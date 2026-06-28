@@ -117,6 +117,18 @@ class Lowering {
     /// esta activo, el lowering de clases baja a layout C-struct +
     /// new->malloc/alloca + ctor directo, SIN __module_init/registry/GC.
     void set_native_poo(bool on) { native_poo_ = on; }
+    /// Bits del target para validar/ensamblar el inline-asm (@Naked / asm{}):
+    /// 64 (defecto), 32 o 16.  Lo fija el driver AOT desde --aot-arch.
+    void set_asm_target_bits(uint8_t bits) { asm_target_bits_ = bits; }
+    /// Ancho del chunk SIMD (bytes) que hornea el matcher del vectorizador en
+    /// AOT (16 SSE2 / 32 AVX / 64 AVX512).  Lo fija el driver desde --float-isa.
+    void set_aot_vec_width(uint8_t w) { aot_vec_width_ = w; }
+    /// --float-isa auto: chunk DUAL (element-wise 64, reduccion 16) para que un
+    /// IR compile a las 3 variantes (multiversion por cpuid en runtime).
+    void set_aot_auto_vec(bool on) { aot_auto_vec_ = on; }
+    /// Solo-LSP: bajar tambien las funciones @c comptime (no-macro) a IR para
+    /// poder inspeccionar su codegen.  Ver @c CompileOptions::emit_comptime_fns.
+    void set_emit_comptime_fns(bool on) { emit_comptime_fns_ = on; }
 
     /// C-3: registra los nombres de las funciones libres marcadas con
     /// @StringConcat / @StringEq.  Cuando no estan vacios, el lowering
@@ -223,7 +235,24 @@ class Lowering {
      * Idempotente: si ya existe slot para @p name lo devuelve.
      * Init: el slot empieza zero-filled; @c __module_init lo inicializa.
      */
-    uint64_t get_or_create_runtime_global_slot(const std::string &name);
+    uint64_t get_or_create_runtime_global_slot(const std::string &name,
+                                               uint64_t bytes = 8);
+
+    /**
+     * @brief Reserva el slot de la PLANTILLA de un `thread_local` (TLS).
+     *
+     * El slot lleva la plantilla por-hilo (bytes de inicializacion estaticos,
+     * NO via @c __module_init), marcado @c SD_FLAG_TLS + seccion @c .tdata
+     * (SHF_TLS).  El codegen AOT lo emite en una seccion TLS y el acceso usa
+     * el thread pointer (fs/gs + TPOFF) en vez de una direccion lineal.
+     *
+     * @param name   nombre del global.
+     * @param bytes  tamano de la variable (>=1).
+     * @param init_value valor inicial empaquetado LE (los primeros 8 bytes).
+     */
+    uint64_t get_or_create_tls_global_slot(const std::string &name,
+                                           uint64_t bytes, uint64_t init_value,
+                                           uint16_t alignment);
 
     /**
      * @brief Inserta una conversion de tipo si difiere; identidad si igual.
@@ -236,6 +265,15 @@ class Lowering {
      */
     ir::IrValueId cast_if_needed(ir::IrValueId v, ir::IrType from,
                                  ir::IrType to, uint32_t source_line,
+                                 bool is_explicit = false);
+    /**
+     * @brief Igual que el anterior pero con el @c SourceLoc completo de la
+     *        expresion culpable, para que el warning de conversion apunte a su
+     *        COLUMNA real (no al inicio de la linea).  El overload de
+     *        @c source_line delega en este con columna 1.
+     */
+    ir::IrValueId cast_if_needed(ir::IrValueId v, ir::IrType from,
+                                 ir::IrType to, const SourceLoc &loc,
                                  bool is_explicit = false);
 
     // -----------------------------------------------------------------
@@ -273,6 +311,67 @@ class Lowering {
     void lower_if(ast::IfStmt *s);
     void lower_return(ast::ReturnStmt *s);
     void lower_while(ast::WhileStmt *s);
+    /// Auto-vectorizacion (idioma memcpy): si @p s es exactamente el patron
+    /// de copia de bytes/elementos `while (i < N) { dst[i] = src[i]; i++; }`
+    /// sobre punteros HOST, lo reemplaza por un unico @c MEMCPY (el JIT/AOT lo
+    /// bajan a @c rep @c movsb / SIMD; el interprete a un bucle host->host).
+    /// Devuelve true si reconocio y bajo el idioma (el llamante debe @c return);
+    /// false si no matchea (seguir con el lowering normal del while).
+    bool try_lower_memcpy_idiom(ast::WhileStmt *s);
+    /// Igual para @c for(T i=init; i<N; i++) dst[i]=src[i]; (la forma canonica
+    /// del memcpy).  Cubre el for que DECLARA la var del loop en @c init
+    /// (loop-local), evitando el writeback de scope post-loop.
+    bool try_lower_memcpy_idiom_for(ast::ForStmt *s);
+    /// Auto-vectorizacion aritmetica: @c for(T i=init; i<N; i++) c[i]=a[i] OP
+    /// b[i]; con a/b/c punteros f64 HOST y OP in {+,-,*,/}.  Emite un loop
+    /// principal que procesa W=2 elementos por iteracion via @c VEC_BINOP
+    /// (SIMD packed en JIT/AOT, escalar por lane en interp) + una cola escalar
+    /// re-bajando el cuerpo para el resto (N % W).  Devuelve true si matcheo.
+    bool try_vectorize_elementwise_for(ast::Stmt *s);
+    /// Auto-vectorizacion de DIFUSION ESCALAR (scalar broadcast):
+    /// @c for(T i=init; i<N; i++) c[i] = a[i] OP scalar; con @c c/@c a punteros
+    /// f64 HOST y @c scalar un valor f64 invariante del loop.  Tambien la forma
+    /// conmutativa @c scalar OP a[i] (add/mul) y el compound @c c[i] OP= scalar.
+    /// El escalar se difunde a todos los lanes (UNPCKLPD/VBROADCASTSD) en JIT/
+    /// AOT, escalar por lane en interp.  Devuelve true si matcheo.
+    bool try_vectorize_scalar_for(ast::Stmt *s);
+    /// Auto-vectorizacion UNARIA: @c for(T i=init; i<N; i++) b[i] = OP a[i];
+    /// con @c a/@c b punteros f64 HOST y OP in @c -a[i] (fneg), @c sqrt(a[i])
+    /// (fsqrt), @c fabs(a[i]) (fabs).  Loop principal W=2 con @c VEC_UNOP (SIMD
+    /// packed SQRTPD/XORPD/ANDPD en JIT/AOT, escalar por lane en interp) + cola
+    /// escalar.  La copia pura la cubre el memcpy-idiom.  Devuelve true si match.
+    bool try_vectorize_unary_for(ast::Stmt *s);
+    /// Auto-vectorizacion de REDUCCION: @c for(T i=init; i<N; i++) acc = acc +
+    /// a[i]; con @c acc escalar f64 y @c a puntero f64 HOST.  Usa un acumulador
+    /// vectorial de W=2 lanes (slot host 16B) acumulado con @c VEC_BINOP
+    /// (acc_slot += a_chunk), reduccion horizontal final + cola escalar.  El
+    /// resultado se bindea a @c acc.  Devuelve true si matcheo.
+    bool try_vectorize_reduction_for(ast::Stmt *s);
+    /// Auto-vectorizacion COMPOUND (cadena lineal multi-op): @c for(...) c[i] =
+    /// a[i] OP1 x OP2 y OP3 ... donde cada operando derecho (x, y, ...) es
+    /// @c arr[i] (host, mismo tipo) o un escalar invariante f64, y la expresion
+    /// es left-leaning `((a OP1 x) OP2 y) ...` (precedencia natural de
+    /// @c a[i]*k + b[i]).  Emite el loop principal usando @c c como acumulador:
+    /// @c c = a OP1 x ; @c c = c OP2 y ; ... (cadena de @c VEC_BINOP /
+    /// @c VEC_BINOP_S por chunk) + cola escalar.  Solo f64/f32.  Cubre el patron
+    /// axpy/FMA que los matchers de 1-op no aceptan.  Devuelve true si matcheo.
+    bool try_vectorize_compound_for(ast::Stmt *s);
+    /// Valida que @p asg sea exactamente @c dst[idx] = src[idx] con bases
+    /// IdentExpr HOST ptr/array de igual tamano de elemento.  Compartido por
+    /// las formas while/for.  Rellena las bases y el tamano de elemento.
+    bool mc_match_copy_assign(ast::AssignExpr *asg, const std::string &idx_name,
+                              ast::IdentExpr **out_dst, ast::IdentExpr **out_src,
+                              size_t *out_esz);
+    /// Emite el MEMCPY equivalente a la copia en @c current_block_.  @p v_idx
+    /// es el SSA del indice inicial (ya resuelto por el llamante: lookup para
+    /// el while, lower del init para el for).  Si @p idx_name_for_post no esta
+    /// vacio, ademas escribe el idx post-loop = idx_init+count en ese nombre de
+    /// scope (solo el while con idx externa lo necesita).  Devuelve false si
+    /// @p v_idx no es un entero o si algun lower_expr fallo (defensivo).
+    bool mc_emit_copy(ir::IrValueId v_idx, ast::Expr *limit,
+                      ast::IdentExpr *dst_base, ast::IdentExpr *src_base,
+                      size_t esz, uint32_t ln,
+                      const std::string &idx_name_for_post);
     void lower_do_while(ast::DoWhileStmt *s);
     void lower_for(ast::ForStmt *s);
     void lower_try(ast::TryStmt *s);
@@ -552,7 +651,7 @@ class Lowering {
 
     /**
      * @brief Genera la IrFunction auxiliar @c __new_<Class>(args) para
-     *        cada clase declarada en el modulo y la anyade a out.
+     *        cada clase declarada en el modulo y la añade a out.
      *        El cuerpo es un bloque RAW_ASM con findclass + newobj +
      *        callvirt 0 (ctor) + return GcHandle.
      */
@@ -928,6 +1027,12 @@ class Lowering {
     /// L2.2: slots para globales runtime no-const (string/int/etc.)
     std::unordered_map<std::string, uint64_t> runtime_global_slots_;
 
+    /// thread_local con init != 0: (slot static_data, valor inicial 8B LE).  El
+    /// lowering sintetiza __vex_tls_init (TLS callback del PE) que escribe estos
+    /// valores en la copia por-hilo al attach del hilo -- el cargador de Windows
+    /// no siempre copia la plantilla del TLS de una .dll a un consumidor minimal.
+    std::vector<std::pair<uint64_t, uint64_t>> tls_nonzero_inits_;
+
     /// sret en call sites: cache nombre-de-funcion -> PrimitiveKind
     /// del tipo de retorno semantico (antes de la transformacion sret).
     /// Solo nos interesa distinguir OPTIONAL / RESULT del resto, porque
@@ -998,6 +1103,11 @@ class Lowering {
     /// helper local-only y el child no podria deref el host_ptr.
     std::unordered_set<std::string> classes_used_shared_;
 
+    /// gc<T> opt-in: clases instanciadas como @c gc<Class> -> generar el helper
+    /// @c __new_<Class>_gc (aloca con @c vex_gc_alloc + marca is_gc_object, sin
+    /// RAII).  El GC (libvesta_gc) colecta lo no alcanzable.
+    std::unordered_set<std::string> classes_used_gc_;
+
     /// Vars locales declaradas con modificador @c shared.  El escape
     /// analyzer de @c spawn las omite del warning "objeto GC local-only
     /// capturado" (declarar @c shared es la solucion sugerida).
@@ -1058,9 +1168,27 @@ class Lowering {
     ir::IrValueId emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
                                          uint32_t source_line);
 
+    // Monitor enter/exit.  En native_poo_ (AOT) baja a CALL nativo
+    // (__vex_monenter/__vex_monexit, bundle-ado desde stdlib/vex/vex_sync.vex)
+    // sobre el host_ptr del objeto; en el resto de tiers emite la IR op
+    // MONENTER/MONEXIT (handle) que el runtime/JIT consume.
+    void emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
+                         uint32_t source_line);
+
     // --- Helpers de operaciones sobre cadenas (StringObject) ---
     ir::IrValueId emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
                                uint32_t source_line);
+    /// Construye un `string` desde un literal (addr+len) eligiendo el repr
+    /// segun el tier: value-string nativo (AOT, PURE_NATIVE, SSO) en
+    /// native_poo_, o STRMAKE (GcHandle, Full/JIT/interp) en otro caso.  Usado
+    /// por los builtins de introspeccion comptime (typename/underlying_of/...)
+    /// que antes emitian STRMAKE incondicional -> RUNTIME_DEPENDENT en AOT.
+    /// @p known_len = longitud compile-time (>=0) o -1 si solo se sabe en
+    /// runtime (el value-string decide SSO/heap con una rama).
+    ir::IrValueId emit_string_literal_repr(ir::IrValueId v_addr,
+                                           ir::IrValueId v_len,
+                                           int64_t known_len,
+                                           uint32_t source_line);
     ir::IrValueId emit_strcat(ir::IrValueId v_a, ir::IrValueId v_b,
                               uint32_t source_line);
     ir::IrValueId emit_strraw(ir::IrValueId v_str, uint32_t source_line);
@@ -1130,6 +1258,26 @@ class Lowering {
     /// @c i64 __vex_strlen(u8* s).
     std::string ensure_strdata_helper();
     std::string ensure_strlen_helper();
+    /// Vex Embed Inc 6 (encoding UTF-8): @c .length() cuenta CODE-POINTS (no
+    /// bytes; @c .bytes() da los bytes via @c emit_native_str_len).  El helper
+    /// @c __vex_str_cplen(u8* p, i64 byte_len) -> i64 recorre los bytes y suma
+    /// 1 por cada byte que NO sea continuacion UTF-8 ((b & 0xC0) != 0x80).
+    /// Para ASCII coincide con el conteo de bytes (cero cambio en los tests
+    /// ASCII existentes).  @c emit_native_str_cplen emite la CALL.
+    std::string ensure_str_cplen_helper();
+    ir::IrValueId emit_native_str_cplen(ir::IrValueId v_ptr, ir::IrValueId v_blen,
+                                        uint32_t source_line);
+    /// Vex Embed Inc 6: @c .wstr() devuelve un @c u16* NUL-terminado en
+    /// UTF-16LE para FFI Win32 @c *W.  El helper
+    /// @c __vex_str_to_utf16(u8* p, i64 byte_len) -> u16* aloca un buffer
+    /// (@c RAW_ALLOC -> malloc/override), decodifica UTF-8 -> UTF-16 (pares
+    /// suplentes para code-points astrales) y lo NUL-termina.  El CALLER es
+    /// dueno del buffer (transitorio para FFI; liberar o aceptar la fuga en
+    /// uso efimero, como en C).
+    std::string ensure_str_to_utf16_helper();
+    ir::IrValueId emit_native_str_to_utf16(ir::IrValueId v_ptr,
+                                           ir::IrValueId v_blen,
+                                           uint32_t source_line);
     /// String Inc 5 (SSO): libera el buffer del value-string SOLO si esta
     /// en modo HEAP (la data SSO es inline, no se libera).  Branchless:
     /// RAW_FREE(ptr0 * is_heap); free(0) es no-op.  Reemplaza el patron
@@ -1180,10 +1328,21 @@ class Lowering {
     /// len > 22 hace RAW_ALLOC(len+1), MEMCPY, nul, set ptr@0/len@8/
     /// cap@16 + byte[23] bit alto.  Usado por concat/slice/append/interp
     /// para obtener SSO en resultados runtime cortos.  Solo native_poo_.
+    /// @p known_len >= 0 (Tier B str_make): la longitud es constante en
+    /// compile-time -> decide SSO/HEAP SIN rama runtime (emite solo el cuerpo
+    /// aplicable).  -1 = longitud runtime (rama CMP_GT como antes).
     void build_native_string_finalize(ir::IrValueId v_slot,
                                       ir::IrValueId v_src_ptr,
                                       ir::IrValueId v_len,
-                                      uint32_t source_line);
+                                      uint32_t source_line,
+                                      int64_t known_len = -1);
+    /// str_make optimo (Vex Embed): COPIA @p v_len bytes de @p v_ptr a un
+    /// value-string PROPIO (slot 24B + buffer; RAII lo libera).  Sin GC.
+    /// @p known_len >= 0 -> especializa (Tier B sin rama).  Solo native_poo_.
+    ir::IrValueId build_native_string_from_buffer(ir::IrValueId v_ptr,
+                                                  ir::IrValueId v_len,
+                                                  uint32_t source_line,
+                                                  int64_t known_len = -1);
     /// Vex Embed Inc 1: concatena dos value-strings nativos @p v_a y
     /// @p v_b produciendo un NUEVO string owned (slot de 24 bytes en
     /// stack + buffer fresco en heap de total+1 bytes con ambos
@@ -1291,6 +1450,8 @@ class Lowering {
     bool strcmp_helper_emitted_ = false; ///< El helper strcmp ya esta emitido.
     bool strdata_helper_emitted_ = false; ///< El helper __vex_strdata emitido.
     bool strlen_helper_emitted_ = false; ///< El helper __vex_strlen emitido.
+    bool str_cplen_helper_emitted_ = false; ///< El helper __vex_str_cplen emitido.
+    bool str_to_utf16_helper_emitted_ = false; ///< __vex_str_to_utf16 emitido.
 
     /// CPU dispatch (cimiento): asegura que existan el global
     /// @c __vex_cpu_features (slot @c static_data de 8 bytes zero-init) y el
@@ -1323,6 +1484,20 @@ class Lowering {
         false; ///< Las variantes + el global fp ya estan emitidos.
     uint64_t memcpy_fp_slot_ =
         UINT64_MAX; ///< Slot static_data del global __vex_memcpy_fp.
+
+    /// AUTO multiversion (--float-isa auto): si @c main tiene ops VEC_*, lo
+    /// renombra a @c __vex_main_body (helper VEC normal que el driver compila
+    /// 3x: $sse2/$avx2/$avx512) y sintetiza un @c main fino que (a) corre los
+    /// inits y (b) hace @c CALLIND a traves del slot @c __vex_main_body$fp.
+    /// Asi "multiversionar main" se reduce a "despachar un helper", sin tratar
+    /// el entry como caso especial.  Construye ademas @c __vex_auto_init() que
+    /// elige la variante por cpuid (AVX512F bit7 > AVX2 bit4 > SSE2) y la
+    /// guarda en el fp.  Idempotente.  Solo @c native_poo_ + @c aot_auto_vec_.
+    /// Marca @c cpu_dispatch_used_ + @c auto_dispatch_emitted_ para que
+    /// @c run() prepone @c call __vex_auto_init al entry de main.
+    void ensure_auto_multiversion(ir::IrModule &out_module);
+    bool auto_dispatch_emitted_ =
+        false; ///< El main sintetico + fp + __vex_auto_init ya se emitieron.
 
     /// Emite un memcpy(dst, src, len) DESPACHADO por la tabla de punteros:
     /// LOAD el fp del global + CALLIND.  Solo @c native_poo_.  En interp/JIT/
@@ -1432,6 +1607,22 @@ class Lowering {
     std::string instrument_mode_ = "none";
     /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
+    /// Bits del target para validar el inline-asm (@Naked/asm{}); 64 por defecto.
+    uint8_t asm_target_bits_ = 64;
+    /// Ancho del chunk SIMD del vectorizador en AOT (16/32/64 bytes); 16 default.
+    uint8_t aot_vec_width_ = 16;
+    /// --float-isa auto: chunk dual para multiversion (ver set_aot_auto_vec).
+    bool aot_auto_vec_ = false;
+    /// Type matching de catch (AOT): por cada clase, su intervalo DFS [lo,hi]
+    /// sobre el bosque de herencia.  is-a(A,B) <=> B.lo <= A.lo <= B.hi.  El
+    /// throw transporta A.lo; cada catch(B) compara contra [B.lo,B.hi]
+    /// (constantes en compile-time).  Vacio fuera de native_poo_.
+    std::unordered_map<std::string, std::pair<uint32_t, uint32_t>>
+        type_intervals_;
+    /// Computa @c type_intervals_ via DFS del bosque de clases (super_name).
+    void compute_type_intervals();
+    /// Solo-LSP: bajar comptime fns (no-macro) a IR para inspeccion.
+    bool emit_comptime_fns_ = false;
     /// C-3: nombres de los override del string built-in (vacios => default).
     std::string string_concat_override_;
     std::string string_eq_override_;
@@ -1698,7 +1889,7 @@ class Lowering {
      */
     void lower_comptime_for(ast::ComptimeForStmt *s);
 
-    /// helpers de spawn pendientes de anyadir al modulo.  Las
+    /// helpers de spawn pendientes de añadir al modulo.  Las
     /// funciones se acumulan aqui durante el lowering del padre y se
     /// vuelcan a @c out_mod_ al final de @c run() para preservar el
     /// orden de funciones (main primero -> emisor IR la marca como

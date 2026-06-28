@@ -1251,6 +1251,32 @@ void exec_instr_fnarrow(ProcessVM *vm, const DecodedInstr &instr) {
     d.write_f32(static_cast<float>(s.read_f64()));
 }
 
+/**
+ * @brief Ejecuta FMADD escalar fusionado: fd = fma(fa, fb, fd).
+ *
+ * Multiplica-acumula con UN SOLO redondeo (C @c std::fma / @c std::fmaf), igual
+ * que la instruccion nativa VFMADD231PD que emite el JIT para la
+ * auto-vectorizacion de dot-products (@c acc += a[i]*b[i]).  Asi el interprete
+ * (oraculo) coincide bit-a-bit con el JIT; un mul+add separado daria DOS
+ * redondeos y divergiria.  Convention B (decode_instr_raw_bytes): reg1=byte2,
+ * reg2=byte3; fd=byte2&0xF, fa=(byte2>>4)&0xF, fb=(byte3>>4)&0xF, isf32=byte3&1.
+ */
+void exec_instr_fmadd(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t b2 = instr.data_instruction.reg_data.reg1;
+    const uint8_t b3 = instr.data_instruction.reg_data.reg2;
+    const uint8_t fd = b2 & 0xF;
+    const uint8_t fa = (b2 >> 4) & 0xF;
+    const uint8_t fb = (b3 >> 4) & 0xF;
+    const bool is_f32 = (b3 & 1) != 0;
+    ZmmRegister &d = vm->registers.zmm[fd];
+    const ZmmRegister &a = vm->registers.zmm[fa];
+    const ZmmRegister &bb = vm->registers.zmm[fb];
+    if (is_f32)
+        d.write_f32(std::fma(a.read_f32(), bb.read_f32(), d.read_f32()));
+    else
+        d.write_f64(std::fma(a.read_f64(), bb.read_f64(), d.read_f64()));
+}
+
 // =========================================================================
 // Sprint string-perf-5 (2026-06-02): opcodes FP nativos para fmin/fmax/
 // ffloor/fceil/fround/ftrunc.  Antes el interp pagaba CALLN (~150 ns) por

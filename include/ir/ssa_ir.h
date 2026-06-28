@@ -203,6 +203,24 @@ enum class IrOp : uint16_t {
                    ///<   (@c roundsd con bits 0-1 de imm8 = rounding mode), en
     ///<   ARM (@c frintm/p/n/z), en WASM (@c f64.floor/ceil/nearest/trunc)
     ///<   y en RISC-V (@c fcvt.l.d con rounding mode).  Reactivados.
+    // ---- ops VECTORIALES FUSIONADAS (auto-vectorizacion, 0x2D-0x2F) ----
+    // Compiler-internas: las emite el matcher de vectorize.cpp para el cuerpo
+    // de un loop element-wise (W elementos por iteracion).  Son FUSIONADAS
+    // (load+op+store en UNA op) para NO necesitar un "valor vectorial" SSA: el
+    // modelo de valores del IR es de 8 bytes (GP) y un vector son 16/32/64B, asi
+    // que el vector vive solo TRANSITORIO dentro de la op (zmm0/zmm1 scratch en
+    // interp, xmm0/xmm1 en jit).  Operandos = punteros HOST a los elementos i.
+    // imm bits 0-7 = ancho en bytes (16/32/64 = 128/256/512b); bits 8-15 = sub-op.
+    // Bajada por backend (reusa ops EXISTENTES; cero opcodes VM nuevos):
+    //   interp: movh host<->VM-stack scratch + fload/fstore ZMM + f<op>[.ps]
+    //           packed.  Roundtrip correcto (interp = oraculo).
+    //   jit/aot: MOVUPD [ptr] + <packed op> + MOVUPD (SIMD directo).
+    // VEC_UNOP dst[i] = OP a[i]    (subop 0=copy 1=fneg 2=fabs 3=fsqrt)
+    // VEC_BINOP dst[i] = a[i] OP b[i] (subop 0=fadd 1=fsub 2=fmul 3=fdiv)
+    VEC_UNOP = 0x2D, ///< vec_unop.fN %dst_ptr, %a_ptr        imm=(subop<<8)|ancho
+    VEC_BINOP = 0x2E, ///< vec_binop.fN %dst_ptr, %a_ptr, %b_ptr imm=(subop<<8)|ancho
+    // VEC_FMA acc[i] += a[i] * b[i]  (dot-product fusionado, 1 redondeo).
+    VEC_FMA = 0x2F, ///< vec_fma.fN %acc_ptr, %a_ptr, %b_ptr   imm=ancho
 
     // ---- logica y desplazamientos (0x30-0x3F) ----
     AND = 0x30, ///< %dst = and.T    %a, %b
@@ -342,6 +360,15 @@ enum class IrOp : uint16_t {
     ///<   @c dst = IR_NO_VALUE (marker puro)
     ///<
     ///< El IR emitter actual lo trata como no-op.
+    SWITCH_DENSE = 0x8B, ///< switch_dense %tag, min=imm, targets=jump_targets[],
+                         ///< default=target_block.  Marker (no-op en interp/
+                         ///< optimizer/ir_emitter) que el backend JIT (vreg)
+                         ///< baja a un island nativo O(1) (computed-goto):
+                         ///< idx=tag-min; if idx u>=N -> default; else jmp al
+                         ///< brazo jump_targets[idx].  Emitido por
+                         ///< lower_match_expr para match DENSO (rango~=N) tras
+                         ///< el LOAD del tag y JUNTO al BST (que es el dispatch
+                         ///< del interp + fallback).  operands[0]=%tag.
 
     MAKE_CLOSURE =
         0x87, ///< make_closure @helper, env_kind=imm, captures=[%c0, %c1, ...]
@@ -551,9 +578,9 @@ enum class IrOp : uint16_t {
         0x74, ///< %dst = findclass %params        (lookup ClassInfo* by name)
     DEFCLASS =
         0x75, ///< %dst = defclass %params         (define clase en runtime)
-    DEFFIELD = 0x76, ///< deffield %cls, %params          (anyade field a clase)
+    DEFFIELD = 0x76, ///< deffield %cls, %params          (añade field a clase)
     DEFMETHOD =
-        0x77, ///< defmethod %cls, %params         (anyade metodo a clase)
+        0x77, ///< defmethod %cls, %params         (añade metodo a clase)
     ADDADVICE =
         0x78, ///< addadvice %target, %advice, kind  (AOP: BEFORE/AFTER/AROUND)
     FINDMETHOD =
@@ -581,6 +608,36 @@ enum class IrOp : uint16_t {
                      ///< despertar)
     MONNOTI = 0xE3,  ///< monnoti  %obj     (despertar un esperante)
     MONNOTA = 0xE4,  ///< monnota  %obj     (despertar todos los esperantes)
+
+    // ---- acumulador vectorial register-resident (reduccion/dot-product) ----
+    // El acumulador de W lanes vive en un XMM/YMM/ZMM DEDICADO (no en memoria)
+    // a traves del bucle -> sin round-trip por iteracion.  El interprete
+    // (oraculo) usa el acc_slot de memoria (lento pero correcto); el JIT usa el
+    // registro y solo vuelca al slot UNA vez (VEC_ACC_STORE) al salir del bucle,
+    // donde la reduccion horizontal existente lo consume.  imm = ancho (16/32/64).
+    // imm = ancho(bits0-7) | acc_idx(bits8-11) | src_idx(bits12-15, COMBINE).
+    // Para ocultar la latencia de la cadena de dependencia, el bucle se
+    // desenrolla en U acumuladores INDEPENDIENTES (acc_idx 0..U-1); al final se
+    // combinan (VEC_ACC_COMBINE acc0 += acc_j) antes de la reduccion horizontal.
+    VEC_ACC_ZERO = 0xE5,  ///< vec_acc_zero %slot         (acc[idx] = 0)
+    VEC_ACC_ADD = 0xE6,   ///< vec_acc_add  %slot, %a      (acc[idx] += a[chunk])
+    VEC_ACC_FMA = 0xE7,   ///< vec_acc_fma  %slot, %a, %b  (acc[idx] += a*b)
+    VEC_ACC_STORE = 0xE8, ///< vec_acc_store %slot         (slot = acc[0]; nop interp)
+    VEC_ACC_COMBINE = 0xE9, ///< vec_acc_combine %slot   (acc[dst] += acc[src])
+
+    // VEC_BINOP_S dst[i] = a[i] OP escalar  (escalado/offset element-wise): el
+    // escalar (loop-invariante; f64 o entero ya replicado a 64b) se DIFUNDE a
+    // todos los lanes.  imm: bits0-7=ancho, bits8-15=subop, bit16=HOISTED (el
+    // broadcast esta pre-hecho en XMM13 por un VEC_BCAST en el preheader -> el
+    // loop usa VEX puro sin re-broadcast ni transicion AVX/SSE).
+    VEC_BINOP_S = 0xEA, ///< vec_binop_s.fN %dst, %a, %scalar
+    // VEC_BCAST: difunde el escalar (operands[0]) a TODOS los lanes de XMM13
+    // (registro reservado) UNA vez en el preheader del loop, para que el
+    // VEC_BINOP_S del cuerpo lo reuse sin re-broadcast por iteracion (hoist).
+    // No-op en el interprete (su VEC_BINOP_S re-lee el escalar por lane).
+    // imm=ancho del chunk.  XMM13 = acc0; scalar-bcast y reduccion no coexisten
+    // en un matcher de 1 sentencia, asi que reusar XMM13 es seguro.
+    VEC_BCAST = 0xEB, ///< vec_bcast.fN %scalar
 
     // ---- intrinsics VM (0xF0-0xFF) ----
     GETPROC = 0xF0, ///< %dst = getproc     (ProcessVM* del proceso actual)
@@ -819,6 +876,13 @@ struct IrInstr {
 
     std::vector<IrPhiArg> phi_args; ///< para PHI
 
+    /// Tabla de bloques destino para SWITCH_DENSE (jump table denso O(1)):
+    /// jump_targets[idx] = bloque del valor (imm_min + idx); idx fuera de
+    /// rango -> target_block (default).  Vacio para el resto de ops.  El
+    /// backend JIT (vreg) lo baja a un island nativo (computed-goto); el
+    /// interp usa el BST que el frontend emite junto al marker.
+    std::vector<uint32_t> jump_targets;
+
     uint32_t
         source_line; ///< numero de linea del fuente original (0 = desconocido)
 
@@ -828,6 +892,12 @@ struct IrInstr {
     /// proteger los SSA values de loop-carry contra el "live hole"
     /// del linear scan (ver lower_for / lower_while).
     bool preserve = false;
+
+    /// AOT: STR_LIT_ADDR sobre la plantilla de un `thread_local` (TLS).  Solo
+    /// en memoria (NO serializado): el driver AOT lo DERIVA tras parsear,
+    /// consultando SD_FLAG_TLS de la entrada static_data @c imm.  El codegen
+    /// emite el acceso por thread pointer (fs/gs + TPOFF) en vez de lineal.
+    bool is_tls = false;
 
     /// Si true para una RAW_ASM, el emitter envuelve el bloque con
     /// emit_save_live_regs / emit_restore_live_regs.  Necesario cuando
@@ -1065,6 +1135,18 @@ struct IrFunction {
      */
     std::string section;
     std::string section_perms;
+    /**
+     * @brief Phase NR: `@Naked` -- funcion sin prologo/epilogo NI ret
+     *        implicito (dev OS: ISRs, stubs de entry/cambio de modo).
+     *
+     * El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
+     * programador es responsable del control de flujo de salida
+     * (`ret`/`iretq`/`iret`) y de no usar locales/spills que requieran
+     * frame (igual semantica que `__attribute__((naked))` de GCC).  Solo
+     * lo consume el codegen (AOT/JIT); el interprete lo ignora (un cuerpo
+     * naked con asm puro no tiene representacion en bytecode VM).
+     */
+    bool is_naked = false;
     int64_t section_at = -1; ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
     int32_t section_order =
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
@@ -1305,6 +1387,15 @@ struct IrModule {
             uint8_t is_rel = 0;  ///< 1 = PC-relativo; 0 = absoluto.
         };
         std::vector<SymRef> sym_refs; ///< vacio = sin refs (caso comun).
+        /// Phase NR / dev-OS: nombre EXPORTADO de este bloque de datos para
+        /// que OTROS bloques lo referencien por simbolo (cross-block).  Lo
+        /// fija el lowering para bloques `asm name {}` y `bytes name {}`: su
+        /// `name` se vuelve un simbolo resoluble por el emisor AOT (un `dd
+        /// gdt` / `jmp other_block` en otro bloque resuelve a la ubicacion de
+        /// ESTE).  Vacio => bloque anonimo (literal de cadena, etc.) sin
+        /// simbolo.  Para que la ubicacion sea estable, un bloque con
+        /// symbol_name se marca FORCE_EMIT + NON_DEDUP.
+        std::string symbol_name;
         /// Clave de global compartido a nivel de PROGRAMA: cuando no esta
         /// vacia, este slot es un unico global identificado por la clave en
         /// todo el binario (aunque sea NON_DEDUP).  El merge cross-module
@@ -1380,8 +1471,8 @@ struct IrModule {
             return equals(i, v.data(), v.size());
         }
 
-        /* ---- Mutaciones: anyadir entries ---- */
-        /// Anyade bytes al pool con padding de alineamiento.  Devuelve
+        /* ---- Mutaciones: añadir entries ---- */
+        /// añade bytes al pool con padding de alineamiento.  Devuelve
         /// el indice de la nueva entry.  La @c meta queda con defaults;
         /// llamar @c meta_at(i) para ajustarla.
         size_t push_back(const uint8_t *p, size_t n);
@@ -1427,6 +1518,10 @@ struct IrModule {
     /// referencie (caso: bloques @c bytes para firmas, tablas,
     /// boot sectors).  El emisor AOT lo coloca siempre.
     static constexpr uint8_t SD_FLAG_FORCE_EMIT = 1 << 5;
+    /// AOT: el slot es la PLANTILLA de una variable `thread_local` (TLS).
+    /// Va a una seccion SHF_TLS (.tdata) y su acceso usa el thread pointer
+    /// (fs/gs + TPOFF en ELF; TLS directory en PE), no una direccion lineal.
+    static constexpr uint8_t SD_FLAG_TLS = 1 << 6;
 
     /**
      * @brief Funciones nativas que el modulo declara importar.
@@ -1466,7 +1561,7 @@ struct IrModule {
     /**
      * @brief Registra una importacion nativa, deduplicando.
      *
-     * Si la pareja (lib, name) ya esta en native_imports no se anyade
+     * Si la pareja (lib, name) ya esta en native_imports no se añade
      * de nuevo; el lowering puede llamarlo libremente desde cualquier
      * punto sin preocuparse de duplicados.
      */

@@ -28,7 +28,7 @@
  *   - SHL/SHR/SAR reg/imm8
  *   - LEA reg/mem
  *
- * Floats (XMM ops) y SIMD se anyaden en sub-hito separado cuando
+ * Floats (XMM ops) y SIMD se añaden en sub-hito separado cuando
  * lo necesite.  Mientras tanto el JIT cae al interprete para
  * cualquier op no soportada.
  *
@@ -53,7 +53,7 @@
  *
  * @c X86Encoder::encode(fn, out) escribe los bytes del @c MFunction
  * @p fn en @p out.  Devuelve el numero total de bytes emitidos.
- * Si encuentra un opcode no soportado, anyade un comentario y un
+ * Si encuentra un opcode no soportado, añade un comentario y un
  * INT3 + retorna 0 (falla).  Tras la pasada principal, ejecuta
  * @c resolve_fixups que patchea los offsets relativos pendientes.
  */
@@ -84,9 +84,15 @@ class X86Encoder {
     /// valores de 32-bit (i32/u32/ptr32); i64 NO cabe en un reg de 32-bit.
     void set_mode32(bool m) noexcept { mode32_ = m; }
     bool mode32() const noexcept { return mode32_; }
+    /// avx+: emitir los MOVES escalares float (MOVSD/MOVSS/MOVQ GP<->XMM) en VEX
+    /// en vez de legacy SSE, para no mezclar legacy con las ops VEX (arith/cvt/
+    /// etc.) y evitar la penalizacion de transicion.  Switch global de funcion
+    /// (los moves se emiten en cientos de sitios del rewrite; mas limpio que un
+    /// flag por instruccion).  Lo fija el pipeline desde --float-isa.
+    void set_vex_scalar(bool v) noexcept { vex_scalar_ = v; }
 
     /**
-     * @brief Codifica @p fn en bytes y los anyade a @p out.
+     * @brief Codifica @p fn en bytes y los añade a @p out.
      * @return numero total de bytes emitidos para esta funcion, o 0
      *         si encontro un opcode no soportado (en cuyo caso
      *         @p out queda parcialmente escrito hasta el punto del
@@ -201,6 +207,62 @@ class X86Encoder {
     void emit_modrm_mem(const MOperand &mem, uint8_t reg_field,
                         std::vector<uint8_t> &out);
 
+    /// Sentinel para "sin segundo source" (vvvv no usado -> campo 1111).
+    static constexpr uint8_t VEX_NO_VVVV = 0xFF;
+
+    /// Emite el prefijo VEX de 3 bytes (C4) para mapa 0F + prefijo 66 (pp=01).
+    /// @p reg = ModRM.reg (0..15); @p rm = ModRM.rm reg/base (0..15);
+    /// @p vvvv = segundo source (0..15) o @c VEX_NO_VVVV si la op es de 2
+    /// operandos (el campo se codifica como 1111, obligatorio para ops sin
+    /// src1 como VMOVUPD/VSQRTPD; un campo distinto = #UD);
+    /// @p w = bit W; @p l256 = true para 256-bit (YMM), false para 128-bit;
+    /// @p idx/@p has_idx = registro indice del SIB (para el bit X).
+    /// @p map = mapa de opcode: 1 = 0F, 2 = 0F38, 3 = 0F3A.
+    /// @p pp = prefijo: 0 = ninguno (packed-single PS), 1 = 66 (packed-double).
+    static void emit_vex3(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
+                          bool l256, uint8_t idx, bool has_idx,
+                          std::vector<uint8_t> &out, uint8_t map = 1,
+                          uint8_t pp = 1) {
+        const uint8_t Rb = (reg & 8) ? 0 : 1;              // ~REX.R
+        const uint8_t Bb = (rm & 8) ? 0 : 1;               // ~REX.B
+        const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~REX.X
+        // El campo vvvv almacena ~src1; para "sin source" debe ser 1111.
+        const uint8_t vfield =
+            (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
+        put8(out, 0xC4);
+        put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
+                                       (map & 0x1F))); // mmmmm
+        put8(out, static_cast<uint8_t>(((w & 1) << 7) | (vfield << 3) |
+                                       ((l256 ? 1 : 0) << 2) | (pp & 3)));
+    }
+
+    /// Emite el prefijo EVEX de 4 bytes (62) para mapa 0F + 66, registros
+    /// 0..15 sin mascara (k0), sin broadcast/zeroing.  @p ll = 0/1/2 para
+    /// 128/256/512-bit.  Resto de parametros como @c emit_vex3.
+    /// @p map = mapa de opcode: 1 = 0F, 2 = 0F38, 3 = 0F3A.
+    /// @p pp = prefijo: 0 = ninguno (PS), 1 = 66 (PD).
+    static void emit_evex(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
+                          uint8_t ll, uint8_t idx, bool has_idx,
+                          std::vector<uint8_t> &out, uint8_t map = 1,
+                          uint8_t pp = 1) {
+        const uint8_t Rb = (reg & 8) ? 0 : 1;              // ~R  (reg bit3)
+        const uint8_t Bb = (rm & 8) ? 0 : 1;               // ~B  (rm bit3)
+        const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~X
+        const uint8_t Rp = 1; // ~R' (reg bit4): solo 0..15 -> no extendido
+        const uint8_t Vp = 1; // ~V' (vvvv bit4): solo 0..15
+        const uint8_t vfield =
+            (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
+        put8(out, 0x62);
+        // P0: [R X B R'] [0 0] [m m]  (mm: 01=0F, 10=0F38, 11=0F3A)
+        put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
+                                       (Rp << 4) | (map & 0x03)));
+        // P1: [W] [~vvvv] [1] [pp]   (pp: 00=ninguno PS, 01=66 PD)
+        put8(out, static_cast<uint8_t>(((w & 1) << 7) | (vfield << 3) |
+                                       (1 << 2) | (pp & 3)));
+        // P2: [z=0] [L'L] [b=0] [V'] [aaa=000]
+        put8(out, static_cast<uint8_t>(((ll & 3) << 5) | (Vp << 3)));
+    }
+
     /// Resuelve todos los @c MFunction::fixups patcheando rel32 in-place.
     /// @c base es el offset del comienzo de @p fn dentro del buffer
     /// global (para soportar emit de varias funciones consecutivas).
@@ -208,6 +270,7 @@ class X86Encoder {
 
     size_t instr_count_ = 0;
     bool mode32_ = false; ///< x86-32 (sin REX); ver set_mode32().
+    bool vex_scalar_ = false; ///< VEX en los moves float escalares; set_vex_scalar.
 };
 
 } // namespace jit

@@ -1054,6 +1054,11 @@ void emit_instr_freg(const vm::Instruction *instruction_parser,
                      ByteWriter &code_final, const InstrInfo *now_instr,
                      Assembler *assembly_ctx);
 
+/** @brief Emite FMADD (3 ZMM): fd = fma(fa, fb, fd).  FIXED_4 Convention B. */
+void emit_instr_fmadd(const vm::Instruction *instruction_parser,
+                      ByteWriter &code_final, const InstrInfo *now_instr,
+                      Assembler *assembly_ctx);
+
 /**
  * @brief Emite instrucciones ZMM unarias (fsqrt, fabs, fneg) con un solo
  * operando.

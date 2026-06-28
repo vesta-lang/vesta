@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <utility> // std::pair (marshal stack-args; UCRT64 no transitivo)
 #include <vector>
 
 #include "vesta_rt/abi.h" // VESTA_PROC_OSR_BUFFER_OFFSET / VESTA_OSR_BUFFER_N
@@ -189,9 +190,17 @@ struct Lowerer {
     const TargetRegInfo &tri;
     bool vm_abi = false;      ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
     bool no_frame = false;    ///< hoja frameless: sin push/mov rbp ni sub rsp
+    bool naked = false;       ///< Phase NR @Naked: sin prologo/epilogo/ret
     uint32_t k = 0;           ///< numero de callee-saved asignados
     uint32_t total_saved = 0; ///< callee-saved + (vm_abi ? 1 (rbx) : 0)
     int32_t spill_bytes = 0;  ///< tamano del area de spills (alineado)
+    /// Args ilimitados (JIT/AOT): nº de slots GP que se pasan por PILA
+    /// (overflow de los arg_regs).  Se reservan en el FONDO del frame
+    /// (encima del shadow Win64) y se direccionan RSP-relativo en el call.
+    /// El interprete tiene limite 12 (bytecode), el JIT/AOT no.
+    uint32_t out_stack_args = 0;
+    /// Offset RSP del primer stack-arg: 32 (Win64 shadow) o 0 (SysV).
+    int32_t stack_arg_base = 0;
     /// Commit 8: offset (desde RBP) del inicio del area de allocas
     /// (justo debajo de los spill slots) + cursor de asignacion.
     uint32_t alloca_base = 0;
@@ -223,9 +232,10 @@ struct Lowerer {
     MFunction *pf = nullptr;
 
     Lowerer(const RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
-            bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in)
+            bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in,
+            uint32_t out_stack_args_in = 0, bool has_stack_params_in = false)
         : ra(r), tri(t), vm_abi(abi == AbiKind::VM),
-          has_vm_alloca(has_vm_alloca_in) {
+          has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in) {
         SZ = t.pointer_size ? t.pointer_size : 8u;
         k = static_cast<uint32_t>(ra.callee_saved_used.size());
         total_saved = k + (vm_abi ? 1u : 0u); // +1 por el push rbx
@@ -241,8 +251,10 @@ struct Lowerer {
          * los callee-saved usados; lo unico que desaparece es RBP. */
         no_frame = !has_calls && ra.num_spill_slots == 0u &&
                    alloca_total == 0u && !has_vm_alloca &&
+                   !has_stack_params_in && /* params en pila -> [rbp+off]
+                  necesita el frame pointer estable (push rbp; mov rbp,rsp). */
                    !jit_no_frameless() &&
-                   !jit_osr_count(); /* el trigger (1b) anyade un
+                   !jit_osr_count(); /* el trigger (1b) añade un
                   call -> necesita frame con rsp 16-alineado. */
         /* Las allocas viven debajo de los spill slots. */
         alloca_base = SZ * total_saved + SZ * ra.num_spill_slots;
@@ -251,13 +263,21 @@ struct Lowerer {
         /* Fase 2: reservar un qword para el VM-RSP salvado, debajo del
          * area de allocas host y por encima del shadow space.  El
          * offset es fijo desde RBP (independiente del shadow/align que
-         * se anyade despues, que solo crece el frame hacia abajo). */
+         * se añade despues, que solo crece el frame hacia abajo). */
         if (has_vm_alloca) {
             vm_rsp_save_off = -static_cast<int32_t>(
                 8u * total_saved + 8u * ra.num_spill_slots + alloca_total + 8u);
             spill_bytes += 8;
         }
         if (!no_frame) {
+            /* stack_arg_base = offset RSP del primer arg por pila.  Win64
+             * reserva 32 de shadow ANTES de los stack args (el callee lee
+             * arg5 en [rsp+32]); SysV no tiene shadow (arg7 en [rsp+0]).
+             * Detectado por el nº de GP arg_regs del TARGET (4=Win64,
+             * 6=SysV) -> correcto tambien en AOT cross-target. */
+            const size_t gareg_n =
+                tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
+            stack_arg_base = (gareg_n == 4) ? 32 : 0;
 #if defined(_WIN32)
             /* Win64: si hay CALLs, reservar 32 bytes de shadow/home
              * space en el FONDO del frame (debajo de los spill slots)
@@ -266,6 +286,11 @@ struct Lowerer {
 #else
             (void)has_calls;
 #endif
+            /* Args ilimitados: reservar el outgoing area (slots GP por
+             * pila) encima del shadow.  Stack-arg j vive en
+             * [rsp + stack_arg_base + j*8] en cada call. */
+            if (out_stack_args > 0)
+                spill_bytes += static_cast<int32_t>(out_stack_args * 8u);
             /* Alinear (SZ*total_saved + spill_bytes) a 16 para mantener
              * el stack 16-aligned en CALLs internos.  Con slots de 4
              * (x86-32) el desalineo puede ser 4/8/12 -> padding exacto. */
@@ -409,6 +434,8 @@ struct Lowerer {
     }
 
     void emit_prologue(std::vector<MInstr> &out) const {
+        /* Phase NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
+        if (naked) return;
         if (!no_frame) {
             out.push_back(push(MReg::RBP));
             out.push_back(
@@ -443,6 +470,8 @@ struct Lowerer {
     }
 
     void emit_epilogue(std::vector<MInstr> &out) const {
+        /* Phase NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
+        if (naked) return;
         if (no_frame) {
             /* Frameless: rsp ya apunta justo encima de los registros
              * salvados (no hubo push rbp ni sub rsp).  Solo se deshacen
@@ -592,15 +621,65 @@ struct Lowerer {
         const auto &gareg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
         const auto &fareg = tri.arg_regs[static_cast<size_t>(RegClass::FP)];
         std::vector<std::pair<MReg, MOperand>> gmoves, fmoves;
+        /* Args ilimitados: GP que no caben en arg_regs van por PILA en
+         * [rsp + stack_arg_base + (idx-gareg)*8].  (idx, loc). */
+        /* (offset_rsp, loc, is_fp): is_fp -> store por MOVSD. */
+        std::vector<std::tuple<int32_t, MOperand, bool>> smoves;
+        /* G = nº de GP-stack-args (overflow GP).  Los FP-stack van DESPUES en
+         * la convencion Vex-interna -> [base+(G+(fi-fmax))*8].  Espejo de la
+         * carga del callee en vreg_select. */
+        uint32_t G = 0;
+        for (const auto &pa : pending_args)
+            if (!pa.is_fp && pa.idx >= gareg.size()) ++G;
         for (const auto &pa : pending_args) {
             if (pa.is_fp) {
                 if (pa.idx < fareg.size())
                     fmoves.emplace_back(static_cast<MReg>(fareg[pa.idx]),
                                         pa.loc);
+                else {
+                    const int32_t off =
+                        stack_arg_base +
+                        static_cast<int32_t>(
+                            (G + (pa.idx - fareg.size())) * 8u);
+                    smoves.emplace_back(off, pa.loc, true);
+                }
             } else {
                 if (pa.idx < gareg.size())
                     gmoves.emplace_back(static_cast<MReg>(gareg[pa.idx]),
                                         pa.loc);
+                else {
+                    const int32_t off =
+                        stack_arg_base +
+                        static_cast<int32_t>((pa.idx - gareg.size()) * 8u);
+                    smoves.emplace_back(off, pa.loc, false);
+                }
+            }
+        }
+        /* Stores de stack-args PRIMERO (leen su loc antes del shuffle de los
+         * arg_regs).  mem->mem via scr1 (R11, caller-saved, libre aqui) -- NO
+         * scr0: un CALL INDIRECTO captura su func_ptr en scr0 antes de este
+         * marshal, y debe sobrevivir (ver el caso MOp::CALL).  scr1 se reusa
+         * luego para romper ciclos del parallel-move (secuencial, sin solape).
+         * FP via MOVSD (scratch XMM si mem->mem). */
+        for (const auto &sm : smoves) {
+            const int32_t soff = std::get<0>(sm);
+            const MOperand &sloc = std::get<1>(sm);
+            const bool sfp = std::get<2>(sm);
+            const MOperand dst = MOperand::make_mem(MReg::RSP, soff);
+            if (sfp) {
+                if (sloc.kind == MOperandKind::MEM) {
+                    out.push_back(
+                        MInstr::make_unary(MOp::MOVSD, xmm(fscr1), sloc));
+                    out.push_back(
+                        MInstr::make_unary(MOp::MOVSD, dst, xmm(fscr1)));
+                } else {
+                    out.push_back(MInstr::make_unary(MOp::MOVSD, dst, sloc));
+                }
+            } else if (sloc.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), sloc));
+                out.push_back(MInstr::make_unary(MOp::MOV, dst, reg(scr1)));
+            } else {
+                out.push_back(MInstr::make_unary(MOp::MOV, dst, sloc));
             }
         }
         if (!gmoves.empty()) emit_parallel_moves(std::move(gmoves), scr1, out);
@@ -642,6 +721,36 @@ struct Lowerer {
             } else {
                 out.push_back(MInstr::make_unary(mv, d, s));
             }
+            return;
+        }
+
+        /* AVX escalar 3-OPERANDOS (VADDSD/VSUBSD/VMULSD/VDIVSD + SS): VEX nativo
+         * dst = src1 OP src2 con dst != src1 permitido -> NO se legaliza a
+         * 2-address (sin el `mov dst,src1`).  Esta es la ventaja que motivo
+         * MOps separadas: el regalloc/scheduler las explota como 3-op.  vvvv
+         * (src1) DEBE ser reg (materializar si spilled); src2 puede ser MEM (VEX
+         * reg-reg-mem = load-and-op); dst reg (fscr0 + store si spilled). */
+        if (op == MOp::VADDSD || op == MOp::VSUBSD || op == MOp::VMULSD ||
+            op == MOp::VDIVSD || op == MOp::VADDSS || op == MOp::VSUBSS ||
+            op == MOp::VMULSS || op == MOp::VDIVSS || op == MOp::VXORPS ||
+            op == MOp::VANDPS) {
+            // VXORPS/VANDPS (fneg/fabs): MOVSD (8B) cubre f64 y f32 (la mascara
+            // de signo tiene los bits altos a 0 -> XOR/AND no los altera).
+            const bool is_ss = (op == MOp::VADDSS || op == MOp::VSUBSS ||
+                                op == MOp::VMULSS || op == MOp::VDIVSS);
+            const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand dreg = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            MOperand s1 = resolve(in.src1);
+            if (s1.kind == MOperandKind::MEM) { // vvvv debe ser reg
+                out.push_back(MInstr::make_unary(mv, xmm(fscr1), s1));
+                s1 = xmm(fscr1);
+            }
+            const MOperand s2 = resolve(in.src2); // reg o MEM (VEX lo admite)
+            out.push_back(MInstr::make_binary(op, dreg, s1, s2));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(mv, resolve(in.dst), dreg));
             return;
         }
 
@@ -726,6 +835,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -747,6 +857,7 @@ struct Lowerer {
                 b = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, a, b));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             return;
         }
 
@@ -764,6 +875,7 @@ struct Lowerer {
                 s = reg(scr0);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -780,6 +892,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -795,6 +908,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOVSD, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -877,33 +991,62 @@ struct Lowerer {
              * marshalling que CALL_ABS (parallel-move de los args a los
              * arg_regs del ABI host), pero la llamada es un CALL DIRECTO
              * rel32 (no via scratch): el encoder deja un placeholder +
-             * MReloc{CALL_REL32} con el sym_idx que viaja en src1.  En
-             * HOST_LEAF/BARE no hay GC -> sin stackmap. */
+             * MReloc{CALL_REL32} con el sym_idx que viaja en src1. */
             marshal_args(out);
             MInstr call;
             call.op = MOp::CALL_SYM;
             call.src1 = in.src1;
+            /* Phase AOT-GC (Inc 1): describir los GC roots vivos a traves de
+             * este call (gc<T>).  El linear_scan los forzo a slots; el GC los
+             * lee via el stackmap.  Antes se omitia ("BARE sin GC"); ahora el
+             * gc<T> opt-in los necesita.  Vacio (0 slots) si no hay valores GC
+             * vivos -> cero coste para el codigo sin GC. */
+            if (ivs != nullptr) {
+                Stackmap sm;
+                const uint32_t NVI =
+                    static_cast<uint32_t>(ivs->intervals.size());
+                for (uint32_t v = 0; v < NVI; ++v) {
+                    const LiveInterval &lv = ivs->intervals[v];
+                    if (!lv.is_gc() || !lv.covers(cur_call_pos)) continue;
+                    if (!ra.spilled(v)) continue;
+                    StackmapSlot s;
+                    s.rbp_offset =
+                        static_cast<int16_t>(slot_off(ra.slot_of(v)));
+                    s.gc_kind = static_cast<StackmapGcKind>(
+                        static_cast<uint8_t>(lv.gc_kind - 1u));
+                    sm.slots.push_back(s);
+                }
+                call.flags = static_cast<uint16_t>(stackmaps.size());
+                stackmaps.push_back(std::move(sm));
+            }
             out.push_back(call);
             return;
         }
 
-        if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM) {
-            /* AOT: dst = &simbolo (.rodata).  MOV_SYM = abs (mov imm64,
-             * --no-pie); LEA_RIP_SYM = RIP-rel (lea, default PIC).  Resolver
-             * el dst vreg a fisico y emitir la instr fisica; el encoder deja
-             * el placeholder + MReloc.  dst spilled -> scratch + store. */
+        if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM ||
+            op == MOp::LEA_LABEL || op == MOp::TLS_LE_ADDR ||
+            op == MOp::TLS_PE_ADDR) {
+            /* AOT: dst = &simbolo (.rodata) o &thread_local (TLS).  MOV_SYM =
+             * abs (mov imm64, --no-pie); LEA_RIP_SYM = RIP-rel (lea, default
+             * PIC); LEA_LABEL = direccion nativa de un label local (in-JIT
+             * catch); TLS_LE_ADDR = direccion por-hilo (mov %fs:0 + lea@tpoff).
+             * Resolver el dst vreg a fisico y emitir la instr fisica; el
+             * encoder deja el placeholder + MReloc/MFixup.  dst spilled ->
+             * scratch + store. */
             MOperand d = resolve(in.dst);
             if (d.is_reg()) {
                 MInstr m;
                 m.op = op;
                 m.dst = d;
                 m.src1 = in.src1;
+                m.src2 = in.src2; /* TLS_PE_ADDR: 2o simbolo (_tls_index) */
                 out.push_back(m);
             } else {
                 MInstr m;
                 m.op = op;
                 m.dst = reg(scr0);
                 m.src1 = in.src1;
+                m.src2 = in.src2;
                 out.push_back(m);
                 out.push_back(MInstr::make_unary(MOp::MOV, d, reg(scr0)));
             }
@@ -917,9 +1060,13 @@ struct Lowerer {
              * de los GC roots vivos a traves del call. */
             MOperand tgt = resolve(in.src1);
             /* HOST_LEAF CALLIND: hay ARGs pendientes que marshalar a los
-             * arg_regs del ABI host.  CRiTICO: mover el func_ptr a scr0
-             * ANTES del parallel-move (puede caer en un arg_reg que el
-             * move pisaria); luego call scr0. */
+             * arg_regs del ABI host.  CRiTICO: capturar el func_ptr a scr0
+             * (R10) ANTES del marshal (su loc actual puede caer en un arg_reg
+             * que el parallel-move pisaria); luego call scr0.  marshal_args usa
+             * scr1 (R11) -- NO scr0 -- como scratch de los stack-args mem->mem,
+             * asi el target en scr0 SOBREVIVE al marshal (RAX no sirve: el
+             * allocator puede colocar un arg en RAX -> `mov rax,tgt` lo
+             * pisaria; visto con 12 args -> resultado erroneo). */
             if (!pending_args.empty()) {
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
                 tgt = reg(scr0);
@@ -1002,6 +1149,11 @@ struct Lowerer {
         }
 
         if (op == MOp::RET) {
+            /* Phase NR @Naked: NO emitir el ret implicito; el cuerpo (asm)
+             * provee la salida real (ret/iretq).  Un ret aqui seria, en el
+             * mejor caso, codigo muerto tras un iretq; en el peor, pisaria
+             * la convencion de interrupcion. */
+            if (naked) return;
             emit_epilogue(out);
             out.push_back(MInstr::make_ret());
             return;
@@ -1036,6 +1188,51 @@ struct Lowerer {
             return;
         }
 
+        /* LOAD float HOST: dst es un vreg FP -> MOVSD/MOVSS xmm, [addr]. */
+        if (op == MOp::LOAD && is_fp_operand(in.dst)) {
+            const uint8_t width = static_cast<uint8_t>(in.flags >> 1);
+            MOperand a = resolve(in.src1);
+            MReg addr_reg;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                addr_reg = scr1;
+            } else {
+                addr_reg = static_cast<MReg>(a.reg);
+            }
+            const MOperand mem = MOperand::make_mem(addr_reg, 0);
+            const MOp mv = fp_mov_for_width(width ? width : 8);
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            out.push_back(MInstr::make_unary(mv, pdst, mem));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    mv, slot_mem(ra.slot_of(in.dst.vreg_id())), xmm(fscr0)));
+            return;
+        }
+
+        /* STORE float HOST: el valor (src2) es un vreg FP -> MOVSD/MOVSS. */
+        if (op == MOp::STORE && is_fp_operand(in.src2)) {
+            const uint8_t width = static_cast<uint8_t>(in.flags);
+            MOperand a = resolve(in.src1);
+            MReg addr_reg;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                addr_reg = scr1;
+            } else {
+                addr_reg = static_cast<MReg>(a.reg);
+            }
+            const MOp mv = fp_mov_for_width(width ? width : 8);
+            MOperand v = resolve(in.src2);
+            if (v.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(mv, xmm(fscr0), v));
+                v = xmm(fscr0);
+            }
+            const MOperand mem = MOperand::make_mem(addr_reg, 0);
+            out.push_back(MInstr::make_unary(mv, mem, v));
+            return;
+        }
+
         if (op == MOp::LOAD) {
             /* dst = [addr].  addr y dst pueden estar spilled. */
             const uint8_t width = static_cast<uint8_t>(in.flags >> 1);
@@ -1057,10 +1254,16 @@ struct Lowerer {
             MOperand pdst = dst_spilled ? reg(scr0) : resolve(in.dst);
             if (width == 8) {
                 out.push_back(MInstr::make_unary(MOp::MOV, pdst, mem));
+            } else if (width == 4 && !sgn) {
+                /* u32: `mov r32, [mem]` zero-extiende a r64 por hardware
+                 * (no hay MOVZX de 32->64).  pdst a 32 bits -> sin REX.W. */
+                MOperand d32 = pdst;
+                if (d32.kind == MOperandKind::REG) d32.width = 4;
+                out.push_back(MInstr::make_unary(MOp::MOV, d32, mem));
             } else if (sgn) {
                 mem.flags = width; // ancho del src para MOVSX
                 out.push_back(MInstr::make_unary(MOp::MOVSX, pdst, mem));
-            } else { // u8/u16 (u32 lo filtro el selector)
+            } else { // u8/u16
                 mem.flags = width;
                 out.push_back(MInstr::make_unary(MOp::MOVZX, pdst, mem));
             }
@@ -1466,8 +1669,14 @@ struct Lowerer {
                     out.push_back(MInstr::make_unary(op, pdst, reg(scr1)));
                 }
             } else {
-                out.push_back(
-                    MInstr::make_unary(MOp::MOV, pdst, rs1)); // pdst = src1
+                /* Elide el `mov pdst, src1` identidad cuando el regalloc ya
+                 * coalescio dst y src1 al mismo fisico (mismo criterio que el
+                 * path de shifts).  Quita un mov redundante por cada ALU
+                 * 2-address coalescida. */
+                if (!(pdst.kind == MOperandKind::REG &&
+                      rs1.kind == MOperandKind::REG && pdst.reg == rs1.reg))
+                    out.push_back(
+                        MInstr::make_unary(MOp::MOV, pdst, rs1)); // pdst = src1
                 out.push_back(
                     MInstr::make_unary(op, pdst,
                                        imul_fix(rs2))); // pdst OP= src2
@@ -1530,11 +1739,57 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
             if (in.op == MOp::ALLOCA_VM) has_vm_alloca = true;
         }
     }
-    Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca);
+    /* Args ilimitados (JIT/AOT): max nº de GP args por PILA en cualquier
+     * call (overflow de arg_regs).  Reset por call group; toma el maximo
+     * para dimensionar el outgoing area del frame una sola vez. */
+    uint32_t max_stack_args = 0;
+    {
+        const size_t gareg_n =
+            tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
+        const size_t fareg_n =
+            tri.arg_regs[static_cast<size_t>(RegClass::FP)].size();
+        uint32_t gp_in_call = 0, fp_in_call = 0;
+        for (const auto &b : vf.blocks) {
+            for (const auto &in : b.instrs) {
+                if (in.op == MOp::ARG) {
+                    if (Lowerer::is_fp_operand(in.src1))
+                        ++fp_in_call;
+                    else
+                        ++gp_in_call;
+                } else if (in.op == MOp::CALL || in.op == MOp::CALL_ABS ||
+                           in.op == MOp::CALL_SYM) {
+                    /* Stack-args = overflow GP + overflow FP (van DESPUES de
+                     * los GP-stack -> el total dimensiona el outgoing area). */
+                    uint32_t s = 0;
+                    if (gp_in_call > gareg_n)
+                        s += gp_in_call - static_cast<uint32_t>(gareg_n);
+                    if (fp_in_call > fareg_n)
+                        s += fp_in_call - static_cast<uint32_t>(fareg_n);
+                    if (s > max_stack_args) max_stack_args = s;
+                    gp_in_call = 0;
+                    fp_in_call = 0;
+                }
+            }
+        }
+    }
+    /* Incoming stack-params (callee): si hay mas params que arg_regs GP, los de
+     * overflow llegan en la pila ([rbp+off]) -> hay que FORZAR el frame pointer
+     * (no_frame=false) para que rbp sea estable.  Conservador (cuenta total de
+     * params): un falso positivo solo reserva un frame de mas, nunca corrompe. */
+    const bool has_stack_params =
+        vf.param_vregs.size() >
+        tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
+    Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca,
+               max_stack_args, has_stack_params);
+    lw.naked = vf.naked; // Phase NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;
     lw.pf = &pf; // labels intra-expansion (LOAD_VM/STORE_VM page-cache)
     pf.name = vf.name;
+    /* Solo-LSP (vista "Godbolt"): propagar el opt-in de la tabla
+     * byte_offset -> source_line al MFunction fisico (que es el que ve el
+     * encoder).  OFF por defecto -> sin efecto en produccion. */
+    pf.emit_line_map = vf.emit_line_map;
     pf.next_label_id = vf.next_label_id;
     pf.label_offsets = vf.label_offsets;
     pf.imm64_pool = vf.imm64_pool;
@@ -1610,6 +1865,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
         pf.blocks[b].label_id = vf.blocks[b].label_id;
         pf.blocks[b].succ_a = vf.blocks[b].succ_a;
         pf.blocks[b].succ_b = vf.blocks[b].succ_b;
+        pf.blocks[b].extra_succs = vf.blocks[b].extra_succs;
         std::vector<MInstr> outv;
         outv.reserve(vf.blocks[b].instrs.size() * 2 + 8);
         if (b == 0) lw.emit_prologue(outv);
@@ -1630,7 +1886,20 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
             }
             ++ii;
             lw.cur_call_pos = 2u * gi;
+            /* Solo-LSP: las MInstr fisicas que emite lower() se construyen
+             * frescas (make_unary/...), perdiendo el source_pc de @c in.
+             * Lo re-estampamos en las instrs anadidas por esta op para que
+             * el encoder produzca la tabla linea<->asm.  OFF en produccion. */
+            const size_t lm_before = pf.emit_line_map ? outv.size() : 0;
             lw.lower(in, outv);
+            if (pf.emit_line_map) {
+                for (size_t k = lm_before; k < outv.size(); ++k) {
+                    if (in.source_pc != 0 && outv[k].source_pc == 0)
+                        outv[k].source_pc = in.source_pc;
+                    /* Tambien la identidad de la op IR (correlacion exacta). */
+                    if (outv[k].ir_id == 0xFFFFFFFFu) outv[k].ir_id = in.ir_id;
+                }
+            }
             ++gi;
         }
         /* OSR 1a: instrumentar el back-edge (BR incondicional a un bloque

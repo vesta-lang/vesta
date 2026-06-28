@@ -12,8 +12,8 @@ import type.magic;
 //
 //   Cubre las 3 versiones del header:
 //     v1 = formato base (header + secciones + tablas + bytecode)
-//     v2 = anyade reloc table  (para loadmodule con rebase transparente)
-//     v3 = anyade IR section (@ir / VEIR) y debug section (DVBG)
+//     v2 = añade reloc table  (para loadmodule con rebase transparente)
+//     v3 = añade IR section (@ir / VEIR) y debug section (DVBG)
 //
 //   El header tiene tamano fijo serializado de 144 bytes (alineado a 16).
 //   El campo `address_spaces *` del struct C++ NO se serializa: la tabla

@@ -20,8 +20,10 @@
  */
 #include "arena/arena_manager.h"
 
-#include <iomanip>
 #include <vector>
+#if !defined(VESTA_GC_FREESTANDING)
+#include <sstream> // ostringstream (solo MappedPtr::to_string, debug)
+#endif
 
 namespace vm {
 
@@ -36,6 +38,7 @@ namespace vm {
  *
  * @return Cadena con el volcado formateado.
  */
+#if !defined(VESTA_GC_FREESTANDING)
 std::string MappedPtr::to_string() const {
     std::ostringstream ss;
     ss << "MappedPtrHost {\n";
@@ -71,6 +74,7 @@ std::string MappedPtr::to_string() const {
 void MappedPtr::print(std::ostream &os) const {
     os << to_string(); // reutilizar la cadena generada por to_string
 }
+#endif // !VESTA_GC_FREESTANDING (MappedPtr::to_string/print: debug iostream)
 
 /**
  * @brief Inicializa el gestor de arenas con todos los contadores a cero.
@@ -108,7 +112,7 @@ ArenaManager::~ArenaManager() {
 uint64_t ArenaManager::create_arena(size_t size, MemPerm perms) {
     void *mem = allocate_memory(size, perms); // reservar memoria del SO
     if (!mem) {
-        std::cerr << "[ArenaManager] Error al asignar memoria\n"; // informar
+        VGC_CERR << "[ArenaManager] Error al asignar memoria\n"; // informar
                                                                   // del fallo
         return 0; // ID 0 indica error
     }
@@ -129,12 +133,12 @@ uint64_t ArenaManager::create_arena(size_t size, MemPerm perms) {
  * @return   true si el bloque existia y fue liberado; false si no existia.
  */
 bool ArenaManager::free_arena(uint64_t id) {
-    auto it = arenas.find(id);            // buscar la arena por ID
-    if (it == arenas.end()) return false; // no existe, nada que liberar
+    Arena *a = arenas.find(id);     // buscar la arena por ID
+    if (a == nullptr) return false; // no existe, nada que liberar
 
-    total_allocated_bytes_ -= it->second.size;    // descontar bytes del total
-    free_memory(it->second.ptr, it->second.size); // liberar memoria del SO
-    arenas.erase(it);                             // eliminar del catalogo
+    total_allocated_bytes_ -= a->size; // descontar bytes del total
+    free_memory(a->ptr, a->size);      // liberar memoria del SO
+    arenas.erase(id);                  // eliminar del catalogo
     return true;
 }
 
@@ -148,9 +152,8 @@ bool ArenaManager::free_arena(uint64_t id) {
  * @return   Puntero constante a la Arena, o nullptr si el ID no existe.
  */
 const Arena *ArenaManager::get_arena(uint64_t id) const {
-    auto it = arenas.find(id);              // buscar por ID en el mapa
-    if (it == arenas.end()) return nullptr; // ID inexistente
-    return &it->second; // devolver puntero a la arena sin ceder propiedad
+    return arenas.find(id); // puntero a la arena (o nullptr) sin ceder
+                            // propiedad
 }
 
 /**
@@ -164,12 +167,12 @@ void ArenaManager::free_all() {
     if (arenas.empty()) return; // nada que liberar
 
     // recoger IDs en vector para no invalidar el iterador durante el borrado
-    std::vector<int> ids;
-    for (const auto &[id, arena] : arenas) {
-        ids.push_back(id); // acumular IDs activos
+    std::vector<uint64_t> ids;
+    for (auto &s : arenas) {
+        ids.push_back(s.key); // acumular IDs activos
     }
 
-    for (int id : ids) {
+    for (uint64_t id : ids) {
         free_arena(id); // liberar cada arena por su ID
     }
 }
@@ -186,9 +189,9 @@ void ArenaManager::free_all() {
  * @return         ID de la arena si se encuentra, -1 en caso contrario.
  */
 int ArenaManager::find_arena_id_for_ptr(void *host_ptr) {
-    for (const auto &[id, arena] : this->arenas) {
-        if (arena.ptr == host_ptr) {
-            return static_cast<int>(id); // cast para devolver como int
+    for (auto &s : this->arenas) {
+        if (s.val.ptr == host_ptr) {
+            return static_cast<int>(s.key); // cast para devolver como int
         }
     }
     return -1; // no encontrado

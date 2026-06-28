@@ -87,6 +87,17 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
     std::memcpy(code, bytes.data(), bytes.size());
+    /* Jump table densa (SWITCH_DENSE): parchear cada entrada de 8 bytes con la
+     * direccion nativa absoluta del brazo (base + label_offset).  POST-memcpy
+     * (base = code) y PRE-commit (antes del flush icache). */
+    for (const auto &f : pf.addr_table_fixups) {
+        if (f.label < pf.label_offsets.size() &&
+            pf.label_offsets[f.label] != UINT32_MAX) {
+            const uint64_t target =
+                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
+            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
+        }
+    }
     cc.commit(code, bytes.size());
 
     /* Disasm opt-in (VESTA_JIT_DISASM=1) del codigo vreg generado. */
@@ -111,15 +122,23 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                     const VregEntries &ent, const CallResolver &resolve_native,
                     const CallResolver &resolve_symbol,
                     std::vector<NativeReloc> *relocs_out, bool pic,
-                    bool target_sysv, bool mode32, FloatIsa fisa) {
+                    bool target_sysv, bool mode32, FloatIsa fisa,
+                    bool emit_line_map,
+                    std::vector<LineMapEntry> *line_map_out,
+                    std::vector<std::pair<uint32_t, std::string>>
+                        *asm_labels_out,
+                    std::vector<Stackmap> *stackmaps_out) {
     if (relocs_out) relocs_out->clear();
+    if (line_map_out) line_map_out->clear();
+    if (asm_labels_out) asm_labels_out->clear();
+    if (stackmaps_out) stackmaps_out->clear();
     /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
      *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
      *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
     MFunction mf;
     if (!vreg_select(fn, mf, AbiKind::HOST_LEAF, resolve_call, ent,
                      resolve_native, resolve_symbol, pic, target_sysv, mode32,
-                     fisa))
+                     fisa, emit_line_map))
         return {};
 
     /* Descriptor del target.  x86-64: ABI del TARGET (no del host) -- SysV
@@ -145,8 +164,19 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
      */
     X86Encoder enc;
     enc.set_mode32(mode32);
+    // avx+: MOVES escalares float en VEX (no mezclar con las ops VEX).
+    enc.set_vex_scalar(fisa == FloatIsa::AVX || fisa == FloatIsa::AVX512F);
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return {};
+
+    /* Solo-LSP: el encoder ya poblo pf.line_map (si emit_line_map).  La
+     * entregamos al caller para la vista correlada fuente <-> asm. */
+    if (line_map_out) *line_map_out = std::move(pf.line_map);
+    if (asm_labels_out) *asm_labels_out = std::move(pf.asm_labels);
+    /* Phase AOT-GC (Inc 1): stackmaps de raices GC (pc_offset relativo a la
+     * funcion + slots GcHandle), poblados por rewrite_to_physical en cada
+     * safepoint/CALL.  El encoder ya fijo pc_offset al byte real del call. */
+    if (stackmaps_out) *stackmaps_out = std::move(pf.stackmaps);
 
     /* AOT: traducir las MReloc del encoder (sym_idx -> reloc_symbols) a
      * NativeReloc con el NOMBRE del simbolo resuelto, para que el driver
@@ -163,6 +193,12 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                 nr.kind = NativeReloc::Kind::DATA_REL32;
                 break;
             case MRelocKind::ABS64: nr.kind = NativeReloc::Kind::ABS64; break;
+            case MRelocKind::TPOFF32:
+                nr.kind = NativeReloc::Kind::TPOFF32;
+                break;
+            case MRelocKind::SECREL32:
+                nr.kind = NativeReloc::Kind::SECREL32;
+                break;
             }
             nr.offset = r.patch_at;
             nr.addend = r.addend;
@@ -231,6 +267,16 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
     std::memcpy(code, bytes.data(), bytes.size());
+    /* Jump table densa (SWITCH_DENSE): parchear entradas con la direccion
+     * nativa del brazo (base + label_offset).  POST-memcpy, PRE-commit. */
+    for (const auto &f : pf.addr_table_fixups) {
+        if (f.label < pf.label_offsets.size() &&
+            pf.label_offsets[f.label] != UINT32_MAX) {
+            const uint64_t target =
+                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
+            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
+        }
+    }
     cc.commit(code, bytes.size());
 
     /* 7. Resolver la direccion absoluta del OSR-entry via el offset que el

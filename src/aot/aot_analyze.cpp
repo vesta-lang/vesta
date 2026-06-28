@@ -141,6 +141,11 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     //    el linker contra lo que el usuario enlace (libc, kernel, etc.) --
     case IrOp::CALL:
     case IrOp::CALLIND:
+    // CALLCLOSURE: en bare baja a una llamada indirecta plana al fn_addr de
+    // la closure (se ignora el env).  Las lambdas SIN capturas compilan asi
+    // (nivel puntero-de-funcion C); las capturantes usan READ_VM_REG en su
+    // helper, que sigue siendo RUNTIME_DEPENDENT -> el modulo se rechaza.
+    case IrOp::CALLCLOSURE:
     case IrOp::TAILCALL:
     case IrOp::CALLN:
     // -- memoria local / punteros crudos / copia inline --
@@ -151,14 +156,39 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::GEP:
     case IrOp::MVTAKE_IR:
     case IrOp::ISNULL:
+    // UNWRAP: el selector AOT lo baja a inline `test v,v; jne ok; call
+    // __vex_panic_null; ok: mov dst,v` (los provably-non-null ya los elimino
+    // ir_pass_elide_unwrap).  El call al hook lo resuelve el linker (como
+    // cualquier extern); en freestanding el usuario provee __vex_panic_null.
+    case IrOp::UNWRAP:
     case IrOp::MEMCPY:
+    // -- ops vectoriales fusionadas (SIMD nativo / packed) --
+    case IrOp::VEC_UNOP:
+    case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
+    case IrOp::VEC_ACC_ZERO:
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE:
+    case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_BINOP_S:
+    case IrOp::VEC_BCAST:
     // -- atomicos enteros (lock-prefixed nativos) --
     case IrOp::ATOMIC_LD_I64:
     case IrOp::ATOMIC_ST_I64:
     case IrOp::ATOMIC_CAS_I64:
     case IrOp::ATOMIC_ADD_I64:
     // -- ensamblador host incrustado (Phase AS) --
-    case IrOp::INLINE_ASM: return AotOpClass::PURE_NATIVE;
+    case IrOp::INLINE_ASM:
+    // -- handle<->ptr en native (AOT.2 sin handle table): el GcHandle ES el
+    //    host_ptr crudo (objetos = ptr de calloc/malloc) -> el selector
+    //    HOST_LEAF los baja a un MOV (passthrough).  PURE_NATIVE. --
+    case IrOp::GC_HANDLE_FOR_PTR:
+    case IrOp::GC_DEREF_HOST:
+    // -- jump table densa (match/switch sobre enum): el selector HOST_LEAF la
+    //    baja a una tabla SELF-RELATIVE (PIC-safe, sin reloc) + dispatch nativo
+    //    (lea+movsxd+add+jmp).  PURE_NATIVE. --
+    case IrOp::SWITCH_DENSE: return AotOpClass::PURE_NATIVE;
 
     // -- dependencias de libc que el COMPILADOR sintetiza por
     //    semantica del lenguaje (el usuario no escribio la llamada) --
@@ -196,12 +226,13 @@ static const char *aot_runtime_subsystem(IrOp op) noexcept {
     case IrOp::SETFIELD:
     case IrOp::GC_ALLOC:
     case IrOp::GC_ALLOCP:
-    case IrOp::GC_HANDLE_FOR_PTR:
-    case IrOp::GC_DEREF_HOST:
     case IrOp::GCWB_IR:
     case IrOp::GCDEREF_IR:
         return "GC heap (libvesta_rt; en Bare/Embed: heap+stack estilo C++ via "
                "AOT.2)";
+    // GC_HANDLE_FOR_PTR / GC_DEREF_HOST: en native (AOT.2 sin handle table) son
+    // PASSTHROUGH (el handle ES el host_ptr crudo) -> el selector HOST_LEAF los
+    // baja a un MOV.  PURE_NATIVE (no caen aqui).
     case IrOp::GC_PROMOTE:
     case IrOp::GC_DEMOTE:
     case IrOp::SHARED_STAT: return "memoria compartida (Phase Z runtime)";
@@ -315,8 +346,9 @@ static bool aot_op_embed_supported(IrOp op) noexcept {
     case IrOp::CALLITF:
     case IrOp::CALLSUPER:
     case IrOp::PROCEED:
-    // closures
-    case IrOp::CALLCLOSURE:
+    // closures: CALLCLOSURE ya es PURE_NATIVE (arriba); READ_VM_REG (lectura
+    // del env en R14 por el helper de una lambda CAPTURANTE) sigue siendo
+    // runtime -> las lambdas con capturas se rechazan limpio en bare.
     case IrOp::READ_VM_REG:
     // tipos
     case IrOp::INSTANCEOF:
@@ -365,6 +397,12 @@ bool aot_op_allowed(IrOp op, const AotTarget &target) noexcept {
     // igual compila el codigo a maquina).  El IR moderno no deberia
     // emitirlo (Phase 2c lo elimino); defensa por si reaparece.
     if (op == IrOp::RAW_ASM) return false;
+    // Excepciones auto-hospedadas (Phase AOT, vex_exc.vex): el THROW baja a
+    // un CALL a __vex_throw (setjmp/longjmp, sin VM runtime) -> es un simbolo
+    // del linker, valido en CUALQUIER tier (Bare/Embed/Full) cuando las
+    // excepciones estan habilitadas.  El try/catch lowering ya no emite
+    // TRYENTER/TRYLEAVE/LANDINGPAD en native_poo_ (baja a CALLs __vex_*).
+    if (op == IrOp::THROW) return target.exceptions_enabled;
     const AotOpClass cls = aot_classify_op(op);
     if (cls == AotOpClass::PURE_NATIVE)
         return true; // stack/aritmetica/control/llamadas-linker: siempre.

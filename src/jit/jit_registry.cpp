@@ -82,7 +82,7 @@ void JitRegistry::register_function(const uint8_t *code_start,
     // Aborto silencioso: el lookup posterior simplemente fallara para
     // el RIP afectado, que es mas seguro que crash en hot path GC.
     if (!code_start || !code_end || code_start >= code_end) return;
-    std::lock_guard<std::mutex> lk(mutex_);
+    JIT_REGISTRY_LOCK();
 
     // Sort de stackmaps por @c pc_offset.  Requisito para que
     // @c lookup_stackmap pueda hacer binary search aguas abajo: el
@@ -131,7 +131,7 @@ void JitRegistry::register_function(const uint8_t *code_start,
  * se vuelve un cuello, cambiar a binary search analogo al de @c lookup.
  */
 void JitRegistry::unregister_function(const uint8_t *code_start) {
-    std::lock_guard<std::mutex> lk(mutex_);
+    JIT_REGISTRY_LOCK();
     auto it = std::find_if(functions_.begin(), functions_.end(),
                            [code_start](const JitFunctionInfo &f) {
                                return f.code_start == code_start;
@@ -160,7 +160,7 @@ void JitRegistry::unregister_function(const uint8_t *code_start) {
  *      antes de RIP si hay un gap entre funciones).
  */
 const JitFunctionInfo *JitRegistry::lookup(const uint8_t *rip) const {
-    std::lock_guard<std::mutex> lk(mutex_);
+    JIT_REGISTRY_LOCK();
     // Defensas baratas: nulls y tabla vacia -> no hay match posible.
     if (!rip || functions_.empty()) return nullptr;
 
@@ -236,7 +236,7 @@ const Stackmap *JitRegistry::lookup_stackmap(const uint8_t *rip) const {
  * del lock antes del @c return implicito.
  */
 size_t JitRegistry::size() const {
-    std::lock_guard<std::mutex> lk(mutex_);
+    JIT_REGISTRY_LOCK();
     return functions_.size();
 }
 
@@ -248,7 +248,7 @@ size_t JitRegistry::size() const {
  * individualmente con @c unregister_function al ser desalojadas.
  */
 void JitRegistry::clear() {
-    std::lock_guard<std::mutex> lk(mutex_);
+    JIT_REGISTRY_LOCK();
     functions_.clear();
 }
 

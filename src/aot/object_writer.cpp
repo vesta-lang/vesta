@@ -81,6 +81,18 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     ccfg.pe_subsystem = cfg_.pe_subsystem;
     ccfg.elf_stack_vaddr = cfg_.elf_stack_vaddr;
     ccfg.elf_stack_size = cfg_.elf_stack_size;
+    ccfg.tls_callback_section = cfg_.tls_callback_section;
+    ccfg.tls_callback_off = cfg_.tls_callback_off;
+
+    // TLS (thread_local): si hay una seccion TLS hace falta el cargador dinamico
+    // (monta el bloque TLS + el thread pointer antes del entry) -> forzar la ruta
+    // ELF dinamica aunque no haya imports de libc.
+    bool has_tls = false;
+    for (const AotSection &s : csecs)
+        if (s.flags & AOT_SEC_TLS) {
+            has_tls = true;
+            break;
+        }
 
     // Relocations cross-seccion (refs a datos / simbolos de seccion).  El
     // shim las resuelve tras el layout.
@@ -122,13 +134,25 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
         const AotSym *sym_ptr = csyms.empty() ? nullptr : csyms.data();
         const int sym_n = static_cast<int>(csyms.size());
         if (fmt_ == ObjFormat::ELF)
-            ok = aot_emit_elf_obj(
-                path.c_str(), csecs.data(), static_cast<int>(csecs.size()),
-                crel_ptr, crel_n, sym_ptr, sym_n, errbuf, sizeof(errbuf));
-        else /* PE -> COFF .obj */
-            ok = aot_emit_coff_obj(
-                path.c_str(), csecs.data(), static_cast<int>(csecs.size()),
-                crel_ptr, crel_n, sym_ptr, sym_n, errbuf, sizeof(errbuf));
+            ok = mode32_
+                     ? aot_emit_elf32_obj(path.c_str(), csecs.data(),
+                                          static_cast<int>(csecs.size()),
+                                          crel_ptr, crel_n, sym_ptr, sym_n,
+                                          errbuf, sizeof(errbuf))
+                     : aot_emit_elf_obj(path.c_str(), csecs.data(),
+                                        static_cast<int>(csecs.size()), crel_ptr,
+                                        crel_n, sym_ptr, sym_n, errbuf,
+                                        sizeof(errbuf));
+        else /* PE -> COFF .obj (AMD64 o i386 segun mode32) */
+            ok = mode32_
+                     ? aot_emit_coff32_obj(path.c_str(), csecs.data(),
+                                           static_cast<int>(csecs.size()),
+                                           crel_ptr, crel_n, sym_ptr, sym_n,
+                                           errbuf, sizeof(errbuf))
+                     : aot_emit_coff_obj(path.c_str(), csecs.data(),
+                                         static_cast<int>(csecs.size()),
+                                         crel_ptr, crel_n, sym_ptr, sym_n,
+                                         errbuf, sizeof(errbuf));
         if (!ok) {
             err = errbuf[0] ? errbuf : "ObjectWriter: error obj";
             return false;
@@ -203,11 +227,11 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                              static_cast<int>(cimps.size()), crel_ptr, crel_n,
                              errbuf, sizeof(errbuf));
         }
-    } else if (mode32_ && !imports_.empty()) {
-        // AOT x86-32 dinamico: ELF32 PIE (ET_DYN, EM_386) que importa
-        // libc.so.6 (i386) via eager-GOT.  Mismo mecanismo de thunks FF 25
-        // que el driver emitio, pero el disp32 es ABSOLUTO (i386 sin
-        // rip-relativo) y las estructuras dinamicas son de 32-bit.
+    } else if (mode32_ && (!imports_.empty() || has_tls)) {
+        // AOT x86-32 dinamico: ELF32 EXEC (EM_386) con interp -> el cargador
+        // monta el bloque TLS y resuelve los imports de libc.so.6 (i386).  Se
+        // toma esta ruta tambien sin imports cuando hay TLS (necesita el
+        // cargador para montar el bloque thread-local antes del entry).
         std::vector<AotImport> cimps(imports_.size());
         for (size_t i = 0; i < imports_.size(); ++i) {
             const ImportCall &ic = imports_[i];
@@ -220,9 +244,10 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
             path.c_str(), &ccfg, csecs.data(), static_cast<int>(csecs.size()),
             entry_sec_, entry_off_, crel_ptr, crel_n, cimps.data(),
             static_cast<int>(cimps.size()), errbuf, sizeof(errbuf));
-    } else if (!imports_.empty()) {
-        // AOT.2.exec slice 2: ELF EXEC (64-bit) que importa libc -> PIE
-        // dinamico via eager-GOT.  (el caso 32-bit lo cubre la rama de arriba)
+    } else if (!mode32_ && (!imports_.empty() || has_tls)) {
+        // AOT.2.exec slice 2: ELF EXEC (64-bit) PIE dinamico -- cuando importa
+        // libc (eager-GOT) o cuando usa TLS (necesita el cargador dinamico para
+        // montar el bloque thread-local).  (el caso 32-bit lo cubre arriba)
         std::vector<AotImport> cimps(imports_.size());
         for (size_t i = 0; i < imports_.size(); ++i) {
             const ImportCall &ic = imports_[i];

@@ -32,7 +32,9 @@
 #include "aot/aot_lower.h" // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
 #include "aot/object_writer.h" // Phase AOT.4: emisor PE/ELF (ObjectWriter)
 #include "aot/aot_native.h"    // Phase AOT.3 Paso 2: _start arch-portable
+#include "aot/linker.h"        // Phase AOT.5: linker propio (enlaza .o)
 #include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
+#include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/auto_jit.h"
 #include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
@@ -42,6 +44,12 @@
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "vex/compiler.h"
+// Forward-decl (evita incluir vex/parser.h, que arrastra cabeceras Windows que
+// desbalancean el push/pop_macro(VOID) de ssa_ir.h).  @Target target-aware AOT.
+namespace vex {
+void set_aot_condcomp_target(const std::string &os,
+                             const std::string &arch) noexcept;
+}
 #include "vex/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
 #include "vex/project_cache.h"  /* Phase M5.B project-level cache */
 #include "vex/velb_signature.h" /* Phase M.L28: firmas digitales */
@@ -245,7 +253,9 @@ int main(int argc, char *argv[]) {
         "j,threads", "Número de hilos para el driver",
         cxxopts::value<int>()->default_value("0"))("v,version",
                                                    "Mostrar versión")(
-        "m,mode", "Modo de ejecución (vm/jit)",
+        "m,mode",
+        "Modo de ejecucion/compilacion: vm (interprete) | jit (JIT en "
+        "caliente) | aot (compilacion nativa standalone, requiere --vex)",
         cxxopts::value<std::string>()->default_value("vm"))(
         "list-arch", "Imprimir arquitecturas soportadas")(
         "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
@@ -354,6 +364,18 @@ int main(int argc, char *argv[]) {
             "freestanding",
             "AOT bare sin libc (kernels/bootloaders): RAW_ALLOC/FREE/PANIC "
             "requieren hooks @AllocatorOverride/@PanicHandler.")(
+            "no-exceptions",
+            "AOT (-m aot): DESACTIVA el mecanismo de excepciones nativo "
+            "(setjmp/longjmp).  Un try/catch/throw da error.  Para "
+            "kernels/freestanding sin runtime de excepciones.")(
+            "no-io",
+            "AOT (-m aot): NO auto-incluye el runtime de I/O "
+            "(stdlib/vex/vex_io.vex).  El usuario aporta __vex_write y los "
+            "__vex_print_* (p.ej. enlazar vesta_io_bare.o, o freestanding).")(
+            "no-mem",
+            "AOT (-m aot): NO auto-incluye el slab allocator "
+            "(stdlib/vex/vex_mem.vex).  El allocator usa libc malloc/free (o el "
+            "@AllocatorOverride del usuario).")(
             "format",
             "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en "
             "Windows, ELF en el resto).",
@@ -378,9 +400,13 @@ int main(int argc, char *argv[]) {
             "32-bit).",
             cxxopts::value<std::string>()->default_value("x86-64"))(
             "float-isa",
-            "AOT: backend de punto flotante: sse2 (default) | x87 | avx | "
-            "avx512f | auto (deteccion en runtime por CPUID). La mayoria de CPUs "
-            "modernas tienen avx pero no avx512f.",
+            "AOT: backend de punto flotante / ancho SIMD del vectorizador: "
+            "sse2 (default, 128b, corre en CUALQUIER x86-64) | x87 (legacy) | "
+            "avx (AVX2 256b, requiere AVX2 en la CPU) | avx512f (512b, requiere "
+            "AVX-512) | auto (multiversion: emite las 3 variantes y elige la "
+            "optima en runtime por CPUID; lo mejor para distribuir un solo "
+            "binario). Nota: un binario avx/avx512f FIJO da SIGILL en una CPU "
+            "sin ese soporte; usa auto para portabilidad.",
             cxxopts::value<std::string>()->default_value("sse2"))(
             "vex-base",
             "VA base address para el modulo (hex, e.g. 0x10000000). Usado para "
@@ -579,7 +605,45 @@ int main(int argc, char *argv[]) {
             "file.velb --verify-key pub.pem",
             cxxopts::value<std::string>())(
             "verify-key", "Path al PEM con la clave publica para --verify-velb",
-            cxxopts::value<std::string>());
+            cxxopts::value<std::string>())
+        // Phase AOT.5: linker propio (enlaza .o sin ld/gcc).
+        ("link",
+         "Phase AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
+         "auto-detectados; los de --emit obj o de gcc/MSVC) en un ejecutable "
+         "nativo SIN ld/gcc. Uso: vm --link a.o b.o [lib.a] [lib.dll] -o prog "
+         "[--format elf|pe] [--entry sym] [--link-base 0xADDR]. Con --entry usa "
+         "ese simbolo como entrada SIN stub (kernel/bootloader); sin el, "
+         "sintetiza _start->main (ejecutable hosted).")
+        // Phase AOT.5: archivador propio (crea .a sin el ar del sistema).
+        ("ar",
+         "Phase AOT.5: crea una libreria estatica .a (formato ar GNU, con "
+         "indice de simbolos) a partir de objetos, SIN el ar del sistema. Uso: "
+         "vm --ar libfoo.a a.o b.o ...  El .a lo consume nuestro linker (--link) "
+         "y tambien ar/ld/gcc.")(
+            "entry",
+            "Con --link: simbolo de entrada del ejecutable (e.g. _kstart). "
+            "Vacio => _start sintetico que llama a main.",
+            cxxopts::value<std::string>()->default_value(""))(
+            "link-base",
+            "Con --link: base de carga del ejecutable (hex, e.g. 0x100000 para "
+            "un kernel). Default segun el formato.",
+            cxxopts::value<std::string>()->default_value(""))(
+            "link-script",
+            "Con --link: script de enlace ESCRITO EN VEX (un .vex con 'fn "
+            "link()' que llama a builtins base/entry/stack/section/"
+            "section_size/align_up/debug_build). El linker lo compila y ejecuta "
+            "para leer la configuracion. Los CLI --link-base/--entry tienen "
+            "prioridad sobre el script.",
+            cxxopts::value<std::string>()->default_value(""))(
+            "link-debug",
+            "Con --link --link-script: hace que el builtin debug_build() del "
+            "script devuelva true.",
+            cxxopts::value<bool>()->default_value("false"))(
+            "sysroot",
+            "Con --link / --emit exe (ELF): raiz donde buscar las librerias del "
+            "sistema (libc.so.6) al cross-compilar ELF desde otro SO. En Linux "
+            "nativo no hace falta.",
+            cxxopts::value<std::string>()->default_value(""));
 
     // BUG FIX: Args posicionales y allow_unrecognised DEBEN configurarse
     // ANTES de @c options.parse(...).  El bug anterior registraba el
@@ -635,6 +699,9 @@ int main(int argc, char *argv[]) {
     bool aot_mode = false;
     aot::Tier aot_tier = aot::Tier::BARE;
     bool aot_freestanding = result.count("freestanding") > 0;
+    bool aot_no_exceptions = result.count("no-exceptions") > 0;
+    bool aot_no_io = result.count("no-io") > 0;
+    bool aot_no_mem = result.count("no-mem") > 0;
     {
         const std::string &tname = result["target"].as<std::string>();
         if (tname == "bare")
@@ -662,6 +729,27 @@ int main(int argc, char *argv[]) {
             // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
             aot_mode = true;
             jit::set_jit_threshold(UINT32_MAX);
+            // @Target target-aware: los atomos os:/arch: de @Target se evaluan
+            // contra el TARGET del binario AOT (cross-compile), no el host de
+            // build, para que las variantes por plataforma del runtime/usuario
+            // se seleccionen segun --format / --aot-arch.
+            std::string fmt_s;
+            if (result.count("format"))
+                fmt_s = result["format"].as<std::string>();
+            else
+#if defined(_WIN32)
+                fmt_s = "pe";
+#else
+                fmt_s = "elf";
+#endif
+            const std::string arch_s =
+                result.count("aot-arch")
+                    ? result["aot-arch"].as<std::string>()
+                    : std::string("x86-64");
+            const bool is32 = (arch_s == "x86-32" || arch_s == "x86_32" ||
+                               arch_s == "i386");
+            vex::set_aot_condcomp_target(fmt_s == "pe" ? "windows" : "linux",
+                                         is32 ? "x86" : "x86_64");
         }
     } else {
         /* Sin flags CLI explicitos -> consultar env var ahora.  Lo
@@ -760,11 +848,17 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
-        // (3) --emit / --format solo aplican a la compilacion AOT (-m aot).
-        //     Fuera de AOT se ignoraban sin avisar.
-        if ((result.count("emit") || result.count("format")) && !aot_mode) {
-            std::cerr << "[cli] --emit/--format solo aplican con -m aot "
+        // (3) --emit / --format solo aplican a la compilacion AOT (-m aot) o,
+        //     en el caso de --format, al linker propio (--link).  Fuera de esos
+        //     contextos se ignoraban sin avisar.
+        const bool link_mode = result.count("link") > 0;
+        if (result.count("emit") && !aot_mode) {
+            std::cerr << "[cli] --emit solo aplica con -m aot "
                          "(compilacion nativa standalone).\n";
+            return EXIT_FAILURE;
+        }
+        if (result.count("format") && !aot_mode && !link_mode) {
+            std::cerr << "[cli] --format solo aplica con -m aot o --link.\n";
             return EXIT_FAILURE;
         }
     }
@@ -838,6 +932,89 @@ int main(int argc, char *argv[]) {
         }
         std::cerr << "[verify] " << in_path << ": " << vr.error << "\n";
         return EXIT_FAILURE;
+    }
+
+    // Phase AOT.5: linker propio -- enlaza objetos .o en un ejecutable nativo
+    // sin depender de ld/gcc.  Uso: vm --link a.o b.o -o prog [--format elf]
+    // [--entry sym] [--link-base 0xADDR].
+    if (result.count("ar")) {
+        // Archivador propio: vm --ar libfoo.a a.o b.o ...  (primer posicional =
+        // .a de salida; resto = objetos), o -o libfoo.a + posicionales objetos.
+        std::vector<std::string> pos;
+        if (result.count("positional"))
+            pos = result["positional"].as<std::vector<std::string>>();
+        std::string ar_out =
+            result.count("output") ? result["output"].as<std::string>() : "";
+        std::vector<std::string> ar_objs;
+        if (!ar_out.empty()) {
+            ar_objs = pos; // -o fijo la salida; los posicionales son objetos
+        } else if (!pos.empty()) {
+            ar_out = pos.front(); // primer posicional = salida
+            ar_objs.assign(pos.begin() + 1, pos.end());
+        }
+        if (ar_out.empty() || ar_objs.empty()) {
+            std::cerr << "error: --ar requiere la libreria de salida y al menos "
+                         "un objeto (vm --ar libfoo.a a.o [b.o ...])\n";
+            return EXIT_FAILURE;
+        }
+        std::string aerr;
+        if (!aot::aot_ar_create(ar_out, ar_objs, aerr)) {
+            std::cerr << "[ar] error: " << aerr << "\n";
+            return EXIT_FAILURE;
+        }
+        std::cerr << "[ar] '" << ar_out << "' creado (" << ar_objs.size()
+                  << " objeto(s)).\n";
+        return EXIT_SUCCESS;
+    }
+
+    if (result.count("link")) {
+        std::vector<std::string> inputs;
+        if (result.count("positional"))
+            inputs = result["positional"].as<std::vector<std::string>>();
+        if (inputs.empty()) {
+            std::cerr << "error: --link requiere al menos un objeto .o "
+                         "(vm --link a.o [b.o ...] -o salida)\n";
+            return EXIT_FAILURE;
+        }
+        aot::LinkOptions lopts;
+        // Formato: --format pe|elf (default ELF; slice 1 = ELF).
+        if (result.count("format")) {
+            const std::string fmt = result["format"].as<std::string>();
+            if (fmt == "pe")
+                lopts.fmt = aot::ObjFormat::PE;
+            else if (fmt == "elf")
+                lopts.fmt = aot::ObjFormat::ELF;
+            else {
+                std::cerr << "error: --format invalido para --link: " << fmt
+                          << " (pe|elf)\n";
+                return EXIT_FAILURE;
+            }
+        } else {
+            lopts.fmt = aot::ObjFormat::ELF;
+        }
+        lopts.entry = result["entry"].as<std::string>();
+        const std::string lbase = result["link-base"].as<std::string>();
+        if (!lbase.empty())
+            lopts.image_base =
+                std::strtoull(lbase.c_str(), nullptr, 0); // 0x.. o decimal
+        lopts.link_script = result["link-script"].as<std::string>();
+        lopts.debug = result.count("link-debug") > 0;
+        lopts.sysroot = result["sysroot"].as<std::string>();
+        std::string out_path = result["output"].as<std::string>();
+        std::string lerr;
+        if (!aot::aot_link(inputs, out_path, lopts, lerr)) {
+            std::cerr << "[link] error: " << lerr << "\n";
+            return EXIT_FAILURE;
+        }
+        std::string entry_note =
+            !lopts.entry.empty()
+                ? (", entry=" + lopts.entry)
+                : (lopts.link_script.empty() ? std::string(", _start->main")
+                                             : std::string(", entry via "
+                                                           "link-script"));
+        std::cerr << "[link] ejecutable '" << out_path << "' escrito ("
+                  << inputs.size() << " objeto(s)" << entry_note << ").\n";
+        return EXIT_SUCCESS;
     }
 
 #ifdef VESTA_HAS_PREPROCESSOR
@@ -1693,6 +1870,35 @@ int main(int argc, char *argv[]) {
         copts.opt_level = 2;
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
         copts.native_poo = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
+        copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
+        // Bits del target para el inline-asm @Naked (validacion compile-time):
+        // --aot-arch x86-32 -> 32 (si no, `jmp ecx` y demas fallan en mode64).
+        if (aot_mode) {
+            const std::string aa = result.count("aot-arch")
+                                       ? result["aot-arch"].as<std::string>()
+                                       : std::string("x86-64");
+            copts.asm_target_bits =
+                (aa == "x86-32" || aa == "x86_32" || aa == "i386") ? 32 : 64;
+            // Ancho SIMD del TARGET para el matcher del vectorizador (mismo
+            // mapeo que el codegen vreg deriva de FloatIsa): el binario AOT usa
+            // el ancho de --float-isa, no el del host de build.  AUTO -> host
+            // del build como estimacion (el multiversion-cpuid es futuro).
+            const std::string fi = result.count("float-isa")
+                                       ? result["float-isa"].as<std::string>()
+                                       : std::string("sse2");
+            if (fi == "avx")
+                copts.aot_vec_width = 32;
+            else if (fi == "avx512")
+                copts.aot_vec_width = 64;
+            else if (fi == "auto") {
+                // AUTO: multiversion por cpuid en runtime.  El matcher hornea el
+                // chunk con estrategia dual (element-wise 64, reduccion 16) para
+                // que UN IR compile a las 3 variantes; el driver las compila 3x.
+                copts.aot_auto_vec = true;
+                copts.aot_vec_width = 64; // element-wise max (la reduccion usa 16)
+            } else
+                copts.aot_vec_width = 16; // sse2 / x87
+        }
         // Instrumentacion: aplica al IR independientemente del target
         // (bytecode VM, JIT, port C, etc.).  Validar valor aqui mismo.
         copts.instrument_mode = result["instrument"].as<std::string>();
@@ -2162,6 +2368,7 @@ int main(int argc, char *argv[]) {
             tgt.alloc_provided = !cr.aot_alloc_sym.empty();
             tgt.free_provided = !cr.aot_free_sym.empty();
             tgt.panic_provided = !cr.aot_panic_sym.empty();
+            tgt.exceptions_enabled = !aot_no_exceptions; // C3: configurable
 
             const char *tier_name = (aot_tier == aot::Tier::BARE)    ? "bare"
                                     : (aot_tier == aot::Tier::EMBED) ? "embed"
@@ -2184,12 +2391,541 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
+            // ----------------------------------------------------------------
+            // Auto-bundle del runtime de excepciones (stdlib/vex/vex_exc.vex).
+            // Si el modulo usa try/catch/throw (THROW o CALL __vex_setjmp en el
+            // IR) y no define el runtime el mismo, lo compilamos inline (mismo
+            // native_poo + el @Target ya seleccionado para el target AOT) y
+            // FUSIONAMOS sus funciones + la seccion .vexexc en aot_mod -> el .o
+            // queda autocontenido (no hay que enlazar vex_exc.o a mano).  El
+            // dead-elim posterior conserva solo las __vex_* realmente usadas.
+            // Removible con --no-exceptions (exceptions_enabled=false).
+            // ----------------------------------------------------------------
+            if (!aot_no_exceptions) {
+                bool uses_exc = false, defines_exc = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_setjmp") defines_exc = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::THROW ||
+                                (ins.op == ir::IrOp::CALL &&
+                                 ins.func_name == "__vex_setjmp"))
+                                uses_exc = true;
+                }
+                if (uses_exc && !defines_exc) {
+                    // Localizar vex_exc.vex: junto al exe (instalacion) o en el
+                    // repo (dev: build_dir/../stdlib/vex) o cwd.
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_exc.vex",
+                        exe_dir + "/../stdlib/vex/vex_exc.vex",
+                        "stdlib/vex/vex_exc.vex"};
+                    std::string ve_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            ve_path = c;
+                            break;
+                        }
+                    if (ve_path.empty()) {
+                        std::cerr << "[aot] usa excepciones pero no encuentro "
+                                     "stdlib/vex/vex_exc.vex (enlazalo a mano o "
+                                     "compila con --no-exceptions).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vef(ve_path);
+                    std::string ve_src((std::istreambuf_iterator<char>(vef)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions ve_opts;
+                    ve_opts.module_name = "vex_exc";
+                    ve_opts.opt_level = 2;
+                    ve_opts.native_poo = true;
+                    ve_opts.exceptions_enabled = true;
+                    // Mismo target bits que el modulo principal (el @Naked
+                    // setjmp/longjmp x86-32 debe ensamblarse en mode32).
+                    ve_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult ve_cr =
+                        vex::compile_vex_source(ve_src, ve_path, ve_opts);
+                    ir::IrModule ve_mod;
+                    if (!ve_cr.ok || ve_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(ve_cr.ir_module_cache_bytes,
+                                                   ve_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de "
+                                     "excepciones vex_exc.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    // Merge (mismo patron que compiler_project): remap de
+                    // STR_LIT_ADDR/code.s_N por el offset del static_data, luego
+                    // append de funciones (las que no existan ya) + static_data
+                    // + globals + native_imports.  vex_exc no tiene literales,
+                    // pero el remap es correcto en general (defensa).
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : ve_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(ve_mod.static_data));
+                    for (auto &gv : ve_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : ve_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] runtime de excepciones "
+                                 "(stdlib/vex/vex_exc.vex) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Auto-bundle del runtime de monitores (stdlib/vex/vex_sync.vex).
+            // Si el modulo usa `synchronized`/`monitor`, el lowering native_poo
+            // emite CALL __vex_monenter/__vex_monexit (monitor reentrante inline
+            // en el objeto, palabra en obj+16) en vez de las IR ops MONENTER/
+            // MONEXIT.  Fusionamos vex_sync.vex (atomic CAS + tid nativos) ->
+            // el .o queda autocontenido.  El dead-elim conserva solo lo usado.
+            // ----------------------------------------------------------------
+            {
+                bool uses_sync = false, defines_sync = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_monenter") defines_sync = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALL &&
+                                (ins.func_name == "__vex_monenter" ||
+                                 ins.func_name == "__vex_monexit"))
+                                uses_sync = true;
+                }
+                if (uses_sync && !defines_sync) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_sync.vex",
+                        exe_dir + "/../stdlib/vex/vex_sync.vex",
+                        "stdlib/vex/vex_sync.vex"};
+                    std::string vs_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            vs_path = c;
+                            break;
+                        }
+                    if (vs_path.empty()) {
+                        std::cerr << "[aot] usa synchronized pero no encuentro "
+                                     "stdlib/vex/vex_sync.vex (enlazalo a mano).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vsf(vs_path);
+                    std::string vs_src((std::istreambuf_iterator<char>(vsf)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions vs_opts;
+                    vs_opts.module_name = "vex_sync";
+                    vs_opts.opt_level = 2;
+                    vs_opts.native_poo = true;
+                    vs_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult vs_cr =
+                        vex::compile_vex_source(vs_src, vs_path, vs_opts);
+                    ir::IrModule vs_mod;
+                    if (!vs_cr.ok || vs_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
+                                                   vs_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de "
+                                     "monitores vex_sync.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : vs_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(vs_mod.static_data));
+                    for (auto &gv : vs_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : vs_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] runtime de monitores "
+                                 "(stdlib/vex/vex_sync.vex) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Auto-bundle del runtime de asincronia (stdlib/vex/vex_async.vex).
+            // Si el modulo usa spawn/future/await/fulfill, el lowering
+            // native_poo emite CALL __vex_spawn/__vex_future_new/__vex_await/
+            // __vex_fulfill (scheduler cooperativo, no hilos del SO).
+            // Fusionamos vex_async.vex -> .o autocontenido.
+            // ----------------------------------------------------------------
+            {
+                bool uses_async = false, defines_async = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_spawn") defines_async = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALL &&
+                                (ins.func_name == "__vex_spawn" ||
+                                 ins.func_name == "__vex_future_new" ||
+                                 ins.func_name == "__vex_await" ||
+                                 ins.func_name == "__vex_fulfill" ||
+                                 ins.func_name == "__vex_msgsend" ||
+                                 ins.func_name == "__vex_msgrecv"))
+                                uses_async = true;
+                }
+                if (uses_async && !defines_async) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_async.vex",
+                        exe_dir + "/../stdlib/vex/vex_async.vex",
+                        "stdlib/vex/vex_async.vex"};
+                    std::string va_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            va_path = c;
+                            break;
+                        }
+                    if (va_path.empty()) {
+                        std::cerr << "[aot] usa spawn/async pero no encuentro "
+                                     "stdlib/vex/vex_async.vex (enlazalo a mano).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vaf(va_path);
+                    std::string va_src((std::istreambuf_iterator<char>(vaf)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions va_opts;
+                    va_opts.module_name = "vex_async";
+                    va_opts.opt_level = 2;
+                    va_opts.native_poo = true;
+                    va_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult va_cr =
+                        vex::compile_vex_source(va_src, va_path, va_opts);
+                    ir::IrModule va_mod;
+                    if (!va_cr.ok || va_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(va_cr.ir_module_cache_bytes,
+                                                   va_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de "
+                                     "asincronia vex_async.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : va_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(va_mod.static_data));
+                    for (auto &gv : va_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : va_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] runtime de asincronia "
+                                 "(stdlib/vex/vex_async.vex) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Auto-bundle del runtime de I/O (stdlib/vex/vex_io.vex).
+            // Si el modulo usa print/println, el lowering native_poo emite
+            // CALLN `vex_bare_io:__vex_*` (write + formateadores).  En vez de
+            // exigir enlazar vesta_io_bare.o (libc/printf), fusionamos un
+            // runtime Vex puro que escribe via FFI a write/_write (fd 1, sin
+            // printf -> mas rapido) y formatea los numeros en Vex.  Tras el
+            // merge reescribimos esas CALLN a CALL plano (__vex_*) -> resuelven
+            // a las funciones bundle-adas (no quedan como import externo).  El
+            // usuario puede REDEFINIR cualquier __vex_* en su modulo: si lo
+            // hace, el lowering ya emitio CALL a la suya y no detectamos la
+            // CALLN -> no se bundle-a.  Removible con --freestanding (el
+            // usuario aporta los __vex_*) o --no-io.
+            // ----------------------------------------------------------------
+            if (!aot_no_io && !aot_freestanding) {
+                const std::string io_pfx = "vex_bare_io:";
+                bool uses_io = false, defines_io = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_write") defines_io = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALLN &&
+                                ins.func_name.rfind(io_pfx, 0) == 0)
+                                uses_io = true;
+                }
+                if (uses_io && !defines_io) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_io.vex",
+                        exe_dir + "/../stdlib/vex/vex_io.vex",
+                        "stdlib/vex/vex_io.vex"};
+                    std::string io_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            io_path = c;
+                            break;
+                        }
+                    if (io_path.empty()) {
+                        std::cerr << "[aot] usa print/println pero no encuentro "
+                                     "stdlib/vex/vex_io.vex (enlazalo a mano o "
+                                     "compila con --freestanding y aporta "
+                                     "__vex_write).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream iof(io_path);
+                    std::string io_src((std::istreambuf_iterator<char>(iof)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions io_opts;
+                    io_opts.module_name = "vex_io";
+                    io_opts.opt_level = 2;
+                    io_opts.native_poo = true;
+                    io_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult io_cr =
+                        vex::compile_vex_source(io_src, io_path, io_opts);
+                    ir::IrModule io_mod;
+                    if (!io_cr.ok || io_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
+                                                   io_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de I/O "
+                                     "vex_io.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    // Merge (mismo patron que vex_exc): remap de STR_LIT_ADDR por
+                    // el offset del static_data + append de funciones nuevas +
+                    // static_data + globals + native_imports (write/_write/abort).
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : io_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(io_mod.static_data));
+                    for (auto &gv : io_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : io_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    // Reescribir CALLN `vex_bare_io:__vex_*` -> CALL `__vex_*`
+                    // (las funciones ahora viven en el modulo; resolucion
+                    // intra-imagen, sin import externo).
+                    for (auto &af : aot_mod.functions)
+                        for (auto &b : af.blocks)
+                            for (auto &ins : b.instrs)
+                                if (ins.op == ir::IrOp::CALLN &&
+                                    ins.func_name.rfind(io_pfx, 0) == 0) {
+                                    ins.op = ir::IrOp::CALL;
+                                    ins.func_name =
+                                        ins.func_name.substr(io_pfx.size());
+                                }
+                    // El I/O es block-buffered: inyectar CALL __vex_flush antes
+                    // de cada RET de main para volcar al salir (el _start nativo
+                    // no corre atexit).  Asi nada se pierde y el buffering vale
+                    // (1 syscall por 4 KiB en vez de 1 por write).
+                    for (auto &af : aot_mod.functions) {
+                        if (af.name != "main") continue;
+                        for (auto &b : af.blocks) {
+                            std::vector<ir::IrInstr> ni;
+                            ni.reserve(b.instrs.size() + 1);
+                            for (auto &ins : b.instrs) {
+                                if (ins.op == ir::IrOp::RET) {
+                                    ir::IrInstr fl{};
+                                    fl.op = ir::IrOp::CALL;
+                                    // type por defecto = VOID (0); evitamos la
+                                    // macro VOID de windef.h (restaurada tras
+                                    // incluir ssa_ir.h).
+                                    fl.dst = ir::IR_NO_VALUE;
+                                    fl.func_name = "__vex_flush";
+                                    fl.source_line = ins.source_line;
+                                    ni.push_back(std::move(fl));
+                                }
+                                ni.push_back(std::move(ins));
+                            }
+                            b.instrs = std::move(ni);
+                        }
+                    }
+                    std::cout << "[aot] runtime de I/O (stdlib/vex/vex_io.vex) "
+                                 "incluido en el objeto.\n";
+                }
+            }
+
+            // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
+            // analizar/compilar.  Sin esto, una factoria-de-closure inlineada
+            // en su caller queda como copia standalone no usada y su GC_ALLOC
+            // bloquearia la compilacion bare.  Cierre transitivo desde main +
+            // funciones @section, siguiendo CALL/TAILCALL/LABEL_ADDR y los
+            // sym_refs de las vtablas (static_data).  Conservador: ante la duda
+            // se conserva (un drop erroneo daria un error de enlace ruidoso,
+            // nunca corrupcion).
+            {
+                std::unordered_set<std::string> live;
+                std::vector<std::string> work;
+                auto add_live = [&](const std::string &n) {
+                    if (!n.empty() && live.insert(n).second) work.push_back(n);
+                };
+                std::unordered_map<std::string, const ir::IrFunction *> by_name;
+                for (auto &f : aot_mod.functions) by_name[f.name] = &f;
+                // Modo LIBRERIA: un modulo sin `main` es una libreria (.o/.so);
+                // TODAS sus funciones son raices (son la API publica; no se sabe
+                // quien las llamara desde fuera).  El linker final hace el
+                // dead-strip del ejecutable (--gc-sections), asi que esto NO
+                // infla el .exe: con `main`, la poda desde main mantiene el exe
+                // lean (una funcion no alcanzable se elimina).  Sin esto, una
+                // libreria Vex compilaba a 0 funciones.
+                const bool is_library = (by_name.count("main") == 0);
+                add_live("main");
+                add_live("__module_init");
+                // AUTO multiversion (--float-isa auto): el dispatch (auto_init)
+                // referencia las VARIANTES por nombre derivado (NAME$sse2/...),
+                // no la funcion base NAME -> la poda no la veria.  Mantener viva
+                // toda funcion con ops VEC (la base de la que el driver deriva
+                // las 3 variantes); su recorrido arrastra sus callees (p.ej.
+                // sum_f64).  Espejo de la siembra del BFS de codegen.
+                const bool auto_keep_vec =
+                    (result.count("float-isa") &&
+                     result["float-isa"].as<std::string>() == "auto");
+                auto has_vec = [](const ir::IrFunction &f) -> bool {
+                    for (const auto &b : f.blocks)
+                        for (const auto &in : b.instrs) {
+                            const auto op = in.op;
+                            if (op == ir::IrOp::VEC_BINOP ||
+                                op == ir::IrOp::VEC_UNOP ||
+                                op == ir::IrOp::VEC_FMA ||
+                                op == ir::IrOp::VEC_BINOP_S ||
+                                op == ir::IrOp::VEC_BCAST ||
+                                op == ir::IrOp::VEC_ACC_ZERO ||
+                                op == ir::IrOp::VEC_ACC_ADD ||
+                                op == ir::IrOp::VEC_ACC_FMA ||
+                                op == ir::IrOp::VEC_ACC_STORE ||
+                                op == ir::IrOp::VEC_ACC_COMBINE)
+                                return true;
+                        }
+                    return false;
+                };
+                for (auto &f : aot_mod.functions) {
+                    if (!f.section.empty() || f.is_naked || is_library ||
+                        (auto_keep_vec && has_vec(f)))
+                        add_live(f.name);
+                }
+                // Raices por vtablas/datos: nombres referenciados en sym_refs.
+                for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
+                    for (const auto &sr : aot_mod.static_data.meta_at(si).sym_refs)
+                        add_live(sr.sym);
+                while (!work.empty()) {
+                    const std::string cur = work.back();
+                    work.pop_back();
+                    auto it = by_name.find(cur);
+                    if (it == by_name.end()) continue;
+                    for (const auto &b : it->second->blocks)
+                        for (const auto &ins : b.instrs) {
+                            if ((ins.op == ir::IrOp::CALL ||
+                                 ins.op == ir::IrOp::TAILCALL ||
+                                 ins.op == ir::IrOp::LABEL_ADDR) &&
+                                !ins.func_name.empty())
+                                add_live(ins.func_name);
+                            // THROW baja a CALL __vex_throw en el backend
+                            // (no es un CALL en el IR) -> referencia implicita
+                            // al runtime de excepciones auto-hospedado.
+                            if (ins.op == ir::IrOp::THROW)
+                                add_live("__vex_throw");
+                            // INLINE_ASM: el cuerpo (func_name) puede referenciar
+                            // funciones del modulo via tokens `__vxf_<label>` que
+                            // el lowering inserto (inline-asm accede simbolos
+                            // propios).  La poda NO ve estas refs porque el asm es
+                            // texto opaco -> escanearlas explicitamente para que la
+                            // funcion referenciada sobreviva y se compile.  Los
+                            // `__vxg_<slot>` son globales (rodata), no funciones.
+                            if (ins.op == ir::IrOp::INLINE_ASM &&
+                                !ins.func_name.empty()) {
+                                const std::string &body = ins.func_name;
+                                const std::string tag = "__vxf_";
+                                size_t p = 0;
+                                while ((p = body.find(tag, p)) !=
+                                       std::string::npos) {
+                                    size_t s = p + tag.size();
+                                    size_t e = s;
+                                    while (e < body.size() &&
+                                           (std::isalnum((unsigned char)body[e]) ||
+                                            body[e] == '_' || body[e] == '$'))
+                                        ++e;
+                                    if (e > s)
+                                        add_live(body.substr(s, e - s));
+                                    p = e;
+                                }
+                            }
+                        }
+                }
+                std::vector<ir::IrFunction> kept;
+                kept.reserve(aot_mod.functions.size());
+                for (auto &f : aot_mod.functions)
+                    if (live.count(f.name)) kept.push_back(std::move(f));
+                aot_mod.functions = std::move(kept);
+            }
+
+            // AOT: promover envs de closure de heap a stack cuando no escapan
+            // (closure-aware escape analysis).  Tras esto, los que no se
+            // pudieron promover quedan GC_ALLOC -> aot_analyze los rechaza
+            // limpio (nunca heap sin liberar).  Corre solo en el path AOT.
+            for (auto &afn : aot_mod.functions)
+                (void)ir::ir_pass_promote_closure_env(afn);
+
+            // AOT opcion 1: las closures que escapan CROSS-FUNCTION (env creado
+            // en una factoria y retornado; no inlinable -> promote no lo pudo
+            // poner en stack) se liberan con RAW_FREE determinista en el dueno
+            // terminal.  Lo que no tenga dueno limpio se revierte a GC_ALLOC
+            // (aot_analyze lo rechaza -> nunca leak).  Corre tras promote.
+            (void)ir::ir_pass_own_closure_envs(aot_mod);
+
+            if (std::getenv("VESTA_AOT_DUMP_IR")) {
+                std::cerr << "===== AOT native_poo IR =====\n";
+                ir::ir_print(aot_mod, std::cerr);
+                std::cerr << "=============================\n";
+            }
             aot::AotCompatReport rep = aot::aot_analyze_module(aot_mod, tgt);
             std::cout << "[aot] target=" << tier_name
                       << (aot_freestanding ? " --freestanding" : "") << ": "
                       << aot_mod.functions.size() << " funcion(es), "
                       << rep.ok_functions.size()
                       << " compilable(s) a nativo.\n";
+
 
             if (!rep.compatible) {
                 std::cerr << rep.render();
@@ -2208,10 +2944,78 @@ int main(int argc, char *argv[]) {
             // @AllocatorOverride/@PanicHandler (vacio = convencion C
             // malloc/free/abort).
             aot::AotLowerConfig lcfg;
+            // Detectar si el modulo usa el allocator (RAW_ALLOC/RAW_FREE o el
+            // calloc del `new`) para decidir el auto-bundle del slab Vex.
+            bool aot_uses_alloc = false;
+            for (const auto &af : aot_mod.functions)
+                for (const auto &b : af.blocks)
+                    for (const auto &in : b.instrs)
+                        if (in.op == ir::IrOp::RAW_ALLOC ||
+                            in.op == ir::IrOp::RAW_FREE ||
+                            ((in.op == ir::IrOp::CALL ||
+                              in.op == ir::IrOp::TAILCALL) &&
+                             in.func_name == "calloc"))
+                            aot_uses_alloc = true;
+            bool bundle_mem = false;
+            ir::IrModule mem_mod; // poblado si bundle_mem (merge tras aot_lower)
             if (!cr.aot_alloc_sym.empty()) {
+                // @AllocatorOverride del usuario: respetarlo (no bundle).
                 lcfg.alloc_sym = cr.aot_alloc_sym;
                 lcfg.has_alloc_override =
                     true; // __new calloc -> alloc_sym(size)
+            } else if (aot_uses_alloc && !aot_no_mem && !aot_freestanding) {
+                // Sin @AllocatorOverride del usuario -> el slab Vex
+                // (stdlib/vex/vex_mem.vex) es el allocator por DEFECTO, via el
+                // MISMO mecanismo @AllocatorOverride (reciclamos la sintaxis):
+                // compilamos vex_mem y leemos sus simbolos override
+                // (__vex_malloc / __vex_free) genericamente, no hardcoded.  Sin
+                // libc malloc/free.  El usuario sustituye con su propio
+                // @AllocatorOverride, o lo desactiva con --no-mem.
+                const std::string exe_dir =
+                    std::filesystem::path(fs::get_executable_path())
+                        .parent_path()
+                        .string();
+                const std::vector<std::string> cands = {
+                    exe_dir + "/stdlib/vex/vex_mem.vex",
+                    exe_dir + "/../stdlib/vex/vex_mem.vex",
+                    "stdlib/vex/vex_mem.vex"};
+                std::string mem_path;
+                for (const auto &c : cands)
+                    if (std::filesystem::exists(c)) {
+                        mem_path = c;
+                        break;
+                    }
+                if (mem_path.empty()) {
+                    std::cerr << "[aot] usa el allocator pero no encuentro "
+                                 "stdlib/vex/vex_mem.vex (enlazalo a mano, usa "
+                                 "@AllocatorOverride o compila con --no-mem).\n";
+                    return EXIT_FAILURE;
+                }
+                std::ifstream mf(mem_path);
+                std::string mem_src((std::istreambuf_iterator<char>(mf)),
+                                    std::istreambuf_iterator<char>());
+                vex::CompileOptions mem_opts;
+                mem_opts.module_name = "vex_mem";
+                mem_opts.opt_level = 2;
+                mem_opts.native_poo = true;
+                mem_opts.asm_target_bits = copts.asm_target_bits;
+                vex::CompileResult mem_cr =
+                    vex::compile_vex_source(mem_src, mem_path, mem_opts);
+                if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
+                    !ir::parse_ir_module_cache(mem_cr.ir_module_cache_bytes,
+                                               mem_mod) ||
+                    mem_cr.aot_alloc_sym.empty() ||
+                    mem_cr.aot_free_sym.empty()) {
+                    std::cerr << "[aot] no pude compilar el slab allocator "
+                                 "vex_mem.vex (o no expone @AllocatorOverride).\n";
+                    return EXIT_FAILURE;
+                }
+                // Override por defecto = los simbolos que vex_mem declaro con
+                // @AllocatorOverride (mismo trato que un override del usuario).
+                lcfg.alloc_sym = mem_cr.aot_alloc_sym;
+                lcfg.free_sym = mem_cr.aot_free_sym;
+                lcfg.has_alloc_override = true; // __new calloc -> alloc_sym(size)
+                bundle_mem = true;
             }
             if (!cr.aot_free_sym.empty()) lcfg.free_sym = cr.aot_free_sym;
             if (!cr.aot_panic_sym.empty()) {
@@ -2219,6 +3023,44 @@ int main(int argc, char *argv[]) {
                 lcfg.panic_takes_msg = true; // @PanicHandler(msg_addr, len)
             }
             aot::aot_lower_runtime(aot_mod, lcfg);
+
+            // Merge del slab (stdlib/vex/vex_mem.vex, ya compilado en mem_mod)
+            // DESPUES de aot_lower: ahora RAW_ALLOC/calloc/RAW_FREE ya son CALL
+            // __vex_malloc/__vex_free, asi que el codegen BFS los alcanza desde
+            // main.  Mismo patron de merge que vex_io/vex_exc.
+            if (bundle_mem) {
+                const uint64_t sd_off =
+                    static_cast<uint64_t>(aot_mod.static_data.size());
+                std::unordered_set<std::string> have;
+                for (const auto &af : aot_mod.functions)
+                    have.insert(af.name);
+                for (auto &fn : mem_mod.functions) {
+                    if (sd_off != 0)
+                        for (auto &bb : fn.blocks)
+                            for (auto &ins : bb.instrs)
+                                if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                    ins.imm += sd_off;
+                    if (!have.count(fn.name))
+                        aot_mod.functions.push_back(std::move(fn));
+                }
+                aot_mod.static_data.append_raw_entries(
+                    std::move(mem_mod.static_data));
+                for (auto &gv : mem_mod.globals)
+                    aot_mod.globals.emplace(gv.first, gv.second);
+                for (auto &ni : mem_mod.native_imports)
+                    aot_mod.register_native_import(ni.lib, ni.name);
+                std::cout << "[aot] slab allocator (stdlib/vex/vex_mem.vex) "
+                             "incluido en el objeto.\n";
+            }
+
+            // Bare AOT: NO hay VM stack (rbx no es un ProcessVM*).  Forzar
+            // TODAS las ALLOCAs a la pila nativa (host_alloca), incluso las
+            // que "escapan" a un CALL -- en nativo el host stack ES
+            // addressable cross-call.  Sin esto, un local cuya direccion se
+            // pasa a una funcion (p.ej. un buffer para itoa) se aloca con
+            // ALLOCA_VM ([rbx+0x40]) -> direccion basura -> SIGSEGV.
+            for (auto &afn : aot_mod.functions)
+                ir::ir_pass_promote_local_allocas(afn, /*force_all=*/true);
 
             // ------------------------------------------------------------------
             // Paso 2: codegen nativo (HOST_LEAF) + emision del ejecutable.
@@ -2319,6 +3161,40 @@ int main(int argc, char *argv[]) {
                     return EXIT_FAILURE;
                 }
             }
+            // Increment 3: auto-link de libvesta_gc.a si el modulo usa gc<T>.
+            // El frontend emite __vexgc_init cuando hay gc<T>; ese codigo llama
+            // a vex_gc_* (definidos en libvesta_gc.a).  Para --emit exe se emite
+            // un .obj temporal y se enlaza con la lib (vm --link interno),
+            // porque la ruta inline mandaria vex_gc_* a imports de DLL (rotos).
+            // Solo PE por ahora (la lib se distribuye como COFF .a).
+            bool gc_autolink = false;
+            std::string gc_real_out, gc_tmp_obj;
+            {
+                bool uses_gc = false;
+                // __vexgc_init suele inlinearse en main; detectamos por las
+                // llamadas a los runtime entries vex_gc_* en cualquier funcion.
+                for (const auto &fn : aot_mod.functions) {
+                    for (const auto &b : fn.blocks) {
+                        for (const auto &ins : b.instrs)
+                            if (ins.func_name.rfind("vex_gc_", 0) == 0) {
+                                uses_gc = true;
+                                break;
+                            }
+                        if (uses_gc) break;
+                    }
+                    if (uses_gc) break;
+                }
+                const bool want_exec =
+                    !emit_obj && !emit_shared && !emit_bin;
+                if (uses_gc && want_exec) {
+                    gc_autolink = true;
+                    emit_obj = true;          // emitir .obj temporal...
+                    gc_real_out = out_prefix; // ...y enlazarlo a este .exe
+                    gc_tmp_obj = out_prefix + ".vexgc.tmp.obj";
+                    out_prefix = gc_tmp_obj;
+                }
+            }
+
             // --emit shared: ELF (.so) y PE (.dll).
             if (emit_shared && !aot_pic) {
                 std::cerr << "[aot] --emit shared requiere PIC; --no-pie no es "
@@ -2336,18 +3212,22 @@ int main(int argc, char *argv[]) {
             // crt/host/loader).
             const bool no_stub = emit_obj || emit_shared || emit_bin;
 
-            // x86-32: soporta --emit bin (flat, modo protegido) y --emit exe
-            // con
-            // --format elf (ELF32 estatico, _start via int 0x80).  PE32 (.exe
-            // Windows 32-bit) y .o32/.so32 son follow-ups.
+            // x86-32: soporta --emit bin (flat), --emit exe (ELF32/PE32) y
+            // --emit obj (.o ELF32 -- COFF32 .obj es follow-up).  .so/.dll de
+            // 32-bit pendientes.  El objeto conserva la extension .o (linkable
+            // con gcc -m32 / ld).
             if (aot_mode32) {
-                const bool ok32 =
-                    emit_bin || (!no_stub /* EXEC: ELF32 o PE32 */);
+                // --emit obj: .o ELF32 (--format elf) o .obj COFF i386
+                // (--format pe), ambos conservando la extension para linkers
+                // externos (gcc -m32 / ld / link.exe).
+                const bool ok32 = emit_bin || emit_obj ||
+                                  (!no_stub /* EXEC: ELF32 o PE32 */);
                 if (!ok32) {
                     std::cerr
-                        << "[aot] --aot-arch x86-32: soporta --emit bin o "
-                           "--emit exe (ELF32 / PE32); .o/.so/.dll de 32-bit "
-                           "son follow-ups.\n";
+                        << "[aot] --aot-arch x86-32: soporta --emit bin, "
+                           "--emit exe (ELF32 / PE32) o --emit obj (.o ELF32 / "
+                           ".obj COFF i386); .so/.dll de 32-bit son "
+                           "follow-ups.\n";
                     return EXIT_FAILURE;
                 }
             }
@@ -2360,7 +3240,7 @@ int main(int argc, char *argv[]) {
                     main_fn = &fn;
                     break;
                 }
-            if (!main_fn && !emit_shared && !emit_bin) {
+            if (!main_fn && !emit_shared && !emit_bin && !emit_obj) {
                 std::cerr
                     << "[aot] no se encontro la funcion 'main' en el modulo.\n";
                 return EXIT_FAILURE;
@@ -2376,6 +3256,61 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
+            // TLS: derivar in-memory el flag is_tls de cada STR_LIT_ADDR cuya
+            // entrada static_data lleve SD_FLAG_TLS (la TLS-ness no se
+            // serializa por-instruccion; se reconstruye aqui desde el flag de
+            // la entrada, que SI round-trippea).  El codegen vreg lo consume
+            // para emitir el acceso por thread pointer (fs/gs + TPOFF).
+            bool module_has_tls = false;
+            {
+                const auto &sd_tls = aot_mod.static_data;
+                for (size_t i = 0; i < sd_tls.size(); ++i)
+                    if (sd_tls.entries[i].meta.flags &
+                        ir::IrModule::SD_FLAG_TLS) {
+                        module_has_tls = true;
+                        break;
+                    }
+                for (auto &f : aot_mod.functions)
+                    for (auto &blk : f.blocks)
+                        for (auto &in : blk.instrs)
+                            if (in.op == ir::IrOp::STR_LIT_ADDR &&
+                                in.imm < sd_tls.size() &&
+                                (sd_tls.entries[in.imm].meta.flags &
+                                 ir::IrModule::SD_FLAG_TLS))
+                                in.is_tls = true;
+            }
+            // thread_local en libreria/binario:
+            //   - PE shared (.dll): VALIDO -- el TLS directory de Windows lo
+            //     procesa el cargador tambien para DLLs (Vista+, incl.
+            //     LoadLibrary); el emisor lo sintetiza igual que en el .exe.
+            //   - ELF shared (.so): NO -- el modelo local-exec es incorrecto en
+            //     una lib cargada con dlopen (el offset TLS se asigna en
+            //     runtime; requiere initial-exec/general-dynamic, que nuestro
+            //     codegen aun no emite).
+            //   - bin (binario plano): NO -- no hay cargador que monte el bloque.
+            const bool tls_is_pe = (fmt == aot::ObjFormat::PE);
+            if (module_has_tls &&
+                (emit_bin || (emit_shared && !tls_is_pe))) {
+                std::cerr
+                    << "[aot] thread_local no soportado en --emit "
+                    << (emit_bin ? "bin" : "shared (ELF)")
+                    << " todavia: "
+                    << (emit_bin
+                            ? "un binario plano no tiene cargador que monte el "
+                              "bloque TLS"
+                            : "una .so con dlopen necesita initial-exec/"
+                              "general-dynamic, no local-exec")
+                    << ".  Usa --emit exe/obj (o --format pe --emit shared para "
+                       "una .dll).\n";
+                return EXIT_FAILURE;
+            }
+            // PE shared (.dll) con TLS: el emisor sintetiza el TLS directory
+            // (isolation por-hilo) y, ademas, fija el AddressOfEntryPoint a
+            // __vex_tls_init (un DllMain minimo).  ntdll lo invoca en cada
+            // DLL_PROCESS_ATTACH / DLL_THREAD_ATTACH, aplicando la plantilla
+            // (valores iniciales no-cero) a la copia por-hilo -- funciona con
+            // cualquier consumidor (con o sin CRT).  Sin nota necesaria.
+
             // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
             std::unordered_map<std::string, const ir::IrFunction *> fn_by_name;
             for (const auto &f : aot_mod.functions)
@@ -2390,6 +3325,9 @@ int main(int argc, char *argv[]) {
                 std::string section_perms; // "rwx" explicito ("" = convencion)
                 int64_t section_at = -1;   // @at(N)
                 int32_t section_order = 0x7fffffff; // @order(N)
+                // Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint
+                // (pc_offset relativo a esta funcion).  Vacios salvo gc<T>.
+                std::vector<jit::Stackmap> stackmaps;
             };
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t>
@@ -2408,12 +3346,31 @@ int main(int argc, char *argv[]) {
                 queued["main"] = true;
             }
             for (const auto &fn : aot_mod.functions) {
-                if ((emit_shared || !fn.section.empty()) &&
+                // SHARED siembra todo (exporta todo).  OBJECT sin main es una
+                // libreria -> tambien siembra todo (compila todas sus funciones
+                // para que un linker las pueda usar).  Con main, OBJECT mantiene
+                // el BFS desde main (no regresa programas con funciones
+                // inalcanzables no-compilables).  @section siempre se siembra.
+                // Phase NR @Naked: un ISR/stub se referencia desde la IDT/GDT
+                // o por asm externo, NUNCA por un CALL visible -> sembrarlo
+                // siempre para que no lo elimine el dead-strip del BFS.
+                if ((emit_shared || (emit_obj && !main_fn) ||
+                     !fn.section.empty() || fn.is_naked) &&
                     !queued.count(fn.name)) {
                     queued[fn.name] = true;
                     work.push_back(fn.name);
                 }
             }
+            // __vex_tls_init (TLS callback): lo llama el cargador de Windows (no
+            // un CALL visible) -> sembrarlo siempre para que se compile.
+            if (!queued.count("__vex_tls_init"))
+                for (const auto &fn : aot_mod.functions)
+                    if (fn.name == "__vex_tls_init") {
+                        queued["__vex_tls_init"] = true;
+                        work.push_back("__vex_tls_init");
+                        break;
+                    }
+
             // Sembrar las funciones referenciadas por bloques `bytes` (`dq
             // foo`) para que se compilen aunque main no las alcance por CALL.
             for (const auto &e : aot_mod.static_data.entries) {
@@ -2425,6 +3382,43 @@ int main(int argc, char *argv[]) {
                 }
             }
             bool aot_codegen_ok = true;
+            // AUTO (--float-isa auto): multiversion por cpuid.  Las funciones
+            // con ops VEC_* (vectorizadas) se compilan 3x (sse2/avx2/avx512); el
+            // IR es UNO (chunk dual: element-wise 64, reduccion 16 -> cada
+            // variante decompone a su ancho).  El dispatch (fp+init+trampolin) va
+            // despues; aqui solo emitimos las variantes fn$sse2/avx2/avx512.
+            const bool aot_auto = (aot_fisa == jit::FloatIsa::AUTO);
+            auto fn_has_vec_ops = [](const ir::IrFunction &f) -> bool {
+                for (const auto &b : f.blocks)
+                    for (const auto &in : b.instrs) {
+                        const auto op = in.op;
+                        if (op == ir::IrOp::VEC_BINOP || op == ir::IrOp::VEC_UNOP ||
+                            op == ir::IrOp::VEC_FMA || op == ir::IrOp::VEC_BINOP_S ||
+                            op == ir::IrOp::VEC_BCAST ||
+                            op == ir::IrOp::VEC_ACC_ZERO ||
+                            op == ir::IrOp::VEC_ACC_ADD ||
+                            op == ir::IrOp::VEC_ACC_FMA ||
+                            op == ir::IrOp::VEC_ACC_STORE ||
+                            op == ir::IrOp::VEC_ACC_COMBINE)
+                            return true;
+                    }
+                return false;
+            };
+            // Nombres de las variantes multiversionadas (los consume el dispatch).
+            std::vector<std::string> mv_funcs; // funciones multiversionadas
+            // AUTO: sembrar toda funcion con ops VEC.  __vex_main_body (el main
+            // del usuario renombrado por la lowering) NO se alcanza por CALL
+            // directo (el main sintetico hace CALLIND via fp), asi que hay que
+            // encolarlo explicitamente para que se dequeue -> compile sus 3
+            // variantes.  __vex_auto_init si se alcanza (main lo CALL-prepende).
+            if (aot_auto) {
+                for (const auto &fn : aot_mod.functions) {
+                    if (fn_has_vec_ops(fn) && !queued.count(fn.name)) {
+                        queued[fn.name] = true;
+                        work.push_back(fn.name);
+                    }
+                }
+            }
             while (!work.empty()) {
                 const std::string nm = work.back();
                 work.pop_back();
@@ -2445,7 +3439,9 @@ int main(int argc, char *argv[]) {
                 af.bytes = jit::vreg_compile_native(
                     *itf->second, {}, {}, {}, {}, &af.relocs, aot_pic,
                     /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                    /*mode32=*/aot_mode32, /*fisa=*/aot_fisa);
+                    /*mode32=*/aot_mode32, /*fisa=*/aot_fisa,
+                    /*emit_line_map=*/false, /*line_map_out=*/nullptr,
+                    /*asm_labels_out=*/nullptr, /*stackmaps_out=*/&af.stackmaps);
                 if (af.bytes.empty()) {
                     std::cerr
                         << "[aot] el selector vreg no soporta la funcion '"
@@ -2455,6 +3451,50 @@ int main(int argc, char *argv[]) {
                 }
                 compiled_idx[nm] = compiled.size();
                 compiled.push_back(std::move(af));
+
+                // AUTO: si la funcion tiene ops VEC, emitir las 3 variantes de
+                // ancho compilando el MISMO IR con fisa sse2/avx2/avx512.  El
+                // dispatch (mas abajo) las cablea via fp+init+trampolin.  La
+                // copia `nm` (compilada arriba con AUTO=host) sirve de baseline
+                // hasta que el trampolin la reemplace.
+                if (aot_auto && fn_has_vec_ops(*itf->second)) {
+                    const std::pair<const char *, jit::FloatIsa> variants[] = {
+                        {"$sse2", jit::FloatIsa::SSE2},
+                        {"$avx2", jit::FloatIsa::AVX},
+                        {"$avx512", jit::FloatIsa::AVX512F}};
+                    bool ok = true;
+                    for (const auto &v : variants) {
+                        AotFn vf;
+                        vf.name = nm + v.first;
+                        vf.bytes = jit::vreg_compile_native(
+                            *itf->second, {}, {}, {}, {}, &vf.relocs, aot_pic,
+                            /*target_sysv=*/fmt == aot::ObjFormat::ELF,
+                            /*mode32=*/aot_mode32, /*fisa=*/v.second);
+                        if (vf.bytes.empty()) {
+                            std::cerr << "[aot] variante " << vf.name
+                                      << " no compilable.\n";
+                            ok = false;
+                            break;
+                        }
+                        // Las CALL de la variante encolan callees igual que el
+                        // baseline (se hace abajo en el loop de relocs comun? no:
+                        // las variantes no pasan por ese loop -> encolar aqui).
+                        for (const jit::NativeReloc &r : vf.relocs)
+                            if (r.kind == jit::NativeReloc::Kind::CALL_REL32 &&
+                                fn_by_name.count(r.symbol) &&
+                                !queued.count(r.symbol)) {
+                                queued[r.symbol] = true;
+                                work.push_back(r.symbol);
+                            }
+                        compiled_idx[vf.name] = compiled.size();
+                        compiled.push_back(std::move(vf));
+                    }
+                    if (!ok) {
+                        aot_codegen_ok = false;
+                        break;
+                    }
+                    mv_funcs.push_back(nm);
+                }
                 // Encolar los callees (relocs CALL_REL32 a nombres de funcion).
                 // Los simbolos que NO son funciones del modulo son EXTERNOS
                 // (libc/runtime, resueltos por el linker): no se encolan, se
@@ -2564,6 +3604,80 @@ int main(int argc, char *argv[]) {
             for (size_t ci = 0; ci < compiled.size(); ++ci)
                 if (!main_fn || compiled[ci].name != "main") place_fn(ci);
 
+            // gc<T> (Inc 4b): emitir la seccion .vexgc_smap con los stackmaps de
+            // cada funcion que retiene GC roots, para que __vexgc_init la
+            // registre en el GC al arranque (scan_jit_roots_precise sobre frames
+            // nativos).  func_addr va como placeholder + reloc ABS64 a la fn
+            // (resuelto tras el layout).  Solo si hay stackmaps no vacios.
+            std::vector<std::pair<uint32_t, std::string>> smap_func_relocs;
+            int smap_si = -1;
+            {
+                std::vector<size_t> gc_fns;
+                for (size_t ci = 0; ci < compiled.size(); ++ci) {
+                    for (const auto &sm : compiled[ci].stackmaps)
+                        if (!sm.slots.empty()) {
+                            gc_fns.push_back(ci);
+                            break;
+                        }
+                }
+                // Emitir la seccion siempre que ALGUNA funcion referencie
+                // .vexgc_smap (via section_start/size de __vexgc_init, posible-
+                // mente INLINEADO en main) -- aunque no haya stackmaps no vacios
+                // -- porque la reloc secsym exige que la seccion exista.
+                bool gc_smap_ref = false;
+                for (const auto &af : compiled) {
+                    for (const auto &r : af.relocs)
+                        if (r.symbol.find(".vexgc_smap") != std::string::npos) {
+                            gc_smap_ref = true;
+                            break;
+                        }
+                    if (gc_smap_ref) break;
+                }
+                if (gc_smap_ref) {
+                    std::vector<uint8_t> b;
+                    auto put32 = [&b](uint32_t v) {
+                        for (int i = 0; i < 4; ++i)
+                            b.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+                    };
+                    auto put64 = [&b](uint64_t v) {
+                        for (int i = 0; i < 8; ++i)
+                            b.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+                    };
+                    put32(0x4D475856u);                            // 'VXGM'
+                    put32(1u);                                     // version
+                    put32(static_cast<uint32_t>(gc_fns.size()));   // n_fn
+                    put32(0u);  // total_size (parcheado al final, offset 12)
+                    for (size_t ci : gc_fns) {
+                        const AotFn &af = compiled[ci];
+                        smap_func_relocs.push_back(
+                            {static_cast<uint32_t>(b.size()), af.name});
+                        put64(0); // func_addr placeholder (ABS64 reloc)
+                        put32(static_cast<uint32_t>(af.bytes.size())); // code_size
+                        put32(static_cast<uint32_t>(
+                            af.stackmaps.size())); // n_safepoints (todos)
+                        for (const auto &sm : af.stackmaps) {
+                            put32(sm.pc_offset);
+                            put32(static_cast<uint32_t>(sm.slots.size()));
+                            for (const auto &slot : sm.slots) {
+                                const int16_t off = slot.rbp_offset;
+                                b.push_back(static_cast<uint8_t>(off & 0xFF));
+                                b.push_back(
+                                    static_cast<uint8_t>((off >> 8) & 0xFF));
+                                b.push_back(
+                                    static_cast<uint8_t>(slot.gc_kind));
+                                b.push_back(0); // _pad
+                            }
+                        }
+                    }
+                    // Parchear total_size (offset 12) con el tamanño final.
+                    const uint32_t total = static_cast<uint32_t>(b.size());
+                    for (int i = 0; i < 4; ++i)
+                        b[12 + i] = static_cast<uint8_t>((total >> (i * 8)) & 0xFF);
+                    smap_si = get_sec(".vexgc_smap", /*is_code=*/false, "r");
+                    secs[smap_si].bytes = std::move(b);
+                }
+            }
+
             // ------------------------------------------------------------------
             // AOT.2.exec (PE-IAT): EXEC/SHARED standalone que llaman a simbolos
             // EXTERNOS (libc malloc/free/calloc/abort, o un FFI extern).  El
@@ -2608,8 +3722,30 @@ int main(int argc, char *argv[]) {
                 // cablear el DLL real desde el CompileResult).  ELF: el campo
                 // se ignora (todo va a libc.so.6 via DT_NEEDED).
                 const bool is_pe = (fmt == aot::ObjFormat::PE);
-                auto dll_for = [is_pe](const std::string &) -> std::string {
-                    return is_pe ? "msvcrt.dll" : "libc.so.6";
+                // DLL real de cada simbolo externo via el mecanismo FFI del
+                // lenguaje: `extern "kernel32.dll" { fn WriteFile(...); }`
+                // registra ("kernel32.dll", "WriteFile") en native_imports (ver
+                // lower_call FFI declarativo).  Construimos symbol -> DLL desde
+                // ahi, en vez de una tabla hardcodeada en el compilador.  PE: si
+                // un simbolo no esta declarado en ningun extern (libc implicito:
+                // malloc/free/abort de msvcrt) -> msvcrt.dll.  ELF: todo va a
+                // libc.so.6 via DT_NEEDED (el SONAME no se usa para resolver).
+                std::unordered_map<std::string, std::string> sym2dll;
+                for (const auto &ni : aot_mod.native_imports) {
+                    // Solo nombres de DLL reales (FFI extern a sistema); las
+                    // libs-plugin (rutas tipo stdlib/native/...) no son DLLs
+                    // resolubles por IAT y en native_poo no llegan a reloc.
+                    if (ni.lib.size() >= 4 &&
+                        (ni.lib.rfind(".dll") == ni.lib.size() - 4 ||
+                         ni.lib.rfind(".DLL") == ni.lib.size() - 4))
+                        sym2dll[ni.name] = ni.lib;
+                }
+                auto dll_for = [is_pe, &sym2dll](const std::string &sym)
+                    -> std::string {
+                    if (!is_pe) return "libc.so.6";
+                    auto it = sym2dll.find(sym);
+                    if (it != sym2dll.end()) return it->second;
+                    return "msvcrt.dll";
                 };
                 for (const std::string &sym : ext_syms) {
                     const uint32_t toff =
@@ -2653,6 +3789,16 @@ int main(int argc, char *argv[]) {
                         continue; // simbolo de seccion (pass 2)
                     if (r.symbol.rfind("fnsym:", 0) == 0)
                         continue; // direccion de funcion (pass 2, sin dato)
+                    if (r.symbol.rfind("tdata.", 0) == 0) {
+                        // thread_local (TLS): colocar la plantilla en su seccion
+                        // (.tdata, via section_name).  El reloc se emite en
+                        // pass 2 como TPOFF32 (ELF) o SECREL32 (PE).
+                        place_data(static_cast<uint32_t>(
+                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10)));
+                        continue;
+                    }
+                    if (r.symbol == "__vex_tls_index")
+                        continue; // TLS PE: simbolo del emisor (pass 2, sin dato)
                     if (r.symbol.rfind("rodata.", 0) != 0) {
                         std::cerr
                             << "[aot] reloc de dato con simbolo inesperado: '"
@@ -2678,17 +3824,43 @@ int main(int argc, char *argv[]) {
                     place_data(N);
             }
 
+            // Phase NR / dev-OS: nombre de bloque (asm/bytes) -> su ubicacion.
+            // Permite que OTROS bloques lo referencien por simbolo (un `jmp
+            // other_block` o un `dd gdt` cross-block).  Los bloques con
+            // symbol_name son FORCE_EMIT -> ya estan colocados (loop de
+            // arriba); ademas place_data() es idempotente.
+            std::unordered_map<std::string, std::pair<int, uint64_t>>
+                data_sym_loc;
+            for (uint32_t N = 0; N < sd.size(); ++N) {
+                const std::string &snm = sd.entries[N].meta.symbol_name;
+                if (snm.empty()) continue;
+                data_sym_loc[snm] = place_data(N);
+            }
+
             // Crear el writer + TODAS las secciones (writer idx == secs idx,
             // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
             w.set_mode32(aot_mode32); // x86-32 EXEC -> contenedor ELF32
+            // TLS PE: si el modulo tiene __vex_tls_init (callback de plantilla),
+            // pasar su ubicacion al emisor para registrarlo en el TLS directory.
+            {
+                auto tcb = fn_loc.find("__vex_tls_init");
+                if (tcb != fn_loc.end())
+                    w.set_tls_callback(tcb->second.sec,
+                                       static_cast<uint32_t>(tcb->second.off));
+            }
             for (const SecAccum &s : secs) {
                 // Permisos: explicitos (@section(".x","rwx")), o por convencion
                 // del nombre (.text*->rx, .rodata*->r, .data*/.bss*->rw).
                 std::string p = s.perms;
+                // .tdata/.tbss: plantilla thread_local (TLS).  rw + SHF_TLS.
+                const bool is_tls_sec = (s.name.rfind(".tdata", 0) == 0 ||
+                                         s.name.rfind(".tbss", 0) == 0);
                 if (p.empty()) {
                     if (s.name.rfind(".text", 0) == 0)
                         p = "rx";
+                    else if (is_tls_sec)
+                        p = "rw";
                     else if (s.name.rfind(".rodata", 0) == 0)
                         p = "r";
                     else if (s.name.rfind(".data", 0) == 0)
@@ -2708,6 +3880,8 @@ int main(int argc, char *argv[]) {
                     flags |= aot::SecFlag::EXEC | aot::SecFlag::CODE;
                 else
                     flags |= aot::SecFlag::DATA;
+                if (is_tls_sec)
+                    flags |= aot::SecFlag::TLS;
                 aot::WriterSection ws;
                 ws.name = s.name;
                 ws.flags = flags;
@@ -2715,6 +3889,18 @@ int main(int argc, char *argv[]) {
                 ws.at = s.at;
                 ws.order = s.order; // ubicacion/orden (.bin)
                 w.add_section(std::move(ws));
+            }
+            // gc<T> (Inc 4b): relocs ABS64 de los func_addr de .vexgc_smap a la
+            // VA real de cada funcion (resuelta tras el layout).
+            if (smap_si >= 0) {
+                for (const auto &fr : smap_func_relocs) {
+                    auto it = fn_loc.find(fr.second);
+                    if (it != fn_loc.end())
+                        w.add_reloc(smap_si, fr.first,
+                                    aot::RelocTarget::addr(it->second.sec,
+                                                           it->second.off),
+                                    aot::RelocKind::ABS64);
+                }
             }
             if (emit_shared) {
                 // Libreria compartida: exporta TODAS las funciones como
@@ -2728,8 +3914,30 @@ int main(int argc, char *argv[]) {
                 // Objeto relocatable: main es un simbolo GLOBAL (lo invoca el
                 // crt del linker externo); sin _start ni entry.
                 w.set_output_kind(aot::OutputKind::OBJECT);
-                const FnLoc &ml = fn_loc["main"];
-                w.add_symbol("main", ml.sec, ml.off, /*is_func=*/true);
+                // Exporta como GLOBAL todas las funciones de USUARIO (no
+                // empiezan por "__").  Los helpers internos (__vex_*/__new_*/
+                // __module_init/...) quedan LOCALES -> no colisionan al enlazar
+                // varios .o Vex (cada .o lleva su propia copia, referenciada via
+                // relocs de seccion).  Asi una libreria .o (sin main) expone sus
+                // funciones y otro .o las resuelve cross-file con el linker.
+                for (const AotFn &af : compiled) {
+                    // Los inits de programa del CPU-dispatch (cpu/memcpy/strdisp)
+                    // se EXPORTAN como globales aunque empiecen por "__": el
+                    // linker los recolecta de CADA .o y los ejecuta antes de main
+                    // (cada .o tiene sus propios slots fp; basta correr su init).
+                    const bool is_init = (af.name == "__vex_cpu_init" ||
+                                          af.name == "__vex_memcpy_init" ||
+                                          af.name == "__vex_strdisp_init");
+                    // En un EJECUTABLE (hay main) los helpers __-prefijados
+                    // quedan LOCALES (program-internos; evita colisiones al
+                    // enlazar varios .o).  En una LIBRERIA (sin main) son la
+                    // API publica -> se exportan globales (p.ej. el runtime
+                    // __vex_setjmp/__vex_throw/... que otro .o resuelve).
+                    if (main_fn && af.name.rfind("__", 0) == 0 && !is_init)
+                        continue; // helper interno del ejecutable -> local
+                    const FnLoc &fl2 = fn_loc[af.name];
+                    w.add_symbol(af.name, fl2.sec, fl2.off, /*is_func=*/true);
+                }
             } else if (emit_bin) {
                 // Binario plano: sin cabecera ni _start; entry = offset 0 (la
                 // primera seccion .text, donde va main si existe).  Las refs
@@ -2847,6 +4055,40 @@ int main(int argc, char *argv[]) {
                                     aot::RelocTarget::addr(fit->second.sec,
                                                            fit->second.off),
                                     k);
+                    } else if (r.kind == jit::NativeReloc::Kind::TPOFF32) {
+                        // thread_local (TLS local-exec): simbolo "tdata.<N>".
+                        // Colocar la plantilla en .tdata y emitir un reloc
+                        // TPOFF32 contra (sec=.tdata, off); el object_writer lo
+                        // materializa como R_X86_64_TPOFF32 + STT_TLS y el
+                        // --link calcula el offset TP-relativo.
+                        const uint32_t N = static_cast<uint32_t>(
+                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10));
+                        const std::pair<int, uint64_t> loc = place_data(N);
+                        w.add_reloc(
+                            fl.sec, site,
+                            aot::RelocTarget::addr(loc.first, loc.second),
+                            aot::RelocKind::TPOFF32);
+                    } else if (r.kind == jit::NativeReloc::Kind::SECREL32) {
+                        // thread_local (TLS PE): simbolo "tdata.<N>".  Colocar la
+                        // plantilla en .tdata (=.tls) y emitir SECREL32 contra
+                        // (sec, off); el emisor PE escribe el offset del var
+                        // dentro de la seccion (el acceso lo suma a la base del
+                        // bloque TLS cargada del TEB).
+                        const uint32_t N = static_cast<uint32_t>(
+                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10));
+                        const std::pair<int, uint64_t> loc = place_data(N);
+                        w.add_reloc(
+                            fl.sec, site,
+                            aot::RelocTarget::addr(loc.first, loc.second),
+                            aot::RelocKind::SECREL32);
+                    } else if (r.symbol == "__vex_tls_index") {
+                        // TLS PE: ref RIP-relativa al _tls_index sintetizado por
+                        // el emisor; se pasa como simbolo externo que el emisor
+                        // resuelve a la VA del slot.
+                        w.add_reloc(
+                            fl.sec, site,
+                            aot::RelocTarget::extern_sym("__vex_tls_index"),
+                            aot::RelocKind::REL32);
                     } else {
                         const uint32_t N = static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
@@ -2874,19 +4116,35 @@ int main(int argc, char *argv[]) {
                 const int dsec = dit->second.first;
                 const uint64_t doff = dit->second.second;
                 for (const auto &sr : meta.sym_refs) {
+                    // Resolver contra una FUNCION (fn_loc) o, si no, contra
+                    // otro BLOQUE asm/bytes nombrado (data_sym_loc): un dev-OS
+                    // hace `jmp pm32` / `dd gdt` cross-block.
+                    int tsec;
+                    uint64_t toff;
                     auto fit = fn_loc.find(sr.sym);
-                    if (fit == fn_loc.end()) {
-                        std::cerr
-                            << "[aot] bytes: referencia a simbolo no resuelto '"
-                            << sr.sym << "' (solo funciones soportadas).\n";
-                        return EXIT_FAILURE;
+                    if (fit != fn_loc.end()) {
+                        tsec = fit->second.sec;
+                        toff = fit->second.off;
+                    } else {
+                        auto dsit = data_sym_loc.find(sr.sym);
+                        if (dsit == data_sym_loc.end()) {
+                            std::cerr << "[aot] referencia a simbolo no "
+                                         "resuelto '"
+                                      << sr.sym
+                                      << "' (ni funcion ni bloque asm/bytes).\n";
+                            return EXIT_FAILURE;
+                        }
+                        tsec = dsit->second.first;
+                        toff = dsit->second.second;
                     }
-                    const aot::RelocKind k = sr.is_rel ? aot::RelocKind::REL32
-                                                       : aot::RelocKind::ABS64;
+                    // Kind segun is_rel + ancho: REL32 (jmp/call near), IMM32
+                    // (dd -> VA absoluta de 32 bits) o ABS64 (dq -> 64 bits).
+                    const aot::RelocKind k =
+                        sr.is_rel ? aot::RelocKind::REL32
+                                  : (sr.width == 4 ? aot::RelocKind::IMM32
+                                                   : aot::RelocKind::ABS64);
                     w.add_reloc(dsec, doff + sr.offset,
-                                aot::RelocTarget::addr(fit->second.sec,
-                                                       fit->second.off),
-                                k);
+                                aot::RelocTarget::addr(tsec, toff), k);
                 }
             }
 
@@ -2907,6 +4165,55 @@ int main(int argc, char *argv[]) {
                 std::cerr << "[aot] error al escribir '" << out_prefix
                           << "': " << werr << "\n";
                 return EXIT_FAILURE;
+            }
+
+            // Increment 3: gc<T> -> enlazar el .obj temporal con libvesta_gc.a
+            // (vm --link interno) para producir el .exe final.
+            if (gc_autolink) {
+                namespace fs = std::filesystem;
+                std::vector<fs::path> cands;
+                const fs::path self(argv[0]);
+                if (self.has_parent_path())
+                    cands.push_back(self.parent_path() / "libvesta_gc.a");
+                cands.emplace_back("libvesta_gc.a");
+                cands.push_back(fs::path("cmake-build-debug") /
+                                "libvesta_gc.a");
+                std::string lib_path;
+                for (const auto &c : cands) {
+                    std::error_code ec;
+                    if (fs::exists(c, ec)) {
+                        lib_path = c.string();
+                        break;
+                    }
+                }
+                if (lib_path.empty()) {
+                    std::cerr
+                        << "[aot] gc<T>: no se encontro libvesta_gc.a (junto a "
+                           "vm o en el cwd).  Enlaza manualmente:\n  vm --link "
+                        << gc_tmp_obj << " libvesta_gc.a -o " << gc_real_out
+                        << " --format pe\n";
+                    return EXIT_FAILURE;
+                }
+                aot::LinkOptions lopts;
+                lopts.fmt = fmt; // PE o ELF, segun el destino
+                lopts.sysroot =
+                    result.count("sysroot")
+                        ? result["sysroot"].as<std::string>()
+                        : std::string();
+                std::string lerr;
+                const bool ok = aot::aot_link({gc_tmp_obj, lib_path},
+                                              gc_real_out, lopts, lerr);
+                std::error_code ec;
+                fs::remove(gc_tmp_obj, ec); // limpiar el .obj temporal
+                if (!ok) {
+                    std::cerr << "[aot] gc<T> auto-link error: " << lerr << "\n";
+                    return EXIT_FAILURE;
+                }
+                std::cout << "[aot] ejecutable nativo PE con GC escrito en '"
+                          << gc_real_out
+                          << "' (gc<T> -> libvesta_gc.a auto-enlazada, sin "
+                             "g++).\n";
+                return EXIT_SUCCESS;
             }
 
             const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
@@ -3006,7 +4313,7 @@ int main(int argc, char *argv[]) {
                         seen.insert(cur.first);
                         auto it = previous.find(cur.first);
                         if (it == previous.end()) {
-                            std::cerr << "[mc-manifest] anyadido: " << cur.first
+                            std::cerr << "[mc-manifest] añadido: " << cur.first
                                       << "\n";
                             ++added;
                         } else if (it->second != cur.second) {
@@ -3024,7 +4331,7 @@ int main(int argc, char *argv[]) {
                     }
                     std::cerr << "[mc-manifest] total=" << current_hashes.size()
                               << " cambios=" << changed
-                              << " anyadidos=" << added << "\n";
+                              << " añadidos=" << added << "\n";
                 }
                 /* Escribir nuevo manifest. */
                 const std::string manifest_path = cache_prefix + ".manifest";

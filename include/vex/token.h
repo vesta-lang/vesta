@@ -17,8 +17,8 @@
  * El conjunto de TokenKind declarado aqui cubre TODA la sintaxis cerrada
  * de Vex.  Esto evita renombres y reordenamientos del enum (que
  * invalidarian tablas planas indexadas por ordinal en el parser) cuando
- * se anyaden caracteristicas nuevas: cualquier futuro feature reusa
- * tokens existentes o anyade nuevos al final.
+ * se añaden caracteristicas nuevas: cualquier futuro feature reusa
+ * tokens existentes o añade nuevos al final.
  *
  * Reglas de diseno:
  *  - El enum se mantiene compacto (uint16_t suficiente).
@@ -52,14 +52,14 @@ namespace vex {
  * Los valores ordinales son estables: el parser y el reportador de
  * errores los usan como indice en tablas planas (operator precedence,
  * "expected after X" messages, etc.).  No reordenar entradas; al
- * anyadir nuevas hacerlo SIEMPRE al final del bloque correspondiente.
+ * añadir nuevas hacerlo SIEMPRE al final del bloque correspondiente.
  */
 enum class TokenKind : uint16_t {
     // ---------------------------------------------------------------
     // Categoria 0: control de flujo del lexer/parser.
     // ---------------------------------------------------------------
     END_OF_FILE = 0, ///< Fin de fichero.
-    UNKNOWN,         ///< Caracter no reconocido (acompanya a un diagnostico).
+    UNKNOWN,         ///< Caracter no reconocido (acompaña a un diagnostico).
 
     // ---------------------------------------------------------------
     // Categoria 1: literales.
@@ -138,6 +138,7 @@ enum class TokenKind : uint16_t {
     // Smart pointers builtins (move-only + refcount).
     KW_UNIQUE,     ///< unique<T> (smart pointer move-only)
     KW_SHARED,     ///< shared<T> (smart pointer con refcount)
+    KW_GC,         ///< gc<T> (referencia GC-managed opt-in; import vex.gc)
     KW_BORROW,     ///< borrow<T> (shared borrow, immutable)
     KW_BORROW_MUT, ///< borrow_mut<T> (exclusive borrow, mutable)
 
@@ -184,6 +185,7 @@ enum class TokenKind : uint16_t {
     KW_NEW,
     KW_DELETE,
     KW_THIS,
+    KW_THREAD_LOCAL, ///< `thread_local` (almacenamiento por-hilo / TLS).
     KW_SUPER,
 
     // ---------------------------------------------------------------
@@ -261,9 +263,10 @@ enum class TokenKind : uint16_t {
     COMMA,     ///< ,
     SEMICOLON, ///< ;
     COLON,     ///< :
-    DOT,       ///< .
-    DOTDOT,    ///< ..  (rango exclusivo en comptime for)
-    DOTDOTEQ,  ///< ..= (rango inclusivo en comptime for)
+    DOT,        ///< .
+    DOTDOT,     ///< ..  (rango exclusivo en comptime for)
+    DOTDOTEQ,   ///< ..= (rango inclusivo en comptime for)
+    DOTDOTDOT,  ///< ... (parametro variadico: T... name)
     ARROW,     ///< ->
     FAT_ARROW, ///< =>
     QUESTION,  ///< ?

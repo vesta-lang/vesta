@@ -585,7 +585,7 @@ El runner mitiga estos flakes con:
 
 Para evitar timeouts permanentemente en Windows:
 
-- Anyadir `%TEMP%\vex_bench_multi` y el directorio de `vesta.EXE` como
+- añadir `%TEMP%\vex_bench_multi` y el directorio de `vesta.EXE` como
   exclusiones de Windows Defender.
 - Activar el power profile "Alto rendimiento" + AC plugged.
 - Cerrar apps pesadas (Chrome, IDE, etc.) durante el bench completo.

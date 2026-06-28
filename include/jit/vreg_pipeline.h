@@ -55,6 +55,12 @@ struct NativeReloc {
         ABS64 = 1, ///< direccion absoluta 64-bit a un DATO (--no-pie).
         DATA_REL32 =
             2, ///< RIP-relativo a un DATO (.rodata), position-independent.
+        TPOFF32 =
+            3, ///< TLS local-exec (ELF): offset TP-relativo de un thread_local;
+               ///< el driver lo emite como R_X86_64_TPOFF32 + STT_TLS.
+        SECREL32 =
+            4, ///< TLS PE (Windows): offset del simbolo DENTRO de su seccion
+               ///< (.tls); el emisor escribe target_off (no la VA).
     };
     Kind kind = Kind::CALL_REL32;
     uint32_t offset = 0; ///< byte offset dentro de los bytes de la funcion
@@ -129,7 +135,21 @@ std::vector<uint8_t> vreg_compile_native(
         true
 #endif
     ,
-    bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2);
+    bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2,
+    /* Solo-LSP (vista "Godbolt"): si @p emit_line_map es true y
+     * @p line_map_out != nullptr, se rellena con la correlacion
+     * byte_offset -> source_line del codigo AOT generado.  OFF por defecto
+     * -> cero efecto para el resto del proyecto. */
+    bool emit_line_map = false,
+    std::vector<LineMapEntry> *line_map_out = nullptr,
+    /* Solo-LSP: etiquetas internas de bloques inline-asm (byte_offset ->
+     * nombre).  Se rellena si emit_line_map y este puntero != nullptr. */
+    std::vector<std::pair<uint32_t, std::string>> *asm_labels_out = nullptr,
+    /* Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint (pc_offset
+     * relativo a la funcion + slots con GcHandle).  Se rellena si != nullptr.
+     * Vacios salvo que el codigo tenga valores GC (gc<T>, Inc 3).  El driver
+     * los serializa en la seccion .vexgc_smap para el scan preciso en runtime. */
+    std::vector<Stackmap> *stackmaps_out = nullptr);
 
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

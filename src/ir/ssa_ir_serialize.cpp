@@ -82,6 +82,8 @@ constexpr uint8_t FN_FLAG_NATIVE =
     1 << 0; ///< Funcion FFI (sin body IR; solo declaracion)
 constexpr uint8_t FN_FLAG_VARIADIC =
     1 << 1; ///< Acepta nargs variable (R15 contiene el count)
+constexpr uint8_t FN_FLAG_NAKED =
+    1 << 2; ///< Phase NR @Naked: sin prologo/epilogo/ret (ISRs/stubs)
 
 /**
  * @brief Serializa un @c IrValue al stream binario.
@@ -207,6 +209,13 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
         write_u32(o, static_cast<uint32_t>(i.phi_args[k].value));
         write_u32(o, static_cast<uint32_t>(i.phi_args[k].block));
     }
+    // jump_targets: tabla de bloques del SWITCH_DENSE (jump table denso).
+    // Count u32 (un switch denso puede tener >255 entradas).  Vacio en el
+    // resto de ops.  (Formato v6/v8.)
+    const size_t jtc = i.jump_targets.size();
+    write_u32(o, static_cast<uint32_t>(jtc));
+    for (size_t k = 0; k < jtc; ++k)
+        write_u32(o, i.jump_targets[k]);
 }
 
 /**
@@ -277,6 +286,16 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
         if (!read_u32(in, off, b)) return false;
         IrPhiArg a{static_cast<IrValueId>(v), static_cast<IrBlockId>(b)};
         i.phi_args.push_back(a);
+    }
+    /* jump_targets (SWITCH_DENSE) -- formato v6/v8. */
+    uint32_t jtc = 0;
+    if (!read_u32(in, off, jtc)) return false;
+    i.jump_targets.clear();
+    i.jump_targets.reserve(jtc);
+    for (uint32_t k = 0; k < jtc; ++k) {
+        uint32_t t = 0;
+        if (!read_u32(in, off, t)) return false;
+        i.jump_targets.push_back(t);
     }
     return true;
 }
@@ -357,6 +376,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     uint8_t fn_flags = 0;
     if (fn.is_native) fn_flags |= FN_FLAG_NATIVE;
     if (fn.is_variadic) fn_flags |= FN_FLAG_VARIADIC;
+    if (fn.is_naked) fn_flags |= FN_FLAG_NAKED;
     write_u8(out, fn_flags);
 
     // Params: lista de IrValueId que apuntan a entries en values[]
@@ -440,6 +460,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     out.ret_type = static_cast<IrType>(ret_type_b);
     out.is_native = (fn_flags & FN_FLAG_NATIVE) != 0;
     out.is_variadic = (fn_flags & FN_FLAG_VARIADIC) != 0;
+    out.is_naked = (fn_flags & FN_FLAG_NAKED) != 0;
 
     /* params */
     uint32_t n_params = 0;
@@ -713,6 +734,8 @@ static void serialize_static_data(const IrModule::StaticDataStore &sd,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         write_str(out, e.meta.shared_key);
+        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        write_str(out, e.meta.symbol_name);
     }
 }
 
@@ -761,6 +784,8 @@ static bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         if (!read_str(in, off, e.meta.shared_key)) return false;
+        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        if (!read_str(in, off, e.meta.symbol_name)) return false;
         // Validar que el rango cae dentro del pool.
         if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())
             return false;
@@ -789,6 +814,28 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
     for (const auto &g : mod.globals) {
         write_str(out, g.first);
         write_u32(out, static_cast<uint32_t>(g.second));
+    }
+
+    // 4) tabla de nombres de valores SSA (debug-info para el LSP: args/vars).
+    //    NO va en el @ir del .velb (emit_ir_section, produccion) -> cero
+    //    coste en el binario; solo en este cache (LSP + .vexir dev).  Por
+    //    funcion: count + un string por value (vacio si el value no tiene
+    //    nombre de fuente).  El indice ES el IrValueId.
+    write_u32(out, static_cast<uint32_t>(mod.functions.size()));
+    for (const auto &fn : mod.functions) {
+        write_u32(out, static_cast<uint32_t>(fn.values.size()));
+        for (const auto &v : fn.values)
+            write_str(out, v.name);
+    }
+
+    // 5) native_imports (lib, name): el AOT los usa para mapear cada simbolo
+    //    FFI extern a su DLL real (kernel32.dll, user32.dll, ...) en vez de
+    //    asumir msvcrt.dll.  Sin esto, `extern "kernel32.dll" {...}` resolvia
+    //    desde msvcrt -> fallo de carga del PE.
+    write_u32(out, static_cast<uint32_t>(mod.native_imports.size()));
+    for (const auto &ni : mod.native_imports) {
+        write_str(out, ni.lib);
+        write_str(out, ni.name);
     }
     return out;
 }
@@ -825,6 +872,39 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
         if (!read_str(data, off, name)) return false;
         if (!read_u32(data, off, vid)) return false;
         out.globals.emplace(std::move(name), static_cast<IrValueId>(vid));
+    }
+
+    // 4) tabla de nombres de valores SSA (debug-info).  Si el stream se acabo
+    //    (cache mas viejo sin la tabla pero con misma version -> no deberia
+    //    pasar por el bump, pero somos defensivos), se omite sin error.
+    uint32_t nfns = 0;
+    if (read_u32(data, off, nfns)) {
+        if (nfns > 2000000u) return false;
+        for (uint32_t f = 0; f < nfns; ++f) {
+            uint32_t nvals = 0;
+            if (!read_u32(data, off, nvals)) return false;
+            if (nvals > 50000000u) return false;
+            for (uint32_t v = 0; v < nvals; ++v) {
+                std::string nm;
+                if (!read_str(data, off, nm)) return false;
+                if (f < out.functions.size() && v < out.functions[f].values.size())
+                    out.functions[f].values[v].name = std::move(nm);
+            }
+        }
+    }
+
+    // 5) native_imports (lib, name).  Defensivo: si el stream se acabo (no
+    //    deberia por el bump de version), se omite sin error.
+    out.native_imports.clear();
+    uint32_t nimp = 0;
+    if (read_u32(data, off, nimp)) {
+        if (nimp > 2000000u) return false;
+        for (uint32_t i = 0; i < nimp; ++i) {
+            std::string lib, name;
+            if (!read_str(data, off, lib)) return false;
+            if (!read_str(data, off, name)) return false;
+            out.register_native_import(std::move(lib), std::move(name));
+        }
     }
     return true;
 }

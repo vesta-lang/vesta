@@ -228,6 +228,11 @@ VregEntries make_vreg_entries() {
     VregEntries e;
     if (g_runtime_entries) {
         e.callvirt = reinterpret_cast<uint64_t>(g_runtime_entries->callvirt);
+        e.callm = reinterpret_cast<uint64_t>(g_runtime_entries->callm);
+        e.callitf = reinterpret_cast<uint64_t>(g_runtime_entries->callitf);
+        e.unwrap_throw =
+            reinterpret_cast<uint64_t>(g_runtime_entries->unwrap_throw);
+        e.proc_pid = reinterpret_cast<uint64_t>(g_runtime_entries->proc_pid);
         e.gc_deref = reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref);
         e.gc_handle =
             reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr);
@@ -236,6 +241,22 @@ VregEntries make_vreg_entries() {
         e.gc_allocp =
             reinterpret_cast<uint64_t>(g_runtime_entries->gc_alloc_payload);
         e.newobj = reinterpret_cast<uint64_t>(g_runtime_entries->newobj_handle);
+        e.newobjs = reinterpret_cast<uint64_t>(g_runtime_entries->newobjs);
+        e.dlopen = reinterpret_cast<uint64_t>(g_runtime_entries->dlopen);
+        e.str_conv = reinterpret_cast<uint64_t>(g_runtime_entries->str_conv);
+        e.panic_str = reinterpret_cast<uint64_t>(g_runtime_entries->panic_str);
+        /* Excepciones in-JIT (Opcion B). */
+        e.tryenter_jit =
+            reinterpret_cast<uint64_t>(g_runtime_entries->tryenter_jit);
+        e.tryleave = reinterpret_cast<uint64_t>(g_runtime_entries->tryleave);
+        e.throw_user =
+            reinterpret_cast<uint64_t>(g_runtime_entries->throw_user);
+        /* Offsets handoff RSP/RBP del tryenter in-JIT (offsetof type-based;
+         * conditionally-supported en tipo no-standard-layout, OK en GCC). */
+        e.jit_exc_rsp_off =
+            static_cast<int32_t>(offsetof(runtime::ProcessVM, jit_exc_rsp));
+        e.jit_exc_rbp_off =
+            static_cast<int32_t>(offsetof(runtime::ProcessVM, jit_exc_rbp));
         /* Class registry (Fase 2). */
         e.findclass = reinterpret_cast<uint64_t>(g_runtime_entries->findclass);
         e.findmethod =
@@ -525,32 +546,10 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         };
     }
 
-    /* Phase D.7 (opt-in): intentar primero el path de registros
-     * virtuales.  Si la funcion es del subset soportado por el selector
-     * vreg, la compila el register allocator; si no, cae al path de
-     * slots de abajo (fallback transparente). */
-    if (g_jit_use_vregs) {
-        uint8_t *vcode = vreg_compile(*ir_fn, *g_code_cache, {},
-                                      make_vreg_entries(), {}, mc_sym_res);
-        if (vcode != nullptr) {
-            method->jit_code = reinterpret_cast<void *>(vcode);
-            if (method->code_vaddr != 0) {
-                register_jit_code_at_pc(method->code_vaddr,
-                                        reinterpret_cast<void *>(vcode));
-            }
-            ++g_jit_compiled_count;
-            if (g_jit_warn_unsupported) {
-                std::fprintf(stderr, "[jit-vreg] compilado '%s'\n",
-                             key.c_str());
-            }
-            return;
-        }
-        if (g_jit_warn_unsupported) {
-            std::fprintf(stderr,
-                         "[jit-vreg] '%s' no soportada -> fallback a slots\n",
-                         key.c_str());
-        }
-    }
+    /* Phase D.7: el intento vreg se MOVIO mas abajo (tras construir el
+     * resolver recursivo de user-fns + native_resolver) para que un metodo
+     * que llama a otra funcion Vex resuelva la callee por vreg en vez de
+     * caer a slots por "call(no-resolver)". */
 
     /* Phase: compile_with_opts pasando el symbol_table de la
      * executable que poseyo este metodo, para que el mini-parser
@@ -790,6 +789,30 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         };
     }
 
+    /* Phase D.7 (opt-in): intento vreg con el resolver recursivo + native
+     * resolver ya construidos (mc_opts) -> los CALL a otras funciones Vex se
+     * resuelven/compilan por vreg en vez de bailar a slots.  Si la funcion no
+     * es del subset vreg, cae al compile_with_opts (slots) de abajo. */
+    if (g_jit_use_vregs) {
+        uint8_t *vcode = vreg_compile(
+            *ir_fn, *g_code_cache, mc_opts.resolve_user_fn, make_vreg_entries(),
+            mc_opts.resolve_native_fn, mc_sym_res);
+        if (vcode != nullptr) {
+            method->jit_code = reinterpret_cast<void *>(vcode);
+            if (method->code_vaddr != 0)
+                register_jit_code_at_pc(method->code_vaddr,
+                                        reinterpret_cast<void *>(vcode));
+            ++g_jit_compiled_count;
+            if (g_jit_warn_unsupported)
+                std::fprintf(stderr, "[jit-vreg] compilado '%s'\n", key.c_str());
+            return;
+        }
+        if (g_jit_warn_unsupported)
+            std::fprintf(stderr,
+                         "[jit-vreg] '%s' no soportada -> fallback a slots\n",
+                         key.c_str());
+    }
+
     const CompileResult res = g_compiler->compile_with_opts(*ir_fn, mc_opts);
     if (res.fn != nullptr) {
         /* Exito: asignar jit_code.  El proximo CALLVIRT despacha
@@ -830,7 +853,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         /* Fallo: marcar para no reintentar (igual que IR ausente).
          * res.unsupported = true significa que el Selector encontro
          * una IR op que no sabe lowerizar; printamos warning para
-         * que el dev sepa que IR op anyadir. */
+         * que el dev sepa que IR op añadir. */
         ++g_jit_unsupported_count;
         if (g_jit_warn_unsupported) {
             std::fprintf(
@@ -1493,7 +1516,7 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
         auto pn_it = pc_to_name.find(target_pc);
         if (pn_it == pc_to_name.end()) continue;
         std::string candidate_name = pn_it->second;
-        /* Sprint JIT-cross-fn 2026-06-01: el frontend Vex anyade
+        /* Sprint JIT-cross-fn 2026-06-01: el frontend Vex añade
          * sufijo `_entry_<N>` al label del bytecode (entry block).
          * El ir_lookup usa el nombre limpio.  Strip el sufijo si
          * existe para que el lookup matchee. */

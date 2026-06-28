@@ -113,7 +113,7 @@ void profile_callvirt(uint64_t pc, loader::ClassInfo *class_ptr) {
         }
     }
 
-    // No esta en la lista: si hay espacio, anyadir.
+    // No esta en la lista: si hay espacio, añadir.
     if (cs.n_types < 4) {
         cs.types[cs.n_types].class_ptr = class_ptr;
         cs.types[cs.n_types].count = 1;

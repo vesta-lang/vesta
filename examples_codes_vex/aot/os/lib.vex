@@ -1,0 +1,66 @@
+// ===========================================================================
+// lib -- utilidades del kernel (sin dependencias del runtime).
+// ===========================================================================
+
+// Rellena n bytes de dst con val.
+void memset(u8* dst, u64 val, u64 n) {
+    u64 i = 0;
+    while (i < n) {
+        dst[i] = (u8) val;
+        i = i + 1;
+    }
+}
+
+// Convierte v a decimal nul-terminado en buf; devuelve la longitud.
+u64 itoa(u64 v, u8* buf) {
+    if (v == 0) {
+        buf[0] = 48;          // '0'
+        buf[1] = 0;
+        return 1;
+    }
+    u8 tmp[24];
+    u64 n = 0;
+    while (v > 0) {
+        tmp[n] = (u8) (48 + (v % 10));
+        v = v / 10;
+        n = n + 1;
+    }
+    // invertir tmp -> buf
+    u64 i = 0;
+    while (i < n) {
+        buf[i] = tmp[n - 1 - i];
+        i = i + 1;
+    }
+    buf[n] = 0;
+    return n;
+}
+
+// Convierte v a hexadecimal "0x..." nul-terminado en buf; devuelve longitud.
+u64 itoa_hex(u64 v, u8* buf) {
+    buf[0] = 48;              // '0'
+    buf[1] = 120;            // 'x'
+    if (v == 0) {
+        buf[2] = 48;
+        buf[3] = 0;
+        return 3;
+    }
+    u8 tmp[20];
+    u64 n = 0;
+    while (v > 0) {
+        u64 d = v & 0xF;
+        if (d < 10) {
+            tmp[n] = (u8) (48 + d);          // '0'..'9'
+        } else {
+            tmp[n] = (u8) (87 + d);          // 'a'..'f'
+        }
+        v = v >> 4;
+        n = n + 1;
+    }
+    u64 i = 0;
+    while (i < n) {
+        buf[2 + i] = tmp[n - 1 - i];
+        i = i + 1;
+    }
+    buf[2 + n] = 0;
+    return n + 2;
+}

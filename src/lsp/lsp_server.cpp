@@ -1,0 +1,1334 @@
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+/**
+ * @file lsp_server.cpp
+ * @brief Implementacion del dispatcher y bucle de eventos del LSP de Vex.
+ */
+
+#include "lsp/lsp_server.h"
+
+#include "lsp/builtin_docs.h"
+
+#include <exception>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "lsp/param_hints.h"
+#include "lsp/semantic_tokens.h"
+#include "lsp/symbol_index.h"
+#include "vex/diagnostic.h"
+
+namespace lsp {
+
+namespace {
+
+/**
+ * @brief Mapea la severidad del compilador a la del LSP.
+ *
+ * LSP: 1=Error, 2=Warning, 3=Information, 4=Hint.  Las NOTE del
+ * compilador se mapean a Information (3).
+ *
+ * @param level Nivel del diagnostico Vex.
+ * @return Codigo de severidad LSP.
+ */
+int diag_severity_to_lsp(vex::DiagLevel level) {
+    switch (level) {
+    case vex::DiagLevel::ERR: return 1;  // Error
+    case vex::DiagLevel::WARN: return 2; // Warning
+    case vex::DiagLevel::NOTE: return 3; // Information
+    }
+    return 1;
+}
+
+} // namespace
+
+LspServer::LspServer(JsonRpcTransport transport)
+    : transport_(std::move(transport)) {}
+
+void LspServer::send_result(const nlohmann::json &id,
+                            const nlohmann::json &result) {
+    // Respuesta JSON-RPC 2.0 estandar: jsonrpc + id + result.
+    nlohmann::json resp;
+    resp["jsonrpc"] = "2.0";
+    resp["id"] = id;
+    resp["result"] = result;
+    transport_.write_message(resp);
+}
+
+void LspServer::handle_initialize(const nlohmann::json &msg) {
+    // Capturar las raices del workspace (rootUri / rootPath / workspaceFolders)
+    // para el indice de simbolos de la Fase 4.  El indexado real es perezoso:
+    // solo se construye en la primera peticion de navegacion.
+    if (msg.contains("params") && msg.at("params").is_object()) {
+        const nlohmann::json &params = msg.at("params");
+        std::vector<std::string> roots;
+        // workspaceFolders[] (LSP moderno): [{ uri, name }, ...].
+        if (params.contains("workspaceFolders") &&
+            params.at("workspaceFolders").is_array()) {
+            for (const auto &wf : params.at("workspaceFolders")) {
+                if (wf.is_object() && wf.contains("uri") &&
+                    wf.at("uri").is_string()) {
+                    roots.push_back(
+                        uri_to_fs_path(wf.at("uri").get<std::string>()));
+                }
+            }
+        }
+        // rootUri (deprecado pero comun).
+        if (params.contains("rootUri") && params.at("rootUri").is_string()) {
+            roots.push_back(uri_to_fs_path(params.at("rootUri").get<std::string>()));
+        }
+        // rootPath (muy antiguo): ya es una ruta de sistema de ficheros.
+        if (params.contains("rootPath") && params.at("rootPath").is_string()) {
+            roots.push_back(params.at("rootPath").get<std::string>());
+        }
+        // Deduplicar entradas vacias/repetidas conservando el orden.
+        std::vector<std::string> uniq;
+        for (const auto &r : roots) {
+            if (r.empty())
+                continue;
+            bool dup = false;
+            for (const auto &u : uniq) {
+                if (u == r) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup)
+                uniq.push_back(r);
+        }
+        workspace_.set_roots(uniq);
+    }
+
+    // Anunciar las capacidades soportadas en esta fase.  textDocumentSync=1
+    // = sincronizacion full (cada cambio envia el texto completo).  Se deja
+    // sitio para anunciar capacidades futuras (semanticTokens, hover, etc.).
+    nlohmann::json caps;
+    caps["textDocumentSync"] = 1; // TextDocumentSyncKind.Full
+
+    // Resaltado semantico (Fase 2): anunciar la leyenda (tokenTypes +
+    // tokenModifiers, en orden = indices) y soporte de documento completo.
+    // No se anuncia range/delta en esta fase.
+    nlohmann::json sem;
+    nlohmann::json legend;
+    legend["tokenTypes"] = semantic_token_types();
+    legend["tokenModifiers"] = semantic_token_modifiers();
+    sem["legend"] = std::move(legend);
+    sem["full"] = true;
+    sem["range"] = false;
+    caps["semanticTokensProvider"] = std::move(sem);
+
+    // Navegacion (Fase 4): hover, ir a la definicion y buscar referencias.
+    caps["hoverProvider"] = true;
+    caps["definitionProvider"] = true;
+    caps["referencesProvider"] = true;
+
+    // Autocompletado (Fase 5): se dispara al teclear o tras el punto '.'
+    // (acceso a miembros).  No resolvemos detalles diferidos (resolveProvider
+    // false): cada item llega ya completo.
+    nlohmann::json comp;
+    comp["triggerCharacters"] = nlohmann::json::array({"."});
+    comp["resolveProvider"] = false;
+    caps["completionProvider"] = std::move(comp);
+
+    // Inspector del ecosistema (Fase 3): las peticiones a medida vesta/* no
+    // forman parte del LSP estandar, asi que se anuncian bajo el campo
+    // experimental para que un cliente que las conozca las descubra.
+    nlohmann::json experimental;
+    experimental["vestaMethods"] = nlohmann::json::array(
+        {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
+         "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
+         "vesta/macroExpand", "vesta/comptimeValues"});
+    caps["experimental"] = std::move(experimental);
+
+    nlohmann::json result;
+    result["capabilities"] = caps;
+    nlohmann::json server_info;
+    server_info["name"] = "vesta-lsp";
+    server_info["version"] = "0.1.0";
+    result["serverInfo"] = server_info;
+
+    // Responder a la peticion (initialize SIEMPRE lleva id).
+    send_result(msg.at("id"), result);
+    initialized_ = true;
+}
+
+void LspServer::handle_shutdown(const nlohmann::json &msg) {
+    // El cliente pide cerrar: responder result null y esperar el exit.
+    shutdown_requested_ = true;
+    send_result(msg.at("id"), nullptr);
+}
+
+void LspServer::handle_did_open(const nlohmann::json &params) {
+    // params.textDocument = { uri, languageId, version, text }
+    const auto &td = params.at("textDocument");
+    const std::string uri = td.at("uri").get<std::string>();
+    std::string text = td.value("text", std::string());
+    docs_.open(uri, text);
+    // Refrescar la entrada de este fichero en el indice con su texto VIVO (el
+    // del editor, no el de disco).  Solo si el indice ya se construyo; si no,
+    // se hara perezosamente en la primera navegacion.
+    workspace_.update_file(uri, text);
+    publish_diagnostics(uri);
+}
+
+void LspServer::handle_did_change(const nlohmann::json &params) {
+    // Sincronizacion full: tomamos el texto del ultimo contentChange.
+    const auto &td = params.at("textDocument");
+    const std::string uri = td.at("uri").get<std::string>();
+    if (!params.contains("contentChanges"))
+        return;
+    const auto &changes = params.at("contentChanges");
+    if (!changes.is_array() || changes.empty())
+        return;
+    // En modo full sync, el ultimo cambio contiene el documento entero.
+    const auto &last = changes.back();
+    std::string text = last.value("text", std::string());
+    docs_.update(uri, text);
+    // Reindexar SOLO este fichero con su texto vivo.
+    workspace_.update_file(uri, text);
+    publish_diagnostics(uri);
+}
+
+void LspServer::handle_did_close(const nlohmann::json &params) {
+    const auto &td = params.at("textDocument");
+    const std::string uri = td.at("uri").get<std::string>();
+    docs_.close(uri);
+    engine_.forget(uri);
+    // El fichero deja de estar abierto: su contribucion al indice (que usaba el
+    // texto vivo) se reemplaza por su version de disco si existe.  Leemos el
+    // disco best-effort; si no se puede, quitamos sus entradas.
+    {
+        const std::string fs_path = uri_to_fs_path(uri);
+        std::ifstream f(fs_path, std::ios::binary);
+        if (f) {
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            workspace_.update_file(uri, ss.str());
+        } else {
+            workspace_.remove_file(uri);
+        }
+    }
+    // Publicar una lista de diagnosticos vacia limpia los del editor.
+    nlohmann::json note;
+    note["jsonrpc"] = "2.0";
+    note["method"] = "textDocument/publishDiagnostics";
+    nlohmann::json p;
+    p["uri"] = uri;
+    p["diagnostics"] = nlohmann::json::array();
+    note["params"] = p;
+    transport_.write_message(note);
+}
+
+void LspServer::publish_diagnostics(const std::string &uri) {
+    // Compilar (o reusar cache) el documento.
+    const std::string &text = docs_.text(uri);
+    const DocAnalysis &an = engine_.analyze_document(uri, text);
+
+    // Construir el array de diagnosticos LSP a partir de los del compilador.
+    nlohmann::json diags = nlohmann::json::array();
+    for (const auto &d : an.result.diagnostics.all()) {
+        // El compilador da linea/columna 1-based en bytes; el LSP exige
+        // 0-based + caracter en UTF-16.  Convertir cada extremo del span.
+        const vex::SourceLoc &loc = d.loc;
+        // Linea 0-based (proteger contra line==0 hipotetico).
+        uint32_t line0 = loc.line > 0 ? loc.line - 1 : 0;
+        // Texto de la linea para la conversion de columnas.
+        std::string line_text = docs_.line(uri, line0);
+        // Span en bytes 0-based dentro de la linea [span_start, span_end).
+        uint32_t span_start = loc.column > 0 ? loc.column - 1 : 0;
+        uint32_t span_end = span_start + (loc.length > 0 ? loc.length : 1);
+        // Si el span es de un solo byte (tipico cuando el diagnostico apunta a
+        // un simbolo suelto -- p.ej. el '(' de una llamada como static_assert),
+        // ensancharlo al token legible bajo esa posicion para que el subrayado
+        // sea visible y util en lugar de marcar un solo caracter.
+        if (span_end <= span_start + 1) {
+            auto is_ident = [](char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       (c >= '0' && c <= '9') || c == '_';
+            };
+            const std::string &lt = line_text;
+            // Si el punto cae en la indentacion / espacios (diagnostico cuyo loc
+            // apunta al inicio de la sentencia), avanzar al primer token real de
+            // la linea: un subrayado sobre el hueco en blanco no se entiende.
+            while (span_start < lt.size() &&
+                   (lt[span_start] == ' ' || lt[span_start] == '\t'))
+                ++span_start;
+            span_end = span_start + 1;
+            if (span_start < lt.size() && is_ident(lt[span_start])) {
+                // Identificador bajo la posicion: extender hacia adelante hasta
+                // el final del identificador.
+                uint32_t e = span_start;
+                while (e < lt.size() && is_ident(lt[e])) ++e;
+                span_end = e;
+            } else if (span_start > 0 && span_start <= lt.size() &&
+                       is_ident(lt[span_start - 1])) {
+                // Simbolo precedido de un identificador (p.ej. "static_assert("):
+                // subrayar ese identificador anterior, que es lo significativo.
+                uint32_t s = span_start;
+                while (s > 0 && is_ident(lt[s - 1])) --s;
+                span_end = span_start;
+                span_start = s;
+            }
+        }
+        // Conversion de cada extremo (columna 1-based en bytes) a UTF-16.
+        uint32_t start_char = byte_column_to_utf16(line_text, span_start + 1);
+        uint32_t end_char = byte_column_to_utf16(line_text, span_end + 1);
+
+        nlohmann::json range;
+        range["start"] = {{"line", line0}, {"character", start_char}};
+        // El span no cruza lineas en el modelo actual del compilador.
+        range["end"] = {{"line", line0}, {"character", end_char}};
+
+        nlohmann::json jd;
+        jd["range"] = range;
+        jd["severity"] = diag_severity_to_lsp(d.level);
+        jd["source"] = "vesta";
+        if (!d.code.empty())
+            jd["code"] = d.code;
+        jd["message"] = d.message;
+        diags.push_back(std::move(jd));
+    }
+
+    // Emitir la notificacion publishDiagnostics.
+    nlohmann::json note;
+    note["jsonrpc"] = "2.0";
+    note["method"] = "textDocument/publishDiagnostics";
+    nlohmann::json p;
+    p["uri"] = uri;
+    p["diagnostics"] = std::move(diags);
+    note["params"] = std::move(p);
+    transport_.write_message(note);
+}
+
+void LspServer::handle_semantic_tokens_full(const nlohmann::json &msg) {
+    // params.textDocument.uri identifica el documento.
+    const auto &params = msg.at("params");
+    const auto &td = params.at("textDocument");
+    const std::string uri = td.at("uri").get<std::string>();
+
+    // Calcular los tokens.  Si el documento no esta abierto, devolvemos una
+    // lista vacia (data: []) en lugar de un error: el cliente lo tolera.
+    nlohmann::json data = nlohmann::json::array();
+    if (docs_.has(uri)) {
+        const std::string &text = docs_.text(uri);
+        // Reusar el analisis cacheado (mismo punto que los diagnosticos) para
+        // enriquecer los identificadores con los nombres declarados.
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        std::vector<uint32_t> toks =
+            compute_semantic_tokens(text, uri, &an);
+        // Volcar el array plano de uint32 a JSON.
+        data = nlohmann::json(toks);
+    }
+
+    nlohmann::json result;
+    result["data"] = std::move(data);
+    send_result(msg.at("id"), result);
+}
+
+namespace {
+
+/**
+ * @brief Construye el objeto @c Range LSP a partir de coordenadas 0-based.
+ */
+nlohmann::json make_range(uint32_t sl, uint32_t sc, uint32_t el, uint32_t ec) {
+    nlohmann::json r;
+    r["start"] = {{"line", sl}, {"character", sc}};
+    r["end"] = {{"line", el}, {"character", ec}};
+    return r;
+}
+
+/**
+ * @brief Construye un objeto @c Location LSP a partir de una
+ *        @c WorkspaceLocation.
+ */
+nlohmann::json make_location(const lsp::WorkspaceLocation &l) {
+    nlohmann::json j;
+    j["uri"] = l.uri;
+    j["range"] = make_range(l.start_line, l.start_char, l.end_line, l.end_char);
+    return j;
+}
+
+// ---------------------------------------------------------------------------
+// Soporte de autocompletado (Fase 5).
+// ---------------------------------------------------------------------------
+
+/// Codigos @c CompletionItemKind del LSP usados aqui.
+enum class CompletionKind : int {
+    Method = 2,
+    Function = 3,
+    Field = 5,
+    Variable = 6,
+    Class = 7,
+    Enum = 13,
+    Keyword = 14,
+    Struct = 22,
+    TypeParameter = 25,
+};
+
+/**
+ * @brief Construye un @c CompletionItem LSP.
+ *
+ * @param label  Texto mostrado y a insertar.
+ * @param kind   Categoria LSP.
+ * @param detail Detalle opcional (firma o tipo); vacio para omitir.
+ * @return Objeto JSON del item.
+ */
+nlohmann::json make_completion_item(const std::string &label,
+                                    CompletionKind kind,
+                                    const std::string &detail) {
+    nlohmann::json it;
+    it["label"] = label;
+    it["kind"] = static_cast<int>(kind);
+    it["insertText"] = label;
+    if (!detail.empty())
+        it["detail"] = detail;
+    return it;
+}
+
+/**
+ * @brief Extrae el comentario de documentacion que PRECEDE a una definicion.
+ *
+ * Dado el offset de byte del nombre de la definicion, sube por las lineas
+ * inmediatamente anteriores recolectando:
+ *   - lineas de comentario @c // (se quita el @c // y un espacio inicial),
+ *   - lineas de un bloque @c /* ... *\/ (se quitan los delimitadores y un @c *
+ *     de continuacion al inicio).
+ * Se detiene en la primera linea que no es comentario (codigo o linea en
+ * blanco).  Devuelve las lineas en orden natural unidas por @c \n, o "" si no
+ * hay comentario.  Tolerante: cualquier caso raro devuelve lo acumulado.
+ */
+std::string extract_doc_comment(const std::string &text, size_t name_offset) {
+    if (name_offset > text.size())
+        return std::string();
+    // Inicio de la linea que contiene el nombre.
+    size_t line_start = text.rfind('\n', name_offset ? name_offset - 1 : 0);
+    line_start = (line_start == std::string::npos) ? 0 : line_start + 1;
+
+    auto trim = [](const std::string &s) -> std::string {
+        size_t a = s.find_first_not_of(" \t\r");
+        if (a == std::string::npos)
+            return std::string();
+        size_t b = s.find_last_not_of(" \t\r");
+        return s.substr(a, b - a + 1);
+    };
+
+    std::vector<std::string> doc; // de la mas cercana a la mas lejana (luego se invierte)
+    size_t pos = line_start;
+    int guard = 0;
+    while (pos > 0 && guard++ < 200) {
+        // Linea anterior: [prev_start, prev_end) sin el '\n'.
+        size_t nl = text.rfind('\n', pos - 2 < text.size() ? pos - 2 : 0);
+        size_t prev_start = (pos >= 2 && nl != std::string::npos) ? nl + 1 : 0;
+        if (pos < 2)
+            prev_start = 0;
+        size_t prev_end = pos - 1; // posicion del '\n' que separa.
+        if (prev_end > text.size())
+            break;
+        std::string raw = text.substr(prev_start, prev_end - prev_start);
+        std::string t = trim(raw);
+        if (t.rfind("//", 0) == 0) {
+            std::string c = t.substr(2);
+            if (!c.empty() && c[0] == ' ')
+                c = c.substr(1);
+            // saltar las marcas Doxygen de mero formato (@brief queda visible).
+            doc.push_back(c);
+            pos = prev_start;
+            continue;
+        }
+        // Linea de bloque: "*/", "* ...", "/** ...", "/* ...".
+        if (t == "*/" || t.rfind("* ", 0) == 0 || t == "*" ||
+            t.rfind("/**", 0) == 0 || t.rfind("/*", 0) == 0) {
+            std::string c = t;
+            // limpiar delimitadores.
+            if (c.rfind("/**", 0) == 0)
+                c = c.substr(3);
+            else if (c.rfind("/*", 0) == 0)
+                c = c.substr(2);
+            if (!c.empty() && c[0] == '*')
+                c = c.substr(1);
+            if (c.size() >= 2 && c.substr(c.size() - 2) == "*/")
+                c = c.substr(0, c.size() - 2);
+            c = trim(c);
+            if (!c.empty())
+                doc.push_back(c);
+            pos = prev_start;
+            // si era la apertura del bloque, ya terminamos.
+            if (t.rfind("/*", 0) == 0)
+                break;
+            continue;
+        }
+        // Ni comentario ni continuacion de bloque: fin de la doc.
+        break;
+    }
+    if (doc.empty())
+        return std::string();
+    std::string out;
+    for (auto it = doc.rbegin(); it != doc.rend(); ++it) {
+        if (!out.empty())
+            out += "\n";
+        out += *it;
+    }
+    return out;
+}
+
+/// @brief Palabras clave de Vex ofrecidas en el completado general (curadas a
+///        partir del conjunto @c KW_* del lexer del frontend).
+const std::vector<std::string> &vex_keywords() {
+    static const std::vector<std::string> kws = {
+        // Declaraciones y modificadores.
+        "const", "static", "final", "nonnull", "typedef", "using", "namespace",
+        "struct", "class", "interface", "enum", "fn", "public", "private",
+        "protected", "import", "extern", "get", "set", "override",
+        // Control de flujo.
+        "if", "else", "while", "do", "for", "in", "break", "continue", "goto",
+        "return", "try", "catch", "finally", "throw", "match", "case",
+        // Objetos / memoria.
+        "new", "delete", "this", "super",
+        // Concurrencia / distribucion.
+        "synchronized", "monitor", "await", "spawn", "rspawn", "asm",
+        // Smart pointers / borrow.
+        "unique", "shared", "borrow", "borrow_mut",
+        // Literales.
+        "true", "false", "null",
+    };
+    return kws;
+}
+
+/// @brief Tipos (primitivos + alias + colecciones) ofrecidos en el completado.
+const std::vector<std::string> &vex_types() {
+    static const std::vector<std::string> tys = {
+        // Primitivos canonicos.
+        "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
+        "bool", "char", "void", "string",
+        // Alias estilo C.
+        "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
+        "uint32_t", "uint64_t", "float", "double",
+        // Colecciones (keywords del lenguaje).
+        "ArrayList", "HashMap", "HashSet", "Queue", "Deque", "TreeMap",
+        "TreeSet", "Stack",
+        // Builtins de tipo generico.
+        "Optional", "Result", "Future", "Array",
+    };
+    return tys;
+}
+
+/// @brief Builtins de funcion mas comunes (lista curada documentada).
+///
+/// El registro de builtins del type checker es privado y no se conserva en el
+/// analisis cacheado, asi que se ofrece una seleccion curada de los builtins
+/// documentados de uso habitual.  Best-effort: no pretende ser exhaustiva.
+const std::vector<std::string> &vex_builtins() {
+    static const std::vector<std::string> bs = {
+        // I/O.
+        "print", "println", "echo", "flush", "panic",
+        // Memoria.
+        "malloc", "free", "sizeof", "alignof",
+        // Strings.
+        "str_length", "str_bytes", "str_concat", "str_equals", "str_intern",
+        "to_str",
+        // Reflexion / introspeccion.
+        "forName", "getClass", "getField", "getMethod", "newInstance",
+        // Concurrencia.
+        "pid", "msgsend", "msgrecv", "loadmodule", "unloadmodule",
+    };
+    return bs;
+}
+
+/// @brief true si @p name empieza por @p prefix (case-sensitive).  Prefijo
+///        vacio coincide con todo.
+bool has_prefix(const std::string &name, const std::string &prefix) {
+    if (prefix.empty())
+        return true;
+    if (name.size() < prefix.size())
+        return false;
+    return name.compare(0, prefix.size(), prefix) == 0;
+}
+
+/// @brief true si @p c es valido dentro de un identificador de Vex.
+bool is_ident_char(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/**
+ * @brief Extrae el prefijo de identificador inmediatamente anterior a
+ *        @p byte_off (los caracteres [A-Za-z0-9_] que se estan escribiendo).
+ *
+ * @param text     Texto completo del documento.
+ * @param byte_off Offset de byte del cursor.
+ * @return Prefijo (posiblemente vacio) y, por referencia, su offset de inicio.
+ */
+std::string ident_prefix_before(const std::string &text, size_t byte_off,
+                                size_t &out_start) {
+    size_t i = byte_off;
+    while (i > 0 && is_ident_char(text[i - 1]))
+        --i;
+    out_start = i;
+    return text.substr(i, byte_off - i);
+}
+
+/**
+ * @brief Resuelve si el contexto del cursor es un acceso a miembro y, si lo es,
+ *        devuelve el identificador receptor (el que precede al @c '.').
+ *
+ * Salta espacios entre el receptor y el punto.  Solo reconoce receptores que
+ * son un identificador simple (no cadenas de @c a.b.c ni llamadas); v1
+ * pragmatico.
+ *
+ * @param text         Texto del documento.
+ * @param prefix_start Offset de inicio del prefijo que se escribe.
+ * @param out_receiver Salida: nombre del receptor si hay acceso a miembro.
+ * @return true si hay un @c '.' antes del prefijo con un receptor identificable.
+ */
+bool member_receiver_before(const std::string &text, size_t prefix_start,
+                            std::string &out_receiver) {
+    // Saltar espacios/tabuladores entre el prefijo y el posible punto.
+    size_t i = prefix_start;
+    while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t'))
+        --i;
+    if (i == 0 || text[i - 1] != '.')
+        return false; // no es acceso a miembro.
+    --i;              // saltar el punto.
+    // Saltar espacios entre el receptor y el punto.
+    while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t'))
+        --i;
+    // El receptor es el identificador que termina en i.
+    size_t end = i;
+    while (i > 0 && is_ident_char(text[i - 1]))
+        --i;
+    if (i == end)
+        return false; // sin identificador receptor.
+    out_receiver = text.substr(i, end - i);
+    return !out_receiver.empty();
+}
+
+/**
+ * @brief Heuristica best-effort para deducir el tipo (clase/struct) de un
+ *        receptor a partir de su declaracion en el texto.
+ *
+ * Busca un patron de declaracion @c "<Tipo> <receptor>" donde @c <Tipo> es un
+ * nombre de clase o struct conocido (de @p known_types).  Recorre todas las
+ * apariciones del receptor como palabra completa y, para cada una, mira la
+ * palabra anterior: si es un tipo conocido, lo devuelve.  Devuelve cadena vacia
+ * si no logra resolverlo.
+ *
+ * @param text        Texto del documento.
+ * @param receiver    Nombre del receptor.
+ * @param known_types Conjunto de nombres de tipo (clases + structs).
+ * @return Nombre del tipo deducido, o cadena vacia.
+ */
+std::string deduce_receiver_type(
+    const std::string &text, const std::string &receiver,
+    const std::unordered_set<std::string> &known_types) {
+    const size_t n = text.size();
+    const size_t rlen = receiver.size();
+    if (rlen == 0)
+        return std::string();
+    for (size_t p = 0; p + rlen <= n;) {
+        // Localizar la siguiente aparicion del receptor.
+        size_t pos = text.find(receiver, p);
+        if (pos == std::string::npos)
+            break;
+        p = pos + 1; // avanzar para la siguiente busqueda.
+        // Exigir limites de palabra: lo anterior y lo posterior no deben ser
+        // caracteres de identificador.
+        bool left_ok = (pos == 0) || !is_ident_char(text[pos - 1]);
+        size_t after = pos + rlen;
+        bool right_ok = (after >= n) || !is_ident_char(text[after]);
+        if (!left_ok || !right_ok)
+            continue;
+        // Retroceder por espacios antes del receptor.
+        size_t j = pos;
+        while (j > 0 && (text[j - 1] == ' ' || text[j - 1] == '\t'))
+            --j;
+        // Extraer la palabra anterior (el candidato a tipo).
+        size_t word_end = j;
+        while (j > 0 && is_ident_char(text[j - 1]))
+            --j;
+        if (j == word_end)
+            continue; // no hay palabra previa.
+        std::string prev = text.substr(j, word_end - j);
+        if (known_types.count(prev) != 0)
+            return prev;
+    }
+    return std::string();
+}
+
+} // namespace
+
+bool LspServer::word_under_cursor(const nlohmann::json &params,
+                                  std::string &out_uri, std::string &out_word) {
+    // params.textDocument.uri + params.position.{line, character}.
+    if (!params.contains("textDocument") || !params.contains("position"))
+        return false;
+    const auto &td = params.at("textDocument");
+    out_uri = td.value("uri", std::string());
+    if (out_uri.empty() || !docs_.has(out_uri))
+        return false;
+    const auto &pos = params.at("position");
+    const uint32_t line = pos.value("line", 0u);
+    const uint32_t character = pos.value("character", 0u);
+
+    const std::string &text = docs_.text(out_uri);
+    // Convertir la posicion LSP a un offset de byte para localizar el token.
+    const uint32_t byte_off = lsp_position_to_byte_offset(text, line, character);
+
+    // Construir (o recomputar barato) el indice por-documento y buscar el
+    // identificador que el cursor toca.
+    DocSymbols sym = build_doc_symbols(text, out_uri);
+    const SymbolRef *ref = sym.ref_at(byte_off);
+    if (ref == nullptr) {
+        // El cursor puede caer justo al final del identificador (posicion
+        // exclusiva): reintentar un byte antes.
+        if (byte_off > 0)
+            ref = sym.ref_at(byte_off - 1);
+    }
+    if (ref == nullptr)
+        return false;
+    out_word = ref->name;
+    return true;
+}
+
+void LspServer::handle_hover(const nlohmann::json &msg) {
+    const auto &params = msg.at("params");
+
+    // (0) ¿El cursor esta sobre un builtin de introspeccion comptime
+    // (sizeof<T>, alignof<T>, kind<T>, type_id<T>, typename<T>)?  Mostramos el
+    // VALOR que el compilador resolvio, aunque "sizeof" no sea un simbolo
+    // declarado.  Va antes del flujo normal porque esos builtins no estan en el
+    // indice de simbolos.
+    try {
+        const std::string huri =
+            params.at("textDocument").at("uri").get<std::string>();
+        const uint32_t pline = params.at("position").at("line").get<uint32_t>();
+        const uint32_t pchar =
+            params.at("position").at("character").get<uint32_t>();
+        const std::string &htext = docs_.text(huri);
+        const DocAnalysis &an = engine_.analyze_document(huri, htext);
+        const std::string line_text = docs_.line(huri, pline);
+        for (const auto &cv : an.result.comptime_values) {
+            if (cv.loc.line == 0 || cv.builtin_kind.empty()) continue;
+            if (cv.loc.line != pline + 1) continue; // 1-based vs 0-based
+            const uint32_t s = byte_column_to_utf16(line_text, cv.loc.column);
+            const uint32_t e =
+                byte_column_to_utf16(line_text, cv.loc.column + cv.loc.length);
+            if (pchar >= s && pchar < e) {
+                std::string md = "**" + cv.name + "**  _(comptime)_\n\n";
+                md += "= **" + cv.value_str +
+                      "**  _(resuelto en compilacion)_\n";
+                nlohmann::json result, contents;
+                contents["kind"] = "markdown";
+                contents["value"] = md;
+                result["contents"] = std::move(contents);
+                send_result(msg.at("id"), result);
+                return;
+            }
+        }
+    } catch (...) {
+        // params incompleto: continuar con el flujo normal de hover.
+    }
+
+    std::string uri, word;
+    if (!word_under_cursor(params, uri, word)) {
+        // Sin identificador resoluble: devolver null (el cliente lo tolera).
+        send_result(msg.at("id"), nullptr);
+        return;
+    }
+
+    // Resolver a una definicion: primero las del propio fichero (texto vivo),
+    // luego el workspace.  La definicion da el kind + firma; la complejidad
+    // sale de la ModuleCost cacheada del propio documento.
+    const std::string &text = docs_.text(uri);
+    DocSymbols local = build_doc_symbols(text, uri);
+
+    SymbolKind kind = SymbolKind::Unknown;
+    std::string signature;
+    std::string container;
+    std::string def_uri = uri; ///< fichero donde vive la definicion (Big-O).
+    bool resolved = false;
+
+    // Buscar en las definiciones locales (preferencia por exactitud de scope).
+    for (const auto &d : local.defs) {
+        if (d.name == word) {
+            kind = d.kind;
+            signature = d.signature;
+            container = d.container;
+            resolved = true;
+            break;
+        }
+    }
+    // Si no esta en el fichero, mirar el workspace.
+    if (!resolved) {
+        workspace_.ensure_built();
+        std::vector<WorkspaceLocation> wdefs = workspace_.defs_for(word);
+        if (!wdefs.empty()) {
+            kind = wdefs.front().kind;
+            signature = wdefs.front().signature;
+            container = wdefs.front().container;
+            def_uri = wdefs.front().uri; // Big-O sale del fichero que la define.
+            resolved = true;
+        }
+    }
+
+    if (!resolved) {
+        send_result(msg.at("id"), nullptr);
+        return;
+    }
+
+    // Construir el markdown del hover.
+    std::string md;
+    md += "**";
+    md += word;
+    md += "**";
+    md += "  _(";
+    md += symbol_kind_name(kind);
+    md += ")_\n\n";
+    if (!container.empty()) {
+        md += "Contenedor: `";
+        md += container;
+        md += "`\n\n";
+    }
+    if (!signature.empty()) {
+        md += "```vex\n";
+        md += signature;
+        md += "\n```\n";
+    }
+    // Complejidad Big-O si es una funcion (o un metodo) conocida por el
+    // analizador de coste.  Buscamos por nombre exacto y, si no, por sufijo
+    // (los metodos viven en el IR como `Clase__metodo`).
+    if (kind == SymbolKind::Function || kind == SymbolKind::Method) {
+        // El coste sale del analisis del fichero que DEFINE la funcion (que
+        // puede ser otro modulo).  Si esta abierto, usamos su texto vivo; si
+        // no, lo leemos de disco best-effort.
+        std::string def_text;
+        if (docs_.has(def_uri)) {
+            def_text = docs_.text(def_uri);
+        } else {
+            std::ifstream f(uri_to_fs_path(def_uri), std::ios::binary);
+            if (f) {
+                std::ostringstream ss;
+                ss << f.rdbuf();
+                def_text = ss.str();
+            }
+        }
+        const DocAnalysis &an = engine_.analyze_document(def_uri, def_text);
+        const analyze::CostResult *cr = nullptr;
+        for (const auto &c : an.cost.functions) {
+            if (c.function == word) {
+                cr = &c;
+                break;
+            }
+        }
+        if (cr == nullptr) {
+            // Buscar por sufijo "__<word>" (mangling de metodos) o por
+            // contener el nombre como ultimo componente.
+            const std::string suffix = "__" + word;
+            for (const auto &c : an.cost.functions) {
+                if (c.function.size() >= suffix.size() &&
+                    c.function.compare(c.function.size() - suffix.size(),
+                                       suffix.size(), suffix) == 0) {
+                    cr = &c;
+                    break;
+                }
+            }
+        }
+        if (cr != nullptr) {
+            md += "\nComplejidad: **";
+            md += analyze::cost_class_str(cr->total_class);
+            md += "**";
+            // Si el coste parcial difiere del total, mostrarlo tambien.
+            if (cr->big_o != cr->total_class) {
+                md += " (parcial ";
+                md += analyze::cost_class_str(cr->big_o);
+                md += ")";
+            }
+            md += "\n";
+        }
+    }
+
+    nlohmann::json result;
+    nlohmann::json contents;
+    contents["kind"] = "markdown";
+    contents["value"] = md;
+    result["contents"] = std::move(contents);
+    send_result(msg.at("id"), result);
+}
+
+void LspServer::handle_definition(const nlohmann::json &msg) {
+    const auto &params = msg.at("params");
+    std::string uri, word;
+    if (!word_under_cursor(params, uri, word)) {
+        send_result(msg.at("id"), nullptr);
+        return;
+    }
+
+    // Preferir las definiciones del propio fichero (texto vivo); si no hay,
+    // usar el workspace (incluye librerias/modulos importados).
+    const std::string &text = docs_.text(uri);
+    DocSymbols local = build_doc_symbols(text, uri);
+
+    nlohmann::json locs = nlohmann::json::array();
+    for (const auto &d : local.defs) {
+        if (d.name != word)
+            continue;
+        WorkspaceLocation l;
+        l.uri = uri;
+        byte_offset_to_lsp_position(text, d.byte_offset, l.start_line,
+                                    l.start_char);
+        byte_offset_to_lsp_position(text, d.byte_offset + d.byte_length,
+                                    l.end_line, l.end_char);
+        locs.push_back(make_location(l));
+    }
+    if (locs.empty()) {
+        workspace_.ensure_built();
+        for (const auto &l : workspace_.defs_for(word))
+            locs.push_back(make_location(l));
+    }
+
+    if (locs.empty()) {
+        send_result(msg.at("id"), nullptr);
+        return;
+    }
+    send_result(msg.at("id"), locs);
+}
+
+void LspServer::handle_references(const nlohmann::json &msg) {
+    const auto &params = msg.at("params");
+    std::string uri, word;
+    if (!word_under_cursor(params, uri, word)) {
+        send_result(msg.at("id"), nlohmann::json::array());
+        return;
+    }
+
+    // includeDeclaration: si true, incluir tambien las definiciones.
+    bool include_decl = false;
+    if (params.contains("context") && params.at("context").is_object())
+        include_decl = params.at("context").value("includeDeclaration", false);
+
+    // Todas las referencias del workspace (incluye librerias).
+    workspace_.ensure_built();
+
+    nlohmann::json locs = nlohmann::json::array();
+    for (const auto &l : workspace_.refs_for(word))
+        locs.push_back(make_location(l));
+    if (include_decl) {
+        for (const auto &l : workspace_.defs_for(word))
+            locs.push_back(make_location(l));
+    }
+
+    send_result(msg.at("id"), locs);
+}
+
+void LspServer::handle_completion(const nlohmann::json &msg) {
+    const auto &params = msg.at("params");
+    // Validar uri + documento abierto + posicion.  Sin ello respondemos lista
+    // vacia (valida para el protocolo).
+    if (!params.contains("textDocument") || !params.contains("position")) {
+        send_result(msg.at("id"), nlohmann::json::array());
+        return;
+    }
+    const std::string uri = params.at("textDocument").value("uri", std::string());
+    if (uri.empty() || !docs_.has(uri)) {
+        send_result(msg.at("id"), nlohmann::json::array());
+        return;
+    }
+    const auto &pos = params.at("position");
+    const uint32_t line = pos.value("line", 0u);
+    const uint32_t character = pos.value("character", 0u);
+
+    const std::string &text = docs_.text(uri);
+    // Offset de byte del cursor, prefijo que se esta escribiendo y su inicio.
+    const size_t cursor =
+        lsp_position_to_byte_offset(text, line, character);
+    size_t prefix_start = cursor;
+    const std::string prefix = ident_prefix_before(text, cursor, prefix_start);
+
+    // Tope de resultados para no devolver listas gigantes.
+    constexpr size_t kMaxItems = 500;
+    nlohmann::json items = nlohmann::json::array();
+    std::unordered_set<std::string> seen; // dedup por label.
+
+    auto add_item = [&](const std::string &label, CompletionKind kind,
+                        const std::string &detail) {
+        if (items.size() >= kMaxItems)
+            return;
+        if (label.empty() || seen.count(label) != 0)
+            return;
+        seen.insert(label);
+        items.push_back(make_completion_item(label, kind, detail));
+    };
+
+    // El analisis cacheado da los conjuntos de nombres declarados (clases,
+    // structs, enums, alias, funciones) del propio documento.
+    const DocAnalysis &an = engine_.analyze_document(uri, text);
+
+    // -- COMPLETADO DE MIEMBRO tras '.' --------------------------------------
+    std::string receiver;
+    if (member_receiver_before(text, prefix_start, receiver)) {
+        // Resolver el tipo del receptor:
+        //  (a) si el receptor ES directamente un nombre de clase/struct
+        //      conocido (acceso estilo Tipo.miembro), usar ese tipo;
+        //  (b) si no, deducirlo de su declaracion "<Tipo> receptor".
+        std::string type_name;
+        if (an.class_names.count(receiver) != 0 ||
+            an.struct_names.count(receiver) != 0) {
+            type_name = receiver;
+        } else {
+            std::unordered_set<std::string> known_types;
+            known_types.insert(an.class_names.begin(), an.class_names.end());
+            known_types.insert(an.struct_names.begin(), an.struct_names.end());
+            type_name = deduce_receiver_type(text, receiver, known_types);
+        }
+
+        if (!type_name.empty()) {
+            // Listar metodos y campos cuyo contenedor sea el tipo resuelto.
+            DocSymbols sym = build_doc_symbols(text, uri);
+            for (const auto &d : sym.defs) {
+                if (d.container != type_name)
+                    continue;
+                if (!has_prefix(d.name, prefix))
+                    continue;
+                if (d.kind == SymbolKind::Method) {
+                    add_item(d.name, CompletionKind::Method, d.signature);
+                } else if (d.kind == SymbolKind::Field) {
+                    add_item(d.name, CompletionKind::Field, type_name);
+                }
+            }
+        }
+        // Caso miembro: NO mezclamos el completado general (evitar inundar con
+        // todo el universo de nombres tras un punto).  Respondemos lo hallado
+        // (puede ser vacio si el tipo no se resolvio: best-effort documentado).
+        send_result(msg.at("id"), items);
+        return;
+    }
+
+    // -- COMPLETADO GENERAL (sin '.') ----------------------------------------
+    // Palabras clave.
+    for (const auto &kw : vex_keywords())
+        if (has_prefix(kw, prefix))
+            add_item(kw, CompletionKind::Keyword, std::string());
+    // Tipos (primitivos + alias + colecciones + genericos builtin).
+    for (const auto &ty : vex_types())
+        if (has_prefix(ty, prefix))
+            add_item(ty, CompletionKind::Class, "tipo");
+    // Builtins comunes (lista curada).
+    for (const auto &b : vex_builtins())
+        if (has_prefix(b, prefix))
+            add_item(b, CompletionKind::Function, "builtin");
+
+    // Simbolos del propio documento (con su firma como detalle cuando exista).
+    DocSymbols sym = build_doc_symbols(text, uri);
+    for (const auto &d : sym.defs) {
+        if (!has_prefix(d.name, prefix))
+            continue;
+        CompletionKind k;
+        switch (d.kind) {
+        case SymbolKind::Function: k = CompletionKind::Function; break;
+        case SymbolKind::Class: k = CompletionKind::Class; break;
+        case SymbolKind::Struct: k = CompletionKind::Struct; break;
+        case SymbolKind::Enum: k = CompletionKind::Enum; break;
+        case SymbolKind::TypeAlias: k = CompletionKind::Class; break;
+        case SymbolKind::Variable: k = CompletionKind::Variable; break;
+        case SymbolKind::Parameter: k = CompletionKind::Variable; break;
+        case SymbolKind::Method: k = CompletionKind::Method; break;
+        case SymbolKind::Field: k = CompletionKind::Field; break;
+        case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+        default: k = CompletionKind::Variable; break;
+        }
+        add_item(d.name, k, d.signature);
+    }
+
+    // Simbolos del workspace (otros ficheros / librerias importadas).  Solo si
+    // las raices estan fijadas; el indice se construye perezosamente.  El
+    // dedup por label evita duplicar los que ya aporto el documento.
+    if (items.size() < kMaxItems && workspace_.has_roots()) {
+        workspace_.ensure_built();
+        workspace_.for_each_def_name(
+            [&](const std::string &name, SymbolKind kind,
+                const std::string &signature) {
+                if (!has_prefix(name, prefix))
+                    return;
+                CompletionKind k;
+                switch (kind) {
+                case SymbolKind::Function: k = CompletionKind::Function; break;
+                case SymbolKind::Class: k = CompletionKind::Class; break;
+                case SymbolKind::Struct: k = CompletionKind::Struct; break;
+                case SymbolKind::Enum: k = CompletionKind::Enum; break;
+                case SymbolKind::TypeAlias: k = CompletionKind::Class; break;
+                case SymbolKind::Variable: k = CompletionKind::Variable; break;
+                case SymbolKind::Method: k = CompletionKind::Method; break;
+                case SymbolKind::Field: k = CompletionKind::Field; break;
+                case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+                default: k = CompletionKind::Variable; break;
+                }
+                add_item(name, k, signature);
+            });
+    }
+
+    send_result(msg.at("id"), items);
+}
+
+bool LspServer::handle_vesta_request(const std::string &method,
+                                     const nlohmann::json &msg) {
+    // Toda peticion vesta/* lleva id (es request) y params con el uri.  Si
+    // falta algo, respondemos con un error en lugar de crashear.
+    if (!msg.contains("id"))
+        return false; // sin id no es una peticion: dejar pasar.
+    const nlohmann::json &id = msg.at("id");
+
+    // Helper local para responder un error con la forma { error: "..." }.
+    auto respond_error = [&](const std::string &what) {
+        nlohmann::json r;
+        r["error"] = what;
+        send_result(id, r);
+    };
+
+    try {
+        // Extraer params.uri (comun a todas las peticiones del inspector).
+        if (!msg.contains("params") || !msg.at("params").is_object()) {
+            respond_error("faltan params");
+            return true;
+        }
+        const nlohmann::json &params = msg.at("params");
+        const std::string uri = params.value("uri", std::string());
+        if (uri.empty()) {
+            respond_error("falta params.uri");
+            return true;
+        }
+
+        nlohmann::json result;
+        if (method == "vesta/bytecode") {
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.bytecode(uri, fn);
+        } else if (method == "vesta/ir") {
+            const std::string phase = params.value("phase", std::string("post"));
+            result = inspector_.ir(uri, phase);
+        } else if (method == "vesta/irDiff") {
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.ir_diff(uri, fn);
+        } else if (method == "vesta/complexity") {
+            result = inspector_.complexity(uri);
+        } else if (method == "vesta/diagram") {
+            const std::string kind = params.value("kind", std::string("ir-post"));
+            const std::string format =
+                params.value("format", std::string("mermaid"));
+            const bool cost = params.value("cost", false);
+            result = inspector_.diagram(uri, kind, format, cost);
+        } else if (method == "vesta/functions") {
+            result = inspector_.functions(uri);
+        } else if (method == "vesta/aotCompat") {
+            const std::string tier = params.value("tier", std::string("bare"));
+            result = inspector_.aot_compat(uri, tier);
+        } else if (method == "vesta/jitAsm") {
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.jit_asm(uri, fn);
+        } else if (method == "vesta/aotAsm") {
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.aot_asm(uri, fn);
+        } else if (method == "vesta/macroExpand") {
+            result = inspector_.macro_expand(uri);
+        } else if (method == "vesta/comptimeValues") {
+            result = inspector_.comptime_values(uri);
+        } else if (method == "vesta/paramHints") {
+            // Parameter hints (inlay): nombre de cada parametro antes de su
+            // argumento en las llamadas a funciones conocidas.
+            nlohmann::json arr = nlohmann::json::array();
+            if (docs_.has(uri)) {
+                const std::string &text = docs_.text(uri);
+                std::vector<ParamHint> ph = compute_param_hints(text, uri);
+                for (const auto &h : ph) {
+                    nlohmann::json o;
+                    o["line"] = h.line;
+                    o["character"] = h.character;
+                    o["label"] = h.label;
+                    arr.push_back(std::move(o));
+                }
+            }
+            result = nlohmann::json::object();
+            result["hints"] = std::move(arr);
+        } else if (method == "vesta/symbolInfo") {
+            // Informacion del simbolo bajo el cursor para el hover rico:
+            // nombre + categoria + firma + doc (comentarios precedentes).  Las
+            // pestanas IR/bytecode/JIT/AOT las pide el cliente aparte (on-demand)
+            // con vesta/ir, vesta/bytecode, vesta/jitAsm, vesta/aotAsm.
+            const uint32_t line = params.value("line", 0u);
+            const uint32_t character = params.value("character", 0u);
+            nlohmann::json info = nlohmann::json::object();
+            info["found"] = false;
+            if (docs_.has(uri)) {
+                // Reusar la extraccion de palabra del hover (maneja UTF-16).
+                nlohmann::json hp;
+                hp["textDocument"]["uri"] = uri;
+                hp["position"]["line"] = line;
+                hp["position"]["character"] = character;
+                std::string u2, word;
+                if (word_under_cursor(hp, u2, word) && !word.empty()) {
+                    const std::string &text = docs_.text(uri);
+                    DocSymbols local = build_doc_symbols(text, uri);
+                    const SymbolDef *def = nullptr;
+                    for (const auto &d : local.defs)
+                        if (d.name == word) {
+                            def = &d;
+                            break;
+                        }
+                    info["name"] = word;
+                    if (def) {
+                        info["found"] = true;
+                        info["kind"] = symbol_kind_name(def->kind);
+                        info["signature"] = def->signature;
+                        info["container"] = def->container;
+                        info["doc"] = extract_doc_comment(text, def->byte_offset);
+                        const bool callable =
+                            def->kind == SymbolKind::Function ||
+                            def->kind == SymbolKind::Method;
+                        info["callable"] = callable;
+                    } else if (const BuiltinDoc *b = lookup_builtin(word)) {
+                        // Builtin del lenguaje (print, sizeof, str_*, ...):
+                        // doc + firma desde la tabla central.  callable=false
+                        // -> el hover solo muestra la pestana Doc (los builtins
+                        // no tienen IR/JIT/AOT de usuario que inspeccionar).
+                        info["found"] = true;
+                        info["kind"] = "builtin";
+                        info["signature"] = b->signature;
+                        info["container"] = "";
+                        info["doc"] = b->doc;
+                        info["callable"] = false;
+                    } else {
+                        // Identificador sin definicion local (var local, tipo
+                        // importado): aun util saber el nombre.
+                        info["found"] = true;
+                        info["kind"] = "unknown";
+                        info["signature"] = "";
+                        info["doc"] = "";
+                        info["callable"] = false;
+                    }
+                }
+            }
+            result = std::move(info);
+        } else {
+            // Metodo vesta/* desconocido: no manejado aqui.
+            return false;
+        }
+        send_result(id, result);
+        return true;
+    } catch (const std::exception &e) {
+        // Cualquier fallo del inspector se convierte en un error de
+        // resultado: el servidor sigue sirviendo.
+        respond_error(std::string("excepcion en el inspector: ") + e.what());
+        return true;
+    } catch (...) {
+        respond_error("excepcion desconocida en el inspector");
+        return true;
+    }
+}
+
+void LspServer::dispatch(const nlohmann::json &msg) {
+    // Todo mensaje LSP valido lleva un campo method (string).  Sin el, lo
+    // ignoramos (puede ser una respuesta a una peticion nuestra, etc.).
+    if (!msg.contains("method") || !msg.at("method").is_string())
+        return;
+    const std::string method = msg.at("method").get<std::string>();
+
+    // Peticiones (llevan id) y notificaciones (no llevan id) se distinguen
+    // por la presencia del campo id.
+    if (method == "initialize") {
+        handle_initialize(msg);
+    } else if (method == "initialized") {
+        // Notificacion sin payload relevante: no requiere respuesta.
+    } else if (method == "shutdown") {
+        handle_shutdown(msg);
+    } else if (method == "exit") {
+        // exit se maneja en el bucle run(); aqui no hacemos nada.
+    } else if (method == "textDocument/didOpen") {
+        handle_did_open(msg.at("params"));
+    } else if (method == "textDocument/didChange") {
+        handle_did_change(msg.at("params"));
+    } else if (method == "textDocument/didClose") {
+        handle_did_close(msg.at("params"));
+    } else if (method == "textDocument/semanticTokens/full") {
+        handle_semantic_tokens_full(msg);
+    } else if (method == "textDocument/hover") {
+        // Navegacion (Fase 4): cada handler envuelve su logica de forma que un
+        // fallo NO tumba el servidor; ademas respondemos null/[] ante error
+        // para cumplir el protocolo (toda peticion debe responderse).
+        try {
+            handle_hover(msg);
+        } catch (...) {
+            if (msg.contains("id"))
+                send_result(msg.at("id"), nullptr);
+        }
+    } else if (method == "textDocument/definition") {
+        try {
+            handle_definition(msg);
+        } catch (...) {
+            if (msg.contains("id"))
+                send_result(msg.at("id"), nullptr);
+        }
+    } else if (method == "textDocument/references") {
+        try {
+            handle_references(msg);
+        } catch (...) {
+            if (msg.contains("id"))
+                send_result(msg.at("id"), nlohmann::json::array());
+        }
+    } else if (method == "textDocument/completion") {
+        // Autocompletado (Fase 5): ante un fallo respondemos una lista vacia
+        // valida para cumplir el protocolo sin tumbar el servidor.
+        try {
+            handle_completion(msg);
+        } catch (...) {
+            if (msg.contains("id"))
+                send_result(msg.at("id"), nlohmann::json::array());
+        }
+    } else if (method.rfind("vesta/", 0) == 0 &&
+               handle_vesta_request(method, msg)) {
+        // Peticion a medida del inspector (vesta/*) atendida.
+    } else if (msg.contains("id")) {
+        // Peticion de un metodo no soportado: responder error MethodNotFound
+        // para cumplir el protocolo (las peticiones SIEMPRE deben responderse).
+        nlohmann::json resp;
+        resp["jsonrpc"] = "2.0";
+        resp["id"] = msg.at("id");
+        resp["error"] = {{"code", -32601}, // MethodNotFound
+                         {"message", "metodo no soportado: " + method}};
+        transport_.write_message(resp);
+    }
+    // Notificaciones no soportadas: se ignoran en silencio (permitido).
+}
+
+int LspServer::run() {
+    nlohmann::json msg;
+    // Bucle de eventos: leer-despachar hasta EOF o exit.
+    while (transport_.read_message(msg)) {
+        // Detectar exit antes de despachar para terminar limpio.
+        if (msg.contains("method") && msg.at("method").is_string() &&
+            msg.at("method").get<std::string>() == "exit") {
+            // Por protocolo: exit tras shutdown => codigo 0; sin shutdown => 1.
+            return shutdown_requested_ ? 0 : 1;
+        }
+        // Despachar bajo try/catch: un mensaje malformado (campos ausentes)
+        // no debe tumbar el servidor.
+        try {
+            dispatch(msg);
+        } catch (...) {
+            // Ignorar errores de un mensaje individual y seguir sirviendo.
+        }
+    }
+    // EOF sin exit explicito: salida limpia.
+    return 0;
+}
+
+} // namespace lsp

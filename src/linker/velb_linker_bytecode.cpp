@@ -22,6 +22,7 @@
  * write_to_file).
  */
 #include "linker/velb_linker_bytecode.h"
+#include <algorithm> // UCRT64: no transitivo
 
 #include <chrono>
 #include <cstdlib>
@@ -746,7 +747,7 @@ void Linker::build_header() {
     // nuevo eliminando configuraciones anteriores de funciones previas.
 
     final_header.magic.firma = MAGIC_NUMBER_VELB;
-    final_header.format_v = VERSION_VELB; // 0x2 (anyade tabla de relocations)
+    final_header.format_v = VERSION_VELB; // 0x2 (añade tabla de relocations)
 
     final_header.max_v = 0; // 0.0.0 => compatible con futuras
     final_header.min_v = 0; // 0.0.0 => retrocompatible

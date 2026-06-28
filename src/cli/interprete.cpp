@@ -23,6 +23,7 @@
  * antes de que el proceso llegue a la cola, causando que no se ejecute nada.
  */
 #include "cli/cli.h"
+#include <algorithm> // UCRT64: no transitivo
 
 #include <cstdio>
 #include <thread>

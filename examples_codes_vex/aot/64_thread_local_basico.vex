@@ -1,0 +1,26 @@
+// AOT thread_local (TLS nativo): una variable por-hilo basica.
+//
+// `thread_local <T> NAME = init;` declara una variable cuyo almacenamiento es
+// PRIVADO de cada hilo: cada hilo ve y muta su PROPIA copia, inicializada con
+// la plantilla `init` (una constante).  No hay sincronizacion ni coste de
+// locks; es el modelo de C `__thread` / C++ `thread_local`.
+//
+// El codegen AOT lo emite NATIVO, sin runtime auxiliar:
+//   - ELF: la plantilla va a una seccion SHF_TLS (.tdata) + segmento PT_TLS; el
+//     acceso usa el thread pointer (fs) + un offset constante (TPOFF).
+//   - PE:  el emisor sintetiza el IMAGE_TLS_DIRECTORY + _tls_index; el acceso
+//     lee el bloque TLS del hilo desde el TEB (gs:[0x58]) y le suma el offset.
+// El cargador del SO monta el bloque por-hilo antes de ejecutar.
+//
+// Compilar/ejecutar:
+//   vm -m aot --vex 64_thread_local_basico.vex --format pe  --emit exe -o t.exe
+//   vm -m aot --vex 64_thread_local_basico.vex --format elf --emit obj -o t.o
+//       (ELF: enlazar con `vm --link t.o libc.so.6 -o t`)
+//
+// Resultado esperado: exit code = 5.
+
+thread_local i32 c = 5;
+
+i64 main() {
+    return c;
+}

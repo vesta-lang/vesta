@@ -37,6 +37,7 @@
 #include "jit/jit_regalloc.h"
 #include "vesta_rt/abi.h"
 
+#include <algorithm> // std::sort/min/max (UCRT64 no los incluye transitivo)
 #include <array>
 #include <cctype>
 #include <cstdio>
@@ -530,6 +531,10 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
     MFunction mf;
     mf.name = ir_fn.name;
     bool unsupported = false;
+    /* Solo-LSP (vista "Godbolt"): propaga el opt-in al MFunction para que el
+     * encoder genere la tabla byte_offset -> source_line.  OFF por defecto:
+     * cero efecto en el codegen de produccion. */
+    mf.emit_line_map = opts_.emit_line_map;
 
     /* Phase D.7-exc (2026-06-04): exception handling.  El modelo v1 del
      * throw (do_throw modifica proc->rip + epilogue + el scheduler reanuda
@@ -1088,7 +1093,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
         if (vid == ir::IR_NO_VALUE) return;
         if (vid >= ir_fn.values.size()) return;
         if (!ir_fn.values[vid].is_gc_object) return;
-        /* Anyadir slot al set si no esta ya. */
+        /* añadir slot al set si no esta ya. */
         const int16_t off = static_cast<int16_t>(slot_offset(vid));
         for (const auto &s : live_gc_slots) {
             if (s.rbp_offset == off) return; /* ya marcado */
@@ -1160,7 +1165,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
     /* preservar regs callee-saved usados por regalloc.
      * Conteo PAR garantizado por @c compute_jit_regalloc para que el
      * alignment del frame no cambie (cada push es 8 bytes; 2 o 4
-     * pushes anyaden 16 o 32 bytes, ambos multiplos de 16). */
+     * pushes añaden 16 o 32 bytes, ambos multiplos de 16). */
     for (MReg cs_reg : regalloc.callee_saved_used) {
         mf.blocks[prologue].instrs.push_back(
             MInstr::make_unary(MOp::PUSH, {}, MOperand::make_reg(cs_reg)));
@@ -1533,9 +1538,50 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
         ir::IrValueId fused_cmp_op0 = ir::IR_NO_VALUE;
         ir::IrValueId fused_cmp_op1 = ir::IR_NO_VALUE;
 
+        /* Solo-LSP (vista "Godbolt"): estampado diferido de source_line.
+         * Cada IR-op emite a @c mf.blocks.back() (y a veces crea bloques
+         * nuevos).  Snapshot ANTES de bajar la op; tras ella (al inicio de
+         * la iteracion siguiente y al cerrar el bucle) estampamos las
+         * MInstr nuevas con su @c source_line.  El esquema diferido
+         * sobrevive a los muchos @c continue del switch (un post-switch
+         * directo se los saltaria).  Coste con flag OFF: nada (el lambda
+         * retorna al instante y las ramas son no-ops). */
+        size_t lm_blk_before = SIZE_MAX; // SIZE_MAX = nada pendiente
+        size_t lm_instrs_before = 0;
+        uint32_t lm_line = 0;
+        auto lm_flush = [&]() {
+            if (!opts_.emit_line_map || lm_blk_before == SIZE_MAX) return;
+            if (lm_line != 0) {
+                // (a) MInstr nuevas en el bloque que era back() al snapshot.
+                if (lm_blk_before >= 1 &&
+                    (lm_blk_before - 1) < mf.blocks.size()) {
+                    auto &b0 = mf.blocks[lm_blk_before - 1];
+                    for (size_t k = lm_instrs_before; k < b0.instrs.size(); ++k)
+                        if (b0.instrs[k].source_pc == 0)
+                            b0.instrs[k].source_pc = lm_line;
+                }
+                // (b) bloques creados durante la op (todas sus instrs).
+                for (size_t bb = lm_blk_before; bb < mf.blocks.size(); ++bb) {
+                    auto &bn = mf.blocks[bb];
+                    for (auto &mi : bn.instrs)
+                        if (mi.source_pc == 0) mi.source_pc = lm_line;
+                }
+            }
+            lm_blk_before = SIZE_MAX;
+        };
+
         for (size_t ins_idx = 0; ins_idx < ir_block.instrs.size(); ++ins_idx) {
             const auto &ins = ir_block.instrs[ins_idx];
             using IrOp = ir::IrOp;
+            // Estampar la op anterior (sobrevive a `continue`) y snapshot
+            // de esta.
+            lm_flush();
+            if (opts_.emit_line_map) {
+                lm_blk_before = mf.blocks.size();
+                lm_instrs_before =
+                    mf.blocks.empty() ? 0 : mf.blocks.back().instrs.size();
+                lm_line = ins.source_line;
+            }
             switch (ins.op) {
             /* --------- Mov / Const --------- */
             case IrOp::NOP: break;
@@ -3011,7 +3057,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 mf.blocks.back().instrs.push_back(call_instr);
 
                 /* Resultado en RAX -> slot del dst.  Si dst es
-                 * GC, anyade el slot a live_gc_slots para futuros
+                 * GC, añade el slot a live_gc_slots para futuros
                  * stackmaps. */
                 if (ins.dst != ir::IR_NO_VALUE) {
                     store_op(mf, ins.dst, MReg::RAX);
@@ -3112,7 +3158,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                  * trajo ganancia neta porque register_alloc
                  * (new_handle) cuesta lo mismo que el call
                  * directo a vrt_newobj_handle.  Y el inline
-                 * anyade ~14 instrs por iter que CAUSAN
+                 * añade ~14 instrs por iter que CAUSAN
                  * regresion ~20-30% en hot loops de NEWOBJ.
                  *
                  * Forzar el path "directo" (call a
@@ -7304,7 +7350,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
             }
 
             /* ==================================================
-             * Sprint JIT-cobertura (2026-06-01): IR ops anyadidos
+             * Sprint JIT-cobertura (2026-06-01): IR ops añadidos
              * para subir cobertura del JIT del 63% al ~85%+.
              *
              * Patron comun: CALL nativo a vrt_* con marshalling
@@ -7885,7 +7931,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 //
                 // El runtime intern hash cache (hash de contenido)
                 // ya cubre las STRMAKEs de literales -- ~50ns hit.
-                // El JIT IC anyadia ~5ns vs ~50ns, pero a costo de
+                // El JIT IC añadia ~5ns vs ~50ns, pero a costo de
                 // correctness.  Diferencia despreciable.
                 // Sprint string-perf-2 debug (2026-06-02): IC
                 // deshabilitado temporalmente para validar
@@ -8148,6 +8194,9 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 mark_slot_as_gc_if_needed(ins.dst, ins.type);
             }
         }
+        /* Solo-LSP: estampar la ultima op del bloque (sin iteracion
+         * siguiente que dispare el flush diferido). */
+        lm_flush();
 
         /* Si el IrBlock no termina con RET/BR/BR_COND explicito y
          * tiene un sucesor unico, agregar fallthrough JMP.  En

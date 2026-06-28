@@ -52,7 +52,7 @@ namespace vex {
  * CallExpr generico.  Sin esta restriccion, @c LT en posicion postfix
  * seria ambiguo con operadores de comparacion (@c foo < bar).
  *
- * Para anyadir nuevos builtins comptime: insertar el nombre aqui y en
+ * Para añadir nuevos builtins comptime: insertar el nombre aqui y en
  * el dispatcher del type checker.  El parser solo necesita el set
  * (un name no listado se trata como llamada normal sin type args, lo
  * cual no rompe codigo existente -- LT pasa al binary expr parser).
@@ -132,6 +132,23 @@ void Parser::skip_target_skipped_decl() {
 // compiler>=1.0 y vm>=1.0 -> true; compiler>=99.0 -> false.
 static constexpr double VEX_TARGET_COMPILER_VERSION = 1.0;
 static constexpr double VEX_TARGET_VM_VERSION = 1.0;
+
+// Override del TARGET para @Target en compilacion AOT cross-target.  El AOT
+// genera codigo para un (os, arch) que puede NO ser el host de build (p.ej.
+// ELF/SysV desde Windows, o x86-32 desde x86-64).  Cuando el driver lo setea,
+// los atomos `os:`/`arch:` de @Target se evaluan contra el TARGET del binario,
+// no contra el host -> las variantes @Target("os:linux && arch:x86_64") del
+// runtime seleccionan la correcta para lo que se esta generando.  Vacio =
+// usar el host de build (ruta normal --vex/--run).  thread_local por el
+// compile paralelo (M8).
+static thread_local std::string g_cc_target_os;   // "windows"/"linux"/"macos"
+static thread_local std::string g_cc_target_arch; // "x86_64"/"x86"/"arm64"
+
+void set_aot_condcomp_target(const std::string &os,
+                             const std::string &arch) noexcept {
+    g_cc_target_os = os;
+    g_cc_target_arch = arch;
+}
 
 // Deteccion de features de CPU.  En x86 usa cpuid; en arm64 NEON es
 // baseline.  SSE/SSE2 son baseline garantizado del ABI x86_64.
@@ -230,6 +247,13 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
     std::string key = atom.substr(0, colon);
     std::string val = atom.substr(colon + 1);
     if (key == "os") {
+        // AOT cross-target: evaluar contra el OS del binario generado.
+        if (!g_cc_target_os.empty()) {
+            if (val == g_cc_target_os) return true;
+            if (val == "posix")
+                return g_cc_target_os == "linux" || g_cc_target_os == "macos";
+            return false;
+        }
 #if defined(_WIN32)
         return val == "windows";
 #elif defined(__APPLE__)
@@ -241,6 +265,8 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
 #endif
     }
     if (key == "arch") {
+        // AOT cross-target: evaluar contra la arch del binario generado.
+        if (!g_cc_target_arch.empty()) return val == g_cc_target_arch;
 #if defined(__x86_64__) || defined(_M_X64)
         return val == "x86_64";
 #elif defined(__aarch64__) || defined(_M_ARM64)
@@ -521,6 +547,8 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             synchronize();
         }
     }
+    // @NoExceptions (sticky) se aplica a todo el modulo.
+    mod->no_exceptions = module_no_exceptions_;
     return mod;
 }
 
@@ -720,6 +748,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_async = false;
     bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
+    bool top_is_naked = false;          /* Phase NR: @Naked (ISRs/stubs) */
+    bool top_is_noexcept = false;       /* @NoExcept: fn sin excepciones */
     bool top_is_string_concat = false;  /* C-3: @StringConcat */
     bool top_is_string_eq = false;      /* C-3: @StringEq */
     /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
@@ -780,6 +810,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_alloc_override = true;
             else if (current_.lexeme == "PanicHandler")
                 top_is_panic_handler = true;
+            else if (current_.lexeme == "Naked")
+                top_is_naked = true;
+            else if (current_.lexeme == "NoExcept")
+                top_is_noexcept = true;
+            else if (current_.lexeme == "NoExceptions")
+                module_no_exceptions_ = true; // sticky: modulo entero
             else if (current_.lexeme == "StringConcat")
                 top_is_string_concat = true;
             else if (current_.lexeme == "StringEq")
@@ -1356,6 +1392,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         }
     }
 
+    // `thread_local <T> NAME = init;` -- almacenamiento por-hilo (TLS).  Se
+    // permite antes del tipo (estilo C/C++).  El init debe ser comptime-const.
+    bool is_thread_local = false;
+    if (match(TokenKind::KW_THREAD_LOCAL)) is_thread_local = true;
+
     // Manejar 'const' opcional al principio.  En v4, comptime ya implica
     // const, asi que el `const` aparece solo en declaraciones runtime.
     bool is_const = false;
@@ -1421,11 +1462,13 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // future_alloc + spawn { msgrecv handle + body + fulfill } y
         // devuelve el handle del future al caller.
         if (fd && top_is_async) fd->is_async = true;
+        if (fd && top_is_noexcept) fd->is_noexcept = true;
         if (fd && is_comptime_fn) fd->is_comptime = true;
         if (fd && top_is_macro) fd->is_macro = true;
         if (fd && top_is_pure) fd->is_pure = true;
         if (fd && top_is_alloc_override) fd->is_alloc_override = true;
         if (fd && top_is_panic_handler) fd->is_panic_handler = true;
+        if (fd && top_is_naked) fd->is_naked = true;
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
         if (fd && !top_helper_override_target.empty())
@@ -1486,6 +1529,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     auto gv = parse_global_var_decl(std::move(type_node), std::move(name), loc,
                                     is_const);
     if (gv && (is_comptime_const || is_comptime_var)) gv->is_comptime = true;
+    if (gv && is_thread_local) gv->is_thread_local = true;
     if (gv) {
         // v4: propagar atributos de usuario (@hot, @cold, @align, @section).
         gv->attr_hot = top_attr_hot;
@@ -1600,6 +1644,14 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = current_.loc;
     p->type = parse_type_node();
+    // Parametro VARIADICO: `T... name`.  El `...` tras el tipo del elemento
+    // marca el param como rest (debe ser el ultimo; la validacion de posicion
+    // la hace el type checker).  El callee lo recibe como `T*` + un count
+    // oculto leido con `vacount()`.
+    if (current_.kind == TokenKind::DOTDOTDOT) {
+        (void)consume();
+        p->is_variadic = true;
+    }
     // `T !!name` en posicion de parametro fuerza no-null en
     // entry: el lowering inyecta un `unwrap r_param, r_param` al
     // inicio del cuerpo para que la funcion falle pronto si se le
@@ -1675,6 +1727,37 @@ bool Parser::looks_like_cast() const noexcept {
             declared_aliases_.count(first.lexeme) > 0);
     if (!is_type_starter) return false;
     ++off;
+
+    // Tipo funcion `fn(params) -> ret`: saltar `(...)` balanceado + el
+    // `-> tipo_retorno` para reconocer `(fn(...)->R) expr` como cast.
+    if (first_kind == TokenKind::KW_FN) {
+        if (mut_lex.peek_at(off).kind == TokenKind::LPAREN) {
+            int d = 1;
+            ++off;
+            const size_t MAXP = 128;
+            while (d > 0 && off < MAXP) {
+                TokenKind k = mut_lex.peek_at(off).kind;
+                if (k == TokenKind::END_OF_FILE) return false;
+                if (k == TokenKind::LPAREN)
+                    ++d;
+                else if (k == TokenKind::RPAREN)
+                    --d;
+                ++off;
+            }
+            if (d != 0) return false;
+        }
+        if (mut_lex.peek_at(off).kind == TokenKind::ARROW) {
+            ++off;
+            TokenKind rk = mut_lex.peek_at(off).kind;
+            if (primitive_kind_from_token(rk) != PrimitiveKind::COUNT ||
+                rk == TokenKind::IDENTIFIER ||
+                rk == TokenKind::KW_NONNULL) {
+                ++off;
+                while (mut_lex.peek_at(off).kind == TokenKind::STAR)
+                    ++off;
+            }
+        }
+    }
 
     // Saltar argumentos genericos `<...>` con balance, tratando
     // `>>` (SHR) como dos GTs.
@@ -1951,7 +2034,8 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
                  k == PrimitiveKind::DEQUE || k == PrimitiveKind::TREEMAP ||
                  k == PrimitiveKind::TREESET || k == PrimitiveKind::STACK);
             const bool is_smart_ptr = (k == PrimitiveKind::UNIQUE_PTR ||
-                                       k == PrimitiveKind::SHARED_PTR);
+                                       k == PrimitiveKind::SHARED_PTR ||
+                                       k == PrimitiveKind::GC_PTR);
             const bool is_borrow =
                 (k == PrimitiveKind::BORROW || k == PrimitiveKind::BORROW_MUT);
             if (is_col || is_smart_ptr || is_borrow) {
@@ -1974,7 +2058,7 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
                current_.lexeme == "VirtualPtr") {
         // Caso especial: VirtualPtr<T> es una direccion VM al contenido T.
         // Lo desazucaramos a PointerTypeNode con `is_virtual=true`.  Sin
-        // anyadir keyword nuevo: el lexer trata VirtualPtr como un
+        // añadir keyword nuevo: el lexer trata VirtualPtr como un
         // identificador comun, y parse_type lo intercepta aqui antes de
         // la rama generica de NamedTypeNode.
         const SourceLoc vloc = current_.loc;
@@ -2351,14 +2435,14 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_using_decl() {
 //   import "path" only A, B;
 //   import "path" only A as A2, B;
 //   import "path" as alias only A, B;     <- alias para namespace y only
-//                                            para seleccion no se anyaden
+//                                            para seleccion no se añaden
 //                                            al mismo namespace; el alias
 //                                            queda inactivo si hay only
 //   public import "path" [as alias] [only ...];
 //
 // El path es siempre un string literal sin interpolacion.  Por
 // consistencia con extern "lib.dll", loadmodule(path), y @Method.
-// El sufijo .vex se anyade automaticamente al resolver.
+// El sufijo .vex se añade automaticamente al resolver.
 // -----------------------------------------------------------------
 std::unique_ptr<ast::ImportDecl>
 Parser::parse_import_decl(bool is_public_reexport) {
@@ -2438,7 +2522,7 @@ Parser::parse_import_decl(bool is_public_reexport) {
 //
 // El contenido se parsea con parse_top_level_decl recursivamente; el
 // pre-pass de mangling (compiler_project.cpp::mangle_top_level_)
-// recorrera el AST anyadiendo el prefijo `foo__` a todos los nombres.
+// recorrera el AST añadiendo el prefijo `foo__` a todos los nombres.
 // -----------------------------------------------------------------
 std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     auto ns = std::make_unique<ast::NamespaceDecl>();
@@ -4454,6 +4538,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
     // de cierre a profundidad 0.
     const std::string &src = lex_.source_buffer();
     const uint32_t start_off = current_.loc.offset;
+    s->body_loc = current_.loc; // inicio del cuerpo: base para mapear errores
     uint32_t end_off = start_off;
     int brace_depth = 1; // ya consumimos el '{' de apertura
     while (current_.kind != TokenKind::END_OF_FILE) {

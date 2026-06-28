@@ -25,6 +25,7 @@
  * VestaViewManager::run().
  */
 #include "cli/cli.h"
+#include <algorithm> // UCRT64: no transitivo
 #include "cli/vsh.h"
 
 #include <cstdio>
@@ -4354,7 +4355,7 @@ static std::string readline_impl(Impl &I, const std::string &prompt_str,
         // stdin.  Cada ~50 ms despierta para chequear el flag
         // I.running; si paso a false (server_shutdown remoto, etc.)
         // salimos limpiamente devolviendo @c eof_out=true.  La latencia
-        // anyadida al input interactivo es indistinguible para el
+        // añadida al input interactivo es indistinguible para el
         // usuario y el coste CPU es nulo (el thread duerme).
         int key;
 

@@ -28,11 +28,11 @@
  * incrustarlas como inmediatos 64-bit o como @c call rel32 si el
  * code cache esta dentro del rango +-2GB del binario.
  *
- * = Anyadir un nuevo entry =
+ * = añadir un nuevo entry =
  *
  * 1. Declarar la funcion en @c vesta_rt/public.h.
  * 2. Implementarla en @c src/vesta_rt/public_wrapper.cpp.
- * 3. Anyadir un campo aqui en @c RuntimeEntries.
+ * 3. añadir un campo aqui en @c RuntimeEntries.
  * 4. Inicializar el campo en el constructor.
  * 5. Documentar la convencion (args + return) en su Doxygen.
  */
@@ -80,8 +80,13 @@ struct RuntimeEntries {
 
     /* ----- Excepciones ----- */
     void (*throw_fatal)(vrt_proc *, uint32_t, const char *) = nullptr;
+    void (*unwrap_throw)(vrt_proc *) = nullptr; ///< UNWRAP null (1-arg)
+    uint64_t (*proc_pid)(vrt_proc *) = nullptr; ///< GETPID -> PID encoded
     void (*tryenter)(vrt_proc *, uint64_t, vrt_class *) = nullptr;
     void (*tryleave)(vrt_proc *) = nullptr;
+    /* Excepciones in-JIT (Opcion B): handler en codigo JIT.  El throw resume
+     * via do_throw -> vrt_resume_jit (no por el interp). */
+    void (*tryenter_jit)(vrt_proc *, vrt_class *, uint64_t) = nullptr;
     /* Lanza una excepcion user-defined dado su GcHandle (i64).  Delega
      * a @c do_throw que recorre @c exc_frame_stack para encontrar el
      * catch matching y salta al handler.  Nunca retorna normalmente. */
@@ -135,6 +140,12 @@ struct RuntimeEntries {
     uint8_t *(*newobj)(vrt_proc *, vrt_class *) = nullptr;
     /* Combinado newobj + gc_handle_for_ptr en una sola call (fast path JIT). */
     vrt_handle (*newobj_handle)(vrt_proc *, vrt_class *) = nullptr;
+    /* NEWOBJS: alloc en SharedHeap -> handle (bit 31). */
+    vrt_handle (*newobjs)(vrt_proc *, vrt_class *) = nullptr;
+    /* DLOPEN: carga libreria nativa -> handle host. */
+    uint64_t (*dlopen)(vrt_proc *, uint64_t, uint32_t) = nullptr;
+    /* STRCONV: convierte StringObject a otra codificacion -> handle. */
+    vrt_handle (*str_conv)(vrt_proc *, vrt_handle, uint32_t) = nullptr;
     /* CALLVIRT con Inline Cache (actualiza slot tras dispatch). */
     uint64_t (*callvirt_ic)(vrt_proc *, uint8_t *, uint32_t,
                             uint64_t) = nullptr;

@@ -262,7 +262,7 @@ static void vt_print_indent_(FILE *f, int depth, int is_leaf_marker,
 
 /* ----- User-overridable hooks (weak symbols).
  * El usuario puede proveer implementaciones en su propio C linkado contra
- * el generado para anyadir log custom, telemetria, breakpoints, etc.
+ * el generado para añadir log custom, telemetria, breakpoints, etc.
  * Las versiones default son no-op.
  * ----- */
 __attribute__((weak)) void vex_user_on_enter(const char *fn_name, int depth,

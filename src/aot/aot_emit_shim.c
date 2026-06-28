@@ -27,6 +27,7 @@
 #include "CreateELF.h"
 #include "LibELFparse.h"
 #include "LibCOFFparse.h"
+#include "LibPEparse.h" // lectura de exports de DLL (aot_pe_export_names)
 
 /* Copia segura del mensaje de error al buffer del llamador. */
 static void set_err(char *err, size_t cap, const char *msg) {
@@ -89,6 +90,152 @@ static _DWORD pe_section_chars(uint32_t flags) {
     return c;
 }
 
+/* Compara dos nombres de DLL ignorando mayusculas/minusculas (ASCII).  Windows
+ * resuelve los imports case-insensitive, asi que "KERNEL32.dll" y
+ * "kernel32.dll" son la MISMA libreria y deben agruparse en un solo
+ * descriptor de import. */
+static int aot_dll_name_eq(const char *a, const char *b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    for (; *a && *b; ++a, ++b) {
+        int ca = (unsigned char)*a, cb = (unsigned char)*b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return 0;
+    }
+    return *a == 0 && *b == 0;
+}
+
+/* TLS (thread_local) PE: si alguna seccion de usuario es SHF_TLS, sintetiza la
+ * infraestructura TLS NATIVA de Windows -- una seccion `.tls$d` con _tls_index
+ * (lo rellena el cargador con el indice del slot), un array de callbacks vacio,
+ * y el IMAGE_TLS_DIRECTORY -- y pone DataDirectory[9] (TLS) apuntando ahi.  El
+ * acceso (mov gs:[0x58] -> [_tls_index] -> bloque -> +offset) lo emite el
+ * codegen; el reloc al simbolo `__vex_tls_index` se resuelve a la VA que
+ * devuelve esta funcion.  Compartido por aot_emit_pe (.exe) y aot_emit_pe_dll
+ * (.dll): el cargador procesa el directorio TLS en ambos (Vista+).
+ * @return VA de _tls_index, o 0 si el modulo no tiene TLS. */
+static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
+                                 int num_secs, int is_dll, int cb_section,
+                                 uint32_t cb_off) {
+    int tls_sec = -1;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].flags & AOT_SEC_TLS) {
+            tls_sec = i;
+            break;
+        }
+    if (tls_sec < 0) return 0;
+    const uint64_t image_base = pe->ntHeaders.OptionalHeader.ImageBase;
+    /* Layout de .tls$d (64 B): [0]=_tls_index(4) [4]=pad
+     * [8]=array de callbacks [&__vex_tls_init, NULL] (16 B)
+     * [24]=IMAGE_TLS_DIRECTORY64(40). */
+    _BYTE tlsd[64];
+    memset(tlsd, 0, sizeof(tlsd));
+    int tlsd_idx = addSection(pe, ".tls$d",
+                              ___IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                  ___IMAGE_SCN_MEM_READ | ___IMAGE_SCN_MEM_WRITE,
+                              tlsd, (_DWORD)sizeof(tlsd));
+    const uint32_t tls_rva = pe->sectionHeaders[tls_sec].VirtualAddress;
+    const uint32_t tlsd_rva = pe->sectionHeaders[tlsd_idx].VirtualAddress;
+    _BYTE *sd = pe->sectionData[tlsd_idx];
+    /* Array de callbacks en +8: [&__vex_tls_init, NULL].  El callback aplica la
+     * plantilla por-hilo (el cargador no siempre la copia para el TLS de una
+     * .dll en un consumidor minimal). */
+    int have_cb = (cb_section >= 0 && cb_section < pe->numberOfSections);
+    if (have_cb) {
+        uint64_t cb_va = image_base +
+                         pe->sectionHeaders[cb_section].VirtualAddress + cb_off;
+        memcpy(sd + 8, &cb_va, 8); /* [+8] = &__vex_tls_init ; [+16] = NULL */
+    }
+    _BYTE *db = sd + 24; /* IMAGE_TLS_DIRECTORY */
+    uint64_t start = image_base + tls_rva;
+    uint64_t end = image_base + tls_rva + secs[tls_sec].size;
+    uint64_t idx_va = image_base + tlsd_rva + 0; /* &_tls_index */
+    uint64_t cbarr_va = image_base + tlsd_rva + 8; /* &array de callbacks */
+    memcpy(db + 0, &start, 8);
+    memcpy(db + 8, &end, 8);
+    memcpy(db + 16, &idx_va, 8);
+    memcpy(db + 24, &cbarr_va, 8);
+    uint32_t zfill = (uint32_t)secs[tls_sec].bss_size;
+    memcpy(db + 32, &zfill, 4); /* SizeOfZeroFill */
+    uint32_t tls_char = 0x00400000u; /* IMAGE_SCN_ALIGN_8BYTES */
+    memcpy(db + 36, &tls_char, 4);   /* Characteristics (alineamiento) */
+    pe->ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
+        .VirtualAddress = tlsd_rva + 24;
+    pe->ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
+        .Size = 40;
+    /* Campos VA ABSOLUTOS: el callback (+8) y los 4 del directorio (Start/End/
+     * Index/Callbacks en +24/+32/+40/+48).  En un EXE fijamos la base (sin
+     * ASLR); en una DLL -- que el cargador reubica -- emitimos una .reloc
+     * (IMAGE_REL_BASED_DIR64) para que el loader los fije al relocar. */
+    if (is_dll) {
+        const uint32_t page = tlsd_rva & ~0xFFFu;
+        _BYTE rel[24];
+        uint32_t nrelocs = 4 + (have_cb ? 1 : 0);
+        uint32_t blksz = 8u + nrelocs * 2u;
+        if (blksz & 3u) blksz += 2u; /* bloques .reloc alineados a 4 (pad 0) */
+        memset(rel, 0, sizeof(rel));
+        memcpy(rel + 0, &page, 4);
+        memcpy(rel + 4, &blksz, 4);
+        uint32_t voff[5];
+        int nv = 0;
+        if (have_cb) voff[nv++] = tlsd_rva + 8; /* callback */
+        voff[nv++] = tlsd_rva + 24;             /* Start */
+        voff[nv++] = tlsd_rva + 32;             /* End */
+        voff[nv++] = tlsd_rva + 40;             /* Index */
+        voff[nv++] = tlsd_rva + 48;             /* Callbacks */
+        for (int k = 0; k < nv; ++k) {
+            uint16_t e = (uint16_t)((10u << 12) | ((voff[k] - page) & 0xFFFu));
+            memcpy(rel + 8 + k * 2, &e, 2);
+        }
+        int rel_idx =
+            addSection(pe, ".reloc",
+                       ___IMAGE_SCN_CNT_INITIALIZED_DATA |
+                           ___IMAGE_SCN_MEM_READ | 0x02000000u /* DISCARDABLE */,
+                       rel, blksz);
+        const uint32_t rel_rva = pe->sectionHeaders[rel_idx].VirtualAddress;
+        pe->ntHeaders.OptionalHeader
+            .DataDirectory[___IMAGE_DIRECTORY_ENTRY_BASERELOC]
+            .VirtualAddress = rel_rva;
+        pe->ntHeaders.OptionalHeader
+            .DataDirectory[___IMAGE_DIRECTORY_ENTRY_BASERELOC]
+            .Size = blksz;
+    } else {
+        pe->ntHeaders.OptionalHeader.DllCharacteristics &=
+            (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+    }
+    return idx_va;
+}
+
+/* TLS PE: resuelve un reloc al simbolo `__vex_tls_index` (RIP-relativo) o un
+ * SECREL32 (offset del var dentro de su seccion .tls).  @return 1 si lo manejo
+ * (el caller debe `continue`), 0 si no es un reloc TLS. */
+static int aot_pe_apply_tls_reloc(PE64FILE_struct *pe, const AotSection *secs,
+                                  int num_secs, const AotReloc *rl,
+                                  uint64_t tls_index_va) {
+    const uint64_t image_base = pe->ntHeaders.OptionalHeader.ImageBase;
+    if (rl->extern_name && strcmp(rl->extern_name, "__vex_tls_index") == 0) {
+        if (tls_index_va == 0 || rl->site_section < 0 ||
+            rl->site_section >= num_secs)
+            return 1; /* manejado (silenciosamente no-op si malformado) */
+        (void)secs;
+        uint64_t sva = image_base +
+                       pe->sectionHeaders[rl->site_section].VirtualAddress +
+                       rl->site_off;
+        int32_t disp =
+            (int32_t)((int64_t)tls_index_va - (int64_t)(sva + 4) + rl->addend);
+        memcpy(pe->sectionData[rl->site_section] + rl->site_off, &disp, 4);
+        return 1;
+    }
+    if (rl->kind == AOT_RELOC_SECREL32) {
+        if (rl->site_section < 0 || rl->site_section >= num_secs) return 1;
+        int32_t off = (int32_t)((int64_t)rl->target_off + rl->addend);
+        memcpy(pe->sectionData[rl->site_section] + rl->site_off, &off, 4);
+        return 1;
+    }
+    return 0;
+}
+
 int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 const AotSection *secs, int num_secs, int entry_sec,
                 uint64_t entry_off, const AotImport *imps, int num_imps,
@@ -137,6 +284,10 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
     }
 
+    /* TLS (thread_local): sintetizar el IMAGE_TLS_DIRECTORY + _tls_index si hay
+     * seccion SHF_TLS (devuelve la VA de _tls_index para resolver los relocs). */
+    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 0, cfg ? cfg->tls_callback_section : -1, cfg ? cfg->tls_callback_off : 0);
+
     /* Relocations cross-seccion: resolver AHORA que addSection ya asigno las
      * VirtualAddress de todas las secciones del usuario (igual que el parcheo
      * de imports, pero generico).  ImageBase + sectionHeaders[i].VirtualAddress
@@ -158,6 +309,10 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
         for (int r = 0; r < num_relocs; ++r) {
             const AotReloc *rl = &relocs[r];
+            /* TLS PE: `__vex_tls_index` (RIP-rel al slot) + SECREL32 (offset del
+             * var en .tls).  Manejados por el helper compartido. */
+            if (aot_pe_apply_tls_reloc(&pe, secs, num_secs, rl, tls_index_va))
+                continue;
             if (rl->site_section < 0 || rl->site_section >= num_secs ||
                 rl->target_section < 0 || rl->target_section >= num_secs) {
                 set_err(err, err_cap,
@@ -219,7 +374,10 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         for (int k = 0; k < num_imps; ++k) {
             int di = -1;
             for (int j = 0; j < num_libs; ++j)
-                if (strcmp(lib_names[j], imps[k].dll) == 0) {
+                /* DLL names case-insensitive (Windows): el stub usa
+                 * "KERNEL32.dll" y un FFI extern puede usar "kernel32.dll" ->
+                 * deben fundirse en UN solo descriptor de import. */
+                if (aot_dll_name_eq(lib_names[j], imps[k].dll)) {
                     di = j;
                     break;
                 }
@@ -295,7 +453,10 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 for (int e = 0; e < num_off; ++e)
                     if (strcmp(imps[k].func, off_entries[e].functionName) ==
                             0 &&
-                        strcmp(imps[k].dll, off_entries[e].dllName) == 0) {
+                        /* DLL case-insensitive: el grouping fundio KERNEL32.dll
+                         * y kernel32.dll en un descriptor; el lookup debe
+                         * coincidir igual aunque difiera el case. */
+                        aot_dll_name_eq(imps[k].dll, off_entries[e].dllName)) {
                         iat_off = off_entries[e].offset;
                         break;
                     }
@@ -389,8 +550,16 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     size_t total_data = 0;
     for (int i = 0; i < num_secs; ++i)
         total_data += secs[i].size;
+    /* Si hay secciones con VA fija (place_section del link-script), el fichero
+     * se rellena hasta vaddr-base; ampliar la capacidad para cubrir el span. */
+    uint64_t span = total_data;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].vaddr && secs[i].vaddr >= base) {
+            uint64_t end = (secs[i].vaddr - base) + secs[i].size;
+            if (end > span) span = end;
+        }
     size_t capacity =
-        (total_data + 64 * AOT_ELF_PAGE + AOT_ELF_PAGE) & ~(AOT_ELF_PAGE - 1);
+        (span + 64 * AOT_ELF_PAGE + AOT_ELF_PAGE) & ~(AOT_ELF_PAGE - 1);
 
     /* 3 phdrs: PT_LOAD R+X (codigo/rodata), PT_LOAD R+W (.data), PT_GNU_STACK
      * (stack RW).  El R+W puede quedar vacio (filesz 0) si no hay writable. */
@@ -466,6 +635,30 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
             if (s->flags & AOT_SEC_EXEC) sh_flags |= SHF_EXECINSTR;
             if (s->flags & AOT_SEC_WRITE) sh_flags |= SHF_WRITE;
             uint64_t align_use = s->align ? s->align : AOT_ELF_PAGE;
+            /* VA fija (place_section): rellenar el fichero hasta vaddr-base para
+             * que vaddr = base + offset de exactamente lo pedido.  El gap se
+             * rellena con ceros (un PT_LOAD lo cubre).  Va en orden de VA: una
+             * VA fija por DEBAJO de la posicion actual es inalcanzable. */
+            if (s->vaddr != 0) {
+                if (s->vaddr < base ||
+                    (s->vaddr - base) < (uint64_t)b->size) {
+                    free(sec_va);
+                    free(sec_foff);
+                    free(sec_seen);
+                    elf_builder_free(b);
+                    set_err(err, err_cap,
+                            "aot_emit_elf: VA fija de seccion inalcanzable "
+                            "(menor que base o que la posicion actual; coloca "
+                            "las secciones en orden de direccion ascendente)");
+                    return 0;
+                }
+                uint64_t want_off = s->vaddr - base;
+                if (want_off > (uint64_t)b->size) {
+                    memset(b->mem + b->size, 0, want_off - b->size);
+                    b->size = want_off;
+                }
+                align_use = 1; // la VA ya esta fijada; no realinear
+            }
             size_t off_out = 0;
             uint64_t vaddr_out = 0;
             size_t idx = elf_builder_add_section_ex(
@@ -476,7 +669,7 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                 free(sec_foff);
                 free(sec_seen);
                 elf_builder_free(b);
-                set_err(err, err_cap, "aot_emit_elf: fallo anyadiendo seccion");
+                set_err(err, err_cap, "aot_emit_elf: fallo añadiendo seccion");
                 return 0;
             }
             if (sec_va) {
@@ -489,6 +682,32 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     }
     rw_end_off = b->size;
     if (rx_end_off == 0) rx_end_off = b->size; /* no hubo seccion writable */
+
+    /* BSS (SHT_NOBITS): secciones con AOT_SEC_BSS -> VA en el segmento R+W, SIN
+     * contenido en fichero.  Van DESPUES de .data en el espacio de direcciones
+     * (base + rw_end_off + ...); el loader las zerifica via p_memsz > p_filesz.
+     * Solo son TARGET de relocs (nunca SITE), asi que sec_foff queda en 0.
+     * Necesario para dev-OS: cualquier global sin inicializar (Vex o un .o de C)
+     * cae en .bss. */
+    uint64_t bss_total = 0;
+    {
+        uint64_t bss_off = rw_end_off;
+        for (int i = 0; i < num_secs; ++i) {
+            const AotSection *s = &secs[i];
+            if (!(s->flags & AOT_SEC_BSS)) continue;
+            uint64_t sz = aot_sec_size(s); /* = bss_size para BSS */
+            if (sz == 0) continue;
+            uint64_t align_use = s->align ? s->align : 8;
+            bss_off = (bss_off + align_use - 1) & ~(align_use - 1);
+            if (sec_va) {
+                sec_va[i] = base + bss_off;
+                sec_foff[i] = 0;
+                sec_seen[i] = 1;
+            }
+            bss_off += sz;
+        }
+        bss_total = bss_off - rw_end_off;
+    }
     if (entry_vaddr == 0) {
         free(sec_va);
         free(sec_foff);
@@ -586,7 +805,7 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     /* Program headers.  Los filesz usan rx_end_off / rw_end_off (capturados
      * ANTES de .strtab/.symtab, que no son ALLOC y no se mapean).  El
      * .symtab/.strtab quedan al final del fichero, fuera de todo PT_LOAD. */
-    const int has_rw = (rw_end_off > rw_start_off);
+    const int has_rw = (rw_end_off > rw_start_off) || (bss_total > 0);
 
     /* PT_LOAD ejecutable: codigo + rodata.  R+X, y ademas W si contiene alguna
      * seccion rwx (e.g. `.boot` de un kernel/bootloader que se auto-modifica). */
@@ -607,8 +826,9 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
         phdr[1].p_offset = rw_start_off;
         phdr[1].p_vaddr = base + rw_start_off;
         phdr[1].p_paddr = base + rw_start_off;
-        phdr[1].p_filesz = rw_end_off - rw_start_off;
-        phdr[1].p_memsz = rw_end_off - rw_start_off;
+        phdr[1].p_filesz = rw_end_off - rw_start_off; /* solo .data en fichero */
+        /* p_memsz cubre .data + .bss (el loader zerifica [filesz, memsz)). */
+        phdr[1].p_memsz = (rw_end_off - rw_start_off) + bss_total;
         phdr[1].p_align = AOT_ELF_PAGE;
     } else {
         phdr[1].p_offset = 0;
@@ -687,6 +907,12 @@ static void wr32(uint8_t *p, uint32_t v) {
     p[1] = (uint8_t)(v >> 8);
     p[2] = (uint8_t)(v >> 16);
     p[3] = (uint8_t)(v >> 24);
+}
+
+/* Escribe un u16 LE en p. */
+static void wr16le(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
 }
 
 /* Alinea x hacia arriba a un multiplo de a (potencia de 2). */
@@ -1291,18 +1517,44 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         set_err(err, err_cap, "elf_dynexec: entry_sec fuera de rango");
         return 0;
     }
-    if (num_imps <= 0) {
-        set_err(err, err_cap, "elf_dynexec: sin imports");
-        return 0;
-    }
+    if (num_imps < 0) num_imps = 0;
+    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con TLS
+     * (necesita el cargador para montar el bloque thread-local) o con relocs
+     * RELATIVE.  GOT vacia + dynsym de 1 entrada (null). */
 
     const uint64_t PAGE = AOT_ELF_PAGE;
-    const int NPH = 6;             /* PHDR,INTERP,LOAD,LOAD,DYNAMIC,GNU_STACK */
+    /* Seccion TLS (plantilla thread_local): si existe, anyade un PT_TLS. */
+    int tls_sec = -1;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].flags & AOT_SEC_TLS) {
+            tls_sec = i;
+            break;
+        }
+    const int NPH = 6 + (tls_sec >= 0 ? 1 : 0); /* +PT_TLS si hay TLS */
     const int nsym = 1 + num_imps; /* [0]=null + 1 UND por import */
     const char interp[] = "/lib64/ld-linux-x86-64.so.2";
     const size_t interp_len = sizeof(interp); /* incluye el nul */
 
-    /* --- .dynstr: "\0" + nombres de import + "libc.so.6" --- */
+    /* Sonames DISTINTOS de los imports -> un DT_NEEDED por libreria (el campo
+     * dll de cada AotImport es el soname; un import sin dll va a libc.so.6). */
+    const int scap = num_imps > 0 ? num_imps : 1;
+    const char **sonames = (const char **)calloc((size_t)scap, sizeof(char *));
+    uint32_t *soname_off = (uint32_t *)calloc((size_t)scap, sizeof(uint32_t));
+    int num_sonames = 0;
+    for (int i = 0; i < num_imps; ++i) {
+        const char *so =
+            (imps[i].dll && imps[i].dll[0]) ? imps[i].dll : "libc.so.6";
+        int found = 0;
+        for (int j = 0; j < num_sonames; ++j)
+            if (strcmp(sonames[j], so) == 0) {
+                found = 1;
+                break;
+            }
+        if (!found) sonames[num_sonames++] = so;
+    }
+    if (num_sonames == 0) sonames[num_sonames++] = "libc.so.6";
+
+    /* --- .dynstr: "\0" + nombres de import + sonames --- */
     OBuf dynstr;
     memset(&dynstr, 0, sizeof(dynstr));
     {
@@ -1314,8 +1566,10 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         name_off[i] = (uint32_t)dynstr.len;
         ob_put(&dynstr, imps[i].func, strlen(imps[i].func) + 1);
     }
-    uint32_t libc_off = (uint32_t)dynstr.len;
-    ob_put(&dynstr, "libc.so.6", 10);
+    for (int s = 0; s < num_sonames; ++s) {
+        soname_off[s] = (uint32_t)dynstr.len;
+        ob_put(&dynstr, sonames[s], strlen(sonames[s]) + 1);
+    }
 
     /* --- .hash SysV: nbucket, nchain(=nsym), buckets[], chains[] --- */
     uint32_t nbucket = (uint32_t)(nsym < 1 ? 1 : nsym);
@@ -1349,7 +1603,15 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     off += hash_size;
     off = AOT_DYN_ALIGN(off, 8);
     uint64_t rela_off = off;
-    off += (uint64_t)num_imps * sizeof(Elf64_Rela);
+    /* Las relocs ABS64 del driver (p.ej. las entradas de la .got que el linker
+     * construye para los GOTPCREL) no caben tal cual en un PIE (base aleatoria):
+     * se materializan como R_X86_64_RELATIVE en .rela.dyn (el cargador escribe
+     * base + addend).  Se cuentan aqui para dimensionar .rela.dyn. */
+    int num_abs64 = 0;
+    for (int r = 0; r < num_relocs; ++r)
+        if (relocs[r].kind == AOT_RELOC_ABS64) ++num_abs64;
+    const int n_dynrela = num_imps + num_abs64;
+    off += (uint64_t)n_dynrela * sizeof(Elf64_Rela);
     off = AOT_DYN_ALIGN(off, 16);
 
     /* Secciones de codigo/rodata (NO-WRITE) en el segmento R+X. */
@@ -1385,10 +1647,28 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     }
     off = AOT_DYN_ALIGN(off, 8);
     uint64_t dynamic_off = off;
-    const int ndyn = 12;
+    /* 11 entradas fijas (HASH/STRTAB/SYMTAB/STRSZ/SYMENT/RELA/RELASZ/RELAENT/
+     * FLAGS/FLAGS_1/NULL) + un DT_NEEDED por soname. */
+    const int ndyn = 11 + num_sonames;
     off += (uint64_t)ndyn * sizeof(Elf64_Dyn);
-    uint64_t region2_end = off;
-    uint64_t total = off;
+    uint64_t region2_end = off; /* fin del contenido en FICHERO */
+    uint64_t total = off;       /* tamano del fichero (sin BSS) */
+
+    /* BSS (secciones NOBITS): reciben VAs en memoria TRAS el contenido del
+     * fichero pero NO ocupan bytes en el (memsz > filesz).  El cargador las
+     * pone a cero. */
+    uint64_t bss_mem = region2_end;
+    for (int i = 0; i < num_secs; ++i) {
+        if (!(secs[i].flags & AOT_SEC_BSS)) continue;
+        uint64_t bsz = secs[i].bss_size ? secs[i].bss_size : secs[i].size;
+        if (bsz == 0) continue;
+        uint64_t a = secs[i].align ? secs[i].align : 8;
+        bss_mem = AOT_DYN_ALIGN(bss_mem, a);
+        sec_va[i] = bss_mem;
+        sec_seen[i] = 1; /* visible para relocs; NO se copia al fichero */
+        bss_mem += bsz;
+    }
+    uint64_t region2_mem_end = bss_mem; /* fin en MEMORIA (incluye BSS) */
 
     uint64_t entry_vaddr = sec_va[entry_sec] + entry_off;
 
@@ -1397,6 +1677,8 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     if (!img) {
         set_err(err, err_cap, "elf_dynexec: OOM");
         free(name_off);
+        free(sonames);
+        free(soname_off);
         free(bucket);
         free(chain);
         free(dynstr.p);
@@ -1461,7 +1743,7 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     ph[3].p_vaddr = region2_start;
     ph[3].p_paddr = region2_start;
     ph[3].p_filesz = region2_end - region2_start;
-    ph[3].p_memsz = region2_end - region2_start;
+    ph[3].p_memsz = region2_mem_end - region2_start; /* incluye BSS */
     ph[3].p_align = PAGE;
     ph[4].p_type = PT_DYNAMIC;
     ph[4].p_flags = PF_R | PF_W;
@@ -1474,6 +1756,21 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     ph[5].p_type = PT_GNU_STACK;
     ph[5].p_flags = PF_R | PF_W;
     ph[5].p_align = 0x10;
+
+    /* PT_TLS: plantilla thread_local (local-exec).  El cargador la copia por
+     * hilo; las variables se acceden TP-relativas (offsets ya calculados por el
+     * linker como TPOFF).  p_filesz = parte .tdata (en fichero), p_memsz =
+     * .tdata + .tbss (el cargador alinea via p_align). */
+    if (tls_sec >= 0) {
+        ph[6].p_type = PT_TLS;
+        ph[6].p_flags = PF_R;
+        ph[6].p_offset = sec_va[tls_sec]; /* file offset == vaddr (PIE base 0) */
+        ph[6].p_vaddr = sec_va[tls_sec];
+        ph[6].p_paddr = sec_va[tls_sec];
+        ph[6].p_filesz = secs[tls_sec].size;
+        ph[6].p_memsz = secs[tls_sec].size + secs[tls_sec].bss_size;
+        ph[6].p_align = secs[tls_sec].align ? secs[tls_sec].align : 8;
+    }
 
     /* .interp */
     memcpy(img + interp_off, interp, interp_len);
@@ -1509,16 +1806,20 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         rela[i].r_info = ELF64_R_INFO((uint64_t)(1 + i), R_X86_64_GLOB_DAT);
         rela[i].r_addend = 0;
     }
-    /* Secciones de usuario (codigo/rodata + data). */
+    /* Secciones de usuario (codigo/rodata + data).  BSS no tiene datos en el
+     * fichero (su VA cae mas alla de 'total') -> se omite del memcpy. */
     for (int i = 0; i < num_secs; ++i)
-        if (sec_seen[i]) memcpy(img + sec_va[i], secs[i].data, secs[i].size);
+        if (sec_seen[i] && !(secs[i].flags & AOT_SEC_BSS) && secs[i].data)
+            memcpy(img + sec_va[i], secs[i].data, secs[i].size);
 
     /* .dynamic */
     {
         Elf64_Dyn *d = (Elf64_Dyn *)(img + dynamic_off);
         int k = 0;
-        d[k].d_tag = DT_NEEDED;
-        d[k++].d_un.d_val = libc_off;
+        for (int s = 0; s < num_sonames; ++s) {
+            d[k].d_tag = DT_NEEDED;
+            d[k++].d_un.d_val = soname_off[s];
+        }
         d[k].d_tag = DT_HASH;
         d[k++].d_un.d_ptr = hash_off;
         d[k].d_tag = DT_STRTAB;
@@ -1532,7 +1833,7 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         d[k].d_tag = DT_RELA;
         d[k++].d_un.d_ptr = rela_off;
         d[k].d_tag = DT_RELASZ;
-        d[k++].d_un.d_val = (uint64_t)num_imps * sizeof(Elf64_Rela);
+        d[k++].d_un.d_val = (uint64_t)n_dynrela * sizeof(Elf64_Rela);
         d[k].d_tag = DT_RELAENT;
         d[k++].d_un.d_val = sizeof(Elf64_Rela);
         d[k].d_tag = DT_FLAGS;
@@ -1547,21 +1848,33 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
      * solo PC-relativo (REL32) + inmediatos (IMM32/IMM64=size); ABS64 NO va en
      *     PIE (necesitaria R_X86_64_RELATIVE) -> error claro. --- */
     int ok = 1;
+    int n_rel_emitted = 0; /* contador de R_X86_64_RELATIVE ya escritas */
+    Elf64_Rela *dynrela = (Elf64_Rela *)(img + rela_off);
     for (int r = 0; r < num_relocs && ok; ++r) {
         const AotReloc *rl = &relocs[r];
-        if (rl->kind == AOT_RELOC_ABS64) {
-            set_err(
-                err, err_cap,
-                "elf_dynexec: ABS64 (--no-pie) no soportado en PIE; usa PIC");
-            ok = 0;
-            break;
-        }
         if (rl->site_section < 0 || rl->site_section >= num_secs ||
             !sec_seen[rl->site_section] ||
             (!rl->target_is_size &&
              (rl->target_section < 0 || rl->target_section >= num_secs ||
               !sec_seen[rl->target_section]))) {
-            set_err(err, err_cap, "elf_dynexec: reloc con seccion invalida");
+            {
+                char m[160];
+                snprintf(m, sizeof(m),
+                         "elf_dynexec: reloc con seccion invalida "
+                         "(kind=%d site_sec=%d seen=%d target_sec=%d seen=%d "
+                         "is_size=%d num_secs=%d)",
+                         rl->kind, rl->site_section,
+                         (rl->site_section >= 0 && rl->site_section < num_secs)
+                             ? sec_seen[rl->site_section]
+                             : -1,
+                         rl->target_section,
+                         (rl->target_section >= 0 &&
+                          rl->target_section < num_secs)
+                             ? sec_seen[rl->target_section]
+                             : -1,
+                         rl->target_is_size, num_secs);
+                set_err(err, err_cap, m);
+            }
             ok = 0;
             break;
         }
@@ -1575,6 +1888,41 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         }
         tv = (uint64_t)((int64_t)tv + rl->addend);
         uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
+        if (rl->kind == AOT_RELOC_TPOFF32) {
+            /* TLS local-exec: tpoff = offset_en_el_bloque - aligned_total
+             * (variante II: TP al final del bloque TLS, offset negativo).  Es
+             * una CONSTANTE de enlace (no depende de la base de carga): se
+             * escribe directa, sin reloc dinamica.  El cargador monta el bloque
+             * TLS desde PT_TLS antes del entry. */
+            if (tls_sec < 0) {
+                set_err(err, err_cap,
+                        "elf_dynexec: reloc TPOFF32 sin seccion TLS");
+                ok = 0;
+                break;
+            }
+            uint64_t talign = secs[tls_sec].align ? secs[tls_sec].align : 8;
+            uint64_t tls_total =
+                secs[tls_sec].size + secs[tls_sec].bss_size;
+            uint64_t aligned_total = (tls_total + talign - 1) & ~(talign - 1);
+            /* tv = VA del simbolo TLS; el offset en el bloque = tv -
+             * sec_va[tls_sec] (el bloque empieza en la 1a seccion SHF_TLS). */
+            int32_t tpoff = (int32_t)((int64_t)(tv - sec_va[tls_sec]) -
+                                      (int64_t)aligned_total);
+            memcpy(img + site_va, &tpoff, 4);
+            continue;
+        }
+        if (rl->kind == AOT_RELOC_ABS64) {
+            /* PIE: el valor absoluto se resuelve en carga.  R_X86_64_RELATIVE
+             * con r_addend = tv (relativo a la imagen, base 0) -> el cargador
+             * escribe base + tv.  El campo se deja con tv (el cargador lo
+             * sobreescribe). */
+            memcpy(img + site_va, &tv, 8);
+            Elf64_Rela *e = &dynrela[num_imps + n_rel_emitted++];
+            e->r_offset = site_va;
+            e->r_info = ELF64_R_INFO(0, R_X86_64_RELATIVE);
+            e->r_addend = (int64_t)tv;
+            continue;
+        }
         if (!apply_reloc(img + site_va, site_va, tv, rl->kind)) {
             set_err(err, err_cap, "elf_dynexec: reloc kind invalido");
             ok = 0;
@@ -1616,6 +1964,8 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
 
     free(img);
     free(name_off);
+    free(sonames);
+    free(soname_off);
     free(bucket);
     free(chain);
     free(dynstr.p);
@@ -1652,13 +2002,18 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
         set_err(err, err_cap, "elf32_dynexec: entry_sec fuera de rango");
         return 0;
     }
-    if (num_imps <= 0) {
-        set_err(err, err_cap, "elf32_dynexec: sin imports");
-        return 0;
-    }
+    if (num_imps < 0) num_imps = 0;
+    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con TLS
+     * (necesita el cargador para montar el bloque thread-local).  GOT vacia +
+     * dynsym de 1 entrada (null) + DT_NEEDED libc.so.6 (monta el TLS estatico). */
 
     const uint32_t PAGE = (uint32_t)AOT_ELF_PAGE;
-    const int NPH = 6;
+    /* Seccion TLS (plantilla thread_local local-exec): si existe, anyade un
+     * PT_TLS para que el cargador monte el bloque TLS por-hilo. */
+    int tls_sec = -1;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].flags & AOT_SEC_TLS) { tls_sec = i; break; }
+    const int NPH = 6 + (tls_sec >= 0 ? 1 : 0);
     const int nsym = 1 + num_imps;
     const char interp[] = "/lib/ld-linux.so.2";
     const uint32_t interp_len = (uint32_t)sizeof(interp);
@@ -1854,6 +2209,21 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
         wr32(ph + 20, 0);
         wr32(ph + 24, PF_R | PF_W);
         wr32(ph + 28, 0x10);
+        if (tls_sec >= 0) {
+            /* PT_TLS: plantilla .tdata (filesz) + .tbss (memsz extra).  El
+             * cargador la copia por-hilo bajo el thread pointer (gs). */
+            ph = img + phdr_off + 6 * PHDR32;
+            wr32(ph + 0, 7); /* PT_TLS */
+            wr32(ph + 4, sec_va[tls_sec]);
+            wr32(ph + 8, BASE + sec_va[tls_sec]);
+            wr32(ph + 12, BASE + sec_va[tls_sec]);
+            wr32(ph + 16, (uint32_t)secs[tls_sec].size);
+            wr32(ph + 20,
+                 (uint32_t)(secs[tls_sec].size + secs[tls_sec].bss_size));
+            wr32(ph + 24, PF_R);
+            wr32(ph + 28, secs[tls_sec].align ? (uint32_t)secs[tls_sec].align
+                                              : 4u);
+        }
     }
 
     memcpy(img + interp_off, interp, interp_len);
@@ -2009,6 +2379,15 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
  *  ELF64 RELOCATABLE (.o, ET_REL) -- hand-rolled (sin _start ni phdrs)
  * ========================================================================= */
 
+/* Constantes ELF para TLS no presentes en CreateELF.h (submodulo): se definen
+ * aqui localmente para no tocar el submodulo. */
+#ifndef SHF_TLS
+#define SHF_TLS 0x400u /* la seccion contiene almacenamiento thread-local */
+#endif
+#ifndef R_X86_64_TPOFF32
+#define R_X86_64_TPOFF32 23 /* TLS local-exec: offset TP-relativo (32-bit) */
+#endif
+
 int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
                      const AotReloc *relocs, int num_relocs, const AotSym *syms,
                      int num_syms, char *err, size_t err_cap) {
@@ -2026,7 +2405,8 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
             return 0;
         }
         if (relocs[r].kind != AOT_RELOC_REL32 &&
-            relocs[r].kind != AOT_RELOC_ABS64) {
+            relocs[r].kind != AOT_RELOC_ABS64 &&
+            relocs[r].kind != AOT_RELOC_TPOFF32) {
             set_err(err, err_cap,
                     "aot_emit_elf_obj: reloc kind no soportado en .o");
             return 0;
@@ -2179,6 +2559,12 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
         if (rl->kind == AOT_RELOC_REL32) {
             re->r_info = ELF64_R_INFO(sym_idx, R_X86_64_PC32);
             re->r_addend = (Elf64_Sxword)rl->target_off - 4 + rl->addend;
+        } else if (rl->kind == AOT_RELOC_TPOFF32) {
+            /* TLS local-exec: R_X86_64_TPOFF32 contra el simbolo de seccion de
+             * .tdata (SHF_TLS) + addend = offset.  El --link calcula el TPOFF
+             * TP-relativo a partir de tls_off[.tdata] + addend. */
+            re->r_info = ELF64_R_INFO(sym_idx, R_X86_64_TPOFF32);
+            re->r_addend = (Elf64_Sxword)rl->target_off + rl->addend;
         } else { /* ABS64 */
             re->r_info = ELF64_R_INFO(sym_idx, R_X86_64_64);
             re->r_addend = (Elf64_Sxword)rl->target_off + rl->addend;
@@ -2266,6 +2652,7 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
         s->sh_flags = SHF_ALLOC;
         if (secs[i].flags & AOT_SEC_EXEC) s->sh_flags |= SHF_EXECINSTR;
         if (secs[i].flags & AOT_SEC_WRITE) s->sh_flags |= SHF_WRITE;
+        if (secs[i].flags & AOT_SEC_TLS) s->sh_flags |= SHF_TLS; /* .tdata */
         s->sh_offset = sec_off[i];
         s->sh_size = secs[i].size;
         s->sh_addralign = (secs[i].flags & AOT_SEC_EXEC) ? 16 : 8;
@@ -2347,6 +2734,304 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
 }
 
 /* =========================================================================
+ *  ELF32 RELOCATABLE (.o i386) -- para enlazar con gcc -m32 / ld
+ *  Difs vs ELF64: ELFCLASS32, EM_386, structs Elf32 (Ehdr 52 / Shdr 40 /
+ *  Sym 16 / Rel 8), y usa SHT_REL (sin addend en el registro: el addend vive
+ *  EN el campo de la seccion -- como COFF).  Relocs R_386_PC32 (2) / R_386_32
+ *  (1).  Se construye a mano con OBuf (sin depender de structs Elf32).
+ * ========================================================================= */
+#define R_386_32 1
+#define R_386_PC32 2
+
+static void e32_push16(OBuf *o, uint16_t v) {
+    uint8_t b[2];
+    b[0] = (uint8_t)v;
+    b[1] = (uint8_t)(v >> 8);
+    ob_put(o, b, 2);
+}
+static void e32_push32(OBuf *o, uint32_t v) {
+    uint8_t b[4];
+    wr32(b, v);
+    ob_put(o, b, 4);
+}
+
+int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
+                       const AotReloc *relocs, int num_relocs,
+                       const AotSym *syms, int num_syms, char *err,
+                       size_t err_cap) {
+    if (num_secs <= 0) {
+        set_err(err, err_cap, "aot_emit_elf32_obj: sin secciones");
+        return 0;
+    }
+    for (int r = 0; r < num_relocs; ++r) {
+        if (relocs[r].target_is_size || relocs[r].target_is_end) {
+            set_err(err, err_cap, "aot_emit_elf32_obj: SIZE/END no soportado");
+            return 0;
+        }
+        if (relocs[r].kind != AOT_RELOC_REL32 &&
+            relocs[r].kind != AOT_RELOC_IMM32) {
+            set_err(err, err_cap,
+                    "aot_emit_elf32_obj: reloc kind no soportado (32-bit usa "
+                    "REL32/ABS32, no ABS64)");
+            return 0;
+        }
+        if (relocs[r].site_section < 0 || relocs[r].site_section >= num_secs) {
+            set_err(err, err_cap, "aot_emit_elf32_obj: site_section invalido");
+            return 0;
+        }
+    }
+    /* Indices de section headers: 0=NULL, 1..N=user, sym, str, rel[i], shstr. */
+    int *sec_nrel = (int *)calloc((size_t)num_secs, sizeof(int));
+    for (int r = 0; r < num_relocs; ++r)
+        sec_nrel[relocs[r].site_section]++;
+    const int sym_sh = 1 + num_secs;
+    const int str_sh = sym_sh + 1;
+    int *rel_sh = (int *)calloc((size_t)num_secs, sizeof(int));
+    int next_sh = str_sh + 1;
+    for (int i = 0; i < num_secs; ++i)
+        if (sec_nrel[i] > 0) rel_sh[i] = next_sh++;
+    const int shstr_sh = next_sh++;
+    const int shnum = next_sh;
+
+    /* Externos dedup. */
+    const char **extn =
+        (const char **)calloc((size_t)num_relocs + 1, sizeof(char *));
+    int n_extn = 0;
+    for (int r = 0; r < num_relocs; ++r) {
+        const char *e = relocs[r].extern_name;
+        if (!e) continue;
+        int found = 0;
+        for (int k = 0; k < n_extn; ++k)
+            if (strcmp(extn[k], e) == 0) {
+                found = 1;
+                break;
+            }
+        if (!found) extn[n_extn++] = e;
+    }
+    const int extn_base = 1 + num_secs + num_syms;
+
+    /* .strtab + symtab (16 bytes/sym, construido en OBuf). */
+    OBuf strtab;
+    memset(&strtab, 0, sizeof(strtab));
+    {
+        uint8_t z = 0;
+        ob_put(&strtab, &z, 1);
+    }
+    const int nsym = 1 + num_secs + num_syms + n_extn;
+    OBuf symtab;
+    memset(&symtab, 0, sizeof(symtab));
+    ob_put(&symtab, NULL, 16); /* sym[0] = null */
+    for (int i = 0; i < num_secs; ++i) {
+        e32_push32(&symtab, 0);                /* st_name */
+        e32_push32(&symtab, 0);                /* st_value */
+        e32_push32(&symtab, 0);                /* st_size */
+        uint8_t info = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
+        ob_put(&symtab, &info, 1);             /* st_info */
+        uint8_t other = 0;
+        ob_put(&symtab, &other, 1);            /* st_other */
+        e32_push16(&symtab, (uint16_t)(1 + i)); /* st_shndx */
+    }
+    for (int g = 0; g < num_syms; ++g) {
+        e32_push32(&symtab, (uint32_t)strtab.len);
+        ob_put(&strtab, syms[g].name, strlen(syms[g].name) + 1);
+        e32_push32(&symtab, (uint32_t)syms[g].offset); /* st_value */
+        e32_push32(&symtab, 0);                        /* st_size */
+        uint8_t info = (uint8_t)((STB_GLOBAL << 4) |
+                                 (syms[g].is_func ? STT_FUNC : STT_OBJECT));
+        ob_put(&symtab, &info, 1);
+        uint8_t other = 0;
+        ob_put(&symtab, &other, 1);
+        e32_push16(&symtab, (uint16_t)(1 + syms[g].section));
+    }
+    for (int e = 0; e < n_extn; ++e) {
+        e32_push32(&symtab, (uint32_t)strtab.len);
+        ob_put(&strtab, extn[e], strlen(extn[e]) + 1);
+        e32_push32(&symtab, 0); /* st_value */
+        e32_push32(&symtab, 0); /* st_size */
+        uint8_t info = (uint8_t)((STB_GLOBAL << 4) | STT_NOTYPE);
+        ob_put(&symtab, &info, 1);
+        uint8_t other = 0;
+        ob_put(&symtab, &other, 1);
+        e32_push16(&symtab, (uint16_t)SHN_UNDEF);
+    }
+    const int first_global = 1 + num_secs;
+
+    /* .shstrtab. */
+    OBuf shstr;
+    memset(&shstr, 0, sizeof(shstr));
+    {
+        uint8_t z = 0;
+        ob_put(&shstr, &z, 1);
+    }
+    uint32_t *sec_nameoff = (uint32_t *)calloc((size_t)num_secs, 4);
+    uint32_t *rel_nameoff = (uint32_t *)calloc((size_t)num_secs, 4);
+    for (int i = 0; i < num_secs; ++i) {
+        sec_nameoff[i] = (uint32_t)shstr.len;
+        ob_put(&shstr, secs[i].name, strlen(secs[i].name) + 1);
+    }
+    uint32_t no_symtab = (uint32_t)shstr.len;
+    ob_put(&shstr, ".symtab", 8);
+    uint32_t no_strtab = (uint32_t)shstr.len;
+    ob_put(&shstr, ".strtab", 8);
+    for (int i = 0; i < num_secs; ++i) {
+        if (!rel_sh[i]) continue;
+        rel_nameoff[i] = (uint32_t)shstr.len;
+        ob_put(&shstr, ".rel", 4);
+        ob_put(&shstr, secs[i].name, strlen(secs[i].name) + 1);
+    }
+    uint32_t no_shstr = (uint32_t)shstr.len;
+    ob_put(&shstr, ".shstrtab", 10);
+
+    /* Construir el fichero. */
+    OBuf out;
+    memset(&out, 0, sizeof(out));
+    /* Elf32_Ehdr (52). */
+    uint8_t eh[52];
+    memset(eh, 0, sizeof(eh));
+    eh[0] = 0x7f;
+    eh[1] = 'E';
+    eh[2] = 'L';
+    eh[3] = 'F';
+    eh[4] = 1; /* ELFCLASS32 */
+    eh[5] = 1; /* LSB */
+    eh[6] = 1; /* version */
+    wr16le(eh + 16, ET_REL);
+    wr16le(eh + 18, 3 /* EM_386 */);
+    wr32(eh + 20, 1); /* e_version */
+    wr16le(eh + 40, 52); /* e_ehsize */
+    wr16le(eh + 46, 40); /* e_shentsize */
+    wr16le(eh + 48, (uint16_t)shnum);
+    wr16le(eh + 50, (uint16_t)shstr_sh);
+    ob_put(&out, eh, 52);
+
+    uint32_t *sec_off = (uint32_t *)calloc((size_t)num_secs, 4);
+    for (int i = 0; i < num_secs; ++i) {
+        ob_align(&out, 16);
+        sec_off[i] = (uint32_t)out.len;
+        ob_put(&out, secs[i].data, secs[i].size);
+    }
+    /* Pre-escribir el addend EN el campo de cada sitio (REL i386 sin addend en
+     * el registro).  REL32: A = target_off + addend - 4.  ABS32: A =
+     * target_off + addend.  Extern (REL32): A = addend - 4. */
+    for (int r = 0; r < num_relocs; ++r) {
+        const AotReloc *rl = &relocs[r];
+        int64_t A;
+        if (rl->extern_name)
+            A = rl->addend - 4;
+        else if (rl->kind == AOT_RELOC_REL32)
+            A = (int64_t)rl->target_off + rl->addend - 4;
+        else /* IMM32 -> ABS32 */
+            A = (int64_t)rl->target_off + rl->addend;
+        wr32(out.p + sec_off[rl->site_section] + rl->site_off, (uint32_t)A);
+    }
+    ob_align(&out, 4);
+    uint32_t symtab_off = (uint32_t)out.len;
+    ob_put(&out, symtab.p, symtab.len);
+    uint32_t strtab_off = (uint32_t)out.len;
+    ob_put(&out, strtab.p, strtab.len);
+    uint32_t *rel_off = (uint32_t *)calloc((size_t)num_secs, 4);
+    int *rel_cnt = (int *)calloc((size_t)num_secs, sizeof(int));
+    for (int i = 0; i < num_secs; ++i) {
+        if (!rel_sh[i]) continue;
+        ob_align(&out, 4);
+        rel_off[i] = (uint32_t)out.len;
+        /* Emitir los Elf32_Rel de esta seccion en orden. */
+        for (int r = 0; r < num_relocs; ++r) {
+            const AotReloc *rl = &relocs[r];
+            if (rl->site_section != i) continue;
+            uint32_t sym_idx;
+            uint32_t type;
+            if (rl->extern_name) {
+                sym_idx = 0;
+                for (int k = 0; k < n_extn; ++k)
+                    if (strcmp(extn[k], rl->extern_name) == 0) {
+                        sym_idx = (uint32_t)(extn_base + k);
+                        break;
+                    }
+                type = R_386_PC32;
+            } else {
+                sym_idx = (uint32_t)(1 + rl->target_section); /* section sym */
+                type = (rl->kind == AOT_RELOC_REL32) ? R_386_PC32 : R_386_32;
+            }
+            e32_push32(&out, (uint32_t)rl->site_off); /* r_offset */
+            e32_push32(&out, (sym_idx << 8) | (type & 0xff)); /* r_info */
+            rel_cnt[i]++;
+        }
+    }
+    uint32_t shstr_off = (uint32_t)out.len;
+    ob_put(&out, shstr.p, shstr.len);
+    ob_align(&out, 4);
+    uint32_t shoff = (uint32_t)out.len;
+
+    /* Section headers (40 bytes c/u). */
+    /* helper para empujar un Elf32_Shdr. */
+#define E32_SHDR(name, type, flags, off, size, link, info, align, entsz)        \
+    do {                                                                        \
+        e32_push32(&out, (name));                                               \
+        e32_push32(&out, (type));                                               \
+        e32_push32(&out, (flags));                                              \
+        e32_push32(&out, 0); /* sh_addr */                                      \
+        e32_push32(&out, (off));                                                \
+        e32_push32(&out, (size));                                               \
+        e32_push32(&out, (link));                                               \
+        e32_push32(&out, (info));                                               \
+        e32_push32(&out, (align));                                              \
+        e32_push32(&out, (entsz));                                              \
+    } while (0)
+    /* indice 0: NULL */
+    E32_SHDR(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    for (int i = 0; i < num_secs; ++i) {
+        uint32_t fl = SHF_ALLOC;
+        if (secs[i].flags & AOT_SEC_EXEC) fl |= SHF_EXECINSTR;
+        if (secs[i].flags & AOT_SEC_WRITE) fl |= SHF_WRITE;
+        uint32_t al = (secs[i].flags & AOT_SEC_EXEC) ? 16 : 8;
+        E32_SHDR(sec_nameoff[i], SHT_PROGBITS, fl, sec_off[i],
+                 (uint32_t)secs[i].size, 0, 0, al, 0);
+    }
+    E32_SHDR(no_symtab, SHT_SYMTAB, 0, symtab_off, (uint32_t)symtab.len,
+             (uint32_t)str_sh, (uint32_t)first_global, 4, 16);
+    E32_SHDR(no_strtab, SHT_STRTAB, 0, strtab_off, (uint32_t)strtab.len, 0, 0, 1,
+             0);
+    for (int i = 0; i < num_secs; ++i) {
+        if (!rel_sh[i]) continue;
+        E32_SHDR(rel_nameoff[i], 9 /* SHT_REL */, 0, rel_off[i],
+                 (uint32_t)(rel_cnt[i] * 8), (uint32_t)sym_sh, (uint32_t)(1 + i),
+                 4, 8);
+    }
+    E32_SHDR(no_shstr, SHT_STRTAB, 0, shstr_off, (uint32_t)shstr.len, 0, 0, 1, 0);
+#undef E32_SHDR
+
+    wr32(out.p + 32, shoff); /* e_shoff */
+
+    int ok = 1;
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        set_err(err, err_cap, "aot_emit_elf32_obj: fopen fallo");
+        ok = 0;
+    } else {
+        size_t w = fwrite(out.p, 1, out.len, f);
+        fclose(f);
+        if (w != out.len) {
+            set_err(err, err_cap, "aot_emit_elf32_obj: escritura incompleta");
+            ok = 0;
+        }
+    }
+    free(sec_nrel);
+    free(rel_sh);
+    free(extn);
+    free(strtab.p);
+    free(symtab.p);
+    free(shstr.p);
+    free(sec_nameoff);
+    free(rel_nameoff);
+    free(sec_off);
+    free(rel_off);
+    free(rel_cnt);
+    free(out.p);
+    return ok;
+}
+
+/* =========================================================================
  *  COFF RELOCATABLE (.obj Windows) -- via LibCOFFparse
  * ========================================================================= */
 
@@ -2355,10 +3040,16 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
 #define AOT_COFF_SYM_STATIC 3
 #define AOT_COFF_SYM_FUNC 0x20 /* DTYPE function << 4 */
 
-int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
-                      const AotReloc *relocs, int num_relocs,
-                      const AotSym *syms, int num_syms, char *err,
-                      size_t err_cap) {
+/* IMAGE_REL_I386_* (COFF de 32-bit). */
+#define IMAGE_REL_I386_DIR32 6
+#define IMAGE_REL_I386_REL32 20
+
+/* Impl comun COFF .obj para AMD64 (is32=0) e i386 (is32=1).  Difs: Machine,
+ * tipos de reloc, y que i386 NO tiene ABS64 (usa DIR32 para datos abs32). */
+static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
+                         const AotReloc *relocs, int num_relocs,
+                         const AotSym *syms, int num_syms, char *err,
+                         size_t err_cap, int is32) {
     if (num_secs <= 0) {
         set_err(err, err_cap, "aot_emit_coff_obj: sin secciones");
         return 0;
@@ -2369,8 +3060,12 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
                     "aot_emit_coff_obj: SIZE/END no soportado en .obj (v1)");
             return 0;
         }
-        if (relocs[r].kind != AOT_RELOC_REL32 &&
-            relocs[r].kind != AOT_RELOC_ABS64) {
+        const int kind_ok =
+            relocs[r].kind == AOT_RELOC_REL32 ||
+            relocs[r].kind == AOT_RELOC_SECREL32 || /* TLS (thread_local) */
+            (is32 ? relocs[r].kind == AOT_RELOC_IMM32
+                  : relocs[r].kind == AOT_RELOC_ABS64);
+        if (!kind_ok) {
             set_err(err, err_cap,
                     "aot_emit_coff_obj: reloc kind no soportado en .obj");
             return 0;
@@ -2442,7 +3137,7 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
             if (!found) extn[n_extn++] = e;
         }
 
-    /* Secciones COFF (las relocs se anyaden con add_relocation). */
+    /* Secciones COFF (las relocs se añaden con add_relocation). */
     NewSection *ns = (NewSection *)calloc((size_t)num_secs, sizeof(NewSection));
     for (int i = 0; i < num_secs; ++i) {
         uint32_t chars = 0;
@@ -2467,12 +3162,22 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
             for (; k < n_extn; ++k)
                 if (strcmp(extn[k], rl->extern_name) == 0) break;
             sym_idx = (uint32_t)(num_secs + num_syms + k);
-            type = (uint16_t)IMAGE_REL_AMD64_REL32;
+            type = is32 ? (uint16_t)IMAGE_REL_I386_REL32
+                        : (uint16_t)IMAGE_REL_AMD64_REL32;
         } else {
             sym_idx = (uint32_t)rl->target_section;
-            type = (rl->kind == AOT_RELOC_ABS64)
-                       ? (uint16_t)IMAGE_REL_AMD64_ADDR64
-                       : (uint16_t)IMAGE_REL_AMD64_REL32;
+            if (is32)
+                type = (rl->kind == AOT_RELOC_SECREL32)
+                           ? (uint16_t)IMAGE_REL_I386_SECREL
+                       : (rl->kind == AOT_RELOC_REL32)
+                           ? (uint16_t)IMAGE_REL_I386_REL32
+                           : (uint16_t)IMAGE_REL_I386_DIR32;
+            else
+                type = (rl->kind == AOT_RELOC_SECREL32)
+                           ? (uint16_t)IMAGE_REL_AMD64_SECREL
+                       : (rl->kind == AOT_RELOC_ABS64)
+                           ? (uint16_t)IMAGE_REL_AMD64_ADDR64
+                           : (uint16_t)IMAGE_REL_AMD64_REL32;
         }
         add_relocation(
             &ns[rl->site_section],
@@ -2542,7 +3247,8 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
 
     COFF_HEADER header;
     memset(&header, 0, sizeof(header));
-    header.Machine = 0x8664; /* IMAGE_FILE_MACHINE_AMD64 */
+    header.Machine =
+        is32 ? 0x14c /* I386 */ : 0x8664 /* AMD64 */;
     header.NumberOfSections = (uint16_t)num_secs;
     header.NumberOfSymbols = (uint32_t)nsym;
     header.SizeOfOptionalHeader = 0;
@@ -2564,6 +3270,24 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
         free(data[i]);
     free(data);
     return ok;
+}
+
+/* COFF .obj AMD64 (64-bit). */
+int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
+                      const AotReloc *relocs, int num_relocs,
+                      const AotSym *syms, int num_syms, char *err,
+                      size_t err_cap) {
+    return coff_obj_impl(path, secs, num_secs, relocs, num_relocs, syms,
+                         num_syms, err, err_cap, /*is32=*/0);
+}
+
+/* COFF .obj i386 (32-bit). */
+int aot_emit_coff32_obj(const char *path, const AotSection *secs, int num_secs,
+                        const AotReloc *relocs, int num_relocs,
+                        const AotSym *syms, int num_syms, char *err,
+                        size_t err_cap) {
+    return coff_obj_impl(path, secs, num_secs, relocs, num_relocs, syms,
+                         num_syms, err, err_cap, /*is32=*/1);
 }
 
 /* =========================================================================
@@ -2668,11 +3392,25 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
                        (_BYTE *)secs[i].data, secs[i].size);
     }
 
+    /* TLS (thread_local) en la .dll: sintetizar el IMAGE_TLS_DIRECTORY +
+     * _tls_index igual que en el .exe.  El cargador de Windows procesa el
+     * directorio TLS tambien para DLLs (Vista+: tambien las cargadas con
+     * LoadLibrary), montando el bloque por-hilo. */
+    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 1, cfg ? cfg->tls_callback_section : -1, cfg ? cfg->tls_callback_off : 0);
+
+    /* TLS .dll: el cargador de Windows aplica la plantilla del TLS de una .dll
+     * a traves de su DllMain (no la copia sin un entry que dispare su init).
+     * El AddressOfEntryPoint -> __vex_tls_init se fija tras finalizePE64File
+     * (que lo recomputa), mas abajo. */
+
     /* Aplicar relocs (PIC: REL32 internas).  Mismo patron que aot_emit_pe. */
     {
         const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
         for (int r = 0; r < num_relocs; ++r) {
             const AotReloc *rl = &relocs[r];
+            /* TLS PE: __vex_tls_index (RIP-rel) + SECREL32 (offset en .tls). */
+            if (aot_pe_apply_tls_reloc(&pe, secs, num_secs, rl, tls_index_va))
+                continue;
             if (rl->target_is_size || rl->target_is_end) {
                 set_err(err, err_cap, "aot_emit_pe_dll: SIZE/END no soportado");
                 freePE64File(&pe);
@@ -2807,7 +3545,17 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
         (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
 
     finalizePE64File(&pe);
-    pe.ntHeaders.OptionalHeader.AddressOfEntryPoint = 0; /* sin DllMain */
+    /* finalizePE64File recomputa el entry; lo re-fijamos.  Con TLS el entry
+     * apunta a __vex_tls_init (DllMain que aplica la plantilla por-hilo y
+     * devuelve TRUE); sin TLS no hay DllMain (entry=0). */
+    if (tls_index_va != 0 && cfg && cfg->tls_callback_section >= 0 &&
+        cfg->tls_callback_section < pe.numberOfSections) {
+        pe.ntHeaders.OptionalHeader.AddressOfEntryPoint =
+            pe.sectionHeaders[cfg->tls_callback_section].VirtualAddress +
+            cfg->tls_callback_off;
+    } else {
+        pe.ntHeaders.OptionalHeader.AddressOfEntryPoint = 0; /* sin DllMain */
+    }
     writePE64File(&pe, path);
     freePE64File(&pe);
 
@@ -2876,12 +3624,43 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
         fixd[b + 1] = key;
     }
 
+    /* Pre-chequeo: dos secciones FIJAS (@at) cuyos rangos se solapan son una
+     * contradiccion que el emisor NO puede resolver (el usuario las anclo a
+     * offsets incompatibles).  Lo detectamos ANTES del merge y damos un error
+     * PRECISO -- nombres + offsets + cuantos bytes solapan -- para que re-
+     * espaciar sea trivial en vez de adivinar. */
+    for (int a = 0; a + 1 < nfixd; ++a) {
+        const AotSection *cur = &secs[fixd[a]];
+        const AotSection *nxt = &secs[fixd[a + 1]];
+        uint64_t cur_at = (uint64_t)cur->at;
+        uint64_t cur_end = cur_at + aot_sec_size(cur);
+        uint64_t nxt_at = (uint64_t)nxt->at;
+        if (cur_end > nxt_at) {
+            char b[256];
+            snprintf(b, sizeof(b),
+                     "aot_emit_flat_bin: solape @at -- la seccion '%s' "
+                     "(@0x%llX..0x%llX) se solapa con '%s' (@0x%llX) por 0x%llX "
+                     "bytes; sube su @at a 0x%llX o reduce '%s'",
+                     cur->name ? cur->name : "?",
+                     (unsigned long long)cur_at, (unsigned long long)cur_end,
+                     nxt->name ? nxt->name : "?", (unsigned long long)nxt_at,
+                     (unsigned long long)(cur_end - nxt_at),
+                     (unsigned long long)cur_end, cur->name ? cur->name : "?");
+            set_err(err, err_cap, b);
+            goto fail;
+        }
+    }
+
     /* Merge greedy: coloca FLUYENTES secuencialmente hasta que la siguiente no
      * cabe antes del proximo ancla FIJO; entonces rellena con ceros hasta el
-     * ancla y coloca la seccion FIJA.  Reporta solapes. */
+     * ancla y coloca la seccion FIJA.  Las secciones FLUYENTES grandes (p.ej.
+     * la .text del kernel) que no caben en ningun hueco se difieren tras el
+     * ultimo ancla FIJO automaticamente (nunca se incrustan entre anclas, asi
+     * no colisionan con el layout @at por mucho que crezcan). */
     {
         uint64_t cursor = 0;
         int qi = 0, fi = 0;
+        const char *prev_name = "(inicio)"; /* quien avanzo el cursor */
         while (qi < nflow || fi < nfixd) {
             int take_fixed = 0;
             uint64_t aligned = cursor;
@@ -2901,17 +3680,29 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
             if (take_fixed) {
                 uint64_t fa = (uint64_t)secs[fixd[fi]].at;
                 if (cursor > fa) {
-                    set_err(err, err_cap,
-                            "aot_emit_flat_bin: solape -- una seccion @at se "
-                            "superpone con datos previos");
+                    /* Una FLUYENTE colocada antes empujo el cursor sobre este
+                     * ancla.  Con el diferido esto no deberia ocurrir, pero si
+                     * pasa, reportamos quien y por cuanto. */
+                    char b[256];
+                    snprintf(b, sizeof(b),
+                             "aot_emit_flat_bin: solape -- '%s' (termina en "
+                             "0x%llX) invade la seccion @at '%s' (@0x%llX) por "
+                             "0x%llX bytes",
+                             prev_name, (unsigned long long)cursor,
+                             secs[fixd[fi]].name ? secs[fixd[fi]].name : "?",
+                             (unsigned long long)fa,
+                             (unsigned long long)(cursor - fa));
+                    set_err(err, err_cap, b);
                     goto fail;
                 }
                 sec_off[fixd[fi]] = fa;
                 cursor = fa + aot_sec_size(&secs[fixd[fi]]);
+                prev_name = secs[fixd[fi]].name ? secs[fixd[fi]].name : "?";
                 ++fi;
             } else {
                 sec_off[flow[qi]] = aligned;
                 cursor = aligned + aot_sec_size(&secs[flow[qi]]);
+                prev_name = secs[flow[qi]].name ? secs[flow[qi]].name : "?";
                 ++qi;
             }
         }
@@ -2989,5 +3780,76 @@ fail:
     free(flow);
     free(fixd);
     free(out.p);
+    return 0;
+}
+
+/* --- Lectura de exports de DLL/PE (delega en LibPEparse) ----------------- */
+int aot_pe_export_names(const char *path, char ***out_names, int *out_count) {
+    if (out_names) *out_names = NULL;
+    if (out_count) *out_count = 0;
+    if (path == NULL || out_names == NULL || out_count == NULL) return 1;
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) return 1;
+    /* Parse MINIMO suficiente para los exports: DOS header (e_lfanew) + NT
+     * headers (RVA del directorio de exports) + section headers (necesarios
+     * para resolve64 RVA->offset).  Se EVITA el ParseFile64 completo, que
+     * ademas parsea imports / base-relocs / rich-header -- innecesarios para
+     * exports y costosos/fragiles en DLLs del sistema grandes (kernel32). */
+    PE64FILE pe;
+    PE64FILE_Initialize(&pe);
+    pe.NAME = (char *)path;
+    pe.Ppefile = f;
+    ParseDOSHeader64(&pe);
+    ParseNTHeaders64(&pe);
+    ParseSectionHeaders64(&pe);
+    int n = 0;
+    char **names = ParseExportNames64(&pe, &n);
+    if (pe.PEFILE_SECTION_HEADERS != NULL) free(pe.PEFILE_SECTION_HEADERS);
+    fclose(f);
+    *out_names = names;
+    *out_count = n;
+    return 0; /* 0 exports tambien es exito */
+}
+
+void aot_free_pe_export_names(char **names, int count) {
+    FreeExportNames64(names, count);
+}
+
+/* --- Lectura de exports de una .so/ELF (dynsym, delega en LibELFparse) ---- */
+int aot_elf_export_names(const char *path, char ***out_names, int *out_count) {
+    if (out_names) *out_names = NULL;
+    if (out_count) *out_count = 0;
+    if (path == NULL || out_names == NULL || out_count == NULL) return 1;
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) return 1;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) {
+        fclose(f);
+        return 1;
+    }
+    void *buf = malloc((size_t)sz);
+    if (buf == NULL) {
+        fclose(f);
+        return 1;
+    }
+    if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+        free(buf);
+        fclose(f);
+        return 1;
+    }
+    fclose(f);
+    ElfFile elf;
+    if (!elf_mem_parse(&elf, buf, (size_t)sz)) {
+        free(buf);
+        return 1;
+    }
+    int n = 0;
+    /* elf_dynsym_export_names COPIA cada nombre -> el buffer se puede liberar. */
+    char **names = elf_dynsym_export_names(&elf, &n);
+    free(buf);
+    *out_names = names;
+    *out_count = n;
     return 0;
 }

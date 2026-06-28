@@ -21,11 +21,10 @@
 
 #include "jit/jit_registry.h"
 #include "jit/stack_scan.h"
-// acceso al ProcessVM owner para leer stack/regs durante GC.
-// Solo en el .cpp (no en gc_heap.h) para evitar incluir gc_heap.h en
-// proceso_runtime.h (gc_heap.h ya esta en proceso_runtime.h).
-#include "runtime/proceso_runtime.h"
-#include "runtime/runtime.h"        // Phase Z: acceso a vm.shared_handle_table
+// Inc 0b: gc_heap.cpp YA NO depende de ProcessVM/runtime.  El acceso al
+// stack/regs del owner + la sincronizacion shared (Phase Z) se hacen via la
+// interfaz GcRootProvider (gc_heap.h); el runtime aporta la impl.  Esto permite
+// compilar el GC como .o freestanding (libvesta_gc) sin arrastrar la VM.
 #include "gc/shared_handle_table.h" // Phase Z: SHARED_HANDLE_BIT
 #include "loader/oop_types.h"
 
@@ -109,8 +108,16 @@ bool g_gc_debug_buffered = []() noexcept -> bool {
 // para evitar mutex contention.  64 KB amortiza syscalls de write
 // sobre miles de trazas pequenias (~50 bytes c/u).
 constexpr size_t GC_DBG_BUF_SIZE = 64 * 1024;
-thread_local char g_gc_dbg_buf[GC_DBG_BUF_SIZE];
-thread_local size_t g_gc_dbg_pos = 0;
+// En el build FREESTANDING (libvesta_gc para AOT) el GC es single-thread y no
+// debe arrastrar TLS (genera _tls_index + relocs SECREL que el linker propio no
+// resuelve sin una TLS directory).  thread_local -> global plano.
+#if defined(VESTA_GC_FREESTANDING)
+#define GC_DBG_TLS
+#else
+#define GC_DBG_TLS thread_local
+#endif
+GC_DBG_TLS char g_gc_dbg_buf[GC_DBG_BUF_SIZE];
+GC_DBG_TLS size_t g_gc_dbg_pos = 0;
 
 // File descriptor de stderr cacheado.  Lazy: el primer trace lo
 // resuelve.  Asi no pagamos lookup por linea.
@@ -185,7 +192,7 @@ struct GcDebugAtExit {
         if (g_gc_debug_buffered) gc_dbg_flush_tls();
     }
 };
-thread_local GcDebugAtExit g_gc_debug_at_exit;
+GC_DBG_TLS GcDebugAtExit g_gc_debug_at_exit;
 } // namespace
 
 void set_gc_debug(bool enabled) noexcept {
@@ -320,8 +327,8 @@ void GcHeap::release_handle(GcHandle h) {
     // <string> del plugin) y necesita el objeto vivo.  El mismo handle
     // sera liberado automaticamente cuando el ultimo gc_release lo
     // saque del map.
-    auto it_ext = external_refs_.find(h);
-    if (it_ext != external_refs_.end() && it_ext->second > 0) {
+    const uint32_t *rc_ext = external_refs_.find(h);
+    if (rc_ext != nullptr && *rc_ext > 0) {
         return;
     }
     // Limpiar el mapa inverso ANTES de invalidar handles_[h].addr.
@@ -385,9 +392,8 @@ GcHeap::handle_for_ptr(const uint8_t *host_payload_ptr) const noexcept {
     // 0xFFFFFFFF -> nullptr -> el host_ptr quedaba a 0 -> store a [0+offset]
     // = SEGV.  Reproducible con 2+ objetos shared vivos a traves de un call
     // y luego escritura a sus fields (a.v=10; b.v=20).
-    if (!in_gc && owner_proc_ != nullptr &&
-        owner_proc_->scheduler.vm_reference.shared_heap.contains(
-            host_payload_ptr)) {
+    if (!in_gc && root_provider_ != nullptr &&
+        root_provider_->shared_contains(host_payload_ptr)) {
         in_gc = true;
     }
     if (!in_gc) return GC_NULL_HANDLE;
@@ -403,10 +409,8 @@ GcHeap::handle_for_ptr(const uint8_t *host_payload_ptr) const noexcept {
     if (maybe_shared & SHARED_HANDLE_BIT) {
         // Validar que el handle realmente resuelve al mismo ptr
         // (defensa contra hash_code colisiones casuales con bit 31).
-        if (owner_proc_) {
-            uint8_t *resolved =
-                owner_proc_->scheduler.vm_reference.shared_handle_table.lookup(
-                    maybe_shared);
+        if (root_provider_) {
+            uint8_t *resolved = root_provider_->shared_lookup(maybe_shared);
             if (resolved == host_payload_ptr) {
                 return maybe_shared;
             }
@@ -914,9 +918,9 @@ void GcHeap::update_stack_forwards(uint64_t rsp_lo, uint64_t stack_high,
             if (v == 0 || v < 256) continue;
             auto *p =
                 reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(v));
-            auto it = forward_table_.find(p);
-            if (it != forward_table_.end()) {
-                const uint64_t new_v = reinterpret_cast<uint64_t>(it->second);
+            const uint8_t *const *fv = forward_table_.find(p);
+            if (fv != nullptr) {
+                const uint64_t new_v = reinterpret_cast<uint64_t>(*fv);
                 vm_mem.write_bytes(addr, &new_v, 8);
             }
         }
@@ -927,9 +931,9 @@ void GcHeap::update_stack_forwards(uint64_t rsp_lo, uint64_t stack_high,
         const uint64_t v = regs[i];
         if (v == 0 || v < 256) continue;
         auto *p = reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(v));
-        auto it = forward_table_.find(p);
-        if (it != forward_table_.end()) {
-            regs[i] = reinterpret_cast<uint64_t>(it->second);
+        const uint8_t *const *fv = forward_table_.find(p);
+        if (fv != nullptr) {
+            regs[i] = reinterpret_cast<uint64_t>(*fv);
         }
     }
 }
@@ -970,9 +974,8 @@ uint8_t *GcHeap::deref(GcHandle h) {
     // handles locales (branch predicho), ~5 ns para handles shared
     // (2 atomic loads: chunk + slot).
     if (h & SHARED_HANDLE_BIT) {
-        if (!owner_proc_) return nullptr;
-        return owner_proc_->scheduler.vm_reference.shared_handle_table.lookup(
-            h);
+        if (!root_provider_) return nullptr;
+        return root_provider_->shared_lookup(h);
     }
     if (h >= handles_.size() || !handles_[h].live) return nullptr;
     return handles_[h].addr + sizeof(GcHeader);
@@ -1006,14 +1009,14 @@ void GcHeap::gc_addref(GcHandle h) {
 
 void GcHeap::gc_release(GcHandle h) {
     if (h == GC_NULL_HANDLE) return;
-    auto it = external_refs_.find(h);
-    if (it == external_refs_.end()) return; // no estaba pinnado: no-op
-    if (it->second > 1) {
-        it->second -= 1;
+    uint32_t *rc = external_refs_.find(h);
+    if (rc == nullptr) return; // no estaba pinnado: no-op
+    if (*rc > 1) {
+        *rc -= 1;
     } else {
         // Al llegar a 0 eliminamos la entrada para que el bucket se libere
         // y el mark phase no malgaste tiempo iterando handles ya liberados.
-        external_refs_.erase(it);
+        external_refs_.erase(h);
     }
 }
 
@@ -1178,16 +1181,17 @@ void GcHeap::minor_gc() {
     }
 
     std::vector<GcHandle> worklist;
-    if (owner_proc_ != nullptr) {
-        const uint64_t rsp = owner_proc_->registers.stack_pointer.qword();
-        const uint64_t stack_high = owner_proc_->stack_high;
-        uint64_t regs[16];
-        for (int i = 0; i < 16; ++i) {
-            regs[i] = owner_proc_->registers.regs[i].qword();
-        }
-        scan_stack_roots(rsp, stack_high, regs, owner_proc_->vm_mem, worklist);
-    } else {
-        // Fallback: modelo previo (todos los handles live = root).
+    uint64_t rsp = 0, stack_high = 0;
+    uint64_t regs[16];
+    if (root_provider_ != nullptr &&
+        root_provider_->vm_stack_regs(rsp, stack_high, regs) &&
+        root_provider_->vm_mem() != nullptr) {
+        scan_stack_roots(rsp, stack_high, regs, *root_provider_->vm_mem(),
+                         worklist);
+    } else if (!aot_precise_roots_) {
+        // Fallback: modelo previo (todos los handles live = root).  En modo AOT
+        // se omite: vex_gc_alloc usa alloc_pinned (OldGen) -> el nursery queda
+        // vacio -> minor_gc no toca objetos gc<T>; solo major_gc los colecta.
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
             if (!handles_[h].live || !handles_[h].addr) continue;
             uint8_t *raw = handles_[h].addr;
@@ -1311,21 +1315,17 @@ void GcHeap::minor_gc() {
     // recien movidos a OldGen quedaban dangling -> SEGFAULT al field
     // access siguiente.  Ver `forward_table_` y comentario de la
     // declaracion en gc_heap.h.
-    if (owner_proc_ != nullptr && !forward_table_.empty()) {
-        const uint64_t rsp_lo =
-            owner_proc_->stack_low_water != 0
-                ? owner_proc_->stack_low_water
-                : owner_proc_->registers.stack_pointer.qword();
-        const uint64_t stack_high = owner_proc_->stack_high;
-        uint64_t regs[16];
-        for (int i = 0; i < 16; ++i) {
-            regs[i] = owner_proc_->registers.regs[i].qword();
-        }
-        update_stack_forwards(rsp_lo, stack_high, regs, owner_proc_->vm_mem);
-        // Escribir de vuelta los regs actualizados.
-        for (int i = 0; i < 16; ++i) {
-            owner_proc_->registers.regs[i].qword(regs[i]);
-        }
+    uint64_t fwd_rsp = 0, fwd_high = 0;
+    uint64_t fwd_regs[16];
+    if (root_provider_ != nullptr && !forward_table_.empty() &&
+        root_provider_->vm_stack_regs(fwd_rsp, fwd_high, fwd_regs) &&
+        root_provider_->vm_mem() != nullptr) {
+        const uint64_t lo = root_provider_->stack_low_water();
+        const uint64_t rsp_lo = lo != 0 ? lo : fwd_rsp;
+        update_stack_forwards(rsp_lo, fwd_high, fwd_regs,
+                              *root_provider_->vm_mem());
+        // Escribir de vuelta los regs actualizados (el GC pudo moverlos).
+        root_provider_->write_back_regs(fwd_regs);
     }
     forward_table_.clear();
 
@@ -1365,26 +1365,24 @@ void GcHeap::major_gc() {
     // = root" que nunca colectaba sin drop explicito.  Si owner_proc_
     // es nullptr (ej. tests sin ProcessVM), fallback al modelo previo.
     std::vector<GcHandle> worklist;
-    if (owner_proc_ != nullptr) {
-        // Leer stack ptr + stack high del proceso.  Estos son atributos
-        // del ProcessVM expuestos publicamente (no requieren accessor).
-        const uint64_t rsp = owner_proc_->registers.stack_pointer.qword();
-        const uint64_t stack_high = owner_proc_->stack_high;
-        // Snapshot de R0..R15 (16 GP regs) para pasar al scan.
-        uint64_t regs[16];
-        for (int i = 0; i < 16; ++i) {
-            regs[i] = owner_proc_->registers.regs[i].qword();
-        }
-        scan_stack_roots(rsp, stack_high, regs, owner_proc_->vm_mem, worklist);
+    uint64_t mj_rsp = 0, mj_high = 0;
+    uint64_t mj_regs[16];
+    if (root_provider_ != nullptr &&
+        root_provider_->vm_stack_regs(mj_rsp, mj_high, mj_regs) &&
+        root_provider_->vm_mem() != nullptr) {
+        scan_stack_roots(mj_rsp, mj_high, mj_regs, *root_provider_->vm_mem(),
+                         worklist);
         // Reset low-water-mark al rsp actual: tras el GC, los slots
         // por debajo del rsp actual ya no son alcanzables; el watermark
         // debe limitar el rango del proximo scan al rango realmente
         // activo desde ahora.
-        owner_proc_->stack_low_water = rsp;
-    } else {
-        // Fallback: modelo previo (todo handle live = root).  Solo se
-        // usa si no hay owner_proc_ asociado (no deberia ocurrir en
-        // produccion, pero defensivo para tests / setups especiales).
+        root_provider_->set_stack_low_water(mj_rsp);
+    } else if (!aot_precise_roots_) {
+        // Fallback: modelo previo (todo handle live = root).  Solo se usa si no
+        // hay root_provider_ NI modo AOT (defensivo para tests / setups
+        // especiales).  En modo AOT (libvesta_gc) se OMITE -> las raices vienen
+        // de external_refs + scan_jit_roots_precise (frames nativos) + pending
+        // -> el GC colecta de verdad lo no alcanzable.
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
             if (!handles_[h].live || !handles_[h].addr) continue;
             auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
@@ -1417,7 +1415,7 @@ void GcHeap::major_gc() {
 
     // precise scan de JIT frames (additive con
     // conservativo).  (no hay JIT funcs) la funcion sale
-    // de inmediato.  Cuando lance JIT real, anyade roots que
+    // de inmediato.  Cuando lance JIT real, añade roots que
     // el conservativo posiblemente cubrio por aproximacion.
     // Tracking conservativo: snapshot del tamano antes para
     // calcular cuantos roots vinieron de cada source.
@@ -1459,6 +1457,24 @@ void GcHeap::major_gc() {
                 stats_.freed_bytes += total; // total slot, no payload
                 old_used_ -= total;
                 hdr->color = GcColor::DEAD;
+                // Modo AOT: LIBERAR el handle del objeto colectado (live=false +
+                // borrar de ptr_to_handle_ + reciclar).  En el path VM el handle
+                // colgante es benigno (el programa ya lo solto) y NO se libera
+                // en el sweep -> aqui solo lo hacemos en AOT para que la tabla
+                // de handles no crezca sin limite (new-and-forget) y para que el
+                // conteo de vivos sea exacto.  El slot se reusa abajo (freelist).
+                if (aot_precise_roots_) {
+                    uint8_t *payload = cursor + sizeof(GcHeader);
+                    const GcHandle dh = ptr_to_handle_.find(payload);
+                    if (dh != GC_NULL_HANDLE) {
+                        ptr_to_handle_.erase(payload);
+                        if (dh < static_cast<GcHandle>(handles_.size())) {
+                            handles_[dh].addr = nullptr;
+                            handles_[dh].live = false;
+                            free_handles_.push_back(dh);
+                        }
+                    }
+                }
             }
 
             if (hdr->color == GcColor::DEAD) {
@@ -1851,9 +1867,10 @@ uint64_t GcHeap::monitor_release(GcHandle h, uint64_t owner_encoded) {
  * locales (caso dominante).
  */
 inline WaitTable &GcHeap::wait_table_for(GcHandle h) noexcept {
-    if (h & SHARED_HANDLE_BIT) {
+    if ((h & SHARED_HANDLE_BIT) && root_provider_ != nullptr) {
         // Shared: usar la tabla per-VM (cross-process visible).
-        return owner_proc_->scheduler.vm_reference.shared_wait_table;
+        if (WaitTable *swt = root_provider_->shared_wait_table())
+            return *swt;
     }
     // Local: tabla per-process.
     return wait_table_;

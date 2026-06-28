@@ -262,7 +262,7 @@ un ejecutable nativo standalone sin necesidad de `vm.exe`.
 
 **Status**: pendiente.
 
-Tras x86-64 estable, anyadir backend ARM:
+Tras x86-64 estable, añadir backend ARM:
 
 - Keystone ya soporta ARM/AArch64 (vendored).
 - Cambio principal: instruction selector del D.1.b ARM-specific (~1500 LOC

@@ -40,7 +40,7 @@
  * hace @c alloc + @c commit.  Multiples threads pueden
  * leer/ejecutar codigo concurrentemente sin sincronizacion (es read-
  * only post-commit).  En Phase D.8 (C2 con multi-thread compile) se
- * anyadira un mutex interno o se shardara el cache por compile worker.
+ * añadira un mutex interno o se shardara el cache por compile worker.
  *
  * = Cleanup =
  *

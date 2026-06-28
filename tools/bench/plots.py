@@ -15,24 +15,30 @@ from typing import Optional
 
 # Colores fijos por lenguaje para consistencia visual cross-plot.
 LANG_COLORS = {
-    "vex_interp": "#ff7f0e",   # naranja
-    "vex_jit":    "#2ca02c",   # verde
-    "vex_aot":    "#8c564b",   # marron
-    "c":          "#1f77b4",   # azul
-    "cpp":        "#9467bd",   # violeta
-    "python":     "#17becf",   # cyan
-    "java":       "#d62728",   # rojo
+    "vex_interp":   "#ff7f0e",  # naranja
+    "vex_jit":      "#2ca02c",  # verde
+    # 3 modos AOT con colores DISTINTOS (antes caian al gris fallback "#888"
+    # -> indistinguibles en los diagramas).
+    "vex_aot_sse2": "#8c564b",  # marron
+    "vex_aot_avx":  "#e377c2",  # rosa
+    "vex_aot_auto": "#bcbd22",  # oliva
+    "c":            "#1f77b4",  # azul
+    "cpp":          "#9467bd",  # violeta
+    "python":       "#17becf",  # cyan
+    "java":         "#d62728",  # rojo
 }
 
 # Labels formateados.
 LANG_LABELS = {
-    "vex_interp": "Vex interp",
-    "vex_jit":    "Vex JIT",
-    "vex_aot":    "Vex AOT nativo",
-    "c":          "C (gcc -O3)",
-    "cpp":        "C++ (g++ -O3)",
-    "python":     "Python",
-    "java":       "Java",
+    "vex_interp":   "Vex interp",
+    "vex_jit":      "Vex JIT",
+    "vex_aot_sse2": "Vex AOT sse2",
+    "vex_aot_avx":  "Vex AOT avx2",
+    "vex_aot_auto": "Vex AOT auto",
+    "c":            "C (gcc -O3)",
+    "cpp":          "C++ (g++ -O3)",
+    "python":       "Python",
+    "java":         "Java",
 }
 
 

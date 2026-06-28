@@ -67,12 +67,30 @@ using CallResolver = std::function<uint64_t(const std::string &)>;
  */
 struct VregEntries {
     uint64_t callvirt = 0;  ///< vrt_callvirt(proc, obj, vtbl_idx)
+    uint64_t callm = 0;     ///< vrt_callm(proc, obj, method_ptr)
+    uint64_t callitf = 0;   ///< vrt_callitf(proc, obj, params, method_idx)
+    uint64_t unwrap_throw = 0; ///< vrt_unwrap_throw(proc) -- UNWRAP null (VM_ABI)
+    uint64_t proc_pid = 0;     ///< vrt_proc_pid(proc) -> PID encoded (GETPID)
     uint64_t gc_deref = 0;  ///< vrt_gc_deref(proc, handle)
     uint64_t gc_handle = 0; ///< vrt_gc_handle_for_ptr(proc, host_ptr)
     uint64_t raw_alloc = 0; ///< vrt_raw_alloc(proc, size)
     uint64_t raw_free = 0;  ///< vrt_raw_free(proc, host_ptr)
     uint64_t gc_allocp = 0; ///< vrt_gc_alloc_payload(proc, size) -> host_ptr
     uint64_t newobj = 0; ///< vrt_newobj_handle(proc, cls) -> GcHandle (NEWOBJ)
+    uint64_t newobjs = 0;   ///< vrt_newobjs(proc, cls) -> handle (NEWOBJS shared)
+    uint64_t dlopen = 0;    ///< vrt_dlopen(proc, path_vaddr, len) -> host handle
+    uint64_t str_conv = 0;  ///< vrt_str_conv(proc, str, enc) -> handle (STRCONV)
+    uint64_t panic_str = 0; ///< vrt_panic_str(proc, msg_vaddr, len) (PANIC)
+    /* Excepciones in-JIT (Opcion B).  tryenter_jit registra el frame con la
+     * direccion nativa del catch + rsp/rbp host; tryleave hace el pop normal;
+     * throw_user lanza (do_throw resume via vrt_resume_jit). */
+    uint64_t tryenter_jit = 0; ///< vrt_tryenter_jit(proc,type,catch_addr)
+    uint64_t tryleave = 0;     ///< vrt_tryleave(proc)
+    uint64_t throw_user = 0;   ///< vrt_throw_user(proc, exc_handle)
+    /* Offsets (desde ProcessVM*) de los campos handoff RSP/RBP del tryenter
+     * in-JIT.  -1 = no disponible -> TRYENTER baila. */
+    int32_t jit_exc_rsp_off = -1; ///< offsetof(ProcessVM, jit_exc_rsp)
+    int32_t jit_exc_rbp_off = -1; ///< offsetof(ProcessVM, jit_exc_rbp)
     uint64_t calln = 0;  ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
     /* Class registry (Fase 2).  Todos 1-arg (proc, params_vaddr) salvo
      * deffield/defmethod (2-arg: cls, params) y addadvice (3-arg). */
@@ -138,7 +156,8 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                      true
 #endif
                  ,
-                 bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2);
+                 bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2,
+                 bool emit_line_map = false);
 
 } // namespace jit
 

@@ -1,0 +1,24 @@
+// AOT thread_local: persistencia por-hilo a traves de llamadas y bucles.
+//
+// La variable `acc` es por-hilo pero PERSISTE entre llamadas a `bump` dentro
+// del mismo hilo (no es una local).  El bucle de main acumula 0+1+2+3+4 sobre
+// la copia TLS del hilo principal.  Demuestra que el acceso TLS funciona desde
+// una funcion que NO es main y que mantiene estado a lo largo del hilo.
+//
+// Resultado esperado: 0+1+2+3+4 = exit code 10.
+
+thread_local i64 acc = 0;
+
+i64 bump(i64 x) {
+    acc = acc + x;   // muta la copia por-hilo, compartida entre llamadas
+    return acc;
+}
+
+i64 main() {
+    i64 i = 0;
+    while (i < 5) {
+        bump(i);
+        i = i + 1;
+    }
+    return acc;
+}

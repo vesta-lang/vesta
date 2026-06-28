@@ -61,7 +61,7 @@ namespace jit {
  *        @c mode (NATIVE_ABI para tests, VM_ABI para runtime real).
  *
  * Construye un @c SelectorOptions con el modo y, si el modo es VM_ABI
- * y hay safepoint handler resuelto, anyade su direccion para que el
+ * y hay safepoint handler resuelto, añade su direccion para que el
  * selector emita las llamadas correctamente.  Despues delega en
  * @c compile_with_opts que hace el trabajo real.
  */
@@ -75,7 +75,7 @@ CompileResult JitCompiler::compile(const ir::IrFunction &ir_fn,
     // tendria que resolver luego).
     opts.runtime = &rt_;
     // Solo si vamos a VM_ABI (codigo que correra como parte de un
-    // proceso VestaVM normal) anyadimos la direccion del handler de
+    // proceso VestaVM normal) añadimos la direccion del handler de
     // safepoint.  En NATIVE_ABI (tests aislados) los polls salen
     // como no-ops o se omiten.
     if (mode == SelectorMode::VM_ABI && rt_.safepoint_handler) {
@@ -110,6 +110,8 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     // que aun no maneja (e.g. operaciones float especificas, ciertos
     // RAW_ASM no patterned).  En ese caso retornamos inmediatamente
     // dejando el flag visible para que el caller caiga al interprete.
+    // Solo-LSP: recordar si se pidio la tabla linea<->asm antes de mover opts.
+    const bool want_line_map = opts.emit_line_map;
     Selector sel(std::move(opts));
     MFunction mf = sel.select(ir_fn, &result.unsupported);
     if (result.unsupported) {
@@ -136,6 +138,12 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     // MInstrs y el encoder a un numero variable de bytes.
     result.instr_count = enc.instr_count();
 
+    // Solo-LSP: el encoder ya poblo mf.line_map (si want_line_map).  La
+    // copiamos al resultado para que el inspector correlacione asm<->fuente.
+    if (want_line_map) {
+        result.line_map = std::move(mf.line_map);
+    }
+
     // ---------------------------------------------------------------
     // Fase 3: Code cache (publicacion en memoria ejecutable).
     // ---------------------------------------------------------------
@@ -156,7 +164,7 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     std::memcpy(code, bytes.data(), bytes.size());
 
     // Sprint fib-recursion (2026-06-02): patch de self-references.
-    // El encoder anyadio a @c mf.self_ref_byte_offsets las posiciones
+    // El encoder añadio a @c mf.self_ref_byte_offsets las posiciones
     // donde se emitio un MOV reg,imm64 con valor placeholder 0 que
     // referencia a la PROPIA funcion.  Ahora que conocemos la
     // direccion final del codigo (= @c code), escribimos esa

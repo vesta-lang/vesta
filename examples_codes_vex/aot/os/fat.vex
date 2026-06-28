@@ -1,0 +1,312 @@
+// ===========================================================================
+// fat -- driver FAT12 minimo de solo-lectura.
+//
+// El boot carga la imagen de disco completa a RAM como ramdisk contiguo a
+// partir de 0x7C00 (sector S -> 0x7C00 + S*512).  La imagen es una FAT12
+// estandar: el BPB vive en el boot sector (offsets 0x0B..), seguido de la(s)
+// FAT(s), el root directory y la zona de datos (clusters).  Este modulo monta
+// la FAT leyendo el BPB y carga ficheros (los programas) por nombre 8.3
+// siguiendo su cadena de clusters.  Sin int 0x13: en modo largo (64-bit) no
+// hay BIOS; toda la "lectura de disco" es acceso al ramdisk en RAM.
+// ===========================================================================
+
+u64 RAMDISK = 0x7C00;          // base del ramdisk (sector 0 = boot sector)
+
+// --- Lectura de campos del BPB (en el boot sector, RAMDISK + offset) ---
+u64 bpb_u8(u64 off) {
+    u8* p = (u8*) (RAMDISK + off);
+    return (u64) p[0];
+}
+u64 bpb_u16(u64 off) {
+    u16* p = (u16*) (RAMDISK + off);
+    return (u64) p[0];
+}
+
+// Siguiente cluster en la cadena (FAT12: entradas de 12 bits empaquetadas).
+u64 fat_next(u64 cluster) {
+    u64 reserved = bpb_u16(0x0E);
+    u64 fat_base = RAMDISK + reserved * 512;
+    u64 off = cluster + (cluster / 2);            // cluster * 1.5
+    u16* p = (u16*) (fat_base + off);
+    u64 val = (u64) p[0];
+    if ((cluster & 1) != 0) {
+        return val >> 4;                          // cluster impar: 12 bits altos
+    }
+    return val & 0xFFF;                           // cluster par: 12 bits bajos
+}
+
+// Construye el nombre 8.3 (11 bytes, mayusculas, padded con espacios) en `dst`
+// a partir del comando `name` (p.ej. "calc" -> "CALC       ").
+void fat_mk83(char* name, u8* dst) {
+    u64 i = 0;
+    while (i < 11) { dst[i] = 32; i = i + 1; }    // rellenar de espacios
+    i = 0;
+    while (name[i] != 0 && i < 8) {
+        u64 c = (u64) name[i];
+        if (c >= 97 && c <= 122) { c = c - 32; }  // a-z -> A-Z
+        dst[i] = (u8) c;
+        i = i + 1;
+    }
+}
+
+// Busca un fichero en el root directory.  Devuelve la direccion (en RAM) de su
+// entrada de 32 bytes, o 0 si no existe.
+u64 fat_find(char* name) {
+    u64 reserved = bpb_u16(0x0E);
+    u64 nfats = bpb_u8(0x10);
+    u64 spf = bpb_u16(0x16);
+    u64 root_ents = bpb_u16(0x11);
+    u64 root_start = reserved + nfats * spf;
+    u64 root_addr = RAMDISK + root_start * 512;
+    u8 want[11];
+    fat_mk83(name, want);
+    u64 e = 0;
+    while (e < root_ents) {
+        u8* ent = (u8*) (root_addr + e * 32);
+        if (ent[0] == 0) { return 0; }            // fin del directorio
+        if (ent[0] != 0xE5) {                      // no es una entrada borrada
+            u64 j = 0;
+            bool eq = true;
+            while (j < 11) {
+                if (ent[j] != want[j]) { eq = false; }
+                j = j + 1;
+            }
+            if (eq) { return root_addr + e * 32; }
+        }
+        e = e + 1;
+    }
+    return 0;
+}
+
+// Direccion en RAM del root directory y numero de entradas (para listar).
+u64 fat_root_addr() {
+    u64 reserved = bpb_u16(0x0E);
+    u64 nfats = bpb_u8(0x10);
+    u64 spf = bpb_u16(0x16);
+    return RAMDISK + (reserved + nfats * spf) * 512;
+}
+u64 fat_root_ents() {
+    return bpb_u16(0x11);
+}
+
+// Numero total de sectores del volumen (BPB 0x13 de 16 bits; si es 0, el
+// campo de 32 bits en 0x20).
+u64 bpb_total() {
+    u64 t16 = bpb_u16(0x13);
+    if (t16 != 0) { return t16; }
+    u32* p = (u32*) (RAMDISK + 0x20);
+    return (u64) p[0];
+}
+
+// Primer sector de la zona de datos (donde empieza el cluster 2).
+u64 fat_data_start() {
+    u64 reserved = bpb_u16(0x0E);
+    u64 nfats = bpb_u8(0x10);
+    u64 spf = bpb_u16(0x16);
+    u64 root_ents = bpb_u16(0x11);
+    u64 root_sects = (root_ents * 32 + 511) / 512;
+    return reserved + nfats * spf + root_sects;
+}
+
+// Numero de clusters de datos del volumen (los validos son 2 .. count+1).
+u64 fat_cluster_count() {
+    u64 spc = bpb_u8(0x0D);
+    u64 data_sects = bpb_total() - fat_data_start();
+    return data_sects / spc;
+}
+
+// Tamano de un cluster en bytes.
+u64 fat_cluster_bytes() {
+    return bpb_u8(0x0D) * 512;
+}
+
+// Numero de clusters libres (entrada FAT == 0) en el volumen.
+u64 fat_free_clusters() {
+    u64 count = fat_cluster_count();
+    u64 free = 0;
+    u64 c = 2;
+    while (c < count + 2) {
+        if (fat_next(c) == 0) { free = free + 1; }
+        c = c + 1;
+    }
+    return free;
+}
+
+// Escribe el valor `val` (12 bits) en la entrada FAT de `cluster`, en TODAS
+// las copias de la FAT (normalmente 2) para mantenerlas coherentes.
+void fat_set_next(u64 cluster, u64 val) {
+    u64 reserved = bpb_u16(0x0E);
+    u64 nfats = bpb_u8(0x10);
+    u64 spf = bpb_u16(0x16);
+    u64 off = cluster + (cluster / 2);             // cluster * 1.5
+    u64 f = 0;
+    while (f < nfats) {
+        u64 fat_base = RAMDISK + (reserved + f * spf) * 512;
+        u16* p = (u16*) (fat_base + off);
+        u64 cur = (u64) p[0];
+        if ((cluster & 1) != 0) {
+            // cluster impar: los 12 bits ALTOS; preservar el nibble bajo.
+            p[0] = (u16) ((cur & 0x000F) | ((val & 0xFFF) << 4));
+        } else {
+            // cluster par: los 12 bits BAJOS; preservar el nibble alto.
+            p[0] = (u16) ((cur & 0xF000) | (val & 0xFFF));
+        }
+        f = f + 1;
+    }
+}
+
+// Busca el primer cluster libre (entrada FAT == 0) a partir del cluster 2.
+// Devuelve su numero, o 0 si no hay clusters libres (disco lleno).
+u64 fat_alloc_cluster() {
+    u64 count = fat_cluster_count();
+    u64 c = 2;
+    while (c < count + 2) {
+        if (fat_next(c) == 0) { return c; }
+        c = c + 1;
+    }
+    return 0;
+}
+
+// Busca una entrada de root directory libre (primer byte 0x00 = nunca usada,
+// o 0xE5 = borrada).  Devuelve su direccion en RAM, o 0 si el root esta lleno.
+u64 fat_new_entry() {
+    u64 reserved = bpb_u16(0x0E);
+    u64 nfats = bpb_u8(0x10);
+    u64 spf = bpb_u16(0x16);
+    u64 root_ents = bpb_u16(0x11);
+    u64 root_addr = RAMDISK + (reserved + nfats * spf) * 512;
+    u64 e = 0;
+    while (e < root_ents) {
+        u8* ent = (u8*) (root_addr + e * 32);
+        if (ent[0] == 0 || ent[0] == 0xE5) { return root_addr + e * 32; }
+        e = e + 1;
+    }
+    return 0;
+}
+
+// Borra un fichero: libera su cadena de clusters (entradas FAT a 0) y marca su
+// entrada de directorio como borrada (primer byte 0xE5).  Devuelve 1 si lo
+// borro, 0 si no existia.
+u64 fat_delete(char* name) {
+    u64 ent = fat_find(name);
+    if (ent == 0) { return 0; }
+    u16* first_p = (u16*) (ent + 0x1A);
+    u64 c = (u64) first_p[0];
+    while (c >= 2 && c < 0xFF8) {
+        u64 nx = fat_next(c);
+        fat_set_next(c, 0);                        // marcar cluster libre
+        c = nx;
+    }
+    u8* e = (u8*) ent;
+    e[0] = 0xE5;                                    // entrada borrada
+    return 1;
+}
+
+// Crea (o sobrescribe) un fichero `name` con `size` bytes de `src`.  Aloca los
+// clusters necesarios, encadena la FAT, escribe los datos y rellena la entrada
+// de directorio (nombre 8.3, attr=archivo, primer cluster, tamano).  Devuelve
+// los bytes escritos, o 0 si fallo (root lleno / disco lleno).
+u64 fat_write(char* name, u8* src, u64 size) {
+    if (fat_find(name) != 0) { fat_delete(name); }  // sobrescritura
+    u64 ent = fat_new_entry();
+    if (ent == 0) { return 0; }                     // root lleno
+    u8* e = (u8*) ent;
+    u64 z = 0;
+    while (z < 32) { e[z] = 0; z = z + 1; }          // limpiar la entrada
+    fat_mk83(name, e);                               // nombre 8.3
+    e[0x0B] = 0x20;                                  // attr = ARCHIVE
+    u64 spc = bpb_u8(0x0D);
+    u64 csize = spc * 512;
+    u64 data_start = fat_data_start();
+    u64 first = 0;
+    u64 prev = 0;
+    u64 written = 0;
+    while (written < size) {
+        u64 c = fat_alloc_cluster();
+        if (c == 0) { return written; }              // disco lleno
+        fat_set_next(c, 0xFFF);                       // EOC (reservar ya)
+        if (first == 0) { first = c; } else { fat_set_next(prev, c); }
+        u64 sect = data_start + (c - 2) * spc;
+        u8* dst = (u8*) (RAMDISK + sect * 512);
+        u64 k = 0;
+        while (k < csize && written < size) {
+            dst[k] = src[written];
+            written = written + 1;
+            k = k + 1;
+        }
+        prev = c;
+    }
+    u16* fp = (u16*) (ent + 0x1A);
+    fp[0] = (u16) first;                             // primer cluster
+    u32* sp = (u32*) (ent + 0x1C);
+    sp[0] = (u32) size;                              // tamano
+    return written;
+}
+
+// Crea un subdirectorio `name`: entrada con attr DIRECTORY (0x10) + un cluster
+// inicializado con las entradas "." (el propio dir) y ".." (root).  El shell
+// actual no navega subdirectorios, pero `ls` lo muestra como <DIR>.  Devuelve 1
+// si lo creo, 0 si fallo.
+u64 fat_mkdir(char* name) {
+    if (fat_find(name) != 0) { return 0; }           // ya existe
+    u64 ent = fat_new_entry();
+    if (ent == 0) { return 0; }
+    u64 c = fat_alloc_cluster();
+    if (c == 0) { return 0; }
+    fat_set_next(c, 0xFFF);                           // 1 cluster, EOC
+    u8* e = (u8*) ent;
+    u64 z = 0;
+    while (z < 32) { e[z] = 0; z = z + 1; }
+    fat_mk83(name, e);
+    e[0x0B] = 0x10;                                   // attr = DIRECTORY
+    u16* fp = (u16*) (ent + 0x1A);
+    fp[0] = (u16) c;
+    // Inicializar el cluster del dir: "." y ".." + resto a cero.
+    u64 spc = bpb_u8(0x0D);
+    u64 sect = fat_data_start() + (c - 2) * spc;
+    u8* d = (u8*) (RAMDISK + sect * 512);
+    z = 0;
+    while (z < spc * 512) { d[z] = 0; z = z + 1; }
+    u64 j = 0;
+    while (j < 11) { d[j] = 32; d[32 + j] = 32; j = j + 1; }
+    d[0] = 46;                                        // "."
+    d[0x0B] = 0x10;
+    u16* dotc = (u16*) (d + 0x1A);
+    dotc[0] = (u16) c;                               // "." -> este dir
+    d[32] = 46; d[33] = 46;                          // ".."
+    d[32 + 0x0B] = 0x10;
+    u16* ddotc = (u16*) (d + 32 + 0x1A);
+    ddotc[0] = 0;                                    // ".." -> root
+    return 1;
+}
+
+// Carga el fichero de la entrada `ent` a `dst` siguiendo su cadena de clusters.
+// Devuelve el numero de bytes escritos (el tamano del fichero).
+u64 fat_load(u64 ent, u8* dst) {
+    u16* first_p = (u16*) (ent + 0x1A);            // primer cluster (low word)
+    u32* size_p = (u32*) (ent + 0x1C);             // tamano del fichero
+    u64 size = (u64) size_p[0];
+    u64 spc = bpb_u8(0x0D);
+    u64 reserved = bpb_u16(0x0E);
+    u64 nfats = bpb_u8(0x10);
+    u64 spf = bpb_u16(0x16);
+    u64 root_ents = bpb_u16(0x11);
+    u64 root_sects = (root_ents * 32 + 511) / 512;
+    u64 data_start = reserved + nfats * spf + root_sects;
+    u64 cluster = (u64) first_p[0];
+    u64 csize = spc * 512;
+    u64 written = 0;
+    // Cluster valido: 2..0xFF7; >= 0xFF8 es fin-de-cadena (EOC).
+    while (cluster >= 2 && cluster < 0xFF8 && written < size) {
+        u64 sect = data_start + (cluster - 2) * spc;
+        u8* src = (u8*) (RAMDISK + sect * 512);
+        u64 k = 0;
+        while (k < csize && written < size) {
+            dst[written] = src[k];
+            written = written + 1;
+            k = k + 1;
+        }
+        cluster = fat_next(cluster);
+    }
+    return written;
+}

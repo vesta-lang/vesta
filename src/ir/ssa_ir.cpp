@@ -118,6 +118,17 @@ static const OpEntry OP_TABLE[] = {
     {"fceil", IrOp::FCEIL},
     {"fround", IrOp::FROUND},
     {"ftrunc", IrOp::FTRUNC},
+    // ops vectoriales fusionadas (auto-vectorizacion)
+    {"vec_unop", IrOp::VEC_UNOP},
+    {"vec_binop", IrOp::VEC_BINOP},
+    {"vec_fma", IrOp::VEC_FMA},
+    {"vec_acc_zero", IrOp::VEC_ACC_ZERO},
+    {"vec_acc_add", IrOp::VEC_ACC_ADD},
+    {"vec_acc_fma", IrOp::VEC_ACC_FMA},
+    {"vec_acc_store", IrOp::VEC_ACC_STORE},
+    {"vec_acc_combine", IrOp::VEC_ACC_COMBINE},
+    {"vec_binop_s", IrOp::VEC_BINOP_S},
+    {"vec_bcast", IrOp::VEC_BCAST},
     // aritmetica entera extendida (Math-IR-promote wave 4)
     {"iabs", IrOp::IABS},
     {"imin", IrOp::IMIN},
@@ -188,6 +199,7 @@ static const OpEntry OP_TABLE[] = {
     {"make_closure", IrOp::MAKE_CLOSURE},
     {"make_variant", IrOp::MAKE_VARIANT},
     {"match_variant", IrOp::MATCH_VARIANT},
+    {"switch_dense", IrOp::SWITCH_DENSE},
     {"calln", IrOp::CALLN},
     // memoria
     {"alloca", IrOp::ALLOCA},
@@ -434,7 +446,7 @@ size_t IrModule::StaticDataStore::push_back(std::vector<uint8_t> &&v) {
 }
 
 void IrModule::StaticDataStore::append_raw_entries(StaticDataStore &&other) {
-    // Anyade los bytes de @c other.bytes al final del pool propio
+    // añade los bytes de @c other.bytes al final del pool propio
     // (con padding intermedio) y ajusta los offsets de las entries.
     if (other.entries.empty()) return;
     // Padding hasta alignment_default antes del bloque del dep.
@@ -458,7 +470,7 @@ void IrModule::StaticDataStore::append_raw_entries(StaticDataStore &&other) {
 uint64_t IrModule::intern_static_data(std::vector<uint8_t> bytes) {
     // Dedup lineal por bytes.  Para programas tipicos (decenas a
     // cientos de literales) el coste es despreciable; arquitectura
-    // futura podria anyadir un map<hash, idx> si el problema escala.
+    // futura podria añadir un map<hash, idx> si el problema escala.
     const uint64_t h = fnv1a_local_64(bytes.data(), bytes.size());
     for (size_t i = 0; i < static_data.size(); ++i) {
         if (static_data.meta_at(i).content_hash == h &&
@@ -545,7 +557,12 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::TRYENTER || ins.op == IrOp::GCWB_IR ||
         ins.op == IrOp::GCDEREF_IR || ins.op == IrOp::ARRAY_STORE ||
         ins.op == IrOp::RETHROW || ins.op == IrOp::RSPAWN_RETURN ||
-        ins.op == IrOp::SMARTPTR_FREE || ins.op == IrOp::STRFINALIZE) {
+        ins.op == IrOp::SMARTPTR_FREE || ins.op == IrOp::STRFINALIZE ||
+        ins.op == IrOp::VEC_UNOP || ins.op == IrOp::VEC_BINOP || ins.op == IrOp::VEC_FMA ||
+        ins.op == IrOp::VEC_ACC_ZERO || ins.op == IrOp::VEC_ACC_ADD ||
+        ins.op == IrOp::VEC_ACC_FMA || ins.op == IrOp::VEC_ACC_STORE ||
+        ins.op == IrOp::VEC_ACC_COMBINE ||
+        ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_BCAST) {
         print_type = false;
     }
     if (print_type) o << "." << ir_type_name(ins.type);
@@ -680,6 +697,21 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         break;
     }
 
+    case IrOp::SWITCH_DENSE: {
+        // switch_dense %tag, min=M, default=BB, [t0, t1, ...]
+        o << " ";
+        if (!ins.operands.empty()) print_val(o, fn, ins.operands[0]);
+        o << ", min=" << static_cast<int64_t>(ins.imm & 0xFFFFFFFFu)
+          << (((ins.imm >> 32) & 1u) ? " no_bounds" : "")
+          << ", default=BB" << ins.target_block << ", [";
+        for (size_t i = 0; i < ins.jump_targets.size(); ++i) {
+            if (i) o << ", ";
+            o << "BB" << ins.jump_targets[i];
+        }
+        o << "]";
+        break;
+    }
+
     case IrOp::CALLVIRT:
         // callvirt.T %obj, vtbl_idx(args...)
         o << " ";
@@ -735,6 +767,40 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         print_val(o, fn, ins.operands[1]);
         o << ", ";
         print_val(o, fn, ins.operands[2]);
+        break;
+
+    case IrOp::VEC_UNOP:
+        // vec_unop.fN %dst_ptr, %a_ptr   imm=(subop<<8)|ancho
+        o << " ";
+        print_val(o, fn, ins.operands[0]);
+        o << ", ";
+        print_val(o, fn, ins.operands[1]);
+        o << ", imm=" << ins.imm;
+        break;
+
+    case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
+    case IrOp::VEC_ACC_ZERO:
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE:
+    case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_BINOP_S:
+        // vec_binop.fN %dst_ptr, %a_ptr, %b_ptr   imm=(subop<<8)|ancho
+        o << " ";
+        print_val(o, fn, ins.operands[0]);
+        o << ", ";
+        print_val(o, fn, ins.operands[1]);
+        o << ", ";
+        print_val(o, fn, ins.operands[2]);
+        o << ", imm=" << ins.imm;
+        break;
+
+    case IrOp::VEC_BCAST:
+        // vec_bcast %scalar   imm=ancho
+        o << " ";
+        print_val(o, fn, ins.operands[0]);
+        o << ", imm=" << ins.imm;
         break;
 
     case IrOp::GETFIELD:

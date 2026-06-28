@@ -353,6 +353,34 @@ inline uint32_t icache_index(uint64_t pc) {
  * Para que el proceso sea elegible por el scheduler debe llamarse a
  * vm->make_ready(proc->pid) tras crearlo.
  */
+
+class ProcessVM; // fwd: el provider guarda un ProcessVM* (def mas abajo).
+
+/**
+ * @brief Implementacion de @c gc::GcRootProvider sobre un @c ProcessVM.
+ *
+ * Da al GcHeap acceso al stack/regs del proceso (scan conservativo) y a las
+ * tablas shared (Phase Z, cross-proceso) sin que @c gc_heap.cpp dependa de la
+ * VM.  Los cuerpos viven en @c proceso_runtime.cpp (donde @c runtime.h aporta
+ * la def completa de la VM); aqui solo las declaraciones.
+ */
+class ProcessVMRootProvider final : public gc::GcRootProvider {
+  public:
+    explicit ProcessVMRootProvider(ProcessVM *p) noexcept : proc_(p) {}
+    bool vm_stack_regs(uint64_t &rsp, uint64_t &stack_high,
+                       uint64_t regs[16]) override;
+    uint64_t stack_low_water() const override;
+    void set_stack_low_water(uint64_t v) override;
+    void write_back_regs(const uint64_t regs[16]) override;
+    vm::VirtualMemory *vm_mem() override;
+    bool shared_contains(const uint8_t *ptr) override;
+    uint8_t *shared_lookup(gc::GcHandle h) override;
+    gc::WaitTable *shared_wait_table() override;
+
+  private:
+    ProcessVM *proc_;
+};
+
 class ProcessVM {
   public:
     /**
@@ -555,6 +583,9 @@ class ProcessVM {
     // --- GC del proceso ---
     gc::GcHeap gc_heap{manager_mem_priv, 2 * 1024 * 1024,
                        8 * 1024 * 1024}; ///< Heap del GC (min 2 MiB, max 8 MiB)
+    /// Proveedor de raices del GC sobre este proceso (lo conecta el ctor via
+    /// gc_heap.set_root_provider).  Solo guarda `this`; seguro en member-init.
+    ProcessVMRootProvider gc_root_provider_{this};
     gc::RawAllocator raw_alloc{};        ///< Asignador raw sin GC
 
     // --- Sistema de objetos (OOP) ---
@@ -704,6 +735,14 @@ class ProcessVM {
                                      ///< los regs en el unwind).
                                      ///< R0 se preserva PERO el catch lo
                                      ///< sobreescribe con la excepcion.
+        /// Excepciones in-JIT (Opcion B).  Si != 0, el handler vive en codigo
+        /// JIT-eado (no bytecode): @c do_throw resume via @c vrt_resume_jit
+        /// (restaura @c native_rsp/@c native_rbp del frame host y salta a
+        /// @c native_catch_addr) en lugar de poner rip=handler_pc para el
+        /// interp.  0 = frame de interp (ruta clasica intacta).
+        uint64_t native_catch_addr = 0; ///< direccion nativa del bloque catch
+        uint64_t native_rsp = 0;        ///< RSP host del frame del try
+        uint64_t native_rbp = 0;        ///< RBP host del frame del try
         struct ExceptionFrame *prev; ///< Frame anterior en la pila
     };
 
@@ -729,6 +768,15 @@ class ProcessVM {
      * ProcessVM via @c free_exc_pool (en .cpp).
      */
     ExceptionFrame *exc_free_list = nullptr;
+
+    /// Excepciones in-JIT (Opcion B): handoff transitorio de RSP/RBP host del
+    /// frame del try.  El codigo JIT los escribe (MOV [rbx+off], rsp/rbp)
+    /// justo antes de llamar a @c vrt_tryenter_jit, que los lee y los copia al
+    /// @c ExceptionFrame.  Evita un 5o argumento en pila (Win64).  No es
+    /// estado persistente: solo vive entre el store del JIT y la lectura del
+    /// wrapper (inmediata, sin reentradas en medio incluso con try anidados).
+    uint64_t jit_exc_rsp = 0;
+    uint64_t jit_exc_rbp = 0;
 
     /// Slot reusable para FatalError instance.  Aloca lazy en
     /// el primer @c throw_fatal y se reutiliza en throws sucesivos

@@ -19,6 +19,7 @@
  * y WaitOnAddress/WakeByAddressAll en Windows.
  */
 #include "util/ThreadPool.h"
+#include <algorithm> // UCRT64: no transitivo
 
 #include <iostream>
 #include <utility>

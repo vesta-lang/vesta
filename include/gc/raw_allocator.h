@@ -414,7 +414,7 @@ class RawAllocator {
                   "SlabChunkInfo debe ser 24 bytes para cache locality");
 
     /// @brief Vector de chunks del slab, SIEMPRE ORDENADO por
-    /// @c base ascendente.  @c slab_grow_class anyade y reordena
+    /// @c base ascendente.  @c slab_grow_class añade y reordena
     /// (inserts son raros: ~1 por cada 500+ allocs del mismo class).
     /// @c free hace binary search para encontrar el chunk que
     /// contiene un ptr dado.

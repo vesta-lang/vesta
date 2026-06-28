@@ -37,7 +37,7 @@
  *   necesita verificar retornos de error.
  *
  * - Ningun simbolo aqui puede cambiar de signatura sin bumpear el
- *   @c VRT_API_VERSION_MAJOR.  Bumps minor permiten ANYADIR funciones
+ *   @c VRT_API_VERSION_MAJOR.  Bumps minor permiten añaDIR funciones
  *   nuevas al final, jamas mutar las existentes.
  *
  * = Uso desde el JIT =
@@ -238,6 +238,15 @@ void vrt_monitor_notify_all(vrt_proc *proc, vrt_handle obj);
 void vrt_throw_fatal(vrt_proc *proc, uint32_t kind, const char *message);
 
 /**
+ * @brief Lanza FATAL_NULL_POINTER (unwrap sobre null).  Atajo 1-arg para
+ * el chequeo inline de UNWRAP en el JIT vreg VM_ABI: el codegen emite
+ * `test v,v; jne ok; call vrt_unwrap_throw(proc); ok:` -> el camino frio
+ * (null) llama aqui.  Equivale al throw del bytecode UNWRAP (0x26).
+ * Nunca retorna (salta al handler o aborta).
+ */
+void vrt_unwrap_throw(vrt_proc *proc);
+
+/**
  * @brief Push de un frame de manejo de excepciones.
  *
  * El handler_pc es la direccion absoluta del catch block (en bytecode
@@ -250,6 +259,46 @@ void vrt_tryenter(vrt_proc *proc, uint64_t handler_pc, vrt_class *type_class);
 
 /** @brief Pop del tope del exc_frame_stack (salida normal del try). */
 void vrt_tryleave(vrt_proc *proc);
+
+/**
+ * @brief Push de un frame de excepcion in-JIT (Opcion B): el handler vive en
+ *        codigo JIT-eado, no en bytecode.
+ *
+ * @param proc              proceso actual.
+ * @param type_class        ClassInfo* a matchear; NULL = catch-all.
+ * @param native_catch_addr direccion nativa del bloque catch JIT.
+ *
+ * El RSP/RBP host del frame del try se pasan por handoff transitorio en
+ * @c proc->jit_exc_rsp / @c proc->jit_exc_rbp (el JIT los escribe justo antes
+ * de llamar aqui), evitando un 5o argumento en pila en Win64.  A diferencia de
+ * @c vrt_tryenter (handler en bytecode), un throw que matchee este frame NO
+ * resume el interp: @c do_throw llama @c vrt_resume_jit para saltar a
+ * @c native_catch_addr con el frame host restaurado.  La excepcion la deja en
+ * @c proc->registers[0] (el catch la lee via LANDINGPAD).
+ */
+void vrt_tryenter_jit(vrt_proc *proc, vrt_class *type_class,
+                      uint64_t native_catch_addr);
+
+/**
+ * @brief Reanuda un catch in-JIT: restaura el frame host y salta al catch.
+ *
+ * Stub asm (UNICA pieza arch-especifica del modelo de excepciones JIT/AOT):
+ * @c rbp=native_rbp; @c rsp=native_rsp; @c jmp catch_addr.  Abandona los
+ * frames nativos intermedios (calls anidados + los frames C de
+ * @c vrt_throw_user/@c do_throw) reseteando RSP.  NUNCA retorna.  La excepcion
+ * ya esta en @c proc->registers[0] (la puso @c do_throw); el catch la lee via
+ * LANDINGPAD.  @c do_throw ya hizo la limpieza VM (host_allocas, frames OOP)
+ * antes de llamar aqui.
+ */
+#if defined(_MSC_VER)
+__declspec(noreturn)
+#endif
+void vrt_resume_jit(uint64_t catch_addr, uint64_t native_rsp,
+                    uint64_t native_rbp, uint64_t proc)
+#if defined(__GNUC__)
+    __attribute__((noreturn))
+#endif
+    ;
 
 /**
  * @brief Lanza una excepcion user-defined desde codigo JIT.
@@ -575,6 +624,27 @@ uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls);
 vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls);
 
 /**
+ * @brief NEWOBJS: aloca un objeto de @p cls en el SharedHeap (cross-process)
+ *        y devuelve su GcHandle (con SHARED_HANDLE_BIT).  Equivale al opcode
+ *        newobjs (0xA6).  GC_NULL_HANDLE si cls es null u OOM.
+ */
+vrt_handle vrt_newobjs(vrt_proc *proc, vrt_class *cls);
+
+/**
+ * @brief DLOPEN: carga una libreria nativa (LoadLibrary/dlopen) cuyo path
+ *        (UTF-8) vive en @p path_vaddr (len @p path_len) del vm_mem.
+ *        Devuelve el handle host (i64); lanza FatalError si falla.
+ */
+uint64_t vrt_dlopen(vrt_proc *proc, uint64_t path_vaddr, uint32_t path_len);
+
+/**
+ * @brief STRCONV: convierte el StringObject @p src a la codificacion @p enc
+ *        (StringEncoding).  Devuelve un GcHandle nuevo (o el mismo si ya esta
+ *        en esa codificacion).  Equivale al opcode strconv (0x4A).
+ */
+vrt_handle vrt_str_conv(vrt_proc *proc, vrt_handle src, uint32_t enc);
+
+/**
  * @brief Phase D.7.opt: registra un handle para un raw_ptr de objeto ya
  *        alocado por bump-pointer inline en JIT.
  *
@@ -601,21 +671,21 @@ uint64_t vrt_register_alloc(vrt_proc *proc, uint8_t *raw);
 vrt_class *vrt_defclass(vrt_proc *proc, uint64_t params_vaddr);
 
 /**
- * @brief Anyade un field a una clase (deffield bytecode).
+ * @brief añade un field a una clase (deffield bytecode).
  *
  * @return 1 si OK, 0 si fallo.
  */
 int32_t vrt_deffield(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr);
 
 /**
- * @brief Anyade un metodo a una clase (defmethod bytecode).
+ * @brief añade un metodo a una clase (defmethod bytecode).
  *
  * @return vtable_index del metodo recien anadido, o UINT32_MAX si fallo.
  */
 uint32_t vrt_defmethod(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr);
 
 /**
- * @brief Anyade un advice a un metodo (addadvice bytecode).
+ * @brief añade un advice a un metodo (addadvice bytecode).
  *
  * @return 1 si OK, 0 si fallo.
  */

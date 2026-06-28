@@ -108,7 +108,7 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    5; // v5: + contratos @complexity por dimension (partial/total x pre/post)
+    6; // v6: + jump_targets por instr (SWITCH_DENSE jump table)
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a
@@ -121,7 +121,7 @@ static constexpr uint16_t IR_SECTION_VERSION =
  *            +12 [..] functions (concat de serialize_function output)
  *
  * @param functions IR functions a incluir en la seccion.
- * @return bytes serializados.  El caller los anyade al .velb y
+ * @return bytes serializados.  El caller los añade al .velb y
  *         escribe el offset/size en el header.
  */
 std::vector<uint8_t> emit_ir_section(const std::vector<IrFunction> &functions);
@@ -154,7 +154,8 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    6; // v6: + contratos @complexity por dimension (partial/total x pre/post)
+    9; // v9: + native_imports (lib,name) -> el AOT mapea cada simbolo FFI a su
+       // DLL real (kernel32/user32/...) en vez de asumir msvcrt
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vexir`.

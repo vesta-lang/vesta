@@ -100,6 +100,13 @@ CompileResult compile_vex_source(const std::string &source,
                                          std::move(ns_sym));
         }
     }
+    // Si el LSP pidio volcar valores comptime, activamos la captura
+    // de las variables locales de los bloques `comptime { ... }`
+    // ANTES de run() (para que check_stmt las acumule al evaluarlos).
+    // Gateado: cero coste cuando dump_comptime_values esta off.
+    if (opts.dump_comptime_values) {
+        tc.set_capture_comptime_block_locals(true);
+    }
     if (!tc.run()) {
         res.ok = false;
         return res;
@@ -124,6 +131,72 @@ CompileResult compile_vex_source(const std::string &source,
         e.expected_str = *v.expected_str;
         e.src_loc = *v.src_loc;
         res.macro_expectations.push_back(std::move(e));
+    }
+
+    // 2.4. (opcional) Volcar los valores comptime computados.  Estrictamente
+    // gateado por @c dump_comptime_values (default false): si esta apagado,
+    // NADA cambia respecto al flujo historico.  Solo LEEMOS las constantes
+    // comptime top-level que el TypeChecker ya resolvio (sin tocar lowering
+    // ni la logica de macros).  Lo consume el metodo LSP vesta/comptimeValues.
+    if (opts.dump_comptime_values) {
+        // Renderiza un ComptimeConst a (type_kind, value_str) legible.
+        // Conservador: int -> decimal; string -> texto entre comillas;
+        // array -> resumen "[n elementos]"; struct -> "{n campos}";
+        // type -> nombre del tipo.
+        for (const auto &kv : tc.comptime_const_values()) {
+            const auto &name = kv.first;
+            const auto &c = kv.second;
+            CompileResult::ComptimeValueSnapshot snap;
+            snap.name = name;
+            snap.scope = ""; // top-level (global); best-effort.
+            if (c.is_type) {
+                snap.type_kind = "type";
+                snap.value_str = type_to_string(c.type_val);
+            } else if (c.is_str) {
+                snap.type_kind = "string";
+                snap.value_str = "\"" + c.str_value + "\"";
+            } else if (c.is_array) {
+                snap.type_kind = "array";
+                snap.value_str =
+                    "[" + std::to_string(c.array_vals.size()) + " elementos]";
+            } else if (c.is_struct) {
+                snap.type_kind = "struct";
+                snap.value_str =
+                    "{" + std::to_string(c.struct_fields.size()) + " campos}";
+            } else {
+                snap.type_kind = "int";
+                snap.value_str = std::to_string(c.value);
+            }
+            res.comptime_values.push_back(std::move(snap));
+        }
+        // Ademas de las constantes top-level, volcamos las variables
+        // locales que computaron los bloques `comptime { ... }` (arrays
+        // y structs poblados por loops, etc).  El TypeChecker las captura
+        // justo antes de salir de cada bloque.
+        for (const auto &b : tc.comptime_block_snapshots()) {
+            CompileResult::ComptimeValueSnapshot snap;
+            snap.name = b.name;
+            snap.scope = b.scope;
+            snap.type_kind = b.type_kind;
+            snap.value_str = b.value_str;
+            res.comptime_values.push_back(std::move(snap));
+        }
+        // Y los valores que resolvieron los builtins de introspeccion
+        // (sizeof<T>, alignof<T>, kind<T>, type_id<T>, typename<T>), con su
+        // ubicacion para que el LSP los muestre por hover sobre la expresion.
+        for (const auto &h : tc.comptime_builtin_hits()) {
+            CompileResult::ComptimeValueSnapshot snap;
+            snap.name = h.name;
+            snap.scope = "";
+            snap.type_kind = h.type_kind;
+            snap.value_str = h.value_str;
+            snap.loc = h.loc;
+            // builtin_kind = el nombre antes del '<' (p.ej. "sizeof").
+            const size_t lt = h.name.find('<');
+            snap.builtin_kind =
+                (lt != std::string::npos) ? h.name.substr(0, lt) : h.name;
+            res.comptime_values.push_back(std::move(snap));
+        }
     }
 
     // 2.5. (opcional) Diagrama Mermaid del AST post type-check.  Lo
@@ -157,6 +230,10 @@ CompileResult compile_vex_source(const std::string &source,
         lo.set_instrument_mode(opts.instrument_mode);
     }
     lo.set_native_poo(opts.native_poo); // Phase AOT.2.b: POO nativa (-m aot)
+    lo.set_asm_target_bits(opts.asm_target_bits); // arch del inline-asm @Naked
+    lo.set_aot_vec_width(opts.aot_vec_width); // ancho SIMD del target (--float-isa)
+    lo.set_aot_auto_vec(opts.aot_auto_vec);   // --float-isa auto: chunk dual
+    lo.set_emit_comptime_fns(opts.emit_comptime_fns); // solo-LSP: inspeccion
     // C-3: detectar @StringConcat / @StringEq ANTES del lowering.  A
     // diferencia de @AllocatorOverride (que reescribe IR post-lowering),
     // el override del string built-in debe afectar el lowering MISMO del

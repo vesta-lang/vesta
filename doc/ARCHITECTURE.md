@@ -123,7 +123,7 @@ Total: ~30,000 LOC C++ para el frontend completo + optimizador.
 
 ## 3. El formato bytecode .velb
 
-VestaLangBinary v3 (anyadido seccion `@sym` en 2026-05-14, seccion `@ir` en
+VestaLangBinary v3 (añadido seccion `@sym` en 2026-05-14, seccion `@ir` en
 2026-05-13).
 
 **Header** (144 bytes):
@@ -359,7 +359,7 @@ para evitar lost wakeups. `make_ready` es idempotente y usa CAS-loop sobre
 
 Cada VM mantiene un registro de nodos conocidos: `{idx, ip:port, name,
 node_id, state, tls_config, ...}`. Discovery UDP lo poblea automaticamente
-o se anyaden con `--dist-add-node ip:port`.
+o se añaden con `--dist-add-node ip:port`.
 
 ### Connection management
 

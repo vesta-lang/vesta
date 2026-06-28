@@ -43,17 +43,36 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                     break;
 
                 case ir::IrOp::RAW_FREE: {
-                    // raw_free %ptr  ->  call free(%ptr), salvo que %ptr
-                    // provenga de un ALLOCA (pila): entonces NOP (no se
-                    // libera la pila; liberar seria un dangling/crash).
-                    bool is_stack = false;
+                    // raw_free %ptr  ->  call free(%ptr), salvo que %ptr:
+                    //   (a) provenga de un ALLOCA (pila): NOP (liberar pila =
+                    //       dangling/crash);
+                    //   (b) sea un valor COLGANTE -- sin definicion en la fn y
+                    //       que NO es un parametro.  Esto pasa cuando un pase
+                    //       (scalar-replace / dead-alloc-elim) ELIMINA el objeto
+                    //       pero deja su `raw_free` referenciando un SSA value
+                    //       ya inexistente.  El interp/JIT/PE lo toleran, pero
+                    //       `free()` de libc aborta ("invalid pointer", visto en
+                    //       callvirt_hot via gcc).  NOPearlo es correcto: el
+                    //       objeto ya no existe, no hay nada que liberar.
+                    bool nop = in.operands.empty();
                     if (!in.operands.empty()) {
-                        auto it = def_op.find(in.operands[0]);
-                        if (it != def_op.end() &&
-                            it->second == ir::IrOp::ALLOCA)
-                            is_stack = true;
+                        const ir::IrValueId p = in.operands[0];
+                        auto it = def_op.find(p);
+                        if (it != def_op.end()) {
+                            if (it->second == ir::IrOp::ALLOCA) nop = true;
+                        } else {
+                            // sin def: param (heap legitimo pasado) -> free;
+                            // colgante (objeto eliminado) -> NOP.
+                            bool is_param = false;
+                            for (ir::IrValueId pv : fn.params)
+                                if (pv == p) {
+                                    is_param = true;
+                                    break;
+                                }
+                            if (!is_param) nop = true;
+                        }
                     }
-                    if (is_stack) {
+                    if (nop) {
                         in.op = ir::IrOp::NOP;
                         in.operands.clear();
                         in.func_name.clear();
@@ -68,13 +87,14 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                 case ir::IrOp::CALL:
                 case ir::IrOp::TAILCALL:
                     // AOT.2.d: el `new` nativo emite calloc(1,size) para
-                    // zero-init.  Con un @AllocatorOverride lo reescribimos
-                    // a alloc_sym(size) -- 1 arg, descartando el `count` (=1)
-                    // -> en freestanding el `new` usa el allocator del
-                    // usuario sin arrastrar calloc de libc.  El override
-                    // debe zerificar (kzalloc) para preservar la semantica.
-                    // Cubre tanto CALL como TAILCALL (un `new` cuyo ctor es
-                    // trivial -> el optimizador promueve calloc a tail-call).
+                    // zero-init.  Con un @AllocatorOverride (incluido el slab
+                    // vex_mem por defecto) lo reescribimos a alloc_sym(size)
+                    // -- 1 arg, descartando el `count` (=1) -> el `new` usa el
+                    // allocator override sin arrastrar calloc de libc.  El
+                    // override debe zerificar (convencion kzalloc) para
+                    // preservar el cero-init de los campos no escritos.  Cubre
+                    // CALL y TAILCALL (un `new` con ctor trivial -> el
+                    // optimizador promueve calloc a tail-call).
                     if (cfg.has_alloc_override && in.func_name == "calloc" &&
                         in.operands.size() == 2) {
                         in.func_name = cfg.alloc_sym;

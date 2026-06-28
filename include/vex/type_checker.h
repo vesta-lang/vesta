@@ -118,6 +118,14 @@ struct FunctionSig {
     /// al label mangled mientras que el resolver de nombres sigue
     /// usando el nombre publico (`foo`).  Cierra la limitacion L.4.
     std::string mangled_label;
+    /// Variadicos: si @c true, el ULTIMO param es un rest `T... name`.  En
+    /// @c param_types el ultimo entry es @c T* (puntero al elemento) y
+    /// @c variadic_elem guarda el tipo del ELEMENTO T (para validar los args
+    /// trailing).  La funcion acepta >= (N-1) args (N = param_types.size());
+    /// los args extra se empacan en un array de pila y se pasan como (ptr,
+    /// count); el count va en un param i64 OCULTO al final.
+    bool is_variadic = false;
+    Type variadic_elem;
 };
 
 /**
@@ -431,6 +439,18 @@ class TypeChecker {
     }
 
     /**
+     * @brief Upcast implicito clase concreta -> interfaz.
+     *
+     * Devuelve true si @p value es una CLASE concreta que implementa la
+     * INTERFAZ @p target (directamente o via su cadena de super).  Habilita
+     * el polimorfismo: `ISh s = new Sq();`, `s = new Sq();`, `use(new Sq())`
+     * cuando `use(ISh)`.  Sin esto el type-checker rechazaba el upcast y el
+     * polimorfismo con tipo concreto desconocido era inalcanzable.
+     */
+    bool value_assignable_to_interface(const Type &target,
+                                       const Type &value) const noexcept;
+
+    /**
      * @brief Acceso de solo lectura a la tabla de layouts de enums.
      *
      * El lowering la consulta para emitir el codigo de constructor de
@@ -482,7 +502,7 @@ class TypeChecker {
                                   const std::vector<Type> &args,
                                   const SourceLoc &loc);
 
-    /// L2.3: ¿el nombre es un enum template generico?
+    /// L2.3: el nombre es un enum template generico?
     bool is_generic_enum_template(const std::string &name) const noexcept {
         return generic_enum_templates_.count(name) > 0;
     }
@@ -888,7 +908,74 @@ class TypeChecker {
         return false;
     }
 
+    /**
+     * @struct ComptimeBlockSnapshot
+     * @brief valor capturado de una variable local (o assert) de un
+     *        bloque @c comptime { ... } tras evaluarlo.
+     *
+     * Solo se rellena cuando @c capture_comptime_block_locals esta
+     * activo (lo activa el LSP via @c dump_comptime_values).  Cero
+     * coste en builds normales.
+     */
+    struct ComptimeBlockSnapshot {
+        std::string name;      ///< Nombre de la variable o "static_assert".
+        std::string scope;     ///< Ambito; e.g. "comptime@<linea>".
+        std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type"|"assert".
+        std::string value_str; ///< Representacion legible del valor.
+    };
+
+    /// Activa/desactiva la captura de locales de bloques comptime.
+    void set_capture_comptime_block_locals(bool on) noexcept {
+        capture_comptime_block_locals_ = on;
+    }
+    /// Snapshots acumulados de los bloques @c comptime { ... }.
+    const std::vector<ComptimeBlockSnapshot> &
+    comptime_block_snapshots() const noexcept {
+        return comptime_block_snapshots_;
+    }
+
+    /**
+     * @struct ComptimeBuiltinHit
+     * @brief valor que un builtin de introspeccion (@c sizeof<T>,
+     *        @c alignof<T>, @c kind<T>, @c type_id<T>, @c typename<T>)
+     *        resolvio en tiempo de compilacion, con la ubicacion de la
+     *        expresion para que el LSP lo muestre en hover / inspector.
+     *
+     * Solo se rellena con @c capture_comptime_block_locals_ activo (lo
+     * activa el LSP via @c dump_comptime_values).  Cero coste normal.
+     */
+    struct ComptimeBuiltinHit {
+        SourceLoc loc;         ///< loc del nombre del builtin (para el hover).
+        std::string name;      ///< Expresion legible: "sizeof<i32>".
+        std::string type_kind; ///< "int"|"string".
+        std::string value_str; ///< Valor: "4", "0 (Primitive)", "\"i32\"".
+    };
+    /// Valores de builtins comptime resueltos (sizeof/alignof/kind/...).
+    const std::vector<ComptimeBuiltinHit> &
+    comptime_builtin_hits() const noexcept {
+        return comptime_builtin_hits_;
+    }
+
   private:
+    /// Serializa un @c ComptimeValue (elemento de array / campo de
+    /// struct) a texto legible, recursivo y acotado.
+    static std::string render_comptime_value(const ComptimeValue &v);
+
+    bool capture_comptime_block_locals_ = false;
+    std::vector<ComptimeBlockSnapshot> comptime_block_snapshots_;
+    std::vector<ComptimeBuiltinHit> comptime_builtin_hits_;
+
+    /// Valor comptime (int/bool) de variables locales cuyo init es
+    /// comptime-evaluable, para evaluar despues la condicion de un `if`.
+    /// Solo se llena con @c capture_comptime_block_locals_ activo (LSP).
+    std::unordered_map<std::string, int64_t> lsp_var_values_;
+    /// Mini-evaluador comptime de enteros/bools: literales, variables conocidas
+    /// (@c lsp_var_values_), builtins escalares y operadores logicos/aritmeticos.
+    /// Devuelve true y escribe @p out si la expresion es evaluable.
+    bool lsp_eval_int(const ast::Expr *e, int64_t *out);
+    /// Evalua un builtin de introspeccion que da un escalar/bool (sizeof,
+    /// field_count, has_field, is_subtype, ...).  No cubre los que dan string.
+    bool lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out);
     std::unordered_map<std::string, ComptimeConst> comptime_const_values_;
     std::vector<std::unordered_map<std::string, ComptimeConst>>
         comptime_const_locals_;
@@ -1096,7 +1183,7 @@ class TypeChecker {
     uint32_t register_imported_namespace(const std::string &local_name,
                                          const std::string &module_name);
 
-    /// @brief Anyade un simbolo al namespace registrado en @p ns_index.
+    /// @brief anyade un simbolo al namespace registrado en @p ns_index.
     /// Llamado por el compiler_project durante la inyeccion de cada
     /// VexiSymbol cuyo modulo se importo plain (sin `only`).
     void register_namespace_symbol(uint32_t ns_index,
@@ -1441,6 +1528,9 @@ class TypeChecker {
     /// `comptime const` automaticamente para que los IdentExpr
     /// posteriores sean resoluble por el comptime evaluator.
     bool current_fn_is_macro_ = false;
+    /// @NoExcept/@NoExceptions: la funcion actual no admite excepciones.
+    /// check_stmt rechaza throw/try/catch cuando es true.
+    bool current_fn_is_noexcept_ = false;
 
     // Conteo de errores al inicio del run() para detectar exito.
     size_t initial_errors_ = 0;

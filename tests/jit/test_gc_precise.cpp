@@ -22,7 +22,7 @@
  *      hay un bug del conservative (improbable).
  *
  * NOTE: el test end-to-end "JIT code aloca + GC preserva handle" llega
- * cuando D.3 anyada CALL al selector.  Pre-D.3 no podemos disparar el
+ * cuando D.3 añada CALL al selector.  Pre-D.3 no podemos disparar el
  * caso real desde JIT-eated code.
  */
 

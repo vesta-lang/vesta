@@ -33,6 +33,18 @@
 
 #include <cstdio>
 #include <cstring>
+#include <new> // placement-new (vrt_newobjs)
+#include <string>
+
+/* FFI runtime (vrt_dlopen): API de carga dinamica del SO. */
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #include "gc/gc_heap.h"
 #include "jit/auto_jit.h"
@@ -46,6 +58,7 @@
 #include "runtime/manager_runtime.h"
 #include "runtime/native_invoke.h"
 #include "runtime/proceso_runtime.h"
+#include "runtime/string_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/string_runtime.h"
 #include "loader/string_object.h"
@@ -209,6 +222,14 @@ void vrt_throw_fatal(vrt_proc *proc, uint32_t kind, const char *message) {
     runtime::throw_fatal(as_proc(proc), kind, message);
 }
 
+void vrt_unwrap_throw(vrt_proc *proc) {
+    if (!proc) return;
+    /* Mismo throw que exec_instr_unwrap (bytecode 0x26): FatalError
+     * capturable con FATAL_NULL_POINTER. */
+    runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
+                         "unwrap sobre Optional/Result/referencia null");
+}
+
 /* Forward decl: do_throw vive en exec_instruction_oop.cpp con C++ mangling.
  * NO debe estar en el extern "C" envolvente; usamos un alias que pueda ser
  * llamado desde las funciones C. */
@@ -267,6 +288,76 @@ void vrt_tryleave(vrt_proc *proc) {
     /* Push al free list (reusar campo prev). */
     top->prev = p->exc_free_list;
     p->exc_free_list = top;
+}
+
+void vrt_tryenter_jit(vrt_proc *proc, vrt_class *type_class,
+                      uint64_t native_catch_addr) {
+    /* Frame de excepcion in-JIT: el handler vive en codigo JIT (no bytecode).
+     * Igual que @c vrt_tryenter pero ademas registra native_catch_addr +
+     * native_rsp/rbp para que @c do_throw resuma via @c vrt_resume_jit.  El
+     * snapshot de regs/VM-rsp/rbp/frame_stack se mantiene (lo usa do_throw
+     * para la limpieza VM antes del salto y para restaurar R1..R15 del catch
+     * que el frontend reload-ea desde slots). */
+    if (!proc) return;
+    runtime::ProcessVM *p = as_proc(proc);
+    runtime::ProcessVM::ExceptionFrame *ef;
+    if (p->exc_free_list != nullptr) {
+        ef = p->exc_free_list;
+        p->exc_free_list = ef->prev;
+    } else {
+        ef = new runtime::ProcessVM::ExceptionFrame();
+    }
+    ef->handler_pc = 0; /* no se usa: el resume es nativo */
+    ef->type = reinterpret_cast<loader::ClassInfo *>(type_class);
+    ef->saved_rsp = p->registers.stack_pointer.qword();
+    ef->saved_rbp = p->registers.base_pointer.qword();
+    ef->saved_frame_stack = reinterpret_cast<uint64_t>(p->frame_stack);
+    for (int i = 0; i < 16; ++i)
+        ef->saved_regs[i] = p->registers.regs[i].qword();
+    ef->native_catch_addr = native_catch_addr;
+    /* RSP/RBP host del frame del try: handoff transitorio escrito por el JIT
+     * justo antes de esta llamada (evita un 5o arg en pila Win64). */
+    ef->native_rsp = p->jit_exc_rsp;
+    ef->native_rbp = p->jit_exc_rbp;
+    ef->prev = p->exc_frame_stack;
+    p->exc_frame_stack = ef;
+}
+
+#if defined(__GNUC__)
+__attribute__((noreturn))
+#endif
+void vrt_resume_jit(uint64_t catch_addr, uint64_t native_rsp,
+                    uint64_t native_rbp, uint64_t proc) {
+    /* Restaura el frame host del try y salta al bloque catch JIT.  Abandona
+     * los frames nativos intermedios reseteando RSP.
+     *
+     * CRITICO: restaurar RBX = proc.  En VM_ABI el JIT mantiene el ProcessVM*
+     * en RBX (callee-saved, fijado en el prologue).  El path del throw
+     * (vrt_throw_user/do_throw, funciones C) salvo el RBX del JIT en SUS frames
+     * y nunca lo restauro (no retornan, saltamos desde aqui) -> RBX trae basura
+     * al llegar al catch.  El catch usa RBX para acceder a proc, asi que lo
+     * recargamos.  El epilogue del catch restaura los demas callee-saved
+     * (r12-r15) desde su home en el frame (memoria intacta, rbp-relativo).
+     *
+     * Los operandos viven en registros (constraint "r"), distintos de
+     * RSP/RBP/RBX, asi que siguen validos tras cambiarlos.  Orden: RBX, RBP,
+     * RSP, JMP (cada paso solo toca su destino). */
+#if defined(__x86_64__) || defined(_M_X64)
+    __asm__ volatile("mov %3, %%rbx\n\t"
+                     "mov %0, %%rbp\n\t"
+                     "mov %1, %%rsp\n\t"
+                     "jmp *%2\n\t"
+                     :
+                     : "r"(native_rbp), "r"(native_rsp), "r"(catch_addr),
+                       "r"(proc)
+                     : "memory");
+#else
+    (void)catch_addr;
+    (void)native_rsp;
+    (void)native_rbp;
+    (void)proc;
+#endif
+    __builtin_unreachable();
 }
 
 void vrt_throw_user(vrt_proc *proc, uint64_t exc_handle) {
@@ -1126,6 +1217,58 @@ vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls) {
     hdr->class_ptr = ci;
     hdr->flags = loader::OBJ_FLAG_GC_OWNED;
     return handle;
+}
+
+/* NEWOBJS: aloca en SharedHeap (cross-process) + registra en
+ * SharedHandleTable.  Replica exec_instr_newobjs; devuelve el handle con
+ * SHARED_HANDLE_BIT.  Sin tocar proc->registers (args/retorno C). */
+vrt_handle vrt_newobjs(vrt_proc *proc, vrt_class *cls) {
+    if (!proc || !cls) return VRT_NULL_HANDLE;
+    runtime::ProcessVM *p = as_proc(proc);
+    auto *ci = reinterpret_cast<loader::ClassInfo *>(cls);
+    auto &vmr = p->scheduler.vm_reference;
+    const uint32_t sz = ci->instance_size;
+    uint8_t *payload = vmr.shared_heap.alloc(static_cast<size_t>(sz));
+    if (!payload) return VRT_NULL_HANDLE; // OOM SharedHeap
+    const uint32_t sh = vmr.shared_handle_table.register_object(payload, sz);
+    if (sh == 0) { // tabla llena
+        vmr.shared_heap.free(payload);
+        return VRT_NULL_HANDLE;
+    }
+    auto *hdr = new (payload) loader::ObjectHeader();
+    hdr->class_ptr = ci;
+    hdr->flags = loader::OBJ_FLAG_GC_OWNED;
+    hdr->hash_code = sh; // SHARED_HANDLE_BIT | shared_idx
+    return static_cast<vrt_handle>(sh);
+}
+
+/* DLOPEN: lee el path (UTF-8) de vm_mem y carga la libreria via API del SO.
+ * Replica exec_instr_dlopen; lanza FatalError capturable si falla. */
+uint64_t vrt_dlopen(vrt_proc *proc, uint64_t path_vaddr, uint32_t path_len) {
+    if (!proc) return 0;
+    runtime::ProcessVM *p = as_proc(proc);
+    std::string path(static_cast<size_t>(path_len), '\0');
+    if (path_len) p->vm_mem.read_bytes(path_vaddr, &path[0], path_len);
+    void *handle = nullptr;
+#if defined(_WIN32)
+    handle = static_cast<void *>(LoadLibraryA(path.c_str()));
+#else
+    handle = dlopen(path.c_str(), RTLD_LAZY);
+#endif
+    if (handle == nullptr) {
+        runtime::throw_fatal(p, VESTA_FATAL_NULL_POINTER,
+                             "dlopen: no se pudo cargar la libreria");
+        return 0;
+    }
+    return reinterpret_cast<uint64_t>(handle);
+}
+
+/* STRCONV: convierte un StringObject a otra codificacion.  Delega en el core
+ * compartido strconv_public (mismo algoritmo que el opcode 0x4A). */
+vrt_handle vrt_str_conv(vrt_proc *proc, vrt_handle src, uint32_t enc) {
+    if (!proc) return VRT_NULL_HANDLE;
+    return static_cast<vrt_handle>(runtime::strconv_public(
+        as_proc(proc), static_cast<gc::GcHandle>(src), enc));
 }
 
 /* ===================================================================== */

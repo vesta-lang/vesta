@@ -832,7 +832,7 @@ void import_vexi_into_typechecker(
                 s.underlying_type != "void") {
                 // No se pudo resolver el underlying (e.g. apunta a un
                 // tipo no importado todavia).  Skip silente; M5
-                // anyadira un round adicional de resolucion.
+                // añadira un round adicional de resolucion.
                 continue;
             }
             if (s.kind == VexiSymbolKind::TYPEDEF_NEW) {

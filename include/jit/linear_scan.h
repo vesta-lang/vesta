@@ -18,7 +18,7 @@
  * = Algoritmo (v1) =
  *
  * Linear-scan estilo Poletto-Sarkar, asignacion all-or-nothing por intervalo
- * (sin splitting a mitad de intervalo todavia; se anyade en una fase
+ * (sin splitting a mitad de intervalo todavia; se añade en una fase
  * posterior persiguiendo el ultimo %).  Por CLASE de registro (GP/FP) de
  * forma independiente:
  *

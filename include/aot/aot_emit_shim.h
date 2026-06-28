@@ -43,6 +43,10 @@ extern "C" {
 #define AOT_SEC_CODE 0x08u  /* contiene codigo */
 #define AOT_SEC_DATA 0x10u  /* datos inicializados */
 #define AOT_SEC_BSS 0x20u   /* datos sin inicializar (no ocupan fichero) */
+#define AOT_SEC_TLS 0x40u   /* plantilla TLS (thread_local): se describe con un \
+                               segmento PT_TLS; el cargador la copia por-hilo.   \
+                               data = parte .tdata (en fichero), bss_size =       \
+                               parte .tbss (solo memsz). */
 
 /**
  * @brief Una seccion definida por el usuario.
@@ -89,6 +93,13 @@ typedef struct {
 #define AOT_RELOC_IMM32                                                        \
     2 /* *(uint32*)site = target_value (inmediato, e.g. SIZE) */
 #define AOT_RELOC_IMM64 3 /* *(uint64*)site = target_value */
+#define AOT_RELOC_TPOFF32                                                       \
+    4 /* TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra el simbolo de         \
+       * seccion de .tdata + addend = offset; el sitio queda SIN resolver en    \
+       * el .o (el --link calcula el TPOFF TP-relativo). */
+#define AOT_RELOC_SECREL32                                                      \
+    5 /* TLS PE (Windows): *(int32*)site = offset del target dentro de su       \
+       * seccion (.tls), no la VA.  El emisor PE escribe target_off. */
 
 /**
  * @brief Una relocation a resolver tras el layout.
@@ -132,6 +143,11 @@ typedef struct {
     uint64_t elf_stack_vaddr; /* ELF: VA sugerida de la pila. 0 => 0x70000000 */
     uint64_t
         elf_stack_size; /* ELF: tamano del segmento de pila. 0 => 0x10000 */
+    /* TLS PE: seccion+offset de __vex_tls_init (el TLS callback que aplica la
+     * plantilla por-hilo).  <0 = sin callback.  El emisor sintetiza el
+     * IMAGE_TLS_DIRECTORY y registra este callback en AddressOfCallBacks. */
+    int tls_callback_section;
+    uint32_t tls_callback_off;
 } AotLayoutCfg;
 
 /**
@@ -272,6 +288,22 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
                      int num_syms, char *err, size_t err_cap);
 
 /**
+ * @brief Emite un objeto RELOCATABLE ELF32 (.o i386) a disco.
+ *
+ * Variante de 32-bit de @c aot_emit_elf_obj: ELFCLASS32 + EM_386 + structs
+ * Elf32 + @c SHT_REL (i386 usa REL, sin addend en el registro: el addend vive
+ * EN el campo de la seccion).  Relocs @c REL32 -> @c R_386_PC32, @c IMM32
+ * (ABS32 a datos) -> @c R_386_32.  No soporta @c ABS64 (no aplica en 32-bit).
+ * Linkable con @c gcc @c -m32 / @c ld.  Conserva la extension @c .o.
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
+                       const AotReloc *relocs, int num_relocs,
+                       const AotSym *syms, int num_syms, char *err,
+                       size_t err_cap);
+
+/**
  * @brief Emite un objeto RELOCATABLE COFF (.obj Windows) a disco.
  *
  * Analogo a @c aot_emit_elf_obj pero en formato COFF (Machine AMD64), linkable
@@ -289,6 +321,20 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
                       const AotReloc *relocs, int num_relocs,
                       const AotSym *syms, int num_syms, char *err,
                       size_t err_cap);
+
+/**
+ * @brief Variante COFF i386 (.obj de 32-bit) de @c aot_emit_coff_obj.
+ *
+ * Machine @c IMAGE_FILE_MACHINE_I386 (0x14c); relocs @c IMAGE_REL_I386_REL32
+ * (pc-rel) / @c IMAGE_REL_I386_DIR32 (abs32, para @c IMM32).  Sin @c ABS64.
+ * Linkable con @c gcc @c -m32 / @c link.exe.  Conserva la extension @c .obj.
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_coff32_obj(const char *path, const AotSection *secs, int num_secs,
+                        const AotReloc *relocs, int num_relocs,
+                        const AotSym *syms, int num_syms, char *err,
+                        size_t err_cap);
 
 /**
  * @brief Emite una libreria compartida ELF64 (.so, ET_DYN) a disco.
@@ -346,6 +392,34 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
 int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
                       int num_secs, const AotReloc *relocs, int num_relocs,
                       char *err, size_t err_cap);
+
+/**
+ * @brief Lee los NOMBRES exportados de una DLL/PE (delega en LibPEparse).
+ *
+ * El linker lo usa para resolver imports leyendo lo que la DLL REALMENTE
+ * exporta, en vez de una lista de simbolos embebida.  Es parte del shim, el
+ * unico punto que toca LibPEparse (frontera C/C++ del proyecto).
+ *
+ * @param path       Ruta de la DLL/PE.
+ * @param out_names  [out] array char** (calloc'd) con los nombres; liberar con
+ *                   @c aot_free_pe_export_names.
+ * @param out_count  [out] numero de nombres.
+ * @return 0 en exito (incluido un PE sin exports -> count=0); !=0 si el fichero
+ *         no se pudo abrir/parsear.
+ */
+int aot_pe_export_names(const char *path, char ***out_names, int *out_count);
+
+/** @brief Libera el array devuelto por @c aot_pe_export_names. */
+void aot_free_pe_export_names(char **names, int count);
+
+/**
+ * @brief Lee los NOMBRES exportados por la tabla dinamica de una @c .so / ELF
+ *        (delega en LibELFparse; analogo a @c aot_pe_export_names para PE).
+ *        Solo ELF64.  Liberar con @c aot_free_pe_export_names.
+ * @return 0 en exito (incluido sin dynsym -> count=0); !=0 si no se pudo
+ *         abrir/parsear.
+ */
+int aot_elf_export_names(const char *path, char ***out_names, int *out_count);
 
 #ifdef __cplusplus
 } /* extern "C" */

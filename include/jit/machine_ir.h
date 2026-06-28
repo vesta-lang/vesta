@@ -102,7 +102,7 @@ namespace jit {
  * El register allocator asigna cada clase de forma INDEPENDIENTE: un
  * vreg GP solo puede ir a un fisico GP, un vreg FP solo a un fisico FP.
  * Esto deja preparado el banco de coma flotante/vector (XMM en x86,
- * NEON en ARM) sin reescribir el core: anyadir floats = registrar la
+ * NEON en ARM) sin reescribir el core: añadir floats = registrar la
  * clase FP con sus fisicos.  En D.7 v1 solo se asignan registros GP;
  * los valores float siguen con memory-roundtrip hasta la fase XMM.
  */
@@ -364,7 +364,7 @@ static_assert(sizeof(MOperand) == 8, "MOperand debe ser 8 bytes");
  *
  * Cobertura v1: el subset minimo para que un C1
  * baseline JIT pueda compilar funciones de aritmetica + control
- * de flujo + calls.  Floats, SIMD y sync atomic se anyaden en
+ * de flujo + calls.  Floats, SIMD y sync atomic se añaden en
  * fases posteriores (D.3+ para floats, D.8 para SIMD).
  */
 enum class MOp : uint8_t {
@@ -557,6 +557,27 @@ enum class MOp : uint8_t {
             ///< .rodata por NOMBRE (ref position-independent, default
             ///< AOT).  dst = reg/vreg, src1 = IMM32(sym_idx).  El
             ///< encoder emite 48 8D 05 + disp32=0 + MReloc{DATA_REL32}.
+    LEA_LABEL =
+        91, ///< lea dst, [rip+disp32] -> direccion NATIVA de un LABEL local
+            ///< (intra-funcion).  dst = reg/vreg, src1 = LABEL(label_id).  El
+            ///< encoder emite 48 8D 05 + disp32=0 + MFixup{label} (mismo
+            ///< rel32 que jmp/jcc: disp = label_off - instr_end).  Usado por
+            ///< TRYENTER in-JIT para capturar la direccion del bloque catch.
+
+    TLS_LE_ADDR =
+        159, ///< dst = direccion por-hilo de un `thread_local` (TLS local-exec,
+            ///< ELF).  src1 = IMM32(sym_idx) del simbolo TLS.  El encoder emite
+            ///< `mov dst, %fs:0` (64 REX.W 8B + SIB disp32=0) + `lea dst,
+            ///< [dst+disp32]` con una @c MReloc{TPOFF32} sobre el disp32 del
+            ///< lea.  El resultado es un host_ptr (TP + tpoff).
+
+    TLS_PE_ADDR =
+        160, ///< dst = direccion por-hilo de un `thread_local` (TLS PE/Windows).
+             ///< src1 = IMM32(var_sym_idx) del simbolo .tls; src2 =
+             ///< IMM32(index_sym_idx) del `__vex_tls_index`.  El encoder emite
+             ///< `mov r10,gs:[0x58]` + `mov r11d,[rip+_tls_index]` (DATA_REL32)
+             ///< + `mov r10,[r10+r11*8]` + `lea dst,[r10+var@secrel]`
+             ///< (SECREL32).  Usa r10/r11 (scratch reservados) -> dst libre.
 
     /* FP-regalloc (Phase AOT C1 float, 2026-06-17): movimiento de datos
      * f64/f32 entre XMM regs y entre XMM y memoria (spills, param-load/store,
@@ -593,7 +614,102 @@ enum class MOp : uint8_t {
      * clobbea vregs porque la save/restore preserva RSI/RDI/RCX). */
     REP_MOVSB = 104,
 
-    COUNT = 105
+    /* Packed FP SSE2 (auto-vectorizacion, 2026-06-25): operan sobre 2x f64
+     * (128-bit XMM).  Prefijo 66 (packed-double).  Reg-reg (arith) o reg-mem
+     * (MOVUPD/MOVAPD).  Base de la vectorizacion de loops float y, a futuro,
+     * de los tipos anchos N=potencia-de-2 (i128 -> XMM completo).  AVX (VEX,
+     * 4x f64) y AVX512 (EVEX, 8x f64) son slices posteriores con el mismo
+     * patron pero distinto encoding. */
+    ADDPD = 106,  ///< ADDPD xmm,xmm (66 0F 58) -- 2x f64 add
+    SUBPD = 107,  ///< SUBPD xmm,xmm (66 0F 5C) -- 2x f64 sub
+    MULPD = 108,  ///< MULPD xmm,xmm (66 0F 59) -- 2x f64 mul
+    DIVPD = 109,  ///< DIVPD xmm,xmm (66 0F 5E) -- 2x f64 div
+    MOVUPD = 110, ///< MOVUPD dst,src (66 0F 10 load / 66 0F 11 store) 16B unaligned
+    MOVAPD = 111, ///< MOVAPD dst,src (66 0F 28 load / 66 0F 29 store) 16B aligned
+
+    /* Packed ENTEROS SSE2 (auto-vectorizacion de loops int).  Mismo patron que
+     * los packed float (66 0F xx, reg-reg) pero suma/resta entera por lane.
+     * No hay div entero packed en SSE (los loops int div/mul-i64 caen a
+     * escalar).  PADDD/PSUBD = 4x i32; PADDQ/PSUBQ = 2x i64. */
+    PADDD = 124, ///< PADDD xmm,xmm (66 0F FE) -- 4x i32 add
+    PSUBD = 125, ///< PSUBD xmm,xmm (66 0F FA) -- 4x i32 sub
+    PADDQ = 126, ///< PADDQ xmm,xmm (66 0F D4) -- 2x i64 add
+    PSUBQ = 127, ///< PSUBQ xmm,xmm (66 0F FB) -- 2x i64 sub
+    /* Packed 16-bit (word) y 8-bit (byte) SSE2.  WIG (W ignorado).  El word
+     * tiene mul packed (PMULLW), el byte NO.  PADDW=8x i16; PADDB=16x i8. */
+    PADDW = 143,  ///< PADDW xmm,xmm  (66 0F FD) -- 8x i16 add
+    PSUBW = 144,  ///< PSUBW xmm,xmm  (66 0F F9) -- 8x i16 sub
+    PMULLW = 145, ///< PMULLW xmm,xmm (66 0F D5) -- 8x i16 mul (low 16b)
+    PADDB = 146,  ///< PADDB xmm,xmm  (66 0F FC) -- 16x i8 add
+    PSUBB = 147,  ///< PSUBB xmm,xmm  (66 0F F8) -- 16x i8 sub
+    /* Packed 32-bit mul (low): SSE4.1 / AVX2.  Mapa 0F38 (no 0F).  Permite
+     * vectorizar `c[i]=a[i]*b[i]` para i32/u32 (PADDD/PSUBD ya cubren add/sub). */
+    PMULLD = 148, ///< PMULLD xmm,xmm (66 0F38 40) -- 4x i32 mul (low 32b)
+
+    /* AVX escalar 3-OPERANDOS no-destructivo (VEX.LIG.F2/F3.0F): VADDSD dst,
+     * src1, src2 -> dst = src1 OP src2 (dst != src1 permitido).  A diferencia de
+     * ADDSD (2-address destructivo, el rewrite mete un `mov dst,src1`), estas
+     * NO necesitan ese mov -> el regalloc/scheduler las explota como 3-op
+     * first-class.  Las emite el selector cuando --float-isa >= AVX; el src2
+     * puede ser MEM (VEX reg-reg-mem).  SD = F2 (double), SS = F3 (single). */
+    VADDSD = 149, ///< VADDSD dst,src1,src2/mem (VEX.LIG.F2.0F 58) -- f64 add
+    VSUBSD = 150, ///< VSUBSD (VEX.LIG.F2.0F 5C) -- f64 sub
+    VMULSD = 151, ///< VMULSD (VEX.LIG.F2.0F 59) -- f64 mul
+    VDIVSD = 152, ///< VDIVSD (VEX.LIG.F2.0F 5E) -- f64 div
+    VADDSS = 153, ///< VADDSS (VEX.LIG.F3.0F 58) -- f32 add
+    VSUBSS = 154, ///< VSUBSS (VEX.LIG.F3.0F 5C) -- f32 sub
+    VMULSS = 155, ///< VMULSS (VEX.LIG.F3.0F 59) -- f32 mul
+    VDIVSS = 156, ///< VDIVSS (VEX.LIG.F3.0F 5E) -- f32 div
+    /* VEX 3-op de XORPS/ANDPS (NP.0F 57/54): FNEG/FABS escalar en avx (dst =
+     * src XOR/AND mascara-de-signo).  3-operandos no-destructivo, sin el `mov`
+     * 2-address y sin legacy SSE mezclado con el resto VEX. */
+    VXORPS = 157, ///< VXORPS dst,src1,src2 (VEX.LIG.NP.0F 57) -- fneg
+    VANDPS = 158, ///< VANDPS dst,src1,src2 (VEX.LIG.NP.0F 54) -- fabs
+
+    /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
+     * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y
+     * UNPCKLPD (difunde el lane bajo a ambos -> construye la mascara de signo
+     * de 16B desde un MOVQ_GP_XMM, sin constante en memoria).  Mismo form
+     * simple 66 0F xx /r reg-reg que los demas packed. */
+    SQRTPD = 128,   ///< SQRTPD xmm,xmm   (66 0F 51) -- 2x f64 sqrt
+    XORPD = 129,    ///< XORPD xmm,xmm    (66 0F 57) -- xor 128b (fneg via mask)
+    ANDPD = 130,    ///< ANDPD xmm,xmm    (66 0F 54) -- and 128b (fabs via mask)
+    UNPCKLPD = 131, ///< UNPCKLPD xmm,xmm (66 0F 14) -- dst.hi = src.lo (broadcast)
+    /* Broadcast de un f64 (xmm.lo) a TODOS los lanes de un YMM/ZMM (mapa 0F38).
+     * Solo AVX (VEX.256.66.0F38.W0 19 / EVEX.512.66.0F38.W1 19); para 128b se
+     * usa UNPCKLPD.  Construye la mascara de signo wide de fneg/fabs. */
+    VBROADCASTSD = 132, ///< VBROADCASTSD ymm/zmm, xmm
+
+    /* Packed SINGLE (f32): mismos opcodes 0F 58/5C/59/5E/51/57/54 que los PD
+     * pero SIN el prefijo 66 (pp=00 en VEX/EVEX; EVEX W0).  4x f32 (XMM),
+     * 8x (YMM), 16x (ZMM).  Para mover bytes se reusa MOVUPD (da igual el
+     * prefijo en un move crudo). */
+    ADDPS = 133,        ///< ADDPS xmm,xmm  (0F 58) -- f32 add
+    SUBPS = 134,        ///< SUBPS xmm,xmm  (0F 5C)
+    MULPS = 135,        ///< MULPS xmm,xmm  (0F 59)
+    DIVPS = 136,        ///< DIVPS xmm,xmm  (0F 5E)
+    /* FMA fusionado (dot-product): dst = src1*src2 + dst (1 redondeo).  src2
+     * (rm) puede ser memoria.  VFMADD231PD (66 0F38 W1 B8) -> f64; VFMADD231PS
+     * (66 0F38 W0 B8) -> f32.  Solo AVX/AVX512 (no hay FMA en SSE2 base). */
+    VFMADD231PD = 141,  ///< VFMADD231PD dst, src1, src2/mem (f64)
+    VFMADD231PS = 142,  ///< VFMADD231PS dst, src1, src2/mem (f32)
+
+    DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
+                          ///< emite 8 zeros + registra un AddrTableFixup
+                          ///< {offset, src1=LABEL}.  El pipeline lo parchea
+                          ///< POST-memcpy con base + label_offsets[label].
+                          ///< No es codigo ejecutable (se salta); el dispatch
+                          ///< lo lee via `mov rT, [rbase + idx*8]`.
+
+    DATA_REL32_LABEL = 113, ///< Entrada de 4 bytes de jump table SELF-RELATIVE
+                            ///< (AOT/HOST_LEAF, PIC-safe, SIN reloc): emite 4
+                            ///< zeros + MFixup{label=src1(block),
+                            ///< instr_end=offset[src2(table)]} -> resolve_fixups
+                            ///< escribe offset[block]-offset[table].  El
+                            ///< dispatch suma la base: lea RB,[rip+table];
+                            ///< movsxd RI,[RB+idx*4]; add RB,RI; jmp RB.
+
+    COUNT = 114
 };
 
 /* ===================================================================== */
@@ -613,11 +729,24 @@ enum class MOp : uint8_t {
  *   +16 [8]  src1         MOperand
  *   +24 [8]  src2         MOperand (para 3-operand ALU)
  */
+/* Bit de @c MInstr::flags: emitir la op escalar float en VEX (avx+) en vez de
+ * legacy SSE.  Lo pone el selector en cvt/cmp/sqrt cuando --float-isa>=AVX, para
+ * NO mezclar legacy-SSE con las binarias VEX (penalizacion de transicion).  Para
+ * las binarias arith hay MOps VEX dedicadas (VADDSD...); estas ops 1-fuente no
+ * ganan nada de 3-op, asi que el flag es lo economico (no se inventa una MOp por
+ * cada una).  Bit alto -> no colisiona con el stackmap-idx que CALL/SAFEPOINT
+ * guardan en flags (esas no son ops float). */
+static constexpr uint16_t MI_FLAG_VEX_SCALAR = 0x8000u;
+
 struct MInstr {
     MOp op = MOp::NOP;
     uint8_t variant = 0;
     uint16_t flags = 0;
     uint32_t source_pc = 0;
+    /* Solo-LSP (correlacion IR<->asm exacta): identidad estable de la op IR
+     * origen = block_index*65536 + instr_pos (UINT32_MAX = sintetica, p.ej.
+     * copias de PHI).  El inspector la decodifica a fn.blocks[bi].instrs[pos]. */
+    uint32_t ir_id = 0xFFFFFFFFu;
     MOperand dst;
     MOperand src1;
     MOperand src2;
@@ -886,10 +1015,78 @@ struct MInstr {
         i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
         return i;
     }
+
+    /** @brief LEA_LABEL: @p dst = direccion nativa del @p label_id local
+     *  (RIP-relativo intra-funcion).  El encoder emite lea reg,[rip+disp32=0]
+     *  + un @c MFixup{label} (mismo rel32 que jmp/jcc). */
+    static MInstr make_lea_label(MOperand dst, uint32_t label_id) noexcept {
+        MInstr i;
+        i.op = MOp::LEA_LABEL;
+        i.dst = dst;
+        i.src1 = MOperand::make_label(label_id);
+        return i;
+    }
+
+    /** @brief TLS_LE_ADDR: @p dst = direccion por-hilo del `thread_local`
+     *  @p sym_idx (TLS local-exec, ELF).  El encoder emite
+     *  `mov dst, %fs:0` + `lea dst, [dst + sym@tpoff]` con @c MReloc{TPOFF32}. */
+    static MInstr make_tls_le_addr(MOperand dst, uint32_t sym_idx) noexcept {
+        MInstr i;
+        i.op = MOp::TLS_LE_ADDR;
+        i.dst = dst;
+        i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+        return i;
+    }
+
+    /** @brief TLS_PE_ADDR: @p dst = direccion por-hilo del `thread_local`
+     *  @p var_sym_idx (.tls) usando el indice de slot @p index_sym_idx
+     *  (`__vex_tls_index`).  El encoder emite la secuencia TEB del PE. */
+    static MInstr make_tls_pe_addr(MOperand dst, uint32_t var_sym_idx,
+                                   uint32_t index_sym_idx) noexcept {
+        MInstr i;
+        i.op = MOp::TLS_PE_ADDR;
+        i.dst = dst;
+        i.src1 = MOperand::make_imm32(static_cast<int32_t>(var_sym_idx));
+        i.src2 = MOperand::make_imm32(static_cast<int32_t>(index_sym_idx));
+        return i;
+    }
+
+    /** @brief DATA_PTR_LABEL: entrada de 8 bytes de la jump table densa que
+     *  apunta al @p label_id (parchada post-memcpy). */
+    static MInstr make_data_ptr_label(uint32_t label_id) noexcept {
+        MInstr i;
+        i.op = MOp::DATA_PTR_LABEL;
+        i.src1 = MOperand::make_label(label_id);
+        return i;
+    }
+
+    /** @brief DATA_REL32_LABEL: entrada self-relative de 4 bytes =
+     *  offset[block_label] - offset[table_label] (jump table PIC-safe AOT). */
+    static MInstr make_data_rel32_label(uint32_t block_label,
+                                        uint32_t table_label) noexcept {
+        MInstr i;
+        i.op = MOp::DATA_REL32_LABEL;
+        i.src1 = MOperand::make_label(block_label);
+        i.src2 = MOperand::make_label(table_label);
+        return i;
+    }
+
+    /** @brief JMP indirecto a registro (FF /4). */
+    static MInstr make_jmp_reg(MReg r) noexcept {
+        MInstr i;
+        i.op = MOp::JMP;
+        i.src1 = MOperand::make_reg(r, 8);
+        return i;
+    }
 };
 
-static_assert(sizeof(MInstr) == 32,
-              "MInstr debe ser 32 bytes para cache locality");
+/* 40 bytes: 32 de codegen + 4 de @c ir_id (correlacion IR<->asm SOLO-LSP, vale
+ * UINT32_MAX en produccion) + 4 de padding.  MachineIR es transitorio del
+ * codegen (no es un path caliente de runtime como el bytecode), asi que el
+ * coste es aceptable; el static_assert sigue blindando contra crecimiento
+ * accidental mas alla de esto. */
+static_assert(sizeof(MInstr) == 36,
+              "MInstr debe ser 36 bytes (32 codegen + ir_id LSP)");
 
 /* ===================================================================== */
 /* MBlock                                                                 */
@@ -918,6 +1115,15 @@ struct MBlock {
     std::vector<MInstr> instrs;
     MBlockId succ_a = MBLOCK_INVALID;
     MBlockId succ_b = MBLOCK_INVALID;
+    /// Sucesores EXTRA / ABNORMALES (edges que no son el fallthrough ni el
+    /// branch del terminador): handlers de excepcion (edge tryenter->catch)
+    /// y, en el futuro, targets de jumptable/switch.  Vacio por defecto
+    /// (cero overhead en el caso comun).  La liveness los UNE ademas de
+    /// succ_a/succ_b para mantener vivos los valores live-in al sucesor a
+    /// traves del edge anormal (p.ej. los valores que el catch usa).  La
+    /// deteccion de loops y el encoder NO los consideran (no hay branch
+    /// fisico hacia ellos; el control llega via runtime, p.ej. do_throw).
+    std::vector<MBlockId> extra_succs;
     /// Offset en bytes desde el inicio del code cache donde se
     /// emite la primera instr de este bloque.  Lo poblea el encoder.
     uint32_t byte_offset = 0;
@@ -972,6 +1178,16 @@ enum class MRelocKind : uint8_t {
            ///< sym - (site+4).  Misma matematica que CALL_REL32 pero el
            ///< target es un dato (.rodata), NO una funcion (el driver NO
            ///< lo encola como callee).  Default position-independent.
+    TPOFF32 =
+        3, ///< TLS local-exec (ELF): *(int32*)@ = offset del simbolo TLS
+           ///< respecto al thread pointer (TP-relativo, NEGATIVO en la
+           ///< variante II).  El driver lo traduce a R_X86_64_TPOFF32 (23)
+           ///< sobre un simbolo STT_TLS; el `--link` resuelve el TPOFF.
+    SECREL32 =
+        4, ///< TLS PE (Windows): *(int32*)@ = offset del simbolo DENTRO de su
+           ///< seccion (.tls), NO la VA.  El acceso suma este offset a la base
+           ///< del bloque TLS del modulo (cargada desde el TEB).  El emisor PE
+           ///< escribe target_off directamente.
 };
 
 /**
@@ -990,6 +1206,27 @@ struct MReloc {
     uint32_t patch_at = 0; ///< byte offset dentro del codigo de la funcion
     uint32_t sym_idx = 0;  ///< indice en @c MFunction::reloc_symbols
     int64_t addend = 0;    ///< desplazamiento adicional dentro del simbolo
+};
+
+/* ===================================================================== */
+/* LineMap (solo-LSP: vista "Godbolt" del codegen)                        */
+/* ===================================================================== */
+
+/**
+ * @struct LineMapEntry
+ * @brief Correlacion byte_offset (instruccion maquina) -> source_line (.vex).
+ *
+ * SOLO se poblea cuando @c MFunction::emit_line_map es true (modo de
+ * analisis exclusivo del LSP).  En compilacion/ejecucion convencional el
+ * flag esta OFF y el encoder NO construye la tabla -> cero overhead, bytes
+ * de codigo BIT-IDENTICOS.  Una entrada por MInstr emitida, en orden de
+ * emision (ascendente por @c byte_offset).  El inspector la cruza con el
+ * desensamblado de Capstone para resaltar fuente <-> asm.
+ */
+struct LineMapEntry {
+    uint32_t byte_offset = 0;  ///< Offset del primer byte de la instr (rel. fn).
+    uint32_t source_line = 0;  ///< Linea .vex (1-based; 0 = sin atribucion).
+    uint32_t ir_id = 0xFFFFFFFFu; ///< Identidad de la op IR origen (solo-LSP).
 };
 
 /* ===================================================================== */
@@ -1075,6 +1312,35 @@ struct AsmBlob {
     std::vector<uint8_t> clobbers;   ///< MReg ids clobbered (no bindings)
     bool clobbers_flags = false;
     bool clobbers_mem = false;
+    /// Solo-inspeccion (LSP): etiquetas internas del asm -> offset RELATIVO al
+    /// inicio del blob (bytes).  Las computa NUESTRO parser del texto usando el
+    /// contrato insn_offsets del backend.  El encoder las reubica al offset
+    /// absoluto de la funcion.  Vacio = sin info (degrada).
+    std::vector<std::pair<uint32_t, std::string>> labels;
+    /// Solo-inspeccion: offset relativo -> linea .vex de cada instruccion del
+    /// asm (para atribuir cada instr a su linea real, no al `asm {` global).
+    std::vector<std::pair<uint32_t, uint32_t>> insn_lines;
+    /// Phase AS inc.6: simbolos PROPIOS referenciados desde el asm (`jmp
+    /// [global]`, `mov rax, fn`, ...).  @c offset es RELATIVO al inicio del
+    /// blob; el encoder lo reubica al offset de la funcion y emite un MReloc
+    /// (DATA_REL32 si @c rip_relative, ABS64 si imm).  @c symbol es el nombre
+    /// Vex (el driver lo resuelve a la dir de la funcion/dato).
+    /// Tipo segun la forma de la instruccion (decidido por el usuario en el
+    /// asm).  Espejo de @c vex::AsmAssembleResult::SymRefKind; el encoder lo
+    /// mapea a @c MRelocKind.
+    enum class AsmSymRefKind : uint8_t {
+        BranchRel32, ///< jmp/call sym (directo) -> CALL_REL32
+        DataRel32,   ///< jmp/call [sym] / lea [rip+sym] -> DATA_REL32
+        Abs64,       ///< mov reg, sym -> ABS64
+        Abs32,       ///< push sym / mov r32, sym -> ABS32 (best-effort)
+    };
+    struct AsmSymRef {
+        uint32_t offset = 0;
+        uint8_t size = 0;
+        AsmSymRefKind kind = AsmSymRefKind::DataRel32;
+        std::string symbol;
+    };
+    std::vector<AsmSymRef> sym_refs;
 };
 
 /**
@@ -1104,6 +1370,16 @@ struct MFunction {
     /// Offset de cada label en el code cache.  Indexado por label_id.
     /// Si el label no esta resuelto aun, contiene UINT32_MAX.
     std::vector<uint32_t> label_offsets;
+    /// Jump table denso (SWITCH_DENSE): cada entrada DATA_PTR_LABEL emite 8
+    /// bytes placeholder + registra aqui (patch_at, label del brazo).  Tras
+    /// el memcpy al code cache (base conocida) el pipeline parchea:
+    /// *(u64*)(base + patch_at) = base + label_offsets[label].  Es una
+    /// direccion ABSOLUTA -> no se resuelve en resolve_fixups (que es rel32).
+    struct AddrTableFixup {
+        uint32_t patch_at;  ///< offset en el codigo de la entrada de 8 bytes
+        MLabelId label;     ///< label del bloque destino (brazo o default)
+    };
+    std::vector<AddrTableFixup> addr_table_fixups;
     /// Tamano del frame stack (bytes) reservado por enter (sub rsp, N).
     /// Lo poblea el selector tras analizar locales/spills.
     uint32_t stack_frame_size = 0;
@@ -1117,6 +1393,25 @@ struct MFunction {
     /// binary search durante stack walk.  Cada Stackmap describe los
     /// slots GC vivos en ese punto especifico.
     std::vector<Stackmap> stackmaps;
+
+    /// Solo-LSP (vista "Godbolt"): si true, el encoder poblea @c line_map
+    /// con una entrada por instruccion (byte_offset -> source_line).  Lo
+    /// activa el Selector/vreg-select SOLO cuando el inspector del LSP pide
+    /// el codegen anotado.  OFF por defecto -> el resto del proyecto
+    /// (auto_jit, runtime, AOT normal) NO paga nada: el encoder ni mira la
+    /// tabla y los bytes emitidos son identicos.
+    bool emit_line_map = false;
+    /// Phase NR: `@Naked` -- suprime prologo/epilogo Y ret implicito en el
+    /// rewrite-to-physical.  El cuerpo (asm) provee su propia salida
+    /// (ret/iretq).  Propagado desde @c IrFunction::is_naked por vreg-select.
+    bool naked = false;
+    /// Solo-LSP: correlacion byte_offset -> source_line.  Vacia salvo que
+    /// @c emit_line_map este activo.  Ver @c LineMapEntry.
+    std::vector<LineMapEntry> line_map;
+    /// Solo-LSP: etiquetas internas de bloques inline-asm -> byte_offset
+    /// (absoluto, relativo al inicio de la funcion).  El encoder las reubica
+    /// desde @c AsmBlob::labels.  El inspector las muestra como divisores.
+    std::vector<std::pair<uint32_t, std::string>> asm_labels;
 
     /// Sprint mem-loop-fix-v2 / fib-recursion (2026-06-02):
     /// indices del @c imm64_pool que contienen referencias a la
@@ -1184,7 +1479,7 @@ struct MFunction {
     int fixed_of(uint32_t vid) const noexcept {
         return vid < vreg_fixed.size() ? vreg_fixed[vid] : -1;
     }
-    /** @brief Anyade un @c AsmBlob al pool y devuelve su indice. */
+    /** @brief añade un @c AsmBlob al pool y devuelve su indice. */
     uint32_t intern_asm_blob(AsmBlob b) {
         asm_blobs.push_back(std::move(b));
         return static_cast<uint32_t>(asm_blobs.size() - 1);
@@ -1216,7 +1511,7 @@ struct MFunction {
         return static_cast<uint32_t>(reloc_symbols.size() - 1);
     }
 
-    /** @brief Anyade un imm64 al pool y devuelve su indice. */
+    /** @brief añade un imm64 al pool y devuelve su indice. */
     uint32_t intern_imm64(uint64_t value) {
         /* O(n) lookup para deduplicar.  Aceptable para el v1: el
          * codigo Vex tipico tiene < 100 imm64 distintos por funcion. */

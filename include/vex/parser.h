@@ -56,6 +56,14 @@
 
 namespace vex {
 
+/// Fija el TARGET (os, arch) contra el que @c @Target evalua sus atomos
+/// `os:`/`arch:` en compilacion AOT cross-target (el binario puede generarse
+/// para un os/arch distinto del host de build).  Llamar ANTES de compilar.
+/// Strings vacios => usar el host de build (comportamiento normal).
+/// os: "windows"/"linux"/"macos".  arch: "x86_64"/"x86"/"arm64".
+void set_aot_condcomp_target(const std::string &os,
+                             const std::string &arch) noexcept;
+
 /**
  * @class Parser
  * @brief Construye un AST a partir de los tokens producidos por @c Lexer.
@@ -379,6 +387,10 @@ class Parser {
     /// llamar a @c synchronize() (que descartaria tokens validos
     /// de la siguiente decl).
     bool last_decl_was_target_skip_ = false;
+
+    /// @NoExceptions a nivel modulo (sticky): una vez visto, se propaga a
+    /// ModuleNode::no_exceptions -> todas las funciones lo heredan.
+    bool module_no_exceptions_ = false;
 
     /// Phase M6.a L.3: visibilidad pendiente capturada en
     /// @c parse_top_level_decl.  Los sub-parsers que produzcan un

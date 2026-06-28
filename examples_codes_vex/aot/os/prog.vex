@@ -1,0 +1,71 @@
+// ===========================================================================
+// prog -- cargador de PROGRAMAS de disco + tabla de API del kernel.
+//
+// El boot carga la imagen completa (una FAT12 estandar) como un "ramdisk"
+// contiguo a partir de 0x7C00 (sector S -> RAM 0x7C00 + S*512).  Los programas
+// son FICHEROS en la FAT; el modulo `fat` los localiza por nombre 8.3 y los
+// carga siguiendo su cadena de clusters.
+//
+// Para EJECUTAR un programa: se carga desde la FAT a EXEC_ADDR (0x100000) y se
+// salta a su entry (offset 0) pasando rdi = tabla de API, rsi = args.  La tabla
+// de API es un array de u64 con las direcciones de los servicios del kernel
+// (function pointers), de modo que el programa no se enlaza con el kernel: solo
+// conoce los indices.
+// ===========================================================================
+import "term";
+import "console";
+import "fat";
+
+// --- Servicios del kernel expuestos a los programas (via la tabla de API) ---
+void k_puts(char* s) {
+    term.tputs(s);
+}
+void k_putc(u64 c) {
+    term.tputc(c);
+}
+void k_dec(i64 v) {
+    term.tdec(v);
+}
+u64 k_getline(u8* buf, u64 max) {
+    return term.read_line(buf, max);
+}
+
+// Construye la tabla de API en 0x70000 (RAM libre) y devuelve su direccion.
+// IMPORTANTE: NO usar 0xA0000-0xFFFFF (VGA + ROM del BIOS): ahi las
+// escrituras se ignoran y las lecturas devuelven la ROM.
+// Indices: [0]=puts [1]=putc [2]=dec [3]=getline.
+u64 api_build() {
+    u64* t = (u64*) 0x70000;
+    t[0] = (u64) k_puts;
+    t[1] = (u64) k_putc;
+    t[2] = (u64) k_dec;
+    t[3] = (u64) k_getline;
+    return 0x70000;
+}
+
+// Copia n bytes de src a dst (byte a byte; suficiente para cargar programas).
+void mcopy(u8* dst, u8* src, u64 n) {
+    u64 i = 0;
+    while (i < n) {
+        dst[i] = src[i];
+        i = i + 1;
+    }
+}
+
+// Busca un programa por nombre en la FAT.  Devuelve la direccion (en RAM) de
+// su entrada de root dir (32 bytes), o 0 si no existe.
+u64 prog_find(char* name) {
+    return fat.fat_find(name);
+}
+
+// Carga y ejecuta el programa de la entrada `ent` con la cadena `args`.
+// Devuelve el codigo de retorno del programa, o -1 si falla.
+i64 prog_exec(u64 ent, char* args) {
+    u8* dst = (u8*) 0x100000;                // EXEC_ADDR
+    u64 size = fat.fat_load(ent, dst);       // sigue la cadena de clusters
+    if (size == 0) { return -1; }
+    u64 api = api_build();
+    // Llamar al entry del programa: prog_main(api, args) en 0x100000.
+    i64 r = ((fn(u64,u64)->i64) 0x100000)(api, (u64) args);
+    return r;
+}

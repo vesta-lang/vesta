@@ -79,6 +79,7 @@ constexpr uint32_t EXEC = AOT_SEC_EXEC;
 constexpr uint32_t CODE = AOT_SEC_CODE;
 constexpr uint32_t DATA = AOT_SEC_DATA;
 constexpr uint32_t BSS = AOT_SEC_BSS;
+constexpr uint32_t TLS = AOT_SEC_TLS;
 } // namespace SecFlag
 
 /**
@@ -110,6 +111,11 @@ struct LayoutConfig {
     int pe_subsystem = -1;        ///< PE Subsystem (<=0 => CUI).
     uint64_t elf_stack_vaddr = 0; ///< ELF: VA sugerida de la pila.
     uint64_t elf_stack_size = 0;  ///< ELF: tamano del segmento de pila.
+    /// TLS PE: seccion+offset de @c __vex_tls_init (el TLS callback que aplica
+    /// la plantilla por-hilo).  -1 = sin callback.  El emisor lo registra en
+    /// @c AddressOfCallBacks del IMAGE_TLS_DIRECTORY.
+    int tls_callback_section = -1;
+    uint32_t tls_callback_off = 0;
 };
 
 /**
@@ -130,6 +136,14 @@ enum class RelocKind : uint8_t {
     ABS64 = 1, ///< direccion absoluta 64-bit.
     IMM32 = 2, ///< inmediato 32-bit (p.ej. tamano de seccion).
     IMM64 = 3, ///< inmediato 64-bit.
+    TPOFF32 =
+        4, ///< TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra un simbolo
+           ///< STT_TLS de la seccion .tdata + addend = offset.  El sitio queda
+           ///< SIN resolver en el .o; el `--link` calcula el TPOFF.
+    SECREL32 =
+        5, ///< TLS PE (Windows): *(int32*)site = offset del target DENTRO de su
+           ///< seccion (.tls), no la VA.  El acceso suma este offset a la base
+           ///< del bloque TLS (cargada desde el TEB en runtime).
 };
 
 /**
@@ -216,6 +230,13 @@ class ObjectWriter {
 
     /// Fija la configuracion de layout.
     void set_config(const LayoutConfig &c) { cfg_ = c; }
+
+    /// TLS PE: ubicacion de @c __vex_tls_init (el callback que aplica la
+    /// plantilla por-hilo).  El emisor lo registra en @c AddressOfCallBacks.
+    void set_tls_callback(int section, uint32_t off) {
+        cfg_.tls_callback_section = section;
+        cfg_.tls_callback_off = off;
+    }
 
     /// Fija el tipo de artefacto (EXEC por defecto, OBJECT relocatable).
     void set_output_kind(OutputKind k) { kind_ = k; }

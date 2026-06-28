@@ -126,7 +126,7 @@ struct LiveInterval {
     }
 
     /**
-     * @brief Anyade un rango [from, to).  Coalesce con rangos
+     * @brief añade un rango [from, to).  Coalesce con rangos
      *        existentes solapados/adyacentes manteniendo orden.
      */
     void add_range(uint32_t from, uint32_t to);
@@ -163,6 +163,21 @@ struct IntervalResult {
         std::vector<uint8_t> regs; ///< MReg ids clobbered (no bindings)
     };
     std::vector<AsmClobberSite> asm_clobbers;
+    /// Vregs que DEBEN ser memory-resident (force-spill).  Indexado por vreg
+    /// id (1 = forzar SPILL).  Lo poblea @c build_intervals con los valores
+    /// live-in a un sucesor EXTRA/abnormal (handler de excepcion): deben vivir
+    /// en un slot para sobrevivir al edge anormal (el throw clobberea regs
+    /// pero no la memoria; el catch recarga del slot).  Mecanismo general
+    /// reusable por GC/deopt (forzar memoria en un punto).  Vacio = sin
+    /// fuerza (caso comun, cero coste).
+    std::vector<uint8_t> force_spill;
+    /// Coalescing hint para ops 2-address (`dst = src1 OP src2`): indexado por
+    /// vreg id del dst -> vreg id de src1 (o -1 sin hint).  El @c linear_scan,
+    /// al asignar dst, PREFIERE el fisico de src1 SI esta libre (libre <=>
+    /// src1 ya expiro = murio -> coalescing seguro).  Asi dst y src1 comparten
+    /// reg y el legalizado 2-address elide el `mov dst, src1`.  Solo es una
+    /// PREFERENCIA: si el reg no esta libre, cae al greedy normal (correcto).
+    std::vector<int32_t> coalesce_hint;
 };
 
 /**

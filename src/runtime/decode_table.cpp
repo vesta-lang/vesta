@@ -1901,10 +1901,13 @@ InstrFormat decode_table_extended[0X100] = {
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_strmake_h,
      decode_instr_raw_bytes},
 
-    /* 0x5F */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x5F  fmadd[.ps] fd, fa, fb (FIXED_4, Convention B)
+             Multiplica-acumula fusionado: fd = fma(fa, fb, fd), 1 redondeo.
+             byte2=(fa<<4)|fd, byte3=(fb<<4)|isf32.  Lo emite VEC_FMA para que
+             el interp coincida con VFMADD231PD del JIT. */
+    {"fmadd", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_fmadd,
+     decode_instr_raw_bytes},
 
     /* 0x60  getstatic r_dst, r_class, offset_u32 (FIXED_8)
              Lee 8 bytes desde cls->static_data + offset (HOST mem).

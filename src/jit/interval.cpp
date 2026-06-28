@@ -82,9 +82,20 @@ InstrRoles operand_roles(MOp op) noexcept {
     /* Comparaciones: solo leen (setean flags). */
     case MOp::CMP:
     case MOp::TEST:
-    case MOp::UCOMISD:
         r.src1 = R::USE;
         r.src2 = R::USE;
+        break;
+
+    /* UCOMISD/UCOMISS: compare FP (setea flags, NO escribe).  Se emiten con
+     * @c make_unary(ucmp, a, b) -> el operando @c a ocupa el slot DST pero se
+     * LEE (no se define).  Marcarlo como USE: si quedara en NONE (default) la
+     * liveness no veria @c a vivo en el ucomisd -> su XMM se reusaria para
+     * @c b -> @c ucomisd xmm0, xmm0 (compara un valor consigo mismo).  CMP/TEST
+     * enteros no sufren esto porque usan src1/src2 (mk_cmp), no el slot dst. */
+    case MOp::UCOMISD:
+    case MOp::UCOMISS:
+        r.dst = R::USE;
+        r.src1 = R::USE;
         break;
 
     /* IDIV src: divisor use; dividendo/resultado en RAX/RDX (fijos,
@@ -141,6 +152,18 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::DIVSS:
     case MOp::XORPS:
     case MOp::ANDPS:
+    /* AVX escalar 3-op no-destructivo: mismas roles (dst def, 2 srcs use) pero
+     * el rewrite NO las legaliza a 2-address (son VEX nativo -> sin el mov). */
+    case MOp::VADDSD:
+    case MOp::VSUBSD:
+    case MOp::VMULSD:
+    case MOp::VDIVSD:
+    case MOp::VADDSS:
+    case MOp::VSUBSS:
+    case MOp::VMULSS:
+    case MOp::VDIVSS:
+    case MOp::VXORPS:
+    case MOp::VANDPS:
         r.dst = R::DEF;
         r.src1 = R::USE;
         r.src2 = R::USE;
@@ -163,16 +186,22 @@ InstrRoles operand_roles(MOp op) noexcept {
         r.dst = R::DEF;
         r.src1 = R::USE;
         break;
-    /* UCOMISS: solo lee (setea flags), igual que UCOMISD/CMP. */
-    case MOp::UCOMISS:
-        r.src1 = R::USE;
-        r.src2 = R::USE;
-        break;
 
-    /* AOT MOV_SYM / LEA_RIP_SYM: dst = &simbolo (def); src1 es el
-     * IMM32(sym_idx), no un vreg. */
+    /* AOT MOV_SYM / LEA_RIP_SYM / TLS_LE_ADDR: dst = &simbolo (def); src1 es
+     * el IMM32(sym_idx), no un vreg.  TLS_LE_ADDR usa dst como base del lea
+     * pero lo ESCRIBE primero (mov %fs:0) -> def puro, sin use externo. */
     case MOp::MOV_SYM:
-    case MOp::LEA_RIP_SYM: r.dst = R::DEF; break;
+    case MOp::LEA_RIP_SYM:
+    case MOp::TLS_LE_ADDR:
+    case MOp::TLS_PE_ADDR:
+    case MOp::LEA_LABEL: r.dst = R::DEF; break;
+
+    /* CALL indirecta (CALLIND / dispatch por puntero): src1 es el vreg con
+     * la DIRECCION de la funcion -- un USE que debe seguir vivo hasta el
+     * call (si no, el regalloc reusa su registro para un argumento y el
+     * call salta a basura).  El role solo aplica si src1.is_vreg(); el
+     * CALL_SYM directo lleva un IMM (sym_idx), no un vreg -> no le afecta. */
+    case MOp::CALL: r.src1 = R::USE; break;
 
     /* Control de flujo / pseudo: sin operandos de registro vreg.
      * CALL_SYM (AOT) cae aqui: sus args ya se marshalaron via ARG; su
@@ -187,7 +216,7 @@ InstrRoles operand_roles(MOp op) noexcept {
 /* ===================================================================== */
 
 void LiveInterval::add_range(uint32_t from, uint32_t to) {
-    if (from >= to) return; // rango vacio: nada que anyadir
+    if (from >= to) return; // rango vacio: nada que añadir
     /* Caso comun (construccion backward): el nuevo rango toca o precede
      * al primer rango existente.  Coalesce con el front si solapan o son
      * adyacentes; si no, insercion ordenada general. */
@@ -425,6 +454,14 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 tmp_out.union_inplace(live_in[blk.succ_a]);
             if (blk.succ_b != MBLOCK_INVALID && blk.succ_b != blk.succ_a)
                 tmp_out.union_inplace(live_in[blk.succ_b]);
+            /* Sucesores extra / abnormales (handlers de excepcion, futuros
+             * targets de jumptable): unirlos mantiene vivos los valores
+             * live-in al sucesor a traves del edge anormal (el catch usa
+             * valores definidos antes del try; sin esta union el regalloc los
+             * consideraria muertos y el throw los perderia). */
+            for (const MBlockId es : blk.extra_succs)
+                if (es != MBLOCK_INVALID && es != blk.succ_a && es != blk.succ_b)
+                    tmp_out.union_inplace(live_in[es]);
             if (!tmp_out.equals(live_out[bi])) {
                 live_out[bi].copy_from(tmp_out);
                 changed = true;
@@ -435,6 +472,62 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             if (!new_in.equals(live_in[bi])) {
                 live_in[bi].copy_from(new_in);
                 changed = true;
+            }
+        }
+    }
+
+    /* ---- 3b) force_spill: vregs live-in a un sucesor EXTRA/abnormal ----
+     * Deben ser memory-resident para sobrevivir al edge anormal (el throw
+     * llega al handler por runtime, no por un branch; clobberea regs pero no
+     * la memoria; el catch recarga del slot).  Solo recorre extra_succs (vacio
+     * en el caso comun -> coste cero). */
+    {
+        bool any_extra = false;
+        for (size_t b = 0; b < NB; ++b)
+            if (!mf.blocks[b].extra_succs.empty()) { any_extra = true; break; }
+        if (any_extra) {
+            out.force_spill.assign(NV, 0u);
+            for (size_t b = 0; b < NB; ++b) {
+                for (const MBlockId es : mf.blocks[b].extra_succs) {
+                    if (es == MBLOCK_INVALID || es >= NB) continue;
+                    for (uint32_t v = 0; v < NV; ++v)
+                        if (live_in[es].test(v)) out.force_spill[v] = 1u;
+                }
+            }
+        }
+    }
+
+    /* ---- 3c) coalesce_hint: para ops 2-address (dst = src1 OP src2) ----
+     * Registrar hint[dst] = src1 para que el linear_scan prefiera el fisico de
+     * src1 al asignar dst (si libre = src1 murio -> coalescing seguro), de modo
+     * que el legalizado elida el `mov dst, src1`.  Cubre ALU (ADD/SUB/AND/OR/
+     * XOR/IMUL) y shifts/rotates (mov dst,src1 + sh dst,imm). */
+    {
+        out.coalesce_hint.assign(NV, -1);
+        auto is_two_addr = [](MOp op) -> bool {
+            switch (op) {
+            case MOp::ADD:
+            case MOp::SUB:
+            case MOp::AND:
+            case MOp::OR:
+            case MOp::XOR:
+            case MOp::IMUL:
+            case MOp::SHL:
+            case MOp::SHR:
+            case MOp::SAR:
+            case MOp::ROL:
+            case MOp::ROR: return true;
+            default: return false;
+            }
+        };
+        for (size_t b = 0; b < NB; ++b) {
+            for (const MInstr &mi : mf.blocks[b].instrs) {
+                if (!is_two_addr(mi.op)) continue;
+                if (!mi.dst.is_vreg() || !mi.src1.is_vreg()) continue;
+                const uint32_t d = mi.dst.vreg_id();
+                const uint32_t s = mi.src1.vreg_id();
+                if (d == s || d >= NV || s >= NV) continue;
+                out.coalesce_hint[d] = static_cast<int32_t>(s);
             }
         }
     }

@@ -49,7 +49,7 @@ namespace vex {
 // ---------------------------------------------------------------------------
 // FNV-1a 64-bit.  Constante recomendada por Eric Niebler / FNV reference.
 // Coste hot path: ~1ns por byte en CPUs modernos.  No usamos xxhash/wyhash
-// para no anyadir dep externa; FNV-1a es suficiente para path hashing
+// para no añadir dep externa; FNV-1a es suficiente para path hashing
 // (sin colisiones esperadas en proyectos de <1M modulos).
 // ---------------------------------------------------------------------------
 uint64_t ModuleGraph::fnv1a_(const std::string &s) noexcept {
@@ -228,7 +228,7 @@ void ModuleGraph::set_stdlib_dir(const std::string &dir) {
 // ---------------------------------------------------------------------------
 // Carga + parse de un modulo.  Crea ResolvedModule, computa hashes,
 // invoca lex + parse.  No procesa las deps todavia (eso lo hace
-// process_dependencies_ tras anyadir el modulo al graph).
+// process_dependencies_ tras añadir el modulo al graph).
 // ---------------------------------------------------------------------------
 uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     const uint64_t path_hash = fnv1a_(canonical_path);
@@ -337,7 +337,7 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
 
     // 1. Carpeta del importador.
     add_candidate(importer_dir);
-    // 2. Search paths anyadidos (VEX_PATH + adds explicitos).
+    // 2. Search paths añadidos (VEX_PATH + adds explicitos).
     for (const auto &sp : search_paths_) {
         add_candidate(sp);
     }
@@ -403,7 +403,7 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
         if (r.module_id == mod.module_id) {
             continue;
         }
-        // Anyadir dependencia.  Evitamos duplicados (un mismo modulo
+        // añadir dependencia.  Evitamos duplicados (un mismo modulo
         // importado dos veces solo aparece una vez).
         bool dup = false;
         for (uint32_t d : mod.dependencies) {

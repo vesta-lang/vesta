@@ -72,7 +72,7 @@ struct ComptimeVmImpl;
  *
  * Thread-safety: NO thread-safe en MC.2.  Compile es single-thread
  * por diseno (incluso con parallel build, cada modulo tiene su
- * propio TypeChecker -> su propio ComptimeRuntime).  MC.9 anyadira
+ * propio TypeChecker -> su propio ComptimeRuntime).  MC.9 añadira
  * pool de VMs para parallelizar @Macro calls cross-module.
  */
 class ComptimeRuntime {

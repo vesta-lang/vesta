@@ -44,6 +44,11 @@ struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
     bool emit_debug =
         false;         ///< Emitir comentarios @line N en el .vel generado.
+    /// Solo-LSP: si true, las funciones @c comptime (no-macro) tambien se
+    /// bajan a IR como funciones normales para poder inspeccionar su codegen
+    /// (JIT/AOT/bytecode del hover).  En compilacion normal estas funciones se
+    /// evaluan en compile-time y se eliden -> OFF por defecto.
+    bool emit_comptime_fns = false;
     int opt_level = 2; ///< 0..3, mapea a ir::OptLevel.  Default O2 (DCE + copy
                        ///< prop + const fold + unreachable + TCO).
     /// si true, ademas del .vel, generar el dump
@@ -137,6 +142,53 @@ struct CompileOptions {
     /// gc_deref_host).  Lo activa el driver @c -m aot.  Default false
     /// (ruta runtime historica, intacta para la VM/JIT).
     bool native_poo = false;
+
+    /// C3 (AOT): habilita el mecanismo de excepciones NATIVO (setjmp/longjmp,
+    /// sin runtime/GC/libc).  CONFIGURABLE: el usuario puede DESACTIVARLO
+    /// (--no-exceptions) para kernels/freestanding donde no se quiere ningun
+    /// runtime de excepciones; entonces un try/catch/throw da error claro.
+    /// Default true.  Coste cero si el programa no usa excepciones (el runtime
+    /// solo se emite si hay try/catch/throw).  Solo afecta a @c native_poo (AOT).
+    bool exceptions_enabled = true;
+
+    /// Bits del target para el ensamblado del inline-asm (@Naked / asm{}): 64
+    /// (defecto), 32 (--aot-arch x86-32) o 16.  La validacion compile-time del
+    /// asm debe usar el modo del TARGET, no del host -- si no, instrucciones de
+    /// 32 bits (p.ej. `jmp ecx`) fallan en KS_MODE_64.
+    uint8_t asm_target_bits = 64;
+
+    /// Ancho del chunk SIMD (bytes) que el matcher del vectorizador hornea en
+    /// AOT (native_poo): 16 (SSE2/defecto), 32 (AVX), 64 (AVX512).  En AOT lo
+    /// fija el TARGET (--float-isa), no el host de build -> cross-compile
+    /// correcto (no emitir AVX2 si el target es solo-SSE2) y ancho seleccionable.
+    /// El codegen (vreg) deriva el mismo ancho de @c FloatIsa.  Fuera de AOT el
+    /// matcher sigue usando el host (vec_chunk_isa) para portabilidad del .velb.
+    uint8_t aot_vec_width = 16;
+
+    /// --float-isa auto: el binario multiversiona las funciones vectorizadas y
+    /// elige sse2/avx2/avx512 en runtime por cpuid.  El matcher hornea el chunk
+    /// con estrategia DUAL para que UN IR compile a las 3 variantes: element-
+    /// wise/unary/scalar-bcast a 64 (cada variante decompone 4x128/2x256/1x512),
+    /// reduccion/FMA a 16 (el acumulador no splittea -> 128b en todas).
+    bool aot_auto_vec = false;
+
+    /// Fase 3.5 LSP: cuando true, @c compile_vex_source vuelca un snapshot
+    /// de los valores @c comptime computados (constantes top-level) a
+    /// @c CompileResult::comptime_values.  Estrictamente ADITIVO y gateado:
+    /// con el default false el flujo de compilacion es EXACTAMENTE el
+    /// historico (cero coste, cero cambio de codegen).  Lo consume el
+    /// metodo @c vesta/comptimeValues del LSP, on-demand.
+    bool dump_comptime_values = false;
+
+    /// LSP "notebook" (valores runtime): cuando true, el lowering instrumenta
+    /// cada declaracion/asignacion de variable ESCALAR (int/bool/char) emitiendo
+    /// un CALLN a @c vesta_io:vio_lsp_value(source_line, valor) que vuelca
+    /// @c __LSPVAL__:linea:valor a stderr.  El LSP compila con este flag, ejecuta
+    /// el @c .velb en un subproceso con timeout y parsea esos marcadores para
+    /// mostrar los valores reales de las variables inline.  Estrictamente
+    /// ADITIVO y gateado: con el default false el codegen es EXACTAMENTE el
+    /// historico (cero coste).  NUNCA se activa en compilacion normal.
+    bool lsp_value_trace = false;
 };
 
 /**
@@ -313,6 +365,30 @@ struct CompileResult {
      * @c compile_vex_source en lugar de @c compile_vex_project se uso.
      */
     std::vector<std::string> dep_paths;
+
+    /**
+     * @brief Fase 3.5 LSP: snapshot de los valores @c comptime computados.
+     *
+     * Cada entrada describe una constante @c comptime (top-level) con su
+     * nombre, el ambito donde vive (best-effort), la clase de valor y una
+     * representacion legible.  Llenado SOLO si
+     * @c CompileOptions::dump_comptime_values esta activo (default false,
+     * cero coste en builds normales).  Lo consume el metodo LSP
+     * @c vesta/comptimeValues para mostrar al usuario los valores que el
+     * compilador resolvio en tiempo de compilacion.
+     */
+    struct ComptimeValueSnapshot {
+        std::string name;      ///< Nombre de la constante comptime.
+        std::string scope;     ///< Ambito (best-effort; "" = global/desconocido).
+        std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type".
+        std::string value_str; ///< Representacion legible del valor.
+        SourceLoc loc;         ///< Ubicacion de la expresion (para hover);
+                               ///< line==0 si no aplica (consts top-level).
+        std::string builtin_kind; ///< "sizeof"/"alignof"/"kind"/"type_id"/
+                                  ///< "typename" si proviene de un builtin; ""
+                                  ///< para constantes comptime normales.
+    };
+    std::vector<ComptimeValueSnapshot> comptime_values;
 };
 
 /**

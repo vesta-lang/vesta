@@ -89,6 +89,13 @@ struct AotTarget {
     bool free_provided =
         false; ///< RAW_FREE / SMARTPTR_FREE ok en freestanding.
     bool panic_provided = false; ///< PANIC ok en freestanding.
+    /// C3: mecanismo de excepciones nativo (setjmp/longjmp, sin runtime/GC/
+    /// libc).  CONFIGURABLE: el usuario puede desactivarlo (--no-exceptions /
+    /// freestanding sin excepciones) -> THROW/TRYENTER/... vuelven a ser
+    /// RUNTIME_DEPENDENT (error claro pidiendo activarlas o no usar try/catch).
+    /// Default true: si el programa NO usa excepciones, no se emite runtime
+    /// alguno (coste cero).
+    bool exceptions_enabled = true;
 };
 
 /**
@@ -183,7 +190,7 @@ AotCompatReport aot_analyze_module(const ir::IrModule &mod,
  * @brief Analiza una sola funcion IR para un target.
  * @param fn         Funcion IR.
  * @param target     Target objetivo.
- * @param out_issues Vector destino (se anyaden entradas, no se limpia).
+ * @param out_issues Vector destino (se añaden entradas, no se limpia).
  * @return true si la funcion es completamente compilable en el target.
  */
 bool aot_analyze_function(const ir::IrFunction &fn, const AotTarget &target,

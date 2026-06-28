@@ -14,6 +14,7 @@
  */
 
 #include "vex/comptime_introspect.h"
+#include <algorithm> // UCRT64: no transitivo
 #include "vex/lexer.h"
 #include "vex/parser.h"
 #include "ffi/virtual_lib_registry.h" //   : virtual libs

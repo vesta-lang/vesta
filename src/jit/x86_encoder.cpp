@@ -85,12 +85,36 @@ size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
         }
         for (const auto &mi : block.instrs) {
             ++instr_count_;
+            /* Solo-LSP (vista "Godbolt"): registrar el offset del primer
+             * byte de esta instr y su source_line ANTES de emitirla.  Solo
+             * cuando @c fn.emit_line_map esta activo (inspector del LSP);
+             * en produccion el flag es OFF y no se construye la tabla -> los
+             * bytes generados son identicos y el coste es 1 rama predicha. */
+            const uint32_t pre_rel = static_cast<uint32_t>(out.size() - base);
+            if (fn.emit_line_map) {
+                fn.line_map.push_back({pre_rel, mi.source_pc, mi.ir_id});
+            }
             if (!emit_instr(fn, mi, out)) {
                 /* fail-fast: opcode no soportado.  El INT3 hace que la
                  * ejecucion crasheee con SIGTRAP en lugar de seguir
                  * con basura. */
                 put8(out, 0xCC);
                 return 0;
+            }
+            /* Solo-LSP: para un bloque inline-asm, refinar el line_map con una
+             * entrada POR INSTRUCCION del asm (su linea real) y reubicar sus
+             * etiquetas internas a offset absoluto de la funcion. */
+            if (fn.emit_line_map && mi.op == MOp::INLINE_ASM_RAW &&
+                mi.src1.kind == MOperandKind::IMM32) {
+                const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
+                if (idx < fn.asm_blobs.size()) {
+                    const AsmBlob &bl = fn.asm_blobs[idx];
+                    for (const auto &il : bl.insn_lines)
+                        fn.line_map.push_back(
+                            {pre_rel + il.first, il.second, mi.ir_id});
+                    for (const auto &lb : bl.labels)
+                        fn.asm_labels.push_back({pre_rel + lb.first, lb.second});
+                }
             }
         }
     }
@@ -194,6 +218,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xmm = static_cast<uint8_t>(mi.dst.reg) - 16; /* XMM0=16 */
         const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
+        if (vex_scalar_) {
+            /* VMOVQ xmm, r64: VEX.128.66.0F.W1 6E, vvvv=1111. */
+            emit_vex3(xmm, gp, VEX_NO_VVVV, /*w=*/1, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/1);
+            put8(out, 0x6E);
+            put8(out, modrm(3, xmm & 7, gp & 7));
+            return true;
+        }
         put8(out, 0x66);
         /* REX.W=1, REX.R=xmm>=8, REX.B=gp>=8.  rex_byte(W, R_reg, B_reg). */
         const uint8_t rex = rex_byte(true, xmm, gp);
@@ -213,6 +245,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
         const uint8_t xmm = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (vex_scalar_) {
+            /* VMOVQ r64, xmm: VEX.128.66.0F.W1 7E, vvvv=1111. */
+            emit_vex3(xmm, gp, VEX_NO_VVVV, /*w=*/1, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/1);
+            put8(out, 0x7E);
+            put8(out, modrm(3, xmm & 7, gp & 7));
+            return true;
+        }
         put8(out, 0x66);
         const uint8_t rex = rex_byte(true, xmm, gp);
         if (rex) put8(out, rex);
@@ -234,6 +274,17 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t opcode = (mi.op == MOp::SQRTSD)  ? 0x51
+                               : (mi.op == MOp::MINSD) ? 0x5D
+                                                       : 0x5F;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VSQRTSD/VMINSD/VMAXSD xmm, xmm(vvvv=dst), xmm: VEX.LIG.F2.0F op. */
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/3);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF2);
         /* REX solo si alguno >= 8.  REX.W no necesario para SSE. */
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
@@ -242,9 +293,6 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             put8(out, 0x40 | (rex_R << 2) | rex_B);
         }
         put8(out, 0x0F);
-        const uint8_t opcode = (mi.op == MOp::SQRTSD)  ? 0x51
-                               : (mi.op == MOp::MINSD) ? 0x5D
-                                                       : 0x5F;
         put8(out, opcode);
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
@@ -304,6 +352,167 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
+    case MOp::VADDSD:
+    case MOp::VSUBSD:
+    case MOp::VMULSD:
+    case MOp::VDIVSD:
+    case MOp::VADDSS:
+    case MOp::VSUBSS:
+    case MOp::VMULSS:
+    case MOp::VDIVSS: {
+        /* AVX escalar 3-operandos: VEX.LIG.{F2|F3}.0F <op> dst, src1(vvvv),
+         * src2(rm reg|mem).  dst = src1 OP src2 (no-destructivo).  pp: F2=3
+         * (double), F3=2 (single).  opcode = 58/5C/59/5E como las legacy. */
+        const bool ss = (mi.op == MOp::VADDSS || mi.op == MOp::VSUBSS ||
+                         mi.op == MOp::VMULSS || mi.op == MOp::VDIVSS);
+        const uint8_t pp = ss ? 2u : 3u; // F3 / F2
+        const uint8_t opcode =
+            (mi.op == MOp::VADDSD || mi.op == MOp::VADDSS)   ? 0x58
+            : (mi.op == MOp::VSUBSD || mi.op == MOp::VSUBSS) ? 0x5C
+            : (mi.op == MOp::VMULSD || mi.op == MOp::VMULSS) ? 0x59
+                                                            : 0x5E; /* DIV */
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.src2.kind == MOperandKind::REG) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
+            emit_vex3(xd, xs, xv, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, pp);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else if (mi.src2.kind == MOperandKind::MEM) {
+            const MReg base = mi.src2.mem_base();
+            const MReg idx = mi.src2.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            const uint8_t bid = reg_id(base);
+            const uint8_t iid = has_index ? reg_id(idx) : 0;
+            emit_vex3(xd, bid, xv, /*w=*/0, /*l256=*/false, iid, has_index, out,
+                      /*map=*/1, pp);
+            put8(out, opcode);
+            emit_modrm_mem(mi.src2, xd & 7, out);
+        } else {
+            put8(out, 0xCC);
+        }
+        return true;
+    }
+    case MOp::ADDPD:
+    case MOp::SUBPD:
+    case MOp::MULPD:
+    case MOp::DIVPD:
+    case MOp::PADDD:
+    case MOp::PSUBD:
+    case MOp::PADDQ:
+    case MOp::PSUBQ:
+    case MOp::PADDW:
+    case MOp::PSUBW:
+    case MOp::PMULLW:
+    case MOp::PADDB:
+    case MOp::PSUBB:
+    case MOp::SQRTPD:
+    case MOp::XORPD:
+    case MOp::ANDPD:
+    case MOp::UNPCKLPD:
+    case MOp::ADDPS:
+    case MOp::SUBPS:
+    case MOp::MULPS:
+    case MOp::DIVPS: {
+        /* Packed SSE2: 66? + (REX) + 0F + <op> + ModR/M.  Los packed-DOUBLE
+         * (PD) y enteros llevan prefijo 66; los packed-SINGLE (PS) NO (pp=00).
+         * Opcodes float 58/5C/59/5E (add/sub/mul/div) compartidos PD/PS;
+         * enteros FE/FA/D4/FB; unarios/logicos 51/57/54; UNPCKLPD=14.  Reg-reg
+         * only; los loads/stores van por MOVUPD (mover bytes crudos vale). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t opcode = (mi.op == MOp::ADDPD || mi.op == MOp::ADDPS) ? 0x58
+                               : (mi.op == MOp::SUBPD || mi.op == MOp::SUBPS) ? 0x5C
+                               : (mi.op == MOp::MULPD || mi.op == MOp::MULPS) ? 0x59
+                               : (mi.op == MOp::DIVPD || mi.op == MOp::DIVPS) ? 0x5E
+                               : (mi.op == MOp::PADDD)    ? 0xFE
+                               : (mi.op == MOp::PSUBD)    ? 0xFA
+                               : (mi.op == MOp::PADDQ)    ? 0xD4
+                               : (mi.op == MOp::PSUBQ)    ? 0xFB
+                               : (mi.op == MOp::PADDW)    ? 0xFD
+                               : (mi.op == MOp::PSUBW)    ? 0xF9
+                               : (mi.op == MOp::PMULLW)   ? 0xD5
+                               : (mi.op == MOp::PADDB)    ? 0xFC
+                               : (mi.op == MOp::PSUBB)    ? 0xF8
+                               : (mi.op == MOp::SQRTPD)   ? 0x51
+                               : (mi.op == MOp::XORPD)    ? 0x57
+                               : (mi.op == MOp::ANDPD)    ? 0x54
+                                                          : 0x14; /* UNPCKLPD */
+        /* packed-single (PS): pp=00 (sin 66), EVEX W0.  packed-double/qword: pp=01
+         * (66), EVEX W1.  PADDD/PSUBD (dword) y word/byte (WIG): pp=01 pero W0. */
+        const bool is_ps =
+            (mi.op == MOp::ADDPS || mi.op == MOp::SUBPS ||
+             mi.op == MOp::MULPS || mi.op == MOp::DIVPS);
+        const bool is_w0 =
+            (is_ps || mi.op == MOp::PADDD || mi.op == MOp::PSUBD ||
+             mi.op == MOp::PADDW || mi.op == MOp::PSUBW || mi.op == MOp::PMULLW ||
+             mi.op == MOp::PADDB || mi.op == MOp::PSUBB);
+        const uint8_t pp = is_ps ? 0 : 1;
+        const uint8_t wbit = is_w0 ? 0 : 1;
+        /* SQRTPD es UNARIO (dst, src): vvvv no se usa (1111). */
+        const bool unary = (mi.op == MOp::SQRTPD);
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 16;
+        if (vec_w >= 64) {
+            emit_evex(xd, xs, unary ? VEX_NO_VVVV : xd, wbit, /*ll=*/2, 0, false,
+                      out, /*map=*/1, pp);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else if (vec_w == 32) {
+            emit_vex3(xd, xs, unary ? VEX_NO_VVVV : xd, /*w=*/0, /*l256=*/true, 0,
+                      false, out, /*map=*/1, pp);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else {
+            /* SSE (128b): [66] [REX] 0F <op> modrm. */
+            if (!is_ps) put8(out, 0x66);
+            const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+            const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+            if (rex_R || rex_B) put8(out, 0x40 | (rex_R << 2) | rex_B);
+            put8(out, 0x0F);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        }
+        return true;
+    }
+    case MOp::PMULLD: {
+        /* PMULLD xmm,xmm: 66 0F38 40 (SSE4.1) -- 4x i32 mul (low 32b).  Mapa
+         * 0F38 (no 0F).  AVX2: VEX.256.66.0F38.W0 40; AVX512: EVEX.512 W0. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 16;
+        if (vec_w >= 64) {
+            emit_evex(xd, xs, xd, /*w=*/0, /*ll=*/2, 0, false, out, /*map=*/2,
+                      /*pp=*/1);
+            put8(out, 0x40);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else if (vec_w == 32) {
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/true, 0, false, out,
+                      /*map=*/2, /*pp=*/1);
+            put8(out, 0x40);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else {
+            put8(out, 0x66);
+            const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+            const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+            if (rex_R || rex_B) put8(out, 0x40 | (rex_R << 2) | rex_B);
+            put8(out, 0x0F);
+            put8(out, 0x38);
+            put8(out, 0x40);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        }
+        return true;
+    }
     case MOp::CVTSI2SD: {
         /* CVTSI2SD xmm, r64: F2 + REX.W + 0F + 2A + ModR/M(11, xmm&7, gp&7).
          * Convierte int64 signed a f64. */
@@ -314,6 +523,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTSI2SD xmm, xmm(vvvv=dst), r64: VEX.LIG.F2.0F.W1 2A.  El vvvv
+             * (merge de bits altos) = dst; solo usamos el f64 bajo. */
+            emit_vex3(xd, gp, xd, /*w=*/1, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/3);
+            put8(out, 0x2A);
+            put8(out, modrm(3, xd & 7, gp & 7));
+            return true;
+        }
         put8(out, 0xF2);
         put_rex(out, true, xd, gp);
         put8(out, 0x0F);
@@ -331,6 +549,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTTSD2SI r64, xmm: VEX.LIG.F2.0F.W1 2C, vvvv=1111 (sin merge). */
+            emit_vex3(gp, xs, VEX_NO_VVVV, /*w=*/1, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/3);
+            put8(out, 0x2C);
+            put8(out, modrm(3, gp & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF2);
         put_rex(out, true, gp, xs);
         put8(out, 0x0F);
@@ -348,6 +574,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTSS2SD xmm, xmm(vvvv=dst), xmm: VEX.LIG.F3.0F 5A. */
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/2);
+            put8(out, 0x5A);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF3);
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
         const uint8_t rex_B = (xs >= 8) ? 1 : 0;
@@ -369,6 +603,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTSD2SS xmm, xmm(vvvv=dst), xmm: VEX.LIG.F2.0F 5A. */
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/3);
+            put8(out, 0x5A);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF2);
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
         const uint8_t rex_B = (xs >= 8) ? 1 : 0;
@@ -390,6 +632,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xa = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xb = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VUCOMISD xmm, xmm: VEX.LIG.66.0F 2E, vvvv=1111 (sin merge). */
+            emit_vex3(xa, xb, VEX_NO_VVVV, /*w=*/0, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/1);
+            put8(out, 0x2E);
+            put8(out, modrm(3, xa & 7, xb & 7));
+            return true;
+        }
         put8(out, 0x66);
         const uint8_t rex_R = (xa >= 8) ? 1 : 0;
         const uint8_t rex_B = (xb >= 8) ? 1 : 0;
@@ -411,12 +661,22 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
          *   mem <- xmm     : 0F 11  (reg = src xmm, r/m = dst mem)
          * El reg-reg se codifica con 0F 10 (dst=reg field, src=r/m). */
         const uint8_t pfx = (mi.op == MOp::MOVSD) ? 0xF2 : 0xF3;
+        const uint8_t pp = (mi.op == MOp::MOVSD) ? 3u : 2u; // VEX: F2 / F3
         const bool dst_xmm = (mi.dst.kind == MOperandKind::REG);
         const bool src_xmm = (mi.src1.kind == MOperandKind::REG);
         if (dst_xmm && src_xmm) {
             /* xmm <- xmm : 0F 10, reg=dst, rm=src. */
             const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
             const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+            if (vex_scalar_) {
+                /* VMOVSD/VMOVSS xmm, xmm(vvvv=src), xmm: VEX.LIG.{F2|F3}.0F 10.
+                 * vvvv=src -> copia el low-128 de src (el escalar). */
+                emit_vex3(xd, xs, xs, /*w=*/0, /*l256=*/false, 0, false, out,
+                          /*map=*/1, pp);
+                put8(out, 0x10);
+                put8(out, modrm(3, xd & 7, xs & 7));
+                return true;
+            }
             put8(out, pfx);
             const uint8_t rex = rex_byte(false, xd, xs);
             if (rex) put8(out, rex);
@@ -431,6 +691,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             const MReg base = mi.src1.mem_base();
             const MReg idx = mi.src1.mem_index();
             const bool has_index = (idx != MReg::NONE);
+            if (vex_scalar_) {
+                /* VMOVSD/VMOVSS xmm, m64: VEX.LIG.{F2|F3}.0F 10, vvvv=1111. */
+                emit_vex3(xd, reg_id(base), VEX_NO_VVVV, /*w=*/0, /*l256=*/false,
+                          has_index ? reg_id(idx) : 0, has_index, out, /*map=*/1,
+                          pp);
+                put8(out, 0x10);
+                emit_modrm_mem(mi.src1, xd & 7, out);
+                return true;
+            }
             put8(out, pfx);
             const uint8_t rex = rex_byte(false, xd, reg_id(base),
                                          has_index ? reg_id(idx) : 0);
@@ -446,6 +715,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             const MReg base = mi.dst.mem_base();
             const MReg idx = mi.dst.mem_index();
             const bool has_index = (idx != MReg::NONE);
+            if (vex_scalar_) {
+                /* VMOVSD/VMOVSS m64, xmm: VEX.LIG.{F2|F3}.0F 11, vvvv=1111. */
+                emit_vex3(xs, reg_id(base), VEX_NO_VVVV, /*w=*/0, /*l256=*/false,
+                          has_index ? reg_id(idx) : 0, has_index, out, /*map=*/1,
+                          pp);
+                put8(out, 0x11);
+                emit_modrm_mem(mi.dst, xs & 7, out);
+                return true;
+            }
             put8(out, pfx);
             const uint8_t rex = rex_byte(false, xs, reg_id(base),
                                          has_index ? reg_id(idx) : 0);
@@ -456,6 +734,139 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             return true;
         }
         put8(out, 0xCC); /* combinacion no soportada (mem<-mem, imm, ...) */
+        return true;
+    }
+
+    case MOp::VFMADD231PD:
+    case MOp::VFMADD231PS: {
+        /* VFMADD231P{D,S} dst, src1(vvvv), src2(rm reg|mem): dst = src1*src2 +
+         * dst (1 redondeo).  66 0F38 B8; W1 para PD, W0 para PS.  Solo AVX/512
+         * (vec_w 32/64); 128b tambien valido pero el vectorizador usa >=256. */
+        const bool ps = (mi.op == MOp::VFMADD231PS);
+        const uint8_t wbit = ps ? 0 : 1;
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 32;
+        const bool evex = (vec_w >= 64);
+        const bool l256 = (vec_w == 32); // 16->VEX.128, 32->VEX.256, 64->EVEX.512
+        if (mi.src2.kind == MOperandKind::REG) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
+            if (evex)
+                emit_evex(xd, xs, xv, wbit, /*ll=*/2, 0, false, out, /*map=*/2,
+                          /*pp=*/1);
+            else
+                emit_vex3(xd, xs, xv, wbit, l256, 0, false, out, /*map=*/2,
+                          /*pp=*/1);
+            put8(out, 0xB8);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else if (mi.src2.kind == MOperandKind::MEM) {
+            const MReg base = mi.src2.mem_base();
+            const MReg idx = mi.src2.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            const uint8_t bid = reg_id(base);
+            const uint8_t iid = has_index ? reg_id(idx) : 0;
+            if (evex)
+                emit_evex(xd, bid, xv, wbit, /*ll=*/2, iid, has_index, out,
+                          /*map=*/2, /*pp=*/1);
+            else
+                emit_vex3(xd, bid, xv, wbit, l256, iid, has_index, out,
+                          /*map=*/2, /*pp=*/1);
+            put8(out, 0xB8);
+            emit_modrm_mem(mi.src2, xd & 7, out);
+        } else {
+            put8(out, 0xCC);
+        }
+        return true;
+    }
+
+    case MOp::VBROADCASTSD: {
+        /* VBROADCASTSD ymm/zmm, xmm: difunde el f64 bajo a todos los lanes.
+         * VEX.256.66.0F38.W0 19 /r ; EVEX.512.66.0F38.W1 19 /r.  Op de 2
+         * operandos (vvvv no usado).  Solo AVX (no hay forma 128b util aqui). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 32;
+        if (vec_w >= 64)
+            emit_evex(xd, xs, VEX_NO_VVVV, /*w=*/1, /*ll=*/2, 0, false, out,
+                      /*map=*/2);
+        else
+            emit_vex3(xd, xs, VEX_NO_VVVV, /*w=*/0, /*l256=*/true, 0, false, out,
+                      /*map=*/2);
+        put8(out, 0x19);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+
+    case MOp::MOVUPD:
+    case MOp::MOVAPD: {
+        /* Move packed 2x f64 (16 bytes) XMM<->XMM o XMM<->mem.  Prefijo 66.
+         *   MOVUPD: 0F 10 (load) / 0F 11 (store)  -- unaligned.
+         *   MOVAPD: 0F 28 (load) / 0F 29 (store)  -- aligned (#GP si !16B).
+         * Misma estructura que MOVSD pero packed-double. */
+        const bool apd = (mi.op == MOp::MOVAPD);
+        const uint8_t op_load = apd ? 0x28 : 0x10;
+        const uint8_t op_store = apd ? 0x29 : 0x11;
+        const bool dst_xmm = (mi.dst.kind == MOperandKind::REG);
+        const bool src_xmm = (mi.src1.kind == MOperandKind::REG);
+        /* ancho del vector: del operando XMM (16=XMM/SSE2, 32=YMM/VEX,
+         * 64=ZMM/EVEX).  VMOVUPD/VMOVAPD: VEX WIG (w=0); EVEX W1. */
+        const uint8_t vec_w =
+            dst_xmm ? (mi.dst.width ? mi.dst.width : 16)
+                    : (mi.src1.width ? mi.src1.width : 16);
+        /* Emite el prefijo SSE2/VEX/EVEX + opcode para un reg XMM @p xreg con
+         * rm @p rm_id (reg o base de mem) e indice opcional. */
+        auto emit_pfx_op = [&](uint8_t xreg, uint8_t rm_id, uint8_t idx_id,
+                               bool has_idx, uint8_t opcode) {
+            if (vec_w >= 64) {
+                emit_evex(xreg, rm_id, VEX_NO_VVVV, /*w=*/1, /*ll=*/2, idx_id, has_idx,
+                          out);
+                put8(out, opcode);
+            } else if (vec_w == 32) {
+                emit_vex3(xreg, rm_id, VEX_NO_VVVV, /*w=*/0, /*l256=*/true, idx_id,
+                          has_idx, out);
+                put8(out, opcode);
+            } else {
+                put8(out, 0x66);
+                const uint8_t rex = rex_byte(false, xreg, rm_id,
+                                             has_idx ? idx_id : 0);
+                if (rex) put8(out, rex);
+                put8(out, 0x0F);
+                put8(out, opcode);
+            }
+        };
+        if (dst_xmm && src_xmm) {
+            const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+            const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+            emit_pfx_op(xd, xs, 0, false, op_load);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
+        if (dst_xmm && mi.src1.kind == MOperandKind::MEM) {
+            const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+            const MReg base = mi.src1.mem_base();
+            const MReg idx = mi.src1.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            emit_pfx_op(xd, reg_id(base), has_index ? reg_id(idx) : 0,
+                        has_index, op_load);
+            emit_modrm_mem(mi.src1, xd & 7, out);
+            return true;
+        }
+        if (mi.dst.kind == MOperandKind::MEM && src_xmm) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+            const MReg base = mi.dst.mem_base();
+            const MReg idx = mi.dst.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            emit_pfx_op(xs, reg_id(base), has_index ? reg_id(idx) : 0,
+                        has_index, op_store);
+            emit_modrm_mem(mi.dst, xs & 7, out);
+            return true;
+        }
+        put8(out, 0xCC);
         return true;
     }
 
@@ -473,15 +884,23 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-        put8(out, 0xF3);
-        const uint8_t rex = rex_byte(false, xd, xs);
-        if (rex) put8(out, rex);
-        put8(out, 0x0F);
         const uint8_t opcode = (mi.op == MOp::ADDSS)   ? 0x58
                                : (mi.op == MOp::SUBSS) ? 0x5C
                                : (mi.op == MOp::MULSS) ? 0x59
                                : (mi.op == MOp::DIVSS) ? 0x5E
                                                        : 0x51; /* SQRTSS */
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VSQRTSS xmm, xmm(vvvv=dst), xmm: VEX.LIG.F3.0F op. */
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/2);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
+        put8(out, 0xF3);
+        const uint8_t rex = rex_byte(false, xd, xs);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
         put8(out, opcode);
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
@@ -496,6 +915,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xa = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xb = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VUCOMISS xmm, xmm: VEX.LIG.NP.0F 2E, vvvv=1111, pp=0 (sin prefijo). */
+            emit_vex3(xa, xb, VEX_NO_VVVV, /*w=*/0, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/0);
+            put8(out, 0x2E);
+            put8(out, modrm(3, xa & 7, xb & 7));
+            return true;
+        }
         const uint8_t rex = rex_byte(false, xa, xb);
         if (rex) put8(out, rex);
         put8(out, 0x0F);
@@ -512,6 +939,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTSI2SS xmm, xmm(vvvv=dst), r64: VEX.LIG.F3.0F.W1 2A. */
+            emit_vex3(xd, gp, xd, /*w=*/1, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/2);
+            put8(out, 0x2A);
+            put8(out, modrm(3, xd & 7, gp & 7));
+            return true;
+        }
         put8(out, 0xF3);
         put_rex(out, true, xd, gp);
         put8(out, 0x0F);
@@ -529,11 +964,33 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTTSS2SI r64, xmm: VEX.LIG.F3.0F.W1 2C, vvvv=1111. */
+            emit_vex3(gp, xs, VEX_NO_VVVV, /*w=*/1, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/2);
+            put8(out, 0x2C);
+            put8(out, modrm(3, gp & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF3);
         put_rex(out, true, gp, xs);
         put8(out, 0x0F);
         put8(out, 0x2C);
         put8(out, modrm(3, gp & 7, xs & 7));
+        return true;
+    }
+    case MOp::VXORPS:
+    case MOp::VANDPS: {
+        /* VXORPS/VANDPS dst, src1(vvvv), src2: VEX.LIG.NP.0F {57|54}.  FNEG/
+         * FABS escalar en avx (3-operandos no-destructivo). */
+        const uint8_t opc = (mi.op == MOp::VXORPS) ? 0x57 : 0x54;
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
+        emit_vex3(xd, xs, xv, /*w=*/0, /*l256=*/false, 0, false, out,
+                  /*map=*/1, /*pp=*/0);
+        put8(out, opc);
+        put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
     case MOp::XORPS: {
@@ -704,6 +1161,13 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
          * CALL_REL32 que el driver parchea tras el layout de .text.
          * patch_at se deja en offset ABSOLUTO de @c out; encode() le
          * resta @c base para dejarlo relativo a la funcion. */
+        /* Phase AOT-GC (Inc 1): si el call lleva stackmap (gc<T>), fijar su
+         * pc_offset al inicio del call (mismo criterio que MOp::CALL) para que
+         * el GC walker lo localice por la direccion de retorno. */
+        if (mi.flags != UINT16_MAX && mi.flags < fn.stackmaps.size()) {
+            fn.stackmaps[mi.flags].pc_offset =
+                static_cast<uint32_t>(out.size());
+        }
         put8(out, 0xE8);
         MReloc r;
         r.kind = MRelocKind::CALL_REL32;
@@ -728,6 +1192,64 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put32(out, 0); /* placeholder rel32 */
         return true;
     }
+    case MOp::DATA_PTR_LABEL: {
+        /* Entrada de 8 bytes de la jump table densa: 8 zeros placeholder +
+         * un AddrTableFixup {offset, label}.  El pipeline lo parchea
+         * POST-memcpy con la direccion absoluta (base + label_offsets[label]).
+         * No es codigo ejecutable (se salta); el dispatch lo lee con un mov. */
+        if (mi.src1.kind != MOperandKind::LABEL) {
+            put8(out, 0xCC);
+            return true;
+        }
+        MFunction::AddrTableFixup f;
+        f.patch_at = static_cast<uint32_t>(out.size());
+        f.label = static_cast<MLabelId>(mi.src1.value);
+        fn.addr_table_fixups.push_back(f);
+        for (int k = 0; k < 8; ++k) put8(out, 0); /* placeholder qword */
+        return true;
+    }
+    case MOp::DATA_REL32_LABEL: {
+        /* Entrada self-relative de 4 bytes de la jump table AOT (PIC-safe, sin
+         * reloc): valor = offset[block] - offset[table].  El table label_def
+         * PRECEDE a las entradas -> offset[table] ya esta resuelto; lo usamos
+         * como instr_end (base del MFixup) y label=block -> resolve_fixups
+         * escribe offset[block]-offset[table].  El dispatch suma la base
+         * runtime de la tabla. */
+        if (mi.src1.kind != MOperandKind::LABEL ||
+            mi.src2.kind != MOperandKind::LABEL) {
+            for (int k = 0; k < 4; ++k) put8(out, 0xCC);
+            return true;
+        }
+        const MLabelId block = static_cast<MLabelId>(mi.src1.value);
+        const MLabelId table = static_cast<MLabelId>(mi.src2.value);
+        const uint32_t table_off =
+            (table < fn.label_offsets.size()) ? fn.label_offsets[table]
+                                              : UINT32_MAX;
+        fn.fixups.push_back(MFixup{block, static_cast<uint32_t>(out.size()),
+                                   table_off, 4});
+        for (int k = 0; k < 4; ++k) put8(out, 0); /* placeholder dword */
+        return true;
+    }
+    case MOp::LEA_LABEL: {
+        /* lea r64, [rip+disp32] -> direccion NATIVA de un LABEL local
+         * (intra-funcion).  Mismo encoding que LEA_RIP_SYM pero el disp32 lo
+         * resuelve un MFixup (label local) en lugar de un MReloc (simbolo).
+         * disp = label_off - instr_end (rip-relativo, igual que jmp/jcc). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::LABEL) {
+            put8(out, 0xCC);
+            return true;
+        }
+        put_rex(out, true, mi.dst.reg, 0); /* REX.W + REX.R si dst>=R8 */
+        put8(out, 0x8D);
+        put8(out, modrm(0, mi.dst.reg & 7, 5)); /* mod=00 rm=101 -> [rip+d32] */
+        const uint32_t patch_at = static_cast<uint32_t>(out.size());
+        put32(out, 0); /* placeholder disp32 */
+        const uint32_t instr_end = static_cast<uint32_t>(out.size());
+        fn.fixups.push_back(MFixup{static_cast<MLabelId>(mi.src1.value),
+                                   patch_at, instr_end, 4});
+        return true;
+    }
     case MOp::LEA_RIP_SYM: {
         /* AOT: lea r64, [rip+disp32] -> direccion de un dato (.rodata)
          * position-independent.  REX.W + 8D + ModRM(mod=00,reg=dst,rm=101
@@ -748,6 +1270,99 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         r.addend = 0;
         fn.relocs.push_back(r);
         put32(out, 0); /* placeholder disp32 */
+        return true;
+    }
+    case MOp::TLS_LE_ADDR: {
+        /* AOT TLS local-exec (ELF): dst = direccion por-hilo de un
+         * `thread_local`.  Dos instrucciones:
+         *   mov dst, %fs:0            ; thread pointer (TP)
+         *   lea dst, [dst + sym@tpoff]; &var = TP + tpoff (TPOFF32 reloc)
+         * El reloc TPOFF32 va sobre el disp32 del lea; el driver lo traduce a
+         * R_X86_64_TPOFF32 + STT_TLS y el --link resuelve el offset (negativo,
+         * variante II).  El resultado es un host_ptr. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t d = mi.dst.reg;
+        /* mov dst, %fs:0 : 64 | REX.W(+R) | 8B | modrm(00,dst,100=SIB) | 25 |
+         * disp32=0 */
+        put8(out, 0x64);                 /* prefijo de segmento FS */
+        put_rex(out, true, d, 0);        /* REX.W + REX.R si dst>=R8 */
+        put8(out, 0x8B);                 /* mov r64, r/m64 */
+        put8(out, modrm(0, d & 7, 4));   /* mod=00 rm=100 -> sigue SIB */
+        put8(out, 0x25);                 /* SIB: base=101(none)+disp32, idx=none */
+        put32(out, 0);                   /* disp32 = 0 */
+        /* lea dst, [dst + disp32] : REX.W(+R+B) | 8D | modrm + (SIB si rsp/r12)
+         * | disp32 (TPOFF32 reloc) */
+        put_rex(out, true, d, d);        /* REX.R (reg=dst) + REX.B (base=dst) */
+        put8(out, 0x8D);                 /* lea r64, m */
+        if ((d & 7) == 4) {              /* rsp/r12: requiere SIB */
+            put8(out, modrm(2, d & 7, 4)); /* mod=10 rm=100 -> SIB */
+            put8(out, 0x24);               /* SIB: base=100(dst&7=4), idx=none */
+        } else {
+            put8(out, modrm(2, d & 7, d & 7)); /* mod=10 -> [dst + disp32] */
+        }
+        MReloc r;
+        r.kind = MRelocKind::TPOFF32;
+        r.patch_at = static_cast<uint32_t>(out.size());
+        r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+        r.addend = 0;
+        fn.relocs.push_back(r);
+        put32(out, 0); /* placeholder disp32 (tpoff) */
+        return true;
+    }
+    case MOp::TLS_PE_ADDR: {
+        /* AOT TLS PE/Windows: dst = direccion por-hilo de un `thread_local`.
+         *   mov r10, gs:[0x58]          ; TEB->ThreadLocalStoragePointer
+         *   mov r11d, [rip+_tls_index]  ; indice del slot (DATA_REL32)
+         *   mov r10, [r10 + r11*8]      ; base del bloque TLS del modulo
+         *   lea dst, [r10 + var@secrel] ; &var (SECREL32)
+         * Usa r10/r11 (scratch reservados por el regalloc) -> dst libre.  El
+         * resultado es un host_ptr. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t d = mi.dst.reg;
+        /* mov r10, gs:[0x58] : 65 | REX.W+R | 8B | modrm(00,r10,SIB) | 25 | d32 */
+        put8(out, 0x65);                  /* prefijo de segmento GS */
+        put_rex(out, true, 10, 0);        /* REX.W + REX.R (reg=r10) */
+        put8(out, 0x8B);
+        put8(out, modrm(0, 10, 4));       /* mod=00 reg=r10 rm=100(SIB) */
+        put8(out, 0x25);                  /* SIB base=101(none)+disp32 idx=none */
+        put32(out, 0x58);                 /* TEB->ThreadLocalStoragePointer */
+        /* mov r11d, [rip+_tls_index] : REX.R | 8B | modrm(00,r11,101=rip) | d32 */
+        put_rex(out, false, 11, 0);       /* REX.R (reg=r11), 32-bit (sin W) */
+        put8(out, 0x8B);
+        put8(out, modrm(0, 11, 5));       /* mod=00 reg=r11 rm=101(rip) */
+        {
+            MReloc r1;
+            r1.kind = MRelocKind::DATA_REL32; /* &_tls_index (rip-relativo) */
+            r1.patch_at = static_cast<uint32_t>(out.size());
+            r1.sym_idx = static_cast<uint32_t>(mi.src2.value);
+            r1.addend = 0;
+            fn.relocs.push_back(r1);
+        }
+        put32(out, 0);
+        /* mov r10, [r10 + r11*8] : REX.W+R+X+B | 8B | modrm(00,r10,SIB) | SIB */
+        put_rex(out, true, 10, 10, 11);   /* W + R(r10) + B(r10 base) + X(r11) */
+        put8(out, 0x8B);
+        put8(out, modrm(0, 10, 4));       /* mod=00 reg=r10 rm=100(SIB) */
+        put8(out, sib(3, 11, 10));        /* scale=8 index=r11 base=r10 */
+        /* lea dst, [r10 + var@secrel] : REX.W+R(dst)+B(r10) | 8D | modrm | d32 */
+        put_rex(out, true, d, 10);        /* REX.R (reg=dst) + REX.B (base=r10) */
+        put8(out, 0x8D);
+        put8(out, modrm(2, d, 10));       /* mod=10 reg=dst rm=r10(=2) -> [r10+d32] */
+        {
+            MReloc r2;
+            r2.kind = MRelocKind::SECREL32; /* offset del var en .tls */
+            r2.patch_at = static_cast<uint32_t>(out.size());
+            r2.sym_idx = static_cast<uint32_t>(mi.src1.value);
+            r2.addend = 0;
+            fn.relocs.push_back(r2);
+        }
+        put32(out, 0);
         return true;
     }
     case MOp::MOV_SYM: {
@@ -809,8 +1424,72 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         if (mi.src1.kind == MOperandKind::IMM32) {
             const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
             if (idx < fn.asm_blobs.size()) {
-                const std::vector<uint8_t> &b = fn.asm_blobs[idx].bytes;
-                out.insert(out.end(), b.begin(), b.end());
+                const AsmBlob &ab = fn.asm_blobs[idx];
+                const uint32_t blob_base = static_cast<uint32_t>(out.size());
+                out.insert(out.end(), ab.bytes.begin(), ab.bytes.end());
+                // Phase AS inc.6: emitir un MReloc por cada simbolo propio
+                // referenciado en el asm.  rip-relativo (`jmp [sym]`, `lea
+                // reg,[rip+sym]`) -> DATA_REL32; imm absoluto (`mov rax,sym`)
+                // -> ABS64.  @c patch_at absoluto en @c out; encode() lo
+                // reubica relativo a la funcion (igual que CALL_SYM).  El
+                // driver resuelve el nombre del simbolo (funcion o dato).
+                for (const auto &sr : ab.sym_refs) {
+                    // Decodificar el nombre CANONICO que dejo lower_asm:
+                    //   __vxf_<label>  -> FUNCION del modulo
+                    //   __vxg_<slot>   -> GLOBAL (static_data slot)
+                    // y combinarlo con la FORMA (kind) para fijar el reloc:
+                    //   funcion + branch  -> CALL_REL32, nombre bare (fn_by_name)
+                    //   funcion + abs/data-> fnsym:<label>
+                    //   global  + abs     -> ABS64,      rodata.<slot>
+                    //   global  + data    -> DATA_REL32, rodata.<slot>
+                    std::string reloc_sym;
+                    MRelocKind kind = MRelocKind::DATA_REL32;
+                    const std::string &cn = sr.symbol;
+                    const bool is_fn = cn.rfind("__vxf_", 0) == 0;
+                    const bool is_g = cn.rfind("__vxg_", 0) == 0;
+                    if (is_fn) {
+                        const std::string label = cn.substr(6);
+                        if (sr.kind == AsmBlob::AsmSymRefKind::BranchRel32) {
+                            reloc_sym = label; // CALL_REL32 usa el bare label
+                            kind = MRelocKind::CALL_REL32;
+                        } else {
+                            reloc_sym = "fnsym:" + label;
+                            kind = (sr.kind == AsmBlob::AsmSymRefKind::Abs64)
+                                       ? MRelocKind::ABS64
+                                       : MRelocKind::DATA_REL32;
+                        }
+                    } else if (is_g) {
+                        reloc_sym = "rodata." + cn.substr(6);
+                        kind = (sr.kind == AsmBlob::AsmSymRefKind::Abs64)
+                                   ? MRelocKind::ABS64
+                                   : MRelocKind::DATA_REL32;
+                    } else {
+                        // Simbolo no decorado (no resuelto por lower_asm): se
+                        // emite tal cual (best-effort segun la forma).
+                        reloc_sym = cn;
+                        kind = (sr.kind == AsmBlob::AsmSymRefKind::BranchRel32)
+                                   ? MRelocKind::CALL_REL32
+                               : (sr.kind == AsmBlob::AsmSymRefKind::Abs64)
+                                   ? MRelocKind::ABS64
+                                   : MRelocKind::DATA_REL32;
+                    }
+                    uint32_t sidx = UINT32_MAX;
+                    for (uint32_t i = 0; i < fn.reloc_symbols.size(); ++i)
+                        if (fn.reloc_symbols[i] == reloc_sym) {
+                            sidx = i;
+                            break;
+                        }
+                    if (sidx == UINT32_MAX) {
+                        sidx = static_cast<uint32_t>(fn.reloc_symbols.size());
+                        fn.reloc_symbols.push_back(reloc_sym);
+                    }
+                    MReloc r;
+                    r.kind = kind;
+                    r.patch_at = blob_base + sr.offset;
+                    r.sym_idx = sidx;
+                    r.addend = 0;
+                    fn.relocs.push_back(r);
+                }
             }
         }
         return true;

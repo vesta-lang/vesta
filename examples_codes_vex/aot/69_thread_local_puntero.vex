@@ -1,0 +1,20 @@
+// AOT thread_local: tomar la direccion (`&`) de una variable por-hilo y
+// acceder a traves de un puntero (incluido un `thread_local T*`).
+//
+// `&v` sobre un thread_local devuelve la direccion de la copia de ESTE hilo
+// (el codegen la calcula via el thread pointer).  Un `thread_local T* p`
+// guarda un puntero por-hilo.  Asi se pueden pasar variables por-hilo por
+// referencia o construir estructuras de datos por-hilo.
+//
+// Resultado esperado: se escribe 33 en `v` via un puntero local `q = &v`, y se
+// lee `v` via un thread_local puntero `p = &v` -> 33 -> exit code 33.
+
+thread_local i64 v = 77;
+thread_local i64* p;   // puntero por-hilo (8 bytes)
+
+i64 main() {
+    i64* q = &v;       // direccion de la copia de v de este hilo
+    *q = 33;           // escribir 33 en v via el puntero local
+    p = &v;            // guardar la direccion tambien en un thread_local ptr
+    return *p;         // leer v (=33) via el thread_local puntero
+}

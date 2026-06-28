@@ -21,9 +21,8 @@
 #ifndef ARENA_MANAGER_H
 #define ARENA_MANAGER_H
 
-#include <unordered_map>
-
 #include "arena.h"
+#include "util/oa_u64_map.h"
 
 namespace vm {
 
@@ -123,8 +122,9 @@ class ArenaManager {
     size_t total_allocated_bytes_; ///< Suma acumulada de bytes reservados por
                                    ///< todas las arenas activas
 
-    std::unordered_map<uint64_t, Arena>
-        arenas; ///< Catalogo de arenas indexado por ID
+    util::OAU64Map<Arena>
+        arenas; ///< Catalogo de arenas indexado por ID (open-addressing:
+                ///< cache-friendly + freestanding, sin std::unordered_map)
 
   protected:
     // Accessible por clases derivadas (p.ej. TLB) para crear arenas internas

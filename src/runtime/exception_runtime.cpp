@@ -534,6 +534,15 @@ namespace runtime {
 static std::once_flag g_av_handler_init_flag;
 
 #if defined(_WIN32)
+/// Handle del VEH instalado por ::install_host_av_handler.  Se guarda para poder
+/// retirarlo (::uninstall_host_av_handler) ANTES de que el codigo de la libreria
+/// quede sin mapear: si libvesta se descarga (FreeLibrary) sin retirar el VEH,
+/// la cadena de manejadores conserva un puntero a codigo muerto y el cierre del
+/// proceso (o cualquier excepcion posterior) salta a esa direccion -> segfault.
+static void *g_av_veh_handle = nullptr;
+#endif
+
+#if defined(_WIN32)
 /**
  * @brief Stub al que el VEH redirige RIP cuando ocurre un AV
  *        capturable.  Corre en contexto de usuario normal (no async)
@@ -617,8 +626,18 @@ void install_host_av_handler() noexcept {
         // Primer parametro = 1 -> registrar al inicio de la cadena
         // (antes del default Windows handler).  Asi capturamos AVs
         // antes de que llegue el "Application has stopped" del OS.
-        (void)AddVectoredExceptionHandler(1u, &vex_av_veh);
+        // Guardamos el handle para poder retirarlo al descargar la libreria.
+        g_av_veh_handle = AddVectoredExceptionHandler(1u, &vex_av_veh);
     });
+}
+
+void uninstall_host_av_handler() noexcept {
+    // Retirar el VEH.  Imprescindible si libvesta se descarga con FreeLibrary:
+    // tras desmapear la DLL, un VEH colgante apuntaria a codigo muerto.
+    if (g_av_veh_handle) {
+        RemoveVectoredExceptionHandler(g_av_veh_handle);
+        g_av_veh_handle = nullptr;
+    }
 }
 #else
 // POSIX: handler de SIGSEGV / SIGFPE.  El handler usa siglongjmp directamente
@@ -653,6 +672,14 @@ void install_host_av_handler() noexcept {
         (void)sigaction(SIGBUS, &sa, nullptr);
         (void)sigaction(SIGFPE, &sa, nullptr);
     });
+}
+
+void uninstall_host_av_handler() noexcept {
+    // Restaurar el comportamiento por defecto para que, si la libreria se
+    // descarga (dlclose), no quede un handler apuntando a codigo desmapeado.
+    std::signal(SIGSEGV, SIG_DFL);
+    std::signal(SIGBUS, SIG_DFL);
+    std::signal(SIGFPE, SIG_DFL);
 }
 #endif
 

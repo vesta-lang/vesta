@@ -527,7 +527,7 @@ bool ClassRegistry::add_method(ClassInfo *cls, const MethodDecl &decl) {
 
     // Reconstruir vtable manteniendo los slots heredados que no han
     // cambiado.  Override pisa el slot de mismo nombre; nuevo metodo
-    // se anyade al final.
+    // se añade al final.
     auto new_vtbl = std::make_unique<MethodInfo *[]>(new_count);
     for (size_t i = 0; i < new_count; ++i)
         new_vtbl[i] = &new_arr[i];

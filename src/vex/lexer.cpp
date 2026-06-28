@@ -94,6 +94,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::KW_STACK: return "Stack";
     case TokenKind::KW_UNIQUE: return "unique";
     case TokenKind::KW_SHARED: return "shared";
+    case TokenKind::KW_GC: return "gc";
     case TokenKind::KW_BORROW: return "borrow";
     case TokenKind::KW_BORROW_MUT: return "borrow_mut";
     case TokenKind::KW_CONST: return "const";
@@ -132,6 +133,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::KW_NEW: return "new";
     case TokenKind::KW_DELETE: return "delete";
     case TokenKind::KW_THIS: return "this";
+    case TokenKind::KW_THREAD_LOCAL: return "thread_local";
     case TokenKind::KW_SUPER: return "super";
     case TokenKind::KW_SYNCHRONIZED: return "synchronized";
     case TokenKind::KW_MONITOR: return "monitor";
@@ -187,6 +189,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::SEMICOLON: return ";";
     case TokenKind::COLON: return ":";
     case TokenKind::DOT: return ".";
+    case TokenKind::DOTDOTDOT: return "...";
     case TokenKind::ARROW: return "->";
     case TokenKind::FAT_ARROW: return "=>";
     case TokenKind::QUESTION: return "?";
@@ -283,6 +286,7 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
     case 'g':
         VEX_KW_EXACT("get", TokenKind::KW_GET);
         VEX_KW_EXACT("goto", TokenKind::KW_GOTO);
+        VEX_KW_EXACT("gc", TokenKind::KW_GC);
         break;
     case 'i':
         VEX_KW_EXACT("if", TokenKind::KW_IF);
@@ -330,6 +334,7 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
         break;
     case 't':
         VEX_KW_EXACT("this", TokenKind::KW_THIS);
+        VEX_KW_EXACT("thread_local", TokenKind::KW_THREAD_LOCAL);
         VEX_KW_EXACT("throw", TokenKind::KW_THROW);
         VEX_KW_EXACT("true", TokenKind::TRUE_KW);
         VEX_KW_EXACT("try", TokenKind::KW_TRY);
@@ -1393,6 +1398,9 @@ Token Lexer::lex_symbol() {
         /* A.39: `..` y `..=` para rangos en comptime for. */
         if (peek_char(1) == '.' && peek_char(2) == '=') {
             return emit(TokenKind::DOTDOTEQ, 3);
+        }
+        if (peek_char(1) == '.' && peek_char(2) == '.') {
+            return emit(TokenKind::DOTDOTDOT, 3); // variadico
         }
         if (peek_char(1) == '.') return emit(TokenKind::DOTDOT, 2);
         return emit(TokenKind::DOT, 1);

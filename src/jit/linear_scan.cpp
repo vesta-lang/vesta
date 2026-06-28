@@ -129,6 +129,17 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
 
             const bool cc = crosses_call(iv);
 
+            /* ---- force_spill: memory-resident obligatorio ----
+             * Vregs live-in a un sucesor abnormal (handler de excepcion):
+             * deben vivir en un slot para sobrevivir al edge del throw (el
+             * catch recarga del slot tras el unwind).  Mismo trato que un GC
+             * root cross-call. */
+            if (vid < ivs.force_spill.size() && ivs.force_spill[vid]) {
+                out.assign[vid].loc = RegAlloc::Loc::SPILL;
+                out.assign[vid].slot = out.num_spill_slots++;
+                continue;
+            }
+
             /* ---- GC root vivo a traves de un call: SPILL forzado ----
              * (Phase D.7 commit 6, enfoque A).  Un valor GC en un registro
              * a traves de un call seria invisible al GC (que escanea el
@@ -143,14 +154,46 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
 
             /* ---- Buscar un fisico libre y usable ---- */
             int chosen = -1;
-            for (uint8_t r : allocatable) {
-                if (occupied[r]) continue;
-                if (cc && !is_callee(r)) continue; // cross-call: solo callee
-                if (clobbered_for(iv, r))
-                    continue; // inc.5e: clobbered por un asm
-                chosen = static_cast<int>(r);
-                break;
+            /* Coalescing 2-address: preferir el fisico de src1 (hint) si esta
+             * LIBRE.  Libre <=> src1 ya expiro = murio -> reusar su reg para
+             * dst es seguro y elide el `mov dst, src1` del legalizado.  Si no
+             * esta libre/usable, cae al greedy normal. */
+            if (vid < ivs.coalesce_hint.size() && ivs.coalesce_hint[vid] >= 0) {
+                const uint32_t partner =
+                    static_cast<uint32_t>(ivs.coalesce_hint[vid]);
+                /* CRITICO: el reg de partner solo conserva su valor si partner
+                 * MUERE exactamente en el def de dst (su ultimo uso = la ranura
+                 * use del op 2-address, posicion 2*gi; el def de dst = 2*gi+1).
+                 * Asi no hay hueco donde otro vreg reuse el reg.  Posiciones: 2
+                 * por instr (use=2*gi, def=2*gi+1) -> partner.end()+1 ==
+                 * dst.start().  Para dst loop-carried (start = header, mucho
+                 * antes) no se cumple -> no coalesce (seguro).  Sin este guard,
+                 * occupied[hr]==false (libre) NO garantiza que hr aun tenga el
+                 * valor de partner (pudo morir antes y reusarse el reg). */
+                if (partner < out.assign.size() &&
+                    out.assign[partner].loc == RegAlloc::Loc::REG &&
+                    partner < ivs.intervals.size() &&
+                    ivs.intervals[partner].end() + 1u == istart) {
+                    const uint8_t hr = out.assign[partner].reg;
+                    /* hr debe ser de esta clase (mismo banco), estar libre y
+                     * pasar los filtros cross-call / clobber. */
+                    bool in_class = false;
+                    for (uint8_t r : allocatable)
+                        if (r == hr) { in_class = true; break; }
+                    if (in_class && !occupied[hr] && !(cc && !is_callee(hr)) &&
+                        !clobbered_for(iv, hr))
+                        chosen = static_cast<int>(hr);
+                }
             }
+            if (chosen < 0)
+                for (uint8_t r : allocatable) {
+                    if (occupied[r]) continue;
+                    if (cc && !is_callee(r)) continue; // cross-call: solo callee
+                    if (clobbered_for(iv, r))
+                        continue; // inc.5e: clobbered por un asm
+                    chosen = static_cast<int>(r);
+                    break;
+                }
 
             if (chosen >= 0) {
                 const uint8_t r = static_cast<uint8_t>(chosen);
@@ -165,9 +208,20 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 continue;
             }
 
-            /* ---- Sin reg libre: SPILL (Poletto, fin mas lejano) ---- */
+            /* ---- Sin reg libre: SPILL por NEXT-USE (no por fin mas lejano) ----
+             * Mejor heuristica que Poletto: mantener en reg el intervalo que se
+             * usa ANTES; spillear el que se usa MAS TARDE (su reg no se necesita
+             * en mas tiempo).  next_use = primer uso >= istart (lista uses
+             * ascendente); si no quedan usos -> end() (vivo pero sin usos, buen
+             * candidato a spill).  Solo heuristica -> no afecta correctitud. */
+            auto next_use = [&](uint32_t av) -> uint32_t {
+                const auto &u = ivs.intervals[av].uses;
+                auto it = std::lower_bound(u.begin(), u.end(), istart);
+                if (it != u.end()) return *it;
+                return ivs.intervals[av].end();
+            };
             int victim_idx = -1;
-            uint32_t victim_end = 0;
+            uint32_t victim_nu = 0;
             for (size_t a = 0; a < active.size(); ++a) {
                 const uint32_t av = active[a];
                 const uint8_t r = out.assign[av].reg;
@@ -177,14 +231,14 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 /* inc.5e: no robar un reg clobbered por un asm que iv cruza
                  * (iv no podria vivir ahi). */
                 if (clobbered_for(iv, r)) continue;
-                const uint32_t e = ivs.intervals[av].end();
-                if (victim_idx < 0 || e > victim_end) {
+                const uint32_t nu = next_use(av);
+                if (victim_idx < 0 || nu > victim_nu) {
                     victim_idx = static_cast<int>(a);
-                    victim_end = e;
+                    victim_nu = nu;
                 }
             }
 
-            if (victim_idx < 0 || iv.end() >= victim_end) {
+            if (victim_idx < 0 || next_use(vid) >= victim_nu) {
                 /* Spillear el PROPIO intervalo (su fin es el mas lejano,
                  * o no hay activo robable). */
                 out.assign[vid].loc = RegAlloc::Loc::SPILL;

@@ -241,7 +241,7 @@ std::string module_cost_to_json(const ModuleCost &m);
  * Busca la funcion @p name en @p mc y devuelve una linea legible con su
  * coste PARCIAL y TOTAL, e.g. "coste: parcial O(n) | total O(n^2)".  Si
  * la funcion declara @c @complexity y hay discrepancia confirmada,
- * anyade un marcador "[!= declarada]".  Si la funcion no esta en @p mc
+ * añade un marcador "[!= declarada]".  Si la funcion no esta en @p mc
  * devuelve cadena vacia (el renderer no anota nada).  Pensada para
  * anexar al titulo del nodo-funcion en Graphviz/Mermaid/HTML.
  */

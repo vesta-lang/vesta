@@ -14,7 +14,7 @@
  *
  * El cuerpo de cada funcion lo genera el back-end de produccion (path vreg ->
  * @c TargetRegInfo + selector + encoder), que YA es portable por arquitectura:
- * portar a x86-32/x86-16/ARM/AArch64/RISC-V = anyadir su @c target_<arch>() +
+ * portar a x86-32/x86-16/ARM/AArch64/RISC-V = añadir su @c target_<arch>() +
  * selector + encoder (el register allocator core es generico).
  *
  * Lo unico ESPECIFICO de cada arch+formato que vive aqui es el @c _start: el
@@ -25,7 +25,7 @@
  *     IAT; ELF freestanding termina via @c syscall @c exit(60)).
  *
  * Por eso la sintesis del stub se despacha por @c (AotArch, ObjFormat).  Hoy
- * solo esta implementado x86-64; anyadir una arch nueva = un @c case mas en
+ * solo esta implementado x86-64; añadir una arch nueva = un @c case mas en
  * @c aot_make_start_stub (sin tocar el resto del pipeline AOT).
  */
 

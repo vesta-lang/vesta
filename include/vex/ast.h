@@ -524,6 +524,13 @@ struct StringLitExpr : Expr {
 
 struct IdentExpr : Expr {
     std::string name;
+    /// Function pointers: el type checker marca @c true cuando el ident
+    /// resuelve a una funcion top-level usada como VALOR (no llamada
+    /// directa).  El lowering emite @c LABEL_ADDR (direccion de la funcion)
+    /// en vez de un load de variable.  @c func_ref_mangled guarda el nombre
+    /// mangled real del simbolo a referenciar.
+    bool is_func_ref = false;
+    std::string func_ref_mangled;
     IdentExpr() : Expr(NodeKind::IdentExpr) {}
 };
 
@@ -668,6 +675,11 @@ struct CallExpr : Expr {
     /// emitir una llamada.  Equivalente al `splice` de Lisp/Scheme
     /// para emitir codigo al AST runtime (no solo eval comptime).
     std::unique_ptr<Expr> macro_expanded;
+    /// Function pointers: el type checker marca @c true cuando el callee es
+    /// una expresion de tipo FUNCTION (variable/cast/etc.), no una llamada
+    /// directa por nombre.  El lowering baja a CALLIND (llamada indirecta a
+    /// traves del puntero que resulta de evaluar @c callee).
+    bool is_indirect_call = false;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 
@@ -742,6 +754,11 @@ struct NewExpr : Expr {
     /// a @c __new_<Class>_shared (que emite el opcode @c newobjs en
     /// lugar de @c newobj).
     bool is_shared = false;
+    /// gc<T> opt-in (`import vex.gc`): el var-decl padre es @c gc<Class>.  Lo
+    /// setea @c lower_var_decl; el lowering despacha a @c __new_<Class>_gc
+    /// (aloca con @c vex_gc_alloc + marca @c is_gc_object) y NO registra
+    /// cleanup RAII (el GC colecta, incl. ciclos).
+    bool is_gc = false;
     /// Bug fix 2026-05-23: indica que @c class_name YA fue mutado a su
     /// forma mangled (Node_i32 etc).  Sin este flag, re-llamadas a
     /// @c check_new sobre el mismo NewExpr (e.g. por compound assign
@@ -1326,6 +1343,8 @@ struct SynchronizedStmt : Stmt {
  */
 struct AsmStmt : Stmt {
     std::string body; ///< Cuerpo NASM Intel verbatim (raw-slice del source).
+    SourceLoc body_loc; ///< loc del primer token del cuerpo (para mapear el
+                        ///< error de ensamblado a la linea/columna exactas).
     bool q_volatile =
         true; ///< @c volatile (default): no optimizar/reordenar/eliminar.
     bool q_nomem = false; ///< @c nomem: el bloque no accede a memoria.
@@ -1359,6 +1378,11 @@ struct ParamDecl : Node {
      * de parsear la expresion. El @c type queda materializado como
      * primitivo STRING para el body del macro. */
     bool is_expr_capture = false;
+    /** @c true si el parametro es VARIADICO (`T... name`, debe ser el ultimo).
+     * El callee lo recibe como un puntero @c T* al array empaquetado por el
+     * caller; el numero de args variadicos se lee con el builtin @c vacount().
+     * El @c type guarda el tipo del ELEMENTO (T), no el del puntero. */
+    bool is_variadic = false;
     ParamDecl() : Node(NodeKind::ParamDecl) {}
 };
 
@@ -1426,6 +1450,17 @@ struct FunctionDecl : Node {
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
     bool is_alloc_override = false; ///< @AllocatorOverride (AOT freestanding)
     bool is_panic_handler = false;  ///< @PanicHandler (AOT freestanding)
+    /// Phase NR: `@Naked` -- funcion sin prologo/epilogo NI ret implicito.
+    /// El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
+    /// programador provee la salida (`ret`/`iretq`/`iret`).  Para ISRs,
+    /// stubs de entry y cambio de modo en dev OS.  Semantica de
+    /// `__attribute__((naked))` de GCC.  Solo lo consume el codegen.
+    bool is_naked = false;
+    /// @NoExcept (o modulo @NoExceptions): esta funcion promete no propagar
+    /// excepciones.  El frontend rechaza throw/try/catch en su cuerpo y el
+    /// codegen omite el bookkeeping de excepciones (cero overhead).  Un
+    /// unwrap-null en este scope termina el proceso (no es catchable).
+    bool is_noexcept = false;
     /// C-3: @StringConcat -- esta fn libre reemplaza el operador `+`
     /// (y el builtin str_concat) entre dos strings.  Firma esperada:
     /// fn(string, string) -> string.  Aplica en native_poo_ (AOT) y Full.
@@ -1523,6 +1558,10 @@ struct GlobalVarDecl : Node {
     /// se baja como @c IrOp::CONST inline (cero overhead).  No genera
     /// global runtime storage.
     bool is_comptime = false;
+    /// `thread_local <type> name = init;`  -- almacenamiento por-hilo (TLS).
+    /// El init debe ser comptime-constante (plantilla por-hilo, como en C).
+    /// En AOT baja a TLS NATIVO: seccion SHF_TLS + PT_TLS / TLS directory PE.
+    bool is_thread_local = false;
     /// v4: atributos `@hot`/`@cold`/`@align(N)`/`@section("name")`.
     /// Solo aplicables a comptime const (string/array/struct).
     bool attr_hot = false;
@@ -1951,6 +1990,10 @@ struct ClassDecl : Node {
  */
 struct ModuleNode : Node {
     std::vector<std::unique_ptr<Node>> decls; ///< FunctionDecl o GlobalVarDecl.
+    /// @NoExceptions a nivel modulo: deshabilita excepciones en TODO el
+    /// modulo (todas las funciones + metodos lo heredan).  Para contextos
+    /// que no pueden tenerlas (kernel, freestanding, embedded).
+    bool no_exceptions = false;
     ModuleNode() : Node(NodeKind::Module) {}
 };
 

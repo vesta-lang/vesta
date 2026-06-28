@@ -35,7 +35,7 @@ public void clip_set(u8* src, i32 n) {
     g_len = n;
 }
 
-// Anyade `n` bytes al final del portapapeles (kill-ring estilo emacs).
+// añade `n` bytes al final del portapapeles (kill-ring estilo emacs).
 public void clip_append(u8* src, i32 n) {
     if (n <= 0) return;
     if (g_len + n > g_cap) {

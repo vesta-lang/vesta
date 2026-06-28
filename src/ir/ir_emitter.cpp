@@ -702,7 +702,7 @@ static void emit_restore_all_gc_aware(EmitCtx &ctx, uint32_t call_pos,
 // como temp; con 2+ args spilled, el segundo load clobbeaba el primero, y
 // ambos terminaban con el mismo valor en moves[].  Fix: emitir spills tras
 // el parallel-move usando direct load `mov r_target, [slot]` (sin pasar por
-// scratch).  Para values is_gc_object spilled, anyade el gcderef+xchg que
+// scratch).  Para values is_gc_object spilled, añade el gcderef+xchg que
 // load_src haria normalmente.
 static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg,
                                   ir::IrValueId vid) {
@@ -1288,16 +1288,31 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
 
 // Devuelve true si ins es una CMP cuyo unico uso es la siguiente instruccion
 // BR_COND (para fusion cmp+branch).
-static bool can_fuse_cmp_brcond(const IrBlock &bb, size_t cmp_idx,
-                                const IrInstr &br_cond_ins) {
+static bool can_fuse_cmp_brcond(const IrFunction &fn, const IrBlock &bb,
+                                size_t cmp_idx, const IrInstr &br_cond_ins) {
     const IrInstr &cmp = bb.instrs[cmp_idx];
     if (cmp.dst == IR_NO_VALUE) return false;
-    // La fusion es segura si el resultado cmp no se usa en ningun otro sitio
-    // dentro del bloque, aparte de la siguiente instruccion BR_COND.
-    // Comprobacion simplificada: solo verificamos que sea el uso inmediato.
-    if (!br_cond_ins.operands.empty() && br_cond_ins.operands[0] == cmp.dst)
-        return true;
-    return false;
+    // El BR_COND inmediato debe ramificar sobre el resultado del cmp.
+    if (br_cond_ins.operands.empty() || br_cond_ins.operands[0] != cmp.dst)
+        return false;
+    // CRITICO: la fusion (cmpjmp) consume el cmp SIN materializar su resultado
+    // en un registro.  Solo es segura si el resultado del cmp se usa
+    // EXCLUSIVAMENTE en este BR_COND.  Si se usa en cualquier otro sitio (p.ej.
+    // `bool b = a < c; if (b) {...}; if (b) {...}` -> el mismo valor alimenta
+    // un segundo BR_COND en otro bloque), el segundo uso leeria un registro sin
+    // materializar -> bool constante/erroneo.  Contamos todos los usos del
+    // valor en la funcion; debe haber exactamente UNO (este BR_COND).
+    size_t uses = 0;
+    for (const auto &b : fn.blocks) {
+        for (const auto &in : b.instrs) {
+            for (IrValueId op : in.operands)
+                if (op == cmp.dst) uses = uses + 1;
+            if (in.func_ptr == cmp.dst) uses = uses + 1;
+            for (const auto &pa : in.phi_args)
+                if (pa.value == cmp.dst) uses = uses + 1;
+        }
+    }
+    return uses == 1;
 }
 
 /**
@@ -1505,6 +1520,17 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ctx.comments) {
             ctx.out << "    // match_variant @" << ins.func_name
                     << "  n_arms=" << ins.imm << "\n";
+        }
+        break;
+
+    // --- SWITCH_DENSE ---
+    // Marker del jump table denso O(1).  No-op en el interp/bytecode: el
+    // dispatch real lo hace el BST que lower_match_expr emite junto al marker.
+    // Solo el backend JIT (vreg) lo baja a un island nativo (computed-goto).
+    case IrOp::SWITCH_DENSE:
+        if (ctx.comments) {
+            ctx.out << "    // switch_dense min=" << static_cast<int64_t>(ins.imm)
+                    << " n=" << ins.jump_targets.size() << "\n";
         }
         break;
 
@@ -1845,7 +1871,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (idx + 1 < bb.instrs.size()) {
             const IrInstr &next = bb.instrs[idx + 1];
             if (next.op == IrOp::BR_COND &&
-                can_fuse_cmp_brcond(bb, idx, next)) {
+                can_fuse_cmp_brcond(ctx.fn, bb, idx, next)) {
                 // Fusion: emitir cmp + salto condicional ahora.
                 //
                 // BUG critico arreglado (2026-05-04): las copias PHI
@@ -2926,14 +2952,409 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     case IrOp::MEMCPY: {
+        // memcpy HOST->HOST: copia ins.operands[2] bytes desde [src] a [dst],
+        // ambos punteros del proceso HOST.  El viejo `vmcopy` era VM->host
+        // (cursor) -- incorrecto para punteros host y, en la practica, codigo
+        // muerto (solo lo emitian rutas que corren por vreg/AOT, nunca por el
+        // interprete).  El JIT (vreg) baja MEMCPY a `rep movsb`; aqui, para el
+        // interprete (oraculo de diff_harness), emitimos un bucle host->host
+        // byte a byte.  Robusto frente al regalloc: push/pop de r10/r11/r12
+        // como temporales (pueden tener SSA vivos) y r13 como scratch del
+        // byte.  Los operandos se materializan via push de su VALOR (sin
+        // hazard de parallel-move) y se sacan a r10/r11/r12.
         if (ins.operands.size() < 3) break;
-        std::string r_dst_ = ctx.reg_of(ins.operands[0]);
-        std::string r_src_ = ctx.reg_of(ins.operands[1]);
-        std::string r_len_ = ctx.reg_of(ins.operands[2]);
-        ctx.out << "    vmcopy " << r_dst_ << ", " << r_src_ << ", " << r_len_
-                << "\n";
+        const std::string lbl_top = ctx.unique_lbl("memcpy_top");
+        const std::string lbl_end = ctx.unique_lbl("memcpy_end");
+        ctx.out << "    push r10\n"; // salvar temporales
+        ctx.out << "    push r11\n";
+        ctx.out << "    push r12\n";
+        // Empujar los VALORES de dst/src/len.  load_src EMITE codigo (carga de
+        // spill) como efecto colateral, asi que hay que capturarlo en una var
+        // ANTES del push (el orden de evaluacion de `<<` no esta especificado
+        // -> interleaving) y empujarlo antes del siguiente load_src (que puede
+        // reusar el mismo scratch r13/r14).
+        { const std::string p = ctx.load_src(ins.operands[0], 0);
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0);
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0);
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r12\n"; // len
+        ctx.out << "    pop r11\n"; // src
+        ctx.out << "    pop r10\n"; // dst
+        ctx.out << "    cmpu r12, 0\n";
+        ctx.out << "    jmp.je @Absolute(\"" << EmitCtx::abs_lbl(lbl_end)
+                << "\")\n";
+        ctx.out << lbl_top << ":\n";
+        ctx.out << "    loadzh r13b, r11\n";    // byte host [src]
+        ctx.out << "    movh [r10], r13b\n";    // byte host [dst]
+        ctx.out << "    addu r10, 1\n";
+        ctx.out << "    addu r11, 1\n";
+        ctx.out << "    decjnz r12, @Absolute(\"" << EmitCtx::abs_lbl(lbl_top)
+                << "\")\n"; // r12--; if r12!=0 -> top
+        ctx.out << lbl_end << ":\n";
+        ctx.out << "    pop r12\n"; // restaurar temporales
+        ctx.out << "    pop r11\n";
+        ctx.out << "    pop r10\n";
+        // r13/r14 quedan clobreados; invalidar caches de constante.
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
         break;
     }
+
+    // VEC_UNOP dst[i] = OP a[i]  (auto-vectorizacion unaria).  Interprete
+    // (oraculo) = W ops ESCALARES por lane (copy via movh; fneg/fabs/fsqrt via
+    // bitg2z/f<op>/bitz2g); el JIT lo baja a SIMD packed (SQRTPD/XORPD/ANDPD).
+    // Solo f64 (el matcher solo emite f64).  Robusto: push/pop r10/r11 (dst/a).
+    case IrOp::VEC_UNOP: {
+        if (ins.operands.size() < 2) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const uint64_t subop = (ins.imm >> 8) & 0xFF;
+        const size_t esz = ir_type_size(ins.type); // F64=8
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const char *uop = (subop == 1)   ? "fneg"
+                          : (subop == 2) ? "fabs"
+                          : (subop == 3) ? "fsqrt"
+                                         : nullptr; // 0=copy (sin op)
+        ctx.out << "    push r10\n    push r11\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r11\n    pop r10\n"; // a, dst
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+            }
+            ctx.out << "    movh r14, [r11]\n";        // a[k] bits
+            if (uop) {
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    " << uop << " f0, f0\n";
+                ctx.out << "    bitz2g r14, f0\n";
+            }
+            ctx.out << "    movh [r10], r14\n";        // dst[k]
+        }
+        ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
+    // VEC_BINOP dst[i] = a[i] OP b[i]  (auto-vectorizacion).  En el interprete
+    // (oraculo) lo bajamos a W operaciones ESCALARES por lane; el JIT lo baja a
+    // SIMD packed (MOVUPD + ADDPD/PADDQ/...).  Soporta f64/f32 (via bitg2z/
+    // f<op>/bitz2g) y enteros i32/i64 (add/sub directo).  Robusto frente al
+    // regalloc: push/pop de r10/r11/r12 (dst/a/b) + r13/r14 + f0/f1 scratch.
+    case IrOp::VEC_BINOP: {
+        if (ins.operands.size() < 3) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const uint64_t subop = (ins.imm >> 8) & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const char *fop = (subop == 0)   ? "fadd"
+                          : (subop == 1) ? "fsub"
+                          : (subop == 2) ? "fmul"
+                                         : "fdiv";
+        // int: add/sub/mul.  El low de un producto signed==unsigned -> "muls"
+        // sirve para i/u (solo guardamos los esz bytes bajos).
+        const char *iop = (subop == 0)   ? "adds"
+                          : (subop == 1) ? "subs"
+                                         : "muls";
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        // sufijo de tamano del reg para load/store entero
+        // (8b->"", 4b->"d", 2b->"w", 1b->"b").
+        const std::string rsz =
+            (esz == 4) ? "d" : (esz == 2) ? "w" : (esz == 1) ? "b" : "";
+        // Cargar los 3 punteros (dst/a/b) en r10/r11/r12 via push del VALOR
+        // (sin hazard de parallel-move).
+        ctx.out << "    push r10\n    push r11\n    push r12\n";
+        // load_src emite codigo (spill) -> capturar en var ANTES del push.
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0); // b
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n"; // b, a, dst
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+                ctx.out << "    addu r12, " << esz << "\n";
+            }
+            if (is_fp) {
+                // carga esz bytes (f64=8 -> r14; f32=4 -> r14d) y opera con el
+                // sufijo .ps cuando es f32 (low 32 del banco ZMM).
+                ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k] bits
+                ctx.out << "    movh r13" << rsz << ", [r12]\n"; // b[k] bits
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    bitg2z f1, r13\n";
+                ctx.out << "    " << fop << suf << " f0, f1\n";
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+            } else {
+                // entero: cargar esz bytes ZERO-EXTENDIDO (loadzh, no movh: el
+                // movh-load parcial de 16/8b deja bits altos basura que rompen
+                // muls/adds de 64b), operar, guardar los esz bytes bajos.  El
+                // signo no importa: los esz bytes bajos del resultado dependen
+                // solo de los esz bytes bajos de los operandos (add/sub/mul).
+                ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
+                ctx.out << "    loadzh r13" << rsz << ", r12\n"; // b[k]
+                ctx.out << "    " << iop << " r14, r13\n";       // a OP b (64b)
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+            }
+        }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
+    // VEC_BINOP_S dst[i] = a[i] OP escalar.  Interp = W ops escalares por lane.
+    // f64: el escalar en f2.  enteros: el escalar (i64 replicado; sus esz bytes
+    // bajos = el valor) en r13; loadzh por lane + add/sub/mul de 64b + store low.
+    // r10=dst, r11=a.
+    case IrOp::VEC_BINOP_S: {
+        if (ins.operands.size() < 3) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const uint64_t subop = (ins.imm >> 8) & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const char *fop = (subop == 0)   ? "fadd"
+                          : (subop == 1) ? "fsub"
+                          : (subop == 2) ? "fmul"
+                                         : "fdiv";
+        const char *iop = (subop == 0)   ? "adds"
+                          : (subop == 1) ? "subs"
+                                         : "muls";
+        const std::string rsz =
+            (esz == 4) ? "d" : (esz == 2) ? "w" : (esz == 1) ? "b" : "";
+        ctx.out << "    push r10\n    push r11\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
+          if (is_fp) ctx.out << "    bitg2z f2, " << p << "\n";
+          else       ctx.out << "    mov r13, " << p << "\n"; }
+        ctx.out << "    pop r11\n    pop r10\n"; // a, dst
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+            }
+            if (is_fp) {
+                ctx.out << "    movh r14, [r11]\n"; // a[k]
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    " << fop << " f0, f2\n";
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14\n"; // dst[k]
+            } else {
+                ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
+                ctx.out << "    " << iop << " r14, r13\n";        // a OP scalar
+                ctx.out << "    movh [r10], r14" << rsz << "\n";  // dst[k]
+            }
+        }
+        ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
+    // VEC_BCAST: hoist del broadcast del escalar a XMM13 (solo JIT).  En el
+    // interprete es NO-OP: el VEC_BINOP_S del cuerpo re-lee el escalar (operando
+    // 2) por lane, asi que no necesita estado pre-difundido.
+    case IrOp::VEC_BCAST:
+        break;
+
+    // VEC_FMA fusionado (1 redondeo).  Interp (oraculo) = W ops ESCALARES por
+    // lane con `fmadd` (std::fma) para coincidir BIT-A-BIT con VFMADD231 del JIT.
+    // Dos formas: 3 ops {acc,a,b} = reduccion acc[i]+=a[i]*b[i] (sumando==dst);
+    // 4 ops {c,d,a,b} = element-wise c[i]=a[i]*b[i]+d[i] (sumando d != dst c).
+    // r9=sumando, r10=dst, r11=a, r12=b.  Solo f64/f32.
+    case IrOp::VEC_FMA: {
+        if (ins.operands.size() < 3) break;
+        const bool fma3 = (ins.operands.size() >= 4); // element-wise
+        const int o_dst = 0;
+        const int o_add = fma3 ? 1 : 0;
+        const int o_a = fma3 ? 2 : 1;
+        const int o_b = fma3 ? 3 : 2;
+        const uint64_t width = ins.imm & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const std::string rsz = (esz == 4) ? "d" : "";
+        ctx.out << "    push r9\n    push r10\n    push r11\n    push r12\n";
+        { const std::string p = ctx.load_src(ins.operands[o_add], 0); // sumando
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[o_dst], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[o_a], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[o_b], 0); // b
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n    pop r9\n";
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r9, " << esz << "\n";
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+                ctx.out << "    addu r12, " << esz << "\n";
+            }
+            ctx.out << "    movh r14" << rsz << ", [r9]\n"; // sumando[k]
+            ctx.out << "    bitg2z f0, r14\n";
+            ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    bitg2z f1, r13\n";
+            ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
+            ctx.out << "    bitg2z f2, r14\n";
+            ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // f0 = a*b + sumando
+            ctx.out << "    bitz2g r14, f0\n";
+            ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+        }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n    pop r9\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
+    // VEC_ACC_* : acumulador vectorial.  El JIT lo mantiene en un XMM dedicado;
+    // el INTERPRETE (oraculo) usa el acc_slot de MEMORIA (lento pero correcto)
+    // -> ZERO/ADD/FMA operan sobre el slot por lane; STORE es no-op (el acc ya
+    // esta en el slot).  Asi el slot tiene la suma al salir del bucle en AMBOS
+    // (la reduccion horizontal posterior lo consume igual).
+    case IrOp::VEC_ACC_ZERO: {
+        if (ins.operands.empty()) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width; // sub-slot idx
+        ctx.out << "    push r10\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0);
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r10\n";
+        if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n";
+        ctx.out << "    mov r14, 0\n";
+        for (uint64_t q = 0; q < width; q += 8) {
+            if (q > 0) ctx.out << "    addu r10, 8\n";
+            ctx.out << "    movh [r10], r14\n";
+        }
+        ctx.out << "    pop r10\n";
+        ctx.r14_cache = -1;
+        break;
+    }
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA: {
+        // acc[k] += a[k]  (ADD)  o  acc[k] += a[k]*b[k]  (FMA), por lane.
+        const bool is_fma = (ins.op == IrOp::VEC_ACC_FMA);
+        if (ins.operands.size() < (is_fma ? 3u : 2u)) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const std::string rsz = (esz == 4) ? "d" : "";
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        ctx.out << "    push r10\n    push r11\n    push r12\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // acc slot
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        if (is_fma) {
+            const std::string p = ctx.load_src(ins.operands[2], 0); // b
+            ctx.out << "    push " << p << "\n";
+            ctx.out << "    pop r12\n";
+        }
+        ctx.out << "    pop r11\n    pop r10\n"; // a, acc
+        { const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width;
+          if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n"; }
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+                if (is_fma) ctx.out << "    addu r12, " << esz << "\n";
+            }
+            if (is_fp) {
+                ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    bitg2z f1, r13\n";
+                if (is_fma) {
+                    ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
+                    ctx.out << "    bitg2z f2, r14\n";
+                    ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // += a*b
+                } else {
+                    ctx.out << "    fadd" << suf << " f0, f1\n"; // += a
+                }
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
+            } else {
+                // entero (solo ADD; FMA es float-only): acc[k] += a[k].
+                ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+                ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    adds r14, r13\n";                // 64b add
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
+            }
+        }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+    case IrOp::VEC_ACC_COMBINE: {
+        // acc[dst] += acc[src] por lane, sobre sub-slots de memoria del slot.
+        if (ins.operands.empty()) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const std::string rsz = (esz == 4) ? "d" : "";
+        const uint64_t dst_off = ((ins.imm >> 8) & 0xF) * width;
+        const uint64_t src_off = ((ins.imm >> 12) & 0xF) * width;
+        ctx.out << "    push r10\n    push r11\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0);
+          ctx.out << "    push " << p << "\n    push " << p << "\n"; }
+        ctx.out << "    pop r10\n    pop r11\n"; // ambos = slot base
+        if (dst_off) ctx.out << "    addu r10, " << dst_off << "\n"; // dst
+        if (src_off) ctx.out << "    addu r11, " << src_off << "\n"; // src
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+            }
+            if (is_fp) {
+                ctx.out << "    movh r14" << rsz << ", [r10]\n";
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    movh r13" << rsz << ", [r11]\n";
+                ctx.out << "    bitg2z f1, r13\n";
+                ctx.out << "    fadd" << suf << " f0, f1\n";
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14" << rsz << "\n";
+            } else {
+                ctx.out << "    movh r14" << rsz << ", [r10]\n";
+                ctx.out << "    movh r13" << rsz << ", [r11]\n";
+                ctx.out << "    adds r14, r13\n";
+                ctx.out << "    movh [r10], r14" << rsz << "\n";
+            }
+        }
+        ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+    case IrOp::VEC_ACC_STORE:
+        // no-op en el interprete: el acc[0] ya vive en el sub-slot 0.
+        break;
 
     // --- OOP / GC ---
     case IrOp::NEWOBJ: {

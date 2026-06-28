@@ -1,0 +1,17 @@
+// AOT thread_local: varias variables por-hilo, tamanos mixtos y mutacion.
+//
+// Demuestra que el bloque TLS por-hilo aloja MULTIPLES variables (con sus
+// plantillas: a=5, c=100, b a cero) y que se pueden MUTAR en runtime (b = 7).
+// Cada variable recibe su propio slot dentro del bloque; el codegen calcula el
+// offset de cada una y el load/store usa el ancho del tipo.
+//
+// Resultado esperado: 5 + 7 + 100 = exit code 112.
+
+thread_local i32 a = 5;   // plantilla inicializada
+thread_local i32 b;       // sin init -> cero por-hilo
+thread_local i64 c = 100; // tamano distinto (8 bytes)
+
+i64 main() {
+    b = 7;                // mutar la copia de ESTE hilo
+    return a + b + c;
+}

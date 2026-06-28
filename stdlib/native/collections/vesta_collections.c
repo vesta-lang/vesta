@@ -1866,7 +1866,7 @@ VESTA_PLUGIN_EXPORT void varr_reverse_u64(uint64_t ptr, uint64_t n) {
  * O(1) por slot (1 lookup + atomic-like increment en GcHeap).
  *
  * Para maxima reuso, las variantes gc_aware delegan a las funciones no-gc
- * y solo anyaden las llamadas gc_addref/gc_release alrededor.
+ * y solo añaden las llamadas gc_addref/gc_release alrededor.
  * ========================================================================= */
 
 /* Helper interno para llamar g_api->gc_addref si el API esta wired. */

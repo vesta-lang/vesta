@@ -26,7 +26,7 @@
  * phi-fold
  *         - ir_pass_dead_alloc_elim purga news cuyo resultado no se usa
  *
- *   O2: anyade analisis de flujo + transformaciones globales:
+ *   O2: añade analisis de flujo + transformaciones globales:
  *         - ir_pass_const_fold      pliega aritmetica con operandos constantes
  *         - ir_pass_unreachable     poda bloques no alcanzables desde entry
  *         - ir_pass_strength_reduction  MUL/DIV/MOD por 2^k -> SHL/SHR/AND
@@ -40,7 +40,7 @@
  *         - ir_pass_devirt_monomorphic  CALLVIRT con clase conocida -> CALL
  * directo
  *
- *   O3: anyade pases de duplicacion / reordenacion mas agresivos:
+ *   O3: añade pases de duplicacion / reordenacion mas agresivos:
  *         - ir_pass_cse             dedup de subexpresiones comunes
  * (intra-block)
  *         - ir_pass_const_cse_entry hoist de CONSTs a entry block
@@ -125,6 +125,13 @@ void ir_optimize(IrModule &mod, OptLevel level);
 bool ir_pass_dce(IrFunction &fn);
 
 /**
+ * @brief Elision comptime de UNWRAP cuando el operando es provably non-null
+ *        (CONST!=0, ALLOCA, STR_LIT_ADDR, LABEL_ADDR, o resultado de UNWRAP).
+ *        Convierte el UNWRAP en MOV -> copy_prop/DCE lo eliminan (cero codigo).
+ */
+bool ir_pass_elide_unwrap(IrFunction &fn);
+
+/**
  * @brief Pase Dead Alloc Elimination.
  *
  * Elimina CALLs a funciones synthetic @c __new_<ClassName> (helpers de
@@ -177,7 +184,11 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn);
  *
  * @return true si se promociono alguna ALLOCA.
  */
-bool ir_pass_promote_local_allocas(IrFunction &fn);
+// @c force_all=true (bare AOT): promueve TODAS las ALLOCAs a host_alloca,
+// escapen o no.  En bare nativo no hay VM stack (rbx no es un ProcessVM*),
+// asi que un ALLOCA_VM ([rbx+off]) corrompe.  Cualquier local debe vivir en
+// la pila nativa.  Default (false): solo promueve las que no escapan (JIT/VM).
+bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
 
 /**
  * @brief Promociona patrones `malloc(N) + ... + free(p)` locales sin
@@ -198,6 +209,42 @@ bool ir_pass_promote_local_allocas(IrFunction &fn);
  * @return true si se promociono algun RAW_ALLOC.
  */
 bool ir_pass_promote_local_raw_alloc(IrFunction &fn);
+
+/**
+ * @brief AOT/native_poo: promueve el env de una closure de HEAP
+ *        (GC_ALLOC/RAW_ALLOC) a STACK (ALLOCA) cuando no escapa del frame.
+ *
+ * Closure-aware: relaja el escape-check para `STORE R,closure_slot[+k]` (slot
+ * ALLOCA local) y `CALLCLOSURE env=R` (uso sincrono), que el pase generico
+ * marca como escape.  Conservador: cualquier uso desconocido -> no promueve
+ * (peor caso = rechazo en bare, NUNCA use-after-free).  Habilita closures
+ * capturantes que escapan (p.ej. tras inlinar la factoria) SIN heap ni leak.
+ * @return true si promociono algun env.
+ */
+bool ir_pass_promote_closure_env(IrFunction &fn);
+
+/**
+ * @brief Inserta el RAW_FREE del env de una closure que escapa cross-function
+ *        (opcion 1: heap + RAII determinista), solo AOT/bare (native_poo).
+ *
+ * Corre a NIVEL MODULO tras inline+promote (asi solo ve los envs que
+ * sobrevivieron como RAW_ALLOC etiquetado "__closure_env" -- escapes
+ * cross-function reales; los no-escapantes ya estan en stack via promote).
+ *
+ * Para cada funcion "yielder" (crea un env que escapa via RET, o reenvia el
+ * resultado de otra yielder), busca el DUENO terminal: el consumidor que liga
+ * el resultado a un local que NO se reenvia ni se deja escapar.  En ese dueno
+ * inserta `ep = LOAD [closure+8]; RAW_FREE ep` en cada RET (RAW_FREE(0) es
+ * no-op -> seguro para closures sin capturas).  Si TODA la cadena tiene dueno
+ * limpio, conserva el RAW_ALLOC (bare-compatible) y le quita el tag.  Si algun
+ * env no tiene dueno limpio, REVIERTE su RAW_ALLOC a GC_ALLOC -> aot_analyze
+ * lo rechaza limpio (REGLA: nunca leak).  Conservador: ante cualquier duda,
+ * revierte (rechazo) en vez de arriesgar un leak/UAF.
+ *
+ * @param mod Modulo a transformar in-place.
+ * @return true si inserto algun free o revirtio algun alloc.
+ */
+bool ir_pass_own_closure_envs(IrModule &mod);
 
 /**
  * @brief Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.
@@ -317,6 +364,39 @@ bool ir_pass_reassoc(IrFunction &fn);
  * @return true si inline al menos una CALL.
  */
 bool ir_pass_inline(IrModule &mod, size_t threshold = 12);
+
+/**
+ * @brief Inline de callees MULTI-bloque (con ramas) que el inliner single-block
+ *        rechaza.  Cirugia de CFG: split del bloque caller en el CALL, copia de
+ *        los bloques del callee (valores + block-ids remapeados), RET -> BR al
+ *        merge + PHI del resultado, recompute preds/succs + reorder RPO.
+ *        Semantica-preservante.  @p threshold = max instrucciones TOTALES del
+ *        callee.  Gated por VESTA_NO_MB_INLINE.
+ */
+bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold = 24);
+
+/**
+ * @brief Inline del CUERPO de una lambda en el CALLCLOSURE (cross-backend).
+ *
+ * Cuando una funcion construye UNA closure (MAKE_CLOSURE) con capturas
+ * by-value y la invoca UNA vez (CALLCLOSURE) en el mismo bloque, este pase
+ * sustituye el CALLCLOSURE por el cuerpo del helper @c __lambda_N,
+ * mapeando los params -> args y las capturas -> los valores capturados
+ * (operands del MAKE_CLOSURE).  Elimina la llamada indirecta + el acceso
+ * al env por completo (el DCE posterior limpia las stores/allocs del env
+ * que quedan muertas).  Beneficia a TODOS los backends: el interprete y el
+ * JIT evitan el dispatch @c vrt_callclosure, y el AOT evita el call
+ * indirecto -- mejor que un puntero de funcion de C/C++.
+ *
+ * Conservador (cero riesgo de mispairing): solo actua si la funcion tiene
+ * EXACTAMENTE un MAKE_CLOSURE y un CALLCLOSURE en el mismo bloque, todas
+ * las capturas son by-value (no mutable), y el helper es single-block.
+ * Ante cualquier anomalia, no transforma (mantiene el CALLCLOSURE).
+ *
+ * @param mod Modulo a transformar in-place.
+ * @return true si inlino al menos una closure.
+ */
+bool ir_pass_inline_closures(IrModule &mod);
 
 /**
  * @brief Loop-Invariant Code Motion.

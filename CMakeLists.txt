@@ -125,6 +125,15 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
 
+# GCC 16 (UCRT64) tiene un ICE en el pase de var-tracking a -O3 sobre algunas
+# funciones del frontend.  var-tracking es info de DEBUG -> en Release
+# (-DNDEBUG, sin -g) no aporta NADA y se puede desactivar SIN tocar el nivel
+# de optimizacion: -O3 sigue intacto (calidad del codigo identica).  Solo GNU.
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " -fno-var-tracking")
+    string(APPEND CMAKE_C_FLAGS_RELEASE " -fno-var-tracking")
+endif ()
+
 
 # SQLite library (statica)
 add_library(sqlite3 STATIC
@@ -184,6 +193,10 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/analyze/")
 # vesta_ffi (con VESTA_BUILD_DLL); excluirla del ejecutable `vm` y de vmcore
 # para no compilar sus definiciones dllexport/dllimport fuera de contexto.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/capi/")
+# El servidor LSP (src/lsp/) es un binario aparte (vesta_lsp) con su propio
+# main(); excluirlo del ejecutable `vm` y de vmcore para no duplicar main ni
+# arrastrar el dispatcher LSP donde no se usa.
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/lsp/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
@@ -448,6 +461,121 @@ if (WIN32)
     target_link_libraries(vmcore PRIVATE libssl libcrypto ws2_32 synchronization applink)
 else ()
     target_link_libraries(vmcore PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif ()
+
+# ---------------------------------------------------------------------------
+# vesta_lsp: servidor Language Server Protocol para Vex (Fase 1).
+#
+# Binario independiente que habla LSP por stdio (JSON-RPC enmarcado por
+# Content-Length) y enlaza el core del compilador EN PROCESO para producir
+# diagnosticos en vivo.  Reutiliza:
+#   - vex_lib  -> compile_vex_source / compile_vex_project + analyze::bigo.
+#   - vmcore   -> ir:: (parse_ir_module_cache) + runtime que el frontend
+#                 arrastra transitivamente.
+#
+# El motor de analisis (src/lsp/analysis_engine.cpp) es el punto unico por el
+# que pasaran las futuras fases (semantic tokens, hover con Big-O, ver
+# IR/bytecode/JIT/AOT, diagramas), reutilizando el CompileResult cacheado.
+# ---------------------------------------------------------------------------
+add_executable(vesta_lsp
+        src/lsp/json_rpc.cpp
+        src/lsp/document_store.cpp
+        src/lsp/analysis_engine.cpp
+        src/lsp/semantic_tokens.cpp
+        src/lsp/param_hints.cpp
+        src/lsp/symbol_index.cpp
+        src/lsp/inspector.cpp
+        src/lsp/builtin_docs.cpp
+        src/lsp/lsp_server.cpp
+        src/lsp/lsp_main.cpp
+)
+target_include_directories(vesta_lsp PRIVATE ${VM_INCLUDES})
+target_link_libraries(vesta_lsp
+        PRIVATE vex_lib
+        PRIVATE vmcore
+        PRIVATE sqlite3
+        PRIVATE capstone
+        PRIVATE keystone
+        PRIVATE aot_emit
+)
+if (VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(vesta_lsp PRIVATE vpp_lib)
+    target_compile_definitions(vesta_lsp PRIVATE VESTA_HAS_PREPROCESSOR=1)
+endif ()
+if (WIN32)
+    target_include_directories(vesta_lsp PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_link_directories(vesta_lsp PRIVATE ${OPENSSL_LIB_DIR})
+    target_link_libraries(vesta_lsp PRIVATE
+            libssl libcrypto ws2_32 synchronization applink)
+else ()
+    target_link_libraries(vesta_lsp PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Reduccion de tamano del LSP (espejo de `vm`).  Sin esto el .exe pesaba
+# ~327MB: el 91% era DWARF de depuracion sin estripar (las libs estaticas
+# vendored la emiten por defecto aunque no haya -g).  Con --strip-all +
+# --gc-sections baja a ~26MB (-92%).  No afecta -O3.
+target_link_options(vesta_lsp PRIVATE
+        $<$<CONFIG:Release>:
+        -Wl,--gc-sections
+        -Wl,--strip-all
+        -Wl,--as-needed
+        -Wl,--build-id=none
+        >
+        $<$<AND:$<CONFIG:Release>,$<BOOL:${WIN32}>>:
+        -static -static-libgcc -static-libstdc++
+        >
+)
+
+# Test unitario de la conversion de posiciones byte->UTF-16.  Solo necesita
+# document_store.cpp (autocontenido, sin deps del compilador).
+add_executable(test_lsp_position_conv
+        tests/lsp/test_position_conv.cpp
+        src/lsp/document_store.cpp
+)
+target_include_directories(test_lsp_position_conv PRIVATE ${VM_INCLUDES})
+
+# Inc 0 de libvesta_gc (GC opt-in de AOT): valida la C-ABI del GcHeap global
+# sin ProcessVM.  Linka vmcore (el motor GC vive en src/vesta_gc/, globbeado).
+# libvesta_gc: el motor GC (mismo que interp/JIT) empaquetado STANDALONE como
+# libreria estatica enlazable en ejecutables AOT que usan gc<T>.  Set minimo:
+# gc_lib (C-ABI) + gc_heap + arena + jit_registry/stack_scan (frames precisos).
+# Inc 0b dejo gc_heap.cpp sin dependencia de ProcessVM -> esto compila sin la VM.
+add_library(vesta_gc STATIC
+        src/vesta_gc/gc_lib.cpp
+        src/vesta_gc/freestanding_shim.cpp
+        src/gc/gc_heap.cpp
+        src/gc/wait_table.cpp
+        src/gc/shared_handle_table.cpp
+        src/arena/arena_manager.cpp
+        src/arena/VirtualMemory.cpp
+        src/arena/TLB.cpp
+        src/jit/jit_registry.cpp
+        src/jit/stack_scan.cpp
+)
+target_include_directories(vesta_gc PUBLIC ${VM_INCLUDES})
+# Freestanding-ish: reducir las dependencias de libstdc++ para que el .a se
+# enlace SIN g++ (solo libc, que el AOT ya resuelve via IAT/PLT).  -fno-exceptions
+# /-rtti/-threadsafe-statics quitan _Unwind/__cxa_*/guards; el define apaga el
+# logging GC (std::ostringstream/cerr).  Lo que quede de libstdc++ (operator
+# new/delete, unordered_map) se cubre con el shim libvesta_gc_shim.
+target_compile_options(vesta_gc PRIVATE
+        -fno-exceptions -fno-rtti -fno-threadsafe-statics)
+target_compile_definitions(vesta_gc PRIVATE
+        VESTA_GC_DEBUG_DISABLE=1 VESTA_GC_FREESTANDING=1)
+
+add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)
+target_include_directories(test_gc_lib PRIVATE ${VM_INCLUDES})
+# vmcore es STATIC y sus deps son PRIVATE -> replicar el set de enlace.
+target_link_libraries(test_gc_lib PRIVATE vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_gc_lib PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_directories(test_gc_lib PRIVATE ${OPENSSL_LIB_DIR})
+    target_link_libraries(test_gc_lib PRIVATE libssl libcrypto ws2_32 synchronization applink)
+else ()
+    target_link_libraries(test_gc_lib PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 # ---------------------------------------------------------------------------

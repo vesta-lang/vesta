@@ -46,6 +46,7 @@
 #include <fstream>  // cargar prebuilt .velb desde disco
 #include <iostream> // log VESTA_MC_VERBOSE
 #include <mutex>    // std::call_once para registro one-shot
+#include <functional>
 
 #include "ffi/virtual_lib_registry.h" // registrar vex_static_assert
 
@@ -1611,6 +1612,17 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
     if (tn->kind == ast::NodeKind::PrimitiveTypeNode) {
         const auto *pt = static_cast<const ast::PrimitiveTypeNode *>(tn);
         Type t{pt->prim};
+        // gc<X> (opt-in `import vex.gc`): referencia GC-managed.  Resolvemos X
+        // y devolvemos su tipo de CLASE con @c gc_managed=true -> reusa TODO el
+        // acceso a miembros de clase; el lowering decide el allocator (vex_gc_
+        // alloc) y la ausencia de RAII por el flag.  GC_PTR no sobrevive al
+        // type checking en valores; es solo la forma parseada del tipo.
+        if (pt->prim == PrimitiveKind::GC_PTR) {
+            if (pt->type_args.empty()) return t; // gc<> mal formado
+            Type inner = type_from_node(pt->type_args[0].get());
+            inner.gc_managed = true;
+            return inner;
+        }
         // si el tipo primitivo es una coleccion y se
         // declara con type args (ej. ArrayList<string>), guardamos
         // el tipo de elemento en pointee (key en pointee, value en
@@ -3183,8 +3195,23 @@ void TypeChecker::collect_globals() {
                 sig.return_type = std::move(ret_t);
             }
             sig.param_types.reserve(fn->params.size());
-            for (auto &p : fn->params) {
-                sig.param_types.push_back(type_from_node(p->type.get()));
+            for (size_t pi = 0; pi < fn->params.size(); ++pi) {
+                auto &p = fn->params[pi];
+                Type pt = type_from_node(p->type.get());
+                if (p->is_variadic) {
+                    // Variadico (`T... name`, ultimo param): el callee lo
+                    // recibe como `T*` (puntero al array empaquetado por el
+                    // caller); el numero de elementos se lee con vacount().
+                    if (pi + 1 != fn->params.size())
+                        diags_.error(p->loc,
+                                     "el parametro variadico '" + p->name +
+                                         "' debe ser el ultimo");
+                    sig.is_variadic = true;
+                    sig.variadic_elem = pt;
+                    sig.param_types.push_back(Type::make_ptr(pt));
+                } else {
+                    sig.param_types.push_back(pt);
+                }
             }
 
             Symbol s;
@@ -3430,7 +3457,11 @@ void TypeChecker::check_functions() {
         for (auto &p : fn->params) {
             Symbol sp;
             sp.kind = SymbolKind::Param;
-            sp.type = type_from_node(p->type.get());
+            // Variadico: dentro del body, `name` es un `T*` (puntero al array
+            // empaquetado).  El usuario lo indexa `name[i]` y lee el numero de
+            // elementos con `vacount()`.
+            sp.type = p->is_variadic ? Type::make_ptr(type_from_node(p->type.get()))
+                                     : type_from_node(p->type.get());
             if (!declare(p->name, sp)) {
                 diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
             }
@@ -3471,12 +3502,15 @@ void TypeChecker::check_functions() {
         // `comptime const string n = ...`.
         const bool saved_is_macro = current_fn_is_macro_;
         current_fn_is_macro_ = fn->is_macro;
+        const bool saved_noexcept = current_fn_is_noexcept_;
+        current_fn_is_noexcept_ = fn->is_noexcept || mod_.no_exceptions;
         // Tambien empujamos un scope comptime nuevo para los locals del
         // macro body (para que find_comptime_local_mut los encuentre).
         if (fn->is_macro) push_comptime_scope();
         check_block(fn->body.get(), fn_ret);
         if (fn->is_macro) pop_comptime_scope();
         current_fn_is_macro_ = saved_is_macro;
+        current_fn_is_noexcept_ = saved_noexcept;
         current_fn_return_type_ = saved_ret;
         pop_scope();
     }
@@ -4094,6 +4128,48 @@ void TypeChecker::compute_borrow_last_uses(ast::Stmt *body) {
     }
 }
 
+std::string TypeChecker::render_comptime_value(const ComptimeValue &v) {
+    // Acota el numero de elementos/campos serializados para no generar
+    // cadenas gigantes con tablas grandes.
+    static constexpr size_t kMaxItems = 16;
+    if (v.is_type) {
+        return type_to_string(v.type_val);
+    }
+    if (v.is_str) {
+        return "\"" + v.str + "\"";
+    }
+    if (v.is_array) {
+        std::string out = "[";
+        size_t n = v.array_vals.size();
+        size_t shown = n < kMaxItems ? n : kMaxItems;
+        for (size_t i = 0; i < shown; ++i) {
+            if (i) out += ", ";
+            out += v.array_vals[i] ? render_comptime_value(*v.array_vals[i])
+                                   : "?";
+        }
+        if (n > shown) out += ", ...";
+        out += "]";
+        return out;
+    }
+    if (v.is_struct) {
+        std::string out = "{";
+        size_t i = 0;
+        for (const auto &kv : v.struct_fields) {
+            if (i >= kMaxItems) {
+                out += ", ...";
+                break;
+            }
+            if (i) out += ", ";
+            out += kv.first + "=" +
+                   (kv.second ? render_comptime_value(*kv.second) : "?");
+            ++i;
+        }
+        out += "}";
+        return out;
+    }
+    return std::to_string(v.value);
+}
+
 void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
     if (!s) return;
     // F1 NLL: BlockStmt no cuenta como un stmt independiente (delegamos
@@ -4185,6 +4261,11 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
         return;
     case ast::NodeKind::TryStmt: {
         auto *ts = static_cast<ast::TryStmt *>(s);
+        if (current_fn_is_noexcept_)
+            diags_.error(ts->loc,
+                         "try/catch no permitido: la funcion esta marcada "
+                         "@NoExcept (o el modulo @NoExceptions).  Las "
+                         "excepciones estan deshabilitadas en este scope");
         if (ts->body) check_stmt(ts->body.get(), fn_return_type);
         for (auto &cc : ts->catches) {
             // Validar que el tipo de la excepcion (si se da) es
@@ -4217,6 +4298,11 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
     }
     case ast::NodeKind::ThrowStmt: {
         auto *th = static_cast<ast::ThrowStmt *>(s);
+        if (current_fn_is_noexcept_)
+            diags_.error(th->loc,
+                         "throw no permitido: la funcion esta marcada "
+                         "@NoExcept (o el modulo @NoExceptions).  Usa "
+                         "Result<T,E> o panic() para errores sin excepciones");
         if (th->value) {
             Type tv = check_expr(th->value.get());
             if (tv.kind != PrimitiveKind::CLASS &&
@@ -4333,6 +4419,66 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
                 break;
             }
         }
+        // Captura LSP (gateada): justo antes del pop, los valores
+        // finales de las variables comptime locales del bloque viven
+        // en el scope top.  Los serializamos para vesta/comptimeValues.
+        // Cero coste cuando capture_comptime_block_locals_ esta off.
+        if (capture_comptime_block_locals_ &&
+            !comptime_const_locals_.empty()) {
+            const std::string scope =
+                "comptime@" + std::to_string(cb->loc.line);
+            for (const auto &kv : comptime_const_locals_.back()) {
+                const auto &c = kv.second;
+                ComptimeBlockSnapshot snap;
+                snap.name = kv.first;
+                snap.scope = scope;
+                if (c.is_type) {
+                    snap.type_kind = "type";
+                    snap.value_str = type_to_string(c.type_val);
+                } else if (c.is_str) {
+                    snap.type_kind = "string";
+                    snap.value_str = "\"" + c.str_value + "\"";
+                } else if (c.is_array) {
+                    snap.type_kind = "array";
+                    std::string out = "[";
+                    static constexpr size_t kMaxItems = 16;
+                    size_t n = c.array_vals.size();
+                    size_t shown = n < kMaxItems ? n : kMaxItems;
+                    for (size_t i = 0; i < shown; ++i) {
+                        if (i) out += ", ";
+                        out += c.array_vals[i]
+                                   ? render_comptime_value(*c.array_vals[i])
+                                   : "?";
+                    }
+                    if (n > shown) out += ", ...";
+                    out += "]";
+                    snap.value_str = std::move(out);
+                } else if (c.is_struct) {
+                    snap.type_kind = "struct";
+                    std::string out = "{";
+                    static constexpr size_t kMaxItems = 16;
+                    size_t i = 0;
+                    for (const auto &fkv : c.struct_fields) {
+                        if (i >= kMaxItems) {
+                            out += ", ...";
+                            break;
+                        }
+                        if (i) out += ", ";
+                        out += fkv.first + "=" +
+                               (fkv.second
+                                    ? render_comptime_value(*fkv.second)
+                                    : "?");
+                        ++i;
+                    }
+                    out += "}";
+                    snap.value_str = std::move(out);
+                } else {
+                    snap.type_kind = "int";
+                    snap.value_str = std::to_string(c.value);
+                }
+                comptime_block_snapshots_.push_back(std::move(snap));
+            }
+        }
         pop_comptime_scope();
         return;
     }
@@ -4436,6 +4582,50 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         // como runtime normal (ALLOCA + STORE).  El AST evaluator usa
         // el comptime local registrado arriba; el VM/bytecode usa la
         // variable runtime con sus mutaciones aplicadas en orden.
+    }
+    // Captura LSP: recordar el valor comptime de la variable cuando su init es
+    // una EXPRESION evaluable (builtin como field_count<T>, o combinacion de
+    // vars/builtins) -- no un literal puro, que podria reasignarse despues.
+    // Sirve para evaluar luego la condicion de los `if` que la usen.
+    if (capture_comptime_block_locals_ && vd->init) {
+        const ast::NodeKind k = vd->init->kind;
+        const bool is_literal = (k == ast::NodeKind::IntLitExpr ||
+                                 k == ast::NodeKind::BoolLitExpr ||
+                                 k == ast::NodeKind::CharLitExpr);
+        int64_t v;
+        const bool known = !is_literal && lsp_eval_int(vd->init.get(), &v);
+        if (known) lsp_var_values_[vd->name] = v;
+        const bool is_bool =
+            vd->init->result_type.kind == PrimitiveKind::BOOL;
+        auto val_str = [&]() -> std::string {
+            return is_bool ? (v != 0 ? std::string("true") : std::string("false"))
+                           : std::to_string(v);
+        };
+        if (vd->infer_type) {
+            // `auto`/`var`: mostrar el TIPO deducido (+ valor si se conoce).
+            std::string ts = type_to_string(vd->init->result_type);
+            if (!ts.empty() && ts != "void") {
+                ComptimeBuiltinHit hit;
+                hit.loc = vd->init->loc;
+                hit.name = "type"; // builtin_kind="type" -> prefijo ": "
+                hit.type_kind = "type";
+                hit.value_str = known ? (ts + " = " + val_str()) : ts;
+                comptime_builtin_hits_.push_back(std::move(hit));
+            }
+        } else if (known) {
+            // Tipo explicito + init constante o COMPTIME (incluye llamadas a
+            // `comptime fn`, que el evaluador real ejecuta de verdad): p.ej.
+            // `i32 mask = 1 << 8` -> = 256, `comptime i64 F = fib(10)` -> = 55.
+            // (Si el init es un builtin de introspeccion -- sizeof<T>, ... --
+            // este "al final" coincide en la linea con el hit del builtin; el
+            // cliente muestra uno: no se duplica visualmente.)
+            ComptimeBuiltinHit hit;
+            hit.loc = vd->init->loc;
+            hit.name = "expr"; // builtin_kind="expr" -> el cliente lo pinta
+            hit.type_kind = is_bool ? "bool" : "int";
+            hit.value_str = val_str();
+            comptime_builtin_hits_.push_back(std::move(hit));
+        }
     }
     /* `comptime const NAME = expr;` local.  Evalua el init en
      * compile-time y registra en el scope local de comptime const.
@@ -4718,6 +4908,27 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         expected_optional_type_ = saved_outer_opt;
         expected_result_type_ = saved_outer_result;
         if (pushed_expected_enum) pop_expected_enum();
+        // Funciones de primera clase: `fn(...)->R f = nombre_funcion;`.  Si el
+        // tipo declarado es FUNCTION y el init es un IdentExpr que resuelve a
+        // una funcion top-level con firma compatible, lo PROMOCIONAMOS a un
+        // function value {fn_addr, env=0}.  Mismo mecanismo que la promocion en
+        // argumentos de HOF (check_call); el lowering de un IdentExpr con
+        // result_type FUNCTION emite el slot via emit_topfn_value.
+        if (s.type.kind == PrimitiveKind::FUNCTION &&
+            t.kind == PrimitiveKind::VOID &&
+            vd->init->kind == ast::NodeKind::IdentExpr) {
+            auto *id_arg = static_cast<ast::IdentExpr *>(vd->init.get());
+            const Symbol *s_arg = lookup(id_arg->name);
+            if (s_arg && s_arg->kind == SymbolKind::Function) {
+                const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
+                Type fnv = Type::make_function(arg_sig.param_types,
+                                               arg_sig.return_type);
+                if (types_assignable(s.type, fnv)) {
+                    t = fnv;
+                    id_arg->result_type = fnv;
+                }
+            }
+        }
         // implicit Some: si el tipo declarado es Optional<T> y el
         // init es de tipo T (o asignable a T), envolvemos el init
         // automaticamente con `Some(...)`.  null literal -> None().
@@ -4831,7 +5042,7 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
             default: break;
             }
             if (overflow) {
-                diags_.warning(vd->loc,
+                diags_.warning(vd->init ? vd->init->loc : vd->loc,
                                std::string("literal ") + std::to_string(sv) +
                                    " fuera del rango del tipo " +
                                    type_to_string(s.type) + " (" + range_msg +
@@ -4881,12 +5092,109 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
     }
 }
 
+bool TypeChecker::lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out) {
+    auto *id = dynamic_cast<const ast::IdentExpr *>(e->callee.get());
+    if (!id || e->type_args.empty()) return false;
+    const std::string &nm = id->name;
+    const Type t1 = type_from_node(e->type_args[0].get());
+    std::string str_arg;
+    if (!e->args.empty())
+        if (auto *sl = dynamic_cast<const ast::StringLitExpr *>(e->args[0].get()))
+            str_arg = sl->value;
+    if (nm == "sizeof") {
+        *out = (int64_t)comptime_type_size(*this, t1);
+        return true;
+    }
+    if (nm == "alignof") {
+        *out = (int64_t)comptime_type_align(*this, t1);
+        return true;
+    }
+    if (nm == "type_id") {
+        *out = (int64_t)comptime_type_id(*this, t1);
+        return true;
+    }
+    if (nm == "kind") {
+        *out = (int64_t)(int)comptime_type_kind(t1);
+        return true;
+    }
+    if (nm == "field_count") {
+        *out = (int64_t)comptime_field_count(*this, t1);
+        return true;
+    }
+    if (nm == "method_count") {
+        *out = (int64_t)comptime_method_count(*this, t1);
+        return true;
+    }
+    if (nm == "offsetof") {
+        *out = (int64_t)comptime_field_offset(*this, t1, str_arg);
+        return true;
+    }
+    if (nm == "has_field") {
+        *out = comptime_has_field(*this, t1, str_arg) ? 1 : 0;
+        return true;
+    }
+    if (nm == "has_method") {
+        *out = comptime_has_method(*this, t1, str_arg) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_class") {
+        *out = comptime_is_class(t1) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_struct") {
+        *out = comptime_is_struct(*this, t1) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_primitive") {
+        *out = comptime_is_primitive(t1) ? 1 : 0;
+        return true;
+    }
+    if ((nm == "is_subtype" || nm == "is_same") && e->type_args.size() == 2) {
+        const Type t2 = type_from_node(e->type_args[1].get());
+        *out = (nm == "is_subtype" ? comptime_is_subtype(*this, t1, t2)
+                                   : comptime_is_same(*this, t1, t2))
+                   ? 1
+                   : 0;
+        return true;
+    }
+    return false;
+}
+
+bool TypeChecker::lsp_eval_int(const ast::Expr *e, int64_t *out) {
+    if (!e) return false;
+    // Delegar en el evaluador comptime REAL del frontend: ejecuta de verdad las
+    // construcciones comptime (comptime fn con su body, comptime const con
+    // llamadas, math constante, builtins sizeof<T>/kind<T>/...).  Devuelve
+    // ok=false para lo que NO es comptime (valores runtime como ffi_call o una
+    // variable mutable): eso se resuelve ejecutando el programa (notebook), no
+    // aqui, para no mostrar un valor que en runtime seria otro.
+    const ComptimeEvalResult r = comptime_eval_expr(*this, e);
+    if (!r.ok || r.is_str || r.is_array || r.is_struct || r.is_type)
+        return false;
+    if (out) *out = r.value;
+    return true;
+}
+
 void TypeChecker::check_if(ast::IfStmt *s, const Type &fn_return_type) {
     if (s->cond) {
         Type tc = check_expr(s->cond.get());
         if (tc.kind != PrimitiveKind::BOOL && !is_numeric(tc.kind)) {
             diags_.error(s->cond->loc,
                          "condicion de 'if' debe ser numerica o bool");
+        }
+        // Captura LSP: si la condicion de un `if` normal es comptime-evaluable
+        // (variables con valor comptime conocido + literales + builtins +
+        // operadores), guardar true/false para mostrarlo inline en el IDE.
+        if (capture_comptime_block_locals_ && !s->is_comptime) {
+            int64_t v;
+            if (lsp_eval_int(s->cond.get(), &v)) {
+                ComptimeBuiltinHit hit;
+                hit.loc = s->cond->loc;
+                hit.name = "if"; // compiler.cpp deriva builtin_kind="if"
+                hit.type_kind = "int";
+                hit.value_str = (v != 0) ? "true" : "false";
+                comptime_builtin_hits_.push_back(std::move(hit));
+            }
         }
     }
     /* `comptime if (cond)` exige que cond sea evaluable
@@ -5398,7 +5706,13 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         if (ce->operand) {
             Type to = check_expr(ce->operand.get());
             ce->operand->result_type = to;
-            if (to.kind == PrimitiveKind::VOID) {
+            // Function pointer: `(u64) foo` / `(fn(...)->R) foo` -- foo es una
+            // funcion (check_ident la marca is_func_ref y devuelve void).  El
+            // cast es valido: el resultado es la direccion del codigo.
+            bool op_is_func_ref =
+                ce->operand->kind == ast::NodeKind::IdentExpr &&
+                static_cast<ast::IdentExpr *>(ce->operand.get())->is_func_ref;
+            if (to.kind == PrimitiveKind::VOID && !op_is_func_ref) {
                 diags_.error(ce->loc,
                              "no se puede castear una expresion de tipo void");
             }
@@ -5720,7 +6034,8 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             const Type &ta = arg_types[i];
             const Type &tp = ctor->param_types[i];
             if (ta.kind == PrimitiveKind::COUNT) continue;
-            if (!types_assignable(tp, ta)) {
+            if (!types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  " del constructor '" + e->class_name +
@@ -5731,6 +6046,28 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
         }
     }
     return Type{PrimitiveKind::CLASS, e->class_name};
+}
+
+bool TypeChecker::value_assignable_to_interface(
+    const Type &target, const Type &value) const noexcept {
+    if (target.kind != PrimitiveKind::CLASS ||
+        value.kind != PrimitiveKind::CLASS)
+        return false;
+    if (target.struct_name.empty() || value.struct_name.empty()) return false;
+    if (target.struct_name == value.struct_name) return false; // ya cubierto
+    auto it_t = class_layouts_.find(target.struct_name);
+    if (it_t == class_layouts_.end() || !it_t->second.is_interface)
+        return false;
+    // Recorrer la clase concreta + su cadena de super buscando la interfaz.
+    std::string cur = value.struct_name;
+    for (int depth = 0; depth < 64 && !cur.empty(); ++depth) {
+        auto it_c = class_layouts_.find(cur);
+        if (it_c == class_layouts_.end()) break;
+        for (const auto &in : it_c->second.interface_names)
+            if (in == target.struct_name) return true;
+        cur = it_c->second.super_name;
+    }
+    return false;
 }
 
 Type TypeChecker::check_index(ast::IndexExpr *e) {
@@ -6156,12 +6493,22 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
         }
     }
     if (s->kind == SymbolKind::Function) {
-        // Tratamos las funciones como un tipo VOID a efectos de
-        // inferencia cuando aparecen sin call directo; el caso CALL
-        // (CallExpr) lo manejara especificamente.  Pasar una funcion
-        // libre como argumento a un parametro @c fn(T) -> R esta
-        // soportado y se promociona explicitamente a function value
-        // en @c check_call (cubre el caso first-class).
+        // Function pointers: marcamos el ident como referencia a funcion y
+        // guardamos el nombre mangled, PERO devolvemos VOID (comportamiento
+        // historico) para no romper:
+        //   - HOF: pasar `foo` a un parametro fn(...) -> R lo promociona a
+        //     closure en check_call.
+        //   - closures/lambdas (modelo de 16 bytes fn+env).
+        // La marca @c is_func_ref solo la consume el CAST explicito
+        // (`(u64) foo` o `(fn(...)->R) foo`), que emite LABEL_ADDR (la
+        // direccion cruda del codigo).  Asi el OS puede meter direcciones de
+        // funciones del kernel en una tabla sin tocar el modelo de closures.
+        const FunctionSig *sig = function_sig_by_name(e->name);
+        if (sig) {
+            e->is_func_ref = true;
+            e->func_ref_mangled =
+                sig->mangled_label.empty() ? e->name : sig->mangled_label;
+        }
         return Type{};
     }
     return s->type;
@@ -6824,11 +7171,16 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     case ast::BinOp::BitXor:
     case ast::BinOp::Shl:
     case ast::BinOp::Shr: {
-        if (!is_integral(tl.kind) || !is_integral(tr.kind)) {
+        // Promocion entera estilo C: un `char` es un entero (u8) en las
+        // operaciones bitwise -- `(attr << 8) | ch` con ch:char no requiere
+        // cast manual.  Reusa char_as_u8 + promote_arith como la aritmetica.
+        if (!is_char_or_integral(tl.kind) || !is_char_or_integral(tr.kind)) {
             diags_.error(e->loc, "operandos no enteros en operacion bitwise");
             return Type{};
         }
-        return Type{promote_arith(tl.kind, tr.kind)};
+        const PrimitiveKind a = char_as_u8(tl.kind);
+        const PrimitiveKind b = char_as_u8(tr.kind);
+        return Type{promote_arith(a, b)};
     }
     }
     return Type{};
@@ -7510,7 +7862,26 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
         }
     }
 
-    const Type tv = check_expr(e->value.get());
+    Type tv = check_expr(e->value.get());
+    // Funciones de primera clase: `g_fp = nombre_funcion;` (asignacion a una
+    // variable de tipo FUNCTION).  Mismo mecanismo que en var-decl/HOF:
+    // promocionar el IdentExpr de la funcion a un function value {fn_addr,
+    // env=0} patcheando su result_type (el lowering emite el slot).
+    if (s->type.kind == PrimitiveKind::FUNCTION &&
+        tv.kind == PrimitiveKind::VOID && e->value &&
+        e->value->kind == ast::NodeKind::IdentExpr) {
+        auto *id_arg = static_cast<ast::IdentExpr *>(e->value.get());
+        const Symbol *s_arg = lookup(id_arg->name);
+        if (s_arg && s_arg->kind == SymbolKind::Function) {
+            const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
+            Type fnv = Type::make_function(arg_sig.param_types,
+                                           arg_sig.return_type);
+            if (types_assignable(s->type, fnv)) {
+                tv = fnv;
+                id_arg->result_type = fnv;
+            }
+        }
+    }
     // Vex Embed Inc 2: `string += string` y `string += char` son legales
     // (append sugar).  El RHS char NO es assignable a string en general,
     // pero en compound `+=` sobre string lo aceptamos: el lowering native
@@ -7520,7 +7891,8 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
          s->type.kind == PrimitiveKind::STRING &&
          (tv.kind == PrimitiveKind::STRING || tv.kind == PrimitiveKind::CHAR));
     if (tv.kind != PrimitiveKind::COUNT && !string_append_ok &&
-        !types_assignable(s->type, tv)) {
+        !types_assignable(s->type, tv) &&
+        !value_assignable_to_interface(s->type, tv)) {
         diags_.error(e->loc, std::string("tipo del valor (") +
                                  type_to_string(tv) +
                                  ") incompatible con tipo del destino (" +
@@ -7535,6 +7907,52 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         for (auto &a : e->args)
             (void)check_expr(a.get());
         return Type{};
+    }
+
+    // Function pointers: llamada INDIRECTA a traves de un valor de tipo
+    // FUNCTION (una variable que guarda un puntero a funcion, el resultado
+    // de un cast `(fn(...)->R) addr`, etc.).  Las llamadas DIRECTAS por
+    // nombre (`foo(args)`) NO entran aqui: una IdentExpr que resuelve a una
+    // funcion top-level se despacha por nombre mas abajo.
+    {
+        // Solo casts/index a tipo FUNCTION son punteros a funcion RAW (8
+        // bytes) -> CALLIND.  Una VARIABLE de tipo FUNCTION puede ser un
+        // closure (lambda con env de 16 bytes); esas se llaman por el path
+        // de closure existente (CALLCLOSURE) mas abajo -- no las intercepta.
+        bool indirect = false;
+        Type ftype{};
+        if (e->callee->kind == ast::NodeKind::CastExpr ||
+            e->callee->kind == ast::NodeKind::IndexExpr) {
+            Type ct = check_expr(e->callee.get());
+            if (ct.kind == PrimitiveKind::FUNCTION) {
+                indirect = true;
+                ftype = ct;
+            }
+        }
+        if (indirect) {
+            e->is_indirect_call = true;
+            // Validar el numero de argumentos contra la firma.
+            if (e->args.size() != ftype.fn_params.size()) {
+                diags_.error(e->loc,
+                             "llamada indirecta: numero de argumentos (" +
+                                 std::to_string(e->args.size()) +
+                                 ") distinto de la firma (" +
+                                 std::to_string(ftype.fn_params.size()) + ")");
+            }
+            for (size_t i = 0; i < e->args.size(); ++i) {
+                Type at = check_expr(e->args[i].get());
+                if (i < ftype.fn_params.size() &&
+                    !types_assignable(ftype.fn_params[i], at)) {
+                    diags_.warning(e->loc,
+                                   "llamada indirecta: argumento " +
+                                       std::to_string(i + 1) +
+                                       " de tipo distinto al de la firma");
+                }
+            }
+            Type ret = ftype.pointee ? *ftype.pointee : Type{PrimitiveKind::VOID};
+            e->result_type = ret;
+            return ret;
+        }
     }
 
     // Metodos OO sobre tipo string.  Si callee es
@@ -8147,7 +8565,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 const Type ta = check_expr(e->args[i].get());
                 const Type &tp = smtd->param_types[i];
                 if (ta.kind == PrimitiveKind::COUNT) continue;
-                if (!types_assignable(tp, ta)) {
+                if (!types_assignable(tp, ta) &&
+                    !value_assignable_to_interface(tp, ta)) {
                     diags_.error(e->args[i]->loc,
                                  std::string("argumento ") +
                                      std::to_string(i + 1) + " del metodo '" +
@@ -8228,7 +8647,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             const Type ta = check_expr(e->args[i].get());
             const Type &tp = mtd->param_types[i];
             if (ta.kind == PrimitiveKind::COUNT) continue;
-            if (!types_assignable(tp, ta)) {
+            if (!types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  " del metodo '" + fa->field_name +
@@ -8340,6 +8760,57 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             /* devuelven un Type como first-class value.  Solo
              * usable como init de `comptime const Type X = ...`. */
             rt = Type{PrimitiveKind::TYPE_META};
+        }
+        // Captura para el LSP: si esta activa, guardar el VALOR que el builtin
+        // resuelve en compile-time (sizeof/alignof/kind/type_id/typename) con su
+        // ubicacion, para mostrarlo en hover / inspector.  Cero coste cuando el
+        // flag esta apagado (builds normales).
+        if (capture_comptime_block_locals_ && e->type_args.size() == 1) {
+            auto kind_name = [](ComptimeKind k) -> const char * {
+                switch (k) {
+                case ComptimeKind::Primitive: return "Primitive";
+                case ComptimeKind::Class: return "Class";
+                case ComptimeKind::Struct: return "Struct";
+                case ComptimeKind::Enum: return "Enum";
+                case ComptimeKind::Optional: return "Optional";
+                case ComptimeKind::Result: return "Result";
+                case ComptimeKind::Array: return "Array";
+                case ComptimeKind::Ptr: return "Ptr";
+                case ComptimeKind::Function: return "Function";
+                case ComptimeKind::String: return "String";
+                case ComptimeKind::Borrow: return "Borrow";
+                case ComptimeKind::Future: return "Future";
+                case ComptimeKind::Unique: return "Unique";
+                case ComptimeKind::Shared: return "Shared";
+                case ComptimeKind::Collection: return "Collection";
+                default: return "Unknown";
+                }
+            };
+            ComptimeBuiltinHit hit;
+            hit.loc = id->loc;
+            hit.loc.length = static_cast<uint32_t>(id->name.size());
+            hit.name = id->name + "<" + type_to_string(resolved) + ">";
+            hit.type_kind = "int";
+            if (id->name == "sizeof") {
+                hit.value_str =
+                    std::to_string(comptime_type_size(*this, resolved));
+            } else if (id->name == "alignof") {
+                hit.value_str =
+                    std::to_string(comptime_type_align(*this, resolved));
+            } else if (id->name == "type_id") {
+                hit.value_str =
+                    std::to_string(comptime_type_id(*this, resolved));
+            } else if (id->name == "kind") {
+                const ComptimeKind k = comptime_type_kind(resolved);
+                hit.value_str = std::to_string(static_cast<int>(k)) + " (" +
+                                kind_name(k) + ")";
+            } else if (id->name == "typename") {
+                hit.type_kind = "string";
+                hit.value_str =
+                    "\"" + comptime_type_name(*this, resolved) + "\"";
+            }
+            if (!hit.value_str.empty())
+                comptime_builtin_hits_.push_back(std::move(hit));
         }
         e->result_type = rt;
         return rt;
@@ -8561,6 +9032,79 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 /* has_field/has_method/is_subtype/is_same/is_class/
                  * is_struct/is_primitive -> BOOL. */
                 rt = Type{PrimitiveKind::BOOL};
+            }
+            // Captura para el LSP: guardar el VALOR que resuelve el builtin con
+            // su ubicacion, para mostrarlo inline / en hover.  Cubre los que dan
+            // un valor escalar/string (no los que devuelven Type).
+            if (capture_comptime_block_locals_ && !e->type_args.empty()) {
+                const Type t1 = type_from_node(e->type_args[0].get());
+                std::string str_arg, arg_disp;
+                uint32_t int_arg = 0;
+                if (one_targ_str_arg && !e->args.empty()) {
+                    auto *sl = dynamic_cast<ast::StringLitExpr *>(e->args[0].get());
+                    if (sl) {
+                        str_arg = sl->value;
+                        arg_disp = "\"" + str_arg + "\"";
+                    }
+                } else if (one_targ_int_arg && !e->args.empty()) {
+                    auto *il = dynamic_cast<ast::IntLitExpr *>(e->args[0].get());
+                    if (il) {
+                        int_arg = static_cast<uint32_t>(il->value);
+                        arg_disp = std::to_string(int_arg);
+                    }
+                }
+                auto yn = [](bool b) -> std::string {
+                    return b ? "true" : "false";
+                };
+                ComptimeBuiltinHit hit;
+                hit.loc = id->loc;
+                hit.loc.length = static_cast<uint32_t>(nm.size());
+                hit.type_kind = "int";
+                if (nm == "field_count") {
+                    hit.value_str = std::to_string(comptime_field_count(*this, t1));
+                } else if (nm == "method_count") {
+                    hit.value_str =
+                        std::to_string(comptime_method_count(*this, t1));
+                } else if (nm == "offsetof") {
+                    hit.value_str =
+                        std::to_string(comptime_field_offset(*this, t1, str_arg));
+                } else if (nm == "has_field") {
+                    hit.value_str = yn(comptime_has_field(*this, t1, str_arg));
+                } else if (nm == "has_method") {
+                    hit.value_str = yn(comptime_has_method(*this, t1, str_arg));
+                } else if (nm == "is_class") {
+                    hit.value_str = yn(comptime_is_class(t1));
+                } else if (nm == "is_struct") {
+                    hit.value_str = yn(comptime_is_struct(*this, t1));
+                } else if (nm == "is_primitive") {
+                    hit.value_str = yn(comptime_is_primitive(t1));
+                } else if (nm == "field_name") {
+                    hit.type_kind = "string";
+                    hit.value_str =
+                        "\"" + comptime_field_name(*this, t1, int_arg) + "\"";
+                } else if (nm == "field_type") {
+                    hit.type_kind = "string";
+                    hit.value_str =
+                        "\"" + comptime_field_type_name(*this, t1, str_arg) + "\"";
+                } else if (two_targ_no_args && e->type_args.size() == 2) {
+                    const Type t2 = type_from_node(e->type_args[1].get());
+                    if (nm == "is_subtype")
+                        hit.value_str = yn(comptime_is_subtype(*this, t1, t2));
+                    else if (nm == "is_same")
+                        hit.value_str = yn(comptime_is_same(*this, t1, t2));
+                }
+                if (!hit.value_str.empty()) {
+                    if (two_targ_no_args && e->type_args.size() == 2) {
+                        hit.name = nm + "<" + type_to_string(t1) + "," +
+                                   type_to_string(
+                                       type_from_node(e->type_args[1].get())) +
+                                   ">";
+                    } else {
+                        hit.name = nm + "<" + type_to_string(t1) + ">";
+                        if (!arg_disp.empty()) hit.name += "(" + arg_disp + ")";
+                    }
+                    comptime_builtin_hits_.push_back(std::move(hit));
+                }
             }
             e->result_type = rt;
             return rt;
@@ -8867,6 +9411,20 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->loc,
                 std::string("static_assert FAILED: ") +
                     (msg.empty() ? std::string("condicion falsa") : msg));
+        }
+        // Captura LSP: indicar inline si el static_assert PASA (OK) o FALLA.
+        // Usamos lsp_eval_int porque evalua los builtins (sizeof<T>, ...) que
+        // comptime_eval_expr no cubre.
+        if (capture_comptime_block_locals_) {
+            int64_t sv;
+            if (lsp_eval_int(e->args[0].get(), &sv)) {
+                ComptimeBuiltinHit hit;
+                hit.loc = e->loc;
+                hit.name = "static_assert";
+                hit.type_kind = "assert";
+                hit.value_str = (sv != 0) ? "OK" : "FALLA";
+                comptime_builtin_hits_.push_back(std::move(hit));
+            }
         }
         /* Si !r.ok, no emitimos error -- el lowering despachara
          * via FFI al virtual fn que hace el check en runtime VM. */
@@ -9212,6 +9770,18 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         e->result_type = rt;
         return rt;
     }
+    if (id->name == "vacount") {
+        // Numero de argumentos variadicos recibidos por la funcion actual.
+        // Solo valido dentro de una funcion con un param `T... name`.
+        if (!e->args.empty()) {
+            diags_.error(e->loc, "vacount: no acepta argumentos");
+        }
+        for (auto &a : e->args)
+            (void)check_expr(a.get());
+        const Type rt{PrimitiveKind::I64};
+        e->result_type = rt;
+        return rt;
+    }
     if (id->name == "msgrecv") {
         if (!e->args.empty()) {
             diags_.error(e->loc, "msgrecv: no acepta argumentos");
@@ -9326,9 +9896,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         e->result_type = rt;
         return rt;
     }
-    if (id->name == "unwrap") {
+    // unwrap(x)          : assert non-null, throw/panic si null.
+    // unwrap_unchecked(x): MISMA semantica de TIPO, pero el lowering NO
+    //                      emite chequeo (baja a identidad).  UB si x es
+    //                      null -- es el opt-out per-sitio (estilo Rust
+    //                      unwrap_unchecked); nombre greppable para audits.
+    if (id->name == "unwrap" || id->name == "unwrap_unchecked") {
+        const char *bn = id->name.c_str();
         if (e->args.size() != 1) {
-            diags_.error(e->loc, "unwrap: se esperaba 1 argumento, recibidos " +
+            diags_.error(e->loc, std::string(bn) +
+                                     ": se esperaba 1 argumento, recibidos " +
                                      std::to_string(e->args.size()));
         }
         Type at = e->args.empty() ? Type{} : check_expr(e->args[0].get());
@@ -9342,8 +9919,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         if (at.kind != PrimitiveKind::CLASS && at.kind != PrimitiveKind::PTR &&
             at.kind != PrimitiveKind::I64 && at.kind != PrimitiveKind::COUNT) {
-            diags_.error(e->loc, "unwrap: el argumento debe ser una referencia "
-                                 "o Optional<T>, no '" +
+            diags_.error(e->loc, std::string(bn) +
+                                     ": el argumento debe ser una referencia "
+                                     "o Optional<T>, no '" +
                                      type_to_string(at) + "'");
         }
         e->result_type = at;
@@ -10466,7 +11044,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     }
                 }
             }
-            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta)) {
+            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  ": tipo (" + type_to_string(ta) +
@@ -10592,6 +11171,36 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         return sig.return_type;
     }
 
+    // Variadicos (`fn foo(A a, T... rest)`): aridad >= numero de params FIJOS
+    // (N-1).  Los args fijos se validan contra su tipo; los trailing (a partir
+    // de N-1) contra el tipo del ELEMENTO T.  El lowering empaqueta los
+    // trailing en un array de pila y pasa (ptr, count).
+    if (sig.is_variadic) {
+        const size_t fixed = sig.param_types.size() - 1;
+        if (e->args.size() < fixed) {
+            diags_.error(e->loc,
+                         std::string("numero de argumentos insuficiente en "
+                                     "llamada variadica a '") +
+                             id->name + "': minimo " + std::to_string(fixed) +
+                             ", recibidos " + std::to_string(e->args.size()));
+        }
+        for (size_t i = 0; i < e->args.size(); ++i) {
+            Type ta = check_expr(e->args[i].get());
+            const Type tp = (i < fixed) ? sig.param_types[i] : sig.variadic_elem;
+            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
+                diags_.error(e->args[i]->loc,
+                             std::string("argumento ") + std::to_string(i + 1) +
+                                 ": tipo (" + type_to_string(ta) +
+                                 ") incompatible con " +
+                                 (i < fixed ? "parametro (" : "elemento variadico (") +
+                                 type_to_string(tp) + ")");
+            }
+        }
+        e->result_type = sig.return_type;
+        return sig.return_type;
+    }
+
     // Aridad.
     if (e->args.size() != sig.param_types.size()) {
         diags_.error(
@@ -10629,7 +11238,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
             }
         }
-        if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta)) {
+        if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
+            !value_assignable_to_interface(tp, ta)) {
             diags_.error(e->args[i]->loc, std::string("argumento ") +
                                               std::to_string(i + 1) +
                                               ": tipo (" + type_to_string(ta) +

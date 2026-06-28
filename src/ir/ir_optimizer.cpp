@@ -12,6 +12,7 @@
 
 #include "ir/ir_optimizer.h"
 #include <unordered_map>
+#include <set>
 #include <unordered_set>
 #include <vector>
 #include <queue>
@@ -75,6 +76,7 @@ static bool is_side_effecting(IrOp op) {
     case IrOp::MAKE_CLOSURE:
     case IrOp::MAKE_VARIANT:
     case IrOp::MATCH_VARIANT:
+    case IrOp::SWITCH_DENSE:
     // control de flujo
     case IrOp::BR:
     case IrOp::BR_COND:
@@ -107,6 +109,16 @@ static bool is_side_effecting(IrOp op) {
     // memoria
     case IrOp::STORE:
     case IrOp::MEMCPY:
+    case IrOp::VEC_UNOP:
+    case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
+    case IrOp::VEC_ACC_ZERO:
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE:
+    case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_BINOP_S:
+    case IrOp::VEC_BCAST:
     case IrOp::SETFIELD:
     // OOP con efectos
     case IrOp::NEWOBJ:
@@ -630,7 +642,7 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn) {
 //      que NO escapan a ningun sitio.
 //==============================================================================
 
-bool ir_pass_promote_local_allocas(IrFunction &fn) {
+bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
@@ -852,10 +864,13 @@ bool ir_pass_promote_local_allocas(IrFunction &fn) {
         }
     }
 
-    /* Step 4: promover ALLOCAs que NO escapan. */
+    /* Step 4: promover ALLOCAs que NO escapan (o TODAS si force_all: bare
+     * AOT no tiene VM stack, asi que incluso las que "escapan" a un CALL
+     * deben vivir en la pila nativa -- el host stack ES addressable cross
+     * call, a diferencia del modelo VM). */
     bool any_promoted = false;
     for (size_t i = 0; i < candidates.size(); ++i) {
-        if (escapes[i]) continue;
+        if (!force_all && escapes[i]) continue;
         IrValueId v = candidates[i];
         for (auto &blk : fn.blocks) {
             for (auto &ins : blk.instrs) {
@@ -941,7 +956,12 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
-    constexpr uint64_t MAX_PROMOTE_SIZE = 65536; // bytes
+    // 4 KB: cubre boxes de unique<T>/shared<T> y structs locales pequenos,
+    // pero EXCLUYE arrays grandes (p.ej. f64[4096]=32KB) que NO deben ir a la
+    // pila -- promoverlos desbordaba la pila de la VM (interp) -> SIGSEGV en
+    // vec_axpy.  El host stack del AOT/JIT aguanta mas, pero un array grande en
+    // pila es mala practica igualmente; los grandes se quedan en heap (malloc).
+    constexpr uint64_t MAX_PROMOTE_SIZE = 4096; // bytes
 
     // Collect RAW_ALLOC candidates (CONST size, size razonable).
     struct AllocSite {
@@ -970,6 +990,228 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
     }
     if (candidates.empty()) return false;
 
+    // ---- Stack-first (slot muerto): analisis de SLOTS LOCALES ----
+    //
+    // El idiom @c unique<T> Tier-1 hace `STORE box_ptr -> slot[+0]` donde
+    // `slot` es un ALLOCA local de 16 B.  El escape-check ingenuo marca ese
+    // STORE como escape (el ptr "sale" a memoria) y bloquea la promocion a
+    // pila, AUN cuando ese slot nunca se vuelve a LEER (el cleanup usa el
+    // SSA value del box directamente).  Resultado: `malloc`/`free` que
+    // podrian ser puro stack.
+    //
+    // Regla SOLIDA (sin analisis de offsets, por eso no confunde el box con
+    // el campo deleter en slot[+8]): un `STORE box -> A` NO escapa si `A`
+    // apunta a un SLOT LOCAL `S` (ALLOCA de esta fn) que es WRITE-ONLY --
+    // nunca es el addr de ningun LOAD, y su propia direccion nunca se pasa a
+    // CALL*/RET/THROW ni se almacena como valor.  Si S nunca se lee, el ptr
+    // guardado jamas se recupera => el box no escapa por ese STORE; sus usos
+    // DIRECTOS (deref, free) los cubre el escape-check normal.  Cualquier
+    // duda (S se lee, S escapa, A no enraiza en un ALLOCA local) => regla
+    // inactiva => comportamiento previo (heap).  Cero riesgo de UAF.
+    const size_t NV = fn.values.size();
+    std::vector<IrValueId> slot_root(NV, IR_NO_VALUE); // raiz ALLOCA de cada v
+    {
+        // Semilla: ALLOCA dst -> raiz de si misma.
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins : blk.instrs)
+                if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE &&
+                    ins.dst < NV)
+                    slot_root[ins.dst] = ins.dst;
+        // Forward-flow por aritmetica de punteros / casts (cota 32 iter).
+        bool prop = true;
+        int it2 = 32;
+        while (prop && it2-- > 0) {
+            prop = false;
+            for (const auto &blk : fn.blocks) {
+                for (const auto &ins : blk.instrs) {
+                    if (ins.dst == IR_NO_VALUE || ins.dst >= NV) continue;
+                    if (slot_root[ins.dst] != IR_NO_VALUE) continue;
+                    switch (ins.op) {
+                    case IrOp::ADD:
+                    case IrOp::SUB:
+                    case IrOp::BITCAST:
+                    case IrOp::MOV:
+                    case IrOp::CAST:
+                    case IrOp::SEXT:
+                    case IrOp::ZEXT:
+                    case IrOp::TRUNC:
+                        for (auto v : ins.operands) {
+                            if (v != IR_NO_VALUE && v < NV &&
+                                slot_root[v] != IR_NO_VALUE) {
+                                slot_root[ins.dst] = slot_root[v];
+                                prop = true;
+                                break;
+                            }
+                        }
+                        break;
+                    default: break;
+                    }
+                }
+            }
+        }
+    }
+    // slot_loaded[S]=1 si S es la raiz del addr de algun LOAD.
+    // slot_escapes[S]=1 si la direccion de S sale del frame (operand de
+    // CALL*/RET/THROW/... o STORE-as-val).
+    std::vector<uint8_t> slot_loaded(NV, 0u), slot_escapes(NV, 0u);
+    {
+        auto root_of = [&](IrValueId v) -> IrValueId {
+            return (v != IR_NO_VALUE && v < NV) ? slot_root[v] : IR_NO_VALUE;
+        };
+        for (const auto &blk : fn.blocks) {
+            for (const auto &ins : blk.instrs) {
+                if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
+                    IrValueId s = root_of(ins.operands[0]);
+                    if (s != IR_NO_VALUE) slot_loaded[s] = 1u;
+                    continue;
+                }
+                if (ins.op == IrOp::STORE) {
+                    // STORE val,addr: si la propia direccion del slot es el
+                    // VAL almacenado, ese slot escapa (su ptr sale).  El addr
+                    // (operands[1]) NO escapa por escribir en el slot.
+                    if (!ins.operands.empty()) {
+                        IrValueId sv = root_of(ins.operands[0]);
+                        if (sv != IR_NO_VALUE) slot_escapes[sv] = 1u;
+                    }
+                    continue;
+                }
+                if (ins.op == IrOp::ALLOCA) continue;
+                // Lista-blanca de PRODUCTORES/CONSUMIDORES seguros de la
+                // direccion de un slot: aritmetica de punteros + casts (campo
+                // addr, ya cubiertos por slot_root-forward), CMP/BR/NOP/CONST
+                // (read-only / control).  CUALQUIER otra op (CALL*, RET, THROW,
+                // MEMCPY, MVTAKE_IR, ...) que reciba la direccion de un slot
+                // como operand puede SACAR/copiar su contenido fuera del frame
+                // -> el slot escapa.  Invertir a lista-blanca (vs enumerar
+                // consumidores escapantes) evita olvidar ops nuevas como
+                // mvtake_ir (el `move` smuggla el box a otro slot).
+                bool safe_consumer = false;
+                switch (ins.op) {
+                case IrOp::ADD:
+                case IrOp::SUB:
+                case IrOp::BITCAST:
+                case IrOp::MOV:
+                case IrOp::CAST:
+                case IrOp::SEXT:
+                case IrOp::ZEXT:
+                case IrOp::TRUNC:
+                case IrOp::CMP_EQ:
+                case IrOp::CMP_NE:
+                case IrOp::CMP_LT:
+                case IrOp::CMP_GT:
+                case IrOp::CMP_LE:
+                case IrOp::CMP_GE:
+                case IrOp::CMP_ULT:
+                case IrOp::CMP_UGT:
+                case IrOp::CMP_ULE:
+                case IrOp::CMP_UGE:
+                case IrOp::BR:
+                case IrOp::BR_COND:
+                case IrOp::NOP:
+                case IrOp::CONST: safe_consumer = true; break;
+                default: break; // PHI incluido: slot_root no lo rastrea -> escape
+                }
+                if (!safe_consumer) {
+                    for (auto v : ins.operands) {
+                        IrValueId s = root_of(v);
+                        if (s != IR_NO_VALUE) slot_escapes[s] = 1u;
+                    }
+                    if (ins.func_ptr != IR_NO_VALUE) {
+                        IrValueId s = root_of(ins.func_ptr);
+                        if (s != IR_NO_VALUE) slot_escapes[s] = 1u;
+                    }
+                    for (const auto &pa : ins.phi_args) {
+                        IrValueId s = root_of(pa.value);
+                        if (s != IR_NO_VALUE) slot_escapes[s] = 1u;
+                    }
+                }
+            }
+        }
+    }
+    // ---- Slot CARRIER limpio (offset-0): idiom unique<T> + borrow ----
+    //
+    // El box vive en slot[+0] y los borrows lo RE-LEEN del slot[+0] (el slot SI
+    // se lee, asi que la regla "slot muerto" no aplica).  Pero si el slot:
+    //   (a) es local + no-escapante,  (b) recibe EXACTAMENTE UN store en
+    //   offset 0 (el del box),  (c) TODOS sus loads son offset 0,
+    // entonces los valores leidos del slot son alias del MISMO box -> el box
+    // sigue siendo frame-local.  El guard offset-0 evita confundir el box con
+    // el campo deleter en slot[+8].  Los free de esos aliases se reescriben al
+    // dst del ALLOCA en la promocion (para que la NOP-detection de aot_lower /
+    // JIT los elide -> nunca free(stack_ptr)).
+    //
+    // slot_off_zero[v]: v es alias de offset-0 de su slot raiz (ALLOCA o
+    // MOV/cast de el; NUNCA un ADD con desplazamiento).
+    std::vector<uint8_t> slot_off_zero(NV, 0u);
+    {
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins : blk.instrs)
+                if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE &&
+                    ins.dst < NV)
+                    slot_off_zero[ins.dst] = 1u;
+        bool prop = true;
+        int it3 = 32;
+        while (prop && it3-- > 0) {
+            prop = false;
+            for (const auto &blk : fn.blocks)
+                for (const auto &ins : blk.instrs) {
+                    if (ins.dst == IR_NO_VALUE || ins.dst >= NV) continue;
+                    if (slot_off_zero[ins.dst]) continue;
+                    switch (ins.op) { // solo casts/MOV preservan offset 0
+                    case IrOp::BITCAST:
+                    case IrOp::MOV:
+                    case IrOp::CAST:
+                        for (auto v : ins.operands)
+                            if (v != IR_NO_VALUE && v < NV && slot_off_zero[v]) {
+                                slot_off_zero[ins.dst] = 1u;
+                                prop = true;
+                                break;
+                            }
+                        break;
+                    default: break;
+                    }
+                }
+        }
+    }
+    // slot_loads_off0[S]=1 si TODOS los loads que enraizan en S son offset-0.
+    // slot_store0_count[S]=numero de STOREs offset-0 que enraizan en S.
+    std::vector<uint8_t> slot_loads_off0(NV, 1u);
+    std::vector<uint32_t> slot_store0_count(NV, 0u);
+    {
+        auto root_of = [&](IrValueId v) -> IrValueId {
+            return (v != IR_NO_VALUE && v < NV) ? slot_root[v] : IR_NO_VALUE;
+        };
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins : blk.instrs) {
+                if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
+                    IrValueId a = ins.operands[0], s = root_of(a);
+                    if (s != IR_NO_VALUE && !(a < NV && slot_off_zero[a]))
+                        slot_loads_off0[s] = 0u;
+                } else if (ins.op == IrOp::STORE && ins.operands.size() >= 2) {
+                    IrValueId a = ins.operands[1], s = root_of(a);
+                    if (s != IR_NO_VALUE && a < NV && slot_off_zero[a])
+                        slot_store0_count[s]++;
+                }
+            }
+    }
+    auto is_clean_carrier = [&](IrValueId s) -> bool {
+        return s != IR_NO_VALUE && s < NV && !slot_escapes[s] &&
+               slot_loads_off0[s] && slot_store0_count[s] == 1u;
+    };
+
+    // store_to_dead_local_slot(addr): true si `addr` apunta a un slot local
+    // WRITE-ONLY no-escapante, O a un carrier limpio offset-0 (el box se
+    // recupera como alias trackeado).  En ambos el STORE del box no lo hace
+    // escapar.
+    auto store_to_dead_local_slot = [&](IrValueId addr) -> bool {
+        if (addr == IR_NO_VALUE || addr >= NV) return false;
+        IrValueId s = slot_root[addr];
+        if (s == IR_NO_VALUE) return false; // no enraiza en ALLOCA local
+        if (slot_escapes[s]) return false;  // la direccion del slot escapa
+        if (!slot_loaded[s]) return true;   // write-only muerto
+        return slot_off_zero[addr] && is_clean_carrier(s); // carrier off-0
+    };
+
     // Para cada candidato, hacer escape analysis:
     //   - forward fix-point: marcar valores derivados del dst.
     //   - rechazar si algun derivado llega a un uso prohibido (RETURN,
@@ -981,19 +1223,49 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
         // CAST/*EXT/TRUNC/PHI).
         std::vector<bool> derivados(fn.values.size(), false);
         derivados[c.dst] = true;
+        // box_carrier[S]=1: el slot S guarda ESTE box en offset 0 (carrier
+        // limpio) -> sus loads off-0 son alias del box.
+        // carrier_alias[v]=1: v es un load off-0 desde un carrier -> su free
+        // debe reescribirse al ALLOCA del box (NOP-able por aot_lower/JIT).
+        std::vector<uint8_t> box_carrier(NV, 0u), carrier_alias(NV, 0u);
         bool prop = true;
         int iters = 0;
         while (prop && iters++ < 32) {
             prop = false;
             for (const auto &blk : fn.blocks) {
                 for (const auto &ins : blk.instrs) {
-                    if (ins.dst == IR_NO_VALUE) continue;
-                    if (ins.dst >= derivados.size()) continue;
-                    if (derivados[ins.dst]) continue;
                     auto check = [&](IrValueId v) -> bool {
                         return v != IR_NO_VALUE && v < derivados.size() &&
                                derivados[v];
                     };
+                    // STORE box -> carrier-slot[+0]: registra el carrier.
+                    if (ins.op == IrOp::STORE && ins.operands.size() >= 2) {
+                        IrValueId val = ins.operands[0], addr = ins.operands[1];
+                        if (check(val) && addr < NV && slot_off_zero[addr]) {
+                            IrValueId s = slot_root[addr];
+                            if (is_clean_carrier(s) && !box_carrier[s]) {
+                                box_carrier[s] = 1u;
+                                prop = true;
+                            }
+                        }
+                        continue; // STORE no define dst
+                    }
+                    if (ins.dst == IR_NO_VALUE) continue;
+                    if (ins.dst >= derivados.size()) continue;
+                    if (derivados[ins.dst]) continue;
+                    // LOAD off-0 desde un carrier de este box -> alias del box.
+                    if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
+                        IrValueId a = ins.operands[0];
+                        if (a < NV && slot_off_zero[a]) {
+                            IrValueId s = slot_root[a];
+                            if (s != IR_NO_VALUE && box_carrier[s]) {
+                                derivados[ins.dst] = true;
+                                carrier_alias[ins.dst] = 1u;
+                                prop = true;
+                            }
+                        }
+                        continue;
+                    }
                     bool any_d = false;
                     switch (ins.op) {
                     case IrOp::ADD:
@@ -1079,7 +1351,12 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
                         const IrValueId val_v = ins.operands[0];
                         const IrValueId addr_v = ins.operands[1];
                         if (is_derived(val_v) && !is_derived(addr_v)) {
-                            escapes = true;
+                            // Stack-first: si el box se guarda en un slot
+                            // local muerto (write-only, no-escapante), el
+                            // ptr nunca se recupera -> NO escapa por aqui.
+                            if (!store_to_dead_local_slot(addr_v)) {
+                                escapes = true;
+                            }
                         }
                     }
                     break;
@@ -1144,6 +1421,20 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
             fn.values[c.dst].is_host_ptr = true;
         }
 
+        // Carrier: los free de un box recuperado via load(slot) tienen como
+        // operando un ALIAS (carrier_alias), no el ALLOCA.  aot_lower / JIT
+        // solo elidan el free si el operando viene DIRECTO de un ALLOCA; si
+        // no, emitirian free(stack_ptr) -> abort.  Reescribimos el operando
+        // del free al dst del ALLOCA (semanticamente el mismo box) para que
+        // la NOP-detection existente lo elide uniformemente.
+        for (const auto &fs : free_sites) {
+            IrInstr &fi = fn.blocks[fs.first].instrs[fs.second];
+            if (!fi.operands.empty() && fi.operands[0] < NV &&
+                carrier_alias[fi.operands[0]]) {
+                fi.operands[0] = c.dst;
+            }
+        }
+
         // Sprint mem-loop-fix (2026-06-02): PRESERVAR los RAW_FREE
         // explicitos en lugar de eliminarlos.  Bottleneck encontrado
         // en bench mem_malloc_free: el path original eliminaba RAW_FREE
@@ -1179,6 +1470,468 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
                                     }),
                      is.end());
         }
+    }
+
+    return changed;
+}
+
+//==============================================================================
+//  Pase ir_pass_promote_closure_env  (AOT / native_poo)
+//
+//  Promueve el env de una closure de HEAP (GC_ALLOC / RAW_ALLOC) a STACK
+//  (ALLOCA) cuando el env NO escapa del frame.  Es closure-aware: relaja el
+//  escape-check del pase generico para los 2 patrones seguros propios de una
+//  closure (que el generico marca como escape):
+//    (1) STORE R, closure_slot[+k]  con closure_slot un ALLOCA LOCAL  -> R
+//        fluye a un slot local; se "tinta" ese slot y se siguen sus loads.
+//    (2) CALLCLOSURE con R como env (operands[0]) o func_ptr -> uso SiNCRONO.
+//  Cualquier OTRO uso de un valor tintado (RET, STORE a no-local, arg de CALL,
+//  THROW, op desconocida) -> ESCAPA -> NO se promueve (queda GC_ALLOC, que en
+//  bare se rechaza limpio; NUNCA se deja un heap sin liberar -> sin leak, y al
+//  ser conservador el peor caso es no-promover, jamas un use-after-free).
+//==============================================================================
+bool ir_pass_promote_closure_env(IrFunction &fn) {
+    if (fn.is_native || fn.values.empty()) return false;
+
+    // value -> instruccion definidora (para resolver bases de direcciones).
+    std::vector<const IrInstr *> def_of(fn.values.size(), nullptr);
+    for (const auto &b : fn.blocks)
+        for (const auto &ins : b.instrs)
+            if (ins.dst != IR_NO_VALUE && ins.dst < def_of.size())
+                def_of[ins.dst] = &ins;
+
+    auto is_const_v = [&](IrValueId v) -> bool {
+        return v != IR_NO_VALUE && v < fn.values.size() && fn.values[v].is_const;
+    };
+    // Raiz de una direccion: sigue cadenas ADD(base, const) / MOV.
+    auto resolve_base = [&](IrValueId v) -> IrValueId {
+        for (int g = 0; g < 64 && v != IR_NO_VALUE && v < def_of.size(); ++g) {
+            const IrInstr *d = def_of[v];
+            if (!d) break;
+            if (d->op == IrOp::ADD && d->operands.size() == 2) {
+                const IrValueId a = d->operands[0], b = d->operands[1];
+                if (is_const_v(a) && !is_const_v(b)) v = b;
+                else if (is_const_v(b) && !is_const_v(a)) v = a;
+                else break;
+            } else if (d->op == IrOp::MOV && d->operands.size() == 1) {
+                v = d->operands[0];
+            } else break;
+        }
+        return v;
+    };
+
+    // ALLOCAs locales (candidatos a slot tintado).
+    std::unordered_set<IrValueId> local_alloca;
+    for (const auto &b : fn.blocks)
+        for (const auto &ins : b.instrs)
+            if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE)
+                local_alloca.insert(ins.dst);
+
+    bool changed = false;
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        for (size_t ii = 0; ii < fn.blocks[bi].instrs.size(); ++ii) {
+            IrInstr &A = fn.blocks[bi].instrs[ii];
+            if (A.op != IrOp::GC_ALLOC && A.op != IrOp::RAW_ALLOC) continue;
+            if (A.dst == IR_NO_VALUE) continue;
+            if (A.operands.empty()) continue;
+            const IrValueId size_vid = A.operands[0];
+            if (!is_const_v(size_vid)) continue;
+            const uint64_t size_bytes = fn.values[size_vid].const_val;
+            if (size_bytes == 0 || size_bytes > 65536) continue;
+
+            // Fixpoint: tinta = {R, derivados, loads desde slots tintados};
+            // tainted_slots = ALLOCAs locales donde se guarda un valor tintado.
+            std::vector<bool> taint(fn.values.size(), false);
+            std::unordered_set<IrValueId> tainted_slots;
+            taint[A.dst] = true;
+            auto is_t = [&](IrValueId v) -> bool {
+                return v != IR_NO_VALUE && v < taint.size() && taint[v];
+            };
+            bool prop = true;
+            int iters = 0;
+            while (prop && iters++ < 128) {
+                prop = false;
+                for (const auto &b : fn.blocks) {
+                    for (const auto &ins : b.instrs) {
+                        // (a) propagar taint a valores derivados / loads.
+                        if (ins.dst != IR_NO_VALUE && ins.dst < taint.size() &&
+                            !taint[ins.dst]) {
+                            bool d = false;
+                            switch (ins.op) {
+                            case IrOp::ADD:
+                            case IrOp::SUB:
+                            case IrOp::MOV:
+                            case IrOp::CAST:
+                            case IrOp::BITCAST:
+                            case IrOp::SEXT:
+                            case IrOp::ZEXT:
+                            case IrOp::TRUNC:
+                                for (auto v : ins.operands)
+                                    if (is_t(v)) { d = true; break; }
+                                break;
+                            case IrOp::PHI:
+                                for (auto &pa : ins.phi_args)
+                                    if (is_t(pa.value)) { d = true; break; }
+                                break;
+                            case IrOp::LOAD: {
+                                const IrValueId addr =
+                                    ins.operands.empty() ? IR_NO_VALUE
+                                                         : ins.operands[0];
+                                if (is_t(addr)) d = true;
+                                else if (tainted_slots.count(
+                                             resolve_base(addr)))
+                                    d = true;
+                                break;
+                            }
+                            default: break;
+                            }
+                            if (d) { taint[ins.dst] = true; prop = true; }
+                        }
+                        // (b) descubrir slots tintados: STORE val-tintado en
+                        //     un ALLOCA local -> tintar el slot (loads futuros
+                        //     desde el se vuelven tintados).
+                        if (ins.op == IrOp::STORE && ins.operands.size() >= 2 &&
+                            is_t(ins.operands[0])) {
+                            const IrValueId base = resolve_base(ins.operands[1]);
+                            if (local_alloca.count(base) &&
+                                !tainted_slots.count(base)) {
+                                tainted_slots.insert(base);
+                                prop = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Escape check sobre la tinta FINAL.
+            bool escapes = false;
+            for (const auto &b : fn.blocks) {
+                if (escapes) break;
+                for (const auto &ins : b.instrs) {
+                    if (escapes) break;
+                    switch (ins.op) {
+                    case IrOp::RET:
+                    case IrOp::TAILCALL:
+                    case IrOp::THROW:
+                    case IrOp::RSPAWN_RETURN:
+                    case IrOp::FULFILL_HLT:
+                        for (auto v : ins.operands)
+                            if (is_t(v)) { escapes = true; break; }
+                        break;
+                    case IrOp::STORE:
+                        // val tintado: seguro solo si addr base es ALLOCA local
+                        // (ya tintado en el fixpoint); si no -> escapa.
+                        if (ins.operands.size() >= 2 && is_t(ins.operands[0])) {
+                            const IrValueId base =
+                                resolve_base(ins.operands[1]);
+                            if (!local_alloca.count(base)) escapes = true;
+                        }
+                        // val NO tintado pero addr tintada = escribir EN R
+                        // (capture store) -> seguro, no hacemos nada.
+                        break;
+                    case IrOp::CALLCLOSURE:
+                        // operands[0]=env (sincrono, seguro), func_ptr seguro;
+                        // operands[1..]=args: si tintado -> podria guardarse.
+                        for (size_t k = 1; k < ins.operands.size(); ++k)
+                            if (is_t(ins.operands[k])) { escapes = true; break; }
+                        break;
+                    case IrOp::CALL:
+                    case IrOp::CALLVIRT:
+                    case IrOp::CALLM:
+                    case IrOp::CALLITF:
+                    case IrOp::CALLIND:
+                    case IrOp::CALLN:
+                    case IrOp::CALLSUPER:
+                        for (auto v : ins.operands)
+                            if (is_t(v)) { escapes = true; break; }
+                        if (is_t(ins.func_ptr)) escapes = true;
+                        break;
+                    case IrOp::LOAD:
+                    case IrOp::ADD:
+                    case IrOp::SUB:
+                    case IrOp::MOV:
+                    case IrOp::CAST:
+                    case IrOp::BITCAST:
+                    case IrOp::SEXT:
+                    case IrOp::ZEXT:
+                    case IrOp::TRUNC:
+                    case IrOp::PHI:
+                    case IrOp::GC_ALLOC:
+                    case IrOp::RAW_ALLOC:
+                        break; // ya cubiertos por la propagacion / inofensivos
+                    default:
+                        // op desconocida que toca un valor tintado -> escape.
+                        for (auto v : ins.operands)
+                            if (is_t(v)) { escapes = true; break; }
+                        if (is_t(ins.func_ptr)) escapes = true;
+                        break;
+                    }
+                }
+            }
+
+            if (escapes) continue;
+            // Promover a ALLOCA (stack host).  Cualquier RAW_FREE del env
+            // (no deberia haberlo aun) se volveria no-op sobre stack: por
+            // seguridad NO promovemos si hay un RAW_FREE de un valor tintado.
+            bool has_free = false;
+            for (const auto &b : fn.blocks)
+                for (const auto &ins : b.instrs)
+                    if (ins.op == IrOp::RAW_FREE && !ins.operands.empty() &&
+                        is_t(ins.operands[0]))
+                        has_free = true;
+            if (has_free) continue;
+
+            A.op = IrOp::ALLOCA;
+            A.imm = size_bytes;
+            A.type = IrType::I8;
+            A.host_alloca = true;
+            A.operands.clear();
+            if (A.dst < fn.values.size()) fn.values[A.dst].is_host_ptr = true;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+//==============================================================================
+//  ir_pass_own_closure_envs (opcion 1: heap + RAII para escapes cross-function)
+//==============================================================================
+//
+// Ver doc en el header.  Corre tras inline+promote (solo ve envs RAW_ALLOC
+// etiquetados "__closure_env" que sobrevivieron = escapes reales).  Resuelve
+// el dueno terminal de cada closure e inserta el RAW_FREE; revierte a
+// GC_ALLOC (-> rechazo en bare) lo que no tenga dueno limpio.  Conservador.
+
+namespace {
+
+/* Una closure que se retorna va por SRET: el buffer de 16 bytes {fn,env} es el
+ * PRIMER param de la funcion productora (su __retbuf), y cada call site pasa el
+ * buffer como operands[0].  Un "forward" (threading del SRET) es una CALL cuyo
+ * buffer es el propio __retbuf del caller.  El DUENO terminal es quien ALOCA el
+ * buffer (ALLOCA 16) y lo pasa a la productora sin reenviarlo ni dejarlo
+ * escapar; ahi va el RAW_FREE de [buffer+8]. */
+
+/* buf es un DUENO LIMPIO en C: C single-block, buf es una ALLOCA local (no el
+ * __retbuf de C), y sus unicos usos son: arg0 de la CALL constructora a
+ * `yname`, LOAD(buf) [fn_addr] y ADD(buf,const) [dir del env].  Cualquier otro
+ * uso (STORE, otro arg de CALL, RET, PHI, func_ptr) -> no limpio. */
+bool ic_clean_owner_buf(const IrFunction &C, IrValueId buf,
+                        const std::string &yname) {
+    if (buf == IR_NO_VALUE) return false;
+    if (C.blocks.size() != 1) return false; /* dominancia trivial */
+    if (!C.params.empty() && C.params[0] == buf) return false; /* es retbuf */
+    bool is_alloca = false;
+    for (const auto &in : C.blocks[0].instrs)
+        if (in.dst == buf && in.op == IrOp::ALLOCA) is_alloca = true;
+    if (!is_alloca) return false;
+    for (const auto &in : C.blocks[0].instrs) {
+        bool as_ctor = (in.op == IrOp::CALL && in.func_name == yname &&
+                        !in.operands.empty() && in.operands[0] == buf);
+        bool as_load = (in.op == IrOp::LOAD && !in.operands.empty() &&
+                        in.operands[0] == buf);
+        bool as_addr = (in.op == IrOp::ADD && in.operands.size() == 2 &&
+                        in.operands[0] == buf);
+        for (size_t k = 0; k < in.operands.size(); ++k) {
+            if (in.operands[k] != buf) continue;
+            if (as_ctor && k == 0) continue;
+            if (as_load && k == 0) continue;
+            if (as_addr && k == 0) continue;
+            return false; /* uso no reconocido -> escape/alias */
+        }
+        if (in.func_ptr == buf) return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool ir_pass_own_closure_envs(IrModule &mod) {
+    std::unordered_map<std::string, size_t> name_to_idx;
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        name_to_idx[mod.functions[i].name] = i;
+
+    /* 1. yielders: funciones que CREAN un env etiquetado o que REENVIAN el
+     *    resultado de una CALL a otra yielder.  Fixpoint. */
+    const size_t NF = mod.functions.size();
+    std::vector<bool> creates_env(NF, false), yielder(NF, false);
+    for (size_t i = 0; i < NF; ++i) {
+        for (const auto &bb : mod.functions[i].blocks)
+            for (const auto &in : bb.instrs)
+                if (in.op == IrOp::RAW_ALLOC && in.func_name == "__closure_env")
+                    creates_env[i] = true;
+        if (creates_env[i]) yielder[i] = true;
+    }
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        for (size_t i = 0; i < NF; ++i) {
+            if (yielder[i]) continue;
+            const IrFunction &F = mod.functions[i];
+            if (F.params.empty()) continue; /* sin __retbuf no reenvia SRET */
+            const IrValueId retbuf = F.params[0];
+            for (const auto &bb : F.blocks)
+                for (const auto &c : bb.instrs) {
+                    /* forward SRET: CALL a yielder pasando el propio retbuf. */
+                    if (c.op != IrOp::CALL || c.operands.empty() ||
+                        c.operands[0] != retbuf)
+                        continue;
+                    auto it = name_to_idx.find(c.func_name);
+                    if (it != name_to_idx.end() && yielder[it->second]) {
+                        yielder[i] = true;
+                        grew = true;
+                    }
+                }
+        }
+    }
+
+    /* 2. ownable[F] (solo yielders): cada call-site que provee buffer es un
+     *    forward-a-ownable o un dueno-limpio.  Fixpoint (true -> false). */
+    std::vector<bool> ownable(NF, true);
+    grew = true;
+    while (grew) {
+        grew = false;
+        for (size_t fy = 0; fy < NF; ++fy) {
+            if (!yielder[fy] || !ownable[fy]) continue;
+            const std::string &yname = mod.functions[fy].name;
+            bool ok = true;
+            for (size_t ci = 0; ci < NF && ok; ++ci) {
+                const IrFunction &C = mod.functions[ci];
+                const IrValueId cret =
+                    C.params.empty() ? IR_NO_VALUE : C.params[0];
+                for (const auto &bb : C.blocks) {
+                    for (const auto &in : bb.instrs) {
+                        if (in.op != IrOp::CALL || in.func_name != yname ||
+                            in.operands.empty())
+                            continue;
+                        const IrValueId buf = in.operands[0];
+                        if (buf != IR_NO_VALUE && buf == cret) {
+                            /* forward: el caller (yielder) debe ser ownable. */
+                            if (!yielder[ci] || !ownable[ci]) ok = false;
+                        } else if (!ic_clean_owner_buf(C, buf, yname)) {
+                            ok = false; /* ni forward ni dueno limpio */
+                        }
+                        if (!ok) break;
+                    }
+                    if (!ok) break;
+                }
+            }
+            if (!ok) { ownable[fy] = false; grew = true; }
+        }
+    }
+
+    bool changed = false;
+
+    /* 3. Revertir envs de yielders NO-ownable a GC_ALLOC (-> rechazo bare). */
+    for (size_t i = 0; i < NF; ++i) {
+        if (!creates_env[i] || ownable[i]) continue;
+        for (auto &bb : mod.functions[i].blocks)
+            for (auto &in : bb.instrs)
+                if (in.op == IrOp::RAW_ALLOC &&
+                    in.func_name == "__closure_env") {
+                    in.op = IrOp::GC_ALLOC;
+                    in.func_name.clear();
+                    changed = true;
+                }
+    }
+
+    /* 4. Para yielders ownable: quitar el tag (RAW_ALLOC normal) e insertar el
+     *    RAW_FREE en cada dueno terminal (call-site no-forward + limpio). */
+    for (size_t i = 0; i < NF; ++i) {
+        if (!creates_env[i] || !ownable[i]) continue;
+        for (auto &bb : mod.functions[i].blocks)
+            for (auto &in : bb.instrs)
+                if (in.op == IrOp::RAW_ALLOC &&
+                    in.func_name == "__closure_env") {
+                    in.func_name.clear();
+                    changed = true;
+                }
+    }
+    /* Insertar frees: recorrer todas las funciones; en cada CALL a una yielder
+     *   ownable cuyo resultado NO se reenvia y es dueno limpio, anadir
+     *   `ea=ADD(dst,8); ep=LOAD ea; RAW_FREE ep` antes de cada RET. */
+    for (size_t ci = 0; ci < NF; ++ci) {
+        IrFunction &C = mod.functions[ci];
+        if (C.blocks.size() != 1) continue; /* solo duenos single-block */
+        /* recolectar los dst a liberar (dueno limpio de yielder ownable). */
+        const IrValueId cret = C.params.empty() ? IR_NO_VALUE : C.params[0];
+        std::vector<IrValueId> to_free;
+        for (const auto &in : C.blocks[0].instrs) {
+            if (in.op != IrOp::CALL || in.operands.empty()) continue;
+            auto it = name_to_idx.find(in.func_name);
+            if (it == name_to_idx.end()) continue;
+            const size_t fy = it->second;
+            if (!yielder[fy] || !ownable[fy]) continue;
+            const IrValueId buf = in.operands[0];
+            if (buf != IR_NO_VALUE && buf == cret) continue; /* forward */
+            if (!ic_clean_owner_buf(C, buf, in.func_name)) continue;
+            to_free.push_back(buf);
+        }
+        if (to_free.empty()) continue;
+
+        /* reconstruir el bloque insertando los frees antes de cada RET. */
+        std::vector<IrInstr> out;
+        out.reserve(C.blocks[0].instrs.size() + to_free.size() * 3);
+        for (auto &in : C.blocks[0].instrs) {
+            if (in.op == IrOp::RET) {
+                for (IrValueId dst : to_free) {
+                    /* ea = dst + 8 (host). */
+                    IrValueId c8 = static_cast<IrValueId>(C.values.size());
+                    {
+                        IrValue v{};
+                        v.id = c8;
+                        v.type = IrType::I64;
+                        v.name = "%cef_off" + std::to_string(c8);
+                        v.is_const = true;
+                        v.const_val = 8;
+                        C.values.push_back(v);
+                    }
+                    IrValueId ea = static_cast<IrValueId>(C.values.size());
+                    {
+                        IrValue v{};
+                        v.id = ea;
+                        v.type = IrType::PTR;
+                        v.name = "%cef_ea" + std::to_string(ea);
+                        v.is_host_ptr = true;
+                        C.values.push_back(v);
+                    }
+                    IrValueId ep = static_cast<IrValueId>(C.values.size());
+                    {
+                        IrValue v{};
+                        v.id = ep;
+                        v.type = IrType::PTR;
+                        v.name = "%cef_ep" + std::to_string(ep);
+                        v.is_host_ptr = true;
+                        C.values.push_back(v);
+                    }
+                    IrInstr k8{};
+                    k8.op = IrOp::CONST;
+                    k8.type = IrType::I64;
+                    k8.dst = c8;
+                    k8.imm = 8;
+                    out.push_back(std::move(k8));
+                    IrInstr ad{};
+                    ad.op = IrOp::ADD;
+                    ad.type = IrType::I64;
+                    ad.dst = ea;
+                    ad.operands = {dst, c8};
+                    out.push_back(std::move(ad));
+                    IrInstr ld{};
+                    ld.op = IrOp::LOAD;
+                    ld.type = IrType::I64;
+                    ld.dst = ep;
+                    ld.operands = {ea};
+                    out.push_back(std::move(ld));
+                    IrInstr rf{};
+                    rf.op = IrOp::RAW_FREE;
+                    rf.type = IrType::VOID;
+                    rf.operands = {ep};
+                    out.push_back(std::move(rf));
+                }
+                changed = true;
+            }
+            out.push_back(std::move(in));
+        }
+        C.blocks[0].instrs = std::move(out);
     }
 
     return changed;
@@ -1460,6 +2213,14 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
                     for (const auto &pa : ins.phi_args)
                         mark_escape(pa.value);
                 }
+                continue;
+            }
+            if (ins.op == IrOp::RAW_FREE) {
+                /* free(obj) (solo native_poo; en GC los objetos no se liberan
+                 * con RAW_FREE) NO hace escapar al objeto: es su dealloc.  Si
+                 * el sitio se escalariza, scalar_replace elimina este free.
+                 * En GC este caso nunca se alcanza (no hay raw_free de objetos
+                 * `new X()`), asi que no afecta al path interp/jit. */
                 continue;
             }
             if (is_safe_op(ins.op)) continue;
@@ -2018,7 +2779,7 @@ SrDom sr_compute_dom(const IrFunction &fn) {
     }
 
     /* Dominance frontier (Cytron): por cada bloque b con >=2 preds, por cada
-     * pred p, sube en el dom-tree desde p hasta idom[b] anyadiendo b al DF. */
+     * pred p, sube en el dom-tree desde p hasta idom[b] añadiendo b al DF. */
     for (IrBlockId b = 0; b < N; ++b) {
         if (d.preds[b].size() < 2) continue;
         for (IrBlockId p : d.preds[b]) {
@@ -2254,7 +3015,7 @@ bool sr_mem2reg_object(
 
     /* 2.5) Deteccion de loops (headers + bloques in-loop) desde back-edges.
      * Necesario para el COST-MODEL: un PHI in-loop que NO esta en un loop
-     * header (= escritura condicional de campo dentro de un loop) anyade copies
+     * header (= escritura condicional de campo dentro de un loop) añade copies
      * en el path no-tomado por iteracion.  Medido: regresiona el interp (16
      * registros VM -> presion + copies).  Los PHIs de loop-header (acumuladores
      * incondicionales) y los if-merge FUERA de loops (coste unico) SI son win.
@@ -2648,6 +3409,8 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
         };
         std::vector<LoadRef> loads; /* loads a reescribir */
         std::vector<std::pair<size_t, size_t>> dead_addr; /* add.ptr a NOPear */
+        std::vector<std::pair<size_t, size_t>>
+            dead_free; /* raw_free(obj) a NOPear (native_poo) */
         std::unordered_map<IrValueId, uint32_t>
             fieldaddr_off; /* addr_vid -> off */
         bool ok = true;
@@ -2731,6 +3494,14 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                            in.operands[1] == obj && in.operands[0] != obj) {
                     has_writes = true; /* store directo -> offset 0 */
                     if (bi != site.block_idx) single_block = false;
+                } else if (in.op == IrOp::RAW_FREE && !in.operands.empty() &&
+                           in.operands[0] == obj) {
+                    /* free(obj) (native_poo): si escalarizamos, el objeto
+                     * deja de existir -> el free es dead.  Lo recolectamos
+                     * para NOPearlo en el transform; NO marca uso no-soportado.
+                     * El modelo de ctor ya descarta clases con dtor, asi que
+                     * aqui el unico efecto del free es liberar el calloc. */
+                    dead_free.push_back({bi, ii});
                 } else {
                     ok = false;
                     use_reason = "obj usado fuera de field-access "
@@ -2863,6 +3634,13 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                 ai.dst = IR_NO_VALUE;
                 ai.func_name.clear();
             }
+            for (const auto &df : dead_free) {
+                IrInstr &fi = fn.blocks[df.first].instrs[df.second];
+                fi.op = IrOp::NOP;
+                fi.operands.clear();
+                fi.dst = IR_NO_VALUE;
+                fi.func_name.clear();
+            }
             call_ins.op = IrOp::NOP;
             call_ins.operands.clear();
             call_ins.dst = IR_NO_VALUE;
@@ -2881,7 +3659,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
          *     insercion de PHI (Cytron) + renaming.
          *
          *     Default-on con COST-MODEL: el propio @c sr_mem2reg_object baila
-         * si promover anyadiria un if-merge PHI DENTRO de un loop (= escritura
+         * si promover añadiria un if-merge PHI DENTRO de un loop (= escritura
          *     condicional de campo en el loop), que pessimiza el interp (16
          *     registros VM -> copies + presion).  Los casos que SI promueve son
          *     win (acumuladores incondicionales en loop: +14..41% interp;
@@ -3057,6 +3835,13 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                 ai.operands.clear();
                 ai.dst = IR_NO_VALUE;
                 ai.func_name.clear();
+            }
+            for (const auto &df : dead_free) {
+                IrInstr &fi = fn.blocks[df.first].instrs[df.second];
+                fi.op = IrOp::NOP;
+                fi.operands.clear();
+                fi.dst = IR_NO_VALUE;
+                fi.func_name.clear();
             }
             call_ins.op = IrOp::NOP;
             call_ins.operands.clear();
@@ -4161,6 +4946,202 @@ bool ir_pass_reassoc(IrFunction &fn) {
     return changed;
 }
 
+// Elision COMPTIME de UNWRAP: cuando el operando es provably non-null, el
+// chequeo es innecesario.  Convierte el UNWRAP en MOV (dst = operando); el
+// copy_prop/DCE posterior lo eliminan -> cero codigo.
+//
+// Dos fuentes de "non-null":
+//   1) GLOBAL (vale en cualquier punto, por dominancia del def en SSA):
+//      constante != 0, ALLOCA (&local), STR_LIT_ADDR (.rodata),
+//      LABEL_ADDR (codigo/dato), o el resultado de otro UNWRAP.
+//   2) FLOW-SENSITIVE: dentro de la rama de un null-check.  P.ej.
+//      `if (x != null) { ... !!x ... }` -> x es non-null en esa rama.
+//      Se resuelve con un dataflow "must-be-non-null" sobre el CFG:
+//      greatest fixpoint con init TOP (todo non-null) e interseccion en
+//      los merges; los hechos se generan en las aristas de BR_COND cuyo
+//      cond es CMP_NE/CMP_EQ contra 0 o ISNULL.  Captura tambien loops.
+bool ir_pass_elide_unwrap(IrFunction &fn) {
+    std::unordered_map<IrValueId, IrOp> def_op;
+    std::unordered_map<IrValueId, const IrInstr *> def_instr;
+    for (const auto &bb : fn.blocks)
+        for (const auto &in : bb.instrs)
+            if (in.dst != IR_NO_VALUE) {
+                def_op[in.dst] = in.op;
+                def_instr[in.dst] = &in;
+            }
+
+    auto globally_nonnull = [&](IrValueId v) -> bool {
+        if (v < fn.values.size() && fn.values[v].is_const &&
+            fn.values[v].const_val != 0)
+            return true;
+        auto it = def_op.find(v);
+        if (it == def_op.end()) return false;
+        // Allocaciones de OBJETO (clase) NUNCA devuelven null por contrato del
+        // lenguaje: OOM lanza un fatal, no un null (`new X()` es non-null,
+        // nunca se null-chequea).  Asi el unwrap del `!!`/nonnull sobre un
+        // `new X()` recien creado es siempre non-null -> elidible.  Esto ademas
+        // desbloquea el scalar-replacement (sin elidir, el UNWRAP cuenta como
+        // escape).  NOTA: RAW_ALLOC (malloc) SI puede devolver null en OOM ->
+        // NO se incluye (su null-check debe preservarse).
+        if (it->second == IrOp::NEWOBJ || it->second == IrOp::NEWOBJS ||
+            it->second == IrOp::GC_ALLOC || it->second == IrOp::GC_ALLOCP)
+            return true;
+        if (it->second == IrOp::CALL) {
+            auto di = def_instr.find(v);
+            if (di != def_instr.end() &&
+                is_new_helper_name(di->second->func_name, nullptr))
+                return true;
+        }
+        return it->second == IrOp::ALLOCA ||
+               it->second == IrOp::STR_LIT_ADDR ||
+               it->second == IrOp::LABEL_ADDR || it->second == IrOp::UNWRAP;
+    };
+
+    auto is_zero = [&](IrValueId v) -> bool {
+        return v < fn.values.size() && fn.values[v].is_const &&
+               fn.values[v].const_val == 0;
+    };
+
+    // Sigue cadenas BITCAST/MOV hasta la raiz: estas ops copian los bits del
+    // valor, asi que preservan la null-ness (un ptr es null sii su bitcast a
+    // i64 es 0).  El frontend compara `bitcast(maybe) != 0` pero el unwrap usa
+    // `maybe` directo -> hay que normalizar ambos a la misma raiz.
+    auto resolve_alias = [&](IrValueId v) -> IrValueId {
+        for (int g = 0; g < 64; ++g) {
+            auto it = def_instr.find(v);
+            if (it == def_instr.end()) break;
+            const IrInstr *d = it->second;
+            if ((d->op == IrOp::BITCAST || d->op == IrOp::MOV) &&
+                !d->operands.empty())
+                v = d->operands[0];
+            else
+                break;
+        }
+        return v;
+    };
+
+    // Hecho de arista de un terminador BR_COND: si su cond compara un valor
+    // contra null, devuelve ese valor probado (normalizado) y si la arista
+    // TRUE implica non-null.  false si no se reconoce el patron.
+    auto edge_fact = [&](const IrInstr &term, IrValueId &tested,
+                         bool &true_nonnull) -> bool {
+        if (term.op != IrOp::BR_COND || term.operands.empty()) return false;
+        auto it = def_instr.find(term.operands[0]);
+        if (it == def_instr.end()) return false;
+        const IrInstr *c = it->second;
+        if (c->op == IrOp::ISNULL && !c->operands.empty()) {
+            tested = resolve_alias(c->operands[0]); // isnull true => ES null
+            true_nonnull = false;
+            return true;
+        }
+        if ((c->op == IrOp::CMP_EQ || c->op == IrOp::CMP_NE) &&
+            c->operands.size() >= 2) {
+            const IrValueId a = c->operands[0], b = c->operands[1];
+            if (is_zero(b)) tested = resolve_alias(a);
+            else if (is_zero(a)) tested = resolve_alias(b);
+            else return false;
+            true_nonnull = (c->op == IrOp::CMP_NE); // x!=0 true => non-null
+            return true;
+        }
+        return false;
+    };
+
+    const size_t nb = fn.blocks.size();
+    // Mapa id de bloque -> indice (no asumimos id==indice).
+    std::unordered_map<IrBlockId, size_t> idx_of;
+    for (size_t i = 0; i < nb; ++i) idx_of[fn.blocks[i].id] = i;
+
+    // Reticulo: para cada bloque, conjunto de valores non-null en su entrada.
+    // top=true representa TOP (universo: todo non-null) para seedear el gfp.
+    struct Facts {
+        bool top = true;
+        std::unordered_set<IrValueId> s;
+    };
+    std::vector<Facts> in_facts(nb);
+    // Anclas: bloques sin preds (entry + inalcanzables) -> nada conocido.
+    for (size_t i = 0; i < nb; ++i)
+        if (fn.blocks[i].preds.empty()) in_facts[i] = Facts{false, {}};
+
+    bool stable = false;
+    int guard = 0;
+    while (!stable && guard++ < 4096) {
+        stable = true;
+        for (size_t bi = 0; bi < nb; ++bi) {
+            const IrBlock &bb = fn.blocks[bi];
+            if (bb.preds.empty()) continue; // ancla fija
+            Facts merged;
+            merged.top = true; // identidad de la interseccion
+            bool any = false;
+            for (IrBlockId pid : bb.preds) {
+                auto pit = idx_of.find(pid);
+                if (pit == idx_of.end()) continue;
+                const size_t pp = pit->second;
+                // out[pp -> bi] = in[pp] (+ hecho de arista).
+                Facts out = in_facts[pp];
+                const IrBlock &pbb = fn.blocks[pp];
+                if (!pbb.instrs.empty()) {
+                    const IrInstr &term = pbb.instrs.back();
+                    IrValueId tested = IR_NO_VALUE;
+                    bool tnn = false;
+                    if (edge_fact(term, tested, tnn)) {
+                        const bool to_true =
+                            (term.target_block == fn.blocks[bi].id);
+                        const bool to_false =
+                            (term.false_block == fn.blocks[bi].id);
+                        const bool implies_nonnull =
+                            (to_true && tnn) || (to_false && !tnn);
+                        if (implies_nonnull && tested != IR_NO_VALUE) {
+                            if (!out.top) out.s.insert(tested);
+                            // si out.top, ya incluye tested (universo)
+                        }
+                    }
+                }
+                // merged = merged ∩ out
+                if (!any) {
+                    merged = std::move(out);
+                    any = true;
+                } else if (out.top) {
+                    // ∩ TOP = merged (sin cambio)
+                } else if (merged.top) {
+                    merged = std::move(out);
+                } else {
+                    std::unordered_set<IrValueId> inter;
+                    for (IrValueId v : merged.s)
+                        if (out.s.count(v)) inter.insert(v);
+                    merged.s = std::move(inter);
+                }
+            }
+            // Comparar con el valor previo.
+            Facts &cur = in_facts[bi];
+            bool same = (cur.top == merged.top) && (cur.s == merged.s);
+            if (!same) {
+                cur = std::move(merged);
+                stable = false;
+            }
+        }
+    }
+
+    bool changed = false;
+    for (size_t bi = 0; bi < nb; ++bi) {
+        auto &bb = fn.blocks[bi];
+        const Facts &facts = in_facts[bi];
+        for (auto &in : bb.instrs) {
+            if (in.op != IrOp::UNWRAP || in.operands.empty()) continue;
+            const IrValueId v = in.operands[0];
+            const IrValueId vr = resolve_alias(v); // normalizar a la raiz
+            // TOP en bloques alcanzables converge a no-top; si quedo top es
+            // inalcanzable -> no aplicamos el hecho de flujo.
+            const bool flow_nn =
+                !facts.top && (facts.s.count(v) || facts.s.count(vr));
+            if (globally_nonnull(v) || globally_nonnull(vr) || flow_nn) {
+                in.op = IrOp::MOV; // dst = v ; copy_prop/DCE lo limpian
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
 bool ir_pass_dce(IrFunction &fn) {
     // Construir conjunto de valores que son usados en algun operando
     std::unordered_set<IrValueId> used;
@@ -4655,6 +5636,16 @@ bool ir_pass_dse(IrFunction &fn) {
             // (el asm puede leerlos via los operandos register-bound).
             case IrOp::INLINE_ASM:
             case IrOp::MEMCPY:
+            case IrOp::VEC_UNOP:
+            case IrOp::VEC_BINOP:
+            case IrOp::VEC_FMA:
+            case IrOp::VEC_ACC_ZERO:
+            case IrOp::VEC_ACC_ADD:
+            case IrOp::VEC_ACC_FMA:
+            case IrOp::VEC_ACC_STORE:
+            case IrOp::VEC_ACC_COMBINE:
+            case IrOp::VEC_BINOP_S:
+            case IrOp::VEC_BCAST:
             case IrOp::SETFIELD:
             case IrOp::ARRAY_STORE:
             case IrOp::STRFINALIZE:
@@ -4849,6 +5840,12 @@ bool ir_pass_unreachable(IrFunction &fn) {
                 }
             }
             ins.phi_args = std::move(new_phi);
+            // SWITCH_DENSE: remapear la tabla de bloques destino (campo
+            // jump_targets) igual que target_block.  Sin esto, tras la
+            // renumeracion la jump table apunta a ids viejos -> dispatch
+            // permutado.
+            for (uint32_t &t : ins.jump_targets)
+                if (t < nblocks && remap[t] != IR_NO_BLOCK) t = remap[t];
         }
         new_blocks.push_back(std::move(bb));
     }
@@ -5484,7 +6481,15 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
      * aritmeticos pequenos sin causar bloat material en el .velb de programas
      * tipicos.  El C2/OSR pasa un threshold mayor para inlinear las CALLs de un
      * loop CALIENTE (el code-size no importa cuando el loop domina el tiempo).
-     */
+     *
+     * NOTA (barrido stack-first): subir a 16 se probo para desbloquear el
+     * scalar-replacement de objetos cuya unica fuga es pasar `this` a un metodo
+     * pequeno (operadores `__add__`/`__eq__`, ~16 instrs).  Resultado: solo +1
+     * ejemplo del corpus a puro-stack, a cambio de +code-size en TODOS los
+     * programas, y SIN destrabar el caso motivante (40_operator_overload tiene
+     * 3 objetos + varios operadores -> necesitaria ~20+).  Mal tradeoff: el
+     * metodo-call necesita scalar-replace-driven inlining (inlinar SOLO cuando
+     * habilita la eliminacion del objeto), no un threshold global.  Revertido. */
     const size_t INLINE_THRESHOLD = threshold;
     bool changed = false;
 
@@ -5527,6 +6532,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
     /* Pre-classify cada function: es inlineable? */
     auto is_inlineable = [&](const IrFunction &fn) -> bool {
         if (fn.is_native) return false;
+        if (fn.is_naked) return false; // @Naked: standalone, no inlinable
         if (is_blacklisted(fn.name)) return false;
         /* AOT 2b (dev OS): una funcion con @section explicito debe permanecer
          * como funcion REAL en esa seccion (el usuario la quiere fisicamente
@@ -5552,7 +6558,19 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* Ultima instr debe ser RET. */
         const auto &last = fn.blocks[0].instrs.back();
         if (last.op != IrOp::RET) return false;
-        if (fn.blocks[0].instrs.size() > INLINE_THRESHOLD) return false;
+        /* Factoria de closures (construye una closure, tipicamente para
+         * devolverla): inlinar con threshold MAYOR.  Inlinar la factoria en
+         * el caller hace que el env nazca en el frame del caller -> si la
+         * closure no escapa de ahi, un pase posterior promueve el env de
+         * heap a stack (cero alocacion, cero leak).  Es la base de las
+         * lambdas capturantes que escapan SIN heap (opcion 3). */
+        size_t eff_threshold = INLINE_THRESHOLD;
+        for (const auto &ins : fn.blocks[0].instrs)
+            if (ins.op == IrOp::MAKE_CLOSURE) {
+                eff_threshold = INLINE_THRESHOLD * 3 + 8; // holgura p/ factoria
+                break;
+            }
+        if (fn.blocks[0].instrs.size() > eff_threshold) return false;
         /* No inlinear funciones que contengan CALLs recursivas a si mismas. */
         for (const auto &ins : fn.blocks[0].instrs) {
             if ((ins.op == IrOp::CALL || ins.op == IrOp::TAILCALL) &&
@@ -5570,11 +6588,31 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * funcion separada (cada una conserva sus bindings + se eager-compila).
          */
         for (const auto &ins : fn.blocks[0].instrs) {
-            if (ins.op == IrOp::RAW_ASM || ins.op == IrOp::INLINE_ASM)
-                return false;
+            // RAW_ASM (@Asm verbatim) asume la calling convention VM -> no
+            // inlinable.  INLINE_ASM (asm{} con register-bindings) SI: el copy
+            // logic remapea asm_reg_bindings + clobber-lists al caller, asi el
+            // helper asm caliente (popcnt/rdtsc/...) se inlinea sin perder el
+            // pin de registros.  La unica restriccion es que el helper no
+            // recurse ni tenga RAW_ASM (ya cubierto arriba).
+            if (ins.op == IrOp::RAW_ASM) return false;
         }
         return true;
     };
+
+    /* NOTA (barrido stack-first): se intento un scalar-replace-driven inlining
+     * (inlinar metodos this-field-only sobre objetos frescos ELIMINABLES para
+     * que scalar_replace los elimine).  El concepto funciona en sintetico
+     * (`Point p = new Point(..); p.sumxy()` -> return const, heap 0) PERO:
+     * (1) CERO ejemplos del corpus se benefician (sus casos method-call usan
+     * metodos MULTI-bloque -- `__eq__` con `&&` -- que el inliner single-block
+     * no toca; el inline multi-bloque es trabajo aparte); (2) rompio
+     * 101_raii_casos_limite de TRES formas distintas en tres intentos (hang
+     * determinista y luego NO-determinista, por interaccion con dtors via
+     * CALLVIRT + reflexion newInstance), senal de que la eliminacion de objetos
+     * en presencia de RAII/reflexion tiene aristas sutiles.  Mal tradeoff
+     * (regresion fragil + cero beneficio de corpus) -> NO incluido.  El unlock
+     * real necesita inline MULTI-bloque + analisis de eliminabilidad robusto
+     * frente a dtor/reflexion; queda como feature dedicada documentada. */
 
     /* Cache de classification. */
     std::vector<bool> can_inline(mod.functions.size(), false);
@@ -5662,6 +6700,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                 /* Replicar todas las instrs del callee EXCEPTO el RET final. */
                 IrValueId ret_value = IR_NO_VALUE;
                 bool inline_ok = true;
+                bool inlined_inline_asm = false;
                 for (const auto &c_ins : cbody.instrs) {
                     if (c_ins.op == IrOp::RET) {
                         if (!c_ins.operands.empty()) {
@@ -5692,17 +6731,37 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         inline_ok = false;
                         break;
                     }
+                    /* INLINE_ASM: el asm-id (imm bits 8..31) indexa el
+                     * @c asm_clobber_lists del CALLEE.  Tras inlinar debe
+                     * indexar el del CALLER -> apendamos la clobber-list y
+                     * reescribimos el asm-id.  Los registros del bloque asm
+                     * (rax/rdi/...) viajan en el texto verbatim; los pins de
+                     * los register-vars viajan en asm_reg_bindings (abajo). */
+                    if (ni.op == IrOp::INLINE_ASM) {
+                        const uint32_t old_id =
+                            static_cast<uint32_t>((ni.imm >> 8) & 0xFFFFFFu);
+                        const uint32_t new_id = static_cast<uint32_t>(
+                            caller.asm_clobber_lists.size());
+                        if (old_id < callee.asm_clobber_lists.size())
+                            caller.asm_clobber_lists.push_back(
+                                callee.asm_clobber_lists[old_id]);
+                        else
+                            caller.asm_clobber_lists.emplace_back();
+                        ni.imm = (ni.imm & 0xFFull) |
+                                 (static_cast<uint64_t>(new_id) << 8);
+                        inlined_inline_asm = true;
+                    }
                     new_instrs.push_back(std::move(ni));
                 }
 
                 if (!inline_ok) {
-                    /* Cancelar el inline: revertir lo que anyadimos.
+                    /* Cancelar el inline: revertir lo que añadimos.
                      * Conservativo: push el CALL original. */
-                    /* Quitar las instrs recien anyadidas relacionadas con
+                    /* Quitar las instrs recien añadidas relacionadas con
                      * inline. Para simplicidad: NO retroceder; quedaria un mix
                      * incorrecto.  Marcar y emit CALL original al final. */
                     /* Reset estrategia: para evitar IR corrupto, hacemos un
-                     * passthrough simple: no haber comenzado a anyadir.
+                     * passthrough simple: no haber comenzado a añadir.
                      * Como ya empezamos, no podemos limpiar facilmente.
                      * Por seguridad: rebuild new_instrs desde scratch
                      * usando bb.instrs[0..i]. */
@@ -5711,6 +6770,22 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         new_instrs.push_back(bb.instrs[k]);
                     }
                     continue;
+                }
+
+                /* INLINE_ASM inlineado: apendar los register-bindings del
+                 * callee al caller, remapeando @c alloca_value via vmap (los
+                 * ALLOCA de los register-vars ya se copiaron al caller).  El
+                 * regalloc del caller (vreg_fixed por-vreg) los pinea al
+                 * registro fisico alrededor del bloque asm; dos inlines del
+                 * mismo helper pinean dos vregs distintos al mismo phys en
+                 * puntos NO solapados -> sin conflicto. */
+                if (inlined_inline_asm) {
+                    for (const auto &b : callee.asm_reg_bindings) {
+                        ir::AsmRegBinding nb = b;
+                        nb.alloca_value = remap_op(b.alloca_value);
+                        if (nb.alloca_value != IR_NO_VALUE)
+                            caller.asm_reg_bindings.push_back(std::move(nb));
+                    }
                 }
 
                 /* Emitir el "resultado" del inline: si el CALL tenia dst,
@@ -5950,6 +7025,16 @@ bool ir_pass_licm(IrFunction &fn) {
                 switch (ins.op) {
                 case IrOp::STORE:
                 case IrOp::MEMCPY:
+                case IrOp::VEC_UNOP:
+                case IrOp::VEC_BINOP:
+                case IrOp::VEC_FMA:
+                case IrOp::VEC_ACC_ZERO:
+                case IrOp::VEC_ACC_ADD:
+                case IrOp::VEC_ACC_FMA:
+                case IrOp::VEC_ACC_STORE:
+                case IrOp::VEC_ACC_COMBINE:
+                case IrOp::VEC_BINOP_S:
+                case IrOp::VEC_BCAST:
                 case IrOp::SETFIELD:
                 case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE:
@@ -5971,7 +7056,7 @@ bool ir_pass_licm(IrFunction &fn) {
 
         /* Helper: instr es candidato para mover? */
         auto is_invariant_candidate = [&](const IrInstr &ins) -> bool {
-            /* Sprint mem-perf string_hot: anyadir STRMAKE/STRCAT/STRINTERN/
+            /* Sprint mem-perf string_hot: añadir STRMAKE/STRCAT/STRINTERN/
              * STRCONV/STRRESERVE como hoistables a pesar de side-effecting.
              * El alloc-identity no es observable; el contenido si.  Ver
              * @c is_licm_hoistable_alloc. */
@@ -6386,6 +7471,378 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
 //  via guard-chain de K candidatos + fallback al dispatch original.
 // =========================================================================
 
+// Reordena los bloques de la funcion a Reverse Post-Order (RPO) desde el
+// entry (bloque 0), siguiendo los sucesores derivados de los terminadores.
+// Necesario tras la cirugia de spec_devirt: esta crea bloques (guards/fast/
+// fallback/merge) en orden de procesamiento de los sites (un unordered_map,
+// no determinista), dejando el array de bloques en orden NO topologico.  El
+// emisor de bytecode + su regalloc/liveness asumen orden ~control-flow (p.ej.
+// el fall-through a `bid+1` y la liveness lineal), por lo que un orden mezclado
+// producia codigo incorrecto (resultados que aliasaban entre sites) y no
+// determinista.  RPO da el orden canonico y deterministico (independiente del
+// orden de iteracion del map).  El path JIT/vreg ya lo toleraba; esto arregla
+// el interprete.
+static void reorder_blocks_rpo(IrFunction &fn) {
+    const size_t N = fn.blocks.size();
+    if (N <= 1) return;
+    auto succs_of = [&](size_t b, std::vector<IrBlockId> &out) {
+        out.clear();
+        if (fn.blocks[b].instrs.empty()) return;
+        const IrInstr &t = fn.blocks[b].instrs.back();
+        if (t.op == IrOp::BR) {
+            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
+        } else if (t.op == IrOp::BR_COND) {
+            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
+            if (t.false_block != IR_NO_BLOCK) out.push_back(t.false_block);
+        }
+    };
+    std::vector<std::vector<IrBlockId>> sc(N);
+    for (size_t b = 0; b < N; ++b) succs_of(b, sc[b]);
+    std::vector<int> state(N, 0); // 0=sin visitar, 1=en pila, 2=hecho
+    std::vector<IrBlockId> post;
+    post.reserve(N);
+    std::vector<std::pair<size_t, size_t>> stk; // (bloque, indice de sucesor)
+    stk.push_back({0, 0});
+    state[0] = 1;
+    while (!stk.empty()) {
+        auto &top = stk.back();
+        if (top.second < sc[top.first].size()) {
+            const IrBlockId s = sc[top.first][top.second++];
+            if (s < N && state[s] == 0) {
+                state[s] = 1;
+                stk.push_back({static_cast<size_t>(s), 0});
+            }
+        } else {
+            post.push_back(static_cast<IrBlockId>(top.first));
+            state[top.first] = 2;
+            stk.pop_back();
+        }
+    }
+    // Conservar bloques no alcanzables desde el entry (no deberia haber tras
+    // spec_devirt, pero por robustez) al final, en su orden original.
+    for (size_t b = 0; b < N; ++b)
+        if (state[b] != 2) post.push_back(static_cast<IrBlockId>(b));
+    // RPO = reverse(post).  remap[viejo] = nuevo indice.
+    std::vector<IrBlockId> remap(N, IR_NO_BLOCK);
+    for (size_t i = 0; i < post.size(); ++i)
+        remap[post[post.size() - 1 - i]] = static_cast<IrBlockId>(i);
+    bool identity = true;
+    for (size_t b = 0; b < N; ++b)
+        if (remap[b] != static_cast<IrBlockId>(b)) {
+            identity = false;
+            break;
+        }
+    if (identity) return; // ya esta en RPO
+    std::vector<IrBlock> nb(N);
+    for (size_t b = 0; b < N; ++b) {
+        IrBlock bb = std::move(fn.blocks[b]);
+        bb.id = remap[b];
+        for (auto &p : bb.preds)
+            if (p < N) p = remap[p];
+        for (auto &s : bb.succs)
+            if (s < N) s = remap[s];
+        for (auto &ins : bb.instrs) {
+            if (ins.target_block != IR_NO_BLOCK && ins.target_block < N)
+                ins.target_block = remap[ins.target_block];
+            if (ins.false_block != IR_NO_BLOCK && ins.false_block < N)
+                ins.false_block = remap[ins.false_block];
+            for (auto &pa : ins.phi_args)
+                if (pa.block < N) pa.block = remap[pa.block];
+        }
+        nb[remap[b]] = std::move(bb);
+    }
+    fn.blocks = std::move(nb);
+}
+
+// =========================================================================
+//  Pase ir_pass_inline_multiblock: inline de callees MULTI-bloque (con `if`,
+//  loops sin back-edge propio, etc.) que el inliner single-block rechaza.
+//  Cirugia de CFG identica en espiritu a spec_devirt: split del bloque caller
+//  en el CALL, insertar copia de los bloques del callee (valores + block-ids
+//  remapeados), cada RET -> BR al merge + PHI del resultado, repuntar los
+//  sucesores originales, recomputar preds/succs y reordenar a RPO.
+//  Semantica-preservante (no toca objetos ni scalar-replace); habilita inlinar
+//  metodos/funciones pequenas con ramas.  Gated por VESTA_NO_MB_INLINE.
+// =========================================================================
+
+// Recomputa preds/succs de TODA la funcion desde los terminadores (robusto
+// tras cirugia de CFG; evita bugs de mantenimiento manual).
+static void recompute_preds_succs(IrFunction &fn) {
+    const size_t N = fn.blocks.size();
+    for (size_t b = 0; b < N; ++b) {
+        fn.blocks[b].succs.clear();
+        fn.blocks[b].preds.clear();
+    }
+    for (size_t b = 0; b < N; ++b) {
+        if (fn.blocks[b].instrs.empty()) continue;
+        const IrInstr &t = fn.blocks[b].instrs.back();
+        auto add = [&](IrBlockId s) {
+            if (s != IR_NO_BLOCK && s < N) fn.blocks[b].succs.push_back(s);
+        };
+        if (t.op == IrOp::BR)
+            add(t.target_block);
+        else if (t.op == IrOp::BR_COND) {
+            add(t.target_block);
+            add(t.false_block);
+        } else if (t.op == IrOp::SWITCH_DENSE) {
+            add(t.target_block);
+            for (IrBlockId s : t.jump_targets) add(s);
+        }
+    }
+    for (size_t b = 0; b < N; ++b)
+        for (IrBlockId s : fn.blocks[b].succs)
+            fn.blocks[s].preds.push_back(static_cast<IrBlockId>(b));
+}
+
+// Inlinea el callee MULTI-bloque en caller.blocks[bi].instrs[ii] (un CALL).
+static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
+                                  const IrFunction &callee) {
+    caller.blocks.reserve(caller.blocks.size() + callee.blocks.size() + 2);
+    const IrInstr call = caller.blocks[bi].instrs[ii]; // copia
+    const IrValueId call_dst = call.dst;
+    const IrType ret_type = call.type;
+    const uint32_t srcline = call.source_line;
+
+    // --- remap de valores: params -> args; resto -> fresh (copia atributos) ---
+    std::unordered_map<IrValueId, IrValueId> vmap;
+    for (size_t p = 0; p < callee.params.size() && p < call.operands.size();
+         ++p)
+        vmap[callee.params[p]] = call.operands[p];
+    for (size_t v = 0; v < callee.values.size(); ++v) {
+        if (vmap.count(static_cast<IrValueId>(v))) continue;
+        const IrValue &cv = callee.values[v];
+        const IrValueId nv = caller.new_value(cv.type, "");
+        IrValue &dv = caller.values[nv];
+        dv.is_const = cv.is_const;
+        dv.const_val = cv.const_val;
+        dv.is_host_ptr = cv.is_host_ptr;
+        dv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
+        dv.is_gc_object = cv.is_gc_object;
+        dv.narrow_only = cv.narrow_only;
+        vmap[static_cast<IrValueId>(v)] = nv;
+    }
+    auto rv = [&](IrValueId v) -> IrValueId {
+        if (v == IR_NO_VALUE) return v;
+        auto it = vmap.find(v);
+        return it != vmap.end() ? it->second : v;
+    };
+
+    // --- remap de bloques: cada bloque del callee -> nuevo bloque del caller ---
+    std::unordered_map<IrBlockId, IrBlockId> bmap;
+    std::vector<IrBlockId> copy_ids;
+    copy_ids.reserve(callee.blocks.size());
+    for (size_t k = 0; k < callee.blocks.size(); ++k) {
+        const IrBlockId nb = caller.new_block("inl_" + callee.blocks[k].name);
+        bmap[callee.blocks[k].id] = nb;
+        copy_ids.push_back(nb);
+    }
+    const IrBlockId mergeb = caller.new_block("inl_merge");
+    auto rb = [&](IrBlockId b) -> IrBlockId {
+        auto it = bmap.find(b);
+        return it != bmap.end() ? it->second : b;
+    };
+
+    // --- capturar succs originales + mover el tail [ii+1..] al merge ---
+    const std::vector<IrBlockId> orig_succs = caller.blocks[bi].succs;
+    {
+        auto &Bi = caller.blocks[bi].instrs;
+        std::vector<IrInstr> tail(Bi.begin() + static_cast<long>(ii) + 1,
+                                  Bi.end());
+        caller.blocks[mergeb].instrs = std::move(tail);
+        Bi.resize(ii); // descarta el CALL + el tail
+    }
+
+    // --- copiar los bloques del callee (remap valores + block-refs) ---
+    std::vector<IrPhiArg> ret_args;
+    for (size_t k = 0; k < callee.blocks.size(); ++k) {
+        const IrBlock &cb = callee.blocks[k];
+        const IrBlockId nbid = copy_ids[k];
+        for (IrInstr in : cb.instrs) { // copia por valor
+            if (in.op == IrOp::RET) {
+                if (call_dst != IR_NO_VALUE && !in.operands.empty())
+                    ret_args.push_back(IrPhiArg{rv(in.operands[0]), nbid});
+                IrInstr br{};
+                br.op = IrOp::BR;
+                br.target_block = mergeb;
+                br.source_line = in.source_line;
+                caller.blocks[nbid].instrs.push_back(std::move(br));
+                continue;
+            }
+            in.dst = rv(in.dst);
+            for (auto &op : in.operands) op = rv(op);
+            if (in.func_ptr != IR_NO_VALUE) in.func_ptr = rv(in.func_ptr);
+            for (auto &pa : in.phi_args) {
+                pa.value = rv(pa.value);
+                pa.block = rb(pa.block);
+            }
+            if (in.target_block != IR_NO_BLOCK) in.target_block = rb(in.target_block);
+            if (in.false_block != IR_NO_BLOCK) in.false_block = rb(in.false_block);
+            caller.blocks[nbid].instrs.push_back(std::move(in));
+        }
+    }
+
+    // --- B salta a la entry del callee copiado ---
+    {
+        IrInstr br{};
+        br.op = IrOp::BR;
+        br.target_block = copy_ids[0];
+        br.source_line = srcline;
+        caller.blocks[bi].instrs.push_back(std::move(br));
+    }
+
+    // --- merge: PHI(call_dst) = ret_args (al inicio) + tail (ya movido) ---
+    if (call_dst != IR_NO_VALUE && !ret_args.empty()) {
+        IrInstr phi{};
+        phi.op = IrOp::PHI;
+        phi.type = ret_type;
+        phi.dst = call_dst;
+        phi.phi_args = std::move(ret_args);
+        phi.source_line = srcline;
+        caller.blocks[mergeb].instrs.insert(
+            caller.blocks[mergeb].instrs.begin(), std::move(phi));
+    }
+
+    // --- repuntar los succs originales: pred bi -> mergeb (PHIs incluidas) ---
+    for (IrBlockId s : orig_succs) {
+        if (s == IR_NO_BLOCK || s >= caller.blocks.size()) continue;
+        for (auto &in : caller.blocks[s].instrs) {
+            if (in.op != IrOp::PHI) continue;
+            for (auto &pa : in.phi_args)
+                if (pa.block == static_cast<IrBlockId>(bi)) pa.block = mergeb;
+        }
+    }
+
+    recompute_preds_succs(caller);
+}
+
+// true si el callee multi-bloque es seguro de inlinar.
+static bool is_inlineable_mb(const IrFunction &fn, size_t threshold) {
+    if (fn.is_native) return false;
+    if (fn.is_naked) return false; // @Naked: sin prologo/epilogo/ret, standalone
+    if (!fn.section.empty()) return false;
+    if (fn.blocks.empty()) return false;
+    if (fn.name == "__module_init") return false;
+    if (fn.name.rfind("__lambda", 0) == 0) return false;
+    if (is_new_helper_name(fn.name, nullptr)) return false;
+    size_t total = 0;
+    bool has_ret = false;
+    for (size_t k = 0; k < fn.blocks.size(); ++k) {
+        const IrBlock &b = fn.blocks[k];
+        if (b.instrs.empty()) return false;
+        total += b.instrs.size();
+        const IrInstr &last = b.instrs.back();
+        if (last.op != IrOp::BR && last.op != IrOp::BR_COND &&
+            last.op != IrOp::RET)
+            return false; // bloque sin terminador limpio
+        if (last.op == IrOp::RET) has_ret = true;
+        for (const auto &in : b.instrs) {
+            if ((in.op == IrOp::CALL || in.op == IrOp::TAILCALL) &&
+                in.func_name == fn.name)
+                return false; // recursion
+            if (in.op == IrOp::RAW_ASM || in.op == IrOp::INLINE_ASM)
+                return false;
+            if (in.op == IrOp::SWITCH_DENSE || !in.jump_targets.empty())
+                return false; // jump tables: no soportado v1
+            // ALLOCA: inlinar una fn con ALLOCA dentro de un loop del caller
+            // crece la pila monotonicamente (bug P0.6).  El single-block
+            // inliner ya lo rechaza; replicamos aqui.
+            if (in.op == IrOp::ALLOCA) return false;
+            // Cleanup RAII / liberacion explicita: inlinar una fn que libera
+            // recursos (dtor via CALLVIRT, free) puede duplicar/reordenar el
+            // cleanup respecto al modelo de scope del caller -> resultado
+            // incorrecto (visto en 101_raii).  Conservador: no inlinar.
+            if (in.op == IrOp::RAW_FREE || in.op == IrOp::SMARTPTR_FREE)
+                return false;
+            // Ops con semantica de FRAME/scope/runtime que inlinar puede
+            // romper (anidamiento de exception frames, save_live_regs del GC,
+            // registros de reflexion ligados al scope, dispatch dinamico):
+            // conservador, no inlinar el callee que las contenga.  En
+            // particular la CREACION de objetos (NEWOBJ/__new_X) + dtor
+            // (CALLVIRT) DENTRO de un callee con loop rompia el save_live_regs
+            // del GC al inlinarse (101_raii caso_6).  Esto sigue permitiendo
+            // inlinar metodos PUROS (getters/setters/operadores field-only) que
+            // es el objetivo del bucket method-call.
+            switch (in.op) {
+            case IrOp::THROW:
+            case IrOp::TRYENTER:
+            case IrOp::TRYLEAVE:
+            case IrOp::RETHROW:
+            case IrOp::FINDCLASS:
+            case IrOp::REFLECT_COUNT:
+            case IrOp::REFLECT_AT:
+            case IrOp::NEWOBJ:
+            case IrOp::NEWOBJS:
+            case IrOp::GC_ALLOC:
+            case IrOp::GC_ALLOCP:
+            case IrOp::CALLVIRT:
+            case IrOp::CALLM:
+            case IrOp::CALLITF:
+                return false;
+            default:
+                break;
+            }
+            // CALL a un helper __new_X (constructor de objeto): misma razon.
+            if (in.op == IrOp::CALL && is_new_helper_name(in.func_name, nullptr))
+                return false;
+            if (k == 0 && in.op == IrOp::PHI) return false; // entry con PHI
+        }
+    }
+    if (!has_ret) return false;
+    // Single-block <=12: ya lo cubre el inliner single-block (threshold 12).
+    // El MB inliner rellena el GAP: single-block 13..threshold (metodos puros
+    // que el single-block rechaza por tamano, p.ej. operadores `__add__`) +
+    // cualquier multi-bloque <=threshold.
+    if (fn.blocks.size() == 1 && total <= 12) return false;
+    return total <= threshold;
+}
+
+bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold) {
+    // Activo por defecto.  Desactivable con VESTA_NO_MB_INLINE=1 (A/B).
+    // El guard de is_inlineable_mb rechaza callees con NEWOBJ/__new_X/CALLVIRT
+    // (creacion de objetos + dtor en loop rompia el save_live_regs del GC) +
+    // ALLOCA/free/excepciones/reflexion, dejando solo metodos/funciones PUROS
+    // (compute + field-access) que es donde el inline multi-bloque aporta.
+    static const bool mb_off = env_flag_on("VESTA_NO_MB_INLINE");
+    if (mb_off) return false;
+    std::unordered_map<std::string, size_t> name_to_idx;
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        name_to_idx[mod.functions[i].name] = i;
+    std::vector<bool> ok(mod.functions.size(), false);
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        ok[i] = is_inlineable_mb(mod.functions[i], threshold);
+
+    bool any = false;
+    for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
+        IrFunction &caller = mod.functions[fi];
+        if (caller.is_native) continue;
+        bool changed = false;
+        int cap = 128; // backstop anti-runaway
+        bool found = true;
+        while (found && cap-- > 0) {
+            found = false;
+            for (size_t bi = 0; bi < caller.blocks.size() && !found; ++bi)
+                for (size_t ii = 0; ii < caller.blocks[bi].instrs.size();
+                     ++ii) {
+                    const IrInstr &in = caller.blocks[bi].instrs[ii];
+                    if (in.op != IrOp::CALL) continue;
+                    auto it = name_to_idx.find(in.func_name);
+                    if (it == name_to_idx.end() || it->second == fi ||
+                        !ok[it->second])
+                        continue;
+                    const IrFunction &callee = mod.functions[it->second];
+                    if (callee.params.size() != in.operands.size()) continue;
+                    inline_one_multiblock(caller, bi, ii, callee);
+                    found = true;
+                    changed = true;
+                    any = true;
+                    break;
+                }
+        }
+        if (changed) reorder_blocks_rpo(caller);
+    }
+    return any;
+}
+
 bool ir_pass_spec_devirt(IrFunction &fn) {
     if (fn.blocks.empty() || fn.spec_devirt_sites.empty()) return false;
     bool changed = false;
@@ -6597,6 +8054,12 @@ bool ir_pass_spec_devirt(IrFunction &fn) {
         changed = true;
     }
 
+    // Tras la cirugia, los bloques nuevos quedaron en orden NO topologico
+    // (orden de iteracion del unordered_map de sites).  Reordenar a RPO para
+    // que el emisor de bytecode + regalloc/liveness (sensibles al orden) y el
+    // fall-through emitan codigo correcto y DETERMINISTA.
+    if (changed) reorder_blocks_rpo(fn);
+
     return changed;
 }
 
@@ -6807,6 +8270,16 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::SETFIELD:
     case IrOp::ARRAY_STORE:
     case IrOp::MEMCPY:
+    case IrOp::VEC_UNOP:
+    case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
+    case IrOp::VEC_ACC_ZERO:
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE:
+    case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_BINOP_S:
+    case IrOp::VEC_BCAST:
     case IrOp::STRFINALIZE:
     case IrOp::GCWB_IR:
     // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE LEE
@@ -6871,8 +8344,15 @@ static bool is_sched_barrier(IrOp op) {
  * STOREs previos del mismo bloque (conservativo).  Otros STOREs tambien
  * dependen del previo (orden de escritura es observable). */
 static bool is_store_like(IrOp op) {
+    // VEC_UNOP/VEC_BINOP escriben memoria (dst) y ademas leen (a/b): tratarlas
+    // como store-like es la barrera conservativa correcta.
     return op == IrOp::STORE || op == IrOp::SETFIELD ||
-           op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY;
+           op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY ||
+           op == IrOp::VEC_UNOP || op == IrOp::VEC_BINOP ||
+           op == IrOp::VEC_FMA || op == IrOp::VEC_ACC_ZERO ||
+           op == IrOp::VEC_ACC_ADD || op == IrOp::VEC_ACC_FMA ||
+           op == IrOp::VEC_ACC_STORE || op == IrOp::VEC_ACC_COMBINE ||
+           op == IrOp::VEC_BINOP_S || op == IrOp::VEC_BCAST;
 }
 
 static bool is_load_like(IrOp op) {
@@ -6970,7 +8450,7 @@ bool ir_pass_schedule(IrFunction &fn) {
 
             if (is_barr) {
                 /* Barrera: depende de todo lo previo, bloquea todo lo
-                 * posterior. Conservador: anyadir edge desde TODOS los nodos
+                 * posterior. Conservador: añadir edge desde TODOS los nodos
                  * previos. */
                 for (size_t j = 0; j < i; ++j)
                     add_edge(j, i);
@@ -7305,7 +8785,7 @@ bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
         auto &hpreds = header.preds;
         hpreds.erase(std::remove(hpreds.begin(), hpreds.end(), body_id),
                      hpreds.end());
-        // Anyadir body a exit.preds si no esta.
+        // añadir body a exit.preds si no esta.
         IrBlock &exit_blk = fn.blocks[exit_id];
         if (std::find(exit_blk.preds.begin(), exit_blk.preds.end(), body_id) ==
             exit_blk.preds.end()) {
@@ -7326,6 +8806,254 @@ bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
 }
 
 // =========================================================================
+//  Pase ir_pass_inline_closures
+// =========================================================================
+//
+// Inline del CUERPO de la lambda en el CALLCLOSURE.  Ver doc en el header.
+// Estrategia conservadora: 1 MAKE_CLOSURE + 1 CALLCLOSURE en el MISMO
+// bloque, capturas by-value, helper single-block terminado en RET.  El
+// emparejamiento es trivial (solo hay una closure) -> sin alias analysis.
+
+bool ir_pass_inline_closures(IrModule &mod) {
+    bool changed = false;
+
+    std::unordered_map<std::string, size_t> name_to_idx;
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        name_to_idx[mod.functions[i].name] = i;
+
+    for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
+        IrFunction &caller = mod.functions[fi];
+        if (caller.is_native) continue;
+
+        /* 1. Localizar el unico MAKE_CLOSURE y el unico CALLCLOSURE. */
+        int mc_b = -1, mc_i = -1, cc_b = -1, cc_i = -1, n_mc = 0, n_cc = 0;
+        for (size_t b = 0; b < caller.blocks.size(); ++b) {
+            const auto &ins = caller.blocks[b].instrs;
+            for (size_t k = 0; k < ins.size(); ++k) {
+                if (ins[k].op == IrOp::MAKE_CLOSURE) {
+                    ++n_mc;
+                    mc_b = static_cast<int>(b);
+                    mc_i = static_cast<int>(k);
+                } else if (ins[k].op == IrOp::CALLCLOSURE) {
+                    ++n_cc;
+                    cc_b = static_cast<int>(b);
+                    cc_i = static_cast<int>(k);
+                }
+            }
+        }
+        if (n_mc != 1 || n_cc != 1) continue;
+        if (mc_b != cc_b || mc_i >= cc_i) continue; /* mc antes del cc */
+
+        IrBlock &bb = caller.blocks[cc_b];
+        const IrInstr mc = bb.instrs[mc_i]; /* copia: vamos a reescribir bb */
+        const IrInstr cc = bb.instrs[cc_i];
+
+        /* by-value only: bits 1.. de imm = mutable_mask. */
+        if ((mc.imm >> 1) != 0ULL) continue;
+
+        auto it = name_to_idx.find(mc.func_name);
+        if (it == name_to_idx.end() || it->second == fi) continue;
+        const IrFunction &h = mod.functions[it->second];
+        if (h.is_native || h.blocks.size() != 1) continue;
+        const IrBlock &hb = h.blocks[0];
+        if (hb.instrs.empty() || hb.instrs.back().op != IrOp::RET) continue;
+
+        const size_t n_args = cc.operands.empty() ? 0 : cc.operands.size() - 1;
+        const size_t n_caps = mc.operands.size();
+
+        /* params del helper = [declarados...] (+ [env] en native_poo). */
+        IrValueId env_param = IR_NO_VALUE;
+        std::vector<IrValueId> decl_params;
+        if (h.params.size() == n_args) {
+            decl_params = h.params;
+        } else if (h.params.size() == n_args + 1) {
+            decl_params.assign(h.params.begin(), h.params.end() - 1);
+            env_param = h.params.back();
+        } else {
+            continue; /* aridad no encaja */
+        }
+
+        /* env_ptr: param oculto (native_poo) o READ_VM_REG 14 (VM/JIT). */
+        IrValueId env_ptr = env_param;
+        std::unordered_set<size_t> skip; /* instrs del prologo a omitir */
+        if (env_ptr == IR_NO_VALUE && n_caps > 0) {
+            for (size_t k = 0; k < hb.instrs.size(); ++k) {
+                if (hb.instrs[k].op == IrOp::READ_VM_REG &&
+                    hb.instrs[k].imm == 14) {
+                    env_ptr = hb.instrs[k].dst;
+                    skip.insert(k);
+                    break;
+                }
+            }
+            if (env_ptr == IR_NO_VALUE) continue; /* capturas sin env -> bail */
+        }
+
+        /* Direcciones de captura: env_ptr (offset 0) + ADD(env_ptr,const). */
+        std::unordered_set<IrValueId> cap_addr;
+        if (env_ptr != IR_NO_VALUE) cap_addr.insert(env_ptr);
+        for (size_t k = 0; k < hb.instrs.size(); ++k) {
+            const auto &in = hb.instrs[k];
+            if (in.op == IrOp::ADD && in.operands.size() == 2 &&
+                in.operands[0] == env_ptr) {
+                cap_addr.insert(in.dst);
+                skip.insert(k);
+            }
+        }
+
+        /* LOADs de captura en orden de fuente -> raw_v_i. */
+        std::vector<IrValueId> cap_loads;
+        for (size_t k = 0; k < hb.instrs.size(); ++k) {
+            const auto &in = hb.instrs[k];
+            if (in.op == IrOp::LOAD && in.operands.size() == 1 &&
+                cap_addr.count(in.operands[0])) {
+                cap_loads.push_back(in.dst);
+                skip.insert(k);
+            }
+        }
+        if (cap_loads.size() != n_caps) continue;
+
+        /* vmap: params -> args; capturas -> valores del MAKE_CLOSURE. */
+        std::unordered_map<IrValueId, IrValueId> vmap;
+        for (size_t k = 0; k < decl_params.size(); ++k)
+            vmap[decl_params[k]] = cc.operands[k + 1];
+        for (size_t i = 0; i < n_caps; ++i) {
+            vmap[cap_loads[i]] = mc.operands[i];
+            /* TRUNC que estrecha la captura (by-value narrow): mapear su
+             * dst tambien al valor original y omitir el TRUNC. */
+            for (size_t k = 0; k < hb.instrs.size(); ++k) {
+                const auto &in = hb.instrs[k];
+                if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
+                    in.operands[0] == cap_loads[i]) {
+                    vmap[in.dst] = mc.operands[i];
+                    skip.insert(k);
+                    break;
+                }
+            }
+        }
+
+        /* Seguridad: env_ptr SOLO usado por ADD(env_ptr,..) / LOAD(env_ptr);
+         * ningun READ_VM_REG fuera del prologo. */
+        bool ok = true;
+        for (size_t k = 0; k < hb.instrs.size() && ok; ++k) {
+            const auto &in = hb.instrs[k];
+            auto used = [&](IrValueId u) {
+                if (u != env_ptr || env_ptr == IR_NO_VALUE) return;
+                const bool as_add = (in.op == IrOp::ADD &&
+                                     in.operands.size() == 2 &&
+                                     in.operands[0] == env_ptr);
+                const bool as_ld = (in.op == IrOp::LOAD &&
+                                    in.operands.size() == 1 &&
+                                    in.operands[0] == env_ptr);
+                if (!as_add && !as_ld) ok = false;
+            };
+            for (auto u : in.operands) used(u);
+            if (in.func_ptr != IR_NO_VALUE) used(in.func_ptr);
+            if (in.op == IrOp::READ_VM_REG && !skip.count(k)) ok = false;
+        }
+        if (!ok) continue;
+
+        /* Construir el cuerpo inlineado (sin commit hasta saber que es OK). */
+        std::vector<IrInstr> body;
+        auto remap_dst = [&](IrValueId cvid, IrType type) -> IrValueId {
+            if (cvid == IR_NO_VALUE) return IR_NO_VALUE;
+            auto vit = vmap.find(cvid);
+            if (vit != vmap.end()) return vit->second;
+            const IrValueId nid = static_cast<IrValueId>(caller.values.size());
+            IrValue nv{};
+            nv.id = nid;
+            nv.type = type;
+            nv.name = "%clo_" + std::to_string(nid);
+            if (cvid < h.values.size()) {
+                const auto &cv = h.values[cvid];
+                nv.is_const = cv.is_const;
+                nv.const_val = cv.const_val;
+                nv.is_host_ptr = cv.is_host_ptr;
+                nv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
+                nv.is_gc_object = cv.is_gc_object;
+                nv.narrow_only = cv.narrow_only;
+            }
+            caller.values.push_back(nv);
+            vmap[cvid] = nid;
+            return nid;
+        };
+        auto remap_op = [&](IrValueId cvid) -> IrValueId {
+            if (cvid == IR_NO_VALUE) return IR_NO_VALUE;
+            auto vit = vmap.find(cvid);
+            return (vit != vmap.end()) ? vit->second : IR_NO_VALUE;
+        };
+
+        IrValueId ret_value = IR_NO_VALUE;
+        for (size_t k = 0; k < hb.instrs.size() && ok; ++k) {
+            if (skip.count(k)) continue;
+            const IrInstr &ci = hb.instrs[k];
+            if (ci.op == IrOp::RET) {
+                if (!ci.operands.empty()) {
+                    ret_value = remap_op(ci.operands[0]);
+                    if (ret_value == IR_NO_VALUE) ok = false;
+                }
+                continue;
+            }
+            if (!ci.phi_args.empty()) { ok = false; break; }
+            IrInstr ni = ci;
+            if (ni.dst != IR_NO_VALUE) {
+                const IrType dt = (ni.dst < h.values.size())
+                                      ? h.values[ni.dst].type
+                                      : ni.type;
+                ni.dst = remap_dst(ni.dst, dt);
+            }
+            bool op_ok = true;
+            for (auto &op : ni.operands) {
+                const IrValueId before = op;
+                op = remap_op(op);
+                if (before != IR_NO_VALUE && op == IR_NO_VALUE) op_ok = false;
+            }
+            if (ni.func_ptr != IR_NO_VALUE) {
+                const IrValueId before = ni.func_ptr;
+                ni.func_ptr = remap_op(ni.func_ptr);
+                if (before != IR_NO_VALUE && ni.func_ptr == IR_NO_VALUE)
+                    op_ok = false;
+            }
+            if (!op_ok) { ok = false; break; }
+            body.push_back(std::move(ni));
+        }
+        if (!ok) continue; /* anomalia -> no transformar (bb intacto) */
+
+        /* Commit: reescribir bb = [0..cc) sin el marcador, + body con MOV
+         * del retorno al dst, + (cc_i, fin) sin el CALLCLOSURE. */
+        std::vector<IrInstr> rebuilt;
+        rebuilt.reserve(bb.instrs.size() + body.size());
+        for (int k = 0; k < cc_i; ++k) {
+            if (k == mc_i) continue; /* drop marker */
+            rebuilt.push_back(bb.instrs[k]);
+        }
+        for (auto &bi : body) rebuilt.push_back(std::move(bi));
+        if (cc.dst != IR_NO_VALUE && ret_value != IR_NO_VALUE) {
+            IrInstr mv{};
+            mv.op = IrOp::MOV;
+            mv.type = cc.type;
+            mv.dst = cc.dst;
+            mv.operands = {ret_value};
+            mv.source_line = cc.source_line;
+            rebuilt.push_back(std::move(mv));
+        } else if (cc.dst != IR_NO_VALUE) {
+            IrInstr cz{};
+            cz.op = IrOp::CONST;
+            cz.type = cc.type;
+            cz.dst = cc.dst;
+            cz.imm = 0;
+            cz.source_line = cc.source_line;
+            rebuilt.push_back(std::move(cz));
+        }
+        for (size_t k = cc_i + 1; k < bb.instrs.size(); ++k)
+            rebuilt.push_back(bb.instrs[k]);
+        bb.instrs = std::move(rebuilt);
+        changed = true;
+    }
+
+    return changed;
+}
+
+// =========================================================================
 //  Punto de entrada principal
 // =========================================================================
 
@@ -7337,6 +9065,11 @@ void ir_optimize(IrModule &mod, OptLevel level) {
      * el codigo expandido. */
     if (level >= OptLevel::O1) {
         ir_pass_inline(mod);
+        /* Tras inlinar las factorias, la closure se construye y se invoca
+         * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
+         * el CALLCLOSURE (elimina el call indirecto + el env; el DCE limpia
+         * las stores/allocs muertas).  Cross-backend: interp, JIT y AOT. */
+        ir_pass_inline_closures(mod);
     }
 
     /* Phase D.jit-mem-model AUTO-PROMOTE: marca ALLOCAs que fluyen a
@@ -7425,6 +9158,11 @@ void ir_optimize(IrModule &mod, OptLevel level) {
                 // AND/OR/XOR) + STORE/RET del mismo ancho.  Ahorra 3 instr VM
                 // por LOAD elidido.  Bench struct_field: ~270M instr ahorradas.
                 any |= ir_pass_load_narrow(fn);
+                // Elision COMPTIME de unwrap: si el valor es provably non-null
+                // (CONST!=0, &local/ALLOCA, STR_LIT_ADDR, LABEL_ADDR, Some(const)
+                // tras const-prop/SLF) el UNWRAP se vuelve MOV -> copy_prop/DCE
+                // lo borran -> cero overhead.  Beneficia VM/JIT/AOT.
+                any |= ir_pass_elide_unwrap(fn);
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
                 any |= ir_pass_dce(fn);
             }
@@ -7460,6 +9198,12 @@ void ir_optimize(IrModule &mod, OptLevel level) {
 
             if (ir_pass_inline(mod)) any = true;
 
+            /* Inline MULTI-bloque: tras el single-block, inlinar callees con
+             * ramas (`if`, etc.) pequenos.  Junta mas codigo en la misma fn
+             * (habilita const-fold/CSE/scalar-replace cross-call de funciones
+             * con control de flujo).  Semantica-preservante. */
+            if (ir_pass_inline_multiblock(mod)) any = true;
+
             /* Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
              * Corre DESPUES del inline (que junta el alloc + los field-access
              * en la misma fn).  Sus reescrituras (loads -> trunc/mov/const)
@@ -7479,6 +9223,31 @@ void ir_optimize(IrModule &mod, OptLevel level) {
         }
 
         if (!any) break; // punto fijo alcanzado
+    }
+
+    /* Stack-first (2a pasada): re-correr la promocion malloc->stack TRAS el
+     * fix-point.  El idiom @c unique<T> carga el box de vuelta desde su slot
+     * en la version sin optimizar; la primera pasada (pre-fixpoint) ve ese
+     * LOAD y descarta el slot como "vivo".  DSE/copy-prop dentro del
+     * fix-point eliminan ese LOAD -> aqui el slot ya es write-only y la regla
+     * "slot local muerto" dispara, convirtiendo el malloc en `sub rsp, N`.
+     * Skippable con el mismo VESTA_NO_PROMOTE_RAW_ALLOC. */
+    if (level >= OptLevel::O1) {
+        const char *skip = std::getenv("VESTA_NO_PROMOTE_RAW_ALLOC");
+        const bool do_promote = !(skip && skip[0] != '\0' && skip[0] != '0');
+        if (do_promote) {
+            bool any2 = false;
+            for (auto &fn : mod.functions) {
+                if (!fn.is_native) any2 |= ir_pass_promote_local_raw_alloc(fn);
+            }
+            /* Si promovio algo, una limpieza DCE para barrer valores muertos
+             * (size const del malloc, etc.). */
+            if (any2) {
+                for (auto &fn : mod.functions) {
+                    if (!fn.is_native) ir_pass_dce(fn);
+                }
+            }
+        }
     }
 
     /* Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.  Corre

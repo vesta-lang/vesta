@@ -16,6 +16,7 @@
  */
 
 #include "vex/lowering.h"
+#include <algorithm> // UCRT64: no transitivo
 #include "vex/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
 #include "vex/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vex/collection_intrinsics.h" // tabla de tipos coleccion
@@ -25,6 +26,7 @@
 #include "ir/ir_optimizer.h"           // register_pure_new_helper
 
 #include <functional>
+#include <map>
 #include <set>
 #include <sstream>
 #include <utility>
@@ -77,6 +79,84 @@ namespace vex {
 //  firma al final) esto no es un problema.
 // =====================================================================
 namespace {
+/**
+ * @brief Normaliza literales enteros DECIMALES a hexadecimal (0x...) en una
+ *        linea de ensamblador.
+ *
+ * Keystone en modo NASM interpreta los enteros desnudos como HEXADECIMAL
+ * (`127` -> 0x127), contra la semantica NASM (decimal).  Para que `mov ax,
+ * 127` valga 127 y no 0x127, reescribimos cada literal decimal a `0x<hex>`
+ * antes de pasarlo a Keystone (que SI parsea 0x correctamente).  Se respetan:
+ *   - literales ya en 0x / 0b / 0o (se dejan tal cual).
+ *   - digitos que forman parte de un identificador/registro (r8, xmm15,
+ *     etiquetas .loop1): el digito va precedido de letra/_/'.', no se toca.
+ *   - el contenido de cadenas entre comillas.
+ */
+std::string asmblk_dec_to_hex(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    const size_t n = s.size();
+    size_t i = 0;
+    bool in_str = false;
+    char qc = 0;
+    while (i < n) {
+        char c = s[i];
+        if (in_str) {
+            out.push_back(c);
+            if (c == qc) in_str = false;
+            ++i;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            in_str = true;
+            qc = c;
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+        // Posible inicio de un literal numerico: un digito cuyo char previo
+        // NO sea alfanumerico / '_' / '.' (eso seria parte de un identificador
+        // o etiqueta, p.ej. r8, .loop1).
+        const bool prev_ident =
+            !out.empty() &&
+            (std::isalnum((unsigned char)out.back()) || out.back() == '_' ||
+             out.back() == '.');
+        if (std::isdigit((unsigned char)c) && !prev_ident) {
+            // Leer el token numerico completo.
+            size_t j = i;
+            while (j < n && (std::isalnum((unsigned char)s[j])))
+                ++j;
+            std::string tok = s.substr(i, j - i);
+            // 0x / 0b / 0o: dejar tal cual (Keystone los parsea bien).
+            bool is_prefixed =
+                tok.size() >= 2 && tok[0] == '0' &&
+                (tok[1] == 'x' || tok[1] == 'X' || tok[1] == 'b' ||
+                 tok[1] == 'B' || tok[1] == 'o' || tok[1] == 'O');
+            bool all_dec = !is_prefixed && !tok.empty();
+            for (char d : tok)
+                if (!std::isdigit((unsigned char)d)) all_dec = false;
+            if (all_dec) {
+                unsigned long long v = 0;
+                bool ok = true;
+                for (char d : tok) {
+                    v = v * 10ull + (unsigned long long)(d - '0');
+                }
+                (void)ok;
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "0x%llx", v);
+                out += buf;
+            } else {
+                out += tok; // 0x.../identificador-con-digitos: verbatim
+            }
+            i = j;
+            continue;
+        }
+        out.push_back(c);
+        ++i;
+    }
+    return out;
+}
+
 std::string asmblk_trim(const std::string &s) {
     size_t a = 0, b = s.size();
     while (a < b &&
@@ -440,6 +520,7 @@ bool asmblk_assemble(
             err = "no hay backend de ensamblado (Keystone) disponible";
             return false;
         }
+        t = asmblk_dec_to_hex(t);
         vex::AsmAssembleResult r = vex::g_asm_backend->assemble(t, arch);
         if (!r.ok) {
             err = "error de ensamblado: " + r.error;
@@ -483,6 +564,43 @@ bool asmblk_assemble(
                     out.push_back(0);
                 continue;
             }
+            // Far jump/call SIMBOLICO `jmp SEG:symbol` (cambio de modo en un
+            // dev-OS: `jmp 0x08:pm32`).  Se emite con offset de 32 bits (en
+            // 16-bit via prefijo 0x66) -> el campo offset es un sym_ref IMM32
+            // (VA absoluta del bloque destino, resuelta por el emisor AOT).
+            // No valido en 64-bit (no hay far jmp ptr:off directo).
+            size_t colon = operand.find(':');
+            if (colon != std::string::npos && bits != 64) {
+                std::string segs = asmblk_trim(operand.substr(0, colon));
+                std::string offs = asmblk_trim(operand.substr(colon + 1));
+                bool seg_ok = true;
+                size_t sp = 0;
+                int64_t selv = asmblk_eval_expr(segs, sp, 0, seg_ok);
+                const bool far_ident =
+                    seg_ok && !offs.empty() &&
+                    (std::isalpha((unsigned char)offs[0]) || offs[0] == '_') &&
+                    offs.find_first_of(" \t[]+-*,:") == std::string::npos &&
+                    !asmblk_is_register(offs) && !local_labels.count(offs) &&
+                    selv >= 0 && selv <= 0xFFFF;
+                if (far_ident) {
+                    if (!flush()) return false;
+                    // 16-bit: 0x66 (operand-size) fuerza offset de 32 bits.
+                    if (bits == 16) out.push_back(0x66);
+                    out.push_back(0xEA); // far jmp/call ptr16:32 (EA = jmp)
+                    // (call far simbolico no se usa en boot; EA = jmp far).
+                    ir::IrModule::StaticDataMeta::SymRef sr;
+                    sr.offset = (uint32_t)out.size(); // imm32 (offset) tras EA
+                    sr.sym = offs;
+                    sr.width = 4;
+                    sr.is_rel = 0; // ABS (IMM32: VA absoluta del destino)
+                    sym_refs->push_back(std::move(sr));
+                    for (int i = 0; i < 4; ++i)
+                        out.push_back(0); // placeholder offset32
+                    out.push_back((uint8_t)(selv & 0xFF)); // selector lo
+                    out.push_back((uint8_t)((selv >> 8) & 0xFF)); // selector hi
+                    continue;
+                }
+            }
         }
         if (is_data) {
             if (!flush()) return false;
@@ -509,7 +627,7 @@ bool asmblk_assemble(
  * que no exista en el scope justo antes del loop.
  *
  * @param n   Nodo a inspeccionar (puede ser nullptr).
- * @param out Set destino al que se anyaden los nombres.
+ * @param out Set destino al que se añaden los nombres.
  */
 static void collect_assigned_vars(const ast::Node *n,
                                   std::set<std::string> &out) {
@@ -730,6 +848,71 @@ ir::IrType Lowering::ir_type_from_primitive(PrimitiveKind p) noexcept {
 // Run principal.
 // ---------------------------------------------------------------------
 
+// Tamano en bytes de un global array nativo @c T[N] (N constante en
+// compile-time).  Devuelve 0 si @p tn no es un array de tamano fijo con
+// elemento dimensionable (entonces no se le reserva storage estatico).
+// Habilita buffers estaticos globales (p.ej. heap de un allocator bump en
+// codigo bare-metal): @c u8[4096] g_heap; -> slot de 4096 bytes en .data.
+static uint64_t vex_global_array_bytes(const ast::TypeNode *tn) {
+    if (!tn || tn->kind != ast::NodeKind::ArrayTypeNode) return 0;
+    auto *at = static_cast<const ast::ArrayTypeNode *>(tn);
+    if (!at->element_type || !at->size_expr) return 0; // T[] decay = sin storage
+    if (at->size_expr->kind != ast::NodeKind::IntLitExpr) return 0;
+    const uint64_t count =
+        static_cast<const ast::IntLitExpr *>(at->size_expr.get())->value;
+    uint64_t esz = 0;
+    if (at->element_type->kind == ast::NodeKind::PrimitiveTypeNode)
+        esz = primitive_size_bytes(
+            static_cast<const ast::PrimitiveTypeNode *>(at->element_type.get())
+                ->prim);
+    else if (at->element_type->kind == ast::NodeKind::PointerTypeNode)
+        esz = 8;
+    if (esz == 0 || count == 0) return 0;
+    return count * esz;
+}
+
+// Computa el intervalo DFS [lo,hi] de cada clase sobre el bosque de herencia
+// (super_name).  El preorden numera lo; hi = max lo del subarbol.  Asi
+// is-a(A,B) <=> B.lo <= A.lo <= B.hi (A es B o un descendiente de B).  Orden de
+// hijos deterministico (alfabetico) para estabilidad cross-build.  Defensa
+// contra ciclos via marca de visitados (el type checker ya rechaza ciclos de
+// herencia, pero el DFS no debe colgarse si reaparece uno).
+void Lowering::compute_type_intervals() {
+    type_intervals_.clear();
+    const auto &layouts = tc_.class_layouts();
+    if (layouts.empty()) return;
+    // children[S] = clases cuya super es S (S es a su vez una clase del modulo).
+    std::map<std::string, std::vector<std::string>> children;
+    std::vector<std::string> roots;
+    for (const auto &kv : layouts) {
+        const std::string &nm = kv.first;
+        const std::string &sup = kv.second.super_name;
+        if (!sup.empty() && layouts.count(sup))
+            children[sup].push_back(nm);
+        else
+            roots.push_back(nm);
+    }
+    for (auto &kv : children)
+        std::sort(kv.second.begin(), kv.second.end());
+    std::sort(roots.begin(), roots.end());
+    uint32_t counter = 0;
+    std::unordered_set<std::string> visiting;
+    std::function<uint32_t(const std::string &)> dfs =
+        [&](const std::string &nm) -> uint32_t {
+        const uint32_t lo = counter++;
+        uint32_t hi = lo;
+        if (visiting.insert(nm).second) { // defensa anti-ciclo
+            auto it = children.find(nm);
+            if (it != children.end())
+                for (const std::string &ch : it->second)
+                    hi = std::max(hi, dfs(ch));
+        }
+        type_intervals_[nm] = {lo, hi};
+        return hi;
+    };
+    for (const std::string &r : roots) dfs(r);
+}
+
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     const size_t initial_errors = diags_.error_count();
     out_module.name = module_name;
@@ -739,6 +922,31 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // datos estaticos y imports nativos sin pasar el modulo en cada
     // signature.
     out_mod_ = &out_module;
+
+    // AOT: precomputar los intervalos de tipo (encoding nested-set) para el
+    // type matching de catch.  Barato y necesario antes de bajar cualquier
+    // try/throw.
+    if (native_poo_) compute_type_intervals();
+
+    // AOT / Embed (native_poo_): el AOP (@Aspect + advice) se registra en
+    // RUNTIME (MethodInfo::advice_chain via addadvice en __module_init), que
+    // native_poo NO emite.  Sin esto, el advice se ignoraria SILENCIOSAMENTE y
+    // los metodos correrian sin sus before/after/around -> resultado erroneo
+    // (16_aop daba 1 en vez de 99).  Rechazar en compile-time es lo correcto:
+    // un fallo ruidoso es mejor que un resultado incorrecto.
+    if (native_poo_) {
+        for (const auto &kv : tc_.class_layouts()) {
+            if (kv.second.is_aspect) {
+                error_at(SourceLoc{},
+                         "AOP (@Aspect '" + kv.first +
+                             "') no soportado en compilacion nativa "
+                             "(--target bare/embed): el advice se registra en "
+                             "runtime y se ignoraria. Usa --target full o "
+                             "elimina los aspectos.");
+                return false;
+            }
+        }
+    }
 
     // Inferir el fichero fuente del primer AST node con loc.file no
     // vacio.  Esto se usa en warnings emitidos por @c cast_if_needed
@@ -915,6 +1123,191 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
         auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
         if (gv->is_const || gv->is_comptime) continue;
+        // thread_local: almacenamiento por-hilo (TLS NATIVO).  Su plantilla va
+        // a una seccion SHF_TLS (.tdata) con SD_FLAG_TLS; el acceso usa el
+        // thread pointer (fs/gs + TPOFF) que emite el codegen AOT.  El init
+        // debe ser una constante (literal entero o ausente = 0): es la
+        // plantilla estatica que el cargador copia por-hilo, no un store en
+        // __module_init.
+        if (gv->is_thread_local) {
+            uint64_t nbytes = 8;
+            uint16_t talign = 8;
+            PrimitiveKind prim_kind = PrimitiveKind::I64;
+            if (gv->type &&
+                gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                auto *pt =
+                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
+                prim_kind = pt->prim;
+                nbytes = primitive_size_bytes(pt->prim);
+                if (nbytes == 0) nbytes = 8;
+                talign = static_cast<uint16_t>(nbytes);
+            }
+            const bool is_f64 = (prim_kind == PrimitiveKind::F64);
+            const bool is_f32 = (prim_kind == PrimitiveKind::F32);
+            // Valor inicial: constante (literal entero/float/bool/char, negado,
+            // o una referencia a un `comptime` const).  Es la plantilla
+            // estatica que el cargador copia por-hilo.
+            uint64_t init_val = 0;
+            bool init_ok = true;
+            if (gv->init) {
+                const ast::Expr *ie = gv->init.get();
+                int64_t sign = 1;
+                if (ie->kind == ast::NodeKind::UnaryExpr) {
+                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                    if (u->op == ast::UnOp::Neg && u->operand &&
+                        (u->operand->kind == ast::NodeKind::IntLitExpr ||
+                         u->operand->kind == ast::NodeKind::FloatLitExpr)) {
+                        sign = -1;
+                        ie = u->operand.get();
+                    }
+                }
+                if (ie->kind == ast::NodeKind::FloatLitExpr) {
+                    // Empaquetar los bits IEEE 754 (f64 o f32) de la plantilla.
+                    double d = sign *
+                               static_cast<const ast::FloatLitExpr *>(ie)->value;
+                    if (is_f32) {
+                        float f = static_cast<float>(d);
+                        uint32_t u32;
+                        std::memcpy(&u32, &f, 4);
+                        init_val = u32;
+                    } else {
+                        std::memcpy(&init_val, &d, 8);
+                    }
+                } else if (ie->kind == ast::NodeKind::IntLitExpr) {
+                    int64_t iv =
+                        sign * static_cast<int64_t>(
+                                   static_cast<const ast::IntLitExpr *>(ie)
+                                       ->value);
+                    // i64-literal en un thread_local float -> convertir a IEEE.
+                    if (is_f64) {
+                        double d = static_cast<double>(iv);
+                        std::memcpy(&init_val, &d, 8);
+                    } else if (is_f32) {
+                        float f = static_cast<float>(iv);
+                        uint32_t u32;
+                        std::memcpy(&u32, &f, 4);
+                        init_val = u32;
+                    } else {
+                        init_val = static_cast<uint64_t>(iv);
+                    }
+                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                    init_val =
+                        static_cast<const ast::BoolLitExpr *>(ie)->value ? 1 : 0;
+                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                    init_val = static_cast<uint64_t>(
+                        static_cast<const ast::CharLitExpr *>(ie)->codepoint);
+                } else if (ie->kind == ast::NodeKind::IdentExpr) {
+                    // Referencia a un `comptime` const entero -> su valor.
+                    const auto &cgv = tc_.comptime_const_values();
+                    auto cit = cgv.find(
+                        static_cast<const ast::IdentExpr *>(ie)->name);
+                    if (cit != cgv.end() && !cit->second.is_str &&
+                        !cit->second.is_struct) {
+                        int64_t cv = sign * cit->second.value;
+                        if (is_f64) {
+                            double d = static_cast<double>(cv);
+                            std::memcpy(&init_val, &d, 8);
+                        } else if (is_f32) {
+                            float f = static_cast<float>(cv);
+                            uint32_t u32;
+                            std::memcpy(&u32, &f, 4);
+                            init_val = u32;
+                        } else {
+                            init_val = static_cast<uint64_t>(cv);
+                        }
+                    } else {
+                        init_ok = false;
+                    }
+                } else {
+                    init_ok = false;
+                }
+            }
+            if (!init_ok) {
+                diags_.error(
+                    gv->loc,
+                    "thread_local '" + gv->name +
+                        "': el inicializador debe ser una constante (literal "
+                        "entero/float/bool/char, o un `comptime` const)");
+                continue;
+            }
+            const uint64_t tls_slot = get_or_create_tls_global_slot(
+                gv->name, nbytes, init_val, talign);
+            // Init != 0: registrar para el TLS callback __vex_tls_init (la
+            // plantilla a cero no necesita store -- el bloque ya esta a cero).
+            if (init_val != 0)
+                tls_nonzero_inits_.push_back({tls_slot, init_val});
+            continue;
+        }
+        // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
+        if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
+            const uint64_t ab = vex_global_array_bytes(gv->type.get());
+            if (ab > 0) {
+                const uint64_t slot =
+                    get_or_create_runtime_global_slot(gv->name, ab);
+                // Init-list constante `= {e0, e1, ...}`: grabar los bytes
+                // directamente en el slot .data (en AOT no corre
+                // __module_init).  Solo elementos enteros constantes.
+                auto *at = static_cast<ast::ArrayTypeNode *>(gv->type.get());
+                uint64_t esz = 8;
+                if (at->element_type &&
+                    at->element_type->kind ==
+                        ast::NodeKind::PrimitiveTypeNode)
+                    esz = primitive_size_bytes(
+                        static_cast<ast::PrimitiveTypeNode *>(
+                            at->element_type.get())
+                            ->prim);
+                if (gv->init &&
+                    gv->init->kind == ast::NodeKind::InitListExpr &&
+                    slot < out_mod_->static_data.entries.size() && esz > 0) {
+                    auto *il =
+                        static_cast<ast::InitListExpr *>(gv->init.get());
+                    const uint32_t base_off =
+                        out_mod_->static_data.entries[slot].byte_offset;
+                    for (size_t ei = 0; ei < il->elements.size(); ++ei) {
+                        uint64_t cval = 0;
+                        const ast::Expr *ie = il->elements[ei].get();
+                        bool have = false;
+                        if (ie &&
+                            ie->kind == ast::NodeKind::IntLitExpr) {
+                            cval =
+                                static_cast<const ast::IntLitExpr *>(ie)->value;
+                            have = true;
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::UnaryExpr) {
+                            auto *u =
+                                static_cast<const ast::UnaryExpr *>(ie);
+                            if (u->op == ast::UnOp::Neg && u->operand &&
+                                u->operand->kind ==
+                                    ast::NodeKind::IntLitExpr) {
+                                cval = (uint64_t)(-(int64_t)static_cast<
+                                    const ast::IntLitExpr *>(u->operand.get())
+                                                      ->value);
+                                have = true;
+                            }
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::CharLitExpr) {
+                            cval = static_cast<const ast::CharLitExpr *>(ie)
+                                       ->codepoint;
+                            have = true;
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::BoolLitExpr) {
+                            cval = static_cast<const ast::BoolLitExpr *>(ie)
+                                           ->value
+                                       ? 1u
+                                       : 0u;
+                            have = true;
+                        }
+                        if (!have) continue;
+                        const uint64_t eoff = base_off + ei * esz;
+                        for (uint64_t k = 0; k < esz; ++k)
+                            out_mod_->static_data
+                                .bytes[eoff + k] =
+                                (uint8_t)((cval >> (8 * k)) & 0xFF);
+                    }
+                }
+            }
+            continue;
+        }
         if (!gv->type || gv->type->kind != ast::NodeKind::PrimitiveTypeNode)
             continue;
         auto *pt = static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
@@ -936,6 +1329,52 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             (void)get_or_create_runtime_global_slot(gv->name);
             break;
         default: break;
+        }
+    }
+    // AOT (native_poo_): los campos estaticos de clase se mapean a globales
+    // planos (slot __static_<Clase>_<campo>).  Pre-grabamos su inicializador
+    // constante en los bytes del slot (no hay __module_init en bare).  Las
+    // rutas de lectura/escritura usan el mismo slot via get_or_create.
+    if (native_poo_) {
+        for (auto &decl : mod_.decls) {
+            if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
+            auto *cd = static_cast<ast::ClassDecl *>(decl.get());
+            for (const auto &fld : cd->fields) {
+                if (!fld.is_static) continue;
+                const uint64_t slot = get_or_create_runtime_global_slot(
+                    "__static_" + cd->name + "_" + fld.name, 8);
+                if (!fld.init) continue;
+                uint64_t cval = 0;
+                bool have = false;
+                const ast::Expr *ie = fld.init.get();
+                if (ie->kind == ast::NodeKind::IntLitExpr) {
+                    cval = static_cast<const ast::IntLitExpr *>(ie)->value;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                    cval = static_cast<const ast::BoolLitExpr *>(ie)->value ? 1u
+                                                                           : 0u;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                    cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::UnaryExpr) {
+                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                    if (u->op == ast::UnOp::Neg && u->operand &&
+                        u->operand->kind == ast::NodeKind::IntLitExpr) {
+                        cval = (uint64_t)(-(int64_t)static_cast<
+                            const ast::IntLitExpr *>(u->operand.get())
+                                              ->value);
+                        have = true;
+                    }
+                }
+                if (have && slot < out_module.static_data.entries.size()) {
+                    uint32_t off =
+                        out_module.static_data.entries[slot].byte_offset;
+                    for (int k = 0; k < 8; ++k)
+                        out_module.static_data.bytes[off + (size_t)k] =
+                            (uint8_t)((cval >> (8 * k)) & 0xFF);
+                }
+            }
         }
     }
     if (main_decl) lower_function(main_decl, out_module);
@@ -984,6 +1423,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             // Solo se reserva si tiene tipo basico soportado: STRING o
             // enteros/floats que caben en 8 bytes.
             bool runtime_global_supported = false;
+            // Global array nativo T[N]: ya tiene slot (pre-pase); soportado.
+            if (!gv->is_const && !is_comptime_silent && gv->type &&
+                gv->type->kind == ast::NodeKind::ArrayTypeNode &&
+                vex_global_array_bytes(gv->type.get()) > 0) {
+                runtime_global_supported = true;
+            }
             if (!gv->is_const && !is_comptime_silent && gv->type &&
                 gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
                 auto *pt =
@@ -1004,7 +1449,66 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 case PrimitiveKind::CHAR:
                 case PrimitiveKind::PTR:
                     runtime_global_supported = true;
-                    (void)get_or_create_runtime_global_slot(gv->name);
+                    {
+                        uint64_t slot = get_or_create_runtime_global_slot(gv->name);
+                        // AOT/bare: __module_init NO se ejecuta (el entry es
+                        // main/kmain directo).  Para que el global tenga su
+                        // valor inicial sin depender de __module_init, si el
+                        // init es una constante la grabamos DIRECTAMENTE en los
+                        // bytes de .data.  El STORE de __module_init (VM/JIT)
+                        // re-escribe el mismo valor; en AOT esos bytes son la
+                        // unica fuente.  (Inits no-constantes -- p.ej. llamadas
+                        // -- siguen necesitando __module_init: no soportado en
+                        // AOT puro, pero raro en codigo bare.)
+                        uint64_t cval = 0;
+                        bool have = false;
+                        const ast::Expr *ie = gv->init.get();
+                        if (ie) {
+                            switch (ie->kind) {
+                            case ast::NodeKind::IntLitExpr:
+                                cval = static_cast<const ast::IntLitExpr *>(ie)->value;
+                                have = true;
+                                break;
+                            case ast::NodeKind::BoolLitExpr:
+                                cval = static_cast<const ast::BoolLitExpr *>(ie)->value ? 1u : 0u;
+                                have = true;
+                                break;
+                            case ast::NodeKind::CharLitExpr:
+                                cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
+                                have = true;
+                                break;
+                            case ast::NodeKind::FloatLitExpr: {
+                                double d = static_cast<const ast::FloatLitExpr *>(ie)->value;
+                                std::memcpy(&cval, &d, sizeof(double));
+                                have = true;
+                                break;
+                            }
+                            case ast::NodeKind::UnaryExpr: {
+                                auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                                if (u->op == ast::UnOp::Neg && u->operand &&
+                                    u->operand->kind == ast::NodeKind::IntLitExpr) {
+                                    cval = (uint64_t)(-(int64_t)static_cast<const ast::IntLitExpr *>(
+                                        u->operand.get())->value);
+                                    have = true;
+                                } else if (u->op == ast::UnOp::Neg && u->operand &&
+                                           u->operand->kind == ast::NodeKind::FloatLitExpr) {
+                                    double d = -static_cast<const ast::FloatLitExpr *>(
+                                        u->operand.get())->value;
+                                    std::memcpy(&cval, &d, sizeof(double));
+                                    have = true;
+                                }
+                                break;
+                            }
+                            default: break;
+                            }
+                        }
+                        if (have && slot < out_mod_->static_data.entries.size()) {
+                            uint32_t off = out_mod_->static_data.entries[slot].byte_offset;
+                            for (int k = 0; k < 8; ++k)
+                                out_mod_->static_data.bytes[off + (size_t)k] =
+                                    (uint8_t)((cval >> (8 * k)) & 0xFF);
+                        }
+                    }
                     break;
                 default: break;
                 }
@@ -1041,7 +1545,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // Generar funciones auxiliares de POO:
     //  - __new_<X>(args) por cada clase: encapsula findclass+newobj+ctor.
     //  - __module_init(): registra todas las clases via defclass+...
-    // Estas se anyaden al modulo despues de las funciones de usuario;
+    // Estas se añaden al modulo despues de las funciones de usuario;
     // el prologo de main incluye una llamada a __module_init para
     // garantizar que las clases esten registradas antes del cuerpo.
     generate_new_helpers(out_module);
@@ -1102,6 +1606,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             m.section_at = bd->attr_at;
             m.section_order = bd->attr_order;
             m.sym_refs = std::move(asm_syms); // call/jmp -> funcion Vex
+            // Phase NR / dev-OS: exportar el nombre del bloque como simbolo
+            // resoluble por otros bloques (cross-block jmp/call/dd).
+            m.symbol_name = bd->name;
             m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                        ir::IrModule::SD_FLAG_NON_DEDUP;
             continue;
@@ -1113,7 +1620,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         //   (b) comptime array        -> sus elementos (cada uno del ancho).
         //   (c) simbolo de funcion     -> reloc ABS64 (requiere dq=8).
         // Los sym_refs vienen en orden de offset creciente (el parser los
-        // anyade segun avanza); reconstruimos de izquierda a derecha.
+        // añade segun avanza); reconstruimos de izquierda a derecha.
         const auto &ccv = tc_.comptime_const_values();
         std::vector<uint8_t> rebuilt;
         std::vector<ir::IrModule::StaticDataMeta::SymRef> kept;
@@ -1160,22 +1667,24 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         rebuilt.push_back((uint8_t)(v >> (8 * i)));
                 }
             } else {
-                // Simbolo de funcion -> reloc absoluta de 64 bits.
-                if (sr.width != 8) {
+                // Simbolo (funcion u otro bloque) -> reloc absoluta.  Se
+                // admite `dq` (ABS64) y `dd` (ABS32): un dev-OS pone la base
+                // de un GDTR / un puntero far de 32 bits con `dd gdt`, donde
+                // la direccion cabe en 32 bits (binario plano bajo 4GB).
+                if (sr.width != 8 && sr.width != 4) {
                     diags_.error(bd->loc,
-                                 "bytes: la referencia a la funcion '" +
-                                     sr.sym +
-                                     "' requiere 'dq' (direccion de 64 bits)");
+                                 "bytes: la referencia al simbolo '" + sr.sym +
+                                     "' requiere 'dd' (32 bits) o 'dq' (64 bits)");
                     ok = false;
                     break;
                 }
                 ir::IrModule::StaticDataMeta::SymRef d;
                 d.offset = (uint32_t)rebuilt.size(); // offset en el blob nuevo
                 d.sym = sr.sym;
-                d.width = 8;
+                d.width = sr.width; // 4 -> ABS32, 8 -> ABS64
                 d.is_rel = sr.is_rel ? 1 : 0;
                 kept.push_back(std::move(d));
-                for (int i = 0; i < 8; ++i)
+                for (int i = 0; i < sr.width; ++i)
                     rebuilt.push_back(0); // placeholder
             }
             cursor =
@@ -1194,6 +1703,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         m.section_perms = bd->attr_section_perms;
         m.section_at = bd->attr_at;
         m.section_order = bd->attr_order;
+        // Phase NR / dev-OS: exportar el nombre del bloque bytes como simbolo
+        // resoluble cross-block (p.ej. `lgdt [gdtr]` / `dd gdt` desde otro).
+        m.symbol_name = bd->name;
         m.flags |=
             ir::IrModule::SD_FLAG_FORCE_EMIT | ir::IrModule::SD_FLAG_NON_DEDUP;
         // Solo las refs de funcion sobreviven como relocs (las comptime
@@ -1208,6 +1720,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // cpu_features() en una funcion no-main marca cpu_features_used_ DESPUES
     // de cerrar main.  Solo en native_poo_ (AOT): el helper usa INLINE_ASM
     // (PURE_NATIVE) + el wiring no toca el stub _start.
+    // AUTO multiversion (--float-isa auto): si main tiene ops VEC_*, renombrarlo
+    // a __vex_main_body + sintetizar un main que despacha por cpuid.  Debe correr
+    // ANTES del wiring de inits (necesita que main exista como el wrapper para
+    // prepender alli el call __vex_auto_init).
+    ensure_auto_multiversion(out_module);
+
     if (native_poo_ && (cpu_features_used_ || cpu_dispatch_used_)) {
         // Asegurar que el global de features + el helper __vex_cpu_init existan
         // (idempotente).  El cpuid corre primero: el dispatch lee el bitmask.
@@ -1245,6 +1763,19 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 call_mc.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_mc));
             }
+            if (auto_dispatch_emitted_) {
+                // AUTO: el dispatch del main (setea __vex_main_body$fp).  Debe
+                // ir DESPUES de cpu_init (lee el bitmask) y ANTES del CALLIND
+                // del wrapper (que lee el fp).  Se inserta aqui (antes que
+                // cpu_init) para quedar justo tras el en el orden final.
+                ir::IrInstr call_auto{};
+                call_auto.op = ir::IrOp::CALL;
+                call_auto.type = ir::IrType::VOID;
+                call_auto.dst = ir::IR_NO_VALUE;
+                call_auto.func_name = "__vex_auto_init";
+                call_auto.source_line = 0;
+                ins.insert(ins.begin(), std::move(call_auto));
+            }
             ir::IrInstr call_init{};
             call_init.op = ir::IrOp::CALL;
             call_init.type = ir::IrType::VOID;
@@ -1252,6 +1783,135 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             call_init.func_name = "__vex_cpu_init";
             call_init.source_line = 0;
             ins.insert(ins.begin(), std::move(call_init));
+            break;
+        }
+    }
+
+    // TLS callback (thread_local PE): si el modulo tiene thread_local con init
+    // != 0, sintetizar __vex_tls_init -- la funcion que el cargador de Windows
+    // llama en cada attach de hilo (registrada en AddressOfCallBacks del
+    // IMAGE_TLS_DIRECTORY).  Escribe la plantilla a la copia por-hilo (el
+    // cargador no siempre la copia para el TLS de una .dll en un consumidor
+    // minimal sin CRT).  Reusa el acceso TLS (STR_LIT_ADDR is_tls -> store), que
+    // el driver baja a gs:[0x58]+secrel.  Idempotente y barato (N stores por
+    // attach; N = thread_local con init != 0).
+    if (native_poo_ && !tls_nonzero_inits_.empty()) {
+        ir::IrFunction ti;
+        ti.name = "__vex_tls_init";
+        // Devuelve i64 1 (TRUE): __vex_tls_init es el ENTRY POINT (DllMain) de la
+        // .dll -- el cargador lo llama en cada attach de hilo y aqui aplicamos la
+        // plantilla por-hilo (ntdll no la copia para el TLS de una .dll sin un
+        // entry que dispare su init).  DllMain debe devolver TRUE o la carga
+        // falla.  (Tambien queda registrado como TLS callback, que ignora el
+        // retorno.)
+        ti.ret_type = ir::IrType::I64;
+        const ir::IrBlockId e = ti.new_block("entry");
+        for (const auto &pr : tls_nonzero_inits_) {
+            const uint64_t slot = pr.first;
+            const uint64_t val = pr.second;
+            // %addr = &tls_var (STR_LIT_ADDR del slot; is_tls lo deriva el driver
+            // desde SD_FLAG_TLS -> acceso por thread pointer).
+            const ir::IrValueId v_addr = ti.new_value(ir::IrType::PTR);
+            ti.values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr a{};
+                a.op = ir::IrOp::STR_LIT_ADDR;
+                a.type = ir::IrType::PTR;
+                a.dst = v_addr;
+                a.imm = slot;
+                ti.append(e, std::move(a));
+            }
+            // %v = CONST val (8B); el slot esta padded a 8 -> store uniforme i64.
+            const ir::IrValueId v_val = ti.new_value(ir::IrType::I64);
+            {
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CONST;
+                c.type = ir::IrType::I64;
+                c.dst = v_val;
+                c.imm = val;
+                ti.append(e, std::move(c));
+            }
+            {
+                ir::IrInstr s{};
+                s.op = ir::IrOp::STORE;
+                s.type = ir::IrType::I64;
+                s.operands = {v_val, v_addr};
+                ti.append(e, std::move(s));
+            }
+        }
+        // return 1 (TRUE) -- DllMain debe devolver no-cero o la carga falla.
+        const ir::IrValueId v_one = ti.new_value(ir::IrType::I64);
+        {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CONST;
+            c.type = ir::IrType::I64;
+            c.dst = v_one;
+            c.imm = 1;
+            ti.append(e, std::move(c));
+        }
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::RET;
+            r.type = ir::IrType::I64;
+            r.operands = {v_one};
+            ti.append(e, std::move(r));
+        }
+        out_module.add_function(std::move(ti));
+    }
+
+    // gc<T> opt-in: si el modulo usa gc<Class>, generar __vexgc_init que
+    // registra los stackmaps AOT (seccion .vexgc_smap) en el GC al arranque
+    // (CALL vex_gc_register_aot_stackmaps(section_start, section_size)) e
+    // inyectar un CALL a el al INICIO de main -> el scan preciso ve los frames
+    // nativos y los gc<T> vivos sobreviven la coleccion.  El driver emite la
+    // seccion .vexgc_smap tras el layout (con relocs a cada funcion).
+    if (native_poo_ && !classes_used_gc_.empty()) {
+        ir::IrFunction gi;
+        gi.name = "__vexgc_init";
+        gi.ret_type = ir::IrType::VOID;
+        const ir::IrBlockId e = gi.new_block("entry");
+        // %start = section_start(".vexgc_smap")  (PTR)
+        const ir::IrValueId v_start = gi.new_value(ir::IrType::PTR);
+        gi.values[v_start].is_host_ptr = true;
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::SECTION_REF;
+            r.type = ir::IrType::PTR;
+            r.dst = v_start;
+            r.func_name = ".vexgc_smap";
+            r.imm = 0; // START
+            gi.append(e, std::move(r));
+        }
+        // call vex_gc_register_aot_stackmaps(%start)  -- el tamanño total va
+        // EMBEBIDO en el header de la seccion (section_size seria una reloc SIZE
+        // no soportada en .obj/.o; section_start es una ADDR normal).
+        {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::VOID;
+            c.dst = ir::IR_NO_VALUE;
+            c.func_name = "vex_gc_register_aot_stackmaps";
+            c.operands = {v_start};
+            gi.append(e, std::move(c));
+        }
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::RET;
+            r.type = ir::IrType::VOID;
+            gi.append(e, std::move(r));
+        }
+        out_module.add_function(std::move(gi));
+        // Inyectar CALL __vexgc_init al inicio de main (antes de todo, incl. los
+        // inits de cpu): el registro debe correr antes del primer gc<T> alloc.
+        for (auto &f : out_module.functions) {
+            if (f.name != "main" || f.blocks.empty()) continue;
+            ir::IrInstr cg{};
+            cg.op = ir::IrOp::CALL;
+            cg.type = ir::IrType::VOID;
+            cg.dst = ir::IR_NO_VALUE;
+            cg.func_name = "__vexgc_init";
+            f.blocks[0].instrs.insert(f.blocks[0].instrs.begin(),
+                                      std::move(cg));
             break;
         }
     }
@@ -1358,7 +2018,7 @@ void Lowering::emit_introspect_info_chunks() {
         introspect_idx_by_name_[lay.name] = idx;
     }
     /* Clases marcadas @Introspect.  No emitimos metodos por ahora
-     * (Sprint 4 MVP cubre solo fields; Sprint 5 anyade methods). */
+     * (Sprint 4 MVP cubre solo fields; Sprint 5 añade methods). */
     for (const auto &kv : tc_.class_layouts()) {
         const auto &lay = kv.second;
         if (!lay.is_introspect) continue;
@@ -1820,8 +2480,13 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * una ComptimeVM para acelerar la metaprogramacion ~10-1000x.
      * Por ahora el IR queda en el modulo como dead code; el call
      * site del macro sigue usando el evaluator AST. */
-    if (fd->is_comptime) {
-        if (!fd->is_macro) return;
+    if (fd->is_comptime && !fd->is_macro) {
+        /* comptime fn (no-macro): por defecto NO se baja (se evalua en
+         * compile-time y se elide).  Solo-LSP: con emit_comptime_fns_ la
+         * bajamos como funcion normal para poder inspeccionar su codegen
+         * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro. */
+        if (!emit_comptime_fns_) return;
+    } else if (fd->is_comptime) {
         /* @Macro: intentar lowear el body al IR.  Si contiene
          * caracteristicas no soportadas todavia (introspect,
          * comptime var, builtins comptime-only), saltar limpiamente
@@ -1894,6 +2559,8 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.section_perms = fd->attr_section_perms;
     fn.section_at = fd->attr_at;
     fn.section_order = fd->attr_order;
+    // Phase NR: @Naked -- el codegen suprime prologo/epilogo/ret.
+    fn.is_naked = fd->is_naked;
 
     // Subsistema de coste (modo --analyze): propagar el contrato
     // @complexity del AST al IR.  Metadata pura -- el codegen la ignora;
@@ -2029,6 +2696,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             // new Shape[N]), usar `T*` explicito en el parametro
             // hasta que la distincion se resuelva en el type system.
         }
+        // Variadico (`T... name`): el callee lo recibe como `T*` (puntero host
+        // al array empaquetado por el caller), NO como T.  El count va en un
+        // param i64 OCULTO que se anñade tras el loop (leido con vacount()).
+        if (p->is_variadic) {
+            pt = ir::IrType::PTR;
+            param_is_host_ptr = true;
+            param_is_class = false;
+        }
         const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
         fn.values[vid].is_param = true;
         if (param_is_class) {
@@ -2039,6 +2714,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
         fn.params.push_back(vid);
         param_bindings.emplace_back(p->name, vid);
+    }
+    // Variadicos: param OCULTO i64 del count, tras el `T*` del ultimo param.
+    // `vacount()` en el body resuelve a este binding.
+    if (!fd->params.empty() && fd->params.back()->is_variadic) {
+        const ir::IrValueId vcnt = fn.new_value(ir::IrType::I64, "%__vacount");
+        fn.values[vcnt].is_param = true;
+        fn.params.push_back(vcnt);
+        param_bindings.emplace_back("__vacount", vcnt);
     }
 
     // Bloque entry.
@@ -2155,6 +2838,13 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     escaping_locals_.clear();
     if (fd->body) scan_escaping_locals(fd->body.get());
 
+    // CRITICO: los IDs de SSA value son POR-FUNCION; ssa_concrete_class_ (mapa
+    // vid->clase concreta para devirt nativa) DEBE limpiarse entre funciones o
+    // un vid de la funcion anterior (p.ej. %1 = new Square en main) colisiona
+    // con un param de esta (b = %1 en total) -> devirt al tipo equivocado.
+    // (Bug AOT-especifico: solo native_poo devirta clases via este mapa.)
+    ssa_concrete_class_.clear();
+
     // limpiar el stack de cleanups (synchronized activos) al
     // entrar a una nueva funcion.  Cada funcion arranca sin cleanups;
     // las acciones se acumulan al bajar synchronized y se consumen al
@@ -2244,7 +2934,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     string_eq_override_ = saved_eq_ovr;
 
     // Cerrar la funcion: si la ultima instruccion no es terminador,
-    // anyadir RET con valor por defecto (0) en funciones no-void, o
+    // añadir RET con valor por defecto (0) en funciones no-void, o
     // RET sin valor en void.
     if (!block_terminated_) {
         // emitir cleanups de auto-free de colecciones antes
@@ -2607,6 +3297,19 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     // no genere warning (es shared explicitamente).
     if (vd->is_shared) {
         shared_locals_.insert(vd->name);
+    }
+
+    // gc<T> opt-in: si el var-decl es `gc<Class>` (sem_type.gc_managed) y el
+    // init es `new Class(...)`, marcar el NewExpr para que el lowering despache
+    // a __new_<Class>_gc (vex_gc_alloc) y registrar la clase para generar ese
+    // helper.  El valor es un host_ptr GC-managed (marcado is_gc_object); NO se
+    // registra cleanup RAII (el GC colecta).
+    if (native_poo_ && sem_type.gc_managed && vd->init &&
+        vd->init->kind == ast::NodeKind::NewExpr) {
+        auto *ne = static_cast<ast::NewExpr *>(vd->init.get());
+        ne->is_gc = true;
+        if (!ne->class_name.empty())
+            classes_used_gc_.insert(ne->class_name);
     }
 
     // Phase AS inc.3: si el var-decl tiene storage-class register("reg"),
@@ -3422,7 +4125,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     vd->init->kind == ast::NodeKind::BoolLitExpr ||
                     vd->init->kind == ast::NodeKind::CharLitExpr ||
                     vd->init->kind == ast::NodeKind::NullLitExpr;
-                v0 = cast_if_needed(v0, vfrom, vt, vd->loc.line,
+                v0 = cast_if_needed(v0, vfrom, vt, vd->init->loc,
                                     /*is_explicit=*/init_is_literal);
             }
         }
@@ -3645,7 +4348,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 vd->init->kind == ast::NodeKind::BoolLitExpr ||
                 vd->init->kind == ast::NodeKind::CharLitExpr ||
                 vd->init->kind == ast::NodeKind::NullLitExpr;
-            v = cast_if_needed(v, vfrom, vt, vd->loc.line,
+            v = cast_if_needed(v, vfrom, vt, vd->init->loc,
                                /*is_explicit=*/init_is_literal);
         }
     } else {
@@ -3696,7 +4399,10 @@ bind_and_cleanup:
             // libera recursos propios, p.ej. free de un campo malloc) corre.
             const bool is_heap_new =
                 vd->init && vd->init->kind == ast::NodeKind::NewExpr;
-            if (native_poo_ && is_heap_new) {
+            // gc<T>: NO registrar cleanup RAII -- el GC (libvesta_gc) colecta el
+            // objeto cuando deja de ser alcanzable (incl. ciclos).  Liberarlo
+            // por RAII seria un double-free (el GC ya lo gestiona).
+            if (native_poo_ && is_heap_new && !sem_type.gc_managed) {
                 CleanupAction act;
                 act.kind = CleanupAction::Kind::NATIVE_FREE;
                 act.operands = {v};
@@ -4045,7 +4751,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
     } else {
         // Sin else: el "branch else" es el propio entry, que cae
         // directo al merge sin pasar por else_bb.  Su pred del merge
-        // es el bloque del que venia el if (anyadido arriba via
+        // es el bloque del que venia el if (añadido arriba via
         // fn_->blocks[merge_bb].preds.push_back(current_block_)
         // antes de la rama then).  El else_pred en ese caso es ese
         // pred original (current_block_ ANTES del then).  Recuperamos
@@ -4081,7 +4787,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
         //
         // Notacion: scope_idx = nivel; tomamos como referencia el
         // depth original (entry_scopes.size()).  Si las ramas
-        // anyaden scopes nuevos, los ignoramos (variables locales a
+        // añaden scopes nuevos, los ignoramos (variables locales a
         // la rama).
         const size_t depth = entry_scopes.size();
         const size_t depth_then = then_scopes.size();
@@ -4164,15 +4870,38 @@ void Lowering::lower_if(ast::IfStmt *s) {
 // El paso clave es identificar las variables que se modifican dentro
 // del cond+body y emitir un PHI por cada una en el header.  El primer
 // arg del PHI viene del entry (el valor previo al loop); el segundo
-// arg se anyade al final, una vez bajado el body, con el valor que
+// arg se añade al final, una vez bajado el body, con el valor que
 // queda en scope tras la ultima iteracion.
 //
 // Las variables NO modificadas no necesitan PHI: el lookup() las
 // encuentra a traves del scope chain con su valor pre-loop.
 // ---------------------------------------------------------------------
 
+// Nota: la auto-vectorizacion de bucles (try_lower_memcpy_idiom / _for,
+// mc_match_copy_assign, mc_emit_copy) vive en src/vex/vectorize.cpp para no
+// inflar este TU; son metodos de Lowering declarados en vex/lowering.h.
+
 void Lowering::lower_while(ast::WhileStmt *s) {
     if (!s) return;
+
+    // Auto-vectorizacion: si el while es EXACTAMENTE el idioma de copia de
+    // bytes/elementos `while (i < N) { dst[i] = src[i]; i++; }` sobre punteros
+    // HOST, lo reemplazamos por un MEMCPY (rep movsb / SIMD en JIT/AOT; bucle
+    // host->host en el interprete).  Si no matchea, seguimos con el lowering
+    // normal del while.
+    static const bool no_vec = std::getenv("VESTA_NO_VECTORIZE") != nullptr;
+    if (!no_vec) {
+    if (try_lower_memcpy_idiom(s)) return;
+    // Auto-vectorizacion aritmetica/unaria/reduccion sobre la forma `while`:
+    // `while (i < N) { c[i] = a[i] OP b[i]; i++; }` (y unaria/reduccion) ->
+    // mismo VEC_BINOP/VEC_UNOP que el `for`.  Los matchers extraen el descriptor
+    // de loop de un for o while via mc_extract_vec_loop.
+    if (try_vectorize_elementwise_for(s)) return;
+    if (try_vectorize_scalar_for(s)) return;
+    if (try_vectorize_unary_for(s)) return;
+    if (try_vectorize_compound_for(s)) return;
+    if (try_vectorize_reduction_for(s)) return;
+    } // !no_vec
 
     // Pre-walk: variables mutadas en cond+body.
     std::set<std::string> modified;
@@ -4219,7 +4948,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     fn_->blocks[header_id].preds.push_back(entry_block);
 
     // 2. En el header, emitir un PHI por cada variable mutada.  Solo
-    //    se anyade el primer arg (entry); el back-edge se completa
+    //    se añade el primer arg (entry); el back-edge se completa
     //    despues de bajar el body.
     for (auto &vi : vars) {
         vi.phi_value = fn_->new_value(vi.type);
@@ -4302,7 +5031,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
         }
     }
 
-    // Si el body no termino con un return/break, anyadir el back-edge
+    // Si el body no termino con un return/break, añadir el back-edge
     //    al header.  Si fue break/continue, el lowering de esos statements
     //    ya emitio BR al target adecuado y marco @c block_terminated_.
     if (!block_terminated_) {
@@ -4580,6 +5309,31 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
 
 void Lowering::lower_for(ast::ForStmt *s) {
     if (!s) return;
+
+    // VESTA_NO_VECTORIZE=1 desactiva TODA la auto-vectorizacion (loops escalares)
+    // -> linea base para benchmarks (escalar vs SSE2 vs AVX2).
+    static const bool no_vec = std::getenv("VESTA_NO_VECTORIZE") != nullptr;
+    if (!no_vec) {
+    // Auto-vectorizacion: la forma canonica del memcpy
+    // `for (T i = init; i < N; i++) dst[i] = src[i];` (ver vectorize.cpp).
+    if (try_lower_memcpy_idiom_for(s)) return;
+    // Auto-vectorizacion aritmetica: `for (...) c[i] = a[i] OP b[i];` f64 host
+    // -> loop W=2 con VEC_BINOP (SIMD) + cola escalar.
+    if (try_vectorize_elementwise_for(s)) return;
+    // Auto-vectorizacion scalar broadcast: `for (...) c[i] = a[i] OP scalar;`
+    // f64 host -> loop W=2 con VEC_BINOP_S (scalar difundido) + cola escalar.
+    if (try_vectorize_scalar_for(s)) return;
+    // Auto-vectorizacion unaria: `for (...) b[i] = OP a[i];` (-a/sqrt/fabs) f64
+    // host -> loop W=2 con VEC_UNOP (SIMD) + cola escalar.
+    if (try_vectorize_unary_for(s)) return;
+    // Auto-vectorizacion COMPOUND: `for (...) c[i] = a[i]*k + b[i];` (cadena
+    // multi-op) -> cadena de VEC ops con c acumulador + cola escalar.  Tras los
+    // matchers de 1-op (que cubren las formas simples).
+    if (try_vectorize_compound_for(s)) return;
+    // Auto-vectorizacion de reduccion: `for (...) acc = acc + a[i];` f64 host
+    // -> acumulador vectorial W=2 + reduccion horizontal + cola escalar.
+    if (try_vectorize_reduction_for(s)) return;
+    } // !no_vec
 
     // for(init; cond; step) body
     //
@@ -5072,6 +5826,27 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         }
         // raw_asm-elim 2026-05-28: usar IrOp::FULFILL_HLT directo.
         // Fusion atomica fulfill+hlt en 1 instr VM, mismo bytecode.
+        // AOT (native_poo_): el helper @Async es una tarea del scheduler coop
+        // -> CALL __vex_fulfill(fut, val) + RET (la tarea retorna al pump, no
+        // hay HLT del scheduler de la VM).
+        if (native_poo_) {
+            ir::IrInstr fu{};
+            fu.op = ir::IrOp::CALL;
+            fu.func_name = "__vex_fulfill";
+            fu.type = ir::IrType::VOID;
+            fu.dst = ir::IR_NO_VALUE;
+            fu.operands = {async_fut_id_, v_payload};
+            fu.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(fu));
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ir::IrType::VOID;
+            ret.dst = ir::IR_NO_VALUE;
+            ret.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(ret));
+            block_terminated_ = true;
+            return;
+        }
         ir::IrInstr fh{};
         fh.op = ir::IrOp::FULFILL_HLT;
         fh.type = ir::IrType::VOID;
@@ -5261,7 +6036,7 @@ static ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
 // Multi-catch / finally: pendientes (deferidos en MVP).
 //
 // El handler PC se obtiene como @Absolute("code.<fn>_<handler.name>")
-// donde <handler.name> incluye el sufijo numerico que new_block anyade.
+// donde <handler.name> incluye el sufijo numerico que new_block añade.
 // Asi el linker resuelve la referencia sin necesitar metadata extra.
 // ---------------------------------------------------------------------
 
@@ -5627,6 +6402,200 @@ void Lowering::lower_try(ast::TryStmt *s) {
     const ir::IrBlockId body_bb = fn_->new_block("try_body");
     const ir::IrBlockId merge_bb = fn_->new_block("try_merge");
 
+    // ---------------------------------------------------------------
+    // AOT/Embed (native_poo_): modelo setjmp/longjmp (sin VM runtime).
+    // En vez de N TRYENTER + br body, emitimos UN frame catch-all:
+    //   buf = ALLOCA(96); __vex_push_frame(buf, 0); r = __vex_setjmp(buf);
+    //   br_cond r ? handler[0] : body   (r!=0 = el longjmp reanudo).
+    // v1: type matching = catch-all (el throw no transporta tipo aun);
+    // multi-catch enruta todo a handler[0].  Las funciones __vex_* viven
+    // en stdlib/vex/vex_exc.vex (enlazado en el .exe AOT).
+    // ---------------------------------------------------------------
+    if (native_poo_) {
+        // buf en host-stack: 96B cubre el peor caso (Win64 buf 80 +
+        // prev 8 + type 8); SysV/x86-32 usan menos.  El layout interno
+        // (offsets prev/type) lo conoce vex_exc.vex via comptime const.
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_buf;
+            al.imm = 96;
+            al.host_alloca = true;
+            al.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        // type = 0 (catch-all).  v2: findclass del tipo del catch.
+        const ir::IrValueId v_type = emit_const(ir::IrType::I64, 0, s->loc.line);
+        {
+            ir::IrInstr cp{};
+            cp.op = ir::IrOp::CALL;
+            cp.type = ir::IrType::VOID;
+            cp.dst = ir::IR_NO_VALUE;
+            cp.func_name = "__vex_push_frame";
+            cp.operands = {v_buf, v_type};
+            cp.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cp));
+        }
+        const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr cs{};
+            cs.op = ir::IrOp::CALL;
+            cs.type = ir::IrType::I64;
+            cs.dst = v_r;
+            cs.func_name = "__vex_setjmp";
+            cs.operands = {v_buf};
+            cs.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cs));
+        }
+        // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
+        // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
+        // frame, lee el type-id y elige el catch que matchea (o re-throw).
+        const ir::IrBlockId dispatch_bb = fn_->new_block("try_dispatch");
+        const ir::IrBlockId rethrow_bb = fn_->new_block("try_rethrow");
+        // br_cond r: !=0 (true) -> dispatch ; ==0 (false) -> body.
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(v_r);
+            br.target_block = dispatch_bb;
+            br.false_block = body_bb;
+            br.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[current_block_].succs.push_back(dispatch_bb);
+        fn_->blocks[current_block_].succs.push_back(body_bb);
+        fn_->blocks[dispatch_bb].preds.push_back(current_block_);
+        fn_->blocks[body_bb].preds.push_back(current_block_);
+
+        // Helpers locales para emitir CALLs al runtime de excepciones.
+        auto emit_void_call = [&](ir::IrBlockId blk, const char *name) {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::VOID;
+            c.dst = ir::IR_NO_VALUE;
+            c.func_name = name;
+            c.source_line = s->loc.line;
+            fn_->append(blk, std::move(c));
+        };
+        auto emit_i64_call = [&](ir::IrBlockId blk,
+                                 const char *name) -> ir::IrValueId {
+            const ir::IrValueId d = fn_->new_value(ir::IrType::I64);
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::I64;
+            c.dst = d;
+            c.func_name = name;
+            c.source_line = s->loc.line;
+            fn_->append(blk, std::move(c));
+            return d;
+        };
+
+        // dispatch_bb: pop del frame consumido + leer el type-id.
+        current_block_ = dispatch_bb;
+        emit_void_call(dispatch_bb, "__vex_pop_frame");
+        const ir::IrValueId v_t = emit_i64_call(dispatch_bb, "__vex_get_type");
+        // Cadena de chequeos: por cada catch, si su tipo es desconocido
+        // (catch-all, builtin como FatalError, o base no registrada) matchea
+        // SIEMPRE; si es una clase con intervalo, matchea si lo<=t<=hi (el
+        // intervalo cubre la clase y sus subclases).
+        ir::IrBlockId cur_check = dispatch_bb;
+        for (size_t ci = 0; ci < n_catches && cur_check != ir::IR_NO_BLOCK;
+             ++ci) {
+            const ast::CatchClause &cc = s->catches[ci];
+            current_block_ = cur_check;
+            auto itv = cc.exc_class_name.empty()
+                           ? type_intervals_.end()
+                           : type_intervals_.find(cc.exc_class_name);
+            const bool catch_all = (itv == type_intervals_.end());
+            if (catch_all) {
+                // BR incondicional al handler; el resto de catches queda muerto.
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR;
+                br.target_block = handler_bbs[ci];
+                br.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(br));
+                fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
+                fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
+                cur_check = ir::IR_NO_BLOCK;
+                break;
+            }
+            const uint32_t lo = itv->second.first, hi = itv->second.second;
+            const ir::IrValueId v_lo =
+                emit_const(ir::IrType::I64, static_cast<int64_t>(lo), cc.loc.line);
+            const ir::IrValueId v_hi =
+                emit_const(ir::IrType::I64, static_cast<int64_t>(hi), cc.loc.line);
+            const ir::IrValueId v_ge = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_GE;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = v_ge;
+                cm.operands = {v_t, v_lo};
+                cm.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(cm));
+            }
+            const ir::IrValueId v_le = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LE;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = v_le;
+                cm.operands = {v_t, v_hi};
+                cm.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(cm));
+            }
+            const ir::IrValueId v_and = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr an{};
+                an.op = ir::IrOp::AND;
+                an.type = ir::IrType::BOOL;
+                an.dst = v_and;
+                an.operands = {v_ge, v_le};
+                an.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(an));
+            }
+            const ir::IrBlockId next_check =
+                (ci + 1 < n_catches) ? fn_->new_block("try_check") : rethrow_bb;
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(v_and);
+            br.target_block = handler_bbs[ci];
+            br.false_block = next_check;
+            br.source_line = cc.loc.line;
+            fn_->append(cur_check, std::move(br));
+            fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
+            fn_->blocks[cur_check].succs.push_back(next_check);
+            fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
+            fn_->blocks[next_check].preds.push_back(cur_check);
+            cur_check = next_check;
+        }
+
+        // rethrow_bb: ningun catch matcheo -> re-lanzar al frame externo.
+        // El frame ya se popeo en dispatch_bb, asi que el __vex_throw del
+        // THROW hace longjmp al handler de fuera (propagacion).
+        current_block_ = rethrow_bb;
+        {
+            const ir::IrValueId v_v =
+                emit_i64_call(rethrow_bb, "__vex_get_value");
+            const ir::IrValueId v_ty =
+                emit_i64_call(rethrow_bb, "__vex_get_type");
+            ir::IrInstr th{};
+            th.op = ir::IrOp::THROW;
+            th.type = ir::IrType::VOID;
+            th.dst = ir::IR_NO_VALUE;
+            th.operands = {v_v, v_ty};
+            th.source_line = s->loc.line;
+            fn_->append(rethrow_bb, std::move(th));
+        }
+        goto try_after_entry; // saltar la emision TRYENTER del path VM
+    }
+
+    { // bloque del path VM (TRYENTER): cerrar el scope de sus locales
+      // (br_to_body, etc.) ANTES del label try_after_entry para que el
+      // goto del path native no salte sobre destructores en scope.
     // 1. Por cada catch (en orden inverso): emitir handler_pc + type
     //    como SSA values con {dst}/{src} substitution, luego emitir
     //    tryenter con esos SSA values.  CRITICO: NO usar mov r1/r2
@@ -5665,6 +6634,23 @@ void Lowering::lower_try(ast::TryStmt *s) {
             ra.type = ir::IrType::VOID;
             ra.dst = ir::IR_NO_VALUE;
             ra.operands = {v_handler_pc, v_type};
+            /* Bloque handler (catch) en target_block: lo usa el backend JIT
+             * (Opcion B in-JIT catch) para capturar la direccion nativa del
+             * catch (LEA_LABEL) y registrar el edge abnormal (extra_succs)
+             * para la liveness/force-spill.  El interp lo ignora (usa
+             * v_handler_pc bytecode). */
+            ra.target_block = handler_bbs[ci];
+            /* imm = 1 si el catch puede capturar un AV de OS (catch-all o
+             * FatalError): el in-JIT catch es inseguro en ese caso (el path
+             * av_recovery longjmp-ea al scheduler y throw_fatal/do_throw corren
+             * sobre la region de stack del frame JIT muerto, clobbeando sus
+             * slots antes del resume).  El backend JIT baila -> esos try corren
+             * en interp (correcto, como antes).  Los catch de tipo-usuario
+             * (no-AV) SI van in-JIT. */
+            ra.imm = (cc.exc_class_name.empty() ||
+                      cc.exc_class_name == "FatalError")
+                         ? 1u
+                         : 0u;
             ra.source_line = cc.loc.line;
             fn_->append(current_block_, std::move(ra));
         }
@@ -5683,6 +6669,9 @@ void Lowering::lower_try(ast::TryStmt *s) {
         fn_->blocks[current_block_].succs.push_back(hb);
         fn_->blocks[hb].preds.push_back(current_block_);
     }
+    } // fin del bloque del path VM (TRYENTER)
+
+try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
 
     // Helper local: emite el bloque finally (clonado en cada salida) y
     // luego un branch al merge.  El finally en MVP se INLINEA en cada
@@ -5720,14 +6709,25 @@ void Lowering::lower_try(ast::TryStmt *s) {
         body_pred = current_block_;
         body_reaches_merge = true;
 
-        // Sprint 6.D: tryleave por cada catch via IR ops puros.
-        for (size_t i = 0; i < n_catches; ++i) {
-            ir::IrInstr tl{};
-            tl.op = ir::IrOp::TRYLEAVE;
-            tl.type = ir::IrType::VOID;
-            tl.dst = ir::IR_NO_VALUE;
-            tl.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(tl));
+        if (native_poo_) {
+            // AOT: salida normal -> pop del frame setjmp (top = prev).
+            ir::IrInstr cp{};
+            cp.op = ir::IrOp::CALL;
+            cp.type = ir::IrType::VOID;
+            cp.dst = ir::IR_NO_VALUE;
+            cp.func_name = "__vex_pop_frame";
+            cp.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cp));
+        } else {
+            // Sprint 6.D: tryleave por cada catch via IR ops puros.
+            for (size_t i = 0; i < n_catches; ++i) {
+                ir::IrInstr tl{};
+                tl.op = ir::IrOp::TRYLEAVE;
+                tl.type = ir::IrType::VOID;
+                tl.dst = ir::IR_NO_VALUE;
+                tl.source_line = s->loc.line;
+                fn_->append(current_block_, std::move(tl));
+            }
         }
         emit_finally_then_merge(current_block_, s->loc.line);
     }
@@ -5790,14 +6790,20 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // Frames POR DEBAJO (anteriores a ci) siguen vivos: hay que
         // popearlos.  Numero a popear: n_catches - 1 - ci.
         const size_t to_pop = n_catches - 1 - ci;
-        // Sprint 6.D: tryleave por catch via IR ops puros.
-        for (size_t k = 0; k < to_pop; ++k) {
-            ir::IrInstr tl{};
-            tl.op = ir::IrOp::TRYLEAVE;
-            tl.type = ir::IrType::VOID;
-            tl.dst = ir::IR_NO_VALUE;
-            tl.source_line = cc.loc.line;
-            fn_->append(current_block_, std::move(tl));
+        if (native_poo_) {
+            // AOT: el frame YA se popeo en dispatch_bb (antes de elegir el
+            // catch), asi que el handler NO popea de nuevo.  El get_value del
+            // catch var se emite mas abajo.
+        } else {
+            // Sprint 6.D: tryleave por catch via IR ops puros.
+            for (size_t k = 0; k < to_pop; ++k) {
+                ir::IrInstr tl{};
+                tl.op = ir::IrOp::TRYLEAVE;
+                tl.type = ir::IrType::VOID;
+                tl.dst = ir::IR_NO_VALUE;
+                tl.source_line = cc.loc.line;
+                fn_->append(current_block_, std::move(tl));
+            }
         }
         push_scope();
         // CRITICO: la primera instruccion del catch debe ser el
@@ -5805,16 +6811,34 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // puntero al FatalError y CUALQUIER instruccion previa
         // (LOAD desde stack, etc.) puede clobrearlo.
         if (!cc.var_name.empty()) {
-            const ir::IrValueId v_exc = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_exc].is_host_ptr =
-                true; // catch recibe FatalError* host
-            ir::IrInstr lp{};
-            lp.op = ir::IrOp::LANDINGPAD;
-            lp.type = ir::IrType::PTR;
-            lp.dst = v_exc;
-            lp.source_line = cc.loc.line;
-            fn_->append(current_block_, std::move(lp));
-            bind(cc.var_name, v_exc);
+            if (native_poo_) {
+                // AOT: el valor lanzado lo devuelve __vex_get_value().
+                // Si el catch declara una clase, el valor es un ptr host
+                // (throw new E()); si no, un i64 (throw <valor>).
+                const bool exc_is_ptr = !cc.exc_class_name.empty();
+                const ir::IrValueId v_exc = fn_->new_value(
+                    exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64);
+                if (exc_is_ptr) fn_->values[v_exc].is_host_ptr = true;
+                ir::IrInstr cg{};
+                cg.op = ir::IrOp::CALL;
+                cg.type = exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64;
+                cg.dst = v_exc;
+                cg.func_name = "__vex_get_value";
+                cg.source_line = cc.loc.line;
+                fn_->append(current_block_, std::move(cg));
+                bind(cc.var_name, v_exc);
+            } else {
+                const ir::IrValueId v_exc = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_exc].is_host_ptr =
+                    true; // catch recibe FatalError* host
+                ir::IrInstr lp{};
+                lp.op = ir::IrOp::LANDINGPAD;
+                lp.type = ir::IrType::PTR;
+                lp.dst = v_exc;
+                lp.source_line = cc.loc.line;
+                fn_->append(current_block_, std::move(lp));
+                bind(cc.var_name, v_exc);
+            }
         }
         // Recargar TODOS los nombres spilled desde su slot DESPUES
         // del bind de la excepcion (para no clobrear r0).  Bindeamos
@@ -6360,7 +7384,18 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
         }
         case CleanupAction::Kind::SYNC_EXIT: {
             // Sprint 6.C: tryleave + monexit como IR ops puros.
-            {
+            // AOT (native_poo_): el frame de excepcion es setjmp/longjmp ->
+            // se popea con __vex_pop_frame (no TRYLEAVE op, que el backend
+            // nativo no soporta); el monitor se libera con __vex_monexit.
+            if (native_poo_) {
+                ir::IrInstr cp{};
+                cp.op = ir::IrOp::CALL;
+                cp.type = ir::IrType::VOID;
+                cp.dst = ir::IR_NO_VALUE;
+                cp.func_name = "__vex_pop_frame";
+                cp.source_line = it->source_line;
+                fn_->append(current_block_, std::move(cp));
+            } else {
                 ir::IrInstr tl{};
                 tl.op = ir::IrOp::TRYLEAVE;
                 tl.type = ir::IrType::VOID;
@@ -6369,13 +7404,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 fn_->append(current_block_, std::move(tl));
             }
             if (!opnds.empty()) {
-                ir::IrInstr me{};
-                me.op = ir::IrOp::MONEXIT;
-                me.type = ir::IrType::VOID;
-                me.dst = ir::IR_NO_VALUE;
-                me.operands = {opnds[0]};
-                me.source_line = it->source_line;
-                fn_->append(current_block_, std::move(me));
+                emit_monitor_op(opnds[0], /*enter=*/false, it->source_line);
             }
             break;
         }
@@ -6465,6 +7494,196 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 // Por simplicidad: skip el free completo en este caso.
                 // El GC libera el inner; el ALLOCA stack se libera
                 // al exit del frame automaticamente.
+                break;
+            }
+
+            // AOT (native_poo): el selector HOST_LEAF NO soporta el op
+            // SMARTPTR_FREE.  Bajamos el cleanup a ops nativas que el selector
+            // ya conoce: guard de null (el slot se zerifica tras un move -> no
+            // llamar al deleter sobre un null) + CALL al deleter (Vesta) /
+            // CALLN (extern) / RAW_FREE (default "free", null-safe) / CALLIND
+            // dinamico (SRET).  El path VM/JIT (no native) sigue usando el op
+            // SMARTPTR_FREE mas abajo.
+            if (native_poo_) {
+                const uint32_t ln = it->source_line;
+                // "free" es null-safe (RAW_FREE(0)=no-op) -> sin guard.
+                if (it->literal_deleter == "free") {
+                    ir::IrInstr fr{};
+                    fr.op = ir::IrOp::RAW_FREE;
+                    fr.type = ir::IrType::VOID;
+                    fr.dst = ir::IR_NO_VALUE;
+                    fr.operands = {v_ptr};
+                    fr.source_line = ln;
+                    fn_->append(current_block_, std::move(fr));
+                    break;
+                }
+                // Resto (deleter custom/extern/SRET): guard `if (ptr != 0)`.
+                const ir::IrBlockId bb_do = fn_->new_block("sp_do");
+                const ir::IrBlockId bb_skip = fn_->new_block("sp_skip");
+                const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, ln);
+                const ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+                {
+                    ir::IrInstr cm{};
+                    cm.op = ir::IrOp::CMP_NE;
+                    cm.type = ir::IrType::BOOL;
+                    cm.dst = v_cond;
+                    cm.operands = {v_ptr, v_z};
+                    cm.source_line = ln;
+                    fn_->append(current_block_, std::move(cm));
+                }
+                {
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR_COND;
+                    br.type = ir::IrType::VOID;
+                    br.dst = ir::IR_NO_VALUE;
+                    br.operands = {v_cond};
+                    br.target_block = bb_do;
+                    br.false_block = bb_skip;
+                    br.source_line = ln;
+                    fn_->append(current_block_, std::move(br));
+                    fn_->blocks[current_block_].succs.push_back(bb_do);
+                    fn_->blocks[current_block_].succs.push_back(bb_skip);
+                    fn_->blocks[bb_do].preds.push_back(current_block_);
+                    fn_->blocks[bb_skip].preds.push_back(current_block_);
+                }
+                current_block_ = bb_do;
+                if (it->literal_deleter.rfind("@extern:", 0) == 0) {
+                    // deleter extern "<lib>:<fn>" -> CALLN (HOST_LEAF lo baja a
+                    // CALL_SYM; el linker lo resuelve).
+                    const std::string sym = it->literal_deleter.substr(8);
+                    ir::IrInstr cn{};
+                    cn.op = ir::IrOp::CALLN;
+                    cn.type = ir::IrType::VOID;
+                    cn.dst = ir::IR_NO_VALUE;
+                    cn.func_name = sym;
+                    cn.operands = {v_ptr};
+                    cn.source_line = ln;
+                    cn.is_call_site = true;
+                    fn_->append(current_block_, std::move(cn));
+                } else if (it->literal_deleter.empty()) {
+                    // SRET: deleter dinamico en slot+8.  Si !=0 -> CALLIND;
+                    // si ==0 -> RAW_FREE.  Nested guard.
+                    const ir::IrValueId v_eight =
+                        emit_const(ir::IrType::I64, 8, ln);
+                    const ir::IrValueId v_slot8 =
+                        fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_slot8].is_host_ptr = true;
+                    {
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::PTR;
+                        ad.dst = v_slot8;
+                        ad.operands = {opnds[0], v_eight};
+                        ad.source_line = ln;
+                        fn_->append(current_block_, std::move(ad));
+                    }
+                    const ir::IrValueId v_del =
+                        fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_del].is_host_ptr = true;
+                    {
+                        ir::IrInstr ld{};
+                        ld.op = ir::IrOp::LOAD;
+                        ld.type = ir::IrType::I64;
+                        ld.dst = v_del;
+                        ld.operands = {v_slot8};
+                        ld.source_line = ln;
+                        fn_->append(current_block_, std::move(ld));
+                    }
+                    const ir::IrBlockId bb_call = fn_->new_block("sp_call");
+                    const ir::IrBlockId bb_free = fn_->new_block("sp_free");
+                    const ir::IrValueId v_z2 =
+                        emit_const(ir::IrType::I64, 0, ln);
+                    const ir::IrValueId v_c2 = fn_->new_value(ir::IrType::BOOL);
+                    {
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_NE;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = v_c2;
+                        cm.operands = {v_del, v_z2};
+                        cm.source_line = ln;
+                        fn_->append(current_block_, std::move(cm));
+                    }
+                    {
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.type = ir::IrType::VOID;
+                        br.dst = ir::IR_NO_VALUE;
+                        br.operands = {v_c2};
+                        br.target_block = bb_call;
+                        br.false_block = bb_free;
+                        br.source_line = ln;
+                        fn_->append(current_block_, std::move(br));
+                        fn_->blocks[current_block_].succs.push_back(bb_call);
+                        fn_->blocks[current_block_].succs.push_back(bb_free);
+                        fn_->blocks[bb_call].preds.push_back(current_block_);
+                        fn_->blocks[bb_free].preds.push_back(current_block_);
+                    }
+                    // bb_call: CALLIND deleter(ptr) -> bb_skip.
+                    current_block_ = bb_call;
+                    {
+                        ir::IrInstr ci{};
+                        ci.op = ir::IrOp::CALLIND;
+                        ci.type = ir::IrType::VOID;
+                        ci.dst = ir::IR_NO_VALUE;
+                        ci.func_ptr = v_del;
+                        ci.operands = {v_ptr};
+                        ci.source_line = ln;
+                        ci.is_call_site = true;
+                        fn_->append(current_block_, std::move(ci));
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR;
+                        br.type = ir::IrType::VOID;
+                        br.target_block = bb_skip;
+                        br.source_line = ln;
+                        fn_->append(current_block_, std::move(br));
+                        fn_->blocks[bb_call].succs.push_back(bb_skip);
+                        fn_->blocks[bb_skip].preds.push_back(bb_call);
+                    }
+                    // bb_free: RAW_FREE(ptr) -> bb_skip.
+                    current_block_ = bb_free;
+                    {
+                        ir::IrInstr fr{};
+                        fr.op = ir::IrOp::RAW_FREE;
+                        fr.type = ir::IrType::VOID;
+                        fr.dst = ir::IR_NO_VALUE;
+                        fr.operands = {v_ptr};
+                        fr.source_line = ln;
+                        fn_->append(current_block_, std::move(fr));
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR;
+                        br.type = ir::IrType::VOID;
+                        br.target_block = bb_skip;
+                        br.source_line = ln;
+                        fn_->append(current_block_, std::move(br));
+                        fn_->blocks[bb_free].succs.push_back(bb_skip);
+                        fn_->blocks[bb_skip].preds.push_back(bb_free);
+                    }
+                    current_block_ = bb_skip;
+                    break;
+                } else {
+                    // deleter Vesta (fn por nombre) -> CALL directo.
+                    ir::IrInstr ca{};
+                    ca.op = ir::IrOp::CALL;
+                    ca.type = ir::IrType::VOID;
+                    ca.dst = ir::IR_NO_VALUE;
+                    ca.func_name = it->literal_deleter;
+                    ca.operands = {v_ptr};
+                    ca.source_line = ln;
+                    ca.is_call_site = true;
+                    fn_->append(current_block_, std::move(ca));
+                }
+                // bb_do -> bb_skip (para extern/vesta; SRET ya retorno).
+                {
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.type = ir::IrType::VOID;
+                    br.target_block = bb_skip;
+                    br.source_line = ln;
+                    fn_->append(current_block_, std::move(br));
+                    fn_->blocks[bb_do].succs.push_back(bb_skip);
+                    fn_->blocks[bb_skip].preds.push_back(bb_do);
+                }
+                current_block_ = bb_skip;
                 break;
             }
 
@@ -6696,6 +7915,154 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     const ir::IrValueId v_obj = lower_expr(s->target.get());
     if (v_obj == ir::IR_NO_VALUE) return;
 
+    // -----------------------------------------------------------------
+    // AOT/Embed (native_poo_): modelo setjmp/longjmp (sin VM runtime ni
+    // ops TRYENTER/TRYLEAVE/RETHROW, que el backend nativo no soporta).
+    //   monenter(obj)
+    //   buf = ALLOCA(96); __vex_push_frame(buf, 0); r = __vex_setjmp(buf)
+    //   br r ? handler : body
+    //   body... (normal) -> __vex_pop_frame + monexit(obj) + br merge
+    //   handler (longjmp) -> __vex_pop_frame + monexit(obj) + rethrow
+    //   return temprano    -> cleanup SYNC_EXIT = pop_frame + monexit
+    // El monitor se libera SIEMPRE (los 3 caminos).  __vex_* viven en
+    // vex_exc.vex; __vex_monenter/monexit en vex_sync.vex (auto-bundle).
+    // -----------------------------------------------------------------
+    if (native_poo_) {
+        const ir::IrBlockId nbody = fn_->new_block("sync_body");
+        const ir::IrBlockId nhandler = fn_->new_block("sync_handler");
+        const ir::IrBlockId nmerge = fn_->new_block("sync_merge");
+
+        // Helper local: CALL void por nombre (sin args salvo los dados).
+        auto vcall = [&](const char *name,
+                         std::vector<ir::IrValueId> args = {}) {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::VOID;
+            c.dst = ir::IR_NO_VALUE;
+            c.func_name = name;
+            c.operands = std::move(args);
+            c.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(c));
+        };
+
+        // monenter(obj).
+        emit_monitor_op(v_obj, /*enter=*/true, s->loc.line);
+
+        // buf + push_frame catch-all + setjmp.
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_buf;
+            al.imm = 96;
+            al.host_alloca = true;
+            al.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        const ir::IrValueId v_type0 =
+            emit_const(ir::IrType::I64, 0, s->loc.line);
+        vcall("__vex_push_frame", {v_buf, v_type0});
+        const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr cs{};
+            cs.op = ir::IrOp::CALL;
+            cs.type = ir::IrType::I64;
+            cs.dst = v_r;
+            cs.func_name = "__vex_setjmp";
+            cs.operands = {v_buf};
+            cs.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cs));
+        }
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(v_r);
+            br.target_block = nhandler;
+            br.false_block = nbody;
+            br.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[current_block_].succs.push_back(nhandler);
+        fn_->blocks[current_block_].succs.push_back(nbody);
+        fn_->blocks[nhandler].preds.push_back(current_block_);
+        fn_->blocks[nbody].preds.push_back(current_block_);
+
+        // Cleanup para return temprano: pop_frame + monexit.
+        {
+            CleanupAction act;
+            act.kind = CleanupAction::Kind::SYNC_EXIT;
+            act.operands = {v_obj};
+            act.source_line = s->loc.line;
+            cleanup_stack_.push_back(std::move(act));
+        }
+
+        // Body.
+        current_block_ = nbody;
+        block_terminated_ = false;
+        lower_block(s->body.get());
+        cleanup_stack_.pop_back();
+
+        // Salida normal del body: pop_frame + monexit + br merge.
+        if (!block_terminated_) {
+            vcall("__vex_pop_frame");
+            emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
+            ir::IrInstr brm{};
+            brm.op = ir::IrOp::BR;
+            brm.target_block = nmerge;
+            brm.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(brm));
+            fn_->blocks[current_block_].succs.push_back(nmerge);
+            fn_->blocks[nmerge].preds.push_back(current_block_);
+            block_terminated_ = true;
+        }
+
+        // Handler (longjmp reanudo): pop_frame + monexit + rethrow.
+        current_block_ = nhandler;
+        block_terminated_ = false;
+        vcall("__vex_pop_frame");
+        emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
+        {
+            // rethrow nativo: leer value+type del estado de excepcion y
+            // re-lanzar (longjmp al frame externo).  El frame propio ya
+            // fue popeado arriba.
+            const ir::IrValueId v_v = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CALL;
+                c.type = ir::IrType::I64;
+                c.dst = v_v;
+                c.func_name = "__vex_get_value";
+                c.source_line = s->loc.line;
+                fn_->append(current_block_, std::move(c));
+            }
+            const ir::IrValueId v_ty = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CALL;
+                c.type = ir::IrType::I64;
+                c.dst = v_ty;
+                c.func_name = "__vex_get_type";
+                c.source_line = s->loc.line;
+                fn_->append(current_block_, std::move(c));
+            }
+            ir::IrInstr th{};
+            th.op = ir::IrOp::THROW;
+            th.type = ir::IrType::VOID;
+            th.dst = ir::IR_NO_VALUE;
+            th.operands = {v_v, v_ty};
+            th.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(th));
+        }
+        block_terminated_ = true;
+
+        // Continuar en merge (salida normal).
+        current_block_ = nmerge;
+        block_terminated_ = false;
+        return;
+    }
+
     // Crear bloques: body + handler (excepcion) + merge (continuacion).
     const ir::IrBlockId body_bb = fn_->new_block("sync_body");
     const ir::IrBlockId handler_bb = fn_->new_block("sync_handler");
@@ -6707,16 +8074,12 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     // colisionan con valores SSA vivos (el regalloc no inspecciona el
     // texto del RAW_ASM y no sabe que clobreamos).
     // Sprint 6.C: ptr -> handle via GC_HANDLE_FOR_PTR IR op + MONENTER IR op.
-    const ir::IrValueId v_handle = emit_gc_handle_for_ptr(v_obj, s->loc.line);
-    {
-        ir::IrInstr me{};
-        me.op = ir::IrOp::MONENTER;
-        me.type = ir::IrType::VOID;
-        me.dst = ir::IR_NO_VALUE;
-        me.operands = {v_handle};
-        me.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(me));
-    }
+    // AOT (native_poo_): NO hay handle table -> el monitor opera sobre el
+    // host_ptr del objeto directamente (palabra inline en obj+16).  El resto
+    // de tiers convierten el ptr a GcHandle.  emit_monitor_op encapsula ambos.
+    const ir::IrValueId v_handle =
+        native_poo_ ? v_obj : emit_gc_handle_for_ptr(v_obj, s->loc.line);
+    emit_monitor_op(v_handle, /*enter=*/true, s->loc.line);
 
     // tryenter catch-all: setup handler_pc y type=NULL via SSA values.
     const std::string handler_label =
@@ -6731,6 +8094,11 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         ra.type = ir::IrType::VOID;
         ra.dst = ir::IR_NO_VALUE;
         ra.operands = {v_handler_pc, v_type_null};
+        /* Bloque handler en target_block (Opcion B in-JIT catch). */
+        ra.target_block = handler_bb;
+        /* El handler del synchronized es catch-all (cleanup + rethrow) -> puede
+         * capturar un AV -> in-JIT inseguro -> imm=1 (baila a interp). */
+        ra.imm = 1u;
         ra.source_line = s->loc.line;
         fn_->append(current_block_, std::move(ra));
     }
@@ -6777,15 +8145,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             tl.source_line = s->loc.line;
             fn_->append(current_block_, std::move(tl));
         }
-        {
-            ir::IrInstr me{};
-            me.op = ir::IrOp::MONEXIT;
-            me.type = ir::IrType::VOID;
-            me.dst = ir::IR_NO_VALUE;
-            me.operands = {v_handle};
-            me.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(me));
-        }
+        emit_monitor_op(v_handle, /*enter=*/false, s->loc.line);
 
         ir::IrInstr brm{};
         brm.op = ir::IrOp::BR;
@@ -6805,15 +8165,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     block_terminated_ = false;
     {
         // Sprint 6.C: handler = MONEXIT IR op + rethrow (RAW_ASM minimal).
-        {
-            ir::IrInstr me{};
-            me.op = ir::IrOp::MONEXIT;
-            me.type = ir::IrType::VOID;
-            me.dst = ir::IR_NO_VALUE;
-            me.operands = {v_handle};
-            me.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(me));
-        }
+        emit_monitor_op(v_handle, /*enter=*/false, s->loc.line);
         // raw_asm-elim wave 3: rethrow IR op dedicado.  Terminator del
         // bloque (re-lanza current_exception; nada sigue a esta instr).
         ir::IrInstr rt{};
@@ -7186,9 +8538,12 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     if (body) lower_block(body);
 
     // Sprint 6.D: terminador HLT via IR op puro (no RAW_ASM).
+    // AOT (native_poo_): el spawn body ES la funcion de entrada del hilo del
+    // SO -> termina con RET (el hilo se reclama al retornar), no con HLT (que
+    // es RUNTIME_DEPENDENT, propio del scheduler de la VM).
     if (!block_terminated_) {
         ir::IrInstr h{};
-        h.op = ir::IrOp::HLT;
+        h.op = native_poo_ ? ir::IrOp::RET : ir::IrOp::HLT;
         h.type = ir::IrType::VOID;
         h.dst = ir::IR_NO_VALUE;
         h.source_line = loc.line;
@@ -7197,7 +8552,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     }
 
     pop_scope();
-    // Guardar el helper en la cola pendiente; se anyadira a out_mod_
+    // Guardar el helper en la cola pendiente; se añadira a out_mod_
     // al final de run() para que main se mantenga como primera funcion
     // (el emisor IR la trata como entry point y termina con hlt).
     pending_spawn_helpers_.push_back(std::move(child_fn));
@@ -7407,6 +8762,18 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
         param_bindings.emplace_back(e->params[i]->name, pv);
     }
 
+    // AOT (native_poo_) con capturas: el env se pasa como PARAMETRO OCULTO
+    // FINAL (convencion C `void* userdata`), no por R14.  Asi el helper usa
+    // el ABI nativo (sin READ_VM_REG) -> compilable en bare y llamable desde
+    // C.  El prologue de capturas lee de este param en vez de R14.
+    ir::IrValueId native_env_param = ir::IR_NO_VALUE;
+    if (native_poo_ && !e->captures.empty()) {
+        native_env_param = child_fn.new_value(ir::IrType::PTR, "%__env");
+        child_fn.values[native_env_param].is_param = true;
+        child_fn.values[native_env_param].is_host_ptr = true; // bare: env host
+        child_fn.params.push_back(native_env_param);
+    }
+
     const ir::IrBlockId entry = child_fn.new_block("entry");
 
     fn_ = &child_fn;
@@ -7432,23 +8799,30 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     // valor a un SSA value.
     ir::IrValueId env_ptr = ir::IR_NO_VALUE;
     if (!e->captures.empty()) {
-        env_ptr = child_fn.new_value(ir::IrType::PTR);
-        // (gap O): si la lambda fue marcada como env_in_heap,
-        // el env_ptr en R14 apunta a HEAP RAW (host_ptr), no a
-        // stack VM.  Marcamos is_host_ptr para que LOAD/STORE
-        // contra el env block emitan @c movh en lugar de @c mov.
-        if (e->env_in_heap) {
-            child_fn.values[env_ptr].is_host_ptr = true;
+        if (native_env_param != ir::IR_NO_VALUE) {
+            // AOT: el env es el parametro oculto final (host_ptr ya marcado).
+            // No se emite READ_VM_REG -> el helper no tiene ops runtime y
+            // compila en bare.
+            env_ptr = native_env_param;
+        } else {
+            env_ptr = child_fn.new_value(ir::IrType::PTR);
+            // (gap O): si la lambda fue marcada como env_in_heap,
+            // el env_ptr en R14 apunta a HEAP RAW (host_ptr), no a
+            // stack VM.  Marcamos is_host_ptr para que LOAD/STORE
+            // contra el env block emitan @c movh en lugar de @c mov.
+            if (e->env_in_heap) {
+                child_fn.values[env_ptr].is_host_ptr = true;
+            }
+            // raw_asm-elim wave 3: prologue del closure helper lee R14
+            // (env_ptr) via IrOp::READ_VM_REG (path VM/JIT).
+            ir::IrInstr rr{};
+            rr.op = ir::IrOp::READ_VM_REG;
+            rr.type = ir::IrType::PTR;
+            rr.dst = env_ptr;
+            rr.imm = 14; // R14 = env_ptr en la convention de callclosure
+            rr.source_line = e->loc.line;
+            child_fn.append(entry, std::move(rr));
         }
-        // raw_asm-elim wave 3: prologue del closure helper lee R14 (env_ptr)
-        // via IrOp::READ_VM_REG.  Reemplaza el viejo RAW_ASM `mov {dst}, r14`.
-        ir::IrInstr rr{};
-        rr.op = ir::IrOp::READ_VM_REG;
-        rr.type = ir::IrType::PTR;
-        rr.dst = env_ptr;
-        rr.imm = 14; // R14 = env_ptr en la calling convention de callclosure
-        rr.source_line = e->loc.line;
-        child_fn.append(entry, std::move(rr));
 
         for (size_t i = 0; i < e->captures.size(); ++i) {
             // Tipo del capture: usar el tipo guardado por el type
@@ -7698,7 +9072,20 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         const ir::IrValueId v_size = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(N * 8), e->loc.line);
         ir::IrInstr ins{};
-        ins.op = ir::IrOp::GC_ALLOC;
+        // Env escapante.  VM/JIT: GC_ALLOC (el GC lo libera).  AOT/bare
+        // (native_poo): RAW_ALLOC etiquetado "__closure_env" -- el pase
+        // ir_pass_own_closure_envs (tras inline+promote) busca el dueno
+        // terminal de la closure e inserta el RAW_FREE en su scope-exit;
+        // si no hay dueno limpio, revierte este alloc a GC_ALLOC para que
+        // aot_analyze lo rechace (REGLA: nunca leak).  Los envs que NO
+        // escapan ya los convierte promote a ALLOCA (stack) antes de este
+        // pase, asi que aqui solo llegan los escapes cross-function reales.
+        if (native_poo_) {
+            ins.op = ir::IrOp::RAW_ALLOC;
+            ins.func_name = "__closure_env"; // tag p/ el pase de ownership
+        } else {
+            ins.op = ir::IrOp::GC_ALLOC;
+        }
         ins.type = ir::IrType::PTR;
         ins.dst = env_addr;
         ins.operands = {v_size};
@@ -8078,66 +9465,201 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             fn_->new_block(std::string("match_arm_") + e->arms[i].variant_name);
     }
 
-    // Encadenar cmps en el bloque actual: si tag == tag_i, br a
-    // arm_blocks[i]; si no, fall-through al siguiente cmp.  El
-    // ultimo cmp falla -> br a default_bb (o merge_bb si no hay
-    // default).
+    // ---- Dispatch del match: estrategia segun el caso (hiperoptimizado) ----
+    // - Con guards: cadena lineal O(N) (los guards necesitan el "siguiente
+    //   arm" via arm_fall_bbs).
+    // - Sin guards y N>=5: BST balanceado O(log N) (cmp_lt en los nodos +
+    //   cmp_eq en las hojas).  Beneficia interp Y JIT (ops existentes).
+    // - (jumptable denso O(1): se anade despues sobre este mismo dispatch.)
+    bool match_any_guard = false;
+    for (const auto &a : e->arms)
+        if (a.guard) {
+            match_any_guard = true;
+            break;
+        }
+    // Recolectar los casos concretos (tag, bloque) ordenados por tag.
+    std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
+    sw_cases.reserve(e->arms.size());
     for (size_t i = 0; i < e->arms.size(); ++i) {
         if (static_cast<ssize_t>(i) == default_arm_idx) continue;
-        // Buscar el tag de la variante.
         const EnumVariantInfo *var = nullptr;
-        for (const auto &v : elay.variants) {
+        for (const auto &v : elay.variants)
             if (v.name == e->arms[i].variant_name) {
                 var = &v;
                 break;
             }
-        }
         if (!var) continue;
-
-        // cmp_eq tag_v == var->tag
-        ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
-        ir::IrValueId tag_const =
-            emit_const(ir::IrType::I64, static_cast<uint64_t>(var->tag),
-                       e->arms[i].loc.line);
-        {
-            ir::IrInstr cm{};
-            cm.op = ir::IrOp::CMP_EQ;
-            cm.type = ir::IrType::BOOL;
-            cm.dst = cmp_v;
-            cm.operands = {tag_v, tag_const};
-            cm.source_line = e->arms[i].loc.line;
-            fn_->append(current_block_, std::move(cm));
-        }
-
-        // br_cond cmp -> arm_blocks[i], else fall_block
-        const ir::IrBlockId fall_bb = fn_->new_block("match_next");
-        arm_fall_bbs[i] = fall_bb; // para uso si la arm tiene guard
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(cmp_v);
-        br.target_block = arm_blocks[i];
-        br.false_block = fall_bb;
-        br.source_line = e->arms[i].loc.line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(arm_blocks[i]);
-        fn_->blocks[current_block_].succs.push_back(fall_bb);
-        fn_->blocks[arm_blocks[i]].preds.push_back(current_block_);
-        fn_->blocks[fall_bb].preds.push_back(current_block_);
-
-        current_block_ = fall_bb;
-        block_terminated_ = false;
+        sw_cases.push_back(
+            {static_cast<int64_t>(var->tag), arm_blocks[i]});
     }
-    // Tras la cadena de cmps, el bloque actual es la rama "ninguna
-    // variante matcheada".  Saltamos al default si existe, o al
-    // merge directamente.
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = default_bb;
-        br.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(default_bb);
-        fn_->blocks[default_bb].preds.push_back(current_block_);
+    std::sort(sw_cases.begin(), sw_cases.end());
+    const bool use_bst = !match_any_guard && sw_cases.size() >= 5;
+
+    // Jump table DENSO (computed-goto O(1) en JIT): rango ~= N, sin guards,
+    // tags no-negativos.  Emite un marker SWITCH_DENSE (no-op en interp/
+    // optimizer) que el backend JIT baja a un island nativo; el dispatch
+    // BST/lineal de abajo sigue siendo el path del interp + fallback.
+    if (!match_any_guard && sw_cases.size() >= 4) {
+        const int64_t lo_tag = sw_cases.front().first;
+        const int64_t hi_tag = sw_cases.back().first;
+        const int64_t range = hi_tag - lo_tag + 1;
+        const int64_t n = static_cast<int64_t>(sw_cases.size());
+        // Densidad: rango no mucho mayor que N (evita tablas con muchos
+        // huecos) + cap a 256 entradas (island compacto) + base no-negativa.
+        if (lo_tag >= 0 && range >= n && range <= 2 * n && range <= 256) {
+            std::vector<uint32_t> table(static_cast<size_t>(range),
+                                        static_cast<uint32_t>(default_bb));
+            for (const auto &c : sw_cases)
+                table[static_cast<size_t>(c.first - lo_tag)] =
+                    static_cast<uint32_t>(c.second);
+            ir::IrInstr sd{};
+            sd.op = ir::IrOp::SWITCH_DENSE;
+            sd.type = ir::IrType::VOID;
+            sd.dst = ir::IR_NO_VALUE;
+            sd.operands = {tag_v};
+            // imm: bits 0-31 = min; bit 32 = no_bounds.  no_bounds cuando la
+            // tabla cubre TODO el rango de tags del enum (min==0 y
+            // range==n_variantes): el tag de un enum SIEMPRE es valido, asi
+            // que idx in [0,range) -> el cmp/jae de bounds es redundante (el
+            // backend lo elide).  Los huecos van por table[idx]=default.
+            const bool sw_no_bounds =
+                (lo_tag == 0 &&
+                 range == static_cast<int64_t>(elay.variants.size()));
+            sd.imm = static_cast<uint64_t>(lo_tag) |
+                     (sw_no_bounds ? (UINT64_C(1) << 32) : 0);
+            sd.target_block = default_bb;
+            sd.jump_targets = std::move(table);
+            sd.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(sd));
+        }
+    }
+
+    // Helper local: anade una arista CFG (succ + pred).
+    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
+        fn_->blocks[from].succs.push_back(to);
+        fn_->blocks[to].preds.push_back(from);
+    };
+
+    if (use_bst) {
+        // BST balanceado sobre sw_cases [lo,hi).  En cada nodo interno:
+        // cmp_lt tag < cases[mid] -> izquierda [lo,mid); else derecha
+        // [mid,hi).  En hojas (<=2 casos): cmp_eq lineal -> arm; al final
+        // br a default_bb.  O(log N) comparaciones.
+        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
+            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
+                current_block_ = cur;
+                if (hi - lo <= 2) {
+                    for (size_t k = lo; k < hi; ++k) {
+                        ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
+                        ir::IrValueId tc = emit_const(
+                            ir::IrType::I64,
+                            static_cast<uint64_t>(sw_cases[k].first),
+                            e->loc.line);
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_EQ;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = cmp_v;
+                        cm.operands = {tag_v, tc};
+                        cm.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(cm));
+                        ir::IrBlockId nb = fn_->new_block("sw_next");
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.operands.push_back(cmp_v);
+                        br.target_block = sw_cases[k].second;
+                        br.false_block = nb;
+                        br.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(br));
+                        sw_edge(current_block_, sw_cases[k].second);
+                        sw_edge(current_block_, nb);
+                        current_block_ = nb;
+                    }
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.target_block = default_bb;
+                    br.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(br));
+                    sw_edge(current_block_, default_bb);
+                    return;
+                }
+                const size_t mid = lo + (hi - lo) / 2;
+                ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
+                ir::IrValueId tc = emit_const(
+                    ir::IrType::I64,
+                    static_cast<uint64_t>(sw_cases[mid].first), e->loc.line);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LT; // tag < cases[mid] (con signo)
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp_v;
+                cm.operands = {tag_v, tc};
+                cm.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(cm));
+                ir::IrBlockId lb = fn_->new_block("sw_lt");
+                ir::IrBlockId rb = fn_->new_block("sw_ge");
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands.push_back(cmp_v);
+                br.target_block = lb; // tag < mid
+                br.false_block = rb;  // tag >= mid
+                br.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(br));
+                sw_edge(current_block_, lb);
+                sw_edge(current_block_, rb);
+                emit_bst(lo, mid, lb);
+                emit_bst(mid, hi, rb);
+            };
+        emit_bst(0, sw_cases.size(), current_block_);
+    } else {
+        // Cadena lineal O(N) (con guards, o pocos casos).
+        for (size_t i = 0; i < e->arms.size(); ++i) {
+            if (static_cast<ssize_t>(i) == default_arm_idx) continue;
+            const EnumVariantInfo *var = nullptr;
+            for (const auto &v : elay.variants) {
+                if (v.name == e->arms[i].variant_name) {
+                    var = &v;
+                    break;
+                }
+            }
+            if (!var) continue;
+
+            ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
+            ir::IrValueId tag_const =
+                emit_const(ir::IrType::I64, static_cast<uint64_t>(var->tag),
+                           e->arms[i].loc.line);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_EQ;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp_v;
+                cm.operands = {tag_v, tag_const};
+                cm.source_line = e->arms[i].loc.line;
+                fn_->append(current_block_, std::move(cm));
+            }
+
+            const ir::IrBlockId fall_bb = fn_->new_block("match_next");
+            arm_fall_bbs[i] = fall_bb; // para uso si la arm tiene guard
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(cmp_v);
+            br.target_block = arm_blocks[i];
+            br.false_block = fall_bb;
+            br.source_line = e->arms[i].loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, arm_blocks[i]);
+            sw_edge(current_block_, fall_bb);
+
+            current_block_ = fall_bb;
+            block_terminated_ = false;
+        }
+        // Ultima rama: ninguna variante matcheada -> default (o merge).
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = default_bb;
+            br.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, default_bb);
+        }
     }
 
     // Snapshot bindings ANTES de las arms para PHI en merge.
@@ -8441,6 +9963,26 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     // Convencion: R1..R[N]=capturas, R15=N, spawnargs r_pc copia los
     // regs al child antes de make_ready.  Aplica para Auto policy.
     const auto &caps = spawn_captured_ssa_values_;
+
+    // AOT/bare (native_poo_): spawn = hilo 1:1 del SO via CALL __vex_spawn
+    // (CreateThread en Win, clone en Linux), bundle-ado desde vex_thread.vex.
+    // El hint de `here`/`on(N)` se ignora (sin schedulers; cada spawn es un
+    // hilo).  Las capturas (SPAWN_ARGS) llegan en la Fase 2; por ahora solo
+    // el caso sin capturas (las capturas caen al rechazo de aot_analyze).
+    if (native_poo_ && caps.empty()) {
+        const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CALL;
+        c.type = ir::IrType::I64;
+        c.dst = v_pid;
+        c.func_name = "__vex_spawn";
+        c.operands = {v_pc};
+        c.is_call_site = true;
+        c.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(c));
+        return v_pid;
+    }
+
     if (e->policy == ast::SpawnExpr::Policy::Auto && !caps.empty()) {
         // raw_asm-elim wave 2: usar IrOp::SPAWN_ARGS nativo en lugar de
         // raw_asm.  El IR emitter ya genera el parallel-move correcto
@@ -8744,8 +10286,10 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // 2a. fut = future_alloc() via IR op FUTURE.
     const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
     {
+        // AOT (native_poo_): CALL nativo __vex_future_new (scheduler coop).
         ir::IrInstr fu{};
-        fu.op = ir::IrOp::FUTURE;
+        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
+        if (native_poo_) fu.func_name = "__vex_future_new";
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true;
@@ -8808,7 +10352,65 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // resolver conflictos al colocar args en sus regs destino.
     // Operands: [r_pc, fut, arg1, arg2, ..., argN]
     const ir::IrValueId v_child = fn_->new_value(ir::IrType::I64);
-    {
+    if (native_poo_) {
+        // AOT (native_poo_): scheduler cooperativo.  Args por PUNTERO (sin
+        // limite de aridad ni bug de stack-args de Win64): construimos un
+        // argbuf en la pila con [fut, args...], y llamamos
+        //   __vex_spawn_argv(helper, argc, &argbuf[0])
+        // que copia los args al slot de la tarea.  Al despacharla, pump castea
+        // el body a `fn(...)` y lo llama (CALLCLOSURE) con los args.
+        std::vector<ir::IrValueId> real_args;
+        real_args.push_back(v_fut);
+        for (auto v : qword_args) real_args.push_back(v);
+        const uint64_t argc = real_args.size();
+        // argbuf = ALLOCA(argc*8) en host-stack.
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_buf;
+            al.imm = argc * 8;
+            al.host_alloca = true;
+            al.source_line = fd->loc.line;
+            fn_->append(current_block_, std::move(al));
+            fn_->values[v_buf].is_host_ptr = true;
+        }
+        // STORE cada arg en argbuf[i].
+        for (size_t k = 0; k < real_args.size(); ++k) {
+            ir::IrValueId slot = v_buf;
+            if (k != 0) {
+                slot = fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId off =
+                    emit_const(ir::IrType::I64, k * 8, fd->loc.line);
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = slot;
+                ad.operands = {v_buf, off};
+                ad.source_line = fd->loc.line;
+                fn_->append(current_block_, std::move(ad));
+                fn_->values[slot].is_host_ptr = true;
+            }
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {real_args[k], slot};
+            st.source_line = fd->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        const ir::IrValueId v_argc =
+            emit_const(ir::IrType::I64, argc, fd->loc.line);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = "__vex_spawn_argv";
+        ins.type = ir::IrType::I64;
+        ins.dst = v_child;
+        ins.operands = {v_pc, v_argc, v_buf};
+        ins.is_call_site = true;
+        ins.source_line = fd->loc.line;
+        fn_->append(current_block_, std::move(ins));
+    } else {
         ir::IrInstr ins{};
         ins.op = ir::IrOp::SPAWN_ARGS;
         ins.type = ir::IrType::I64;
@@ -8864,6 +10466,19 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
     ra.type = ir::IrType::VOID;
     ra.dst = ir::IR_NO_VALUE;
     ra.operands = {v_obj};
+    // AOT (native_poo): el throw transporta el type-id (intervalo lo) del tipo
+    // ESTATICO lanzado, para que el catch despache por tipo (subtipo via el
+    // intervalo).  operands[1] = CONST(lo).  El backend HOST_LEAF lo pasa como
+    // 2o arg a __vex_throw(value, type_id).  En el path VM se ignora.
+    if (native_poo_) {
+        uint32_t lo = 0;
+        const std::string &cn = s->value->result_type.struct_name;
+        auto it = type_intervals_.find(cn);
+        if (it != type_intervals_.end()) lo = it->second.first;
+        const ir::IrValueId v_type =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(lo), s->loc.line);
+        ra.operands.push_back(v_type);
+    }
     ra.source_line = s->loc.line;
     fn_->append(current_block_, std::move(ra));
     // throw es un terminador del flujo: marcamos el bloque para que
@@ -8938,6 +10553,23 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                               static_cast<unsigned long long>(
                                   static_cast<uint64_t>(it->second.value)));
                 body_sub += buf;
+            } else if (native_poo_ &&
+                       tc_.function_sig_by_name(tok) != nullptr) {
+                // AOT: referencia a una FUNCION del modulo -> nombre canonico
+                // __vxf_<label>.  El backend lo resuelve a un sentinela; el
+                // encoder lo decodifica al reloc (CALL_REL32 bare / fnsym: abs)
+                // segun la forma de la instruccion (jmp/call/mov/lea).
+                const FunctionSig *fs = tc_.function_sig_by_name(tok);
+                const std::string label =
+                    fs->mangled_label.empty() ? tok : fs->mangled_label;
+                body_sub += "__vxf_" + label;
+            } else if (native_poo_ &&
+                       runtime_global_slots_.find(tok) !=
+                           runtime_global_slots_.end()) {
+                // AOT: referencia a un GLOBAL del modulo -> __vxg_<slot>.  El
+                // encoder lo resuelve a rodata.<slot> (.data del global).
+                body_sub += "__vxg_" + std::to_string(
+                                           runtime_global_slots_[tok]);
             } else {
                 body_sub += tok;
             }
@@ -8958,10 +10590,90 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // se omite: GCC valida en port-C.  Solo es validacion -- los bytes se
     // descartan (se usaran en inc.5 JIT).
     if (vex::g_asm_backend && !body_sub.empty()) {
+        // Ensamblar el cuerpo COMPLETO (preserva el contexto de etiquetas: un
+        // `jmp .loop` necesita ver la definicion `.loop:` de otra linea).
+        // Arch del TARGET (no del host): 32/16 si --aot-arch lo pide.
+        const vex::AsmArch asm_arch = asm_target_bits_ == 32 ? vex::AsmArch::X86_32
+                                      : asm_target_bits_ == 16
+                                          ? vex::AsmArch::X86_16
+                                          : vex::AsmArch::X86_64;
         vex::AsmAssembleResult ar =
-            vex::g_asm_backend->assemble(body_sub, vex::AsmArch::X86_64);
+            vex::g_asm_backend->assemble(body_sub, asm_arch);
         if (!ar.ok) {
-            error_at(s->loc, "inline asm: sintaxis invalida: " + ar.error);
+            // Traducir el codigo de Keystone a un mensaje claro en espanol.
+            auto human_asm_error = [](const std::string &e) -> std::string {
+                auto has = [&](const char *s) {
+                    return e.find(s) != std::string::npos;
+                };
+                if (has("mnemonic") || has("Mnemonic"))
+                    return "instruccion desconocida (mnemonico no valido)";
+                if (has("operand") || has("Operand"))
+                    return "operando no valido para esta instruccion";
+                if (has("ymbol") || has("ndefined") || has("elocation"))
+                    return "simbolo o etiqueta no definido";
+                if (has("token") || has("Token") || has("xpression") ||
+                    has("expr"))
+                    return "token no reconocido (no es una instruccion valida)";
+                if (has("mmediate"))
+                    return "valor inmediato no valido o fuera de rango";
+                if (has("egister")) return "registro no valido";
+                if (has("refix")) return "prefijo de instruccion no valido";
+                // Sin traduccion conocida: generico en espanol (el detalle de
+                // Keystone se anexa aparte, asi no se duplica).
+                return "instruccion o sintaxis no valida";
+            };
+
+            // Localizar la LINEA del fallo: re-ensamblar cada linea por separado
+            // y quedarnos con la primera que falla por un motivo que NO sea
+            // "simbolo no definido" (en una linea aislada, un salto a una
+            // etiqueta de otra linea daria un falso positivo de simbolo).
+            SourceLoc eloc = s->body_loc;
+            std::string detail = ar.error;
+            {
+                size_t start = 0;
+                uint32_t line_rel = 0; // lineas desde el inicio del cuerpo
+                bool located = false;
+                for (size_t k = 0; k <= body_sub.size() && !located; ++k) {
+                    if (k == body_sub.size() || body_sub[k] == '\n') {
+                        // contenido util de la linea [a, e2) tras recortar
+                        size_t a = start, e2 = k;
+                        while (a < e2 &&
+                               (body_sub[a] == ' ' || body_sub[a] == '\t' ||
+                                body_sub[a] == '\r'))
+                            ++a;
+                        while (e2 > a &&
+                               (body_sub[e2 - 1] == ' ' ||
+                                body_sub[e2 - 1] == '\t' ||
+                                body_sub[e2 - 1] == '\r'))
+                            --e2;
+                        std::string ln = body_sub.substr(a, e2 - a);
+                        const bool is_comment =
+                            ln.empty() || ln[0] == ';' ||
+                            (ln.size() >= 2 && ln[0] == '/' && ln[1] == '/');
+                        if (!is_comment) {
+                            vex::AsmAssembleResult lr =
+                                vex::g_asm_backend->assemble(ln, asm_arch);
+                            if (!lr.ok &&
+                                lr.error.find("ymbol") == std::string::npos &&
+                                lr.error.find("ndefined") == std::string::npos &&
+                                lr.error.find("elocation") == std::string::npos) {
+                                eloc.line = s->body_loc.line + line_rel;
+                                eloc.column =
+                                    (line_rel == 0)
+                                        ? s->body_loc.column +
+                                              (uint32_t)(a - start)
+                                        : (uint32_t)(a - start) + 1;
+                                detail = lr.error;
+                                located = true;
+                            }
+                        }
+                        ++line_rel;
+                        start = k + 1;
+                    }
+                }
+            }
+            error_at(eloc,
+                     "inline asm: " + human_asm_error(detail) + " -- " + detail);
             return;
         }
     }
@@ -8990,7 +10702,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // Phase AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
     // `noinfer`, analizamos el cuerpo y unimos los clobbers inferidos con
     // los explicitos.  `nomem`/`preserves_flags`/`pure` QUITAN memory/flags
-    // del set; `clobbers(...)` ANYADE.  Resultado final -> asm_clobber_lists
+    // del set; `clobbers(...)` añaDE.  Resultado final -> asm_clobber_lists
     // + bits 4/5 de imm (memory/flags).
     std::vector<std::string> final_clobbers = s->clobbers; // explicitos primero
     bool final_mem = s->clobbers_memory;
@@ -9145,6 +10857,27 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
 
 ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (!e || !e->operand) return ir::IR_NO_VALUE;
+
+    // Function pointer: `(u64) foo` / `(fn(...)->R) foo` donde foo es una
+    // funcion top-level -> emitir LABEL_ADDR (direccion cruda del codigo).
+    // El resultado es un puntero de 8 bytes valido para meter en una tabla
+    // o para una llamada indirecta posterior (cast u64->fn -> CALLIND).
+    if (e->operand->kind == ast::NodeKind::IdentExpr) {
+        auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
+        if (id->is_func_ref) {
+            const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::LABEL_ADDR;
+            ins.type = ir::IrType::PTR;
+            ins.dst = dst;
+            ins.func_name = id->func_ref_mangled.empty() ? id->name
+                                                         : id->func_ref_mangled;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return dst;
+        }
+    }
+
     const ir::IrValueId v_op = lower_expr(e->operand.get());
     if (v_op == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
@@ -9172,12 +10905,100 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         return ir::IR_NO_VALUE;
     }
 
+    // Cast a tipo FUNCTION desde una direccion cruda ENTERA (i64/u64/...):
+    // `(fn(...)->R) addr`.  Un function value es un PUNTERO a un slot de 16
+    // bytes {fn_addr, env}; el cast debe CONSTRUIR ese slot (env=0, sin
+    // captures) en lugar de reinterpretar la direccion como puntero al slot (lo
+    // que deref-eaba el codigo de la funcion como si fuera el fn_addr -> crash).
+    // Asi `((fn(...)->R) addr_i64)(args)` baja a una llamada indirecta correcta
+    // (CALLCLOSURE) con los args en la convencion natural.
+    // RESTRINGIDO a origen ENTERO: un origen PTR (e.g. `&slot[0]`) YA es el
+    // puntero al slot y debe pasar tal cual (no envolverse de nuevo).
+    auto is_int_kind = [](PrimitiveKind k) {
+        return k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+               k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+               k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+               k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+    };
+    if (dst_type.kind == PrimitiveKind::FUNCTION &&
+        is_int_kind(src_type.kind)) {
+        // v_op es la direccion de la funcion (i64).  Construir el slot.
+        const ir::IrValueId fv_addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = fv_addr;
+            al.imm = 16;
+            al.host_alloca = native_poo_;
+            al.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        if (native_poo_) fn_->values[fv_addr].is_host_ptr = true;
+        // [fv_addr + 0] = fn_addr (la direccion cruda).
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {v_op, fv_addr};
+            st.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        // [fv_addr + 8] = 0 (env vacio).
+        {
+            const ir::IrValueId fv8 = fn_->new_value(ir::IrType::PTR);
+            const ir::IrValueId off8 = emit_const(ir::IrType::I64, 8, e->loc.line);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = fv8;
+            ad.operands = {fv_addr, off8};
+            ad.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ad));
+            if (native_poo_) fn_->values[fv8].is_host_ptr = true;
+            const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {z, fv8};
+            st.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        return fv_addr;
+    }
+
     // Categorias.  PTR/ARRAY se tratan como pointer-like.
     auto is_ptr_like = [](const Type &t) {
         return t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY;
     };
     const bool dst_ptr = is_ptr_like(dst_type);
     const bool src_ptr = is_ptr_like(src_type);
+
+    // Cast de un function value (VARIABLE) a una direccion ENTERA o puntero
+    // crudo: `(u64) fp` / `(void*) fp`.  Una VARIABLE de tipo fn es un PTR a un
+    // slot de 16 bytes {fn_addr, env}; extraer el fn_addr (primeros 8 bytes) --
+    // el puntero de codigo crudo, util para pasarlo a una API que espera un
+    // puntero de funcion (CreateThread, callbacks, tablas).  Sin esto el cast
+    // devolvia la DIRECCION del slot (&fp) -> la API saltaba a una direccion de
+    // stack y crasheaba.
+    //   Solo cuando el operando es una VARIABLE (IdentExpr): `(fn)nombre` ya
+    // bajo a LABEL_ADDR (direccion cruda de 8 bytes, no un slot) en el chequeo
+    // is_func_ref de arriba, asi que `(i64)(fn)nombre` NO debe re-LOAD-ear
+    // (seria deref del codigo) -- ese caso cae al manejo generico (identidad).
+    if (src_type.kind == PrimitiveKind::FUNCTION &&
+        e->operand->kind == ast::NodeKind::IdentExpr &&
+        (is_int_kind(dst_type.kind) || dst_ptr)) {
+        const ir::IrValueId fa = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = fa;
+        ld.operands = {v_op};
+        ld.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ld));
+        if (dst_ptr && native_poo_) fn_->values[fa].is_host_ptr = true;
+        return fa;
+    }
 
     // ptr <-> ptr: el bit-pattern es identico, solo cambia la
     // interpretacion (host vs virtual, pointee).  No emitimos
@@ -9525,7 +11346,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                     ir::IrType::I64,
                     static_cast<uint64_t>(hit->second.str_value.size()),
                     e->loc.line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, e->loc.line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
                 return v_str;
             }
             return emit_const(hit->second.ir_t,
@@ -9581,7 +11402,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 emit_const(ir::IrType::I64,
                            static_cast<uint64_t>(e->comptime_const_str.size()),
                            e->loc.line);
-            ir::IrValueId v_str = emit_strmake(v_addr, v_len, e->loc.line);
+            ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
             return v_str;
         }
         ir::IrType t = ir_type_from_primitive(e->result_type.kind);
@@ -9616,7 +11437,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
                                static_cast<uint64_t>(sv.size()), e->loc.line);
-                return emit_strmake(v_addr, v_len, e->loc.line);
+                return emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
             }
             ir::IrType t = ir_type_from_primitive(it->second.type.kind);
             return emit_const(t, it->second.value, e->loc.line);
@@ -9633,6 +11454,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             // con el ancho correcto.  Default i64.
             ir::IrType t = ir::IrType::I64;
             bool is_string = false;
+            bool is_array = false;
             for (auto &decl : mod_.decls) {
                 if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl)
                     continue;
@@ -9644,10 +11466,32 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                         static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
                     t = ir_type_from_primitive(pt->prim);
                     is_string = (pt->prim == PrimitiveKind::STRING);
+                } else if (gv->type &&
+                           gv->type->kind == ast::NodeKind::ArrayTypeNode) {
+                    is_array = true;
                 }
                 break;
             }
             const uint64_t slot_idx = sit->second;
+            // Array global: decae a su DIRECCION (host_ptr), no se carga
+            // el contenido.  g_heap[i] indexa sobre esta direccion.
+            if (is_array) {
+                const int ln_a = e->loc.line;
+                ir::IrValueId v_a = fn_->new_value(ir::IrType::PTR);
+                // AOT (native_poo_): el slot vive en .data del host -> host_ptr.
+                // VM/JIT: el slot vive en vm_mem -> direccion VM (NO host;
+                // marcar host_ptr haria que el indexado use movh sobre una
+                // direccion VM y segfaultee).
+                fn_->values[v_a].is_host_ptr = native_poo_;
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_a;
+                is.imm = slot_idx;
+                is.source_line = ln_a;
+                fn_->append(current_block_, std::move(is));
+                return v_a;
+            }
             const int ln = e->loc.line;
             ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
             {
@@ -9856,7 +11700,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             fn_->append(current_block_, std::move(is));
         }
         ir::IrValueId v_len = emit_const(ir::IrType::I64, p_len, line);
-        ir::IrValueId v_handle = emit_strmake(v_addr, v_len, line);
+        ir::IrValueId v_handle = emit_string_literal_repr(v_addr, v_len, -1, line);
         return v_handle;
     };
 
@@ -10262,7 +12106,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                         ir::IrValueId v_len = emit_const(
                             ir::IrType::I64, static_cast<uint64_t>(sv.size()),
                             e->loc.line);
-                        return emit_strmake(v_addr, v_len, e->loc.line);
+                        return emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
                     }
                 }
             }
@@ -10270,6 +12114,19 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     }
     const ir::IrValueId addr = lower_field_addr(e);
     if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+
+    // Campo de tipo AGREGADO inline (struct/array/optional/result anidado):
+    // su "valor" SSA ES su direccion (pass-through), NO se carga.  Sin esto,
+    // `r.a.x` (a = sub-struct inline) emitia un LOAD que deref-eaba los
+    // primeros 8 bytes de `a` como un puntero -> direccion basura -> segfault
+    // en AOT (host) o valor erroneo en VM.  Mismo patron que los fixes B1/B3
+    // de ptr_of/read_borrow sobre agregados.
+    if (e->result_type.kind == PrimitiveKind::STRUCT ||
+        e->result_type.kind == PrimitiveKind::ARRAY ||
+        e->result_type.kind == PrimitiveKind::OPTIONAL ||
+        e->result_type.kind == PrimitiveKind::RESULT) {
+        return addr;
+    }
 
     const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
     const ir::IrValueId dst = fn_->new_value(ft);
@@ -11270,6 +13127,23 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // & sobre IdentExpr local address-taken: scope guarda la addr.
         if (e->operand->kind == ast::NodeKind::IdentExpr) {
             auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
+            // & sobre un GLOBAL runtime (incluido un thread_local): su
+            // direccion es STR_LIT_ADDR del slot static_data.  El driver AOT
+            // deriva la TLS-ness desde SD_FLAG_TLS y emite el acceso por thread
+            // pointer; para un global normal es la direccion lineal.
+            auto git = runtime_global_slots_.find(id->name);
+            if (git != runtime_global_slots_.end()) {
+                const ir::IrValueId va = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = va;
+                is.imm = git->second;
+                is.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(is));
+                if (native_poo_) fn_->values[va].is_host_ptr = true;
+                return va;
+            }
             const ir::IrValueId addr = lookup(id->name);
             if (addr == ir::IR_NO_VALUE) {
                 error_at(e->loc,
@@ -11452,8 +13326,13 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // i64 raw; el frontend hace cast/bitcast al tipo logico T).
         const ir::IrValueId v_raw = fn_->new_value(ir::IrType::I64);
         {
+            // AOT (native_poo_): CALL nativo __vex_await(fut) -> i64 raw.  En
+            // el scheduler cooperativo, si el future esta PENDING y estamos en
+            // main, bombea la cola hasta que se resuelva (run-to-completion);
+            // dentro de una tarea, suspende (fibra, fase 3).
             ir::IrInstr aw{};
-            aw.op = ir::IrOp::AWAIT;
+            aw.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::AWAIT;
+            if (native_poo_) aw.func_name = "__vex_await";
             aw.type = ir::IrType::I64;
             aw.dst = v_raw;
             aw.operands = {v};
@@ -11531,6 +13410,35 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * en codigo runtime real generado a partir de string compile-time. */
     if (e->macro_expanded) {
         return lower_expr(e->macro_expanded.get());
+    }
+
+    // Function pointers: llamada INDIRECTA.  Evaluamos el callee a un SSA
+    // value (la direccion del codigo: una variable fn(...), un cast, etc.) y
+    // emitimos CALLIND con func_ptr = ese valor.  El tipo de retorno viene
+    // del result_type que dejo el type checker.
+    if (e->is_indirect_call) {
+        const ir::IrValueId fnp = lower_expr(e->callee.get());
+        std::vector<ir::IrValueId> args;
+        args.reserve(e->args.size());
+        for (auto &a : e->args) {
+            const ir::IrValueId av = lower_expr(a.get());
+            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            args.push_back(av);
+        }
+        const ir::IrType rt = ir_type_from_primitive(e->result_type.kind);
+        const ir::IrValueId dst =
+            (e->result_type.kind == PrimitiveKind::VOID)
+                ? ir::IR_NO_VALUE
+                : fn_->new_value(rt);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALLIND;
+        ins.type = rt;
+        ins.dst = dst;
+        ins.func_ptr = fnp;
+        ins.operands = std::move(args);
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        return dst;
     }
 
     // Phase M.7: llamada a funcion de namespace importado, ej.
@@ -11776,7 +13684,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                  * emitir el IrInstr::CALL al final de lower_call. */
                 goto skip_comptime_eval_for_macro_to_macro;
             }
+            /* Solo-LSP: cuando bajamos comptime fns a IR para inspeccion
+             * (emit_comptime_fns_), una llamada con args runtime -- p.ej. la
+             * auto-llamada de una comptime fn RECURSIVA -- no es
+             * comptime-evaluable; en vez de error, caemos al CALLVM normal
+             * (la callee ya esta en el IR como funcion regular). */
             ComptimeEvalResult r = comptime_eval_expr(tc_, e);
+            if (!r.ok && emit_comptime_fns_) {
+                goto skip_comptime_eval_for_macro_to_macro;
+            }
             if (!r.ok) {
                 error_at(e->loc,
                          "llamada a comptime fn '" + cid->name +
@@ -11809,7 +13725,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 }
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, src_line);
                 return v_str;
             }
             /* Tipo de retorno declarado por la fn. */
@@ -12336,6 +14252,63 @@ skip_comptime_eval_for_macro_to_macro:
                 if (is_tmp_str) tmp_str_args_to_free.push_back(v_arg);
             }
         }
+    }
+
+    // Variadicos: empaquetar los args TRAILING (a partir del param fijo N-1)
+    // en un array de pila host y reemplazarlos por (ptr, count).  El callee
+    // recibe `T*` + el count (leido con vacount()).  Mismo patron que el argv
+    // de vex_async, ahora como feature del lenguaje.
+    if (callee_sig && callee_sig->is_variadic && !callee_is_sret &&
+        arg_ids.size() >= callee_sig->param_types.size() - 1) {
+        const size_t fixed = callee_sig->param_types.size() - 1;
+        const size_t vcount = arg_ids.size() - fixed;
+        const ir::IrType et =
+            ir_type_from_primitive(callee_sig->variadic_elem.kind);
+        const uint64_t esz = ir_type_size(et);
+        ir::IrValueId v_arr;
+        if (vcount > 0) {
+            v_arr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_arr].is_host_ptr = true;
+            {
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.dst = v_arr;
+                al.imm = vcount * esz;
+                al.host_alloca = true;
+                al.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(al));
+            }
+            for (size_t i = 0; i < vcount; ++i) {
+                ir::IrValueId slot = v_arr;
+                if (i != 0) {
+                    slot = fn_->new_value(ir::IrType::PTR);
+                    const ir::IrValueId off =
+                        emit_const(ir::IrType::I64, i * esz, e->loc.line);
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = slot;
+                    ad.operands = {v_arr, off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                    fn_->values[slot].is_host_ptr = true;
+                }
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = et;
+                st.operands = {arg_ids[fixed + i], slot};
+                st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+        } else {
+            v_arr = emit_const(ir::IrType::PTR, 0, e->loc.line); // array vacio
+        }
+        std::vector<ir::IrValueId> packed(arg_ids.begin(),
+                                          arg_ids.begin() + fixed);
+        packed.push_back(v_arr);
+        packed.push_back(emit_const(ir::IrType::I64, vcount, e->loc.line));
+        arg_ids = std::move(packed);
     }
 
     // Para sret la "firma" de retorno es VOID; el dst SSA visible al
@@ -12947,7 +14920,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
             rhs = emit_binop_ir(bop, cur, rhs, fa->result_type.kind, e->loc);
         }
-        rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft, e->loc.line);
+        rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft,
+                             e->value ? e->value->loc : e->loc);
 
         // WRITE de bit field: read-modify-write.  Si el campo es bit
         // field, leemos el storage word completo, le limpiamos los
@@ -13271,7 +15245,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
             rhs = emit_binop_ir(bop, v_old, rhs, ix->result_type.kind, e->loc);
         }
-        rhs = cast_if_needed(rhs, fn_->values[rhs].type, pt, e->loc.line);
+        rhs = cast_if_needed(rhs, fn_->values[rhs].type, pt,
+                             e->value ? e->value->loc : e->loc);
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
         st.type = pt;
@@ -13761,7 +15736,16 @@ ir::IrValueId Lowering::lower_string_lit(ast::StringLitExpr *e) {
     // Convertir el contenido resuelto a vector<uint8_t> y registrarlo
     // (deduplicado) en static_data.  Los duplicados retornan el mismo
     // indice, ahorrando bytes en el .vel emitido.
+    //
+    // NUL terminator: el STR_LIT_ADDR se usa como `char*` (C string) -- p.ej.
+    // pasado a una funcion que itera hasta el 0.  Sin el nul, dos literales
+    // contiguos en .rodata se leen como uno solo (un `dputs("A")` seguia
+    // hasta el siguiente literal).  En PE/exe "funcionaba" por relleno de
+    // alineacion casual; en el .bin empaquetado no.  El +1 byte es inocuo
+    // para los consumidores que usan longitud explicita (STRMAKE lee
+    // value.size() bytes e ignora el nul).
     std::vector<uint8_t> bytes(e->value.begin(), e->value.end());
+    bytes.push_back(0);
     const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
 
     // Emitir IrOp::STR_LIT_ADDR -> el emisor genera "mov rDst,
@@ -13932,14 +15916,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             }
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), src_line);
-            ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
-            /* NO marcar is_gc_object: STRMAKE devuelve un GcHandle
-             * (uint32 zero-extended a i64).  Los handles son estables
-             * cross-GC -- la HandleTable los redirige tras evacuacion.
-             * Marcarlo como host_ptr provocaria que el regalloc emita
-             * gchandle/gcderef innecesarios y, peor, leyera la entrada
-             * de ptr_to_handle_ para un handle (no un host_ptr) -> NULL.
-             * Mismo patron que lower_string_literal_to_string_object. */
+            /* typename es un literal compile-time: value-string nativo en AOT
+             * (PURE_NATIVE) o GcHandle en el resto de tiers. */
+            ir::IrValueId v_str = emit_string_literal_repr(
+                v_addr, v_len, (int64_t)nm.size(), src_line);
             out_value = v_str;
             return true;
         }
@@ -13985,7 +15965,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 }
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, src_line);
                 out_value = v_str;
                 return true;
             }
@@ -14057,7 +16037,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     return true;
                 }
                 /* Runtime string: para MVP devolvemos 0 (no soportado).
-                 * Sprint 5 anyade resolver sintetico. */
+                 * Sprint 5 añade resolver sintetico. */
                 error_at(e->loc,
                          "find_type: en MVP solo se soporta literal string "
                          "(runtime resolver pendiente en Sprint 5)");
@@ -14138,7 +16118,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 /* STRMAKE necesita addr y len.  Para name_len que es u32
                  * lo usamos como i64 directamente; en la VM ambos caben
                  * en qword. */
-                ir::IrValueId v_str = emit_strmake(addr, name_len, src_line);
+                ir::IrValueId v_str =
+                    emit_string_literal_repr(addr, name_len, -1, src_line);
                 out_value = v_str;
                 return true;
             }
@@ -14227,7 +16208,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ad.source_line = src_line;
                     fn_->append(current_block_, std::move(ad));
                 }
-                ir::IrValueId v_str = emit_strmake(addr, fname_len, src_line);
+                ir::IrValueId v_str =
+                    emit_string_literal_repr(addr, fname_len, -1, src_line);
                 out_value = v_str;
                 return true;
             }
@@ -14323,7 +16305,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             }
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), e->loc.line);
-            ir::IrValueId v_str = emit_strmake(v_addr, v_len, e->loc.line);
+            ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
             /* CALLCLOSURE(env_addr, v_str) -- void return. */
             ir::IrInstr cl{};
             cl.op = ir::IrOp::CALLCLOSURE;
@@ -14519,7 +16501,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
                                static_cast<uint64_t>(nm.size()), src_line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, src_line);
                 return v_str;
             };
 
@@ -14707,6 +16689,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Optional via instrucciones VM isnull/unwrap (referencias).
     const bool is_isPresent = (name == "isPresent");
     const bool is_unwrap = (name == "unwrap");
+    // unwrap_unchecked: opt-out per-sitio.  Misma forma que unwrap pero
+    // SIN chequeo (baja a identidad / LOAD payload directo).  UB si null.
+    const bool is_unwrap_unchecked = (name == "unwrap_unchecked");
     // Optional/Result builtins del compilador (stack values).
     const bool is_Some = (name == "Some");
     const bool is_None = (name == "None");
@@ -14725,6 +16710,19 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_pid = (name == "pid");
     const bool is_msgsend = (name == "msgsend");
     const bool is_msgrecv = (name == "msgrecv");
+    // Variadicos: vacount() -> lee el param oculto __vacount (numero de args
+    // variadicos empaquetados por el caller).
+    if (name == "vacount") {
+        const ir::IrValueId v = lookup("__vacount");
+        if (v == ir::IR_NO_VALUE) {
+            error_at(e->loc, "vacount() solo es valido dentro de una funcion "
+                             "con un parametro variadico 'T... name'");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_value = v;
+        return true;
+    }
     // argv del script: bajan a getargc/getarg.
     const bool is_args_count = (name == "args_count");
     const bool is_args_get = (name == "args_get");
@@ -14864,7 +16862,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is_fopen || is_fwrite || is_fclose || is_malloc || is_free ||
         is_forName || is_getClass || is_getField || is_getMethod ||
         is_newInstance || is_invoke || is_proceed || is_isPresent ||
-        is_unwrap || is_Some || is_None || is_Ok || is_Err || is_isOk ||
+        is_unwrap || is_unwrap_unchecked ||
+        is_Some || is_None || is_Ok || is_Err || is_isOk ||
         is_value || is_error || is_wait || is_notify || is_notifyAll ||
         is_cpu_features ||
         is_pid || is_msgsend || is_msgrecv || is_args_count || is_args_get ||
@@ -14941,6 +16940,34 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     //
     // emit_print_newline():  CALLN vio_print_newline (cero args).
     // -----------------------------------------------------------------
+
+    // emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
+    // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vex con
+    // ese nombre (p.ej. `void __vex_write(u8* b, u64 n) {...}`) se llama a la
+    // SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
+    // si no, se usa el simbolo C por defecto (CALLN vex_bare_io:<prim>, lo
+    // aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
+    // programables en el propio lenguaje sin import ni libreria std.
+    auto emit_io_prim = [&](const std::string &prim,
+                            const std::vector<ir::IrValueId> &args,
+                            uint32_t line) {
+        const bool user_defined = (tc_.function_sig_by_name(prim) != nullptr);
+        ir::IrInstr ins{};
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.operands = args;
+        ins.source_line = line;
+        if (user_defined) {
+            ins.op = ir::IrOp::CALL;
+            ins.func_name = prim;
+        } else {
+            out_mod_->register_native_import("vex_bare_io", prim);
+            ins.op = ir::IrOp::CALLN;
+            ins.func_name = "vex_bare_io:" + prim;
+        }
+        fn_->append(current_block_, std::move(ins));
+    };
+
     auto emit_print_string_literal = [&](const std::string &text,
                                          uint32_t line) {
         if (text.empty()) return;
@@ -14956,6 +16983,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is.source_line = line;
         fn_->append(current_block_, std::move(is));
         const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
+        if (native_poo_) {
+            // AOT/bare: sin proc -> escribir los bytes via __vex_write (el
+            // usuario puede redefinirlo en Vex).  v_str es host_ptr.
+            fn_->values[v_str].is_host_ptr = true;
+            emit_io_prim("__vex_write", {v_str, v_len}, line);
+            return;
+        }
         const ir::IrValueId v_proc = emit_getproc(line);
         out_mod_->register_native_import(lib, "vio_print");
         ir::IrInstr ins{};
@@ -14969,6 +17003,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     };
 
     auto emit_print_newline = [&](uint32_t line) {
+        if (native_poo_) {
+            emit_print_string_literal("\n", line); // via __vex_write
+            return;
+        }
         out_mod_->register_native_import(lib, "vio_print_newline");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
@@ -15136,6 +17174,152 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (v == ir::IR_NO_VALUE) return;
         const ir::IrType vt = fn_->values[v].type;
 
+        // -------------------------------------------------------------
+        // AOT/bare (native_poo_): formateo de un valor de runtime SIN proc.
+        // Despacha a los helpers __vex_print_* (libc, ABI plana).  El usuario
+        // puede redefinir cualquiera.  Cubre escalares (dec/uint/hex/bin/oct/
+        // ptr/bool/char) + char* (cstr).  Float y string value-type se
+        // difieren con un warning claro.  El format-spec ${x:kind} elige el
+        // helper; padding/alineacion se difiere (warning una vez).
+        // -------------------------------------------------------------
+        if (native_poo_) {
+            if (t.kind == PrimitiveKind::F32 || t.kind == PrimitiveKind::F64) {
+                // AOT: __vex_print_float(f64) del runtime de I/O (formateo %g
+                // aproximado en Vex puro).  F32 se promociona a F64 antes.
+                ir::IrValueId vf = v;
+                if (t.kind == PrimitiveKind::F32) {
+                    ir::IrValueId vp = fn_->new_value(ir::IrType::F64);
+                    ir::IrInstr cv{};
+                    cv.op = ir::IrOp::F32TOF64;
+                    cv.type = ir::IrType::F64;
+                    cv.dst = vp;
+                    cv.operands = {v};
+                    cv.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(cv));
+                    vf = vp;
+                }
+                emit_io_prim("__vex_print_float", {vf}, ex->loc.line);
+                return;
+            }
+            if (t.kind == PrimitiveKind::STRING) {
+                // string value-type (Embed/AOT): (ptr,len) flag-aware (SSO) y
+                // escritura via __vex_write (PURE_NATIVE).  El format-spec
+                // ${s:>W} aplica padding via __vex_pad (fill_cp, count).
+                ir::IrValueId sptr =
+                    emit_native_str_data_ptr(v, ex->loc.line);
+                ir::IrValueId slen = emit_native_str_len(v, ex->loc.line);
+                const bool need_pad =
+                    (fs.align != FmtSpec::Align::NONE) && (fs.width > 0);
+                // pad = max(0, width - len); via SUB + clamp (CMP_GT*MUL).
+                auto compute_pad = [&]() -> ir::IrValueId {
+                    ir::IrValueId v_width = emit_const(
+                        ir::IrType::I64, (uint64_t)fs.width, ex->loc.line);
+                    ir::IrValueId v_sub = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr s{};
+                    s.op = ir::IrOp::SUB;
+                    s.type = ir::IrType::I64;
+                    s.dst = v_sub;
+                    s.operands = {v_width, slen};
+                    s.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(s));
+                    ir::IrValueId v_zero =
+                        emit_const(ir::IrType::I64, 0, ex->loc.line);
+                    ir::IrValueId v_pos = fn_->new_value(ir::IrType::BOOL);
+                    ir::IrInstr cgt{};
+                    cgt.op = ir::IrOp::CMP_GT;
+                    cgt.type = ir::IrType::BOOL;
+                    cgt.dst = v_pos;
+                    cgt.operands = {v_sub, v_zero};
+                    cgt.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(cgt));
+                    ir::IrValueId v_mask = cast_if_needed(
+                        v_pos, ir::IrType::BOOL, ir::IrType::I64, ex->loc.line,
+                        /*is_explicit=*/true);
+                    ir::IrValueId v_cl = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr m{};
+                    m.op = ir::IrOp::MUL;
+                    m.type = ir::IrType::I64;
+                    m.dst = v_cl;
+                    m.operands = {v_sub, v_mask};
+                    m.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(m));
+                    return v_cl;
+                };
+                auto emit_pad = [&](ir::IrValueId v_count) {
+                    ir::IrValueId v_fill = emit_const(
+                        ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
+                    emit_io_prim("__vex_pad", {v_fill, v_count}, ex->loc.line);
+                };
+                ir::IrValueId v_pad = ir::IR_NO_VALUE;
+                if (need_pad) v_pad = compute_pad();
+                if (need_pad && fs.align == FmtSpec::Align::RIGHT)
+                    emit_pad(v_pad);
+                emit_io_prim("__vex_write", {sptr, slen}, ex->loc.line);
+                if (need_pad && fs.align == FmtSpec::Align::LEFT)
+                    emit_pad(v_pad);
+                return;
+            }
+            if (fs.align != FmtSpec::Align::NONE && fs.width > 0) {
+                diags_.warning(ex->loc, "padding/alineacion en print AOT nativo "
+                                        "aun no soportado; se ignora el ancho");
+            }
+            const bool is_unsigned_t = (t.kind == PrimitiveKind::CHAR ||
+                                        t.kind == PrimitiveKind::U8 ||
+                                        t.kind == PrimitiveKind::U16 ||
+                                        t.kind == PrimitiveKind::U32 ||
+                                        t.kind == PrimitiveKind::U64);
+            // Elegir el helper (kind explicito del format-spec o AUTO->tipo).
+            std::string sym;
+            bool as_signed_dec = false;
+            if (fs.kind == FmtSpec::Kind::HEX)
+                sym = "__vex_print_hex";
+            else if (fs.kind == FmtSpec::Kind::BIN)
+                sym = "__vex_print_bin";
+            else if (fs.kind == FmtSpec::Kind::OCT)
+                sym = "__vex_print_oct";
+            else if (fs.kind == FmtSpec::Kind::PTR)
+                sym = "__vex_print_ptr";
+            else if (fs.kind == FmtSpec::Kind::BOOL)
+                sym = "__vex_print_bool";
+            else if (fs.kind == FmtSpec::Kind::CHAR)
+                sym = "__vex_print_char";
+            else if (fs.kind == FmtSpec::Kind::DEC) {
+                sym = is_unsigned_t ? "__vex_print_u64" : "__vex_print_i64";
+                as_signed_dec = !is_unsigned_t;
+            } else {
+                // AUTO: por tipo (mismo criterio que el path VM).
+                switch (t.kind) {
+                case PrimitiveKind::BOOL: sym = "__vex_print_bool"; break;
+                case PrimitiveKind::PTR:
+                case PrimitiveKind::ARRAY:
+                case PrimitiveKind::CLASS: sym = "__vex_print_ptr"; break;
+                default:
+                    if (is_unsigned_t)
+                        sym = "__vex_print_u64";
+                    else {
+                        sym = "__vex_print_i64";
+                        as_signed_dec = true;
+                    }
+                    break;
+                }
+            }
+            // Extender el valor a 64 bits (los helpers toman u64/i64).  Para
+            // decimal con signo, SEXT; en cualquier otro caso, ZEXT (bits).
+            ir::IrValueId arg = v;
+            if (vt != ir::IrType::I64 && vt != ir::IrType::PTR) {
+                arg = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ext{};
+                ext.op = as_signed_dec ? ir::IrOp::SEXT : ir::IrOp::ZEXT;
+                ext.type = ir::IrType::I64;
+                ext.dst = arg;
+                ext.operands = {v};
+                ext.source_line = ex->loc.line;
+                fn_->append(current_block_, std::move(ext));
+            }
+            emit_io_prim(sym, {arg}, ex->loc.line);
+            return;
+        }
+
         // Format spec ${expr:fmt}: si el formato pide un kind concreto
         // (hex/bin/oct/dec/ptr/gc/char/bool) o alineacion, usamos el
         // helper unificado @c vio_print_fmt(value, kind, width,
@@ -15259,8 +17443,16 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // longitud en bytes, y usar vio_print_buf para emitir el bloque
         // sin cortar en NUL (binary-safe; preserva multi-byte UTF-8).
         if (t.kind == PrimitiveKind::STRING) {
-            ir::IrValueId v_ptr = emit_strraw(v, ex->loc.line);
-            ir::IrValueId v_len = emit_strgetbytes(v, ex->loc.line);
+            // native_poo (AOT): `string` es value-string {ptr,len,cap} con SSO;
+            // (ptr,len) via accesores flag-aware + escritura por __vex_write
+            // (PURE_NATIVE).  Full/JIT/interp: GcHandle via strraw/strgetbytes
+            // + vio_print_buf (VM).
+            ir::IrValueId v_ptr = native_poo_
+                                      ? emit_native_str_data_ptr(v, ex->loc.line)
+                                      : emit_strraw(v, ex->loc.line);
+            ir::IrValueId v_len = native_poo_
+                                      ? emit_native_str_len(v, ex->loc.line)
+                                      : emit_strgetbytes(v, ex->loc.line);
             // Item 17: format spec en STRING.  Si align != NONE Y
             // width > 0, calcular padding = max(0, width - len) y
             // emitirlo antes (RIGHT) o despues (LEFT) del print_buf.
@@ -15315,6 +17507,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             auto emit_pad_call = [&](ir::IrValueId v_count) {
                 ir::IrValueId v_fill = emit_const(
                     ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
+                if (native_poo_) {
+                    // AOT: padding via __vex_pad (fill_cp, count) del runtime
+                    // de I/O (PURE_NATIVE); no hay vio_print_pad (VM).
+                    emit_io_prim("__vex_pad", {v_fill, v_count}, ex->loc.line);
+                    return;
+                }
                 out_mod_->register_native_import(lib, "vio_print_pad");
                 ir::IrInstr pc{};
                 pc.op = ir::IrOp::CALLN;
@@ -15328,15 +17526,20 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             if (need_pad && fs.align == FmtSpec::Align::RIGHT) {
                 emit_pad_call(v_pad);
             }
-            out_mod_->register_native_import(lib, "vio_print_buf");
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = lib + ":vio_print_buf";
-            ins.operands = {v_ptr, v_len};
-            ins.source_line = ex->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            if (native_poo_) {
+                // AOT: escribir los bytes via __vex_write (PURE_NATIVE).
+                emit_io_prim("__vex_write", {v_ptr, v_len}, ex->loc.line);
+            } else {
+                out_mod_->register_native_import(lib, "vio_print_buf");
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::CALLN;
+                ins.type = ir::IrType::VOID;
+                ins.dst = ir::IR_NO_VALUE;
+                ins.func_name = lib + ":vio_print_buf";
+                ins.operands = {v_ptr, v_len};
+                ins.source_line = ex->loc.line;
+                fn_->append(current_block_, std::move(ins));
+            }
             if (need_pad && fs.align == FmtSpec::Align::LEFT) {
                 emit_pad_call(v_pad);
             }
@@ -15501,6 +17704,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        if (native_poo_) {
+            emit_io_prim("__vex_flush", {}, e->loc.line);
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         out_mod_->register_native_import(lib, "vio_flush");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
@@ -15541,6 +17749,29 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64, e->loc.line,
                            /*is_explicit=*/true);
+        // AOT/bare: rutear a los formateadores nativos __vex_print_* (sin
+        // proc).  float/color/gchandle se difieren con warning.
+        if (native_poo_) {
+            std::string nf;
+            if (is_print_uint) nf = "__vex_print_u64";
+            else if (is_print_hex) nf = "__vex_print_hex";
+            else if (is_print_bool) nf = "__vex_print_bool";
+            else if (is_print_char) nf = "__vex_print_char";
+            else if (is_print_bin) nf = "__vex_print_bin";
+            else if (is_print_oct) nf = "__vex_print_oct";
+            else if (is_print_ptr) nf = "__vex_print_ptr";
+            else if (is_print_cstr) nf = "__vex_print_cstr";
+            if (nf.empty()) {
+                diags_.warning(e->loc, std::string("'") + name +
+                                           "' en AOT nativo aun no soportado; "
+                                           "se omite");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            emit_io_prim(nf, {v}, e->loc.line);
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         std::string func;
         if (is_print_uint)
             func = "vio_print_uint";
@@ -15626,6 +17857,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // Forzar i64 para coincidir con la firma C de vio_print_int.
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64,
                            e->loc.line);
+        if (native_poo_) {
+            emit_io_prim("__vex_print_i64", {v}, e->loc.line);
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         out_mod_->register_native_import(lib, "vio_print_int");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
@@ -16193,7 +18429,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         //       tiene un pre-pase que los convierte a CALLN equivalente.
         //   (c) El Selector JIT (futuro) emite sqrtsd/andpd/minsd/roundsd
         //       nativos sin tocar el frontend.
-        //   (d) Constant folding (cuando se anyada) funciona uniforme.
+        //   (d) Constant folding (cuando se añada) funciona uniforme.
         if (is_math_sqrt) return emit_float_irop(ir::IrOp::FSQRT, 1);
         if (is_math_fabs) return emit_float_irop(ir::IrOp::FABS, 1);
         if (is_math_fmin) return emit_float_irop(ir::IrOp::FMIN, 2);
@@ -16831,7 +19067,16 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // LOAD ptr@[slot+0] (ya nul-terminado).  No emitimos STRLEN/STRRAW
     // (RUNTIME_DEPENDENT en AOT).  Solo length/cstr en Inc 0; el resto
     // (bytes/hash/intern/wstr) sigue su path normal (no se prueba en AOT).
-    if (native_poo_ && (is_str_length || is_str_cstr) && e->args.size() == 1) {
+    // Vex Embed Inc 0/5/6: en native_poo_ el value-string {ptr,len,cap}
+    // resuelve length/bytes/cstr/wstr SIN STRMAKE/STRLEN/STRRAW
+    // (RUNTIME_DEPENDENT en AOT).  Inc 6 (encoding UTF-8):
+    //   .length() -> conteo de CODE-POINTS (UTF-8).
+    //   .bytes()  -> conteo de BYTES (el len crudo del repr).
+    //   .cstr()   -> u8* UTF-8 NUL-terminado (Win32 *A / FFI).
+    //   .wstr()   -> u16* UTF-16LE NUL-terminado (Win32 *W).
+    if (native_poo_ &&
+        (is_str_length || is_str_bytes || is_str_cstr || is_str_wstr) &&
+        e->args.size() == 1) {
         ast::Expr *ae = e->args[0].get();
         // Literal directo `str_length("x")`: raro en native; resolver con
         // el repr construido (correcto pero aloca un buffer descartable).
@@ -16847,13 +19092,23 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        if (is_str_length) {
-            // String Inc 5 (SSO): len via accesor flag-aware.
+        if (is_str_bytes) {
+            // String Inc 5 (SSO): len de BYTES via accesor flag-aware.
             out_value = emit_native_str_len(v_slot, e->loc.line);
-        } else { // is_str_cstr
+        } else if (is_str_length) {
+            // Inc 6: code-points (UTF-8).  data_ptr + byte_len -> cplen.
+            // Para ASCII == byte_len (sin regresion en los tests ASCII).
+            ir::IrValueId v_ptr = emit_native_str_data_ptr(v_slot, e->loc.line);
+            ir::IrValueId v_blen = emit_native_str_len(v_slot, e->loc.line);
+            out_value = emit_native_str_cplen(v_ptr, v_blen, e->loc.line);
+        } else if (is_str_cstr) {
             // String Inc 5 (SSO): data_ptr flag-aware (SSO -> &slot ya
             // nul-terminado; HEAP -> ptr@0).
             out_value = emit_native_str_data_ptr(v_slot, e->loc.line);
+        } else { // is_str_wstr -- Inc 6: UTF-16LE para Win32 *W.
+            ir::IrValueId v_ptr = emit_native_str_data_ptr(v_slot, e->loc.line);
+            ir::IrValueId v_blen = emit_native_str_len(v_slot, e->loc.line);
+            out_value = emit_native_str_to_utf16(v_ptr, v_blen, e->loc.line);
         }
         return true;
     }
@@ -17007,6 +19262,77 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = v_res;
             return true;
         }
+        // Vex Embed Inc 4 (builtin): en native_poo_ str_equals(a, b) usa el
+        // mismo helper native __vex_strcmp que el operador `==` (value-string,
+        // CERO GC), en vez de STRCMP (StringObject GC).  Devuelve bool (==0).
+        if (native_poo_ && is_str_equals) {
+            // Extrae (ptr, len) de cada operando como el operador == (literal
+            // -> .rodata + CONST len; var/concat/cast -> slot value-string +
+            // accesores; temporales se liberan tras comparar).
+            struct OpRef {
+                ir::IrValueId ptr = ir::IR_NO_VALUE;
+                ir::IrValueId len = ir::IR_NO_VALUE;
+                ir::IrValueId temp = ir::IR_NO_VALUE; // !=NO_VALUE -> free si heap
+            };
+            auto op_ref = [&](ast::Expr *ex) -> OpRef {
+                OpRef r;
+                if (ex && ex->kind == ast::NodeKind::StringLitExpr &&
+                    !static_cast<ast::StringLitExpr *>(ex)->is_interpolated()) {
+                    auto *slit = static_cast<ast::StringLitExpr *>(ex);
+                    const std::string &lit = slit->value;
+                    std::vector<uint8_t> data(lit.begin(), lit.end());
+                    data.push_back(0);
+                    const uint64_t idx =
+                        out_mod_->intern_static_data(std::move(data));
+                    r.ptr = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[r.ptr].is_host_ptr = true;
+                    ir::IrInstr sa{};
+                    sa.op = ir::IrOp::STR_LIT_ADDR; sa.type = ir::IrType::PTR;
+                    sa.dst = r.ptr; sa.imm = idx; sa.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(sa));
+                    r.len = emit_const(ir::IrType::I64,
+                                       static_cast<uint64_t>(lit.size()),
+                                       e->loc.line);
+                    return r;
+                }
+                bool is_temp = false;
+                if (ex && ex->kind == ast::NodeKind::BinaryExpr &&
+                    static_cast<ast::BinaryExpr *>(ex)->op == ast::BinOp::Add &&
+                    ex->result_type.kind == PrimitiveKind::STRING)
+                    is_temp = true;
+                else if (ex && ex->kind == ast::NodeKind::CastExpr &&
+                         ex->result_type.kind == PrimitiveKind::STRING)
+                    is_temp = true;
+                ir::IrValueId v_slot = lower_expr(ex);
+                if (v_slot == ir::IR_NO_VALUE) return r;
+                r.ptr = emit_native_str_data_ptr(v_slot, e->loc.line);
+                r.len = emit_native_str_len(v_slot, e->loc.line);
+                if (is_temp) r.temp = v_slot;
+                return r;
+            };
+            OpRef ra = op_ref(e->args[0].get());
+            OpRef rb = op_ref(e->args[1].get());
+            if (ra.ptr == ir::IR_NO_VALUE || rb.ptr == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            ir::IrValueId v_cmp = emit_strcmp_dispatched(ra.ptr, ra.len, rb.ptr,
+                                                         rb.len, e->loc.line);
+            if (ra.temp != ir::IR_NO_VALUE)
+                emit_native_str_free_if_heap(ra.temp, e->loc.line);
+            if (rb.temp != ir::IR_NO_VALUE)
+                emit_native_str_free_if_heap(rb.temp, e->loc.line);
+            // str_equals: bool = (strcmp == 0).
+            ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
+            ir::IrValueId v_eq = fn_->new_value(ir::IrType::BOOL);
+            ir::IrInstr cmp{};
+            cmp.op = ir::IrOp::CMP_EQ; cmp.type = ir::IrType::BOOL;
+            cmp.dst = v_eq; cmp.operands = {v_cmp, v_zero};
+            cmp.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(cmp));
+            out_value = v_eq;
+            return true;
+        }
         // Coerce string literals (PTR) a StringObject
         // (STRING handle) inline via STRMAKE.  Sin esto pasar un
         // literal directamente a str_concat/str_equals enviaria un
@@ -17062,6 +19388,28 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (e->args.size() != 2) {
             error_at(e->loc, "str_make: 2 args (ptr, len)");
             out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // Vex Embed (native_poo_): str_make(ptr, len) COPIA len bytes a un
+        // value-string PROPIO (sin GC), NO un StringObject GC.  Si len es un
+        // literal entero -> Tier B (decision SSO/HEAP compile-time, sin rama).
+        if (native_poo_) {
+            int64_t known_len = -1;
+            if (e->args[1] &&
+                e->args[1]->kind == ast::NodeKind::IntLitExpr) {
+                int64_t lv =
+                    (int64_t)static_cast<ast::IntLitExpr *>(e->args[1].get())
+                        ->value;
+                if (lv >= 0) known_len = lv;
+            }
+            ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId v_len = lower_expr(e->args[1].get());
+            if (v_ptr == ir::IR_NO_VALUE || v_len == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            out_value = build_native_string_from_buffer(v_ptr, v_len,
+                                                        e->loc.line, known_len);
             return true;
         }
         ir::IrValueId v_ptr = lower_expr(e->args[0].get());
@@ -17855,9 +20203,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // `unwrap` (genera NPE si flag==0); luego LOAD payload at +8.
     // Para referencias (CLASS/PTR) legacy: VM `unwrap` directo sobre
     // el puntero (0 = null).
-    if (is_unwrap) {
+    if (is_unwrap || is_unwrap_unchecked) {
+        const char *bn = is_unwrap_unchecked ? "unwrap_unchecked" : "unwrap";
         if (e->args.size() != 1) {
-            error_at(e->loc, "unwrap: requiere exactamente 1 argumento");
+            error_at(e->loc, std::string(bn) +
+                                 ": requiere exactamente 1 argumento");
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -17867,30 +20217,34 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         // Optional<T>: LOAD flag, unwrap (lanza si 0), LOAD payload.
+        // unwrap_unchecked: omite flag+UNWRAP, LOAD payload directo (UB
+        // si vacio) -- cero coste, sin red.
         if (e->args[0]->result_type.kind == PrimitiveKind::OPTIONAL) {
             const Type at = e->args[0]->result_type;
             const Type payload_st =
                 at.pointee ? *at.pointee : Type{PrimitiveKind::I64};
             const ir::IrType payload_t =
                 ir_type_from_primitive(payload_st.kind);
-            // Load flag (i64) from buf+0.
-            const ir::IrValueId v_flag = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr ldf{};
-            ldf.op = ir::IrOp::LOAD;
-            ldf.type = ir::IrType::I64;
-            ldf.dst = v_flag;
-            ldf.operands = {v_arg};
-            ldf.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ldf));
-            // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
-            const ir::IrValueId v_chk = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr uw{};
-            uw.op = ir::IrOp::UNWRAP;
-            uw.type = ir::IrType::I64;
-            uw.dst = v_chk;
-            uw.operands = {v_flag};
-            uw.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(uw));
+            if (is_unwrap) {
+                // Load flag (i64) from buf+0.
+                const ir::IrValueId v_flag = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ldf{};
+                ldf.op = ir::IrOp::LOAD;
+                ldf.type = ir::IrType::I64;
+                ldf.dst = v_flag;
+                ldf.operands = {v_arg};
+                ldf.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ldf));
+                // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
+                const ir::IrValueId v_chk = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr uw{};
+                uw.op = ir::IrOp::UNWRAP;
+                uw.type = ir::IrType::I64;
+                uw.dst = v_chk;
+                uw.operands = {v_flag};
+                uw.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(uw));
+            }
             // Load payload from buf+8.
             const ir::IrValueId v_eight =
                 emit_const(ir::IrType::I64, 8, e->loc.line);
@@ -17913,7 +20267,14 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = v_dst;
             return true;
         }
-        // Referencias legacy: VM `unwrap` directo.
+        // Referencias: unwrap_unchecked baja a IDENTIDAD (el "valor" de
+        // un unwrap es el mismo puntero; lo unico que anade unwrap es el
+        // chequeo).  Devolvemos v_arg directo -> cero IR, cero coste.
+        if (is_unwrap_unchecked) {
+            out_value = v_arg;
+            return true;
+        }
+        // Referencias legacy: VM `unwrap` directo (con chequeo runtime).
         const ir::IrType t = fn_->values[v_arg].type;
         const ir::IrValueId v_dst = fn_->new_value(t);
         ir::IrInstr ra{};
@@ -18527,7 +20888,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // direccion vesta-callable, por lo que usamos 0 (sentinel)
         // y el cleanup local conoce el deleter por compile-time via
         // literal_deleter.  SRET return con extern deleter no
-        // preserva la info (futuro: anyadir tabla de deleter ids).
+        // preserva la info (futuro: añadir tabla de deleter ids).
         const ir::IrValueId v_deleter_addr = fn_->new_value(ir::IrType::I64);
         if (deleter_label.rfind("@extern:", 0) == 0) {
             // Extern: no podemos materializar direccion como Vesta
@@ -18584,22 +20945,73 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     // ----- move(p) -----  transfer ownership.
-    // El destino de move es el LHS del var-decl o de la asignacion;
-    // este builtin SOLO marca el SSA value como "consumed".  El
-    // codigo del mvtake real se emite en lower_var_decl cuando ve
-    // que el init es CallExpr(move(...)).  Aqui devolvemos el slot
-    // del origen tal cual: el lower_var_decl tomara responsabilidad
-    // de emitir mvtake y zerificar el slot del origen.
+    // Cuando `move(p)` es el init DIRECTO de un var-decl, lo maneja
+    // lower_var_decl (emite mvtake al slot del var + zerifica el origen) y
+    // NUNCA llega aqui.  Pero `move(p)` tambien aparece como ARGUMENTO de
+    // funcion (`consume(move(data))`), en una asignacion o en un return.  En
+    // esos casos DEBEMOS emitir el mvtake a un TEMPORAL aqui mismo, o el slot
+    // origen NO se zerifica -> tanto el origen como el destino liberan el
+    // MISMO box -> doble-free (en GC/interp es no-op, en native abort).
+    //
+    // Replicamos la logica del var-decl: ALLOCA temporal + mvtake [tmp+0]<-
+    // [src+0] (+ [tmp+8]<-[src+8] para unique<T>), que MUEVE el contenido y
+    // ZERIFICA el origen.  Devolvemos el temporal (el call lee tmp[0] = box).
     if (is_move) {
         if (e->args.size() != 1) {
             error_at(e->loc, "move: requiere 1 argumento");
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        const ir::IrValueId v_arg = lower_expr(e->args[0].get());
-        // No emitimos mvtake aqui; lower_var_decl detecta el patron
-        // CallExpr(move(...)) y emite la secuencia correcta.
-        out_value = v_arg;
+        const ir::IrValueId v_src = lower_expr(e->args[0].get());
+        if (v_src == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
+        // shared<T>: slot = 8 bytes (ctrl_block_ptr).
+        const bool is_unique =
+            (e->args[0]->result_type.kind == PrimitiveKind::UNIQUE_PTR);
+        const uint32_t slot_bytes = is_unique ? 16 : 8;
+        const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_tmp;
+            al.imm = slot_bytes;
+            al.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        // mvtake [tmp+0] <- [src+0]  (mueve el box-ptr + zerifica origen).
+        emit_mvtake(v_tmp, v_src, e->loc.line);
+        if (slot_bytes == 16) {
+            // Segundo qword: deleter.
+            const ir::IrValueId v_eight =
+                emit_const(ir::IrType::I64, 8, e->loc.line);
+            const ir::IrValueId v_tmp8 = fn_->new_value(ir::IrType::PTR);
+            const ir::IrValueId v_src8 = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr add{};
+                add.op = ir::IrOp::ADD;
+                add.type = ir::IrType::I64;
+                add.dst = v_tmp8;
+                add.operands = {v_tmp, v_eight};
+                add.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(add));
+            }
+            {
+                ir::IrInstr add{};
+                add.op = ir::IrOp::ADD;
+                add.type = ir::IrType::I64;
+                add.dst = v_src8;
+                add.operands = {v_src, v_eight};
+                add.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(add));
+            }
+            emit_mvtake(v_tmp8, v_src8, e->loc.line);
+        }
+        fn_->values[v_tmp].pointee_is_host_ptr = true;
+        out_value = v_tmp;
         return true;
     }
 
@@ -19423,6 +21835,22 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // AOT (native_poo_): mailbox por valor -> CALL __vex_msgsend(pid, val)
+        // (sin buffer ni VM memory).  Devuelve 1 (ok) en el scheduler coop.
+        if (native_poo_) {
+            const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
+            ir::IrInstr ms{};
+            ms.op = ir::IrOp::CALL;
+            ms.func_name = "__vex_msgsend";
+            ms.type = ir::IrType::I32;
+            ms.dst = v_dst;
+            ms.operands = {v_pid, v_val};
+            ms.is_call_site = true;
+            ms.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ms));
+            out_value = v_dst;
+            return true;
+        }
         // ALLOCA 8 bytes en stack para el buffer del mensaje.
         const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         {
@@ -19467,6 +21895,22 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (!e->args.empty()) {
             error_at(e->loc, "msgrecv: no acepta argumentos");
             out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // AOT (native_poo_): mailbox por valor -> CALL __vex_msgrecv() -> i64
+        // (lee de la mailbox de la tarea actual; no bloquea en Fase 2 -- el
+        // mensaje ya esta porque main hace el setup antes de bombear).
+        if (native_poo_) {
+            const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
+            ir::IrInstr mr{};
+            mr.op = ir::IrOp::CALL;
+            mr.func_name = "__vex_msgrecv";
+            mr.type = ir::IrType::I64;
+            mr.dst = v_val;
+            mr.is_call_site = true;
+            mr.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(mr));
+            out_value = v_val;
             return true;
         }
         // ALLOCA 8 bytes para el buffer destino.
@@ -19521,8 +21965,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         // future -> aloca FutureObject; R0 contiene el handle.
         const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
+        // AOT (native_poo_): CALL nativo al scheduler cooperativo
+        // (__vex_future_new -> handle), bundle-ado desde vex_async.vex.
         ir::IrInstr fu{};
-        fu.op = ir::IrOp::FUTURE;
+        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
+        if (native_poo_) fu.func_name = "__vex_future_new";
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true; // GC alloc
@@ -19548,8 +21995,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // AOT (native_poo_): CALL nativo __vex_fulfill(fut, val).
         ir::IrInstr fu{};
-        fu.op = ir::IrOp::FULFILL;
+        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FULFILL;
+        if (native_poo_) fu.func_name = "__vex_fulfill";
         fu.type = ir::IrType::VOID;
         fu.dst = ir::IR_NO_VALUE;
         fu.operands = {v_fut, v_val};
@@ -20245,6 +22694,74 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 for (const auto &mi : lay.methods)
                     if (mi.vtable_index + 1u > nslots)
                         nslots = mi.vtable_index + 1u;
+                // El dispatch de INTERFAZ usa el vtable_index del metodo en la
+                // INTERFAZ (numerada 0-based, sin ctor).  La clase numera con
+                // el ctor en el slot 0 -> los slots no coinciden.  En native_poo
+                // el ctor NUNCA se despacha por vtable (new/super llaman directo)
+                // -> su slot esta MUERTO y podemos colocar ahi el metodo de
+                // interfaz.  Recolectamos esas colocaciones (offset de interfaz
+                // -> metodo implementador) y las aplicamos DESPUES de los slots
+                // propios para que ganen su slot.  Tambien ampliamos nslots a
+                // los slots de interfaz por si la interfaz tuviera mas metodos.
+                struct IfaceSlot {
+                    uint32_t slot;
+                    std::string sym;
+                };
+                std::vector<IfaceSlot> iface_slots;
+                // Recolectar las interfaces de la clase Y de TODA su cadena de
+                // superclases.  Una clase que hereda (E : C, C : Sh) implementa
+                // Sh transitivamente, pero su `interface_names` solo lista las
+                // DIRECTAS -> sin esto, la vtable de E no colocaria el metodo de
+                // Sh en su slot de interfaz y el dispatch dinamico leeria
+                // basura (bug: s[1].a() sobre un E heredado daba garbage).
+                std::vector<std::string> all_ifaces;
+                {
+                    std::string cur = cd->name;
+                    int guard = 0;
+                    while (!cur.empty() && guard++ < 64) {
+                        auto itc = tc_.class_layouts().find(cur);
+                        if (itc == tc_.class_layouts().end()) break;
+                        for (const auto &in : itc->second.interface_names)
+                            all_ifaces.push_back(in);
+                        cur = itc->second.super_name;
+                    }
+                }
+                for (const auto &iname : all_ifaces) {
+                    auto it_if = tc_.class_layouts().find(iname);
+                    if (it_if == tc_.class_layouts().end()) continue;
+                    for (const auto &im : it_if->second.methods) {
+                        if (im.is_constructor) continue;
+                        // Buscar el metodo implementador en la clase y, si no
+                        // esta (metodo heredado no aplanado), en la cadena de
+                        // superclases.  owner = clase que DEFINE el metodo.
+                        const ClassMethodInfo *impl = nullptr;
+                        std::string impl_owner;
+                        {
+                            std::string cur = cd->name;
+                            int guard = 0;
+                            while (!cur.empty() && guard++ < 64 && !impl) {
+                                auto itc = tc_.class_layouts().find(cur);
+                                if (itc == tc_.class_layouts().end()) break;
+                                for (const auto &cm : itc->second.methods)
+                                    if (!cm.is_constructor &&
+                                        cm.name == im.name) {
+                                        impl = &cm;
+                                        impl_owner =
+                                            cm.defining_class.empty()
+                                                ? itc->second.name
+                                                : cm.defining_class;
+                                        break;
+                                    }
+                                cur = itc->second.super_name;
+                            }
+                        }
+                        if (!impl) continue;
+                        iface_slots.push_back(
+                            {im.vtable_index, impl_owner + "__" + impl->name});
+                        if (im.vtable_index + 1u > nslots)
+                            nslots = im.vtable_index + 1u;
+                    }
+                }
                 if (nslots == 0) {
                     needs_vtable = false;
                 } else {
@@ -20259,15 +22776,25 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     vm.section_name = ".data.rel.ro";
                     vm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                                 ir::IrModule::SD_FLAG_NON_DEDUP;
+                    // Un simbolo por slot (offset).  Los metodos propios primero;
+                    // las colocaciones de interfaz SOBREESCRIBEN (priman) su
+                    // slot -- el slot del ctor esta muerto en native_poo.  Sin
+                    // depender del orden de aplicacion de relocs del emisor.
+                    std::map<uint32_t, std::string> slot_sym;
                     for (const auto &mi : lay.methods) {
                         const std::string owner = mi.defining_class.empty()
                                                       ? cd->name
                                                       : mi.defining_class;
-                        ir::IrModule::StaticDataMeta::SymRef sr;
-                        sr.offset = mi.vtable_index * 8u;
-                        sr.sym =
+                        slot_sym[mi.vtable_index * 8u] =
                             owner + "__" +
                             (mi.is_constructor ? std::string("ctor") : mi.name);
+                    }
+                    for (const auto &is : iface_slots)
+                        slot_sym[is.slot * 8u] = is.sym;
+                    for (const auto &kv : slot_sym) {
+                        ir::IrModule::StaticDataMeta::SymRef sr;
+                        sr.offset = kv.first;
+                        sr.sym = kv.second;
                         sr.width = 8;
                         sr.is_rel = 0;
                         vm.sym_refs.push_back(std::move(sr));
@@ -20367,6 +22894,95 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 nf.append(e, std::move(r));
             }
             out.add_function(std::move(nf));
+
+            // gc<T> opt-in: si la clase se uso como gc<Class>, generar tambien
+            // __new_<Class>_gc.  Identico al native (calloc+ctor) pero alocando
+            // con vex_gc_alloc_ptr (GC-managed, no-RAII).  El GC (libvesta_gc)
+            // colecta el objeto cuando deja de ser alcanzable via stackmaps.
+            if (classes_used_gc_.count(cd->name) > 0) {
+                ir::IrFunction gf;
+                gf.name = "__new_" + cd->name + "_gc";
+                gf.ret_type = ir::IrType::PTR;
+                for (size_t i = 0; i < nargs; ++i) {
+                    const ir::IrType pt = ir_type_from_primitive(
+                        effective_ctor->param_types[i].kind);
+                    const ir::IrValueId vid =
+                        gf.new_value(pt, "%a" + std::to_string(i));
+                    gf.values[vid].is_param = true;
+                    gf.params.push_back(vid);
+                }
+                const ir::IrBlockId ge = gf.new_block("entry");
+                // %sz = size_bytes
+                const ir::IrValueId g_sz = gf.new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr c{};
+                    c.op = ir::IrOp::CONST;
+                    c.type = ir::IrType::I64;
+                    c.dst = g_sz;
+                    c.imm = lay.size_bytes;
+                    c.source_line = cd->loc.line;
+                    gf.append(ge, std::move(c));
+                }
+                // %obj = call vex_gc_alloc_ptr(%sz)  (host_ptr al payload)
+                const ir::IrValueId g_obj = gf.new_value(ir::IrType::PTR);
+                gf.values[g_obj].is_host_ptr = true;
+                gf.values[g_obj].is_gc_object = true;
+                {
+                    ir::IrInstr ca{};
+                    ca.op = ir::IrOp::CALL;
+                    ca.type = ir::IrType::PTR;
+                    ca.dst = g_obj;
+                    ca.func_name = "vex_gc_alloc_ptr";
+                    ca.operands = {g_sz};
+                    ca.source_line = cd->loc.line;
+                    gf.append(ge, std::move(ca));
+                }
+                // vtable (si la clase es virtual): obj[0] = &vtable.
+                if (needs_vtable && vtable_idx != UINT64_MAX) {
+                    ir::IrValueId g_vt = gf.new_value(ir::IrType::PTR);
+                    gf.values[g_vt].is_host_ptr = true;
+                    {
+                        ir::IrInstr sa{};
+                        sa.op = ir::IrOp::STR_LIT_ADDR;
+                        sa.type = ir::IrType::PTR;
+                        sa.dst = g_vt;
+                        sa.imm = vtable_idx;
+                        sa.source_line = cd->loc.line;
+                        gf.append(ge, std::move(sa));
+                    }
+                    {
+                        ir::IrInstr st{};
+                        st.op = ir::IrOp::STORE;
+                        st.type = ir::IrType::I64;
+                        st.operands = {g_vt, g_obj};
+                        st.source_line = cd->loc.line;
+                        gf.append(ge, std::move(st));
+                    }
+                }
+                // ctor(obj, args...)
+                if (effective_ctor) {
+                    ir::IrInstr cc{};
+                    cc.op = ir::IrOp::CALL;
+                    cc.type = ir::IrType::VOID;
+                    cc.dst = ir::IR_NO_VALUE;
+                    cc.func_name = cd->name + "__ctor";
+                    cc.operands.reserve(nargs + 1);
+                    cc.operands.push_back(g_obj);
+                    for (size_t i = 0; i < nargs; ++i)
+                        cc.operands.push_back(gf.params[i]);
+                    cc.source_line = cd->loc.line;
+                    gf.append(ge, std::move(cc));
+                }
+                {
+                    ir::IrInstr r{};
+                    r.op = ir::IrOp::RET;
+                    r.type = ir::IrType::PTR;
+                    r.operands = {g_obj};
+                    r.source_line = cd->loc.line;
+                    gf.append(ge, std::move(r));
+                }
+                out.add_function(std::move(gf));
+            }
             continue; // ruta nativa lista; saltar el path runtime de esta clase
         }
 
@@ -20430,8 +23046,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             // raw_asm-elim: la variante SHARED (__new_<X>_shared) tambien se
             // emite estructurada usando IrOp::NEWOBJS (newobjs -> SharedHeap)
             // en lugar de NEWOBJ.  Asi NINGUN __new_<X> queda en RAW_ASM.
-            const bool emit_structured = true;
-            if (emit_structured) {
+            {
                 // v_slot = direccion del slot ClassInfo* cacheado
                 // (static_data).
                 const ir::IrValueId v_slot = fn.new_value(ir::IrType::PTR);
@@ -20522,112 +23137,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     ret.source_line = cd->loc.line;
                     fn.append(entry, std::move(ret));
                 }
-            } else {
-                // Construir RAW_ASM body.
-                std::ostringstream asm_;
-
-                // fix12 - optimizaciones bytecode-level del helper:
-                //  (1) Cargar cache en r1 directamente (skip mov r1, r12).
-                //  (2) push r0 directo (handle) en lugar de gchandle r12, r12.
-                //  (3) xchg cur0, r1 post-newobj para obtener host_ptr en r1
-                //      sin la secuencia xchg cur0, r12 + mov r1, r12.
-                // Para nargs=0 estas tres optimizaciones combinan a 3 instr
-                // menos. Para nargs>0 ahorran 1 instr (la shift derecha sigue
-                // necesaria).
-
-                if (nargs == 0) {
-                    // Caso comun y ultra-optimizado: ctor sin args (o sin ctor,
-                    // o ctor zero-init trivial saltado por fix12).
-                    // Cargar ClassInfo* directo en r1 (sin pasar por r12).
-                    asm_ << "mov r1, @Absolute(\"code.s_" << cache_idx
-                         << "\")\n";
-                    asm_ << "mov r1, [r1]\n"; // r1 = ClassInfo* (cacheado)
-                    asm_ << "mov r15, 1\n";
-                    asm_ << newobj_op
-                         << " r1\n"; // r0 = GcHandle, r1 = ClassInfo*
-                    if (effective_ctor) {
-                        // Preservar handle directamente con push r0 (sin
-                        // gchandle). newobj acaba de devolver r0=handle; el GC
-                        // del ctor body puede mover el objeto pero el handle es
-                        // estable.
-                        asm_ << "push r0\n";          // save handle pre-ctor
-                        asm_ << "gcderef cur0, r0\n"; // cur0 = host_ptr
-                        asm_ << "xchg cur0, r1\n"; // r1 = host_ptr (this); cur0
-                                                   // = ClassInfo*
-                        asm_ << "mov r15, 1\n";
-                        asm_ << "callvirt r1, " << ctor_vtable_idx << "\n";
-                        asm_ << "pop r12\n"; // r12 = handle (restored)
-                        asm_ << "gcderef cur0, r12\n"; // cur0 = host_ptr fresco
-                        asm_ << "xchg cur0, r12\n";    // r12 = host_ptr
-                        asm_ << "mov r0, r12\n";
-                    } else {
-                        // Sin ctor (real o saltado por zero-init opt):
-                        // convertir handle a host_ptr y devolverlo.  Los fields
-                        // ya estan a 0 por el memset de gc_heap.alloc.
-                        asm_ << "gcderef cur0, r0\n";
-                        asm_ << "xchg cur0, r12\n"; // r12 = host_ptr
-                        asm_ << "mov r0, r12\n";
-                    }
-                } else {
-                    // Caso con args: necesitamos salvar/restaurar args
-                    // alrededor del newobj (que clobbera r1) y hacer shift
-                    // derecha pre-callvirt. Salvar args en stack: push r1..r_N
-                    // (orden ascendente).
-                    for (size_t i = 0; i < nargs; ++i) {
-                        asm_ << "push r" << (i + 1) << "\n";
-                    }
-                    // Cargar cache en r1 (los args ya estan salvados).
-                    asm_ << "mov r1, @Absolute(\"code.s_" << cache_idx
-                         << "\")\n";
-                    asm_ << "mov r1, [r1]\n"; // r1 = ClassInfo*
-                    asm_ << "mov r15, 1\n";
-                    asm_ << newobj_op << " r1\n"; // r0 = handle
-                    // Convertir handle a host_ptr en r12 (que esta libre).
-                    asm_ << "gcderef cur0, r0\n";
-                    asm_ << "xchg cur0, r12\n"; // r12 = host_ptr
-                    // Restaurar args en orden inverso (LIFO): r_N, ..., r1.
-                    for (size_t i = nargs; i > 0; --i) {
-                        asm_ << "pop r" << i << "\n";
-                    }
-                    if (effective_ctor) {
-                        // Shift derecha: r_{N+1}=r_N, ..., r2=r1.
-                        for (size_t i = nargs + 1; i >= 2; --i) {
-                            asm_ << "mov r" << i << ", r" << (i - 1) << "\n";
-                        }
-                        asm_ << "mov r1, r12\n"; // this = host_ptr
-                        // fix - preservar handle a traves de callvirt
-                        // porque el ctor body puede hacer GC moves.
-                        asm_ << "gchandle r12, r12\n"; // r12 = handle
-                        asm_ << "push r12\n";
-                        asm_ << "mov r15, " << (nargs + 1) << "\n";
-                        asm_ << "callvirt r1, " << ctor_vtable_idx << "\n";
-                        asm_ << "pop r12\n";           // r12 = handle
-                        asm_ << "gcderef cur0, r12\n"; // cur0 = host_ptr fresco
-                        asm_ << "xchg cur0, r12\n";
-                    }
-                    asm_ << "mov r0, r12\n";
-                }
-
-                ir::IrInstr ra{};
-                ra.op = ir::IrOp::RAW_ASM;
-                ra.type = ir::IrType::PTR;
-                ra.dst = ir::IR_NO_VALUE;
-                ra.func_name = asm_.str();
-                ra.source_line = cd->loc.line;
-                fn.append(entry, std::move(ra));
-
-                // Cerrar con RET PTR (r0 ya tiene el handle).
-                ir::IrInstr ret{};
-                ret.op = ir::IrOp::RET;
-                ret.type = ir::IrType::PTR;
-                // No anyadimos operands; el emisor IR genera 'ret' simple y r0
-                // ya esta cargado por el RAW_ASM previo.  Para que el emisor no
-                // intente construir RET con un valor SSA, usamos VOID y luego
-                // dejamos un fall-through.  Mejor: ret sin operandos como void.
-                ret.type = ir::IrType::VOID;
-                ret.source_line = cd->loc.line;
-                fn.append(entry, std::move(ret));
-            } // fin else (path RAW_ASM legacy: ctor / nargs>0 / shared)
+            }
 
             propagate_is_gc_object_through_phis(fn);
 
@@ -20916,6 +23426,58 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             emit_def2(ir::IrOp::DEFFIELD, reload_cls(), b);
         }
 
+        // 3.6) INICIALIZAR los static fields con su valor por defecto.
+        // El DEFFIELD solo reserva el slot (zero).  Sin esto,
+        // `static i64 base = 40;` quedaba en 0 (bug general: el init del
+        // static nunca se aplicaba en VM/JIT).  Emitimos SETSTATIC con el
+        // literal constante.  (Solo constantes; un init no-constante de
+        // static es raro y queda como 0 -- mismo criterio que el AOT.)
+        for (const auto &fld : cd->fields) {
+            if (!fld.is_static || !fld.init) continue;
+            uint64_t s_off = 0;
+            bool s_ok = false;
+            for (const auto &lf : lay.static_fields)
+                if (lf.name == fld.name) {
+                    s_off = lf.offset;
+                    s_ok = true;
+                    break;
+                }
+            if (!s_ok) continue;
+            uint64_t cval = 0;
+            bool have = false;
+            const ast::Expr *ie = fld.init.get();
+            if (ie->kind == ast::NodeKind::IntLitExpr) {
+                cval = static_cast<const ast::IntLitExpr *>(ie)->value;
+                have = true;
+            } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                cval = static_cast<const ast::BoolLitExpr *>(ie)->value ? 1u : 0u;
+                have = true;
+            } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
+                have = true;
+            } else if (ie->kind == ast::NodeKind::UnaryExpr) {
+                auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                if (u->op == ast::UnOp::Neg && u->operand &&
+                    u->operand->kind == ast::NodeKind::IntLitExpr)
+                    cval = (uint64_t)(-(int64_t)static_cast<
+                               const ast::IntLitExpr *>(u->operand.get())
+                               ->value),
+                    have = true;
+            }
+            if (have) {
+                const ir::IrValueId vc = reload_cls();
+                const ir::IrValueId vv = emit_const64(cval);
+                ir::IrInstr ss{};
+                ss.op = ir::IrOp::SETSTATIC;
+                ss.type = ir::IrType::VOID;
+                ss.dst = ir::IR_NO_VALUE;
+                ss.operands = {vc, vv};
+                ss.imm = s_off;
+                ss.source_line = ln;
+                fn.append(cur, std::move(ss));
+            }
+        }
+
         // Las interfaces no emiten defmethod (metodos abstractos sin code).
         if (cd->is_interface) continue;
 
@@ -21073,6 +23635,16 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
             auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
             if (gv->is_const || !gv->init) continue;
+            // thread_local: la plantilla por-hilo ya esta en los bytes del slot
+            // .tdata (estatica); el cargador la copia por-hilo.  NO se
+            // inicializa via __module_init (eso escribiria una sola copia).
+            if (gv->is_thread_local) continue;
+            // Los arrays globales (T[N]) ya tienen su contenido grabado en los
+            // bytes del slot static_data (pre-pase, init-list constante o
+            // zero-init).  __module_init NO debe intentar lowerar su init-list
+            // (InitListExpr no es lowerable como expresion de valor) -> skip.
+            if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode)
+                continue;
             auto rit = runtime_global_slots_.find(gv->name);
             if (rit == runtime_global_slots_.end()) continue;
             const uint64_t slot_idx = rit->second;
@@ -21369,6 +23941,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     ins.type = ir::IrType::PTR;
     ins.dst = dst;
     ins.func_name = e->is_shared ? ("__new_" + helper_class_name + "_shared")
+                   : e->is_gc    ? ("__new_" + helper_class_name + "_gc")
                                  : ("__new_" + helper_class_name);
     ins.operands = std::move(arg_vals);
     ins.source_line = e->loc.line;
@@ -21466,6 +24039,39 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
                                  "' no encontrado en la clase '" +
                                  base_id->name + "'");
             return ir::IR_NO_VALUE;
+        }
+        // AOT (native_poo_): un campo estatico es almacenamiento por-clase,
+        // sin ClassRegistry.  Lo mapeamos a un GLOBAL plano (slot static_data
+        // unico por <Clase>_<campo>) -> STR_LIT_ADDR + LOAD, igual que un
+        // global runtime.  Evita findclass+getstatic (runtime, no bare).
+        if (native_poo_) {
+            const ir::IrType ir_t = ir_type_from_primitive(s_typ.kind);
+            const uint64_t slot = get_or_create_runtime_global_slot(
+                "__static_" + base_id->name + "_" + e->field_name, 8);
+            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_addr;
+                is.imm = slot;
+                is.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(is));
+            }
+            ir::IrValueId v_val = fn_->new_value(ir_t == ir::IrType::VOID
+                                                     ? ir::IrType::I64
+                                                     : ir_t);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = (ir_t == ir::IrType::VOID) ? ir::IrType::I64 : ir_t;
+                ld.dst = v_val;
+                ld.operands = {v_addr};
+                ld.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            return v_val;
         }
         // 1) Sprint 5: findclass via IR ops (ALLOCA + STORE + FINDCLASS).
         const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
@@ -21688,6 +24294,30 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         const ir::IrType field_ir = ir_type_from_primitive(s_typ.kind);
         const ir::IrValueId rhs_cast =
             cast_if_needed(rhs, fn_->values[rhs].type, field_ir, loc.line);
+        // AOT (native_poo_): campo estatico = global plano -> STR_LIT_ADDR +
+        // STORE (mismo slot que la lectura: <Clase>_<campo>).
+        if (native_poo_) {
+            const uint64_t slot = get_or_create_runtime_global_slot(
+                "__static_" + base_id->name + "_" + target->field_name, 8);
+            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_addr;
+                is.imm = slot;
+                is.source_line = loc.line;
+                fn_->append(current_block_, std::move(is));
+            }
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = field_ir;
+            st.operands = {rhs_cast, v_addr};
+            st.source_line = loc.line;
+            fn_->append(current_block_, std::move(st));
+            return rhs_cast;
+        }
         // 1) Sprint 5: findclass via IR ops.
         const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
         const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
@@ -22046,7 +24676,12 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // su SSA value viene directamente de un @c new ConcreteClass()
     // (caso comun: @c IServicio s = new ImplA();).
     // -----------------------------------------------------------------
-    if (lay.is_interface && !native_poo_) {
+    // Devirtualizacion cuando el tipo concreto del receptor se conoce
+    // estaticamente.  En native_poo (AOT) se aplica SIEMPRE (HOST_LEAF no
+    // soporta CALLVIRT y la vtable nativa sufre slot-mismatch interfaz/clase
+    // -> el CALL directo es la unica via correcta); en no-native solo para
+    // interfaces (el backend ya devirta los CALLVIRT de clase base).
+    if (lay.is_interface || native_poo_) {
         auto it_conc = ssa_concrete_class_.find(obj);
         if (it_conc != ssa_concrete_class_.end()) {
             const std::string &concrete_name = it_conc->second;
@@ -22056,6 +24691,34 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                 // Buscar metodo por nombre en la clase concreta.
                 for (const auto &cm : conc_lay.methods) {
                     if (cm.name == mtd->name && !cm.is_constructor) {
+                        if (native_poo_) {
+                            // AOT (HOST_LEAF no soporta CALLVIRT): el tipo
+                            // concreto se conoce -> CALL DIRECTO a
+                            // <concreto>__<metodo>.  Correcto y mas rapido,
+                            // y EVITA el bug de slot-mismatch entre el
+                            // vtable_index de la interfaz (area=slot0) y el
+                            // de la clase concreta (el ctor ocupa slot0 ->
+                            // area=slot1).  Sin esto el dispatch de interfaz
+                            // nativo leia el slot equivocado (resultado
+                            // silenciosamente erroneo).
+                            const std::string callee =
+                                (cm.defining_class.empty() ? concrete_name
+                                                           : cm.defining_class) +
+                                "__" + cm.name;
+                            ir::IrInstr ca{};
+                            ca.op = ir::IrOp::CALL;
+                            ca.type = ret_ir;
+                            ca.dst = dst;
+                            ca.func_name = callee;
+                            ca.operands.push_back(obj);
+                            if (method_call_sret)
+                                ca.operands.push_back(v_method_call_retbuf);
+                            for (auto av : arg_vals)
+                                ca.operands.push_back(av);
+                            ca.source_line = e->loc.line;
+                            fn_->append(current_block_, std::move(ca));
+                            return visible_dst;
+                        }
                         // CALLVIRT directo con el vtable_idx de la
                         // clase concreta -> backend devirtaliza.
                         ir::IrInstr cv{};
@@ -22731,6 +25394,18 @@ ir::IrValueId Lowering::emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
     ins.source_line = source_line;
     fn_->append(current_block_, std::move(ins));
     return v_str;
+}
+
+ir::IrValueId Lowering::emit_string_literal_repr(ir::IrValueId v_addr,
+                                                 ir::IrValueId v_len,
+                                                 int64_t known_len,
+                                                 uint32_t source_line) {
+    // native_poo (AOT): value-string nativo (PURE_NATIVE, SSO) en vez de
+    // STRMAKE (RUNTIME_DEPENDENT).  Resto de tiers: GcHandle via STRMAKE.
+    if (native_poo_)
+        return build_native_string_from_buffer(v_addr, v_len, source_line,
+                                               known_len);
+    return emit_strmake(v_addr, v_len, source_line);
 }
 
 // ---------------------------------------------------------------------
@@ -23510,13 +26185,14 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
 void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
                                             ir::IrValueId v_src_ptr,
                                             ir::IrValueId v_len,
-                                            uint32_t source_line) {
+                                            uint32_t source_line,
+                                            int64_t known_len) {
     // String Inc 5 (SSO): rellena el slot value-string ya alocado (24
-    // bytes) decidiendo SSO vs HEAP EN RUNTIME segun la longitud.  Si
-    // len <= 22 -> SSO (data inline, cero malloc); si len > 22 -> HEAP
-    // (RAW_ALLOC + MEMCPY + ptr@0/len@8/cap@16 + flag).  Branch real
-    // porque el malloc debe ser condicional (no alocar en el caso SSO).
-    // Cada rama finaliza COMPLETAMENTE el slot -> no necesita PHI.
+    // bytes) decidiendo SSO vs HEAP segun la longitud.  Si len <= 22 -> SSO
+    // (data inline, cero malloc); si len > 22 -> HEAP (RAW_ALLOC + MEMCPY +
+    // ptr@0/len@8/cap@16 + flag).  Cada rama finaliza COMPLETAMENTE el slot
+    // -> no necesita PHI.  Si @p known_len >= 0 (Tier B str_make) la decision
+    // es COMPILE-TIME -> se emite solo el cuerpo aplicable, SIN rama runtime.
     auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
         fn_->values[v].is_host_ptr = true;
@@ -23555,39 +26231,10 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         fn_->append(current_block_, std::move(st));
     };
 
-    // cond = (len > 22)  -> usar HEAP.
-    ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
-    ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
-    {
-        ir::IrInstr c{};
-        c.op = ir::IrOp::CMP_GT;
-        c.type = ir::IrType::I64;
-        c.dst = v_cond;
-        c.operands = {v_len, v_22};
-        c.source_line = source_line;
-        fn_->append(current_block_, std::move(c));
-    }
-
-    const ir::IrBlockId heap_bb = fn_->new_block("strfin_heap");
-    const ir::IrBlockId sso_bb = fn_->new_block("strfin_sso");
-    const ir::IrBlockId merge_bb = fn_->new_block("strfin_merge");
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(v_cond);
-        br.target_block = heap_bb;
-        br.false_block = sso_bb;
-        br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(heap_bb);
-        fn_->blocks[current_block_].succs.push_back(sso_bb);
-        fn_->blocks[heap_bb].preds.push_back(current_block_);
-        fn_->blocks[sso_bb].preds.push_back(current_block_);
-    }
-
-    // --- Rama HEAP: len > 22 ---
-    current_block_ = heap_bb;
-    {
+    // Cuerpos SSO/HEAP como lambdas (emiten en current_block_, SIN el BR final
+    // -> el caller decide si hay rama o no).  Reusados por la rama runtime y
+    // por el fast-path const (Tier B).
+    auto fill_heap = [&]() {
         // cap = len + 1.
         ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
         ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
@@ -23622,18 +26269,8 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         store_at(ptr_add(v_slot, emit_const(ir::IrType::I64, 8, source_line)),
                  v_len, ir::IrType::I64);
         emit_str_meta_heap(v_slot, v_cap, source_line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = merge_bb;
-        br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
-    }
-
-    // --- Rama SSO: len <= 22 ---
-    current_block_ = sso_bb;
-    {
+    };
+    auto fill_sso = [&]() {
         // MEMCPY slot <- src (len bytes; data inline en bytes[0..len)).
         // v_slot es PTR al inicio del struct; lo usamos como dst directo.
         emit_memcpy(v_slot, v_src_ptr, v_len);
@@ -23642,6 +26279,45 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // qword2 = (len << 56): byte[23]=len (SSO).
         emit_str_meta_sso(v_slot, v_len, source_line);
+    };
+
+    // Tier B (str_make con len constante): decision compile-time, SIN rama.
+    if (known_len >= 0) {
+        if (known_len <= 22) fill_sso();
+        else                 fill_heap();
+        return;
+    }
+
+    // Tier C (len runtime): rama CMP_GT(len, 22) -> heap_bb / sso_bb -> merge.
+    ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
+    ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_GT;
+        c.type = ir::IrType::I64;
+        c.dst = v_cond;
+        c.operands = {v_len, v_22};
+        c.source_line = source_line;
+        fn_->append(current_block_, std::move(c));
+    }
+
+    const ir::IrBlockId heap_bb = fn_->new_block("strfin_heap");
+    const ir::IrBlockId sso_bb = fn_->new_block("strfin_sso");
+    const ir::IrBlockId merge_bb = fn_->new_block("strfin_merge");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands.push_back(v_cond);
+        br.target_block = heap_bb;
+        br.false_block = sso_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(heap_bb);
+        fn_->blocks[current_block_].succs.push_back(sso_bb);
+        fn_->blocks[heap_bb].preds.push_back(current_block_);
+        fn_->blocks[sso_bb].preds.push_back(current_block_);
+    }
+    auto close_to_merge = [&]() {
         ir::IrInstr br{};
         br.op = ir::IrOp::BR;
         br.target_block = merge_bb;
@@ -23649,9 +26325,33 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         fn_->append(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
-    }
-
+    };
+    current_block_ = heap_bb; fill_heap(); close_to_merge();
+    current_block_ = sso_bb;  fill_sso();  close_to_merge();
     current_block_ = merge_bb;
+}
+
+ir::IrValueId Lowering::build_native_string_from_buffer(ir::IrValueId v_ptr,
+                                                        ir::IrValueId v_len,
+                                                        uint32_t source_line,
+                                                        int64_t known_len) {
+    // str_make: COPIA known/runtime len bytes de v_ptr a un value-string
+    // PROPIO (sin GC, RAII).  Slot 24B + finalize (SSO/HEAP; copia dispatched).
+    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_slot;
+        al.imm = 24;
+        al.host_alloca = native_poo_;
+        al.source_line = source_line;
+        fn_->append(current_block_, std::move(al));
+    }
+    emit_zero_native_str_slot(v_slot, source_line);
+    build_native_string_finalize(v_slot, v_ptr, v_len, source_line, known_len);
+    return v_slot;
 }
 
 void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
@@ -24951,6 +27651,335 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
     current_block_ = saved_block;
     block_terminated_ = saved_terminated;
     return fp_slot;
+}
+
+// ---------------------------------------------------------------------
+// AUTO multiversion (--float-isa auto): despacha el MAIN por cpuid.
+//
+// Problema: main es el entry; el _start stub lo llama por NOMBRE.  Si lo
+// multiversionaramos directamente (main$sse2/avx2/avx512) nadie correria el
+// init (cpuid) antes de elegir la variante.  Fix: reducir "multiversionar
+// main" a "despachar un helper":
+//   1. El main del usuario se RENOMBRA a __vex_main_body (un helper VEC
+//      normal; el driver lo compila 3x: $sse2/$avx2/$avx512).
+//   2. Se sintetiza un main fino = { <inits> ; r = CALLIND [__vex_main_body$fp]
+//      (args...) ; ret r }.  Los inits (cpu_init + auto_init) los prepone
+//      run() en su entry, asi corren ANTES del CALLIND que lee el fp.
+//   3. __vex_auto_init() elige la variante por cpuid (AVX512F bit7 > AVX2 bit4
+//      > SSE2) y la guarda en __vex_main_body$fp.
+// El fp se referencia por INDICE (STR_LIT_ADDR), no por nombre -> no hace
+// falta trampolin de bytes crudos ni reloc DATA_REL32: todo es IR estandar
+// (CALLIND + LABEL_ADDR + LOAD/STORE), PURE_NATIVE.
+void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
+    if (!native_poo_ || !aot_auto_vec_) return; // solo AOT --float-isa auto
+    if (auto_dispatch_emitted_) return;         // idempotente
+
+    // Detector de ops VEC_* (idem al driver): solo despachamos lo vectorizado.
+    auto fn_has_vec = [](const ir::IrFunction &f) -> bool {
+        for (const auto &b : f.blocks)
+            for (const auto &in : b.instrs) {
+                const auto op = in.op;
+                if (op == ir::IrOp::VEC_BINOP || op == ir::IrOp::VEC_UNOP ||
+                    op == ir::IrOp::VEC_FMA || op == ir::IrOp::VEC_BINOP_S ||
+                    op == ir::IrOp::VEC_BCAST || op == ir::IrOp::VEC_ACC_ZERO ||
+                    op == ir::IrOp::VEC_ACC_ADD || op == ir::IrOp::VEC_ACC_FMA ||
+                    op == ir::IrOp::VEC_ACC_STORE ||
+                    op == ir::IrOp::VEC_ACC_COMBINE)
+                    return true;
+            }
+        return false;
+    };
+
+    // Recolectar TODAS las funciones con ops VEC (main + helpers).  Capturar
+    // firma + RENOMBRAR en sitio ANTES de cualquier add_function (que realocaria
+    // out_module.functions e invalidaria indices/punteros).  El renombrado NO
+    // anñade funciones, asi que el primer bucle es seguro.
+    struct PInfo {
+        ir::IrType ty;
+        bool host;
+    };
+    struct MvEntry {
+        std::string wrapper_name; // nombre que ven los callers (el original)
+        std::string body_name;    // cuerpo multiversionado (el driver lo compila 3x)
+        ir::IrType ret;
+        std::vector<PInfo> params;
+        uint64_t fp_slot = 0; // se rellena en la fase de wrappers
+    };
+    std::vector<MvEntry> mv;
+    for (size_t i = 0; i < out_module.functions.size(); ++i) {
+        ir::IrFunction &f = out_module.functions[i];
+        if (!fn_has_vec(f)) continue;
+        MvEntry e;
+        e.wrapper_name = f.name;
+        // main mantiene el nombre historico __vex_main_body; los helpers usan
+        // <nombre>$mv.  El driver suffija $sse2/$avx2/$avx512 a estos nombres.
+        e.body_name = (f.name == "main") ? std::string("__vex_main_body")
+                                         : f.name + "$mv";
+        e.ret = f.ret_type;
+        for (ir::IrValueId pid : f.params)
+            e.params.push_back({f.values[pid].type, f.values[pid].is_host_ptr});
+        f.name = e.body_name; // renombrado en sitio (sin add_function)
+        mv.push_back(std::move(e));
+    }
+    if (mv.empty()) return; // ninguna funcion vectorizada -> nada que despachar
+
+    auto_dispatch_emitted_ = true;
+    cpu_dispatch_used_ = true;
+    // Garantizar el global de features + __vex_cpu_init (puede anñadir una
+    // funcion -> realoc, pero ya no tenemos referencias vivas a las funciones).
+    (void)ensure_cpu_features_global();
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+    const uint32_t ln = 0;
+
+    // Por cada funcion VEC: slot fp <body>$fp + wrapper sintetico (nombre
+    // original) que hace CALLIND a la variante elegida.  Los callers siguen
+    // llamando por nombre -> caen en el wrapper -> despacho transparente.
+    for (auto &e : mv) {
+        {
+            std::vector<uint8_t> zero(8, 0);
+            e.fp_slot = static_cast<uint64_t>(
+                out_module.static_data.push_back(std::move(zero)));
+            auto &m = out_module.static_data.meta_at(e.fp_slot);
+            m.section_name = ".data";
+            m.flags |= ir::IrModule::SD_FLAG_NON_DEDUP |
+                       ir::IrModule::SD_FLAG_FORCE_EMIT;
+            m.shared_key = e.body_name + "$fp";
+        }
+        ir::IrFunction w;
+        w.name = e.wrapper_name;
+        w.ret_type = e.ret;
+        std::vector<ir::IrValueId> sparams;
+        for (const auto &pi : e.params) {
+            const ir::IrValueId pv = w.new_value(pi.ty);
+            w.values[pv].is_param = true;
+            w.values[pv].is_host_ptr = pi.host;
+            w.params.push_back(pv);
+            sparams.push_back(pv);
+        }
+        const ir::IrBlockId be = w.new_block("entry");
+        fn_ = &w;
+        current_block_ = be;
+        block_terminated_ = false;
+
+        // v_fpaddr = &<body>$fp ; v_fp = LOAD i64 [v_fpaddr].
+        ir::IrValueId v_fpaddr = w.new_value(ir::IrType::PTR);
+        w.values[v_fpaddr].is_host_ptr = true;
+        {
+            ir::IrInstr la{};
+            la.op = ir::IrOp::STR_LIT_ADDR;
+            la.type = ir::IrType::PTR;
+            la.dst = v_fpaddr;
+            la.imm = e.fp_slot;
+            la.source_line = ln;
+            w.append(current_block_, std::move(la));
+        }
+        ir::IrValueId v_fp = w.new_value(ir::IrType::PTR);
+        w.values[v_fp].is_host_ptr = true;
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_fp;
+            ld.operands = {v_fpaddr};
+            ld.source_line = ln;
+            w.append(current_block_, std::move(ld));
+        }
+        // CALLIND v_fp(args...) -> r.
+        ir::IrValueId v_ret = ir::IR_NO_VALUE;
+        {
+            ir::IrInstr ci{};
+            ci.op = ir::IrOp::CALLIND;
+            ci.type = e.ret;
+            ci.func_ptr = v_fp;
+            ci.operands = sparams;
+            if (e.ret != ir::IrType::VOID) {
+                v_ret = w.new_value(e.ret);
+                ci.dst = v_ret;
+            } else {
+                ci.dst = ir::IR_NO_VALUE;
+            }
+            ci.source_line = ln;
+            w.append(current_block_, std::move(ci));
+        }
+        {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = e.ret;
+            ret.dst = ir::IR_NO_VALUE;
+            if (e.ret != ir::IrType::VOID) ret.operands.push_back(v_ret);
+            ret.source_line = ln;
+            w.append(current_block_, std::move(ret));
+        }
+        block_terminated_ = true;
+        out_module.add_function(std::move(w));
+    }
+
+    // __vex_auto_init(): un solo cpuid -> tres ramas (AVX512F bit7 > AVX2 bit4 >
+    // SSE2); cada rama setea el fp de TODAS las funciones VEC a su variante del
+    // ancho elegido.  (La decision de ISA es global a la CPU -> una sola vez.)
+    {
+        ir::IrFunction hf;
+        hf.name = "__vex_auto_init";
+        hf.ret_type = ir::IrType::VOID;
+        const ir::IrBlockId e = hf.new_block("entry");
+        fn_ = &hf;
+        current_block_ = e;
+        block_terminated_ = false;
+
+        // STORE &<variante> al fp dado, en el bloque actual (sin terminador).
+        auto emit_store_fp = [&](const std::string &variant, uint64_t fp_slot) {
+            ir::IrValueId v_addr = emit_label_addr(variant, ln);
+            ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_gaddr].is_host_ptr = true;
+            {
+                ir::IrInstr la{};
+                la.op = ir::IrOp::STR_LIT_ADDR;
+                la.type = ir::IrType::PTR;
+                la.dst = v_gaddr;
+                la.imm = fp_slot;
+                la.source_line = ln;
+                fn_->append(current_block_, std::move(la));
+            }
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_addr, v_gaddr};
+            st.source_line = ln;
+            fn_->append(current_block_, std::move(st));
+        };
+
+        // feat = LOAD i64 [__vex_cpu_features].
+        const uint64_t feat_slot = ensure_cpu_features_global();
+        ir::IrValueId v_faddr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_faddr].is_host_ptr = true;
+        {
+            ir::IrInstr la{};
+            la.op = ir::IrOp::STR_LIT_ADDR;
+            la.type = ir::IrType::PTR;
+            la.dst = v_faddr;
+            la.imm = feat_slot;
+            la.source_line = ln;
+            fn_->append(current_block_, std::move(la));
+        }
+        ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_feat;
+            ld.operands = {v_faddr};
+            ld.source_line = ln;
+            fn_->append(current_block_, std::move(ld));
+        }
+        // bit_set(n): has = ((feat >> n) & 1) != 0.
+        auto bit_set = [&](int n) -> ir::IrValueId {
+            ir::IrValueId v_sh = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrValueId vn = emit_const(ir::IrType::I64, (uint64_t)n, ln);
+                ir::IrInstr sh{};
+                sh.op = ir::IrOp::SHR;
+                sh.type = ir::IrType::I64;
+                sh.dst = v_sh;
+                sh.operands = {v_feat, vn};
+                sh.source_line = ln;
+                fn_->append(current_block_, std::move(sh));
+            }
+            ir::IrValueId v_bit = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrValueId v1 = emit_const(ir::IrType::I64, 1, ln);
+                ir::IrInstr an{};
+                an.op = ir::IrOp::AND;
+                an.type = ir::IrType::I64;
+                an.dst = v_bit;
+                an.operands = {v_sh, v1};
+                an.source_line = ln;
+                fn_->append(current_block_, std::move(an));
+            }
+            ir::IrValueId v_has = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrValueId v0 = emit_const(ir::IrType::I64, 0, ln);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_NE;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = v_has;
+                cm.operands = {v_bit, v0};
+                cm.source_line = ln;
+                fn_->append(current_block_, std::move(cm));
+            }
+            return v_has;
+        };
+
+        const ir::IrBlockId bb_512 = fn_->new_block("pick512");
+        const ir::IrBlockId bb_not512 = fn_->new_block("not512");
+        const ir::IrBlockId bb_2 = fn_->new_block("pick2");
+        const ir::IrBlockId bb_sse = fn_->new_block("picksse");
+        const ir::IrBlockId bb_join = fn_->new_block("join");
+
+        auto branch = [&](ir::IrValueId cond, ir::IrBlockId t,
+                          ir::IrBlockId f) {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.type = ir::IrType::VOID;
+            br.dst = ir::IR_NO_VALUE;
+            br.operands = {cond};
+            br.target_block = t;
+            br.false_block = f;
+            br.source_line = ln;
+            fn_->append(current_block_, std::move(br));
+            fn_->blocks[current_block_].succs.push_back(t);
+            fn_->blocks[current_block_].succs.push_back(f);
+            fn_->blocks[t].preds.push_back(current_block_);
+            fn_->blocks[f].preds.push_back(current_block_);
+        };
+        // En el bloque actual: setea el fp de TODAS las entries a la variante
+        // del sufijo dado + BR a join.
+        auto store_all_and_join = [&](const char *suffix) {
+            for (const auto &en : mv)
+                emit_store_fp(en.body_name + suffix, en.fp_slot);
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.type = ir::IrType::VOID;
+            br.dst = ir::IR_NO_VALUE;
+            br.target_block = bb_join;
+            br.source_line = ln;
+            fn_->append(current_block_, std::move(br));
+            fn_->blocks[current_block_].succs.push_back(bb_join);
+            fn_->blocks[bb_join].preds.push_back(current_block_);
+        };
+
+        // entry: has512 = bit7 ; br has512 -> pick512 : not512.
+        ir::IrValueId v512 = bit_set(7);
+        branch(v512, bb_512, bb_not512);
+        current_block_ = bb_512;
+        store_all_and_join("$avx512");
+        current_block_ = bb_not512;
+        ir::IrValueId v2 = bit_set(4);
+        branch(v2, bb_2, bb_sse);
+        current_block_ = bb_2;
+        store_all_and_join("$avx2");
+        current_block_ = bb_sse;
+        store_all_and_join("$sse2");
+        // join: RET void.
+        current_block_ = bb_join;
+        {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ir::IrType::VOID;
+            ret.dst = ir::IR_NO_VALUE;
+            ret.source_line = ln;
+            fn_->append(current_block_, std::move(ret));
+        }
+        block_terminated_ = true;
+        out_module.add_function(std::move(hf));
+    }
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
 }
 
 void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
@@ -26254,6 +29283,539 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
     return v;
 }
 
+// -------------------------------------------------------------------------
+// Vex Embed Inc 6 (encoding UTF-8): conteo de code-points + conversion a
+// UTF-16 (.length() / .wstr()).  Ambos como helpers IR aparte (loop) ->
+// fuera del const-fold y del inliner (prefijo __vex_str), self-contained
+// (solo malloc en utf16, overridable) -> funciona freestanding.
+// -------------------------------------------------------------------------
+std::string Lowering::ensure_str_cplen_helper() {
+    // i64 __vex_str_cplen(u8* p, i64 byte_len):
+    //   count = 0;
+    //   for (i = 0; i < byte_len; i++)
+    //     if ((p[i] & 0xC0) != 0x80) count++;   // no es byte de continuacion
+    //   ret count;
+    // Para ASCII puro coincide con byte_len (cada byte < 0x80).
+    const std::string name = "__vex_str_cplen";
+    if (str_cplen_helper_emitted_) return name;
+    str_cplen_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_p = hf.new_value(ir::IrType::PTR, "%p");
+    hf.values[p_p].is_param = true;
+    hf.values[p_p].is_host_ptr = true;
+    hf.params.push_back(p_p);
+    const ir::IrValueId p_blen = hf.new_value(ir::IrType::I64, "%blen");
+    hf.values[p_blen].is_param = true;
+    hf.params.push_back(p_blen);
+    const ir::IrBlockId entry = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = entry;
+    block_terminated_ = false;
+    const uint32_t ln = 0;
+
+    // Toolkit local (mismo patron que ensure_strcmp_helper).
+    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v;
+        ad.operands = {base, off};
+        ad.source_line = ln;
+        fn_->append(current_block_, std::move(ad));
+        return v;
+    };
+    auto new_slot = [&]() -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v;
+        al.imm = 8;
+        al.host_alloca = true;
+        al.source_line = ln;
+        fn_->append(current_block_, std::move(al));
+        return v;
+    };
+    auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v;
+        ld.operands = {addr};
+        ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        return v;
+    };
+    auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {val, addr};
+        st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    };
+    auto load_byte = [&](ir::IrValueId addr) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U8;
+        ld.dst = v;
+        ld.operands = {addr};
+        ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        return v;
+    };
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::I64;
+        in.dst = v;
+        in.operands = {a, b};
+        in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return v;
+    };
+    auto br = [&](ir::IrBlockId target) {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.target_block = target;
+        b.source_line = ln;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(target);
+        fn_->blocks[target].preds.push_back(current_block_);
+    };
+    auto br_cond = [&](ir::IrValueId cond, ir::IrBlockId t_true,
+                       ir::IrBlockId t_false) {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR_COND;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.operands = {cond};
+        b.target_block = t_true;
+        b.false_block = t_false;
+        b.source_line = ln;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(t_true);
+        fn_->blocks[current_block_].succs.push_back(t_false);
+        fn_->blocks[t_true].preds.push_back(current_block_);
+        fn_->blocks[t_false].preds.push_back(current_block_);
+    };
+
+    ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, ln);
+    ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, ln);
+    ir::IrValueId v_c0 = emit_const(ir::IrType::I64, 0xC0, ln);
+    ir::IrValueId v_80 = emit_const(ir::IrType::I64, 0x80, ln);
+
+    // i = 0 ; count = 0.
+    ir::IrValueId s_i = new_slot();
+    ir::IrValueId s_cnt = new_slot();
+    store_i64(s_i, v_zero);
+    store_i64(s_cnt, v_zero);
+
+    // header: while (i < byte_len)
+    ir::IrBlockId bb_hdr = fn_->new_block();
+    br(bb_hdr);
+    current_block_ = bb_hdr;
+    ir::IrValueId v_i = load_i64(s_i);
+    ir::IrValueId i_lt = bin(ir::IrOp::CMP_LT, v_i, p_blen);
+    ir::IrBlockId bb_body = fn_->new_block();
+    ir::IrBlockId bb_exit = fn_->new_block();
+    br_cond(i_lt, bb_body, bb_exit);
+
+    // body: b = p[i]; if ((b & 0xC0) != 0x80) count++; i++.
+    current_block_ = bb_body;
+    ir::IrValueId v_i2 = load_i64(s_i);
+    ir::IrValueId v_at = ptr_add(p_p, v_i2);
+    ir::IrValueId v_b = load_byte(v_at);
+    ir::IrValueId v_hi = bin(ir::IrOp::AND, v_b, v_c0);
+    ir::IrValueId is_cont = bin(ir::IrOp::CMP_EQ, v_hi, v_80);
+    ir::IrBlockId bb_inc = fn_->new_block(); // no-continuacion -> count++
+    ir::IrBlockId bb_adv = fn_->new_block(); // avanza i
+    // si is_cont (==0x80) saltar el count++; si no, contarlo.
+    br_cond(is_cont, bb_adv, bb_inc);
+    current_block_ = bb_inc;
+    {
+        ir::IrValueId v_c = load_i64(s_cnt);
+        store_i64(s_cnt, bin(ir::IrOp::ADD, v_c, v_one));
+    }
+    br(bb_adv);
+    current_block_ = bb_adv;
+    {
+        ir::IrValueId v_i3 = load_i64(s_i);
+        store_i64(s_i, bin(ir::IrOp::ADD, v_i3, v_one));
+    }
+    br(bb_hdr);
+
+    // exit: ret count.
+    current_block_ = bb_exit;
+    {
+        ir::IrValueId v_cnt = load_i64(s_cnt);
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {v_cnt};
+        rt.source_line = ln;
+        fn_->append(current_block_, std::move(rt));
+    }
+    block_terminated_ = true;
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
+ir::IrValueId Lowering::emit_native_str_cplen(ir::IrValueId v_ptr,
+                                              ir::IrValueId v_blen,
+                                              uint32_t source_line) {
+    const std::string name = ensure_str_cplen_helper();
+    ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ca{};
+    ca.op = ir::IrOp::CALL;
+    ca.type = ir::IrType::I64;
+    ca.dst = v;
+    ca.func_name = name;
+    ca.operands = {v_ptr, v_blen};
+    ca.source_line = source_line;
+    fn_->append(current_block_, std::move(ca));
+    return v;
+}
+
+std::string Lowering::ensure_str_to_utf16_helper() {
+    // u16* __vex_str_to_utf16(u8* p, i64 byte_len):
+    //   out = malloc((byte_len + 1) * 2)   // cota superior: ASCII = 1 unit/byte
+    //   i = 0; ob = 0;                       // i=byte idx, ob=output byte off
+    //   while (i < byte_len):
+    //     b0 = p[i]
+    //     if      b0 < 0x80: cp = b0;                                     i+=1
+    //     elif    b0 < 0xE0: cp = ((b0&0x1F)<<6)|c(1);                    i+=2
+    //     elif    b0 < 0xF0: cp = ((b0&0x0F)<<12)|(c(1)<<6)|c(2);         i+=3
+    //     else:              cp = ((b0&0x07)<<18)|(c(1)<<12)|(c(2)<<6)|c(3); i+=4
+    //       (c(k) = p[i+k] & 0x3F)
+    //     if cp < 0x10000: out[ob]=cp; ob+=2
+    //     else: cp-=0x10000; out[ob]=0xD800|(cp>>10); out[ob+2]=0xDC00|(cp&0x3FF); ob+=4
+    //   out[ob] = 0   // NUL u16
+    //   ret out
+    // Asume UTF-8 bien formado (el value-string se construye de literales/
+    // concat validos).  El CALLER es dueno del buffer (transitorio para FFI).
+    const std::string name = "__vex_str_to_utf16";
+    if (str_to_utf16_helper_emitted_) return name;
+    str_to_utf16_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::PTR;
+    const ir::IrValueId p_p = hf.new_value(ir::IrType::PTR, "%p");
+    hf.values[p_p].is_param = true;
+    hf.values[p_p].is_host_ptr = true;
+    hf.params.push_back(p_p);
+    const ir::IrValueId p_blen = hf.new_value(ir::IrType::I64, "%blen");
+    hf.values[p_blen].is_param = true;
+    hf.params.push_back(p_blen);
+    const ir::IrBlockId entry = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = entry;
+    block_terminated_ = false;
+    const uint32_t ln = 0;
+
+    // Toolkit local.
+    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v;
+        ad.operands = {base, off};
+        ad.source_line = ln;
+        fn_->append(current_block_, std::move(ad));
+        return v;
+    };
+    auto new_slot = [&]() -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v;
+        al.imm = 8;
+        al.host_alloca = true;
+        al.source_line = ln;
+        fn_->append(current_block_, std::move(al));
+        return v;
+    };
+    auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v;
+        ld.operands = {addr};
+        ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        return v;
+    };
+    auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {val, addr};
+        st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    };
+    auto load_byte_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId a = ptr_add(base, off);
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U8;
+        ld.dst = v;
+        ld.operands = {a};
+        ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        return v;
+    };
+    auto store_u16 = [&](ir::IrValueId addr, ir::IrValueId val) {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I16;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {val, addr};
+        st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    };
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::I64;
+        in.dst = v;
+        in.operands = {a, b};
+        in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return v;
+    };
+    auto cst = [&](uint64_t k) -> ir::IrValueId {
+        return emit_const(ir::IrType::I64, k, ln);
+    };
+    auto br = [&](ir::IrBlockId target) {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.target_block = target;
+        b.source_line = ln;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(target);
+        fn_->blocks[target].preds.push_back(current_block_);
+    };
+    auto br_cond = [&](ir::IrValueId cond, ir::IrBlockId t_true,
+                       ir::IrBlockId t_false) {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR_COND;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.operands = {cond};
+        b.target_block = t_true;
+        b.false_block = t_false;
+        b.source_line = ln;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(t_true);
+        fn_->blocks[current_block_].succs.push_back(t_false);
+        fn_->blocks[t_true].preds.push_back(current_block_);
+        fn_->blocks[t_false].preds.push_back(current_block_);
+    };
+
+    // out = malloc((byte_len + 1) * 2).
+    ir::IrValueId v_units = bin(ir::IrOp::ADD, p_blen, cst(1));
+    ir::IrValueId v_bytes = bin(ir::IrOp::SHL, v_units, cst(1)); // *2
+    ir::IrValueId v_out = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_out].is_host_ptr = true;
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::RAW_ALLOC;
+        al.type = ir::IrType::PTR;
+        al.dst = v_out;
+        al.operands = {v_bytes};
+        al.source_line = ln;
+        fn_->append(current_block_, std::move(al));
+    }
+
+    // i = 0 ; ob = 0 ; cp slot.
+    ir::IrValueId s_i = new_slot();
+    ir::IrValueId s_ob = new_slot();
+    ir::IrValueId s_cp = new_slot();
+    store_i64(s_i, cst(0));
+    store_i64(s_ob, cst(0));
+
+    // header: while (i < byte_len).
+    ir::IrBlockId bb_hdr = fn_->new_block();
+    br(bb_hdr);
+    current_block_ = bb_hdr;
+    ir::IrValueId v_i = load_i64(s_i);
+    ir::IrValueId i_lt = bin(ir::IrOp::CMP_LT, v_i, p_blen);
+    ir::IrBlockId bb_dec = fn_->new_block();
+    ir::IrBlockId bb_end = fn_->new_block();
+    br_cond(i_lt, bb_dec, bb_end);
+
+    // bb_dec: b0 = p[i] ; 4-way segun rango.
+    current_block_ = bb_dec;
+    ir::IrValueId v_i0 = load_i64(s_i);
+    ir::IrValueId v_b0 = load_byte_at(p_p, v_i0);
+    ir::IrBlockId bb_emit = fn_->new_block(); // tras decodificar cp + avanzar i
+    auto cont = [&](uint64_t k) -> ir::IrValueId {
+        // (p[i + k] & 0x3F)
+        ir::IrValueId off = bin(ir::IrOp::ADD, load_i64(s_i), cst(k));
+        return bin(ir::IrOp::AND, load_byte_at(p_p, off), cst(0x3F));
+    };
+    // if b0 < 0x80
+    {
+        ir::IrValueId lt80 = bin(ir::IrOp::CMP_LT, v_b0, cst(0x80));
+        ir::IrBlockId bb_1 = fn_->new_block();
+        ir::IrBlockId bb_n1 = fn_->new_block();
+        br_cond(lt80, bb_1, bb_n1);
+        // 1 byte.
+        current_block_ = bb_1;
+        store_i64(s_cp, v_b0);
+        store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(1)));
+        br(bb_emit);
+        // else.
+        current_block_ = bb_n1;
+        ir::IrValueId ltE0 = bin(ir::IrOp::CMP_LT, v_b0, cst(0xE0));
+        ir::IrBlockId bb_2 = fn_->new_block();
+        ir::IrBlockId bb_n2 = fn_->new_block();
+        br_cond(ltE0, bb_2, bb_n2);
+        // 2 bytes: cp = ((b0&0x1F)<<6) | c(1).
+        current_block_ = bb_2;
+        {
+            ir::IrValueId hi = bin(ir::IrOp::SHL, bin(ir::IrOp::AND, v_b0, cst(0x1F)), cst(6));
+            store_i64(s_cp, bin(ir::IrOp::OR, hi, cont(1)));
+            store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(2)));
+        }
+        br(bb_emit);
+        // else.
+        current_block_ = bb_n2;
+        ir::IrValueId ltF0 = bin(ir::IrOp::CMP_LT, v_b0, cst(0xF0));
+        ir::IrBlockId bb_3 = fn_->new_block();
+        ir::IrBlockId bb_4 = fn_->new_block();
+        br_cond(ltF0, bb_3, bb_4);
+        // 3 bytes: cp = ((b0&0x0F)<<12) | (c(1)<<6) | c(2).
+        current_block_ = bb_3;
+        {
+            ir::IrValueId hi = bin(ir::IrOp::SHL, bin(ir::IrOp::AND, v_b0, cst(0x0F)), cst(12));
+            ir::IrValueId mid = bin(ir::IrOp::SHL, cont(1), cst(6));
+            store_i64(s_cp, bin(ir::IrOp::OR, bin(ir::IrOp::OR, hi, mid), cont(2)));
+            store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(3)));
+        }
+        br(bb_emit);
+        // 4 bytes: cp = ((b0&0x07)<<18)|(c(1)<<12)|(c(2)<<6)|c(3).
+        current_block_ = bb_4;
+        {
+            ir::IrValueId hi = bin(ir::IrOp::SHL, bin(ir::IrOp::AND, v_b0, cst(0x07)), cst(18));
+            ir::IrValueId m1 = bin(ir::IrOp::SHL, cont(1), cst(12));
+            ir::IrValueId m2 = bin(ir::IrOp::SHL, cont(2), cst(6));
+            ir::IrValueId acc = bin(ir::IrOp::OR, bin(ir::IrOp::OR, hi, m1),
+                                    bin(ir::IrOp::OR, m2, cont(3)));
+            store_i64(s_cp, acc);
+            store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(4)));
+        }
+        br(bb_emit);
+    }
+
+    // bb_emit: codificar cp a UTF-16 (BMP o par suplente) + ob += unidades.
+    current_block_ = bb_emit;
+    ir::IrValueId v_cp = load_i64(s_cp);
+    ir::IrValueId is_bmp = bin(ir::IrOp::CMP_LT, v_cp, cst(0x10000));
+    ir::IrBlockId bb_bmp = fn_->new_block();
+    ir::IrBlockId bb_ast = fn_->new_block();
+    br_cond(is_bmp, bb_bmp, bb_ast);
+    // BMP: out[ob] = cp ; ob += 2.
+    current_block_ = bb_bmp;
+    {
+        ir::IrValueId v_ob = load_i64(s_ob);
+        store_u16(ptr_add(v_out, v_ob), v_cp);
+        store_i64(s_ob, bin(ir::IrOp::ADD, v_ob, cst(2)));
+    }
+    br(bb_hdr);
+    // Astral: cp2 = cp - 0x10000 ; hi/lo surrogates.
+    current_block_ = bb_ast;
+    {
+        ir::IrValueId cp2 = bin(ir::IrOp::SUB, v_cp, cst(0x10000));
+        ir::IrValueId hi = bin(ir::IrOp::OR, cst(0xD800),
+                               bin(ir::IrOp::SHR, cp2, cst(10)));
+        ir::IrValueId lo = bin(ir::IrOp::OR, cst(0xDC00),
+                               bin(ir::IrOp::AND, cp2, cst(0x3FF)));
+        ir::IrValueId v_ob = load_i64(s_ob);
+        store_u16(ptr_add(v_out, v_ob), hi);
+        ir::IrValueId v_ob2 = bin(ir::IrOp::ADD, v_ob, cst(2));
+        store_u16(ptr_add(v_out, v_ob2), lo);
+        store_i64(s_ob, bin(ir::IrOp::ADD, v_ob, cst(4)));
+    }
+    br(bb_hdr);
+
+    // bb_end: out[ob] = 0 (NUL u16) ; ret out.
+    current_block_ = bb_end;
+    {
+        ir::IrValueId v_ob = load_i64(s_ob);
+        store_u16(ptr_add(v_out, v_ob), cst(0));
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::PTR;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {v_out};
+        rt.source_line = ln;
+        fn_->append(current_block_, std::move(rt));
+    }
+    block_terminated_ = true;
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
+ir::IrValueId Lowering::emit_native_str_to_utf16(ir::IrValueId v_ptr,
+                                                 ir::IrValueId v_blen,
+                                                 uint32_t source_line) {
+    const std::string name = ensure_str_to_utf16_helper();
+    ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v].is_host_ptr = true;
+    ir::IrInstr ca{};
+    ca.op = ir::IrOp::CALL;
+    ca.type = ir::IrType::PTR;
+    ca.dst = v;
+    ca.func_name = name;
+    ca.operands = {v_ptr, v_blen};
+    ca.source_line = source_line;
+    fn_->append(current_block_, std::move(ca));
+    return v;
+}
+
 ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
                                                ir::IrValueId la,
                                                ir::IrValueId pb,
@@ -26641,6 +30203,33 @@ ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
     return v_h;
 }
 
+void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
+                               uint32_t source_line) {
+    if (native_poo_) {
+        // AOT/bare: monitor reentrante inline en el objeto (palabra en obj+16),
+        // sin GC ni handle table.  Baja a CALL a la primitiva nativa
+        // (__vex_monenter/__vex_monexit) que el auto-bundle de vex_sync.vex
+        // fusiona en el .o.  v_obj_or_handle es el host_ptr al ObjectHeader.
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = enter ? "__vex_monenter" : "__vex_monexit";
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.operands = {v_obj_or_handle};
+        ins.source_line = source_line;
+        fn_->append(current_block_, std::move(ins));
+        return;
+    }
+    // Resto de tiers (Full/JIT/interp): IR op MONENTER/MONEXIT sobre el handle.
+    ir::IrInstr ins{};
+    ins.op = enter ? ir::IrOp::MONENTER : ir::IrOp::MONEXIT;
+    ins.type = ir::IrType::VOID;
+    ins.dst = ir::IR_NO_VALUE;
+    ins.operands = {v_obj_or_handle};
+    ins.source_line = source_line;
+    fn_->append(current_block_, std::move(ins));
+}
+
 void Lowering::emit_mvtake(ir::IrValueId v_dst_addr, ir::IrValueId v_src_addr,
                            uint32_t source_line) {
     ir::IrInstr ins{};
@@ -27026,15 +30615,52 @@ ir::IrValueId Lowering::emit_getproc(uint32_t source_line) {
 // dedup -- cada global necesita SU PROPIO slot aunque comparta bytes
 // iniciales (typicamente todos los globals empiezan en {0,0,...,0} y
 // si los dedupeamos colisionan en el mismo storage).
-uint64_t Lowering::get_or_create_runtime_global_slot(const std::string &name) {
+uint64_t Lowering::get_or_create_runtime_global_slot(const std::string &name,
+                                                     uint64_t nbytes) {
     auto it = runtime_global_slots_.find(name);
     if (it != runtime_global_slots_.end()) return it->second;
-    std::vector<uint8_t> bytes(8, 0); // 8 bytes zero-init
+    if (nbytes < 8) nbytes = 8; // minimo un qword (alineacion)
+    std::vector<uint8_t> bytes(static_cast<size_t>(nbytes), 0); // zero-init
     const uint64_t idx = static_cast<uint64_t>(
         out_mod_->static_data.push_back(std::move(bytes)));
+    auto &gmeta = out_mod_->static_data.meta_at(idx);
     // Marcar el slot como NON_DEDUP para que el merge cross-module
     // no colapse multiples globals con bytes iniciales identicos.
-    out_mod_->static_data.meta_at(idx).flags |= ir::IrModule::SD_FLAG_NON_DEDUP;
+    gmeta.flags |= ir::IrModule::SD_FLAG_NON_DEDUP;
+    // AOT: un global runtime es MUTABLE -> debe vivir en .data (rw), no en
+    // .rodata (r): escribir a un slot read-only segfaultea en nativo.  El
+    // interp/JIT ignoran section_name; solo lo consume el codegen AOT.
+    gmeta.section_name = ".data";
+    runtime_global_slots_[name] = idx;
+    return idx;
+}
+
+uint64_t Lowering::get_or_create_tls_global_slot(const std::string &name,
+                                                 uint64_t nbytes,
+                                                 uint64_t init_value,
+                                                 uint16_t alignment) {
+    auto it = runtime_global_slots_.find(name);
+    if (it != runtime_global_slots_.end()) return it->second;
+    // Cada slot ocupa >=8 bytes (alineado a 8), igual que un global runtime:
+    // los STORE a un global usan ancho de qword, asi que un slot de 4 bytes
+    // empacado junto al siguiente seria pisado por el store de 8 bytes del
+    // vecino.  El valor vive en los bytes bajos; el LOAD usa el ancho del tipo.
+    if (nbytes < 8) nbytes = 8;
+    nbytes = (nbytes + 7) & ~static_cast<uint64_t>(7); // multiplo de 8
+    // Plantilla estatica con el valor inicial (LE en los primeros 8 bytes).
+    std::vector<uint8_t> bytes(static_cast<size_t>(nbytes), 0);
+    for (size_t i = 0; i < bytes.size() && i < 8; ++i)
+        bytes[i] = static_cast<uint8_t>((init_value >> (i * 8)) & 0xFFu);
+    const uint64_t idx = static_cast<uint64_t>(
+        out_mod_->static_data.push_back(std::move(bytes)));
+    auto &m = out_mod_->static_data.meta_at(idx);
+    // NON_DEDUP (storage propio) + TLS (seccion SHF_TLS) + .tdata.
+    m.flags |= ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_TLS;
+    m.section_name = ".tdata";
+    m.alignment = alignment < 8 ? 8 : alignment;
+    // Registrar en runtime_global_slots_ para que lower_ident lo resuelva
+    // como un global ordinario (STR_LIT_ADDR); el driver AOT deriva la
+    // TLS-ness desde SD_FLAG_TLS y emite el acceso por thread pointer.
     runtime_global_slots_[name] = idx;
     return idx;
 }
@@ -27098,6 +30724,19 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
 
 ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
                                        ir::IrType to, uint32_t source_line,
+                                       bool is_explicit) {
+    // Overload de compatibilidad: sin SourceLoc completo, el warning apunta al
+    // inicio (columna 1) de la linea.  Los call sites de alto impacto pasan el
+    // SourceLoc de la expresion para apuntar a su columna real.
+    SourceLoc loc;
+    loc.file = current_file_;
+    loc.line = source_line;
+    loc.column = 1;
+    return cast_if_needed(v, from, to, loc, is_explicit);
+}
+
+ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
+                                       ir::IrType to, const SourceLoc &loc,
                                        bool is_explicit) {
     if (from == to || v == ir::IR_NO_VALUE) return v;
     // Warning de seguridad para casts implicitos que pueden perder
@@ -27165,10 +30804,6 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
             }
         }
         if (!warn_msg.empty()) {
-            SourceLoc loc;
-            loc.file = current_file_;
-            loc.line = source_line;
-            loc.column = 1;
             diags_.warning(loc, warn_msg);
         }
     }
@@ -27219,7 +30854,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
             ext.type = ir::IrType::I64;
             ext.dst = v_ext;
             ext.operands.push_back(v);
-            ext.source_line = source_line;
+            ext.source_line = loc.line;
             fn_->append(current_block_, std::move(ext));
             v = v_ext;
         }
@@ -27266,7 +30901,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     ins.type = to;
     ins.dst = dst;
     ins.operands = {v};
-    ins.source_line = source_line;
+    ins.source_line = loc.line;
     fn_->append(current_block_, std::move(ins));
     return dst;
 }
@@ -27285,6 +30920,23 @@ void Lowering::pop_scope() {
 
 void Lowering::bind(const std::string &name, ir::IrValueId v) {
     scopes_.back()[name] = v;
+    // Debug-info (solo-LSP / dumps): si el valor SSA aun no tiene nombre de
+    // fuente, etiquetarlo con el de la variable -> la pestana IR muestra "%t"
+    // en vez de "%5", y el cache de modulo lo persiste para el inspector.  NO
+    // sobreescribimos nombres ya puestos (params "%n", alias) para no
+    // corromperlos.  Cosmetico: el optimizer/codegen indexan por ID, no por
+    // nombre, y el @ir de produccion no serializa nombres -> cero efecto en
+    // runtime/JIT.
+    if (fn_ && v != ir::IR_NO_VALUE && v < fn_->values.size() &&
+        !name.empty()) {
+        std::string &vn = fn_->values[v].name;
+        // new_value() rellena el nombre por defecto como "%<id>".  Solo
+        // sobreescribimos ese auto-nombre (no params "%n" ni alias ya
+        // nombrados) para no corromper nombres significativos.
+        const bool is_default =
+            (vn == "%" + std::to_string(fn_->values[v].id));
+        if (is_default) vn = "%" + name;
+    }
 }
 
 ir::IrValueId Lowering::lookup(const std::string &name) const {
@@ -27521,7 +31173,7 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
 //   - arr[i]       = ident;    -> escapa via slot de array.
 //   - p->field     = ident;    -> escapa via field deref.
 //
-// Los locales detectados se anyaden a @c escaping_locals_; el cleanup
+// Los locales detectados se añaden a @c escaping_locals_; el cleanup
 // automatico los omite y queda como responsabilidad del caller (o del
 // futuro GC roots) liberar el handle.
 //
@@ -28018,6 +31670,25 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
         if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         arg_vals.push_back(av);
     }
+    // AOT (native_poo_): la clase super es estaticamente conocida -> CALL
+    // DIRECTO a <super>__ctor(this, args).  Evita findclass + callsuper
+    // (ambos runtime, no compilables en bare).  Habilita herencia en AOT.
+    if (native_poo_) {
+        const std::string sname = super_ctor->defining_class.empty()
+                                      ? super_name
+                                      : super_ctor->defining_class;
+        ir::IrInstr ca{};
+        ca.op = ir::IrOp::CALL;
+        ca.type = ir::IrType::VOID;
+        ca.dst = ir::IR_NO_VALUE;
+        ca.func_name = sname + "__ctor";
+        ca.operands.push_back(v_this);
+        for (auto av : arg_vals)
+            ca.operands.push_back(av);
+        ca.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ca));
+        return ir::IR_NO_VALUE;
+    }
     // Resolver ClassInfo* del super via findclass inline (mismo patron
     // que forName).  Resultado en v_cls.  Luego emitir CALLSUPER IR.
     const uint64_t super_name_idx = intern_class_name(*out_mod_, super_name);
@@ -28090,6 +31761,25 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
     const ir::IrType ret_ir = ir_type_from_primitive(found->return_type.kind);
     const ir::IrValueId dst =
         (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret_ir);
+    // AOT (native_poo_): el metodo base es estaticamente conocido ->
+    // CALL DIRECTO a <defining_class>__<metodo>(this, args).  Evita
+    // findclass + callsuper (runtime).  Habilita super.metodo() en AOT.
+    if (native_poo_) {
+        const std::string owner = found->defining_class.empty()
+                                      ? it->second.super_name
+                                      : found->defining_class;
+        ir::IrInstr ca{};
+        ca.op = ir::IrOp::CALL;
+        ca.type = ret_ir;
+        ca.dst = dst;
+        ca.func_name = owner + "__" + found->name;
+        ca.operands.push_back(v_this);
+        for (auto av : arg_vals)
+            ca.operands.push_back(av);
+        ca.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ca));
+        return dst;
+    }
     // Resolver ClassInfo* del super via findclass inline.
     const std::string &super_name = it->second.super_name;
     const uint64_t super_name_idx = intern_class_name(*out_mod_, super_name);

@@ -15,7 +15,41 @@
 #  - Ninguna mas alla de la stdlib de C++17.
 # ============================================================================
 
+# ---------------------------------------------------------------------------
+# Version de CODEGEN para invalidacion de cache (.vexi / .vexir / .vpc).
+#
+# vexi_compiler_version_hash() usa VEXI_COMPILER_BUILD_ID si esta definido.
+# Aqui generamos ese identificador como un hash de las fuentes que afectan la
+# SALIDA del compilador (frontend Vex + IR + emisores de bytecode + AOT/JIT).
+# El header solo se reescribe cuando ese hash cambia, de modo que:
+#   - cambiar lowering/IR/emisores -> nuevo hash -> caches invalidados.
+#   - recompilar sin tocar codegen  -> mismo hash -> caches conservados.
+# Esto evita el bug de "edite el compilador pero el .vexir viejo se reuso".
+file(GLOB_RECURSE VEX_CODEGEN_SRCS
+    ${CMAKE_SOURCE_DIR}/src/vex/*.cpp     ${CMAKE_SOURCE_DIR}/src/vex/*.h
+    ${CMAKE_SOURCE_DIR}/include/vex/*.h
+    ${CMAKE_SOURCE_DIR}/src/ir/*.cpp      ${CMAKE_SOURCE_DIR}/include/ir/*.h
+    ${CMAKE_SOURCE_DIR}/src/emmit/*.cpp   ${CMAKE_SOURCE_DIR}/include/emmit/*.h
+    ${CMAKE_SOURCE_DIR}/src/aot/*.c       ${CMAKE_SOURCE_DIR}/src/aot/*.cpp
+    ${CMAKE_SOURCE_DIR}/include/aot/*.h
+    ${CMAKE_SOURCE_DIR}/src/jit/*.cpp     ${CMAKE_SOURCE_DIR}/include/jit/*.h
+    ${CMAKE_SOURCE_DIR}/src/port/transpiler_base.cpp
+    ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
+)
+set(VEX_CODEGEN_VERSION_HDR ${CMAKE_CURRENT_BINARY_DIR}/vex_codegen_version.h)
+add_custom_command(
+    OUTPUT ${VEX_CODEGEN_VERSION_HDR}
+    COMMAND ${CMAKE_COMMAND}
+        -DOUT=${VEX_CODEGEN_VERSION_HDR}
+        "-DSRCS=${VEX_CODEGEN_SRCS}"
+        -P ${CMAKE_SOURCE_DIR}/cmake/gen_codegen_version.cmake
+    DEPENDS ${VEX_CODEGEN_SRCS} ${CMAKE_SOURCE_DIR}/cmake/gen_codegen_version.cmake
+    COMMENT "Calculando version de codegen Vex (invalidacion de cache)"
+    VERBATIM
+)
+
 add_library(vex_lib STATIC
+    ${VEX_CODEGEN_VERSION_HDR}
     lexer.cpp
     ast.cpp
     parser.cpp
@@ -24,6 +58,9 @@ add_library(vex_lib STATIC
     type_checker.cpp
     lombok.cpp
     lowering.cpp
+    # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
+    # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
+    vectorize.cpp
     borrow_checker.cpp
     compiler.cpp
     compiler_project.cpp
@@ -56,6 +93,12 @@ add_library(vex_lib STATIC
 target_include_directories(vex_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/include
 )
+# El header generado con VEXI_COMPILER_BUILD_ID es PRIVATE (solo lo usa
+# vexi_format.cpp).  Dependencia explicita para que CMake genere el header
+# antes de compilar ese TU y lo recompile cuando el header cambie.
+target_include_directories(vex_lib PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+set_source_files_properties(vexi_format.cpp PROPERTIES
+    OBJECT_DEPENDS ${VEX_CODEGEN_VERSION_HDR})
 
 # C++17 minimo (consistente con el resto del proyecto).
 target_compile_features(vex_lib PUBLIC cxx_std_17)
