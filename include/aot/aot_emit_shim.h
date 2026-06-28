@@ -396,6 +396,15 @@ int aot_pe_export_names(const char *path, char ***out_names, int *out_count);
 /** @brief Libera el array devuelto por @c aot_pe_export_names. */
 void aot_free_pe_export_names(char **names, int count);
 
+/**
+ * @brief Lee los NOMBRES exportados por la tabla dinamica de una @c .so / ELF
+ *        (delega en LibELFparse; analogo a @c aot_pe_export_names para PE).
+ *        Solo ELF64.  Liberar con @c aot_free_pe_export_names.
+ * @return 0 en exito (incluido sin dynsym -> count=0); !=0 si no se pudo
+ *         abrir/parsear.
+ */
+int aot_elf_export_names(const char *path, char ***out_names, int *out_count);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

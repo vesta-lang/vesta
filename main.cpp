@@ -3180,6 +3180,10 @@ int main(int argc, char *argv[]) {
                 }
                 const bool want_exec =
                     !emit_obj && !emit_shared && !emit_bin;
+                // PE: auto-link directo.  ELF: pendiente de soporte GOT en el
+                // linker (la libreria del GC compilada con g++ usa relocs
+                // GOTPCREL que aun no resolvemos); en ELF el usuario enlaza a
+                // mano por ahora.
                 if (uses_gc && want_exec && fmt == aot::ObjFormat::PE) {
                     gc_autolink = true;
                     emit_obj = true;          // emitir .obj temporal...
@@ -4065,7 +4069,7 @@ int main(int argc, char *argv[]) {
                     return EXIT_FAILURE;
                 }
                 aot::LinkOptions lopts;
-                lopts.fmt = aot::ObjFormat::PE;
+                lopts.fmt = fmt; // PE o ELF, segun el destino
                 std::string lerr;
                 const bool ok = aot::aot_link({gc_tmp_obj, lib_path},
                                               gc_real_out, lopts, lerr);
