@@ -543,6 +543,7 @@ target_include_directories(test_lsp_position_conv PRIVATE ${VM_INCLUDES})
 # Inc 0b dejo gc_heap.cpp sin dependencia de ProcessVM -> esto compila sin la VM.
 add_library(vesta_gc STATIC
         src/vesta_gc/gc_lib.cpp
+        src/vesta_gc/freestanding_shim.cpp
         src/gc/gc_heap.cpp
         src/gc/raw_allocator.cpp
         src/gc/wait_table.cpp
@@ -561,7 +562,8 @@ target_include_directories(vesta_gc PUBLIC ${VM_INCLUDES})
 # new/delete, unordered_map) se cubre con el shim libvesta_gc_shim.
 target_compile_options(vesta_gc PRIVATE
         -fno-exceptions -fno-rtti -fno-threadsafe-statics)
-target_compile_definitions(vesta_gc PRIVATE VESTA_GC_DEBUG_DISABLE=1)
+target_compile_definitions(vesta_gc PRIVATE
+        VESTA_GC_DEBUG_DISABLE=1 VESTA_GC_FREESTANDING=1)
 
 add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)
 target_include_directories(test_gc_lib PRIVATE ${VM_INCLUDES})
