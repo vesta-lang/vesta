@@ -27,6 +27,7 @@
 #include "aot/link_script.h" // Phase AOT.5: link-script Vex (configurable)
 
 #include <cstdint>
+#include <cstdlib> // std::getenv (ruta de las DLLs del sistema)
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -606,42 +607,26 @@ inline uint64_t align_up(uint64_t v, uint64_t a) {
     return (v + a - 1) / a * a;
 }
 
-// Decide si un simbolo UNDEF es un import de libreria del sistema (libc /
-// Win32 CRT / kernel32) que el linker resuelve por IAT, frente a un simbolo de
-// usuario genuinamente ausente (-> error).  Asi un `rt_value` no declarado NO
-// se auto-importa (semantica de linker correcta), pero malloc/VirtualAlloc si.
-inline bool is_system_import(const std::string &n) {
-    // dllimport explicito de MinGW (__imp_X) o internos del CRT.
-    if (n.rfind("__imp_", 0) == 0) return true;
-    if (n.rfind("__acrt", 0) == 0) return true;
-    if (n.rfind("__mingw", 0) == 0) return true;
-    // Conjunto de simbolos libc / Win32 comunes (ASCII, ordenado por uso).
-    static const char *const kSys[] = {
-        // memoria / CRT
-        "malloc", "free", "calloc", "realloc", "abort", "exit", "_exit",
-        "atexit", "_assert", "_errno", "memcpy", "memmove", "memset", "memcmp",
-        "memchr",
-        // cadenas
-        "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat", "strncat",
-        "strchr", "strrchr", "strstr", "strtol", "strtoul", "strtod", "atoi",
-        "atol",
-        // E/S
-        "printf", "fprintf", "sprintf", "snprintf", "vsnprintf", "vfprintf",
-        "puts", "fputs", "fputc", "putchar", "fwrite", "fread", "fopen",
-        "fclose", "fflush", "fseek", "ftell", "getenv", "_fileno", "_write",
-        "_read", "__acrt_iob_func",
-        // matematicas (libm en msvcrt/ucrtbase)
-        "pow", "sqrt", "fabs", "floor", "ceil", "round", "sin", "cos", "tan",
-        "log", "log2", "log10", "exp",
-        // Win32 (kernel32 / user32 comunes)
-        "VirtualAlloc", "VirtualFree", "VirtualProtect", "GetLastError",
-        "GetSystemInfo", "LocalFree", "FormatMessageA", "FormatMessageW",
-        "GetCurrentThreadId", "GetProcAddress", "LoadLibraryA", "FreeLibrary",
-        "ExitProcess", "GetModuleHandleA", "WriteFile", "ReadFile",
-        "CreateFileA", "CloseHandle", "GetStdHandle", "Sleep", "GetTickCount"};
-    for (const char *s : kSys)
-        if (n == s) return true;
-    return false;
+// Lee los nombres EXPORTADOS de una DLL/PE delegando en LibPEparse (via el shim
+// C aot_pe_export_names -- el shim es el unico punto que toca la lib PE).  Asi
+// el linker resuelve los imports leyendo lo que la DLL REALMENTE exporta, NO una
+// lista de simbolos embebida en el compilador.
+bool pe_read_exports(const std::string &path, std::vector<std::string> &names) {
+    char **arr = nullptr;
+    int count = 0;
+    if (aot_pe_export_names(path.c_str(), &arr, &count) != 0) return false;
+    names.reserve(names.size() + (size_t)count);
+    for (int i = 0; i < count; ++i)
+        if (arr[i]) names.emplace_back(arr[i]);
+    aot_free_pe_export_names(arr, count);
+    return true;
+}
+
+// Ruta de una DLL del sistema en %SystemRoot%\System32 (Windows).
+std::string system_dll_path(const char *dll) {
+    const char *root = std::getenv("SystemRoot");
+    if (!root || !*root) root = "C:\\Windows";
+    return std::string(root) + "\\System32\\" + dll;
 }
 
 } // namespace
@@ -673,12 +658,22 @@ bool aot_link(const std::vector<std::string> &inputs,
         std::unordered_map<std::string, int> sym_to_member;
     };
     std::vector<ArchiveInput> archives;
+    // DLLs pasadas como entrada (el usuario puede enlazar contra los exports de
+    // cualquier .dll, ademas de las del sistema): se consultan sus exports para
+    // resolver imports, igual que kernel32/CRT.
+    std::vector<std::string> dll_inputs;
 
     for (const std::string &in : inputs) {
         std::vector<uint8_t> buf;
         if (!read_file(in, buf)) {
             err = "no se puede abrir la entrada: " + in;
             return false;
+        }
+        // DLL (imagen PE 'MZ'): no es un objeto a fusionar; se usa como fuente
+        // de imports (sus exports).
+        if (buf.size() >= 2 && buf[0] == 'M' && buf[1] == 'Z') {
+            dll_inputs.push_back(in);
+            continue;
         }
         if (ar_is_archive(buf)) {
             ArchiveInput a;
@@ -987,6 +982,37 @@ bool aot_link(const std::vector<std::string> &inputs,
     };
     std::vector<ImpSite> imp_sites;
     std::vector<std::string> unresolved;
+
+    // Mapa simbolo -> DLL leido de los EXPORTS REALES de las DLLs candidatas
+    // (NO una lista de simbolos embebida).  Candidatas: el CRT + kernel32 del
+    // sistema (busqueda de librerias por defecto, como el implicito -lkernel32
+    // -lmsvcrt de un linker), mas cualquier .dll que el usuario pase como
+    // entrada.  Un simbolo que NINGUNA DLL exporta no es un import -> error.
+    std::unordered_map<std::string, std::string> sym2dll;
+    if (can_import) {
+        std::vector<std::string> cand;
+        for (const char *d : {"kernel32.dll", "ucrtbase.dll", "msvcrt.dll"})
+            cand.push_back(system_dll_path(d));
+        for (const std::string &dp : dll_inputs) // .dll pasados como entrada
+            cand.push_back(dp);
+        for (const std::string &dp : cand) {
+            std::vector<std::string> exps;
+            if (!pe_read_exports(dp, exps)) continue;
+            std::string base = dp;
+            const size_t sl = base.find_last_of("\\/");
+            if (sl != std::string::npos) base = base.substr(sl + 1);
+            for (std::string &e : exps)
+                sym2dll.emplace(std::move(e), base); // 1a DLL que lo exporta gana
+        }
+    }
+    // Resuelve el nombre real de un simbolo a su DLL (strip __imp_ de los
+    // dllimport de MinGW).  Devuelve "" si ninguna DLL candidata lo exporta.
+    auto dll_of = [&sym2dll](const std::string &n) -> std::string {
+        const std::string real =
+            (n.rfind("__imp_", 0) == 0) ? n.substr(6) : n;
+        auto it = sym2dll.find(real);
+        return it != sym2dll.end() ? it->second : std::string();
+    };
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjRel &r : o.rels) {
@@ -1020,10 +1046,10 @@ bool aot_link(const std::vector<std::string> &inputs,
                 if (it != globals.end() && it->second.defined) {
                     tgt = RelocTarget::addr(it->second.wsec, it->second.off);
                     ok = true;
-                } else if (can_import && is_system_import(sy.name)) {
-                    // Import de libreria del sistema (libc/Win32) -> se resuelve
-                    // via IAT tras el bucle (thunk libc o slot __imp_).  Los
-                    // simbolos de usuario ausentes NO se auto-importan.
+                } else if (can_import && !dll_of(sy.name).empty()) {
+                    // Una DLL candidata EXPORTA este simbolo -> import por IAT
+                    // (thunk libc o slot __imp_, resuelto tras el bucle).  Un
+                    // simbolo que ninguna DLL exporta NO se auto-importa.
                     imp_sites.push_back(
                         {site_sec, site_off, r.kind, r.addend, sy.name});
                     continue;
@@ -1050,35 +1076,8 @@ bool aot_link(const std::vector<std::string> &inputs,
     //     como un import directo (call_off = inicio del FF 15 = site_off-2) sin
     //     anyadir reloc.
     if (!imp_sites.empty()) {
-        // CRT de Windows: msvcrt.dll (clasico) vs ucrtbase.dll (UCRT, MinGW
-        // ucrt64).  Se autodetecta por simbolos exclusivos de UCRT presentes en
-        // los imports (__acrt_iob_func, _assert, __acrt_*).  Ambos son DLLs del
-        // sistema en Win10+, asi que el .exe no arrastra dependencias externas.
-        std::string libc_dll = "msvcrt.dll";
-        for (const ImpSite &s : imp_sites) {
-            if (s.sym == "__acrt_iob_func" || s.sym == "_assert" ||
-                s.sym.rfind("__acrt", 0) == 0 ||
-                s.sym.rfind("_o_", 0) == 0) {
-                libc_dll = "ucrtbase.dll";
-                break;
-            }
-        }
-        // Mapa nombre de funcion -> DLL.  Win32 API conocida -> kernel32.dll;
-        // resto -> el CRT detectado.  Ampliable.
-        auto dll_for = [&libc_dll](const std::string &f) -> std::string {
-            static const char *const kernel32[] = {
-                "VirtualAlloc",   "VirtualFree",   "VirtualProtect",
-                "GetLastError",   "GetSystemInfo", "LocalFree",
-                "FormatMessageA", "FormatMessageW", "GetCurrentThreadId",
-                "GetProcAddress", "LoadLibraryA",  "FreeLibrary",
-                "ExitProcess",    "GetModuleHandleA", "WriteFile",
-                "ReadFile",       "CreateFileA",   "CloseHandle",
-                "GetStdHandle",   "Sleep",         "GetTickCount"};
-            for (const char *n : kernel32)
-                if (f == n) return "kernel32.dll";
-            return libc_dll;
-        };
-
+        // El DLL de cada simbolo se LEE de los exports reales (sym2dll), no se
+        // adivina con una tabla embebida: dll_of(sym) -> la DLL que lo exporta.
         std::vector<uint8_t> thunk_bytes;
         std::unordered_map<std::string, uint64_t> thunk_off;
         std::vector<ImportCall> calls;
@@ -1087,7 +1086,7 @@ bool aot_link(const std::vector<std::string> &inputs,
             if (s.sym.rfind("__imp_", 0) == 0) {
                 // Slot IAT directo: el FF 15 empieza 2 bytes antes del disp32.
                 const std::string func = s.sym.substr(6);
-                calls.push_back({dll_for(func), func, s.site_sec,
+                calls.push_back({dll_of(s.sym), func, s.site_sec,
                                  s.site_off >= 2 ? s.site_off - 2 : 0});
             } else if (thunk_off.find(s.sym) == thunk_off.end()) {
                 const uint64_t off = thunk_bytes.size();
@@ -1095,7 +1094,7 @@ bool aot_link(const std::vector<std::string> &inputs,
                 thunk_bytes.insert(thunk_bytes.end(), t, t + 6);
                 thunk_off[s.sym] = off;
                 calls.push_back(
-                    {dll_for(s.sym), s.sym, -1 /*thunk_sec, fijado abajo*/, off});
+                    {dll_of(s.sym), s.sym, -1 /*thunk_sec, fijado abajo*/, off});
             }
         }
 

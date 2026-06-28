@@ -377,6 +377,25 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
                       int num_secs, const AotReloc *relocs, int num_relocs,
                       char *err, size_t err_cap);
 
+/**
+ * @brief Lee los NOMBRES exportados de una DLL/PE (delega en LibPEparse).
+ *
+ * El linker lo usa para resolver imports leyendo lo que la DLL REALMENTE
+ * exporta, en vez de una lista de simbolos embebida.  Es parte del shim, el
+ * unico punto que toca LibPEparse (frontera C/C++ del proyecto).
+ *
+ * @param path       Ruta de la DLL/PE.
+ * @param out_names  [out] array char** (calloc'd) con los nombres; liberar con
+ *                   @c aot_free_pe_export_names.
+ * @param out_count  [out] numero de nombres.
+ * @return 0 en exito (incluido un PE sin exports -> count=0); !=0 si el fichero
+ *         no se pudo abrir/parsear.
+ */
+int aot_pe_export_names(const char *path, char ***out_names, int *out_count);
+
+/** @brief Libera el array devuelto por @c aot_pe_export_names. */
+void aot_free_pe_export_names(char **names, int count);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
