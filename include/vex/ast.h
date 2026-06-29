@@ -611,6 +611,11 @@ struct UnaryExpr : Expr {
     /// @c `x.__neg__()`.  Cadena vacia = sin sobrecarga; comportamiento
     /// clasico (negacion aritmetica de primitivos).
     std::string overload_method;
+    /// `&obj.metodo` (puntero a metodo LIGADO): el type checker lo desugara a
+    /// un lambda `(args) => obj.metodo(args)` que captura el receptor, y lo
+    /// deja aqui.  Si != null, el lowering baja ESTE lambda en vez del AddrOf.
+    /// Reusa toda la maquinaria de closures (env owned, Fase 1).
+    std::unique_ptr<Expr> desugared_bound_method;
     UnaryExpr() : Expr(NodeKind::UnaryExpr) {}
 };
 

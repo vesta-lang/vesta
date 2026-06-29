@@ -601,6 +601,15 @@ class TypeChecker {
     // de sus parametros y su retorno desde el contexto (var-decl/assign/field/
     // return).  No-op si la aridad no coincide o el lambda ya esta anotado.
     void propagate_fn_type_to_lambda(ast::LambdaExpr *lam, const Type &fn_type);
+    /// Construye un @c TypeNode (Primitive o Named) que representa @c t, para
+    /// sintetizar AST (params/return de un lambda desugarado).
+    std::unique_ptr<ast::TypeNode> type_to_node(const Type &t, SourceLoc loc);
+    /// Desugara `&base_var.metodo` (puntero a metodo LIGADO) a un lambda
+    /// `(args) => base_var.metodo(args)` que captura el receptor.  Reusa toda
+    /// la maquinaria de closures (Fase 1).  @c m es el metodo resuelto.
+    std::unique_ptr<ast::Expr>
+    build_bound_method_lambda(const std::string &base_var,
+                              const ClassMethodInfo &m, SourceLoc loc);
     Type check_call(ast::CallExpr *e);
     Type check_ident(ast::IdentExpr *e);
     Type check_field_access(ast::FieldAccessExpr *e);

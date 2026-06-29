@@ -7128,6 +7128,53 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
 }
 
 Type TypeChecker::check_unary(ast::UnaryExpr *e) {
+    // &var.metodo -> PUNTERO A METODO LIGADO (Fase 2).  Cuando `var` es una
+    // VARIABLE de tipo CLASE y `metodo` es un metodo (no un campo), `&var.metodo`
+    // es un closure que CAPTURA el receptor.  Lo desugaramos a un lambda
+    // `(args) => var.metodo(args)` (reusa toda la maquinaria de closures: env
+    // owned, Fase 1) y lo guardamos en @c desugared_bound_method.
+    if (e->op == ast::UnOp::AddrOf && e->operand &&
+        e->operand->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->operand.get());
+        if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+            auto *bid = static_cast<ast::IdentExpr *>(fa->base.get());
+            const Symbol *vs = lookup(bid->name);
+            if (vs && vs->kind == SymbolKind::Variable &&
+                vs->type.kind == PrimitiveKind::CLASS) {
+                auto itc = class_layouts_.find(vs->type.struct_name);
+                if (itc != class_layouts_.end()) {
+                    // Buscar un METODO con ese nombre (no constructor/dtor/
+                    // estatico); si es un campo, NO aplica (cae a &obj.campo).
+                    const ClassMethodInfo *method = nullptr;
+                    bool is_field = false;
+                    for (const auto &f : itc->second.fields)
+                        if (f.name == fa->field_name) is_field = true;
+                    if (!is_field) {
+                        for (const auto &mm : itc->second.methods) {
+                            if (mm.name == fa->field_name && !mm.is_constructor &&
+                                !mm.is_destructor && !mm.is_static) {
+                                method = &mm;
+                                break;
+                            }
+                        }
+                    }
+                    if (method) {
+                        // Tipo resultante = fn(...params) -> ret (lambda).
+                        Type fnt = Type::make_function(method->param_types,
+                                                       method->return_type);
+                        // Construir y type-checkear el lambda desugarado.
+                        e->desugared_bound_method =
+                            build_bound_method_lambda(bid->name, *method, e->loc);
+                        const Type lt =
+                            check_expr(e->desugared_bound_method.get());
+                        e->desugared_bound_method->result_type = lt;
+                        e->result_type = fnt;
+                        return fnt;
+                    }
+                }
+            }
+        }
+    }
     // &Tipo.metodo -> PUNTERO A METODO NO LIGADO (cfn).  Se detecta ANTES de
     // type-checkear el operando porque `Tipo.metodo` como FieldAccess fallaria
     // (el base nombra un TIPO, no un valor).  El metodo se desugara a la free
@@ -7418,6 +7465,76 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     }
     }
     return Type{};
+}
+
+std::unique_ptr<ast::TypeNode> TypeChecker::type_to_node(const Type &t,
+                                                        SourceLoc loc) {
+    if (t.kind == PrimitiveKind::CLASS || t.kind == PrimitiveKind::STRUCT) {
+        auto nt = std::make_unique<ast::NamedTypeNode>();
+        nt->loc = loc;
+        nt->name = t.struct_name;
+        return nt;
+    }
+    auto pn = std::make_unique<ast::PrimitiveTypeNode>();
+    pn->loc = loc;
+    pn->prim = t.kind;
+    return pn;
+}
+
+std::unique_ptr<ast::Expr>
+TypeChecker::build_bound_method_lambda(const std::string &base_var,
+                                       const ClassMethodInfo &m, SourceLoc loc) {
+    // Sintetiza:  (__bm0, __bm1, ...) => base_var.metodo(__bm0, __bm1, ...)
+    // El receptor base_var se referencia en el body -> el type check del
+    // lambda lo detecta como CAPTURA (by-value: la referencia del objeto).
+    auto lam = std::make_unique<ast::LambdaExpr>();
+    lam->loc = loc;
+    // Params: uno por cada parametro del metodo, con nombre sintetico.
+    std::vector<std::unique_ptr<ast::Expr>> call_args;
+    for (size_t i = 0; i < m.param_types.size(); ++i) {
+        auto pd = std::make_unique<ast::ParamDecl>();
+        pd->loc = loc;
+        pd->name = "__bm" + std::to_string(i);
+        pd->type = type_to_node(m.param_types[i], loc);
+        lam->params.push_back(std::move(pd));
+        // Arg correspondiente para la llamada.
+        auto arg = std::make_unique<ast::IdentExpr>();
+        arg->loc = loc;
+        arg->name = "__bm" + std::to_string(i);
+        call_args.push_back(std::move(arg));
+    }
+    // return_type del lambda = return type del metodo (null si void).
+    const bool ret_void = (m.return_type.kind == PrimitiveKind::VOID ||
+                           m.return_type.kind == PrimitiveKind::COUNT);
+    if (!ret_void) lam->return_type = type_to_node(m.return_type, loc);
+    // Cuerpo: CallExpr  base_var.metodo(args...)
+    auto recv = std::make_unique<ast::IdentExpr>();
+    recv->loc = loc;
+    recv->name = base_var;
+    auto fa = std::make_unique<ast::FieldAccessExpr>();
+    fa->loc = loc;
+    fa->base = std::move(recv);
+    fa->field_name = m.name;
+    auto call = std::make_unique<ast::CallExpr>();
+    call->loc = loc;
+    call->callee = std::move(fa);
+    call->args = std::move(call_args);
+    // BlockStmt: `return call;` (o `call;` si void).
+    auto blk = std::make_unique<ast::BlockStmt>();
+    blk->loc = loc;
+    if (ret_void) {
+        auto es = std::make_unique<ast::ExprStmt>();
+        es->loc = loc;
+        es->expr = std::move(call);
+        blk->body.push_back(std::move(es));
+    } else {
+        auto ret = std::make_unique<ast::ReturnStmt>();
+        ret->loc = loc;
+        ret->value = std::move(call);
+        blk->body.push_back(std::move(ret));
+    }
+    lam->body = std::move(blk);
+    return lam;
 }
 
 void TypeChecker::propagate_fn_type_to_lambda(ast::LambdaExpr *lam,

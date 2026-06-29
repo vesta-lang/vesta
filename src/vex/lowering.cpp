@@ -13322,6 +13322,12 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             error_at(e->loc, "lowering: '&' sin operando");
             return ir::IR_NO_VALUE;
         }
+        // &var.metodo (puntero a metodo LIGADO, Fase 2): el type checker lo
+        // desugaro a un lambda `(args) => var.metodo(args)` que captura el
+        // receptor.  Bajamos ESE lambda (reusa env owned + CALLCLOSURE).
+        if (e->desugared_bound_method) {
+            return lower_expr(e->desugared_bound_method.get());
+        }
         // &Tipo.metodo -> LABEL_ADDR del label de la free fn `Tipo__metodo`
         // (puntero a metodo no ligado, cfn).  El checker dejo el label en
         // FieldAccessExpr::func_ref_mangled.
