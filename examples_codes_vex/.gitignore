@@ -16,3 +16,6 @@ out
 
 # Fixtures host C de los ejemplos AOT (no son salida transpilada)
 !aot/*_host.c
+
+# Consumidores C de ejemplo (fuente, no generados)
+!*_consumer.c
