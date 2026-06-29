@@ -44,6 +44,12 @@
 //     {fn_addr, env} castea a un struct de dos i64 (16 == 16).
 // ============================================================================
 
+// Funcion nativa via FFI: su direccion (`&toupper`) tambien es un cfn -- el
+// compilador genera un thunk Vesta `__cfnthunk_toupper` que reenvia al CALLN,
+// asi el cfn se invoca por CALLIND en cualquier backend (la direccion nativa
+// no es bytecode VM y no se puede llamar directamente por callvmr).
+extern "msvcrt.dll" { fn toupper(i32 c) -> i32; }
+
 // Funciones libres normales (su direccion es un puntero a funcion crudo).
 i64 doblar(i64 x)    { return x * 2; }
 i64 triplicar(i64 x) { return x * 3; }
@@ -138,6 +144,10 @@ i32 main() {
     // compile-time -- cero llamada en runtime).
     cfn(i64) -> i64 conocido = &doblar;
     if (conocido(21) != 42) { return 12; }   // inline + const-fold -> 42
+
+    // === 2i. &extern -- FFI nativo como cfn (via thunk automatico) ===
+    cfn(i32) -> i32 mayus = &toupper;         // genera __cfnthunk_toupper
+    if (mayus(97) != 65) { return 14; }       // toupper('a') = 'A' = 65
 
     // === 2f. cfn dentro de unique<> -- ownership + move + borrow ===
     // Un cfn es un valor de 8 bytes, asi que entra en un unique<>/borrow<>

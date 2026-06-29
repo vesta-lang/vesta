@@ -656,6 +656,14 @@ class Lowering {
      *        callvirt 0 (ctor) + return GcHandle.
      */
     void generate_new_helpers(ir::IrModule &out);
+    /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
+    /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
+    void generate_extern_cfn_thunks(ir::IrModule &out);
+    /// Devuelve el label a usar para `&fn` / promocion a cfn.  Si @c name es
+    /// un extern, registra el thunk y devuelve `__cfnthunk_<fn>`; si no, el
+    /// label mangled (o el nombre).
+    std::string func_ref_label(const std::string &name,
+                               const std::string &mangled);
 
     /**
      * @brief Genera la IrFunction @c __module_init que registra todas
@@ -915,6 +923,12 @@ class Lowering {
     /// el import via @c out_mod_->register_native_import.  Sin entry,
     /// el flujo normal CALLVM (funcion Vex local) sigue intacto.
     std::unordered_map<std::string, std::string> extern_lib_by_fn_name_;
+
+    /// Externs cuyo `&fn` (o promocion a cfn) se uso como function value.
+    /// Para cada uno generamos un thunk Vesta `__cfnthunk_<fn>` que reenvia
+    /// al CALLN nativo, asi el cfn es invocable por CALLIND en cualquier
+    /// backend (la direccion nativa no se puede llamar por callvmr directo).
+    std::unordered_set<std::string> extern_cfn_thunks_;
 
     /// ADTs: nombre del enum que la funcion retorna (vacio si
     /// no retorna enum declarado).  Se usa en lower_call para

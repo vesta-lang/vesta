@@ -1549,6 +1549,8 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // el prologo de main incluye una llamada a __module_init para
     // garantizar que las clases esten registradas antes del cuerpo.
     generate_new_helpers(out_module);
+    // Thunks para `&extern` usado como cfn (se rellenan durante el lowering).
+    generate_extern_cfn_thunks(out_module);
     // Phase AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
     // __module_init (las clases son layout estatico compile-time).
     if (!native_poo_) generate_module_init_function(out_module);
@@ -10914,8 +10916,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             ins.op = ir::IrOp::LABEL_ADDR;
             ins.type = ir::IrType::PTR;
             ins.dst = code;
-            ins.func_name = id->func_ref_mangled.empty() ? id->name
-                                                         : id->func_ref_mangled;
+            ins.func_name = func_ref_label(id->name, id->func_ref_mangled);
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));
             // `(fn(...)) nombre` (LAMBDA): SIEMPRE un fat-pointer de 16 bytes
@@ -11388,8 +11389,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ins.op = ir::IrOp::LABEL_ADDR;
             ins.type = ir::IrType::PTR;
             ins.dst = code;
-            ins.func_name =
-                e->func_ref_mangled.empty() ? e->name : e->func_ref_mangled;
+            ins.func_name = func_ref_label(e->name, e->func_ref_mangled);
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));
         }
@@ -13321,9 +13321,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 ins.op = ir::IrOp::LABEL_ADDR;
                 ins.type = ir::IrType::PTR;
                 ins.dst = dst;
-                ins.func_name = id->func_ref_mangled.empty()
-                                    ? id->name
-                                    : id->func_ref_mangled;
+                ins.func_name = func_ref_label(id->name, id->func_ref_mangled);
                 ins.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(ins));
                 return dst;
@@ -22983,6 +22981,83 @@ static uint64_t intern_class_cache_slot(ir::IrModule &mod,
  * @brief Emite el ASM que construye una FindClassParams (16 bytes) en
  *        stack y deja en @c r12 el ClassInfo* localizado.
  */
+std::string Lowering::func_ref_label(const std::string &name,
+                                     const std::string &mangled) {
+    // Si el nombre es un extern, su direccion cruda no es invocable por
+    // callvmr (es codigo nativo, no bytecode VM).  Generamos un thunk Vesta
+    // `__cfnthunk_<fn>` que reenvia al CALLN; el cfn apunta a ese thunk.
+    if (extern_lib_by_fn_name_.count(name)) {
+        extern_cfn_thunks_.insert(name);
+        return "__cfnthunk_" + name;
+    }
+    return mangled.empty() ? name : mangled;
+}
+
+void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
+    // Por cada extern cuya direccion se tomo como cfn, sintetizamos un
+    // thunk Vesta:  __cfnthunk_<fn>(params...) { return <lib>:<fn>(params...); }
+    // El cuerpo es un unico CALLN (reenvio nativo) + RET.  Asi el cfn se
+    // invoca por CALLIND -> entra al thunk -> el thunk hace el CALLN, que
+    // cada backend resuelve normalmente (LoadLibrary/GetProcAddress, IAT/GOT).
+    for (const auto &fn_name : extern_cfn_thunks_) {
+        const FunctionSig *sig = tc_.function_sig_by_name(fn_name);
+        if (!sig || sig->extern_lib.empty()) continue;
+
+        ir::IrFunction fn;
+        fn.name = "__cfnthunk_" + fn_name;
+        const ir::IrType ret_ir =
+            (sig->return_type.kind == PrimitiveKind::VOID ||
+             sig->return_type.kind == PrimitiveKind::COUNT)
+                ? ir::IrType::VOID
+                : ir_type_from_primitive(sig->return_type.kind);
+        fn.ret_type = ret_ir;
+
+        // Params: uno por parametro del extern, en orden.
+        std::vector<ir::IrValueId> param_vids;
+        param_vids.reserve(sig->param_types.size());
+        for (size_t i = 0; i < sig->param_types.size(); ++i) {
+            const ir::IrType pt =
+                ir_type_from_primitive(sig->param_types[i].kind);
+            const ir::IrValueId vid =
+                fn.new_value(pt, "%a" + std::to_string(i));
+            fn.values[vid].is_param = true;
+            // PTR/ARRAY nativos (no VirtualPtr) son host_ptr.
+            const PrimitiveKind pk = sig->param_types[i].kind;
+            if ((pk == PrimitiveKind::PTR || pk == PrimitiveKind::ARRAY) &&
+                !sig->param_types[i].is_virtual) {
+                fn.values[vid].is_host_ptr = true;
+            }
+            fn.params.push_back(vid);
+            param_vids.push_back(vid);
+        }
+
+        const ir::IrBlockId entry = fn.new_block("entry");
+        // CALLN @Method("<lib>:<fn>") con los params como args.
+        out.register_native_import(sig->extern_lib, fn_name);
+        const ir::IrValueId dst =
+            (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn.new_value(ret_ir);
+        {
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ret_ir;
+            ins.dst = dst;
+            ins.func_name = sig->extern_lib + ":" + fn_name;
+            ins.operands = param_vids;
+            ins.source_line = 0;
+            fn.append(entry, std::move(ins));
+        }
+        {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ret_ir;
+            if (dst != ir::IR_NO_VALUE) ret.operands = {dst};
+            ret.source_line = 0;
+            fn.append(entry, std::move(ret));
+        }
+        out.add_function(std::move(fn));
+    }
+}
+
 void Lowering::generate_new_helpers(ir::IrModule &out) {
     // Para cada clase declarada en el modulo, generamos una funcion
     // __new_<Class>(arg1, ..., argN) -> handle (GcHandle).  El cuerpo
