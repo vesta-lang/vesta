@@ -590,6 +590,11 @@ class TypeChecker {
     Type check_binary(ast::BinaryExpr *e);
     Type check_unary(ast::UnaryExpr *e);
     Type check_assign(ast::AssignExpr *e);
+    /// Safety net (item 1): true si @c e es un closure CAPTURADOR -- un
+    /// LambdaExpr con capturas o un metodo ligado `&obj.m` (que captura el
+    /// receptor).  Un closure asi guardado en un campo de struct deja el env
+    /// en stack; ver @c struct_stack_closure_taint_.
+    bool is_capturing_closure_expr(const ast::Expr *e) const;
     // Promocion de nombre desnudo de funcion a function value: si @c val es un
     // IdentExpr que nombra una funcion (is_func_ref) y @c target es FUNCTION,
     // le asigna el tipo cfn/fn (segun target.fn_is_raw) y devuelve ese tipo.
@@ -1530,6 +1535,16 @@ class TypeChecker {
     // VOID).  Se settea al entrar en @c check_function /
     // @c check_class_method y se restaura al salir.
     Type current_fn_return_type_{PrimitiveKind::VOID};
+
+    // Safety net (item 1): variables LOCALES de tipo STRUCT a las que se les
+    // asigno un closure CAPTURADOR en un campo.  El env de ese closure vive en
+    // el STACK del scope actual (los structs son value-types sin destructor de
+    // campos owned), asi que si el struct ESCAPA (return, o store a un destino
+    // que sobrevive: campo/indice/deref) el env queda colgante (use-after-
+    // scope).  Se taintea en @c check_assign y se rechaza el escape en
+    // @c check_return / @c check_assign.  Se limpia al entrar en cada funcion.
+    // Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+    std::unordered_set<std::string> struct_stack_closure_taint_;
 
     // Bug fix 2026-05-23 (audit optres infer): tipo Result<V,E> esperado
     // en el contexto actual (caller del check_expr).  Se setea en

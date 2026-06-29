@@ -1,0 +1,22 @@
+// NEGATIVO (compile-must-fail): un struct con un closure CAPTURADOR en un campo
+// guarda el env en el STACK del scope actual (los structs son value-types sin
+// destructor de campos owned).  Retornar ese struct por valor haria que la
+// copia del caller apunte a un env ya muerto (use-after-scope).  El compilador
+// lo rechaza (safety net).  La solucion es usar una CLASE (env heap owned,
+// liberado por el destructor) cuando el closure debe sobrevivir al scope.
+// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+
+struct Caja {
+    fn() -> i64 leer;
+}
+
+Caja crear(i64 v) {
+    Caja c;
+    c.leer = () => v + 1;   // closure capturador -> env en stack de `crear`
+    return c;               // ERROR: el struct escapa con el env colgante
+}
+
+i32 main() {
+    Caja c = crear(41);
+    return (i32) c.leer();
+}

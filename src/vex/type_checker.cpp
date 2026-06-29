@@ -3485,6 +3485,9 @@ void TypeChecker::check_functions() {
         // Cada funcion tiene su propio scope de borrows; los borrows
         // de una funcion no afectan a otra.
         borrow_checker_.reset();
+        // Safety net (item 1): el taint de structs-con-closure-en-stack es
+        // por-funcion (los locals no cruzan fronteras de funcion).
+        struct_stack_closure_taint_.clear();
         // F2: registrar parametros como owners con OwnerKind::Param.
         // Si el parametro ES un borrow (su tipo es BORROW/BORROW_MUT),
         // ademas lo registramos como borrower self-referencial: el
@@ -3940,6 +3943,7 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
                             : type_from_node(m->return_type.get());
     const Type saved_ret = current_fn_return_type_;
     current_fn_return_type_ = fn_ret;
+    struct_stack_closure_taint_.clear();
     check_block(m->body.get(), fn_ret);
     current_fn_return_type_ = saved_ret;
     pop_scope();
@@ -3989,6 +3993,7 @@ void TypeChecker::check_struct_method(const StructLayout &lay,
                                        : Type{PrimitiveKind::VOID};
     const Type saved_ret = current_fn_return_type_;
     current_fn_return_type_ = fn_ret;
+    struct_stack_closure_taint_.clear();
     check_block(m->body.get(), fn_ret);
     current_fn_return_type_ = saved_ret;
     pop_scope();
@@ -4796,6 +4801,14 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
     if (!declare(vd->name, s)) {
         diags_.error(vd->loc, "redefinicion de variable: '" + vd->name + "'");
     }
+    // Safety net (item 1): copia de un struct tainteado (`T s2 = s1;`)
+    // propaga el taint -> `s2` tambien apunta al closure-en-stack y su escape
+    // se rechaza igual.
+    if (vd->init && vd->init->kind == ast::NodeKind::IdentExpr) {
+        auto *iid = static_cast<ast::IdentExpr *>(vd->init.get());
+        if (struct_stack_closure_taint_.count(iid->name))
+            struct_stack_closure_taint_.insert(vd->name);
+    }
     // Borrow checker: si la variable es @c unique<T>/shared<T>,
     // registrarla como owner (posible objeto de prestamos).  Si la
     // variable es @c borrow<T>/borrow_mut<T>, registrarla como
@@ -5261,6 +5274,23 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
         Type t = check_expr(s->value.get());
         expected_result_type_ = saved_expected_result;
         expected_optional_type_ = saved_expected_optional;
+        // Safety net (item 1): un struct local con un closure CAPTURADOR en un
+        // campo guarda el env en el STACK del scope actual; retornarlo por
+        // valor haria que la copia del caller apunte a un env ya muerto
+        // (use-after-scope).  Rechazar con un mensaje claro.
+        if (s->value->kind == ast::NodeKind::IdentExpr) {
+            auto *rid = static_cast<ast::IdentExpr *>(s->value.get());
+            if (struct_stack_closure_taint_.count(rid->name)) {
+                diags_.error(
+                    s->loc,
+                    "el struct '" + rid->name +
+                        "' tiene un closure capturador en un campo (su env vive "
+                        "en el stack) y se retorna por valor: el env quedaria "
+                        "colgante en el caller.  Usa una CLASE (env heap owned, "
+                        "liberado por el destructor) si el closure debe "
+                        "sobrevivir al scope.");
+            }
+        }
         // Borrow checker R4: si el valor de retorno es un borrow,
         // validar via on_borrow_escape.  El owner_kind del borrow
         // (Local vs Param/Global) decide si el escape es valido.
@@ -7693,6 +7723,22 @@ Type TypeChecker::maybe_promote_func_ref(ast::Expr *val, const Type &target,
     return ft;
 }
 
+bool TypeChecker::is_capturing_closure_expr(const ast::Expr *e) const {
+    if (!e) return false;
+    // Lambda literal con capturas: el env contiene esas variables.
+    if (e->kind == ast::NodeKind::LambdaExpr) {
+        auto *lam = static_cast<const ast::LambdaExpr *>(e);
+        return !lam->captures.empty();
+    }
+    // Metodo ligado `&obj.m`: el lambda desugarado captura SIEMPRE el receptor.
+    if (e->kind == ast::NodeKind::UnaryExpr) {
+        auto *u = static_cast<const ast::UnaryExpr *>(e);
+        if (u->op == ast::UnOp::AddrOf && u->desugared_bound_method)
+            return true;
+    }
+    return false;
+}
+
 Type TypeChecker::check_assign(ast::AssignExpr *e) {
     // Target debe ser un lvalue.  admitimos:
     //  - IdentExpr        (variable simple).
@@ -7926,6 +7972,33 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                                      type_to_string(tv) +
                                      ") incompatible con tipo del campo (" +
                                      type_to_string(ft) + ")");
+        }
+        // Safety net (item 1): un closure CAPTURADOR asignado a un campo de un
+        // STRUCT local deja el env en el STACK del scope actual.  Tainteamos el
+        // struct para rechazar luego su escape (return/store).  Para CLASES el
+        // env es heap-owned (lo libera el dtor), asi que no se taintea.
+        if (ft.kind == PrimitiveKind::FUNCTION && !ft.fn_is_raw && fa->base &&
+            fa->base->kind == ast::NodeKind::IdentExpr &&
+            fa->base->result_type.kind == PrimitiveKind::STRUCT &&
+            is_capturing_closure_expr(e->value.get())) {
+            auto *bid = static_cast<ast::IdentExpr *>(fa->base.get());
+            struct_stack_closure_taint_.insert(bid->name);
+        }
+        // Safety net (item 1): escape via store de un struct tainteado a un
+        // campo (obj.f = s) -> la copia con el closure-en-stack sobrevive al
+        // scope productor -> colgaria.  Rechazar.
+        if (e->value && e->value->kind == ast::NodeKind::IdentExpr) {
+            auto *vid = static_cast<ast::IdentExpr *>(e->value.get());
+            if (struct_stack_closure_taint_.count(vid->name)) {
+                diags_.error(
+                    e->loc,
+                    "el struct '" + vid->name +
+                        "' tiene un closure capturador en un campo (su env vive "
+                        "en el stack) y se almacena en un campo que le "
+                        "sobrevive: el env quedaria colgante.  Usa una CLASE "
+                        "(env heap owned, liberado por el destructor) si el "
+                        "closure debe sobrevivir al scope.");
+            }
         }
         return ft;
     }
