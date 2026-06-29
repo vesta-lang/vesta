@@ -1,0 +1,23 @@
+// NEGATIVO (compile-must-fail): almacenar un struct con `~Struct()` en un
+// campo todavia no esta soportado (Fase 2b).  El destructor del campo no se
+// ejecutaria al destruirse el contenedor -> fuga del recurso.  El compilador
+// lo rechaza (no leaks).  Usalo como variable local (RAII) o retornalo (move).
+// Cuando Fase 2b augmente el dtor del contenedor para recursar a sus campos
+// struct, este patron pasara a soportado.  Ver doc/VMdoc/Vex/InteropC.md.
+
+struct Recurso {
+    i64* p;
+    ~Recurso() { free(this.p); }
+}
+
+class Caja {
+    Recurso r;
+}
+
+i32 main() {
+    Caja c = new Caja();
+    Recurso tmp;
+    tmp.p = (i64*) malloc(8);
+    c.r = tmp;          // ERROR: el dtor del campo no se ejecutaria (fuga)
+    return 0;
+}

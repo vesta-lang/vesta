@@ -1744,6 +1744,12 @@ class Lowering {
         enum class Kind {
             RAW_ASM,    ///< Cleanup opaco (no preserva regs caller-saved).
             CALL_DTOR,  ///< CALLVIRT real al destructor de la clase.
+            STRUCT_DTOR, ///< CALL directo al destructor de un STRUCT value-type
+                        ///< (`<Struct>__dtor(addr)`).  Sin vtable: dispatch
+                        ///< estatico.  Inlineable (un dtor trivial cuesta ~0
+                        ///< tras el inliner).  Se registra solo si el struct
+                        ///< tiene `~Struct()` y NO escapa (move-on-return /
+                        ///< store suprime el cleanup via escaping_locals_).
             CALLN_FREE, ///< CALLN a libreria nativa (e.g. free de colecciones).
             SMARTPTR_FREE, ///< Liberar @c unique<T> al exit del scope.
             SHAREDPTR_REL, ///< Decrementar refcount de @c shared<T>.

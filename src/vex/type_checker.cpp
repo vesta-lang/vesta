@@ -7883,6 +7883,39 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                     }
                 }
             }
+            // Fase 2a interop C / ownership: un STRUCT value-type con
+            // `~Struct()` almacenado en un campo/slot/deref fugaria -- el
+            // destructor del campo NO se ejecuta todavia (el dtor del
+            // contenedor no recursa a campos struct; eso es Fase 2b).  El dtor
+            // de struct SI corre para variables locales (RAII) y se transfiere
+            // por `return` (move).  Rechazar el escape a campo para no dejar un
+            // leak silencioso.
+            if (tv_peek.kind == PrimitiveKind::STRUCT) {
+                auto it_s = struct_layouts_.find(tv_peek.struct_name);
+                if (it_s != struct_layouts_.end()) {
+                    bool s_has_dtor = false;
+                    for (const auto &m : it_s->second.methods)
+                        if (m.is_destructor) {
+                            s_has_dtor = true;
+                            break;
+                        }
+                    if (s_has_dtor) {
+                        const char *target_name =
+                            target_is_field   ? "campo de objeto/struct"
+                            : target_is_index ? "slot de array"
+                                              : "deref de puntero";
+                        diags_.error(
+                            e->loc,
+                            std::string("struct '") + tv_peek.struct_name +
+                                "' tiene destructor `~" + tv_peek.struct_name +
+                                "()` y no puede asignarse a " + target_name +
+                                " todavia: el destructor del campo no se "
+                                "ejecutaria (fuga).  Usalo como variable local "
+                                "(RAII) o retornalo (move).");
+                        return Type{PrimitiveKind::VOID};
+                    }
+                }
+            }
             // Re-procesamos el target/value despues por el flujo normal.
             // Idempotente porque check_expr no muta el AST de forma no-op.
         }

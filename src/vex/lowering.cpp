@@ -3758,6 +3758,31 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 }
             }
         }
+        // Fase 2a interop C / ownership: destructor automatico (RAII) del
+        // struct value-type local con `~Struct()` declarado y que NO escapa.
+        // CALL directo a <Struct>__dtor(addr) al exit del scope (dispatch
+        // estatico, sin vtable; inlineable -> un dtor trivial cuesta ~0).  Si
+        // el struct ESCAPA (return/store -> escaping_locals_), se SUPRIME el
+        // cleanup: move-on-return (el caller re-registra el dtor de su copia
+        // -> un solo free).  Cero overhead para structs sin `~Struct()`.
+        if (escaping_locals_.find(vd->name) == escaping_locals_.end()) {
+            bool has_dtor = false;
+            for (const auto &mi : lay.methods)
+                if (mi.is_destructor) {
+                    has_dtor = true;
+                    break;
+                }
+            if (has_dtor) {
+                CleanupAction act;
+                act.kind = CleanupAction::Kind::STRUCT_DTOR;
+                act.operands = {addr};
+                act.source_line = vd->loc.line;
+                act.refresh_name = vd->name;
+                // Naming de lower_struct_methods: <Struct>__ + __dtor.
+                act.func_name = sem_type.struct_name + "__" + "__dtor";
+                cleanup_stack_.push_back(std::move(act));
+            }
+        }
         return;
     }
 
@@ -7305,6 +7330,22 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             cv.imm = static_cast<uint64_t>(it->dtor_vtable_index);
             cv.source_line = it->source_line;
             fn_->append(current_block_, std::move(cv));
+            break;
+        }
+        case CleanupAction::Kind::STRUCT_DTOR: {
+            // CALL directo a <Struct>__dtor(addr): dispatch estatico (los
+            // structs no tienen vtable).  IrOp::CALL -> CALLVM en interp/JIT,
+            // call nativo en AOT; el inliner puede inlinearlo (dtor trivial =
+            // coste ~0).  El regalloc lo trata como CALL y preserva los regs
+            // vivos del scope (incluido el reg de v_ret en lower_return).
+            ir::IrInstr cd{};
+            cd.op = ir::IrOp::CALL;
+            cd.type = ir::IrType::VOID;
+            cd.dst = ir::IR_NO_VALUE;
+            cd.operands = std::move(opnds);
+            cd.func_name = it->func_name;
+            cd.source_line = it->source_line;
+            fn_->append(current_block_, std::move(cd));
             break;
         }
         case CleanupAction::Kind::NATIVE_FREE: {

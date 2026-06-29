@@ -1,0 +1,50 @@
+// Destructor de struct `~Struct()` (Fase 2a, ownership de value-types).
+//
+// Un struct value-type puede declarar un destructor `~Struct()` que se ejecuta
+// de forma DETERMINISTA (RAII) cuando la variable local sale de scope.  Da al
+// programador control total sobre la liberacion de recursos (memoria, handles
+// OS, ...), igual que `~Class()` pero para value-types y SIN GC.
+//
+// Semantica:
+//   - Variable local: el dtor corre al exit del scope (una vez).
+//   - `return s`: MOVE -- el dtor del local se SUPRIME y el dueno pasa al
+//     caller (que re-registra el dtor de su copia).  Un solo free, sin
+//     double-free.  Asi una factoria `Struct make() { ...; return s; }` es
+//     correcta y zero-cost.
+//   - Almacenar un struct-con-dtor en un campo todavia es error (Fase 2b: el
+//     dtor del contenedor recursara a sus campos struct).
+// Ver doc/VMdoc/Vex/InteropC.md.
+
+i64 freed = 0;
+
+// Struct que POSEE un recurso heap (un i64 alocado con malloc) y lo libera en
+// su destructor.  El programador decide como liberar.
+struct Recurso {
+    i64* p;
+    ~Recurso() {
+        free(this.p);          // liberacion determinista del recurso propio
+        freed = freed + 1;     // observable: cuenta de destructores ejecutados
+    }
+}
+
+// Factoria: adquiere el recurso y lo devuelve por valor (MOVE -- el dtor de `r`
+// aqui se suprime; el dueno pasa al caller).
+Recurso adquirir(i64 v) {
+    Recurso r;
+    r.p = (i64*) malloc(8);
+    *r.p = v;
+    return r;
+}
+
+// Usa el recurso en su propio scope.  `r` es el dueno (move desde adquirir);
+// se libera UNA vez al exit de `usar` -> malloc y free balanceados (sin leak,
+// sin double-free; verificado con valgrind).
+i64 usar(i64 v) {
+    Recurso r = adquirir(v);
+    return *r.p;
+}
+
+i32 main() {
+    i64 s = usar(20) + usar(20);   // 40; cada `usar` libera su recurso -> freed=2
+    return (i32)(s + freed);        // 40 + 2 = 42
+}
