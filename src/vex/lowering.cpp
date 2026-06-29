@@ -10909,16 +10909,56 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (e->operand->kind == ast::NodeKind::IdentExpr) {
         auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
         if (id->is_func_ref) {
-            const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+            const ir::IrValueId code = fn_->new_value(ir::IrType::PTR);
             ir::IrInstr ins{};
             ins.op = ir::IrOp::LABEL_ADDR;
             ins.type = ir::IrType::PTR;
-            ins.dst = dst;
+            ins.dst = code;
             ins.func_name = id->func_ref_mangled.empty() ? id->name
                                                          : id->func_ref_mangled;
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));
-            return dst;
+            // `(fn(...)) nombre` (LAMBDA): SIEMPRE un fat-pointer de 16 bytes
+            // {fn_addr, env=0}, como TODO valor lambda -> el call lo trata por
+            // CALLCLOSURE uniforme y se puede guardar en variables/campos fn.
+            // `(cfn(...)) nombre`, `(u64) nombre`, `&nombre` (raw, 8 bytes)
+            // devuelven la direccion cruda tal cual.
+            const bool dst_is_lambda =
+                (e->result_type.kind == PrimitiveKind::FUNCTION &&
+                 !e->result_type.fn_is_raw);
+            if (!dst_is_lambda) return code;
+            const ir::IrValueId fv = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
+                al.dst = fv; al.imm = 16; al.host_alloca = native_poo_;
+                al.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(al));
+            }
+            if (native_poo_) fn_->values[fv].is_host_ptr = true;
+            { // [fv+0] = fn_addr
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE; st.type = ir::IrType::I64;
+                st.operands = {code, fv}; st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            { // [fv+8] = 0 (env vacio)
+                const ir::IrValueId fv8 = fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId o8 =
+                    emit_const(ir::IrType::I64, 8, e->loc.line);
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD; ad.type = ir::IrType::I64;
+                ad.dst = fv8; ad.operands = {fv, o8}; ad.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ad));
+                if (native_poo_) fn_->values[fv8].is_host_ptr = true;
+                const ir::IrValueId z =
+                    emit_const(ir::IrType::I64, 0, e->loc.line);
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE; st.type = ir::IrType::I64;
+                st.operands = {z, fv8}; st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            return fv;
         }
     }
 
@@ -11026,20 +11066,30 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     const bool dst_ptr = is_ptr_like(dst_type);
     const bool src_ptr = is_ptr_like(src_type);
 
-    // Cast de un function value (VARIABLE) a una direccion ENTERA o puntero
-    // crudo: `(u64) fp` / `(void*) fp`.  Una VARIABLE de tipo fn es un PTR a un
-    // slot de 16 bytes {fn_addr, env}; extraer el fn_addr (primeros 8 bytes) --
-    // el puntero de codigo crudo, util para pasarlo a una API que espera un
-    // puntero de funcion (CreateThread, callbacks, tablas).  Sin esto el cast
-    // devolvia la DIRECCION del slot (&fp) -> la API saltaba a una direccion de
-    // stack y crasheaba.
-    //   Solo cuando el operando es una VARIABLE (IdentExpr): `(fn)nombre` ya
-    // bajo a LABEL_ADDR (direccion cruda de 8 bytes, no un slot) en el chequeo
-    // is_func_ref de arriba, asi que `(i64)(fn)nombre` NO debe re-LOAD-ear
-    // (seria deref del codigo) -- ese caso cae al manejo generico (identidad).
-    if (src_type.kind == PrimitiveKind::FUNCTION &&
-        e->operand->kind == ast::NodeKind::IdentExpr &&
+    // Cast desde un tipo FUNCTION a entero/puntero.  Distinguimos:
+    //   - cfn (fn_is_raw): el VALOR ya ES la direccion del codigo (8 bytes) ->
+    //     identidad (`(u64) cfn` / `(i64) &funcion` = la direccion tal cual).
+    //   - fn (lambda): un fat-pointer de 16 bytes {fn_addr, env}.  NO cabe en un
+    //     entero de 8 bytes -> ERROR (usa cfn(...) o &funcion para el puntero
+    //     crudo; o castea a un struct de dos i64 para deconstruir {fn_addr,env}).
+    if (src_type.kind == PrimitiveKind::FUNCTION && src_type.fn_is_raw &&
         (is_int_kind(dst_type.kind) || dst_ptr)) {
+        if (dst_ptr && native_poo_) fn_->values[v_op].is_host_ptr = true;
+        return v_op; // identidad: el cfn ES la direccion
+    }
+    if (src_type.kind == PrimitiveKind::FUNCTION && !src_type.fn_is_raw &&
+        is_int_kind(dst_type.kind)) {
+        error_at(e->loc,
+                 "no se puede castear un lambda (fn(...), 16 bytes) a un entero "
+                 "de 8 bytes: se perderia el entorno.  Usa 'cfn(...)' o "
+                 "'&funcion' para el puntero a funcion crudo (8 bytes), o castea "
+                 "a un struct de dos i64 {fn_addr, env} para deconstruirlo.");
+        return ir::IR_NO_VALUE;
+    }
+    // (void*) lambda: extraer el fn_addr (primeros 8 bytes del slot) para APIs
+    // nativas que esperan un puntero de funcion crudo.  Solo para VARIABLE.
+    if (src_type.kind == PrimitiveKind::FUNCTION &&
+        e->operand->kind == ast::NodeKind::IdentExpr && dst_ptr) {
         const ir::IrValueId fa = fn_->new_value(ir::IrType::I64);
         ir::IrInstr ld{};
         ld.op = ir::IrOp::LOAD;
@@ -11048,7 +11098,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         ld.operands = {v_op};
         ld.source_line = e->loc.line;
         fn_->append(current_block_, std::move(ld));
-        if (dst_ptr && native_poo_) fn_->values[fa].is_host_ptr = true;
+        if (native_poo_) fn_->values[fa].is_host_ptr = true;
         return fa;
     }
 
@@ -13498,6 +13548,55 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             (e->result_type.kind == PrimitiveKind::VOID)
                 ? ir::IR_NO_VALUE
                 : fn_->new_value(rt);
+        // El callee puede ser un LAMBDA (fn(...), fat-pointer de 16 bytes) o un
+        // puntero a funcion CRUDO (cfn(...), 8 bytes).  Lambda: fnp es el
+        // PUNTERO al slot {fn_addr, env} -> cargar fn_addr de [fnp+0] y env de
+        // [fnp+8] y emitir CALLCLOSURE (env en R14).  cfn: fnp ES la direccion
+        // -> CALLIND directo (sin slot, sin env).
+        const bool is_lambda =
+            (e->callee->result_type.kind == PrimitiveKind::FUNCTION &&
+             !e->callee->result_type.fn_is_raw);
+        if (is_lambda) {
+            const ir::IrValueId fn_addr = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::I64;
+                ld.dst = fn_addr; ld.operands = {fnp};
+                ld.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            const ir::IrValueId fnp8 = fn_->new_value(ir::IrType::PTR);
+            {
+                const ir::IrValueId off8 =
+                    emit_const(ir::IrType::I64, 8, e->loc.line);
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD; ad.type = ir::IrType::I64;
+                ad.dst = fnp8; ad.operands = {fnp, off8};
+                ad.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ad));
+                if (native_poo_)
+                    fn_->values[fnp8].is_host_ptr = fn_->values[fnp].is_host_ptr;
+            }
+            const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::I64;
+                ld.dst = env; ld.operands = {fnp8};
+                ld.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            std::vector<ir::IrValueId> cargs;
+            cargs.reserve(1 + args.size());
+            cargs.push_back(env);
+            for (auto v : args) cargs.push_back(v);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLCLOSURE;
+            ins.type = rt; ins.dst = dst;
+            ins.func_ptr = fn_addr; ins.operands = std::move(cargs);
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return dst;
+        }
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLIND;
         ins.type = rt;

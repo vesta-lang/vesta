@@ -8582,15 +8582,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 (void)check_expr(e->args[i].get());
             return ftype.pointee ? *ftype.pointee : Type{};
         };
-        // Solo campos cfn (puntero a funcion crudo, fn_is_raw): su valor es la
-        // direccion -> CALLIND directo.  Un campo lambda (fn) guardaria un
-        // puntero a un slot de 16 bytes y requeriria CALLCLOSURE (follow-up).
+        // Campo de tipo funcion (cfn O fn): `o.f(args)` baja a llamada
+        // indirecta.  El lowering elige CALLIND (cfn raw, 8 bytes) o
+        // CALLCLOSURE (fn lambda, fat-pointer de 16 bytes con env) segun
+        // fn_is_raw.  NOTA: un campo lambda guarda el PUNTERO a un slot que
+        // vive en stack -> el programador es responsable del lifetime.
         auto find_fn_field = [&](const std::vector<StructFieldInfo> &flds)
             -> const StructFieldInfo * {
             for (const auto &fld : flds)
                 if (fld.name == fa->field_name &&
-                    fld.type.kind == PrimitiveKind::FUNCTION &&
-                    fld.type.fn_is_raw)
+                    fld.type.kind == PrimitiveKind::FUNCTION)
                     return &fld;
             return nullptr;
         };
