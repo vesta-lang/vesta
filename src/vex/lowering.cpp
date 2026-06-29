@@ -23078,6 +23078,45 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
 
         lower_block(m->body.get());
 
+        // Fase 2b ownership: augmentar el dtor del struct para liberar sus
+        // campos struct destructibles (RAII recursivo).  Un campo struct es
+        // INLINE en el contenedor, asi que su dtor se invoca con CALL directo a
+        // <FieldStruct>__dtor(this + offset) -- mismo memory class que el
+        // contenedor (sin divergencia host: ambos VM en interp, host en AOT).
+        // Sin null-check (un campo struct siempre esta presente, inline).
+        if (m->is_destructor && !block_terminated_) {
+            const ir::IrValueId this_dtor = bindings.empty()
+                                                ? ir::IR_NO_VALUE
+                                                : bindings[0].second;
+            auto it_sl = tc_.struct_layouts().find(sd->name);
+            if (this_dtor != ir::IR_NO_VALUE &&
+                it_sl != tc_.struct_layouts().end()) {
+                for (const auto &f : it_sl->second.fields) {
+                    if (f.type.kind != PrimitiveKind::STRUCT) continue;
+                    auto it_inner =
+                        tc_.struct_layouts().find(f.type.struct_name);
+                    if (it_inner == tc_.struct_layouts().end()) continue;
+                    bool inner_has_dtor = false;
+                    for (const auto &im : it_inner->second.methods)
+                        if (im.is_destructor) {
+                            inner_has_dtor = true;
+                            break;
+                        }
+                    if (!inner_has_dtor) continue;
+                    const ir::IrValueId faddr = emit_field_addr(
+                        &fn, current_block_, this_dtor, f.offset, m->loc.line);
+                    ir::IrInstr cd{};
+                    cd.op = ir::IrOp::CALL;
+                    cd.type = ir::IrType::VOID;
+                    cd.dst = ir::IR_NO_VALUE;
+                    cd.operands = {faddr};
+                    cd.func_name = f.type.struct_name + "__" + "__dtor";
+                    cd.source_line = m->loc.line;
+                    fn.append(current_block_, std::move(cd));
+                }
+            }
+        }
+
         if (method_sret) {
             sret_active_ = saved_sret_active;
             sret_retbuf_ = saved_sret_retbuf;
@@ -24952,6 +24991,17 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     // el patron cur0/gcderef que colisionaba con el regalloc.
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, e->loc.line);
+    // Campo STRUCT: es INLINE en el payload de la clase (no un puntero).  Su
+    // "valor" como agregado ES su DIRECCION (igual que un struct local: el SSA
+    // value de un struct es su buffer).  NO hacer LOAD (eso leeria los primeros
+    // bytes tratando el campo como puntero -> `obj.s.x` accederia a [[obj+off]]
+    // en vez de [obj+off]; en AOT el campo sin inicializar es 0 -> store/deref
+    // a NULL -> SIGSEGV).  Devolver la direccion del campo inline.  (Los arrays
+    // T[] dinamicos SI son punteros host; los sized inline tienen su propio
+    // manejo mas abajo, por eso solo interceptamos STRUCT aqui.)
+    if (ftyp.kind == PrimitiveKind::STRUCT) {
+        return addr;
+    }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
     const ir::IrValueId dst = fn_->new_value(ir_t);
     ir::IrInstr ld{};

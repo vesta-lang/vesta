@@ -238,6 +238,11 @@ struct StructLayout {
     bool cat_c_representable = false;
     bool cat_managed = false;
     bool cat_computed = false;
+    /// Fase 2b ownership: @c true si el struct tiene algun campo struct que es
+    /// destructible (tiene `~Struct()` o a su vez @c has_destructible_field).
+    /// Dispara la sintesis de un dtor implicito + la augmentacion RAII
+    /// recursiva (el dtor del contenedor llama al dtor de cada campo struct).
+    bool has_destructible_field = false;
     /// marca `@Introspect` -- el lowering emite
     /// IntrospectInfo POD en static_data para que `find_type("Name")`
     /// runtime lo encuentre.

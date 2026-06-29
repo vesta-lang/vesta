@@ -1,0 +1,47 @@
+// Composicion de structs con RAII recursivo (Fase 2b, ownership).
+//
+// Un struct que CONTIENE otro struct con destructor obtiene un destructor
+// implicito que recursa a sus campos: al destruirse el contenedor, se ejecutan
+// los destructores de sus campos struct (en orden de declaracion), liberando la
+// cadena de recursos sin escribir codigo manual.  Value-types inline, sin GC.
+//
+// Tambien arregla un bug previo: acceder a un campo struct de una clase/struct
+// (`obj.campo.x`, `obj.campo.metodo()`) devuelve ahora la DIRECCION del campo
+// inline (antes hacia un LOAD extra tratandolo como puntero -> SIGSEGV en AOT).
+// Ver doc/VMdoc/Vex/InteropC.md.
+
+i64 freed = 0;
+
+// Recurso hoja: posee memoria heap y la libera en su destructor.
+struct Inner {
+    i64* p;
+    ~Inner() {
+        free(this.p);
+        freed = freed + 1;
+    }
+}
+
+// Contenedor: tiene un campo struct destructible -> gana un destructor
+// implicito que llama a ~Inner() automaticamente.
+struct Mid {
+    Inner inner;
+    i64 tag;
+}
+
+// Composicion anidada (3 niveles): Outer -> Mid -> Inner.
+struct Outer {
+    Mid mid;
+}
+
+i64 usar(i64 v) {
+    Outer o;
+    o.mid.inner.p = (i64*) malloc(8);   // acceso a campo struct anidado
+    *o.mid.inner.p = v;
+    o.mid.tag = 0;
+    return *o.mid.inner.p;               // o destruido al exit -> Mid -> Inner.free
+}
+
+i32 main() {
+    i64 s = usar(20) + usar(20);   // 40; cada `usar` libera su Inner -> freed=2
+    return (i32)(s + freed);        // 40 + 2 = 42
+}

@@ -3099,6 +3099,71 @@ void TypeChecker::collect_globals() {
     }
 
     // -----------------------------------------------------------------
+    // Fase 2b ownership: lo mismo para STRUCTS value-type.  Un struct con un
+    // campo struct destructible (tiene `~Struct()` o has_destructible_field a
+    // su vez) gana @c has_destructible_field; se le sintetiza un dtor implicito
+    // (si no declaro uno) y el lowering augmenta su dtor para llamar al dtor de
+    // cada campo struct (RAII recursivo, value-types inline).  Cierra el leak
+    // de la composicion `struct Outer { Inner inner; }` con Inner destructible.
+    // -----------------------------------------------------------------
+    auto struct_destructible = [&](const std::string &n) -> bool {
+        auto it = struct_layouts_.find(n);
+        if (it == struct_layouts_.end()) return false;
+        if (it->second.has_destructible_field) return true;
+        for (const auto &m : it->second.methods)
+            if (m.is_destructor) return true;
+        return false;
+    };
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto &kv : struct_layouts_) {
+            StructLayout &sl = kv.second;
+            if (sl.has_destructible_field) continue;
+            for (const auto &f : sl.fields) {
+                if (f.type.kind != PrimitiveKind::STRUCT) continue;
+                if (struct_destructible(f.type.struct_name)) {
+                    sl.has_destructible_field = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+    // Sintesis del dtor implicito para structs con campo destructible y sin
+    // `~Struct()` propio (mismo patron que las clases).
+    for (auto &mod_node : mod_.decls) {
+        if (!mod_node || mod_node->kind != ast::NodeKind::StructDecl) continue;
+        auto *sd = static_cast<ast::StructDecl *>(mod_node.get());
+        auto it_lay = struct_layouts_.find(sd->name);
+        if (it_lay == struct_layouts_.end()) continue;
+        StructLayout &lay = it_lay->second;
+        if (!lay.has_destructible_field) continue;
+        bool has_dtor = false;
+        for (const auto &m : lay.methods)
+            if (m.is_destructor) {
+                has_dtor = true;
+                break;
+            }
+        if (has_dtor) continue; // el user ya declaro uno
+        auto dtor = std::make_unique<ast::ClassMethodDecl>();
+        dtor->loc = sd->loc;
+        dtor->name = "__dtor";
+        dtor->is_destructor = true;
+        dtor->access = 0;
+        dtor->body = std::make_unique<ast::BlockStmt>();
+        dtor->body->loc = sd->loc;
+        sd->methods.push_back(std::move(dtor));
+        ClassMethodInfo mi;
+        mi.name = "__dtor";
+        mi.is_destructor = true;
+        mi.defining_class = sd->name;
+        mi.return_type = Type{PrimitiveKind::VOID};
+        mi.source_file = sd->loc.file;
+        mi.source_line = sd->loc.line;
+        lay.methods.push_back(std::move(mi));
+    }
+
+    // -----------------------------------------------------------------
     // Validacion de implementacion de interfaces.
     //
     // Para cada clase NO-interface con `class X : Base, IFoo, IBar`,
