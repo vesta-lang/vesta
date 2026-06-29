@@ -1,0 +1,37 @@
+// Reasignacion de un campo closure: liberar el slot+env anterior antes de
+// guardar el nuevo, como reasignar un unique<T> (RAII puro, sin GC).  El env
+// (y el slot {fn_addr, env} de 16 bytes) viven en heap, propiedad del objeto
+// contenedor; el dtor y la reasignacion los liberan de forma determinista.
+// Verificado cero leak con valgrind sobre el ELF AOT.
+// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+
+class Contador {
+    i64 n;
+    i64 inc() { this.n = this.n + 1; return this.n; }
+}
+
+class Widget {
+    fn() -> i64 onTick;   // campo lambda (closure capturando una clase)
+}
+
+i32 main() {
+    Contador c1 = new Contador();
+    Contador c2 = new Contador();
+    c2.n = 40;
+
+    Widget w = new Widget();
+
+    // Primera asignacion: closure que captura c1 (env+slot en heap owned).
+    w.onTick = () => c1.inc();
+
+    // Reasignacion: libera el slot+env de la PRIMERA closure antes de guardar
+    // la segunda (que captura c2).  Tambien funciona con metodo ligado.
+    w.onTick = &c2.inc;
+
+    // Llama a la closure vigente -> c2.inc() = 41.
+    i64 r = w.onTick();
+
+    // Al salir de scope, el dtor de `w` libera el slot+env de la segunda
+    // closure (RAII).  Sin fugas ni double-free.
+    return (i32)(r + 1);   // 41 + 1 = 42
+}

@@ -9224,9 +9224,27 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
 
     // -------------------------------------------------------------
     // 2. Alocar slot 16 bytes para el function value.
+    //
+    // Por defecto el slot va en STACK (ALLOCA, cero overhead).  PERO si el
+    // closure se almacena en un CAMPO (env_owned_by_field), el slot debe
+    // sobrevivir al scope donde nace (el campo guarda un puntero a el): lo
+    // alocamos en HEAP via RAW_ALLOC, owned por el campo.  Su destructor
+    // libera el slot Y el env (RAII puro, sin GC).  Sin esto el campo
+    // apuntaria a un slot de stack que cuelga cuando el objeto escapa.
+    // Ver doc/VMdoc/Vex/ClosuresEnCampos.md y emit_free_closure_env_field.
     // -------------------------------------------------------------
     ir::IrValueId fv_addr = fn_->new_value(ir::IrType::PTR);
-    {
+    if (e->env_owned_by_field) {
+        fn_->values[fv_addr].is_host_ptr = true;
+        const ir::IrValueId v_size = emit_const(ir::IrType::I64, 16, e->loc.line);
+        ir::IrInstr al{};
+        al.op = ir::IrOp::RAW_ALLOC;
+        al.type = ir::IrType::PTR;
+        al.dst = fv_addr;
+        al.operands = {v_size};
+        al.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(al));
+    } else {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
@@ -9254,6 +9272,9 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
     }
     {
         ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);
+        // Si el slot es heap (RAW_ALLOC, env_owned_by_field), el STORE a
+        // [slot+8] debe usar movh (host).
+        fn_->values[fv_plus_8].is_host_ptr = fn_->values[fv_addr].is_host_ptr;
         ir::IrValueId off8 = emit_const(ir::IrType::I64, 8, e->loc.line);
         ir::IrInstr ad{};
         ad.op = ir::IrOp::ADD;
@@ -13736,8 +13757,13 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 ad.dst = fnp8; ad.operands = {fnp, off8};
                 ad.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(ad));
-                if (native_poo_)
-                    fn_->values[fnp8].is_host_ptr = fn_->values[fnp].is_host_ptr;
+                // El slot {fn_addr, env} puede ser host (closure-en-campo de
+                // clase, RAW_ALLOC) o VM (lambda local en stack, ALLOCA).  La
+                // host-ness del slot+8 debe HEREDAR la del slot en TODOS los
+                // backends para que la carga de env emita movh/mov correcto.
+                // Antes solo se propagaba en native_poo (AOT) -> en VM/JIT un
+                // closure-en-campo cargaba env con mov (vm_mem) -> basura.
+                fn_->values[fnp8].is_host_ptr = fn_->values[fnp].is_host_ptr;
             }
             const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
             {
@@ -15219,8 +15245,19 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     // con closure que se copia fuera de scope comparte el env de stack (misma
     // limitacion que cualquier struct con puntero crudo).  Ver
     // doc/VMdoc/Vex/ClosuresEnCampos.md.
-    const bool _val_is_lambda =
+    // El RHS es "una lambda" tanto si es un LambdaExpr directo como si es un
+    // metodo ligado `&obj.metodo` (UnaryExpr AddrOf con desugared_bound_method,
+    // que el lowering baja como un lambda que captura el receptor).  Sin
+    // detectar el segundo caso, current_lambda_store_escapes_ no se activa ->
+    // el lambda del bound-method usa slot STACK (ALLOCA) en vez de heap owned
+    // -> el reassign-free/dtor harian `free` de una direccion de stack -> crash.
+    bool _val_is_lambda =
         e->value && e->value->kind == ast::NodeKind::LambdaExpr;
+    if (!_val_is_lambda && e->value &&
+        e->value->kind == ast::NodeKind::UnaryExpr) {
+        auto *uv = static_cast<ast::UnaryExpr *>(e->value.get());
+        if (uv->desugared_bound_method) _val_is_lambda = true;
+    }
     bool _tgt_is_class_field = false;
     if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
@@ -22681,14 +22718,14 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             if (it_lay != tc_.class_layouts().end()) {
                 const ClassLayout &lay = it_lay->second;
                 for (const auto &f : lay.fields) {
-                    // Campo FUNCTION (lambda): el env del closure NO se libera
-                    // aqui.  El campo guarda un PTR a un slot de 16 bytes en el
-                    // stack, no el {fn,env} inline; liberar de forma fiable
-                    // requiere campos closure INLINE (trabajo futuro).  De
-                    // momento el env (RAW_ALLOC) se fuga -- nunca un crash ni
-                    // un use-after-free.  Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+                    // Campo FUNCTION (lambda): el campo guarda un PTR a un slot
+                    // HEAP de 16 bytes {fn,env} (RAW_ALLOC owned por el campo).
+                    // Liberamos el env (si tiene capturas) y el slot -- RAII
+                    // puro, sin GC.  Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
                     if (f.type.kind == PrimitiveKind::FUNCTION &&
                         !f.type.fn_is_raw) {
+                        emit_free_closure_env_field(this_vid, f.offset,
+                                                    m->loc.line);
                         continue;
                     }
                     if (f.type.kind != PrimitiveKind::CLASS) continue;
@@ -23056,24 +23093,23 @@ static uint64_t intern_class_cache_slot(ir::IrModule &mod,
 }
 
 /**
- * @brief Emite el ASM que construye una FindClassParams (16 bytes) en
- *        stack y deja en @c r12 el ClassInfo* localizado.
+ * @brief Emite la liberacion RAII del closure almacenado en un campo: libera
+ *        el env (RAW_ALLOC, si tiene capturas) y el slot de 16 bytes (RAW_ALLOC
+ *        owned por el campo).  Modelo sin GC; ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+ *
+ * El campo guarda un PTR a un slot heap de 16 bytes {fn_addr@+0, env_ptr@+8}.
+ * Secuencia:
+ *   slot = [this + field_offset];       if (slot == 0) skip;   // campo sin closure
+ *   env  = [slot + 8];                  if (env  != 0) RAW_FREE(env);  // captura
+ *   RAW_FREE(slot);                                              // siempre
  */
 void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
                                            uint32_t field_offset,
                                            uint32_t line) {
-    // El campo lambda almacena un PTR al slot de 16 bytes {fn_addr@+0,
-    // env_ptr@+8} (el slot vive en el stack del scope donde se creo el
-    // closure).  Para liberar el env owned:
-    //   slot = [this + field_offset];   if (slot == 0) skip;
-    //   env  = [slot + 8];               if (env  == 0) skip;
-    //   RAW_FREE(env);
-    // Doble null-guard: campo sin closure (slot==0) o closure sin captura
-    // (env==0).  Modelo sin GC -- ver doc/VMdoc/Vex/ClosuresEnCampos.md.
-    const ir::IrBlockId skip_bb = fn_->new_block("free_env_skip");
+    const ir::IrBlockId skip_bb = fn_->new_block("free_clo_skip");
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
 
-    // slot = LOAD [this + field_offset]
+    // slot = LOAD [this + field_offset]  (host_ptr al slot RAW_ALLOC).
     const ir::IrValueId slot_addr =
         emit_field_addr(fn_, current_block_, this_vid, field_offset, line);
     const ir::IrValueId slot = fn_->new_value(ir::IrType::I64);
@@ -23087,7 +23123,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ld.source_line = line;
         fn_->append(current_block_, std::move(ld));
     }
-    // if (slot == 0) -> skip
+    // if (slot == 0) -> skip  (campo nunca asignado / closure null).
+    const ir::IrBlockId slot_ok = fn_->new_block("free_clo_slot_ok");
     {
         const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
         ir::IrInstr cmp{};
@@ -23097,15 +23134,23 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         cmp.operands = {slot, zero};
         cmp.source_line = line;
         fn_->append(current_block_, std::move(cmp));
-        const ir::IrBlockId cont = fn_->new_block("free_env_slot_ok");
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {is_null};
         br.target_block = skip_bb; // null -> skip
-        br.false_block = cont;
+        br.false_block = slot_ok;
         br.source_line = line;
+        // CFG explicita (succs/preds): SIN esto el analisis de vivacidad NO
+        // ve los edges del diamante del free hacia skip_bb -> las constantes
+        // vivas que cruzan el free (p.ej. el offset +8 del call posterior)
+        // se consideran muertas y el regalloc reusa su registro como scratch
+        // del env-load -> direccion basura en el call -> segfault.
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[current_block_].succs.push_back(slot_ok);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        fn_->blocks[slot_ok].preds.push_back(current_block_);
         fn_->append(current_block_, std::move(br));
-        current_block_ = cont;
+        current_block_ = slot_ok;
     }
     // env = LOAD [slot + 8]
     const ir::IrValueId env_addr = fn_->new_value(ir::IrType::PTR);
@@ -23131,7 +23176,9 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ld.source_line = line;
         fn_->append(current_block_, std::move(ld));
     }
-    // if (env == 0) -> skip; else RAW_FREE(env)
+    // Bloque que SIEMPRE libera el slot (heap owned), tras (quiza) liberar env.
+    const ir::IrBlockId free_slot_bb = fn_->new_block("free_clo_slot");
+    // if (env == 0) -> free_slot; else RAW_FREE(env) -> free_slot
     {
         const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
         ir::IrInstr cmp{};
@@ -23141,15 +23188,19 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         cmp.operands = {env, zero};
         cmp.source_line = line;
         fn_->append(current_block_, std::move(cmp));
-        const ir::IrBlockId do_bb = fn_->new_block("free_env");
+        const ir::IrBlockId free_env_bb = fn_->new_block("free_clo_env");
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {is_null};
-        br.target_block = skip_bb; // null -> skip
-        br.false_block = do_bb;
+        br.target_block = free_slot_bb; // env null -> solo libera el slot
+        br.false_block = free_env_bb;
         br.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[current_block_].succs.push_back(free_env_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        fn_->blocks[free_env_bb].preds.push_back(current_block_);
         fn_->append(current_block_, std::move(br));
-        current_block_ = do_bb;
+        current_block_ = free_env_bb;
     }
     {
         ir::IrInstr rf{};
@@ -23159,12 +23210,30 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         rf.operands = {env};
         rf.source_line = line;
         fn_->append(current_block_, std::move(rf));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = free_slot_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        fn_->append(current_block_, std::move(brj));
     }
+    // free_slot_bb: RAW_FREE(slot); br skip.
+    current_block_ = free_slot_bb;
     {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {slot};
+        rf.source_line = line;
+        fn_->append(current_block_, std::move(rf));
         ir::IrInstr brj{};
         brj.op = ir::IrOp::BR;
         brj.target_block = skip_bb;
         brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
         fn_->append(current_block_, std::move(brj));
     }
     current_block_ = skip_bb;
@@ -24869,6 +24938,19 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     if (ftyp.kind == PrimitiveKind::ARRAY && ftyp.array_size == 0) {
         fn_->values[dst].is_host_ptr = true;
     }
+    // Campo de tipo FUNCTION (lambda fn(...), NO cfn): en una CLASE el
+    // campo guarda un PTR al slot heap de 16 bytes {fn_addr, env}
+    // alocado con RAW_ALLOC (host) -- modelo de closures-en-campos
+    // owned (RAII).  Marcar is_host_ptr=true para que, al llamar, las
+    // cargas de fn_addr=[slot] y env=[slot+8] emitan movh (memoria
+    // host) y NO mov (que iria a vm_mem y leeria basura -> callvmr a
+    // una direccion invalida -> cuelgue/crash en VM/JIT).  En AOT todo
+    // el espacio es host, por eso solo divergia en VM/JIT.
+    // El cfn (fn_is_raw) es la direccion cruda de 8 bytes (CALLIND
+    // directo, sin deref de slot), no necesita host-ness aqui.
+    if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
+        fn_->values[dst].is_host_ptr = true;
+    }
     // fix - field de tipo CLASS guarda un GcHandle (estable a
     // evacuacion del GC).  Tras LOADear el handle, hacemos @c gcderef
     // para obtener el host_ptr actual del objeto (refrescado tras
@@ -25047,12 +25129,15 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     }
     const ir::IrValueId obj = lower_expr(target->base.get());
     if (obj == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-    // Reasignar un campo CLOSURE de clase: liberar el env (RAW_ALLOC owned)
-    // anterior ANTES de guardar el nuevo, como reasignar un unique<T>.  Sin
-    // esto el env viejo se fugaria.  Null-guard: la primera asignacion (campo
-    // == 0) no libera nada.  El nuevo env (rhs) ya esta alocado y es distinto
-    // del viejo, asi que no hay use-after-free.  Modelo sin GC -- ver
+    // Reasignar un campo LAMBDA: liberar el slot+env (RAW_ALLOC owned) anterior
+    // ANTES de guardar el nuevo, como reasignar un unique<T>.  Sin esto el
+    // slot/env viejos se fugarian.  Null-guard interno (campo == 0 -> no libera
+    // nada).  El nuevo slot+env (rhs) ya estan alocados y son distintos de los
+    // viejos -> sin use-after-free.  Modelo sin GC -- ver
     // doc/VMdoc/Vex/ClosuresEnCampos.md.
+    if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
+        emit_free_closure_env_field(obj, off, loc.line);
+    }
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);

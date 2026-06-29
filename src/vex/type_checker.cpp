@@ -3026,6 +3026,13 @@ void TypeChecker::collect_globals() {
             if (cl.is_interface || cl.is_runtime_predefined) continue;
             if (cl.has_destructible_field) continue; // ya maximo
             for (const auto &f : cl.fields) {
+                // Un campo FUNCTION (lambda) guarda un closure cuyo slot+env
+                // (RAW_ALLOC host owned) libera el destructor (RAII, sin GC).
+                if (f.type.kind == PrimitiveKind::FUNCTION && !f.type.fn_is_raw) {
+                    cl.has_destructible_field = true;
+                    changed = true;
+                    break;
+                }
                 // Solo fields de tipo CLASS aportan destructibilidad.
                 if (f.type.kind != PrimitiveKind::CLASS) continue;
                 auto it_inner = class_layouts_.find(f.type.struct_name);
