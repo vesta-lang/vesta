@@ -30526,7 +30526,15 @@ ir::IrValueId Lowering::emit_label_addr(const std::string &label_name,
 ir::IrValueId Lowering::emit_getpid(uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
     ir::IrInstr ins{};
-    ins.op = ir::IrOp::GETPID;
+    if (native_poo_) {
+        // AOT: pid() -> CALL __vex_pid (vex_async.vex, devuelve
+        // __vasync_current_pid).  Sin la VM; el runtime cooperativo lo provee.
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = "__vex_pid";
+        ins.is_call_site = true;
+    } else {
+        ins.op = ir::IrOp::GETPID;
+    }
     ins.type = ir::IrType::I64;
     ins.dst = v;
     ins.source_line = line;

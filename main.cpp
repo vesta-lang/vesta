@@ -2589,7 +2589,8 @@ int main(int argc, char *argv[]) {
                                  ins.func_name == "__vex_await" ||
                                  ins.func_name == "__vex_fulfill" ||
                                  ins.func_name == "__vex_msgsend" ||
-                                 ins.func_name == "__vex_msgrecv"))
+                                 ins.func_name == "__vex_msgrecv" ||
+                                 ins.func_name == "__vex_pid"))
                                 uses_async = true;
                 }
                 if (uses_async && !defines_async) {
