@@ -407,6 +407,11 @@ struct FunctionTypeNode : TypeNode {
     /// Tipo de retorno.  Nunca null (el parser inserta VOID si el
     /// usuario omite la flecha @c ->).
     std::unique_ptr<TypeNode> return_type;
+    /// true si es un PUNTERO A FUNCION crudo estilo C (@c cfn(...) -> R):
+    /// 8 bytes (solo la direccion), llamada directa (CALLIND), SIN env.
+    /// false = lambda/closure (@c fn(...) -> R): fat-pointer de 16 bytes
+    /// {fn_addr, env}.  Conceptos distintos: lambda != puntero a funcion.
+    bool is_raw = false;
     FunctionTypeNode() : TypeNode(NodeKind::FunctionTypeNode) {}
 };
 

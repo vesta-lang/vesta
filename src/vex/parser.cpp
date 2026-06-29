@@ -1717,7 +1717,7 @@ bool Parser::looks_like_cast() const noexcept {
     const TokenKind first_kind = first.kind;
     const bool is_type_starter =
         primitive_kind_from_token(first_kind) != PrimitiveKind::COUNT ||
-        first_kind == TokenKind::KW_FN ||
+        first_kind == TokenKind::KW_FN || first_kind == TokenKind::KW_CFN ||
         (first_kind == TokenKind::IDENTIFIER && first.lexeme == "VirtualPtr")
         // Item 19: identifier declarado como typedef/using
         // tambien es un type-starter valido para casts.
@@ -1730,7 +1730,7 @@ bool Parser::looks_like_cast() const noexcept {
 
     // Tipo funcion `fn(params) -> ret`: saltar `(...)` balanceado + el
     // `-> tipo_retorno` para reconocer `(fn(...)->R) expr` como cast.
-    if (first_kind == TokenKind::KW_FN) {
+    if (first_kind == TokenKind::KW_FN || first_kind == TokenKind::KW_CFN) {
         if (mut_lex.peek_at(off).kind == TokenKind::LPAREN) {
             int d = 1;
             ++off;
@@ -1852,6 +1852,7 @@ bool Parser::looks_like_register_storage() const noexcept {
     if (primitive_kind_from_token(t.kind) != PrimitiveKind::COUNT) return true;
     if (t.kind == TokenKind::KW_NONNULL) return true;
     if (t.kind == TokenKind::KW_FN) return true;
+    if (t.kind == TokenKind::KW_CFN) return true;
     if (t.kind == TokenKind::IDENTIFIER) return true; // tipo nombrado / typedef
     return false;
 }
@@ -1875,6 +1876,7 @@ bool Parser::starts_type() const noexcept {
     // hipotetico identificador que empezara por "fn"; KW_FN siempre
     // es el keyword reservado.
     if (current_.kind == TokenKind::KW_FN) return true;
+    if (current_.kind == TokenKind::KW_CFN) return true;
     if (current_.kind != TokenKind::IDENTIFIER) return false;
     /* `auto NAME = init;` y `var NAME = init;` cuentan como
      * inicio de var-decl (con inferencia local de tipo).  `auto`/`var`
@@ -1973,13 +1975,18 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
     // Si el usuario omite la flecha @c -> el return_type queda como
     // PrimitiveTypeNode(VOID) para mantener un tipo siempre presente
     // (simplifica el type checker, que no tiene que manejar null).
-    if (current_.kind == TokenKind::KW_FN) {
+    if (current_.kind == TokenKind::KW_FN ||
+        current_.kind == TokenKind::KW_CFN) {
+        const bool is_raw = (current_.kind == TokenKind::KW_CFN);
         const SourceLoc loc = current_.loc;
-        (void)consume(); // 'fn'
+        (void)consume(); // 'fn' / 'cfn'
         (void)expect(TokenKind::LPAREN,
-                     "se esperaba '(' tras 'fn' en tipo de funcion");
+                     is_raw
+                         ? "se esperaba '(' tras 'cfn' en puntero a funcion"
+                         : "se esperaba '(' tras 'fn' en tipo de funcion");
         auto fn = std::make_unique<ast::FunctionTypeNode>();
         fn->loc = loc;
+        fn->is_raw = is_raw; // cfn(...) -> puntero a funcion crudo (8 bytes)
         // Parametros: lista de tipos separados por coma.  Vacio para
         // `fn() -> R`.  No se admiten nombres aqui (un type-node solo
         // describe la firma, no introduce parametros con nombre).

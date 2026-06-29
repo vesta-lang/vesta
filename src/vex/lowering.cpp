@@ -10964,6 +10964,14 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
                k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
     };
+    // cfn (PUNTERO A FUNCION crudo estilo C): el cast NO envuelve en un slot
+    // de 16 bytes; la direccion ENTERA ES el valor (8 bytes), y la llamada
+    // baja a CALLIND directo.  lambda (fn) != cfn.  Esto cubre las tablas de
+    // punteros a funcion y los saltos a direcciones fijas (kernels, FFI).
+    if (dst_type.kind == PrimitiveKind::FUNCTION && dst_type.fn_is_raw &&
+        is_int_kind(src_type.kind)) {
+        return v_op; // la direccion cruda tal cual
+    }
     if (dst_type.kind == PrimitiveKind::FUNCTION &&
         is_int_kind(src_type.kind)) {
         // v_op es la direccion de la funcion (i64).  Construir el slot.

@@ -1864,7 +1864,9 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
             params.push_back(type_from_node(p.get()));
         }
         Type ret = type_from_node(fn->return_type.get());
-        return Type::make_function(std::move(params), std::move(ret));
+        Type ft = Type::make_function(std::move(params), std::move(ret));
+        ft.fn_is_raw = fn->is_raw; // cfn(...) -> puntero a funcion crudo (8B)
+        return ft;
     }
     return Type{};
 }

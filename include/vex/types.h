@@ -319,6 +319,12 @@ struct Type {
     /// aridad y tipos en compile time.
     std::vector<Type> fn_params;
 
+    /// Solo para @c kind == FUNCTION: distingue el LAMBDA/closure (false,
+    /// @c fn(...) -> R, fat-pointer de 16 bytes {fn_addr, env}) del PUNTERO
+    /// A FUNCION crudo estilo C (true, @c cfn(...) -> R, 8 bytes = solo la
+    /// direccion, llamada directa via CALLIND, sin env).  lambda != cfn.
+    bool fn_is_raw = false;
+
     /// Newtype nominal ID (typedef T name new).  0 = no es newtype
     /// (alias transparente clasico).  Cualquier valor > 0 identifica
     /// univocamente al newtype: dos Type con kinds/representacion
@@ -423,6 +429,9 @@ struct Type {
         // la identidad estructural.  Dos `fn(i32) -> i32` con distinta
         // aridad o distinto tipo de parametro son tipos diferentes.
         if (kind == PrimitiveKind::FUNCTION) {
+            // lambda (fn) != puntero a funcion crudo (cfn): tipos distintos
+            // aunque compartan firma (representacion 16B vs 8B).
+            if (fn_is_raw != o.fn_is_raw) return false;
             if (fn_params.size() != o.fn_params.size()) return false;
             for (size_t i = 0; i < fn_params.size(); ++i) {
                 if (!(fn_params[i] == o.fn_params[i])) return false;

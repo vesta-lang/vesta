@@ -2291,6 +2291,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // emit_save_all_gc_aware lo clobrea como scratch del gchandle.
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         std::string rfn = ctx.load_src(ins.func_ptr, 0);
+        // El func_ptr debe SOBREVIVIR al marshalling de args (que escribe
+        // r1..r12) y a los scratch del parallel-move (r13/r14).  Si quedo en
+        // alguno de esos, el `callvmr` saltaria al VALOR DE UN ARG en vez de
+        // a la funcion (bug: `mov r1,&fn; mov r1,arg0; callvmr r1`).  Lo
+        // anclamos en r0: esta libre hasta que `callvmr` lo consume (el
+        // retorno de la funcion sobreescribe r0 DESPUES del salto, y el
+        // `mov rd,r0` de abajo ya captura ese retorno).  r0 nunca es destino
+        // de un arg (args = r1..r12) ni scratch del move (r13/r14).
+        if (rfn != "r0") {
+            ctx.out << "    mov r0, " << rfn << "\n";
+            rfn = "r0";
+        }
 
         const size_t nargs = std::min(ins.operands.size(), (size_t)12);
         std::vector<std::pair<int, std::string>> moves;

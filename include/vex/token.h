@@ -156,7 +156,8 @@ enum class TokenKind : uint16_t {
     KW_CLASS,
     KW_INTERFACE,
     KW_ENUM,
-    KW_FN, ///< Tipo de funcion: fn(T) -> R
+    KW_FN, ///< Tipo de funcion / closure (lambda): fn(T) -> R (16 bytes)
+    KW_CFN, ///< Puntero a funcion crudo estilo C: cfn(T) -> R (8 bytes)
     KW_PUBLIC,
     KW_PRIVATE,
     KW_PROTECTED,

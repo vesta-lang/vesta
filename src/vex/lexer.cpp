@@ -109,6 +109,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::KW_INTERFACE: return "interface";
     case TokenKind::KW_ENUM: return "enum";
     case TokenKind::KW_FN: return "fn";
+    case TokenKind::KW_CFN: return "cfn";
     case TokenKind::KW_PUBLIC: return "public";
     case TokenKind::KW_PRIVATE: return "private";
     case TokenKind::KW_PROTECTED: return "protected";
@@ -262,6 +263,7 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
         VEX_KW_EXACT("continue", TokenKind::KW_CONTINUE);
         VEX_KW_EXACT("catch", TokenKind::KW_CATCH);
         VEX_KW_EXACT("case", TokenKind::KW_CASE);
+        VEX_KW_EXACT("cfn", TokenKind::KW_CFN);
         break;
     case 'd':
         VEX_KW_EXACT("do", TokenKind::KW_DO);
