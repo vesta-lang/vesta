@@ -30356,7 +30356,16 @@ ir::IrValueId Lowering::emit_gc_allocp(ir::IrValueId v_size, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
     fn_->values[v].is_host_ptr = true;
     ir::IrInstr ins{};
-    ins.op = ir::IrOp::GC_ALLOCP;
+    if (native_poo_) {
+        // AOT: usar el GC nativo (libvesta_gc) -> CALL vex_gc_alloc_ptr(size),
+        // igual que __new_<Class>_gc.  Asi shared<T> aloca su control block sin
+        // la VM; el GC gestiona el lifetime (stackmaps).  El auto-link de
+        // libvesta_gc.a se dispara al detectar vex_gc_*.
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = "vex_gc_alloc_ptr";
+    } else {
+        ins.op = ir::IrOp::GC_ALLOCP;
+    }
     ins.type = ir::IrType::PTR;
     ins.dst = v;
     ins.operands = {v_size};
