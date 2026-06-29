@@ -590,6 +590,12 @@ class TypeChecker {
     Type check_binary(ast::BinaryExpr *e);
     Type check_unary(ast::UnaryExpr *e);
     Type check_assign(ast::AssignExpr *e);
+    // Promocion de nombre desnudo de funcion a function value: si @c val es un
+    // IdentExpr que nombra una funcion (is_func_ref) y @c target es FUNCTION,
+    // le asigna el tipo cfn/fn (segun target.fn_is_raw) y devuelve ese tipo.
+    // Si no aplica, devuelve @c fallback sin tocar el AST.
+    Type maybe_promote_func_ref(ast::Expr *val, const Type &target,
+                                const Type &fallback);
     Type check_call(ast::CallExpr *e);
     Type check_ident(ast::IdentExpr *e);
     Type check_field_access(ast::FieldAccessExpr *e);

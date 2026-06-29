@@ -4974,6 +4974,10 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         const bool is_null_lit = vd->init->kind == ast::NodeKind::NullLitExpr;
         const bool null_to_class =
             is_null_lit && s.type.kind == PrimitiveKind::CLASS;
+        // Promocion de nombre desnudo de funcion: `cfn(...) f = doblar` o
+        // `fn(...) g = doblar` -> tratar el nombre como &doblar (cfn) o
+        // como slot lambda {addr,0} segun el tipo declarado.
+        t = maybe_promote_func_ref(vd->init.get(), s.type, t);
         // nonnull: si el tipo declarado lleva el modificador
         // nonnull, rechazar literal null como inicializador.
         if (vd->type && vd->type->is_nonnull && is_null_lit) {
@@ -7423,6 +7427,28 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     return Type{};
 }
 
+Type TypeChecker::maybe_promote_func_ref(ast::Expr *val, const Type &target,
+                                         const Type &fallback) {
+    // Solo aplica si el destino es un tipo funcion y el valor es un nombre
+    // desnudo de funcion (sin `&`).  check_ident ya marco is_func_ref y
+    // func_ref_mangled; aqui le damos un result_type concreto (cfn o lambda
+    // segun el destino) para que types_assignable lo acepte y el lowering
+    // emita LABEL_ADDR (+ slot si lambda) -- ver lower_ident.
+    if (!val || target.kind != PrimitiveKind::FUNCTION) return fallback;
+    if (val->kind != ast::NodeKind::IdentExpr) return fallback;
+    auto *id = static_cast<ast::IdentExpr *>(val);
+    if (!id->is_func_ref) return fallback;
+    // No promocionar si el nombre esta sombreado por una variable local.
+    const Symbol *vs = lookup(id->name);
+    if (vs && vs->kind == SymbolKind::Variable) return fallback;
+    const FunctionSig *fsig = function_sig_by_name(id->name);
+    if (!fsig) return fallback;
+    Type ft = Type::make_function(fsig->param_types, fsig->return_type);
+    ft.fn_is_raw = target.fn_is_raw; // cfn o lambda segun el destino
+    val->result_type = ft;
+    return ft;
+}
+
 Type TypeChecker::check_assign(ast::AssignExpr *e) {
     // Target debe ser un lvalue.  admitimos:
     //  - IdentExpr        (variable simple).
@@ -7628,7 +7654,10 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
         // re-evalua base() pero el lookup esta cacheado en su layout.
         Type ft = check_field_access(fa);
         fa->result_type = ft;
-        const Type tv = check_expr(e->value.get());
+        Type tv = check_expr(e->value.get());
+        // Promocion de nombre desnudo de funcion: `o.f = doblar` cuando el
+        // campo es cfn/fn -> tratar el nombre como &doblar.
+        tv = maybe_promote_func_ref(e->value.get(), ft, tv);
         // null asignable a cualquier referencia CLASS (modelo
         // nullable por defecto, igual que en check_var_decl).
         const bool null_to_class_field =
@@ -7890,24 +7919,10 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
 
     Type tv = check_expr(e->value.get());
     // Funciones de primera clase: `g_fp = nombre_funcion;` (asignacion a una
-    // variable de tipo FUNCTION).  Mismo mecanismo que en var-decl/HOF:
-    // promocionar el IdentExpr de la funcion a un function value {fn_addr,
-    // env=0} patcheando su result_type (el lowering emite el slot).
-    if (s->type.kind == PrimitiveKind::FUNCTION &&
-        tv.kind == PrimitiveKind::VOID && e->value &&
-        e->value->kind == ast::NodeKind::IdentExpr) {
-        auto *id_arg = static_cast<ast::IdentExpr *>(e->value.get());
-        const Symbol *s_arg = lookup(id_arg->name);
-        if (s_arg && s_arg->kind == SymbolKind::Function) {
-            const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
-            Type fnv = Type::make_function(arg_sig.param_types,
-                                           arg_sig.return_type);
-            if (types_assignable(s->type, fnv)) {
-                tv = fnv;
-                id_arg->result_type = fnv;
-            }
-        }
-    }
+    // variable de tipo FUNCTION).  Promociona el nombre desnudo a cfn o lambda
+    // segun el destino (fn_is_raw del target); el lowering emite LABEL_ADDR
+    // (+ slot {fn_addr,env=0} si lambda) -- ver lower_ident.
+    tv = maybe_promote_func_ref(e->value.get(), s->type, tv);
     // Vex Embed Inc 2: `string += string` y `string += char` son legales
     // (append sugar).  El RHS char NO es assignable a string en general,
     // pero en compound `+=` sobre string lo aceptamos: el lowering native

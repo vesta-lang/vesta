@@ -91,7 +91,8 @@ i32 main() {
     i64 r2 = (o.op)(o.valor);            // CALLIND -> doblar(10) = 20
     if (r2 != 20) { return 2; }
 
-    o.op = &triplicar;                   // REASIGNAR en runtime (un metodo no)
+    o.op = triplicar;                    // NOMBRE DESNUDO (sin &): se promociona
+                                         // a &triplicar automaticamente
     i64 r3 = (o.op)(o.valor);            // CALLIND -> triplicar(10) = 30
     if (r3 != 30) { return 3; }
 

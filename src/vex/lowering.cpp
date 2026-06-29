@@ -11374,6 +11374,69 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
 }
 
 ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
+    // Promocion de NOMBRE DESNUDO de funcion a function value.  Cuando el
+    // type checker detecta `campo_fn = nombre` / `cfn x = nombre` (sin `&`),
+    // marca el IdentExpr is_func_ref y le asigna un result_type FUNCTION
+    // (cfn si fn_is_raw, lambda si no).  Aqui emitimos la direccion cruda
+    // (LABEL_ADDR) y, si el destino es un lambda, la envolvemos en el slot
+    // fat-pointer de 16 bytes {fn_addr, env=0}.  Misma logica que el cast
+    // explicito `(cfn/fn) nombre` en lower_cast_expr.
+    if (e->is_func_ref && e->result_type.kind == PrimitiveKind::FUNCTION) {
+        const ir::IrValueId code = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::LABEL_ADDR;
+            ins.type = ir::IrType::PTR;
+            ins.dst = code;
+            ins.func_name =
+                e->func_ref_mangled.empty() ? e->name : e->func_ref_mangled;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+        }
+        if (e->result_type.fn_is_raw) return code; // cfn: 8 bytes crudos
+        // Lambda: fat-pointer de 16 bytes {fn_addr, env=0}.
+        const ir::IrValueId fv = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = fv;
+            al.imm = 16;
+            al.host_alloca = native_poo_;
+            al.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        if (native_poo_) fn_->values[fv].is_host_ptr = true;
+        { // [fv+0] = fn_addr
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {code, fv};
+            st.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        { // [fv+8] = 0 (env vacio)
+            const ir::IrValueId fv8 = fn_->new_value(ir::IrType::PTR);
+            const ir::IrValueId o8 = emit_const(ir::IrType::I64, 8, e->loc.line);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = fv8;
+            ad.operands = {fv, o8};
+            ad.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ad));
+            if (native_poo_) fn_->values[fv8].is_host_ptr = true;
+            const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {z, fv8};
+            st.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        return fv;
+    }
+
     /* si estamos dentro de un @Macro body Y el name
      * resuelve a un comptime global int, emit LOAD desde el slot
      * @c static_data correspondiente.  Asi el macro ve el VALOR
