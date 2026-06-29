@@ -7947,12 +7947,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // de closure existente (CALLCLOSURE) mas abajo -- no las intercepta.
         bool indirect = false;
         Type ftype{};
-        // Casts, index y &funcion (UnaryExpr AddrOf) a tipo FUNCTION son
-        // punteros a funcion crudos -> CALLIND.  Una VARIABLE de tipo FUNCTION
-        // (closure de 16 bytes) se llama por el path de closure mas abajo.
+        // Cualquier callee que sea una EXPRESION (no un nombre de funcion ni un
+        // metodo) cuyo valor es de tipo FUNCTION es una llamada indirecta:
+        //   - cast `(cfn/fn(...)) x`, index `tabla[i]`, &funcion (UnaryExpr),
+        //     resultado de otra llamada `ptr_of(p)(x)`, etc.
+        // Una IdentExpr (variable fn/cfn) y los nombres de funcion / metodos se
+        // resuelven en sus paths dedicados mas abajo.
         if (e->callee->kind == ast::NodeKind::CastExpr ||
             e->callee->kind == ast::NodeKind::IndexExpr ||
-            e->callee->kind == ast::NodeKind::UnaryExpr) {
+            e->callee->kind == ast::NodeKind::UnaryExpr ||
+            e->callee->kind == ast::NodeKind::CallExpr) {
             Type ct = check_expr(e->callee.get());
             if (ct.kind == PrimitiveKind::FUNCTION) {
                 indirect = true;

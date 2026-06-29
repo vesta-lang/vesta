@@ -13535,6 +13535,51 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     // emitimos CALLIND con func_ptr = ese valor.  El tipo de retorno viene
     // del result_type que dejo el type checker.
     if (e->is_indirect_call) {
+        // OPTIMIZACION (callback conocido): si el puntero a funcion es una
+        // funcion CONOCIDA en compile-time -- `(cfn(...)) nombre` o `&nombre`
+        // -- emitimos un CALL DIRECTO a la funcion en vez de CALLIND.  Mismo
+        // coste que una llamada normal y el inliner del IR puede inlinearla.
+        // (Un cfn que viene de un entero/tabla/variable sigue por CALLIND.)
+        {
+            ast::Expr *inner = nullptr;
+            if (e->callee->kind == ast::NodeKind::CastExpr)
+                inner = static_cast<ast::CastExpr *>(e->callee.get())
+                            ->operand.get();
+            else if (e->callee->kind == ast::NodeKind::UnaryExpr) {
+                auto *u = static_cast<ast::UnaryExpr *>(e->callee.get());
+                if (u->op == ast::UnOp::AddrOf) inner = u->operand.get();
+            }
+            if (inner && inner->kind == ast::NodeKind::IdentExpr) {
+                auto *iid = static_cast<ast::IdentExpr *>(inner);
+                if (iid->is_func_ref) {
+                    const std::string fname = iid->func_ref_mangled.empty()
+                                                  ? iid->name
+                                                  : iid->func_ref_mangled;
+                    std::vector<ir::IrValueId> dargs;
+                    dargs.reserve(e->args.size());
+                    for (auto &a : e->args) {
+                        const ir::IrValueId av = lower_expr(a.get());
+                        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                        dargs.push_back(av);
+                    }
+                    const ir::IrType drt =
+                        ir_type_from_primitive(e->result_type.kind);
+                    const ir::IrValueId ddst =
+                        (e->result_type.kind == PrimitiveKind::VOID)
+                            ? ir::IR_NO_VALUE
+                            : fn_->new_value(drt);
+                    ir::IrInstr di{};
+                    di.op = ir::IrOp::CALL;
+                    di.func_name = fname;
+                    di.type = drt;
+                    di.dst = ddst;
+                    di.operands = std::move(dargs);
+                    di.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(di));
+                    return ddst;
+                }
+            }
+        }
         const ir::IrValueId fnp = lower_expr(e->callee.get());
         std::vector<ir::IrValueId> args;
         args.reserve(e->args.size());
