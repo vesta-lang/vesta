@@ -66,6 +66,6 @@ i64 prog_exec(u64 ent, char* args) {
     if (size == 0) { return -1; }
     u64 api = api_build();
     // Llamar al entry del programa: prog_main(api, args) en 0x100000.
-    i64 r = ((fn(u64,u64)->i64) 0x100000)(api, (u64) args);
+    i64 r = ((cfn(u64,u64)->i64) 0x100000)(api, (u64) args);
     return r;
 }

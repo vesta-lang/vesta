@@ -89,11 +89,11 @@ i64 prog_main(u64 api, u64 args) {
     u64 a_puts = tbl[0];     // void puts(char*)
     u64 a_dec = tbl[2];      // void dec(i64)
 
-    ((fn(u64)->void) a_puts)((u64) "= ");
+    ((cfn(u64)->void) a_puts)((u64) "= ");
     g_cs = args;
     g_cp = 0;
     i64 r = parse_expr();
-    ((fn(i64)->void) a_dec)(r);
-    ((fn(u64)->void) a_puts)((u64) "\n");
+    ((cfn(i64)->void) a_dec)(r);
+    ((cfn(u64)->void) a_puts)((u64) "\n");
     return r;
 }
