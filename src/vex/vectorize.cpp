@@ -1844,18 +1844,41 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
                ((disp & 0xFFFFull) << 16);
     };
 
-    // acc_init = valor f64 de acc ANTES del loop (binding SSA plano).
-    const ir::IrValueId acc_init = lookup(acc_name);
+    // acc puede ser un valor SSA directo (caso simple: acc vive en un registro
+    // SSA) o un PTR a un SLOT de memoria (caso loop-carried: un loop EXTERNO
+    // arrastra acc, asi que la bajada lo materializa en un ALLOCA y el binding
+    // es el puntero al slot).  Soportamos AMBOS: si es slot, cargamos el valor
+    // inicial del slot antes del loop y escribimos el resultado al slot al
+    // final (en vez de re-vincular un SSA).  Sin esto, la reduccion con acc
+    // loop-carried (p.ej. `for(k) for(i) acc+=a[i]`) caia a escalar -> ~4x gcc.
+    const ir::IrValueId acc_binding = lookup(acc_name);
     const ir::IrValueId i_init =
         vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
     const ir::IrValueId v_a = lower_expr(a_base);
     const ir::IrValueId v_b = is_fma ? lower_expr(b_base) : ir::IR_NO_VALUE;
     const ir::IrValueId v_N = lower_expr(vl.limit);
-    if (acc_init == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
+    if (acc_binding == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
         v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE ||
         (is_fma && v_b == ir::IR_NO_VALUE))
         return false;
-    if (fn_->values[acc_init].type != elem_ty) return false;
+    // Resolver el valor inicial (acc_init) y, si es memory-based, el slot
+    // externo (acc_slot_ext) al que escribir el resultado final.
+    ir::IrValueId acc_init;
+    ir::IrValueId acc_slot_ext = ir::IR_NO_VALUE;
+    const ir::IrType acc_bt = fn_->values[acc_binding].type;
+    if (acc_bt == elem_ty) {
+        acc_init = acc_binding; // valor SSA directo
+    } else if (acc_bt == ir::IrType::PTR) {
+        // acc en slot: cargar el valor inicial (hereda is_host_ptr del binding).
+        acc_slot_ext = acc_binding;
+        const ir::IrValueId loaded = fn_->new_value(elem_ty);
+        ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
+        ld.dst = loaded; ld.operands = {acc_binding}; ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        acc_init = loaded;
+    } else {
+        return false; // tipo de binding inesperado
+    }
     const ir::IrType idx_ty = fn_->values[i_init].type;
 
     auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
@@ -2128,10 +2151,19 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         fn_->blocks[thdr].instrs[1].phi_args.push_back({rnext, tbody});
     }
 
-    // --- exit: acc = phi_res (resultado final) ---
+    // --- exit: resultado final = phi_res ---
     current_block_ = exit;
     block_terminated_ = false;
-    update_scope(acc_name, phi_res);
+    if (acc_slot_ext != ir::IR_NO_VALUE) {
+        // acc vive en un slot: escribir el resultado de vuelta (el binding sigue
+        // siendo el slot; lecturas posteriores de acc cargan de ahi).
+        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE; st.operands = {phi_res, acc_slot_ext};
+        st.source_line = ln;
+        fn_->append(exit, std::move(st));
+    } else {
+        update_scope(acc_name, phi_res); // valor SSA directo
+    }
     return true;
 }
 
