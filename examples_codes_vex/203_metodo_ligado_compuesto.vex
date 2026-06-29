@@ -1,0 +1,53 @@
+// Metodo ligado `&obj.metodo` con base COMPUESTA (no una variable simple):
+// `&getObj().metodo`.  El receptor se evalua UNA sola vez (al crear el puntero
+// ligado) y se captura; las llamadas posteriores operan sobre ESE receptor.
+// El compilador materializa un temporal oculto para el receptor.  Cubre
+// receptor de CLASE (capturado por referencia) y de STRUCT (copia por valor),
+// y el almacenamiento en un campo (env owned, liberado por el destructor).
+// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+
+class Contador {
+    i64 n;
+    i64 inc() { this.n = this.n + 1; return this.n; }
+}
+
+// Factoria: devuelve un Contador nuevo (base COMPUESTA del metodo ligado).
+Contador hacer(i64 base) {
+    Contador c = new Contador();
+    c.n = base;
+    return c;
+}
+
+struct Punto {
+    i64 x;
+    i64 leer() { return this.x; }
+}
+
+Punto mk(i64 v) {
+    Punto p;
+    p.x = v;
+    return p;
+}
+
+class Widget {
+    fn() -> i64 cb;
+}
+
+i32 main() {
+    // Receptor CLASE evaluado una vez: las dos llamadas inc-rementan el MISMO
+    // Contador (10 -> 11, 11 -> 12).
+    fn() -> i64 f = &hacer(10).inc;
+    i64 a = f();          // 11
+    i64 b = f();          // 12
+
+    // Receptor STRUCT (copia por valor del struct devuelto por mk).
+    fn() -> i64 g = &mk(8).leer;
+    i64 c = g();          // 8
+
+    // Base compuesta almacenada en un CAMPO: env owned, liberado por el dtor.
+    Widget w = new Widget();
+    w.cb = &hacer(10).inc;
+    i64 d = w.cb();       // 11
+
+    return (i32)(a + b + c + d);   // 11 + 12 + 8 + 11 = 42
+}

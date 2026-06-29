@@ -13347,6 +13347,15 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // desugaro a un lambda `(args) => var.metodo(args)` que captura el
         // receptor.  Bajamos ESE lambda (reusa env owned + CALLCLOSURE).
         if (e->desugared_bound_method) {
+            // Base COMPUESTA (`&getObj().m`): evaluar el receptor UNA vez y
+            // ligarlo al temporal oculto que el lambda captura por nombre.
+            // Asi getObj() no se re-evalua en cada llamada y se captura el
+            // objeto/struct correcto.
+            if (e->bound_recv_init && !e->bound_recv_name.empty()) {
+                const ir::IrValueId rv = lower_expr(e->bound_recv_init.get());
+                if (rv == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                bind(e->bound_recv_name, rv);
+            }
             return lower_expr(e->desugared_bound_method.get());
         }
         // &Tipo.metodo -> LABEL_ADDR del label de la free fn `Tipo__metodo`

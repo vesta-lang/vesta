@@ -616,6 +616,14 @@ struct UnaryExpr : Expr {
     /// deja aqui.  Si != null, el lowering baja ESTE lambda en vez del AddrOf.
     /// Reusa toda la maquinaria de closures (env owned, Fase 1).
     std::unique_ptr<Expr> desugared_bound_method;
+    /// `&expr.metodo` con base COMPUESTA (no una variable simple, p.ej.
+    /// `&getObj().metodo`): el receptor debe evaluarse UNA vez.  El type
+    /// checker materializa un temporal oculto (@c bound_recv_name) y mueve la
+    /// expresion base aqui (@c bound_recv_init); el lowering la evalua y la
+    /// liga al temporal ANTES de bajar @c desugared_bound_method (que captura
+    /// ese temporal por nombre).  Vacio/null si la base es una variable simple.
+    std::string bound_recv_name;
+    std::unique_ptr<Expr> bound_recv_init;
     UnaryExpr() : Expr(NodeKind::UnaryExpr) {}
 };
 

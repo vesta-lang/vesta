@@ -7126,6 +7126,15 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
 }
 
 Type TypeChecker::check_unary(ast::UnaryExpr *e) {
+    // Idempotencia: check_assign hace un "peek" del RHS antes del check real,
+    // asi que check_unary puede invocarse DOS veces sobre el mismo nodo.  Si ya
+    // desugaramos un metodo ligado (`&obj.m` / `&getObj().m`), devolvemos el
+    // tipo ya calculado sin re-procesar -- critico para la base compuesta,
+    // cuya expresion base ya fue MOVIDA a bound_recv_init (un segundo pase no
+    // la encontraria y caeria al AddrOf generico -> VirtualPtr<void>).
+    if (e->op == ast::UnOp::AddrOf && e->desugared_bound_method) {
+        return e->result_type;
+    }
     // &var.metodo -> PUNTERO A METODO LIGADO (Fase 2).  Cuando `var` es una
     // VARIABLE de tipo CLASE o STRUCT y `metodo` es un metodo (no un campo),
     // `&var.metodo` es un closure que CAPTURA el receptor.  Lo desugaramos a un
@@ -7193,9 +7202,11 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     }
     // &expr.metodo con base COMPUESTA (no una variable simple, e.g.
     // `&getObj().metodo`): el metodo ligado necesita capturar el receptor UNA
-    // vez, pero un lambda solo captura variables por nombre; capturar el
-    // resultado de una expresion requeriria materializar un temporal.  En v1
-    // damos un error claro sugiriendo asignar a una variable.
+    // vez.  Un lambda solo captura variables por nombre, asi que materializamos
+    // un TEMPORAL oculto (`__bmrecv_<id>`), movemos la expresion base a
+    // @c bound_recv_init (el lowering la evalua una vez y la liga al temporal)
+    // y construimos el lambda capturando ese temporal -- exactamente como el
+    // caso de variable simple, pero con un receptor sintetico.
     if (e->op == ast::UnOp::AddrOf && e->operand &&
         e->operand->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->operand.get());
@@ -7204,31 +7215,59 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
         if (fa->base && !base_is_simple_var) {
             const Type bt = check_expr(fa->base.get());
             fa->base->result_type = bt;
+            const std::vector<StructFieldInfo> *bfields = nullptr;
             const std::vector<ClassMethodInfo> *bm = nullptr;
             if (bt.kind == PrimitiveKind::CLASS) {
                 auto itc = class_layouts_.find(bt.struct_name);
-                if (itc != class_layouts_.end()) bm = &itc->second.methods;
+                if (itc != class_layouts_.end()) {
+                    bfields = &itc->second.fields;
+                    bm = &itc->second.methods;
+                }
             } else if (bt.kind == PrimitiveKind::STRUCT) {
                 auto its = struct_layouts_.find(bt.struct_name);
-                if (its != struct_layouts_.end()) bm = &its->second.methods;
+                if (its != struct_layouts_.end()) {
+                    bfields = &its->second.fields;
+                    bm = &its->second.methods;
+                }
             }
             if (bm) {
-                for (const auto &mm : *bm) {
-                    if (mm.name == fa->field_name && !mm.is_constructor &&
-                        !mm.is_static) {
-                        diags_.error(
-                            e->loc,
-                            "el receptor de un metodo ligado `&expr." +
-                                fa->field_name +
-                                "` debe ser una variable simple; asigna el "
-                                "receptor a una variable primero "
-                                "(`T r = expr; &r." +
-                                fa->field_name + "`).");
-                        // Devolver el tipo fn del metodo para no encadenar un
-                        // diagnostico de incompatibilidad de tipos.
-                        return Type::make_function(mm.param_types,
-                                                   mm.return_type);
+                // No aplicar si el nombre es un CAMPO (cae a &obj.campo).
+                bool is_field = false;
+                if (bfields)
+                    for (const auto &f : *bfields)
+                        if (f.name == fa->field_name) is_field = true;
+                const ClassMethodInfo *method = nullptr;
+                if (!is_field) {
+                    for (const auto &mm : *bm) {
+                        if (mm.name == fa->field_name && !mm.is_constructor &&
+                            !mm.is_destructor && !mm.is_static) {
+                            method = &mm;
+                            break;
+                        }
                     }
+                }
+                if (method) {
+                    // Temporal oculto del receptor, registrado como Variable
+                    // del tipo de la base para que el body del lambda
+                    // (`__bmrecv.metodo(...)`) type-checkee igual que con una
+                    // variable real.
+                    const std::string recv_name =
+                        "__bmrecv_" + std::to_string(next_gensym_id());
+                    Symbol rs;
+                    rs.kind = SymbolKind::Variable;
+                    rs.type = bt;
+                    (void)declare(recv_name, rs);
+                    e->bound_recv_name = recv_name;
+                    e->bound_recv_init = std::move(fa->base);
+                    Type fnt = Type::make_function(method->param_types,
+                                                   method->return_type);
+                    e->desugared_bound_method =
+                        build_bound_method_lambda(recv_name, *method, e->loc);
+                    const Type lt =
+                        check_expr(e->desugared_bound_method.get());
+                    e->desugared_bound_method->result_type = lt;
+                    e->result_type = fnt;
+                    return fnt;
                 }
             }
         }
