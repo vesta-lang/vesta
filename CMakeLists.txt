@@ -589,6 +589,31 @@ target_compile_options(vesta_gc PRIVATE
 target_compile_definitions(vesta_gc PRIVATE
         VESTA_GC_DEBUG_DISABLE=1 VESTA_GC_FREESTANDING=1)
 
+# ---------------------------------------------------------------------------
+# Variantes ESTATICAS de los plugins de stdlib (colecciones / math) para AOT
+# STANDALONE.  Mismo .c que la DLL, pero VESTA_PLUGIN_EXPORT vacio (sin
+# dllexport): el AOT enlaza estos .a (libvesta_collections.a / libvesta_math.a)
+# en vez de importar la DLL cuando el programa usa colecciones/math, produciendo
+# un .exe sin DLLs.  Solo se enlazan si el programa las usa (auto-link en main).
+# -ffunction-sections + -fdata-sections para que el linker descarte lo no usado.
+add_library(vesta_collections_a STATIC
+        stdlib/native/collections/vesta_collections.c)
+set_target_properties(vesta_collections_a PROPERTIES
+        OUTPUT_NAME vesta_collections C_STANDARD 11)
+target_include_directories(vesta_collections_a PRIVATE
+        ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(vesta_collections_a PRIVATE "VESTA_PLUGIN_EXPORT=")
+target_compile_options(vesta_collections_a PRIVATE
+        -ffunction-sections -fdata-sections)
+
+add_library(vesta_math_a STATIC stdlib/native/math/vesta_math.c)
+set_target_properties(vesta_math_a PROPERTIES
+        OUTPUT_NAME vesta_math C_STANDARD 11)
+target_include_directories(vesta_math_a PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(vesta_math_a PRIVATE "VESTA_PLUGIN_EXPORT=")
+target_compile_options(vesta_math_a PRIVATE
+        -ffunction-sections -fdata-sections)
+
 add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)
 target_include_directories(test_gc_lib PRIVATE ${VM_INCLUDES})
 # vmcore es STATIC y sus deps son PRIVATE -> replicar el set de enlace.

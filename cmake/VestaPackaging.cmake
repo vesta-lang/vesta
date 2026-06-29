@@ -21,6 +21,8 @@
 #   <prefix>/
 #     vesta.exe                    <- [core] ejecutable principal (en el PATH)
 #     libvesta_gc.a                <- [core] GC estatico para AOT (gc<T>)
+#     libvesta_collections.a       <- [core] colecciones estaticas para AOT
+#     libvesta_math.a              <- [core] math estatico para AOT
 #     include_lib/                 <- [core] stdlib del preprocesador VPP
 #     README.md, LICENSE.txt       <- [core]
 #     stdlib/native/<mod>/*.dll    <- [stdlib] plugins nativos (io, math, ...)
@@ -66,6 +68,16 @@ endif()
 # AOT falla con "no se encontro libvesta_gc.a".
 if (TARGET vesta_gc)
     install(FILES "$<TARGET_FILE:vesta_gc>" DESTINATION . COMPONENT core)
+endif()
+# Variantes ESTATICAS de los plugins de stdlib (colecciones / math): el AOT las
+# auto-enlaza JUNTO a vesta.exe cuando el programa las usa -> .exe standalone sin
+# DLLs.  Se instalan en core (parte del toolchain AOT).
+if (TARGET vesta_collections_a)
+    install(FILES "$<TARGET_FILE:vesta_collections_a>"
+            DESTINATION . COMPONENT core)
+endif()
+if (TARGET vesta_math_a)
+    install(FILES "$<TARGET_FILE:vesta_math_a>" DESTINATION . COMPONENT core)
 endif()
 
 # === stdlib (opcional): biblioteca estandar del lenguaje ===================
@@ -262,7 +274,8 @@ include(CPack)
 
 # Binarios que el instalador empaqueta (se construyen antes de cpack).
 set(_vesta_pkg_targets vm)
-foreach(_t vesta_lsp vesta_ffi vesta_gc vesta_io vesta_math vesta_collections vex_trace)
+foreach(_t vesta_lsp vesta_ffi vesta_gc vesta_collections_a vesta_math_a
+           vesta_io vesta_math vesta_collections vex_trace)
     if (TARGET ${_t})
         list(APPEND _vesta_pkg_targets ${_t})
     endif()

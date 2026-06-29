@@ -3255,31 +3255,72 @@ int main(int argc, char *argv[]) {
             // un .obj temporal y se enlaza con la lib (vm --link interno),
             // porque la ruta inline mandaria vex_gc_* a imports de DLL (rotos).
             // Solo PE por ahora (la lib se distribuye como COFF .a).
-            bool gc_autolink = false;
-            std::string gc_real_out, gc_tmp_obj;
+            // Auto-link de librerias ESTATICAS de la stdlib (.a) cuando el
+            // programa las usa: gc<T> (libvesta_gc.a), colecciones
+            // (libvesta_collections.a), math (libvesta_math.a).  Asi el .exe es
+            // STANDALONE (sin DLLs).  Se emite un .obj temporal y se enlaza con
+            // las .a (vm --link interno).  Las .a son de NUESTRO lenguaje ->
+            // siempre estaticas; solo se anaden si el programa las usa de verdad.
+            bool need_temp_link = false;
+            std::string link_real_out, link_tmp_obj;
+            std::vector<std::string> autolink_libs;
             {
-                bool uses_gc = false;
-                // __vexgc_init suele inlinearse en main; detectamos por las
-                // llamadas a los runtime entries vex_gc_* en cualquier funcion.
-                for (const auto &fn : aot_mod.functions) {
-                    for (const auto &b : fn.blocks) {
-                        for (const auto &ins : b.instrs)
-                            if (ins.func_name.rfind("vex_gc_", 0) == 0) {
-                                uses_gc = true;
-                                break;
-                            }
-                        if (uses_gc) break;
+                bool uses_gc = false, uses_col = false, uses_math = false;
+                for (const auto &fn : aot_mod.functions)
+                    for (const auto &b : fn.blocks)
+                        for (const auto &ins : b.instrs) {
+                            const std::string &f = ins.func_name;
+                            if (f.rfind("vex_gc_", 0) == 0) uses_gc = true;
+                            if (f.find("vcol_") != std::string::npos)
+                                uses_col = true;
+                            if (f.find("vmath_") != std::string::npos)
+                                uses_math = true;
+                        }
+                const bool want_exec = !emit_obj && !emit_shared && !emit_bin;
+                namespace fs = std::filesystem;
+                auto find_a = [&](const char *libfile) -> std::string {
+                    std::vector<fs::path> cands;
+                    const fs::path self(argv[0]);
+                    if (self.has_parent_path())
+                        cands.push_back(self.parent_path() / libfile);
+                    cands.emplace_back(libfile);
+                    cands.push_back(fs::path("cmake-build-release") / libfile);
+                    cands.push_back(fs::path("cmake-build-debug") / libfile);
+                    for (const auto &c : cands) {
+                        std::error_code ec;
+                        if (fs::exists(c, ec)) return c.string();
                     }
-                    if (uses_gc) break;
+                    return "";
+                };
+                if (want_exec) {
+                    if (uses_gc) {
+                        const std::string p = find_a("libvesta_gc.a");
+                        if (p.empty()) {
+                            std::cerr << "[aot] gc<T>: no se encontro "
+                                         "libvesta_gc.a (junto a vm o cwd).\n";
+                            return EXIT_FAILURE;
+                        }
+                        autolink_libs.push_back(p);
+                    }
+                    // Colecciones / math: preferir la .a estatica (standalone);
+                    // si no esta, se deja para el import IAT de la DLL (fallback,
+                    // la DLL acompana al exe).
+                    if (uses_col) {
+                        const std::string p =
+                            find_a("libvesta_collections.a");
+                        if (!p.empty()) autolink_libs.push_back(p);
+                    }
+                    if (uses_math) {
+                        const std::string p = find_a("libvesta_math.a");
+                        if (!p.empty()) autolink_libs.push_back(p);
+                    }
                 }
-                const bool want_exec =
-                    !emit_obj && !emit_shared && !emit_bin;
-                if (uses_gc && want_exec) {
-                    gc_autolink = true;
+                if (!autolink_libs.empty()) {
+                    need_temp_link = true;
                     emit_obj = true;          // emitir .obj temporal...
-                    gc_real_out = out_prefix; // ...y enlazarlo a este .exe
-                    gc_tmp_obj = out_prefix + ".vexgc.tmp.obj";
-                    out_prefix = gc_tmp_obj;
+                    link_real_out = out_prefix; // ...y enlazarlo al .exe final
+                    link_tmp_obj = out_prefix + ".aotlink.tmp.obj";
+                    out_prefix = link_tmp_obj;
                 }
             }
 
@@ -4268,52 +4309,35 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
-            // Increment 3: gc<T> -> enlazar el .obj temporal con libvesta_gc.a
-            // (vm --link interno) para producir el .exe final.
-            if (gc_autolink) {
+            // Auto-link: enlazar el .obj temporal con las .a estaticas de la
+            // stdlib que el programa usa (gc / colecciones / math) -> .exe
+            // STANDALONE (vm --link interno, sin g++ ni DLLs).
+            if (need_temp_link) {
                 namespace fs = std::filesystem;
-                std::vector<fs::path> cands;
-                const fs::path self(argv[0]);
-                if (self.has_parent_path())
-                    cands.push_back(self.parent_path() / "libvesta_gc.a");
-                cands.emplace_back("libvesta_gc.a");
-                cands.push_back(fs::path("cmake-build-debug") /
-                                "libvesta_gc.a");
-                std::string lib_path;
-                for (const auto &c : cands) {
-                    std::error_code ec;
-                    if (fs::exists(c, ec)) {
-                        lib_path = c.string();
-                        break;
-                    }
-                }
-                if (lib_path.empty()) {
-                    std::cerr
-                        << "[aot] gc<T>: no se encontro libvesta_gc.a (junto a "
-                           "vm o en el cwd).  Enlaza manualmente:\n  vm --link "
-                        << gc_tmp_obj << " libvesta_gc.a -o " << gc_real_out
-                        << " --format pe\n";
-                    return EXIT_FAILURE;
-                }
                 aot::LinkOptions lopts;
                 lopts.fmt = fmt; // PE o ELF, segun el destino
                 lopts.sysroot =
                     result.count("sysroot")
                         ? result["sysroot"].as<std::string>()
                         : std::string();
+                std::vector<std::string> inputs;
+                inputs.push_back(link_tmp_obj);
+                for (const auto &l : autolink_libs) inputs.push_back(l);
                 std::string lerr;
-                const bool ok = aot::aot_link({gc_tmp_obj, lib_path},
-                                              gc_real_out, lopts, lerr);
+                const bool ok =
+                    aot::aot_link(inputs, link_real_out, lopts, lerr);
                 std::error_code ec;
-                fs::remove(gc_tmp_obj, ec); // limpiar el .obj temporal
+                fs::remove(link_tmp_obj, ec); // limpiar el .obj temporal
                 if (!ok) {
-                    std::cerr << "[aot] gc<T> auto-link error: " << lerr << "\n";
+                    std::cerr << "[aot] auto-link error: " << lerr << "\n";
                     return EXIT_FAILURE;
                 }
-                std::cout << "[aot] ejecutable nativo PE con GC escrito en '"
-                          << gc_real_out
-                          << "' (gc<T> -> libvesta_gc.a auto-enlazada, sin "
-                             "g++).\n";
+                std::cout << "[aot] ejecutable nativo "
+                          << (fmt == aot::ObjFormat::PE ? "PE" : "ELF")
+                          << " STANDALONE escrito en '" << link_real_out << "' ("
+                          << autolink_libs.size()
+                          << " lib(s) estatica(s) de la stdlib auto-enlazada(s), "
+                             "sin DLLs ni g++).\n";
                 return EXIT_SUCCESS;
             }
 
