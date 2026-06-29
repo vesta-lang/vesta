@@ -656,6 +656,15 @@ class Lowering {
      *        callvirt 0 (ctor) + return GcHandle.
      */
     void generate_new_helpers(ir::IrModule &out);
+    /// Emite, dentro del destructor del contenedor, la liberacion del env
+    /// (RAW_ALLOC host) de un campo closure: `env = [this+offset+8]; if (env)
+    /// RAW_FREE(env)`.  Modelo de ownership sin GC (el closure-en-campo se
+    /// libera con su objeto, como un campo @c unique<T>).
+    /// @param this_vid  SSA value del receptor (`this`, host_ptr al objeto).
+    /// @param field_offset  Offset del campo closure (inicio del slot 16B).
+    /// @param line  Linea fuente para la depuracion.
+    void emit_free_closure_env_field(ir::IrValueId this_vid,
+                                     uint32_t field_offset, uint32_t line);
     /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);
@@ -973,6 +982,12 @@ class Lowering {
     /// y consultado por @c lower_lambda_expr para alocar el env
     /// block en heap raw en lugar de stack.  Se restaura al salir.
     bool current_fn_returns_function_ = false;
+
+    /// Activo mientras se baja un lambda-literal que se ALMACENA en un campo /
+    /// slot de array / deref (escapa del scope actual a un objeto que puede
+    /// sobrevivir al frame).  Disparado por @c lower_assign y consultado por
+    /// @c lower_lambda_expr para alocar el env en heap (GC) en lugar de stack.
+    bool current_lambda_store_escapes_ = false;
 
     /// Indica que la funcion actual declara devolver `string` a nivel
     /// fuente.  El IR tipo es I64 (handle a StringObject) por lo que

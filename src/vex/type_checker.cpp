@@ -3026,6 +3026,15 @@ void TypeChecker::collect_globals() {
             if (cl.is_interface || cl.is_runtime_predefined) continue;
             if (cl.has_destructible_field) continue; // ya maximo
             for (const auto &f : cl.fields) {
+                // Un campo FUNCTION (lambda) puede contener un closure cuyo
+                // env es PROPIEDAD de este objeto (modelo sin GC): el
+                // destructor lo libera.  Marca la clase destructible para
+                // que gane un destructor sintetico + la augmentacion RAII.
+                if (f.type.kind == PrimitiveKind::FUNCTION && !f.type.fn_is_raw) {
+                    cl.has_destructible_field = true;
+                    changed = true;
+                    break;
+                }
                 // Solo fields de tipo CLASS aportan destructibilidad.
                 if (f.type.kind != PrimitiveKind::CLASS) continue;
                 auto it_inner = class_layouts_.find(f.type.struct_name);
@@ -4811,48 +4820,8 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         // check normal generara el diagnostico de aridad.
         if (s.type.kind == PrimitiveKind::FUNCTION &&
             vd->init->kind == ast::NodeKind::LambdaExpr) {
-            auto *lam = static_cast<ast::LambdaExpr *>(vd->init.get());
-            if (lam->params.size() == s.type.fn_params.size()) {
-                for (size_t i = 0; i < lam->params.size(); ++i) {
-                    if (!lam->params[i]->type) {
-                        // Construir un PrimitiveTypeNode (o NamedTypeNode
-                        // para CLASS/STRUCT) que represente el tipo
-                        // esperado.  Los tipos primitivos cubren la
-                        // mayoria de casos; CLASS/STRUCT se anaden si
-                        // es necesario en hitos posteriores.
-                        const Type &pt = s.type.fn_params[i];
-                        if (pt.kind == PrimitiveKind::CLASS ||
-                            pt.kind == PrimitiveKind::STRUCT) {
-                            auto nt = std::make_unique<ast::NamedTypeNode>();
-                            nt->loc = lam->params[i]->loc;
-                            nt->name = pt.struct_name;
-                            lam->params[i]->type = std::move(nt);
-                        } else {
-                            auto pn =
-                                std::make_unique<ast::PrimitiveTypeNode>();
-                            pn->loc = lam->params[i]->loc;
-                            pn->prim = pt.kind;
-                            lam->params[i]->type = std::move(pn);
-                        }
-                    }
-                }
-                // Tambien propagar return_type si la lambda no lo tenia.
-                if (!lam->return_type && s.type.pointee) {
-                    const Type &rt = *s.type.pointee;
-                    if (rt.kind == PrimitiveKind::CLASS ||
-                        rt.kind == PrimitiveKind::STRUCT) {
-                        auto nt = std::make_unique<ast::NamedTypeNode>();
-                        nt->loc = lam->loc;
-                        nt->name = rt.struct_name;
-                        lam->return_type = std::move(nt);
-                    } else {
-                        auto pn = std::make_unique<ast::PrimitiveTypeNode>();
-                        pn->loc = lam->loc;
-                        pn->prim = rt.kind;
-                        lam->return_type = std::move(pn);
-                    }
-                }
-            }
+            propagate_fn_type_to_lambda(
+                static_cast<ast::LambdaExpr *>(vd->init.get()), s.type);
         }
         // Opcion B: auto-envolver init list anonimo en unique_box/shared_box.
         //   unique<Punto> p = {.x=10, .y=20};  ===>
@@ -5276,42 +5245,8 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
         // `fn(...) -> R var = (x) => ...`.
         if (fn_return_type.kind == PrimitiveKind::FUNCTION &&
             s->value->kind == ast::NodeKind::LambdaExpr) {
-            auto *lam = static_cast<ast::LambdaExpr *>(s->value.get());
-            if (lam->params.size() == fn_return_type.fn_params.size()) {
-                for (size_t i = 0; i < lam->params.size(); ++i) {
-                    if (!lam->params[i]->type) {
-                        const Type &pt = fn_return_type.fn_params[i];
-                        if (pt.kind == PrimitiveKind::CLASS ||
-                            pt.kind == PrimitiveKind::STRUCT) {
-                            auto nt = std::make_unique<ast::NamedTypeNode>();
-                            nt->loc = lam->params[i]->loc;
-                            nt->name = pt.struct_name;
-                            lam->params[i]->type = std::move(nt);
-                        } else {
-                            auto pn =
-                                std::make_unique<ast::PrimitiveTypeNode>();
-                            pn->loc = lam->params[i]->loc;
-                            pn->prim = pt.kind;
-                            lam->params[i]->type = std::move(pn);
-                        }
-                    }
-                }
-                if (!lam->return_type && fn_return_type.pointee) {
-                    const Type &rt = *fn_return_type.pointee;
-                    if (rt.kind == PrimitiveKind::CLASS ||
-                        rt.kind == PrimitiveKind::STRUCT) {
-                        auto nt = std::make_unique<ast::NamedTypeNode>();
-                        nt->loc = lam->loc;
-                        nt->name = rt.struct_name;
-                        lam->return_type = std::move(nt);
-                    } else {
-                        auto pn = std::make_unique<ast::PrimitiveTypeNode>();
-                        pn->loc = lam->loc;
-                        pn->prim = rt.kind;
-                        lam->return_type = std::move(pn);
-                    }
-                }
-            }
+            propagate_fn_type_to_lambda(
+                static_cast<ast::LambdaExpr *>(s->value.get()), fn_return_type);
         }
         // Bug fix 2026-05-23: propagar el Result<V,E> / Optional<T>
         // declarado del return type al check_expr antes de bajar Ok/Err/Some.
@@ -7485,6 +7420,43 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     return Type{};
 }
 
+void TypeChecker::propagate_fn_type_to_lambda(ast::LambdaExpr *lam,
+                                              const Type &fn_type) {
+    if (!lam || fn_type.kind != PrimitiveKind::FUNCTION) return;
+    if (lam->params.size() != fn_type.fn_params.size()) return;
+    for (size_t i = 0; i < lam->params.size(); ++i) {
+        if (lam->params[i]->type) continue;
+        const Type &pt = fn_type.fn_params[i];
+        if (pt.kind == PrimitiveKind::CLASS ||
+            pt.kind == PrimitiveKind::STRUCT) {
+            auto nt = std::make_unique<ast::NamedTypeNode>();
+            nt->loc = lam->params[i]->loc;
+            nt->name = pt.struct_name;
+            lam->params[i]->type = std::move(nt);
+        } else {
+            auto pn = std::make_unique<ast::PrimitiveTypeNode>();
+            pn->loc = lam->params[i]->loc;
+            pn->prim = pt.kind;
+            lam->params[i]->type = std::move(pn);
+        }
+    }
+    if (!lam->return_type && fn_type.pointee) {
+        const Type &rt = *fn_type.pointee;
+        if (rt.kind == PrimitiveKind::CLASS ||
+            rt.kind == PrimitiveKind::STRUCT) {
+            auto nt = std::make_unique<ast::NamedTypeNode>();
+            nt->loc = lam->loc;
+            nt->name = rt.struct_name;
+            lam->return_type = std::move(nt);
+        } else {
+            auto pn = std::make_unique<ast::PrimitiveTypeNode>();
+            pn->loc = lam->loc;
+            pn->prim = rt.kind;
+            lam->return_type = std::move(pn);
+        }
+    }
+}
+
 Type TypeChecker::maybe_promote_func_ref(ast::Expr *val, const Type &target,
                                          const Type &fallback) {
     // Solo aplica si el destino es un tipo funcion y el valor es un nombre
@@ -7548,7 +7520,11 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
             auto *u = static_cast<ast::UnaryExpr *>(e->target.get());
             if (u->op == ast::UnOp::Deref) target_is_deref = true;
         }
-        if (target_is_field || target_is_index || target_is_deref) {
+        // Un lambda-literal nunca es una CLASS con destructor; saltamos el
+        // peek para no type-checkear el lambda ANTES de propagarle la firma
+        // esperada del campo (la propagacion va mas abajo).
+        if ((target_is_field || target_is_index || target_is_deref) &&
+            e->value->kind != ast::NodeKind::LambdaExpr) {
             // Resolver tipo del value sin reportar errores de check_expr
             // para no duplicar diagnosticos.  Si es CLASS con destructor,
             // emitir error claro.
@@ -7712,6 +7688,13 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
         // re-evalua base() pero el lookup esta cacheado en su layout.
         Type ft = check_field_access(fa);
         fa->result_type = ft;
+        // Lambda-literal a un campo fn: propagar la firma esperada al lambda
+        // (params + return) ANTES de check_expr, igual que var-decl/assign.
+        if (ft.kind == PrimitiveKind::FUNCTION && e->value &&
+            e->value->kind == ast::NodeKind::LambdaExpr) {
+            propagate_fn_type_to_lambda(
+                static_cast<ast::LambdaExpr *>(e->value.get()), ft);
+        }
         Type tv = check_expr(e->value.get());
         // Promocion de nombre desnudo de funcion: `o.f = doblar` cuando el
         // campo es cfn/fn -> tratar el nombre como &doblar.
@@ -7938,41 +7921,8 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
     // Mismo patron que check_var_decl + check_return ya hacen.
     if (s->type.kind == PrimitiveKind::FUNCTION && e->value &&
         e->value->kind == ast::NodeKind::LambdaExpr) {
-        auto *lam = static_cast<ast::LambdaExpr *>(e->value.get());
-        if (lam->params.size() == s->type.fn_params.size()) {
-            for (size_t i = 0; i < lam->params.size(); ++i) {
-                if (!lam->params[i]->type) {
-                    const Type &pt = s->type.fn_params[i];
-                    if (pt.kind == PrimitiveKind::CLASS ||
-                        pt.kind == PrimitiveKind::STRUCT) {
-                        auto nt = std::make_unique<ast::NamedTypeNode>();
-                        nt->loc = lam->params[i]->loc;
-                        nt->name = pt.struct_name;
-                        lam->params[i]->type = std::move(nt);
-                    } else {
-                        auto pn = std::make_unique<ast::PrimitiveTypeNode>();
-                        pn->loc = lam->params[i]->loc;
-                        pn->prim = pt.kind;
-                        lam->params[i]->type = std::move(pn);
-                    }
-                }
-            }
-            if (!lam->return_type && s->type.pointee) {
-                const Type &rt = *s->type.pointee;
-                if (rt.kind == PrimitiveKind::CLASS ||
-                    rt.kind == PrimitiveKind::STRUCT) {
-                    auto nt = std::make_unique<ast::NamedTypeNode>();
-                    nt->loc = lam->loc;
-                    nt->name = rt.struct_name;
-                    lam->return_type = std::move(nt);
-                } else {
-                    auto pn = std::make_unique<ast::PrimitiveTypeNode>();
-                    pn->loc = lam->loc;
-                    pn->prim = rt.kind;
-                    lam->return_type = std::move(pn);
-                }
-            }
-        }
+        propagate_fn_type_to_lambda(
+            static_cast<ast::LambdaExpr *>(e->value.get()), s->type);
     }
 
     Type tv = check_expr(e->value.get());

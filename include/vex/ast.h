@@ -1090,6 +1090,12 @@ struct LambdaExpr : Expr {
     /// los LOAD del prologue de captures emitan @c movh (host mem)
     /// en lugar de @c mov (vm mem).
     bool env_in_heap = false;
+    /// true si el env es PROPIEDAD del objeto contenedor (el closure se
+    /// almacena en un campo).  Implica @c env_in_heap, pero el env se aloca
+    /// con @c RAW_ALLOC host SIN etiqueta (no GC, no "__closure_env"): el
+    /// destructor del contenedor lo libera (RAII), igual que un campo
+    /// @c unique<T>.  Modelo "sin GC" -- ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+    bool env_owned_by_field = false;
 
     LambdaExpr() : Expr(NodeKind::LambdaExpr) {}
 };

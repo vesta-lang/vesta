@@ -596,6 +596,11 @@ class TypeChecker {
     // Si no aplica, devuelve @c fallback sin tocar el AST.
     Type maybe_promote_func_ref(ast::Expr *val, const Type &target,
                                 const Type &fallback);
+    // Bidireccional poor-man's: propaga la firma esperada @c fn_type (params +
+    // return) a un lambda-literal sin anotaciones, para que infiera los tipos
+    // de sus parametros y su retorno desde el contexto (var-decl/assign/field/
+    // return).  No-op si la aridad no coincide o el lambda ya esta anotado.
+    void propagate_fn_type_to_lambda(ast::LambdaExpr *lam, const Type &fn_type);
     Type check_call(ast::CallExpr *e);
     Type check_ident(ast::IdentExpr *e);
     Type check_field_access(ast::FieldAccessExpr *e);

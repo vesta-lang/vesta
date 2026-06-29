@@ -9041,12 +9041,36 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
     // marcar @c env_ptr.is_host_ptr=true en su prologue.  La
     // condicion: hay capturas (N>0) Y la funcion contenedora
     // retorna FUNCTION.
-    if (N > 0 && current_fn_returns_function_) {
+    if (N > 0 && (current_fn_returns_function_ ||
+                  current_lambda_store_escapes_)) {
         e->env_in_heap = true;
     }
+    // Closure almacenado en un campo: el env es PROPIEDAD del objeto
+    // contenedor y lo libera su destructor (modelo sin GC).  RAW_ALLOC host
+    // owned, no GC.  Las capturas por REFERENCIA (variables mutadas dentro
+    // del lambda) NO pueden escapar a un campo: el env guardaria un puntero
+    // a un slot de stack que muere -> use-after-scope.  Rechazo en compile
+    // time (decision de diseno; usa captura por valor).
+    if (N > 0 && current_lambda_store_escapes_) {
+        if (!e->mutable_captures.empty()) {
+            error_at(e->loc,
+                     "captura por referencia en un closure que se almacena en "
+                     "un campo: '" +
+                         e->mutable_captures.front() +
+                         "' se mutaria fuera de su scope.  Captura por valor "
+                         "(no la modifiques dentro del lambda).");
+        }
+        e->env_owned_by_field = true;
+    }
+    // Consumir el flag de escape-a-campo: no debe propagarse a lambdas
+    // anidados dentro del body de este (su escape lo decide su propio
+    // contexto via lower_assign).
+    const bool _saved_store_escapes = current_lambda_store_escapes_;
+    current_lambda_store_escapes_ = false;
 
     // Generar el helper sintetico con su prologue de captures.
     const std::string fn_name = generate_lambda_helper(e);
+    current_lambda_store_escapes_ = _saved_store_escapes;
     e->synthetic_name = fn_name;
 
     // marker: emitir MAKE_CLOSURE ANTES de la secuencia explicita
@@ -9126,7 +9150,13 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         // aot_analyze lo rechace (REGLA: nunca leak).  Los envs que NO
         // escapan ya los convierte promote a ALLOCA (stack) antes de este
         // pase, asi que aqui solo llegan los escapes cross-function reales.
-        if (native_poo_) {
+        if (e->env_owned_by_field) {
+            // Owned por el objeto contenedor: su destructor hace RAW_FREE del
+            // env (RAII, modelo sin GC).  RAW_ALLOC host SIN etiqueta en
+            // AMBOS backends -- el GC no participa y ir_pass_own_closure_envs
+            // NO debe tocarlo (el dueno es el campo, no un buffer de stack).
+            ins.op = ir::IrOp::RAW_ALLOC;
+        } else if (native_poo_) {
             ins.op = ir::IrOp::RAW_ALLOC;
             ins.func_name = "__closure_env"; // tag p/ el pase de ownership
         } else {
@@ -15163,6 +15193,38 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         error_at(e->loc, "lowering: target de '=' nulo");
         return ir::IR_NO_VALUE;
     }
+    // Si el valor es un lambda-literal que se almacena en un campo / slot /
+    // deref, su env ESCAPA del scope actual (el objeto contenedor puede
+    // sobrevivir al frame) -> debe alocarse en heap (GC).  Activamos el flag
+    // mientras se baja el valor; un guard RAII lo restaura en cualquier
+    // return de esta funcion.  lower_lambda_expr lo consulta.
+    struct EscapeFlagGuard {
+        bool &flag;
+        bool prev;
+        EscapeFlagGuard(bool &f, bool v) : flag(f), prev(f) { flag = v; }
+        ~EscapeFlagGuard() { flag = prev; }
+    };
+    // El modelo de env owned-by-holder (RAW_ALLOC liberado por el destructor)
+    // requiere que el contenedor tenga un punto de destruccion determinista.
+    // En v1 solo lo aplicamos a campos de CLASE (su destructor aumentado
+    // libera el env; ver emit_free_closure_env_field).  Para holders struct
+    // (value-type, sin destructor de campos) el env se queda en STACK -- es
+    // correcto y zero-cost para el caso no-escapante (el comun); un struct
+    // con closure que se copia fuera de scope comparte el env de stack (misma
+    // limitacion que cualquier struct con puntero crudo).  Ver
+    // doc/VMdoc/Vex/ClosuresEnCampos.md.
+    const bool _val_is_lambda =
+        e->value && e->value->kind == ast::NodeKind::LambdaExpr;
+    bool _tgt_is_class_field = false;
+    if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
+        if (fa->base &&
+            fa->base->result_type.kind == PrimitiveKind::CLASS) {
+            _tgt_is_class_field = true;
+        }
+    }
+    EscapeFlagGuard _esc_guard(current_lambda_store_escapes_,
+                               _val_is_lambda && _tgt_is_class_field);
     // Caso FieldAccessExpr: dos rutas distintas por tipo de receptor.
     if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
@@ -22613,6 +22675,17 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             if (it_lay != tc_.class_layouts().end()) {
                 const ClassLayout &lay = it_lay->second;
                 for (const auto &f : lay.fields) {
+                    // Campo FUNCTION (lambda): si guarda un closure cuyo env es
+                    // owned (RAW_ALLOC host), lo liberamos.  El slot del closure
+                    // es {fn_addr@+0, env_ptr@+8}; un env != 0 indica un closure
+                    // con captura cuyo env es propiedad de este objeto.  Modelo
+                    // sin GC -- ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+                    if (f.type.kind == PrimitiveKind::FUNCTION &&
+                        !f.type.fn_is_raw) {
+                        emit_free_closure_env_field(this_vid, f.offset,
+                                                    m->loc.line);
+                        continue;
+                    }
                     if (f.type.kind != PrimitiveKind::CLASS) continue;
                     auto it_inner =
                         tc_.class_layouts().find(f.type.struct_name);
@@ -22981,6 +23054,70 @@ static uint64_t intern_class_cache_slot(ir::IrModule &mod,
  * @brief Emite el ASM que construye una FindClassParams (16 bytes) en
  *        stack y deja en @c r12 el ClassInfo* localizado.
  */
+void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
+                                           uint32_t field_offset,
+                                           uint32_t line) {
+    // env_addr = this + field_offset + 8  (el env_ptr vive en el slot+8 del
+    // function value de 16 bytes {fn_addr@+0, env_ptr@+8}).
+    const ir::IrValueId env_addr =
+        emit_field_addr(fn_, current_block_, this_vid, field_offset + 8, line);
+    // env = LOAD i64 [env_addr]  (host_ptr al bloque RAW_ALLOC).
+    const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
+    fn_->values[env].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = env;
+        ld.operands = {env_addr};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // if (env == 0) skip; else RAW_FREE(env).  Un env null = closure sin
+    // captura o campo nunca asignado.
+    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
+    const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = is_null;
+        cmp.operands = {env, zero};
+        cmp.source_line = line;
+        fn_->append(current_block_, std::move(cmp));
+    }
+    const ir::IrBlockId do_bb = fn_->new_block("free_env");
+    const ir::IrBlockId skip_bb = fn_->new_block("free_env_skip");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {is_null};
+        br.target_block = skip_bb; // true (null) -> skip
+        br.false_block = do_bb;    // false -> RAW_FREE
+        br.source_line = line;
+        fn_->append(current_block_, std::move(br));
+    }
+    current_block_ = do_bb;
+    {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {env};
+        rf.source_line = line;
+        fn_->append(current_block_, std::move(rf));
+    }
+    {
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = skip_bb;
+        brj.source_line = line;
+        fn_->append(current_block_, std::move(brj));
+    }
+    current_block_ = skip_bb;
+    block_terminated_ = false;
+}
+
 std::string Lowering::func_ref_label(const std::string &name,
                                      const std::string &mangled) {
     // Si el nombre es un extern, su direccion cruda no es invocable por
