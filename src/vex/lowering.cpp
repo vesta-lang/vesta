@@ -4502,8 +4502,13 @@ bind_and_cleanup:
             PrimitiveKind val_k = PrimitiveKind::VOID;
             if (sem_type.pointee) elem_k = sem_type.pointee->kind;
             if (sem_type.pointee2) val_k = sem_type.pointee2->kind;
+            // En native_poo (AOT) no hay VM -> no hay getproc ni el gc_addref/
+            // release del runtime de la VM.  Usamos la variante NO-GC (libera
+            // solo el almacenamiento de la coleccion); el lifetime de los
+            // elementos lo gestiona el modelo nativo (RAII / gc<T>), no el
+            // refcount de la VM.
             const bool gc_aware =
-                (ct->native_free_fn_gc != nullptr) &&
+                (ct->native_free_fn_gc != nullptr) && !native_poo_ &&
                 col_needs_gc_aware(sem_type.kind, elem_k, val_k);
             const char *fn_name =
                 gc_aware ? ct->native_free_fn_gc : ct->native_free_fn;
@@ -13966,8 +13971,11 @@ skip_comptime_eval_for_macro_to_macro:
                 PrimitiveKind val_k = PrimitiveKind::VOID;
                 if (recv_ty.pointee) elem_k = recv_ty.pointee->kind;
                 if (recv_ty.pointee2) val_k = recv_ty.pointee2->kind;
+                // native_poo (AOT): sin VM -> sin getproc ni gc_addref/release;
+                // usar la variante NO-GC (cero overhead, el handle/ptr se guarda
+                // tal cual).  El lifetime lo gestiona el modelo nativo.
                 const bool gc_aware =
-                    (cm->native_fn_gc != nullptr) &&
+                    (cm->native_fn_gc != nullptr) && !native_poo_ &&
                     col_needs_gc_aware(recv_ty.kind, elem_k, val_k);
 
                 // Lower base (handle).

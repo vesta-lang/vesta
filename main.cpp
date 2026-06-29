@@ -3820,13 +3820,26 @@ int main(int argc, char *argv[]) {
                 // libc.so.6 via DT_NEEDED (el SONAME no se usa para resolver).
                 std::unordered_map<std::string, std::string> sym2dll;
                 for (const auto &ni : aot_mod.native_imports) {
-                    // Solo nombres de DLL reales (FFI extern a sistema); las
-                    // libs-plugin (rutas tipo stdlib/native/...) no son DLLs
-                    // resolubles por IAT y en native_poo no llegan a reloc.
+                    // (a) FFI extern a sistema: lib ya es un nombre de DLL real
+                    //     (`extern "kernel32.dll"`).
                     if (ni.lib.size() >= 4 &&
                         (ni.lib.rfind(".dll") == ni.lib.size() - 4 ||
-                         ni.lib.rfind(".DLL") == ni.lib.size() - 4))
+                         ni.lib.rfind(".DLL") == ni.lib.size() - 4)) {
                         sym2dll[ni.name] = ni.lib;
+                        continue;
+                    }
+                    // (b) Plugin de la stdlib (ruta tipo
+                    //     "stdlib/native/collections/vesta_collections"): el
+                    //     plugin se distribuye como una DLL con el basename de la
+                    //     ruta (vesta_collections.dll).  Lo importamos por IAT
+                    //     -> las colecciones (ArrayList/HashMap/...) funcionan en
+                    //     AOT sin la VM (sus funciones vcol_* toman uint64, no
+                    //     proc_ptr).  La DLL debe acompanar al .exe.
+                    const auto slash = ni.lib.find_last_of("/\\");
+                    const std::string base = (slash == std::string::npos)
+                                                 ? ni.lib
+                                                 : ni.lib.substr(slash + 1);
+                    if (!base.empty()) sym2dll[ni.name] = base + ".dll";
                 }
                 auto dll_for = [is_pe, &sym2dll](const std::string &sym)
                     -> std::string {
