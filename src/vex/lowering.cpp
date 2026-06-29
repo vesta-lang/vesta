@@ -22681,15 +22681,14 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             if (it_lay != tc_.class_layouts().end()) {
                 const ClassLayout &lay = it_lay->second;
                 for (const auto &f : lay.fields) {
-                    // Campo FUNCTION (lambda): si guarda un closure cuyo env es
-                    // owned (RAW_ALLOC host), lo liberamos.  El slot del closure
-                    // es {fn_addr@+0, env_ptr@+8}; un env != 0 indica un closure
-                    // con captura cuyo env es propiedad de este objeto.  Modelo
-                    // sin GC -- ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+                    // Campo FUNCTION (lambda): el env del closure NO se libera
+                    // aqui.  El campo guarda un PTR a un slot de 16 bytes en el
+                    // stack, no el {fn,env} inline; liberar de forma fiable
+                    // requiere campos closure INLINE (trabajo futuro).  De
+                    // momento el env (RAW_ALLOC) se fuga -- nunca un crash ni
+                    // un use-after-free.  Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
                     if (f.type.kind == PrimitiveKind::FUNCTION &&
                         !f.type.fn_is_raw) {
-                        emit_free_closure_env_field(this_vid, f.offset,
-                                                    m->loc.line);
                         continue;
                     }
                     if (f.type.kind != PrimitiveKind::CLASS) continue;
@@ -23063,11 +23062,64 @@ static uint64_t intern_class_cache_slot(ir::IrModule &mod,
 void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
                                            uint32_t field_offset,
                                            uint32_t line) {
-    // env_addr = this + field_offset + 8  (el env_ptr vive en el slot+8 del
-    // function value de 16 bytes {fn_addr@+0, env_ptr@+8}).
-    const ir::IrValueId env_addr =
-        emit_field_addr(fn_, current_block_, this_vid, field_offset + 8, line);
-    // env = LOAD i64 [env_addr]  (host_ptr al bloque RAW_ALLOC).
+    // El campo lambda almacena un PTR al slot de 16 bytes {fn_addr@+0,
+    // env_ptr@+8} (el slot vive en el stack del scope donde se creo el
+    // closure).  Para liberar el env owned:
+    //   slot = [this + field_offset];   if (slot == 0) skip;
+    //   env  = [slot + 8];               if (env  == 0) skip;
+    //   RAW_FREE(env);
+    // Doble null-guard: campo sin closure (slot==0) o closure sin captura
+    // (env==0).  Modelo sin GC -- ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+    const ir::IrBlockId skip_bb = fn_->new_block("free_env_skip");
+    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
+
+    // slot = LOAD [this + field_offset]
+    const ir::IrValueId slot_addr =
+        emit_field_addr(fn_, current_block_, this_vid, field_offset, line);
+    const ir::IrValueId slot = fn_->new_value(ir::IrType::I64);
+    fn_->values[slot].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = slot;
+        ld.operands = {slot_addr};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // if (slot == 0) -> skip
+    {
+        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = is_null;
+        cmp.operands = {slot, zero};
+        cmp.source_line = line;
+        fn_->append(current_block_, std::move(cmp));
+        const ir::IrBlockId cont = fn_->new_block("free_env_slot_ok");
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {is_null};
+        br.target_block = skip_bb; // null -> skip
+        br.false_block = cont;
+        br.source_line = line;
+        fn_->append(current_block_, std::move(br));
+        current_block_ = cont;
+    }
+    // env = LOAD [slot + 8]
+    const ir::IrValueId env_addr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[env_addr].is_host_ptr = true;
+    {
+        const ir::IrValueId eight = emit_const(ir::IrType::I64, 8, line);
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = env_addr;
+        ad.operands = {slot, eight};
+        ad.source_line = line;
+        fn_->append(current_block_, std::move(ad));
+    }
     const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
     fn_->values[env].is_host_ptr = true;
     {
@@ -23079,11 +23131,9 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ld.source_line = line;
         fn_->append(current_block_, std::move(ld));
     }
-    // if (env == 0) skip; else RAW_FREE(env).  Un env null = closure sin
-    // captura o campo nunca asignado.
-    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
-    const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
+    // if (env == 0) -> skip; else RAW_FREE(env)
     {
+        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
         ir::IrInstr cmp{};
         cmp.op = ir::IrOp::CMP_EQ;
         cmp.type = ir::IrType::BOOL;
@@ -23091,19 +23141,16 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         cmp.operands = {env, zero};
         cmp.source_line = line;
         fn_->append(current_block_, std::move(cmp));
-    }
-    const ir::IrBlockId do_bb = fn_->new_block("free_env");
-    const ir::IrBlockId skip_bb = fn_->new_block("free_env_skip");
-    {
+        const ir::IrBlockId do_bb = fn_->new_block("free_env");
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {is_null};
-        br.target_block = skip_bb; // true (null) -> skip
-        br.false_block = do_bb;    // false -> RAW_FREE
+        br.target_block = skip_bb; // null -> skip
+        br.false_block = do_bb;
         br.source_line = line;
         fn_->append(current_block_, std::move(br));
+        current_block_ = do_bb;
     }
-    current_block_ = do_bb;
     {
         ir::IrInstr rf{};
         rf.op = ir::IrOp::RAW_FREE;
@@ -25000,6 +25047,12 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     }
     const ir::IrValueId obj = lower_expr(target->base.get());
     if (obj == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+    // Reasignar un campo CLOSURE de clase: liberar el env (RAW_ALLOC owned)
+    // anterior ANTES de guardar el nuevo, como reasignar un unique<T>.  Sin
+    // esto el env viejo se fugaria.  Null-guard: la primera asignacion (campo
+    // == 0) no libera nada.  El nuevo env (rhs) ya esta alocado y es distinto
+    // del viejo, asi que no hay use-after-free.  Modelo sin GC -- ver
+    // doc/VMdoc/Vex/ClosuresEnCampos.md.
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);

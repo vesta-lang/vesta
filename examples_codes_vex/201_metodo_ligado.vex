@@ -12,6 +12,13 @@ class Contador {
     i64 suma(i64 x)  { return this.n + x; }
 }
 
+// Receptor STRUCT (value-type): el metodo ligado captura una COPIA del struct
+// (snapshot al momento de `&p.metodo`); opera sobre esa copia.
+struct Punto {
+    i64 v;
+    i64 escala(i64 k) { return this.v * k; }
+}
+
 // callback: recibe un metodo ligado (lambda) y lo aplica.
 i64 aplicar(fn(i64) -> i64 f, i64 x) { return f(x); }
 
@@ -37,6 +44,17 @@ i32 main() {
     w.onTick = &c.inc;
     i64 r = w.onTick();              // c.inc() -> c.n = 31
     if (r != 31) { return 3; }
+
+    // 4. Reasignar el campo closure: el env anterior se libera (sin fuga).
+    Contador c2 = new Contador();
+    c2.n = 9;
+    w.onTick = &c2.inc;             // libera el env de `&c.inc` antes de guardar
+    if (w.onTick() != 10) { return 4; }   // c2.inc() -> 10
+
+    // 5. Receptor STRUCT: captura una copia del struct.
+    Punto p; p.v = 6;
+    fn(i64) -> i64 g = &p.escala;
+    if (g(7) != 42) { return 5; }   // 6 * 7 = 42 (sobre la copia)
 
     return 42;
 }

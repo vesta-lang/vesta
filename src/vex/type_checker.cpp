@@ -3026,15 +3026,6 @@ void TypeChecker::collect_globals() {
             if (cl.is_interface || cl.is_runtime_predefined) continue;
             if (cl.has_destructible_field) continue; // ya maximo
             for (const auto &f : cl.fields) {
-                // Un campo FUNCTION (lambda) puede contener un closure cuyo
-                // env es PROPIEDAD de este objeto (modelo sin GC): el
-                // destructor lo libera.  Marca la clase destructible para
-                // que gane un destructor sintetico + la augmentacion RAII.
-                if (f.type.kind == PrimitiveKind::FUNCTION && !f.type.fn_is_raw) {
-                    cl.has_destructible_field = true;
-                    changed = true;
-                    break;
-                }
                 // Solo fields de tipo CLASS aportan destructibilidad.
                 if (f.type.kind != PrimitiveKind::CLASS) continue;
                 auto it_inner = class_layouts_.find(f.type.struct_name);
@@ -7129,28 +7120,46 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
 
 Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     // &var.metodo -> PUNTERO A METODO LIGADO (Fase 2).  Cuando `var` es una
-    // VARIABLE de tipo CLASE y `metodo` es un metodo (no un campo), `&var.metodo`
-    // es un closure que CAPTURA el receptor.  Lo desugaramos a un lambda
-    // `(args) => var.metodo(args)` (reusa toda la maquinaria de closures: env
-    // owned, Fase 1) y lo guardamos en @c desugared_bound_method.
+    // VARIABLE de tipo CLASE o STRUCT y `metodo` es un metodo (no un campo),
+    // `&var.metodo` es un closure que CAPTURA el receptor.  Lo desugaramos a un
+    // lambda `(args) => var.metodo(args)` (reusa toda la maquinaria de
+    // closures: env owned para clase / captura del struct por valor) y lo
+    // guardamos en @c desugared_bound_method.  Si la base NO es una variable
+    // simple (e.g. `&getObj().metodo`) damos un error claro mas abajo.
     if (e->op == ast::UnOp::AddrOf && e->operand &&
         e->operand->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->operand.get());
         if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
             auto *bid = static_cast<ast::IdentExpr *>(fa->base.get());
             const Symbol *vs = lookup(bid->name);
-            if (vs && vs->kind == SymbolKind::Variable &&
-                vs->type.kind == PrimitiveKind::CLASS) {
-                auto itc = class_layouts_.find(vs->type.struct_name);
-                if (itc != class_layouts_.end()) {
+            // Layout de la clase o struct de la variable receptora.
+            const std::vector<StructFieldInfo> *rfields = nullptr;
+            const std::vector<ClassMethodInfo> *rmethods = nullptr;
+            if (vs && vs->kind == SymbolKind::Variable) {
+                if (vs->type.kind == PrimitiveKind::CLASS) {
+                    auto itc = class_layouts_.find(vs->type.struct_name);
+                    if (itc != class_layouts_.end()) {
+                        rfields = &itc->second.fields;
+                        rmethods = &itc->second.methods;
+                    }
+                } else if (vs->type.kind == PrimitiveKind::STRUCT) {
+                    auto its = struct_layouts_.find(vs->type.struct_name);
+                    if (its != struct_layouts_.end()) {
+                        rfields = &its->second.fields;
+                        rmethods = &its->second.methods;
+                    }
+                }
+            }
+            if (rmethods) {
+                {
                     // Buscar un METODO con ese nombre (no constructor/dtor/
                     // estatico); si es un campo, NO aplica (cae a &obj.campo).
                     const ClassMethodInfo *method = nullptr;
                     bool is_field = false;
-                    for (const auto &f : itc->second.fields)
+                    for (const auto &f : *rfields)
                         if (f.name == fa->field_name) is_field = true;
                     if (!is_field) {
-                        for (const auto &mm : itc->second.methods) {
+                        for (const auto &mm : *rmethods) {
                             if (mm.name == fa->field_name && !mm.is_constructor &&
                                 !mm.is_destructor && !mm.is_static) {
                                 method = &mm;
@@ -7170,6 +7179,48 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                         e->desugared_bound_method->result_type = lt;
                         e->result_type = fnt;
                         return fnt;
+                    }
+                }
+            }
+        }
+    }
+    // &expr.metodo con base COMPUESTA (no una variable simple, e.g.
+    // `&getObj().metodo`): el metodo ligado necesita capturar el receptor UNA
+    // vez, pero un lambda solo captura variables por nombre; capturar el
+    // resultado de una expresion requeriria materializar un temporal.  En v1
+    // damos un error claro sugiriendo asignar a una variable.
+    if (e->op == ast::UnOp::AddrOf && e->operand &&
+        e->operand->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->operand.get());
+        const bool base_is_simple_var =
+            fa->base && fa->base->kind == ast::NodeKind::IdentExpr;
+        if (fa->base && !base_is_simple_var) {
+            const Type bt = check_expr(fa->base.get());
+            fa->base->result_type = bt;
+            const std::vector<ClassMethodInfo> *bm = nullptr;
+            if (bt.kind == PrimitiveKind::CLASS) {
+                auto itc = class_layouts_.find(bt.struct_name);
+                if (itc != class_layouts_.end()) bm = &itc->second.methods;
+            } else if (bt.kind == PrimitiveKind::STRUCT) {
+                auto its = struct_layouts_.find(bt.struct_name);
+                if (its != struct_layouts_.end()) bm = &its->second.methods;
+            }
+            if (bm) {
+                for (const auto &mm : *bm) {
+                    if (mm.name == fa->field_name && !mm.is_constructor &&
+                        !mm.is_static) {
+                        diags_.error(
+                            e->loc,
+                            "el receptor de un metodo ligado `&expr." +
+                                fa->field_name +
+                                "` debe ser una variable simple; asigna el "
+                                "receptor a una variable primero "
+                                "(`T r = expr; &r." +
+                                fa->field_name + "`).");
+                        // Devolver el tipo fn del metodo para no encadenar un
+                        // diagnostico de incompatibilidad de tipos.
+                        return Type::make_function(mm.param_types,
+                                                   mm.return_type);
                     }
                 }
             }
