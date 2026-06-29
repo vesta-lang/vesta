@@ -11210,6 +11210,9 @@ size_t Lowering::size_of_type(const Type &t) const {
     if (t.kind == PrimitiveKind::CLASS) return 8;
     // STRING: GcHandle u64.
     if (t.kind == PrimitiveKind::STRING) return 8;
+    // cfn (puntero a funcion crudo, fn_is_raw): SOLO la direccion -> 8 bytes.
+    // Un lambda fn(...) es un fat-pointer de 16 bytes {fn_addr, env}.
+    if (t.kind == PrimitiveKind::FUNCTION && t.fn_is_raw) return 8;
     return primitive_size_bytes(t.kind);
 }
 
