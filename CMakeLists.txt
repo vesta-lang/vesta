@@ -585,7 +585,10 @@ target_include_directories(vesta_gc PUBLIC ${VM_INCLUDES})
 # logging GC (std::ostringstream/cerr).  Lo que quede de libstdc++ (operator
 # new/delete, unordered_map) se cubre con el shim libvesta_gc_shim.
 target_compile_options(vesta_gc PRIVATE
-        -fno-exceptions -fno-rtti -fno-threadsafe-statics)
+        -fno-exceptions -fno-rtti -fno-threadsafe-statics
+        # -g1: simbolos de depuracion minimos (linea + funcion) sobre el -O3
+        # heredado de Release, por si hay que depurar el GC en un binario AOT.
+        -g1)
 target_compile_definitions(vesta_gc PRIVATE
         VESTA_GC_DEBUG_DISABLE=1 VESTA_GC_FREESTANDING=1)
 
@@ -603,8 +606,11 @@ set_target_properties(vesta_collections_a PROPERTIES
 target_include_directories(vesta_collections_a PRIVATE
         ${CMAKE_SOURCE_DIR}/include)
 target_compile_definitions(vesta_collections_a PRIVATE "VESTA_PLUGIN_EXPORT=")
+# -O3 (heredado de Release) para codigo optimo + -g1 para conservar simbolos de
+# depuracion MINIMOS (tablas de linea + nombres de funcion): suficiente para
+# backtraces / addr2line / gdb, sin el peso de -g2/-g3 (variables locales, macros).
 target_compile_options(vesta_collections_a PRIVATE
-        -ffunction-sections -fdata-sections)
+        -ffunction-sections -fdata-sections -g1)
 
 add_library(vesta_math_a STATIC stdlib/native/math/vesta_math.c)
 set_target_properties(vesta_math_a PROPERTIES
@@ -612,7 +618,7 @@ set_target_properties(vesta_math_a PROPERTIES
 target_include_directories(vesta_math_a PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_compile_definitions(vesta_math_a PRIVATE "VESTA_PLUGIN_EXPORT=")
 target_compile_options(vesta_math_a PRIVATE
-        -ffunction-sections -fdata-sections)
+        -ffunction-sections -fdata-sections -g1)
 
 add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)
 target_include_directories(test_gc_lib PRIVATE ${VM_INCLUDES})
