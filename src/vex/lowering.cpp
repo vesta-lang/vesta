@@ -25657,7 +25657,21 @@ ir::IrValueId Lowering::emit_strraw(ir::IrValueId v_str, uint32_t source_line) {
 
 ir::IrValueId Lowering::emit_strconv(ir::IrValueId v_str, uint64_t enc_imm,
                                      uint32_t source_line) {
-    // STRCONV retorna GcHandle del nuevo StringObject re-encoded.
+    // AOT (native_poo): el value-string es canonicamente UTF-8 -> un `string`
+    // ES una secuencia de code-points (no de bytes con un tag de encoding).
+    // str_convert preserva los code-points: deep-copy del value-string (los
+    // mismos bytes UTF-8).  str_length(resultado) = cplen (code-points) ->
+    // correcto.  El encoding concreto solo importa en la frontera FFI, donde se
+    // usa str_wstr (UTF-16) / str_raw (bytes) sobre el resultado.  El enc_imm es
+    // advisory en este modelo.
+    if (native_poo_) {
+        (void)enc_imm;
+        const ir::IrValueId v_ptr =
+            emit_native_str_data_ptr(v_str, source_line);
+        const ir::IrValueId v_blen = emit_native_str_len(v_str, source_line);
+        return build_native_string_from_buffer(v_ptr, v_blen, source_line);
+    }
+    // VM/JIT: STRCONV retorna GcHandle del nuevo StringObject re-encoded.
     const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
     ir::IrInstr ins{};
     ins.op = ir::IrOp::STRCONV;
