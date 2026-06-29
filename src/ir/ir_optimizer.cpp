@@ -7166,6 +7166,56 @@ static bool module_uses_aop(const IrModule &mod) {
     return false;
 }
 
+// =========================================================================
+//  Pase ir_pass_devirt_cfn
+// =========================================================================
+//
+// Devirtualizacion de llamadas a PUNTERO A FUNCION crudo (cfn) constante.
+// Si un CALLIND tiene su @c func_ptr definido por un LABEL_ADDR (la direccion
+// cruda de una funcion conocida en compile-time), lo reescribimos a un CALL
+// directo a esa funcion.  Beneficios:
+//   - elimina la rama indirecta (callvmr -> callvm): mejor branch prediction.
+//   - habilita el INLINER (ir_pass_inline solo procesa CALL directos), asi el
+//     callback conocido se puede inlinar.
+// La direccion fluye al call site tras mem2reg + copy_prop (el caso comun es
+// `cfn c = &add1; c(x)` -> el func_ptr ES el LABEL_ADDR).  Propagamos tambien
+// a traves de MOV por robustez.  La firma del cfn es solo compile-time; la
+// convencion de llamada de CALL y CALLIND es identica (args en R1.., ret R0),
+// asi que el rewrite preserva la semantica.
+bool ir_pass_devirt_cfn(IrFunction &fn) {
+    if (fn.is_native || fn.blocks.empty()) return false;
+    // vid -> label de funcion (desde LABEL_ADDR, propagado por MOV).
+    std::unordered_map<IrValueId, std::string> label_of;
+    // Primero recolectar LABEL_ADDR; luego propagar por MOV en orden lineal.
+    for (auto &bb : fn.blocks) {
+        for (auto &ins : bb.instrs) {
+            if (ins.dst == IR_NO_VALUE) continue;
+            if (ins.op == IrOp::LABEL_ADDR && !ins.func_name.empty()) {
+                label_of[ins.dst] = ins.func_name;
+            } else if (ins.op == IrOp::MOV && !ins.operands.empty()) {
+                auto it = label_of.find(ins.operands[0]);
+                if (it != label_of.end()) label_of[ins.dst] = it->second;
+            }
+        }
+    }
+    if (label_of.empty()) return false;
+    bool changed = false;
+    for (auto &bb : fn.blocks) {
+        for (auto &ins : bb.instrs) {
+            if (ins.op != IrOp::CALLIND) continue;
+            if (ins.func_ptr == IR_NO_VALUE) continue;
+            auto it = label_of.find(ins.func_ptr);
+            if (it == label_of.end()) continue;
+            // Reescribir a CALL directo: func_name = label, sin func_ptr.
+            ins.op = IrOp::CALL;
+            ins.func_name = it->second;
+            ins.func_ptr = IR_NO_VALUE;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 bool ir_pass_devirt_monomorphic(IrModule &mod) {
     if (module_uses_aop(mod)) return false;
 
@@ -9177,6 +9227,11 @@ void ir_optimize(IrModule &mod, OptLevel level) {
          * la inline pass vea las callees OPTIMIZADAS (e.g. Counter.inc
          * con 6 instrs en vez de 12), aprobando inline bajo el threshold. */
         if (level >= OptLevel::O2) {
+            // Devirt de cfn constante (CALLIND a LABEL_ADDR -> CALL directo),
+            // antes del inline para que el callback conocido se pueda inlinar.
+            for (auto &fn : mod.functions) {
+                if (ir_pass_devirt_cfn(fn)) any = true;
+            }
             if (ir_pass_devirt_monomorphic(mod)) any = true;
 
             /* (C2): devirt especulativa ESTATICA via guard-chain.

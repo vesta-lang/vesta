@@ -439,6 +439,18 @@ bool ir_pass_licm(IrFunction &fn);
 bool ir_pass_devirt_monomorphic(IrModule &mod);
 
 /**
+ * @brief Devirtualizacion de CALLIND a puntero a funcion crudo (cfn) constante.
+ *
+ * Si el @c func_ptr de un CALLIND viene de un LABEL_ADDR (direccion de una
+ * funcion conocida en compile-time), lo reescribe a un CALL directo a esa
+ * funcion -- elimina la rama indirecta y habilita el inliner.
+ *
+ * @param fn Funcion a transformar.
+ * @return true si reescribio al menos un CALLIND.
+ */
+bool ir_pass_devirt_cfn(IrFunction &fn);
+
+/**
  * @brief Devirtualizacion ESPECULATIVA guiada por perfil/IC (C2).
  *
  * A diferencia de @c ir_pass_devirt_monomorphic (estatico, closed-world, sin

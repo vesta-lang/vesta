@@ -121,6 +121,14 @@ i32 main() {
     cfn(u64) -> u64  cu = (cfn(u64) -> u64) ci;
     if (cu(21) != 42) { return 7; }
 
+    // === 2g. INLINE del callback CONOCIDO -- optimizacion ===
+    // Cuando el cfn es una constante conocida en compile-time, el optimizador
+    // reescribe la llamada indirecta (CALLIND) a un CALL directo a `doblar`,
+    // y el inliner puede ABSORBER su cuerpo (aqui, `(21)*2` se pliega a 42 en
+    // compile-time -- cero llamada en runtime).
+    cfn(i64) -> i64 conocido = &doblar;
+    if (conocido(21) != 42) { return 12; }   // inline + const-fold -> 42
+
     // === 2f. cfn dentro de unique<> -- ownership + move + borrow ===
     // Un cfn es un valor de 8 bytes, asi que entra en un unique<>/borrow<>
     // como cualquier primitivo (NO se construye un slot de lambda).
