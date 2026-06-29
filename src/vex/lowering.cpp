@@ -20832,6 +20832,15 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             (sem_payload.kind == PrimitiveKind::STRUCT) &&
             (tc_.struct_layouts().find(sem_payload.struct_name) !=
              tc_.struct_layouts().end());
+        // Un cfn (puntero a funcion crudo) es un VALOR de 8 bytes, igual que
+        // un i64 -- NO un host_ptr a un objeto.  Aunque su IR type sea PTR,
+        // debe alojar una celda heap de 8 bytes y guardar la direccion ahi
+        // (como un primitivo), para que `ptr_of(p)` devuelva un cfn* y
+        // `*ptr_of(p)` recupere el cfn con un solo LOAD.  Sin esto tomaria
+        // la rama class-PTR (store directo) y `*ptr_of` deref-earia el codigo
+        // de la funcion -> basura/#UD.
+        const bool payload_is_cfn =
+            (sem_payload.kind == PrimitiveKind::FUNCTION);
         // sizeof(T): para primitivos usar ir_type_size; para structs
         // value-type consultar struct_layouts; para PTR/CLASS no se usa
         // (no alocamos memoria extra, guardamos el host_ptr directo).
@@ -20941,8 +20950,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     }
                 }
                 v_to_store = v_payload_ptr;
-            } else if (payload_t != ir::IrType::PTR) {
+            } else if (payload_t != ir::IrType::PTR || payload_is_cfn) {
                 // RAW_ALLOC(payload_size) -> v_payload_ptr (host ptr).
+                // (cfn entra aqui pese a ser PTR: es un valor de 8 bytes.)
                 const ir::IrValueId v_size =
                     emit_const(ir::IrType::I64,
                                static_cast<int64_t>(payload_size), e->loc.line);

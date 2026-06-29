@@ -52,6 +52,13 @@ i64 negar(i64 x)     { return 0 - x; }
 // callback: recibe un cfn y lo aplica.  El cfn se decide en el call site.
 i64 aplicar(cfn(i64) -> i64 f, i64 x) { return f(x); }
 
+// callback recibido por BORROW (prestamo): el cfn lo posee un unique<> del
+// caller; aqui solo lo leemos sin tomar ownership.
+i64 aplicar_borrow(borrow<cfn(i64) -> i64> b, i64 x) {
+    cfn(i64) -> i64 f = read_borrow(b);   // recupera el cfn (8 bytes) del prestamo
+    return f(x);
+}
+
 // Para DECONSTRUIR un lambda: un struct de dos campos de 64 bits = 16 bytes,
 // el mismo layout que el slot {fn_addr, env}.
 struct LambdaRaw { i64 fn_addr; i64 env; }
@@ -112,6 +119,16 @@ i32 main() {
     cfn(i64) -> i64  ci = &doblar;
     cfn(u64) -> u64  cu = (cfn(u64) -> u64) ci;
     if (cu(21) != 42) { return 7; }
+
+    // === 2f. cfn dentro de unique<> -- ownership + move + borrow ===
+    // Un cfn es un valor de 8 bytes, asi que entra en un unique<>/borrow<>
+    // como cualquier primitivo (NO se construye un slot de lambda).
+    cfn(i64) -> i64 cc = &doblar;
+    unique<cfn(i64) -> i64> up = unique_box(cc);   // toma posesion (8 B en heap)
+    unique<cfn(i64) -> i64> uq = move(up);          // transfiere ownership
+    cfn(i64) -> i64 desbox = *ptr_of(uq);           // recupera el cfn (1 LOAD)
+    if (desbox(21) != 42) { return 10; }            // doblar(21) = 42
+    if (aplicar_borrow(lend(uq), 21) != 42) { return 11; } // prestamo -> 42
 
     // === 3. LAMBDA -- closure con ENV (16 bytes), captura del entorno ===
     i64 factor = 7;
