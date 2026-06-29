@@ -52,21 +52,27 @@ StartStub start_x86_64_pe() {
 
 /**
  * @brief @c _start x86-64 para ELF freestanding: llama a main y termina
- *        via @c syscall @c exit(60) con @c eax como codigo.  Sin libc ni
- *        imports -- valido para kernels/bootloaders.
+ *        via @c syscall @c exit_group(231) con @c eax como codigo.  Sin libc
+ *        ni imports -- valido para hosted Linux y kernels/bootloaders.
  *
  *   E8 rel32           call main             ; main justo despues del stub
  *   89 C7              mov  edi, eax          ; arg0 = codigo de salida
- *   B8 3C 00 00 00     mov  eax, 60           ; sys_exit
+ *   B8 E7 00 00 00     mov  eax, 231          ; sys_exit_group
  *   0F 05              syscall
+ *
+ * NOTA: usamos exit_group (231) y NO exit (60).  El 60 termina solo el HILO
+ * llamante; en un proceso single-thread el codigo de salida no siempre se
+ * propaga al padre (p.ej. WSL2 reporta 0 aunque main devuelva 42).  exit_group
+ * termina el proceso completo y propaga bien el exit-code.  En un kernel sin SO
+ * debajo el _start nunca retorna a este exit, asi que el cambio es inocuo ahi.
  */
 StartStub start_x86_64_elf() {
     StartStub s;
     s.bytes = {
-        0xE8, 0x00, 0x00, 0x00, 0x00, // call main (rel32@1)    (off 0)
-        0x89, 0xC7,                   // mov edi, eax           (off 5)
-        0xB8, 0x3C, 0x00, 0x00, 0x00, // mov eax, 60 (sys_exit) (off 7)
-        0x0F, 0x05                    // syscall                (off 12)
+        0xE8, 0x00, 0x00, 0x00, 0x00, // call main (rel32@1)          (off 0)
+        0x89, 0xC7,                   // mov edi, eax                 (off 5)
+        0xB8, 0xE7, 0x00, 0x00, 0x00, // mov eax, 231 (exit_group)    (off 7)
+        0x0F, 0x05                    // syscall                      (off 12)
     };
     // AOT 2b: `call main` (rel32 @1) sin pre-patch -> reloc del driver.
     s.main_call_off = 1;
@@ -82,16 +88,19 @@ StartStub start_x86_64_elf() {
  *
  *   E8 rel32           call main             ; main justo despues del stub
  *   89 C3              mov  ebx, eax          ; codigo de salida en ebx
- *   B8 01 00 00 00     mov  eax, 1            ; sys_exit (32-bit)
+ *   B8 FC 00 00 00     mov  eax, 252          ; sys_exit_group (32-bit)
  *   CD 80              int  0x80
+ *
+ * NOTA: exit_group (252 en 32-bit), no exit (1), por la misma razon que en
+ * x86-64: propaga el exit-code del proceso entero.
  */
 StartStub start_x86_32_elf() {
     StartStub s;
     s.bytes = {
-        0xE8, 0x00, 0x00, 0x00, 0x00, // call main (rel32@1)    (off 0)
-        0x89, 0xC3,                   // mov ebx, eax           (off 5)
-        0xB8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1 (sys_exit)  (off 7)
-        0xCD, 0x80                    // int 0x80               (off 12)
+        0xE8, 0x00, 0x00, 0x00, 0x00, // call main (rel32@1)            (off 0)
+        0x89, 0xC3,                   // mov ebx, eax                   (off 5)
+        0xB8, 0xFC, 0x00, 0x00, 0x00, // mov eax, 252 (exit_group)      (off 7)
+        0xCD, 0x80                    // int 0x80                       (off 12)
     };
     s.main_call_off = 1;
     s.has_import_call = false;
