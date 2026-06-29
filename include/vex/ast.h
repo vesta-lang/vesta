@@ -569,6 +569,14 @@ struct FieldAccessExpr : Expr {
     /// depender de la pila de scopes (que ya esta vacia al lower).
     /// Sentinel: UINT32_MAX = no resuelto.
     uint32_t ns_index = 0xFFFFFFFFu;
+    /// `&Tipo.metodo`: referencia a la funcion libre de un metodo (puntero
+    /// a metodo NO ligado estilo C).  El checker la marca al ver el patron
+    /// `&Tipo.metodo` (base = nombre de struct/clase, field = metodo) y
+    /// deja en @c func_ref_mangled el nombre de la free fn (`Tipo__metodo`).
+    /// El lowering emite LABEL_ADDR de ese label -- un cfn cuya firma lleva
+    /// `Tipo*` como primer parametro (this explicito).
+    bool is_func_ref = false;
+    std::string func_ref_mangled;
     FieldAccessExpr() : Expr(NodeKind::FieldAccessExpr) {}
 };
 

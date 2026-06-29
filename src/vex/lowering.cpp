@@ -13292,6 +13292,23 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             error_at(e->loc, "lowering: '&' sin operando");
             return ir::IR_NO_VALUE;
         }
+        // &Tipo.metodo -> LABEL_ADDR del label de la free fn `Tipo__metodo`
+        // (puntero a metodo no ligado, cfn).  El checker dejo el label en
+        // FieldAccessExpr::func_ref_mangled.
+        if (e->operand->kind == ast::NodeKind::FieldAccessExpr) {
+            auto *fa = static_cast<ast::FieldAccessExpr *>(e->operand.get());
+            if (fa->is_func_ref && !fa->func_ref_mangled.empty()) {
+                const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::LABEL_ADDR;
+                ins.type = ir::IrType::PTR;
+                ins.dst = dst;
+                ins.func_name = fa->func_ref_mangled;
+                ins.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ins));
+                return dst;
+            }
+        }
         // & sobre IdentExpr local address-taken: scope guarda la addr.
         if (e->operand->kind == ast::NodeKind::IdentExpr) {
             auto *id = static_cast<ast::IdentExpr *>(e->operand.get());

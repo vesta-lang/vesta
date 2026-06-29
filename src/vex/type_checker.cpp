@@ -7193,6 +7193,64 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
 }
 
 Type TypeChecker::check_unary(ast::UnaryExpr *e) {
+    // &Tipo.metodo -> PUNTERO A METODO NO LIGADO (cfn).  Se detecta ANTES de
+    // type-checkear el operando porque `Tipo.metodo` como FieldAccess fallaria
+    // (el base nombra un TIPO, no un valor).  El metodo se desugara a la free
+    // fn `Tipo__metodo(Tipo* this, ...params)`; el cfn lleva `Tipo*` como
+    // primer parametro (this explicito).
+    if (e->op == ast::UnOp::AddrOf && e->operand &&
+        e->operand->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->operand.get());
+        if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+            auto *bid = static_cast<ast::IdentExpr *>(fa->base.get());
+            const Symbol *bsym = lookup(bid->name);
+            const bool shadowed = bsym && bsym->kind == SymbolKind::Variable;
+            const std::vector<ClassMethodInfo> *methods = nullptr;
+            bool base_is_class = false;
+            if (!shadowed) {
+                auto itc = class_layouts_.find(bid->name);
+                if (itc != class_layouts_.end()) {
+                    methods = &itc->second.methods;
+                    base_is_class = true;
+                } else {
+                    auto its = struct_layouts_.find(bid->name);
+                    if (its != struct_layouts_.end())
+                        methods = &its->second.methods;
+                }
+            }
+            if (methods) {
+                for (const auto &m : *methods) {
+                    if (m.name != fa->field_name) continue;
+                    if (m.is_constructor || m.is_destructor || m.is_static)
+                        break;
+                    std::vector<Type> params;
+                    params.reserve(m.param_types.size() + 1);
+                    // this: para CLASS es la referencia (ya es puntero) -> el
+                    // primer parametro es el propio tipo CLASS; para STRUCT
+                    // (value-type) es `Struct*`.
+                    if (base_is_class) {
+                        Type self_ty;
+                        self_ty.kind = PrimitiveKind::CLASS;
+                        self_ty.struct_name = bid->name;
+                        params.push_back(self_ty);
+                    } else {
+                        Type self_ty;
+                        self_ty.kind = PrimitiveKind::STRUCT;
+                        self_ty.struct_name = bid->name;
+                        params.push_back(Type::make_ptr(self_ty));
+                    }
+                    for (const auto &pt : m.param_types) params.push_back(pt);
+                    Type cfnt = Type::make_function(params, m.return_type);
+                    cfnt.fn_is_raw = true;
+                    fa->is_func_ref = true;
+                    fa->func_ref_mangled = bid->name + "__" + m.name;
+                    fa->result_type = cfnt;
+                    e->result_type = cfnt;
+                    return cfnt;
+                }
+            }
+        }
+    }
     const Type t = check_expr(e->operand.get());
     switch (e->op) {
     case ast::UnOp::Neg: {
