@@ -224,6 +224,20 @@ struct StructLayout {
     std::vector<ClassMethodInfo> methods;
     uint32_t size_bytes = 0;
     uint32_t align_bytes = 1;
+    /// Fase 1 interop C: categoria INFERIDA de los campos (clasificador de
+    /// Fase 0).  @c cat_c_representable: el struct cruza la frontera C por
+    /// valor (todos sus campos C-representables y sin `~Struct()`).
+    /// @c cat_managed: posee un recurso de lifetime no-C (algun campo
+    /// gestionado o un `~Struct()`) -> carril move-only + RAII.  NO son
+    /// complementarios (un struct con un campo VirtualPtr no es ninguno).
+    /// Se computan en @c compute_struct_categories tras registrar todos los
+    /// structs; los consumidores (move-checker, header-gen) deben preferir
+    /// @c TypeChecker::type_is_managed / @c type_is_c_representable (siempre
+    /// correctos, incl. structs monomorphizados tarde).  @c cat_computed
+    /// marca si ya se calcularon (false hasta el pase final).
+    bool cat_c_representable = false;
+    bool cat_managed = false;
+    bool cat_computed = false;
     /// marca `@Introspect` -- el lowering emite
     /// IntrospectInfo POD en static_data para que `find_type("Name")`
     /// runtime lo encuentre.
@@ -427,6 +441,20 @@ class TypeChecker {
     }
 
     /**
+     * @brief Fase 1 interop C: clasifica un @c Type via el clasificador de
+     *        Fase 0 con un resolver respaldado por @c struct_layouts_.
+     *
+     * Fuente de verdad (siempre correcta, incl. structs monomorphizados
+     * tarde) -- los consumidores (move-checker, header-gen) deben preferir
+     * estos metodos a los flags cacheados @c StructLayout::cat_*.
+     *
+     * @c type_is_c_representable: cruza la frontera C por valor (ABI C).
+     * @c type_is_managed: posee un recurso de lifetime no-C (move-only+RAII).
+     */
+    bool type_is_c_representable(const Type &t) const;
+    bool type_is_managed(const Type &t) const;
+
+    /**
      * @brief Acceso de solo lectura a la tabla de layouts de clases.
      *
      * El lowering la consulta para emitir el bloque __module_init
@@ -561,6 +589,12 @@ class TypeChecker {
      * global.
      */
     void collect_globals();
+    /// Fase 1 interop C: tras registrar todos los structs, cachea su
+    /// categoria (@c StructLayout::cat_c_representable / @c cat_managed) via
+    /// el clasificador de Fase 0.  Se llama al final de @c collect_globals.
+    void compute_struct_categories();
+    /// Resolver de structs (Fase 0) respaldado por @c struct_layouts_.
+    const StructLayout *resolve_struct_layout(const std::string &name) const;
 
     /**
      * @brief Pase 2: chequea el cuerpo de cada funcion declarada.

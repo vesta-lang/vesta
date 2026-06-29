@@ -32,6 +32,7 @@
 
 #include "vex/type_checker.h"
 #include "vex/asm_effects.h"           // asm_canonical_reg (Phase AS inc.4)
+#include "vex/type_classify.h"         // is_c_representable / is_managed (Fase 1)
 #include "vex/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vex/comptime_introspect.h"   // comptime_field_type
 #include "vex/lexer.h"  // parse de fragments en comptime_emit_expr
@@ -3292,6 +3293,49 @@ void TypeChecker::collect_globals() {
                                            efd->name + "'");
             }
         }
+    }
+    // Fase 1 interop C: con todos los structs ya registrados, cachear su
+    // categoria (C-compat vs gestionado) inferida de los campos.
+    compute_struct_categories();
+}
+
+// ---------------------------------------------------------------------
+// Fase 1 interop C: clasificacion de tipos (C-representable / gestionado).
+// ---------------------------------------------------------------------
+
+const StructLayout *
+TypeChecker::resolve_struct_layout(const std::string &name) const {
+    auto it = struct_layouts_.find(name);
+    return it == struct_layouts_.end() ? nullptr : &it->second;
+}
+
+bool TypeChecker::type_is_c_representable(const Type &t) const {
+    StructResolver r = [this](const std::string &n) {
+        return resolve_struct_layout(n);
+    };
+    return vex::is_c_representable(t, r);
+}
+
+bool TypeChecker::type_is_managed(const Type &t) const {
+    StructResolver r = [this](const std::string &n) {
+        return resolve_struct_layout(n);
+    };
+    return vex::is_managed(t, r);
+}
+
+void TypeChecker::compute_struct_categories() {
+    // El clasificador recursa via el resolver (que ve el mapa COMPLETO), asi
+    // que el orden de iteracion no importa; los structs no se contienen a si
+    // mismos por valor (el type checker ya lo rechazaria).
+    StructResolver r = [this](const std::string &n) {
+        return resolve_struct_layout(n);
+    };
+    for (auto &kv : struct_layouts_) {
+        StructLayout &lay = kv.second;
+        const Type st{PrimitiveKind::STRUCT, kv.first};
+        lay.cat_c_representable = vex::is_c_representable(st, r);
+        lay.cat_managed = vex::is_managed(st, r);
+        lay.cat_computed = true;
     }
 }
 
