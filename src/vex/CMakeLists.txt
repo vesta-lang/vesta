@@ -56,6 +56,8 @@ add_library(vex_lib STATIC
     asm_effects.cpp
     asm_backend.cpp
     type_checker.cpp
+    # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
+    type_classify.cpp
     lombok.cpp
     lowering.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
