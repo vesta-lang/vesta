@@ -3275,6 +3275,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    pop r11\n    pop r10\n"; // a, acc
         { const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width;
           if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n"; }
+        // disp de array (bits 16-31): displacement constante de la pieza del
+        // unroll sobre a[]/b[].  Paridad con el codegen vreg (movupd disp(base)).
+        { const uint64_t arr_disp = ((ins.imm >> 16) & 0xFFFFull);
+          if (arr_disp) {
+              ctx.out << "    addu r11, " << arr_disp << "\n";
+              if (is_fma) ctx.out << "    addu r12, " << arr_disp << "\n";
+          } }
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out << "    addu r10, " << esz << "\n";

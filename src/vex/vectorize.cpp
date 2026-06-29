@@ -1832,9 +1832,16 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;     // lanes segun ancho/tipo
     const uint64_t U = 4;               // acumuladores (XMM13,12,11,10)
-    // imm de las VEC_ACC ops: ancho | acc_idx<<8 | src_idx<<12.
-    auto acc_imm = [&](uint8_t aidx, uint8_t sidx) -> uint64_t {
-        return width | ((uint64_t)aidx << 8) | ((uint64_t)sidx << 12);
+    // imm de las VEC_ACC ops: ancho | acc_idx<<8 | src_idx<<12 | disp<<16.
+    // disp (bits 16-31) = displacement de bytes en el array a[]/b[] para las
+    // U piezas del unroll: en vez de recalcular el puntero (MUL+ADD) por pieza,
+    // el matcher computa el puntero base UNA vez y cada VEC_ACC_ADD/FMA lee con
+    // `movupd disp(base)` (direccionamiento gcc-style).  Quita los adds enteros
+    // por elemento que nos dejaban ~4x detras de gcc en reducciones float.
+    auto acc_imm = [&](uint8_t aidx, uint8_t sidx,
+                       uint64_t disp = 0) -> uint64_t {
+        return width | ((uint64_t)aidx << 8) | ((uint64_t)sidx << 12) |
+               ((disp & 0xFFFFull) << 16);
     };
 
     // acc_init = valor f64 de acc ANTES del loop (binding SSA plano).
@@ -1942,31 +1949,33 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     fn_->blocks[ubody].preds.push_back(uhdr);
     fn_->blocks[comb].preds.push_back(uhdr);
 
-    // emite un VEC_ACC_ADD/FMA(acc_idx, a[i+idx*W]) en current_block_.
-    auto emit_acc_step = [&](uint8_t aidx, ir::IrValueId iexpr) {
-        const ir::IrValueId i64 =
-            cast_if_needed(iexpr, idx_ty, ir::IrType::I64, ln);
-        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
-        const ir::IrValueId a_at = ptr_at(v_a, off);
-        ir::IrInstr v{}; v.type = elem_ty; v.dst = ir::IR_NO_VALUE;
-        v.imm = acc_imm(aidx, 0); v.source_line = ln;
-        if (is_fma) {
-            const ir::IrValueId b_at = ptr_at(v_b, off);
-            v.op = ir::IrOp::VEC_ACC_FMA; v.operands = {acc_slot, a_at, b_at};
-        } else {
-            v.op = ir::IrOp::VEC_ACC_ADD; v.operands = {acc_slot, a_at};
-        }
-        fn_->append(current_block_, std::move(v));
-    };
-
     // --- ubody: acc_u += a[i + u*W] para u=0..U-1; i += U*W; BR uhdr ---
+    // OPTIMIZACION de direccionamiento: en vez de recalcular el puntero por
+    // pieza (iu = i + u*W; off = iu*esz; a_at = base + off  ->  ADD+MUL+ADD por
+    // pieza), computamos el puntero BASE una sola vez (a_at0 = base + i*esz) y
+    // cada VEC_ACC_ADD/FMA lee con displacement constante `u*W*esz` plegado en
+    // el imm (codegen: `movupd disp(base)`).  Esto elimina los adds enteros por
+    // elemento que nos dejaban ~4x detras de gcc -- ahora el bucle gasta solo
+    // 1 MUL + 1-2 ADD para el base por iteracion del unroll, igual que gcc.
     current_block_ = ubody;
+    const ir::IrValueId iu64 =
+        cast_if_needed(phi_iu, idx_ty, ir::IrType::I64, ln);
+    const ir::IrValueId off_base =
+        bin(ir::IrOp::MUL, ir::IrType::I64, iu64, v_esz);
+    const ir::IrValueId a_at0 = ptr_at(v_a, off_base);
+    const ir::IrValueId b_at0 = is_fma ? ptr_at(v_b, off_base) : ir::IR_NO_VALUE;
     for (uint8_t u = 0; u < U; ++u) {
-        const ir::IrValueId iu = (u == 0)
-            ? phi_iu
-            : bin(ir::IrOp::ADD, idx_ty, phi_iu,
-                  emit_const(idx_ty, (uint64_t)(u * W), ln));
-        emit_acc_step(u, iu);
+        const uint64_t disp = (uint64_t)u * W * esz; // constante de pieza
+        ir::IrInstr v{}; v.type = elem_ty; v.dst = ir::IR_NO_VALUE;
+        v.imm = acc_imm(u, 0, disp); v.source_line = ln;
+        if (is_fma) {
+            v.op = ir::IrOp::VEC_ACC_FMA;
+            v.operands = {acc_slot, a_at0, b_at0};
+        } else {
+            v.op = ir::IrOp::VEC_ACC_ADD;
+            v.operands = {acc_slot, a_at0};
+        }
+        fn_->append(ubody, std::move(v));
     }
     const ir::IrValueId i_unext = bin(ir::IrOp::ADD, idx_ty, phi_iu, v_UW);
     { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = uhdr;

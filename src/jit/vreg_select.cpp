@@ -2860,6 +2860,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const uint8_t acc_idx = (in.imm >> 8) & 0xF;
                 const uint8_t src_idx = (in.imm >> 12) & 0xF; // COMBINE
                 if (acc_idx > 3 || src_idx > 3) return false; // solo 4 reservados
+                // disp de array (bits 16-31): displacement constante de la
+                // pieza del unroll para ADD/FMA -> `movupd disp(base)` en vez de
+                // recalcular el puntero.  ZERO/COMBINE/STORE lo ignoran.
+                const int32_t arr_disp =
+                    static_cast<int32_t>((in.imm >> 16) & 0xFFFF);
                 const MReg ACC =
                     static_cast<MReg>(reg_id(MReg::XMM13) - acc_idx);
                 const MReg SCR = static_cast<MReg>(fpsc[0]); // XMM14 scratch a/b
@@ -2881,7 +2886,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                    MOperand::make_reg(gp0, 8),
                                                    vr(in.operands[1])));
                     O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, xscr, MOperand::make_mem(gp0, 0)));
+                        MOp::MOVUPD, xscr, MOperand::make_mem(gp0, arr_disp)));
                     O.push_back(MInstr::make_unary(aop, xacc, xscr));
                 } else if (in.op == ir::IrOp::VEC_ACC_FMA) {
                     // acc += a*b:  MOVUPD scr,[a]; VFMADD231 acc,scr,[b].
@@ -2889,13 +2894,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                    MOperand::make_reg(gp0, 8),
                                                    vr(in.operands[1])));
                     O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, xscr, MOperand::make_mem(gp0, 0)));
+                        MOp::MOVUPD, xscr, MOperand::make_mem(gp0, arr_disp)));
                     O.push_back(MInstr::make_unary(MOp::MOV,
                                                    MOperand::make_reg(gp1, 8),
                                                    vr(in.operands[2])));
                     O.push_back(MInstr::make_binary(
                         is_f32 ? MOp::VFMADD231PS : MOp::VFMADD231PD, xacc,
-                        xscr, MOperand::make_mem(gp1, 0)));
+                        xscr, MOperand::make_mem(gp1, arr_disp)));
                 } else if (in.op == ir::IrOp::VEC_ACC_COMBINE) {
                     // acc[dst] += acc[src]  (reg-reg, sin memoria).
                     const MReg SRC =
