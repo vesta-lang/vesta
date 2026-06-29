@@ -14083,6 +14083,40 @@ skip_comptime_eval_for_macro_to_macro:
     // El emisor IR (caso CALLCLOSURE) coloca env en R14, args en
     // R1..R12 y emite @c callvmr fn_addr.
     if (id->result_type.kind == PrimitiveKind::FUNCTION) {
+        // cfn (puntero a funcion crudo estilo C): la VARIABLE guarda la
+        // direccion del codigo tal cual (8 bytes), NO un slot de 16 bytes.
+        // La llamada es CALLIND directo sobre ese valor, sin cargar fn_addr
+        // de un slot ni env.  lambda (fn) != cfn.
+        if (id->result_type.fn_is_raw) {
+            const ir::IrValueId fnp = lookup(id->name);
+            if (fnp == ir::IR_NO_VALUE) {
+                error_at(e->loc,
+                         "lowering: cfn no resuelto: '" + id->name + "'");
+                return ir::IR_NO_VALUE;
+            }
+            std::vector<ir::IrValueId> args;
+            args.reserve(e->args.size());
+            for (auto &a : e->args) {
+                const ir::IrValueId av = lower_expr(a.get());
+                if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                args.push_back(av);
+            }
+            const ir::IrType rt = ir_type_from_primitive(
+                id->result_type.pointee ? id->result_type.pointee->kind
+                                        : PrimitiveKind::VOID);
+            const ir::IrValueId dst =
+                (rt == ir::IrType::VOID) ? ir::IR_NO_VALUE
+                                         : fn_->new_value(rt);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLIND;
+            ins.type = rt;
+            ins.dst = dst;
+            ins.func_ptr = fnp;
+            ins.operands = std::move(args);
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return dst;
+        }
         // Direccion del function value (16 bytes en stack).  Si es
         // una variable address-taken, read_local devuelve el LOAD;
         // si es directa, devuelve el SSA value tal cual.  Para
