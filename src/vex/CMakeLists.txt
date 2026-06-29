@@ -35,6 +35,7 @@ file(GLOB_RECURSE VEX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/jit/*.cpp     ${CMAKE_SOURCE_DIR}/include/jit/*.h
     ${CMAKE_SOURCE_DIR}/src/port/transpiler_base.cpp
     ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
+    ${CMAKE_SOURCE_DIR}/src/port/snippet_loader.cpp
 )
 set(VEX_CODEGEN_VERSION_HDR ${CMAKE_CURRENT_BINARY_DIR}/vex_codegen_version.h)
 add_custom_command(
@@ -58,6 +59,8 @@ add_library(vex_lib STATIC
     type_checker.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
+    # Fase 4 interop C: generador de header C publico (vex --emit-header).
+    c_header_gen.cpp
     lombok.cpp
     lowering.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
@@ -88,6 +91,8 @@ add_library(vex_lib STATIC
     # a su propia libreria port_lib en CMakeLists del root.
     ${CMAKE_SOURCE_DIR}/src/port/transpiler_base.cpp
     ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
+    # Cargador de snippets compartido (stdlib/port/c) -- backend C + header gen.
+    ${CMAKE_SOURCE_DIR}/src/port/snippet_loader.cpp
 )
 
 # La libreria expone sus headers desde include/vex/; PUBLIC para que los

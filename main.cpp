@@ -540,6 +540,12 @@ int main(int argc, char *argv[]) {
             "de VestaVM (a menos que --port-gc=vesta).  Implica --vex (se "
             "aplica al pipeline Vex post-optimizacion).",
             cxxopts::value<std::string>())(
+            "emit-header",
+            "Generar el header C publico del modulo (<output>.h): typedefs de "
+            "los structs C-compatibles + prototipos de las funciones con firma "
+            "C-representable + punteros a funcion cfn.  Pensado junto a --port "
+            "c: el .c lleva las definiciones y el .h las declaraciones, listo "
+            "para que un programa C incluya el .h y enlace el .c.")(
             "port-gc",
             "Modelo de memoria del codigo portado: none|vesta|boehm.  none "
             "(default): malloc/free + sin GC.  Las IR ops de objetos GC "
@@ -1936,6 +1942,9 @@ int main(int argc, char *argv[]) {
         // codigo. El frontend Vex llama al port::Transpiler tras la fase de
         // optimizacion del IR; el resultado queda en cr.port_text para que aqui
         // lo escribamos a archivo con la extension correspondiente.
+        if (result.count("emit-header")) {
+            copts.emit_header = true;
+        }
         if (result.count("port")) {
             copts.port_target = result["port"].as<std::string>();
             // Validacion temprana del target: solo 'c' en v1.
@@ -4712,6 +4721,24 @@ int main(int argc, char *argv[]) {
             ofs_ir << cr.ir_text;
             vesta::scout() << "[vex] .ir generado: " << ir_path << "\n";
             return EXIT_SUCCESS;
+        }
+
+        // Fase 4 interop C: escribir el header C publico (<output>.h) si
+        // --emit-header esta activo.  Se hace ANTES del bloque --port (que
+        // termina con return) para que `--port c --emit-header` produzca
+        // ambos: el .c con las definiciones y el .h con las declaraciones.
+        if (copts.emit_header && !cr.header_text.empty()) {
+            const std::string h_path = out_prefix.empty()
+                                           ? (copts.module_name + ".h")
+                                           : (out_prefix + ".h");
+            std::ofstream ofs_h(h_path);
+            if (!ofs_h.is_open()) {
+                std::cerr << "[header] No se puede escribir: " << h_path << "\n";
+                return EXIT_FAILURE;
+            }
+            ofs_h << cr.header_text;
+            vesta::scout() << "[header] C generado: " << h_path << " ("
+                           << cr.header_text.size() << " bytes)\n";
         }
 
         // Si --port=<lang> esta activo, escribir el codigo fuente generado

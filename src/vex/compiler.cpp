@@ -16,6 +16,7 @@
  */
 
 #include "vex/compiler.h"
+#include "vex/c_header_gen.h" // Fase 4 interop C: vex --emit-header
 
 #include "analyze/bigo.h"
 #include "ir/ir_emitter.h"
@@ -490,6 +491,13 @@ CompileResult compile_vex_source(const std::string &source,
         }
         if (opts.dump_html_ir_post) {
             res.html_ir_post = html_from_ir_module(irmod_opt, title, cost_post);
+        }
+
+        // Fase 4 interop C: header C publico (structs C-compat + prototipos
+        // de funciones C-representables).  Se genera del frontend (AST + tc),
+        // no del IR: es la API Vex tal cual la ve un programador C.
+        if (opts.emit_header) {
+            res.header_text = vex::generate_c_header(*mod, tc, mod_name);
         }
 
         // Port transpiler: convierte el IR optimizado a codigo fuente

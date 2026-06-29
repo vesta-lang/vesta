@@ -122,6 +122,11 @@ struct CompileOptions {
     /// si @c port_target != "".  Default segun PortOptions::PortOptions.
     port::PortOptions port_options;
 
+    /// Fase 4 interop C: si @c true, genera el header C publico del modulo
+    /// (structs C-compat + prototipos de funciones C-representables) en
+    /// @c CompileResult::header_text.  Activado por `vex --emit-header`.
+    bool emit_header = false;
+
     /// Instrumentacion para debugging: cuando esta activa, el lowering
     /// emite CALLs sinteticas a @c "vex_trace:enter" y @c "vex_trace:exit"
     /// al inicio y antes de cada @c RET de cada funcion del usuario.
@@ -303,6 +308,10 @@ struct CompileResult {
     /// es C/Java/JS/etc segun el target elegido, listo para escribir
     /// a archivo y compilar con la toolchain nativa.
     std::string port_text;
+
+    /// Fase 4 interop C: texto del header C publico generado, lleno solo si
+    /// @c CompileOptions::emit_header.  Listo para escribir a `<out>.h`.
+    std::string header_text;
 
     /// Warnings emitidos por el transpiler (IR ops no soportadas por
     /// el backend, etc.).  Vacio si no hubo issues.
