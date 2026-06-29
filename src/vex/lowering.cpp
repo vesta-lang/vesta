@@ -13179,6 +13179,22 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // & sobre IdentExpr local address-taken: scope guarda la addr.
         if (e->operand->kind == ast::NodeKind::IdentExpr) {
             auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
+            // &funcion -> LABEL_ADDR (direccion cruda del codigo) = un cfn.
+            // El type checker tipo el resultado como cfn(sig); aqui producimos
+            // la direccion (8 bytes), igual que el cast `(cfn(...)) nombre`.
+            if (id->is_func_ref) {
+                const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::LABEL_ADDR;
+                ins.type = ir::IrType::PTR;
+                ins.dst = dst;
+                ins.func_name = id->func_ref_mangled.empty()
+                                    ? id->name
+                                    : id->func_ref_mangled;
+                ins.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ins));
+                return dst;
+            }
             // & sobre un GLOBAL runtime (incluido un thread_local): su
             // direccion es STR_LIT_ADDR del slot static_data.  El driver AOT
             // deriva la TLS-ness desde SD_FLAG_TLS y emite el acceso por thread

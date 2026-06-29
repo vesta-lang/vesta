@@ -7301,6 +7301,30 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
             diags_.error(e->loc, "'&' requiere un operando");
             return Type{};
         }
+        // &funcion -> PUNTERO A FUNCION crudo (cfn).  La direccion de una
+        // funcion top-level ES un puntero a funcion estilo C; lo tipamos como
+        // cfn(sig) con fn_is_raw=true.  El lowering emite LABEL_ADDR (direccion
+        // cruda del codigo), igual que el cast `(cfn(...)) nombre`.  Solo si el
+        // nombre NO esta sombreado por una variable local (esa tendria address
+        // normal).
+        if (e->operand->kind == ast::NodeKind::IdentExpr) {
+            auto *fid = static_cast<ast::IdentExpr *>(e->operand.get());
+            const Symbol *vs = lookup(fid->name);
+            const bool shadowed_var = vs && vs->kind == SymbolKind::Variable;
+            if (!shadowed_var) {
+                if (const FunctionSig *fsig = function_sig_by_name(fid->name)) {
+                    fid->is_func_ref = true;
+                    fid->func_ref_mangled = fsig->mangled_label.empty()
+                                                ? fid->name
+                                                : fsig->mangled_label;
+                    Type cfnt = Type::make_function(fsig->param_types,
+                                                    fsig->return_type);
+                    cfnt.fn_is_raw = true; // cfn, no lambda
+                    e->result_type = cfnt;
+                    return cfnt;
+                }
+            }
+        }
         const auto kind = e->operand->kind;
         const bool is_lvalue =
             kind == ast::NodeKind::IdentExpr ||
@@ -7923,8 +7947,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // de closure existente (CALLCLOSURE) mas abajo -- no las intercepta.
         bool indirect = false;
         Type ftype{};
+        // Casts, index y &funcion (UnaryExpr AddrOf) a tipo FUNCTION son
+        // punteros a funcion crudos -> CALLIND.  Una VARIABLE de tipo FUNCTION
+        // (closure de 16 bytes) se llama por el path de closure mas abajo.
         if (e->callee->kind == ast::NodeKind::CastExpr ||
-            e->callee->kind == ast::NodeKind::IndexExpr) {
+            e->callee->kind == ast::NodeKind::IndexExpr ||
+            e->callee->kind == ast::NodeKind::UnaryExpr) {
             Type ct = check_expr(e->callee.get());
             if (ct.kind == PrimitiveKind::FUNCTION) {
                 indirect = true;
@@ -8527,6 +8555,45 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
         const Type bt = check_expr(fa->base.get());
+        // Helper: `o.f(args)` donde f es un CAMPO de tipo funcion (cfn/fn) ->
+        // llamada INDIRECTA a traves del puntero a funcion guardado en el campo
+        // (CALLIND), NO un metodo.  Esto distingue un METODO de struct/clase
+        // (dispatch directo, inline-able, eficiente) de un MIEMBRO puntero a
+        // funcion estilo C.  Marca is_indirect_call y valida la firma; el
+        // lowering bajara `o.f` al valor del campo y emitira CALLIND.
+        auto funcptr_field_call = [&](const Type &ftype) -> Type {
+            e->is_indirect_call = true;
+            fa->result_type = ftype;
+            if (e->args.size() != ftype.fn_params.size())
+                diags_.error(e->loc, "llamada a campo-funcion '" +
+                    fa->field_name + "': numero de argumentos (" +
+                    std::to_string(e->args.size()) + ") distinto de la firma (" +
+                    std::to_string(ftype.fn_params.size()) + ")");
+            const size_t n = std::min(e->args.size(), ftype.fn_params.size());
+            for (size_t i = 0; i < n; ++i) {
+                const Type ta = check_expr(e->args[i].get());
+                if (ta.kind != PrimitiveKind::COUNT &&
+                    !types_assignable(ftype.fn_params[i], ta))
+                    diags_.warning(e->args[i]->loc, "argumento " +
+                        std::to_string(i + 1) + " del campo-funcion '" +
+                        fa->field_name + "': tipo incompatible");
+            }
+            for (size_t i = n; i < e->args.size(); ++i)
+                (void)check_expr(e->args[i].get());
+            return ftype.pointee ? *ftype.pointee : Type{};
+        };
+        // Solo campos cfn (puntero a funcion crudo, fn_is_raw): su valor es la
+        // direccion -> CALLIND directo.  Un campo lambda (fn) guardaria un
+        // puntero a un slot de 16 bytes y requeriria CALLCLOSURE (follow-up).
+        auto find_fn_field = [&](const std::vector<StructFieldInfo> &flds)
+            -> const StructFieldInfo * {
+            for (const auto &fld : flds)
+                if (fld.name == fa->field_name &&
+                    fld.type.kind == PrimitiveKind::FUNCTION &&
+                    fld.type.fn_is_raw)
+                    return &fld;
+            return nullptr;
+        };
         // STRUCT: resolver el metodo en el layout del struct (dispatch
         // estatico).  Si no es un metodo del struct, error claro.
         if (bt.kind == PrimitiveKind::STRUCT) {
@@ -8547,6 +8614,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
             }
             if (!smtd) {
+                // No es metodo: ¿es un CAMPO puntero a funcion?  -> CALLIND.
+                if (const StructFieldInfo *ff = find_fn_field(slay.fields))
+                    return funcptr_field_call(ff->type);
                 diags_.error(e->loc, "el struct '" + bt.struct_name +
                                          "' no tiene un metodo '" +
                                          fa->field_name + "'");
@@ -8607,6 +8677,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
         }
         if (!mtd) {
+            // No es metodo: ¿es un CAMPO puntero a funcion?  -> CALLIND.
+            if (const StructFieldInfo *ff = find_fn_field(cls.fields))
+                return funcptr_field_call(ff->type);
             diags_.error(e->loc, "la clase '" + bt.struct_name +
                                      "' no tiene un metodo '" + fa->field_name +
                                      "'");
