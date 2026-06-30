@@ -854,6 +854,18 @@ CompileResult compile_vex_project(const std::string &root_path,
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
                            (source_hash << 6) + (source_hash >> 2);
         }
+        // Phase AOT (fix): el IR de un dep depende del MODO de POO con que se
+        // baja.  En modo Full/VM las clases usan GC (newobj + gc_deref); en
+        // modo AOT (`native_poo`) usan stack/heap nativo (calloc + dtor RAII).
+        // Son IR DISTINTOS para el mismo source.  Si no mezclamos native_poo
+        // en el source_hash, un `.vexir` cacheado por `-m vm` se reusaria en
+        // `-m aot` (y viceversa) -> IR incompatible con el backend objetivo.
+        // Esto solo muerde libs con clases/funciones CONCRETAS (las plantillas
+        // genericas no producen IR en el dep; se monomorphizan en el root).
+        if (opts.native_poo) {
+            source_hash ^= 0xA07A07A07A07A07AULL + (source_hash << 7) +
+                           (source_hash >> 3);
+        }
 
         // ---- M4: cache hit path ----
         // Solo se aplica a DEPS, no al root.  Verifica:

@@ -2291,7 +2291,18 @@ int main(int argc, char *argv[]) {
             diag_vex || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
             !copts.port_target.empty();
 
-        if (project_cache_enabled && has_imports && !wants_pipeline_artifacts) {
+        // Phase AOT multi-modulo (fix): el project-cache SOLO almacena un
+        // `.velb` (bytecode VM).  En modo `-m aot` el output es un binario
+        // NATIVO (PE/ELF), no un `.velb`.  Si dejaramos que el cache hit
+        // sirviera el `.velb` cacheado de un build previo (la ProjectCacheKey
+        // no distingue aot_mode/--format/--emit), el comando AOT escribiria un
+        // `.velb` y retornaria EXIT_SUCCESS ANTES de llegar al codegen nativo
+        // (bloque `if (aot_mode)` mas abajo) -> el usuario nunca obtenia su
+        // exe.  Solucion: en AOT saltamos por completo el project-cache (no
+        // puede servir ni guardar binarios nativos; el codegen AOT es siempre
+        // fresco).  Los caches per-dep (.vexi/.vexir) siguen aplicando.
+        if (project_cache_enabled && has_imports && !wants_pipeline_artifacts &&
+            !aot_mode) {
             uint32_t cached_opts_hash = 0;
             std::vector<vex::ProjectCacheDep> cached_deps;
             std::vector<uint8_t> cached_velb;
