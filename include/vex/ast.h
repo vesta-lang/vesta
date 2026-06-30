@@ -2132,12 +2132,34 @@ struct ClassDecl : Node {
  * @struct ModuleNode
  * @brief Raiz del AST: lista de declaraciones top-level.
  */
+/**
+ * @struct GenericTemplateExport
+ * @brief Fuente textual de una plantilla generica exportable cross-module.
+ *
+ * Los genericos se monomorphizan donde se USAN; para que un modulo importador
+ * pueda instanciar `Caja<i64>` necesita el AST del template `struct Caja<T>`.
+ * En vez de serializar el AST, guardamos el TEXTO FUENTE del decl (capturado
+ * por el parser) en el `.vexi`; el importador lo re-parsea e inyecta en su AST.
+ * Cubre struct/clase/funcion/enum genericos (type_params no vacios) y los
+ * `concept`.  @c kind = NodeKind del decl.
+ */
+struct GenericTemplateExport {
+    std::string name;    ///< nombre del template (para diagnostico/dedup)
+    uint8_t kind = 0;    ///< NodeKind del decl (Struct/Class/Function/Enum/Concept)
+    std::string source;  ///< texto fuente completo del decl
+    bool is_public = true;
+};
+
 struct ModuleNode : Node {
     std::vector<std::unique_ptr<Node>> decls; ///< FunctionDecl o GlobalVarDecl.
     /// @NoExceptions a nivel modulo: deshabilita excepciones en TODO el
     /// modulo (todas las funciones + metodos lo heredan).  Para contextos
     /// que no pueden tenerlas (kernel, freestanding, embedded).
     bool no_exceptions = false;
+    /// Plantillas genericas + conceptos declarados en este modulo, con su
+    /// texto fuente para exportarlos cross-module via `.vexi`.  Lo rellena
+    /// el parser; lo consume el emitter del `.vexi`.
+    std::vector<GenericTemplateExport> generic_template_exports;
     ModuleNode() : Node(NodeKind::Module) {}
 };
 

@@ -452,7 +452,10 @@ std::vector<uint8_t> vexi_emit(const VexiModule &mod) {
     //    + blob_pool + string_pool.
     // .vexi v4: header crece de 48 a 64 bytes (añade blob_pool_offset u32 +
     // blob_pool_size u32 + blob_pool_alignment u8 + 7 pad en offsets 48..63).
-    const size_t HEADER_BYTES = 64;
+    // v6: crece a 80 (gen_templates_offset u32 + gen_templates_count u32 +
+    // 8 pad en offsets 64..79).
+    const size_t HEADER_BYTES = 80;
+    const size_t GEN_ENTRY_BYTES = 20; // name_off+name_len+kind(u32)+src_off+src_len
     const size_t SYMENTRY_BYTES = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
     const size_t DEP_ENTRY_BYTES =
         16; // u32 name_off + u32 name_len + u64 abi_hash
@@ -469,6 +472,21 @@ std::vector<uint8_t> vexi_emit(const VexiModule &mod) {
     for (const auto &d : mod.deps) {
         dep_name_offs.emplace_back(pool.intern(d.name),
                                    static_cast<uint32_t>(d.name.size()));
+    }
+    // v6: pre-internar nombre + fuente de cada plantilla generica exportada.
+    struct GenTplOff {
+        uint32_t name_off, name_len, kind, src_off, src_len;
+    };
+    std::vector<GenTplOff> gen_offs;
+    gen_offs.reserve(mod.generic_templates.size());
+    for (const auto &g : mod.generic_templates) {
+        GenTplOff go{};
+        go.name_off = pool.intern(g.name);
+        go.name_len = static_cast<uint32_t>(g.name.size());
+        go.kind = g.kind;
+        go.src_off = pool.intern(g.source);
+        go.src_len = static_cast<uint32_t>(g.source.size());
+        gen_offs.push_back(go);
     }
 
     std::vector<uint8_t> out;
@@ -516,6 +534,17 @@ std::vector<uint8_t> vexi_emit(const VexiModule &mod) {
     const uint32_t blob_pool_start = static_cast<uint32_t>(out.size());
     if (!mod.blob_pool.empty()) {
         out.insert(out.end(), mod.blob_pool.begin(), mod.blob_pool.end());
+    }
+
+    // v6: tabla de plantillas genericas tras el blob_pool, antes del pool.
+    // Cada entrada referencia offsets dentro del string pool (name + source).
+    const uint32_t gen_start = static_cast<uint32_t>(out.size());
+    for (const auto &go : gen_offs) {
+        write_u32(out, go.name_off);
+        write_u32(out, go.name_len);
+        write_u32(out, go.kind);
+        write_u32(out, go.src_off);
+        write_u32(out, go.src_len);
     }
 
     // String pool al final.
@@ -568,6 +597,10 @@ std::vector<uint8_t> vexi_emit(const VexiModule &mod) {
     out[61] = 0;
     out[62] = 0;
     out[63] = 0;
+    // v6: gen_templates_offset (64) + gen_templates_count (68) + 8 pad (72..79).
+    patch_u32(64, gen_start);
+    patch_u32(68, static_cast<uint32_t>(mod.generic_templates.size()));
+    for (size_t i = 72; i < 80; ++i) out[i] = 0;
 
     // Adjustar payload_off de cada entry: hasta ahora son relativos al
     // BLOQUE de payloads (empieza en 0).  Sumar payloads_start para que
@@ -893,9 +926,9 @@ static bool parse_payload_enum(const uint8_t *data, size_t size,
 
 VexiParseResult vexi_parse(const uint8_t *data, size_t size) {
     VexiParseResult r;
-    // .vexi v4: header crece a 64 bytes.
-    if (size < 64) {
-        r.error_message = "fichero .vexi truncado (< 64 bytes)";
+    // .vexi v6: header crece a 80 bytes.
+    if (size < 80) {
+        r.error_message = "fichero .vexi truncado (< 80 bytes)";
         return r;
     }
     size_t off = 0;
@@ -925,7 +958,12 @@ VexiParseResult vexi_parse(const uint8_t *data, size_t size) {
     read_u32(data, size, off, blob_pool_offset_hdr);   // v4
     read_u32(data, size, off, blob_pool_size_hdr);     // v4
     read_u8(data, size, off, blob_pool_alignment_hdr); // v4
-    off += 7;                                          // pad
+    off += 7;                                          // pad (offsets 57..63)
+    uint32_t gen_offset_hdr = 0;                        // v6
+    uint32_t gen_count_hdr = 0;                         // v6
+    read_u32(data, size, off, gen_offset_hdr);
+    read_u32(data, size, off, gen_count_hdr);
+    off += 8; // pad (offsets 72..79)
 
     if (magic != VEXI_MAGIC) {
         r.error_message = "magic invalido en .vexi";
@@ -965,10 +1003,11 @@ VexiParseResult vexi_parse(const uint8_t *data, size_t size) {
     r.module_.compiler_version_hash = cvh;
     r.module_.symbols.reserve(symbol_count);
 
-    // Symbol entries empiezan en offset 64 (tras el header v4).
+    // Symbol entries empiezan en offset 80 (tras el header v6).
     constexpr size_t SYMENTRY_BYTES = 20;
-    constexpr size_t HEADER_BYTES = 64;
+    constexpr size_t HEADER_BYTES = 80;
     constexpr size_t DEP_ENTRY_BYTES = 16;
+    constexpr size_t GEN_ENTRY_BYTES = 20;
     // v4: blob_pool extraido a un std::vector para conservar la API
     // existente.  Validamos rangos antes de copiar.
     if (blob_pool_size_hdr != 0) {
@@ -1096,6 +1135,33 @@ VexiParseResult vexi_parse(const uint8_t *data, size_t size) {
             return r;
         }
         r.module_.deps.push_back(std::move(d));
+    }
+
+    // v6: parsear la tabla de plantillas genericas.
+    if (gen_count_hdr > 100000) {
+        r.error_message = "gen_templates_count excesivo (posible corrupcion)";
+        return r;
+    }
+    r.module_.generic_templates.reserve(gen_count_hdr);
+    for (uint32_t i = 0; i < gen_count_hdr; ++i) {
+        size_t g_off = gen_offset_hdr + i * GEN_ENTRY_BYTES;
+        uint32_t n_off = 0, n_len = 0, kind = 0, s_off = 0, s_len = 0;
+        if (!read_u32(data, size, g_off, n_off) ||
+            !read_u32(data, size, g_off, n_len) ||
+            !read_u32(data, size, g_off, kind) ||
+            !read_u32(data, size, g_off, s_off) ||
+            !read_u32(data, size, g_off, s_len)) {
+            r.error_message = "gen template entry truncada";
+            return r;
+        }
+        VexiModule::GenericTemplateSource g;
+        g.kind = static_cast<uint8_t>(kind);
+        if (!read_name(data, size, n_off, n_len, pool_start, g.name) ||
+            !read_name(data, size, s_off, s_len, pool_start, g.source)) {
+            r.error_message = "gen template name/source fuera de bounds";
+            return r;
+        }
+        r.module_.generic_templates.push_back(std::move(g));
     }
 
     r.ok = true;

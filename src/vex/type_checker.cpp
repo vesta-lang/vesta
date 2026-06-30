@@ -269,10 +269,28 @@ TypeChecker::~TypeChecker() {
 // requalificar las decenas de usos existentes.
 using namespace vexgen;
 
+// #cross-module-generics: un template importado con namespace se inyecta con
+// nombre cualificado `lib.Box` (con punto).  El punto es invalido en las
+// etiquetas del IR/linker, asi que el nombre MANGLED de la instancia debe ser
+// dot-free.  Reemplaza '.' por '_' (idempotente para nombres sin punto).
+static std::string mangle_sanitize(const std::string &s) {
+    if (s.find('.') == std::string::npos) return s;
+    std::string out = s;
+    for (char &c : out)
+        if (c == '.') c = '_';
+    return out;
+}
+
 std::string TypeChecker::monomorphize_class(const std::string &template_name,
                                             const std::vector<Type> &args,
                                             const SourceLoc &loc) {
-    const std::string mangled = template_name + "_" + mangle_args(args);
+    // #cross-module-generics: usar el template lo marca como referenciado
+    // (evita el falso "import no se usa" cuando se importa cross-module).
+    referenced_names_.insert(template_name);
+    if (template_name.find('.') != std::string::npos)
+        referenced_names_.insert(template_name.substr(0, template_name.find('.')));
+    const std::string mangled =
+        mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
     auto it = generic_templates_.find(template_name);
@@ -406,7 +424,8 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
 std::string TypeChecker::monomorphize_enum(const std::string &template_name,
                                            const std::vector<Type> &args,
                                            const SourceLoc &loc) {
-    const std::string mangled = template_name + "_" + mangle_args(args);
+    const std::string mangled =
+        mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
     auto it = generic_enum_templates_.find(template_name);
@@ -485,7 +504,11 @@ std::string TypeChecker::monomorphize_enum(const std::string &template_name,
 std::string TypeChecker::monomorphize_struct(const std::string &template_name,
                                              const std::vector<Type> &args,
                                              const SourceLoc &loc) {
-    const std::string mangled = template_name + "_" + mangle_args(args);
+    referenced_names_.insert(template_name); // #cross-module-generics
+    if (template_name.find('.') != std::string::npos) // marca el namespace
+        referenced_names_.insert(template_name.substr(0, template_name.find('.')));
+    const std::string mangled =
+        mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
     auto it = generic_struct_templates_.find(template_name);
@@ -601,7 +624,11 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
 std::string TypeChecker::monomorphize_function(const std::string &template_name,
                                                const std::vector<Type> &args,
                                                const SourceLoc &loc) {
-    const std::string mangled = template_name + "_" + mangle_args(args);
+    referenced_names_.insert(template_name); // #cross-module-generics
+    if (template_name.find('.') != std::string::npos) // marca el namespace
+        referenced_names_.insert(template_name.substr(0, template_name.find('.')));
+    const std::string mangled =
+        mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
     auto it = generic_fn_templates_.find(template_name);
@@ -1628,7 +1655,11 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
             for (auto &ta : nt->type_args) {
                 args.push_back(type_from_node(ta.get()));
             }
-            lookup = nt->name + "_" + mangle_args(args);
+            // #cross-module-generics: un template importado con namespace se
+            // registra con nombre cualificado `lib.Box` (con punto), pero su
+            // instancia se mangla dot-free (`lib_Box_i64`) para etiquetas
+            // validas.  Sanitizar aqui para que el lookup del layout coincida.
+            lookup = mangle_sanitize(nt->name) + "_" + mangle_args(args);
         }
         // 1) Alias resolution.
         auto it_a = type_aliases_.find(lookup);
@@ -6053,7 +6084,10 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
         targs.reserve(e->type_args.size());
         for (auto &ta : e->type_args)
             targs.push_back(type_from_node(ta.get()));
-        e->class_name = e->class_name + "_" + mangle_args(targs);
+        // #cross-module-generics: sanitizar el punto del nombre cualificado
+        // (`lib.Box`) para que el mangled (`lib_Box_i64`) coincida con el
+        // layout y sea una etiqueta valida.
+        e->class_name = mangle_sanitize(e->class_name) + "_" + mangle_args(targs);
         e->is_mangled = true;
     }
 

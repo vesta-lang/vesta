@@ -1,0 +1,26 @@
+// Modulo libreria que EXPORTA plantillas genericas + conceptos + una
+// especializacion, para validar genericos cross-module (#cross-module-generics).
+// Las plantillas viajan en el .vexi como texto fuente y el importador las
+// re-parsea e inyecta para monomorphizar en su propio modulo.
+
+// Struct generico con metodo generico.
+public struct Caja<T> {
+    T v;
+    U identidad<U>(U x) { return x; }   // metodo generico
+    i64 leer() { return (i64) this.v; }
+}
+
+// Clase generica.
+public class Box<T> {
+    public T v;
+    public Box(T x) { this.v = x; }
+    public T get() { return this.v; }
+}
+
+// Concepto + funcion con bound.
+public concept Num<T> = is_numeric<T>();
+public i64 doblar<T: Num>(T x) { return (i64)x + (i64)x; }
+
+// Especializacion: primario + total i64 (con campo extra).
+public struct Par<T> { T a; i64 cual() { return 1; } }
+public struct Par<i64> { i64 a; i64 extra; i64 cual() { return 2; } }

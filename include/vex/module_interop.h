@@ -81,6 +81,23 @@ void register_namespace_for_import(TypeChecker &tc,
                                    const std::string &module_name,
                                    const VexiModule &mod);
 
+/**
+ * @brief #cross-module-generics: inyecta las plantillas genericas + conceptos
+ * de un `.vexi` importado en el TypeChecker del importador.
+ *
+ * Re-parsea el TEXTO FUENTE de cada plantilla (`struct Caja<T>`, `concept N`,
+ * etc.) y la anyade a @c mod_.decls del importador, para que pueda
+ * monomorphizar `Caja<i64>` cross-module.  Debe llamarse ANTES de @c run().
+ * Si @p wanted no esta vacio, solo inyecta las plantillas con esos nombres
+ * (import `only`); si esta vacio, inyecta todas (import plain/namespace).
+ * @p ns_prefix: si no esta vacio, registra ademas el nombre cualificado
+ * `<ns>.<Template>` como alias del template para los imports con namespace.
+ */
+void inject_generic_templates_from_vexi(
+    TypeChecker &tc, const VexiModule &mod,
+    const std::unordered_set<std::string> &wanted,
+    const std::string &ns_prefix);
+
 } // namespace vex
 
 #endif // VEX_MODULE_INTEROP_H

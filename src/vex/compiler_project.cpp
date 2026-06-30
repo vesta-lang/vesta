@@ -1018,6 +1018,10 @@ CompileResult compile_vex_project(const std::string &root_path,
                 // M.7: registrar namespace.
                 register_namespace_for_import(*pm.tc, req.local_name,
                                               req.module_name, dep.vexi);
+                // #cross-module-generics: inyectar TODAS las plantillas del
+                // dep bajo el namespace (`lib.Caja<i64>`).
+                inject_generic_templates_from_vexi(
+                    *pm.tc, dep.vexi, /*wanted=*/{}, req.local_name);
                 // M.reexport ext: para `public import "base";` (sin only),
                 // inyectar TAMBIEN cada simbolo publico del dep como si
                 // fuera un `only A, B, ...` sintetico Y marcarlo
@@ -1042,17 +1046,43 @@ CompileResult compile_vex_project(const std::string &root_path,
                     }
                 }
             } else {
+                // #cross-module-generics: inyectar las plantillas del dep
+                // (sin namespace -> nombre directo `Caja<i64>`).  Se inyectan
+                // TODAS (no solo las listadas en `only`) para que las
+                // dependencias entre plantillas se satisfagan (p.ej. una fn
+                // generica con bound de un `concept` del mismo modulo).  Son
+                // inertes si no se usan (se monomorphizan solo on-use).  Se
+                // hace ANTES de la inyeccion de simbolos para que el template
+                // exista en mod_.decls cuando run() registre los templates.
+                inject_generic_templates_from_vexi(*pm.tc, dep.vexi,
+                                                   /*wanted=*/{},
+                                                   /*ns_prefix=*/"");
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 auto missing = import_vexi_into_typechecker_with_missing(
                     *pm.tc, dep.vexi, req.only_symbols);
+                // #cross-module-generics: un nombre `only` puede ser una
+                // PLANTILLA generica (no esta en symbols sino en
+                // generic_templates) -> no es "missing".
+                std::unordered_set<std::string> gen_names;
+                for (const auto &g : dep.vexi.generic_templates)
+                    gen_names.insert(g.name);
                 for (const auto &m : missing) {
+                    if (gen_names.count(m)) continue; // es un template: OK
                     std::string msg = "el modulo '";
                     msg += req.module_name;
                     msg += "' no exporta '";
                     msg += m;
                     msg += "' (es privado o no existe)";
                     pm.diags.error(req.loc, std::move(msg));
+                }
+                // Recalcular missing real (excluyendo templates) para el
+                // early-abort de abajo.
+                {
+                    std::vector<std::string> real_missing;
+                    for (const auto &m : missing)
+                        if (!gen_names.count(m)) real_missing.push_back(m);
+                    missing = std::move(real_missing);
                 }
                 if (!missing.empty()) {
                     pm.ok = false;
@@ -1399,6 +1429,16 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
     }
 
+    // #cross-module-generics: dedup de funciones por nombre al mergear.  Una
+    // misma instanciacion `Caja_i64__leer` puede producirse en VARIOS modulos
+    // (cada uno inyecta la plantilla y monomorphiza on-use); son IDENTICAS por
+    // construccion (mismo template + mismos args), asi que se conserva UNA.
+    // Sin esto, el linker veria simbolos duplicados.  Modelo COMDAT de C++.
+    std::unordered_set<std::string> merged_fn_names;
+    merged_fn_names.reserve(merged.functions.size() * 2);
+    for (const auto &fn : merged.functions)
+        merged_fn_names.insert(fn.name);
+
     for (size_t i = 0; i + 1 < work.size(); ++i) {
         if (shaken_indices.count(i)) continue; // L.25: skip dep no usado
         auto &dep_ir = work[i].ir;
@@ -1472,6 +1512,11 @@ CompileResult compile_vex_project(const std::string &root_path,
             }
         }
         for (auto &fn : dep_ir.functions) {
+            // #cross-module-generics: dedup -- saltar funciones cuyo nombre
+            // ya existe (monomorphizaciones identicas de otro modulo).  Las
+            // synteticas por-modulo (`__module_init_<mod>`) ya son unicas.
+            if (!fn.name.empty() && !merged_fn_names.insert(fn.name).second)
+                continue;
             merged.functions.push_back(std::move(fn));
         }
         // M.staticdata-pool: el storage canonico es ahora un pool unico

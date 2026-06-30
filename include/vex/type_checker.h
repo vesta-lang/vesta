@@ -511,6 +511,20 @@ class TypeChecker {
      */
     const ast::ModuleNode &ast_module() const noexcept { return mod_; }
 
+    /// #cross-module-generics: inyecta un decl (plantilla generica o
+    /// concepto) re-parseado de un `.vexi` importado en este modulo, para
+    /// que se pueda monomorphizar `Caja<i64>` cross-module.  Debe llamarse
+    /// ANTES de run() (que registra los templates).  Idempotente por nombre.
+    void inject_decl(std::unique_ptr<ast::Node> decl) {
+        mod_.decls.push_back(std::move(decl));
+    }
+    bool has_injected_template(const std::string &name) const noexcept {
+        return injected_templates_.count(name) > 0;
+    }
+    void mark_injected_template(const std::string &name) {
+        injected_templates_.insert(name);
+    }
+
     /**
      * @brief Resuelve un TypeNode AST a su Type semantico.
      *
@@ -1537,6 +1551,10 @@ class TypeChecker {
     /// Poblado al registrar templates.  Consultado por la evaluacion de
     /// bounds y por la composicion de conceptos en predicados comptime.
     std::unordered_map<std::string, const ast::ConceptDecl *> concepts_;
+    /// #cross-module-generics: nombres de plantillas/conceptos ya inyectados
+    /// desde un `.vexi` importado (dedup de re-parse + evita doble inyeccion
+    /// si varios imports los traen).
+    std::unordered_set<std::string> injected_templates_;
     /// #6: bounds encolados por check_type_bounds, pendientes de evaluar
     /// cuando los layouts existan (ver verify_pending_type_bounds).
     struct PendingBoundCheck {

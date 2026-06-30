@@ -28,6 +28,9 @@
 #include "vex/type_checker.h"
 #include "vex/types.h"
 #include "vex/vexi_format.h"
+#include "vex/diagnostic.h" // #cross-module-generics: re-parse de templates
+#include "vex/lexer.h"
+#include "vex/parser.h"
 
 namespace vex {
 
@@ -362,6 +365,16 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
                        32;
     out.symbols.reserve(cap);
 
+    // #cross-module-generics: nombres de plantillas genericas + conceptos de
+    // ESTE modulo.  NO se exportan como simbolos regulares (function/struct/
+    // class/enum): se exportan aparte como texto fuente (out.generic_templates)
+    // y el importador los re-parsea.  Sin este filtro, un `triple<T>` se
+    // exportaria a la vez como FUNCTION symbol Y como template -> el importador
+    // declararia el nombre dos veces ("redefinicion a nivel global").
+    std::unordered_set<std::string> template_names;
+    for (const auto &tex : tc.ast_module().generic_template_exports)
+        template_names.insert(tex.name);
+
     // --- Type aliases + newtypes ---
     for (const auto &kv : tc.type_aliases()) {
         // Phase M6.a L.3: solo exportar si es publico.
@@ -588,6 +601,11 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         if (!tc.is_function_public(fname)) {
             continue;
         }
+        // #cross-module-generics: las plantillas se exportan como fuente, no
+        // como simbolo regular.
+        if (template_names.count(public_name) || template_names.count(fname)) {
+            continue;
+        }
         // Phase M.L23: filtrar imports NO re-exportados.  El check
         // contra public_name (no mangled) porque los imports se
         // registran con su nombre publico al consumer.
@@ -787,6 +805,106 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         s.has_init_value = true;
         s.init_value = kv.second.value;
         out.symbols.push_back(std::move(s));
+    }
+
+    // --- #cross-module-generics: plantillas genericas + conceptos ---
+    // Exportar el TEXTO FUENTE de cada plantilla generica/concepto publico
+    // para que los importadores la re-parseen e inyecten en su AST y puedan
+    // monomorphizar `Caja<i64>` cross-module.  No re-exportar las que vienen
+    // de otro modulo (salvo re-export explicito).
+    for (const auto &tex : tc.ast_module().generic_template_exports) {
+        if (!tex.is_public) continue;
+        if (tc.is_imported(tex.name) && !tc.is_reexported(tex.name)) continue;
+        VexiModule::GenericTemplateSource g;
+        g.name = tex.name;
+        g.kind = tex.kind;
+        g.source = tex.source;
+        out.generic_templates.push_back(std::move(g));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #cross-module-generics: inyectar plantillas genericas + conceptos.
+// ---------------------------------------------------------------------------
+void inject_generic_templates_from_vexi(
+    TypeChecker &tc, const VexiModule &mod,
+    const std::unordered_set<std::string> &wanted,
+    const std::string &ns_prefix) {
+    if (mod.generic_templates.empty()) return;
+
+    // Dedup a nivel de (modulo + namespace): un modulo importado dos veces
+    // bajo el mismo prefijo no se re-inyecta.  La clave usa el nombre del
+    // primer template + ns para identificar el conjunto.
+    const std::string dedup_key =
+        "__modtpl__" + ns_prefix + "|" + mod.generic_templates.front().name +
+        "@" + std::to_string(mod.generic_templates.size());
+    if (tc.has_injected_template(dedup_key)) return;
+    tc.mark_injected_template(dedup_key);
+
+    // CONCATENAR todas las fuentes de plantillas del modulo y parsearlas
+    // JUNTAS, en orden.  Critico para #7: la deteccion de especializacion
+    // (`la PRIMERA Caja<...> es el primario, las siguientes son specs`) usa
+    // estado del parser (generic_struct_names_seen_) que se perderia si se
+    // re-parsea cada fuente por separado -> una spec aislada se trataria
+    // como primario.
+    std::string combined;
+    for (const auto &g : mod.generic_templates) {
+        combined += g.source;
+        combined += "\n";
+    }
+    Diagnostics tmp_diags;
+    Lexer lex(combined, "<vexi-templates:" + ns_prefix + ">", tmp_diags);
+    Parser parser(lex, tmp_diags);
+    auto parsed = parser.parse_program();
+    if (!parsed || tmp_diags.has_errors()) return; // best-effort
+
+    // Helper: nombre del decl (para el filtro `only` + rename namespace).
+    auto decl_name = [](ast::Node *d) -> std::string {
+        switch (d->kind) {
+        case ast::NodeKind::StructDecl:
+            return static_cast<ast::StructDecl *>(d)->name;
+        case ast::NodeKind::ClassDecl:
+            return static_cast<ast::ClassDecl *>(d)->name;
+        case ast::NodeKind::FunctionDecl:
+            return static_cast<ast::FunctionDecl *>(d)->name;
+        case ast::NodeKind::EnumDecl:
+            return static_cast<ast::EnumDecl *>(d)->name;
+        case ast::NodeKind::ConceptDecl:
+            return static_cast<ast::ConceptDecl *>(d)->name;
+        default: return std::string();
+        }
+    };
+    auto set_decl_name = [](ast::Node *d, const std::string &nm) {
+        switch (d->kind) {
+        case ast::NodeKind::StructDecl:
+            static_cast<ast::StructDecl *>(d)->name = nm;
+            break;
+        case ast::NodeKind::ClassDecl:
+            static_cast<ast::ClassDecl *>(d)->name = nm;
+            break;
+        case ast::NodeKind::FunctionDecl:
+            static_cast<ast::FunctionDecl *>(d)->name = nm;
+            break;
+        case ast::NodeKind::EnumDecl:
+            static_cast<ast::EnumDecl *>(d)->name = nm;
+            break;
+        case ast::NodeKind::ConceptDecl:
+            static_cast<ast::ConceptDecl *>(d)->name = nm;
+            break;
+        default: break;
+        }
+    };
+
+    for (auto &decl : parsed->decls) {
+        if (!decl) continue;
+        const std::string nm = decl_name(decl.get());
+        // Filtro `only` (si wanted no esta vacio).  Las specs comparten el
+        // nombre del primario, asi que el filtro por nombre las incluye.
+        if (!wanted.empty() && wanted.find(nm) == wanted.end()) continue;
+        // Rename para imports con namespace: `Caja` -> `lib.Caja`.
+        if (!ns_prefix.empty() && !nm.empty())
+            set_decl_name(decl.get(), ns_prefix + "." + nm);
+        tc.inject_decl(std::move(decl));
     }
 }
 

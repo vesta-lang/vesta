@@ -540,8 +540,74 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             parse_extern_block(*mod);
             continue;
         }
+        // #cross-module-generics: capturar el span fuente del decl para poder
+        // exportar las plantillas genericas (struct/clase/fn/enum con
+        // type_params) y los conceptos a otros modulos via `.vexi`.
+        const uint32_t decl_start_off = current_.loc.offset;
         auto decl = parse_top_level_decl();
         if (decl) {
+            // ¿Es una plantilla generica o un concepto?  Si lo es, guardar su
+            // texto fuente [start, end) para el `.vexi`.
+            ast::GenericTemplateExport tex;
+            bool is_template = false;
+            switch (decl->kind) {
+            case ast::NodeKind::StructDecl: {
+                auto *sd = static_cast<ast::StructDecl *>(decl.get());
+                if (!sd->type_params.empty() || sd->is_specialization) {
+                    tex.name = sd->name;
+                    tex.is_public = sd->is_public;
+                    is_template = true;
+                }
+                break;
+            }
+            case ast::NodeKind::ClassDecl: {
+                auto *cd = static_cast<ast::ClassDecl *>(decl.get());
+                if (!cd->type_params.empty() || cd->is_specialization) {
+                    tex.name = cd->name;
+                    tex.is_public = cd->is_public;
+                    is_template = true;
+                }
+                break;
+            }
+            case ast::NodeKind::FunctionDecl: {
+                auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+                if ((!fd->type_params.empty() || fd->is_specialization) &&
+                    !fd->is_comptime && !fd->is_macro) {
+                    tex.name = fd->name;
+                    tex.is_public = fd->is_public;
+                    is_template = true;
+                }
+                break;
+            }
+            case ast::NodeKind::EnumDecl: {
+                auto *en = static_cast<ast::EnumDecl *>(decl.get());
+                if (!en->type_params.empty()) {
+                    tex.name = en->name;
+                    tex.is_public = en->is_public;
+                    is_template = true;
+                }
+                break;
+            }
+            case ast::NodeKind::ConceptDecl: {
+                auto *cn = static_cast<ast::ConceptDecl *>(decl.get());
+                tex.name = cn->name;
+                tex.is_public = cn->is_public;
+                is_template = true;
+                break;
+            }
+            default: break;
+            }
+            if (is_template) {
+                const std::string &src = lex_.source_buffer();
+                uint32_t end_off = current_.loc.offset; // inicio del sig. decl
+                if (end_off > src.size()) end_off = (uint32_t)src.size();
+                if (decl_start_off < end_off && end_off <= src.size()) {
+                    tex.kind = static_cast<uint8_t>(decl->kind);
+                    tex.source =
+                        src.substr(decl_start_off, end_off - decl_start_off);
+                    mod->generic_template_exports.push_back(std::move(tex));
+                }
+            }
             mod->decls.push_back(std::move(decl));
         } else if (last_decl_was_target_skip_) {
             // L.24: skip intencional via @Target no matcheado.

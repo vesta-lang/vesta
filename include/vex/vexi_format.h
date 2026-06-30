@@ -49,7 +49,9 @@ inline constexpr uint32_t VEXI_MAGIC = 0x49584556u;
 /// El Symbol GLOBAL_VAR ahora puede llevar @c blob_offset apuntando al
 /// pool en lugar de @c init_value (que solo cabe 8 bytes).  Atributos
 /// `@align`/`@hot`/`@cold`/`@section` viajan en el blob.
-inline constexpr uint16_t VEXI_FORMAT_VERSION = 5;
+/// v6: seccion de plantillas genericas exportadas (texto fuente) para
+/// monomorphizacion cross-module.
+inline constexpr uint16_t VEXI_FORMAT_VERSION = 6;
 
 /// Kind del payload dentro de un BlobHeader (.vexi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
@@ -281,6 +283,15 @@ struct VexiModule {
     /// al inicio.  Vacio si ningun simbolo necesita blobs.
     std::vector<uint8_t> blob_pool;
     uint8_t blob_pool_alignment = 8;
+    /// v6: plantillas genericas + conceptos exportados (texto fuente).  El
+    /// importador las re-parsea e inyecta en su AST para monomorphizar
+    /// `Caja<i64>` cross-module.  Ver @c GenericTemplateSource.
+    struct GenericTemplateSource {
+        std::string name;   ///< nombre del template
+        uint8_t kind = 0;   ///< NodeKind del decl (Struct/Class/Function/...)
+        std::string source; ///< texto fuente completo del decl
+    };
+    std::vector<GenericTemplateSource> generic_templates;
 };
 
 /// Helper: alocar un blob en el pool y devolver su offset.  El emitter
