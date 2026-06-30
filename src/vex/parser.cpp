@@ -3071,6 +3071,19 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
         return nullptr;
     }
     s->name = consume().lexeme;
+    // Genericos opcionales `<T>`, `<K, V>` tras el nombre.  Mismo patron que
+    // parse_class_decl / parse_enum_decl: cada parametro es un identificador;
+    // el struct se trata como plantilla y se monomorphiza en cada uso
+    // `Box<i32>` en el type checker.
+    if (current_.kind == TokenKind::LT) {
+        (void)consume(); // '<'
+        while (current_.kind == TokenKind::IDENTIFIER) {
+            s->type_params.push_back(consume().lexeme);
+            if (!match(TokenKind::COMMA)) break;
+        }
+        (void)expect_close_angle(
+            "se esperaba '>' al cerrar parametros de tipo");
+    }
     (void)expect(TokenKind::LBRACE,
                  "se esperaba '{' al abrir el cuerpo del struct");
 

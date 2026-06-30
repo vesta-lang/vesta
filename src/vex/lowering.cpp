@@ -23544,6 +23544,11 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
     // metodos de clase, 'this' NO es un objeto GC ni host_ptr: el
     // struct vive en VM-stack (ALLOCA) y se accede con `mov`
     // (memoria VM).  El dispatch en el call site es CALL directo.
+    //
+    // Templates genericos (con type_params) se omiten: sus
+    // monomorphizaciones concretas (que SI aparecen en mod_.decls) se
+    // procesan normalmente.
+    if (!sd->type_params.empty()) return;
     for (auto &m_uptr : sd->methods) {
         auto *m = m_uptr.get();
         if (!m || !m->body) continue;

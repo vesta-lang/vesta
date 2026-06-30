@@ -543,9 +543,26 @@ class TypeChecker {
                                   const std::vector<Type> &args,
                                   const SourceLoc &loc);
 
+    /**
+     * @brief Monomorphizacion de struct generico.  Crea una copia concreta
+     * del template (`struct Box<T> { T v; }`) sustituyendo los type_params
+     * por args concretos, la anyade a @c mod_.decls para que @c collect_globals
+     * construya su @c StructLayout (size/offsets/destructibilidad/copy-hook) y
+     * @c lower_struct_methods baje sus metodos.  Devuelve el nombre mangled
+     * (e.g. "Box_i32") usado como @c struct_name del Type STRUCT.  Idempotente.
+     */
+    std::string monomorphize_struct(const std::string &template_name,
+                                    const std::vector<Type> &args,
+                                    const SourceLoc &loc);
+
     /// L2.3: el nombre es un enum template generico?
     bool is_generic_enum_template(const std::string &name) const noexcept {
         return generic_enum_templates_.count(name) > 0;
+    }
+
+    /// El nombre es un struct template generico?
+    bool is_generic_struct_template(const std::string &name) const noexcept {
+        return generic_struct_templates_.count(name) > 0;
     }
 
     /// L2.3: stack de contexto.  Cuando check_var_decl o check_assign
@@ -1365,6 +1382,11 @@ class TypeChecker {
     /// args) -> indice en mod_.decls.  Cada uso `Maybe<i32>` se
     /// monomorphiza on demand via monomorphize_enum().
     std::unordered_map<std::string, size_t> generic_enum_templates_;
+    /// Templates de struct genericos (`struct Box<T> { ... }`).  Mapea
+    /// template_name -> indice en mod_.decls.  Cada uso `Box<i32>` se
+    /// monomorphiza on demand via monomorphize_struct() (mismo modelo que
+    /// las clases y los enums).
+    std::unordered_map<std::string, size_t> generic_struct_templates_;
     /// L2.3: stack para inferir el mangled de variantes sin payload
     /// (e.g. `Maybe<i32> a = Maybe.None`).  Pair = (template_name,
     /// mangled_name).

@@ -991,6 +991,105 @@ std::string TypeChecker::monomorphize_enum(const std::string &template_name,
     return mangled;
 }
 
+// Monomorphizacion de struct generico.  Mismo modelo que monomorphize_class:
+// clona el StructDecl template sustituyendo los type_params, pre-registra un
+// StructLayout vacio (para resolver genericos anidados) y anyade el clon a
+// mod_.decls; collect_globals construye el layout real (size/offsets/
+// destructibilidad/copy-hook) y lower_struct_methods baja sus metodos.
+std::string TypeChecker::monomorphize_struct(const std::string &template_name,
+                                             const std::vector<Type> &args,
+                                             const SourceLoc &loc) {
+    const std::string mangled = template_name + "_" + mangle_args(args);
+    if (monomorphized_.count(mangled)) return mangled;
+
+    auto it = generic_struct_templates_.find(template_name);
+    if (it == generic_struct_templates_.end()) {
+        diags_.error(loc,
+                     "struct generico desconocido: '" + template_name + "'");
+        return std::string();
+    }
+    auto *tmpl =
+        static_cast<const ast::StructDecl *>(mod_.decls[it->second].get());
+    if (tmpl->type_params.size() != args.size()) {
+        diags_.error(loc, "numero incorrecto de args de tipo para struct '" +
+                              template_name + "': esperados " +
+                              std::to_string(tmpl->type_params.size()) +
+                              ", recibidos " + std::to_string(args.size()));
+        return std::string();
+    }
+
+    GenSubst g{&tmpl->type_params, &args};
+
+    auto cloned = std::make_unique<ast::StructDecl>();
+    cloned->loc = tmpl->loc;
+    cloned->name = mangled;
+    cloned->is_public = tmpl->is_public;
+    cloned->is_introspect = tmpl->is_introspect;
+    // type_params vacio: ya es concreto.
+
+    // Clonar campos sustituyendo el tipo (T -> arg concreto).
+    for (const auto &f : tmpl->fields) {
+        ast::StructFieldDecl nf;
+        nf.loc = f.loc;
+        nf.name = f.name;
+        nf.bit_width = f.bit_width;
+        nf.type = clone_type_with_subst(f.type.get(), g);
+        cloned->fields.push_back(std::move(nf));
+    }
+    // Clonar metodos (dtor `__dtor`, copy-hook `__clone__`, y metodos normales;
+    // los structs no tienen constructores nombrados como el tipo).
+    for (const auto &m : tmpl->methods) {
+        auto nm = std::make_unique<ast::ClassMethodDecl>();
+        nm->loc = m->loc;
+        nm->name = m->name;
+        nm->access = m->access;
+        nm->is_static = m->is_static;
+        nm->is_final = m->is_final;
+        nm->is_destructor = m->is_destructor;
+        if (m->return_type) {
+            nm->return_type = clone_type_with_subst(m->return_type.get(), g);
+        }
+        for (const auto &p : m->params) {
+            auto np = std::make_unique<ast::ParamDecl>();
+            np->loc = p->loc;
+            np->name = p->name;
+            np->type = clone_type_with_subst(p->type.get(), g);
+            nm->params.push_back(std::move(np));
+        }
+        if (m->body) {
+            auto cb = clone_stmt(m->body.get(), g);
+            if (cb && cb->kind == ast::NodeKind::BlockStmt) {
+                nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
+            }
+        }
+        cloned->methods.push_back(std::move(nm));
+    }
+
+    monomorphized_[mangled] = true;
+
+    // B.3 contract: provenance legible (template + args) para el lowering.
+    MonomorphInfo info;
+    info.template_name = template_name;
+    info.type_args.reserve(args.size());
+    for (const auto &t : args) {
+        info.type_args.push_back(type_to_string(t));
+    }
+    monomorph_info_[mangled] = std::move(info);
+
+    // Pre-registrar StructLayout vacio (mismo motivo que monomorphize_class):
+    // un generico anidado (`Outer<Inner<i32>>`) resuelve Inner_i32 antes de que
+    // collect_globals construya su layout real.  collect_globals lo sobreescribe.
+    if (!struct_layouts_.count(mangled)) {
+        StructLayout empty;
+        empty.name = mangled;
+        empty.is_introspect = tmpl->is_introspect;
+        struct_layouts_[mangled] = std::move(empty);
+    }
+
+    mod_.decls.push_back(std::move(cloned));
+    return mangled;
+}
+
 bool TypeChecker::class_is_assignable(const Type &target,
                                       const Type &value) const noexcept {
     // Optional/Result: dos Optional<X> son asignables si X y Y
@@ -1092,9 +1191,11 @@ static void pre_mono_collect_in_type(TypeChecker &tc, const ast::TypeNode *t,
             for (auto &ta : nt->type_args) {
                 args.push_back(tc.resolve_type_node(ta.get()));
             }
-            // L2.3: si es enum generico, monomorphizar como enum.
+            // Despachar por categoria del template: enum, struct o clase.
             if (tc.is_generic_enum_template(nt->name)) {
                 (void)tc.monomorphize_enum(nt->name, args, loc);
+            } else if (tc.is_generic_struct_template(nt->name)) {
+                (void)tc.monomorphize_struct(nt->name, args, loc);
             } else {
                 (void)tc.monomorphize_class(nt->name, args, loc);
             }
@@ -1174,6 +1275,13 @@ static void pre_mono_collect_in_expr(TypeChecker &tc, const ast::Expr *e) {
     case ast::NodeKind::CallExpr: {
         auto *c = static_cast<const ast::CallExpr *>(e);
         pre_mono_collect_in_expr(tc, c->callee.get());
+        // Type-args de la llamada (builtins de introspeccion comptime como
+        // `sizeof<Box<i64>>()`, `field_name<Par<i32,i64>>(1)`, `offsetof<..>`):
+        // disparan la monomorphizacion del tipo generico aunque no se declare
+        // ninguna variable de ese tipo.  Sin esto la introspeccion resolveria
+        // el tipo a void.
+        for (auto &ta : c->type_args)
+            pre_mono_collect_in_type(tc, ta.get(), c->loc);
         for (auto &a : c->args)
             pre_mono_collect_in_expr(tc, a.get());
         return;
@@ -1403,6 +1511,12 @@ bool TypeChecker::run() {
             if (!en->type_params.empty()) {
                 generic_enum_templates_[en->name] = i;
             }
+        } else if (d && d->kind == ast::NodeKind::StructDecl) {
+            // structs genericos como templates.
+            auto *sd = static_cast<ast::StructDecl *>(d);
+            if (!sd->type_params.empty()) {
+                generic_struct_templates_[sd->name] = i;
+            }
         }
     }
     // Snapshot del numero de decls antes de monomorphizar (las
@@ -1438,27 +1552,59 @@ bool TypeChecker::run() {
             if (gv->type)
                 pre_mono_collect_in_type(*this, gv->type.get(), gv->loc);
             if (gv->init) pre_mono_collect_in_expr(*this, gv->init.get());
-        }
-    }
-    // Las monomorphizaciones recien anadidas pueden a su vez
-    // referenciar otros generics: re-pasamos hasta punto fijo (cota
-    // razonable para evitar bucles maliciosos).
-    for (int round = 0; round < 8; ++round) {
-        const size_t before = mod_.decls.size();
-        for (size_t i = orig_decls; i < before; ++i) {
-            auto *d = mod_.decls[i].get();
-            if (!d || d->kind != ast::NodeKind::ClassDecl) continue;
-            auto *cd = static_cast<ast::ClassDecl *>(d);
-            for (const auto &f : cd->fields) {
+        } else if (d->kind == ast::NodeKind::StructDecl) {
+            // Un struct (no template) puede usar genericos en sus campos o
+            // cuerpos de metodo (`Caja<i64>`); dispararlos aqui.
+            auto *sd = static_cast<ast::StructDecl *>(d);
+            if (!sd->type_params.empty()) continue; // template
+            for (const auto &f : sd->fields) {
                 pre_mono_collect_in_type(*this, f.type.get(), f.loc);
             }
-            for (const auto &m : cd->methods) {
+            for (const auto &m : sd->methods) {
                 if (m->return_type)
                     pre_mono_collect_in_type(*this, m->return_type.get(),
                                              m->loc);
                 for (const auto &p : m->params)
                     pre_mono_collect_in_type(*this, p->type.get(), p->loc);
                 if (m->body) pre_mono_collect_in_stmt(*this, m->body.get());
+            }
+        }
+    }
+    // Las monomorphizaciones recien anadidas pueden a su vez
+    // referenciar otros generics: re-pasamos hasta punto fijo (cota
+    // razonable para evitar bucles maliciosos).  Cubre clones de clase Y
+    // de struct (un struct monomorphizado con un campo `Inner<T>` anidado).
+    for (int round = 0; round < 8; ++round) {
+        const size_t before = mod_.decls.size();
+        for (size_t i = orig_decls; i < before; ++i) {
+            auto *d = mod_.decls[i].get();
+            if (!d) continue;
+            if (d->kind == ast::NodeKind::ClassDecl) {
+                auto *cd = static_cast<ast::ClassDecl *>(d);
+                for (const auto &f : cd->fields) {
+                    pre_mono_collect_in_type(*this, f.type.get(), f.loc);
+                }
+                for (const auto &m : cd->methods) {
+                    if (m->return_type)
+                        pre_mono_collect_in_type(*this, m->return_type.get(),
+                                                 m->loc);
+                    for (const auto &p : m->params)
+                        pre_mono_collect_in_type(*this, p->type.get(), p->loc);
+                    if (m->body) pre_mono_collect_in_stmt(*this, m->body.get());
+                }
+            } else if (d->kind == ast::NodeKind::StructDecl) {
+                auto *sd = static_cast<ast::StructDecl *>(d);
+                for (const auto &f : sd->fields) {
+                    pre_mono_collect_in_type(*this, f.type.get(), f.loc);
+                }
+                for (const auto &m : sd->methods) {
+                    if (m->return_type)
+                        pre_mono_collect_in_type(*this, m->return_type.get(),
+                                                 m->loc);
+                    for (const auto &p : m->params)
+                        pre_mono_collect_in_type(*this, p->type.get(), p->loc);
+                    if (m->body) pre_mono_collect_in_stmt(*this, m->body.get());
+                }
             }
         }
         if (mod_.decls.size() == before) break;
@@ -2273,6 +2419,8 @@ void TypeChecker::collect_globals() {
         if (!decl) continue;
         if (decl->kind == ast::NodeKind::StructDecl) {
             auto *s = static_cast<ast::StructDecl *>(decl.get());
+            // Templates con type_params no son structs concretos.
+            if (!s->type_params.empty()) continue;
             if (!struct_layouts_.count(s->name)) {
                 StructLayout empty;
                 empty.name = s->name;
@@ -2381,6 +2529,10 @@ void TypeChecker::collect_globals() {
             }
         } else if (decl->kind == ast::NodeKind::StructDecl) {
             auto *s = static_cast<ast::StructDecl *>(decl.get());
+            // Templates con type_params no se procesan como concretos; cada
+            // instanciado `Box<i32>` se monomorphiza y produce su propio
+            // StructDecl concreto (sin type_params) que SI llega aqui.
+            if (!s->type_params.empty()) continue;
             // Pre-pasada (mas arriba) ya creo una entrada vacia.  Si
             // size_bytes > 0 (ya completada) -> redeclaracion real.
             auto it_pre = struct_layouts_.find(s->name);

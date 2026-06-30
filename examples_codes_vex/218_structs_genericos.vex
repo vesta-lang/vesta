@@ -1,0 +1,43 @@
+// Structs genericos: `struct Nombre<T> { ... }`.
+//
+// Un struct puede declarar parametros de tipo y usarse con tipos concretos.
+// Cada instanciacion (`Caja<i64>`, `Caja<i32>`) se monomorphiza en compile-time:
+// el compilador genera un struct concreto con T sustituido, calcula su layout
+// (tamano, offsets) y baja sus metodos.  Cero overhead en runtime -- es como
+// haber escrito el struct concreto a mano.  Funciona con multiples parametros
+// (`Par<K, V>`), genericos anidados (`Caja<Caja<i64>>`), metodos, RAII (`~T()`)
+// y el sistema de introspeccion comptime (`sizeof<T>`, `field_count<T>`,
+// `field_name<T>`, `offsetof<T>`).
+
+struct Caja<T> {
+    T dato;
+    T leer() { return this.dato; }     // metodo generico
+}
+
+struct Par<K, V> {
+    K clave;
+    V valor;
+    V get_valor() { return this.valor; }
+}
+
+i32 main() {
+    Caja<i64> a;
+    a.dato = 20;
+    Caja<i32> b;                       // otra instanciacion del mismo template
+    b.dato = 8;
+    Par<i32, i64> p;
+    p.clave = 1;
+    p.valor = 7;
+
+    // Introspeccion comptime sobre los structs monomorfizados.
+    i64 sz = sizeof<Caja<i64>>();          // 8 (un i64)
+    i64 nf = field_count<Par<i32, i64>>(); // 2 campos
+    i64 off = offsetof<Par<i32, i64>>("valor"); // offset del 2o campo
+
+    // 20 + 8 + 7 = 35 ; + (sz==8 -> 1) + (nf==2 -> 1) + (off==8 -> 1) ... ajustado:
+    i64 ok = 0;
+    if (sz == 8) { ok = ok + 3; }
+    if (nf == 2) { ok = ok + 2; }
+    if (off == 8) { ok = ok + 2; }
+    return (i32)(a.leer() + (i64)b.dato + p.get_valor() + ok);  // 20+8+7+7 = 42
+}
