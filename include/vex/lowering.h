@@ -700,6 +700,10 @@ class Lowering {
     ir::IrValueId emit_struct_arg_copy_clone(ir::IrValueId v_src,
                                              const std::string &struct_name,
                                              uint32_t line);
+    /// Ruta B (H3 inc-on-copy): incrementa el refcount del bloque de control de
+    /// un `shared<T>` al copiarlo (`b = a`, campo = a, paso por valor).  El slot
+    /// guarda el host_ptr al ctrl; refcount en [ctrl+0].  No-op si ctrl==0.
+    void emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line);
     /// Libera un slot Tier 1 (16B [ptr][deleter]) heap dado su VALOR (no via un
     /// campo): null-guard, dispatch del deleter (slot+8) + RAW_FREE(slot).  Lo
     /// usa @c emit_free_unique_field tras cargar el slot, y el reassign-free de

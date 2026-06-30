@@ -1,0 +1,23 @@
+// shared<T>: conteo de referencias puro, sin recolector de basura.
+//
+// Copiar un `shared<T>` (`shared<T> b = a`) incrementa el conteo de referencias;
+// cada copia es un dueno mas.  Al salir de scope, cada dueno lo decrementa, y el
+// bloque de control se libera (free) en el momento exacto en que el conteo cae a
+// cero -- de forma determinista, sin esperar al GC.  Por eso `shared<T>` funciona
+// igual en codigo gestionado (interp/JIT) y en binarios nativos sin runtime
+// (AOT standalone).  `use_count` refleja el numero de duenos vivos.
+// Ver doc/VMdoc/Vex/SmartPointers.md.
+
+i64 trabajo() {
+    shared<i64> a = shared_box(10);   // refcount = 1
+    i64 uc1 = use_count(a);           // 1
+    shared<i64> b = a;                // copia -> refcount = 2
+    i64 uc2 = use_count(a);           // 2 (a y b)
+    i64 val = *ptr_of(b);             // 10
+    return val * 100 + uc1 * 10 + uc2;  // 1000 + 10 + 2 = 1012
+}                                     // ~b -> refcount=1 ; ~a -> refcount=0 -> free
+
+i32 main() {
+    i64 r = trabajo();                // 1012
+    return (i32)(r - 970);            // 1012 - 970 = 42
+}

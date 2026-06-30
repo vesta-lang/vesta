@@ -4600,6 +4600,18 @@ bind_and_cleanup:
         }
     }
 
+    // ---- Smart pointers (H3 inc-on-copy): `shared<T> b = a` es una COPIA ----
+    // (init es un IdentExpr de otro shared, no `shared_box`/`move`/factory).
+    // Incrementamos el refcount del bloque de control: cada copia es un dueno
+    // mas, y su SHAREDPTR_REL al exit lo decrementa.  Asi use_count es correcto
+    // y (con free-when-0) el bloque se libera tras el ultimo dueno.  El move
+    // (CallExpr `move`) y la construccion (`shared_box`) NO incrementan.
+    if (sem_type.kind == PrimitiveKind::SHARED_PTR && v != ir::IR_NO_VALUE &&
+        vd->init && vd->init->kind == ast::NodeKind::IdentExpr &&
+        vd->init->result_type.kind == PrimitiveKind::SHARED_PTR) {
+        emit_shared_refcount_inc(v, vd->loc.line);
+    }
+
     // ---- Smart pointers: registrar cleanup automatico al scope exit ----
     //
     // Para @c unique<T>: SMARTPTR_FREE con literal_deleter="free" (default
@@ -8013,15 +8025,52 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 st.source_line = it->source_line;
                 fn_->append(current_block_, std::move(st));
             }
-            // br skip_bb (merge).
+            // H3 no-GC: si el refcount cayo a 0, liberar el bloque de control
+            // (RAW_FREE).  Refcount puro determinista -> sin GC.  cmp rc==0.
+            const ir::IrValueId v_zero2 =
+                emit_const(ir::IrType::I64, 0, it->source_line);
+            const ir::IrValueId v_is0 = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cmp{};
+                cmp.op = ir::IrOp::CMP_EQ;
+                cmp.type = ir::IrType::I64;
+                cmp.dst = v_is0;
+                cmp.operands = {v_rc_dec, v_zero2};
+                cmp.source_line = it->source_line;
+                fn_->append(current_block_, std::move(cmp));
+            }
+            const ir::IrBlockId free_bb = fn_->new_block("sh_free");
+            {
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands = {v_is0};
+                br.target_block = free_bb;
+                br.false_block = skip_bb;
+                br.source_line = it->source_line;
+                fn_->append(current_block_, std::move(br));
+                fn_->blocks[dec_bb].succs.push_back(free_bb);
+                fn_->blocks[dec_bb].succs.push_back(skip_bb);
+                fn_->blocks[free_bb].preds.push_back(dec_bb);
+                fn_->blocks[skip_bb].preds.push_back(dec_bb);
+            }
+            // free_bb: RAW_FREE(v_ctrl) + br skip_bb.
+            current_block_ = free_bb;
+            {
+                ir::IrInstr fr{};
+                fr.op = ir::IrOp::RAW_FREE;
+                fr.type = ir::IrType::VOID;
+                fr.operands = {v_ctrl};
+                fr.source_line = it->source_line;
+                fn_->append(current_block_, std::move(fr));
+            }
             {
                 ir::IrInstr br{};
                 br.op = ir::IrOp::BR;
                 br.target_block = skip_bb;
                 br.source_line = it->source_line;
                 fn_->append(current_block_, std::move(br));
-                fn_->blocks[dec_bb].succs.push_back(skip_bb);
-                fn_->blocks[skip_bb].preds.push_back(dec_bb);
+                fn_->blocks[free_bb].succs.push_back(skip_bb);
+                fn_->blocks[skip_bb].preds.push_back(free_bb);
             }
             // current_block_ = skip_bb para que el siguiente cleanup
             // se siga emitiendo en orden lineal.
@@ -8030,6 +8079,91 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
         }
         }
     }
+}
+
+void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
+    // Ownership ruta B (H3 inc-on-copy): al COPIAR un shared<T> (`b = a`, campo
+    // = a, paso por valor) incrementamos el refcount del bloque de control.
+    // El slot guarda el host_ptr al ctrl block; refcount esta en [ctrl + 0].
+    // Si ctrl == 0 (movido/null) es no-op.  Simetrico al SHAREDPTR_REL (dec).
+    if (v_slot == ir::IR_NO_VALUE) return;
+    const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_ctrl].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_ctrl;
+        ld.operands = {v_slot};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
+    const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_NE;
+        cmp.type = ir::IrType::I64;
+        cmp.dst = v_cmp;
+        cmp.operands = {v_ctrl, v_zero};
+        cmp.source_line = line;
+        fn_->append(current_block_, std::move(cmp));
+    }
+    const ir::IrBlockId inc_bb = fn_->new_block("sh_inc");
+    const ir::IrBlockId skip_bb = fn_->new_block("sh_inc_skip");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {v_cmp};
+        br.target_block = inc_bb;
+        br.false_block = skip_bb;
+        br.source_line = line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(inc_bb);
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[inc_bb].preds.push_back(current_block_);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+    }
+    current_block_ = inc_bb;
+    const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_rc;
+        ld.operands = {v_ctrl};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
+    const ir::IrValueId v_rc_inc = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr add{};
+        add.op = ir::IrOp::ADD;
+        add.type = ir::IrType::I64;
+        add.dst = v_rc_inc;
+        add.operands = {v_rc, v_one};
+        add.source_line = line;
+        fn_->append(current_block_, std::move(add));
+    }
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.operands = {v_rc_inc, v_ctrl};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = skip_bb;
+        br.source_line = line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[inc_bb].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(inc_bb);
+    }
+    current_block_ = skip_bb;
 }
 
 // ---------------------------------------------------------------------
@@ -21475,15 +21609,26 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = v_slot;
             return true;
         } else {
-            // shared<T>: gcallocp(16 + 8) - control block + payload inline.
+            // shared<T> (H3 no-GC): RAW_ALLOC(16 + 8) del bloque de control.
             // Layout: [+0 i64 refcount=1][+8 u64 deleter=0][+16 T payload].
-            // El slot stack guarda host_ptr al control block.
+            // El slot stack guarda host_ptr al control block.  El cleanup
+            // SHAREDPTR_REL hace `free` cuando el refcount cae a 0 (refcount
+            // puro, determinista, sin GC -> funciona en AOT standalone).
             const ir::IrValueId v_slot = stack_alloc_buf(8, e->loc.line);
             const ir::IrValueId v_ctrl_size = emit_const(
                 ir::IrType::I64, 16 + 8, e->loc.line); // 24 bytes total
-            // gcallocp -> host_ptr a payload
-            const ir::IrValueId v_ctrl =
-                emit_gc_allocp(v_ctrl_size, e->loc.line);
+            // RAW_ALLOC -> host_ptr al bloque de control.
+            const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_ctrl].is_host_ptr = true;
+            {
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::RAW_ALLOC;
+                ins.type = ir::IrType::PTR;
+                ins.dst = v_ctrl;
+                ins.operands = {v_ctrl_size};
+                ins.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ins));
+            }
             // STORE refcount=1 at [v_ctrl + 0].
             {
                 const ir::IrValueId v_one =
