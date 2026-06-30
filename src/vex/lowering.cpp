@@ -25715,6 +25715,11 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 fn_->append(current_block_, std::move(st));
             }
         }
+        // (El copy-hook __clone__ en el store a campo -- para tipos copiables
+        // como un futuro shared<T> stdlib -- queda pendiente: requiere primero
+        // resolver la host-ness de los metodos de struct sobre un campo de clase
+        // (this es host, pero el metodo lo lee como VM) Y aplicar __clone__
+        // tambien en el path struct-contenedor.  Ver proj_ownership_hooks H1-resto.)
         return rhs;
     }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
