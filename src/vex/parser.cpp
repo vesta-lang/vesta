@@ -3163,6 +3163,13 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
         }
         std::string member_name = consume().lexeme;
 
+        // Type-params de metodo generico: `R metodo<U>(...)` (#4).  Un
+        // campo nunca lleva `<`, asi que ver `<` aqui implica metodo
+        // generico.  Tras parsearlos, current_ debe ser '('.
+        std::vector<std::string> method_tparams;
+        if (current_.kind == TokenKind::LT)
+            parse_method_type_params(method_tparams);
+
         // Distinguir metodo (siguiente '(') vs campo (':' bit-width o ';').
         if (current_.kind == TokenKind::LPAREN) {
             // Metodo de instancia: dispatch estatico.  Cuerpo de bloque
@@ -3172,6 +3179,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
             m->access = access;
+            m->method_type_params = method_tparams;
             (void)consume(); // '('
             while (current_.kind != TokenKind::RPAREN &&
                    current_.kind != TokenKind::END_OF_FILE) {
@@ -3193,7 +3201,15 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar parametros del metodo");
+            // Registrar los type-params del contenedor (T) y del metodo
+            // (U) como aliases temporales para que `(T)x`/`(U)x` se
+            // reconozcan como cast dentro del body.  Se retiran al salir.
+            std::vector<std::string> all_tp = s->type_params;
+            all_tp.insert(all_tp.end(), method_tparams.begin(),
+                          method_tparams.end());
+            const auto temp_aliases = register_temp_type_aliases(all_tp);
             m->body = parse_method_body(/*is_void=*/false);
+            unregister_temp_type_aliases(temp_aliases);
             s->methods.push_back(std::move(m));
             continue;
         }
@@ -3616,6 +3632,13 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         }
         std::string member_name = consume().lexeme;
 
+        // Type-params de metodo generico: `R metodo<U>(...)` (#4).  Un
+        // campo nunca lleva `<`, asi que ver `<` aqui implica metodo
+        // generico.  Tras parsearlos, current_ debe ser '('.
+        std::vector<std::string> method_tparams;
+        if (current_.kind == TokenKind::LT)
+            parse_method_type_params(method_tparams);
+
         // Distinguir campo (siguiente '=' o ';') vs metodo (siguiente '(').
         if (current_.kind == TokenKind::LPAREN) {
             // Metodo de instancia o estatico.
@@ -3630,6 +3653,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->is_inline = annot_inline;
             m->advice_kind = annot_advice_kind;
             m->advice_target = annot_advice_target;
+            m->method_type_params = method_tparams;
             (void)consume(); // '('
             while (current_.kind != TokenKind::RPAREN &&
                    current_.kind != TokenKind::END_OF_FILE) {
@@ -3651,7 +3675,15 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar parametros del metodo");
+            // Registrar los type-params del contenedor (T) y del metodo
+            // (U) como aliases temporales para que `(T)x`/`(U)x` se
+            // reconozcan como cast dentro del body.  Se retiran al salir.
+            std::vector<std::string> all_tp = c->type_params;
+            all_tp.insert(all_tp.end(), method_tparams.begin(),
+                          method_tparams.end());
+            const auto temp_aliases = register_temp_type_aliases(all_tp);
             m->body = parse_method_body(/*is_void=*/false);
+            unregister_temp_type_aliases(temp_aliases);
             c->methods.push_back(std::move(m));
         } else {
             // Campo.  Init opcional con '='.
@@ -3802,6 +3834,35 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_interface_decl() {
  * - Expression-bodied: @c => expr ; equivale a @c { return expr; }
  *   (o solo @c expr; si @p is_void).  Util para metodos cortos.
  */
+void Parser::parse_method_type_params(std::vector<std::string> &out) {
+    // Precondicion: current_ es '<'.  Mismo patron que parse_struct_decl /
+    // parse_class_decl para los type-params del contenedor.
+    (void)consume(); // '<'
+    while (current_.kind == TokenKind::IDENTIFIER) {
+        out.push_back(consume().lexeme);
+        if (!match(TokenKind::COMMA)) break;
+    }
+    (void)expect_close_angle(
+        "se esperaba '>' al cerrar parametros de tipo del metodo");
+}
+
+std::vector<std::string>
+Parser::register_temp_type_aliases(const std::vector<std::string> &names) {
+    std::vector<std::string> inserted;
+    inserted.reserve(names.size());
+    for (const auto &n : names) {
+        // insert().second == true solo si NO existia previamente: asi
+        // no retiramos por error un typedef real con el mismo nombre.
+        if (declared_aliases_.insert(n).second) inserted.push_back(n);
+    }
+    return inserted;
+}
+
+void Parser::unregister_temp_type_aliases(
+    const std::vector<std::string> &inserted) {
+    for (const auto &n : inserted) declared_aliases_.erase(n);
+}
+
 std::unique_ptr<ast::BlockStmt> Parser::parse_method_body(bool is_void) {
     if (current_.kind == TokenKind::FAT_ARROW) {
         const SourceLoc loc = current_.loc;
@@ -5000,30 +5061,34 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             break;
         }
         case TokenKind::LT: {
-            /* Soporte para builtins comptime con type args:
-             * @c sizeof<T>(), @c offsetof<T>("field"), etc.
-             * Solo se activa cuando @c expr es un IdentExpr cuyo
-             * nombre matchea un builtin comptime conocido.  Sin
-             * esta restriccion, @c LT en posicion postfix seria
-             * ambiguo con operadores de comparacion (@c foo < bar).
-             * Si el nombre no es builtin comptime, salimos del
-             * switch para que el LT lo procese binary_expr. */
-            if (expr->kind != ast::NodeKind::IdentExpr) {
+            /* Soporte para type-args en posicion postfix:
+             *   - builtins comptime: @c sizeof<T>(), @c offsetof<T>(..)
+             *   - funciones libres genericas: @c id<i64>(x)
+             *   - METODOS genericos (#4): @c obj.metodo<U>(args), donde
+             *     @c expr es un FieldAccessExpr (`obj.metodo`).
+             * Para evitar el conflicto con el operador de comparacion
+             * (@c foo < bar / @c obj.f < x) hacemos un lookahead: solo se
+             * trata como type-args si el patron es `... < TIPOS > (`.
+             * Un nombre builtin comptime conocido salta el lookahead. */
+            const bool is_ident = (expr->kind == ast::NodeKind::IdentExpr);
+            const bool is_field =
+                (expr->kind == ast::NodeKind::FieldAccessExpr);
+            if (!is_ident && !is_field) {
                 return expr;
             }
-            const auto *id_chk =
-                static_cast<const ast::IdentExpr *>(expr.get());
-            /* para nombres no-builtin, hacemos un lookahead
-             * permisivo: si el patron es `name<TYPE_STUFF>(` lo
-             * tratamos como type-args (probable comptime fn
-             * generica).  Esto evita reservar nombres conocidos
-             * y permite que usuarios definan sus propias
-             * generic comptime fns sin tocar la whitelist. */
-            if (!is_comptime_builtin_name(id_chk->name)) {
-                /* Lookahead: tras `<` esperamos un token que
-                 * arranque un tipo y eventualmente `>` + `(`.
-                 * Si no encontramos `(` tras el `>` (o `>>`) en
-                 * un rango razonable, fallback a binary `<`. */
+            /* Builtins comptime (`sizeof<T>`) no requieren lookahead; el
+             * resto (fns genericas de usuario y metodos genericos) si. */
+            bool need_lookahead = true;
+            if (is_ident) {
+                const auto *id_chk =
+                    static_cast<const ast::IdentExpr *>(expr.get());
+                if (is_comptime_builtin_name(id_chk->name))
+                    need_lookahead = false;
+            }
+            if (need_lookahead) {
+                /* Lookahead: tras `<` esperamos tokens de tipo y
+                 * eventualmente `>` (o `>>`) seguido de `(`.  Si no, es
+                 * una comparacion -> fallback al binary_expr. */
                 Lexer &mut_lex = const_cast<Lexer &>(lex_);
                 bool looks_like_type_args = false;
                 int depth = 0;
@@ -5075,12 +5140,11 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
                 if (!match(TokenKind::COMMA)) break;
             }
             (void)expect_close_angle(
-                "se esperaba '>' al cerrar type args de builtin comptime");
-            /* Tras los type args DEBE venir '(' para los args runtime
-             * del builtin (incluso si es ()). */
+                "se esperaba '>' al cerrar type args de la llamada generica");
+            /* Tras los type args DEBE venir '(' para los args runtime. */
             if (current_.kind != TokenKind::LPAREN) {
                 error_here(
-                    "se esperaba '(' tras type args de builtin comptime");
+                    "se esperaba '(' tras type args de la llamada generica");
                 break;
             }
             (void)consume(); /* '(' */

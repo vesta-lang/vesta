@@ -1,0 +1,74 @@
+// Metodos genericos: `R metodo<U>(...)` (#4).
+//
+// Un metodo puede declarar SUS PROPIOS parametros de tipo, independientes de
+// los del struct/clase contenedor.  La llamada `obj.metodo<U>(args)` (o con U
+// inferido de los argumentos) clona en compile-time una version concreta del
+// metodo con U sustituido por el tipo real, exactamente como una funcion libre
+// generica con `this` explicito.  El DISPATCH ES SIEMPRE ESTATICO (como C++ /
+// Rust: no existe el "metodo template virtual").  Cero artefacto generico en
+// runtime: el interprete, el JIT y el AOT ven metodos concretos normales.
+//
+// Cubre:
+//   1. Metodo generico en un STRUCT (value-type, dispatch directo).
+//   2. Metodo generico en una CLASE (objeto GC).
+//   3. Type-arg EXPLICITO `obj.m<U>()` y type-arg INFERIDO `obj.m(x)`.
+//   4. Varios type-params del metodo `R m<A, B>(...)`.
+//   5. Cast `(U) expr` con U = type-param del metodo.
+//   6. Metodo generico en un STRUCT GENERICO: U independiente del T contenedor.
+//   7. Un metodo generico que llama a otro metodo generico del mismo tipo.
+
+// ---- 1 + 3 + 5: struct con metodos genericos -----------------------------
+struct Caja {
+    i64 v;
+    // Identidad generica: devuelve el argumento tal cual (U explicito/inferido).
+    U identidad<U>(U x) { return x; }
+    // Lee el campo casteado al tipo U pedido (cast con type-param del metodo).
+    U leer_como<U>() { return (U) this.v; }
+}
+
+// ---- 2: clase con metodo generico ----------------------------------------
+class Contador {
+    i64 n;
+    Contador(i64 inicial) { this.n = inicial; }
+    // Suma el campo (casteado a U) con el argumento U.
+    U sumar<U>(U extra) { return (U) this.n + extra; }
+}
+
+// ---- 4 + 7: varios type-params + metodo llamando a otro generico ---------
+struct Util {
+    i64 base;
+    // Dos type-params: devuelve el primero (de tipo K), ignora el de tipo V.
+    K primero<K, V>(K a, V b) { return a; }
+    // Llama internamente a primero<i64, i64> y suma -> dispatch estatico anidado.
+    i64 doble<U>(U x) { return this.primero<i64, i64>((i64) x, (i64) x) + (i64) x; }
+}
+
+// ---- 6: metodo generico en un STRUCT GENERICO ----------------------------
+// El struct tiene su propio type-param T; el metodo anyade U, INDEPENDIENTE.
+struct Par<T> {
+    T v;
+    // Combina el campo T con un argumento U, ambos llevados a i64.
+    i64 mezcla<U>(U x) { return (i64) this.v + (i64) x; }
+}
+
+i32 main() {
+    Caja c = {.v = 40};
+    i64 a = c.identidad<i64>(2);   // explicito  -> 2
+    i32 b = c.identidad(3);        // inferido i32 -> 3
+    i64 d = c.leer_como<i64>();    // cast del campo -> 40
+
+    Contador k = new Contador(28);
+    i64 s = k.sumar<i64>(7);       // 28 + 7 -> 35
+
+    Util u = {.base = 0};
+    i64 p = u.primero<i64, i32>(4, 999);  // primer arg -> 4
+    i64 dd = u.doble<i64>(9);             // 9 + 9 -> 18
+
+    Par<i32> par = {.v = 30};
+    i64 m = par.mezcla<i64>(12);          // 30 + 12 -> 42 (no usado en suma)
+
+    // 2 + 3 + (40-40) + 35 + 4 + 18 - 20 = 42 ; ademas validamos m == 42.
+    i64 total = a + b + (d - 40) + s + p + dd - 20;
+    if (m != 42) { return 0; }
+    return (i32) total;            // 42
+}

@@ -23097,6 +23097,11 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
     for (auto &m_uptr : cd->methods) {
         auto *m = m_uptr.get();
         if (!m || !m->body) continue;
+        // Metodo generico template (`R metodo<U>(...)`, #4): se omite.  Sus
+        // monomorphizaciones concretas (`metodo_<U>`) tambien estan en
+        // cd->methods (anyadidas por drain_pending_method_monos) y se bajan
+        // normalmente en este mismo bucle.
+        if (!m->method_type_params.empty()) continue;
 
         ir::IrFunction fn;
         // Mangling: ClassName__methodName; constructor usa "ctor".
@@ -23555,6 +23560,10 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
     for (auto &m_uptr : sd->methods) {
         auto *m = m_uptr.get();
         if (!m || !m->body) continue;
+        // Metodo generico template (`R metodo<U>(...)`, #4): se omite.  Sus
+        // monomorphizaciones concretas (`metodo_<U>`) tambien estan en
+        // sd->methods (anyadidas por drain_pending_method_monos).
+        if (!m->method_type_params.empty()) continue;
 
         ir::IrFunction fn;
         const std::string suffix = m->is_destructor ? std::string("__dtor")

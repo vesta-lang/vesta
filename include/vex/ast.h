@@ -1953,6 +1953,15 @@ struct ClassMethodDecl : Node {
     /// resueltos a los SSA values del call site.  MVP: solo metodos
     /// expression-bodied o bloques con 1 statement, sin try/await/spawn.
     bool is_inline = false;
+    /// Parametros de tipo del METODO (independientes de los del
+    /// struct/clase contenedor).  `R metodo<U>(...)` produce
+    /// method_type_params = ["U"].  Vacio para metodos no genericos.
+    /// Dispatch SIEMPRE estatico (como C++/Rust): la llamada
+    /// `obj.metodo<U>(args)` clona este metodo con U sustituido por el
+    /// tipo concreto (`metodo_<mangle(U)>`) y lo baja como un metodo
+    /// normal.  El metodo template (con method_type_params no vacio) se
+    /// omite en el lowering.  Ver src/vex/generic_methods.cpp (#4).
+    std::vector<std::string> method_type_params;
     ClassMethodDecl() : Node(NodeKind::FunctionDecl) {}
 };
 

@@ -57,6 +57,11 @@ add_library(vex_lib STATIC
     asm_effects.cpp
     asm_backend.cpp
     type_checker.cpp
+    # Utilidades de clonacion de AST con sustitucion de type-params,
+    # extraidas de type_checker.cpp (monolito) para mantenerlo manejable.
+    generic_clone.cpp
+    # Monomorphizacion de metodos genericos `obj.metodo<U>()` (#4).
+    generic_methods.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
     # Fase 4 interop C: generador de header C publico (vex --emit-header).

@@ -565,6 +565,58 @@ class TypeChecker {
                                       const std::vector<Type> &args,
                                       const SourceLoc &loc);
 
+    /**
+     * @brief Monomorphizacion de un METODO generico `R metodo<U>(...)` (#4).
+     *
+     * Clona el @c ClassMethodDecl template del struct/clase @p container
+     * sustituyendo sus @c method_type_params por @p targs concretos,
+     * produciendo `metodo_<mangle(targs)>`.  El metodo concreto se anyade
+     * AL LAYOUT inmediatamente (para que la resolucion de la llamada actual
+     * lo encuentre) y se ENCOLA en @c pending_method_monos_ para anyadirlo
+     * al AST del contenedor + chequear su body tras @c check_functions
+     * (evita invalidar el iterador del bucle de metodos al estar dentro de
+     * uno).  Dispatch SIEMPRE estatico; cero artefacto generico en runtime.
+     * Idempotente por (container, mangled).  Devuelve el nombre mangled o
+     * cadena vacia si error.  Implementado en generic_methods.cpp.
+     */
+    std::string monomorphize_method(const std::string &container,
+                                    bool is_struct,
+                                    const ast::ClassMethodDecl *tmpl,
+                                    const std::vector<Type> &targs,
+                                    const SourceLoc &loc);
+
+    /**
+     * @brief Drena @c pending_method_monos_: anyade cada metodo clonado al
+     * AST de su struct/clase y chequea su body.  El chequeo puede encolar
+     * mas (un metodo generico que llama a otro); se repite hasta punto fijo
+     * (cota dura defensiva).  Lo invoca @c check_functions al final.
+     * Implementado en generic_methods.cpp.
+     */
+    void drain_pending_method_monos();
+
+    /**
+     * @brief Busca el @c ClassMethodDecl template (con method_type_params
+     * no vacios) de @p method_name en el struct/clase @p container.
+     * Devuelve nullptr si no existe o no es generico.  Usado por el hook
+     * de @c check_call.  Implementado en generic_methods.cpp.
+     */
+    const ast::ClassMethodDecl *
+    find_generic_method_template(const std::string &container,
+                                 const std::string &method_name) const;
+
+    /**
+     * @brief Hook de @c check_call para metodos genericos (#4).  Si
+     * @p fa->field_name es un metodo generico de @p bt (struct/clase),
+     * resuelve los type-args (explicitos en @c e->type_args o inferidos
+     * de los argumentos), monomorphiza via @c monomorphize_method y
+     * reescribe @c fa->field_name al nombre concreto (`metodo_<U>`),
+     * dejando que la resolucion normal de la llamada lo encuentre.
+     * Devuelve true si reescribio (era generico).  Si no es generico,
+     * false (la resolucion sigue su curso).  En generic_methods.cpp.
+     */
+    bool try_monomorphize_method_call(ast::CallExpr *e,
+                                      ast::FieldAccessExpr *fa, const Type &bt);
+
     /// L2.3: el nombre es un enum template generico?
     bool is_generic_enum_template(const std::string &name) const noexcept {
         return generic_enum_templates_.count(name) > 0;
@@ -1406,6 +1458,19 @@ class TypeChecker {
     /// -> indice en mod_.decls.  Cada llamada `id<i64>(...)` (o con args
     /// inferidos) se monomorphiza via monomorphize_function().
     std::unordered_map<std::string, size_t> generic_fn_templates_;
+
+    /// Idempotencia de monomorphize_method: clave = "Container#metodo_i32"
+    /// (separador '#' interno; el lenguaje no usa sintaxis '::').
+    std::unordered_set<std::string> monomorphized_methods_;
+    /// Cola de metodos genericos monomorphizados pendientes de anyadir al
+    /// AST del contenedor + chequear su body (drenada por
+    /// drain_pending_method_monos tras check_functions).
+    struct PendingMethodMono {
+        std::string container;                       ///< struct/clase
+        bool is_struct = false;                       ///< true si struct
+        std::unique_ptr<ast::ClassMethodDecl> method; ///< clon sustituido
+    };
+    std::vector<PendingMethodMono> pending_method_monos_;
     /// L2.3: stack para inferir el mangled de variantes sin payload
     /// (e.g. `Maybe<i32> a = Maybe.None`).  Pair = (template_name,
     /// mangled_name).

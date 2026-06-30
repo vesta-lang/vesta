@@ -255,6 +255,26 @@ class Parser {
     std::unique_ptr<ast::Expr> parse_match_expr();
     std::unique_ptr<ast::BlockStmt> parse_method_body(bool is_void);
 
+    /// @brief Parsea `<U1, U2, ...>` de type-params de un metodo generico.
+    ///
+    /// Precondicion: @c current_ es @c LT.  Consume hasta el `>` de cierre
+    /// y rellena @p out con los nombres de los parametros de tipo.  Se usa
+    /// en las declaraciones de metodo (`R metodo<U>(...)`).  Para metodos
+    /// NO genericos, el llamante no invoca este helper (no hay `<`).
+    void parse_method_type_params(std::vector<std::string> &out);
+
+    /// @brief Registra @p names como type-aliases temporales para que
+    /// `(T)x` se reconozca como cast dentro de un body generico (los
+    /// type-params del struct/clase contenedor y del metodo no son
+    /// typedefs conocidos a priori).  Devuelve SOLO los nombres que
+    /// realmente se insertaron (no estaban ya en @c declared_aliases_),
+    /// para retirarlos despues con @c unregister_temp_type_aliases.
+    std::vector<std::string>
+    register_temp_type_aliases(const std::vector<std::string> &names);
+    /// @brief Retira los aliases temporales insertados por el helper
+    /// anterior (restaura @c declared_aliases_ al estado previo).
+    void unregister_temp_type_aliases(const std::vector<std::string> &inserted);
+
     // -----------------------------------------------------------------
     // Reglas gramaticales: tipos.
     // -----------------------------------------------------------------
