@@ -8167,6 +8167,26 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                                      ") incompatible con tipo del campo (" +
                                      type_to_string(ft) + ")");
         }
+        // Ownership: almacenar un shared<T> en un CAMPO todavia no esta
+        // soportado.  El store NO incrementa el refcount y el destructor del
+        // contenedor NO lo decrementa, asi que al dropear el shared origen el
+        // bloque de control se liberaria mientras el campo aun lo referencia
+        // (use-after-free).  Hasta implementar inc-on-store + dec-on-dtor +
+        // slot heap (como unique<T>), lo rechazamos para no dejar la fuga/UAF
+        // silenciosa.  Usa unique<T> (ownership unico) si encaja, o gestiona el
+        // refcount manualmente.
+        if (ft.kind == PrimitiveKind::SHARED_PTR && fa->base &&
+            (fa->base->result_type.kind == PrimitiveKind::CLASS ||
+             fa->base->result_type.kind == PrimitiveKind::STRUCT)) {
+            diags_.error(
+                e->loc,
+                "almacenar un shared<T> en un campo de objeto/struct todavia no "
+                "esta soportado: el refcount no se ajustaria y el bloque podria "
+                "liberarse mientras el campo lo referencia (use-after-free).  "
+                "Usa unique<T> si el ownership es unico, o gestiona el refcount "
+                "de forma explicita.");
+            return ft;
+        }
         // Safety net (item 1): un closure CAPTURADOR asignado a un campo de un
         // STRUCT local deja el env en el STACK del scope actual.  Tainteamos el
         // struct para rechazar luego su escape (return/store).  Para CLASES el

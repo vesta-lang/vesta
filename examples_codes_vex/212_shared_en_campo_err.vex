@@ -1,0 +1,18 @@
+// NEGATIVO (compile-must-fail): almacenar un shared<T> en un campo de un
+// contenedor todavia no esta soportado.  El store no ajustaria el refcount y el
+// destructor del contenedor no lo decrementaria, asi que al dropear el shared
+// origen el bloque de control se liberaria mientras el campo aun lo referencia
+// (use-after-free).  El compilador lo rechaza hasta implementar el inc-on-store
+// + dec-on-dtor + slot heap (como unique<T>).  Usa unique<T> si el ownership es
+// unico.  Ver doc/VMdoc/Vex/InteropC.md.
+
+class Caja {
+    shared<i64> s;
+}
+
+i32 main() {
+    shared<i64> a = shared_box(7);
+    Caja c = new Caja();
+    c.s = a;            // ERROR: shared<T> en campo no soportado (UAF)
+    return (i32) use_count(a);
+}
