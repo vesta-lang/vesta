@@ -22778,6 +22778,36 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                                                     m->loc.line);
                         continue;
                     }
+                    // Campo STRUCT inline destructible (Fase 2b clase-contenedor):
+                    // el valor del campo ES su direccion (this + offset), no un
+                    // puntero.  Despachamos su dtor con CALL directo
+                    // <Struct>____dtor(addr) -- value-type, sin null-check, sin
+                    // LOAD, identico interp/JIT/AOT (PURE_NATIVE).
+                    if (f.type.kind == PrimitiveKind::STRUCT) {
+                        auto it_sl =
+                            tc_.struct_layouts().find(f.type.struct_name);
+                        if (it_sl == tc_.struct_layouts().end()) continue;
+                        bool sdestr = it_sl->second.has_destructible_field;
+                        if (!sdestr)
+                            for (const auto &im : it_sl->second.methods)
+                                if (im.is_destructor) {
+                                    sdestr = true;
+                                    break;
+                                }
+                        if (!sdestr) continue;
+                        const ir::IrValueId saddr =
+                            emit_field_addr(fn_, current_block_, this_vid,
+                                            f.offset, m->loc.line);
+                        ir::IrInstr scd{};
+                        scd.op = ir::IrOp::CALL;
+                        scd.type = ir::IrType::VOID;
+                        scd.dst = ir::IR_NO_VALUE;
+                        scd.operands = {saddr};
+                        scd.func_name = f.type.struct_name + "__" + "__dtor";
+                        scd.source_line = m->loc.line;
+                        fn_->append(current_block_, std::move(scd));
+                        continue;
+                    }
                     if (f.type.kind != PrimitiveKind::CLASS) continue;
                     auto it_inner =
                         tc_.class_layouts().find(f.type.struct_name);
@@ -25240,6 +25270,67 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     }
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
+    // Campo STRUCT value-type (Fase 2b/3): el campo es un struct inline; @c rhs
+    // es la DIRECCION del struct origen.  Copiamos memberwise (qword-by-qword)
+    // sus bytes al campo -- NO un STORE escalar (que pisaria el primer qword con
+    // la direccion origen).  move-on-store: el local origen ya esta en
+    // @c escaping_locals_ (scan_escaping_locals marca el value de un store a
+    // campo) -> su dtor de scope-exit se suprime; solo el dtor augmentado del
+    // contenedor libera el recurso (un unico free).  Identico interp/JIT/AOT.
+    if (ftyp.kind == PrimitiveKind::STRUCT) {
+        uint64_t sz = 8;
+        auto it_sl = tc_.struct_layouts().find(ftyp.struct_name);
+        if (it_sl != tc_.struct_layouts().end())
+            sz = static_cast<uint64_t>(it_sl->second.size_bytes);
+        const bool dst_host = fn_->values[addr].is_host_ptr;
+        const bool src_host = fn_->values[rhs].is_host_ptr;
+        const uint64_t qwords = (sz + 7) / 8;
+        for (uint64_t qi = 0; qi < qwords; ++qi) {
+            const ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, static_cast<int64_t>(qi * 8), loc.line);
+            const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_src_at].is_host_ptr = src_host;
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = v_src_at;
+                ad.operands = {rhs, v_off};
+                ad.source_line = loc.line;
+                fn_->append(current_block_, std::move(ad));
+            }
+            const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::I64;
+                ld.dst = v_word;
+                ld.operands = {v_src_at};
+                ld.source_line = loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_dst_at].is_host_ptr = dst_host;
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = v_dst_at;
+                ad.operands = {addr, v_off};
+                ad.source_line = loc.line;
+                fn_->append(current_block_, std::move(ad));
+            }
+            {
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.operands = {v_word, v_dst_at};
+                st.source_line = loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+        }
+        return rhs;
+    }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
     const ir::IrValueId rhs_cast =
         cast_if_needed(rhs, fn_->values[rhs].type, ir_t, loc.line);

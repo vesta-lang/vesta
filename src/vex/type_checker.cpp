@@ -3009,10 +3009,76 @@ void TypeChecker::collect_globals() {
         }
     }
 
+    // Fase 2b ownership: destructibilidad de STRUCTS (value-types).  Se computa
+    // ANTES que la de clases para que una clase con un campo struct destructible
+    // lo vea (incluido el dtor SINTETIZADO de un struct con composicion).  Un
+    // struct es destructible si tiene `~Struct()` propio O un campo struct
+    // destructible.  @c struct_destructible se reusa abajo en el fixpoint de
+    // clase.  Tras esto se sintetiza el dtor implicito de los structs.
+    auto struct_destructible = [&](const std::string &n) -> bool {
+        auto it = struct_layouts_.find(n);
+        if (it == struct_layouts_.end()) return false;
+        if (it->second.has_destructible_field) return true;
+        for (const auto &m : it->second.methods)
+            if (m.is_destructor) return true;
+        return false;
+    };
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto &kv : struct_layouts_) {
+            StructLayout &sl = kv.second;
+            if (sl.has_destructible_field) continue;
+            for (const auto &f : sl.fields) {
+                if (f.type.kind != PrimitiveKind::STRUCT) continue;
+                if (struct_destructible(f.type.struct_name)) {
+                    sl.has_destructible_field = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+    // Sintesis del dtor implicito para structs con campo destructible y sin
+    // `~Struct()` propio (mismo patron que las clases).  Tras esto, cualquier
+    // struct destructible tiene un metodo is_destructor -> @c struct_destructible
+    // y el fixpoint de clase lo detectan.
+    for (auto &mod_node : mod_.decls) {
+        if (!mod_node || mod_node->kind != ast::NodeKind::StructDecl) continue;
+        auto *sd = static_cast<ast::StructDecl *>(mod_node.get());
+        auto it_lay = struct_layouts_.find(sd->name);
+        if (it_lay == struct_layouts_.end()) continue;
+        StructLayout &lay = it_lay->second;
+        if (!lay.has_destructible_field) continue;
+        bool has_dtor = false;
+        for (const auto &m : lay.methods)
+            if (m.is_destructor) {
+                has_dtor = true;
+                break;
+            }
+        if (has_dtor) continue; // el user ya declaro uno
+        auto dtor = std::make_unique<ast::ClassMethodDecl>();
+        dtor->loc = sd->loc;
+        dtor->name = "__dtor";
+        dtor->is_destructor = true;
+        dtor->access = 0;
+        dtor->body = std::make_unique<ast::BlockStmt>();
+        dtor->body->loc = sd->loc;
+        sd->methods.push_back(std::move(dtor));
+        ClassMethodInfo mi;
+        mi.name = "__dtor";
+        mi.is_destructor = true;
+        mi.defining_class = sd->name;
+        mi.return_type = Type{PrimitiveKind::VOID};
+        mi.source_file = sd->loc.file;
+        mi.source_line = sd->loc.line;
+        lay.methods.push_back(std::move(mi));
+    }
+
     // punto-fijo de @c has_destructible_field.  Una clase tiene
     // @c has_destructible_field si alguno de sus fields (incluidos los
     // heredados del super) es de tipo CLASS y esa clase tiene
-    // @c has_destructor o @c has_destructible_field a su vez.
+    // @c has_destructor o @c has_destructible_field a su vez, O es un campo
+    // FUNCTION (closure) o un campo STRUCT destructible (Fase 2b).
     //
     // Iteramos hasta estabilizar para soportar referencias mutuamente
     // recursivas (LinkedList { Node head; } / Node { Node next; }).
@@ -3033,6 +3099,16 @@ void TypeChecker::collect_globals() {
                     cl.has_destructible_field = true;
                     changed = true;
                     break;
+                }
+                // Fase 2b: un campo STRUCT destructible (con dtor propio o
+                // sintetizado) -> la clase lo libera en su dtor augmentado.
+                if (f.type.kind == PrimitiveKind::STRUCT) {
+                    if (struct_destructible(f.type.struct_name)) {
+                        cl.has_destructible_field = true;
+                        changed = true;
+                        break;
+                    }
+                    continue;
                 }
                 // Solo fields de tipo CLASS aportan destructibilidad.
                 if (f.type.kind != PrimitiveKind::CLASS) continue;
@@ -3096,71 +3172,6 @@ void TypeChecker::collect_globals() {
         mi_info.source_line = cd->loc.line;
         lay.methods.push_back(std::move(mi_info));
         lay.has_destructor = true;
-    }
-
-    // -----------------------------------------------------------------
-    // Fase 2b ownership: lo mismo para STRUCTS value-type.  Un struct con un
-    // campo struct destructible (tiene `~Struct()` o has_destructible_field a
-    // su vez) gana @c has_destructible_field; se le sintetiza un dtor implicito
-    // (si no declaro uno) y el lowering augmenta su dtor para llamar al dtor de
-    // cada campo struct (RAII recursivo, value-types inline).  Cierra el leak
-    // de la composicion `struct Outer { Inner inner; }` con Inner destructible.
-    // -----------------------------------------------------------------
-    auto struct_destructible = [&](const std::string &n) -> bool {
-        auto it = struct_layouts_.find(n);
-        if (it == struct_layouts_.end()) return false;
-        if (it->second.has_destructible_field) return true;
-        for (const auto &m : it->second.methods)
-            if (m.is_destructor) return true;
-        return false;
-    };
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (auto &kv : struct_layouts_) {
-            StructLayout &sl = kv.second;
-            if (sl.has_destructible_field) continue;
-            for (const auto &f : sl.fields) {
-                if (f.type.kind != PrimitiveKind::STRUCT) continue;
-                if (struct_destructible(f.type.struct_name)) {
-                    sl.has_destructible_field = true;
-                    changed = true;
-                    break;
-                }
-            }
-        }
-    }
-    // Sintesis del dtor implicito para structs con campo destructible y sin
-    // `~Struct()` propio (mismo patron que las clases).
-    for (auto &mod_node : mod_.decls) {
-        if (!mod_node || mod_node->kind != ast::NodeKind::StructDecl) continue;
-        auto *sd = static_cast<ast::StructDecl *>(mod_node.get());
-        auto it_lay = struct_layouts_.find(sd->name);
-        if (it_lay == struct_layouts_.end()) continue;
-        StructLayout &lay = it_lay->second;
-        if (!lay.has_destructible_field) continue;
-        bool has_dtor = false;
-        for (const auto &m : lay.methods)
-            if (m.is_destructor) {
-                has_dtor = true;
-                break;
-            }
-        if (has_dtor) continue; // el user ya declaro uno
-        auto dtor = std::make_unique<ast::ClassMethodDecl>();
-        dtor->loc = sd->loc;
-        dtor->name = "__dtor";
-        dtor->is_destructor = true;
-        dtor->access = 0;
-        dtor->body = std::make_unique<ast::BlockStmt>();
-        dtor->body->loc = sd->loc;
-        sd->methods.push_back(std::move(dtor));
-        ClassMethodInfo mi;
-        mi.name = "__dtor";
-        mi.is_destructor = true;
-        mi.defining_class = sd->name;
-        mi.return_type = Type{PrimitiveKind::VOID};
-        mi.source_file = sd->loc.file;
-        mi.source_line = sd->loc.line;
-        lay.methods.push_back(std::move(mi));
     }
 
     // -----------------------------------------------------------------
@@ -7965,19 +7976,56 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                             break;
                         }
                     if (s_has_dtor) {
-                        const char *target_name =
-                            target_is_field   ? "campo de objeto/struct"
-                            : target_is_index ? "slot de array"
-                                              : "deref de puntero";
-                        diags_.error(
-                            e->loc,
-                            std::string("struct '") + tv_peek.struct_name +
-                                "' tiene destructor `~" + tv_peek.struct_name +
-                                "()` y no puede asignarse a " + target_name +
-                                " todavia: el destructor del campo no se "
-                                "ejecutaria (fuga).  Usalo como variable local "
-                                "(RAII) o retornalo (move).");
-                        return Type{PrimitiveKind::VOID};
+                        // relajacion Fase 2b/3 (move-on-store): si el target es
+                        // un FieldAccess y el CONTENEDOR (clase o struct) es
+                        // destructible, copiar un struct-con-dtor entero a su
+                        // campo es legal.  El lowering hace memcpy del struct y
+                        // el local origen queda detectado como escaping
+                        // (scan_escaping_locals) -> su dtor de scope-exit se
+                        // suprime (MOVE); solo el dtor augmentado del contenedor
+                        // libera el recurso -> un unico free, sin doble free.
+                        bool container_owns = false;
+                        if (target_is_field) {
+                            auto *fa = static_cast<ast::FieldAccessExpr *>(
+                                e->target.get());
+                            if (fa && fa->base) {
+                                Type tb = check_expr(fa->base.get());
+                                if (tb.kind == PrimitiveKind::CLASS) {
+                                    auto it_outer =
+                                        class_layouts_.find(tb.struct_name);
+                                    if (it_outer != class_layouts_.end() &&
+                                        (it_outer->second.has_destructor ||
+                                         it_outer->second
+                                             .has_destructible_field))
+                                        container_owns = true;
+                                } else if (tb.kind == PrimitiveKind::STRUCT) {
+                                    auto it_outer =
+                                        struct_layouts_.find(tb.struct_name);
+                                    if (it_outer != struct_layouts_.end() &&
+                                        it_outer->second.has_destructible_field)
+                                        container_owns = true;
+                                }
+                            }
+                        }
+                        if (!container_owns) {
+                            const char *target_name =
+                                target_is_field   ? "campo de objeto/struct"
+                                : target_is_index ? "slot de array"
+                                                  : "deref de puntero";
+                            diags_.error(
+                                e->loc,
+                                std::string("struct '") + tv_peek.struct_name +
+                                    "' tiene destructor `~" +
+                                    tv_peek.struct_name +
+                                    "()` y no puede asignarse a " + target_name +
+                                    ": el destructor del recurso no se "
+                                    "ejecutaria (fuga).  Usalo como variable "
+                                    "local (RAII) o retornalo (move).  (O bien "
+                                    "declara el contenedor con destructor/campo "
+                                    "destructible para que herede la "
+                                    "responsabilidad RAII.)");
+                            return Type{PrimitiveKind::VOID};
+                        }
                     }
                 }
             }

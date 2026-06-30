@@ -1,23 +1,41 @@
-// NEGATIVO (compile-must-fail): almacenar un struct con `~Struct()` en un
-// campo todavia no esta soportado (Fase 2b).  El destructor del campo no se
-// ejecutaria al destruirse el contenedor -> fuga del recurso.  El compilador
-// lo rechaza (no leaks).  Usalo como variable local (RAII) o retornalo (move).
-// Cuando Fase 2b augmente el dtor del contenedor para recursar a sus campos
-// struct, este patron pasara a soportado.  Ver doc/VMdoc/Vex/InteropC.md.
+// Clase-contenedor con campo struct destructible + move-on-store (Fase 2b/3).
+//
+// Una clase que CONTIENE un struct con `~Struct()` gana un destructor implicito
+// que recursa al campo: al destruirse la Caja (RAII al exit del scope) se
+// ejecuta el destructor del campo struct, liberando su recurso.  Copiar un
+// struct-con-dtor ENTERO a un campo (`c.r = tmp`) es ahora legal: el store hace
+// un MOVE -- copia los bytes del struct al campo y el local origen queda
+// detectado como escaping (su dtor de scope-exit se suprime).  Asi solo el dtor
+// del contenedor libera el recurso: un unico free, sin doble free.  Value-types
+// inline, sin GC.  Ver doc/VMdoc/Vex/InteropC.md.
 
+i64 freed = 0;
+
+// Recurso hoja: posee memoria heap y la libera en su destructor.
 struct Recurso {
     i64* p;
-    ~Recurso() { free(this.p); }
+    ~Recurso() {
+        free(this.p);
+        freed = freed + 1;
+    }
 }
 
+// Contenedor de clase: tiene un campo struct destructible -> gana un destructor
+// implicito que llama a ~Recurso() automaticamente al destruirse la Caja.
 class Caja {
     Recurso r;
 }
 
-i32 main() {
-    Caja c = new Caja();
+i32 usar(i64 v) {
     Recurso tmp;
     tmp.p = (i64*) malloc(8);
-    c.r = tmp;          // ERROR: el dtor del campo no se ejecutaria (fuga)
-    return 0;
+    *tmp.p = v;
+    Caja c = new Caja();
+    c.r = tmp;             // move-on-store: tmp invalidado, la Caja posee el recurso
+    return (i32)(*c.r.p);  // c destruida al exit -> ~Recurso -> free + freed++
+}
+
+i32 main() {
+    i32 s = usar(20) + usar(20);   // 40; cada usar libera su Recurso -> freed=2
+    return (i32)(s + freed);        // 40 + 2 = 42
 }
