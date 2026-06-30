@@ -15372,6 +15372,29 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         current_lambda_store_escapes_,
         _val_is_lambda &&
             (_tgt_is_class_field || _tgt_is_escaping_struct_field));
+    // Ownership: si el target es un campo unique<T> y el RHS construye un
+    // unique (unique_box/unique_with), el slot Tier 1 debe ir a HEAP para
+    // sobrevivir al scope productor (el campo lo posee; el dtor del contenedor
+    // lo libera).  unique_slot_buf consume el flag al alocar el slot.
+    bool _tgt_is_unique_field = false;
+    if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
+        if (fa->result_type.kind == PrimitiveKind::UNIQUE_PTR && fa->base &&
+            (fa->base->result_type.kind == PrimitiveKind::CLASS ||
+             fa->base->result_type.kind == PrimitiveKind::STRUCT))
+            _tgt_is_unique_field = true;
+    }
+    bool _val_is_unique_ctor = false;
+    if (e->value && e->value->kind == ast::NodeKind::CallExpr) {
+        auto *cv = static_cast<ast::CallExpr *>(e->value.get());
+        if (cv->callee && cv->callee->kind == ast::NodeKind::IdentExpr) {
+            const std::string &n =
+                static_cast<ast::IdentExpr *>(cv->callee.get())->name;
+            _val_is_unique_ctor = (n == "unique_box" || n == "unique_with");
+        }
+    }
+    EscapeFlagGuard _uniq_guard(unique_slot_to_heap_,
+                                _tgt_is_unique_field && _val_is_unique_ctor);
     // Caso FieldAccessExpr: dos rutas distintas por tipo de receptor.
     if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
@@ -20486,6 +20509,25 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         return v_buf;
     };
+    // Slot del smart pointer: HEAP (RAW_ALLOC, host) si el unique se asigna a
+    // un CAMPO (unique_slot_to_heap_), si no STACK (ALLOCA).  El heap-slot
+    // sobrevive al scope productor; lo libera el dtor del contenedor.  Consume
+    // y resetea el flag (no se propaga a uniques anidados/posteriores).
+    auto unique_slot_buf = [&](uint32_t line) -> ir::IrValueId {
+        if (!unique_slot_to_heap_) return stack_alloc_buf(16, line);
+        unique_slot_to_heap_ = false;
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        const ir::IrValueId v_size = emit_const(ir::IrType::I64, 16, line);
+        ir::IrInstr al{};
+        al.op = ir::IrOp::RAW_ALLOC;
+        al.type = ir::IrType::PTR;
+        al.dst = v_buf;
+        al.operands = {v_size};
+        al.source_line = line;
+        fn_->append(current_block_, std::move(al));
+        return v_buf;
+    };
 
     // ----- Some(x) -----  Optional<T> en heap.
     //   Layout: [+0 i64 flag=1][+8 T payload].  Total 16 bytes.
@@ -21147,7 +21189,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             const ir::IrValueId v_slot =
                 (unique_box_target_slot_ != ir::IR_NO_VALUE)
                     ? unique_box_target_slot_
-                    : stack_alloc_buf(16, e->loc.line);
+                    : unique_slot_buf(e->loc.line);
 
             // Bug fix bug2: si el payload ya es un host_ptr (e.g.
             // `new Recurso(1)` devuelve PTR), guardarlo DIRECTAMENTE
@@ -21423,11 +21465,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             // el cleanup emitira CALLVM @Absolute("code.<name>").
             deleter_label = deleter_id->name;
         } // else: ya viene con prefijo "@extern:lib:fn".
-        // Tier 1: ALLOCA 16 + STORE value@+0 + STORE deleter_addr@+8.
-        // El deleter_addr se materializa via RAW_ASM que captura
-        // `@Absolute("code.<name>")` (Vesta) o un puntero null marcador
-        // (extern, no soportado en SRET return aun).
-        const ir::IrValueId v_slot = stack_alloc_buf(16, e->loc.line);
+        // Tier 1: slot 16 + STORE value@+0 + STORE deleter_addr@+8.  HEAP si
+        // el unique va a un campo (unique_slot_buf), si no STACK.
+        const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
         {
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -21470,11 +21510,16 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             mov.source_line = e->loc.line;
             fn_->append(current_block_, std::move(mov));
         }
-        // STORE deleter_addr en slot+8.
+        // STORE deleter_addr en slot+8.  v_slot8 HEREDA la host-ness de v_slot
+        // (heap -> movh, stack -> mov) para que sea consistente con la store de
+        // slot+0 y con las lecturas del dtor; sin esto el deleter se escribiria
+        // en vm_mem con un slot heap -> el dtor leeria 0 -> RAW_FREE en vez de
+        // invocar el deleter.
         {
             const ir::IrValueId v_eight =
                 emit_const(ir::IrType::I64, 8, e->loc.line);
             const ir::IrValueId v_slot8 = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_slot8].is_host_ptr = fn_->values[v_slot].is_host_ptr;
             ir::IrInstr add{};
             add.op = ir::IrOp::ADD;
             add.type = ir::IrType::I64;
@@ -22832,6 +22877,13 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                                                     m->loc.line);
                         continue;
                     }
+                    // Campo unique<T> (ownership): liberar el inner via el
+                    // deleter del slot (default free o custom).  El dtor del
+                    // contenedor es el unico dueno -> un solo free.
+                    if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
+                        emit_free_unique_field(this_vid, f.offset, m->loc.line);
+                        continue;
+                    }
                     // Campo STRUCT inline destructible (Fase 2b clase-contenedor):
                     // el valor del campo ES su direccion (this + offset), no un
                     // puntero.  Despachamos su dtor con CALL directo
@@ -23176,6 +23228,13 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             if (this_dtor != ir::IR_NO_VALUE &&
                 it_sl != tc_.struct_layouts().end()) {
                 for (const auto &f : it_sl->second.fields) {
+                    // Campo unique<T> (ownership): liberar el inner via el
+                    // deleter del slot.  fn_ == &fn aqui (set en el setup).
+                    if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
+                        emit_free_unique_field(this_dtor, f.offset,
+                                               m->loc.line);
+                        continue;
+                    }
                     if (f.type.kind != PrimitiveKind::STRUCT) continue;
                     auto it_inner =
                         tc_.struct_layouts().find(f.type.struct_name);
@@ -23392,6 +23451,189 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         fn_->append(current_block_, std::move(brj));
     }
     // free_slot_bb: RAW_FREE(slot); br skip.
+    current_block_ = free_slot_bb;
+    {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {slot};
+        rf.source_line = line;
+        fn_->append(current_block_, std::move(rf));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = skip_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        fn_->append(current_block_, std::move(brj));
+    }
+    current_block_ = skip_bb;
+    block_terminated_ = false;
+}
+
+void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
+                                      uint32_t field_offset, uint32_t line) {
+    const ir::IrBlockId skip_bb = fn_->new_block("free_uniq_skip");
+    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
+
+    // El CAMPO vive en la memoria del CONTENEDOR: VM (struct en VM stack) o
+    // host (clase, o cualquiera en native_poo/AOT).  La carga del campo hereda
+    // la host-ness de @c this_vid (NO emit_field_addr, que la fuerza a host).
+    // El slot que el campo guarda es SIEMPRE un host_ptr (heap RAW_ALLOC).
+    const bool container_host = fn_->values[this_vid].is_host_ptr;
+    ir::IrValueId slot_addr = this_vid;
+    if (field_offset != 0) {
+        const ir::IrValueId off =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(field_offset),
+                       line);
+        slot_addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[slot_addr].is_host_ptr = container_host;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = slot_addr;
+        ad.operands = {this_vid, off};
+        ad.source_line = line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    // slot = LOAD [this + field_offset]  (mov/movh segun el contenedor).
+    const ir::IrValueId slot = fn_->new_value(ir::IrType::I64);
+    fn_->values[slot].is_host_ptr = true; // el slot es heap host
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = slot;
+        ld.operands = {slot_addr};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // if (slot == 0) -> skip  (campo nunca asignado / unique movido).
+    const ir::IrBlockId slot_ok = fn_->new_block("free_uniq_slot_ok");
+    {
+        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = is_null;
+        cmp.operands = {slot, zero};
+        cmp.source_line = line;
+        fn_->append(current_block_, std::move(cmp));
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {is_null};
+        br.target_block = skip_bb;
+        br.false_block = slot_ok;
+        br.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[current_block_].succs.push_back(slot_ok);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        fn_->blocks[slot_ok].preds.push_back(current_block_);
+        fn_->append(current_block_, std::move(br));
+        current_block_ = slot_ok;
+    }
+    // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
+    const ir::IrValueId ptr = fn_->new_value(ir::IrType::I64);
+    fn_->values[ptr].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = ptr;
+        ld.operands = {slot};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // deleter = LOAD [slot + 8].
+    const ir::IrValueId del_addr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[del_addr].is_host_ptr = true;
+    {
+        const ir::IrValueId eight = emit_const(ir::IrType::I64, 8, line);
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = del_addr;
+        ad.operands = {slot, eight};
+        ad.source_line = line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    const ir::IrValueId deleter = fn_->new_value(ir::IrType::I64);
+    fn_->values[deleter].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = deleter;
+        ld.operands = {del_addr};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // if (deleter != 0) -> CALLIND deleter(ptr); else RAW_FREE(ptr).
+    const ir::IrBlockId call_bb = fn_->new_block("free_uniq_call");
+    const ir::IrBlockId free_bb = fn_->new_block("free_uniq_raw");
+    {
+        const ir::IrValueId has_del = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_NE;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = has_del;
+        cmp.operands = {deleter, zero};
+        cmp.source_line = line;
+        fn_->append(current_block_, std::move(cmp));
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {has_del};
+        br.target_block = call_bb;
+        br.false_block = free_bb;
+        br.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(call_bb);
+        fn_->blocks[current_block_].succs.push_back(free_bb);
+        fn_->blocks[call_bb].preds.push_back(current_block_);
+        fn_->blocks[free_bb].preds.push_back(current_block_);
+        fn_->append(current_block_, std::move(br));
+    }
+    // Bloque que SIEMPRE libera el slot heap (16B), tras liberar el inner.
+    const ir::IrBlockId free_slot_bb = fn_->new_block("free_uniq_slot");
+    // call_bb: CALLIND deleter(ptr) -> free_slot.
+    current_block_ = call_bb;
+    {
+        ir::IrInstr ci{};
+        ci.op = ir::IrOp::CALLIND;
+        ci.type = ir::IrType::VOID;
+        ci.dst = ir::IR_NO_VALUE;
+        ci.func_ptr = deleter;
+        ci.operands = {ptr};
+        ci.source_line = line;
+        ci.is_call_site = true;
+        fn_->append(current_block_, std::move(ci));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = free_slot_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        fn_->append(current_block_, std::move(brj));
+    }
+    // free_bb: RAW_FREE(ptr) -> free_slot  (deleter por defecto; null-safe).
+    current_block_ = free_bb;
+    {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {ptr};
+        rf.source_line = line;
+        fn_->append(current_block_, std::move(rf));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = free_slot_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        fn_->append(current_block_, std::move(brj));
+    }
+    // free_slot_bb: RAW_FREE(slot heap) -> skip.
     current_block_ = free_slot_bb;
     {
         ir::IrInstr rf{};
@@ -25135,6 +25377,14 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
         fn_->values[dst].is_host_ptr = true;
     }
+    // Campo unique<T> (ownership): el campo guarda la direccion del slot Tier 1
+    // (16B) alocado en HEAP (RAW_ALLOC) cuando el unique va a un campo.  Marcar
+    // el valor cargado como host_ptr para que ptr_of/read/use_count emitan movh
+    // al deref-ear el slot (slot+0 ptr, slot+8 deleter); sin esto leerian
+    // vm_mem en una direccion host -> 0/garbage.
+    if (ftyp.kind == PrimitiveKind::UNIQUE_PTR) {
+        fn_->values[dst].is_host_ptr = true;
+    }
     // fix - field de tipo CLASS guarda un GcHandle (estable a
     // evacuacion del GC).  Tras LOADear el handle, hacemos @c gcderef
     // para obtener el host_ptr actual del objeto (refrescado tras
@@ -25322,6 +25572,11 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
         emit_free_closure_env_field(obj, off, loc.line);
     }
+    // (El reassign-free de un campo unique<T> -- liberar el slot anterior antes
+    // de guardar el nuevo -- queda pendiente: reasignar el mismo campo unique
+    // fuga el slot previo.  Patron poco comun; el dtor del contenedor libera el
+    // ultimo valor.  No emitimos el free aqui para no incurrir en el bucle del
+    // diamante sobre el slot reutilizado.)
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
     // Campo STRUCT value-type (Fase 2b/3): el campo es un struct inline; @c rhs

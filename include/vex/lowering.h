@@ -665,6 +665,16 @@ class Lowering {
     /// @param line  Linea fuente para la depuracion.
     void emit_free_closure_env_field(ir::IrValueId this_vid,
                                      uint32_t field_offset, uint32_t line);
+    /// Libera el @c unique<T> almacenado en un campo del contenedor al exit del
+    /// scope (ownership, sin GC): el campo guarda la direccion del slot Tier 1
+    /// (16B [ptr][deleter]); cargamos el slot, y si != 0 dispatchamos el
+    /// deleter dinamico (slot+8): deleter==0 -> RAW_FREE(ptr); !=0 -> CALLIND
+    /// deleter(ptr).  Ops explicitas (universales en interp/JIT/AOT).
+    /// @param this_vid  SSA value del receptor (host_ptr al contenedor).
+    /// @param field_offset  Offset del campo @c unique<T> (8B, guarda el slot).
+    /// @param line  Linea fuente.
+    void emit_free_unique_field(ir::IrValueId this_vid, uint32_t field_offset,
+                                uint32_t line);
     /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);
@@ -1847,6 +1857,13 @@ class Lowering {
     /// custom al cleanup pendiente.  Vacio = usar el deleter por
     /// defecto ("free").  Se limpia tras consumirse en lower_var_decl.
     std::string pending_smartptr_deleter_;
+    /// Ownership: cuando un @c unique<T> se asigna a un CAMPO (de clase o
+    /// struct), su slot Tier 1 (16B [ptr][deleter]) debe vivir en HEAP, no en
+    /// stack: el campo guarda la direccion del slot y sobrevive al scope donde
+    /// se creo el unique (igual que el env de un closure en un campo).  El dtor
+    /// del contenedor libera el inner (via deleter) Y el slot heap.  Lo activa
+    /// @c lower_assign antes de bajar el RHS; lo consumen unique_box/unique_with.
+    bool unique_slot_to_heap_ = false;
 
     /// Stack de targets de break/continue para los loops anidados.
     /// Cada vez que entramos a un while/for/do-while se hace push de
