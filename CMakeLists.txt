@@ -158,7 +158,6 @@ set(VM_INCLUDES
         ${CMAKE_SOURCE_DIR}/include
         libs/SourceCode/json
         libs/SourceCode/cxxopts
-        libs/SourceCode/ftxui/include
         libs/SourceCode/capstone/include
         libs/SourceCode/keystone/include
         libs/SourceCode/DistanciaLevenshtein
