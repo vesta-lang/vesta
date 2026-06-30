@@ -1,0 +1,27 @@
+class Counter { public static i64 vivos; }
+// Tipo refcount definido por el USUARIO en Vex (sin magia del compilador):
+// el copy-hook __clone__ incrementa; el destructor decrementa y libera al llegar a 0.
+struct Rc {
+    i64* ctrl;
+    void __clone__() { *this.ctrl = *this.ctrl + 1; }      // copia -> ++refcount
+    ~Rc() {
+        *this.ctrl = *this.ctrl - 1;
+        if (*this.ctrl == 0) { free(this.ctrl); Counter.vivos = Counter.vivos - 1; }
+    }
+}
+Rc make() {
+    Rc r;
+    r.ctrl = (i64*) malloc(8);
+    *r.ctrl = 1;
+    Counter.vivos = Counter.vivos + 1;
+    return r;       // move (no clone)
+}
+void usar() {
+    Rc a = make();   // vivos=1, rc=1
+    Rc b = a;         // copia -> __clone__ -> rc=2
+}                     // ~b: rc=1 ; ~a: rc=0 -> free, vivos=0
+i32 main() {
+    Counter.vivos = 0;
+    usar();
+    return (i32)(42 - Counter.vivos);   // 42 - 0 = 42
+}

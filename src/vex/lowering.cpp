@@ -3688,6 +3688,17 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         fn_->append(current_block_, std::move(ins));
         if (native_poo_) fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
+        // Ownership ruta B (copy-hook): `S b = a;` donde S declara `__clone__`
+        // y `a` es un lvalue struct existente (IdentExpr) es una COPIA.  Modelo
+        // (estilo Rust Clone): memcpy bit a bit a->b (abajo) y DESPUES
+        // `b.__clone__()` (CALL <S>____clone__(b)) que aplica el efecto sobre la
+        // copia (p.ej. ++refcount de su recurso).  Opera sobre `this`=b (misma
+        // memory class que cualquier metodo de struct -> sin mismatch host/VM).
+        // `S b = move(a)` o `S b = call()` (valor fresco/transferencia) NO entran.
+        const bool do_copy_hook =
+            vd->init && vd->init->kind == ast::NodeKind::IdentExpr &&
+            lay.has_copy_hook &&
+            escaping_locals_.find(vd->name) == escaping_locals_.end();
         // B3 fix: si hay inicializador, lower-lo como PTR al struct
         // origen y copiar qword-by-qword al slot ALLOCA recien creado.
         // Soporta:
@@ -3759,6 +3770,18 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     }
                 }
             }
+        }
+        // Copy-hook: tras el memcpy, `b.__clone__()` aplica el efecto de copia
+        // sobre la nueva copia (this = addr = b).
+        if (do_copy_hook) {
+            ir::IrInstr cc{};
+            cc.op = ir::IrOp::CALL;
+            cc.type = ir::IrType::VOID;
+            cc.dst = ir::IR_NO_VALUE;
+            cc.operands = {addr}; // this = b (la copia)
+            cc.func_name = sem_type.struct_name + "__" + "__clone__";
+            cc.source_line = vd->loc.line;
+            fn_->append(current_block_, std::move(cc));
         }
         // Fase 2a interop C / ownership: destructor automatico (RAII) del
         // struct value-type local con `~Struct()` declarado y que NO escapa.

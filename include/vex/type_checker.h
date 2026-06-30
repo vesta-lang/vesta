@@ -243,6 +243,14 @@ struct StructLayout {
     /// Dispara la sintesis de un dtor implicito + la augmentacion RAII
     /// recursiva (el dtor del contenedor llama al dtor de cada campo struct).
     bool has_destructible_field = false;
+    /// Ownership ruta B (copy-hook): @c true si el struct declara un metodo
+    /// reservado `__clone__(this) -> Self`.  Es el copy-constructor IMPLICITO
+    /// (estilo C++): el compilador lo invoca en cada sitio de COPIA del struct
+    /// (`S b = a`, `obj.f = a`, paso por valor) en vez de un memcpy bit a bit,
+    /// para que la copia tenga efecto (p.ej. ++refcount de shared<T>).  Un
+    /// `return`/`move` NO lo invoca (es transferencia).  Ver
+    /// doc/VMdoc/Vex/SmartPointers.md y proj_ownership_hooks.
+    bool has_copy_hook = false;
     /// marca `@Introspect` -- el lowering emite
     /// IntrospectInfo POD en static_data para que `find_type("Name")`
     /// runtime lo encuentre.

@@ -2568,6 +2568,10 @@ void TypeChecker::collect_globals() {
                 for (const auto &p : m->params) {
                     mi.param_types.push_back(type_from_node(p->type.get()));
                 }
+                // Ownership ruta B: el metodo reservado `__clone__` es el
+                // copy-hook (copy-constructor implicito).  El compilador lo
+                // invoca en cada sitio de copia del struct.
+                if (m->name == "__clone__") layout.has_copy_hook = true;
                 layout.methods.push_back(std::move(mi));
             }
 
