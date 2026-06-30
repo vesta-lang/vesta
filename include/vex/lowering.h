@@ -683,6 +683,15 @@ class Lowering {
     /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);
+    /// Sintetiza, si @c needs_free_uniq_helper_, la funcion runtime
+    /// `__vex_free_uniq(i64 slot)` que libera un slot Tier 1 de unique<T>
+    /// (null-guard + dispatch del deleter + RAW_FREE del slot, reusando
+    /// @c emit_free_unique_slot).  La usa el reassign-free de un campo unique
+    /// como una sola CALL (el diamante del free vive DENTRO del helper, evitando
+    /// la interaccion del diamante con el tailcall del dtor en el call site).
+    void generate_free_uniq_helper(ir::IrModule &out);
+    /// @c true si algun reassign de campo unique<T> requiere el helper.
+    bool needs_free_uniq_helper_ = false;
     /// Devuelve el label a usar para `&fn` / promocion a cfn.  Si @c name es
     /// un extern, registra el thunk y devuelve `__cfnthunk_<fn>`; si no, el
     /// label mangled (o el nombre).

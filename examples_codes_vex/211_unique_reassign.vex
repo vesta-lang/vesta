@@ -1,0 +1,28 @@
+// Reasignacion de un campo unique<T> (ownership, sin fuga).
+//
+// Al reasignar un campo unique<T> (`c.p = a; c.p = b;`), el recurso ANTERIOR se
+// libera antes de guardar el nuevo (igual que reasignar un unique<T> local), y
+// el destructor del contenedor libera el ultimo.  Asi cada recurso adquirido se
+// libera exactamente una vez, sin fugas intermedias.  Ver doc/VMdoc/Vex/InteropC.md.
+
+class Counter { public static i64 liberados; }
+
+void cerrar(i64 recurso) {
+    Counter.liberados = Counter.liberados + 1;
+}
+
+class Conexion {
+    unique<i64> handle;
+}
+
+void trabajar() {
+    Conexion c = new Conexion();
+    c.handle = unique_with(10, cerrar);   // primer recurso
+    c.handle = unique_with(20, cerrar);   // reasigna: libera el primero
+}   // al salir de scope: ~Conexion() libera el segundo
+
+i32 main() {
+    Counter.liberados = 0;
+    trabajar();                 // 1 reasignacion + 1 destruccion = 2 cierres
+    return (i32)(40 + Counter.liberados);   // 40 + 2 = 42
+}

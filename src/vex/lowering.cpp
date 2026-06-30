@@ -1551,6 +1551,8 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     generate_new_helpers(out_module);
     // Thunks para `&extern` usado como cfn (se rellenan durante el lowering).
     generate_extern_cfn_thunks(out_module);
+    // Helper runtime __vex_free_uniq para el reassign-free de campos unique<T>.
+    generate_free_uniq_helper(out_module);
     // Phase AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
     // __module_init (las clases son layout estatico compile-time).
     if (!native_poo_) generate_module_init_function(out_module);
@@ -23735,6 +23737,43 @@ void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
     }
 }
 
+void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
+    if (!needs_free_uniq_helper_) return;
+    // void __vex_free_uniq(i64 slot) { <emit_free_unique_slot(slot)>; ret; }
+    // El cuerpo reusa emit_free_unique_slot (null-guard + deleter dispatch +
+    // RAW_FREE del slot).  Como es una funcion normal, su diamante interno no
+    // colisiona con el tailcall del dtor en el call site del reassign-free.
+    ir::IrFunction fn;
+    fn.name = "__vex_free_uniq";
+    fn.ret_type = ir::IrType::VOID;
+    const ir::IrValueId slot = fn.new_value(ir::IrType::I64, "%slot");
+    fn.values[slot].is_param = true;
+    fn.values[slot].is_host_ptr = true; // el slot es heap host
+    fn.params.push_back(slot);
+    const ir::IrBlockId entry = fn.new_block("entry");
+
+    // Activar el contexto del lowering para reusar emit_free_unique_slot.
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_term = block_terminated_;
+    fn_ = &fn;
+    current_block_ = entry;
+    block_terminated_ = false;
+    emit_free_unique_slot(slot, 0);
+    // RET void al final (emit_free_unique_slot deja current_block_ en su skip).
+    {
+        ir::IrInstr ret{};
+        ret.op = ir::IrOp::RET;
+        ret.type = ir::IrType::VOID;
+        ret.source_line = 0;
+        fn.append(current_block_, std::move(ret));
+    }
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_term;
+    out.add_function(std::move(fn));
+}
+
 void Lowering::generate_new_helpers(ir::IrModule &out) {
     // Para cada clase declarada en el modulo, generamos una funcion
     // __new_<Class>(arg1, ..., argN) -> handle (GcHandle).  El cuerpo
@@ -25577,11 +25616,23 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     }
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
-    // (Limitacion conocida: reasignar el mismo campo unique<T> -- `c.p = a;
-    // c.p = b;` -- fuga el slot de `a`; el dtor del contenedor libera solo el
-    // ultimo valor.  Un reassign-free naive aqui entra en bucle por la
-    // interaccion del diamante del free con el tailcall del dtor; pendiente de
-    // un enfoque sin esa interaccion.  Patron poco comun.)
+    // Reasignar un campo unique<T>: capturamos el slot ANTERIOR (el campo aun lo
+    // guarda) ANTES de sobreescribirlo; tras el store del nuevo lo liberamos via
+    // CALL al helper __vex_free_uniq (NO inline, para no pegar el diamante del
+    // free al tailcall del dtor en este call site -> evita el bucle).  El nuevo
+    // slot ya se aloco -> distinto del viejo, sin double-free.
+    ir::IrValueId uniq_old_slot = ir::IR_NO_VALUE;
+    if (ftyp.kind == PrimitiveKind::UNIQUE_PTR) {
+        uniq_old_slot = fn_->new_value(ir::IrType::I64);
+        fn_->values[uniq_old_slot].is_host_ptr = true;
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = uniq_old_slot;
+        ld.operands = {addr};
+        ld.source_line = loc.line;
+        fn_->append(current_block_, std::move(ld));
+    }
     // Campo STRUCT value-type (Fase 2b/3): el campo es un struct inline; @c rhs
     // es la DIRECCION del struct origen.  Copiamos memberwise (qword-by-qword)
     // sus bytes al campo -- NO un STORE escalar (que pisaria el primer qword con
@@ -25662,6 +25713,21 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     st.operands = {v_to_store, addr};
     st.source_line = loc.line;
     fn_->append(current_block_, std::move(st));
+    // Reassign-free del campo unique<T> via CALL al helper (1 instr, sin
+    // diamante en el call site).  El helper hace null-guard internamente -> el
+    // primer store (campo == 0) es un no-op.
+    if (uniq_old_slot != ir::IR_NO_VALUE) {
+        needs_free_uniq_helper_ = true;
+        ir::IrInstr ci{};
+        ci.op = ir::IrOp::CALL;
+        ci.type = ir::IrType::VOID;
+        ci.dst = ir::IR_NO_VALUE;
+        ci.func_name = "__vex_free_uniq";
+        ci.operands = {uniq_old_slot};
+        ci.source_line = loc.line;
+        ci.is_call_site = true;
+        fn_->append(current_block_, std::move(ci));
+    }
     return rhs_cast;
 }
 
