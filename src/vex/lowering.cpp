@@ -23474,9 +23474,6 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
 
 void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
                                       uint32_t field_offset, uint32_t line) {
-    const ir::IrBlockId skip_bb = fn_->new_block("free_uniq_skip");
-    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
-
     // El CAMPO vive en la memoria del CONTENEDOR: VM (struct en VM stack) o
     // host (clase, o cualquiera en native_poo/AOT).  La carga del campo hereda
     // la host-ness de @c this_vid (NO emit_field_addr, que la fuerza a host).
@@ -23509,7 +23506,13 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
         ld.source_line = line;
         fn_->append(current_block_, std::move(ld));
     }
-    // if (slot == 0) -> skip  (campo nunca asignado / unique movido).
+    emit_free_unique_slot(slot, line);
+}
+
+void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
+    const ir::IrBlockId skip_bb = fn_->new_block("free_uniq_skip");
+    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
+    // if (slot == 0) -> skip  (slot nulo / unique movido).
     const ir::IrBlockId slot_ok = fn_->new_block("free_uniq_slot_ok");
     {
         const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
@@ -25572,13 +25575,13 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
         emit_free_closure_env_field(obj, off, loc.line);
     }
-    // (El reassign-free de un campo unique<T> -- liberar el slot anterior antes
-    // de guardar el nuevo -- queda pendiente: reasignar el mismo campo unique
-    // fuga el slot previo.  Patron poco comun; el dtor del contenedor libera el
-    // ultimo valor.  No emitimos el free aqui para no incurrir en el bucle del
-    // diamante sobre el slot reutilizado.)
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
+    // (Limitacion conocida: reasignar el mismo campo unique<T> -- `c.p = a;
+    // c.p = b;` -- fuga el slot de `a`; el dtor del contenedor libera solo el
+    // ultimo valor.  Un reassign-free naive aqui entra en bucle por la
+    // interaccion del diamante del free con el tailcall del dtor; pendiente de
+    // un enfoque sin esa interaccion.  Patron poco comun.)
     // Campo STRUCT value-type (Fase 2b/3): el campo es un struct inline; @c rhs
     // es la DIRECCION del struct origen.  Copiamos memberwise (qword-by-qword)
     // sus bytes al campo -- NO un STORE escalar (que pisaria el primer qword con

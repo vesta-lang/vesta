@@ -675,6 +675,11 @@ class Lowering {
     /// @param line  Linea fuente.
     void emit_free_unique_field(ir::IrValueId this_vid, uint32_t field_offset,
                                 uint32_t line);
+    /// Libera un slot Tier 1 (16B [ptr][deleter]) heap dado su VALOR (no via un
+    /// campo): null-guard, dispatch del deleter (slot+8) + RAW_FREE(slot).  Lo
+    /// usa @c emit_free_unique_field tras cargar el slot, y el reassign-free de
+    /// un campo unique (que captura el slot viejo antes de sobreescribir).
+    void emit_free_unique_slot(ir::IrValueId slot, uint32_t line);
     /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);
