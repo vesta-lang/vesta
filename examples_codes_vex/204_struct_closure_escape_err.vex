@@ -1,10 +1,12 @@
-// NEGATIVO (compile-must-fail): un struct con un closure CAPTURADOR en un campo
-// guarda el env en el STACK del scope actual (los structs son value-types sin
-// destructor de campos owned).  Retornar ese struct por valor haria que la
-// copia del caller apunte a un env ya muerto (use-after-scope).  El compilador
-// lo rechaza (safety net).  La solucion es usar una CLASE (env heap owned,
-// liberado por el destructor) cuando el closure debe sobrevivir al scope.
-// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+// Struct con closure capturador que escapa por valor (move-on-return).
+//
+// Un struct value-type puede contener un closure (lambda con captura) y
+// retornarse por valor.  Para el caso local-no-escapa, el env del closure vive
+// en el stack (cero coste).  Cuando el struct ESCAPA por return, el compilador
+// aloca su env en el heap, mueve el struct al caller (SRET) y transfiere el
+// ownership del env: el productor no lo libera (move) y el consumidor
+// (`Caja c = crear(...)`) lo libera al salir de su scope.  Un unico free, sin
+// GC.  Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
 
 struct Caja {
     fn() -> i64 leer;
@@ -12,11 +14,11 @@ struct Caja {
 
 Caja crear(i64 v) {
     Caja c;
-    c.leer = () => v + 1;   // closure capturador -> env en stack de `crear`
-    return c;               // ERROR: el struct escapa con el env colgante
+    c.leer = () => v + 1;   // closure capturador; al escapar, env en heap
+    return c;               // move-on-return: el env se transfiere al caller
 }
 
 i32 main() {
-    Caja c = crear(41);
-    return (i32) c.leer();
+    Caja c = crear(41);     // c posee el env; lo libera al exit del scope
+    return (i32) c.leer();  // 42
 }

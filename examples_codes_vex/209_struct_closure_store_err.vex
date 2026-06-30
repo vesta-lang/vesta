@@ -1,0 +1,24 @@
+// NEGATIVO (compile-must-fail): almacenar un struct con un closure capturador
+// en un CAMPO que le sobrevive todavia no esta soportado.  A diferencia del
+// move-on-return (soportado, ver 204), el ownership del env al cruzar a un campo
+// de otro contenedor requiere analisis adicional; mientras tanto el compilador
+// lo rechaza para no dejar un env colgante.  Usa una CLASE (env heap owned,
+// liberado por el destructor) si el closure debe vivir dentro de otro objeto.
+// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+
+struct Caja {
+    fn() -> i64 leer;
+}
+
+struct Marco {
+    Caja caja;
+}
+
+i32 main() {
+    i64 base = 41;
+    Caja c;
+    c.leer = () => base + 1;   // closure CAPTURADOR (captura base)
+    Marco m;
+    m.caja = c;                // ERROR: el struct con closure escapa a un campo
+    return (i32) m.caja.leer();
+}

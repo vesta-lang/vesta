@@ -5394,23 +5394,14 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
         Type t = check_expr(s->value.get());
         expected_result_type_ = saved_expected_result;
         expected_optional_type_ = saved_expected_optional;
-        // Safety net (item 1): un struct local con un closure CAPTURADOR en un
-        // campo guarda el env en el STACK del scope actual; retornarlo por
-        // valor haria que la copia del caller apunte a un env ya muerto
-        // (use-after-scope).  Rechazar con un mensaje claro.
-        if (s->value->kind == ast::NodeKind::IdentExpr) {
-            auto *rid = static_cast<ast::IdentExpr *>(s->value.get());
-            if (struct_stack_closure_taint_.count(rid->name)) {
-                diags_.error(
-                    s->loc,
-                    "el struct '" + rid->name +
-                        "' tiene un closure capturador en un campo (su env vive "
-                        "en el stack) y se retorna por valor: el env quedaria "
-                        "colgante en el caller.  Usa una CLASE (env heap owned, "
-                        "liberado por el destructor) si el closure debe "
-                        "sobrevivir al scope.");
-            }
-        }
+        // Ownership escape-sensitive: retornar por valor un struct con un
+        // closure capturador en un campo esta SOPORTADO (move-on-return).  El
+        // lowering aloca el env en HEAP para ese struct escapante (en vez de
+        // stack), lo mueve al caller con los bytes del struct (SRET), suprime
+        // el cleanup del productor (escaping_locals_) y registra el free en el
+        // consumidor (`T c = crear()` -> CLOSURE_ENV_FREE).  Un solo free, sin
+        // GC.  El caso local-no-escapa sigue en stack (cero coste).  El taint
+        // se conserva para rechazar el store-a-campo (aun no soportado).
         // Borrow checker R4: si el valor de retorno es un borrow,
         // validar via on_borrow_escape.  El owner_kind del borrow
         // (Local vs Param/Global) decide si el escape es valido.

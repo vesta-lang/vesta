@@ -1759,12 +1759,23 @@ class Lowering {
                         ///< clase NATIVA (calloc) al exit del scope (RAII; sin
                         ///< GC). aot_lower lo convierte en call<free>.  Sin
                         ///< dangling.
-            STRING_FREE ///< Vex Embed Inc 0: liberar el buffer de un
+            STRING_FREE, ///< Vex Embed Inc 0: liberar el buffer de un
                         ///< string value-type (native_poo_) al exit del
                         ///< scope.  operands[0] = PTR al slot de 24 bytes
                         ///< {ptr,len,cap}.  Emite LOAD ptr@[slot+0] +
                         ///< RAW_FREE(ptr) (aot_lower -> call free; free(0)
                         ///< es no-op tras un move, sin doble-free).
+            CLOSURE_ENV_FREE ///< Ownership: liberar el env+slot heap de los
+                        ///< campos closure (lambda con captura) de un struct
+                        ///< value-type que recibio su valor por move (init
+                        ///< desde una call que retorna un struct con closure
+                        ///< escapado).  operands[0] = PTR al struct (refresh
+                        ///< por refresh_name); @c closure_field_offsets lista
+                        ///< los offsets de los campos fn.  Emite, por campo,
+                        ///< la misma secuencia que @c emit_free_closure_env_field
+                        ///< (null-guard, free env + slot).  Sin GC; un solo
+                        ///< free porque el productor suprime su cleanup
+                        ///< (move-on-return via escaping_locals_).
         };
         Kind kind = Kind::RAW_ASM;
         // --- Comun ---
@@ -1819,6 +1830,10 @@ class Lowering {
         std::string literal_deleter;
         /// Tamano del slot del smart pointer (8 para Tier 0).
         uint32_t slot_size = 8;
+        /// --- CLOSURE_ENV_FREE ---
+        /// Offsets (en bytes) de los campos closure (fn con captura) del
+        /// struct a liberar al exit del scope.
+        std::vector<uint32_t> closure_field_offsets;
     };
     std::vector<CleanupAction> cleanup_stack_;
     /// Contador para etiquetas unicas en cleanups que emiten labels

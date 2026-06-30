@@ -3782,6 +3782,30 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 act.func_name = sem_type.struct_name + "__" + "__dtor";
                 cleanup_stack_.push_back(std::move(act));
             }
+            // Ownership escape-sensitive: si el struct tiene campos closure
+            // (lambda con captura) y su valor llega POR MOVE desde una call
+            // (init = CallExpr) que retorna un struct con closure escapado, su
+            // env vive en HEAP y este consumidor es el unico responsable de
+            // liberarlo al exit del scope (el productor suprimio su cleanup via
+            // escaping_locals_ al hacer return).  Registramos CLOSURE_ENV_FREE
+            // con los offsets de los campos fn.  El caso local-no-escapa NO
+            // entra aqui (su env vive en stack, sin liberacion).
+            if (vd->init && vd->init->kind == ast::NodeKind::CallExpr) {
+                std::vector<uint32_t> fn_offs;
+                for (const auto &f : lay.fields)
+                    if (f.type.kind == PrimitiveKind::FUNCTION &&
+                        !f.type.fn_is_raw)
+                        fn_offs.push_back(f.offset);
+                if (!fn_offs.empty()) {
+                    CleanupAction act;
+                    act.kind = CleanupAction::Kind::CLOSURE_ENV_FREE;
+                    act.operands = {addr};
+                    act.source_line = vd->loc.line;
+                    act.refresh_name = vd->name;
+                    act.closure_field_offsets = std::move(fn_offs);
+                    cleanup_stack_.push_back(std::move(act));
+                }
+            }
         }
         return;
     }
@@ -7346,6 +7370,20 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             cd.func_name = it->func_name;
             cd.source_line = it->source_line;
             fn_->append(current_block_, std::move(cd));
+            break;
+        }
+        case CleanupAction::Kind::CLOSURE_ENV_FREE: {
+            // Ownership: liberar el env+slot heap de cada campo closure del
+            // struct (move-on-return: el productor suprimio su cleanup via
+            // escaping_locals_, asi que este consumidor es el unico que
+            // libera).  opnds[0] = PTR al struct (refrescado).  Por campo,
+            // reusa emit_free_closure_env_field (null-guard interno).
+            if (!opnds.empty()) {
+                for (uint32_t off : it->closure_field_offsets) {
+                    emit_free_closure_env_field(opnds[0], off,
+                                                it->source_line);
+                }
+            }
             break;
         }
         case CleanupAction::Kind::NATIVE_FREE: {
@@ -15309,15 +15347,31 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         if (uv->desugared_bound_method) _val_is_lambda = true;
     }
     bool _tgt_is_class_field = false;
+    bool _tgt_is_escaping_struct_field = false;
     if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
         if (fa->base &&
             fa->base->result_type.kind == PrimitiveKind::CLASS) {
             _tgt_is_class_field = true;
         }
+        // Ownership escape-sensitive: un lambda almacenado en un campo de un
+        // STRUCT local que ESCAPA (return/store -> escaping_locals_) necesita
+        // env en HEAP (como el caso clase), porque el struct se mueve por valor
+        // fuera del scope productor y el env de stack colgaria.  El consumidor
+        // (init-from-call) lo libera (CLOSURE_ENV_FREE).  Si el struct NO
+        // escapa, el env se queda en stack (cero coste).
+        else if (fa->base &&
+                 fa->base->result_type.kind == PrimitiveKind::STRUCT &&
+                 fa->base->kind == ast::NodeKind::IdentExpr) {
+            auto *bid = static_cast<ast::IdentExpr *>(fa->base.get());
+            if (escaping_locals_.find(bid->name) != escaping_locals_.end())
+                _tgt_is_escaping_struct_field = true;
+        }
     }
-    EscapeFlagGuard _esc_guard(current_lambda_store_escapes_,
-                               _val_is_lambda && _tgt_is_class_field);
+    EscapeFlagGuard _esc_guard(
+        current_lambda_store_escapes_,
+        _val_is_lambda &&
+            (_tgt_is_class_field || _tgt_is_escaping_struct_field));
     // Caso FieldAccessExpr: dos rutas distintas por tipo de receptor.
     if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
