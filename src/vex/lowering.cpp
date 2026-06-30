@@ -3688,6 +3688,38 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         fn_->append(current_block_, std::move(ins));
         if (native_poo_) fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
+        // H5: si el struct tiene campos destructibles (shared/unique/closure/
+        // struct anidado), zero-inicializamos el buffer.  Un struct local en
+        // stack NO se zeroea (a diferencia de un objeto GC), asi que un campo
+        // shared/unique sin asignar contendria basura -> el dtor del struct
+        // leeria un ctrl/slot basura y haria free de basura (UAF).  Con el
+        // buffer a 0, el dtor de un campo no asignado es un no-op (null-guard).
+        // El init-list / copy posterior sobrescribe los campos que toque.
+        if (lay.has_destructible_field) {
+            const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, vd->loc.line);
+            const uint64_t qwords = (lay.size_bytes + 7) / 8;
+            for (uint64_t qi = 0; qi < qwords; ++qi) {
+                const ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(qi * 8), vd->loc.line);
+                const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_at].is_host_ptr = fn_->values[addr].is_host_ptr;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_at;
+                    ad.operands = {addr, v_off};
+                    ad.source_line = vd->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.operands = {v_z, v_at};
+                st.source_line = vd->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+        }
         // Ownership ruta B (copy-hook): `S b = a;` donde S declara `__clone__`
         // y `a` es un lvalue struct existente (IdentExpr) es una COPIA.  Modelo
         // (estilo Rust Clone): memcpy bit a bit a->b (abajo) y DESPUES
@@ -8166,6 +8198,125 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
     current_block_ = skip_bb;
 }
 
+void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
+    // Ownership ruta B (H3/H5 dec-on-drop): decrementa el refcount del bloque de
+    // control de un shared<T> y, si cae a 0, lo libera (RAW_FREE).  El slot
+    // guarda el host_ptr al ctrl; refcount en [ctrl+0].  No-op si ctrl==0
+    // (movido/null).  Lo usan el cleanup SHAREDPTR_REL del scope local y el
+    // destructor del contenedor para un campo shared (H5).
+    if (v_slot == ir::IR_NO_VALUE) return;
+    const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_ctrl].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_ctrl;
+        ld.operands = {v_slot};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
+    const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_NE;
+        cmp.type = ir::IrType::I64;
+        cmp.dst = v_cmp;
+        cmp.operands = {v_ctrl, v_zero};
+        cmp.source_line = line;
+        fn_->append(current_block_, std::move(cmp));
+    }
+    const ir::IrBlockId dec_bb = fn_->new_block("shf_dec");
+    const ir::IrBlockId skip_bb = fn_->new_block("shf_skip");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {v_cmp};
+        br.target_block = dec_bb;
+        br.false_block = skip_bb;
+        br.source_line = line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(dec_bb);
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[dec_bb].preds.push_back(current_block_);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+    }
+    current_block_ = dec_bb;
+    const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_rc;
+        ld.operands = {v_ctrl};
+        ld.source_line = line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
+    const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr sub{};
+        sub.op = ir::IrOp::SUB;
+        sub.type = ir::IrType::I64;
+        sub.dst = v_rc_dec;
+        sub.operands = {v_rc, v_one};
+        sub.source_line = line;
+        fn_->append(current_block_, std::move(sub));
+    }
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.operands = {v_rc_dec, v_ctrl};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    }
+    const ir::IrValueId v_is0 = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::I64;
+        cmp.dst = v_is0;
+        cmp.operands = {v_rc_dec, v_zero};
+        cmp.source_line = line;
+        fn_->append(current_block_, std::move(cmp));
+    }
+    const ir::IrBlockId free_bb = fn_->new_block("shf_free");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {v_is0};
+        br.target_block = free_bb;
+        br.false_block = skip_bb;
+        br.source_line = line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[dec_bb].succs.push_back(free_bb);
+        fn_->blocks[dec_bb].succs.push_back(skip_bb);
+        fn_->blocks[free_bb].preds.push_back(dec_bb);
+        fn_->blocks[skip_bb].preds.push_back(dec_bb);
+    }
+    current_block_ = free_bb;
+    {
+        ir::IrInstr fr{};
+        fr.op = ir::IrOp::RAW_FREE;
+        fr.type = ir::IrType::VOID;
+        fr.operands = {v_ctrl};
+        fr.source_line = line;
+        fn_->append(current_block_, std::move(fr));
+    }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = skip_bb;
+        br.source_line = line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[free_bb].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(free_bb);
+    }
+    current_block_ = skip_bb;
+}
+
 // ---------------------------------------------------------------------
 // synchronized (obj) { body }   (cierre completo con cleanup)
 //
@@ -12581,7 +12732,11 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     if (e->result_type.kind == PrimitiveKind::STRUCT ||
         e->result_type.kind == PrimitiveKind::ARRAY ||
         e->result_type.kind == PrimitiveKind::OPTIONAL ||
-        e->result_type.kind == PrimitiveKind::RESULT) {
+        e->result_type.kind == PrimitiveKind::RESULT ||
+        // H5: un campo shared<T> ES el slot que guarda el ctrl ptr; su valor
+        // como shared es la DIRECCION del campo (use_count/ptr_of cargan el
+        // ctrl desde alli).  Pass-through con la host-ness de lower_field_addr.
+        e->result_type.kind == PrimitiveKind::SHARED_PTR) {
         return addr;
     }
 
@@ -15840,6 +15995,33 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     fa->result_type.struct_name + "__" + "__clone__",
                     e->loc.line);
             }
+            return rhs;
+        }
+        // Campo shared<T> (H5) en contenedor struct: igual que en clase --
+        // dec del shared anterior del campo (free-when-0), LOAD ctrl desde el
+        // slot origen (rhs), STORE ctrl al campo, inc del refcount.
+        if (fa->result_type.kind == PrimitiveKind::SHARED_PTR) {
+            emit_shared_refcount_dec(addr, e->loc.line);
+            const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_ctrl].is_host_ptr = true;
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::I64;
+                ld.dst = v_ctrl;
+                ld.operands = {rhs};
+                ld.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            {
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.operands = {v_ctrl, addr};
+                st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            emit_shared_refcount_inc(addr, e->loc.line);
             return rhs;
         }
         // Campo normal: STORE directo.
@@ -23158,6 +23340,17 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                         emit_free_unique_field(this_vid, f.offset, m->loc.line);
                         continue;
                     }
+                    // Campo shared<T> (H5): decrementar el refcount del bloque de
+                    // control; si cae a 0, liberarlo (free-when-0).  El campo
+                    // guarda el host_ptr al ctrl; el dec lee [this+offset].  No-op
+                    // si el campo es 0 (nunca asignado / movido).
+                    if (f.type.kind == PrimitiveKind::SHARED_PTR) {
+                        const ir::IrValueId saddr =
+                            emit_field_addr(fn_, current_block_, this_vid,
+                                            f.offset, m->loc.line);
+                        emit_shared_refcount_dec(saddr, m->loc.line);
+                        continue;
+                    }
                     // Campo STRUCT inline destructible (Fase 2b clase-contenedor):
                     // el valor del campo ES su direccion (this + offset), no un
                     // puntero.  Despachamos su dtor con CALL directo
@@ -23507,6 +23700,32 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                     if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
                         emit_free_unique_field(this_dtor, f.offset,
                                                m->loc.line);
+                        continue;
+                    }
+                    // Campo shared<T> (H5): decrementar el refcount (free-when-0).
+                    // El campo vive en la memoria del CONTENEDOR (VM para un
+                    // struct en VM-stack); su direccion hereda la host-ness de
+                    // @c this_dtor -- NO emit_field_addr, que la forzaria a host
+                    // y leeria basura (mismo patron que emit_free_unique_field).
+                    if (f.type.kind == PrimitiveKind::SHARED_PTR) {
+                        const bool container_host =
+                            fn_->values[this_dtor].is_host_ptr;
+                        ir::IrValueId saddr = this_dtor;
+                        if (f.offset != 0) {
+                            const ir::IrValueId off = emit_const(
+                                ir::IrType::I64, static_cast<int64_t>(f.offset),
+                                m->loc.line);
+                            saddr = fn_->new_value(ir::IrType::PTR);
+                            fn_->values[saddr].is_host_ptr = container_host;
+                            ir::IrInstr ad{};
+                            ad.op = ir::IrOp::ADD;
+                            ad.type = ir::IrType::I64;
+                            ad.dst = saddr;
+                            ad.operands = {this_dtor, off};
+                            ad.source_line = m->loc.line;
+                            fn_->append(current_block_, std::move(ad));
+                        }
+                        emit_shared_refcount_dec(saddr, m->loc.line);
                         continue;
                     }
                     if (f.type.kind != PrimitiveKind::STRUCT) continue;
@@ -25822,6 +26041,13 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     if (ftyp.kind == PrimitiveKind::STRUCT) {
         return addr;
     }
+    // Campo shared<T> (H5): el campo ES el slot que guarda el host_ptr al ctrl.
+    // Su "valor" como shared es la DIRECCION del campo (igual que un struct
+    // inline): use_count/ptr_of cargan el ctrl desde [field_addr].  NO hacer
+    // LOAD aqui (eso devolveria el ctrl ptr y ptr_of lo trataria como slot).
+    if (ftyp.kind == PrimitiveKind::SHARED_PTR) {
+        return addr;
+    }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
     const ir::IrValueId dst = fn_->new_value(ir_t);
     ir::IrInstr ld{};
@@ -26156,6 +26382,42 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 addr, ftyp.struct_name, ftyp.struct_name + "__" + "__clone__",
                 loc.line);
         }
+        return rhs;
+    }
+    // Campo shared<T> (H5): el campo guarda el host_ptr al bloque de control
+    // (NO el slot stack del origen, que colgaria).  El store es una COPIA:
+    //   1. dec del shared ANTERIOR del campo (free-when-0; no-op si era 0).
+    //   2. LOAD ctrl desde [rhs] (rhs = slot del shared origen).
+    //   3. STORE ctrl al campo.
+    //   4. inc del refcount (el campo es un dueno mas).
+    // El origen conserva su propia referencia (no se mueve; scan_escaping_locals
+    // lo excluye).  El dtor del contenedor decrementa el campo (dec-on-dtor).
+    if (ftyp.kind == PrimitiveKind::SHARED_PTR) {
+        // 1. dec del valor anterior del campo (reasignacion sin fuga).
+        emit_shared_refcount_dec(addr, loc.line);
+        // 2. LOAD ctrl desde el slot del origen.
+        const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_ctrl].is_host_ptr = true;
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_ctrl;
+            ld.operands = {rhs};
+            ld.source_line = loc.line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        // 3. STORE ctrl al campo.
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {v_ctrl, addr};
+            st.source_line = loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        // 4. inc del refcount (el campo es un dueno mas).
+        emit_shared_refcount_inc(addr, loc.line);
         return rhs;
     }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
@@ -33004,6 +33266,10 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
     auto value_has_copy_hook = [&](ast::Expr *e) -> bool {
         if (!e || e->kind != ast::NodeKind::IdentExpr) return false;
         const Type &t = e->result_type;
+        // H5: un shared<T> guardado en un campo es una COPIA (inc-on-store); el
+        // origen conserva su propia referencia y su dtor decrementa.  No es un
+        // move -> no lo marcamos escaping (mismo trato que un copy-hook).
+        if (t.kind == PrimitiveKind::SHARED_PTR) return true;
         if (t.kind != PrimitiveKind::STRUCT) return false;
         auto it = tc_.struct_layouts().find(t.struct_name);
         return it != tc_.struct_layouts().end() && it->second.has_copy_hook;

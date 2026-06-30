@@ -3039,6 +3039,13 @@ void TypeChecker::collect_globals() {
                     changed = true;
                     break;
                 }
+                // Campo shared<T> (H5): refcount no-GC -> struct destructible
+                // (su dtor decrementa el bloque de control).
+                if (f.type.kind == PrimitiveKind::SHARED_PTR) {
+                    sl.has_destructible_field = true;
+                    changed = true;
+                    break;
+                }
                 if (f.type.kind != PrimitiveKind::STRUCT) continue;
                 if (struct_destructible(f.type.struct_name)) {
                     sl.has_destructible_field = true;
@@ -3123,6 +3130,13 @@ void TypeChecker::collect_globals() {
                 // Un campo unique<T> es siempre heap-owned: el dtor del
                 // contenedor lo libera (deleter por defecto o custom).
                 if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
+                    cl.has_destructible_field = true;
+                    changed = true;
+                    break;
+                }
+                // Un campo shared<T> (H5): el dtor del contenedor decrementa
+                // el refcount del bloque de control (free-when-0).
+                if (f.type.kind == PrimitiveKind::SHARED_PTR) {
                     cl.has_destructible_field = true;
                     changed = true;
                     break;
@@ -8219,26 +8233,10 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                                      ") incompatible con tipo del campo (" +
                                      type_to_string(ft) + ")");
         }
-        // Ownership: almacenar un shared<T> en un CAMPO todavia no esta
-        // soportado.  El store NO incrementa el refcount y el destructor del
-        // contenedor NO lo decrementa, asi que al dropear el shared origen el
-        // bloque de control se liberaria mientras el campo aun lo referencia
-        // (use-after-free).  Hasta implementar inc-on-store + dec-on-dtor +
-        // slot heap (como unique<T>), lo rechazamos para no dejar la fuga/UAF
-        // silenciosa.  Usa unique<T> (ownership unico) si encaja, o gestiona el
-        // refcount manualmente.
-        if (ft.kind == PrimitiveKind::SHARED_PTR && fa->base &&
-            (fa->base->result_type.kind == PrimitiveKind::CLASS ||
-             fa->base->result_type.kind == PrimitiveKind::STRUCT)) {
-            diags_.error(
-                e->loc,
-                "almacenar un shared<T> en un campo de objeto/struct todavia no "
-                "esta soportado: el refcount no se ajustaria y el bloque podria "
-                "liberarse mientras el campo lo referencia (use-after-free).  "
-                "Usa unique<T> si el ownership es unico, o gestiona el refcount "
-                "de forma explicita.");
-            return ft;
-        }
+        // Ownership (H5): almacenar un shared<T> en un CAMPO incrementa el
+        // refcount (inc-on-store en el lowering) y el destructor del contenedor
+        // lo decrementa (dec-on-dtor, free-when-0).  Cada campo es un dueno mas
+        // del bloque de control; el origen conserva su propia referencia.
         // Safety net (item 1): un closure CAPTURADOR asignado a un campo de un
         // STRUCT local deja el env en el STACK del scope actual.  Tainteamos el
         // struct para rechazar luego su escape (return/store).  Para CLASES el

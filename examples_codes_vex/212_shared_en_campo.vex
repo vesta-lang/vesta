@@ -1,0 +1,25 @@
+// shared<T> almacenado en un campo de contenedor (refcount no-GC).
+//
+// Guardar un shared<T> en un campo (`obj.s = a`) es una COPIA: incrementa el
+// conteo de referencias (cada campo es un dueno mas del bloque de control).  El
+// origen `a` conserva su propia referencia.  El destructor del contenedor
+// decrementa el campo; el bloque se libera (free) cuando el conteo cae a cero,
+// de forma determinista y sin GC -- igual en interp/JIT y en AOT standalone.
+// Ver doc/VMdoc/Vex/SmartPointers.md.
+
+class Caja {
+    shared<i64> s;             // campo shared (dtor sintetizado lo decrementa)
+}
+
+i64 trabajo() {
+    shared<i64> a = shared_box(40);   // refcount = 1
+    Caja c = new Caja();
+    c.s = a;                           // inc -> refcount = 2 (a y c.s)
+    i64 uc = use_count(a);             // 2
+    i64 val = *ptr_of(c.s);            // lee el campo como shared -> 40
+    return val + uc;                   // 40 + 2 = 42
+}                                      // ~Caja (dec c.s -> 1) ; ~a (dec -> 0 -> free)
+
+i32 main() {
+    return (i32) trabajo();
+}
