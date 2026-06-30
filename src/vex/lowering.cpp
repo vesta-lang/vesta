@@ -32841,6 +32841,28 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
             if (vd->init && vd->init->kind == ast::NodeKind::IdentExpr) {
                 auto *id_v = static_cast<ast::IdentExpr *>(vd->init.get());
                 alias_graph[vd->name].push_back(id_v->name);
+                // Ruta B (move-only): `S b = a` de un struct GESTIONADO (con
+                // dtor o campo destructible) SIN copy-hook es un MOVE (estilo
+                // Rust): `b` toma el ownership y el dtor de `a` se SUPRIME.  Sin
+                // esto la copia bit a bit dejaria a `a` y `b` con el mismo
+                // recurso -> doble free.  Para tipos con copy-hook NO es move
+                // (la copia es real, ambos gestionan via __clone__).
+                const Type &st_t = id_v->result_type;
+                if (st_t.kind == PrimitiveKind::STRUCT) {
+                    auto it = tc_.struct_layouts().find(st_t.struct_name);
+                    if (it != tc_.struct_layouts().end()) {
+                        const StructLayout &sl = it->second;
+                        bool managed = sl.has_destructible_field;
+                        if (!managed)
+                            for (const auto &mm : sl.methods)
+                                if (mm.is_destructor) {
+                                    managed = true;
+                                    break;
+                                }
+                        if (managed && !sl.has_copy_hook)
+                            escaping_locals_.insert(id_v->name);
+                    }
+                }
             }
             if (vd->init) visit_expr(vd->init.get());
             return;

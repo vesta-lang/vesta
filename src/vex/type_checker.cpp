@@ -3625,6 +3625,7 @@ void TypeChecker::check_functions() {
         // Safety net (item 1): el taint de structs-con-closure-en-stack es
         // por-funcion (los locals no cruzan fronteras de funcion).
         struct_stack_closure_taint_.clear();
+        moved_locals_.clear();
         // F2: registrar parametros como owners con OwnerKind::Param.
         // Si el parametro ES un borrow (su tipo es BORROW/BORROW_MUT),
         // ademas lo registramos como borrower self-referencial: el
@@ -4081,6 +4082,7 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
     const Type saved_ret = current_fn_return_type_;
     current_fn_return_type_ = fn_ret;
     struct_stack_closure_taint_.clear();
+    moved_locals_.clear();
     check_block(m->body.get(), fn_ret);
     current_fn_return_type_ = saved_ret;
     pop_scope();
@@ -4131,6 +4133,7 @@ void TypeChecker::check_struct_method(const StructLayout &lay,
     const Type saved_ret = current_fn_return_type_;
     current_fn_return_type_ = fn_ret;
     struct_stack_closure_taint_.clear();
+    moved_locals_.clear();
     check_block(m->body.get(), fn_ret);
     current_fn_return_type_ = saved_ret;
     pop_scope();
@@ -5210,6 +5213,30 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
                     borrow_checker_.mark_as_reborrow(
                         vd->name, vd->init->borrow_reborrow_source_name);
                 }
+            }
+        }
+    }
+
+    // Ruta B (H2 move-only): `S b = a` donde `a` es un local y `S` es un
+    // struct GESTIONADO (con `~Struct()` o un campo destructible) SIN
+    // copy-hook `__clone__` es un MOVE: la fuente `a` queda invalidada (su
+    // dtor de scope-exit se suprime en el lowering para evitar doble-free).
+    // Marcamos `a` como movido para que un uso posterior sea un error claro.
+    if (vd->init && vd->init->kind == ast::NodeKind::IdentExpr &&
+        s.type.kind == PrimitiveKind::STRUCT) {
+        auto it_sl = struct_layouts_.find(s.type.struct_name);
+        if (it_sl != struct_layouts_.end()) {
+            const StructLayout &sl = it_sl->second;
+            bool managed = sl.has_destructible_field;
+            if (!managed) {
+                for (const auto &mm : sl.methods)
+                    if (mm.is_destructor) { managed = true; break; }
+            }
+            if (managed && !sl.has_copy_hook) {
+                auto *src = static_cast<ast::IdentExpr *>(vd->init.get());
+                // Solo locales (no campos/params globales): el move solo
+                // aplica a un binding que poseemos en este scope.
+                moved_locals_.insert(src->name);
             }
         }
     }
@@ -6488,6 +6515,20 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
 }
 
 Type TypeChecker::check_ident(ast::IdentExpr *e) {
+    // Ruta B (H2 move-only): usar un local tras un move (`S b = a; use(a)`)
+    // es un error.  La fuente quedo invalidada por el move (su contenido se
+    // transfirio a `b`); leerla seria un use-after-move.  Reasignar el local
+    // lo rehabilita (se limpia en check_assign).
+    if (!moved_locals_.empty() && moved_locals_.count(e->name)) {
+        diags_.error(e->loc,
+                     "uso de '" + e->name +
+                         "' tras moverlo: el valor se transfirio a otro "
+                         "binding (move); el tipo es gestionado sin copy-hook "
+                         "'__clone__', por lo que la copia es un move. Define "
+                         "'__clone__' si quieres copiar, o reasigna '" +
+                         e->name + "' antes de usarlo.");
+    }
+
     /* A.39: si el ident resuelve a un comptime const (local o
      * global), anotamos el valor en el AST.  El lowering lee la
      * marca y emite CONST directo sin volver a consultar la tabla
@@ -7876,6 +7917,13 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
         diags_.error(e->loc, "el lado izquierdo de '=' es nulo");
         (void)check_expr(e->value.get());
         return Type{};
+    }
+
+    // Ruta B (H2 move-only): reasignar un local lo rehabilita tras un move.
+    // `S b = a; a = make(); use(a)` es valido -- `a` vuelve a poseer un valor.
+    if (e->target->kind == ast::NodeKind::IdentExpr && !moved_locals_.empty()) {
+        moved_locals_.erase(
+            static_cast<ast::IdentExpr *>(e->target.get())->name);
     }
 
     // validacion de escape ilegal para clases con destructor.

@@ -1593,6 +1593,15 @@ class TypeChecker {
     // Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
     std::unordered_set<std::string> struct_stack_closure_taint_;
 
+    // Ruta B (H2 move-only): locales que han sido MOVIDOS -- `S b = a` de un
+    // struct gestionado (con `~Struct()` o campo destructible) SIN copy-hook es
+    // un move (estilo Rust): `a` queda invalidado.  Usar `a` despues es un
+    // error (use-after-move).  Se inserta en @c check_var_decl tras procesar el
+    // init; se chequea en @c check_ident; se limpia al reasignar el local
+    // (`a = ...`) y al entrar en cada funcion.  Conservador para no dar falsos
+    // positivos: solo el caso lineal claro.  Ver proj_ownership_hooks.
+    std::unordered_set<std::string> moved_locals_;
+
     // Bug fix 2026-05-23 (audit optres infer): tipo Result<V,E> esperado
     // en el contexto actual (caller del check_expr).  Se setea en
     // check_return / check_var_decl antes de check_expr cuando el destino
