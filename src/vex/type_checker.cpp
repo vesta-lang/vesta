@@ -294,9 +294,17 @@ static std::string mangle_type(const Type &t) {
     case PrimitiveKind::F64: return "f64";
     case PrimitiveKind::BOOL: return "bool";
     case PrimitiveKind::CHAR: return "ch";
-    case PrimitiveKind::PTR: return "ptr";
+    case PrimitiveKind::PTR: {
+        // Incluir el pointee + la naturaleza (virtual vs host) para no colisionar
+        // (`Caja<i64*>` vs `Caja<u8*>` vs `Caja<VirtualPtr<i64>>`).
+        const std::string base = t.is_virtual ? "vptr" : "ptr";
+        return t.pointee ? (base + mangle_type(*t.pointee)) : base;
+    }
+    case PrimitiveKind::ARRAY:
+        return t.pointee ? ("arr" + mangle_type(*t.pointee)) : "arr";
     case PrimitiveKind::CLASS:
     case PrimitiveKind::STRUCT: return t.struct_name;
+    case PrimitiveKind::STRING: return "str";
     default: return "x";
     }
 }
@@ -307,6 +315,52 @@ static std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
                                              const GenSubst &g = {});
 static std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s,
                                              const GenSubst &g = {});
+
+// Reconstruye un TypeNode AST a partir de un Type ya resuelto.  Lo usa la
+// sustitucion de type-params cuando el arg NO es un escalar simple: un puntero
+// (`i64*`) o un array (`i64[4]`) deben preservar su pointee/element y tamano,
+// no colapsar a un PrimitiveTypeNode{PTR/ARRAY} que pierde esa info (#2).
+static std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
+                                                          const SourceLoc &loc) {
+    switch (a.kind) {
+    case PrimitiveKind::PTR: {
+        auto p = std::make_unique<ast::PointerTypeNode>();
+        p->loc = loc;
+        // Preservar VirtualPtr<T> (is_virtual=true) vs T* (host).  Sin esto un
+        // type-arg `VirtualPtr<i64>` colapsaba a `i64*` host -> el deref de un
+        // `&local` (VM) por el campo fallaba.
+        p->is_virtual = a.is_virtual;
+        p->pointee = a.pointee ? type_node_from_type(*a.pointee, loc) : nullptr;
+        return p;
+    }
+    case PrimitiveKind::ARRAY: {
+        auto arr = std::make_unique<ast::ArrayTypeNode>();
+        arr->loc = loc;
+        arr->element_type =
+            a.pointee ? type_node_from_type(*a.pointee, loc) : nullptr;
+        if (a.array_size > 0) {
+            auto sz = std::make_unique<ast::IntLitExpr>();
+            sz->loc = loc;
+            sz->value = static_cast<int64_t>(a.array_size);
+            arr->size_expr = std::move(sz);
+        }
+        return arr;
+    }
+    case PrimitiveKind::CLASS:
+    case PrimitiveKind::STRUCT: {
+        auto n = std::make_unique<ast::NamedTypeNode>();
+        n->loc = loc;
+        n->name = a.struct_name;
+        return n;
+    }
+    default: {
+        auto p = std::make_unique<ast::PrimitiveTypeNode>();
+        p->loc = loc;
+        p->prim = a.kind;
+        return p;
+    }
+    }
+}
 
 static std::unique_ptr<ast::TypeNode>
 clone_type_with_subst(const ast::TypeNode *t, const GenSubst &g) {
@@ -332,22 +386,10 @@ clone_type_with_subst(const ast::TypeNode *t, const GenSubst &g) {
         if (g.params && g.args) {
             for (size_t i = 0; i < g.params->size(); ++i) {
                 if ((*g.params)[i] == src->name) {
-                    const Type &a = (*g.args)[i];
-                    // Si el arg es primitivo, generamos un
-                    // PrimitiveTypeNode.  Si es CLASS/STRUCT,
-                    // generamos un NamedTypeNode con el nombre
-                    // de la clase concreta.
-                    if (a.kind != PrimitiveKind::CLASS &&
-                        a.kind != PrimitiveKind::STRUCT) {
-                        auto p = std::make_unique<ast::PrimitiveTypeNode>();
-                        p->loc = src->loc;
-                        p->prim = a.kind;
-                        return p;
-                    }
-                    auto n = std::make_unique<ast::NamedTypeNode>();
-                    n->loc = src->loc;
-                    n->name = a.struct_name;
-                    return n;
+                    // Reconstruir el TypeNode COMPLETO del arg (preserva
+                    // puntero/array/pointee; antes un `i64*` colapsaba a un
+                    // PrimitiveTypeNode{PTR} sin pointee -> deref fallaba, #2).
+                    return type_node_from_type((*g.args)[i], src->loc);
                 }
             }
         }
@@ -1516,6 +1558,44 @@ bool TypeChecker::run() {
             auto *sd = static_cast<ast::StructDecl *>(d);
             if (!sd->type_params.empty()) {
                 generic_struct_templates_[sd->name] = i;
+            }
+        }
+    }
+    // Pre-registro de NOMBRES de tipos de usuario (struct/clase/enum concretos)
+    // como layouts vacios ANTES de la monomorphizacion.  Sin esto, un type-arg
+    // de usuario (`Caja<Punto>`) se resuelve a void durante pre_mono porque su
+    // layout aun no existe -> mangling roto (`Caja_x`) + campo invalido.  Con el
+    // nombre registrado, resolve_type_node devuelve Type{STRUCT/CLASS, "Punto"}
+    // correcto.  collect_globals construye el layout real luego (sobreescribe).
+    for (size_t i = 0; i < mod_.decls.size(); ++i) {
+        auto *d = mod_.decls[i].get();
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::StructDecl) {
+            auto *sd = static_cast<ast::StructDecl *>(d);
+            if (!sd->type_params.empty()) continue; // template
+            if (!struct_layouts_.count(sd->name)) {
+                StructLayout empty;
+                empty.name = sd->name;
+                empty.is_introspect = sd->is_introspect;
+                struct_layouts_.emplace(sd->name, std::move(empty));
+            }
+        } else if (d->kind == ast::NodeKind::ClassDecl) {
+            auto *cd = static_cast<ast::ClassDecl *>(d);
+            if (!cd->type_params.empty()) continue; // template
+            if (!class_layouts_.count(cd->name)) {
+                ClassLayout empty;
+                empty.name = cd->name;
+                empty.is_interface = cd->is_interface;
+                class_layouts_.emplace(cd->name, std::move(empty));
+            }
+        } else if (d->kind == ast::NodeKind::EnumDecl) {
+            auto *en = static_cast<ast::EnumDecl *>(d);
+            if (!en->type_params.empty()) continue; // template
+            if (!enum_layouts_.count(en->name)) {
+                EnumLayout empty;
+                empty.name = en->name;
+                empty.is_introspect = en->is_introspect;
+                enum_layouts_.emplace(en->name, std::move(empty));
             }
         }
     }
@@ -8384,6 +8464,21 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                                      type_to_string(tv) +
                                      ") incompatible con tipo del campo (" +
                                      type_to_string(ft) + ")");
+        }
+        // Mismatch host/VM: guardar un puntero VIRTUAL (VM, de `&local` o
+        // VirtualPtr<T>) en un campo `T*` (host) falla silenciosamente -- el
+        // campo se lee con `movh` (host) pero contiene una direccion VM.  Lo
+        // rechazamos en compile-time dirigiendo al tipo correcto.  (Un puntero
+        // host -- malloc, etc. -- en un campo `T*` SI es valido.)
+        if (ft.kind == PrimitiveKind::PTR && !ft.is_virtual &&
+            tv.kind == PrimitiveKind::PTR && tv.is_virtual) {
+            diags_.error(
+                e->loc,
+                "no se puede guardar un puntero virtual (VM, de '&local' o "
+                "VirtualPtr<T>) en un campo de tipo '" + type_to_string(ft) +
+                "' (puntero host): el campo se leeria como host y la direccion "
+                "es VM.  Declara el campo como 'VirtualPtr<...>' para guardar "
+                "direcciones de memoria VM.");
         }
         // Ownership (H5): almacenar un shared<T> en un CAMPO incrementa el
         // refcount (inc-on-store en el lowering) y el destructor del contenedor

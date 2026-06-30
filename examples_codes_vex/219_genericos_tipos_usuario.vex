@@ -1,0 +1,42 @@
+// Genericos instanciados con tipos de USUARIO (struct/clase) y punteros.
+//
+// Un struct o clase generico puede instanciarse no solo con primitivos sino con
+// cualquier tipo de usuario (`Caja<Punto>`, `Caja<Obj>`) y con punteros, tanto
+// host (`T*`, p.ej. de malloc) como VM (`VirtualPtr<T>`, p.ej. de `&local`).
+// Cada combinacion produce su propia monomorphizacion concreta.  Ver tambien
+// 218_structs_genericos.vex.
+
+struct Punto { i64 x; i64 y; }
+class Obj { public i64 v; }
+
+struct Caja<T> { T contenido; }
+
+i32 main() {
+    // 1. Generico con un STRUCT de usuario como argumento.
+    Caja<Punto> cp;
+    cp.contenido.x = 10;
+    cp.contenido.y = 5;
+
+    // 2. Generico con una CLASE de usuario como argumento.
+    Caja<Obj> co;
+    co.contenido = new Obj();
+    co.contenido.v = 20;
+
+    // 3. Generico con un puntero HOST (`T*`) como argumento.
+    i64* hp = (i64*) malloc(8);
+    *hp = 4;
+    Caja<i64*> ch;
+    ch.contenido = hp;
+
+    // 4. Generico con un puntero VM (`VirtualPtr<T>`) como argumento.
+    i64 local = 3;
+    Caja<VirtualPtr<i64>> cv;
+    cv.contenido = &local;
+
+    i64 total = cp.contenido.x + cp.contenido.y   // 15
+              + co.contenido.v                     // 20
+              + (*ch.contenido)                    // 4
+              + (*cv.contenido);                   // 3
+    free(ch.contenido);
+    return (i32) total;                            // 15 + 20 + 4 + 3 = 42
+}
