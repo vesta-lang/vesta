@@ -1444,11 +1444,13 @@ struct FunctionDecl : Node {
     /// desde contextos comptime (init de comptime const, condicion
     /// de comptime if, args de comptime for, otros comptime fn).
     bool is_comptime = false;
-    /// parametros de tipo para comptime fns genericos.
-    /// Sintaxis: `comptime <T, U> R name(params) { ... }`.  Permite
-    /// type-level metaprogramming -- el body puede usar T como un
-    /// tipo (sizeof<T>, kind<T>, etc.) y el call site provee T:
-    /// `my_fn<Vec3>(...)`.  Solo aplica a comptime fns.
+    /// parametros de tipo genericos.  Dos sintaxis:
+    ///   - comptime: `comptime <T, U> R name(params) { ... }` (type-level
+    ///     metaprogramming; el body usa T como tipo, sizeof<T>/kind<T>/...).
+    ///   - runtime:  `R name<T>(params) { ... }` (funcion generica monomorphizada
+    ///     en cada llamada `name<i64>(...)` o con args inferidos; equivalente a
+    ///     un template de C++).
+    /// En ambos casos se rellena este vector; @c is_comptime distingue el modo.
     std::vector<std::string> type_params;
     /// marca `@Macro` -- comptime fn cuyo string de retorno
     /// se INYECTA como codigo Vex en el call site (parse + lower).

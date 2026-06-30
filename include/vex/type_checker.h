@@ -555,6 +555,16 @@ class TypeChecker {
                                     const std::vector<Type> &args,
                                     const SourceLoc &loc);
 
+    /**
+     * @brief Monomorphizacion de funcion generica.  Clona la FunctionDecl
+     * template sustituyendo los type_params, la anyade a @c mod_.decls (para que
+     * collect_globals registre su firma y el lowering la baje) y devuelve el
+     * nombre mangled (e.g. "id_i64").  Idempotente.
+     */
+    std::string monomorphize_function(const std::string &template_name,
+                                      const std::vector<Type> &args,
+                                      const SourceLoc &loc);
+
     /// L2.3: el nombre es un enum template generico?
     bool is_generic_enum_template(const std::string &name) const noexcept {
         return generic_enum_templates_.count(name) > 0;
@@ -563,6 +573,11 @@ class TypeChecker {
     /// El nombre es un struct template generico?
     bool is_generic_struct_template(const std::string &name) const noexcept {
         return generic_struct_templates_.count(name) > 0;
+    }
+
+    /// El nombre es una funcion generica (template)?
+    bool is_generic_fn_template(const std::string &name) const noexcept {
+        return generic_fn_templates_.count(name) > 0;
     }
 
     /// L2.3: stack de contexto.  Cuando check_var_decl o check_assign
@@ -1387,6 +1402,10 @@ class TypeChecker {
     /// monomorphiza on demand via monomorphize_struct() (mismo modelo que
     /// las clases y los enums).
     std::unordered_map<std::string, size_t> generic_struct_templates_;
+    /// Templates de FUNCIONES genericas (`T id<T>(T x)`).  Mapea template_name
+    /// -> indice en mod_.decls.  Cada llamada `id<i64>(...)` (o con args
+    /// inferidos) se monomorphiza via monomorphize_function().
+    std::unordered_map<std::string, size_t> generic_fn_templates_;
     /// L2.3: stack para inferir el mangled de variantes sin payload
     /// (e.g. `Maybe<i32> a = Maybe.None`).  Pair = (template_name,
     /// mangled_name).

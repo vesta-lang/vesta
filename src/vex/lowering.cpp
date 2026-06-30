@@ -2473,6 +2473,9 @@ static void annotate_macro_param_idents(
 void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Bug fix 2026-05-23: forward declarations no tienen body -- skip.
     if (fd->is_forward_decl || !fd->body) return;
+    // Templates genericos (con type_params) se omiten: sus monomorphizaciones
+    // concretas (que SI aparecen en mod_.decls) se bajan normalmente.
+    if (!fd->type_params.empty()) return;
     /* A.39: comptime fn (no-macro) NO se baja a IR.  Su body solo
      * se evalua en compile-time cuando es invocada desde un contexto
      * comptime.

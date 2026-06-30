@@ -1,0 +1,38 @@
+// Funciones libres genericas: `R nombre<T>(...)`.
+//
+// Una funcion puede declarar parametros de tipo tras su nombre y monomorphizarse
+// en cada llamada, igual que un template de funcion en C++.  Los argumentos de
+// tipo pueden darse explicitos (`id<i64>(x)`) o INFERIRSE de los argumentos
+// (`id(x)`).  Cada instanciacion genera una funcion concreta especializada; cero
+// overhead en runtime.  Permite escribir algoritmos genericos una sola vez.
+
+// Identidad generica: devuelve su argumento sin importar el tipo.
+T identidad<T>(T x) {
+    return x;
+}
+
+// Dos parametros de tipo: devuelve el primero.
+K primero<K, V>(K a, V b) {
+    return a;
+}
+
+// Generica que opera sobre T (suma) -- T debe soportar '+'.
+T doble<T>(T x) {
+    return x + x;
+}
+
+// Generica que llama a otra generica.
+T cuadruple<T>(T x) {
+    return doble<T>(x) + doble<T>(x);
+}
+
+i32 main() {
+    i64 a = identidad<i64>(10);      // explicito
+    i32 b = identidad(5);            // inferido de '5' -> i32... (literal i64->trunc)
+    i64 c = primero<i64, i32>(20, 99);
+    i64 d = doble<i64>(2);           // 4
+    i64 e = cuadruple<i64>(0);       // 0
+
+    // 10 + 5 + 20 + 4 + 0 ... ajustado a 42:
+    return (i32)(a + (i64)b + c + d + e + 3);   // 10+5+20+4+0+3 = 42
+}

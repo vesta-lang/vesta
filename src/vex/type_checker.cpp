@@ -1132,6 +1132,69 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     return mangled;
 }
 
+// Monomorphizacion de funcion generica.  Clona la FunctionDecl template
+// sustituyendo los type_params en return_type, params y body; la anyade a
+// mod_.decls para que collect_globals registre su firma y el lowering la baje.
+std::string TypeChecker::monomorphize_function(const std::string &template_name,
+                                               const std::vector<Type> &args,
+                                               const SourceLoc &loc) {
+    const std::string mangled = template_name + "_" + mangle_args(args);
+    if (monomorphized_.count(mangled)) return mangled;
+
+    auto it = generic_fn_templates_.find(template_name);
+    if (it == generic_fn_templates_.end()) {
+        diags_.error(loc,
+                     "funcion generica desconocida: '" + template_name + "'");
+        return std::string();
+    }
+    auto *tmpl =
+        static_cast<const ast::FunctionDecl *>(mod_.decls[it->second].get());
+    if (tmpl->type_params.size() != args.size()) {
+        diags_.error(loc, "numero incorrecto de args de tipo para funcion '" +
+                              template_name + "': esperados " +
+                              std::to_string(tmpl->type_params.size()) +
+                              ", recibidos " + std::to_string(args.size()));
+        return std::string();
+    }
+
+    GenSubst g{&tmpl->type_params, &args};
+
+    auto cloned = std::make_unique<ast::FunctionDecl>();
+    cloned->loc = tmpl->loc;
+    cloned->name = mangled;
+    cloned->is_public = tmpl->is_public;
+    cloned->is_noexcept = tmpl->is_noexcept;
+    cloned->is_pure = tmpl->is_pure;
+    // type_params vacio: ya es concreta.
+    if (tmpl->return_type)
+        cloned->return_type = clone_type_with_subst(tmpl->return_type.get(), g);
+    for (const auto &p : tmpl->params) {
+        auto np = std::make_unique<ast::ParamDecl>();
+        np->loc = p->loc;
+        np->name = p->name;
+        np->is_expr_capture = p->is_expr_capture;
+        np->type = clone_type_with_subst(p->type.get(), g);
+        cloned->params.push_back(std::move(np));
+    }
+    if (tmpl->body) {
+        auto cb = clone_stmt(tmpl->body.get(), g);
+        if (cb && cb->kind == ast::NodeKind::BlockStmt) {
+            cloned->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
+        }
+    }
+
+    monomorphized_[mangled] = true;
+
+    MonomorphInfo info;
+    info.template_name = template_name;
+    info.type_args.reserve(args.size());
+    for (const auto &t : args) info.type_args.push_back(type_to_string(t));
+    monomorph_info_[mangled] = std::move(info);
+
+    mod_.decls.push_back(std::move(cloned));
+    return mangled;
+}
+
 bool TypeChecker::class_is_assignable(const Type &target,
                                       const Type &value) const noexcept {
     // Optional/Result: dos Optional<X> son asignables si X y Y
@@ -1324,6 +1387,21 @@ static void pre_mono_collect_in_expr(TypeChecker &tc, const ast::Expr *e) {
         // el tipo a void.
         for (auto &ta : c->type_args)
             pre_mono_collect_in_type(tc, ta.get(), c->loc);
+        // Llamada a FUNCION generica con args de tipo explicitos
+        // (`id<i64>(42)`): monomorphizar la funcion aqui (en pre_mono, antes de
+        // collect_globals, para que su firma se registre).  La inferencia desde
+        // los argumentos sin `<...>` se resuelve en check_call.
+        if (!c->type_args.empty() && c->callee &&
+            c->callee->kind == ast::NodeKind::IdentExpr) {
+            auto *cid = static_cast<const ast::IdentExpr *>(c->callee.get());
+            if (tc.is_generic_fn_template(cid->name)) {
+                std::vector<Type> targs;
+                targs.reserve(c->type_args.size());
+                for (auto &ta : c->type_args)
+                    targs.push_back(tc.resolve_type_node(ta.get()));
+                (void)tc.monomorphize_function(cid->name, targs, c->loc);
+            }
+        }
         for (auto &a : c->args)
             pre_mono_collect_in_expr(tc, a.get());
         return;
@@ -1559,6 +1637,14 @@ bool TypeChecker::run() {
             if (!sd->type_params.empty()) {
                 generic_struct_templates_[sd->name] = i;
             }
+        } else if (d && d->kind == ast::NodeKind::FunctionDecl) {
+            // funciones genericas RUNTIME como templates.  Las comptime fns
+            // genericas (`comptime <T> ...`) y los @Macro tienen su propio
+            // manejo (evaluacion comptime), no se monomorphizan a runtime.
+            auto *fd = static_cast<ast::FunctionDecl *>(d);
+            if (!fd->type_params.empty() && !fd->is_comptime && !fd->is_macro) {
+                generic_fn_templates_[fd->name] = i;
+            }
         }
     }
     // Pre-registro de NOMBRES de tipos de usuario (struct/clase/enum concretos)
@@ -1622,6 +1708,7 @@ bool TypeChecker::run() {
             }
         } else if (d->kind == ast::NodeKind::FunctionDecl) {
             auto *fn = static_cast<ast::FunctionDecl *>(d);
+            if (!fn->type_params.empty()) continue; // template generico
             if (fn->return_type)
                 pre_mono_collect_in_type(*this, fn->return_type.get(), fn->loc);
             for (const auto &p : fn->params)
@@ -1685,6 +1772,15 @@ bool TypeChecker::run() {
                         pre_mono_collect_in_type(*this, p->type.get(), p->loc);
                     if (m->body) pre_mono_collect_in_stmt(*this, m->body.get());
                 }
+            } else if (d->kind == ast::NodeKind::FunctionDecl) {
+                auto *fn = static_cast<ast::FunctionDecl *>(d);
+                if (!fn->type_params.empty()) continue; // template
+                if (fn->return_type)
+                    pre_mono_collect_in_type(*this, fn->return_type.get(),
+                                             fn->loc);
+                for (const auto &p : fn->params)
+                    pre_mono_collect_in_type(*this, p->type.get(), p->loc);
+                if (fn->body) pre_mono_collect_in_stmt(*this, fn->body.get());
             }
         }
         if (mod_.decls.size() == before) break;
@@ -3796,6 +3892,12 @@ void TypeChecker::check_functions() {
         }
         auto *fn = static_cast<ast::FunctionDecl *>(decl.get());
         if (!fn->body) continue;
+        // Templates genericos RUNTIME: NO se type-checkea el body del template
+        // (su `T` no esta resuelto -> resolveria a void).  Solo se chequean sus
+        // monomorphizaciones concretas (que aparecen como FunctionDecls sin
+        // type_params en mod_.decls).  Las comptime genericas siguen su path.
+        if (!fn->type_params.empty() && !fn->is_comptime && !fn->is_macro)
+            continue;
         /* comptime fn -- el body solo se interpreta al
          * call site via comptime_eval_stmt.  No type-check estatico
          * aqui (los IdentExpr no necesitan annotation; el eval los
@@ -8754,6 +8856,92 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         for (auto &a : e->args)
             (void)check_expr(a.get());
         return Type{};
+    }
+
+    // Funcion generica (`id<i64>(42)` o `id(42)` con inferencia): reescribir el
+    // nombre del callee al de la instancia monomorphizada (`id_i64`) para que el
+    // resto de check_call y el lowering la resuelvan como una funcion normal.
+    // La monomorphizacion ya ocurrio en pre_mono (caso explicito); aqui solo
+    // reescribimos el nombre.  La inferencia desde los argumentos se resuelve
+    // tambien aqui (los args ya tienen result_type).
+    if (e->callee->kind == ast::NodeKind::IdentExpr) {
+        auto *cid = static_cast<ast::IdentExpr *>(e->callee.get());
+        if (is_generic_fn_template(cid->name)) {
+            auto it_t = generic_fn_templates_.find(cid->name);
+            auto *tmpl = static_cast<const ast::FunctionDecl *>(
+                mod_.decls[it_t->second].get());
+            std::vector<Type> targs;
+            if (!e->type_args.empty()) {
+                // Explicitos.
+                for (auto &ta : e->type_args)
+                    targs.push_back(resolve_type_node(ta.get()));
+            } else {
+                // Inferencia: por cada type_param, buscar el primer parametro
+                // cuyo tipo declarado sea exactamente ese nombre (`T x`) y tomar
+                // el tipo del argumento correspondiente.
+                for (const auto &tp : tmpl->type_params) {
+                    Type deduced{PrimitiveKind::COUNT};
+                    for (size_t pi = 0;
+                         pi < tmpl->params.size() && pi < e->args.size(); ++pi) {
+                        auto *pt = tmpl->params[pi]->type.get();
+                        if (pt && pt->kind == ast::NodeKind::NamedTypeNode &&
+                            static_cast<ast::NamedTypeNode *>(pt)->name == tp) {
+                            deduced = check_expr(e->args[pi].get());
+                            break;
+                        }
+                    }
+                    targs.push_back(deduced);
+                }
+            }
+            bool ok = targs.size() == tmpl->type_params.size();
+            for (const auto &t : targs)
+                if (t.kind == PrimitiveKind::COUNT) ok = false;
+            if (ok) {
+                const std::string mangled =
+                    monomorphize_function(cid->name, targs, e->loc);
+                if (!mangled.empty()) {
+                    // Si la monomorphizacion ocurrio AQUI (caso inferencia, tras
+                    // collect_globals) su firma aun no esta registrada; la
+                    // construimos on-demand para que la resolucion de la llamada
+                    // (y el lowering) la encuentren.  En el caso explicito,
+                    // pre_mono ya la monomorphizo y collect_globals la registro.
+                    if (sig_by_name_.find(mangled) == sig_by_name_.end()) {
+                        for (auto &d2 : mod_.decls) {
+                            if (!d2 ||
+                                d2->kind != ast::NodeKind::FunctionDecl)
+                                continue;
+                            auto *mfn =
+                                static_cast<ast::FunctionDecl *>(d2.get());
+                            if (mfn->name != mangled) continue;
+                            FunctionSig sig;
+                            sig.return_type =
+                                mfn->return_type
+                                    ? type_from_node(mfn->return_type.get())
+                                    : Type{PrimitiveKind::VOID};
+                            for (auto &p : mfn->params)
+                                sig.param_types.push_back(
+                                    type_from_node(p->type.get()));
+                            Symbol s;
+                            s.kind = SymbolKind::Function;
+                            s.sig_index = (uint32_t)function_sigs_.size();
+                            sig_by_name_[mangled] = s.sig_index;
+                            function_sigs_.push_back(std::move(sig));
+                            (void)declare(mangled, s);
+                            break;
+                        }
+                    }
+                    cid->name = mangled;
+                    e->type_args.clear(); // ya consumidos
+                }
+            } else {
+                diags_.error(
+                    e->loc,
+                    "no se pudieron inferir los argumentos de tipo de la "
+                    "funcion generica '" + cid->name +
+                        "'; especificalos explicitamente: " + cid->name +
+                        "<...>(...)");
+            }
+        }
     }
 
     // Function pointers: llamada INDIRECTA a traves de un valor de tipo

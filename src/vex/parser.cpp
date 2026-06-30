@@ -1442,9 +1442,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     }
     std::string name = consume().lexeme;
 
-    if (current_.kind == TokenKind::LPAREN) {
-        // Es una funcion.  Las funciones no admiten 'const' delante;
-        // si lo hubo, reportar warning pero seguir.
+    if (current_.kind == TokenKind::LPAREN || current_.kind == TokenKind::LT) {
+        // Es una funcion (`T name(...)` o generica `T name<T>(...)`).  Las
+        // funciones no admiten 'const' delante; si lo hubo, warning pero sigue.
         if (is_const) {
             diags_.warning(loc, "'const' ignorado en declaracion de funcion");
         }
@@ -1553,6 +1553,18 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
     fn->loc = loc;
     fn->return_type = std::move(ret_type);
     fn->name = std::move(name);
+
+    // Parametros de tipo opcionales (funcion generica `T id<T>(T x)`).  Mismo
+    // patron que struct/clase/enum: `<T1, T2>` tras el nombre, antes de '('.
+    if (current_.kind == TokenKind::LT) {
+        (void)consume(); // '<'
+        while (current_.kind == TokenKind::IDENTIFIER) {
+            fn->type_params.push_back(consume().lexeme);
+            if (!match(TokenKind::COMMA)) break;
+        }
+        (void)expect_close_angle(
+            "se esperaba '>' al cerrar parametros de tipo");
+    }
 
     (void)expect(TokenKind::LPAREN,
                  "se esperaba '(' tras el nombre de la funcion");
