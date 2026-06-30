@@ -663,6 +663,23 @@ class TypeChecker {
      */
     void verify_pending_type_bounds();
 
+    /**
+     * @brief Elige la especializacion de struct mas especifica para @p args (#7).
+     *
+     * Busca en @c struct_specializations_[base] la especializacion (total o
+     * parcial) cuyo patron matchee @p args; entre varias, la MAS ESPECIFICA
+     * (exacta > patron).  Si encuentra una, devuelve su @c StructDecl y
+     * rellena @p out_params / @p out_args con los bindings de sus params
+     * frescos (vacios para una especializacion total).  Si no hay match,
+     * devuelve nullptr (el llamante usa el template primario).  Implementado
+     * en src/vex/specialization.cpp.
+     */
+    const ast::StructDecl *
+    select_struct_specialization(const std::string &base,
+                                 const std::vector<Type> &args,
+                                 std::vector<std::string> &out_params,
+                                 std::vector<Type> &out_args);
+
     /// L2.3: stack de contexto.  Cuando check_var_decl o check_assign
     /// procesa `Maybe<i32> a = Maybe.Some(42)`, push ("Maybe","Maybe_i32")
     /// para que `Maybe.Some(42)` o `Maybe.None` resuelvan al mangled
@@ -1485,6 +1502,11 @@ class TypeChecker {
     /// monomorphiza on demand via monomorphize_struct() (mismo modelo que
     /// las clases y los enums).
     std::unordered_map<std::string, size_t> generic_struct_templates_;
+    /// #7: especializaciones de struct (`struct Caja<i64>` total /
+    /// `struct Caja<T*>` parcial).  Mapea nombre base -> indices en
+    /// mod_.decls de las especializaciones.  Al instanciar `Caja<X>` se
+    /// elige la mas especifica que matchee (ver select_struct_specialization).
+    std::unordered_map<std::string, std::vector<size_t>> struct_specializations_;
     /// Templates de FUNCIONES genericas (`T id<T>(T x)`).  Mapea template_name
     /// -> indice en mod_.decls.  Cada llamada `id<i64>(...)` (o con args
     /// inferidos) se monomorphiza via monomorphize_function().

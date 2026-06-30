@@ -23553,10 +23553,10 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
     // struct vive en VM-stack (ALLOCA) y se accede con `mov`
     // (memoria VM).  El dispatch en el call site es CALL directo.
     //
-    // Templates genericos (con type_params) se omiten: sus
-    // monomorphizaciones concretas (que SI aparecen en mod_.decls) se
-    // procesan normalmente.
-    if (!sd->type_params.empty()) return;
+    // Templates genericos (con type_params) y especializaciones (#7) se
+    // omiten: sus monomorphizaciones concretas (que SI aparecen en
+    // mod_.decls) se procesan normalmente.
+    if (!sd->type_params.empty() || sd->is_specialization) return;
     for (auto &m_uptr : sd->methods) {
         auto *m = m_uptr.get();
         if (!m || !m->body) continue;

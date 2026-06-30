@@ -64,6 +64,8 @@ add_library(vex_lib STATIC
     generic_methods.cpp
     # Conceptos / constraints de genericos `<T: Concepto>` / where (#6).
     concepts.cpp
+    # Especializacion total + parcial de structs genericos (#7).
+    specialization.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
     # Fase 4 interop C: generador de header C publico (vex --emit-header).

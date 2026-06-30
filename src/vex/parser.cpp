@@ -3102,8 +3102,16 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
     // el struct se trata como plantilla y se monomorphiza en cada uso
     // `Box<i32>` en el type checker.
     if (current_.kind == TokenKind::LT) {
-        // #6: cada param puede llevar un bound inline `<T: Concepto>`.
-        parse_type_params_with_bounds(s->type_params, s->type_bounds);
+        // #7: la PRIMERA `struct Caja<...>` es el template primario; las
+        // siguientes con el mismo nombre son ESPECIALIZACIONES (total/parcial).
+        if (generic_struct_names_seen_.count(s->name)) {
+            s->is_specialization = true;
+            parse_specialization_pattern(s->spec_pattern, s->type_params);
+        } else {
+            // #6: cada param puede llevar un bound inline `<T: Concepto>`.
+            parse_type_params_with_bounds(s->type_params, s->type_bounds);
+            generic_struct_names_seen_.insert(s->name);
+        }
     }
     // #6: clausula `where T: A + B` opcional tras los params.
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
@@ -3902,6 +3910,60 @@ void Parser::parse_type_params_with_bounds(
         if (!match(TokenKind::COMMA)) break;
     }
     (void)expect_close_angle("se esperaba '>' al cerrar parametros de tipo");
+}
+
+// Recoge los identificadores que son params FRESCOS de un patron de
+// especializacion: los que aparecen DENTRO de un puntero/array (`T*`, `T[]`).
+// Un NamedTypeNode al nivel TOP (no anidado) es un tipo CONCRETO (total spec),
+// no un param fresco.  Los primitivos nunca son frescos.
+static void collect_fresh_spec_params(const ast::TypeNode *t,
+                                      bool inside_compound,
+                                      std::vector<std::string> &out) {
+    if (!t) return;
+    switch (t->kind) {
+    case ast::NodeKind::NamedTypeNode: {
+        auto *n = static_cast<const ast::NamedTypeNode *>(t);
+        if (inside_compound) {
+            // Param fresco (e.g. T en `T*`).  Evitar duplicados.
+            for (const auto &e : out)
+                if (e == n->name) return;
+            out.push_back(n->name);
+        }
+        // Recorrer type-args anidados (`Inner<T>`): tambien compuesto.
+        for (const auto &ta : n->type_args)
+            collect_fresh_spec_params(ta.get(), true, out);
+        return;
+    }
+    case ast::NodeKind::PointerTypeNode: {
+        auto *p = static_cast<const ast::PointerTypeNode *>(t);
+        collect_fresh_spec_params(p->pointee.get(), true, out);
+        return;
+    }
+    case ast::NodeKind::ArrayTypeNode: {
+        auto *a = static_cast<const ast::ArrayTypeNode *>(t);
+        collect_fresh_spec_params(a->element_type.get(), true, out);
+        return;
+    }
+    default:
+        return; // primitivos, fn, etc.: sin params frescos
+    }
+}
+
+void Parser::parse_specialization_pattern(
+    std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
+    std::vector<std::string> &fresh_params) {
+    (void)consume(); // '<'
+    while (current_.kind != TokenKind::GT && current_.kind != TokenKind::SHR &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        auto tn = parse_type_node();
+        if (!tn) break;
+        collect_fresh_spec_params(tn.get(), /*inside_compound=*/false,
+                                  fresh_params);
+        pattern.push_back(std::move(tn));
+        if (!match(TokenKind::COMMA)) break;
+    }
+    (void)expect_close_angle(
+        "se esperaba '>' al cerrar el patron de especializacion");
 }
 
 void Parser::parse_where_clause(std::vector<ast::TypeBound> &bounds) {

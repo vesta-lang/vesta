@@ -499,17 +499,26 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     // #6: verificar constraints del struct generico sobre los type-args.
     check_type_bounds(tmpl->type_bounds, tmpl->type_params, args, loc);
 
-    GenSubst g{&tmpl->type_params, &args};
+    // #7: elegir la especializacion mas especifica que matchee los args
+    // (total/parcial).  Si la hay, se clona ESA definicion con los bindings
+    // de sus params frescos; si no, el template primario con T -> args.
+    std::vector<std::string> spec_params;
+    std::vector<Type> spec_args;
+    const ast::StructDecl *spec =
+        select_struct_specialization(template_name, args, spec_params, spec_args);
+    const ast::StructDecl *src = spec ? spec : tmpl;
+    GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
+                      : GenSubst{&tmpl->type_params, &args};
 
     auto cloned = std::make_unique<ast::StructDecl>();
-    cloned->loc = tmpl->loc;
+    cloned->loc = src->loc;
     cloned->name = mangled;
-    cloned->is_public = tmpl->is_public;
-    cloned->is_introspect = tmpl->is_introspect;
+    cloned->is_public = src->is_public;
+    cloned->is_introspect = src->is_introspect;
     // type_params vacio: ya es concreto.
 
     // Clonar campos sustituyendo el tipo (T -> arg concreto).
-    for (const auto &f : tmpl->fields) {
+    for (const auto &f : src->fields) {
         ast::StructFieldDecl nf;
         nf.loc = f.loc;
         nf.name = f.name;
@@ -519,7 +528,7 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     }
     // Clonar metodos (dtor `__dtor`, copy-hook `__clone__`, y metodos normales;
     // los structs no tienen constructores nombrados como el tipo).
-    for (const auto &m : tmpl->methods) {
+    for (const auto &m : src->methods) {
         auto nm = std::make_unique<ast::ClassMethodDecl>();
         nm->loc = m->loc;
         nm->name = m->name;
@@ -569,7 +578,7 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     if (!struct_layouts_.count(mangled)) {
         StructLayout empty;
         empty.name = mangled;
-        empty.is_introspect = tmpl->is_introspect;
+        empty.is_introspect = src->is_introspect;
         struct_layouts_[mangled] = std::move(empty);
     }
 
@@ -1083,7 +1092,10 @@ bool TypeChecker::run() {
         } else if (d && d->kind == ast::NodeKind::StructDecl) {
             // structs genericos como templates.
             auto *sd = static_cast<ast::StructDecl *>(d);
-            if (!sd->type_params.empty()) {
+            if (sd->is_specialization) {
+                // #7: especializacion (total/parcial) de un struct generico.
+                struct_specializations_[sd->name].push_back(i);
+            } else if (!sd->type_params.empty()) {
                 generic_struct_templates_[sd->name] = i;
             }
         } else if (d && d->kind == ast::NodeKind::FunctionDecl) {
@@ -1112,7 +1124,9 @@ bool TypeChecker::run() {
         if (!d) continue;
         if (d->kind == ast::NodeKind::StructDecl) {
             auto *sd = static_cast<ast::StructDecl *>(d);
-            if (!sd->type_params.empty()) continue; // template
+            // Templates (type_params) y especializaciones (#7) NO son
+            // structs concretos: se clonan on-demand en monomorphize_struct.
+            if (!sd->type_params.empty() || sd->is_specialization) continue;
             if (!struct_layouts_.count(sd->name)) {
                 StructLayout empty;
                 empty.name = sd->name;
@@ -1177,7 +1191,9 @@ bool TypeChecker::run() {
             // Un struct (no template) puede usar genericos en sus campos o
             // cuerpos de metodo (`Caja<i64>`); dispararlos aqui.
             auto *sd = static_cast<ast::StructDecl *>(d);
-            if (!sd->type_params.empty()) continue; // template
+            // Templates (type_params) y especializaciones (#7) NO son
+            // structs concretos: se clonan on-demand en monomorphize_struct.
+            if (!sd->type_params.empty() || sd->is_specialization) continue;
             for (const auto &f : sd->fields) {
                 pre_mono_collect_in_type(*this, f.type.get(), f.loc);
             }
@@ -2055,8 +2071,9 @@ void TypeChecker::collect_globals() {
         if (!decl) continue;
         if (decl->kind == ast::NodeKind::StructDecl) {
             auto *s = static_cast<ast::StructDecl *>(decl.get());
-            // Templates con type_params no son structs concretos.
-            if (!s->type_params.empty()) continue;
+            // Templates con type_params y especializaciones (#7) no son
+            // structs concretos.
+            if (!s->type_params.empty() || s->is_specialization) continue;
             if (!struct_layouts_.count(s->name)) {
                 StructLayout empty;
                 empty.name = s->name;
@@ -2167,8 +2184,9 @@ void TypeChecker::collect_globals() {
             auto *s = static_cast<ast::StructDecl *>(decl.get());
             // Templates con type_params no se procesan como concretos; cada
             // instanciado `Box<i32>` se monomorphiza y produce su propio
-            // StructDecl concreto (sin type_params) que SI llega aqui.
-            if (!s->type_params.empty()) continue;
+            // StructDecl concreto (sin type_params) que SI llega aqui.  Las
+            // especializaciones (#7) tampoco se procesan como concretos.
+            if (!s->type_params.empty() || s->is_specialization) continue;
             // Pre-pasada (mas arriba) ya creo una entrada vacia.  Si
             // size_bytes > 0 (ya completada) -> redeclaracion real.
             auto it_pre = struct_layouts_.find(s->name);

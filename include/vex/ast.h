@@ -1864,6 +1864,15 @@ struct StructDecl : Node {
     /// #6: constraints de los type-params (`struct S<T: Concepto>` o
     /// `where T: A + B`).  Verificados al monomorphizar; cero runtime.
     std::vector<TypeBound> type_bounds;
+    /// #7: especializacion (total o parcial).  Si @c is_specialization es
+    /// true, esta declaracion NO es el template primario sino una
+    /// especializacion de @c name: @c spec_pattern son los type-args del
+    /// patron (`<i64>` total, `<T*>` parcial) y @c type_params son los
+    /// FRESH params del patron (e.g. ["T"] en `Caja<T*>`; vacio en total).
+    /// Al instanciar `Caja<X>` se elige la especializacion mas especifica
+    /// que matchee (exacto > patron > primario).  Compile-time puro.
+    bool is_specialization = false;
+    std::vector<std::unique_ptr<TypeNode>> spec_pattern;
     StructDecl() : Node(NodeKind::StructDecl) {}
 };
 

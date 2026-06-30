@@ -277,6 +277,22 @@ class Parser {
     /// anyade los bounds a @p bounds (acumula con los inline si los hubo).
     void parse_where_clause(std::vector<ast::TypeBound> &bounds);
 
+    /// @brief Parsea el patron `<i64>` / `<T*>` de una especializacion (#7).
+    ///
+    /// Precondicion: @c current_ es '<'.  Rellena @p pattern con los
+    /// type-nodes del patron y @p fresh_params con los identificadores que
+    /// aparecen DENTRO de un patron compuesto (`T*`, `T[]`) -> son los params
+    /// frescos de una especializacion PARCIAL.  Un identificador desnudo
+    /// (`Punto`) o un primitivo (`i64`) es CONCRETO (especializacion TOTAL).
+    void
+    parse_specialization_pattern(std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
+                                 std::vector<std::string> &fresh_params);
+
+    /// #7: nombres de struct genericos ya vistos como template PRIMARIO.
+    /// La PRIMERA `struct Caja<...>` es el primario; las siguientes con el
+    /// mismo nombre son especializaciones (total/parcial).
+    std::unordered_set<std::string> generic_struct_names_seen_;
+
     /// @brief Parsea una declaracion de concepto (#6).  Tres formas:
     ///   - `concept N<T> = <bool-expr>;`        (predicado)
     ///   - `concept N<T> { <comptime stmts> }`  (bloque estilo comptime)
