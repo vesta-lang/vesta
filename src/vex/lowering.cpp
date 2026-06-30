@@ -22929,14 +22929,14 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                         const ir::IrValueId saddr =
                             emit_field_addr(fn_, current_block_, this_vid,
                                             f.offset, m->loc.line);
-                        ir::IrInstr scd{};
-                        scd.op = ir::IrOp::CALL;
-                        scd.type = ir::IrType::VOID;
-                        scd.dst = ir::IR_NO_VALUE;
-                        scd.operands = {saddr};
-                        scd.func_name = f.type.struct_name + "__" + "__dtor";
-                        scd.source_line = m->loc.line;
-                        fn_->append(current_block_, std::move(scd));
+                        // El campo struct vive en el payload HOST de la clase;
+                        // su dtor (compilado con this=VM en interp/JIT) leeria
+                        // this.campo con `mov` sobre una direccion host -> basura
+                        // -> free de basura (fuga).  El helper copia el campo a
+                        // un temp VM y llama el dtor sobre el temp.
+                        emit_struct_method_on_host_field(
+                            saddr, f.type.struct_name,
+                            f.type.struct_name + "__" + "__dtor", m->loc.line);
                         continue;
                     }
                     if (f.type.kind != PrimitiveKind::CLASS) continue;
@@ -23532,6 +23532,98 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
         fn_->append(current_block_, std::move(ld));
     }
     emit_free_unique_slot(slot, line);
+}
+
+void Lowering::emit_struct_method_on_host_field(
+    ir::IrValueId field_addr, const std::string &struct_name,
+    const std::string &method_label, uint32_t line) {
+    // AOT (native_poo_): el struct es host y el metodo host-this -> CALL directo.
+    if (native_poo_) {
+        ir::IrInstr cd{};
+        cd.op = ir::IrOp::CALL;
+        cd.type = ir::IrType::VOID;
+        cd.dst = ir::IR_NO_VALUE;
+        cd.operands = {field_addr};
+        cd.func_name = method_label;
+        cd.source_line = line;
+        fn_->append(current_block_, std::move(cd));
+        return;
+    }
+    // interp/JIT: copiar el campo (host) a un temporal VM-stack y llamar el
+    // metodo sobre el temporal (this VM == lo que el metodo asume).
+    uint64_t sz = 8;
+    auto it_sl = tc_.struct_layouts().find(struct_name);
+    if (it_sl != tc_.struct_layouts().end())
+        sz = static_cast<uint64_t>(it_sl->second.size_bytes);
+    if (sz == 0) sz = 8;
+    // ALLOCA temp VM (is_host_ptr = false).
+    const ir::IrValueId tmp = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.imm = sz;
+        al.dst = tmp;
+        al.source_line = line;
+        fn_->append(current_block_, std::move(al));
+    }
+    // memcpy field_addr (host) -> tmp (VM): qword por qword.
+    const uint64_t qwords = (sz + 7) / 8;
+    for (uint64_t qi = 0; qi < qwords; ++qi) {
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(qi * 8), line);
+        const ir::IrValueId src_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[src_at].is_host_ptr = true; // campo en payload host
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = src_at;
+            ad.operands = {field_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        const ir::IrValueId word = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = word;
+            ld.operands = {src_at};
+            ld.source_line = line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        const ir::IrValueId dst_at = fn_->new_value(ir::IrType::PTR);
+        // tmp es VM (is_host_ptr = false por defecto).
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = dst_at;
+            ad.operands = {tmp, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {word, dst_at};
+            st.source_line = line;
+            fn_->append(current_block_, std::move(st));
+        }
+    }
+    // CALL method_label(tmp).
+    {
+        ir::IrInstr cd{};
+        cd.op = ir::IrOp::CALL;
+        cd.type = ir::IrType::VOID;
+        cd.dst = ir::IR_NO_VALUE;
+        cd.operands = {tmp};
+        cd.func_name = method_label;
+        cd.source_line = line;
+        fn_->append(current_block_, std::move(cd));
+    }
 }
 
 void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {

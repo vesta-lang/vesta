@@ -675,6 +675,24 @@ class Lowering {
     /// @param line  Linea fuente.
     void emit_free_unique_field(ir::IrValueId this_vid, uint32_t field_offset,
                                 uint32_t line);
+    /// Invoca un metodo de struct (`<Struct>__<m>`) sobre un struct que vive en
+    /// un campo HOST (p.ej. campo struct de una clase, cuyo payload es host).
+    /// Los metodos de struct se compilan asumiendo `this` en memoria VM
+    /// (interp/JIT); llamarlos con un `this` host hace que lean `this.campo` con
+    /// `mov` (VM) sobre una direccion host -> basura.  En interp/JIT copiamos el
+    /// campo a un temporal en VM-stack y llamamos el metodo sobre el temporal
+    /// (lee `temp.campo` con VM correcto; los punteros internos son host y se
+    /// deref-ean bien).  Valido para metodos que operan sobre los POINTEES
+    /// (dtor: free del ptr; copy-hook: ++refcount via el ptr) sin necesidad de
+    /// copy-back.  En AOT (native_poo_) el struct ya es host y el metodo
+    /// host-this: CALL directo sobre @c field_addr.
+    /// @param field_addr  host_ptr a la direccion del campo struct.
+    /// @param struct_name  nombre del struct (para el tamano y el label).
+    /// @param method_label  label del metodo (`<Struct>__<m>`).
+    void emit_struct_method_on_host_field(ir::IrValueId field_addr,
+                                          const std::string &struct_name,
+                                          const std::string &method_label,
+                                          uint32_t line);
     /// Libera un slot Tier 1 (16B [ptr][deleter]) heap dado su VALOR (no via un
     /// campo): null-guard, dispatch del deleter (slot+8) + RAW_FREE(slot).  Lo
     /// usa @c emit_free_unique_field tras cargar el slot, y el reassign-free de
