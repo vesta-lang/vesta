@@ -1,0 +1,17 @@
+// Test NEGATIVO de constraints (#6): el compilador DEBE rechazar instanciar
+// un generico con un tipo que no satisface el concepto exigido.
+//
+// `sumar<T: Numeric>` exige que T sea numerico.  `Punto` es un struct, no un
+// numero, asi que `sumar<Punto>(...)` debe producir un error de constraint
+// claro citando el tipo, el concepto y el parametro.  Cero codigo emitido.
+
+struct Punto { i64 x; i64 y; }
+
+T sumar<T: Numeric>(T a, T b) { return a + b; }
+
+i32 main() {
+    Punto p = {.x = 1, .y = 2};
+    Punto q = {.x = 3, .y = 4};
+    Punto r = sumar<Punto>(p, q);   // ERROR: Punto no es Numeric
+    return 0;
+}

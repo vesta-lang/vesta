@@ -632,6 +632,37 @@ class TypeChecker {
         return generic_fn_templates_.count(name) > 0;
     }
 
+    /// #6: registro de conceptos de usuario (consultado por concepts.cpp).
+    const std::unordered_map<std::string, const ast::ConceptDecl *> &
+    concepts() const noexcept {
+        return concepts_;
+    }
+
+    /**
+     * @brief Verifica los constraints (#6) de un generico al monomorphizar.
+     *
+     * Para cada @c TypeBound, localiza el type-arg concreto correspondiente
+     * (via @p params -> @p args) y evalua cada concepto exigido sobre el.
+     * Si alguno no se satisface, emite un error claro citando el tipo, el
+     * type-param y el concepto.  Cero codigo emitido: las constraints
+     * desaparecen tras el check.  Implementado en src/vex/concepts.cpp.
+     */
+    void check_type_bounds(const std::vector<ast::TypeBound> &bounds,
+                           const std::vector<std::string> &params,
+                           const std::vector<Type> &args, const SourceLoc &loc);
+
+    /**
+     * @brief Evalua los bounds encolados por @c check_type_bounds (#6).
+     *
+     * @c check_type_bounds NO evalua en el acto: encola (concepto, tipo
+     * concreto, param, loc).  La evaluacion se DIFIERE hasta que los layouts
+     * de clases/structs existen (los conceptos estructurales y has_method/
+     * sizeof de tipos de usuario los necesitan).  Se invoca tras
+     * @c collect_globals y al final de @c check_functions.  Implementado en
+     * src/vex/concepts.cpp.
+     */
+    void verify_pending_type_bounds();
+
     /// L2.3: stack de contexto.  Cuando check_var_decl o check_assign
     /// procesa `Maybe<i32> a = Maybe.Some(42)`, push ("Maybe","Maybe_i32")
     /// para que `Maybe.Some(42)` o `Maybe.None` resuelvan al mangled
@@ -1462,6 +1493,21 @@ class TypeChecker {
     /// Idempotencia de monomorphize_method: clave = "Container#metodo_i32"
     /// (separador '#' interno; el lenguaje no usa sintaxis '::').
     std::unordered_set<std::string> monomorphized_methods_;
+
+    /// #6: registro de conceptos de usuario (`concept Name<T> = ...`).
+    /// Clave = nombre; valor = puntero al ConceptDecl (vive en mod_.decls).
+    /// Poblado al registrar templates.  Consultado por la evaluacion de
+    /// bounds y por la composicion de conceptos en predicados comptime.
+    std::unordered_map<std::string, const ast::ConceptDecl *> concepts_;
+    /// #6: bounds encolados por check_type_bounds, pendientes de evaluar
+    /// cuando los layouts existan (ver verify_pending_type_bounds).
+    struct PendingBoundCheck {
+        std::string concept_name; ///< concepto exigido
+        Type arg;                 ///< type-arg concreto
+        std::string type_param;   ///< nombre del param (para el mensaje)
+        SourceLoc loc;
+    };
+    std::vector<PendingBoundCheck> pending_bound_checks_;
     /// Cola de metodos genericos monomorphizados pendientes de anyadir al
     /// AST del contenedor + chequear su body (drenada por
     /// drain_pending_method_monos tras check_functions).

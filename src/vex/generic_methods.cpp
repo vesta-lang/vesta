@@ -88,6 +88,10 @@ std::string TypeChecker::monomorphize_method(
     if (monomorphized_methods_.count(key)) return mangled; // ya generado
     monomorphized_methods_.insert(key);
 
+    // #6: verificar las constraints del metodo (`R m<U: Concepto>()`) sobre
+    // los type-args concretos (una vez por instancia; cero codigo emitido).
+    check_type_bounds(tmpl->type_bounds, tmpl->method_type_params, targs, loc);
+
     GenSubst g{&tmpl->method_type_params, &targs};
 
     // Clon del ClassMethodDecl con U sustituido por el tipo concreto.

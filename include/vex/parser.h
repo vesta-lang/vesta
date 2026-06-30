@@ -263,6 +263,27 @@ class Parser {
     /// NO genericos, el llamante no invoca este helper (no hay `<`).
     void parse_method_type_params(std::vector<std::string> &out);
 
+    /// @brief Parsea `<T, U: C, V: A + B>`: type-params con constraints (#6).
+    ///
+    /// Precondicion: @c current_ es @c LT.  Rellena @p params con los
+    /// nombres y @p bounds con los constraints inline (`T: C`).  Equivale a
+    /// @c parse_method_type_params pero ademas captura los bounds `: ...`.
+    void parse_type_params_with_bounds(std::vector<std::string> &params,
+                                       std::vector<ast::TypeBound> &bounds);
+
+    /// @brief Parsea una clausula `where T: A + B, U: C` (#6).
+    ///
+    /// Precondicion: @c current_ es el identificador contextual @c where.
+    /// anyade los bounds a @p bounds (acumula con los inline si los hubo).
+    void parse_where_clause(std::vector<ast::TypeBound> &bounds);
+
+    /// @brief Parsea una declaracion de concepto (#6).  Tres formas:
+    ///   - `concept N<T> = <bool-expr>;`        (predicado)
+    ///   - `concept N<T> { <comptime stmts> }`  (bloque estilo comptime)
+    ///   - `concept N { <metodo-sigs> }`        (estructural -> has_method)
+    /// Precondicion: @c current_ es el identificador contextual @c concept.
+    std::unique_ptr<ast::ConceptDecl> parse_concept_decl();
+
     /// @brief Registra @p names como type-aliases temporales para que
     /// `(T)x` se reconozca como cast dentro de un body generico (los
     /// type-params del struct/clase contenedor y del metodo no son

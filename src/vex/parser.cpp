@@ -65,6 +65,9 @@ static bool is_comptime_builtin_name(const std::string &name) {
         "offsetof", "has_field", "has_method", "field_count", "method_count",
         "field_name", "field_type", "is_subtype", "is_same", "is_class",
         "is_struct", "is_primitive", "is_newtype", "is_opaque", "underlying_of",
+        /* #6: predicados de tipo, base de los conceptos built-in */
+        "is_integer", "is_signed", "is_unsigned", "is_float", "is_numeric",
+        "is_bool", "is_char", "is_pointer", "is_string",
         /* iteracion + acceso directo */
         "field_get", "field_set", "for_each_field", "for_each_method",
         /* Type-as-first-class-value + builtins composables */
@@ -401,6 +404,9 @@ void Parser::apply_pending_visibility(ast::Node *n) noexcept {
     case ast::NodeKind::BytesDecl:
         static_cast<ast::BytesDecl *>(n)->is_public = is_public;
         break;
+    case ast::NodeKind::ConceptDecl:
+        static_cast<ast::ConceptDecl *>(n)->is_public = is_public;
+        break;
     default: break;
     }
     // Limpiar para no propagar a nested decls.
@@ -714,6 +720,15 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         uint8_t &flag;
         ~VisGuard() { flag = 0; }
     } guard{pending_visibility_};
+    // concept Name<T> = pred; | { ... }  (#6, keyword contextual).  Se exige
+    // que tras `concept` venga un identificador (el nombre) para no chocar con
+    // un hipotetico uso de `concept` como identificador normal.
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "concept" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_concept_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
     // typedef <tipo> <nombre> ;
     if (current_.kind == TokenKind::KW_TYPEDEF) {
         // typedef struct/enum C-style.
@@ -1556,14 +1571,9 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
 
     // Parametros de tipo opcionales (funcion generica `T id<T>(T x)`).  Mismo
     // patron que struct/clase/enum: `<T1, T2>` tras el nombre, antes de '('.
+    // #6: cada param puede llevar un bound inline `<T: Concepto>`.
     if (current_.kind == TokenKind::LT) {
-        (void)consume(); // '<'
-        while (current_.kind == TokenKind::IDENTIFIER) {
-            fn->type_params.push_back(consume().lexeme);
-            if (!match(TokenKind::COMMA)) break;
-        }
-        (void)expect_close_angle(
-            "se esperaba '>' al cerrar parametros de tipo");
+        parse_type_params_with_bounds(fn->type_params, fn->type_bounds);
     }
 
     (void)expect(TokenKind::LPAREN,
@@ -1594,6 +1604,11 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
     }
     (void)expect(TokenKind::RPAREN,
                  "se esperaba ')' al cerrar la lista de parametros");
+
+    // #6: clausula `where T: A + B` opcional tras los params (estilo Rust).
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
+        parse_where_clause(fn->type_bounds);
+    }
 
     // Cuerpo: bloque obligatorio para funciones Vex; las funciones
     // sin cuerpo (FFI extern) se modelan via @c ExternFnDecl aparte.
@@ -2911,13 +2926,12 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
     // simple; el enum se trata como plantilla y se monomorphiza en cada
     // uso `Maybe<i32>` en el type checker.
     if (current_.kind == TokenKind::LT) {
-        (void)consume(); // '<'
-        while (current_.kind == TokenKind::IDENTIFIER) {
-            e->type_params.push_back(consume().lexeme);
-            if (!match(TokenKind::COMMA)) break;
-        }
-        (void)expect_close_angle(
-            "se esperaba '>' al cerrar parametros de tipo");
+        // #6: cada param puede llevar un bound inline `<T: Concepto>`.
+        parse_type_params_with_bounds(e->type_params, e->type_bounds);
+    }
+    // #6: clausula `where T: A + B` opcional tras los params.
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
+        parse_where_clause(e->type_bounds);
     }
 
     (void)expect(TokenKind::LBRACE,
@@ -3088,13 +3102,12 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
     // el struct se trata como plantilla y se monomorphiza en cada uso
     // `Box<i32>` en el type checker.
     if (current_.kind == TokenKind::LT) {
-        (void)consume(); // '<'
-        while (current_.kind == TokenKind::IDENTIFIER) {
-            s->type_params.push_back(consume().lexeme);
-            if (!match(TokenKind::COMMA)) break;
-        }
-        (void)expect_close_angle(
-            "se esperaba '>' al cerrar parametros de tipo");
+        // #6: cada param puede llevar un bound inline `<T: Concepto>`.
+        parse_type_params_with_bounds(s->type_params, s->type_bounds);
+    }
+    // #6: clausula `where T: A + B` opcional tras los params.
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
+        parse_where_clause(s->type_bounds);
     }
     (void)expect(TokenKind::LBRACE,
                  "se esperaba '{' al abrir el cuerpo del struct");
@@ -3163,12 +3176,13 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
         }
         std::string member_name = consume().lexeme;
 
-        // Type-params de metodo generico: `R metodo<U>(...)` (#4).  Un
-        // campo nunca lleva `<`, asi que ver `<` aqui implica metodo
-        // generico.  Tras parsearlos, current_ debe ser '('.
+        // Type-params de metodo generico: `R metodo<U>(...)` (#4) con
+        // bounds opcionales `<U: Concepto>` (#6).  Un campo nunca lleva `<`,
+        // asi que ver `<` aqui implica metodo generico.
         std::vector<std::string> method_tparams;
+        std::vector<ast::TypeBound> method_tbounds;
         if (current_.kind == TokenKind::LT)
-            parse_method_type_params(method_tparams);
+            parse_type_params_with_bounds(method_tparams, method_tbounds);
 
         // Distinguir metodo (siguiente '(') vs campo (':' bit-width o ';').
         if (current_.kind == TokenKind::LPAREN) {
@@ -3180,6 +3194,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             m->return_type = std::move(type_node);
             m->access = access;
             m->method_type_params = method_tparams;
+            m->type_bounds = method_tbounds;
             (void)consume(); // '('
             while (current_.kind != TokenKind::RPAREN &&
                    current_.kind != TokenKind::END_OF_FILE) {
@@ -3201,6 +3216,11 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar parametros del metodo");
+            // #6: clausula `where U: A + B` opcional tras los params.
+            if (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "where") {
+                parse_where_clause(m->type_bounds);
+            }
             // Registrar los type-params del contenedor (T) y del metodo
             // (U) como aliases temporales para que `(T)x`/`(U)x` se
             // reconozcan como cast dentro del body.  Se retiran al salir.
@@ -3273,13 +3293,10 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
     // como plantilla y no se procesa como clase concreta hasta que
     // se instancie via `Box<i32>`.
     if (current_.kind == TokenKind::LT) {
-        (void)consume(); // '<'
-        while (current_.kind == TokenKind::IDENTIFIER) {
-            c->type_params.push_back(consume().lexeme);
-            if (!match(TokenKind::COMMA)) break;
-        }
-        (void)expect_close_angle(
-            "se esperaba '>' al cerrar parametros de tipo");
+        // #6: cada param puede llevar un bound inline `<T: Concepto>`.  El
+        // `:` de la superclase (`class C : Base`) queda FUERA de `<>` y no
+        // colisiona con el `:` del bound (que va dentro de los angulos).
+        parse_type_params_with_bounds(c->type_params, c->type_bounds);
     }
 
     // Superclase opcional via ':'.
@@ -3300,6 +3317,11 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             } else
                 break;
         }
+    }
+
+    // #6: clausula `where T: A + B` opcional tras la superclase/interfaces.
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
+        parse_where_clause(c->type_bounds);
     }
 
     (void)expect(TokenKind::LBRACE,
@@ -3632,12 +3654,13 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         }
         std::string member_name = consume().lexeme;
 
-        // Type-params de metodo generico: `R metodo<U>(...)` (#4).  Un
-        // campo nunca lleva `<`, asi que ver `<` aqui implica metodo
-        // generico.  Tras parsearlos, current_ debe ser '('.
+        // Type-params de metodo generico: `R metodo<U>(...)` (#4) con
+        // bounds opcionales `<U: Concepto>` (#6).  Un campo nunca lleva `<`,
+        // asi que ver `<` aqui implica metodo generico.
         std::vector<std::string> method_tparams;
+        std::vector<ast::TypeBound> method_tbounds;
         if (current_.kind == TokenKind::LT)
-            parse_method_type_params(method_tparams);
+            parse_type_params_with_bounds(method_tparams, method_tbounds);
 
         // Distinguir campo (siguiente '=' o ';') vs metodo (siguiente '(').
         if (current_.kind == TokenKind::LPAREN) {
@@ -3654,6 +3677,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->advice_kind = annot_advice_kind;
             m->advice_target = annot_advice_target;
             m->method_type_params = method_tparams;
+            m->type_bounds = method_tbounds;
             (void)consume(); // '('
             while (current_.kind != TokenKind::RPAREN &&
                    current_.kind != TokenKind::END_OF_FILE) {
@@ -3675,6 +3699,11 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar parametros del metodo");
+            // #6: clausula `where U: A + B` opcional tras los params.
+            if (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "where") {
+                parse_where_clause(m->type_bounds);
+            }
             // Registrar los type-params del contenedor (T) y del metodo
             // (U) como aliases temporales para que `(T)x`/`(U)x` se
             // reconozcan como cast dentro del body.  Se retiran al salir.
@@ -3844,6 +3873,167 @@ void Parser::parse_method_type_params(std::vector<std::string> &out) {
     }
     (void)expect_close_angle(
         "se esperaba '>' al cerrar parametros de tipo del metodo");
+}
+
+void Parser::parse_type_params_with_bounds(
+    std::vector<std::string> &params, std::vector<ast::TypeBound> &bounds) {
+    // Precondicion: current_ es '<'.  Cada param puede llevar un bound
+    // inline `: Concepto` (o `Concepto + Otro`).
+    (void)consume(); // '<'
+    while (current_.kind == TokenKind::IDENTIFIER) {
+        const SourceLoc bl = current_.loc;
+        const std::string pname = consume().lexeme;
+        params.push_back(pname);
+        if (current_.kind == TokenKind::COLON) {
+            (void)consume(); // ':'
+            ast::TypeBound tb;
+            tb.type_param = pname;
+            tb.loc = bl;
+            while (current_.kind == TokenKind::IDENTIFIER) {
+                tb.concepts.push_back(consume().lexeme);
+                if (current_.kind == TokenKind::PLUS) {
+                    (void)consume(); // '+' : otro concepto exigido
+                    continue;
+                }
+                break;
+            }
+            bounds.push_back(std::move(tb));
+        }
+        if (!match(TokenKind::COMMA)) break;
+    }
+    (void)expect_close_angle("se esperaba '>' al cerrar parametros de tipo");
+}
+
+void Parser::parse_where_clause(std::vector<ast::TypeBound> &bounds) {
+    // Precondicion: current_ es el identificador contextual `where`.
+    (void)consume(); // 'where'
+    while (current_.kind == TokenKind::IDENTIFIER) {
+        const SourceLoc bl = current_.loc;
+        const std::string pname = consume().lexeme;
+        ast::TypeBound tb;
+        tb.type_param = pname;
+        tb.loc = bl;
+        if (current_.kind == TokenKind::COLON) {
+            (void)consume(); // ':'
+            while (current_.kind == TokenKind::IDENTIFIER) {
+                tb.concepts.push_back(consume().lexeme);
+                if (current_.kind == TokenKind::PLUS) {
+                    (void)consume();
+                    continue;
+                }
+                break;
+            }
+        } else {
+            error_here("se esperaba ':' tras el type-param en la clausula where");
+        }
+        bounds.push_back(std::move(tb));
+        if (!match(TokenKind::COMMA)) break;
+    }
+}
+
+std::unique_ptr<ast::ConceptDecl> Parser::parse_concept_decl() {
+    auto c = std::make_unique<ast::ConceptDecl>();
+    c->loc = current_.loc;
+    (void)consume(); // 'concept' (identificador contextual)
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del concepto tras 'concept'");
+        return nullptr;
+    }
+    c->name = consume().lexeme;
+    // Type-params opcionales `<T>` / `<K, V>`.
+    if (current_.kind == TokenKind::LT) {
+        (void)consume(); // '<'
+        while (current_.kind == TokenKind::IDENTIFIER) {
+            c->type_params.push_back(consume().lexeme);
+            if (!match(TokenKind::COMMA)) break;
+        }
+        (void)expect_close_angle(
+            "se esperaba '>' al cerrar los parametros del concepto");
+    }
+
+    if (current_.kind == TokenKind::ASSIGN) {
+        // Forma predicado: `concept N<T> = <bool-expr>;`.
+        (void)consume(); // '='
+        c->ckind = ast::ConceptKind::Predicate;
+        // Registrar T como alias temporal para `(T)x` / `is_x<T>()`.
+        const auto temp = register_temp_type_aliases(c->type_params);
+        c->predicate = parse_expr();
+        unregister_temp_type_aliases(temp);
+        (void)expect(TokenKind::SEMICOLON,
+                     "se esperaba ';' tras el predicado del concepto");
+        return c;
+    }
+
+    if (current_.kind != TokenKind::LBRACE) {
+        error_here("se esperaba '=' o '{' tras el nombre del concepto");
+        return c;
+    }
+
+    // Disambiguar BLOQUE (stmts comptime) vs ESTRUCTURAL (firmas de metodo).
+    // Estructural: el primer miembro es `<tipo> <ident> ( ... ) ;`.
+    Lexer &ml = const_cast<Lexer &>(lex_);
+    const Token &a0 = ml.peek_at(0); // primer token del cuerpo
+    const Token &a1 = ml.peek_at(1);
+    const Token &a2 = ml.peek_at(2);
+    const bool a0_type_start =
+        (primitive_kind_from_token(a0.kind) != PrimitiveKind::COUNT) ||
+        a0.kind == TokenKind::KW_VOID || a0.kind == TokenKind::IDENTIFIER;
+    const bool is_structural = a0_type_start &&
+                               a1.kind == TokenKind::IDENTIFIER &&
+                               a2.kind == TokenKind::LPAREN;
+    (void)consume(); // '{'
+
+    if (is_structural) {
+        c->ckind = ast::ConceptKind::Structural;
+        while (current_.kind != TokenKind::RBRACE &&
+               current_.kind != TokenKind::END_OF_FILE) {
+            auto rt = parse_type_node(); // tipo de retorno (descartado)
+            if (!rt) {
+                synchronize();
+                break;
+            }
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba el nombre del metodo en el concepto "
+                           "estructural");
+                synchronize();
+                break;
+            }
+            c->structural_methods.push_back(consume().lexeme);
+            // Consumir `( ... )` balanceado (la firma de params no se usa en
+            // el MVP: el chequeo es por existencia de metodo via has_method).
+            (void)expect(TokenKind::LPAREN,
+                         "se esperaba '(' tras el nombre del metodo");
+            int depth = 1;
+            while (depth > 0 && current_.kind != TokenKind::END_OF_FILE) {
+                if (current_.kind == TokenKind::LPAREN)
+                    ++depth;
+                else if (current_.kind == TokenKind::RPAREN)
+                    --depth;
+                (void)consume();
+            }
+            (void)match(TokenKind::SEMICOLON);
+        }
+        (void)expect(TokenKind::RBRACE,
+                     "se esperaba '}' al cerrar el concepto estructural");
+        return c;
+    }
+
+    // Forma bloque: `concept N<T> { <stmts comptime>; return <bool>; }`.
+    c->ckind = ast::ConceptKind::Block;
+    auto blk = std::make_unique<ast::BlockStmt>();
+    blk->loc = c->loc;
+    const auto temp = register_temp_type_aliases(c->type_params);
+    while (current_.kind != TokenKind::RBRACE &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        auto st = parse_statement();
+        if (!st) break;
+        blk->body.push_back(std::move(st));
+    }
+    unregister_temp_type_aliases(temp);
+    (void)expect(TokenKind::RBRACE,
+                 "se esperaba '}' al cerrar el cuerpo del concepto");
+    c->body = std::move(blk);
+    return c;
 }
 
 std::vector<std::string>

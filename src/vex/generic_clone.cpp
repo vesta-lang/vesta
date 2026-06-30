@@ -277,6 +277,12 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
         x->callee = clone_expr(s->callee.get(), g);
         for (auto &a : s->args)
             x->args.push_back(clone_expr(a.get(), g));
+        // Los type-args de la llamada (builtins comptime como
+        // `sizeof<T>()`, `is_integer<T>()`) tambien se sustituyen: sin
+        // esto un `sizeof<U>()` en un body generico o un predicado de
+        // concepto `is_integer<T>()` mantendrian T/U sin resolver.
+        for (auto &t : s->type_args)
+            x->type_args.push_back(clone_type_with_subst(t.get(), g));
         return x;
     }
     case ast::NodeKind::IndexExpr: {

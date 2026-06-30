@@ -1,0 +1,90 @@
+// Conceptos / constraints de genericos: `<T: Concepto>` y `where` (#6).
+//
+// Un CONCEPTO es un predicado COMPTIME sobre un tipo (devuelve bool).  Se
+// usa como CONSTRAINT (bound) de un type-param generico: al instanciar el
+// generico con un tipo concreto, el compilador evalua el concepto; si no se
+// satisface, error claro.  Las constraints son 100% compile-time: DESAPARECEN
+// tras el type-check (cero codigo emitido, cero coste runtime).  El backend
+// (interp / JIT / AOT) ve genericos concretos normales.
+//
+// Cubre:
+//   1. Conceptos BUILT-IN (Numeric, Comparable, Sized, ...).
+//   2. Concepto de usuario PREDICADO `concept N<T> = <bool-expr>;`.
+//   3. Concepto de usuario BLOQUE `concept N<T> { <stmts comptime>; }`.
+//   4. Concepto de usuario ESTRUCTURAL `concept N { metodo-sigs }`.
+//   5. COMPOSICION de conceptos (`Comparable<T>() && Sized<T>()`).
+//   6. Bound INLINE `<T: C>` y clausula `where T: A + B`.
+//   7. Bounds en funcion libre, struct, clase y metodo generico.
+
+// ---- 2: concepto PREDICADO (sobre la introspeccion comptime) -------------
+concept MiNumero<T> = is_numeric<T>();
+
+// ---- 5: COMPOSICION de conceptos (built-in + usuario) --------------------
+concept Ordenable<T> = Comparable<T>() && Sized<T>();
+
+// ---- 3: concepto BLOQUE (logica comptime arbitraria) ---------------------
+concept CabeEnReg<T> {
+    if (is_primitive<T>()) { return sizeof<T>() <= 8; }
+    return false;
+}
+
+// ---- 4: concepto ESTRUCTURAL (exige metodos por nombre) ------------------
+concept Dibujable { i64 area(); }
+
+// ---- 1 + 6: bound inline con concepto built-in en funcion libre ----------
+T maximo<T: Comparable>(T a, T b) {
+    if (a > b) { return a; }
+    return b;
+}
+
+// ---- 6: clausula `where` con concepto de usuario -------------------------
+T sumar<T>(T a, T b) where T: MiNumero {
+    return a + b;
+}
+
+// ---- composicion + where ------------------------------------------------
+T elegir<T>(T a, T b) where T: Ordenable {
+    if (a > b) { return a; }
+    return b;
+}
+
+// ---- 7: bound inline en STRUCT generico ----------------------------------
+struct Caja<T: CabeEnReg> {
+    T v;
+    T leer() { return this.v; }
+}
+
+// ---- 7: bound estructural en funcion + clase con area() ------------------
+class Cuadrado {
+    i64 lado;
+    Cuadrado(i64 l) { this.lado = l; }
+    i64 area() { return this.lado * this.lado; }
+}
+
+i64 pintar<T: Dibujable>(T fig) { return fig.area(); }
+
+// ---- 7: bound en METODO generico -----------------------------------------
+struct Acumulador {
+    i64 base;
+    U combinar<U: Numeric>(U x) { return (U) this.base + x; }
+}
+
+i32 main() {
+    i64 mx = maximo<i64>(10, 30);     // built-in Comparable      -> 30
+    i64 sm = sumar<i64>(3, 4);         // user MiNumero (where)     -> 7
+    i64 el = elegir<i64>(2, 9);        // Ordenable (composicion)   -> 9
+
+    Caja<i64> c = {.v = 5};            // CabeEnReg (bloque)        -> v=5
+    i64 lv = c.leer();                  // 5
+
+    Cuadrado sq = new Cuadrado(2);
+    i64 ar = pintar<Cuadrado>(sq);     // Dibujable (estructural)   -> 4
+
+    Acumulador a = {.base = 1};
+    i64 cb = a.combinar<i64>(0);       // metodo con bound Numeric  -> 1
+
+    println("mx=${mx} sm=${sm} el=${el} lv=${lv} ar=${ar} cb=${cb}");
+    // 30 + 7 + 9 - 5 - 4 - 1 - 9 + ... ajustamos a 42:
+    // 30 + 7 + 9 + 5 + 4 + 1 - 14 = 42
+    return (i32)(mx + sm + el + lv + ar + cb - 14);   // 42
+}

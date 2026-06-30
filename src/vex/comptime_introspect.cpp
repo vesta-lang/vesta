@@ -17,6 +17,7 @@
 #include <algorithm> // UCRT64: no transitivo
 #include "vex/lexer.h"
 #include "vex/parser.h"
+#include "concepts.h" // #6: composicion de conceptos en predicados comptime
 #include "ffi/virtual_lib_registry.h" //   : virtual libs
 
 #include <cstdio>
@@ -1202,6 +1203,66 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
         r.value = comptime_is_primitive(t1) ? 1 : 0;
         return r;
     }
+    /* #6: predicados de tipo adicionales, base de los conceptos built-in
+     * (Numeric/Integer/Float/...).  Todos derivan de t1.kind. */
+    {
+        const PrimitiveKind k = t1.kind;
+        const bool is_int =
+            k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+            k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+            k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+            k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+        const bool is_signed =
+            k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+            k == PrimitiveKind::I32 || k == PrimitiveKind::I64;
+        const bool is_flt =
+            k == PrimitiveKind::F32 || k == PrimitiveKind::F64;
+        if (nm == "is_integer") {
+            r.ok = true;
+            r.value = is_int ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_signed") {
+            r.ok = true;
+            r.value = is_signed ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_unsigned") {
+            r.ok = true;
+            r.value = (is_int && !is_signed) ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_float") {
+            r.ok = true;
+            r.value = is_flt ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_numeric") {
+            r.ok = true;
+            r.value = (is_int || is_flt) ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_bool") {
+            r.ok = true;
+            r.value = (k == PrimitiveKind::BOOL) ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_char") {
+            r.ok = true;
+            r.value = (k == PrimitiveKind::CHAR) ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_pointer") {
+            r.ok = true;
+            r.value = (k == PrimitiveKind::PTR) ? 1 : 0;
+            return r;
+        }
+        if (nm == "is_string") {
+            r.ok = true;
+            r.value = (k == PrimitiveKind::STRING) ? 1 : 0;
+            return r;
+        }
+    }
 
     /* Builtins con 1 string literal arg. */
     if (nm == "offsetof" || nm == "has_field" || nm == "has_method") {
@@ -1241,6 +1302,18 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
         if (nm == "is_same") {
             r.ok = true;
             r.value = comptime_is_same(tc, t1, t2) ? 1 : 0;
+            return r;
+        }
+    }
+
+    /* #6: composicion de conceptos en predicados comptime.  Si `nm` es un
+     * concepto (built-in o de usuario), `Concepto<T>()` evalua a 0/1.  Esto
+     * permite `concept Ordenable<T> = Comparable<T>() && Sized<T>();`. */
+    {
+        const ConceptEval ce = comptime_eval_concept(tc, nm, t1);
+        if (ce.found) {
+            r.ok = true;
+            r.value = ce.satisfied ? 1 : 0;
             return r;
         }
     }

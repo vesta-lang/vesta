@@ -85,6 +85,8 @@ enum class NodeKind : uint8_t {
                    ///< namespace estilo C++).
     BytesDecl,     ///< @c bytes name { db/dw/dd/dq/times ... }  (datos crudos
                    ///< estilo NASM, AOT).
+    ConceptDecl,   ///< @c concept Name<T> = pred; | { stmts } | { metodos }
+                   ///< (constraints/bounds de genericos, #6; compile-time puro).
 
     // ----- Statements -----
     BlockStmt,
@@ -1426,11 +1428,29 @@ struct ParamDecl : Node {
  * (typicamente FFI extern; las funciones extern reales se modelan
  * via @c ExternFnDecl, este caso queda como fallback general).
  */
+/**
+ * @struct TypeBound
+ * @brief Constraint sobre un type-param generico (#6).
+ *
+ * `<T: Comparable>` o `where T: Comparable + Sized` produce un TypeBound
+ * con @c type_param = "T" y @c concepts = ["Comparable"] (o ["Comparable",
+ * "Sized"]).  El type-arg concreto debe satisfacer TODOS los conceptos.
+ * La verificacion es compile-time (al monomorphizar); cero codigo emitido.
+ */
+struct TypeBound {
+    std::string type_param;            ///< nombre del type-param (e.g. "T")
+    std::vector<std::string> concepts; ///< conceptos exigidos (A + B + ...)
+    SourceLoc loc;
+};
+
 struct FunctionDecl : Node {
     std::unique_ptr<TypeNode> return_type;
     std::string name;
     std::vector<std::unique_ptr<ParamDecl>> params;
     std::unique_ptr<BlockStmt> body;
+    /// #6: constraints de los type-params (`<T: C>` inline o `where T: A+B`).
+    /// Vacio = sin bounds.  Verificados al monomorphizar; cero runtime.
+    std::vector<TypeBound> type_bounds;
     /// Phase M6.a L.3: visibilidad cross-module.  @c true (default) =
     /// publica, exportada al `.vexi` y accesible desde otros modulos.
     /// @c false = privada al modulo (no se exporta).  El parser setea
@@ -1539,6 +1559,36 @@ struct FunctionDecl : Node {
     std::string complexity_total_pre;
     std::string complexity_total_post;
     FunctionDecl() : Node(NodeKind::FunctionDecl) {}
+};
+
+/**
+ * @enum ConceptKind
+ * @brief Forma sintactica de un @c ConceptDecl (#6).
+ */
+enum class ConceptKind : uint8_t {
+    Predicate,  ///< `concept N<T> = <bool-expr>;`
+    Block,      ///< `concept N<T> { <comptime stmts>; return <bool>; }`
+    Structural, ///< `concept N { metodo-sigs }` (desugar a has_method)
+};
+
+/**
+ * @struct ConceptDecl
+ * @brief Declaracion de un CONCEPTO: un predicado comptime sobre un tipo (#6).
+ *
+ * Un concepto es una funcion booleana evaluada en compile-time sobre un
+ * type-arg.  Tres formas (ver @c ConceptKind).  Se evalua al monomorphizar
+ * un generico con bound `<T: N>`; si devuelve false, error claro.  No emite
+ * codigo: las constraints DESAPARECEN tras el type-check.
+ */
+struct ConceptDecl : Node {
+    std::string name;
+    std::vector<std::string> type_params;        ///< usualmente ["T"]
+    ConceptKind ckind = ConceptKind::Predicate;
+    std::unique_ptr<Expr> predicate;             ///< forma Predicate
+    std::unique_ptr<BlockStmt> body;             ///< forma Block
+    std::vector<std::string> structural_methods; ///< forma Structural (nombres)
+    bool is_public = true;
+    ConceptDecl() : Node(NodeKind::ConceptDecl) {}
 };
 
 /**
@@ -1811,6 +1861,9 @@ struct StructDecl : Node {
     /// cada uso `Box<i32>` se monomorphiza on-demand (mismo modelo que las
     /// clases A.8 y los enums L2.3).
     std::vector<std::string> type_params;
+    /// #6: constraints de los type-params (`struct S<T: Concepto>` o
+    /// `where T: A + B`).  Verificados al monomorphizar; cero runtime.
+    std::vector<TypeBound> type_bounds;
     StructDecl() : Node(NodeKind::StructDecl) {}
 };
 
@@ -1873,6 +1926,8 @@ struct EnumDecl : Node {
     /// Si no esta vacio, el enum es un template y se monomorphiza on demand
     /// en cada uso `Maybe<i32>` (mismo modelo que generic classes A.8).
     std::vector<std::string> type_params;
+    /// #6: constraints de los type-params (`enum E<T: Concepto>`).
+    std::vector<TypeBound> type_bounds;
     EnumDecl() : Node(NodeKind::EnumDecl) {}
 };
 
@@ -1962,6 +2017,9 @@ struct ClassMethodDecl : Node {
     /// normal.  El metodo template (con method_type_params no vacio) se
     /// omite en el lowering.  Ver src/vex/generic_methods.cpp (#4).
     std::vector<std::string> method_type_params;
+    /// #6: constraints de los type-params del METODO (`R m<U: Concepto>()`
+    /// o `where U: A + B`).  Verificados al monomorphizar el metodo.
+    std::vector<TypeBound> type_bounds;
     ClassMethodDecl() : Node(NodeKind::FunctionDecl) {}
 };
 
@@ -1996,6 +2054,9 @@ struct ClassDecl : Node {
     /// nueva ClassDecl concreta con T -> i32 y la procesa como una
     /// clase normal (collect_classes + lower_class_methods).
     std::vector<std::string> type_params;
+    /// #6: constraints de los type-params (`class C<T: Concepto>` o
+    /// `where T: A + B`).  Verificados al monomorphizar; cero runtime.
+    std::vector<TypeBound> type_bounds;
     /// @brief Marca de aspecto AOP.  Si es @c true, los metodos con
     /// @Before/@After/@Around dentro de esta clase se registran como
     /// advices en __module_init (ademas de definirse como metodos

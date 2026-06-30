@@ -290,6 +290,9 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         return std::string();
     }
 
+    // #6: verificar constraints de la clase generica sobre los type-args.
+    check_type_bounds(tmpl->type_bounds, tmpl->type_params, args, loc);
+
     GenSubst g{&tmpl->type_params, &args};
 
     auto cloned = std::make_unique<ast::ClassDecl>();
@@ -493,6 +496,9 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         return std::string();
     }
 
+    // #6: verificar constraints del struct generico sobre los type-args.
+    check_type_bounds(tmpl->type_bounds, tmpl->type_params, args, loc);
+
     GenSubst g{&tmpl->type_params, &args};
 
     auto cloned = std::make_unique<ast::StructDecl>();
@@ -595,6 +601,10 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
                               ", recibidos " + std::to_string(args.size()));
         return std::string();
     }
+
+    // #6: verificar las constraints `<T: Concepto>` / `where` sobre los
+    // type-args concretos (compile-time; cero codigo emitido).
+    check_type_bounds(tmpl->type_bounds, tmpl->type_params, args, loc);
 
     GenSubst g{&tmpl->type_params, &args};
 
@@ -1084,6 +1094,11 @@ bool TypeChecker::run() {
             if (!fd->type_params.empty() && !fd->is_comptime && !fd->is_macro) {
                 generic_fn_templates_[fd->name] = i;
             }
+        } else if (d && d->kind == ast::NodeKind::ConceptDecl) {
+            // #6: registrar conceptos de usuario para la evaluacion de
+            // bounds + composicion en predicados comptime.
+            auto *cn = static_cast<ast::ConceptDecl *>(d);
+            concepts_[cn->name] = cn;
         }
     }
     // Pre-registro de NOMBRES de tipos de usuario (struct/clase/enum concretos)
@@ -1226,6 +1241,12 @@ bool TypeChecker::run() {
     }
 
     collect_globals();
+
+    // #6: ya existen los layouts -> verificar los bounds encolados durante
+    // pre_mono (conceptos estructurales / has_method de tipos de usuario los
+    // necesitan).  Los bounds de metodos genericos (monomorphizados en
+    // check_functions) se verifican al final de check_functions.
+    verify_pending_type_bounds();
 
     /* LANG.fix-2 pre-pase: inicializar los `comptime const|var`
      * globals con sus inits.  Sin esto, los top-level `comptime { }`
@@ -3515,6 +3536,10 @@ void TypeChecker::check_functions() {
     // contenedor + chequear su body, a punto fijo).  Debe ir DESPUES de
     // los bucles de metodos para no invalidar sus iteradores.
     drain_pending_method_monos();
+
+    // #6: verificar los bounds encolados durante check_functions (metodos
+    // genericos con `<U: Concepto>`, y cualquier monomorphizacion on-demand).
+    verify_pending_type_bounds();
 }
 
 /**
