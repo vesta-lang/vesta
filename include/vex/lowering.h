@@ -693,6 +693,13 @@ class Lowering {
                                           const std::string &struct_name,
                                           const std::string &method_label,
                                           uint32_t line);
+    /// Ruta B (H1 paso por valor): copia un struct con copy-hook para pasarlo
+    /// por valor a una funcion.  Aloca una copia, memcpy del origen, invoca
+    /// `copia.__clone__()` y devuelve la direccion de la copia.  El caller debe
+    /// emitir el `~dtor` de la copia tras el CALL (la callee no la posee).
+    ir::IrValueId emit_struct_arg_copy_clone(ir::IrValueId v_src,
+                                             const std::string &struct_name,
+                                             uint32_t line);
     /// Libera un slot Tier 1 (16B [ptr][deleter]) heap dado su VALOR (no via un
     /// campo): null-guard, dispatch del deleter (slot+8) + RAW_FREE(slot).  Lo
     /// usa @c emit_free_unique_field tras cargar el slot, y el reassign-free de

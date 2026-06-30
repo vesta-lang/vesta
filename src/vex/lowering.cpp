@@ -14714,6 +14714,10 @@ skip_comptime_eval_for_macro_to_macro:
     // fuga el buffer del intermedio.  Los IdentExpr (variables) NO se
     // liberan: su RAII en el scope dueno lo hace (no doble-free).
     std::vector<ir::IrValueId> tmp_str_args_to_free;
+    // Ruta B (H1 paso por valor): copias de structs con copy-hook que pasamos
+    // por valor.  Tras el CALL, el caller emite el `~dtor` de cada copia (la
+    // callee no la posee).  Pares (copy_addr, struct_name).
+    std::vector<std::pair<ir::IrValueId, std::string>> struct_clone_to_dtor;
     for (size_t i = 0; i < e->args.size(); ++i) {
         ast::Expr *ae = e->args[i].get();
         // Detectar (param STRING, arg StringLitExpr no interpolado) y
@@ -14744,7 +14748,33 @@ skip_comptime_eval_for_macro_to_macro:
         }
         if (!promote_to_string) {
             const ir::IrValueId v_arg = lower_expr(ae);
-            arg_ids.push_back(v_arg);
+            // Ruta B (H1 paso por valor): si el param es un STRUCT por valor con
+            // copy-hook y el arg es un lvalue existente (IdentExpr), la callee
+            // debe recibir una COPIA.  Copiamos + `copia.__clone__()` y pasamos
+            // la copia; el `~dtor` de la copia se emite tras el CALL.  Un valor
+            // fresco (CallExpr) o un struct sin copy-hook no se clona (move /
+            // alias actual).
+            bool cloned_struct = false;
+            if (v_arg != ir::IR_NO_VALUE && ae &&
+                ae->kind == ast::NodeKind::IdentExpr && callee_sig &&
+                i < callee_sig->param_types.size() &&
+                callee_sig->param_types[i].kind == PrimitiveKind::STRUCT) {
+                const std::string &sn = callee_sig->param_types[i].struct_name;
+                auto it_sl = tc_.struct_layouts().find(sn);
+                if (it_sl != tc_.struct_layouts().end() &&
+                    it_sl->second.has_copy_hook) {
+                    const ir::IrValueId copy =
+                        emit_struct_arg_copy_clone(v_arg, sn, e->loc.line);
+                    arg_ids.push_back(copy);
+                    cloned_struct = true;
+                    // ~dtor de la copia tras el CALL solo si el tipo lo define.
+                    bool has_dtor = false;
+                    for (const auto &mm : it_sl->second.methods)
+                        if (mm.is_destructor) { has_dtor = true; break; }
+                    if (has_dtor) struct_clone_to_dtor.emplace_back(copy, sn);
+                }
+            }
+            if (!cloned_struct) arg_ids.push_back(v_arg);
             // native_poo_: marcar arg como value-string temporal a liberar.
             if (native_poo_ && v_arg != ir::IR_NO_VALUE && ae &&
                 ae->result_type.kind == PrimitiveKind::STRING) {
@@ -14859,6 +14889,13 @@ skip_comptime_eval_for_macro_to_macro:
     // arg estaba en HEAP; free(0)=no-op.
     for (ir::IrValueId v_tmp : tmp_str_args_to_free) {
         emit_native_str_free_if_heap(v_tmp, e->loc.line);
+    }
+    // Ruta B (H1 paso por valor): `~dtor` de las copias de structs con copy-hook
+    // tras el CALL (la callee uso la copia; el caller la posee y la destruye).
+    for (const auto &pr : struct_clone_to_dtor) {
+        emit_struct_method_on_host_field(pr.first, pr.second,
+                                         pr.second + "__" + "__dtor",
+                                         e->loc.line);
     }
     return callee_is_sret ? v_call_retbuf : dst;
 }
@@ -23697,6 +23734,88 @@ void Lowering::emit_struct_method_on_host_field(
         cd.source_line = line;
         fn_->append(current_block_, std::move(cd));
     }
+}
+
+ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
+                                                   const std::string &struct_name,
+                                                   uint32_t line) {
+    // Ownership ruta B (H1 paso por valor): pasar un struct CON copy-hook por
+    // valor a una funcion (`f(a)`) hace una COPIA -- la callee recibe su propia
+    // instancia.  Alocamos una copia (ALLOCA, misma memory class que un struct
+    // local: VM en interp/JIT, host en AOT/native_poo), memcpy del origen, y
+    // `copia.__clone__()` para que el tipo gestionado ajuste su recurso (p.ej.
+    // ++refcount).  Devuelve la direccion de la copia para pasarla al CALL.  El
+    // caller emite el `~dtor` de la copia tras el CALL (la callee no posee el
+    // param, igual que cualquier struct por valor en Vesta).
+    uint64_t sz = 8;
+    auto it_sl = tc_.struct_layouts().find(struct_name);
+    if (it_sl != tc_.struct_layouts().end())
+        sz = static_cast<uint64_t>(it_sl->second.size_bytes);
+    if (sz == 0) sz = 8;
+    // ALLOCA copia (host-ness identica a un struct local).
+    const ir::IrValueId copy = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.imm = sz;
+        al.dst = copy;
+        al.source_line = line;
+        fn_->append(current_block_, std::move(al));
+    }
+    if (native_poo_) fn_->values[copy].is_host_ptr = true;
+    // memcpy v_src -> copy (respetando host-ness de origen y destino).
+    const bool src_is_host = fn_->values[v_src].is_host_ptr;
+    const bool dst_is_host = fn_->values[copy].is_host_ptr;
+    const uint64_t qwords = (sz + 7) / 8;
+    for (uint64_t qi = 0; qi < qwords; ++qi) {
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(qi * 8), line);
+        const ir::IrValueId src_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[src_at].is_host_ptr = src_is_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = src_at;
+            ad.operands = {v_src, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        const ir::IrValueId word = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = word;
+            ld.operands = {src_at};
+            ld.source_line = line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        const ir::IrValueId dst_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[dst_at].is_host_ptr = dst_is_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = dst_at;
+            ad.operands = {copy, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {word, dst_at};
+            st.source_line = line;
+            fn_->append(current_block_, std::move(st));
+        }
+    }
+    // copia.__clone__()  (this = copy, misma memory class -> sin mismatch).
+    emit_struct_method_on_host_field(copy, struct_name,
+                                     struct_name + "__" + "__clone__", line);
+    return copy;
 }
 
 void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
