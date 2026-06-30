@@ -1451,6 +1451,11 @@ struct FunctionDecl : Node {
     /// #6: constraints de los type-params (`<T: C>` inline o `where T: A+B`).
     /// Vacio = sin bounds.  Verificados al monomorphizar; cero runtime.
     std::vector<TypeBound> type_bounds;
+    /// #7: especializacion de FUNCION generica (`R id<i64>(...)` total /
+    /// `R id<T*>(...)` parcial).  Si @c is_specialization, @c spec_pattern
+    /// son los type-args del patron y @c type_params los params frescos.
+    bool is_specialization = false;
+    std::vector<std::unique_ptr<TypeNode>> spec_pattern;
     /// Phase M6.a L.3: visibilidad cross-module.  @c true (default) =
     /// publica, exportada al `.vexi` y accesible desde otros modulos.
     /// @c false = privada al modulo (no se exporta).  El parser setea
@@ -2066,6 +2071,11 @@ struct ClassDecl : Node {
     /// #6: constraints de los type-params (`class C<T: Concepto>` o
     /// `where T: A + B`).  Verificados al monomorphizar; cero runtime.
     std::vector<TypeBound> type_bounds;
+    /// #7: especializacion de CLASE generica (total/parcial).  Si
+    /// @c is_specialization, @c spec_pattern son los type-args del patron
+    /// y @c type_params los params frescos (mismo modelo que StructDecl).
+    bool is_specialization = false;
+    std::vector<std::unique_ptr<TypeNode>> spec_pattern;
     /// @brief Marca de aspecto AOP.  Si es @c true, los metodos con
     /// @Before/@After/@Around dentro de esta clase se registran como
     /// advices en __module_init (ademas de definirse como metodos

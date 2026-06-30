@@ -693,6 +693,12 @@ class Lowering {
                                           const std::string &struct_name,
                                           const std::string &method_label,
                                           uint32_t line);
+    /// Copia memberwise (qword a qword) @p size_bytes desde @p src_addr a
+    /// @p dst_addr.  Hereda la naturaleza host/VM de ambas direcciones para
+    /// emitir mov/movh correctos.  Usado al copiar un agregado value-type
+    /// (struct/array) -- e.g. inicializar un campo struct en un init-list.
+    void emit_memberwise_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
+                              uint64_t size_bytes, uint32_t line);
     /// Ruta B (H1 paso por valor): copia un struct con copy-hook para pasarlo
     /// por valor a una funcion.  Aloca una copia, memcpy del origen, invoca
     /// `copia.__clone__()` y devuelve la direccion de la copia.  El caller debe

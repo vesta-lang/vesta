@@ -293,21 +293,28 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     // #6: verificar constraints de la clase generica sobre los type-args.
     check_type_bounds(tmpl->type_bounds, tmpl->type_params, args, loc);
 
-    GenSubst g{&tmpl->type_params, &args};
+    // #7: elegir la especializacion de CLASE mas especifica que matchee.
+    std::vector<std::string> spec_params;
+    std::vector<Type> spec_args;
+    const ast::ClassDecl *spec =
+        select_class_specialization(template_name, args, spec_params, spec_args);
+    const ast::ClassDecl *src = spec ? spec : tmpl;
+    GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
+                      : GenSubst{&tmpl->type_params, &args};
 
     auto cloned = std::make_unique<ast::ClassDecl>();
-    cloned->loc = tmpl->loc;
+    cloned->loc = src->loc;
     cloned->name = mangled;
-    cloned->super_name = tmpl->super_name;
-    cloned->interface_names = tmpl->interface_names;
-    cloned->is_final = tmpl->is_final;
-    cloned->is_aspect = tmpl->is_aspect;
-    cloned->is_interface = tmpl->is_interface;
-    cloned->is_introspect = tmpl->is_introspect;
+    cloned->super_name = src->super_name;
+    cloned->interface_names = src->interface_names;
+    cloned->is_final = src->is_final;
+    cloned->is_aspect = src->is_aspect;
+    cloned->is_interface = src->is_interface;
+    cloned->is_introspect = src->is_introspect;
     // type_params vacio: ya es concreto.
 
     // Clonar fields.
-    for (const auto &f : tmpl->fields) {
+    for (const auto &f : src->fields) {
         ast::ClassFieldDecl nf;
         nf.loc = f.loc;
         nf.name = f.name;
@@ -319,7 +326,7 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         cloned->fields.push_back(std::move(nf));
     }
     // Clonar metodos.
-    for (const auto &m : tmpl->methods) {
+    for (const auto &m : src->methods) {
         auto nm = std::make_unique<ast::ClassMethodDecl>();
         nm->loc = m->loc;
         // Si el metodo es el constructor del template, su nombre
@@ -367,6 +374,7 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     MonomorphInfo info;
     info.template_name = template_name;
     info.type_args.reserve(args.size());
+    info.type_arg_types = args; // #7: Types concretos para matching anidado
     for (const auto &t : args) {
         info.type_args.push_back(type_to_string(t));
     }
@@ -567,6 +575,7 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     MonomorphInfo info;
     info.template_name = template_name;
     info.type_args.reserve(args.size());
+    info.type_arg_types = args; // #7: Types concretos para matching anidado
     for (const auto &t : args) {
         info.type_args.push_back(type_to_string(t));
     }
@@ -615,18 +624,25 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
     // type-args concretos (compile-time; cero codigo emitido).
     check_type_bounds(tmpl->type_bounds, tmpl->type_params, args, loc);
 
-    GenSubst g{&tmpl->type_params, &args};
+    // #7: elegir la especializacion de FUNCION mas especifica que matchee.
+    std::vector<std::string> spec_params;
+    std::vector<Type> spec_args;
+    const ast::FunctionDecl *spec = select_function_specialization(
+        template_name, args, spec_params, spec_args);
+    const ast::FunctionDecl *src = spec ? spec : tmpl;
+    GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
+                      : GenSubst{&tmpl->type_params, &args};
 
     auto cloned = std::make_unique<ast::FunctionDecl>();
-    cloned->loc = tmpl->loc;
+    cloned->loc = src->loc;
     cloned->name = mangled;
-    cloned->is_public = tmpl->is_public;
-    cloned->is_noexcept = tmpl->is_noexcept;
-    cloned->is_pure = tmpl->is_pure;
+    cloned->is_public = src->is_public;
+    cloned->is_noexcept = src->is_noexcept;
+    cloned->is_pure = src->is_pure;
     // type_params vacio: ya es concreta.
-    if (tmpl->return_type)
-        cloned->return_type = clone_type_with_subst(tmpl->return_type.get(), g);
-    for (const auto &p : tmpl->params) {
+    if (src->return_type)
+        cloned->return_type = clone_type_with_subst(src->return_type.get(), g);
+    for (const auto &p : src->params) {
         auto np = std::make_unique<ast::ParamDecl>();
         np->loc = p->loc;
         np->name = p->name;
@@ -634,8 +650,8 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
         np->type = clone_type_with_subst(p->type.get(), g);
         cloned->params.push_back(std::move(np));
     }
-    if (tmpl->body) {
-        auto cb = clone_stmt(tmpl->body.get(), g);
+    if (src->body) {
+        auto cb = clone_stmt(src->body.get(), g);
         if (cb && cb->kind == ast::NodeKind::BlockStmt) {
             cloned->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
         }
@@ -646,6 +662,7 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
     MonomorphInfo info;
     info.template_name = template_name;
     info.type_args.reserve(args.size());
+    info.type_arg_types = args; // #7: Types concretos para matching anidado
     for (const auto &t : args) info.type_args.push_back(type_to_string(t));
     monomorph_info_[mangled] = std::move(info);
 
@@ -1080,7 +1097,10 @@ bool TypeChecker::run() {
         auto *d = mod_.decls[i].get();
         if (d && d->kind == ast::NodeKind::ClassDecl) {
             auto *cd = static_cast<ast::ClassDecl *>(d);
-            if (!cd->type_params.empty()) {
+            if (cd->is_specialization) {
+                // #7: especializacion (total/parcial) de una clase generica.
+                class_specializations_[cd->name].push_back(i);
+            } else if (!cd->type_params.empty()) {
                 generic_templates_[cd->name] = i;
             }
         } else if (d && d->kind == ast::NodeKind::EnumDecl) {
@@ -1103,7 +1123,11 @@ bool TypeChecker::run() {
             // genericas (`comptime <T> ...`) y los @Macro tienen su propio
             // manejo (evaluacion comptime), no se monomorphizan a runtime.
             auto *fd = static_cast<ast::FunctionDecl *>(d);
-            if (!fd->type_params.empty() && !fd->is_comptime && !fd->is_macro) {
+            if (fd->is_specialization && !fd->is_comptime && !fd->is_macro) {
+                // #7: especializacion (total/parcial) de una funcion generica.
+                function_specializations_[fd->name].push_back(i);
+            } else if (!fd->type_params.empty() && !fd->is_comptime &&
+                       !fd->is_macro) {
                 generic_fn_templates_[fd->name] = i;
             }
         } else if (d && d->kind == ast::NodeKind::ConceptDecl) {
@@ -1135,7 +1159,9 @@ bool TypeChecker::run() {
             }
         } else if (d->kind == ast::NodeKind::ClassDecl) {
             auto *cd = static_cast<ast::ClassDecl *>(d);
-            if (!cd->type_params.empty()) continue; // template
+            // Templates (type_params) y especializaciones (#7) no son clases
+            // concretas: se clonan on-demand en monomorphize_class.
+            if (!cd->type_params.empty() || cd->is_specialization) continue;
             if (!class_layouts_.count(cd->name)) {
                 ClassLayout empty;
                 empty.name = cd->name;
@@ -1162,7 +1188,9 @@ bool TypeChecker::run() {
         if (!d) continue;
         if (d->kind == ast::NodeKind::ClassDecl) {
             auto *cd = static_cast<ast::ClassDecl *>(d);
-            if (!cd->type_params.empty()) continue; // template
+            // Templates (type_params) y especializaciones (#7) no son clases
+            // concretas: se clonan on-demand en monomorphize_class.
+            if (!cd->type_params.empty() || cd->is_specialization) continue;
             for (const auto &f : cd->fields) {
                 pre_mono_collect_in_type(*this, f.type.get(), f.loc);
             }
@@ -1176,7 +1204,9 @@ bool TypeChecker::run() {
             }
         } else if (d->kind == ast::NodeKind::FunctionDecl) {
             auto *fn = static_cast<ast::FunctionDecl *>(d);
-            if (!fn->type_params.empty()) continue; // template generico
+            // Templates y especializaciones (#7) no son funciones concretas.
+            if (!fn->type_params.empty() || fn->is_specialization)
+                continue; // template generico
             if (fn->return_type)
                 pre_mono_collect_in_type(*this, fn->return_type.get(), fn->loc);
             for (const auto &p : fn->params)
@@ -1244,7 +1274,8 @@ bool TypeChecker::run() {
                 }
             } else if (d->kind == ast::NodeKind::FunctionDecl) {
                 auto *fn = static_cast<ast::FunctionDecl *>(d);
-                if (!fn->type_params.empty()) continue; // template
+                if (!fn->type_params.empty() || fn->is_specialization)
+                    continue; // template / especializacion (#7)
                 if (fn->return_type)
                     pre_mono_collect_in_type(*this, fn->return_type.get(),
                                              fn->loc);
@@ -2082,8 +2113,9 @@ void TypeChecker::collect_globals() {
             }
         } else if (decl->kind == ast::NodeKind::ClassDecl) {
             auto *c = static_cast<ast::ClassDecl *>(decl.get());
-            // Templates con type_params no son clases concretas.
-            if (!c->type_params.empty()) continue;
+            // Templates con type_params y especializaciones (#7) no son
+            // clases concretas.
+            if (!c->type_params.empty() || c->is_specialization) continue;
             if (!class_layouts_.count(c->name)) {
                 ClassLayout empty;
                 empty.name = c->name;
@@ -2459,10 +2491,10 @@ void TypeChecker::collect_globals() {
             enum_layouts_[en->name] = std::move(elay);
         } else if (decl->kind == ast::NodeKind::ClassDecl) {
             auto *c = static_cast<ast::ClassDecl *>(decl.get());
-            // generics: templates (con type_params) no son clases
-            // concretas.  Solo se procesa la version monomorphizada
-            // (que tiene type_params vacio).
-            if (!c->type_params.empty()) continue;
+            // generics: templates (con type_params) y especializaciones (#7)
+            // no son clases concretas.  Solo se procesa la version
+            // monomorphizada (que tiene type_params vacio y no es spec).
+            if (!c->type_params.empty() || c->is_specialization) continue;
             // Pre-pasada creo entradas vacias en class_layouts_; un
             // class es "ya completada" si tiene fields o methods.
             auto it_pre_c = class_layouts_.find(c->name);
@@ -3086,6 +3118,11 @@ void TypeChecker::collect_globals() {
         if (!decl) continue;
         if (decl->kind == ast::NodeKind::FunctionDecl) {
             auto *fn = static_cast<ast::FunctionDecl *>(decl.get());
+            // #7: las especializaciones de funcion NO se registran como
+            // simbolo global (comparten nombre con el primario): solo el
+            // primario declara el nombre; las specs se eligen al
+            // monomorphizar.  Sin esto -> "redefinicion de simbolo".
+            if (fn->is_specialization) continue;
             /* comptime fn -- registrar para que las llamadas
              * desde contextos comptime puedan interpretar el body.
              * NO se registra como Symbol::Function regular porque
@@ -3388,6 +3425,9 @@ void TypeChecker::check_functions() {
         // type_params en mod_.decls).  Las comptime genericas siguen su path.
         if (!fn->type_params.empty() && !fn->is_comptime && !fn->is_macro)
             continue;
+        // #7: especializaciones de funcion no se chequean como concretas (su
+        // body usa el patron); cada uso se monomorphiza eligiendo la spec.
+        if (fn->is_specialization && !fn->is_comptime && !fn->is_macro) continue;
         /* comptime fn -- el body solo se interpreta al
          * call site via comptime_eval_stmt.  No type-check estatico
          * aqui (los IdentExpr no necesitan annotation; el eval los

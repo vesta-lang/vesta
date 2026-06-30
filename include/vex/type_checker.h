@@ -679,6 +679,18 @@ class TypeChecker {
                                  const std::vector<Type> &args,
                                  std::vector<std::string> &out_params,
                                  std::vector<Type> &out_args);
+    /// #7: idem para CLASES genericas.  En specialization.cpp.
+    const ast::ClassDecl *
+    select_class_specialization(const std::string &base,
+                                const std::vector<Type> &args,
+                                std::vector<std::string> &out_params,
+                                std::vector<Type> &out_args);
+    /// #7: idem para FUNCIONES genericas.  En specialization.cpp.
+    const ast::FunctionDecl *
+    select_function_specialization(const std::string &base,
+                                   const std::vector<Type> &args,
+                                   std::vector<std::string> &out_params,
+                                   std::vector<Type> &out_args);
 
     /// L2.3: stack de contexto.  Cuando check_var_decl o check_assign
     /// procesa `Maybe<i32> a = Maybe.Some(42)`, push ("Maybe","Maybe_i32")
@@ -1507,6 +1519,10 @@ class TypeChecker {
     /// mod_.decls de las especializaciones.  Al instanciar `Caja<X>` se
     /// elige la mas especifica que matchee (ver select_struct_specialization).
     std::unordered_map<std::string, std::vector<size_t>> struct_specializations_;
+    /// #7: especializaciones de CLASE (mismo modelo que structs).
+    std::unordered_map<std::string, std::vector<size_t>> class_specializations_;
+    /// #7: especializaciones de FUNCION generica (`R id<i64>(...)`).
+    std::unordered_map<std::string, std::vector<size_t>> function_specializations_;
     /// Templates de FUNCIONES genericas (`T id<T>(T x)`).  Mapea template_name
     /// -> indice en mod_.decls.  Cada llamada `id<i64>(...)` (o con args
     /// inferidos) se monomorphiza via monomorphize_function().
@@ -1560,6 +1576,11 @@ class TypeChecker {
     struct MonomorphInfo {
         std::string template_name;          ///< "Box"
         std::vector<std::string> type_args; ///< ["i32"] (legibles)
+        /// #7: los type-args concretos como @c Type (no solo el string).
+        /// Lo usa el matching de patrones genericos anidados
+        /// (`Caja<Inner<T>>`) para recuperar el T concreto de un
+        /// `Inner_i64` y ligar el param fresco.
+        std::vector<Type> type_arg_types;
     };
 
     /**

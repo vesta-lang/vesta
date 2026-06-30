@@ -2473,9 +2473,10 @@ static void annotate_macro_param_idents(
 void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Bug fix 2026-05-23: forward declarations no tienen body -- skip.
     if (fd->is_forward_decl || !fd->body) return;
-    // Templates genericos (con type_params) se omiten: sus monomorphizaciones
-    // concretas (que SI aparecen en mod_.decls) se bajan normalmente.
-    if (!fd->type_params.empty()) return;
+    // Templates genericos (con type_params) y especializaciones (#7) se
+    // omiten: sus monomorphizaciones concretas (que SI aparecen en
+    // mod_.decls) se bajan normalmente.
+    if (!fd->type_params.empty() || fd->is_specialization) return;
     /* A.39: comptime fn (no-macro) NO se baja a IR.  Su body solo
      * se evalua en compile-time cuando es invocada desde un contexto
      * comptime.
@@ -3537,6 +3538,35 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ad.source_line = vd->loc.line;
                 fn_->append(current_block_, std::move(ad));
             }
+            // Campo AGREGADO inline (struct/array value-type): @c v_val es la
+            // DIRECCION del agregado origen -> copia memberwise (qword a
+            // qword) sus bytes al campo, NO un STORE escalar (que guardaria la
+            // direccion origen).  Sin esto un `Outer o = {.w = inner}`
+            // guardaba &inner en o.w y leer o.w.v devolvia la direccion
+            // (bug struct-en-struct, value-type anidado).
+            if (fi->type.kind == PrimitiveKind::STRUCT ||
+                fi->type.kind == PrimitiveKind::ARRAY) {
+                uint64_t sz = size_of_type(fi->type);
+                if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
+                    auto it_sl =
+                        tc_.struct_layouts().find(fi->type.struct_name);
+                    if (it_sl != tc_.struct_layouts().end())
+                        sz = (uint64_t)it_sl->second.size_bytes;
+                }
+                if (sz == 0) sz = 8;
+                emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
+                if (fi->type.kind == PrimitiveKind::STRUCT) {
+                    auto it_sl =
+                        tc_.struct_layouts().find(fi->type.struct_name);
+                    if (it_sl != tc_.struct_layouts().end() &&
+                        it_sl->second.has_copy_hook) {
+                        emit_struct_method_on_host_field(
+                            v_addr, fi->type.struct_name,
+                            fi->type.struct_name + "____clone__", vd->loc.line);
+                    }
+                }
+                continue;
+            }
             // Bit field en init list: read-modify-write.
             // El ALLOCA inicial deja basura; debemos LOAD el storage
             // word actual, limpiar los bits del rango con AND ~mask,
@@ -4089,15 +4119,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             ir::IrValueId v_val = lower_expr(il->elements[i].get());
             if (v_val == ir::IR_NO_VALUE) continue;
             const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-            const bool elem_is_literal =
-                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft,
-                                   vd->loc.line,
-                                   /*is_explicit=*/elem_is_literal);
+            // Direccion del campo de destino (addr + offset).
             ir::IrValueId v_addr = addr;
             if (fi->offset > 0) {
                 ir::IrValueId v_off = emit_const(
@@ -4111,6 +4133,45 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ad.source_line = vd->loc.line;
                 fn_->append(current_block_, std::move(ad));
             }
+            // Campo AGREGADO inline (struct/array value-type): @c v_val es la
+            // DIRECCION del agregado origen -> copia memberwise (qword a
+            // qword) sus bytes al campo, NO un STORE escalar (que guardaria la
+            // direccion origen como si fuera un puntero).  Sin esto un
+            // `Outer o = {.w = inner}` guardaba &inner en o.w y leer o.w.v
+            // devolvia la direccion en vez del valor (bug struct-en-struct).
+            if (fi->type.kind == PrimitiveKind::STRUCT ||
+                fi->type.kind == PrimitiveKind::ARRAY) {
+                uint64_t sz = size_of_type(fi->type);
+                if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
+                    auto it_sl =
+                        tc_.struct_layouts().find(fi->type.struct_name);
+                    if (it_sl != tc_.struct_layouts().end())
+                        sz = (uint64_t)it_sl->second.size_bytes;
+                }
+                if (sz == 0) sz = 8;
+                emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
+                // Copy-hook (__clone__) del struct, si lo declara.
+                if (fi->type.kind == PrimitiveKind::STRUCT) {
+                    auto it_sl =
+                        tc_.struct_layouts().find(fi->type.struct_name);
+                    if (it_sl != tc_.struct_layouts().end() &&
+                        it_sl->second.has_copy_hook) {
+                        emit_struct_method_on_host_field(
+                            v_addr, fi->type.struct_name,
+                            fi->type.struct_name + "____clone__", vd->loc.line);
+                    }
+                }
+                continue;
+            }
+            const bool elem_is_literal =
+                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
+            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft,
+                                   vd->loc.line,
+                                   /*is_explicit=*/elem_is_literal);
             // Bit field: necesitaria read-modify-write; en init list
             // simple solo se admiten campos normales.  Reportar error
             // si fi->bit_width > 0 (uso raro: usar asignacion despues).
@@ -23090,10 +23151,10 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
     // Las interfaces se omiten: sus metodos son abstractos (sin body)
     // y solo aportan la metadata de la firma para validacion.
     if (cd->is_interface) return;
-    // Templates genericos (con type_params) se omiten: sus
-    // monomorphizaciones concretas (que SI aparecen en mod_.decls)
-    // se procesan normalmente.
-    if (!cd->type_params.empty()) return;
+    // Templates genericos (con type_params) y especializaciones (#7) se
+    // omiten: sus monomorphizaciones concretas (que SI aparecen en
+    // mod_.decls) se procesan normalmente.
+    if (!cd->type_params.empty() || cd->is_specialization) return;
     for (auto &m_uptr : cd->methods) {
         auto *m = m_uptr.get();
         if (!m || !m->body) continue;
@@ -24019,6 +24080,58 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
     emit_free_unique_slot(slot, line);
 }
 
+void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
+                                    ir::IrValueId src_addr, uint64_t size_bytes,
+                                    uint32_t line) {
+    const bool dst_host = fn_->values[dst_addr].is_host_ptr;
+    const bool src_host = fn_->values[src_addr].is_host_ptr;
+    const uint64_t qwords = (size_bytes + 7) / 8;
+    for (uint64_t qi = 0; qi < qwords; ++qi) {
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(qi * 8), line);
+        const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[s_at].is_host_ptr = src_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = s_at;
+            ad.operands = {src_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = w;
+            ld.operands = {s_at};
+            ld.source_line = line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[d_at].is_host_ptr = dst_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = d_at;
+            ad.operands = {dst_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {w, d_at};
+            st.source_line = line;
+            fn_->append(current_block_, std::move(st));
+        }
+    }
+}
+
 void Lowering::emit_struct_method_on_host_field(
     ir::IrValueId field_addr, const std::string &struct_name,
     const std::string &method_label, uint32_t line) {
@@ -24471,8 +24584,9 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
         auto *cd = static_cast<ast::ClassDecl *>(decl.get());
         // No se genera helper para interfaces: no son instanciables.
         if (cd->is_interface) continue;
-        // Templates genericos (no monomorphizados): no instanciables.
-        if (!cd->type_params.empty()) continue;
+        // Templates genericos y especializaciones (#7): no instanciables tal
+        // cual; solo sus monomorphizaciones concretas.
+        if (!cd->type_params.empty() || cd->is_specialization) continue;
         auto it = tc_.class_layouts().find(cd->name);
         if (it == tc_.class_layouts().end()) continue;
         const ClassLayout &lay = it->second;
@@ -25409,7 +25523,8 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
     for (auto &decl : mod_.decls) {
         if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
         auto *cd = static_cast<ast::ClassDecl *>(decl.get());
-        if (!cd->type_params.empty()) continue; // template, no se procesa
+        if (!cd->type_params.empty() || cd->is_specialization)
+            continue; // template / especializacion (#7), no se procesa
         for (auto &m_uptr : cd->methods) {
             auto *m = m_uptr.get();
             if (!m || m->advice_kind == 0) continue;

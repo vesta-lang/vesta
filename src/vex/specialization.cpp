@@ -44,6 +44,24 @@ bool match_spec_pattern(TypeChecker &tc, const ast::TypeNode *pat,
     switch (pat->kind) {
     case ast::NodeKind::NamedTypeNode: {
         auto *n = static_cast<const ast::NamedTypeNode *>(pat);
+        // Patron generico ANIDADO: `Inner<T>` (T fresco).  El arg debe ser
+        // una instanciacion concreta de `Inner` (e.g. `Inner_i64`);
+        // recuperamos sus type-args concretos via monomorph_info y los
+        // matcheamos recursivamente contra los del patron.
+        if (!n->type_args.empty()) {
+            if (arg.kind != PrimitiveKind::STRUCT &&
+                arg.kind != PrimitiveKind::CLASS)
+                return false;
+            const auto *mi = tc.monomorph_info(arg.struct_name);
+            if (!mi || mi->template_name != n->name) return false;
+            if (mi->type_arg_types.size() != n->type_args.size()) return false;
+            for (size_t i = 0; i < n->type_args.size(); ++i) {
+                if (!match_spec_pattern(tc, n->type_args[i].get(),
+                                        mi->type_arg_types[i], fresh, bindings))
+                    return false;
+            }
+            return true;
+        }
         if (fresh.count(n->name)) {
             // Param fresco: liga al tipo concreto (parcial).  Si ya estaba
             // ligado, debe coincidir (consistencia de `Par<T, T>`).
@@ -78,22 +96,24 @@ bool match_spec_pattern(TypeChecker &tc, const ast::TypeNode *pat,
     }
 }
 
-} // namespace
-
-const ast::StructDecl *TypeChecker::select_struct_specialization(
-    const std::string &base, const std::vector<Type> &args,
-    std::vector<std::string> &out_params, std::vector<Type> &out_args) {
-    auto it = struct_specializations_.find(base);
-    if (it == struct_specializations_.end()) return nullptr; // sin specs
-
-    const ast::StructDecl *best = nullptr;
+/// Nucleo generico de seleccion: dado un decl @c DeclT (struct/clase/funcion)
+/// con @c is_specialization / @c spec_pattern / @c type_params, elige la
+/// especializacion mas especifica que matchee @p args.  TOTAL (sin params
+/// frescos) gana a PARCIAL; entre iguales, la primera declarada.
+template <class DeclT>
+const DeclT *select_spec_generic(TypeChecker &tc,
+                                 const std::vector<size_t> &candidate_indices,
+                                 const std::vector<std::unique_ptr<ast::Node>> &decls,
+                                 const std::vector<Type> &args,
+                                 std::vector<std::string> &out_params,
+                                 std::vector<Type> &out_args) {
+    const DeclT *best = nullptr;
     int best_score = -1;
     std::unordered_map<std::string, Type> best_bindings;
-    const ast::StructDecl *best_spec_for_params = nullptr;
 
-    for (size_t idx : it->second) {
-        if (idx >= mod_.decls.size()) continue;
-        auto *spec = static_cast<const ast::StructDecl *>(mod_.decls[idx].get());
+    for (size_t idx : candidate_indices) {
+        if (idx >= decls.size()) continue;
+        auto *spec = static_cast<const DeclT *>(decls[idx].get());
         if (!spec || !spec->is_specialization) continue;
         if (spec->spec_pattern.size() != args.size()) continue;
 
@@ -102,7 +122,7 @@ const ast::StructDecl *TypeChecker::select_struct_specialization(
         std::unordered_map<std::string, Type> bindings;
         bool ok = true;
         for (size_t i = 0; i < args.size(); ++i) {
-            if (!match_spec_pattern(*this, spec->spec_pattern[i].get(), args[i],
+            if (!match_spec_pattern(tc, spec->spec_pattern[i].get(), args[i],
                                     fresh, bindings)) {
                 ok = false;
                 break;
@@ -110,22 +130,16 @@ const ast::StructDecl *TypeChecker::select_struct_specialization(
         }
         if (!ok) continue;
 
-        // Especificidad: TOTAL (sin params frescos) gana a PARCIAL.  Entre
-        // dos del mismo rango se queda la primera declarada (no se espera
-        // ambiguedad con los patrones soportados).
         const int score = spec->type_params.empty() ? 100 : 50;
         if (score > best_score) {
             best_score = score;
             best = spec;
             best_bindings = bindings;
-            best_spec_for_params = spec;
         }
     }
 
     if (!best) return nullptr;
-
-    // Rellenar los bindings en el orden de declaracion de los params frescos.
-    out_params = best_spec_for_params->type_params;
+    out_params = best->type_params;
     out_args.clear();
     out_args.reserve(out_params.size());
     for (const auto &p : out_params) {
@@ -133,6 +147,35 @@ const ast::StructDecl *TypeChecker::select_struct_specialization(
         out_args.push_back(bit != best_bindings.end() ? bit->second : Type{});
     }
     return best;
+}
+
+} // namespace
+
+const ast::StructDecl *TypeChecker::select_struct_specialization(
+    const std::string &base, const std::vector<Type> &args,
+    std::vector<std::string> &out_params, std::vector<Type> &out_args) {
+    auto it = struct_specializations_.find(base);
+    if (it == struct_specializations_.end()) return nullptr;
+    return select_spec_generic<ast::StructDecl>(*this, it->second, mod_.decls,
+                                                args, out_params, out_args);
+}
+
+const ast::ClassDecl *TypeChecker::select_class_specialization(
+    const std::string &base, const std::vector<Type> &args,
+    std::vector<std::string> &out_params, std::vector<Type> &out_args) {
+    auto it = class_specializations_.find(base);
+    if (it == class_specializations_.end()) return nullptr;
+    return select_spec_generic<ast::ClassDecl>(*this, it->second, mod_.decls,
+                                               args, out_params, out_args);
+}
+
+const ast::FunctionDecl *TypeChecker::select_function_specialization(
+    const std::string &base, const std::vector<Type> &args,
+    std::vector<std::string> &out_params, std::vector<Type> &out_args) {
+    auto it = function_specializations_.find(base);
+    if (it == function_specializations_.end()) return nullptr;
+    return select_spec_generic<ast::FunctionDecl>(*this, it->second, mod_.decls,
+                                                  args, out_params, out_args);
 }
 
 } // namespace vex

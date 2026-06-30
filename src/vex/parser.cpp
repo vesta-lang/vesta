@@ -1572,8 +1572,16 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
     // Parametros de tipo opcionales (funcion generica `T id<T>(T x)`).  Mismo
     // patron que struct/clase/enum: `<T1, T2>` tras el nombre, antes de '('.
     // #6: cada param puede llevar un bound inline `<T: Concepto>`.
+    // #7: la PRIMERA `id<...>` es el primario; las siguientes con el mismo
+    // nombre son especializaciones (total/parcial).
     if (current_.kind == TokenKind::LT) {
-        parse_type_params_with_bounds(fn->type_params, fn->type_bounds);
+        if (generic_fn_names_seen_.count(fn->name)) {
+            fn->is_specialization = true;
+            parse_specialization_pattern(fn->spec_pattern, fn->type_params);
+        } else {
+            parse_type_params_with_bounds(fn->type_params, fn->type_bounds);
+            generic_fn_names_seen_.insert(fn->name);
+        }
     }
 
     (void)expect(TokenKind::LPAREN,
@@ -3301,10 +3309,18 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
     // como plantilla y no se procesa como clase concreta hasta que
     // se instancie via `Box<i32>`.
     if (current_.kind == TokenKind::LT) {
-        // #6: cada param puede llevar un bound inline `<T: Concepto>`.  El
-        // `:` de la superclase (`class C : Base`) queda FUERA de `<>` y no
-        // colisiona con el `:` del bound (que va dentro de los angulos).
-        parse_type_params_with_bounds(c->type_params, c->type_bounds);
+        // #7: la PRIMERA `class Caja<...>` es el primario; las siguientes con
+        // el mismo nombre son especializaciones (total/parcial).
+        if (generic_class_names_seen_.count(c->name)) {
+            c->is_specialization = true;
+            parse_specialization_pattern(c->spec_pattern, c->type_params);
+        } else {
+            // #6: cada param puede llevar un bound inline `<T: Concepto>`.  El
+            // `:` de la superclase (`class C : Base`) queda FUERA de `<>` y no
+            // colisiona con el `:` del bound (que va dentro de los angulos).
+            parse_type_params_with_bounds(c->type_params, c->type_bounds);
+            generic_class_names_seen_.insert(c->name);
+        }
     }
 
     // Superclase opcional via ':'.

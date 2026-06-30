@@ -288,10 +288,12 @@ class Parser {
     parse_specialization_pattern(std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
                                  std::vector<std::string> &fresh_params);
 
-    /// #7: nombres de struct genericos ya vistos como template PRIMARIO.
-    /// La PRIMERA `struct Caja<...>` es el primario; las siguientes con el
-    /// mismo nombre son especializaciones (total/parcial).
+    /// #7: nombres de struct/clase/funcion genericos ya vistos como template
+    /// PRIMARIO.  La PRIMERA decl `Caja<...>` es el primario; las siguientes
+    /// con el mismo nombre son especializaciones (total/parcial).
     std::unordered_set<std::string> generic_struct_names_seen_;
+    std::unordered_set<std::string> generic_class_names_seen_;
+    std::unordered_set<std::string> generic_fn_names_seen_;
 
     /// @brief Parsea una declaracion de concepto (#6).  Tres formas:
     ///   - `concept N<T> = <bool-expr>;`        (predicado)
