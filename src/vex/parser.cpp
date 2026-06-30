@@ -4065,8 +4065,9 @@ std::unique_ptr<ast::ConceptDecl> Parser::parse_concept_decl() {
         c->ckind = ast::ConceptKind::Structural;
         while (current_.kind != TokenKind::RBRACE &&
                current_.kind != TokenKind::END_OF_FILE) {
-            auto rt = parse_type_node(); // tipo de retorno (descartado)
-            if (!rt) {
+            ast::StructuralMethod sm;
+            sm.return_type = parse_type_node(); // tipo de retorno
+            if (!sm.return_type) {
                 synchronize();
                 break;
             }
@@ -4076,20 +4077,27 @@ std::unique_ptr<ast::ConceptDecl> Parser::parse_concept_decl() {
                 synchronize();
                 break;
             }
-            c->structural_methods.push_back(consume().lexeme);
-            // Consumir `( ... )` balanceado (la firma de params no se usa en
-            // el MVP: el chequeo es por existencia de metodo via has_method).
+            sm.name = consume().lexeme;
+            // Firma de parametros: `(T1, T2, ...)` -- solo los TIPOS (los
+            // nombres de param son opcionales y se ignoran).
             (void)expect(TokenKind::LPAREN,
                          "se esperaba '(' tras el nombre del metodo");
-            int depth = 1;
-            while (depth > 0 && current_.kind != TokenKind::END_OF_FILE) {
-                if (current_.kind == TokenKind::LPAREN)
-                    ++depth;
-                else if (current_.kind == TokenKind::RPAREN)
-                    --depth;
-                (void)consume();
+            while (current_.kind != TokenKind::RPAREN &&
+                   current_.kind != TokenKind::END_OF_FILE) {
+                auto pt = parse_type_node();
+                if (!pt) {
+                    synchronize();
+                    break;
+                }
+                sm.param_types.push_back(std::move(pt));
+                // Nombre de param opcional (e.g. `i64 x`): consumirlo.
+                if (current_.kind == TokenKind::IDENTIFIER) (void)consume();
+                if (!match(TokenKind::COMMA)) break;
             }
+            (void)expect(TokenKind::RPAREN,
+                         "se esperaba ')' al cerrar la firma del metodo");
             (void)match(TokenKind::SEMICOLON);
+            c->structural_methods.push_back(std::move(sm));
         }
         (void)expect(TokenKind::RBRACE,
                      "se esperaba '}' al cerrar el concepto estructural");

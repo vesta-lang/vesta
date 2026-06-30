@@ -1585,13 +1585,28 @@ enum class ConceptKind : uint8_t {
  * un generico con bound `<T: N>`; si devuelve false, error claro.  No emite
  * codigo: las constraints DESAPARECEN tras el type-check.
  */
+/**
+ * @struct StructuralMethod
+ * @brief Firma de un metodo exigido por un concepto estructural (#6 ext).
+ *
+ * `concept Dibujable { i64 area(); bool igual(i64 x); }` produce dos
+ * StructuralMethod.  El chequeo compara nombre + aridad + tipo de retorno +
+ * tipos de parametros contra los metodos del tipo concreto.
+ */
+struct StructuralMethod {
+    std::string name;
+    std::unique_ptr<TypeNode> return_type; ///< null = void
+    std::vector<std::unique_ptr<TypeNode>> param_types;
+};
+
 struct ConceptDecl : Node {
     std::string name;
     std::vector<std::string> type_params;        ///< usualmente ["T"]
     ConceptKind ckind = ConceptKind::Predicate;
     std::unique_ptr<Expr> predicate;             ///< forma Predicate
     std::unique_ptr<BlockStmt> body;             ///< forma Block
-    std::vector<std::string> structural_methods; ///< forma Structural (nombres)
+    /// forma Structural: firmas completas (nombre + retorno + params).
+    std::vector<StructuralMethod> structural_methods;
     bool is_public = true;
     ConceptDecl() : Node(NodeKind::ConceptDecl) {}
 };

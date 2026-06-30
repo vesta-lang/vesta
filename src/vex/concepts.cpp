@@ -186,15 +186,62 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
         return r;
     }
     case ast::ConceptKind::Structural: {
-        // El tipo debe tener TODOS los metodos exigidos (chequeo por
-        // existencia de nombre; la firma exacta se deja a una version
-        // futura).  Un concepto estructural NO toma type-param: opera
-        // sobre el tipo del bound directamente.
-        bool all = true;
-        for (const auto &mn : cd->structural_methods) {
-            if (!comptime_has_method(tc, t, mn)) {
-                all = false;
-                break;
+        // El tipo debe tener TODOS los metodos exigidos, con FIRMA
+        // compatible: mismo nombre, misma aridad, mismo tipo de retorno y
+        // mismos tipos de parametros.  Localiza el ClassMethodInfo del tipo
+        // (clase o struct) y lo compara contra la firma del concepto.
+        const std::vector<ClassMethodInfo> *methods = nullptr;
+        if (t.kind == PrimitiveKind::CLASS) {
+            auto itc = tc.class_layouts().find(t.struct_name);
+            if (itc != tc.class_layouts().end())
+                methods = &itc->second.methods;
+        } else if (t.kind == PrimitiveKind::STRUCT) {
+            auto its = tc.struct_layouts().find(t.struct_name);
+            if (its != tc.struct_layouts().end())
+                methods = &its->second.methods;
+        }
+        bool all = (methods != nullptr);
+        if (methods) {
+            for (const auto &sm : cd->structural_methods) {
+                const ClassMethodInfo *found = nullptr;
+                for (const auto &m : *methods) {
+                    if (m.is_constructor || m.is_destructor) continue;
+                    if (m.name == sm.name) {
+                        found = &m;
+                        break;
+                    }
+                }
+                if (!found) {
+                    all = false;
+                    break;
+                }
+                // Aridad.
+                if (found->param_types.size() != sm.param_types.size()) {
+                    all = false;
+                    break;
+                }
+                // Tipo de retorno (null en la firma = void).
+                const Type want_ret =
+                    sm.return_type ? tc.resolve_type_node(sm.return_type.get())
+                                   : Type{PrimitiveKind::VOID};
+                if (!(found->return_type == want_ret)) {
+                    all = false;
+                    break;
+                }
+                // Tipos de parametros.
+                bool params_ok = true;
+                for (size_t i = 0; i < sm.param_types.size(); ++i) {
+                    const Type want_p =
+                        tc.resolve_type_node(sm.param_types[i].get());
+                    if (!(found->param_types[i] == want_p)) {
+                        params_ok = false;
+                        break;
+                    }
+                }
+                if (!params_ok) {
+                    all = false;
+                    break;
+                }
             }
         }
         r.satisfied = all;

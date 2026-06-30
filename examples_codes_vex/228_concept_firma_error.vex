@@ -1,0 +1,22 @@
+// Test NEGATIVO (#6 ext): un concepto estructural rechaza un tipo cuyo metodo
+// tiene el NOMBRE correcto pero la FIRMA incorrecta (tipo de retorno distinto).
+//
+// `Figura` exige `i64 area()`.  `Mala` tiene `bool area()` (retorno bool, no
+// i64), asi que NO satisface el concepto y la instanciacion debe fallar con un
+// error de constraint claro.
+
+concept Figura { i64 area(); }
+
+class Mala {
+    i64 x;
+    Mala(i64 v) { this.x = v; }
+    bool area() { return true; }   // nombre OK, retorno bool != i64
+}
+
+i64 medir<T: Figura>(T f) { return 0; }
+
+i32 main() {
+    Mala m = new Mala(1);
+    i64 r = medir<Mala>(m);        // ERROR: Mala no satisface Figura
+    return 0;
+}
