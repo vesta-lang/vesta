@@ -1179,6 +1179,28 @@ bool TypeChecker::run() {
             }
         }
     }
+    // Pre-registro de los typedef/using PLANOS (no-newtype) ANTES del walk de
+    // pre_mono.  Sin esto, un type-arg que es un alias (`Caja<Edad>` con
+    // `typedef i64 Edad`) se resuelve a void durante la monomorphizacion
+    // (type_aliases_ se llena en collect_globals, DESPUES) -> mangling roto
+    // (`Caja_x`).  Los newtypes (con nominal_id, conversiones) los maneja
+    // collect_globals (mas complejo + raro como type-arg); aqui solo los
+    // alias simples.  collect_globals tolera el re-registro (no re-emplaza).
+    for (auto &decl : mod_.decls) {
+        if (!decl || decl->kind != ast::NodeKind::TypeAliasDecl) continue;
+        auto *a = static_cast<ast::TypeAliasDecl *>(decl.get());
+        if (a->is_newtype) continue; // los maneja collect_globals
+        if (type_aliases_.count(a->name)) continue;
+        Type resolved = type_from_node(a->aliased.get());
+        // Solo registrar si resolvio a algo concreto (primitivo o tipo de
+        // usuario ya pre-registrado como nombre).  Si no, lo deja a
+        // collect_globals (que emite el error si procede).
+        if (resolved.kind != PrimitiveKind::COUNT &&
+            !(resolved.kind == PrimitiveKind::VOID && a->aliased &&
+              a->aliased->kind == ast::NodeKind::NamedTypeNode)) {
+            type_aliases_.emplace(a->name, std::move(resolved));
+        }
+    }
     // Snapshot del numero de decls antes de monomorphizar (las
     // monomorphizaciones nuevas se anyaden al final).  Recorremos
     // SOLO los decls originales para evitar revisitar lo nuevo.
@@ -2209,8 +2231,23 @@ void TypeChecker::collect_globals() {
                 newtype_info_.emplace(a->name, std::move(info));
             }
             if (!type_aliases_.emplace(a->name, resolved).second) {
-                diags_.error(a->loc,
-                             "alias de tipo redefinido: '" + a->name + "'");
+                // #typedef-generics: si el alias ya estaba registrado por el
+                // pre-pase early (para que los type-args genericos lo
+                // resuelvan), NO es una redefinicion real.  Solo es error si
+                // hay DOS TypeAliasDecl con el mismo nombre.  Distinguimos
+                // re-registrando el valor (idempotente) y contando decls.
+                int count = 0;
+                for (auto &d2 : mod_.decls)
+                    if (d2 && d2->kind == ast::NodeKind::TypeAliasDecl &&
+                        static_cast<ast::TypeAliasDecl *>(d2.get())->name ==
+                            a->name)
+                        ++count;
+                if (count > 1) {
+                    diags_.error(a->loc,
+                                 "alias de tipo redefinido: '" + a->name + "'");
+                } else {
+                    type_aliases_[a->name] = resolved; // refrescar (idempotente)
+                }
             }
         } else if (decl->kind == ast::NodeKind::StructDecl) {
             auto *s = static_cast<ast::StructDecl *>(decl.get());
