@@ -1,0 +1,38 @@
+// Inferencia de tipos genericos en declaraciones (CTAD y `auto`).
+//
+// Al declarar una variable inicializada con una expresion de tipo generico, no
+// hace falta repetir los argumentos de tipo: se deducen del inicializador.  Dos
+// formas:
+//   - `auto v = expr;`       -- infiere el tipo COMPLETO de expr (cualquier tipo).
+//   - `Caja v = expr;`       -- estilo CTAD de C++17: el nombre del template sin
+//                               args; los args se deducen del init (`Caja<i64>`).
+// Ambas producen el mismo tipo concreto; cero overhead.
+
+struct Caja<T> {
+    T dato;
+    T leer() { return this.dato; }
+}
+
+Caja<i64> hacer_caja(i64 x) {
+    Caja<i64> c;
+    c.dato = x;
+    return c;
+}
+
+class Box<T> {
+    public T valor;
+    public Box(T x) { this.valor = x; }
+}
+
+i32 main() {
+    // CTAD: `Caja` sin <...>, deducido a Caja<i64> por el init.
+    Caja c1 = hacer_caja(20);
+
+    // auto: infiere el tipo completo del init.
+    auto c2 = hacer_caja(15);
+
+    // CTAD con clase generica + constructor.
+    Box b = new Box<i64>(7);
+
+    return (i32)(c1.leer() + c2.leer() + b.valor);   // 20 + 15 + 7 = 42
+}

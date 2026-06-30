@@ -5452,6 +5452,31 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
             diags_.error(vd->loc, "no se puede asignar null a una variable "
                                   "'nonnull' (use !!x para forzar unwrap)");
         }
+        // Inferencia CTAD: `Caja c = expr;` con un nombre de template generico
+        // SIN args de tipo y un init cuyo tipo es una monomorphizacion del
+        // template (`Caja_i64`) -> deducir los args del init (como C++17 CTAD).
+        // Equivalente a `auto c = expr;` pero con el nombre del template escrito.
+        if (vd->type && vd->type->kind == ast::NodeKind::NamedTypeNode) {
+            auto *nt = static_cast<ast::NamedTypeNode *>(vd->type.get());
+            const bool is_template =
+                is_generic_struct_template(nt->name) ||
+                is_generic_enum_template(nt->name) ||
+                generic_templates_.count(nt->name) > 0;
+            if (nt->type_args.empty() && is_template &&
+                (t.kind == PrimitiveKind::STRUCT ||
+                 t.kind == PrimitiveKind::CLASS) &&
+                t.struct_name.rfind(nt->name + "_", 0) == 0) {
+                s.type = t; // deducir el tipo concreto del init
+                // Actualizar el simbolo ya declarado (declare() lo metio en el
+                // scope antes de computar el init) para que `c.campo` resuelva.
+                auto &top = scopes_.back();
+                auto it_sym = top.find(vd->name);
+                if (it_sym != top.end()) it_sym->second.type = t;
+                // Reescribir el TypeNode al nombre concreto monomorphizado para
+                // que el lowering (que re-resuelve vd->type) lo baje bien.
+                nt->name = t.struct_name;
+            }
+        }
         if (t.kind != PrimitiveKind::COUNT && !types_assignable(s.type, t) &&
             !class_is_assignable(s.type, t) && !null_to_class) {
             diags_.error(vd->loc, std::string("tipo del inicializador (") +
