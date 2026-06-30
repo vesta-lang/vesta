@@ -15604,6 +15604,73 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 }
             }
         }
+        // Campo de tipo STRUCT (value-type): @c rhs es la DIRECCION del struct
+        // origen -> copia memberwise (qword-by-qword) sus bytes al campo, NO un
+        // STORE escalar (que guardaria la direccion origen).  Si el struct
+        // declara `__clone__` (copy-hook), tras la copia aplica el efecto sobre
+        // la copia del campo (p.ej. ++refcount).  Mismo modelo que el path
+        // CLASS (lower_class_field_store).
+        if (fa->result_type.kind == PrimitiveKind::STRUCT) {
+            uint64_t sz = 8;
+            auto it_sl = tc_.struct_layouts().find(fa->result_type.struct_name);
+            if (it_sl != tc_.struct_layouts().end())
+                sz = static_cast<uint64_t>(it_sl->second.size_bytes);
+            const bool dst_host = fn_->values[addr].is_host_ptr;
+            const bool src_host = fn_->values[rhs].is_host_ptr;
+            const uint64_t qwords = (sz + 7) / 8;
+            for (uint64_t qi = 0; qi < qwords; ++qi) {
+                const ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(qi * 8), e->loc.line);
+                const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
+                fn_->values[s_at].is_host_ptr = src_host;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = s_at;
+                    ad.operands = {rhs, v_off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr ld{};
+                    ld.op = ir::IrOp::LOAD;
+                    ld.type = ir::IrType::I64;
+                    ld.dst = w;
+                    ld.operands = {s_at};
+                    ld.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ld));
+                }
+                const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
+                fn_->values[d_at].is_host_ptr = dst_host;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = d_at;
+                    ad.operands = {addr, v_off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                {
+                    ir::IrInstr st{};
+                    st.op = ir::IrOp::STORE;
+                    st.type = ir::IrType::I64;
+                    st.operands = {w, d_at};
+                    st.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(st));
+                }
+            }
+            if (it_sl != tc_.struct_layouts().end() &&
+                it_sl->second.has_copy_hook) {
+                emit_struct_method_on_host_field(
+                    addr, fa->result_type.struct_name,
+                    fa->result_type.struct_name + "__" + "__clone__",
+                    e->loc.line);
+            }
+            return rhs;
+        }
         // Campo normal: STORE directo.
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -23537,8 +23604,14 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
 void Lowering::emit_struct_method_on_host_field(
     ir::IrValueId field_addr, const std::string &struct_name,
     const std::string &method_label, uint32_t line) {
-    // AOT (native_poo_): el struct es host y el metodo host-this -> CALL directo.
-    if (native_poo_) {
+    // El metodo de struct se compila con this=VM (interp/JIT) o this=host (AOT,
+    // native_poo).  Solo necesitamos el temp VM intermedio cuando el campo es
+    // HOST pero el metodo espera VM (interp/JIT + campo en payload de clase).
+    // En AOT (todo host, metodo host-this) o si el campo ya es VM (struct
+    // contenedor en VM-stack) el CALL es directo sobre field_addr.
+    const bool need_temp =
+        !native_poo_ && fn_->values[field_addr].is_host_ptr;
+    if (!need_temp) {
         ir::IrInstr cd{};
         cd.op = ir::IrOp::CALL;
         cd.type = ir::IrType::VOID;
@@ -25807,11 +25880,18 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 fn_->append(current_block_, std::move(st));
             }
         }
-        // (El copy-hook __clone__ en el store a campo -- para tipos copiables
-        // como un futuro shared<T> stdlib -- queda pendiente: requiere primero
-        // resolver la host-ness de los metodos de struct sobre un campo de clase
-        // (this es host, pero el metodo lo lee como VM) Y aplicar __clone__
-        // tambien en el path struct-contenedor.  Ver proj_ownership_hooks H1-resto.)
+        // Copy-hook (ruta B): si el campo struct declara `__clone__`, este store
+        // es una COPIA -> tras el memcpy, `campo.__clone__()` aplica el efecto
+        // (p.ej. ++refcount) sobre la copia del campo.  El campo vive en el
+        // payload HOST de la clase, asi que usamos el helper (copia a temp VM en
+        // interp/JIT; el __clone__ opera sobre el pointee, sin copy-back).  El
+        // origen NO se mueve (scan_escaping_locals lo excluye para copy-hook).
+        if (it_sl != tc_.struct_layouts().end() &&
+            it_sl->second.has_copy_hook) {
+            emit_struct_method_on_host_field(
+                addr, ftyp.struct_name, ftyp.struct_name + "__" + "__clone__",
+                loc.line);
+        }
         return rhs;
     }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
@@ -32653,6 +32733,17 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
             escaping_locals_.insert(id->name);
         }
     };
+    // Ruta B: un valor de un tipo con copy-hook NO escapa al guardarse en un
+    // campo -- es una COPIA (el store llama __clone__ sobre la copia del campo;
+    // el origen conserva su propia copia y su dtor corre).  No lo marcamos como
+    // escaping (no es un move).
+    auto value_has_copy_hook = [&](ast::Expr *e) -> bool {
+        if (!e || e->kind != ast::NodeKind::IdentExpr) return false;
+        const Type &t = e->result_type;
+        if (t.kind != PrimitiveKind::STRUCT) return false;
+        auto it = tc_.struct_layouts().find(t.struct_name);
+        return it != tc_.struct_layouts().end() && it->second.has_copy_hook;
+    };
 
     visit_expr = [&](ast::Expr *e) {
         if (!e) return;
@@ -32667,6 +32758,9 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
             if (a->target) {
                 switch (a->target->kind) {
                 case ast::NodeKind::FieldAccessExpr:
+                    if (!value_has_copy_hook(a->value.get()))
+                        mark_if_ident(a->value.get());
+                    break;
                 case ast::NodeKind::IndexExpr:
                     mark_if_ident(a->value.get());
                     break;

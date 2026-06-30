@@ -1,0 +1,43 @@
+// Copy-hook en campos de contenedor (ruta B, H1).
+//
+// El copy-hook `__clone__` no solo se invoca en `S b = a`, sino tambien al
+// COPIAR el struct a un campo de un contenedor (`obj.f = a`): el compilador hace
+// el memcpy y luego `campo.__clone__()` sobre la copia del campo.  Asi un tipo
+// con ownership gestionado -- como un conteo de referencias -- funciona
+// correctamente almacenado en clases y structs: cada copia incrementa, cada
+// destruccion (del contenedor o del original) decrementa, y el recurso se libera
+// cuando cae a cero.  El destructor del contenedor invoca el destructor del
+// campo automaticamente.  Ver doc/VMdoc/Vex/SmartPointers.md.
+
+class Counter { public static i64 vivos; }
+
+struct Rc {
+    i64* ctrl;
+    void __clone__() { *this.ctrl = *this.ctrl + 1; }   // copia -> ++refcount
+    ~Rc() {
+        *this.ctrl = *this.ctrl - 1;
+        if (*this.ctrl == 0) { free(this.ctrl); Counter.vivos = Counter.vivos - 1; }
+    }
+}
+
+class Nodo { Rc dato; }              // contenedor con un campo Rc
+
+Rc make() {
+    Rc r;
+    r.ctrl = (i64*) malloc(8);
+    *r.ctrl = 1;
+    Counter.vivos = Counter.vivos + 1;
+    return r;
+}
+
+void usar() {
+    Rc a = make();          // vivos=1, refcount=1
+    Nodo n = new Nodo();
+    n.dato = a;             // COPIA a campo -> __clone__ -> refcount=2 (a y n.dato)
+}                           // ~Nodo(n.dato): refcount=1 ; ~a: refcount=0 -> free, vivos=0
+
+i32 main() {
+    Counter.vivos = 0;
+    usar();
+    return (i32)(42 - Counter.vivos);   // 42 - 0 = 42 (todo liberado, un solo free)
+}
