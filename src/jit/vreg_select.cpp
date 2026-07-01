@@ -1235,13 +1235,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 if (in.operands.size() != 2) return false;
                 (void)bin_mop(in.op, mop);
-                /* P3 imm-forms: `x * const` (const cabe en i32) -> IMUL 3-op
-                 * `imul dst, x, imm` (evita materializar el const en un
-                 * registro Y el mov 2-address; el encoder + rewrite ya lo
-                 * soportan).  Conmutativo: el const puede estar en cualquier
-                 * lado.  Solo MUL de momento (ADD/SUB/AND/... con imm = inc
-                 * futuro; verificar emit_alu imm antes). */
-                if (in.op == ir::IrOp::MUL) {
+                /* P3 imm-forms: operando CONST (i32) -> forma inmediata,
+                 * evita materializar el const en un registro (y para IMUL
+                 * ademas el mov 2-address).  IMUL -> `imul dst,x,imm` (3-op,
+                 * rewrite dedicado); ADD/AND/OR/XOR -> `mov dst,x; OP dst,imm`
+                 * (2-address, emit_alu 0x81/0x83).  Conmutatividad: const en
+                 * cualquier lado salvo SUB (solo `x - const`; `const - x`
+                 * necesitaria NEG -> no se fusiona). */
+                {
                     const uint32_t a = in.operands[0], b = in.operands[1];
                     auto cst = [&](uint32_t v, int64_t &c) -> bool {
                         if (v < v_is_const.size() && v_is_const[v]) {
@@ -1253,16 +1254,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         }
                         return false;
                     };
+                    const bool commut = (in.op != ir::IrOp::SUB);
                     int64_t c;
-                    if (cst(b, c)) {
+                    if (cst(b, c)) { // x OP const
                         O.push_back(MInstr::make_binary(
-                            MOp::IMUL, vr(in.dst), vr(a),
+                            mop, vr(in.dst), vr(a),
                             MOperand::make_imm32(static_cast<int32_t>(c))));
                         break;
                     }
-                    if (cst(a, c)) {
+                    if (commut && cst(a, c)) { // const OP x -> x OP const
                         O.push_back(MInstr::make_binary(
-                            MOp::IMUL, vr(in.dst), vr(b),
+                            mop, vr(in.dst), vr(b),
                             MOperand::make_imm32(static_cast<int32_t>(c))));
                         break;
                     }
