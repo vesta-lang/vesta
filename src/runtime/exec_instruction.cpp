@@ -28,6 +28,7 @@
 #include "loader/loader.h"         // Phase M.sandbox: check_cap_at_pc + Caps
 #include "jit/auto_jit.h"          // D.5-callvm-hook: lookup_jit_code_at_pc
 #include "jit/interp_jit_bridge.h" // D.5-callvm-hook: enter_jit
+#include "jit/naked_native.h"      // Bug 198: fp nativo (naked) via callvmr
 #include "vesta_rt/public.h"       // D.5-callvm-hook: vrt_proc
 #include "runtime/profile.h"       // Sprint D.6 (2026-06-03): PGO counters
 
@@ -645,6 +646,21 @@ void exec_instr_callvmr(ProcessVM *vm, const DecodedInstr &instr) {
             : read_reg64(vm, instr.data_instruction.reg_data.reg1);
     const uint64_t ret_addr =
         vm->registers.rip.raw() + instr.flags_info.size_instr; // PC de retorno
+
+    // Bug/feature 198: puntero a funcion NATIVO (naked).  Si @c addr cae dentro
+    // del code cache de funciones naked-native (comprobacion de rango precisa),
+    // la invocamos con ABI del host: args en R1..R15 (mismo puente que CALLN),
+    // resultado a R0.  Las direcciones VM de bytecode nunca caen en ese rango
+    // (son VAs del espacio VM, no punteros host), asi que el fast-path normal
+    // no se ve afectado.
+    if (jit::is_naked_native_addr(addr)) {
+        const uint64_t argc = vm->registers.regs[15].qword();
+        const uint64_t r = runtime::invoke_native_unchecked(
+            reinterpret_cast<void *>(addr), argc, vm);
+        vm->registers.regs[0].qword(r);
+        write_rip(vm, ret_addr);
+        return;
+    }
 
     // D.5-callvm-hook: dispatch a JIT si el target tiene codigo nativo
     // compilado.  Mismo razonamiento que exec_instr_callvm: la calling

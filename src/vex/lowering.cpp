@@ -11106,6 +11106,30 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     break;
             }
             const std::string tok = b.substr(i, j - i);
+            // Bug/feature 198: la decoracion de simbolos propios (__vxf_ fn /
+            // __vxg_ global) solo debe aplicarse a tokens en posicion de
+            // OPERANDO, NUNCA a un mnemonico ni a un registro.  Critico porque
+            // hay builtins del lenguaje cuyo nombre coincide con un mnemonico
+            // x86 (`bswap`, `not`, `and`, `or`, `add`, ...); sin este guard,
+            // `bswap rax` se reescribia a `__vxf_bswap rax` y Keystone lo
+            // rechazaba como mnemonico invalido.
+            //
+            // Detectamos la posicion de mnemonico mirando hacia atras hasta el
+            // inicio de la linea: si solo hay espacios/tabs antes, este token
+            // es el primero (mnemonico).
+            bool is_mnemonic_pos = true;
+            {
+                size_t k = i;
+                while (k > 0) {
+                    const char pc = b[k - 1];
+                    if (pc == '\n') break;               // inicio de linea
+                    if (pc == ' ' || pc == '\t' || pc == '\r') { --k; continue; }
+                    is_mnemonic_pos = false;             // hay codigo antes
+                    break;
+                }
+            }
+            // Un registro tampoco es un simbolo aunque su nombre coincidiera.
+            const bool is_reg = asmblk_is_register(tok);
             auto it = cmap.find(tok);
             if (it != cmap.end() && !it->second.is_str &&
                 !it->second.is_array && !it->second.is_struct &&
@@ -11115,21 +11139,31 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                               static_cast<unsigned long long>(
                                   static_cast<uint64_t>(it->second.value)));
                 body_sub += buf;
-            } else if (native_poo_ &&
+            } else if (!is_mnemonic_pos && !is_reg &&
                        tc_.function_sig_by_name(tok) != nullptr) {
-                // AOT: referencia a una FUNCION del modulo -> nombre canonico
+                // Referencia a una FUNCION del modulo -> nombre canonico
                 // __vxf_<label>.  El backend lo resuelve a un sentinela; el
                 // encoder lo decodifica al reloc (CALL_REL32 bare / fnsym: abs)
                 // segun la forma de la instruccion (jmp/call/mov/lea).
+                //
+                // Bug/feature 198: la decoracion se hace en TODOS los modos (no
+                // solo native_poo_/AOT).  En interp/JIT el resolver de
+                // naked_native mapea __vxf_<label> a la direccion NATIVA de la
+                // funcion (native-compilada al vuelo).  Sin decorar, el token
+                // quedaba bare y Keystone lo resolvia a un sentinela que nadie
+                // parchea -> SIGSEGV al ejecutar el asm.
                 const FunctionSig *fs = tc_.function_sig_by_name(tok);
                 const std::string label =
                     fs->mangled_label.empty() ? tok : fs->mangled_label;
                 body_sub += "__vxf_" + label;
-            } else if (native_poo_ &&
+            } else if (!is_mnemonic_pos && !is_reg &&
                        runtime_global_slots_.find(tok) !=
                            runtime_global_slots_.end()) {
-                // AOT: referencia a un GLOBAL del modulo -> __vxg_<slot>.  El
-                // encoder lo resuelve a rodata.<slot> (.data del global).
+                // Referencia a un GLOBAL del modulo -> __vxg_<slot>.  En AOT el
+                // encoder lo resuelve a rodata.<slot> (.data del global); en
+                // interp/JIT el resolver de naked_native lo mapea a la direccion
+                // HOST del slot en vm_mem (donde el codigo VM_ABI escribe/lee el
+                // global).
                 body_sub += "__vxg_" + std::to_string(
                                            runtime_global_slots_[tok]);
             } else {
@@ -11427,6 +11461,43 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (e->operand->kind == ast::NodeKind::IdentExpr) {
         auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
         if (id->is_func_ref) {
+            const std::string label =
+                id->func_ref_mangled.empty() ? id->name : id->func_ref_mangled;
+            // Bug/feature 198: en interp/JIT (no AOT), un puntero a funcion de
+            // una funcion PLANA del modulo puede fluir a codigo NATIVO (asm
+            // @Naked que hace `call [g_fp]`, o un callvmr que detecta la
+            // direccion nativa).  Para que ese codigo pueda saltar al fp, la
+            // direccion debe ser la NATIVA (no la VA de bytecode VM).  Emitimos
+            // una CALLN a vrt:naked_fnaddr que compila la funcion al vuelo y
+            // devuelve su direccion nativa.  El interp/JIT callvmr detecta que
+            // la direccion cae en el code cache naked y la invoca con ABI del
+            // host.  Solo funciones planas (no lambdas ni externs): las lambdas
+            // van por otro path (LABEL_ADDR de bytecode) y los externs por su
+            // thunk cfn.
+            const FunctionSig *fs = tc_.function_sig_by_name(label);
+            if (!native_poo_ && fs != nullptr && fs->extern_lib.empty() &&
+                !extern_lib_by_fn_name_.count(id->name)) {
+                out_mod_->register_native_import("vrt", "naked_fnaddr");
+                uint64_t name_hash = 1469598103934665603ull;
+                for (unsigned char c : label) {
+                    name_hash ^= static_cast<uint64_t>(c);
+                    name_hash *= 1099511628211ull;
+                }
+                std::vector<ir::IrValueId> args;
+                args.push_back(emit_getproc(e->loc.line));
+                args.push_back(
+                    emit_const(ir::IrType::I64, name_hash, e->loc.line));
+                const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::CALLN;
+                ins.type = ir::IrType::PTR;
+                ins.dst = dst;
+                ins.func_name = "vrt:naked_fnaddr";
+                ins.operands = std::move(args);
+                ins.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ins));
+                return dst;
+            }
             const ir::IrValueId code = fn_->new_value(ir::IrType::PTR);
             ir::IrInstr ins{};
             ins.op = ir::IrOp::LABEL_ADDR;
@@ -14833,6 +14904,63 @@ skip_comptime_eval_for_macro_to_macro:
             ins.type = ret_ir;
             ins.dst = dst;
             ins.func_name = lib + ":" + id->name;
+            ins.operands = std::move(arg_ids);
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return dst;
+        }
+    }
+
+    // Bug/feature 198: llamada a una funcion @Naked.  En AOT todo es nativo y
+    // la llamada normal ya funciona; pero en interp/JIT (VM_ABI) una @Naked no
+    // tiene representacion en bytecode VM (su cuerpo es asm nativo puro con ABI
+    // del host).  Enrutamos la llamada al dispatcher @c vrt:naked_dispatch, que
+    // compila la @Naked al vuelo (con sus simbolos propios resueltos) y la
+    // invoca con ABI nativo.  Convencion CALLN:
+    //   R1 = proc, R2 = name_hash, R3 = argc_real, R4.. = args reales.
+    if (!native_poo_) {
+        const FunctionSig *sig = tc_.function_sig_by_name(id->name);
+        if (sig != nullptr && sig->is_naked && sig->extern_lib.empty()) {
+            const std::string label =
+                sig->mangled_label.empty() ? id->name : sig->mangled_label;
+            out_mod_->register_native_import("vrt", "naked_dispatch");
+            std::vector<ir::IrValueId> arg_ids;
+            arg_ids.reserve(e->args.size() + 3);
+            // R1 = proc (getproc); R2 = hash; R3 = argc_real.
+            arg_ids.push_back(emit_getproc(e->loc.line));
+            // FNV-1a 64-bit del label (DEBE coincidir con jit::fnv1a64_name en
+            // naked_native.h -- clave que el dispatcher usa para localizar el
+            // IrFunction @Naked por nombre).
+            uint64_t name_hash = 1469598103934665603ull;
+            for (unsigned char c : label) {
+                name_hash ^= static_cast<uint64_t>(c);
+                name_hash *= 1099511628211ull;
+            }
+            arg_ids.push_back(
+                emit_const(ir::IrType::I64, name_hash, e->loc.line));
+            arg_ids.push_back(emit_const(
+                ir::IrType::I64, static_cast<uint64_t>(e->args.size()),
+                e->loc.line));
+            // R4.. = argumentos reales (max 6; el dispatcher los pasa al ABI
+            // nativo).  Se promocionan a i64 (convencion C uniforme).
+            for (auto &a : e->args) {
+                const ir::IrValueId av = lower_expr(a.get());
+                if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                arg_ids.push_back(av);
+            }
+            const ir::IrType ret_ir =
+                ir_type_from_primitive(sig->return_type.kind);
+            const ir::IrValueId dst =
+                (sig->return_type.kind == PrimitiveKind::VOID)
+                    ? ir::IR_NO_VALUE
+                    : fn_->new_value(ret_ir == ir::IrType::VOID
+                                         ? ir::IrType::I64
+                                         : ret_ir);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ret_ir;
+            ins.dst = dst;
+            ins.func_name = "vrt:naked_dispatch";
             ins.operands = std::move(arg_ids);
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));

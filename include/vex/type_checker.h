@@ -126,6 +126,13 @@ struct FunctionSig {
     /// count); el count va en un param i64 OCULTO al final.
     bool is_variadic = false;
     Type variadic_elem;
+    /// Bug/feature 198: @Naked -- funcion cuyo cuerpo es asm nativo puro (sin
+    /// prologo/epilogo VM).  El lowering, al ver una llamada a una @Naked,
+    /// emite un CALLN al dispatcher @c vrt:naked_dispatch (que la compila al
+    /// vuelo como nativa con sus simbolos propios resueltos) en vez de un
+    /// CALLVM a bytecode VM que no existe.  Solo se activa en interp/JIT; en
+    /// AOT todo es nativo y la llamada normal ya funciona.
+    bool is_naked = false;
 };
 
 /**

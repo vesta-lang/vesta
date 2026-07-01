@@ -3254,6 +3254,10 @@ void TypeChecker::collect_globals() {
                 }
             }
 
+            // Bug/feature 198: propagar @Naked a la firma para que el lowering
+            // enrute las llamadas al dispatcher nativo (interp/JIT).
+            sig.is_naked = fn->is_naked;
+
             Symbol s;
             s.kind = SymbolKind::Function;
             s.sig_index = (uint32_t)function_sigs_.size();

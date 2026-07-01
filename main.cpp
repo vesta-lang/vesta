@@ -38,6 +38,7 @@
 #include "jit/auto_jit.h"
 #include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
+#include "jit/naked_native.h" // Bug 198: dispatcher naked (asm con simbolos propios)
 #include "runtime/profile.h"           // Sprint D.6 (2026-06-03)
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
@@ -216,6 +217,12 @@ int main(int argc, char *argv[]) {
     // Phase AS inc.6: registrar el helper nativo vrt:inline_asm_exec que el
     // interprete (modo -m vm, sin JIT) invoca por cada bloque inline-asm.
     jit::register_inline_asm_runner();
+    // Bug/feature 198: registrar el dispatcher vrt:naked_dispatch que
+    // compila+invoca funciones @Naked (asm con simbolos propios) al vuelo
+    // desde interp/JIT, + vrt:naked_fnaddr (direccion nativa de una funcion
+    // para punteros a funcion que fluyen a codigo nativo).
+    jit::register_naked_dispatch_runner();
+    jit::register_naked_fnaddr_runner();
 
     // ------------------------------------------------------------------
     // Subcomando especial: @c vm pkg <subcmd> ...
