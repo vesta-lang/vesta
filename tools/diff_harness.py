@@ -142,7 +142,8 @@ def main() -> int:
           f"timeout {args.timeout:.0f}s\n")
 
     cats = {k: [] for k in
-            ("OK", "DIVERGE", "CRASH", "TIMEOUT", "NOCOMPILA", "NORUN", "NODET", "SKIP")}
+            ("OK", "VREG_HANG", "DIVERGE", "CRASH", "SLOTS_BUG", "SLOW",
+             "NOCOMPILA", "NORUN", "NODET", "SKIP")}
     detail = []
     t0 = time.time()
 
@@ -175,18 +176,29 @@ def main() -> int:
         rec = {"name": name, "interp": res["interp"], "jit-vreg": res["jit-vreg"],
                "jit-slots": res["jit-slots"]}
 
-        # Clasificar (interp = oraculo).
-        if "timeout" in st.values():
-            cat = "TIMEOUT"
-        elif st["interp"] == "norun":
-            cat = "NORUN"   # ni el interp corre -> no-ejecutable, no es bug del JIT
-        elif st["jit-vreg"] == "crash" or st["jit-slots"] == "crash":
-            cat = "CRASH"
-        elif r0["jit-vreg"] != r0["interp"] or r0["jit-slots"] != r0["interp"]:
-            cat = "DIVERGE"
+        # Clasificar (interp = oraculo).  ORDEN IMPORTANTE: separar un HANG del
+        # path de PRODUCCION (jit-vreg cuelga mientras el interp SI termina) de
+        # un programa lento de por si.  Un jit-vreg timeout con interp OK ES un
+        # BUG DE JIT (miscompilacion que rompe la terminacion; p.ej. el
+        # coalescing que corrompe el contador del loop de state_machine).  Esta
+        # clase escapaba al veredicto viejo porque TIMEOUT era categoria benigna.
+        if st["interp"] in ("timeout", "norun"):
+            # El oraculo no da resultado -> programa lento o no-ejecutable; no
+            # hay con que comparar -> no es bug del JIT.
+            cat = "SLOW" if st["interp"] == "timeout" else "NORUN"
+        elif st["jit-vreg"] == "timeout":
+            cat = "VREG_HANG"   # interp termina, vreg cuelga -> BUG DE PRODUCCION
+        elif st["jit-vreg"] == "crash":
+            cat = "CRASH"       # crash del path de produccion -> BUG
+        elif r0["jit-vreg"] != r0["interp"]:
+            cat = "DIVERGE"     # resultado vreg != oraculo -> BUG
+        elif st["jit-slots"] in ("timeout", "crash") or \
+                r0["jit-slots"] != r0["interp"]:
+            cat = "SLOTS_BUG"   # ruta legacy (backlog conocido: no falla el gate)
         else:
             cat = "OK"
-        if name in NODET and cat in ("DIVERGE", "CRASH"):
+        # NODET: R0 legitimamente no-determinista (punteros host) -> no es bug.
+        if name in NODET and cat in ("DIVERGE", "CRASH", "VREG_HANG"):
             cat = "NODET"
         rec["cat"] = cat
         cats[cat].append(name)
@@ -198,30 +210,38 @@ def main() -> int:
 
     # Resumen.
     print(f"{C.BOLD}=== diff_harness: baseline ({elapsed:.0f}s) ==={C.R}")
-    order = [("OK", C.GRN), ("DIVERGE", C.RED), ("CRASH", C.RED),
-             ("TIMEOUT", C.YEL), ("NORUN", C.DIM), ("NOCOMPILA", C.DIM),
-             ("NODET", C.DIM), ("SKIP", C.DIM)]
+    order = [("OK", C.GRN), ("VREG_HANG", C.RED), ("DIVERGE", C.RED),
+             ("CRASH", C.RED), ("SLOTS_BUG", C.YEL), ("SLOW", C.YEL),
+             ("NORUN", C.DIM), ("NOCOMPILA", C.DIM), ("NODET", C.DIM),
+             ("SKIP", C.DIM)]
     for k, col in order:
         print(f"  {col}{k:10s}{C.R} {len(cats[k]):3d}")
 
-    # Los bugs reales del JIT: DIVERGE + CRASH.
-    bugs = cats["DIVERGE"] + cats["CRASH"]
+    # Los bugs reales del path de PRODUCCION (vreg): VREG_HANG + DIVERGE + CRASH.
+    # SLOTS_BUG es la ruta legacy en jubilacion (backlog conocido) -> no falla.
+    bug_cats = ("VREG_HANG", "DIVERGE", "CRASH")
+    bugs = sum((cats[c] for c in bug_cats), [])
     if bugs:
-        print(f"\n{C.RED}{C.BOLD}BUGS DEL JIT (backlog):{C.R}")
+        print(f"\n{C.RED}{C.BOLD}BUGS DEL JIT (path vreg de produccion):{C.R}")
         for rec in detail:
-            if rec["cat"] in ("DIVERGE", "CRASH"):
+            if rec["cat"] in bug_cats:
                 iv = rec.get("interp"); vg = rec.get("jit-vreg"); sl = rec.get("jit-slots")
-                print(f"  {C.RED}{rec['cat']:8s}{C.R} {rec['name']:32s} "
+                print(f"  {C.RED}{rec['cat']:9s}{C.R} {rec['name']:32s} "
                       f"interp={iv} vreg={vg} slots={sl}")
     else:
-        print(f"\n{C.GRN}{C.BOLD}Sin bugs de JIT (DIVERGE/CRASH) en el corpus.{C.R}")
+        print(f"\n{C.GRN}{C.BOLD}Sin bugs del path vreg (VREG_HANG/DIVERGE/CRASH).{C.R}")
+    if cats["SLOTS_BUG"]:
+        print(f"{C.YEL}[nota]{C.R} SLOTS_BUG (legacy en jubilacion): "
+              f"{', '.join(cats['SLOTS_BUG'])}")
 
     out = root / args.out
     out.write_text(json.dumps({"vm": str(vm), "elapsed_s": elapsed,
         "summary": {k: len(v) for k, v in cats.items()},
         "categories": cats, "detail": detail}, indent=2), encoding="utf-8")
     print(f"\n{C.CYN}[ok]{C.R} baseline: {out}")
-    return 0
+    # Exit code = numero de bugs del path de produccion (0 = limpio) -> usable
+    # como gate de CI / bisect.  Antes SIEMPRE retornaba 0 (nunca fallaba).
+    return 1 if bugs else 0
 
 
 if __name__ == "__main__":
