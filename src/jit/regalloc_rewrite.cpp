@@ -1643,6 +1643,23 @@ struct Lowerer {
             const MOperand rs1 = resolve(in.src1);
             const MOperand rs2 = resolve(in.src2);
 
+            /* P3 imm-forms: IMUL con src2 inmediato -> forma 3-op NO
+             * destructiva `imul pdst, src1, imm` (0x69/0x6B).  Ahorra el
+             * `mov pdst, src1` del 2-address.  src1 debe ser reg (si spilled,
+             * a scratch); el encoder no acepta un imul con fuente en memoria. */
+            if (op == MOp::IMUL && in.src2.kind == MOperandKind::IMM32) {
+                MOperand s1 = rs1;
+                if (s1.kind == MOperandKind::MEM) {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), s1));
+                    s1 = reg(scr1);
+                }
+                out.push_back(MInstr::make_binary(MOp::IMUL, pdst, s1, in.src2));
+                if (dst_spilled)
+                    out.push_back(MInstr::make_unary(
+                        MOp::MOV, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+                return;
+            }
+
             const bool anti =
                 (rs2.kind == MOperandKind::REG &&
                  pdst.kind == MOperandKind::REG && rs2.reg == pdst.reg);
