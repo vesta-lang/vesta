@@ -77,6 +77,15 @@ bool mop_kills_all_flags(MOp op) noexcept {
     }
 }
 
+/// True si @p in es un `cmp reg, 0`.  `test reg, reg` pone EXACTAMENTE los
+/// mismos 5 flags (CF=OF=0, ZF/SF/PF de reg) y es mas corto -> sustitucion
+/// siempre segura para cualquier Jcc/SETcc posterior.  El encoder fuerza REX.W
+/// en ambos, asi que la comparacion es de 64-bit en los dos casos.
+bool is_cmp_zero(const MInstr &in) noexcept {
+    return in.op == MOp::CMP && in.dst.kind == MOperandKind::REG &&
+           in.src1.kind == MOperandKind::IMM32 && in.src1.value == 0;
+}
+
 /// True si @p in es un `mov reg, 0` (materializacion de cero en un GP).  Un
 /// MOV con fuente inmediata siempre destina a un GP (no existe `mov xmm,imm`),
 /// asi que no hay riesgo de tocar el banco flotante.
@@ -176,6 +185,14 @@ uint32_t peephole_physical(MFunction &pf) {
                 const MOperand r =
                     MOperand::make_reg(static_cast<MReg>(in.dst.reg), 8);
                 kept.push_back(MInstr::make_unary(MOp::XOR, r, r));
+                changed = true;
+                continue;
+            }
+            /* cmp reg,0 -> test reg,reg (mismos flags, mas corto). */
+            if (is_cmp_zero(in)) {
+                const MOperand r = MOperand::make_reg(
+                    static_cast<MReg>(in.dst.reg), in.dst.width);
+                kept.push_back(MInstr::make_unary(MOp::TEST, r, r));
                 changed = true;
                 continue;
             }

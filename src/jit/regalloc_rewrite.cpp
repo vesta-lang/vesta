@@ -1678,6 +1678,32 @@ struct Lowerer {
                 }
                 return src;
             };
+            /* P3 lea-3op: `dst = src1 + src2` con dst, src1, src2 en
+             * REGISTROS DISTINTOS (3-address puro) -> `lea dst, [src1+src2]`
+             * en UNA instr (vs `mov dst,src1; add dst,src2`) y SIN tocar
+             * flags (util justo antes de un consumidor de flags).  Solo ADD
+             * (lea suma, no resta).  Se descarta si:
+             *   - !anti garantiza pdst != rs2 (el otro sumando).
+             *   - pdst != rs1 (si coalescieron, ya es `add dst,src2` 1-instr).
+             *   - alguno de los sumandos es RSP/RBP: RSP no puede ser index en
+             *     SIB y RBP-base fuerza disp32; ademas esos NUNCA son valores
+             *     computados (frame reservado) -> descartar sin perder nada. */
+            if (op == MOp::ADD && !anti && pdst.kind == MOperandKind::REG &&
+                rs1.kind == MOperandKind::REG &&
+                rs2.kind == MOperandKind::REG && pdst.reg != rs1.reg &&
+                rs1.reg != static_cast<uint8_t>(MReg::RSP) &&
+                rs1.reg != static_cast<uint8_t>(MReg::RBP) &&
+                rs2.reg != static_cast<uint8_t>(MReg::RSP) &&
+                rs2.reg != static_cast<uint8_t>(MReg::RBP)) {
+                out.push_back(MInstr::make_unary(
+                    MOp::LEA, pdst,
+                    MOperand::make_mem(static_cast<MReg>(rs1.reg), 0,
+                                       static_cast<MReg>(rs2.reg), 1)));
+                if (dst_spilled)
+                    out.push_back(MInstr::make_unary(
+                        MOp::MOV, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+                return;
+            }
             if (anti) {
                 if (is_commutative(op)) {
                     /* pdst ya contiene src2 -> OP pdst, src1 (conmutativo). */
