@@ -522,12 +522,23 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         };
         for (size_t b = 0; b < NB; ++b) {
             for (const MInstr &mi : mf.blocks[b].instrs) {
-                if (!is_two_addr(mi.op)) continue;
                 if (!mi.dst.is_vreg() || !mi.src1.is_vreg()) continue;
+                /* Copia pura reg->reg (`mov d, s`, incluidas las copias de PHI
+                 * ya materializadas): tambien es candidata a coalescing.  El
+                 * hint es SOUND por construccion -- el linear_scan solo reusa el
+                 * reg de `s` si `s` muere EXACTO en el def de `d`
+                 * (partner.end()+1 == dst.start()), asi que nunca fusiona dos
+                 * valores que interfieren.  A diferencia de un rewrite FORZADO
+                 * de vregs, esto no puede miscompilar. */
+                const bool is_copy = (mi.op == MOp::MOV &&
+                                      mi.src2.kind == MOperandKind::NONE);
+                if (!is_two_addr(mi.op) && !is_copy) continue;
                 const uint32_t d = mi.dst.vreg_id();
                 const uint32_t s = mi.src1.vreg_id();
                 if (d == s || d >= NV || s >= NV) continue;
-                out.coalesce_hint[d] = static_cast<int32_t>(s);
+                /* No pisar un hint 2-address ya puesto (prioridad al ALU). */
+                if (out.coalesce_hint[d] < 0)
+                    out.coalesce_hint[d] = static_cast<int32_t>(s);
             }
         }
     }
