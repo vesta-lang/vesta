@@ -1,0 +1,259 @@
+// 230_fiber_pingpong.vex
+//
+// F1 de las fibras nativas: prueba AISLADA del primitivo de context-switch
+// (fiber_switch / fiber_init).  SIN scheduler, SIN GC: dos fibras se ceden
+// control 5 veces cada una intercambiando fiber_switch; cada una incrementa su
+// contador.  Resultado = 5 + 5 = 10, IDENTICO en los 3 modos (-m vm/jit/aot).
+//
+// POR QUE ES AUTO-CONTENIDO (no `import "vex_fiber"`):
+//   El primitivo fiber_switch es una funcion @Naked (asm nativo puro).  En AOT
+//   una @Naked importada de otro modulo se llama nativa directa y funciona; pero
+//   en interp/JIT la importacion cross-modulo NO preserva hoy el atributo
+//   @Naked (el .vexi no lo serializa) -> el interprete la trataria como bytecode
+//   normal y ejecutaria el asm como basura.  Para validar el MECANISMO en LOS
+//   TRES modos con un solo fichero, aqui se inlinean los primitivos (identicos a
+//   los de stdlib/vex/vex_fiber.vex).  vex_fiber.vex es el modulo canonico
+//   (validado en AOT); cerrar la importacion cross-modulo de @Naked en interp/
+//   JIT es un fix del sistema de modulos, fuera del alcance de F1.
+//
+// CLAVE DEL PRIMITIVO (`noinfer`):  fiber_switch salva TODOS los callee-saved
+// (incluido rbx) en su propio bloque, balanceado (cada push tiene su pop
+// alcanzable antes del ret).  El calificador `noinfer` evita que el backend
+// @Naked infiera que el asm "clobbera" rbx y envuelva el bloque con un push/pop
+// rbx extra cuyo `pop` quedaria tras el `ret` (muerto) -> pila desbalanceada.
+// Asi el context-switch es un primitivo HOST_LEAF puro, correcto y SIMETRICO en
+// interp/JIT/AOT, sin asumir runtime (ProcessVM) ni inyecciones del codegen.
+//
+// Estado compartido por fibra (5 qwords, base = host_ptr):
+//   [0] counter   [1] rounds   [2] self_ctx   [3] other_ctx   [4] main_ctx
+//
+// Compilar/ejecutar:
+//   vm --vex 230_fiber_pingpong.vex -o p && vm -m vm  --run p.velb --stats  (R00=10)
+//   vm --vex 230_fiber_pingpong.vex -o p && vm -m jit --run p.velb --stats  (R00=10)
+//   vm -m aot --vex 230_fiber_pingpong.vex --format pe -o p.exe && ./p.exe  (exit 10)
+
+// ===========================================================================
+//  fiber_switch: salva el contexto actual en *from, carga el de *to.
+//  SysV (Linux/mac): args rdi/rsi.  Win64 (Windows): args rcx/rdx.
+// ===========================================================================
+@Target("!os:windows")
+@Naked void fiber_switch(u64 from_ctx, u64 to_ctx) {
+    asm volatile noinfer {
+        push rbp
+        push rbx
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rdi], rsp
+        mov rsp, [rsi]
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbx
+        pop rbp
+        ret
+    }
+}
+@Target("os:windows")
+@Naked void fiber_switch(u64 from_ctx, u64 to_ctx) {
+    asm volatile noinfer {
+        push rbp
+        push rbx
+        push rdi
+        push rsi
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rcx], rsp
+        mov rsp, [rdx]
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rsi
+        pop rdi
+        pop rbx
+        pop rbp
+        ret
+    }
+}
+
+// Trampolin de arranque: coloca arg (en rbx) como 1er argumento del ABI y salta
+// a entry (en r12).  SysV: arg -> rdi.  Win64: arg -> rcx (+ shadow space 32).
+@Target("!os:windows")
+@Naked void __fiber_trampoline() {
+    asm volatile noinfer {
+        mov rdi, rbx
+        jmp r12
+    }
+}
+@Target("os:windows")
+@Naked void __fiber_trampoline() {
+    asm volatile noinfer {
+        mov rcx, rbx
+        sub rsp, 32
+        jmp r12
+    }
+}
+
+// Trampa por si un entry retornara (no ocurre en este test: las fibras ceden).
+@Naked void __fiber_exit() {
+    asm volatile noinfer {
+    fexit_loop:
+        hlt
+        jmp fexit_loop
+    }
+}
+
+// ===========================================================================
+//  Cuerpo de fibra (@Naked): loop de N rondas incrementando + cediendo.
+//  El arg (base del estado) llega en rcx (Win64) / rdi (SysV) via el trampolin.
+//  Se mantiene en r13 (callee-saved: fiber_switch lo preserva por-fibra, asi que
+//  sobrevive a cada cesion).  Layout: [base+0]=counter [+8]=rounds [+16]=self
+//  [+24]=other [+32]=main.
+// ===========================================================================
+@Target("os:windows")
+@Naked void fiber_body() {
+    asm volatile noinfer {
+        mov r13, rcx
+    body_loop:
+        mov rax, [r13 + 8]
+        test rax, rax
+        jz body_done
+        mov rax, [r13 + 0]
+        add rax, 1
+        mov [r13 + 0], rax
+        mov rax, [r13 + 8]
+        sub rax, 1
+        mov [r13 + 8], rax
+        mov rcx, [r13 + 16]
+        mov rdx, [r13 + 24]
+        call fiber_switch
+        jmp body_loop
+    body_done:
+        mov rcx, [r13 + 16]
+        mov rdx, [r13 + 32]
+        call fiber_switch
+        ret
+    }
+}
+@Target("!os:windows")
+@Naked void fiber_body() {
+    asm volatile noinfer {
+        mov r13, rdi
+    body_loop:
+        mov rax, [r13 + 8]
+        test rax, rax
+        jz body_done
+        mov rax, [r13 + 0]
+        add rax, 1
+        mov [r13 + 0], rax
+        mov rax, [r13 + 8]
+        sub rax, 1
+        mov [r13 + 8], rax
+        mov rdi, [r13 + 16]
+        mov rsi, [r13 + 24]
+        call fiber_switch
+        jmp body_loop
+    body_done:
+        mov rdi, [r13 + 16]
+        mov rsi, [r13 + 32]
+        call fiber_switch
+        ret
+    }
+}
+
+// ===========================================================================
+//  fiber_init: prepara la pila para que el 1er switch arranque entry(arg).
+//  Layout de pop de fiber_switch:
+//    Win64: r15,r14,r13,r12,rsi,rdi,rbx,rbp  (8 callee-saved) + tramp + exit
+//    SysV : r15,r14,r13,r12,rbx,rbp          (6 callee-saved) + tramp + exit
+//  entry -> r12, arg -> rbx.
+// ===========================================================================
+@Target("os:windows")
+void fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
+    u64 base = (top & ~((u64)15)) - 10 * 8;   // 8 saved + 2 retaddr
+    u64* s = (u64*)base;
+    s[0] = 0;      // r15
+    s[1] = 0;      // r14
+    s[2] = 0;      // r13
+    s[3] = entry;  // r12
+    s[4] = 0;      // rsi
+    s[5] = 0;      // rdi
+    s[6] = arg;    // rbx
+    s[7] = 0;      // rbp
+    s[8] = (u64)(cfn() -> void) __fiber_trampoline;
+    s[9] = (u64)(cfn() -> void) __fiber_exit;
+    u64* c = (u64*)ctx;
+    c[0] = base;
+}
+@Target("!os:windows")
+void fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
+    u64 base = (top & ~((u64)15)) - 8 * 8;    // 6 saved + 2 retaddr
+    u64* s = (u64*)base;
+    s[0] = 0;      // r15
+    s[1] = 0;      // r14
+    s[2] = 0;      // r13
+    s[3] = entry;  // r12
+    s[4] = arg;    // rbx
+    s[5] = 0;      // rbp
+    s[6] = (u64)(cfn() -> void) __fiber_trampoline;
+    s[7] = (u64)(cfn() -> void) __fiber_exit;
+    u64* c = (u64*)ctx;
+    c[0] = base;
+}
+
+// ===========================================================================
+//  Orquestacion del ping-pong.
+// ===========================================================================
+u64 run() {
+    // Bloque HOST: 3 celdas de contexto + 2 estados de 5 qwords.
+    u64 blk = (u64)malloc(13 * 8);
+    u64 main_ctx = blk + 0 * 8;
+    u64 ctx_a    = blk + 1 * 8;
+    u64 ctx_b    = blk + 2 * 8;
+
+    // Estado de la fibra A (5 qwords desde el offset 3).
+    u64 sa = blk + 3 * 8;
+    u64* pa = (u64*)sa;
+    pa[0] = 0;         // counter
+    pa[1] = 5;         // rounds
+    pa[2] = ctx_a;     // self
+    pa[3] = ctx_b;     // other
+    pa[4] = main_ctx;  // main
+
+    // Estado de la fibra B (5 qwords desde el offset 8).
+    u64 sb = blk + 8 * 8;
+    u64* pb = (u64*)sb;
+    pb[0] = 0;         // counter
+    pb[1] = 5;         // rounds
+    pb[2] = ctx_b;     // self
+    pb[3] = ctx_a;     // other
+    pb[4] = main_ctx;  // main
+
+    // Pilas de fibra (64 KiB cada una) en memoria host (malloc funciona en los
+    // 3 modos: RawAllocator en interp/JIT, slab de vex_mem en AOT).
+    u64 stk_a = (u64)malloc(65536);
+    u64 stk_b = (u64)malloc(65536);
+
+    fiber_init(ctx_a, stk_a + 65536, (u64)(cfn() -> void) fiber_body, sa);
+    fiber_init(ctx_b, stk_b + 65536, (u64)(cfn() -> void) fiber_body, sb);
+
+    // Arrancar: main -> A -> B -> A -> ... (5 rondas c/u) -> A agota -> main.
+    fiber_switch(main_ctx, ctx_a);
+
+    u64 total = pa[0] + pb[0];   // 5 + 5 = 10
+
+    free((i64*)stk_a);
+    free((i64*)stk_b);
+    free((i64*)blk);
+    return total;
+}
+
+i32 main() {
+    u64 r = run();
+    return (i32)r;   // 10
+}
