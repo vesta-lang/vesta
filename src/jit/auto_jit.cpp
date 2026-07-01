@@ -809,8 +809,16 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         }
         if (g_jit_warn_unsupported)
             std::fprintf(stderr,
-                         "[jit-vreg] '%s' no soportada -> fallback a slots\n",
+                         "[jit-vreg] '%s' no soportada -> interp (slots jubilado)\n",
                          key.c_str());
+        /* Jubilacion slots (A3): un metodo que el vreg no soporta NO cae al
+         * selector-slots (legacy, backlog B-JIT-1) -> se queda en el INTERPRETE
+         * (siempre correcto).  maybe_compile_method NUNCA compila callbacks
+         * (esos van por compile_native_callback), asi que no hay caso que
+         * necesite codigo nativo aqui.  En produccion ningun SLOTS_BUG usa slots
+         * -> sin regresion (verificado por subagente).  VESTA_JIT_VREGS=0
+         * (g_jit_use_vregs=false) reactiva slots para A/B. */
+        return;
     }
 
     const CompileResult res = g_compiler->compile_with_opts(*ir_fn, mc_opts);
@@ -1249,7 +1257,19 @@ CompileResult eager_compile_function(
                          ir_fn.name.c_str());
     }
 
-    const CompileResult res = g_compiler->compile_with_opts(ir_fn, top_opts);
+    /* Jubilacion slots (A3): en el compile top-level (eager), un NO-callback que
+     * el vreg no compilo NO cae a slots -> corre en interp (correcto).  Los
+     * CALLBACKS (callback_entry) SI necesitan una direccion de codigo NATIVO
+     * (va a una API C: qsort/Win32/CRT) -> el interprete no es un puntero de fn
+     * valido, asi que siguen usando el selector-slots como unica via hasta que
+     * el vreg cubra su subset (fase A4).  VESTA_JIT_VREGS=0 reactiva slots. */
+    CompileResult res;
+    if (callback_entry || !g_jit_use_vregs) {
+        res = g_compiler->compile_with_opts(ir_fn, top_opts);
+    } else {
+        res.fn = nullptr;
+        res.unsupported = true;
+    }
     if (res.fn != nullptr) {
         ++g_jit_compiled_count;
         /* callback-ABI: NO cachear by-name ni registrar en el pc-map (su
