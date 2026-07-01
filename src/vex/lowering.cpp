@@ -17,6 +17,7 @@
 
 #include "vex/lowering.h"
 #include <algorithm> // UCRT64: no transitivo
+#include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
 #include "vex/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
 #include "vex/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vex/collection_intrinsics.h" // tabla de tipos coleccion
@@ -2160,6 +2161,17 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
             };
             if (COMPTIME_ONLY.count(id->name)) {
                 return "builtin comptime-only '" + id->name + "'";
+            }
+            /* MC.23 fix (bug 161): los nombres registrados como virtual comptime
+             * fns bajo `vesta_comptime` (comptime_type_sizeof/alignof/kind,
+             * comptime_compile, static_assert) NO tienen simbolo de bytecode
+             * real -- solo existen in-process en el compilador.  Bajar el body
+             * del macro a IR emitiria un `callvm code.<nombre>` colgante que el
+             * linker no resuelve (RelocationError).  Se fuerza a que el macro
+             * corra en comptime (AST/VM eval), que SI resuelve el nombre via
+             * lookup_virtual_fn y embebe el resultado como literal. */
+            if (ffi::lookup_virtual_fn("vesta_comptime", id->name)) {
+                return "virtual comptime fn '" + id->name + "'";
             }
             /* Phase MC.17.3: calls a @Macros user-defined SE ACEPTAN
              * (la callee tambien se baja a IR con nombre
