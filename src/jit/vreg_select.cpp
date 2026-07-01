@@ -24,6 +24,9 @@
 
 #include "jit/vreg_select.h"
 
+#include <unordered_map>
+#include <unordered_set>
+
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
 #include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
@@ -737,6 +740,115 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                         av_fp ? vrt(av) : vr(av)));
     };
 
+    /* ---- P2: pre-pase de ADDRESSING-MODE FOLDING (disp) ----
+     * Reconoce `ptr = ADD(base, const)` cuyo unico uso es como DIRECCION de
+     * LOAD (acceso a campo `obj.field`, muy comun) y lo fusiona en un solo
+     * `mov dst, [base + disp]` -- elimina el ADD separado.  Requisitos SOUND:
+     *   - el const cabe en disp32;
+     *   - @c ptr NO tiene ningun uso que NO sea direccion de LOAD (si se usa
+     *     como valor o como direccion de STORE, se materializa normal -- el
+     *     STORE-fold es un incremento posterior, su MInstr no tiene campo
+     *     libre para el disp);
+     *   - la base es HOST ptr (los LOAD de memoria VM bajan a LOAD_VM = call,
+     *     que toma la direccion completa; no se fusiona).
+     * fold_disp[ptr] = (base_vreg, disp).  El ADD de un ptr fusionado NO se
+     * emite (queda muerto: su unico consumidor era la direccion).  Desactivable
+     * con VESTA_NO_SIB=1. */
+    std::unordered_map<uint32_t, std::pair<uint32_t, int64_t>> fold_disp;
+    {
+        static const bool sib_off = [] {
+            const char *v = std::getenv("VESTA_NO_SIB");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+        const uint32_t NVAL = static_cast<uint32_t>(fn.values.size());
+        /* La auto-vectorizacion (VEC_*) y MEMCPY usan valores sinteticos y
+         * addressing complejo (offsets en el imm, punteros scratch) que el
+         * fold no modela bien -> conservador: NO fusionar en funciones que
+         * los usan.  El disp-fold de field-access (no vectorizado) se conserva. */
+        bool has_complex_mem = false;
+        for (const auto &blk : fn.blocks) {
+            for (const ir::IrInstr &in : blk.instrs) {
+                switch (in.op) {
+                case ir::IrOp::VEC_ACC_ZERO:
+                case ir::IrOp::VEC_ACC_ADD:
+                case ir::IrOp::VEC_ACC_FMA:
+                case ir::IrOp::VEC_ACC_COMBINE:
+                case ir::IrOp::VEC_ACC_STORE:
+                case ir::IrOp::VEC_BINOP:
+                case ir::IrOp::VEC_BINOP_S:
+                case ir::IrOp::VEC_FMA:
+                case ir::IrOp::VEC_BCAST:
+                case ir::IrOp::MEMCPY: has_complex_mem = true; break;
+                default: break;
+                }
+                if (has_complex_mem) break;
+            }
+            if (has_complex_mem) break;
+        }
+        if (!sib_off && !has_complex_mem && NVAL > 0) {
+            /* 1) valores constantes (para leer el offset). */
+            std::unordered_map<uint32_t, int64_t> const_val;
+            for (const auto &blk : fn.blocks)
+                for (const ir::IrInstr &in : blk.instrs)
+                    if (in.op == ir::IrOp::CONST && in.dst != ir::IR_NO_VALUE)
+                        const_val[in.dst] = static_cast<int64_t>(in.imm);
+            /* 2) candidatos ptr = ADD(base, const)  (const en cualquier lado). */
+            std::unordered_map<uint32_t, std::pair<uint32_t, int64_t>> cand;
+            for (const auto &blk : fn.blocks) {
+                for (const ir::IrInstr &in : blk.instrs) {
+                    if (in.op != ir::IrOp::ADD || in.dst == ir::IR_NO_VALUE ||
+                        in.operands.size() != 2)
+                        continue;
+                    const uint32_t o0 = in.operands[0], o1 = in.operands[1];
+                    auto c0 = const_val.find(o0), c1 = const_val.find(o1);
+                    uint32_t base;
+                    int64_t disp;
+                    if (c1 != const_val.end() && c0 == const_val.end()) {
+                        base = o0;
+                        disp = c1->second;
+                    } else if (c0 != const_val.end() && c1 == const_val.end()) {
+                        base = o1;
+                        disp = c0->second;
+                    } else
+                        continue;
+                    if (disp < INT32_MIN || disp > INT32_MAX) continue;
+                    /* solo HOST ptr (VM -> LOAD_VM, no se fusiona). */
+                    if (in.dst >= NVAL || !fn.values[in.dst].is_host_ptr)
+                        continue;
+                    cand[in.dst] = {base, disp};
+                }
+            }
+            /* 3) address-only: ptr solo puede usarse como direccion de LOAD.
+             * Cualquier otro uso (valor, direccion de STORE, func_ptr) lo
+             * descalifica. */
+            std::unordered_set<uint32_t> disqualified;
+            for (const auto &blk : fn.blocks) {
+                for (const ir::IrInstr &in : blk.instrs) {
+                    for (size_t k = 0; k < in.operands.size(); ++k) {
+                        const bool is_load_addr =
+                            (in.op == ir::IrOp::LOAD && k == 0);
+                        if (!is_load_addr) disqualified.insert(in.operands[k]);
+                    }
+                    if (in.func_ptr != ir::IR_NO_VALUE)
+                        disqualified.insert(in.func_ptr);
+                    for (const ir::IrPhiArg &a : in.phi_args)
+                        disqualified.insert(a.value);
+                }
+            }
+            for (const auto &c : cand)
+                if (!disqualified.count(c.first)) fold_disp.emplace(c);
+            static const bool sdbg = [] {
+                const char *v = std::getenv("VESTA_SIB_DBG");
+                return v && v[0] != '\0' && v[0] != '0';
+            }();
+            if (sdbg)
+                std::fprintf(stderr,
+                             "[sib] %s: const=%zu cand=%zu fold=%zu\n",
+                             fn.name.c_str(), const_val.size(), cand.size(),
+                             fold_disp.size());
+        }
+    }
+
     for (size_t b = 0; b < NB; ++b) {
         const ir::IrBlock &ib = fn.blocks[b];
         MBlock mb;
@@ -912,6 +1024,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 lm_ir_id = static_cast<uint32_t>(b * 65536u + pos);
             }
             if (in.op == ir::IrOp::PHI) continue; // resuelto via copias
+
+            /* P2 SIB: el ADD que solo computa el disp de un LOAD fusionado NO
+             * se emite (su unico consumidor era la direccion, que ahora usa
+             * [base + disp] directo). */
+            if (in.op == ir::IrOp::ADD && in.dst != ir::IR_NO_VALUE &&
+                fold_disp.count(in.dst))
+                continue;
 
             if (cmp_cond(in.op, cc)) {
                 flush_pending();
@@ -2266,6 +2385,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * FP -> el rewrite enruta a MOVSD/MOVSS (sin esto, vr() lo
                  * hardcodea a GP y el valor float queda inconsistente con el
                  * FADD que SI lo trata como XMM -> codegen roto). */
+                /* P2 SIB: si el ptr es `base + const` (address-only), emitir
+                 * `mov dst, [base + disp]` (el disp viaja en src2=IMM32; el
+                 * rewrite lo usa en make_mem).  Si no, LOAD normal [ptr]. */
+                auto fd = fold_disp.find(in.operands[0]);
+                if (fd != fold_disp.end()) {
+                    MInstr ld = MInstr::make_load(vrt(in.dst),
+                                                  vr(fd->second.first),
+                                                  static_cast<uint8_t>(w), sgn);
+                    ld.src2 = MOperand::make_imm32(
+                        static_cast<int32_t>(fd->second.second));
+                    O.push_back(ld);
+                    break;
+                }
                 O.push_back(MInstr::make_load(vrt(in.dst), vr(in.operands[0]),
                                               static_cast<uint8_t>(w), sgn));
                 break;

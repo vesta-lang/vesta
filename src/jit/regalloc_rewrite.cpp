@@ -1247,8 +1247,11 @@ struct Lowerer {
             }
             /* NO tocar mem.width: empaqueta scale|index del MEM.  El
              * ancho de un MOV [mem] lo da el reg; el de MOVSX/MOVZX va
-             * en mem.flags (mem_size override). */
-            MOperand mem = MOperand::make_mem(addr_reg, 0);
+             * en mem.flags (mem_size override).
+             * P2 SIB: si src2 es IMM32, es el disp fusionado (`[base+disp]`). */
+            const int32_t ld_disp =
+                (in.src2.kind == MOperandKind::IMM32) ? in.src2.value : 0;
+            MOperand mem = MOperand::make_mem(addr_reg, ld_disp);
             const bool dst_spilled =
                 in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
             MOperand pdst = dst_spilled ? reg(scr0) : resolve(in.dst);
