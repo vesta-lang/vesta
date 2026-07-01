@@ -101,6 +101,42 @@ bool flags_dead_after(const MBlock &b, size_t i) noexcept {
     return false; // fin de bloque sin resolver -> conservador: VIVO
 }
 
+/// Desactiva SOLO la eliminacion de JMP-a-fallthrough (bisection).
+bool jmpfall_disabled() noexcept {
+    static const bool off = [] {
+        const char *v = std::getenv("VESTA_NO_JMPFALL");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    return off;
+}
+
+/// Si @p in es un `jmp LABEL` INCONDICIONAL (no jmp-reg ni jmp-sym), devuelve
+/// true y escribe el label_id en @p out.  Solo los JMP con operando LABEL son
+/// candidatos a eliminacion por fallthrough.
+bool is_label_jmp(const MInstr &in, uint32_t &out) noexcept {
+    if (in.op != MOp::JMP) return false;
+    if (in.src1.kind != MOperandKind::LABEL) return false; // jmp-reg / jmp-sym
+    out = static_cast<uint32_t>(in.src1.value);
+    return true;
+}
+
+/// Label que DEFINE el bloque @p b en su primera instruccion real (saltando
+/// COMMENT/NOP).  Devuelve true + label_id si esa primera instruccion es un
+/// LABEL_DEF; el resto de instrucciones intermedias no cuenta (un JMP solo
+/// cae en fallthrough si el destino es la etiqueta de ENTRADA del bloque
+/// siguiente).
+bool block_entry_label(const MBlock &b, uint32_t &out) noexcept {
+    for (const MInstr &in : b.instrs) {
+        if (in.op == MOp::COMMENT || in.op == MOp::NOP) continue;
+        if (in.op == MOp::LABEL_DEF) {
+            out = static_cast<uint32_t>(in.src1.value);
+            return true;
+        }
+        return false; // primera instruccion real no es un label
+    }
+    return false; // bloque vacio
+}
+
 /// True si @p in es un SELF-MOVE redundante y eliminable: copia reg->reg
 /// del MISMO registro fisico, en un ancho que no tiene efecto observable.
 ///   - MOV de 64-bit (`mov rX, rX`): nop puro.
@@ -146,6 +182,42 @@ uint32_t peephole_physical(MFunction &pf) {
             kept.push_back(in);
         }
         if (changed) b.instrs = std::move(kept);
+    }
+
+    /* Eliminacion de JMP-a-fallthrough.  Los bridge-blocks del critical-edge
+     * split suelen terminar con `jmp .L` cuando .L es justo el bloque
+     * siguiente -> el salto es muerto (la caida natural va al mismo sitio). */
+    if (!jmpfall_disabled()) {
+        for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
+            MBlock &b = pf.blocks[bi];
+            /* (1) intra-bloque: `jmp L` seguido inmediatamente de `L:`. */
+            std::vector<MInstr> kept;
+            kept.reserve(b.instrs.size());
+            bool changed = false;
+            for (size_t i = 0; i < b.instrs.size(); ++i) {
+                uint32_t tgt = 0;
+                if (i + 1 < b.instrs.size() && is_label_jmp(b.instrs[i], tgt) &&
+                    b.instrs[i + 1].op == MOp::LABEL_DEF &&
+                    static_cast<uint32_t>(b.instrs[i + 1].src1.value) == tgt) {
+                    ++removed;
+                    changed = true;
+                    continue; // el `L:` siguiente lo hace redundante
+                }
+                kept.push_back(b.instrs[i]);
+            }
+            if (changed) b.instrs = std::move(kept);
+
+            /* (2) inter-bloque: ultima instr `jmp L` y el bloque SIGUIENTE
+             * entra por `L:` -> fallthrough natural. */
+            if (b.instrs.empty() || bi + 1 >= pf.blocks.size()) continue;
+            uint32_t tgt = 0, next_lbl = 0;
+            if (is_label_jmp(b.instrs.back(), tgt) &&
+                block_entry_label(pf.blocks[bi + 1], next_lbl) &&
+                next_lbl == tgt) {
+                b.instrs.pop_back();
+                ++removed;
+            }
+        }
     }
     return removed;
 }
