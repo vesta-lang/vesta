@@ -406,13 +406,21 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
 }
 
 bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn) {
-    /* Gate: ACTIVO por defecto (validado interp==jit==aot en todo el corpus
-     * via diff_harness).  VESTA_NO_COALESCE=1 lo desactiva (bisecar/comparar). */
-    static const bool off = [] {
-        const char *no = std::getenv("VESTA_NO_COALESCE");
-        return no && no[0] != '\0' && no[0] != '0';
+    /* Gate: OPT-IN (default OFF) tras detectar un caso UNSOUND.  El corpus del
+     * diff_harness pasaba (vreg==interp), pero `state_machine` del benchmark
+     * (bucle while i<10_000_000 con PHIs de estado + induccion) CUELGA en un
+     * bucle infinito: el coalescing fusiona un phi_dst con un phi_arg que SI
+     * interfieren (el valor del phi se sigue usando despues de computar el
+     * "next"), y el analisis de liveness PHI-aware no detecta esa
+     * interferencia -> se corrompe la variable de control del loop.  Hasta
+     * anadir un test de INTERFERENCIA real (no solo congruencia + heuristicas),
+     * queda desactivado.  Activar con VESTA_SSA_COALESCE=1 (bisecar/medir).
+     * Repro: examples_codes_vex/benchmark/state_machine/main.vex -m jit. */
+    static const bool on = [] {
+        const char *en = std::getenv("VESTA_SSA_COALESCE");
+        return en && en[0] != '\0' && en[0] != '0';
     }();
-    if (off) return false;
+    if (!on) return false;
     const std::vector<uint32_t> remap = ssa_phi_coalesce_remap(fn);
     if (remap.empty()) return false;
     const uint32_t NVAL = static_cast<uint32_t>(remap.size());
