@@ -211,6 +211,25 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
         }
     }
 
+    /* ---- 4b) Usos NO-phi de cada valor (para la regla de soundness) ----
+     * Un phi_arg `s` solo es SEGURO de coalescer con su phi_dst si TODOS sus
+     * usos son phi-args: entonces s "muere" en el borde del phi (copia paralela
+     * en la arista) y NO puede estar vivo a la vez que el phi_dst -> cero
+     * interferencia.  Si s tiene ALGUN uso NO-phi, coalescer puede crear una
+     * interferencia real que el analisis de rangos con numeracion lineal NO
+     * modela bien a traves de un back-edge de loop -- era la causa del hang de
+     * state_machine (el phi de `rng` se coalescia con `rng_next`, que ademas se
+     * usa en el shift que calcula `byte`).  Es el subset provably-sound clasico
+     * (Chaitin/Briggs): coalescer solo copias phi cuyo origen no vive fuera del
+     * phi.  each_use ya EXCLUYE los PHI, asi que esto marca exactamente los
+     * usos no-phi. */
+    std::vector<char> non_phi_used(NV, 0);
+    for (const auto &blk : fn.blocks)
+        for (const ir::IrInstr &in : blk.instrs)
+            each_use(in, [&](ir::IrValueId u) {
+                if (u < NV) non_phi_used[u] = 1;
+            });
+
     /* ---- 5) Coalescing de congruencias de PHI ---- */
     std::vector<uint32_t> parent(NV);
     for (uint32_t v = 0; v < NV; ++v) parent[v] = v;
@@ -370,6 +389,13 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                 if (d >= NV || s >= NV || d == s) continue;
                 if (iv[d].empty() || iv[s].empty()) continue;
                 if (is_phi_dst[s]) continue; // no cadenas de phis (cross-merge)
+                if (non_phi_used[s]) { // arg vive fuera del phi -> puede interferir
+                    if (dbg)
+                        std::fprintf(stderr,
+                                     "[ssa-coal] %s phi v%u<-v%u NONPHIUSE\n",
+                                     fn.name.c_str(), d, s);
+                    continue;
+                }
                 const uint32_t rd = find(d), rs = find(s);
                 if (rd == rs) continue;
                 if (crosses_call(rd) || crosses_call(rs)) {
@@ -406,16 +432,22 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
 }
 
 bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn) {
-    /* Gate: OPT-IN (default OFF) tras detectar un caso UNSOUND.  El corpus del
-     * diff_harness pasaba (vreg==interp), pero `state_machine` del benchmark
-     * (bucle while i<10_000_000 con PHIs de estado + induccion) CUELGA en un
-     * bucle infinito: el coalescing fusiona un phi_dst con un phi_arg que SI
-     * interfieren (el valor del phi se sigue usando despues de computar el
-     * "next"), y el analisis de liveness PHI-aware no detecta esa
-     * interferencia -> se corrompe la variable de control del loop.  Hasta
-     * anadir un test de INTERFERENCIA real (no solo congruencia + heuristicas),
-     * queda desactivado.  Activar con VESTA_SSA_COALESCE=1 (bisecar/medir).
-     * Repro: examples_codes_vex/benchmark/state_machine/main.vex -m jit. */
+    /* Gate: OPT-IN (default OFF).  El coalescing sobre liveness de RANGOS
+     * LINEALES casera es UNSOUND en dos clases distintas ya observadas en
+     * state_machine (-m jit):
+     *   1) phi de `rng` coalescido con `rng_next` (que vive fuera del phi) ->
+     *      corrompe el valor -> BUCLE INFINITO.  Lo ataja la regla "el phi_arg
+     *      solo se usa en phis" (seccion 4b).
+     *   2) diamante `%d = phi[%s, %o]` con `%s = %o + c` (un arg DERIVADO del
+     *      otro arg del MISMO phi): coalescer %d<-%s mientras %o vive rompe la
+     *      copia del else -> RESULTADO INCORRECTO (counts 0x967e vs 0xb7d4).
+     *      La regla single-use NO lo ataja (%s solo se usa en el phi).
+     * La numeracion lineal no modela la interferencia de hermanos en el if/else
+     * ni el back-edge del loop.  FIX REAL: construir un GRAFO DE INTERFERENCIA
+     * de verdad sobre el SSA (o reusar build_intervals de interval.cpp) en vez
+     * de la aproximacion de rangos.  Hasta entonces queda OFF (cero miscompile).
+     * Activar (medir/desarrollar el fix) con VESTA_SSA_COALESCE=1; el
+     * diff_harness caza VREG_HANG y DIVERGE, asi que el fix esta protegido. */
     static const bool on = [] {
         const char *en = std::getenv("VESTA_SSA_COALESCE");
         return en && en[0] != '\0' && en[0] != '0';
