@@ -20,7 +20,9 @@
 #include "jit/jit_registry.h"
 #include "jit/linear_scan.h"
 #include "jit/machine_ir.h"
+#include "jit/peephole.h"
 #include "jit/regalloc_rewrite.h"
+#include "jit/ssa_coalesce.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
@@ -45,9 +47,13 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
 
-    /* 2. Intervalos + 3. asignacion (commit 6: el linear_scan FUERZA a
-     *    slot los GC roots vivos a traves de un call). */
+    /* 2. Intervalos + P1 coalescing + 3. asignacion (commit 6: el linear_scan
+     *    FUERZA a slot los GC roots vivos a traves de un call).
+     *    P1 (register coalescing): une vregs move-related no-interferentes
+     *    para eliminar las copias de PHI/2-address.  Si coalesce algo,
+     *    reconstruye los intervalos sobre la forma coalescida. */
     IntervalResult ivs = build_intervals(mf, tri);
+    if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
     RegAlloc ra = linear_scan(ivs, tri);
 
     /* 3b. Verificador adversarial (commit 6): TODO GC root vivo a traves
@@ -77,6 +83,10 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
 
     /* 4. Rewrite a fisico (VM_ABI) + stackmaps de GC roots en cada CALL. */
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
+
+    /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
+     *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
+    peephole_physical(pf);
 
     /* 3. Encode a bytes. */
     X86Encoder enc;
@@ -149,8 +159,10 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
     const TargetRegInfo &tri =
         mode32 ? target_x86_32() : target_x86_64_abi(target_sysv);
 
-    /* 2. Intervalos + 3. asignacion linear-scan. */
+    /* 2. Intervalos + P1 coalescing + 3. asignacion linear-scan.  El
+     *    coalescing es target-neutral: mismo pase que el JIT (VM_ABI). */
     IntervalResult ivs = build_intervals(mf, tri);
+    if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
     RegAlloc ra = linear_scan(ivs, tri);
 
     /* 4. Rewrite a fisico con prologue/epilogue HOST_LEAF + carga de params
@@ -159,6 +171,9 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
      *    en BARE no hay GC que consuma esos stackmaps, pero construirlos es
      *    inocuo. */
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF, &ivs);
+
+    /* 4b. P1 peephole: borrar self-moves dejados por el coalescing. */
+    peephole_physical(pf);
 
     /* 5. Encode a bytes nativos.  mode32 -> x86-32 (sin REX, operando 32-bit).
      */
