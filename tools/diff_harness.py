@@ -142,8 +142,8 @@ def main() -> int:
           f"timeout {args.timeout:.0f}s\n")
 
     cats = {k: [] for k in
-            ("OK", "VREG_HANG", "DIVERGE", "CRASH", "SLOTS_BUG", "SLOW",
-             "NOCOMPILA", "NORUN", "NODET", "SKIP")}
+            ("OK", "VREG_HANG", "DIVERGE", "CRASH", "SLOTS_BUG",
+             "NO_ORACLE", "NOCOMPILA", "NODET", "SKIP")}
     detail = []
     t0 = time.time()
 
@@ -182,10 +182,11 @@ def main() -> int:
         # BUG DE JIT (miscompilacion que rompe la terminacion; p.ej. el
         # coalescing que corrompe el contador del loop de state_machine).  Esta
         # clase escapaba al veredicto viejo porque TIMEOUT era categoria benigna.
-        if st["interp"] in ("timeout", "norun"):
-            # El oraculo no da resultado -> programa lento o no-ejecutable; no
-            # hay con que comparar -> no es bug del JIT.
-            cat = "SLOW" if st["interp"] == "timeout" else "NORUN"
+        if st["interp"] != "ok":
+            # El ORACULO no da un R0 valido (crash/timeout/norun) -> no hay con
+            # que comparar el JIT -> NO es bug del JIT (p.ej. un programa que
+            # crashea en los 3 modos por diseno, o que es lento de por si).
+            cat = "NO_ORACLE"
         elif st["jit-vreg"] == "timeout":
             cat = "VREG_HANG"   # interp termina, vreg cuelga -> BUG DE PRODUCCION
         elif st["jit-vreg"] == "crash":
@@ -211,9 +212,8 @@ def main() -> int:
     # Resumen.
     print(f"{C.BOLD}=== diff_harness: baseline ({elapsed:.0f}s) ==={C.R}")
     order = [("OK", C.GRN), ("VREG_HANG", C.RED), ("DIVERGE", C.RED),
-             ("CRASH", C.RED), ("SLOTS_BUG", C.YEL), ("SLOW", C.YEL),
-             ("NORUN", C.DIM), ("NOCOMPILA", C.DIM), ("NODET", C.DIM),
-             ("SKIP", C.DIM)]
+             ("CRASH", C.RED), ("SLOTS_BUG", C.YEL), ("NO_ORACLE", C.DIM),
+             ("NOCOMPILA", C.DIM), ("NODET", C.DIM), ("SKIP", C.DIM)]
     for k, col in order:
         print(f"  {col}{k:10s}{C.R} {len(cats[k]):3d}")
 
