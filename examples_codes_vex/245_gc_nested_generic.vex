@@ -1,0 +1,47 @@
+// examples_codes_vex/245_gc_nested_generic.vex
+//
+// bug6 - gc<T> acepta como T CUALQUIER tipo: un primitivo (gc<i64>, gc<f64>),
+// un smart pointer (gc<unique<i64>>, gc<shared<i64>>) o el anidamiento
+// arbitrario de modelos de memoria (gc<shared<unique<i64>>>).  Antes gc<T>
+// solo aceptaba un NOMBRE DE CLASE (gc<Nodo>), donde el box ES la instancia de
+// clase; ahora un `gc_box(value)` aloja el valor T en un bloque GC-managed
+// (vex_gc_alloc_ptr en AOT, GC_ALLOCP en interp/JIT) y devuelve el host_ptr al
+// box.  El valor interno se lee con `*g` (deref).  El GC recolecta el box.
+//
+// CERO FUGA: cuando T posee un recurso con dtor (unique<T> -> deleter), el box
+// arrastra el cleanup determinista de T al salir de scope (mismo cleanup_stack_
+// que gc<Clase> con campo owned).  El dtor se invoca por CALL DIRECTO (dispatch
+// estatico, sin vtable) al deleter concreto -- portable en el interprete
+// (bytecode, arch-independiente) e identico en interp/JIT/AOT.
+//
+// Esperado: R00 == 43  (40 + 2 + 1).
+
+// Contador global de liberaciones del deleter custom.
+class Trace { public static i64 frees; }
+void del(i64 r) { Trace.frees = Trace.frees + 1; }
+
+// gc<unique<i64>> con deleter custom: al salir de scope, el cleanup del box
+// invoca el deleter EXACTAMENTE una vez (CALL directo, sin dispatch dinamico).
+void wrap_unique() {
+    gc<unique<i64>> g = gc_box(unique_with(9, del));
+}
+
+i32 main() {
+    // (1) gc<i64>: box de un primitivo, leido con *g.
+    gc<i64> a = gc_box(40);
+    i64 va = *a;                       // 40
+
+    // (2) gc<f64>: box de un float.
+    gc<f64> b = gc_box(2.0);
+    i64 vb = (i64) *b;                 // 2
+
+    // (3) gc<unique<i64>>: cero fuga, del se invoca 1 vez.
+    Trace.frees = 0;
+    wrap_unique();
+    i64 vc = Trace.frees;              // 1
+
+    // (4) gc<shared<unique<i64>>>: anidamiento arbitrario, construye sin crash.
+    gc<shared<unique<i64>>> deep = gc_box(shared_box(unique_box(42)));
+
+    return (i32)(va + vb + vc);        // 40 + 2 + 1 = 43
+}

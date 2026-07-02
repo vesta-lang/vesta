@@ -7737,6 +7737,16 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
         return Type::make_ptr(t, result_is_virtual);
     }
     case ast::UnOp::Deref: {
+        // bug6 - `*g` sobre un gc<T> (T CUALQUIERA): el operando es un
+        // host_ptr a un box GC de sizeof(T) bytes; deref-earlo devuelve el
+        // valor T (mismo tipo sin gc_managed).  Cubre gc<i64>, gc<f64>,
+        // gc<unique<i64>>, gc<shared<unique<i64>>>, etc.  Para gc<Clase> el
+        // acceso es via `.campo` (no `*`), asi que ese caso no llega aqui.
+        if (t.gc_managed) {
+            Type inner = t;
+            inner.gc_managed = false;
+            return inner;
+        }
         // '*p' requiere que p sea un puntero; el tipo resultante
         // es el del tipo apuntado.  Desreferenciar void (resultado
         // de un pointee no resuelto) emite error.
@@ -10873,6 +10883,48 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         Type rt = (id->name == "unique_box") ? Type::make_unique(vt)
                                              : Type::make_shared(vt);
+        e->result_type = rt;
+        return rt;
+    }
+
+    // ===================================================================
+    // bug6 - `gc_box(value)` -> gc<typeof(value)>
+    //   Aloja `value` en un bloque GC-managed (vex_gc_alloc_ptr) de
+    //   sizeof(T) bytes y devuelve el host_ptr al box.  Generaliza el
+    //   modelo gc<Clase> (que aloja la INSTANCIA de clase en el heap GC)
+    //   a un T CUALQUIERA: primitivo (gc<i64>, gc<f64>), smart pointer
+    //   (gc<unique<i64>>, gc<shared<i64>>) o anidamiento arbitrario de
+    //   modelos de memoria (gc<shared<unique<i64>>>).  El valor interno se
+    //   lee via `*g` (deref).  El GC recolecta la memoria del box.
+    //
+    //   CERO FUGA: si T posee un recurso con dtor (unique<T> -> deleter,
+    //   shared<T> -> decref), el box arrastra el cleanup DETERMINISTA de T al
+    //   salir de scope (mismo cleanup_stack_ + SMARTPTR_FREE/SHAREDPTR_REL que
+    //   usa gc<Clase> con campo owned).  El dtor se invoca por CALL DIRECTO al
+    //   deleter/decref concreto (dispatch estatico, sin vtable) -- portable en
+    //   el interprete (bytecode arch-independiente) e identico en interp/JIT/
+    //   AOT.  El payload del box tiene el MISMO layout que el slot del smart
+    //   pointer (unique=16 / shared=8), asi que el cleanup opera sobre el box
+    //   directamente.  Un T primitivo (gc<i64>, gc<f64>) no tiene dtor -> solo
+    //   se recolecta la memoria del box, sin cleanup.
+    // ===================================================================
+    if (id->name == "gc_box") {
+        if (e->args.size() != 1) {
+            diags_.error(e->loc,
+                         "gc_box: se esperaba 1 argumento (valor a envolver)");
+            e->result_type = Type{};
+            return Type{};
+        }
+        Type vt = check_expr(e->args[0].get());
+        if (vt.kind == PrimitiveKind::VOID || vt.kind == PrimitiveKind::COUNT) {
+            diags_.error(e->loc, "gc_box: tipo del valor invalido ('" +
+                                     type_to_string(vt) + "')");
+        }
+        // El tipo resultante es el mismo T con gc_managed=true: unifica
+        // contra el tipo declarado `gc<T>` (que type_from_node produce
+        // como inner + gc_managed=true).
+        Type rt = vt;
+        rt.gc_managed = true;
         e->result_type = rt;
         return rt;
     }

@@ -4264,6 +4264,15 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // Alias resuelto a primitivo / PTR.
         vt = ir_type_from_primitive(sem_type.kind);
     }
+    // bug6 - gc<T> para T CUALQUIERA (primitivo / smart ptr / anidado): la
+    // variable guarda un host_ptr al box GC (gc_box).  El IR type debe ser PTR
+    // (no el tipo interno T), si no un cast_if_needed insertaria un bitcast
+    // PTR->T que descartaria is_host_ptr -> el `*g` posterior leeria memoria
+    // VM en lugar del box host y devolveria basura.  Para gc<Clase> el tipo ya
+    // era CLASS->PTR; esto extiende el mismo modelo a T no-clase.
+    if (sem_type.gc_managed) {
+        vt = ir::IrType::PTR;
+    }
 
     // variable address-taken (&x aparece en algun sitio del body).
     // Reservamos memoria local con ALLOCA y emitimos un STORE inicial
@@ -18158,6 +18167,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_shared_box = (name == "shared_box");
     const bool is_unique_with = (name == "unique_with");
     const bool is_shared_with = (name == "shared_with");
+    // bug6 - gc_box(value): aloja el valor en un bloque GC-managed
+    // (vex_gc_alloc_ptr / GC_ALLOCP) y devuelve el host_ptr al box.
+    const bool is_gc_box = (name == "gc_box");
     // Borrow builtins: lend/lend_mut son operaciones zero-overhead
     // que devuelven el ptr_of del owner (slot+0).  El borrow checker
     // ya valido las reglas en compile-time, asi que aqui solo emitimos
@@ -18241,7 +18253,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is_to_str || is_chr_b || is_ord_b || is_substr_b || is_gensym_b ||
         is_repeat_b || is_replace_b || is_contains_b || is_static_assert_b ||
         is_any_math || is_col_ctor || is_dispose || is_unique_box ||
-        is_shared_box || is_unique_with || is_shared_with || is_move ||
+        is_shared_box || is_gc_box || is_unique_with || is_shared_with ||
+        is_move ||
         is_get || is_use_count || is_lend || is_lend_mut || is_read_borrow ||
         is_write_borrow || is_z6_isshared || is_z6_share || is_z6_unshare // Z.6
         || is_z8_atomic_load || is_z8_atomic_store                        // Z.8
@@ -21793,6 +21806,132 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Para shared<T> el slot contiene un host_ptr al control block
     // gestionado por GC.  El control block tiene refcount@0, deleter@8,
     // payload inline desde +16.
+
+    // ----- bug6 gc_box(value) -----  gc<T> para T CUALQUIERA.
+    // Aloja el valor en un bloque GC-managed (GC_ALLOCP en interp/JIT,
+    // vex_gc_alloc_ptr en AOT) de sizeof(T) bytes y devuelve el host_ptr al
+    // box.  El GC recolecta el box cuando deja de ser alcanzable (stackmaps
+    // precisos); no hay RAII (mismo modelo que gc<Clase>).  El valor interno
+    // se lee con `*g` (deref).  Generaliza el modelo gc<Clase> (que aloja una
+    // INSTANCIA de clase) a primitivos (gc<i64>), smart pointers (gc<unique<
+    // i64>>) y anidamiento arbitrario (gc<shared<unique<i64>>>).
+    if (is_gc_box) {
+        if (e->args.size() != 1) {
+            error_at(e->loc, "gc_box: requiere 1 argumento");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId v_payload = lower_expr(e->args[0].get());
+        if (v_payload == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrType payload_t = fn_->values[v_payload].type;
+        const Type sem_payload = e->args[0]->result_type;
+        // Clasificacion identica a unique_box/shared_box: un struct value o
+        // un smart-pointer wrapper tienen su "valor" en un BUFFER apuntado por
+        // v_payload (payload_t==PTR al slot) -> se copia qword-a-qword.  Un
+        // primitivo / raw-ptr / cfn es un VALOR de sizeof bytes -> STORE
+        // directo.  Una CLASS es un host_ptr a objeto -> STORE directo del ptr.
+        const bool payload_is_struct_value =
+            (sem_payload.kind == PrimitiveKind::STRUCT) &&
+            (tc_.struct_layouts().find(sem_payload.struct_name) !=
+             tc_.struct_layouts().end());
+        const bool payload_is_smart_wrapper =
+            (sem_payload.kind == PrimitiveKind::UNIQUE_PTR ||
+             sem_payload.kind == PrimitiveKind::SHARED_PTR ||
+             sem_payload.kind == PrimitiveKind::BORROW ||
+             sem_payload.kind == PrimitiveKind::BORROW_MUT);
+        // sizeof(T) del contenido del box.
+        uint64_t box_size = ir_type_size(payload_t);
+        if (payload_is_struct_value) {
+            box_size = static_cast<uint64_t>(
+                tc_.struct_layouts().at(sem_payload.struct_name).size_bytes);
+        } else if (payload_is_smart_wrapper) {
+            box_size =
+                (sem_payload.kind == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
+        }
+        if (box_size == 0) box_size = 8u; // defensivo: nunca alocar 0 bytes.
+        // %box = GC_ALLOCP(sizeof(T))  (host_ptr GC-managed).
+        const ir::IrValueId v_box = emit_gc_allocp(
+            emit_const(ir::IrType::I64, static_cast<int64_t>(box_size),
+                       e->loc.line),
+            e->loc.line);
+        fn_->values[v_box].is_gc_object = true;
+        fn_->values[v_box].is_host_ptr = true;
+        if (payload_is_struct_value || payload_is_smart_wrapper) {
+            // El payload es un PTR a un buffer (slot del wrapper / struct
+            // value): copiar qword-a-qword al box.  Mismo mecanismo que
+            // unique_box con struct/smart-wrapper.
+            const uint64_t qwords = (box_size + 7) / 8;
+            for (uint64_t i = 0; i < qwords; ++i) {
+                const ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
+                const ir::IrValueId v_src_p = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_src_p].is_host_ptr =
+                    fn_->values[v_payload].is_host_ptr;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_src_p;
+                    ad.operands = {v_payload, v_off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr ld{};
+                    ld.op = ir::IrOp::LOAD;
+                    ld.type = ir::IrType::I64;
+                    ld.dst = v_word;
+                    ld.operands = {v_src_p};
+                    ld.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ld));
+                }
+                const ir::IrValueId v_dst_p = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_dst_p].is_host_ptr = true;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_dst_p;
+                    ad.operands = {v_box, v_off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                {
+                    ir::IrInstr st{};
+                    st.op = ir::IrOp::STORE;
+                    st.type = ir::IrType::I64;
+                    st.operands = {v_word, v_dst_p};
+                    st.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(st));
+                }
+            }
+            // Refcount inc-on-copy: si el payload es un shared<T> que viene de
+            // COPIAR otra variable shared (IdentExpr, no shared_box/move), el
+            // box es un DUEnO adicional del control block -> incrementar el
+            // refcount.  Su SHAREDPTR_REL al exit lo decrementa (balance).  Un
+            // shared_box(...) / move recien construido tiene refcount=1 y su
+            // ownership se transfiere al box sin inc (mismo criterio que el
+            // var-decl `shared<T> b = a` vs `shared<T> b = shared_box(...)`).
+            if (sem_payload.kind == PrimitiveKind::SHARED_PTR &&
+                e->args[0]->kind == ast::NodeKind::IdentExpr) {
+                emit_shared_refcount_inc(v_box, e->loc.line);
+            }
+        } else {
+            // Primitivo / raw-ptr / cfn / CLASS: STORE directo del VALOR al box.
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = payload_t;
+            st.operands = {v_payload, v_box};
+            st.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        out_value = v_box;
+        return true;
+    }
 
     // ----- unique_box(value) -----  unique<T> Tier 0 con deleter=free.
     // Layout: ALLOCA 8 bytes (slot) + malloc(sizeof(T)) (host) +
