@@ -344,13 +344,19 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
                             // [rip+sym] (indirecto / lea).  Bug de Keystone con
                             // KS_OPT_SYM_RESOLVER: computa el disp relativo al
                             // INICIO del campo disp (ia+disp_offset) en vez del
-                            // fin de instruccion (ia+il), asi el target efectivo
-                            // queda sym + disp_size.  Compensamos restando
-                            // disp_size para recuperar el sentinela.  (El reloc
+                            // fin de instruccion (ia+il), asi el disp escrito es
+                            // sym - (ia + disp_offset) y el sentinela original se
+                            // recupera como disp + ia + disp_offset.  Usamos
+                            // disp_offset DIRECTAMENTE (no il - disp_size): en
+                            // instrucciones con inmediato despues del disp (p.ej.
+                            // `mov [rip+sym], imm32`) el disp NO es el ultimo
+                            // campo, asi que `il - disp_size` apuntaria al imm y
+                            // el lookup del sentinela fallaria -> disp sin relocar
+                            // -> escritura a direccion basura.  (El reloc
                             // DATA_REL32 que emitimos abajo sobrescribe el disp
                             // con el valor correcto via el driver.)
                             const uint64_t target =
-                                ia + il + op.mem.disp - x.encoding.disp_size;
+                                ia + x.encoding.disp_offset + op.mem.disp;
                             const std::string *s = sym_state.symbol_for(target);
                             if (std::getenv("VEX_ASM_DEBUG"))
                                 std::fprintf(stderr,
@@ -368,6 +374,13 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
                             ref.offset = static_cast<uint32_t>(
                                 ia_rel + x.encoding.disp_offset);
                             ref.size = x.encoding.disp_size; // 4
+                            // Bytes tras el disp dentro de la instruccion (imm
+                            // en `mov [rip+disp32], imm32`): el disp rip-rel se
+                            // mide desde el FIN de instruccion, no desde el fin
+                            // del disp; el consumidor resta esto al addend.
+                            ref.pcrel_trailing = static_cast<uint8_t>(
+                                il - (x.encoding.disp_offset +
+                                      x.encoding.disp_size));
                             ref.kind = K::DataRel32;
                             ref.symbol = *s;
                             r.sym_refs.push_back(std::move(ref));

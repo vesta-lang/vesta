@@ -487,20 +487,16 @@ void __vasync_fiber_stack_free(u64 top, u64 size) {
  * @c \@Naked por la misma razon que @ref vasync_yield.  Escribe la marca via
  * rip-relative y salta a fiber_switch (no retorna).
  *
- * @note La marca se escribe con `mov rax, 1; mov [global], rax` (store desde
- *       REGISTRO), NO con `mov qword [global], imm`.  Motivo: el resolver de
- *       inline-asm de naked_native (interp/JIT) reloca el desplazamiento
- *       rip-relative de un `mov reg, [global]` / `mov [global], reg`, pero NO el
- *       de la forma `mov qword [global], imm` (el imm se solapa con el disp32 sin
- *       relocar -> escritura a direccion basura -> SIGSEGV).  Es una limitacion
- *       del reloc de globales en asm con operando inmediato; el idioma con
- *       registro es equivalente y correcto en los tres modos.  (Ver informe F3.)
+ * @note La marca se escribe con `mov qword [global], 1` (store de INMEDIATO a
+ *       un global rip-relative).  El reloc del disp32 en la forma
+ *       `mov [rip+disp32], imm32` ya es correcto en los tres modos (el disp se
+ *       localiza por disp_offset, no por fin-de-instruccion, y el addend
+ *       compensa los bytes del imm).
  */
 @Target("!os:windows")
 @Naked public void vasync_task_done() {
     asm volatile noinfer {
-        mov rax, 1
-        mov [__vasync_cur_done], rax
+        mov qword [__vasync_cur_done], 1
         mov rdi, [__vasync_cur_ctx]
         mov rsi, [__vasync_sched_ctx]
         jmp __vasync_fiber_switch
@@ -509,8 +505,7 @@ void __vasync_fiber_stack_free(u64 top, u64 size) {
 @Target("os:windows")
 @Naked public void vasync_task_done() {
     asm volatile noinfer {
-        mov rax, 1
-        mov [__vasync_cur_done], rax
+        mov qword [__vasync_cur_done], 1
         mov rcx, [__vasync_cur_ctx]
         mov rdx, [__vasync_sched_ctx]
         jmp __vasync_fiber_switch

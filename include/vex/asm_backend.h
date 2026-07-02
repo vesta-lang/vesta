@@ -71,6 +71,11 @@ struct AsmAssembleResult {
     struct SymRef {
         uint32_t offset = 0;  ///< offset del campo dentro de @c bytes
         uint8_t size = 0;     ///< 4 u 8
+        /// Bytes que siguen al campo DENTRO de la misma instruccion (p.ej. el
+        /// imm32 de `mov [rip+disp32], imm32`).  Solo relevante para rip-rel
+        /// (DataRel32): el disp32 se mide desde el FIN de instruccion, no desde
+        /// el fin del campo disp.  El consumidor resta este valor al addend.
+        uint8_t pcrel_trailing = 0;
         SymRefKind kind = SymRefKind::DataRel32;
         std::string symbol;   ///< nombre del simbolo Vex
     };

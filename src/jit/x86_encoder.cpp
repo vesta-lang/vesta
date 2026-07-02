@@ -1488,6 +1488,12 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
                     r.patch_at = blob_base + sr.offset;
                     r.sym_idx = sidx;
                     r.addend = 0;
+                    // DATA_REL32: el disp rip-rel se mide desde el FIN de
+                    // instruccion.  Si hay bytes tras el disp (imm de
+                    // `mov [rip+disp32], imm32`), el reloc `sym - (site+4)`
+                    // apuntaria disp_trailing bytes de mas -> restamos.
+                    if (kind == MRelocKind::DATA_REL32 && sr.pcrel_trailing)
+                        r.addend = -static_cast<int64_t>(sr.pcrel_trailing);
                     fn.relocs.push_back(r);
                 }
             }

@@ -4197,12 +4197,14 @@ int main(int argc, char *argv[]) {
                             w.add_reloc(fl.sec, site,
                                         aot::RelocTarget::end(tsi),
                                         rel ? aot::RelocKind::REL32
-                                            : aot::RelocKind::ABS64);
+                                            : aot::RelocKind::ABS64,
+                                        r.addend);
                         } else {
                             w.add_reloc(fl.sec, site,
                                         aot::RelocTarget::addr(tsi, 0),
                                         rel ? aot::RelocKind::REL32
-                                            : aot::RelocKind::ABS64);
+                                            : aot::RelocKind::ABS64,
+                                        r.addend);
                         }
                     } else if (r.symbol.rfind("fnsym:", 0) == 0) {
                         // Direccion de una FUNCION del modulo ("fnsym:<name>",
@@ -4224,7 +4226,7 @@ int main(int argc, char *argv[]) {
                         w.add_reloc(fl.sec, site,
                                     aot::RelocTarget::addr(fit->second.sec,
                                                            fit->second.off),
-                                    k);
+                                    k, r.addend);
                     } else if (r.kind == jit::NativeReloc::Kind::TPOFF32) {
                         // thread_local (TLS local-exec): simbolo "tdata.<N>".
                         // Colocar la plantilla en .tdata y emitir un reloc
@@ -4269,7 +4271,8 @@ int main(int argc, char *argv[]) {
                                 : aot::RelocKind::ABS64;
                         w.add_reloc(
                             fl.sec, site,
-                            aot::RelocTarget::addr(loc.first, loc.second), k);
+                            aot::RelocTarget::addr(loc.first, loc.second), k,
+                            r.addend);
                     }
                 }
             }

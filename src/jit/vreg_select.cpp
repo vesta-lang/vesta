@@ -3127,6 +3127,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     AsmBlob::AsmSymRef br;
                     br.offset = sr.offset;
                     br.size = sr.size;
+                    br.pcrel_trailing = sr.pcrel_trailing;
                     br.symbol = sr.symbol;
                     using SK = vex::AsmAssembleResult::SymRefKind;
                     using BK = AsmBlob::AsmSymRefKind;

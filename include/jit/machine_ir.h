@@ -1337,6 +1337,11 @@ struct AsmBlob {
     struct AsmSymRef {
         uint32_t offset = 0;
         uint8_t size = 0;
+        /// Bytes que siguen al campo disp DENTRO de la misma instruccion (p.ej.
+        /// el imm32 de `mov [rip+disp32], imm32`).  Para DataRel32 el encoder
+        /// ajusta el addend restando este valor (el disp rip-rel se mide desde
+        /// el FIN de instruccion).
+        uint8_t pcrel_trailing = 0;
         AsmSymRefKind kind = AsmSymRefKind::DataRel32;
         std::string symbol;
     };
