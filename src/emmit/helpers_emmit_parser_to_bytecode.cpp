@@ -1,3 +1,4 @@
+#include <optional>
 /*
  * VestaVM - Maquina Virtual Distribuida
  *
@@ -222,6 +223,11 @@ search_variante_None:
 void Assembler::emit_instruction(const vm::Instruction *instr) {
     const auto &info = select_variant(instr->opcode, instr->operands);
 
+    // Stackmap preciso pendiente de publicar: se rellena con los slots del
+    // marcador `// @sm` y su byte_offset se fija al RETURN_PC (tras emitir la
+    // instruccion de call) al final de esta funcion.
+    std::optional<Context::StackmapRec> pending_stackmap;
+
     // Si la instruccion tiene linea fuente Vex registrada por el
     // parser (capturada del marcador `// @line N` del lexer),
     // anadirla a la tabla debug del Context.  El offset que
@@ -231,6 +237,63 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
     if (instr->source_line > 0) {
         ctx.debug_lines.push_back({static_cast<uint32_t>(output.offset),
                                    static_cast<uint32_t>(instr->source_line)});
+    }
+
+    // Stackmap PRECISO (Phase E.1): si la instruccion lleva un marcador
+    // `// @sm <hex>`, decodificar el hex y registrar el par
+    // (byte_offset_del_modulo, slots).  El linker suma el offset del code
+    // section para producir el offset absoluto y emite la seccion VSMP.
+    //
+    // Formato hex: pares de digitos hex = bytes.  Layout de bytes (LE):
+    //   [u16 slot_count] [slot_count * { u8 location, u8 gc_kind }]
+    if (!instr->stackmap_hex.empty()) {
+        const std::string &hx = instr->stackmap_hex;
+        // Helper: par de digitos hex -> byte.  Solo procesamos si la
+        // longitud es par (defensivo ante corrupcion).
+        auto hexval = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        if ((hx.size() % 2) == 0 && hx.size() >= 4) {
+            std::vector<uint8_t> bytes;
+            bytes.reserve(hx.size() / 2);
+            bool ok = true;
+            for (size_t i = 0; i + 1 < hx.size(); i += 2) {
+                const int hi = hexval(hx[i]);
+                const int lo = hexval(hx[i + 1]);
+                if (hi < 0 || lo < 0) {
+                    ok = false;
+                    break;
+                }
+                bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
+            }
+            if (ok && bytes.size() >= 2) {
+                const uint16_t slot_count =
+                    static_cast<uint16_t>(bytes[0] | (bytes[1] << 8));
+                // Cada slot son 2 bytes; validamos que caben.
+                if (static_cast<size_t>(2) + slot_count * 2 <= bytes.size()) {
+                    pending_stackmap.emplace();
+                    Context::StackmapRec &rec = *pending_stackmap;
+                    rec.slots.reserve(slot_count);
+                    size_t p = 2;
+                    for (uint16_t k = 0; k < slot_count; ++k) {
+                        Context::StackmapSlotRec s;
+                        s.location = bytes[p++];
+                        s.gc_kind = bytes[p++];
+                        rec.slots.push_back(s);
+                    }
+                    // byte_offset se fija DESPUES de emitir esta instruccion:
+                    // el marcador `// @sm` que produjo el emisor va ligado a la
+                    // instruccion de CALL (el lexer lo consume en el skip de
+                    // whitespace tras el call), pero la raiz debe registrarse en
+                    // el RETURN_PC = offset del byte SIGUIENTE al call (lo que
+                    // callvm/callvirt empujan como ret_addr).  Por eso diferimos
+                    // la asignacion del offset al final de la emision.
+                }
+            }
+        }
     }
 
     // 1 opcode1
@@ -253,6 +316,18 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
                          "una unidad de emision"
                       << std::endl;
         }
+    }
+
+    // Fijar el offset del stackmap pendiente al RETURN_PC (byte siguiente al
+    // call, ya emitido) y publicarlo.  El marcador `// @sm` que produjo el
+    // emisor va ligado (por el lexer) a la instruccion de CALL, pero la raiz
+    // debe registrarse en el offset del byte SIGUIENTE = el ret_addr que
+    // callvm/callvirt empujan y con el que el scan del interprete busca el
+    // stackmap del frame caller.
+    if (pending_stackmap) {
+        pending_stackmap->byte_offset = static_cast<uint32_t>(output.offset);
+        ctx.stackmap_recs.push_back(std::move(*pending_stackmap));
+        pending_stackmap.reset();
     }
 }
 } // namespace Assembly::Bytecode

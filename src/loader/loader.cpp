@@ -195,6 +195,13 @@ void Loader::parse_velb_header(Executable &exe, ByteReader &reader) {
     exe.header.offset_ir_section = reader.read64();
     exe.header.size_ir_section = reader.read32();
 
+    /* Phase E.1 (VERSION_VELB 0x4): offset_stackmap_section +
+     * size_stackmap_section.  Contienen la seccion VSMP con los stackmaps
+     * precisos del interprete.  0 = sin stackmaps (GC preciso no-op). */
+    exe.header.offset_stackmap_section = reader.read64();
+    exe.header.size_stackmap_section = reader.read32();
+    (void)reader.read32(); // _stackmap_pad (mantiene el header en 160 bytes)
+
     // el header siempre debe estar alineado a 16 bytes
     while (reader.offset % 16 != 0) {
         (void)reader.read8();
@@ -535,6 +542,58 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
             // debugger.  Si esto ocurre, el linker emitio mal la
             // seccion -- bug a investigar.
             exe->debug_info.reset();
+        }
+    }
+
+    // Phase E.1: cargar la seccion VSMP (stackmaps precisos del interprete)
+    // si esta presente.  Formato: magic "VSMP" + version + count + entries.
+    // Si el magic/version es invalido, dejamos la tabla vacia (GC preciso
+    // no-op, fallback al conservador -- backward compatible).
+    if (exe->header.offset_stackmap_section != 0 &&
+        exe->header.size_stackmap_section >= 12 &&
+        static_cast<size_t>(exe->header.offset_stackmap_section) +
+                exe->header.size_stackmap_section <=
+            exe->bytecode.size()) {
+        const size_t base =
+            static_cast<size_t>(exe->header.offset_stackmap_section);
+        const size_t end = base + exe->header.size_stackmap_section;
+        const auto &bc = exe->bytecode;
+        auto rd16 = [&](size_t off) {
+            return static_cast<uint16_t>(bc[off]) |
+                   (static_cast<uint16_t>(bc[off + 1]) << 8);
+        };
+        auto rd32 = [&](size_t off) {
+            return static_cast<uint32_t>(bc[off]) |
+                   (static_cast<uint32_t>(bc[off + 1]) << 8) |
+                   (static_cast<uint32_t>(bc[off + 2]) << 16) |
+                   (static_cast<uint32_t>(bc[off + 3]) << 24);
+        };
+        // Validar magic "VSMP" + version.
+        if (bc[base] == 'V' && bc[base + 1] == 'S' && bc[base + 2] == 'M' &&
+            bc[base + 3] == 'P' && rd16(base + 4) == loader::INTERP_STACKMAP_VERSION) {
+            const uint32_t entry_count = rd32(base + 8);
+            if (entry_count <= 10'000'000u) { /* sanity */
+                size_t cur = base + 12;
+                for (uint32_t k = 0; k < entry_count; ++k) {
+                    if (cur + 6 > end) break; /* pc(4) + slot_count(2) */
+                    loader::InterpStackmap sm;
+                    sm.pc_offset = rd32(cur);
+                    cur += 4;
+                    const uint16_t slot_count = rd16(cur);
+                    cur += 2;
+                    if (cur + static_cast<size_t>(slot_count) * 2 > end) break;
+                    sm.slots.reserve(slot_count);
+                    for (uint16_t s = 0; s < slot_count; ++s) {
+                        loader::InterpStackmapSlot sl;
+                        sl.location = bc[cur++];
+                        sl.gc_kind =
+                            static_cast<jit::StackmapGcKind>(bc[cur++]);
+                        sm.slots.push_back(sl);
+                    }
+                    exe->interp_stackmaps.add(std::move(sm));
+                }
+                exe->interp_stackmaps.finalize();
+            }
         }
     }
 

@@ -55,6 +55,10 @@ struct EmitOptions {
     bool emit_comments = true; ///< emitir comentarios con info de origen IR
     bool emit_debug =
         false; ///< emitir comentarios @line N para cada instruccion
+    /// Emitir marcadores `// @sm <hex>` en cada safepoint para embeber los
+    /// stackmaps precisos de raices GC en el .velb (seccion VSMP).  Siempre
+    /// activo: el GC preciso es el comportamiento correcto, no una opcion.
+    bool emit_stackmaps = true;
     bool export_all = false; ///< exportar todas las funciones con @Export
     std::string module_name; ///< nombre @Module (vacio = usar mod.name)
 };

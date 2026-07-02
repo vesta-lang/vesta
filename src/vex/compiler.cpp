@@ -585,6 +585,8 @@ CompileResult compile_vex_source(const std::string &source,
     emit_opts.opt_level = opt_level_from_int(opts.opt_level);
     emit_opts.emit_comments = true;
     emit_opts.emit_debug = opts.emit_debug;
+    // emit_opts.emit_stackmaps queda en su default (true): los stackmaps
+    // precisos de raices GC se embeben SIEMPRE en el .velb.
     emit_opts.module_name = mod_name;
 
     /* serializar el IR OPTIMIZADO a bytes para que el JIT compile la

@@ -1307,6 +1307,7 @@ CompileResult compile_vex_project(const std::string &root_path,
             ir::EmitOptions dep_emit_opts;
             dep_emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
             dep_emit_opts.emit_debug = opts.emit_debug;
+            // emit_stackmaps queda en su default (true): VSMP siempre presente.
             dep_emit_opts.module_name = pm.module_name;
             ir::EmitResult dep_eres = ir::ir_emit_module(pm.ir, dep_emit_opts);
             std::string dvel_path = dep_vel_path_for_(pm.canonical_path);
@@ -1905,6 +1906,7 @@ CompileResult compile_vex_project(const std::string &root_path,
     emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
     emit_opts.emit_comments = true;
     emit_opts.emit_debug = opts.emit_debug;
+    // emit_opts.emit_stackmaps queda en su default (true): VSMP siempre.
     emit_opts.module_name =
         opts.module_name.empty() ? work.back().module_name : opts.module_name;
     ir::EmitResult eres = ir::ir_emit_module(merged, emit_opts);

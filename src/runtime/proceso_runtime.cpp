@@ -41,6 +41,7 @@
 // VM (scheduler.vm_reference.shared_*) + las tablas shared (Phase Z).
 #include "gc/shared_handle_table.h"
 #include "gc/shared_heap.h"
+#include "loader/loader.h" // Loader completo (executables + interp_stackmaps)
 #include "runtime/runtime.h"
 
 namespace loader {
@@ -311,6 +312,102 @@ void ProcessVMRootProvider::write_back_regs(const uint64_t regs[16]) {
 }
 
 vm::VirtualMemory *ProcessVMRootProvider::vm_mem() { return &proc_->vm_mem; }
+
+uint64_t
+ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
+                                                 void *cb_ctx) {
+    if (!cb) return 0;
+
+    // Coleccion de executables cargados (cada uno con su tabla VSMP).
+    auto &executables = proc_->scheduler.vm_reference.loader_public.executables;
+
+    // Helper: busca el stackmap del PC @p pc en cualquier executable.
+    auto lookup = [&](uint64_t pc) -> const loader::InterpStackmap * {
+        const uint32_t pc32 = static_cast<uint32_t>(pc);
+        for (const auto &exe_ptr : executables) {
+            if (!exe_ptr || exe_ptr->interp_stackmaps.empty()) continue;
+            if (const auto *sm = exe_ptr->interp_stackmaps.lookup_exact(pc32))
+                return sm;
+        }
+        return nullptr;
+    };
+
+    // Snapshot de los 16 GP regs del frame TOP (los unicos accesibles como
+    // registros; los frames caller ya spillaron sus GC vivos a la pila).
+    uint64_t regs[16];
+    for (int i = 0; i < 16; ++i) regs[i] = proc_->registers.regs[i].qword();
+
+    uint64_t marked = 0;
+
+    // Helper: materializa un stackmap dado su @p rbp de frame.  @p is_top
+    // indica si es el frame top (los slots de registro solo son validos
+    // ahi; en frames caller los regs ya no reflejan sus valores).
+    auto apply = [&](const loader::InterpStackmap *sm, uint64_t rbp,
+                     bool is_top) {
+        for (const auto &slot : sm->slots) {
+            uint64_t value = 0;
+            if (slot.is_reg()) {
+                // Registro VM: solo valido en el frame top.  Los frames
+                // caller tienen sus GC vivos en slots de spill (handles),
+                // no en registros -> saltamos los slots de registro alli.
+                if (!is_top) continue;
+                const uint8_t r = slot.reg_index();
+                if (r >= 16) continue;
+                value = regs[r];
+            } else {
+                // Slot de spill: valor en [rbp - (slot+1)*8].
+                const uint64_t addr =
+                    rbp - static_cast<uint64_t>(slot.slot_index() + 1) * 8;
+                value = proc_->vm_mem.read_u64(addr);
+            }
+            if (value == 0) continue;
+            cb(cb_ctx, value, static_cast<uint8_t>(slot.gc_kind));
+            ++marked;
+        }
+    };
+
+    // Frame TOP: PC = rip, rbp = base_pointer.
+    const uint64_t top_pc = proc_->registers.rip.raw();
+    const uint64_t top_rbp = proc_->registers.base_pointer.qword();
+    if (const auto *sm = lookup(top_pc)) {
+        apply(sm, top_rbp, /*is_top=*/true);
+    }
+
+    // Frames CALLER: caminamos la CADENA DE RBP guardada en vm_mem (el
+    // frame-pointer clasico).  Para un frame que hizo `enter` (push rbp;
+    // mov rbp,rsp), la memoria en:
+    //   [rbp]     = rbp del caller (saved_rbp).
+    //   [rbp + 8] = return_pc (el ret_addr que `callvm` empujo antes de que
+    //               este frame ejecutara `enter`).
+    // Ese return_pc es EXACTAMENTE el PC del caller (el sitio inmediatamente
+    // posterior al call), donde el emisor coloco el marcador `// @sm`.  No
+    // usamos @c frame_stack porque solo lo mantienen los CALL virtuales
+    // (CALLVIRT/CALLM/...), no el CALLVM plano del camino de alocacion.
+    //
+    // Requiere que las funciones relevantes (las que alocan o retienen raices
+    // GC a traves de un call) tengan FRAME; el emisor lo garantiza forzando
+    // `enter` en esos casos (ver force_frame_gc en ir_emitter).  Las funciones
+    // hoja sin frame no delimitan un rbp propio; sus raices (si las hubiera)
+    // las cubre el scan conservador en modo aditivo -> soundness.  Cota
+    // defensiva de 256 frames.
+    uint64_t rbp = top_rbp;
+    for (uint32_t depth = 0; depth < 256; ++depth) {
+        if (rbp == 0 || (rbp & 7)) break;
+        const uint64_t caller_rbp = proc_->vm_mem.read_u64(rbp);
+        const uint64_t return_pc = proc_->vm_mem.read_u64(rbp + 8);
+        // Fin de la cadena: rbp del caller invalido, no crece, o cae fuera
+        // de la region de pila valida.
+        if (caller_rbp == 0 || caller_rbp <= rbp) break;
+        if (const auto *sm = lookup(return_pc)) {
+            // El stackmap del sitio de retorno describe raices en el frame del
+            // CALLER (caller_rbp), no en este frame.
+            apply(sm, caller_rbp, /*is_top=*/false);
+        }
+        rbp = caller_rbp;
+    }
+
+    return marked;
+}
 
 bool ProcessVMRootProvider::shared_contains(const uint8_t *ptr) {
     return proc_->scheduler.vm_reference.shared_heap.contains(ptr);

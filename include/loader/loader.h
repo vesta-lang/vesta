@@ -43,6 +43,7 @@
 #include "runtime/vm_address_space.h"
 #include "loader/oop_types.h"
 #include "loader/sandbox.h" // loader::Caps + parse_caps + caps_to_string
+#include "loader/interp_stackmap.h" // loader::InterpStackmapTable (Phase E.1)
 #include "debug/debug_info.h"
 #include "ir/ssa_ir.h"
 
@@ -290,6 +291,17 @@ typedef struct Executable {
      * mapa vacio.
      */
     std::unordered_map<std::string, uint64_t> symbol_table;
+
+    /**
+     * @brief Phase E.1: tabla de stackmaps PRECISOS del interprete,
+     *        deserializada de la seccion @c VSMP del @c .velb.
+     *
+     * Vacia si el @c .velb no lleva stackmaps (build sin
+     * @c --vex-emit-stackmaps o @c .vel sin safepoints) -> el GC preciso
+     * del interprete es no-op y cae al scan conservador.  Consultada por
+     * @c gc_heap::scan_interp_roots_precise via el PC de cada frame.
+     */
+    loader::InterpStackmapTable interp_stackmaps;
 
     /**
      * @brief Metadatos arbitrarios en formato JSON.

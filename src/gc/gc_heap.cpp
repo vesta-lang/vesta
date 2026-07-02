@@ -910,6 +910,80 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist) {
 }
 
 // -------------------------------------------------------------------------
+//  Scan PRECISO del interprete (stackmaps VSMP) -- modo aditivo.
+// -------------------------------------------------------------------------
+
+namespace {
+/**
+ * @brief Contexto del callback de @c scan_interp_precise_roots.
+ */
+struct InterpPreciseCtx {
+    gc::GcHeap *heap;
+    std::vector<gc::GcHandle> *worklist;
+    uint64_t roots_marked;
+    uint64_t notified;
+};
+
+/**
+ * @brief Callback C-style invocado por el provider para cada raiz precisa
+ *        de un frame del interprete.
+ *
+ * HANDLE: el valor es directamente un GcHandle.
+ * HOSTPTR/STRING: el valor es un host_ptr al payload -> handle_for_ptr.
+ */
+void interp_precise_root_cb(void *ctx, uint64_t value, uint8_t kind) {
+    auto *c = static_cast<InterpPreciseCtx *>(ctx);
+    ++c->notified;
+    // kind reusa jit::StackmapGcKind (0=HANDLE 1=HOSTPTR 2=STRING).
+    if (kind == static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)) {
+        const auto h = static_cast<gc::GcHandle>(value);
+        if (c->heap->try_mark_precise_handle(h, *c->worklist)) ++c->roots_marked;
+    } else {
+        if (value == 0) return;
+        const auto *ptr = reinterpret_cast<const uint8_t *>(value);
+        const gc::GcHandle h = c->heap->handle_for_ptr(ptr);
+        if (h != gc::GC_NULL_HANDLE &&
+            c->heap->try_mark_precise_handle(h, *c->worklist))
+            ++c->roots_marked;
+    }
+}
+} // namespace
+
+void GcHeap::scan_interp_roots_precise(std::vector<GcHandle> &worklist) {
+    // Sin provider (p.ej. GC AOT standalone) o sin stackmaps -> no-op.
+    if (root_provider_ == nullptr) return;
+
+    InterpPreciseCtx ctx{this, &worklist, 0, 0};
+    root_provider_->scan_interp_precise_roots(&interp_precise_root_cb, &ctx);
+
+    stats_.interp_precise_roots_marked += ctx.roots_marked;
+    stats_.interp_precise_notified += ctx.notified;
+
+    // Diagnostico temporal de desarrollo (verificador aditivo-vs-primario):
+    // NO es un flag de producto.  Muestra la cobertura precisa-vs-conservador.
+    // Gateado por FREESTANDING: el GC del AOT (libvesta_gc) no tiene libc/stdio
+    // (arrastrar std::fprintf romperia el link con __mingw_fprintf sin resolver)
+    // y ademas no hay pila de interprete que trazar en AOT.  Usa gc_dbg_emit
+    // (write() syscall, freestanding-safe) en el build de la VM.
+#if !defined(VESTA_GC_FREESTANDING)
+    static const bool trace = [] {
+        const char *v = std::getenv("VESTA_GC_INTERP_TRACE");
+        return v && v[0] == '1';
+    }();
+    if (trace && ctx.notified > 0) {
+        gc_dbg_emit(
+            "[gc-interp-precise] notified=%llu marked=%llu "
+            "(acc marked=%llu conservador=%llu)\n",
+            (unsigned long long)ctx.notified,
+            (unsigned long long)ctx.roots_marked,
+            (unsigned long long)stats_.interp_precise_roots_marked,
+            (unsigned long long)stats_.conservative_roots_marked);
+        gc_debug_flush();
+    }
+#endif
+}
+
+// -------------------------------------------------------------------------
 // update_stack_forwards - actualiza host_ptrs en stack/regs tras evacuar
 // -------------------------------------------------------------------------
 
@@ -1485,11 +1559,23 @@ void GcHeap::major_gc() {
         }
     }
 
+    std::vector<GcHandle> worklist;
+
+    // MARK PRECISO del interprete (stackmaps VSMP) -- se ejecuta ANTES del
+    // scan conservador.  Es un SUBCONJUNTO de lo que el conservador marca
+    // (las mismas raices, sobre la misma region de pila VM), por lo que el
+    // conjunto final de supervivientes es IDENTICO al orden inverso: puro
+    // reordenamiento, cero cambio de comportamiento.  Ejecutarlo primero hace
+    // VISIBLE su contribucion (interp_precise_roots_marked > 0) en lugar de
+    // que el conservador marque todo antes y el preciso siempre vea BLACK.
+    // No-op si el .velb no lleva VSMP.
+    scan_interp_roots_precise(worklist);
+
     // MARK: stack scanning conservativo desde stack/regs
     // del proceso owner.  Reemplaza el modelo previo "todo handle live
     // = root" que nunca colectaba sin drop explicito.  Si owner_proc_
     // es nullptr (ej. tests sin ProcessVM), fallback al modelo previo.
-    std::vector<GcHandle> worklist;
+    const size_t worklist_after_precise = worklist.size();
     uint64_t mj_rsp = 0, mj_high = 0;
     uint64_t mj_regs[16];
     if (root_provider_ != nullptr &&
@@ -1538,14 +1624,18 @@ void GcHeap::major_gc() {
         // en external_refs_ tampoco -- ver minor_gc adaptado abajo).
     }
 
+    // Metrica conservador: cuantas raices anadio el scan conservador (total
+    // tras el conservador menos las que ya habia marcado el preciso interp).
+    // El preciso del interprete ya corrio arriba (antes del conservador).
+    const size_t worklist_after_conservative = worklist.size();
+    if (worklist_after_conservative >= worklist_after_precise)
+        stats_.conservative_roots_marked +=
+            worklist_after_conservative - worklist_after_precise;
+
     // precise scan de JIT frames (additive con
     // conservativo).  (no hay JIT funcs) la funcion sale
     // de inmediato.  Cuando lance JIT real, añade roots que
     // el conservativo posiblemente cubrio por aproximacion.
-    // Tracking conservativo: snapshot del tamano antes para
-    // calcular cuantos roots vinieron de cada source.
-    const size_t worklist_before_precise = worklist.size();
-    stats_.conservative_roots_marked += worklist_before_precise;
     scan_jit_roots_precise(worklist);
 
     // BFS transitivo: seguir handles VIVOS embebidos en payloads

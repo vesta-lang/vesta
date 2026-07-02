@@ -298,6 +298,22 @@ class Lexer {
      */
     std::string last_src_file;
 
+    /**
+     * @brief Stackmap PRECISO (Phase E.1) para la siguiente instruccion,
+     *        capturado del comentario `// @sm <hex>` visto por el lexer.
+     *
+     * El IR emitter emite este marcador antes de cada instruccion de
+     * safepoint (sitio de alocacion) cuando @c emit_stackmaps esta activo.
+     * El hex codifica la lista de ubicaciones GC vivas (registro / slot
+     * de spill + kind) en ese punto.  El parser lo copia a
+     * @c Instruction::stackmap_hex; el ensamblador lo decodifica y
+     * registra @c {byte_offset, slots} en el Context; el linker lo emite
+     * como seccion @c VSMP del @c .velb.
+     *
+     * Vacio = no hay stackmap para el siguiente token.
+     */
+    std::string last_src_stackmap;
+
   private:
     std::string source; ///< Codigo fuente completo almacenado en memoria.
     size_t pos = 0;     ///< Posicion actual del cursor en @c source.

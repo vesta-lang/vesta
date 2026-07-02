@@ -116,6 +116,30 @@ void Lexer::skip_whitespace() {
                 }
                 continue;
             }
+            // Detectar `@sm <hex>` (Phase E.1): stackmap preciso para la
+            // siguiente instruccion.  El hex son digitos [0-9a-fA-F]
+            // capturados hasta fin de linea; se almacena verbatim en
+            // last_src_stackmap para que el parser lo copie al Instruction.
+            if (peek() == '@' && peek_token(1) == 's' && peek_token(2) == 'm' &&
+                (peek_token(3) == ' ' || peek_token(3) == '\t')) {
+                advance();
+                advance();
+                advance(); // @sm
+                while (peek() == ' ' || peek() == '\t')
+                    advance();
+                std::string hexstr;
+                while ((peek() >= '0' && peek() <= '9') ||
+                       (peek() >= 'a' && peek() <= 'f') ||
+                       (peek() >= 'A' && peek() <= 'F')) {
+                    hexstr.push_back(peek());
+                    advance();
+                }
+                if (!hexstr.empty()) last_src_stackmap = hexstr;
+                // consumir el resto del comentario hasta '\n'
+                while (peek() != '\n' && peek() != '\0')
+                    advance();
+                continue;
+            }
             // No es `@line`: rebobinar al `//` y consumir como
             // comentario normal (descartar hasta fin de linea).
             pos = save_pos;

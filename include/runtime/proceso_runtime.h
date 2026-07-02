@@ -373,6 +373,8 @@ class ProcessVMRootProvider final : public gc::GcRootProvider {
     void set_stack_low_water(uint64_t v) override;
     void write_back_regs(const uint64_t regs[16]) override;
     vm::VirtualMemory *vm_mem() override;
+    uint64_t scan_interp_precise_roots(InterpRootCallback cb,
+                                       void *cb_ctx) override;
     bool shared_contains(const uint8_t *ptr) override;
     uint8_t *shared_lookup(gc::GcHandle h) override;
     gc::WaitTable *shared_wait_table() override;

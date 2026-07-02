@@ -1027,6 +1027,18 @@ struct GcStats {
     uint64_t precise_roots_marked = 0;
     uint64_t conservative_roots_marked = 0;
     uint64_t precise_frames_scanned = 0; /**< JIT frames walked en total. */
+
+    /**
+     * Metricas del scan PRECISO del INTERPRETE (stackmaps VSMP), paralelas a
+     * las del JIT.  En modo aditivo (junto al conservador) permiten comparar
+     * empiricamente preciso-vs-conservador:
+     *   - interp_precise_roots_marked: handles/host_ptrs marcados via los
+     *     stackmaps del interprete.  0 si el .velb no lleva seccion VSMP.
+     *   - interp_precise_notified: raices notificadas por el provider (antes
+     *     de filtrar por vivas/OldGen/WHITE); util para ver la cobertura.
+     */
+    uint64_t interp_precise_roots_marked = 0;
+    uint64_t interp_precise_notified = 0;
 };
 
 /**
@@ -1086,6 +1098,37 @@ class GcRootProvider {
     virtual void write_back_regs(const uint64_t regs[16]) = 0;
     /// Memoria virtual del VM para el scan (nullptr si no hay).
     virtual vm::VirtualMemory *vm_mem() = 0;
+
+    // --- Scan PRECISO del interprete (stackmaps VSMP) ---
+    /**
+     * @brief Callback invocado por @c scan_interp_precise_roots para cada
+     *        raiz GC precisa encontrada en un frame del interprete.
+     * @param ctx    contexto opaco del caller (GcHeap).
+     * @param value  valor leido de la ubicacion (handle o host_ptr).
+     * @param kind   categoria (0=HANDLE, 1=HOSTPTR, 2=STRING) -- reusa
+     *               @c jit::StackmapGcKind.
+     */
+    using InterpRootCallback = void (*)(void *ctx, uint64_t value,
+                                        uint8_t kind);
+
+    /**
+     * @brief Escanea las raices GC PRECISAS de los frames del interprete
+     *        usando los stackmaps (seccion VSMP) del ejecutable.
+     *
+     * Consulta el stackmap del PC de cada frame (rip del frame top +
+     * return_pc de los callers) y, por cada ubicacion GC, lee el valor
+     * (registro VM o slot de spill) e invoca @p cb.  La impl por defecto
+     * es no-op (usada por el GC AOT y cualquier owner sin stackmaps del
+     * interprete) -> el GcHeap cae al scan conservador.
+     *
+     * @param cb      callback por cada raiz encontrada.
+     * @param cb_ctx  contexto opaco para @p cb.
+     * @return numero de raices notificadas (0 si no hay stackmaps).
+     */
+    virtual uint64_t scan_interp_precise_roots(InterpRootCallback /*cb*/,
+                                               void * /*cb_ctx*/) {
+        return 0;
+    }
 
     // --- Phase Z (shared / cross-proceso).  En AOT: false/nullptr. ---
     virtual bool shared_contains(const uint8_t *ptr) = 0;
@@ -1231,6 +1274,22 @@ class GcHeap {
      *                 precise marcados como BLACK.
      */
     void scan_jit_roots_precise(std::vector<GcHandle> &worklist);
+
+    /**
+     * @brief Scan PRECISO de raices de los frames del INTERPRETE via los
+     *        stackmaps (seccion VSMP).  Delega en
+     *        @c GcRootProvider::scan_interp_precise_roots y marca cada raiz
+     *        notificada (handle o host_ptr) como BLACK + worklist.
+     *
+     * Corre en modo ADITIVO junto al scan conservador (no lo reemplaza):
+     * anade roots precisos.  Como es un SUBCONJUNTO de lo que el
+     * conservador ya marca, nunca cambia que sobrevive -> cero cambio de
+     * comportamiento.  Si el @c .velb no lleva VSMP o no hay provider, es
+     * no-op.  Actualiza @c stats_.interp_precise_* .
+     *
+     * @param worklist worklist BFS donde se anaden los handles marcados.
+     */
+    void scan_interp_roots_precise(std::vector<GcHandle> &worklist);
 
     /**
      * @brief Intenta marcar un handle como root precise (BLACK + push

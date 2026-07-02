@@ -83,7 +83,7 @@ extern "C" {
 // bumped to 0x2 cuando se añadio la tabla de relocations al header.
 // Loaders viejos (v1) no entenderan los campos nuevos; no es backward
 // compatible.  Las .velb existentes deben recompilarse.
-#define VERSION_VELB 0x3
+#define VERSION_VELB 0x4
 #define VERSION_VELA 0x1
 
 /**
@@ -293,6 +293,41 @@ typedef struct PACKED HeaderVELB {
      * @brief Opcion W: tamano en bytes de la seccion @c @ir.
      */
     uint32_t size_ir_section = 0; // 4, offset 140
+
+    /**
+     * @brief Phase E.1: offset al inicio de la seccion @c VSMP dentro del
+     *        .velb.  Contiene los stackmaps PRECISOS del interprete (por
+     *        cada safepoint, las ubicaciones GC vivas) para el GC preciso.
+     *
+     * Layout de la seccion:
+     *   +0  [4]  magic "VSMP"
+     *   +4  [2]  version u16
+     *   +6  [2]  reserved u16
+     *   +8  [4]  entry_count
+     *   +12 [..] entradas: pc_offset u32 + slot_count u16 +
+     *            slot_count * { location u8, gc_kind u8 }
+     *
+     * El valor 0 indica que el .velb no lleva stackmaps precisos (build
+     * sin --vex-emit-stackmaps o .vel sin safepoints).  En ese caso el GC
+     * del interprete cae al scan conservador.  VERSION_VELB es 0x4 cuando
+     * se introduce este campo.
+     */
+    uint64_t offset_stackmap_section = 0; // 8, offset 144
+
+    /**
+     * @brief Phase E.1: tamano en bytes de la seccion @c VSMP.
+     */
+    uint32_t size_stackmap_section = 0; // 4, offset 152
+
+    /**
+     * @brief Relleno para que el header serializado siga siendo multiplo de
+     *        16 bytes (156 -> 160).  Necesario porque
+     *        @c compute_sections_base_offset usa
+     *        @c sizeof(HeaderVELB) - sizeof(ptr) sin re-alinear; si el header
+     *        no fuera 16-aligned, la tabla de espacios quedaria desfasada 4
+     *        bytes respecto a su posicion real en el archivo.
+     */
+    uint32_t _stackmap_pad = 0; // 4, offset 156 (reservado, debe ser 0)
 
     table_spaces_address *address_spaces =
         nullptr; // tabla de espacios de direcciones (NO se serializa)

@@ -691,6 +691,23 @@ typedef struct Context {
     };
     std::vector<DebugLineRec> debug_lines;
 
+    // === Tabla de stackmaps precisos (Phase E.1, modulo-local) ===
+    // Por cada instruccion de safepoint (con marcador `// @sm <hex>`),
+    // el Assembler registra el offset del INICIO de la instruccion dentro
+    // del bytecode del modulo + la lista de ubicaciones GC vivas (registro
+    // R0..R15 o slot de spill) con su kind.  El linker las consume al
+    // ensamblar el .velb final, sumando el offset del code section para
+    // producir offsets absolutos, y las emite como seccion VSMP.
+    struct StackmapSlotRec {
+        uint8_t location; ///< <0x40 = reg R<location>; >=0x40 = slot (location-0x40)
+        uint8_t gc_kind;  ///< jit::StackmapGcKind (0=HANDLE 1=HOSTPTR 2=STRING)
+    };
+    struct StackmapRec {
+        uint32_t byte_offset; ///< offset del safepoint dentro del bytecode del modulo
+        std::vector<StackmapSlotRec> slots;
+    };
+    std::vector<StackmapRec> stackmap_recs;
+
     // Nombre del archivo fuente Vex que origino este modulo.  Se usa
     // como `file_offset` (resuelto al strings blob) en la seccion
     // debug del .velb.  Si vacio, el linker no escribe info de file.

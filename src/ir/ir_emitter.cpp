@@ -36,12 +36,14 @@
  */
 
 #include "ir/ir_emitter.h"
+#include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "ir/ir_optimizer.h"
 #include "ir/liveness.h"
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
 #include "vex/asm_effects.h"           // inc.6: asm_canonical_reg
 #include "jit/inline_asm_trampoline.h" // inc.6: fnv1a64_asm (clave del trampoline)
+#include "loader/interp_stackmap.h"    // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
 #include <sstream>
 #include <cstdio>
 #include <cstdlib>
@@ -66,12 +68,21 @@ struct EmitCtx {
     std::ostringstream &out; // stream de salida .vel
     bool comments;           // emitir comentarios de origen
     bool emit_debug;         // emitir comentarios @line N por instruccion
+    bool emit_stackmaps;     // Phase E.1: emitir `// @sm <hex>` en safepoints
     uint32_t label_seq;      // secuencia para etiquetas unicas de condicion
     // true si se emitio enter (spill_count > 0); false = metodo hoja sin frame.
     // Permite skipear leave en epilogos cuando no hay frame, ahorrando 2 bytes
     // por ret en metodos hoja (tipicos: getters, setters, ops aritmeticas
     // pequenas).
     bool has_frame;
+
+    // true si la funcion contiene alguna ALLOCA (subsp rsp dinamico entre el
+    // area de spill y el area de push).  Cuando lo hay, la aritmetica
+    // rbp-relativa de los handles empujados a traves de un CALL deja de ser
+    // fiable (el ALLOCA desplaza rsp de forma no reflejada en spill_count),
+    // asi que el stackmap de sitio de retorno NO registra las raices
+    // register-held empujadas (el scan conservador las cubre en modo aditivo).
+    bool has_alloca = false;
 
     // Cache de constantes en scratches para evitar `mov r14, K; mov r14, K`
     // consecutivos (patron tipico: dos SEXTs back-to-back con K=32 entre
@@ -87,9 +98,11 @@ struct EmitCtx {
 
     EmitCtx(const IrFunction &fn_, const AllocResult &alloc_,
             const LivenessResult &liveness_, std::ostringstream &out_,
-            bool comments_, bool emit_debug_, bool has_frame_)
+            bool comments_, bool emit_debug_, bool has_frame_,
+            bool emit_stackmaps_ = false)
         : fn(fn_), alloc(alloc_), liveness(liveness_), out(out_),
-          comments(comments_), emit_debug(emit_debug_), label_seq(0),
+          comments(comments_), emit_debug(emit_debug_),
+          emit_stackmaps(emit_stackmaps_), label_seq(0),
           has_frame(has_frame_), fn_lbl(sanitize(fn_.name)) {}
 
     // Convierte un nombre arbitrario a un identificador .vel valido
@@ -483,6 +496,247 @@ static bool reg_holds_gc_object(const EmitCtx &ctx, uint32_t call_pos, int r) {
         }
     }
     return found_any && best_is_gc;
+}
+
+// ------------------------------------------------------------------------
+// Stackmaps precisos del interprete.
+// ------------------------------------------------------------------------
+//
+// La deteccion de RAICES GC por safepoint es SEMANTICA y vive en un pase
+// IR COMPARTIDO (ir/gc_safepoint.h): @c ir::is_gc_safepoint identifica los
+// safepoints y @c ir::safepoint_gc_roots devuelve el conjunto de valores
+// SSA vivos de tipo GC.  Ese conjunto es INDEPENDIENTE del backend (el
+// mismo sirve para interp / JIT / AOT).  Aqui SOLO hacemos la
+// MATERIALIZACION INTERP: mapear cada raiz SSA a su ubicacion fisica VM
+// (registro R0..R15 o slot de spill) y emitir el marcador `// @sm`.
+
+// Codifica un byte como 2 digitos hex en minuscula (append a @p out).
+static void append_hex_byte(std::string &out, uint8_t b) {
+    static const char *H = "0123456789abcdef";
+    out.push_back(H[(b >> 4) & 0xF]);
+    out.push_back(H[b & 0xF]);
+}
+
+// Emite el marcador `// @sm <hex>` para el safepoint en (@p bb, @p idx) si
+// @c ctx.emit_stackmaps esta activo y hay al menos una raiz GC viva.
+//
+// El CONJUNTO de raices viene del pase IR compartido
+// (@c ir::safepoint_gc_roots).  Aqui MATERIALIZAMOS cada raiz SSA a su
+// ubicacion fisica VM:
+//   - En un registro VM (reg_map): location = numero de reg (0..15),
+//     kind = HOSTPTR (el reg contiene el host_ptr; ver ir_emitter).
+//   - Derramado a un slot (spill_map): location = 0x40 + slot,
+//     kind = HANDLE (el slot contiene el GcHandle estable a evacuacion).
+//
+// Nota de soundness: esto es un SUBCONJUNTO estricto de lo que el scan
+// conservador marca (que mira TODOS los slots/regs).  El GC preciso corre
+// en modo ADITIVO junto al conservador, asi que aunque omitamos alguna
+// ubicacion, el conservador la cubre -> nunca se pierde una raiz viva.
+// Solo excluimos registros MUERTOS (no vivos en el safepoint), que es
+// exactamente el falso positivo que queremos eliminar.
+// Ubicacion fisica VM materializada de una raiz.
+namespace {
+struct SmLoc {
+    uint8_t location;
+    uint8_t kind;
+};
+} // namespace
+
+// Serializa @p locs a hex y emite el marcador `// @sm <hex>` (nada si vacio).
+static void emit_sm_locs(EmitCtx &ctx, std::vector<SmLoc> &locs) {
+    // Deduplicar por location (mantener el primer kind visto).
+    std::sort(locs.begin(), locs.end(),
+              [](const SmLoc &a, const SmLoc &b) {
+                  return a.location < b.location;
+              });
+    locs.erase(std::unique(locs.begin(), locs.end(),
+                           [](const SmLoc &a, const SmLoc &b) {
+                               return a.location == b.location;
+                           }),
+               locs.end());
+    if (locs.empty()) return;
+
+    // Serializar a hex: [u16 slot_count LE] [slot_count * {location, kind}].
+    std::string hex;
+    hex.reserve(4 + locs.size() * 4);
+    const uint16_t count = static_cast<uint16_t>(locs.size());
+    append_hex_byte(hex, static_cast<uint8_t>(count & 0xFF));
+    append_hex_byte(hex, static_cast<uint8_t>((count >> 8) & 0xFF));
+    for (const auto &l : locs) {
+        append_hex_byte(hex, l.location);
+        append_hex_byte(hex, l.kind);
+    }
+    ctx.out << "    // @sm " << hex << "\n";
+}
+
+// Marcador para un safepoint de ALOCACION DIRECTA (frame TOP): materializa
+// las raices en su registro VM (host_ptr) Y en su slot de spill (handle).
+static void emit_stackmap_marker(EmitCtx &ctx, const IrBlock &bb, size_t idx) {
+    if (!ctx.emit_stackmaps) return;
+    const IrInstr &ins = bb.instrs[idx];
+    if (!ir::is_gc_safepoint(ins.op)) return;
+
+    const uint32_t pos = lin_pos_of(ctx, bb.id, idx);
+
+    // Conjunto de raices GC (parte SEMANTICA compartida, pase IR).
+    const std::vector<IrValueId> roots =
+        ir::safepoint_gc_roots(ctx.fn, ctx.liveness, pos, ins.dst);
+    if (roots.empty()) return;
+
+    // Materializacion INTERP: raiz SSA -> ubicacion fisica VM.
+    std::vector<SmLoc> locs;
+    locs.reserve(roots.size() * 2);
+    for (IrValueId vid : roots) {
+        // Un valor puede tener reg Y spill; incluimos ambos (el reg lleva
+        // host_ptr fresco, el slot lleva handle estable).
+        auto it_reg = ctx.alloc.reg_map.find(vid);
+        if (it_reg != ctx.alloc.reg_map.end()) {
+            const int r = it_reg->second;
+            if (r >= 0 && r < 16)
+                locs.push_back({static_cast<uint8_t>(r),
+                                static_cast<uint8_t>(
+                                    jit::StackmapGcKind::HOSTPTR)});
+        }
+        auto it_sp = ctx.alloc.spill_map.find(vid);
+        if (it_sp != ctx.alloc.spill_map.end()) {
+            const int slot = it_sp->second;
+            if (slot >= 0 && slot < 0xC0)
+                locs.push_back(
+                    {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE + slot),
+                     static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
+        }
+    }
+    emit_sm_locs(ctx, locs);
+}
+
+// Predeclaracion: replica la decision de rama de @c emit_save_live_regs para
+// saber la POSICION DE EMPUJE (0-based, desde el tope del area reservada por
+// enter) de cada registro GC empujado a traves de un CALL.  Devuelve un mapa
+// reg -> push_index solo para los regs que se empujan INDIVIDUALMENTE como
+// handle (los GC).  Los no-GC empujados por fastpush no interesan aqui.
+//
+// El layout de pila del frame caller es:
+//   rbp
+//   [spill_count slots]          en rbp - 8*(0..spill_count)
+//   [empujes]                    en rbp - 8*spill_count - 8*(push_idx+1)
+// Un handle en push_idx equivale al slot rbp-relativo (spill_count + push_idx).
+//
+// El scan del interprete lee rbp - (slot+1)*8, por lo que codificamos cada
+// handle empujado como un "slot de spill" con indice (spill_count + push_idx).
+static std::unordered_map<int, int>
+pushed_gc_reg_positions(const EmitCtx &ctx, uint32_t call_pos,
+                        const std::vector<int> &regs_to_save) {
+    std::unordered_map<int, int> pos_of;
+    // Rama A de emit_save_live_regs: !any_gc && size>=2 -> fastpush, sin GC.
+    bool any_gc = false;
+    for (int r : regs_to_save) {
+        if (reg_holds_gc_object(ctx, call_pos, r)) { any_gc = true; break; }
+    }
+    if (!any_gc) return pos_of; // ningun GC empujado individualmente
+    // Empuje individual: en TODAS las ramas con any_gc, los regs GC se
+    // empujan como `gchandle; push` en el orden de regs_to_save, ANTES de
+    // cualquier fastpush de los no-GC (rama hibrida) o intercalados (rama
+    // por defecto).  En ambos casos, el push_index de un reg GC es su
+    // posicion secuencial de empuje: contamos cuantos empujes lo preceden.
+    //
+    // Rama hibrida (gc_first_ordered && num_nongc_tail>=2): los GC van
+    // primero, luego un unico fastpush -> push_idx GC = contador secuencial
+    // entre solo los GC.
+    // Rama por defecto: cada reg (GC o no) se empuja en orden -> push_idx =
+    // indice en regs_to_save.
+    //
+    // Determinamos la rama exactamente igual que emit_save_live_regs.
+    bool gc_first_ordered = true;
+    bool saw_nongc = false;
+    int num_nongc_tail = 0;
+    for (int r : regs_to_save) {
+        const bool is_gc = reg_holds_gc_object(ctx, call_pos, r);
+        if (is_gc && saw_nongc) { gc_first_ordered = false; break; }
+        if (!is_gc) { saw_nongc = true; ++num_nongc_tail; }
+    }
+    const bool hybrid = gc_first_ordered && num_nongc_tail >= 2;
+    int push_idx = 0;
+    int gc_seq = 0;
+    for (int r : regs_to_save) {
+        const bool is_gc = reg_holds_gc_object(ctx, call_pos, r);
+        if (hybrid) {
+            // Los GC se empujan primero (secuencial); los no-GC despues.
+            if (is_gc) pos_of[r] = gc_seq++;
+        } else {
+            // Empuje intercalado en orden de regs_to_save.
+            if (is_gc) pos_of[r] = push_idx;
+            ++push_idx;
+        }
+    }
+    return pos_of;
+}
+
+// Marcador para el SITIO DE RETORNO de un CALL (frame CALLER).  El GC puede
+// correr en el callee; cuando escanea el frame de ESTE caller, su PC es el
+// return_pc (la instruccion inmediatamente posterior al call).  Registramos:
+//   - Raices en SLOTS DE SPILL (RBP-relativos, GcHandle estable).
+//   - Raices REGISTER-HELD empujadas a traves del call: el emisor guarda su
+//     GcHandle en la pila (gchandle; push).  Ese handle vive en un offset
+//     rbp-relativo fijo (spill_count + push_idx), que codificamos como slot.
+//     Solo cuando la funcion NO tiene ALLOCA (que desplazaria rsp de forma
+//     no reflejada en spill_count); con ALLOCA el conservador las cubre.
+//
+// Debe llamarse JUSTO DESPUES del opcode de call, para que el offset del
+// marcador coincida con el return_pc (siguiente instruccion emitida).
+static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
+                                      size_t idx) {
+    if (!ctx.emit_stackmaps) return;
+    const uint32_t pos = lin_pos_of(ctx, bb.id, idx);
+    const IrInstr &ins = bb.instrs[idx];
+
+    // Raices vivas a traves del call (conjunto semantico compartido).
+    const std::vector<IrValueId> roots =
+        ir::safepoint_gc_roots(ctx.fn, ctx.liveness, pos, ins.dst);
+    if (roots.empty()) return;
+
+    // Registros GC empujados a traves del call: reg -> push_index.  Su
+    // GcHandle vive en el area de empuje del frame, en el slot rbp-relativo
+    // (spill_count + push_idx).  SOLO es fiable cuando la funcion tiene FRAME
+    // (enter emitido) y NO tiene ALLOCA: en ese caso rsp AL INICIO de la
+    // secuencia de empuje del call site == rbp - 8*spill_count (los empujes
+    // de cada call site son autocontenidos: push...call...pop), asi que el
+    // empuje p cae en rbp - 8*(spill_count + p + 1) = slot (spill_count+p).
+    // Sin frame (spill_count==0 y sin ALLOCA) el rbp es el del caller y el
+    // offset no es fiable -> lo cubre el scan conservador (modo aditivo).
+    std::unordered_map<int, int> pushed_pos;
+    if (ctx.has_frame && !ctx.has_alloca) {
+        const std::vector<int> regs_to_save =
+            live_regs_through_call(ctx, pos, ins.dst);
+        pushed_pos = pushed_gc_reg_positions(ctx, pos, regs_to_save);
+    }
+    const uint32_t spill_count = ctx.alloc.spill_count;
+
+    std::vector<SmLoc> locs;
+    locs.reserve(roots.size());
+    for (IrValueId vid : roots) {
+        // (a) Raiz derramada a slot: el slot lleva el GcHandle estable.
+        auto it_sp = ctx.alloc.spill_map.find(vid);
+        if (it_sp != ctx.alloc.spill_map.end()) {
+            const int slot = it_sp->second;
+            if (slot >= 0 && slot < 0xC0)
+                locs.push_back(
+                    {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE + slot),
+                     static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
+            continue;
+        }
+        // (b) Raiz register-held empujada a traves del call (solo con frame).
+        auto it_reg = ctx.alloc.reg_map.find(vid);
+        if (it_reg == ctx.alloc.reg_map.end()) continue;
+        const int r = it_reg->second;
+        auto it_push = pushed_pos.find(r);
+        if (it_push == pushed_pos.end()) continue; // no empujado (no vivo/reg)
+        const uint32_t slot_idx = spill_count + static_cast<uint32_t>(it_push->second);
+        if (slot_idx < 0xC0)
+            locs.push_back(
+                {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE + slot_idx),
+                 static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
+    }
+    emit_sm_locs(ctx, locs);
 }
 
 // emite el save de los regs vivos antes de un CALL.  Para los
@@ -1465,6 +1719,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    // @line " << ins.source_line << "\n";
     }
 
+    // Phase E.1: el marcador `// @sm <hex>` se emite DENTRO de cada case de
+    // safepoint (NEWOBJ/NEWOBJS/GC_ALLOC/GC_ALLOCP) justo antes del opcode de
+    // alocacion, para que el byte_offset registrado coincida EXACTAMENTE con
+    // el PC (rip) que el GC vera cuando el alloc dispare la coleccion.  No se
+    // emite aqui (pre-switch) porque las secuencias de save-regs precederian
+    // al opcode real y el offset no cuadraria con rip.
+
     // Peephole decjnz: SUB(v, 1) + CMP_NE/EQ(_, 0) + BR_COND -> decjnz fused.
     //
     // DESHABILITADO: la fusion automatica requiere reordenar las phi copies
@@ -2263,6 +2524,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    callvm @Absolute(\""
                     << EmitCtx::abs_lbl(EmitCtx::sanitize(ins.func_name))
                     << "\")\n";
+            // Stackmap del sitio de retorno: el GC puede correr en el callee;
+            // el return_pc de este frame es la siguiente instruccion emitida.
+            emit_return_site_stackmap(ctx, bb, idx);
             // 5. Mover r0 al destino si lo hay.  IMPORTANTE: hacerlo ANTES del
             // pop, porque despues de los pops r0 podria haber sido modificado
             // por el restore (no, push/pop no tocan r0, pero por orden).
@@ -2509,6 +2773,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // El callvirt recibe el receptor en r1 (ya colocado por los
         // moves) y el indice del slot en la vtable.
         ctx.out << "    callvirt r1, " << ins.imm << "\n";
+        // Stackmap del sitio de retorno (frame caller): raices en slots de
+        // spill vivas a traves del callvirt, keyed al return_pc.
+        emit_return_site_stackmap(ctx, bb, idx);
         if (ins.dst != IR_NO_VALUE) {
             std::string rd = ctx.dst_of(ins.dst);
             emit_mov_if_needed(ctx, rd, "r0");
@@ -2951,6 +3218,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             live_regs_through_call(ctx, call_pos, ins.dst);
         emit_save_live_regs(ctx, call_pos, regs_to_save);
         std::string r_size = ctx.load_src(ins.operands[0], 0);
+        // E.1: stackmap justo antes del opcode gcallocp (safepoint).
+        emit_stackmap_marker(ctx, bb, idx);
         if (ins.dst != IR_NO_VALUE) {
             std::string r_dst = ctx.dst_of(ins.dst);
             ctx.out << "    gcallocp " << r_dst << ", " << r_size << "\n";
@@ -3403,6 +3672,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_live_regs(ctx, call_pos, regs_to_save);
         ctx.out << "    mov r1, " << r_cls << "\n";
         ctx.out << "    mov r15, 1\n";
+        // E.1: stackmap justo antes del opcode que puede disparar GC.
+        emit_stackmap_marker(ctx, bb, idx);
         ctx.out << "    newobj r1\n";
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
@@ -3422,6 +3693,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_live_regs(ctx, call_pos, regs_to_save);
         ctx.out << "    mov r1, " << r_cls << "\n";
         ctx.out << "    mov r15, 1\n";
+        // E.1: stackmap justo antes del opcode que puede disparar GC.
+        emit_stackmap_marker(ctx, bb, idx);
         ctx.out << "    newobjs r1\n";
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
@@ -4113,6 +4386,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- gcallocp: alloc + deref + xchg fusionados ---
     case IrOp::GC_ALLOCP:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // E.1: stackmap justo antes del opcode gcallocp (safepoint).
+            emit_stackmap_marker(ctx, bb, idx);
             ctx.out << "    gcallocp " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -4686,12 +4961,64 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             if (has_alloca) break;
         }
     }
-    const bool has_frame = (alloc.spill_count > 0) || has_alloca;
+
+    // GC preciso: forzar un FRAME (enter) en dos casos, para que el scan del
+    // interprete tenga un rbp estable donde anclar:
+    //   (1) La funcion contiene un SAFEPOINT DIRECTO (newobj/gcalloc): cuando
+    //       el GC dispara aqui, esta funcion es el frame TOP; con enter, su
+    //       rbp delimita el frame y [rbp+8] es el return_pc del caller (el
+    //       sitio donde el caller retiene sus raices).  Sin enter (funcion
+    //       hoja tipica `__new_X`), el rbp seria el del caller y no habria
+    //       forma de recuperar el return_pc del caller ni su rbp por separado.
+    //   (2) La funcion EMPUJA una raiz GC register-held a traves de un CALL:
+    //       con enter, ese handle empujado cae en un offset rbp-relativo fijo
+    //       (slot spill_count+push_idx) que el scan puede leer con precision.
+    // Solo cuando emit_stackmaps esta activo (build con GC preciso).  Coste:
+    // un enter/leave (2 instrs) en funciones que antes eran hoja pero alocan
+    // o retienen GC -- despreciable y solo en el camino GC.
+    bool force_frame_gc = false;
+    if (opts.emit_stackmaps && alloc.spill_count == 0 && !has_alloca) {
+        // Posiciones lineales por bloque (para safepoint_gc_roots).
+        for (const IrBlock &bb : fn.blocks) {
+            for (size_t i = 0; i < bb.instrs.size() && !force_frame_gc; ++i) {
+                const IrInstr &ins = bb.instrs[i];
+                // (1) Safepoint directo.
+                if (ir::is_gc_safepoint(ins.op)) { force_frame_gc = true; break; }
+                // (2) Empuje de raiz GC register-held a traves de un CALL.
+                switch (ins.op) {
+                case IrOp::CALL:
+                case IrOp::CALLIND:
+                case IrOp::CALLVIRT:
+                case IrOp::CALLM:
+                case IrOp::CALLN:
+                case IrOp::CALLCLOSURE: {
+                    uint32_t pos = 0;
+                    if (bb.id < liveness.block_start.size())
+                        pos = liveness.block_start[bb.id] + (uint32_t)i;
+                    // Alguna raiz GC viva a traves del call en registro?
+                    const std::vector<IrValueId> roots =
+                        ir::safepoint_gc_roots(fn, liveness, pos, ins.dst);
+                    for (IrValueId vid : roots) {
+                        if (alloc.spill_map.count(vid)) continue; // spill: no push
+                        if (alloc.reg_map.count(vid)) { force_frame_gc = true; break; }
+                    }
+                    break;
+                }
+                default: break;
+                }
+            }
+            if (force_frame_gc) break;
+        }
+    }
+
+    const bool has_frame =
+        (alloc.spill_count > 0) || has_alloca || force_frame_gc;
 
     // Construir el contexto (pasa has_frame para que TAILCALL tambien omita
     // leave)
     EmitCtx ctx(fn, alloc, liveness, out, opts.emit_comments, opts.emit_debug,
-                has_frame);
+                has_frame, opts.emit_stackmaps);
+    ctx.has_alloca = has_alloca;
 
     // Etiqueta de funcion (exportada si corresponde)
     if (opts.export_all) {

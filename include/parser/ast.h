@@ -117,6 +117,13 @@ struct Instruction : ASTNode {
     // .velb que el debugger usa para resolver `b file.vex:42`.
     int source_line = 0;
 
+    // Stackmap PRECISO (Phase E.1) para esta instruccion de safepoint,
+    // capturado del marcador `// @sm <hex>` previo en el .vel.  Vacio =
+    // esta instruccion no es un safepoint con info precisa de raices GC.
+    // El ensamblador lo decodifica y registra en Context::stackmap_recs;
+    // el linker lo emite como seccion VSMP del .velb.
+    std::string stackmap_hex;
+
     Instruction(std::string op, std::vector<std::unique_ptr<ASTNode>> ops)
         : opcode(std::move(op)), operands(std::move(ops)) {}
 

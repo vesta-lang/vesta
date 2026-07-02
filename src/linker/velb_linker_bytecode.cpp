@@ -1159,6 +1159,17 @@ std::vector<uint8_t> Linker::build_executable() {
     const size_t header_pos_size_ir = result->offset;
     result->emit32(final_header.size_ir_section); // 0 por ahora
 
+    /* Phase E.1: placeholder para offset_stackmap_section +
+     * size_stackmap_section.  Los patcheamos al final via
+     * write64_at/write32_at tras conocer la posicion de la seccion VSMP. */
+    const size_t header_pos_offset_stackmap = result->offset;
+    result->emit64(final_header.offset_stackmap_section); // 0 por ahora
+    const size_t header_pos_size_stackmap = result->offset;
+    result->emit32(final_header.size_stackmap_section); // 0 por ahora
+    /* Relleno para mantener el header serializado en 160 bytes (multiplo de
+     * 16), consistente con sizeof(HeaderVELB)-sizeof(ptr). */
+    result->emit32(final_header._stackmap_pad); // 0
+
     // el header siempre debe estar alineado a 16 bytes
     while (result->offset % 16 != 0) {
         result->emit8(0x00);
@@ -1484,6 +1495,80 @@ std::vector<uint8_t> Linker::build_executable() {
 
         final_header.offset_ir_section = ir_offset;
         final_header.size_ir_section = total_size;
+    }
+
+    /* Phase E.1: emitir seccion @c VSMP con los stackmaps precisos del
+     * interprete.  Recolectamos los recs de cada modulo, sumando el offset
+     * del code section (mismo esquema que la seccion debug DVBG) para
+     * producir offsets absolutos, ordenamos por pc_offset y serializamos.
+     *
+     * Backward-compat: si ningun modulo tiene stackmaps, no se escribe la
+     * seccion (offset/size quedan a 0 -> GC preciso no-op). */
+    {
+        // Recolectar todas las entradas con offset absoluto.
+        struct FlatStackmap {
+            uint32_t pc_offset;
+            const Context::StackmapRec *rec;
+        };
+        std::vector<FlatStackmap> flat;
+        uint64_t sm_bc_base = 0;
+        for (const auto &mod : modules) {
+            for (const auto &rec : mod.ctx.stackmap_recs) {
+                flat.push_back(
+                    {static_cast<uint32_t>(sm_bc_base + rec.byte_offset),
+                     &rec});
+            }
+            sm_bc_base += mod.bytecode.size();
+        }
+
+        if (!flat.empty()) {
+            // Ordenar por pc_offset para lookup por busqueda binaria.
+            std::sort(flat.begin(), flat.end(),
+                      [](const FlatStackmap &a, const FlatStackmap &b) {
+                          return a.pc_offset < b.pc_offset;
+                      });
+
+            // Alineacion 8 bytes.
+            while (result->output.size() % 8 != 0) {
+                result->output.push_back(0x00);
+            }
+            const uint64_t vsmp_offset = result->output.size();
+
+            // Serializar VSMP: magic + version + reserved + count + entries.
+            std::vector<uint8_t> vsmp;
+            auto vput16 = [&vsmp](uint16_t v) {
+                vsmp.push_back(static_cast<uint8_t>(v & 0xFF));
+                vsmp.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+            };
+            auto vput32 = [&vsmp](uint32_t v) {
+                for (int i = 0; i < 4; ++i)
+                    vsmp.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+            };
+            vsmp.push_back('V');
+            vsmp.push_back('S');
+            vsmp.push_back('M');
+            vsmp.push_back('P');
+            vput16(1); /* version */
+            vput16(0); /* reserved */
+            vput32(static_cast<uint32_t>(flat.size()));
+            for (const auto &fs : flat) {
+                vput32(fs.pc_offset);
+                vput16(static_cast<uint16_t>(fs.rec->slots.size()));
+                for (const auto &s : fs.rec->slots) {
+                    vsmp.push_back(s.location);
+                    vsmp.push_back(s.gc_kind);
+                }
+            }
+
+            result->output.insert(result->output.end(), vsmp.begin(),
+                                  vsmp.end());
+            const uint32_t vsmp_total = static_cast<uint32_t>(vsmp.size());
+
+            result->write64_at(vsmp_offset, header_pos_offset_stackmap);
+            result->write32_at(vsmp_total, header_pos_size_stackmap);
+            final_header.offset_stackmap_section = vsmp_offset;
+            final_header.size_stackmap_section = vsmp_total;
+        }
     }
 
     return result->output;
