@@ -258,6 +258,13 @@ struct VexiSymbol {
     /// colisiones de nombres cross-module).  E.g. funcion "sumar" del
     /// modulo "lib" tiene @c name="sumar" pero @c mangled_label="lib__sumar".
     std::string mangled_label;
+    /// (FUNCTION) LIM-A: marca @c \@Naked (cuerpo asm nativo puro).  Se
+    /// serializa en el bit 0x08 del byte de flags del symbol header (no en
+    /// el payload -- asi un .vexi previo con ese bit a 0 lee @c false y el
+    /// comportamiento es el actual).  El consumidor propaga a
+    /// @c FunctionSig::is_naked para enrutar la llamada cross-modulo al
+    /// dispatcher @c vrt:naked_dispatch en interp/JIT.
+    bool is_naked = false;
 };
 
 /**

@@ -619,6 +619,10 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         s.return_type = canonical_typename_of(sig->return_type);
         s.is_extern = !sig->extern_lib.empty();
         s.extern_lib = sig->extern_lib;
+        // LIM-A: propagar @Naked al .vexi para que la importacion cross-modulo
+        // en interp/JIT enrute al dispatcher naked (y no ejecute el asm como
+        // bytecode).
+        s.is_naked = sig->is_naked;
         s.param_types.reserve(sig->param_types.size());
         for (const auto &pt : sig->param_types) {
             s.param_types.push_back(canonical_typename_of(pt));
@@ -1089,6 +1093,8 @@ void import_vexi_into_typechecker(
             // lowering del consumidor emitira @c CALLVM a ese label
             // en lugar del nombre publico.  Cierra L.4.
             sig.mangled_label = s.mangled_label;
+            // LIM-A: preservar @Naked para enrutar la llamada al dispatcher.
+            sig.is_naked = s.is_naked;
             tc.register_imported_function(local_name, std::move(sig));
             break;
         }
@@ -1426,6 +1432,9 @@ void register_namespace_for_import(TypeChecker &tc,
             }
             sym.sig.extern_lib = s.is_extern ? s.extern_lib : std::string();
             sym.sig.mangled_label = sym.mangled_label;
+            // LIM-A: preservar @Naked para enrutar la llamada cross-modulo
+            // via namespace (`lib.fn(...)`) al dispatcher naked en interp/JIT.
+            sym.sig.is_naked = s.is_naked;
             tc.register_namespace_symbol(ns_idx, s.name, std::move(sym));
         } else if (s.kind == VexiSymbolKind::GLOBAL_VAR) {
             // M.L7 ext: globals const cross-module via namespace plain.

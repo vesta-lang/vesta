@@ -420,6 +420,7 @@ std::vector<uint8_t> vexi_emit(const VexiModule &mod) {
         if (sym.is_opaque) so.flags |= 0x01;
         if (sym.is_extern) so.flags |= 0x02;
         if (sym.is_const) so.flags |= 0x04; // L.7: GLOBAL_VAR const
+        if (sym.is_naked) so.flags |= 0x08; // LIM-A: FUNCTION @Naked
         so.align_override = sym.align_override;
 
         switch (sym.kind) {
@@ -1059,7 +1060,8 @@ VexiParseResult vexi_parse(const uint8_t *data, size_t size) {
         s.kind = static_cast<VexiSymbolKind>(kind);
         s.is_opaque = (flags & 0x01) != 0;
         s.is_extern = (flags & 0x02) != 0;
-        s.is_const = (flags & 0x04) != 0; // L.7
+        s.is_const = (flags & 0x04) != 0;  // L.7
+        s.is_naked = (flags & 0x08) != 0;  // LIM-A: FUNCTION @Naked
         s.align_override = align_override;
         if (!read_name(data, size, name_off, name_len, pool_start, s.name)) {
             r.error_message = "name fuera de bounds";

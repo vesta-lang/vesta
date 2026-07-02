@@ -49,15 +49,6 @@
  *          fiber_stack_alloc), NO en el stack VM (en interp, @c &local es una
  *          direccion VM que el codigo nativo malinterpretaria como host_ptr).
  *
- * @warning Uso cross-modulo en interp/JIT (F1): importar estas funciones @Naked
- *          desde OTRO modulo y llamarlas en @c -m vm / @c -m jit NO funciona hoy
- *          -- el @c .vexi no serializa el atributo @Naked, asi que el interprete
- *          trataria el asm como bytecode.  En @c -m aot la importacion
- *          cross-modulo SI funciona (llamada nativa directa).  Para validar el
- *          mecanismo en los tres modos con un solo fichero, inlinea estos
- *          primitivos (ver examples_codes_vex/230_fiber_pingpong.vex).  Cerrar
- *          la importacion @Naked cross-modulo en interp/JIT es un fix del
- *          sistema de modulos (fuera del alcance de F1).
  */
 
 // ===========================================================================

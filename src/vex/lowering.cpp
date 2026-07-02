@@ -14421,6 +14421,70 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                                          "' no resuelto en lowering");
                 return ir::IR_NO_VALUE;
             }
+            // LIM-A: si el simbolo importado es @Naked (asm nativo puro), su
+            // cuerpo NO tiene representacion en bytecode VM.  En interp/JIT
+            // (VM_ABI) enrutamos la llamada cross-modulo al dispatcher
+            // @c vrt:naked_dispatch, que compila la @Naked al vuelo (viendo el
+            // IR del modulo importado ya mergeado en el .velb) y la invoca con
+            // ABI nativo.  En AOT (native_poo_) la llamada nativa directa ya
+            // funciona, asi que este re-ruteo se limita al path VM_ABI.  Mismo
+            // patron que la rama IdentExpr-callee de arriba, pero con el
+            // @c mangled_label del simbolo importado como clave del hash.
+            if (!native_poo_) {
+                bool ns_is_naked = false;
+                if (fa->ns_index != 0xFFFFFFFFu) {
+                    const auto &nss2 = tc_.imported_namespaces();
+                    if (fa->ns_index < nss2.size()) {
+                        const auto &ns2 = nss2[fa->ns_index];
+                        auto it2 = ns2.by_name.find(fa->field_name);
+                        if (it2 != ns2.by_name.end()) {
+                            const auto &sig2 = ns2.symbols[it2->second].sig;
+                            ns_is_naked =
+                                sig2.is_naked && sig2.extern_lib.empty();
+                        }
+                    }
+                }
+                if (ns_is_naked) {
+                    const std::string &label = mangled_label;
+                    out_mod_->register_native_import("vrt", "naked_dispatch");
+                    std::vector<ir::IrValueId> arg_ids;
+                    arg_ids.reserve(e->args.size() + 3);
+                    // R1 = proc; R2 = hash(label); R3 = argc_real.
+                    arg_ids.push_back(emit_getproc(e->loc.line));
+                    // FNV-1a 64-bit del mangled_label (DEBE coincidir con
+                    // jit::fnv1a64_name -- clave que el dispatcher usa para
+                    // localizar el IrFunction @Naked por nombre).
+                    uint64_t name_hash = 1469598103934665603ull;
+                    for (unsigned char c : label) {
+                        name_hash ^= static_cast<uint64_t>(c);
+                        name_hash *= 1099511628211ull;
+                    }
+                    arg_ids.push_back(
+                        emit_const(ir::IrType::I64, name_hash, e->loc.line));
+                    arg_ids.push_back(emit_const(
+                        ir::IrType::I64,
+                        static_cast<uint64_t>(e->args.size()), e->loc.line));
+                    // R4.. = args reales (max 6; promocionados a i64).
+                    for (auto &a : e->args) {
+                        const ir::IrValueId av = lower_expr(a.get());
+                        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                        arg_ids.push_back(av);
+                    }
+                    const ir::IrValueId dst =
+                        (ret_ir == ir::IrType::VOID)
+                            ? ir::IR_NO_VALUE
+                            : fn_->new_value(ret_ir);
+                    ir::IrInstr ins{};
+                    ins.op = ir::IrOp::CALLN;
+                    ins.type = ret_ir;
+                    ins.dst = dst;
+                    ins.func_name = "vrt:naked_dispatch";
+                    ins.operands = std::move(arg_ids);
+                    ins.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ins));
+                    return dst;
+                }
+            }
             // SRET cross-module: si el callee declara devolver
             // Optional<T>, Result<V,E>, un enum declarado por usuario
             // (encoded como STRUCT con struct_name = enum_name) o un
