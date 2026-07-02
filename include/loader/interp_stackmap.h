@@ -83,9 +83,25 @@ static constexpr uint32_t INTERP_STACKMAP_MAGIC = 0x504D5356u;
 static constexpr uint16_t INTERP_STACKMAP_VERSION = 1u;
 
 /// Base para codificar un slot de spill en el byte @c location.
-/// @c location < 0x40 es un registro VM; @c location >= 0x40 es un slot
-/// de spill con indice @c location - INTERP_SM_SLOT_BASE.
+/// @c location < 0x40 es un registro VM; @c location en [0x40, 0x80) es un
+/// slot de spill con indice @c location - INTERP_SM_SLOT_BASE.
 static constexpr uint8_t INTERP_SM_SLOT_BASE = 0x40u;
+
+/// Base para codificar un handle GC empujado a traves de un CALL, localizado
+/// RELATIVO AL RBP DEL CALLEE (no del caller).  @c location >= 0x80 es un
+/// handle en @c callee_rbp + 16 + 8*(location - INTERP_SM_PUSH_BASE).
+///
+/// Robusto ante ALLOCA en el caller: los empujes pre-call quedan por ENCIMA
+/// del @c saved_rbp + @c return_pc que el @c enter del callee dejo, asi que su
+/// offset desde @c callee_rbp es FIJO independientemente de cuanto haya bajado
+/// rsp el caller por sus ALLOCA.  El scan usa el rbp del frame ACTUAL (el
+/// callee) para materializarlos, no el caller_rbp.
+static constexpr uint8_t INTERP_SM_PUSH_BASE = 0x80u;
+
+/// Offset (bytes) del PRIMER handle empujado desde el rbp del callee:
+/// @c [callee_rbp] = saved_rbp, @c [callee_rbp+8] = return_pc, y el empuje
+/// mas alto (topmost, ultimo empujado antes del call) queda en @c callee_rbp+16.
+static constexpr uint32_t INTERP_SM_PUSH_FIRST_OFF = 16u;
 
 /**
  * @struct InterpStackmapSlot
@@ -99,11 +115,22 @@ struct InterpStackmapSlot {
 
     /// True si esta ubicacion es un registro VM (R0..R15).
     bool is_reg() const noexcept { return location < INTERP_SM_SLOT_BASE; }
+    /// True si es un slot de spill (caller-rbp relativo).
+    bool is_spill() const noexcept {
+        return location >= INTERP_SM_SLOT_BASE && location < INTERP_SM_PUSH_BASE;
+    }
+    /// True si es un handle empujado a traves de un call (callee-rbp relativo).
+    bool is_pushed() const noexcept { return location >= INTERP_SM_PUSH_BASE; }
     /// Indice de registro (valido solo si @c is_reg()).
     uint8_t reg_index() const noexcept { return location; }
-    /// Indice de slot de spill (valido solo si NO @c is_reg()).
+    /// Indice de slot de spill (valido solo si @c is_spill()).
     uint8_t slot_index() const noexcept {
         return static_cast<uint8_t>(location - INTERP_SM_SLOT_BASE);
+    }
+    /// Posicion desde el tope (0=topmost) de un handle empujado (si @c
+    /// is_pushed()).  Offset = @c callee_rbp + INTERP_SM_PUSH_FIRST_OFF + 8*k.
+    uint8_t push_index() const noexcept {
+        return static_cast<uint8_t>(location - INTERP_SM_PUSH_BASE);
     }
 };
 

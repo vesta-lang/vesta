@@ -1039,6 +1039,22 @@ struct GcStats {
      */
     uint64_t interp_precise_roots_marked = 0;
     uint64_t interp_precise_notified = 0;
+
+    /**
+     * Verificador diferencial de COMPLETITUD (solo con VESTA_GC_VERIFY=1;
+     * flag de DESARROLLO, no de producto).  Compara el conjunto PRECISO
+     * (interp + JIT frames, cerrado transitivamente) contra las raices
+     * REALES que el conservador retiene (objetos GC vivos de verdad).
+     *
+     *   - verify_gap_roots: raices GC vivas que el CONSERVADOR marca como
+     *     raiz directa y que el PRECISO (ni su cierre transitivo) NO
+     *     alcanzo -> HUECO de completitud (el preciso las perderia si
+     *     fuera primario -> use-after-free).  Objetivo: 0.
+     *   - verify_major_gc_checked: cuantos major_gc corrieron con el
+     *     verificador activo (denominador de la tasa de huecos).
+     */
+    uint64_t verify_gap_roots = 0;
+    uint64_t verify_major_gc_checked = 0;
 };
 
 /**
@@ -1290,6 +1306,23 @@ class GcHeap {
      * @param worklist worklist BFS donde se anaden los handles marcados.
      */
     void scan_interp_roots_precise(std::vector<GcHandle> &worklist);
+
+    /**
+     * @brief Verificador diferencial de COMPLETITUD del scan preciso
+     *        (VESTA_GC_VERIFY=1, DEV-ONLY).  Cierra transitivamente el
+     *        conjunto preciso ya acumulado en @p worklist y luego compara
+     *        contra las raices reales que el conservador retiene: cualquier
+     *        objeto GC vivo con referencia real (host_ptr en pila/regs) que
+     *        el conservador marca pero el cierre preciso NO alcanzo es un
+     *        HUECO (raiz real perdida).  Actualiza @c stats_.verify_gap_roots.
+     *
+     * ADITIVO: reusa el mismo coloreo (mark_reachable idempotente), no cambia
+     * el conjunto de supervivientes.  Solo mide y reporta.
+     *
+     * @param worklist worklist BFS con los roots precisos ya acumulados; se
+     *                 cierra in situ (BLACK) igual que haria el GC despues.
+     */
+    void verify_completeness(std::vector<GcHandle> &worklist);
 
     /**
      * @brief Intenta marcar un handle como root precise (BLACK + push

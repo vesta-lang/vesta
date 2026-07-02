@@ -339,11 +339,15 @@ ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
 
     uint64_t marked = 0;
 
-    // Helper: materializa un stackmap dado su @p rbp de frame.  @p is_top
-    // indica si es el frame top (los slots de registro solo son validos
-    // ahi; en frames caller los regs ya no reflejan sus valores).
-    auto apply = [&](const loader::InterpStackmap *sm, uint64_t rbp,
-                     bool is_top) {
+    // Helper: materializa un stackmap.  @p frame_rbp es el rbp del frame que el
+    // stackmap describe (para registros del top y slots de spill).  @p
+    // callee_rbp es el rbp del frame CALLEE cuyo return_pc selecciono este
+    // stackmap (para handles empujados a traves del call, que viven por encima
+    // del saved_rbp/return_pc del callee).  Para el frame TOP, callee_rbp==0
+    // (sus safepoints directos no tienen handles empujados).  @p is_top indica
+    // si @p frame_rbp es el frame top (los slots de registro solo valen ahi).
+    auto apply = [&](const loader::InterpStackmap *sm, uint64_t frame_rbp,
+                     uint64_t callee_rbp, bool is_top) {
         for (const auto &slot : sm->slots) {
             uint64_t value = 0;
             if (slot.is_reg()) {
@@ -354,10 +358,20 @@ ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
                 const uint8_t r = slot.reg_index();
                 if (r >= 16) continue;
                 value = regs[r];
-            } else {
-                // Slot de spill: valor en [rbp - (slot+1)*8].
+            } else if (slot.is_pushed()) {
+                // Handle empujado a traves de un call: vive en
+                // [callee_rbp + 16 + 8*push_index].  Robusto ante ALLOCA en el
+                // frame del caller.  Sin callee_rbp (frame top) no aplica.
+                if (callee_rbp == 0) continue;
                 const uint64_t addr =
-                    rbp - static_cast<uint64_t>(slot.slot_index() + 1) * 8;
+                    callee_rbp + loader::INTERP_SM_PUSH_FIRST_OFF +
+                    static_cast<uint64_t>(slot.push_index()) * 8;
+                value = proc_->vm_mem.read_u64(addr);
+            } else {
+                // Slot de spill: valor en [frame_rbp - (slot+1)*8].
+                const uint64_t addr =
+                    frame_rbp -
+                    static_cast<uint64_t>(slot.slot_index() + 1) * 8;
                 value = proc_->vm_mem.read_u64(addr);
             }
             if (value == 0) continue;
@@ -366,11 +380,12 @@ ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
         }
     };
 
-    // Frame TOP: PC = rip, rbp = base_pointer.
+    // Frame TOP: PC = rip, rbp = base_pointer.  Sin callee_rbp (es el frame mas
+    // interno; sus safepoints directos -newobj/gcalloc- no empujan handles).
     const uint64_t top_pc = proc_->registers.rip.raw();
     const uint64_t top_rbp = proc_->registers.base_pointer.qword();
     if (const auto *sm = lookup(top_pc)) {
-        apply(sm, top_rbp, /*is_top=*/true);
+        apply(sm, top_rbp, /*callee_rbp=*/0, /*is_top=*/true);
     }
 
     // Frames CALLER: caminamos la CADENA DE RBP guardada en vm_mem (el
@@ -400,8 +415,11 @@ ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
         if (caller_rbp == 0 || caller_rbp <= rbp) break;
         if (const auto *sm = lookup(return_pc)) {
             // El stackmap del sitio de retorno describe raices en el frame del
-            // CALLER (caller_rbp), no en este frame.
-            apply(sm, caller_rbp, /*is_top=*/false);
+            // CALLER (caller_rbp): sus slots de spill sobre caller_rbp, y sus
+            // handles empujados a traves del call sobre el rbp del CALLEE (este
+            // frame, @c rbp) -- por encima del saved_rbp/return_pc que su enter
+            // dejo, offset fijo aun con ALLOCA en el caller.
+            apply(sm, caller_rbp, /*callee_rbp=*/rbp, /*is_top=*/false);
         }
         rbp = caller_rbp;
     }

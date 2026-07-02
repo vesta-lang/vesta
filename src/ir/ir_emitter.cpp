@@ -703,38 +703,74 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
     // empuje p cae en rbp - 8*(spill_count + p + 1) = slot (spill_count+p).
     // Sin frame (spill_count==0 y sin ALLOCA) el rbp es el del caller y el
     // offset no es fiable -> lo cubre el scan conservador (modo aditivo).
+    // Registros GC empujados a traves del call: reg -> push_idx (desde el
+    // fondo, en orden de regs_to_save).  Dos esquemas de localizacion:
+    //
+    //  - SIN ALLOCA (has_frame && !has_alloca): el empuje p cae en el slot
+    //    rbp-relativo (spill_count + push_idx) del CALLER; codificamos como
+    //    slot de spill 0x40+idx (materializado sobre caller_rbp por el scan).
+    //    Requiere que la secuencia de empuje empiece en rbp - 8*spill_count,
+    //    cierto solo sin ALLOCA (que baja rsp de forma no reflejada).
+    //
+    //  - CON ALLOCA (has_frame && has_alloca): el offset caller-rbp NO es
+    //    fiable (ALLOCA desplazo rsp).  Pero los empujes quedan por ENCIMA del
+    //    saved_rbp + return_pc que el `enter` del CALLEE dejo, asi que su
+    //    offset desde el rbp del CALLEE es FIJO.  Forzamos empuje individual
+    //    (force_individual_push_stackmap) -> el layout es determinista: el
+    //    handle en el indice i de regs_to_save queda en
+    //    callee_rbp + 16 + 8*(N-1-i).  Codificamos como 0x80 + (N-1-i)
+    //    (materializado sobre el rbp del frame ACTUAL, el callee, por el scan).
     std::unordered_map<int, int> pushed_pos;
-    if (ctx.has_frame && !ctx.has_alloca) {
-        const std::vector<int> regs_to_save =
-            live_regs_through_call(ctx, pos, ins.dst);
+    std::vector<int> regs_to_save;
+    if (ctx.has_frame) {
+        regs_to_save = live_regs_through_call(ctx, pos, ins.dst);
         pushed_pos = pushed_gc_reg_positions(ctx, pos, regs_to_save);
     }
     const uint32_t spill_count = ctx.alloc.spill_count;
+    const int n_saved = static_cast<int>(regs_to_save.size());
 
     std::vector<SmLoc> locs;
     locs.reserve(roots.size());
     for (IrValueId vid : roots) {
-        // (a) Raiz derramada a slot: el slot lleva el GcHandle estable.
+        // (a) Raiz derramada a slot: el slot lleva el GcHandle estable.  Los
+        //     slots de spill estan POR ENCIMA de la region ALLOCA (offset fijo
+        //     desde caller_rbp), asi que funcionan con o sin ALLOCA.
         auto it_sp = ctx.alloc.spill_map.find(vid);
         if (it_sp != ctx.alloc.spill_map.end()) {
             const int slot = it_sp->second;
-            if (slot >= 0 && slot < 0xC0)
+            if (slot >= 0 && slot < 0x40)
                 locs.push_back(
                     {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE + slot),
                      static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
             continue;
         }
-        // (b) Raiz register-held empujada a traves del call (solo con frame).
+        // (b) Raiz register-held empujada a traves del call.
         auto it_reg = ctx.alloc.reg_map.find(vid);
         if (it_reg == ctx.alloc.reg_map.end()) continue;
         const int r = it_reg->second;
         auto it_push = pushed_pos.find(r);
         if (it_push == pushed_pos.end()) continue; // no empujado (no vivo/reg)
-        const uint32_t slot_idx = spill_count + static_cast<uint32_t>(it_push->second);
-        if (slot_idx < 0xC0)
-            locs.push_back(
-                {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE + slot_idx),
-                 static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
+        const int push_idx = it_push->second;
+
+        if (!ctx.has_alloca) {
+            // Sin ALLOCA: slot caller-rbp = spill_count + push_idx.
+            const uint32_t slot_idx =
+                spill_count + static_cast<uint32_t>(push_idx);
+            if (slot_idx < 0x40)
+                locs.push_back({static_cast<uint8_t>(
+                                    loader::INTERP_SM_SLOT_BASE + slot_idx),
+                                static_cast<uint8_t>(
+                                    jit::StackmapGcKind::HANDLE)});
+        } else {
+            // Con ALLOCA: offset callee-rbp = 16 + 8*(N-1-push_idx).
+            // Con empuje individual forzado, push_idx = indice en regs_to_save,
+            // por lo que la posicion desde el tope es (N-1-push_idx).
+            const int from_top = n_saved - 1 - push_idx;
+            if (from_top >= 0 && from_top < 0x40)
+                locs.push_back(
+                    {static_cast<uint8_t>(loader::INTERP_SM_PUSH_BASE + from_top),
+                     static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
+        }
     }
     emit_sm_locs(ctx, locs);
 }
@@ -753,6 +789,18 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
 // empujamos en una sola instruccion con `fastpush <mask16>` (4 bytes vs
 // N x 2 bytes de push reg).  Para 1 reg el push tradicional es mas chico
 // (2 bytes vs 4 bytes), asi que solo fusionamos a partir de 2 regs.
+// True si debemos FORZAR el empuje individual (sin fastpush/hibrido) para que
+// el layout de la pila de empuje sea DETERMINISTA y el stackmap del sitio de
+// retorno pueda localizar cada handle GC empujado por su offset relativo al
+// rbp del CALLEE (robusto ante ALLOCA en el caller).  Solo cuando hay GC preciso
+// activo Y la funcion tiene ALLOCA (que desplaza rsp de forma no reflejada en
+// spill_count, rompiendo el offset rbp-relativo del caller).  En funciones sin
+// ALLOCA seguimos usando fastpush/hibrido (mismo perf de antes) porque el offset
+// caller-rbp del handle empujado (spill_count + push_idx) SI es exacto.
+static inline bool force_individual_push_stackmap(const EmitCtx &ctx) {
+    return ctx.emit_stackmaps && ctx.has_alloca;
+}
+
 static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
                                 const std::vector<int> &regs_to_save) {
     // Detectar si todos los regs son no-GC para usar fastpush.
@@ -763,6 +811,11 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
             break;
         }
     }
+    // GC preciso con ALLOCA: si hay handles GC, forzar empuje individual para
+    // layout determinista (ver force_individual_push_stackmap).  Si no hay GC,
+    // el fastpush puro sigue siendo seguro (no hay raiz que localizar).
+    const bool force_individual = force_individual_push_stackmap(ctx) && any_gc;
+
     if (!any_gc && regs_to_save.size() >= 2) {
         uint32_t mask = 0;
         for (int r : regs_to_save) {
@@ -807,7 +860,7 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
             ++num_nongc_tail;
         }
     }
-    if (gc_first_ordered && num_nongc_tail >= 2) {
+    if (!force_individual && gc_first_ordered && num_nongc_tail >= 2) {
         uint32_t mask = 0;
         for (int r : regs_to_save) {
             if (reg_holds_gc_object(ctx, call_pos, r)) {
@@ -822,6 +875,10 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
         return;
     }
 
+    // Empuje individual (default y forzado con ALLOCA+GC preciso): cada reg en
+    // orden de regs_to_save; los GC como handle (gchandle+push), los no-GC como
+    // push reg.  Layout determinista -> el offset callee-rbp de cada handle es
+    // 16 + 8*(N-1-i) donde i es su indice en regs_to_save (N = total empujados).
     for (int r : regs_to_save) {
         if (reg_holds_gc_object(ctx, call_pos, r)) {
             ctx.out << "    gchandle " << sc << ", " << reg_name(r) << "\n";
@@ -864,6 +921,10 @@ static void emit_restore_live_regs(EmitCtx &ctx, uint32_t call_pos,
             break;
         }
     }
+    // Simetrico al save: si el save forzo empuje individual (GC preciso +
+    // ALLOCA + GC), el restore debe usar pop individual (misma condicion).
+    const bool force_individual = force_individual_push_stackmap(ctx) && any_gc;
+
     if (!any_gc && regs_to_save.size() >= 2) {
         uint32_t mask = 0;
         for (int r : regs_to_save) {
@@ -888,7 +949,7 @@ static void emit_restore_live_regs(EmitCtx &ctx, uint32_t call_pos,
             ++num_nongc_tail;
         }
     }
-    if (gc_first_ordered && num_nongc_tail >= 2) {
+    if (!force_individual && gc_first_ordered && num_nongc_tail >= 2) {
         // Reverse del save: fastpop primero (los non-GC fueron pusheados al
         // final), luego pop+gcderef+xchg de los GC en orden inverso.
         uint32_t mask = 0;

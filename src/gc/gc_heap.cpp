@@ -533,6 +533,24 @@ GcHandle GcHeap::alloc(size_t size) {
     // pedido + padding hasta multiplo de 8.
     const size_t total = (sizeof(GcHeader) + size + ALIGN - 1) & ~(ALIGN - 1);
 
+#if !defined(VESTA_GC_FREESTANDING)
+    // STRESS GC (VESTA_GC_STRESS=1, DEV-ONLY): fuerza un ciclo COMPLETO
+    // (minor + major) en CADA alocacion, ANTES de reservar el nuevo objeto.
+    // Sirve al verificador (VESTA_GC_VERIFY) para ejercitar el scan preciso
+    // en TODO safepoint de programas cortos que de otro modo nunca llenan el
+    // nursery.  En este punto no hay objeto en construccion (pending_alloc_
+    // root_ vacio); las raices vivas del caller estan en pila/regs.  No es un
+    // flag de producto: sin la env var, cero coste (una lectura de bool).
+    static const bool stress = [] {
+        const char *v = std::getenv("VESTA_GC_STRESS");
+        return v && v[0] == '1';
+    }();
+    if (stress) {
+        minor_gc();
+        major_gc();
+    }
+#endif
+
     // Lambda que inicializa un slot ya reservado.  Recibe el puntero
     // al GcHeader y el tamano REAL del slot (slot_total).
     //
@@ -982,6 +1000,119 @@ void GcHeap::scan_interp_roots_precise(std::vector<GcHandle> &worklist) {
     }
 #endif
 }
+
+// -------------------------------------------------------------------------
+//  Verificador diferencial de COMPLETITUD (VESTA_GC_VERIFY=1, DEV-ONLY).
+// -------------------------------------------------------------------------
+
+#if !defined(VESTA_GC_FREESTANDING)
+void GcHeap::verify_completeness(std::vector<GcHandle> &worklist) {
+    stats_.verify_major_gc_checked++;
+
+    // Paso 1: cerrar TRANSITIVAMENTE el conjunto preciso ya acumulado en
+    // worklist (interp + JIT frames).  Tras esto, todo objeto OLD alcanzable
+    // desde una raiz precisa esta BLACK.  Es idempotente con el BFS que el GC
+    // corre despues (mark_reachable solo WHITE->BLACK) -> no cambia el
+    // conjunto final de supervivientes.
+    for (size_t i = 0; i < worklist.size(); ++i)
+        mark_reachable(worklist[i], worklist);
+
+    // Paso 2: recolectar CANDIDATOS a hueco via HOST_PTR (referencia genuina,
+    // sin ambiguedad de coincidencia numerica).  Un valor en pila/regs que
+    // resuelve a un objeto OLD vivo via handle_for_ptr (exacto o interior) es
+    // un puntero real.  Si el cierre preciso NO lo alcanzo (sigue WHITE), es un
+    // CANDIDATO a hueco.
+    //
+    // IMPORTANTE -- por que es CANDIDATO y no hueco confirmado: un host_ptr
+    // puede ser RANCIO (memoria de pila reusada -- p.ej. un slot ALLOCA o un
+    // registro scratch que contuvo el ptr de un objeto ya MUERTO cuyo handle
+    // aun no fue barrido).  Ese objeto NO es raiz real (nadie lo usa), asi que
+    // es CORRECTO que el preciso no lo marque -- es un falso positivo del
+    // conservador, no un hueco.  El diferencial solo (aditivo) no puede
+    // distinguirlos con certeza.
+    //
+    // La AUTORIDAD de completitud es el modo PRECISO-PURO (VESTA_GC_PRECISE_
+    // ONLY=1 + STRESS): si el programa produce el MISMO resultado con el
+    // conservador desactivado, el preciso captura TODAS las raices reales y
+    // los candidatos que este diferencial reporta son ranciedades (confirmado
+    // empiricamente sobre todo el corpus GC).  Este diferencial sirve para
+    // LOCALIZAR los candidatos; el preciso-puro CONFIRMA si son reales.
+    //
+    // NO contamos coincidencias por handle-numerico bare (value == handle
+    // pequeno): esas SI pueden ser un escalar del programa; falso positivo que
+    // el preciso elimina legitimamente.
+    uint64_t rsp = 0, high = 0, regs[16];
+    if (!root_provider_->vm_stack_regs(rsp, high, regs)) return;
+    auto *vmem = root_provider_->vm_mem();
+    if (vmem == nullptr) return;
+
+    // Limitar el rango de pila al REALMENTE ACTIVO (mismo watermark que el
+    // conservador usa): por debajo del low-water los slots ya no son
+    // alcanzables.  Reduce ranciedades sin perder cobertura de raices vivas.
+    const uint64_t low = root_provider_->stack_low_water();
+    if (low != 0 && low > rsp) rsp = low;
+
+    // Conjunto de handles ya reportados este ciclo (evita doble-conteo del
+    // mismo objeto referenciado desde varios slots).
+    std::vector<GcHandle> gap_handles;
+
+    auto check_hostptr = [&](uint64_t v) {
+        // Igual criterio de rango que scan_stack_roots: descartar NULL y
+        // escalares pequenos que nunca son host_ptrs canonicos.
+        if (v < 65536) return;
+        if ((v & 7) != 0) return; // host_ptr GC siempre alineado a 8
+        const auto *ptr = reinterpret_cast<const uint8_t *>(
+            static_cast<uintptr_t>(v));
+        GcHandle h = handle_for_ptr(ptr);
+        if (h == GC_NULL_HANDLE) {
+            // Intento de interior scan en OldGen (STRRAW -> data[] a offset 40).
+            for (auto &block : old_blocks_) {
+                uint8_t *bend = block.ptr + block.bump_offset;
+                if (ptr < block.ptr || ptr >= bend) continue;
+                GcHeader *hdr = find_containing_header(
+                    block.ptr, block.bump_offset,
+                    const_cast<uint8_t *>(ptr));
+                if (hdr == nullptr) return;
+                uint8_t *payload =
+                    reinterpret_cast<uint8_t *>(hdr) + sizeof(GcHeader);
+                h = ptr_to_handle_.find(payload);
+                break;
+            }
+            if (h == GC_NULL_HANDLE) return;
+        }
+        if (h >= handles_.size() || !handles_[h].live || !handles_[h].addr)
+            return;
+        auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
+        if (hdr->gen != GcGen::OLD) return; // young lo cubre minor_gc
+        // Objeto GC vivo referenciado por un host_ptr real.  Es raiz real.
+        // Si el cierre preciso NO lo alcanzo (WHITE) -> HUECO de completitud.
+        if (hdr->color == GcColor::WHITE) {
+            for (GcHandle g : gap_handles)
+                if (g == h) return; // ya reportado
+            gap_handles.push_back(h);
+        }
+    };
+
+    if (rsp < high && (high - rsp) < (16 * 1024 * 1024)) {
+        for (uint64_t addr = rsp; addr + 8 <= high; addr += 8)
+            check_hostptr(vmem->read_u64(addr));
+    }
+    for (int i = 0; i < 16; ++i) check_hostptr(regs[i]);
+
+    if (!gap_handles.empty()) {
+        stats_.verify_gap_roots += gap_handles.size();
+        gc_dbg_emit(
+            "[gc-verify] CANDIDATO: %zu obj(s) GC via host_ptr que el PRECISO "
+            "no marco (major_gc #%llu) -- confirmar con PRECISE_ONLY. handles:",
+            gap_handles.size(),
+            (unsigned long long)stats_.major_gc_count);
+        for (GcHandle h : gap_handles)
+            gc_dbg_emit(" %u", (unsigned)h);
+        gc_dbg_emit("\n");
+        gc_debug_flush();
+    }
+}
+#endif // !VESTA_GC_FREESTANDING
 
 // -------------------------------------------------------------------------
 // update_stack_forwards - actualiza host_ptrs en stack/regs tras evacuar
@@ -1571,14 +1702,62 @@ void GcHeap::major_gc() {
     // No-op si el .velb no lleva VSMP.
     scan_interp_roots_precise(worklist);
 
+    // -----------------------------------------------------------------------
+    // VERIFICADOR DIFERENCIAL DE COMPLETITUD (VESTA_GC_VERIFY=1, DEV-ONLY).
+    //
+    // Comprueba que el conjunto PRECISO captura TODA raiz GC real.  Modelo:
+    // "preciso ⊇ todas las raices reales".  Si es asi, cerrando el conjunto
+    // preciso transitivamente se alcanza TODO objeto vivo alcanzable; el
+    // conservador (que corre despues) no anadiria ninguna raiz directa nueva.
+    // Cualquier raiz que el conservador SI anade -> el preciso la perdio.
+    //
+    // Es ADITIVO puro: cerramos el worklist preciso ANTES del conservador
+    // (mark_reachable es idempotente WHITE->BLACK, asi que hacerlo ahora o
+    // despues no cambia el conjunto final de supervivientes).  El conservador
+    // sigue siendo primario -> cero cambio de comportamiento observable.
+    //
+    // Filtrado de falsos positivos del conservador: el conservador SOLO marca
+    // objetos GC vivos de verdad (process_value valida handle/ptr_to_handle_/
+    // interior, y salta host_ptr_only).  El unico falso positivo residual es
+    // un escalar que coincide NUMERICAMENTE con un handle pequeno vivo; para
+    // descartarlo, exigimos que el objeto reportado como hueco tenga ademas
+    // un HOST_PTR real presente en pila/regs (una referencia real, no solo un
+    // valor==handle).  Asi "raiz real perdida" (hueco) se distingue de
+    // "coincidencia numerica" (correcto que el preciso no la marque).
+    // -----------------------------------------------------------------------
+#if !defined(VESTA_GC_FREESTANDING)
+    static const bool verify_enabled = [] {
+        const char *v = std::getenv("VESTA_GC_VERIFY");
+        return v && v[0] == '1';
+    }();
+    if (verify_enabled && root_provider_ != nullptr &&
+        root_provider_->vm_mem() != nullptr) {
+        verify_completeness(worklist);
+    }
+#endif
+
     // MARK: stack scanning conservativo desde stack/regs
     // del proceso owner.  Reemplaza el modelo previo "todo handle live
     // = root" que nunca colectaba sin drop explicito.  Si owner_proc_
     // es nullptr (ej. tests sin ProcessVM), fallback al modelo previo.
     const size_t worklist_after_precise = worklist.size();
+#if !defined(VESTA_GC_FREESTANDING)
+    // MODO PRECISO-PURO (VESTA_GC_PRECISE_ONLY=1, DEV-ONLY): salta el scan
+    // conservador para PROBAR empiricamente la completitud del preciso.  Si un
+    // programa corre correcto en este modo, el preciso captura TODAS sus raices
+    // reales (los "huecos" que reporta el verificador son falsos positivos del
+    // conservador -- host_ptrs rancios en memoria reusada -> objeto ya muerto).
+    // NO es el flip de produccion; es una herramienta de validacion.
+    static const bool precise_only = [] {
+        const char *v = std::getenv("VESTA_GC_PRECISE_ONLY");
+        return v && v[0] == '1';
+    }();
+#else
+    constexpr bool precise_only = false;
+#endif
     uint64_t mj_rsp = 0, mj_high = 0;
     uint64_t mj_regs[16];
-    if (root_provider_ != nullptr &&
+    if (!precise_only && root_provider_ != nullptr &&
         root_provider_->vm_stack_regs(mj_rsp, mj_high, mj_regs) &&
         root_provider_->vm_mem() != nullptr) {
         scan_stack_roots(mj_rsp, mj_high, mj_regs, *root_provider_->vm_mem(),
@@ -1588,7 +1767,7 @@ void GcHeap::major_gc() {
         // debe limitar el rango del proximo scan al rango realmente
         // activo desde ahora.
         root_provider_->set_stack_low_water(mj_rsp);
-    } else if (!aot_precise_roots_) {
+    } else if (!aot_precise_roots_ && !precise_only) {
         // Fallback: modelo previo (todo handle live = root).  Solo se usa si no
         // hay root_provider_ NI modo AOT (defensivo para tests / setups
         // especiales).  En modo AOT (libvesta_gc) se OMITE -> las raices vienen
@@ -1603,6 +1782,15 @@ void GcHeap::major_gc() {
             }
         }
     }
+#if !defined(VESTA_GC_FREESTANDING)
+    else if (precise_only && root_provider_ != nullptr &&
+             root_provider_->vm_stack_regs(mj_rsp, mj_high, mj_regs)) {
+        // Modo preciso-puro: sin conservador, pero mantener el watermark del
+        // stack coherente para el proximo ciclo (el interp precise scan y el
+        // forward-update lo usan).
+        root_provider_->set_stack_low_water(mj_rsp);
+    }
+#endif
 
     // MARK roots externos: handles pinnados por estructuras nativas
     // (ArrayList<string> del plugin vesta_collections, etc.) se tratan
