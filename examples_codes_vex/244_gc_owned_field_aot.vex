@@ -1,0 +1,21 @@
+// 244 -- Objeto GC con campo owned (shared<T>) compilable en AOT.
+//
+// Una clase GC (`gc<Caja>`) con un campo owned `shared<i64>` obliga al
+// compilador a sintetizar un destructor del contenedor (que decrementa el
+// refcount del campo).  Ese dtor sintetizado se resuelve EN COMPILE-TIME por
+// el tipo declarado del contenedor (no hay herencia ni interfaces), asi que
+// se emite como CALL DIRECTO al `Caja____dtor`, NO como CALLVIRT.  De ese
+// modo el AOT (--target=bare, sin vtable runtime) lo acepta y ademas es mas
+// rapido en interp/JIT (sin vtable lookup).
+//
+// R0 esperado = 42 en los 3 modos (uc = use_count tras copiar a campo = 2;
+// 2*10 + 22 = 42).
+class Caja { shared<i64> s; }
+
+i32 main() {
+    shared<i64> a = shared_box(100);      // rc = 1
+    gc<Caja> c = new Caja();
+    c.s = a;                               // copia -> rc = 2
+    i64 uc = use_count(a);                 // esperado uc = 2
+    return (i32)(uc * 10 + 22);            // 2*10 + 22 = 42
+}

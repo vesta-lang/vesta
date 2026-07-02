@@ -4624,7 +4624,7 @@ bind_and_cleanup:
                 }
                 cleanup_stack_.push_back(std::move(act));
             } else if (dtor) {
-                // cleanup CALL_DTOR: el regalloc ve un CALLVIRT
+                // cleanup CALL_DTOR: el regalloc ve un CALL/CALLVIRT
                 // real y preserva los regs vivos del scope (incluido el
                 // reg de v_ret en lower_return).  refresh_name garantiza
                 // que el cleanup vea el binding actual del local si fue
@@ -4635,6 +4635,29 @@ bind_and_cleanup:
                 act.source_line = vd->loc.line;
                 act.refresh_name = vd->name;
                 act.dtor_vtable_index = dtor->vtable_index;
+                // Dispatch estatico cuando el dtor NO es polimorfico: el tipo
+                // declarado del contenedor coincide con el dinamico (no hay
+                // super, ni interfaces, ni subclases) -> el dtor sintetizado se
+                // resuelve en compile-time.  Emitir CALL DIRECTO al
+                // `<owner>____dtor` en lugar de CALLVIRT: mas rapido (sin vtable
+                // lookup) en interp/JIT y compilable en AOT --target=bare (que
+                // no tiene vtable runtime).  Misma deteccion de vtable que
+                // NATIVE_FREE / __new_<Class>.  Solo cuando existe vtable
+                // (herencia/interfaz real) se conserva el CALLVIRT.
+                bool has_vtable =
+                    !lay.super_name.empty() || !lay.interface_names.empty();
+                if (!has_vtable)
+                    for (const auto &kv : class_layouts)
+                        if (kv.second.super_name == sem_type.struct_name) {
+                            has_vtable = true;
+                            break;
+                        }
+                if (!has_vtable) {
+                    const std::string owner = dtor->defining_class.empty()
+                                                  ? sem_type.struct_name
+                                                  : dtor->defining_class;
+                    act.func_name = owner + "__" + dtor->name; // <Class>____dtor
+                }
                 cleanup_stack_.push_back(std::move(act));
             }
             // fix9 - eliminado el cleanup RAW_ASM `gchandle+drop`
@@ -7520,9 +7543,26 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
         }
         switch (it->kind) {
         case CleanupAction::Kind::CALL_DTOR: {
-            // emitir CALLVIRT real para que el regalloc lo
-            // trate como CALL y preserve regs caller-saved vivos
-            // (especialmente el reg que lleva v_ret en lower_return).
+            if (!it->func_name.empty()) {
+                // Dispatch estatico: el dtor sintetizado del contenedor se
+                // resuelve por el tipo declarado (no polimorfico).  CALL
+                // DIRECTO -> mas rapido (sin vtable lookup) y compilable en
+                // AOT --target=bare.  El regalloc lo trata como CALL y
+                // preserva los regs vivos del scope (incluido v_ret).
+                ir::IrInstr cd{};
+                cd.op = ir::IrOp::CALL;
+                cd.type = ir::IrType::VOID;
+                cd.dst = ir::IR_NO_VALUE;
+                cd.operands = std::move(opnds);
+                cd.func_name = it->func_name;
+                cd.source_line = it->source_line;
+                fn_->append(current_block_, std::move(cd));
+                break;
+            }
+            // Dtor polimorfico (herencia/interfaz): emitir CALLVIRT real
+            // para que el regalloc lo trate como CALL y preserve regs
+            // caller-saved vivos (especialmente el reg que lleva v_ret en
+            // lower_return).
             ir::IrInstr cv{};
             cv.op = ir::IrOp::CALLVIRT;
             cv.type = ir::IrType::VOID;
