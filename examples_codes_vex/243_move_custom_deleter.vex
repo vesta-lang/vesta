@@ -1,0 +1,14 @@
+// combo memoria: move(unique_with) transfiere el deleter custom (bug4).
+// `unique<i64> b = move(a)` donde `a = unique_with(9, del)`.  El move copia el
+// deleter de `a` al slot de `b`; el cleanup de `b` resuelve el deleter
+// ESTATICAMENTE (llamada directa a `del`, sin dispatch dinamico ni lectura de
+// slot+8) porque el deleter de `a` es conocido en compile-time.  `a` queda
+// invalidado (ptr=0) tras el move -> su cleanup se salta (guard de null).
+// Resultado: `del` se invoca EXACTAMENTE una vez.  Esperado: R0 = 1.
+class Counter { public static i64 libs; }
+void del(i64 r){ Counter.libs = Counter.libs + 1; }
+void run() {
+    unique<i64> a = unique_with(9, del);
+    unique<i64> b = move(a);
+}
+i32 main(){ Counter.libs = 0; run(); return (i32) Counter.libs; }

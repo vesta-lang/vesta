@@ -1,0 +1,15 @@
+// combo memoria: move(unique) HACIA UN CAMPO (bug3).
+// `c.h = move(local)` donde `local` es unique<i64> y `c.h` es campo unique<i64>.
+// El slot movido debe materializarse en HEAP (el campo lo posee; el dtor del
+// contenedor hace RAW_FREE del slot).  Antes: el move dejaba el slot en la pila
+// y el dtor liberaba una direccion de stack -> SIGSEGV en VM/JIT.  Como el move
+// deja `local` invalidado, solo el campo libera (1 free).  Esperado: R0 = 1.
+class Counter { public static i64 libs; }
+void del(i64 r){ Counter.libs = Counter.libs + 1; }
+class Cont { unique<i64> h; }
+void run() {
+    unique<i64> local = unique_with(9, del);
+    Cont c = new Cont();
+    c.h = move(local);    // move local -> field
+}   // solo el field libera (1 free)
+i32 main(){ Counter.libs = 0; run(); return (i32) Counter.libs; }

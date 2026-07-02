@@ -1,0 +1,15 @@
+// combo memoria: unique<T> que envuelve OTRO smart pointer owned (bug1).
+// unique<shared<i64>> y unique<unique<i64>>: el wrapper externo posee una
+// COPIA en heap del wrapper interno (sus bytes de slot: shared=8, unique=16);
+// el cleanup RAW_FREE-a esa copia, NO el control block interno (que su dueno
+// original decrementa/libera).  Antes: RAW_FREE de una direccion de stack ->
+// SIGSEGV en VM/JIT.  Esperado: R0 = 42 en los 3 modos.
+i32 main() {
+    shared<i64> s = shared_box(42);
+    unique<shared<i64>> us = unique_box(s);
+
+    unique<i64> a = unique_box(7);
+    unique<unique<i64>> uu = unique_box(a);
+
+    return 42;
+}

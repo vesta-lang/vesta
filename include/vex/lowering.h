@@ -1910,6 +1910,14 @@ class Lowering {
     /// custom al cleanup pendiente.  Vacio = usar el deleter por
     /// defecto ("free").  Se limpia tras consumirse en lower_var_decl.
     std::string pending_smartptr_deleter_;
+    /// Deleter ESTATICO por variable @c unique<T> local.  Permite resolver el
+    /// cleanup de un `move(a)` a una llamada DIRECTA al deleter concreto de `a`
+    /// (free / <fn_label> / @extern:...) en vez de un dispatch dinamico que lee
+    /// el slot+8 en runtime.  Clave = nombre de la variable; valor = mismo
+    /// formato que @c CleanupAction::literal_deleter ("free", "<fn>",
+    /// "@extern:<lib>:<fn>").  Ausente = deleter desconocido (p.ej. la variable
+    /// vino de una factory opaca) -> el move cae a dispatch dinamico.
+    std::unordered_map<std::string, std::string> unique_var_deleter_;
     /// Ownership: cuando un @c unique<T> se asigna a un CAMPO (de clase o
     /// struct), su slot Tier 1 (16B [ptr][deleter]) debe vivir en HEAP, no en
     /// stack: el campo guarda la direccion del slot y sobrevive al scope donde
