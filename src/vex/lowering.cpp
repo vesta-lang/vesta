@@ -11474,7 +11474,17 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             // host.  Solo funciones planas (no lambdas ni externs): las lambdas
             // van por otro path (LABEL_ADDR de bytecode) y los externs por su
             // thunk cfn.
-            const FunctionSig *fs = tc_.function_sig_by_name(label);
+            //
+            // LIM-5: el sig se busca por el nombre LOCAL @c id->name (NO por
+            // @c label), igual que el path de CALL a @Naked (mismo fichero,
+            // ~L14986).  Para un simbolo IMPORTADO via `only`, la FunctionSig
+            // se registra bajo su nombre LOCAL y su @c mangled_label lleva el
+            // nombre del modulo (`racelib__race_task`); buscar por @c label (ya
+            // mangled) devolveria nullptr -> se caeria al LABEL_ADDR de
+            // bytecode VM (direccion equivocada) y el fiber_switch saltaria a
+            // basura.  El @c label (para el hash del dispatcher) sigue siendo
+            // el mangled, que es como se llama el IrFunction en el modulo final.
+            const FunctionSig *fs = tc_.function_sig_by_name(id->name);
             if (!native_poo_ && fs != nullptr && fs->extern_lib.empty() &&
                 !extern_lib_by_fn_name_.count(id->name)) {
                 out_mod_->register_native_import("vrt", "naked_fnaddr");

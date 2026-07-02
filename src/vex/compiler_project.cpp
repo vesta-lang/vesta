@@ -485,6 +485,52 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
             walk_expr(r->value.get());
             break;
         }
+        case ast::NodeKind::AsmStmt: {
+            // Inline-asm @Naked: el cuerpo es texto NASM verbatim.  Un
+            // `call helper2` / `jmp helper2` / `lea rax, [helper2]` que
+            // referencie una fn/global top-level del PROPIO modulo debe ver
+            // el nombre MANGLED (`mod__helper2`), igual que un IdentExpr.
+            // Sin esto, al compilar el modulo como dep el simbolo del asm
+            // queda con su nombre LOCAL y el resolver de @Naked cross-modulo
+            // (jit/naked_native.cpp::resolve_naked_symbol) no lo encuentra
+            // -> "simbolo externo no resuelto" -> la fn @Naked no compila.
+            // (Las labels internas del bloque `.foo:` empiezan por `.` y las
+            // fns reservadas por `__`; ninguna esta en rename_map, no se
+            // tocan.)  Reescritura por TOKEN completo (frontera de
+            // identificador) para no pisar substrings de otro simbolo.
+            auto *as = static_cast<ast::AsmStmt *>(s);
+            std::string &body = as->body;
+            std::string out;
+            out.reserve(body.size());
+            const auto is_ident_ch = [](char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       (c >= '0' && c <= '9') || c == '_';
+            };
+            size_t i = 0;
+            while (i < body.size()) {
+                char c = body[i];
+                // Inicio de un identificador NASM (letra o `_`; el `.` de una
+                // label local NO inicia identificador renombrable porque los
+                // nombres de rename_map nunca empiezan por `.`).
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    c == '_') {
+                    size_t j = i + 1;
+                    while (j < body.size() && is_ident_ch(body[j])) ++j;
+                    std::string tok = body.substr(i, j - i);
+                    auto it = rename_map.find(tok);
+                    if (it != rename_map.end())
+                        out += it->second;
+                    else
+                        out += tok;
+                    i = j;
+                } else {
+                    out += c;
+                    ++i;
+                }
+            }
+            body.swap(out);
+            break;
+        }
         default: break;
         }
     };
