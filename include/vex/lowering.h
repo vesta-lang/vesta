@@ -1200,6 +1200,11 @@ class Lowering {
     /// RAII).  El GC (libvesta_gc) colecta lo no alcanzable.
     std::unordered_set<std::string> classes_used_gc_;
 
+    /// true si el modulo registro al menos un finalizador GC (gc<unique>/
+    /// gc<shared>/gc<Clase> con recurso interno).  En AOT dispara la inyeccion
+    /// de @c vex_gc_finalize_all antes de cada RET de main (cero fuga al exit).
+    bool module_has_gc_finalizers_ = false;
+
     /// Vars locales declaradas con modificador @c shared.  El escape
     /// analyzer de @c spawn las omite del warning "objeto GC local-only
     /// capturado" (declarar @c shared es la solucion sugerida).
@@ -1239,6 +1244,14 @@ class Lowering {
     /// con la garantia de que la fuente queda invalidada.
     void emit_mvtake(ir::IrValueId v_dst_addr, ir::IrValueId v_src_addr,
                      uint32_t source_line);
+
+    /// Emite GC_SET_FINALIZER %box, imm=kind.  Registra (kind 1/2/3) o
+    /// desregistra (kind 0) el finalizador GC de un box con recurso interno.
+    /// Para kind==3 (CLASS_DTOR) pasar @p v_dtor_addr con el vaddr del
+    /// <Clase>____dtor concreto (dispatch estatico).
+    void emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
+                               uint32_t source_line,
+                               ir::IrValueId v_dtor_addr = ir::IR_NO_VALUE);
 
     /// Emite @c IrOp::LABEL_ADDR que se interpreta en el bajado a .vel
     /// como @c @Absolute("code.<label_name>"), produciendo la direccion

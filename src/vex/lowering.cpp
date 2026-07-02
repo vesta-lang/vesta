@@ -982,12 +982,26 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             ir::IrType rt = ir::IrType::VOID;
             PrimitiveKind kind = PrimitiveKind::VOID;
             if (fd->return_type &&
-                fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode &&
+                static_cast<ast::PrimitiveTypeNode *>(fd->return_type.get())
+                        ->prim != PrimitiveKind::GC_PTR) {
                 auto *pt = static_cast<ast::PrimitiveTypeNode *>(
                     fd->return_type.get());
                 rt = ir_type_from_primitive(pt->prim);
                 kind = pt->prim;
             } else if (fd->return_type) {
+                // NOTA gc<T>: `gc<unique<i64>>` es un PrimitiveTypeNode(GC_PTR)
+                // con type_args, pero su tipo REAL de retorno es el inner T
+                // (UNIQUE_PTR/SHARED_PTR/CLASS/...) con gc_managed=true -- ver
+                // TypeChecker::type_from_node.  Debemos resolverlo por
+                // `resolve_type_node` (NO quedarnos en GC_PTR) para que la
+                // deteccion de SRET del CALLER (fn_returns_smartptr_, etc.)
+                // coincida con la del CALLEE (lower_function, que usa
+                // resolve_type_node).  Sin esto, una fn que devuelve
+                // gc<unique<T>>/gc<shared<T>> es SRET en el callee (retbuf)
+                // pero el caller no pasa retbuf -> escritura a puntero basura
+                // (SEGV en AOT, bug 248).  Por eso GC_PTR se excluye de la
+                // rama PrimitiveTypeNode de arriba y cae aqui.
                 // Para tipos no-primitivos (NamedTypeNode con CLASS,
                 // Optional<T>, Result<V,E>, ARRAY, PTR, alias), usar
                 // el tipo semantico resuelto.  Sin esto, las llamadas
@@ -1864,17 +1878,53 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         out_module.add_function(std::move(ti));
     }
 
-    // gc<T> opt-in: si el modulo usa gc<Class>, generar __vexgc_init que
-    // registra los stackmaps AOT (seccion .vexgc_smap) en el GC al arranque
-    // (CALL vex_gc_register_aot_stackmaps(section_start, section_size)) e
-    // inyectar un CALL a el al INICIO de main -> el scan preciso ve los frames
-    // nativos y los gc<T> vivos sobreviven la coleccion.  El driver emite la
-    // seccion .vexgc_smap tras el layout (con relocs a cada funcion).
-    if (native_poo_ && !classes_used_gc_.empty()) {
+    // gc<T> opt-in: si el modulo usa gc<T> (CLASE, unique, shared o primitivo),
+    // generar __vexgc_init que (1) llama vex_gc_init -> construye el heap E
+    // INSTALA el runner nativo de finalizadores, y (2) registra los stackmaps
+    // AOT (seccion .vexgc_smap) en el GC al arranque, inyectando un CALL a el al
+    // INICIO de main -> el scan preciso ve los frames nativos y los gc<T> vivos
+    // sobreviven la coleccion.  El driver emite la seccion .vexgc_smap tras el
+    // layout (con relocs a cada funcion).
+    //
+    // El gate no puede limitarse a `classes_used_gc_` (gc<Clase>): un
+    // gc<unique<T>>/gc<shared<T>> NO es una clase pero SI aloca via vex_gc_* y
+    // registra un finalizador -- sin vex_gc_init su runner no se instala y el
+    // finalizador se descarta (deleter/dtor no corre -> FUGA en AOT, bugs
+    // 248).  Detectamos el uso REAL de gc<T> escaneando si alguna funcion
+    // emitida referencia un simbolo `vex_gc_*` (uniforme para clase/unique/
+    // shared/primitivo).
+    bool module_uses_gc = !classes_used_gc_.empty() || module_has_gc_finalizers_;
+    if (native_poo_ && !module_uses_gc) {
+        for (const auto &f : out_module.functions) {
+            for (const auto &b : f.blocks) {
+                for (const auto &ins : b.instrs)
+                    if (ins.func_name.rfind("vex_gc_", 0) == 0) {
+                        module_uses_gc = true;
+                        break;
+                    }
+                if (module_uses_gc) break;
+            }
+            if (module_uses_gc) break;
+        }
+    }
+    if (native_poo_ && module_uses_gc) {
         ir::IrFunction gi;
         gi.name = "__vexgc_init";
         gi.ret_type = ir::IrType::VOID;
         const ir::IrBlockId e = gi.new_block("entry");
+        // CALL vex_gc_init(): construye el heap global E INSTALA el runner
+        // nativo de finalizadores (gc_finalizer_run_native).  Debe correr antes
+        // del primer alloc/register_finalizer para que los finalizadores de
+        // objetos escapados se ejecuten (deleter/dtor nativo) al colectar/exit.
+        {
+            ir::IrInstr ci{};
+            ci.op = ir::IrOp::CALL;
+            ci.type = ir::IrType::VOID;
+            ci.dst = ir::IR_NO_VALUE;
+            ci.func_name = "vex_gc_init";
+            ci.is_call_site = true;
+            gi.append(e, std::move(ci));
+        }
         // %start = section_start(".vexgc_smap")  (PTR)
         const ir::IrValueId v_start = gi.new_value(ir::IrType::PTR);
         gi.values[v_start].is_host_ptr = true;
@@ -1918,6 +1968,33 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             f.blocks[0].instrs.insert(f.blocks[0].instrs.begin(),
                                       std::move(cg));
             break;
+        }
+        // Shutdown-time: inyectar CALL vex_gc_finalize_all ANTES de cada RET de
+        // main.  Garantiza cero fuga del recurso interno de objetos gc<T> con
+        // finalizador que ESCAPARON su scope y el sweep no colecto todavia (el
+        // finalizador corre su deleter/dtor nativo antes del exit).  El valor de
+        // retorno de main (RET %v) se preserva: el CALL se inserta ANTES del RET
+        // pero no toca su operando.  Solo si el modulo registra finalizadores
+        // (algun gc<T> con recurso interno): si no, es no-op inofensivo.
+        if (module_has_gc_finalizers_) {
+            for (auto &f : out_module.functions) {
+                if (f.name != "main") continue;
+                for (auto &blk : f.blocks) {
+                    for (size_t i = 0; i < blk.instrs.size(); ++i) {
+                        if (blk.instrs[i].op != ir::IrOp::RET) continue;
+                        ir::IrInstr cf{};
+                        cf.op = ir::IrOp::CALL;
+                        cf.type = ir::IrType::VOID;
+                        cf.dst = ir::IR_NO_VALUE;
+                        cf.func_name = "vex_gc_finalize_all";
+                        cf.is_call_site = true;
+                        blk.instrs.insert(blk.instrs.begin() + i,
+                                          std::move(cf));
+                        ++i; // saltar el RET recien desplazado
+                    }
+                }
+                break;
+            }
         }
     }
 
@@ -4569,11 +4646,68 @@ bind_and_cleanup:
     // locales en @c escaping_locals_ y omite el cleanup para ellos;
     // los locales realmente locales si reciben el free automatico.
 
+    // FINALIZADOR CLASS_DTOR: un gc<Clase> con ~Clase() que POSEE un recurso
+    // (campo owned, file handle, etc.) no tiene cleanup determinista (el GC lo
+    // colecta).  Sin finalizador, ~Clase() nunca corre -> FUGA del recurso.
+    // Registramos un finalizador GC que invoca el <Clase>____dtor CONCRETO
+    // (dispatch estatico, CALL directo) cuando el sweep colecte el objeto.
+    // Aplica ESCAPE o NO-escape indistintamente (el GC colecta cada objeto
+    // exactamente una vez -> el dtor corre exactamente una vez; no hay cleanup
+    // determinista que pudiera duplicarlo).  interp/JIT via gcfinalc; AOT via
+    // CALL vex_gc_register_finalizer (emit_gc_set_finalizer bifurca por target).
+    if (v != ir::IR_NO_VALUE &&
+        sem_type.kind == PrimitiveKind::CLASS && sem_type.gc_managed &&
+        vd->init && vd->init->kind == ast::NodeKind::NewExpr) {
+        const auto &class_layouts = tc_.class_layouts();
+        auto it_cls = class_layouts.find(sem_type.struct_name);
+        if (it_cls != class_layouts.end()) {
+            const ClassLayout &lay = it_cls->second;
+            const ClassMethodInfo *dtor = nullptr;
+            for (const auto &mi : lay.methods)
+                if (mi.is_destructor) {
+                    dtor = &mi;
+                    break;
+                }
+            // Solo registrar si el dtor NO es polimorfico (dispatch estatico:
+            // sin super, sin interfaces, sin subclases).  Si fuera virtual, el
+            // finalizador tendria que resolver por vtable (fuera del contrato
+            // "CALL directo"); ese caso (gc<Clase> polimorfica con dtor + escape)
+            // queda como incremento futuro (fallback: se colecta sin dtor).
+            if (dtor != nullptr) {
+                bool has_vtable =
+                    !lay.super_name.empty() || !lay.interface_names.empty();
+                if (!has_vtable)
+                    for (const auto &kv : class_layouts)
+                        if (kv.second.super_name == sem_type.struct_name) {
+                            has_vtable = true;
+                            break;
+                        }
+                if (!has_vtable) {
+                    const std::string owner = dtor->defining_class.empty()
+                                                  ? sem_type.struct_name
+                                                  : dtor->defining_class;
+                    const std::string dtor_label =
+                        owner + "__" + dtor->name; // <Clase>____dtor
+                    // vaddr del dtor via LABEL_ADDR (dispatch estatico).
+                    const ir::IrValueId v_dtor =
+                        emit_label_addr(dtor_label, vd->loc.line);
+                    emit_gc_set_finalizer(v, /*CLASS_DTOR*/ 3, vd->loc.line,
+                                          v_dtor);
+                }
+            }
+        }
+    }
+
     // Destructor automatico (RAII) para instancias locales de
     // clase Vex que tienen `~ClassName()` declarado y NO escapan.
     // Emite CALLVIRT al destructor al exit del scope/funcion via
     // cleanup_stack_, mismo mecanismo que el auto-free de colecciones.
+    // gc<Clase>: se EXCLUYE -- su ~Clase() lo corre el finalizador GC
+    // (CLASS_DTOR, registrado arriba), no el cleanup determinista de scope.
+    // Sin esta exclusion, un gc<Clase> no-escape ejecutaria el dtor DOS veces
+    // (CALL_DTOR del scope + finalizador GC al colectar) -> doble-free.
     if (v != ir::IR_NO_VALUE && sem_type.kind == PrimitiveKind::CLASS &&
+        !sem_type.gc_managed &&
         escaping_locals_.find(vd->name) == escaping_locals_.end()) {
         const auto &class_layouts = tc_.class_layouts();
         auto it_cls = class_layouts.find(sem_type.struct_name);
@@ -4892,6 +5026,30 @@ bind_and_cleanup:
             act.slot_size = 8;
         }
         cleanup_stack_.push_back(std::move(act));
+
+        // gc<unique<T>>/gc<shared<T>> NO-escape (AOT): el box lleva un
+        // finalizador GC (registrado por gc_box) para el caso ESCAPE, pero este
+        // var NO escapa -> el cleanup RAII determinista de arriba libera el
+        // recurso.  Si ademas corriera el finalizador al `gc_finalize_all` del
+        // exit, el bloque de control se liberaria DOS VECES (RAW_FREE del
+        // cleanup + free del finalizador; ademas con allocadores distintos:
+        // slab vex_mem vs libc) -> corrupcion de heap (bug 245,
+        // gc<shared<unique<i64>>> anidado).  Desregistramos el finalizador aqui
+        // para que finalize_all lo salte (anti-doble-free, el modelo que la doc
+        // de emit_gc_set_finalizer ya describia).  Solo en native_poo_ (AOT):
+        // en interp/JIT el finalizador y el cleanup conviven sin corrupcion (la
+        // memoria del box es del VM y su liberacion es idempotente).
+        if (native_poo_ && sem_type.gc_managed) {
+            ir::IrInstr ur{};
+            ur.op = ir::IrOp::CALL;
+            ur.type = ir::IrType::VOID;
+            ur.dst = ir::IR_NO_VALUE;
+            ur.func_name = "vex_gc_unregister_finalizer";
+            ur.operands = {v};
+            ur.is_call_site = true;
+            ur.source_line = vd->loc.line;
+            fn_->append(current_block_, std::move(ur));
+        }
     }
     // Limpiar pending_smartptr_deleter_ tras consumirlo (o si el
     // var-decl no era smart pointer pero hubo un unique_with previo
@@ -18017,6 +18175,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         (name == "println" || name == "comptime_print" || name == "ct_print");
     const bool is_echo = (name == "echo");   // alias de print
     const bool is_flush = (name == "flush"); // vio_flush() sin args
+    const bool is_gc_collect = (name == "gc_collect"); // fuerza GC + finalizadores
+    const bool is_gc_finalize_all =
+        (name == "gc_finalize_all"); // finaliza todo objeto GC con recurso
     const bool is_print_int = (name == "print_int");
     // builtins de I/O explicitos por tipo (sin newline; usar
     // println o print + "\n" si lo necesitas).
@@ -18230,7 +18391,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         (name == "contains" || name == "comptime_contains");
     const bool is_static_assert_b = (name == "static_assert");
     const bool is_any_builtin =
-        is_print || is_println || is_echo || is_flush || is_print_int ||
+        is_print || is_println || is_echo || is_flush || is_gc_collect ||
+        is_gc_finalize_all || is_print_int ||
         is_print_uint || is_print_hex || is_print_float || is_print_bool ||
         is_print_char || is_print_color || is_print_cstr || is_print_bin ||
         is_print_oct || is_print_ptr || is_print_gchandle || is_print_pad ||
@@ -19074,6 +19236,69 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 
     // ----- flush() -----
     // Vacia el buffer global de vesta_io ahora mismo.  Util para TUIs.
+    if (is_gc_collect) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "'gc_collect' no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        if (native_poo_) {
+            // AOT: CALL al recolector nativo (libvesta_gc).
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALL;
+            ins.type = ir::IrType::VOID;
+            ins.dst = ir::IR_NO_VALUE;
+            ins.func_name = "vex_gc_collect";
+            ins.is_call_site = true;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::GC_COLLECT;
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
+    // gc_finalize_all(): finaliza TODO objeto GC vivo con recurso interno
+    // (deleter/dtor).  Determinista, no depende de la colecta -> util para
+    // observar la finalizacion de escapados sin polling ni residuos de scan.
+    if (is_gc_finalize_all) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "'gc_finalize_all' no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        module_has_gc_finalizers_ = true;
+        if (native_poo_) {
+            // AOT: CALL vex_gc_finalize_all de libvesta_gc.
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALL;
+            ins.type = ir::IrType::VOID;
+            ins.dst = ir::IR_NO_VALUE;
+            ins.func_name = "vex_gc_finalize_all";
+            ins.is_call_site = true;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // interp/JIT: opcode gcfinall (ZERO) que llama finalize_all_live.
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::GC_FINALIZE_ALL;
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
     if (is_flush) {
         if (!e->args.empty()) {
             error_at(e->loc, "'flush' no acepta argumentos");
@@ -21919,6 +22144,19 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             if (sem_payload.kind == PrimitiveKind::SHARED_PTR &&
                 e->args[0]->kind == ast::NodeKind::IdentExpr) {
                 emit_shared_refcount_inc(v_box, e->loc.line);
+            }
+            // FINALIZADOR GC (cero fuga en escape): el box POSEE un recurso
+            // interno (el deleter del unique / el control block del shared).
+            // Si el box escapa su scope, el cleanup determinista no corre ->
+            // registramos un finalizador GC que ejecuta EXACTAMENTE el mismo
+            // deleter/dtor (resuelto por el contenido del propio box) cuando el
+            // sweep colecte el box.  El caso no-escape lo desregistra en su
+            // cleanup de scope (anti-doble-free).  Cero coste para gc<primitivo>
+            // (no es smart-wrapper -> no lleva finalizador).
+            if (sem_payload.kind == PrimitiveKind::UNIQUE_PTR) {
+                emit_gc_set_finalizer(v_box, /*UNIQUE*/ 1, e->loc.line);
+            } else if (sem_payload.kind == PrimitiveKind::SHARED_PTR) {
+                emit_gc_set_finalizer(v_box, /*SHARED*/ 2, e->loc.line);
             }
         } else {
             // Primitivo / raw-ptr / cfn / CLASS: STORE directo del VALOR al box.
@@ -32965,6 +33203,49 @@ void Lowering::emit_mvtake(ir::IrValueId v_dst_addr, ir::IrValueId v_src_addr,
     ins.type = ir::IrType::VOID;
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_dst_addr, v_src_addr};
+    ins.source_line = source_line;
+    fn_->append(current_block_, std::move(ins));
+}
+
+void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
+                                     uint32_t source_line,
+                                     ir::IrValueId v_dtor_addr) {
+    // Registra (kind 1/2/3) el finalizador GC del box con recurso interno.
+    module_has_gc_finalizers_ = true; // habilita el finalize_all al exit (AOT)
+    if (native_poo_) {
+        // AOT: CALL vex_gc_register_finalizer(payload, kind, aux) de
+        // libvesta_gc.  El runner nativo ejecuta el deleter/dtor por CALL
+        // directo cuando el sweep colecte el objeto (o el shutdown lo finalice).
+        // aux = vaddr/func_ptr del <Clase>____dtor (kind==3), 0 para UNIQUE/
+        // SHARED (su deleter vive dentro del box).  El auto-link de
+        // libvesta_gc.a se dispara al detectar el simbolo vex_gc_*.
+        const ir::IrValueId v_kind =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(kind), source_line);
+        const ir::IrValueId v_aux =
+            (kind == 3 && v_dtor_addr != ir::IR_NO_VALUE)
+                ? v_dtor_addr
+                : emit_const(ir::IrType::I64, 0, source_line);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.func_name = "vex_gc_register_finalizer";
+        ins.operands = {v_box, v_kind, v_aux};
+        ins.is_call_site = true;
+        ins.source_line = source_line;
+        fn_->append(current_block_, std::move(ins));
+        return;
+    }
+    // interp/JIT: opcode gcfinal (1/2) o gcfinalc (3 = CLASS_DTOR).
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::GC_SET_FINALIZER;
+    ins.type = ir::IrType::VOID;
+    ins.dst = ir::IR_NO_VALUE;
+    if (kind == 3 && v_dtor_addr != ir::IR_NO_VALUE)
+        ins.operands = {v_box, v_dtor_addr};
+    else
+        ins.operands = {v_box};
+    ins.imm = kind;
     ins.source_line = source_line;
     fn_->append(current_block_, std::move(ins));
 }

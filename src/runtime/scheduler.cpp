@@ -1040,6 +1040,16 @@ void Scheduler::run_loop() {
 
             BATCH_END:;
 #undef NEXT_DISPATCH
+            // FINALIZADORES GC: safe point de fin de batch.  Ninguna instruccion
+            // esta en vuelo; los regs/stack del proceso estan commiteados y la
+            // instruccion decodificada ya no se usa.  Si un GC disparado durante
+            // el batch stageo finalizadores (objetos con recurso interno
+            // escapados y muertos), drenarlos AHORA reentrando al interprete
+            // para correr sus deleters -- seguro fuera de cualquier handler.
+            // Fast path: 1 branch predicho-no-tomado cuando no hay pendientes.
+            if (instance != nullptr &&
+                __builtin_expect(instance->gc_heap.has_pending_finalizers(), 0))
+                instance->gc_heap.run_pending_finalizers();
             }
             /* DEAD CODE STUB BELOW: el codigo entre aqui y `} else {`
              * (slow path FSM hooks) son los restos del while+switch viejo

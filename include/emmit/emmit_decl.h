@@ -1181,6 +1181,25 @@ void emit_setcc(const vm::Instruction *instruction_parser,
                 ByteWriter &code_final, const InstrInfo *now_instr,
                 Assembler *assembly_ctx);
 
+/**
+ * @brief Emite GCFINAL r_box, kind (0x7F): registra/desregistra finalizador GC.
+ *
+ * Layout: byte2 = 0x00 (ctrl vacio), byte3 = (kind<<4) | r_box.  El decode
+ * (decode_instr_two_op_reg) extrae reg1 = r_box, reg2 = kind.
+ */
+void emit_gcfinal(const vm::Instruction *instruction_parser,
+                  ByteWriter &code_final, const InstrInfo *now_instr,
+                  Assembler *assembly_ctx);
+
+/**
+ * @brief Emite gcfinalc r_box, r_dtor (opcode 0x8D, FIXED_4): registra un
+ *        finalizador CLASS_DTOR (gc<Clase> con ~Clase()).  r_dtor lleva el
+ *        vaddr del <Clase>____dtor concreto (dispatch estatico).
+ */
+void emit_gcfinalc(const vm::Instruction *instruction_parser,
+                   ByteWriter &code_final, const InstrInfo *now_instr,
+                   Assembler *assembly_ctx);
+
 } // namespace Assembly::Bytecode
 
 #endif // EMMIT_DECL_H

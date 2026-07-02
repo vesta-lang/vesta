@@ -688,6 +688,15 @@ void GcHeap::scan_stack_roots(uint64_t rsp, uint64_t stack_high,
             const GcHandle h = static_cast<GcHandle>(v);
             if (handles_[h].live && handles_[h].addr) {
                 auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
+                // Un objeto marcado host_ptr_only (box gc_allocp) NUNCA es
+                // referenciado por el bytecode via su handle numerico -- solo
+                // por su host_ptr.  Saltamos el marcado por coincidencia
+                // numerica valor==handle: es un falso positivo (una constante
+                // pequena del programa que coincide con un handle pequeno).
+                // El box SI se marca por host_ptr real en las fases 2/3a/3b de
+                // abajo (ptr_to_handle_ + interior scan).  Sin esto, un box
+                // escapado inalcanzable no se colectaba de forma determinista.
+                if (hdr->host_ptr_only) return;
                 if (hdr->color == GcColor::WHITE) {
                     hdr->color = GcColor::BLACK;
                     worklist.push_back(h);
@@ -979,6 +988,109 @@ uint8_t *GcHeap::deref(GcHandle h) {
     }
     if (h >= handles_.size() || !handles_[h].live) return nullptr;
     return handles_[h].addr + sizeof(GcHeader);
+}
+
+// -------------------------------------------------------------------------
+// Finalizadores GC
+// -------------------------------------------------------------------------
+
+void GcHeap::register_finalizer(uint8_t *payload, GcFinalizerKind kind,
+                                uint64_t dtor_vaddr) {
+    if (payload == nullptr || kind == GcFinalizerKind::NONE) return;
+    // El GcHeader precede al payload en memoria (layout [GcHeader][payload]).
+    auto *hdr = reinterpret_cast<GcHeader *>(payload - sizeof(GcHeader));
+    hdr->has_finalizer = 1;
+    hdr->finalizer_kind = static_cast<uint8_t>(kind) & 0x3;
+    // CLASS_DTOR: guardar el vaddr del dtor concreto en la side-table (la
+    // instancia de clase no lo lleva inline).  Keyed por el host_ptr del
+    // payload, estable mientras el objeto no se evacue (los boxes gc<Clase>
+    // usan alloc_pinned -> OldGen non-moving -> el ptr es estable).  Freestanding
+    // -safe (U64U64Map hash open-addressing): mismo camino en interp/JIT/AOT,
+    // cierra la fuga de gc<Clase> con ~Clase() en AOT.  O(1) amortizado.
+    if (kind == GcFinalizerKind::CLASS_DTOR) {
+        const uint64_t key = reinterpret_cast<uint64_t>(payload);
+        // set() sobrescribe si ya existe (re-registro del mismo host_ptr).
+        class_dtor_vaddr_.set(key, dtor_vaddr);
+    }
+}
+
+void GcHeap::unregister_finalizer(uint8_t *payload) {
+    if (payload == nullptr) return;
+    auto *hdr = reinterpret_cast<GcHeader *>(payload - sizeof(GcHeader));
+    hdr->has_finalizer = 0;
+    hdr->finalizer_kind = 0;
+    // Quitar la entrada de la side-table CLASS_DTOR (hash erase, O(1) amortizado).
+    const uint64_t key = reinterpret_cast<uint64_t>(payload);
+    class_dtor_vaddr_.erase(key);
+}
+
+void GcHeap::stage_finalizer(GcHeader *hdr, uint8_t *payload) {
+    // Copia el CONTENIDO relevante del box (aun valido en el sweep) al pending,
+    // para que el drenado posterior (fuera del GC) no dependa del box liberado.
+    const GcFinalizerKind kind =
+        static_cast<GcFinalizerKind>(hdr->finalizer_kind);
+    GcPendingFinalizer f{};
+    f.kind = kind;
+    if (kind == GcFinalizerKind::CLASS_DTOR) {
+        // CLASS_DTOR: a0 = dtor_vaddr (side-table), a1 = obj_host_ptr (el
+        // payload = la instancia).  El runner invoca dtor_vaddr(obj_host_ptr).
+        // take() = lookup + borrado en una sola pasada (hash, O(1) amortizado).
+        const uint64_t key = reinterpret_cast<uint64_t>(payload);
+        f.a0 = 0;
+        class_dtor_vaddr_.take(key, f.a0);
+        f.a1 = reinterpret_cast<uint64_t>(payload);
+    } else {
+        // UNIQUE: box = [inner_ptr@0, deleter_vaddr@8].  SHARED: box = [ctrl@0].
+        std::memcpy(&f.a0, payload, sizeof(uint64_t));
+        if (kind == GcFinalizerKind::UNIQUE)
+            std::memcpy(&f.a1, payload + 8, sizeof(uint64_t));
+        else
+            f.a1 = 0;
+    }
+    pending_finalizers_.push_back(f);
+    hdr->has_finalizer = 0;
+}
+
+void GcHeap::run_pending_finalizers() {
+    // Guard de reentrada: si ya estamos drenando (un finalizador disparo un
+    // GC que a su vez stageo mas finalizadores), NO re-drenar aqui -- el bucle
+    // externo procesara la cola actualizada.  Sin esto, un finalizador que
+    // aloca podria recursar indefinidamente.
+    if (finalizing_) return;
+    if (pending_finalizers_.empty()) return;
+    if (finalizer_runner_ == nullptr) {
+        // Sin ejecutor instalado (solo posible pre-init): descartar la cola
+        // para no acumular trabajo colgante.  No hay crash; el recurso se fuga.
+        pending_finalizers_.clear();
+        return;
+    }
+    finalizing_ = true;
+    // Procesar por indice: el runner puede (via un GC anidado) APPEND-ear mas
+    // entradas; el guard impide un drenado anidado, pero este bucle SI las
+    // recoge porque re-lee size() en cada vuelta.  Cada entrada se ejecuta
+    // EXACTAMENTE una vez.
+    for (size_t i = 0; i < pending_finalizers_.size(); ++i)
+        finalizer_runner_(finalizer_owner_, pending_finalizers_[i]);
+    pending_finalizers_.clear();
+    finalizing_ = false;
+}
+
+void GcHeap::stage_all_live_finalizers() {
+    // Recorrer la tabla de handles: cubre YOUNG (nursery) y OLD (promovidos)
+    // porque todo objeto vivo tiene una entrada live con addr != nullptr.
+    for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
+        if (!handles_[h].live || !handles_[h].addr) continue;
+        auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
+        if (hdr->has_finalizer) {
+            uint8_t *payload = handles_[h].addr + sizeof(GcHeader);
+            stage_finalizer(hdr, payload);
+        }
+    }
+}
+
+void GcHeap::finalize_all_live() {
+    stage_all_live_finalizers();
+    run_pending_finalizers();
 }
 
 // -------------------------------------------------------------------------
@@ -1302,6 +1414,11 @@ void GcHeap::minor_gc() {
             // No evacuado: el objeto muere con el reset del nursery.
             GC_LOGF("minor_gc sweep killed YOUNG h=%u (size=%u)", (unsigned)h,
                     (unsigned)hdr->size);
+            // FINALIZADOR: si el objeto muerto tiene un recurso interno,
+            // STAGEAR su finalizador (copia el contenido del box AHORA, que
+            // sigue valido; el drenado se hace FUERA del GC, en un safe point).
+            if (hdr->has_finalizer)
+                stage_finalizer(hdr, raw + sizeof(GcHeader));
             ptr_to_handle_.erase(raw + sizeof(GcHeader));
             handles_[h].addr = nullptr;
             handles_[h].live = false;
@@ -1334,6 +1451,14 @@ void GcHeap::minor_gc() {
     // (No necesario en realidad porque los WHITE ya murieron y los
     // evacuados ya estan en OLD con BLACK).
     remembered_set_.clear();
+
+    // FINALIZADORES: NO se ejecutan aqui.  Estamos DENTRO de alloc() (que
+    // disparo este minor_gc), a su vez dentro de una instruccion del mutator:
+    // reentrar al interprete para correr un deleter aqui corromperia la
+    // alocacion en curso (bug observado: hang/corrupcion).  El sweep ya STAGEo
+    // (copio) los datos del box en pending_finalizers_; el drenado ocurre en un
+    // safe point FUERA del GC (el runtime lo hace tras la instruccion de
+    // alocacion que disparo el GC).
     nursery_bump_ = nursery_base_;
 
     if (old_used_ >= old_threshold_) major_gc();
@@ -1453,6 +1578,14 @@ void GcHeap::major_gc() {
             if (hdr->color == GcColor::WHITE) {
                 GC_LOGF("major_gc sweep killed OLD obj cursor=%p size=%u",
                         (void *)cursor, (unsigned)hdr->size);
+                // FINALIZADOR: si el objeto colectado tiene un recurso interno
+                // (unique/shared con deleter), encolar su finalizador para
+                // correrlo en el safe point post-collect.  NO se ejecuta aqui
+                // (dentro del sweep) para no reentrar al interprete en medio
+                // del mark/sweep; se drena tras completar el collect.  Se
+                // limpia el bit para no re-encolar si el slot se re-inspecciona.
+                if (hdr->has_finalizer)
+                    stage_finalizer(hdr, cursor + sizeof(GcHeader));
                 stats_.freed_count++;
                 stats_.freed_bytes += total; // total slot, no payload
                 old_used_ -= total;
@@ -1507,6 +1640,13 @@ void GcHeap::major_gc() {
         if (!alive)
             entry.target = GC_NULL_HANDLE; // objeto muerto: anular referencia
     }
+
+    // FINALIZADORES: el sweep ya STAGEo los datos de los objetos colectados en
+    // pending_finalizers_.  NO se drenan aqui (major_gc corre dentro de alloc,
+    // dentro de una instruccion del mutator -> reentrar al interp seria
+    // inseguro).  El drenado ocurre en un safe point FUERA del GC (el runtime
+    // lo dispara tras la instruccion que causo el GC, via has_pending +
+    // run_pending_finalizers).
 }
 
 // -------------------------------------------------------------------------

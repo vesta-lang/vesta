@@ -99,6 +99,45 @@ void vex_gc_unpin(uint32_t handle);
  */
 uint64_t vex_gc_live_count(void);
 
+/**
+ * @brief Registra un finalizador GC para un objeto AOT con recurso interno.
+ *
+ * Cuando el sweep colecte el objeto (o el shutdown lo finalice), el runner
+ * NATIVO invocara el deleter/dtor concreto por CALL directo (el codigo esta
+ * AOT-compilado, cero bytecode).  Cierra la fuga del escape en AOT: un
+ * gc<unique>/gc<shared>/gc<Clase> que escapa su scope libera su recurso
+ * exactamente una vez.
+ *
+ * @param payload host_ptr al payload del box (lo que ve el programa).
+ * @param kind    1=UNIQUE (box=[inner_ptr@0, deleter@8]), 2=SHARED
+ *                (box=[ctrl@0]), 3=CLASS_DTOR (payload=instancia).
+ * @param aux     CLASS_DTOR: func_ptr nativo del <Clase>____dtor.  Ignorado
+ *                para UNIQUE/SHARED (su deleter vive dentro del box).
+ */
+void vex_gc_register_finalizer(uint8_t *payload, uint32_t kind, uint64_t aux);
+
+/**
+ * @brief Desregistra el finalizador de un objeto (anti-doble-free desde el
+ *        cleanup determinista de scope, caso no-escape).
+ * @param payload host_ptr al payload del box.
+ */
+void vex_gc_unregister_finalizer(uint8_t *payload);
+
+/**
+ * @brief Finaliza TODO objeto GC vivo con recurso interno (shutdown-time).
+ *
+ * Lo llama el epilogo del binario AOT (atexit / fin de main) para garantizar
+ * cero fuga: los objetos escapados que el sweep no colecto todavia corren su
+ * deleter/dtor antes de salir.  Idempotente.
+ */
+void vex_gc_finalize_all(void);
+
+/**
+ * @brief Numero de finalizadores nativos ejecutados (introspeccion/diagnostico).
+ * @return Contador acumulado de deleters/dtors invocados por el runner nativo.
+ */
+uint64_t vex_gc_fin_count(void);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

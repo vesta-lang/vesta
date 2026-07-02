@@ -634,6 +634,24 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x7E, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_one_reg}}},
 
+        /* --- Finalizadores GC: gcfinal r_box, kind (FIXED_4, reg + nibble) --- */
+        {"gcfinal",
+         {{0x00, 0x7F, InstrSizeMode::FIXED_4, AddressingMode::INMED,
+           emit_gcfinal}}},
+
+        /* --- gcfinalc r_box, r_dtor (FIXED_4, dos regs): CLASS_DTOR --- */
+        {"gcfinalc",
+         {{0x00, 0x8D, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_gcfinalc}}},
+
+        /* --- gccollect (ZERO, FIXED_2): fuerza minor+major GC del proceso --- */
+        {"gccollect",
+         {{0x00, 0x8C, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+
+        /* --- gcfinall (ZERO, FIXED_2): finaliza todo objeto vivo con recurso */
+        {"gcfinall",
+         {{0x00, 0x8E, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+
         /* --- Phase Z: memoria compartida cross-process (0xA6-0xAD) ---
          *  Stubs registrados para que el assembler acepte estos mnemonicos
          *  emitidos por el lowering Phase Z.  El runtime ejecuta versiones

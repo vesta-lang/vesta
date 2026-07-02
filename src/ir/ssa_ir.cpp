@@ -288,6 +288,9 @@ static const OpEntry OP_TABLE[] = {
     {"label_addr", IrOp::LABEL_ADDR},
     // memoria extra (move-and-take, gcallocp, static fields, atomics)
     {"mvtake_ir", IrOp::MVTAKE_IR},
+    {"gc_set_finalizer", IrOp::GC_SET_FINALIZER},
+    {"gc_collect", IrOp::GC_COLLECT},
+    {"gc_finalize_all", IrOp::GC_FINALIZE_ALL},
     {"gc_allocp", IrOp::GC_ALLOCP},
     {"getstatic", IrOp::GETSTATIC},
     {"setstatic", IrOp::SETSTATIC},

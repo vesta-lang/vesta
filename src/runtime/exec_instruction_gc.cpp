@@ -22,6 +22,7 @@
 #include "runtime/proceso_runtime.h"
 #include "runtime/host_alloca_tracker.h"
 #include "gc/gc_heap.h"
+#include <cstdlib>
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
 #include "util/simd_copy.h"
@@ -365,6 +366,107 @@ void exec_instr_htrack(ProcessVM *vm, const DecodedInstr &instr) {
     }
 }
 
+/**
+ * @brief GCFINAL r_box, kind (opcode 0x7F, FIXED_4): registra un finalizador
+ *        GC para el box (objeto GC con recurso interno) en r_box.
+ *
+ * Marca el bit @c has_finalizer + @c finalizer_kind en el GcHeader del objeto.
+ * Cuando el sweep del GC colecte el box (WHITE, inalcanzable), correra su
+ * finalizador (el deleter/dtor customizable) en el safe point post-collect.
+ * Lo emite el lowering de @c gc_box(unique_with(...)/shared(...)) tras el
+ * GC_ALLOCP, y el cleanup determinista de scope (caso no-escape) lo desregistra
+ * con kind=0 para evitar doble-free.
+ *
+ * encoding: [0x00][0x7F][0x00][n2], n2 = (kind<<4) | r_box.
+ * decode_instr_two_op_reg: reg1 = r_box, reg2 = kind.
+ */
+void exec_instr_gcfinal(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t r_box = instr.data_instruction.reg_data.reg1;
+    const uint8_t kind = instr.data_instruction.reg_data.reg2;
+    const uint64_t box = vm->registers.regs[r_box].qword();
+    if (box == 0) return;
+    auto *payload = reinterpret_cast<uint8_t *>(box);
+    if (kind == 0) {
+        // Desregistrar (anti-doble-free desde el cleanup determinista).
+        vm->gc_heap.unregister_finalizer(payload);
+    } else {
+        vm->gc_heap.register_finalizer(
+            payload, static_cast<gc::GcFinalizerKind>(kind));
+    }
+}
+
+/**
+ * @brief GCFINALC r_box, r_dtor (opcode 0x8D, FIXED_4): registra un finalizador
+ *        CLASS_DTOR para el objeto GC gc<Clase> con ~Clase() en r_box.
+ *
+ * A diferencia de @c gcfinal (UNIQUE/SHARED, cuyo deleter vive DENTRO del box),
+ * un gc<Clase> es la instancia misma y el vaddr del dtor concreto no viaja
+ * inline -> se pasa en @c r_dtor (dispatch ESTATICO: el lowering resuelve
+ * <Clase>____dtor en compile-time, CALL directo, sin vtable).  El finalizador,
+ * cuando el sweep colecte el objeto, invoca dtor(obj_host_ptr) por bytecode
+ * reentrante (portable en interp).
+ *
+ * encoding: [0x00][0x8D][0x00][n2], n2 = (r_dtor<<4)|r_box.
+ * decode_instr_two_op_reg: reg1 = r_box (nibble bajo), reg2 = r_dtor (alto).
+ */
+void exec_instr_gcfinalc(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t r_box = instr.data_instruction.reg_data.reg1;
+    const uint8_t r_dtor = instr.data_instruction.reg_data.reg2;
+    const uint64_t box = vm->registers.regs[r_box].qword();
+    if (box == 0) return;
+    const uint64_t dtor_vaddr = vm->registers.regs[r_dtor].qword();
+    auto *payload = reinterpret_cast<uint8_t *>(box);
+    vm->gc_heap.register_finalizer(payload, gc::GcFinalizerKind::CLASS_DTOR,
+                                   dtor_vaddr);
+}
+
+/**
+ * @brief GCCOLLECT (opcode 0x8C, ZERO, FIXED_2): fuerza un ciclo de GC del
+ *        proceso (minor + major) + drena finalizadores.
+ *
+ * Builtin Vex @c gc_collect().  Util para pruebas de finalizacion (observar
+ * el finalizador de un objeto que escapo y murio sin esperar a la presion de
+ * memoria) y para liberacion deterministica de recursos GC cuando el programa
+ * lo desea explicitamente.  Los finalizadores encolados por el sweep se
+ * ejecutan en el safe point dentro de minor_gc/major_gc (reentrada al interp).
+ */
+void exec_instr_gccollect(ProcessVM *vm, const DecodedInstr &instr) {
+    (void)instr;
+    vm->gc_heap.minor_gc(); // evacua/mata YOUNG; puede encadenar major_gc
+    vm->gc_heap.major_gc(); // barre OLD (colecta boxes escapados y muertos)
+    // NO se drenan los finalizadores aqui: el scheduler los drena en un safe
+    // point tras avanzar el PC (la instruccion decodificada `d` ya no se usa),
+    // evitando que el re-decode del deleter corrompa la instruccion en curso.
+}
+
+/**
+ * @brief GCFINALL (opcode 0x8E, ZERO, FIXED_2): finaliza TODO objeto GC vivo
+ *        con recurso interno (deleter/dtor).  Builtin Vex gc_finalize_all().
+ *
+ * A diferencia de gccollect (que solo finaliza lo INALCANZABLE), este stagea el
+ * finalizador de CADA objeto vivo con has_finalizer y lo drena.  Determinista:
+ * no depende del scan de raices -> observa la finalizacion de objetos escapados
+ * sin polling ni interferencia de host_ptrs residuales en regs/slots.  El
+ * drenado (reentrada al interp para el deleter/dtor) lo hace el scheduler en un
+ * safe point tras avanzar el PC (igual que gccollect); stage_finalizer limpia
+ * el bit has_finalizer -> idempotente (nunca doble-free).
+ */
+void exec_instr_gcfinall(ProcessVM *vm, const DecodedInstr &instr) {
+    (void)instr;
+    // Stagea los finalizadores de todos los objetos vivos con recurso interno.
+    vm->gc_heap.stage_all_live_finalizers();
+    // Drenar SINCRONAMENTE (reentrada al interp para cada deleter/dtor).  A
+    // diferencia de gccollect (cuyo drenado difiere al safe point del scheduler
+    // para no interferir con el flujo normal), gc_finalize_all es un builtin
+    // EXPLICITO del usuario cuyo efecto (el recurso liberado) debe ser visible
+    // en la siguiente instruccion (p.ej. `return contador`).  El reentry es
+    // seguro aqui: gcfinall es ZERO (sin operandos que preservar) y
+    // gc_finalizer_call_bytecode salva/restaura TODO el estado del proceso +
+    // invalida el icache al volver (mismo mecanismo probado del drenado del
+    // scheduler).  El avance del PC de gcfinall lo hace el caller tras retornar.
+    vm->gc_heap.run_pending_finalizers();
+}
+
 // -------------------------------------------------------------------------
 // GC generacional - opcodes 0x00 0xA0 .. 0xA5
 // -------------------------------------------------------------------------
@@ -418,6 +520,8 @@ void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr) {
 
     vm->registers.regs[R00].qword(
         static_cast<uint64_t>(h)); // devolver el handle en R00
+    // Los finalizadores stageados por un GC de este alloc se drenan en el safe
+    // point del scheduler (tras avanzar el PC), no aqui.
 }
 
 // B4.3: NEWOBJS r_cls -> aloca en SharedHeap (Phase Z.6).

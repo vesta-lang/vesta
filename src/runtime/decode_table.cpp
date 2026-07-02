@@ -2157,10 +2157,16 @@ InstrFormat decode_table_extended[0X100] = {
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_htrack,
      decode_instr_two_op_reg},
 
-    /* 0x7F */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x7F  gcfinal r_box, kind (FIXED_4)
+             Registra un finalizador GC para el box (objeto GC con recurso
+             interno) en r_box.  Marca el bit has_finalizer + finalizer_kind
+             en el GcHeader.  kind!=0 registra, kind==0 desregistra (cleanup
+             determinista de scope, anti-doble-free).  Emitido por el lowering
+             de gc_box(unique_with/shared) tras el GC_ALLOCP.
+             encoding [0x00][0x7F][0x00][n2], n2 = (kind<<4)|r_box. */
+    {"gcfinal", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_gcfinal,
+     decode_instr_two_op_reg},
     /* 0x80  fmin dst, src: FP min escalar nativo */
     {"fmin", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_fmin,
@@ -2221,20 +2227,27 @@ InstrFormat decode_table_extended[0X100] = {
      "", Assembly::Bytecode::AddressingMode::COUNT,
      Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
 
-    /* 0x8C */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x8C  gccollect (ZERO, FIXED_2): fuerza minor+major GC del proceso +
+             drena finalizadores.  Builtin Vex gc_collect(). */
+    {"gccollect", Assembly::Bytecode::AddressingMode::NONE,
+     Assembly::Bytecode::InstrSizeMode::FIXED_2, exec_instr_gccollect,
+     decode_instr_simple},
 
-    /* 0x8D */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x8D  gcfinalc r_box, r_dtor (FIXED_4)
+             Registra un finalizador CLASS_DTOR para el gc<Clase> con ~Clase()
+             en r_box.  r_dtor contiene el vaddr del <Clase>____dtor concreto
+             (dispatch estatico, CALL directo).  El sweep invoca dtor(obj) por
+             bytecode reentrante al colectar el objeto.
+             encoding [0x00][0x8D][0x00][n2], n2 = (r_dtor<<4)|r_box. */
+    {"gcfinalc", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_gcfinalc,
+     decode_instr_two_op_reg},
 
-    /* 0x8E */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x8E  gcfinall (ZERO, FIXED_2): finaliza todo objeto GC vivo con recurso
+             interno.  Builtin Vex gc_finalize_all().  Determinista. */
+    {"gcfinall", Assembly::Bytecode::AddressingMode::NONE,
+     Assembly::Bytecode::InstrSizeMode::FIXED_2, exec_instr_gcfinall,
+     decode_instr_simple},
 
     /* 0x8F */
     {//

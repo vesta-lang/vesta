@@ -4085,6 +4085,31 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     << ctx.reg_of(ins.operands[1]) << "\n";
         break;
 
+    // --- gcfinal: registra/desregistra finalizador GC del box ---
+    case IrOp::GC_SET_FINALIZER:
+        if (!ins.operands.empty()) {
+            // kind==3 (CLASS_DTOR): lleva un 2o operando = vaddr del dtor
+            // concreto (dispatch estatico).  Se emite con el opcode dedicado
+            // `gcfinalc r_box, r_dtor` (registra CLASS_DTOR + guarda el vaddr).
+            if (ins.imm == 3 && ins.operands.size() >= 2)
+                ctx.out << "    gcfinalc " << ctx.reg_of(ins.operands[0])
+                        << ", " << ctx.reg_of(ins.operands[1]) << "\n";
+            else
+                ctx.out << "    gcfinal " << ctx.reg_of(ins.operands[0]) << ", "
+                        << ins.imm << "\n";
+        }
+        break;
+
+    // --- gccollect: fuerza minor+major GC del proceso + drena finalizadores ---
+    case IrOp::GC_COLLECT:
+        ctx.out << "    gccollect\n";
+        break;
+
+    // --- gcfinall: finaliza TODO objeto GC vivo con recurso interno ---
+    case IrOp::GC_FINALIZE_ALL:
+        ctx.out << "    gcfinall\n";
+        break;
+
     // --- gcallocp: alloc + deref + xchg fusionados ---
     case IrOp::GC_ALLOCP:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {

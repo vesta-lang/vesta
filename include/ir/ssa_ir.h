@@ -405,6 +405,18 @@ enum class IrOp : uint16_t {
                       ///< host_ptr al payload).
     MVTAKE_IR = 0x97, ///< mvtake [dst_addr], [src_addr]  (move-and-zero atomic
                       ///< intra-thread)
+    GC_SET_FINALIZER = 0xD3, ///< gcfinal %box, imm=kind  (registra/desregistra
+                             ///< el finalizador GC de un box con recurso
+                             ///< interno; kind 0=desregistrar, 1=UNIQUE,
+                             ///< 2=SHARED).  interp/JIT: opcode gcfinal;
+                             ///< AOT: CALL vex_gc_register_finalizer.
+    GC_COLLECT = 0xD4, ///< gccollect  (fuerza minor+major GC del proceso +
+                       ///< drena finalizadores).  Builtin Vex gc_collect().
+                       ///< interp/JIT: opcode gccollect; AOT: CALL vex_gc_collect.
+    GC_FINALIZE_ALL = 0xD5, ///< gcfinall  (finaliza TODO objeto GC vivo con
+                            ///< recurso interno).  Builtin Vex gc_finalize_all().
+                            ///< interp/JIT: opcode gcfinall; AOT: CALL
+                            ///< vex_gc_finalize_all.  Determinista.
     GC_ALLOCP = 0x98, ///< %dst = gc_allocp.ptr %size  (gcallocp: alloc + deref
                       ///< + xchg en 1 instr)
     GETSTATIC = 0x99, ///< %dst = getstatic.i64 %cls, imm=offset   (carga campo

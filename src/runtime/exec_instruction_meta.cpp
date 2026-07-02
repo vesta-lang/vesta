@@ -57,6 +57,8 @@
 #include "loader/oop_types.h"
 #include "ffi/native_ffi.h"
 #include "gc/gc_heap.h"
+#include <cstdio>
+#include <cstdlib>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -669,7 +671,17 @@ void exec_instr_gcallocp(ProcessVM *vm, const DecodedInstr &instr) {
     // un qword == 0 se descarta y nunca se confunde con handle valido
     // (h=0 esta reservado como sentinela inalcanzable en HandleTable).
     uint8_t *payload = vm->gc_heap.deref(h);
+    // El bytecode referencia este box UNICAMENTE por su host_ptr (add ptr,off /
+    // load / store); jamas por su GcHandle numerico.  Marcarlo host_ptr_only
+    // hace que el scan conservador NO lo mantenga vivo por coincidencia
+    // numerica valor==handle (falso positivo constante-vs-handle-pequeno que
+    // impedia la colecta determinista de un box escapado inalcanzable).  El
+    // box SI se marca por host_ptr real cuando esta vivo en algun slot.
+    vm->gc_heap.mark_host_ptr_only(payload);
     vm->registers.regs[r_dst].qword(reinterpret_cast<uint64_t>(payload));
+    // Los finalizadores stageados por un GC de este alloc se drenan en el safe
+    // point del scheduler (tras avanzar el PC), no aqui: reentrar al interprete
+    // dentro del handler corromperia la instruccion decodificada en curso.
 }
 
 } // namespace runtime

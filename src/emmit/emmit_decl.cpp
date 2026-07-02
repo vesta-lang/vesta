@@ -3044,4 +3044,47 @@ void emit_setcc(const vm::Instruction *instruction_parser,
     code_final.emit8(0x00);                                     // b3
 }
 
+// emit_gcfinal: gcfinal r_box, kind.  byte2=0, byte3=(kind<<4)|r_box.
+// Mismo empaquetado que decode_instr_two_op_reg espera (reg1=r_box en el
+// nibble bajo, reg2=kind en el nibble alto).
+void emit_gcfinal(const vm::Instruction *instruction_parser,
+                  ByteWriter &code_final, const InstrInfo *now_instr,
+                  Assembler *assembly_ctx) {
+    (void)now_instr;
+    (void)assembly_ctx;
+    auto r1 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto kind = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[1].get());
+    if (!r1 || !kind)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": requiere r_box, kind_literal");
+    uint8_t idx1 = encode_reg_general(r1->name.c_str());
+    uint8_t kind_val = static_cast<uint8_t>(std::stoull(kind->value) & 0x0F);
+    code_final.emit8(0x00);                                         // b2 ctrl
+    code_final.emit8(static_cast<uint8_t>((kind_val << 4) | (idx1 & 0x0F))); // b3
+}
+
+// emit_gcfinalc: gcfinalc r_box, r_dtor.  b2=0, b3=(r_dtor<<4)|r_box.
+// Mismo empaquetado que decode_instr_two_op_reg (reg1=r_box nibble bajo,
+// reg2=r_dtor nibble alto).  El exec registra un finalizador CLASS_DTOR con el
+// vaddr del dtor concreto leido de r_dtor (dispatch estatico).
+void emit_gcfinalc(const vm::Instruction *instruction_parser,
+                   ByteWriter &code_final, const InstrInfo *now_instr,
+                   Assembler *assembly_ctx) {
+    (void)now_instr;
+    (void)assembly_ctx;
+    auto r1 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto r2 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[1].get());
+    if (!r1 || !r2)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": requiere r_box, r_dtor");
+    uint8_t idx1 = encode_reg_general(r1->name.c_str()); // r_box
+    uint8_t idx2 = encode_reg_general(r2->name.c_str()); // r_dtor
+    code_final.emit8(0x00);                                        // b2 ctrl
+    code_final.emit8(static_cast<uint8_t>((idx2 << 4) | (idx1 & 0x0F))); // b3
+}
+
 } // namespace Assembly::Bytecode

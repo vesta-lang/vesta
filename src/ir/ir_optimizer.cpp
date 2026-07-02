@@ -163,6 +163,8 @@ static bool is_side_effecting(IrOp op) {
     // global del runtime y NO pueden reordenarse contra los STOREs
     // que arman sus structs de parametros.  Tratarlos como llamadas.
     case IrOp::MVTAKE_IR:
+    case IrOp::GC_SET_FINALIZER: // muta el GcHeader (bit finalizer); side-effect
+    case IrOp::GC_COLLECT:       // dispara GC + finalizadores; side-effect
     case IrOp::GC_ALLOCP:
     case IrOp::GC_PROMOTE:
     case IrOp::GC_DEMOTE:

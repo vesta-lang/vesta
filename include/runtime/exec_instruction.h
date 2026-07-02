@@ -841,6 +841,30 @@ void exec_instr_mvtake(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_htrack(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
+ * @brief GCFINAL r_box, kind (0x7F): registra/desregistra el finalizador GC
+ *        del box en r_box (kind!=0 registra, kind==0 desregistra).
+ */
+void exec_instr_gcfinal(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
+ * @brief GCFINALC r_box, r_dtor (opcode 0x8D): registra un finalizador
+ *        CLASS_DTOR para un gc<Clase> con ~Clase() (dtor concreto en r_dtor).
+ */
+void exec_instr_gcfinalc(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
+ * @brief GCFINALL (opcode 0x8E): finaliza todo objeto GC vivo con recurso
+ *        interno (builtin gc_finalize_all()).  Determinista.
+ */
+void exec_instr_gcfinall(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
+ * @brief GCCOLLECT (0x8C): fuerza minor+major GC del proceso + drena
+ *        finalizadores.  Builtin Vex gc_collect().
+ */
+void exec_instr_gccollect(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
  * @brief Ejecuta super-instrucciones ALU 3-operandos (0x73-0x7B).
  *
  * Combina @c mov rd,rs1 + OP rd,rs2 en una sola instruccion VM.  La
@@ -1926,6 +1950,16 @@ void exec_instr_memsync(ProcessVM *vm, const DecodedInstr &instr);
  * @param instr Estructura que se rellena con el ZMM index y el inmediato.
  */
 void decode_instr_fmowi(ProcessVM *vm, DecodedInstr &instr);
+
+/**
+ * @brief Instala el runner de finalizadores GC en el GcHeap del proceso.
+ *
+ * El runner ejecuta el deleter/dtor customizable de un objeto GC colectado que
+ * poseia un recurso interno (unique/shared) y escapo su scope.  Reentra al
+ * interprete (bytecode, portable) para correr el mismo deleter que el cleanup
+ * determinista de scope.  Lo llama el ctor de ProcessVM.
+ */
+void install_gc_finalizer_runner(ProcessVM *vm);
 
 } // namespace runtime
 

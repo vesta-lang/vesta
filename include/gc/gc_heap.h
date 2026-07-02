@@ -526,6 +526,131 @@ class PtrPtrMap {
 };
 
 /**
+ * @class U64U64Map
+ * @brief Mapa open-addressing @c uint64_t -> @c uint64_t (reemplaza el antiguo
+ *        @c std::vector<std::pair<uint64_t,uint64_t>> con busqueda LINEAL de la
+ *        side-table de finalizadores @c CLASS_DTOR).
+ *
+ * Motivacion: register/unregister/stage sobre la side-table eran O(n) -> con
+ * muchos @c gc<Clase> con @c ~Clase() el coste agregado era O(n^2).  Aqui el
+ * lookup/insercion/borrado es O(1) amortizado.
+ *
+ * Diseno (mismo estilo que @c GcHandleSet / @c PtrPtrMap del mismo header,
+ * freestanding-safe -- el libvesta_gc AOT lo compila igual que la VM):
+ *   - Clave = puntero @c uint64_t (host_ptr del payload).
+ *   - Hash multiplicativo de Fibonacci (@c splitmix / golden-ratio 64-bit), NO
+ *     FNV (FNV es para secuencias de bytes; aqui la clave es un entero ya
+ *     "denso" y la mezcla multiplicativa dispersa mejor los bits bajos del
+ *     puntero, que suelen estar alineados a 8/16).
+ *   - Linear probing (cache-friendly).
+ *   - Tombstones para el borrado (@c erase / @c take) sin romper cadenas de
+ *     probe.
+ *   - Factor de carga <= 0.75 (crece con rehash al superarlo); capacidad
+ *     siempre potencia de 2 (mask = cap-1).
+ *
+ * Las claves 0 y 1 estan reservadas como centinelas @c EMPTY / @c TOMB; un
+ * host_ptr real jamas es 0 ni 1, asi que no colisionan con datos validos.
+ */
+class U64U64Map {
+  public:
+    U64U64Map() { rehash_to(8); }
+
+    /// Inserta o sobrescribe: @p key -> @p val.
+    void set(uint64_t key, uint64_t val) {
+        if (used_ + 1 > grow_at_) grow();
+        size_t i = hash(key) & mask_;
+        size_t first_tomb = SIZE_MAX;
+        for (;;) {
+            Slot &s = table_[i];
+            if (s.key == EMPTY) {
+                const size_t at = (first_tomb != SIZE_MAX) ? first_tomb : i;
+                if (table_[at].key != TOMB) ++used_;
+                table_[at].key = key;
+                table_[at].val = val;
+                ++live_count_;
+                return;
+            }
+            if (s.key == TOMB) {
+                if (first_tomb == SIZE_MAX) first_tomb = i;
+            } else if (s.key == key) {
+                s.val = val; // sobrescribe (re-registro del mismo host_ptr)
+                return;
+            }
+            i = (i + 1) & mask_;
+        }
+    }
+
+    /// Borra la entrada @p key si existe (deja un tombstone).
+    void erase(uint64_t key) {
+        size_t i = hash(key) & mask_;
+        for (;;) {
+            Slot &s = table_[i];
+            if (s.key == EMPTY) return; // no esta
+            if (s.key == key) {
+                s.key = TOMB;
+                s.val = 0;
+                --live_count_;
+                return;
+            }
+            i = (i + 1) & mask_;
+        }
+    }
+
+    /// Busca @p key: si esta, escribe el valor en @p out, borra la entrada y
+    /// devuelve true; si no, devuelve false y no toca @p out.  Combina lookup +
+    /// borrado en una sola pasada (usado por el stage del finalizador).
+    bool take(uint64_t key, uint64_t &out) {
+        size_t i = hash(key) & mask_;
+        for (;;) {
+            Slot &s = table_[i];
+            if (s.key == EMPTY) return false; // no esta
+            if (s.key == key) {
+                out = s.val;
+                s.key = TOMB;
+                s.val = 0;
+                --live_count_;
+                return true;
+            }
+            i = (i + 1) & mask_;
+        }
+    }
+
+    bool empty() const noexcept { return live_count_ == 0; }
+    size_t size() const noexcept { return live_count_; }
+    void clear() { rehash_to(8); }
+
+  private:
+    struct Slot {
+        uint64_t key = EMPTY;
+        uint64_t val = 0;
+    };
+    // Centinelas: un host_ptr real nunca es 0 (EMPTY) ni 1 (TOMB).
+    static constexpr uint64_t EMPTY = 0;
+    static constexpr uint64_t TOMB = 1;
+    static inline size_t hash(uint64_t k) noexcept {
+        // Fibonacci hashing (golden-ratio 64-bit); toma los bits altos tras la
+        // multiplicacion (mejor dispersion que los bajos del puntero alineado).
+        uint64_t x = k * 0x9E3779B97F4A7C15ull;
+        return static_cast<size_t>(x >> 32);
+    }
+    void rehash_to(size_t cap) {
+        table_.assign(cap, Slot{});
+        mask_ = cap - 1;
+        grow_at_ = (cap * 3) / 4; // factor de carga 0.75
+        used_ = 0;
+        live_count_ = 0;
+    }
+    void grow() {
+        std::vector<Slot> old = std::move(table_);
+        rehash_to((mask_ + 1) * 2);
+        for (const Slot &s : old)
+            if (s.key != EMPTY && s.key != TOMB) set(s.key, s.val);
+    }
+    std::vector<Slot> table_;
+    size_t mask_ = 0, live_count_ = 0, used_ = 0, grow_at_ = 0;
+};
+
+/**
  * @brief Activa/desactiva el debug del GC en runtime.
  *
  * Cuando esta activado, las operaciones del GC (major_gc, minor_gc,
@@ -614,6 +739,65 @@ enum class GcGen : uint8_t {
 };
 
 /**
+ * @brief Clase de finalizador GC de un objeto (side-table finalizer_kinds_).
+ *
+ * Un objeto GC que POSEE un recurso interno (un @c unique<T> con deleter, un
+ * @c shared<T> con refcount, o una instancia de clase con @c ~Clase()) y que
+ * ESCAPA su scope (return / almacenado en variable de vida mayor) NO puede
+ * liberar ese recurso por el cleanup determinista de scope.  El sweep del GC,
+ * al colectar el objeto, corre su FINALIZADOR: invoca EXACTAMENTE el mismo
+ * deleter/dtor personalizable que corre en el caso no-escape (resuelto
+ * estatico, CALL directo, portable en interp/JIT/AOT).
+ *
+ * El "kind" identifica QUE hay que hacer con el box colectado.  El deleter/
+ * dtor concreto vive DENTRO del propio box (slot+8 en unique, control block en
+ * shared, vtable del objeto en clase) -> el finalizador es generico por kind,
+ * sin necesidad de un thunk por tipo.
+ */
+enum class GcFinalizerKind : uint8_t {
+    NONE = 0,   /**< Sin finalizador (default: gc<primitivo>). */
+    UNIQUE = 1, /**< Box = slot unique<T> [ptr@0, deleter@8].  El finalizador
+                 *   lee slot+8: si deleter!=0 llama deleter(slot[0]); si es 0
+                 *   (default unique_box) libera slot[0] con free. */
+    SHARED = 2, /**< Box = slot shared<T> [ctrl_block_ptr@0].  El finalizador
+                 *   decrementa el refcount del control block y lo libera con
+                 *   free cuando llega a 0 (modelo refcount puro). */
+    CLASS_DTOR = 3 /**< Box = instancia de clase gc<Clase> con ~Clase().  El
+                    *   finalizador invoca el dtor concreto <Clase>____dtor
+                    *   sobre el host_ptr del objeto (CALL directo, dispatch
+                    *   estatico).  a0 = dtor_vaddr, a1 = obj_host_ptr. */
+};
+
+/**
+ * @brief Firma del callback que EJECUTA un finalizador GC.
+ *
+ * GcHeap es agnostico del mecanismo de ejecucion (interp bytecode vs nativo):
+ * solo recolecta los finalizadores pendientes durante el sweep y los DRENA
+ * invocando este callback una vez por objeto colectado.  El runtime (VM) lo
+ * implementa reentrando al interprete (portable, arch-independiente); el AOT
+ * lo implementa con una llamada nativa directa.
+ *
+ * @param owner Contexto opaco del ejecutor (p.ej. el ProcessVM propietario).
+ * @param box_payload Puntero host al payload del box colectado.
+ * @param kind Clase de finalizador (UNIQUE / SHARED).
+ */
+/**
+ * @brief Datos STAGEADOS de un finalizador pendiente.
+ *
+ * El sweep copia AQUI el contenido relevante del box ANTES de que su memoria se
+ * reclame (reset del nursery / reuso del slot), para que el drenado posterior
+ * (fuera del GC) no dependa de leer el box ya liberado.  Para UNIQUE:
+ * a0=inner_ptr, a1=deleter_vaddr.  Para SHARED: a0=ctrl_block_ptr.
+ */
+struct GcPendingFinalizer {
+    GcFinalizerKind kind;
+    uint64_t a0; ///< inner_ptr (UNIQUE) o ctrl_block_ptr (SHARED)
+    uint64_t a1; ///< deleter_vaddr (UNIQUE); 0 en SHARED
+};
+
+using GcFinalizerRunner = void (*)(void *owner, const GcPendingFinalizer &f);
+
+/**
  * @brief Cabecera de metadatos que precede a cada objeto en el heap GC.
  *
  * Precede inmediatamente al payload del objeto en memoria. El layout es:
@@ -632,11 +816,31 @@ enum class GcGen : uint8_t {
  *          si puede reutilizarlo. Nunca poner size = 0 en un slot DEAD.
  */
 struct alignas(8) GcHeader {
-    uint32_t size;        /**< Bytes del payload (sin incluir esta cabecera). */
-    GcColor color : 2;    /**< Estado tri-color mas DEAD. */
-    GcGen gen : 1;        /**< Generacion: YOUNG o OLD. */
-    uint8_t _pad : 5;     /**< Bits reservados para uso futuro. */
-    uint8_t _reserved[3]; /**< Padding hasta 8 bytes; reservado. */
+    uint32_t size;             /**< Bytes del payload (sin la cabecera). */
+    GcColor color : 2;         /**< Estado tri-color mas DEAD. */
+    GcGen gen : 1;             /**< Generacion: YOUNG o OLD. */
+    uint8_t has_finalizer : 1; /**< 1 si el objeto tiene finalizador GC.  El
+                                *   sweep, al colectar un objeto WHITE con este
+                                *   bit, encola su finalizador para correrlo en
+                                *   un safe point (drain post-collect). */
+    uint8_t finalizer_kind : 2; /**< GcFinalizerKind del objeto (0-2).  Vive en
+                                 *   el propio header (sin side-table) para ser
+                                 *   freestanding-safe (libvesta_gc AOT) y
+                                 *   cache-friendly (el sweep ya lee el header).*/
+    uint8_t host_ptr_only : 1; /**< 1 si el objeto SOLO es alcanzable por su
+                                *   host_ptr (payload start), nunca por su
+                                *   GcHandle numerico.  Lo ponen los boxes
+                                *   @c gc_allocp (gc<T> por valor): el bytecode
+                                *   los referencia unicamente via host_ptr
+                                *   (add ptr,off / load / store), jamas via el
+                                *   handle.  El scan conservador entonces NO
+                                *   debe marcarlos por coincidencia numerica
+                                *   valor==handle (falso positivo constante-vs-
+                                *   handle-pequeno que impedia la colecta
+                                *   determinista); SI se marcan por host_ptr
+                                *   real (ptr_to_handle_ + interior scan). */
+    uint8_t _pad : 1;          /**< Bit reservado para uso futuro. */
+    uint8_t _reserved[3];      /**< Padding hasta 8 bytes; reservado. */
 };
 
 static_assert(sizeof(GcHeader) == 8, "GcHeader debe medir exactamente 8 bytes");
@@ -1476,6 +1680,114 @@ class GcHeap {
      */
     void major_gc();
 
+    // ----------------------------------------------------------------------
+    //  Finalizadores GC (recurso interno de objetos que escapan su scope)
+    // ----------------------------------------------------------------------
+
+    /**
+     * @brief Registra un finalizador para el objeto cuyo payload es @p payload.
+     *
+     * Marca el bit @c has_finalizer y el @c finalizer_kind en el GcHeader del
+     * objeto.  A partir de aqui, cuando el sweep colecte el objeto (WHITE,
+     * inalcanzable), encolara su finalizador para correrlo en un safe point.
+     * Idempotente: registrar dos veces sobreescribe el kind.  No-op si @p
+     * payload no es un objeto GC vivo de este heap.
+     *
+     * @param payload Puntero host al payload del objeto (el que devuelve alloc
+     *                + sizeof(GcHeader), es decir el que ve el programa).
+     * @param kind Clase de finalizador (UNIQUE / SHARED / CLASS_DTOR).
+     * @param dtor_vaddr Solo para CLASS_DTOR: direccion VM del <Clase>____dtor
+     *                   concreto (dispatch estatico).  Ignorado para los demas
+     *                   kinds (su deleter vive dentro del box).
+     */
+    void register_finalizer(uint8_t *payload, GcFinalizerKind kind,
+                            uint64_t dtor_vaddr = 0);
+
+    /**
+     * @brief Marca el objeto @p payload como alcanzable SOLO por host_ptr.
+     *
+     * Lo llaman los boxes @c gc_allocp (gc<T> por valor): el bytecode los
+     * referencia unicamente via el host_ptr al payload, nunca via el GcHandle
+     * numerico.  El scan conservador entonces salta el marcado por coincidencia
+     * numerica (valor == handle), eliminando el falso positivo constante-vs-
+     * handle-pequeno que impedia la colecta determinista de boxes escapados.
+     * No-op si @p payload no es un objeto GC vivo de este heap.
+     *
+     * @param payload Puntero host al payload del box (lo que devuelve gcallocp).
+     */
+    void mark_host_ptr_only(uint8_t *payload) {
+        if (payload == nullptr) return;
+        auto *hdr = reinterpret_cast<GcHeader *>(payload - sizeof(GcHeader));
+        hdr->host_ptr_only = 1;
+    }
+
+    /**
+     * @brief Desregistra el finalizador del objeto @p payload (anti-doble-free).
+     *
+     * Limpia el bit @c has_finalizer del GcHeader.  Lo llama el
+     * cleanup determinista de scope (caso NO-escape): el recurso ya se libero
+     * ahi, asi que el finalizador GC NO debe volver a correr.  No-op si el
+     * objeto no tenia finalizador registrado.
+     */
+    void unregister_finalizer(uint8_t *payload);
+
+    /**
+     * @brief Instala el callback que EJECUTA los finalizadores encolados.
+     *
+     * GcHeap solo recolecta finalizadores durante el sweep; el runtime (VM) o
+     * el AOT proveen la ejecucion concreta via este callback.  Si no hay
+     * callback instalado, los finalizadores encolados se descartan (el recurso
+     * se fuga, pero no hay crash) -- caso solo posible pre-inicializacion.
+     *
+     * @param runner Callback de ejecucion (ver GcFinalizerRunner).
+     * @param owner Contexto opaco que se pasa al callback (p.ej. ProcessVM*).
+     */
+    void set_finalizer_runner(GcFinalizerRunner runner, void *owner) {
+        finalizer_runner_ = runner;
+        finalizer_owner_ = owner;
+    }
+
+    /**
+     * @brief Drena la cola de finalizadores pendientes invocando el runner.
+     *
+     * Se llama en un SAFE POINT tras completar un collect (fin de major_gc) y
+     * tambien al destruir el heap (para finalizar los objetos vivos-con-recurso
+     * antes del exit).  Guardado contra reentrada (@c finalizing_): un GC
+     * disparado DENTRO de un finalizador solo ENCOLA mas trabajo; el bucle de
+     * drenado externo lo procesa.  Cada finalizador se corre EXACTAMENTE una
+     * vez (se desencola antes de invocarlo).
+     */
+    void run_pending_finalizers();
+
+    /** @brief true si hay finalizadores stageados pendientes de ejecutar. */
+    bool has_pending_finalizers() const {
+        return !pending_finalizers_.empty();
+    }
+
+    /**
+     * @brief Finaliza TODOS los objetos vivos con recurso interno (exit-time).
+     *
+     * Recorre la tabla de handles + los bloques OldGen buscando objetos con el
+     * bit @c has_finalizer set y encola su finalizador; luego drena.  Se llama
+     * cuando el proceso termina (HALT del main) mientras el interprete sigue
+     * vivo, para garantizar que un objeto GC con recurso que ESCAPO su scope
+     * (y por tanto no tuvo cleanup determinista) libere su recurso interno
+     * ANTES del exit -- aunque el GC no lo haya colectado todavia.  Idempotente:
+     * limpia el bit al encolar, asi no re-finaliza en un segundo pase.
+     */
+    void finalize_all_live();
+
+    /**
+     * @brief Stagea (sin drenar) el finalizador de TODO objeto vivo con recurso.
+     *
+     * Igual que @c finalize_all_live pero SIN llamar @c run_pending_finalizers:
+     * solo encola.  Lo usa el opcode @c gcfinall (builtin gc_finalize_all) para
+     * que el DRENADO ocurra despues, en el safe point del scheduler (reentrar al
+     * interp para el deleter/dtor dentro del handler de la instruccion
+     * corromperia la instruccion en curso).  Idempotente (limpia has_finalizer).
+     */
+    void stage_all_live_finalizers();
+
     /**
      * @brief Configura el umbral de OldGen para major GC automatico.
      *
@@ -1615,6 +1927,40 @@ class GcHeap {
      * hash map open-addressing para el hot path del GC (new_handle/
      * release_handle ~20-30 ns -> ~5 ns por op). */
     PtrHandleMap ptr_to_handle_;
+
+    // --- Finalizadores GC ---
+    /// El kind del finalizador vive en el GcHeader (has_finalizer +
+    /// finalizer_kind), no en una side-table -> freestanding-safe + zero
+    /// overhead para objetos sin recurso (no llevan el bit).
+    /// Cola de finalizadores STAGEADOS durante el sweep, pendientes de ejecutar
+    /// en un safe point FUERA del GC (el sweep copia los datos del box antes de
+    /// que su memoria se reclame; el drenado no vuelve a leer el box).
+    std::vector<GcPendingFinalizer> pending_finalizers_;
+    /// Helper: stagea un objeto colectado con recurso interno.  Lee el box (aun
+    /// valido en el sweep) y encola sus datos.  Limpia el bit has_finalizer.
+    void stage_finalizer(GcHeader *hdr, uint8_t *payload);
+    /// Callback que ejecuta un finalizador (interp reentry en VM, call nativo
+    /// en AOT).  nullptr = descartar (solo posible pre-init).
+    GcFinalizerRunner finalizer_runner_ = nullptr;
+    /// Contexto opaco pasado al runner (ProcessVM* en la VM).
+    void *finalizer_owner_ = nullptr;
+    /// Guard de reentrada: true mientras @c run_pending_finalizers drena.  Un
+    /// GC disparado dentro de un finalizador NO re-drena (solo encola mas).
+    bool finalizing_ = false;
+    /// Side-table payload_host_ptr -> dtor_vaddr para finalizadores CLASS_DTOR
+    /// (gc<Clase> con ~Clase()).  A diferencia de UNIQUE/SHARED (cuyo deleter
+    /// vive DENTRO del box en slot+8 / control block), la instancia de clase no
+    /// lleva el vaddr del dtor inline -- lo guardamos aqui al registrar.  El
+    /// sweep lo lee para stagear (a0=dtor_vaddr) y borra la entrada.  Solo se
+    /// usa para gc<Clase> con dtor (raro); no afecta el hot path del GC.
+    ///
+    /// Freestanding-safe: se usa @c U64U64Map (hash open-addressing propio, no
+    /// @c unordered_map, que arrastra libstdc++).  El libvesta_gc AOT lo
+    /// compila igual que la VM, asi que el finalizador CLASS_DTOR resuelve el
+    /// dtor por el MISMO camino en interp/JIT/AOT (cierra la fuga de gc<Clase>
+    /// con ~Clase() en AOT).  register/unregister/stage son O(1) amortizado
+    /// (antes O(n) con busqueda lineal -> O(n^2) agregado con muchos gc<Clase>).
+    U64U64Map class_dtor_vaddr_;
 
     // --- Tabla de referencias debiles ---
     std::vector<WeakEntry>

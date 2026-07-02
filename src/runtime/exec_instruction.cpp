@@ -43,6 +43,159 @@
 
 namespace runtime {
 
+/// Sentinel de retorno para el mini run-loop de reentrada.  Igual patron que
+/// @c vrt_run_method_in_interp: el CALL empuja este PC como direccion de
+/// retorno; el bucle para cuando RIP vuelve a el.  Valor imposible como PC
+/// real de bytecode.
+static constexpr uint64_t GC_FINALIZER_RET_SENTINEL = 0xFDFDFDFD00000000ULL;
+
+/**
+ * @brief Reentra al interprete para ejecutar la funcion de bytecode en @p
+ *        entry_vaddr con un unico argumento en R1 (convencion VM_ABI).
+ *
+ * Salva/restaura el estado del proceso (RIP/RSP/frame_stack/decoded_ptr),
+ * empuja un sentinel de retorno, coloca @p arg en R1 y R15=1 (argc), salta a
+ * @p entry_vaddr y corre un mini run-loop hasta que RIP vuelve al sentinel o
+ * el proceso entra en HALT/DEAD/error.  Mismo mecanismo probado que usa el
+ * fallback de CALLVIRT desde JIT (@c vrt_run_method_in_interp): portable y
+ * arch-independiente (ejecuta bytecode, no codigo nativo).
+ *
+ * @note Se invoca desde el drenado de finalizadores GC, que corre en un safe
+ *       point tras completar un collect.  El deleter NO debe entrar en IO
+ *       (no hay como esperar sincronicamente); si lo hace se aborta el bucle.
+ */
+static void gc_finalizer_call_bytecode(ProcessVM *p, uint64_t entry_vaddr,
+                                       uint64_t arg) {
+    if (entry_vaddr == 0) return;
+    // Salvar TODO el estado del proceso que el deleter puede tocar: RIP, RSP,
+    // RBP (el deleter usa enter/leave que manipulan RBP), frame_stack,
+    // decoded_ptr y los 16 GP regs.  El finalizador corre en medio del ciclo
+    // de alocacion del mutator; todo debe quedar intacto al volver.
+    const uint64_t saved_rip = p->registers.rip.raw();
+    const uint64_t saved_rsp = p->registers.stack_pointer.qword();
+    const uint64_t saved_rbp = p->registers.base_pointer.raw();
+    const uint64_t saved_flags = p->registers.flags.raw;
+    auto *saved_frame_stack = p->frame_stack;
+    auto *saved_decoded_ptr = p->decoded_ptr;
+    uint64_t saved_regs[16];
+    for (int i = 0; i < 16; ++i)
+        saved_regs[i] = p->registers.regs[i].qword();
+
+    // Empujar el sentinel como direccion de retorno (mismo mecanismo que
+    // CALLVM: push ret_addr; jump).  El deleter crece su pila por debajo de
+    // aqui; el caller conserva su pila por encima intacta.
+    const uint64_t new_rsp = saved_rsp - 8;
+    p->vm_mem.write_u64_fast(new_rsp, GC_FINALIZER_RET_SENTINEL);
+    p->registers.stack_pointer.qword(new_rsp);
+
+    // Convencion CALLVM/VM_ABI: arg en R1, argc en R15.  El deleter monta su
+    // propio frame (enter/subsp) y setea los registros que usa; no depende de
+    // los valores entrantes salvo R1.  NO limpiamos el resto (CALLVM tampoco).
+    p->registers.regs[1].qword(arg); // R1 = arg
+    p->registers.regs[15].qword(1);  // R15 = argc
+
+    // Saltar al deleter y forzar fresh decode.
+    p->registers.rip.qword(entry_vaddr);
+    p->decoded_ptr = &p->icache[0];
+    p->decoded_ptr->pc = UINT64_MAX;
+
+    // Mini run-loop.  Cota defensiva.
+    const uint64_t MAX_ITERS = 10'000'000;
+    uint64_t iters = 0;
+    while (iters++ < MAX_ITERS) {
+        if (p->registers.rip.raw() == GC_FINALIZER_RET_SENTINEL) break;
+        if (p->state == HALT || p->state == DEAD) break;
+        if (p->err_thread != THREAD_NO_ERROR) break;
+        decode_instruction(p);
+        vm_event ev = execute_instruction(p);
+        if (ev == EVT_HALT || ev == EVT_ERROR) break;
+        if (ev == EVT_IO_WAIT) break; // no soportado en el drenado sincronico
+    }
+
+    // Restaurar TODO el estado del proceso.
+    p->registers.rip.qword(saved_rip);
+    p->registers.stack_pointer.qword(saved_rsp);
+    p->registers.base_pointer.raw(saved_rbp);
+    p->registers.flags.raw = saved_flags;
+    p->frame_stack = saved_frame_stack; // por si el deleter dejo frames colgando
+    for (int i = 0; i < 16; ++i)
+        p->registers.regs[i].qword(saved_regs[i]);
+    // El deleter decodifico instrucciones en el icache (indexado por PC): las
+    // entradas que colisionan con las del caller quedan pobladas con datos del
+    // deleter.  Invalidar el icache entero fuerza que el interprete re-decode
+    // fresco al reanudar, evitando ejecutar una instruccion del deleter en el
+    // slot del caller (bug observado: `return C.libs` justo tras gc_collect
+    // leia basura).  Coste aceptable: los finalizadores son poco frecuentes.
+    for (uint32_t k = 0; k < ICACHE_SIZE; ++k) p->icache[k].pc = UINT64_MAX;
+    p->decoded_ptr = saved_decoded_ptr;
+}
+
+/**
+ * @brief Runner de finalizadores GC (interp bytecode, portable).
+ *
+ * Lo instala el ctor de ProcessVM via @c gc_heap.set_finalizer_runner.  El GC
+ * lo invoca (una vez por objeto colectado con recurso interno) en el safe
+ * point post-collect.  Ejecuta EXACTAMENTE el mismo deleter/dtor customizable
+ * que el cleanup determinista de scope, resuelto por el contenido del propio
+ * box (deleter en slot+8 para unique, control block para shared).
+ *
+ * @param owner ProcessVM* propietario (contexto opaco).
+ * @param box   Puntero host al payload del box colectado.
+ * @param kind  Clase de finalizador.
+ */
+static void gc_finalizer_run(void *owner, const gc::GcPendingFinalizer &f) {
+    if (owner == nullptr) return;
+    auto *p = static_cast<ProcessVM *>(owner);
+    switch (f.kind) {
+    case gc::GcFinalizerKind::UNIQUE: {
+        // f.a0 = inner_ptr, f.a1 = deleter_vaddr (0 = default free).
+        const uint64_t inner_ptr = f.a0;
+        const uint64_t deleter = f.a1;
+        // Anti-doble-free: si el slot fue movido/liberado ya se zerifico.
+        if (inner_ptr == 0) return;
+        if (deleter != 0) {
+            // Deleter Vesta: correr bytecode deleter(inner_ptr).
+            gc_finalizer_call_bytecode(p, deleter, inner_ptr);
+        } else {
+            // Default (unique_box): liberar el bloque raw.  null-safe.
+            p->raw_alloc.free(inner_ptr);
+        }
+        break;
+    }
+    case gc::GcFinalizerKind::SHARED: {
+        // f.a0 = ctrl_block_ptr.  Modelo refcount puro: decrementar refcount
+        // @ctrl+0; liberar el ctrl block cuando llega a 0.
+        const uint64_t ctrl = f.a0;
+        if (ctrl == 0) return;
+        uint64_t *rc = reinterpret_cast<uint64_t *>(ctrl);
+        if (*rc > 0) (*rc)--;
+        if (*rc == 0) p->raw_alloc.free(ctrl);
+        break;
+    }
+    case gc::GcFinalizerKind::CLASS_DTOR: {
+        // f.a0 = dtor_vaddr (<Clase>____dtor concreto, dispatch estatico),
+        // f.a1 = obj_host_ptr (la instancia).  Correr bytecode dtor(obj) --
+        // EXACTAMENTE el mismo <Clase>____dtor que el cleanup determinista
+        // CALL_DTOR del caso no-escape (portable en interp, arch-independiente).
+        // NO se libera memoria aqui: el GC ya reclamo el slot de la instancia;
+        // el dtor solo libera los RECURSOS internos (campos owned, file
+        // handles, etc.).
+        const uint64_t dtor_vaddr = f.a0;
+        const uint64_t obj = f.a1;
+        if (dtor_vaddr == 0 || obj == 0) return;
+        gc_finalizer_call_bytecode(p, dtor_vaddr, obj);
+        break;
+    }
+    case gc::GcFinalizerKind::NONE:
+    default:
+        break;
+    }
+}
+
+void install_gc_finalizer_runner(ProcessVM *vm) {
+    vm->gc_heap.set_finalizer_runner(&gc_finalizer_run, vm);
+}
+
 /**
  * @brief Ejecuta la instruccion HLT: detiene el proceso de forma cooperativa.
  *
@@ -79,6 +232,13 @@ void exec_instr_hlt(ProcessVM *vm, const DecodedInstr &instr) {
         }
         return;
     }
+    // FINALIZADORES exit-time: el proceso termina.  Con el interprete todavia
+    // vivo, finalizar todo objeto GC con recurso interno que siga vivo -- cubre
+    // los que ESCAPARON su scope (sin cleanup determinista) y que el GC no
+    // colecto todavia.  Garantiza cero fuga del recurso interno ANTES del exit.
+    // Idempotente (limpia el bit al encolar) y guardado contra reentrada.
+    vm->gc_heap.finalize_all_live();
+
     // bloquear la instruccion ANTES de notificar al scheduler para evitar
     // re-entradas
     vm->scheduler.on_event(EVT_HALT);

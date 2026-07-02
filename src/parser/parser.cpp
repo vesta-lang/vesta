@@ -485,6 +485,16 @@ static const std::unordered_map<std::string, InstructionPattern>
          *     automatico cuando el frame actual se destruye. --- */
         {"htrack", {"htrack", OpArity::ONE}},
 
+        /* --- Finalizadores GC: gcfinal r_box, kind (reg, imm nibble) --- */
+        {"gcfinal", {"gcfinal", OpArity::TWO}},
+        /* --- gcfinalc r_box, r_dtor: CLASS_DTOR con vaddr del dtor concreto */
+        {"gcfinalc", {"gcfinalc", OpArity::TWO}},
+
+        /* --- gccollect: fuerza minor+major GC + drena finalizadores --- */
+        {"gccollect", {"gccollect", OpArity::ZERO}},
+        /* --- gcfinall: finaliza todo objeto GC vivo con recurso interno --- */
+        {"gcfinall", {"gcfinall", OpArity::ZERO}},
+
         /* --- Phase Z: memoria compartida cross-process ---
          *  Todos arity TWO (reg, reg).  El lowering los emite cuando un
          *  objeto tiene SHARED_HANDLE_BIT puesto.  Stubs registrados aqui

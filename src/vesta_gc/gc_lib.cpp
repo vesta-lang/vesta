@@ -23,7 +23,13 @@
 #include "jit/jit_registry.h" // register_function (frames AOT en el scan preciso)
 #include "jit/machine_ir.h"   // Stackmap / StackmapSlot
 
+#include <cstdlib> // free (deleter default UNIQUE / ctrl block SHARED)
 #include <cstring>
+
+// Diagnostico: contador de finalizadores nativos ejecutados (verificacion del
+// path en tests).  Global de archivo (no anonimo) para que gc_finalizer_run_
+// native y el accessor extern "C" compartan el mismo simbolo.
+static volatile uint64_t g_vex_gc_fin_count = 0;
 
 namespace {
 
@@ -55,6 +61,60 @@ gc::GcHeap &gc_heap() {
     return heap;
 }
 
+/**
+ * @brief Runner NATIVO de finalizadores GC en AOT.
+ *
+ * Lo instala @c vex_gc_init via @c set_finalizer_runner.  El sweep (major_gc)
+ * stagea los datos del box colectado (mismo mecanismo que la VM) y este runner
+ * los ejecuta por CALL DIRECTO al deleter/dtor nativo -- cero bytecode (el
+ * codigo esta AOT-compilado).  Semantica IDENTICA al runner del interprete
+ * (@c gc_finalizer_run en exec_instruction.cpp), pero con llamadas a punteros
+ * de funcion nativos en lugar de reentrada al interprete.
+ *
+ * @param owner Ignorado (no hay ProcessVM en AOT).
+ * @param f     Datos stageados del finalizador (kind + a0 + a1).
+ */
+void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) {
+    ++g_vex_gc_fin_count;
+    switch (f.kind) {
+    case gc::GcFinalizerKind::UNIQUE: {
+        // f.a0 = inner_ptr, f.a1 = deleter (func_ptr nativo; 0 = default free).
+        const uint64_t inner_ptr = f.a0;
+        const uint64_t deleter = f.a1;
+        if (inner_ptr == 0) return; // ya movido/zerificado (anti-doble-free).
+        if (deleter != 0) {
+            // Deleter Vesta AOT-compilado: CALL directo deleter(inner_ptr).
+            reinterpret_cast<void (*)(uint64_t)>(deleter)(inner_ptr);
+        } else {
+            // Default (unique_box): liberar el bloque raw con free (libc).
+            std::free(reinterpret_cast<void *>(inner_ptr));
+        }
+        break;
+    }
+    case gc::GcFinalizerKind::SHARED: {
+        // f.a0 = ctrl_block_ptr.  Refcount puro: decrementar; liberar en 0.
+        const uint64_t ctrl = f.a0;
+        if (ctrl == 0) return;
+        uint64_t *rc = reinterpret_cast<uint64_t *>(ctrl);
+        if (*rc > 0) (*rc)--;
+        if (*rc == 0) std::free(reinterpret_cast<void *>(ctrl));
+        break;
+    }
+    case gc::GcFinalizerKind::CLASS_DTOR: {
+        // f.a0 = dtor func_ptr nativo, f.a1 = obj_host_ptr.  CALL directo
+        // dtor(obj).  No se libera memoria (el GC ya reclamo la instancia).
+        const uint64_t dtor = f.a0;
+        const uint64_t obj = f.a1;
+        if (dtor == 0 || obj == 0) return;
+        reinterpret_cast<void (*)(uint64_t)>(dtor)(obj);
+        break;
+    }
+    case gc::GcFinalizerKind::NONE:
+    default:
+        break;
+    }
+}
+
 } // namespace
 
 extern "C" {
@@ -62,7 +122,11 @@ extern "C" {
 void vex_gc_init(void) {
     // Forzar la construccion del heap (idempotente: el static local solo se
     // inicializa una vez).
-    (void)gc_heap();
+    gc::GcHeap &h = gc_heap();
+    // Instalar el runner nativo de finalizadores (idempotente): ejecuta el
+    // deleter/dtor concreto por CALL directo cuando el sweep colecte un objeto
+    // con recurso interno.  Cierra la fuga del escape en AOT.
+    h.set_finalizer_runner(&gc_finalizer_run_native, nullptr);
 }
 
 uint32_t vex_gc_alloc(uint64_t size) {
@@ -166,9 +230,32 @@ uint8_t *vex_gc_deref(uint32_t handle) {
 }
 
 void vex_gc_collect(void) {
-    gc_heap().minor_gc();
-    gc_heap().major_gc();
+    gc::GcHeap &h = gc_heap();
+    h.minor_gc();
+    h.major_gc();
+    // Drenar los finalizadores stageados por el sweep (CALL directo al
+    // deleter/dtor nativo).  En AOT no hay scheduler/safe-point: el drenado
+    // corre aqui, tras completar el collect (el sweep ya copio los datos del
+    // box, asi que el drenado no toca memoria reclamada).
+    h.run_pending_finalizers();
 }
+
+void vex_gc_register_finalizer(uint8_t *payload, uint32_t kind, uint64_t aux) {
+    gc_heap().register_finalizer(payload,
+                                 static_cast<gc::GcFinalizerKind>(kind), aux);
+}
+
+void vex_gc_unregister_finalizer(uint8_t *payload) {
+    gc_heap().unregister_finalizer(payload);
+}
+
+void vex_gc_finalize_all(void) {
+    // Shutdown-time: finalizar todo objeto vivo con recurso interno (cubre los
+    // escapados que el sweep no colecto todavia).  Cero fuga antes del exit.
+    gc_heap().finalize_all_live();
+}
+
+uint64_t vex_gc_fin_count(void) { return g_vex_gc_fin_count; }
 
 uint64_t vex_gc_live_count(void) {
     // No hay accesor directo de "handles vivos"; lo contamos sobre la tabla

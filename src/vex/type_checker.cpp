@@ -1793,6 +1793,12 @@ void TypeChecker::collect_globals() {
     reg_builtin("echo", Type{PrimitiveKind::VOID}, {PrimitiveKind::PTR});
     // flush() sin argumentos (vacia el buffer de vesta_io).
     reg_builtin("flush", Type{PrimitiveKind::VOID}, {});
+    // gc_collect() sin argumentos: fuerza un ciclo de GC + finalizadores.
+    reg_builtin("gc_collect", Type{PrimitiveKind::VOID}, {});
+    // gc_finalize_all() sin argumentos: finaliza TODO objeto GC vivo con
+    // recurso interno (deleter/dtor).  Determinista (no depende de la colecta):
+    // util para observar la finalizacion de objetos escapados sin polling.
+    reg_builtin("gc_finalize_all", Type{PrimitiveKind::VOID}, {});
     // Salida de valores numericos (sin acceso a memoria VM).
     reg_builtin("print_int", Type{PrimitiveKind::VOID}, {PrimitiveKind::I64});
     reg_builtin("print_uint", Type{PrimitiveKind::VOID}, {PrimitiveKind::U64});

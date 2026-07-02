@@ -35,6 +35,7 @@
 #include "cli/sync_io.h"
 #include "jit/jit_call.h"
 #include "profiler/timer.h"
+#include "runtime/exec_instruction.h" // install_gc_finalizer_runner
 #include "runtime/rflags.h"
 // Inc 0b: los cuerpos de ProcessVMRootProvider necesitan la def completa de la
 // VM (scheduler.vm_reference.shared_*) + las tablas shared (Phase Z).
@@ -88,6 +89,10 @@ ProcessVM::ProcessVM(Scheduler &scheduler, GlobalPID pid)
     // ProcessVM* directo) -> gc_heap.cpp no depende de la VM.  El provider solo
     // guarda `this`; permanece valido durante toda la vida del proceso.
     gc_heap.set_root_provider(&gc_root_provider_);
+    // Finalizadores GC: instalar el runner que ejecuta el deleter/dtor
+    // customizable de objetos GC con recurso interno que escapan su scope.
+    // Reentra al interprete (bytecode portable) en el safe point post-collect.
+    install_gc_finalizer_runner(this);
     // Phase D.7: cachear la direccion estable de la HandleTable para que
     // el JIT inline-e deref (handle -> host_ptr) sin CALL al runtime.
     jit_handle_table = gc_heap.jit_handle_table_ptr();

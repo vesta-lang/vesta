@@ -134,3 +134,4 @@ doc/sprint_lsp_machine_view.md
 # Directorios temporales de tests AOT (se crean y borran en runtime)
 _tls_test/
 _tls_pe/
+tests/bugs/mem_combo/README.md
