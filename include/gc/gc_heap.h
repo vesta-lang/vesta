@@ -1146,6 +1146,25 @@ class GcRootProvider {
         return 0;
     }
 
+    /**
+     * @brief Indica si TODO frame vivo del interprete esta cubierto por
+     *        stackmaps precisos (seccion @c VSMP).
+     *
+     * Camina la cadena de frames y comprueba, POR FRAME, que el ejecutable
+     * al que pertenece su PC lleve una tabla @c VSMP no vacia.  Devuelve
+     * @c false si ALGUN frame pertenece a un @c .velb SIN @c VSMP (binario
+     * viejo, pre-scan-preciso, o modulo sin stackmaps).  En ese caso el
+     * GcHeap mantiene el scan conservador como PRIMARIO -> soundness para
+     * binarios mixtos (nuevos precisos + viejos conservadores).
+     *
+     * La impl por defecto devuelve @c false (owner sin frames de interprete
+     * -- p.ej. GC AOT standalone): el GcHeap NO asume cobertura precisa y
+     * cae al conservador salvo que este explicitamente desactivado.
+     *
+     * @return @c true si TODOS los frames del interprete tienen @c VSMP.
+     */
+    virtual bool all_interp_frames_have_stackmaps() { return false; }
+
     // --- Phase Z (shared / cross-proceso).  En AOT: false/nullptr. ---
     virtual bool shared_contains(const uint8_t *ptr) = 0;
     virtual uint8_t *shared_lookup(GcHandle h) = 0;

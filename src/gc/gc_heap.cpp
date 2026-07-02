@@ -1497,6 +1497,15 @@ void GcHeap::minor_gc() {
         if (hdr->gen == GcGen::YOUNG) hdr->color = GcColor::WHITE;
     }
 
+    // NOTA sobre el flip a preciso-primario: aplica a MAJOR gc (OldGen), no a
+    // este minor_gc.  El scan PRECISO (stackmaps VSMP) solo marca objetos OLD
+    // (try_mark_precise_handle rechaza YOUNG: "young se cubre via minor_gc").
+    // El nursery (YOUNG) se colecta AQUI y su UNICO mecanismo de raices es el
+    // scan conservador de la pila -- no existe un scan preciso que marque
+    // YOUNG.  Desactivarlo barreria TODO objeto joven vivo -> UAF.  Por eso el
+    // minor_gc mantiene el conservador como primario; el no-determinismo por
+    // falsos positivos que el flip elimina vive en OldGen (retencion), que
+    // major_gc ya resuelve con preciso-primario.
     std::vector<GcHandle> worklist;
     uint64_t rsp = 0, stack_high = 0;
     uint64_t regs[16];
@@ -1736,28 +1745,67 @@ void GcHeap::major_gc() {
     }
 #endif
 
-    // MARK: stack scanning conservativo desde stack/regs
-    // del proceso owner.  Reemplaza el modelo previo "todo handle live
-    // = root" que nunca colectaba sin drop explicito.  Si owner_proc_
-    // es nullptr (ej. tests sin ProcessVM), fallback al modelo previo.
+    // MARK: raices de los frames del INTERPRETE.
+    //
+    // FLIP A PRECISO-PRIMARIO (jubilacion del scan conservador por defecto):
+    // el scan PRECISO (stackmaps VSMP, ejecutado arriba en scan_interp_roots_
+    // precise) es ahora el mecanismo PRIMARIO.  El scan CONSERVADOR de la pila
+    // del interprete deja de correr por defecto -- sus FALSOS POSITIVOS
+    // (host_ptrs rancios en memoria reusada) retenian objetos ya muertos, lo
+    // que introducia no-determinismo en las colecciones.  El preciso solo toca
+    // slots GC reales -> ademas es mas rapido que escanear toda la pila.
+    //
+    // El conservador NO se borra: queda como herramienta de verificacion /
+    // fallback GATEADA:
+    //   - VESTA_GC_CONSERVATIVE=1  -> re-activa el conservador (aditivo) para
+    //                                 diagnostico / red de seguridad de dev.
+    //   - VESTA_GC_PRECISE_ONLY=1  -> fuerza preciso-puro incluso con .velb
+    //                                 viejos (verificador de completitud).
+    //   - VESTA_GC_VERIFY=1        -> ya corrio arriba el diferencial.
+    //
+    // BACKWARD-COMPAT (por-ejecutable): un .velb SIN seccion VSMP (compilado
+    // antes del scan preciso, format_v < 4) NO lleva stackmaps -> usar preciso
+    // sobre sus frames perderia raices (UAF).  all_interp_frames_have_stackmaps
+    // devuelve false si ALGUN ejecutable cargado es legacy -> mantenemos el
+    // conservador como PRIMARIO en ese proceso.  Modelo: binario nuevo=preciso,
+    // viejo=conservador.
     const size_t worklist_after_precise = worklist.size();
 #if !defined(VESTA_GC_FREESTANDING)
-    // MODO PRECISO-PURO (VESTA_GC_PRECISE_ONLY=1, DEV-ONLY): salta el scan
-    // conservador para PROBAR empiricamente la completitud del preciso.  Si un
-    // programa corre correcto en este modo, el preciso captura TODAS sus raices
-    // reales (los "huecos" que reporta el verificador son falsos positivos del
-    // conservador -- host_ptrs rancios en memoria reusada -> objeto ya muerto).
-    // NO es el flip de produccion; es una herramienta de validacion.
-    static const bool precise_only = [] {
+    // VESTA_GC_PRECISE_ONLY=1 (DEV-ONLY): fuerza preciso-puro (sin conservador)
+    // incluso para .velb viejos.  Herramienta de validacion, NO el flip.
+    static const bool precise_only_forced = [] {
         const char *v = std::getenv("VESTA_GC_PRECISE_ONLY");
         return v && v[0] == '1';
     }();
+    // VESTA_GC_CONSERVATIVE=1 (DEV-ONLY): re-activa el conservador aditivo como
+    // red de seguridad / diagnostico.
+    static const bool conservative_forced = [] {
+        const char *v = std::getenv("VESTA_GC_CONSERVATIVE");
+        return v && v[0] == '1';
+    }();
 #else
-    constexpr bool precise_only = false;
+    constexpr bool precise_only_forced = false;
+    constexpr bool conservative_forced = false;
 #endif
+
+    // Decidir si corre el conservador de la pila del interprete.  Preciso-
+    // primario (DEFAULT): NO corre, salvo que un ejecutable legacy lo exija o
+    // el usuario lo fuerce.  precise_only_forced lo desactiva pase lo que pase.
+    bool run_conservative = false;
+    if (!precise_only_forced) {
+        if (conservative_forced) {
+            run_conservative = true; // forzado por env (aditivo)
+        } else if (root_provider_ != nullptr &&
+                   !root_provider_->all_interp_frames_have_stackmaps()) {
+            // Algun ejecutable sin VSMP (legacy) -> conservador primario para
+            // no perder raices de sus frames.
+            run_conservative = true;
+        }
+    }
+
     uint64_t mj_rsp = 0, mj_high = 0;
     uint64_t mj_regs[16];
-    if (!precise_only && root_provider_ != nullptr &&
+    if (run_conservative && root_provider_ != nullptr &&
         root_provider_->vm_stack_regs(mj_rsp, mj_high, mj_regs) &&
         root_provider_->vm_mem() != nullptr) {
         scan_stack_roots(mj_rsp, mj_high, mj_regs, *root_provider_->vm_mem(),
@@ -1767,7 +1815,7 @@ void GcHeap::major_gc() {
         // debe limitar el rango del proximo scan al rango realmente
         // activo desde ahora.
         root_provider_->set_stack_low_water(mj_rsp);
-    } else if (!aot_precise_roots_ && !precise_only) {
+    } else if (!aot_precise_roots_ && root_provider_ == nullptr) {
         // Fallback: modelo previo (todo handle live = root).  Solo se usa si no
         // hay root_provider_ NI modo AOT (defensivo para tests / setups
         // especiales).  En modo AOT (libvesta_gc) se OMITE -> las raices vienen
@@ -1781,16 +1829,13 @@ void GcHeap::major_gc() {
                 worklist.push_back(h);
             }
         }
-    }
-#if !defined(VESTA_GC_FREESTANDING)
-    else if (precise_only && root_provider_ != nullptr &&
-             root_provider_->vm_stack_regs(mj_rsp, mj_high, mj_regs)) {
-        // Modo preciso-puro: sin conservador, pero mantener el watermark del
-        // stack coherente para el proximo ciclo (el interp precise scan y el
+    } else if (root_provider_ != nullptr &&
+               root_provider_->vm_stack_regs(mj_rsp, mj_high, mj_regs)) {
+        // Preciso-primario (sin conservador): mantener el watermark del stack
+        // coherente para el proximo ciclo (el interp precise scan y el
         // forward-update lo usan).
         root_provider_->set_stack_low_water(mj_rsp);
     }
-#endif
 
     // MARK roots externos: handles pinnados por estructuras nativas
     // (ArrayList<string> del plugin vesta_collections, etc.) se tratan

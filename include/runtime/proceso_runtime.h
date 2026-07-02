@@ -375,6 +375,7 @@ class ProcessVMRootProvider final : public gc::GcRootProvider {
     vm::VirtualMemory *vm_mem() override;
     uint64_t scan_interp_precise_roots(InterpRootCallback cb,
                                        void *cb_ctx) override;
+    bool all_interp_frames_have_stackmaps() override;
     bool shared_contains(const uint8_t *ptr) override;
     uint8_t *shared_lookup(gc::GcHandle h) override;
     gc::WaitTable *shared_wait_table() override;

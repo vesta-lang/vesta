@@ -427,6 +427,34 @@ ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
     return marked;
 }
 
+bool ProcessVMRootProvider::all_interp_frames_have_stackmaps() {
+    // Decision de cobertura precisa POR EJECUTABLE (backward-compat del flip a
+    // preciso-primario).  Un frame del interprete pertenece a algun ejecutable
+    // cargado; ese ejecutable soporta stackmaps precisos (seccion VSMP) sii su
+    // formato es >= VERSION_VELB 0x4 -- la version del linker que emite la
+    // seccion VSMP para CUALQUIER safepoint GC.  Un .velb con format_v < 4
+    // (compilado antes del scan preciso) NO lleva stackmaps -> sus frames deben
+    // escanearse con el conservador para no perder raices (UAF).
+    //
+    // Regla sound: preciso-primario SOLO si TODOS los ejecutables cargados son
+    // format_v >= 4.  Basta un .velb viejo para mantener el conservador como
+    // primario en todo el proceso.  Modelo "velb nuevo=preciso, viejo=
+    // conservador" a granularidad de ejecutable (la unica robusta sin mapear
+    // PC->modulo, que el loader fusiona en un solo espacio de direcciones).
+    //
+    // Un ejecutable format_v>=4 SIN entradas VSMP (modulo puramente aritmetico
+    // sin ops GC) sigue siendo preciso-capaz: el linker omite la seccion solo
+    // cuando NO hay safepoints, es decir cuando no hay raices GC que perder.
+    const auto &executables =
+        proc_->scheduler.vm_reference.loader_public.executables;
+    if (executables.empty()) return false; // sin ejecutables -> no asumir preciso
+    for (const auto &exe_ptr : executables) {
+        if (!exe_ptr) continue;
+        if (exe_ptr->header.format_v < 0x4) return false; // legacy -> conservador
+    }
+    return true;
+}
+
 bool ProcessVMRootProvider::shared_contains(const uint8_t *ptr) {
     return proc_->scheduler.vm_reference.shared_heap.contains(ptr);
 }
