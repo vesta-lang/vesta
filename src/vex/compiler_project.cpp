@@ -933,6 +933,18 @@ CompileResult compile_vex_project(const std::string &root_path,
                                 pm.ir.static_data =
                                     std::move(dep_mod.static_data);
                                 pm.ir.globals = std::move(dep_mod.globals);
+                                // BugFix M.ni-cache: restaurar tambien los
+                                // native_imports del dep en el cache-hit.  Sin
+                                // esto, el merge cross-modulo (mas abajo) no
+                                // tiene que propagar y el linker deja simbolos
+                                // colgantes (p.ej. `vrt:inline_asm_exec` /
+                                // `vrt:naked_fnaddr` de un dep con cuerpos
+                                // @Naked/inline-asm) -> RelocationError con el
+                                // .vexir caliente (frio compilaba bien).
+                                // parse_ir_module_cache ya los deserializo en
+                                // dep_mod; solo faltaba trasladarlos a pm.ir.
+                                pm.ir.native_imports =
+                                    std::move(dep_mod.native_imports);
                                 pm.ok = true;
                                 if (verbose_cache) {
                                     std::ostringstream tmp;
