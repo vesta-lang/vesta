@@ -13,6 +13,15 @@
 #include <vector>
 #include <cstdint>
 
+// Deteccion de TTY: banner bonito en terminal, linea plana parseable en pipe.
+#if defined(_WIN32)
+#include <io.h>
+#define VESTA_ISATTY_STDOUT() (_isatty(_fileno(stdout)) != 0)
+#else
+#include <unistd.h>
+#define VESTA_ISATTY_STDOUT() (isatty(fileno(stdout)) != 0)
+#endif
+
 #include "pkg/ui.h"
 
 // Numeros de version (fuente de verdad: project(...) en CMakeLists.txt).
@@ -115,6 +124,18 @@ std::string mark_plain(bool /*present*/) { return "[--]"; }
 } // namespace
 
 void print_version_banner(std::ostream &os) {
+    // Salida MACHINE-READABLE cuando stdout no es un terminal (pipe/redireccion,
+    // p.ej. el harness de benchmark que captura `vm --version`): una sola linea
+    // parseable, sin la caja ni codigos ANSI.  El banner bonito solo en TTY.
+    if (!VESTA_ISATTY_STDOUT()) {
+        os << "Vesta v" << VEX_VM_VERSION_STRING << "-alpha"
+           << " (build " << VESTA_BUILD_DATE;
+        if (VESTA_GIT_HASH_KNOWN)
+            os << ", " << VESTA_GIT_HASH;
+        os << ")\n";
+        return;
+    }
+
     ui::init(); // Habilita ANSI en Windows 10+ / respeta NO_COLOR.
 
     const uint64_t feats = vesta_runtime_cpu_features();
