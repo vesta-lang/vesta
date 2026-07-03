@@ -126,12 +126,15 @@ void print_version_banner(std::ostream &os) {
     // ---- Construir las filas del banner --------------------------------
     std::vector<Row> rows;
 
-    // Titulo: "Vesta vX.Y.Z" en bold.
+    // Titulo: "Vesta vX.Y.Z-alpha" en bold.  Todo el ecosistema esta en alfa;
+    // el sufijo -alpha se resalta en amarillo para dejarlo claro de un vistazo.
     {
-        std::string vstr = std::string("Vesta v") + VEX_VM_VERSION_STRING;
+        std::string base = std::string("Vesta v") + VEX_VM_VERSION_STRING;
+        const char *alpha = "-alpha";
         Row r;
-        r.plain = vstr;
-        r.colored = std::string(ui::bold()) + ui::green() + vstr + ui::reset();
+        r.plain = base + alpha;
+        r.colored = std::string(ui::bold()) + ui::green() + base +
+                    ui::yellow() + alpha + ui::reset();
         rows.push_back(r);
     }
 
