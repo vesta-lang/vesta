@@ -1351,6 +1351,36 @@ class GcHeap {
     bool try_mark_precise_handle(GcHandle h, std::vector<GcHandle> &worklist);
 
     /**
+     * @brief Variante YOUNG de @c try_mark_precise_handle usada por el scan
+     *        preciso del NURSERY (minor_gc).
+     *
+     * Marca un handle como root precise (BLACK + push worklist) si es valido +
+     * vivo + WHITE Y apunta a un objeto de la generacion YOUNG (dentro del
+     * rango del nursery).  El scan preciso reporta TODAS las raices GC
+     * independientemente de la generacion; para el minor_gc solo interesan las
+     * YOUNG (las OLD las gobierna major_gc).  Simetrico a
+     * @c try_mark_precise_handle (que filtra OLD) para el path del nursery.
+     *
+     * @return true si lo marco como root young, false si no aplica.
+     */
+    bool try_mark_precise_young(GcHandle h, std::vector<GcHandle> &worklist);
+
+    /**
+     * @brief Scan PRECISO de raices YOUNG de los frames del INTERPRETE via los
+     *        stackmaps (seccion VSMP), para el minor_gc del nursery.
+     *
+     * Delega en @c GcRootProvider::scan_interp_precise_roots (el mismo que usa
+     * el major_gc) pero enruta cada raiz notificada a
+     * @c try_mark_precise_young, que solo marca objetos YOUNG.  Es el mecanismo
+     * PRIMARIO de raices del nursery bajo el flip a preciso; el scan
+     * conservador queda como fallback de dev (VESTA_GC_CONSERVATIVE=1) o para
+     * ejecutables legacy sin VSMP.  No-op si no hay provider o stackmaps.
+     *
+     * @param worklist worklist BFS donde se anaden los handles YOUNG marcados.
+     */
+    void scan_interp_young_roots_precise(std::vector<GcHandle> &worklist);
+
+    /**
      * @brief Recorre stack y GP regs reescribiendo host_ptrs de objetos
      * YoungGen evacuados a sus nuevas addresses en OldGen.
      *

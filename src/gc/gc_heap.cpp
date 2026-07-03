@@ -918,6 +918,23 @@ bool GcHeap::try_mark_precise_handle(GcHandle h,
     return true;
 }
 
+bool GcHeap::try_mark_precise_young(GcHandle h,
+                                    std::vector<GcHandle> &worklist) {
+    if (h == GC_NULL_HANDLE) return false;
+    if (h >= handles_.size()) return false;
+    if (!handles_[h].live || !handles_[h].addr) return false;
+    uint8_t *raw = handles_[h].addr;
+    // Solo objetos que viven en el nursery (rango YOUNG).  Un handle preciso
+    // que apunte a OLD lo gobierna major_gc -> aqui se ignora.
+    if (raw < nursery_base_ || raw >= nursery_end_) return false;
+    auto *hdr = reinterpret_cast<GcHeader *>(raw);
+    if (hdr->gen != GcGen::YOUNG) return false;
+    if (hdr->color != GcColor::WHITE) return false;
+    hdr->color = GcColor::BLACK;
+    worklist.push_back(h);
+    return true;
+}
+
 namespace {
 /**
  * @brief Contexto pasado al callback de @c scan_jit_frames durante
@@ -1108,6 +1125,44 @@ void interp_precise_root_cb(void *ctx, uint64_t value, uint8_t kind) {
     }
 }
 } // namespace
+
+namespace {
+/**
+ * @brief Callback C-style para el scan preciso del NURSERY (minor_gc).
+ *
+ * Identico a @c interp_precise_root_cb pero enruta a
+ * @c try_mark_precise_young: solo marca objetos YOUNG (el minor_gc no toca
+ * OLD).  Reusa @c InterpPreciseCtx.
+ */
+void interp_precise_young_root_cb(void *ctx, uint64_t value, uint8_t kind) {
+    auto *c = static_cast<InterpPreciseCtx *>(ctx);
+    ++c->notified;
+    if (kind == static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)) {
+        const auto h = static_cast<gc::GcHandle>(value);
+        if (c->heap->try_mark_precise_young(h, *c->worklist)) ++c->roots_marked;
+    } else {
+        if (value == 0) return;
+        const auto *ptr = reinterpret_cast<const uint8_t *>(value);
+        const gc::GcHandle h = c->heap->handle_for_ptr(ptr);
+        if (h != gc::GC_NULL_HANDLE &&
+            c->heap->try_mark_precise_young(h, *c->worklist))
+            ++c->roots_marked;
+    }
+}
+} // namespace
+
+void GcHeap::scan_interp_young_roots_precise(std::vector<GcHandle> &worklist) {
+    // Sin provider (p.ej. GC AOT standalone) o sin stackmaps -> no-op.  En AOT
+    // el nursery queda vacio (vex_gc_alloc usa alloc_pinned -> OldGen), asi que
+    // este scan no encuentra nada de todos modos.
+    if (root_provider_ == nullptr) return;
+
+    InterpPreciseCtx ctx{this, &worklist, 0, 0};
+    root_provider_->scan_interp_precise_roots(&interp_precise_young_root_cb,
+                                              &ctx);
+    stats_.interp_precise_roots_marked += ctx.roots_marked;
+    stats_.interp_precise_notified += ctx.notified;
+}
 
 void GcHeap::scan_interp_roots_precise(std::vector<GcHandle> &worklist) {
     // Sin provider (p.ej. GC AOT standalone) o sin stackmaps -> no-op.
@@ -1669,27 +1724,66 @@ void GcHeap::minor_gc() {
         if (hdr->gen == GcGen::YOUNG) hdr->color = GcColor::WHITE;
     }
 
-    // NOTA sobre el flip a preciso-primario: aplica a MAJOR gc (OldGen), no a
-    // este minor_gc.  El scan PRECISO (stackmaps VSMP) solo marca objetos OLD
-    // (try_mark_precise_handle rechaza YOUNG: "young se cubre via minor_gc").
-    // El nursery (YOUNG) se colecta AQUI y su UNICO mecanismo de raices es el
-    // scan conservador de la pila -- no existe un scan preciso que marque
-    // YOUNG.  Desactivarlo barreria TODO objeto joven vivo -> UAF.  Por eso el
-    // minor_gc mantiene el conservador como primario; el no-determinismo por
-    // falsos positivos que el flip elimina vive en OldGen (retencion), que
-    // major_gc ya resuelve con preciso-primario.
+    // MIGRACION DEL NURSERY A RAICES PRECISAS (scan_interp_young_roots_precise).
+    //
+    // El scan PRECISO (stackmaps VSMP) reporta TODAS las raices GC del
+    // interprete independientemente de la generacion; el enrutado a
+    // try_mark_precise_young marca los YOUNG DIRECTAMENTE alcanzables desde la
+    // pila/regs.  Es el mismo mecanismo que el major_gc usa para OldGen.
+    //
+    // BLOQUEANTE ESTRUCTURAL (por eso el preciso young es OPT-IN, NO el default):
+    // un minor_gc generacional preciso NECESITA un WRITE-BARRIER old->young para
+    // encontrar los YOUNG alcanzables SOLO a traves de un campo de un objeto OLD
+    // (p.ej. `l.head` cuando `l` ya se promovio).  El opcode `gcwb` +
+    // remembered_set EXISTEN, pero el frontend Vex NUNCA los emite en stores de
+    // campo (los baja a STORE/movh de host_ptr, sin barrier) -> remembered_set
+    // queda VACIO.  El scan CONSERVADOR enmascara este hueco al retener esos
+    // young via slots rancios de la pila VM.  Sin el write-barrier, hacer el
+    // young preciso PRIMARIO perderia los young alcanzables solo via old (UAF con
+    // el GC moving).  Hasta que exista el write-barrier, el conservador sigue
+    // siendo el PRIMARIO del nursery (comportamiento previo, sound en la
+    // practica).  El preciso young se activa para validacion/futuro con
+    // VESTA_GC_YOUNG_PRECISE=1 (aditivo con el conservador salvo que ademas se
+    // pida VESTA_GC_PRECISE_ONLY=1).
     std::vector<GcHandle> worklist;
+
+#if !defined(VESTA_GC_FREESTANDING)
+    static const bool minor_precise_only_forced = [] {
+        const char *v = std::getenv("VESTA_GC_PRECISE_ONLY");
+        return v && v[0] == '1';
+    }();
+    static const bool minor_young_precise = [] {
+        const char *v = std::getenv("VESTA_GC_YOUNG_PRECISE");
+        return v && v[0] == '1';
+    }();
+#else
+    constexpr bool minor_precise_only_forced = false;
+    constexpr bool minor_young_precise = false;
+#endif
+
+    // Scan PRECISO del nursery (raices YOUNG via stackmaps).  Opt-in: hasta que
+    // exista el write-barrier old->young no puede ser el unico mecanismo.
+    if (minor_young_precise || minor_precise_only_forced)
+        scan_interp_young_roots_precise(worklist);
+
+    // Conservador: PRIMARIO por defecto (unico mecanismo que hoy cubre las
+    // referencias old->young sin write-barrier).  Se omite solo si el usuario
+    // fuerza preciso-puro con VESTA_GC_PRECISE_ONLY=1 (herramienta de
+    // validacion del scan preciso, sabiendo que hoy pierde old->young).
+    const bool run_conservative_minor = !minor_precise_only_forced;
+
     uint64_t rsp = 0, stack_high = 0;
     uint64_t regs[16];
-    if (root_provider_ != nullptr &&
+    if (run_conservative_minor && root_provider_ != nullptr &&
         root_provider_->vm_stack_regs(rsp, stack_high, regs) &&
         root_provider_->vm_mem() != nullptr) {
         scan_stack_roots(rsp, stack_high, regs, *root_provider_->vm_mem(),
                          worklist);
-    } else if (!aot_precise_roots_) {
-        // Fallback: modelo previo (todos los handles live = root).  En modo AOT
-        // se omite: vex_gc_alloc usa alloc_pinned (OldGen) -> el nursery queda
-        // vacio -> minor_gc no toca objetos gc<T>; solo major_gc los colecta.
+    } else if (root_provider_ == nullptr && !aot_precise_roots_) {
+        // Fallback: modelo previo (todos los handles live = root).  Solo si no
+        // hay provider NI modo AOT (defensivo para tests/setups especiales).
+        // En modo AOT vex_gc_alloc usa alloc_pinned (OldGen) -> el nursery
+        // queda vacio -> minor_gc no toca objetos gc<T>; solo major_gc.
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
             if (!handles_[h].live || !handles_[h].addr) continue;
             uint8_t *raw = handles_[h].addr;

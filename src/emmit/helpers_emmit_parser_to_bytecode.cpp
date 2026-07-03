@@ -329,19 +329,34 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
         }
     }
 
-    // Fijar el offset del stackmap pendiente al INICIO de ESTA instruccion (la
-    // que porta el marcador `// @sm`) y publicarlo.  El lexer liga el marcador a
-    // la instruccion INMEDIATAMENTE SIGUIENTE al comentario; en ambos tipos de
-    // safepoint esa instruccion es exactamente donde apuntara el rip del scan:
-    //   - Directo: el marcador va sobre el opcode del safepoint -> rip == inicio.
-    //   - Return-site: el marcador va sobre la primera instruccion tras el call
-    //     -> el ret_addr empujado == inicio de esa instruccion (= este offset).
-    // El bug anterior fijaba el offset TRAS emitir la instruccion (inicio+size),
-    // por lo que el scan (que busca por igualdad EXACTA con rip == inicio) nunca
-    // hallaba el stackmap -> raices vivas sin marcar (UAF latente enmascarado
-    // por el GC no-moving; corrupcion con el GC moving).
+    // Fijar el offset del stackmap pendiente y publicarlo.  El PC bajo el que el
+    // scan busca el stackmap depende del TIPO de safepoint:
+    //
+    //   - DIRECTO (newobj/gcalloc/...): el marcador `// @sm` queda ligado al
+    //     propio opcode del safepoint; el rip del interprete cuando el GC corre
+    //     ES el INICIO de esa instruccion -> byte_offset = instr_start_offset.
+    //
+    //   - RETURN-SITE (tras callvm/callvirt/callm): el emisor coloca el marcador
+    //     `// @sm` JUSTO DESPUES del call, con la INTENCION de ligarlo a la
+    //     instruccion siguiente (el return_pc).  Pero el lexer lo captura en el
+    //     lookahead que cierra el parse del PROPIO call -> el marcador queda
+    //     ligado al CALL, no a la instruccion posterior.  El frame-walk del scan
+    //     preciso lee el return_pc = [rbp+8], que es el offset del byte SIGUIENTE
+    //     al call (lo que callvm/callvirt empujan como ret_addr) = el INICIO +
+    //     el tamano del call = @c output.offset TRAS emitir el call.  Por eso el
+    //     stackmap de un carrier de tipo CALL se registra en el offset POST-emit
+    //     (return_pc), no en su inicio.  Sin esto el stackmap queda mal-keyed
+    //     (nunca coincide con el return_pc del walk) y las raices GC vivas SOLO
+    //     alcanzables desde un frame CALLER (p.ej. el `l` de una lista enlazada
+    //     construida en un helper) se pierden -> UAF con el GC moving del
+    //     nursery preciso.
     if (pending_stackmap) {
-        pending_stackmap->byte_offset = instr_start_offset;
+        const bool call_carrier =
+            (instr->opcode == "callvm" || instr->opcode == "callvirt" ||
+             instr->opcode == "callm");
+        pending_stackmap->byte_offset =
+            call_carrier ? static_cast<uint32_t>(output.offset)
+                         : instr_start_offset;
         ctx.stackmap_recs.push_back(std::move(*pending_stackmap));
         pending_stackmap.reset();
     }
