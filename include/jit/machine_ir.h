@@ -1283,12 +1283,14 @@ struct Stackmap {
     uint32_t pc_offset = 0; ///< byte offset en code cache
     /// Tamano del frame en un safepoint call: RBP - RSP =
     /// pointer_size*callee_saved + spill_bytes.  Lo usa el WALK POR TAMANO DE
-    /// FRAME del scan preciso de AOT (@c scan_aot_frames) para reconstruir RBP
-    /// a partir del RSP del llamador SIN leer la cadena RBP -> robusto ante
+    /// FRAME del scan preciso (@c scan_aot_frames) para reconstruir RBP a partir
+    /// del RSP del llamador SIN leer la cadena RBP -> robusto ante
     /// -fomit-frame-pointer / inlining de frames intermedios (modelo LLVM
-    /// statepoint).  Es CONSTANTE por funcion; se replica en cada stackmap de
-    /// la misma.  Queda 0 en el path JIT/interp (que camina la cadena RBP y no
-    /// lo consume).
+    /// statepoint).  Es CONSTANTE por funcion; se replica en cada stackmap de la
+    /// misma.  Lo emite @c rewrite_to_physical para AOT Y JIT; vreg_pipeline lo
+    /// propaga a @c register_function para que el mismo walk sirva al scan
+    /// preciso del GC en modo interp+JIT (frontera capturada por las
+    /// runtime-entries @c vrt_*).
     uint32_t frame_size = 0;
     std::vector<StackmapSlot> slots;
 };

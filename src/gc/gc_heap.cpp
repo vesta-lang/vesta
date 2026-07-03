@@ -1057,6 +1057,23 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
         return;
     }
 
+    /* INTERP+JIT: boundary capturado por la runtime-entry (@c vrt_*) que el
+     * codigo JIT llamo DIRECTAMENTE para alocar.  Mismo WALK POR TAMANO DE
+     * FRAME que el AOT (reconstruye RBP con frame_size) -> robusto ante los
+     * frames C++ del runtime que a -O0 rompen la cadena RBP (@c lea rbp,[rsp+N]),
+     * que es justo lo que hacia que el scan de frames JIT (cadena RBP) marcara
+     * 0 young roots dentro de un loop JIT que dispara GC.  NO invalida el
+     * boundary: la misma coleccion puede correr varias fases (minor: este
+     * root-scan + @c scan_jit_forwards; major: otro root-scan) sobre el mismo
+     * frame JIT llamador -- lo invalida el guard de la runtime-entry al salir. */
+    if (jit_boundary_valid_) {
+        const jit::JitScanStats stats = jit::scan_aot_frames(
+            &jit_precise_root_cb, &ctx, jit_boundary_pc_, jit_boundary_sp_);
+        stats_.precise_roots_marked += ctx.roots_marked;
+        stats_.precise_frames_scanned += stats.jit_frames;
+        return;
+    }
+
     /* INTERP/JIT: RBP del frame actual (major_gc).  Iniciamos la walk aqui;
      * el walker sigue la cadena hasta el bottom del stack. */
     const uint8_t *gc_rbp =
@@ -1135,6 +1152,18 @@ void jit_forward_cb(void *ctx, uint64_t value, jit::StackmapGcKind kind,
 void GcHeap::scan_jit_forwards() {
     if (forward_table_.empty()) return;
     if (jit::JitRegistry::instance().size() == 0) return;
+
+    /* INTERP+JIT: si la runtime-entry capturo el frame JIT llamador, usar el
+     * WALK POR TAMANO DE FRAME (mismo boundary que consumio el root-scan del
+     * minor).  Sin esto, un slot HOSTPTR en un frame JIT que apunta a un young
+     * evacuado quedaria stale (la cadena RBP se rompe en los frames C++ del
+     * runtime) -> UAF con el GC movible. */
+    if (jit_boundary_valid_) {
+        JitForwardCtx ctx{this, 0};
+        jit::scan_aot_frames(&jit_forward_cb, &ctx, jit_boundary_pc_,
+                             jit_boundary_sp_);
+        return;
+    }
 
     const uint8_t *gc_rbp =
         static_cast<const uint8_t *>(__builtin_frame_address(0));

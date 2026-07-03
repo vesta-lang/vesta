@@ -5514,6 +5514,23 @@ void Lowering::lower_while(ast::WhileStmt *s) {
                 fn_->values[vi.pre_loop].is_gc_object) {
                 fn_->values[vi.phi_value].is_gc_object = true;
             }
+            // Mismo razonamiento para is_host_ptr: si algun arg del PHI es un
+            // host_ptr (p.ej. un gc<T> o un malloc que entra por el back-edge),
+            // el PHI value DEBE heredar el flag.  Sin esto, el stackmap del GC
+            // etiqueta el slot como HANDLE en vez de HOSTPTR -> el scan preciso
+            // lo trata como un indice de handle (basura) y el forward-pass del
+            // GC movible NO reescribe el slot tras evacuar -> host_ptr rancio +
+            // objeto perdido (UAF).  Ademas LOAD/STORE emitirian mov en vez de
+            // movh.  Todos los args no-null de un mismo PHI comparten host-ness
+            // (null=0 es indiferente), asi que el OR es correcto.
+            if (static_cast<size_t>(post) < fn_->values.size() &&
+                fn_->values[post].is_host_ptr) {
+                fn_->values[vi.phi_value].is_host_ptr = true;
+            }
+            if (static_cast<size_t>(vi.pre_loop) < fn_->values.size() &&
+                fn_->values[vi.pre_loop].is_host_ptr) {
+                fn_->values[vi.phi_value].is_host_ptr = true;
+            }
         }
     } else {
         // Body termina con un return: el back-edge nunca se ejecuta.

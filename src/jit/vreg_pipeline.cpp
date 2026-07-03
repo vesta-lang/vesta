@@ -119,10 +119,21 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
 
     /* 5. Registrar en el JitRegistry con los stackmaps reales (commit 6):
      *    describen los GC roots vivos a traves de cada CALL (en slots),
-     *    para que el GC los escanee del stack durante un sweep. */
+     *    para que el GC los escanee del stack durante un sweep.
+     *
+     *    frame_size para el WALK POR TAMANO DE FRAME (scan_aot_frames, usado
+     *    tambien por el scan preciso del GC en modo interp+JIT): RBP - RSP en
+     *    un safepoint call = callee-saved pushes + spill_bytes.  Ese valor exacto
+     *    ya lo lleva cada stackmap (frame_size_for_scan(), identico en todos);
+     *    @c num_spill_slots por si solo NO incluye los callee-saved, asi que
+     *    registrarlo daria un RBP mal reconstruido y el GC no veria los roots.
+     *    Sin stackmaps (funcion sin calls) el valor no se consume en el walk. */
+    const uint32_t scan_frame_size =
+        pf.stackmaps.empty()
+            ? static_cast<uint32_t>(8u * ra.num_spill_slots)
+            : pf.stackmaps.front().frame_size;
     JitRegistry::instance().register_function(
-        code, code + bytes.size(), pf.stackmaps,
-        static_cast<uint32_t>(8u * ra.num_spill_slots), "vreg");
+        code, code + bytes.size(), pf.stackmaps, scan_frame_size, "vreg");
 
     return code;
 }
@@ -310,10 +321,17 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     }();
     if (dis) debug_dump_jit_code(fn.name + " [vreg-osr]", code, bytes.size());
 
-    /* 8. Registrar el blob C2 en el JitRegistry (stackmaps de sus CALLs). */
+    /* 8. Registrar el blob C2 en el JitRegistry (stackmaps de sus CALLs).
+     *    frame_size = RBP - RSP en un safepoint (callee-saved + spill_bytes),
+     *    tomado del stackmap: @c num_spill_slots por si solo no incluye los
+     *    callee-saved -> el scan_aot_frames reconstruiria mal el RBP.  Ver el
+     *    comentario equivalente en vreg_compile. */
+    const uint32_t scan_frame_size =
+        pf.stackmaps.empty()
+            ? static_cast<uint32_t>(8u * ra.num_spill_slots)
+            : pf.stackmaps.front().frame_size;
     JitRegistry::instance().register_function(
-        code, code + bytes.size(), pf.stackmaps,
-        static_cast<uint32_t>(8u * ra.num_spill_slots), "vreg-osr");
+        code, code + bytes.size(), pf.stackmaps, scan_frame_size, "vreg-osr");
 
     return code;
 }

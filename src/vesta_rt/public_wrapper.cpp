@@ -84,7 +84,59 @@ inline runtime::VM *as_vm(vrt_vm *v) noexcept {
 inline loader::ClassInfo *as_class(vrt_class *c) noexcept {
     return reinterpret_cast<loader::ClassInfo *>(c);
 }
+
+/*
+ * Guard del boundary del scan preciso de GC para el modo interp+JIT.
+ *
+ * Se construye AL INICIO de cada runtime-entry (@c vrt_*) que (a) el codigo
+ * JIT llama DIRECTAMENTE y (b) puede disparar una coleccion (alloc en el
+ * @c gc_heap del proceso).  Captura la frontera C<-JIT:
+ *
+ *   pc = __builtin_return_address(0)   -> direccion de retorno al codigo JIT.
+ *   sp = __builtin_frame_address(0)+16 -> RSP del frame JIT antes del @c call.
+ *
+ * El GC (@c scan_jit_roots_precise / @c scan_jit_forwards) sube por la pila con
+ * @c frame_size (@c scan_aot_frames) desde ese par, saltando los frames C++ del
+ * runtime que a -O0 rompen la cadena RBP (p.ej. @c lea rbp,[rsp+N]).  El dtor
+ * restaura el boundary previo -> solo es valido DURANTE esta llamada (nunca
+ * camina un frame JIT ya retornado; nesting seguro via save/restore).
+ *
+ * El @c +16 vale porque la entry hace @c push rbp; mov rbp,rsp (forzado por
+ * @c VRT_FORCE_FP): @c frame_address(0)=RBP, @c [RBP+8]=retorno,
+ * @c RBP+16=RSP del llamador justo antes del @c call.
+ */
+struct JitBoundaryGuard {
+    gc::GcHeap &h;
+    gc::GcHeap::JitScanBoundary prev;
+    JitBoundaryGuard(gc::GcHeap &heap, uint64_t pc, uint64_t sp) noexcept
+        : h(heap), prev(heap.jit_scan_boundary()) {
+        h.set_jit_scan_boundary(pc, sp);
+    }
+    ~JitBoundaryGuard() noexcept { h.restore_jit_scan_boundary(prev); }
+    JitBoundaryGuard(const JitBoundaryGuard &) = delete;
+    JitBoundaryGuard &operator=(const JitBoundaryGuard &) = delete;
+};
 } // namespace
+
+/* Fuerza frame pointer en la entry para que @c __builtin_frame_address(0) sea
+ * fiable (mismo mecanismo que @c VEX_GC_FORCE_FP en libvesta_gc). */
+#if defined(__GNUC__)
+#define VRT_FORCE_FP __attribute__((optimize("no-omit-frame-pointer")))
+#else
+#define VRT_FORCE_FP
+#endif
+
+/* Declara un @c JitBoundaryGuard local que captura el frame JIT llamador.  Los
+ * builtins se evaluan en el contexto de la entry (retorno + RBP de la entry). */
+#if defined(__GNUC__)
+#define VRT_CAPTURE_JIT_FRAME(p)                                                \
+    JitBoundaryGuard _jit_bnd(                                                  \
+        (p)->gc_heap,                                                           \
+        reinterpret_cast<uint64_t>(__builtin_return_address(0)),                \
+        reinterpret_cast<uint64_t>(__builtin_frame_address(0)) + 16u)
+#else
+#define VRT_CAPTURE_JIT_FRAME(p) ((void)0)
+#endif
 
 extern "C" {
 
@@ -103,14 +155,20 @@ uint32_t vrt_api_version(void) {
 /* GC                                                                       */
 /* ----------------------------------------------------------------------- */
 
-vrt_handle vrt_gc_alloc(vrt_proc *proc, size_t size) {
+VRT_FORCE_FP vrt_handle vrt_gc_alloc(vrt_proc *proc, size_t size) {
     if (!proc) return VRT_NULL_HANDLE;
-    return as_proc(proc)->gc_heap.alloc(size);
+    runtime::ProcessVM *p = as_proc(proc);
+    /* Capturar el frame JIT llamador: el alloc puede disparar minor/major_gc y
+     * el scan preciso necesita el par (pc,sp) para caminar por frame_size. */
+    VRT_CAPTURE_JIT_FRAME(p);
+    return p->gc_heap.alloc(size);
 }
 
-vrt_handle vrt_gc_alloc_pinned(vrt_proc *proc, size_t size) {
+VRT_FORCE_FP vrt_handle vrt_gc_alloc_pinned(vrt_proc *proc, size_t size) {
     if (!proc) return VRT_NULL_HANDLE;
-    return as_proc(proc)->gc_heap.alloc_pinned(size);
+    runtime::ProcessVM *p = as_proc(proc);
+    VRT_CAPTURE_JIT_FRAME(p);
+    return p->gc_heap.alloc_pinned(size);
 }
 
 /* Raw heap host (malloc/free): bloque no-GC, dereferenciable directo
@@ -1160,7 +1218,7 @@ vrt_class *vrt_findclass(vrt_proc *proc, uint64_t params_vaddr) {
     return reinterpret_cast<vrt_class *>(cls);
 }
 
-uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls) {
+VRT_FORCE_FP uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls) {
     if (!proc || !cls) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
@@ -1169,6 +1227,8 @@ uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls) {
         return nullptr;
     }
     runtime::ProcessVM *p = as_proc(proc);
+    /* El alloc de abajo puede disparar GC; capturar el frame JIT llamador. */
+    VRT_CAPTURE_JIT_FRAME(p);
     loader::ClassInfo *ci = reinterpret_cast<loader::ClassInfo *>(cls);
     /* gc_heap.alloc devuelve un GcHandle; deref para obtener host_ptr al
      * payload. */
@@ -1192,7 +1252,7 @@ uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls) {
     return payload;
 }
 
-vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls) {
+VRT_FORCE_FP vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls) {
     /* Misma logica que vrt_newobj + vrt_gc_handle_for_ptr combinados.
      * Optimizacion clave: gc_heap.alloc YA devuelve el handle, asi que
      * NO necesitamos hacer el lookup de ptr_to_handle_ que haria
@@ -1205,6 +1265,10 @@ vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls) {
         return VRT_NULL_HANDLE;
     }
     runtime::ProcessVM *p = as_proc(proc);
+    /* Frontera C<-JIT: el codigo JIT llama aqui directo para @c new X().  El
+     * alloc puede disparar minor/major_gc; el scan preciso de los frames JIT
+     * (roots young/old) arranca desde el par (pc,sp) que captura este guard. */
+    VRT_CAPTURE_JIT_FRAME(p);
     loader::ClassInfo *ci = reinterpret_cast<loader::ClassInfo *>(cls);
     const uint32_t handle = p->gc_heap.alloc(ci->instance_size);
     if (handle == VRT_NULL_HANDLE) {
@@ -1574,10 +1638,15 @@ void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
 /* GC_ALLOCP: alloc en GC heap + deref + devuelve host_ptr al payload.
  * Combinacion atomica que el opcode bytecode gcallocp implementa en
  * 1 instr.  Para el JIT usamos 1 CALL nativo en lugar de 2. */
-uint8_t *vrt_gc_alloc_payload(vrt_proc *proc, size_t size) {
+VRT_FORCE_FP uint8_t *vrt_gc_alloc_payload(vrt_proc *proc, size_t size) {
     if (!proc) return nullptr;
     runtime::ProcessVM *p = as_proc(proc);
-    vrt_handle h = vrt_gc_alloc(proc, size);
+    /* Capturar el frame JIT ANTES del alloc (dispara GC).  Se hace el alloc
+     * DIRECTO sobre gc_heap (no via vrt_gc_alloc) para no anidar dos guards:
+     * el interno pondria un boundary con retorno a ESTA funcion C++ (no al
+     * codigo JIT), rompiendo el walk mientras el GC corre. */
+    VRT_CAPTURE_JIT_FRAME(p);
+    const vrt_handle h = p->gc_heap.alloc(size);
     if (h == VRT_NULL_HANDLE) return nullptr;
     return p->gc_heap.deref(h);
 }
@@ -1585,9 +1654,12 @@ uint8_t *vrt_gc_alloc_payload(vrt_proc *proc, size_t size) {
 /* STRMAKE: %dst = strmake.handle vm_addr, byte_len.  La codificacion la
  * detectamos como UTF-8 por defecto (mismo path que el opcode bytecode);
  * el helper interno auto-compacta a ASCII si todos los bytes son < 0x80. */
-vrt_handle vrt_str_make(vrt_proc *proc, uint64_t vm_addr, uint32_t byte_len) {
+VRT_FORCE_FP vrt_handle vrt_str_make(vrt_proc *proc, uint64_t vm_addr,
+                                     uint32_t byte_len) {
     if (!proc) return VRT_NULL_HANDLE;
     runtime::ProcessVM *p = as_proc(proc);
+    /* La alocacion del StringObject puede disparar GC; capturar el frame JIT. */
+    VRT_CAPTURE_JIT_FRAME(p);
     if (byte_len > (1u << 24)) return VRT_NULL_HANDLE; /* sanity: 16 MB cap */
     /* Sprint string-perf-4 (2026-06-02): bypass del path antiguo
      * (heap std::vector + make_string_flat sin cache).  Delega al
@@ -1634,9 +1706,11 @@ uint64_t vrt_str_raw(vrt_proc *proc, vrt_handle h) {
 }
 
 /* STRCAT: %dst = strcat.handle a, b.  Crea un ROPE O(1) (lazy concat). */
-vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b) {
+VRT_FORCE_FP vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b) {
     if (!proc) return VRT_NULL_HANDLE;
     runtime::ProcessVM *p = as_proc(proc);
+    /* El nuevo StringObject concatenado se aloca en el GC; capturar el frame. */
+    VRT_CAPTURE_JIT_FRAME(p);
     return static_cast<vrt_handle>(runtime::strcat_public(
         p, static_cast<gc::GcHandle>(a), static_cast<gc::GcHandle>(b)));
 }

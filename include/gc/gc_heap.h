@@ -1495,6 +1495,59 @@ class GcHeap {
     }
 
     /**
+     * @brief Snapshot del boundary del scan preciso en modo interp+JIT.
+     *
+     * Lo usa el guard de la runtime-entry (@c vrt_*) para restaurar el estado
+     * previo al salir, de modo que el boundary solo sea valido DURANTE la
+     * llamada que lo fijo (no se camina un frame JIT ya retornado).
+     */
+    struct JitScanBoundary {
+        uint64_t pc = 0;   ///< PC de retorno al codigo JIT.
+        uint64_t sp = 0;   ///< RSP del frame JIT justo antes del @c call.
+        bool valid = false; ///< true si @c pc y @c sp son utilizables.
+    };
+
+    /**
+     * @brief Fija el boundary del WALK POR TAMANO DE FRAME en modo interp+JIT.
+     *
+     * Analogo a @c set_aot_scan_boundary pero para el proceso de la VM (interp +
+     * JIT), donde @c aot_precise_roots_ es false.  Lo fija cada runtime-entry
+     * @c vrt_* que puede colectar y que el codigo JIT llama DIRECTAMENTE,
+     * capturado en la frontera C<-JIT: @p pc es la direccion de retorno al
+     * codigo JIT y @p sp es el RSP de ese frame JIT justo antes del @c call.
+     * Mientras sea valido, @c scan_jit_roots_precise y @c scan_jit_forwards
+     * usan @c scan_aot_frames (reconstruye RBP con @c frame_size) en lugar de la
+     * cadena RBP -> saltan los frames C++ del runtime, que a -O0 rompen la
+     * cadena (p.ej. @c lea rbp,[rsp+N]).  Boundary SEPARADO del de AOT para no
+     * pisar su estado.
+     *
+     * @param pc direccion de retorno al codigo JIT (0 = invalida el boundary).
+     * @param sp RSP del frame JIT llamador antes del @c call.
+     */
+    void set_jit_scan_boundary(uint64_t pc, uint64_t sp) noexcept {
+        jit_boundary_pc_ = pc;
+        jit_boundary_sp_ = sp;
+        jit_boundary_valid_ = (pc != 0 && sp != 0);
+    }
+
+    /**
+     * @brief Devuelve el boundary JIT actual (para save/restore del guard).
+     */
+    JitScanBoundary jit_scan_boundary() const noexcept {
+        return JitScanBoundary{jit_boundary_pc_, jit_boundary_sp_,
+                               jit_boundary_valid_};
+    }
+
+    /**
+     * @brief Restaura un boundary JIT previamente guardado.
+     */
+    void restore_jit_scan_boundary(const JitScanBoundary &s) noexcept {
+        jit_boundary_pc_ = s.pc;
+        jit_boundary_sp_ = s.sp;
+        jit_boundary_valid_ = s.valid;
+    }
+
+    /**
      * @brief Devuelve un puntero al payload del objeto referenciado por @p
      * handle.
      *
@@ -2082,6 +2135,22 @@ class GcHeap {
     uint64_t aot_boundary_pc_ = 0;
     uint64_t aot_boundary_sp_ = 0;
     bool aot_boundary_valid_ = false;
+
+    /// Boundary del WALK POR TAMANO DE FRAME para el modo interp+JIT.  Lo fija
+    /// @c set_jit_scan_boundary en cada runtime-entry @c vrt_* que puede
+    /// colectar y que el codigo JIT llama DIRECTAMENTE, capturado en la frontera
+    /// C<-JIT.  Mientras sea valido, @c scan_jit_roots_precise y
+    /// @c scan_jit_forwards usan @c scan_aot_frames (frame_size) en vez de la
+    /// cadena RBP -> saltan los frames C++ del runtime (que a -O0 la rompen con
+    /// @c lea rbp,[rsp+N]).  SEPARADO del boundary AOT para no pisar su estado.
+    /// El guard de la runtime-entry lo fija al entrar y lo restaura al salir,
+    /// asi que solo es valido durante ESA llamada (evita caminar un frame ya
+    /// retornado).  A diferencia del AOT, NO se invalida dentro del scan porque
+    /// una sola coleccion puede correr varias fases (minor: roots + forwards;
+    /// major: roots) que comparten el mismo frame JIT llamador.
+    uint64_t jit_boundary_pc_ = 0;
+    uint64_t jit_boundary_sp_ = 0;
+    bool jit_boundary_valid_ = false;
 
     // ---- (iv) Free lists segregadas para slots OldGen liberados ----
     // Cada slot DEAD reusa los primeros 8 bytes de su payload como

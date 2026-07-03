@@ -603,9 +603,16 @@ void exec_instr_callvm(ProcessVM *vm, const DecodedInstr &instr) {
     // predicted-not-taken = ~1 ns.  Programs sin JIT no pagan overhead real.
     if (jit::g_pc_jit_active) {
         if (void *jit_fn = jit::lookup_jit_code_at_pc(addr)) {
+            // RIP al sitio de retorno ANTES de entrar al JIT: si el callee JIT
+            // dispara un GC, el scan preciso de raices del interprete halla el
+            // frame de este caller (aun en interp) via el stackmap del @sm que
+            // el emisor puso tras el CALLVM -- igual que el caso interp->interp
+            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
+            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
+            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));
-            write_rip(vm, ret_addr);
             return;
         }
     }
@@ -625,9 +632,16 @@ void exec_instr_callvm(ProcessVM *vm, const DecodedInstr &instr) {
          * a JIT en ESTA misma invocacion en lugar de esperar a la
          * siguiente -- elimina la latencia de 1 invocacion. */
         if (void *jit_fn = jit::lookup_jit_code_at_pc(addr)) {
+            // RIP al sitio de retorno ANTES de entrar al JIT: si el callee JIT
+            // dispara un GC, el scan preciso de raices del interprete halla el
+            // frame de este caller (aun en interp) via el stackmap del @sm que
+            // el emisor puso tras el CALLVM -- igual que el caso interp->interp
+            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
+            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
+            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));
-            write_rip(vm, ret_addr);
             return;
         }
     }
@@ -828,9 +842,16 @@ void exec_instr_callvmr(ProcessVM *vm, const DecodedInstr &instr) {
     // escriba el resultado ahi, sin tocar la pila VM.
     if (jit::g_pc_jit_active) {
         if (void *jit_fn = jit::lookup_jit_code_at_pc(addr)) {
+            // RIP al sitio de retorno ANTES de entrar al JIT: si el callee JIT
+            // dispara un GC, el scan preciso de raices del interprete halla el
+            // frame de este caller (aun en interp) via el stackmap del @sm que
+            // el emisor puso tras el CALLVM -- igual que el caso interp->interp
+            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
+            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
+            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));
-            write_rip(vm, ret_addr);
             return;
         }
     }
@@ -838,9 +859,16 @@ void exec_instr_callvmr(ProcessVM *vm, const DecodedInstr &instr) {
     if (jit::g_jit_threshold != UINT32_MAX) {
         jit::maybe_compile_callvm_target(vm, addr);
         if (void *jit_fn = jit::lookup_jit_code_at_pc(addr)) {
+            // RIP al sitio de retorno ANTES de entrar al JIT: si el callee JIT
+            // dispara un GC, el scan preciso de raices del interprete halla el
+            // frame de este caller (aun en interp) via el stackmap del @sm que
+            // el emisor puso tras el CALLVM -- igual que el caso interp->interp
+            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
+            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
+            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));
-            write_rip(vm, ret_addr);
             return;
         }
     }
