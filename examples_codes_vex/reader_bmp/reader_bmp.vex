@@ -1,0 +1,190 @@
+// =============================================================================
+// reader_bmp.vex - Migracion a Vex del proyecto Java ReaderBMP + JColorsTerm.
+//
+// Lee un BMP de 24 bits (BGR, sin compresion), imprime sus atributos de
+// cabecera y vuelca los pixeles a la terminal como bloques de color ANSI
+// truecolor (secuencia 48;2;r;g;b), replicando dump_buffer_cli de JColorsTerm.
+//
+// Objetivo del ejercicio: destapar bugs y limitaciones del lenguaje Vex.
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// FFI dinamico a msvcrt para I/O binario de fichero.
+// ---------------------------------------------------------------------------
+i64 g_msvcrt = 0;
+i64 g_fopen  = 0;
+i64 g_fread  = 0;
+i64 g_fseek  = 0;
+i64 g_ftell  = 0;
+i64 g_fclose = 0;
+
+void ensure_loaded() {
+    if (g_msvcrt != 0) {
+        return;
+    }
+    g_msvcrt = ffi_open("msvcrt.dll");
+    g_fopen  = ffi_sym(g_msvcrt, "fopen");
+    g_fread  = ffi_sym(g_msvcrt, "fread");
+    g_fseek  = ffi_sym(g_msvcrt, "fseek");
+    g_ftell  = ffi_sym(g_msvcrt, "ftell");
+    g_fclose = ffi_sym(g_msvcrt, "fclose");
+}
+
+// Lee el fichero completo a un buffer host (malloc).  Devuelve el puntero
+// (o null si falla) y escribe la longitud en out_len (via puntero).
+u8* read_whole_file(string path, i64* out_len) {
+    ensure_loaded();
+    u8* path_c = str_cstr(path);
+    u8* mode_c = str_cstr("rb");
+    if (path_c == null || mode_c == null) {
+        return null;
+    }
+    i64 fp = ffi_call(g_fopen, path_c, mode_c);
+    if (fp == 0) {
+        return null;
+    }
+    ffi_call(g_fseek, fp, 0, 2);      // SEEK_END
+    i64 size = ffi_call(g_ftell, fp);
+    ffi_call(g_fseek, fp, 0, 0);      // SEEK_SET (rewind)
+    if (size <= 0) {
+        ffi_call(g_fclose, fp);
+        return null;
+    }
+    u8* buf = malloc(size + 1);
+    i64 nread = ffi_call(g_fread, buf, 1, size, fp);
+    ffi_call(g_fclose, fp);
+    if (nread != size) {
+        free(buf);
+        return null;
+    }
+    buf[size] = 0;
+    *out_len = size;
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
+// Lectura little-endian desde el buffer.
+// ---------------------------------------------------------------------------
+i32 read_u16le(u8* buf, i32 off) {
+    i32 b0 = (i32) buf[off];
+    i32 b1 = (i32) buf[off + 1];
+    return b0 | (b1 << 8);
+}
+
+i32 read_u32le(u8* buf, i32 off) {
+    i32 b0 = (i32) buf[off];
+    i32 b1 = (i32) buf[off + 1];
+    i32 b2 = (i32) buf[off + 2];
+    i32 b3 = (i32) buf[off + 3];
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+}
+
+// ---------------------------------------------------------------------------
+// Cabecera BMP parseada (struct value-type).
+// ---------------------------------------------------------------------------
+struct BmpHeader {
+    i32 file_magic;      // 'BM' = 0x4D42
+    i32 size_img;        // tamano total declarado
+    i32 offset_data;     // offset a los pixeles
+    i32 size_header;     // tamano del DIB header (0x28)
+    i32 width;
+    i32 height;
+    i32 color_planes;
+    i32 bit_pixel;
+    i32 method_compression;
+    i32 size_img_raw;
+    i32 horizontal_res;
+    i32 vertical_res;
+    i32 color_palette;
+    i32 important_colors;
+}
+
+BmpHeader parse_header(u8* buf) {
+    BmpHeader h;
+    h.file_magic         = read_u16le(buf, 0);
+    h.size_img           = read_u32le(buf, 2);
+    h.offset_data        = read_u32le(buf, 10);
+    h.size_header        = read_u32le(buf, 14);
+    h.width              = read_u32le(buf, 18);
+    h.height             = read_u32le(buf, 22);
+    h.color_planes       = read_u16le(buf, 26);
+    h.bit_pixel          = read_u16le(buf, 28);
+    h.method_compression = read_u32le(buf, 30);
+    h.size_img_raw       = read_u32le(buf, 34);
+    h.horizontal_res     = read_u32le(buf, 38);
+    h.vertical_res       = read_u32le(buf, 42);
+    h.color_palette      = read_u32le(buf, 46);
+    h.important_colors   = read_u32le(buf, 50);
+    return h;
+}
+
+void print_attributes(BmpHeader h) {
+    println("File Header: ${h.file_magic:hex}");
+    println("Image Size: ${h.size_img} bytes");
+    println("Offset Init Data: ${h.offset_data}");
+    println("");
+    println("Header:");
+    println("  Size Header: ${h.size_header} bytes");
+    println("  Width: ${h.width} pixels");
+    println("  Height: ${h.height} pixels");
+    println("  Color Planes: ${h.color_planes}");
+    println("  Bits per Pixel: ${h.bit_pixel}");
+    println("Compression Method: ${h.method_compression}");
+    println("Raw Image Size: ${h.size_img_raw} bytes");
+    println("Horizontal Resolution: ${h.horizontal_res} pixels/meter");
+    println("Vertical Resolution: ${h.vertical_res} pixels/meter");
+    println("Color Palette: ${h.color_palette}");
+    println("Important Colors: ${h.important_colors}");
+}
+
+// ---------------------------------------------------------------------------
+// Volcado ANSI truecolor: replica dump_buffer_cli (BMP = bottom-up, BGR).
+// ---------------------------------------------------------------------------
+void dump_terminal(u8* buf, BmpHeader h) {
+    i32 width  = h.width;
+    i32 height = h.height;
+    i32 bytes_per_row = width * 3;
+    i32 padding = (4 - (bytes_per_row % 4)) % 4;
+    i32 row_padded = bytes_per_row + padding;
+    i32 base = h.offset_data;
+
+    i32 esc = 27;   // caracter ESC (0x1B)
+
+    // BMP se almacena de abajo hacia arriba: fila height-1 primero.
+    i32 fila = height - 1;
+    while (fila >= 0) {
+        i32 col = 0;
+        while (col < width) {
+            i32 index = base + fila * row_padded + col * 3;
+            i32 b = (i32) buf[index];
+            i32 g = (i32) buf[index + 1];
+            i32 r = (i32) buf[index + 2];
+            print("${esc:char}[48;2;${r};${g};${b}m ${esc:char}[0m");
+            col = col + 1;
+        }
+        println("");
+        fila = fila - 1;
+    }
+}
+
+i32 main(string[] args) {
+    // Path fijo: version portable que compila tambien a AOT (donde
+    // args_count/args_get no estan disponibles).  Ejecutar desde el
+    // directorio reader_bmp/.  La version con CLI esta en main.vex.
+    string path = "Ejemplo60x3.bmp";
+    i64 len = 0;
+    u8* buf = read_whole_file(path, &len);
+    if (buf == null) {
+        println("Error: no se pudo leer ${path}");
+        return 1;
+    }
+    println("Leidos ${len} bytes de ${path}");
+
+    BmpHeader h = parse_header(buf);
+    print_attributes(h);
+    println("");
+    dump_terminal(buf, h);
+
+    free(buf);
+    return 0;
+}

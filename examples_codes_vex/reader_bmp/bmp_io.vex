@@ -1,0 +1,68 @@
+// =============================================================================
+// bmp_io.vex - Lectura de fichero binario LIBRE DE LIBC (kernel32 directo).
+//
+// LIMITACION DE STDLIB: stdlib/vex/vex_io.vex solo cubre SALIDA a consola
+// (WriteConsole/WriteFile) y panic.  NO existe una primitiva stdlib para
+// LEER un fichero binario completo a un buffer.  Aqui se implementa con
+// kernel32 (CreateFileA/GetFileSizeEx/ReadFile/CloseHandle), CERO msvcrt,
+// para que funcione tambien en AOT/freestanding.  Candidata a stdlib.
+//
+// NOTA (workaround BUG host-ptr): NO se expone una funcion que DEVUELVA el
+// buffer (u8*) porque una funcion `u8* f()` con rama `return null` pierde el
+// flag is_host_ptr en su valor de retorno (ver BUGS_LIMITACIONES.md #1).  En
+// su lugar, el patron es de dos pasos: file_size() (devuelve i64) + el caller
+// hace malloc + file_read_into(path, buf, size) recibe el buffer como ARG
+// (los host-ptr pasados como argumento SI preservan su naturaleza).
+// =============================================================================
+
+extern "kernel32.dll" {
+    fn CreateFileA(u8* name, u32 access, u32 share, u64 sec,
+                   u32 disposition, u32 flags, u64 templ) -> u64;
+    fn GetFileSizeEx(u64 h, i64* size) -> i32;
+    fn ReadFile(u64 h, u8* buf, u32 n, u32* nread, u64 overlapped) -> i32;
+    fn CloseHandle(u64 h) -> i32;
+}
+
+// Abre `path`, obtiene su tamano y cierra.  Devuelve el tamano en bytes,
+// o -1 si el fichero no existe / no se pudo abrir.
+public i64 file_size(string path) {
+    u8* pc = str_cstr(path);
+    if (pc == null) {
+        return -1;
+    }
+    // GENERIC_READ=0x80000000, FILE_SHARE_READ=1, OPEN_EXISTING=3,
+    // FILE_ATTRIBUTE_NORMAL=0x80.  INVALID_HANDLE_VALUE = -1.
+    u64 h = CreateFileA(pc, (u32) 0x80000000, (u32) 1, (u64) 0,
+                        (u32) 3, (u32) 0x80, (u64) 0);
+    if (h == 0xFFFFFFFFFFFFFFFF) {
+        return -1;
+    }
+    i64 size = 0;
+    i32 gs = GetFileSizeEx(h, &size);
+    CloseHandle(h);
+    if (gs == 0) {
+        return -1;
+    }
+    return size;
+}
+
+// Lee hasta `size` bytes de `path` al buffer `buf` (host, provisto por el
+// caller).  Devuelve los bytes leidos, o -1 si error.
+public i64 file_read_into(string path, u8* buf, i64 size) {
+    u8* pc = str_cstr(path);
+    if (pc == null) {
+        return -1;
+    }
+    u64 h = CreateFileA(pc, (u32) 0x80000000, (u32) 1, (u64) 0,
+                        (u32) 3, (u32) 0x80, (u64) 0);
+    if (h == 0xFFFFFFFFFFFFFFFF) {
+        return -1;
+    }
+    u32 nread = 0;
+    i32 ok = ReadFile(h, buf, (u32) size, &nread, (u64) 0);
+    CloseHandle(h);
+    if (ok == 0) {
+        return -1;
+    }
+    return (i64) nread;
+}

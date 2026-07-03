@@ -1,0 +1,25 @@
+// =============================================================================
+// main_aot.vex - Variante SIN argumentos de CLI para compilacion AOT nativa.
+//
+// LIMITACION: args_count()/args_get() bajan a getargc/getarg, que en el
+// target AOT 'bare' fallan con "op getarg requiere scheduler/procesos"
+// (ver BUGS_LIMITACIONES.md).  Por eso esta variante fija el path en el
+// codigo, para poder generar un ejecutable nativo standalone (PE/ELF).
+// =============================================================================
+
+import "bmp";
+
+i32 main() {
+    string path = "Ejemplo60x3.bmp";
+
+    bmp.BMP_Image img = new bmp.BMP_Image();
+    if (img.load(path) == 0) {
+        println("El archivo ${path} no pudo encontrarse o no existe.");
+        return 1;
+    }
+
+    img.printBMPAttributes();
+    println("");
+    img.dumpTerminal();
+    return 0;
+}

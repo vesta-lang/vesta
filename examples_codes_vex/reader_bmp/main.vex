@@ -1,0 +1,41 @@
+// =============================================================================
+// main.vex - Punto de entrada de ReaderBMP migrado a Vex.
+//
+// Uso:  vm --run main.velb -- <archivo.bmp>
+//   (el separador `--` es necesario para pasar flags con guion al programa;
+//    ver BUGS_LIMITACIONES.md).
+// =============================================================================
+
+import "bmp";
+
+void print_help() {
+    println("Uso: reader_bmp <archivo.bmp>");
+    println("");
+    println("Lee un BMP de 24 bits (BGR, sin compresion), imprime sus");
+    println("atributos y vuelca los pixeles a la terminal en color truecolor.");
+}
+
+i32 main(string[] args) {
+    i32 argc = args_count();
+    if (argc == 0) {
+        print_help();
+        return 0;
+    }
+
+    string path = args_get(0);
+    if (str_equals(path, "-h") || str_equals(path, "--help")) {
+        print_help();
+        return 0;
+    }
+
+    bmp.BMP_Image img = new bmp.BMP_Image();
+    if (img.load(path) == 0) {
+        println("El archivo ${path} no pudo encontrarse o no existe.");
+        return 1;
+    }
+
+    img.printBMPAttributes();
+    println("");
+    img.dumpTerminal();
+    return 0;
+}

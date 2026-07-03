@@ -1,0 +1,32 @@
+// =============================================================================
+// colors.vex - Portado minimo de JColorsTerm: secuencias ANSI truecolor.
+//
+// La stdlib de Vex ya imprime con colores ANSI basicos (identificadores
+// magicos RED/GREEN/BOLD) pero NO expone truecolor 24-bit (48;2;r;g;b) que
+// JColorsTerm usa para volcar pixeles.  Este modulo construye esas
+// secuencias como strings, replicando JColorsTerm.
+// =============================================================================
+
+// Caracter ESC (0x1B) via chr(27).
+//
+// NOTA (workaround BUG format-spec): en un contexto de CONSTRUCCION de string
+// (return "...${x:char}...") el especificador de formato `:char` se IGNORA y
+// se imprime el valor decimal ("27") en lugar del caracter (ver
+// BUGS_LIMITACIONES.md).  Por eso usamos chr(27), que devuelve un string de
+// 1 caracter con el byte ESC y se interpola sin `:char`.
+
+// Secuencia de reset (equivale a JColorsTerm.RESET = "\033[0;0m").
+public string reset() {
+    return "${chr(27)}[0m";
+}
+
+// Construye la secuencia de color de FONDO truecolor (48;2;r;g;b), como el
+// constructor JColorsTerm(fg_negro, bg=color) usado en dump_buffer_cli.
+public string bg_rgb(i32 r, i32 g, i32 b) {
+    return "${chr(27)}[48;2;${r};${g};${b}m";
+}
+
+// Construye la secuencia de color de PRIMER PLANO truecolor (38;2;r;g;b).
+public string fg_rgb(i32 r, i32 g, i32 b) {
+    return "${chr(27)}[38;2;${r};${g};${b}m";
+}
