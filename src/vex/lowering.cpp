@@ -27489,6 +27489,29 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     st.operands = {v_to_store, addr};
     st.source_line = loc.line;
     fn_->append(current_block_, std::move(st));
+    // Write-barrier generacional old->young.  Al guardar una referencia GC
+    // (campo CLASS) en el campo de un objeto que puede ser OLD, registrar el
+    // CONTENEDOR en el remembered_set del GC para que el minor_gc encuentre el
+    // young alcanzable SOLO via este campo old->young.  Sin el barrier, el
+    // nursery preciso perderia ese young (UAF con el GC movible).  Se emite TRAS
+    // el STORE del puntero young.  Solo en interp/JIT (comparten el GcHeap con
+    // nursery real): en AOT (native_poo_) es NO-OP -- el nursery queda vacio
+    // (alloc_pinned -> OldGen) y el major escanea preciso via field-maps -> no
+    // se emite.  El contenedor `obj` es un host_ptr; GC_HANDLE_FOR_PTR lo mapea a
+    // su GcHandle.  GCWB_IR baja a `gcwb` (interp) o a vrt_gc_write_barrier
+    // (JIT); write_barrier() filtra por generacion (skip si el contenedor es
+    // YOUNG) -> el remembered_set solo acumula old->young reales.
+    if (ftyp.kind == PrimitiveKind::CLASS && !native_poo_) {
+        const ir::IrValueId v_cont_handle =
+            emit_gc_handle_for_ptr(obj, loc.line);
+        ir::IrInstr wb{};
+        wb.op = ir::IrOp::GCWB_IR;
+        wb.type = ir::IrType::VOID;
+        wb.dst = ir::IR_NO_VALUE;
+        wb.operands = {v_cont_handle};
+        wb.source_line = loc.line;
+        fn_->append(current_block_, std::move(wb));
+    }
     // Reassign-free del campo unique<T> via CALL al helper (1 instr, sin
     // diamante en el call site).  El helper hace null-guard internamente -> el
     // primer store (campo == 0) es un no-op.

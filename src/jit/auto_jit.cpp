@@ -236,6 +236,8 @@ VregEntries make_vreg_entries() {
         e.gc_deref = reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref);
         e.gc_handle =
             reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr);
+        e.gc_write_barrier =
+            reinterpret_cast<uint64_t>(g_runtime_entries->gc_write_barrier);
         e.raw_alloc = reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc);
         e.raw_free = reinterpret_cast<uint64_t>(g_runtime_entries->raw_free);
         e.gc_allocp =

@@ -73,6 +73,8 @@ struct VregEntries {
     uint64_t proc_pid = 0;     ///< vrt_proc_pid(proc) -> PID encoded (GETPID)
     uint64_t gc_deref = 0;  ///< vrt_gc_deref(proc, handle)
     uint64_t gc_handle = 0; ///< vrt_gc_handle_for_ptr(proc, host_ptr)
+    uint64_t gc_write_barrier =
+        0; ///< vrt_gc_write_barrier(proc, container_handle) -- GCWB_IR
     uint64_t raw_alloc = 0; ///< vrt_raw_alloc(proc, size)
     uint64_t raw_free = 0;  ///< vrt_raw_free(proc, host_ptr)
     uint64_t gc_allocp = 0; ///< vrt_gc_alloc_payload(proc, size) -> host_ptr

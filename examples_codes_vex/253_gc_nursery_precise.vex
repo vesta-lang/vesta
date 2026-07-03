@@ -1,0 +1,98 @@
+// 253 -- Nursery PRECISO primario + write-barrier old->young.
+//
+// Cierra la ultima pieza del GC preciso: el minor_gc del nursery usa raices
+// PRECISAS (stackmaps) + el remembered_set poblado por el write-barrier que el
+// frontend emite en cada store de campo-CLASS.  El caso critico: un objeto
+// YOUNG alcanzable SOLO via una referencia de campo old->young, retenido a
+// traves de 2+ minor_gc.  Sin el barrier + el nursery preciso, ese young se
+// perderia (UAF con el GC movible que evacua el nursery).
+//
+// Construccion: lista enlazada `gc<Node>` con campo `gc<Node> next`, APPEND A LA
+// COLA (no prepend).  Al crecer, la cabeza y los nodos tempranos se promueven al
+// OldGen (sobreviven a un minor); los ultimos anadidos quedan YOUNG.  El store
+// `tail.next = m` (tail YA OLD, m YOUNG) es un edge old->young -> dispara el
+// write-barrier -> el nodo young queda en el remembered_set.
+//
+// Tras `build`, sus locales (head/tail/m) desaparecen: la UNICA raiz es `keep`
+// (la cabeza, ya OLD).  La cola young es alcanzable SOLO via el edge old->young.
+// `churn` aloca basura joven que fuerza varios minor_gc: el primero DEBE retener
+// la cola young via el remembered_set (la cabeza es OLD -> el scan preciso young
+// no la marca; la cola no esta en ningun slot de pila).  Si el barrier no la
+// registro, la cola muere aqui y el sum sale mal / peta.
+//
+// N = 120000: sum(0..119999) = 119999*120000/2 = 7199940000; count = 120000.
+// R0 esperado = 42 (exito) en interp / JIT / AOT.  (En AOT el nursery queda
+// vacio -- alloc_pinned -> OldGen -- y el barrier es no-op; la lista sobrevive
+// por ser alcanzable via keep, escaneada preciso por el major via field-maps.)
+
+class Node {
+    i64 v;
+    gc<Node> next;
+    Node(i64 x) { this.v = x; this.next = null; }
+}
+
+// Append-a-la-cola: head fijo, tail avanza.  `tail.next = m` genera el edge
+// old->young cuando tail ya se promovio -> ejercita el write-barrier.
+gc<Node> build(i64 n) {
+    gc<Node> head = new Node(0);
+    gc<Node> tail = head;
+    i64 i = 1;
+    while (i < n) {
+        gc<Node> m = new Node(i);
+        tail.next = m;     // <-- store de campo-CLASS: emite gcwb (barrier)
+        tail = m;
+        i = i + 1;
+    }
+    return head;
+}
+
+// Cuenta los nodos alcanzables leyendo el campo gc `next`.
+i64 count_list(gc<Node> h) {
+    i64 acc = 0;
+    gc<Node> c = h;
+    while (c != null) {
+        acc = acc + 1;
+        c = c.next;
+    }
+    return acc;
+}
+
+// Suma los valores `v` recorriendo la cadena via el campo gc `next`.
+i64 sum_list(gc<Node> h) {
+    i64 acc = 0;
+    gc<Node> c = h;
+    while (c != null) {
+        acc = acc + c.v;
+        c = c.next;
+    }
+    return acc;
+}
+
+// Genera basura joven (no se retiene) para forzar varios minor_gc SIN mantener
+// nada vivo en locales: la unica lista viva es `keep` en main.
+void churn(i64 n) {
+    i64 i = 0;
+    gc<Node> junk = null;
+    while (i < n) {
+        junk = new Node(i);   // se sobrescribe -> muere en el proximo minor
+        i = i + 1;
+    }
+}
+
+i32 main() {
+    i64 N = 120000;
+    gc<Node> keep = build(N);   // cabeza OLD, cola YOUNG; barrier en tail.next
+
+    // Forzar 2+ minor_gc.  La cola young de `keep` solo es alcanzable via el
+    // edge old->young -> depende del remembered_set + nursery preciso.
+    churn(120000);
+    churn(120000);
+
+    i64 cnt = count_list(keep);
+    i64 s = sum_list(keep);
+
+    if (cnt == N && s == 7199940000) {
+        return 42;
+    }
+    return 0;
+}

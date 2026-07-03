@@ -3453,6 +3453,34 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* GCWB_IR: write-barrier generacional old->young.
+             *   vrt_gc_write_barrier(proc, container_handle) -> void.
+             * write_barrier() filtra por generacion (skip si el contenedor es
+             * YOUNG) y solo inserta en el remembered_set (host malloc, NO dispara
+             * GC) -> no es safepoint.  En HOST_LEAF (AOT native, sin nursery /
+             * sin runtime) es NO-OP: el GC del AOT usa alloc_pinned (todo OldGen)
+             * y el major escanea preciso via field-maps -> el barrier no aporta;
+             * se omite.  Marshalling 1-arg (proc=A0, handle=A1). */
+            case ir::IrOp::GCWB_IR: {
+                if (!vm || ent.gc_write_barrier == 0 || in.operands.size() != 1)
+                    break; // AOT / sin runtime: no-op
+                flush_pending();
+#if defined(_WIN32)
+                const MReg wb0 = MReg::RCX, wb1 = MReg::RDX;
+#else
+                const MReg wb0 = MReg::RDI, wb1 = MReg::RSI;
+#endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(wb1, 8),
+                                               vr(in.operands[0]))); // handle
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(wb0, 8),
+                    MOperand::make_reg(MReg::RBX, 8))); // proc
+                O.push_back(MInstr::make_call_abs(
+                    out.intern_imm64(ent.gc_write_barrier)));
+                break;
+            }
+
             /* GC_HANDLE_FOR_PTR: dst = vrt_gc_handle_for_ptr(proc, ptr).
              * Lookup en ptr_to_handle_ (unordered_map): mas dificil de
              * inline-ar que deref -> sigue via CALL.  Convencion host:

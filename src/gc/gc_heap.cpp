@@ -944,6 +944,7 @@ struct JitPreciseCtx {
     gc::GcHeap *heap;
     std::vector<gc::GcHandle> *worklist;
     uint64_t roots_marked;
+    bool young = false; ///< true -> try_mark_precise_young (minor_gc)
 };
 
 /**
@@ -957,10 +958,16 @@ struct JitPreciseCtx {
 void jit_precise_root_cb(void *ctx, uint64_t value, jit::StackmapGcKind kind,
                          const uint8_t * /*slot_addr*/) {
     auto *c = static_cast<JitPreciseCtx *>(ctx);
+    // Enrutar segun el modo: young (minor_gc) marca solo YOUNG; !young
+    // (major_gc) marca OLD.  Mismo walk de frames y stackmaps.
+    auto mark = [c](gc::GcHandle h) -> bool {
+        return c->young ? c->heap->try_mark_precise_young(h, *c->worklist)
+                        : c->heap->try_mark_precise_handle(h, *c->worklist);
+    };
     switch (kind) {
     case jit::StackmapGcKind::HANDLE: {
         const auto h = static_cast<gc::GcHandle>(value);
-        if (c->heap->try_mark_precise_handle(h, *c->worklist)) {
+        if (mark(h)) {
             ++c->roots_marked;
         }
         break;
@@ -970,8 +977,7 @@ void jit_precise_root_cb(void *ctx, uint64_t value, jit::StackmapGcKind kind,
         if (value == 0) break;
         const auto *ptr = reinterpret_cast<const uint8_t *>(value);
         const gc::GcHandle h = c->heap->handle_for_ptr(ptr);
-        if (h != gc::GC_NULL_HANDLE &&
-            c->heap->try_mark_precise_handle(h, *c->worklist)) {
+        if (h != gc::GC_NULL_HANDLE && mark(h)) {
             ++c->roots_marked;
         }
         break;
@@ -1023,13 +1029,14 @@ bool native_stack_bounds(const uint8_t *&low, const uint8_t *&high) noexcept {
 }
 } // namespace
 
-void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist) {
+void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
+                                    bool young) {
     /* Optimizacion clave: si no hay JIT funcs registradas, la
      * funcion sale inmediatamente sin walk.  Pre-D.3 (no hay JIT
      * code real) este es el camino del 100% de los major_gc. */
     if (jit::JitRegistry::instance().size() == 0) return;
 
-    JitPreciseCtx ctx{this, &worklist, 0};
+    JitPreciseCtx ctx{this, &worklist, 0, young};
 
     /* MODO AOT: WALK POR TAMANO DE FRAME desde el frame Vex capturado en la
      * frontera C<-Vex (set_aot_scan_boundary, fijado por cada runtime-entry del
@@ -1084,6 +1091,62 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist) {
 
     stats_.precise_roots_marked += ctx.roots_marked;
     stats_.precise_frames_scanned += stats.jit_frames;
+}
+
+// -------------------------------------------------------------------------
+//  Forward-update de host_ptrs en frames JIT tras evacuar (minor_gc).
+// -------------------------------------------------------------------------
+
+bool GcHeap::jit_forward_slot(uint64_t value, const uint8_t *slot_addr) {
+    if (slot_addr == nullptr || value == 0 || value < 256) return false;
+    const auto *p = reinterpret_cast<const uint8_t *>(
+        static_cast<uintptr_t>(value));
+    const uint8_t *const *fv = forward_table_.find(p);
+    if (fv == nullptr) return false;
+    const uint64_t new_v = reinterpret_cast<uint64_t>(*fv);
+    // slot_addr apunta al slot de 8 bytes en la pila NATIVA del hilo actual
+    // (escribible).  Sobrescribimos el host_ptr stale con el forwarded.
+    std::memcpy(const_cast<uint8_t *>(slot_addr), &new_v, sizeof(new_v));
+    return true;
+}
+
+namespace {
+/**
+ * @brief Contexto del walk de forward-update de frames JIT.
+ */
+struct JitForwardCtx {
+    gc::GcHeap *heap;
+    uint64_t updated;
+};
+
+/**
+ * @brief Callback de @c scan_jit_frames para el forward-update: por cada slot
+ *        HOSTPTR/STRING con un host_ptr evacuado, reescribe el slot con la nueva
+ *        direccion.  Los slots HANDLE no se tocan (el GcHandle es estable).
+ */
+void jit_forward_cb(void *ctx, uint64_t value, jit::StackmapGcKind kind,
+                    const uint8_t *slot_addr) {
+    auto *c = static_cast<JitForwardCtx *>(ctx);
+    if (kind == jit::StackmapGcKind::HANDLE) return; // handle estable
+    if (c->heap->jit_forward_slot(value, slot_addr)) ++c->updated;
+}
+} // namespace
+
+void GcHeap::scan_jit_forwards() {
+    if (forward_table_.empty()) return;
+    if (jit::JitRegistry::instance().size() == 0) return;
+
+    const uint8_t *gc_rbp =
+        static_cast<const uint8_t *>(__builtin_frame_address(0));
+    const uint8_t *stk_low = nullptr;
+    const uint8_t *stk_high = nullptr;
+    if (!native_stack_bounds(stk_low, stk_high) || stk_low == nullptr ||
+        stk_high == nullptr)
+        return; // sin limites fiables no es seguro caminar la cadena RBP
+    if (gc_rbp > stk_low) stk_low = gc_rbp;
+
+    JitForwardCtx ctx{this, 0};
+    jit::scan_jit_frames(&jit_forward_cb, &ctx, gc_rbp, stk_low, stk_high);
 }
 
 // -------------------------------------------------------------------------
@@ -1500,6 +1563,21 @@ void GcHeap::finalize_all_live() {
 // -------------------------------------------------------------------------
 
 void GcHeap::write_barrier(GcHandle old_handle) {
+    // Filtro generacional: solo interesa old->young.  Si el contenedor NO es
+    // OLD (YOUNG recien alocado, o handle invalido/muerto), no ensuciar el
+    // remembered_set: un contenedor YOUNG con refs young ya se alcanza por el
+    // BFS del nursery (o esta muerto), y al promoverse co-evacua sus refs en el
+    // mismo minor.  El barrier SOLO importa cuando un objeto YA OLD recibe una
+    // referencia young en un campo (store post-promocion).  Sound: sin el filtro
+    // solo habria mas entradas (over-approx); con el filtro el set queda minimo
+    // (old->young reales).  Barato: 1 lookup + 1 check de generacion.
+    if (old_handle == GC_NULL_HANDLE ||
+        old_handle >= static_cast<GcHandle>(handles_.size()))
+        return;
+    if (!handles_[old_handle].live || !handles_[old_handle].addr) return;
+    const auto *hdr =
+        reinterpret_cast<const GcHeader *>(handles_[old_handle].addr);
+    if (hdr->gen != GcGen::OLD) return; // contenedor YOUNG -> no-op
     remembered_set_.insert(old_handle);
 }
 
@@ -1627,9 +1705,13 @@ void GcHeap::scan_young_refs(GcHandle h, std::vector<GcHandle> &worklist) {
         if (ref_raw < nursery_base_ || ref_raw >= nursery_end_) continue;
 
         auto *ref_hdr = reinterpret_cast<GcHeader *>(ref_raw);
-        if (ref_hdr->color == GcColor::BLACK) continue;
+        if (ref_hdr->color != GcColor::WHITE) continue;
 
-        do_evacuate(ref);
+        // MARK+PUSH (NO evacuar aqui): dejamos que el BFS transitivo del
+        // minor_gc siga la cadena (old->young1->young2...) y que el bucle de
+        // evacuacion unificado mueva TODO.  Si evacuaramos aqui, los hijos
+        // transitivos del young directo-desde-old quedarian sin visitar.
+        ref_hdr->color = GcColor::BLACK;
         worklist.push_back(ref);
     }
 }
@@ -1752,25 +1834,53 @@ void GcHeap::minor_gc() {
         const char *v = std::getenv("VESTA_GC_PRECISE_ONLY");
         return v && v[0] == '1';
     }();
-    static const bool minor_young_precise = [] {
-        const char *v = std::getenv("VESTA_GC_YOUNG_PRECISE");
+    // VESTA_GC_CONSERVATIVE=1 (DEV-ONLY): re-activa el conservador del nursery
+    // como red de seguridad / diagnostico (espeja el major_gc).
+    static const bool minor_conservative_forced = [] {
+        const char *v = std::getenv("VESTA_GC_CONSERVATIVE");
         return v && v[0] == '1';
     }();
 #else
     constexpr bool minor_precise_only_forced = false;
-    constexpr bool minor_young_precise = false;
+    constexpr bool minor_conservative_forced = false;
 #endif
 
-    // Scan PRECISO del nursery (raices YOUNG via stackmaps).  Opt-in: hasta que
-    // exista el write-barrier old->young no puede ser el unico mecanismo.
-    if (minor_young_precise || minor_precise_only_forced)
-        scan_interp_young_roots_precise(worklist);
+    // FLIP A PRECISO-PRIMARIO del nursery (espeja el major_gc; cierra la ultima
+    // pieza del GC preciso).  El scan PRECISO del nursery (stackmaps VSMP ->
+    // try_mark_precise_young) es ahora el mecanismo PRIMARIO de raices YOUNG.
+    // El write-barrier old->young (gcwb, emitido por el frontend en cada store
+    // de campo-CLASS y filtrado a old->young reales por write_barrier()) puebla
+    // el remembered_set -> los young alcanzables SOLO via un campo de un objeto
+    // OLD (p.ej. la cola young de una lista cuyo head ya es OLD) sobreviven.  El
+    // scan CONSERVADOR de la pila deja de ser primario: sus falsos positivos
+    // (host_ptrs rancios) retenian young ya muertos -> no-determinismo.  Queda
+    // como fallback GATEADO (igual que en major_gc):
+    //   - VESTA_GC_CONSERVATIVE=1 -> conservador aditivo (diagnostico / dev).
+    //   - VESTA_GC_PRECISE_ONLY=1 -> preciso-puro incluso con .velb legacy.
+    // BACKWARD-COMPAT por-ejecutable: un .velb SIN seccion VSMP (legacy) no
+    // lleva stackmaps -> all_interp_frames_have_stackmaps() == false ->
+    // conservador primario para no perder raices de sus frames.
+    scan_interp_young_roots_precise(worklist);
 
-    // Conservador: PRIMARIO por defecto (unico mecanismo que hoy cubre las
-    // referencias old->young sin write-barrier).  Se omite solo si el usuario
-    // fuerza preciso-puro con VESTA_GC_PRECISE_ONLY=1 (herramienta de
-    // validacion del scan preciso, sabiendo que hoy pierde old->young).
-    const bool run_conservative_minor = !minor_precise_only_forced;
+    // Frames JIT nativos: raices YOUNG precisas via stackmaps (mismo walk que el
+    // major_gc pero enrutado a try_mark_precise_young).  Imprescindible al
+    // flipear a preciso-primario: el scan de interp SOLO cubre frames del
+    // interprete; un objeto young cuya unica raiz viva vive en un frame
+    // JIT-compilado (p.ej. el `head`/`tail` de un build() JIT-eado) se perderia
+    // sin esto.  En AOT (aot_precise_roots_) el nursery queda vacio -> se omite.
+    if (!aot_precise_roots_)
+        scan_jit_roots_precise(worklist, /*young=*/true);
+
+    // Decidir si corre el conservador de la pila del interprete (fallback).
+    bool run_conservative_minor = false;
+    if (!minor_precise_only_forced) {
+        if (minor_conservative_forced) {
+            run_conservative_minor = true; // forzado por env (aditivo)
+        } else if (root_provider_ != nullptr &&
+                   !root_provider_->all_interp_frames_have_stackmaps()) {
+            run_conservative_minor = true; // algun ejecutable legacy sin VSMP
+        }
+    }
 
     uint64_t rsp = 0, stack_high = 0;
     uint64_t regs[16];
@@ -1826,6 +1936,21 @@ void GcHeap::minor_gc() {
         }
     }
 
+    // Raices del REMEMBERED SET (write-barrier old->young): objetos OLD que
+    // recibieron una referencia YOUNG en un campo (store post-promocion).  Para
+    // cada uno, scan_young_refs MARCA+PUSH los young DIRECTOS al worklist (NO
+    // evacua).  DEBE correr ANTES del BFS de abajo: asi la cadena transitiva
+    // (old->young1->young2...) se sigue por el mismo BFS y la evacuacion
+    // unificada mueve TODO.  (Antes se escaneaba DESPUES de la evacuacion con un
+    // worklist local que se descartaba -> los hijos transitivos del young
+    // directo-desde-old se perdian.)
+    for (GcHandle old_h : remembered_set_) {
+        if (old_h >= static_cast<GcHandle>(handles_.size()) ||
+            !handles_[old_h].live || !handles_[old_h].addr)
+            continue;
+        scan_young_refs(old_h, worklist);
+    }
+
     // Bug fix 2026-05-23: BFS transitivo sobre YOUNG.  Sin esto, solo
     // los roots inmediatos (cur, head desde regs/stack) se marcaban,
     // pero la cadena interna `head.next.next.next...` quedaba WHITE
@@ -1874,12 +1999,9 @@ void GcHeap::minor_gc() {
         }
     }
 
-    // Raices adicionales del remembered_set: OLD objects con refs a YOUNG vivos
-    // Cubre el caso: objeto OLD escribe ref YOUNG via GCWB y el objeto YOUNG
-    // solo es alcanzable desde ese campo (sin handle propio en el bytecode)
-    std::vector<GcHandle> rs_worklist;
-    for (GcHandle old_h : remembered_set_)
-        scan_young_refs(old_h, rs_worklist);
+    // (El scan del remembered_set old->young corre ARRIBA, antes del BFS y de la
+    // evacuacion, para que la cadena transitiva old->young1->young2 se evacue
+    // completa.  Aqui ya no se re-escanea.)
 
     // los handles YOUNG no evacuados (color WHITE tras
     // scan) deben liberarse: handles_[h].live = false + payload_ptr
@@ -1924,6 +2046,14 @@ void GcHeap::minor_gc() {
         // Escribir de vuelta los regs actualizados (el GC pudo moverlos).
         root_provider_->write_back_regs(fwd_regs);
     }
+    // Forward-update de los host_ptrs GC guardados en frames JIT nativos (la
+    // pila VM la cubre update_stack_forwards arriba; los frames JIT-compilados
+    // tienen sus propios slots en la pila NATIVA).  Sin esto, un `gc<T>` vivo en
+    // un frame JIT a traves de la alocacion que disparo el minor quedaria stale
+    // -> el siguiente store de campo escribiria en el nursery ya reseteado
+    // (sintoma: la cola de una lista construida en un loop JIT se pierde tras el
+    // primer minor).  En AOT el nursery esta vacio -> se omite.
+    if (!aot_precise_roots_) scan_jit_forwards();
     forward_table_.clear();
 
     // Reset BLACK -> WHITE para los YOUNG no procesados (ninguno tras

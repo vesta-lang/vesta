@@ -1307,8 +1307,37 @@ class GcHeap {
      *
      * @param worklist worklist BFS donde se anaden los handles
      *                 precise marcados como BLACK.
+     * @param young    si true, enruta cada raiz a @c try_mark_precise_young
+     *                 (solo marca objetos YOUNG del nursery -- lo usa el
+     *                 minor_gc); si false (default), a @c try_mark_precise_handle
+     *                 (marca OLD -- lo usa el major_gc).
      */
-    void scan_jit_roots_precise(std::vector<GcHandle> &worklist);
+    void scan_jit_roots_precise(std::vector<GcHandle> &worklist,
+                                bool young = false);
+
+    /**
+     * @brief Actualiza los host_ptrs GC guardados en frames JIT nativos tras una
+     *        evacuacion del minor_gc (analogo a @c update_stack_forwards pero
+     *        para la pila NATIVA del JIT, no la pila VM).
+     *
+     * Cuando el minor_gc evacua un objeto YOUNG a OldGen, su payload cambia de
+     * direccion.  Los host_ptrs cacheados en slots de frames JIT-compilados (p.ej.
+     * un `gc<Node> tail` vivo a traves de una alocacion que disparo el minor)
+     * quedarian STALE -> el siguiente acceso al campo escribiria en memoria del
+     * nursery ya reseteada.  Recorre los frames JIT via stackmaps (usa el
+     * @c slot_addr que reporta @c scan_jit_frames) y, para cada slot HOSTPTR/
+     * STRING cuyo valor este en @c forward_table_, escribe la nueva direccion.
+     * Los slots HANDLE no necesitan actualizacion (el GcHandle es estable).
+     * No-op si @c forward_table_ esta vacio o no hay JIT funcs registradas.
+     */
+    void scan_jit_forwards();
+
+    /**
+     * @brief Si @c value esta en @c forward_table_, escribe la direccion
+     *        forwarded en @c *slot_addr (8 bytes).  Helper de @c scan_jit_forwards.
+     * @return true si aplico un forward.
+     */
+    bool jit_forward_slot(uint64_t value, const uint8_t *slot_addr);
 
     /**
      * @brief Scan PRECISO de raices de los frames del INTERPRETE via los
