@@ -1,0 +1,84 @@
+// 250 -- Compactacion mark-compact (sliding in-place) del OldGen.
+//
+// Valida el GC MOVIBLE del OldGen sobre un GRAFO DE OBJETOS real (lista
+// enlazada) cuyas referencias entre nodos son GcHandles ESTABLES: al deslizar
+// un nodo a su nueva posicion basta actualizar la tabla de handles; los handles
+// embebidos en los payloads (el campo `next`) NO cambian.  La traversal tras la
+// compactacion debe dar el MISMO resultado (los handles resuelven a las nuevas
+// direcciones via la tabla de handles); las raices host_ptr crudas de la pila
+// se reescriben al mover.
+//
+// La lista es grande (40000 nodos) para PROMOVERse al OldGen (desborda la
+// nursery ~1 MB varias veces).  Se recorta a la mitad (truncate_at) creando
+// huecos, y gc_collect() dispara el major_gc.  Con la compactacion activada
+// (VESTA_GC_COMPACT_ALWAYS=1) los nodos vivos se DESLIZAN in-place; el
+// verificador (VESTA_GC_VERIFY_MOVE=1) confirma 0 punteros colgantes.
+//
+// R0 esperado = 42 en los 3 modos (vm/jit/aot), con y sin compactacion.
+// (42 = codigo de exito si la lista conserva sus 20000 nodos tras compactar;
+// el exit-code de AOT es de 8 bits, por eso se codifica el exito como 42 en vez
+// de devolver el conteo directo.)  La compactacion es transparente: el
+// resultado es identico la active o no.
+//
+// En -m vm la compactacion (opt-in via VESTA_GC_COMPACT_ALWAYS=1) DESLIZA los
+// 20000 nodos vivos in-place (verificado: 0 punteros stale).  En -m jit/-m aot
+// la compactacion esta gateada OFF (frames nativos con host_ptrs / native_poo
+// con fields host_ptr crudos), asi que el programa corre por el camino
+// no-moving de siempre -> mismo resultado.
+
+class Node {
+    i64 v;
+    Node next;
+    Node(i64 x) { this.v = x; this.next = null; }
+}
+
+// Construye una lista de n nodos (valores 0..n-1); retorna la cabeza (ESCAPA).
+Node build(i64 n) {
+    Node head = null;
+    i64 i = 0;
+    while (i < n) {
+        Node m = new Node(i);
+        m.next = head;
+        head = m;
+        i = i + 1;
+    }
+    return head;
+}
+
+// Cuenta los nodos alcanzables desde la cabeza.
+i64 count_list(Node h) {
+    i64 acc = 0;
+    Node c = h;
+    while (c != null) {
+        acc = acc + 1;
+        c = c.next;
+    }
+    return acc;
+}
+
+// Corta la lista tras el nodo k: los nodos posteriores quedan inalcanzables
+// (basura en OldGen -> huecos que la compactacion elimina).
+void truncate_at(Node h, i64 k) {
+    Node c = h;
+    i64 i = 0;
+    while (i < k) {
+        c = c.next;
+        i = i + 1;
+    }
+    c.next = null;
+}
+
+i32 main() {
+    Node keep = build(40000);       // lista viva -> promovida a OldGen
+    i64 pre = count_list(keep);     // 40000
+
+    truncate_at(keep, 19999);        // deja 20000 nodos; el resto es basura
+
+    gc_collect();                     // colecta la basura; compacta los vivos
+
+    i64 cnt = count_list(keep);      // 20000 tras compactar (handles intactos)
+    if (cnt == 20000 && pre == 40000) {
+        return 42;                   // exito
+    }
+    return 0;
+}

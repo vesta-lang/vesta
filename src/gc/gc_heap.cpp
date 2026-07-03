@@ -1821,6 +1821,23 @@ void GcHeap::major_gc() {
             run_conservative = true;
         }
     }
+#if !defined(VESTA_GC_FREESTANDING)
+    // SOUNDNESS DEL MOVING: si la compactacion esta activada por OPT-IN, forzamos
+    // el scan CONSERVADOR (aditivo) para garantizar un MARK sin FALSOS NEGATIVOS
+    // (ninguna raiz viva queda WHITE).  El scan preciso por si solo tiene huecos
+    // de cobertura de stackmaps que, con el GC NO-MOVING, son benignos (se lee
+    // "stale pero valido"), pero con MOVING corromperian (el objeto vivo mal
+    // marcado se movería/reusaría).  Verificado: con el conservador, la
+    // compactacion mueve todos los objetos vivos con 0 punteros stale.
+    static const bool compaction_opt_in =
+        (std::getenv("VESTA_GC_COMPACT_ALWAYS") &&
+         std::getenv("VESTA_GC_COMPACT_ALWAYS")[0] == '1') ||
+        std::getenv("VESTA_GC_COMPACT_THRESHOLD") != nullptr;
+    if (compaction_opt_in && root_provider_ != nullptr &&
+        root_provider_->vm_mem() != nullptr) {
+        run_conservative = true;
+    }
+#endif
 
     uint64_t mj_rsp = 0, mj_high = 0;
     uint64_t mj_regs[16];
@@ -1894,6 +1911,23 @@ void GcHeap::major_gc() {
     for (size_t i = 0; i < worklist.size(); ++i)
         mark_reachable(worklist[i], worklist);
 
+    // ---- COMPACTACION (mark-compact sliding) vs SWEEP no-moving ----
+    //
+    // GATE de seguridad: la compactacion MUEVE objetos del OldGen, lo que solo
+    // es correcto en el camino INTERPRETE.  Alli los fields de referencia
+    // guardan un GcHandle ESTABLE (mover el objeto solo actualiza
+    // handles_[h].addr; las referencias-handle embebidas no cambian) y las
+    // UNICAS referencias crudas (host_ptr) viven en la pila/regs del VM, que se
+    // reescriben tras mover.  NO se compacta en AOT (native_poo guarda host_ptrs
+    // crudos en los fields, sin tabla de handles -> haria falta un field-map que
+    // no existe) ni con frames nativos JIT activos (host_ptrs en la pila nativa
+    // sin reescritura implementada aun).  En esos modos se cae al sweep
+    // no-moving de siempre -> comportamiento identico a hoy.
+    const bool can_compact_now =
+        root_provider_ != nullptr && !aot_precise_roots_ &&
+        root_provider_->vm_mem() != nullptr &&
+        jit::JitRegistry::instance().size() == 0;
+    if (!(can_compact_now && compact_old_gen())) {
     // SWEEP: WHITE (sin raiz) -> DEAD, y reconstruir free lists.
     //
     // (iv) GC no-moving: tras el sweep, los slots DEAD se vuelven a
@@ -1960,6 +1994,7 @@ void GcHeap::major_gc() {
             cursor += total;
         }
     }
+    } // fin del sweep no-moving (solo si NO se compacto arriba)
 
     // WEAK SWEEP: anular referencias debiles a objetos recolectados
     // Si el handle apuntado por una WeakEntry esta muerto, poner target =
@@ -1989,6 +2024,407 @@ void GcHeap::major_gc() {
     // inseguro).  El drenado ocurre en un safe point FUERA del GC (el runtime
     // lo dispara tras la instruccion que causo el GC, via has_pending +
     // run_pending_finalizers).
+}
+
+// -------------------------------------------------------------------------
+// Compactacion mark-compact SLIDING in-place del OldGen (copia escalar).
+// -------------------------------------------------------------------------
+//
+// Reemplaza al sweep cuando corre.  Desliza los objetos vivos (BLACK) hacia el
+// inicio de SU bloque, eliminando los huecos (WHITE colectados + DEAD previos).
+// Copia por objeto con @c memmove (escalar; SIMD = incremento posterior).  Cero
+// memoria extra: se compacta EN EL MISMO espacio (sin segundo semispace).
+//
+// Correccion (por que no hace falta un field-map en el interprete): los handles
+// son ESTABLES (indices en la HandleTable), asi que las referencias entre
+// objetos -que en el interprete se guardan como GcHandle en el payload- NO
+// cambian al mover.  Mover un objeto solo requiere: (1) actualizar
+// handles_[h].addr; (2) reubicar su entrada en ptr_to_handle_; (3) reescribir
+// las raices host_ptr crudas (pila+regs del VM) que apuntan a el (incluidos
+// punteros interiores tipo STRRAW) via remap por rango de slot.
+//
+// Fases:
+//   A. PLAN   : clasifica BLACK (mueve) vs WHITE/DEAD (colecta), calcula el
+//               destino de cada BLACK, sin mutar memoria.  Aborta (return false)
+//               si un BLACK no tiene handle valido (defensa anti-corrupcion) o
+//               si la fragmentacion esta por debajo del umbral (salvo forzado).
+//   B. FIN    : stagea los finalizadores de los colectados (memoria aun intacta).
+//   C. MOVE   : memmove de cada BLACK a su destino (orden creciente -> solape
+//               seguro: destino <= fuente siempre).
+//   D. MAPS   : actualiza handles_ (moved: nueva addr; collected: release) y
+//               ptr_to_handle_ (erase viejos, insert nuevos).
+//   E. RECOUNT: old_used_, bump_offset por bloque, limpia free-lists.
+//   F. ROOTS  : reescribe host_ptrs en pila+regs del VM (exacto + interior).
+//   G. VERIFY : (VESTA_GC_VERIFY_MOVE=1) 0 punteros a la region hueco.
+//
+// El caller (major_gc) restringe su uso al camino interprete (ver GATE alli).
+
+#if !defined(VESTA_GC_FREESTANDING)
+namespace {
+/// Lee un flag de entorno 0/1 una sola vez (static local en el caller).
+inline bool env_flag_1(const char *name) noexcept {
+    const char *v = std::getenv(name);
+    return v && v[0] == '1';
+}
+} // namespace
+#endif
+
+bool GcHeap::compact_old_gen() {
+#if defined(VESTA_GC_FREESTANDING)
+    // El GC freestanding (libvesta_gc / AOT) NUNCA compacta: en native_poo los
+    // fields de referencia guardan host_ptrs CRUDOS (sin tabla de handles) ->
+    // mover requeriria un field-map que no existe.  El caller (major_gc) ademas
+    // nunca invoca esto en modo AOT (gate can_compact_now: !aot_precise_roots_).
+    // Stub para no arrastrar getenv/atoi/std::sort/gc_dbg_emit al link
+    // freestanding (sin libc/stdio).
+    return false;
+#else
+    // ------------------------------------------------------------------
+    // OPT-IN ESTRICTO (seguridad).  La compactacion (moving) es correcta SOLO
+    // si el MARK que la precede es SOUND: marca BLACK toda raiz viva.  Hoy el
+    // scan preciso del interprete tiene HUECOS de cobertura (una raiz host_ptr
+    // en un registro no cubierto por el stackmap del PC de un safe point puede
+    // quedar sin marcar).  Con el GC NO-MOVING eso es benigno (el objeto queda
+    // DEAD pero su memoria intacta -> se lee "stale pero valido"; es justo lo
+    // que documenta el ejemplo 249).  Con MOVING, ese mismo hueco libera Y
+    // REUSA el espacio -> corrupcion.  Por eso la compactacion NO se activa por
+    // umbral de fragmentacion en produccion: requiere OPT-IN explicito.
+    //   - VESTA_GC_COMPACT_ALWAYS=1        -> compacta en cada major_gc.
+    //   - VESTA_GC_COMPACT_THRESHOLD=NN    -> compacta si fragmentacion > NN%.
+    // Sin ninguno de los dos, jamas compacta (impacto cero en el corpus/e2e).
+    // Cerrar los huecos del mark (scan preciso completo) es prerequisito para
+    // activarla por defecto -- ver el informe.
+    // ------------------------------------------------------------------
+    static const bool compact_always = env_flag_1("VESTA_GC_COMPACT_ALWAYS");
+    static const bool verify_move = env_flag_1("VESTA_GC_VERIFY_MOVE");
+    static const bool has_threshold =
+        std::getenv("VESTA_GC_COMPACT_THRESHOLD") != nullptr;
+    // Umbral de fragmentacion [0..1].  Sin la env var explicita: 1.0
+    // (inalcanzable -> nunca compacta por fragmentacion).  Valor invalido
+    // (<=0 o >=100) -> 0.5.
+    static const double frag_threshold = [] {
+        const char *v = std::getenv("VESTA_GC_COMPACT_THRESHOLD");
+        if (!v) return 1.0;
+        const int pct = std::atoi(v);
+        if (pct <= 0 || pct >= 100) return 0.5;
+        return static_cast<double>(pct) / 100.0;
+    }();
+    // Opt-in estricto: sin COMPACT_ALWAYS ni THRESHOLD explicito, no compactar.
+    if (!compact_always && !has_threshold) return false;
+
+    // vm_mem obligatorio para reescribir las raices (el caller ya lo verifico,
+    // pero re-chequeamos por seguridad: sin el, mover corromperia).
+    vm::VirtualMemory *mem =
+        root_provider_ ? root_provider_->vm_mem() : nullptr;
+    if (mem == nullptr) return false;
+
+    // Objeto vivo a mover: handle + posiciones + tamano de slot.
+    struct MovedObj {
+        GcHandle h;
+        uint8_t *old_hdr;
+        uint8_t *new_hdr;
+        size_t total;
+    };
+    // Objeto colectado (WHITE inalcanzable): posicion + tamano + finalizador.
+    struct CollectedObj {
+        uint8_t *hdr;
+        size_t total;
+        bool has_fin;
+    };
+
+    std::vector<MovedObj> moved;
+    std::vector<CollectedObj> collected;
+    std::vector<size_t> new_bump(old_blocks_.size(), 0);
+    std::vector<size_t> old_bump(old_blocks_.size(), 0);
+
+    size_t live_bytes = 0, dead_bytes = 0;
+
+    // ---- Fase A: PLAN (sin mutar memoria) ----
+    for (size_t bi = 0; bi < old_blocks_.size(); ++bi) {
+        auto &block = old_blocks_[bi];
+        old_bump[bi] = block.bump_offset;
+        uint8_t *cursor = block.ptr;
+        uint8_t *end = block.ptr + block.bump_offset;
+        uint8_t *dest = block.ptr; // objetivo del sliding
+        while (cursor + sizeof(GcHeader) <= end) {
+            auto *hdr = reinterpret_cast<GcHeader *>(cursor);
+            if (hdr->size == 0) break;
+            const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+
+            if (hdr->color == GcColor::BLACK) {
+                uint8_t *old_payload = cursor + sizeof(GcHeader);
+                const GcHandle h = ptr_to_handle_.find(old_payload);
+                // Un objeto vivo SIN handle valido apuntando exactamente a este
+                // slot no se puede reubicar de forma segura (no sabriamos que
+                // handle actualizar).  Abortamos TODA la compactacion sin haber
+                // mutado nada -> el caller correra el sweep normal.  No deberia
+                // ocurrir (cada alloc registra su payload en ptr_to_handle_).
+                if (h == GC_NULL_HANDLE || h >= handles_.size() ||
+                    !handles_[h].live || handles_[h].addr != cursor) {
+                    gc_dbg_emit("[gc-compact] abort: BLACK sin handle valido "
+                                "(cursor=%p)\n",
+                                (void *)cursor);
+                    return false;
+                }
+                moved.push_back({h, cursor, dest, total});
+                dest += total;
+                live_bytes += total;
+            } else {
+                // WHITE (inalcanzable, a colectar) o DEAD (ya colectado): hueco.
+                if (hdr->color == GcColor::WHITE) {
+                    collected.push_back(
+                        {cursor, total, hdr->has_finalizer != 0});
+                }
+                dead_bytes += total;
+            }
+            cursor += total;
+        }
+        new_bump[bi] = static_cast<size_t>(dest - block.ptr);
+    }
+
+    // Gate de fragmentacion: si no se fuerza y hay pocos huecos, no vale la pena
+    // mover (el sweep no-moving es mas barato).
+    const size_t total_bytes = live_bytes + dead_bytes;
+    if (!compact_always) {
+        if (total_bytes == 0) return false;
+        const double frag =
+            static_cast<double>(dead_bytes) / static_cast<double>(total_bytes);
+        if (frag < frag_threshold) return false;
+    }
+
+    // Si nada se mueve fisicamente y no hay nada que colectar, no aporta;
+    // dejamos el sweep normal (que ademas repuebla free-lists).  Con
+    // compact_always seguimos para EJERCITAR el camino aunque sea no-op.
+    bool any_physical_move = false;
+    for (const auto &m : moved)
+        if (m.new_hdr != m.old_hdr) {
+            any_physical_move = true;
+            break;
+        }
+    if (!compact_always && !any_physical_move && collected.empty())
+        return false;
+
+    // ---- Fase B: FINALIZADORES de los colectados (box aun intacto) ----
+    for (const auto &c : collected) {
+        if (c.has_fin) {
+            auto *hdr = reinterpret_cast<GcHeader *>(c.hdr);
+            stage_finalizer(hdr, c.hdr + sizeof(GcHeader));
+        }
+    }
+
+    // ---- Fase C: MOVER (memmove sliding) ----
+    // Orden creciente de old_hdr por bloque -> new_hdr <= old_hdr siempre y las
+    // regiones destino nunca pisan una fuente aun no procesada.  memmove maneja
+    // el solape del propio objeto.
+    for (const auto &m : moved) {
+        if (m.new_hdr != m.old_hdr) std::memmove(m.new_hdr, m.old_hdr, m.total);
+        // El color BLACK se preserva; el PRE-MARK del proximo major_gc lo
+        // blanqueara.  gen/size/finalizer se copian con el memmove.
+    }
+
+    // ---- Fase D: FIX MAPS ----
+    // 1. Erase de las claves viejas de los movidos + update handles_ (antes de
+    //    insertar las nuevas para no colisionar claves).
+    for (const auto &m : moved) {
+        ptr_to_handle_.erase(m.old_hdr + sizeof(GcHeader));
+        handles_[m.h].addr = m.new_hdr;
+    }
+    // 2. Colectados: erase de su clave del mapa inverso.  NO se libera el
+    //    handle (handles_[h].live queda como estaba), IGUAL que el sweep
+    //    no-moving del camino VM: "el handle colgante es benigno (el programa
+    //    ya lo solto)".  Esto iguala la semantica del sweep no-moving y evita
+    //    que la compactacion, ante un MARK con huecos (una raiz viva marcada
+    //    WHITE por error), destruya handles que el programa sigue usando -- el
+    //    no-moving los deja leer memoria "stale pero valida"; la compactacion,
+    //    al no mover esos objetos WHITE (solo se mueven los BLACK), preserva su
+    //    memoria intacta salvo que un objeto deslizado la reuse.  El caso de un
+    //    handle libre reutilizado por un alloc futuro se comporta igual que en
+    //    el no-moving (la memoria del slot DEAD se recicla).  Si el mark fuese
+    //    completo, estos colectados serian realmente inalcanzables y el handle
+    //    colgante nunca se usaria.
+    for (const auto &c : collected) {
+        uint8_t *payload = c.hdr + sizeof(GcHeader);
+        ptr_to_handle_.erase(payload);
+        stats_.freed_count++;
+        stats_.freed_bytes += c.total;
+    }
+    // 3. Insert de las claves nuevas de los movidos.
+    for (const auto &m : moved)
+        ptr_to_handle_.insert_or_assign(m.new_hdr + sizeof(GcHeader), m.h);
+
+    // ---- Fase E: RECUENTO + free-lists ----
+    freelist_clear();
+    stats_.old_freelist_bytes = 0;
+    for (size_t bi = 0; bi < old_blocks_.size(); ++bi)
+        old_blocks_[bi].bump_offset = new_bump[bi];
+    old_used_ = live_bytes;
+
+    // ---- Fase F: REESCRITURA DE RAICES (pila + regs del VM) ----
+    // Construimos rangos [old_start, old_end) con su delta (new-old).  Un
+    // host_ptr en pila/regs que caiga en un rango movido se remapea +delta
+    // (cubre el inicio del payload y punteros interiores tipo STRRAW).  Las
+    // referencias-handle NO se tocan (son indices pequenos, filtrados por
+    // v < 65536).
+    struct Range {
+        uint64_t old_start;
+        uint64_t old_end;
+        int64_t delta;
+    };
+    std::vector<Range> ranges;
+    ranges.reserve(moved.size());
+    for (const auto &m : moved) {
+        if (m.new_hdr == m.old_hdr) continue; // no se movio
+        ranges.push_back(
+            {reinterpret_cast<uint64_t>(m.old_hdr),
+             reinterpret_cast<uint64_t>(m.old_hdr + m.total),
+             static_cast<int64_t>(reinterpret_cast<intptr_t>(m.new_hdr) -
+                                  reinterpret_cast<intptr_t>(m.old_hdr))});
+    }
+    std::sort(ranges.begin(), ranges.end(),
+              [](const Range &a, const Range &b) {
+                  return a.old_start < b.old_start;
+              });
+    auto remap = [&](uint64_t v) -> uint64_t {
+        if (ranges.empty()) return v;
+        // Busqueda binaria: mayor old_start <= v.
+        size_t lo = 0, hi = ranges.size();
+        while (lo < hi) {
+            const size_t mid = (lo + hi) / 2;
+            if (ranges[mid].old_start <= v)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo == 0) return v;
+        const Range &r = ranges[lo - 1];
+        if (v >= r.old_start && v < r.old_end)
+            return static_cast<uint64_t>(static_cast<int64_t>(v) + r.delta);
+        return v;
+    };
+
+    if (!ranges.empty()) {
+        uint64_t rsp = 0, high = 0;
+        uint64_t regs[16];
+        if (root_provider_->vm_stack_regs(rsp, high, regs)) {
+            const uint64_t lo = root_provider_->stack_low_water();
+            const uint64_t start = (lo != 0 && lo < rsp) ? lo : rsp;
+            if (start < high && (high - start) < (16 * 1024 * 1024)) {
+                for (uint64_t a = start; a + 8 <= high; a += 8) {
+                    const uint64_t v = mem->read_u64(a);
+                    if (v < 65536) continue;
+                    const uint64_t nv = remap(v);
+                    if (nv != v) mem->write_bytes(a, &nv, 8);
+                }
+            }
+            bool regs_changed = false;
+            for (int i = 0; i < 16; ++i) {
+                const uint64_t v = regs[i];
+                if (v < 65536) continue;
+                const uint64_t nv = remap(v);
+                if (nv != v) {
+                    regs[i] = nv;
+                    regs_changed = true;
+                }
+            }
+            if (regs_changed) root_provider_->write_back_regs(regs);
+        }
+    }
+
+    // ---- Fase G: VERIFICADOR DE MOVING (VESTA_GC_VERIFY_MOVE=1, DEV-ONLY) ----
+    // Comprueba que NINGUNA raiz (pila+regs) ni campo-puntero de ningun objeto
+    // vivo apunta a la region HUECO liberada [ptr+new_bump, ptr+old_bump) de
+    // cada bloque -> 0 punteros colgantes/stale.  Un puntero real no-reescrito
+    // a un objeto movido cae justo ahi (los objetos deslizan hacia abajo, sus
+    // posiciones viejas quedan en el hueco).  Freestanding-safe (gateado).
+    if (verify_move) {
+        // Rangos hueco [ptr+new_bump, ptr+old_bump) por bloque.
+        std::vector<Range> holes;
+        for (size_t bi = 0; bi < old_blocks_.size(); ++bi) {
+            const uint64_t hs =
+                reinterpret_cast<uint64_t>(old_blocks_[bi].ptr) + new_bump[bi];
+            const uint64_t he =
+                reinterpret_cast<uint64_t>(old_blocks_[bi].ptr) + old_bump[bi];
+            if (he > hs) holes.push_back({hs, he, 0});
+        }
+        auto in_hole = [&](uint64_t v) -> bool {
+            for (const auto &r : holes)
+                if (v >= r.old_start && v < r.old_end) return true;
+            return false;
+        };
+        uint64_t stale_roots = 0, stale_payload = 0;
+
+        // Raices: pila + regs (tras la reescritura).
+        uint64_t rsp = 0, high = 0;
+        uint64_t regs[16];
+        if (root_provider_->vm_stack_regs(rsp, high, regs)) {
+            const uint64_t lo = root_provider_->stack_low_water();
+            const uint64_t start = (lo != 0 && lo < rsp) ? lo : rsp;
+            if (start < high && (high - start) < (16 * 1024 * 1024)) {
+                for (uint64_t a = start; a + 8 <= high; a += 8) {
+                    const uint64_t v = mem->read_u64(a);
+                    if (v < 65536) continue;
+                    if (in_hole(v)) {
+                        ++stale_roots;
+                        gc_dbg_emit("[gc-verify-move] STALE root @vm=%llu "
+                                    "v=0x%llx\n",
+                                    (unsigned long long)a,
+                                    (unsigned long long)v);
+                    }
+                }
+            }
+            for (int i = 0; i < 16; ++i) {
+                const uint64_t v = regs[i];
+                if (v < 65536) continue;
+                if (in_hole(v)) {
+                    ++stale_roots;
+                    gc_dbg_emit("[gc-verify-move] STALE reg r%d v=0x%llx\n", i,
+                                (unsigned long long)v);
+                }
+            }
+        }
+
+        // Campos-puntero de cada objeto vivo (movido o no): recorrer los
+        // payloads y buscar words que apunten al hueco.  En el interprete los
+        // fields de referencia son HANDLES (indices, < 65536 casi siempre), no
+        // host_ptrs -> stale_payload debe ser 0.  Si NO lo es, es evidencia de
+        // que algun field guarda un host_ptr crudo (viola el modelo) y hay que
+        // PARAR: un field-map seria necesario.
+        for (auto &block : old_blocks_) {
+            uint8_t *cursor = block.ptr;
+            uint8_t *end = block.ptr + block.bump_offset;
+            while (cursor + sizeof(GcHeader) <= end) {
+                auto *hdr = reinterpret_cast<GcHeader *>(cursor);
+                if (hdr->size == 0) break;
+                const size_t total =
+                    (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+                uint8_t *pl = cursor + sizeof(GcHeader);
+                const size_t sz = hdr->size;
+                for (size_t off = 0; off + 8 <= sz; off += 8) {
+                    uint64_t v;
+                    std::memcpy(&v, pl + off, 8);
+                    if (v < 65536) continue;
+                    if (in_hole(v)) {
+                        ++stale_payload;
+                        gc_dbg_emit("[gc-verify-move] STALE payload cursor=%p "
+                                    "off=%zu v=0x%llx\n",
+                                    (void *)cursor, off,
+                                    (unsigned long long)v);
+                    }
+                }
+                cursor += total;
+            }
+        }
+
+        gc_dbg_emit("[gc-verify-move] compacted moved=%zu collected=%zu "
+                    "live=%zu freed=%zu stale_roots=%llu stale_payload=%llu\n",
+                    moved.size(), collected.size(), live_bytes, dead_bytes,
+                    (unsigned long long)stale_roots,
+                    (unsigned long long)stale_payload);
+        gc_debug_flush();
+    }
+
+    return true;
+#endif // VESTA_GC_FREESTANDING
 }
 
 // -------------------------------------------------------------------------

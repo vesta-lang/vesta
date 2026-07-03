@@ -2294,6 +2294,36 @@ class GcHeap {
      * embebidos en los slots y se sobrescribiran al re-push.
      */
     void freelist_clear() noexcept;
+
+    /**
+     * @brief Compactacion mark-compact SLIDING in-place del OldGen.
+     *
+     * Desliza los objetos vivos (BLACK) hacia el inicio de su bloque,
+     * eliminando los huecos de los objetos colectados (WHITE) y de los slots
+     * ya DEAD.  Copia ESCALAR (@c memmove; sin SIMD).  Cero memoria extra: se
+     * compacta EN EL MISMO espacio (no hay segundo semispace).  Reemplaza al
+     * sweep cuando corre (el caller no debe barrer despues).
+     *
+     * Correccion del moving: los handles son ESTABLES (indices en la
+     * HandleTable), asi que mover un objeto solo requiere actualizar
+     * @c handles_[h].addr; las referencias-handle embebidas en los payloads NO
+     * cambian.  Las UNICAS referencias crudas a payloads (host_ptrs) viven en
+     * las raices del interprete (pila + regs del VM) y se reescriben aqui via
+     * remap por rango de slot (cubre punteros al inicio del payload y punteros
+     * interiores tipo STRRAW).  El mapa inverso @c ptr_to_handle_ se actualiza
+     * al mover.
+     *
+     * SOLO es correcto para el camino INTERPRETE (fields = GcHandle).  El caller
+     * (@c major_gc) restringe su uso a ese camino (ver "GATE" alli): NO corre en
+     * AOT (native_poo: los fields guardan host_ptrs crudos, sin tabla de
+     * handles -> haria falta un field-map que no existe) ni con frames nativos
+     * JIT activos (host_ptrs en la pila nativa sin reescritura implementada).
+     *
+     * @return true si compacto (el caller NO debe barrer); false si no aplica
+     *         (fragmentacion por debajo del umbral, o abortado por seguridad)
+     *         -> el caller corre el sweep normal.
+     */
+    bool compact_old_gen();
 };
 } // namespace gc
 
