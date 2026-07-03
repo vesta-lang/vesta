@@ -144,6 +144,109 @@
 }
 
 // ===========================================================================
+//  __vex_swapctx: materializacion NATIVA del primitivo abstracto de
+//  fiber-switch (builtin `fiber_swapctx`) en el path AOT (FN.2).
+// ===========================================================================
+// A diferencia de `fiber_switch` (arriba), cuyo contexto es UN qword (RSP) y
+// exige `fiber_init` para preparar la pila, este switch usa el MISMO layout de
+// contexto que el opcode VM `swapctx` del interprete (FN.1), de modo que el
+// MISMO cuerpo Vex (test 235) inicializa el ctx igual en -m vm y -m aot:
+//
+//   ctx = i64[19] (152 bytes).  Sub-layout que usa el nativo (offsets en bytes):
+//     [ 0] PC   (direccion de reanudacion; en el arranque = fiber_entry(body))
+//     [ 8] SP   (RSP de la fibra; en el arranque = cima de su pila)
+//     [16] BP   (RBP)
+//     [24] rbx
+//     [32] r12
+//     [40] r13
+//     [48] r14
+//     [56] r15
+//     [64] rdi  (solo Win64)
+//     [72] rsi  (solo Win64)
+//   El resto de slots ([80..] / R0..R15 del layout VM) no lo usa el nativo.
+//
+// Semantica (identica a fiber_swapctx(from,to) del builtin): GUARDA el contexto
+// actual en `from_ctx` y CARGA `to_ctx`.  El frontend emite
+// `CALL __vex_swapctx(to_ctx, from_ctx)` -> arg0 = to (cargar), arg1 = from
+// (guardar).  Como es una CALL nativa, basta preservar los callee-saved (los
+// caller-saved ya los salva el llamante por ABI): guardamos rbp, rbx, r12-r15
+// (SysV) o + rdi, rsi (Win64).  PC guardado = retaddr de la CALL; SP guardado =
+// RSP del llamante tras el ret.  Al reanudar, la ejecucion continua justo tras
+// la llamada, con los callee-saved restaurados.
+//
+// PRIMER ARRANQUE (ctx = {PC=body, SP=top, BP=top, callee-saved=0}): carga
+// rsp=top, rbp=top, callee-saved=0 y `jmp body`; el prologo NATIVO del cuerpo
+// (push rbp; mov rbp,rsp; sub rsp,N) monta su marco sobre la pila de la fibra.
+//
+// `noinfer`: mismo motivo que fiber_switch -- el bloque es asm verbatim; no
+// inferir clobbers ni envolver (nosotros salvamos/restauramos todo a mano de
+// forma balanceada), para que el switch sea simetrico y correcto.
+
+/**
+ * @brief Context-switch nativo del primitivo abstracto de fibras (SysV).
+ * @param to_ctx   (rdi) contexto a CARGAR (salta a el).
+ * @param from_ctx (rsi) contexto donde GUARDAR el estado actual.
+ */
+@Target("!os:windows")
+@Naked public void __vex_swapctx(u64 to_ctx, u64 from_ctx) {
+    asm volatile noinfer {
+        mov rax, [rsp]
+        mov [rsi], rax
+        lea rax, [rsp + 8]
+        mov [rsi + 8], rax
+        mov [rsi + 16], rbp
+        mov [rsi + 24], rbx
+        mov [rsi + 32], r12
+        mov [rsi + 40], r13
+        mov [rsi + 48], r14
+        mov [rsi + 56], r15
+        mov rax, [rdi]
+        mov rbp, [rdi + 16]
+        mov rbx, [rdi + 24]
+        mov r12, [rdi + 32]
+        mov r13, [rdi + 40]
+        mov r14, [rdi + 48]
+        mov r15, [rdi + 56]
+        mov rsp, [rdi + 8]
+        jmp rax
+    }
+}
+
+/**
+ * @brief Context-switch nativo del primitivo abstracto de fibras (Win64).
+ * @copydetails __vex_swapctx
+ * @note Win64: args en rcx(to)/rdx(from); callee-saved incluye rdi/rsi.
+ */
+@Target("os:windows")
+@Naked public void __vex_swapctx(u64 to_ctx, u64 from_ctx) {
+    asm volatile noinfer {
+        mov rax, [rsp]
+        mov [rdx], rax
+        lea rax, [rsp + 8]
+        mov [rdx + 8], rax
+        mov [rdx + 16], rbp
+        mov [rdx + 24], rbx
+        mov [rdx + 32], r12
+        mov [rdx + 40], r13
+        mov [rdx + 48], r14
+        mov [rdx + 56], r15
+        mov [rdx + 64], rdi
+        mov [rdx + 72], rsi
+        mov rax, [rcx]
+        mov rbp, [rcx + 16]
+        mov rbx, [rcx + 24]
+        mov r12, [rcx + 32]
+        mov r13, [rcx + 40]
+        mov r14, [rcx + 48]
+        mov r15, [rcx + 56]
+        mov rdi, [rcx + 64]
+        mov rsi, [rcx + 72]
+        mov rsp, [rcx + 8]
+        jmp rax
+    }
+}
+
+// ===========================================================================
 //  Trampolines: primer punto de ejecucion de una fibra recien creada.
 // ===========================================================================
 // fiber_init prepara la pila para que el PRIMER fiber_switch hacia la fibra

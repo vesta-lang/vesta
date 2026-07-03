@@ -2686,6 +2686,89 @@ int main(int argc, char *argv[]) {
             }
 
             // ----------------------------------------------------------------
+            // Auto-bundle del primitivo de fibras (stdlib/vex/vex_fiber.vex).
+            // Si el modulo usa el builtin `fiber_swapctx`, el lowering
+            // native_poo (FN.2) emite CALL __vex_swapctx (context-switch nativo
+            // @Naked, host-stack).  Fusionamos vex_fiber.vex -> .o autocontenido,
+            // salvo que el modulo YA lo defina (import explicito).  Mismo patron
+            // que vex_async: el context-switch es puro Vex (inline-asm), sin
+            // runtime.
+            // ----------------------------------------------------------------
+            {
+                bool uses_fiber = false, defines_fiber = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_swapctx") defines_fiber = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALL &&
+                                ins.func_name == "__vex_swapctx")
+                                uses_fiber = true;
+                }
+                if (uses_fiber && !defines_fiber) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_fiber.vex",
+                        exe_dir + "/../stdlib/vex/vex_fiber.vex",
+                        "stdlib/vex/vex_fiber.vex"};
+                    std::string vf_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            vf_path = c;
+                            break;
+                        }
+                    if (vf_path.empty()) {
+                        std::cerr << "[aot] usa fiber_swapctx pero no encuentro "
+                                     "stdlib/vex/vex_fiber.vex (enlazalo a mano).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vff(vf_path);
+                    std::string vf_src((std::istreambuf_iterator<char>(vff)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions vf_opts;
+                    vf_opts.module_name = "vex_fiber";
+                    vf_opts.opt_level = 2;
+                    vf_opts.native_poo = true;
+                    vf_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult vf_cr =
+                        vex::compile_vex_source(vf_src, vf_path, vf_opts);
+                    ir::IrModule vf_mod;
+                    if (!vf_cr.ok || vf_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
+                                                   vf_mod)) {
+                        std::cerr << "[aot] no pude compilar el primitivo de "
+                                     "fibras vex_fiber.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : vf_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(vf_mod.static_data));
+                    for (auto &gv : vf_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : vf_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] primitivo de fibras "
+                                 "(stdlib/vex/vex_fiber.vex) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
+            // ----------------------------------------------------------------
             // Auto-bundle del runtime de I/O (stdlib/vex/vex_io.vex).
             // Si el modulo usa print/println, el lowering native_poo emite
             // CALLN `vex_bare_io:__vex_*` (write + formateadores).  En vez de

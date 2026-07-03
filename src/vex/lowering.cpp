@@ -19716,6 +19716,28 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // El primitivo de fiber-switch baja por BACKEND:
+        //   - INTERPRETE (.velb): opcode VM `swapctx` (estado VM, portable).
+        //   - AOT nativo (native_poo_, FN.2): CALL al context-switch NATIVO
+        //     `__vex_swapctx` (host-stack, @Naked de vex_fiber.vex; auto-bundle
+        //     al detectarse la llamada).  Mismo layout de contexto {PC,SP,BP,
+        //     callee-saved} que inicializa el llamante; el cuerpo de fibra ya es
+        //     codigo nativo (native_poo), asi que el switch nativo funciona con
+        //     el sin necesitar @Naked en el cuerpo.  Args en el mismo orden que
+        //     los operandos de SWAPCTX: (to_ctx=cargar, from_ctx=guardar).
+        if (native_poo_) {
+            ir::IrInstr call{};
+            call.op = ir::IrOp::CALL;
+            call.func_name = "__vex_swapctx";
+            call.type = ir::IrType::VOID;
+            call.dst = ir::IR_NO_VALUE;
+            call.is_call_site = true;
+            call.operands = {v_to, v_from}; // arg0=to_ctx, arg1=from_ctx
+            call.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(call));
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         ir::IrInstr ins{};
         ins.op = ir::IrOp::SWAPCTX;
         ins.type = ir::IrType::VOID;
