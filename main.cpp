@@ -25,6 +25,7 @@
 
 #include "cli/cli.h"
 #include "cli/vsh.h"
+#include "cli/version_info.h" // Banner de `vesta --version` / `-v`
 #include "analyze/bigo.h" // Subsistema de coste: modo --analyze (Big-O)
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
@@ -813,7 +814,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (result.count("version")) {
-        vesta::scout() << "Vesta v0.1.0" << std::endl;
+        cli::print_version_banner(std::cout);
         return 0;
     }
 

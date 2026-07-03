@@ -331,6 +331,22 @@ target_link_libraries(aot_emit PUBLIC LibPEparse)
 
 add_executable(vm ${VM_SOURCES})
 
+# Fecha/hora del build + hash de git para `vesta --version`.  Un target ALL
+# que corre SIEMPRE (out-of-date por diseno) regenera el header con el
+# timestamp del momento; solo lo consume src/cli/version_info.cpp, asi que el
+# rebuild constante afecta a esa unica TU pequena, no a todo main.cpp.
+set(VESTA_BUILD_INFO_HEADER
+    "${CMAKE_BINARY_DIR}/generated/include/version/build_info_generated.h")
+add_custom_target(vm_build_info ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DOUT=${VESTA_BUILD_INFO_HEADER}
+        -DSRC_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/cmake/gen_build_info.cmake
+    BYPRODUCTS ${VESTA_BUILD_INFO_HEADER}
+    COMMENT "Generando build_info_generated.h (fecha de build + git hash)"
+    VERBATIM)
+add_dependencies(vm vm_build_info)
+
 # Sprint edge-bugs (2026-06-02): exec_instruction_float.cpp implementa
 # semantica IEEE 754 estricta (NaN, Inf).  -ffast-math global asume no
 # NaN/Inf, lo que folda isnan(x) a false y rompe FCMP con NaN.
