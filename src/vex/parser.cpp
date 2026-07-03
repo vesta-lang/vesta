@@ -833,6 +833,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_noexcept = false;       /* @NoExcept: fn sin excepciones */
     bool top_is_string_concat = false;  /* C-3: @StringConcat */
     bool top_is_string_eq = false;      /* C-3: @StringEq */
+    bool top_is_sync_impl = false;      /* @SyncImpl: override de monitor */
     /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
        helper objetivo (hoy "memcpy"); vacio => no es override. */
     std::string top_helper_override_target;
@@ -901,6 +902,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_string_concat = true;
             else if (current_.lexeme == "StringEq")
                 top_is_string_eq = true;
+            else if (current_.lexeme == "SyncImpl")
+                top_is_sync_impl = true;
             // Sprint lombok (2026-06-03): anotaciones class-level.
             // El parser solo marca los flags; el pre-pase del
             // TypeChecker (expand_lombok_annotations) genera los
@@ -1552,6 +1555,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_naked) fd->is_naked = true;
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
+        if (fd && top_is_sync_impl) fd->is_sync_impl = true;
         if (fd && !top_helper_override_target.empty())
             fd->helper_override_target = top_helper_override_target;
         // Subsistema de coste: propagar el contrato @complexity al AST.

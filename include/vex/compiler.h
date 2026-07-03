@@ -222,6 +222,13 @@ struct CompileResult {
     /// Vacios => comportamiento por defecto (STRCAT/STRCMP o value-string).
     std::string string_concat_override;
     std::string string_eq_override;
+    /// @SyncImpl -- nombres de las funciones libres que reemplazan la
+    /// primitiva de monitor de `synchronized` (enter/exit).  Vacios =>
+    /// comportamiento por defecto (opcode MONENTER/MONEXIT en interp/JIT,
+    /// __vex_monenter/monexit en AOT).  Cuando estan set, `synchronized`
+    /// baja a un CALL a estas funciones en LOS 3 MODOS.
+    std::string sync_enter_override;
+    std::string sync_exit_override;
     /// CPU dispatch Inc 4: @HelperOverride(<helper>) -- mapea el nombre del
     /// helper objetivo (hoy solo "memcpy") al nombre de la fn libre del
     /// usuario que lo reemplaza.  Vacio => sin override (dispatch por cpuid).

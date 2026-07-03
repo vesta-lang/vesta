@@ -141,6 +141,18 @@ class Lowering {
         string_eq_override_ = eq;
     }
 
+    /// @SyncImpl: registra los nombres de las funciones Vex que reemplazan
+    /// la primitiva de monitor de `synchronized`.  Cuando NO estan vacios,
+    /// @c emit_monitor_op emite un CALL a @p enter / @p exit en LOS 3 MODOS
+    /// (interp/JIT/AOT) en vez del opcode MONENTER/MONEXIT (interp/JIT) o
+    /// __vex_monenter/monexit (AOT).  El operando es el host_ptr al
+    /// ObjectHeader (no el GcHandle): la impl del usuario decide el layout.
+    void set_sync_impl_overrides(const std::string &enter,
+                                 const std::string &exit) {
+        sync_enter_override_ = enter;
+        sync_exit_override_ = exit;
+    }
+
     /// CPU dispatch Inc 4: registra el nombre de la fn libre marcada con
     /// @HelperOverride(memcpy).  Cuando NO esta vacio, __vex_memcpy_init
     /// apunta el fp directamente a esta fn (INCONDICIONAL, sin leer el
@@ -1731,6 +1743,10 @@ class Lowering {
     /// C-3: nombres de los override del string built-in (vacios => default).
     std::string string_concat_override_;
     std::string string_eq_override_;
+    /// @SyncImpl: nombres de las fns override de monitor enter/exit (vacios
+    /// => default por tier).  Ver @c set_sync_impl_overrides.
+    std::string sync_enter_override_;
+    std::string sync_exit_override_;
     /// CPU dispatch Inc 4: fn libre @HelperOverride(memcpy) (vacio => sin
     /// override; el fp se elige por cpuid en __vex_memcpy_init).
     std::string memcpy_override_;

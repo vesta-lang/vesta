@@ -107,6 +107,13 @@ i64[256] __vasync_mbox_has;     ///< 1 = hay mensaje pendiente.
 u64 __vasync_sched_ctx = 0;     ///< FiberCtx del bucle del scheduler (host_ptr).
 u64 __vasync_cur_ctx = 0;       ///< FiberCtx de la tarea en ejecucion (host_ptr).
 i64 __vasync_cur_done = 0;      ///< 1 si la tarea en ejecucion termino.
+/// Id de la FIBRA en ejecucion (0 = main / sin fibra).  vasync_run lo fija a
+/// (slot+1) antes de switchear hacia una fibra y lo resetea a 0 al volver (al
+/// ceder o terminar).  Lo LEE cross-modulo el lock cooperativo de vex_sync
+/// (@SyncImpl) para saber que fibra posee un monitor.  Sin scheduler de fibras
+/// (run-to-completion o main) queda en 0 -> el fast-path del lock nunca ve
+/// contienda (single-thread), asi el override es correcto tambien sin fibras.
+i64 __vasync_current_fiber = 0;
 
 // Tabla de fibras (una entrada por tarea suspendible viva).  VASYNC_FIBCAP
 // entradas; cada una: ctx (host_ptr), stack_top (host_ptr, para liberar),
@@ -589,8 +596,13 @@ public i64 vasync_run() {
             if (__vasync_fib_alive[i] == 1) {
                 __vasync_cur_ctx = __vasync_fib_ctx[i];
                 __vasync_cur_done = 0;
+                // Fiber-id de la tarea en ejecucion (slot+1; 0 reservado a main)
+                // para el lock cooperativo cross-modulo (vex_sync @SyncImpl).
+                __vasync_current_fiber = i + 1;
                 // Dar un quantum a la fibra i.  Al ceder (o terminar) vuelve aqui.
                 __vasync_fiber_switch(__vasync_sched_ctx, __vasync_fib_ctx[i]);
+                // De vuelta en el scheduler: ninguna fibra corre -> id = main.
+                __vasync_current_fiber = 0;
                 if (__vasync_cur_done == 1) {
                     __vasync_fib_alive[i] = 0;
                     __vasync_fiber_stack_free(__vasync_fib_stk[i], VASYNC_FIBSTK);

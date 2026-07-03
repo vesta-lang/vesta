@@ -265,6 +265,50 @@ CompileResult compile_vex_source(const std::string &source,
             }
             res.string_eq_override = fd->name;
         }
+        // @SyncImpl: override de la primitiva de monitor de `synchronized`.
+        // Debe resolverse ANTES del lowering (afecta al lowering MISMO del
+        // bloque synchronized).  El ROL se selecciona por el nombre convenido
+        // de la fn (ABI fijo): monitor_enter (adquiere) / monitor_exit
+        // (libera).  Aceptamos el nombre exacto o cualquier sufijo tras un
+        // separador de namespace '.' para permitir declararlas en un
+        // namespace.  Firma esperada: void(<ptr> obj).
+        if (fd->is_sync_impl) {
+            const std::string &nm = fd->name;
+            auto tail_is = [&](const std::string &suf) -> bool {
+                if (nm.size() < suf.size()) return false;
+                if (nm.compare(nm.size() - suf.size(), suf.size(), suf) != 0)
+                    return false;
+                return nm.size() == suf.size() ||
+                       nm[nm.size() - suf.size() - 1] == '.';
+            };
+            if (tail_is("monitor_enter")) {
+                if (!res.sync_enter_override.empty()) {
+                    res.ok = false;
+                    res.diagnostics.error(
+                        SourceLoc{opts.module_name, 0, 0},
+                        "multiples @SyncImpl monitor_enter: '" +
+                            res.sync_enter_override + "' y '" + fd->name + "'");
+                    return res;
+                }
+                res.sync_enter_override = fd->name;
+            } else if (tail_is("monitor_exit")) {
+                if (!res.sync_exit_override.empty()) {
+                    res.ok = false;
+                    res.diagnostics.error(
+                        SourceLoc{opts.module_name, 0, 0},
+                        "multiples @SyncImpl monitor_exit: '" +
+                            res.sync_exit_override + "' y '" + fd->name + "'");
+                    return res;
+                }
+                res.sync_exit_override = fd->name;
+            } else {
+                res.diagnostics.warning(
+                    fd->loc,
+                    "@SyncImpl en fn '" + fd->name +
+                        "' cuyo nombre no termina en 'monitor_enter' ni "
+                        "'monitor_exit'; la anotacion se ignora");
+            }
+        }
         // CPU dispatch Inc 4: @HelperOverride(<helper>).  Debe resolverse
         // ANTES del lowering porque afecta a la construccion de
         // __vex_memcpy_init (apunta el fp a la fn del usuario, saltando el
@@ -330,6 +374,20 @@ CompileResult compile_vex_source(const std::string &source,
     }
     lo.set_string_op_overrides(res.string_concat_override,
                                res.string_eq_override);
+    // @SyncImpl: exigir el PAR completo (enter + exit) o ninguno.  Un
+    // override a medias dejaria el monitor sin liberar (o sin adquirir).
+    if (res.sync_enter_override.empty() != res.sync_exit_override.empty()) {
+        res.ok = false;
+        res.diagnostics.error(
+            SourceLoc{opts.module_name, 0, 0},
+            std::string("@SyncImpl incompleto: se requiere el par "
+                        "monitor_enter + monitor_exit (falta '") +
+                (res.sync_enter_override.empty() ? "monitor_enter"
+                                                 : "monitor_exit") +
+                "')");
+        return res;
+    }
+    lo.set_sync_impl_overrides(res.sync_enter_override, res.sync_exit_override);
     // CPU dispatch Inc 4: pasar el override de "memcpy" (si lo hay) al
     // lowering para que __vex_memcpy_init apunte el fp a la fn del usuario.
     {

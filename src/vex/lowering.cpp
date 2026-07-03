@@ -8844,8 +8844,13 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     // AOT (native_poo_): NO hay handle table -> el monitor opera sobre el
     // host_ptr del objeto directamente (palabra inline en obj+16).  El resto
     // de tiers convierten el ptr a GcHandle.  emit_monitor_op encapsula ambos.
+    // Con @SyncImpl override, el operando es el host_ptr al ObjectHeader
+    // (v_obj), NO el GcHandle: emit_monitor_op emite un CALL a la fn del
+    // usuario, que trabaja sobre el ptr.  Sin override, el path interp/JIT
+    // convierte el ptr a GcHandle para el opcode MONENTER/MONEXIT.
+    const bool has_sync_ovr = !sync_enter_override_.empty();
     const ir::IrValueId v_handle =
-        native_poo_ ? v_obj : emit_gc_handle_for_ptr(v_obj, s->loc.line);
+        has_sync_ovr ? v_obj : emit_gc_handle_for_ptr(v_obj, s->loc.line);
     emit_monitor_op(v_handle, /*enter=*/true, s->loc.line);
 
     // tryenter catch-all: setup handler_pc y type=NULL via SSA values.
@@ -33336,6 +33341,25 @@ ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
 
 void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
                                uint32_t source_line) {
+    // @SyncImpl: si el programa define monitor_enter/monitor_exit, `synchronized`
+    // rutea a esas funciones en LOS 3 MODOS (interp/JIT/AOT).  Mecanismo, no
+    // politica: la impl del usuario decide el layout del lock.  El operando es
+    // el host_ptr al ObjectHeader (lower_synchronized ya pasa v_obj sin
+    // convertir a GcHandle cuando hay override).
+    const std::string &sync_ovr =
+        enter ? sync_enter_override_ : sync_exit_override_;
+    if (!sync_ovr.empty()) {
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = sync_ovr;
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.operands = {v_obj_or_handle};
+        ins.is_call_site = true;
+        ins.source_line = source_line;
+        fn_->append(current_block_, std::move(ins));
+        return;
+    }
     if (native_poo_) {
         // AOT/bare: monitor reentrante inline en el objeto (palabra en obj+16),
         // sin GC ni handle table.  Baja a CALL a la primitiva nativa

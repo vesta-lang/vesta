@@ -1528,6 +1528,17 @@ struct FunctionDecl : Node {
     /// (y `!=` via negacion) entre dos strings.  Firma esperada:
     /// fn(string, string) -> bool.  Aplica en native_poo_ (AOT) y Full.
     bool is_string_eq_override = false;
+    /// @SyncImpl -- esta fn libre reemplaza la primitiva de monitor de
+    /// `synchronized`.  El nombre convenido de la fn selecciona el rol:
+    /// `monitor_enter` (adquiere) o `monitor_exit` (libera); firma
+    /// esperada `void(<ptr> obj)`.  Si el programa declara un @SyncImpl,
+    /// `synchronized` baja a un CALL a estas funciones en LOS 3 MODOS
+    /// (interp/JIT/AOT); sin override se usa el default de cada tier
+    /// (opcode MONENTER/MONEXIT en interp/JIT, __vex_monenter/monexit en
+    /// AOT).  Mecanismo, no politica: el programador decide la impl
+    /// (spinlock, pthread, disable-IRQ en kernel, lock cooperativo de
+    /// fibras, etc.).  Mismo patron que @AllocatorOverride/@PanicHandler.
+    bool is_sync_impl = false;
     /// CPU dispatch Inc 4: @HelperOverride(<helper>) -- esta fn libre
     /// reemplaza el helper multi-versionado del build.  @c
     /// helper_override_target guarda el nombre del helper objetivo
