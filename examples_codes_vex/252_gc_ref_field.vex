@@ -1,0 +1,86 @@
+// 252 -- Campo-referencia gc<Clase> dentro de un objeto gc<Clase> en los 3
+// modos (interp / JIT / AOT), atravesando un major_gc.
+//
+// Un objeto gc-managed con un campo cuyo tipo es una referencia a OTRO objeto
+// gc (lista enlazada `gc<Node>` con campo `gc<Node> next`).  Se construye una
+// lista suficientemente grande para promoverse al OldGen, se recorta (deja
+// huecos), se dispara gc_collect() (major_gc: mark + sweep de los muertos) y se
+// recorre la cadena SUPERVIVIENTE leyendo el campo gc `next` + sumando `v`.
+//
+// El read encadenado del campo gc (load del GcHandle guardado en el campo +
+// gc_deref al host_ptr del objeto) debe dar el MISMO resultado tras el collect
+// en interp/JIT que en AOT.  Antes, el major_gc en interp/JIT crasheaba al
+// caminar la cadena RBP nativa sin acotar (scan de raices JIT) -> el read del
+// campo gc "devolvia basura / casaba".
+//
+// build(4000): nodos con valores 0..3999 (head = 3999).
+// truncate_at(head, 1999): deja 2000 nodos vivos (valores 3999..2000); el resto
+//   queda inalcanzable -> lo colecta el major_gc.
+// Tras collect: count == 2000, y sum de 2000..3999 = (2000+3999)*2000/2 =
+//   5999000.  R0 esperado = 42 (exito codificado) en los 3 modos.
+
+class Node {
+    i64 v;
+    gc<Node> next;
+    Node(i64 x) { this.v = x; this.next = null; }
+}
+
+// Construye una lista de n nodos (valores 0..n-1); retorna la cabeza (ESCAPA).
+gc<Node> build(i64 n) {
+    gc<Node> head = null;
+    i64 i = 0;
+    while (i < n) {
+        gc<Node> m = new Node(i);
+        m.next = head;
+        head = m;
+        i = i + 1;
+    }
+    return head;
+}
+
+// Cuenta los nodos alcanzables leyendo el campo gc `next`.
+i64 count_list(gc<Node> h) {
+    i64 acc = 0;
+    gc<Node> c = h;
+    while (c != null) {
+        acc = acc + 1;
+        c = c.next;
+    }
+    return acc;
+}
+
+// Suma los valores `v` recorriendo la cadena via el campo gc `next`.
+i64 sum_list(gc<Node> h) {
+    i64 acc = 0;
+    gc<Node> c = h;
+    while (c != null) {
+        acc = acc + c.v;
+        c = c.next;
+    }
+    return acc;
+}
+
+// Corta la lista tras el nodo k: los posteriores quedan inalcanzables (basura).
+void truncate_at(gc<Node> h, i64 k) {
+    gc<Node> c = h;
+    i64 i = 0;
+    while (i < k) {
+        c = c.next;
+        i = i + 1;
+    }
+    c.next = null;
+}
+
+i32 main() {
+    gc<Node> keep = build(4000);         // lista viva -> OldGen
+    truncate_at(keep, 1999);              // deja 2000 nodos vivos
+    gc_collect();                          // major_gc: colecta los 2000 muertos
+
+    i64 cnt = count_list(keep);           // 2000 supervivientes
+    i64 s = sum_list(keep);               // suma de 2000..3999 = 5999000
+
+    if (cnt == 2000 && s == 5999000) {
+        return 42;                         // exito
+    }
+    return 0;
+}

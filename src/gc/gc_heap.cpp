@@ -44,6 +44,21 @@
 #define GC_DBG_FILENO fileno
 #endif
 
+// Limites del stack NATIVO del hilo actual, necesarios para acotar el walk de
+// frames JIT (evita derefs fuera de rango cuando la cadena RBP no es fiable, p.
+// ej. binarios compilados con -fomit-frame-pointer).  Solo en el build de la VM
+// (freestanding/AOT usa scan_aot_frames por tamano de frame, no la cadena RBP).
+#if !defined(VESTA_GC_FREESTANDING)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h> // GetCurrentThreadStackLimits
+#elif defined(__linux__) || defined(__GLIBC__)
+#include <pthread.h> // pthread_getattr_np, pthread_attr_getstack
+#endif
+#endif
+
 namespace gc {
 
 // -------------------------------------------------------------------------
@@ -948,6 +963,49 @@ void jit_precise_root_cb(void *ctx, uint64_t value, jit::StackmapGcKind kind,
 }
 } // namespace
 
+namespace {
+/**
+ * @brief Obtiene los limites [low, high) del stack NATIVO del hilo actual.
+ *
+ * Necesario para acotar el walk de la cadena RBP en @c scan_jit_frames: sin
+ * limites, un binario compilado con @c -fomit-frame-pointer no mantiene una
+ * cadena de frame-pointers valida, por lo que seguir @c [rbp] lleva a
+ * direcciones arbitrarias y su deref segfaultea.  Con los limites reales el
+ * walk se detiene de forma segura en la frontera del stack.
+ *
+ * @return true si se pudieron determinar los limites (low < high).
+ */
+bool native_stack_bounds(const uint8_t *&low, const uint8_t *&high) noexcept {
+#if defined(VESTA_GC_FREESTANDING)
+    (void)low;
+    (void)high;
+    return false;
+#elif defined(_WIN32)
+    ULONG_PTR lo = 0, hi = 0;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    if (lo == 0 || hi == 0 || lo >= hi) return false;
+    low = reinterpret_cast<const uint8_t *>(lo);
+    high = reinterpret_cast<const uint8_t *>(hi);
+    return true;
+#elif defined(__linux__) || defined(__GLIBC__)
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) return false;
+    void *base = nullptr;
+    size_t size = 0;
+    const int rc = pthread_attr_getstack(&attr, &base, &size);
+    pthread_attr_destroy(&attr);
+    if (rc != 0 || base == nullptr || size == 0) return false;
+    low = static_cast<const uint8_t *>(base);
+    high = low + size;
+    return true;
+#else
+    (void)low;
+    (void)high;
+    return false;
+#endif
+}
+} // namespace
+
 void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist) {
     /* Optimizacion clave: si no hay JIT funcs registradas, la
      * funcion sale inmediatamente sin walk.  Pre-D.3 (no hay JIT
@@ -980,14 +1038,32 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist) {
     const uint8_t *gc_rbp =
         static_cast<const uint8_t *>(__builtin_frame_address(0));
 
-    /* Bounds: pasamos nullptr porque no conocemos los limites del
-     * stack NATIVO del host (distinto del stack VM del proceso).
-     * El walker tiene proteccion intrinseca: max 256 frames + check
-     * de alineacion + saved_rbp chain validation. */
+    /* Bounds del stack NATIVO del hilo: OBLIGATORIOS para la seguridad del
+     * walk.  El interprete (y binarios -fomit-frame-pointer) NO mantienen una
+     * cadena de frame-pointers valida, asi que seguir [rbp] sin acotar
+     * deref-earia direcciones arbitrarias -> segfault dependiente del contenido
+     * del stack.  Con los limites reales, cada lectura queda dentro del stack y
+     * el walk termina de forma segura (no encuentra RIPs JIT en modo interp ->
+     * ningun root, que es lo correcto).  El limite inferior efectivo es el
+     * frame actual (la walk solo sube hacia la base). */
+    const uint8_t *stk_low = nullptr;
+    const uint8_t *stk_high = nullptr;
+    if (!native_stack_bounds(stk_low, stk_high) || stk_low == nullptr ||
+        stk_high == nullptr) {
+        /* Sin limites fiables no es seguro caminar la cadena RBP: abortar el
+         * scan JIT (aditivo -- el mark preciso/conservador + BFS ya cubre las
+         * raices en interp).  Mejor perder este scan que arriesgar un deref
+         * invalido. */
+        return;
+    }
+    /* Clamp del limite inferior al frame actual: la walk nunca desciende por
+     * debajo del frame de major_gc. */
+    if (gc_rbp > stk_low) stk_low = gc_rbp;
+
     const jit::JitScanStats stats =
         jit::scan_jit_frames(&jit_precise_root_cb, &ctx, gc_rbp,
-                             /*low=*/nullptr,
-                             /*high=*/nullptr);
+                             /*low=*/stk_low,
+                             /*high=*/stk_high);
 
     stats_.precise_roots_marked += ctx.roots_marked;
     stats_.precise_frames_scanned += stats.jit_frames;
