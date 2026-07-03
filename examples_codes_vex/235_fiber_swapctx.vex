@@ -1,0 +1,99 @@
+// 235_fiber_swapctx.vex
+//
+// FN.1 de la arquitectura v2 de fibras: el fiber-switch como primitivo SEMANTICO
+// que en el path INTERPRETE (-m vm) se materializa con el opcode VM `swapctx`
+// (via el builtin `fiber_swapctx`).  A diferencia de 230/232/233 (cuerpos @Naked
+// que corren NATIVOS sobre pila HOST via naked_native), aqui los CUERPOS DE FIBRA
+// SON VEX NORMAL: corren como bytecode con su ESTADO VM (PC/SP/BP/R0..R15)
+// guardado/restaurado por swapctx.  Cero asm-por-arch, C/C++ puro, portable.
+//
+// MODELO (todo en memoria VM, sin malloc/host):
+//   - Contexto de fibra = 152 bytes = 19 qwords: [0]=PC [1]=SP [2]=BP [3..18]=R0..R15.
+//     Vive en un array global (memoria VM); su direccion es una direccion VM que
+//     swapctx lee/escribe.  Se inicializa con stores directos al array (stores VM,
+//     no host), para no depender de un cast (u64*) que caeria a `movh`.
+//   - Pila de fibra = un array global (memoria VM); crece hacia abajo desde su
+//     cima.  El prologo del cuerpo (enter/subsp) opera sobre ella como cualquier
+//     pila VM.
+//   - PC de arranque de una fibra = `fiber_entry(cuerpo)`: la VA de BYTECODE de la
+//     funcion cuerpo (no la direccion nativa del cast `(cfn)`), porque el cuerpo
+//     corre como bytecode y `swapctx` solo fija el PC.
+//   - fiber_swapctx(from_ctx, to_ctx): guarda el contexto actual en from_ctx y
+//     salta al de to_ctx.
+//
+// Ping-pong deterministico entre DOS fibras (A=1, B=2) con un mini round-robin en
+// main.  Orden: A B A B  ->  traza 1 2 1 2  =  1212 (=0x4bc).  R00 = 1212 en -m vm.
+//
+// Compilar/ejecutar:
+//   vm --vex 235_fiber_swapctx.vex -o p && vm -m vm --run p.velb --stats  (R00=0x4bc)
+
+// --- Contextos de fibra (19 qwords c/u) en memoria VM ---
+i64[19] __ctx_sched;   // contexto del bucle round-robin (main)
+i64[19] __ctx_a;       // contexto de la fibra A
+i64[19] __ctx_b;       // contexto de la fibra B
+
+// --- Pilas de fibra (512 qwords = 4 KiB c/u) en memoria VM ---
+i64[512] __stk_a;
+i64[512] __stk_b;
+
+// --- Estado compartido ---
+i64 __trace = 0;       // traza acumulada (base 10)
+i64 __done_a = 0;      // 1 cuando la fibra A termino
+i64 __done_b = 0;      // 1 cuando la fibra B termino
+
+// Cuerpo de la fibra A (VEX NORMAL): acumula su id (1), cede al scheduler, vuelve
+// a acumular, marca terminada y cede definitivo (no retorna: sin frame de retorno
+// valido en una pila de fibra recien inicializada).
+void fiber_a() {
+    __trace = __trace * 10 + 1;
+    fiber_swapctx((u64)&__ctx_a[0], (u64)&__ctx_sched[0]); // cede al scheduler
+    __trace = __trace * 10 + 1;
+    __done_a = 1;
+    fiber_swapctx((u64)&__ctx_a[0], (u64)&__ctx_sched[0]); // termina
+}
+
+// Cuerpo de la fibra B (VEX NORMAL): identico con id = 2.
+void fiber_b() {
+    __trace = __trace * 10 + 2;
+    fiber_swapctx((u64)&__ctx_b[0], (u64)&__ctx_sched[0]);
+    __trace = __trace * 10 + 2;
+    __done_b = 1;
+    fiber_swapctx((u64)&__ctx_b[0], (u64)&__ctx_sched[0]);
+}
+
+i32 main() {
+    // Cima de cada pila = base + 512*8 (exclusiva; la pila crece hacia abajo).
+    i64 top_a = (i64)((u64)&__stk_a[0] + 4096);
+    i64 top_b = (i64)((u64)&__stk_b[0] + 4096);
+    // Inicializar contextos con stores VM directos: PC = VA de bytecode del
+    // cuerpo, SP = BP = cima de su pila.  R0..R15 (indices 3..18) quedan a 0 (BSS)
+    // -- el cuerpo no lee registros de entrada (arranca desde su prologo).
+    __ctx_a[0] = (i64) fiber_entry(fiber_a);
+    __ctx_a[1] = top_a;
+    __ctx_a[2] = top_a;
+    __ctx_b[0] = (i64) fiber_entry(fiber_b);
+    __ctx_b[1] = top_b;
+    __ctx_b[2] = top_b;
+
+    // Mini round-robin: mientras alguna fibra viva, dale un quantum (swapctx hacia
+    // ella; al ceder/terminar vuelve aqui).  El ctx del scheduler se guarda en
+    // __ctx_sched en cada switch de ida y se restaura en el switch de vuelta.
+    i64 alive_a = 1;
+    i64 alive_b = 1;
+    while (alive_a == 1 || alive_b == 1) {
+        if (alive_a == 1) {
+            fiber_swapctx((u64)&__ctx_sched[0], (u64)&__ctx_a[0]); // corre A
+            if (__done_a == 1) {
+                alive_a = 0;
+            }
+        }
+        if (alive_b == 1) {
+            fiber_swapctx((u64)&__ctx_sched[0], (u64)&__ctx_b[0]); // corre B
+            if (__done_b == 1) {
+                alive_b = 0;
+            }
+        }
+    }
+
+    return (i32)__trace; // 1212
+}

@@ -1799,6 +1799,12 @@ void TypeChecker::collect_globals() {
     // recurso interno (deleter/dtor).  Determinista (no depende de la colecta):
     // util para observar la finalizacion de objetos escapados sin polling.
     reg_builtin("gc_finalize_all", Type{PrimitiveKind::VOID}, {});
+    // fiber_swapctx(from_ctx, to_ctx): context-switch cooperativo de fibra en el
+    // path INTERPRETE (FN.1).  Baja al opcode VM `swapctx`: guarda el contexto
+    // actual (152 bytes = 19 qwords {PC,SP,BP,R0..R15}) en @p from_ctx y salta al
+    // de @p to_ctx.  Ambos son direcciones de memoria VM (arrays globales).
+    reg_builtin("fiber_swapctx", Type{PrimitiveKind::VOID},
+                {PrimitiveKind::U64, PrimitiveKind::U64});
     // Salida de valores numericos (sin acceso a memoria VM).
     reg_builtin("print_int", Type{PrimitiveKind::VOID}, {PrimitiveKind::I64});
     reg_builtin("print_uint", Type{PrimitiveKind::VOID}, {PrimitiveKind::U64});
@@ -2033,6 +2039,10 @@ void TypeChecker::collect_globals() {
      *   qsort(arr, n, sz, cb);  // C llama a mi_cmp via cc nativa */
     reg_builtin("as_native_callback", Type{PrimitiveKind::I64},
                 {PrimitiveKind::PTR});
+    // fiber_entry(fn): VA de bytecode VM de una funcion (PC de arranque de fibra,
+    // FN.1).  Registrado para que el simbolo exista; el bypass en check_call lo
+    // resuelve (acepta un nombre de funcion como arg, no un valor tipado).
+    reg_builtin("fiber_entry", Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
 
     // Identificadores magicos para colores y atributos ANSI.
     //
@@ -11949,6 +11959,38 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
          * normal que daria error de simbolo). */
         fn_id->result_type = Type{PrimitiveKind::I64};
         return Type{PrimitiveKind::I64};
+    }
+
+    // fiber_entry(fn): direccion de ENTRADA (VA de bytecode VM) de una funcion
+    // plana, para instalar como PC en un contexto de fibra (FN.1).  A diferencia
+    // del cast `(cfn) fn` (que en interp/JIT enruta a naked_fnaddr -> direccion
+    // NATIVA, correcta para codigo host), fiber_entry devuelve la VA de BYTECODE
+    // porque el cuerpo de fibra corre como bytecode NORMAL (lo arranca `swapctx`
+    // fijando el PC).  Mismo patron de bypass que as_native_callback: acepta un
+    // identificador de funcion y devuelve U64.
+    if (id->name == "fiber_entry") {
+        if (e->args.size() != 1) {
+            diags_.error(e->loc, "'fiber_entry' espera 1 argumento (nombre de "
+                                 "funcion cuerpo de fibra)");
+            return Type{PrimitiveKind::U64};
+        }
+        auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
+        if (fn_id == nullptr) {
+            diags_.error(e->args[0]->loc,
+                         "'fiber_entry' requiere un identificador de funcion");
+            return Type{PrimitiveKind::U64};
+        }
+        size_t fe_depth = 0;
+        const Symbol *sym = lookup_with_depth(fn_id->name, &fe_depth);
+        if (sym == nullptr || sym->kind != SymbolKind::Function) {
+            diags_.error(fn_id->loc, "'fiber_entry': '" + fn_id->name +
+                                         "' no es una funcion conocida");
+            return Type{PrimitiveKind::U64};
+        }
+        // Sentinela U64 para que el lowering reconozca el patron sin pasar por
+        // lower_ident (que daria error de simbolo para un nombre de funcion).
+        fn_id->result_type = Type{PrimitiveKind::U64};
+        return Type{PrimitiveKind::U64};
     }
 
     const bool is_io_print_relaxed =

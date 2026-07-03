@@ -17432,6 +17432,22 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return true;
     }
 
+    // fiber_entry(fn) -> VA de bytecode VM de la funcion (PC de arranque de una
+    // fibra en el path INTERPRETE, FN.1).  Emite LABEL_ADDR("code.<fn>") sin
+    // pasar por el enrutado a naked_fnaddr del cast `(cfn) fn` -> el `swapctx`
+    // fija este PC y el interprete ejecuta el cuerpo como bytecode NORMAL.
+    if (name == "fiber_entry" && e->args.size() == 1) {
+        auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
+        if (fn_id == nullptr) {
+            error_at(e->loc,
+                     "fiber_entry: arg debe ser identificador de fn cuerpo");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_value = emit_label_addr(fn_id->name, e->loc.line);
+        return true;
+    }
+
     if (!e->type_args.empty() &&
         (name == "sizeof" || name == "alignof" || name == "typename" ||
          name == "type_id" || name == "kind")) {
@@ -18245,6 +18261,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_fclose = (name == "fclose");
     const bool is_malloc = (name == "malloc");
     const bool is_free = (name == "free");
+    // Fibras (path INTERPRETE, FN.1): context-switch cooperativo via el opcode
+    // VM `swapctx`.  Es la materializacion del primitivo de fiber-switch para el
+    // .velb (estado VM portable, C/C++ puro; sin asm-por-arch).  El cuerpo de la
+    // fibra corre como bytecode NORMAL con su estado VM guardado/restaurado.
+    //   fiber_swapctx(from_ctx, to_ctx): guarda el contexto actual en @p from_ctx
+    //   (152 bytes = 19 qwords en memoria VM) y salta al de @p to_ctx.
+    const bool is_fiber_swapctx = (name == "fiber_swapctx");
     // Builtins de reflexion y AOP
     const bool is_forName = (name == "forName");
     const bool is_getClass = (name == "getClass");
@@ -18431,6 +18454,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is_print_char || is_print_color || is_print_cstr || is_print_bin ||
         is_print_oct || is_print_ptr || is_print_gchandle || is_print_pad ||
         is_fopen || is_fwrite || is_fclose || is_malloc || is_free ||
+        is_fiber_swapctx ||
         is_forName || is_getClass || is_getField || is_getMethod ||
         is_newInstance || is_invoke || is_proceed || is_isPresent ||
         is_unwrap || is_unwrap_unchecked ||
@@ -19661,6 +19685,42 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
         ins.operands = {v_ptr};
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
+    // ----- fiber_swapctx(from_ctx, to_ctx) -----
+    // Materializacion del primitivo de fiber-switch en el path INTERPRETE (FN.1):
+    // emite el opcode VM `swapctx dst, src` (guarda el contexto actual en
+    // @p from_ctx y carga el de @p to_ctx).  El opcode guarda/restaura
+    // {PC,SP,BP,R0..R15} (152 bytes) en memoria VM -> el cuerpo de fibra corre
+    // como bytecode NORMAL con su estado VM, sin necesidad de @Naked ni asm host.
+    //
+    //   exec_instr_swapctx: reg1 = dst (a CARGAR), reg2 = src (a GUARDAR).
+    //   Semantica de fiber_swapctx(from, to): GUARDA en from, CARGA to.
+    //   -> dst(load) = to_ctx = args[1] ; src(save) = from_ctx = args[0].
+    //   IrOp::SWAPCTX espera operands[0]=dst_ctx, operands[1]=src_ctx.
+    if (is_fiber_swapctx) {
+        if (e->args.size() != 2) {
+            error_at(e->loc,
+                     "'fiber_swapctx' requiere dos direcciones de contexto VM "
+                     "(from_ctx, to_ctx)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId v_from = lower_expr(e->args[0].get()); // src (save)
+        const ir::IrValueId v_to = lower_expr(e->args[1].get());   // dst (load)
+        if (v_from == ir::IR_NO_VALUE || v_to == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::SWAPCTX;
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.operands = {v_to, v_from}; // operands[0]=dst_ctx, operands[1]=src_ctx
         ins.source_line = e->loc.line;
         fn_->append(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;

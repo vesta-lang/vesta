@@ -8381,6 +8381,17 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::SETMETHDBG:
     case IrOp::PROCEED:
     case IrOp::SPAWN_ON:
+    // Fibras/corutinas (FN.1): SWAPCTX cede el control a OTRO contexto (fibra)
+    // que puede leer/escribir memoria global (y, en el interp, restaura TODOS
+    // los registros al volver).  DEBE ser barrera: un LOAD post-swapctx tiene que
+    // releer memoria (no reusar un valor cacheado antes del switch), y el
+    // scheduler no puede mover LOADs/STOREs a traves del switch.  SPAWN/YIELD/
+    // RESUME mutan estado del scheduler (crean/ceden/reactivan procesos).
+    case IrOp::SWAPCTX:
+    case IrOp::SPAWN:
+    case IrOp::SPAWN_ARGS:
+    case IrOp::YIELD:
+    case IrOp::RESUME:
     case IrOp::HLT:
     case IrOp::PANIC:
     case IrOp::GETPID:
