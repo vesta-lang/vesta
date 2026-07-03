@@ -15690,6 +15690,18 @@ skip_comptime_eval_for_macro_to_macro:
     ins.operands = std::move(arg_ids);
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
+    // Marcar el resultado del CALL como raiz GC cuando el callee devuelve una
+    // CLASS (host_ptr a objeto gestionado por el GC).  CRITICO para el scan
+    // preciso de raices: sin esto, un `Node keep = build(...)` que vive a
+    // traves de un safepoint (p.ej. gc_collect / newobj) queda con
+    // is_gc_object=false en su SSA value -> safepoint_gc_roots no lo reconoce
+    // como raiz -> el GC lo colecta pese a estar vivo (UAF latente enmascarado
+    // por el GC no-moving; corrupcion con el GC moving).  Mismo tratamiento que
+    // el path CALLVIRT (metodos) que ya marcaba is_gc_object para retorno CLASS.
+    if (dst != ir::IR_NO_VALUE && callee_kind == PrimitiveKind::CLASS) {
+        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].is_gc_object = true;
+    }
     // native_poo_: liberar los buffers de los args value-string temporales
     // (ya copiados/usados por el callee).  Inc 5 (SSO): solo libera si el
     // arg estaba en HEAP; free(0)=no-op.

@@ -46,7 +46,10 @@ namespace ir {
  *        puede disparar el recolector de basura (alocacion directa).
  *
  * Cubre las alocaciones directas que llaman a @c gc_heap.alloc():
- * NEWOBJ / NEWOBJS / GC_ALLOC / GC_ALLOCP.  Los CALLs (cuyo callee puede
+ * NEWOBJ / NEWOBJS / GC_ALLOC / GC_ALLOCP, y las FUERZAS EXPLICITAS del
+ * recolector: GC_COLLECT (gccollect ejecuta minor_gc + major_gc in-situ) --
+ * en su PC el mark corre con las raices del programa vivas en regs/slots, asi
+ * que necesita stackmap igual que una alocacion.  Los CALLs (cuyo callee puede
  * alocar) son safepoints tambien, pero alli el GC corre en el frame del
  * callee y el frame del caller se identifica por la direccion de retorno
  * (manejo distinto por backend); no se incluyen en esta version del pase.
@@ -57,6 +60,7 @@ inline bool is_gc_safepoint(IrOp op) {
     case IrOp::NEWOBJS:
     case IrOp::GC_ALLOC:
     case IrOp::GC_ALLOCP:
+    case IrOp::GC_COLLECT:
         return true;
     default:
         return false;

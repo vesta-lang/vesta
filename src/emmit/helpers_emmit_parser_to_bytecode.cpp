@@ -223,9 +223,20 @@ search_variante_None:
 void Assembler::emit_instruction(const vm::Instruction *instr) {
     const auto &info = select_variant(instr->opcode, instr->operands);
 
+    // Offset de INICIO de esta instruccion (antes de emitir ningun byte).  El
+    // stackmap preciso que porta esta instruccion se registra EN este offset:
+    // es donde estara el rip del interprete cuando el GC corra en su PC.  Vale
+    // para AMBOS tipos de safepoint (misma semantica):
+    //   - Directo (newobj/gcalloc/gccollect/...): el marcador `// @sm` va SOBRE
+    //     el opcode del safepoint; su rip == este offset.
+    //   - Return-site (tras callvm/callvirt): el marcador `// @sm` va sobre la
+    //     PRIMERA instruccion posterior al call; el ret_addr que el call empuja
+    //     == este offset (el frame walk lee [rbp+8] = este offset).
+    const uint32_t instr_start_offset = static_cast<uint32_t>(output.offset);
+
     // Stackmap preciso pendiente de publicar: se rellena con los slots del
-    // marcador `// @sm` y su byte_offset se fija al RETURN_PC (tras emitir la
-    // instruccion de call) al final de esta funcion.
+    // marcador `// @sm` y su byte_offset se fija al INICIO de la instruccion
+    // portadora (@c instr_start_offset), al final de esta funcion.
     std::optional<Context::StackmapRec> pending_stackmap;
 
     // Si la instruccion tiene linea fuente Vex registrada por el
@@ -318,14 +329,19 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
         }
     }
 
-    // Fijar el offset del stackmap pendiente al RETURN_PC (byte siguiente al
-    // call, ya emitido) y publicarlo.  El marcador `// @sm` que produjo el
-    // emisor va ligado (por el lexer) a la instruccion de CALL, pero la raiz
-    // debe registrarse en el offset del byte SIGUIENTE = el ret_addr que
-    // callvm/callvirt empujan y con el que el scan del interprete busca el
-    // stackmap del frame caller.
+    // Fijar el offset del stackmap pendiente al INICIO de ESTA instruccion (la
+    // que porta el marcador `// @sm`) y publicarlo.  El lexer liga el marcador a
+    // la instruccion INMEDIATAMENTE SIGUIENTE al comentario; en ambos tipos de
+    // safepoint esa instruccion es exactamente donde apuntara el rip del scan:
+    //   - Directo: el marcador va sobre el opcode del safepoint -> rip == inicio.
+    //   - Return-site: el marcador va sobre la primera instruccion tras el call
+    //     -> el ret_addr empujado == inicio de esa instruccion (= este offset).
+    // El bug anterior fijaba el offset TRAS emitir la instruccion (inicio+size),
+    // por lo que el scan (que busca por igualdad EXACTA con rip == inicio) nunca
+    // hallaba el stackmap -> raices vivas sin marcar (UAF latente enmascarado
+    // por el GC no-moving; corrupcion con el GC moving).
     if (pending_stackmap) {
-        pending_stackmap->byte_offset = static_cast<uint32_t>(output.offset);
+        pending_stackmap->byte_offset = instr_start_offset;
         ctx.stackmap_recs.push_back(std::move(*pending_stackmap));
         pending_stackmap.reset();
     }

@@ -4436,6 +4436,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     // --- gccollect: fuerza minor+major GC del proceso + drena finalizadores ---
     case IrOp::GC_COLLECT:
+        // gccollect ejecuta minor_gc + major_gc in-situ: es un SAFEPOINT.  El
+        // mark corre con las raices del programa vivas en regs/slots del frame
+        // TOP -> emitir el stackmap ANTES del opcode (mismo modelo que newobj/
+        // gcalloc).  Sin esto, el scan preciso no encuentra raices en el PC de
+        // gccollect y colecta objetos vivos (con el GC moving: corrupcion).
+        emit_stackmap_marker(ctx, bb, idx);
         ctx.out << "    gccollect\n";
         break;
 

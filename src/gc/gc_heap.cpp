@@ -1822,21 +1822,25 @@ void GcHeap::major_gc() {
         }
     }
 #if !defined(VESTA_GC_FREESTANDING)
-    // SOUNDNESS DEL MOVING: si la compactacion esta activada por OPT-IN, forzamos
-    // el scan CONSERVADOR (aditivo) para garantizar un MARK sin FALSOS NEGATIVOS
-    // (ninguna raiz viva queda WHITE).  El scan preciso por si solo tiene huecos
-    // de cobertura de stackmaps que, con el GC NO-MOVING, son benignos (se lee
-    // "stale pero valido"), pero con MOVING corromperian (el objeto vivo mal
-    // marcado se movería/reusaría).  Verificado: con el conservador, la
-    // compactacion mueve todos los objetos vivos con 0 punteros stale.
-    static const bool compaction_opt_in =
-        (std::getenv("VESTA_GC_COMPACT_ALWAYS") &&
-         std::getenv("VESTA_GC_COMPACT_ALWAYS")[0] == '1') ||
-        std::getenv("VESTA_GC_COMPACT_THRESHOLD") != nullptr;
-    if (compaction_opt_in && root_provider_ != nullptr &&
-        root_provider_->vm_mem() != nullptr) {
-        run_conservative = true;
-    }
+    // SOUNDNESS DEL MOVING con marcado PRECISO.  El scan preciso del interprete
+    // es ahora COMPLETO: cada raiz GC viva (regs + slots de spill + slots de
+    // Vex ALLOCA materializados como spill del SSA value) queda cubierta por el
+    // stackmap del PC del safepoint.  Cerrados los dos huecos que lo rompian:
+    //   (1) el offset del stackmap se registraba TRAS la instruccion (rip+size)
+    //       en vez de en su INICIO -> el scan (match exacto con rip) nunca lo
+    //       hallaba (ver helpers_emmit_parser_to_bytecode.cpp);
+    //   (2) el resultado de un CALL a funcion libre que devuelve CLASS no se
+    //       marcaba is_gc_object -> la raiz (p.ej. `Node k = build(...)`) no
+    //       entraba en safepoint_gc_roots (ver lowering.cpp lower_call).
+    // Verificado con el GC MOVING (detector infalible: un falso negativo libera
+    // Y reusa el hueco -> corrupcion): corpus GC + repros de listas 30-40k con
+    // huecos reales -> 0 stale de raiz viva, R0 correcto, movimientos reales.
+    // Por eso la compactacion YA NO fuerza el conservador: usa el marcado
+    // preciso primario.  El conservador queda como fallback de dev via
+    // VESTA_GC_CONSERVATIVE=1 (aditivo) por si un patron aun no cubierto
+    // (p.ej. una raiz GC en una ALLOCA address-taken invisible al SSA) lo
+    // necesitara -- se activa explicitamente, no por la compactacion.
+    (void)0;
 #endif
 
     uint64_t mj_rsp = 0, mj_high = 0;
