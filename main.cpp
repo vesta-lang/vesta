@@ -3771,11 +3771,17 @@ int main(int argc, char *argv[]) {
             {
                 std::vector<size_t> gc_fns;
                 for (size_t ci = 0; ci < compiled.size(); ++ci) {
-                    for (const auto &sm : compiled[ci].stackmaps)
-                        if (!sm.slots.empty()) {
-                            gc_fns.push_back(ci);
-                            break;
-                        }
+                    // Registrar TODA funcion con al menos un safepoint (call),
+                    // aunque NO retenga roots GC: el WALK POR TAMANO DE FRAME
+                    // debe poder ATRAVESARLA (leer su frame_size) para llegar a
+                    // los frames superiores que si retienen roots.  Si solo
+                    // registraramos las que tienen slots no vacios, el walk se
+                    // cortaria en una funcion intermedia sin roots y perderia
+                    // los roots de sus llamadores -> colectaria vivos.  Las
+                    // hojas frameless (sin calls) no tienen stackmaps y nunca
+                    // aparecen a mitad de pila durante un GC -> se omiten (cero
+                    // coste).
+                    if (!compiled[ci].stackmaps.empty()) gc_fns.push_back(ci);
                 }
                 // Emitir la seccion siempre que ALGUNA funcion referencie
                 // .vexgc_smap (via section_start/size de __vexgc_init, posible-
@@ -3801,7 +3807,7 @@ int main(int argc, char *argv[]) {
                             b.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
                     };
                     put32(0x4D475856u);                            // 'VXGM'
-                    put32(1u);                                     // version
+                    put32(2u);                                     // version
                     put32(static_cast<uint32_t>(gc_fns.size()));   // n_fn
                     put32(0u);  // total_size (parcheado al final, offset 12)
                     for (size_t ci : gc_fns) {
@@ -3810,6 +3816,12 @@ int main(int argc, char *argv[]) {
                             {static_cast<uint32_t>(b.size()), af.name});
                         put64(0); // func_addr placeholder (ABS64 reloc)
                         put32(static_cast<uint32_t>(af.bytes.size())); // code_size
+                        // frame_size (v2): RBP - RSP en un safepoint call.  Igual
+                        // en todos los stackmaps de la fn; el WALK POR TAMANO DE
+                        // FRAME lo usa para reconstruir RBP sin cadena RBP.
+                        put32(af.stackmaps.empty()
+                                  ? 0u
+                                  : af.stackmaps.front().frame_size);
                         put32(static_cast<uint32_t>(
                             af.stackmaps.size())); // n_safepoints (todos)
                         for (const auto &sm : af.stackmaps) {

@@ -100,4 +100,92 @@ JitScanStats scan_jit_frames(JitRootCallback cb, void *cb_ctx,
     return stats;
 }
 
+namespace {
+/**
+ * @brief Localiza el stackmap que cubre @p pc dentro de @p info: el ultimo con
+ *        @c pc_offset <= (pc - code_start).  Los stackmaps estan ordenados
+ *        ascendente por @c pc_offset (register_function los ordena), asi que un
+ *        barrido con corte temprano es O(n_safepoints) con n tipicamente <10.
+ *        Evita el doble lookup + doble mutex de @c lookup_stackmap.
+ */
+const Stackmap *find_stackmap_in(const JitFunctionInfo &info,
+                                 uint64_t pc) noexcept {
+    const uint64_t base = reinterpret_cast<uint64_t>(info.code_start);
+    if (pc < base) return nullptr;
+    const uint32_t off = static_cast<uint32_t>(pc - base);
+    const Stackmap *best = nullptr;
+    for (const Stackmap &s : info.stackmaps) {
+        if (s.pc_offset <= off)
+            best = &s;
+        else
+            break; // ordenados ascendente -> el resto tambien es > off.
+    }
+    return best;
+}
+} // namespace
+
+JitScanStats scan_aot_frames(JitRootCallback cb, void *cb_ctx, uint64_t start_pc,
+                             uint64_t start_sp) noexcept {
+    JitScanStats stats{};
+    if (!cb || start_pc == 0 || start_sp == 0) return stats;
+
+    JitRegistry &reg = JitRegistry::instance();
+    uint64_t pc = start_pc; // return address dentro del frame Vex actual
+    uint64_t sp = start_sp; // RSP del frame Vex justo antes de su `call`
+
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
+        /* RSP siempre 8-alineado; un desalineo indica corrupcion o que se
+         * salio de la cadena Vex -> parar (defensa anti-crash). */
+        if (sp & 7u) break;
+
+        const JitFunctionInfo *info =
+            reg.lookup(reinterpret_cast<const uint8_t *>(pc));
+        /* PC fuera de toda funcion Vex registrada (CRT / _start / thunk):
+         * fin del walk.  Los frames Vex intermedios SIEMPRE se registran (con
+         * frame_size real), aunque no retengan roots, para poder atravesarlos. */
+        if (!info) break;
+
+        ++stats.frames_walked;
+        ++stats.jit_frames;
+
+        /* Reconstruir RBP SIN leer la cadena [rbp]: en un safepoint call de
+         * este frame, RBP = RSP + frame_size.  Robusto ante -fomit-frame-pointer
+         * de OTROS frames (nunca dependemos del saved-RBP ajeno). */
+        const uint64_t rbp = sp + info->frame_size;
+
+        const Stackmap *sm = find_stackmap_in(*info, pc);
+        if (sm) {
+            /* Slots GC del safepoint: RBP-relativos (los mismos que emite el
+             * codegen), leidos con el RBP reconstruido. */
+            for (const StackmapSlot &slot : sm->slots) {
+                const uint8_t *slot_addr =
+                    reinterpret_cast<const uint8_t *>(rbp) + slot.rbp_offset;
+                const uint64_t value = read_u64(slot_addr);
+                cb(cb_ctx, value, slot.gc_kind, slot_addr);
+                switch (slot.gc_kind) {
+                case StackmapGcKind::HANDLE: ++stats.handles_marked; break;
+                case StackmapGcKind::HOSTPTR:
+                case StackmapGcKind::STRING: ++stats.hostptr_marked; break;
+                }
+            }
+        }
+
+        /* Avanzar al frame llamador POR TAMANO DE FRAME (no cadena RBP):
+         *   next_pc = [rbp+8]  -> return address propio de este frame.
+         *   next_sp = rbp+16   -> RSP del llamador justo antes de `call estefn`
+         *                          (= CFA de este frame; RBP=CFA-16). */
+        const uint64_t next_pc =
+            read_u64(reinterpret_cast<const uint8_t *>(rbp + 8));
+        const uint64_t next_sp = rbp + 16;
+        /* La pila crece hacia abajo: el frame del llamador esta en direcciones
+         * MAYORES.  Si no avanza hacia arriba, parar (ciclo / corrupcion). */
+        if (next_sp <= sp) break;
+        if (next_pc == 0) break;
+        sp = next_sp;
+        pc = next_pc;
+    }
+
+    return stats;
+}
+
 } // namespace jit

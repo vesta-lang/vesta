@@ -102,6 +102,30 @@ JitScanStats scan_jit_frames(JitRootCallback cb, void *cb_ctx,
                              const uint8_t *rbp_top, const uint8_t *stack_low,
                              const uint8_t *stack_high) noexcept;
 
+/**
+ * @brief Walk PRECISO por TAMANO DE FRAME (modelo LLVM statepoint) para el GC
+ *        de AOT.
+ *
+ * A diferencia de @c scan_jit_frames NO camina la cadena RBP: reconstruye el
+ * RBP de cada frame como @c RSP_del_llamador + frame_size (leido del
+ * @c JitFunctionInfo) y avanza al llamador con @c next_sp = rbp + 16 y
+ * @c next_pc = [rbp+8].  Al no leer nunca @c [rbp] (el saved-RBP), es robusto
+ * ante frames que omiten el frame pointer (-fomit-frame-pointer) o inlining.
+ *
+ * Arranca en el primer frame Vex REAL, cuyo (PC, SP) se captura en la frontera
+ * C<-Vex (ver @c GcHeap::set_aot_scan_boundary), saltando los frames C++
+ * no-walkables de libvesta_gc.  Sube hasta que un PC no pertenece a ninguna
+ * funcion Vex registrada (CRT / _start) o hasta @c MAX_FRAMES.
+ *
+ * @param cb        callback por cada root GC encontrado.
+ * @param cb_ctx    contexto opaco para @p cb.
+ * @param start_pc  PC de retorno al primer frame Vex (return address).
+ * @param start_sp  RSP de ese frame Vex justo antes del @c call al GC.
+ * @return estadisticas del scan (jit_frames = frames Vex recorridos).
+ */
+JitScanStats scan_aot_frames(JitRootCallback cb, void *cb_ctx, uint64_t start_pc,
+                             uint64_t start_sp) noexcept;
+
 } // namespace jit
 
 #endif // VESTA_JIT_STACK_SCAN_H

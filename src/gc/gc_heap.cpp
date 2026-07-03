@@ -909,7 +909,26 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist) {
 
     JitPreciseCtx ctx{this, &worklist, 0};
 
-    /* RBP del frame actual (major_gc).  Iniciamos la walk aqui;
+    /* MODO AOT: WALK POR TAMANO DE FRAME desde el frame Vex capturado en la
+     * frontera C<-Vex (set_aot_scan_boundary, fijado por cada runtime-entry del
+     * GC que puede colectar).  Reconstruye cada RBP con frame_size en vez de la
+     * cadena RBP -> salta los frames C++ de libvesta_gc (no-walkables por
+     * -fomit-frame-pointer) y arranca en el primer frame Vex real.  Es lo que
+     * cierra el bug de raices vivas colectadas en AOT.  El path interp/JIT
+     * (abajo) NO cambia. */
+    if (aot_precise_roots_ && aot_boundary_valid_) {
+        const jit::JitScanStats stats = jit::scan_aot_frames(
+            &jit_precise_root_cb, &ctx, aot_boundary_pc_, aot_boundary_sp_);
+        stats_.precise_roots_marked += ctx.roots_marked;
+        stats_.precise_frames_scanned += stats.jit_frames;
+        /* Invalidar el boundary: cada runtime-entry del GC lo re-captura antes
+         * de colectar.  Asi un hipotetico major_gc que no pase por la frontera
+         * nunca caminaria un frame Vex ya muerto (defensa anti-corrupcion). */
+        aot_boundary_valid_ = false;
+        return;
+    }
+
+    /* INTERP/JIT: RBP del frame actual (major_gc).  Iniciamos la walk aqui;
      * el walker sigue la cadena hasta el bottom del stack. */
     const uint8_t *gc_rbp =
         static_cast<const uint8_t *>(__builtin_frame_address(0));

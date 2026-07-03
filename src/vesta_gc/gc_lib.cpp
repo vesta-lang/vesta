@@ -117,6 +117,28 @@ void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) 
 
 } // namespace
 
+// Captura el frame Vex LLAMADOR (frontera C<-Vex) para el WALK POR TAMANO DE
+// FRAME del scan preciso de AOT.  Debe expandirse DENTRO de la runtime-entry que
+// el codigo Vex llama directamente, para que:
+//   __builtin_return_address(0) = PC de retorno al frame Vex (dentro de la
+//                                 funcion Vex que hizo `call vex_gc_*`).
+//   __builtin_frame_address(0)  = RBP de ESTA entry = RSP_entry - 8, luego el
+//                                 RSP del frame Vex justo antes del `call` es
+//                                 frame_addr + 16 (RSP_entry + 8).
+// La relacion +16 exige que la entry conserve frame pointer -> se marca con el
+// atributo optimize("no-omit-frame-pointer") (ver abajo).  Desde ese par
+// (pc, sp) el walk sube por la pila con frame_size (no cadena RBP), saltando los
+// frames C++ de esta libreria.
+#if defined(__GNUC__)
+#define VEX_GC_FORCE_FP __attribute__((optimize("no-omit-frame-pointer")))
+#else
+#define VEX_GC_FORCE_FP
+#endif
+#define VEX_GC_CAPTURE_VEX_FRAME()                                             \
+    gc_heap().set_aot_scan_boundary(                                           \
+        reinterpret_cast<uint64_t>(__builtin_return_address(0)),               \
+        reinterpret_cast<uint64_t>(__builtin_frame_address(0)) + 16u)
+
 extern "C" {
 
 void vex_gc_init(void) {
@@ -160,11 +182,14 @@ void vex_gc_register_aot_stackmaps(const uint8_t *sec) {
     // vivas en los frames nativos durante la coleccion.  La llama el arranque
     // del binario (CALL __vexgc_init al inicio de main) antes del primer alloc.
     //
-    // Formato (LE):
-    //   header 16B: u32 magic 'VXGM' | u32 version=1 | u32 n_fn | u32 _pad
-    //   por fn: u64 func_addr | u32 code_size | u32 n_safepoints
+    // Formato (LE), version 2:
+    //   header 16B: u32 magic 'VXGM' | u32 version=2 | u32 n_fn | u32 total_size
+    //   por fn: u64 func_addr | u32 code_size | u32 frame_size | u32 n_safepoints
     //     por safepoint: u32 pc_offset | u32 n_slots
     //       por slot: i16 rbp_offset | u8 gc_kind | u8 _pad
+    // frame_size (v2) = RBP - RSP en un safepoint call; lo consume el WALK POR
+    // TAMANO DE FRAME (scan_aot_frames) para reconstruir RBP sin cadena RBP.  Un
+    // .vexgc_smap v1 (sin frame_size) falla el check de version -> recompilar.
     if (!sec || size < 16) return;
     const uint8_t *p = sec;
     const uint8_t *end = sec + size;
@@ -183,13 +208,14 @@ void vex_gc_register_aot_stackmaps(const uint8_t *sec) {
     const uint32_t magic = rd32();
     if (magic != 0x4D475856u) return; // 'VXGM'
     const uint32_t version = rd32();
-    if (version != 1u) return;
+    if (version != 2u) return; // v1 (sin frame_size) -> forzar recompilar
     const uint32_t n_fn = rd32();
-    (void)rd32(); // _pad
+    (void)rd32(); // total_size (ya leido del offset 12)
     auto &reg = jit::JitRegistry::instance();
-    for (uint32_t f = 0; f < n_fn && p + 16 <= end; ++f) {
+    for (uint32_t f = 0; f < n_fn && p + 20 <= end; ++f) {
         const uint64_t func_addr = rd64();
         const uint32_t code_size = rd32();
+        const uint32_t frame_size = rd32(); // v2: RBP - RSP en safepoint call
         const uint32_t n_sp = rd32();
         std::vector<jit::Stackmap> smaps;
         smaps.reserve(n_sp);
@@ -213,7 +239,7 @@ void vex_gc_register_aot_stackmaps(const uint8_t *sec) {
             reg.register_function(
                 reinterpret_cast<const uint8_t *>(func_addr),
                 reinterpret_cast<const uint8_t *>(func_addr) + code_size,
-                std::move(smaps), /*frame_size=*/0, "aot");
+                std::move(smaps), /*frame_size=*/frame_size, "aot");
     }
 }
 
@@ -229,7 +255,10 @@ uint8_t *vex_gc_deref(uint32_t handle) {
     return gc_heap().deref(static_cast<gc::GcHandle>(handle));
 }
 
-void vex_gc_collect(void) {
+VEX_GC_FORCE_FP void vex_gc_collect(void) {
+    // Capturar el frame Vex llamador ANTES de colectar: el major_gc de abajo
+    // arranca el scan preciso desde aqui (frontera C<-Vex).
+    VEX_GC_CAPTURE_VEX_FRAME();
     gc::GcHeap &h = gc_heap();
     h.minor_gc();
     h.major_gc();
@@ -249,7 +278,11 @@ void vex_gc_unregister_finalizer(uint8_t *payload) {
     gc_heap().unregister_finalizer(payload);
 }
 
-void vex_gc_finalize_all(void) {
+VEX_GC_FORCE_FP void vex_gc_finalize_all(void) {
+    // Capturar el frame Vex llamador por si finalize_all_live disparara un
+    // scan de raices en el futuro (hoy solo corre finalizadores, sin mark/sweep;
+    // capturar es defensivo y mantiene el boundary fresco).
+    VEX_GC_CAPTURE_VEX_FRAME();
     // Shutdown-time: finalizar todo objeto vivo con recurso interno (cubre los
     // escapados que el sweep no colecto todavia).  Cero fuga antes del exit.
     gc_heap().finalize_all_live();

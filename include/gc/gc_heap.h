@@ -1414,6 +1414,28 @@ class GcHeap {
     void set_aot_mode(bool v) noexcept { aot_precise_roots_ = v; }
 
     /**
+     * @brief Fija el frame Vex de ENTRADA para el WALK POR TAMANO DE FRAME del
+     *        scan preciso de AOT.
+     *
+     * Lo captura cada runtime-entry del GC que puede colectar (vex_gc_collect,
+     * vex_gc_finalize_all) EN LA FRONTERA C<-Vex: @p pc es la direccion de
+     * retorno al frame Vex llamador (dentro de la funcion nativa que llamo al
+     * GC) y @p sp es el RSP de ese frame justo antes del @c call.  A partir de
+     * ese par, @c scan_jit_roots_precise (en modo AOT) sube por la pila usando
+     * el @c frame_size de cada funcion en lugar de la cadena RBP -> salta los
+     * frames C++ no-walkables de libvesta_gc (que pueden usar
+     * -fomit-frame-pointer) y arranca en el primer frame Vex real.
+     *
+     * @param pc direccion de retorno al frame Vex (0 = invalida el boundary).
+     * @param sp RSP del frame Vex llamador antes del @c call.
+     */
+    void set_aot_scan_boundary(uint64_t pc, uint64_t sp) noexcept {
+        aot_boundary_pc_ = pc;
+        aot_boundary_sp_ = sp;
+        aot_boundary_valid_ = (pc != 0 && sp != 0);
+    }
+
+    /**
      * @brief Devuelve un puntero al payload del objeto referenciado por @p
      * handle.
      *
@@ -1991,6 +2013,16 @@ class GcHeap {
     /// libvesta_gc (set_aot_mode).  Sin el flag, un heap sin owner conserva
     /// todo (comportamiento de tests/Inc 0).
     bool aot_precise_roots_ = false;
+
+    /// Boundary del WALK POR TAMANO DE FRAME (scan preciso de AOT).  Lo fija
+    /// @c set_aot_scan_boundary en cada runtime-entry del GC que puede colectar,
+    /// capturado en la frontera C<-Vex.  @c aot_boundary_pc_ es el PC de retorno
+    /// al frame Vex y @c aot_boundary_sp_ su RSP antes del @c call.  Mientras sea
+    /// valido, @c scan_jit_roots_precise usa @c scan_aot_frames (frame_size) en
+    /// vez de la cadena RBP.  Fresco en cada coleccion (cada entry lo re-fija).
+    uint64_t aot_boundary_pc_ = 0;
+    uint64_t aot_boundary_sp_ = 0;
+    bool aot_boundary_valid_ = false;
 
     // ---- (iv) Free lists segregadas para slots OldGen liberados ----
     // Cada slot DEAD reusa los primeros 8 bytes de su payload como

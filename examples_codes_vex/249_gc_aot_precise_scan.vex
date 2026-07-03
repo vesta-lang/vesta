@@ -1,0 +1,61 @@
+// 249 -- Scan PRECISO de raices del GC de AOT (walk por tamano de frame).
+//
+// De-enmascara el bug historico: el scan preciso de AOT arrancaba el walk
+// dentro de los frames C++ de libvesta_gc (compilados con -fomit-frame-pointer)
+// y caminaba la cadena RBP, que se rompe ahi -> NUNCA alcanzaba el frame Vex
+// -> colectaba raices VIVAS.  Con el GC no-moving el R0 salia "bien" por leer
+// memoria stale; por eso la prueba de correctitud NO es solo el R0, sino que el
+// objeto VIVO sobreviva a un collect que libera cientos de muertos, y que su
+// slot NO sea reutilizado por las alocaciones posteriores.
+//
+// Prueba DETERMINISTA por reuso de slot:
+//   1. `live` (Box 42) es raiz VIVA de main, retenida a traves del collect.
+//   2. make_dead() crea 200 Box muertos (sus frames ya retornaron -> sin raiz).
+//   3. gc_collect() libera los 200 muertos.  Si el walk fallara, tambien
+//      liberaria `live` (su slot iria al freelist de su size class).
+//   4. fill() crea 400 Box nuevos con valor 99 -> reusa TODOS los slots
+//      liberados.  Si `live` hubiese sido colectado, su slot se sobreescribe
+//      con 99.
+//   5. return live.v : 42 si el scan preservo la raiz (CORRECTO); 99 si la
+//      colecto por error (BUG).  El exit-code depende de la preservacion real
+//      de la raiz, no de memoria stale.
+//
+// R0 esperado = 42 en los 3 modos (vm/jit/aot).
+
+class Box { i64 v; Box(i64 x) { this.v = x; } }
+
+// Crea n Box muertos (no escapan; el frame retorna antes del collect).  Suma
+// los campos para impedir que el optimizador elimine las alocaciones.
+i64 make_dead(i64 n) {
+    i64 i = 0;
+    i64 acc = 0;
+    while (i < n) {
+        gc<Box> d = new Box(7);
+        acc = acc + d.v;
+        i = i + 1;
+    }
+    return acc;
+}
+
+// Crea n Box nuevos con valor 99 -> reusa los slots liberados por el collect.
+i64 fill(i64 n) {
+    i64 i = 0;
+    i64 acc = 0;
+    while (i < n) {
+        gc<Box> f = new Box(99);
+        acc = acc + f.v;
+        i = i + 1;
+    }
+    return acc;
+}
+
+i64 main() {
+    gc<Box> live = new Box(42);   // raiz VIVA, retenida a traves del collect
+    i64 dsum = make_dead(200);    // 200 Box muertos
+    gc_collect();                  // libera los muertos (y `live` si el walk falla)
+    i64 fsum = fill(400);          // reusa TODOS los slots liberados con 99
+    // Referenciar dsum/fsum para que no se eliminen las alocaciones anteriores;
+    // el resultado real es live.v (42 correcto / 99 si la raiz fue colectada).
+    i64 guard = (dsum - dsum) + (fsum - fsum);
+    return live.v + guard;
+}

@@ -389,6 +389,21 @@ struct Lowerer {
         return -static_cast<int32_t>(SZ * total_saved + SZ * (slot + 1u));
     }
 
+    /**
+     * @brief Tamano del frame en un safepoint call: RBP - RSP.
+     *
+     * El prologo hace @c push rbp; mov rbp,rsp; (push callee-saved)*total_saved;
+     * sub rsp,spill_bytes -> en cualquier CALL interno RSP = RBP - (SZ*total_saved
+     * + spill_bytes).  Lo consume el WALK POR TAMANO DE FRAME del GC de AOT para
+     * reconstruir RBP desde el RSP del llamador sin leer la cadena RBP.  Los
+     * slots GC (slot_off) son RBP-relativos, asi que rbp = sp_llamador + este
+     * valor + 16 en la iteracion; ver @c scan_aot_frames.
+     */
+    uint32_t frame_size_for_scan() const noexcept {
+        return SZ * total_saved +
+               (spill_bytes > 0 ? static_cast<uint32_t>(spill_bytes) : 0u);
+    }
+
     /** @brief Operando de memoria del spill slot @p slot: [rbp+off]. */
     MOperand slot_mem(uint32_t slot) const noexcept {
         return MOperand::make_mem(MReg::RBP, slot_off(slot));
@@ -965,6 +980,7 @@ struct Lowerer {
              * el pc_offset. */
             if (ivs != nullptr) {
                 Stackmap sm;
+                sm.frame_size = frame_size_for_scan();
                 const uint32_t NVI =
                     static_cast<uint32_t>(ivs->intervals.size());
                 for (uint32_t v = 0; v < NVI; ++v) {
@@ -1003,6 +1019,7 @@ struct Lowerer {
              * vivos -> cero coste para el codigo sin GC. */
             if (ivs != nullptr) {
                 Stackmap sm;
+                sm.frame_size = frame_size_for_scan();
                 const uint32_t NVI =
                     static_cast<uint32_t>(ivs->intervals.size());
                 for (uint32_t v = 0; v < NVI; ++v) {
@@ -1081,6 +1098,7 @@ struct Lowerer {
             call.src1 = tgt;
             if (ivs != nullptr) {
                 Stackmap sm;
+                sm.frame_size = frame_size_for_scan();
                 const uint32_t NVI =
                     static_cast<uint32_t>(ivs->intervals.size());
                 for (uint32_t v = 0; v < NVI; ++v) {
