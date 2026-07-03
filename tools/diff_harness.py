@@ -49,6 +49,13 @@ NODET = {
 # argv, stdin) y no corren standalone en este harness.  No son bugs del JIT.
 SKIP = {
     "49_loadmodule_caller",   # requiere _test_plugin.velb en el FS
+    # AOT-only: la compactacion del GC en AOT via field-maps del descriptor de
+    # tipo.  El patron gc<Clase> con un campo-referencia gc<Clase> (lista de
+    # objetos gc) es una limitacion PRE-EXISTENTE del camino interp/JIT (el read
+    # de un campo gc devuelve garbage / cae en el path vreg).  Este harness solo
+    # ejercita interp/vreg/slots (nunca AOT), asi que el test no le corresponde;
+    # su correctness AOT la valida test_vex_e2e.sh (251, moved+0 stale).
+    "251_gc_compact_aot",
 }
 
 

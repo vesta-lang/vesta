@@ -1,0 +1,98 @@
+// 251 -- Compactacion mark-compact del OldGen en AOT (native_poo) via
+// FIELD-MAPS del descriptor de tipo.
+//
+// A diferencia de 250 (interp/JIT, referencias = GcHandles estables), aqui la
+// lista es de objetos `gc<Node>`: en AOT sus campos-referencia guardan
+// host_ptrs CRUDOS (no handles).  Para compactar (mover) el GC necesita, por
+// cada objeto, el FIELD-MAP de su descriptor de tipo (obj[0]) para (a) trazar
+// preciso el interior en el mark y (b) reescribir los punteros internos
+// (`next`) a la direccion de destino al deslizar los nodos vivos.  Las raices
+// de la pila nativa se reescriben via los stackmaps del scan preciso.
+//
+// La lista se construye grande, se recorta a la mitad (crea huecos) y
+// gc_collect() dispara el major_gc.  Con VESTA_GC_COMPACT_ALWAYS=1 los nodos
+// vivos DESLIZAN in-place; con VESTA_GC_VERIFY_MOVE=1 el verificador confirma
+// 0 punteros colgantes (raices + campos).  El resultado es transparente: la
+// traversal tras compactar da el MISMO conteo.
+//
+// R0 esperado = 42 en AOT, con y sin compactacion (transparente).  La
+// compactacion (opt-in) DESLIZA los 2000 nodos vivos reescribiendo cada `next`
+// via el field-map del descriptor + las raices de pila via los stackmaps.
+//
+// NOTA: este es un test AOT-only.  El patron `gc<Clase>` con un campo-referencia
+// `gc<Clase>` (lista enlazada de objetos gc) es una limitacion PRE-EXISTENTE del
+// camino interp/JIT (el read encadenado de un campo gc devuelve un valor
+// incorrecto), ajena a este incremento (que solo toca el codegen native_poo y
+// el GC de AOT).  La compactacion del OldGen en interp/JIT (con referencias =
+// GcHandles) la cubre 250_gc_compact.vex.
+
+class Node {
+    i64 v;
+    gc<Node> next;
+    Node(i64 x) { this.v = x; this.next = null; }
+}
+
+// Construye una lista de n nodos (valores 0..n-1); retorna la cabeza (ESCAPA).
+gc<Node> build(i64 n) {
+    gc<Node> head = null;
+    i64 i = 0;
+    while (i < n) {
+        gc<Node> m = new Node(i);
+        m.next = head;
+        head = m;
+        i = i + 1;
+    }
+    return head;
+}
+
+// Cuenta los nodos alcanzables desde la cabeza.
+i64 count_list(gc<Node> h) {
+    i64 acc = 0;
+    gc<Node> c = h;
+    while (c != null) {
+        acc = acc + 1;
+        c = c.next;
+    }
+    return acc;
+}
+
+// Suma los valores para forzar el uso de los campos tras compactar (detecta
+// punteros stale: un `next` no reescrito leeria basura o cascaria).
+i64 sum_list(gc<Node> h) {
+    i64 acc = 0;
+    gc<Node> c = h;
+    while (c != null) {
+        acc = acc + c.v;
+        c = c.next;
+    }
+    return acc;
+}
+
+// Corta la lista tras el nodo k: los nodos posteriores quedan inalcanzables.
+void truncate_at(gc<Node> h, i64 k) {
+    gc<Node> c = h;
+    i64 i = 0;
+    while (i < k) {
+        c = c.next;
+        i = i + 1;
+    }
+    c.next = null;
+}
+
+i32 main() {
+    gc<Node> keep = build(4000);        // lista viva -> OldGen (alloc_pinned)
+    i64 pre = count_list(keep);          // 4000
+
+    truncate_at(keep, 1999);             // deja 2000 nodos; el resto es basura
+
+    gc_collect();                         // colecta basura; compacta (opt-in)
+
+    i64 cnt = count_list(keep);          // 2000 tras compactar
+    // Kept: valores 2000..3999 -> sum = (2000+3999)*2000/2 = 5999000.
+    // Verifica que los `next` y `v` reescritos siguen validos tras el sliding.
+    i64 s = sum_list(keep);
+    if (cnt == 2000 && pre == 4000 && s == 5999000) {
+        return 42;                        // exito
+    }
+    return 0;
+}

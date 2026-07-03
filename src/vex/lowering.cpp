@@ -25463,8 +25463,12 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         break;
                     }
             uint64_t vtable_idx = UINT64_MAX;
+            // Hoisted fuera del bloque needs_vtable: el DESCRIPTOR DE TIPO de
+            // una clase gc<X> (ver mas abajo) reusa el numero de slots y la
+            // tabla slot->simbolo aunque la clase no requiera vtable propia.
+            uint32_t nslots = 0;
+            std::map<uint32_t, std::string> slot_sym;
             if (needs_vtable) {
-                uint32_t nslots = 0;
                 for (const auto &mi : lay.methods)
                     if (mi.vtable_index + 1u > nslots)
                         nslots = mi.vtable_index + 1u;
@@ -25554,7 +25558,6 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     // las colocaciones de interfaz SOBREESCRIBEN (priman) su
                     // slot -- el slot del ctor esta muerto en native_poo.  Sin
                     // depender del orden de aplicacion de relocs del emisor.
-                    std::map<uint32_t, std::string> slot_sym;
                     for (const auto &mi : lay.methods) {
                         const std::string owner = mi.defining_class.empty()
                                                       ? cd->name
@@ -25573,6 +25576,89 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         sr.is_rel = 0;
                         vm.sym_refs.push_back(std::move(sr));
                     }
+                }
+            }
+
+            // -----------------------------------------------------------
+            // DESCRIPTOR DE TIPO gc<X> (para la compactacion del GC en AOT).
+            //
+            // Solo las clases usadas como gc<Clase> (classes_used_gc_) llevan
+            // descriptor: el GC (libvesta_gc) lo necesita para (a) trazar
+            // preciso el interior de cada objeto y (b) reescribir sus punteros
+            // internos al compactar (mover) el OldGen.  Las clases RAII normales
+            // (no-GC) NO lo llevan -> cero coste en binarios sin gc<T>.
+            //
+            // Layout del descriptor (blob en .data.rel.ro, referenciado por
+            // obj[0]).  Cabecera fija de 32 bytes ANTES de la vtable para NO
+            // romper el dispatch: obj[0] apunta a &descriptor + 32 = vtable[0],
+            // asi [obj[0] + idx*8] sigue siendo la entrada idx de la vtable.
+            //   [ -32 ]  field_map_ptr (8)  -> &field-map (o 0 si sin campos-ref)
+            //   [ -24 ]  size_bytes    (8)  -> tamano del payload (compact/refl)
+            //   [ -16 ]  dtor_ptr      (8)  -> 0 (reservado: unificacion futura)
+            //   [  -8 ]  magic 'VXTD'  (4) + flags (4)  -> sanity del verificador
+            //   [   0 ]  vtable[0], vtable[1], ...   <- obj[0] apunta AQUI
+            // Field-map (blob en .rodata): [u32 count][u32 pad][u32 off]...
+            // offN = offset de un campo-referencia gc<Y> desde obj[0] (incluye
+            // el ObjectHeader de 24 bytes).  Solo se listan campos con
+            // Type.gc_managed == true (NUNCA unique/shared/raw/RAII/primitivos).
+            uint64_t desc_idx = UINT64_MAX;
+            if (classes_used_gc_.count(cd->name) > 0) {
+                // 1. Field-map: recolectar offsets de campos-referencia gc.
+                std::vector<uint32_t> gc_field_offsets;
+                for (const auto &f : lay.fields)
+                    if (f.type.gc_managed)
+                        gc_field_offsets.push_back(f.offset);
+                uint64_t fmap_idx = UINT64_MAX;
+                if (!gc_field_offsets.empty()) {
+                    std::vector<uint8_t> fmap(
+                        8 + gc_field_offsets.size() * 4u, 0);
+                    const uint32_t cnt =
+                        static_cast<uint32_t>(gc_field_offsets.size());
+                    std::memcpy(fmap.data(), &cnt, 4); // count @0
+                    // pad @4 = 0
+                    for (size_t k = 0; k < gc_field_offsets.size(); ++k)
+                        std::memcpy(fmap.data() + 8 + k * 4u,
+                                    &gc_field_offsets[k], 4);
+                    fmap_idx = out.static_data.push_back(std::move(fmap));
+                    auto &fm = out.static_data.meta_at(fmap_idx);
+                    fm.section_name = ".rodata";
+                    fm.symbol_name = "__vex_fmap_" + cd->name;
+                    fm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
+                                ir::IrModule::SD_FLAG_NON_DEDUP;
+                }
+                // 2. Descriptor: cabecera 32B + vtable (copia de slot_sym).
+                const uint32_t kHdr = 32;
+                std::vector<uint8_t> desc(
+                    kHdr + static_cast<size_t>(nslots) * 8u, 0);
+                const uint64_t sz64 = lay.size_bytes;
+                std::memcpy(desc.data() + 8, &sz64, 8);      // size @8
+                const uint32_t magic = 0x44545856u;          // 'VXTD' LE
+                std::memcpy(desc.data() + 24, &magic, 4);    // magic @24
+                desc_idx = out.static_data.push_back(std::move(desc));
+                auto &dm = out.static_data.meta_at(desc_idx);
+                dm.section_name = ".data.rel.ro";
+                dm.symbol_name = "__vex_tdesc_" + cd->name;
+                dm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
+                            ir::IrModule::SD_FLAG_NON_DEDUP;
+                if (fmap_idx != UINT64_MAX) {
+                    ir::IrModule::StaticDataMeta::SymRef sr;
+                    sr.offset = 0; // field_map_ptr @0
+                    sr.sym = "__vex_fmap_" + cd->name;
+                    sr.width = 8;
+                    sr.is_rel = 0;
+                    dm.sym_refs.push_back(std::move(sr));
+                }
+                // Vtable embebida en el descriptor (a partir de +32): copia de
+                // los mismos simbolos que la vtable standalone.  Asi los
+                // objetos gc despachan por esta vtable y el descriptor unifica
+                // metadata + vtable en un solo blob que obj[0] localiza.
+                for (const auto &kv : slot_sym) {
+                    ir::IrModule::StaticDataMeta::SymRef sr;
+                    sr.offset = kHdr + kv.first;
+                    sr.sym = kv.second;
+                    sr.width = 8;
+                    sr.is_rel = 0;
+                    dm.sym_refs.push_back(std::move(sr));
                 }
             }
 
@@ -25711,18 +25797,45 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     ca.source_line = cd->loc.line;
                     gf.append(ge, std::move(ca));
                 }
-                // vtable (si la clase es virtual): obj[0] = &vtable.
-                if (needs_vtable && vtable_idx != UINT64_MAX) {
-                    ir::IrValueId g_vt = gf.new_value(ir::IrType::PTR);
-                    gf.values[g_vt].is_host_ptr = true;
+                // obj[0] = &descriptor + 32 (= vtable[0]).  El descriptor
+                // unifica field-map + metadata + vtable en un solo blob.  El
+                // +32 salta la cabecera fija para que [obj[0] + idx*8] siga
+                // siendo la entrada idx de la vtable (dispatch intacto); el GC
+                // lee la metadata en [obj[0] - 32].  desc_idx SIEMPRE existe
+                // para una clase gc (se construyo arriba), con o sin vtable.
+                if (desc_idx != UINT64_MAX) {
+                    ir::IrValueId g_db = gf.new_value(ir::IrType::PTR);
+                    gf.values[g_db].is_host_ptr = true;
                     {
                         ir::IrInstr sa{};
                         sa.op = ir::IrOp::STR_LIT_ADDR;
                         sa.type = ir::IrType::PTR;
-                        sa.dst = g_vt;
-                        sa.imm = vtable_idx;
+                        sa.dst = g_db;
+                        sa.imm = desc_idx;
                         sa.source_line = cd->loc.line;
                         gf.append(ge, std::move(sa));
+                    }
+                    const ir::IrValueId g_k =
+                        gf.new_value(ir::IrType::I64);
+                    {
+                        ir::IrInstr c{};
+                        c.op = ir::IrOp::CONST;
+                        c.type = ir::IrType::I64;
+                        c.dst = g_k;
+                        c.imm = 32;
+                        c.source_line = cd->loc.line;
+                        gf.append(ge, std::move(c));
+                    }
+                    ir::IrValueId g_vt = gf.new_value(ir::IrType::PTR);
+                    gf.values[g_vt].is_host_ptr = true;
+                    {
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::PTR;
+                        ad.dst = g_vt;
+                        ad.operands = {g_db, g_k};
+                        ad.source_line = cd->loc.line;
+                        gf.append(ge, std::move(ad));
                     }
                     {
                         ir::IrInstr st{};

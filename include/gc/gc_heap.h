@@ -2324,6 +2324,20 @@ class GcHeap {
      *         -> el caller corre el sweep normal.
      */
     bool compact_old_gen();
+
+    /**
+     * @brief Compactacion mark-compact del OldGen en modo AOT (libvesta_gc).
+     *
+     * Igual que @c compact_old_gen pero para native_poo (AOT), donde los
+     * campos-referencia guardan host_ptrs CRUDOS (no GcHandles) y las raices
+     * viven en la pila NATIVA (no en vm_mem).  Reescribe: (a) las raices via
+     * @c scan_aot_frames (stackmaps) y (b) los punteros internos de cada objeto
+     * vivo via su field-map (descriptor de tipo en obj[0]).  Copia escalar
+     * (memmove).  Freestanding-safe.  OPT-IN (VESTA_GC_COMPACT_ALWAYS).
+     *
+     * @return true si compacto; false si no aplica -> el caller barre normal.
+     */
+    bool compact_old_gen_aot();
 };
 } // namespace gc
 

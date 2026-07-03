@@ -195,6 +195,53 @@ struct GcDebugAtExit {
 GC_DBG_TLS GcDebugAtExit g_gc_debug_at_exit;
 } // namespace
 
+// -------------------------------------------------------------------------
+// DESCRIPTOR DE TIPO gc<X> (AOT) -- contrato con el codegen (lowering.cpp).
+//
+// Un objeto gc<X> compilado en modo nativo (native_poo) guarda en obj[0]
+// (ObjectHeader.class_ptr) un puntero a &descriptor + 32.  El descriptor es
+// un blob en .data.rel.ro con esta forma:
+//   [desc+0 ]  field_map_ptr (8)   -> &field-map  (0 = sin campos-referencia)
+//   [desc+8 ]  size_bytes    (8)
+//   [desc+16]  dtor_ptr      (8)   -> 0 (reservado, unificacion futura)
+//   [desc+24]  magic 'VXTD'  (4) + flags (4)
+//   [desc+32]  vtable[0], vtable[1], ...   <- obj[0] apunta AQUI
+// De modo que [obj[0] + idx*8] sigue siendo la entrada idx de la vtable
+// (dispatch intacto) y el GC lee la metadata en [obj[0] - 32].
+//
+// El field-map (blob en .rodata) lista los offsets (desde obj[0], incluye
+// el ObjectHeader de 24 bytes) de los campos que son referencias gc<Y>:
+//   [fmap+0]  count (u32)   [fmap+4]  pad (u32)   [fmap+8]  off0, off1, ...
+// Solo campos con Type.gc_managed == true (NUNCA unique/shared/raw/prim).
+namespace {
+constexpr uint32_t VEX_TDESC_HDR = 32;          // cabecera antes de la vtable
+constexpr uint32_t VEX_TDESC_MAGIC = 0x44545856u; // 'VXTD' little-endian
+
+// Lee el field-map de un objeto gc<X> AOT a partir de su @p payload (= obj[0],
+// inicio del ObjectHeader).  Devuelve el numero de campos-referencia en
+// @p count y el array de offsets en @p offs.  Robusto: los boxes por valor
+// (@p host_ptr_only) y los objetos sin descriptor o sin campos-referencia
+// devuelven count=0 (nada que trazar/reescribir).  Solo lecturas de memoria
+// host valida (.rodata/.data.rel.ro); freestanding-safe (sin libc/stdio).
+inline void read_gc_field_map(const uint8_t *payload, bool host_ptr_only,
+                              uint32_t &count,
+                              const uint32_t *&offs) noexcept {
+    count = 0;
+    offs = nullptr;
+    if (host_ptr_only) return; // box por valor (gc<primitivo>): sin descriptor
+    uint64_t obj0 = 0;
+    std::memcpy(&obj0, payload, 8); // obj[0] = &descriptor + 32
+    if (obj0 == 0) return;
+    const uint8_t *desc = reinterpret_cast<const uint8_t *>(obj0) - VEX_TDESC_HDR;
+    uint64_t fmap_ptr = 0;
+    std::memcpy(&fmap_ptr, desc, 8); // field_map_ptr @ desc+0
+    if (fmap_ptr == 0) return;       // clase gc sin campos-referencia
+    const uint8_t *fmap = reinterpret_cast<const uint8_t *>(fmap_ptr);
+    std::memcpy(&count, fmap, 4);         // count @ fmap+0
+    offs = reinterpret_cast<const uint32_t *>(fmap + 8); // offsets @ fmap+8
+}
+} // namespace
+
 void set_gc_debug(bool enabled) noexcept {
     g_gc_debug = enabled;
 }
@@ -1467,6 +1514,36 @@ void GcHeap::mark_reachable(GcHandle h, std::vector<GcHandle> &worklist) {
     uint8_t *payload = handles_[h].addr + sizeof(GcHeader);
     size_t sz = hdr->size;
 
+    // Modo AOT (native_poo): los campos-referencia guardan host_ptrs CRUDOS,
+    // no GcHandles -> el word-scan por indices de abajo no los seguiria.  Se
+    // traza PRECISO via el field-map del descriptor de tipo (obj[0]): solo los
+    // offsets de campos gc<Y>.  Esto hace el mark SOUND (sin ello, un objeto
+    // alcanzable solo via un campo quedaria WHITE y se colectaria -> UAF).
+    if (aot_precise_roots_) {
+        uint32_t fcount = 0;
+        const uint32_t *foffs = nullptr;
+        read_gc_field_map(payload, hdr->host_ptr_only != 0, fcount, foffs);
+        for (uint32_t k = 0; k < fcount; ++k) {
+            const uint32_t fo = foffs[k];
+            if (fo + 8 > sz) continue; // defensivo: offset fuera del payload
+            uint64_t fptr = 0;
+            std::memcpy(&fptr, payload + fo, 8);
+            if (fptr == 0) continue; // campo nulo
+            const GcHandle ref = handle_for_ptr(
+                reinterpret_cast<const uint8_t *>(fptr));
+            if (ref == GC_NULL_HANDLE ||
+                ref >= static_cast<GcHandle>(handles_.size()))
+                continue;
+            if (!handles_[ref].live || !handles_[ref].addr) continue;
+            auto *ref_hdr = reinterpret_cast<GcHeader *>(handles_[ref].addr);
+            if (ref_hdr->gen != GcGen::OLD || ref_hdr->color != GcColor::WHITE)
+                continue;
+            ref_hdr->color = GcColor::BLACK;
+            worklist.push_back(ref);
+        }
+        return;
+    }
+
     for (size_t off = 0; off + sizeof(GcHandle) <= sz;
          off += sizeof(GcHandle)) {
         GcHandle ref;
@@ -1927,10 +2004,15 @@ void GcHeap::major_gc() {
     // no existe) ni con frames nativos JIT activos (host_ptrs en la pila nativa
     // sin reescritura implementada aun).  En esos modos se cae al sweep
     // no-moving de siempre -> comportamiento identico a hoy.
+    // AOT (native_poo): compactar con reescritura de raices (stackmaps) +
+    // punteros internos (field-maps del descriptor de tipo).  Es correcto
+    // porque el mark AOT es preciso (raices via scan_aot_frames + interior via
+    // field-maps).  Sigue OPT-IN dentro de compact_old_gen_aot.  El path
+    // interp mantiene su gate original (vm_mem + sin JIT frames nativos).
     const bool can_compact_now =
-        root_provider_ != nullptr && !aot_precise_roots_ &&
-        root_provider_->vm_mem() != nullptr &&
-        jit::JitRegistry::instance().size() == 0;
+        aot_precise_roots_ ||
+        (root_provider_ != nullptr && root_provider_->vm_mem() != nullptr &&
+         jit::JitRegistry::instance().size() == 0);
     if (!(can_compact_now && compact_old_gen())) {
     // SWEEP: WHITE (sin raiz) -> DEAD, y reconstruir free lists.
     //
@@ -2074,13 +2156,13 @@ inline bool env_flag_1(const char *name) noexcept {
 #endif
 
 bool GcHeap::compact_old_gen() {
+    // AOT (native_poo): ruta dedicada con reescritura por field-maps + raices
+    // de pila nativa (stackmaps).  aot_precise_roots_ solo es true en
+    // libvesta_gc (set_aot_mode); en interp/JIT es false -> ruta de abajo.
+    if (aot_precise_roots_) return compact_old_gen_aot();
 #if defined(VESTA_GC_FREESTANDING)
-    // El GC freestanding (libvesta_gc / AOT) NUNCA compacta: en native_poo los
-    // fields de referencia guardan host_ptrs CRUDOS (sin tabla de handles) ->
-    // mover requeriria un field-map que no existe.  El caller (major_gc) ademas
-    // nunca invoca esto en modo AOT (gate can_compact_now: !aot_precise_roots_).
-    // Stub para no arrastrar getenv/atoi/std::sort/gc_dbg_emit al link
-    // freestanding (sin libc/stdio).
+    // GC freestanding NO-AOT (no deberia ocurrir: freestanding implica AOT).
+    // Stub defensivo para no arrastrar getenv/atoi/std::sort al link.
     return false;
 #else
     // ------------------------------------------------------------------
@@ -2429,6 +2511,387 @@ bool GcHeap::compact_old_gen() {
 
     return true;
 #endif // VESTA_GC_FREESTANDING
+}
+
+// -------------------------------------------------------------------------
+// Compactacion mark-compact del OldGen en AOT (libvesta_gc / native_poo).
+// -------------------------------------------------------------------------
+// Traza de la compactacion AOT: en el build FREESTANDING (libvesta_gc) NO se
+// emite (evita arrastrar vsnprintf/__mingw_vsnprintf al link nativo, igual que
+// el resto de gc_dbg_emit del path freestanding, todos gateados).  La
+// correctness NO depende de la traza: el verificador cuenta stale igual y el
+// resultado del programa (R0) delata cualquier corrupcion.
+#if defined(VESTA_GC_FREESTANDING)
+#define GC_AOT_DBG(...) ((void)0)
+#define GC_AOT_FLUSH() ((void)0)
+#else
+#define GC_AOT_DBG(...) gc_dbg_emit(__VA_ARGS__)
+#define GC_AOT_FLUSH() gc_debug_flush()
+#endif
+namespace {
+// Emisor freestanding-safe (SIN vsnprintf) para el resumen de la compactacion
+// AOT: formatea manualmente los contadores a decimal y los escribe al fd 2 via
+// GC_DBG_WRITE (_write/::write).  Gateado en runtime por VESTA_GC_DEBUG.  Asi la
+// compactacion AOT es OBSERVABLE (moved/collected/stale) sin arrastrar stdio.
+inline void gc_aot_write_str(const char *s) noexcept {
+    size_t n = 0;
+    while (s[n]) ++n;
+    if (n) GC_DBG_WRITE(2, s, (unsigned)n);
+}
+inline void gc_aot_write_u64(uint64_t v) noexcept {
+    char buf[24];
+    int i = 24;
+    buf[--i] = '\0';
+    if (v == 0) buf[--i] = '0';
+    while (v) {
+        buf[--i] = static_cast<char>('0' + (v % 10));
+        v /= 10;
+    }
+    gc_aot_write_str(buf + i);
+}
+inline void gc_aot_summary(uint64_t moved, uint64_t collected, uint64_t live,
+                           uint64_t freed, uint64_t stale_roots,
+                           uint64_t stale_fields) noexcept {
+    gc_aot_write_str("[gc-compact-aot] moved=");
+    gc_aot_write_u64(moved);
+    gc_aot_write_str(" collected=");
+    gc_aot_write_u64(collected);
+    gc_aot_write_str(" live=");
+    gc_aot_write_u64(live);
+    gc_aot_write_str(" freed=");
+    gc_aot_write_u64(freed);
+    gc_aot_write_str(" stale_roots=");
+    gc_aot_write_u64(stale_roots);
+    gc_aot_write_str(" stale_fields=");
+    gc_aot_write_u64(stale_fields);
+    gc_aot_write_str("\n");
+}
+/// Rango [old_start, old_end) de un objeto movido con su delta (new - old).
+struct AotRange {
+    uint64_t old_start;
+    uint64_t old_end;
+    int64_t delta;
+};
+/// Remapea un host_ptr @p v: si cae en un rango movido, +delta; si no, igual.
+/// Cubre el inicio del objeto y punteros interiores (el payload al que apunta
+/// un campo cae dentro de [old_hdr, old_hdr+total)).  Busqueda binaria.
+inline uint64_t aot_remap(const std::vector<AotRange> &ranges,
+                          uint64_t v) noexcept {
+    if (ranges.empty()) return v;
+    size_t lo = 0, hi = ranges.size();
+    while (lo < hi) {
+        const size_t mid = (lo + hi) / 2;
+        if (ranges[mid].old_start <= v)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo == 0) return v;
+    const AotRange &r = ranges[lo - 1];
+    if (v >= r.old_start && v < r.old_end)
+        return static_cast<uint64_t>(static_cast<int64_t>(v) + r.delta);
+    return v;
+}
+/// Contexto del callback de reescritura de raices de pila nativa (AOT).
+struct AotRootCtx {
+    const std::vector<AotRange> *ranges;
+    uint64_t rewritten;
+};
+/// Callback de @c scan_aot_frames: reescribe IN SITU el slot de pila nativa
+/// que aloja una raiz movida.  @p slot_addr es la direccion nativa del slot.
+void aot_root_rewrite_cb(void *ctx, uint64_t value, jit::StackmapGcKind /*k*/,
+                         const uint8_t *slot_addr) {
+    auto *c = static_cast<AotRootCtx *>(ctx);
+    if (value < 65536 || slot_addr == nullptr) return;
+    const uint64_t nv = aot_remap(*c->ranges, value);
+    if (nv != value) {
+        std::memcpy(const_cast<uint8_t *>(slot_addr), &nv, 8);
+        ++c->rewritten;
+    }
+}
+/// Contexto del verificador: cuenta raices que aun apuntan a un hueco.
+struct AotVerifyCtx {
+    const std::vector<AotRange> *holes; // delta ignorado; solo el rango
+    uint64_t stale;
+};
+void aot_root_verify_cb(void *ctx, uint64_t value, jit::StackmapGcKind /*k*/,
+                        const uint8_t * /*slot_addr*/) {
+    auto *c = static_cast<AotVerifyCtx *>(ctx);
+    if (value < 65536) return;
+    for (const auto &h : *c->holes)
+        if (value >= h.old_start && value < h.old_end) {
+            ++c->stale;
+            GC_AOT_DBG("[gc-verify-move-aot] STALE root v=0x%llx\n",
+                        (unsigned long long)value);
+            break;
+        }
+}
+} // namespace
+
+bool GcHeap::compact_old_gen_aot() {
+    // OPT-IN estricto (igual que el path interp): sin VESTA_GC_COMPACT_ALWAYS
+    // ni VESTA_GC_COMPACT_THRESHOLD explicitos, jamas compacta.  getenv esta
+    // disponible en el build freestanding (ya lo usa el init de debug).
+    static const bool compact_always = [] {
+        const char *v = std::getenv("VESTA_GC_COMPACT_ALWAYS");
+        return v && v[0] == '1';
+    }();
+    static const bool verify_move = [] {
+        const char *v = std::getenv("VESTA_GC_VERIFY_MOVE");
+        return v && v[0] == '1';
+    }();
+    // VESTA_GC_DEBUG leido como static LOCAL (no via g_gc_debug, cuyo
+    // inicializador namespace-scope no corre en un binario AOT bare sin
+    // .init_array).  Habilita el resumen observable de la compactacion.
+    static const bool aot_debug = [] {
+        const char *v = std::getenv("VESTA_GC_DEBUG");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    static const bool has_threshold =
+        std::getenv("VESTA_GC_COMPACT_THRESHOLD") != nullptr;
+    static const double frag_threshold = [] {
+        const char *v = std::getenv("VESTA_GC_COMPACT_THRESHOLD");
+        if (!v) return 1.0;
+        const int pct = std::atoi(v);
+        if (pct <= 0 || pct >= 100) return 0.5;
+        return static_cast<double>(pct) / 100.0;
+    }();
+    if (!compact_always && !has_threshold) return false;
+
+    // Sin frontera Vex valida NO podemos reescribir las raices de la pila
+    // nativa -> mover corromperia.  Abortamos ANTES de mutar nada (los valores
+    // pc/sp persisten tras el mark; solo se limpio el flag valid_).
+    const uint64_t bpc = aot_boundary_pc_;
+    const uint64_t bsp = aot_boundary_sp_;
+    if (bpc == 0 || bsp == 0) return false;
+
+    struct MovedObj {
+        GcHandle h;
+        uint8_t *old_hdr;
+        uint8_t *new_hdr;
+        size_t total;
+    };
+    struct CollectedObj {
+        uint8_t *hdr;
+        size_t total;
+        bool has_fin;
+    };
+    std::vector<MovedObj> moved;
+    std::vector<CollectedObj> collected;
+    std::vector<size_t> new_bump(old_blocks_.size(), 0);
+    std::vector<size_t> old_bump(old_blocks_.size(), 0);
+    size_t live_bytes = 0, dead_bytes = 0;
+
+    // ---- Fase A: PLAN (sin mutar) ----
+    for (size_t bi = 0; bi < old_blocks_.size(); ++bi) {
+        auto &block = old_blocks_[bi];
+        old_bump[bi] = block.bump_offset;
+        uint8_t *cursor = block.ptr;
+        uint8_t *end = block.ptr + block.bump_offset;
+        uint8_t *dest = block.ptr;
+        while (cursor + sizeof(GcHeader) <= end) {
+            auto *hdr = reinterpret_cast<GcHeader *>(cursor);
+            if (hdr->size == 0) break;
+            const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+            if (hdr->color == GcColor::BLACK) {
+                uint8_t *old_payload = cursor + sizeof(GcHeader);
+                const GcHandle h = ptr_to_handle_.find(old_payload);
+                if (h == GC_NULL_HANDLE || h >= handles_.size() ||
+                    !handles_[h].live || handles_[h].addr != cursor) {
+                    GC_AOT_DBG("[gc-compact-aot] abort: BLACK sin handle "
+                                "(cursor=%p)\n",
+                                (void *)cursor);
+                    return false;
+                }
+                moved.push_back({h, cursor, dest, total});
+                dest += total;
+                live_bytes += total;
+            } else {
+                if (hdr->color == GcColor::WHITE)
+                    collected.push_back(
+                        {cursor, total, hdr->has_finalizer != 0});
+                dead_bytes += total;
+            }
+            cursor += total;
+        }
+        new_bump[bi] = static_cast<size_t>(dest - block.ptr);
+    }
+
+    const size_t total_bytes = live_bytes + dead_bytes;
+    if (!compact_always) {
+        if (total_bytes == 0) return false;
+        const double frag =
+            static_cast<double>(dead_bytes) / static_cast<double>(total_bytes);
+        if (frag < frag_threshold) return false;
+    }
+    bool any_physical_move = false;
+    for (const auto &m : moved)
+        if (m.new_hdr != m.old_hdr) {
+            any_physical_move = true;
+            break;
+        }
+    if (!compact_always && !any_physical_move && collected.empty())
+        return false;
+
+    // ---- Fase B: FINALIZADORES de colectados ----
+    for (const auto &c : collected)
+        if (c.has_fin) {
+            auto *hdr = reinterpret_cast<GcHeader *>(c.hdr);
+            stage_finalizer(hdr, c.hdr + sizeof(GcHeader));
+        }
+
+    // ---- Fase C: MOVER (memmove sliding) ----
+    for (const auto &m : moved)
+        if (m.new_hdr != m.old_hdr)
+            std::memmove(m.new_hdr, m.old_hdr, m.total);
+
+    // ---- Rangos de reubicacion (para remapear punteros) ----
+    std::vector<AotRange> ranges;
+    ranges.reserve(moved.size());
+    for (const auto &m : moved) {
+        if (m.new_hdr == m.old_hdr) continue;
+        ranges.push_back(
+            {reinterpret_cast<uint64_t>(m.old_hdr),
+             reinterpret_cast<uint64_t>(m.old_hdr + m.total),
+             static_cast<int64_t>(reinterpret_cast<intptr_t>(m.new_hdr) -
+                                  reinterpret_cast<intptr_t>(m.old_hdr))});
+    }
+    std::sort(ranges.begin(), ranges.end(),
+              [](const AotRange &a, const AotRange &b) {
+                  return a.old_start < b.old_start;
+              });
+
+    // ---- Fase D: FIX MAPS (ptr_to_handle_ + handles_) ----
+    for (const auto &m : moved) {
+        ptr_to_handle_.erase(m.old_hdr + sizeof(GcHeader));
+        handles_[m.h].addr = m.new_hdr;
+    }
+    for (const auto &c : collected) {
+        uint8_t *payload = c.hdr + sizeof(GcHeader);
+        const GcHandle dh = ptr_to_handle_.find(payload);
+        ptr_to_handle_.erase(payload);
+        // En AOT liberamos el handle del colectado (igual que el sweep AOT):
+        // la tabla no debe crecer sin limite (new-and-forget).
+        if (dh != GC_NULL_HANDLE && dh < handles_.size()) {
+            handles_[dh].addr = nullptr;
+            handles_[dh].live = false;
+            free_handles_.push_back(dh);
+        }
+        stats_.freed_count++;
+        stats_.freed_bytes += c.total;
+    }
+    for (const auto &m : moved)
+        ptr_to_handle_.insert_or_assign(m.new_hdr + sizeof(GcHeader), m.h);
+
+    // ---- Fase E: RECUENTO + free-lists ----
+    freelist_clear();
+    stats_.old_freelist_bytes = 0;
+    for (size_t bi = 0; bi < old_blocks_.size(); ++bi)
+        old_blocks_[bi].bump_offset = new_bump[bi];
+    old_used_ = live_bytes;
+
+    // ---- Fase F1: REESCRITURA DE PUNTEROS INTERNOS (field-maps) ----
+    // Recorre TODOS los objetos vivos (en su posicion nueva) y remapea cada
+    // campo-referencia gc<Y> a la direccion de destino de su objeto.  Un objeto
+    // que no se movio puede referir a uno que si -> hay que recorrerlos todos.
+    if (!ranges.empty()) {
+        for (auto &block : old_blocks_) {
+            uint8_t *cursor = block.ptr;
+            uint8_t *end = block.ptr + block.bump_offset;
+            while (cursor + sizeof(GcHeader) <= end) {
+                auto *hdr = reinterpret_cast<GcHeader *>(cursor);
+                if (hdr->size == 0) break;
+                const size_t total =
+                    (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+                uint8_t *payload = cursor + sizeof(GcHeader);
+                const size_t sz = hdr->size;
+                uint32_t fcount = 0;
+                const uint32_t *foffs = nullptr;
+                read_gc_field_map(payload, hdr->host_ptr_only != 0, fcount,
+                                  foffs);
+                for (uint32_t k = 0; k < fcount; ++k) {
+                    const uint32_t fo = foffs[k];
+                    if (fo + 8 > sz) continue;
+                    uint64_t fptr = 0;
+                    std::memcpy(&fptr, payload + fo, 8);
+                    if (fptr < 65536) continue;
+                    const uint64_t nptr = aot_remap(ranges, fptr);
+                    if (nptr != fptr) std::memcpy(payload + fo, &nptr, 8);
+                }
+                cursor += total;
+            }
+        }
+    }
+
+    // ---- Fase F2: REESCRITURA DE RAICES (pila nativa via stackmaps) ----
+    if (!ranges.empty()) {
+        AotRootCtx rctx{&ranges, 0};
+        jit::scan_aot_frames(&aot_root_rewrite_cb, &rctx, bpc, bsp);
+    }
+
+    // ---- Fase G: VERIFICADOR (VESTA_GC_VERIFY_MOVE=1) ----
+    if (verify_move) {
+        std::vector<AotRange> holes;
+        for (size_t bi = 0; bi < old_blocks_.size(); ++bi) {
+            const uint64_t hs =
+                reinterpret_cast<uint64_t>(old_blocks_[bi].ptr) + new_bump[bi];
+            const uint64_t he =
+                reinterpret_cast<uint64_t>(old_blocks_[bi].ptr) + old_bump[bi];
+            if (he > hs) holes.push_back({hs, he, 0});
+        }
+        auto in_hole = [&](uint64_t v) -> bool {
+            for (const auto &r : holes)
+                if (v >= r.old_start && v < r.old_end) return true;
+            return false;
+        };
+        uint64_t stale_fields = 0;
+        // Campos-referencia de cada objeto vivo (tras la reescritura): 0 deben
+        // apuntar al hueco.  Si alguno lo hace, el mark tenia un hueco o falto
+        // un offset en el field-map.
+        for (auto &block : old_blocks_) {
+            uint8_t *cursor = block.ptr;
+            uint8_t *end = block.ptr + block.bump_offset;
+            while (cursor + sizeof(GcHeader) <= end) {
+                auto *hdr = reinterpret_cast<GcHeader *>(cursor);
+                if (hdr->size == 0) break;
+                const size_t total =
+                    (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+                uint8_t *payload = cursor + sizeof(GcHeader);
+                const size_t sz = hdr->size;
+                uint32_t fcount = 0;
+                const uint32_t *foffs = nullptr;
+                read_gc_field_map(payload, hdr->host_ptr_only != 0, fcount,
+                                  foffs);
+                for (uint32_t k = 0; k < fcount; ++k) {
+                    const uint32_t fo = foffs[k];
+                    if (fo + 8 > sz) continue;
+                    uint64_t v = 0;
+                    std::memcpy(&v, payload + fo, 8);
+                    if (v >= 65536 && in_hole(v)) {
+                        ++stale_fields;
+                        GC_AOT_DBG("[gc-verify-move-aot] STALE field cursor=%p "
+                                    "off=%u v=0x%llx\n",
+                                    (void *)cursor, fo, (unsigned long long)v);
+                    }
+                }
+                cursor += total;
+            }
+        }
+        // Raices de pila nativa (tras la reescritura).
+        AotVerifyCtx vctx{&holes, 0};
+        jit::scan_aot_frames(&aot_root_verify_cb, &vctx, bpc, bsp);
+        // Resumen OBSERVABLE en AOT (freestanding-safe, sin vsnprintf).
+        gc_aot_summary(moved.size(), collected.size(), live_bytes, dead_bytes,
+                       vctx.stale, stale_fields);
+        GC_AOT_FLUSH();
+    } else if (aot_debug) {
+        // Sin verificador pero con VESTA_GC_DEBUG: emitir el resumen para
+        // confirmar que la compactacion realmente movio objetos.
+        gc_aot_summary(moved.size(), collected.size(), live_bytes, dead_bytes,
+                       0, 0);
+    }
+
+    return true;
 }
 
 // -------------------------------------------------------------------------
