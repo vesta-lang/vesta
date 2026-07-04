@@ -50,6 +50,20 @@ std::string mangle_ns_path_(const std::string &dotted) {
     return out;
 }
 
+/// Quita el prefijo `<full_path>__` de un nombre mangled para obtener su nombre
+/// publico local.  Si el nombre NO lleva ese prefijo (e.g. `main`, que no se
+/// manglea, o un `__reservado`), lo devuelve TAL CUAL -- evita el substr
+/// fuera-de-rango cuando un simbolo escapa al mangling (bug NS.1: la forma
+/// statement `namespace a.b.c;` arrastra `main` al namespace).
+std::string strip_ns_prefix_(const std::string &name,
+                             const std::string &full_path) {
+    if (full_path.empty()) return name;
+    const std::string pre = full_path + "__";
+    if (name.size() > pre.size() && name.compare(0, pre.size(), pre) == 0)
+        return name.substr(pre.size());
+    return name;
+}
+
 /// Aplica el prefix `<ns_path>__` a un nombre si NO empieza con `__`
 /// (identificadores reservados) y no es `main` (entry point unico).
 std::string mangle_name_(const std::string &ns_path, const std::string &name) {
@@ -478,8 +492,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Function;
             sym.public_name =
-                (full_path.empty() ? fd->name
-                                   : fd->name.substr(full_path.size() + 2));
+                strip_ns_prefix_(fd->name, full_path);
             sym.mangled_label = fd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -490,8 +503,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
             sym.public_name =
-                (full_path.empty() ? sd->name
-                                   : sd->name.substr(full_path.size() + 2));
+                strip_ns_prefix_(sd->name, full_path);
             sym.mangled_label = sd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -502,8 +514,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
             sym.public_name =
-                (full_path.empty() ? cd->name
-                                   : cd->name.substr(full_path.size() + 2));
+                strip_ns_prefix_(cd->name, full_path);
             sym.mangled_label = cd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -514,8 +525,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
             sym.public_name =
-                (full_path.empty() ? ed->name
-                                   : ed->name.substr(full_path.size() + 2));
+                strip_ns_prefix_(ed->name, full_path);
             sym.mangled_label = ed->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -526,8 +536,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
             sym.public_name =
-                (full_path.empty() ? td->name
-                                   : td->name.substr(full_path.size() + 2));
+                strip_ns_prefix_(td->name, full_path);
             sym.mangled_label = td->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -538,8 +547,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Variable;
             sym.public_name =
-                (full_path.empty() ? gd->name
-                                   : gd->name.substr(full_path.size() + 2));
+                strip_ns_prefix_(gd->name, full_path);
             sym.mangled_label = gd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));

@@ -346,6 +346,43 @@ void TypeChecker::register_namespace_symbol(uint32_t ns_index,
     ns.by_name.emplace(public_name, sym_idx);
 }
 
+// Phase NS.1b: resuelve `a.b.c.Symbol` probando el prefijo de namespace mas
+// LARGO.  Itera desde el ultimo punto hacia el primero: el namespace es el
+// prefijo mas largo registrado (por su nombre punteado completo) que contiene
+// el simbolo restante.  Cubre single-segment (`ui.Button`) y multi-segment
+// (`ui.widgets.Button` -> ns=`ui.widgets`, sym=`Button`).
+bool TypeChecker::resolve_ns_qualified(const std::string &dotted,
+                                       uint32_t &out_ns_idx,
+                                       std::string &out_sym) const {
+    size_t pos = dotted.rfind('.');
+    while (pos != std::string::npos) {
+        const std::string ns_name = dotted.substr(0, pos);
+        const std::string sym_name = dotted.substr(pos + 1);
+        // Resolver ns_name como namespace: primero el mapa persistente (que
+        // sobrevive al pop_scope), luego el lookup tradicional.
+        uint32_t idx = UINT32_MAX;
+        auto it = ns_idx_by_local_name_.find(ns_name);
+        if (it != ns_idx_by_local_name_.end()) {
+            idx = it->second;
+        } else {
+            const Symbol *s = lookup(ns_name);
+            if (s && s->kind == SymbolKind::Namespace) idx = s->ns_index;
+        }
+        if (idx < imported_namespaces_.size()) {
+            const auto &ns = imported_namespaces_[idx];
+            if (ns.by_name.find(sym_name) != ns.by_name.end()) {
+                out_ns_idx = idx;
+                out_sym = sym_name;
+                return true;
+            }
+        }
+        // Probar un prefijo de namespace mas corto (punto anterior).
+        if (pos == 0) break;
+        pos = dotted.rfind('.', pos - 1);
+    }
+    return false;
+}
+
 } // namespace vex
 
 namespace vex {

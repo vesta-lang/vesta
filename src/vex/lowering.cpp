@@ -14693,9 +14693,18 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     // emitimos CALL como si fuera una llamada normal.
     if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        // Phase NS.1b: la base puede ser un IdentExpr (single-segment `ui`) o
+        // una cadena de field-access (multi-segment `ui.widgets`).  La
+        // resolucion usa @c fa->ns_index (autoritativo); @c idb solo se usa en
+        // el fallback de static-method (ns_index no resuelto), que no aplica a
+        // los namespaces multi-segmento.
         if (fa->property_kind == 4 && fa->base &&
-            fa->base->kind == ast::NodeKind::IdentExpr) {
-            auto *idb = static_cast<ast::IdentExpr *>(fa->base.get());
+            (fa->base->kind == ast::NodeKind::IdentExpr ||
+             fa->base->kind == ast::NodeKind::FieldAccessExpr)) {
+            ast::IdentExpr *idb =
+                (fa->base->kind == ast::NodeKind::IdentExpr)
+                    ? static_cast<ast::IdentExpr *>(fa->base.get())
+                    : nullptr;
             // Localizar el namespace EXACTO via ns_index que el
             // TypeChecker dejo en el FieldAccessExpr.  Sentinel
             // UINT32_MAX significa no resuelto (defensivo).
@@ -14737,7 +14746,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     }
                 }
             }
-            if (!found) {
+            if (!found && idb) {
                 // L2.1: static method de clase cross-class (e.g.
                 // `Stats.inc()`). El TypeChecker marca @c property_kind=4 pero
                 // deja
@@ -14758,8 +14767,10 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 }
             }
             if (!found) {
-                diags_.error(e->loc, "namespace '" + idb->name +
-                                         "' no resuelto en lowering");
+                diags_.error(e->loc,
+                             "namespace '" +
+                                 (idb ? idb->name : fa->field_name) +
+                                 "' no resuelto en lowering");
                 return ir::IR_NO_VALUE;
             }
             // LIM-A: si el simbolo importado es @Naked (asm nativo puro), su

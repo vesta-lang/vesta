@@ -1428,6 +1428,14 @@ class TypeChecker {
                                    ImportedNamespace::Sym sym);
 
   private:
+    /// Phase NS.1b: resuelve un nombre qualified punteado `a.b.c.Symbol` a su
+    /// namespace + simbolo, probando el PREFIJO de namespace mas LARGO (para
+    /// paths multi-segmento: `ui.widgets.Button` -> ns=`ui.widgets`,
+    /// sym=`Button`).  Cubre tambien el caso single-segment (`ui.Button`).
+    /// @return true si resolvio; rellena @p out_ns_idx + @p out_sym.
+    bool resolve_ns_qualified(const std::string &dotted, uint32_t &out_ns_idx,
+                              std::string &out_sym) const;
+
     /// Borrow checker compile-time.  Mantiene estado de borrows
     /// activos durante el chequeo de una funcion.  Se resetea al
     /// entrar a cada funcion.

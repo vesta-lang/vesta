@@ -1548,25 +1548,12 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
         // el simbolo dentro.  Si encaja, traducimos a Type del
         // tipo apuntado (con el mangled label correspondiente).
         {
-            size_t dot = nt->name.find('.');
-            if (dot != std::string::npos) {
-                const std::string ns_name = nt->name.substr(0, dot);
-                const std::string sym_name = nt->name.substr(dot + 1);
-                // LANG.fix-3: resolver via mapa persistente
-                // ns_idx_by_local_name_ que sobrevive al pop_scope
-                // del final de tc.run().  Si esa busqueda falla,
-                // fallback al lookup tradicional (durante check
-                // phase los scopes aun estan vivos).
-                uint32_t ns_idx_resolved = UINT32_MAX;
-                auto it_ns = ns_idx_by_local_name_.find(ns_name);
-                if (it_ns != ns_idx_by_local_name_.end()) {
-                    ns_idx_resolved = it_ns->second;
-                } else {
-                    const Symbol *ns_sym = lookup(ns_name);
-                    if (ns_sym && ns_sym->kind == SymbolKind::Namespace) {
-                        ns_idx_resolved = ns_sym->ns_index;
-                    }
-                }
+            // Phase NS.1b: resolver por el prefijo de namespace mas largo
+            // (multi-segmento `ui.widgets.Button`).
+            uint32_t ns_idx_resolved = UINT32_MAX;
+            std::string sym_name;
+            if (nt->name.find('.') != std::string::npos &&
+                resolve_ns_qualified(nt->name, ns_idx_resolved, sym_name)) {
                 if (ns_idx_resolved < imported_namespaces_.size()) {
                     const auto &ns = imported_namespaces_[ns_idx_resolved];
                     auto its = ns.by_name.find(sym_name);
@@ -5983,19 +5970,17 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
     // del codigo (lookup en class_layouts_, llamada al ctor, etc.)
     // ve el nombre interno (`ui__Button`) sin necesidad de cambios.
     {
-        size_t dot = e->class_name.find('.');
-        if (dot != std::string::npos) {
-            const std::string ns_name = e->class_name.substr(0, dot);
-            const std::string sym_name = e->class_name.substr(dot + 1);
-            const Symbol *ns_sym = lookup(ns_name);
-            if (ns_sym && ns_sym->kind == SymbolKind::Namespace &&
-                ns_sym->ns_index < imported_namespaces_.size()) {
-                const auto &ns = imported_namespaces_[ns_sym->ns_index];
-                auto its = ns.by_name.find(sym_name);
-                if (its != ns.by_name.end()) {
-                    const auto &sym = ns.symbols[its->second];
-                    e->class_name = sym.mangled_label;
-                }
+        // Phase NS.1b: resolver por el prefijo de namespace mas largo
+        // (multi-segmento `new ui.widgets.Button(...)`).
+        uint32_t ns_idx = UINT32_MAX;
+        std::string sym_name;
+        if (e->class_name.find('.') != std::string::npos &&
+            resolve_ns_qualified(e->class_name, ns_idx, sym_name) &&
+            ns_idx < imported_namespaces_.size()) {
+            const auto &ns = imported_namespaces_[ns_idx];
+            auto its = ns.by_name.find(sym_name);
+            if (its != ns.by_name.end()) {
+                e->class_name = ns.symbols[its->second].mangled_label;
             }
         }
     }
@@ -6678,7 +6663,81 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
     return s->type;
 }
 
+// Phase NS.1b: colapsa una cadena de field-access de identificadores en un path
+// punteado (ui.widgets.button -> "ui.widgets.button").  Devuelve false si algun
+// eslabon no es IdentExpr/FieldAccessExpr simple.
+static bool collect_dotted_path(const ast::Expr *e, std::string &out) {
+    if (!e) return false;
+    if (e->kind == ast::NodeKind::IdentExpr) {
+        out = static_cast<const ast::IdentExpr *>(e)->name;
+        return true;
+    }
+    if (e->kind == ast::NodeKind::FieldAccessExpr) {
+        const auto *fa = static_cast<const ast::FieldAccessExpr *>(e);
+        std::string base;
+        if (!collect_dotted_path(fa->base.get(), base)) return false;
+        out = base + "." + fa->field_name;
+        return true;
+    }
+    return false;
+}
+
 Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
+    // Phase NS.1b: acceso qualified MULTI-segmento a namespace
+    // (`ui.widgets.button`): la base es una CADENA de field-access de
+    // identificadores.  Colapsamos la base en un path punteado, la resolvemos
+    // como namespace (por su nombre completo registrado) y buscamos
+    // @c field_name como simbolo suyo.  El caso single-segment (`ui.button`) lo
+    // cubre el path M.7 de mas abajo (base = IdentExpr).
+    if (e->base && e->base->kind == ast::NodeKind::FieldAccessExpr) {
+        std::string base_ns_path;
+        if (collect_dotted_path(e->base.get(), base_ns_path)) {
+            uint32_t ns_idx = UINT32_MAX;
+            auto it = ns_idx_by_local_name_.find(base_ns_path);
+            if (it != ns_idx_by_local_name_.end()) {
+                ns_idx = it->second;
+            } else {
+                const Symbol *s = lookup(base_ns_path);
+                if (s && s->kind == SymbolKind::Namespace) ns_idx = s->ns_index;
+            }
+            if (ns_idx < imported_namespaces_.size()) {
+                const auto &ns = imported_namespaces_[ns_idx];
+                auto its = ns.by_name.find(e->field_name);
+                if (its != ns.by_name.end()) {
+                    referenced_names_.insert(base_ns_path);
+                    const auto &sym = ns.symbols[its->second];
+                    e->property_kind = 4;
+                    e->ns_index = ns_idx;
+                    if (sym.kind == 0) { // funcion
+                        Type t = Type::make_function(sym.sig.param_types,
+                                                     sym.sig.return_type);
+                        e->result_type = t;
+                        return t;
+                    }
+                    if (sym.kind == 2) { // tipo (struct/class/enum/alias)
+                        if (enum_layouts_.find(sym.mangled_label) !=
+                            enum_layouts_.end()) {
+                            Type t{PrimitiveKind::STRUCT, sym.mangled_label};
+                            e->result_type = t;
+                            return t;
+                        }
+                        if (class_layouts_.find(sym.mangled_label) !=
+                            class_layouts_.end()) {
+                            Type t{PrimitiveKind::CLASS, sym.mangled_label};
+                            e->result_type = t;
+                            return t;
+                        }
+                        if (struct_layouts_.find(sym.mangled_label) !=
+                            struct_layouts_.end()) {
+                            Type t{PrimitiveKind::STRUCT, sym.mangled_label};
+                            e->result_type = t;
+                            return t;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // ADTs: detectar variante sin payload `Color.Red` (sin
     // parens).  Si la base es un identificador que nombra un enum
     // y el field_name es una variante de aridad 0, lo tratamos como
@@ -8694,6 +8753,56 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // IdentExpr que nombra un enum.
     if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        // Phase NS.1b: namespace MULTI-segmento `ui.widgets.button(args)` -- la
+        // base es una cadena de field-access (`ui.widgets`).  Colapsar en path
+        // punteado y resolver el namespace ANTES de check_expr(base) (que
+        // trataria `ui` como variable indefinida).  El caso single-segment
+        // (`ui.button()`) lo cubre el bloque IdentExpr de abajo.
+        if (fa->base && fa->base->kind == ast::NodeKind::FieldAccessExpr) {
+            std::string ns_path;
+            if (collect_dotted_path(fa->base.get(), ns_path)) {
+                uint32_t ns_idx_c = UINT32_MAX;
+                auto itc = ns_idx_by_local_name_.find(ns_path);
+                if (itc != ns_idx_by_local_name_.end()) {
+                    ns_idx_c = itc->second;
+                } else {
+                    const Symbol *s = lookup(ns_path);
+                    if (s && s->kind == SymbolKind::Namespace)
+                        ns_idx_c = s->ns_index;
+                }
+                if (ns_idx_c < imported_namespaces_.size()) {
+                    const auto &ns = imported_namespaces_[ns_idx_c];
+                    auto its = ns.by_name.find(fa->field_name);
+                    if (its != ns.by_name.end()) {
+                        referenced_names_.insert(ns_path);
+                        const auto &sym = ns.symbols[its->second];
+                        const FunctionSig *real_sig =
+                            sym.mangled_label.empty()
+                                ? nullptr
+                                : function_sig_by_name(sym.mangled_label);
+                        const FunctionSig *use_sig =
+                            real_sig ? real_sig : &sym.sig;
+                        if (e->args.size() != use_sig->param_types.size()) {
+                            diags_.error(
+                                e->loc, "llamada a '" + ns_path + "." +
+                                            fa->field_name + "': se esperaban " +
+                                            std::to_string(
+                                                use_sig->param_types.size()) +
+                                            " args, recibidos " +
+                                            std::to_string(e->args.size()));
+                        }
+                        for (auto &a : e->args)
+                            (void)check_expr(a.get());
+                        fa->property_kind = 4;
+                        fa->ns_index = ns_idx_c;
+                        fa->result_type = Type::make_function(
+                            use_sig->param_types, use_sig->return_type);
+                        e->result_type = use_sig->return_type;
+                        return use_sig->return_type;
+                    }
+                }
+            }
+        }
         // Phase M.7: namespace.function(args) -- el base resuelve a
         // Symbol::Namespace y el field es una funcion del namespace.
         // Detectar ANTES de check_expr(base) para que no se trate
