@@ -6,218 +6,226 @@ limitaciones; la migracion es el vehiculo.
 
 Binario usado: `cmake-build-release/vm.exe` (sin rebuild).  Compilador NO
 modificado.  Imagenes de prueba: `Ejemplo60x3.bmp` (60x3, sin padding) y
-`Ejemplo3x60.bmp` (3x60, padding de 3 bytes/fila), ambas 24bpp BGR.
+`Ejemplo3x60.bmp` (3x60, padding de 2 bytes/fila), ambas 24bpp BGR.
 
-**Verificacion**: el volcado de pixeles a terminal se comparo BYTE A BYTE
-contra una referencia Python del algoritmo (`dump_buffer_cli`).  En modo
-interprete el volcado es identico a la referencia para ambas imagenes
-(con/sin padding).
-
----
-
-## Resumen de estado de la migracion
-
-| Componente | interp (`-m vm`) | JIT (`-m jit`) | AOT (`-m aot`) |
-|:-----------|:----------------:|:--------------:|:--------------:|
-| Lectura de fichero (kernel32, libc-free) | OK | OK | OK |
-| Parseo de cabecera BMP (little-endian) | OK | OK | OK |
-| Impresion de atributos (print interp.) | OK | OK | OK |
-| Volcado ANSI truecolor **en contexto print** (`reader_bmp.vex`) | OK (byte-exacto) | OK (byte-exacto) | OK (byte-exacto) |
-| Volcado ANSI via **helpers que construyen string** (`colors.vex`) | OK (byte-exacto) | **BUG (NUL)** | **no compila** |
-| CLI args (`args_get`) | OK | OK | **no soportado** |
-
-Hay DOS variantes del programa migrado:
-- `reader_bmp.vex` (un solo fichero, ANSI en contexto `print`): **byte-exacto
-  en los 3 modos**.  Path fijo para poder compilar a AOT.
-- `main.vex` + modulos `bmp.vex` / `bmp_io.vex` / `colors.vex` (mirror
-  idiomatico de las clases Java, ANSI via helpers que devuelven `string`):
-  **correcto en interp**; JIT y AOT afectados por los bugs #2 y #9.
+**Verificacion byte-exacta**: el volcado de pixeles a terminal se comparo BYTE
+A BYTE entre modos y contra la referencia single-file `reader_bmp.vex` (que ya
+era byte-exacta).  Ambas imagenes (con y sin padding de fila) coinciden.
 
 ---
 
-## BUGS (algo que deberia funcionar y no)
+## Estado tras la MODERNIZACION (2026-07)
 
-### BUG-1 [CRITICO] Un `T*` (host pointer) devuelto por una funcion con rama `return null` pierde su naturaleza host
+La version modular fue modernizada para usar la stdlib y los builtins nuevos,
+eliminando TODOS los workarounds locales:
 
-**Que intentaba**: una funcion que hace `malloc`, llena el buffer, y lo
-devuelve; con una rama de error `return null` (patron Java/C clasico:
-`readBMPFile` que devuelve la imagen o lanza/nulo).
+- `bmp_io.vex` (lectura binaria via kernel32 local) -> **eliminado**.  Ahora
+  se usa la stdlib: `import "vex_fileio"` con `file_size(path)` +
+  `file_read_into(path, buf, size)` (Windows kernel32 / POSIX libc, libc-free).
+- `colors.vex` (truecolor ANSI local via `chr(27)`) -> **eliminado**.  Ahora
+  se usan los **builtins del lenguaje** `bg_rgb(r,g,b)` / `fg_rgb(r,g,b)` /
+  `RESET` dentro de la interpolacion de `print`/`println`.
+- El flag opcional `-r WxH` se parsea con `vio_parse_int` de la stdlib nativa
+  (`extern "stdlib/native/io/vesta_io"`), cerrando LIM-8.
 
-**Sintoma**: el puntero devuelto tiene el VALOR correcto (misma direccion host
-impresa dentro y fuera), pero al dereferenciarlo en el llamante lee CERO /
-basura, como si fuese una direccion de memoria de la VM en vez de host.  En el
-caso real, guardar ese buffer en un campo y luego indexarlo -> **SIGSEGV**
-(exit 139).
+### Matriz de resultados (version modular modernizada)
 
-**Repro minimo** (mismo modulo, interp y JIT):
+| Componente | interp (`-m vm`) | JIT (`-m jit`) | AOT PE | AOT ELF (WSL) |
+|:-----------|:----------------:|:--------------:|:------:|:-------------:|
+| Lectura de fichero (stdlib `vex_fileio`) | OK | OK | OK\* | OK\*\* |
+| Parseo de cabecera BMP (little-endian) | OK | OK | OK | OK |
+| Impresion de atributos | OK | OK | OK | OK |
+| Volcado ANSI truecolor (builtin `bg_rgb`) | **byte-exacto** | **byte-exacto** | **byte-exacto** | **byte-exacto** |
+| CLI args (`args_get`) | OK | OK | no (LIM-5) | no (LIM-5) |
+| **Modulo con clase cruzada** (`main_aot.vex` + `bmp.vex`) | OK | OK | **BUG-5** | **BUG-5** |
+
+\* AOT PE: la clase `BMP_Image` vive en un modulo importado; el volcado se
+valido byte-exacto con una variante **auto-contenida** (misma clase + mismos
+builtins en un solo fichero), porque la variante **modular** dispara BUG-5.
+
+\*\* AOT ELF (cross-compile desde Windows): validado byte-exacto con la variante
+auto-contenida usando `extern "libc.so.6"` DIRECTO, porque `import "vex_fileio"`
+en ELF-desde-Windows selecciona la rama kernel32 por el HALLAZGO-2 (`@Target`
+evalua contra el HOST, no contra el formato de salida).
+
+Resultado byte-exacto confirmado: **interp == JIT == AOT-PE == AOT-ELF(WSL)**
+para ambas imagenes (60x3 sin padding y 3x60 con padding).
+
+---
+
+## BUGS CERRADOS (verificados con su repro minimo)
+
+### BUG-1 [CERRADO] `T*` (host pointer) devuelto por funcion con rama `return null`
+
+Antes: un `u8* f()` con una rama `return null` perdia el flag `is_host_ptr` de
+su valor de retorno; el llamante deref-eaba leyendo memoria VM (byte0=0 /
+SIGSEGV al indexar).  **Ahora arreglado.**
+
+Repro (interp y JIT dan `byte0=66`):
 ```vex
-u8* make_buf(i32 bad) {
-    if (bad != 0) { return null; }   // <-- rama null
-    u8* p = malloc(8);
-    p[0] = 66;
-    return p;
+u8* make_buf(i32 bad) { if (bad != 0) { return null; } u8* p = malloc(8); p[0] = 66; return p; }
+i32 main() { u8* buf = make_buf(0); println("byte0=${buf[0]}"); free(buf); return 0; }
+```
+
+### BUG-2 [CERRADO] JIT emitia NUL en la interpolacion que CONSTRUYE un string
+
+Antes: en JIT, `return "${chr(27)}[48;2;${r};${g};${b}m";` producia bytes NUL en
+cada fragmento interpolado.  **Ahora interp == JIT** (secuencia ANSI correcta).
+
+### BUG-3 [CERRADO] El especificador `:char` se ignoraba al construir un string
+
+Antes: `return "${e:char}X"` con `e=27` producia `"27X"` en vez de `"\x1bX"`.
+**Ahora** produce el byte ESC (0x1b) correctamente.
+
+### BUG-4 [CERRADO] `${x:hex}` divergia entre interp / JIT / AOT
+
+Antes: interp/JIT daban `0x0000000000004D42` (64 bits, mayusculas) y AOT
+`0x4d42`.  **Ahora los tres modos coinciden**: `0x4d42` (minusculas, sin
+relleno).  (El control de ancho/mayusculas/sin-prefijo estilo `%02X` sigue
+sin exponerse; ergonomia menor, no bug.)
+
+---
+
+## BUGS NUEVOS (destapados por la modernizacion)
+
+### BUG-5 [CRITICO] Los metodos de una CLASE definida en un modulo IMPORTADO no se compilan en AOT
+
+**Que intentaba**: la version modular (`main_aot.vex` importa `bmp.vex`, que
+define `class BMP_Image`) compilada a nativo.  `main` hace
+`new bmp.BMP_Image()` y luego `img.load(...)`, `img.printBMPAttributes()`,
+`img.dumpTerminal()`.
+
+**Sintoma**: el AOT enlaza, pero el binario NO ARRANCA:
+- PE: `ExitCode 0xC0000139` (STATUS_ENTRYPOINT_NOT_FOUND) — 0 bytes de salida.
+- ELF (WSL): `symbol lookup error: undefined symbol: bmp__BMP_Image__load`.
+
+**Causa observada**: los tres metodos de instancia (`load`,
+`printBMPAttributes`, `dumpTerminal`) NO se emiten en `.text`; se emiten como
+**simbolos externos indefinidos** y el linker AOT los mete por error en la
+tabla de imports de **msvcrt.dll**:
+```
+$ objdump -x main_aot.exe | grep msvcrt
+msvcrt.dll: bmp__BMP_Image__load
+msvcrt.dll: bmp__BMP_Image__printBMPAttributes
+msvcrt.dll: bmp__BMP_Image__dumpTerminal
+```
+El constructor (`new` / `__new_bmp__BMP_Image`) y el destructor SI se resuelven;
+solo fallan las llamadas a metodos regulares sobre el objeto.
+
+**Aislamiento** (que SI funciona, descartando causas):
+- Clase + `main` en el **mismo fichero** (sin `import`) -> AOT OK.
+- Funciones LIBRES cruzadas de modulo (`vex_fileio.file_size`, etc.) -> AOT OK.
+- interp y JIT de la version modular -> OK (byte-exacto).
+
+**Repro minimo** (2 ficheros; `widget.vex` + `mainx.vex`):
+```vex
+// widget.vex
+public class Widget {
+    public i32 v;
+    public Widget() { this.v = 0; }
+    public i32 bump(i32 n) { this.v = this.v + n; return this.v; }
 }
+```
+```vex
+// mainx.vex
+import "widget";
 i32 main() {
-    u8* buf = make_buf(0);
-    println("byte0=${buf[0]}");      // imprime 0 (deberia 66)
-    free(buf);
+    widget.Widget w = new widget.Widget();
+    i32 r = w.bump(41);            // <- callee emitido como import de msvcrt.dll
+    println("r=${r}");
     return 0;
 }
 ```
-`byte0=0` (esperado `66`).  Tambien ocurre pasando el puntero por
-`u8**` out-param con una rama `*out = null`.
+- `vm --run mx.velb -m vm`  -> `r=41`  (interp OK)
+- `vm --run mx.velb -m jit` -> `r=41`  (JIT OK)
+- `vm -m aot --vex mainx.vex --format pe --emit exe -o mainx.exe` -> el .exe
+  hace `STATUS_ENTRYPOINT_NOT_FOUND` (importa `widget__Widget__bump` de
+  msvcrt.dll).  Igual en ELF.
 
-**Hipotesis de causa**: al fusionar los valores de retorno (`null` no-host y el
-puntero host) se computa `is_host_ptr = false` para el resultado, y el llamante
-emite un LOAD de memoria VM (`mov`) en vez de host (`movh`).
-
-**Enmascarado por inlining**: si la funcion se inlinea (funcion libre llamada
-una sola vez, sin `extern`), la naturaleza host fluye directamente del `malloc`
-y NO se ve el bug.  Se expone cuando la funcion NO se inlinea: cruce de modulo,
-o funciones con llamadas `extern` FFI estaticas (que bloquean el inlining).
-Por eso `reader_bmp.vex` (funcion inlineada) funciona pero la version modular
-crasheaba.
-
-**Workaround aplicado**: patron de dos pasos que NO devuelve el host-ptr con
-rama null.  `file_size(path) -> i64` + el llamante hace `malloc` LOCAL +
-`file_read_into(path, buf, size)` recibiendo el buffer como ARGUMENTO (los
-host-ptr pasados como argumento SI conservan su naturaleza).  Ver `bmp_io.vex`.
+**Conclusion**: el codegen AOT solo compila las clases/metodos del modulo RAIZ;
+los metodos de instancia de una clase definida en un modulo IMPORTADO quedan
+como referencias externas sin definir.  **Bloquea la version modular en AOT**
+(PE y ELF).  No hay workaround aplicado en el ejemplo (a proposito): `main_aot.vex`
+se deja como codigo correcto y la validacion AOT byte-exacta se hace con una
+variante auto-contenida.
 
 ---
 
-### BUG-2 [ALTO] Divergencia JIT vs interp: la interpolacion que CONSTRUYE un string produce bytes NUL
+## HALLAZGOS (limitaciones de cross-compile, no bugs de codegen)
 
-**Que intentaba**: helper `bg_rgb(r,g,b)` que devuelve la secuencia ANSI como
-string: `return "${chr(27)}[48;2;${r};${g};${b}m";` (equivalente al constructor
-de `JColorsTerm`).
+### HALLAZGO-2 [cross-compile] `@Target(os:...)` evalua contra el HOST, no contra el formato de salida
 
-**Sintoma**: en **JIT** los fragmentos interpolados (`chr(27)` y cada
-`${int}`) salen como bytes **NUL (0x00)** en vez de los caracteres correctos;
-la CANTIDAD de bytes es la correcta (misma longitud) pero los VALORES son cero.
-Las partes literales (`[48;2;`, `;`, `m`) salen bien.  En **interp** es
-correcto.
+Al compilar `--format elf` **desde un host Windows**, `@Target("os:windows")`
+sigue siendo verdadero (el HOST es Windows), asi que `vex_fileio` selecciona la
+rama **kernel32** y el ELF resultante referencia `CreateFileA` -> en Linux:
+`undefined symbol: CreateFileA`.
 
-**Repro minimo** (un solo fichero):
-```vex
-string bg(i32 r, i32 g, i32 b) {
-    return "${chr(27)}[48;2;${r};${g};${b}m";
-}
-i32 main() { print(bg(0,75,125)); println(""); return 0; }
-```
-- interp: `\e[48;2;0;75;125m`  (correcto)
-- jit:    `\0[48;2;\0;\0\0;\0\0\0m`  (NUL en cada fragmento interpolado)
-
-**Impacto**: el volcado de color de la version modular es correcto en interp
-pero sale corrupto en JIT.
+- El **codegen ELF es correcto**: un ELF que usa `extern "libc.so.6"` DIRECTO
+  (sin `@Target`) compilado desde Windows **arranca y funciona en WSL**
+  (`read 54 bytes, magic=0x4d42`).
+- El problema es solo la **seleccion de rama por plataforma**: `@Target` deberia
+  poder resolverse contra el OS del TARGET de compilacion (`--format elf` ->
+  `os:linux`), o exponer un flag `--target-os`.  Hoy el cross-compile de
+  `vex_fileio` de Windows a ELF elige la rama equivocada.
+- Workaround para la validacion ELF: variante auto-contenida con
+  `extern "libc.so.6"` directo (sin depender de `@Target`).
 
 ---
 
-### BUG-3 [MEDIO] El especificador de formato `:char` se IGNORA en contexto de construccion de string
+## LIMITACIONES CERRADAS
 
-**Que intentaba**: incrustar el byte ESC via `${ESC:char}` dentro de un string
-que se construye (return de una funcion / `string s = "..."`).
+### LIM-1 [CERRADO] Lectura de fichero binario a un buffer
+Ahora en la stdlib: `import "vex_fileio"` -> `file_size(path)` +
+`file_read_into(path, buf, size)`.  Windows kernel32, POSIX libc; libc-free.
+(Sujeto a HALLAZGO-2 al cross-compilar a ELF desde Windows.)
 
-**Sintoma**: en contexto de CONSTRUCCION de string, `${x:char}` imprime el
-valor DECIMAL (`27`) en lugar del caracter (0x1b).  En contexto de `print`
-directo (`print("...${x:char}...")`) funciona bien.  Afecta por igual a
-variables locales, literales y `comptime` const.
+### LIM-2 [CERRADO] ANSI truecolor (48;2;r;g;b)
+Ahora son builtins del lenguaje: `bg_rgb(r,g,b)`, `fg_rgb(r,g,b)` y `RESET`
+dentro de la interpolacion de `print`/`println`.  No construyen `StringObject`,
+por lo que funcionan identico en interp / JIT / AOT.
 
-**Repro minimo**:
-```vex
-string mk() { i32 e = 27; return "${e:char}X"; }   // -> "27X"  (mal)
-i32 main() {
-    print(mk()); println("");                       // 27X
-    print("${27:char}Y"); println("");              // \e Y  (bien, contexto print)
-    return 0;
-}
-```
-
-**Workaround aplicado**: usar `chr(27)` (devuelve un string de 1 caracter con el
-byte) e interpolarlo sin `:char`: `"${chr(27)}[48;2;..."`.  Ver `colors.vex`.
+### LIM-8 [CERRADO] Parseo de entero desde string
+`extern "stdlib/native/io/vesta_io" { fn vio_parse_int(u64 s, u64 len) -> i64;
+fn vio_parse_ok() -> i64; }`.  Detecta base por prefijo (0x/0b/0o), signo,
+espacios y overflow.  Usado en `main.vex` para el flag `-r WxH`.
 
 ---
 
-### BUG-4 [MEDIO] `${x:hex}` diverge entre interp y AOT + ergonomia pobre
-
-**Que intentaba**: imprimir el magic BMP en hex (Java: `get_string_hex()` ->
-`"424D"`).
-
-**Sintoma** (mismo fuente, `i32 v = 0x4D42; println("${v:hex}")`):
-- interp / JIT: `0x0000000000004D42`  (mayusculas, rellenado a 16 digitos = 64 bits, con prefijo `0x`)
-- AOT:          `0x4d42`               (minusculas, sin relleno, con prefijo `0x`)
-
-Ademas `:hex` SIEMPRE antepone `0x` (si el usuario escribe un literal `"0x"`
-antes, sale `0x0x...`) y no ofrece control de ancho/mayusculas/sin-prefijo para
-replicar formatos tipo `%02X` de Java.
-
----
-
-## LIMITACIONES (feature que no existe / hueco de stdlib)
-
-### LIM-1 [stdlib] No hay primitiva para leer un fichero binario a un buffer
-`stdlib/vex/vex_io.vex` solo cubre SALIDA a consola (WriteConsole/WriteFile) y
-`panic`.  No existe algo tipo `read_file(path) -> buffer`.  Implementado en
-`bmp_io.vex` con **kernel32 directo** (CreateFileA/GetFileSizeEx/ReadFile/
-CloseHandle), CERO msvcrt, para que valga tambien en AOT/freestanding.
-**Candidata a stdlib** (`file_size` + `file_read_into`, libc-free).
-
-### LIM-2 [stdlib] No hay ANSI truecolor (48;2;r;g;b)
-La stdlib solo expone identificadores magicos basicos (RED/GREEN/BOLD).  Para
-replicar `dump_buffer_cli` de JColorsTerm hubo que construir a mano las
-secuencias 24-bit (`colors.vex`).  **Candidata a stdlib**.
+## LIMITACIONES VIGENTES
 
 ### LIM-3 [lenguaje] `main(string[] args)` es inerte; no hay longitud de array
-- `len(args)` no existe (`funcion no declarada: 'len'`).
-- No hay `args.length` ni acceso util al parametro `args`.
-- Los argumentos de CLI SOLO se obtienen con los builtins `args_count()` /
-  `args_get(i)`, y `args_get(0)` es el PRIMER argumento de usuario (no el nombre
-  del programa).
+- `len(args)` no existe.  No hay `args.length`.
+- Los argumentos SOLO se obtienen con `args_count()` / `args_get(i)`;
+  `args_get(0)` es el primer argumento de usuario (no el nombre del programa).
 
-### LIM-4 [CLI/runner] Los flags con guion son consumidos por el propio parser de la VM
-`vm --run p.velb foo -r 32x32` -> el programa solo recibe `foo` y `32x32`
-(el `-r` desaparece).  Hay que usar el separador `--`:
-`vm --run p.velb -- foo -r 32x32`.  Esto bloquea migrar los flags de ReaderBMP
-(`-k -s -r WxH -h`) sin el separador.
+### LIM-4 [CLI/runner] Los flags con guion los consume el parser de la VM
+`vm --run p.velb foo -r 32x32` -> el programa solo recibe `foo` y `32x32`.
+Hay que usar el separador `--`: `vm --run p.velb -m vm -- foo -r 32x32`.
 
 ### LIM-5 [AOT] `args_count()`/`args_get()` no compilan a nativo
 `op 'getarg' requiere scheduler/procesos (runtime)`.  Cualquier programa que lea
-argumentos de CLI no compila en target `bare`.  Workaround: variante sin
-argumentos con path fijo (`main_aot.vex`).
-
-### LIM-6 [AOT] Construir un StringObject por interpolacion no compila en target bare
-Una funcion que DEVUELVE un `string` interpolado (p.ej. `bg_rgb`) falla en AOT:
-`op 'strmake' requiere strings GC (StringObject)` + `op 'getproc' requiere
-contexto VM`.  IMPORTANTE: la interpolacion en contexto **print**
-(`println("${x}")`) SI funciona en AOT.  Por eso la version single-file
-(ANSI en `print`) compila a AOT y la modular (helpers que devuelven string) no.
+argumentos de CLI no compila en target nativo.  Por eso el AOT usa `main_aot.vex`
+(path fijo).  ORTOGONAL a BUG-5 (esta es una limitacion conocida de args).
 
 ### LIM-7 [lenguaje] `streq` es comptime-only; para runtime hay que usar `str_equals`
-`streq(path, "-h")` con `path` runtime -> error `comptime_streq: argumento 0 no
-es comptime-evaluable`.  Hay que usar `str_equals`.  El doble nombre (uno
-comptime, otro runtime) es confuso.
-
-### LIM-8 [lenguaje] No hay builtin de parseo de entero desde string
-No existe `parse_int`/`str_to_int`/`atoi`.  Para migrar `-r 32x32`
-(`Integer.parseInt`) habria que parsear a mano recorriendo los bytes de
-`str_cstr(s)`.  (Hueco anotado; no se implemento el parse de `-r` en la version
-final.)
+`streq(path, "-h")` con `path` runtime -> error comptime.  Hay que usar
+`str_equals`.
 
 ### LIM-9 [no-portable] Codecs de imagen (JPG/PNG -> BMP) y resize AWT no migrables
-ReaderBMP usa `javax.imageio.ImageIO` (decodifica JPG/PNG) y
-`Graphics2D`/bilinear para redimensionar.  Sin equivalente en Vex/stdlib.  Se
-migro solo la ruta BMP-directo (leer, atributos, volcado).  Los flags `-k`/`-s`
-(mantener convertido/redimensionado) dependen de esos codecs y quedan fuera.
+ReaderBMP usa `javax.imageio.ImageIO` (decodifica JPG/PNG) y `Graphics2D`/
+bilinear para redimensionar.  Sin equivalente en Vex/stdlib.  Se migro solo la
+ruta BMP-directo.  Los flags `-k`/`-s` (mantener convertido/redimensionado) y el
+redimensionado real de `-r` dependen de esos codecs y quedan fuera; `-r` solo
+parsea y reporta las dimensiones (demo de `vio_parse_int`).
 
 ---
 
 ## Notas menores (no bloqueantes)
 
-- **Warnings de narrowing** en cada `... << 24` y en el `return` de helpers
-  `i32` (p.ej. `read_u32le`): ruido, pero obligan a `(i32)` explicitos para
-  silenciar.  Correcto en semantica, molesto en volumen.
-- **Cross-module: acceso siempre cualificado.**  Con `import "x"` (forma
-  simple) hay que escribir `x.fn(...)` / `x.Tipo` / `new x.Tipo()`; un nombre
-  desnudo da `funcion no declarada`.  Es por diseno (no bug), pero es friccion
-  al migrar codigo de un solo namespace.
-- **Line endings**: la VM emite `\n` (LF) puro; correcto.  (La referencia
-  Python en Windows metia `\r\n`; tras normalizar, match byte-exacto.)
+- **Warnings de narrowing** en cada `... << 24` y en los `return i32`: ruido;
+  obligan a casts `(i32)` explicitos para silenciar.
+- **Warning "import 'bmp' no se usa"** en `main.vex` aunque `bmp.BMP_Image` SI
+  se usa (acceso cualificado): falso positivo del detector de imports sin usar.
+- **Cross-module: acceso siempre cualificado.**  Con `import "x"` hay que
+  escribir `x.fn(...)` / `x.Tipo` / `new x.Tipo()`.  Por diseno.
+- **Line endings**: la VM emite `\n` (LF) puro; correcto.

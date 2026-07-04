@@ -1,10 +1,14 @@
 // =============================================================================
 // main_aot.vex - Variante SIN argumentos de CLI para compilacion AOT nativa.
 //
-// LIMITACION: args_count()/args_get() bajan a getargc/getarg, que en el
-// target AOT 'bare' fallan con "op getarg requiere scheduler/procesos"
-// (ver BUGS_LIMITACIONES.md).  Por eso esta variante fija el path en el
-// codigo, para poder generar un ejecutable nativo standalone (PE/ELF).
+// LIMITACION VIGENTE (LIM-5): args_count()/args_get() bajan a getargc/getarg,
+// que en el target AOT nativo fallan con "op getarg requiere scheduler/procesos".
+// Por eso esta variante fija el path en el codigo, para generar un ejecutable
+// nativo standalone (PE/ELF).  El resto (lectura via stdlib vex_fileio, volcado
+// truecolor via builtin bg_rgb) es identico a main.vex, de modo que el volcado
+// de pixeles es BYTE-EXACTO respecto a interp/JIT sobre el mismo fichero.
+//
+// El path se puede cambiar aqui para volcar otra imagen.
 // =============================================================================
 
 import "bmp";

@@ -2,11 +2,18 @@
 // bmp.vex - Modelo de imagen BMP (mirror de BMP_Image de JColorsTerm) en Vex.
 //
 // Clase BMP_Image con parseo de cabecera 24bpp BGR sin compresion, impresion
-// de atributos y volcado a terminal (ANSI truecolor) via el modulo colors.
+// de atributos y volcado a terminal en ANSI truecolor.
+//
+// MODERNIZADO (2026-07): ya NO usa modulos-workaround locales.  La lectura
+// binaria del fichero viene de la STDLIB (import "vex_fileio": file_size +
+// file_read_into, libc-free en Windows via kernel32, POSIX via libc).  El
+// truecolor 24-bit usa los BUILTINS del lenguaje bg_rgb(r,g,b) / RESET dentro
+// de la interpolacion de print (funcionan identico en interp/JIT/AOT sin
+// construir un StringObject).  Los antiguos bmp_io.vex y colors.vex quedaron
+// obsoletos y se eliminaron.
 // =============================================================================
 
-import "colors";
-import "bmp_io";
+import "vex_fileio";
 
 // Lectura little-endian desde un buffer host.
 i32 read_u16le(u8* buf, i32 off) {
@@ -57,17 +64,17 @@ public class BMP_Image {
     }
 
     // Lee el fichero y parsea la cabecera.  Devuelve 1 si OK, 0 si error.
-    // Patron de dos pasos (ver bmp_io.vex): file_size + malloc local +
-    // file_read_into.  Evita el bug de host-ptr devuelto con rama null.
+    // Patron de dos pasos (stdlib vex_fileio): file_size + malloc local +
+    // file_read_into.
     public i32 load(string path) {
-        i64 size = bmp_io.file_size(path);
+        i64 size = vex_fileio.file_size(path);
         if (size <= 0) {
             return 0;
         }
         // malloc LOCAL: la naturaleza host-ptr se conserva y se propaga al
-        // campo this.raw sin cruzar un retorno con rama null.
+        // campo this.raw.
         u8* buf = malloc(size + 1);
-        i64 n = bmp_io.file_read_into(path, buf, size);
+        i64 n = vex_fileio.file_read_into(path, buf, size);
         if (n != size) {
             free(buf);
             return 0;
@@ -112,7 +119,8 @@ public class BMP_Image {
         println("Important Colors: ${this.important_colors}");
     }
 
-    // Replica dump_buffer_cli: BMP es bottom-up + BGR.
+    // Replica dump_buffer_cli: BMP es bottom-up + BGR.  Usa el builtin
+    // bg_rgb(r,g,b) para el color de fondo truecolor y RESET para limpiar.
     public void dumpTerminal() {
         i32 width  = this.width;
         i32 height = this.height;
@@ -130,7 +138,7 @@ public class BMP_Image {
                 i32 b = (i32) buf[index];
                 i32 g = (i32) buf[index + 1];
                 i32 r = (i32) buf[index + 2];
-                print("${colors.bg_rgb(r, g, b)} ${colors.reset()}");
+                print("${bg_rgb(r, g, b)} ${RESET}");
                 col = col + 1;
             }
             println("");
