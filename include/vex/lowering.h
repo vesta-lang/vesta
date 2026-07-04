@@ -1553,6 +1553,13 @@ class Lowering {
     /// Devuelve el nombre del helper.  Solo en @c native_poo_.
     std::string ensure_btoa_helper();
     bool btoa_helper_emitted_ = false; ///< El helper btoa ya esta emitido.
+    /// BUG-3 (`${cp:char}` en construccion native/AOT): helper codepoint ->
+    /// UTF-8.  Firma @c i64 __vex_ctoa(u8* buf, i64 cp): escribe la
+    /// codificacion UTF-8 (1..4 bytes) del codepoint en @p buf y devuelve la
+    /// longitud.  Paridad byte-exacta con @c vio_char_to_vmbuf (interp/JIT).
+    /// Solo en @c native_poo_.
+    std::string ensure_ctoa_helper();
+    bool ctoa_helper_emitted_ = false; ///< El helper ctoa ya esta emitido.
     /// Vex Embed Inc 4: helper de comparacion lexicografica de strings
     /// value-type nativos.  Firma:
     /// @c i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb).

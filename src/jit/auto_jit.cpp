@@ -276,6 +276,8 @@ VregEntries make_vreg_entries() {
         e.addadvice = reinterpret_cast<uint64_t>(g_runtime_entries->addadvice);
         /* String ops (cluster cobertura 2026-06-09). */
         e.str_make = reinterpret_cast<uint64_t>(g_runtime_entries->str_make);
+        e.str_make_h =
+            reinterpret_cast<uint64_t>(g_runtime_entries->str_make_h);
         e.str_len = reinterpret_cast<uint64_t>(g_runtime_entries->str_len);
         e.str_cat = reinterpret_cast<uint64_t>(g_runtime_entries->str_cat);
         e.str_cmp = reinterpret_cast<uint64_t>(g_runtime_entries->str_cmp);

@@ -3709,9 +3709,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 2) return false;
-                if (in.operands[0] < fn.values.size() &&
-                    fn.values[in.operands[0]].is_host_ptr) {
-                    /* buf host -> sin runtime entry host todavia. */
+                // BUG-2 fix: buffer HOST (ALLOCA promovido a heap host que
+                // fluye a un CALLN de stringify) -> vrt_str_make_h que lee
+                // memoria host directa (paridad con el opcode strmake_h del
+                // interp).  Sin esto, el path vreg caia a slots que emitia
+                // `strmake` (VM mem) sobre un buffer host -> bytes NUL en los
+                // fragmentos interpolados de `return "${expr}..."`.
+                const bool sm_buf_host =
+                    in.operands[0] < fn.values.size() &&
+                    fn.values[in.operands[0]].is_host_ptr;
+                const uint64_t sm_entry =
+                    sm_buf_host ? ent.str_make_h : ent.str_make;
+                if (sm_buf_host && ent.str_make_h == 0) {
                     vreg_dbg(fn.name.c_str(), "strmake_h");
                     return false;
                 }
@@ -3736,7 +3745,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_unary(MOp::MOV, MOperand::make_reg(sm0, 8),
                                        MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
-                    MInstr::make_call_abs(out.intern_imm64(ent.str_make)));
+                    MInstr::make_call_abs(out.intern_imm64(sm_entry)));
                 if (in.dst != ir::IR_NO_VALUE)
                     O.push_back(
                         MInstr::make_unary(MOp::MOV, vr(in.dst),

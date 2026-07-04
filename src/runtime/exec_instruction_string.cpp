@@ -711,23 +711,18 @@ void exec_instr_strmake(ProcessVM *vm, const DecodedInstr &instr) {
 // =========================================================================
 
 /**
- * @brief Ejecuta STRMAKE_H: crea un StringObject FLAT desde un buffer HOST.
+ * @brief Helper compartido: crea un StringObject FLAT desde un buffer HOST.
  *
- * Variante de STRMAKE (0x46) que lee directamente desde la memoria del
- * proceso host (puntero crudo, no direccion VM).  Util cuando el buffer
- * fuente proviene de @c malloc, @c gcallocp, @c str_cstr, etc.
- *
- * Aplica las mismas reglas que STRMAKE: compactacion HotSpot, internado
- * automatico, encoding por defecto UTF-8.
+ * Lee directamente desde la memoria del proceso host (puntero crudo, no
+ * direccion VM).  Util cuando el buffer fuente proviene de @c malloc,
+ * @c gcallocp, @c str_cstr, o de un ALLOCA promovido a heap host que fluye
+ * a un CALLN de stringify (interpolacion `${expr}` en contexto string).
+ * Consumido por @c exec_instr_strmake_h (interp) y por @c vrt_str_make_h
+ * (JIT).  Aplica las mismas reglas que STRMAKE: FNV-1a, internado
+ * automatico, encoding ASCII/UTF-8 auto-detectado.
  */
-void exec_instr_strmake_h(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
-    const uint8_t r_len = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF;
-
-    uint64_t host_addr = vm->registers.regs[r_src].qword();
-    uint32_t byte_len =
-        static_cast<uint32_t>(vm->registers.regs[r_len].qword());
+gc::GcHandle make_string_from_host_mem(ProcessVM *vm, uint64_t host_addr,
+                                       uint32_t byte_len) noexcept {
     const uint8_t *src = reinterpret_cast<const uint8_t *>(host_addr);
 
     // Sprint string-perf-3: FNV-1a 64-bit consistente con todos los paths.
@@ -773,9 +768,7 @@ void exec_instr_strmake_h(ProcessVM *vm, const DecodedInstr &instr) {
                 if (cs->byte_len == byte_len &&
                     cs->encoding == static_cast<uint8_t>(final_enc) &&
                     std::memcmp(loader::str_data(cs), src, byte_len) == 0) {
-                    vm->registers.regs[r_dst].qword(
-                        static_cast<uint64_t>(cached));
-                    return;
+                    return cached;
                 }
             }
         }
@@ -786,15 +779,34 @@ void exec_instr_strmake_h(ProcessVM *vm, const DecodedInstr &instr) {
                    /*capacity=*/0,
                    /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
     if (__builtin_expect(h == gc::GC_NULL_HANDLE, 0)) {
-        vm->registers.regs[r_dst].qword(
-            static_cast<uint64_t>(gc::GC_NULL_HANDLE));
-        return;
+        return gc::GC_NULL_HANDLE;
     }
     if (byte_len > 0 && byte_len <= loader::STR_INTERN_THRESHOLD) {
         get_intern_pool(vm).insert_by_hash(fnv, h);
         vm->gc_heap.gc_addref(h); // pin como GC root (idem fix STRMAKE)
     }
     h = auto_intern(vm, h, src, byte_len, final_enc);
+    return h;
+}
+
+/**
+ * @brief Ejecuta STRMAKE_H: crea un StringObject FLAT desde un buffer HOST.
+ *
+ * Variante de STRMAKE (0x46) que lee directamente desde la memoria del
+ * proceso host (puntero crudo, no direccion VM).  Delega en el helper
+ * compartido @c make_string_from_host_mem (mismo path que @c vrt_str_make_h
+ * del JIT).
+ */
+void exec_instr_strmake_h(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
+    const uint8_t r_len = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF;
+
+    uint64_t host_addr = vm->registers.regs[r_src].qword();
+    uint32_t byte_len =
+        static_cast<uint32_t>(vm->registers.regs[r_len].qword());
+
+    gc::GcHandle h = make_string_from_host_mem(vm, host_addr, byte_len);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
 }
 

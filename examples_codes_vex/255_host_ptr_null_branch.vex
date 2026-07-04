@@ -1,0 +1,14 @@
+// BUG-1: un T* (host pointer) devuelto por una funcion con rama `return null`
+// debe conservar su naturaleza host en el llamante.
+u8* make_buf(i32 bad) {
+    if (bad != 0) { return null; }   // rama null: no-host
+    u8* p = malloc(8);
+    p[0] = 66;                        // 'B'
+    return p;                         // rama host
+}
+i32 main() {
+    u8* buf = make_buf(0);
+    println("byte0=${buf[0]}");       // debe ser 66
+    free(buf);
+    return 0;
+}

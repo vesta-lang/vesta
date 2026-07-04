@@ -1671,6 +1671,20 @@ VRT_FORCE_FP vrt_handle vrt_str_make(vrt_proc *proc, uint64_t vm_addr,
         runtime::make_string_from_vm_mem(p, vm_addr, byte_len));
 }
 
+/* STRMAKE_H: crea StringObject FLAT desde un buffer en memoria HOST.
+ * Variante de vrt_str_make para cuando el buffer fuente es un host_ptr
+ * (ALLOCA promovido a heap host que fluye a un CALLN de stringify). */
+VRT_FORCE_FP vrt_handle vrt_str_make_h(vrt_proc *proc, uint64_t host_addr,
+                                       uint32_t byte_len) {
+    if (!proc) return VRT_NULL_HANDLE;
+    runtime::ProcessVM *p = as_proc(proc);
+    /* La alocacion del StringObject puede disparar GC; capturar el frame JIT. */
+    VRT_CAPTURE_JIT_FRAME(p);
+    if (byte_len > (1u << 24)) return VRT_NULL_HANDLE; /* sanity: 16 MB cap */
+    return static_cast<vrt_handle>(
+        runtime::make_string_from_host_mem(p, host_addr, byte_len));
+}
+
 /* STRLEN: numero de code points del StringObject. */
 uint64_t vrt_str_len(vrt_proc *proc, vrt_handle h) {
     if (!proc || h == VRT_NULL_HANDLE) return 0;

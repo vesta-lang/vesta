@@ -12799,7 +12799,42 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
         return v_h;
     };
 
-    auto coerce_to_string_handle = [&](ast::Expr *ex) -> ir::IrValueId {
+    // BUG-3 fix: honrar el KIND del format spec `${expr:fmt}` al CONSTRUIR
+    // string (return / var-decl), no solo en `print`.  Extrae el keyword de
+    // kind (char/hex/bin/oct/dec/ptr/bool/gc) del formato ignorando la parte
+    // de alineacion (`>N`/`<N`).  Devuelve "" si no hay kind explicito.
+    auto fmt_kind_of = [](const std::string &fmt) -> std::string {
+        size_t i = 0;
+        while (i < fmt.size()) {
+            while (i < fmt.size() && (fmt[i] == ' ' || fmt[i] == '\t'))
+                ++i;
+            if (i >= fmt.size()) break;
+            if (fmt[i] == '<' || fmt[i] == '>') {
+                // Segmento de alineacion: `<`/`>` + digitos + fill opcional.
+                ++i;
+                while (i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '9')
+                    ++i;
+                if (i < fmt.size() && fmt[i] != ':') ++i; // fill char
+            } else {
+                size_t start = i;
+                while (i < fmt.size() && fmt[i] != ':' && fmt[i] != ' ' &&
+                       fmt[i] != '\t')
+                    ++i;
+                std::string kw = fmt.substr(start, i - start);
+                if (kw == "char" || kw == "hex" || kw == "bin" ||
+                    kw == "oct" || kw == "dec" || kw == "ptr" ||
+                    kw == "bool" || kw == "gc")
+                    return kw;
+            }
+            while (i < fmt.size() && (fmt[i] == ' ' || fmt[i] == '\t'))
+                ++i;
+            if (i < fmt.size() && fmt[i] == ':') ++i;
+        }
+        return std::string();
+    };
+
+    auto coerce_to_string_handle = [&](ast::Expr *ex,
+                                       const std::string &fmt) -> ir::IrValueId {
         if (!ex) return ir::IR_NO_VALUE;
         if (ex->kind == ast::NodeKind::StringLitExpr) {
             auto *sl = static_cast<ast::StringLitExpr *>(ex);
@@ -12811,6 +12846,38 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
         const int ln = ex->loc.line;
         // Strings: pasan directamente.
         if (ek == PrimitiveKind::STRING) return v;
+        // BUG-3: si el format spec fuerza un KIND concreto, enrutar al helper
+        // nativo correspondiente en lugar del dispatch por tipo.  `char`
+        // interpreta el valor entero como codepoint -> UTF-8; `hex`/`ptr`/
+        // `bool` usan su helper; `bin`/`oct`/`gc`/`dec` no tienen helper de
+        // construccion dedicado -> caen al dispatch por tipo (default).
+        if (!fmt.empty()) {
+            const std::string k = fmt_kind_of(fmt);
+            if (k == "char" &&
+                (ek == PrimitiveKind::I8 || ek == PrimitiveKind::I16 ||
+                 ek == PrimitiveKind::I32 || ek == PrimitiveKind::I64 ||
+                 ek == PrimitiveKind::U8 || ek == PrimitiveKind::U16 ||
+                 ek == PrimitiveKind::U32 || ek == PrimitiveKind::U64 ||
+                 ek == PrimitiveKind::CHAR)) {
+                return stringify_primitive(v, "vio_char_to_vmbuf", ln);
+            }
+            if (k == "hex" &&
+                (ek == PrimitiveKind::I8 || ek == PrimitiveKind::I16 ||
+                 ek == PrimitiveKind::I32 || ek == PrimitiveKind::I64 ||
+                 ek == PrimitiveKind::U8 || ek == PrimitiveKind::U16 ||
+                 ek == PrimitiveKind::U32 || ek == PrimitiveKind::U64)) {
+                return stringify_primitive(v, "vio_hex_to_vmbuf", ln);
+            }
+            if (k == "ptr" && (ek == PrimitiveKind::PTR ||
+                               ek == PrimitiveKind::ARRAY ||
+                               ek == PrimitiveKind::I64 ||
+                               ek == PrimitiveKind::U64)) {
+                return stringify_primitive(v, "vio_ptr_to_vmbuf", ln);
+            }
+            if (k == "bool") {
+                return stringify_primitive(v, "vio_bool_to_vmbuf", ln);
+            }
+        }
         // Stringify por tipo primitivo.  Cada categoria mapea a un
         // helper nativo en vesta_io.
         switch (ek) {
@@ -12896,8 +12963,11 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
         acc = make_part_handle(slit->interp_parts[0], line);
     }
     for (size_t i = 0; i < ne; ++i) {
+        const std::string fmt_i =
+            (i < slit->interp_formats.size()) ? slit->interp_formats[i]
+                                              : std::string();
         ir::IrValueId expr_h =
-            coerce_to_string_handle(slit->interp_exprs[i].get());
+            coerce_to_string_handle(slit->interp_exprs[i].get(), fmt_i);
         if (expr_h == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         if (acc == ir::IR_NO_VALUE) {
             acc = expr_h;
@@ -15741,6 +15811,31 @@ skip_comptime_eval_for_macro_to_macro:
     if (dst != ir::IR_NO_VALUE && callee_kind == PrimitiveKind::CLASS) {
         fn_->values[dst].is_host_ptr = true;
         fn_->values[dst].is_gc_object = true;
+    }
+    // BUG-1 fix: un callee que declara devolver un puntero/array HOST
+    // (`T*` / `T[]` con is_virtual=false, p.ej. resultado de malloc) debe
+    // producir un dst is_host_ptr=true en el llamante.  Sin esto, cuando el
+    // callee NO se inlinea (cruce de modulo, o bloqueado por CALLN extern) o
+    // cuando el retorno fusiona una rama `return null` (no-host) con la rama
+    // host, el dst queda is_host_ptr=false -> el llamante emite `mov` (memoria
+    // VM) en vez de `movh` (memoria host) al dereferenciarlo -> lee 0 / SIGSEGV.
+    // La naturaleza host se decide desde la FIRMA declarada, no desde el flujo
+    // interno del callee, por lo que es robusta ante ramas null.  VirtualPtr<T>
+    // (is_virtual=true) sigue siendo memoria VM -> NO se marca.
+    if (dst != ir::IR_NO_VALUE && callee_sig &&
+        (callee_sig->return_type.kind == PrimitiveKind::PTR ||
+         callee_sig->return_type.kind == PrimitiveKind::ARRAY) &&
+        !callee_sig->return_type.is_virtual) {
+        fn_->values[dst].is_host_ptr = true;
+        // Si el pointee es a su vez un puntero host (`T**`), propagar
+        // pointee_is_host_ptr para que un deref intermedio conserve la
+        // naturaleza host.
+        if (callee_sig->return_type.pointee &&
+            (callee_sig->return_type.pointee->kind == PrimitiveKind::PTR ||
+             callee_sig->return_type.pointee->kind == PrimitiveKind::ARRAY) &&
+            !callee_sig->return_type.pointee->is_virtual) {
+            fn_->values[dst].pointee_is_host_ptr = true;
+        }
     }
     // native_poo_: liberar los buffers de los args value-string temporales
     // (ya copiados/usados por el callee).  Inc 5 (SSO): solo libera si el
@@ -30283,6 +30378,162 @@ std::string Lowering::ensure_btoa_helper() {
     return name;
 }
 
+std::string Lowering::ensure_ctoa_helper() {
+    // BUG-3: helper codepoint -> UTF-8 nativo (una vez por modulo).
+    //   i64 __vex_ctoa(u8* buf, i64 cp)
+    //     cp < 0x80    -> 1 byte;  cp < 0x800   -> 2 bytes;
+    //     cp < 0x10000 -> 3 bytes; else         -> 4 bytes.
+    // Paridad byte-exacta con vio_char_to_vmbuf (interp/JIT).  Vive en una
+    // funcion APARTE con branches -> evita const-fold mid-expression.
+    const std::string name = "__vex_ctoa";
+    if (ctoa_helper_emitted_) return name;
+    ctoa_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
+    hf.values[p_buf].is_param = true;
+    hf.values[p_buf].is_host_ptr = true;
+    hf.params.push_back(p_buf);
+    const ir::IrValueId p_cp = hf.new_value(ir::IrType::I64, "%cp");
+    hf.values[p_cp].is_param = true;
+    hf.params.push_back(p_cp);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    // Helpers locales de emision de instrucciones aritmeticas/bit.
+    auto emit_bin = [&](ir::IrOp op, ir::IrValueId a,
+                        ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::I64;
+        in.dst = v;
+        in.operands = {a, b};
+        in.source_line = 0;
+        fn_->append(current_block_, std::move(in));
+        return v;
+    };
+    auto shr = [&](ir::IrValueId a, uint64_t k) -> ir::IrValueId {
+        return emit_bin(ir::IrOp::SHR, a, emit_const(ir::IrType::I64, k, 0));
+    };
+    auto andc = [&](ir::IrValueId a, uint64_t k) -> ir::IrValueId {
+        return emit_bin(ir::IrOp::AND, a, emit_const(ir::IrType::I64, k, 0));
+    };
+    auto orc = [&](ir::IrValueId a, uint64_t k) -> ir::IrValueId {
+        return emit_bin(ir::IrOp::OR, a, emit_const(ir::IrType::I64, k, 0));
+    };
+    auto store_u8_at = [&](uint64_t off, ir::IrValueId v_val) {
+        ir::IrValueId v_dst = p_buf;
+        if (off != 0) {
+            v_dst = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_dst].is_host_ptr = true;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_dst;
+            ad.operands = {p_buf, emit_const(ir::IrType::I64, off, 0)};
+            ad.source_line = 0;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::U8;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_dst};
+        st.source_line = 0;
+        fn_->append(current_block_, std::move(st));
+    };
+    auto ret_len = [&](uint64_t len) {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {emit_const(ir::IrType::I64, len, 0)};
+        rt.source_line = 0;
+        fn_->append(current_block_, std::move(rt));
+    };
+    // cond = (cp u< limit) -> branch a bb_then, si no a bb_else.
+    auto branch_ult = [&](uint64_t limit, ir::IrBlockId bb_then,
+                          ir::IrBlockId bb_else) {
+        ir::IrValueId v_cond = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr in{};
+            in.op = ir::IrOp::CMP_ULT;
+            in.type = ir::IrType::I64;
+            in.dst = v_cond;
+            in.operands = {p_cp, emit_const(ir::IrType::I64, limit, 0)};
+            in.source_line = 0;
+            fn_->append(current_block_, std::move(in));
+        }
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR_COND;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.operands = {v_cond};
+        b.target_block = bb_then;
+        b.false_block = bb_else;
+        b.source_line = 0;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(bb_then);
+        fn_->blocks[current_block_].succs.push_back(bb_else);
+        fn_->blocks[bb_then].preds.push_back(current_block_);
+        fn_->blocks[bb_else].preds.push_back(current_block_);
+    };
+
+    ir::IrBlockId bb1 = fn_->new_block("ctoa_1");
+    ir::IrBlockId bb_ge1 = fn_->new_block("ctoa_ge1");
+    ir::IrBlockId bb2 = fn_->new_block("ctoa_2");
+    ir::IrBlockId bb_ge2 = fn_->new_block("ctoa_ge2");
+    ir::IrBlockId bb3 = fn_->new_block("ctoa_3");
+    ir::IrBlockId bb4 = fn_->new_block("ctoa_4");
+
+    // if (cp < 0x80) -> 1 byte, else -> ge1.
+    branch_ult(0x80, bb1, bb_ge1);
+    // 1 byte: buf[0]=cp; ret 1.
+    current_block_ = bb1;
+    store_u8_at(0, p_cp);
+    ret_len(1);
+    // ge1: if (cp < 0x800) -> 2 bytes, else -> ge2.
+    current_block_ = bb_ge1;
+    branch_ult(0x800, bb2, bb_ge2);
+    // 2 bytes: buf[0]=0xC0|(cp>>6); buf[1]=0x80|(cp&0x3F); ret 2.
+    current_block_ = bb2;
+    store_u8_at(0, orc(shr(p_cp, 6), 0xC0));
+    store_u8_at(1, orc(andc(p_cp, 0x3F), 0x80));
+    ret_len(2);
+    // ge2: if (cp < 0x10000) -> 3 bytes, else -> 4 bytes.
+    current_block_ = bb_ge2;
+    branch_ult(0x10000, bb3, bb4);
+    // 3 bytes.
+    current_block_ = bb3;
+    store_u8_at(0, orc(shr(p_cp, 12), 0xE0));
+    store_u8_at(1, orc(andc(shr(p_cp, 6), 0x3F), 0x80));
+    store_u8_at(2, orc(andc(p_cp, 0x3F), 0x80));
+    ret_len(3);
+    // 4 bytes.
+    current_block_ = bb4;
+    store_u8_at(0, orc(shr(p_cp, 18), 0xF0));
+    store_u8_at(1, orc(andc(shr(p_cp, 12), 0x3F), 0x80));
+    store_u8_at(2, orc(andc(shr(p_cp, 6), 0x3F), 0x80));
+    store_u8_at(3, orc(andc(p_cp, 0x3F), 0x80));
+    ret_len(4);
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
 // ---------------------------------------------------------------------
 // CPU dispatch (cimiento): global __vex_cpu_features + helper __vex_cpu_init.
 //
@@ -31779,7 +32030,36 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
     //   char   -> 1 byte (el char ya es un valor 0-255).
     //   int    -> itoa inline a un buffer scratch de 24 bytes.
     //   bool   -> "true"/"false" via branch + append literal.
-    auto append_expr = [&](ast::Expr *ex) -> bool {
+    // BUG-3: extractor del KIND del format spec (ignora alineacion).
+    auto fmt_kind_of = [](const std::string &fmt) -> std::string {
+        size_t i = 0;
+        while (i < fmt.size()) {
+            while (i < fmt.size() && (fmt[i] == ' ' || fmt[i] == '\t'))
+                ++i;
+            if (i >= fmt.size()) break;
+            if (fmt[i] == '<' || fmt[i] == '>') {
+                ++i;
+                while (i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '9')
+                    ++i;
+                if (i < fmt.size() && fmt[i] != ':') ++i;
+            } else {
+                size_t start = i;
+                while (i < fmt.size() && fmt[i] != ':' && fmt[i] != ' ' &&
+                       fmt[i] != '\t')
+                    ++i;
+                std::string kw = fmt.substr(start, i - start);
+                if (kw == "char" || kw == "hex" || kw == "bin" ||
+                    kw == "oct" || kw == "dec" || kw == "ptr" ||
+                    kw == "bool" || kw == "gc")
+                    return kw;
+            }
+            while (i < fmt.size() && (fmt[i] == ' ' || fmt[i] == '\t'))
+                ++i;
+            if (i < fmt.size() && fmt[i] == ':') ++i;
+        }
+        return std::string();
+    };
+    auto append_expr = [&](ast::Expr *ex, const std::string &fmt) -> bool {
         if (!ex) return false;
         // String literal anidado (no interpolado) -> tratamos su texto
         // como literal directo.
@@ -31788,6 +32068,52 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             if (!sl->is_interpolated()) { append_literal(sl->value); return true; }
         }
         const PrimitiveKind ek = ex->result_type.kind;
+        // BUG-3: `${int:char}` -> codificar el valor como codepoint UTF-8 via
+        // __vex_ctoa (paridad con interp/JIT), no como decimal.
+        if (!fmt.empty() && fmt_kind_of(fmt) == "char" &&
+            (is_integral(ek) || ek == PrimitiveKind::CHAR)) {
+            ir::IrValueId v_cp = lower_expr(ex);
+            if (v_cp == ir::IR_NO_VALUE) return false;
+            // Promover a i64 para el helper (cp puede ser hasta 0x10FFFF).
+            if (ek != PrimitiveKind::I64 && ek != PrimitiveKind::U64) {
+                ir::IrValueId v64 = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ext{};
+                ext.op = is_signed_integral(ek) ? ir::IrOp::SEXT : ir::IrOp::ZEXT;
+                ext.type = ir::IrType::I64;
+                ext.dst = v64;
+                ext.operands = {v_cp};
+                ext.source_line = ln;
+                fn_->append(current_block_, std::move(ext));
+                v_cp = v64;
+            }
+            // scratch de 4 bytes (max UTF-8).
+            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.dst = v_scr;
+                al.imm = 4;
+                al.host_alloca = native_poo_;
+                al.source_line = ln;
+                fn_->append(current_block_, std::move(al));
+            }
+            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            const std::string ctoa_fn = ensure_ctoa_helper();
+            ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ca{};
+                ca.op = ir::IrOp::CALL;
+                ca.type = ir::IrType::I64;
+                ca.dst = v_len;
+                ca.func_name = ctoa_fn;
+                ca.operands = {v_scr, v_cp};
+                ca.source_line = ln;
+                fn_->append(current_block_, std::move(ca));
+            }
+            build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
+            return true;
+        }
         if (ek == PrimitiveKind::STRING) {
             // El expr produce un value-string (PTR a slot).  Inc 5 (SSO):
             // (ptr, len) via accesores flag-aware.  Append de sus bytes.
@@ -31936,7 +32262,11 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
     // parts[0].
     if (np > 0) append_literal(slit->interp_parts[0]);
     for (size_t i = 0; i < ne; ++i) {
-        if (!append_expr(slit->interp_exprs[i].get())) return ir::IR_NO_VALUE;
+        const std::string fmt_i =
+            (i < slit->interp_formats.size()) ? slit->interp_formats[i]
+                                              : std::string();
+        if (!append_expr(slit->interp_exprs[i].get(), fmt_i))
+            return ir::IR_NO_VALUE;
         if (i + 1 < np) append_literal(slit->interp_parts[i + 1]);
     }
     return v_slot;

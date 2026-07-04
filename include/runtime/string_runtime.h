@@ -67,6 +67,17 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm, uint64_t vm_addr,
                                      uint32_t byte_len) noexcept;
 
 /**
+ * @brief Helper unificado para STRMAKE_H desde memoria HOST (puntero
+ * crudo del proceso, no direccion VM).  Misma fast path que
+ * @c exec_instr_strmake_h.  Usado por @c vrt_str_make_h (JIT) para que
+ * el path vreg pueda compilar STRMAKE con buffer host (resultado de
+ * ALLOCA promovido a heap host que fluye a un CALLN de stringify) en
+ * lugar de caer al selector de slots.
+ */
+gc::GcHandle make_string_from_host_mem(ProcessVM *vm, uint64_t host_addr,
+                                       uint32_t byte_len) noexcept;
+
+/**
  * @brief Materializa un StringObject ROPE/SLICE a FLAT (operacion
  * identidad si ya es FLAT).  Usado por STRRAW del JIT antes de
  * devolver el puntero host.

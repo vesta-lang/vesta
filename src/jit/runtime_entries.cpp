@@ -154,6 +154,7 @@ void RuntimeEntries::resolve() {
 
     // ----- String ops (Sprint JIT-cobertura 2026-06-01) -----
     str_make = &vrt_str_make;
+    str_make_h = &vrt_str_make_h;
     str_len = &vrt_str_len;
     str_get_bytes = &vrt_str_get_bytes;
     str_raw = &vrt_str_raw;
@@ -194,7 +195,8 @@ bool RuntimeEntries::all_resolved() const noexcept {
            callitf && callclosure && calln && call_bc_function && vm_read_u64 &&
            vm_write_u64 && findclass && newobj && defclass && deffield &&
            defmethod && addadvice && findmethod && findfield && setmethdbg &&
-           str_make && str_len && str_get_bytes && str_raw && str_cat &&
+           str_make && str_make_h && str_len && str_get_bytes && str_raw &&
+           str_cat &&
            str_cmp && panic_str && gc_alloc_payload && safepoint_poll &&
            safepoint_handler;
 }
