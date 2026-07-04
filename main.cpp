@@ -353,7 +353,10 @@ int main(int argc, char *argv[]) {
             "Nivel de optimizacion IR: 0=O0, 1=O1, 2=O2, 3=O3 (defecto: 1)",
             cxxopts::value<int>()->default_value("1"))(
             "ir-emit-only", "Solo emitir el texto .vel; no compilar a .velb")(
-            "vex", "Compilar archivo .vex (lenguaje Vex) a .velb",
+            "vex", "Compilar archivo .vx (lenguaje Vesta) a .velb",
+            cxxopts::value<std::string>())(
+            "vesta", "Compilar archivo .vx (lenguaje Vesta) a .velb; "
+                     "equivalente a --vex",
             cxxopts::value<std::string>())(
             "vex-emit-only",
             "Solo emitir el .vel intermedio del .vex; no compilar a .velb")(
@@ -844,7 +847,7 @@ int main(int argc, char *argv[]) {
         // (1) Acciones primarias mutuamente excluyentes: solo una a la vez.
         static const char *const kPrimaryActions[] = {
             "run",      "worker",       "driver", "build",
-            "vex",      "asm-file",     "disasm-file", "script"};
+            "vex",      "vesta",        "asm-file",     "disasm-file", "script"};
         std::vector<std::string> present;
         for (const char *a : kPrimaryActions)
             if (result.count(a)) present.emplace_back(std::string("--") + a);
@@ -857,9 +860,9 @@ int main(int argc, char *argv[]) {
         }
 
         // (2) -m aot solo tiene sentido compilando un .vex a binario nativo.
-        if (aot_mode && !result.count("vex")) {
-            std::cerr << "[cli] -m aot requiere --vex <archivo.vex> "
-                         "(compilacion nativa desde fuente Vex).\n";
+        if (aot_mode && !result.count("vex") && !result.count("vesta")) {
+            std::cerr << "[cli] -m aot requiere --vesta <archivo.vx> "
+                         "(compilacion nativa desde fuente Vesta).\n";
             if (result.count("run"))
                 std::cerr << "[cli]   nota: --run ejecuta un .velb en la VM; "
                              "es incompatible con -m aot.\n";
@@ -1765,9 +1768,11 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
-    // Ejemplo: vm.exe --vex src/main.vex -o main.velb
-    if (result.count("vex")) {
-        const std::string &vex_path = result["vex"].as<std::string>();
+    // Ejemplo: vm.exe --vesta src/main.vx -o main.velb  (--vex es alias legacy)
+    if (result.count("vex") || result.count("vesta")) {
+        const std::string vex_path = result.count("vex")
+            ? result["vex"].as<std::string>()
+            : result["vesta"].as<std::string>();
         bool emit_only = result.count("vex-emit-only") > 0;
         bool emit_ir = result.count("vex-emit-ir") > 0;
 
