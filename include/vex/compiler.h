@@ -452,12 +452,17 @@ CompileResult compile_vex_source(const std::string &source,
  * @param source_overlay Opcional: mapa path->texto en memoria (overlay).  Usado
  *        por el LSP para analizar el buffer del editor (root) resolviendo los
  *        imports del disco.  @c nullptr => todo del disco (ruta normal).
+ * @param extra_search_paths Opcional: directorios extra donde resolver imports.
+ *        Usado por el LSP para resolver imports relativos al root del proyecto
+ *        (p.ej. `import "modules/buffer"`) cuando se analiza un fichero-modulo
+ *        que no es la raiz (se le pasan sus directorios ancestros).
  * @return CompileResult con el @c .vel mergeado + diagnostics.
  */
 CompileResult compile_vex_project(
     const std::string &root_path, const CompileOptions &opts = {},
     const std::unordered_map<std::string, std::string> *source_overlay =
-        nullptr);
+        nullptr,
+    const std::vector<std::string> *extra_search_paths = nullptr);
 
 /**
  * @brief Detecta si el source @c .vex contiene @c import declaraciones

@@ -278,7 +278,30 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         if (has_imports && file_on_disk) {
             std::unordered_map<std::string, std::string> overlay;
             overlay[fs_path] = text;
-            analysis->result = vex::compile_vex_project(fs_path, opts, &overlay);
+            // Ancestros del fichero como search paths extra: permite resolver
+            // imports relativos al root del proyecto (p.ej. `import
+            // "modules/buffer"`) cuando el fichero analizado es un modulo que
+            // no es la raiz.  Subimos hasta la RAIZ del filesystem (profundidad
+            // arbitraria), acotado defensivamente a 40 niveles para no colgar
+            // ante paths patologicos.  Asi librerias anidadas a cualquier
+            // profundidad resuelven sus imports project-relative.
+            std::vector<std::string> anc;
+            {
+                std::string d = fs_path;
+                size_t slash = d.find_last_of("/\\");
+                if (slash != std::string::npos) d = d.substr(0, slash);
+                for (int lvl = 0; lvl < 40 && !d.empty(); ++lvl) {
+                    anc.push_back(d);
+                    size_t s = d.find_last_of("/\\");
+                    // Parar en la raiz (POSIX "/" o Windows "C:").
+                    if (s == std::string::npos || s == 0 ||
+                        (s == 2 && d[1] == ':'))
+                        break;
+                    d = d.substr(0, s);
+                }
+            }
+            analysis->result =
+                vex::compile_vex_project(fs_path, opts, &overlay, &anc);
         } else {
             analysis->result = vex::compile_vex_source(text, uri, opts);
         }

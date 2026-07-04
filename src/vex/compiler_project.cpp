@@ -621,7 +621,8 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
 
 CompileResult compile_vex_project(
     const std::string &root_path, const CompileOptions &opts,
-    const std::unordered_map<std::string, std::string> *source_overlay) {
+    const std::unordered_map<std::string, std::string> *source_overlay,
+    const std::vector<std::string> *extra_search_paths) {
     CompileResult res;
 
     // 1. Construir el dep graph + topo sort.
@@ -632,6 +633,12 @@ CompileResult compile_vex_project(
     if (source_overlay) {
         for (const auto &kv : *source_overlay)
             graph.set_source_overlay(kv.first, kv.second);
+    }
+    // LSP: directorios extra donde resolver imports (ancestros del fichero
+    // analizado), para que un modulo con imports relativos al root del proyecto
+    // (p.ej. `import "modules/buffer"`) resuelva aunque se abra standalone.
+    if (extra_search_paths) {
+        for (const auto &d : *extra_search_paths) graph.add_search_path(d);
     }
     // Permitir override del directorio de busqueda via env var VEX_PATH.
     graph.add_vex_path_env();
