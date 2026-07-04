@@ -26,6 +26,7 @@ LANG_COLORS = {
     "cpp":          "#9467bd",  # violeta
     "python":       "#17becf",  # cyan
     "java":         "#d62728",  # rojo
+    "go":           "#007d9c",  # teal Go (distinto del cyan de python)
 }
 
 # Labels formateados.
@@ -39,6 +40,7 @@ LANG_LABELS = {
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
     "java":         "Java",
+    "go":           "Go (gc)",
 }
 
 

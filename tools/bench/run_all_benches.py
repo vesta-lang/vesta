@@ -79,6 +79,10 @@ class C:
     ORANGE = "\033[38;5;208m" if _enabled else ""  # naranja
     VIOLET = "\033[38;5;99m" if _enabled else ""   # violeta azulado
     PINK = "\033[38;5;213m" if _enabled else ""    # rosa
+    # Teal/turquesa brillante (aquamarine 43, ~#00d7af) para Go.  Distinto de
+    # CYAN (36, python), BLUE (34, c) y GREEN (32, jit): tira a verde-cian pero
+    # con hue propio y brillante, inequivoco frente al resto de la paleta.
+    TEAL = "\033[38;5;43m" if _enabled else ""
 
     @classmethod
     def enable_windows_ansi(cls):
@@ -379,6 +383,15 @@ def capture_system_info(vm_bin: Path, tc: dict) -> dict:
         }
     else:
         tooling["Java"] = {"available": False}
+    # go (usa `go version`, sin dashes).
+    if tc.get("go") and tc["go"].available:
+        tooling["Go (gc)"] = {
+            "available": True,
+            "version": get_tool_version([tc["go"].path, "version"]),
+            "path": tc["go"].path,
+        }
+    else:
+        tooling["Go (gc)"] = {"available": False}
     info_d["tooling"] = tooling
 
     # ---- Fecha del reporte ----
@@ -621,6 +634,14 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
     tc["java"].path_javac = javac if javac else ""
     tc["java"].path_java = java if java else ""
 
+    go = shutil.which("go")
+    tc["go"] = Toolchain(
+        "go", "Go (gc)", C.TEAL,
+        available=go is not None,
+        why_unavailable="" if go else "go not in PATH"
+    )
+    tc["go"].path = go if go else ""
+
     return tc
 
 
@@ -658,6 +679,7 @@ def discover_benches(bench_dir: Path) -> list[Bench]:
             "cpp":    d / "main.cpp",
             "python": d / "main.py",
             "java":   d / "Main.java",
+            "go":     d / "main.go",
         }
         for lang, p in candidates.items():
             if p.is_file():
@@ -905,6 +927,23 @@ def compile_java(variant: BenchVariant, work_dir: Path,
     if r.returncode != 0:
         return None
     return ([tc.path_java, "-cp", str(bench_work), "Main"], bench_work, 1.0)
+
+
+def compile_go(variant: BenchVariant, work_dir: Path,
+               tc: Toolchain) -> Optional[tuple[list[str], Path, float]]:
+    # Go compila a un exe nativo (el compilador gc optimiza por defecto; no se
+    # pasan flags de optimizacion ni se usa gccgo).  Se ejecuta como binario
+    # nativo igual que C, midiendo su wall time.
+    suffix = ".exe" if sys.platform == "win32" else ""
+    out = work_dir / f"{variant.bench_name}_go{suffix}"
+    r = subprocess.run(
+        [tc.path, "build", "-o", str(out), str(variant.src_path)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120.0,
+        cwd=str(variant.src_path.parent),
+    )
+    if r.returncode != 0 or not out.is_file():
+        return None
+    return ([str(out)], work_dir, 1.0)
 
 
 def compile_vex(variant: BenchVariant, work_dir: Path,
@@ -1221,6 +1260,7 @@ LANG_LABELS_PLAIN = {
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
     "java":         "Java",
+    "go":           "Go (gc)",
 }
 
 
@@ -1301,6 +1341,7 @@ def save_matplotlib(rows: list[dict], active_langs: list[str],
         "cpp":          "#9467bd",
         "python":       "#17becf",
         "java":         "#d62728",
+        "go":           "#007d9c",
     }
 
     n_benches = len(valid_rows)
@@ -1655,6 +1696,7 @@ def rerender_from_json(json_path: Path, project_root: Path,
         "cpp":          ("C++ (g++ -O3)", C.MAGENTA),
         "python":       ("Python (CPython)", C.CYAN),
         "java":         ("Java (HotSpot)", C.RED),
+        "go":           ("Go (gc)", C.TEAL),
     }
     tc = {ln: _MockTc(ln, *LABELS.get(ln, (ln, C.RESET))) for ln in active_langs}
 
@@ -1721,13 +1763,13 @@ def main() -> int:
     parser.add_argument(
         "--langs", type=str,
         default="vex_interp,vex_jit,vex_aot_sse2,vex_aot_avx,vex_aot_auto,"
-                "c,cpp,python,java",
+                "c,cpp,python,java,go",
         help=("lista CSV de lenguajes/modos a ejecutar.  Validos: "
               "vex_interp (interp puro), vex_jit (JIT), "
               "vex_aot_sse2 (AOT nativo 128b), vex_aot_avx (AOT AVX2 256b), "
               "vex_aot_auto (AOT multiversion cpuid), "
-              "c (gcc -O3), cpp (g++ -O3), python, java.  "
-              "Ej: --langs vex_jit,vex_aot_auto,c"))
+              "c (gcc -O3), cpp (g++ -O3), python, java, go (Go gc).  "
+              "Ej: --langs vex_jit,vex_aot_auto,c,go"))
     parser.add_argument("--filter", type=str, default="",
                         help="Regex para filtrar benches por nombre")
     parser.add_argument("--runs", type=int, default=RUNS_PER_MODE)
@@ -1915,6 +1957,8 @@ def main() -> int:
                 return (idx, b.name, ln, compile_python(variant, work_dir, tc["python"]), None)
             elif ln == "java":
                 return (idx, b.name, ln, compile_java(variant, work_dir, tc["java"]), None)
+            elif ln == "go":
+                return (idx, b.name, ln, compile_go(variant, work_dir, tc["go"]), None)
             else:
                 return (idx, b.name, ln, None, "unknown lang")
         except Exception as e:  # noqa: BLE001
