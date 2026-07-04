@@ -37,6 +37,7 @@
 #include "vex/lowering.h"
 #include "vex/module_interop.h"
 #include "vex/module_resolver.h"
+#include "vex/namespace_flatten.h" // NS.2: flatten inline namespaces por modulo
 #include "vex/parser.h"
 // IMPORTANTE: incluir los headers de diagramas DESPUES de parser.h / lowering.h
 // para que la fwd decl @c namespace ast { struct ModuleNode; } del header
@@ -1064,7 +1065,31 @@ CompileResult compile_vex_project(
             mangle_top_level_(*pm.ast, pm.module_name);
         }
 
+        // NS.2: aplanar los `namespace X;` inline de ESTE modulo (root o dep).
+        // mangle_top_level_ (arriba) solo toca las decls anonimas top-level (no
+        // recorre NamespaceDecl), asi que no hay doble-mangle: las decls
+        // namespaced se manglan por su NAMESPACE (mylib__X), las anonimas de un
+        // dep por su MODULO (lib__Y).  Se registran en el TypeChecker para que
+        // el acceso qualified (mylib.helper()) resuelva dentro del modulo.
+        auto inline_namespaces = flatten_namespaces(*pm.ast);
+
         pm.tc = std::make_unique<TypeChecker>(*pm.ast, pm.diags);
+
+        for (const auto &ins : inline_namespaces) {
+            const uint32_t ns_idx =
+                pm.tc->register_imported_namespace(ins.name, ins.name);
+            for (const auto &sym : ins.symbols) {
+                TypeChecker::ImportedNamespace::Sym ns_sym;
+                ns_sym.kind = (sym.kind == FlattenedNamespace::Sym::Function)
+                                  ? 0
+                                  : (sym.kind == FlattenedNamespace::Sym::Type
+                                         ? 2
+                                         : 1);
+                ns_sym.mangled_label = sym.mangled_label;
+                pm.tc->register_namespace_symbol(ns_idx, sym.public_name,
+                                                 std::move(ns_sym));
+            }
+        }
 
         // ANTES de typecheck: inyectar simbolos de los deps via .vexi.
         // Dos modos:
