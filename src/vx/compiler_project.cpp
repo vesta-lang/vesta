@@ -300,8 +300,16 @@ struct ImportRequest {
     std::vector<TypeChecker::VxiOnlyEntry> only_symbols;
     bool is_plain = false;           // sin only -> registra namespace
     bool is_public_reexport = false; // L.23: public import
+    bool by_namespace = false;       // NS.2-full: import a.b.c; (por-namespace)
     SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
 };
+
+/// Phase NS.2-full: mapa namespace punteado -> module_name (filename) del
+/// modulo que lo declara.  Se construye desde los AST de todos los modulos
+/// del proyecto y traduce los imports por-namespace (`import a.b.c;`) al
+/// module_name del dep resuelto, para reusar toda la maquinaria de imports
+/// por-path (que ya soporta acceso cualificado multi-segmento via ns_path).
+using NsToModname = std::unordered_map<std::string, std::string>;
 
 /// Phase M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
 /// modulo con un prefijo `<modname>__`.  Esto evita colisiones de
@@ -561,19 +569,36 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
     }
 }
 
-std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
+std::vector<ImportRequest>
+collect_imports_(const ast::ModuleNode &mod,
+                 const NsToModname *ns_to_modname = nullptr) {
     std::vector<ImportRequest> out;
     for (const auto &d : mod.decls) {
         if (!d || d->kind != ast::NodeKind::ImportDecl) continue;
         const auto *im = static_cast<const ast::ImportDecl *>(d.get());
         ImportRequest req;
-        // Extraer el nombre del modulo del path (ultimo segmento).
-        size_t slash = im->path.find_last_of('/');
-        req.module_name = (slash == std::string::npos)
-                              ? im->path
-                              : im->path.substr(slash + 1);
-        // local_name: alias o module_name si no hay alias.
-        req.local_name = im->alias.empty() ? req.module_name : im->alias;
+        req.by_namespace = im->by_namespace;
+        if (im->by_namespace) {
+            // NS.2-full: import a.b.c;  El `path` es el namespace punteado.
+            // Lo traducimos al module_name (filename) del dep que lo declara,
+            // para reusar la maquinaria de imports por-path.  Si no hay mapa
+            // (o el ns no esta), dejamos el dotted (fallara el by_name lookup
+            // con diagnostico claro mas arriba/abajo).
+            req.module_name = im->path; // dotted por defecto
+            if (ns_to_modname) {
+                auto it = ns_to_modname->find(im->path);
+                if (it != ns_to_modname->end()) req.module_name = it->second;
+            }
+            req.local_name =
+                im->alias.empty() ? req.module_name : im->alias;
+        } else {
+            // Por-path: module_name = ultimo segmento del path.
+            size_t slash = im->path.find_last_of('/');
+            req.module_name = (slash == std::string::npos)
+                                  ? im->path
+                                  : im->path.substr(slash + 1);
+            req.local_name = im->alias.empty() ? req.module_name : im->alias;
+        }
         // Mapear OnlySymbol AST -> TypeChecker::VxiOnlyEntry.
         req.only_symbols.reserve(im->only_symbols.size());
         for (const auto &os : im->only_symbols) {
@@ -588,6 +613,25 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
     return out;
 }
 
+/// Phase NS.2-full: construye el mapa namespace -> module_name recorriendo
+/// los AST de todos los modulos del proyecto.  Cada @c NamespaceDecl top-level
+/// (formas statement y bloque) mapea su path punteado al module_name del
+/// modulo que lo contiene.  Namespaces parciales (varios modulos, mismo ns):
+/// gana el primero registrado (MVP; el import trae ese fichero).
+NsToModname build_ns_to_modname_(const std::vector<ProjectModuleWork> &work) {
+    NsToModname out;
+    for (const auto &pm : work) {
+        if (!pm.ast) continue;
+        for (const auto &d : pm.ast->decls) {
+            if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+            const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
+            if (ns->name.empty()) continue;
+            out.emplace(ns->name, pm.module_name);
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 /// Phase M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
@@ -597,7 +641,8 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
 /// paralelo.  El root siempre tiene el nivel maximo.
 std::vector<int>
 compute_module_levels_(const std::vector<ProjectModuleWork> &work,
-                       const std::unordered_map<std::string, size_t> &by_name) {
+                       const std::unordered_map<std::string, size_t> &by_name,
+                       const NsToModname &ns_to_modname) {
     std::vector<int> levels(work.size(), 0);
     // Procesamos en orden topologico (work ya esta en topo).  Para cada
     // modulo, recogemos los imports de su AST + calculamos su nivel
@@ -606,7 +651,7 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         const auto &pm = work[i];
         if (!pm.ast) continue;
         int max_dep_level = -1;
-        auto imports = collect_imports_(*pm.ast);
+        auto imports = collect_imports_(*pm.ast, &ns_to_modname);
         for (const auto &req : imports) {
             auto itd = by_name.find(req.module_name);
             if (itd == by_name.end()) continue;
@@ -732,6 +777,10 @@ CompileResult compile_vx_project(
         by_name.emplace(rm_mut->module_name, i);
     }
 
+    // Phase NS.2-full: mapa namespace -> module_name para traducir los
+    // imports por-namespace (`import a.b.c;`) al module_name del dep.
+    const NsToModname ns_to_modname = build_ns_to_modname_(work);
+
     // 3. Compilar cada modulo en orden topologico (deps primero).
     //
     // Estrategia con cache (M3+M4):
@@ -762,7 +811,7 @@ CompileResult compile_vx_project(
     // safety review del TypeChecker compartido + file lock cache que
     // M5.A ya cubre via atomic write.
     const std::vector<int> module_levels =
-        compute_module_levels_(work, by_name);
+        compute_module_levels_(work, by_name, ns_to_modname);
     int max_level = 0;
     for (int L : module_levels) {
         if (L > max_level) max_level = L;
@@ -1101,7 +1150,7 @@ CompileResult compile_vx_project(
         //   - `import "x" only A, B;`   -> inyecta A, B directos en scope.
         //   - `import "x" [as alias];`  -> registra namespace para `x.A` o
         //                                   `alias.A` (Phase M.7).
-        auto imports = collect_imports_(*pm.ast);
+        auto imports = collect_imports_(*pm.ast, &ns_to_modname);
 
         // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
         // antes de procesar los imports explicitos.  Si main tiene
@@ -1542,7 +1591,7 @@ CompileResult compile_vx_project(
         const auto &root_pm = work.back();
         const auto &root_refs = root_pm.tc ? root_pm.tc->referenced_names()
                                            : std::unordered_set<std::string>{};
-        auto root_imports = collect_imports_(*root_pm.ast);
+        auto root_imports = collect_imports_(*root_pm.ast, &ns_to_modname);
         for (const auto &req : root_imports) {
             if (req.is_plain) continue;           // namespace -> nunca shake
             if (req.is_public_reexport) continue; // re-export consume el dep

@@ -1,0 +1,8 @@
+// NS.2-full: modulo que declara un namespace multi-segmento.  Un consumidor
+// lo importa por su NAMESPACE (import geo.shapes;) en lugar de por su PATH
+// de fichero (import "geolib";).  El resolver mapea el namespace a fichero
+// via un indice de las cabeceras `namespace` de las source roots.
+namespace geo.shapes;
+
+public i64 area(i64 w, i64 h) { return w * h; }
+public struct Rect { i64 w; i64 h; }

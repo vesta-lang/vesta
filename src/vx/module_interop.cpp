@@ -1628,6 +1628,30 @@ void register_namespace_for_import(TypeChecker &tc,
             tc.register_namespace_symbol(target_ns_g, s.name, std::move(sym));
         }
     }
+
+    // NS.2-full: si el modulo declara UN namespace (ns_path) y el local_name
+    // (alias del import o el module_name por defecto) difiere de el, apuntar
+    // el alias a ese namespace para que `alias.Sym` resuelva igual que
+    // `ns_path.Sym`.  Arregla `import a.b.c as x;` (y el alias por-path con
+    // namespace declarado, que estaba roto pre-existente).
+    {
+        std::string primary_ns;
+        bool multiple = false;
+        for (const auto &s : mod.symbols) {
+            if (s.ns_path.empty()) continue;
+            if (primary_ns.empty()) {
+                primary_ns = s.ns_path;
+            } else if (primary_ns != s.ns_path) {
+                multiple = true;
+                break;
+            }
+        }
+        if (!multiple && !primary_ns.empty() && primary_ns != local_name) {
+            const uint32_t target =
+                tc.register_imported_namespace(primary_ns, module_name);
+            tc.point_namespace_alias(local_name, target);
+        }
+    }
 }
 
 } // namespace vx

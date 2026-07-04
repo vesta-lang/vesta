@@ -2597,18 +2597,72 @@ Parser::parse_import_decl(bool is_public_reexport) {
 
     (void)consume(); // 'import'
 
-    // El path debe ser un literal string puro.  Strings interpolados
-    // arrancan con ISTR_BEGIN (no STRING_LIT) -- el check con
-    // STRING_LIT/RAW_STRING_LIT garantiza implicitamente que no hay
-    // interpolacion en la ruta.
-    if (current_.kind != TokenKind::STRING_LIT &&
-        current_.kind != TokenKind::RAW_STRING_LIT) {
-        error_here("se esperaba un literal string como ruta del modulo, "
-                   "e.g. import \"editor/buffer\";");
+    // Phase NS.2-full: dos formas de import.
+    //   (a) por-PATH:      import "editor/buffer";   (literal string)
+    //   (b) por-NAMESPACE: import a.b.c;             (identificadores punteados)
+    // La forma (b) resuelve el namespace a fichero via el indice de
+    // namespaces (escaneo de las cabeceras `namespace` de las source roots).
+    if (current_.kind == TokenKind::STRING_LIT ||
+        current_.kind == TokenKind::RAW_STRING_LIT) {
+        // Forma (a) por-path.  Strings interpolados arrancan con ISTR_BEGIN
+        // (no STRING_LIT), asi que el check garantiza que no hay interpolacion.
+        im->path = current_.str_val;
+        (void)consume();
+    } else if (current_.kind == TokenKind::IDENTIFIER) {
+        // Forma (b) por-namespace: recolectar el path punteado a.b.c.
+        im->by_namespace = true;
+        std::string ns = consume().lexeme;
+        while (current_.kind == TokenKind::DOT) {
+            // `a.b.c.{A, B}` -> el `.{` cierra el path y abre la lista selectiva.
+            if (lex_.peek_at(0).kind == TokenKind::LBRACE) break;
+            (void)consume(); // '.'
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba un identificador tras '.' en el "
+                           "namespace del import");
+                return nullptr;
+            }
+            ns += ".";
+            ns += consume().lexeme;
+        }
+        im->path = std::move(ns);
+        // Forma selectiva `.{A, B as C}` (equivalente a `only`).
+        if (current_.kind == TokenKind::DOT && lex_.peek_at(0).kind == TokenKind::LBRACE) {
+            (void)consume(); // '.'
+            (void)consume(); // '{'
+            for (;;) {
+                if (current_.kind != TokenKind::IDENTIFIER) {
+                    error_here("se esperaba un identificador en la lista "
+                               "selectiva '.{ ... }' del import");
+                    return nullptr;
+                }
+                ast::ImportDecl::OnlySymbol os;
+                os.name = consume().lexeme;
+                if (current_.kind == TokenKind::IDENTIFIER &&
+                    current_.lexeme == "as") {
+                    (void)consume(); // 'as'
+                    if (current_.kind != TokenKind::IDENTIFIER) {
+                        error_here("se esperaba un identificador tras 'as' en "
+                                   "la lista selectiva del import");
+                        return nullptr;
+                    }
+                    os.rename = consume().lexeme;
+                }
+                im->only_symbols.push_back(std::move(os));
+                if (current_.kind == TokenKind::COMMA) {
+                    (void)consume();
+                    continue;
+                }
+                break;
+            }
+            (void)expect(TokenKind::RBRACE,
+                         "se esperaba '}' al final de la lista selectiva "
+                         "'.{ ... }' del import");
+        }
+    } else {
+        error_here("se esperaba un literal string (import \"a/b\";) o un "
+                   "namespace punteado (import a.b.c;) tras 'import'");
         return nullptr;
     }
-    im->path = current_.str_val;
-    (void)consume();
 
     // Opcional: as alias  (contextual 'as').
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "as") {

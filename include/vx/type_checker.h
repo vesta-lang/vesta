@@ -1447,6 +1447,20 @@ class TypeChecker {
                                    const std::string &public_name,
                                    ImportedNamespace::Sym sym);
 
+    /// @brief Phase NS.2-full: apunta un nombre local (alias del import) a un
+    /// namespace ya registrado.  Usado para que @c "import a.b.c as x;" haga
+    /// que @c x.Sym resuelva igual que @c a.b.c.Sym cuando el namespace
+    /// declarado difiere del nombre del fichero/alias.
+    void point_namespace_alias(const std::string &alias, uint32_t ns_index) {
+        ns_idx_by_local_name_[alias] = ns_index;
+        // El Symbol::Namespace de @p alias se crea desde la cola pendiente con
+        // el ns_index capturado al registrarlo; corregirlo aqui para que
+        // @c alias.Sym resuelva contra el namespace destino.
+        for (auto &pn : pending_imported_ns_names_) {
+            if (pn.first == alias) pn.second = ns_index;
+        }
+    }
+
   private:
     /// Phase NS.1b: resuelve un nombre qualified punteado `a.b.c.Symbol` a su
     /// namespace + simbolo, probando el PREFIJO de namespace mas LARGO (para

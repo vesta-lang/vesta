@@ -1794,8 +1794,15 @@ struct TypeAliasDecl : Node {
  */
 struct ImportDecl : Node {
     /// Ruta literal tal como aparecio en el source (sin las comillas).
-    /// E.g. @c "editor/buffer" o @c "std/io".
+    /// E.g. @c "editor/buffer" o @c "std/io".  Cuando @c by_namespace es
+    /// true, contiene el path punteado del namespace (e.g. @c "std.collections").
     std::string path;
+    /// Phase NS.2-full: true si el import vino de la forma por-NAMESPACE
+    /// @c "import a.b.c;" (identificadores punteados) en lugar de la forma
+    /// por-PATH @c "import \"a/b/c\";" (literal string).  En ese caso @c path
+    /// contiene el namespace punteado y el resolver lo mapea a fichero via el
+    /// indice de namespaces (no via el sistema de ficheros directo).
+    bool by_namespace = false;
     /// Alias opcional para el namespace.  Vacio si no hay @c as.
     std::string alias;
     /// Lista de simbolos especificos a importar al scope local
