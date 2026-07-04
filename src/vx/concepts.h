@@ -24,8 +24,8 @@
  * mantener cada fichero manejable.
  */
 
-#ifndef VEX_CONCEPTS_H
-#define VEX_CONCEPTS_H
+#ifndef VX_CONCEPTS_H
+#define VX_CONCEPTS_H
 
 #include "vx/types.h"
 
@@ -58,4 +58,4 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
 
 } // namespace vx
 
-#endif // VEX_CONCEPTS_H
+#endif // VX_CONCEPTS_H

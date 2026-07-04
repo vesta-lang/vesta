@@ -40,8 +40,8 @@
  *     tras chequear @c kind, NO con dynamic_cast (cero RTTI overhead).
  */
 
-#ifndef VEX_AST_H
-#define VEX_AST_H
+#ifndef VX_AST_H
+#define VX_AST_H
 
 #include <cstdint>
 #include <memory>
@@ -782,9 +782,9 @@ struct NewExpr : Expr {
     /// a @c __new_<Class>_shared (que emite el opcode @c newobjs en
     /// lugar de @c newobj).
     bool is_shared = false;
-    /// gc<T> opt-in (`import vex.gc`): el var-decl padre es @c gc<Class>.  Lo
+    /// gc<T> opt-in (`import vx.gc`): el var-decl padre es @c gc<Class>.  Lo
     /// setea @c lower_var_decl; el lowering despacha a @c __new_<Class>_gc
-    /// (aloca con @c vex_gc_alloc + marca @c is_gc_object) y NO registra
+    /// (aloca con @c vx_gc_alloc + marca @c is_gc_object) y NO registra
     /// cleanup RAII (el GC colecta, incl. ciclos).
     bool is_gc = false;
     /// Bug fix 2026-05-23: indica que @c class_name YA fue mutado a su
@@ -1457,7 +1457,7 @@ struct FunctionDecl : Node {
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
     /// Phase M6.a L.3: visibilidad cross-module.  @c true (default) =
-    /// publica, exportada al `.vexi` y accesible desde otros modulos.
+    /// publica, exportada al `.vxi` y accesible desde otros modulos.
     /// @c false = privada al modulo (no se exporta).  El parser setea
     /// segun keyword `public`/`private` precedente; sin keyword = true
     /// (default permisivo para compat con codigo existente).
@@ -1534,7 +1534,7 @@ struct FunctionDecl : Node {
     /// esperada `void(<ptr> obj)`.  Si el programa declara un @SyncImpl,
     /// `synchronized` baja a un CALL a estas funciones en LOS 3 MODOS
     /// (interp/JIT/AOT); sin override se usa el default de cada tier
-    /// (opcode MONENTER/MONEXIT en interp/JIT, __vex_monenter/monexit en
+    /// (opcode MONENTER/MONEXIT en interp/JIT, __vx_monenter/monexit en
     /// AOT).  Mecanismo, no politica: el programador decide la impl
     /// (spinlock, pthread, disable-IRQ en kernel, lock cooperativo de
     /// fibras, etc.).  Mismo patron que @AllocatorOverride/@PanicHandler.
@@ -1779,7 +1779,7 @@ struct TypeAliasDecl : Node {
  *
  * Phase M (sistema de modulos).  El @c path es siempre un string
  * literal por consistencia con @c extern "lib.dll", @c loadmodule(),
- * @c @Method("lib:fn"), etc.  Se resuelve a un fichero @c .vex en
+ * @c @Method("lib:fn"), etc.  Se resuelve a un fichero @c .vx en
  * el filesystem por el module resolver del compilador.
  *
  * Sin @c as ni @c only, el modulo se accede via su namespace (el
@@ -2155,7 +2155,7 @@ struct ClassDecl : Node {
  * Los genericos se monomorphizan donde se USAN; para que un modulo importador
  * pueda instanciar `Caja<i64>` necesita el AST del template `struct Caja<T>`.
  * En vez de serializar el AST, guardamos el TEXTO FUENTE del decl (capturado
- * por el parser) en el `.vexi`; el importador lo re-parsea e inyecta en su AST.
+ * por el parser) en el `.vxi`; el importador lo re-parsea e inyecta en su AST.
  * Cubre struct/clase/funcion/enum genericos (type_params no vacios) y los
  * `concept`.  @c kind = NodeKind del decl.
  */
@@ -2173,8 +2173,8 @@ struct ModuleNode : Node {
     /// que no pueden tenerlas (kernel, freestanding, embedded).
     bool no_exceptions = false;
     /// Plantillas genericas + conceptos declarados en este modulo, con su
-    /// texto fuente para exportarlos cross-module via `.vexi`.  Lo rellena
-    /// el parser; lo consume el emitter del `.vexi`.
+    /// texto fuente para exportarlos cross-module via `.vxi`.  Lo rellena
+    /// el parser; lo consume el emitter del `.vxi`.
     std::vector<GenericTemplateExport> generic_template_exports;
     ModuleNode() : Node(NodeKind::Module) {}
 };
@@ -2201,4 +2201,4 @@ bool assignop_from_token(TokenKind k, AssignOp &out) noexcept;
 
 } // namespace vx::ast
 
-#endif // VEX_AST_H
+#endif // VX_AST_H

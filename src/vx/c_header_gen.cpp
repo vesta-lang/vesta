@@ -151,17 +151,17 @@ std::string generate_c_header(const ast::ModuleNode &mod, const TypeChecker &tc,
     std::ostringstream os;
     const std::string guard = guard_of(guard_base);
 
-    os << "/* Header C generado por VestaVM (vex --emit-header).\n"
+    os << "/* Header C generado por VestaVM (vx --emit-header).\n"
        << " * Interfaz publica del modulo Vesta: structs C-compat + funciones\n"
        << " * con firma C-representable.  Los structs cruzan POR PUNTERO\n"
        << " * (ABI de agregados; un T* == void* a nivel ABI).  Editar a mano\n"
-       << " * bajo tu propio riesgo; regenera con vex --emit-header. */\n";
+       << " * bajo tu propio riesgo; regenera con vx --emit-header. */\n";
     os << "#ifndef " << guard << "\n#define " << guard << "\n\n";
     // Prelude estatico desde stdlib/port/c (includes + apertura extern "C").
     // Minimo C/C++ hardcodeado: la boilerplate vive en el snippet.
     bool pre_ok = false;
     const std::string prelude =
-        port::load_snippet_text("vex_header_prelude", "", pre_ok);
+        port::load_snippet_text("vx_header_prelude", "", pre_ok);
     if (pre_ok) {
         os << prelude << "\n";
     } else {
@@ -249,7 +249,7 @@ std::string generate_c_header(const ast::ModuleNode &mod, const TypeChecker &tc,
     // Postlude estatico desde stdlib/port/c (cierre de extern "C").
     bool post_ok = false;
     const std::string postlude =
-        port::load_snippet_text("vex_header_postlude", "", post_ok);
+        port::load_snippet_text("vx_header_postlude", "", post_ok);
     if (post_ok) {
         os << postlude << "\n";
     } else {

@@ -13,7 +13,7 @@
  *        (`extern "lib.dll" fn name(...)`).
  *
  * Phase MC.20 (Camino A.cont): habilita exponer servicios compile-time
- * de @c vex_lib (static_assert, comptime_compile, comptime_type, etc.)
+ * de @c vx_lib (static_assert, comptime_compile, comptime_type, etc.)
  * a las macros sin necesidad de DLL externa.  El macro escribe:
  *
  *   extern "vesta_comptime" {

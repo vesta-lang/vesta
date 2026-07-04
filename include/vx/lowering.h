@@ -47,8 +47,8 @@
  *     dejo el campo result_type relleno, evitando recomputos.
  */
 
-#ifndef VEX_LOWERING_H
-#define VEX_LOWERING_H
+#ifndef VX_LOWERING_H
+#define VX_LOWERING_H
 
 #include <string>
 #include <unordered_map>
@@ -100,7 +100,7 @@ class Lowering {
     /**
      * @brief Habilita instrumentacion para debugging.  Cuando esta
      * activa, el lowering emite @c CALLN sinteticas a
-     * @c "vex_trace:enter" al inicio y a @c "vex_trace:exit" antes
+     * @c "vx_trace:enter" al inicio y a @c "vx_trace:exit" antes
      * de cada @c RET de cada funcion del usuario.  La instrumentacion
      * vive en el IR -> todos los backends (bytecode VM, JIT, port C,
      * futuros ports) la heredan automaticamente.
@@ -145,7 +145,7 @@ class Lowering {
     /// la primitiva de monitor de `synchronized`.  Cuando NO estan vacios,
     /// @c emit_monitor_op emite un CALL a @p enter / @p exit en LOS 3 MODOS
     /// (interp/JIT/AOT) en vez del opcode MONENTER/MONEXIT (interp/JIT) o
-    /// __vex_monenter/monexit (AOT).  El operando es el host_ptr al
+    /// __vx_monenter/monexit (AOT).  El operando es el host_ptr al
     /// ObjectHeader (no el GcHandle): la impl del usuario decide el layout.
     void set_sync_impl_overrides(const std::string &enter,
                                  const std::string &exit) {
@@ -154,7 +154,7 @@ class Lowering {
     }
 
     /// CPU dispatch Inc 4: registra el nombre de la fn libre marcada con
-    /// @HelperOverride(memcpy).  Cuando NO esta vacio, __vex_memcpy_init
+    /// @HelperOverride(memcpy).  Cuando NO esta vacio, __vx_memcpy_init
     /// apunta el fp directamente a esta fn (INCONDICIONAL, sin leer el
     /// bitmask de cpuid).  Solo aplica en native_poo_ (AOT).
     void set_memcpy_override(const std::string &fn_name) {
@@ -162,18 +162,18 @@ class Lowering {
     }
 
     /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
-    /// @HelperOverride(strcmp).  Cuando NO esta vacio, __vex_strdisp_init
-    /// apunta el fp __vex_strcmp_fp a esta fn (INCONDICIONAL).  El default es
-    /// __vex_strcmp_base (la impl escalar del compilador).  Solo native_poo_.
+    /// @HelperOverride(strcmp).  Cuando NO esta vacio, __vx_strdisp_init
+    /// apunta el fp __vx_strcmp_fp a esta fn (INCONDICIONAL).  El default es
+    /// __vx_strcmp_base (la impl escalar del compilador).  Solo native_poo_.
     /// Firma esperada: i64(u8*, i64, u8*, i64).
     void set_strcmp_override(const std::string &fn_name) {
         strcmp_override_ = fn_name;
     }
 
     /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
-    /// @HelperOverride(strlen).  Cuando NO esta vacio, __vex_strdisp_init
-    /// apunta el fp __vex_strlen_fp a esta fn (INCONDICIONAL).  El default es
-    /// __vex_strlen_base.  Solo native_poo_.  Firma esperada: i64(u8*).
+    /// @HelperOverride(strlen).  Cuando NO esta vacio, __vx_strdisp_init
+    /// apunta el fp __vx_strlen_fp a esta fn (INCONDICIONAL).  El default es
+    /// __vx_strlen_base.  Solo native_poo_.  Firma esperada: i64(u8*).
     void set_strlen_override(const std::string &fn_name) {
         strlen_override_ = fn_name;
     }
@@ -735,7 +735,7 @@ class Lowering {
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);
     /// Sintetiza, si @c needs_free_uniq_helper_, la funcion runtime
-    /// `__vex_free_uniq(i64 slot)` que libera un slot Tier 1 de unique<T>
+    /// `__vx_free_uniq(i64 slot)` que libera un slot Tier 1 de unique<T>
     /// (null-guard + dispatch del deleter + RAW_FREE del slot, reusando
     /// @c emit_free_unique_slot).  La usa el reassign-free de un campo unique
     /// como una sola CALL (el diamante del free vive DENTRO del helper, evitando
@@ -1132,7 +1132,7 @@ class Lowering {
     std::unordered_map<std::string, uint64_t> runtime_global_slots_;
 
     /// thread_local con init != 0: (slot static_data, valor inicial 8B LE).  El
-    /// lowering sintetiza __vex_tls_init (TLS callback del PE) que escribe estos
+    /// lowering sintetiza __vx_tls_init (TLS callback del PE) que escribe estos
     /// valores en la copia por-hilo al attach del hilo -- el cargador de Windows
     /// no siempre copia la plantilla del TLS de una .dll a un consumidor minimal.
     std::vector<std::pair<uint64_t, uint64_t>> tls_nonzero_inits_;
@@ -1208,13 +1208,13 @@ class Lowering {
     std::unordered_set<std::string> classes_used_shared_;
 
     /// gc<T> opt-in: clases instanciadas como @c gc<Class> -> generar el helper
-    /// @c __new_<Class>_gc (aloca con @c vex_gc_alloc + marca is_gc_object, sin
+    /// @c __new_<Class>_gc (aloca con @c vx_gc_alloc + marca is_gc_object, sin
     /// RAII).  El GC (libvesta_gc) colecta lo no alcanzable.
     std::unordered_set<std::string> classes_used_gc_;
 
     /// true si el modulo registro al menos un finalizador GC (gc<unique>/
     /// gc<shared>/gc<Clase> con recurso interno).  En AOT dispara la inyeccion
-    /// de @c vex_gc_finalize_all antes de cada RET de main (cero fuga al exit).
+    /// de @c vx_gc_finalize_all antes de cada RET de main (cero fuga al exit).
     bool module_has_gc_finalizers_ = false;
 
     /// Vars locales declaradas con modificador @c shared.  El escape
@@ -1286,7 +1286,7 @@ class Lowering {
                                          uint32_t source_line);
 
     // Monitor enter/exit.  En native_poo_ (AOT) baja a CALL nativo
-    // (__vex_monenter/__vex_monexit, bundle-ado desde stdlib/vex/vex_sync.vex)
+    // (__vx_monenter/__vx_monexit, bundle-ado desde stdlib/vx/vx_sync.vx)
     // sobre el host_ptr del objeto; en el resto de tiers emite la IR op
     // MONENTER/MONEXIT (handle) que el runtime/JIT consume.
     void emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
@@ -1353,13 +1353,13 @@ class Lowering {
     ir::IrValueId emit_native_str_is_heap(ir::IrValueId v_slot,
                                           uint32_t source_line);
     /// @c emit_native_str_data_ptr / @c emit_native_str_len emiten una CALL a
-    /// los helpers @c __vex_strdata / @c __vex_strlen (una sola instruccion por
+    /// los helpers @c __vx_strdata / @c __vx_strlen (una sola instruccion por
     /// uso).  La logica branchless (AND-mask heap/SSO) vive en el cuerpo del
     /// helper (@c *_inline), NO inline en cada call site: cada accesor inline
     /// expandia ~10 instrs, y sumar 4 longitudes + 4 punteros en una funcion
     /// reventaba el regalloc SysV (menos callee-saved que Win64) -> resultado
-    /// erroneo en ELF.  Mismo patron que @c __vex_strcmp / itoa.  Los helpers
-    /// estan en el blacklist del inliner (prefijo @c __vex_str) para no
+    /// erroneo en ELF.  Mismo patron que @c __vx_strcmp / itoa.  Los helpers
+    /// estan en el blacklist del inliner (prefijo @c __vx_str) para no
     /// re-inlinearse.
     ir::IrValueId emit_native_str_data_ptr(ir::IrValueId v_slot,
                                            uint32_t source_line);
@@ -1370,14 +1370,14 @@ class Lowering {
                                                   uint32_t source_line);
     ir::IrValueId emit_native_str_len_inline(ir::IrValueId v_slot,
                                              uint32_t source_line);
-    /// Construyen (lazy, una vez) los helpers @c __vex_strdata / @c __vex_strlen
-    /// y devuelven su nombre.  Firma: @c u8* __vex_strdata(u8* s) /
-    /// @c i64 __vex_strlen(u8* s).
+    /// Construyen (lazy, una vez) los helpers @c __vx_strdata / @c __vx_strlen
+    /// y devuelven su nombre.  Firma: @c u8* __vx_strdata(u8* s) /
+    /// @c i64 __vx_strlen(u8* s).
     std::string ensure_strdata_helper();
     std::string ensure_strlen_helper();
     /// Vesta Embed Inc 6 (encoding UTF-8): @c .length() cuenta CODE-POINTS (no
     /// bytes; @c .bytes() da los bytes via @c emit_native_str_len).  El helper
-    /// @c __vex_str_cplen(u8* p, i64 byte_len) -> i64 recorre los bytes y suma
+    /// @c __vx_str_cplen(u8* p, i64 byte_len) -> i64 recorre los bytes y suma
     /// 1 por cada byte que NO sea continuacion UTF-8 ((b & 0xC0) != 0x80).
     /// Para ASCII coincide con el conteo de bytes (cero cambio en los tests
     /// ASCII existentes).  @c emit_native_str_cplen emite la CALL.
@@ -1386,7 +1386,7 @@ class Lowering {
                                         uint32_t source_line);
     /// Vesta Embed Inc 6: @c .wstr() devuelve un @c u16* NUL-terminado en
     /// UTF-16LE para FFI Win32 @c *W.  El helper
-    /// @c __vex_str_to_utf16(u8* p, i64 byte_len) -> u16* aloca un buffer
+    /// @c __vx_str_to_utf16(u8* p, i64 byte_len) -> u16* aloca un buffer
     /// (@c RAW_ALLOC -> malloc/override), decodifica UTF-8 -> UTF-16 (pares
     /// suplentes para code-points astrales) y lo NUL-termina.  El CALLER es
     /// dueno del buffer (transitorio para FFI; liberar o aceptar la fuga en
@@ -1533,7 +1533,7 @@ class Lowering {
                                           ir::IrValueId v_val, bool is_signed,
                                           uint32_t source_line);
     /// Vesta Embed Inc 2: garantiza que el helper itoa nativo
-    /// @c __vex_itoa_s (signed) / @c __vex_itoa_u (unsigned) este emitido
+    /// @c __vx_itoa_s (signed) / @c __vx_itoa_u (unsigned) este emitido
     /// como funcion IR independiente en @c out_mod_ (una sola vez por
     /// modulo y signedness).  Firma: @c (u8* buf, i64 val) -> i64 len.
     /// El cuerpo es el itoa de @c emit_native_itoa_to_buf, pero como
@@ -1547,14 +1547,14 @@ class Lowering {
     /// modulo (indice 0=unsigned, 1=signed).  Evita duplicar la funcion.
     bool itoa_helper_emitted_[2] = {false, false};
     /// Vesta Embed Inc 2: helper bool->string nativo
-    /// @c i64 __vex_btoa(u8* buf, i64 b): escribe "true" (4) o "false"
+    /// @c i64 __vx_btoa(u8* buf, i64 b): escribe "true" (4) o "false"
     /// (5) en @p buf y devuelve la longitud.  Como funcion APARTE con
     /// branch -> evita el const-fold mid-expression del append condicional.
     /// Devuelve el nombre del helper.  Solo en @c native_poo_.
     std::string ensure_btoa_helper();
     bool btoa_helper_emitted_ = false; ///< El helper btoa ya esta emitido.
     /// BUG-3 (`${cp:char}` en construccion native/AOT): helper codepoint ->
-    /// UTF-8.  Firma @c i64 __vex_ctoa(u8* buf, i64 cp): escribe la
+    /// UTF-8.  Firma @c i64 __vx_ctoa(u8* buf, i64 cp): escribe la
     /// codificacion UTF-8 (1..4 bytes) del codepoint en @p buf y devuelve la
     /// longitud.  Paridad byte-exacta con @c vio_char_to_vmbuf (interp/JIT).
     /// Solo en @c native_poo_.
@@ -1562,7 +1562,7 @@ class Lowering {
     bool ctoa_helper_emitted_ = false; ///< El helper ctoa ya esta emitido.
     /// Vesta Embed Inc 4: helper de comparacion lexicografica de strings
     /// value-type nativos.  Firma:
-    /// @c i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb).
+    /// @c i64 __vx_strcmp(u8* pa, i64 la, u8* pb, i64 lb).
     /// Devuelve -1/0/1 (memcmp + tie-break por longitud: a la izquierda
     /// del primer byte distinto decide; si un prefijo coincide, el mas
     /// corto es menor).  Como funcion APARTE con loop -> el optimizer no
@@ -1572,56 +1572,56 @@ class Lowering {
     /// @c native_poo_.
     std::string ensure_strcmp_helper();
     bool strcmp_helper_emitted_ = false; ///< El helper strcmp ya esta emitido.
-    bool strdata_helper_emitted_ = false; ///< El helper __vex_strdata emitido.
-    bool strlen_helper_emitted_ = false; ///< El helper __vex_strlen emitido.
-    bool str_cplen_helper_emitted_ = false; ///< El helper __vex_str_cplen emitido.
-    bool str_to_utf16_helper_emitted_ = false; ///< __vex_str_to_utf16 emitido.
+    bool strdata_helper_emitted_ = false; ///< El helper __vx_strdata emitido.
+    bool strlen_helper_emitted_ = false; ///< El helper __vx_strlen emitido.
+    bool str_cplen_helper_emitted_ = false; ///< El helper __vx_str_cplen emitido.
+    bool str_to_utf16_helper_emitted_ = false; ///< __vx_str_to_utf16 emitido.
 
     /// CPU dispatch (cimiento): asegura que existan el global
-    /// @c __vex_cpu_features (slot @c static_data de 8 bytes zero-init) y el
-    /// helper @c __vex_cpu_init() que ejecuta @c cpuid al arranque y empaqueta
+    /// @c __vx_cpu_features (slot @c static_data de 8 bytes zero-init) y el
+    /// helper @c __vx_cpu_init() que ejecuta @c cpuid al arranque y empaqueta
     /// un bitmask de features en ese slot.  Devuelve el indice del slot del
     /// global (para que @c cpu_features() lo lea via STR_LIT_ADDR + LOAD).
     /// Idempotente.  Solo en @c native_poo_ (AOT Bare/Embed): usa INLINE_ASM
     /// que es PURE_NATIVE.  El bitmask: bit0=SSE2 bit1=SSE4.2 bit2=POPCNT
     /// bit3=AVX bit4=AVX2 bit5=BMI1 bit6=BMI2 bit7=AVX512F bit8=ERMS.
     uint64_t ensure_cpu_features_global();
-    bool cpu_init_emitted_ = false; ///< El helper __vex_cpu_init ya emitido.
+    bool cpu_init_emitted_ = false; ///< El helper __vx_cpu_init ya emitido.
     bool cpu_features_used_ =
         false; ///< Algun cpu_features() se uso -> wirear init en main.
     uint64_t cpu_features_slot_ =
         UINT64_MAX; ///< Slot static_data del global (UINT64_MAX = sin crear).
     bool cpu_dispatch_used_ =
         false; ///< Se uso ALGUN helper multi-versionado (memcpy dispatch) ->
-               ///< wirear __vex_cpu_init en main aunque no se llame
+               ///< wirear __vx_cpu_init en main aunque no se llame
                ///< cpu_features() (el init setea los fp).
 
     /// CPU dispatch (Inc 2): mecanismo de despacho por TABLA DE PUNTEROS.
-    /// Asegura el global @c __vex_memcpy_fp (slot @c static_data de 8 bytes,
-    /// seccion ".data") + las dos variantes @c __vex_memcpy_base (rep movsb,
-    /// segura) y @c __vex_memcpy_avx2 (AVX2 32B + cola byte-a-byte).  El helper
-    /// @c __vex_cpu_init setea el fp a la mejor variante segun el bit AVX2.
-    /// Devuelve el indice del slot del global @c __vex_memcpy_fp.  Idempotente.
+    /// Asegura el global @c __vx_memcpy_fp (slot @c static_data de 8 bytes,
+    /// seccion ".data") + las dos variantes @c __vx_memcpy_base (rep movsb,
+    /// segura) y @c __vx_memcpy_avx2 (AVX2 32B + cola byte-a-byte).  El helper
+    /// @c __vx_cpu_init setea el fp a la mejor variante segun el bit AVX2.
+    /// Devuelve el indice del slot del global @c __vx_memcpy_fp.  Idempotente.
     /// Solo en @c native_poo_ (AOT).  Marca @c cpu_dispatch_used_.
     uint64_t ensure_memcpy_dispatch();
     bool memcpy_helpers_emitted_ =
         false; ///< Las variantes + el global fp ya estan emitidos.
     uint64_t memcpy_fp_slot_ =
-        UINT64_MAX; ///< Slot static_data del global __vex_memcpy_fp.
+        UINT64_MAX; ///< Slot static_data del global __vx_memcpy_fp.
 
     /// AUTO multiversion (--float-isa auto): si @c main tiene ops VEC_*, lo
-    /// renombra a @c __vex_main_body (helper VEC normal que el driver compila
+    /// renombra a @c __vx_main_body (helper VEC normal que el driver compila
     /// 3x: $sse2/$avx2/$avx512) y sintetiza un @c main fino que (a) corre los
-    /// inits y (b) hace @c CALLIND a traves del slot @c __vex_main_body$fp.
+    /// inits y (b) hace @c CALLIND a traves del slot @c __vx_main_body$fp.
     /// Asi "multiversionar main" se reduce a "despachar un helper", sin tratar
-    /// el entry como caso especial.  Construye ademas @c __vex_auto_init() que
+    /// el entry como caso especial.  Construye ademas @c __vx_auto_init() que
     /// elige la variante por cpuid (AVX512F bit7 > AVX2 bit4 > SSE2) y la
     /// guarda en el fp.  Idempotente.  Solo @c native_poo_ + @c aot_auto_vec_.
     /// Marca @c cpu_dispatch_used_ + @c auto_dispatch_emitted_ para que
-    /// @c run() prepone @c call __vex_auto_init al entry de main.
+    /// @c run() prepone @c call __vx_auto_init al entry de main.
     void ensure_auto_multiversion(ir::IrModule &out_module);
     bool auto_dispatch_emitted_ =
-        false; ///< El main sintetico + fp + __vex_auto_init ya se emitieron.
+        false; ///< El main sintetico + fp + __vx_auto_init ya se emitieron.
 
     /// Emite un memcpy(dst, src, len) DESPACHADO por la tabla de punteros:
     /// LOAD el fp del global + CALLIND.  Solo @c native_poo_.  En interp/JIT/
@@ -1632,12 +1632,12 @@ class Lowering {
     /// CPU dispatch Inc 5a: despacho de strcmp/strlen via tabla de punteros,
     /// foundation para que una libreria stdlib provea variantes SIMD via
     /// @HelperOverride.  Asegura (idempotente, una sola vez):
-    ///   - global @c __vex_strcmp_fp (slot 8 B en ".data").
-    ///   - global @c __vex_strlen_fp (slot 8 B en ".data").
-    ///   - los helpers BASELINE @c __vex_strcmp_base / @c __vex_strlen_base
+    ///   - global @c __vx_strcmp_fp (slot 8 B en ".data").
+    ///   - global @c __vx_strlen_fp (slot 8 B en ".data").
+    ///   - los helpers BASELINE @c __vx_strcmp_base / @c __vx_strlen_base
     ///     (la impl escalar del compilador; el dispatch los usa por defecto y
     ///     son llamables por nombre desde Vesta para que un override delegue).
-    ///   - el helper @c __vex_strdisp_init() que setea ambos fp (override del
+    ///   - el helper @c __vx_strdisp_init() que setea ambos fp (override del
     ///     usuario si existe, si no el baseline).  El compilador NO hace cpuid
     ///     aqui: el default es baseline; la SIMD vendra de la lib importada.
     /// Marca @c cpu_dispatch_used_ para que @c run() prepone el init en main.
@@ -1646,12 +1646,12 @@ class Lowering {
     bool strdisp_emitted_ =
         false; ///< Los fp + baselines + init ya estan emitidos.
     uint64_t strcmp_fp_slot_ =
-        UINT64_MAX; ///< Slot static_data del global __vex_strcmp_fp.
+        UINT64_MAX; ///< Slot static_data del global __vx_strcmp_fp.
     uint64_t strlen_fp_slot_ =
-        UINT64_MAX; ///< Slot static_data del global __vex_strlen_fp.
+        UINT64_MAX; ///< Slot static_data del global __vx_strlen_fp.
 
     /// Emite strcmp(pa, la, pb, lb) -> i64 (-1/0/1) DESPACHADO por la tabla de
-    /// punteros (LOAD __vex_strcmp_fp + CALLIND).  Solo @c native_poo_.
+    /// punteros (LOAD __vx_strcmp_fp + CALLIND).  Solo @c native_poo_.
     ir::IrValueId emit_strcmp_dispatched(ir::IrValueId pa, ir::IrValueId la,
                                          ir::IrValueId pb, ir::IrValueId lb,
                                          uint32_t source_line);
@@ -1727,7 +1727,7 @@ class Lowering {
 
     /// Modo de instrumentacion: "none", "trace", "profile".  Cuando
     /// no es "none", el lowering envuelve cada funcion usuario con
-    /// CALLs a @c vex_trace:enter y @c vex_trace:exit (o equivalente).
+    /// CALLs a @c vx_trace:enter y @c vx_trace:exit (o equivalente).
     std::string instrument_mode_ = "none";
     /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
@@ -1755,10 +1755,10 @@ class Lowering {
     std::string sync_enter_override_;
     std::string sync_exit_override_;
     /// CPU dispatch Inc 4: fn libre @HelperOverride(memcpy) (vacio => sin
-    /// override; el fp se elige por cpuid en __vex_memcpy_init).
+    /// override; el fp se elige por cpuid en __vx_memcpy_init).
     std::string memcpy_override_;
     /// CPU dispatch Inc 5a: fn libre @HelperOverride(strcmp) / (strlen)
-    /// (vacio => sin override; el fp apunta al baseline en __vex_strdisp_init).
+    /// (vacio => sin override; el fp apunta al baseline en __vx_strdisp_init).
     std::string strcmp_override_;
     std::string strlen_override_;
 
@@ -1774,12 +1774,12 @@ class Lowering {
                                             ir::IrType ret_ir, bool negate,
                                             uint32_t source_line);
 
-    /// Helper: emite CALLN sintetica a @c "vex_trace:enter" con
+    /// Helper: emite CALLN sintetica a @c "vx_trace:enter" con
     /// argumento puntero al string literal del nombre de la funcion.
     /// Usa @c out_mod_->intern_static_data para internar el nombre.
     void emit_instrument_enter(const std::string &fn_name, uint32_t line);
 
-    /// Helper: emite CALLN sintetica a @c "vex_trace:exit" con
+    /// Helper: emite CALLN sintetica a @c "vx_trace:exit" con
     /// argumentos (fn_name_ptr, return_value).  Si @c v_ret es
     /// @c IR_NO_VALUE (funcion void), se pasa @c 0.
     void emit_instrument_exit(const std::string &fn_name, ir::IrValueId v_ret,
@@ -2154,4 +2154,4 @@ class Lowering {
 
 } // namespace vx
 
-#endif // VEX_LOWERING_H
+#endif // VX_LOWERING_H

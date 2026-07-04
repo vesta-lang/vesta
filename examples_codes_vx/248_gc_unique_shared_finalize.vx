@@ -1,0 +1,35 @@
+// examples_codes_vx/248_gc_unique_shared_finalize.vx
+//
+// FINALIZADOR GC de gc<unique<T>> y gc<shared<T>> con gc_finalize_all().
+//
+// Un box `gc<unique<i64>>` con deleter custom y un box `gc<shared<i64>>` que
+// ESCAPAN su scope liberan su recurso interno EXACTAMENTE una vez cuando se
+// finalizan.  Para UNIQUE el finalizador corre el deleter que el usuario paso a
+// `unique_with` (resuelto estatico, CALL directo); para SHARED decrementa el
+// refcount del control block.  Sin finalizador GC habria FUGA del recurso al
+// escapar (el cleanup determinista de scope no corre para un box que escapa).
+//
+// `gc_finalize_all()` finaliza DETERMINISTAMENTE (no depende de la colecta ni
+// de residuos del scan conservador), asi que el test observa la liberacion sin
+// polling.  Exactamente una liberacion por box (nunca 0 = fuga, nunca 2 =
+// doble-free): el caso no-escape lo desregistra en su cleanup de scope.
+//
+// Esperado: R00 == 1  (el deleter del unique escapado corrio una vez).
+
+class Trace { public static i64 frees; }
+
+// Deleter custom del recurso interno del unique.
+void del(i64 r) { Trace.frees = Trace.frees + 1; }
+
+// El box gc<unique<i64>> escapa via return -> el finalizador GC corre `del`.
+gc<unique<i64>> crea_unique() {
+    gc<unique<i64>> g = gc_box(unique_with(7, del));
+    return g;
+}
+
+i32 main() {
+    Trace.frees = 0;
+    crea_unique();          // box unique escapado (recurso via deleter `del`)
+    gc_finalize_all();      // finaliza el box -> del() corre una vez
+    return (i32) Trace.frees;   // 1
+}

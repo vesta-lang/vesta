@@ -1175,15 +1175,15 @@ bool aot_link(const std::vector<std::string> &inputs,
             if (sm.mindex < 0) continue;
             const int wsec = sec_base + sm.mindex;
             const uint64_t off = sm.base + sy.value;
-            if (sy.name == "__vex_cpu_init") {
+            if (sy.name == "__vx_cpu_init") {
                 init_cpu.push_back({wsec, off});
                 continue;
             }
-            if (sy.name == "__vex_memcpy_init") {
+            if (sy.name == "__vx_memcpy_init") {
                 init_memcpy.push_back({wsec, off});
                 continue;
             }
-            if (sy.name == "__vex_strdisp_init") {
+            if (sy.name == "__vx_strdisp_init") {
                 init_strdisp.push_back({wsec, off});
                 continue;
             }
@@ -1573,7 +1573,7 @@ bool aot_link(const std::vector<std::string> &inputs,
         const bool any_init = !init_cpu.empty() || !init_memcpy.empty() ||
                               !init_strdisp.empty();
         if (any_init) {
-            // Sintetizar __vex_premain: llama a CADA init de programa (en orden
+            // Sintetizar __vx_premain: llama a CADA init de programa (en orden
             // cpu -> memcpy -> strdisp) y salta a main.  Asi los slots fp de
             // TODOS los .o (incluidos los .o sin main) quedan inicializados.
             // El init del .o de main ademas corre via su prologo (idempotente).

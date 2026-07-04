@@ -53,7 +53,7 @@ def build_input():
          "params": {"processId": None, "rootUri": None, "capabilities": {}}},
         {"jsonrpc": "2.0", "method": "initialized", "params": {}},
         {"jsonrpc": "2.0", "method": "textDocument/didOpen",
-         "params": {"textDocument": {"uri": URI, "languageId": "vex",
+         "params": {"textDocument": {"uri": URI, "languageId": "vx",
                                      "version": 1, "text": SRC}}},
         {"jsonrpc": "2.0", "id": 10, "method": "vesta/bytecode",
          "params": {"uri": URI}},

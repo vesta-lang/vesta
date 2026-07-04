@@ -36,7 +36,7 @@
 #include "generic_clone.h"
 
 namespace vx {
-using namespace vexgen;
+using namespace vxgen;
 
 const ast::ClassMethodDecl *
 TypeChecker::find_generic_method_template(const std::string &container,

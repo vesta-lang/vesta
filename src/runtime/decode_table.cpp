@@ -1872,7 +1872,7 @@ InstrFormat decode_table_extended[0X100] = {
               info para un MethodInfo (file + start_line) en la tabla
               global g_method_debug.  Lo emite el frontend Vesta tras
               cada defmethod en __module_init.  El stack trace lo
-              consulta para mostrar "(file.vex:42)" en vez de
+              consulta para mostrar "(file.vx:42)" en vez de
               "(pc=0xADDR)" en cada frame. */
     {"setmethdbg", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_setmethdbg,

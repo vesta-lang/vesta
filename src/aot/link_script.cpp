@@ -13,7 +13,7 @@
  * @brief Phase AOT.5 -- runner del script de enlace Vesta.
  *
  * Construye un programa Vesta completo a partir del script del usuario (que solo
- * define @c fn link()): le antepone los @c extern "vexlink" de los builtins +
+ * define @c fn link()): le antepone los @c extern "vxlink" de los builtins +
  * unos wrappers que pasan los strings via @c str_cstr (host ptr), y le anyade
  * un @c main que llama a @c link().  Compila ese programa a @c .velb in-process
  * (frontend Vesta + ensamblador) y lo ejecuta en una VM con los builtins de
@@ -62,44 +62,44 @@ bool g_dbg = false;
 
 // --- Builtins nativos (firma u64(u64,...) que espera invoke_native_unchecked).
 //     Los punteros de string llegan como u64 (host ptr de str_cstr). ---
-uint64_t vexlink_base(uint64_t a) {
+uint64_t vxlink_base(uint64_t a) {
     if (g_cfg) {
         g_cfg->base = a;
         g_cfg->has_base = true;
     }
     return 0;
 }
-uint64_t vexlink_stack(uint64_t n) {
+uint64_t vxlink_stack(uint64_t n) {
     if (g_cfg) {
         g_cfg->stack = n;
         g_cfg->has_stack = true;
     }
     return 0;
 }
-uint64_t vexlink_entry_raw(uint64_t p) {
+uint64_t vxlink_entry_raw(uint64_t p) {
     if (g_cfg && p) {
         g_cfg->entry = reinterpret_cast<const char *>(p);
         g_cfg->has_entry = true;
     }
     return 0;
 }
-uint64_t vexlink_section_raw(uint64_t p, uint64_t a) {
+uint64_t vxlink_section_raw(uint64_t p, uint64_t a) {
     if (g_cfg && p)
         g_cfg->sections[reinterpret_cast<const char *>(p)] = a;
     return 0;
 }
-uint64_t vexlink_section_size_raw(uint64_t p) {
+uint64_t vxlink_section_size_raw(uint64_t p) {
     if (g_sizes && p) {
         auto it = g_sizes->find(reinterpret_cast<const char *>(p));
         if (it != g_sizes->end()) return it->second;
     }
     return 0;
 }
-uint64_t vexlink_align_up(uint64_t v, uint64_t a) {
+uint64_t vxlink_align_up(uint64_t v, uint64_t a) {
     if (a == 0) return v;
     return ((v + a - 1) / a) * a;
 }
-uint64_t vexlink_debug_build(void) { return g_dbg ? 1u : 0u; }
+uint64_t vxlink_debug_build(void) { return g_dbg ? 1u : 0u; }
 
 void register_builtins_once() {
     static std::atomic<bool> done{false};
@@ -107,22 +107,22 @@ void register_builtins_once() {
     if (!done.compare_exchange_strong(expected, true)) return;
     // Nombres elegidos para NO colisionar con builtins existentes
     // (section_size/start/end del AOT; 'stack' reservado).
-    ffi::register_virtual_fn("vexlink", "base", (void *)&vexlink_base);
-    ffi::register_virtual_fn("vexlink", "stack_size", (void *)&vexlink_stack);
-    ffi::register_virtual_fn("vexlink", "entry_raw", (void *)&vexlink_entry_raw);
-    ffi::register_virtual_fn("vexlink", "place_raw",
-                             (void *)&vexlink_section_raw);
-    ffi::register_virtual_fn("vexlink", "secbytes_raw",
-                             (void *)&vexlink_section_size_raw);
-    ffi::register_virtual_fn("vexlink", "align_up", (void *)&vexlink_align_up);
-    ffi::register_virtual_fn("vexlink", "debug_build",
-                             (void *)&vexlink_debug_build);
+    ffi::register_virtual_fn("vxlink", "base", (void *)&vxlink_base);
+    ffi::register_virtual_fn("vxlink", "stack_size", (void *)&vxlink_stack);
+    ffi::register_virtual_fn("vxlink", "entry_raw", (void *)&vxlink_entry_raw);
+    ffi::register_virtual_fn("vxlink", "place_raw",
+                             (void *)&vxlink_section_raw);
+    ffi::register_virtual_fn("vxlink", "secbytes_raw",
+                             (void *)&vxlink_section_size_raw);
+    ffi::register_virtual_fn("vxlink", "align_up", (void *)&vxlink_align_up);
+    ffi::register_virtual_fn("vxlink", "debug_build",
+                             (void *)&vxlink_debug_build);
 }
 
 // Prelude inyectado: declara los externs + wrappers ergonomicos (los que
 // reciben nombre usan str_cstr para pasar un host ptr nul-terminado).
 const char *kPrelude =
-    "extern \"vexlink\" {\n"
+    "extern \"vxlink\" {\n"
     "    fn base(u64 a) -> void;\n"
     "    fn stack_size(u64 n) -> void;\n"
     "    fn entry_raw(char* p) -> void;\n"
@@ -163,7 +163,7 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
     vx::CompileOptions copts;
     copts.module_name = "linkscript";
     vx::CompileResult cr =
-        vx::compile_vx_source(src, "linkscript.vex", copts);
+        vx::compile_vx_source(src, "linkscript.vx", copts);
     if (!cr.ok || cr.diagnostics.has_errors()) {
         err = "link-script: error de compilacion Vesta";
         return false;
@@ -175,7 +175,7 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
         ss << (std::getenv("TEMP") ? std::getenv("TEMP")
                                    : (std::getenv("TMP") ? std::getenv("TMP")
                                                          : "/tmp"))
-           << "/vexlink_" << (void *)&src;
+           << "/vxlink_" << (void *)&src;
         prefix = ss.str();
     }
     const std::string vel_path = prefix + ".vel";

@@ -46,7 +46,7 @@ struct LinkOptions {
     uint64_t image_base = 0;        ///< base de carga (0 => default del writer).
     std::string entry;              ///< simbolo de entrada; vacio => _start->main.
     LayoutConfig layout;            ///< config de layout opcional (align/pila/...).
-    std::string link_script;        ///< .vex de configuracion (fn link()); vacio
+    std::string link_script;        ///< .vx de configuracion (fn link()); vacio
                                     ///< => sin script (solo CLI flags).
     bool debug = false;             ///< valor de debug_build() en el link-script.
     std::string sysroot;            ///< raiz para localizar librerias del sistema

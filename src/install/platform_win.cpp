@@ -212,7 +212,7 @@ static std::filesystem::path expand_env(const std::string &s) {
 /// que no debe instalarse.  Usado por @c copy_dir_recursive para
 /// filtrar @c stdlib/ y otras carpetas que el build de cmake llena
 /// con CMakeFiles/, libfoo.dll.a, *.cmake, etc.  Lo que SI se copia:
-/// .dll/.so/.dylib (plugins), .vex/.vsh/.vel/.velb (codigo runtime),
+/// .dll/.so/.dylib (plugins), .vx/.vsh/.vel/.velb (codigo runtime),
 /// .md/.txt si es @c doc/.  Lo que NO: directorios @c CMakeFiles,
 /// @c .git, @c __pycache__, archivos @c .a/.o/.obj/.lib/.exp/.cmake/.txt
 /// terminados en cmake artifacts.
@@ -241,7 +241,7 @@ static bool is_build_garbage(const std::filesystem::path &p) {
         return true;
     // Intermediarios del frontend Vesta (debug-only).  El usuario final
     // no necesita: .ir (SSA dump), .velb-map (debug map del linker).
-    // Conservamos .vex (source), .vel (assembly), .velb (ejecutable).
+    // Conservamos .vx (source), .vel (assembly), .velb (ejecutable).
     if (ext == ".ir") return true;
     if (fn.size() > 9 && fn.substr(fn.size() - 9) == ".velb-map") return true;
     return false;
@@ -345,7 +345,7 @@ class PlatformWin : public Platform {
         // icons/
         //
         // BUG fix: el binario puede estar en un build dir paralelo
-        // (ej. cmake-vex-build/vm.exe) donde los assets de source no
+        // (ej. cmake-vx-build/vm.exe) donde los assets de source no
         // existen.  Probamos varias raices y usamos la primera que
         // contenga la carpeta.  Orden: <exe_dir>, <exe_dir>/.., <exe_dir>/../..
         auto src_root = module_path().parent_path();
@@ -369,7 +369,7 @@ class PlatformWin : public Platform {
         try_copy_dir("doc", opts.copy_docs);
         try_copy_dir("examples_codes_vsh", opts.copy_examples);
         try_copy_dir("examples_codes_vm", opts.copy_examples);
-        try_copy_dir("examples_codes_vex", opts.copy_examples);
+        try_copy_dir("examples_codes_vx", opts.copy_examples);
         try_copy_dir("stdlib", opts.copy_stdlib);
         try_copy_dir("icons", opts.copy_icons);
 

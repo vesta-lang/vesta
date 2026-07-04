@@ -1,0 +1,148 @@
+// =============================================================================
+// bmp.vx - Modelo de imagen BMP (mirror de BMP_Image de JColorsTerm) en Vex.
+//
+// Clase BMP_Image con parseo de cabecera 24bpp BGR sin compresion, impresion
+// de atributos y volcado a terminal en ANSI truecolor.
+//
+// MODERNIZADO (2026-07): ya NO usa modulos-workaround locales.  La lectura
+// binaria del fichero viene de la STDLIB (import "vx_fileio": file_size +
+// file_read_into, libc-free en Windows via kernel32, POSIX via libc).  El
+// truecolor 24-bit usa los BUILTINS del lenguaje bg_rgb(r,g,b) / RESET dentro
+// de la interpolacion de print (funcionan identico en interp/JIT/AOT sin
+// construir un StringObject).  Los antiguos bmp_io.vx y colors.vx quedaron
+// obsoletos y se eliminaron.
+// =============================================================================
+
+import "vx_fileio";
+
+// Lectura little-endian desde un buffer host.
+i32 read_u16le(u8* buf, i32 off) {
+    i32 b0 = (i32) buf[off];
+    i32 b1 = (i32) buf[off + 1];
+    return b0 | (b1 << 8);
+}
+
+i32 read_u32le(u8* buf, i32 off) {
+    i32 b0 = (i32) buf[off];
+    i32 b1 = (i32) buf[off + 1];
+    i32 b2 = (i32) buf[off + 2];
+    i32 b3 = (i32) buf[off + 3];
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+}
+
+public class BMP_Image {
+    public i32 file_magic;
+    public i32 size_img;
+    public i32 offset_data;
+    public i32 size_header;
+    public i32 width;
+    public i32 height;
+    public i32 color_planes;
+    public i32 bit_pixel;
+    public i32 method_compression;
+    public i32 size_img_raw;
+    public i32 horizontal_res;
+    public i32 vertical_res;
+    public i32 color_palette;
+    public i32 important_colors;
+
+    // Buffer host con TODO el fichero (cabecera + pixeles).  El destructor
+    // lo libera (RAII) evitando fuga.
+    public u8* raw;
+    public i64 raw_len;
+
+    public BMP_Image() {
+        this.raw = null;
+        this.raw_len = 0;
+    }
+
+    public ~BMP_Image() {
+        if (this.raw != null) {
+            free(this.raw);
+            this.raw = null;
+        }
+    }
+
+    // Lee el fichero y parsea la cabecera.  Devuelve 1 si OK, 0 si error.
+    // Patron de dos pasos (stdlib vx_fileio): file_size + malloc local +
+    // file_read_into.
+    public i32 load(string path) {
+        i64 size = vx_fileio.file_size(path);
+        if (size <= 0) {
+            return 0;
+        }
+        // malloc LOCAL: la naturaleza host-ptr se conserva y se propaga al
+        // campo this.raw.
+        u8* buf = malloc(size + 1);
+        i64 n = vx_fileio.file_read_into(path, buf, size);
+        if (n != size) {
+            free(buf);
+            return 0;
+        }
+        buf[size] = 0;
+        this.raw = buf;
+        this.raw_len = size;
+        this.file_magic         = read_u16le(buf, 0);
+        this.size_img           = read_u32le(buf, 2);
+        this.offset_data        = read_u32le(buf, 10);
+        this.size_header        = read_u32le(buf, 14);
+        this.width              = read_u32le(buf, 18);
+        this.height             = read_u32le(buf, 22);
+        this.color_planes       = read_u16le(buf, 26);
+        this.bit_pixel          = read_u16le(buf, 28);
+        this.method_compression = read_u32le(buf, 30);
+        this.size_img_raw       = read_u32le(buf, 34);
+        this.horizontal_res     = read_u32le(buf, 38);
+        this.vertical_res       = read_u32le(buf, 42);
+        this.color_palette      = read_u32le(buf, 46);
+        this.important_colors   = read_u32le(buf, 50);
+        return 1;
+    }
+
+    // Replica printBMPAttributes de BMP_Image.
+    public void printBMPAttributes() {
+        println("File Header: ${this.file_magic:hex}");
+        println("Image Size: ${this.size_img} bytes");
+        println("Offset Init Data: ${this.offset_data}");
+        println("");
+        println("Header:");
+        println("  Size Header: ${this.size_header} bytes");
+        println("  Width: ${this.width} pixels");
+        println("  Height: ${this.height} pixels");
+        println("  Color Planes: ${this.color_planes}");
+        println("  Bits per Pixel: ${this.bit_pixel}");
+        println("Compression Method: ${this.method_compression}");
+        println("Raw Image Size: ${this.size_img_raw} bytes");
+        println("Horizontal Resolution: ${this.horizontal_res} pixels/meter");
+        println("Vertical Resolution: ${this.vertical_res} pixels/meter");
+        println("Color Palette: ${this.color_palette}");
+        println("Important Colors: ${this.important_colors}");
+    }
+
+    // Replica dump_buffer_cli: BMP es bottom-up + BGR.  Usa el builtin
+    // bg_rgb(r,g,b) para el color de fondo truecolor y RESET para limpiar.
+    public void dumpTerminal() {
+        i32 width  = this.width;
+        i32 height = this.height;
+        i32 bytes_per_row = width * 3;
+        i32 padding = (4 - (bytes_per_row % 4)) % 4;
+        i32 row_padded = bytes_per_row + padding;
+        i32 base = this.offset_data;
+        u8* buf = this.raw;
+
+        i32 fila = height - 1;
+        while (fila >= 0) {
+            i32 col = 0;
+            while (col < width) {
+                i32 index = base + fila * row_padded + col * 3;
+                i32 b = (i32) buf[index];
+                i32 g = (i32) buf[index + 1];
+                i32 r = (i32) buf[index + 2];
+                print("${bg_rgb(r, g, b)} ${RESET}");
+                col = col + 1;
+            }
+            println("");
+            fila = fila - 1;
+        }
+    }
+}

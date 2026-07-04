@@ -12,7 +12,7 @@
 
 /**
  * @file aot_exc_runtime.cpp
- * @brief Emision de __vex_setjmp / __vex_longjmp nativos (hand-rolled).
+ * @brief Emision de __vx_setjmp / __vx_longjmp nativos (hand-rolled).
  */
 
 #include "aot/aot_exc_runtime.h"

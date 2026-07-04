@@ -4,15 +4,15 @@
  *
  * Detecta @c import declaraciones en el fichero raiz, construye el dep
  * graph via @c ModuleGraph, ordena topologicamente, compila cada modulo
- * en orden (con .vexi compartido cross-modulo) y mergea las IrFunctions
+ * en orden (con .vxi compartido cross-modulo) y mergea las IrFunctions
  * en un solo @c IrModule final que el emitter produce como un unico
  * @c .vel.  El linker se encarga (M5 futuro) de empaquetar al .velb.
  *
  * Diseno:
  *   - Reusa @c ModuleGraph (M1) para paths + topo + ciclos.
- *   - Reusa @c export_typechecker_to_vexi (M2.d) + @c vexi_emit (M2.c)
+ *   - Reusa @c export_typechecker_to_vxi (M2.d) + @c vxi_emit (M2.c)
  *     para producir las interfaces.
- *   - Reusa @c import_vexi_into_typechecker (M2.d) para inyectar en
+ *   - Reusa @c import_vxi_into_typechecker (M2.d) para inyectar en
  *     consumidores.
  *   - Cada modulo del path se compila con su propio @c TypeChecker y
  *     @c Lowering, produciendo un @c IrModule local.  Al final, todos
@@ -48,7 +48,7 @@
 #include "vx/html_diagrams.h"
 #include "vx/mermaid_diagrams.h"
 #include "vx/type_checker.h"
-#include "vx/vexi_format.h"
+#include "vx/vxi_format.h"
 #include "util/fs_utils.h"   // fs::get_executable_path()
 
 #include <atomic>
@@ -99,9 +99,9 @@ ir::OptLevel opt_level_from_int_(int n) noexcept {
 
 /// Verifica si la cache esta deshabilitada via env var.  Por defecto
 /// activa (escribe + lee de disco).  El usuario puede setear
-/// `VEX_NO_CACHE=1` para forzar rebuild completo (util en CI / debug).
-bool vexi_cache_disabled_() noexcept {
-    const char *p = std::getenv("VEX_NO_CACHE");
+/// `VX_NO_CACHE=1` para forzar rebuild completo (util en CI / debug).
+bool vxi_cache_disabled_() noexcept {
+    const char *p = std::getenv("VX_NO_CACHE");
     return p != nullptr && p[0] != 0 && p[0] != '0';
 }
 
@@ -128,7 +128,7 @@ bool write_file_(const std::string &path, const std::vector<uint8_t> &bytes) {
 /// (Windows NTFS, Linux ext4/btrfs, macOS APFS) el rename es atomic:
 /// el destino o tiene el contenido viejo o el nuevo, nunca un parcial.
 /// Esto cierra L.17: dos compilaciones simultaneas del mismo proyecto
-/// no corrompen los archivos de cache compartidos (.vexi, .vexir, .velb).
+/// no corrompen los archivos de cache compartidos (.vxi, .vxir, .velb).
 bool write_file_atomic_(const std::string &path,
                         const std::vector<uint8_t> &bytes) {
     namespace fs = std::filesystem;
@@ -191,20 +191,20 @@ bool read_file_bytes_(const std::string &path, std::vector<uint8_t> &out) {
     return f.good();
 }
 
-/// Calcula el path del .vexi cacheado para un .vex.  Convencion:
-/// `path/to/lib.vex` -> `path/to/lib.vexi`.  Mantener el cache junto al
+/// Calcula el path del .vxi cacheado para un .vx.  Convencion:
+/// `path/to/lib.vx` -> `path/to/lib.vxi`.  Mantener el cache junto al
 /// source es la ruta mas predecible (vs un .cache/ global): facilita
-/// distribucion (publicar la libreria = copiar .vex + .vexi + .ir
+/// distribucion (publicar la libreria = copiar .vx + .vxi + .ir
 /// juntos) y limpieza (borrar la carpeta del modulo lo limpia todo).
-/// Phase M.L16: cache global opt-in via @c VEX_CACHE_DIR .  Si la env
-/// var esta definida, los caches (@c .vexi / @c .vexir / @c .vel ) se
-/// redirigen a @c "$VEX_CACHE_DIR/<hash_64>_<basename><ext>" donde
+/// Phase M.L16: cache global opt-in via @c VX_CACHE_DIR .  Si la env
+/// var esta definida, los caches (@c .vxi / @c .vxir / @c .vel ) se
+/// redirigen a @c "$VX_CACHE_DIR/<hash_64>_<basename><ext>" donde
 /// @c hash_64 es FNV-1a 64 del path canonico completo.  Esto permite
 /// que multiples proyectos compartan el mismo cache de libs comunes
 /// (e.g. stdlib en read-only).  Sin la env var, comportamiento default:
 /// cache junto al source (estable + facilita distribucion bundle).
 static std::string global_cache_dir_() {
-    const char *v = std::getenv("VEX_CACHE_DIR");
+    const char *v = std::getenv("VX_CACHE_DIR");
     return (v && v[0]) ? std::string(v) : std::string();
 }
 
@@ -227,31 +227,31 @@ static std::string global_cache_path_(const std::string &source_path,
     return (fs::path(dir) / (std::string(hex) + "_" + base + ext)).string();
 }
 
-std::string vexi_path_for_(const std::string &source_path,
+std::string vxi_path_for_(const std::string &source_path,
                            const std::string &tgt_suffix = "") {
     if (!global_cache_dir_().empty()) {
-        return global_cache_path_(source_path, tgt_suffix + ".vexi");
+        return global_cache_path_(source_path, tgt_suffix + ".vxi");
     }
     size_t dot = source_path.find_last_of('.');
-    if (dot == std::string::npos) return source_path + tgt_suffix + ".vexi";
-    return source_path.substr(0, dot) + tgt_suffix + ".vexi";
+    if (dot == std::string::npos) return source_path + tgt_suffix + ".vxi";
+    return source_path.substr(0, dot) + tgt_suffix + ".vxi";
 }
 
-/// Idem para el cache de IR del dep (.vexir).  @c tgt_suffix separa el cache por
+/// Idem para el cache de IR del dep (.vxir).  @c tgt_suffix separa el cache por
 /// target (p.ej. ".linux-x86_64") para modulos con @Target -> alternar de
 /// target no recompila (HALLAZGO-2).  Vacio => fichero unico compartido.
-std::string vexir_path_for_(const std::string &source_path,
+std::string vxir_path_for_(const std::string &source_path,
                             const std::string &tgt_suffix = "") {
     if (!global_cache_dir_().empty()) {
-        return global_cache_path_(source_path, tgt_suffix + ".vexir");
+        return global_cache_path_(source_path, tgt_suffix + ".vxir");
     }
     size_t dot = source_path.find_last_of('.');
-    if (dot == std::string::npos) return source_path + tgt_suffix + ".vexir";
-    return source_path.substr(0, dot) + tgt_suffix + ".vexir";
+    if (dot == std::string::npos) return source_path + tgt_suffix + ".vxir";
+    return source_path.substr(0, dot) + tgt_suffix + ".vxir";
 }
 
 /// Phase M5.C: path del @c .vel cacheado per-dep (output secundario
-/// junto al @c .vexi para distribucion de libs precompiladas).
+/// junto al @c .vxi para distribucion de libs precompiladas).
 std::string dep_vel_path_for_(const std::string &source_path) {
     if (!global_cache_dir_().empty()) {
         return global_cache_path_(source_path, ".vel");
@@ -283,21 +283,21 @@ struct ProjectModuleWork {
     std::unique_ptr<ast::ModuleNode> ast;
     std::unique_ptr<TypeChecker> tc;
     ir::IrModule ir;
-    VexiModule vexi;
+    VxiModule vxi;
     bool ok = false;
     /// Phase M.L20-full: Diagnostics local del modulo.  Cuando se
-    /// paraleliza el compile (VEX_PARALLEL_COMPILE=1), cada thread
+    /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,
     /// evitando race conditions.  Post-join se mergean al global.
     Diagnostics diags;
 };
 
 /// Extrae los ImportDecl del AST en orden de declaracion.  Util para
-/// procesar los `only` imports tras tener las VexiModule de los deps.
+/// procesar los `only` imports tras tener las VxiModule de los deps.
 struct ImportRequest {
     std::string module_name;
     std::string local_name; // alias o module_name
-    std::vector<TypeChecker::VexiOnlyEntry> only_symbols;
+    std::vector<TypeChecker::VxiOnlyEntry> only_symbols;
     bool is_plain = false;           // sin only -> registra namespace
     bool is_public_reexport = false; // L.23: public import
     SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
@@ -574,7 +574,7 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
                               : im->path.substr(slash + 1);
         // local_name: alias o module_name si no hay alias.
         req.local_name = im->alias.empty() ? req.module_name : im->alias;
-        // Mapear OnlySymbol AST -> TypeChecker::VexiOnlyEntry.
+        // Mapear OnlySymbol AST -> TypeChecker::VxiOnlyEntry.
         req.only_symbols.reserve(im->only_symbols.size());
         for (const auto &os : im->only_symbols) {
             req.only_symbols.push_back({os.name, os.rename});
@@ -641,18 +641,18 @@ CompileResult compile_vx_project(
     if (extra_search_paths) {
         for (const auto &d : *extra_search_paths) graph.add_search_path(d);
     }
-    // Permitir override del directorio de busqueda via env var VEX_PATH.
-    graph.add_vex_path_env();
-    // Cablear el directorio de la stdlib Vesta (stdlib/vex).  Permite que
+    // Permitir override del directorio de busqueda via env var VX_PATH.
+    graph.add_vx_path_env();
+    // Cablear el directorio de la stdlib Vesta (stdlib/vx).  Permite que
     // `import "simd_string"` (y futuras libs Vesta de la stdlib) resuelva sin
     // que el usuario tenga que copiar la lib a su proyecto.  Autodetect por
-    // candidatos comunes desde el cwd (override via env var VEX_STDLIB_DIR).
+    // candidatos comunes desde el cwd (override via env var VX_STDLIB_DIR).
     {
         std::string sd;
-        if (const char *env = std::getenv("VEX_STDLIB_DIR")) sd = env;
+        if (const char *env = std::getenv("VX_STDLIB_DIR")) sd = env;
         if (sd.empty()) {
-            static const char *cands[] = {"stdlib/vex", "../stdlib/vex",
-                                          "../../stdlib/vex"};
+            static const char *cands[] = {"stdlib/vx", "../stdlib/vx",
+                                          "../../stdlib/vx"};
             for (const char *c : cands) {
                 std::ifstream test(std::string(c) + "/simd_string.vx");
                 if (test.good()) {
@@ -662,7 +662,7 @@ CompileResult compile_vx_project(
             }
         }
         // Fallback relativo al EJECUTABLE: cubre la instalacion (vesta.exe junto
-        // a stdlib/vex/) y el build-tree (vm.exe en cmake-build-X/, stdlib en la
+        // a stdlib/vx/) y el build-tree (vm.exe en cmake-build-X/, stdlib en la
         // raiz del repo).  Asi el compilador instalado encuentra la stdlib desde
         // cualquier directorio de trabajo.
         if (sd.empty()) {
@@ -671,8 +671,8 @@ CompileResult compile_vx_project(
                 std::filesystem::path ed =
                     std::filesystem::path(exe).parent_path();
                 const std::filesystem::path exe_cands[] = {
-                    ed / "stdlib" / "vex",
-                    ed.parent_path() / "stdlib" / "vex"};
+                    ed / "stdlib" / "vx",
+                    ed.parent_path() / "stdlib" / "vx"};
                 for (const auto &c : exe_cands) {
                     std::ifstream test((c / "simd_string.vx").string());
                     if (test.good()) {
@@ -686,8 +686,8 @@ CompileResult compile_vx_project(
     }
     // añadir como search path implicito la carpeta del modulo root.  Asi
     // los modulos hermanos pueden importarse con paths relativos al root
-    // (`import "modules/foo"` desde @c src/modules/bar.vex resuelve a
-    // @c src/modules/foo.vex aunque el importer dir sea @c src/modules/).
+    // (`import "modules/foo"` desde @c src/modules/bar.vx resuelve a
+    // @c src/modules/foo.vx aunque el importer dir sea @c src/modules/).
     // Sin esto, cada modulo tendria que usar paths siblings (`import "foo"`)
     // que cambian segun donde vive el archivo -- frustrante a escala.
     {
@@ -737,21 +737,21 @@ CompileResult compile_vx_project(
     // Estrategia con cache (M3+M4):
     //   - El ROOT (work.back()) SIEMPRE se compila (es lo que el usuario
     //     pidio compilar; su .velb es el output del comando).
-    //   - Los DEPS comprueban el cache `.vexi` + `.vexir` junto al source:
-    //     si ambos existen y source_hash coincide con el del .vexi, se
+    //   - Los DEPS comprueban el cache `.vxi` + `.vxir` junto al source:
+    //     si ambos existen y source_hash coincide con el del .vxi, se
     //     SKIPEAN el lex+parse+typecheck+lower del dep y se carga el IR
-    //     directo desde .vexir.  Speedup esperado: 5-20x en builds
+    //     directo desde .vxir.  Speedup esperado: 5-20x en builds
     //     incrementales con cache hit.
-    //   - Cache desactivable via env VEX_NO_CACHE=1.
-    const bool cache_enabled = !vexi_cache_disabled_();
-    const bool verbose_cache = std::getenv("VEX_VERBOSE_CACHE") != nullptr;
+    //   - Cache desactivable via env VX_NO_CACHE=1.
+    const bool cache_enabled = !vxi_cache_disabled_();
+    const bool verbose_cache = std::getenv("VX_VERBOSE_CACHE") != nullptr;
     // Phase M.L21: progreso/feedback al usuario durante compile de
-    // proyectos grandes.  Activado via @c VEX_VERBOSE_COMPILE=1 .
+    // proyectos grandes.  Activado via @c VX_VERBOSE_COMPILE=1 .
     // Emit @c [i/N] compiling <name>... al iniciar cada modulo +
     // @c (hit/wrote) al cerrar.  Util para identificar cuellos de
     // botella en build incrementales.
     const bool verbose_compile = []() {
-        const char *v = std::getenv("VEX_VERBOSE_COMPILE");
+        const char *v = std::getenv("VX_VERBOSE_COMPILE");
         return v && v[0] == '1';
     }();
     // Phase M.L20: computar niveles topologicos para reporting.  Modulos
@@ -785,7 +785,7 @@ CompileResult compile_vx_project(
     // un modulo IMPORTADO puede declarar el override (la "lib" hereda su
     // implementacion al consumidor via import).  El override debe resolverse
     // ANTES de lowerear el ROOT, porque es el root quien genera los inits
-    // (__vex_memcpy_init / __vex_strdisp_init) que apuntan el fp a la fn del
+    // (__vx_memcpy_init / __vx_strdisp_init) que apuntan el fp a la fn del
     // override.  Estrategia: recorrer el AST de TODOS los modulos (root +
     // imports) recolectando un map agregado target->fn_name; luego, cuando se
     // lowerea el root, aplicarlo via lo.set_*_override.  El fn_name resuelve
@@ -898,7 +898,7 @@ CompileResult compile_vx_project(
     std::mutex verbose_mtx;
     // HALLAZGO-2: capturar el override de @Target (thread_local del parser) en
     // el main thread.  Se usa para (a) mezclarlo en el source_hash del cache
-    // -> PE y ELF del MISMO proyecto no comparten `.vexir` (si no, cross-compilar
+    // -> PE y ELF del MISMO proyecto no comparten `.vxir` (si no, cross-compilar
     // a un target y luego a otro reusaba el IR del target equivocado), y (b)
     // re-aplicarlo en los workers del compile paralelo (el thread_local arranca
     // vacio en un thread nuevo).
@@ -923,9 +923,9 @@ CompileResult compile_vx_project(
         // Sin esto, builds con cache de un modo distinto producen
         // `.vel` con relocations sin resolver -> SEGV silente en runtime
         // (limitacion MC.12 documentada).
-        uint64_t source_hash = vexi_fnv1a(pm.source);
+        uint64_t source_hash = vxi_fnv1a(pm.source);
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
-            const uint64_t instrument_hash = vexi_fnv1a(opts.instrument_mode);
+            const uint64_t instrument_hash = vxi_fnv1a(opts.instrument_mode);
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
                            (source_hash << 6) + (source_hash >> 2);
         }
@@ -933,7 +933,7 @@ CompileResult compile_vx_project(
         // baja.  En modo Full/VM las clases usan GC (newobj + gc_deref); en
         // modo AOT (`native_poo`) usan stack/heap nativo (calloc + dtor RAII).
         // Son IR DISTINTOS para el mismo source.  Si no mezclamos native_poo
-        // en el source_hash, un `.vexir` cacheado por `-m vm` se reusaria en
+        // en el source_hash, un `.vxir` cacheado por `-m vm` se reusaria en
         // `-m aot` (y viceversa) -> IR incompatible con el backend objetivo.
         // Esto solo muerde libs con clases/funciones CONCRETAS (las plantillas
         // genericas no producen IR en el dep; se monomorphizan en el root).
@@ -944,8 +944,8 @@ CompileResult compile_vx_project(
         // HALLAZGO-2: un modulo SOLO es target-especifico si usa @Target (que
         // descarta decls distintas segun os/arch al parsear).  Para NO
         // recompilar al alternar de target, separamos su cache por FICHERO (no
-        // por source_hash, que sobrescribiria el unico .vexir y forzaria
-        // recompilar en cada cambio).  Asi persisten `mod.<os>-<arch>.vexir`
+        // por source_hash, que sobrescribiria el unico .vxir y forzaria
+        // recompilar en cada cambio).  Asi persisten `mod.<os>-<arch>.vxir`
         // para cada target y alternar PE<->ELF es cache-hit.  Los modulos SIN
         // @Target usan el fichero unico compartido (mismo IR para todos los
         // targets).  El sufijo va vacio cuando no aplica.
@@ -957,23 +957,23 @@ CompileResult compile_vx_project(
 
         // ---- M4: cache hit path ----
         // Solo se aplica a DEPS, no al root.  Verifica:
-        //   1. Existe `<source>.vexi`.
-        //   2. .vexi.source_hash == source_hash actual.
-        //   3. Existe `<source>.vexir` para reusar el IR.
+        //   1. Existe `<source>.vxi`.
+        //   2. .vxi.source_hash == source_hash actual.
+        //   3. Existe `<source>.vxir` para reusar el IR.
         // Si los 3 se cumplen, se skipea el recompile del dep.
         if (cache_enabled && !is_root) {
             const std::string vp =
-                vexi_path_for_(pm.canonical_path, cache_tgt_suffix);
+                vxi_path_for_(pm.canonical_path, cache_tgt_suffix);
             const std::string ip =
-                vexir_path_for_(pm.canonical_path, cache_tgt_suffix);
+                vxir_path_for_(pm.canonical_path, cache_tgt_suffix);
             std::vector<uint8_t> vbytes;
             if (read_file_bytes_(vp, vbytes)) {
-                auto pr = vexi_parse(vbytes.data(), vbytes.size());
+                auto pr = vxi_parse(vbytes.data(), vbytes.size());
                 if (pr.ok && pr.module_.source_hash == source_hash) {
                     // Phase M4.ext L.13: cache transitivo.  El source_hash
                     // del modulo coincide, pero alguno de sus deps directos
                     // podria haber cambiado.  Verificar que cada DepRecord
-                    // del .vexi cacheado matchea el abi_hash actual del dep
+                    // del .vxi cacheado matchea el abi_hash actual del dep
                     // (que ya viene populated en work[] por topo order).
                     bool deps_match = true;
                     for (const auto &dep_rec : pr.module_.deps) {
@@ -983,19 +983,19 @@ CompileResult compile_vx_project(
                             deps_match = false;
                             if (verbose_cache) {
                                 std::ostringstream tmp;
-                                tmp << "[vex-cache] miss (transitivo): dep '"
+                                tmp << "[vx-cache] miss (transitivo): dep '"
                                     << dep_rec.name << "' no encontrado\n";
                                 std::lock_guard<std::mutex> lk(verbose_mtx);
                                 std::cerr << tmp.str();
                             }
                             break;
                         }
-                        const uint64_t actual = work[itd->second].vexi.abi_hash;
+                        const uint64_t actual = work[itd->second].vxi.abi_hash;
                         if (actual != dep_rec.abi_hash) {
                             deps_match = false;
                             if (verbose_cache) {
                                 std::ostringstream tmp;
-                                tmp << "[vex-cache] miss (transitivo): dep '"
+                                tmp << "[vx-cache] miss (transitivo): dep '"
                                     << dep_rec.name
                                     << "' cambio (abi_hash old=0x" << std::hex
                                     << dep_rec.abi_hash << " new=0x" << actual
@@ -1007,18 +1007,18 @@ CompileResult compile_vx_project(
                         }
                     }
                     if (deps_match) {
-                        // Hash match -> intentar cargar tambien el .vexir.
+                        // Hash match -> intentar cargar tambien el .vxir.
                         std::vector<uint8_t> ibytes;
                         if (read_file_bytes_(ip, ibytes) && !ibytes.empty()) {
-                            // BugFix M.vexir-sd: cargar el modulo COMPLETO
+                            // BugFix M.vxir-sd: cargar el modulo COMPLETO
                             // (functions + static_data + globals).  El formato
                             // viejo (solo functions) perdia el static_data del
                             // dep -> relocaciones `code.s_*` colgantes en el
-                            // `.velb` con cache caliente.  Un `.vexir` viejo
+                            // `.velb` con cache caliente.  Un `.vxir` viejo
                             // falla el magic y cae a recompilar.
                             ir::IrModule dep_mod;
                             if (ir::parse_ir_module_cache(ibytes, dep_mod)) {
-                                pm.vexi = std::move(pr.module_);
+                                pm.vxi = std::move(pr.module_);
                                 pm.ir.functions = std::move(dep_mod.functions);
                                 pm.ir.static_data =
                                     std::move(dep_mod.static_data);
@@ -1030,7 +1030,7 @@ CompileResult compile_vx_project(
                                 // colgantes (p.ej. `vrt:inline_asm_exec` /
                                 // `vrt:naked_fnaddr` de un dep con cuerpos
                                 // @Naked/inline-asm) -> RelocationError con el
-                                // .vexir caliente (frio compilaba bien).
+                                // .vxir caliente (frio compilaba bien).
                                 // parse_ir_module_cache ya los deserializo en
                                 // dep_mod; solo faltaba trasladarlos a pm.ir.
                                 pm.ir.native_imports =
@@ -1038,7 +1038,7 @@ CompileResult compile_vx_project(
                                 pm.ok = true;
                                 if (verbose_cache) {
                                     std::ostringstream tmp;
-                                    tmp << "[vex-cache] hit: "
+                                    tmp << "[vx-cache] hit: "
                                         << pm.canonical_path << "\n";
                                     std::lock_guard<std::mutex> lk(verbose_mtx);
                                     std::cerr << tmp.str();
@@ -1051,7 +1051,7 @@ CompileResult compile_vx_project(
             }
             if (verbose_cache) {
                 std::ostringstream tmp;
-                tmp << "[vex-cache] miss: " << pm.canonical_path << "\n";
+                tmp << "[vx-cache] miss: " << pm.canonical_path << "\n";
                 std::lock_guard<std::mutex> lk(verbose_mtx);
                 std::cerr << tmp.str();
             }
@@ -1090,23 +1090,23 @@ CompileResult compile_vx_project(
                                                  std::move(ns_sym));
                 // NS.2 round-trip: recordar que este mangled_label pertenece al
                 // namespace declarado `ins.name` con nombre publico
-                // `sym.public_name`, para el export al .vexi.
+                // `sym.public_name`, para el export al .vxi.
                 pm.tc->register_declared_ns_symbol(sym.mangled_label, ins.name,
                                                    sym.public_name);
             }
         }
 
-        // ANTES de typecheck: inyectar simbolos de los deps via .vexi.
+        // ANTES de typecheck: inyectar simbolos de los deps via .vxi.
         // Dos modos:
         //   - `import "x" only A, B;`   -> inyecta A, B directos en scope.
         //   - `import "x" [as alias];`  -> registra namespace para `x.A` o
         //                                   `alias.A` (Phase M.7).
         auto imports = collect_imports_(*pm.ast);
 
-        // LANG.fix-3: pre-importar las .vexi de los deps TRANSITIVOS
+        // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
         // antes de procesar los imports explicitos.  Si main tiene
         // `import "outer";` + outer depende de inner, main necesita
-        // inner.vexi en su TC ANTES de procesar outer (porque outer.vexi
+        // inner.vxi en su TC ANTES de procesar outer (porque outer.vxi
         // referencia tipos como `inner__Bar`).  Sin esto el resolver de
         // fields falla con "void" para tipos del dep transitivo.
         //
@@ -1116,7 +1116,7 @@ CompileResult compile_vx_project(
         // contaminar el namespace global del consumer.
         // Recolectar deps TRANSITIVOS (no incluidos en imports explicitos)
         // y pre-importarlos como namespaces silenciosos ANTES del loop de
-        // imports explicitos.  Asi cuando outer.vexi se procesa, las
+        // imports explicitos.  Asi cuando outer.vxi se procesa, las
         // referencias a tipos de inner ya estan en class_layouts_ via la
         // pre-importacion de inner.  Cada namespace solo se registra una
         // vez (los explicitos van por el loop normal mas abajo).
@@ -1138,7 +1138,7 @@ CompileResult compile_vx_project(
                 auto itd = by_name.find(mn);
                 if (itd == by_name.end()) continue;
                 const ProjectModuleWork &transit = work[itd->second];
-                for (const auto &de : transit.vexi.deps) {
+                for (const auto &de : transit.vxi.deps) {
                     if (seen.insert(de.name).second) {
                         queue.push_back(de.name);
                     }
@@ -1149,7 +1149,7 @@ CompileResult compile_vx_project(
                 auto itd = by_name.find(mn);
                 if (itd == by_name.end()) continue;
                 const ProjectModuleWork &transit = work[itd->second];
-                register_namespace_for_import(*pm.tc, mn, mn, transit.vexi);
+                register_namespace_for_import(*pm.tc, mn, mn, transit.vxi);
             }
         }
 
@@ -1160,11 +1160,11 @@ CompileResult compile_vx_project(
             if (req.is_plain) {
                 // M.7: registrar namespace.
                 register_namespace_for_import(*pm.tc, req.local_name,
-                                              req.module_name, dep.vexi);
+                                              req.module_name, dep.vxi);
                 // #cross-module-generics: inyectar TODAS las plantillas del
                 // dep bajo el namespace (`lib.Caja<i64>`).
-                inject_generic_templates_from_vexi(
-                    *pm.tc, dep.vexi, /*wanted=*/{}, req.local_name);
+                inject_generic_templates_from_vxi(
+                    *pm.tc, dep.vxi, /*wanted=*/{}, req.local_name);
                 // M.reexport ext: para `public import "base";` (sin only),
                 // inyectar TAMBIEN cada simbolo publico del dep como si
                 // fuera un `only A, B, ...` sintetico Y marcarlo
@@ -1172,18 +1172,18 @@ CompileResult compile_vx_project(
                 // no reexpone ningun simbolo de base a sus propios
                 // consumidores.
                 if (req.is_public_reexport) {
-                    std::vector<TypeChecker::VexiOnlyEntry> synth_only;
-                    for (const auto &sym : dep.vexi.symbols) {
+                    std::vector<TypeChecker::VxiOnlyEntry> synth_only;
+                    for (const auto &sym : dep.vxi.symbols) {
                         // skip simbolos privados o synthetic (mangled).
                         if (sym.name.empty()) continue;
                         if (sym.name[0] == '_') continue;
                         synth_only.push_back({sym.name, ""});
                     }
-                    auto missing = import_vexi_into_typechecker_with_missing(
-                        *pm.tc, dep.vexi, synth_only);
+                    auto missing = import_vxi_into_typechecker_with_missing(
+                        *pm.tc, dep.vxi, synth_only);
                     (void)missing; // best-effort; los privados ya fueron
                                    //              filtrados al construir el
-                                   //              .vexi.
+                                   //              .vxi.
                     for (const auto &os : synth_only) {
                         pm.tc->mark_imported(os.name, /*is_reexport=*/true);
                     }
@@ -1197,18 +1197,18 @@ CompileResult compile_vx_project(
                 // inertes si no se usan (se monomorphizan solo on-use).  Se
                 // hace ANTES de la inyeccion de simbolos para que el template
                 // exista en mod_.decls cuando run() registre los templates.
-                inject_generic_templates_from_vexi(*pm.tc, dep.vexi,
+                inject_generic_templates_from_vxi(*pm.tc, dep.vxi,
                                                    /*wanted=*/{},
                                                    /*ns_prefix=*/"");
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
-                auto missing = import_vexi_into_typechecker_with_missing(
-                    *pm.tc, dep.vexi, req.only_symbols);
+                auto missing = import_vxi_into_typechecker_with_missing(
+                    *pm.tc, dep.vxi, req.only_symbols);
                 // #cross-module-generics: un nombre `only` puede ser una
                 // PLANTILLA generica (no esta en symbols sino en
                 // generic_templates) -> no es "missing".
                 std::unordered_set<std::string> gen_names;
-                for (const auto &g : dep.vexi.generic_templates)
+                for (const auto &g : dep.vxi.generic_templates)
                     gen_names.insert(g.name);
                 for (const auto &m : missing) {
                     if (gen_names.count(m)) continue; // es un template: OK
@@ -1232,7 +1232,7 @@ CompileResult compile_vx_project(
                     return;
                 }
                 // Phase M.L23: marcar cada simbolo importado como
-                // (imported, is_reexport).  El export del .vexi del
+                // (imported, is_reexport).  El export del .vxi del
                 // modulo actual filtra los importados NO marcados como
                 // public.
                 for (const auto &os : req.only_symbols) {
@@ -1300,7 +1300,7 @@ CompileResult compile_vx_project(
         lo.set_native_poo(opts.native_poo);
         // CPU dispatch Inc 5b: aplicar los @HelperOverride agregados (root +
         // imports, ya resueltos por precedencia en el pre-pase) SOLO al
-        // modulo ROOT, que es quien emite __vex_memcpy_init / __vex_strdisp_init.
+        // modulo ROOT, que es quien emite __vx_memcpy_init / __vx_strdisp_init.
         // El fp de cada init apunta entonces a la fn del override (que puede
         // vivir en un modulo importado; su simbolo se resuelve en el IR
         // mergeado via el reloc fnsym del LABEL_ADDR).
@@ -1325,38 +1325,38 @@ CompileResult compile_vx_project(
         }
 
         // Phase M.5: export con strip_prefix = `<module>__` para que el
-        // .vexi exponga nombres publicos sin el mangle.  El consumidor
+        // .vxi exponga nombres publicos sin el mangle.  El consumidor
         // importa "sumar" pero la FunctionSig lleva mangled_label="lib__sumar".
         const std::string strip_prefix =
             is_root ? std::string() // root: sin prefix (no se exporta)
                     : (pm.module_name + "__");
-        export_typechecker_to_vexi(*pm.tc, source_hash, pm.vexi, strip_prefix);
+        export_typechecker_to_vxi(*pm.tc, source_hash, pm.vxi, strip_prefix);
 
         // Phase M4.ext L.13: poblar dep table con los (name, abi_hash) de
         // los deps directos del modulo.  El loader del cache verifica
         // estos hashes al cache hit para invalidacion transitiva: si
-        // cualquier dep cambio su .vexi (distinto abi_hash), este modulo
+        // cualquier dep cambio su .vxi (distinto abi_hash), este modulo
         // tambien debe recompilarse.
-        pm.vexi.deps.clear();
+        pm.vxi.deps.clear();
         for (const auto &req : imports) {
             auto itd = by_name.find(req.module_name);
             if (itd == by_name.end()) continue;
             const ProjectModuleWork &dep = work[itd->second];
-            VexiModule::DepRecord drec;
+            VxiModule::DepRecord drec;
             drec.name = req.module_name;
-            drec.abi_hash = dep.vexi.abi_hash;
-            pm.vexi.deps.push_back(std::move(drec));
+            drec.abi_hash = dep.vxi.abi_hash;
+            pm.vxi.deps.push_back(std::move(drec));
         }
 
-        // ---- M3: persistir .vexi + .vexir a disco para futuro cache ----
+        // ---- M3: persistir .vxi + .vxir a disco para futuro cache ----
         if (cache_enabled && !is_root) {
             const std::string vp =
-                vexi_path_for_(pm.canonical_path, cache_tgt_suffix);
+                vxi_path_for_(pm.canonical_path, cache_tgt_suffix);
             const std::string ip =
-                vexir_path_for_(pm.canonical_path, cache_tgt_suffix);
-            auto vbytes = vexi_emit(pm.vexi);
+                vxir_path_for_(pm.canonical_path, cache_tgt_suffix);
+            auto vbytes = vxi_emit(pm.vxi);
             // Phase M4.ext L.13: capturar el abi_hash recien calculado
-            // por vexi_emit (lo escribio en offset 8 del header) para
+            // por vxi_emit (lo escribio en offset 8 del header) para
             // que los modulos sucesores en topo order que importen este
             // puedan apuntarlo en su dep table.
             if (vbytes.size() >= 16) {
@@ -1364,20 +1364,20 @@ CompileResult compile_vx_project(
                 for (int i = 0; i < 8; ++i) {
                     h |= static_cast<uint64_t>(vbytes[8 + i]) << (i * 8);
                 }
-                pm.vexi.abi_hash = h;
+                pm.vxi.abi_hash = h;
             }
             // Phase M5.A L.17: escritura atomica (rename temp file).
             (void)write_file_atomic_(vp, vbytes);
-            // BugFix M.vexir-sd: persistir el modulo COMPLETO (functions +
+            // BugFix M.vxir-sd: persistir el modulo COMPLETO (functions +
             // static_data + globals) para que un dep cache-hit aporte sus
             // slots `code.s_*` al merge.  emit_ir_section (solo functions)
             // los perdia.
             auto ibytes = ir::emit_ir_module_cache(pm.ir);
             (void)write_file_atomic_(ip, ibytes);
-            // Phase M5.C L.18: ademas del .vexi (interfaz) + .vexir (IR
+            // Phase M5.C L.18: ademas del .vxi (interfaz) + .vxir (IR
             // serializado), emitir el .vel del dep solo (sin merge) para
             // que la libreria sea distribuible standalone.  El
-            // consumidor puede tomar lib.vex + lib.vexi + lib.vel y
+            // consumidor puede tomar lib.vx + lib.vxi + lib.vel y
             // armar su .velb directamente con vm --asm-file lib.vel.
             ir::EmitOptions dep_emit_opts;
             dep_emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
@@ -1393,7 +1393,7 @@ CompileResult compile_vx_project(
             }
             if (verbose_cache) {
                 std::ostringstream tmp;
-                tmp << "[vex-cache] wrote: " << vp << " (" << vbytes.size()
+                tmp << "[vx-cache] wrote: " << vp << " (" << vbytes.size()
                     << " B) + " << ip << " (" << ibytes.size() << " B) + "
                     << dvel_path << " ("
                     << (dep_eres.ok ? dep_eres.vel_text.size() : 0) << " B)\n";
@@ -1407,7 +1407,7 @@ CompileResult compile_vx_project(
 
     // Phase M8: dispatch.  Por defecto secuencial (preserve cache hit
     // determinism y el orden de @c verbose_compile output).  Activado via
-    // env @c VEX_PARALLEL_COMPILE=N (N >= 1).  N=1 fuerza secuencial (util
+    // env @c VX_PARALLEL_COMPILE=N (N >= 1).  N=1 fuerza secuencial (util
     // para diagnostico).  N >= 2 corre hasta N modulos del MISMO nivel
     // topologico en paralelo via @c std::thread + join al final de cada
     // nivel (barrier natural).  Modulos en niveles distintos NUNCA se
@@ -1415,7 +1415,7 @@ CompileResult compile_vx_project(
     // de que un consumer empiece.
     int parallel_threads = 0;
     bool env_present = false;
-    if (const char *p = std::getenv("VEX_PARALLEL_COMPILE")) {
+    if (const char *p = std::getenv("VX_PARALLEL_COMPILE")) {
         env_present = true;
         try {
             parallel_threads = std::stoi(p);
@@ -1427,7 +1427,7 @@ CompileResult compile_vx_project(
     // Phase M8 AUTO (2026-06-05): sin env var (o =0) el compile usa
     // hardware_concurrency() limitado a max 8 threads (cap para evitar
     // oversubscription: >8 da diminishing returns por contention en cache
-    // writes + mutex verbose).  VEX_PARALLEL_COMPILE=1 fuerza SECUENCIAL
+    // writes + mutex verbose).  VX_PARALLEL_COMPILE=1 fuerza SECUENCIAL
     // (diagnostico / output determinista); >=2 fija N exacto.  Proyectos
     // triviales (1 modulo por nivel) NO pagan overhead: el dispatch
     // paralelo solo crea threads cuando un nivel tiene >=2 modulos.
@@ -1522,7 +1522,7 @@ CompileResult compile_vx_project(
     }
     ir::IrModule &merged = work.back().ir;
 
-    // Phase M.L25: tree-shaking opt-in via VEX_TREE_SHAKE=1 .  Si el root
+    // Phase M.L25: tree-shaking opt-in via VX_TREE_SHAKE=1 .  Si el root
     // hace `import "lib" only X, Y` y NINGUNO de X, Y aparece en
     // referenced_names() del root, el dep NO se mergea al .velb final.
     // Reduce el tamano de programas con muchos deps opcionales.
@@ -1534,7 +1534,7 @@ CompileResult compile_vx_project(
     // jamas se shake-an (son referencia opaca, dificil de demostrar
     // unused).
     const bool tree_shake = []() {
-        const char *v = std::getenv("VEX_TREE_SHAKE");
+        const char *v = std::getenv("VX_TREE_SHAKE");
         return v && v[0] == '1';
     }();
     std::unordered_set<size_t> shaken_indices;
@@ -1760,26 +1760,26 @@ CompileResult compile_vx_project(
         }
     }
 
-    // CPU dispatch cross-module: los globals fp-table (__vex_*_fp,
-    // __vex_cpu_features) son program-globales (unificados arriba por
-    // shared_key), pero los `__vex_*_init` que los inicializan se preponen
+    // CPU dispatch cross-module: los globals fp-table (__vx_*_fp,
+    // __vx_cpu_features) son program-globales (unificados arriba por
+    // shared_key), pero los `__vx_*_init` que los inicializan se preponen
     // a `main` SOLO en el modulo que baja `main` (Lowering::run).  Si el
     // ROOT no usa dispatch pero un DEP si (p.ej. el dep llama s.length()
-    // -> __vex_strlen_fp), el init existe como funcion pero nunca se
+    // -> __vx_strlen_fp), el init existe como funcion pero nunca se
     // llama -> el slot queda en 0 -> call a fp nulo -> SEGV.  Aqui, sobre
     // el modulo mergeado, prepondemos a `main` las CALLs a los inits que
     // existan y que main aun no invoque (idempotente: si el root ya las
     // prepuso, se detectan y no se duplican).  Orden de ejecucion:
-    // __vex_cpu_init (cpuid) -> __vex_memcpy_init -> __vex_strdisp_init.
+    // __vx_cpu_init (cpuid) -> __vx_memcpy_init -> __vx_strdisp_init.
     {
         // Que inits existen tras el merge.
         bool has_cpu = false, has_mc = false, has_sd = false;
         for (const auto &fn : merged.functions) {
-            if (fn.name == "__vex_cpu_init")
+            if (fn.name == "__vx_cpu_init")
                 has_cpu = true;
-            else if (fn.name == "__vex_memcpy_init")
+            else if (fn.name == "__vx_memcpy_init")
                 has_mc = true;
-            else if (fn.name == "__vex_strdisp_init")
+            else if (fn.name == "__vx_strdisp_init")
                 has_sd = true;
         }
         if (has_cpu || has_mc || has_sd) {
@@ -1790,11 +1790,11 @@ CompileResult compile_vx_project(
                 bool have_cpu = false, have_mc = false, have_sd = false;
                 for (const auto &x : ins) {
                     if (x.op != ir::IrOp::CALL) continue;
-                    if (x.func_name == "__vex_cpu_init")
+                    if (x.func_name == "__vx_cpu_init")
                         have_cpu = true;
-                    else if (x.func_name == "__vex_memcpy_init")
+                    else if (x.func_name == "__vx_memcpy_init")
                         have_mc = true;
-                    else if (x.func_name == "__vex_strdisp_init")
+                    else if (x.func_name == "__vx_strdisp_init")
                         have_sd = true;
                 }
                 // Prepend en orden inverso (insert(begin) invierte): primero
@@ -1808,28 +1808,28 @@ CompileResult compile_vx_project(
                     c.source_line = 0;
                     ins.insert(ins.begin(), std::move(c));
                 };
-                if (has_sd && !have_sd) prepend_call("__vex_strdisp_init");
-                if (has_mc && !have_mc) prepend_call("__vex_memcpy_init");
-                if (has_cpu && !have_cpu) prepend_call("__vex_cpu_init");
+                if (has_sd && !have_sd) prepend_call("__vx_strdisp_init");
+                if (has_mc && !have_mc) prepend_call("__vx_memcpy_init");
+                if (has_cpu && !have_cpu) prepend_call("__vx_cpu_init");
                 break;
             }
         }
     }
 
-    // Dedup de las funciones synthetic del CPU dispatch (`__vex_*`): el
-    // root y cada dep emiten su propio juego de helpers (__vex_strlen_base,
-    // __vex_memcpy_init, etc.) con nombres identicos.  Tras el merge habria
+    // Dedup de las funciones synthetic del CPU dispatch (`__vx_*`): el
+    // root y cada dep emiten su propio juego de helpers (__vx_strlen_base,
+    // __vx_memcpy_init, etc.) con nombres identicos.  Tras el merge habria
     // colision de simbolos en el linker AOT.  Mantener la PRIMERA aparicion
     // (root primero, luego deps) y descartar las siguientes con el mismo
-    // nombre.  Solo afecta a los synthetic `__vex_*` (los simbolos de
+    // nombre.  Solo afecta a los synthetic `__vx_*` (los simbolos de
     // usuario ya estan mangled con prefijo de modulo, no colisionan).
     {
         // Primera pasada: detectar si hay duplicados (sin mover nada).
-        std::unordered_set<std::string> seen_vex_fns;
+        std::unordered_set<std::string> seen_vx_fns;
         bool has_dup = false;
         for (const auto &fn : merged.functions) {
-            if (fn.name.rfind("__vex_", 0) == 0) {
-                if (!seen_vex_fns.insert(fn.name).second) {
+            if (fn.name.rfind("__vx_", 0) == 0) {
+                if (!seen_vx_fns.insert(fn.name).second) {
                     has_dup = true;
                     break;
                 }
@@ -1838,12 +1838,12 @@ CompileResult compile_vx_project(
         // Segunda pasada: reconstruir solo si hubo duplicados (preserva la
         // PRIMERA aparicion; root primero, luego deps).
         if (has_dup) {
-            seen_vex_fns.clear();
+            seen_vx_fns.clear();
             std::vector<ir::IrFunction> kept;
             kept.reserve(merged.functions.size());
             for (auto &fn : merged.functions) {
-                if (fn.name.rfind("__vex_", 0) == 0 &&
-                    !seen_vex_fns.insert(fn.name).second) {
+                if (fn.name.rfind("__vx_", 0) == 0 &&
+                    !seen_vx_fns.insert(fn.name).second) {
                     continue; // ya presente: descartar duplicado
                 }
                 kept.push_back(std::move(fn));
@@ -2005,7 +2005,7 @@ CompileResult compile_vx_project(
     // Phase AOT multi-modulo: exponer el IR mergeado (functions + static_data
     // + globals) como module_cache para que el path -m aot lo consuma.  El
     // single-file lo rellena en compile_vx_source; aqui lo rellenamos desde
-    // el modulo mergeado de todos los .vex del proyecto.
+    // el modulo mergeado de todos los .vx del proyecto.
     res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
     res.ok = !res.diagnostics.has_errors();
 
@@ -2068,7 +2068,7 @@ CompileResult compile_vx_project(
     return res;
 }
 
-bool vex_source_has_imports(const std::string &source) {
+bool vx_source_has_imports(const std::string &source) {
     // Scanner muy simple: busca `import` en posicion top-level (al
     // inicio de linea o tras whitespace, no dentro de un string ni
     // comentario).  Es heuristica permisiva: si el matcher dice "tiene

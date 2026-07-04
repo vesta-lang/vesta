@@ -88,7 +88,7 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                 case ir::IrOp::TAILCALL:
                     // AOT.2.d: el `new` nativo emite calloc(1,size) para
                     // zero-init.  Con un @AllocatorOverride (incluido el slab
-                    // vex_mem por defecto) lo reescribimos a alloc_sym(size)
+                    // vx_mem por defecto) lo reescribimos a alloc_sym(size)
                     // -- 1 arg, descartando el `count` (=1) -> el `new` usa el
                     // allocator override sin arrastrar calloc de libc.  El
                     // override debe zerificar (convencion kzalloc) para
@@ -121,7 +121,7 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
 
                 case ir::IrOp::DLOPEN:
                     // ffi_open: dlopen %path_addr, %path_len  ->  call
-                    // __vex_dlopen(%path_addr).  La funcion Vesta (vex_ffi.vex)
+                    // __vx_dlopen(%path_addr).  La funcion Vesta (vx_ffi.vx)
                     // usa LoadLibraryA/dlopen segun @Target.  El path es una
                     // cstring NUL-terminada (el frontend la NUL-termina).  Se
                     // descarta %path_len (las APIs nativas leen hasta el NUL).
@@ -133,7 +133,7 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
 
                 case ir::IrOp::DLSYM:
                     // ffi_sym: dlsym %handle, %name_addr, %name_len  ->  call
-                    // __vex_dlsym(%handle, %name_addr).  Descarta %name_len.
+                    // __vx_dlsym(%handle, %name_addr).  Descarta %name_len.
                     in.op = ir::IrOp::CALL;
                     in.func_name = cfg.dlsym_sym;
                     if (in.operands.size() > 2)

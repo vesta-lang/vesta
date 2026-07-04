@@ -697,7 +697,7 @@ fn cmd_backtrace(pid) {
 }
 
 // Source-aware: bp por (file, line).  Requiere que el .velb se haya
-// compilado con --vex-debug para incluir la seccion DVBG.
+// compilado con --vx-debug para incluir la seccion DVBG.
 fn cmd_break_src(file_path, line_no, pid) {
     let m = {"cmd":"set_break_src","file":file_path,"line":line_no}
     if pid != null { m["pid"] = pid }
@@ -733,7 +733,7 @@ fn cmd_info_source(pid) {
         println(s)
     } else {
         let s = DIM + "  pc=" + to_hex(d["pc"], 8)
-        s = s + " (sin info de debug; recompila con --vex-debug)" + RESET
+        s = s + " (sin info de debug; recompila con --vx-debug)" + RESET
         println(s)
     }
 }
@@ -926,7 +926,7 @@ fn cmd_locals(pid) {
     if d == null { return }
     let vars = d["vars"]
     if len(vars) == 0 {
-        println(DIM + "  (sin info de locales en este PC; recompila con --vex-debug y nivel VARS)" + RESET)
+        println(DIM + "  (sin info de locales en este PC; recompila con --vx-debug y nivel VARS)" + RESET)
         return
     }
     println(BOLD + "  NAME            OFF      ADDR        VALUE" + RESET)
@@ -1146,7 +1146,7 @@ fn print_help() {
     help_row("q | quit",                 "salir")
     help_section("Breakpoints")
     help_row("b <addr> [pid]",           "set breakpoint por addr")
-    help_row("b <file>:<line> [pid]",    "set bp por linea Vex (--vex-debug)")
+    help_row("b <file>:<line> [pid]",    "set bp por linea Vex (--vx-debug)")
     help_row("bd <id>",                  "borrar breakpoint")
     help_row("bl",                       "lista breakpoints")
     help_section("Inspeccion de registros")
@@ -1168,7 +1168,7 @@ fn print_help() {
     help_row("where [pid] | src [pid]",  "file:line del PC actual")
     help_row("list [<file>:<line>] [N]", "muestra N lineas alrededor (sin args = PC actual)")
     help_row("disasm [pid] [addr] [N]",  "desensambla N instrucciones (default = PC)")
-    help_row("locals [pid]",             "variables del scope actual (--vex-debug VARS)")
+    help_row("locals [pid]",             "variables del scope actual (--vx-debug VARS)")
     help_section("Step avanzado")
     help_row("finish [pid]",             "correr hasta el RET del frame actual")
     help_row("until <line> [pid]",       "correr hasta linea Vex (file inferido)")
@@ -1446,7 +1446,7 @@ while running {
                     if d != null and d["file"] != null and d["line"] > 0 {
                         cmd_list_source(d["file"], d["line"], radius)
                     } else {
-                        println(YELLOW + "(no hay info de debug; recompila con --vex-debug)" + RESET)
+                        println(YELLOW + "(no hay info de debug; recompila con --vx-debug)" + RESET)
                     }
                 }
             } else {
@@ -1544,7 +1544,7 @@ while running {
                         cmd_until(pid, d["file"], int(arg))
                         wait_break_render(pid, 500)
                     } else {
-                        println(YELLOW + "(no se pudo inferir el file; usa 'until file.vex:N')" + RESET)
+                        println(YELLOW + "(no se pudo inferir el file; usa 'until file.vx:N')" + RESET)
                     }
                 }
             }

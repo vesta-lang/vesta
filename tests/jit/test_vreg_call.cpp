@@ -47,11 +47,11 @@ static MOperand pr(MReg r) {
 }
 
 /** @brief Funcion nativa de prueba (convencion C host).  a*10 + b. */
-extern "C" int64_t vex_test_addmul(int64_t a, int64_t b) {
+extern "C" int64_t vx_test_addmul(int64_t a, int64_t b) {
     return a * 10 + b;
 }
 /** @brief 3 args: a + b*2 + c*3. */
-extern "C" int64_t vex_test_three(int64_t a, int64_t b, int64_t c) {
+extern "C" int64_t vx_test_three(int64_t a, int64_t b, int64_t c) {
     return a + b * 2 + c * 3;
 }
 
@@ -74,7 +74,7 @@ static void test_call_two() {
     MOperand v1 = mf.new_vreg(RegClass::GP);
     MOperand res = mf.new_vreg(RegClass::GP);
     const uint32_t addr = mf.intern_imm64(
-        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vex_test_addmul)));
+        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vx_test_addmul)));
     MBlock b;
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v0, imm(5)));
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v1, imm(7)));
@@ -109,7 +109,7 @@ static void test_call_three() {
     MOperand v1 = mf.new_vreg(RegClass::GP);
     MOperand v2 = mf.new_vreg(RegClass::GP);
     const uint32_t addr = mf.intern_imm64(
-        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vex_test_three)));
+        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vx_test_three)));
     MBlock b;
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v0, imm(1)));
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v1, imm(2)));

@@ -13,7 +13,7 @@
 #include "pkg/sha256.h"
 #include "pkg/auditor.h"
 
-#include "vx/vexi_format.h"
+#include "vx/vxi_format.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -50,13 +50,13 @@ bool write_file(const std::string &p, const std::string &content) {
 std::string find_project_manifest(std::string &out_format) {
     std::string root = paths::project_root("");
     if (root.empty()) return std::string();
-    std::string toml_p = paths::join(root, "vex.toml");
-    std::string json_p = paths::join(root, "vex.json");
+    std::string toml_p = paths::join(root, "vx.toml");
+    std::string json_p = paths::join(root, "vx.json");
     bool has_toml = paths::is_file(toml_p);
     bool has_json = paths::is_file(json_p);
     if (has_toml && has_json) {
         ui::error(
-            "ambos vex.toml y vex.json existen; elige uno y borra el otro");
+            "ambos vx.toml y vx.json existen; elige uno y borra el otro");
         return std::string();
     }
     if (has_toml) {
@@ -73,7 +73,7 @@ std::string find_project_manifest(std::string &out_format) {
 std::string lockfile_path() {
     std::string root = paths::project_root("");
     if (root.empty()) return std::string();
-    return paths::join(root, "vex.lock");
+    return paths::join(root, "vx.lock");
 }
 
 bool save_manifest(const std::string &path, const std::string &format,
@@ -94,7 +94,7 @@ static int cmd_init(const std::vector<std::string> &args) {
         if (a == "--json") json = true;
     }
     std::string ext = json ? ".json" : ".toml";
-    std::string out = "vex" + ext;
+    std::string out = "vx" + ext;
     if (paths::exists(out)) {
         ui::error("ya existe " + out + " en este directorio");
         return 1;
@@ -118,16 +118,16 @@ static int cmd_init(const std::vector<std::string> &args) {
     }
     ui::ok("creado " + out);
 
-    // Tambien crear .gitignore con vex_modules + caches.
+    // Tambien crear .gitignore con vx_modules + caches.
     std::string gi = ".gitignore";
     if (!paths::exists(gi)) {
         std::string body = "# Vesta package manager\n"
-                           "vex_modules/\n"
-                           ".vex_cache/\n"
+                           "vx_modules/\n"
+                           ".vx_cache/\n"
                            "*.velb\n"
                            "*.vel\n";
         write_file(gi, body);
-        ui::info("creado .gitignore con vex_modules/ + caches");
+        ui::info("creado .gitignore con vx_modules/ + caches");
     }
     return 0;
 }
@@ -144,7 +144,7 @@ static int cmd_install(const std::vector<std::string> &args) {
     std::string fmt;
     std::string mani_path = find_project_manifest(fmt);
     if (mani_path.empty()) {
-        ui::error("no se encontro vex.toml ni vex.json en este proyecto");
+        ui::error("no se encontro vx.toml ni vx.json en este proyecto");
         return 1;
     }
 
@@ -165,7 +165,7 @@ static int cmd_install(const std::vector<std::string> &args) {
     }
 
     ui::step("resolviendo dependencias");
-    std::string work = paths::join(paths::project_root(""), ".vex_cache/work");
+    std::string work = paths::join(paths::project_root(""), ".vx_cache/work");
     paths::ensure_dir(work);
 
     auto pins = signing::load_trust_pins();
@@ -196,15 +196,15 @@ static int cmd_install(const std::vector<std::string> &args) {
         return 1;
     }
 
-    // Install: copiar/symlink al vex_modules.
-    std::string vex_mods = paths::project_modules_dir("");
-    paths::ensure_dir(vex_mods);
+    // Install: copiar/symlink al vx_modules.
+    std::string vx_mods = paths::project_modules_dir("");
+    paths::ensure_dir(vx_mods);
 
-    ui::step("instalando paquetes a " + vex_mods);
+    ui::step("instalando paquetes a " + vx_mods);
     ui::Progress prog("installing", res.deps.size());
     size_t idx = 0;
     for (const auto &d : res.deps) {
-        std::string dest = paths::join(vex_mods, d.name);
+        std::string dest = paths::join(vx_mods, d.name);
         std::replace(dest.begin(), dest.end(), '/', '_');
         fetcher::SourceSpec src;
         if (d.source_url.rfind("http", 0) == 0 ||
@@ -230,10 +230,10 @@ static int cmd_install(const std::vector<std::string> &args) {
 
     // Persistir lockfile.
     if (!write_file(lp, serialize_lockfile(new_lock))) {
-        ui::error("no se pudo escribir vex.lock");
+        ui::error("no se pudo escribir vx.lock");
         return 1;
     }
-    ui::ok("vex.lock actualizado");
+    ui::ok("vx.lock actualizado");
     return 0;
 }
 
@@ -243,7 +243,7 @@ static int cmd_install(const std::vector<std::string> &args) {
 static int cmd_list(const std::vector<std::string> &) {
     std::string lp = lockfile_path();
     if (!paths::exists(lp)) {
-        ui::warn("sin vex.lock; ejecuta `vm pkg install` primero");
+        ui::warn("sin vx.lock; ejecuta `vm pkg install` primero");
         return 1;
     }
     auto lpr = parse_lockfile_file(lp);
@@ -275,7 +275,7 @@ static int cmd_list(const std::vector<std::string> &) {
 static int cmd_verify(const std::vector<std::string> &) {
     std::string lp = lockfile_path();
     if (!paths::exists(lp)) {
-        ui::warn("sin vex.lock; nada que verificar");
+        ui::warn("sin vx.lock; nada que verificar");
         return 1;
     }
     auto lpr = parse_lockfile_file(lp);
@@ -283,11 +283,11 @@ static int cmd_verify(const std::vector<std::string> &) {
         ui::error("lockfile invalido: " + lpr.error_msg);
         return 1;
     }
-    std::string vex_mods = paths::project_modules_dir("");
+    std::string vx_mods = paths::project_modules_dir("");
     ui::header("Verificando integridad de paquetes");
     size_t ok_count = 0, fail = 0;
     for (const auto &p : lpr.lock.packages) {
-        std::string dest = paths::join(vex_mods, p.name);
+        std::string dest = paths::join(vx_mods, p.name);
         std::replace(dest.begin(), dest.end(), '/', '_');
         if (!paths::exists(dest)) {
             ui::warn(p.name + ": no instalado");
@@ -314,7 +314,7 @@ static int cmd_verify(const std::vector<std::string> &) {
 static int cmd_audit(const std::vector<std::string> &) {
     std::string lp = lockfile_path();
     if (!paths::exists(lp)) {
-        ui::warn("sin vex.lock; nada que auditar");
+        ui::warn("sin vx.lock; nada que auditar");
         return 1;
     }
     auto lpr = parse_lockfile_file(lp);
@@ -445,7 +445,7 @@ static int cmd_convert(const std::vector<std::string> &args) {
         return 1;
     }
     std::string new_path =
-        paths::join(paths::project_root(""), std::string("vex.") + fmt);
+        paths::join(paths::project_root(""), std::string("vx.") + fmt);
     std::string body = fmt == "toml" ? serialize_manifest_toml(pr.manifest)
                                      : serialize_manifest_json(pr.manifest);
     if (!write_file(new_path, body)) {
@@ -458,37 +458,37 @@ static int cmd_convert(const std::vector<std::string> &args) {
 }
 
 // ------------------------------------------------------------------
-// inspect <ruta.vexi>: dump del contenido de un fichero .vexi
+// inspect <ruta.vxi>: dump del contenido de un fichero .vxi
 // ------------------------------------------------------------------
-static const char *kind_to_str(vx::VexiSymbolKind k) {
+static const char *kind_to_str(vx::VxiSymbolKind k) {
     switch (k) {
-    case vx::VexiSymbolKind::TYPEDEF_ALIAS: return "typedef";
-    case vx::VexiSymbolKind::TYPEDEF_NEW: return "typedef-new";
-    case vx::VexiSymbolKind::STRUCT: return "struct";
-    case vx::VexiSymbolKind::CLASS: return "class";
-    case vx::VexiSymbolKind::ENUM: return "enum";
-    case vx::VexiSymbolKind::GLOBAL_VAR: return "global";
-    case vx::VexiSymbolKind::FUNCTION: return "fn";
+    case vx::VxiSymbolKind::TYPEDEF_ALIAS: return "typedef";
+    case vx::VxiSymbolKind::TYPEDEF_NEW: return "typedef-new";
+    case vx::VxiSymbolKind::STRUCT: return "struct";
+    case vx::VxiSymbolKind::CLASS: return "class";
+    case vx::VxiSymbolKind::ENUM: return "enum";
+    case vx::VxiSymbolKind::GLOBAL_VAR: return "global";
+    case vx::VxiSymbolKind::FUNCTION: return "fn";
     }
     return "?";
 }
 
 static const char *blob_kind_to_str(uint32_t k) {
-    switch (static_cast<vx::VexiBlobKind>(k)) {
-    case vx::VexiBlobKind::STRING: return "string";
-    case vx::VexiBlobKind::ARRAY_PRIM: return "array_prim";
-    case vx::VexiBlobKind::STRUCT_PRIM: return "struct_prim";
-    case vx::VexiBlobKind::STRUCT_NESTED: return "struct_nested";
-    case vx::VexiBlobKind::ARRAY_REF: return "array_ref";
-    case vx::VexiBlobKind::TYPE_DESC: return "type_desc";
-    case vx::VexiBlobKind::NONE: return "none";
+    switch (static_cast<vx::VxiBlobKind>(k)) {
+    case vx::VxiBlobKind::STRING: return "string";
+    case vx::VxiBlobKind::ARRAY_PRIM: return "array_prim";
+    case vx::VxiBlobKind::STRUCT_PRIM: return "struct_prim";
+    case vx::VxiBlobKind::STRUCT_NESTED: return "struct_nested";
+    case vx::VxiBlobKind::ARRAY_REF: return "array_ref";
+    case vx::VxiBlobKind::TYPE_DESC: return "type_desc";
+    case vx::VxiBlobKind::NONE: return "none";
     }
     return "?";
 }
 
 static int cmd_inspect(const std::vector<std::string> &args) {
     if (args.empty()) {
-        ui::error("uso: vm pkg inspect <ruta.vexi>");
+        ui::error("uso: vm pkg inspect <ruta.vxi>");
         return 1;
     }
     const std::string &path = args[0];
@@ -505,13 +505,13 @@ static int cmd_inspect(const std::vector<std::string> &args) {
     std::ostringstream ss;
     ss << in.rdbuf();
     std::string raw = ss.str();
-    auto pr = vx::vexi_parse(reinterpret_cast<const uint8_t *>(raw.data()),
+    auto pr = vx::vxi_parse(reinterpret_cast<const uint8_t *>(raw.data()),
                               raw.size());
     if (!pr.ok) {
         ui::error("parse fallo: " + pr.error_message);
         return 1;
     }
-    const vx::VexiModule &mod = pr.module_;
+    const vx::VxiModule &mod = pr.module_;
 
     ui::header("Inspeccion de " + path);
     ui::kv("format_version", std::to_string(mod.format_version));
@@ -551,7 +551,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
         std::cout << "  " << ui::magenta() << kind_to_str(s.kind) << ui::reset()
                   << "  " << ui::pkg_name(s.name);
         // Tipo / firma.
-        if (s.kind == vx::VexiSymbolKind::FUNCTION) {
+        if (s.kind == vx::VxiSymbolKind::FUNCTION) {
             std::cout << "  " << ui::gray() << "(";
             for (size_t i = 0; i < s.param_types.size(); ++i) {
                 if (i) std::cout << ", ";
@@ -562,7 +562,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                 std::cout << "  " << ui::yellow() << "[extern " << s.extern_lib
                           << "]" << ui::reset();
             }
-        } else if (s.kind == vx::VexiSymbolKind::GLOBAL_VAR) {
+        } else if (s.kind == vx::VxiSymbolKind::GLOBAL_VAR) {
             std::cout << "  " << ui::gray() << ": " << s.underlying_type
                       << ui::reset();
             if (s.is_const)
@@ -579,11 +579,11 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                           << ui::reset();
                 // Si es STRING, mostrar el contenido decodificado.
                 if (s.blob_kind_hint ==
-                    static_cast<uint8_t>(vx::VexiBlobKind::STRING)) {
-                    const vx::VexiBlobHeader *bh =
-                        vx::vexi_blob_read(mod.blob_pool, s.blob_offset);
+                    static_cast<uint8_t>(vx::VxiBlobKind::STRING)) {
+                    const vx::VxiBlobHeader *bh =
+                        vx::vxi_blob_read(mod.blob_pool, s.blob_offset);
                     const uint8_t *bp =
-                        vx::vexi_blob_payload(mod.blob_pool, s.blob_offset);
+                        vx::vxi_blob_payload(mod.blob_pool, s.blob_offset);
                     if (bh && bp) {
                         std::string sv(reinterpret_cast<const char *>(bp),
                                        bh->count);
@@ -604,7 +604,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
             if (!s.attr_section.empty())
                 std::cout << "  " << ui::cyan() << "@section(\""
                           << s.attr_section << "\")" << ui::reset();
-        } else if (s.kind == vx::VexiSymbolKind::CLASS) {
+        } else if (s.kind == vx::VxiSymbolKind::CLASS) {
             std::cout << "  " << ui::gray() << "size=" << s.size_bytes
                       << " fields=" << s.fields.size()
                       << " methods=" << s.methods.size() << ui::reset();
@@ -612,10 +612,10 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                 std::cout << "  " << ui::cyan() << "extends " << s.super_class
                           << ui::reset();
             }
-        } else if (s.kind == vx::VexiSymbolKind::ENUM) {
+        } else if (s.kind == vx::VxiSymbolKind::ENUM) {
             std::cout << "  " << ui::gray() << "variants=" << s.variants.size()
                       << ui::reset();
-        } else if (s.kind == vx::VexiSymbolKind::STRUCT) {
+        } else if (s.kind == vx::VxiSymbolKind::STRUCT) {
             std::cout << "  " << ui::gray() << "size=" << s.size_bytes
                       << " fields=" << s.fields.size() << ui::reset();
         }
@@ -627,9 +627,9 @@ static int cmd_inspect(const std::vector<std::string> &args) {
         ui::header("Blob pool");
         size_t off = 0;
         int blob_idx = 0;
-        while (off + sizeof(vx::VexiBlobHeader) <= mod.blob_pool.size()) {
-            const vx::VexiBlobHeader *bh =
-                vx::vexi_blob_read(mod.blob_pool, static_cast<uint32_t>(off));
+        while (off + sizeof(vx::VxiBlobHeader) <= mod.blob_pool.size()) {
+            const vx::VxiBlobHeader *bh =
+                vx::vxi_blob_read(mod.blob_pool, static_cast<uint32_t>(off));
             if (!bh || bh->kind == 0) break;
             char hh[32];
             std::snprintf(hh, sizeof(hh), "0x%016llx",
@@ -639,7 +639,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                       << ui::reset() << "  count=" << bh->count
                       << " bytes=" << bh->total_bytes << "  "
                       << ui::short_hash(hh) << "\n";
-            off += sizeof(vx::VexiBlobHeader) + bh->total_bytes;
+            off += sizeof(vx::VxiBlobHeader) + bh->total_bytes;
             // Padding al multiplo de 8.
             while (off % 8 != 0 && off < mod.blob_pool.size())
                 ++off;
@@ -664,7 +664,7 @@ static int cmd_run(const std::vector<std::string> &args) {
     std::string format;
     std::string mpath = find_project_manifest(format);
     if (mpath.empty()) {
-        ui::error("no se encontro vex.toml ni vex.json en este proyecto");
+        ui::error("no se encontro vx.toml ni vx.json en este proyecto");
         return 1;
     }
     ParseResult pr = parse_manifest_file(mpath);

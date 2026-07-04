@@ -45,8 +45,8 @@
  *   detalle, sin depender del hover de una herramienta externa.
  */
 
-#ifndef VEX_HTML_DIAGRAMS_H
-#define VEX_HTML_DIAGRAMS_H
+#ifndef VX_HTML_DIAGRAMS_H
+#define VX_HTML_DIAGRAMS_H
 
 #include <string>
 
@@ -116,4 +116,4 @@ std::string html_from_vel_text(const std::string &vel_text);
 
 } // namespace vx
 
-#endif // VEX_HTML_DIAGRAMS_H
+#endif // VX_HTML_DIAGRAMS_H

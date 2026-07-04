@@ -1,0 +1,20 @@
+// AOT.2.a: malloc/free nativos sin runtime VM.  Compilar a objeto relocatable
+// y enlazar con el toolchain del sistema (que resuelve los simbolos externos
+// 'malloc'/'free' contra su libc -- o contra TU allocator en freestanding):
+//   vm -m aot --vx 19_heap_native.vx --emit obj --format elf -o heap.o
+//   gcc heap.o -o heap && ./heap        # exit 41
+//
+// El .o NO depende de libc: solo REFERENCIA simbolos externos indefinidos
+// (malloc/free); quien enlaza decide su implementacion.  Si el puntero NO
+// escapa, el optimizador lo promueve a pila (alloca) y elimina el free
+// (sin dangling, sin libc).  Aqui escapa via return -> heap real, pareado.
+
+i64* make_buf(i64 n) { return malloc(n * 8); }
+
+i32 main() {
+    i64* p = make_buf(8);   // malloc(64) (escapa -> heap real)
+    p[0] = 41;
+    i64 v = p[0];
+    free(p);                // free pareado -> sin leak
+    return (i32)v;
+}

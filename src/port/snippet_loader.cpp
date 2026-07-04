@@ -30,7 +30,7 @@ std::string resolve_port_c_dir(const std::string &override_dir) {
         "../../stdlib/port/c",
     };
     for (const char *c : candidates) {
-        std::ifstream test(std::string(c) + "/vex_macros.v.c");
+        std::ifstream test(std::string(c) + "/vx_macros.v.c");
         if (test.good()) return c;
     }
     // Fallback relativo al EJECUTABLE (instalacion: vesta.exe junto a
@@ -43,7 +43,7 @@ std::string resolve_port_c_dir(const std::string &override_dir) {
             ed / "stdlib" / "port" / "c",
             ed.parent_path() / "stdlib" / "port" / "c"};
         for (const auto &c : exe_cands) {
-            std::ifstream test((c / "vex_macros.v.c").string());
+            std::ifstream test((c / "vx_macros.v.c").string());
             if (test.good()) return c.string();
         }
     }

@@ -681,7 +681,7 @@ typedef struct Context {
     // === Tabla de debug (modulo-local) ===
     // Pares (byte_offset_dentro_del_modulo, source_line) acumulados
     // por el Assembler al emitir cada Instruccion cuyo source_line > 0
-    // (i.e., compiladas con --vex-debug).  El linker los consume al
+    // (i.e., compiladas con --vx-debug).  El linker los consume al
     // ensamblar el .velb final, sumando module_base_offset al
     // byte_offset para producir entradas DebugLineEntry con offsets
     // absolutos dentro del .velb.

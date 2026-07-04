@@ -52,8 +52,8 @@
  *     `<`, `>`, `"`, saltos de linea -> `<br/>`).
  */
 
-#ifndef VEX_MERMAID_DIAGRAMS_H
-#define VEX_MERMAID_DIAGRAMS_H
+#ifndef VX_MERMAID_DIAGRAMS_H
+#define VX_MERMAID_DIAGRAMS_H
 
 #include <string>
 
@@ -111,7 +111,7 @@ std::string mermaid_from_ast(const ast::ModuleNode &mod);
  * Las instrucciones se truncan a 3-4 por bloque por legibilidad;
  * bloques mas grandes se anotan con `... (N instrs total)`.  El
  * detalle exhaustivo esta disponible via el dump textual del IR
- * (--vex-emit-ir) que conserva todas las instrucciones.
+ * (--vx-emit-ir) que conserva todas las instrucciones.
  *
  * @param mod          IrModule a graficar (pre o post optimizacion).
  * @param title        Titulo del diagrama, incluido en un comentario
@@ -161,4 +161,4 @@ std::string mermaid_from_vel_text(const std::string &vel_text);
 
 } // namespace vx
 
-#endif // VEX_MERMAID_DIAGRAMS_H
+#endif // VX_MERMAID_DIAGRAMS_H

@@ -61,7 +61,7 @@ def main():
                     'i64 main() { return (i64)toupper(97); }\n')
         obj = os.path.join(work, "m.o")
         prog = os.path.join(work, "p")
-        run([vm, "--vex", os.path.join(work, "m.vx"), "-m", "aot",
+        run([vm, "--vx", os.path.join(work, "m.vx"), "-m", "aot",
              "--emit", "obj", "--format", "elf", "-o", obj])
         run([vm, "--link", obj, libc, "-o", prog, "--format", "elf"])
         if not os.path.exists(prog):

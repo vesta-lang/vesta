@@ -6,7 +6,7 @@
  */
 
 /**
- * @file vex/comptime_introspect.h
+ * @file vx/comptime_introspect.h
  * @brief Helpers compartidos por type checker y lowering para resolver
  *        los builtins comptime de introspection (sizeof<T>, alignof<T>,
  *        typename<T>, type_id<T>, kind<T>, ...).
@@ -22,8 +22,8 @@
  * lowering.
  */
 
-#ifndef VEX_COMPTIME_INTROSPECT_H
-#define VEX_COMPTIME_INTROSPECT_H
+#ifndef VX_COMPTIME_INTROSPECT_H
+#define VX_COMPTIME_INTROSPECT_H
 
 #include "vx/types.h"
 #include "vx/type_checker.h"
@@ -355,4 +355,4 @@ std::string comptime_underlying_name(const TypeChecker &tc, const Type &t);
 
 } // namespace vx
 
-#endif // VEX_COMPTIME_INTROSPECT_H
+#endif // VX_COMPTIME_INTROSPECT_H

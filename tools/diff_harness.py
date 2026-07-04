@@ -77,10 +77,10 @@ def find_vm(arg: str | None, root: Path) -> Path | None:
 def discover(root: Path, want_bench: bool):
     """Devuelve [(name, path)] del corpus."""
     items = []
-    for p in sorted((root / "examples_codes_vex").glob("*.vx")):
+    for p in sorted((root / "examples_codes_vx").glob("*.vx")):
         items.append((p.stem, p))
     if want_bench:
-        for d in sorted((root / "examples_codes_vex" / "benchmark").iterdir()):
+        for d in sorted((root / "examples_codes_vx" / "benchmark").iterdir()):
             mv = d / "main.vx"
             if mv.is_file():
                 items.append((d.name, mv))
@@ -156,7 +156,7 @@ def main() -> int:
         # Compilar una vez.
         velb = tmp / (name + ".velb")
         try:
-            cr = subprocess.run([str(vm), "--vex", str(path), "-o", str(tmp / name)],
+            cr = subprocess.run([str(vm), "--vx", str(path), "-o", str(tmp / name)],
                                 capture_output=True, text=True, timeout=120, check=False)
         except subprocess.TimeoutExpired:
             cats["NOCOMPILA"].append(name); detail.append({"name": name, "cat": "NOCOMPILA",

@@ -202,7 +202,7 @@ namespace {
 std::string default_trust_path() {
     std::string keys = paths::keys_dir();
     if (keys.empty()) return std::string();
-    return paths::join(paths::vex_home(), "trust.toml");
+    return paths::join(paths::vx_home(), "trust.toml");
 }
 
 std::string read_text_file(const std::string &path) {
@@ -293,7 +293,7 @@ bool add_trust_pin(const TrustPin &pin, const std::string &override_path) {
     }
     if (!found) pins.push_back(pin);
 
-    paths::ensure_dir(paths::vex_home());
+    paths::ensure_dir(paths::vx_home());
     return write_text_file(path, serialize_trust(pins));
 }
 

@@ -1,0 +1,16 @@
+// AOT: boot sector MBR de 512 bytes (BIOS), 100% datos crudos.
+// Demuestra `times 510-($-$$) db 0` (relleno NASM hasta una posicion) + la
+// firma 0x55AA en el offset 510.  Compilar con:
+//   vm -m aot --vx 15_boot_sector.vx --emit bin --bin-base 0x7C00 -o boot.bin
+// (codigo 16-bit real escrito a mano como db; el backend X86_16 llegara luego.)
+
+@section(".boot", "rx")
+bytes boot {
+    // Codigo 16-bit de ejemplo (cli; hlt; jmp $) -- placeholder hasta X86_16.
+    db 0xFA                     // cli
+    db 0xF4                     // hlt
+    db 0xEB, 0xFE              // jmp $ (bucle infinito)
+
+    times 510 - ($ - $$) db 0  // relleno con ceros hasta el offset 510
+    db 0x55, 0xAA              // firma MBR en 510..511
+}

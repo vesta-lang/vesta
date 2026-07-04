@@ -1,0 +1,51 @@
+// examples_codes_vx/247_gc_class_dtor_finalize.vx
+//
+// FINALIZADOR GC de gc<Clase> con ~Clase() (CLASS_DTOR).  Un objeto gestionado
+// por GC (`gc<Clase>`) cuya clase declara un destructor `~Clase()` que libera
+// un recurso (aqui: incrementa un contador estatico) corre ese destructor
+// EXACTAMENTE una vez -- escape o no-escape -- via el finalizador GC.  El dtor
+// se invoca por CALL DIRECTO al `<Clase>____dtor` concreto (dispatch estatico,
+// sin vtable), portable en el interprete (bytecode, arch-independiente) e
+// identico en interp/JIT.
+//
+// Antes de este soporte, solo gc<unique>/gc<shared> tenian finalizador; un
+// gc<Clase> con dtor que escapaba se recolectaba SIN correr ~Clase() -> FUGA.
+//
+// `gc_finalize_all()` finaliza DETERMINISTAMENTE todo objeto GC vivo con
+// recurso interno (no depende de la colecta ni de residuos del scan de raices),
+// por lo que el test observa la finalizacion sin polling.  Cero doble-free:
+// gc<Clase> NO tiene cleanup determinista de scope (el GC lo gestiona), asi que
+// el finalizador es el UNICO camino que corre el dtor.
+//
+// Esperado: R00 == 2  (un objeto escapado + uno no-escape = 2 dtors).
+
+class Trace { public static i64 dtors; }
+
+class Recurso {
+    public i64 id;
+    public Recurso(i64 x) { this.id = x; }
+    // El dtor libera el recurso interno (aqui: cuenta la liberacion).
+    public ~Recurso() { Trace.dtors = Trace.dtors + 1; }
+}
+
+// El box gc<Recurso> escapa via return -> sin cleanup determinista; el
+// finalizador GC corre ~Recurso() al finalizar.
+gc<Recurso> crea() {
+    gc<Recurso> g = new Recurso(7);
+    return g;
+}
+
+// El box gc<Recurso> NO escapa (muere en el scope); el GC lo colecta y su
+// finalizador corre ~Recurso() -- tambien exactamente una vez.
+void usar() {
+    gc<Recurso> g = new Recurso(9);
+    i64 x = g.id;
+}
+
+i32 main() {
+    Trace.dtors = 0;
+    crea();               // objeto escapado
+    usar();               // objeto no-escape
+    gc_finalize_all();    // finaliza AMBOS (deterministico, sin polling)
+    return (i32) Trace.dtors;   // 2
+}

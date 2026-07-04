@@ -119,7 +119,7 @@ struct JitBoundaryGuard {
 } // namespace
 
 /* Fuerza frame pointer en la entry para que @c __builtin_frame_address(0) sea
- * fiable (mismo mecanismo que @c VEX_GC_FORCE_FP en libvesta_gc). */
+ * fiable (mismo mecanismo que @c VX_GC_FORCE_FP en libvesta_gc). */
 #if defined(__GNUC__)
 #define VRT_FORCE_FP __attribute__((optimize("no-omit-frame-pointer")))
 #else

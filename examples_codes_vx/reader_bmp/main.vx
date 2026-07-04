@@ -1,0 +1,113 @@
+// =============================================================================
+// main.vx - Punto de entrada de ReaderBMP migrado a Vex (interp / JIT).
+//
+// Uso:  vm --run main.velb -m vm -- <archivo.bmp> [-r WxH]
+//   (el separador `--` es necesario para pasar flags con guion al programa;
+//    ver LIM-4 en BUGS_LIMITACIONES.md).
+//
+// MODERNIZADO (2026-07): usa la clase BMP_Image (que lee via stdlib
+// vx_fileio y vuelca con el builtin bg_rgb).  El flag opcional -r WxH se
+// parsea con vio_parse_int de la stdlib nativa (cierra LIM-8); el redimensionado
+// en si sigue fuera de alcance (LIM-9: depende de codecs AWT), asi que -r solo
+// reporta las dimensiones parseadas.
+//
+// NOTA: args_count/args_get NO compilan a AOT nativo (LIM-5).  Para el binario
+// AOT standalone se usa main_aot.vx (path fijo).
+// =============================================================================
+
+import "bmp";
+
+// FFI a la stdlib nativa: parseo de entero desde string (host_ptr + len).
+extern "stdlib/native/io/vesta_io" {
+    fn vio_parse_int(u64 s, u64 len) -> i64;
+    fn vio_parse_ok() -> i64;
+}
+
+void print_help() {
+    println("Uso: reader_bmp <archivo.bmp> [-r WxH]");
+    println("");
+    println("Lee un BMP de 24 bits (BGR, sin compresion), imprime sus");
+    println("atributos y vuelca los pixeles a la terminal en color truecolor.");
+    println("  -r WxH   parsea unas dimensiones de redimensionado (no aplicado).");
+}
+
+// Parsea "WxH" (p.ej. "32x24") en dos i32 via vio_parse_int.  Devuelve 1 si
+// ambos lados son enteros validos, 0 si el formato es invalido.
+i32 parse_wxh(string spec, i32* out_w, i32* out_h) {
+    u8* pc = str_cstr(spec);
+    if (pc == null) {
+        return 0;
+    }
+    i32 total = (i32) str_bytes(spec);
+    // Buscar el separador 'x' (o 'X').
+    i32 xpos = -1;
+    i32 i = 0;
+    while (i < total) {
+        i32 c = (i32) pc[i];
+        if (c == 120 || c == 88) {   // 'x' = 120, 'X' = 88
+            xpos = i;
+            i = total;   // corta el bucle
+        } else {
+            i = i + 1;
+        }
+    }
+    if (xpos <= 0 || xpos >= total - 1) {
+        return 0;
+    }
+    // Lado izquierdo: [0, xpos).  Lado derecho: [xpos+1, total).
+    i64 w = vio_parse_int((u64) pc, (u64) xpos);
+    if (vio_parse_ok() == 0) {
+        return 0;
+    }
+    i64 h = vio_parse_int((u64) (pc + xpos + 1), (u64) (total - xpos - 1));
+    if (vio_parse_ok() == 0) {
+        return 0;
+    }
+    *out_w = (i32) w;
+    *out_h = (i32) h;
+    return 1;
+}
+
+i32 main(string[] args) {
+    i32 argc = args_count();
+    if (argc == 0) {
+        print_help();
+        return 0;
+    }
+
+    string path = args_get(0);
+    if (str_equals(path, "-h") || str_equals(path, "--help")) {
+        print_help();
+        return 0;
+    }
+
+    // Barrido de flags posteriores.  Solo -r WxH esta soportado (parse-demo).
+    i32 a = 1;
+    while (a < argc) {
+        string flag = args_get(a);
+        if (str_equals(flag, "-r") && a + 1 < argc) {
+            string spec = args_get(a + 1);
+            i32 rw = 0;
+            i32 rh = 0;
+            if (parse_wxh(spec, &rw, &rh) == 1) {
+                println("Resize solicitado: ${rw}x${rh} (no aplicado: LIM-9).");
+            } else {
+                println("Formato -r invalido: ${spec} (se esperaba WxH).");
+            }
+            a = a + 2;
+        } else {
+            a = a + 1;
+        }
+    }
+
+    bmp.BMP_Image img = new bmp.BMP_Image();
+    if (img.load(path) == 0) {
+        println("El archivo ${path} no pudo encontrarse o no existe.");
+        return 1;
+    }
+
+    img.printBMPAttributes();
+    println("");
+    img.dumpTerminal();
+    return 0;
+}

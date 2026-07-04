@@ -148,7 +148,7 @@ std::vector<uint8_t> vreg_compile_native(
     /* Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint (pc_offset
      * relativo a la funcion + slots con GcHandle).  Se rellena si != nullptr.
      * Vacios salvo que el codigo tenga valores GC (gc<T>, Inc 3).  El driver
-     * los serializa en la seccion .vexgc_smap para el scan preciso en runtime. */
+     * los serializa en la seccion .vxgc_smap para el scan preciso en runtime. */
     std::vector<Stackmap> *stackmaps_out = nullptr);
 
 /**

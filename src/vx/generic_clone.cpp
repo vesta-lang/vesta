@@ -25,7 +25,7 @@
 #include "generic_clone.h"
 
 namespace vx {
-namespace vexgen {
+namespace vxgen {
 
 
 
@@ -599,5 +599,5 @@ std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s,
     }
 }
 
-} // namespace vexgen
+} // namespace vxgen
 } // namespace vx

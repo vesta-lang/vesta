@@ -1,0 +1,28 @@
+// Phase AS (inline-asm nativo ejecutado por el JIT de VestaVM).
+//
+// Demuestra que el register allocator respeta los clobbers de registros
+// CALLEE-SAVED (r12-r15) INFERIDOS por el compilador: la variable `keep`
+// esta viva A TRAVES del bloque asm; el asm pisa r12/r13 sin ligarlos, asi
+// que el compilador INFIERE que son clobbers (no hace falta declararlos) y
+// el regalloc los EXCLUYE para `keep`.  Sin ese soporte, `keep` se
+// corromperia.
+//
+//     vm --vx 03_clobber_callee_saved.vx -o clob
+//     vm --run clob.velb
+//
+// @expect 50
+u64 medir(u64 a, u64 b) {
+    u64 keep = a * b;                    // vivo a traves del asm (= 42)
+    register("rdi") u64 valor = 0xFF;
+    register("rax") u64 cuenta;
+    asm volatile {
+        mov r12, 111                     // pisa r12/r13 SIN ligarlos;
+        mov r13, 222                     // el compilador los infiere clobber
+        popcnt rax, rdi                  // cuenta = 8
+    };
+    return cuenta + keep;                // 8 + 42, keep intacto
+}
+
+u64 main() {
+    return medir(7, 6);                  // 42 + 8 -> 50
+}

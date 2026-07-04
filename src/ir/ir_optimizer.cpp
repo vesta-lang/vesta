@@ -6132,7 +6132,7 @@ bool ir_pass_cse(IrFunction &fn) {
 //  Razon: TAILCALL emite `leave` antes del salto al callee, lo que
 //  restaura RSP=RBP y libera el bloque ALLOCA.  Si el callee dereferencia
 //  un puntero que apuntaba a esa region, lee basura (o memoria del
-//  callee).  Demo regresion: 17_ecs_basico.vex pasaba arrays
+//  callee).  Demo regresion: 17_ecs_basico.vx pasaba arrays
 //  i32[8] (ALLOCA) por valor a system_sum_positions y obtenia R0=0
 //  en vez de 100 con TCO activo.
 //
@@ -6520,13 +6520,13 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* rspawn body helpers. */
         if (name.size() > 9 && name.compare(0, 9, "__rspawn_") == 0)
             return true;
-        /* Helpers de string value-type (Vesta Embed): __vex_strlen, __vex_strdata,
-         * __vex_strcmp.  Se mantienen como funciones APARTE: cada accesor de
+        /* Helpers de string value-type (Vesta Embed): __vx_strlen, __vx_strdata,
+         * __vx_strcmp.  Se mantienen como funciones APARTE: cada accesor de
          * longitud/data inline expandia ~10 instrs (AND-mask select heap/SSO);
          * sumar varias en una funcion reventaba el regalloc SysV (4 callee-saved
          * vs 6 en Win64) -> resultado erroneo en ELF.  Una sola CALL por uso
          * elimina la presion y unifica el codegen PE/ELF. */
-        if (name.size() > 9 && name.compare(0, 9, "__vex_str") == 0)
+        if (name.size() > 9 && name.compare(0, 9, "__vx_str") == 0)
             return true;
         return false;
     };

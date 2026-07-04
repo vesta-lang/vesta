@@ -50,13 +50,13 @@
 #include <mutex>    // std::call_once para registro one-shot
 #include <functional>
 
-#include "ffi/virtual_lib_registry.h" // registrar vex_static_assert
+#include "ffi/virtual_lib_registry.h" // registrar vx_static_assert
 
 /* extern "C" decl global del thunk generator.  La impl esta
  * en src/runtime/native_callback.cpp.  La registramos como virtual_fn
- * "vesta_runtime:vex_get_native_thunk" para que el builtin Vesta
+ * "vesta_runtime:vx_get_native_thunk" para que el builtin Vesta
  * `as_native_callback(fn)` la invoque via CALLN. */
-extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t argc);
+extern "C" uint64_t vx_get_native_thunk(uint64_t fn_pc, uint64_t argc);
 
 namespace vx {
 
@@ -108,7 +108,7 @@ thread_local TypeChecker *g_active_typechecker = nullptr;
  * TypeChecker (cleanup via clear).
  */
 static std::string g_comptime_compile_buf;
-extern "C" const char *vex_comptime_compile(const char *src) {
+extern "C" const char *vx_comptime_compile(const char *src) {
     if (!src) return "";
     g_comptime_compile_buf = src;
     return g_comptime_compile_buf.c_str();
@@ -164,27 +164,27 @@ static Type type_from_name_str(const char *name) {
     return Type{};
 }
 
-extern "C" uint64_t vex_comptime_type_sizeof(const char *name) {
+extern "C" uint64_t vx_comptime_type_sizeof(const char *name) {
     if (!g_active_typechecker) return 0;
     const Type t = type_from_name_str(name);
     if (t.kind == PrimitiveKind::VOID) return 0;
     return comptime_type_size(*g_active_typechecker, t);
 }
 
-extern "C" uint64_t vex_comptime_type_alignof(const char *name) {
+extern "C" uint64_t vx_comptime_type_alignof(const char *name) {
     if (!g_active_typechecker) return 0;
     const Type t = type_from_name_str(name);
     if (t.kind == PrimitiveKind::VOID) return 0;
     return comptime_type_align(*g_active_typechecker, t);
 }
 
-extern "C" uint64_t vex_comptime_type_kind(const char *name) {
+extern "C" uint64_t vx_comptime_type_kind(const char *name) {
     if (!g_active_typechecker) return 0;
     const Type t = type_from_name_str(name);
     return static_cast<uint64_t>(comptime_type_kind(t));
 }
 
-extern "C" uint64_t vex_static_assert(int64_t cond, const char *msg) {
+extern "C" uint64_t vx_static_assert(int64_t cond, const char *msg) {
     if (cond) return 0; /* OK -- no-op. */
     const std::string text = msg ? std::string("static_assert: ") + msg
                                  : std::string("static_assert fallo");
@@ -193,7 +193,7 @@ extern "C" uint64_t vex_static_assert(int64_t cond, const char *msg) {
         loc.file = "<comptime>";
         g_active_typechecker->diagnostics().error(loc, text);
     } else {
-        std::fprintf(stderr, "[vex] %s (sin TypeChecker activo)\n",
+        std::fprintf(stderr, "[vx] %s (sin TypeChecker activo)\n",
                      text.c_str());
     }
     return 1; /* status fail (para el caller si lo lee). */
@@ -214,31 +214,31 @@ TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
     static std::once_flag once_reg;
     std::call_once(once_reg, []() {
         ffi::register_virtual_fn("vesta_comptime", "static_assert",
-                                 reinterpret_cast<void *>(&vex_static_assert));
+                                 reinterpret_cast<void *>(&vx_static_assert));
         /* type queries via virtual fns.  Macros invocan
          * `comptime_type_sizeof("i32")` etc. y obtienen metadata. */
         ffi::register_virtual_fn(
             "vesta_comptime", "comptime_type_sizeof",
-            reinterpret_cast<void *>(&vex_comptime_type_sizeof));
+            reinterpret_cast<void *>(&vx_comptime_type_sizeof));
         ffi::register_virtual_fn(
             "vesta_comptime", "comptime_type_alignof",
-            reinterpret_cast<void *>(&vex_comptime_type_alignof));
+            reinterpret_cast<void *>(&vx_comptime_type_alignof));
         ffi::register_virtual_fn(
             "vesta_comptime", "comptime_type_kind",
-            reinterpret_cast<void *>(&vex_comptime_type_kind));
+            reinterpret_cast<void *>(&vx_comptime_type_kind));
         /* comptime_compile: identity en v1 (devuelve src tal cual).
          * Util para que el AST evaluator no rechace el call cuando
          * el macro hace `return comptime_compile(complicated_str)`. */
         ffi::register_virtual_fn(
             "vesta_comptime", "comptime_compile",
-            reinterpret_cast<void *>(&vex_comptime_compile));
+            reinterpret_cast<void *>(&vx_comptime_compile));
         /* Sprint B.1: thunk generator para callbacks Vesta -> C nativos.
          * Builtin `as_native_callback(fn)` se baja a un CALLN a esta
          * fn que retorna el host_ptr al thunk callable con cc nativa.
          * El extern "C" decl global esta arriba del namespace. */
         ffi::register_virtual_fn(
-            "vesta_runtime", "vex_get_native_thunk",
-            reinterpret_cast<void *>(&::vex_get_native_thunk));
+            "vesta_runtime", "vx_get_native_thunk",
+            reinterpret_cast<void *>(&::vx_get_native_thunk));
     });
 }
 
@@ -265,9 +265,9 @@ TypeChecker::~TypeChecker() {
 // Las utilidades de clonacion de AST con sustitucion de type-params
 // (GenSubst, clone_*, mangle_*) viven ahora en generic_clone.{h,cpp}
 // para mantener este fichero manejable (el include esta arriba, fuera
-// del namespace).  Se traen al scope de `vex` con un using para no
+// del namespace).  Se traen al scope de `vx` con un using para no
 // requalificar las decenas de usos existentes.
-using namespace vexgen;
+using namespace vxgen;
 
 // #cross-module-generics: un template importado con namespace se inyecta con
 // nombre cualificado `lib.Box` (con punto).  El punto es invalido en las
@@ -996,7 +996,7 @@ bool TypeChecker::run() {
     initial_errors_ = diags_.error_count();
     push_scope(); // global
 
-    // Phase M.2.e: drenar la cola de funciones importadas via .vexi.
+    // Phase M.2.e: drenar la cola de funciones importadas via .vxi.
     // Cada entrada se declara en el scope global como Symbol::Function
     // con su sig_index ya asignado, igual que los builtins.
     for (const auto &pf : pending_imported_fn_names_) {
@@ -1009,7 +1009,7 @@ bool TypeChecker::run() {
 
     // Phase M.L7: drenar la cola de globals importadas.  Cada entry
     // se declara en el scope global como Symbol::Variable con su
-    // tipo resuelto + flag is_const propagado del .vexi.  Si la
+    // tipo resuelto + flag is_const propagado del .vxi.  Si la
     // global es const + trae init_value, ademas se guarda en la
     // tabla @c imported_global_consts_ que el lowering consulta
     // para inline-ar el literal en cada uso.
@@ -1491,9 +1491,9 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
     if (tn->kind == ast::NodeKind::PrimitiveTypeNode) {
         const auto *pt = static_cast<const ast::PrimitiveTypeNode *>(tn);
         Type t{pt->prim};
-        // gc<X> (opt-in `import vex.gc`): referencia GC-managed.  Resolvemos X
+        // gc<X> (opt-in `import vx.gc`): referencia GC-managed.  Resolvemos X
         // y devolvemos su tipo de CLASE con @c gc_managed=true -> reusa TODO el
-        // acceso a miembros de clase; el lowering decide el allocator (vex_gc_
+        // acceso a miembros de clase; el lowering decide el allocator (vx_gc_
         // alloc) y la ausencia de RAII por el flag.  GC_PTR no sobrevive al
         // type checking en valores; es solo la forma parseada del tipo.
         if (pt->prim == PrimitiveKind::GC_PTR) {
@@ -1952,9 +1952,9 @@ void TypeChecker::collect_globals() {
         // tmap_new() / tset_new() son sin args; los tratamos igual:
         // el lowering ignora args extra cuando default_cap == 0.
         if (ct.default_cap == 0) {
-            reg_builtin(ct.vex_ctor_name, Type{ct.kind}, {});
+            reg_builtin(ct.vx_ctor_name, Type{ct.kind}, {});
         } else {
-            reg_builtin(ct.vex_ctor_name, Type{ct.kind}, {PrimitiveKind::I64});
+            reg_builtin(ct.vx_ctor_name, Type{ct.kind}, {PrimitiveKind::I64});
         }
     }
 
@@ -7179,7 +7179,7 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
             return Type{PrimitiveKind::STRING};
         }
         // Inc 4: comparacion (== != < > <= >=) -> BOOL.  La ordenacion es
-        // lexicografica byte-a-byte (ver __vex_strcmp en el lowering native).
+        // lexicografica byte-a-byte (ver __vx_strcmp en el lowering native).
         if (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq ||
             e->op == ast::BinOp::Lt || e->op == ast::BinOp::Gt ||
             e->op == ast::BinOp::Le || e->op == ast::BinOp::Ge) {
@@ -8960,7 +8960,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         diags_.error(e->loc,
                                      std::string("'") +
                                          primitive_name(base_t.kind) + "." +
-                                         cm->vex_name + "' espera " +
+                                         cm->vx_name + "' espera " +
                                          std::to_string(cm->n_args) +
                                          " arg(s), recibidos " +
                                          std::to_string(e->args.size()));
@@ -11030,7 +11030,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
 
     // ===================================================================
     // bug6 - `gc_box(value)` -> gc<typeof(value)>
-    //   Aloja `value` en un bloque GC-managed (vex_gc_alloc_ptr) de
+    //   Aloja `value` en un bloque GC-managed (vx_gc_alloc_ptr) de
     //   sizeof(T) bytes y devuelve el host_ptr al box.  Generaliza el
     //   modelo gc<Clase> (que aloja la INSTANCIA de clase en el heap GC)
     //   a un T CUALQUIERA: primitivo (gc<i64>, gc<f64>), smart pointer

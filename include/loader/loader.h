@@ -236,7 +236,7 @@ typedef struct Executable {
      * @brief Informacion de depuracion bytecode -> source line.
      *
      * Construida cuando el .velb tiene la seccion DVBG (compilado
-     * con --vex-debug).  Permite al debugger resolver `b file.vex:42`
+     * con --vx-debug).  Permite al debugger resolver `b file.vx:42`
      * al offset de bytecode correcto via DebugInfo::lookup_offset_for_line,
      * y mostrar `file:line` del PC actual via DebugInfo::lookup_line.
      * nullptr si el .velb no tiene info de debug (caso comun).
@@ -297,7 +297,7 @@ typedef struct Executable {
      *        deserializada de la seccion @c VSMP del @c .velb.
      *
      * Vacia si el @c .velb no lleva stackmaps (build sin
-     * @c --vex-emit-stackmaps o @c .vel sin safepoints) -> el GC preciso
+     * @c --vx-emit-stackmaps o @c .vel sin safepoints) -> el GC preciso
      * del interprete es no-op y cae al scan conservador.  Consultada por
      * @c gc_heap::scan_interp_roots_precise via el PC de cada frame.
      */
@@ -321,7 +321,7 @@ typedef struct Executable {
      * Default ALL granted + sin whitelists -> @c caps.unrestricted() == true ->
      * cero overhead (los chequeos colapsan a un branch predicho).
      *
-     * Configurable por modulo via CLI @c --vex-caps (modulo principal) o
+     * Configurable por modulo via CLI @c --vx-caps (modulo principal) o
      * por @c loadmodule(path, caps_str) (modulo dinamico).
      */
     loader::Caps caps{};
@@ -387,7 +387,7 @@ class Loader {
      * @brief Phase M.sandbox: flag global "hay algun modulo sandboxed".
      *
      * Default @c false (sin sandbox).  Se pone a @c true cuando se aplica
-     * un conjunto de caps restringido a algun Executable (via --vex-caps
+     * un conjunto de caps restringido a algun Executable (via --vx-caps
      * o loadmodule con caps).  Permite que @c check_cap_at_pc retorne de
      * inmediato (1 branch predicho) en el caso comun sin sandbox, en lugar
      * de iterar @c executables en cada CALLN/dlopen/spawn/etc.  Resultado:

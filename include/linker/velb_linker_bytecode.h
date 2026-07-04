@@ -308,7 +308,7 @@ typedef struct PACKED HeaderVELB {
      *            slot_count * { location u8, gc_kind u8 }
      *
      * El valor 0 indica que el .velb no lleva stackmaps precisos (build
-     * sin --vex-emit-stackmaps o .vel sin safepoints).  En ese caso el GC
+     * sin --vx-emit-stackmaps o .vel sin safepoints).  En ese caso el GC
      * del interprete cae al scan conservador.  VERSION_VELB es 0x4 cuando
      * se introduce este campo.
      */

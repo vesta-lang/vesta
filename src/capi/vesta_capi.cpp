@@ -7,8 +7,8 @@
  * via la libreria compartida @c libvesta.
  *
  * Estrategia de reuso (sin reescribir el pipeline):
- *   - Compilar .vex -> .velb: se replica la secuencia que usa el path
- *     @c --vex de @c main.cpp: @c vx::compile_vx_source produce el texto
+ *   - Compilar .vx -> .velb: se replica la secuencia que usa el path
+ *     @c --vx de @c main.cpp: @c vx::compile_vx_source produce el texto
  *     @c .vel + el IR serializado; se escribe el @c .vel a un fichero
  *     temporal y se invoca @c asm_multi_process::run_worker (que ensambla
  *     + linka) para producir el @c .velb final; se leen sus bytes a memoria
@@ -164,12 +164,12 @@ void try_remove(const std::string &path) {
  */
 bool compile_to_velb_bytes(const std::string &src, const std::string &unit_name,
                            std::vector<uint8_t> &out_bytes, std::string &err) {
-    // 1. Compilar .vex -> texto .vel + IR serializado (reusa el frontend).
+    // 1. Compilar .vx -> texto .vel + IR serializado (reusa el frontend).
     vx::CompileOptions copts;
     copts.module_name = unit_name.empty() ? std::string("main") : unit_name;
 
     vx::CompileResult cr =
-        vx::compile_vx_source(src, copts.module_name + ".vex", copts);
+        vx::compile_vx_source(src, copts.module_name + ".vx", copts);
 
     if (!cr.ok || cr.diagnostics.has_errors()) {
         err = "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics);
@@ -492,7 +492,7 @@ VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
@@ -527,7 +527,7 @@ VESTA_API int vesta_compile_to_ir(const char *src, const char *unit_name,
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = true; // habilita CompileResult::ir_text
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
@@ -683,7 +683,7 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
         }
 
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
@@ -830,7 +830,7 @@ VESTA_API int vesta_compile_to_ir_t(const char *src, const char *unit_name,
         copts.dump_ir = true;
         vt_apply_opts_(target, copts);
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
@@ -867,7 +867,7 @@ VESTA_API int vesta_compile_to_vel_t(const char *src, const char *unit_name,
         copts.module_name = unit_name ? unit_name : "main";
         vt_apply_opts_(target, copts);
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
@@ -928,7 +928,7 @@ VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
         copts.module_name = unit_name ? unit_name : "main";
         copts.native_poo = true; // la vista asm nativa requiere el lowering AOT
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
@@ -990,7 +990,7 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
@@ -1101,7 +1101,7 @@ VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = (out_ir != nullptr);
         vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vex", copts);
+            src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
                     "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));

@@ -486,7 +486,7 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
 
 /// @brief Palabras clave de Vesta ofrecidas en el completado general (curadas a
 ///        partir del conjunto @c KW_* del lexer del frontend).
-const std::vector<std::string> &vex_keywords() {
+const std::vector<std::string> &vx_keywords() {
     static const std::vector<std::string> kws = {
         // Declaraciones y modificadores.
         "const", "static", "final", "nonnull", "typedef", "using", "namespace",
@@ -508,7 +508,7 @@ const std::vector<std::string> &vex_keywords() {
 }
 
 /// @brief Tipos (primitivos + alias + colecciones) ofrecidos en el completado.
-const std::vector<std::string> &vex_types() {
+const std::vector<std::string> &vx_types() {
     static const std::vector<std::string> tys = {
         // Primitivos canonicos.
         "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
@@ -530,7 +530,7 @@ const std::vector<std::string> &vex_types() {
 /// El registro de builtins del type checker es privado y no se conserva en el
 /// analisis cacheado, asi que se ofrece una seleccion curada de los builtins
 /// documentados de uso habitual.  Best-effort: no pretende ser exhaustiva.
-const std::vector<std::string> &vex_builtins() {
+const std::vector<std::string> &vx_builtins() {
     static const std::vector<std::string> bs = {
         // I/O.
         "print", "println", "echo", "flush", "panic",
@@ -802,7 +802,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         md += "`\n\n";
     }
     if (!signature.empty()) {
-        md += "```vex\n";
+        md += "```vx\n";
         md += signature;
         md += "\n```\n";
     }
@@ -1017,15 +1017,15 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
 
     // -- COMPLETADO GENERAL (sin '.') ----------------------------------------
     // Palabras clave.
-    for (const auto &kw : vex_keywords())
+    for (const auto &kw : vx_keywords())
         if (has_prefix(kw, prefix))
             add_item(kw, CompletionKind::Keyword, std::string());
     // Tipos (primitivos + alias + colecciones + genericos builtin).
-    for (const auto &ty : vex_types())
+    for (const auto &ty : vx_types())
         if (has_prefix(ty, prefix))
             add_item(ty, CompletionKind::Class, "tipo");
     // Builtins comunes (lista curada).
-    for (const auto &b : vex_builtins())
+    for (const auto &b : vx_builtins())
         if (has_prefix(b, prefix))
             add_item(b, CompletionKind::Function, "builtin");
 

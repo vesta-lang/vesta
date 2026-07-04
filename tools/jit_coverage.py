@@ -28,9 +28,9 @@ def find_vm(arg, root):
     return None
 
 def discover(root, want_bench):
-    items = [(p.stem, p) for p in sorted((root/"examples_codes_vex").glob("*.vx"))]
+    items = [(p.stem, p) for p in sorted((root/"examples_codes_vx").glob("*.vx"))]
     if want_bench:
-        for d in sorted((root/"examples_codes_vex"/"benchmark").iterdir()):
+        for d in sorted((root/"examples_codes_vx"/"benchmark").iterdir()):
             if (d/"main.vx").is_file(): items.append((d.name, d/"main.vx"))
     return items
 
@@ -61,7 +61,7 @@ def main():
         sys.stdout.write(f"\r[{i}/{len(corpus)}] {name[:38]:38s}"); sys.stdout.flush()
         velb = tmp/(name+".velb")
         if not velb.is_file():
-            cr = subprocess.run([str(vm),"--vex",str(path),"-o",str(tmp/name)],
+            cr = subprocess.run([str(vm),"--vx",str(path),"-o",str(tmp/name)],
                                 capture_output=True, text=True, timeout=120, check=False)
             if cr.returncode!=0 or not velb.is_file(): continue
         try:

@@ -117,7 +117,7 @@ Flags Release: `-O3 -DNDEBUG -march=x86-64 -mtune=native -ffast-math
 
 ## 3. Benchmarks sinteticos del intérprete
 
-Ubicacion: [`examples_codes_vex/benchmark/`](../examples_codes_vex/benchmark/).
+Ubicacion: [`examples_codes_vx/benchmark/`](../examples_codes_vx/benchmark/).
 
 ### Benchmarks core (12 incluidos)
 
@@ -147,9 +147,9 @@ Ubicacion: [`examples_codes_vex/benchmark/`](../examples_codes_vex/benchmark/).
 
 Suite dedicada para validar throughput del `SharedHeap` + monitores cross-scheduler
 + STW GC.  Implementadas como ficheros `bench_shared_*.vx` en
-`examples_codes_vex/benchmark/`.
+`examples_codes_vx/benchmark/`.
 
-Ejecucion via `bash tests/vex/bench_shared_runner.sh cmake-build-windows`
+Ejecucion via `bash tests/vx/bench_shared_runner.sh cmake-build-windows`
 (corre cada bench en 4 modos: VM single, VM 4-sched, JIT thr=1, JIT 4-sched).
 
 | Bench                           | Que mide                                              | Iters total | VM single  | VM 4-sched | JIT 4-sched |
@@ -261,7 +261,7 @@ o bridge al scheduler. NO afecta hot paths sincronos.
 
 Comparativa empirica contra los principales lenguajes del ecosistema
 usando **workloads identicos** implementados en cada uno. Los benchmarks
-viven en `examples_codes_vex/benchmark/<bench_name>/` con un fichero
+viven en `examples_codes_vx/benchmark/<bench_name>/` con un fichero
 por lenguaje (`main.vx`, `main.c`, `main.cpp`, `main.py`, `Main.java`,
 `main.go`).
 
@@ -467,7 +467,7 @@ restante en codigo recursion-heavy.
 
 ```bash
 # Compilar todos los benches en un script
-for b in examples_codes_vex/benchmark/bench_*.vx; do
+for b in examples_codes_vx/benchmark/bench_*.vx; do
   name=$(basename "$b" .vx)
   ./build/vm --vesta "$b" -o /tmp/$name -O2 > /dev/null
 done
@@ -506,7 +506,7 @@ Los benchmarks multi-lenguaje viven en carpetas con multiples
 implementaciones, una por lenguaje:
 
 ```text
-examples_codes_vex/benchmark/<bench>/
+examples_codes_vx/benchmark/<bench>/
     main.vx      # Vesta
     main.c        # C    (gcc -O3 -march=native)
     main.cpp      # C++  (g++ -O3 -march=native)
@@ -521,7 +521,7 @@ Runner Python orquestador:
 python tools/bench/run_all_benches.py
 
 # Subset de lenguajes
-python tools/bench/run_all_benches.py --langs vex_interp,vex_jit,c,java
+python tools/bench/run_all_benches.py --langs vx_interp,vx_jit,c,java
 
 # Filtrar benches por nombre (regex)
 python tools/bench/run_all_benches.py --filter "fib|tight"
@@ -602,7 +602,7 @@ El runner mitiga estos flakes con:
 
 Para evitar timeouts permanentemente en Windows:
 
-- añadir `%TEMP%\vex_bench_multi` y el directorio de `vesta.EXE` como
+- añadir `%TEMP%\vx_bench_multi` y el directorio de `vesta.EXE` como
   exclusiones de Windows Defender.
 - Activar el power profile "Alto rendimiento" + AC plugged.
 - Cerrar apps pesadas (Chrome, IDE, etc.) durante el bench completo.

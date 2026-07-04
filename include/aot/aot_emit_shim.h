@@ -143,7 +143,7 @@ typedef struct {
     uint64_t elf_stack_vaddr; /* ELF: VA sugerida de la pila. 0 => 0x70000000 */
     uint64_t
         elf_stack_size; /* ELF: tamano del segmento de pila. 0 => 0x10000 */
-    /* TLS PE: seccion+offset de __vex_tls_init (el TLS callback que aplica la
+    /* TLS PE: seccion+offset de __vx_tls_init (el TLS callback que aplica la
      * plantilla por-hilo).  <0 = sin callback.  El emisor sintetiza el
      * IMAGE_TLS_DIRECTORY y registra este callback en AddressOfCallBacks. */
     int tls_callback_section;

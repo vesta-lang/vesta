@@ -3,7 +3,7 @@
  * @brief Phase M5.B - cache del @c .velb final del proyecto.
  *
  * Cache a nivel de bytecode-final: si nada cambio en el root + deps
- * recursivos + opciones de compile, el siguiente @c vm @c --vex es un
+ * recursivos + opciones de compile, el siguiente @c vm @c --vx es un
  * cache hit instantaneo (copia del @c .velb cacheado al output sin
  * invocar el frontend).
  *
@@ -13,7 +13,7 @@
  * +4   u16  format_version (=1)
  * +6   u16  _reserved
  * +8   u32  opts_hash (FNV-1a sobre las opciones de compile que afectan
- *           la salida -- opt_level, emit_debug, vex_base, etc.)
+ *           la salida -- opt_level, emit_debug, vx_base, etc.)
  * +12  u32  dep_count
  * +16  DepEntry[dep_count]:
  *           u32  path_len
@@ -27,8 +27,8 @@
  * es FNV-1a 64 del path canonico del root.
  */
 
-#ifndef VEX_PROJECT_CACHE_H
-#define VEX_PROJECT_CACHE_H
+#ifndef VX_PROJECT_CACHE_H
+#define VX_PROJECT_CACHE_H
 
 #include <cstdint>
 #include <string>
@@ -41,7 +41,7 @@ namespace vx {
 struct ProjectCacheKey {
     int opt_level = 1;
     bool emit_debug = false;
-    uint64_t vex_base = 0;
+    uint64_t vx_base = 0;
     std::string instrument_mode; ///< "none", "trace", "coverage", etc.
     std::string port_target;     ///< "" si no es port; "c", "java", etc.
 };
@@ -59,12 +59,12 @@ struct ProjectCacheDep {
 /// @brief Computa el path donde se cachearia el .velb del proyecto.
 /// @param root_path  Path canonico del root.
 /// @param cache_dir  Directorio del cache global (puede ser una funcion
-///                   centralizada en @c $VEX_HOME o @c ./.vex_cache ).
+///                   centralizada en @c $VX_HOME o @c ./.vx_cache ).
 std::string project_cache_path(const std::string &root_path,
                                const std::string &cache_dir);
 
 /// @brief Computa el directorio default del cache de proyectos.
-/// Por defecto: @c $VEX_HOME/cache/projects o @c ./.vex_cache/projects .
+/// Por defecto: @c $VX_HOME/cache/projects o @c ./.vx_cache/projects .
 std::string default_project_cache_dir();
 
 /// @brief Lee un cache file y devuelve sus contenidos parseados.
@@ -97,4 +97,4 @@ uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;
 
 } // namespace vx
 
-#endif // VEX_PROJECT_CACHE_H
+#endif // VX_PROJECT_CACHE_H

@@ -739,11 +739,11 @@ struct Lowerer {
             return;
         }
 
-        /* AVX escalar 3-OPERANDOS (VADDSD/VSUBSD/VMULSD/VDIVSD + SS): VEX nativo
+        /* AVX escalar 3-OPERANDOS (VADDSD/VSUBSD/VMULSD/VDIVSD + SS): VX nativo
          * dst = src1 OP src2 con dst != src1 permitido -> NO se legaliza a
          * 2-address (sin el `mov dst,src1`).  Esta es la ventaja que motivo
          * MOps separadas: el regalloc/scheduler las explota como 3-op.  vvvv
-         * (src1) DEBE ser reg (materializar si spilled); src2 puede ser MEM (VEX
+         * (src1) DEBE ser reg (materializar si spilled); src2 puede ser MEM (VX
          * reg-reg-mem = load-and-op); dst reg (fscr0 + store si spilled). */
         if (op == MOp::VADDSD || op == MOp::VSUBSD || op == MOp::VMULSD ||
             op == MOp::VDIVSD || op == MOp::VADDSS || op == MOp::VSUBSS ||
@@ -762,7 +762,7 @@ struct Lowerer {
                 out.push_back(MInstr::make_unary(mv, xmm(fscr1), s1));
                 s1 = xmm(fscr1);
             }
-            const MOperand s2 = resolve(in.src2); // reg o MEM (VEX lo admite)
+            const MOperand s2 = resolve(in.src2); // reg o MEM (VX lo admite)
             out.push_back(MInstr::make_binary(op, dreg, s1, s2));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(mv, resolve(in.dst), dreg));
@@ -850,7 +850,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
-            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
+            out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -872,7 +872,7 @@ struct Lowerer {
                 b = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, a, b));
-            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
+            out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             return;
         }
 
@@ -890,7 +890,7 @@ struct Lowerer {
                 s = reg(scr0);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
-            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
+            out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -907,7 +907,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
-            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
+            out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -923,7 +923,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
-            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
+            out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOVSD, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));

@@ -29,8 +29,8 @@
  * ligados por register() del set de clobbers).
  */
 
-#ifndef VEX_ASM_EFFECTS_H
-#define VEX_ASM_EFFECTS_H
+#ifndef VX_ASM_EFFECTS_H
+#define VX_ASM_EFFECTS_H
 
 #include <string>
 #include <vector>
@@ -124,4 +124,4 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
 
 } // namespace vx
 
-#endif // VEX_ASM_EFFECTS_H
+#endif // VX_ASM_EFFECTS_H

@@ -7,7 +7,7 @@
 
 /**
  * @file c_header_gen.h
- * @brief Generador del header C publico (`vex --emit-header`, Fase 4 interop C).
+ * @brief Generador del header C publico (`vx --emit-header`, Fase 4 interop C).
  *
  * Emite un `.h` C99 con la interfaz publica del modulo Vesta: typedefs de los
  * structs C-representables (named, layout C garantizado), prototipos de las
@@ -23,8 +23,8 @@
  * la frontera C por valor.
  */
 
-#ifndef VEX_C_HEADER_GEN_H
-#define VEX_C_HEADER_GEN_H
+#ifndef VX_C_HEADER_GEN_H
+#define VX_C_HEADER_GEN_H
 
 #include <string>
 
@@ -48,4 +48,4 @@ std::string generate_c_header(const ast::ModuleNode &mod, const TypeChecker &tc,
 
 } // namespace vx
 
-#endif // VEX_C_HEADER_GEN_H
+#endif // VX_C_HEADER_GEN_H

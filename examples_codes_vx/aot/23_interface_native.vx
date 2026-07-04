@@ -1,0 +1,22 @@
+// AOT.2.c (interfaces): dispatch de INTERFAZ polimorfico nativo via vtable
+// (sin runtime, sin GC).  Una clase que implementa una interfaz lleva su vtable
+// en obj[0]; una llamada sobre una referencia de interfaz se despacha por la
+// vtable usando el slot del metodo de la interfaz (los implementadores los
+// colocan en esos slots).  Eficiencia C/C++.
+//   vm -m aot --vx 23_interface_native.vx --emit obj --format elf -o i.o
+//   gcc i.o -o i && ./i        # exit 42
+
+interface Speaker {
+    i32 speak();
+}
+class Dog : Speaker { @Override i32 speak() { return 10; } }
+class Cat : Speaker { @Override i32 speak() { return 32; } }
+
+// Dispatch polimorfico: s puede ser cualquier implementador de Speaker.
+i32 ask(Speaker s) { return s.speak(); }
+
+i32 main() {
+    Speaker a = new Dog();
+    Speaker b = new Cat();
+    return ask(a) + ask(b);   // 10 + 32 = 42
+}

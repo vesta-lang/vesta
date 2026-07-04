@@ -409,14 +409,14 @@ enum class IrOp : uint16_t {
                              ///< el finalizador GC de un box con recurso
                              ///< interno; kind 0=desregistrar, 1=UNIQUE,
                              ///< 2=SHARED).  interp/JIT: opcode gcfinal;
-                             ///< AOT: CALL vex_gc_register_finalizer.
+                             ///< AOT: CALL vx_gc_register_finalizer.
     GC_COLLECT = 0xD4, ///< gccollect  (fuerza minor+major GC del proceso +
                        ///< drena finalizadores).  Builtin Vesta gc_collect().
-                       ///< interp/JIT: opcode gccollect; AOT: CALL vex_gc_collect.
+                       ///< interp/JIT: opcode gccollect; AOT: CALL vx_gc_collect.
     GC_FINALIZE_ALL = 0xD5, ///< gcfinall  (finaliza TODO objeto GC vivo con
                             ///< recurso interno).  Builtin Vesta gc_finalize_all().
                             ///< interp/JIT: opcode gcfinall; AOT: CALL
-                            ///< vex_gc_finalize_all.  Determinista.
+                            ///< vx_gc_finalize_all.  Determinista.
     GC_ALLOCP = 0x98, ///< %dst = gc_allocp.ptr %size  (gcallocp: alloc + deref
                       ///< + xchg en 1 instr)
     GETSTATIC = 0x99, ///< %dst = getstatic.i64 %cls, imm=offset   (carga campo
@@ -641,7 +641,7 @@ enum class IrOp : uint16_t {
     // escalar (loop-invariante; f64 o entero ya replicado a 64b) se DIFUNDE a
     // todos los lanes.  imm: bits0-7=ancho, bits8-15=subop, bit16=HOISTED (el
     // broadcast esta pre-hecho en XMM13 por un VEC_BCAST en el preheader -> el
-    // loop usa VEX puro sin re-broadcast ni transicion AVX/SSE).
+    // loop usa VX puro sin re-broadcast ni transicion AVX/SSE).
     VEC_BINOP_S = 0xEA, ///< vec_binop_s.fN %dst, %a, %scalar
     // VEC_BCAST: difunde el escalar (operands[0]) a TODOS los lanes de XMM13
     // (registro reservado) UNA vez en el preheader del loop, para que el
@@ -1413,7 +1413,7 @@ struct IrModule {
         /// todo el binario (aunque sea NON_DEDUP).  El merge cross-module
         /// (compile_vx_project) unifica todas las entries con la misma
         /// shared_key en UN solo slot.  Usado por los globals del CPU
-        /// dispatch (__vex_cpu_features, __vex_memcpy_fp, etc.) que deben
+        /// dispatch (__vx_cpu_features, __vx_memcpy_fp, etc.) que deben
         /// ser program-globales para que el init del root inicialice el slot
         /// que leen las funciones de los modulos dependientes.
         std::string shared_key;

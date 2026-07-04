@@ -1,22 +1,22 @@
 # Ejemplos de Vesta - Catalogo curado
 
 Esta pagina selecciona los ejemplos mas instructivos de
-[`examples_codes_vex/`](../examples_codes_vex/) organizados por tema. Cada uno
+[`examples_codes_vx/`](../examples_codes_vx/) organizados por tema. Cada uno
 es ejecutable directamente con:
 
 ```bash
-./build/vm --vesta examples_codes_vex/<archivo>.vx -o /tmp/ej
+./build/vm --vesta examples_codes_vx/<archivo>.vx -o /tmp/ej
 ./build/vm --run /tmp/ej.velb
 ```
 
 Para todos los 140+ ejemplos completos, ver el directorio. Los benches estan
-separados en `examples_codes_vex/benchmark/`.
+separados en `examples_codes_vx/benchmark/`.
 
 ---
 
 ## Indice
 
-- [Ejemplos de Vesta - Catalogo curado](#ejemplos-de-vex---catalogo-curado)
+- [Ejemplos de Vesta - Catalogo curado](#ejemplos-de-vx---catalogo-curado)
   - [Indice](#indice)
   - [1. Hola Mundo y basico](#1-hola-mundo-y-basico)
   - [2. Tipos y operaciones](#2-tipos-y-operaciones)
@@ -49,19 +49,19 @@ separados en `examples_codes_vex/benchmark/`.
 
 ## 1. Hola Mundo y basico
 
-**[`02_hola_mundo.vx`](../examples_codes_vex/02_hola_mundo.vx)**
+**[`02_hola_mundo.vx`](../examples_codes_vx/02_hola_mundo.vx)**
 
-```vex
+```vx
 i32 main() {
     println("Hola Mundo desde Vesta!");
     return 0;
 }
 ```
 
-**[`03_contador.vx`](../examples_codes_vex/03_contador.vx)** - loop while + print
+**[`03_contador.vx`](../examples_codes_vx/03_contador.vx)** - loop while + print
 con interpolacion:
 
-```vex
+```vx
 i32 main() {
     i32 i = 0;
     while (i < 5) {
@@ -76,10 +76,10 @@ i32 main() {
 
 ## 2. Tipos y operaciones
 
-**[`00_aritmetica.vx`](../examples_codes_vex/00_aritmetica.vx)** - operadores
+**[`00_aritmetica.vx`](../examples_codes_vx/00_aritmetica.vx)** - operadores
 basicos:
 
-```vex
+```vx
 i32 main() {
     i32 a = 1 + 2 * 3;     // 7 (precedencia)
     i32 b = (10 - 4) * 2;  // 12
@@ -87,9 +87,9 @@ i32 main() {
 }
 ```
 
-**[`01_factorial.vx`](../examples_codes_vex/01_factorial.vx)** - recursion:
+**[`01_factorial.vx`](../examples_codes_vx/01_factorial.vx)** - recursion:
 
-```vex
+```vx
 i64 factorial(i64 n) {
     if (n <= 1) return 1;
     return n * factorial(n - 1);
@@ -104,10 +104,10 @@ i32 main() {
 
 ## 3. Estructuras de datos
 
-**[`05_struct_punto.vx`](../examples_codes_vex/05_struct_punto.vx)** - struct
+**[`05_struct_punto.vx`](../examples_codes_vx/05_struct_punto.vx)** - struct
 basico:
 
-```vex
+```vx
 struct Punto {
     i32 x;
     i32 y;
@@ -119,10 +119,10 @@ i32 main() {
 }
 ```
 
-**[`06_struct_multi.vx`](../examples_codes_vex/06_struct_multi.vx)** -
+**[`06_struct_multi.vx`](../examples_codes_vx/06_struct_multi.vx)** -
 struct compuesto:
 
-```vex
+```vx
 struct Vec3 {
     i32 x;
     i32 y;
@@ -140,9 +140,9 @@ i32 main() {
 
 ## 4. Punteros y memoria
 
-**[`07_punteros.vx`](../examples_codes_vex/07_punteros.vx)** - punteros raw:
+**[`07_punteros.vx`](../examples_codes_vx/07_punteros.vx)** - punteros raw:
 
-```vex
+```vx
 i32 read_ptr(i32* p) {
     return *p;
 }
@@ -154,9 +154,9 @@ i32 main() {
 }
 ```
 
-**[`10_heap_malloc.vx`](../examples_codes_vex/10_heap_malloc.vx)** - malloc/free:
+**[`10_heap_malloc.vx`](../examples_codes_vx/10_heap_malloc.vx)** - malloc/free:
 
-```vex
+```vx
 i32 main() {
     i32* arr = malloc<i32>(100);
     for (i32 i = 0; i < 100; i = i + 1) {
@@ -175,10 +175,10 @@ i32 main() {
 
 ## 5. POO: clases, herencia, interfaces
 
-**[`12_clases_basico.vx`](../examples_codes_vex/12_clases_basico.vx)** - clase
+**[`12_clases_basico.vx`](../examples_codes_vx/12_clases_basico.vx)** - clase
 simple con ctor:
 
-```vex
+```vx
 class Punto {
     public i32 x;
     public i32 y;
@@ -197,10 +197,10 @@ i32 main() {
 }
 ```
 
-**[`15_herencia_basica.vx`](../examples_codes_vex/15_herencia_basica.vx)** -
+**[`15_herencia_basica.vx`](../examples_codes_vx/15_herencia_basica.vx)** -
 herencia + override:
 
-```vex
+```vx
 class Animal {
     public string name;
     
@@ -216,10 +216,10 @@ class Dog : Animal {
 }
 ```
 
-**[`21_interfaces_basico.vx`](../examples_codes_vex/21_interfaces_basico.vx)** -
+**[`21_interfaces_basico.vx`](../examples_codes_vx/21_interfaces_basico.vx)** -
 interfaces + polimorfismo:
 
-```vex
+```vx
 interface Speaker {
     public string speak();
 }
@@ -247,10 +247,10 @@ i32 main() {
 
 ## 6. Genericos
 
-**[`27_generics_box.vx`](../examples_codes_vex/27_generics_box.vx)** -
+**[`27_generics_box.vx`](../examples_codes_vx/27_generics_box.vx)** -
 generic monomorfizado:
 
-```vex
+```vx
 class Box<T> {
     public T value;
     public Box(T v) { this.value = v; }
@@ -268,10 +268,10 @@ i32 main() {
 
 ## 7. Pattern matching y enums
 
-**[`54_enum_payload.vx`](../examples_codes_vex/54_enum_payload.vx)** - enum con
+**[`54_enum_payload.vx`](../examples_codes_vx/54_enum_payload.vx)** - enum con
 variantes:
 
-```vex
+```vx
 enum Op {
     Nop,
     Square(i32),
@@ -295,10 +295,10 @@ i32 main() {
 
 ## 8. Optional y Result
 
-**[`33_optional_basic.vx`](../examples_codes_vex/33_optional_basic.vx)** -
+**[`33_optional_basic.vx`](../examples_codes_vx/33_optional_basic.vx)** -
 Optional con implicit Some:
 
-```vex
+```vx
 Optional<i32> find_pos(i32[] arr, i32 t) {
     for (i32 i = 0; i < arr.length; i = i + 1) {
         if (arr[i] == t) return Some(i);
@@ -319,7 +319,7 @@ i32 main() {
 **Result con must-handle**: el compilador rechaza descartar el Result sin
 inspeccionarlo:
 
-```vex
+```vx
 Result<i32, string> divide(i32 a, i32 b) {
     if (b == 0) return Err("division by zero");
     return Ok(a / b);
@@ -338,10 +338,10 @@ i32 main() {
 
 ## 9. Smart pointers
 
-**[`95_unique_ptr_basico.vx`](../examples_codes_vex/95_unique_ptr_basico.vx)** -
+**[`95_unique_ptr_basico.vx`](../examples_codes_vx/95_unique_ptr_basico.vx)** -
 unique_box:
 
-```vex
+```vx
 i32 main() {
     unique<i32> p = unique_box(42);
     i32 v = *ptr_of(p);
@@ -350,10 +350,10 @@ i32 main() {
 }
 ```
 
-**[`106_virtualalloc_unique.vx`](../examples_codes_vex/106_virtualalloc_unique.vx)** -
+**[`106_virtualalloc_unique.vx`](../examples_codes_vx/106_virtualalloc_unique.vx)** -
 unique_with + deleter custom (Windows API):
 
-```vex
+```vx
 extern "kernel32.dll" {
     fn VirtualAlloc(u64 a, u64 s, u32 t, u32 p) -> u64;
     fn VirtualFree(u64 a, u64 s, u32 t) -> u32;
@@ -376,10 +376,10 @@ i32 main() {
 
 ## 10. Borrow checker
 
-**[`112_borrow_mut_ok.vx`](../examples_codes_vex/112_borrow_mut_ok.vx)** -
+**[`112_borrow_mut_ok.vx`](../examples_codes_vx/112_borrow_mut_ok.vx)** -
 borrow_mut basico:
 
-```vex
+```vx
 i32 main() {
     unique<i32> data = unique_box(0);
     borrow_mut<i32> m = lend_mut(data);
@@ -389,10 +389,10 @@ i32 main() {
 }
 ```
 
-**[`118_borrow_nll.vx`](../examples_codes_vex/118_borrow_nll.vx)** -
+**[`118_borrow_nll.vx`](../examples_codes_vx/118_borrow_nll.vx)** -
 Non-Lexical Lifetimes (NLL):
 
-```vex
+```vx
 i32 main() {
     unique<i32> data = unique_box(42);
     borrow<i32> view = lend(data);
@@ -404,7 +404,7 @@ i32 main() {
 }
 ```
 
-**[`131_borrow_combined_real.vx`](../examples_codes_vex/131_borrow_combined_real.vx)** -
+**[`131_borrow_combined_real.vx`](../examples_codes_vx/131_borrow_combined_real.vx)** -
 patron real: pipeline mut con reborrow encadenado + multiples shared + F4
 elision. Modelando un cache simple.
 
@@ -412,20 +412,20 @@ elision. Modelando un cache simple.
 
 ## 11. Closures y HOF
 
-**[`50_lambda_simple.vx`](../examples_codes_vex/50_lambda_simple.vx)** -
+**[`50_lambda_simple.vx`](../examples_codes_vx/50_lambda_simple.vx)** -
 lambda inline:
 
-```vex
+```vx
 i32 main() {
     fn(i32) -> i32 sq = (x) => x * x;
     return sq(6);  // 36
 }
 ```
 
-**[`51_lambda_captura.vx`](../examples_codes_vex/51_lambda_captura.vx)** -
+**[`51_lambda_captura.vx`](../examples_codes_vx/51_lambda_captura.vx)** -
 captura lexica:
 
-```vex
+```vx
 i32 main() {
     i32 y = 25;
     fn(i32) -> i32 add_y = (x) => x + y;
@@ -433,10 +433,10 @@ i32 main() {
 }
 ```
 
-**[`63_topfn_as_fnvalue.vx`](../examples_codes_vex/63_topfn_as_fnvalue.vx)** -
+**[`63_topfn_as_fnvalue.vx`](../examples_codes_vx/63_topfn_as_fnvalue.vx)** -
 top-level fn promotion:
 
-```vex
+```vx
 i32 add2(i32 a, i32 b) { return a + b; }
 i32 mul2(i32 a, i32 b) { return a * b; }
 
@@ -456,9 +456,9 @@ i32 main() {
 
 ## 12. Async, spawn, futures
 
-**[`43_async_basico.vx`](../examples_codes_vex/43_async_basico.vx)** - @Async:
+**[`43_async_basico.vx`](../examples_codes_vx/43_async_basico.vx)** - @Async:
 
-```vex
+```vx
 @Async
 i64 compute() {
     return 42;
@@ -471,10 +471,10 @@ i32 main() {
 }
 ```
 
-**[`44_spawn_basico.vx`](../examples_codes_vex/44_spawn_basico.vx)** - spawn
+**[`44_spawn_basico.vx`](../examples_codes_vx/44_spawn_basico.vx)** - spawn
 + msgsend:
 
-```vex
+```vx
 i32 main() {
     i64 parent_pid = pid();
     
@@ -487,10 +487,10 @@ i32 main() {
 }
 ```
 
-**[`45_spawn_placement.vx`](../examples_codes_vex/45_spawn_placement.vx)** -
+**[`45_spawn_placement.vx`](../examples_codes_vx/45_spawn_placement.vx)** -
 spawn placement (multi-thread real con `--schedulers N`):
 
-```vex
+```vx
 i32 main() {
     spawn here { /* mismo scheduler */ }
     spawn on(2) { /* scheduler 2 */ }
@@ -502,10 +502,10 @@ i32 main() {
 
 ## 13. Sincronizacion
 
-**[`35_synchronized_basico.vx`](../examples_codes_vex/35_synchronized_basico.vx)** -
+**[`35_synchronized_basico.vx`](../examples_codes_vx/35_synchronized_basico.vx)** -
 monitor:
 
-```vex
+```vx
 class Counter {
     public i32 value = 0;
 }
@@ -525,10 +525,10 @@ i32 main() {
 
 ## 14. Reflexion y AOP
 
-**[`100_reflection_full.vx`](../examples_codes_vex/100_reflection_full.vx)** -
+**[`100_reflection_full.vx`](../examples_codes_vx/100_reflection_full.vx)** -
 reflexion completa:
 
-```vex
+```vx
 class Calculadora {
     public i32 doblar(i32 x) => x * 2;
 }
@@ -544,7 +544,7 @@ i32 main() {
 
 **[AOP con @Aspect]** - BEFORE/AFTER/AROUND:
 
-```vex
+```vx
 class Service {
     public i32 expensive() => 42;
 }
@@ -566,10 +566,10 @@ class Service {
 
 ## 15. FFI: extern y dinamico
 
-**[`85_extern_winapi.vx`](../examples_codes_vex/85_extern_winapi.vx)** - extern
+**[`85_extern_winapi.vx`](../examples_codes_vx/85_extern_winapi.vx)** - extern
 declarativo:
 
-```vex
+```vx
 extern "kernel32.dll" {
     fn GetCurrentProcessId() -> u32;
     fn GetTickCount() -> u32;
@@ -582,9 +582,9 @@ i32 main() {
 }
 ```
 
-**[`86_ffi_runtime.vx`](../examples_codes_vex/86_ffi_runtime.vx)** - FFI runtime:
+**[`86_ffi_runtime.vx`](../examples_codes_vx/86_ffi_runtime.vx)** - FFI runtime:
 
-```vex
+```vx
 i32 main() {
     i64 lib = ffi_open("kernel32.dll");
     i64 fn = ffi_sym(lib, "GetTickCount");
@@ -597,10 +597,10 @@ i32 main() {
 
 ## 16. Excepciones
 
-**[`36_synchronized_exception.vx`](../examples_codes_vex/36_synchronized_exception.vx)** -
+**[`36_synchronized_exception.vx`](../examples_codes_vx/36_synchronized_exception.vx)** -
 try/catch + monitor cleanup:
 
-```vex
+```vx
 class MyExc {
     public i32 code;
     public MyExc(i32 c) { this.code = c; }
@@ -618,7 +618,7 @@ i32 main() {
 
 **Capturar FatalError de OS** (AV / segfault):
 
-```vex
+```vx
 i32 main() {
     try {
         i64* bad = (i64*) 0;
@@ -634,10 +634,10 @@ i32 main() {
 
 ## 17. Colecciones
 
-**[`92_collections_primitive.vx`](../examples_codes_vex/92_collections_primitive.vx)** -
+**[`92_collections_primitive.vx`](../examples_codes_vx/92_collections_primitive.vx)** -
 ArrayList + HashMap + free automatico:
 
-```vex
+```vx
 i32 main() {
     ArrayList xs = arraylist(16);
     xs.push(10); xs.push(20); xs.push(30);
@@ -656,10 +656,10 @@ i32 main() {
 
 ## 18. Strings
 
-**[`76_string_exhaustive.vx`](../examples_codes_vex/76_string_exhaustive.vx)** -
+**[`76_string_exhaustive.vx`](../examples_codes_vx/76_string_exhaustive.vx)** -
 strings completos (UTF-8, interpolacion, multi-alfabeto):
 
-```vex
+```vx
 i32 main() {
     string s = "hola";
     string t = " mundo";
@@ -679,7 +679,7 @@ i32 main() {
 
 **Format specifiers** (interpolacion estilo Python/Rust):
 
-```vex
+```vx
 i32 main() {
     i32 n = 255;
     println("${n:hex}");           // 0x00000000000000FF
@@ -694,10 +694,10 @@ i32 main() {
 
 ## 19. Distribuido
 
-**[`47_rspawn_basico.vx`](../examples_codes_vex/47_rspawn_basico.vx)** - rspawn
+**[`47_rspawn_basico.vx`](../examples_codes_vx/47_rspawn_basico.vx)** - rspawn
 cross-node:
 
-```vex
+```vx
 i32 main() {
     // spawn un proceso en el nodo remoto 0 (registrado con --dist-add-node)
     i64 fut = rspawn(0) {
@@ -715,7 +715,7 @@ Compilar y ejecutar entre 2 procesos:
 ./build/vm --dist-server --dist-port 7789
 
 # Terminal 2: cliente que envia rspawn
-./build/vm --vesta examples_codes_vex/47_rspawn_basico.vx -o /tmp/rsp
+./build/vm --vesta examples_codes_vx/47_rspawn_basico.vx -o /tmp/rsp
 ./build/vm --run /tmp/rsp.velb --dist-port 7790 --dist-add-node 127.0.0.1:7789
 ```
 
@@ -726,10 +726,10 @@ Compilar y ejecutar entre 2 procesos:
 Macros compile-time que generan codigo, capturan DSLs y consultan tipos
 sin overhead runtime. Detalles completos: [Metaprogramacion.md](./VMdoc/Vesta/Metaprogramacion.md).
 
-**[`159_macro_expr_capture.vx`](../examples_codes_vex/159_macro_expr_capture.vx)** -
+**[`159_macro_expr_capture.vx`](../examples_codes_vx/159_macro_expr_capture.vx)** -
 captura raw de codigo arbitrario con `expr`:
 
-```vex
+```vx
 @Macro
 comptime string M_identity(expr code) {
     // `code` recibe el texto verbatim del call site.
@@ -744,10 +744,10 @@ i32 main() {
 }
 ```
 
-**[`160_macro_walk_pchase.vx`](../examples_codes_vex/160_macro_walk_pchase.vx)** -
+**[`160_macro_walk_pchase.vx`](../examples_codes_vx/160_macro_walk_pchase.vx)** -
 DSL real: pointer chase anidado generado en compile-time:
 
-```vex
+```vx
 @Macro
 comptime string walk(expr code) {
     // Parser interno: split por "->", emitir derefs anidados.
@@ -769,10 +769,10 @@ i32 main() {
 El `.vel` emitido contiene exactamente 3 instrucciones `movh` consecutivas,
 una por hop. Sin overhead vs escribir el chase manualmente.
 
-**[`161_macro_ffi_compile_time.vx`](../examples_codes_vex/161_macro_ffi_compile_time.vx)** -
+**[`161_macro_ffi_compile_time.vx`](../examples_codes_vx/161_macro_ffi_compile_time.vx)** -
 FFI a DLLs del sistema en tiempo de compilacion:
 
-```vex
+```vx
 extern "kernel32.dll" {
     fn GetCurrentProcessId() -> u32;
     fn GetTickCount() -> u32;
@@ -803,10 +803,10 @@ Cada compilacion produce un binario distinto (depende del PID + tick del
 compilador). El `.velb` final NO referencia kernel32 -- solo contiene
 `mov rN, <literal>` con el valor calculado al compilar.
 
-**[`162_macro_comptime_data.vx`](../examples_codes_vex/162_macro_comptime_data.vx)** -
+**[`162_macro_comptime_data.vx`](../examples_codes_vx/162_macro_comptime_data.vx)** -
 arrays y "diccionario" via arrays paralelos en compile-time:
 
-```vex
+```vx
 @Macro
 comptime string fib_at(i64 idx) {
     i64 fibs[16] = {0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610};
@@ -856,7 +856,7 @@ builtins cortos (`strlen`, `substr`, `to_str`, `chr`, `ord`, `repeat`,
 `replace`, `contains`, `gensym`) son siempre preferidos a las versiones
 `comptime_*` verbose. Mismo bytecode emitido, codigo ~3x mas corto.
 
-```vex
+```vx
 // Verbose (legacy):
 return comptime_concat("(", comptime_concat(comptime_to_str(n), ")"));
 
@@ -878,7 +878,7 @@ return "(" + to_str(n) + ")";
 
 **Vesta**:
 
-```vex
+```vx
 i64 fib(i64 n) {
     if (n < 2) return n;
     return fib(n - 1) + fib(n - 2);
@@ -915,7 +915,7 @@ print(fib(30))
 
 **Vesta** (Optional builtin SRET, cero heap):
 
-```vex
+```vx
 Optional<i32> find(i32[] arr, i32 t) {
     for (i32 i = 0; i < arr.length; i = i + 1) {
         if (arr[i] == t) return Some(i);
@@ -947,7 +947,7 @@ Optional<Integer> find(int[] arr, int t) {
 
 **Vesta**:
 
-```vex
+```vx
 enum Shape { Circle(f64), Square(f64) }
 
 f64 area(Shape s) {

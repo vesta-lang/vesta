@@ -1870,7 +1870,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 /*   : ademas de externs declarados,
                  * tambien aceptamos "implicit externs" -- nombres
                  * que NO estan declarados como `extern "..."` en
-                 * el .vex pero estan registrados como virtual fns
+                 * el .vx pero estan registrados como virtual fns
                  * bajo `vesta_comptime`.  Esto cubre builtins
                  * como `static_assert` que el usuario no necesita
                  * declarar explicitamente. */

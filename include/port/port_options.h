@@ -96,10 +96,10 @@ enum class ExcMode {
  */
 enum class InstrumentMode {
     None,    ///< Sin instrumentacion (default).
-    Trace,   ///< Emite @c vex_trace_enter/exit en cada funcion.  Imprime
+    Trace,   ///< Emite @c vx_trace_enter/exit en cada funcion.  Imprime
              ///< a stderr con indentacion por depth.  Util para ver el
              ///< flow de ejecucion en debugging.
-    Profile, ///< Emite @c vex_profile_enter/exit que miden tiempo
+    Profile, ///< Emite @c vx_profile_enter/exit que miden tiempo
              ///< (rdtsc o @c clock_gettime) por funcion.  Al exit
              ///< del programa imprime estadisticas por funcion:
              ///< count, total_ns, avg_ns.
@@ -116,11 +116,11 @@ enum class StringMode {
     /// runtime, cero alocacion.
     Raw,
 
-    /// Strings via mini-runtime @c VexString embebido al inicio del .c:
+    /// Strings via mini-runtime @c VxString embebido al inicio del .c:
     ///   typedef struct { uint32_t byte_len; uint32_t code_points; ... }
-    ///   VexString;
+    ///   VxString;
     /// Soporta @c STRMAKE/STRCAT/STREQ/STRLEN/STRRAW/STRGETBYTES con
-    /// helpers @c vex_str_*.  Tracking per-thread de alocaciones via
+    /// helpers @c vx_str_*.  Tracking per-thread de alocaciones via
     /// linked list; warning al exit del thread si quedan blocks vivos.
     /// Default v1 (cubre el 99% de programas Vesta con strings).
     Managed,
@@ -156,12 +156,12 @@ struct PortOptions {
     GcMode gc = GcMode::None;                 ///< Default: no GC, malloc/free.
     ExcMode exc = ExcMode::SetJmp;            ///< Default: setjmp/longjmp.
     TypeStyle types = TypeStyle::StdInt;      ///< Default: stdint.h portatil.
-    StringMode strings = StringMode::Managed; ///< Default: VexString managed.
+    StringMode strings = StringMode::Managed; ///< Default: VxString managed.
     InstrumentMode instrument =
         InstrumentMode::None; ///< Default: sin instrumentacion.
 
     /// Si true, emite comentarios verbose en el codigo generado:
-    /// nombre IR de cada op, source_line del .vex original, anotaciones
+    /// nombre IR de cada op, source_line del .vx original, anotaciones
     /// de los SSA values.  Util para debug del transpiler y para
     /// inspeccionar mapeo IR <-> output.  Coste: ~3x mas grande el output.
     /// Default: true (cuesta 0 si el usuario tiene @c gcc -O3 -s).
@@ -179,11 +179,11 @@ struct PortOptions {
     /// Nombre del modulo de salida.  Se usa como prefijo del simbolo
     /// @c main_<module>() cuando el frontend Vesta emite una funcion
     /// llamada "main" -- evita colision con el @c main() de C.  Si
-    /// vacio, usa @c "vex" como fallback.
+    /// vacio, usa @c "vx" como fallback.
     std::string module_name;
 
-    /// Path completo del archivo .vex original.  Se emite como comentario
-    /// header del archivo generado (@c "// source: foo.vex") para que el
+    /// Path completo del archivo .vx original.  Se emite como comentario
+    /// header del archivo generado (@c "// source: foo.vx") para que el
     /// usuario sepa que fuente produjo este output.  Vacio = sin header.
     std::string source_path;
 
@@ -198,8 +198,8 @@ struct PortOptions {
     /// / @c <stdlib.h> / @c <math.h> automatico.  Los snippets de
     /// runtime que dependen de la libc hosted se omiten; el programador
     /// debe proveer en su codigo:
-    ///   - @c VEX_NORETURN @c "void @c vex_throw(int)"
-    ///   - @c vex_panic_with_str si usa try/catch
+    ///   - @c VX_NORETURN @c "void @c vx_throw(int)"
+    ///   - @c vx_panic_with_str si usa try/catch
     ///   - Bridges propios para print/IO si quiere strings
     /// Usado para programacion de sistemas, bootloaders, kernels
     /// donde no hay libc disponible.
@@ -225,7 +225,7 @@ struct PortOptions {
     ///   - @c __attribute__((const)) en funciones puras detectadas
     ///   - @c __attribute__((cold)) en paths que solo throw/panic
     ///   - @c __builtin_expect en exception checks (rama unlikely)
-    ///   - @c __builtin_unreachable() tras @c vex_throw/longjmp
+    ///   - @c __builtin_unreachable() tras @c vx_throw/longjmp
     ///   - @c __restrict__ en TODOS los pointer params
     ///   - @c __attribute__((always_inline)) en accesors triviales
     /// Default: true (sin cambios en correctness, solo en perf).

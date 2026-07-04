@@ -229,8 +229,8 @@ GC_DBG_TLS GcDebugAtExit g_gc_debug_at_exit;
 //   [fmap+0]  count (u32)   [fmap+4]  pad (u32)   [fmap+8]  off0, off1, ...
 // Solo campos con Type.gc_managed == true (NUNCA unique/shared/raw/prim).
 namespace {
-constexpr uint32_t VEX_TDESC_HDR = 32;          // cabecera antes de la vtable
-constexpr uint32_t VEX_TDESC_MAGIC = 0x44545856u; // 'VXTD' little-endian
+constexpr uint32_t VX_TDESC_HDR = 32;          // cabecera antes de la vtable
+constexpr uint32_t VX_TDESC_MAGIC = 0x44545856u; // 'VXTD' little-endian
 
 // Lee el field-map de un objeto gc<X> AOT a partir de su @p payload (= obj[0],
 // inicio del ObjectHeader).  Devuelve el numero de campos-referencia en
@@ -247,7 +247,7 @@ inline void read_gc_field_map(const uint8_t *payload, bool host_ptr_only,
     uint64_t obj0 = 0;
     std::memcpy(&obj0, payload, 8); // obj[0] = &descriptor + 32
     if (obj0 == 0) return;
-    const uint8_t *desc = reinterpret_cast<const uint8_t *>(obj0) - VEX_TDESC_HDR;
+    const uint8_t *desc = reinterpret_cast<const uint8_t *>(obj0) - VX_TDESC_HDR;
     uint64_t fmap_ptr = 0;
     std::memcpy(&fmap_ptr, desc, 8); // field_map_ptr @ desc+0
     if (fmap_ptr == 0) return;       // clase gc sin campos-referencia
@@ -1245,7 +1245,7 @@ void interp_precise_young_root_cb(void *ctx, uint64_t value, uint8_t kind) {
 
 void GcHeap::scan_interp_young_roots_precise(std::vector<GcHandle> &worklist) {
     // Sin provider (p.ej. GC AOT standalone) o sin stackmaps -> no-op.  En AOT
-    // el nursery queda vacio (vex_gc_alloc usa alloc_pinned -> OldGen), asi que
+    // el nursery queda vacio (vx_gc_alloc usa alloc_pinned -> OldGen), asi que
     // este scan no encuentra nada de todos modos.
     if (root_provider_ == nullptr) return;
 
@@ -1921,7 +1921,7 @@ void GcHeap::minor_gc() {
     } else if (root_provider_ == nullptr && !aot_precise_roots_) {
         // Fallback: modelo previo (todos los handles live = root).  Solo si no
         // hay provider NI modo AOT (defensivo para tests/setups especiales).
-        // En modo AOT vex_gc_alloc usa alloc_pinned (OldGen) -> el nursery
+        // En modo AOT vx_gc_alloc usa alloc_pinned (OldGen) -> el nursery
         // queda vacio -> minor_gc no toca objetos gc<T>; solo major_gc.
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
             if (!handles_[h].live || !handles_[h].addr) continue;

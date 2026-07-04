@@ -292,7 +292,7 @@ class Lexer {
      *        `// @file <path>` (tipicamente al inicio del .vel).
      *
      * El compilador Vesta inserta esa linea en el .vel cuando
-     * --vex-debug esta activo, para que el linker sepa que archivo
+     * --vx-debug esta activo, para que el linker sepa que archivo
      * es la fuente original.  El lexer captura el primer match en
      * skip_whitespace.
      */

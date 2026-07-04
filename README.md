@@ -7,7 +7,7 @@
 
 [![Licencia](https://img.shields.io/badge/licencia-VMProject-blue.svg)](./LICENSE.md)
 [![Estado](https://img.shields.io/badge/estado-interp%20%2B%20JIT%20%2B%20AOT%20nativo-brightgreen.svg)](./doc/ROADMAP.md)
-[![Tests](https://img.shields.io/badge/tests-314%2F314%20PASS-brightgreen.svg)](./tests/vex/)
+[![Tests](https://img.shields.io/badge/tests-314%2F314%20PASS-brightgreen.svg)](./tests/vx/)
 [![JIT](https://img.shields.io/badge/JIT-C1%20geomean%2017.73×%20%2F%20peak%20301×-orange.svg)](./doc/BENCHMARKS.md)
 [![Plataformas](https://img.shields.io/badge/plataformas-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#inicio-r%C3%A1pido)
 
@@ -53,7 +53,7 @@ en el propio Vesta.
 
 ## Ejemplo: cómo se ve Vesta
 
-```vex
+```vx
 // Pattern matching, genéricos, smart pointers y borrow checker en 20 líneas.
 
 enum Result<V, E> {
@@ -83,7 +83,7 @@ i32 main() {
 }
 ```
 
-Más ejemplos completos en [`examples_codes_vex/`](./examples_codes_vex/) (180+
+Más ejemplos completos en [`examples_codes_vx/`](./examples_codes_vx/) (180+
 programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 
 ---
@@ -183,7 +183,7 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 - **VestaShellScript (.vsh)** — lenguaje embebido para scripting del REPL.
 - **Debugger TCP** con protocolo JSON: breakpoints (por addr o `file.vx:line`),
   step/continue, inspección de registros/memoria/stack, GC stats, source-aware.
-- **Diagramas Mermaid** del pipeline: `--diagram-vex/ir/vel/all` para AST, SSA
+- **Diagramas Mermaid** del pipeline: `--diagram-vx/ir/vel/all` para AST, SSA
   IR, bytecode visualizado.
 - **Map file de simbolos** opt-in via `--emit-map` (debug; off por defecto
   porque cuesta ~60% del tiempo del linker).
@@ -244,7 +244,7 @@ Los macros bajan al IR y se ejecutan vía VM con cache persistente y JIT opciona
 **PGO foundation** disponible vía `--profile <path>` que genera `.vprof`
 consumible por el JIT (warm-start) y el compilador AOT.
 
-**Suite de tests E2E**: **314/314 PASS** (`tests/vex/test_vex_e2e.sh`), cubriendo
+**Suite de tests E2E**: **314/314 PASS** (`tests/vx/test_vx_e2e.sh`), cubriendo
 los 180+ ejemplos del repo + 6 tests negativos del borrow checker + 11 tests
 positivos realistas del borrow checker.
 
@@ -383,7 +383,7 @@ Python en hot loops puros (geomean Python: 141× más lento que C).
 
 Detalles + metodología + cómo correr los benchmarks en
 [doc/BENCHMARKS.md](./doc/BENCHMARKS.md). Los **29 workloads** multi-lenguaje
-viven en `examples_codes_vex/benchmark/<bench>/` con `main.vx`, `main.c`,
+viven en `examples_codes_vx/benchmark/<bench>/` con `main.vx`, `main.c`,
 `main.cpp`, `main.py`, `Main.java` y `main.go` cada uno. Runner orquestador:
 `python tools/bench/run_all_benches.py` (incluye **Go (gc)** con su propio
 color; genera `bench_results.json` con `runs_individual`, `stats`
@@ -653,7 +653,7 @@ donde lenguaje, runtime, distribución y herramientas se diseñan juntos:
   bytecode tienen doc autoritativa en español. 
   referencia para futuras decisiones).
 - **Tests no negociables**: 314/314 e2e antes de cada commit. Cada nueva feature
-  ships con su test en `tests/vex/`.
+  ships con su test en `tests/vx/`.
 
 ---
 

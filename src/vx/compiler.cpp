@@ -16,7 +16,7 @@
  */
 
 #include "vx/compiler.h"
-#include "vx/c_header_gen.h" // Fase 4 interop C: vex --emit-header
+#include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
 
 #include "analyze/bigo.h"
 #include "ir/ir_emitter.h"
@@ -319,7 +319,7 @@ CompileResult compile_vx_source(const std::string &source,
         }
         // CPU dispatch Inc 4: @HelperOverride(<helper>).  Debe resolverse
         // ANTES del lowering porque afecta a la construccion de
-        // __vex_memcpy_init (apunta el fp a la fn del usuario, saltando el
+        // __vx_memcpy_init (apunta el fp a la fn del usuario, saltando el
         // dispatch por cpuid).  El map escala a futuros helpers sin tocar el
         // schema; hoy solo "memcpy" es multi-versionado.
         if (!fd->helper_override_target.empty()) {
@@ -397,13 +397,13 @@ CompileResult compile_vx_source(const std::string &source,
     }
     lo.set_sync_impl_overrides(res.sync_enter_override, res.sync_exit_override);
     // CPU dispatch Inc 4: pasar el override de "memcpy" (si lo hay) al
-    // lowering para que __vex_memcpy_init apunte el fp a la fn del usuario.
+    // lowering para que __vx_memcpy_init apunte el fp a la fn del usuario.
     {
         auto it = res.aot_helper_override_syms.find("memcpy");
         if (it != res.aot_helper_override_syms.end())
             lo.set_memcpy_override(it->second);
     }
-    // CPU dispatch Inc 5a: idem para strcmp / strlen (el __vex_strdisp_init
+    // CPU dispatch Inc 5a: idem para strcmp / strlen (el __vx_strdisp_init
     // apunta cada fp a la fn del usuario en lugar del baseline).
     {
         auto it = res.aot_helper_override_syms.find("strcmp");
@@ -425,38 +425,38 @@ CompileResult compile_vx_source(const std::string &source,
     // FN.3: auto-bundle del context-switch de fibra para el JIT.
     // En el path interp/JIT (native_poo == false), `fiber_swapctx` baja al
     // opcode VM SWAPCTX; el interp lo ejecuta directamente, pero el JIT emite
-    // un CALL nativo al primitivo @Naked `__vex_swapctx` (context-switch host)
+    // un CALL nativo al primitivo @Naked `__vx_swapctx` (context-switch host)
     // y `__fiber_trampoline` (arranque de fibra).  Esas dos funciones viven en
-    // stdlib/vex/vex_fiber.vx y el opcode NO las referencia -> no estarian en
+    // stdlib/vx/vx_fiber.vx y el opcode NO las referencia -> no estarian en
     // el .velb del usuario.  Cuando detectamos uso de SWAPCTX, compilamos
-    // vex_fiber.vex (interp/JIT) y fusionamos SOLO esas dos funciones @Naked en
+    // vx_fiber.vx (interp/JIT) y fusionamos SOLO esas dos funciones @Naked en
     // el modulo, para que su IR llegue a la seccion @ir del .velb y el JIT las
     // materialice (find_exe_with_fn -> compile_native_fn).  Son asm puro (sin
     // static_data / globals / native_imports), asi que basta con las funciones.
     // El path AOT (native_poo) tiene su propio auto-bundle en main.cpp; alli
-    // fiber_swapctx baja a CALL __vex_swapctx (no al opcode) -> no entra aqui.
-    // Recursion imposible: vex_fiber.vex DEFINE __vex_swapctx pero NO usa el
+    // fiber_swapctx baja a CALL __vx_swapctx (no al opcode) -> no entra aqui.
+    // Recursion imposible: vx_fiber.vx DEFINE __vx_swapctx pero NO usa el
     // opcode SWAPCTX (usa fiber_switch/asm), asi que no re-dispara el bundle.
     if (!opts.native_poo) {
         bool uses_swapctx = false, defines_swapctx = false;
         for (const auto &f : irmod.functions) {
-            if (f.name == "__vex_swapctx") defines_swapctx = true;
+            if (f.name == "__vx_swapctx") defines_swapctx = true;
             for (const auto &b : f.blocks)
                 for (const auto &ins : b.instrs)
                     if (ins.op == ir::IrOp::SWAPCTX) uses_swapctx = true;
         }
         if (uses_swapctx && !defines_swapctx) {
-            std::vector<std::string> cands = {"stdlib/vex/vex_fiber.vx",
-                                              "../stdlib/vex/vex_fiber.vx",
-                                              "../../stdlib/vex/vex_fiber.vx"};
+            std::vector<std::string> cands = {"stdlib/vx/vx_fiber.vx",
+                                              "../stdlib/vx/vx_fiber.vx",
+                                              "../../stdlib/vx/vx_fiber.vx"};
             const std::string exe = fs::get_executable_path();
             if (!exe.empty()) {
                 std::filesystem::path ed =
                     std::filesystem::path(exe).parent_path();
                 cands.push_back(
-                    (ed / "stdlib" / "vex" / "vex_fiber.vx").string());
+                    (ed / "stdlib" / "vx" / "vx_fiber.vx").string());
                 cands.push_back(
-                    (ed.parent_path() / "stdlib" / "vex" / "vex_fiber.vx")
+                    (ed.parent_path() / "stdlib" / "vx" / "vx_fiber.vx")
                         .string());
             }
             std::string vf_path;
@@ -468,14 +468,14 @@ CompileResult compile_vx_source(const std::string &source,
             if (vf_path.empty()) {
                 res.diagnostics.warning(
                     SourceLoc{mod_name, 0, 0},
-                    "fiber_swapctx: no encuentro stdlib/vex/vex_fiber.vx; el "
+                    "fiber_swapctx: no encuentro stdlib/vx/vx_fiber.vx; el "
                     "context-switch de fibra no estara disponible en JIT");
             } else {
                 std::ifstream vff(vf_path);
                 std::string vf_src((std::istreambuf_iterator<char>(vff)),
                                    std::istreambuf_iterator<char>());
                 CompileOptions vf_opts;
-                vf_opts.module_name = "vex_fiber";
+                vf_opts.module_name = "vx_fiber";
                 vf_opts.opt_level = 2;
                 vf_opts.native_poo = false;
                 vf_opts.asm_target_bits = opts.asm_target_bits;
@@ -489,7 +489,7 @@ CompileResult compile_vx_source(const std::string &source,
                     for (const auto &f : irmod.functions)
                         have.insert(f.name);
                     for (auto &fn : vf_mod.functions) {
-                        if (fn.name != "__vex_swapctx" &&
+                        if (fn.name != "__vx_swapctx" &&
                             fn.name != "__fiber_trampoline")
                             continue;
                         if (have.count(fn.name)) continue;
@@ -551,7 +551,7 @@ CompileResult compile_vx_source(const std::string &source,
 
     // 3.5. (opcional) Volcar el IR pre-optimizacion al campo
     // @c res.ir_text para que el caller pueda inspeccionarlo con la
-    // flag @c --vex-emit-ir / @c CompileOptions::dump_ir.  Util para
+    // flag @c --vx-emit-ir / @c CompileOptions::dump_ir.  Util para
     // verificar que el frontend produce SSA correcto (PHI insertado
     // tras if/else, CALLCLOSURE con func_ptr+env, etc.) antes de
     // que el optimizador y el regalloc transformen el codigo.
@@ -702,7 +702,7 @@ CompileResult compile_vx_source(const std::string &source,
     // su IR completo (con asm_reg_bindings) viaja en la seccion @ir.  El
     // loader las eager-compila a codigo nativo (JIT activo por defecto,
     // threshold 1500); el cuerpo bytecode-trap NUNCA se ejecuta bajo JIT.
-    // Sin flags: `vm --vex prog.vex -o prog && vm --run prog.velb`.
+    // Sin flags: `vm --vx prog.vx -o prog && vm --run prog.velb`.
     //
     // Phase AS inc.5g: PERO si el inline-asm liga un registro VECTORIAL
     // (register("xmm0"/"ymm0"/"zmm0")), el JIT v1 no lo soporta (el regalloc
@@ -721,7 +721,7 @@ CompileResult compile_vx_source(const std::string &source,
                             "el backend JIT todavia.  Usa el patron de memoria "
                             "(puntero GP + registro vectorial interno como "
                             "scratch; ver "
-                            "examples_codes_vex/asm/06_sse2_paddd) "
+                            "examples_codes_vx/asm/06_sse2_paddd) "
                             "o compila con --port c.");
                 }
             }

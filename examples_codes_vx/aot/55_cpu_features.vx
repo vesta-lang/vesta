@@ -1,0 +1,17 @@
+// CPU dispatch (cimiento): deteccion de features de la CPU via cpuid al
+// arranque.  El helper sintetico __vx_cpu_init() corre cpuid (leaf 1 + leaf 7)
+// UNA VEZ antes de main y empaqueta un bitmask en el global __vx_cpu_features.
+// El builtin cpu_features() lee ese bitmask.
+//
+// Bit layout: bit0=SSE2 bit1=SSE4.2 bit2=POPCNT bit3=AVX bit4=AVX2 bit5=BMI1
+// bit6=BMI2 bit7=AVX512F bit8=ERMS.
+//
+// SSE2 (bit0) es parte del ABI base x86-64 -> SIEMPRE presente.  Asi el test
+// es determinista: 42 si SSE2 se detecto (siempre), 0 si la deteccion fallo.
+
+i32 main() {
+    u64 f = cpu_features();
+    // bit0 = SSE2: garantizado en cualquier x86-64.
+    i32 has_sse2 = (i32)((f & 1) != 0);
+    return 42 * has_sse2;   // 42
+}

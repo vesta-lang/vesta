@@ -1,6 +1,6 @@
 // Modulo libreria que EXPORTA plantillas genericas + conceptos + una
 // especializacion, para validar genericos cross-module (#cross-module-generics).
-// Las plantillas viajan en el .vexi como texto fuente y el importador las
+// Las plantillas viajan en el .vxi como texto fuente y el importador las
 // re-parsea e inyecta para monomorphizar en su propio modulo.
 
 // Struct generico con metodo generico.

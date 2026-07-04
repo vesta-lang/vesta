@@ -1,0 +1,623 @@
+/**
+ * @file vx_async.vx
+ * @brief Runtime de asincronia cooperativo para Vex AOT (tiers bare/embed),
+ *        SIN libc.
+ *
+ * Auto-bundle: el driver `-m aot` fusiona este modulo cuando el programa usa
+ * `spawn`/`future`/`await`/`fulfill`/`msgsend` y no define las primitivas el
+ * mismo (mismo patron que vx_io.vx / vx_sync.vx / vx_exc.vx).
+ *
+ * @par Modelo
+ * Scheduler COOPERATIVO (asincronia), NO hilos 1:1 del SO.  `spawn` ENCOLA una
+ * tarea; el bloqueo (`await`) BOMBEA la cola hasta que el future se resuelve.
+ * Es el mismo modelo del interprete/JIT (tareas verdes sobre un scheduler),
+ * portado a nativo.
+ *
+ * Fase 1-2 (single-thread, run-to-completion):
+ *   - Las tareas que NO se bloquean a si mismas (computar + fulfill, p.ej. los
+ *     helpers @Async) corren ENTERAS al despacharse -> sin context-switch.
+ *   - `await` en main bombea la cola hasta que el future este listo.
+ *   - Despacho via LLAMADA INDIRECTA del puntero a funcion: el body se guarda
+ *     como dir (i64); pump lo castea a `fn(...)` y lo llama (CALLCLOSURE) ->
+ *     convencion natural del sistema.  Args por PUNTERO (argv): cualquier argc
+ *     hasta el maximo del lenguaje (R1..R12 = 12 args), sin trampolin ni el
+ *     limite de 4 args de Win64.
+ *
+ * Fases siguientes: fibras para tareas que se bloquean entre si / ping-pong
+ * (3), thread pool real para paralelismo (4).
+ *
+ * @par Multiplataforma
+ * Este modulo es Vex puro (sin FFI ni inline-asm) -> identico en PE y ELF y en
+ * cualquier arquitectura que soporte el codegen.  Toda la dependencia de
+ * plataforma (TID, atomicos) vive en vx_sync.vx.
+ *
+ * @par Fase 3 (F3): suspension cooperativa via fibras
+ * Ademas del scheduler run-to-completion de arriba (que se preserva intacto: una
+ * tarea que NUNCA cede corre entera, sin fibra ni context-switch), F3 anade un
+ * scheduler SUSPENDIBLE construido sobre el primitivo @c fiber_switch de
+ * @c vx_fiber: una tarea corriendo sobre su propia pila de fibra puede CEDER
+ * (@ref vasync_yield) al bucle del scheduler y ser REANUDADA despues, sin perder
+ * su estado.  Es LAZY: solo las tareas creadas con @ref vasync_spawn_fiber tienen
+ * una fibra (pila host + ctx); las tareas run-to-completion no alocan nada.  El
+ * bucle del scheduler (@ref vasync_run) corre en la pila VM/host normal y NO cede
+ * (nucleo no-yieldable: elegir-siguiente-tarea nunca esta dentro de una fibra que
+ * ceda -> sin reentrancia).
+ *
+ * FRONTERA NATIVO/VM (critica):  el CUERPO de una tarea con fibra corre SIEMPRE
+ * como codigo NATIVO sobre su pila host, luego debe ser una fn @c \@Naked (asm
+ * puro).  @ref vasync_yield tambien es @c \@Naked: una fn Vex NORMAL llamada
+ * desde un cuerpo de fibra en @c -m vm falla (el codigo nativo sobre la pila host
+ * no puede reentrar al interprete, que asume un frame VM).  Por eso el yield se
+ * escribe en asm (lee los ctx globales via rip-relative y salta a fiber_switch).
+ *
+ * @note Los primitivos de fibra (fiber_switch/fiber_init/fiber_stack_alloc/free)
+ *       se INLINEAN aqui (identicos a stdlib/vx/vx_fiber.vx) en vez de
+ *       importarlos.  Razon: el auto-bundle de @c -m aot compila vx_async como
+ *       modulo AUTOCONTENIDO (single-module @c compile_vx_source, sin resolucion
+ *       de imports) -> un @c import "vx_fiber" no cruzaria en esa ruta y romperia
+ *       el bundle de CUALQUIER programa async.  Es el mismo enfoque que el test
+ *       230 (F1).  vx_fiber.vx sigue siendo el modulo canonico para uso directo.
+ */
+
+// ---------------------------------------------------------------------------
+// Parametros de capacidad (comptime).  VASYNC_QCAP debe ser potencia de 2
+// (el ring usa la mascara VASYNC_QMASK = QCAP-1 para el wraparound).
+// ---------------------------------------------------------------------------
+comptime i64 VASYNC_QCAP  = 256;  ///< Tareas en vuelo simultaneas (ring).
+comptime i64 VASYNC_QMASK = 255;  ///< Mascara de wraparound (QCAP-1).
+comptime i64 VASYNC_MAXARG = 12;  ///< Args por tarea (R1..R12 = max del lenguaje).
+comptime i64 VASYNC_MAXFUT = 256; ///< Futures vivos simultaneos.
+comptime i64 VASYNC_MAXPID = 256; ///< Mailboxes por pid.
+
+// ---------------------------------------------------------------------------
+// Estado global (BSS, zero-init).  Los tamanños de array deben coincidir con
+// las constantes de arriba (QCAP=256, QCAP*MAXARG=3072, MAXFUT=256, MAXPID=256).
+// ---------------------------------------------------------------------------
+i64[256] __vasync_q;            ///< Cola de tareas: punteros a la fn del body.
+i64[3072] __vasync_q_args;      ///< Args por tarea: [slot*MAXARG + i].
+i64[256] __vasync_q_pid;        ///< Pid de cada tarea encolada.
+i64 __vasync_q_head = 0;        ///< Indice de cabeza del ring.
+i64 __vasync_q_tail = 0;        ///< Indice de cola del ring.
+i64 __vasync_q_count = 0;       ///< Tareas pendientes.
+i64 __vasync_next_pid = 1;      ///< Contador de pid (siempre != 0).
+i64 __vasync_current_pid = 0;   ///< Pid de la tarea en ejecucion (0 = main).
+
+i64[256] __vasync_fut_ready;    ///< 0 = PENDING, 1 = RESUELTO.
+i64[256] __vasync_fut_result;   ///< Valor del future resuelto.
+i64 __vasync_fut_n = 0;         ///< Futures asignados.
+
+i64[256] __vasync_mbox_val;     ///< Mailbox por pid (1 slot; suficiente Fase 2).
+i64[256] __vasync_mbox_has;     ///< 1 = hay mensaje pendiente.
+
+// ---------------------------------------------------------------------------
+// F3: estado del scheduler SUSPENDIBLE (tareas con fibra).  Todo host_ptr / int:
+// las celdas de contexto (@c FiberCtx = 1 qword) las alocamos con
+// fiber_stack_alloc / malloc del host, nunca en el stack VM (el switch corre
+// nativo y necesita direcciones host reales).
+//
+//   __vasync_sched_ctx : host_ptr al FiberCtx del BUCLE del scheduler (donde
+//                        vuelve una tarea al ceder).  Lo rellena vasync_run.
+//   __vasync_cur_ctx   : host_ptr al FiberCtx de la tarea EN EJECUCION (a donde
+//                        el scheduler salto por ultima vez).  vasync_yield lee
+//                        este + sched_ctx para volver.
+//   __vasync_cur_done  : la tarea en ejecucion se marco terminada (@ref
+//                        vasync_task_done).  El scheduler lo lee tras cada switch
+//                        para no reanudarla.
+// ---------------------------------------------------------------------------
+u64 __vasync_sched_ctx = 0;     ///< FiberCtx del bucle del scheduler (host_ptr).
+u64 __vasync_cur_ctx = 0;       ///< FiberCtx de la tarea en ejecucion (host_ptr).
+i64 __vasync_cur_done = 0;      ///< 1 si la tarea en ejecucion termino.
+/// Id de la FIBRA en ejecucion (0 = main / sin fibra).  vasync_run lo fija a
+/// (slot+1) antes de switchear hacia una fibra y lo resetea a 0 al volver (al
+/// ceder o terminar).  Lo LEE cross-modulo el lock cooperativo de vx_sync
+/// (@SyncImpl) para saber que fibra posee un monitor.  Sin scheduler de fibras
+/// (run-to-completion o main) queda en 0 -> el fast-path del lock nunca ve
+/// contienda (single-thread), asi el override es correcto tambien sin fibras.
+i64 __vasync_current_fiber = 0;
+
+// Tabla de fibras (una entrada por tarea suspendible viva).  VASYNC_FIBCAP
+// entradas; cada una: ctx (host_ptr), stack_top (host_ptr, para liberar),
+// alive (1 mientras no termine).  Contiguas para localidad del bucle.
+comptime i64 VASYNC_FIBCAP  = 64;   ///< Fibras suspendibles simultaneas.
+comptime u64 VASYNC_FIBSTK  = 65536; ///< Pila por fibra (64 KiB, sin guard page).
+u64[64] __vasync_fib_ctx;       ///< FiberCtx de cada fibra (host_ptr, 1 qword).
+u64[64] __vasync_fib_stk;       ///< Cima de la pila host de cada fibra.
+i64[64] __vasync_fib_alive;     ///< 1 mientras la fibra no ha terminado.
+i64 __vasync_fib_n = 0;         ///< Fibras registradas (indice de la siguiente).
+
+// ---------------------------------------------------------------------------
+// spawn.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Encola una tarea con sus argumentos (argv).
+ * @param body Direccion de la funcion del body de la tarea (puntero a funcion).
+ * @param argc Numero de argumentos (se copian `min(argc, VASYNC_MAXARG)`).
+ * @param argv Puntero al array de argumentos (qwords).
+ * @return pid de la tarea (>0), o 0 si la cola esta llena.
+ *
+ * Copia hasta VASYNC_MAXARG qwords al slot de la tarea y rellena el resto a 0
+ * (el body ignora los que no declare).
+ */
+i64 __vx_spawn_argv(i64 body, i64 argc, i64* argv) {
+    if (__vasync_q_count >= VASYNC_QCAP) {
+        return 0; // cola llena
+    }
+    i64 t = __vasync_q_tail;
+    i64 pid = __vasync_next_pid;
+    __vasync_q[t] = body;
+    __vasync_q_pid[t] = pid;
+    i64 base = t * VASYNC_MAXARG;
+    i64 n = argc;
+    if (n > VASYNC_MAXARG) {
+        n = VASYNC_MAXARG;
+    }
+    i64 i = 0;
+    while (i < n) {
+        __vasync_q_args[base + i] = argv[i];
+        i = i + 1;
+    }
+    while (i < VASYNC_MAXARG) {
+        __vasync_q_args[base + i] = 0; // relleno
+        i = i + 1;
+    }
+    __vasync_q_tail = (t + 1) & VASYNC_QMASK;
+    __vasync_q_count = __vasync_q_count + 1;
+    __vasync_next_pid = __vasync_next_pid + 1;
+    return pid;
+}
+
+/**
+ * @brief Encola una tarea sin argumentos.
+ * @param body Direccion de la funcion del body.
+ * @return pid de la tarea (>0), o 0 si la cola esta llena.
+ */
+i64 __vx_spawn(i64 body) {
+    return __vx_spawn_argv(body, 0, &__vasync_q_args[0]); // argv no se lee
+}
+
+// ---------------------------------------------------------------------------
+// futures.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Reserva un slot de future en estado PENDING.
+ * @return Handle del future (>=0), o 0 si no hay slots.
+ */
+i64 __vx_future_new() {
+    i64 h = __vasync_fut_n;
+    if (h >= VASYNC_MAXFUT) {
+        return 0;
+    }
+    __vasync_fut_ready[h] = 0;
+    __vasync_fut_result[h] = 0;
+    __vasync_fut_n = __vasync_fut_n + 1;
+    return h;
+}
+
+/**
+ * @brief Resuelve un future con un valor (lo marca RESUELTO).
+ * @param h   Handle del future.
+ * @param val Valor de resolucion.
+ */
+void __vx_fulfill(i64 h, i64 val) {
+    if (h < 0) {
+        return;
+    }
+    if (h >= VASYNC_MAXFUT) {
+        return;
+    }
+    __vasync_fut_result[h] = val;
+    __vasync_fut_ready[h] = 1;
+}
+
+// ---------------------------------------------------------------------------
+// scheduler (pump / await).
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Ejecuta una tarea de la cola (run-to-completion).
+ * @return 1 si ejecuto una tarea, 0 si la cola estaba vacia.
+ *
+ * Despacho via llamada indirecta: castea el body (dir) a `fn(...)` y lo llama
+ * (CALLCLOSURE).  Los argumentos se pasan por la convencion natural (R1..R12);
+ * el body ignora los que no declare.  Establece `__vasync_current_pid` al pid
+ * de la tarea durante su ejecucion y lo restaura al terminar.
+ */
+i64 __vasync_pump_one() {
+    if (__vasync_q_count <= 0) {
+        return 0;
+    }
+    i64 h = __vasync_q_head;
+    i64 body = __vasync_q[h];
+    i64 base = h * VASYNC_MAXARG;
+    i64 a0 = __vasync_q_args[base + 0];
+    i64 a1 = __vasync_q_args[base + 1];
+    i64 a2 = __vasync_q_args[base + 2];
+    i64 a3 = __vasync_q_args[base + 3];
+    i64 a4 = __vasync_q_args[base + 4];
+    i64 a5 = __vasync_q_args[base + 5];
+    i64 a6 = __vasync_q_args[base + 6];
+    i64 a7 = __vasync_q_args[base + 7];
+    i64 a8 = __vasync_q_args[base + 8];
+    i64 a9 = __vasync_q_args[base + 9];
+    i64 a10 = __vasync_q_args[base + 10];
+    i64 a11 = __vasync_q_args[base + 11];
+    i64 saved_pid = __vasync_current_pid;
+    __vasync_current_pid = __vasync_q_pid[h]; // contexto de la tarea
+    __vasync_q_head = (h + 1) & VASYNC_QMASK;
+    __vasync_q_count = __vasync_q_count - 1;
+    // Llamada indirecta al body (CALLCLOSURE).  El cast (fn) construye el
+    // function value {body, env=0}.
+    fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64 fp =
+        (fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64)
+            body;
+    fp(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11); // corre la tarea
+    __vasync_current_pid = saved_pid; // restaurar (main = 0)
+    return 1;
+}
+
+/**
+ * @brief Bloquea hasta que el future @p h este resuelto, bombeando la cola.
+ * @param h Handle del future.
+ * @return Valor del future.
+ *
+ * Modelo single-thread: si el future esta PENDING, ejecuta tareas encoladas
+ * hasta resolverlo.  Si la cola se vacia y sigue PENDING no hay quien lo
+ * resuelva (deadlock logico); devuelve el valor actual (0) sin colgar.
+ */
+i64 __vx_await(i64 h) {
+    while (__vasync_fut_ready[h] == 0) {
+        i64 r = __vasync_pump_one();
+        if (r == 0) {
+            break; // cola vacia y future PENDING -> no hay resolvedor
+        }
+    }
+    return __vasync_fut_result[h];
+}
+
+// ---------------------------------------------------------------------------
+// mailbox (msgsend / msgrecv / pid).
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Deposita un mensaje en la mailbox de un pid.
+ * @param pid Pid destino.
+ * @param val Valor del mensaje.
+ * @return 1 si se deposito, 0 si el pid es invalido.
+ * @note Mailbox de 1 slot por pid (Fase 2).  En el modelo single-thread main
+ *       hace el setup (spawn + msgsend) ANTES de bombear, asi cuando la tarea
+ *       corre su mensaje ya esta -> msgrecv no bloquea.
+ */
+i32 __vx_msgsend(i64 pid, i64 val) {
+    if (pid < 0) {
+        return 0;
+    }
+    if (pid >= VASYNC_MAXPID) {
+        return 0;
+    }
+    __vasync_mbox_val[pid] = val;
+    __vasync_mbox_has[pid] = 1;
+    return 1;
+}
+
+/**
+ * @brief Lee (y consume) el mensaje de la mailbox de la TAREA ACTUAL.
+ * @return Valor del mensaje, o 0 si no hay / pid invalido.
+ */
+i64 __vx_msgrecv() {
+    i64 pid = __vasync_current_pid;
+    if (pid < 0) {
+        return 0;
+    }
+    if (pid >= VASYNC_MAXPID) {
+        return 0;
+    }
+    i64 v = __vasync_mbox_val[pid];
+    __vasync_mbox_has[pid] = 0; // consumido
+    return v;
+}
+
+/**
+ * @brief Pid de la tarea en ejecucion.
+ * @return Pid actual (0 = main).
+ */
+i64 __vx_pid() {
+    return __vasync_current_pid;
+}
+
+// ===========================================================================
+//  F3: primitivos de fibra INLINEADOS (identicos a stdlib/vx/vx_fiber.vx).
+//  Nombres con prefijo __vasync_ para no chocar con un vx_fiber importado por
+//  el programa de usuario.  Ver la nota del encabezado sobre por que se inlinean.
+// ===========================================================================
+
+// fiber_switch: salva el contexto actual en *from, carga el de *to.
+// SysV: args rdi/rsi.  Win64: rcx/rdx.  noinfer: primitivo HOST_LEAF puro.
+@Target("!os:windows")
+@Naked void __vasync_fiber_switch(u64 from_ctx, u64 to_ctx) {
+    asm volatile noinfer {
+        push rbp
+        push rbx
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rdi], rsp
+        mov rsp, [rsi]
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbx
+        pop rbp
+        ret
+    }
+}
+@Target("os:windows")
+@Naked void __vasync_fiber_switch(u64 from_ctx, u64 to_ctx) {
+    asm volatile noinfer {
+        push rbp
+        push rbx
+        push rdi
+        push rsi
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rcx], rsp
+        mov rsp, [rdx]
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rsi
+        pop rdi
+        pop rbx
+        pop rbp
+        ret
+    }
+}
+
+// Trampolin de arranque: arg (rbx) -> 1er argumento del ABI; jmp entry (r12).
+@Target("!os:windows")
+@Naked void __vasync_fiber_trampoline() {
+    asm volatile noinfer {
+        mov rdi, rbx
+        jmp r12
+    }
+}
+@Target("os:windows")
+@Naked void __vasync_fiber_trampoline() {
+    asm volatile noinfer {
+        mov rcx, rbx
+        sub rsp, 32
+        jmp r12
+    }
+}
+
+// Trampa por si un cuerpo de tarea retornara (no ocurre: usan vasync_task_done).
+@Naked void __vasync_fiber_exit() {
+    asm volatile noinfer {
+    __vasync_fexit_loop:
+        hlt
+        jmp __vasync_fexit_loop
+    }
+}
+
+// fiber_init: prepara la pila para que el 1er switch arranque entry(arg).
+@Target("!os:windows")
+void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
+    u64 base = (top & ~((u64)15)) - 8 * 8;   // 6 saved + 2 retaddr
+    u64* s = (u64*)base;
+    s[0] = 0;      // r15
+    s[1] = 0;      // r14
+    s[2] = 0;      // r13
+    s[3] = entry;  // r12 = entry
+    s[4] = arg;    // rbx = arg
+    s[5] = 0;      // rbp
+    s[6] = (u64)(cfn() -> void) __vasync_fiber_trampoline;
+    s[7] = (u64)(cfn() -> void) __vasync_fiber_exit;
+    u64* c = (u64*)ctx; c[0] = base;
+}
+@Target("os:windows")
+void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
+    u64 base = (top & ~((u64)15)) - 10 * 8;  // 8 saved + 2 retaddr
+    u64* s = (u64*)base;
+    s[0] = 0;      // r15
+    s[1] = 0;      // r14
+    s[2] = 0;      // r13
+    s[3] = entry;  // r12 = entry
+    s[4] = 0;      // rsi
+    s[5] = 0;      // rdi
+    s[6] = arg;    // rbx = arg
+    s[7] = 0;      // rbp
+    s[8] = (u64)(cfn() -> void) __vasync_fiber_trampoline;
+    s[9] = (u64)(cfn() -> void) __vasync_fiber_exit;
+    u64* c = (u64*)ctx; c[0] = base;
+}
+
+// Pila de fibra en memoria host (malloc): valida en los 3 modos.  Devuelve cima.
+u64 __vasync_fiber_stack_alloc(u64 size) {
+    u64 base = (u64)malloc(size);
+    if (base == 0) return 0;
+    return base + size;   // cima (crece hacia abajo)
+}
+void __vasync_fiber_stack_free(u64 top, u64 size) {
+    free((i64*)(top - size));
+}
+
+// ===========================================================================
+//  F3: scheduler SUSPENDIBLE (tareas con fibra).  vasync_yield / spawn_fiber /
+//  run.  Construido sobre los primitivos de fibra inlineados de arriba.  El
+//  scheduler run-to-completion de mas arriba se conserva intacto.
+// ===========================================================================
+
+/**
+ * @brief Cede la CPU de la tarea (fibra) actual al bucle del scheduler.
+ *
+ * @c \@Naked por necesidad: se llama DESDE el cuerpo de una tarea, que corre como
+ * codigo NATIVO sobre su pila de fibra host.  Una fn Vex normal fallaria en
+ * @c -m vm (no se puede reentrar al interprete desde ese contexto).  Lee los
+ * FiberCtx globales via rip-relative (bug 198, simbolos del MISMO modulo) y salta
+ * a @c fiber_switch(cur, sched) -> el control vuelve al bucle del scheduler justo
+ * tras el @c fiber_switch que arranco/reanudo esta tarea.  Cuando el scheduler
+ * vuelva a switchear hacia esta fibra, la ejecucion continua tras el @c call a
+ * vasync_yield.
+ *
+ * SysV: args de fiber_switch en rdi/rsi.  Win64: rcx/rdx.
+ */
+@Target("!os:windows")
+@Naked public void vasync_yield() {
+    asm volatile noinfer {
+        mov rdi, [__vasync_cur_ctx]
+        mov rsi, [__vasync_sched_ctx]
+        jmp __vasync_fiber_switch
+    }
+}
+@Target("os:windows")
+@Naked public void vasync_yield() {
+    asm volatile noinfer {
+        mov rcx, [__vasync_cur_ctx]
+        mov rdx, [__vasync_sched_ctx]
+        jmp __vasync_fiber_switch
+    }
+}
+
+/**
+ * @brief Marca terminada la tarea (fibra) actual y cede definitivo al scheduler.
+ *
+ * El cuerpo de una tarea con fibra DEBE llamar a esto en vez de retornar: si
+ * retornara, el @c ret caeria en @c __fiber_exit (trampa hlt).  Marca
+ * @c __vasync_cur_done y cede; el scheduler ve la marca y NO reanuda la fibra.
+ *
+ * @c \@Naked por la misma razon que @ref vasync_yield.  Escribe la marca via
+ * rip-relative y salta a fiber_switch (no retorna).
+ *
+ * @note La marca se escribe con `mov qword [global], 1` (store de INMEDIATO a
+ *       un global rip-relative).  El reloc del disp32 en la forma
+ *       `mov [rip+disp32], imm32` ya es correcto en los tres modos (el disp se
+ *       localiza por disp_offset, no por fin-de-instruccion, y el addend
+ *       compensa los bytes del imm).
+ */
+@Target("!os:windows")
+@Naked public void vasync_task_done() {
+    asm volatile noinfer {
+        mov qword [__vasync_cur_done], 1
+        mov rdi, [__vasync_cur_ctx]
+        mov rsi, [__vasync_sched_ctx]
+        jmp __vasync_fiber_switch
+    }
+}
+@Target("os:windows")
+@Naked public void vasync_task_done() {
+    asm volatile noinfer {
+        mov qword [__vasync_cur_done], 1
+        mov rcx, [__vasync_cur_ctx]
+        mov rdx, [__vasync_sched_ctx]
+        jmp __vasync_fiber_switch
+    }
+}
+
+/**
+ * @brief Crea una tarea SUSPENDIBLE (con fibra) lista para el scheduler F3.
+ * @param body Direccion de la fn @c \@Naked del cuerpo de la tarea.  Recibe
+ *             @p arg en el 1er registro del ABI (rdi/rcx via el trampolin).
+ * @param arg  Argumento que se pasa al cuerpo (host_ptr al estado de la tarea).
+ * @return Indice de la fibra (>=0), o -1 si no hay slots / fallo de pila.
+ *
+ * Aloca una pila host (fiber_stack_alloc) + un FiberCtx (1 qword en host) y lo
+ * inicializa con fiber_init para que el 1er switch arranque @c body(@p arg) sobre
+ * esa pila.  LAZY: solo las tareas creadas asi tienen fibra; el resto del runtime
+ * (spawn/future/await run-to-completion) no aloca nada.
+ */
+public i64 vasync_spawn_fiber(i64 body, i64 arg) {
+    i64 idx = __vasync_fib_n;
+    if (idx >= VASYNC_FIBCAP) {
+        return -1;   // sin slots
+    }
+    u64 top = __vasync_fiber_stack_alloc(VASYNC_FIBSTK);
+    if (top == 0) {
+        return -1;   // sin memoria de pila
+    }
+    // FiberCtx = 1 qword host.  Lo alocamos con malloc (host_ptr valido en los 3
+    // modos, igual que las pilas).
+    u64 ctx = (u64)malloc(8);
+    if (ctx == 0) {
+        __vasync_fiber_stack_free(top, VASYNC_FIBSTK);
+        return -1;
+    }
+    __vasync_fiber_init(ctx, top, (u64)body, (u64)arg);
+    __vasync_fib_ctx[idx] = ctx;
+    __vasync_fib_stk[idx] = top;
+    __vasync_fib_alive[idx] = 1;
+    __vasync_fib_n = idx + 1;
+    return idx;
+}
+
+/**
+ * @brief Bucle del scheduler suspendible: reparte quantums en round-robin.
+ *
+ * Nucleo NO-YIELDABLE (corre en la pila VM/host, nunca cede): mientras quede
+ * alguna fibra viva, da un quantum a cada fibra viva en orden (fiber_switch hacia
+ * ella); cuando la fibra cede vuelve aqui.  Si la fibra se marco terminada
+ * (@ref vasync_task_done), la baja (alive=0) y libera su pila+ctx.  Termina
+ * cuando todas las fibras han terminado.
+ *
+ * El FiberCtx del scheduler (@c __vasync_sched_ctx) se aloja en una celda host
+ * (malloc) porque el fiber_switch lo escribe desde codigo nativo.
+ *
+ * @return Numero de fibras que corrieron (informativo).
+ */
+public i64 vasync_run() {
+    i64 total = __vasync_fib_n;
+    if (total <= 0) {
+        return 0;
+    }
+    // FiberCtx del bucle en host (el switch lo escribe nativo).
+    u64 sctx = (u64)malloc(8);
+    if (sctx == 0) {
+        return 0;
+    }
+    __vasync_sched_ctx = sctx;
+
+    i64 live = 0;
+    i64 j = 0;
+    while (j < total) {
+        if (__vasync_fib_alive[j] == 1) {
+            live = live + 1;
+        }
+        j = j + 1;
+    }
+
+    while (live > 0) {
+        i64 i = 0;
+        while (i < total) {
+            if (__vasync_fib_alive[i] == 1) {
+                __vasync_cur_ctx = __vasync_fib_ctx[i];
+                __vasync_cur_done = 0;
+                // Fiber-id de la tarea en ejecucion (slot+1; 0 reservado a main)
+                // para el lock cooperativo cross-modulo (vx_sync @SyncImpl).
+                __vasync_current_fiber = i + 1;
+                // Dar un quantum a la fibra i.  Al ceder (o terminar) vuelve aqui.
+                __vasync_fiber_switch(__vasync_sched_ctx, __vasync_fib_ctx[i]);
+                // De vuelta en el scheduler: ninguna fibra corre -> id = main.
+                __vasync_current_fiber = 0;
+                if (__vasync_cur_done == 1) {
+                    __vasync_fib_alive[i] = 0;
+                    __vasync_fiber_stack_free(__vasync_fib_stk[i], VASYNC_FIBSTK);
+                    free((i64*)__vasync_fib_ctx[i]);
+                    live = live - 1;
+                }
+            }
+            i = i + 1;
+        }
+    }
+
+    free((i64*)sctx);
+    __vasync_sched_ctx = 0;
+    __vasync_cur_ctx = 0;
+    // Reset del registro de fibras para un posible siguiente run.
+    __vasync_fib_n = 0;
+    return total;
+}

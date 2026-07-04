@@ -3195,7 +3195,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Consecuencia: en un slot del slab de 16 bytes, escribir
         // `buf[3]` con qword corrompia los bytes 12-19 (4 bytes fuera
         // del slot, en el slot vecino).  Repro:
-        // `examples_codes_vex/59_arraylist.vex`.
+        // `examples_codes_vx/59_arraylist.vx`.
         //
         // Fix: SIEMPRE aplicar sufijo segun ins.type, incluso cuando
         // el reg es scratch del spill (r14/r13).  La VM ya soporta

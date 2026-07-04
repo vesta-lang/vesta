@@ -1476,8 +1476,8 @@ class GcHeap {
      * @brief Fija el frame Vesta de ENTRADA para el WALK POR TAMANO DE FRAME del
      *        scan preciso de AOT.
      *
-     * Lo captura cada runtime-entry del GC que puede colectar (vex_gc_collect,
-     * vex_gc_finalize_all) EN LA FRONTERA C<-Vesta: @p pc es la direccion de
+     * Lo captura cada runtime-entry del GC que puede colectar (vx_gc_collect,
+     * vx_gc_finalize_all) EN LA FRONTERA C<-Vesta: @p pc es la direccion de
      * retorno al frame Vesta llamador (dentro de la funcion nativa que llamo al
      * GC) y @p sp es el RSP de ese frame justo antes del @c call.  A partir de
      * ese par, @c scan_jit_roots_precise (en modo AOT) sube por la pila usando

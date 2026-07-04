@@ -61,7 +61,7 @@ DTYPE_INFO = {
     "i16": {"sz": 2, "ia": "(i16)1", "ib": "(i16)2", "ic": "(i16)0"},
 }
 
-VEX_TEMPLATE = """\
+VX_TEMPLATE = """\
 // Generado por tools/bench_vectorize.py -- benchmark de auto-vectorizacion.
 f64 kernel({dt}* a, {dt}* b, {dt}* c, i32 n, i32 reps) {{
     f64 s = 0.0;
@@ -106,9 +106,9 @@ def extract_r00(out):
     return m.group(1).lstrip("0") or "0" if m else None
 
 
-def compile_variant(vm, vex_path, out_base, env):
-    """Compila vex_path -> out_base.velb con el env del modo.  Devuelve el .velb."""
-    rc, out = run([vm, "--vex", vex_path, "-o", out_base], env=env)
+def compile_variant(vm, vx_path, out_base, env):
+    """Compila vx_path -> out_base.velb con el env del modo.  Devuelve el .velb."""
+    rc, out = run([vm, "--vx", vx_path, "-o", out_base], env=env)
     velb = out_base + ".velb"
     if rc != 0 or not os.path.exists(velb):
         raise RuntimeError("fallo al compilar (%s):\n%s" % (env, out[-800:]))
@@ -162,18 +162,18 @@ def main():
     tmp = tempfile.mkdtemp(prefix="vecbench_")
     for name, dt, inner in KERNELS:
         di = DTYPE_INFO[dt]
-        src = VEX_TEMPLATE.format(inner=inner, n=args.n, reps=args.reps,
+        src = VX_TEMPLATE.format(inner=inner, n=args.n, reps=args.reps,
                                   dt=dt, sz=di["sz"], ia=di["ia"], ib=di["ib"],
                                   ic=di["ic"])
-        vex_path = os.path.join(tmp, "k.vx")
-        with open(vex_path, "w") as f:
+        vx_path = os.path.join(tmp, "k.vx")
+        with open(vx_path, "w") as f:
             f.write(src)
 
         times = {}
         r00s = {}
         for mode, env in MODES:
             out_base = os.path.join(tmp, "k_" + mode)
-            velb = compile_variant(vm, vex_path, out_base, env)
+            velb = compile_variant(vm, vx_path, out_base, env)
             secs, r00 = time_run(vm, velb, args.runs)
             times[mode] = secs
             r00s[mode] = r00

@@ -525,7 +525,7 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
 
     // Cargar la seccion debug (DVBG) si esta presente.  El header
     // del .velb tiene `offset_debug_section` + `size_debug_section`
-    // emitidos por el linker cuando se compila con --vex-debug.
+    // emitidos por el linker cuando se compila con --vx-debug.
     // Construimos un DebugInfo a partir del blob; el debugger
     // accede luego via Executable::debug_info para resolver
     // breakpoints por (file, line) o devolver line info de un PC.
@@ -980,8 +980,8 @@ Loader::load_executable(runtime::VM &vm,
                 &proccess->scheduler.profiler_jit_instr_counter);
             // FN.3: force-eager del grafo de fibra ANTES de compilar main.
             // Si algun IR usa el opcode SWAPCTX (fibras via `fiber_swapctx`),
-            // (1) materializamos `__vex_swapctx` nativo (deja
-            // g_vex_swapctx_native, que el vreg lee para emitir el CALL nativo
+            // (1) materializamos `__vx_swapctx` nativo (deja
+            // g_vx_swapctx_native, que el vreg lee para emitir el CALL nativo
             // del SWAPCTX) y (2) eager-compilamos cada CUERPO de fibra por vreg,
             // para que `fiber_entry(fn)` (LABEL_ADDR) resuelva a su jit_code
             // nativo (pieza 1) -- el ctx.r12 de la fibra debe apuntar a codigo
@@ -1002,7 +1002,7 @@ Loader::load_executable(runtime::VM &vm,
                     }
                 if (any_swapctx) {
                     const uint64_t sc =
-                        jit::ensure_vex_swapctx_native(proccess);
+                        jit::ensure_vx_swapctx_native(proccess);
                     if (sc == 0) {
                         std::fprintf(
                             stderr,
@@ -1254,7 +1254,7 @@ uint64_t Loader::load_module_dynamic(runtime::VM &vm,
         // local_pid*...) y el heap del programa principal y sus procesos.
         // Los modulos dinamicos SIEMPRE deben vivir en la region dinamica
         // alta [next_dyn_base=0x80000000, ...).  Sin esto, un plugin
-        // compilado con `--vex-base 0x10000000` (== stack_base del main)
+        // compilado con `--vx-base 0x10000000` (== stack_base del main)
         // se copiaba ENCIMA del stack de main y lo corrompia -> el segundo
         // loadmodule del hot-reload devolvia basura (M.dyn -> -4).  La
         // deteccion por secciones no lo cubre porque el code section de

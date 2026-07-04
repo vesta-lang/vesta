@@ -69,7 +69,7 @@ namespace jit {
  *
  * Validado: e2e 263/0 forzando T=1500.  Un bug previo del path
  * native-callback (el thunk no forzaba el compile a threshold moderado ->
- * test 173 colgaba) se arreglo en native_callback.cpp (vex_get_native_thunk
+ * test 173 colgaba) se arreglo en native_callback.cpp (vx_get_native_thunk
  * fuerza el compile inmediato sea cual sea el threshold).
  *
  * Override: @c set_jit_threshold / env var @c VESTA_JIT_THRESHOLD;
@@ -98,8 +98,8 @@ uint64_t g_jit_compiled_count = 0;
 uint64_t g_jit_unsupported_count = 0;
 uint64_t g_jit_no_ir_count = 0;
 
-/* FN.3: direccion nativa de __vex_swapctx (la fija el force-eager de fibras). */
-uint64_t g_vex_swapctx_native = 0;
+/* FN.3: direccion nativa de __vx_swapctx (la fija el force-eager de fibras). */
+uint64_t g_vx_swapctx_native = 0;
 
 /* C2 tier-up (2026-06-07).  OPT-IN: g_c2_threshold == 0 (default) deja el
  * C2 totalmente apagado -> el Selector NO emite el contador on-entry y el
@@ -289,9 +289,9 @@ VregEntries make_vreg_entries() {
         e.callclosure =
             reinterpret_cast<uint64_t>(g_runtime_entries->callclosure);
         /* FN.3: fibras nativas en JIT.  swapctx la fija el force-eager al
-         * compilar __vex_swapctx (0 si el programa no usa fibras); callind es
+         * compilar __vx_swapctx (0 si el programa no usa fibras); callind es
          * el helper de runtime, un simbolo estatico siempre disponible. */
-        e.swapctx = g_vex_swapctx_native;
+        e.swapctx = g_vx_swapctx_native;
         e.callind = reinterpret_cast<uint64_t>(&vrt_callind);
         /* Fallback de LOAD_VM/STORE_VM (page-miss del vm_mem). */
         e.vm_read_u8 =
@@ -397,14 +397,14 @@ CodeCache *get_or_init_code_cache() noexcept {
 }
 
 /* FN.3: fuera del namespace anonimo -- la llama loader.cpp (linkage externa). */
-uint64_t ensure_vex_swapctx_native(runtime::ProcessVM *vm) noexcept {
-    if (g_vex_swapctx_native != 0) return g_vex_swapctx_native;
+uint64_t ensure_vx_swapctx_native(runtime::ProcessVM *vm) noexcept {
+    if (g_vx_swapctx_native != 0) return g_vx_swapctx_native;
     if (vm == nullptr) return 0;
     /* compile_naked_native aplica el arch-guard x86-64 y devuelve 0 fuera de
      * esa arquitectura -> el llamante deja el grafo de fibra en el interp. */
-    const uint64_t a = jit::compile_naked_native(vm, "__vex_swapctx");
-    if (a != 0) g_vex_swapctx_native = a;
-    return g_vex_swapctx_native;
+    const uint64_t a = jit::compile_naked_native(vm, "__vx_swapctx");
+    if (a != 0) g_vx_swapctx_native = a;
+    return g_vx_swapctx_native;
 }
 
 namespace {
@@ -540,7 +540,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         if (g_jit_warn_unsupported) {
             std::fprintf(stderr,
                          "[jit] no IR encontrado para metodo '%s' (build sin "
-                         "--vex o .velb v2)\n",
+                         "--vx o .velb v2)\n",
                          key.c_str());
         }
         method->invocation_count = UINT32_MAX;
@@ -617,7 +617,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
          * Permite resolver libs in-process como "vesta_runtime",
          * "vesta_comptime" via punteros C registrados sin pasar por
          * LoadLibrary.  Bloqueante para callbacks B.1 (el thunk
-         * generator vive en `vex_get_native_thunk` virtual fn). */
+         * generator vive en `vx_get_native_thunk` virtual fn). */
         void *vfn = ffi::lookup_virtual_fn(lib, func);
         if (vfn != nullptr) {
             return reinterpret_cast<uint64_t>(vfn);
@@ -1695,7 +1695,7 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
 /* ===================================================================== */
 
 uint64_t compile_native_callback(runtime::ProcessVM *vm,
-                                 uint64_t vex_fn_pc) noexcept {
+                                 uint64_t vx_fn_pc) noexcept {
     if (vm == nullptr) return 0;
 
     /* Cache propia por PC: la misma fn puede tener version VM_ABI (pc-map)
@@ -1704,7 +1704,7 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
     static std::unordered_map<uint64_t, uint64_t> g_cb_cache;
     {
         std::lock_guard<std::mutex> lk(g_cb_mtx);
-        auto it = g_cb_cache.find(vex_fn_pc);
+        auto it = g_cb_cache.find(vx_fn_pc);
         if (it != g_cb_cache.end()) return it->second;
     }
 
@@ -1728,7 +1728,7 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
                     }
                 }
             }
-            auto pn_it = pc_to_name.find(vex_fn_pc);
+            auto pn_it = pc_to_name.find(vx_fn_pc);
             if (pn_it == pc_to_name.end()) continue;
             std::string candidate_name = pn_it->second;
             /* Strip sufijo `_entry_<N>` igual que maybe_compile_callvm_target.
@@ -1760,7 +1760,7 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
     }
     if (ir_fn == nullptr || owning_exe == nullptr) {
         std::lock_guard<std::mutex> lk(g_cb_mtx);
-        g_cb_cache[vex_fn_pc] = 0;
+        g_cb_cache[vx_fn_pc] = 0;
         return 0;
     }
 
@@ -1837,7 +1837,7 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
         result = cr.fn ? reinterpret_cast<uint64_t>(cr.fn) : 0;
         if (g_jit_warn_unsupported) {
             std::fprintf(stderr, "[jit] native-callback pc=0x%llx -> %s\n",
-                         static_cast<unsigned long long>(vex_fn_pc),
+                         static_cast<unsigned long long>(vx_fn_pc),
                          result ? "compiled" : "unsupported");
         }
     } catch (...) {
@@ -1845,7 +1845,7 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
     }
 
     std::lock_guard<std::mutex> lk(g_cb_mtx);
-    g_cb_cache[vex_fn_pc] = result;
+    g_cb_cache[vx_fn_pc] = result;
     return result;
 }
 

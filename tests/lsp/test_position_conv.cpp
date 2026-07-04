@@ -124,21 +124,21 @@ int main() {
     {
         lsp::DocumentStore store;
         // Documento con tres lineas usando CRLF.
-        store.open("file:///t.vex", "uno\r\ndos\r\ntres");
+        store.open("file:///t.vx", "uno\r\ndos\r\ntres");
         // line() debe devolver la linea SIN el CR final.
         check_eq("line 0 len", static_cast<uint32_t>(
-                                   store.line("file:///t.vex", 0).size()),
+                                   store.line("file:///t.vx", 0).size()),
                  3); // "uno"
         check_eq("line 1 len", static_cast<uint32_t>(
-                                   store.line("file:///t.vex", 1).size()),
+                                   store.line("file:///t.vx", 1).size()),
                  3); // "dos"
         check_eq("line 2 len", static_cast<uint32_t>(
-                                   store.line("file:///t.vex", 2).size()),
+                                   store.line("file:///t.vx", 2).size()),
                  4); // "tres"
         // Linea fuera de rango -> vacia.
         check_eq("line 99 (fuera) len",
                  static_cast<uint32_t>(
-                     store.line("file:///t.vex", 99).size()),
+                     store.line("file:///t.vx", 99).size()),
                  0);
         // Documento inexistente -> vacia.
         check_eq("line de uri inexistente",

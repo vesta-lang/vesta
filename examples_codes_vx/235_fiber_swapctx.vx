@@ -1,0 +1,126 @@
+// 235_fiber_swapctx.vx
+//
+// FN.3 de la arquitectura v2 de fibras: el fiber-switch como primitivo SEMANTICO
+// que corre en LOS TRES modos (interp, JIT, AOT) desde UN MISMO fuente, dando el
+// MISMO resultado (vm == jit exacto; aot = mismo valor mod 256).  El builtin
+// `fiber_swapctx(from, to)` guarda el contexto actual en `from` y salta a `to`;
+// `fiber_entry(cuerpo)` es el PC de arranque del cuerpo de fibra.
+//
+// El modelo de MEMORIA del contexto/pila depende del modo, y por eso se elige en
+// tiempo de ejecucion con el extern `vrt:jit_active` (mismo .velb corre -m vm y
+// -m jit):
+//   - INTERPRETE (-m vm): fiber_swapctx baja al opcode VM `swapctx` (estado VM:
+//     PC/SP/BP/R0..R15).  El contexto y la pila son ARRAYS GLOBALES en memoria
+//     VM; el cuerpo corre como bytecode NORMAL.  fiber_entry = VA de bytecode.
+//   - JIT (-m jit): el cuerpo corre como codigo NATIVO (VM_ABI, host-stack).  El
+//     switch es nativo (__vx_swapctx, host RSP + callee-saved), asi que el
+//     contexto y la pila viven en memoria HOST; el arranque pasa por un trampolin
+//     que pone el proc en el arg-reg y salta al jit_code del cuerpo.  Todo eso lo
+//     construye `vrt:fiber_jit_ctx` (host malloc + trampolin + proc + entry).
+//     fiber_entry = jit_code nativo del cuerpo.
+//   - AOT (-m aot): el cuerpo es nativo (native_poo); contexto/pila son globales
+//     NATIVOS (.bss) y fiber_entry = direccion nativa.  `vrt:jit_active` se
+//     pliega a 0 en el lowering AOT -> se usa el modelo directo (globales).
+//
+// Ping-pong deterministico entre DOS fibras (A=1, B=2) con un mini round-robin en
+// main.  Orden: A B A B  ->  traza 1 2 1 2  =  1212 (=0x4bc).
+//   -m vm  : R00 = 0x4bc (1212)
+//   -m jit : R00 = 0x4bc (1212)  (identico)
+//   -m aot : exit  = 1212 & 0xFF = 188
+
+// El extern virtual `vrt:jit_active` distingue interp de JIT en runtime; en AOT
+// se pliega a 0.  `fiber_jit_ctx` / `fiber_jit_scratch` construyen los contextos
+// host de la rama JIT (en AOT tambien se pliegan a 0, rama muerta -> DCE).
+extern "vrt" {
+    fn jit_active() -> i32;
+    fn fiber_jit_ctx(u64 entry) -> u64;
+    fn fiber_jit_scratch() -> u64;
+}
+
+// --- Contextos de fibra (19 qwords c/u) en memoria VM (interp/aot) ---
+i64[19] __ctx_sched;   // contexto del bucle round-robin (main)
+i64[19] __ctx_a;       // contexto de la fibra A
+i64[19] __ctx_b;       // contexto de la fibra B
+
+// --- Pilas de fibra (512 qwords = 4 KiB c/u) en memoria VM (interp/aot) ---
+i64[512] __stk_a;
+i64[512] __stk_b;
+
+// --- Handles: la direccion de contexto REAL a usar con fiber_swapctx.  En
+//     interp/aot apuntan a los arrays globales; en JIT apuntan a memoria host. ---
+u64 __h_sched;
+u64 __h_a;
+u64 __h_b;
+
+// --- Estado compartido ---
+i64 __trace = 0;       // traza acumulada (base 10)
+i64 __done_a = 0;      // 1 cuando la fibra A termino
+i64 __done_b = 0;      // 1 cuando la fibra B termino
+
+// Cuerpo de la fibra A: acumula su id (1), cede al scheduler, vuelve a acumular,
+// marca terminada y cede definitivo (no retorna: sin frame de retorno valido).
+// Usa los HANDLES globales, validos en cualquier modo.
+void fiber_a() {
+    __trace = __trace * 10 + 1;
+    fiber_swapctx(__h_a, __h_sched); // cede al scheduler
+    __trace = __trace * 10 + 1;
+    __done_a = 1;
+    fiber_swapctx(__h_a, __h_sched); // termina
+}
+
+// Cuerpo de la fibra B: identico con id = 2.
+void fiber_b() {
+    __trace = __trace * 10 + 2;
+    fiber_swapctx(__h_b, __h_sched);
+    __trace = __trace * 10 + 2;
+    __done_b = 1;
+    fiber_swapctx(__h_b, __h_sched);
+}
+
+i32 main() {
+    // Cima de cada pila VM = base + 512*8 (exclusiva; la pila crece hacia abajo).
+    i64 top_a = (i64)((u64)&__stk_a[0] + 4096);
+    i64 top_b = (i64)((u64)&__stk_b[0] + 4096);
+
+    // Modelo INTERP/AOT: contexto en los arrays globales (stores que se adaptan
+    // al backend: VM en interp, nativo en aot).  PC = fiber_entry(cuerpo),
+    // SP = BP = cima de su pila; R0..R15 quedan a 0.
+    __ctx_a[0] = (i64) fiber_entry(fiber_a);
+    __ctx_a[1] = top_a;
+    __ctx_a[2] = top_a;
+    __ctx_b[0] = (i64) fiber_entry(fiber_b);
+    __ctx_b[1] = top_b;
+    __ctx_b[2] = top_b;
+    __h_sched = (u64)&__ctx_sched[0];
+    __h_a = (u64)&__ctx_a[0];
+    __h_b = (u64)&__ctx_b[0];
+
+    // Modelo JIT: override a contexto/pila HOST + trampolin + proc.  fiber_entry
+    // resuelve al jit_code nativo del cuerpo (compilado por el force-eager).
+    if (jit_active()) {
+        __h_sched = fiber_jit_scratch();
+        __h_a = fiber_jit_ctx(fiber_entry(fiber_a));
+        __h_b = fiber_jit_ctx(fiber_entry(fiber_b));
+    }
+
+    // Mini round-robin: mientras alguna fibra viva, dale un quantum (swapctx
+    // hacia ella; al ceder/terminar vuelve aqui).
+    i64 alive_a = 1;
+    i64 alive_b = 1;
+    while (alive_a == 1 || alive_b == 1) {
+        if (alive_a == 1) {
+            fiber_swapctx(__h_sched, __h_a); // corre A
+            if (__done_a == 1) {
+                alive_a = 0;
+            }
+        }
+        if (alive_b == 1) {
+            fiber_swapctx(__h_sched, __h_b); // corre B
+            if (__done_b == 1) {
+                alive_b = 0;
+            }
+        }
+    }
+
+    return (i32)__trace; // 1212
+}

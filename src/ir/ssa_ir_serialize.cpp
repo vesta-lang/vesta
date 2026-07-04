@@ -434,7 +434,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     write_u32(out, (uint32_t)fn.section_order);
 
     // Subsistema de coste (--analyze): contrato @complexity.  Metadata pura;
-    // viaja en el cache para que el modo --analyze (que reusa el .vexir /
+    // viaja en el cache para que el modo --analyze (que reusa el .vxir /
     // ir_module_cache_bytes) pueda comparar contra la complejidad inferida.
     write_str(out, fn.complexity_expr);
     write_u32(out, static_cast<uint32_t>(fn.complexity_vars.size()));
@@ -695,7 +695,7 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 }
 
 /* ===================================================================== */
-/* emit_ir_module_cache / parse_ir_module_cache  (.vexir)                 */
+/* emit_ir_module_cache / parse_ir_module_cache  (.vxir)                 */
 /* ===================================================================== */
 
 /**
@@ -818,7 +818,7 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
 
     // 4) tabla de nombres de valores SSA (debug-info para el LSP: args/vars).
     //    NO va en el @ir del .velb (emit_ir_section, produccion) -> cero
-    //    coste en el binario; solo en este cache (LSP + .vexir dev).  Por
+    //    coste en el binario; solo en este cache (LSP + .vxir dev).  Por
     //    funcion: count + un string por value (vacio si el value no tiene
     //    nombre de fuente).  El indice ES el IrValueId.
     write_u32(out, static_cast<uint32_t>(mod.functions.size()));

@@ -32,9 +32,9 @@ std::string get_env(const char *name) {
 }
 } // namespace
 
-std::string vex_home() {
-    // 1) VEX_HOME explicito gana siempre.
-    std::string env = get_env("VEX_HOME");
+std::string vx_home() {
+    // 1) VX_HOME explicito gana siempre.
+    std::string env = get_env("VX_HOME");
     if (!env.empty()) {
         return normalize(env);
     }
@@ -86,7 +86,7 @@ std::string system_install_dir() {
 }
 
 std::string project_root(const std::string &start_dir) {
-    // Subimos buscando vex.toml o vex.json.
+    // Subimos buscando vx.toml o vx.json.
     std::error_code ec;
     fs::path p = start_dir.empty() ? fs::current_path(ec) : fs::path(start_dir);
     if (ec) return std::string();
@@ -94,7 +94,7 @@ std::string project_root(const std::string &start_dir) {
     if (ec) return std::string();
     // Hasta 64 niveles defensivamente.
     for (int i = 0; i < 64; ++i) {
-        if (fs::exists(p / "vex.toml", ec) || fs::exists(p / "vex.json", ec)) {
+        if (fs::exists(p / "vx.toml", ec) || fs::exists(p / "vx.json", ec)) {
             return p.string();
         }
         fs::path parent = p.parent_path();
@@ -107,7 +107,7 @@ std::string project_root(const std::string &start_dir) {
 std::string project_modules_dir(const std::string &start_dir) {
     std::string root = project_root(start_dir);
     if (root.empty()) return std::string();
-    return join(root, "vex_modules");
+    return join(root, "vx_modules");
 }
 
 std::string packages_dir(Scope scope, const std::string &proj_root) {
@@ -115,10 +115,10 @@ std::string packages_dir(Scope scope, const std::string &proj_root) {
     case Scope::Project: {
         std::string r = proj_root.empty() ? project_root("") : proj_root;
         if (r.empty()) return std::string();
-        return join(r, "vex_modules");
+        return join(r, "vx_modules");
     }
     case Scope::User: {
-        std::string vh = vex_home();
+        std::string vh = vx_home();
         if (vh.empty()) return std::string();
         return join(vh, "packages");
     }
@@ -136,10 +136,10 @@ std::string cache_dir(Scope scope, const std::string &proj_root) {
     case Scope::Project: {
         std::string r = proj_root.empty() ? project_root("") : proj_root;
         if (r.empty()) return std::string();
-        return join(join(r, ".vex_cache"), "pkg");
+        return join(join(r, ".vx_cache"), "pkg");
     }
     case Scope::User: {
-        std::string vh = vex_home();
+        std::string vh = vx_home();
         if (vh.empty()) return std::string();
         return join(vh, "cache");
     }
@@ -153,13 +153,13 @@ std::string cache_dir(Scope scope, const std::string &proj_root) {
 }
 
 std::string keys_dir() {
-    std::string vh = vex_home();
+    std::string vh = vx_home();
     if (vh.empty()) return std::string();
     return join(vh, "keys");
 }
 
 std::string private_keys_dir() {
-    std::string vh = vex_home();
+    std::string vh = vx_home();
     if (vh.empty()) return std::string();
     return join(join(vh, "keys"), "private");
 }
@@ -198,7 +198,7 @@ std::string installed_manifest(Scope scope, const std::string &name,
     std::string folder = name + "@" + version;
     // Sanitizar / en el name (por org/pkg).
     std::replace(folder.begin(), folder.end(), '/', '_');
-    return join(join(pkgs, folder), "vex.toml");
+    return join(join(pkgs, folder), "vx.toml");
 }
 
 bool exists(const std::string &path) {

@@ -22,12 +22,12 @@
  * los type params (T, U, ...) por los args concretos en TODOS los
  * @c TypeNode encontrados (firmas, bodies de metodo, etc).  El cloning es
  * AST-puro: no depende de @c TypeChecker, solo de @c ast y del helper
- * libre @c type_to_string (en vex/types.h).  Esto permite reutilizarlo
+ * libre @c type_to_string (en vx/types.h).  Esto permite reutilizarlo
  * desde varios .cpp del frontend sin acoplar al type checker.
  */
 
-#ifndef VEX_GENERIC_CLONE_H
-#define VEX_GENERIC_CLONE_H
+#ifndef VX_GENERIC_CLONE_H
+#define VX_GENERIC_CLONE_H
 
 #include "vx/ast.h"
 #include "vx/types.h"
@@ -38,9 +38,9 @@
 
 namespace vx {
 
-/// @namespace vx::vexgen
+/// @namespace vx::vxgen
 /// @brief Espacio de nombres de las utilidades de monomorphizacion AST.
-namespace vexgen {
+namespace vxgen {
 
 /**
  * @struct GenSubst
@@ -82,7 +82,7 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
 std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s,
                                       const GenSubst &g = {});
 
-} // namespace vexgen
+} // namespace vxgen
 } // namespace vx
 
-#endif // VEX_GENERIC_CLONE_H
+#endif // VX_GENERIC_CLONE_H

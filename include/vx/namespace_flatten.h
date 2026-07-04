@@ -2,7 +2,7 @@
  * @file namespace_flatten.h
  * @brief Pre-pass que aplana @c NamespaceDecl inline (Phase M.7.c).
  *
- * Tras parsear el `.vex`, el AST contiene @c NamespaceDecl nodes
+ * Tras parsear el `.vx`, el AST contiene @c NamespaceDecl nodes
  * envolviendo grupos de declaraciones.  Este pre-pass:
  *   1. Manglea los nombres internos con prefix @c <ns>__.
  *   2. Reescribe referencias internas a los nombres mangled.
@@ -11,8 +11,8 @@
  *      caller los registre como Symbol::Namespace en el TypeChecker.
  */
 
-#ifndef VEX_NAMESPACE_FLATTEN_H
-#define VEX_NAMESPACE_FLATTEN_H
+#ifndef VX_NAMESPACE_FLATTEN_H
+#define VX_NAMESPACE_FLATTEN_H
 
 #include <string>
 #include <vector>
@@ -61,4 +61,4 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod);
 
 } // namespace vx
 
-#endif // VEX_NAMESPACE_FLATTEN_H
+#endif // VX_NAMESPACE_FLATTEN_H

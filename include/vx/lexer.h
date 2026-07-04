@@ -14,7 +14,7 @@
  * @file lexer.h
  * @brief Analizador lexico (tokenizador) del lenguaje Vesta.
  *
- * Convierte el codigo fuente .vex en una secuencia de tokens (vx::Token)
+ * Convierte el codigo fuente .vx en una secuencia de tokens (vx::Token)
  * que el parser consume.  Se ejecuta DESPUES del preprocesador VPP (cuando
  * este se aplica), por lo que el flujo de bytes que ve es ya plano.
  *
@@ -38,8 +38,8 @@
  *    lexer y es el motivo por el que se evita std::unordered_map aqui.
  */
 
-#ifndef VEX_LEXER_H
-#define VEX_LEXER_H
+#ifndef VX_LEXER_H
+#define VX_LEXER_H
 
 #include <cstddef>
 #include <cstdint>
@@ -54,7 +54,7 @@ namespace vx {
 
 /**
  * @class Lexer
- * @brief Tokenizador hot-path para .vex.
+ * @brief Tokenizador hot-path para .vx.
  *
  * Posee internamente el codigo fuente (mover-in en el constructor) y
  * un cursor (pos, line, column).  El tokenizado funciona "on demand":
@@ -68,7 +68,7 @@ class Lexer {
     /**
      * @brief Construye el lexer con su buffer y diagnostico asociados.
      *
-     * @param source   Codigo fuente .vex completo (se mueve, sin copia).
+     * @param source   Codigo fuente .vx completo (se mueve, sin copia).
      * @param filename Nombre logico del fichero para los diagnosticos.
      * @param diags    Sumidero de errores y warnings.  Vivo durante toda
      *                 la vida del lexer.
@@ -251,4 +251,4 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept;
 
 } // namespace vx
 
-#endif // VEX_LEXER_H
+#endif // VX_LEXER_H

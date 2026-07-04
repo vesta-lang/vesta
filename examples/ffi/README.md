@@ -251,13 +251,13 @@ PATH="../../../cmake-build-release:$PATH" ./test_ffi.exe
 
 ## Ejemplo en Vex (self-hosting)
 
-`vex/self_host.vx` es un programa Vex que, via el FFI runtime dinamico
+`vx/self_host.vx` es un programa Vex que, via el FFI runtime dinamico
 (`ffi_open` / `ffi_sym` / `ffi_call`), carga `libvesta` y llama a
 `vesta_eval` para **compilar y ejecutar otro snippet Vex desde dentro de
 Vex**.  Es decir: el lenguaje se ejecuta a si mismo a traves de su propia
 DLL.
 
-```vex
+```vx
 i32 main() {
     string snippet = "i32 main() { return 6 * 7; }";
     i32* slot = malloc(4); slot[0] = 0;
@@ -275,7 +275,7 @@ i32 main() {
 Compilar y ejecutar (con `libvesta.dll` junto al `.exe` o en el `PATH`):
 
 ```bash
-vm --vex examples/ffi/vex/self_host.vx -o self_host
+vm --vx examples/ffi/vx/self_host.vx -o self_host
 vm --run self_host.velb --stats          # imprime R00=0x2a (42)
 ```
 

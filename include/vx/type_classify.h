@@ -35,16 +35,16 @@
  * (es value-copiable, sin cleanup) -- responde a preguntas distintas.
  */
 
-#ifndef VEX_TYPE_CLASSIFY_H
-#define VEX_TYPE_CLASSIFY_H
+#ifndef VX_TYPE_CLASSIFY_H
+#define VX_TYPE_CLASSIFY_H
 
 #include <functional>
 #include <string>
 
 namespace vx {
 
-struct Type;         ///< fwd (definido en vex/types.h)
-struct StructLayout; ///< fwd (definido en vex/type_checker.h)
+struct Type;         ///< fwd (definido en vx/types.h)
+struct StructLayout; ///< fwd (definido en vx/type_checker.h)
 
 /**
  * @brief Resolver de layouts de struct para la recursion sobre campos.
@@ -91,4 +91,4 @@ bool is_managed(const Type &t, const StructResolver &find_struct);
 
 } // namespace vx
 
-#endif // VEX_TYPE_CLASSIFY_H
+#endif // VX_TYPE_CLASSIFY_H

@@ -45,8 +45,8 @@
 #define VESTA_GIT_HASH_KNOWN 0
 #endif
 
-#ifndef VEX_VM_VERSION_STRING
-#define VEX_VM_VERSION_STRING "0.1.0"
+#ifndef VX_VM_VERSION_STRING
+#define VX_VM_VERSION_STRING "0.1.0"
 #endif
 
 // CPU dispatch (cimiento): deteccion de features del host via cpuid.  Definida
@@ -128,7 +128,7 @@ void print_version_banner(std::ostream &os) {
     // p.ej. el harness de benchmark que captura `vm --version`): una sola linea
     // parseable, sin la caja ni codigos ANSI.  El banner bonito solo en TTY.
     if (!VESTA_ISATTY_STDOUT()) {
-        os << "Vesta v" << VEX_VM_VERSION_STRING << "-alpha"
+        os << "Vesta v" << VX_VM_VERSION_STRING << "-alpha"
            << " (build " << VESTA_BUILD_DATE;
         if (VESTA_GIT_HASH_KNOWN)
             os << ", " << VESTA_GIT_HASH;
@@ -150,7 +150,7 @@ void print_version_banner(std::ostream &os) {
     // Titulo: "Vesta vX.Y.Z-alpha" en bold.  Todo el ecosistema esta en alfa;
     // el sufijo -alpha se resalta en amarillo para dejarlo claro de un vistazo.
     {
-        std::string base = std::string("Vesta v") + VEX_VM_VERSION_STRING;
+        std::string base = std::string("Vesta v") + VX_VM_VERSION_STRING;
         const char *alpha = "-alpha";
         Row r;
         r.plain = base + alpha;

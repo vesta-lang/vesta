@@ -46,7 +46,7 @@
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
-// Forward-decl (evita incluir vex/parser.h, que arrastra cabeceras Windows que
+// Forward-decl (evita incluir vx/parser.h, que arrastra cabeceras Windows que
 // desbalancean el push/pop_macro(VOID) de ssa_ir.h).  @Target target-aware AOT.
 namespace vx {
 void set_aot_condcomp_target(const std::string &os,
@@ -204,14 +204,14 @@ static void apply_dist_config(runtime::VM *vm,
 }
 
 /* forzar registro de virtual fns runtime (callbacks Vesta->C). */
-extern "C" void runtime_ensure_vex_callback_registered(void);
+extern "C" void runtime_ensure_vx_callback_registered(void);
 
 int main(int argc, char *argv[]) {
 #if defined(WIN32) || defined(_WIN32) ||                                       \
     defined(__WIN32) && !defined(__CYGWIN__)
     asm_multi_process::run_and_capture("chcp 65001");
 #endif
-    runtime_ensure_vex_callback_registered();
+    runtime_ensure_vx_callback_registered();
     // Phase AS inc.4b: registrar el backend de ensamblado Keystone para que el
     // frontend Vesta valide la sintaxis del inline asm en compile-time.
     jit::register_keystone_asm_backend();
@@ -267,7 +267,7 @@ int main(int argc, char *argv[]) {
                                                    "Mostrar versión")(
         "m,mode",
         "Modo de ejecucion/compilacion: vm (interprete) | jit (JIT en "
-        "caliente) | aot (compilacion nativa standalone, requiere --vex)",
+        "caliente) | aot (compilacion nativa standalone, requiere --vx)",
         cxxopts::value<std::string>()->default_value("vm"))(
         "list-arch", "Imprimir arquitecturas soportadas")(
         "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
@@ -353,19 +353,16 @@ int main(int argc, char *argv[]) {
             "Nivel de optimizacion IR: 0=O0, 1=O1, 2=O2, 3=O3 (defecto: 1)",
             cxxopts::value<int>()->default_value("1"))(
             "ir-emit-only", "Solo emitir el texto .vel; no compilar a .velb")(
-            "vex", "Compilar archivo .vx (lenguaje Vesta) a .velb",
+            "vesta", "Compilar archivo .vx (lenguaje Vesta) a .velb",
             cxxopts::value<std::string>())(
-            "vesta", "Compilar archivo .vx (lenguaje Vesta) a .velb; "
-                     "equivalente a --vex",
-            cxxopts::value<std::string>())(
-            "vex-emit-only",
-            "Solo emitir el .vel intermedio del .vex; no compilar a .velb")(
-            "vex-emit-ir",
-            "Emitir el SSA IR del .vex (pre y post optimizacion) en "
+            "vx-emit-only",
+            "Solo emitir el .vel intermedio del .vx; no compilar a .velb")(
+            "vx-emit-ir",
+            "Emitir el SSA IR del .vx (pre y post optimizacion) en "
             "<output>.ir; util para debug del frontend")(
             "analyze",
             "Subsistema de coste: analiza la complejidad algoritmica (Big-O) "
-            "estatica de cada funcion de un .vex y la imprime; valida el "
+            "estatica de cada funcion de un .vx y la imprime; valida el "
             "contrato @complexity si esta presente. Cero impacto en codegen.",
             cxxopts::value<std::string>())(
             "analyze-json",
@@ -385,11 +382,11 @@ int main(int argc, char *argv[]) {
             "kernels/freestanding sin runtime de excepciones.")(
             "no-io",
             "AOT (-m aot): NO auto-incluye el runtime de I/O "
-            "(stdlib/vex/vex_io.vx).  El usuario aporta __vex_write y los "
-            "__vex_print_* (p.ej. enlazar vesta_io_bare.o, o freestanding).")(
+            "(stdlib/vx/vx_io.vx).  El usuario aporta __vx_write y los "
+            "__vx_print_* (p.ej. enlazar vesta_io_bare.o, o freestanding).")(
             "no-mem",
             "AOT (-m aot): NO auto-incluye el slab allocator "
-            "(stdlib/vex/vex_mem.vx).  El allocator usa libc malloc/free (o el "
+            "(stdlib/vx/vx_mem.vx).  El allocator usa libc malloc/free (o el "
             "@AllocatorOverride del usuario).")(
             "format",
             "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en "
@@ -423,7 +420,7 @@ int main(int argc, char *argv[]) {
             "binario). Nota: un binario avx/avx512f FIJO da SIGILL en una CPU "
             "sin ese soporte; usa auto para portabilidad.",
             cxxopts::value<std::string>()->default_value("sse2"))(
-            "vex-base",
+            "vx-base",
             "VA base address para el modulo (hex, e.g. 0x10000000). Usado para "
             "plugins cargados via loadmodule, evita solapamiento con el caller "
             "(default 0x0).",
@@ -433,7 +430,7 @@ int main(int argc, char *argv[]) {
         // (zero overhead, backward compat).  Sintaxis: 'fs:read,net,
         // ffi:call=kernel32.dll;user32.dll' etc.  Ver include/loader/
         // sandbox.h para tabla completa de caps + sintaxis.
-        ("vex-caps",
+        ("vx-caps",
          "Phase M.sandbox: restringe caps del modulo principal. Sintaxis: "
          "'fs:read,net,ffi:call=kernel32.dll;user32.dll'. Vacio = ALL granted "
          "(default). 'none' = sandbox total.",
@@ -453,7 +450,7 @@ int main(int argc, char *argv[]) {
         // info por nodo (Graphviz/HTML llevan extra via tooltips/detalle).
         // --diagram-all genera las 4 vistas (AST, IR pre, IR post, VEL)
         // en el formato escogido.
-        ("diagram-vex",
+        ("diagram-vx",
          "Generar diagrama del AST Vesta post type-check (.ast.<ext>)")(
             "diagram-ir",
             "Generar diagrama del SSA IR pre-optimizacion (.ir.pre.<ext>)")(
@@ -461,7 +458,7 @@ int main(int argc, char *argv[]) {
             "Generar diagrama del SSA IR post-optimizacion (.ir.post.<ext>)")(
             "diagram-vel",
             "Generar diagrama del bytecode .vel final (.vel.<ext>)")(
-            "diagram-all", "Generar las 4 vistas (vex, ir pre, ir post, vel) "
+            "diagram-all", "Generar las 4 vistas (vx, ir pre, ir post, vel) "
                            "con sufijos correspondientes")(
             "diagram-format",
             "Formato: mermaid | graphviz | html | both | all (default: "
@@ -538,21 +535,21 @@ int main(int argc, char *argv[]) {
             "headless). Sin este flag, el operador local mantiene un prompt "
             "vesta> que comparte el mismo runtime con los clientes remotos; "
             "con el, el proceso solo escucha el socket TCP.")(
-            "vex-debug",
+            "vx-debug",
             "Emitir comentarios `// @line N` en el .vel intermedio del "
             "compilador Vesta y, cuando se integre la pipeline completa de debug "
             "section (Phase 2), embeber la tabla bytecode_offset -> (file, "
             "line) en el .velb final.  Sin este flag, el .vel/.velb no "
             "contienen info de debug -> el ejecutable es mas pequeno y el "
             "frontend NO genera datos extra.  Con el flag, el cliente del "
-            "debugger puede setear breakpoints por linea Vesta (`b file.vex:42`) "
+            "debugger puede setear breakpoints por linea Vesta (`b file.vx:42`) "
             "en lugar de solo por addr.")(
             "port",
             "Transpilar el IR a codigo fuente del lenguaje destino y escribir "
             "a <output>.<ext> (e.g. .c).  Valores actuales: 'c'.  Futuro: "
             "'java', 'js', 'rust'.  Con --port=c se genera codigo C99 portable "
             "listo para compilar con gcc/clang -O3 -std=c11 SIN dependencias "
-            "de VestaVM (a menos que --port-gc=vesta).  Implica --vex (se "
+            "de VestaVM (a menos que --port-gc=vesta).  Implica --vx (se "
             "aplica al pipeline Vesta post-optimizacion).",
             cxxopts::value<std::string>())(
             "emit-header",
@@ -580,12 +577,12 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>()->default_value("stdint"))(
             "port-strings",
             "Modelo de strings: raw (const char* solo literales) | managed "
-            "(default: VexString con tracking per-thread).",
+            "(default: VxString con tracking per-thread).",
             cxxopts::value<std::string>()->default_value("managed"))(
             "port-freestanding",
             "Generar C freestanding (sin includes automaticos de "
-            "stdio/stdlib/math).  El usuario debe proveer vex_throw + "
-            "vex_panic_with_str.  Para bootloaders, kernels, firmware.")(
+            "stdio/stdlib/math).  El usuario debe proveer vx_throw + "
+            "vx_panic_with_str.  Para bootloaders, kernels, firmware.")(
             "port-stdlib-dir",
             "Path al directorio stdlib/port/c con los snippets .v.c "
             "(autodetect si vacio).",
@@ -601,7 +598,7 @@ int main(int argc, char *argv[]) {
             "instrument",
             "Instrumentacion en el IR Vesta (heredada por bytecode VM, JIT, port "
             "C, port futuros): none (default) | trace (calls a "
-            "vex_trace:enter/exit por funcion) | profile (timing per-funcion).",
+            "vx_trace:enter/exit por funcion) | profile (timing per-funcion).",
             cxxopts::value<std::string>()->default_value("none"))
 #ifdef VESTA_HAS_PREPROCESSOR
             ("preprocess-only",
@@ -650,7 +647,7 @@ int main(int argc, char *argv[]) {
             "un kernel). Default segun el formato.",
             cxxopts::value<std::string>()->default_value(""))(
             "link-script",
-            "Con --link: script de enlace ESCRITO EN VEX (un .vex con 'fn "
+            "Con --link: script de enlace ESCRITO EN VESTA (un .vx con 'fn "
             "link()' que llama a builtins base/entry/stack/section/"
             "section_size/align_up/debug_build). El linker lo compila y ejecuta "
             "para leer la configuracion. Los CLI --link-base/--entry tienen "
@@ -716,7 +713,7 @@ int main(int argc, char *argv[]) {
      * el threshold se inicializa lazy en el primer maybe_compile_*, ya
      * tarde para eager compile. */
     // Phase AOT: modo de compilacion nativa standalone (-m aot).  Se resuelve
-    // aqui (junto al resto de modos) y se consume en el bloque --vex mas abajo.
+    // aqui (junto al resto de modos) y se consume en el bloque --vx mas abajo.
     bool aot_mode = false;
     aot::Tier aot_tier = aot::Tier::BARE;
     bool aot_freestanding = result.count("freestanding") > 0;
@@ -841,13 +838,13 @@ int main(int argc, char *argv[]) {
     // por el orden de dispatch.  Ejemplos reales detectados:
     //   - `--run x.velb -m aot --emit exe --format exe`: el dispatch de --run
     //     ganaba y ejecutaba el .velb, ignorando -m aot/--emit/--format.
-    //   - `--vex x.vex --emit exe` (sin -m aot): --emit se ignoraba en silencio.
+    //   - `--vx x.vx --emit exe` (sin -m aot): --emit se ignoraba en silencio.
     // Falla cerrado con mensaje claro en vez de hacer algo distinto a lo pedido.
     {
         // (1) Acciones primarias mutuamente excluyentes: solo una a la vez.
         static const char *const kPrimaryActions[] = {
             "run",      "worker",       "driver", "build",
-            "vex",      "vesta",        "asm-file",     "disasm-file", "script"};
+            "vesta",    "asm-file",     "disasm-file", "script"};
         std::vector<std::string> present;
         for (const char *a : kPrimaryActions)
             if (result.count(a)) present.emplace_back(std::string("--") + a);
@@ -859,8 +856,8 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
-        // (2) -m aot solo tiene sentido compilando un .vex a binario nativo.
-        if (aot_mode && !result.count("vex") && !result.count("vesta")) {
+        // (2) -m aot solo tiene sentido compilando un .vx a binario nativo.
+        if (aot_mode && !result.count("vesta")) {
             std::cerr << "[cli] -m aot requiere --vesta <archivo.vx> "
                          "(compilacion nativa desde fuente Vesta).\n";
             if (result.count("run"))
@@ -1163,7 +1160,7 @@ int main(int argc, char *argv[]) {
     // Modo servidor persistente de depuracion (sin ejecutar un .velb inicial).
     //
     // vm.exe --server-mode [--server-port N | --debug-port N] [--schedulers M]
-    //        [--dist-port ...] [--vex-debug]
+    //        [--dist-port ...] [--vx-debug]
     //
     // La VM se queda viva indefinidamente atendiendo comandos del debugger
     // (load_velb, kill_proc, server_info, server_shutdown, etc.).  Los
@@ -1532,9 +1529,9 @@ int main(int argc, char *argv[]) {
             /*emit_map=*/(result.count("emit-map") > 0));
     }
 
-    // Compilar un archivo .vex (lenguaje Vesta) a .velb.
+    // Compilar un archivo .vx (lenguaje Vesta) a .velb.
     // Pipeline:
-    //   .vex source
+    //   .vx source
     //     -> [VPP opcional]    (metaprogramacion compartida con .vel)
     //     -> Vesta frontend      (lex + parse + tipos + lowering)
     //     -> ir::IrModule
@@ -1543,28 +1540,28 @@ int main(int argc, char *argv[]) {
     //     -> .velb
     //
     // -----------------------------------------------------------------
-    // Subsistema de coste (MODO ANALISIS): vm --analyze <archivo.vex>
+    // Subsistema de coste (MODO ANALISIS): vm --analyze <archivo.vx>
     //
-    // Rama APARTE del path de compilacion normal.  Compila el .vex hasta
+    // Rama APARTE del path de compilacion normal.  Compila el .vx hasta
     // el SSA IR (sin emitir .velb), corre el analizador estatico de
     // complejidad (analyze::bigo) sobre cada funcion del modulo OPTIMIZADO
     // (O2), e imprime el coste Big-O.  Si una funcion declara @complexity,
     // valida el contrato de forma conservadora (solo avisa si esta
     // CONFIADO de la discrepancia).  Cero impacto en el codegen.
     //
-    //   vm --analyze prog.vex            -> salida legible
-    //   vm --analyze prog.vex --analyze-json -> JSON (para diagramas)
+    //   vm --analyze prog.vx            -> salida legible
+    //   vm --analyze prog.vx --analyze-json -> JSON (para diagramas)
     // -----------------------------------------------------------------
     if (result.count("analyze")) {
-        const std::string &vex_path = result["analyze"].as<std::string>();
+        const std::string &vx_path = result["analyze"].as<std::string>();
         const bool want_json = result.count("analyze-json") > 0;
 
-        std::ifstream ifs(vex_path);
+        std::ifstream ifs(vx_path);
         if (!ifs.is_open()) {
-            std::cerr << "[analyze] No se puede abrir: " << vex_path << "\n";
+            std::cerr << "[analyze] No se puede abrir: " << vx_path << "\n";
             return EXIT_FAILURE;
         }
-        std::string vex_source((std::istreambuf_iterator<char>(ifs)),
+        std::string vx_source((std::istreambuf_iterator<char>(ifs)),
                                std::istreambuf_iterator<char>());
         ifs.close();
 
@@ -1577,7 +1574,7 @@ int main(int argc, char *argv[]) {
         copts.opt_level = 2;
         copts.emit_ir_preopt = true;
         vx::CompileResult cr =
-            vx::compile_vx_source(vex_source, vex_path, copts);
+            vx::compile_vx_source(vx_source, vx_path, copts);
         // Volcar diagnosticos (errores/warnings) del frontend.
         for (const auto &d : cr.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);
@@ -1657,7 +1654,7 @@ int main(int argc, char *argv[]) {
 
         // Salida legible: por cada funcion (orden del modulo POST-opt),
         // mostrar los 4 costes: PRE/POST x PARCIAL/TOTAL.
-        std::cout << "Analisis de coste (Big-O) -- " << vex_path << "\n";
+        std::cout << "Analisis de coste (Big-O) -- " << vx_path << "\n";
         std::cout << "Niveles: PRE-opt (fuente) y POST-opt (codigo final O2);"
                      " PARCIAL (cuerpo, calls=O(1)) y TOTAL (interprocedural)."
                      "\n";
@@ -1768,18 +1765,16 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
-    // Ejemplo: vm.exe --vesta src/main.vx -o main.velb  (--vex es alias legacy)
-    if (result.count("vex") || result.count("vesta")) {
-        const std::string vex_path = result.count("vex")
-            ? result["vex"].as<std::string>()
-            : result["vesta"].as<std::string>();
-        bool emit_only = result.count("vex-emit-only") > 0;
-        bool emit_ir = result.count("vex-emit-ir") > 0;
+    // Ejemplo: vm.exe --vesta src/main.vx -o main.velb
+    if (result.count("vesta")) {
+        const std::string vx_path = result["vesta"].as<std::string>();
+        bool emit_only = result.count("vx-emit-only") > 0;
+        bool emit_ir = result.count("vx-emit-ir") > 0;
 
         // Flags de diagramas (Mermaid y/o Graphviz).  --diagram-all activa
         // los 4 diagramas; --diagram-format elige el formato de salida.
         const bool diag_all = result.count("diagram-all") > 0;
-        const bool diag_vex = diag_all || result.count("diagram-vex") > 0;
+        const bool diag_vx = diag_all || result.count("diagram-vx") > 0;
         const bool diag_ir_pre = diag_all || result.count("diagram-ir") > 0;
         const bool diag_ir_post =
             diag_all || result.count("diagram-ir-opt") > 0;
@@ -1806,29 +1801,29 @@ int main(int argc, char *argv[]) {
             emit_mermaid = true;
         }
 
-        // parsear --vex-base (VA base en hex).  0x0 = comportamiento
+        // parsear --vx-base (VA base en hex).  0x0 = comportamiento
         // por defecto (caller).  Para plugins cargados via loadmodule usar
         // un valor distinto (ej. 0x10000000) para evitar solapamiento con
         // el caller cuyo code section vive en 0x0..N.
-        uint64_t vex_base_addr = 0;
-        if (result.count("vex-base")) {
-            const std::string &s = result["vex-base"].as<std::string>();
+        uint64_t vx_base_addr = 0;
+        if (result.count("vx-base")) {
+            const std::string &s = result["vx-base"].as<std::string>();
             try {
-                vex_base_addr =
+                vx_base_addr =
                     std::stoull(s, nullptr, 0); // base 0 = autodetect 0x prefix
             } catch (...) {
-                std::cerr << "[vex] --vex-base invalido: " << s << "\n";
+                std::cerr << "[vx] --vx-base invalido: " << s << "\n";
                 return EXIT_FAILURE;
             }
         }
 
-        // 1 Leer el .vex.
-        std::ifstream ifs(vex_path);
+        // 1 Leer el .vx.
+        std::ifstream ifs(vx_path);
         if (!ifs.is_open()) {
-            std::cerr << "[vex] No se puede abrir: " << vex_path << "\n";
+            std::cerr << "[vx] No se puede abrir: " << vx_path << "\n";
             return EXIT_FAILURE;
         }
-        std::string vex_source((std::istreambuf_iterator<char>(ifs)),
+        std::string vx_source((std::istreambuf_iterator<char>(ifs)),
                                std::istreambuf_iterator<char>());
 
         // 2 Aplicar VPP (mismo pipeline que run_worker).  Esto es
@@ -1838,7 +1833,7 @@ int main(int argc, char *argv[]) {
         {
             vpp::Preprocessor pp;
             std::string source_dir =
-                std::filesystem::path(vex_path).parent_path().string();
+                std::filesystem::path(vx_path).parent_path().string();
             pp.options().include_paths.push_back(source_dir);
             std::string exe_dir =
                 std::filesystem::path(fs::get_executable_path())
@@ -1855,7 +1850,7 @@ int main(int argc, char *argv[]) {
 #elif defined(__APPLE__)
             pp.options().predefines.push_back("__VPP_MACOS__");
 #endif
-            std::string processed = pp.process(vex_source, vex_path);
+            std::string processed = pp.process(vx_source, vx_path);
             if (pp.diagnostics().has_errors()) {
                 for (const auto &d : pp.diagnostics().diagnostics()) {
                     std::cerr << d.loc.file << ":" << d.loc.line << ": "
@@ -1865,7 +1860,7 @@ int main(int argc, char *argv[]) {
                 }
                 return EXIT_FAILURE;
             }
-            vex_source = std::move(processed);
+            vx_source = std::move(processed);
         }
 #endif
 
@@ -1875,7 +1870,7 @@ int main(int argc, char *argv[]) {
         // [A-Za-z0-9_], pero los nombres de fichero pueden tener cualquier
         // cosa.  Aplicamos dos transformaciones: (a) si empieza por digito,
         // anteponer "m_"; (b) sustituir cualquier byte no alfanumerico por '_'.
-        std::string raw_name = std::filesystem::path(vex_path).stem().string();
+        std::string raw_name = std::filesystem::path(vx_path).stem().string();
         std::string mod_name;
         mod_name.reserve(raw_name.size() + 2);
         if (!raw_name.empty() && (raw_name[0] >= '0' && raw_name[0] <= '9')) {
@@ -1928,27 +1923,27 @@ int main(int argc, char *argv[]) {
         if (copts.instrument_mode != "none" &&
             copts.instrument_mode != "trace" &&
             copts.instrument_mode != "profile") {
-            std::cerr << "[vex] --instrument invalido: "
+            std::cerr << "[vx] --instrument invalido: "
                       << copts.instrument_mode
                       << " (valores: none|trace|profile)\n";
             return 2;
         }
-        // --vex-debug: emite `// @line N` en el .vel y genera la
+        // --vx-debug: emite `// @line N` en el .vel y genera la
         // seccion debug en el .velb final.  Por defecto OFF: el ejecutable
         // queda mas pequeno y la compilacion mas rapida.
-        copts.emit_debug = (result.count("vex-debug") > 0);
+        copts.emit_debug = (result.count("vx-debug") > 0);
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por
         // --diagram-format.  Se escriben a archivos al final del bloque.
-        copts.dump_mermaid_ast = emit_mermaid && diag_vex;
+        copts.dump_mermaid_ast = emit_mermaid && diag_vx;
         copts.dump_mermaid_ir_pre = emit_mermaid && diag_ir_pre;
         copts.dump_mermaid_ir_post = emit_mermaid && diag_ir_post;
         copts.dump_mermaid_vel = emit_mermaid && diag_vel;
-        copts.dump_graphviz_ast = emit_graphviz && diag_vex;
+        copts.dump_graphviz_ast = emit_graphviz && diag_vx;
         copts.dump_graphviz_ir_pre = emit_graphviz && diag_ir_pre;
         copts.dump_graphviz_ir_post = emit_graphviz && diag_ir_post;
         copts.dump_graphviz_vel = emit_graphviz && diag_vel;
-        copts.dump_html_ast = emit_html && diag_vex;
+        copts.dump_html_ast = emit_html && diag_vx;
         copts.dump_html_ir_pre = emit_html && diag_ir_pre;
         copts.dump_html_ir_post = emit_html && diag_ir_post;
         copts.dump_html_vel = emit_html && diag_vel;
@@ -2004,14 +1999,14 @@ int main(int argc, char *argv[]) {
             copts.port_options.aggressive_opt =
                 (result.count("port-no-aggressive") == 0);
             copts.port_options.module_name = mod_name;
-            copts.port_options.source_path = vex_path;
+            copts.port_options.source_path = vx_path;
         }
 
         /* === Phase MC.12: cache persistente para @Macros ===
          *
-         * Cache dir: `./.cache/vex/` (cwd-relative).  Key = FNV-1a 64
-         * sobre (cache_format_version + vex_path + vex_source).  File =
-         * `.cache/vex/<hex_key>.velb`.
+         * Cache dir: `./.cache/vx/` (cwd-relative).  Key = FNV-1a 64
+         * sobre (cache_format_version + vx_path + vx_source).  File =
+         * `.cache/vx/<hex_key>.velb`.
          *
          * Flow:
          *   1. Compute key.
@@ -2026,7 +2021,7 @@ int main(int argc, char *argv[]) {
          * Cache invalidation: implicita.  Cualquier cambio en el byte
          * stream del fuente (incluso un comentario o whitespace) genera
          * un key distinto y por tanto miss.  Sin sweeper automatico --
-         * el usuario puede borrar `.cache/vex/` para limpiar manualmente.
+         * el usuario puede borrar `.cache/vx/` para limpiar manualmente.
          */
         const uint8_t cache_format_version =
             2; /* Bump por MC.14 macro-scoped key */
@@ -2206,31 +2201,31 @@ int main(int argc, char *argv[]) {
             uint64_t h = FNV_OFFSET;
             h ^= cache_format_version;
             h *= FNV_PRIME;
-            for (char c : vex_path) {
+            for (char c : vx_path) {
                 h ^= static_cast<uint8_t>(c);
                 h *= FNV_PRIME;
             }
             h ^= 0xFFu;
             h *= FNV_PRIME;
-            const auto ranges = find_macro_ranges(vex_source);
+            const auto ranges = find_macro_ranges(vx_source);
             if (ranges.empty()) {
                 /* Sin macros: hash full-source.  El cache no se usa
                  * (has_lowerable_macros=false impedira el populate),
                  * pero un key estable previene colisiones si el usuario
                  * compila el mismo path con/sin macros sobre el mismo
                  * archivo. */
-                for (char c : vex_source) {
+                for (char c : vx_source) {
                     h ^= static_cast<uint8_t>(c);
                     h *= FNV_PRIME;
                 }
             } else {
                 /* Hash solo los rangos macro + separadores. */
                 for (const auto &r : ranges) {
-                    const size_t end = (r.second < vex_source.size())
+                    const size_t end = (r.second < vx_source.size())
                                            ? r.second
-                                           : vex_source.size();
+                                           : vx_source.size();
                     for (size_t i = r.first; i < end; ++i) {
-                        h ^= static_cast<uint8_t>(vex_source[i]);
+                        h ^= static_cast<uint8_t>(vx_source[i]);
                         h *= FNV_PRIME;
                     }
                     h ^= 0xFEu; /* separador entre macros distintos. */
@@ -2242,7 +2237,7 @@ int main(int argc, char *argv[]) {
         char cache_key_hex[17];
         std::snprintf(cache_key_hex, sizeof(cache_key_hex), "%016llx",
                       static_cast<unsigned long long>(cache_key));
-        const std::string cache_dir = ".cache/vex";
+        const std::string cache_dir = ".cache/vx";
         const std::string cache_prefix = cache_dir + "/" + cache_key_hex;
         const std::string cache_path = cache_prefix + ".velb";
         const bool cache_hit = std::filesystem::exists(cache_path);
@@ -2268,21 +2263,21 @@ int main(int argc, char *argv[]) {
         // intentar cache hit a nivel @c .velb final.  Si todos los hashes
         // de root + deps recursivos coinciden con los cacheados, copiar
         // el @c .velb cacheado al output y SALTAR todo el compile +
-        // link.  Desactivable via @c VEX_NO_PROJECT_CACHE=1.
+        // link.  Desactivable via @c VX_NO_PROJECT_CACHE=1.
         const bool project_cache_enabled = []() {
-            const char *v = std::getenv("VEX_NO_PROJECT_CACHE");
+            const char *v = std::getenv("VX_NO_PROJECT_CACHE");
             return !(v && v[0] == '1');
         }();
         const bool project_cache_verbose = []() {
-            const char *v = std::getenv("VEX_VERBOSE_PROJECT_CACHE");
+            const char *v = std::getenv("VX_VERBOSE_PROJECT_CACHE");
             return v && v[0] == '1';
         }();
-        const bool has_imports = vx::vex_source_has_imports(vex_source);
+        const bool has_imports = vx::vx_source_has_imports(vx_source);
 
         vx::ProjectCacheKey pck;
         pck.opt_level = copts.opt_level;
         pck.emit_debug = copts.emit_debug;
-        pck.vex_base = 0; // no usado por compile_vx_project; queda 0
+        pck.vx_base = 0; // no usado por compile_vx_project; queda 0
         pck.instrument_mode = copts.instrument_mode;
         pck.port_target = copts.port_target;
         const uint32_t opts_hash = vx::project_cache_opts_hash(pck);
@@ -2291,9 +2286,9 @@ int main(int argc, char *argv[]) {
         std::string canonical_root;
         try {
             canonical_root =
-                std::filesystem::weakly_canonical(vex_path).string();
+                std::filesystem::weakly_canonical(vx_path).string();
         } catch (...) {
-            canonical_root = vex_path;
+            canonical_root = vx_path;
         }
         const std::string pc_dir = vx::default_project_cache_dir();
         const std::string pc_path =
@@ -2301,11 +2296,11 @@ int main(int argc, char *argv[]) {
 
         // Artefactos que SOLO se producen recorriendo el pipeline completo
         // (no estan en el .velb cacheado): diagramas (mmd/dot/html), dump de
-        // IR (--vex-emit-ir) y transpile (--port).  Si el usuario los pide,
+        // IR (--vx-emit-ir) y transpile (--port).  Si el usuario los pide,
         // saltamos el hit del project-cache para forzar la compilacion y que
         // se generen; de lo contrario el cache hit los omitiria en silencio.
         const bool wants_pipeline_artifacts =
-            diag_vex || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
+            diag_vx || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
             !copts.port_target.empty();
 
         // Phase AOT multi-modulo (fix): el project-cache SOLO almacena un
@@ -2317,7 +2312,7 @@ int main(int argc, char *argv[]) {
         // (bloque `if (aot_mode)` mas abajo) -> el usuario nunca obtenia su
         // exe.  Solucion: en AOT saltamos por completo el project-cache (no
         // puede servir ni guardar binarios nativos; el codegen AOT es siempre
-        // fresco).  Los caches per-dep (.vexi/.vexir) siguen aplicando.
+        // fresco).  Los caches per-dep (.vxi/.vxir) siguen aplicando.
         if (project_cache_enabled && has_imports && !wants_pipeline_artifacts &&
             !aot_mode) {
             uint32_t cached_opts_hash = 0;
@@ -2336,7 +2331,7 @@ int main(int argc, char *argv[]) {
                             static_cast<std::streamsize>(cached_velb.size()));
                     if (f.good()) {
                         if (project_cache_verbose) {
-                            std::cerr << "[vex-project-cache] hit: " << pc_path
+                            std::cerr << "[vx-project-cache] hit: " << pc_path
                                       << " -> " << out_velb << " ("
                                       << cached_velb.size() << " bytes)\n";
                         }
@@ -2345,21 +2340,21 @@ int main(int argc, char *argv[]) {
                 }
                 // Si fallo escribir, caemos al compile normal (no es fatal).
                 if (project_cache_verbose) {
-                    std::cerr << "[vex-project-cache] hit pero write fallo, "
+                    std::cerr << "[vx-project-cache] hit pero write fallo, "
                                  "recompile\n";
                 }
             } else if (project_cache_verbose) {
-                std::cerr << "[vex-project-cache] miss: " << pc_path << "\n";
+                std::cerr << "[vx-project-cache] miss: " << pc_path << "\n";
             }
         }
 
         // Phase M.2.e: si el source tiene `import`, dispatch al
         // compilador multi-modulo.  Este construye el dep graph,
-        // compila cada dep en topo order, inyecta .vexi, y mergea
+        // compila cada dep en topo order, inyecta .vxi, y mergea
         // todas las funciones en un solo .vel.
         vx::CompileResult cr =
-            has_imports ? vx::compile_vx_project(vex_path, copts)
-                        : vx::compile_vx_source(vex_source, vex_path, copts);
+            has_imports ? vx::compile_vx_project(vx_path, copts)
+                        : vx::compile_vx_source(vx_source, vx_path, copts);
 
         /* Phase MC.16+: diagnostico de macros que el lowering rechazo
          * por usar builtins comptime-only no aliasables (comptime_compile,
@@ -2429,37 +2424,37 @@ int main(int argc, char *argv[]) {
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de excepciones (stdlib/vex/vex_exc.vx).
-            // Si el modulo usa try/catch/throw (THROW o CALL __vex_setjmp en el
+            // Auto-bundle del runtime de excepciones (stdlib/vx/vx_exc.vx).
+            // Si el modulo usa try/catch/throw (THROW o CALL __vx_setjmp en el
             // IR) y no define el runtime el mismo, lo compilamos inline (mismo
             // native_poo + el @Target ya seleccionado para el target AOT) y
-            // FUSIONAMOS sus funciones + la seccion .vexexc en aot_mod -> el .o
-            // queda autocontenido (no hay que enlazar vex_exc.o a mano).  El
-            // dead-elim posterior conserva solo las __vex_* realmente usadas.
+            // FUSIONAMOS sus funciones + la seccion .vxexc en aot_mod -> el .o
+            // queda autocontenido (no hay que enlazar vx_exc.o a mano).  El
+            // dead-elim posterior conserva solo las __vx_* realmente usadas.
             // Removible con --no-exceptions (exceptions_enabled=false).
             // ----------------------------------------------------------------
             if (!aot_no_exceptions) {
                 bool uses_exc = false, defines_exc = false;
                 for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vex_setjmp") defines_exc = true;
+                    if (af.name == "__vx_setjmp") defines_exc = true;
                     for (const auto &b : af.blocks)
                         for (const auto &ins : b.instrs)
                             if (ins.op == ir::IrOp::THROW ||
                                 (ins.op == ir::IrOp::CALL &&
-                                 ins.func_name == "__vex_setjmp"))
+                                 ins.func_name == "__vx_setjmp"))
                                 uses_exc = true;
                 }
                 if (uses_exc && !defines_exc) {
-                    // Localizar vex_exc.vex: junto al exe (instalacion) o en el
-                    // repo (dev: build_dir/../stdlib/vex) o cwd.
+                    // Localizar vx_exc.vx: junto al exe (instalacion) o en el
+                    // repo (dev: build_dir/../stdlib/vx) o cwd.
                     const std::string exe_dir =
                         std::filesystem::path(fs::get_executable_path())
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_exc.vx",
-                        exe_dir + "/../stdlib/vex/vex_exc.vx",
-                        "stdlib/vex/vex_exc.vx"};
+                        exe_dir + "/stdlib/vx/vx_exc.vx",
+                        exe_dir + "/../stdlib/vx/vx_exc.vx",
+                        "stdlib/vx/vx_exc.vx"};
                     std::string ve_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2468,7 +2463,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (ve_path.empty()) {
                         std::cerr << "[aot] usa excepciones pero no encuentro "
-                                     "stdlib/vex/vex_exc.vx (enlazalo a mano o "
+                                     "stdlib/vx/vx_exc.vx (enlazalo a mano o "
                                      "compila con --no-exceptions).\n";
                         return EXIT_FAILURE;
                     }
@@ -2476,7 +2471,7 @@ int main(int argc, char *argv[]) {
                     std::string ve_src((std::istreambuf_iterator<char>(vef)),
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions ve_opts;
-                    ve_opts.module_name = "vex_exc";
+                    ve_opts.module_name = "vx_exc";
                     ve_opts.opt_level = 2;
                     ve_opts.native_poo = true;
                     ve_opts.exceptions_enabled = true;
@@ -2490,13 +2485,13 @@ int main(int argc, char *argv[]) {
                         !ir::parse_ir_module_cache(ve_cr.ir_module_cache_bytes,
                                                    ve_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de "
-                                     "excepciones vex_exc.vex.\n";
+                                     "excepciones vx_exc.vx.\n";
                         return EXIT_FAILURE;
                     }
                     // Merge (mismo patron que compiler_project): remap de
                     // STR_LIT_ADDR/code.s_N por el offset del static_data, luego
                     // append de funciones (las que no existan ya) + static_data
-                    // + globals + native_imports.  vex_exc no tiene literales,
+                    // + globals + native_imports.  vx_exc no tiene literales,
                     // pero el remap es correcto en general (defensa).
                     const uint64_t sd_off =
                         static_cast<uint64_t>(aot_mod.static_data.size());
@@ -2519,28 +2514,28 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : ve_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] runtime de excepciones "
-                                 "(stdlib/vex/vex_exc.vx) incluido en el "
+                                 "(stdlib/vx/vx_exc.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de monitores (stdlib/vex/vex_sync.vx).
+            // Auto-bundle del runtime de monitores (stdlib/vx/vx_sync.vx).
             // Si el modulo usa `synchronized`/`monitor`, el lowering native_poo
-            // emite CALL __vex_monenter/__vex_monexit (monitor reentrante inline
+            // emite CALL __vx_monenter/__vx_monexit (monitor reentrante inline
             // en el objeto, palabra en obj+16) en vez de las IR ops MONENTER/
-            // MONEXIT.  Fusionamos vex_sync.vex (atomic CAS + tid nativos) ->
+            // MONEXIT.  Fusionamos vx_sync.vx (atomic CAS + tid nativos) ->
             // el .o queda autocontenido.  El dead-elim conserva solo lo usado.
             // ----------------------------------------------------------------
             {
                 bool uses_sync = false, defines_sync = false;
                 for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vex_monenter") defines_sync = true;
+                    if (af.name == "__vx_monenter") defines_sync = true;
                     for (const auto &b : af.blocks)
                         for (const auto &ins : b.instrs)
                             if (ins.op == ir::IrOp::CALL &&
-                                (ins.func_name == "__vex_monenter" ||
-                                 ins.func_name == "__vex_monexit"))
+                                (ins.func_name == "__vx_monenter" ||
+                                 ins.func_name == "__vx_monexit"))
                                 uses_sync = true;
                 }
                 if (uses_sync && !defines_sync) {
@@ -2549,9 +2544,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_sync.vx",
-                        exe_dir + "/../stdlib/vex/vex_sync.vx",
-                        "stdlib/vex/vex_sync.vx"};
+                        exe_dir + "/stdlib/vx/vx_sync.vx",
+                        exe_dir + "/../stdlib/vx/vx_sync.vx",
+                        "stdlib/vx/vx_sync.vx"};
                     std::string vs_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2560,14 +2555,14 @@ int main(int argc, char *argv[]) {
                         }
                     if (vs_path.empty()) {
                         std::cerr << "[aot] usa synchronized pero no encuentro "
-                                     "stdlib/vex/vex_sync.vx (enlazalo a mano).\n";
+                                     "stdlib/vx/vx_sync.vx (enlazalo a mano).\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream vsf(vs_path);
                     std::string vs_src((std::istreambuf_iterator<char>(vsf)),
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions vs_opts;
-                    vs_opts.module_name = "vex_sync";
+                    vs_opts.module_name = "vx_sync";
                     vs_opts.opt_level = 2;
                     vs_opts.native_poo = true;
                     vs_opts.asm_target_bits = copts.asm_target_bits;
@@ -2578,7 +2573,7 @@ int main(int argc, char *argv[]) {
                         !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
                                                    vs_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de "
-                                     "monitores vex_sync.vex.\n";
+                                     "monitores vx_sync.vx.\n";
                         return EXIT_FAILURE;
                     }
                     const uint64_t sd_off =
@@ -2602,32 +2597,32 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : vs_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] runtime de monitores "
-                                 "(stdlib/vex/vex_sync.vx) incluido en el "
+                                 "(stdlib/vx/vx_sync.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de asincronia (stdlib/vex/vex_async.vx).
+            // Auto-bundle del runtime de asincronia (stdlib/vx/vx_async.vx).
             // Si el modulo usa spawn/future/await/fulfill, el lowering
-            // native_poo emite CALL __vex_spawn/__vex_future_new/__vex_await/
-            // __vex_fulfill (scheduler cooperativo, no hilos del SO).
-            // Fusionamos vex_async.vex -> .o autocontenido.
+            // native_poo emite CALL __vx_spawn/__vx_future_new/__vx_await/
+            // __vx_fulfill (scheduler cooperativo, no hilos del SO).
+            // Fusionamos vx_async.vx -> .o autocontenido.
             // ----------------------------------------------------------------
             {
                 bool uses_async = false, defines_async = false;
                 for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vex_spawn") defines_async = true;
+                    if (af.name == "__vx_spawn") defines_async = true;
                     for (const auto &b : af.blocks)
                         for (const auto &ins : b.instrs)
                             if (ins.op == ir::IrOp::CALL &&
-                                (ins.func_name == "__vex_spawn" ||
-                                 ins.func_name == "__vex_future_new" ||
-                                 ins.func_name == "__vex_await" ||
-                                 ins.func_name == "__vex_fulfill" ||
-                                 ins.func_name == "__vex_msgsend" ||
-                                 ins.func_name == "__vex_msgrecv" ||
-                                 ins.func_name == "__vex_pid"))
+                                (ins.func_name == "__vx_spawn" ||
+                                 ins.func_name == "__vx_future_new" ||
+                                 ins.func_name == "__vx_await" ||
+                                 ins.func_name == "__vx_fulfill" ||
+                                 ins.func_name == "__vx_msgsend" ||
+                                 ins.func_name == "__vx_msgrecv" ||
+                                 ins.func_name == "__vx_pid"))
                                 uses_async = true;
                 }
                 if (uses_async && !defines_async) {
@@ -2636,9 +2631,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_async.vx",
-                        exe_dir + "/../stdlib/vex/vex_async.vx",
-                        "stdlib/vex/vex_async.vx"};
+                        exe_dir + "/stdlib/vx/vx_async.vx",
+                        exe_dir + "/../stdlib/vx/vx_async.vx",
+                        "stdlib/vx/vx_async.vx"};
                     std::string va_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2647,14 +2642,14 @@ int main(int argc, char *argv[]) {
                         }
                     if (va_path.empty()) {
                         std::cerr << "[aot] usa spawn/async pero no encuentro "
-                                     "stdlib/vex/vex_async.vx (enlazalo a mano).\n";
+                                     "stdlib/vx/vx_async.vx (enlazalo a mano).\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream vaf(va_path);
                     std::string va_src((std::istreambuf_iterator<char>(vaf)),
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions va_opts;
-                    va_opts.module_name = "vex_async";
+                    va_opts.module_name = "vx_async";
                     va_opts.opt_level = 2;
                     va_opts.native_poo = true;
                     va_opts.asm_target_bits = copts.asm_target_bits;
@@ -2665,7 +2660,7 @@ int main(int argc, char *argv[]) {
                         !ir::parse_ir_module_cache(va_cr.ir_module_cache_bytes,
                                                    va_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de "
-                                     "asincronia vex_async.vex.\n";
+                                     "asincronia vx_async.vx.\n";
                         return EXIT_FAILURE;
                     }
                     const uint64_t sd_off =
@@ -2689,28 +2684,28 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : va_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] runtime de asincronia "
-                                 "(stdlib/vex/vex_async.vx) incluido en el "
+                                 "(stdlib/vx/vx_async.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del primitivo de fibras (stdlib/vex/vex_fiber.vx).
+            // Auto-bundle del primitivo de fibras (stdlib/vx/vx_fiber.vx).
             // Si el modulo usa el builtin `fiber_swapctx`, el lowering
-            // native_poo (FN.2) emite CALL __vex_swapctx (context-switch nativo
-            // @Naked, host-stack).  Fusionamos vex_fiber.vex -> .o autocontenido,
+            // native_poo (FN.2) emite CALL __vx_swapctx (context-switch nativo
+            // @Naked, host-stack).  Fusionamos vx_fiber.vx -> .o autocontenido,
             // salvo que el modulo YA lo defina (import explicito).  Mismo patron
-            // que vex_async: el context-switch es puro Vesta (inline-asm), sin
+            // que vx_async: el context-switch es puro Vesta (inline-asm), sin
             // runtime.
             // ----------------------------------------------------------------
             {
                 bool uses_fiber = false, defines_fiber = false;
                 for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vex_swapctx") defines_fiber = true;
+                    if (af.name == "__vx_swapctx") defines_fiber = true;
                     for (const auto &b : af.blocks)
                         for (const auto &ins : b.instrs)
                             if (ins.op == ir::IrOp::CALL &&
-                                ins.func_name == "__vex_swapctx")
+                                ins.func_name == "__vx_swapctx")
                                 uses_fiber = true;
                 }
                 if (uses_fiber && !defines_fiber) {
@@ -2719,9 +2714,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_fiber.vx",
-                        exe_dir + "/../stdlib/vex/vex_fiber.vx",
-                        "stdlib/vex/vex_fiber.vx"};
+                        exe_dir + "/stdlib/vx/vx_fiber.vx",
+                        exe_dir + "/../stdlib/vx/vx_fiber.vx",
+                        "stdlib/vx/vx_fiber.vx"};
                     std::string vf_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2730,14 +2725,14 @@ int main(int argc, char *argv[]) {
                         }
                     if (vf_path.empty()) {
                         std::cerr << "[aot] usa fiber_swapctx pero no encuentro "
-                                     "stdlib/vex/vex_fiber.vx (enlazalo a mano).\n";
+                                     "stdlib/vx/vx_fiber.vx (enlazalo a mano).\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream vff(vf_path);
                     std::string vf_src((std::istreambuf_iterator<char>(vff)),
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions vf_opts;
-                    vf_opts.module_name = "vex_fiber";
+                    vf_opts.module_name = "vx_fiber";
                     vf_opts.opt_level = 2;
                     vf_opts.native_poo = true;
                     vf_opts.asm_target_bits = copts.asm_target_bits;
@@ -2748,7 +2743,7 @@ int main(int argc, char *argv[]) {
                         !ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
                                                    vf_mod)) {
                         std::cerr << "[aot] no pude compilar el primitivo de "
-                                     "fibras vex_fiber.vex.\n";
+                                     "fibras vx_fiber.vx.\n";
                         return EXIT_FAILURE;
                     }
                     const uint64_t sd_off =
@@ -2772,30 +2767,30 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : vf_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] primitivo de fibras "
-                                 "(stdlib/vex/vex_fiber.vx) incluido en el "
+                                 "(stdlib/vx/vx_fiber.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de I/O (stdlib/vex/vex_io.vx).
+            // Auto-bundle del runtime de I/O (stdlib/vx/vx_io.vx).
             // Si el modulo usa print/println, el lowering native_poo emite
-            // CALLN `vex_bare_io:__vex_*` (write + formateadores).  En vez de
+            // CALLN `vx_bare_io:__vx_*` (write + formateadores).  En vez de
             // exigir enlazar vesta_io_bare.o (libc/printf), fusionamos un
             // runtime Vesta puro que escribe via FFI a write/_write (fd 1, sin
             // printf -> mas rapido) y formatea los numeros en Vesta.  Tras el
-            // merge reescribimos esas CALLN a CALL plano (__vex_*) -> resuelven
+            // merge reescribimos esas CALLN a CALL plano (__vx_*) -> resuelven
             // a las funciones bundle-adas (no quedan como import externo).  El
-            // usuario puede REDEFINIR cualquier __vex_* en su modulo: si lo
+            // usuario puede REDEFINIR cualquier __vx_* en su modulo: si lo
             // hace, el lowering ya emitio CALL a la suya y no detectamos la
             // CALLN -> no se bundle-a.  Removible con --freestanding (el
-            // usuario aporta los __vex_*) o --no-io.
+            // usuario aporta los __vx_*) o --no-io.
             // ----------------------------------------------------------------
             if (!aot_no_io && !aot_freestanding) {
-                const std::string io_pfx = "vex_bare_io:";
+                const std::string io_pfx = "vx_bare_io:";
                 bool uses_io = false, defines_io = false;
                 for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vex_write") defines_io = true;
+                    if (af.name == "__vx_write") defines_io = true;
                     for (const auto &b : af.blocks)
                         for (const auto &ins : b.instrs)
                             if (ins.op == ir::IrOp::CALLN &&
@@ -2808,9 +2803,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_io.vx",
-                        exe_dir + "/../stdlib/vex/vex_io.vx",
-                        "stdlib/vex/vex_io.vx"};
+                        exe_dir + "/stdlib/vx/vx_io.vx",
+                        exe_dir + "/../stdlib/vx/vx_io.vx",
+                        "stdlib/vx/vx_io.vx"};
                     std::string io_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2819,16 +2814,16 @@ int main(int argc, char *argv[]) {
                         }
                     if (io_path.empty()) {
                         std::cerr << "[aot] usa print/println pero no encuentro "
-                                     "stdlib/vex/vex_io.vx (enlazalo a mano o "
+                                     "stdlib/vx/vx_io.vx (enlazalo a mano o "
                                      "compila con --freestanding y aporta "
-                                     "__vex_write).\n";
+                                     "__vx_write).\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream iof(io_path);
                     std::string io_src((std::istreambuf_iterator<char>(iof)),
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions io_opts;
-                    io_opts.module_name = "vex_io";
+                    io_opts.module_name = "vx_io";
                     io_opts.opt_level = 2;
                     io_opts.native_poo = true;
                     io_opts.asm_target_bits = copts.asm_target_bits;
@@ -2839,10 +2834,10 @@ int main(int argc, char *argv[]) {
                         !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
                                                    io_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de I/O "
-                                     "vex_io.vex.\n";
+                                     "vx_io.vx.\n";
                         return EXIT_FAILURE;
                     }
-                    // Merge (mismo patron que vex_exc): remap de STR_LIT_ADDR por
+                    // Merge (mismo patron que vx_exc): remap de STR_LIT_ADDR por
                     // el offset del static_data + append de funciones nuevas +
                     // static_data + globals + native_imports (write/_write/abort).
                     const uint64_t sd_off =
@@ -2865,7 +2860,7 @@ int main(int argc, char *argv[]) {
                         aot_mod.globals.emplace(gv.first, gv.second);
                     for (auto &ni : io_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
-                    // Reescribir CALLN `vex_bare_io:__vex_*` -> CALL `__vex_*`
+                    // Reescribir CALLN `vx_bare_io:__vx_*` -> CALL `__vx_*`
                     // (las funciones ahora viven en el modulo; resolucion
                     // intra-imagen, sin import externo).
                     for (auto &af : aot_mod.functions)
@@ -2877,7 +2872,7 @@ int main(int argc, char *argv[]) {
                                     ins.func_name =
                                         ins.func_name.substr(io_pfx.size());
                                 }
-                    // El I/O es block-buffered: inyectar CALL __vex_flush antes
+                    // El I/O es block-buffered: inyectar CALL __vx_flush antes
                     // de cada RET de main para volcar al salir (el _start nativo
                     // no corre atexit).  Asi nada se pierde y el buffering vale
                     // (1 syscall por 4 KiB en vez de 1 por write).
@@ -2894,7 +2889,7 @@ int main(int argc, char *argv[]) {
                                     // macro VOID de windef.h (restaurada tras
                                     // incluir ssa_ir.h).
                                     fl.dst = ir::IR_NO_VALUE;
-                                    fl.func_name = "__vex_flush";
+                                    fl.func_name = "__vx_flush";
                                     fl.source_line = ins.source_line;
                                     ni.push_back(std::move(fl));
                                 }
@@ -2903,7 +2898,7 @@ int main(int argc, char *argv[]) {
                             b.instrs = std::move(ni);
                         }
                     }
-                    std::cout << "[aot] runtime de I/O (stdlib/vex/vex_io.vx) "
+                    std::cout << "[aot] runtime de I/O (stdlib/vx/vx_io.vx) "
                                  "incluido en el objeto.\n";
                 }
             }
@@ -2982,11 +2977,11 @@ int main(int argc, char *argv[]) {
                                  ins.op == ir::IrOp::LABEL_ADDR) &&
                                 !ins.func_name.empty())
                                 add_live(ins.func_name);
-                            // THROW baja a CALL __vex_throw en el backend
+                            // THROW baja a CALL __vx_throw en el backend
                             // (no es un CALL en el IR) -> referencia implicita
                             // al runtime de excepciones auto-hospedado.
                             if (ins.op == ir::IrOp::THROW)
-                                add_live("__vex_throw");
+                                add_live("__vx_throw");
                             // INLINE_ASM: el cuerpo (func_name) puede referenciar
                             // funciones del modulo via tokens `__vxf_<label>` que
                             // el lowering inserto (inline-asm accede simbolos
@@ -3086,10 +3081,10 @@ int main(int argc, char *argv[]) {
                     true; // __new calloc -> alloc_sym(size)
             } else if (aot_uses_alloc && !aot_no_mem && !aot_freestanding) {
                 // Sin @AllocatorOverride del usuario -> el slab Vesta
-                // (stdlib/vex/vex_mem.vx) es el allocator por DEFECTO, via el
+                // (stdlib/vx/vx_mem.vx) es el allocator por DEFECTO, via el
                 // MISMO mecanismo @AllocatorOverride (reciclamos la sintaxis):
-                // compilamos vex_mem y leemos sus simbolos override
-                // (__vex_malloc / __vex_free) genericamente, no hardcoded.  Sin
+                // compilamos vx_mem y leemos sus simbolos override
+                // (__vx_malloc / __vx_free) genericamente, no hardcoded.  Sin
                 // libc malloc/free.  El usuario sustituye con su propio
                 // @AllocatorOverride, o lo desactiva con --no-mem.
                 const std::string exe_dir =
@@ -3097,9 +3092,9 @@ int main(int argc, char *argv[]) {
                         .parent_path()
                         .string();
                 const std::vector<std::string> cands = {
-                    exe_dir + "/stdlib/vex/vex_mem.vx",
-                    exe_dir + "/../stdlib/vex/vex_mem.vx",
-                    "stdlib/vex/vex_mem.vx"};
+                    exe_dir + "/stdlib/vx/vx_mem.vx",
+                    exe_dir + "/../stdlib/vx/vx_mem.vx",
+                    "stdlib/vx/vx_mem.vx"};
                 std::string mem_path;
                 for (const auto &c : cands)
                     if (std::filesystem::exists(c)) {
@@ -3108,7 +3103,7 @@ int main(int argc, char *argv[]) {
                     }
                 if (mem_path.empty()) {
                     std::cerr << "[aot] usa el allocator pero no encuentro "
-                                 "stdlib/vex/vex_mem.vx (enlazalo a mano, usa "
+                                 "stdlib/vx/vx_mem.vx (enlazalo a mano, usa "
                                  "@AllocatorOverride o compila con --no-mem).\n";
                     return EXIT_FAILURE;
                 }
@@ -3116,7 +3111,7 @@ int main(int argc, char *argv[]) {
                 std::string mem_src((std::istreambuf_iterator<char>(mf)),
                                     std::istreambuf_iterator<char>());
                 vx::CompileOptions mem_opts;
-                mem_opts.module_name = "vex_mem";
+                mem_opts.module_name = "vx_mem";
                 mem_opts.opt_level = 2;
                 mem_opts.native_poo = true;
                 mem_opts.asm_target_bits = copts.asm_target_bits;
@@ -3128,10 +3123,10 @@ int main(int argc, char *argv[]) {
                     mem_cr.aot_alloc_sym.empty() ||
                     mem_cr.aot_free_sym.empty()) {
                     std::cerr << "[aot] no pude compilar el slab allocator "
-                                 "vex_mem.vex (o no expone @AllocatorOverride).\n";
+                                 "vx_mem.vx (o no expone @AllocatorOverride).\n";
                     return EXIT_FAILURE;
                 }
-                // Override por defecto = los simbolos que vex_mem declaro con
+                // Override por defecto = los simbolos que vx_mem declaro con
                 // @AllocatorOverride (mismo trato que un override del usuario).
                 lcfg.alloc_sym = mem_cr.aot_alloc_sym;
                 lcfg.free_sym = mem_cr.aot_free_sym;
@@ -3145,11 +3140,11 @@ int main(int argc, char *argv[]) {
             }
 
             // FFI dinamico (ffi_open/ffi_sym -> DLOPEN/DLSYM): bundle
-            // stdlib/vex/vex_ffi.vx que define __vex_dlopen/__vex_dlsym
-            // (LoadLibraryA/dlopen via @Target, Vesta puro).  Igual que vex_mem:
+            // stdlib/vx/vx_ffi.vx que define __vx_dlopen/__vx_dlsym
+            // (LoadLibraryA/dlopen via @Target, Vesta puro).  Igual que vx_mem:
             // el usuario puede REDEFINIR esas funciones en su modulo (el merge
             // respeta las suyas).  Se detecta ANTES de aot_lower (que convierte
-            // DLOPEN/DLSYM en CALL __vex_dlopen/__vex_dlsym).
+            // DLOPEN/DLSYM en CALL __vx_dlopen/__vx_dlsym).
             bool bundle_ffi = false;
             ir::IrModule ffi_mod;
             {
@@ -3166,9 +3161,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_ffi.vx",
-                        exe_dir + "/../stdlib/vex/vex_ffi.vx",
-                        "stdlib/vex/vex_ffi.vx"};
+                        exe_dir + "/stdlib/vx/vx_ffi.vx",
+                        exe_dir + "/../stdlib/vx/vx_ffi.vx",
+                        "stdlib/vx/vx_ffi.vx"};
                     std::string ffi_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -3177,7 +3172,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (ffi_path.empty()) {
                         std::cerr << "[aot] usa ffi_open/ffi_sym pero no "
-                                     "encuentro stdlib/vex/vex_ffi.vx.\n";
+                                     "encuentro stdlib/vx/vx_ffi.vx.\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream ff(ffi_path);
@@ -3185,7 +3180,7 @@ int main(int argc, char *argv[]) {
                         (std::istreambuf_iterator<char>(ff)),
                         std::istreambuf_iterator<char>());
                     vx::CompileOptions ffi_opts;
-                    ffi_opts.module_name = "vex_ffi";
+                    ffi_opts.module_name = "vx_ffi";
                     ffi_opts.opt_level = 2;
                     ffi_opts.native_poo = true;
                     ffi_opts.asm_target_bits = copts.asm_target_bits;
@@ -3195,7 +3190,7 @@ int main(int argc, char *argv[]) {
                         !ir::parse_ir_module_cache(
                             ffi_cr.ir_module_cache_bytes, ffi_mod)) {
                         std::cerr << "[aot] no pude compilar el FFI dinamico "
-                                     "vex_ffi.vex.\n";
+                                     "vx_ffi.vx.\n";
                         return EXIT_FAILURE;
                     }
                     bundle_ffi = true;
@@ -3204,10 +3199,10 @@ int main(int argc, char *argv[]) {
 
             aot::aot_lower_runtime(aot_mod, lcfg);
 
-            // Merge del slab (stdlib/vex/vex_mem.vx, ya compilado en mem_mod)
+            // Merge del slab (stdlib/vx/vx_mem.vx, ya compilado en mem_mod)
             // DESPUES de aot_lower: ahora RAW_ALLOC/calloc/RAW_FREE ya son CALL
-            // __vex_malloc/__vex_free, asi que el codegen BFS los alcanza desde
-            // main.  Mismo patron de merge que vex_io/vex_exc.
+            // __vx_malloc/__vx_free, asi que el codegen BFS los alcanza desde
+            // main.  Mismo patron de merge que vx_io/vx_exc.
             if (bundle_mem) {
                 const uint64_t sd_off =
                     static_cast<uint64_t>(aot_mod.static_data.size());
@@ -3229,14 +3224,14 @@ int main(int argc, char *argv[]) {
                     aot_mod.globals.emplace(gv.first, gv.second);
                 for (auto &ni : mem_mod.native_imports)
                     aot_mod.register_native_import(ni.lib, ni.name);
-                std::cout << "[aot] slab allocator (stdlib/vex/vex_mem.vx) "
+                std::cout << "[aot] slab allocator (stdlib/vx/vx_mem.vx) "
                              "incluido en el objeto.\n";
             }
 
-            // Merge del FFI dinamico (vex_ffi.vex) DESPUES de aot_lower: ahora
-            // DLOPEN/DLSYM ya son CALL __vex_dlopen/__vex_dlsym y el BFS los
-            // alcanza.  Mismo patron que vex_mem.  Si el usuario definio sus
-            // propias __vex_dlopen/__vex_dlsym, el dedup (have) las respeta.
+            // Merge del FFI dinamico (vx_ffi.vx) DESPUES de aot_lower: ahora
+            // DLOPEN/DLSYM ya son CALL __vx_dlopen/__vx_dlsym y el BFS los
+            // alcanza.  Mismo patron que vx_mem.  Si el usuario definio sus
+            // propias __vx_dlopen/__vx_dlsym, el dedup (have) las respeta.
             if (bundle_ffi) {
                 const uint64_t sd_off =
                     static_cast<uint64_t>(aot_mod.static_data.size());
@@ -3258,7 +3253,7 @@ int main(int argc, char *argv[]) {
                     aot_mod.globals.emplace(gv.first, gv.second);
                 for (auto &ni : ffi_mod.native_imports)
                     aot_mod.register_native_import(ni.lib, ni.name);
-                std::cout << "[aot] FFI dinamico (stdlib/vex/vex_ffi.vx) "
+                std::cout << "[aot] FFI dinamico (stdlib/vx/vx_ffi.vx) "
                              "incluido en el objeto.\n";
             }
 
@@ -3371,10 +3366,10 @@ int main(int argc, char *argv[]) {
                 }
             }
             // Increment 3: auto-link de libvesta_gc.a si el modulo usa gc<T>.
-            // El frontend emite __vexgc_init cuando hay gc<T>; ese codigo llama
-            // a vex_gc_* (definidos en libvesta_gc.a).  Para --emit exe se emite
+            // El frontend emite __vxgc_init cuando hay gc<T>; ese codigo llama
+            // a vx_gc_* (definidos en libvesta_gc.a).  Para --emit exe se emite
             // un .obj temporal y se enlaza con la lib (vm --link interno),
-            // porque la ruta inline mandaria vex_gc_* a imports de DLL (rotos).
+            // porque la ruta inline mandaria vx_gc_* a imports de DLL (rotos).
             // Solo PE por ahora (la lib se distribuye como COFF .a).
             // Auto-link de librerias ESTATICAS de la stdlib (.a) cuando el
             // programa las usa: gc<T> (libvesta_gc.a), colecciones
@@ -3391,7 +3386,7 @@ int main(int argc, char *argv[]) {
                     for (const auto &b : fn.blocks)
                         for (const auto &ins : b.instrs) {
                             const std::string &f = ins.func_name;
-                            if (f.rfind("vex_gc_", 0) == 0) uses_gc = true;
+                            if (f.rfind("vx_gc_", 0) == 0) uses_gc = true;
                             if (f.find("vcol_") != std::string::npos)
                                 uses_col = true;
                             if (f.find("vmath_") != std::string::npos)
@@ -3556,7 +3551,7 @@ int main(int argc, char *argv[]) {
             }
             // PE shared (.dll) con TLS: el emisor sintetiza el TLS directory
             // (isolation por-hilo) y, ademas, fija el AddressOfEntryPoint a
-            // __vex_tls_init (un DllMain minimo).  ntdll lo invoca en cada
+            // __vx_tls_init (un DllMain minimo).  ntdll lo invoca en cada
             // DLL_PROCESS_ATTACH / DLL_THREAD_ATTACH, aplicando la plantilla
             // (valores iniciales no-cero) a la copia por-hilo -- funciona con
             // cualquier consumidor (con o sin CRT).  Sin nota necesaria.
@@ -3611,13 +3606,13 @@ int main(int argc, char *argv[]) {
                     work.push_back(fn.name);
                 }
             }
-            // __vex_tls_init (TLS callback): lo llama el cargador de Windows (no
+            // __vx_tls_init (TLS callback): lo llama el cargador de Windows (no
             // un CALL visible) -> sembrarlo siempre para que se compile.
-            if (!queued.count("__vex_tls_init"))
+            if (!queued.count("__vx_tls_init"))
                 for (const auto &fn : aot_mod.functions)
-                    if (fn.name == "__vex_tls_init") {
-                        queued["__vex_tls_init"] = true;
-                        work.push_back("__vex_tls_init");
+                    if (fn.name == "__vx_tls_init") {
+                        queued["__vx_tls_init"] = true;
+                        work.push_back("__vx_tls_init");
                         break;
                     }
 
@@ -3656,11 +3651,11 @@ int main(int argc, char *argv[]) {
             };
             // Nombres de las variantes multiversionadas (los consume el dispatch).
             std::vector<std::string> mv_funcs; // funciones multiversionadas
-            // AUTO: sembrar toda funcion con ops VEC.  __vex_main_body (el main
+            // AUTO: sembrar toda funcion con ops VEC.  __vx_main_body (el main
             // del usuario renombrado por la lowering) NO se alcanza por CALL
             // directo (el main sintetico hace CALLIND via fp), asi que hay que
             // encolarlo explicitamente para que se dequeue -> compile sus 3
-            // variantes.  __vex_auto_init si se alcanza (main lo CALL-prepende).
+            // variantes.  __vx_auto_init si se alcanza (main lo CALL-prepende).
             if (aot_auto) {
                 for (const auto &fn : aot_mod.functions) {
                     if (fn_has_vec_ops(fn) && !queued.count(fn.name)) {
@@ -3854,8 +3849,8 @@ int main(int argc, char *argv[]) {
             for (size_t ci = 0; ci < compiled.size(); ++ci)
                 if (!main_fn || compiled[ci].name != "main") place_fn(ci);
 
-            // gc<T> (Inc 4b): emitir la seccion .vexgc_smap con los stackmaps de
-            // cada funcion que retiene GC roots, para que __vexgc_init la
+            // gc<T> (Inc 4b): emitir la seccion .vxgc_smap con los stackmaps de
+            // cada funcion que retiene GC roots, para que __vxgc_init la
             // registre en el GC al arranque (scan_jit_roots_precise sobre frames
             // nativos).  func_addr va como placeholder + reloc ABS64 a la fn
             // (resuelto tras el layout).  Solo si hay stackmaps no vacios.
@@ -3877,13 +3872,13 @@ int main(int argc, char *argv[]) {
                     if (!compiled[ci].stackmaps.empty()) gc_fns.push_back(ci);
                 }
                 // Emitir la seccion siempre que ALGUNA funcion referencie
-                // .vexgc_smap (via section_start/size de __vexgc_init, posible-
+                // .vxgc_smap (via section_start/size de __vxgc_init, posible-
                 // mente INLINEADO en main) -- aunque no haya stackmaps no vacios
                 // -- porque la reloc secsym exige que la seccion exista.
                 bool gc_smap_ref = false;
                 for (const auto &af : compiled) {
                     for (const auto &r : af.relocs)
-                        if (r.symbol.find(".vexgc_smap") != std::string::npos) {
+                        if (r.symbol.find(".vxgc_smap") != std::string::npos) {
                             gc_smap_ref = true;
                             break;
                         }
@@ -3935,7 +3930,7 @@ int main(int argc, char *argv[]) {
                     const uint32_t total = static_cast<uint32_t>(b.size());
                     for (int i = 0; i < 4; ++i)
                         b[12 + i] = static_cast<uint8_t>((total >> (i * 8)) & 0xFF);
-                    smap_si = get_sec(".vexgc_smap", /*is_code=*/false, "r");
+                    smap_si = get_sec(".vxgc_smap", /*is_code=*/false, "r");
                     secs[smap_si].bytes = std::move(b);
                 }
             }
@@ -4072,7 +4067,7 @@ int main(int argc, char *argv[]) {
                             std::strtoul(r.symbol.c_str() + 6, nullptr, 10)));
                         continue;
                     }
-                    if (r.symbol == "__vex_tls_index")
+                    if (r.symbol == "__vx_tls_index")
                         continue; // TLS PE: simbolo del emisor (pass 2, sin dato)
                     if (r.symbol.rfind("rodata.", 0) != 0) {
                         std::cerr
@@ -4116,10 +4111,10 @@ int main(int argc, char *argv[]) {
             // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
             w.set_mode32(aot_mode32); // x86-32 EXEC -> contenedor ELF32
-            // TLS PE: si el modulo tiene __vex_tls_init (callback de plantilla),
+            // TLS PE: si el modulo tiene __vx_tls_init (callback de plantilla),
             // pasar su ubicacion al emisor para registrarlo en el TLS directory.
             {
-                auto tcb = fn_loc.find("__vex_tls_init");
+                auto tcb = fn_loc.find("__vx_tls_init");
                 if (tcb != fn_loc.end())
                     w.set_tls_callback(tcb->second.sec,
                                        static_cast<uint32_t>(tcb->second.off));
@@ -4165,7 +4160,7 @@ int main(int argc, char *argv[]) {
                 ws.order = s.order; // ubicacion/orden (.bin)
                 w.add_section(std::move(ws));
             }
-            // gc<T> (Inc 4b): relocs ABS64 de los func_addr de .vexgc_smap a la
+            // gc<T> (Inc 4b): relocs ABS64 de los func_addr de .vxgc_smap a la
             // VA real de cada funcion (resuelta tras el layout).
             if (smap_si >= 0) {
                 for (const auto &fr : smap_func_relocs) {
@@ -4190,7 +4185,7 @@ int main(int argc, char *argv[]) {
                 // crt del linker externo); sin _start ni entry.
                 w.set_output_kind(aot::OutputKind::OBJECT);
                 // Exporta como GLOBAL todas las funciones de USUARIO (no
-                // empiezan por "__").  Los helpers internos (__vex_*/__new_*/
+                // empiezan por "__").  Los helpers internos (__vx_*/__new_*/
                 // __module_init/...) quedan LOCALES -> no colisionan al enlazar
                 // varios .o Vesta (cada .o lleva su propia copia, referenciada via
                 // relocs de seccion).  Asi una libreria .o (sin main) expone sus
@@ -4200,14 +4195,14 @@ int main(int argc, char *argv[]) {
                     // se EXPORTAN como globales aunque empiecen por "__": el
                     // linker los recolecta de CADA .o y los ejecuta antes de main
                     // (cada .o tiene sus propios slots fp; basta correr su init).
-                    const bool is_init = (af.name == "__vex_cpu_init" ||
-                                          af.name == "__vex_memcpy_init" ||
-                                          af.name == "__vex_strdisp_init");
+                    const bool is_init = (af.name == "__vx_cpu_init" ||
+                                          af.name == "__vx_memcpy_init" ||
+                                          af.name == "__vx_strdisp_init");
                     // En un EJECUTABLE (hay main) los helpers __-prefijados
                     // quedan LOCALES (program-internos; evita colisiones al
                     // enlazar varios .o).  En una LIBRERIA (sin main) son la
                     // API publica -> se exportan globales (p.ej. el runtime
-                    // __vex_setjmp/__vex_throw/... que otro .o resuelve).
+                    // __vx_setjmp/__vx_throw/... que otro .o resuelve).
                     if (main_fn && af.name.rfind("__", 0) == 0 && !is_init)
                         continue; // helper interno del ejecutable -> local
                     const FnLoc &fl2 = fn_loc[af.name];
@@ -4358,13 +4353,13 @@ int main(int argc, char *argv[]) {
                             fl.sec, site,
                             aot::RelocTarget::addr(loc.first, loc.second),
                             aot::RelocKind::SECREL32);
-                    } else if (r.symbol == "__vex_tls_index") {
+                    } else if (r.symbol == "__vx_tls_index") {
                         // TLS PE: ref RIP-relativa al _tls_index sintetizado por
                         // el emisor; se pasa como simbolo externo que el emisor
                         // resuelve a la VA del slot.
                         w.add_reloc(
                             fl.sec, site,
-                            aot::RelocTarget::extern_sym("__vex_tls_index"),
+                            aot::RelocTarget::extern_sym("__vx_tls_index"),
                             aot::RelocKind::REL32);
                     } else {
                         const uint32_t N = static_cast<uint32_t>(
@@ -4509,7 +4504,7 @@ int main(int argc, char *argv[]) {
         }
 
         /* CACHE MISS + @Macros presentes: hacer two-phase y persistir
-         * el resultado a `.cache/vex/<key>.velb` para futuras corridas. */
+         * el resultado a `.cache/vx/<key>.velb` para futuras corridas. */
         if (!cache_hit && cr.has_lowerable_macros &&
             !user_already_set_prebuilt) {
             std::error_code ec;
@@ -4521,7 +4516,7 @@ int main(int argc, char *argv[]) {
              * macros cambiaron -- foundation para futuro per-macro relink. */
             if (verbose_mc) {
                 const auto current_ranges =
-                    find_macro_ranges_with_names(vex_source);
+                    find_macro_ranges_with_names(vx_source);
                 std::vector<std::pair<std::string, std::string>> current_hashes;
                 current_hashes.reserve(current_ranges.size());
                 for (const auto &r : current_ranges) {
@@ -4531,9 +4526,9 @@ int main(int argc, char *argv[]) {
                     constexpr uint64_t FNV_O = 14695981039346656037ULL;
                     constexpr uint64_t FNV_P = 1099511628211ULL;
                     uint64_t h = FNV_O;
-                    for (size_t i = start; i < end && i < vex_source.size();
+                    for (size_t i = start; i < end && i < vx_source.size();
                          ++i) {
-                        h ^= static_cast<uint8_t>(vex_source[i]);
+                        h ^= static_cast<uint8_t>(vx_source[i]);
                         h *= FNV_P;
                     }
                     char buf[17];
@@ -4605,7 +4600,7 @@ int main(int argc, char *argv[]) {
             }
 
             /* Phase MC.14: cache sweeper TTL-based.  Antes de poblar el
-             * nuevo cache file, escanea @c .cache/vex/ y borra archivos
+             * nuevo cache file, escanea @c .cache/vx/ y borra archivos
              * cuyo mtime sea anterior a @c TTL dias (default 30, override
              * via env var @c VESTA_MC_CACHE_TTL_DAYS).  Solo corre en el
              * path de miss para evitar sobrecargar el path comun de hit.
@@ -4655,12 +4650,12 @@ int main(int argc, char *argv[]) {
                 std::ofstream tmp(tmp_vel_path, std::ios::binary);
                 if (tmp) {
                     if (copts.emit_debug) {
-                        tmp << "// @file " << vex_path << "\n";
+                        tmp << "// @file " << vx_path << "\n";
                     }
                     tmp << cr.vel_text;
                 }
             }
-            /* Linker -> .velb persistente en .cache/vex/.  Reusa el
+            /* Linker -> .velb persistente en .cache/vx/.  Reusa el
              * mismo @c run_worker que produce el .velb final. */
             const int tmp_rc = asm_multi_process::run_worker(
                 tmp_vel_path, cache_prefix,
@@ -4677,9 +4672,9 @@ int main(int argc, char *argv[]) {
                 // Phase M.2.e: same dispatch en el path two-phase del macro
                 // cache.  Si el source tiene imports, usar compile_vx_project.
                 vx::CompileResult cr2 =
-                    vx::vex_source_has_imports(vex_source)
-                        ? vx::compile_vx_project(vex_path, copts)
-                        : vx::compile_vx_source(vex_source, vex_path, copts);
+                    vx::vx_source_has_imports(vx_source)
+                        ? vx::compile_vx_project(vx_path, copts)
+                        : vx::compile_vx_source(vx_source, vx_path, copts);
 #if defined(_WIN32)
                 _putenv_s("VESTA_MC_PREBUILT", "");
 #else
@@ -4706,7 +4701,7 @@ int main(int argc, char *argv[]) {
                 vx::print_diagnostic(std::cerr, d);
         }
 
-        // si --vex-base fue especificado y es != 0, parchear el
+        // si --vx-base fue especificado y es != 0, parchear el
         // texto .vel para reemplazar el @IniAddress(0x0000000000000000)
         // generado por defecto por el ir_emitter por @IniAddress(<base>).
         // Esto desplaza todo el code section a la VA solicitada, evitando
@@ -4719,19 +4714,19 @@ int main(int argc, char *argv[]) {
         // offset(main) = base + 0 (main es siempre el primer label en
         // codigo Vesta).  Sin esto, start_pc queda en 0 y loadmodule ejecuta
         // codigo del caller en vez del plugin.
-        if (vex_base_addr != 0) {
+        if (vx_base_addr != 0) {
             const std::string from = "@IniAddress(0x0000000000000000)";
             char buf[64];
             std::snprintf(buf, sizeof(buf), "@IniAddress(0x%016llX)",
-                          static_cast<unsigned long long>(vex_base_addr));
+                          static_cast<unsigned long long>(vx_base_addr));
             std::string to = buf;
             size_t pos = cr.vel_text.find(from);
             if (pos != std::string::npos) {
                 cr.vel_text.replace(pos, from.size(), to);
-                vesta::scout() << "[vex] @IniAddress patched -> " << to << "\n";
+                vesta::scout() << "[vx] @IniAddress patched -> " << to << "\n";
             } else {
-                std::cerr << "[vex] aviso: no se encontro @IniAddress(0x0...) "
-                             "para parchear con --vex-base\n";
+                std::cerr << "[vx] aviso: no se encontro @IniAddress(0x0...) "
+                             "para parchear con --vx-base\n";
             }
             // Insertar @InitPc(<base>) NUMERICO antes del @Module(...).  El
             // assembler procesa anotaciones single-pass y `main` no esta
@@ -4744,13 +4739,13 @@ int main(int argc, char *argv[]) {
             if (mod_pos != std::string::npos) {
                 char ipbuf[64];
                 std::snprintf(ipbuf, sizeof(ipbuf), "@InitPc(0x%llX)\n\n",
-                              static_cast<unsigned long long>(vex_base_addr));
+                              static_cast<unsigned long long>(vx_base_addr));
                 cr.vel_text.insert(mod_pos, ipbuf);
                 vesta::scout()
-                    << "[vex] @InitPc(0x" << std::hex << vex_base_addr
+                    << "[vx] @InitPc(0x" << std::hex << vx_base_addr
                     << std::dec << ") insertado (start_pc = base address)\n";
             } else {
-                std::cerr << "[vex] aviso: no se encontro @Module(...) para "
+                std::cerr << "[vx] aviso: no se encontro @Module(...) para "
                              "insertar @InitPc\n";
             }
             // Convertir el `hlt` final del main del modulo en `ret` para que
@@ -4768,10 +4763,10 @@ int main(int argc, char *argv[]) {
             if (hlt_pos != std::string::npos) {
                 cr.vel_text.replace(hlt_pos, main_ret_marker.size(),
                                     main_ret_repl);
-                vesta::scout() << "[vex] main_ret hlt -> ret (modo plugin: "
+                vesta::scout() << "[vx] main_ret hlt -> ret (modo plugin: "
                                   "callable via loadmod)\n";
             } else {
-                std::cerr << "[vex] aviso: no se encontro 'main_ret: leave "
+                std::cerr << "[vx] aviso: no se encontro 'main_ret: leave "
                              "hlt' para convertir a ret\n";
             }
         }
@@ -4796,7 +4791,7 @@ int main(int argc, char *argv[]) {
             return true;
         };
         if (emit_mermaid) {
-            if (diag_vex && !write_diagram(cr.mermaid_ast, ".ast.mmd"))
+            if (diag_vx && !write_diagram(cr.mermaid_ast, ".ast.mmd"))
                 return EXIT_FAILURE;
             if (diag_ir_pre && !write_diagram(cr.mermaid_ir_pre, ".ir.pre.mmd"))
                 return EXIT_FAILURE;
@@ -4807,7 +4802,7 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
         }
         if (emit_graphviz) {
-            if (diag_vex && !write_diagram(cr.graphviz_ast, ".ast.dot"))
+            if (diag_vx && !write_diagram(cr.graphviz_ast, ".ast.dot"))
                 return EXIT_FAILURE;
             if (diag_ir_pre &&
                 !write_diagram(cr.graphviz_ir_pre, ".ir.pre.dot"))
@@ -4820,7 +4815,7 @@ int main(int argc, char *argv[]) {
         }
         if (emit_html) {
             // Paginas HTML interactivas autocontenidas: abrir en el navegador.
-            if (diag_vex && !write_diagram(cr.html_ast, ".ast.html"))
+            if (diag_vx && !write_diagram(cr.html_ast, ".ast.html"))
                 return EXIT_FAILURE;
             if (diag_ir_pre && !write_diagram(cr.html_ir_pre, ".ir.pre.html"))
                 return EXIT_FAILURE;
@@ -4831,7 +4826,7 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
         }
 
-        // Si --vex-emit-ir esta activo, escribir el dump del SSA IR
+        // Si --vx-emit-ir esta activo, escribir el dump del SSA IR
         // (pre y post optimizacion) en <out>.ir y salir.  Util para
         // debug del frontend sin tocar el .vel ni el linker.  No se
         // compila a .velb en este modo.
@@ -4841,11 +4836,11 @@ int main(int argc, char *argv[]) {
                                       : (out_prefix + ".ir");
             std::ofstream ofs_ir(ir_path);
             if (!ofs_ir.is_open()) {
-                std::cerr << "[vex] No se puede escribir: " << ir_path << "\n";
+                std::cerr << "[vx] No se puede escribir: " << ir_path << "\n";
                 return EXIT_FAILURE;
             }
             ofs_ir << cr.ir_text;
-            vesta::scout() << "[vex] .ir generado: " << ir_path << "\n";
+            vesta::scout() << "[vx] .ir generado: " << ir_path << "\n";
             return EXIT_SUCCESS;
         }
 
@@ -4900,18 +4895,18 @@ int main(int argc, char *argv[]) {
         {
             std::ofstream ofs(vel_path);
             if (!ofs.is_open()) {
-                std::cerr << "[vex] No se puede escribir: " << vel_path << "\n";
+                std::cerr << "[vx] No se puede escribir: " << vel_path << "\n";
                 return EXIT_FAILURE;
             }
-            // Si --vex-debug esta activo, prepend `// @file <vex_path>`
+            // Si --vx-debug esta activo, prepend `// @file <vx_path>`
             // al .vel para que el lexer del .vel-to-.velb pase la info
             // al linker (Context::debug_source_file).
             if (copts.emit_debug) {
-                ofs << "// @file " << vex_path << "\n";
+                ofs << "// @file " << vx_path << "\n";
             }
             ofs << cr.vel_text;
         }
-        vesta::scout() << "[vex] .vel generado: " << vel_path << "\n";
+        vesta::scout() << "[vx] .vel generado: " << vel_path << "\n";
 
         if (emit_only) return EXIT_SUCCESS;
 
@@ -4965,7 +4960,7 @@ int main(int argc, char *argv[]) {
                     const bool saved = vx::project_cache_save(
                         pc_path, opts_hash, deps, velb_bytes);
                     if (project_cache_verbose) {
-                        std::cerr << "[vex-project-cache] "
+                        std::cerr << "[vx-project-cache] "
                                   << (saved ? "saved" : "save_failed") << ": "
                                   << pc_path << " (" << velb_bytes.size()
                                   << " bytes, " << deps.size() << " deps)\n";
@@ -5179,8 +5174,8 @@ int main(int argc, char *argv[]) {
             // DESPUES (al aplicar exe.caps mas abajo), el eager-compile veria
             // sandbox_active=false -> JIT-compilaria main saltandose el check
             // de capabilities -> bypass del sandbox bajo JIT.
-            if (result.count("vex-caps")) {
-                const std::string cs = result["vex-caps"].as<std::string>();
+            if (result.count("vx-caps")) {
+                const std::string cs = result["vx-caps"].as<std::string>();
                 if (!cs.empty() && !::loader::parse_caps(cs).unrestricted()) {
                     mgr.loader.sandbox_active = true;
                 }
@@ -5193,11 +5188,11 @@ int main(int argc, char *argv[]) {
                 std::cerr << "Error: no se pudo cargar el ejecutable\n";
                 return EXIT_FAILURE;
             }
-            // Phase M.sandbox: aplicar @c --vex-caps al modulo cargado.
+            // Phase M.sandbox: aplicar @c --vx-caps al modulo cargado.
             // El primer Executable del pool es el que acabamos de cargar.
-            if (result.count("vex-caps") && !mgr.loader.executables.empty()) {
+            if (result.count("vx-caps") && !mgr.loader.executables.empty()) {
                 const std::string caps_str =
-                    result["vex-caps"].as<std::string>();
+                    result["vx-caps"].as<std::string>();
                 if (!caps_str.empty()) {
                     auto &exe = *mgr.loader.executables.front();
                     exe.caps = ::loader::parse_caps(caps_str);

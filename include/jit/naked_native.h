@@ -100,7 +100,7 @@ inline uint64_t fnv1a64_name(const char *s) {
  *        NATIVA HOST_LEAF (respetando @c is_naked), con sus relocs resueltos.
  *        Wrapper publico y thread-safe de la maquinaria @Naked interna.
  *
- * Lo usa el force-eager del grafo de fibra para materializar @c __vex_swapctx
+ * Lo usa el force-eager del grafo de fibra para materializar @c __vx_swapctx
  * (context-switch @Naked) antes de compilar los cuerpos de fibra, de modo que
  * el vreg pueda emitir un CALL nativo directo a el para @c IrOp::SWAPCTX.
  *
@@ -134,7 +134,7 @@ extern "C" int32_t vrt_jit_active(void);
 
 /**
  * @brief FN.3: extern `vrt:getproc` -> ProcessVM* del proceso en ejecucion
- *        (via TLS, como `vex_get_native_thunk`).  Lo usa `fiber_init` en la
+ *        (via TLS, como `vx_get_native_thunk`).  Lo usa `fiber_init` en la
  *        rama JIT para poner `proc` en el ctx de la fibra (rbx del entry
  *        VM_ABI).  En AOT se pliega a 0 en el lowering.
  */
@@ -146,7 +146,7 @@ extern "C" uint64_t vrt_getproc(void);
  *
  * Reserva ctx (152 B) + pila (64 KiB) con malloc (memoria host), materializa el
  * trampolin `__fiber_trampoline` nativo, y rellena el ctx con el layout que
- * `__vex_swapctx` espera al PRIMER arranque: PC=trampolin, SP=BP=cima de la
+ * `__vx_swapctx` espera al PRIMER arranque: PC=trampolin, SP=BP=cima de la
  * pila host, rbx=proc (recuperado via TLS), r12=@p entry (jit_code nativo del
  * cuerpo, que @c fiber_entry resuelve via la pieza 1).  El trampolin pone proc
  * en el arg-reg y salta al entry VM_ABI.  Devuelve la direccion del ctx host.

@@ -127,7 +127,7 @@ class LspServer {
      * @brief Responde a @c textDocument/references.
      *
      * Devuelve TODAS las referencias del identificador bajo el cursor en el
-     * indice de workspace (todos los @c .vex, incluidas librerias).  Si
+     * indice de workspace (todos los @c .vx, incluidas librerias).  Si
      * @c context.includeDeclaration es true, anyade tambien las definiciones.
      *
      * @param msg Mensaje completo (lleva @c id y @c params).

@@ -19,8 +19,8 @@
  * body (todos los bytes ANTES del footer) contra la signature.
  */
 
-#ifndef VEX_VELB_SIGNATURE_H
-#define VEX_VELB_SIGNATURE_H
+#ifndef VX_VELB_SIGNATURE_H
+#define VX_VELB_SIGNATURE_H
 
 #include <cstdint>
 #include <string>
@@ -70,4 +70,4 @@ bool velb_has_signature(const std::vector<uint8_t> &velb) noexcept;
 
 } // namespace vx
 
-#endif // VEX_VELB_SIGNATURE_H
+#endif // VX_VELB_SIGNATURE_H

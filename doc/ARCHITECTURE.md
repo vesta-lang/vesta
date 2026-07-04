@@ -147,7 +147,7 @@ struct HeaderVELB {
     uint32_t size_reloc_table;
     uint64_t offset_ir_section;      // NEW v3: IR embebido para JIT
     uint32_t size_ir_section;
-    uint64_t offset_debug_section;   // debug info opcional (--vex-debug)
+    uint64_t offset_debug_section;   // debug info opcional (--vx-debug)
     uint32_t size_debug_section;
     uint8_t  debug_level;
     uint8_t  _pad[N];
@@ -502,7 +502,7 @@ Dos sabores:
 
 ### Declarativo (zero-overhead)
 
-```vex
+```vx
 extern "kernel32.dll" {
     fn GetCurrentProcessId() -> u32;
 }
@@ -515,7 +515,7 @@ estatico).
 
 ### Runtime dinamico (cuando la lib/fn se decide en ejecucion)
 
-```vex
+```vx
 i64 lib = ffi_open("user32.dll");
 i64 fn = ffi_sym(lib, "MessageBoxA");
 ffi_call(fn, 0, str_cstr("Hello"), str_cstr("Title"), 0);
@@ -590,7 +590,7 @@ VM/
 │   ├── runtime/           # ProcessVM, scheduler, exec, decode_table
 │   ├── util/              # ThreadPool, sqlite_singleton
 │   ├── vesta_rt/          # public.h API (Phase C)
-│   └── vex/               # frontend Vesta (lexer, parser, type checker, lowering)
+│   └── vx/               # frontend Vesta (lexer, parser, type checker, lowering)
 │
 ├── src/                   # implementaciones (mirror de include/)
 │
@@ -617,13 +617,13 @@ VM/
 │   │   └── ...
 │   └── *.md               # QUICKSTART, ARCHITECTURE, BENCHMARKS, ROADMAP
 │
-├── examples_codes_vex/    # ~140 ejemplos .vx
+├── examples_codes_vx/    # ~140 ejemplos .vx
 │   ├── benchmark/         # benches sinteticos
 │   └── ...
 │
 ├── tests/                 # test suites
-│   └── vex/
-│       └── test_vex_e2e.sh  # suite oficial (200/200)
+│   └── vx/
+│       └── test_vx_e2e.sh  # suite oficial (200/200)
 │
 └── tools/                 # herramientas
     └── dbg_client.vsh     # cliente del debugger en VSH

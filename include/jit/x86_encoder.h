@@ -84,12 +84,12 @@ class X86Encoder {
     /// valores de 32-bit (i32/u32/ptr32); i64 NO cabe en un reg de 32-bit.
     void set_mode32(bool m) noexcept { mode32_ = m; }
     bool mode32() const noexcept { return mode32_; }
-    /// avx+: emitir los MOVES escalares float (MOVSD/MOVSS/MOVQ GP<->XMM) en VEX
-    /// en vez de legacy SSE, para no mezclar legacy con las ops VEX (arith/cvt/
+    /// avx+: emitir los MOVES escalares float (MOVSD/MOVSS/MOVQ GP<->XMM) en VX
+    /// en vez de legacy SSE, para no mezclar legacy con las ops VX (arith/cvt/
     /// etc.) y evitar la penalizacion de transicion.  Switch global de funcion
     /// (los moves se emiten en cientos de sitios del rewrite; mas limpio que un
     /// flag por instruccion).  Lo fija el pipeline desde --float-isa.
-    void set_vex_scalar(bool v) noexcept { vex_scalar_ = v; }
+    void set_vx_scalar(bool v) noexcept { vx_scalar_ = v; }
 
     /**
      * @brief Codifica @p fn en bytes y los añade a @p out.
@@ -208,18 +208,18 @@ class X86Encoder {
                         std::vector<uint8_t> &out);
 
     /// Sentinel para "sin segundo source" (vvvv no usado -> campo 1111).
-    static constexpr uint8_t VEX_NO_VVVV = 0xFF;
+    static constexpr uint8_t VX_NO_VVVV = 0xFF;
 
-    /// Emite el prefijo VEX de 3 bytes (C4) para mapa 0F + prefijo 66 (pp=01).
+    /// Emite el prefijo VX de 3 bytes (C4) para mapa 0F + prefijo 66 (pp=01).
     /// @p reg = ModRM.reg (0..15); @p rm = ModRM.rm reg/base (0..15);
-    /// @p vvvv = segundo source (0..15) o @c VEX_NO_VVVV si la op es de 2
+    /// @p vvvv = segundo source (0..15) o @c VX_NO_VVVV si la op es de 2
     /// operandos (el campo se codifica como 1111, obligatorio para ops sin
     /// src1 como VMOVUPD/VSQRTPD; un campo distinto = #UD);
     /// @p w = bit W; @p l256 = true para 256-bit (YMM), false para 128-bit;
     /// @p idx/@p has_idx = registro indice del SIB (para el bit X).
     /// @p map = mapa de opcode: 1 = 0F, 2 = 0F38, 3 = 0F3A.
     /// @p pp = prefijo: 0 = ninguno (packed-single PS), 1 = 66 (packed-double).
-    static void emit_vex3(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
+    static void emit_vx3(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
                           bool l256, uint8_t idx, bool has_idx,
                           std::vector<uint8_t> &out, uint8_t map = 1,
                           uint8_t pp = 1) {
@@ -228,7 +228,7 @@ class X86Encoder {
         const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~REX.X
         // El campo vvvv almacena ~src1; para "sin source" debe ser 1111.
         const uint8_t vfield =
-            (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
+            (vvvv == VX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
         put8(out, 0xC4);
         put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
                                        (map & 0x1F))); // mmmmm
@@ -238,7 +238,7 @@ class X86Encoder {
 
     /// Emite el prefijo EVEX de 4 bytes (62) para mapa 0F + 66, registros
     /// 0..15 sin mascara (k0), sin broadcast/zeroing.  @p ll = 0/1/2 para
-    /// 128/256/512-bit.  Resto de parametros como @c emit_vex3.
+    /// 128/256/512-bit.  Resto de parametros como @c emit_vx3.
     /// @p map = mapa de opcode: 1 = 0F, 2 = 0F38, 3 = 0F3A.
     /// @p pp = prefijo: 0 = ninguno (PS), 1 = 66 (PD).
     static void emit_evex(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
@@ -251,7 +251,7 @@ class X86Encoder {
         const uint8_t Rp = 1; // ~R' (reg bit4): solo 0..15 -> no extendido
         const uint8_t Vp = 1; // ~V' (vvvv bit4): solo 0..15
         const uint8_t vfield =
-            (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
+            (vvvv == VX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
         put8(out, 0x62);
         // P0: [R X B R'] [0 0] [m m]  (mm: 01=0F, 10=0F38, 11=0F3A)
         put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
@@ -270,7 +270,7 @@ class X86Encoder {
 
     size_t instr_count_ = 0;
     bool mode32_ = false; ///< x86-32 (sin REX); ver set_mode32().
-    bool vex_scalar_ = false; ///< VEX en los moves float escalares; set_vex_scalar.
+    bool vx_scalar_ = false; ///< VX en los moves float escalares; set_vx_scalar.
 };
 
 } // namespace jit

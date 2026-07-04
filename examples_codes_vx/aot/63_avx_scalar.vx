@@ -1,0 +1,14 @@
+// AVX escalar 3-operandos en AOT (Increment 2a del sprint float).
+//
+// Con --float-isa avx, las binarias f64/f32 escalares se emiten en VX
+// (VADDSD/VSUBSD/VMULSD/VDIVSD + SS) 3-operandos NO-destructivo, en vez de
+// legacy SSE (ADDSD...).  Asi: (a) no hace falta el `mov dst,src1` de la
+// legalizacion 2-address, y (b) no se mezcla legacy-SSE con VX (penalizacion
+// de transicion ~100 ciclos).  Con --float-isa sse2 (default) sigue legacy.
+//
+// Libreria (sin main): se enlaza con un C harness que aporta los f64 runtime
+// (sin conversiones int->float, que son Increment 2b).  Ver
+// tests/aot/avx_scalar_elf_test.sh.
+
+public f64 fma2(f64 a, f64 b, f64 c) { return a * b + c; } // VMULSD + VADDSD
+public f64 poly(f64 x) { return x * x - x; }               // VMULSD + VSUBSD

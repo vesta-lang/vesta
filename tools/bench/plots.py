@@ -15,13 +15,13 @@ from typing import Optional
 
 # Colores fijos por lenguaje para consistencia visual cross-plot.
 LANG_COLORS = {
-    "vex_interp":   "#ff7f0e",  # naranja
-    "vex_jit":      "#2ca02c",  # verde
+    "vx_interp":   "#ff7f0e",  # naranja
+    "vx_jit":      "#2ca02c",  # verde
     # 3 modos AOT con colores DISTINTOS (antes caian al gris fallback "#888"
     # -> indistinguibles en los diagramas).
-    "vex_aot_sse2": "#8c564b",  # marron
-    "vex_aot_avx":  "#e377c2",  # rosa
-    "vex_aot_auto": "#bcbd22",  # oliva
+    "vx_aot_sse2": "#8c564b",  # marron
+    "vx_aot_avx":  "#e377c2",  # rosa
+    "vx_aot_auto": "#bcbd22",  # oliva
     "c":            "#1f77b4",  # azul
     "cpp":          "#9467bd",  # violeta
     "python":       "#17becf",  # cyan
@@ -31,11 +31,11 @@ LANG_COLORS = {
 
 # Labels formateados.
 LANG_LABELS = {
-    "vex_interp":   "Vex interp",
-    "vex_jit":      "Vex JIT",
-    "vex_aot_sse2": "Vex AOT sse2",
-    "vex_aot_avx":  "Vex AOT avx2",
-    "vex_aot_auto": "Vex AOT auto",
+    "vx_interp":   "Vex interp",
+    "vx_jit":      "Vex JIT",
+    "vx_aot_sse2": "Vex AOT sse2",
+    "vx_aot_avx":  "Vex AOT avx2",
+    "vx_aot_auto": "Vex AOT auto",
     "c":            "C (gcc -O3)",
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
@@ -94,7 +94,7 @@ def plot_dashboard(rows: list[dict], langs: list[str], out_path: Path) -> bool:
 
     # 1.4 Speedup Vex JIT vs interp.
     ax4 = fig.add_subplot(gs[1, 1])
-    _plot_vex_speedup(ax4, rows)
+    _plot_vx_speedup(ax4, rows)
 
     fig.suptitle("VestaVM benchmark suite -- dashboard",
                  fontsize=15, fontweight="bold", y=0.995)
@@ -198,12 +198,12 @@ def _plot_ranking_heatmap(ax, rows, langs):
     plt.colorbar(im, ax=ax, label="Ranking (1=mejor)", fraction=0.04)
 
 
-def _plot_vex_speedup(ax, rows):
+def _plot_vx_speedup(ax, rows):
     """Barras del speedup Vex JIT vs Vex interp para cada bench."""
     names, speedups = [], []
     for r in rows:
-        ti = r.get("vex_interp")
-        tj = r.get("vex_jit")
+        ti = r.get("vx_interp")
+        tj = r.get("vx_jit")
         if ti and ti > 0 and tj and tj > 0:
             names.append(r["bench"])
             speedups.append(ti / tj)

@@ -1,0 +1,256 @@
+// CPU dispatch (Inc 5c): LIBRERIA stdlib de string SIMD (Vex + asm puro).
+//
+// Esta es la pieza que materializa la vision: el dispatch SIMD vive en una
+// LIBRERIA APARTE, legible y modificable, sin codigo magico.  Cualquier
+// programa que haga `import "simd_string";` HEREDA el strcmp SIMD (porque la
+// lib declara @HelperOverride(strcmp), aplicado al root en el merge
+// cross-module) y ademas puede llamar simd_string.strlen_cstr() para char*.
+//
+// Dos servicios:
+//
+//   (1) strcmp SIMD como @HelperOverride(strcmp) -- override del build,
+//       heredado por import.  Firma EXACTA i64(u8* a, i64 la, u8* b, i64 lb)
+//       que devuelve -1/0/1 con la MISMA semantica que __vx_strcmp_base
+//       (compara min(la,lb) bytes unsigned; si el prefijo comun es igual,
+//       tie-break por longitud: la<lb -> -1, la>lb -> 1, == -> 0).  Esto es
+//       CRITICO: lo usan TODAS las comparaciones de value-string ==/!=/</>/
+//       <=/>=.
+//
+//   (2) strlen_cstr(char* s) -> i64 -- funcion de lib llamable directo (no
+//       override), escanea el nul terminador como la strlen de C.
+//
+// Ambos hacen self-dispatch leyendo cpu_features():
+//   bit0=SSE2 (SIEMPRE presente en x86-64 -> fallback universal)
+//   bit4=AVX2 (opcional).
+//
+// Seguridad de pagina (lo que valgrind caza): en el path SIMD NUNCA se lee
+// fuera del rango valido.  strcmp procesa chunks de 16 solo mientras quedan
+// >=16 bytes DENTRO de min(la,lb) (que esta dentro de ambos buffers); la cola
+// es byte-a-byte.  strlen alinea el puntero a 16 con un prologo byte-a-byte y
+// luego usa movdqa alineado (un chunk de 16 alineado nunca cruza pagina 4K).
+
+// --------------------------------------------------------------------------
+// strcmp -- variante SSE2 (asm puro).
+//
+// Compara 16 bytes/iter con movdqu+pcmpeqb+pmovmskb.  Al primer chunk con
+// diferencia, halla el primer byte distinto (bsf del mask invertido) y compara
+// unsigned -> -1/1.  La cola (< 16 restantes en min) es byte-a-byte.  Si todo
+// el prefijo comun es igual, tie-break por longitud.
+//
+// Bindings: a=rdi, la=rsi, b=rdx, lb=rcx.  Resultado en rax.  El loop usa
+// r8 (i), r9 (min), r10/r11/eax como scratch; xmm0/xmm1 vectoriales.  Todos
+// son caller-saved -> el compilador los infiere clobber.  rbx NO se toca.
+// --------------------------------------------------------------------------
+public i64 strcmp_sse2(u8* a, i64 la, u8* b, i64 lb) {
+    register("rdi") u8*  pa  = a;
+    register("rsi") i64  rla = la;
+    register("rdx") u8*  pb  = b;
+    register("rcx") i64  rlb = lb;
+    register("rax") i64  res;
+    asm volatile {
+        // min = (la < lb) ? la : lb  -> r9
+        mov     r9, rsi                  // r9 = la
+        cmp     rcx, rsi                 // lb < la ?
+        cmovl   r9, rcx                  // r9 = min
+        xor     r8, r8                   // i = 0
+
+    .chunk:
+        // while (i + 16 <= min) procesar 16 bytes alineados al rango.
+        lea     r10, [r8 + 16]           // r10 = i + 16
+        cmp     r10, r9                  // i + 16 <= min ?
+        jg      .tail                    // no -> cola byte-a-byte
+        movdqu  xmm0, [rdi + r8]         // a[i..i+15]
+        movdqu  xmm1, [rdx + r8]         // b[i..i+15]
+        pcmpeqb xmm0, xmm1               // 0xFF donde iguales
+        pmovmskb eax, xmm0               // bit j = 1 si a[i+j]==b[i+j]
+        cmp     eax, 0xFFFF              // todos iguales ?
+        jne     .diff_chunk              // hay diferencia en este chunk
+        add     r8, 16                   // i += 16
+        jmp     .chunk
+
+    .diff_chunk:
+        // primer byte distinto = bsf de (~mask).  Como pcmpeqb pone 1 en
+        // iguales, invertimos para que el primer 0->1 sea el primer distinto.
+        not     eax                      // bit j = 1 si a[i+j]!=b[i+j]
+        bsf     eax, eax                 // eax = indice del primer distinto
+        add     r8, rax                  // i = i + indice -> posicion global
+        // comparar a[i] vs b[i] unsigned.
+        movzx   r10, byte [rdi + r8]     // ca
+        movzx   r11, byte [rdx + r8]     // cb
+        cmp     r10, r11
+        jb      .less                    // ca < cb
+        jmp     .greater                 // ca > cb (no pueden ser iguales aqui)
+
+    .tail:
+        // cola byte-a-byte mientras i < min.
+        cmp     r8, r9                   // i < min ?
+        jge     .eqpref                  // prefijo comun igual -> tie-break
+        movzx   r10, byte [rdi + r8]     // ca
+        movzx   r11, byte [rdx + r8]     // cb
+        cmp     r10, r11
+        jb      .less
+        ja      .greater
+        inc     r8                       // iguales -> siguiente
+        jmp     .tail
+
+    .eqpref:
+        // prefijo comun igual: el mas corto es menor.
+        cmp     rsi, rcx                 // la vs lb
+        jl      .less                    // la < lb
+        jg      .greater                 // la > lb
+        xor     rax, rax                 // iguales -> 0
+        jmp     .done
+    .less:
+        mov     rax, -1
+        jmp     .done
+    .greater:
+        mov     rax, 1
+    .done:
+    };
+    return res;
+}
+
+// --------------------------------------------------------------------------
+// strcmp -- variante AVX2 (asm puro, OPCIONAL).
+//
+// Igual que SSE2 pero con vmovdqu ymm/vpcmpeqb/vpmovmskb de 32 bytes.  El mask
+// de pmovmskb sobre ymm es de 32 bits.  vzeroupper al final para evitar la
+// penalizacion de transicion AVX<->SSE.  La cola < 32 cae a byte-a-byte.
+// --------------------------------------------------------------------------
+public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
+    register("rdi") u8*  pa  = a;
+    register("rsi") i64  rla = la;
+    register("rdx") u8*  pb  = b;
+    register("rcx") i64  rlb = lb;
+    register("rax") i64  res;
+    asm volatile {
+        mov     r9, rsi                  // r9 = la
+        cmp     rcx, rsi
+        cmovl   r9, rcx                  // r9 = min
+        xor     r8, r8                   // i = 0
+
+    .chunk32:
+        lea     r10, [r8 + 32]           // i + 32
+        cmp     r10, r9                  // i + 32 <= min ?
+        jg      .tail2
+        vmovdqu ymm0, [rdi + r8]         // a[i..i+31]
+        vmovdqu ymm1, [rdx + r8]         // b[i..i+31]
+        vpcmpeqb ymm0, ymm0, ymm1        // 0xFF donde iguales
+        vpmovmskb eax, ymm0              // 32 bits: bit j = 1 si iguales
+        cmp     eax, 0xFFFFFFFF          // todos iguales ?
+        jne     .diff32
+        add     r8, 32
+        jmp     .chunk32
+
+    .diff32:
+        not     eax                      // bit j = 1 si distintos
+        bsf     eax, eax                 // primer distinto
+        add     r8, rax
+        movzx   r10, byte [rdi + r8]
+        movzx   r11, byte [rdx + r8]
+        cmp     r10, r11
+        jb      .less2
+        jmp     .greater2
+
+    .tail2:
+        vzeroupper                       // limpiar estado AVX antes de la cola
+        cmp     r8, r9
+        jge     .eqpref2
+        movzx   r10, byte [rdi + r8]
+        movzx   r11, byte [rdx + r8]
+        cmp     r10, r11
+        jb      .less2
+        ja      .greater2
+        inc     r8
+        jmp     .tail2
+
+    .eqpref2:
+        cmp     rsi, rcx
+        jl      .less2
+        jg      .greater2
+        xor     rax, rax
+        jmp     .done2
+    .less2:
+        vzeroupper                       // tambien si salimos del path SIMD
+        mov     rax, -1
+        jmp     .done2
+    .greater2:
+        vzeroupper
+        mov     rax, 1
+    .done2:
+    };
+    return res;
+}
+
+// Dispatcher del override.  El compilador apunta el fp __vx_strcmp_fp a esta
+// funcion (cross-module merge), asi toda comparacion de value-string del root
+// la usa.  Self-dispatch por features: AVX2 (bit4) si disponible, sino SSE2
+// (bit0, siempre presente en x86-64).
+@HelperOverride(strcmp)
+public i64 lib_strcmp(u8* a, i64 la, u8* b, i64 lb) {
+    u64 f = cpu_features();
+    if ((f & 16) != 0) {            // bit4 = AVX2
+        return strcmp_avx2(a, la, b, lb);
+    }
+    return strcmp_sse2(a, la, b, lb);  // bit0 = SSE2 (fallback universal)
+}
+
+// --------------------------------------------------------------------------
+// strlen_cstr -- variante SSE2 (asm puro).
+//
+// Escanea el nul terminador.  Seguridad de pagina: prologo byte-a-byte hasta
+// alinear el puntero a 16, luego chunks de 16 con movdqa ALINEADO (que nunca
+// cruza una pagina 4K).  pcmpeqb contra cero + pmovmskb + bsf -> indice del
+// primer nul dentro del chunk.
+//
+// Binding: s=rdi.  Resultado (longitud) en rax.  Scratch: r8 (cursor), r9
+// (base original), eax/r10; xmm0/xmm1.
+// --------------------------------------------------------------------------
+public i64 strlen_sse2(char* s) {
+    register("rdi") char* ps = s;
+    register("rax") i64   res;
+    asm volatile {
+        mov     r9, rdi                  // r9 = base original
+        mov     r8, rdi                  // r8 = cursor
+
+        // prologo: avanzar byte-a-byte hasta que r8 quede 16-alineado.
+    .align_loop:
+        test    r8, 15                   // (r8 & 15) == 0 ?
+        jz      .aligned                 // ya alineado -> path SIMD
+        movzx   r10, byte [r8]           // *r8
+        test    r10, r10                 // == 0 ?
+        jz      .found_scalar            // nul encontrado en el prologo
+        inc     r8
+        jmp     .align_loop
+
+    .aligned:
+        pxor    xmm1, xmm1               // xmm1 = 0 (16 bytes cero)
+    .simd_loop:
+        movdqa  xmm0, [r8]               // 16 bytes alineados (no cruza pagina)
+        pcmpeqb xmm0, xmm1               // 0xFF donde byte == 0
+        pmovmskb eax, xmm0               // bit j = 1 si *(r8+j) == 0
+        test    eax, eax                 // algun nul en el chunk ?
+        jnz     .found_simd
+        add     r8, 16                   // siguiente chunk alineado
+        jmp     .simd_loop
+
+    .found_simd:
+        bsf     eax, eax                 // indice del primer nul en el chunk
+        add     r8, rax                  // r8 -> direccion del nul
+    .found_scalar:
+        mov     rax, r8                  // longitud = (nul - base)
+        sub     rax, r9
+    };
+    return res;
+}
+
+// Dispatcher de strlen_cstr.  Self-dispatch (hoy solo SSE2; el nul-scan no
+// gana lo suficiente con AVX2 para justificar el riesgo de page-cross extra).
+public i64 strlen_cstr(char* s) {
+    u64 f = cpu_features();
+    // bit0 = SSE2 garantizado; reservamos el if para futura variante AVX2.
+    if ((f & 1) != 0) {
+        return strlen_sse2(s);
+    }
+    return strlen_sse2(s);
+}

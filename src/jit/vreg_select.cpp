@@ -493,13 +493,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * es guiado por ANCHO (fp_mov_for_width), no por un tipo float fijo. */
     /* fp_ok: float escalar en XMM.  Cualquier ISA salvo x87 (sin XMM) y x86-32
      * (ABI float distinto) -> SSE2/AVX/AVX512/AUTO.  Las binarias se emiten en
-     * VEX 3-op cuando vex_scalar (avx+); el resto (cvt/cmp/sqrt) sigue legacy
-     * SSE por ahora (Increment 2b las pasa a VEX para no mezclar). */
+     * VX 3-op cuando vx_scalar (avx+); el resto (cvt/cmp/sqrt) sigue legacy
+     * SSE por ahora (Increment 2b las pasa a VX para no mezclar). */
     const bool fp_ok = (abi == AbiKind::HOST_LEAF || abi == AbiKind::VM) &&
                        (fisa != FloatIsa::X87) && !mode32;
-    /* Emitir las binarias escalares en VEX 3-operandos no-destructivo (sin el
+    /* Emitir las binarias escalares en VX 3-operandos no-destructivo (sin el
      * `mov` de coalescing) cuando el target es AVX/AVX512. */
-    const bool vex_scalar =
+    const bool vx_scalar =
         (fisa == FloatIsa::AVX || fisa == FloatIsa::AVX512F);
     /* Ancho del chunk SIMD a emitir en las ops VEC_* (vectorizacion).  AOT
      * (HOST_LEAF): lo fija el TARGET via --float-isa (cross-compile correcto: no
@@ -1293,8 +1293,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 MOp fop;
-                if (vex_scalar) {
-                    // VEX 3-operandos no-destructivo (avx+): el rewrite NO mete
+                if (vx_scalar) {
+                    // VX 3-operandos no-destructivo (avx+): el rewrite NO mete
                     // el `mov dst,src1` -> menos instrucciones.
                     switch (in.op) {
                     case ir::IrOp::FADD:
@@ -1345,7 +1345,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     (in.type == ir::IrType::F32) ? MOp::SQRTSS : MOp::SQRTSD;
                 O.push_back(MInstr::make_unary(fop, vrt(in.dst),
                                                vrt(in.operands[0])));
-                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
+                if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
 
@@ -1381,9 +1381,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(
                     MInstr::make_unary(MOp::MOVQ_GP_XMM, vrt(xm), vr(gpm)));
                 /* dst = src (XOR|AND) mask (forma 3-op; el rewrite legaliza). */
-                // avx: VEX 3-op (VXORPS/VANDPS) -> sin legacy SSE mezclado.
+                // avx: VX 3-op (VXORPS/VANDPS) -> sin legacy SSE mezclado.
                 const MOp maskop =
-                    vex_scalar ? (is_abs ? MOp::VANDPS : MOp::VXORPS)
+                    vx_scalar ? (is_abs ? MOp::VANDPS : MOp::VXORPS)
                                : (is_abs ? MOp::ANDPS : MOp::XORPS);
                 O.push_back(MInstr::make_binary(maskop, vrt(in.dst),
                                                 vrt(in.operands[0]), vrt(xm)));
@@ -1408,7 +1408,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     (in.type == ir::IrType::F32) ? MOp::CVTSI2SS : MOp::CVTSI2SD;
                 O.push_back(MInstr::make_unary(cop, vrt(in.dst),
                                                vr(in.operands[0])));
-                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
+                if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
             case ir::IrOp::FTOI:
@@ -1425,7 +1425,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     (st == ir::IrType::F32) ? MOp::CVTTSS2SI : MOp::CVTTSD2SI;
                 O.push_back(MInstr::make_unary(cop, vr(in.dst),
                                                vrt(in.operands[0])));
-                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
+                if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
             case ir::IrOp::F32TOF64: {
@@ -1438,7 +1438,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 O.push_back(MInstr::make_unary(MOp::CVTSS2SD, vrt(in.dst),
                                                vrt(in.operands[0])));
-                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
+                if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
             case ir::IrOp::F64TOF32: {
@@ -1451,7 +1451,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 O.push_back(MInstr::make_unary(MOp::CVTSD2SS, vrt(in.dst),
                                                vrt(in.operands[0])));
-                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
+                if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
 
@@ -1504,7 +1504,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* UCOMISD a, b : dst=a (operando 1), src1=b.  El rewrite
                  * materializa ambos a XMM si estan spilled. */
                 O.push_back(MInstr::make_unary(ucmp, vrt(ca), vrt(cb)));
-                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
+                if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                MOperand::make_imm32(0)));
                 O.push_back(mk_setcc(in.dst, cc));
@@ -1679,9 +1679,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             /* UNWRAP (AOT/HOST_LEAF): assert non-null + passthrough.  Los
              * provably-non-null ya los elimino ir_pass_elide_unwrap (cero
              * codigo).  Para el resto: chequeo INLINE hiper-eficiente
-             *   test v,v ; jne ok ; call __vex_panic_null ; ok: ; mov dst,v
+             *   test v,v ; jne ok ; call __vx_panic_null ; ok: ; mov dst,v
              * Hot path = test + branch predicho-no-tomado (~0 overhead); el
-             * panic es cold.  __vex_panic_null es un hook (default en la
+             * panic es cold.  __vx_panic_null es un hook (default en la
              * bare-lib, redefinible -- freestanding lo provee el usuario). */
             case ir::IrOp::UNWRAP: {
                 flush_pending();
@@ -1694,10 +1694,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(mk_test(v, v));
                 O.push_back(MInstr::make_jcc(MCond::NE, Lok));
                 if (abi == AbiKind::HOST_LEAF) {
-                    /* AOT: hook __vex_panic_null (sin args; default bare-lib,
+                    /* AOT: hook __vx_panic_null (sin args; default bare-lib,
                      * redefinible -- freestanding lo provee el usuario). */
                     O.push_back(MInstr::make_call_sym(
-                        out.intern_reloc_symbol("__vex_panic_null")));
+                        out.intern_reloc_symbol("__vx_panic_null")));
                 } else {
                     /* VM_ABI (JIT): camino frio llama vrt_unwrap_throw(proc)
                      * -> mismo FatalError capturable que el bytecode UNWRAP.
@@ -1727,7 +1727,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * pop + ret) devuelve a enter_jit, que detecta rip!=pre_rip y
                  * deja que el interp resuma en el handler.  NO escribe regs[0]
                  * (do_throw ya lo puso = exception_ptr para el catch).
-                 * En HOST_LEAF el __vex_panic_null normalmente aborta; el ret
+                 * En HOST_LEAF el __vx_panic_null normalmente aborta; el ret
                  * queda inalcanzable (inofensivo). */
                 O.push_back(MInstr::make_ret());
                 O.push_back(MInstr::make_label_def(Lok));
@@ -2021,7 +2021,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::THROW: {
                 flush_pending();
                 /* AOT/Embed (HOST_LEAF, sin VM): el throw baja a CALL al
-                 * runtime auto-hospedado __vex_throw(value) (vex_exc.vex,
+                 * runtime auto-hospedado __vx_throw(value) (vx_exc.vx,
                  * setjmp/longjmp).  noreturn -> RET de relleno para cerrar
                  * el bloque (nunca se ejecuta; el longjmp diverge). */
                 if (abi == AbiKind::HOST_LEAF) {
@@ -2029,7 +2029,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "throw(host-leaf-no-arg)");
                         return false;
                     }
-                    // __vex_throw(value[, type_id]): operands[1] (type-id del
+                    // __vx_throw(value[, type_id]): operands[1] (type-id del
                     // intervalo) presente en native_poo para el type matching.
                     std::vector<ir::IrValueId> targs = {in.operands[0]};
                     if (in.operands.size() >= 2)
@@ -2039,7 +2039,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         return false;
                     }
                     O.push_back(MInstr::make_call_sym(
-                        out.intern_reloc_symbol("__vex_throw")));
+                        out.intern_reloc_symbol("__vx_throw")));
                     O.push_back(MInstr::make_ret());
                     break;
                 }
@@ -2727,7 +2727,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
                 const MReg fp1 = static_cast<MReg>(fpsc[1]);
                 /* x0/x1 con ancho eff_w (16/32/64) -> el encoder elige
-                 * SSE2/VEX/EVEX.  Una pieza procesa eff_w bytes en el offset
+                 * SSE2/VX/EVEX.  Una pieza procesa eff_w bytes en el offset
                  * piece*eff_w; recargamos la base por pieza (solo 2 GP scratch)
                  * y le sumamos el offset (cuando n_pieces>1). */
                 const uint8_t ew = static_cast<uint8_t>(eff_w);
@@ -2809,7 +2809,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 (void)is_fp;
                 // HOIST: el escalar ya esta DIFUNDIDO en XMM13 por un VEC_BCAST
-                // del preheader (imm bit 16).  Asi el cuerpo del loop es VEX PURO
+                // del preheader (imm bit 16).  Asi el cuerpo del loop es VX PURO
                 // (vmovupd ymm + vop ymm leyendo XMM13) -> ancho AVX/AVX512 sin
                 // re-broadcast ni transicion AVX<->SSE.  XMM13 = acc0 reservado;
                 // scalar-bcast y reduccion no coexisten en un matcher de 1 stmt.
@@ -5051,7 +5051,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     /* thread_local: la direccion por-hilo se computa via el
                      * thread pointer.  ELF (local-exec): `mov dst,%fs:0` + `lea
                      * dst,[dst+sym@tpoff]` (reloc TPOFF32).  PE (TLS directory):
-                     * carga el bloque TLS del TEB con `__vex_tls_index` y suma
+                     * carga el bloque TLS del TEB con `__vx_tls_index` y suma
                      * el offset del var (SECREL32).  El reloc apunta a
                      * `tdata.<imm>`; el driver/emisor lo resuelven. */
                     const uint32_t vsidx = out.intern_reloc_symbol(
@@ -5060,7 +5060,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         O.push_back(MInstr::make_tls_le_addr(vr(in.dst), vsidx));
                     } else {
                         const uint32_t isidx =
-                            out.intern_reloc_symbol("__vex_tls_index");
+                            out.intern_reloc_symbol("__vx_tls_index");
                         O.push_back(MInstr::make_tls_pe_addr(vr(in.dst), vsidx,
                                                              isidx));
                     }
@@ -5197,15 +5197,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
 
             /* FN.3 pieza 3: SWAPCTX en VM_ABI (JIT) -> CALL nativo a
-             * `__vex_swapctx` (@Naked, host-ABI).  operands[0]=to_ctx (a
+             * `__vx_swapctx` (@Naked, host-ABI).  operands[0]=to_ctx (a
              * cargar), operands[1]=from_ctx (a guardar).  El primitivo toma
              * sus args en los arg-regs NATIVOS (arg0=to, arg1=from), NO en
              * proc->registers -> usamos ARG + CALL_ABS (misma via que un CALLN
-             * host-ABI).  ent.swapctx = direccion nativa de __vex_swapctx que
+             * host-ABI).  ent.swapctx = direccion nativa de __vx_swapctx que
              * el force-eager del grafo de fibra dejo lista (compilada por
              * compile_native_fn).  Es un context-switch: al reanudar (cuando
              * alguien vuelva a esta fibra) los callee-saved los restaura el
-             * propio __vex_swapctx; los caller-saved vivos a traves de la
+             * propio __vx_swapctx; los caller-saved vivos a traves de la
              * llamada los spillea el regalloc (CALL_ABS = call-position).  El
              * path INTERPRETE sigue usando el opcode VM `swapctx` (FN.1); aqui
              * solo el path JIT nativo. */

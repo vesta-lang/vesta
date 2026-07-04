@@ -1,0 +1,78 @@
+// examples/ffi/vx/self_host.vx
+//
+// Self-hosting: un programa Vex que, via la C-API de libvesta (el propio
+// compilador + VM empaquetados como DLL/.so), COMPILA y EJECUTA otro
+// snippet Vex y usa su resultado.  Es decir: Vex ejecuta Vex a traves de
+// la DLL del lenguaje.
+//
+// Mecanismo (FFI runtime dinamico, A.24):
+//   - ffi_open("...")  -> carga la libreria compartida (handle host i64).
+//   - ffi_sym(lib,"f") -> resuelve un simbolo (puntero host i64).
+//   - ffi_call(fn,...) -> invoca con los args en R1..R12, retorno en R0.
+//
+// Se invoca la funcion exportada:
+//   int vesta_eval(const char* src, const char* unit_name,
+//                  int* out_exit, char** out_err);
+// pasando:
+//   - src       = str_cstr(SNIPPET)   (host char* nul-terminado)
+//   - unit_name = 0                   (NULL -> "main")
+//   - out_exit  = slot                (host int* donde se escribe el R0 interno)
+//   - out_err   = 0                   (NULL -> ignoramos el mensaje de error)
+//
+// El snippet interno calcula 6 * 7 = 42.  Tras la llamada, leemos *slot
+// (el R0 del programa interno) y lo devolvemos como nuestro propio R0.
+//
+// Compilar + ejecutar (Windows / MinGW):
+//   vm --vx examples/ffi/vx/self_host.vx -o self_host
+//   vm --run self_host.velb        (libvesta.dll debe estar en el PATH o
+//                                   junto al binario; usamos ruta relativa
+//                                   abajo para mayor robustez)
+//
+// Resultado esperado: R00 == 42 (el resultado del programa COMPILADO+EJECUTADO
+// por la DLL desde dentro de este programa Vex).
+
+i32 main() {
+    // Snippet Vex a compilar+ejecutar via la DLL.  Devuelve 6 * 7 = 42.
+    string snippet = "i32 main() { return 6 * 7; }";
+
+    // Buffer host de 4 bytes para recibir el out_exit (int) por puntero.
+    i32* slot = malloc(4);
+    slot[0] = 0;
+
+    // Cargar libvesta.  En Windows el loader busca en el directorio del
+    // ejecutable y el PATH; "libvesta.dll" resuelve si esta junto al .exe.
+    // En POSIX usar "libvesta.so".  Para portabilidad de la demo probamos
+    // el nombre Windows; si falla, el handle sera 0 y abortamos limpio.
+    i64 lib = ffi_open("libvesta.dll");
+    if (lib == 0) {
+        // Segundo intento: nombre POSIX.
+        lib = ffi_open("libvesta.so");
+    }
+    if (lib == 0) {
+        free(slot);
+        // No se pudo cargar la DLL: devolvemos 0 (fallo silencioso para la
+        // demo; el ejemplo C cubre el reporte de errores detallado).
+        return 0;
+    }
+
+    // Resolver el simbolo exportado vesta_eval.
+    i64 fn_eval = ffi_sym(lib, "vesta_eval");
+    if (fn_eval == 0) {
+        free(slot);
+        return 0;
+    }
+
+    // Invocar: vesta_eval(src, NULL, &out_exit, NULL).
+    // ffi_call devuelve el codigo de retorno (0 = ok).
+    i64 rc = ffi_call(fn_eval, str_cstr(snippet), 0, slot, 0);
+
+    // Leer el resultado interno (R0 del snippet) escrito en el slot host.
+    i32 inner = slot[0];
+    free(slot);
+
+    println("self-host via libvesta: snippet -> ${inner} (rc=${rc})");
+    flush();
+
+    // Devolver el resultado del programa que la DLL compilo + ejecuto.
+    return inner;
+}

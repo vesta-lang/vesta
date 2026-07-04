@@ -26,16 +26,16 @@
 #if defined(_WIN32)
 #include <direct.h>
 #include <io.h>
-#define VEX_PATH_SEP_ENV ';'
-#define VEX_F_OK 0
+#define VX_PATH_SEP_ENV ';'
+#define VX_F_OK 0
 // _access en Windows.
-static inline bool vex_file_access_ok(const char *p) {
+static inline bool vx_file_access_ok(const char *p) {
     return _access(p, 0) == 0;
 }
 #else
 #include <unistd.h>
-#define VEX_PATH_SEP_ENV ':'
-static inline bool vex_file_access_ok(const char *p) {
+#define VX_PATH_SEP_ENV ':'
+static inline bool vx_file_access_ok(const char *p) {
     return access(p, F_OK) == 0;
 }
 #endif
@@ -108,7 +108,7 @@ bool ModuleGraph::read_file_(const std::string &path, std::string &out) {
 }
 
 bool ModuleGraph::file_exists_(const std::string &path) noexcept {
-    return vex_file_access_ok(path.c_str());
+    return vx_file_access_ok(path.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -206,19 +206,19 @@ void ModuleGraph::add_search_path(const std::string &dir) {
     search_paths_.push_back(normalize_path_(dir, ""));
 }
 
-void ModuleGraph::add_vex_path_env() {
+void ModuleGraph::add_vx_path_env() {
 #if defined(_WIN32)
     // Windows: getenv puede devolver NULL si no esta seteado.
-    const char *raw = std::getenv("VEX_PATH");
+    const char *raw = std::getenv("VX_PATH");
 #else
-    const char *raw = std::getenv("VEX_PATH");
+    const char *raw = std::getenv("VX_PATH");
 #endif
     if (raw == nullptr || *raw == 0) return;
     std::string s(raw);
-    // Tokenizar por VEX_PATH_SEP_ENV.
+    // Tokenizar por VX_PATH_SEP_ENV.
     std::string cur;
     for (size_t i = 0; i <= s.size(); ++i) {
-        if (i == s.size() || s[i] == VEX_PATH_SEP_ENV) {
+        if (i == s.size() || s[i] == VX_PATH_SEP_ENV) {
             if (!cur.empty()) {
                 add_search_path(cur);
                 cur.clear();
@@ -282,8 +282,8 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     size_t dot = base.find_last_of('.');
     mod->module_name = (dot == std::string::npos) ? base : base.substr(0, dot);
 
-    // Phase M.L22: paquete-dir.  Si el filename es `mod.vex`, el modulo
-    // logico es el directorio parent.  Asi `pkg_lib/mod.vex` se llama
+    // Phase M.L22: paquete-dir.  Si el filename es `mod.vx`, el modulo
+    // logico es el directorio parent.  Asi `pkg_lib/mod.vx` se llama
     // `pkg_lib` (no `mod`), coincidiendo con el nombre que el consumer
     // usa al hacer `import "pkg_lib"`.
     if (mod->module_name == "mod" && slash != std::string::npos) {
@@ -341,25 +341,21 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
     candidates.reserve(4 + search_paths_.size());
 
     // Phase M.L22: paquete-dir.  Para cada base_dir, intentamos primero
-    // `base_dir/raw_path.vex` (modulo single-file) y luego
-    // `base_dir/raw_path/mod.vex` (paquete-dir).  El segundo convenio
-    // permite agrupar varios .vex bajo `std/io/` con un entry point.
+    // `base_dir/raw_path.vx` (modulo single-file) y luego
+    // `base_dir/raw_path/mod.vx` (paquete-dir).  El segundo convenio
+    // permite agrupar varios .vx bajo `std/io/` con un entry point.
     // El nombre del modulo importado sigue siendo `raw_path` (e.g.
     // `std/io`) -- no cambia la semantica del consumer.
     auto add_candidate = [&](const std::string &base_dir) {
-        // (a) modulo single-file.  La extension canonica es `.vx` (el lenguaje
-        // se llama vesta-lang; `.vex` colisiona con otro lenguaje existente y
-        // queda como LEGACY durante la migracion -- se prueba despues de `.vx`).
+        // (a) modulo single-file.  La extension del lenguaje Vesta es `.vx`.
         candidates.push_back(normalize_path_(raw_path + ".vx", base_dir));
-        candidates.push_back(normalize_path_(raw_path + ".vex", base_dir));
-        // (b) paquete-dir: base_dir/raw_path/mod.vx (o .vex legacy).
+        // (b) paquete-dir: base_dir/raw_path/mod.vx (entry point del paquete).
         candidates.push_back(normalize_path_(raw_path + "/mod.vx", base_dir));
-        candidates.push_back(normalize_path_(raw_path + "/mod.vex", base_dir));
     };
 
     // 1. Carpeta del importador.
     add_candidate(importer_dir);
-    // 2. Search paths añadidos (VEX_PATH + adds explicitos).
+    // 2. Search paths añadidos (VX_PATH + adds explicitos).
     for (const auto &sp : search_paths_) {
         add_candidate(sp);
     }

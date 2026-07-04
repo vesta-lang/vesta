@@ -1,0 +1,178 @@
+// 234_sync_contention.vx
+//
+// F4-(a) de las fibras nativas: monitor-yield COOPERATIVO en el runtime
+// self-hosted.  Varias tareas con fibra CONTIENDEN un lock cooperativo sobre un
+// objeto compartido mientras se ceden a mitad de la seccion critica -- el caso que
+// ANTES (spin-PAUSE) DEADLOCKEARIA en el modelo cooperativo single-thread (el
+// duenño, suspendido con el lock tomado, jamas volveria a correr).  Con F4-(a), en
+// contienda la tarea CEDE al scheduler (vasync_yield) y REINTENTA la CAS al ser
+// reanudada; el round-robin de vasync_run garantiza que el duenño corra, libere el
+// lock, y el que espera triunfe.  Resultado DETERMINISTA y sin deadlock.
+//
+// ESCENARIO: 3 tareas, cada una hace 7 iteraciones de:
+//     lock(obj)                   // adquiere el lock cooperativo (palabra obj+16)
+//     counter += 1                // incremento protegido #1
+//     yield                       // CEDE MIENTRAS TIENE EL LOCK -> fuerza contienda
+//     counter += 1                // incremento protegido #2
+//     unlock(obj)                 // libera el lock
+// Total = 3 tareas * 7 iters * 2 incrementos = 42, IDENTICO en -m vm / -m jit /
+// -m aot (en aot el exit-code es 42, cabe en un byte).  Sin la cesion cooperativa,
+// una tarea que topa el lock ocupado colgaria el programa (deadlock): esa es la
+// razon de ser de F4-(a).
+//
+// POR QUE @Naked los cuerpos:  un cuerpo de tarea con fibra corre sobre SU PROPIA
+// pila NATIVA; en -m vm una fn Vex normal asume un frame VM y crashea al correr
+// sobre la pila host.  Por eso el cuerpo es asm puro (@Naked), como en 230/232/233.
+// La CESION cooperativa se hace con `call vasync_yield` (fn @Naked de vx_async,
+// importada) directamente desde el cuerpo del bucle de espera del lock.
+//
+// POR QUE EL LOCK VA INLINE EN EL CUERPO (y NO factorizado en vx_sync/vx_async):
+// existe una LIMITACION del codegen/bundle -- una fn @Naked que contiene un
+// `call vasync_yield` (referencia por simbolo de inline-asm a OTRA fn del mismo
+// modulo) CORROMPE el layout cuando esa fn NO esta en el modulo raiz (verificado:
+// segfault en -m vm al importarla, y la MISMA fn rompe el bundle AOT de vx_async
+// entero, tumbando incluso 233).  La forma correcta y portable (vm/jit/aot) es
+// hacer el lock INLINE en el cuerpo de la tarea (modulo raiz), usando `vasync_yield`
+// del runtime.  El monitor reentrante general de `synchronized` (vx_sync) queda
+// intacto; su cooperacion en fibras queda bloqueada por la MISMA limitacion (ver el
+// informe de F4-(a)).
+//
+// LOCK: binario (0 = libre, 1 = tomado) en la palabra obj+16 (misma celda que el
+// monitor reentrante de vx_sync; el modelo cooperativo single-thread no necesita
+// tid ni profundidad).  Acquire: `lock cmpxchg` 0->1; en fallo `call vasync_yield`
+// + reintento.  Release: store 0 (sin wake -- el round-robin reanuda al que espera).
+//
+// Compilar/ejecutar:
+//   vm --vx 234_sync_contention.vx -o p && vm -m vm  --run p.velb   (R00=0x2a=42)
+//   vm --vx 234_sync_contention.vx -o p && vm -m jit --run p.velb   (R00=0x2a=42)
+//   vm -m aot --vx 234_sync_contention.vx --format pe -o p.exe && ./p.exe (exit 42)
+
+import "vx_async" only vasync_yield, vasync_spawn_fiber, vasync_run, vasync_task_done;
+
+// ===========================================================================
+//  Cuerpo de tarea (@Naked).  arg = state block (host) en r13:
+//    [r13+0]  = iters restantes
+//    [r13+8]  = lock_obj_ptr (host_ptr al objeto; su palabra de lock en obj+16)
+//    [r13+16] = counter_ptr  (host_ptr al contador compartido)
+//  El obj se cachea en r12 (callee-saved: lo preserva fiber_switch a traves del
+//  yield) para el acquire/release del lock a lo largo del bucle.
+// ===========================================================================
+@Target("!os:windows")
+@Naked void race_task() {
+    asm volatile noinfer {
+        mov r13, rdi
+    race_loop:
+        mov rax, [r13 + 0]          // iters
+        test rax, rax
+        jz race_end
+        // acquire: CAS palabra(obj+16) 0->1; en contienda cede y reintenta
+        mov r12, [r13 + 8]          // obj (callee-saved -> sobrevive el yield)
+    race_acq:
+        lea r11, [r12 + 16]
+        xor eax, eax                // expected = 0 (libre)
+        mov edx, 1                  // desired = 1 (tomado)
+        lock cmpxchg [r11], rdx     // ZF=1 en exito
+        jz race_got
+        call vasync_yield           // ocupado: cede al scheduler y reintenta
+        jmp race_acq
+    race_got:
+        // counter += 1  (protegido por el lock)
+        mov rax, [r13 + 16]
+        mov rcx, [rax]
+        add rcx, 1
+        mov [rax], rcx
+        // yield MIENTRAS SE TIENE EL LOCK -> fuerza contienda en las demas tareas
+        call vasync_yield
+        // counter += 1  (aun protegido: seguimos con el lock)
+        mov rax, [r13 + 16]
+        mov rcx, [rax]
+        add rcx, 1
+        mov [rax], rcx
+        // release: palabra(obj+16) = 0
+        mov r12, [r13 + 8]
+        mov qword [r12 + 16], 0
+        // iters -= 1
+        mov rax, [r13 + 0]
+        sub rax, 1
+        mov [r13 + 0], rax
+        jmp race_loop
+    race_end:
+        call vasync_task_done       // marca terminada + cede definitivo (no retorna)
+    race_hang:
+        jmp race_hang
+    }
+}
+@Target("os:windows")
+@Naked void race_task() {
+    asm volatile noinfer {
+        mov r13, rcx
+        sub rsp, 32                 // shadow space Win64 para los call
+    race_loop:
+        mov rax, [r13 + 0]
+        test rax, rax
+        jz race_end
+        mov r12, [r13 + 8]
+    race_acq:
+        lea r11, [r12 + 16]
+        xor eax, eax
+        mov edx, 1
+        lock cmpxchg [r11], rdx
+        jz race_got
+        call vasync_yield
+        jmp race_acq
+    race_got:
+        mov rax, [r13 + 16]
+        mov rcx, [rax]
+        add rcx, 1
+        mov [rax], rcx
+        call vasync_yield
+        mov rax, [r13 + 16]
+        mov rcx, [rax]
+        add rcx, 1
+        mov [rax], rcx
+        mov r12, [r13 + 8]
+        mov qword [r12 + 16], 0
+        mov rax, [r13 + 0]
+        sub rax, 1
+        mov [r13 + 0], rax
+        jmp race_loop
+    race_end:
+        call vasync_task_done
+    race_hang:
+        jmp race_hang
+    }
+}
+
+i32 main() {
+    // Objeto compartido cuyo lock (celda obj+16) se contiende.  Reservamos 4 qwords
+    // (>= obj+16) y ponemos la palabra de lock a 0 (libre).
+    u64 lock_obj = (u64)malloc(4 * 8);
+    u64* lo = (u64*)lock_obj; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
+
+    // Contador compartido (1 qword).
+    u64 cnt_cell = (u64)malloc(8);
+    u64* cc = (u64*)cnt_cell; cc[0] = 0;
+
+    // 3 state blocks de 3 qwords: [iters, lock_obj, counter_ptr].
+    u64 blk = (u64)malloc(3 * 3 * 8);
+    u64 s1 = blk + 0 * 24;
+    u64 s2 = blk + 1 * 24;
+    u64 s3 = blk + 2 * 24;
+    u64* p1 = (u64*)s1; p1[0] = 7; p1[1] = lock_obj; p1[2] = cnt_cell;
+    u64* p2 = (u64*)s2; p2[0] = 7; p2[1] = lock_obj; p2[2] = cnt_cell;
+    u64* p3 = (u64*)s3; p3[0] = 7; p3[1] = lock_obj; p3[2] = cnt_cell;
+
+    // Crear las 3 tareas suspendibles (cada una con su fibra) que contienden.
+    vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s1);
+    vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s2);
+    vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s3);
+
+    // Correr el scheduler round-robin hasta que las 3 terminen.
+    vasync_run();
+
+    u64 total = cc[0];               // 3 * 7 * 2 = 42
+    free((i64*)blk);
+    free((i64*)cnt_cell);
+    free((i64*)lock_obj);
+    return (i32)total;               // 42
+}

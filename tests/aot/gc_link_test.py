@@ -5,8 +5,8 @@ Phase AOT.5 / gc<T> -- enlace standalone de un programa con GC opt-in usando
 NUESTRO linker (vm --link), sin g++/ld externos.
 
 Escenario (PE, nativo Windows):
-  1. Un .vx usa gc<Box> (GC opt-in) -> el .obj referencia vex_gc_alloc_ptr /
-     vex_gc_register_aot_stackmaps (definidos en libvesta_gc.a, libc-only).
+  1. Un .vx usa gc<Box> (GC opt-in) -> el .obj referencia vx_gc_alloc_ptr /
+     vx_gc_register_aot_stackmaps (definidos en libvesta_gc.a, libc-only).
   2. `vm --link prog.obj libvesta_gc.a -o prog.exe` debe:
        - extraer del .a solo los miembros necesarios (pull perezoso),
        - hacer COMDAT-folding de los inline/plantillas de C++ (operator new...),
@@ -51,7 +51,7 @@ def main():
     obj = os.path.join(work, "gc.obj")
     exe = os.path.join(work, "gc.exe")
 
-    r = run([vm, "--vex", src, "-m", "aot", "--emit", "obj",
+    r = run([vm, "--vx", src, "-m", "aot", "--emit", "obj",
              "--format", "pe", "-o", obj])
     if not os.path.exists(obj):
         print("FALLO: no se genero gc.obj")
@@ -75,7 +75,7 @@ def main():
 
     # Increment 3: --emit exe DIRECTO debe auto-enlazar libvesta_gc.a.
     auto = os.path.join(work, "gc_auto.exe")
-    run([vm, "--vex", src, "-m", "aot", "--emit", "exe", "--format", "pe",
+    run([vm, "--vx", src, "-m", "aot", "--emit", "exe", "--format", "pe",
          "-o", auto])
     if os.path.exists(auto) and run([auto]).returncode == 42:
         print("GC-AUTOLINK PE (--emit exe, libvesta_gc.a automatica): exit=42 OK")

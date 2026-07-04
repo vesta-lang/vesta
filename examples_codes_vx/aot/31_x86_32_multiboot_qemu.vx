@@ -1,0 +1,48 @@
+// KERNEL multiboot x86-32 ejecutable en QEMU (modo protegido bare-metal).
+// Valida que el codigo Vex de 32-bit corre SIN SO: QEMU -kernel carga la imagen
+// en modo protegido y salta a entry_addr.  El trampolin asm `_kstart` llama a
+// compute() (codigo Vex generado, REL32 resuelto por el driver) y senala el
+// resultado por debugcon (0xE9) + isa-debug-exit (0xF4).
+//
+//   vm -m aot --vx examples_codes_vx/aot/31_x86_32_multiboot_qemu.vx \
+//      -o k.bin --aot-arch x86-32 --emit bin --bin-base 0x100000
+//   qemu-system-i386 -kernel k.bin -debugcon file:dbg.out \
+//      -device isa-debug-exit,iobase=0xf4,iosize=1 -display none -no-reboot
+//   # QEMU exit = (45<<1)|1 = 91 ; dbg.out = 0x2d (45)
+//
+// El `call compute` desde el bloque asm lo habilita la resolucion de simbolos
+// del mini-ensamblador (call/jmp <funcion_vx> -> sym_ref REL32).
+//
+// Multiboot header: QEMU -kernel carga en modo protegido 32-bit + salta a entry_addr.
+// _kstart va solo en .text (offset fijo 0x20, justo tras el header de 32B);
+// compute() en .ktext aparte -> entry_addr estable sin importar el tamano de compute.
+@section(".mb") @order(0)
+bytes mbheader {
+    dd 0x1BADB002        // MULTIBOOT_MAGIC
+    dd 0x00010000        // flags: address fields
+    dd 0xE4514FFE        // checksum = -(magic+flags)
+    dd 0x00100000        // header_addr (base)
+    dd 0x00100000        // load_addr
+    dd 0x00000000        // load_end_addr (0 = todo)
+    dd 0x00000000        // bss_end_addr
+    dd 0x00100020        // entry_addr = _kstart (base + 0x20)
+}
+
+@bits(32) @section(".text") @order(1)
+asm _kstart {
+    mov esp, 0x200000
+    call compute
+    mov dx, 0xE9
+    out dx, al
+    mov dx, 0xF4
+    out dx, al
+    hlt
+}
+
+@section(".ktext") @order(2)
+i32 compute() {
+    i32 sum = 0;
+    i32 i = 1;
+    while (i <= 9) { sum = sum + i; i = i + 1; }
+    return sum;          // 45 = 0x2D
+}

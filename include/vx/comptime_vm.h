@@ -11,7 +11,7 @@
  */
 
 /**
- * @file vex/comptime_vm.h
+ * @file vx/comptime_vm.h
  * @brief Phase MC.2 -- ComptimeRuntime: VM dedicada que ejecuta el
  *        bytecode de @Macros lowered durante compile-time.
  *
@@ -35,8 +35,8 @@
  * Phase MC.3+: marshalling args + ejecucion + read return + cache.
  */
 
-#ifndef VEX_COMPTIME_VM_H
-#define VEX_COMPTIME_VM_H
+#ifndef VX_COMPTIME_VM_H
+#define VX_COMPTIME_VM_H
 
 #include <cstdint>
 #include <memory>
@@ -313,7 +313,7 @@ class ComptimeRuntime {
      * @param args         Args del call site (uint64 cada uno).
      * @param expected_str Resultado AST que el VM debe replicar.
      * @param src_loc      Texto libre describiendo el call site
-     *                     (e.g., "file.vex:line:col") para diag.
+     *                     (e.g., "file.vx:line:col") para diag.
      */
     void record_expectation(const std::string &macro_name,
                             std::vector<uint64_t> args,
@@ -416,4 +416,4 @@ class ComptimeRuntime {
 
 } // namespace vx
 
-#endif // VEX_COMPTIME_VM_H
+#endif // VX_COMPTIME_VM_H

@@ -1,0 +1,32 @@
+// AOT thread_local en una LIBRERIA COMPARTIDA (.dll PE).
+//
+// El reto de thread_local en una .dll: el cargador de Windows NO copia la
+// plantilla del bloque TLS (el VALOR INICIAL) a menos que la .dll tenga un
+// DllMain que dispare su init en cada DLL_PROCESS_ATTACH / DLL_THREAD_ATTACH.
+// A diferencia de un .exe (donde el cargador siempre aplica la plantilla), una
+// .dll cargada con LoadLibrary necesita ese entry point.
+//
+// Solucion: el compilador sintetiza `__vx_tls_init` (que escribe los valores
+// iniciales no-cero en el bloque TLS por-hilo y devuelve TRUE) y fija el
+// AddressOfEntryPoint de la .dll a esa funcion -- actua como un DllMain minimo.
+// Asi cada hilo que ataca la .dll recibe su copia inicializada a 7.
+//
+// Compilar:
+//   vm --vx 70_thread_local_dll.vx -m aot --emit shared --format pe -o tls.dll
+//
+// Consumir desde un host C (ver 70_thread_local_dll_host.c):
+//   get_t() incrementa la copia por-hilo en 5 y la devuelve.
+//   Primera llamada en el hilo principal: 7 + 5 = 12.
+//   Cada hilo nuevo empieza de nuevo en 7 (aislamiento por-hilo).
+
+thread_local i64 t = 7;          // copia por-hilo, plantilla = 7
+
+i64 get_t() {                    // exportada via GetProcAddress
+    t = t + 5;
+    return t;
+}
+
+i64 reset_t() {                  // exportada: vuelve la copia de ESTE hilo a 7
+    t = 7;
+    return t;
+}

@@ -539,7 +539,7 @@ std::string model_to_json(const DotModel &mdl, const std::string &view) {
 // __TITLE_TEXT__ se sustituyen en build_page por el JSON del modelo
 // y el titulo.  El motor JS hace layout en capas (longest-path),
 // pan/zoom, panel de detalle, busqueda y filtros de aristas.
-static const char *kHtmlTemplate = R"VEXHTML(<!DOCTYPE html>
+static const char *kHtmlTemplate = R"VXHTML(<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -1095,7 +1095,7 @@ window.addEventListener('resize',updateMinimapView);
 </script>
 </body>
 </html>
-)VEXHTML";
+)VXHTML";
 
 std::string build_page(const std::string &json, const std::string &title,
                        const std::string &view) {

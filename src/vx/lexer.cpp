@@ -217,7 +217,7 @@ const char *token_kind_name(TokenKind k) noexcept {
 
 // Comprobar coincidencia exacta del lexema con una cadena literal estatica.
 // sizeof(LIT) - 1 elimina el nul terminador del literal (constexpr).
-#define VEX_KW_EXACT(LIT, KIND)                                                \
+#define VX_KW_EXACT(LIT, KIND)                                                \
     do {                                                                       \
         if (n == sizeof(LIT) - 1 && std::memcmp(p, LIT, n) == 0)               \
             return (KIND);                                                     \
@@ -234,135 +234,135 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
     switch (p[0]) {
     // tipos primitivos de coleccion (CamelCase para coincidir
     // con la convencion de "tipo importado" comun en otros lenguajes).
-    case 'A': VEX_KW_EXACT("ArrayList", TokenKind::KW_ARRAYLIST); break;
-    case 'D': VEX_KW_EXACT("Deque", TokenKind::KW_DEQUE); break;
+    case 'A': VX_KW_EXACT("ArrayList", TokenKind::KW_ARRAYLIST); break;
+    case 'D': VX_KW_EXACT("Deque", TokenKind::KW_DEQUE); break;
     case 'H':
-        VEX_KW_EXACT("HashMap", TokenKind::KW_HASHMAP);
-        VEX_KW_EXACT("HashSet", TokenKind::KW_HASHSET);
+        VX_KW_EXACT("HashMap", TokenKind::KW_HASHMAP);
+        VX_KW_EXACT("HashSet", TokenKind::KW_HASHSET);
         break;
-    case 'Q': VEX_KW_EXACT("Queue", TokenKind::KW_QUEUE); break;
-    case 'S': VEX_KW_EXACT("Stack", TokenKind::KW_STACK); break;
+    case 'Q': VX_KW_EXACT("Queue", TokenKind::KW_QUEUE); break;
+    case 'S': VX_KW_EXACT("Stack", TokenKind::KW_STACK); break;
     case 'T':
-        VEX_KW_EXACT("TreeMap", TokenKind::KW_TREEMAP);
-        VEX_KW_EXACT("TreeSet", TokenKind::KW_TREESET);
+        VX_KW_EXACT("TreeMap", TokenKind::KW_TREEMAP);
+        VX_KW_EXACT("TreeSet", TokenKind::KW_TREESET);
         break;
     case 'a':
-        VEX_KW_EXACT("await", TokenKind::KW_AWAIT);
-        VEX_KW_EXACT("asm", TokenKind::KW_ASM);
+        VX_KW_EXACT("await", TokenKind::KW_AWAIT);
+        VX_KW_EXACT("asm", TokenKind::KW_ASM);
         break;
     case 'b':
-        VEX_KW_EXACT("bool", TokenKind::KW_BOOL);
-        VEX_KW_EXACT("break", TokenKind::KW_BREAK);
-        VEX_KW_EXACT("borrow_mut", TokenKind::KW_BORROW_MUT);
-        VEX_KW_EXACT("borrow", TokenKind::KW_BORROW);
+        VX_KW_EXACT("bool", TokenKind::KW_BOOL);
+        VX_KW_EXACT("break", TokenKind::KW_BREAK);
+        VX_KW_EXACT("borrow_mut", TokenKind::KW_BORROW_MUT);
+        VX_KW_EXACT("borrow", TokenKind::KW_BORROW);
         break;
     case 'c':
-        VEX_KW_EXACT("char", TokenKind::KW_CHAR);
-        VEX_KW_EXACT("class", TokenKind::KW_CLASS);
-        VEX_KW_EXACT("const", TokenKind::KW_CONST);
-        VEX_KW_EXACT("continue", TokenKind::KW_CONTINUE);
-        VEX_KW_EXACT("catch", TokenKind::KW_CATCH);
-        VEX_KW_EXACT("case", TokenKind::KW_CASE);
-        VEX_KW_EXACT("cfn", TokenKind::KW_CFN);
+        VX_KW_EXACT("char", TokenKind::KW_CHAR);
+        VX_KW_EXACT("class", TokenKind::KW_CLASS);
+        VX_KW_EXACT("const", TokenKind::KW_CONST);
+        VX_KW_EXACT("continue", TokenKind::KW_CONTINUE);
+        VX_KW_EXACT("catch", TokenKind::KW_CATCH);
+        VX_KW_EXACT("case", TokenKind::KW_CASE);
+        VX_KW_EXACT("cfn", TokenKind::KW_CFN);
         break;
     case 'd':
-        VEX_KW_EXACT("do", TokenKind::KW_DO);
-        VEX_KW_EXACT("double", TokenKind::KW_DOUBLE);
-        VEX_KW_EXACT("delete", TokenKind::KW_DELETE);
+        VX_KW_EXACT("do", TokenKind::KW_DO);
+        VX_KW_EXACT("double", TokenKind::KW_DOUBLE);
+        VX_KW_EXACT("delete", TokenKind::KW_DELETE);
         break;
     case 'e':
-        VEX_KW_EXACT("else", TokenKind::KW_ELSE);
-        VEX_KW_EXACT("enum", TokenKind::KW_ENUM);
-        VEX_KW_EXACT("extern", TokenKind::KW_EXTERN);
+        VX_KW_EXACT("else", TokenKind::KW_ELSE);
+        VX_KW_EXACT("enum", TokenKind::KW_ENUM);
+        VX_KW_EXACT("extern", TokenKind::KW_EXTERN);
         break;
     case 'f':
-        VEX_KW_EXACT("f32", TokenKind::KW_F32);
-        VEX_KW_EXACT("f64", TokenKind::KW_F64);
-        VEX_KW_EXACT("for", TokenKind::KW_FOR);
-        VEX_KW_EXACT("fn", TokenKind::KW_FN);
-        VEX_KW_EXACT("false", TokenKind::FALSE_KW);
-        VEX_KW_EXACT("final", TokenKind::KW_FINAL);
-        VEX_KW_EXACT("finally", TokenKind::KW_FINALLY);
-        VEX_KW_EXACT("float", TokenKind::KW_FLOAT);
+        VX_KW_EXACT("f32", TokenKind::KW_F32);
+        VX_KW_EXACT("f64", TokenKind::KW_F64);
+        VX_KW_EXACT("for", TokenKind::KW_FOR);
+        VX_KW_EXACT("fn", TokenKind::KW_FN);
+        VX_KW_EXACT("false", TokenKind::FALSE_KW);
+        VX_KW_EXACT("final", TokenKind::KW_FINAL);
+        VX_KW_EXACT("finally", TokenKind::KW_FINALLY);
+        VX_KW_EXACT("float", TokenKind::KW_FLOAT);
         break;
     case 'g':
-        VEX_KW_EXACT("get", TokenKind::KW_GET);
-        VEX_KW_EXACT("goto", TokenKind::KW_GOTO);
-        VEX_KW_EXACT("gc", TokenKind::KW_GC);
+        VX_KW_EXACT("get", TokenKind::KW_GET);
+        VX_KW_EXACT("goto", TokenKind::KW_GOTO);
+        VX_KW_EXACT("gc", TokenKind::KW_GC);
         break;
     case 'i':
-        VEX_KW_EXACT("if", TokenKind::KW_IF);
-        VEX_KW_EXACT("in", TokenKind::KW_IN);
-        VEX_KW_EXACT("i8", TokenKind::KW_INT8);
-        VEX_KW_EXACT("i16", TokenKind::KW_INT16);
-        VEX_KW_EXACT("i32", TokenKind::KW_INT32);
-        VEX_KW_EXACT("i64", TokenKind::KW_INT64);
-        VEX_KW_EXACT("int8_t", TokenKind::KW_INT8_T);
-        VEX_KW_EXACT("int16_t", TokenKind::KW_INT16_T);
-        VEX_KW_EXACT("int32_t", TokenKind::KW_INT32_T);
-        VEX_KW_EXACT("int64_t", TokenKind::KW_INT64_T);
-        VEX_KW_EXACT("import", TokenKind::KW_IMPORT);
-        VEX_KW_EXACT("interface", TokenKind::KW_INTERFACE);
+        VX_KW_EXACT("if", TokenKind::KW_IF);
+        VX_KW_EXACT("in", TokenKind::KW_IN);
+        VX_KW_EXACT("i8", TokenKind::KW_INT8);
+        VX_KW_EXACT("i16", TokenKind::KW_INT16);
+        VX_KW_EXACT("i32", TokenKind::KW_INT32);
+        VX_KW_EXACT("i64", TokenKind::KW_INT64);
+        VX_KW_EXACT("int8_t", TokenKind::KW_INT8_T);
+        VX_KW_EXACT("int16_t", TokenKind::KW_INT16_T);
+        VX_KW_EXACT("int32_t", TokenKind::KW_INT32_T);
+        VX_KW_EXACT("int64_t", TokenKind::KW_INT64_T);
+        VX_KW_EXACT("import", TokenKind::KW_IMPORT);
+        VX_KW_EXACT("interface", TokenKind::KW_INTERFACE);
         break;
     case 'm':
-        VEX_KW_EXACT("monitor", TokenKind::KW_MONITOR);
-        VEX_KW_EXACT("match", TokenKind::KW_MATCH);
+        VX_KW_EXACT("monitor", TokenKind::KW_MONITOR);
+        VX_KW_EXACT("match", TokenKind::KW_MATCH);
         break;
     case 'n':
-        VEX_KW_EXACT("new", TokenKind::KW_NEW);
-        VEX_KW_EXACT("null", TokenKind::NULL_KW);
-        VEX_KW_EXACT("nonnull", TokenKind::KW_NONNULL);
-        VEX_KW_EXACT("namespace", TokenKind::KW_NAMESPACE);
+        VX_KW_EXACT("new", TokenKind::KW_NEW);
+        VX_KW_EXACT("null", TokenKind::NULL_KW);
+        VX_KW_EXACT("nonnull", TokenKind::KW_NONNULL);
+        VX_KW_EXACT("namespace", TokenKind::KW_NAMESPACE);
         break;
-    case 'o': VEX_KW_EXACT("override", TokenKind::KW_OVERRIDE); break;
+    case 'o': VX_KW_EXACT("override", TokenKind::KW_OVERRIDE); break;
     case 'p':
-        VEX_KW_EXACT("public", TokenKind::KW_PUBLIC);
-        VEX_KW_EXACT("private", TokenKind::KW_PRIVATE);
-        VEX_KW_EXACT("protected", TokenKind::KW_PROTECTED);
+        VX_KW_EXACT("public", TokenKind::KW_PUBLIC);
+        VX_KW_EXACT("private", TokenKind::KW_PRIVATE);
+        VX_KW_EXACT("protected", TokenKind::KW_PROTECTED);
         break;
     case 'r':
-        VEX_KW_EXACT("return", TokenKind::KW_RETURN);
-        VEX_KW_EXACT("rspawn", TokenKind::KW_RSPAWN);
+        VX_KW_EXACT("return", TokenKind::KW_RETURN);
+        VX_KW_EXACT("rspawn", TokenKind::KW_RSPAWN);
         break;
     case 's':
-        VEX_KW_EXACT("set", TokenKind::KW_SET);
-        VEX_KW_EXACT("string", TokenKind::KW_STRING);
-        VEX_KW_EXACT("struct", TokenKind::KW_STRUCT);
-        VEX_KW_EXACT("static", TokenKind::KW_STATIC);
-        VEX_KW_EXACT("super", TokenKind::KW_SUPER);
-        VEX_KW_EXACT("spawn", TokenKind::KW_SPAWN);
-        VEX_KW_EXACT("synchronized", TokenKind::KW_SYNCHRONIZED);
-        VEX_KW_EXACT("shared", TokenKind::KW_SHARED);
+        VX_KW_EXACT("set", TokenKind::KW_SET);
+        VX_KW_EXACT("string", TokenKind::KW_STRING);
+        VX_KW_EXACT("struct", TokenKind::KW_STRUCT);
+        VX_KW_EXACT("static", TokenKind::KW_STATIC);
+        VX_KW_EXACT("super", TokenKind::KW_SUPER);
+        VX_KW_EXACT("spawn", TokenKind::KW_SPAWN);
+        VX_KW_EXACT("synchronized", TokenKind::KW_SYNCHRONIZED);
+        VX_KW_EXACT("shared", TokenKind::KW_SHARED);
         break;
     case 't':
-        VEX_KW_EXACT("this", TokenKind::KW_THIS);
-        VEX_KW_EXACT("thread_local", TokenKind::KW_THREAD_LOCAL);
-        VEX_KW_EXACT("throw", TokenKind::KW_THROW);
-        VEX_KW_EXACT("true", TokenKind::TRUE_KW);
-        VEX_KW_EXACT("try", TokenKind::KW_TRY);
-        VEX_KW_EXACT("typedef", TokenKind::KW_TYPEDEF);
+        VX_KW_EXACT("this", TokenKind::KW_THIS);
+        VX_KW_EXACT("thread_local", TokenKind::KW_THREAD_LOCAL);
+        VX_KW_EXACT("throw", TokenKind::KW_THROW);
+        VX_KW_EXACT("true", TokenKind::TRUE_KW);
+        VX_KW_EXACT("try", TokenKind::KW_TRY);
+        VX_KW_EXACT("typedef", TokenKind::KW_TYPEDEF);
         break;
     case 'u':
-        VEX_KW_EXACT("u8", TokenKind::KW_UINT8);
-        VEX_KW_EXACT("u16", TokenKind::KW_UINT16);
-        VEX_KW_EXACT("u32", TokenKind::KW_UINT32);
-        VEX_KW_EXACT("u64", TokenKind::KW_UINT64);
-        VEX_KW_EXACT("uint8_t", TokenKind::KW_UINT8_T);
-        VEX_KW_EXACT("uint16_t", TokenKind::KW_UINT16_T);
-        VEX_KW_EXACT("uint32_t", TokenKind::KW_UINT32_T);
-        VEX_KW_EXACT("uint64_t", TokenKind::KW_UINT64_T);
-        VEX_KW_EXACT("using", TokenKind::KW_USING);
-        VEX_KW_EXACT("unique", TokenKind::KW_UNIQUE);
+        VX_KW_EXACT("u8", TokenKind::KW_UINT8);
+        VX_KW_EXACT("u16", TokenKind::KW_UINT16);
+        VX_KW_EXACT("u32", TokenKind::KW_UINT32);
+        VX_KW_EXACT("u64", TokenKind::KW_UINT64);
+        VX_KW_EXACT("uint8_t", TokenKind::KW_UINT8_T);
+        VX_KW_EXACT("uint16_t", TokenKind::KW_UINT16_T);
+        VX_KW_EXACT("uint32_t", TokenKind::KW_UINT32_T);
+        VX_KW_EXACT("uint64_t", TokenKind::KW_UINT64_T);
+        VX_KW_EXACT("using", TokenKind::KW_USING);
+        VX_KW_EXACT("unique", TokenKind::KW_UNIQUE);
         break;
-    case 'v': VEX_KW_EXACT("void", TokenKind::KW_VOID); break;
-    case 'w': VEX_KW_EXACT("while", TokenKind::KW_WHILE); break;
+    case 'v': VX_KW_EXACT("void", TokenKind::KW_VOID); break;
+    case 'w': VX_KW_EXACT("while", TokenKind::KW_WHILE); break;
     default: break;
     }
     // No coincidio con ninguna palabra reservada: identificador normal.
     return TokenKind::IDENTIFIER;
 }
 
-#undef VEX_KW_EXACT
+#undef VX_KW_EXACT
 
 // -----------------------------------------------------------------------
 // Lexer: implementacion.

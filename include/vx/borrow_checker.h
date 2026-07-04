@@ -45,8 +45,8 @@
  * con multiples puntos referenciados, igual que rustc.
  */
 
-#ifndef VEX_BORROW_CHECKER_H
-#define VEX_BORROW_CHECKER_H
+#ifndef VX_BORROW_CHECKER_H
+#define VX_BORROW_CHECKER_H
 
 #include <cstdint>
 #include <string>
@@ -293,4 +293,4 @@ class BorrowChecker {
 
 } // namespace vx
 
-#endif // VEX_BORROW_CHECKER_H
+#endif // VX_BORROW_CHECKER_H

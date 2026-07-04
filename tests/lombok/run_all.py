@@ -16,13 +16,13 @@ TMP = Path(os.environ.get("TEMP", "/tmp"))
 R_RE = re.compile(r"R00=0x([0-9a-fA-F]+)")
 
 
-def run_vex(test: Path, mode: str) -> tuple[str, int | None]:
+def run_vx(test: Path, mode: str) -> tuple[str, int | None]:
     velb_path = TMP / f"lombok_{test.stem}_{mode}.velb"
     base      = str(velb_path.with_suffix("")).replace("/", "\\")
     velb_abs  = str(velb_path).replace("/", "\\")
     vm        = str(VM).replace("/", "\\")
     test_abs  = str(test).replace("/", "\\")
-    p = subprocess.run([vm, "--vex", test_abs, "-o", base],
+    p = subprocess.run([vm, "--vx", test_abs, "-o", base],
                        capture_output=True, text=True, timeout=30)
     if p.returncode != 0 or not velb_path.exists():
         return "compile_fail", None
@@ -55,8 +55,8 @@ def main() -> int:
     print(f"{'test':<40} {'interp':>10} {'jit':>10}  status")
     print("-" * 76)
     for t in tests:
-        st_i, r_i = run_vex(t, "interp")
-        st_j, r_j = run_vex(t, "jit")
+        st_i, r_i = run_vx(t, "interp")
+        st_j, r_j = run_vx(t, "jit")
         if st_i == "compile_fail" or st_j == "compile_fail":
             cf_n += 1
             print(f"{t.stem:<40} {'-':>10} {'-':>10}  COMPILE_FAIL")

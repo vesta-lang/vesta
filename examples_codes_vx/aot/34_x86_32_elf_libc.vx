@@ -1,0 +1,17 @@
+// CALL a libc desde un ELF32 (x86-32): un `extern "libc.so.6"` se resuelve por
+// la GOT (enlace dinamico) contra libc.so.6 de i386.  El ejecutable es ET_EXEC
+// con base fija (0x08048000) -- x86-32 no tiene RIP-relativo, asi que el thunk
+// usa direccionamiento absoluto, lo que exige base fija (no PIE).
+//
+//   vm -m aot --vx examples_codes_vx/aot/34_x86_32_elf_libc.vx \
+//      -o tu.elf --aot-arch x86-32 --emit exe --format elf
+//   ./tu.elf ; echo $?     # -> 65 ('A')   (Linux/WSL 32-bit)
+//
+// readelf -d: NEEDED libc.so.6 + BIND_NOW; interpreter /lib/ld-linux.so.2.
+// Las funciones de libc son CDECL (args en la pila); el codegen 32-bit lo emite.
+
+extern "libc.so.6" { fn toupper(i32 c) -> i32; }
+
+i32 main() {
+    return toupper(97);   // 'a' -> 'A' = 65
+}

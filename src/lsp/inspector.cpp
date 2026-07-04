@@ -620,13 +620,13 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
 }
 
 /**
- * @brief Recoge las lineas fuente .vex que abarca una funcion IR.
+ * @brief Recoge las lineas fuente .vx que abarca una funcion IR.
  *
  * Solo-LSP (vista "Godbolt"): el panel SOURCE muestra el codigo de la
  * funcion.  Calcula el rango [min,max] de @c source_line sobre las
  * instrucciones de @p fn (ignorando 0) y extrae esas lineas del documento.
  *
- * @param doc Texto completo del documento .vex.
+ * @param doc Texto completo del documento .vx.
  * @param fn  Funcion IR.
  * @return Array JSON de @c {line, text} (1-based), vacio si no hay lineas.
  */
@@ -815,7 +815,7 @@ nlohmann::json ir_listing(const ir::IrFunction &fn) {
                 continue;
             if (in.op == ir::IrOp::INLINE_ASM) {
                 // Expandir el cuerpo asm: una fila por linea (legible), con su
-                // linea .vex real (base+1+k); las etiquetas como "label".
+                // linea .vx real (base+1+k); las etiquetas como "label".
                 nlohmann::json jh;
                 jh["kind"] = "op";
                 jh["line"] = in.source_line;
@@ -1065,7 +1065,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
         return {{"text", an.result.vel_text}};
     }
 
-    // Por-funcion (hover): vista correlada linea .vex -> bytecode generado,
+    // Por-funcion (hover): vista correlada linea .vx -> bytecode generado,
     // igual estilo que JIT/AOT.  Recompilamos con emit_debug para tener los
     // marcadores `// @line N` y atribuir cada instruccion .vel a su linea.
     // Cache por (uri, hash, fn) -- recompilar es barato pero no en cada frame.

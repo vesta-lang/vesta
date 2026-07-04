@@ -143,16 +143,16 @@ void throw_fatalf(ProcessVM *vm, uint32_t kind, const char *fmt, ...);
 /**
  * @brief Metadata de debug por metodo.  Se rellena durante
  *        @c __module_init via el opcode @c setmethdbg que el frontend
- *        Vesta emite tras cada @c defmethod con la info del .vex source.
+ *        Vesta emite tras cada @c defmethod con la info del .vx source.
  *
  * Layout muy compacto: nombre de archivo (compartido entre todos los
  * metodos del modulo) + linea de inicio del metodo en el source.
- * Suficiente para que el stack trace muestre "(myfile.vex:42)" en
+ * Suficiente para que el stack trace muestre "(myfile.vx:42)" en
  * cada frame.  Opcionalmente extensible a tabla pc -> line para
  * precision instruction-level (no implementado en MVP).
  */
 struct MethodDebug {
-    std::string source_file; ///< nombre del .vex source (e.g. "foo.vex")
+    std::string source_file; ///< nombre del .vx source (e.g. "foo.vx")
     uint32_t start_line;     ///< linea 1-based del inicio del metodo
 };
 

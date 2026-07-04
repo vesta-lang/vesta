@@ -10,11 +10,11 @@
 
 /**
  * @file aot/link_script.h
- * @brief Phase AOT.5 -- script de enlace ESCRITO EN VEX (configurable).
+ * @brief Phase AOT.5 -- script de enlace ESCRITO EN VESTA (configurable).
  *
- * El usuario configura el linker con un @c .vex normal (sin sintaxis nueva):
+ * El usuario configura el linker con un @c .vx normal (sin sintaxis nueva):
  * define una funcion @c link() que llama a builtins de configuracion.  El
- * linker compila ese @c .vex, lo ejecuta in-process (VM) con los builtins
+ * linker compila ese @c .vx, lo ejecuta in-process (VM) con los builtins
  * registrados como funciones nativas, y lee la configuracion resultante.  Es
  * intuitivo (es Vesta) y potente (logica/bucles/comptime completos para CALCULAR
  * la disposicion).  Builtins disponibles dentro de @c link():
@@ -53,9 +53,9 @@ struct LinkScriptConfig {
 };
 
 /**
- * @brief Compila y ejecuta @p script_path (un .vex con @c fn link()) y devuelve
+ * @brief Compila y ejecuta @p script_path (un .vx con @c fn link()) y devuelve
  *        la configuracion del enlace.
- * @param script_path Ruta del .vex de configuracion.
+ * @param script_path Ruta del .vx de configuracion.
  * @param sec_sizes   Tamanos de las secciones fusionadas (para section_size()).
  * @param debug_build Valor que devolvera el builtin @c debug_build().
  * @param out         [salida] Config leida del script.

@@ -1,21 +1,21 @@
 /**
  * @file module_interop.cpp
- * @brief Interop entre TypeChecker y formato @c .vexi (Phase M.2.d).
+ * @brief Interop entre TypeChecker y formato @c .vxi (Phase M.2.d).
  *
- * Funciones libres en namespace @c vex que conectan el estado del
- * @c TypeChecker con un @c VexiModule:
+ * Funciones libres en namespace @c vx que conectan el estado del
+ * @c TypeChecker con un @c VxiModule:
  *
- *   - @c export_typechecker_to_vexi: extrae los simbolos publicos del
- *     TypeChecker a un @c VexiModule listo para serializar.  En el MVP
+ *   - @c export_typechecker_to_vxi: extrae los simbolos publicos del
+ *     TypeChecker a un @c VxiModule listo para serializar.  En el MVP
  *     todos los simbolos top-level son publicos; @c public/private
  *     explicito llega en M6.
  *
- *   - @c import_vexi_into_typechecker: inyecta los simbolos listados en
+ *   - @c import_vxi_into_typechecker: inyecta los simbolos listados en
  *     @c only_symbols en las tablas del TypeChecker (type_aliases_,
  *     struct_layouts_, class_layouts_, enum_layouts_, function_sigs_).
  *
  * Las firmas viven en este TU (no en type_checker.h) para no forzar el
- * include de vexi_format.h en todos los consumidores del TypeChecker.
+ * include de vxi_format.h en todos los consumidores del TypeChecker.
  * El compiler.cpp (en M2.e) las invoca explicitamente.
  */
 
@@ -27,7 +27,7 @@
 
 #include "vx/type_checker.h"
 #include "vx/types.h"
-#include "vx/vexi_format.h"
+#include "vx/vxi_format.h"
 #include "vx/diagnostic.h" // #cross-module-generics: re-parse de templates
 #include "vx/lexer.h"
 #include "vx/parser.h"
@@ -388,10 +388,10 @@ bool TypeChecker::resolve_ns_qualified(const std::string &dotted,
 namespace vx {
 
 // ---------------------------------------------------------------------------
-// export: TypeChecker -> VexiModule.
+// export: TypeChecker -> VxiModule.
 // ---------------------------------------------------------------------------
-void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
-                                VexiModule &out,
+void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
+                                VxiModule &out,
                                 const std::string &strip_prefix) {
     out.source_hash = source_hash;
     out.symbols.clear();
@@ -417,16 +417,16 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         // Phase M6.a L.3: solo exportar si es publico.
         if (!tc.is_typedef_public(kv.first)) continue;
         // Phase M.L23: filtrar imports NO re-exportados.  Solo lo que
-        // venga de otro .vexi vive en imported_names_; los locales no.
+        // venga de otro .vxi vive en imported_names_; los locales no.
         if (tc.is_imported(kv.first) && !tc.is_reexported(kv.first)) continue;
-        VexiSymbol s;
+        VxiSymbol s;
         const Type &t = kv.second;
         s.name = kv.first;
         if (t.nominal_id != 0) {
-            s.kind = VexiSymbolKind::TYPEDEF_NEW;
+            s.kind = VxiSymbolKind::TYPEDEF_NEW;
             s.is_opaque = t.is_opaque;
             s.align_override = t.align_override;
-            s.nominal_abi = vexi_fnv1a(s.name);
+            s.nominal_abi = vxi_fnv1a(s.name);
             // El underlying canonico se obtiene del registro de newtypes.
             const Type *u = tc.newtype_underlying(s.name);
             if (u != nullptr) {
@@ -449,21 +449,21 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
             if (ni != nullptr) {
                 for (const auto &conv : ni->from_conversions) {
                     if (!conv.is_public) continue;
-                    VexiSymbol::ExplicitConvEntry e;
+                    VxiSymbol::ExplicitConvEntry e;
                     e.type_str = canonical_typename_of(conv.type);
                     e.is_public = true;
                     s.from_conversions.push_back(std::move(e));
                 }
                 for (const auto &conv : ni->to_conversions) {
                     if (!conv.is_public) continue;
-                    VexiSymbol::ExplicitConvEntry e;
+                    VxiSymbol::ExplicitConvEntry e;
                     e.type_str = canonical_typename_of(conv.type);
                     e.is_public = true;
                     s.to_conversions.push_back(std::move(e));
                 }
             }
         } else {
-            s.kind = VexiSymbolKind::TYPEDEF_ALIAS;
+            s.kind = VxiSymbolKind::TYPEDEF_ALIAS;
             s.underlying_type = canonical_typename_of(t);
         }
         out.symbols.push_back(std::move(s));
@@ -477,14 +477,14 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         if (!layout.is_public) continue;
         // Phase M.L23: filtrar imports NO re-exportados.
         if (tc.is_imported(name) && !tc.is_reexported(name)) continue;
-        VexiSymbol s;
-        s.kind = VexiSymbolKind::STRUCT;
+        VxiSymbol s;
+        s.kind = VxiSymbolKind::STRUCT;
         s.name = name;
         s.size_bytes = layout.size_bytes;
         s.align_bytes = layout.align_bytes;
         s.fields.reserve(layout.fields.size());
         for (const auto &f : layout.fields) {
-            VexiSymbol::FieldInfo fi;
+            VxiSymbol::FieldInfo fi;
             fi.name = f.name;
             fi.type_str = canonical_typename_of(f.type);
             fi.offset = f.offset;
@@ -507,8 +507,8 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         // Phase M.L23: filtrar imports NO re-exportados.
         if (tc.is_imported(name) && !tc.is_reexported(name)) continue;
         if (layout.is_runtime_predefined) continue;
-        VexiSymbol s;
-        s.kind = VexiSymbolKind::CLASS;
+        VxiSymbol s;
+        s.kind = VxiSymbolKind::CLASS;
         s.name = name;
         s.super_class = layout.super_name;
         s.size_bytes = layout.size_bytes;
@@ -516,7 +516,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         s.interfaces = layout.interface_names;
         s.fields.reserve(layout.fields.size());
         for (const auto &f : layout.fields) {
-            VexiSymbol::FieldInfo fi;
+            VxiSymbol::FieldInfo fi;
             fi.name = f.name;
             fi.type_str = canonical_typename_of(f.type);
             fi.offset = f.offset;
@@ -530,7 +530,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         // correcto cross-module.
         s.methods.reserve(layout.methods.size());
         for (const auto &m : layout.methods) {
-            VexiSymbol::MethodInfo mi;
+            VxiSymbol::MethodInfo mi;
             mi.name = m.name;
             mi.return_type = canonical_typename_of(m.return_type);
             mi.vtable_index = m.vtable_index;
@@ -562,8 +562,8 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         if (!layout.is_public) continue;
         // Phase M.L23: filtrar imports NO re-exportados.
         if (tc.is_imported(name) && !tc.is_reexported(name)) continue;
-        VexiSymbol s;
-        s.kind = VexiSymbolKind::ENUM;
+        VxiSymbol s;
+        s.kind = VxiSymbolKind::ENUM;
         s.name = name;
         // Preservar size_bytes para que el consumidor pueda allocar
         // slots del enum (8 + 8*max_payload_fields).  Sin esto, el
@@ -573,7 +573,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         s.align_bytes = 8;
         s.variants.reserve(layout.variants.size());
         for (const auto &v : layout.variants) {
-            VexiSymbol::EnumVariant ev;
+            VxiSymbol::EnumVariant ev;
             ev.name = v.name;
             ev.tag = v.tag;
             ev.payload_types.reserve(v.field_types.size());
@@ -660,15 +660,15 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         if (tc.is_imported(public_name) && !tc.is_reexported(public_name)) {
             continue;
         }
-        VexiSymbol s;
-        s.kind = VexiSymbolKind::FUNCTION;
+        VxiSymbol s;
+        s.kind = VxiSymbolKind::FUNCTION;
         s.name = public_name;
         s.mangled_label = mangled_label;
         s.ns_path = ns_path_for_sym; // NS.2: namespace declarado (vacio si none)
         s.return_type = canonical_typename_of(sig->return_type);
         s.is_extern = !sig->extern_lib.empty();
         s.extern_lib = sig->extern_lib;
-        // LIM-A: propagar @Naked al .vexi para que la importacion cross-modulo
+        // LIM-A: propagar @Naked al .vxi para que la importacion cross-modulo
         // en interp/JIT enrute al dispatcher naked (y no ejecute el asm como
         // bytecode).
         s.is_naked = sig->is_naked;
@@ -722,20 +722,20 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
             public_name[1] == '_') {
             continue;
         }
-        VexiSymbol s;
-        s.kind = VexiSymbolKind::GLOBAL_VAR;
+        VxiSymbol s;
+        s.kind = VxiSymbolKind::GLOBAL_VAR;
         s.name = public_name;
         s.mangled_label = mangled_label;
         s.ns_path = ns_path_for_gv; // NS.2: namespace declarado (vacio si none)
         Type gv_type =
             const_cast<TypeChecker &>(tc).resolve_type_node(gv->type.get());
         s.underlying_type = canonical_typename_of(gv_type);
-        // Para los comptime const, marcamos @c is_const=true en el .vexi
+        // Para los comptime const, marcamos @c is_const=true en el .vxi
         // porque el consumer los va a inlinear como CONST (mismo flujo que
         // los const runtime).  El bit @c is_comptime no se persiste; es
         // detalle interno del modulo emisor.
         s.is_const = gv->is_const || gv->is_comptime;
-        // v4: propagar atributos al .vexi para que el consumer/AOT/JIT
+        // v4: propagar atributos al .vxi para que el consumer/AOT/JIT
         // los respeten al materializar el simbolo.
         if (gv->attr_hot) s.attr_flags |= 0x01;
         if (gv->attr_cold) s.attr_flags |= 0x02;
@@ -758,15 +758,15 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
             } else if (it != cv_map.end() && it->second.is_str) {
                 // v4: materializar como blob STRING en el pool.
                 const std::string &sv = it->second.str_value;
-                const uint32_t blob_off = vexi_blob_append(
-                    out.blob_pool, VexiBlobKind::STRING,
+                const uint32_t blob_off = vxi_blob_append(
+                    out.blob_pool, VxiBlobKind::STRING,
                     reinterpret_cast<const uint8_t *>(sv.data()), sv.size(),
                     /*element_size=*/1u,
                     /*count=*/static_cast<uint32_t>(sv.size()),
                     /*alignment=*/8u);
                 s.has_blob_ref = true;
                 s.blob_offset = blob_off;
-                s.blob_kind_hint = static_cast<uint8_t>(VexiBlobKind::STRING);
+                s.blob_kind_hint = static_cast<uint8_t>(VxiBlobKind::STRING);
             } else if (it != cv_map.end() && it->second.is_array) {
                 // v4: materializar como blob ARRAY_PRIM.  Solo i64 elements
                 // soportados en v4 (el evaluador comptime guarda los array
@@ -780,8 +780,8 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
                     std::memcpy(bytes.data() + i * sizeof(int64_t), &v,
                                 sizeof(int64_t));
                 }
-                const uint32_t blob_off = vexi_blob_append(
-                    out.blob_pool, VexiBlobKind::ARRAY_PRIM, bytes.data(),
+                const uint32_t blob_off = vxi_blob_append(
+                    out.blob_pool, VxiBlobKind::ARRAY_PRIM, bytes.data(),
                     bytes.size(),
                     /*element_size=*/static_cast<uint32_t>(sizeof(int64_t)),
                     /*count=*/static_cast<uint32_t>(av.size()),
@@ -789,7 +789,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
                 s.has_blob_ref = true;
                 s.blob_offset = blob_off;
                 s.blob_kind_hint =
-                    static_cast<uint8_t>(VexiBlobKind::ARRAY_PRIM);
+                    static_cast<uint8_t>(VxiBlobKind::ARRAY_PRIM);
             } else if (it != cv_map.end() && it->second.is_struct) {
                 // v4: materializar como blob STRUCT_PRIM (campos primitivos
                 // i64).  El consumer reconstruye el struct accediendo a los
@@ -797,7 +797,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
                 const auto &fields = it->second.struct_fields;
                 std::vector<uint8_t> bytes;
                 // Layout: (u32 name_off + u32 name_len + u64 value) por field.
-                // El name_off apunta al string pool del .vexi (que sigue al
+                // El name_off apunta al string pool del .vxi (que sigue al
                 // blob_pool).  Lo resolvemos via el StringPoolBuilder NO
                 // accesible aqui directamente.  Para v4 inicial, almacenamos
                 // el nombre EN EL BLOB mismo via inline u32 len + bytes.
@@ -818,8 +818,8 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
                     while (bytes.size() % 8 != 0)
                         bytes.push_back(0);
                 }
-                const uint32_t blob_off = vexi_blob_append(
-                    out.blob_pool, VexiBlobKind::STRUCT_PRIM, bytes.data(),
+                const uint32_t blob_off = vxi_blob_append(
+                    out.blob_pool, VxiBlobKind::STRUCT_PRIM, bytes.data(),
                     bytes.size(),
                     /*element_size=*/0u,
                     /*count=*/static_cast<uint32_t>(fields.size()),
@@ -827,7 +827,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
                 s.has_blob_ref = true;
                 s.blob_offset = blob_off;
                 s.blob_kind_hint =
-                    static_cast<uint8_t>(VexiBlobKind::STRUCT_PRIM);
+                    static_cast<uint8_t>(VxiBlobKind::STRUCT_PRIM);
             } else {
                 // is_type u otros casos no soportados en v4: saltar.
                 continue;
@@ -860,8 +860,8 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &kv : tc.imported_global_consts()) {
         const std::string &name = kv.first;
         if (!tc.is_reexported(name)) continue;
-        VexiSymbol s;
-        s.kind = VexiSymbolKind::GLOBAL_VAR;
+        VxiSymbol s;
+        s.kind = VxiSymbolKind::GLOBAL_VAR;
         s.name = name;
         s.underlying_type = canonical_typename_of(kv.second.type);
         s.is_const = true; // imported_global_consts solo guarda const
@@ -878,7 +878,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &tex : tc.ast_module().generic_template_exports) {
         if (!tex.is_public) continue;
         if (tc.is_imported(tex.name) && !tc.is_reexported(tex.name)) continue;
-        VexiModule::GenericTemplateSource g;
+        VxiModule::GenericTemplateSource g;
         g.name = tex.name;
         g.kind = tex.kind;
         g.source = tex.source;
@@ -889,8 +889,8 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
 // ---------------------------------------------------------------------------
 // #cross-module-generics: inyectar plantillas genericas + conceptos.
 // ---------------------------------------------------------------------------
-void inject_generic_templates_from_vexi(
-    TypeChecker &tc, const VexiModule &mod,
+void inject_generic_templates_from_vxi(
+    TypeChecker &tc, const VxiModule &mod,
     const std::unordered_set<std::string> &wanted,
     const std::string &ns_prefix) {
     if (mod.generic_templates.empty()) return;
@@ -916,7 +916,7 @@ void inject_generic_templates_from_vexi(
         combined += "\n";
     }
     Diagnostics tmp_diags;
-    Lexer lex(combined, "<vexi-templates:" + ns_prefix + ">", tmp_diags);
+    Lexer lex(combined, "<vxi-templates:" + ns_prefix + ">", tmp_diags);
     Parser parser(lex, tmp_diags);
     auto parsed = parser.parse_program();
     if (!parsed || tmp_diags.has_errors()) return; // best-effort
@@ -972,19 +972,19 @@ void inject_generic_templates_from_vexi(
 }
 
 // ---------------------------------------------------------------------------
-// import: VexiModule -> TypeChecker (inyeccion selectiva via only_symbols).
+// import: VxiModule -> TypeChecker (inyeccion selectiva via only_symbols).
 //
 // Phase M.2 MVP: solo procesamos los simbolos LISTADOS en only_symbols.
-// Para cada uno, buscamos el VexiSymbol con ese nombre en el modulo y
+// Para cada uno, buscamos el VxiSymbol con ese nombre en el modulo y
 // lo inyectamos en la tabla del TypeChecker que corresponda a su kind.
 //
 // Si only_symbols esta vacio, no se inyecta nada (los imports plain
 // `import "x";` o `import "x" as alias;` requieren namespace support,
 // pendiente en M2.x).
 // ---------------------------------------------------------------------------
-void import_vexi_into_typechecker(
-    TypeChecker &tc, const VexiModule &mod,
-    const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols) {
+void import_vxi_into_typechecker(
+    TypeChecker &tc, const VxiModule &mod,
+    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols) {
     if (only_symbols.empty()) return;
 
     // Mapa name -> indice en mod.symbols para lookup O(1).
@@ -1002,12 +1002,12 @@ void import_vexi_into_typechecker(
             // Aqui solo skipeamos para no abortar las demas inyecciones.
             continue;
         }
-        const VexiSymbol &s = mod.symbols[it->second];
+        const VxiSymbol &s = mod.symbols[it->second];
         const std::string local_name = os.rename.empty() ? os.name : os.rename;
 
         switch (s.kind) {
-        case VexiSymbolKind::TYPEDEF_ALIAS:
-        case VexiSymbolKind::TYPEDEF_NEW: {
+        case VxiSymbolKind::TYPEDEF_ALIAS:
+        case VxiSymbolKind::TYPEDEF_NEW: {
             Type underlying = tc.resolve_type_string(s.underlying_type);
             if (underlying.kind == PrimitiveKind::VOID &&
                 s.underlying_type != "void") {
@@ -1016,7 +1016,7 @@ void import_vexi_into_typechecker(
                 // añadira un round adicional de resolucion.
                 continue;
             }
-            if (s.kind == VexiSymbolKind::TYPEDEF_NEW) {
+            if (s.kind == VxiSymbolKind::TYPEDEF_NEW) {
                 underlying.nominal_id = tc.allocate_nominal_id();
                 underlying.nominal_name = local_name;
                 underlying.is_opaque = s.is_opaque;
@@ -1028,7 +1028,7 @@ void import_vexi_into_typechecker(
                 clean.align_override = 0;
                 tc.register_imported_newtype(local_name, clean);
                 // Phase M.L8: registrar el bloque {explicit from/to T;}
-                // si el .vexi lo trae.  Las entries no-public ya fueron
+                // si el .vxi lo trae.  Las entries no-public ya fueron
                 // filtradas por el lado emit.  Las que llegan aqui son
                 // siempre is_public=true.
                 if (!s.from_conversions.empty() || !s.to_conversions.empty()) {
@@ -1054,7 +1054,7 @@ void import_vexi_into_typechecker(
             tc.register_imported_type_alias(local_name, std::move(underlying));
             break;
         }
-        case VexiSymbolKind::STRUCT: {
+        case VxiSymbolKind::STRUCT: {
             StructLayout L;
             L.name = local_name;
             L.size_bytes = s.size_bytes;
@@ -1073,7 +1073,7 @@ void import_vexi_into_typechecker(
             tc.register_imported_struct(local_name, std::move(L));
             break;
         }
-        case VexiSymbolKind::CLASS: {
+        case VxiSymbolKind::CLASS: {
             // M2 MVP: las clases inyectadas son layouts solo de
             // estructura (sin vtable funcional, sin metodos
             // dispatcheables).  Util para que el TypeChecker conozca
@@ -1117,7 +1117,7 @@ void import_vexi_into_typechecker(
             tc.register_imported_class(local_name, std::move(L));
             break;
         }
-        case VexiSymbolKind::ENUM: {
+        case VxiSymbolKind::ENUM: {
             EnumLayout L;
             L.name = local_name;
             L.variants.reserve(s.variants.size());
@@ -1140,7 +1140,7 @@ void import_vexi_into_typechecker(
             tc.register_imported_enum(local_name, std::move(L));
             break;
         }
-        case VexiSymbolKind::FUNCTION: {
+        case VxiSymbolKind::FUNCTION: {
             FunctionSig sig;
             sig.return_type = tc.resolve_type_string(s.return_type);
             sig.param_types.reserve(s.param_types.size());
@@ -1148,7 +1148,7 @@ void import_vexi_into_typechecker(
                 sig.param_types.push_back(tc.resolve_type_string(pt));
             }
             sig.extern_lib = s.is_extern ? s.extern_lib : std::string();
-            // Phase M.5: si el .vexi declara un mangled_label, el
+            // Phase M.5: si el .vxi declara un mangled_label, el
             // lowering del consumidor emitira @c CALLVM a ese label
             // en lugar del nombre publico.  Cierra L.4.
             sig.mangled_label = s.mangled_label;
@@ -1157,7 +1157,7 @@ void import_vexi_into_typechecker(
             tc.register_imported_function(local_name, std::move(sig));
             break;
         }
-        case VexiSymbolKind::GLOBAL_VAR: {
+        case VxiSymbolKind::GLOBAL_VAR: {
             // Phase M.L7: registrar global importada.  El TypeChecker
             // la declarara como Symbol::Variable en el scope global
             // tras el push_scope inicial de run().  Si trae
@@ -1177,16 +1177,16 @@ void import_vexi_into_typechecker(
 
 // =========================================================================
 // Variante que devuelve la lista de simbolos solicitados pero NO encontrados
-// (o no publicos) en el .vexi.  El caller (compile_vx_project) la usa para
+// (o no publicos) en el .vxi.  El caller (compile_vx_project) la usa para
 // emitir diagnosticos cross-module precisos (Phase M6.a L.3).
 //
 // Tras llamar a esta funcion, el TypeChecker queda con las inyecciones de
 // los simbolos que SI existian (igual que la variante simple); los faltantes
 // solo se devuelven para que el caller decida si emitir error o warning.
 // =========================================================================
-std::vector<std::string> import_vexi_into_typechecker_with_missing(
-    TypeChecker &tc, const VexiModule &mod,
-    const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols) {
+std::vector<std::string> import_vxi_into_typechecker_with_missing(
+    TypeChecker &tc, const VxiModule &mod,
+    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols) {
     std::vector<std::string> missing;
     if (only_symbols.empty()) return missing;
 
@@ -1198,7 +1198,7 @@ std::vector<std::string> import_vexi_into_typechecker_with_missing(
     }
 
     // Primera pasada: identificar simbolos faltantes.  Solo se serializan al
-    // .vexi los simbolos PUBLICOS, asi que un `not found` significa "no
+    // .vxi los simbolos PUBLICOS, asi que un `not found` significa "no
     // existe" O "existe pero es privado".  Para el usuario el mensaje es el
     // mismo en ambos casos (privado == no exportado).
     for (const auto &os : only_symbols) {
@@ -1209,8 +1209,8 @@ std::vector<std::string> import_vexi_into_typechecker_with_missing(
 
     // Delegar la inyeccion real a la variante simple (ya skipea los missing
     // silenciosamente).  De esta manera no duplicamos la logica de switch
-    // sobre VexiSymbolKind.
-    import_vexi_into_typechecker(tc, mod, only_symbols);
+    // sobre VxiSymbolKind.
+    import_vxi_into_typechecker(tc, mod, only_symbols);
 
     return missing;
 }
@@ -1230,7 +1230,7 @@ std::vector<std::string> import_vexi_into_typechecker_with_missing(
 void register_namespace_for_import(TypeChecker &tc,
                                    const std::string &local_name,
                                    const std::string &module_name,
-                                   const VexiModule &mod) {
+                                   const VxiModule &mod) {
     const uint32_t ns_idx =
         tc.register_imported_namespace(local_name, module_name);
     // Phase M7.b: para que `lib.MyClass` funcione como tipo qualified
@@ -1245,7 +1245,7 @@ void register_namespace_for_import(TypeChecker &tc,
     // detecta `lib.MyClass`, busca Sym en namespace, usa mangled_label
     // para lookup en layouts.  Solo faltaban estos dos pasos.
     // Helper local para resolver typenames con fallback a la version
-    // mangled del modulo.  Si el .vexi exporta `return_type = "Point"` pero
+    // mangled del modulo.  Si el .vxi exporta `return_type = "Point"` pero
     // el consumer registro el tipo como `lib__Point` (M7.b), debemos probar
     // ambos.  Cubre el bug 2 (struct value return cross-module).
     auto resolve_with_mangled_fallback = [&](const std::string &name) -> Type {
@@ -1264,16 +1264,16 @@ void register_namespace_for_import(TypeChecker &tc,
     //
     // LANG.fix-3: ademas de registrar el layout, marcar el NOMBRE MANGLED
     // como imported (sin re-export) para que cuando el modulo consumer
-    // se exporte a su propia .vexi, NO incluya estos tipos importados
+    // se exporte a su propia .vxi, NO incluya estos tipos importados
     // como simbolos exportados.  Sin esto, una cadena main -> outer ->
-    // inner re-exportaba `inner__Bar` desde outer.vexi (double-mangling
+    // inner re-exportaba `inner__Bar` desde outer.vxi (double-mangling
     // y type mismatches).
     for (const auto &s : mod.symbols) {
-        if (s.kind == VexiSymbolKind::FUNCTION) continue;
-        if (s.kind == VexiSymbolKind::GLOBAL_VAR) continue;
+        if (s.kind == VxiSymbolKind::FUNCTION) continue;
+        if (s.kind == VxiSymbolKind::GLOBAL_VAR) continue;
         const std::string mangled_pre = module_name + "__" + s.name;
         switch (s.kind) {
-        case VexiSymbolKind::STRUCT: {
+        case VxiSymbolKind::STRUCT: {
             StructLayout L;
             L.name = mangled_pre;
             L.size_bytes = s.size_bytes;
@@ -1282,7 +1282,7 @@ void register_namespace_for_import(TypeChecker &tc,
             tc.mark_imported(mangled_pre, /*is_reexport=*/false);
             break;
         }
-        case VexiSymbolKind::CLASS: {
+        case VxiSymbolKind::CLASS: {
             ClassLayout L;
             L.name = mangled_pre;
             L.imported_helper_suffix = s.name;
@@ -1291,7 +1291,7 @@ void register_namespace_for_import(TypeChecker &tc,
             tc.mark_imported(mangled_pre, /*is_reexport=*/false);
             break;
         }
-        case VexiSymbolKind::ENUM: {
+        case VxiSymbolKind::ENUM: {
             EnumLayout L;
             L.name = mangled_pre;
             L.size_bytes = static_cast<uint32_t>(s.size_bytes);
@@ -1307,21 +1307,21 @@ void register_namespace_for_import(TypeChecker &tc,
     // tipos del modulo dep tienen skeleton registrado.  Las referencias
     // cross-type dentro del mismo dep ya resuelven via mangled fallback.
     for (const auto &s : mod.symbols) {
-        if (s.kind == VexiSymbolKind::FUNCTION) continue;
-        if (s.kind == VexiSymbolKind::GLOBAL_VAR) continue;
+        if (s.kind == VxiSymbolKind::FUNCTION) continue;
+        if (s.kind == VxiSymbolKind::GLOBAL_VAR) continue;
         // M7.b: tipos cross-module via namespace qualified.
         // Compute mangled name = module_name + "__" + s.name.  Asi el
         // tipo no colisiona con un tipo del mismo nombre en el consumer.
         const std::string mangled = module_name + "__" + s.name;
         switch (s.kind) {
-        case VexiSymbolKind::TYPEDEF_ALIAS:
-        case VexiSymbolKind::TYPEDEF_NEW: {
+        case VxiSymbolKind::TYPEDEF_ALIAS:
+        case VxiSymbolKind::TYPEDEF_NEW: {
             Type underlying = tc.resolve_type_string(s.underlying_type);
             if (underlying.kind == PrimitiveKind::VOID &&
                 s.underlying_type != "void") {
                 continue; // forward-ref no resolvible -> skip
             }
-            if (s.kind == VexiSymbolKind::TYPEDEF_NEW) {
+            if (s.kind == VxiSymbolKind::TYPEDEF_NEW) {
                 underlying.nominal_id = tc.allocate_nominal_id();
                 underlying.nominal_name = mangled;
                 underlying.is_opaque = s.is_opaque;
@@ -1335,11 +1335,11 @@ void register_namespace_for_import(TypeChecker &tc,
             }
             tc.register_imported_type_alias(mangled, std::move(underlying));
             // LANG.fix-3: marcar typedef importado para que NO se
-            // re-exporte cuando el consumer mismo emita su .vexi.
+            // re-exporte cuando el consumer mismo emita su .vxi.
             tc.mark_imported(mangled, /*is_reexport=*/false);
             break;
         }
-        case VexiSymbolKind::STRUCT: {
+        case VxiSymbolKind::STRUCT: {
             StructLayout L;
             L.name = mangled;
             L.size_bytes = s.size_bytes;
@@ -1350,7 +1350,7 @@ void register_namespace_for_import(TypeChecker &tc,
                 sfi.name = fi.name;
                 // Phase M.fix-classfield: fallback al mangled del dep
                 // para campos con tipo CLASS/STRUCT/ENUM del mismo
-                // modulo dep.  El .vexi guarda type_str unmangled
+                // modulo dep.  El .vxi guarda type_str unmangled
                 // ("EditorTab") pero el consumer registra mangled
                 // ("tabs__EditorTab"); el fallback lo encuentra.
                 sfi.type = resolve_with_mangled_fallback(fi.type_str);
@@ -1363,7 +1363,7 @@ void register_namespace_for_import(TypeChecker &tc,
             tc.register_imported_struct(mangled, std::move(L));
             break;
         }
-        case VexiSymbolKind::CLASS: {
+        case VxiSymbolKind::CLASS: {
             ClassLayout L;
             L.name = mangled;
             L.imported_helper_suffix = s.name; // dep emitio __new_<s.name>
@@ -1400,7 +1400,7 @@ void register_namespace_for_import(TypeChecker &tc,
             tc.register_imported_class(mangled, std::move(L));
             break;
         }
-        case VexiSymbolKind::ENUM: {
+        case VxiSymbolKind::ENUM: {
             EnumLayout L;
             L.name = mangled;
             L.variants.reserve(s.variants.size());
@@ -1418,10 +1418,10 @@ void register_namespace_for_import(TypeChecker &tc,
             tc.register_imported_enum(mangled, std::move(L));
             break;
         }
-        case VexiSymbolKind::GLOBAL_VAR: {
+        case VxiSymbolKind::GLOBAL_VAR: {
             // M.L7 ext: globals const cross-module via namespace plain.
             // v4: si el simbolo tiene blob ref (string/array/struct),
-            // leemos el blob del pool del .vexi y lo registramos como
+            // leemos el blob del pool del .vxi y lo registramos como
             // comptime const string/array/struct importado.
             Type t = tc.resolve_type_string(s.underlying_type);
             if (t.kind == PrimitiveKind::VOID && s.underlying_type != "void") {
@@ -1434,13 +1434,13 @@ void register_namespace_for_import(TypeChecker &tc,
                                             s.init_value);
             }
             if (s.is_const && s.has_blob_ref) {
-                // Leer el blob desde el pool del .vexi.
-                const VexiBlobHeader *bh =
-                    vexi_blob_read(mod.blob_pool, s.blob_offset);
+                // Leer el blob desde el pool del .vxi.
+                const VxiBlobHeader *bh =
+                    vxi_blob_read(mod.blob_pool, s.blob_offset);
                 const uint8_t *payload =
-                    vexi_blob_payload(mod.blob_pool, s.blob_offset);
+                    vxi_blob_payload(mod.blob_pool, s.blob_offset);
                 if (bh && payload &&
-                    bh->kind == static_cast<uint32_t>(VexiBlobKind::STRING)) {
+                    bh->kind == static_cast<uint32_t>(VxiBlobKind::STRING)) {
                     std::string str_val(reinterpret_cast<const char *>(payload),
                                         bh->count);
                     tc.register_imported_global_str(s.name, t,
@@ -1478,7 +1478,7 @@ void register_namespace_for_import(TypeChecker &tc,
     // structs como tipo).  Ahora los layouts ya estan en el TypeChecker;
     // el resolver con fallback encontrara "lib__Point" si "Point" no esta.
     for (const auto &s : mod.symbols) {
-        if (s.kind == VexiSymbolKind::FUNCTION) {
+        if (s.kind == VxiSymbolKind::FUNCTION) {
             TypeChecker::ImportedNamespace::Sym sym;
             sym.kind = 0;
             sym.mangled_label =
@@ -1504,7 +1504,7 @@ void register_namespace_for_import(TypeChecker &tc,
                     ? ns_idx
                     : tc.register_imported_namespace(s.ns_path, module_name);
             tc.register_namespace_symbol(target_ns, s.name, std::move(sym));
-        } else if (s.kind == VexiSymbolKind::GLOBAL_VAR) {
+        } else if (s.kind == VxiSymbolKind::GLOBAL_VAR) {
             // M.L7 ext: globals const cross-module via namespace plain.
             // v4: si tiene blob_ref, leemos el blob string del pool.
             Type t = resolve_with_mangled_fallback(s.underlying_type);
@@ -1518,12 +1518,12 @@ void register_namespace_for_import(TypeChecker &tc,
                                             s.init_value);
             }
             if (s.is_const && s.has_blob_ref) {
-                const VexiBlobHeader *bh =
-                    vexi_blob_read(mod.blob_pool, s.blob_offset);
+                const VxiBlobHeader *bh =
+                    vxi_blob_read(mod.blob_pool, s.blob_offset);
                 const uint8_t *payload =
-                    vexi_blob_payload(mod.blob_pool, s.blob_offset);
+                    vxi_blob_payload(mod.blob_pool, s.blob_offset);
                 if (bh && payload &&
-                    bh->kind == static_cast<uint32_t>(VexiBlobKind::STRING)) {
+                    bh->kind == static_cast<uint32_t>(VxiBlobKind::STRING)) {
                     std::string str_val(reinterpret_cast<const char *>(payload),
                                         bh->count);
                     tc.register_imported_global_str(s.name, t,

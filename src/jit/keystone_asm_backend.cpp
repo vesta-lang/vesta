@@ -72,7 +72,7 @@ struct SymState {
 };
 thread_local SymState *g_sym_state = nullptr;
 
-bool vex_sym_resolver(const char *symbol, uint64_t *value) {
+bool vx_sym_resolver(const char *symbol, uint64_t *value) {
     if (g_sym_state == nullptr || symbol == nullptr) return false;
     *value = g_sym_state->intern(symbol);
     return true;
@@ -230,7 +230,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
         SymState sym_state;
         g_sym_state = &sym_state;
         ks_option(ks, KS_OPT_SYM_RESOLVER,
-                  reinterpret_cast<size_t>(&vex_sym_resolver));
+                  reinterpret_cast<size_t>(&vx_sym_resolver));
 
         // x86-64: `DEFAULT REL` -> `[sym]` (operando de memoria a un simbolo,
         // sin registro base) se ensambla RIP-RELATIVO (ff 25 disp32) en vez de
@@ -282,7 +282,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                 // extra: solo insn_offsets como antes.
                 const bool need_detail = !sym_state.syms.empty();
                 if (need_detail) cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
-                if (need_detail && std::getenv("VEX_ASM_DEBUG"))
+                if (need_detail && std::getenv("VX_ASM_DEBUG"))
                     for (auto &sp : sym_state.syms)
                         std::fprintf(stderr, "[asmdbg] sym '%s' -> %llx\n",
                                      sp.first.c_str(),
@@ -358,7 +358,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                             const uint64_t target =
                                 ia + x.encoding.disp_offset + op.mem.disp;
                             const std::string *s = sym_state.symbol_for(target);
-                            if (std::getenv("VEX_ASM_DEBUG"))
+                            if (std::getenv("VX_ASM_DEBUG"))
                                 std::fprintf(stderr,
                                              "[asmdbg] rip-mem ia=%llx il=%llx "
                                              "disp=%lld target=%llx match=%d "

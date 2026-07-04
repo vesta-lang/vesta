@@ -12,7 +12,7 @@ final [Troubleshooting](#troubleshooting).
   - [Indice](#indice)
   - [1. Pre-requisitos](#1-pre-requisitos)
   - [2. Clonar y compilar](#2-clonar-y-compilar)
-  - [3. Hola Mundo en Vesta](#3-hola-mundo-en-vex)
+  - [3. Hola Mundo en Vesta](#3-hola-mundo-en-vx)
   - [4. Ejecutar examples del repositorio](#4-ejecutar-examples-del-repositorio)
   - [5. REPL interactivo](#5-repl-interactivo)
   - [6. Probar el JIT](#6-probar-el-jit)
@@ -22,7 +22,7 @@ final [Troubleshooting](#troubleshooting).
     - ["config.guess: Syntax error: word unexpected" en Linux](#configguess-syntax-error-word-unexpected-en-linux)
     - ["CMake Error... at libs/SourceCode/keystone... policy version"](#cmake-error-at-libssourcecodekeystone-policy-version)
     - ["OPENSSL\_FOUND - NO" en Windows](#openssl_found---no-en-windows)
-    - [El programa Vesta no encuentra los plugins nativos (vesta\_io, etc.)](#el-programa-vex-no-encuentra-los-plugins-nativos-vesta_io-etc)
+    - [El programa Vesta no encuentra los plugins nativos (vesta\_io, etc.)](#el-programa-vx-no-encuentra-los-plugins-nativos-vesta_io-etc)
     - [Tests fallan](#tests-fallan)
     - [Build muy lento](#build-muy-lento)
     - [Run con Valgrind (Linux/macOS)](#run-con-valgrind-linuxmacos)
@@ -88,7 +88,7 @@ El binario resultante es `build/vm` (Linux/macOS) o `build/vm.exe` (Windows).
 
 Crea `hola.vx`:
 
-```vex
+```vx
 i32 main() {
     println("Hola desde Vesta ${1 + 1}!");
     return 0;
@@ -118,21 +118,21 @@ Compila y ejecuta:
 
 ## 4. Ejecutar examples del repositorio
 
-El repo trae ~140 programas en [`examples_codes_vex/`](../examples_codes_vex/)
+El repo trae ~140 programas en [`examples_codes_vx/`](../examples_codes_vx/)
 cubriendo todas las features del lenguaje:
 
 ```bash
 # Factorial recursivo
-./build/vm --vesta examples_codes_vex/01_factorial.vx -o /tmp/fact
+./build/vm --vesta examples_codes_vx/01_factorial.vx -o /tmp/fact
 ./build/vm --run /tmp/fact.velb
 # -> 3628800
 
 # Clases con herencia
-./build/vm --vesta examples_codes_vex/15_herencia_basica.vx -o /tmp/h
+./build/vm --vesta examples_codes_vx/15_herencia_basica.vx -o /tmp/h
 ./build/vm --run /tmp/h.velb
 
 # Async + futures
-./build/vm --vesta examples_codes_vex/43_async_basico.vx -o /tmp/a
+./build/vm --vesta examples_codes_vx/43_async_basico.vx -o /tmp/a
 ./build/vm --run /tmp/a.velb
 ```
 
@@ -140,24 +140,24 @@ Para ver el `.vel` (ensamblador VM intermedio) o el SSA IR:
 
 ```bash
 # Ver el .vel generado (lo escribe al lado del .velb)
-./build/vm --vesta examples_codes_vex/01_factorial.vx -o /tmp/fact
+./build/vm --vesta examples_codes_vx/01_factorial.vx -o /tmp/fact
 cat /tmp/fact.vel
 
 # Volcar el SSA IR (pre y post optimizacion)
-./build/vm --vesta examples_codes_vex/01_factorial.vx -o /tmp/fact --vex-emit-ir
+./build/vm --vesta examples_codes_vx/01_factorial.vx -o /tmp/fact --vx-emit-ir
 cat /tmp/fact.ir
 
 # Generar diagramas Mermaid de AST, IR y .vel
-./build/vm --vesta examples_codes_vex/01_factorial.vx -o /tmp/fact --diagram-all
+./build/vm --vesta examples_codes_vx/01_factorial.vx -o /tmp/fact --diagram-all
 ls /tmp/fact.*.mmd
 # -> /tmp/fact.ast.mmd, /tmp/fact.ir.pre.mmd, /tmp/fact.ir.post.mmd, /tmp/fact.vel.mmd
 
 # Map file de simbolos y secciones (debug; opt-in porque cuesta ~60% del linker)
-./build/vm --vesta examples_codes_vex/01_factorial.vx -o /tmp/fact --emit-map
+./build/vm --vesta examples_codes_vx/01_factorial.vx -o /tmp/fact --emit-map
 cat /tmp/fact.velb-map        # tabla de symbols + sections + addresses
 
 # Debug info (file:line) embebida en el .velb para el debugger TCP
-./build/vm --vesta examples_codes_vex/01_factorial.vx -o /tmp/fact --vex-debug
+./build/vm --vesta examples_codes_vx/01_factorial.vx -o /tmp/fact --vx-debug
 ```
 
 ---
@@ -204,15 +204,15 @@ preset `-m jit` (= threshold 1, compila a la primera invocacion):
 
 ```bash
 # Benchmark sin JIT (interprete puro)
-./build/vm --run examples_codes_vex/benchmark/bench_jit_method.velb --stats
+./build/vm --run examples_codes_vx/benchmark/bench_jit_method.velb --stats
 # -> Wall time: ~1700 ms, MIPS ~150
 
 # Mismo bench con JIT activo
-./build/vm --run examples_codes_vex/benchmark/bench_jit_method.velb -m jit --stats
+./build/vm --run examples_codes_vx/benchmark/bench_jit_method.velb -m jit --stats
 # -> Wall time: ~85 ms, MIPS ~3500 (20x speedup)
 
 # Stats de compilacion JIT
-./build/vm --run examples_codes_vex/benchmark/bench_jit_method.velb -m jit --jit-stats
+./build/vm --run examples_codes_vx/benchmark/bench_jit_method.velb -m jit --jit-stats
 # -> Cuantos metodos compilados, cuantos fallaron (selector unsupported), etc.
 
 # Warnings sobre que IR ops no soporta el selector
@@ -239,7 +239,7 @@ Protocol) sobre TCP. Para una prueba rapida en localhost:
 **Terminal 2** (nodo cliente que envia un programa al nodo 1):
 
 ```bash
-./build/vm --vesta examples_codes_vex/47_rspawn_basico.vx -o /tmp/rsp
+./build/vm --vesta examples_codes_vx/47_rspawn_basico.vx -o /tmp/rsp
 ./build/vm --run /tmp/rsp.velb \
     --dist-port 7790 \
     --dist-add-node 127.0.0.1:7789
@@ -312,7 +312,7 @@ export VESTA_PLUGIN_DIR=/ruta/a/build/stdlib/native
 ### Tests fallan
 
 ```bash
-bash tests/vex/test_vex_e2e.sh build
+bash tests/vx/test_vx_e2e.sh build
 # Esperado: 200/200 pasos OK
 ```
 

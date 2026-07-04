@@ -22,7 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 VM = ROOT / "cmake-build-windows" / "vm.exe"
-TMP = Path(os.environ.get("TEMP", "/tmp")) / "vex_edge"
+TMP = Path(os.environ.get("TEMP", "/tmp")) / "vx_edge"
 TMP.mkdir(parents=True, exist_ok=True)
 
 R00_RE = re.compile(r"R00=0x([0-9a-fA-F]+)")
@@ -41,14 +41,14 @@ DIM = lambda s: c("2",  s)
 BLD = lambda s: c("1",  s)
 
 
-def compile_vex(src: Path) -> Path | None:
+def compile_vx(src: Path) -> Path | None:
     """Compila src.vx -> tmp/<stem>.velb.  None si falla."""
     stem = src.stem
     out_stem = TMP / stem
     velb = TMP / f"{stem}.velb"
     try:
         proc = subprocess.run(
-            [str(VM), "--vex", str(src), "-o", str(out_stem)],
+            [str(VM), "--vx", str(src), "-o", str(out_stem)],
             capture_output=True, text=True, timeout=30.0,
         )
     except subprocess.TimeoutExpired:
@@ -58,7 +58,7 @@ def compile_vex(src: Path) -> Path | None:
     return velb
 
 
-def run_vex(velb: Path, jit: bool) -> dict:
+def run_vx(velb: Path, jit: bool) -> dict:
     """Ejecuta velb en interp o jit.  Devuelve dict con r00 + wall_ns +
     exit + stdout + stderr."""
     cmd = [str(VM), "--run", str(velb), "--stats"]
@@ -117,15 +117,15 @@ def main():
 
     for src in tests:
         name = src.stem
-        velb = compile_vex(src)
+        velb = compile_vx(src)
         if velb is None:
             n_compile_fail += 1
             print(f"{name:<30}{'-':>14}{'-':>14}  {RED('COMPILE_FAIL'):<14}")
             failures.append(f"{name}: compile_fail")
             continue
 
-        ri = run_vex(velb, jit=False)
-        rj = run_vex(velb, jit=True)
+        ri = run_vx(velb, jit=False)
+        rj = run_vx(velb, jit=True)
 
         def fmt(r):
             if r["r00"] is None:

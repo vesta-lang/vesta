@@ -1,11 +1,11 @@
 /**
  * @file manifest.h
- * @brief Parser dual TOML/JSON del manifest de paquete (vex.toml / vex.json).
+ * @brief Parser dual TOML/JSON del manifest de paquete (vx.toml / vx.json).
  *
  * Phase PM.1: estructura unica @c Manifest con accesores tipados.  Soporta
  * dos serializaciones equivalentes:
- *   - vex.toml (humano-friendly, canonico)
- *   - vex.json (machine-friendly, otros lenguajes pueden leer)
+ *   - vx.toml (humano-friendly, canonico)
+ *   - vx.json (machine-friendly, otros lenguajes pueden leer)
  *
  * El parser detecta el formato por la extension del archivo.  Si ambos
  * coexisten en un proyecto, error explicito ("manifest duplicado").
@@ -41,7 +41,7 @@ namespace pkg {
 struct DependencySpec {
     std::string name;    ///< @c "@vesta/buffer" (qualified)
     std::string version; ///< @c "1.2" (semver opcional)
-    std::string sha256;  ///< hash hex del .vex+.vexi (32 bytes hex = 64 chars)
+    std::string sha256;  ///< hash hex del .vx+.vxi (32 bytes hex = 64 chars)
     std::string git_url; ///< @c "https://github.com/..."  vacio si no es git
     std::string git_rev; ///< commit hash exacto (NO branch, NO tag) si es git
     std::string path;    ///< ruta local relativa o absoluta si es local
@@ -55,7 +55,7 @@ struct DependencySpec {
  * @brief Capabilities declaradas por el paquete propio (qué necesita).
  *
  * El CONSUMER decide si grant via su propio manifest.  Default: deny-all.
- * Sintaxis identica a `--vex-caps`:
+ * Sintaxis identica a `--vx-caps`:
  *   - "fs:read"
  *   - "fs:read=/tmp,/etc"
  *   - "net=localhost:8080;api.foo.com:443"
@@ -80,7 +80,7 @@ struct TrustPin {
 };
 
 /**
- * @brief Manifest completo (vex.toml / vex.json).
+ * @brief Manifest completo (vx.toml / vx.json).
  *
  * Layout canonico:
  * @code

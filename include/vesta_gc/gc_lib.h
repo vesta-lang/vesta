@@ -2,8 +2,8 @@
  * @file vesta_gc/gc_lib.h
  * @brief C-ABI de `libvesta_gc` -- el GC opt-in de Vesta para codigo nativo AOT.
  *
- * `gc<T>` de Vesta (opt-in via `import vex.gc`) baja a CALLs a estas funciones,
- * igual que vex_io / vex_mem.  El motor por debajo es EL MISMO `gc::GcHeap` que
+ * `gc<T>` de Vesta (opt-in via `import vx.gc`) baja a CALLs a estas funciones,
+ * igual que vx_io / vx_mem.  El motor por debajo es EL MISMO `gc::GcHeap` que
  * usan el interprete y el JIT (generacional mark-sweep + handle table) -> el
  * comportamiento es UNIFORME en los tres backends por construccion, sin
  * duplicar implementacion.
@@ -32,33 +32,33 @@ extern "C" {
 
 /**
  * @brief Inicializa el heap global del GC.  Idempotente (no-op tras la 1a vez).
- * @note Lo llama el arranque del binario AOT antes del primer `vex_gc_alloc`.
+ * @note Lo llama el arranque del binario AOT antes del primer `vx_gc_alloc`.
  *       Llamarlo de mas es seguro.
  */
-void vex_gc_init(void);
+void vx_gc_init(void);
 
 /**
  * @brief Aloca un objeto GC de @p size bytes de payload.
  * @param size Tamanño del payload en bytes (sin el GcHeader).
  * @return GcHandle del nuevo objeto (indice estable en la handle table).  Usa
- *         @c vex_gc_deref para obtener el puntero al payload.
+ *         @c vx_gc_deref para obtener el puntero al payload.
  */
-uint32_t vex_gc_alloc(uint64_t size);
+uint32_t vx_gc_alloc(uint64_t size);
 
 /**
  * @brief Traduce un GcHandle a su puntero de payload.
- * @param handle GcHandle devuelto por @c vex_gc_alloc.
+ * @param handle GcHandle devuelto por @c vx_gc_alloc.
  * @return Puntero host al payload, o NULL si el handle no es valido/esta muerto.
  * @note Estable hasta el proximo GC (el GC puede mover el objeto; el handle
  *       sigue siendo valido, el puntero crudo NO -> re-derefa tras un safepoint).
  */
-uint8_t *vex_gc_deref(uint32_t handle);
+uint8_t *vx_gc_deref(uint32_t handle);
 
 /**
  * @brief Fuerza un ciclo de coleccion (minor + major).
  * @note Tambien se dispara automaticamente cuando el nursery/old se llena.
  */
-void vex_gc_collect(void);
+void vx_gc_collect(void);
 
 /**
  * @brief Aloca un objeto GC de @p size bytes y devuelve su host_ptr (aloca +
@@ -66,18 +66,18 @@ void vex_gc_collect(void);
  * @param size Tamanño del payload en bytes.
  * @return host_ptr al payload (estable en v1 no-moving), o NULL si OOM.
  */
-uint8_t *vex_gc_alloc_ptr(uint64_t size);
+uint8_t *vx_gc_alloc_ptr(uint64_t size);
 
 /**
- * @brief Registra los stackmaps AOT (seccion .vexgc_smap) en el JitRegistry
+ * @brief Registra los stackmaps AOT (seccion .vxgc_smap) en el JitRegistry
  *        para que el scan preciso descubra raices gc<T> en los frames nativos.
- * @param sec  Puntero al inicio de la seccion .vexgc_smap (el tamanño total va
+ * @param sec  Puntero al inicio de la seccion .vxgc_smap (el tamanño total va
  *             embebido en su header, offset 12).
- * @note La llama el arranque del binario (CALL __vexgc_init en main) antes del
+ * @note La llama el arranque del binario (CALL __vxgc_init en main) antes del
  *       primer alloc.  Idempotente-ish: registrar dos veces duplica entradas
  *       (el arranque la llama una sola vez).
  */
-void vex_gc_register_aot_stackmaps(const uint8_t *sec);
+void vx_gc_register_aot_stackmaps(const uint8_t *sec);
 
 /**
  * @brief Pinna un handle como raiz externa (refcount): no se colecta mientras
@@ -85,19 +85,19 @@ void vex_gc_register_aot_stackmaps(const uint8_t *sec);
  *        (globals nativos, estructuras host) y en tests.
  * @param handle GcHandle a pinnar.
  */
-void vex_gc_pin(uint32_t handle);
+void vx_gc_pin(uint32_t handle);
 
 /**
  * @brief Quita un pin de raiz externa (decrementa el refcount).
  * @param handle GcHandle a despinnar.
  */
-void vex_gc_unpin(uint32_t handle);
+void vx_gc_unpin(uint32_t handle);
 
 /**
  * @brief Numero de handles vivos (introspeccion/diagnostico).
  * @return Cantidad de objetos GC actualmente vivos.
  */
-uint64_t vex_gc_live_count(void);
+uint64_t vx_gc_live_count(void);
 
 /**
  * @brief Registra un finalizador GC para un objeto AOT con recurso interno.
@@ -114,14 +114,14 @@ uint64_t vex_gc_live_count(void);
  * @param aux     CLASS_DTOR: func_ptr nativo del <Clase>____dtor.  Ignorado
  *                para UNIQUE/SHARED (su deleter vive dentro del box).
  */
-void vex_gc_register_finalizer(uint8_t *payload, uint32_t kind, uint64_t aux);
+void vx_gc_register_finalizer(uint8_t *payload, uint32_t kind, uint64_t aux);
 
 /**
  * @brief Desregistra el finalizador de un objeto (anti-doble-free desde el
  *        cleanup determinista de scope, caso no-escape).
  * @param payload host_ptr al payload del box.
  */
-void vex_gc_unregister_finalizer(uint8_t *payload);
+void vx_gc_unregister_finalizer(uint8_t *payload);
 
 /**
  * @brief Finaliza TODO objeto GC vivo con recurso interno (shutdown-time).
@@ -130,13 +130,13 @@ void vex_gc_unregister_finalizer(uint8_t *payload);
  * cero fuga: los objetos escapados que el sweep no colecto todavia corren su
  * deleter/dtor antes de salir.  Idempotente.
  */
-void vex_gc_finalize_all(void);
+void vx_gc_finalize_all(void);
 
 /**
  * @brief Numero de finalizadores nativos ejecutados (introspeccion/diagnostico).
  * @return Contador acumulado de deleters/dtors invocados por el runner nativo.
  */
-uint64_t vex_gc_fin_count(void);
+uint64_t vx_gc_fin_count(void);
 
 #ifdef __cplusplus
 } // extern "C"

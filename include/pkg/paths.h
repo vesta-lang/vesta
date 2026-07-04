@@ -3,20 +3,20 @@
  * @brief Resolucion de rutas estandar del package manager Vesta.
  *
  * Tres ambitos de instalacion:
- *   - Proyecto (`./vex_modules/`): default; vive junto al `vex.toml`.
- *   - Usuario (`$VEX_HOME` o `~/.vesta`): cache + keys + paquetes globales
+ *   - Proyecto (`./vx_modules/`): default; vive junto al `vx.toml`.
+ *   - Usuario (`$VX_HOME` o `~/.vesta`): cache + keys + paquetes globales
  *     del usuario actual.
  *   - Sistema: directorio donde se instalo la VM (`ProgramFiles/Vesta` Win,
  *     `/usr/local/share/vesta` POSIX); compartido entre todos los usuarios.
  *
- * Resolucion de VEX_HOME (en orden):
- *   1. Variable de entorno @c VEX_HOME explicita.
+ * Resolucion de VX_HOME (en orden):
+ *   1. Variable de entorno @c VX_HOME explicita.
  *   2. Per-usuario: @c %APPDATA%/Vesta (Win) o @c $HOME/.vesta (POSIX).
  *   3. Sistema (read-only desde el punto de vista del PM, salvo `pkg install
  * --system`).
  *
- * Estructura tipica de @c $VEX_HOME:
- *   $VEX_HOME/
+ * Estructura tipica de @c $VX_HOME:
+ *   $VX_HOME/
  *     cache/             # paquetes descargados (read-only tras verify)
  *     packages/          # paquetes "instalados globalmente"
  *     keys/              # claves publicas confiables (kpub1:*.pem)
@@ -35,18 +35,18 @@ namespace pkg::paths {
  * @brief Ambito de instalacion de un paquete.
  */
 enum class Scope {
-    Project, ///< @c ./vex_modules/ (default; junto al vex.toml)
-    User,    ///< @c $VEX_HOME (per-usuario)
+    Project, ///< @c ./vx_modules/ (default; junto al vx.toml)
+    User,    ///< @c $VX_HOME (per-usuario)
     System   ///< Directorio de la VM (sysadmin only)
 };
 
 /**
- * @brief Devuelve el path canonico de @c $VEX_HOME (per-usuario).
+ * @brief Devuelve el path canonico de @c $VX_HOME (per-usuario).
  *
- * Si la env var @c VEX_HOME esta definida, la devuelve normalizada.
+ * Si la env var @c VX_HOME esta definida, la devuelve normalizada.
  * Si no, devuelve @c $APPDATA/Vesta (Win) o @c $HOME/.vesta (POSIX).
  */
-std::string vex_home();
+std::string vx_home();
 
 /**
  * @brief Devuelve el path del directorio system-wide donde se instalo la VM.
@@ -58,9 +58,9 @@ std::string vex_home();
 std::string system_install_dir();
 
 /**
- * @brief Devuelve el directorio @c vex_modules del proyecto actual.
+ * @brief Devuelve el directorio @c vx_modules del proyecto actual.
  *
- * Busca @c vex.toml o @c vex.json subiendo desde @p start_dir.  Si no
+ * Busca @c vx.toml o @c vx.json subiendo desde @p start_dir.  Si no
  * encuentra manifest, devuelve cadena vacia.
  */
 std::string project_modules_dir(const std::string &start_dir);
@@ -108,7 +108,7 @@ std::string join(const std::string &a, const std::string &b);
 /**
  * @brief Path al manifest del paquete instalado.
  *
- * @c <scope>/packages/<name>@<version>/vex.toml
+ * @c <scope>/packages/<name>@<version>/vx.toml
  */
 std::string installed_manifest(Scope scope, const std::string &name,
                                const std::string &version,

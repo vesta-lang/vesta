@@ -8,7 +8,7 @@ general; para detalles de cada feature consulta los docs especificos en
 
 ## Indice
 
-- [El lenguaje Vesta](#el-lenguaje-vex)
+- [El lenguaje Vesta](#el-lenguaje-vx)
   - [Indice](#indice)
   - [1. Filosofia de diseño](#1-filosofia-de-diseño)
   - [2. Comparativa rapida con otros lenguajes](#2-comparativa-rapida-con-otros-lenguajes)
@@ -83,7 +83,7 @@ y la dinamica de Python (reflexion).
 
 ### Tipos y variables
 
-```vex
+```vx
 // Primitivos
 i8 byte_value   = -128;       // i16, i32, i64
 u8 unsigned_b   = 255;        // u16, u32, u64
@@ -115,7 +115,7 @@ Detalles: [doc/VMdoc/Vesta/TiposDatos.md](./VMdoc/Vesta/TiposDatos.md).
 
 ### Funciones
 
-```vex
+```vx
 i32 add(i32 a, i32 b) {
     return a + b;
 }
@@ -132,7 +132,7 @@ i32 square(i32 x) => x * x;
 
 Vesta tiene **closures de primera clase** con captura lexica:
 
-```vex
+```vx
 i32 main() {
     i32 y = 25;
     fn(i32) -> i32 add_y = (i32 x) => x + y;  // captura y
@@ -143,7 +143,7 @@ i32 main() {
 Funciones top-level se **promueven automaticamente** a function values cuando
 se pasan como argumento (A.14):
 
-```vex
+```vx
 i32 add2(i32 a, i32 b) { return a + b; }
 
 i32 reduce(fn(i32, i32) -> i32 op, i32 init, i32[] arr) {
@@ -162,7 +162,7 @@ Detalles: [doc/VMdoc/Vesta/Closures.md](./VMdoc/Vesta/Closures.md).
 
 ### Clases y OOP
 
-```vex
+```vx
 class Animal {
     public string name;
     public i32 age;
@@ -215,7 +215,7 @@ Detalles: [doc/VMdoc/Vesta/OOP.md](./VMdoc/Vesta/OOP.md) y
 
 ### Genericos
 
-```vex
+```vx
 class Box<T> {
     public T value;
     public Box(T v) { this.value = v; }
@@ -237,7 +237,7 @@ Detalles: [doc/VMdoc/Vesta/Generics.md](./VMdoc/Vesta/Generics.md).
 
 ### Pattern matching y enums
 
-```vex
+```vx
 enum Shape {
     Circle(f64),
     Rectangle(f64, f64),
@@ -271,7 +271,7 @@ Detalles: [doc/VMdoc/Vesta/ControlFlow.md](./VMdoc/Vesta/ControlFlow.md) seccion
 
 ### Optional y Result
 
-```vex
+```vx
 Optional<i32> find(i32[] arr, i32 target) {
     for (i32 i = 0; i < arr.length; i = i + 1) {
         if (arr[i] == target) return Some(i);
@@ -312,7 +312,7 @@ Detalles: [doc/VMdoc/Vesta/OptionalResult.md](./VMdoc/Vesta/OptionalResult.md).
 
 ### Smart pointers y borrow checker
 
-```vex
+```vx
 extern "kernel32.dll" {
     fn VirtualAlloc(u64 a, u64 s, u32 t, u32 p) -> u64;
     fn VirtualFree(u64 a, u64 s, u32 t) -> u32;
@@ -348,7 +348,7 @@ Detalles: [doc/VMdoc/Vesta/SmartPointers.md](./VMdoc/Vesta/SmartPointers.md) y
 
 ### Async y concurrencia
 
-```vex
+```vx
 @Async
 i64 fetch_data(i32 id) {
     // ... simula trabajo async ...
@@ -414,7 +414,7 @@ Detalles: [doc/VMdoc/Vesta/Async.md](./VMdoc/Vesta/Async.md),
 
 ### Strings con interpolacion
 
-```vex
+```vx
 i32 count = 42;
 string name = "World";
 
@@ -450,7 +450,7 @@ Detalles: [doc/VMdoc/Vesta/Strings.md](./VMdoc/Vesta/Strings.md).
 
 ### FFI a APIs nativas
 
-```vex
+```vx
 // FFI declarativo (zero-overhead, mismo coste que plugins compilados)
 extern "kernel32.dll" {
     fn GetCurrentProcessId() -> u32;
@@ -486,7 +486,7 @@ codigo arbitrario en tiempo de compilacion y emite codigo Vesta que se
 inyecta en el call site. Combinable con introspeccion de tipos, FFI
 compile-time y captura de DSLs arbitrarios.
 
-```vex
+```vx
 // Macro simple: tabla de Fibonacci embebida como literal.
 @Macro
 comptime string fib_at(i64 idx) {
@@ -565,10 +565,10 @@ Detalles completos: [doc/VMdoc/Vesta/Metaprogramacion.md](./VMdoc/Vesta/Metaprog
 
 Flags utiles para inspeccionar:
 
-- `--vex-emit-ir`: dumpea SSA IR pre y post optimizacion.
+- `--vx-emit-ir`: dumpea SSA IR pre y post optimizacion.
 - `--diagram-all`: genera diagramas Mermaid (`.ast.mmd`, `.ir.pre.mmd`,
   `.ir.post.mmd`, `.vel.mmd`).
-- `--vex-debug`: incluye debug info (file:line) en el `.velb` para el debugger.
+- `--vx-debug`: incluye debug info (file:line) en el `.velb` para el debugger.
 - `--jit-warn`: warnings sobre que IR ops el selector no soporta.
 - `--emit-map`: genera archivo `.velb-map` con info de simbolos y secciones
   (debug). Off por defecto: cuesta ~60% del tiempo del linker para programas

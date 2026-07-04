@@ -1,0 +1,65 @@
+// =============================================================================
+// 182_vectorize_elementwise.vx
+//
+// Auto-vectorizacion: bucles element-wise sobre arrays f64 en memoria HOST.
+//
+// El patron `for (i32 i = 0; i < N; i++) c[i] = a[i] OP b[i];` sobre punteros
+// HOST (malloc) es el objetivo del vectorizador: el compilador lo reconoce y
+// emite la op fusionada VEC_BINOP (carga W elementos, opera packed, guarda W) +
+// una cola escalar para el resto.  En el JIT/AOT baja a SIMD real (MOVUPD +
+// ADDPD/...); en el interprete a la misma operacion lane-a-lane (correcta).
+//
+// Este programa corre IDENTICO con o sin vectorizacion (la vectorizacion no
+// cambia el resultado, solo la velocidad).  Sirve de documentacion del patron
+// soportado y de banco de validacion (interp == jit).
+//
+// Resultado esperado: ver el calculo al final de main (return).
+// =============================================================================
+
+// Suma el contenido de un array f64 y devuelve la suma como i64 truncado.
+i64 sum_f64(f64* p, i32 n) {
+    f64 acc = 0.0;
+    for (i32 i = 0; i < n; i++) {
+        acc = acc + p[i];
+    }
+    return (i64) acc;
+}
+
+i32 main() {
+    i32 N = 64;
+    f64* a = malloc(N * 8);   // f64 = 8 bytes
+    f64* b = malloc(N * 8);
+    f64* c = malloc(N * 8);
+
+    // Inicializacion (no es patron vectorizable: el valor depende de i).
+    for (i32 i = 0; i < N; i++) {
+        a[i] = (f64)(i + 1);          // 1, 2, 3, ...
+        b[i] = (f64)(2 * i + 1);      // 1, 3, 5, ...
+    }
+
+    // --- PATRONES VECTORIZABLES: c[i] = a[i] OP b[i] (HOST f64) ---
+
+    // suma:  c[i] = a[i] + b[i]
+    for (i32 i = 0; i < N; i++) { c[i] = a[i] + b[i]; }
+    i64 s_add = sum_f64(c, N);        // sum (i+1)+(2i+1) = sum (3i+2), i=0..63
+
+    // resta: c[i] = a[i] - b[i]
+    for (i32 i = 0; i < N; i++) { c[i] = a[i] - b[i]; }
+    i64 s_sub = sum_f64(c, N);        // sum (i+1)-(2i+1) = sum (-i)
+
+    // producto: c[i] = a[i] * b[i]
+    for (i32 i = 0; i < N; i++) { c[i] = a[i] * b[i]; }
+    i64 s_mul = sum_f64(c, N);        // sum (i+1)*(2i+1)
+
+    free(a);
+    free(b);
+    free(c);
+
+    // s_add = sum_{i=0}^{63} (3i+2) = 3*(63*64/2) + 2*64 = 3*2016 + 128 = 6176
+    // s_sub = sum_{i=0}^{63} (-i)   = -(2016) = -2016
+    // s_mul = sum (i+1)(2i+1) = sum (2i^2+3i+1)
+    //       = 2*sum(i^2) + 3*sum(i) + 64,  i=0..63
+    //       = 2*85344 + 3*2016 + 64 = 170688 + 6048 + 64 = 176800
+    // total = 6176 + (-2016) + 176800 = 180960
+    return (i32)(s_add + s_sub + s_mul);
+}

@@ -405,7 +405,7 @@ void exec_instr_pop(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr) {
     // Phase M.sandbox: comprobar la capability FFI_CALL del modulo
-    // propietario del PC actual.  En modo default (sin --vex-caps) el
+    // propietario del PC actual.  En modo default (sin --vx-caps) el
     // check es un fast path (todos los modulos unrestricted) y permite
     // siempre.  Si el sandbox del modulo NO concede ffi:call, abortar
     // con FatalError (el proceso queda DEAD salvo que un try/catch lo

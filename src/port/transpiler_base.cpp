@@ -908,7 +908,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         // SPAWN_ARGS: operands[0]=fn_ptr, operands[1]=future,
         // operands[2..]=args adicionales.
         //
-        // Caso 1 arg (solo future): direct @c vex_spawn(fn, fut).
+        // Caso 1 arg (solo future): direct @c vx_spawn(fn, fut).
         // Caso N>1: alocar array @c int64_t[N], rellenar y pasar
         // un trampoline-by-pointer que el backend genera al emit
         // del modulo (ver @c emit_spawn_trampolines).
@@ -916,7 +916,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         ctx.indent();
         if (ins.operands.size() == 2) {
             /* Direct path: helper toma solo future. */
-            ctx.out << "vex_spawn((void(*)(int64_t))(intptr_t)"
+            ctx.out << "vx_spawn((void(*)(int64_t))(intptr_t)"
                     << backend_.format_value(ctx, ins.operands[0]) << ", "
                     << backend_.format_value(ctx, ins.operands[1]) << ");\n";
         } else {
@@ -947,7 +947,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
             /* Llamada al trampoline generico de aridad N=n_extra+1
              * (future + extras).  El backend C registra el N en
              * @c emit_spawn_trampoline_call para emitir el
-             * @c __vex_trampoline_N una sola vez en el postamble. */
+             * @c __vx_trampoline_N una sola vez en el postamble. */
             backend_.emit_spawn_trampoline_call(ctx, ins.operands[0],
                                                 n_extra + 1, "__sa");
             ctx.indent_level--;

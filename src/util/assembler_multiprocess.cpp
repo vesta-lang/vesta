@@ -59,7 +59,7 @@ int run_worker(const std::string &file_name, const std::string &output_prefix,
 #ifdef VESTA_HAS_PREPROCESSOR
     // Preprocesado: expandir macros, directivas #define/#if/#foreach/#import,
     // etc. Saltable si el caller lo pidio (p.ej. el .vel proviene del lowering
-    // de Vesta y ya ha sido preprocesado al nivel del .vex original).
+    // de Vesta y ya ha sido preprocesado al nivel del .vx original).
     if (!skip_preprocessor) {
         vpp::Preprocessor pp;
 
@@ -144,7 +144,7 @@ int run_worker(const std::string &file_name, const std::string &output_prefix,
     // Propagar el path del archivo fuente Vesta (capturado por el
     // lexer del marcador `// @file <path>` al inicio del .vel) al
     // Context para que el linker lo emita en la seccion debug del
-    // .velb.  Si no hay marcador (compilacion sin --vex-debug),
+    // .velb.  Si no hay marcador (compilacion sin --vx-debug),
     // queda vacio y el linker simplemente no emite la seccion.
     if (!lexer.last_src_file.empty()) {
         asmblr.ctx.debug_source_file = lexer.last_src_file;

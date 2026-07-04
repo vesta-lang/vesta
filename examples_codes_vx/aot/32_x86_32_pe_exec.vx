@@ -1,0 +1,24 @@
+// EJECUTABLE PE32 standalone (.exe Windows 32-bit) -- x86-32.
+// El AOT genera un PE de 32-bit (Machine i386, Magic 0x10B PE32) que corre en
+// Windows (incluido WoW64 en un host de 64-bit): el _start llama a main y
+// termina via kernel32!ExitProcess(eax) por la IAT.
+//
+//   vm -m aot --vx examples_codes_vx/aot/32_x86_32_pe_exec.vx \
+//      -o fib32.exe --aot-arch x86-32 --emit exe --format pe
+//   fib32.exe & echo %errorlevel%    # -> 55
+//
+// objdump -f: pei-i386 ; objdump -p: Magic 010b (PE32), kernel32!ExitProcess.
+// Ejercita recursion (call rel32 32-bit), branches, spills y tail-call.
+//
+// v1 PE32: EXEC self-contained (sin libc); el unico import es ExitProcess (del
+// _start).  Llamadas a externos (thunks IAT 32-bit) y .o/.dll de 32-bit son
+// follow-ups.
+
+i32 fib(i32 n) {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+i32 main() {
+    return fib(10);   // 55
+}

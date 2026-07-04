@@ -26,9 +26,9 @@
 #     include_lib/                 <- [core] stdlib del preprocesador VPP
 #     README.md, LICENSE.txt       <- [core]
 #     stdlib/native/<mod>/*.dll    <- [stdlib] plugins nativos (io, math, ...)
-#     stdlib/{vex,vel,port,vsh}/   <- [stdlib] modulos fuente del lenguaje
+#     stdlib/{vx,vel,port,vsh}/   <- [stdlib] modulos fuente del lenguaje
 #     vesta_lsp.exe                <- [lsp] servidor LSP para editores
-#     examples/vex/, examples/vsh/ <- [examples] ejemplos Vex y VSH
+#     examples/vx/, examples/vsh/ <- [examples] ejemplos Vex y VSH
 #     tools/                       <- [tools] scripts del lenguaje
 #     vesta.dll + lib/ + include/ffi/ + cmake/  <- [sdk] embeber / plugins
 #     libssl-3-x64.dll, libcrypto-3-x64.dll     <- [core] SOLO si OpenSSL no se embebio
@@ -81,10 +81,10 @@ if (TARGET vesta_math_a)
 endif()
 
 # === stdlib (opcional): biblioteca estandar del lenguaje ===================
-# Modulos fuente Vesta/Vex (vex/, vel/, port/, vsh/).  Los plugins nativos
+# Modulos fuente Vesta/Vex (vx/, vel/, port/, vsh/).  Los plugins nativos
 # (stdlib/native/*/*.dll) los instala add_vesta_plugin con COMPONENT stdlib.
 install(DIRECTORY
-        "${CMAKE_SOURCE_DIR}/stdlib/vex"
+        "${CMAKE_SOURCE_DIR}/stdlib/vx"
         "${CMAKE_SOURCE_DIR}/stdlib/vel"
         "${CMAKE_SOURCE_DIR}/stdlib/port"
         "${CMAKE_SOURCE_DIR}/stdlib/vsh"
@@ -98,8 +98,8 @@ endif()
 
 # === examples (opcional): programas de ejemplo de AMBOS lenguajes ==========
 # Vesta trae dos lenguajes: Vex (compilado) y VSH (scripting).
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vex/"
-        DESTINATION "examples/vex" COMPONENT examples
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vx/"
+        DESTINATION "examples/vx" COMPONENT examples
         FILES_MATCHING
             PATTERN "*.vx"
             PATTERN "*.md"
@@ -197,7 +197,7 @@ set(CPACK_COMPONENT_LSP_DEPENDS core)
 
 set(CPACK_COMPONENT_EXAMPLES_DISPLAY_NAME "Ejemplos (Vex + VSH)")
 set(CPACK_COMPONENT_EXAMPLES_DESCRIPTION
-        "Programas de ejemplo de los dos lenguajes de Vesta: Vex (compilado, examples/vex) y VSH (scripting, examples/vsh).")
+        "Programas de ejemplo de los dos lenguajes de Vesta: Vex (compilado, examples/vx) y VSH (scripting, examples/vsh).")
 
 set(CPACK_COMPONENT_TOOLS_DISPLAY_NAME    "Herramientas")
 set(CPACK_COMPONENT_TOOLS_DESCRIPTION
@@ -283,7 +283,7 @@ include(CPack)
 # Binarios que el instalador empaqueta (se construyen antes de cpack).
 set(_vesta_pkg_targets vm)
 foreach(_t vesta_lsp vesta_ffi vesta_gc vesta_collections_a vesta_math_a
-           vesta_io vesta_math vesta_collections vex_trace)
+           vesta_io vesta_math vesta_collections vx_trace)
     if (TARGET ${_t})
         list(APPEND _vesta_pkg_targets ${_t})
     endif()

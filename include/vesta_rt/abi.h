@@ -193,7 +193,7 @@ extern "C" {
 /// Verificado en compile-time por @c abi_checks.cpp.
 ///
 /// Usado por Phase D.jit-mem-model VM-STACK: el JIT modifica el VM-RSP
-/// al ejecutar ALLOCAs vex (consistente con interp `subsp`), salvando
+/// al ejecutar ALLOCAs vx (consistente con interp `subsp`), salvando
 /// y restaurando el valor en prologue/epilogue.
 #define VESTA_PROC_STACK_POINTER_OFFSET 64
 

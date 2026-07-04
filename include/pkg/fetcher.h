@@ -11,7 +11,7 @@
  * Verificacion estricta:
  *   - sha256 del directorio extraido vs el declarado en lockfile/manifest.
  *   - Si no coincide, aborta y limpia el directorio temporal.
- *   - Las descargas pasan primero por @c $VEX_HOME/cache para reutilizar.
+ *   - Las descargas pasan primero por @c $VX_HOME/cache para reutilizar.
  *
  * Sin postinstall scripts.  El paquete fetched es PURO codigo Vesta.
  */

@@ -24,12 +24,12 @@
  *     dejamos al usuario consistente.
  *   - Path absolute resolution: respeta la convencion del OS (drive
  *     letters Windows, `/` raiz POSIX).
- *   - Separators de VEX_PATH: `;` en Windows, `:` en POSIX (al estilo
+ *   - Separators de VX_PATH: `;` en Windows, `:` en POSIX (al estilo
  *     PATH del shell).
  */
 
-#ifndef VEX_MODULE_RESOLVER_H
-#define VEX_MODULE_RESOLVER_H
+#ifndef VX_MODULE_RESOLVER_H
+#define VX_MODULE_RESOLVER_H
 
 #include <cstdint>
 #include <memory>
@@ -68,7 +68,7 @@ struct ResolvedModule {
     /// Hash FNV-1a 64 del @c canonical_path (key para cache lookups).
     uint64_t path_hash = 0;
     /// Nombre logico del modulo (ultimo segmento sin extension).
-    /// E.g. @c "buffer" para @c "/home/x/editor/buffer.vex".
+    /// E.g. @c "buffer" para @c "/home/x/editor/buffer.vx".
     std::string module_name;
     /// AST parseado (lazy: nullptr hasta primer parse).
     std::unique_ptr<ast::ModuleNode> parsed_ast;
@@ -125,7 +125,7 @@ class ModuleGraph {
      *
      * Se consultan en orden: (1) carpeta del fichero importador, (2)
      * search paths añadidos en orden de @c add_search_path, (3)
-     * @c VEX_PATH env var, (4) stdlib bundled.
+     * @c VX_PATH env var, (4) stdlib bundled.
      *
      * Los paths se normalizan al estilo POSIX (forward slash) y se
      * expanden a absolutos si son relativos.
@@ -133,10 +133,10 @@ class ModuleGraph {
     void add_search_path(const std::string &dir);
 
     /**
-     * @brief añade los directorios de VEX_PATH (separados por `:` POSIX
+     * @brief añade los directorios de VX_PATH (separados por `:` POSIX
      * o `;` Windows).  Sin efecto si la env var no esta seteada.
      */
-    void add_vex_path_env();
+    void add_vx_path_env();
 
     /**
      * @brief Establece el path al directorio stdlib (resuelve `std/*`).
@@ -170,9 +170,9 @@ class ModuleGraph {
      * @return ResolveResult con el module_id o el error con tried_paths.
      *
      * El resolver intenta los candidatos en orden:
-     *   1. <importer_dir>/<raw_path>.vex
-     *   2. cada search path añadido / <raw_path>.vex
-     *   3. <stdlib_dir>/<raw_path>.vex
+     *   1. <importer_dir>/<raw_path>.vx
+     *   2. cada search path añadido / <raw_path>.vx
+     *   3. <stdlib_dir>/<raw_path>.vx
      */
     ResolveResult resolve(const std::string &raw_path,
                           const std::string &importer_file);
@@ -182,7 +182,7 @@ class ModuleGraph {
      * fichero raiz.  Parsea cada fichero alcanzable y registra sus
      * dependencias.  Detecta ciclos.
      *
-     * @param root_file Path al fichero .vex raiz del proyecto.
+     * @param root_file Path al fichero .vx raiz del proyecto.
      * @return module_id del root si OK, UINT32_MAX si error fatal.
      */
     uint32_t build_from_root(const std::string &root_file);
@@ -251,4 +251,4 @@ class ModuleGraph {
 
 } // namespace vx
 
-#endif // VEX_MODULE_RESOLVER_H
+#endif // VX_MODULE_RESOLVER_H

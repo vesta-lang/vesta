@@ -33,8 +33,8 @@
  * @endcode
  */
 
-#ifndef VEX_DIAGNOSTIC_H
-#define VEX_DIAGNOSTIC_H
+#ifndef VX_DIAGNOSTIC_H
+#define VX_DIAGNOSTIC_H
 
 #include <cstddef>
 #include <cstdint>
@@ -87,13 +87,13 @@ struct SourceLoc {
  * @brief Un diagnostico completo: nivel + localizacion + mensaje.
  *
  * El campo @c code es opcional; permite asociar codigos de error
- * estables (estilo "VEX0001") para documentacion y herramientas.
+ * estables (estilo "VX0001") para documentacion y herramientas.
  */
 struct Diagnostic {
     DiagLevel level = DiagLevel::ERR; ///< Severidad.
     SourceLoc loc;                    ///< Posicion en el fuente.
     std::string message;              ///< Texto descriptivo del problema.
-    std::string code;                 ///< Codigo opcional (p.ej. "VEX0042").
+    std::string code;                 ///< Codigo opcional (p.ej. "VX0042").
 };
 
 /**
@@ -307,4 +307,4 @@ template <typename T> class Result {
 
 } // namespace vx
 
-#endif // VEX_DIAGNOSTIC_H
+#endif // VX_DIAGNOSTIC_H

@@ -510,28 +510,25 @@ constexpr size_t kMaxIndexedFiles = 5000;
 /// Devuelve true si @p name es un directorio que NO debe recorrerse.
 bool is_skipped_dir(const std::string &name) {
     return name == ".git" || name == "build" || name == "node_modules" ||
-           name == "_deps" || name == ".vex_cache" || name == ".cache" ||
+           name == "_deps" || name == ".vx_cache" || name == ".cache" ||
            name == ".vscode" || name == "out" ||
            // cmake-build* (cmake-build-debug, cmake-build-release, ...).
            name.rfind("cmake-build", 0) == 0;
 }
 
-/// Devuelve true si @p name termina en la extension del lenguaje: `.vx`
-/// (canonica de vesta-lang) o `.vex` (legacy, en migracion).
-bool has_vex_ext(const std::string &name) {
-    auto ends_with = [&](const char *ext) {
-        const size_t el = std::strlen(ext);
-        return name.size() > el &&
-               name.compare(name.size() - el, el, ext) == 0;
-    };
-    return ends_with(".vx") || ends_with(".vex");
+/// Devuelve true si @p name termina en la extension del lenguaje Vesta: `.vx`.
+bool has_vx_ext(const std::string &name) {
+    const char *ext = ".vx";
+    const size_t el = std::strlen(ext);
+    return name.size() > el &&
+           name.compare(name.size() - el, el, ext) == 0;
 }
 
 /**
- * @brief Recorre recursivamente @p dir acumulando rutas de ficheros @c .vex en
+ * @brief Recorre recursivamente @p dir acumulando rutas de ficheros @c .vx en
  *        @p out, saltando directorios de build/cache y respetando el cap.
  */
-void collect_vex_files(const std::string &dir, std::vector<std::string> &out) {
+void collect_vx_files(const std::string &dir, std::vector<std::string> &out) {
     if (out.size() >= kMaxIndexedFiles)
         return;
 #if defined(_WIN32)
@@ -548,8 +545,8 @@ void collect_vex_files(const std::string &dir, std::vector<std::string> &out) {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             if (is_skipped_dir(name))
                 continue;
-            collect_vex_files(full, out);
-        } else if (has_vex_ext(name)) {
+            collect_vx_files(full, out);
+        } else if (has_vx_ext(name)) {
             out.push_back(full);
         }
         if (out.size() >= kMaxIndexedFiles)
@@ -572,8 +569,8 @@ void collect_vex_files(const std::string &dir, std::vector<std::string> &out) {
         if (S_ISDIR(st.st_mode)) {
             if (is_skipped_dir(name))
                 continue;
-            collect_vex_files(full, out);
-        } else if (S_ISREG(st.st_mode) && has_vex_ext(name)) {
+            collect_vx_files(full, out);
+        } else if (S_ISREG(st.st_mode) && has_vx_ext(name)) {
             out.push_back(full);
         }
         if (out.size() >= kMaxIndexedFiles)
@@ -668,7 +665,7 @@ void WorkspaceIndex::ensure_built() {
     for (const auto &root : roots_) {
         if (root.empty())
             continue;
-        collect_vex_files(root, files);
+        collect_vx_files(root, files);
     }
     for (const auto &f : files) {
         if (defs_.size() + refs_.size() > 0 && f.empty())

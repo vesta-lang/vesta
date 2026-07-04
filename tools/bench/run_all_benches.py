@@ -2,7 +2,7 @@
 """run_all_benches.py -- benchmark suite multi-lenguaje VestaVM.
 
 Sprint bench-multilang (2026-06-02):
-- Descubre benches en @c examples_codes_vex/benchmark/<bench_name>/ con
+- Descubre benches en @c examples_codes_vx/benchmark/<bench_name>/ con
   multiples implementaciones (main.vx, main.c, main.cpp, main.py,
   Main.java).
 - Detecta compiladores/runtimes disponibles (gcc, g++, javac+java,
@@ -29,7 +29,7 @@ Output:
 Uso:
   python tools/bench/run_all_benches.py                  # auto-detect + prompt
   python tools/bench/run_all_benches.py /path/al/vm.exe  # binary fijo
-  python tools/bench/run_all_benches.py --langs vex,c    # subset lenguajes
+  python tools/bench/run_all_benches.py --langs vx,c    # subset lenguajes
   python tools/bench/run_all_benches.py --filter fib     # subset benches
 """
 from __future__ import annotations
@@ -105,14 +105,14 @@ class C:
 #   - auto : multiversion por cpuid (sse2/avx2/avx512 en el binario; elige la
 #            variante optima del host en runtime).  Lo mejor de ambos mundos.
 # lang_name -> valor de --float-isa.
-VEX_AOT_MODES: dict[str, str] = {
-    "vex_aot_sse2": "sse2",
-    "vex_aot_avx":  "avx",
-    "vex_aot_auto": "auto",
+VX_AOT_MODES: dict[str, str] = {
+    "vx_aot_sse2": "sse2",
+    "vx_aot_avx":  "avx",
+    "vx_aot_auto": "auto",
 }
 # Todos los lenguajes "Vex" (comparten la variante .vx; difieren en como se
 # compila/ejecuta).  Usado en los dispatch de compile + run.
-VEX_LANGS = ("vex_interp", "vex_jit", *VEX_AOT_MODES.keys())
+VX_LANGS = ("vx_interp", "vx_jit", *VX_AOT_MODES.keys())
 
 
 def info(msg: str) -> None:
@@ -138,10 +138,10 @@ def ok(msg: str) -> None:
 def find_project_root(start: Path) -> Path:
     cur = start.resolve()
     while True:
-        if (cur / "CMakeLists.txt").is_file() and (cur / "examples_codes_vex").is_dir():
+        if (cur / "CMakeLists.txt").is_file() and (cur / "examples_codes_vx").is_dir():
             return cur
         if cur.parent == cur:
-            err("no encuentro project root (CMakeLists.txt + examples_codes_vex/)")
+            err("no encuentro project root (CMakeLists.txt + examples_codes_vx/)")
             sys.exit(1)
         cur = cur.parent
 
@@ -210,7 +210,7 @@ def prompt_choose_vm(candidates: list[tuple[str, Path]]) -> Path:
 @dataclass
 class Toolchain:
     """Configuracion de toolchain por lenguaje."""
-    name: str             # vex_interp, vex_jit, c, cpp, python, java
+    name: str             # vx_interp, vx_jit, c, cpp, python, java
     label: str            # texto visible
     color: str            # ANSI color para tablas
     available: bool       # True si el compilador/runtime esta instalado
@@ -334,10 +334,10 @@ def capture_system_info(vm_bin: Path, tc: dict) -> dict:
     tooling: dict = {}
     # Vex
     if vm_bin.is_file():
-        vex_ver = get_tool_version([str(vm_bin), "--version"])
+        vx_ver = get_tool_version([str(vm_bin), "--version"])
         tooling["Vex VM"] = {
             "available": True,
-            "version": vex_ver,
+            "version": vx_ver,
             "path": str(vm_bin),
         }
     else:
@@ -562,13 +562,13 @@ def print_category_summary(rows: list[dict], active_langs: list[str],
 def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
     tc: dict[str, Toolchain] = {}
 
-    tc["vex_interp"] = Toolchain(
-        "vex_interp", "Vex interp", C.YELLOW,
+    tc["vx_interp"] = Toolchain(
+        "vx_interp", "Vex interp", C.YELLOW,
         available=vm_bin.is_file(),
         why_unavailable="" if vm_bin.is_file() else "vm binary missing"
     )
-    tc["vex_jit"] = Toolchain(
-        "vex_jit", "Vex JIT", C.GREEN,
+    tc["vx_jit"] = Toolchain(
+        "vx_jit", "Vex JIT", C.GREEN,
         available=vm_bin.is_file(),
         why_unavailable="" if vm_bin.is_file() else "vm binary missing"
     )
@@ -582,18 +582,18 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
     # (--float-isa) para ver el efecto del ancho vectorial lado a lado:
     #   sse2 (128b baseline), avx (AVX2 256b), auto (multiversion cpuid).
     _aot_labels = {
-        "vex_aot_sse2": "Vex AOT sse2",
-        "vex_aot_avx":  "Vex AOT avx2",
-        "vex_aot_auto": "Vex AOT auto",
+        "vx_aot_sse2": "Vex AOT sse2",
+        "vx_aot_avx":  "Vex AOT avx2",
+        "vx_aot_auto": "Vex AOT auto",
     }
     # Colores distintos de los 6 base (interp=amarillo, jit=verde, c=azul,
     # cpp=magenta, python=cian, java=rojo) para que el trio AOT se diferencie.
     _aot_colors = {
-        "vex_aot_sse2": C.ORANGE,
-        "vex_aot_avx":  C.VIOLET,
-        "vex_aot_auto": C.PINK,
+        "vx_aot_sse2": C.ORANGE,
+        "vx_aot_avx":  C.VIOLET,
+        "vx_aot_auto": C.PINK,
     }
-    for _ln in VEX_AOT_MODES:
+    for _ln in VX_AOT_MODES:
         tc[_ln] = Toolchain(
             _ln, _aot_labels[_ln], _aot_colors[_ln],
             available=vm_bin.is_file(),
@@ -652,7 +652,7 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
 @dataclass
 class BenchVariant:
     """Una implementacion de un bench en un lenguaje especifico."""
-    lang: str             # vex, c, cpp, python, java
+    lang: str             # vx, c, cpp, python, java
     src_path: Path
     bench_name: str       # nombre del bench (ej. tight_loop)
 
@@ -674,7 +674,7 @@ def discover_benches(bench_dir: Path) -> list[Bench]:
             continue
         b = Bench(name=d.name)
         candidates = {
-            "vex":    d / "main.vx",
+            "vx":    d / "main.vx",
             "c":      d / "main.c",
             "cpp":    d / "main.cpp",
             "python": d / "main.py",
@@ -708,7 +708,7 @@ def discover_benches(bench_dir: Path) -> list[Bench]:
         if logical in multilang_names or logical_no_jit in multilang_names:
             continue
         b = Bench(name=f.stem, is_legacy=True)
-        b.variants["vex"] = BenchVariant(lang="vex", src_path=f,
+        b.variants["vx"] = BenchVariant(lang="vx", src_path=f,
                                           bench_name=b.name)
         benches.append(b)
     return benches
@@ -766,7 +766,7 @@ def run_timed(cmd: list[str], env: dict | None = None,
     Para C/C++/Python/Java el overhead del fork+startup es bajo (<5ms en
     binarios optimizados; Python ~30ms; Java ~50-80ms por JVM init).  Para
     Vex la VM tiene ~28ms de overhead de boot que distorsiona benches
-    cortos -- usar @c run_timed_vex en su lugar."""
+    cortos -- usar @c run_timed_vx en su lugar."""
     t0 = time.perf_counter()
     try:
         subprocess.run(
@@ -781,10 +781,10 @@ def run_timed(cmd: list[str], env: dict | None = None,
 # Sprint bench-walltime (2026-06-02): patron de parseo para extraer el
 # Wall time interno reportado por @c --stats.  Forma del output:
 #   "Wall time:     2895000 ns  (2895 us, 2 ms)"
-_VEX_WALL_RE = re.compile(r"Wall time:\s+(\d+)\s+ns")
+_VX_WALL_RE = re.compile(r"Wall time:\s+(\d+)\s+ns")
 
 
-def run_timed_vex(cmd: list[str], env: dict | None,
+def run_timed_vx(cmd: list[str], env: dict | None,
                    timeout: float, cwd: Optional[Path]) -> float:
     """Wall time INTERNO del scheduler (excluye VM init overhead).
 
@@ -804,9 +804,9 @@ def run_timed_vex(cmd: list[str], env: dict | None,
         )
     except subprocess.TimeoutExpired:
         return -1.0
-    m = _VEX_WALL_RE.search(proc.stdout or "")
+    m = _VX_WALL_RE.search(proc.stdout or "")
     if not m:
-        m = _VEX_WALL_RE.search(proc.stderr or "")
+        m = _VX_WALL_RE.search(proc.stderr or "")
     if not m:
         # Fallback a wall externo si el binario no soporta --stats.
         return run_timed(cmd, env=env, timeout=timeout, cwd=cwd)
@@ -827,7 +827,7 @@ def median_runs(cmd: list[str], env: dict | None, runs: int,
 
 def all_runs(cmd: list[str], env: dict | None, runs: int,
              timeout: float, cwd: Optional[Path] = None,
-             warmup: int = 0, use_vex_walltime: bool = False) -> list[float]:
+             warmup: int = 0, use_vx_walltime: bool = False) -> list[float]:
     """Devuelve los runs MEDIDOS (excluye los primeros @c warmup runs).
 
     Para JIT/JVM el primer run paga compile-fresh y no es representativo
@@ -836,7 +836,7 @@ def all_runs(cmd: list[str], env: dict | None, runs: int,
     Total runs ejecutados: warmup + runs.  Retorna solo los runs reales
     (longitud == @c runs).  Devuelve lista vacia si cualquier run falla.
 
-    @param use_vex_walltime  Si true, ejecuta con @c --stats y extrae el
+    @param use_vx_walltime  Si true, ejecuta con @c --stats y extrae el
     Wall time interno (sin VM init overhead).  Solo para langs Vex.
 
     Resiliencia contra flakes ambientales:
@@ -853,7 +853,7 @@ def all_runs(cmd: list[str], env: dict | None, runs: int,
     """
     total = max(0, warmup) + runs
     times = []
-    timer = run_timed_vex if use_vex_walltime else run_timed
+    timer = run_timed_vx if use_vx_walltime else run_timed
     MAX_ATTEMPTS = 5
     BACKOFF_MS = [0, 250, 500, 1000, 2000]
     for i in range(total):
@@ -946,11 +946,11 @@ def compile_go(variant: BenchVariant, work_dir: Path,
     return ([str(out)], work_dir, 1.0)
 
 
-def compile_vex(variant: BenchVariant, work_dir: Path,
+def compile_vx(variant: BenchVariant, work_dir: Path,
                 vm_bin: Path) -> Optional[tuple[list[str], Path, float]]:
-    velb_stem = work_dir / f"{variant.bench_name}_vex"
+    velb_stem = work_dir / f"{variant.bench_name}_vx"
     r = subprocess.run(
-        [str(vm_bin), "--vex", str(variant.src_path), "-o", str(velb_stem)],
+        [str(vm_bin), "--vx", str(variant.src_path), "-o", str(velb_stem)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
     )
     velb = Path(str(velb_stem) + ".velb")
@@ -959,7 +959,7 @@ def compile_vex(variant: BenchVariant, work_dir: Path,
     return ([str(vm_bin), "--run", str(velb)], work_dir, 1.0)
 
 
-def compile_vex_aot(variant: BenchVariant, work_dir: Path,
+def compile_vx_aot(variant: BenchVariant, work_dir: Path,
                     vm_bin: Path,
                     float_isa: str = "sse2"
                     ) -> Optional[tuple[list[str], Path, float]]:
@@ -990,7 +990,7 @@ def compile_vex_aot(variant: BenchVariant, work_dir: Path,
         pass
     try:
         r = subprocess.run(
-            [str(vm_bin), "-m", "aot", "--vex", str(variant.src_path),
+            [str(vm_bin), "-m", "aot", "--vx", str(variant.src_path),
              "-o", str(out), "--emit", "exe", "--format", fmt,
              "--float-isa", float_isa],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
@@ -1203,16 +1203,16 @@ def print_ascii_charts(rows: list[dict], active_langs: list[str],
     # Chart 2: speedup Vex JIT vs Vex interp por bench.
     print()
     print(f"{C.BOLD}(2) Speedup Vex JIT vs Vex interp{C.RESET}")
-    vex_data = []
+    vx_data = []
     for r in rows:
-        ti = r.get("vex_interp")
-        tj = r.get("vex_jit")
+        ti = r.get("vx_interp")
+        tj = r.get("vx_jit")
         if ti and ti > 0 and tj and tj > 0:
-            vex_data.append((r["bench"], ti / tj))
-    if vex_data:
-        vex_data.sort(key=lambda x: x[1], reverse=True)
-        max_sp = vex_data[0][1]
-        for name, sp in vex_data:
+            vx_data.append((r["bench"], ti / tj))
+    if vx_data:
+        vx_data.sort(key=lambda x: x[1], reverse=True)
+        max_sp = vx_data[0][1]
+        for name, sp in vx_data:
             color = (C.GREEN if sp >= 10 else
                      C.CYAN if sp >= 2 else
                      C.YELLOW if sp >= 1 else C.RED)
@@ -1251,11 +1251,11 @@ def print_ascii_charts(rows: list[dict], active_langs: list[str],
 
 # Labels sin codigos ANSI para padding consistente.
 LANG_LABELS_PLAIN = {
-    "vex_interp":   "Vex interp",
-    "vex_jit":      "Vex JIT",
-    "vex_aot_sse2": "Vex AOT sse2",
-    "vex_aot_avx":  "Vex AOT avx2",
-    "vex_aot_auto": "Vex AOT auto",
+    "vx_interp":   "Vex interp",
+    "vx_jit":      "Vex JIT",
+    "vx_aot_sse2": "Vex AOT sse2",
+    "vx_aot_avx":  "Vex AOT avx2",
+    "vx_aot_auto": "Vex AOT auto",
     "c":            "C (gcc -O3)",
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
@@ -1332,11 +1332,11 @@ def save_matplotlib(rows: list[dict], active_langs: list[str],
 
     # Map lenguaje -> color matplotlib.
     lang_color = {
-        "vex_interp":   "#ff7f0e",
-        "vex_jit":      "#2ca02c",
-        "vex_aot_sse2": "#8c564b",
-        "vex_aot_avx":  "#e377c2",
-        "vex_aot_auto": "#7f7f7f",
+        "vx_interp":   "#ff7f0e",
+        "vx_jit":      "#2ca02c",
+        "vx_aot_sse2": "#8c564b",
+        "vx_aot_avx":  "#e377c2",
+        "vx_aot_auto": "#7f7f7f",
         "c":            "#1f77b4",
         "cpp":          "#9467bd",
         "python":       "#17becf",
@@ -1687,11 +1687,11 @@ def rerender_from_json(json_path: Path, project_root: Path,
             self.name = name; self.label = label; self.color = color
             self.available = True
     LABELS = {
-        "vex_interp":   ("Vex interp",   C.YELLOW),
-        "vex_jit":      ("Vex JIT",      C.GREEN),
-        "vex_aot_sse2": ("Vex AOT sse2", C.ORANGE),
-        "vex_aot_avx":  ("Vex AOT avx2", C.VIOLET),
-        "vex_aot_auto": ("Vex AOT auto", C.PINK),
+        "vx_interp":   ("Vex interp",   C.YELLOW),
+        "vx_jit":      ("Vex JIT",      C.GREEN),
+        "vx_aot_sse2": ("Vex AOT sse2", C.ORANGE),
+        "vx_aot_avx":  ("Vex AOT avx2", C.VIOLET),
+        "vx_aot_auto": ("Vex AOT auto", C.PINK),
         "c":            ("C (gcc -O3)",  C.BLUE),
         "cpp":          ("C++ (g++ -O3)", C.MAGENTA),
         "python":       ("Python (CPython)", C.CYAN),
@@ -1762,14 +1762,14 @@ def main() -> int:
     parser.add_argument("vm_path", nargs="?")
     parser.add_argument(
         "--langs", type=str,
-        default="vex_interp,vex_jit,vex_aot_sse2,vex_aot_avx,vex_aot_auto,"
+        default="vx_interp,vx_jit,vx_aot_sse2,vx_aot_avx,vx_aot_auto,"
                 "c,cpp,python,java,go",
         help=("lista CSV de lenguajes/modos a ejecutar.  Validos: "
-              "vex_interp (interp puro), vex_jit (JIT), "
-              "vex_aot_sse2 (AOT nativo 128b), vex_aot_avx (AOT AVX2 256b), "
-              "vex_aot_auto (AOT multiversion cpuid), "
+              "vx_interp (interp puro), vx_jit (JIT), "
+              "vx_aot_sse2 (AOT nativo 128b), vx_aot_avx (AOT AVX2 256b), "
+              "vx_aot_auto (AOT multiversion cpuid), "
               "c (gcc -O3), cpp (g++ -O3), python, java, go (Go gc).  "
-              "Ej: --langs vex_jit,vex_aot_auto,c,go"))
+              "Ej: --langs vx_jit,vx_aot_auto,c,go"))
     parser.add_argument("--filter", type=str, default="",
                         help="Regex para filtrar benches por nombre")
     parser.add_argument("--runs", type=int, default=RUNS_PER_MODE)
@@ -1879,7 +1879,7 @@ def main() -> int:
 
     # Filtrar lenguajes activos.
     requested = [ln.strip() for ln in args.langs.split(",") if ln.strip()]
-    # Avisar de nombres no reconocidos (typo o nombre viejo como "vex_aot").
+    # Avisar de nombres no reconocidos (typo o nombre viejo como "vx_aot").
     unknown = [ln for ln in requested if ln not in tc]
     if unknown:
         warn(f"lenguaje(s) no reconocido(s): {', '.join(unknown)}")
@@ -1894,7 +1894,7 @@ def main() -> int:
         return 1
 
     # Descubrir benches.
-    bench_dir = project_root / "examples_codes_vex" / "benchmark"
+    bench_dir = project_root / "examples_codes_vx" / "benchmark"
     benches = discover_benches(bench_dir)
     if args.skip_legacy:
         benches = [b for b in benches if not b.is_legacy]
@@ -1907,9 +1907,9 @@ def main() -> int:
     multi = sum(1 for b in benches if not b.is_legacy)
     legacy = sum(1 for b in benches if b.is_legacy)
     info(f"benches: {C.BOLD}{len(benches)}{C.RESET} "
-         f"({multi} multi-lenguaje, {legacy} legacy single-vex)")
+         f"({multi} multi-lenguaje, {legacy} legacy single-vx)")
 
-    work_dir = Path(os.environ.get("TEMP", "/tmp")) / "vex_bench_multi"
+    work_dir = Path(os.environ.get("TEMP", "/tmp")) / "vx_bench_multi"
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # -------------------------------------------------------------------
@@ -1932,8 +1932,8 @@ def main() -> int:
     for idx, b in enumerate(benches, 1):
         for ln in active_langs:
             variant: Optional[BenchVariant] = None
-            if ln in VEX_LANGS:
-                variant = b.variants.get("vex")
+            if ln in VX_LANGS:
+                variant = b.variants.get("vx")
             else:
                 variant = b.variants.get(ln)
             if variant is None:
@@ -1943,12 +1943,12 @@ def main() -> int:
     def compile_one(task):
         idx, b, ln, variant = task
         try:
-            if ln in ("vex_interp", "vex_jit"):
-                return (idx, b.name, ln, compile_vex(variant, work_dir, vm), None)
-            elif ln in VEX_AOT_MODES:
+            if ln in ("vx_interp", "vx_jit"):
+                return (idx, b.name, ln, compile_vx(variant, work_dir, vm), None)
+            elif ln in VX_AOT_MODES:
                 return (idx, b.name, ln,
-                        compile_vex_aot(variant, work_dir, vm,
-                                        float_isa=VEX_AOT_MODES[ln]), None)
+                        compile_vx_aot(variant, work_dir, vm,
+                                        float_isa=VX_AOT_MODES[ln]), None)
             elif ln == "c":
                 return (idx, b.name, ln, compile_c(variant, work_dir, tc["c"]), None)
             elif ln == "cpp":
@@ -1998,8 +1998,8 @@ def main() -> int:
 
         for ln in active_langs:
             variant: Optional[BenchVariant] = None
-            if ln in VEX_LANGS:
-                variant = b.variants.get("vex")
+            if ln in VX_LANGS:
+                variant = b.variants.get("vx")
             else:
                 variant = b.variants.get(ln)
             if variant is None:
@@ -2011,18 +2011,18 @@ def main() -> int:
                 # Para AOT, un compile fallido significa "bench no soportado
                 # por el subset nativo" -> N/A (gris), no FAIL (rojo).  Asi
                 # no entra en el geomean ni se confunde con un crash real.
-                row[ln] = None if ln in VEX_AOT_MODES else -1.0
+                row[ln] = None if ln in VX_AOT_MODES else -1.0
                 continue
             cmd, cwd, factor = compiled
 
             # Env: forzar el threshold explicito por modo.  El DEFAULT del vm
-            # ahora es JIT (threshold=1500), asi que vex_interp debe forzar
+            # ahora es JIT (threshold=1500), asi que vx_interp debe forzar
             # UINT32_MAX para medir interp puro (sin esto la columna interp
             # seria JIT-para-metodos-hot y la comparacion no tendria sentido).
             env = os.environ.copy()
-            if ln == "vex_jit":
+            if ln == "vx_jit":
                 env["VESTA_JIT_THRESHOLD"] = "1"
-            elif ln == "vex_interp":
+            elif ln == "vx_interp":
                 env["VESTA_JIT_THRESHOLD"] = "4294967295"
 
             # Run + capturar TODOS los runs individuales (no solo mediana).
@@ -2035,12 +2035,12 @@ def main() -> int:
             # wall externo para TODOS los lenguajes (incluye fork + runtime
             # init).  Mode --unfair restaura el comportamiento legacy
             # (Vex usa --stats interno, otros wall externo).
-            use_vex_wt = (not args.fair) and ln in ("vex_interp", "vex_jit")
+            use_vx_wt = (not args.fair) and ln in ("vx_interp", "vx_jit")
             with Spinner(label_run, color=tc[ln].color):
                 runs_ms = all_runs(cmd, env=env, runs=args.runs,
                                     timeout=args.timeout, cwd=cwd,
                                     warmup=warm,
-                                    use_vex_walltime=use_vex_wt)
+                                    use_vx_walltime=use_vx_wt)
             if not runs_ms:
                 row[ln] = -1.0
                 row.setdefault("_runs", {})[ln] = []
@@ -2053,7 +2053,7 @@ def main() -> int:
         rows.append(row)
 
         # Imprimir fila parcial.
-        # Cada columna usa ANCHO FIJO para que las etiquetas (vex_jit=, c=, ...)
+        # Cada columna usa ANCHO FIJO para que las etiquetas (vx_jit=, c=, ...)
         # queden alineadas verticalmente en todas las filas.  El padding se
         # aplica sobre el texto VISIBLE (sin contar los codigos de color ANSI),
         # por eso se construye primero la celda en crudo y se pad-ea con ljust
@@ -2061,7 +2061,7 @@ def main() -> int:
         line = f"  [{idx:>3}/{len(benches)}] {C.BOLD}{b.name:<22}{C.RESET}"
         for ln in active_langs:
             v = row.get(ln)
-            # Ancho fijo de la columna: etiqueta (p.ej. "vex_interp=") mas hasta
+            # Ancho fijo de la columna: etiqueta (p.ej. "vx_interp=") mas hasta
             # 6 digitos de ms y el sufijo "ms".  Caben N/A, FAIL y TIMEOUT.
             col_w = len(ln) + 1 + 6 + 2  # "<ln>=" + 6 digitos + "ms"
             if v is None:

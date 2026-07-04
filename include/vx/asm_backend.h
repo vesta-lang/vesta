@@ -30,8 +30,8 @@
  * los BYTES que van al code-cache.
  */
 
-#ifndef VEX_ASM_BACKEND_H
-#define VEX_ASM_BACKEND_H
+#ifndef VX_ASM_BACKEND_H
+#define VX_ASM_BACKEND_H
 
 #include <cstdint>
 #include <string>
@@ -110,4 +110,4 @@ extern AsmBackend *g_asm_backend;
 
 } // namespace vx
 
-#endif // VEX_ASM_BACKEND_H
+#endif // VX_ASM_BACKEND_H

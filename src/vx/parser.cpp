@@ -133,8 +133,8 @@ void Parser::skip_target_skipped_decl() {
 // Version del compilador / VM expuesta a @Target (M.m).  Bump al
 // publicar releases con semver.  El test M.condcomp espera
 // compiler>=1.0 y vm>=1.0 -> true; compiler>=99.0 -> false.
-static constexpr double VEX_TARGET_COMPILER_VERSION = 1.0;
-static constexpr double VEX_TARGET_VM_VERSION = 1.0;
+static constexpr double VX_TARGET_COMPILER_VERSION = 1.0;
+static constexpr double VX_TARGET_VM_VERSION = 1.0;
 
 // Override del TARGET para @Target en compilacion AOT cross-target.  El AOT
 // genera codigo para un (os, arch) que puede NO ser el host de build (p.ej.
@@ -142,7 +142,7 @@ static constexpr double VEX_TARGET_VM_VERSION = 1.0;
 // los atomos `os:`/`arch:` de @Target se evaluan contra el TARGET del binario,
 // no contra el host -> las variantes @Target("os:linux && arch:x86_64") del
 // runtime seleccionan la correcta para lo que se esta generando.  Vacio =
-// usar el host de build (ruta normal --vex/--run).  thread_local por el
+// usar el host de build (ruta normal --vx/--run).  thread_local por el
 // compile paralelo (M8).
 static thread_local std::string g_cc_target_os;   // "windows"/"linux"/"macos"
 static thread_local std::string g_cc_target_arch; // "x86_64"/"x86"/"arm64"
@@ -250,9 +250,9 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
                 return false;
             }
             if (key == "compiler")
-                return target_ver_cmp_(VEX_TARGET_COMPILER_VERSION, op, want);
+                return target_ver_cmp_(VX_TARGET_COMPILER_VERSION, op, want);
             if (key == "vm")
-                return target_ver_cmp_(VEX_TARGET_VM_VERSION, op, want);
+                return target_ver_cmp_(VX_TARGET_VM_VERSION, op, want);
             return false;
         }
     }
@@ -294,7 +294,7 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
     }
     if (key == "cpu") return target_cpu_has_(val);
     if (key == "mode") {
-        // Durante la compilacion (--vex) el modo de ejecucion es
+        // Durante la compilacion (--vx) el modo de ejecucion es
         // indeterminado: el JIT decide en runtime.  Por eso `auto`
         // (default) es true y `jit-required` (exige JIT) es false.
         // `jit`/`vm` quedan false: no se puede garantizar el modo en
@@ -554,12 +554,12 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
         }
         // #cross-module-generics: capturar el span fuente del decl para poder
         // exportar las plantillas genericas (struct/clase/fn/enum con
-        // type_params) y los conceptos a otros modulos via `.vexi`.
+        // type_params) y los conceptos a otros modulos via `.vxi`.
         const uint32_t decl_start_off = current_.loc.offset;
         auto decl = parse_top_level_decl();
         if (decl) {
             // ¿Es una plantilla generica o un concepto?  Si lo es, guardar su
-            // texto fuente [start, end) para el `.vexi`.
+            // texto fuente [start, end) para el `.vxi`.
             ast::GenericTemplateExport tex;
             bool is_template = false;
             switch (decl->kind) {
@@ -1615,7 +1615,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         return fd;
     }
     // `comptime T NAME = expr;` (forma canonica v4) -> comptime const
-    // (inmutable, exportable, va al .vexi).
+    // (inmutable, exportable, va al .vxi).
     // `comptime var T NAME = init;` -> comptime mutable (local al eval AST).
     // v4: si veniamos como `is_comptime_const` (set tentativamente cuando
     // se vio `comptime` sin `var`/`auto`/`<>`), forzamos @c is_const=true
@@ -2566,7 +2566,7 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_using_decl() {
 //
 // El path es siempre un string literal sin interpolacion.  Por
 // consistencia con extern "lib.dll", loadmodule(path), y @Method.
-// El sufijo .vex se añade automaticamente al resolver.
+// El sufijo .vx se añade automaticamente al resolver.
 // -----------------------------------------------------------------
 std::unique_ptr<ast::ImportDecl>
 Parser::parse_import_decl(bool is_public_reexport) {

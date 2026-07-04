@@ -100,13 +100,13 @@ project(VMProject
 # Permite que usuarios escriban @Target("compiler>=1.0") y obtengan
 # resolucion en compile-time sin hardcodear los numeros en C++.  Se
 # bumpean al subir mayor/minor; un sprint futuro puede separar
-# vex-compiler vs runtime-VM si divergen.
-set(VEX_COMPILER_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
-set(VEX_COMPILER_VERSION_MINOR ${PROJECT_VERSION_MINOR})
-set(VEX_COMPILER_VERSION_PATCH ${PROJECT_VERSION_PATCH})
-set(VEX_VM_VERSION_MAJOR       ${PROJECT_VERSION_MAJOR})
-set(VEX_VM_VERSION_MINOR       ${PROJECT_VERSION_MINOR})
-set(VEX_VM_VERSION_PATCH       ${PROJECT_VERSION_PATCH})
+# vx-compiler vs runtime-VM si divergen.
+set(VX_COMPILER_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(VX_COMPILER_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(VX_COMPILER_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+set(VX_VM_VERSION_MAJOR       ${PROJECT_VERSION_MAJOR})
+set(VX_VM_VERSION_MINOR       ${PROJECT_VERSION_MINOR})
+set(VX_VM_VERSION_PATCH       ${PROJECT_VERSION_PATCH})
 
 # Generar include/vx/version_generated.h con las constantes para que
 # el frontend lea las versiones desde un solo punto.  Build incremental
@@ -170,7 +170,7 @@ endif()
 # OpenSSL centralizado en el target INTERFACE `vesta_openssl`.
 # ---------------------------------------------------------------------------
 # UNICO punto de verdad de la linkadura de OpenSSL: cada consumidor (vm,
-# vex_lib, vmcore, vesta_lsp, vesta_ffi, vesta_rt, tests) enlaza `vesta_openssl`
+# vx_lib, vmcore, vesta_lsp, vesta_ffi, vesta_rt, tests) enlaza `vesta_openssl`
 # y nada mas.  Se define AQUI, antes del primer add_subdirectory que lo use.
 #
 # Windows: se PREFIERE el enlace ESTATICO (libssl.a + libcrypto.a del sysroot
@@ -246,14 +246,14 @@ else ()
     set(VESTA_OPENSSL_STATIC OFF CACHE INTERNAL "OpenSSL embebido en el binario")
 endif ()
 
-# Frontend del lenguaje Vex como libreria estatica aislada (vex_lib).
+# Frontend del lenguaje Vex como libreria estatica aislada (vx_lib).
 # Decision arquitectonica: el frontend del HLL se compila
 # fuera del GLOB principal y se enlaza al ejecutable como dependencia
 # explicita, prefigurando la futura libvesta_rt.
 add_subdirectory(src/vx)
 
 # Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vx/
-# porque ya se compilan dentro de vex_lib (incluirlos en ambos lados
+# porque ya se compilan dentro de vx_lib (incluirlos en ambos lados
 # causaria definicion multiple de simbolos en el linker).
 file(GLOB_RECURSE VM_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
@@ -261,11 +261,11 @@ file(GLOB_RECURSE VM_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
 )
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/vx/")
-# Port transpiler IR -> codigo (C, futuro Java/JS) vive en vex_lib (ver
+# Port transpiler IR -> codigo (C, futuro Java/JS) vive en vx_lib (ver
 # src/vx/CMakeLists.txt).  Excluir para evitar definicion duplicada.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/port/")
-# Subsistema de coste (analyze::bigo) vive en vex_lib para que los renderers
-# de diagramas (tambien en vex_lib) puedan anotar el coste por funcion.  Solo
+# Subsistema de coste (analyze::bigo) vive en vx_lib para que los renderers
+# de diagramas (tambien en vx_lib) puedan anotar el coste por funcion.  Solo
 # depende de ir::IrModule.  Excluir aqui para evitar definicion duplicada.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/analyze/")
 # La API C embebible (src/capi/) solo forma parte de la libreria compartida
@@ -363,7 +363,7 @@ target_link_libraries(vm
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone
-        PRIVATE vex_lib
+        PRIVATE vx_lib
         PRIVATE aot_emit
 )
 if(VESTA_BUILD_PREPROCESSOR)
@@ -511,7 +511,7 @@ endif ()
 # Binario independiente que habla LSP por stdio (JSON-RPC enmarcado por
 # Content-Length) y enlaza el core del compilador EN PROCESO para producir
 # diagnosticos en vivo.  Reutiliza:
-#   - vex_lib  -> compile_vex_source / compile_vex_project + analyze::bigo.
+#   - vx_lib  -> compile_vx_source / compile_vx_project + analyze::bigo.
 #   - vmcore   -> ir:: (parse_ir_module_cache) + runtime que el frontend
 #                 arrastra transitivamente.
 #
@@ -533,7 +533,7 @@ add_executable(vesta_lsp
 )
 target_include_directories(vesta_lsp PRIVATE ${VM_INCLUDES})
 target_link_libraries(vesta_lsp
-        PRIVATE vex_lib
+        PRIVATE vx_lib
         PRIVATE vmcore
         PRIVATE sqlite3
         PRIVATE capstone
@@ -689,7 +689,7 @@ if (VESTA_BUILD_FFI)
             PRIVATE sqlite3
             PRIVATE capstone
             PRIVATE keystone
-            PRIVATE vex_lib
+            PRIVATE vx_lib
             PRIVATE aot_emit
             PRIVATE vesta_install
     )
@@ -722,7 +722,7 @@ endif ()
 # Subset estricto de @c vmcore que contiene SOLO los componentes del runtime
 # puro (GC, scheduler, mailbox, futures, monitores, FFI, class_registry,
 # arena, distribucion VDP).  No incluye:
-#   - frontend del lenguaje (vex, ir, lexer, parser, emmit)
+#   - frontend del lenguaje (vx, ir, lexer, parser, emmit)
 #   - linker / loader principal del .velb (solo class_registry)
 #   - CLI / VSH / REPL
 #   - jit, optimizer, profiler, install

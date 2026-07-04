@@ -26,7 +26,7 @@
  *          { nombre, rango }.  Es resolucion por NOMBRE (v1): suficiente para
  *          un LSP util sin necesidad del AST completo.
  *
- *  - @c WorkspaceIndex: indice de TODOS los @c .vex bajo la raiz del proyecto
+ *  - @c WorkspaceIndex: indice de TODOS los @c .vx bajo la raiz del proyecto
  *    (recursivo y acotado) MAS los directorios de busqueda de modulos de Vesta
  *    que sean faciles de detectar.  Mapea @c nombre -> [definiciones] y
  *    @c nombre -> [referencias] con su fichero y rango.  Esto es lo que
@@ -164,7 +164,7 @@ struct WorkspaceLocation {
  *
  * Se construye perezosamente la primera vez que se pide navegacion, recorre
  * recursivamente la raiz del proyecto (mas directorios de modulos faciles de
- * detectar) y registra las definiciones y referencias de cada @c .vex.  Para
+ * detectar) y registra las definiciones y referencias de cada @c .vx.  Para
  * los ficheros abiertos en el editor usa el TEXTO VIVO (no el de disco) y
  * permite refrescar SOLO ese fichero sin reindexar todo.
  *
@@ -188,7 +188,7 @@ class WorkspaceIndex {
     /**
      * @brief Asegura que el indice de disco esta construido (idempotente).
      *
-     * La primera invocacion recorre las raices e indexa todos los @c .vex
+     * La primera invocacion recorre las raices e indexa todos los @c .vx
      * encontrados.  Invocaciones posteriores no hacen nada (salvo que se
      * llame @c invalidate_all).
      */

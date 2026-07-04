@@ -1,6 +1,6 @@
 /**
  * @file lockfile.cpp
- * @brief Implementacion del parser/serializer de @c vex.lock.
+ * @brief Implementacion del parser/serializer de @c vx.lock.
  */
 #include "pkg/lockfile.h"
 #include "pkg/toml_lite.h"
@@ -105,7 +105,7 @@ LockParseResult parse_lockfile_file(const std::string &path) {
 
 std::string serialize_lockfile(const Lockfile &lock) {
     std::ostringstream out;
-    out << "# vex.lock -- generado automaticamente, no editar a mano\n";
+    out << "# vx.lock -- generado automaticamente, no editar a mano\n";
     out << "# Builds reproducibles bit-perfect: sha256 + author_fp + caps.\n\n";
 
     // [meta] -- escape_string ya wrapea con "..."

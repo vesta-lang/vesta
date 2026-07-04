@@ -59,7 +59,7 @@ def main():
     prog = os.path.join(work, "prog.exe")
 
     # 1. kern.vx -> kern.obj (COFF PE)
-    r = run([vm, "--vex", kern, "-m", "aot", "--emit", "obj",
+    r = run([vm, "--vx", kern, "-m", "aot", "--emit", "obj",
              "--format", "pe", "-o", kern_obj])
     if not os.path.exists(kern_obj):
         print("FALLO: no se genero kern.obj")

@@ -1,0 +1,25 @@
+// EJECUTABLE ELF32 standalone (x86-32, modo protegido) -- slice 2 de 32-bit.
+// El AOT genera un ELF de 32-bit (ELFCLASS32, EM_386, ET_EXEC) ejecutable de
+// punta a punta: el _start llama a main y termina via `int 0x80` con el retorno
+// de main (regparm: en eax) como codigo de salida.  Sin libc (freestanding).
+//
+//   vm -m aot --vx examples_codes_vx/aot/30_x86_32_elf_exec.vx \
+//      -o fib32.elf --aot-arch x86-32 --emit exe --format elf
+//   ./fib32.elf ; echo $?    # -> 55  (en Linux/WSL 32-bit, o qemu-i386)
+//
+// Ejercita recursion (call rel32 32-bit), branches, spills a la pila (frame
+// con slots de 4 bytes, no 8) y tail-call.  Validado por ejecucion: fib(10)=55,
+// fact(5)=120, return 42.
+//
+// v1 EXEC 32-bit: ELF32 estatico (1 PT_LOAD R+X), entry _start.  PE32 (.exe
+// Windows 32-bit), CALL a externos (libc) y refs a datos absolutas (ABS32, el
+// x86-32 no tiene RIP-relativo) son follow-ups.
+
+i32 fib(i32 n) {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+i32 main() {
+    return fib(10);   // 55
+}

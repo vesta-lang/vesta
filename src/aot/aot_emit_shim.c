@@ -111,7 +111,7 @@ static int aot_dll_name_eq(const char *a, const char *b) {
  * (lo rellena el cargador con el indice del slot), un array de callbacks vacio,
  * y el IMAGE_TLS_DIRECTORY -- y pone DataDirectory[9] (TLS) apuntando ahi.  El
  * acceso (mov gs:[0x58] -> [_tls_index] -> bloque -> +offset) lo emite el
- * codegen; el reloc al simbolo `__vex_tls_index` se resuelve a la VA que
+ * codegen; el reloc al simbolo `__vx_tls_index` se resuelve a la VA que
  * devuelve esta funcion.  Compartido por aot_emit_pe (.exe) y aot_emit_pe_dll
  * (.dll): el cargador procesa el directorio TLS en ambos (Vista+).
  * @return VA de _tls_index, o 0 si el modulo no tiene TLS. */
@@ -127,7 +127,7 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
     if (tls_sec < 0) return 0;
     const uint64_t image_base = pe->ntHeaders.OptionalHeader.ImageBase;
     /* Layout de .tls$d (64 B): [0]=_tls_index(4) [4]=pad
-     * [8]=array de callbacks [&__vex_tls_init, NULL] (16 B)
+     * [8]=array de callbacks [&__vx_tls_init, NULL] (16 B)
      * [24]=IMAGE_TLS_DIRECTORY64(40). */
     _BYTE tlsd[64];
     memset(tlsd, 0, sizeof(tlsd));
@@ -138,14 +138,14 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
     const uint32_t tls_rva = pe->sectionHeaders[tls_sec].VirtualAddress;
     const uint32_t tlsd_rva = pe->sectionHeaders[tlsd_idx].VirtualAddress;
     _BYTE *sd = pe->sectionData[tlsd_idx];
-    /* Array de callbacks en +8: [&__vex_tls_init, NULL].  El callback aplica la
+    /* Array de callbacks en +8: [&__vx_tls_init, NULL].  El callback aplica la
      * plantilla por-hilo (el cargador no siempre la copia para el TLS de una
      * .dll en un consumidor minimal). */
     int have_cb = (cb_section >= 0 && cb_section < pe->numberOfSections);
     if (have_cb) {
         uint64_t cb_va = image_base +
                          pe->sectionHeaders[cb_section].VirtualAddress + cb_off;
-        memcpy(sd + 8, &cb_va, 8); /* [+8] = &__vex_tls_init ; [+16] = NULL */
+        memcpy(sd + 8, &cb_va, 8); /* [+8] = &__vx_tls_init ; [+16] = NULL */
     }
     _BYTE *db = sd + 24; /* IMAGE_TLS_DIRECTORY */
     uint64_t start = image_base + tls_rva;
@@ -207,14 +207,14 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
     return idx_va;
 }
 
-/* TLS PE: resuelve un reloc al simbolo `__vex_tls_index` (RIP-relativo) o un
+/* TLS PE: resuelve un reloc al simbolo `__vx_tls_index` (RIP-relativo) o un
  * SECREL32 (offset del var dentro de su seccion .tls).  @return 1 si lo manejo
  * (el caller debe `continue`), 0 si no es un reloc TLS. */
 static int aot_pe_apply_tls_reloc(PE64FILE_struct *pe, const AotSection *secs,
                                   int num_secs, const AotReloc *rl,
                                   uint64_t tls_index_va) {
     const uint64_t image_base = pe->ntHeaders.OptionalHeader.ImageBase;
-    if (rl->extern_name && strcmp(rl->extern_name, "__vex_tls_index") == 0) {
+    if (rl->extern_name && strcmp(rl->extern_name, "__vx_tls_index") == 0) {
         if (tls_index_va == 0 || rl->site_section < 0 ||
             rl->site_section >= num_secs)
             return 1; /* manejado (silenciosamente no-op si malformado) */
@@ -309,7 +309,7 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
         for (int r = 0; r < num_relocs; ++r) {
             const AotReloc *rl = &relocs[r];
-            /* TLS PE: `__vex_tls_index` (RIP-rel al slot) + SECREL32 (offset del
+            /* TLS PE: `__vx_tls_index` (RIP-rel al slot) + SECREL32 (offset del
              * var en .tls).  Manejados por el helper compartido. */
             if (aot_pe_apply_tls_reloc(&pe, secs, num_secs, rl, tls_index_va))
                 continue;
@@ -587,7 +587,7 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
      * (1) el segmento ejecutable: TODO lo que tenga EXEC (codigo, incluido
      * `.boot` rwx) MAS el rodata no-writable, y (2) un segmento R+W aparte
      * para los datos writable NO-ejecutables (`.data` puro).  Sin esta
-     * separacion, un STORE a un global writable (e.g. __vex_cpu_features)
+     * separacion, un STORE a un global writable (e.g. __vx_cpu_features)
      * caeria en una pagina R-X y segfaultearia; e inversamente, mandar una
      * seccion rwx al segmento R+W (sin X) haria segfaultear su EJECUCION.
      * El criterio de particion es EXEC (no WRITE): el grupo 1 puede contener
@@ -3400,7 +3400,7 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
 
     /* TLS .dll: el cargador de Windows aplica la plantilla del TLS de una .dll
      * a traves de su DllMain (no la copia sin un entry que dispare su init).
-     * El AddressOfEntryPoint -> __vex_tls_init se fija tras finalizePE64File
+     * El AddressOfEntryPoint -> __vx_tls_init se fija tras finalizePE64File
      * (que lo recomputa), mas abajo. */
 
     /* Aplicar relocs (PIC: REL32 internas).  Mismo patron que aot_emit_pe. */
@@ -3408,7 +3408,7 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
         const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
         for (int r = 0; r < num_relocs; ++r) {
             const AotReloc *rl = &relocs[r];
-            /* TLS PE: __vex_tls_index (RIP-rel) + SECREL32 (offset en .tls). */
+            /* TLS PE: __vx_tls_index (RIP-rel) + SECREL32 (offset en .tls). */
             if (aot_pe_apply_tls_reloc(&pe, secs, num_secs, rl, tls_index_va))
                 continue;
             if (rl->target_is_size || rl->target_is_end) {
@@ -3546,7 +3546,7 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
 
     finalizePE64File(&pe);
     /* finalizePE64File recomputa el entry; lo re-fijamos.  Con TLS el entry
-     * apunta a __vex_tls_init (DllMain que aplica la plantilla por-hilo y
+     * apunta a __vx_tls_init (DllMain que aplica la plantilla por-hilo y
      * devuelve TRUE); sin TLS no hay DllMain (entry=0). */
     if (tls_index_va != 0 && cfg && cfg->tls_callback_section >= 0 &&
         cfg->tls_callback_section < pe.numberOfSections) {

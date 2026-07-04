@@ -19,7 +19,7 @@
  * eficientes: un unico @c MEMCPY que el JIT/AOT materializan como @c rep
  * @c movsb / SIMD y el interprete como un bucle host->host.
  *
- * Estos son metodos de @c vx::Lowering (declarados en @c vex/lowering.h) pero
+ * Estos son metodos de @c vx::Lowering (declarados en @c vx/lowering.h) pero
  * se definen en este TU separado para mantener la vectorizacion agrupada y
  * poder evolucionarla (unroll xW, fusion SIMD, memset, anchos AVX/AVX512) sin
  * inflar @c lowering.cpp ni dificultar un futuro split en mas archivos.
@@ -1419,7 +1419,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         vb.dst = ir::IR_NO_VALUE;
         vb.operands = {c_at, a_at, v_s};
         // bit16 = HOISTED: el broadcast esta pre-hecho en XMM13 (VEC_BCAST del
-        // preheader) -> el JIT usa VEX puro a ancho de host sin re-broadcast.
+        // preheader) -> el JIT usa VX puro a ancho de host sin re-broadcast.
         vb.imm = ((uint64_t)subop << 8) | width | (1ull << 16);
         vb.source_line = ln;
         fn_->append(current_block_, std::move(vb));

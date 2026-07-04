@@ -48,7 +48,7 @@ namespace jit {
 enum class FloatIsa : uint8_t {
     X87 = 0,     ///< FPU x87 (todo x86 incluso 386; pila ST, sin XMM).
     SSE2 = 1,    ///< SSE2 (baseline x86-64; XMM, ADDSD/MULSD).  Default.
-    AVX = 2,     ///< AVX (VEX, 3-operandos VADDSD; mayoria de CPUs modernas).
+    AVX = 2,     ///< AVX (VX, 3-operandos VADDSD; mayoria de CPUs modernas).
     AVX512F = 3, ///< AVX-512 Foundation (EVEX; server/HEDT recientes).
     AUTO = 4,    ///< deteccion en runtime via CPUID -> la mejor disponible.
 };
@@ -121,12 +121,12 @@ struct VregEntries {
     uint64_t callclosure =
         0; ///< vrt_callclosure(proc, fn_addr, env_addr) -> result
     /* Fibras nativas en JIT (FN.3).  swapctx = direccion NATIVA de
-     * @c __vex_swapctx (@Naked, compilado via compile_native_fn en el
+     * @c __vx_swapctx (@Naked, compilado via compile_native_fn en el
      * force-eager del grafo de fibra); el vreg emite un CALL nativo a el
      * para @c IrOp::SWAPCTX.  callind = @c vrt_callind(proc, func_ptr), el
      * helper de runtime que replica @c exec_instr_callvmr (distingue
      * naked-native/jit-VM_ABI/VA por rango) para @c IrOp::CALLIND en JIT. */
-    uint64_t swapctx = 0; ///< addr nativa de __vex_swapctx (SWAPCTX en JIT)
+    uint64_t swapctx = 0; ///< addr nativa de __vx_swapctx (SWAPCTX en JIT)
     uint64_t callind = 0; ///< vrt_callind(proc, func_ptr) (CALLIND en JIT)
     /* Fallback page-miss de LOAD_VM/STORE_VM (acceso a vm_mem).  0 = no
      * disponible -> esos ops caen a fallback. */

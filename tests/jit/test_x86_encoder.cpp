@@ -540,7 +540,7 @@ void test_encode_movupd_store() {
     CHECK_BYTES(out, (std::vector<uint8_t>{0x66, 0x0F, 0x11, 0x01}));
 }
 
-/* --- AVX2 (VEX.256) y AVX512 (EVEX.512): byte-exact validado con objdump.
+/* --- AVX2 (VX.256) y AVX512 (EVEX.512): byte-exact validado con objdump.
  * Usa XMM14/XMM15 (-> ymm/zmm) y R10 como base para ejercitar los bits altos
  * R/B del prefijo.  NO requiere una CPU con AVX2/AVX512 (solo codifica). */
 void test_encode_vfmadd231pd_ymm() {
@@ -641,7 +641,7 @@ void test_encode_vpaddq_zmm() {
 }
 
 void test_encode_vbroadcastsd_ymm() {
-    /* vbroadcastsd ymm14,xmm14 -> c4 42 7d 19 f6  (VEX.256.66.0F38.W0 19) */
+    /* vbroadcastsd ymm14,xmm14 -> c4 42 7d 19 f6  (VX.256.66.0F38.W0 19) */
     MFunction fn = make_single_block_fn({MInstr::make_unary(
         MOp::VBROADCASTSD, MOperand::make_reg(MReg::XMM14, 32),
         MOperand::make_reg(MReg::XMM14, 16))});
@@ -713,7 +713,7 @@ int main() {
     test_encode_mulpd();
     test_encode_movupd_load();
     test_encode_movupd_store();
-    /* AVX2 (VEX) + AVX512 (EVEX) byte-exact */
+    /* AVX2 (VX) + AVX512 (EVEX) byte-exact */
     test_encode_vfmadd231pd_ymm();
     test_encode_vfmadd231pd_zmm();
     test_encode_vaddpd_ymm();

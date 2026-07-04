@@ -1,0 +1,110 @@
+// 233_coop_yield.vx
+//
+// F3 de las fibras nativas: SUSPENSION cooperativa del scheduler de vx_async.
+// Tres tareas se ceden en ROUND-ROBIN via `vasync_yield` (del modulo vx_async,
+// importado): cada una registra su id, cede, registra su id otra vez, y termina.
+// El scheduler `vasync_run` reparte quantums en orden hasta que las 3 terminan.
+//
+// ORDEN ESPERADO (round-robin, dos pasadas):  1 2 3  1 2 3.  La traza acumula
+// cada id en base 10 -> 123123 (= 0x1e0f3).  R0 = 123123, IDENTICO en los tres
+// modos (-m vm / -m jit / -m aot; en aot el exit-code es 123123 mod 256 = 243).
+//
+// POR QUE EL CUERPO DE TAREA ES @Naked (no una fn Vex normal):  una tarea con
+// fibra corre sobre SU PROPIA pila NATIVA (la que aloca vasync_spawn_fiber).  En
+// -m vm/-m jit una fn Vex normal asume un frame VM; ejecutandola sobre una pila
+// host cruda romperia esa suposicion (crash comprobado).  Por eso el cuerpo es
+// asm puro (@Naked): lee/escribe solo el estado host que le pasamos por r13, y
+// cede llamando a `vasync_yield`/`vasync_task_done` (que TAMBIEN son @Naked, por
+// la misma razon: una fn normal llamada desde la fibra crashea en interp).  Es
+// el mismo enfoque que 230/232.
+//
+// LAZY: solo estas tareas (creadas con vasync_spawn_fiber) tienen fibra.  El
+// resto del runtime async (spawn/future/await run-to-completion) no aloca fibra.
+//
+// Estado host por tarea (3 qwords, base en r13):  [+0]=id  [+8]=trace_ptr  (el
+// trace es un contador compartido host que las 3 tareas acumulan).
+//
+// Compilar/ejecutar:
+//   vm --vx 233_coop_yield.vx -o p && vm -m vm  --run p.velb   (R00=0x1e0f3)
+//   vm --vx 233_coop_yield.vx -o p && vm -m jit --run p.velb   (R00=0x1e0f3)
+//   vm -m aot --vx 233_coop_yield.vx --format pe -o p.exe && ./p.exe  (exit 243)
+
+import "vx_async" only vasync_yield, vasync_task_done, vasync_spawn_fiber, vasync_run;
+
+// ===========================================================================
+//  Cuerpo de tarea (@Naked): arg = state block (host) en r13.
+//    trace = trace*10 + id ;  yield ;  trace = trace*10 + id ;  task_done.
+//  Layout del state: [r13+0]=id  [r13+8]=trace_ptr.
+// ===========================================================================
+@Target("!os:windows")
+@Naked void coop_task() {
+    asm volatile noinfer {
+        mov r13, rdi
+        // paso 1: trace = trace*10 + id
+        mov rax, [r13 + 8]       // trace_ptr
+        mov rcx, [rax]           // trace
+        mov rdx, 10
+        imul rcx, rdx
+        add rcx, [r13 + 0]       // + id
+        mov [rax], rcx
+        call vasync_yield        // cede al scheduler; reanuda aqui
+        // paso 2: trace = trace*10 + id
+        mov rax, [r13 + 8]
+        mov rcx, [rax]
+        mov rdx, 10
+        imul rcx, rdx
+        add rcx, [r13 + 0]
+        mov [rax], rcx
+        call vasync_task_done    // marca terminada + cede definitivo (no retorna)
+    coop_task_hang:
+        jmp coop_task_hang
+    }
+}
+@Target("os:windows")
+@Naked void coop_task() {
+    asm volatile noinfer {
+        mov r13, rcx
+        sub rsp, 32              // shadow space Win64 para los call
+        mov rax, [r13 + 8]
+        mov rcx, [rax]
+        mov rdx, 10
+        imul rcx, rdx
+        add rcx, [r13 + 0]
+        mov [rax], rcx
+        call vasync_yield
+        mov rax, [r13 + 8]
+        mov rcx, [rax]
+        mov rdx, 10
+        imul rcx, rdx
+        add rcx, [r13 + 0]
+        mov [rax], rcx
+        call vasync_task_done
+    coop_task_hang:
+        jmp coop_task_hang
+    }
+}
+
+i32 main() {
+    // Bloque host: trace(1 qword) + 3 state blocks de 2 qwords.
+    u64 blk = (u64)malloc(7 * 8);
+    u64 trace = blk + 0 * 8;
+    u64* pt = (u64*)trace; pt[0] = 0;
+    u64 st1 = blk + 1 * 8;   // [1]=id  [2]=trace_ptr
+    u64 st2 = blk + 3 * 8;   // [3]=id  [4]=trace_ptr
+    u64 st3 = blk + 5 * 8;   // [5]=id  [6]=trace_ptr
+    u64* p1 = (u64*)st1; p1[0] = 1; p1[1] = trace;
+    u64* p2 = (u64*)st2; p2[0] = 2; p2[1] = trace;
+    u64* p3 = (u64*)st3; p3[0] = 3; p3[1] = trace;
+
+    // Crear las 3 tareas suspendibles (cada una con su fibra) en orden.
+    vasync_spawn_fiber((i64)(cfn() -> void) coop_task, (i64)st1);
+    vasync_spawn_fiber((i64)(cfn() -> void) coop_task, (i64)st2);
+    vasync_spawn_fiber((i64)(cfn() -> void) coop_task, (i64)st3);
+
+    // Correr el scheduler round-robin hasta que las 3 terminen.
+    vasync_run();
+
+    u64 t = pt[0];
+    free((i64*)blk);
+    return (i32)t;   // 123123
+}

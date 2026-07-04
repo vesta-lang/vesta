@@ -35,8 +35,8 @@
  *     ownership intacto.
  */
 
-#ifndef VEX_TYPE_CHECKER_H
-#define VEX_TYPE_CHECKER_H
+#ifndef VX_TYPE_CHECKER_H
+#define VX_TYPE_CHECKER_H
 
 #include <cstdint>
 #include <string>
@@ -263,7 +263,7 @@ struct StructLayout {
     /// runtime lo encuentre.
     bool is_introspect = false;
     /// Phase M6.a L.3: visibilidad cross-module.  Solo se exporta a
-    /// `.vexi` si es @c true.  Sin keyword `public`/`private` en el
+    /// `.vxi` si es @c true.  Sin keyword `public`/`private` en el
     /// source: @c true (default permisivo).  Sin esto en false, otros
     /// modulos podrian importar el struct via @c only.
     bool is_public = true;
@@ -512,14 +512,14 @@ class TypeChecker {
 
     /**
      * @brief Acceso de solo lectura al ModuleNode AST.  Phase M.L7
-     * lo usa @c export_typechecker_to_vexi para iterar
+     * lo usa @c export_typechecker_to_vxi para iterar
      * @c GlobalVarDecl y extraer sus tipos sin tener que mantener
      * un mapa paralelo en el TypeChecker.
      */
     const ast::ModuleNode &ast_module() const noexcept { return mod_; }
 
     /// #cross-module-generics: inyecta un decl (plantilla generica o
-    /// concepto) re-parseado de un `.vexi` importado en este modulo, para
+    /// concepto) re-parseado de un `.vxi` importado en este modulo, para
     /// que se pueda monomorphizar `Caja<i64>` cross-module.  Debe llamarse
     /// ANTES de run() (que registra los templates).  Idempotente por nombre.
     void inject_decl(std::unique_ptr<ast::Node> decl) {
@@ -972,10 +972,10 @@ class TypeChecker {
     }
 
     /// Phase M.L23: marca un nombre como importado de otro modulo.
-    /// El export del @c .vexi del modulo actual lo filtra por
+    /// El export del @c .vxi del modulo actual lo filtra por
     /// defecto (no se re-exporta).  Si @c is_reexport es @c true ,
     /// se anyade tambien al set de re-exportados y SE EXPORTA al
-    /// @c .vexi (semantica @c public @c import @c "x"; ).
+    /// @c .vxi (semantica @c public @c import @c "x"; ).
     void mark_imported(const std::string &name, bool is_reexport) {
         imported_names_.insert(name);
         if (is_reexport) reexported_imported_names_.insert(name);
@@ -1295,7 +1295,7 @@ class TypeChecker {
     /// rellena en cada @c function_sigs_.push_back y nunca se limpia.
     std::unordered_map<std::string, uint32_t> sig_by_name_;
 
-    /// Phase M.2.e: simbolos de funcion importados via .vexi que
+    /// Phase M.2.e: simbolos de funcion importados via .vxi que
     /// deben declararse en el scope global al inicio de run().  El
     /// constructor del TypeChecker NO ha pusheado scope todavia,
     /// asi que las llamadas a register_imported_function durante
@@ -1336,7 +1336,7 @@ class TypeChecker {
     /// Phase M6.a L.3: visibilidad por simbolo top-level.
     /// El TypeChecker rellena estos sets al procesar cada decl segun
     /// @c FunctionDecl::is_public, @c GlobalVarDecl::is_public, etc.
-    /// El emitter de .vexi consulta para filtrar simbolos privados.
+    /// El emitter de .vxi consulta para filtrar simbolos privados.
     std::unordered_map<std::string, bool> function_is_public_;
     std::unordered_map<std::string, bool> global_is_public_;
     std::unordered_map<std::string, bool> typedef_is_public_;
@@ -1348,8 +1348,8 @@ class TypeChecker {
     /// emitir warnings.
     mutable std::unordered_set<std::string> referenced_names_;
 
-    /// Phase M.L23: set de nombres importados desde @c .vexi de otros
-    /// modulos.  El export del @c .vexi del modulo actual los filtra
+    /// Phase M.L23: set de nombres importados desde @c .vxi de otros
+    /// modulos.  El export del @c .vxi del modulo actual los filtra
     /// por DEFAULT (no se re-exportan) salvo que esten tambien en
     /// @c reexported_imported_names_ (marcados con @c public import).
     std::unordered_set<std::string> imported_names_;
@@ -1362,7 +1362,7 @@ class TypeChecker {
     std::unordered_map<std::string, uint32_t> ns_idx_by_local_name_;
 
     /// NS.2 round-trip: namespaces DECLARADOS por este modulo (via
-    /// `namespace X;`), para que el export al .vexi sepa que la funcion
+    /// `namespace X;`), para que el export al .vxi sepa que la funcion
     /// mangled `mylib__helper` pertenece al namespace `mylib` con nombre
     /// publico `helper`.  Clave = mangled_label; valor = (ns_path, public_name).
     std::unordered_map<std::string, std::pair<std::string, std::string>>
@@ -1375,7 +1375,7 @@ class TypeChecker {
     }
 
     /// NS.2: registra un simbolo de un namespace DECLARADO localmente (para el
-    /// export al .vexi).  Llamado por el compiler tras flatten_namespaces.
+    /// export al .vxi).  Llamado por el compiler tras flatten_namespaces.
     void register_declared_ns_symbol(const std::string &mangled_label,
                                      const std::string &ns_path,
                                      const std::string &public_name) {
@@ -1390,7 +1390,7 @@ class TypeChecker {
   private:
   public:
     /// Phase M.7: namespace de un modulo importado.  Cada entry
-    /// contiene los simbolos publicos del @c .vexi indexados por
+    /// contiene los simbolos publicos del @c .vxi indexados por
     /// nombre.  Cuando el TypeChecker ve @c "buf.Buffer" o
     /// @c "lib_a.valor_a", busca @c "buf"/@c "lib_a" en la pila de
     /// scopes (debe ser Symbol::Namespace con @c ns_index apuntando
@@ -1432,7 +1432,7 @@ class TypeChecker {
 
     /// @brief Registra un namespace importado.  Devuelve el indice
     /// asignado en @c imported_namespaces_.  El caller (compiler_project)
-    /// llama esto tras parsear el .vexi del dep para registrar
+    /// llama esto tras parsear el .vxi del dep para registrar
     /// `import "lib_a";` o `import "lib_a" as foo;`.
     /// @param local_name Nombre con el que se accede en el modulo
     ///                   actual (e.g. "lib_a" o "foo" si hay alias).
@@ -1442,7 +1442,7 @@ class TypeChecker {
 
     /// @brief anyade un simbolo al namespace registrado en @p ns_index.
     /// Llamado por el compiler_project durante la inyeccion de cada
-    /// VexiSymbol cuyo modulo se importo plain (sin `only`).
+    /// VxiSymbol cuyo modulo se importo plain (sin `only`).
     void register_namespace_symbol(uint32_t ns_index,
                                    const std::string &public_name,
                                    ImportedNamespace::Sym sym);
@@ -1587,7 +1587,7 @@ class TypeChecker {
     /// bounds y por la composicion de conceptos en predicados comptime.
     std::unordered_map<std::string, const ast::ConceptDecl *> concepts_;
     /// #cross-module-generics: nombres de plantillas/conceptos ya inyectados
-    /// desde un `.vexi` importado (dedup de re-parse + evita doble inyeccion
+    /// desde un `.vxi` importado (dedup de re-parse + evita doble inyeccion
     /// si varios imports los traen).
     std::unordered_set<std::string> injected_templates_;
     /// #6: bounds encolados por check_type_bounds, pendientes de evaluar
@@ -1650,17 +1650,17 @@ class TypeChecker {
         return (it == monomorph_info_.end()) ? nullptr : &it->second;
     }
 
-    // ---- Phase M.2: interop con .vexi (interfaces compiladas) ----
+    // ---- Phase M.2: interop con .vxi (interfaces compiladas) ----
     //
     // El TypeChecker puede exportar sus simbolos publicos a un
-    // descriptor @c vx::VexiModule para que el emitter del .vexi
+    // descriptor @c vx::VxiModule para que el emitter del .vxi
     // los serialize.  Tambien puede inyectar simbolos importados
-    // desde un .vexi parseado.  Las firmas precisas viven en
-    // @c module_interop.cpp para no forzar include de vexi_format.h
-    // aqui (forward declaramos VexiModule mas abajo via traits).
+    // desde un .vxi parseado.  Las firmas precisas viven en
+    // @c module_interop.cpp para no forzar include de vxi_format.h
+    // aqui (forward declaramos VxiModule mas abajo via traits).
 
     /// @brief Entry para la lista de simbolos en @c only.
-    struct VexiOnlyEntry {
+    struct VxiOnlyEntry {
         std::string name;   // nombre original en el modulo
         std::string rename; // nombre local (vacio = mismo)
     };
@@ -1669,7 +1669,7 @@ class TypeChecker {
     /// strings tipo @c "i32", @c "u64*", @c "Optional<i32>",
     /// @c "fn(i32) -> i64".  Devuelve @c Type{} (kind=VOID) si el
     /// typename es desconocido en el contexto actual.  Usado por el
-    /// cargador de .vexi para resolver firmas de funciones y tipos
+    /// cargador de .vxi para resolver firmas de funciones y tipos
     /// de fields cross-module.
     Type resolve_type_string(const std::string &type_str) const;
 
@@ -1679,7 +1679,7 @@ class TypeChecker {
     }
 
     /// @brief Map de nombre -> sig_index (para iterar funciones top-level).
-    /// Usado por el emitter del .vexi para enumerar funciones con
+    /// Usado por el emitter del .vxi para enumerar funciones con
     /// sus firmas sin necesidad de mantener un getter por funcion.
     const std::unordered_map<std::string, uint32_t> &
     function_names() const noexcept {
@@ -1687,13 +1687,13 @@ class TypeChecker {
     }
 
     /// @brief Reserva un nominal_id univoco para un nuevo newtype
-    /// (cuando se inyecta desde .vexi).  Cada llamada devuelve un id
+    /// (cuando se inyecta desde .vxi).  Cada llamada devuelve un id
     /// distinto.  No tiene efectos secundarios.
     uint32_t allocate_nominal_id() noexcept { return ++newtype_counter_; }
 
-    // -- Registradores usados solo por el cargador de .vexi (M2.d).
+    // -- Registradores usados solo por el cargador de .vxi (M2.d).
     // Insertan en las tablas internas SIN re-validar (asumen que el
-    // .vexi de origen es valido).  Si el nombre ya existe, no se
+    // .vxi de origen es valido).  Si el nombre ya existe, no se
     // sobreescribe (idempotente).
 
     void register_imported_type_alias(const std::string &name, Type t) {
@@ -1732,7 +1732,7 @@ class TypeChecker {
         pending_imported_fn_names_.push_back({name, idx});
     }
     /// Phase M.L7: registra una variable global importada de otro
-    /// modulo via @c .vexi.  Igual que las funciones, se encola para
+    /// modulo via @c .vxi.  Igual que las funciones, se encola para
     /// que @c run() la declare en el scope global tras el
     /// @c push_scope inicial.  Si @c has_init_value es @c true y la
     /// global es @c const , el lowering del consumidor puede
@@ -1909,4 +1909,4 @@ class TypeChecker {
 
 } // namespace vx
 
-#endif // VEX_TYPE_CHECKER_H
+#endif // VX_TYPE_CHECKER_H

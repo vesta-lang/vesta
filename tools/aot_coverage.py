@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""aot_coverage.py -- mide la cobertura AOT sobre examples_codes_vex/.
+"""aot_coverage.py -- mide la cobertura AOT sobre examples_codes_vx/.
 
 Compila cada .vx con `-m aot --emit obj` y clasifica:
   - OK: se genero el .o.
@@ -10,7 +10,7 @@ Compila cada .vx con `-m aot --emit obj` y clasifica:
 Agrupa los fallos por la op/categoria culpable para priorizar.
 
 Uso:
-  python tools/aot_coverage.py [vm_path] [--dir examples_codes_vex] [--show N]
+  python tools/aot_coverage.py [vm_path] [--dir examples_codes_vx] [--show N]
 """
 from __future__ import annotations
 import argparse
@@ -75,7 +75,7 @@ def classify(out: str, ok: bool) -> tuple[str, str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("vm_path", nargs="?")
-    ap.add_argument("--dir", default="examples_codes_vex")
+    ap.add_argument("--dir", default="examples_codes_vx")
     ap.add_argument("--recurse", action="store_true",
                     help="incluir subdirectorios (benchmark/, aot/, etc.)")
     ap.add_argument("--show", type=int, default=20,
@@ -107,7 +107,7 @@ def main() -> int:
             if out_obj.exists():
                 out_obj.unlink()  # evitar falso OK con un .o de una corrida previa
             r = subprocess.run(
-                [str(vm), "--vex", str(f), "-m", "aot", "--format", "elf",
+                [str(vm), "--vx", str(f), "-m", "aot", "--format", "elf",
                  "--emit", "obj", "-o", str(out_obj)],
                 capture_output=True, text=True, timeout=60)
             out = (r.stdout + "\n" + r.stderr)

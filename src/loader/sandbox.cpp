@@ -5,10 +5,10 @@
  * Este archivo proporciona la representación en memoria de las
  * capabilities del sandbox y las funciones de serialización/parsing
  * que las convierten desde y hacia el formato textual que usa el
- * usuario (`--vex-caps`, segundo argumento de `loadmodule`, etc.).
+ * usuario (`--vx-caps`, segundo argumento de `loadmodule`, etc.).
  *
  * El diseño del parser es deliberadamente tolerante a tokens
- * desconocidos: si el usuario escribe `--vex-caps "fs:read,foo:bar"`,
+ * desconocidos: si el usuario escribe `--vx-caps "fs:read,foo:bar"`,
  * el `foo:bar` se descarta silenciosamente en lugar de aborter la
  * compilación. La idea es que añadir caps nuevas en el futuro no
  * rompa configuraciones existentes.
@@ -118,7 +118,7 @@ std::vector<std::string> split_sub_(const std::string &s) {
  *
  * Las dos formas combinadas (`fs`, `ffi`) son convenientes para
  * autorizar la familia completa con una sola entrada en el string:
- * `--vex-caps "fs"` equivale a `--vex-caps "fs:read,fs:write"`.
+ * `--vx-caps "fs"` equivale a `--vx-caps "fs:read,fs:write"`.
  *
  * @param name Nombre de la cap.
  * @return Bitmask con el o los bits correspondientes; 0 si el nombre
@@ -418,7 +418,7 @@ bool Caps::host_allowed(const std::string &host_port) const noexcept {
 
         // Match relajado: si la entry whitelisted es solo `"host"` (sin
         // puerto explícito) y el destino solicitado es `"host:port"`,
-        // aceptamos el match. Permite escribir `--vex-caps "net=api.foo"`
+        // aceptamos el match. Permite escribir `--vx-caps "net=api.foo"`
         // y que cualquier puerto de api.foo sea válido.
         const size_t colon = host_port.find(':');
         if (colon != std::string::npos &&

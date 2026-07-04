@@ -369,8 +369,8 @@ static size_t vio_u64_to_str(uint64_t v, char *out) {
  * en minuscula.  Para v=0 emite "0x0".  Maximo 18 chars ("0x" + 16 hex).
  *
  * CANONICO (fix divergencia interp/JIT vs AOT/port-C): esta forma compacta y
- * en minusculas ES la que ya producen el backend AOT (@c __vex_print_hex en
- * @c stdlib/vex/vex_io.vex) y el backend port-C (@c "0x%llx").  Antes este
+ * en minusculas ES la que ya producen el backend AOT (@c __vx_print_hex en
+ * @c stdlib/vx/vx_io.vx) y el backend port-C (@c "0x%llx").  Antes este
  * helper del interprete/JIT emitia 18 chars fijos en MAYUS ("0x0000...004D42")
  * lo que hacia que el mismo @c ${x:hex} diese un string distinto segun el
  * modo.  Ahora los cuatro caminos (interp, JIT, AOT, port-C) coinciden.
@@ -1152,7 +1152,7 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_pad(uint64_t fill_cp, uint64_t width);
  * de Unicode (~2 KB en lugar de ~120 KB).  Suficientemente precisa para
  * el 95% de uso real (terminales y print alineado).
  */
-static int vex_wcwidth_cp(uint32_t cp) {
+static int vx_wcwidth_cp(uint32_t cp) {
     /* Control characters: 0 columnas. */
     if (cp < 0x20 || (cp >= 0x7F && cp < 0xA0)) return 0;
     /* Zero-width: combining marks, zero-width space/joiner, BOM. */
@@ -1187,7 +1187,7 @@ static int vex_wcwidth_cp(uint32_t cp) {
 /* Decodifica un codepoint UTF-8 a partir de p; devuelve numero de bytes
  * consumidos (1..4) y escribe el codepoint en *out_cp.  Devuelve 0 si
  * la secuencia es invalida (entonces *out_cp = 0xFFFD replacement). */
-static size_t vex_utf8_decode(const char *p, size_t n, uint32_t *out_cp) {
+static size_t vx_utf8_decode(const char *p, size_t n, uint32_t *out_cp) {
     if (n == 0) {
         *out_cp = 0;
         return 0;
@@ -1217,14 +1217,14 @@ static size_t vex_utf8_decode(const char *p, size_t n, uint32_t *out_cp) {
 }
 
 /* Suma el ancho visual (columnas terminal) de los bytes UTF-8 en p[0..n]. */
-static size_t vex_utf8_cols(const char *p, size_t n) {
+static size_t vx_utf8_cols(const char *p, size_t n) {
     size_t cols = 0;
     size_t i = 0;
     while (i < n) {
         uint32_t cp;
-        size_t adv = vex_utf8_decode(p + i, n - i, &cp);
+        size_t adv = vx_utf8_decode(p + i, n - i, &cp);
         if (adv == 0) break;
-        int w = vex_wcwidth_cp(cp);
+        int w = vx_wcwidth_cp(cp);
         if (w < 0) w = 1;
         cols += (size_t)w;
         i += adv;
@@ -1365,7 +1365,7 @@ fmt_done:; /* statement vacio para que la label valga en C estricto */
     /* Item 18: calcular padding usando COLUMNAS terminal (no bytes).
      * Para ASCII puro cols == bytes; para multi-byte UTF-8 (CJK, emoji)
      * cada codepoint puede ocupar 2 columnas o 0 (control). */
-    size_t cols = vex_utf8_cols(tmp, tmp_n);
+    size_t cols = vx_utf8_cols(tmp, tmp_n);
     uint64_t pad = (cols < width) ? (width - cols) : 0u;
     if (align == 2u && pad > 0u) {
         /* RIGHT-align: padding antes. */
@@ -1406,7 +1406,7 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_pad(uint64_t fill_cp, uint64_t width) {
      * cuantos cols ocupa una copia del fill, luego repetir hasta cubrir
      * width cols.  Defensa: si fill tiene 0 cols (control), tratarlo
      * como 1 col para evitar loop infinito. */
-    int fill_cols = vex_wcwidth_cp((uint32_t)fill_cp);
+    int fill_cols = vx_wcwidth_cp((uint32_t)fill_cp);
     if (fill_cols < 1) fill_cols = 1;
     uint64_t copies = (width + (uint64_t)fill_cols - 1u) / (uint64_t)fill_cols;
     /* Emitir en chunks para no abusar del buffer en width grandes. */

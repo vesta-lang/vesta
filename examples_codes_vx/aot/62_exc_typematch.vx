@@ -1,0 +1,46 @@
+// Type matching de excepciones AOT (multi-catch + subtipo + propagacion).
+//
+// El throw transporta el type-id (intervalo nested-set del tipo lanzado); cada
+// catch(T) matchea si el id cae en [T.lo, T.hi] (T o un subtipo).  Si ningun
+// catch matchea, se re-lanza al try externo (propagacion).  Todo sin GC/VM/libc
+// (runtime auto-hospedado vx_exc.vx, setjmp/longjmp).
+
+class EA { public i64 v; public EA(i64 x) { this.v = x; } }
+class EB { public i64 v; public EB(i64 x) { this.v = x; } }
+class Base { public i64 v; public Base(i64 x) { this.v = x; } }
+class Derived : Base { public Derived(i64 x) { super(x); } }
+class Other { public i64 v; public Other(i64 x) { this.v = x; } }
+
+// Multi-catch: el handler elegido depende del tipo LANZADO, no del orden.
+public i64 pick(i64 which) {
+    try {
+        if (which == 1) { throw new EA(10); }
+        throw new EB(20);
+    } catch (EA e) {
+        return e.v + 1;   // 11 si se lanzo EA
+    } catch (EB e) {
+        return e.v + 2;   // 22 si se lanzo EB
+    }
+}
+
+// Subtipo: throw Derived, catch(Base) lo captura (Derived is-a Base).
+public i64 sub_catch() {
+    try { throw new Derived(50); }
+    catch (Base e) { return e.v + 1; }   // 51
+    return -1;
+}
+
+// Propagacion: throw Other no matchea catch(Base) -> re-throw al try externo.
+public i64 propagate() {
+    try {
+        try { throw new Other(60); }
+        catch (Base e) { return -2; }      // NO matchea
+    } catch (Other e) { return e.v + 3; }  // 63 (propagado)
+    return -3;
+}
+
+public i64 main() {
+    // pick(1)=11, pick(0)=22, sub_catch=51, propagate=63.
+    // 11 + 22 + 51 + 63 = 147; & 0xFF = 0x93 = 147.
+    return pick(1) + pick(0) + sub_catch() + propagate();
+}

@@ -238,13 +238,13 @@ class CBackend : public IPortBackend {
                           ir::IrType ret_type);
 
     /**
-     * @brief Emite el runtime VexString inline al inicio del .c.
+     * @brief Emite el runtime VxString inline al inicio del .c.
      *
      * Solo se invoca si @c opts_.strings == Managed Y el modulo usa
      * strings (detectado via STR_LIT_ADDR o raw_asm "str*").  Emite:
-     *   - typedef struct VexString { ... };
-     *   - vex_str_make_lit / vex_str_make / vex_str_concat / vex_str_eq
-     *   - vex_str_len / vex_str_byte_len / vex_str_raw / vex_str_free
+     *   - typedef struct VxString { ... };
+     *   - vx_str_make_lit / vx_str_make / vx_str_concat / vx_str_eq
+     *   - vx_str_len / vx_str_byte_len / vx_str_raw / vx_str_free
      *   - Linked list per-thread + warn on leak at exit.
      */
     void emit_string_runtime(EmitContext &ctx);
@@ -325,7 +325,7 @@ class CBackend : public IPortBackend {
     /**
      * @brief Set de aridades de SPAWN_ARGS encontradas en el modulo.
      *
-     * Cada aridad N requiere un @c __vex_trampoline_<N> que desempaca
+     * Cada aridad N requiere un @c __vx_trampoline_<N> que desempaca
      * @c (fn_ptr, args...) y llama al helper.  Se emite una sola vez
      * por N en @c emit_postamble.
      */
@@ -400,7 +400,7 @@ class CBackend : public IPortBackend {
      *
      * Reemplaza caracteres invalidos (`.`, `:`, `<`, `>`, `__`) por `_`
      * para que sea un identificador C valido.  Detecta el caso especial
-     * @c "main" -> @c "vex_main" para evitar colision con @c main()
+     * @c "main" -> @c "vx_main" para evitar colision con @c main()
      * de C cuando emit_postamble lo envuelve.
      */
     std::string sanitize_name(const std::string &n) const;

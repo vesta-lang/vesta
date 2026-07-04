@@ -35,8 +35,8 @@
  *     muchos tipos (e.g. al validar parametros de una funcion).
  */
 
-#ifndef VEX_TYPES_H
-#define VEX_TYPES_H
+#ifndef VX_TYPES_H
+#define VX_TYPES_H
 
 #include <cstddef>
 #include <cstdint>
@@ -231,7 +231,7 @@ enum class PrimitiveKind : uint8_t {
     ///
     /// @c pointee = tipo T del payload.
     SHARED_PTR,
-    /// `gc<T>` builtin opt-in (`import vex.gc`): referencia GC-managed.  El
+    /// `gc<T>` builtin opt-in (`import vx.gc`): referencia GC-managed.  El
     /// parser produce este kind; el type checker lo CONVIERTE a @c CLASS con
     /// @c gc_managed=true (reusa todo el acceso a miembros de clase).  Por eso
     /// GC_PTR no deberia sobrevivir al type checking en valores; es solo la
@@ -273,7 +273,7 @@ struct Type {
     /// un indice a una pool de StructLayout en TypeChecker.
     std::string struct_name;
     /// @c true si esta referencia de clase (@c kind == CLASS) es GC-managed
-    /// (declarada como @c gc<X>): se aloca con @c vex_gc_alloc en vez de
+    /// (declarada como @c gc<X>): se aloca con @c vx_gc_alloc en vez de
     /// @c calloc, no tiene cleanup RAII (el GC colecta, incl. ciclos), y su
     /// slot se marca @c is_gc_object para los stackmaps precisos del GC.  El
     /// resto (acceso a campos/metodos) es identico a una ref de clase normal.
@@ -1126,4 +1126,4 @@ constexpr bool is_char_or_integral(PrimitiveKind k) noexcept {
 
 } // namespace vx
 
-#endif // VEX_TYPES_H
+#endif // VX_TYPES_H

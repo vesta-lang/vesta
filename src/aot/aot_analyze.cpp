@@ -157,9 +157,9 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::MVTAKE_IR:
     case IrOp::ISNULL:
     // UNWRAP: el selector AOT lo baja a inline `test v,v; jne ok; call
-    // __vex_panic_null; ok: mov dst,v` (los provably-non-null ya los elimino
+    // __vx_panic_null; ok: mov dst,v` (los provably-non-null ya los elimino
     // ir_pass_elide_unwrap).  El call al hook lo resuelve el linker (como
-    // cualquier extern); en freestanding el usuario provee __vex_panic_null.
+    // cualquier extern); en freestanding el usuario provee __vx_panic_null.
     case IrOp::UNWRAP:
     case IrOp::MEMCPY:
     // -- ops vectoriales fusionadas (SIMD nativo / packed) --
@@ -196,8 +196,8 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::RAW_FREE:      // free(p)     -> free
     case IrOp::PANIC:         // panic(msg)  -> fputs(stderr)+exit
     case IrOp::SMARTPTR_FREE: // unique<T> cleanup -> free / deleter
-    // FFI dinamico: ffi_open/ffi_sym -> CALL __vex_dlopen/__vex_dlsym (Vesta,
-    // bundled vex_ffi.vex; LoadLibraryA/dlopen via extern al SO).  No necesita
+    // FFI dinamico: ffi_open/ffi_sym -> CALL __vx_dlopen/__vx_dlsym (Vesta,
+    // bundled vx_ffi.vx; LoadLibraryA/dlopen via extern al SO).  No necesita
     // la VM -> compilable a nativo.  En freestanding se rechaza salvo que el
     // usuario provea las funciones.
     case IrOp::DLOPEN:
@@ -403,11 +403,11 @@ bool aot_op_allowed(IrOp op, const AotTarget &target) noexcept {
     // igual compila el codigo a maquina).  El IR moderno no deberia
     // emitirlo (Phase 2c lo elimino); defensa por si reaparece.
     if (op == IrOp::RAW_ASM) return false;
-    // Excepciones auto-hospedadas (Phase AOT, vex_exc.vex): el THROW baja a
-    // un CALL a __vex_throw (setjmp/longjmp, sin VM runtime) -> es un simbolo
+    // Excepciones auto-hospedadas (Phase AOT, vx_exc.vx): el THROW baja a
+    // un CALL a __vx_throw (setjmp/longjmp, sin VM runtime) -> es un simbolo
     // del linker, valido en CUALQUIER tier (Bare/Embed/Full) cuando las
     // excepciones estan habilitadas.  El try/catch lowering ya no emite
-    // TRYENTER/TRYLEAVE/LANDINGPAD en native_poo_ (baja a CALLs __vex_*).
+    // TRYENTER/TRYLEAVE/LANDINGPAD en native_poo_ (baja a CALLs __vx_*).
     if (op == IrOp::THROW) return target.exceptions_enabled;
     const AotOpClass cls = aot_classify_op(op);
     if (cls == AotOpClass::PURE_NATIVE)

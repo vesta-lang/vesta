@@ -47,7 +47,7 @@ static constexpr const char *COL_NATIVE_LIB =
 struct ColType {
     PrimitiveKind kind; ///< PrimitiveKind del tipo Vesta.
     const char
-        *vex_ctor_name; ///< Nombre del constructor Vesta (ej. "arraylist").
+        *vx_ctor_name; ///< Nombre del constructor Vesta (ej. "arraylist").
     const char *native_new_fn; ///< Funcion native (ej. "vcol_alist_new").
     const char
         *native_free_fn; ///< Funcion native de free (ej. "vcol_alist_free").
@@ -74,7 +74,7 @@ struct ColType {
  */
 struct ColMethod {
     PrimitiveKind type;    ///< Tipo del receiver (this).
-    const char *vex_name;  ///< Nombre del metodo en Vesta.
+    const char *vx_name;  ///< Nombre del metodo en Vesta.
     const char *native_fn; ///< Funcion native (no-GC).
     /// Variante GC-aware (recibe @c proc como primer arg adicional);
     /// nullptr si esta operacion no necesita write-barrier.  Las
@@ -114,7 +114,7 @@ static constexpr size_t COL_TYPES_N = sizeof(COL_TYPES) / sizeof(COL_TYPES[0]);
  */
 static constexpr ColMethod COL_METHODS[] = {
     // ===== ArrayList =====
-    // Cada fila: { type, vex_name, native_fn, native_fn_gc, ret, n_args,
+    // Cada fila: { type, vx_name, native_fn, native_fn_gc, ret, n_args,
     // arg_types }
     // native_fn_gc = nullptr si la op es read-only (no anade ni quita refs).
     {PrimitiveKind::ARRAYLIST,
@@ -574,12 +574,12 @@ inline const ColType *find_col_type(PrimitiveKind kind) {
 }
 
 /**
- * @brief Devuelve el ColType cuyo @c vex_ctor_name coincide con @p name,
+ * @brief Devuelve el ColType cuyo @c vx_ctor_name coincide con @p name,
  *        o nullptr si @p name no es un constructor de coleccion.
  */
 inline const ColType *find_col_ctor(const std::string &name) {
     for (size_t i = 0; i < COL_TYPES_N; ++i) {
-        if (name == COL_TYPES[i].vex_ctor_name) return &COL_TYPES[i];
+        if (name == COL_TYPES[i].vx_ctor_name) return &COL_TYPES[i];
     }
     return nullptr;
 }
@@ -592,7 +592,7 @@ inline const ColMethod *find_col_method(PrimitiveKind kind,
                                         const std::string &method_name) {
     for (size_t i = 0; i < COL_METHODS_N; ++i) {
         if (COL_METHODS[i].type == kind &&
-            method_name == COL_METHODS[i].vex_name) {
+            method_name == COL_METHODS[i].vx_name) {
             return &COL_METHODS[i];
         }
     }

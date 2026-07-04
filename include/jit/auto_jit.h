@@ -130,17 +130,17 @@ extern uint64_t g_jit_unsupported_count;
 extern uint64_t g_jit_no_ir_count;
 
 /**
- * @brief FN.3: direccion NATIVA de @c __vex_swapctx (context-switch @Naked de
- *        vex_fiber.vex), compilada por el force-eager del grafo de fibra.
+ * @brief FN.3: direccion NATIVA de @c __vx_swapctx (context-switch @Naked de
+ *        vx_fiber.vx), compilada por el force-eager del grafo de fibra.
  *        El vreg la lee (via @c make_vreg_entries -> VregEntries::swapctx) para
  *        emitir un CALL nativo directo en @c IrOp::SWAPCTX (JIT).  0 = fibras
  *        en JIT no inicializadas (o arquitectura sin backend x86-64).
  */
-extern uint64_t g_vex_swapctx_native;
+extern uint64_t g_vx_swapctx_native;
 
 /**
- * @brief FN.3: materializa @c __vex_swapctx (context-switch @Naked) como codigo
- *        NATIVO y deja su direccion en @c g_vex_swapctx_native (idempotente).
+ * @brief FN.3: materializa @c __vx_swapctx (context-switch @Naked) como codigo
+ *        NATIVO y deja su direccion en @c g_vx_swapctx_native (idempotente).
  *
  * Es el primer paso del force-eager del grafo de fibra: compila el primitivo de
  * fiber-switch por la via naked (@c compile_naked_native, HOST_LEAF) para que el
@@ -149,9 +149,9 @@ extern uint64_t g_vex_swapctx_native;
  * (el llamante deja el grafo de fibra en el interprete con un aviso claro).
  *
  * @param vm  ProcessVM del proceso principal (acceso al Loader/executables).
- * @return la direccion nativa de __vex_swapctx, o 0 si no se pudo compilar.
+ * @return la direccion nativa de __vx_swapctx, o 0 si no se pudo compilar.
  */
-uint64_t ensure_vex_swapctx_native(runtime::ProcessVM *vm) noexcept;
+uint64_t ensure_vx_swapctx_native(runtime::ProcessVM *vm) noexcept;
 
 /**
  * @brief Devuelve un snapshot legible del estado del JIT
@@ -303,7 +303,7 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
                                  uint64_t target_pc) noexcept;
 
 /**
- * @brief Compila la funcion cuyo bytecode empieza en @p vex_fn_pc con
+ * @brief Compila la funcion cuyo bytecode empieza en @p vx_fn_pc con
  *        un ENTRY de ABI C nativo (callback) y devuelve su direccion
  *        host, callable directamente por qsort/Win32/etc.
  *
@@ -314,15 +314,15 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
  * @c ProcessVM* via TLS/call y mueve los args nativos a los params; solo
  * salva/restaura el banco de registros VM si el cuerpo puede ensuciarlo.
  *
- * Cachea por @p vex_fn_pc (cache propia, separada del pc-map VM_ABI: la
+ * Cachea por @p vx_fn_pc (cache propia, separada del pc-map VM_ABI: la
  * misma funcion puede tener una version VM_ABI y una callback-ABI).
  *
  * @param vm         Proceso virtual actual (para acceder al Loader).
- * @param vex_fn_pc  Direccion VM del primer byte del bytecode de la fn.
+ * @param vx_fn_pc  Direccion VM del primer byte del bytecode de la fn.
  * @return Direccion host del codigo callback, o 0 si no se pudo compilar.
  */
 uint64_t compile_native_callback(runtime::ProcessVM *vm,
-                                 uint64_t vex_fn_pc) noexcept;
+                                 uint64_t vx_fn_pc) noexcept;
 
 class CodeCache; // fwd decl
 /**

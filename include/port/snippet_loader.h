@@ -18,8 +18,8 @@
  * comparten esta resolucion de directorio + lectura.
  */
 
-#ifndef VEX_PORT_SNIPPET_LOADER_H
-#define VEX_PORT_SNIPPET_LOADER_H
+#ifndef VX_PORT_SNIPPET_LOADER_H
+#define VX_PORT_SNIPPET_LOADER_H
 
 #include <string>
 
@@ -49,4 +49,4 @@ std::string load_snippet_text(const std::string &name,
 
 } // namespace port
 
-#endif // VEX_PORT_SNIPPET_LOADER_H
+#endif // VX_PORT_SNIPPET_LOADER_H

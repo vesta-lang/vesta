@@ -854,7 +854,7 @@ ir::IrType Lowering::ir_type_from_primitive(PrimitiveKind p) noexcept {
 // elemento dimensionable (entonces no se le reserva storage estatico).
 // Habilita buffers estaticos globales (p.ej. heap de un allocator bump en
 // codigo bare-metal): @c u8[4096] g_heap; -> slot de 4096 bytes en .data.
-static uint64_t vex_global_array_bytes(const ast::TypeNode *tn) {
+static uint64_t vx_global_array_bytes(const ast::TypeNode *tn) {
     if (!tn || tn->kind != ast::NodeKind::ArrayTypeNode) return 0;
     auto *at = static_cast<const ast::ArrayTypeNode *>(tn);
     if (!at->element_type || !at->size_expr) return 0; // T[] decay = sin storage
@@ -1117,7 +1117,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // marca como "entry point" la PRIMERA funcion del modulo, lo que
     // hace que esa funcion termine con 'hlt' (detiene la VM) en lugar
     // de 'ret'.  Por tanto si dejamos las funciones en el orden en que
-    // aparecen en el .vex, una funcion como 'factorial' que se declara
+    // aparecen en el .vx, una funcion como 'factorial' que se declara
     // antes de 'main' acabaria como entry point y la primera llamada
     // recursiva detendria la VM.  Solucion: bajamos 'main' primero
     // (si existe), luego el resto en orden de declaracion.
@@ -1247,7 +1247,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
             const uint64_t tls_slot = get_or_create_tls_global_slot(
                 gv->name, nbytes, init_val, talign);
-            // Init != 0: registrar para el TLS callback __vex_tls_init (la
+            // Init != 0: registrar para el TLS callback __vx_tls_init (la
             // plantilla a cero no necesita store -- el bloque ya esta a cero).
             if (init_val != 0)
                 tls_nonzero_inits_.push_back({tls_slot, init_val});
@@ -1255,7 +1255,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         }
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
         if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
-            const uint64_t ab = vex_global_array_bytes(gv->type.get());
+            const uint64_t ab = vx_global_array_bytes(gv->type.get());
             if (ab > 0) {
                 const uint64_t slot =
                     get_or_create_runtime_global_slot(gv->name, ab);
@@ -1441,7 +1441,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             // Global array nativo T[N]: ya tiene slot (pre-pase); soportado.
             if (!gv->is_const && !is_comptime_silent && gv->type &&
                 gv->type->kind == ast::NodeKind::ArrayTypeNode &&
-                vex_global_array_bytes(gv->type.get()) > 0) {
+                vx_global_array_bytes(gv->type.get()) > 0) {
                 runtime_global_supported = true;
             }
             if (!gv->is_const && !is_comptime_silent && gv->type &&
@@ -1566,7 +1566,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     generate_new_helpers(out_module);
     // Thunks para `&extern` usado como cfn (se rellenan durante el lowering).
     generate_extern_cfn_thunks(out_module);
-    // Helper runtime __vex_free_uniq para el reassign-free de campos unique<T>.
+    // Helper runtime __vx_free_uniq para el reassign-free de campos unique<T>.
     generate_free_uniq_helper(out_module);
     // Phase AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
     // __module_init (las clases son layout estatico compile-time).
@@ -1733,20 +1733,20 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     }
 
     // CPU dispatch (cimiento): si algun cpu_features() se uso, prepender
-    // `call __vex_cpu_init` al ENTRY de main para que la deteccion corra UNA
+    // `call __vx_cpu_init` al ENTRY de main para que la deteccion corra UNA
     // VEZ antes de cualquier codigo del usuario.  Se hace AQUI (post-lowering)
     // y no en lower_function porque main se baja ANTES que el resto: un
     // cpu_features() en una funcion no-main marca cpu_features_used_ DESPUES
     // de cerrar main.  Solo en native_poo_ (AOT): el helper usa INLINE_ASM
     // (PURE_NATIVE) + el wiring no toca el stub _start.
     // AUTO multiversion (--float-isa auto): si main tiene ops VEC_*, renombrarlo
-    // a __vex_main_body + sintetizar un main que despacha por cpuid.  Debe correr
+    // a __vx_main_body + sintetizar un main que despacha por cpuid.  Debe correr
     // ANTES del wiring de inits (necesita que main exista como el wrapper para
-    // prepender alli el call __vex_auto_init).
+    // prepender alli el call __vx_auto_init).
     ensure_auto_multiversion(out_module);
 
     if (native_poo_ && (cpu_features_used_ || cpu_dispatch_used_)) {
-        // Asegurar que el global de features + el helper __vex_cpu_init existan
+        // Asegurar que el global de features + el helper __vx_cpu_init existan
         // (idempotente).  El cpuid corre primero: el dispatch lee el bitmask.
         (void)ensure_cpu_features_global();
         // Cada init se prepone SOLO si su mecanismo de dispatch se emitio
@@ -1756,8 +1756,8 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         const bool mc_disp = memcpy_helpers_emitted_;
         const bool sd_disp = strdisp_emitted_;
         // Localizar main y prepender las CALL a su bloque de entrada.  El
-        // ORDEN final de ejecucion debe ser:  __vex_cpu_init (cpuid) ->
-        // __vex_memcpy_init -> __vex_strdisp_init -> codigo del usuario.
+        // ORDEN final de ejecucion debe ser:  __vx_cpu_init (cpuid) ->
+        // __vx_memcpy_init -> __vx_strdisp_init -> codigo del usuario.
         // insert(begin()) prepende, asi que insertamos en orden inverso:
         // strdisp_init, luego memcpy_init, luego cpu_init (queda de primero).
         for (auto &f : out_module.functions) {
@@ -1769,7 +1769,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 call_sd.op = ir::IrOp::CALL;
                 call_sd.type = ir::IrType::VOID;
                 call_sd.dst = ir::IR_NO_VALUE;
-                call_sd.func_name = "__vex_strdisp_init";
+                call_sd.func_name = "__vx_strdisp_init";
                 call_sd.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_sd));
             }
@@ -1778,12 +1778,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 call_mc.op = ir::IrOp::CALL;
                 call_mc.type = ir::IrType::VOID;
                 call_mc.dst = ir::IR_NO_VALUE;
-                call_mc.func_name = "__vex_memcpy_init";
+                call_mc.func_name = "__vx_memcpy_init";
                 call_mc.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_mc));
             }
             if (auto_dispatch_emitted_) {
-                // AUTO: el dispatch del main (setea __vex_main_body$fp).  Debe
+                // AUTO: el dispatch del main (setea __vx_main_body$fp).  Debe
                 // ir DESPUES de cpu_init (lee el bitmask) y ANTES del CALLIND
                 // del wrapper (que lee el fp).  Se inserta aqui (antes que
                 // cpu_init) para quedar justo tras el en el orden final.
@@ -1791,7 +1791,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 call_auto.op = ir::IrOp::CALL;
                 call_auto.type = ir::IrType::VOID;
                 call_auto.dst = ir::IR_NO_VALUE;
-                call_auto.func_name = "__vex_auto_init";
+                call_auto.func_name = "__vx_auto_init";
                 call_auto.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_auto));
             }
@@ -1799,7 +1799,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             call_init.op = ir::IrOp::CALL;
             call_init.type = ir::IrType::VOID;
             call_init.dst = ir::IR_NO_VALUE;
-            call_init.func_name = "__vex_cpu_init";
+            call_init.func_name = "__vx_cpu_init";
             call_init.source_line = 0;
             ins.insert(ins.begin(), std::move(call_init));
             break;
@@ -1807,7 +1807,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     }
 
     // TLS callback (thread_local PE): si el modulo tiene thread_local con init
-    // != 0, sintetizar __vex_tls_init -- la funcion que el cargador de Windows
+    // != 0, sintetizar __vx_tls_init -- la funcion que el cargador de Windows
     // llama en cada attach de hilo (registrada en AddressOfCallBacks del
     // IMAGE_TLS_DIRECTORY).  Escribe la plantilla a la copia por-hilo (el
     // cargador no siempre la copia para el TLS de una .dll en un consumidor
@@ -1816,8 +1816,8 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // attach; N = thread_local con init != 0).
     if (native_poo_ && !tls_nonzero_inits_.empty()) {
         ir::IrFunction ti;
-        ti.name = "__vex_tls_init";
-        // Devuelve i64 1 (TRUE): __vex_tls_init es el ENTRY POINT (DllMain) de la
+        ti.name = "__vx_tls_init";
+        // Devuelve i64 1 (TRUE): __vx_tls_init es el ENTRY POINT (DllMain) de la
         // .dll -- el cargador lo llama en cada attach de hilo y aqui aplicamos la
         // plantilla por-hilo (ntdll no la copia para el TLS de una .dll sin un
         // entry que dispare su init).  DllMain debe devolver TRUE o la carga
@@ -1879,26 +1879,26 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     }
 
     // gc<T> opt-in: si el modulo usa gc<T> (CLASE, unique, shared o primitivo),
-    // generar __vexgc_init que (1) llama vex_gc_init -> construye el heap E
+    // generar __vxgc_init que (1) llama vx_gc_init -> construye el heap E
     // INSTALA el runner nativo de finalizadores, y (2) registra los stackmaps
-    // AOT (seccion .vexgc_smap) en el GC al arranque, inyectando un CALL a el al
+    // AOT (seccion .vxgc_smap) en el GC al arranque, inyectando un CALL a el al
     // INICIO de main -> el scan preciso ve los frames nativos y los gc<T> vivos
-    // sobreviven la coleccion.  El driver emite la seccion .vexgc_smap tras el
+    // sobreviven la coleccion.  El driver emite la seccion .vxgc_smap tras el
     // layout (con relocs a cada funcion).
     //
     // El gate no puede limitarse a `classes_used_gc_` (gc<Clase>): un
-    // gc<unique<T>>/gc<shared<T>> NO es una clase pero SI aloca via vex_gc_* y
-    // registra un finalizador -- sin vex_gc_init su runner no se instala y el
+    // gc<unique<T>>/gc<shared<T>> NO es una clase pero SI aloca via vx_gc_* y
+    // registra un finalizador -- sin vx_gc_init su runner no se instala y el
     // finalizador se descarta (deleter/dtor no corre -> FUGA en AOT, bugs
     // 248).  Detectamos el uso REAL de gc<T> escaneando si alguna funcion
-    // emitida referencia un simbolo `vex_gc_*` (uniforme para clase/unique/
+    // emitida referencia un simbolo `vx_gc_*` (uniforme para clase/unique/
     // shared/primitivo).
     bool module_uses_gc = !classes_used_gc_.empty() || module_has_gc_finalizers_;
     if (native_poo_ && !module_uses_gc) {
         for (const auto &f : out_module.functions) {
             for (const auto &b : f.blocks) {
                 for (const auto &ins : b.instrs)
-                    if (ins.func_name.rfind("vex_gc_", 0) == 0) {
+                    if (ins.func_name.rfind("vx_gc_", 0) == 0) {
                         module_uses_gc = true;
                         break;
                     }
@@ -1909,10 +1909,10 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     }
     if (native_poo_ && module_uses_gc) {
         ir::IrFunction gi;
-        gi.name = "__vexgc_init";
+        gi.name = "__vxgc_init";
         gi.ret_type = ir::IrType::VOID;
         const ir::IrBlockId e = gi.new_block("entry");
-        // CALL vex_gc_init(): construye el heap global E INSTALA el runner
+        // CALL vx_gc_init(): construye el heap global E INSTALA el runner
         // nativo de finalizadores (gc_finalizer_run_native).  Debe correr antes
         // del primer alloc/register_finalizer para que los finalizadores de
         // objetos escapados se ejecuten (deleter/dtor nativo) al colectar/exit.
@@ -1921,11 +1921,11 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             ci.op = ir::IrOp::CALL;
             ci.type = ir::IrType::VOID;
             ci.dst = ir::IR_NO_VALUE;
-            ci.func_name = "vex_gc_init";
+            ci.func_name = "vx_gc_init";
             ci.is_call_site = true;
             gi.append(e, std::move(ci));
         }
-        // %start = section_start(".vexgc_smap")  (PTR)
+        // %start = section_start(".vxgc_smap")  (PTR)
         const ir::IrValueId v_start = gi.new_value(ir::IrType::PTR);
         gi.values[v_start].is_host_ptr = true;
         {
@@ -1933,11 +1933,11 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             r.op = ir::IrOp::SECTION_REF;
             r.type = ir::IrType::PTR;
             r.dst = v_start;
-            r.func_name = ".vexgc_smap";
+            r.func_name = ".vxgc_smap";
             r.imm = 0; // START
             gi.append(e, std::move(r));
         }
-        // call vex_gc_register_aot_stackmaps(%start)  -- el tamanño total va
+        // call vx_gc_register_aot_stackmaps(%start)  -- el tamanño total va
         // EMBEBIDO en el header de la seccion (section_size seria una reloc SIZE
         // no soportada en .obj/.o; section_start es una ADDR normal).
         {
@@ -1945,7 +1945,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             c.op = ir::IrOp::CALL;
             c.type = ir::IrType::VOID;
             c.dst = ir::IR_NO_VALUE;
-            c.func_name = "vex_gc_register_aot_stackmaps";
+            c.func_name = "vx_gc_register_aot_stackmaps";
             c.operands = {v_start};
             gi.append(e, std::move(c));
         }
@@ -1956,7 +1956,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             gi.append(e, std::move(r));
         }
         out_module.add_function(std::move(gi));
-        // Inyectar CALL __vexgc_init al inicio de main (antes de todo, incl. los
+        // Inyectar CALL __vxgc_init al inicio de main (antes de todo, incl. los
         // inits de cpu): el registro debe correr antes del primer gc<T> alloc.
         for (auto &f : out_module.functions) {
             if (f.name != "main" || f.blocks.empty()) continue;
@@ -1964,12 +1964,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             cg.op = ir::IrOp::CALL;
             cg.type = ir::IrType::VOID;
             cg.dst = ir::IR_NO_VALUE;
-            cg.func_name = "__vexgc_init";
+            cg.func_name = "__vxgc_init";
             f.blocks[0].instrs.insert(f.blocks[0].instrs.begin(),
                                       std::move(cg));
             break;
         }
-        // Shutdown-time: inyectar CALL vex_gc_finalize_all ANTES de cada RET de
+        // Shutdown-time: inyectar CALL vx_gc_finalize_all ANTES de cada RET de
         // main.  Garantiza cero fuga del recurso interno de objetos gc<T> con
         // finalizador que ESCAPARON su scope y el sweep no colecto todavia (el
         // finalizador corre su deleter/dtor nativo antes del exit).  El valor de
@@ -1986,7 +1986,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         cf.op = ir::IrOp::CALL;
                         cf.type = ir::IrType::VOID;
                         cf.dst = ir::IR_NO_VALUE;
-                        cf.func_name = "vex_gc_finalize_all";
+                        cf.func_name = "vx_gc_finalize_all";
                         cf.is_call_site = true;
                         blk.instrs.insert(blk.instrs.begin() + i,
                                           std::move(cf));
@@ -3004,7 +3004,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
     }
 
-    // Instrumentacion: vex_trace:enter al inicio.  Solo para funciones
+    // Instrumentacion: vx_trace:enter al inicio.  Solo para funciones
     // de usuario (saltamos __module_init, __new_*, __async_*, __lambda_*,
     // __spawn_* y wrappers internos).  El bytecode VM, JIT y ports
     // heredan la instrumentacion porque vive en el IR.
@@ -3041,7 +3041,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // del RET implicito.  Garantiza liberacion incluso si la
         // funcion cae al final sin un return explicito.
         emit_cleanups_all();
-        // Instrumentacion: vex_trace:exit antes del RET implicito.
+        // Instrumentacion: vx_trace:exit antes del RET implicito.
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
             fd->name != "__module_init" &&
             fd->name.compare(0, 6, "__new_") != 0 &&
@@ -3401,7 +3401,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
 
     // gc<T> opt-in: si el var-decl es `gc<Class>` (sem_type.gc_managed) y el
     // init es `new Class(...)`, marcar el NewExpr para que el lowering despache
-    // a __new_<Class>_gc (vex_gc_alloc) y registrar la clase para generar ese
+    // a __new_<Class>_gc (vx_gc_alloc) y registrar la clase para generar ese
     // helper.  El valor es un host_ptr GC-managed (marcado is_gc_object); NO se
     // registra cleanup RAII (el GC colecta).
     if (native_poo_ && sem_type.gc_managed && vd->init &&
@@ -4654,7 +4654,7 @@ bind_and_cleanup:
     // Aplica ESCAPE o NO-escape indistintamente (el GC colecta cada objeto
     // exactamente una vez -> el dtor corre exactamente una vez; no hay cleanup
     // determinista que pudiera duplicarlo).  interp/JIT via gcfinalc; AOT via
-    // CALL vex_gc_register_finalizer (emit_gc_set_finalizer bifurca por target).
+    // CALL vx_gc_register_finalizer (emit_gc_set_finalizer bifurca por target).
     if (v != ir::IR_NO_VALUE &&
         sem_type.kind == PrimitiveKind::CLASS && sem_type.gc_managed &&
         vd->init && vd->init->kind == ast::NodeKind::NewExpr) {
@@ -5033,7 +5033,7 @@ bind_and_cleanup:
         // recurso.  Si ademas corriera el finalizador al `gc_finalize_all` del
         // exit, el bloque de control se liberaria DOS VECES (RAW_FREE del
         // cleanup + free del finalizador; ademas con allocadores distintos:
-        // slab vex_mem vs libc) -> corrupcion de heap (bug 245,
+        // slab vx_mem vs libc) -> corrupcion de heap (bug 245,
         // gc<shared<unique<i64>>> anidado).  Desregistramos el finalizador aqui
         // para que finalize_all lo salte (anti-doble-free, el modelo que la doc
         // de emit_gc_set_finalizer ya describia).  Solo en native_poo_ (AOT):
@@ -5044,7 +5044,7 @@ bind_and_cleanup:
             ur.op = ir::IrOp::CALL;
             ur.type = ir::IrType::VOID;
             ur.dst = ir::IR_NO_VALUE;
-            ur.func_name = "vex_gc_unregister_finalizer";
+            ur.func_name = "vx_gc_unregister_finalizer";
             ur.operands = {v};
             ur.is_call_site = true;
             ur.source_line = vd->loc.line;
@@ -5323,7 +5323,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
 
 // Nota: la auto-vectorizacion de bucles (try_lower_memcpy_idiom / _for,
 // mc_match_copy_assign, mc_emit_copy) vive en src/vx/vectorize.cpp para no
-// inflar este TU; son metodos de Lowering declarados en vex/lowering.h.
+// inflar este TU; son metodos de Lowering declarados en vx/lowering.h.
 
 void Lowering::lower_while(ast::WhileStmt *s) {
     if (!s) return;
@@ -6044,7 +6044,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             // retbuf del caller.  No hace falta copia final; saltamos
             // al RET directamente.
             emit_cleanups_all();
-            // Instrumentacion: emitir vex_trace:leave antes del RET
+            // Instrumentacion: emitir vx_trace:leave antes del RET
             // tambien en este path SRET (mismo filtro que lower_return
             // del path normal).  Sin esto, fns que retornan
             // unique<T>/shared<T> NO cierran el trace y producen un
@@ -6179,7 +6179,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         // se completaron arriba; los cleanups solo modifican estado
         // global (mailboxes, monitores) sin tocar el retbuf.
         emit_cleanups_all();
-        // Instrumentacion: emitir vex_trace:leave antes del RET sret.
+        // Instrumentacion: emitir vx_trace:leave antes del RET sret.
         // Sin esto, fns que retornan Optional<T>/Result<V,E> NO cierran
         // el trace y producen un arbol descuadrado en la salida.
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
@@ -6288,12 +6288,12 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         // raw_asm-elim 2026-05-28: usar IrOp::FULFILL_HLT directo.
         // Fusion atomica fulfill+hlt en 1 instr VM, mismo bytecode.
         // AOT (native_poo_): el helper @Async es una tarea del scheduler coop
-        // -> CALL __vex_fulfill(fut, val) + RET (la tarea retorna al pump, no
+        // -> CALL __vx_fulfill(fut, val) + RET (la tarea retorna al pump, no
         // hay HLT del scheduler de la VM).
         if (native_poo_) {
             ir::IrInstr fu{};
             fu.op = ir::IrOp::CALL;
-            fu.func_name = "__vex_fulfill";
+            fu.func_name = "__vx_fulfill";
             fu.type = ir::IrType::VOID;
             fu.dst = ir::IR_NO_VALUE;
             fu.operands = {async_fut_id_, v_payload};
@@ -6344,7 +6344,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
     // El SSA value v_ret sobrevive: el regalloc garantiza que se mantenga
     // vivo hasta el RET (o se reescriba antes si conviene).
     emit_cleanups_all();
-    // Instrumentacion: vex_trace:exit antes del RET explicito.  Skipea
+    // Instrumentacion: vx_trace:exit antes del RET explicito.  Skipea
     // helpers internos (mismo filtro que en lower_function).
     if (instrument_mode_ != "none" && instrument_mode_ != "" &&
         fn_ != nullptr) {
@@ -6370,14 +6370,14 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
 }
 
 // =========================================================================
-//  Instrumentacion (vex_trace:enter / vex_trace:exit)
+//  Instrumentacion (vx_trace:enter / vx_trace:exit)
 // =========================================================================
 //
-// Como el lowering emite CALLN a un nombre @c "vex_trace:enter" /
-// @c "vex_trace:exit", todos los backends (bytecode VM, JIT, port C,
+// Como el lowering emite CALLN a un nombre @c "vx_trace:enter" /
+// @c "vx_trace:exit", todos los backends (bytecode VM, JIT, port C,
 // futuros) heredan la instrumentacion automaticamente.  Cada backend
 // resuelve el simbolo a su forma:
-//   - bytecode VM: CALLN se resuelve via stdlib/native/runtime/vex_trace.dll
+//   - bytecode VM: CALLN se resuelve via stdlib/native/runtime/vx_trace.dll
 //   - JIT: idem (mismo CALLN dispatch)
 //   - port C: emit_native_call lo bridgea a fprintf stderr (default)
 //             o el usuario provee su propia implementacion.
@@ -6404,7 +6404,7 @@ void Lowering::emit_instrument_enter(const std::string &fn_name,
         fn_->append(current_block_, std::move(sa));
     }
 
-    // 3. CALLN void a "vex_trace:enter"(proc_ptr, name_ptr).
+    // 3. CALLN void a "vx_trace:enter"(proc_ptr, name_ptr).
     //    El proc_ptr lo obtenemos via @c getproc; el plugin nativo
     //    lo usa para @c vm_read_bytes del nombre.  En port C el
     //    bridge ignora el proc_ptr.
@@ -6416,14 +6416,14 @@ void Lowering::emit_instrument_enter(const std::string &fn_name,
     // El @c lib_path incluye el subdir bajo @c stdlib/native/ para
     // que el loader pueda resolver la DLL via path relativo al
     // @c vm.exe (igual convencion que vesta_io / vesta_math).
-    call.func_name = "stdlib/native/runtime/vex_trace:enter";
+    call.func_name = "stdlib/native/runtime/vx_trace:enter";
     call.operands = {v_proc, v_name};
     call.source_line = line;
     fn_->append(current_block_, std::move(call));
 
     // 4. Registrar el import nativo para que el linker .velb
     //    incluya la libreria.
-    out_mod_->register_native_import("stdlib/native/runtime/vex_trace",
+    out_mod_->register_native_import("stdlib/native/runtime/vx_trace",
                                      "enter");
 }
 
@@ -6458,12 +6458,12 @@ void Lowering::emit_instrument_exit(const std::string &fn_name,
     call.dst = ir::IR_NO_VALUE;
     // Usamos @c leave en lugar de @c exit para evitar colision con la
     // libc @c exit() cuando el port C emite @c extern declarations.
-    call.func_name = "stdlib/native/runtime/vex_trace:leave";
+    call.func_name = "stdlib/native/runtime/vx_trace:leave";
     call.operands = {v_proc, v_name, v_val};
     call.source_line = line;
     fn_->append(current_block_, std::move(call));
 
-    out_mod_->register_native_import("stdlib/native/runtime/vex_trace",
+    out_mod_->register_native_import("stdlib/native/runtime/vx_trace",
                                      "leave");
 }
 
@@ -6866,16 +6866,16 @@ void Lowering::lower_try(ast::TryStmt *s) {
     // ---------------------------------------------------------------
     // AOT/Embed (native_poo_): modelo setjmp/longjmp (sin VM runtime).
     // En vez de N TRYENTER + br body, emitimos UN frame catch-all:
-    //   buf = ALLOCA(96); __vex_push_frame(buf, 0); r = __vex_setjmp(buf);
+    //   buf = ALLOCA(96); __vx_push_frame(buf, 0); r = __vx_setjmp(buf);
     //   br_cond r ? handler[0] : body   (r!=0 = el longjmp reanudo).
     // v1: type matching = catch-all (el throw no transporta tipo aun);
-    // multi-catch enruta todo a handler[0].  Las funciones __vex_* viven
-    // en stdlib/vex/vex_exc.vex (enlazado en el .exe AOT).
+    // multi-catch enruta todo a handler[0].  Las funciones __vx_* viven
+    // en stdlib/vx/vx_exc.vx (enlazado en el .exe AOT).
     // ---------------------------------------------------------------
     if (native_poo_) {
         // buf en host-stack: 96B cubre el peor caso (Win64 buf 80 +
         // prev 8 + type 8); SysV/x86-32 usan menos.  El layout interno
-        // (offsets prev/type) lo conoce vex_exc.vex via comptime const.
+        // (offsets prev/type) lo conoce vx_exc.vx via comptime const.
         const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_buf].is_host_ptr = true;
         {
@@ -6895,7 +6895,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             cp.op = ir::IrOp::CALL;
             cp.type = ir::IrType::VOID;
             cp.dst = ir::IR_NO_VALUE;
-            cp.func_name = "__vex_push_frame";
+            cp.func_name = "__vx_push_frame";
             cp.operands = {v_buf, v_type};
             cp.source_line = s->loc.line;
             fn_->append(current_block_, std::move(cp));
@@ -6906,7 +6906,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             cs.op = ir::IrOp::CALL;
             cs.type = ir::IrType::I64;
             cs.dst = v_r;
-            cs.func_name = "__vex_setjmp";
+            cs.func_name = "__vx_setjmp";
             cs.operands = {v_buf};
             cs.source_line = s->loc.line;
             fn_->append(current_block_, std::move(cs));
@@ -6956,8 +6956,8 @@ void Lowering::lower_try(ast::TryStmt *s) {
 
         // dispatch_bb: pop del frame consumido + leer el type-id.
         current_block_ = dispatch_bb;
-        emit_void_call(dispatch_bb, "__vex_pop_frame");
-        const ir::IrValueId v_t = emit_i64_call(dispatch_bb, "__vex_get_type");
+        emit_void_call(dispatch_bb, "__vx_pop_frame");
+        const ir::IrValueId v_t = emit_i64_call(dispatch_bb, "__vx_get_type");
         // Cadena de chequeos: por cada catch, si su tipo es desconocido
         // (catch-all, builtin como FatalError, o base no registrada) matchea
         // SIEMPRE; si es una clase con intervalo, matchea si lo<=t<=hi (el
@@ -7035,14 +7035,14 @@ void Lowering::lower_try(ast::TryStmt *s) {
         }
 
         // rethrow_bb: ningun catch matcheo -> re-lanzar al frame externo.
-        // El frame ya se popeo en dispatch_bb, asi que el __vex_throw del
+        // El frame ya se popeo en dispatch_bb, asi que el __vx_throw del
         // THROW hace longjmp al handler de fuera (propagacion).
         current_block_ = rethrow_bb;
         {
             const ir::IrValueId v_v =
-                emit_i64_call(rethrow_bb, "__vex_get_value");
+                emit_i64_call(rethrow_bb, "__vx_get_value");
             const ir::IrValueId v_ty =
-                emit_i64_call(rethrow_bb, "__vex_get_type");
+                emit_i64_call(rethrow_bb, "__vx_get_type");
             ir::IrInstr th{};
             th.op = ir::IrOp::THROW;
             th.type = ir::IrType::VOID;
@@ -7176,7 +7176,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
             cp.op = ir::IrOp::CALL;
             cp.type = ir::IrType::VOID;
             cp.dst = ir::IR_NO_VALUE;
-            cp.func_name = "__vex_pop_frame";
+            cp.func_name = "__vx_pop_frame";
             cp.source_line = s->loc.line;
             fn_->append(current_block_, std::move(cp));
         } else {
@@ -7273,7 +7273,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
         // (LOAD desde stack, etc.) puede clobrearlo.
         if (!cc.var_name.empty()) {
             if (native_poo_) {
-                // AOT: el valor lanzado lo devuelve __vex_get_value().
+                // AOT: el valor lanzado lo devuelve __vx_get_value().
                 // Si el catch declara una clase, el valor es un ptr host
                 // (throw new E()); si no, un i64 (throw <valor>).
                 const bool exc_is_ptr = !cc.exc_class_name.empty();
@@ -7284,7 +7284,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
                 cg.op = ir::IrOp::CALL;
                 cg.type = exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64;
                 cg.dst = v_exc;
-                cg.func_name = "__vex_get_value";
+                cg.func_name = "__vx_get_value";
                 cg.source_line = cc.loc.line;
                 fn_->append(current_block_, std::move(cg));
                 bind(cc.var_name, v_exc);
@@ -7893,14 +7893,14 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
         case CleanupAction::Kind::SYNC_EXIT: {
             // Sprint 6.C: tryleave + monexit como IR ops puros.
             // AOT (native_poo_): el frame de excepcion es setjmp/longjmp ->
-            // se popea con __vex_pop_frame (no TRYLEAVE op, que el backend
-            // nativo no soporta); el monitor se libera con __vex_monexit.
+            // se popea con __vx_pop_frame (no TRYLEAVE op, que el backend
+            // nativo no soporta); el monitor se libera con __vx_monexit.
             if (native_poo_) {
                 ir::IrInstr cp{};
                 cp.op = ir::IrOp::CALL;
                 cp.type = ir::IrType::VOID;
                 cp.dst = ir::IR_NO_VALUE;
-                cp.func_name = "__vex_pop_frame";
+                cp.func_name = "__vx_pop_frame";
                 cp.source_line = it->source_line;
                 fn_->append(current_block_, std::move(cp));
             } else {
@@ -8686,13 +8686,13 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     // AOT/Embed (native_poo_): modelo setjmp/longjmp (sin VM runtime ni
     // ops TRYENTER/TRYLEAVE/RETHROW, que el backend nativo no soporta).
     //   monenter(obj)
-    //   buf = ALLOCA(96); __vex_push_frame(buf, 0); r = __vex_setjmp(buf)
+    //   buf = ALLOCA(96); __vx_push_frame(buf, 0); r = __vx_setjmp(buf)
     //   br r ? handler : body
-    //   body... (normal) -> __vex_pop_frame + monexit(obj) + br merge
-    //   handler (longjmp) -> __vex_pop_frame + monexit(obj) + rethrow
+    //   body... (normal) -> __vx_pop_frame + monexit(obj) + br merge
+    //   handler (longjmp) -> __vx_pop_frame + monexit(obj) + rethrow
     //   return temprano    -> cleanup SYNC_EXIT = pop_frame + monexit
-    // El monitor se libera SIEMPRE (los 3 caminos).  __vex_* viven en
-    // vex_exc.vex; __vex_monenter/monexit en vex_sync.vex (auto-bundle).
+    // El monitor se libera SIEMPRE (los 3 caminos).  __vx_* viven en
+    // vx_exc.vx; __vx_monenter/monexit en vx_sync.vx (auto-bundle).
     // -----------------------------------------------------------------
     if (native_poo_) {
         const ir::IrBlockId nbody = fn_->new_block("sync_body");
@@ -8730,14 +8730,14 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         }
         const ir::IrValueId v_type0 =
             emit_const(ir::IrType::I64, 0, s->loc.line);
-        vcall("__vex_push_frame", {v_buf, v_type0});
+        vcall("__vx_push_frame", {v_buf, v_type0});
         const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
         {
             ir::IrInstr cs{};
             cs.op = ir::IrOp::CALL;
             cs.type = ir::IrType::I64;
             cs.dst = v_r;
-            cs.func_name = "__vex_setjmp";
+            cs.func_name = "__vx_setjmp";
             cs.operands = {v_buf};
             cs.source_line = s->loc.line;
             fn_->append(current_block_, std::move(cs));
@@ -8773,7 +8773,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
 
         // Salida normal del body: pop_frame + monexit + br merge.
         if (!block_terminated_) {
-            vcall("__vex_pop_frame");
+            vcall("__vx_pop_frame");
             emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
             ir::IrInstr brm{};
             brm.op = ir::IrOp::BR;
@@ -8788,7 +8788,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         // Handler (longjmp reanudo): pop_frame + monexit + rethrow.
         current_block_ = nhandler;
         block_terminated_ = false;
-        vcall("__vex_pop_frame");
+        vcall("__vx_pop_frame");
         emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
         {
             // rethrow nativo: leer value+type del estado de excepcion y
@@ -8800,7 +8800,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
                 c.op = ir::IrOp::CALL;
                 c.type = ir::IrType::I64;
                 c.dst = v_v;
-                c.func_name = "__vex_get_value";
+                c.func_name = "__vx_get_value";
                 c.source_line = s->loc.line;
                 fn_->append(current_block_, std::move(c));
             }
@@ -8810,7 +8810,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
                 c.op = ir::IrOp::CALL;
                 c.type = ir::IrType::I64;
                 c.dst = v_ty;
-                c.func_name = "__vex_get_type";
+                c.func_name = "__vx_get_type";
                 c.source_line = s->loc.line;
                 fn_->append(current_block_, std::move(c));
             }
@@ -10787,8 +10787,8 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     // regs al child antes de make_ready.  Aplica para Auto policy.
     const auto &caps = spawn_captured_ssa_values_;
 
-    // AOT/bare (native_poo_): spawn = hilo 1:1 del SO via CALL __vex_spawn
-    // (CreateThread en Win, clone en Linux), bundle-ado desde vex_thread.vex.
+    // AOT/bare (native_poo_): spawn = hilo 1:1 del SO via CALL __vx_spawn
+    // (CreateThread en Win, clone en Linux), bundle-ado desde vx_thread.vx.
     // El hint de `here`/`on(N)` se ignora (sin schedulers; cada spawn es un
     // hilo).  Las capturas (SPAWN_ARGS) llegan en la Fase 2; por ahora solo
     // el caso sin capturas (las capturas caen al rechazo de aot_analyze).
@@ -10798,7 +10798,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
         c.op = ir::IrOp::CALL;
         c.type = ir::IrType::I64;
         c.dst = v_pid;
-        c.func_name = "__vex_spawn";
+        c.func_name = "__vx_spawn";
         c.operands = {v_pc};
         c.is_call_site = true;
         c.source_line = e->loc.line;
@@ -11109,10 +11109,10 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // 2a. fut = future_alloc() via IR op FUTURE.
     const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
     {
-        // AOT (native_poo_): CALL nativo __vex_future_new (scheduler coop).
+        // AOT (native_poo_): CALL nativo __vx_future_new (scheduler coop).
         ir::IrInstr fu{};
         fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
-        if (native_poo_) fu.func_name = "__vex_future_new";
+        if (native_poo_) fu.func_name = "__vx_future_new";
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true;
@@ -11179,7 +11179,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // AOT (native_poo_): scheduler cooperativo.  Args por PUNTERO (sin
         // limite de aridad ni bug de stack-args de Win64): construimos un
         // argbuf en la pila con [fut, args...], y llamamos
-        //   __vex_spawn_argv(helper, argc, &argbuf[0])
+        //   __vx_spawn_argv(helper, argc, &argbuf[0])
         // que copia los args al slot de la tarea.  Al despacharla, pump castea
         // el body a `fn(...)` y lo llama (CALLCLOSURE) con los args.
         std::vector<ir::IrValueId> real_args;
@@ -11226,7 +11226,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             emit_const(ir::IrType::I64, argc, fd->loc.line);
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALL;
-        ins.func_name = "__vex_spawn_argv";
+        ins.func_name = "__vx_spawn_argv";
         ins.type = ir::IrType::I64;
         ins.dst = v_child;
         ins.operands = {v_pc, v_argc, v_buf};
@@ -11292,7 +11292,7 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
     // AOT (native_poo): el throw transporta el type-id (intervalo lo) del tipo
     // ESTATICO lanzado, para que el catch despache por tipo (subtipo via el
     // intervalo).  operands[1] = CONST(lo).  El backend HOST_LEAF lo pasa como
-    // 2o arg a __vex_throw(value, type_id).  En el path VM se ignora.
+    // 2o arg a __vx_throw(value, type_id).  En el path VM se ignora.
     if (native_poo_) {
         uint32_t lo = 0;
         const std::string &cn = s->value->result_type.struct_name;
@@ -12436,7 +12436,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                           e->loc.line);
     }
 
-    // Phase M.L7: globals const IMPORTADAS de otro modulo via .vexi.
+    // Phase M.L7: globals const IMPORTADAS de otro modulo via .vxi.
     // El TypeChecker las registro con su valor literal embedded en
     // @c imported_global_consts_; emitimos CONST inline igual que
     // las locales (cero overhead).
@@ -13697,7 +13697,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             return v_res;
         }
         // Vesta Embed Inc 4: comparacion native de strings value-type via
-        // helper __vex_strcmp (lexicografica, -1/0/1).  Cubre == != < > <= >=.
+        // helper __vx_strcmp (lexicografica, -1/0/1).  Cubre == != < > <= >=.
         // El resultado del strcmp se mapea a BOOL con la comparacion entera
         // correspondiente.
         if (native_poo_ &&
@@ -13772,7 +13772,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             if (ra.ptr == ir::IR_NO_VALUE || rb.ptr == ir::IR_NO_VALUE)
                 return ir::IR_NO_VALUE;
             // CPU dispatch Inc 5a: strcmp(pa, la, pb, lb) -> i64 (-1/0/1)
-            // DESPACHADO por tabla de punteros: `call [__vex_strcmp_fp]`.  El
+            // DESPACHADO por tabla de punteros: `call [__vx_strcmp_fp]`.  El
             // fp apunta al baseline o al @HelperOverride(strcmp) del usuario.
             const ir::IrValueId v_cmp =
                 emit_strcmp_dispatched(ra.ptr, ra.len, rb.ptr, rb.len,
@@ -14472,13 +14472,13 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // i64 raw; el frontend hace cast/bitcast al tipo logico T).
         const ir::IrValueId v_raw = fn_->new_value(ir::IrType::I64);
         {
-            // AOT (native_poo_): CALL nativo __vex_await(fut) -> i64 raw.  En
+            // AOT (native_poo_): CALL nativo __vx_await(fut) -> i64 raw.  En
             // el scheduler cooperativo, si el future esta PENDING y estamos en
             // main, bombea la cola hasta que se resuelva (run-to-completion);
             // dentro de una tarea, suspende (fibra, fase 3).
             ir::IrInstr aw{};
             aw.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::AWAIT;
-            if (native_poo_) aw.func_name = "__vex_await";
+            if (native_poo_) aw.func_name = "__vx_await";
             aw.type = ir::IrType::I64;
             aw.dst = v_raw;
             aw.operands = {v};
@@ -15719,7 +15719,7 @@ skip_comptime_eval_for_macro_to_macro:
     // Variadicos: empaquetar los args TRAILING (a partir del param fijo N-1)
     // en un array de pila host y reemplazarlos por (ptr, count).  El callee
     // recibe `T*` + el count (leido con vacount()).  Mismo patron que el argv
-    // de vex_async, ahora como feature del lenguaje.
+    // de vx_async, ahora como feature del lenguaje.
     if (callee_sig && callee_sig->is_variadic && !callee_is_sret &&
         arg_ids.size() >= callee_sig->param_types.size() - 1) {
         const size_t fixed = callee_sig->param_types.size() - 1;
@@ -17513,7 +17513,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // -----------------------------------------------------------------
     // Sprint B.1: as_native_callback(fn) -> i64 (host_ptr al thunk).
     //
-    // Lowering: emite CALLN a vesta_runtime:vex_get_native_thunk con:
+    // Lowering: emite CALLN a vesta_runtime:vx_get_native_thunk con:
     //   r1 = @Absolute("code.<fn_name>")  (PC virtual de la fn Vesta)
     //   r2 = argc (numero de parametros que la fn Vesta recibe)
     // El runtime genera (o reusa) un thunk x86-64 callable con cc C
@@ -17539,16 +17539,16 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         /* v_argc = CONST i64 */
         ir::IrValueId v_argc =
             emit_const(ir::IrType::I64, (uint64_t)argc, src_line);
-        /* CALLN @Method("vesta_runtime:vex_get_native_thunk", v_fn_pc, v_argc).
+        /* CALLN @Method("vesta_runtime:vx_get_native_thunk", v_fn_pc, v_argc).
          */
         out_mod_->register_native_import("vesta_runtime",
-                                         "vex_get_native_thunk");
+                                         "vx_get_native_thunk");
         ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
         ir::IrInstr cl{};
         cl.op = ir::IrOp::CALLN;
         cl.type = ir::IrType::I64;
         cl.dst = v_dst;
-        cl.func_name = "vesta_runtime:vex_get_native_thunk";
+        cl.func_name = "vesta_runtime:vx_get_native_thunk";
         cl.operands = {v_fn_pc, v_argc};
         cl.source_line = src_line;
         fn_->append(current_block_, std::move(cl));
@@ -18510,7 +18510,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_unique_with = (name == "unique_with");
     const bool is_shared_with = (name == "shared_with");
     // bug6 - gc_box(value): aloja el valor en un bloque GC-managed
-    // (vex_gc_alloc_ptr / GC_ALLOCP) y devuelve el host_ptr al box.
+    // (vx_gc_alloc_ptr / GC_ALLOCP) y devuelve el host_ptr al box.
     const bool is_gc_box = (name == "gc_box");
     // Borrow builtins: lend/lend_mut son operaciones zero-overhead
     // que devuelven el ptr_of del owner (slot+0).  El borrow checker
@@ -18663,9 +18663,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 
     // emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
     // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vesta con
-    // ese nombre (p.ej. `void __vex_write(u8* b, u64 n) {...}`) se llama a la
+    // ese nombre (p.ej. `void __vx_write(u8* b, u64 n) {...}`) se llama a la
     // SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
-    // si no, se usa el simbolo C por defecto (CALLN vex_bare_io:<prim>, lo
+    // si no, se usa el simbolo C por defecto (CALLN vx_bare_io:<prim>, lo
     // aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
     // programables en el propio lenguaje sin import ni libreria std.
     auto emit_io_prim = [&](const std::string &prim,
@@ -18681,9 +18681,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.op = ir::IrOp::CALL;
             ins.func_name = prim;
         } else {
-            out_mod_->register_native_import("vex_bare_io", prim);
+            out_mod_->register_native_import("vx_bare_io", prim);
             ins.op = ir::IrOp::CALLN;
-            ins.func_name = "vex_bare_io:" + prim;
+            ins.func_name = "vx_bare_io:" + prim;
         }
         fn_->append(current_block_, std::move(ins));
     };
@@ -18704,10 +18704,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         fn_->append(current_block_, std::move(is));
         const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
         if (native_poo_) {
-            // AOT/bare: sin proc -> escribir los bytes via __vex_write (el
+            // AOT/bare: sin proc -> escribir los bytes via __vx_write (el
             // usuario puede redefinirlo en Vesta).  v_str es host_ptr.
             fn_->values[v_str].is_host_ptr = true;
-            emit_io_prim("__vex_write", {v_str, v_len}, line);
+            emit_io_prim("__vx_write", {v_str, v_len}, line);
             return;
         }
         const ir::IrValueId v_proc = emit_getproc(line);
@@ -18724,7 +18724,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 
     auto emit_print_newline = [&](uint32_t line) {
         if (native_poo_) {
-            emit_print_string_literal("\n", line); // via __vex_write
+            emit_print_string_literal("\n", line); // via __vx_write
             return;
         }
         out_mod_->register_native_import(lib, "vio_print_newline");
@@ -18934,7 +18934,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 
         // -------------------------------------------------------------
         // AOT/bare (native_poo_): formateo de un valor de runtime SIN proc.
-        // Despacha a los helpers __vex_print_* (libc, ABI plana).  El usuario
+        // Despacha a los helpers __vx_print_* (libc, ABI plana).  El usuario
         // puede redefinir cualquiera.  Cubre escalares (dec/uint/hex/bin/oct/
         // ptr/bool/char) + char* (cstr).  Float y string value-type se
         // difieren con un warning claro.  El format-spec ${x:kind} elige el
@@ -18942,7 +18942,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // -------------------------------------------------------------
         if (native_poo_) {
             if (t.kind == PrimitiveKind::F32 || t.kind == PrimitiveKind::F64) {
-                // AOT: __vex_print_float(f64) del runtime de I/O (formateo %g
+                // AOT: __vx_print_float(f64) del runtime de I/O (formateo %g
                 // aproximado en Vesta puro).  F32 se promociona a F64 antes.
                 ir::IrValueId vf = v;
                 if (t.kind == PrimitiveKind::F32) {
@@ -18956,13 +18956,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     fn_->append(current_block_, std::move(cv));
                     vf = vp;
                 }
-                emit_io_prim("__vex_print_float", {vf}, ex->loc.line);
+                emit_io_prim("__vx_print_float", {vf}, ex->loc.line);
                 return;
             }
             if (t.kind == PrimitiveKind::STRING) {
                 // string value-type (Embed/AOT): (ptr,len) flag-aware (SSO) y
-                // escritura via __vex_write (PURE_NATIVE).  El format-spec
-                // ${s:>W} aplica padding via __vex_pad (fill_cp, count).
+                // escritura via __vx_write (PURE_NATIVE).  El format-spec
+                // ${s:>W} aplica padding via __vx_pad (fill_cp, count).
                 ir::IrValueId sptr =
                     emit_native_str_data_ptr(v, ex->loc.line);
                 ir::IrValueId slen = emit_native_str_len(v, ex->loc.line);
@@ -19006,13 +19006,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 auto emit_pad = [&](ir::IrValueId v_count) {
                     ir::IrValueId v_fill = emit_const(
                         ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
-                    emit_io_prim("__vex_pad", {v_fill, v_count}, ex->loc.line);
+                    emit_io_prim("__vx_pad", {v_fill, v_count}, ex->loc.line);
                 };
                 ir::IrValueId v_pad = ir::IR_NO_VALUE;
                 if (need_pad) v_pad = compute_pad();
                 if (need_pad && fs.align == FmtSpec::Align::RIGHT)
                     emit_pad(v_pad);
-                emit_io_prim("__vex_write", {sptr, slen}, ex->loc.line);
+                emit_io_prim("__vx_write", {sptr, slen}, ex->loc.line);
                 if (need_pad && fs.align == FmtSpec::Align::LEFT)
                     emit_pad(v_pad);
                 return;
@@ -19030,32 +19030,32 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             std::string sym;
             bool as_signed_dec = false;
             if (fs.kind == FmtSpec::Kind::HEX)
-                sym = "__vex_print_hex";
+                sym = "__vx_print_hex";
             else if (fs.kind == FmtSpec::Kind::BIN)
-                sym = "__vex_print_bin";
+                sym = "__vx_print_bin";
             else if (fs.kind == FmtSpec::Kind::OCT)
-                sym = "__vex_print_oct";
+                sym = "__vx_print_oct";
             else if (fs.kind == FmtSpec::Kind::PTR)
-                sym = "__vex_print_ptr";
+                sym = "__vx_print_ptr";
             else if (fs.kind == FmtSpec::Kind::BOOL)
-                sym = "__vex_print_bool";
+                sym = "__vx_print_bool";
             else if (fs.kind == FmtSpec::Kind::CHAR)
-                sym = "__vex_print_char";
+                sym = "__vx_print_char";
             else if (fs.kind == FmtSpec::Kind::DEC) {
-                sym = is_unsigned_t ? "__vex_print_u64" : "__vex_print_i64";
+                sym = is_unsigned_t ? "__vx_print_u64" : "__vx_print_i64";
                 as_signed_dec = !is_unsigned_t;
             } else {
                 // AUTO: por tipo (mismo criterio que el path VM).
                 switch (t.kind) {
-                case PrimitiveKind::BOOL: sym = "__vex_print_bool"; break;
+                case PrimitiveKind::BOOL: sym = "__vx_print_bool"; break;
                 case PrimitiveKind::PTR:
                 case PrimitiveKind::ARRAY:
-                case PrimitiveKind::CLASS: sym = "__vex_print_ptr"; break;
+                case PrimitiveKind::CLASS: sym = "__vx_print_ptr"; break;
                 default:
                     if (is_unsigned_t)
-                        sym = "__vex_print_u64";
+                        sym = "__vx_print_u64";
                     else {
-                        sym = "__vex_print_i64";
+                        sym = "__vx_print_i64";
                         as_signed_dec = true;
                     }
                     break;
@@ -19202,7 +19202,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // sin cortar en NUL (binary-safe; preserva multi-byte UTF-8).
         if (t.kind == PrimitiveKind::STRING) {
             // native_poo (AOT): `string` es value-string {ptr,len,cap} con SSO;
-            // (ptr,len) via accesores flag-aware + escritura por __vex_write
+            // (ptr,len) via accesores flag-aware + escritura por __vx_write
             // (PURE_NATIVE).  Full/JIT/interp: GcHandle via strraw/strgetbytes
             // + vio_print_buf (VM).
             ir::IrValueId v_ptr = native_poo_
@@ -19266,9 +19266,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ir::IrValueId v_fill = emit_const(
                     ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
                 if (native_poo_) {
-                    // AOT: padding via __vex_pad (fill_cp, count) del runtime
+                    // AOT: padding via __vx_pad (fill_cp, count) del runtime
                     // de I/O (PURE_NATIVE); no hay vio_print_pad (VM).
-                    emit_io_prim("__vex_pad", {v_fill, v_count}, ex->loc.line);
+                    emit_io_prim("__vx_pad", {v_fill, v_count}, ex->loc.line);
                     return;
                 }
                 out_mod_->register_native_import(lib, "vio_print_pad");
@@ -19285,8 +19285,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 emit_pad_call(v_pad);
             }
             if (native_poo_) {
-                // AOT: escribir los bytes via __vex_write (PURE_NATIVE).
-                emit_io_prim("__vex_write", {v_ptr, v_len}, ex->loc.line);
+                // AOT: escribir los bytes via __vx_write (PURE_NATIVE).
+                emit_io_prim("__vx_write", {v_ptr, v_len}, ex->loc.line);
             } else {
                 out_mod_->register_native_import(lib, "vio_print_buf");
                 ir::IrInstr ins{};
@@ -19468,7 +19468,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.op = ir::IrOp::CALL;
             ins.type = ir::IrType::VOID;
             ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "vex_gc_collect";
+            ins.func_name = "vx_gc_collect";
             ins.is_call_site = true;
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));
@@ -19496,12 +19496,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         module_has_gc_finalizers_ = true;
         if (native_poo_) {
-            // AOT: CALL vex_gc_finalize_all de libvesta_gc.
+            // AOT: CALL vx_gc_finalize_all de libvesta_gc.
             ir::IrInstr ins{};
             ins.op = ir::IrOp::CALL;
             ins.type = ir::IrType::VOID;
             ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "vex_gc_finalize_all";
+            ins.func_name = "vx_gc_finalize_all";
             ins.is_call_site = true;
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));
@@ -19526,7 +19526,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         if (native_poo_) {
-            emit_io_prim("__vex_flush", {}, e->loc.line);
+            emit_io_prim("__vx_flush", {}, e->loc.line);
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -19570,18 +19570,18 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64, e->loc.line,
                            /*is_explicit=*/true);
-        // AOT/bare: rutear a los formateadores nativos __vex_print_* (sin
+        // AOT/bare: rutear a los formateadores nativos __vx_print_* (sin
         // proc).  float/color/gchandle se difieren con warning.
         if (native_poo_) {
             std::string nf;
-            if (is_print_uint) nf = "__vex_print_u64";
-            else if (is_print_hex) nf = "__vex_print_hex";
-            else if (is_print_bool) nf = "__vex_print_bool";
-            else if (is_print_char) nf = "__vex_print_char";
-            else if (is_print_bin) nf = "__vex_print_bin";
-            else if (is_print_oct) nf = "__vex_print_oct";
-            else if (is_print_ptr) nf = "__vex_print_ptr";
-            else if (is_print_cstr) nf = "__vex_print_cstr";
+            if (is_print_uint) nf = "__vx_print_u64";
+            else if (is_print_hex) nf = "__vx_print_hex";
+            else if (is_print_bool) nf = "__vx_print_bool";
+            else if (is_print_char) nf = "__vx_print_char";
+            else if (is_print_bin) nf = "__vx_print_bin";
+            else if (is_print_oct) nf = "__vx_print_oct";
+            else if (is_print_ptr) nf = "__vx_print_ptr";
+            else if (is_print_cstr) nf = "__vx_print_cstr";
             if (nf.empty()) {
                 diags_.warning(e->loc, std::string("'") + name +
                                            "' en AOT nativo aun no soportado; "
@@ -19679,7 +19679,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64,
                            e->loc.line);
         if (native_poo_) {
-            emit_io_prim("__vex_print_i64", {v}, e->loc.line);
+            emit_io_prim("__vx_print_i64", {v}, e->loc.line);
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -19881,7 +19881,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // El primitivo de fiber-switch baja por BACKEND:
         //   - INTERPRETE (.velb): opcode VM `swapctx` (estado VM, portable).
         //   - AOT nativo (native_poo_, FN.2): CALL al context-switch NATIVO
-        //     `__vex_swapctx` (host-stack, @Naked de vex_fiber.vex; auto-bundle
+        //     `__vx_swapctx` (host-stack, @Naked de vx_fiber.vx; auto-bundle
         //     al detectarse la llamada).  Mismo layout de contexto {PC,SP,BP,
         //     callee-saved} que inicializa el llamante; el cuerpo de fibra ya es
         //     codigo nativo (native_poo), asi que el switch nativo funciona con
@@ -19890,7 +19890,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (native_poo_) {
             ir::IrInstr call{};
             call.op = ir::IrOp::CALL;
-            call.func_name = "__vex_swapctx";
+            call.func_name = "__vx_swapctx";
             call.type = ir::IrType::VOID;
             call.dst = ir::IR_NO_VALUE;
             call.is_call_site = true;
@@ -21149,7 +21149,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         // Vesta Embed Inc 4 (builtin): en native_poo_ str_equals(a, b) usa el
-        // mismo helper native __vex_strcmp que el operador `==` (value-string,
+        // mismo helper native __vx_strcmp que el operador `==` (value-string,
         // CERO GC), en vez de STRCMP (StringObject GC).  Devuelve bool (==0).
         if (native_poo_ && is_str_equals) {
             // Extrae (ptr, len) de cada operando como el operador == (literal
@@ -22312,7 +22312,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 
     // ----- bug6 gc_box(value) -----  gc<T> para T CUALQUIERA.
     // Aloja el valor en un bloque GC-managed (GC_ALLOCP en interp/JIT,
-    // vex_gc_alloc_ptr en AOT) de sizeof(T) bytes y devuelve el host_ptr al
+    // vx_gc_alloc_ptr en AOT) de sizeof(T) bytes y devuelve el host_ptr al
     // box.  El GC recolecta el box cuando deja de ser alcanzable (stackmaps
     // precisos); no hay RAII (mismo modelo que gc<Clase>).  El valor interno
     // se lee con `*g` (deref).  Generaliza el modelo gc<Clase> (que aloja una
@@ -23762,9 +23762,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     // ----- cpu_features() -> u64 (CPU dispatch, cimiento) -----
-    // En native_poo_ (AOT): marca el uso (para wirear __vex_cpu_init en main),
+    // En native_poo_ (AOT): marca el uso (para wirear __vx_cpu_init en main),
     // asegura el global, y emite STR_LIT_ADDR(slot) + LOAD u64 (lectura del
-    // bitmask que __vex_cpu_init dejo escrito al arranque).  En Full/interp
+    // bitmask que __vx_cpu_init dejo escrito al arranque).  En Full/interp
     // no hay cpuid native disponible -> devuelve 0 (consistente, sin error).
     if (is_cpu_features) {
         if (!e->args.empty()) {
@@ -23776,7 +23776,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             // Path Full/interp/JIT: la VM corre sobre la CPU real -> emitimos
             // CALLN a la fn nativa `vesta_runtime:cpu_features` (registrada en
             // el virtual_lib_registry, sin DLL), que corre cpuid en el host y
-            // devuelve el bitmask con el MISMO layout que el __vex_cpu_init de
+            // devuelve el bitmask con el MISMO layout que el __vx_cpu_init de
             // AOT.  Resuelve igual en interp (loader/native_ffi) y en JIT
             // (auto_jit).  0 args, retorno u64 en R0.
             const int ln = e->loc.line;
@@ -24027,13 +24027,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        // AOT (native_poo_): mailbox por valor -> CALL __vex_msgsend(pid, val)
+        // AOT (native_poo_): mailbox por valor -> CALL __vx_msgsend(pid, val)
         // (sin buffer ni VM memory).  Devuelve 1 (ok) en el scheduler coop.
         if (native_poo_) {
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
             ir::IrInstr ms{};
             ms.op = ir::IrOp::CALL;
-            ms.func_name = "__vex_msgsend";
+            ms.func_name = "__vx_msgsend";
             ms.type = ir::IrType::I32;
             ms.dst = v_dst;
             ms.operands = {v_pid, v_val};
@@ -24089,14 +24089,14 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        // AOT (native_poo_): mailbox por valor -> CALL __vex_msgrecv() -> i64
+        // AOT (native_poo_): mailbox por valor -> CALL __vx_msgrecv() -> i64
         // (lee de la mailbox de la tarea actual; no bloquea en Fase 2 -- el
         // mensaje ya esta porque main hace el setup antes de bombear).
         if (native_poo_) {
             const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
             ir::IrInstr mr{};
             mr.op = ir::IrOp::CALL;
-            mr.func_name = "__vex_msgrecv";
+            mr.func_name = "__vx_msgrecv";
             mr.type = ir::IrType::I64;
             mr.dst = v_val;
             mr.is_call_site = true;
@@ -24158,10 +24158,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // future -> aloca FutureObject; R0 contiene el handle.
         const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
         // AOT (native_poo_): CALL nativo al scheduler cooperativo
-        // (__vex_future_new -> handle), bundle-ado desde vex_async.vex.
+        // (__vx_future_new -> handle), bundle-ado desde vx_async.vx.
         ir::IrInstr fu{};
         fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
-        if (native_poo_) fu.func_name = "__vex_future_new";
+        if (native_poo_) fu.func_name = "__vx_future_new";
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true; // GC alloc
@@ -24187,10 +24187,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        // AOT (native_poo_): CALL nativo __vex_fulfill(fut, val).
+        // AOT (native_poo_): CALL nativo __vx_fulfill(fut, val).
         ir::IrInstr fu{};
         fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FULFILL;
-        if (native_poo_) fu.func_name = "__vex_fulfill";
+        if (native_poo_) fu.func_name = "__vx_fulfill";
         fu.type = ir::IrType::VOID;
         fu.dst = ir::IR_NO_VALUE;
         fu.operands = {v_fut, v_val};
@@ -24408,7 +24408,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             current_fn_returns_string_ = is_string_ret;
         }
 
-        // Instrumentacion: vex_trace:enter al inicio del metodo
+        // Instrumentacion: vx_trace:enter al inicio del metodo
         // (igual filtro que en lower_function -- saltamos solo helpers
         // sinteticos; los ctors/dtors/metodos normales se instrumentan).
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
@@ -24637,7 +24637,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
 
         // Cierre: anadir RET por defecto si el body no termino con uno.
         if (!block_terminated_) {
-            // Instrumentacion: vex_trace:leave antes del RET implicito.
+            // Instrumentacion: vx_trace:leave antes del RET implicito.
             if (instrument_mode_ != "none" && instrument_mode_ != "" &&
                 fn.name != "__module_init" &&
                 fn.name.compare(0, 6, "__new_") != 0 &&
@@ -25611,12 +25611,12 @@ void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
 
 void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
     if (!needs_free_uniq_helper_) return;
-    // void __vex_free_uniq(i64 slot) { <emit_free_unique_slot(slot)>; ret; }
+    // void __vx_free_uniq(i64 slot) { <emit_free_unique_slot(slot)>; ret; }
     // El cuerpo reusa emit_free_unique_slot (null-guard + deleter dispatch +
     // RAW_FREE del slot).  Como es una funcion normal, su diamante interno no
     // colisiona con el tailcall del dtor en el call site del reassign-free.
     ir::IrFunction fn;
-    fn.name = "__vex_free_uniq";
+    fn.name = "__vx_free_uniq";
     fn.ret_type = ir::IrType::VOID;
     const ir::IrValueId slot = fn.new_value(ir::IrType::I64, "%slot");
     fn.values[slot].is_param = true;
@@ -25888,7 +25888,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     fmap_idx = out.static_data.push_back(std::move(fmap));
                     auto &fm = out.static_data.meta_at(fmap_idx);
                     fm.section_name = ".rodata";
-                    fm.symbol_name = "__vex_fmap_" + cd->name;
+                    fm.symbol_name = "__vx_fmap_" + cd->name;
                     fm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                                 ir::IrModule::SD_FLAG_NON_DEDUP;
                 }
@@ -25903,13 +25903,13 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 desc_idx = out.static_data.push_back(std::move(desc));
                 auto &dm = out.static_data.meta_at(desc_idx);
                 dm.section_name = ".data.rel.ro";
-                dm.symbol_name = "__vex_tdesc_" + cd->name;
+                dm.symbol_name = "__vx_tdesc_" + cd->name;
                 dm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                             ir::IrModule::SD_FLAG_NON_DEDUP;
                 if (fmap_idx != UINT64_MAX) {
                     ir::IrModule::StaticDataMeta::SymRef sr;
                     sr.offset = 0; // field_map_ptr @0
-                    sr.sym = "__vex_fmap_" + cd->name;
+                    sr.sym = "__vx_fmap_" + cd->name;
                     sr.width = 8;
                     sr.is_rel = 0;
                     dm.sym_refs.push_back(std::move(sr));
@@ -26023,7 +26023,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
 
             // gc<T> opt-in: si la clase se uso como gc<Class>, generar tambien
             // __new_<Class>_gc.  Identico al native (calloc+ctor) pero alocando
-            // con vex_gc_alloc_ptr (GC-managed, no-RAII).  El GC (libvesta_gc)
+            // con vx_gc_alloc_ptr (GC-managed, no-RAII).  El GC (libvesta_gc)
             // colecta el objeto cuando deja de ser alcanzable via stackmaps.
             if (classes_used_gc_.count(cd->name) > 0) {
                 ir::IrFunction gf;
@@ -26049,7 +26049,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     c.source_line = cd->loc.line;
                     gf.append(ge, std::move(c));
                 }
-                // %obj = call vex_gc_alloc_ptr(%sz)  (host_ptr al payload)
+                // %obj = call vx_gc_alloc_ptr(%sz)  (host_ptr al payload)
                 const ir::IrValueId g_obj = gf.new_value(ir::IrType::PTR);
                 gf.values[g_obj].is_host_ptr = true;
                 gf.values[g_obj].is_gc_object = true;
@@ -26058,7 +26058,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     ca.op = ir::IrOp::CALL;
                     ca.type = ir::IrType::PTR;
                     ca.dst = g_obj;
-                    ca.func_name = "vex_gc_alloc_ptr";
+                    ca.func_name = "vx_gc_alloc_ptr";
                     ca.operands = {g_sz};
                     ca.source_line = cd->loc.line;
                     gf.append(ge, std::move(ca));
@@ -27612,7 +27612,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
     // Reasignar un campo unique<T>: capturamos el slot ANTERIOR (el campo aun lo
     // guarda) ANTES de sobreescribirlo; tras el store del nuevo lo liberamos via
-    // CALL al helper __vex_free_uniq (NO inline, para no pegar el diamante del
+    // CALL al helper __vx_free_uniq (NO inline, para no pegar el diamante del
     // free al tailcall del dtor en este call site -> evita el bucle).  El nuevo
     // slot ya se aloco -> distinto del viejo, sin double-free.
     ir::IrValueId uniq_old_slot = ir::IR_NO_VALUE;
@@ -27787,7 +27787,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         ci.op = ir::IrOp::CALL;
         ci.type = ir::IrType::VOID;
         ci.dst = ir::IR_NO_VALUE;
-        ci.func_name = "__vex_free_uniq";
+        ci.func_name = "__vx_free_uniq";
         ci.operands = {uniq_old_slot};
         ci.source_line = loc.line;
         ci.is_call_site = true;
@@ -30228,7 +30228,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
 std::string Lowering::ensure_itoa_helper(bool is_signed) {
     // Vesta Embed Inc 2: emite (una vez por modulo + signedness) el helper
     // itoa como funcion IR independiente.  Firma:
-    //   i64 __vex_itoa_{s|u}(u8* buf, i64 val)
+    //   i64 __vx_itoa_{s|u}(u8* buf, i64 val)
     // El cuerpo reutiliza emit_native_itoa_to_buf, que construye los loops
     // de extraccion/inversion sobre fn_/current_block_.  Al vivir en una
     // funcion APARTE con varios bloques:
@@ -30236,7 +30236,7 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
     //       (el bug de length erronea con argumento constante);
     //   (b) el inliner NO lo re-inlinea (is_inlineable exige 1 bloque).
     const int idx = is_signed ? 1 : 0;
-    const std::string name = is_signed ? "__vex_itoa_s" : "__vex_itoa_u";
+    const std::string name = is_signed ? "__vx_itoa_s" : "__vx_itoa_u";
     if (itoa_helper_emitted_[idx]) return name;
     itoa_helper_emitted_[idx] = true;
 
@@ -30287,12 +30287,12 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
 
 std::string Lowering::ensure_btoa_helper() {
     // Vesta Embed Inc 2: helper bool->string nativo (una vez por modulo).
-    //   i64 __vex_btoa(u8* buf, i64 b)
+    //   i64 __vx_btoa(u8* buf, i64 b)
     //     if (b != 0) { buf <- "true";  ret 4; }
     //     else        { buf <- "false"; ret 5; }
     // Vive en una funcion APARTE con branch -> el optimizer no foldea el
     // append condicional mid-expression con argumento constante.
-    const std::string name = "__vex_btoa";
+    const std::string name = "__vx_btoa";
     if (btoa_helper_emitted_) return name;
     btoa_helper_emitted_ = true;
 
@@ -30410,12 +30410,12 @@ std::string Lowering::ensure_btoa_helper() {
 
 std::string Lowering::ensure_ctoa_helper() {
     // BUG-3: helper codepoint -> UTF-8 nativo (una vez por modulo).
-    //   i64 __vex_ctoa(u8* buf, i64 cp)
+    //   i64 __vx_ctoa(u8* buf, i64 cp)
     //     cp < 0x80    -> 1 byte;  cp < 0x800   -> 2 bytes;
     //     cp < 0x10000 -> 3 bytes; else         -> 4 bytes.
     // Paridad byte-exacta con vio_char_to_vmbuf (interp/JIT).  Vive en una
     // funcion APARTE con branches -> evita const-fold mid-expression.
-    const std::string name = "__vex_ctoa";
+    const std::string name = "__vx_ctoa";
     if (ctoa_helper_emitted_) return name;
     ctoa_helper_emitted_ = true;
 
@@ -30565,10 +30565,10 @@ std::string Lowering::ensure_ctoa_helper() {
 }
 
 // ---------------------------------------------------------------------
-// CPU dispatch (cimiento): global __vex_cpu_features + helper __vex_cpu_init.
+// CPU dispatch (cimiento): global __vx_cpu_features + helper __vx_cpu_init.
 //
 // Detecta las features de la CPU via `cpuid` UNA VEZ al arranque (el wiring
-// prepone `call __vex_cpu_init` al entry de main, solo native_poo_) y guarda
+// prepone `call __vx_cpu_init` al entry de main, solo native_poo_) y guarda
 // un bitmask en el slot static_data del global.  El builtin cpu_features()
 // lo lee (STR_LIT_ADDR + LOAD).  Sienta la base del despacho de helpers por
 // CPU + del override por el usuario.
@@ -30593,7 +30593,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
     if (cpu_features_slot_ != UINT64_MAX) return cpu_features_slot_;
 
     // 1. Slot static_data de 8 bytes zero-init para el global.  Va a `.data`
-    //    (WRITABLE): __vex_cpu_init le hace STORE en runtime.  El default de
+    //    (WRITABLE): __vx_cpu_init le hace STORE en runtime.  El default de
     //    STR_LIT_ADDR es `.rodata` (read-only) -> un STORE ahi fallaria.
     //    NON_DEDUP para que el merge cross-module no lo colapse con otro
     //    all-zero; FORCE_EMIT para garantizar su presencia aunque el optimizer
@@ -30607,16 +30607,16 @@ uint64_t Lowering::ensure_cpu_features_global() {
         m.flags |=
             ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
         // Global de programa: unificar el slot cross-module en el merge.
-        m.shared_key = "__vex_cpu_features";
+        m.shared_key = "__vx_cpu_features";
     }
     cpu_features_slot_ = slot;
 
     if (cpu_init_emitted_) return slot;
     cpu_init_emitted_ = true;
 
-    // 2. Helper __vex_cpu_init(): un bloque asm que detecta features y un
+    // 2. Helper __vx_cpu_init(): un bloque asm que detecta features y un
     //    STORE del bitmask al slot.  Construido como IrFunction aparte.
-    const std::string name = "__vex_cpu_init";
+    const std::string name = "__vx_cpu_init";
 
     ir::IrFunction *saved_fn = fn_;
     ir::IrBlockId saved_block = current_block_;
@@ -30760,7 +30760,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         fn_->append(current_block_, std::move(ld));
     }
 
-    // --- STORE del bitmask al slot global __vex_cpu_features ---
+    // --- STORE del bitmask al slot global __vx_cpu_features ---
     const ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
     {
         ir::IrInstr is{};
@@ -30808,17 +30808,17 @@ uint64_t Lowering::ensure_cpu_features_global() {
 // CPU dispatch (Inc 2): memcpy multi-versionado por tabla de punteros.
 //
 // Tres piezas:
-//   1. Global __vex_memcpy_fp (u64 en ".data"): puntero a la variante elegida.
+//   1. Global __vx_memcpy_fp (u64 en ".data"): puntero a la variante elegida.
 //   2. Variantes:
-//        - __vex_memcpy_base(dst, src, n): rep movsb (segura, cualquier n).
-//        - __vex_memcpy_avx2(dst, src, n): 32B con vmovdqu ymm + cola
+//        - __vx_memcpy_base(dst, src, n): rep movsb (segura, cualquier n).
+//        - __vx_memcpy_avx2(dst, src, n): 32B con vmovdqu ymm + cola
 //          byte-a-byte (sin leer/escribir fuera de [0,n)).
-//   3. __vex_memcpy_init(): lee __vex_cpu_features, si el bit AVX2 (bit 4)
-//      esta activo setea fp = &__vex_memcpy_avx2, si no &__vex_memcpy_base.
+//   3. __vx_memcpy_init(): lee __vx_cpu_features, si el bit AVX2 (bit 4)
+//      esta activo setea fp = &__vx_memcpy_avx2, si no &__vx_memcpy_base.
 //
-// El wiring (run()) prepone `call __vex_cpu_init` + `call __vex_memcpy_init`
+// El wiring (run()) prepone `call __vx_cpu_init` + `call __vx_memcpy_init`
 // al entry de main (en ese orden).  Los memcpy del concat/slice/+= bajan a
-// `call [__vex_memcpy_fp]` (CALLIND) en lugar de rep movsb inline.
+// `call [__vx_memcpy_fp]` (CALLIND) en lugar de rep movsb inline.
 //
 // La direccion de cada variante se obtiene via LABEL_ADDR (en AOT baja a una
 // reloc "fnsym:<name>" que el driver resuelve contra el offset de la funcion).
@@ -30829,7 +30829,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
     if (memcpy_helpers_emitted_) return memcpy_fp_slot_;
     memcpy_helpers_emitted_ = true;
 
-    // 1. Global __vex_memcpy_fp (8 bytes zero-init) en ".data" (writable: el
+    // 1. Global __vx_memcpy_fp (8 bytes zero-init) en ".data" (writable: el
     //    init le hace STORE en runtime).  NON_DEDUP + FORCE_EMIT como el slot
     //    de features.
     {
@@ -30841,7 +30841,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         m.flags |=
             ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
         // Global de programa: unificar el slot cross-module en el merge.
-        m.shared_key = "__vex_memcpy_fp";
+        m.shared_key = "__vx_memcpy_fp";
         memcpy_fp_slot_ = slot;
     }
     const uint64_t fp_slot = memcpy_fp_slot_;
@@ -30903,7 +30903,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         fn_->append(current_block_, std::move(ret));
     };
 
-    build_variant("__vex_memcpy_base", emit_base_body);
+    build_variant("__vx_memcpy_base", emit_base_body);
 
     // --- Variante AVX2: vmovdqu ymm de a 32 bytes + cola byte-a-byte ---------
     // Helper INLINE_ASM auto-contenido: los 3 params (dst/src/n) llegan en los
@@ -30917,7 +30917,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
     // rdx son operandos (bindings), no clobbers.
     {
         ir::IrFunction hf;
-        hf.name = "__vex_memcpy_avx2";
+        hf.name = "__vx_memcpy_avx2";
         hf.ret_type = ir::IrType::VOID;
         const ir::IrValueId p_dst = hf.new_value(ir::IrType::PTR, "%dst");
         hf.values[p_dst].is_param = true;
@@ -31038,10 +31038,10 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         out_mod_->register_native_import("vrt", "inline_asm_exec");
     }
 
-    // --- 3. __vex_memcpy_init(): setea el fp segun el bit AVX2 --------------
+    // --- 3. __vx_memcpy_init(): setea el fp segun el bit AVX2 --------------
     {
         ir::IrFunction hf;
-        hf.name = "__vex_memcpy_init";
+        hf.name = "__vx_memcpy_init";
         hf.ret_type = ir::IrType::VOID;
         const ir::IrBlockId e = hf.new_block("entry");
         fn_ = &hf;
@@ -31092,7 +31092,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             return fp_slot;
         }
 
-        // feat = LOAD i64 [__vex_cpu_features].
+        // feat = LOAD i64 [__vx_cpu_features].
         const uint64_t feat_slot = ensure_cpu_features_global();
         ir::IrValueId v_faddr = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_faddr].is_host_ptr = true;
@@ -31185,9 +31185,9 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         };
 
         current_block_ = bb_avx2;
-        store_fp_and_join("__vex_memcpy_avx2");
+        store_fp_and_join("__vx_memcpy_avx2");
         current_block_ = bb_base;
-        store_fp_and_join("__vex_memcpy_base");
+        store_fp_and_join("__vx_memcpy_base");
 
         current_block_ = bb_join;
         {
@@ -31215,13 +31215,13 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
 // multiversionaramos directamente (main$sse2/avx2/avx512) nadie correria el
 // init (cpuid) antes de elegir la variante.  Fix: reducir "multiversionar
 // main" a "despachar un helper":
-//   1. El main del usuario se RENOMBRA a __vex_main_body (un helper VEC
+//   1. El main del usuario se RENOMBRA a __vx_main_body (un helper VEC
 //      normal; el driver lo compila 3x: $sse2/$avx2/$avx512).
-//   2. Se sintetiza un main fino = { <inits> ; r = CALLIND [__vex_main_body$fp]
+//   2. Se sintetiza un main fino = { <inits> ; r = CALLIND [__vx_main_body$fp]
 //      (args...) ; ret r }.  Los inits (cpu_init + auto_init) los prepone
 //      run() en su entry, asi corren ANTES del CALLIND que lee el fp.
-//   3. __vex_auto_init() elige la variante por cpuid (AVX512F bit7 > AVX2 bit4
-//      > SSE2) y la guarda en __vex_main_body$fp.
+//   3. __vx_auto_init() elige la variante por cpuid (AVX512F bit7 > AVX2 bit4
+//      > SSE2) y la guarda en __vx_main_body$fp.
 // El fp se referencia por INDICE (STR_LIT_ADDR), no por nombre -> no hace
 // falta trampolin de bytes crudos ni reloc DATA_REL32: todo es IR estandar
 // (CALLIND + LABEL_ADDR + LOAD/STORE), PURE_NATIVE.
@@ -31266,9 +31266,9 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         if (!fn_has_vec(f)) continue;
         MvEntry e;
         e.wrapper_name = f.name;
-        // main mantiene el nombre historico __vex_main_body; los helpers usan
+        // main mantiene el nombre historico __vx_main_body; los helpers usan
         // <nombre>$mv.  El driver suffija $sse2/$avx2/$avx512 a estos nombres.
-        e.body_name = (f.name == "main") ? std::string("__vex_main_body")
+        e.body_name = (f.name == "main") ? std::string("__vx_main_body")
                                          : f.name + "$mv";
         e.ret = f.ret_type;
         for (ir::IrValueId pid : f.params)
@@ -31280,7 +31280,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
 
     auto_dispatch_emitted_ = true;
     cpu_dispatch_used_ = true;
-    // Garantizar el global de features + __vex_cpu_init (puede anñadir una
+    // Garantizar el global de features + __vx_cpu_init (puede anñadir una
     // funcion -> realoc, pero ya no tenemos referencias vivas a las funciones).
     (void)ensure_cpu_features_global();
 
@@ -31372,12 +31372,12 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         out_module.add_function(std::move(w));
     }
 
-    // __vex_auto_init(): un solo cpuid -> tres ramas (AVX512F bit7 > AVX2 bit4 >
+    // __vx_auto_init(): un solo cpuid -> tres ramas (AVX512F bit7 > AVX2 bit4 >
     // SSE2); cada rama setea el fp de TODAS las funciones VEC a su variante del
     // ancho elegido.  (La decision de ISA es global a la CPU -> una sola vez.)
     {
         ir::IrFunction hf;
-        hf.name = "__vex_auto_init";
+        hf.name = "__vx_auto_init";
         hf.ret_type = ir::IrType::VOID;
         const ir::IrBlockId e = hf.new_block("entry");
         fn_ = &hf;
@@ -31407,7 +31407,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             fn_->append(current_block_, std::move(st));
         };
 
-        // feat = LOAD i64 [__vex_cpu_features].
+        // feat = LOAD i64 [__vx_cpu_features].
         const uint64_t feat_slot = ensure_cpu_features_global();
         ir::IrValueId v_faddr = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_faddr].is_host_ptr = true;
@@ -31540,10 +31540,10 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
 void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
                                       ir::IrValueId len, uint32_t line) {
     // Asegura el global fp + variantes + init (idempotente) y marca el uso
-    // para que el wiring prepone __vex_memcpy_init en main.
+    // para que el wiring prepone __vx_memcpy_init en main.
     const uint64_t fp_slot = ensure_memcpy_dispatch();
 
-    // v_fpaddr = &__vex_memcpy_fp ; v_fp = LOAD i64 [v_fpaddr].
+    // v_fpaddr = &__vx_memcpy_fp ; v_fp = LOAD i64 [v_fpaddr].
     ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fpaddr].is_host_ptr = true;
     {
@@ -31582,18 +31582,18 @@ void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
 // punteros.  Foundation para que una libreria stdlib provea variantes SIMD
 // via @HelperOverride(strcmp)/(strlen).  A DIFERENCIA de memcpy, el
 // compilador NO hace cpuid aqui: el default es el BASELINE escalar
-// (__vex_strcmp_base / __vex_strlen_base, la impl actual del compilador);
+// (__vx_strcmp_base / __vx_strlen_base, la impl actual del compilador);
 // la variante SIMD vendra de una lib importada (Inc 5c) via @HelperOverride.
 //
 // Tres piezas:
-//   1. Globals __vex_strcmp_fp / __vex_strlen_fp (u64 en ".data").
-//   2. Baselines __vex_strcmp_base / __vex_strlen_base (los renombrados
+//   1. Globals __vx_strcmp_fp / __vx_strlen_fp (u64 en ".data").
+//   2. Baselines __vx_strcmp_base / __vx_strlen_base (los renombrados
 //      ensure_strcmp_helper / ensure_strlen_helper; siempre presentes,
 //      llamables por nombre para que un override delegue a ellos).
-//   3. __vex_strdisp_init(): setea cada fp al override del usuario (si
+//   3. __vx_strdisp_init(): setea cada fp al override del usuario (si
 //      declarado @HelperOverride) o al baseline.
 //
-// run() prepone `call __vex_strdisp_init` al entry de main (junto al resto
+// run() prepone `call __vx_strdisp_init` al entry de main (junto al resto
 // de inits).  Los call sites de strcmp/strlen bajan a `call [fp]` (CALLIND)
 // en native_poo_.  Todo PURE_NATIVE (CALL/CALLIND/LABEL_ADDR/LOAD/STORE).
 // ---------------------------------------------------------------------
@@ -31616,21 +31616,21 @@ void Lowering::ensure_strdisp() {
         m.shared_key = shared_key;
         return slot;
     };
-    strcmp_fp_slot_ = make_fp_slot("__vex_strcmp_fp");
-    strlen_fp_slot_ = make_fp_slot("__vex_strlen_fp");
+    strcmp_fp_slot_ = make_fp_slot("__vx_strcmp_fp");
+    strlen_fp_slot_ = make_fp_slot("__vx_strlen_fp");
 
-    // 2. Asegurar los baselines (emiten __vex_strcmp_base / __vex_strlen_base).
+    // 2. Asegurar los baselines (emiten __vx_strcmp_base / __vx_strlen_base).
     (void)ensure_strcmp_helper();
     (void)ensure_strlen_helper();
 
-    // 3. __vex_strdisp_init(): para cada fp, STORE &<variante> al global.
+    // 3. __vx_strdisp_init(): para cada fp, STORE &<variante> al global.
     ir::IrFunction *saved_fn = fn_;
     ir::IrBlockId saved_block = current_block_;
     bool saved_terminated = block_terminated_;
     const uint32_t ln = 0;
 
     ir::IrFunction hf;
-    hf.name = "__vex_strdisp_init";
+    hf.name = "__vx_strdisp_init";
     hf.ret_type = ir::IrType::VOID;
     const ir::IrBlockId e = hf.new_block("entry");
     fn_ = &hf;
@@ -31662,10 +31662,10 @@ void Lowering::ensure_strdisp() {
 
     // fp = override del usuario si lo hay; si no, el baseline.
     emit_store_fp(strcmp_fp_slot_, strcmp_override_.empty()
-                                       ? std::string("__vex_strcmp_base")
+                                       ? std::string("__vx_strcmp_base")
                                        : strcmp_override_);
     emit_store_fp(strlen_fp_slot_, strlen_override_.empty()
-                                       ? std::string("__vex_strlen_base")
+                                       ? std::string("__vx_strlen_base")
                                        : strlen_override_);
 
     {
@@ -31687,7 +31687,7 @@ void Lowering::ensure_strdisp() {
 std::string Lowering::ensure_strcmp_helper() {
     // Vesta Embed Inc 4: helper de comparacion lexicografica de strings
     // value-type nativos.  Firma:
-    //   i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb)
+    //   i64 __vx_strcmp(u8* pa, i64 la, u8* pb, i64 lb)
     // Devuelve -1/0/1 (memcmp + tie-break por longitud):
     //   1. min = (la < lb) ? la : lb.
     //   2. for (i = 0; i < min; i++): comparar pa[i] vs pb[i] como bytes
@@ -31701,10 +31701,10 @@ std::string Lowering::ensure_strcmp_helper() {
     // slots ALLOCA para el indice (mem2reg los promueve en O2) y evita
     // PHIs manuales.  Todas las ops son PURE_NATIVE.
     //
-    // CPU dispatch Inc 5a: este es el BASELINE escalar (`__vex_strcmp_base`)
-    // al que apunta __vex_strcmp_fp por defecto.  Es llamable por nombre desde
+    // CPU dispatch Inc 5a: este es el BASELINE escalar (`__vx_strcmp_base`)
+    // al que apunta __vx_strcmp_fp por defecto.  Es llamable por nombre desde
     // Vesta (un override puede delegar a el).
-    const std::string name = "__vex_strcmp_base";
+    const std::string name = "__vx_strcmp_base";
     if (strcmp_helper_emitted_) return name;
     strcmp_helper_emitted_ = true;
 
@@ -32099,7 +32099,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         }
         const PrimitiveKind ek = ex->result_type.kind;
         // BUG-3: `${int:char}` -> codificar el valor como codepoint UTF-8 via
-        // __vex_ctoa (paridad con interp/JIT), no como decimal.
+        // __vx_ctoa (paridad con interp/JIT), no como decimal.
         if (!fmt.empty() && fmt_kind_of(fmt) == "char" &&
             (is_integral(ek) || ek == PrimitiveKind::CHAR)) {
             ir::IrValueId v_cp = lower_expr(ex);
@@ -32841,7 +32841,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
 
 ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
                                                  uint32_t source_line) {
-    // CALL __vex_strdata(s) -> u8* (la logica branchless vive en el helper;
+    // CALL __vx_strdata(s) -> u8* (la logica branchless vive en el helper;
     // ver ensure_strdata_helper / el comentario del blacklist del inliner).
     const std::string name = ensure_strdata_helper();
     ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
@@ -32876,12 +32876,12 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
         return v;
     }
     // CPU dispatch Inc 5a: strlen(s) -> i64 DESPACHADO por tabla de punteros:
-    // `call [__vex_strlen_fp]`.  El fp apunta al baseline (__vex_strlen_base)
+    // `call [__vx_strlen_fp]`.  El fp apunta al baseline (__vx_strlen_base)
     // o al @HelperOverride(strlen) del usuario.  ensure_strdisp() es
     // idempotente y marca cpu_dispatch_used_ para wirear el init en main.
     ensure_strdisp();
     const uint64_t fp_slot = strlen_fp_slot_;
-    // v_fpaddr = &__vex_strlen_fp ; v_fp = LOAD i64 [v_fpaddr].
+    // v_fpaddr = &__vx_strlen_fp ; v_fp = LOAD i64 [v_fpaddr].
     ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fpaddr].is_host_ptr = true;
     {
@@ -32920,17 +32920,17 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
 // -------------------------------------------------------------------------
 // Vesta Embed Inc 6 (encoding UTF-8): conteo de code-points + conversion a
 // UTF-16 (.length() / .wstr()).  Ambos como helpers IR aparte (loop) ->
-// fuera del const-fold y del inliner (prefijo __vex_str), self-contained
+// fuera del const-fold y del inliner (prefijo __vx_str), self-contained
 // (solo malloc en utf16, overridable) -> funciona freestanding.
 // -------------------------------------------------------------------------
 std::string Lowering::ensure_str_cplen_helper() {
-    // i64 __vex_str_cplen(u8* p, i64 byte_len):
+    // i64 __vx_str_cplen(u8* p, i64 byte_len):
     //   count = 0;
     //   for (i = 0; i < byte_len; i++)
     //     if ((p[i] & 0xC0) != 0x80) count++;   // no es byte de continuacion
     //   ret count;
     // Para ASCII puro coincide con byte_len (cada byte < 0x80).
-    const std::string name = "__vex_str_cplen";
+    const std::string name = "__vx_str_cplen";
     if (str_cplen_helper_emitted_) return name;
     str_cplen_helper_emitted_ = true;
 
@@ -33134,7 +33134,7 @@ ir::IrValueId Lowering::emit_native_str_cplen(ir::IrValueId v_ptr,
 }
 
 std::string Lowering::ensure_str_to_utf16_helper() {
-    // u16* __vex_str_to_utf16(u8* p, i64 byte_len):
+    // u16* __vx_str_to_utf16(u8* p, i64 byte_len):
     //   out = malloc((byte_len + 1) * 2)   // cota superior: ASCII = 1 unit/byte
     //   i = 0; ob = 0;                       // i=byte idx, ob=output byte off
     //   while (i < byte_len):
@@ -33150,7 +33150,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     //   ret out
     // Asume UTF-8 bien formado (el value-string se construye de literales/
     // concat validos).  El CALLER es dueno del buffer (transitorio para FFI).
-    const std::string name = "__vex_str_to_utf16";
+    const std::string name = "__vx_str_to_utf16";
     if (str_to_utf16_helper_emitted_) return name;
     str_to_utf16_helper_emitted_ = true;
 
@@ -33456,13 +33456,13 @@ ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
                                                ir::IrValueId lb,
                                                uint32_t source_line) {
     // CPU dispatch Inc 5a: strcmp(pa, la, pb, lb) -> i64 (-1/0/1) DESPACHADO
-    // por tabla de punteros: `call [__vex_strcmp_fp]`.  El fp apunta al
-    // baseline (__vex_strcmp_base) o al @HelperOverride(strcmp) del usuario.
+    // por tabla de punteros: `call [__vx_strcmp_fp]`.  El fp apunta al
+    // baseline (__vx_strcmp_base) o al @HelperOverride(strcmp) del usuario.
     // Solo se llama desde el path native_poo_ de lower_binary.  Idempotente +
     // marca cpu_dispatch_used_ para wirear el init en main.
     ensure_strdisp();
     const uint64_t fp_slot = strcmp_fp_slot_;
-    // v_fpaddr = &__vex_strcmp_fp ; v_fp = LOAD i64 [v_fpaddr].
+    // v_fpaddr = &__vx_strcmp_fp ; v_fp = LOAD i64 [v_fpaddr].
     ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fpaddr].is_host_ptr = true;
     {
@@ -33499,10 +33499,10 @@ ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
 }
 
 std::string Lowering::ensure_strdata_helper() {
-    // u8* __vex_strdata(u8* s): data_ptr branchless (is_heap ? ptr@0 : &s).
+    // u8* __vx_strdata(u8* s): data_ptr branchless (is_heap ? ptr@0 : &s).
     // Funcion APARTE (no inline) -> una sola CALL por uso; el blacklist del
-    // inliner (prefijo __vex_str) impide re-inlinearla.
-    const std::string name = "__vex_strdata";
+    // inliner (prefijo __vx_str) impide re-inlinearla.
+    const std::string name = "__vx_strdata";
     if (strdata_helper_emitted_) return name;
     strdata_helper_emitted_ = true;
 
@@ -33541,12 +33541,12 @@ std::string Lowering::ensure_strdata_helper() {
 }
 
 std::string Lowering::ensure_strlen_helper() {
-    // i64 __vex_strlen_base(u8* s): len branchless (is_heap ? len@8 :
+    // i64 __vx_strlen_base(u8* s): len branchless (is_heap ? len@8 :
     // byte[23]&0x7F).
     //
-    // CPU dispatch Inc 5a: BASELINE escalar al que apunta __vex_strlen_fp por
+    // CPU dispatch Inc 5a: BASELINE escalar al que apunta __vx_strlen_fp por
     // defecto.  Llamable por nombre desde Vesta (un override puede delegar a el).
-    const std::string name = "__vex_strlen_base";
+    const std::string name = "__vx_strlen_base";
     if (strlen_helper_emitted_) return name;
     strlen_helper_emitted_ = true;
 
@@ -33861,11 +33861,11 @@ void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
     if (native_poo_) {
         // AOT/bare: monitor reentrante inline en el objeto (palabra en obj+16),
         // sin GC ni handle table.  Baja a CALL a la primitiva nativa
-        // (__vex_monenter/__vex_monexit) que el auto-bundle de vex_sync.vex
+        // (__vx_monenter/__vx_monexit) que el auto-bundle de vx_sync.vx
         // fusiona en el .o.  v_obj_or_handle es el host_ptr al ObjectHeader.
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALL;
-        ins.func_name = enter ? "__vex_monenter" : "__vex_monexit";
+        ins.func_name = enter ? "__vx_monenter" : "__vx_monexit";
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
         ins.operands = {v_obj_or_handle};
@@ -33900,12 +33900,12 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
     // Registra (kind 1/2/3) el finalizador GC del box con recurso interno.
     module_has_gc_finalizers_ = true; // habilita el finalize_all al exit (AOT)
     if (native_poo_) {
-        // AOT: CALL vex_gc_register_finalizer(payload, kind, aux) de
+        // AOT: CALL vx_gc_register_finalizer(payload, kind, aux) de
         // libvesta_gc.  El runner nativo ejecuta el deleter/dtor por CALL
         // directo cuando el sweep colecte el objeto (o el shutdown lo finalice).
         // aux = vaddr/func_ptr del <Clase>____dtor (kind==3), 0 para UNIQUE/
         // SHARED (su deleter vive dentro del box).  El auto-link de
-        // libvesta_gc.a se dispara al detectar el simbolo vex_gc_*.
+        // libvesta_gc.a se dispara al detectar el simbolo vx_gc_*.
         const ir::IrValueId v_kind =
             emit_const(ir::IrType::I64, static_cast<int64_t>(kind), source_line);
         const ir::IrValueId v_aux =
@@ -33916,7 +33916,7 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
         ins.op = ir::IrOp::CALL;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = "vex_gc_register_finalizer";
+        ins.func_name = "vx_gc_register_finalizer";
         ins.operands = {v_box, v_kind, v_aux};
         ins.is_call_site = true;
         ins.source_line = source_line;
@@ -33972,12 +33972,12 @@ ir::IrValueId Lowering::emit_gc_allocp(ir::IrValueId v_size, uint32_t line) {
     fn_->values[v].is_host_ptr = true;
     ir::IrInstr ins{};
     if (native_poo_) {
-        // AOT: usar el GC nativo (libvesta_gc) -> CALL vex_gc_alloc_ptr(size),
+        // AOT: usar el GC nativo (libvesta_gc) -> CALL vx_gc_alloc_ptr(size),
         // igual que __new_<Class>_gc.  Asi shared<T> aloca su control block sin
         // la VM; el GC gestiona el lifetime (stackmaps).  El auto-link de
-        // libvesta_gc.a se dispara al detectar vex_gc_*.
+        // libvesta_gc.a se dispara al detectar vx_gc_*.
         ins.op = ir::IrOp::CALL;
-        ins.func_name = "vex_gc_alloc_ptr";
+        ins.func_name = "vx_gc_alloc_ptr";
     } else {
         ins.op = ir::IrOp::GC_ALLOCP;
     }
@@ -34128,10 +34128,10 @@ ir::IrValueId Lowering::emit_getpid(uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
     ir::IrInstr ins{};
     if (native_poo_) {
-        // AOT: pid() -> CALL __vex_pid (vex_async.vex, devuelve
+        // AOT: pid() -> CALL __vx_pid (vx_async.vx, devuelve
         // __vasync_current_pid).  Sin la VM; el runtime cooperativo lo provee.
         ins.op = ir::IrOp::CALL;
-        ins.func_name = "__vex_pid";
+        ins.func_name = "__vx_pid";
         ins.is_call_site = true;
     } else {
         ins.op = ir::IrOp::GETPID;

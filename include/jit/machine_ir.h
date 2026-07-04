@@ -574,7 +574,7 @@ enum class MOp : uint8_t {
     TLS_PE_ADDR =
         160, ///< dst = direccion por-hilo de un `thread_local` (TLS PE/Windows).
              ///< src1 = IMM32(var_sym_idx) del simbolo .tls; src2 =
-             ///< IMM32(index_sym_idx) del `__vex_tls_index`.  El encoder emite
+             ///< IMM32(index_sym_idx) del `__vx_tls_index`.  El encoder emite
              ///< `mov r10,gs:[0x58]` + `mov r11d,[rip+_tls_index]` (DATA_REL32)
              ///< + `mov r10,[r10+r11*8]` + `lea dst,[r10+var@secrel]`
              ///< (SECREL32).  Usa r10/r11 (scratch reservados) -> dst libre.
@@ -617,7 +617,7 @@ enum class MOp : uint8_t {
     /* Packed FP SSE2 (auto-vectorizacion, 2026-06-25): operan sobre 2x f64
      * (128-bit XMM).  Prefijo 66 (packed-double).  Reg-reg (arith) o reg-mem
      * (MOVUPD/MOVAPD).  Base de la vectorizacion de loops float y, a futuro,
-     * de los tipos anchos N=potencia-de-2 (i128 -> XMM completo).  AVX (VEX,
+     * de los tipos anchos N=potencia-de-2 (i128 -> XMM completo).  AVX (VX,
      * 4x f64) y AVX512 (EVEX, 8x f64) son slices posteriores con el mismo
      * patron pero distinto encoding. */
     ADDPD = 106,  ///< ADDPD xmm,xmm (66 0F 58) -- 2x f64 add
@@ -646,25 +646,25 @@ enum class MOp : uint8_t {
      * vectorizar `c[i]=a[i]*b[i]` para i32/u32 (PADDD/PSUBD ya cubren add/sub). */
     PMULLD = 148, ///< PMULLD xmm,xmm (66 0F38 40) -- 4x i32 mul (low 32b)
 
-    /* AVX escalar 3-OPERANDOS no-destructivo (VEX.LIG.F2/F3.0F): VADDSD dst,
+    /* AVX escalar 3-OPERANDOS no-destructivo (VX.LIG.F2/F3.0F): VADDSD dst,
      * src1, src2 -> dst = src1 OP src2 (dst != src1 permitido).  A diferencia de
      * ADDSD (2-address destructivo, el rewrite mete un `mov dst,src1`), estas
      * NO necesitan ese mov -> el regalloc/scheduler las explota como 3-op
      * first-class.  Las emite el selector cuando --float-isa >= AVX; el src2
-     * puede ser MEM (VEX reg-reg-mem).  SD = F2 (double), SS = F3 (single). */
-    VADDSD = 149, ///< VADDSD dst,src1,src2/mem (VEX.LIG.F2.0F 58) -- f64 add
-    VSUBSD = 150, ///< VSUBSD (VEX.LIG.F2.0F 5C) -- f64 sub
-    VMULSD = 151, ///< VMULSD (VEX.LIG.F2.0F 59) -- f64 mul
-    VDIVSD = 152, ///< VDIVSD (VEX.LIG.F2.0F 5E) -- f64 div
-    VADDSS = 153, ///< VADDSS (VEX.LIG.F3.0F 58) -- f32 add
-    VSUBSS = 154, ///< VSUBSS (VEX.LIG.F3.0F 5C) -- f32 sub
-    VMULSS = 155, ///< VMULSS (VEX.LIG.F3.0F 59) -- f32 mul
-    VDIVSS = 156, ///< VDIVSS (VEX.LIG.F3.0F 5E) -- f32 div
-    /* VEX 3-op de XORPS/ANDPS (NP.0F 57/54): FNEG/FABS escalar en avx (dst =
+     * puede ser MEM (VX reg-reg-mem).  SD = F2 (double), SS = F3 (single). */
+    VADDSD = 149, ///< VADDSD dst,src1,src2/mem (VX.LIG.F2.0F 58) -- f64 add
+    VSUBSD = 150, ///< VSUBSD (VX.LIG.F2.0F 5C) -- f64 sub
+    VMULSD = 151, ///< VMULSD (VX.LIG.F2.0F 59) -- f64 mul
+    VDIVSD = 152, ///< VDIVSD (VX.LIG.F2.0F 5E) -- f64 div
+    VADDSS = 153, ///< VADDSS (VX.LIG.F3.0F 58) -- f32 add
+    VSUBSS = 154, ///< VSUBSS (VX.LIG.F3.0F 5C) -- f32 sub
+    VMULSS = 155, ///< VMULSS (VX.LIG.F3.0F 59) -- f32 mul
+    VDIVSS = 156, ///< VDIVSS (VX.LIG.F3.0F 5E) -- f32 div
+    /* VX 3-op de XORPS/ANDPS (NP.0F 57/54): FNEG/FABS escalar en avx (dst =
      * src XOR/AND mascara-de-signo).  3-operandos no-destructivo, sin el `mov`
-     * 2-address y sin legacy SSE mezclado con el resto VEX. */
-    VXORPS = 157, ///< VXORPS dst,src1,src2 (VEX.LIG.NP.0F 57) -- fneg
-    VANDPS = 158, ///< VANDPS dst,src1,src2 (VEX.LIG.NP.0F 54) -- fabs
+     * 2-address y sin legacy SSE mezclado con el resto VX. */
+    VXORPS = 157, ///< VXORPS dst,src1,src2 (VX.LIG.NP.0F 57) -- fneg
+    VANDPS = 158, ///< VANDPS dst,src1,src2 (VX.LIG.NP.0F 54) -- fabs
 
     /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
      * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y
@@ -676,12 +676,12 @@ enum class MOp : uint8_t {
     ANDPD = 130,    ///< ANDPD xmm,xmm    (66 0F 54) -- and 128b (fabs via mask)
     UNPCKLPD = 131, ///< UNPCKLPD xmm,xmm (66 0F 14) -- dst.hi = src.lo (broadcast)
     /* Broadcast de un f64 (xmm.lo) a TODOS los lanes de un YMM/ZMM (mapa 0F38).
-     * Solo AVX (VEX.256.66.0F38.W0 19 / EVEX.512.66.0F38.W1 19); para 128b se
+     * Solo AVX (VX.256.66.0F38.W0 19 / EVEX.512.66.0F38.W1 19); para 128b se
      * usa UNPCKLPD.  Construye la mascara de signo wide de fneg/fabs. */
     VBROADCASTSD = 132, ///< VBROADCASTSD ymm/zmm, xmm
 
     /* Packed SINGLE (f32): mismos opcodes 0F 58/5C/59/5E/51/57/54 que los PD
-     * pero SIN el prefijo 66 (pp=00 en VEX/EVEX; EVEX W0).  4x f32 (XMM),
+     * pero SIN el prefijo 66 (pp=00 en VX/EVEX; EVEX W0).  4x f32 (XMM),
      * 8x (YMM), 16x (ZMM).  Para mover bytes se reusa MOVUPD (da igual el
      * prefijo en un move crudo). */
     ADDPS = 133,        ///< ADDPS xmm,xmm  (0F 58) -- f32 add
@@ -729,14 +729,14 @@ enum class MOp : uint8_t {
  *   +16 [8]  src1         MOperand
  *   +24 [8]  src2         MOperand (para 3-operand ALU)
  */
-/* Bit de @c MInstr::flags: emitir la op escalar float en VEX (avx+) en vez de
+/* Bit de @c MInstr::flags: emitir la op escalar float en VX (avx+) en vez de
  * legacy SSE.  Lo pone el selector en cvt/cmp/sqrt cuando --float-isa>=AVX, para
- * NO mezclar legacy-SSE con las binarias VEX (penalizacion de transicion).  Para
- * las binarias arith hay MOps VEX dedicadas (VADDSD...); estas ops 1-fuente no
+ * NO mezclar legacy-SSE con las binarias VX (penalizacion de transicion).  Para
+ * las binarias arith hay MOps VX dedicadas (VADDSD...); estas ops 1-fuente no
  * ganan nada de 3-op, asi que el flag es lo economico (no se inventa una MOp por
  * cada una).  Bit alto -> no colisiona con el stackmap-idx que CALL/SAFEPOINT
  * guardan en flags (esas no son ops float). */
-static constexpr uint16_t MI_FLAG_VEX_SCALAR = 0x8000u;
+static constexpr uint16_t MI_FLAG_VX_SCALAR = 0x8000u;
 
 struct MInstr {
     MOp op = MOp::NOP;
@@ -1040,7 +1040,7 @@ struct MInstr {
 
     /** @brief TLS_PE_ADDR: @p dst = direccion por-hilo del `thread_local`
      *  @p var_sym_idx (.tls) usando el indice de slot @p index_sym_idx
-     *  (`__vex_tls_index`).  El encoder emite la secuencia TEB del PE. */
+     *  (`__vx_tls_index`).  El encoder emite la secuencia TEB del PE. */
     static MInstr make_tls_pe_addr(MOperand dst, uint32_t var_sym_idx,
                                    uint32_t index_sym_idx) noexcept {
         MInstr i;
@@ -1214,7 +1214,7 @@ struct MReloc {
 
 /**
  * @struct LineMapEntry
- * @brief Correlacion byte_offset (instruccion maquina) -> source_line (.vex).
+ * @brief Correlacion byte_offset (instruccion maquina) -> source_line (.vx).
  *
  * SOLO se poblea cuando @c MFunction::emit_line_map es true (modo de
  * analisis exclusivo del LSP).  En compilacion/ejecucion convencional el
@@ -1225,7 +1225,7 @@ struct MReloc {
  */
 struct LineMapEntry {
     uint32_t byte_offset = 0;  ///< Offset del primer byte de la instr (rel. fn).
-    uint32_t source_line = 0;  ///< Linea .vex (1-based; 0 = sin atribucion).
+    uint32_t source_line = 0;  ///< Linea .vx (1-based; 0 = sin atribucion).
     uint32_t ir_id = 0xFFFFFFFFu; ///< Identidad de la op IR origen (solo-LSP).
 };
 
@@ -1328,7 +1328,7 @@ struct AsmBlob {
     /// contrato insn_offsets del backend.  El encoder las reubica al offset
     /// absoluto de la funcion.  Vacio = sin info (degrada).
     std::vector<std::pair<uint32_t, std::string>> labels;
-    /// Solo-inspeccion: offset relativo -> linea .vex de cada instruccion del
+    /// Solo-inspeccion: offset relativo -> linea .vx de cada instruccion del
     /// asm (para atribuir cada instr a su linea real, no al `asm {` global).
     std::vector<std::pair<uint32_t, uint32_t>> insn_lines;
     /// Phase AS inc.6: simbolos PROPIOS referenciados desde el asm (`jmp

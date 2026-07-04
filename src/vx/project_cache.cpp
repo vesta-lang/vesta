@@ -10,7 +10,7 @@
  */
 
 #include "vx/project_cache.h"
-#include "vx/vexi_format.h" // para vexi_compiler_version_hash() (L.15)
+#include "vx/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
 
 #include <atomic>
 #include <cstdint>
@@ -154,14 +154,14 @@ static uint32_t fnv1a32_str(const std::string &s) noexcept {
 
 std::string default_project_cache_dir() {
     namespace fs = std::filesystem;
-    // Preferencia: VEX_HOME/cache/projects, fallback ./.vex_cache/projects.
-    if (const char *vh = std::getenv("VEX_HOME")) {
+    // Preferencia: VX_HOME/cache/projects, fallback ./.vx_cache/projects.
+    if (const char *vh = std::getenv("VX_HOME")) {
         if (vh && vh[0]) {
             return (fs::path(vh) / "cache" / "projects").string();
         }
     }
     // Fallback al cwd actual.
-    return (fs::current_path() / ".vex_cache" / "projects").string();
+    return (fs::current_path() / ".vx_cache" / "projects").string();
 }
 
 std::string project_cache_path(const std::string &root_path,
@@ -181,7 +181,7 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
     // formato exacto del string no importa mientras sea estable.
     std::ostringstream os;
     os << "opt=" << key.opt_level << "|debug=" << (key.emit_debug ? 1 : 0)
-       << "|base=0x" << std::hex << key.vex_base
+       << "|base=0x" << std::hex << key.vx_base
        << "|instr=" << key.instrument_mode << "|port=" << key.port_target;
     return fnv1a32_str(os.str());
 }
@@ -213,7 +213,7 @@ bool project_cache_load(const std::string &cache_path, uint32_t &out_opts_hash,
     if (!read_u32_le(buf.data(), buf.size(), off, dep_count)) return false;
     if (magic != VPC_MAGIC) return false;
     if (version != VPC_FORMAT_VERSION) return false;
-    if (cached_cvh != vexi_compiler_version_hash()) return false;
+    if (cached_cvh != vxi_compiler_version_hash()) return false;
     if (dep_count > 100000) return false; // sanity
 
     out_deps.reserve(dep_count);
@@ -256,8 +256,8 @@ bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
     // Phase M.L15: compiler_version_hash u64.  Si el compiler cambia
     // (cambio de version, reglas de mangling, ABI invariantes), el
     // cache se invalida automaticamente.  Reusa el mismo hash que
-    // vexi_format.h usa para verificacion del .vexi (M5.b).
-    write_u64_le(buf, vexi_compiler_version_hash());
+    // vxi_format.h usa para verificacion del .vxi (M5.b).
+    write_u64_le(buf, vxi_compiler_version_hash());
     write_u32_le(buf, static_cast<uint32_t>(deps.size()));
     for (const auto &d : deps) {
         write_u32_le(buf, static_cast<uint32_t>(d.path.size()));

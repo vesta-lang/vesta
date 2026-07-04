@@ -1,14 +1,14 @@
 /**
  * @file module_interop.h
- * @brief Interop entre TypeChecker y formato @c .vexi (Phase M.2.d).
+ * @brief Interop entre TypeChecker y formato @c .vxi (Phase M.2.d).
  *
  * Funciones libres que conectan el estado del @c TypeChecker con un
- * @c VexiModule.  Viven fuera del TypeChecker para no forzar
- * @c vexi_format.h en todos sus consumidores.
+ * @c VxiModule.  Viven fuera del TypeChecker para no forzar
+ * @c vxi_format.h en todos sus consumidores.
  */
 
-#ifndef VEX_MODULE_INTEROP_H
-#define VEX_MODULE_INTEROP_H
+#ifndef VX_MODULE_INTEROP_H
+#define VX_MODULE_INTEROP_H
 
 #include <cstdint>
 #include <vector>
@@ -17,11 +17,11 @@
 
 namespace vx {
 
-struct VexiModule; // fwd decl, definido en vexi_format.h
+struct VxiModule; // fwd decl, definido en vxi_format.h
 
 /**
  * @brief Extrae los simbolos publicos del @c TypeChecker a un
- * @c VexiModule listo para serializar.
+ * @c VxiModule listo para serializar.
  *
  * En el MVP M2, "publico" = todos los typedefs, structs, classes,
  * enums y funciones top-level del modulo.  La regla de @c public /
@@ -30,14 +30,14 @@ struct VexiModule; // fwd decl, definido en vexi_format.h
  * @param tc           TypeChecker con el modulo ya verificado.
  * @param source_hash  Hash FNV-1a 64 del source crudo (para
  *                     invalidacion incremental del cache).
- * @param out          @c VexiModule destino.  Se sobrescribe.
+ * @param out          @c VxiModule destino.  Se sobrescribe.
  */
-void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
-                                VexiModule &out,
+void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
+                                VxiModule &out,
                                 const std::string &strip_prefix = "");
 
 /**
- * @brief Inyecta simbolos importados de un @c VexiModule en las tablas
+ * @brief Inyecta simbolos importados de un @c VxiModule en las tablas
  * del TypeChecker actual.
  *
  * En el MVP M2 solo se inyectan los simbolos LISTADOS en
@@ -45,23 +45,23 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
  * (`import "x" as a;`) requieren namespace support, pendiente en M2.x.
  *
  * @param tc           TypeChecker destino.
- * @param mod          Modulo @c VexiModule decodificado.
+ * @param mod          Modulo @c VxiModule decodificado.
  * @param only_symbols Lista de simbolos a importar (con rename opcional).
  *                     Si vacio: no se inyecta nada.
  */
-void import_vexi_into_typechecker(
-    TypeChecker &tc, const VexiModule &mod,
-    const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols);
+void import_vxi_into_typechecker(
+    TypeChecker &tc, const VxiModule &mod,
+    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols);
 
 /**
  * @brief Variante que devuelve la lista de simbolos solicitados pero
- * NO encontrados (o privados) en el `.vexi`.  Util para que el caller
+ * NO encontrados (o privados) en el `.vxi`.  Util para que el caller
  * (compile_vx_project) emita diagnosticos cross-module precisos
  * (Phase M6.a L.3).
  */
-std::vector<std::string> import_vexi_into_typechecker_with_missing(
-    TypeChecker &tc, const VexiModule &mod,
-    const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols);
+std::vector<std::string> import_vxi_into_typechecker_with_missing(
+    TypeChecker &tc, const VxiModule &mod,
+    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols);
 
 /**
  * @brief Phase M.7: registra un namespace para un @c "import \"lib\";"
@@ -70,7 +70,7 @@ std::vector<std::string> import_vexi_into_typechecker_with_missing(
  * @param tc          TypeChecker del consumidor.
  * @param local_name  Nombre visible (alias o module_name si sin alias).
  * @param module_name Nombre original del modulo (para mensajes de error).
- * @param mod         Modulo @c VexiModule decodificado del dep.
+ * @param mod         Modulo @c VxiModule decodificado del dep.
  *
  * Tras esta llamada, @c local_name esta registrado como un
  * Symbol::Namespace en el scope global del consumidor.  El usuario puede
@@ -79,11 +79,11 @@ std::vector<std::string> import_vexi_into_typechecker_with_missing(
 void register_namespace_for_import(TypeChecker &tc,
                                    const std::string &local_name,
                                    const std::string &module_name,
-                                   const VexiModule &mod);
+                                   const VxiModule &mod);
 
 /**
  * @brief #cross-module-generics: inyecta las plantillas genericas + conceptos
- * de un `.vexi` importado en el TypeChecker del importador.
+ * de un `.vxi` importado en el TypeChecker del importador.
  *
  * Re-parsea el TEXTO FUENTE de cada plantilla (`struct Caja<T>`, `concept N`,
  * etc.) y la anyade a @c mod_.decls del importador, para que pueda
@@ -93,11 +93,11 @@ void register_namespace_for_import(TypeChecker &tc,
  * @p ns_prefix: si no esta vacio, registra ademas el nombre cualificado
  * `<ns>.<Template>` como alias del template para los imports con namespace.
  */
-void inject_generic_templates_from_vexi(
-    TypeChecker &tc, const VexiModule &mod,
+void inject_generic_templates_from_vxi(
+    TypeChecker &tc, const VxiModule &mod,
     const std::unordered_set<std::string> &wanted,
     const std::string &ns_prefix);
 
 } // namespace vx
 
-#endif // VEX_MODULE_INTEROP_H
+#endif // VX_MODULE_INTEROP_H

@@ -457,7 +457,7 @@ ValidationResult validate_manifest(const Manifest &m) {
             if (d.sha256.empty()) {
                 vr.warnings.push_back("dep '" + d.name +
                                       "': sin 'sha256' (modo dev; falla en "
-                                      "install si no hay vex.lock)");
+                                      "install si no hay vx.lock)");
             } else if (!is_valid_sha256(d.sha256)) {
                 vr.ok = false;
                 vr.errors.push_back(

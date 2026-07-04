@@ -50,8 +50,8 @@
  * que el lowering ya emite (r1=fn_pc, r2=argc).
  *
  * Registrado en el virtual_lib_registry como
- * @c "vesta_runtime:vex_get_native_thunk". */
-extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t /*argc*/) {
+ * @c "vesta_runtime:vx_get_native_thunk". */
+extern "C" uint64_t vx_get_native_thunk(uint64_t fn_pc, uint64_t /*argc*/) {
     runtime::ProcessVM *proc = runtime::get_current_executing_process();
     if (proc == nullptr) return 0;
     /* Compila (o reusa de cache) la fn como callback de ABI nativo y
@@ -62,7 +62,7 @@ extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t /*argc*/) {
 }
 
 /* Auto-registro en el virtual_lib_registry al cargar el binario.  Asi
- * tanto el path --vex (compile) como --run (ejecutar .velb) tienen la
+ * tanto el path --vx (compile) como --run (ejecutar .velb) tienen la
  * fn disponible sin necesidad de llamar al TypeChecker constructor.
  *
  * `__attribute__((used))` evita que `-Wl,--gc-sections` elimine el
@@ -70,36 +70,36 @@ extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t /*argc*/) {
  * fuerza ejecucion antes de main, garantizado por GCC/Clang. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((used, constructor)) static void
-vex_callback_register_virtual_fn() {
-    ffi::register_virtual_fn("vesta_runtime", "vex_get_native_thunk",
-                             reinterpret_cast<void *>(&::vex_get_native_thunk));
+vx_callback_register_virtual_fn() {
+    ffi::register_virtual_fn("vesta_runtime", "vx_get_native_thunk",
+                             reinterpret_cast<void *>(&::vx_get_native_thunk));
 }
 #else
 namespace {
-struct VexCallbackAutoRegister {
-    VexCallbackAutoRegister() {
+struct VxCallbackAutoRegister {
+    VxCallbackAutoRegister() {
         ffi::register_virtual_fn(
-            "vesta_runtime", "vex_get_native_thunk",
-            reinterpret_cast<void *>(&::vex_get_native_thunk));
+            "vesta_runtime", "vx_get_native_thunk",
+            reinterpret_cast<void *>(&::vx_get_native_thunk));
     }
 };
-static VexCallbackAutoRegister _vex_callback_auto_register;
+static VxCallbackAutoRegister _vx_callback_auto_register;
 } // namespace
 #endif
 
 /* Helper que el main.cpp puede llamar explicitamente para forzar el
  * registro (defense-in-depth si el constructor no se ejecuta por algun
  * motivo de linking). */
-extern "C" void runtime_ensure_vex_callback_registered(void) {
-    ffi::register_virtual_fn("vesta_runtime", "vex_get_native_thunk",
-                             reinterpret_cast<void *>(&::vex_get_native_thunk));
+extern "C" void runtime_ensure_vx_callback_registered(void) {
+    ffi::register_virtual_fn("vesta_runtime", "vx_get_native_thunk",
+                             reinterpret_cast<void *>(&::vx_get_native_thunk));
 }
 
 /* CPU dispatch (cimiento): deteccion de features del HOST para interp/JIT.
- * En AOT el binario corre su propio __vex_cpu_init (cpuid dentro del .exe);
+ * En AOT el binario corre su propio __vx_cpu_init (cpuid dentro del .exe);
  * en interp/JIT la VM corre sobre la CPU real -> exponemos las features del
  * host via esta fn nativa, resuelta por el virtual_lib_registry (sin DLL).
- * MISMO bit layout que el __vex_cpu_init de AOT (ver lowering.cpp):
+ * MISMO bit layout que el __vx_cpu_init de AOT (ver lowering.cpp):
  *   bit0=SSE2 1=SSE4.2 2=POPCNT 3=AVX 4=AVX2 5=BMI1 6=BMI2 7=AVX512F 8=ERMS.
  * Cacheado: cpuid corre una sola vez por proceso. */
 extern "C" uint64_t vesta_runtime_cpu_features(void) {
@@ -133,20 +133,20 @@ extern "C" uint64_t vesta_runtime_cpu_features(void) {
 
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((used, constructor)) static void
-vex_cpu_features_register_virtual_fn() {
+vx_cpu_features_register_virtual_fn() {
     ffi::register_virtual_fn(
         "vesta_runtime", "cpu_features",
         reinterpret_cast<void *>(&::vesta_runtime_cpu_features));
 }
 #else
 namespace {
-struct VexCpuFeaturesAutoRegister {
-    VexCpuFeaturesAutoRegister() {
+struct VxCpuFeaturesAutoRegister {
+    VxCpuFeaturesAutoRegister() {
         ffi::register_virtual_fn(
             "vesta_runtime", "cpu_features",
             reinterpret_cast<void *>(&::vesta_runtime_cpu_features));
     }
 };
-static VexCpuFeaturesAutoRegister _vex_cpu_features_auto_register;
+static VxCpuFeaturesAutoRegister _vx_cpu_features_auto_register;
 } // namespace
 #endif

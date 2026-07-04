@@ -3,12 +3,12 @@
  * @brief Firmas Ed25519 sobre paquetes Vesta + sistema de pin de autores.
  *
  * Modelo:
- *   - Cada paquete publica un @c .vex.sig (Ed25519) junto a su contenido.
+ *   - Cada paquete publica un @c .vx.sig (Ed25519) junto a su contenido.
  *   - La firma se calcula sobre @c sha256_tree(package_dir) (no sobre la
  *     concatenacion de los archivos), asi cualquier modificacion de un solo
  *     byte invalida la firma.
  *   - El autor se identifica por @c kpub1:<64-hex>  ("kpub1" = key pub v1).
- *   - El usuario "pinea" autores confiables en @c $VEX_HOME/trust.toml.
+ *   - El usuario "pinea" autores confiables en @c $VX_HOME/trust.toml.
  *     Paquetes firmados por autores no pinneados emiten warning y requieren
  *     @c --allow-unsigned o accept-on-first-use (TOFU).
  *
@@ -55,7 +55,7 @@ bool verify_hex(const std::vector<uint8_t> &pub, const std::string &sig_hex,
 
 /**
  * @brief Lee una clave privada del usuario desde
- *        @c $VEX_HOME/keys/private/<id>.pem (formato OpenSSL Ed25519 PEM).
+ *        @c $VX_HOME/keys/private/<id>.pem (formato OpenSSL Ed25519 PEM).
  */
 bool load_private_key(const std::string &path, KeyPair &out);
 
@@ -82,7 +82,7 @@ struct TrustPin {
 /**
  * @brief Carga la lista de trust pins del usuario.
  *
- * Por defecto @c $VEX_HOME/trust.toml.
+ * Por defecto @c $VX_HOME/trust.toml.
  */
 std::vector<TrustPin> load_trust_pins(const std::string &trust_file_path = "");
 

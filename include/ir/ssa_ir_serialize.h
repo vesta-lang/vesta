@@ -60,7 +60,7 @@
  *
  *   Funcion pequena (~10 instrs): ~300 bytes serializada.
  *   Funcion media (100 instrs): ~3 KB.
- *   Modulo Vesta tipico (`vexed_modular.vex` ~30 fns x 50 instrs/fn):
+ *   Modulo Vesta tipico (`vxed_modular.vx` ~30 fns x 50 instrs/fn):
  *      ~30 * 1.5 KB = 45 KB de IR vs ~150 KB de bytecode -> 1.3x total.
  *
  *   La compresion LZ4 (no implementada en v1) reduce IR ~3x adicional.
@@ -141,13 +141,13 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
                       size_t section_size, std::vector<IrFunction> &functions);
 
 /* ===================================================================== */
-/* Cache de IR por modulo (.vexir)                                       */
+/* Cache de IR por modulo (.vxir)                                       */
 /* ===================================================================== */
 
 /**
- * @brief Magic "VXMC" del cache de IR por modulo (`.vexir`).
+ * @brief Magic "VXMC" del cache de IR por modulo (`.vxir`).
  *        DISTINTO de @c IR_SECTION_MAGIC ("VEIR") a proposito: un
- *        `.vexir` viejo (formato solo-funciones, magic "VEIR") falla
+ *        `.vxir` viejo (formato solo-funciones, magic "VEIR") falla
  *        el check de magic en @c parse_ir_module_cache y fuerza
  *        recompilar el dep (auto-invalidacion del cache obsoleto).
  */
@@ -158,7 +158,7 @@ static constexpr uint16_t IR_MODULE_CACHE_VERSION =
        // DLL real (kernel32/user32/...) en vez de asumir msvcrt
 
 /**
- * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vexir`.
+ * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vxir`.
  *
  * A diferencia de @c emit_ir_section (que solo guarda @c functions y
  * sirve para la seccion @c @ir del `.velb` consumida por el JIT), este
@@ -170,18 +170,18 @@ static constexpr uint16_t IR_MODULE_CACHE_VERSION =
  *   - globals      (map nombre -> IrValueId).
  *
  * @param mod  IrModule del dep a cachear.
- * @return     bytes listos para escribir al `.vexir`.
+ * @return     bytes listos para escribir al `.vxir`.
  */
 std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod);
 
 /**
- * @brief Reconstruye un @c IrModule completo desde un buffer `.vexir`
+ * @brief Reconstruye un @c IrModule completo desde un buffer `.vxir`
  *        producido por @c emit_ir_module_cache.
  *
  * Rellena @c out.functions, @c out.static_data y @c out.globals.
  *
  * @return @c true si el parseo fue exitoso; @c false si magic/version
- *         no coinciden (p.ej. un `.vexir` del formato viejo) o el
+ *         no coinciden (p.ej. un `.vxir` del formato viejo) o el
  *         buffer esta truncado.  En false, el caller debe recompilar.
  */
 bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out);

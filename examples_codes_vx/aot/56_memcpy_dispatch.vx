@@ -1,0 +1,39 @@
+// CPU dispatch (Inc 2): memcpy multi-versionado por tabla de punteros.
+// El concat de value-strings nativos (`a + b`) baja a un `call [fp]` indirecto;
+// __vx_cpu_init detecta la CPU (cpuid) y __vx_memcpy_init setea el fp a la
+// variante optima (base = rep movsb; avx2 = vmovdqu ymm 32B + cola).  Ambas
+// variantes deben copiar byte-exacto para cualquier longitud.
+//
+// El test construye strings de varios tamanos para ejercitar todos los paths
+// del memcpy:
+//   - corta (< 32 bytes)          -> solo cola en la variante AVX2.
+//   - exacta 32 bytes             -> un chunk de 32 + cero cola.
+//   - 70 bytes (NO multiplo de 32)-> dos chunks de 32 + cola de 6.
+// Verifica las longitudes resultantes sumandolas a un entero comprobable.
+
+i32 main() {
+    // Corta: 5 bytes (< 32).
+    string s1 = "ab" + "cde";          // "abcde" -> 5
+
+    // Exacta 32: "0123456789" (10) + "0123456789" (10) + "0123456789AB" (12).
+    string s2 = "0123456789" + "0123456789" + "0123456789AB"; // 32
+
+    // 70 bytes (no multiplo de 32): construir por concats encadenados.
+    // 7 grupos de "0123456789" (10 cada uno) = 70.
+    string d = "0123456789";
+    string t = d + d;                  // 20
+    string u = t + t;                  // 40
+    string v = u + t;                  // 60
+    string w = v + d;                  // 70
+
+    // Verificacion de cpu_features(): en una CPU con AVX2 (bit4) elegimos el
+    // path avx2; en cualquier x86-64 el bit0 (SSE2) esta siempre.  No afecta al
+    // resultado numerico (la copia debe ser identica en ambas variantes), solo
+    // confirma que la deteccion corre.
+    u64 feats = cpu_features();
+    i32 sse2_ok = (i32)((feats & 1) != 0);   // 1 siempre
+
+    // 5 + 32 + 70 = 107.  * sse2_ok (1) = 107.
+    i32 total = (i32)(s1.length() + s2.length() + w.length());
+    return total * sse2_ok;   // 107
+}

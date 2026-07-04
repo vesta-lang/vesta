@@ -211,7 +211,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     loader::FrameHeader *fr = vm->frame_stack;
     const uint64_t cur_pc = vm->registers.rip.raw();
 
-    // Helper: append "(file.vex:line)" usando primero DebugInfo del
+    // Helper: append "(file.vx:line)" usando primero DebugInfo del
     // .velb cargado (precision pc_offset -> line); fallback a
     // MethodDebug (start_line del metodo).  Item 4: ahora el stack
     // trace muestra la linea EXACTA de la instruccion fallida en
@@ -571,7 +571,7 @@ static void __attribute__((noinline)) av_recovery_stub() {
  *        interferir con el manejo normal de excepciones (otros
  *        plugins, debugger, etc.).
  */
-static LONG WINAPI vex_av_veh(EXCEPTION_POINTERS *info) {
+static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
     if (info == nullptr || info->ExceptionRecord == nullptr) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
@@ -627,7 +627,7 @@ void install_host_av_handler() noexcept {
         // (antes del default Windows handler).  Asi capturamos AVs
         // antes de que llegue el "Application has stopped" del OS.
         // Guardamos el handle para poder retirarlo al descargar la libreria.
-        g_av_veh_handle = AddVectoredExceptionHandler(1u, &vex_av_veh);
+        g_av_veh_handle = AddVectoredExceptionHandler(1u, &vx_av_veh);
     });
 }
 

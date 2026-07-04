@@ -276,9 +276,9 @@ class DebugInfo {
      * @brief Traduce (file, line) -> bytecode_offset (busqueda inversa).
      *
      * Util para resolver breakpoints emitidos por el cliente como
-     * "file.vex:42" a un offset concreto que el server pueda usar
-     * con SET_BREAK.  El match del file es por sufijo: "foo.vex"
-     * matchea cualquier path que termine en "foo.vex".  Si
+     * "file.vx:42" a un offset concreto que el server pueda usar
+     * con SET_BREAK.  El match del file es por sufijo: "foo.vx"
+     * matchea cualquier path que termine en "foo.vx".  Si
      * @p line_target es 0 devuelve el primer offset del file.  Si
      * la linea exacta no esta en la tabla, devuelve el offset de
      * la siguiente linea conocida (>= target).  Devuelve UINT32_MAX

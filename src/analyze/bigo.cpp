@@ -24,7 +24,7 @@
  * @c UNKNOWN (que NUNCA genera warning de contrato).
  *
  * --- Nivel 3 (EMPIRICO, --measure): DISENO documentado, no implementado ---
- * El harness compilaria el .vex a .velb, ejecutaria el interp con tamanos
+ * El harness compilaria el .vx a .velb, ejecutaria el interp con tamanos
  * crecientes n = 10, 100, 1000, ... contando instrucciones VM (el scheduler
  * ya lleva un instr-counter determinista).  Al doblar n se observa el ratio
  * de crecimiento del conteo:

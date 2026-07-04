@@ -1,10 +1,10 @@
 /**
  * @file lockfile.h
- * @brief Formato @c vex.lock para builds reproducibles bit-perfect.
+ * @brief Formato @c vx.lock para builds reproducibles bit-perfect.
  *
  * El lockfile congela las decisiones de resolucion: por cada dep transitiva
  * registra @c name + @c version + fuente exacta (rev/sha256) + autor +
- * firma + caps declarados.  El comando @c vm pkg install consume @c vex.lock
+ * firma + caps declarados.  El comando @c vm pkg install consume @c vx.lock
  * cuando existe (sin re-resolver semver); si no existe, lo genera tras la
  * primera resolucion exitosa.
  *
@@ -82,12 +82,12 @@ struct LockParseResult {
 };
 
 /**
- * @brief Parsea @c vex.lock desde un buffer TOML.
+ * @brief Parsea @c vx.lock desde un buffer TOML.
  */
 LockParseResult parse_lockfile_buffer(const std::string &buffer);
 
 /**
- * @brief Parsea @c vex.lock desde archivo.
+ * @brief Parsea @c vx.lock desde archivo.
  */
 LockParseResult parse_lockfile_file(const std::string &path);
 

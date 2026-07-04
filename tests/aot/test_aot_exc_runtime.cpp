@@ -1,5 +1,5 @@
 /*
- * VestaVM - test del runtime de excepciones nativo (__vex_setjmp/longjmp).
+ * VestaVM - test del runtime de excepciones nativo (__vx_setjmp/longjmp).
  *
  * Carga los bytes hand-rolled en memoria RWX y valida el round-trip
  * setjmp/longjmp en el ABI del HOST (Win64 en Windows, SysV en POSIX).

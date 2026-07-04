@@ -41,8 +41,8 @@
  *   14. primaria           literales, identificadores, ( expr )
  */
 
-#ifndef VEX_PARSER_H
-#define VEX_PARSER_H
+#ifndef VX_PARSER_H
+#define VX_PARSER_H
 
 #include <memory>
 #include <string>
@@ -90,7 +90,7 @@ class Parser {
 
     /**
      * @brief Phase M.L8: registra un alias de tipo conocido (typedef
-     * importado de otro modulo via @c .vexi) ANTES de parsear.  El
+     * importado de otro modulo via @c .vxi) ANTES de parsear.  El
      * @c looks_like_cast lo usa para reconocer @c (Name)expr como un
      * cast.  Idempotente: insertar el mismo nombre dos veces es no-op.
      */
@@ -479,4 +479,4 @@ class Parser {
 
 } // namespace vx
 
-#endif // VEX_PARSER_H
+#endif // VX_PARSER_H

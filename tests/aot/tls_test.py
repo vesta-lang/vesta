@@ -5,14 +5,14 @@ TLS (thread_local) nativo en AOT: PE (Windows) y ELF (Linux).
 
 Valida que `thread_local` de Vex se emite a TLS NATIVO por nuestro codegen, sin
 emutls ni runtime C.  Los PROGRAMAS viven como ejemplos en
-examples_codes_vex/aot/ (64-68); este script SOLO los compila y verifica el exit
+examples_codes_vx/aot/ (64-68); este script SOLO los compila y verifica el exit
 (no hardcodea la fuente).
 
 PE (corre nativo en Windows, sin WSL):
   - 64-68: el emisor PE sintetiza _tls_index + callbacks + IMAGE_TLS_DIRECTORY;
     el acceso lee el bloque TLS del hilo del TEB (gs:[0x58]) + offset (SECREL).
   - 67 ademas prueba el AISLAMIENTO por-hilo REAL con un hilo Win32.
-  - 70: TLS en una .dll PE (plantilla via __vex_tls_init / DllMain sintetico);
+  - 70: TLS en una .dll PE (plantilla via __vx_tls_init / DllMain sintetico);
     host C (gcc) verifica plantilla + aislamiento por-hilo.
 
 ELF (compila/ejecuta via WSL):
@@ -52,9 +52,9 @@ def main():
     # --- PE: thread_local Vex-nativo (TLS directory de Windows).  Corre nativo
     # (sin WSL).  El emisor PE sintetiza _tls_index + callbacks +
     # IMAGE_TLS_DIRECTORY; el acceso usa gs:[0x58] -> [_tls_index] -> bloque.
-    # Los programas viven como EJEMPLOS en examples_codes_vex/aot/ (no
+    # Los programas viven como EJEMPLOS en examples_codes_vx/aot/ (no
     # hardcodeados aqui): el test compila cada uno a PE y verifica el exit. ---
-    aot_ex = os.path.join(repo, "examples_codes_vex", "aot")
+    aot_ex = os.path.join(repo, "examples_codes_vx", "aot")
     # (fichero del ejemplo, exit esperado).  Ver la cabecera de cada .vx.
     pe_cases = [
         ("64_thread_local_basico.vx", 5),
@@ -74,7 +74,7 @@ def main():
                     print(f"TLS-PE: falta el ejemplo {ex}, omitido")
                     continue
                 ep = os.path.join(pe, ex.replace(".vx", ".exe"))
-                run([vm, "--vex", src, "-m", "aot", "--emit", "exe",
+                run([vm, "--vx", src, "-m", "aot", "--emit", "exe",
                      "--format", "pe", "-o", ep])
                 got = run([ep]).returncode if os.path.exists(ep) else -1
                 if got == exp:
@@ -83,7 +83,7 @@ def main():
                     print(f"TLS-PE {ex}: EXIT MISMATCH got={got} exp={exp}")
                     rc_pe = 1
             # --- DLL: TLS en una .dll PE.  El emisor sintetiza el TLS directory
-            # y, ademas, fija AddressOfEntryPoint -> __vex_tls_init (DllMain
+            # y, ademas, fija AddressOfEntryPoint -> __vx_tls_init (DllMain
             # minimo) para que la plantilla se aplique en cada attach.  El host
             # C carga la .dll con LoadLibrary y verifica plantilla (12) +
             # aislamiento por-hilo (child=12).  Necesita gcc en PATH. ---
@@ -96,7 +96,7 @@ def main():
                 try:
                     dll = os.path.join(dpe, "tls.dll")
                     hexe = os.path.join(dpe, "thost.exe")
-                    run([vm, "--vex", ex70, "-m", "aot", "--emit", "shared",
+                    run([vm, "--vx", ex70, "-m", "aot", "--emit", "shared",
                          "--format", "pe", "-o", dll])
                     run(["gcc", host70, "-o", hexe])
                     got = (run([hexe, dll]).returncode
@@ -148,7 +148,7 @@ def main():
         with open(os.path.join(work, "ma.vx"), "w") as f:
             f.write('extern "tl" { fn get_counter() -> i64; }\n'
                     'i64 main(){ return get_counter(); }\n')
-        run([vm, "--vex", os.path.join(work, "ma.vx"), "-m", "aot", "--emit",
+        run([vm, "--vx", os.path.join(work, "ma.vx"), "-m", "aot", "--emit",
              "obj", "--format", "elf", "-o", os.path.join(work, "ma.o")])
         run([vm, "--link", os.path.join(work, "ma.o"),
              os.path.join(work, "tl.o"), libc, "-o",
@@ -170,7 +170,7 @@ def main():
         with open(os.path.join(work, "mb.vx"), "w") as f:
             f.write('extern "tl2" { fn compute() -> i64; }\n'
                     'i64 main(){ return compute(); }\n')
-        run([vm, "--vex", os.path.join(work, "mb.vx"), "-m", "aot", "--emit",
+        run([vm, "--vx", os.path.join(work, "mb.vx"), "-m", "aot", "--emit",
              "obj", "--format", "elf", "-o", os.path.join(work, "mb.o")])
         run([vm, "--link", os.path.join(work, "mb.o"),
              os.path.join(work, "tl2.o"), libc, "-o",
@@ -191,7 +191,7 @@ def main():
         with open(os.path.join(work, "mc.vx"), "w") as f:
             f.write('extern "tc" { fn get_v() -> i64; }\n'
                     'i64 main(){ return get_v(); }\n')
-        run([vm, "--vex", os.path.join(work, "mc.vx"), "-m", "aot", "--emit",
+        run([vm, "--vx", os.path.join(work, "mc.vx"), "-m", "aot", "--emit",
              "obj", "--format", "elf", "-o", os.path.join(work, "mc.o")])
         run([vm, "--link", os.path.join(work, "mc.o"),
              os.path.join(work, "tc.o"), libc, "-o",
@@ -213,7 +213,7 @@ def main():
         with open(os.path.join(work, "md.vx"), "w") as f:
             f.write('extern "td" { fn get_w() -> i64; }\n'
                     'i64 main(){ return get_w(); }\n')
-        run([vm, "--vex", os.path.join(work, "md.vx"), "-m", "aot", "--emit",
+        run([vm, "--vx", os.path.join(work, "md.vx"), "-m", "aot", "--emit",
              "obj", "--format", "elf", "-o", os.path.join(work, "md.o")])
         run([vm, "--link", os.path.join(work, "md.o"),
              os.path.join(work, "td.o"), libc, "-o",
@@ -244,7 +244,7 @@ def main():
             with open(os.path.join(work, "me.vx"), "w") as f:
                 f.write('extern "te" { fn compute() -> i64; }\n'
                         'i64 main(){ return compute(); }\n')
-            run([vm, "--vex", os.path.join(work, "me.vx"), "-m", "aot",
+            run([vm, "--vx", os.path.join(work, "me.vx"), "-m", "aot",
                  "--emit", "obj", "--format", "elf", "--aot-arch", "x86-32",
                  "-o", os.path.join(work, "me.o")])
             run([vm, "--link", os.path.join(work, "me.o"),
@@ -264,7 +264,7 @@ def main():
         # SHF_TLS (.tdata) + acceso fs:0 + lea@tpoff + reloc R_X86_64_TPOFF32 que
         # el --link resuelve.  Sin emutls, sin runtime C, todo del lenguaje. ---
         ex65 = os.path.join(aot_ex, "65_thread_local_multi.vx")
-        run([vm, "--vex", ex65, "-m", "aot", "--emit", "obj", "--format", "elf",
+        run([vm, "--vx", ex65, "-m", "aot", "--emit", "obj", "--format", "elf",
              "-o", os.path.join(work, "vtl.o")])
         run([vm, "--link", os.path.join(work, "vtl.o"), libc, "-o",
              os.path.join(work, "vtl"), "--format", "elf"])
@@ -279,7 +279,7 @@ def main():
         # ejecutable ELF resuelve el TPOFF inline + monta PT_TLS.  Reusa el
         # EJEMPLO 66 (TLS en funcion no-main + loop, persistencia por-hilo). ---
         ex66 = os.path.join(aot_ex, "66_thread_local_fn_loop.vx")
-        run([vm, "--vex", ex66, "-m", "aot", "--emit", "exe", "--format", "elf",
+        run([vm, "--vx", ex66, "-m", "aot", "--emit", "exe", "--format", "elf",
              "-o", os.path.join(work, "vtg")])
         rg = wsl(f"cd {wm} && chmod +x vtg && ./vtg").returncode
         if rg == 10:

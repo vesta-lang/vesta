@@ -1292,7 +1292,7 @@ std::vector<uint8_t> Linker::build_executable() {
     //
     // Patchea offset_debug_section + size_debug_section + debug_level
     // en el header del .velb.  Si no hay info de debug recolectada
-    // (compilacion sin --vex-debug), no escribimos nada y los campos
+    // (compilacion sin --vx-debug), no escribimos nada y los campos
     // quedan a 0 (loader detecta size==0 y omite la carga).
     {
         LinkerPhaseTimer __t_dbg("emit_debug_section");

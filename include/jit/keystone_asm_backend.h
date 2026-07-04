@@ -20,8 +20,8 @@
  * este header ni keystone.h: solo usa la interfaz abstracta.
  */
 
-#ifndef VEX_JIT_KEYSTONE_ASM_BACKEND_H
-#define VEX_JIT_KEYSTONE_ASM_BACKEND_H
+#ifndef VX_JIT_KEYSTONE_ASM_BACKEND_H
+#define VX_JIT_KEYSTONE_ASM_BACKEND_H
 
 namespace jit {
 
@@ -35,4 +35,4 @@ void register_keystone_asm_backend();
 
 } // namespace jit
 
-#endif // VEX_JIT_KEYSTONE_ASM_BACKEND_H
+#endif // VX_JIT_KEYSTONE_ASM_BACKEND_H

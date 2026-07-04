@@ -111,7 +111,7 @@ struct LayoutConfig {
     int pe_subsystem = -1;        ///< PE Subsystem (<=0 => CUI).
     uint64_t elf_stack_vaddr = 0; ///< ELF: VA sugerida de la pila.
     uint64_t elf_stack_size = 0;  ///< ELF: tamano del segmento de pila.
-    /// TLS PE: seccion+offset de @c __vex_tls_init (el TLS callback que aplica
+    /// TLS PE: seccion+offset de @c __vx_tls_init (el TLS callback que aplica
     /// la plantilla por-hilo).  -1 = sin callback.  El emisor lo registra en
     /// @c AddressOfCallBacks del IMAGE_TLS_DIRECTORY.
     int tls_callback_section = -1;
@@ -231,7 +231,7 @@ class ObjectWriter {
     /// Fija la configuracion de layout.
     void set_config(const LayoutConfig &c) { cfg_ = c; }
 
-    /// TLS PE: ubicacion de @c __vex_tls_init (el callback que aplica la
+    /// TLS PE: ubicacion de @c __vx_tls_init (el callback que aplica la
     /// plantilla por-hilo).  El emisor lo registra en @c AddressOfCallBacks.
     void set_tls_callback(int section, uint32_t off) {
         cfg_.tls_callback_section = section;

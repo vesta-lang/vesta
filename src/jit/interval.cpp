@@ -153,7 +153,7 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::XORPS:
     case MOp::ANDPS:
     /* AVX escalar 3-op no-destructivo: mismas roles (dst def, 2 srcs use) pero
-     * el rewrite NO las legaliza a 2-address (son VEX nativo -> sin el mov). */
+     * el rewrite NO las legaliza a 2-address (son VX nativo -> sin el mov). */
     case MOp::VADDSD:
     case MOp::VSUBSD:
     case MOp::VMULSD:

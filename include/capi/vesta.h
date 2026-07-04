@@ -7,7 +7,7 @@
  * libreria compartida @c libvesta (vesta.dll / libvesta.so).
  *
  * Capacidades:
- *   - Compilar fuente Vesta (.vex) a bytecode .velb en memoria.
+ *   - Compilar fuente Vesta (.vx) a bytecode .velb en memoria.
  *   - Ejecutar bytecode .velb en una instancia de la VM.
  *   - Compilar + ejecutar en una sola llamada (eval).
  *
@@ -139,7 +139,7 @@ VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
  * @brief Compila fuente Vesta a texto del IR SSA (dump legible del IrModule).
  *
  * Activa @c CompileOptions::dump_ir y devuelve @c CompileResult::ir_text,
- * el mismo dump que produce @c --vex-emit-ir.
+ * el mismo dump que produce @c --vx-emit-ir.
  *
  * @param src        Codigo fuente Vesta terminado en NUL.
  * @param unit_name  Nombre logico del modulo; puede ser NULL.

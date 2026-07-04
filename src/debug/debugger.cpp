@@ -1701,7 +1701,7 @@ void Debugger::handle_command(const std::string &json_msg, int client_fd) {
         // Recorrer todos los Executable cargados y preguntar a su
         // DebugInfo si tienen un offset para (file, line).  El
         // primer match gana.  Si ninguno tiene info de debug,
-        // devolver error claro pidiendo recompilar con --vex-debug.
+        // devolver error claro pidiendo recompilar con --vx-debug.
         uint32_t best_off = UINT32_MAX;
         for (const auto &exe : vm_.loader_public.executables) {
             if (!exe || !exe->debug_info) continue;
@@ -1714,7 +1714,7 @@ void Debugger::handle_command(const std::string &json_msg, int client_fd) {
         }
         if (best_off == UINT32_MAX) {
             err_resp("set_break_src: no se encontro (file, line) en "
-                     "la info de debug.  Compila con --vex-debug "
+                     "la info de debug.  Compila con --vx-debug "
                      "para incluir la tabla bytecode->source-line.");
             return;
         }

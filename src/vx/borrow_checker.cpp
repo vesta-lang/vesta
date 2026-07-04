@@ -24,7 +24,7 @@
  * la operacion que viola la regla), igual que el output de @c rustc:
  *
  *   error: no se puede mover 'p' porque ya esta prestado
- *      --> foo.vex:5:12
+ *      --> foo.vx:5:12
  *       | 5 |     unique<i32> q = move(p);
  *       |   |                     ^^^^^^^ movido aqui
  *       | 3 |     borrow<i32> r = lend(p);

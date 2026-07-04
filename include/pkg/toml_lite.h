@@ -2,7 +2,7 @@
  * @file toml_lite.h
  * @brief Mini-parser de TOML para el manifest de paquetes Vesta.
  *
- * Subset de TOML que cubre lo necesario para vex.toml y vex.lock:
+ * Subset de TOML que cubre lo necesario para vx.toml y vx.lock:
  *   - Tablas: @c [section] y @c [[array_of_tables]]
  *   - Sub-tablas: @c [section.subsection]
  *   - Tablas inline: @c key = { a = 1, b = "..." }
@@ -122,7 +122,7 @@ ParseResult parse(std::string_view input);
 ParseResult parse_file(const std::string &path);
 
 // ----------------------------------------------------------------
-// Serializer (para escribir vex.toml/vex.lock canonicos)
+// Serializer (para escribir vx.toml/vx.lock canonicos)
 // ----------------------------------------------------------------
 
 /**

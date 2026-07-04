@@ -3,7 +3,7 @@
  * @brief Despachador del CLI @c vm pkg <subcomando> [args].
  *
  * Subcomandos soportados:
- *   init [--json]                       Crear vex.toml/vex.json en cwd
+ *   init [--json]                       Crear vx.toml/vx.json en cwd
  *   add <name> [--git URL --rev R | --path P]
  *                                       añadir dep al manifest + lockfile
  *   remove <name>                       Quitar dep

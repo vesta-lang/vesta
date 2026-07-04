@@ -16,7 +16,7 @@
  * lex/parse/check/lower/emit.
  *
  * Esta es la interfaz que el dispatcher CLI llama cuando recibe
- * @c --vex archivo.vex.  Convierte el codigo fuente .vex en texto
+ * @c --vx archivo.vx.  Convierte el codigo fuente .vx en texto
  * .vel listo para ser pasado al ensamblador del proyecto.
  *
  * No realiza I/O por si misma (lo hace el caller); solo opera sobre
@@ -24,8 +24,8 @@
  * el sistema de ficheros.
  */
 
-#ifndef VEX_COMPILER_H
-#define VEX_COMPILER_H
+#ifndef VX_COMPILER_H
+#define VX_COMPILER_H
 
 #include <map>
 #include <unordered_map>
@@ -125,11 +125,11 @@ struct CompileOptions {
 
     /// Fase 4 interop C: si @c true, genera el header C publico del modulo
     /// (structs C-compat + prototipos de funciones C-representables) en
-    /// @c CompileResult::header_text.  Activado por `vex --emit-header`.
+    /// @c CompileResult::header_text.  Activado por `vx --emit-header`.
     bool emit_header = false;
 
     /// Instrumentacion para debugging: cuando esta activa, el lowering
-    /// emite CALLs sinteticas a @c "vex_trace:enter" y @c "vex_trace:exit"
+    /// emite CALLs sinteticas a @c "vx_trace:enter" y @c "vx_trace:exit"
     /// al inicio y antes de cada @c RET de cada funcion del usuario.
     /// Como las trazas estan en el IR (no en un backend especifico),
     /// el bytecode VM, el JIT y todos los ports (C, futuro Java, JS)
@@ -226,7 +226,7 @@ struct CompileResult {
     /// @SyncImpl -- nombres de las funciones libres que reemplazan la
     /// primitiva de monitor de `synchronized` (enter/exit).  Vacios =>
     /// comportamiento por defecto (opcode MONENTER/MONEXIT en interp/JIT,
-    /// __vex_monenter/monexit en AOT).  Cuando estan set, `synchronized`
+    /// __vx_monenter/monexit en AOT).  Cuando estan set, `synchronized`
     /// baja a un CALL a estas funciones en LOS 3 MODOS.
     std::string sync_enter_override;
     std::string sync_exit_override;
@@ -409,11 +409,11 @@ struct CompileResult {
 };
 
 /**
- * @brief Compila una cadena .vex a texto .vel.
+ * @brief Compila una cadena .vx a texto .vel.
  *
  * Pipeline interno:
  *
- *   .vex source
+ *   .vx source
  *     -> Lexer (token stream)
  *     -> Parser  (AST)
  *     -> TypeChecker (rellena result_type, valida)
@@ -437,7 +437,7 @@ CompileResult compile_vx_source(const std::string &source,
  *
  * Resuelve los @c import del fichero raiz via @c ModuleGraph,
  * compila cada modulo en orden topologico (deps primero), inyecta
- * los .vexi entre dependientes, y emite un unico @c .vel con todas
+ * los .vxi entre dependientes, y emite un unico @c .vel con todas
  * las funciones mergeadas.
  *
  * Restricciones MVP:
@@ -447,7 +447,7 @@ CompileResult compile_vx_source(const std::string &source,
  *     nombres de funciones no colisionen entre modulos.
  *   - Sin link separado: todos los modulos se mergean en un solo .vel.
  *
- * @param root_path Path absoluto o relativo del @c .vex raiz.
+ * @param root_path Path absoluto o relativo del @c .vx raiz.
  * @param opts      Opciones de compilacion.
  * @param source_overlay Opcional: mapa path->texto en memoria (overlay).  Usado
  *        por el LSP para analizar el buffer del editor (root) resolviendo los
@@ -465,7 +465,7 @@ CompileResult compile_vx_project(
     const std::vector<std::string> *extra_search_paths = nullptr);
 
 /**
- * @brief Detecta si el source @c .vex contiene @c import declaraciones
+ * @brief Detecta si el source @c .vx contiene @c import declaraciones
  * top-level.  Heuristica permisiva (string-scanner que respeta
  * comentarios y strings).  Usado por @c main.cpp para decidir si
  * dispatchar a @c compile_vx_project en lugar de @c compile_vx_source.
@@ -473,8 +473,8 @@ CompileResult compile_vx_project(
  * @param source Texto Vesta.
  * @return @c true si encuentra al menos un @c import top-level.
  */
-bool vex_source_has_imports(const std::string &source);
+bool vx_source_has_imports(const std::string &source);
 
 } // namespace vx
 
-#endif // VEX_COMPILER_H
+#endif // VX_COMPILER_H

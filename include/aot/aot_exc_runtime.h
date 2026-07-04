@@ -15,13 +15,13 @@
  * @brief Runtime de excepciones NATIVO para AOT (sin libc, sin GC, sin VM).
  *
  * Provee las primitivas que el codegen AOT usa para try/catch/throw:
- *   - @c __vex_setjmp(buf) -> i64 : salva el estado callee-saved + rsp + rip
+ *   - @c __vx_setjmp(buf) -> i64 : salva el estado callee-saved + rsp + rip
  *     en @p buf y devuelve 0 (en el retorno normal) o el valor pasado a
  *     longjmp (en el retorno tras un longjmp).  Es el unico modo de obtener
  *     el "returns twice"; el AOT lo emite como un CALL real seguido de una
  *     rama sobre el resultado.
- *   - @c __vex_longjmp(buf, val) : restaura el estado de @p buf y reanuda
- *     justo despues del @c __vex_setjmp que lo salvo, devolviendo @p val (o 1
+ *   - @c __vx_longjmp(buf, val) : restaura el estado de @p buf y reanuda
+ *     justo despues del @c __vx_setjmp que lo salvo, devolviendo @p val (o 1
  *     si @p val es 0, semantica estandar de longjmp).
  *
  * Implementacion HAND-ROLLED minima-correcta (cero libc).  El layout del
@@ -55,11 +55,11 @@ struct ExcBufLayout {
 /// false -> Win64/PE).
 ExcBufLayout aot_exc_buf_layout(bool sysv);
 
-/// Bytes x86-64 de @c __vex_setjmp(buf): salva callee-saved + rsp + rip,
+/// Bytes x86-64 de @c __vx_setjmp(buf): salva callee-saved + rsp + rip,
 /// devuelve 0.  Arg0 = @c buf (rdi en SysV, rcx en Win64).
 std::vector<uint8_t> aot_exc_setjmp_bytes(bool sysv);
 
-/// Bytes x86-64 de @c __vex_longjmp(buf, val): restaura el estado y salta al
+/// Bytes x86-64 de @c __vx_longjmp(buf, val): restaura el estado y salta al
 /// rip guardado, devolviendo val (o 1 si val==0).  Args: buf, val
 /// (rdi/rsi en SysV, rcx/rdx en Win64).  No retorna.
 std::vector<uint8_t> aot_exc_longjmp_bytes(bool sysv);

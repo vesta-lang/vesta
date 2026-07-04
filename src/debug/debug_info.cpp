@@ -26,7 +26,7 @@
  *     Solo nivel 3.  Devuelve el scope mas interno que contiene el offset.
  *
  * Tambien provee la API inversa @c lookup_offset_for_line para que el
- * debugger traduzca breakpoints "file.vex:42" a un bytecode_offset
+ * debugger traduzca breakpoints "file.vx:42" a un bytecode_offset
  * concreto.  Implementado con busqueda lineal por (file, line) en la
  * tabla de lineas.  Coste O(N) por lookup, lo cual es aceptable porque
  * los breakpoints se setean al arrancar (no en hot path).
@@ -155,7 +155,7 @@ LineInfo DebugInfo::lookup_line(uint32_t bytecode_offset) const {
  * cuyo line_number sea >= line_target Y cuyo file_offset apunte a
  * @p file_target.  Devuelve UINT32_MAX si no encuentra match.
  *
- * Util para resolver breakpoints "file.vex:42" emitidos por el
+ * Util para resolver breakpoints "file.vx:42" emitidos por el
  * cliente del debugger.  Puede haber multiples instrucciones VM
  * para una misma linea Vesta (e.g. ALLOCA + CONST + STORE); elegimos
  * la PRIMERA de ese rango (menor offset), que corresponde al
@@ -173,8 +173,8 @@ uint32_t DebugInfo::lookup_offset_for_line(const std::string &file_target,
     uint32_t best_line = UINT32_MAX;
 
     // Normalizamos un path para comparacion: backslashes -> forward y
-    // toda en minusculas.  Asi `F:\C\VM\file.vex` matchea con
-    // `f:/c/vm/file.vex` y `F:/C/VM/file.vex`.  Necesario porque el
+    // toda en minusculas.  Asi `F:\C\VM\file.vx` matchea con
+    // `f:/c/vm/file.vx` y `F:/C/VM/file.vx`.  Necesario porque el
     // IDE Electron envia paths en estilo forward-slash mientras que
     // el frontend Vesta incrusta el path original (Windows backslash)
     // en la debug section del .velb.

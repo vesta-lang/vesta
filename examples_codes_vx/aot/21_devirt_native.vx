@@ -1,0 +1,24 @@
+// AOT.2.c (slice 1): devirtualizacion monomorfica nativa.  Una llamada a metodo
+// sobre una clase HOJA (sin subclases) se resuelve a un CALL directo (cero
+// overhead, como C++ con tipo final), aunque el receptor sea un parametro/
+// retorno que el optimizer no puede rastrear.  Sin vtable, sin runtime.
+//   vm -m aot --vx 21_devirt_native.vx --emit obj --format elf -o d.o
+//   gcc d.o -o d && ./d        # exit 42
+// (El dispatch virtual REAL -- clases base con subclases / interfaces -- usa
+//  vtable/itable estaticas y llega en el siguiente slice de 2.c.)
+
+class Rect {
+    i32 w;
+    i32 h;
+    Rect(i32 a, i32 b) { this.w = a; this.h = b; }
+    i32 area() { return this.w * this.h; }
+}
+
+// `r` es un parametro: el optimizer no sabe su tipo concreto, pero el frontend
+// SI (Rect es hoja) -> CALL directo a Rect__area, compilable a nativo.
+i32 use(Rect r) { return r.area(); }
+
+i32 main() {
+    Rect r = new Rect(6, 7);   // heap: calloc + ctor + free al exit (RAII)
+    return use(r);             // 6 * 7 = 42
+}

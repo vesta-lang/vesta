@@ -43,14 +43,14 @@
  * el render web de Mermaid.
  *
  * Pipeline tipico:
- *   ./vm --vex foo.vex --diagram-all --diagram-format=graphviz -o foo
+ *   ./vm --vx foo.vx --diagram-all --diagram-format=graphviz -o foo
  *   dot -Tsvg foo.ast.dot   -o foo.ast.svg
  *   dot -Tpng foo.ir.pre.dot -o foo.ir.pre.png
  *   dot -Tsvg foo.vel.dot    -o foo.vel.svg
  */
 
-#ifndef VEX_GRAPHVIZ_DIAGRAMS_H
-#define VEX_GRAPHVIZ_DIAGRAMS_H
+#ifndef VX_GRAPHVIZ_DIAGRAMS_H
+#define VX_GRAPHVIZ_DIAGRAMS_H
 
 #include <string>
 
@@ -146,4 +146,4 @@ std::string graphviz_from_vel_text(const std::string &vel_text);
 
 } // namespace vx
 
-#endif // VEX_GRAPHVIZ_DIAGRAMS_H
+#endif // VX_GRAPHVIZ_DIAGRAMS_H

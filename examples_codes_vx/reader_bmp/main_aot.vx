@@ -1,0 +1,29 @@
+// =============================================================================
+// main_aot.vx - Variante SIN argumentos de CLI para compilacion AOT nativa.
+//
+// LIMITACION VIGENTE (LIM-5): args_count()/args_get() bajan a getargc/getarg,
+// que en el target AOT nativo fallan con "op getarg requiere scheduler/procesos".
+// Por eso esta variante fija el path en el codigo, para generar un ejecutable
+// nativo standalone (PE/ELF).  El resto (lectura via stdlib vx_fileio, volcado
+// truecolor via builtin bg_rgb) es identico a main.vx, de modo que el volcado
+// de pixeles es BYTE-EXACTO respecto a interp/JIT sobre el mismo fichero.
+//
+// El path se puede cambiar aqui para volcar otra imagen.
+// =============================================================================
+
+import "bmp";
+
+i32 main() {
+    string path = "Ejemplo60x3.bmp";
+
+    bmp.BMP_Image img = new bmp.BMP_Image();
+    if (img.load(path) == 0) {
+        println("El archivo ${path} no pudo encontrarse o no existe.");
+        return 1;
+    }
+
+    img.printBMPAttributes();
+    println("");
+    img.dumpTerminal();
+    return 0;
+}

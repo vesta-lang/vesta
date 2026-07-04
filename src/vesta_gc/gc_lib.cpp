@@ -29,7 +29,7 @@
 // Diagnostico: contador de finalizadores nativos ejecutados (verificacion del
 // path en tests).  Global de archivo (no anonimo) para que gc_finalizer_run_
 // native y el accessor extern "C" compartan el mismo simbolo.
-static volatile uint64_t g_vex_gc_fin_count = 0;
+static volatile uint64_t g_vx_gc_fin_count = 0;
 
 namespace {
 
@@ -53,7 +53,7 @@ gc::GcHeap &gc_heap() {
     static gc::GcHeap heap(gc_arena(), 2u * 1024u * 1024u, 8u * 1024u * 1024u);
     // Modo AOT: raices SOLO por stackmaps precisos (frames nativos via
     // JitRegistry) + external_refs + pending.  Sin esto el major_gc conservaria
-    // todo (no colectaria).  v1 no-moving: vex_gc_alloc usa alloc_pinned ->
+    // todo (no colectaria).  v1 no-moving: vx_gc_alloc usa alloc_pinned ->
     // OldGen, el nursery queda vacio (sin riesgo de interior-ptr stale al
     // mover).  Set idempotente en cada acceso (1 store, a prueba de orden de
     // init de statics).
@@ -64,7 +64,7 @@ gc::GcHeap &gc_heap() {
 /**
  * @brief Runner NATIVO de finalizadores GC en AOT.
  *
- * Lo instala @c vex_gc_init via @c set_finalizer_runner.  El sweep (major_gc)
+ * Lo instala @c vx_gc_init via @c set_finalizer_runner.  El sweep (major_gc)
  * stagea los datos del box colectado (mismo mecanismo que la VM) y este runner
  * los ejecuta por CALL DIRECTO al deleter/dtor nativo -- cero bytecode (el
  * codigo esta AOT-compilado).  Semantica IDENTICA al runner del interprete
@@ -75,7 +75,7 @@ gc::GcHeap &gc_heap() {
  * @param f     Datos stageados del finalizador (kind + a0 + a1).
  */
 void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) {
-    ++g_vex_gc_fin_count;
+    ++g_vx_gc_fin_count;
     switch (f.kind) {
     case gc::GcFinalizerKind::UNIQUE: {
         // f.a0 = inner_ptr, f.a1 = deleter (func_ptr nativo; 0 = default free).
@@ -121,7 +121,7 @@ void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) 
 // FRAME del scan preciso de AOT.  Debe expandirse DENTRO de la runtime-entry que
 // el codigo Vesta llama directamente, para que:
 //   __builtin_return_address(0) = PC de retorno al frame Vesta (dentro de la
-//                                 funcion Vesta que hizo `call vex_gc_*`).
+//                                 funcion Vesta que hizo `call vx_gc_*`).
 //   __builtin_frame_address(0)  = RBP de ESTA entry = RSP_entry - 8, luego el
 //                                 RSP del frame Vesta justo antes del `call` es
 //                                 frame_addr + 16 (RSP_entry + 8).
@@ -130,18 +130,18 @@ void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) 
 // (pc, sp) el walk sube por la pila con frame_size (no cadena RBP), saltando los
 // frames C++ de esta libreria.
 #if defined(__GNUC__)
-#define VEX_GC_FORCE_FP __attribute__((optimize("no-omit-frame-pointer")))
+#define VX_GC_FORCE_FP __attribute__((optimize("no-omit-frame-pointer")))
 #else
-#define VEX_GC_FORCE_FP
+#define VX_GC_FORCE_FP
 #endif
-#define VEX_GC_CAPTURE_VEX_FRAME()                                             \
+#define VX_GC_CAPTURE_VX_FRAME()                                             \
     gc_heap().set_aot_scan_boundary(                                           \
         reinterpret_cast<uint64_t>(__builtin_return_address(0)),               \
         reinterpret_cast<uint64_t>(__builtin_frame_address(0)) + 16u)
 
 extern "C" {
 
-void vex_gc_init(void) {
+void vx_gc_init(void) {
     // Forzar la construccion del heap (idempotente: el static local solo se
     // inicializa una vez).
     gc::GcHeap &h = gc_heap();
@@ -151,14 +151,14 @@ void vex_gc_init(void) {
     h.set_finalizer_runner(&gc_finalizer_run_native, nullptr);
 }
 
-uint32_t vex_gc_alloc(uint64_t size) {
+uint32_t vx_gc_alloc(uint64_t size) {
     // v1 no-moving: pinned -> OldGen (el nursery queda vacio).  El GC colecta
     // por mark-sweep con raices precisas; sin compactacion (optimizacion v2).
     return static_cast<uint32_t>(
         gc_heap().alloc_pinned(static_cast<size_t>(size)));
 }
 
-uint8_t *vex_gc_alloc_ptr(uint64_t size) {
+uint8_t *vx_gc_alloc_ptr(uint64_t size) {
     // Aloca + deref en una llamada: devuelve el host_ptr al payload (estable en
     // v1 no-moving).  Lo usa el helper __new_<X>_gc del frontend (gc<T>): el ptr
     // se guarda en el slot del var-decl, marcado HOSTPTR en el stackmap ->
@@ -169,18 +169,18 @@ uint8_t *vex_gc_alloc_ptr(uint64_t size) {
     return h.deref(handle);
 }
 
-void vex_gc_register_aot_stackmaps(const uint8_t *sec) {
+void vx_gc_register_aot_stackmaps(const uint8_t *sec) {
     // El tamanño total va EMBEBIDO en el header (offset 12) -- no como parametro
     // -- porque section_size seria una reloc SIZE no soportada en .obj/.o.
     if (!sec) return;
     uint32_t total = 0;
     std::memcpy(&total, sec + 12, 4);
     const uint64_t size = total;
-    // Parsea la seccion .vexgc_smap emitida por el driver -m aot y registra cada
+    // Parsea la seccion .vxgc_smap emitida por el driver -m aot y registra cada
     // funcion (rango de codigo + stackmaps) en el JitRegistry global, para que
     // scan_jit_roots_precise (el mismo walker del JIT) descubra las raices gc<T>
     // vivas en los frames nativos durante la coleccion.  La llama el arranque
-    // del binario (CALL __vexgc_init al inicio de main) antes del primer alloc.
+    // del binario (CALL __vxgc_init al inicio de main) antes del primer alloc.
     //
     // Formato (LE), version 2:
     //   header 16B: u32 magic 'VXGM' | u32 version=2 | u32 n_fn | u32 total_size
@@ -189,7 +189,7 @@ void vex_gc_register_aot_stackmaps(const uint8_t *sec) {
     //       por slot: i16 rbp_offset | u8 gc_kind | u8 _pad
     // frame_size (v2) = RBP - RSP en un safepoint call; lo consume el WALK POR
     // TAMANO DE FRAME (scan_aot_frames) para reconstruir RBP sin cadena RBP.  Un
-    // .vexgc_smap v1 (sin frame_size) falla el check de version -> recompilar.
+    // .vxgc_smap v1 (sin frame_size) falla el check de version -> recompilar.
     if (!sec || size < 16) return;
     const uint8_t *p = sec;
     const uint8_t *end = sec + size;
@@ -243,22 +243,22 @@ void vex_gc_register_aot_stackmaps(const uint8_t *sec) {
     }
 }
 
-void vex_gc_pin(uint32_t handle) {
+void vx_gc_pin(uint32_t handle) {
     gc_heap().gc_addref(static_cast<gc::GcHandle>(handle));
 }
 
-void vex_gc_unpin(uint32_t handle) {
+void vx_gc_unpin(uint32_t handle) {
     gc_heap().gc_release(static_cast<gc::GcHandle>(handle));
 }
 
-uint8_t *vex_gc_deref(uint32_t handle) {
+uint8_t *vx_gc_deref(uint32_t handle) {
     return gc_heap().deref(static_cast<gc::GcHandle>(handle));
 }
 
-VEX_GC_FORCE_FP void vex_gc_collect(void) {
+VX_GC_FORCE_FP void vx_gc_collect(void) {
     // Capturar el frame Vesta llamador ANTES de colectar: el major_gc de abajo
     // arranca el scan preciso desde aqui (frontera C<-Vesta).
-    VEX_GC_CAPTURE_VEX_FRAME();
+    VX_GC_CAPTURE_VX_FRAME();
     gc::GcHeap &h = gc_heap();
     h.minor_gc();
     h.major_gc();
@@ -269,28 +269,28 @@ VEX_GC_FORCE_FP void vex_gc_collect(void) {
     h.run_pending_finalizers();
 }
 
-void vex_gc_register_finalizer(uint8_t *payload, uint32_t kind, uint64_t aux) {
+void vx_gc_register_finalizer(uint8_t *payload, uint32_t kind, uint64_t aux) {
     gc_heap().register_finalizer(payload,
                                  static_cast<gc::GcFinalizerKind>(kind), aux);
 }
 
-void vex_gc_unregister_finalizer(uint8_t *payload) {
+void vx_gc_unregister_finalizer(uint8_t *payload) {
     gc_heap().unregister_finalizer(payload);
 }
 
-VEX_GC_FORCE_FP void vex_gc_finalize_all(void) {
+VX_GC_FORCE_FP void vx_gc_finalize_all(void) {
     // Capturar el frame Vesta llamador por si finalize_all_live disparara un
     // scan de raices en el futuro (hoy solo corre finalizadores, sin mark/sweep;
     // capturar es defensivo y mantiene el boundary fresco).
-    VEX_GC_CAPTURE_VEX_FRAME();
+    VX_GC_CAPTURE_VX_FRAME();
     // Shutdown-time: finalizar todo objeto vivo con recurso interno (cubre los
     // escapados que el sweep no colecto todavia).  Cero fuga antes del exit.
     gc_heap().finalize_all_live();
 }
 
-uint64_t vex_gc_fin_count(void) { return g_vex_gc_fin_count; }
+uint64_t vx_gc_fin_count(void) { return g_vx_gc_fin_count; }
 
-uint64_t vex_gc_live_count(void) {
+uint64_t vx_gc_live_count(void) {
     // No hay accesor directo de "handles vivos"; lo contamos sobre la tabla
     // (O(N), solo para introspeccion/diagnostico, no es hot path).
     gc::GcHeap &h = gc_heap();

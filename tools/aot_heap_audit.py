@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """aot_heap_audit.py -- audita el uso de HEAP (malloc/calloc/free/realloc) en
-los .o que el AOT genera para examples_codes_vex/.
+los .o que el AOT genera para examples_codes_vx/.
 
 Para cada .vx que compila a .o, hace `nm` y reporta si quedan simbolos libc de
 heap sin resolver.  Agrupa los que SI usan heap para priorizar el barrido
 stack-first (convertir malloc local no-escapante -> ALLOCA de pila).
 
 Uso:
-  python tools/aot_heap_audit.py [vm_path] [--dir examples_codes_vex] [--recurse]
+  python tools/aot_heap_audit.py [vm_path] [--dir examples_codes_vx] [--recurse]
 """
 from __future__ import annotations
 import argparse
@@ -43,7 +43,7 @@ def nm_tool() -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("vm_path", nargs="?")
-    ap.add_argument("--dir", default="examples_codes_vex")
+    ap.add_argument("--dir", default="examples_codes_vx")
     ap.add_argument("--recurse", action="store_true")
     ap.add_argument("--out", default="cmake-build-release/_heap_audit.o")
     args = ap.parse_args()
@@ -67,7 +67,7 @@ def main() -> int:
             pass
         try:
             r = subprocess.run(
-                [vm, "--vex", str(f), "-m", "aot", "--format", "elf",
+                [vm, "--vx", str(f), "-m", "aot", "--format", "elf",
                  "--emit", "obj", "-o", str(out)],
                 capture_output=True, text=True, timeout=60)
         except Exception:  # noqa: BLE001

@@ -116,7 +116,7 @@ std::string CBackend::sanitize_name(const std::string &n) const {
     std::string out;
     out.reserve(n.size() + 8);
     if (n.empty() || std::isdigit(static_cast<unsigned char>(n[0]))) {
-        out = "vex_";
+        out = "vx_";
     }
     for (char c : n) {
         if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
@@ -125,7 +125,7 @@ std::string CBackend::sanitize_name(const std::string &n) const {
             out += '_';
         }
     }
-    if (out == "main") return "vex_main";
+    if (out == "main") return "vx_main";
     return out;
 }
 
@@ -815,7 +815,7 @@ void CBackend::emit_class_bodies(EmitContext &ctx, const ir::IrModule &mod) {
         //  calloc da zero-init de un golpe (mas eficiente que malloc+memset).
         //  Si la clase tiene multiples ctors, solo el primero se invoca
         //  desde new -- el frontend Vesta elige cual via overload resolution.
-        ctx.out << "static VEX_UNUSED " << cls.name << " *" << cls.name
+        ctx.out << "static VX_UNUSED " << cls.name << " *" << cls.name
                 << "__new(";
         if (ctor && !ctor->param_types.empty()) {
             for (size_t i = 0; i < ctor->param_types.size(); ++i) {
@@ -841,7 +841,7 @@ void CBackend::emit_class_bodies(EmitContext &ctx, const ir::IrModule &mod) {
         ctx.out << "}\n\n";
 
         // @c Class__delete(self) : dtor (si existe) + free.
-        ctx.out << "static VEX_UNUSED void " << cls.name << "__delete("
+        ctx.out << "static VX_UNUSED void " << cls.name << "__delete("
                 << cls.name << " *self) {\n";
         ctx.out << "    if (!self) return;\n";
         if (cls.has_destructor) {
@@ -868,7 +868,7 @@ std::string CBackend::resolve_stdlib_dir() const {
         "../../stdlib/port/c",
     };
     for (const char *c : candidates) {
-        std::string path = std::string(c) + "/vex_macros.v.c";
+        std::string path = std::string(c) + "/vx_macros.v.c";
         std::ifstream test(path.c_str());
         if (test.good()) {
             return std::string(c);
@@ -885,7 +885,7 @@ std::string CBackend::resolve_stdlib_dir() const {
                 ed / "stdlib" / "port" / "c",
                 ed.parent_path() / "stdlib" / "port" / "c"};
             for (const auto &c : exe_cands) {
-                std::ifstream test((c / "vex_macros.v.c").string());
+                std::ifstream test((c / "vx_macros.v.c").string());
                 if (test.good()) return c.string();
             }
         }
@@ -906,7 +906,7 @@ bool CBackend::emit_snippet(EmitContext &ctx, const std::string &name) {
         return false;
     }
 
-    // Parsear cabecera @c "// @vex-freestanding-skip: yes" para decidir
+    // Parsear cabecera @c "// @vx-freestanding-skip: yes" para decidir
     // si omitir en modo freestanding.  La cabecera esta en las primeras
     // ~10 lineas.
     std::string line;
@@ -917,8 +917,8 @@ bool CBackend::emit_snippet(EmitContext &ctx, const std::string &name) {
     while (std::getline(in, line)) {
         if (in_header && line.size() > 3 && line[0] == '/' && line[1] == '/' &&
             line[2] == ' ' && line[3] == '@') {
-            // Cabecera de metadata.  Parse "@vex-freestanding-skip:".
-            auto pos = line.find("@vex-freestanding-skip:");
+            // Cabecera de metadata.  Parse "@vx-freestanding-skip:".
+            auto pos = line.find("@vx-freestanding-skip:");
             if (pos != std::string::npos) {
                 auto val = line.substr(pos + 23);
                 while (!val.empty() && (val[0] == ' ' || val[0] == '\t')) {
@@ -951,16 +951,16 @@ bool CBackend::emit_snippet(EmitContext &ctx, const std::string &name) {
 // =========================================================================
 
 /**
- * @brief Detecta si el modulo usa instrumentacion (vex_trace:*).
+ * @brief Detecta si el modulo usa instrumentacion (vx_trace:*).
  */
 static bool module_uses_instrument(const ir::IrModule &mod) {
     for (const auto &fn : mod.functions) {
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
                 if (ins.op != ir::IrOp::CALLN) continue;
-                if (ins.func_name.find("vex_trace:enter") !=
+                if (ins.func_name.find("vx_trace:enter") !=
                         std::string::npos ||
-                    ins.func_name.find("vex_trace:leave") != std::string::npos)
+                    ins.func_name.find("vx_trace:leave") != std::string::npos)
                     return true;
             }
         }
@@ -1033,7 +1033,7 @@ void CBackend::emit_static_data(EmitContext &ctx, const ir::IrModule &mod) {
         ctx.out << "/* Literales estaticos del modulo (interned por el "
                    "frontend Vesta).\n"
                    " * Layout pool unificado (M.staticdata-pool):\n"
-                   " *   - __vex_static_pool[]: todos los bytes contiguos.\n"
+                   " *   - __vx_static_pool[]: todos los bytes contiguos.\n"
                    " *   - __str_<i>: macro que retorna ptr al inicio de la "
                    "entry i.\n"
                    " * Beneficios cache-locality + un solo simbolo expuesto al "
@@ -1052,12 +1052,12 @@ void CBackend::emit_static_data(EmitContext &ctx, const ir::IrModule &mod) {
         const uint16_t a = mod.static_data.meta_at(i).alignment;
         if (a > max_align) max_align = a;
     }
-    ctx.out << "static VEX_UNUSED";
+    ctx.out << "static VX_UNUSED";
     if (max_align > 1) {
         // Atributo C estandar (C11) para alineamiento garantizado.
         ctx.out << " _Alignas(" << max_align << ")";
     }
-    ctx.out << " const unsigned char __vex_static_pool[] = {";
+    ctx.out << " const unsigned char __vx_static_pool[] = {";
     // 2) Emit pool byte por byte, respetando alineamiento de cada entry
     //    via padding NUL intermedio.  Indices [offset] dentro del pool.
     size_t cursor = 0;
@@ -1084,17 +1084,17 @@ void CBackend::emit_static_data(EmitContext &ctx, const ir::IrModule &mod) {
     ctx.out << " };\n\n";
     // 3) Macros legibles por entry.  El consumer existente del C
     //    backend referencia `__str_<i>` como puntero a unsigned char.
-    //    Generamos un alias macro -> &__vex_static_pool[offset] con
+    //    Generamos un alias macro -> &__vx_static_pool[offset] con
     //    coste cero en runtime (resuelto en compile time del C).
     for (size_t i = 0; i < N; ++i) {
-        ctx.out << "#define __str_" << i << " (&__vex_static_pool["
+        ctx.out << "#define __str_" << i << " (&__vx_static_pool["
                 << entry_offsets[i] << "])\n";
     }
     ctx.out << "\n";
 }
 
 void CBackend::emit_string_runtime(EmitContext &ctx) {
-    // Runtime VexString embebido inline al inicio del .c.  Cuando el
+    // Runtime VxString embebido inline al inicio del .c.  Cuando el
     // modulo no usa strings, este bloque NO se emite (cero overhead).
     // Tracking de leaks: linked list per-thread + warning a stderr al
     // exit del proceso (registrado via atexit).
@@ -1102,12 +1102,12 @@ void CBackend::emit_string_runtime(EmitContext &ctx) {
         << "/* "
            "==================================================================="
            "======\n"
-           " * Runtime mini VexString embebido (mode=managed).\n"
+           " * Runtime mini VxString embebido (mode=managed).\n"
            " * Layout: header 16 bytes + buffer flexible.  Operaciones de "
            "strings\n"
            " * (concat/equals/length/raw/bytes) usan estos helpers.  El "
            "usuario debe\n"
-           " * llamar vex_str_free(s) cuando termine con un VexString* "
+           " * llamar vx_str_free(s) cuando termine con un VxString* "
            "heap-alloc'd\n"
            " * (los marcados is_owned=1).  Al exit del programa, los unfreed "
            "se\n"
@@ -1116,78 +1116,78 @@ void CBackend::emit_string_runtime(EmitContext &ctx) {
            "==================================================================="
            "======\n"
            " */\n"
-           "typedef struct VexString {\n"
-           "    struct VexString *__prev;\n"
-           "    struct VexString *__next;\n"
+           "typedef struct VxString {\n"
+           "    struct VxString *__prev;\n"
+           "    struct VxString *__next;\n"
            "    uint32_t byte_len;\n"
            "    uint32_t code_points;\n"
-           "    uint8_t  is_owned;       /* 1=heap (free at vex_str_free), "
+           "    uint8_t  is_owned;       /* 1=heap (free at vx_str_free), "
            "0=literal */\n"
            "    uint8_t  __pad[3];\n"
            "    char    *data;\n"
-           "} VexString;\n"
+           "} VxString;\n"
            "\n"
-           "#ifndef VEX_TLS\n"
+           "#ifndef VX_TLS\n"
            "#  if defined(__GNUC__) || defined(__clang__)\n"
-           "#    define VEX_TLS __thread\n"
+           "#    define VX_TLS __thread\n"
            "#  elif defined(_MSC_VER)\n"
-           "#    define VEX_TLS __declspec(thread)\n"
+           "#    define VX_TLS __declspec(thread)\n"
            "#  else\n"
-           "#    define VEX_TLS\n"
+           "#    define VX_TLS\n"
            "#  endif\n"
            "#endif\n"
            "\n"
            "/* @c __thread + self-reference no funciona en algunos "
            "toolchains;\n"
            " * lazy-init en la primera inserccion al list. */\n"
-           "static VEX_TLS VexString  vex_str_head_;\n"
-           "static VEX_TLS int        vex_str_head_init_ = 0;\n"
-           "static VEX_TLS int        vex_str_live_count_ = 0;\n"
-           "static int                vex_str_atexit_registered_ = 0;\n"
+           "static VX_TLS VxString  vx_str_head_;\n"
+           "static VX_TLS int        vx_str_head_init_ = 0;\n"
+           "static VX_TLS int        vx_str_live_count_ = 0;\n"
+           "static int                vx_str_atexit_registered_ = 0;\n"
            "\n"
-           "static void vex_str_head_ensure_(void) {\n"
-           "    if (!vex_str_head_init_) {\n"
-           "        vex_str_head_.__prev = &vex_str_head_;\n"
-           "        vex_str_head_.__next = &vex_str_head_;\n"
-           "        vex_str_head_init_ = 1;\n"
+           "static void vx_str_head_ensure_(void) {\n"
+           "    if (!vx_str_head_init_) {\n"
+           "        vx_str_head_.__prev = &vx_str_head_;\n"
+           "        vx_str_head_.__next = &vx_str_head_;\n"
+           "        vx_str_head_init_ = 1;\n"
            "    }\n"
            "}\n"
            "\n"
-           "static void vex_str_track_(VexString *s) {\n"
-           "    vex_str_head_ensure_();\n"
-           "    s->__next = vex_str_head_.__next;\n"
-           "    s->__prev = &vex_str_head_;\n"
-           "    vex_str_head_.__next->__prev = s;\n"
-           "    vex_str_head_.__next = s;\n"
-           "    vex_str_live_count_++;\n"
+           "static void vx_str_track_(VxString *s) {\n"
+           "    vx_str_head_ensure_();\n"
+           "    s->__next = vx_str_head_.__next;\n"
+           "    s->__prev = &vx_str_head_;\n"
+           "    vx_str_head_.__next->__prev = s;\n"
+           "    vx_str_head_.__next = s;\n"
+           "    vx_str_live_count_++;\n"
            "}\n"
            "\n"
-           "static void vex_str_untrack_(VexString *s) {\n"
+           "static void vx_str_untrack_(VxString *s) {\n"
            "    s->__prev->__next = s->__next;\n"
            "    s->__next->__prev = s->__prev;\n"
            "    s->__prev = s->__next = 0;\n"
-           "    vex_str_live_count_--;\n"
+           "    vx_str_live_count_--;\n"
            "}\n"
            "\n"
-           "static void vex_str_atexit_warn_(void) {\n"
-           "    if (vex_str_live_count_ > 0) {\n"
+           "static void vx_str_atexit_warn_(void) {\n"
+           "    if (vx_str_live_count_ > 0) {\n"
            "        fprintf(stderr,\n"
-           "          \"[vex] warning: %d VexString blocks leaked at thread "
+           "          \"[vx] warning: %d VxString blocks leaked at thread "
            "exit\\n\",\n"
-           "          vex_str_live_count_);\n"
+           "          vx_str_live_count_);\n"
            "    }\n"
            "}\n"
            "\n"
-           "static void vex_str_register_atexit_(void) {\n"
-           "    if (!vex_str_atexit_registered_) {\n"
-           "        vex_str_atexit_registered_ = 1;\n"
-           "        atexit(vex_str_atexit_warn_);\n"
+           "static void vx_str_register_atexit_(void) {\n"
+           "    if (!vx_str_atexit_registered_) {\n"
+           "        vx_str_atexit_registered_ = 1;\n"
+           "        atexit(vx_str_atexit_warn_);\n"
            "    }\n"
            "}\n"
            "\n"
            "/* Cuenta code points UTF-8 en un buffer (1 byte por cp ASCII, "
            "varios para multi-byte). */\n"
-           "static uint32_t vex_str_count_cp_(const char *buf, uint32_t "
+           "static uint32_t vx_str_count_cp_(const char *buf, uint32_t "
            "byte_len) {\n"
            "    uint32_t n = 0;\n"
            "    for (uint32_t i = 0; i < byte_len; ) {\n"
@@ -1203,42 +1203,42 @@ void CBackend::emit_string_runtime(EmitContext &ctx) {
            "    return n;\n"
            "}\n"
            "\n"
-           "/* Crea un VexString desde un literal de @c .rodata. NO trackeado, "
+           "/* Crea un VxString desde un literal de @c .rodata. NO trackeado, "
            "NO owned. */\n"
-           "static VEX_UNUSED VexString *vex_str_from_lit(const char *lit, "
+           "static VX_UNUSED VxString *vx_str_from_lit(const char *lit, "
            "uint32_t byte_len) {\n"
-           "    VexString *s = (VexString*)malloc(sizeof(VexString));\n"
+           "    VxString *s = (VxString*)malloc(sizeof(VxString));\n"
            "    if (!s) return 0;\n"
            "    s->byte_len = byte_len;\n"
-           "    s->code_points = vex_str_count_cp_(lit, byte_len);\n"
+           "    s->code_points = vx_str_count_cp_(lit, byte_len);\n"
            "    s->is_owned = 0;\n"
            "    s->data = (char*)lit;\n"
-           "    vex_str_track_(s);\n"
-           "    vex_str_register_atexit_();\n"
+           "    vx_str_track_(s);\n"
+           "    vx_str_register_atexit_();\n"
            "    return s;\n"
            "}\n"
            "\n"
-           "/* Crea un VexString desde un buffer de bytes (copia los datos). "
+           "/* Crea un VxString desde un buffer de bytes (copia los datos). "
            "*/\n"
-           "static VEX_UNUSED VexString *vex_str_make(const char *buf, "
+           "static VX_UNUSED VxString *vx_str_make(const char *buf, "
            "uint32_t byte_len) {\n"
-           "    VexString *s = (VexString*)malloc(sizeof(VexString));\n"
+           "    VxString *s = (VxString*)malloc(sizeof(VxString));\n"
            "    if (!s) return 0;\n"
            "    s->byte_len = byte_len;\n"
-           "    s->code_points = vex_str_count_cp_(buf, byte_len);\n"
+           "    s->code_points = vx_str_count_cp_(buf, byte_len);\n"
            "    s->is_owned = 1;\n"
            "    s->data = (char*)malloc(byte_len + 1);\n"
            "    if (!s->data) { free(s); return 0; }\n"
            "    memcpy(s->data, buf, byte_len);\n"
            "    s->data[byte_len] = 0;\n"
-           "    vex_str_track_(s);\n"
-           "    vex_str_register_atexit_();\n"
+           "    vx_str_track_(s);\n"
+           "    vx_str_register_atexit_();\n"
            "    return s;\n"
            "}\n"
            "\n"
-           "/* Concatena dos strings. Devuelve nuevo VexString owned. */\n"
-           "static VEX_UNUSED VexString *vex_str_concat(VexString *a, "
-           "VexString *b) {\n"
+           "/* Concatena dos strings. Devuelve nuevo VxString owned. */\n"
+           "static VX_UNUSED VxString *vx_str_concat(VxString *a, "
+           "VxString *b) {\n"
            "    if (!a || !b) return 0;\n"
            "    uint32_t na = a->byte_len, nb = b->byte_len;\n"
            "    char *buf = (char*)malloc(na + nb + 1);\n"
@@ -1246,37 +1246,37 @@ void CBackend::emit_string_runtime(EmitContext &ctx) {
            "    memcpy(buf, a->data, na);\n"
            "    memcpy(buf + na, b->data, nb);\n"
            "    buf[na + nb] = 0;\n"
-           "    VexString *r = (VexString*)malloc(sizeof(VexString));\n"
+           "    VxString *r = (VxString*)malloc(sizeof(VxString));\n"
            "    if (!r) { free(buf); return 0; }\n"
            "    r->byte_len = na + nb;\n"
            "    r->code_points = a->code_points + b->code_points;\n"
            "    r->is_owned = 1;\n"
            "    r->data = buf;\n"
-           "    vex_str_track_(r);\n"
+           "    vx_str_track_(r);\n"
            "    return r;\n"
            "}\n"
            "\n"
-           "static VEX_UNUSED int vex_str_eq(VexString *a, VexString *b) {\n"
+           "static VX_UNUSED int vx_str_eq(VxString *a, VxString *b) {\n"
            "    if (a == b) return 1;\n"
            "    if (!a || !b) return 0;\n"
            "    if (a->byte_len != b->byte_len) return 0;\n"
            "    return memcmp(a->data, b->data, a->byte_len) == 0;\n"
            "}\n"
-           "static VEX_UNUSED uint32_t vex_str_len(VexString *s)      { return "
+           "static VX_UNUSED uint32_t vx_str_len(VxString *s)      { return "
            "s ? s->code_points : 0; }\n"
-           "static VEX_UNUSED uint32_t vex_str_byte_len(VexString *s) { return "
+           "static VX_UNUSED uint32_t vx_str_byte_len(VxString *s) { return "
            "s ? s->byte_len    : 0; }\n"
-           "static VEX_UNUSED const char *vex_str_raw(VexString *s)   { return "
+           "static VX_UNUSED const char *vx_str_raw(VxString *s)   { return "
            "s ? s->data : (const char*)\"\"; }\n"
            "\n"
-           "/* Libera explicitamente un VexString.  No-op si NULL.  Si es "
+           "/* Libera explicitamente un VxString.  No-op si NULL.  Si es "
            "literal\n"
            "   (is_owned=0) solo libera el header (data esta en .rodata).  Si "
            "es\n"
            "   owned, libera tambien data. */\n"
-           "static VEX_UNUSED void vex_str_free(VexString *s) {\n"
+           "static VX_UNUSED void vx_str_free(VxString *s) {\n"
            "    if (!s) return;\n"
-           "    vex_str_untrack_(s);\n"
+           "    vx_str_untrack_(s);\n"
            "    if (s->is_owned) free(s->data);\n"
            "    free(s);\n"
            "}\n"
@@ -1306,11 +1306,11 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
     // strraw (host buffer) vs I64 para los handles internos.
     const char *result_cast =
         (t == ir::IrType::PTR) ? "(void*)" : "(int64_t)(intptr_t)";
-    // Helper para leer un VexString * desde una direccion VM (cuando
+    // Helper para leer un VxString * desde una direccion VM (cuando
     // el src es un puntero a memoria VM con buffer raw).  Aqui los
     // strings se construyen siempre desde memoria VM (alloca + store
     // de literales).  La direccion del buffer apunta al inicio de los
-    // bytes; le pasamos a vex_str_make directamente para que copie.
+    // bytes; le pasamos a vx_str_make directamente para que copie.
 
     auto src = [&](size_t i) -> std::string {
         if (i >= operands.size()) return "0";
@@ -1325,45 +1325,45 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
 
     // strmake {dst}, {src0 buffer_addr}, {src1 byte_len}
     // El dst en el IR es i64 (handle); en C lo representamos como un
-    // puntero VexString* pero almacenado en int64_t -> cast inline.
+    // puntero VxString* pero almacenado en int64_t -> cast inline.
     if (asm_text == "strmake {dst}, {src0}, {src1}\n") {
         dst_lhs();
-        ctx.out << "(int64_t)(intptr_t)vex_str_make((const char*)(intptr_t)"
+        ctx.out << "(int64_t)(intptr_t)vx_str_make((const char*)(intptr_t)"
                 << src(0) << ", (uint32_t)" << src(1) << ");\n";
         return;
     }
     if (asm_text == "strcat {dst}, {src0}, {src1}\n") {
         dst_lhs();
-        ctx.out << "(int64_t)(intptr_t)vex_str_concat((VexString*)(intptr_t)"
-                << src(0) << ", (VexString*)(intptr_t)" << src(1) << ");\n";
+        ctx.out << "(int64_t)(intptr_t)vx_str_concat((VxString*)(intptr_t)"
+                << src(0) << ", (VxString*)(intptr_t)" << src(1) << ");\n";
         return;
     }
     if (asm_text == "strraw {dst}, {src0}\n") {
         dst_lhs();
-        ctx.out << result_cast << "vex_str_raw((VexString*)(intptr_t)" << src(0)
+        ctx.out << result_cast << "vx_str_raw((VxString*)(intptr_t)" << src(0)
                 << ");\n";
         return;
     }
     // strgetbytes {dst}, {src0 str} -> uint32 byte count
     if (asm_text == "strgetbytes {dst}, {src0}\n") {
         dst_lhs();
-        ctx.out << "(int64_t)vex_str_byte_len((VexString*)(intptr_t)" << src(0)
+        ctx.out << "(int64_t)vx_str_byte_len((VxString*)(intptr_t)" << src(0)
                 << ");\n";
         return;
     }
     if (asm_text == "strlen {dst}, {src0}\n") {
         dst_lhs();
-        ctx.out << "(int64_t)vex_str_len((VexString*)(intptr_t)" << src(0)
+        ctx.out << "(int64_t)vx_str_len((VxString*)(intptr_t)" << src(0)
                 << ");\n";
         return;
     }
     if (asm_text == "strcmp {dst}, {src0}, {src1}\n") {
         dst_lhs();
-        ctx.out << "(int64_t)(vex_str_eq((VexString*)(intptr_t)" << src(0)
-                << ", (VexString*)(intptr_t)" << src(1) << ") ? 0 : "
-                << "memcmp(vex_str_raw((VexString*)(intptr_t)" << src(0)
-                << "), vex_str_raw((VexString*)(intptr_t)" << src(1)
-                << "), vex_str_byte_len((VexString*)(intptr_t)" << src(0)
+        ctx.out << "(int64_t)(vx_str_eq((VxString*)(intptr_t)" << src(0)
+                << ", (VxString*)(intptr_t)" << src(1) << ") ? 0 : "
+                << "memcmp(vx_str_raw((VxString*)(intptr_t)" << src(0)
+                << "), vx_str_raw((VxString*)(intptr_t)" << src(1)
+                << "), vx_str_byte_len((VxString*)(intptr_t)" << src(0)
                 << ")));\n";
         return;
     }
@@ -1402,7 +1402,7 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
     //   2. mov {dst}, @Absolute("code.<fn>_<handler_bb>") -> &&bb_id
     //   3. tryenter {src0}, {src1}           -> setjmp + push frame
     //   4. (body) panic                      -> longjmp
-    //   5. (handler) mov {dst}, r0           -> v_dst = vex_exc_value
+    //   5. (handler) mov {dst}, r0           -> v_dst = vx_exc_value
     //   6. tryleave                          -> pop frame
 
     // (1) findclass FatalError.  Devolvemos un sentinel (no usado en C,
@@ -1495,18 +1495,18 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
         // -Wmissing-braces.  El jmp_buf se inicializa via setjmp; aqui
         // basta con declarar la variable.
         ctx.indent();
-        ctx.out << "vex_exc_frame __vex_f;\n";
+        ctx.out << "vx_exc_frame __vx_f;\n";
         ctx.indent();
-        ctx.out << "__vex_f.type_tag = (int64_t)(intptr_t)" << src(1) << ";\n";
+        ctx.out << "__vx_f.type_tag = (int64_t)(intptr_t)" << src(1) << ";\n";
         ctx.indent();
-        ctx.out << "__vex_f.prev = vex_exc_top;\n";
+        ctx.out << "__vx_f.prev = vx_exc_top;\n";
         ctx.indent();
-        ctx.out << "vex_exc_top = &__vex_f;\n";
+        ctx.out << "vx_exc_top = &__vx_f;\n";
         ctx.indent();
-        ctx.out << "if (setjmp(__vex_f.buf) != 0) {\n";
+        ctx.out << "if (setjmp(__vx_f.buf) != 0) {\n";
         ctx.indent_level++;
         ctx.indent();
-        ctx.out << "vex_exc_top = __vex_f.prev;\n";
+        ctx.out << "vx_exc_top = __vx_f.prev;\n";
         ctx.indent();
         ctx.out << "goto *((void*)(intptr_t)" << src(0) << ");\n";
         ctx.indent_level--;
@@ -1519,13 +1519,13 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
     }
 
     // (4) catch handler bind:  // catch: bind r0 -> var\nmov {dst}, r0\n
-    // Lee @c vex_exc_value (set por panic).
+    // Lee @c vx_exc_value (set por panic).
     if (asm_text.find("// catch:") != std::string::npos &&
         asm_text.find("mov {dst}, r0") != std::string::npos) {
         if (dst != ir::IR_NO_VALUE && ctx.tx != nullptr &&
             ctx.tx->use_count(dst) > 0) {
             emit_assign_lhs(ctx, dst);
-            ctx.out << "(int64_t)vex_exc_value;\n";
+            ctx.out << "(int64_t)vx_exc_value;\n";
         } else if (opts_.emit_comments) {
             ctx.indent();
             ctx.out << "/* catch bind: dst no usado, asignacion suprimida */\n";
@@ -1533,7 +1533,7 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
         return;
     }
 
-    // (5) panic r12, r11   -> set vex_exc_value + longjmp.  src0=msg_ptr,
+    // (5) panic r12, r11   -> set vx_exc_value + longjmp.  src0=msg_ptr,
     // src1=len; en port C ignoramos len y guardamos msg como exc_value.
     if (asm_text.find("panic r12, r11") != std::string::npos) {
         // panic con mov hardcoded r12/r11 -- no tenemos los SSA values.
@@ -1554,19 +1554,19 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
             }
         }
         ctx.indent();
-        ctx.out << "vex_panic_with_str(__str_" << msg_idx << ");\n";
+        ctx.out << "vx_panic_with_str(__str_" << msg_idx << ");\n";
         return;
     }
 
     // (6) tryleave -> pop frame.
     if (asm_text == "tryleave\n") {
         ctx.indent();
-        ctx.out << "if (vex_exc_top) vex_exc_top = vex_exc_top->prev;\n";
+        ctx.out << "if (vx_exc_top) vx_exc_top = vx_exc_top->prev;\n";
         return;
     }
 
     // -------- Optional/Result unwrap (chequeo tag != 0) --------
-    // Si tag == 0 (None), llamamos a vex_throw(1).  Marcamos la rama
+    // Si tag == 0 (None), llamamos a vx_throw(1).  Marcamos la rama
     // como @c __builtin_expect(cond, 0) para que GCC la prediga como
     // NO tomada -> branch prediction agresiva al fast path.
     if (asm_text == "unwrap {dst}, {src0}\n") {
@@ -1580,10 +1580,10 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
         ctx.indent_level++;
         if (!opts_.freestanding) {
             ctx.indent();
-            ctx.out << "fputs(\"[vex] unwrap of None\\n\", stderr);\n";
+            ctx.out << "fputs(\"[vx] unwrap of None\\n\", stderr);\n";
         }
         ctx.indent();
-        ctx.out << "vex_throw(1);\n";
+        ctx.out << "vx_throw(1);\n";
         ctx.indent_level--;
         ctx.indent();
         ctx.out << "}\n";
@@ -1599,24 +1599,24 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
     }
 
     // -------- Async: future / await / fulfillhlt --------
-    // future\nmov {dst}, r0\n  -> vex_future_alloc()
+    // future\nmov {dst}, r0\n  -> vx_future_alloc()
     if (asm_text.find("future\n") != std::string::npos &&
         asm_text.find("mov {dst}, r0") != std::string::npos) {
         dst_lhs();
-        ctx.out << "vex_future_alloc();\n";
+        ctx.out << "vx_future_alloc();\n";
         return;
     }
-    // await {src0}\nmov {dst}, r0\n  -> vex_future_await(src0)
+    // await {src0}\nmov {dst}, r0\n  -> vx_future_await(src0)
     if (asm_text.find("await {src0}") != std::string::npos &&
         asm_text.find("mov {dst}, r0") != std::string::npos) {
         dst_lhs();
-        ctx.out << "vex_future_await(" << src(0) << ");\n";
+        ctx.out << "vx_future_await(" << src(0) << ");\n";
         return;
     }
     // fulfillhlt {src0}, {src1}  -> fulfill + return (helper async exit)
     if (asm_text.find("fulfillhlt {src0}, {src1}") != std::string::npos) {
         ctx.indent();
-        ctx.out << "vex_future_fulfill(" << src(0) << ", " << src(1) << ");\n";
+        ctx.out << "vx_future_fulfill(" << src(0) << ", " << src(1) << ");\n";
         ctx.indent();
         ctx.out << "return;\n";
         return;
@@ -1626,15 +1626,15 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
     // El frontend Vesta emite "mov {dst}, r14" en el prologue de cada
     // lambda que captura, para acceder al env_ptr (que llega en R14
     // segun la calling convention bytecode).  En port C, la firma de
-    // la lambda es @c (void* __vex_env, ...) -> ret asi que basta
-    // exponer @c __vex_env como i64.
+    // la lambda es @c (void* __vx_env, ...) -> ret asi que basta
+    // exponer @c __vx_env como i64.
     if (asm_text.find("leer env_ptr de R14") != std::string::npos ||
         asm_text == "mov {dst}, r14\n") {
         dst_lhs();
         if (t == ir::IrType::PTR) {
-            ctx.out << "(void*)__vex_env;\n";
+            ctx.out << "(void*)__vx_env;\n";
         } else {
-            ctx.out << "(int64_t)(intptr_t)__vex_env;\n";
+            ctx.out << "(int64_t)(intptr_t)__vx_env;\n";
         }
         return;
     }
@@ -1678,30 +1678,30 @@ void CBackend::emit_native_call(EmitContext &ctx, ir::IrValueId dst,
     // print_* simples: vio_print_int(proc, n) ignora proc, imprime n.
     // Para los print_buf: vio_print_buf(host_ptr, len) -> fwrite stdout.
 
-    // -------- Instrumentacion: vex_trace:enter / vex_trace:exit --------
+    // -------- Instrumentacion: vx_trace:enter / vx_trace:exit --------
     // El frontend emite estas calls con --instrument trace.  Default
     // bridge: imprime a stderr con indentacion por depth (TLS counter).
     // El usuario puede override declarando sus propias funciones
-    // @c "void vex_trace_enter(const char*)" y reemplazando este snippet.
-    // Detectar vex_trace por basename del lib path
-    // (puede venir como "vex_trace" o "stdlib/native/runtime/vex_trace").
+    // @c "void vx_trace_enter(const char*)" y reemplazando este snippet.
+    // Detectar vx_trace por basename del lib path
+    // (puede venir como "vx_trace" o "stdlib/native/runtime/vx_trace").
     auto basename_eq = [](const std::string &s, const char *base) {
         size_t pos = s.rfind('/');
         std::string b = (pos == std::string::npos) ? s : s.substr(pos + 1);
         return b == base;
     };
-    if (sym == "enter" && basename_eq(lib, "vex_trace")) {
+    if (sym == "enter" && basename_eq(lib, "vx_trace")) {
         // args: (proc_ptr, name_ptr).  Ignoramos proc_ptr en port C
         // (no hay VM-proc; el nombre es ya un host_ptr a .rodata).
         ctx.indent();
-        ctx.out << "vex_trace_enter((const char*)(intptr_t)" << src(1)
+        ctx.out << "vx_trace_enter((const char*)(intptr_t)" << src(1)
                 << ");\n";
         return;
     }
-    if (sym == "leave" && basename_eq(lib, "vex_trace")) {
+    if (sym == "leave" && basename_eq(lib, "vx_trace")) {
         // args: (proc_ptr, name_ptr, return_value)
         ctx.indent();
-        ctx.out << "vex_trace_leave((const char*)(intptr_t)" << src(1)
+        ctx.out << "vx_trace_leave((const char*)(intptr_t)" << src(1)
                 << ", (int64_t)" << src(2) << ");\n";
         return;
     }
@@ -1918,7 +1918,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         ctx.out << " * Generated from: " << opts_.source_path << "\n";
         ctx.out << " * by VestaVM port-C transpiler\n";
         ctx.out << " * Edit at your own risk - regenerate with:\n";
-        ctx.out << " *   vm --port=c <source.vex> -o " << opts_.source_path
+        ctx.out << " *   vm --port=c <source.vx> -o " << opts_.source_path
                 << ".c\n";
         ctx.out << " */\n\n";
     }
@@ -2017,7 +2017,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         if (opts_.gc == GcMode::Boehm) {
             ctx.out << "#include <gc.h>\n";
             // Redefinir malloc/free a Boehm GC.  Esto cubre todas las
-            // alocaciones del runtime VexString y RAW_ALLOC del IR.
+            // alocaciones del runtime VxString y RAW_ALLOC del IR.
             ctx.out << "#define malloc(n)  GC_MALLOC(n)\n";
             ctx.out << "#define free(p)    ((void)(p))  /* boehm gestiona */\n";
             ctx.out << "#define calloc(n,s) GC_MALLOC((n)*(s))\n";
@@ -2030,7 +2030,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         if (uses_exc_inc) ctx.out << "#include <setjmp.h>\n";
         ctx.out << "/* --port-freestanding: sin stdio/stdlib/string/math.\n"
                 << " * El usuario debe proveer en su codigo:\n"
-                << " *   - VEX_NORETURN void vex_throw(int code);\n"
+                << " *   - VX_NORETURN void vx_throw(int code);\n"
                 << " *   - void *memcpy/memset (si se usan strings/structs)\n"
                 << " */\n";
     }
@@ -2044,17 +2044,17 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
 
     ctx.out << "\n";
     // Snippets siempre presentes: macros + pragma silence.
-    emit_snippet(ctx, "vex_macros");
-    emit_snippet(ctx, "vex_pragma_silence");
+    emit_snippet(ctx, "vx_macros");
+    emit_snippet(ctx, "vx_pragma_silence");
 
-    // vex_throw: hosted (setjmp) o freestanding (extern stub).
+    // vx_throw: hosted (setjmp) o freestanding (extern stub).
     if (opts_.freestanding) {
-        emit_snippet(ctx, "vex_throw_freestanding");
+        emit_snippet(ctx, "vx_throw_freestanding");
     } else if (opts_.exc == ExcMode::SetJmp) {
-        emit_snippet(ctx, "vex_throw_hosted");
+        emit_snippet(ctx, "vx_throw_hosted");
     } else if (opts_.exc == ExcMode::None) {
         ctx.out
-            << "static VEX_UNUSED VEX_NORETURN void vex_throw(int code) {\n";
+            << "static VX_UNUSED VX_NORETURN void vx_throw(int code) {\n";
         ctx.out << "    (void)code; abort();\n";
         ctx.out << "}\n\n";
     }
@@ -2064,9 +2064,9 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
     bool uses_exc = module_uses_exceptions(mod);
     if (uses_exc) {
         if (opts_.freestanding) {
-            emit_snippet(ctx, "vex_exception_freestanding");
+            emit_snippet(ctx, "vx_exception_freestanding");
         } else {
-            emit_snippet(ctx, "vex_exception");
+            emit_snippet(ctx, "vx_exception");
         }
     }
     // FFI extern declarations: scan el modulo y emite @c extern firma
@@ -2090,15 +2090,15 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
                     if (sym.compare(0, 6, "vmath_") == 0) continue;
                     if (sym == "__module_init") continue;
                     if (sym.compare(0, 6, "__new_") == 0) continue;
-                    // Skip vex_trace:* (provistos por snippet inline).
-                    // Match por basename para tolerar tanto "vex_trace"
-                    // como "stdlib/native/runtime/vex_trace".
+                    // Skip vx_trace:* (provistos por snippet inline).
+                    // Match por basename para tolerar tanto "vx_trace"
+                    // como "stdlib/native/runtime/vx_trace".
                     {
                         size_t pos = lib.rfind('/');
                         std::string base = (pos == std::string::npos)
                                                ? lib
                                                : lib.substr(pos + 1);
-                        if (base == "vex_trace") continue;
+                        if (base == "vx_trace") continue;
                     }
                     if (declared.count(sym)) continue;
                     declared.insert(sym);
@@ -2130,32 +2130,32 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
     // @c __str_<i> esten visibles a todo lo que sigue.
     emit_static_data(ctx, mod);
 
-    // Runtime VexString si aplica.  Cero overhead si el modulo no
+    // Runtime VxString si aplica.  Cero overhead si el modulo no
     // usa strings (no se emite el bloque).  En freestanding, el
     // snippet tiene @c freestanding-skip:yes y se omite -- error si
     // el programa usa strings + freestanding.
     if (uses_strings && opts_.strings == StringMode::Managed) {
-        emit_snippet(ctx, "vex_string");
+        emit_snippet(ctx, "vx_string");
     }
 
     // Runtime de instrumentacion si --instrument trace/profile fue activo.
-    // Detectamos el modo por presencia de CALLNs vex_trace:* (siempre
+    // Detectamos el modo por presencia de CALLNs vx_trace:* (siempre
     // trace por defecto; el usuario controla profile via env var o el
-    // backend puede emitir @c #define VEX_INSTRUMENT_MODE).
+    // backend puede emitir @c #define VX_INSTRUMENT_MODE).
     if (module_uses_instrument(mod)) {
-        /* Permitimos al usuario forzar el modo via @c VEX_INSTRUMENT_MODE
+        /* Permitimos al usuario forzar el modo via @c VX_INSTRUMENT_MODE
          * al compilar el .c con @c gcc.  Default = 1 (solo trace). */
-        ctx.out << "#ifndef VEX_INSTRUMENT_MODE\n";
+        ctx.out << "#ifndef VX_INSTRUMENT_MODE\n";
         ctx.out << "/* 1=trace, 2=profile, 3=trace+profile.  Override con\n"
                    "   gcc -DVEX_INSTRUMENT_MODE=N. */\n";
-        ctx.out << "#define VEX_INSTRUMENT_MODE 3\n";
+        ctx.out << "#define VX_INSTRUMENT_MODE 3\n";
         ctx.out << "#endif\n\n";
-        emit_snippet(ctx, "vex_instrument");
+        emit_snippet(ctx, "vx_instrument");
     }
 
     // Async runtime (futures + spawn + monitors) si se usa.
     if (module_uses_async(mod)) {
-        emit_snippet(ctx, "vex_async");
+        emit_snippet(ctx, "vx_async");
 
         // Scan SPAWN_ARGS para recolectar las aridades necesarias y
         // forward-declarar sus trampolines (el cuerpo se emite en
@@ -2176,7 +2176,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
             ctx.out << "/* Forward decls de spawn trampolines (bodies en "
                        "postamble) */\n";
             for (size_t N : arities) {
-                ctx.out << "static void __vex_trampoline_" << N
+                ctx.out << "static void __vx_trampoline_" << N
                         << "(int64_t packed);\n";
                 spawn_trampoline_arities_.insert(N);
             }
@@ -2267,7 +2267,7 @@ void CBackend::emit_postamble(EmitContext &ctx, const ir::IrModule &mod) {
                                     spawn_trampoline_arities_.end());
         std::sort(arities.begin(), arities.end());
         for (size_t N : arities) {
-            ctx.out << "static void __vex_trampoline_" << N
+            ctx.out << "static void __vx_trampoline_" << N
                     << "(int64_t packed) {\n";
             ctx.out << "    int64_t *a = (int64_t*)(intptr_t)packed;\n";
             ctx.out << "    void (*fn)(";
@@ -2310,23 +2310,23 @@ void CBackend::emit_postamble(EmitContext &ctx, const ir::IrModule &mod) {
         // En freestanding NO emitimos un wrapper @c "int main()" --
         // el usuario decide el entry point (e.g. _start del kernel,
         // BootMain del bootloader).  Emitimos solo un comentario
-        // guia.  La funcion @c vex_main esta disponible para
+        // guia.  La funcion @c vx_main esta disponible para
         // llamarse desde codigo del usuario.
         ctx.out << "\n/* --port-freestanding: sin wrapper int main(). */\n";
-        ctx.out << "/* Llama a @c vex_main desde tu entry point custom. */\n";
+        ctx.out << "/* Llama a @c vx_main desde tu entry point custom. */\n";
         return;
     }
     ctx.out << "\n/* Entry point wrapper */\n";
     ctx.out << "int main(int argc, char **argv) {\n";
     ctx.out << "    (void)argc; (void)argv;\n";
     if (opts_.exc == ExcMode::SetJmp) {
-        ctx.out << "    if (setjmp(vex_exc_buf) != 0) return vex_exc_code;\n";
+        ctx.out << "    if (setjmp(vx_exc_buf) != 0) return vx_exc_code;\n";
     }
     if (main_ret == ir::IrType::VOID) {
-        ctx.out << "    vex_main();\n";
+        ctx.out << "    vx_main();\n";
         ctx.out << "    return 0;\n";
     } else {
-        ctx.out << "    return (int)vex_main();\n";
+        ctx.out << "    return (int)vx_main();\n";
     }
     ctx.out << "}\n";
 }
@@ -2422,10 +2422,10 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
                 case IrOp::CALLM:
                 case IrOp::TAILCALL:
                     has_call = true;
-                    // Detectar si el unico call es a vex_throw/panic
+                    // Detectar si el unico call es a vx_throw/panic
                     // (heuristica para @c cold).
                     if (ins.func_name.find("panic") != std::string::npos ||
-                        ins.func_name == "vex_throw") {
+                        ins.func_name == "vx_throw") {
                         has_throw = true;
                     }
                     break;
@@ -2486,7 +2486,7 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
             ctx.out << "__attribute__((const)) ";
         }
         if (attrs.is_cold) {
-            ctx.out << "VEX_COLD ";
+            ctx.out << "VX_COLD ";
         }
     }
 
@@ -2497,7 +2497,7 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
     ctx.out << type_for(fn.ret_type, false) << " " << sanitize_name(fn.name)
             << "(";
     if (is_lambda) {
-        ctx.out << "void *VEX_UNUSED __vex_env";
+        ctx.out << "void *VX_UNUSED __vx_env";
     }
     if (fn.params.empty()) {
         if (!is_lambda) ctx.out << "void";
@@ -2512,7 +2512,7 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
                 if (is_method && i == 0) {
                     ctx.out << method_class << " *";
                     if (opts_.emit_compiler_hints) {
-                        ctx.out << "VEX_RESTRICT ";
+                        ctx.out << "VX_RESTRICT ";
                     }
                     ctx.out << "v" << vid;
                     continue;
@@ -2525,7 +2525,7 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
                 // vectorizacion automatica de GCC.
                 if (opts_.emit_compiler_hints &&
                     (v.is_host_ptr || v.type == ir::IrType::PTR)) {
-                    ctx.out << "VEX_RESTRICT ";
+                    ctx.out << "VX_RESTRICT ";
                 }
                 ctx.out << "v" << vid;
             } else {
@@ -3311,7 +3311,7 @@ void CBackend::emit_spawn_trampoline_call(EmitContext &ctx,
     (void)fn_ptr;
     spawn_trampoline_arities_.insert(argc);
     ctx.indent();
-    ctx.out << "vex_spawn(__vex_trampoline_" << argc << ", (int64_t)(intptr_t)"
+    ctx.out << "vx_spawn(__vx_trampoline_" << argc << ", (int64_t)(intptr_t)"
             << args_var << ");\n";
 }
 

@@ -19,7 +19,7 @@
  * El programador del host **decide explícitamente** qué restringir.
  * Por defecto todos los permisos están concedidos (modo "sin sandbox"),
  * lo que mantiene compatibilidad total con código existente. Cuando se
- * activa el sandbox via `--vex-caps`, los chequeos pasan a tener efecto.
+ * activa el sandbox via `--vx-caps`, los chequeos pasan a tener efecto.
  *
  * ## Coste en runtime
  *

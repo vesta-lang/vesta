@@ -411,8 +411,8 @@ size_t IrModule::add_function(IrFunction fn) {
  */
 namespace {
 /**
- * @brief FNV-1a 64 sobre un buffer.  Mismo algoritmo que el .vexi.
- *        Local al TU para no introducir dep circular con vex/.
+ * @brief FNV-1a 64 sobre un buffer.  Mismo algoritmo que el .vxi.
+ *        Local al TU para no introducir dep circular con vx/.
  */
 inline uint64_t fnv1a_local_64(const uint8_t *p, size_t n) noexcept {
     uint64_t h = 0xcbf29ce484222325ull;

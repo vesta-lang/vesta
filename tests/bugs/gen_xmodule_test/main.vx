@@ -1,6 +1,6 @@
 // Importa plantillas genericas de "lib" y las instancia en este modulo.
 // Valida: struct generico + metodo generico + clase generica + concepto/bound
-// + especializacion, todos atravesando el sistema de imports (.vexi).
+// + especializacion, todos atravesando el sistema de imports (.vxi).
 
 import "lib" only Caja, Box, doblar, Par;
 

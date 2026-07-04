@@ -12,7 +12,7 @@ standalone.
 - [Roadmap de VestaVM](#roadmap-de-vestavm)
   - [Indice](#indice)
   - [1. Vision general de fases](#1-vision-general-de-fases)
-  - [2. Phase A: Frontend Vesta (completa)](#2-phase-a-frontend-vex-completa)
+  - [2. Phase A: Frontend Vesta (completa)](#2-phase-a-frontend-vx-completa)
   - [3. Phase B: IR cleanups (completa)](#3-phase-b-ir-cleanups-completa)
   - [4. Phase C: libvesta\_rt extraction (parcial)](#4-phase-c-libvesta_rt-extraction-parcial)
   - [5. Phase D: JIT C1+C2 (en progreso)](#5-phase-d-jit-c1c2-en-progreso)

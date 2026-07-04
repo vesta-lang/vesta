@@ -169,9 +169,9 @@ ResolveResult resolve(const Manifest &root, const std::string &work_dir,
 
         // Para path local, leer su propio manifest y encolar sus deps.
         if (!d.path.empty()) {
-            std::string mani_path = paths::join(d.path, "vex.toml");
+            std::string mani_path = paths::join(d.path, "vx.toml");
             if (!paths::exists(mani_path)) {
-                mani_path = paths::join(d.path, "vex.json");
+                mani_path = paths::join(d.path, "vx.json");
             }
             if (paths::exists(mani_path)) {
                 auto pr = parse_manifest_file(mani_path);
@@ -206,9 +206,9 @@ ResolveResult resolve(const Manifest &root, const std::string &work_dir,
             rd.resolved_rev = fr.resolved_rev;
             rd.source_url = src.url;
 
-            std::string mani_path = paths::join(dest, "vex.toml");
+            std::string mani_path = paths::join(dest, "vx.toml");
             if (!paths::exists(mani_path)) {
-                mani_path = paths::join(dest, "vex.json");
+                mani_path = paths::join(dest, "vx.json");
             }
             if (paths::exists(mani_path)) {
                 auto pr = parse_manifest_file(mani_path);
@@ -226,7 +226,7 @@ ResolveResult resolve(const Manifest &root, const std::string &work_dir,
                 }
             } else {
                 result.warnings.push_back(
-                    "dep " + d.name + ": sin vex.toml / vex.json en el repo");
+                    "dep " + d.name + ": sin vx.toml / vx.json en el repo");
             }
         } else {
             result.warnings.push_back(

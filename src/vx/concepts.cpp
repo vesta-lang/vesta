@@ -148,7 +148,7 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
     std::vector<std::string> params = cd->type_params;
     std::vector<Type> args;
     args.push_back(t);
-    vexgen::GenSubst g;
+    vxgen::GenSubst g;
     g.params = &params;
     g.args = &args;
 
@@ -164,7 +164,7 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
             r.satisfied = false;
             return r;
         }
-        auto cloned = vexgen::clone_expr(cd->predicate.get(), g);
+        auto cloned = vxgen::clone_expr(cd->predicate.get(), g);
         const ComptimeEvalResult er = comptime_eval_expr(tc, cloned.get());
         r.satisfied = er.ok && er.value != 0;
         return r;
@@ -174,7 +174,7 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
             r.satisfied = false;
             return r;
         }
-        auto cloned = vexgen::clone_stmt(cd->body.get(), g);
+        auto cloned = vxgen::clone_stmt(cd->body.get(), g);
         // comptime_eval_stmt muta el estado comptime (scopes); el cast es
         // seguro porque la mutacion es local y se revierte.  Mismo patron
         // que comptime_eval_expr al invocar comptime_call_fn.

@@ -1,5 +1,5 @@
 # ============================================================================
-# vex_lib: frontend del lenguaje Vesta (lexer, parser, type checker, lowering,
+# vx_lib: frontend del lenguaje Vesta (lexer, parser, type checker, lowering,
 # facade del compilador).  Diseno aislado segun la decision arquitectonica
 # del roadmap: el frontend es una libreria estatica separada que prefigura
 # la futura libvesta_rt y permite reutilizarla desde tests, herramientas
@@ -7,7 +7,7 @@
 #
 # Dependencias internas:
 #  - Ninguna sobre vm/vmcore: el frontend solo conoce ir::IrModule
-#    (definido en include/ir/), y consume cabeceras de vex/.  El IR se
+#    (definido en include/ir/), y consume cabeceras de vx/.  El IR se
 #    enlaza desde el ejecutable principal porque sus .cpp se incluyen
 #    en el GLOB principal de src/.
 #
@@ -16,16 +16,16 @@
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# Version de CODEGEN para invalidacion de cache (.vexi / .vexir / .vpc).
+# Version de CODEGEN para invalidacion de cache (.vxi / .vxir / .vpc).
 #
-# vexi_compiler_version_hash() usa VEXI_COMPILER_BUILD_ID si esta definido.
+# vxi_compiler_version_hash() usa VXI_COMPILER_BUILD_ID si esta definido.
 # Aqui generamos ese identificador como un hash de las fuentes que afectan la
 # SALIDA del compilador (frontend Vesta + IR + emisores de bytecode + AOT/JIT).
 # El header solo se reescribe cuando ese hash cambia, de modo que:
 #   - cambiar lowering/IR/emisores -> nuevo hash -> caches invalidados.
 #   - recompilar sin tocar codegen  -> mismo hash -> caches conservados.
-# Esto evita el bug de "edite el compilador pero el .vexir viejo se reuso".
-file(GLOB_RECURSE VEX_CODEGEN_SRCS
+# Esto evita el bug de "edite el compilador pero el .vxir viejo se reuso".
+file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/vx/*.cpp     ${CMAKE_SOURCE_DIR}/src/vx/*.h
     ${CMAKE_SOURCE_DIR}/include/vx/*.h
     ${CMAKE_SOURCE_DIR}/src/ir/*.cpp      ${CMAKE_SOURCE_DIR}/include/ir/*.h
@@ -37,20 +37,20 @@ file(GLOB_RECURSE VEX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/port/snippet_loader.cpp
 )
-set(VEX_CODEGEN_VERSION_HDR ${CMAKE_CURRENT_BINARY_DIR}/vex_codegen_version.h)
+set(VX_CODEGEN_VERSION_HDR ${CMAKE_CURRENT_BINARY_DIR}/vx_codegen_version.h)
 add_custom_command(
-    OUTPUT ${VEX_CODEGEN_VERSION_HDR}
+    OUTPUT ${VX_CODEGEN_VERSION_HDR}
     COMMAND ${CMAKE_COMMAND}
-        -DOUT=${VEX_CODEGEN_VERSION_HDR}
-        "-DSRCS=${VEX_CODEGEN_SRCS}"
+        -DOUT=${VX_CODEGEN_VERSION_HDR}
+        "-DSRCS=${VX_CODEGEN_SRCS}"
         -P ${CMAKE_SOURCE_DIR}/cmake/gen_codegen_version.cmake
-    DEPENDS ${VEX_CODEGEN_SRCS} ${CMAKE_SOURCE_DIR}/cmake/gen_codegen_version.cmake
+    DEPENDS ${VX_CODEGEN_SRCS} ${CMAKE_SOURCE_DIR}/cmake/gen_codegen_version.cmake
     COMMENT "Calculando version de codegen Vesta (invalidacion de cache)"
     VERBATIM
 )
 
-add_library(vex_lib STATIC
-    ${VEX_CODEGEN_VERSION_HDR}
+add_library(vx_lib STATIC
+    ${VX_CODEGEN_VERSION_HDR}
     lexer.cpp
     ast.cpp
     parser.cpp
@@ -68,7 +68,7 @@ add_library(vex_lib STATIC
     specialization.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
-    # Fase 4 interop C: generador de header C publico (vex --emit-header).
+    # Fase 4 interop C: generador de header C publico (vx --emit-header).
     c_header_gen.cpp
     lombok.cpp
     lowering.cpp
@@ -90,7 +90,7 @@ add_library(vex_lib STATIC
     module_resolver.cpp
     module_interop.cpp
     namespace_flatten.cpp
-    vexi_format.cpp
+    vxi_format.cpp
     project_cache.cpp
     velb_signature.cpp
     # comptime_vm.cpp vive en src/runtime/ (depende del runtime VM).
@@ -106,24 +106,24 @@ add_library(vex_lib STATIC
 
 # La libreria expone sus headers desde include/vx/; PUBLIC para que los
 # consumidores (vm, tests) los hereden automaticamente al linkear.
-target_include_directories(vex_lib PUBLIC
+target_include_directories(vx_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/include
 )
-# El header generado con VEXI_COMPILER_BUILD_ID es PRIVATE (solo lo usa
-# vexi_format.cpp).  Dependencia explicita para que CMake genere el header
+# El header generado con VXI_COMPILER_BUILD_ID es PRIVATE (solo lo usa
+# vxi_format.cpp).  Dependencia explicita para que CMake genere el header
 # antes de compilar ese TU y lo recompile cuando el header cambie.
-target_include_directories(vex_lib PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-set_source_files_properties(vexi_format.cpp PROPERTIES
-    OBJECT_DEPENDS ${VEX_CODEGEN_VERSION_HDR})
+target_include_directories(vx_lib PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+set_source_files_properties(vxi_format.cpp PROPERTIES
+    OBJECT_DEPENDS ${VX_CODEGEN_VERSION_HDR})
 
 # C++17 minimo (consistente con el resto del proyecto).
-target_compile_features(vex_lib PUBLIC cxx_std_17)
+target_compile_features(vx_lib PUBLIC cxx_std_17)
 
 # velb_signature.cpp usa OpenSSL EVP_DigestSign / EVP_DigestVerify.
 # Enlace centralizado en `vesta_openssl` (estatico/standalone o FireDaemon).
-target_link_libraries(vex_lib PRIVATE vesta_openssl)
+target_link_libraries(vx_lib PRIVATE vesta_openssl)
 
 # Avisos estrictos en builds nuestros para mantener la regla de "no warnings".
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(vex_lib PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(vx_lib PRIVATE -Wall -Wextra -Wpedantic)
 endif()

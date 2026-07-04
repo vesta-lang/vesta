@@ -1,6 +1,6 @@
 /**
  * @file toml_lite.cpp
- * @brief Implementacion del mini-parser TOML para vex.toml/vex.lock.
+ * @brief Implementacion del mini-parser TOML para vx.toml/vx.lock.
  */
 #include "pkg/toml_lite.h"
 
