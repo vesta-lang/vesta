@@ -1109,13 +1109,20 @@ bool LspServer::handle_vesta_request(const std::string &method,
             return true;
         }
 
+        // Target OS/arch opcional (vistas por plataforma): params.os / params.arch
+        // (vacios = host).  Permite ver el IR/bytecode/asm/JIT/diagrama que el
+        // compilador genera para Linux/Windows x x86-64/x86-32.
+        lsp::InspectTarget itarget;
+        itarget.os = params.value("os", std::string());
+        itarget.arch = params.value("arch", std::string());
+
         nlohmann::json result;
         if (method == "vesta/bytecode") {
             const std::string fn = params.value("function", std::string());
-            result = inspector_.bytecode(uri, fn);
+            result = inspector_.bytecode(uri, fn, itarget);
         } else if (method == "vesta/ir") {
             const std::string phase = params.value("phase", std::string("post"));
-            result = inspector_.ir(uri, phase);
+            result = inspector_.ir(uri, phase, itarget);
         } else if (method == "vesta/irDiff") {
             const std::string fn = params.value("function", std::string());
             result = inspector_.ir_diff(uri, fn);
@@ -1126,7 +1133,7 @@ bool LspServer::handle_vesta_request(const std::string &method,
             const std::string format =
                 params.value("format", std::string("mermaid"));
             const bool cost = params.value("cost", false);
-            result = inspector_.diagram(uri, kind, format, cost);
+            result = inspector_.diagram(uri, kind, format, cost, itarget);
         } else if (method == "vesta/functions") {
             result = inspector_.functions(uri);
         } else if (method == "vesta/aotCompat") {
@@ -1134,10 +1141,10 @@ bool LspServer::handle_vesta_request(const std::string &method,
             result = inspector_.aot_compat(uri, tier);
         } else if (method == "vesta/jitAsm") {
             const std::string fn = params.value("function", std::string());
-            result = inspector_.jit_asm(uri, fn);
+            result = inspector_.jit_asm(uri, fn, itarget);
         } else if (method == "vesta/aotAsm") {
             const std::string fn = params.value("function", std::string());
-            result = inspector_.aot_asm(uri, fn);
+            result = inspector_.aot_asm(uri, fn, itarget);
         } else if (method == "vesta/macroExpand") {
             result = inspector_.macro_expand(uri);
         } else if (method == "vesta/comptimeValues") {

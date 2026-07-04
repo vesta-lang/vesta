@@ -59,6 +59,31 @@ namespace lsp {
 class DocumentStore;
 
 /**
+ * @struct InspectTarget
+ * @brief Target OS/arquitectura para las vistas del inspector.
+ *
+ * Permite ver el IR / bytecode / asm nativo / JIT / diagrama que el compilador
+ * genera para un target concreto (Linux/Windows, x86-64/x86-32).  Campos vacios
+ * => host (comportamiento previo).  El @c os selecciona las ramas
+ * @c @Target("os:...") del fuente; @c arch determina el codegen nativo (x86-64
+ * vs x86-32) y la ABI (SysV vs Win64) de las vistas de asm.
+ */
+struct InspectTarget {
+    std::string os;   ///< "windows"|"linux"|"macos"; vacio = host.
+    std::string arch; ///< "x86-64"|"x86-32"; vacio = "x86-64".
+    /// @return true si hay un override real (no es el host por defecto).
+    bool active() const {
+        return !os.empty() || (!arch.empty() && arch != "x86-64" &&
+                               arch != "x86_64");
+    }
+    /// @return clave estable para el cache de vistas ("" si host).
+    std::string cache_key() const {
+        if (!active()) return std::string();
+        return "@" + os + "-" + arch;
+    }
+};
+
+/**
  * @class Inspector
  * @brief Sirve las peticiones @c vesta/* del LSP (vistas del ecosistema).
  *
@@ -95,7 +120,8 @@ class Inspector {
      * @return @c { "text": "<bytecode .vel>" } o @c { "error": "..." }.
      */
     nlohmann::json bytecode(const std::string &uri,
-                            const std::string &function = "");
+                            const std::string &function = "",
+                            const InspectTarget &target = {});
 
     /**
      * @brief @c vesta/ir: SSA IR del modulo.
@@ -103,7 +129,8 @@ class Inspector {
      * @param phase "pre" (antes de optimizar) o "post" (default, optimizado).
      * @return @c { "text": "<IR legible>" } o @c { "error": "..." }.
      */
-    nlohmann::json ir(const std::string &uri, const std::string &phase);
+    nlohmann::json ir(const std::string &uri, const std::string &phase,
+                      const InspectTarget &target = {});
 
     /**
      * @brief @c vesta/irDiff: diff del IR pre-opt vs post-opt de una funcion.
@@ -135,7 +162,8 @@ class Inspector {
      * @return @c { "text": "<diagrama>" } o @c { "error": "..." }.
      */
     nlohmann::json diagram(const std::string &uri, const std::string &kind,
-                           const std::string &format, bool cost);
+                           const std::string &format, bool cost,
+                           const InspectTarget &target = {});
 
     /**
      * @brief @c vesta/functions: lista de funciones del modulo.
@@ -165,7 +193,8 @@ class Inspector {
      *         soportadas por el selector JIT @c { "unsupported": true,
      *         "reason": "..." }.  Ante otro fallo @c { "error": "..." }.
      */
-    nlohmann::json jit_asm(const std::string &uri, const std::string &function);
+    nlohmann::json jit_asm(const std::string &uri, const std::string &function,
+                           const InspectTarget &target = {});
 
     /**
      * @brief @c vesta/aotAsm: desensamblado x86-64 del codigo AOT de una
@@ -177,7 +206,8 @@ class Inspector {
      *         Si la funcion no es AOT-compatible @c { "incompatible": true,
      *         "reason": "..." }.  Ante otro fallo @c { "error": "..." }.
      */
-    nlohmann::json aot_asm(const std::string &uri, const std::string &function);
+    nlohmann::json aot_asm(const std::string &uri, const std::string &function,
+                           const InspectTarget &target = {});
 
     /**
      * @brief @c vesta/macroExpand: codigo que generan los @Macro del modulo.

@@ -52,10 +52,52 @@
 #include "jit/vreg_pipeline.h"
 #include "lsp/document_store.h"
 #include "vex/compiler.h"
+#include "vex/parser.h" // set/get_aot_condcomp_target (vistas por OS/arch)
 
 namespace lsp {
 
 namespace {
+
+/// Normaliza el arch del inspector al que espera el parser/codegen.
+inline std::string norm_arch(const std::string &a) {
+    if (a.empty() || a == "x86-64" || a == "x86_64" || a == "x64") return "x86_64";
+    if (a == "x86-32" || a == "x86_32" || a == "x86" || a == "i386") return "x86";
+    return a;
+}
+
+/// RAII: aplica el override de @Target(os:...) del inspector y lo restaura al
+/// destruir.  Sin target activo no toca el thread_local del parser.
+struct InspectTargetGuard {
+    std::string prev_os, prev_arch;
+    bool active = false;
+    explicit InspectTargetGuard(const InspectTarget &t) {
+        if (!t.active()) return;
+        vex::get_aot_condcomp_target(prev_os, prev_arch);
+        vex::set_aot_condcomp_target(t.os, norm_arch(t.arch));
+        active = true;
+    }
+    ~InspectTargetGuard() {
+        if (active) vex::set_aot_condcomp_target(prev_os, prev_arch);
+    }
+    InspectTargetGuard(const InspectTargetGuard &) = delete;
+    InspectTargetGuard &operator=(const InspectTargetGuard &) = delete;
+};
+
+/// @return true si el target pide ABI SysV (Linux/macOS); false Win64.
+inline bool target_is_sysv(const InspectTarget &t) {
+    if (t.os == "linux" || t.os == "macos") return true;
+    if (t.os == "windows") return false;
+#if defined(_WIN32)
+    return false;
+#else
+    return true;
+#endif
+}
+
+/// @return true si el target pide codegen x86-32.
+inline bool target_is_mode32(const InspectTarget &t) {
+    return norm_arch(t.arch) == "x86";
+}
 
 /**
  * @brief Devuelve la primera linea fuente conocida de una funcion IR.
@@ -144,12 +186,13 @@ const ir::IrFunction *pick_function(const ir::IrModule &mod,
  * @return Texto del desensamblado (multilinea).
  */
 std::string disasm_x86_64(const uint8_t *code, size_t code_size,
-                          uint64_t base) {
+                          uint64_t base, bool mode32 = false) {
     if (!code || code_size == 0)
         return "(codigo vacio)";
     csh handle;
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK)
-        return "(Capstone: no se pudo abrir el desensamblador x86-64)";
+    if (cs_open(CS_ARCH_X86, mode32 ? CS_MODE_32 : CS_MODE_64, &handle) !=
+        CS_ERR_OK)
+        return "(Capstone: no se pudo abrir el desensamblador x86)";
     cs_option(handle, CS_OPT_DETAIL, CS_OPT_OFF);
     cs_insn *insn = nullptr;
     const size_t count = cs_disasm(handle, code, code_size, base, 0, &insn);
@@ -1002,12 +1045,22 @@ std::string vel_extract_fn(const std::string &vel, const std::string &fn);
 } // namespace
 
 nlohmann::json Inspector::bytecode(const std::string &uri,
-                                   const std::string &function) {
+                                   const std::string &function,
+                                   const InspectTarget &target) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};
+    // El bytecode VM es arch-agnostico; el @c target->os solo selecciona las
+    // ramas @Target.  Con target activo recompilamos fresco bajo el guard.
+    InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
     // Sin funcion (panel del inspector): modulo entero, texto plano.
     if (function.empty()) {
+        if (target.active()) {
+            vex::CompileOptions opts;
+            opts.module_name = "main";
+            vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+            return {{"text", res.vel_text}};
+        }
         const DocAnalysis &an = engine_.analyze_document(uri, text);
         return {{"text", an.result.vel_text}};
     }
@@ -1018,7 +1071,8 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     // Cache por (uri, hash, fn) -- recompilar es barato pero no en cada frame.
     const uint64_t hsh = fnv1a_hash(text);
     const std::string key =
-        uri + "|" + std::to_string(hsh) + "|bc-gb:" + function;
+        uri + "|" + std::to_string(hsh) + "|bc-gb:" + function +
+        target.cache_key();
     auto it = view_cache_.find(key);
     if (it != view_cache_.end())
         return nlohmann::json::parse(it->second);
@@ -1117,16 +1171,21 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     return out;
 }
 
-nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase) {
+nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
+                             const InspectTarget &target) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};
+    // @Target(os) del target: recompilamos fresco bajo el guard para que las
+    // ramas por-OS se seleccionen segun el target (el arch no afecta al IR).
+    InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
 
     if (phase == "pre") {
         // El IR pre-opt NO esta en el CompileResult cacheado por defecto:
         // exige recompilar con emit_ir_preopt.  Cachear por (uri, hash).
         const uint64_t h = fnv1a_hash(text);
-        const std::string key = uri + "|" + std::to_string(h) + "|ir-pre";
+        const std::string key =
+            uri + "|" + std::to_string(h) + "|ir-pre" + target.cache_key();
         auto it = view_cache_.find(key);
         if (it != view_cache_.end())
             return {{"text", it->second}};
@@ -1147,10 +1206,20 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase) {
         return {{"text", std::move(rendered)}};
     }
 
-    // phase "post" (o cualquier otra): reutilizar el cache del motor.
-    const DocAnalysis &an = engine_.analyze_document(uri, text);
+    // phase "post" (o cualquier otra): con target activo recompilar fresco
+    // (el cache del motor es host); si no, reutilizar el cache del motor.
     ir::IrModule mod;
-    if (!parse_post_opt_module(an.result, mod))
+    bool got = false;
+    if (target.active()) {
+        vex::CompileOptions opts;
+        opts.module_name = "main";
+        vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+        got = parse_post_opt_module(res, mod);
+    } else {
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        got = parse_post_opt_module(an.result, mod);
+    }
+    if (!got)
         return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
     std::ostringstream oss;
     ir::ir_print(mod, oss);
@@ -1376,9 +1445,13 @@ nlohmann::json Inspector::complexity(const std::string &uri) {
 
 nlohmann::json Inspector::diagram(const std::string &uri,
                                   const std::string &kind,
-                                  const std::string &format, bool cost) {
+                                  const std::string &format, bool cost,
+                                  const InspectTarget &target) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};
+    // El @c target->os selecciona las ramas @Target en las fases IR/vel del
+    // diagrama.  El guard se aplica a la recompilacion que hace la generacion.
+    InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
 
     // Validar kind y format antes de recompilar.
@@ -1395,7 +1468,8 @@ nlohmann::json Inspector::diagram(const std::string &uri,
     // recompila con flags concretos -> no repetir peticiones identicas.
     const uint64_t h = fnv1a_hash(text);
     const std::string key = uri + "|" + std::to_string(h) + "|diag:" + kind +
-                            ":" + format + ":" + (cost ? "1" : "0");
+                            ":" + format + ":" + (cost ? "1" : "0") +
+                            target.cache_key();
     auto it = view_cache_.find(key);
     if (it != view_cache_.end())
         return {{"text", it->second}};
@@ -1507,12 +1581,27 @@ nlohmann::json Inspector::aot_compat(const std::string &uri,
 }
 
 nlohmann::json Inspector::jit_asm(const std::string &uri,
-                                  const std::string &function) {
+                                  const std::string &function,
+                                  const InspectTarget &target) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};
-    const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
+    // El JIT es x86-64 host; el @c target->os solo selecciona las ramas
+    // @Target y la ABI mostrada.  Con un target activo recompilamos fresco
+    // bajo el guard para que la seleccion @Target sea la del target.
+    InspectTargetGuard tguard(target);
+    const std::string &doc_text = docs_.text(uri);
     ir::IrModule mod;
-    if (!parse_post_opt_module(an.result, mod))
+    bool got_ir = false;
+    if (target.active()) {
+        vex::CompileOptions co;
+        co.module_name = "main";
+        vex::CompileResult cr = vex::compile_vex_source(doc_text, uri, co);
+        got_ir = parse_post_opt_module(cr, mod);
+    } else {
+        const DocAnalysis &an = engine_.analyze_document(uri, doc_text);
+        got_ir = parse_post_opt_module(an.result, mod);
+    }
+    if (!got_ir)
         return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
 
     const ir::IrFunction *fn = pick_function(mod, function);
@@ -1523,7 +1612,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
         vex::CompileOptions co;
         co.module_name = "main";
         co.emit_comptime_fns = true;
-        vex::CompileResult cr2 = vex::compile_vex_source(docs_.text(uri), uri, co);
+        vex::CompileResult cr2 = vex::compile_vex_source(doc_text, uri, co);
         ir::IrModule m2;
         if (parse_post_opt_module(cr2, m2)) {
             mod = std::move(m2);
@@ -1555,11 +1644,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
         bytes = jit::vreg_compile_native(
             *fn, /*resolve_call=*/{}, /*ent=*/{}, /*resolve_native=*/{},
             /*resolve_symbol=*/{}, &relocs, /*pic=*/true,
-#if defined(_WIN32)
-            /*target_sysv=*/false,
-#else
-            /*target_sysv=*/true,
-#endif
+            /*target_sysv=*/target_is_sysv(target),
             /*mode32=*/false, jit::FloatIsa::SSE2,
             /*emit_line_map=*/true, &line_map, &asm_labels);
     } catch (...) {
@@ -1573,12 +1658,12 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
                                "backend vreg (float/strings/algunos builtins)"}};
 
     std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0);
-    nlohmann::json args = function_args(*fn,
-#if defined(_WIN32)
-                                        {"rcx", "rdx", "r8", "r9"});
-#else
-                                        {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
-#endif
+    nlohmann::json args =
+        function_args(*fn, target_is_sysv(target)
+                               ? std::vector<const char *>{"rdi", "rsi", "rdx",
+                                                           "rcx", "r8", "r9"}
+                               : std::vector<const char *>{"rcx", "rdx", "r8",
+                                                           "r9"});
     std::vector<std::pair<std::string, std::string>> seed;
     for (const auto &a : args)
         seed.emplace_back(a["reg"].get<std::string>(),
@@ -1610,12 +1695,30 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
 }
 
 nlohmann::json Inspector::aot_asm(const std::string &uri,
-                                  const std::string &function) {
+                                  const std::string &function,
+                                  const InspectTarget &target) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};
-    const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
+    // La vista AOT por target: aplicar @Target(os) + ABI SysV/Win64 (fmt) +
+    // codegen x86-64/x86-32 (arch).  Con target activo recompilamos con el
+    // lowering AOT nativo (native_poo) bajo el guard para reflejar el target.
+    InspectTargetGuard tguard(target);
+    const bool sysv = target_is_sysv(target);
+    const bool mode32 = target_is_mode32(target);
+    const std::string &doc_text = docs_.text(uri);
     ir::IrModule mod;
-    if (!parse_post_opt_module(an.result, mod))
+    bool got_ir = false;
+    if (target.active()) {
+        vex::CompileOptions co;
+        co.module_name = "main";
+        co.native_poo = true; // la vista AOT usa el lowering nativo
+        vex::CompileResult cr = vex::compile_vex_source(doc_text, uri, co);
+        got_ir = parse_post_opt_module(cr, mod);
+    } else {
+        const DocAnalysis &an = engine_.analyze_document(uri, doc_text);
+        got_ir = parse_post_opt_module(an.result, mod);
+    }
+    if (!got_ir)
         return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
 
     const ir::IrFunction *fn = pick_function(mod, function);
@@ -1626,7 +1729,8 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         vex::CompileOptions co;
         co.module_name = "main";
         co.emit_comptime_fns = true;
-        vex::CompileResult cr2 = vex::compile_vex_source(docs_.text(uri), uri, co);
+        if (target.active()) co.native_poo = true;
+        vex::CompileResult cr2 = vex::compile_vex_source(doc_text, uri, co);
         ir::IrModule m2;
         if (parse_post_opt_module(cr2, m2)) {
             mod = std::move(m2);
@@ -1647,10 +1751,10 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
 
     // Primero comprobar compatibilidad AOT (tier BARE: el subset mas
     // estricto, lo que el codegen nativo aislado puede materializar).
-    aot::AotTarget target;
-    target.tier = aot::Tier::BARE;
+    aot::AotTarget aot_tgt;
+    aot_tgt.tier = aot::Tier::BARE;
     std::vector<aot::AotIncompat> issues;
-    if (!aot::aot_analyze_function(*fn, target, issues)) {
+    if (!aot::aot_analyze_function(*fn, aot_tgt, issues)) {
         std::string reason = "la funcion '" + fn->name +
                              "' no es compatible con AOT bare";
         if (!issues.empty()) {
@@ -1674,12 +1778,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         bytes = jit::vreg_compile_native(
             *fn, /*resolve_call=*/{}, /*ent=*/{}, /*resolve_native=*/{},
             /*resolve_symbol=*/{}, &relocs, /*pic=*/true,
-#if defined(_WIN32)
-            /*target_sysv=*/false,
-#else
-            /*target_sysv=*/true,
-#endif
-            /*mode32=*/false, jit::FloatIsa::SSE2,
+            /*target_sysv=*/sysv, /*mode32=*/mode32, jit::FloatIsa::SSE2,
             /*emit_line_map=*/true, &line_map, &asm_labels);
     } catch (...) {
         return {{"error", "el codegen AOT lanzo una excepcion para '" +
@@ -1690,21 +1789,25 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
                 {"reason", "la funcion '" + fn->name +
                                "' no esta soportada por el selector vreg AOT"}};
 
-    std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0);
-    nlohmann::json args = function_args(*fn,
-#if defined(_WIN32)
-                                        {"rcx", "rdx", "r8", "r9"});
-#else
-                                        {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
-#endif
+    std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0, mode32);
+    nlohmann::json args =
+        function_args(*fn, sysv
+                               ? std::vector<const char *>{"rdi", "rsi", "rdx",
+                                                           "rcx", "r8", "r9"}
+                               : std::vector<const char *>{"rcx", "rdx", "r8",
+                                                           "r9"});
     std::vector<std::pair<std::string, std::string>> seed;
     for (const auto &a : args)
         seed.emplace_back(a["reg"].get<std::string>(),
                           a["name"].get<std::string>());
     nlohmann::json frame = nlohmann::json::array();
     // Vista correlada (solo-LSP): asm por-instruccion + fuente de la funcion.
-    nlohmann::json instrs = disasm_x86_64_correlated(
-        bytes.data(), bytes.size(), line_map, relocs, seed, &frame);
+    // La vista correlada usa disasm x86-64; para x86-32 el listado plano `text`
+    // ya refleja el arch, y la correlacion se omite en 32-bit (line_map sigue).
+    nlohmann::json instrs =
+        mode32 ? nlohmann::json::array()
+               : disasm_x86_64_correlated(bytes.data(), bytes.size(), line_map,
+                                          relocs, seed, &frame);
     nlohmann::json src = function_source_lines(docs_.text(uri), *fn);
 
     nlohmann::json jrelocs = nlohmann::json::array();
