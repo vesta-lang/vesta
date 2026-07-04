@@ -1,0 +1,14 @@
+// NS.2: llamada a una funcion GENERICA declarada en un namespace, cualificada
+// y con type-args (explicitos o inferidos) + bound a un concepto del namespace.
+namespace mat;
+concept Numerico<T> = is_numeric<T>();
+public T doble<T: mat.Numerico>(T x) { return x + x; }
+public T id<T>(T x) { return x; }
+public K primero<K, V>(K a, V b) { return a; }
+i64 main() {
+    i64 a = mat.doble<i64>(20);          // 40 (explicito + bound)
+    i64 b = mat.id(1);                   // 1  (inferido)
+    i64 c = mat.primero<i64, i64>(1, 9); // 1  (multi-param explicito)
+    println("a=${a} b=${b} c=${c}");
+    return a + b + c;                    // 42
+}

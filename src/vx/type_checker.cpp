@@ -8666,7 +8666,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                             break;
                         }
                     }
-                    if (fd && (fd->is_comptime || fd->is_macro)) {
+                    // Comptime/macro -> fold; generico -> monomorfizacion.  En
+                    // los tres casos reescribimos el callee al nombre mangled
+                    // desnudo para reusar la maquinaria de bare-call (fold /
+                    // is_generic_fn_template + monomorphize_function).
+                    if (fd && (fd->is_comptime || fd->is_macro ||
+                               !fd->type_params.empty())) {
                         referenced_names_.insert(ns_path);
                         auto id = std::make_unique<ast::IdentExpr>();
                         id->name = mangled;
