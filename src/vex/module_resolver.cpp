@@ -347,9 +347,13 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
     // El nombre del modulo importado sigue siendo `raw_path` (e.g.
     // `std/io`) -- no cambia la semantica del consumer.
     auto add_candidate = [&](const std::string &base_dir) {
-        // (a) modulo single-file.
+        // (a) modulo single-file.  La extension canonica es `.vx` (el lenguaje
+        // se llama vesta-lang; `.vex` colisiona con otro lenguaje existente y
+        // queda como LEGACY durante la migracion -- se prueba despues de `.vx`).
+        candidates.push_back(normalize_path_(raw_path + ".vx", base_dir));
         candidates.push_back(normalize_path_(raw_path + ".vex", base_dir));
-        // (b) paquete-dir: base_dir/raw_path/mod.vex.
+        // (b) paquete-dir: base_dir/raw_path/mod.vx (o .vex legacy).
+        candidates.push_back(normalize_path_(raw_path + "/mod.vx", base_dir));
         candidates.push_back(normalize_path_(raw_path + "/mod.vex", base_dir));
     };
 

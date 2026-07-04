@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <sstream>
@@ -515,11 +516,15 @@ bool is_skipped_dir(const std::string &name) {
            name.rfind("cmake-build", 0) == 0;
 }
 
-/// Devuelve true si @p name termina en ".vex".
+/// Devuelve true si @p name termina en la extension del lenguaje: `.vx`
+/// (canonica de vesta-lang) o `.vex` (legacy, en migracion).
 bool has_vex_ext(const std::string &name) {
-    const std::string ext = ".vex";
-    return name.size() > ext.size() &&
-           name.compare(name.size() - ext.size(), ext.size(), ext) == 0;
+    auto ends_with = [&](const char *ext) {
+        const size_t el = std::strlen(ext);
+        return name.size() > el &&
+               name.compare(name.size() - el, el, ext) == 0;
+    };
+    return ends_with(".vx") || ends_with(".vex");
 }
 
 /**
