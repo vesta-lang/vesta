@@ -62,6 +62,11 @@ if(NOT _cpack)
 endif()
 
 # Poner makensis en el PATH y lanzar cpack -G NSIS.
+#
+# La carpeta contenedora (VestaVM-<ver>-win64/) se desactiva SOLO para el NSIS en
+# cmake/VestaCPackProjectConfig.cmake (CPACK_PROJECT_CONFIG_FILE), para que el
+# .exe instale en `$PROGRAMFILES64\VestaVM\` y no en el subdir anidado
+# `...\VestaVM\VestaVM-<ver>-win64\`.
 set(ENV{PATH} "${_nsis_bindir};$ENV{PATH}")
 message(STATUS "[installer] generando .exe con NSIS...")
 execute_process(

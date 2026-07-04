@@ -169,7 +169,15 @@ set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
 set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
 # Mantener la carpeta contenedora (VestaVM-<ver>-win64/) dentro del .zip para
 # que al extraer no se vuelquen los archivos sueltos en el directorio actual.
+# NOTA: este valor por defecto (1) es el correcto para el ZIP; para el NSIS lo
+# forzamos a 0 en CPACK_PROJECT_CONFIG_FILE (si no, el .exe instalaria en
+# `...\VestaVM\VestaVM-<ver>-win64\` en vez de `...\VestaVM\`).
 set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY 1)
+# Override por-generador (NSIS=0, ZIP=1).  CPack lo ejecuta una vez por
+# generador con ${CPACK_GENERATOR} fijado -> es el modo soportado de dar valores
+# distintos segun el formato (un `-D` de cpack lo pisaria el CPackConfig).
+set(CPACK_PROJECT_CONFIG_FILE
+        "${CMAKE_SOURCE_DIR}/cmake/VestaCPackProjectConfig.cmake")
 
 # Descripciones de cada componente (lo que ve el usuario al elegir que instalar).
 set(CPACK_COMPONENT_CORE_DISPLAY_NAME     "Lenguaje Vesta (vesta.exe)")
