@@ -298,6 +298,12 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
     const uint32_t ml_off = pool.intern(sym.mangled_label);
     write_u32(payload, ml_off);
     write_u32(payload, static_cast<uint32_t>(sym.mangled_label.size()));
+    // NS.2: ns_path (8 bytes: off + len; vacio = simbolo a nivel de modulo).
+    // El namespace DECLARADO al que pertenece el simbolo, para que el
+    // consumidor haga visible `mylib.helper()` al importar el modulo.
+    const uint32_t nsp_off = pool.intern(sym.ns_path);
+    write_u32(payload, nsp_off);
+    write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
     // ParamSlot: type_off (u32) + type_len (u32) + name_off (u32) + name_len
     // (u32). 16 bytes c/u en lugar de 8 (preferimos claridad; el coste es
     // despreciable).
@@ -749,13 +755,14 @@ static bool parse_payload_global(const uint8_t *data, size_t size,
 static bool parse_payload_function(const uint8_t *data, size_t size,
                                    uint32_t payload_off, uint32_t payload_len,
                                    uint32_t pool_start, VexiSymbol &out) {
-    // Phase M5.b L.5: format v2 añade lib_len explicito.  Total fixed
-    // bytes en payload = 28 (vs 24 en v1): ret_off+ret_len+pc+
-    // lib_off+lib_len+ml_off+ml_len = 7 u32 = 28 bytes.
-    if (payload_len < 28) return false;
+    // Phase M5.b L.5: format v2 añade lib_len explicito.  NS.2 (v7) añade
+    // ns_path (off+len).  Total fixed bytes en payload = 36:
+    // ret_off+ret_len+pc+lib_off+lib_len+ml_off+ml_len+nsp_off+nsp_len =
+    // 9 u32 = 36 bytes.
+    if (payload_len < 36) return false;
     size_t off = payload_off;
     uint32_t ret_off = 0, ret_len = 0, pc = 0, lib_off = 0, lib_len = 0;
-    uint32_t ml_off = 0, ml_len = 0;
+    uint32_t ml_off = 0, ml_len = 0, nsp_off = 0, nsp_len = 0;
     if (!read_u32(data, size, off, ret_off)) return false;
     if (!read_u32(data, size, off, ret_len)) return false;
     if (!read_u32(data, size, off, pc)) return false;
@@ -763,9 +770,15 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
     if (!read_u32(data, size, off, lib_len)) return false;
     if (!read_u32(data, size, off, ml_off)) return false;
     if (!read_u32(data, size, off, ml_len)) return false;
+    if (!read_u32(data, size, off, nsp_off)) return false;
+    if (!read_u32(data, size, off, nsp_len)) return false;
     if (ml_len > 0) {
         if (!read_name(data, size, ml_off, ml_len, pool_start,
                        out.mangled_label))
+            return false;
+    }
+    if (nsp_len > 0) {
+        if (!read_name(data, size, nsp_off, nsp_len, pool_start, out.ns_path))
             return false;
     }
     if (!read_name(data, size, ret_off, ret_len, pool_start, out.return_type))

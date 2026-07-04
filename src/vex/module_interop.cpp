@@ -606,7 +606,18 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         // exportarse igual con su nombre publico original.
         std::string public_name;
         std::string mangled_label;
-        if (!strip_prefix.empty()) {
+        std::string ns_path_for_sym;
+        // NS.2: funcion de un namespace DECLARADO (`namespace mylib;`).  El
+        // mangled es `mylib__helper`; exportamos con nombre publico `helper` +
+        // ns_path `mylib` para que el consumidor la registre bajo ese namespace
+        // al importar el modulo.  Independiente del strip_prefix del modulo (el
+        // prefijo fisico es el del NAMESPACE, no el del modulo).
+        auto itns = tc.declared_ns_symbols().find(fname);
+        if (itns != tc.declared_ns_symbols().end()) {
+            ns_path_for_sym = itns->second.first;
+            public_name = itns->second.second;
+            mangled_label = fname;
+        } else if (!strip_prefix.empty()) {
             const bool has_prefix =
                 fname.size() > strip_prefix.size() &&
                 fname.compare(0, strip_prefix.size(), strip_prefix) == 0;
@@ -653,6 +664,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         s.kind = VexiSymbolKind::FUNCTION;
         s.name = public_name;
         s.mangled_label = mangled_label;
+        s.ns_path = ns_path_for_sym; // NS.2: namespace declarado (vacio si none)
         s.return_type = canonical_typename_of(sig->return_type);
         s.is_extern = !sig->extern_lib.empty();
         s.extern_lib = sig->extern_lib;
@@ -1472,7 +1484,16 @@ void register_namespace_for_import(TypeChecker &tc,
             // LIM-A: preservar @Naked para enrutar la llamada cross-modulo
             // via namespace (`lib.fn(...)`) al dispatcher naked en interp/JIT.
             sym.sig.is_naked = s.is_naked;
-            tc.register_namespace_symbol(ns_idx, s.name, std::move(sym));
+            // NS.2: si la funcion pertenece a un namespace DECLARADO por el dep
+            // (`namespace mylib;`), la registramos bajo ESE namespace (mylib)
+            // para que el consumidor la vea como `mylib.helper()` (desacoplado
+            // del nombre del modulo).  register_imported_namespace dedupea por
+            // nombre, asi que varios simbolos del mismo namespace comparten idx.
+            const uint32_t target_ns =
+                s.ns_path.empty()
+                    ? ns_idx
+                    : tc.register_imported_namespace(s.ns_path, module_name);
+            tc.register_namespace_symbol(target_ns, s.name, std::move(sym));
         } else if (s.kind == VexiSymbolKind::GLOBAL_VAR) {
             // M.L7 ext: globals const cross-module via namespace plain.
             // v4: si tiene blob_ref, leemos el blob string del pool.

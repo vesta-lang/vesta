@@ -1088,6 +1088,11 @@ CompileResult compile_vex_project(
                 ns_sym.mangled_label = sym.mangled_label;
                 pm.tc->register_namespace_symbol(ns_idx, sym.public_name,
                                                  std::move(ns_sym));
+                // NS.2 round-trip: recordar que este mangled_label pertenece al
+                // namespace declarado `ins.name` con nombre publico
+                // `sym.public_name`, para el export al .vexi.
+                pm.tc->register_declared_ns_symbol(sym.mangled_label, ins.name,
+                                                   sym.public_name);
             }
         }
 

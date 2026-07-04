@@ -104,6 +104,9 @@ CompileResult compile_vex_source(const std::string &source,
             // mangled como key), por lo que el lookup puede ir alli.
             tc.register_namespace_symbol(ns_idx, sym.public_name,
                                          std::move(ns_sym));
+            // NS.2 round-trip: recordar el namespace declarado para el export.
+            tc.register_declared_ns_symbol(sym.mangled_label, ins.name,
+                                           sym.public_name);
         }
     }
     // Si el LSP pidio volcar valores comptime, activamos la captura

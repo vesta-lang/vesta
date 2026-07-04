@@ -51,7 +51,7 @@ inline constexpr uint32_t VEXI_MAGIC = 0x49584556u;
 /// `@align`/`@hot`/`@cold`/`@section` viajan en el blob.
 /// v6: seccion de plantillas genericas exportadas (texto fuente) para
 /// monomorphizacion cross-module.
-inline constexpr uint16_t VEXI_FORMAT_VERSION = 6;
+inline constexpr uint16_t VEXI_FORMAT_VERSION = 7; // NS.2: ns_path por simbolo
 
 /// Kind del payload dentro de un BlobHeader (.vexi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
@@ -155,6 +155,12 @@ struct VexiHeader {
 struct VexiSymbol {
     VexiSymbolKind kind = VexiSymbolKind::FUNCTION;
     std::string name; ///< Nombre publico del simbolo.
+
+    /// NS.2 round-trip: namespace DECLARADO al que pertenece el simbolo
+    /// (path punteado, e.g. "std.collections").  Vacio = simbolo a nivel de
+    /// modulo (sin namespace).  El consumidor registra el namespace declarado
+    /// al importar, para que `import "lib"` haga visible `mylib.helper()`.
+    std::string ns_path;
 
     // Comun: el payload depende de @c kind.  Solo los campos relevantes
     // se llenan; el resto queda con su valor default.

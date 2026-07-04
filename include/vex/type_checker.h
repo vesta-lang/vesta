@@ -1361,10 +1361,30 @@ class TypeChecker {
     /// namespaces porque viven en @c scopes_ (popped).
     std::unordered_map<std::string, uint32_t> ns_idx_by_local_name_;
 
+    /// NS.2 round-trip: namespaces DECLARADOS por este modulo (via
+    /// `namespace X;`), para que el export al .vexi sepa que la funcion
+    /// mangled `mylib__helper` pertenece al namespace `mylib` con nombre
+    /// publico `helper`.  Clave = mangled_label; valor = (ns_path, public_name).
+    std::unordered_map<std::string, std::pair<std::string, std::string>>
+        declared_ns_symbols_;
+
   public:
     const std::unordered_map<std::string, uint32_t> &
     ns_idx_by_local_name() const {
         return ns_idx_by_local_name_;
+    }
+
+    /// NS.2: registra un simbolo de un namespace DECLARADO localmente (para el
+    /// export al .vexi).  Llamado por el compiler tras flatten_namespaces.
+    void register_declared_ns_symbol(const std::string &mangled_label,
+                                     const std::string &ns_path,
+                                     const std::string &public_name) {
+        declared_ns_symbols_[mangled_label] = {ns_path, public_name};
+    }
+    const std::unordered_map<std::string,
+                             std::pair<std::string, std::string>> &
+    declared_ns_symbols() const {
+        return declared_ns_symbols_;
     }
 
   private:
