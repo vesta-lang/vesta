@@ -13111,6 +13111,34 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
 }
 
 ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
+    // NS.2: comptime const de un namespace (`mod.ANSWER`).  El type checker
+    // anoto el valor (resuelto en compile-time); emitimos CONST inline igual
+    // que un comptime const desnudo -- cero overhead runtime.
+    if (e->comptime_const_resolved) {
+        if (e->comptime_const_is_str) {
+            std::vector<uint8_t> bytes(e->comptime_const_str.begin(),
+                                       e->comptime_const_str.end());
+            const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
+            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_addr;
+                is.imm = idx;
+                is.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(is));
+            }
+            ir::IrValueId v_len = emit_const(
+                ir::IrType::I64,
+                static_cast<uint64_t>(e->comptime_const_str.size()),
+                e->loc.line);
+            return emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
+        }
+        ir::IrType t = ir_type_from_primitive(e->result_type.kind);
+        return emit_const(t, static_cast<uint64_t>(e->comptime_const_int),
+                          e->loc.line);
+    }
     // ADTs: variante sin payload `Color.Red` (sin parens).  El
     // type checker la marco con property_kind=99.  Despachar al
     // constructor de variante con args vacio en lugar del manejo

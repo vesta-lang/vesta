@@ -6824,7 +6824,26 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                         e->result_type = Type{};
                         return Type{};
                     }
-                    // Variables / Constants.
+                    // Variables / Constants.  NS.2: si es un comptime const
+                    // del namespace (`mod.ANSWER`), su valor vive en
+                    // comptime_const_values_ bajo el label mangled; lo
+                    // resolvemos y anotamos en el nodo para que el lowering
+                    // emita un CONST inline (cero overhead, compile-time).
+                    {
+                        auto itcc =
+                            comptime_const_values_.find(sym.mangled_label);
+                        if (itcc != comptime_const_values_.end()) {
+                            e->comptime_const_resolved = true;
+                            if (itcc->second.is_str) {
+                                e->comptime_const_is_str = true;
+                                e->comptime_const_str = itcc->second.str_value;
+                            } else {
+                                e->comptime_const_int = itcc->second.value;
+                            }
+                            e->result_type = itcc->second.type;
+                            return e->result_type;
+                        }
+                    }
                     e->result_type = sym.var_type;
                     return sym.var_type;
                 }
@@ -8603,6 +8622,61 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         for (auto &a : e->args)
             (void)check_expr(a.get());
         return Type{};
+    }
+
+    // NS.2: llamada cualificada a un namespace (`mod.sq(3)` / `a.b.mk(21)`) cuyo
+    // simbolo resuelto es una funcion COMPTIME o un MACRO.  Estas NO se emiten
+    // como codigo runtime (se pliegan en compile-time via el ComptimeRuntime),
+    // asi que reescribimos el callee al nombre mangled desnudo (`mod__sq`) para
+    // que la maquinaria de bare-call comptime/macro lo maneje uniformemente.
+    if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        std::string ns_path;
+        bool got_ns = false;
+        if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+            ns_path = static_cast<ast::IdentExpr *>(fa->base.get())->name;
+            got_ns = true;
+        } else if (fa->base &&
+                   fa->base->kind == ast::NodeKind::FieldAccessExpr) {
+            got_ns = collect_dotted_path(fa->base.get(), ns_path);
+        }
+        if (got_ns) {
+            uint32_t ns_idx = UINT32_MAX;
+            auto itn = ns_idx_by_local_name_.find(ns_path);
+            if (itn != ns_idx_by_local_name_.end()) {
+                ns_idx = itn->second;
+            } else {
+                const Symbol *s = lookup(ns_path);
+                if (s && s->kind == SymbolKind::Namespace) ns_idx = s->ns_index;
+            }
+            if (ns_idx < imported_namespaces_.size()) {
+                const auto &ns = imported_namespaces_[ns_idx];
+                auto its = ns.by_name.find(fa->field_name);
+                if (its != ns.by_name.end()) {
+                    const std::string mangled =
+                        ns.symbols[its->second].mangled_label;
+                    // Buscar la FunctionDecl mangled y comprobar comptime/macro.
+                    const ast::FunctionDecl *fd = nullptr;
+                    for (auto &d2 : mod_.decls) {
+                        if (!d2 || d2->kind != ast::NodeKind::FunctionDecl)
+                            continue;
+                        auto *cand = static_cast<ast::FunctionDecl *>(d2.get());
+                        if (cand->name == mangled) {
+                            fd = cand;
+                            break;
+                        }
+                    }
+                    if (fd && (fd->is_comptime || fd->is_macro)) {
+                        referenced_names_.insert(ns_path);
+                        auto id = std::make_unique<ast::IdentExpr>();
+                        id->name = mangled;
+                        id->loc = fa->loc;
+                        e->callee = std::move(id);
+                        // fall-through: se procesa como bare `mangled(args)`.
+                    }
+                }
+            }
+        }
     }
 
     // Funcion generica (`id<i64>(42)` o `id(42)` con inferencia): reescribir el
