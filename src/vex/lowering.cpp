@@ -28056,10 +28056,29 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                             // area=slot1).  Sin esto el dispatch de interfaz
                             // nativo leia el slot equivocado (resultado
                             // silenciosamente erroneo).
-                            const std::string callee =
-                                (cm.defining_class.empty() ? concrete_name
-                                                           : cm.defining_class) +
-                                "__" + cm.name;
+                            // BUG-5: clase importada cross-module.  El body del
+                            // metodo en el dep se emitio con el nombre LOCAL de
+                            // la clase (imported_helper_suffix), no con el
+                            // mangled del consumer ("widget__Widget").  Al
+                            // devirtualizar a un CALL directo hay que usar el
+                            // nombre local para que el simbolo case con el body;
+                            // si no, el linker AOT deja `<mangled>__<metodo>`
+                            // indefinido (y el dead-elim descarta el body).
+                            // Mismo patron que el ctor (__new_<suffix>).
+                            std::string owner_class =
+                                cm.defining_class.empty() ? concrete_name
+                                                          : cm.defining_class;
+                            {
+                                auto it_ol =
+                                    tc_.class_layouts().find(owner_class);
+                                if (it_ol != tc_.class_layouts().end() &&
+                                    !it_ol->second.imported_helper_suffix
+                                         .empty())
+                                    owner_class =
+                                        it_ol->second.imported_helper_suffix;
+                            }
+                            const std::string callee = owner_class + "__" +
+                                                       cm.name;
                             ir::IrInstr ca{};
                             ca.op = ir::IrOp::CALL;
                             ca.type = ret_ir;

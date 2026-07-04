@@ -33,6 +33,7 @@ stats = "vesta --run reader_bmp.velb --stats -- Ejemplo60x3.bmp"
 jit   = "vesta --run reader_bmp.velb -m jit -- Ejemplo60x3.bmp"
 
 # Compilacion nativa AOT (PE en Windows / ELF en Linux) de la variante
-# single-file, que SI compila a nativo.  La version MODULAR aun no compila a
-# AOT por BUG-5 (metodos de clase cross-modulo) -- ver BUGS_LIMITACIONES.md.
+# single-file.  Los metodos de clase cross-modulo ya compilan a AOT (BUG-5
+# cerrado); la variante MODULAR completa aun necesita `args_get` en AOT (LIM-5)
+# para leer el nombre del fichero -- ver BUGS_LIMITACIONES.md.
 aot   = "vesta -m aot --vex reader_bmp.vex -o reader_bmp_native --emit exe"

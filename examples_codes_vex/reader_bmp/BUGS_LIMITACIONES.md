@@ -37,11 +37,12 @@ eliminando TODOS los workarounds locales:
 | Impresion de atributos | OK | OK | OK | OK |
 | Volcado ANSI truecolor (builtin `bg_rgb`) | **byte-exacto** | **byte-exacto** | **byte-exacto** | **byte-exacto** |
 | CLI args (`args_get`) | OK | OK | no (LIM-5) | no (LIM-5) |
-| **Modulo con clase cruzada** (`main_aot.vex` + `bmp.vex`) | OK | OK | **BUG-5** | **BUG-5** |
+| **Modulo con clase cruzada** (`main_aot.vex` + `bmp.vex`) | OK | OK | **OK** | **OK** |
 
-\* AOT PE: la clase `BMP_Image` vive en un modulo importado; el volcado se
-valido byte-exacto con una variante **auto-contenida** (misma clase + mismos
-builtins en un solo fichero), porque la variante **modular** dispara BUG-5.
+\* AOT PE: la clase `BMP_Image` vive en un modulo importado.  Los metodos de
+instancia cruzando modulo ya compilan a nativo (BUG-5 CERRADO 2026-07-04); el
+unico bloqueante restante para el `main.vex` modular completo es el gap de
+`args_get` (LIM-5), no el codegen de metodos de clase.
 
 \*\* AOT ELF (cross-compile desde Windows): validado byte-exacto con la variante
 auto-contenida usando `extern "libc.so.6"` DIRECTO, porque `import "vex_fileio"`
@@ -88,7 +89,17 @@ sin exponerse; ergonomia menor, no bug.)
 
 ## BUGS NUEVOS (destapados por la modernizacion)
 
-### BUG-5 [CRITICO] Los metodos de una CLASE definida en un modulo IMPORTADO no se compilan en AOT
+### BUG-5 [CERRADO 2026-07-04] Los metodos de una CLASE definida en un modulo IMPORTADO no se compilan en AOT
+
+**Fix**: la devirtualizacion nativa (`native_poo`) construia el callee del CALL
+directo con el nombre MANGLED de la clase importada (`widget__Widget__bump`),
+pero el body del metodo en el dep se emite con el nombre LOCAL
+(`Widget__bump`, igual que el ctor `__new_Widget`).  El linker AOT dejaba el
+simbolo mangled indefinido (y el dead-elim descartaba el body por no-usado).
+Solucion en `lower_class_method_call` (lowering.cpp): al devirtualizar, resolver
+el nombre de la clase via `imported_helper_suffix` del layout (nombre local),
+igual que ya hacia el ctor.  Verificado byte-exacto en interp/JIT/AOT-PE/AOT-ELF
+con el repro minimo (`widget.vex` + `mainx.vex`, `w.bump(41)` -> 42).
 
 **Que intentaba**: la version modular (`main_aot.vex` importa `bmp.vex`, que
 define `class BMP_Image`) compilada a nativo.  `main` hace
@@ -142,12 +153,12 @@ i32 main() {
   hace `STATUS_ENTRYPOINT_NOT_FOUND` (importa `widget__Widget__bump` de
   msvcrt.dll).  Igual en ELF.
 
-**Conclusion**: el codegen AOT solo compila las clases/metodos del modulo RAIZ;
-los metodos de instancia de una clase definida en un modulo IMPORTADO quedan
-como referencias externas sin definir.  **Bloquea la version modular en AOT**
-(PE y ELF).  No hay workaround aplicado en el ejemplo (a proposito): `main_aot.vex`
-se deja como codigo correcto y la validacion AOT byte-exacta se hace con una
-variante auto-contenida.
+**Conclusion (historica)**: el sintoma era un mismatch de mangling entre la
+llamada devirtualizada (nombre mangled del consumer) y el body (nombre local del
+dep).  Ya CERRADO (ver el fix arriba): los metodos de instancia de una clase
+importada compilan a nativo en PE y ELF.  El unico bloqueante restante del
+`main.vex` modular completo en AOT es el gap de `args_get`/`args_count` (LIM-5),
+independiente de este bug.
 
 ---
 
