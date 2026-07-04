@@ -51,7 +51,9 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// `@align`/`@hot`/`@cold`/`@section` viajan en el blob.
 /// v6: seccion de plantillas genericas exportadas (texto fuente) para
 /// monomorphizacion cross-module.
-inline constexpr uint16_t VXI_FORMAT_VERSION = 9; // NS.2: ns_path en templates
+/// v9: ns_path en templates genericas (NS.2 cross-module).
+/// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
+inline constexpr uint16_t VXI_FORMAT_VERSION = 10; // NS.3: package_id
 
 /// Kind del payload dentro de un BlobHeader (.vxi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
@@ -306,6 +308,12 @@ struct VxiModule {
         std::string ns_path; ///< NS.2 (v9): namespace declarado (vacio = ninguno)
     };
     std::vector<GenericTemplateSource> generic_templates;
+    /// Phase NS.3 (v10): identidad del PAQUETE que produjo este .vxi.
+    /// Derivado de @c "vx.toml" ([package] name@version) o de @c "@id(...)"
+    /// opt-in; vacio = paquete anonimo.  Usado para: (a) desambiguar
+    /// namespaces homonimos de paquetes distintos, (b) frontera de la
+    /// visibilidad @c internal (visible solo dentro del mismo package_id).
+    std::string package_id;
 };
 
 /// Helper: alocar un blob en el pool y devolver su offset.  El emitter

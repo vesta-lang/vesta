@@ -1849,6 +1849,10 @@ struct NamespaceDecl : Node {
     /// Semanticamente equivalentes (ambas manglan sus @c decls con el path); el
     /// flag es informativo para diagnosticos.
     bool is_statement_form = false;
+    /// Phase NS.3: override opcional del PackageId via @c "namespace X @id(\"..\");".
+    /// Vacio = usar el PackageId derivado del vx.toml.  Permite renombrar el
+    /// namespace manteniendo la identidad ABI (el .vxi del modulo lo estampa).
+    std::string package_id_override;
     NamespaceDecl() : Node(NodeKind::NamespaceDecl) {}
 };
 

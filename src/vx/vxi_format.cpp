@@ -511,6 +511,9 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         go.ns_len = static_cast<uint32_t>(g.ns_path.size());
         gen_offs.push_back(go);
     }
+    // NS.3 (v10): internar el package_id (vacio = paquete anonimo).
+    const uint32_t pkgid_off = pool.intern(mod.package_id);
+    const uint32_t pkgid_len = static_cast<uint32_t>(mod.package_id.size());
 
     std::vector<uint8_t> out;
     out.reserve(HEADER_BYTES + entries_bytes + payloads_bytes + deps_bytes +
@@ -622,10 +625,13 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     out[61] = 0;
     out[62] = 0;
     out[63] = 0;
-    // v6: gen_templates_offset (64) + gen_templates_count (68) + 8 pad (72..79).
+    // v6: gen_templates_offset (64) + gen_templates_count (68).
     patch_u32(64, gen_start);
     patch_u32(68, static_cast<uint32_t>(mod.generic_templates.size()));
-    for (size_t i = 72; i < 80; ++i) out[i] = 0;
+    // NS.3 (v10): package_id en el pad v6 (72 = offset RELATIVO al pool,
+    // 76 = longitud).  El parser suma string_pool_offset al leerlo.
+    patch_u32(72, pkgid_off);
+    patch_u32(76, pkgid_len);
 
     // Adjustar payload_off de cada entry: hasta ahora son relativos al
     // BLOQUE de payloads (empieza en 0).  Sumar payloads_start para que
@@ -1020,7 +1026,10 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     uint32_t gen_count_hdr = 0;                         // v6
     read_u32(data, size, off, gen_offset_hdr);
     read_u32(data, size, off, gen_count_hdr);
-    off += 8; // pad (offsets 72..79)
+    uint32_t pkgid_off_hdr = 0; // NS.3 v10 (offset 72, rel al pool)
+    uint32_t pkgid_len_hdr = 0; // NS.3 v10 (offset 76)
+    read_u32(data, size, off, pkgid_off_hdr);
+    read_u32(data, size, off, pkgid_len_hdr);
 
     if (magic != VXI_MAGIC) {
         r.error_message = "magic invalido en .vxi";
@@ -1225,6 +1234,12 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
         if (ns_len > 0)
             read_name(data, size, ns_off, ns_len, pool_start, g.ns_path);
         r.module_.generic_templates.push_back(std::move(g));
+    }
+
+    // NS.3 (v10): package_id desde el pool (vacio = paquete anonimo).
+    if (pkgid_len_hdr > 0) {
+        read_name(data, size, pkgid_off_hdr, pkgid_len_hdr, pool_start,
+                  r.module_.package_id);
     }
 
     r.ok = true;

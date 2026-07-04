@@ -632,6 +632,89 @@ NsToModname build_ns_to_modname_(const std::vector<ProjectModuleWork> &work) {
     return out;
 }
 
+/// Phase NS.3: deriva el PackageId del proyecto.  Camina hacia arriba desde el
+/// directorio del fichero raiz buscando @c "vx.toml" (o @c "vx.json"); lee el
+/// @c [package] con un scan minimo (sin dependencia de @c src/pkg).  El id es:
+///   - el valor explicito de @c id / @c "id" si esta presente, o
+///   - @c fnv1a_hex(name @ version) derivado, o
+///   - vacio (paquete anonimo) si no hay manifest ni nombre.
+std::string derive_package_id_(const std::string &root_path) {
+    namespace fs = std::filesystem;
+    // Normalizar + obtener el directorio del root.
+    std::string norm = root_path;
+    for (char &c : norm)
+        if (c == '\\') c = '/';
+    std::error_code ec;
+    fs::path dir = fs::path(norm).parent_path();
+    std::string manifest;
+    for (int depth = 0; depth < 32 && !dir.empty(); ++depth) {
+        for (const char *fname : {"vx.toml", "vx.json"}) {
+            fs::path cand = dir / fname;
+            if (fs::exists(cand, ec) && fs::is_regular_file(cand, ec)) {
+                std::ifstream f(cand.string(), std::ios::binary);
+                if (f) {
+                    std::stringstream ss;
+                    ss << f.rdbuf();
+                    manifest = ss.str();
+                }
+                break;
+            }
+        }
+        if (!manifest.empty()) break;
+        fs::path parent = dir.parent_path();
+        if (parent == dir) break; // llegamos a la raiz del FS
+        dir = parent;
+    }
+    if (manifest.empty()) return {}; // sin manifest -> anonimo
+
+    // Scan minimo del [package]: name / version / id.  Acepta TOML
+    // (`key = "val"`) y JSON (`"key": "val"`) de forma tolerante: extraemos
+    // el primer string tras el nombre de la clave.
+    auto extract = [&](const std::string &key) -> std::string {
+        // Buscar la clave como token de palabra.
+        size_t pos = 0;
+        while ((pos = manifest.find(key, pos)) != std::string::npos) {
+            // Verificar que es un limite de palabra por la izquierda.
+            bool lok = (pos == 0) || (!std::isalnum((unsigned char)manifest[pos - 1]) &&
+                                      manifest[pos - 1] != '_');
+            size_t after = pos + key.size();
+            bool rok = after >= manifest.size() ||
+                       (!std::isalnum((unsigned char)manifest[after]) &&
+                        manifest[after] != '_');
+            if (lok && rok) {
+                // Buscar el primer '"' tras la clave en la misma logica linea.
+                size_t q1 = manifest.find('"', after);
+                size_t nl = manifest.find('\n', after);
+                if (q1 != std::string::npos &&
+                    (nl == std::string::npos || q1 < nl)) {
+                    size_t q2 = manifest.find('"', q1 + 1);
+                    if (q2 != std::string::npos) {
+                        return manifest.substr(q1 + 1, q2 - q1 - 1);
+                    }
+                }
+            }
+            pos = after;
+        }
+        return {};
+    };
+    const std::string explicit_id = extract("id");
+    if (!explicit_id.empty()) return explicit_id;
+    const std::string name = extract("name");
+    if (name.empty()) return {};
+    const std::string version = extract("version");
+    const std::string ident = name + "@" + version;
+    // FNV-1a 64 sobre name@version -> hex.  Mismo esquema que abi_hash.
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (unsigned char c : ident) {
+        h ^= c;
+        h *= 0x100000001B3ull;
+    }
+    char buf[19];
+    std::snprintf(buf, sizeof(buf), "pkg:%012llx",
+                  (unsigned long long)(h & 0xFFFFFFFFFFFFull));
+    return std::string(buf);
+}
+
 } // namespace
 
 /// Phase M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
@@ -780,6 +863,24 @@ CompileResult compile_vx_project(
     // Phase NS.2-full: mapa namespace -> module_name para traducir los
     // imports por-namespace (`import a.b.c;`) al module_name del dep.
     const NsToModname ns_to_modname = build_ns_to_modname_(work);
+
+    // Phase NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
+    // Compartido por todos los modulos del proyecto salvo override @id.
+    const std::string project_package_id = derive_package_id_(root_path);
+    // Phase NS.3: override @id por-modulo, capturado AQUI (antes de que el
+    // flatten elimine el NamespaceDecl del AST durante compile_one_module).
+    std::vector<std::string> module_pkgid_override(work.size());
+    for (size_t i = 0; i < work.size(); ++i) {
+        if (!work[i].ast) continue;
+        for (const auto &d : work[i].ast->decls) {
+            if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+            const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
+            if (!ns->package_id_override.empty()) {
+                module_pkgid_override[i] = ns->package_id_override;
+                break;
+            }
+        }
+    }
 
     // 3. Compilar cada modulo en orden topologico (deps primero).
     //
@@ -1380,6 +1481,15 @@ CompileResult compile_vx_project(
             is_root ? std::string() // root: sin prefix (no se exporta)
                     : (pm.module_name + "__");
         export_typechecker_to_vxi(*pm.tc, source_hash, pm.vxi, strip_prefix);
+
+        // Phase NS.3: estampar el PackageId en el .vxi del modulo.  Por defecto
+        // el del proyecto (vx.toml); si el modulo declaro `namespace X @id(..)`,
+        // ese override gana (identidad ABI por-namespace).  El override se
+        // capturo antes del flatten (que borra el NamespaceDecl del AST).
+        pm.vxi.package_id = (i < module_pkgid_override.size() &&
+                             !module_pkgid_override[i].empty())
+                                ? module_pkgid_override[i]
+                                : project_package_id;
 
         // Phase M4.ext L.13: poblar dep table con los (name, abi_hash) de
         // los deps directos del modulo.  El loader del cache verifica

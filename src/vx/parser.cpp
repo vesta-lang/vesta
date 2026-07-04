@@ -2748,6 +2748,24 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     }
     ns->name = path;
 
+    // Phase NS.3: override opcional de PackageId: `namespace X @id("...")`.
+    // Permite renombrar el namespace manteniendo la identidad ABI.
+    if (current_.kind == TokenKind::AT &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+        lex_.peek_at(0).lexeme == "id") {
+        (void)consume(); // '@'
+        (void)consume(); // 'id'
+        (void)expect(TokenKind::LPAREN, "se esperaba '(' tras '@id'");
+        if (current_.kind != TokenKind::STRING_LIT &&
+            current_.kind != TokenKind::RAW_STRING_LIT) {
+            error_here("se esperaba un literal string en '@id(\"...\")'");
+            return nullptr;
+        }
+        ns->package_id_override = current_.str_val;
+        (void)consume();
+        (void)expect(TokenKind::RPAREN, "se esperaba ')' tras el id de '@id'");
+    }
+
     // Phase NS.1: forma STATEMENT `namespace a.b.c;` -- aplica al RESTO del
     // fichero (recoge las decls top-level siguientes hasta el proximo
     // `namespace` statement o EOF).  La forma BLOQUE `namespace a.b.c { ... }`
