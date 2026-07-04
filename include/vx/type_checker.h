@@ -1340,6 +1340,22 @@ class TypeChecker {
     std::unordered_map<std::string, bool> function_is_public_;
     std::unordered_map<std::string, bool> global_is_public_;
     std::unordered_map<std::string, bool> typedef_is_public_;
+    /// Phase NS.3: nombres marcados @c "internal" (package-scoped).  El emitter
+    /// de .vxi los exporta con flag; el consumidor de OTRO paquete los filtra.
+    std::unordered_set<std::string> function_is_internal_;
+    std::unordered_set<std::string> global_is_internal_;
+
+  public:
+    /// @brief Phase NS.3: @c true si la funcion @p name es @c internal.
+    bool function_is_internal(const std::string &name) const {
+        return function_is_internal_.count(name) != 0;
+    }
+    /// @brief Phase NS.3: @c true si el global @p name es @c internal.
+    bool global_is_internal(const std::string &name) const {
+        return global_is_internal_.count(name) != 0;
+    }
+
+  private:
 
     /// Phase M.L26: set de nombres que @c lookup_with_depth resolvio
     /// exitosamente.  Mutable porque el lookup es @c const pero el

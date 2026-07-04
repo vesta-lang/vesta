@@ -699,6 +699,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         // en interp/JIT enrute al dispatcher naked (y no ejecute el asm como
         // bytecode).
         s.is_naked = sig->is_naked;
+        s.is_internal = tc.function_is_internal(fname); // NS.3: package-scoped
         s.param_types.reserve(sig->param_types.size());
         for (const auto &pt : sig->param_types) {
             s.param_types.push_back(canonical_typename_of(pt));
@@ -754,6 +755,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         s.name = public_name;
         s.mangled_label = mangled_label;
         s.ns_path = ns_path_for_gv; // NS.2: namespace declarado (vacio si none)
+        s.is_internal = gv->is_internal; // NS.3: package-scoped
         Type gv_type =
             const_cast<TypeChecker &>(tc).resolve_type_node(gv->type.get());
         s.underlying_type = canonical_typename_of(gv_type);

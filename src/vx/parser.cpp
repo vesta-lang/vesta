@@ -393,13 +393,20 @@ static bool target_matches_(const std::string &spec_in) noexcept {
 // no hereden la visibilidad del top-level que los envuelve.
 void Parser::apply_pending_visibility(ast::Node *n) noexcept {
     if (n == nullptr || pending_visibility_ == 0) return;
-    const bool is_public = (pending_visibility_ == 1);
+    // NS.3: internal (3) es EXPORTABLE (visible en el paquete) -> is_public=true
+    // ademas de is_internal=true.  public (1) e internal (3) exportan; private
+    // (2) no.
+    const bool is_public =
+        (pending_visibility_ == 1 || pending_visibility_ == 3);
+    const bool is_internal = (pending_visibility_ == 3);
     switch (n->kind) {
     case ast::NodeKind::FunctionDecl:
         static_cast<ast::FunctionDecl *>(n)->is_public = is_public;
+        static_cast<ast::FunctionDecl *>(n)->is_internal = is_internal;
         break;
     case ast::NodeKind::GlobalVarDecl:
         static_cast<ast::GlobalVarDecl *>(n)->is_public = is_public;
+        static_cast<ast::GlobalVarDecl *>(n)->is_internal = is_internal;
         break;
     case ast::NodeKind::TypeAliasDecl:
         static_cast<ast::TypeAliasDecl *>(n)->is_public = is_public;
@@ -813,6 +820,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     } else if (current_.kind == TokenKind::KW_PRIVATE) {
         (void)consume();
         pending_visibility_ = 2; // 2 = private explicito
+    } else if (current_.kind == TokenKind::IDENTIFIER &&
+               current_.lexeme == "internal") {
+        // Phase NS.3: `internal` (keyword contextual) -- package-scoped.
+        (void)consume();
+        pending_visibility_ = 3; // 3 = internal explicito
     }
     // Cleanup garantizado al salir de parse_top_level_decl.
     struct VisGuard {
@@ -1279,6 +1291,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (pending_visibility_ == 0 && (current_.kind == TokenKind::KW_PUBLIC ||
                                      current_.kind == TokenKind::KW_PRIVATE)) {
         pending_visibility_ = (current_.kind == TokenKind::KW_PUBLIC) ? 1 : 2;
+        (void)consume();
+    } else if (pending_visibility_ == 0 &&
+               current_.kind == TokenKind::IDENTIFIER &&
+               current_.lexeme == "internal") {
+        pending_visibility_ = 3; // NS.3: internal tras annotations
         (void)consume();
     }
     // bytes <nombre> { db/dw/dd/dq/times ... }  (datos crudos estilo NASM)

@@ -1462,6 +1462,10 @@ struct FunctionDecl : Node {
     /// segun keyword `public`/`private` precedente; sin keyword = true
     /// (default permisivo para compat con codigo existente).
     bool is_public = true;
+    /// Phase NS.3: @c "internal" -- visible en TODO el paquete (mismo
+    /// PackageId) pero NO exportado a paquetes distintos.  Se exporta al .vxi
+    /// con flag; el consumidor de OTRO paquete lo filtra.
+    bool is_internal = false;
     bool is_async = false; ///< @Async: el cuerpo se ejecuta en un proceso hijo,
                            ///< devuelve handle de Future
     /// marca `comptime fn` -- la funcion se interpreta en
@@ -1667,6 +1671,8 @@ struct GlobalVarDecl : Node {
     bool is_const = false;
     /// Phase M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
+    /// Phase NS.3: @c "internal" -- package-scoped (ver FunctionDecl::is_internal).
+    bool is_internal = false;
     ///  marca `comptime const`.  El init debe ser comptime-
     /// evaluable; el type checker guarda el valor en
     /// @c TypeChecker::comptime_const_values_ y los usos posteriores

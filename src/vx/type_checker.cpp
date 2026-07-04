@@ -1059,11 +1059,13 @@ bool TypeChecker::run() {
         case ast::NodeKind::FunctionDecl: {
             auto *fd = static_cast<const ast::FunctionDecl *>(decl.get());
             function_is_public_[fd->name] = fd->is_public;
+            if (fd->is_internal) function_is_internal_.insert(fd->name);
             break;
         }
         case ast::NodeKind::GlobalVarDecl: {
             auto *gd = static_cast<const ast::GlobalVarDecl *>(decl.get());
             global_is_public_[gd->name] = gd->is_public;
+            if (gd->is_internal) global_is_internal_.insert(gd->name);
             break;
         }
         case ast::NodeKind::TypeAliasDecl: {

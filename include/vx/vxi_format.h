@@ -273,6 +273,9 @@ struct VxiSymbol {
     /// @c FunctionSig::is_naked para enrutar la llamada cross-modulo al
     /// dispatcher @c vrt:naked_dispatch en interp/JIT.
     bool is_naked = false;
+    /// Phase NS.3: @c "internal" (package-scoped).  Bit 0x10 del byte de flags.
+    /// El simbolo se exporta pero el consumidor de OTRO package_id lo filtra.
+    bool is_internal = false;
 };
 
 /**

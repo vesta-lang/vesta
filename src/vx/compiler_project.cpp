@@ -1275,6 +1275,35 @@ CompileResult compile_vx_project(
         // usa operator[] (overwrite) y register_imported_namespace ahora
         // dedupea por local_name, asi que registrar el mismo dep dos
         // veces es no-op.
+
+        // NS.3: PackageId del consumidor + helper para filtrar los simbolos
+        // `internal` de un dep que pertenece a OTRO paquete (package_id
+        // distinto, ambos no vacios).  Dentro del mismo paquete, internal es
+        // visible (no se filtra).  El storage lo aporta el caller (vive lo que
+        // dure el uso del &const devuelto).
+        const std::string consumer_pkgid =
+            (i < module_pkgid_override.size() &&
+             !module_pkgid_override[i].empty())
+                ? module_pkgid_override[i]
+                : project_package_id;
+        auto filter_internal_ = [&](const VxiModule &v,
+                                    VxiModule &storage) -> const VxiModule & {
+            if (consumer_pkgid.empty() || v.package_id.empty() ||
+                consumer_pkgid == v.package_id) {
+                return v; // mismo paquete (o anonimo) -> internal visible
+            }
+            bool any_internal = false;
+            for (const auto &s : v.symbols)
+                if (s.is_internal) { any_internal = true; break; }
+            if (!any_internal) return v;
+            storage = v;
+            auto &syms = storage.symbols;
+            syms.erase(std::remove_if(
+                           syms.begin(), syms.end(),
+                           [](const VxiSymbol &s) { return s.is_internal; }),
+                       syms.end());
+            return storage;
+        };
         {
             std::unordered_set<std::string> seen;
             std::vector<std::string> queue;
@@ -1299,7 +1328,9 @@ CompileResult compile_vx_project(
                 auto itd = by_name.find(mn);
                 if (itd == by_name.end()) continue;
                 const ProjectModuleWork &transit = work[itd->second];
-                register_namespace_for_import(*pm.tc, mn, mn, transit.vxi);
+                VxiModule tstore;
+                register_namespace_for_import(
+                    *pm.tc, mn, mn, filter_internal_(transit.vxi, tstore));
             }
         }
 
@@ -1307,14 +1338,17 @@ CompileResult compile_vx_project(
             auto itd = by_name.find(req.module_name);
             if (itd == by_name.end()) continue;
             const ProjectModuleWork &dep = work[itd->second];
+            VxiModule dep_filtered_storage;
+            const VxiModule &dep_vxi =
+                filter_internal_(dep.vxi, dep_filtered_storage);
             if (req.is_plain) {
                 // M.7: registrar namespace.
                 register_namespace_for_import(*pm.tc, req.local_name,
-                                              req.module_name, dep.vxi);
+                                              req.module_name, dep_vxi);
                 // #cross-module-generics: inyectar TODAS las plantillas del
                 // dep bajo el namespace (`lib.Caja<i64>`).
                 inject_generic_templates_from_vxi(
-                    *pm.tc, dep.vxi, /*wanted=*/{}, req.local_name);
+                    *pm.tc, dep_vxi, /*wanted=*/{}, req.local_name);
                 // M.reexport ext: para `public import "base";` (sin only),
                 // inyectar TAMBIEN cada simbolo publico del dep como si
                 // fuera un `only A, B, ...` sintetico Y marcarlo
@@ -1323,14 +1357,14 @@ CompileResult compile_vx_project(
                 // consumidores.
                 if (req.is_public_reexport) {
                     std::vector<TypeChecker::VxiOnlyEntry> synth_only;
-                    for (const auto &sym : dep.vxi.symbols) {
+                    for (const auto &sym : dep_vxi.symbols) {
                         // skip simbolos privados o synthetic (mangled).
                         if (sym.name.empty()) continue;
                         if (sym.name[0] == '_') continue;
                         synth_only.push_back({sym.name, ""});
                     }
                     auto missing = import_vxi_into_typechecker_with_missing(
-                        *pm.tc, dep.vxi, synth_only);
+                        *pm.tc, dep_vxi, synth_only);
                     (void)missing; // best-effort; los privados ya fueron
                                    //              filtrados al construir el
                                    //              .vxi.
@@ -1347,18 +1381,18 @@ CompileResult compile_vx_project(
                 // inertes si no se usan (se monomorphizan solo on-use).  Se
                 // hace ANTES de la inyeccion de simbolos para que el template
                 // exista en mod_.decls cuando run() registre los templates.
-                inject_generic_templates_from_vxi(*pm.tc, dep.vxi,
+                inject_generic_templates_from_vxi(*pm.tc, dep_vxi,
                                                    /*wanted=*/{},
                                                    /*ns_prefix=*/"");
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 auto missing = import_vxi_into_typechecker_with_missing(
-                    *pm.tc, dep.vxi, req.only_symbols);
+                    *pm.tc, dep_vxi, req.only_symbols);
                 // #cross-module-generics: un nombre `only` puede ser una
                 // PLANTILLA generica (no esta en symbols sino en
                 // generic_templates) -> no es "missing".
                 std::unordered_set<std::string> gen_names;
-                for (const auto &g : dep.vxi.generic_templates)
+                for (const auto &g : dep_vxi.generic_templates)
                     gen_names.insert(g.name);
                 for (const auto &m : missing) {
                     if (gen_names.count(m)) continue; // es un template: OK
