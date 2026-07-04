@@ -696,7 +696,16 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         // el consumidor lo importa.  Igual que funciones.
         std::string public_name = gv->name;
         std::string mangled_label;
-        if (!strip_prefix.empty()) {
+        std::string ns_path_for_gv;
+        // NS.2: global de un namespace DECLARADO (`namespace mylib; public
+        // comptime string CLEAR = ...`).  El mangled es `mylib__CLEAR`;
+        // exportamos con nombre publico `CLEAR` + ns_path `mylib`.
+        auto itnsg = tc.declared_ns_symbols().find(gv->name);
+        if (itnsg != tc.declared_ns_symbols().end()) {
+            ns_path_for_gv = itnsg->second.first;
+            public_name = itnsg->second.second;
+            mangled_label = gv->name;
+        } else if (!strip_prefix.empty()) {
             if (gv->name.size() > strip_prefix.size() &&
                 gv->name.compare(0, strip_prefix.size(), strip_prefix) == 0) {
                 public_name = gv->name.substr(strip_prefix.size());
@@ -717,6 +726,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
         s.kind = VexiSymbolKind::GLOBAL_VAR;
         s.name = public_name;
         s.mangled_label = mangled_label;
+        s.ns_path = ns_path_for_gv; // NS.2: namespace declarado (vacio si none)
         Type gv_type =
             const_cast<TypeChecker &>(tc).resolve_type_node(gv->type.get());
         s.underlying_type = canonical_typename_of(gv_type);
@@ -1528,7 +1538,13 @@ void register_namespace_for_import(TypeChecker &tc,
             sym.var_type = t;
             sym.has_const_value = s.is_const && s.has_init_value;
             sym.const_value = static_cast<int64_t>(s.init_value);
-            tc.register_namespace_symbol(ns_idx, s.name, std::move(sym));
+            // NS.2: global de un namespace DECLARADO -> registrar bajo ese
+            // namespace (mylib.CLEAR), no bajo el namespace del modulo.
+            const uint32_t target_ns_g =
+                s.ns_path.empty()
+                    ? ns_idx
+                    : tc.register_imported_namespace(s.ns_path, module_name);
+            tc.register_namespace_symbol(target_ns_g, s.name, std::move(sym));
         }
     }
 }

@@ -278,6 +278,10 @@ static void emit_payload_for_global(std::vector<uint8_t> &payload,
         sym.attr_section.empty() ? 0u : pool.intern(sym.attr_section);
     write_u32(payload, sec_off);
     write_u32(payload, static_cast<uint32_t>(sym.attr_section.size()));
+    // NS.2 (v7): ns_path del global (off + len; vacio = nivel de modulo).
+    const uint32_t nsp_off = pool.intern(sym.ns_path);
+    write_u32(payload, nsp_off);
+    write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
 }
 
 static void emit_payload_for_function(std::vector<uint8_t> &payload,
@@ -748,6 +752,14 @@ static bool parse_payload_global(const uint8_t *data, size_t size,
                        out.attr_section)) {
             return false;
         }
+    }
+    // NS.2 (v7): ns_path del global.
+    uint32_t nsp_off = 0, nsp_len = 0;
+    if (!read_u32(data, size, off, nsp_off)) return false;
+    if (!read_u32(data, size, off, nsp_len)) return false;
+    if (nsp_len > 0) {
+        if (!read_name(data, size, nsp_off, nsp_len, pool_start, out.ns_path))
+            return false;
     }
     return true;
 }
