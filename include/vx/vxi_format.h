@@ -51,7 +51,7 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// `@align`/`@hot`/`@cold`/`@section` viajan en el blob.
 /// v6: seccion de plantillas genericas exportadas (texto fuente) para
 /// monomorphizacion cross-module.
-inline constexpr uint16_t VXI_FORMAT_VERSION = 7; // NS.2: ns_path por simbolo
+inline constexpr uint16_t VXI_FORMAT_VERSION = 8; // NS.2: ns_path tambien en tipos
 
 /// Kind del payload dentro de un BlobHeader (.vxi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.

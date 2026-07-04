@@ -378,6 +378,11 @@ static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
             write_u32(payload, static_cast<uint32_t>(pt.size()));
         }
     }
+    // NS.2 (v8): ns_path del tipo al final del payload (off+len; vacio = nivel
+    // de modulo).  Permite el round-trip cross-modulo de tipos namespaced.
+    const uint32_t nsp_off = pool.intern(sym.ns_path);
+    write_u32(payload, nsp_off);
+    write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
 }
 
 static void emit_payload_for_enum(std::vector<uint8_t> &payload,
@@ -402,6 +407,10 @@ static void emit_payload_for_enum(std::vector<uint8_t> &payload,
             write_u32(payload, static_cast<uint32_t>(pt.size()));
         }
     }
+    // NS.2 (v8): ns_path del enum al final del payload (off+len).
+    const uint32_t nsp_off = pool.intern(sym.ns_path);
+    write_u32(payload, nsp_off);
+    write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
 }
 
 std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
@@ -912,6 +921,15 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
         }
         out.methods.push_back(std::move(m));
     }
+    // NS.2 (v8): ns_path del tipo al final (off+len).  Guardado defensivo por
+    // si el payload es de una version anterior sin este campo.
+    if (off + 8 <= static_cast<size_t>(payload_off) + payload_len) {
+        uint32_t nsp_off = 0, nsp_len = 0;
+        if (read_u32(data, size, off, nsp_off) &&
+            read_u32(data, size, off, nsp_len) && nsp_len > 0) {
+            read_name(data, size, nsp_off, nsp_len, pool_start, out.ns_path);
+        }
+    }
     return true;
 }
 
@@ -946,6 +964,14 @@ static bool parse_payload_enum(const uint8_t *data, size_t size,
             v.payload_types.push_back(std::move(tnm));
         }
         out.variants.push_back(std::move(v));
+    }
+    // NS.2 (v8): ns_path del enum al final (off+len; guardado defensivo).
+    if (off + 8 <= static_cast<size_t>(payload_off) + payload_len) {
+        uint32_t nsp_off = 0, nsp_len = 0;
+        if (read_u32(data, size, off, nsp_off) &&
+            read_u32(data, size, off, nsp_len) && nsp_len > 0) {
+            read_name(data, size, nsp_off, nsp_len, pool_start, out.ns_path);
+        }
     }
     return true;
 }

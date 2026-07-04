@@ -480,6 +480,16 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         VxiSymbol s;
         s.kind = VxiSymbolKind::STRUCT;
         s.name = name;
+        // NS.2: si el tipo se declaro en un `namespace X;`, exportarlo con su
+        // nombre publico (sin manglar) + ns_path para que el consumidor lo vea
+        // como `X.Tipo` cross-modulo.
+        {
+            auto itns = tc.declared_ns_symbols().find(name);
+            if (itns != tc.declared_ns_symbols().end()) {
+                s.ns_path = itns->second.first;
+                s.name = itns->second.second;
+            }
+        }
         s.size_bytes = layout.size_bytes;
         s.align_bytes = layout.align_bytes;
         s.fields.reserve(layout.fields.size());
@@ -510,6 +520,15 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         VxiSymbol s;
         s.kind = VxiSymbolKind::CLASS;
         s.name = name;
+        // NS.2: export namespaced (nombre publico + ns_path).  `name` (mangled)
+        // se conserva para construir los mangled_label de los metodos.
+        {
+            auto itns = tc.declared_ns_symbols().find(name);
+            if (itns != tc.declared_ns_symbols().end()) {
+                s.ns_path = itns->second.first;
+                s.name = itns->second.second;
+            }
+        }
         s.super_class = layout.super_name;
         s.size_bytes = layout.size_bytes;
         s.align_bytes = 8; // las instancias se alinean a 8 (ObjectHeader)
@@ -565,6 +584,14 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         VxiSymbol s;
         s.kind = VxiSymbolKind::ENUM;
         s.name = name;
+        // NS.2: export namespaced (nombre publico + ns_path).
+        {
+            auto itns = tc.declared_ns_symbols().find(name);
+            if (itns != tc.declared_ns_symbols().end()) {
+                s.ns_path = itns->second.first;
+                s.name = itns->second.second;
+            }
+        }
         // Preservar size_bytes para que el consumidor pueda allocar
         // slots del enum (8 + 8*max_payload_fields).  Sin esto, el
         // consumer ve size_bytes=0 -> ALLOCA cero -> corrupcion de
@@ -1312,7 +1339,17 @@ void register_namespace_for_import(TypeChecker &tc,
         // M7.b: tipos cross-module via namespace qualified.
         // Compute mangled name = module_name + "__" + s.name.  Asi el
         // tipo no colisiona con un tipo del mismo nombre en el consumer.
-        const std::string mangled = module_name + "__" + s.name;
+        // NS.2: si el tipo pertenece a un `namespace X;` DECLARADO por el dep,
+        // su label real en el dep es `X__Tipo` (ns-mangled por flatten); usamos
+        // ESE como clave local para que fields/fns que lo referencian por
+        // `X__Tipo` resuelvan directo, y para que `__new_X__Tipo` coincida.
+        std::string ns_mangled_prefix;
+        for (char c : s.ns_path)
+            ns_mangled_prefix += (c == '.') ? std::string("__")
+                                            : std::string(1, c);
+        const std::string mangled =
+            s.ns_path.empty() ? (module_name + "__" + s.name)
+                              : (ns_mangled_prefix + "__" + s.name);
         switch (s.kind) {
         case VxiSymbolKind::TYPEDEF_ALIAS:
         case VxiSymbolKind::TYPEDEF_NEW: {
@@ -1366,7 +1403,9 @@ void register_namespace_for_import(TypeChecker &tc,
         case VxiSymbolKind::CLASS: {
             ClassLayout L;
             L.name = mangled;
-            L.imported_helper_suffix = s.name; // dep emitio __new_<s.name>
+            // dep emitio __new_<label real>.  Para clase namespaced el label
+            // real es el ns-mangled (mylib__MyClass); si no, el nombre publico.
+            L.imported_helper_suffix = s.ns_path.empty() ? s.name : mangled;
             L.super_name = s.super_class;
             L.size_bytes = s.size_bytes;
             L.fields.reserve(s.fields.size());
@@ -1471,7 +1510,13 @@ void register_namespace_for_import(TypeChecker &tc,
         TypeChecker::ImportedNamespace::Sym sym;
         sym.kind = 2; // TypeAlias
         sym.mangled_label = mangled;
-        tc.register_namespace_symbol(ns_idx, s.name, std::move(sym));
+        // NS.2: si el tipo pertenece a un namespace DECLARADO por el dep,
+        // registrarlo bajo ESE namespace (mylib.MyClass), no bajo el del modulo.
+        const uint32_t type_target_ns =
+            s.ns_path.empty()
+                ? ns_idx
+                : tc.register_imported_namespace(s.ns_path, module_name);
+        tc.register_namespace_symbol(type_target_ns, s.name, std::move(sym));
     }
 
     // PASE 2: registrar FUNCTIONS y GLOBAL_VAR (que tambien podrian usar
