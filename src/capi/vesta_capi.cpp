@@ -26,6 +26,13 @@
 
 #include "capi/vesta.h"
 
+// IMPORTANTE: parsear los tipos Vex (PrimitiveKind::VOID/CONST/...) ANTES que
+// cualquier header que arrastre <windows.h> (los headers del JIT lo hacen via
+// VirtualAlloc), porque Windows define VOID/CONST/IN/OUT/... como macros que
+// colisionan con los miembros del enum.  Con types.h ya parseado (guardado),
+// las macros posteriores son inocuas.
+#include "vex/ast.h"
+
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -41,6 +48,7 @@
 #include "cli/vsh.h"
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir.h"
+#include "ir/ssa_ir_serialize.h" // parse_ir_module_cache (vistas asm/JIT)
 #include "loader/loader.h"
 #include "runtime/exception_runtime.h"
 #include "runtime/manager_runtime.h"
@@ -49,6 +57,12 @@
 #include "util/assembler_multiprocess.h"
 #include "vex/compiler.h"
 #include "vex/diagnostic.h"
+#include "vex/parser.h" // set/get_aot_condcomp_target (vistas por @Target)
+
+#include "jit/code_cache.h"      // vista JIT
+#include "jit/jit_compiler.h"    // vista JIT
+#include "jit/runtime_entries.h" // vista JIT
+#include "jit/vreg_pipeline.h"   // vista asm nativo (AOT)
 
 #include <algorithm>
 #include <capstone/capstone.h>
@@ -707,6 +721,320 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_diagram");
+        return 2;
+    }
+}
+
+// ------------------------------------------------------------------------- //
+// Vistas por OS/arquitectura (VestaTarget).                                 //
+// ------------------------------------------------------------------------- //
+namespace {
+
+/// Normaliza el nombre de arch del C-API al que espera el parser / codegen.
+std::string vt_norm_arch_(const char *a) {
+    if (!a || !*a) return "x86_64";
+    std::string s = a;
+    if (s == "x86-64" || s == "x86_64" || s == "x64" || s == "amd64")
+        return "x86_64";
+    if (s == "x86-32" || s == "x86_32" || s == "x86" || s == "i386")
+        return "x86";
+    if (s == "arm64" || s == "aarch64") return "arm64";
+    return s;
+}
+
+/// Normaliza el nombre de OS ("" = host, sin override).
+std::string vt_norm_os_(const char *o) {
+    if (!o || !*o) return std::string();
+    return std::string(o);
+}
+
+/// Deriva el formato de objeto ("pe"/"elf") a partir del target.
+std::string vt_fmt_(const VestaTarget *t) {
+    if (t && t->fmt && *t->fmt) return std::string(t->fmt);
+    const std::string os = t ? vt_norm_os_(t->os) : std::string();
+    if (os == "windows") return "pe";
+    if (os == "linux" || os == "macos") return "elf";
+#if defined(_WIN32)
+    return "pe";
+#else
+    return "elf";
+#endif
+}
+
+/// RAII: aplica el override de @Target del target y lo restaura al destruir.
+/// Sin target (o target == host x86-64) no toca el thread_local del parser.
+struct TargetGuard {
+    std::string prev_os, prev_arch;
+    bool active = false;
+    explicit TargetGuard(const VestaTarget *t) {
+        if (!t) return;
+        std::string os = vt_norm_os_(t->os);
+        std::string arch = vt_norm_arch_(t->arch);
+        // Solo activar si hay un override real (os no-host o arch != default).
+        if (os.empty() && arch == "x86_64") return;
+        vex::get_aot_condcomp_target(prev_os, prev_arch);
+        vex::set_aot_condcomp_target(os, arch);
+        active = true;
+    }
+    ~TargetGuard() {
+        if (active) vex::set_aot_condcomp_target(prev_os, prev_arch);
+    }
+    TargetGuard(const TargetGuard &) = delete;
+    TargetGuard &operator=(const TargetGuard &) = delete;
+};
+
+/// Rellena @c copts con el target: native_poo + bits del arch.
+void vt_apply_opts_(const VestaTarget *t, vex::CompileOptions &copts) {
+    if (!t) return;
+    if (t->native_poo) copts.native_poo = true;
+}
+
+/// Desensambla un buffer de bytes nativos a texto (Capstone).  @p mode32
+/// elige x86-32 vs x86-64.  Devuelve "" si falla (el llamante anota el fallo).
+std::string vt_disasm_(const std::vector<uint8_t> &bytes, bool mode32) {
+    if (bytes.empty()) return std::string();
+    cs_arch a = CS_ARCH_X86;
+    cs_mode m = mode32 ? CS_MODE_32 : CS_MODE_64;
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK) return std::string();
+    cs_insn *insn = nullptr;
+    const size_t n = cs_disasm(h, bytes.data(), bytes.size(), 0x0, 0, &insn);
+    std::string out;
+    for (size_t i = 0; i < n; ++i) {
+        char line[128];
+        std::snprintf(line, sizeof(line), "  %04llx  %-9s %s\n",
+                      static_cast<unsigned long long>(insn[i].address),
+                      insn[i].mnemonic, insn[i].op_str);
+        out += line;
+    }
+    if (insn) cs_free(insn, n);
+    cs_close(&h);
+    return out;
+}
+
+} // namespace
+
+VESTA_API int vesta_compile_to_ir_t(const char *src, const char *unit_name,
+                                    const VestaTarget *target, char **out_ir,
+                                    char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_ir) *out_ir = nullptr;
+    if (!src || !out_ir) {
+        set_err(out_err, "argumentos invalidos (src/out_ir NULL)");
+        return 1;
+    }
+    try {
+        TargetGuard guard(target);
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        copts.dump_ir = true;
+        vt_apply_opts_(target, copts);
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+        *out_ir = dup_cstr(cr.ir_text);
+        if (!*out_ir) {
+            set_err(out_err, "sin memoria al copiar el IR");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_compile_to_ir_t: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_compile_to_ir_t");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_compile_to_vel_t(const char *src, const char *unit_name,
+                                     const VestaTarget *target, char **out_vel,
+                                     char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_vel) *out_vel = nullptr;
+    if (!src || !out_vel) {
+        set_err(out_err, "argumentos invalidos (src/out_vel NULL)");
+        return 1;
+    }
+    try {
+        TargetGuard guard(target);
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        vt_apply_opts_(target, copts);
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+        *out_vel = dup_cstr(cr.vel_text);
+        if (!*out_vel) {
+            set_err(out_err, "sin memoria al copiar el .vel");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_compile_to_vel_t: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_compile_to_vel_t");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_diagram_t(const char *src, const char *unit_name,
+                              const char *kind, const char *format,
+                              const VestaTarget *target, char **out_text,
+                              char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_text) *out_text = nullptr;
+    if (!src || !kind || !format || !out_text) {
+        set_err(out_err, "argumentos invalidos (src/kind/format/out_text)");
+        return 1;
+    }
+    // La vista "asm" del diagrama se delega a la vista de asm nativo (texto
+    // plano por ahora; el front-end puede envolverlo).  El resto reusa el
+    // pipeline de diagramas con el target aplicado.
+    {
+        TargetGuard guard(target);
+        return vesta_diagram(src, unit_name, kind, format, out_text, out_err);
+    }
+}
+
+VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
+                                     const VestaTarget *target, char **out_asm,
+                                     char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_asm) *out_asm = nullptr;
+    if (!src || !out_asm) {
+        set_err(out_err, "argumentos invalidos (src/out_asm NULL)");
+        return 1;
+    }
+    try {
+        TargetGuard guard(target);
+        const std::string fmt = vt_fmt_(target);
+        const bool sysv = (fmt == "elf");
+        const std::string arch = vt_norm_arch_(target ? target->arch : nullptr);
+        const bool mode32 = (arch == "x86");
+
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        copts.native_poo = true; // la vista asm nativa requiere el lowering AOT
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+        ir::IrModule mod;
+        if (cr.ir_module_cache_bytes.empty() ||
+            !ir::parse_ir_module_cache(cr.ir_module_cache_bytes, mod)) {
+            set_err(out_err, "no se pudo obtener el IR del modulo para el asm");
+            return 1;
+        }
+        std::string out;
+        out += "; asm nativo AOT  target=" +
+               (target && target->os && *target->os ? std::string(target->os)
+                                                     : std::string("host")) +
+               " " + arch + " " + fmt + "\n";
+        for (const auto &fn : mod.functions) {
+            std::vector<jit::NativeReloc> relocs;
+            std::vector<uint8_t> bytes = jit::vreg_compile_native(
+                fn, {}, {}, {}, {}, &relocs, /*pic=*/false,
+                /*target_sysv=*/sysv, /*mode32=*/mode32,
+                jit::FloatIsa::SSE2);
+            out += "\n; === " + fn.name + " ===\n";
+            if (bytes.empty()) {
+                out += "; (op fuera del subset nativo -> no compilable a asm)\n";
+                continue;
+            }
+            const std::string dis = vt_disasm_(bytes, mode32);
+            out += dis.empty() ? "; (desensamblado vacio)\n" : dis;
+        }
+        *out_asm = dup_cstr(out);
+        if (!*out_asm) {
+            set_err(out_err, "sin memoria al copiar el asm");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_compile_to_asm_t: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_compile_to_asm_t");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
+                                     const VestaTarget *target, char **out_asm,
+                                     char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_asm) *out_asm = nullptr;
+    if (!src || !out_asm) {
+        set_err(out_err, "argumentos invalidos (src/out_asm NULL)");
+        return 1;
+    }
+    try {
+        // El JIT es x86-64 host; el @c os solo afecta las ramas @Target.
+        TargetGuard guard(target);
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+        ir::IrModule mod;
+        if (cr.ir_module_cache_bytes.empty() ||
+            !ir::parse_ir_module_cache(cr.ir_module_cache_bytes, mod)) {
+            set_err(out_err, "no se pudo obtener el IR del modulo para el JIT");
+            return 1;
+        }
+        jit::CodeCache cache;
+        jit::RuntimeEntries rt;
+        rt.resolve();
+        jit::JitCompiler jc(cache, rt);
+        std::string out;
+        out += "; asm JIT (vreg, VM_ABI, x86-64 host)\n";
+        for (const auto &fn : mod.functions) {
+            jit::CompileResult res = jc.compile(fn, jit::SelectorMode::VM_ABI);
+            out += "\n; === " + fn.name + " ===\n";
+            if (!res.code_start || res.code_size == 0) {
+                out += res.unsupported
+                           ? "; (op no soportada por el JIT vreg)\n"
+                           : "; (no compilable)\n";
+                continue;
+            }
+            std::vector<uint8_t> bytes(res.code_start,
+                                       res.code_start + res.code_size);
+            const std::string dis = vt_disasm_(bytes, /*mode32=*/false);
+            out += dis.empty() ? "; (desensamblado vacio)\n" : dis;
+            jc.invalidate(res);
+        }
+        *out_asm = dup_cstr(out);
+        if (!*out_asm) {
+            set_err(out_err, "sin memoria al copiar el asm JIT");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_compile_to_jit_t: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_compile_to_jit_t");
         return 2;
     }
 }

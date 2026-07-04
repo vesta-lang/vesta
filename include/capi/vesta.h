@@ -45,6 +45,26 @@ extern "C" {
 #endif
 
 /**
+ * @struct VestaTarget
+ * @brief Descriptor de target para las vistas por OS/arquitectura del LSP y de
+ *        los diagramas (IR, bytecode .vel, asm nativo AOT, JIT, diagramas).
+ *
+ * Cualquier campo NULL o "" usa el valor por defecto.  El @c os selecciona las
+ * ramas de compilacion condicional @c @Target("os:...") del fuente; el @c arch
+ * y @c format determinan el codegen nativo (AOT) para las vistas de asm.
+ *
+ * Ejemplos:
+ *   - Ver el IR/asm que se genera para Linux x86-64: {"linux","x86-64","elf",1}
+ *   - Ver el asm que se genera para Windows x86-32:  {"windows","x86-32","pe",1}
+ */
+typedef struct {
+    const char *os;   /**< "windows" | "linux" | "macos"; NULL/"" = host. */
+    const char *arch; /**< "x86-64" | "x86-32"; NULL/"" = "x86-64". */
+    const char *fmt;  /**< "pe" | "elf"; NULL/"" = derivado del os. */
+    int native_poo;   /**< 1 = lowering AOT nativo; 0 = interp/VM (default). */
+} VestaTarget;
+
+/**
  * @brief Devuelve la cadena de version de la API/VM.
  *
  * El puntero devuelto es estatico (no liberar con @c vesta_free).
@@ -179,6 +199,66 @@ VESTA_API int vesta_disasm(const unsigned char *bytes, size_t len,
 VESTA_API int vesta_diagram(const char *src, const char *unit_name,
                             const char *kind, const char *format,
                             char **out_text, char **out_err);
+
+/* ------------------------------------------------------------------------- *
+ * Vistas por OS/arquitectura (@c VestaTarget).                              *
+ *                                                                           *
+ * Permiten al LSP y a los diagramas mostrar el IR / bytecode / asm nativo / *
+ * JIT / diagramas que el compilador genera para un target concreto (Linux o *
+ * Windows, x86-64 o x86-32).  @c target == NULL equivale al host con        *
+ * lowering interp/VM.  Todas devuelven el texto en heap (liberar con        *
+ * @c vesta_free).                                                            *
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief IR SSA (dump legible) que se genera para @c target.
+ *
+ * Aplica las ramas @c @Target("os:...") del @c target->os y, con
+ * @c target->native_poo, el lowering AOT nativo.  @c target == NULL => host.
+ */
+VESTA_API int vesta_compile_to_ir_t(const char *src, const char *unit_name,
+                                    const VestaTarget *target, char **out_ir,
+                                    char **out_err);
+
+/**
+ * @brief Bytecode textual .vel que se genera para @c target.
+ *
+ * El @c os selecciona las ramas @c @Target; el bytecode VM es arch-agnostico.
+ * @c target == NULL => host.
+ */
+VESTA_API int vesta_compile_to_vel_t(const char *src, const char *unit_name,
+                                     const VestaTarget *target, char **out_vel,
+                                     char **out_err);
+
+/**
+ * @brief Asm NATIVO (AOT) desensamblado que se genera para @c target.
+ *
+ * Baja el modulo a codigo nativo para @c (os, arch, fmt) y lo desensambla con
+ * Capstone, agrupado por funcion.  Es la vista donde el arch/OS importan de
+ * verdad (x86-64 vs x86-32, PE vs ELF).  @c target->native_poo se fuerza a 1.
+ */
+VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
+                                     const VestaTarget *target, char **out_asm,
+                                     char **out_err);
+
+/**
+ * @brief Asm del codigo JIT-eado (vreg) desensamblado para @c target.
+ *
+ * El JIT es x86-64 host; el @c os solo afecta las ramas @c @Target.  Devuelve
+ * el listado por funcion compilada.  Util para comparar JIT vs AOT vs interp.
+ */
+VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
+                                     const VestaTarget *target, char **out_asm,
+                                     char **out_err);
+
+/**
+ * @brief Diagrama del pipeline para @c target (mismas @c kind/@c format que
+ *        @c vesta_diagram, mas @c kind "asm" para el nativo desensamblado).
+ */
+VESTA_API int vesta_diagram_t(const char *src, const char *unit_name,
+                              const char *kind, const char *format,
+                              const VestaTarget *target, char **out_text,
+                              char **out_err);
 
 /**
  * @brief Ejecuta un script VestaShellScript (.vsh) desde una cadena.
