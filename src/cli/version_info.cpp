@@ -25,8 +25,8 @@
 #include "pkg/ui.h"
 
 // Numeros de version (fuente de verdad: project(...) en CMakeLists.txt).
-#if __has_include("vex/version_generated.h")
-#include "vex/version_generated.h"
+#if __has_include("vx/version_generated.h")
+#include "vx/version_generated.h"
 #endif
 
 // Fecha/hora del build + hash de git (regenerado en cada build por CMake).

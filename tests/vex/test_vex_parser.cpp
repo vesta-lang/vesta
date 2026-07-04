@@ -26,20 +26,20 @@
  *                              detectar mas errores en el mismo fichero.
  */
 
-#include "vex/lexer.h"
-#include "vex/parser.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
 
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
-using vex::Diagnostics;
-using vex::Lexer;
-using vex::Parser;
-using vex::PrimitiveKind;
-using vex::TokenKind;
-namespace ast = vex::ast;
+using vx::Diagnostics;
+using vx::Lexer;
+using vx::Parser;
+using vx::PrimitiveKind;
+using vx::TokenKind;
+namespace ast = vx::ast;
 
 static int g_passed = 0;
 static int g_failed = 0;

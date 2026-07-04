@@ -26,10 +26,10 @@
  */
 
 #include "ir/ssa_ir.h"
-#include "vex/lexer.h"
-#include "vex/lowering.h"
-#include "vex/parser.h"
-#include "vex/type_checker.h"
+#include "vx/lexer.h"
+#include "vx/lowering.h"
+#include "vx/parser.h"
+#include "vx/type_checker.h"
 
 #include <cassert>
 #include <cstdint>
@@ -37,12 +37,12 @@
 #include <cstring>
 #include <string>
 
-using vex::Diagnostics;
-using vex::Lexer;
-using vex::Lowering;
-using vex::Parser;
-using vex::TypeChecker;
-namespace ast = vex::ast;
+using vx::Diagnostics;
+using vx::Lexer;
+using vx::Lowering;
+using vx::Parser;
+using vx::TypeChecker;
+namespace ast = vx::ast;
 
 static int g_passed = 0;
 static int g_failed = 0;

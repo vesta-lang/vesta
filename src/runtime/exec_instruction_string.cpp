@@ -1655,7 +1655,7 @@ void exec_instr_getarg(ProcessVM *vm, const DecodedInstr &instr) {
  * helper `alloc_flat` interno (alloc_pinned + populacion de header +
  * hash precomputado para strings cortos).
  *
- * Usado por @c vex::ComptimeRuntime para marshalar args @c string del
+ * Usado por @c vx::ComptimeRuntime para marshalar args @c string del
  * compile-time al VM antes de invocar @Macros lowered.
  * =========================================================================
  */

@@ -45,16 +45,16 @@
 #include "runtime/proceso_runtime.h"
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
-#include "vex/compiler.h"
+#include "vx/compiler.h"
 // Forward-decl (evita incluir vex/parser.h, que arrastra cabeceras Windows que
 // desbalancean el push/pop_macro(VOID) de ssa_ir.h).  @Target target-aware AOT.
-namespace vex {
+namespace vx {
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 }
-#include "vex/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
-#include "vex/project_cache.h"  /* Phase M5.B project-level cache */
-#include "vex/velb_signature.h" /* Phase M.L28: firmas digitales */
+#include "vx/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
+#include "vx/project_cache.h"  /* Phase M5.B project-level cache */
+#include "vx/velb_signature.h" /* Phase M.L28: firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/fs_utils.h"
 #include "runtime/manager_runtime.h"
@@ -766,7 +766,7 @@ int main(int argc, char *argv[]) {
                     : std::string("x86-64");
             const bool is32 = (arch_s == "x86-32" || arch_s == "x86_32" ||
                                arch_s == "i386");
-            vex::set_aot_condcomp_target(fmt_s == "pe" ? "windows" : "linux",
+            vx::set_aot_condcomp_target(fmt_s == "pe" ? "windows" : "linux",
                                          is32 ? "x86" : "x86_64");
         }
     } else {
@@ -906,7 +906,7 @@ int main(int argc, char *argv[]) {
         f.close();
         std::vector<uint8_t> signed_bytes;
         std::string err;
-        if (!vex::velb_sign(bytes, key_path, vex::VsigAlgo::RSA_SHA256,
+        if (!vx::velb_sign(bytes, key_path, vx::VsigAlgo::RSA_SHA256,
                             signed_bytes, err)) {
             std::cerr << "error: " << err << "\n";
             return EXIT_FAILURE;
@@ -943,7 +943,7 @@ int main(int argc, char *argv[]) {
         std::vector<uint8_t> bytes(static_cast<size_t>(sz < 0 ? 0 : sz));
         if (sz > 0) f.read(reinterpret_cast<char *>(bytes.data()), sz);
         f.close();
-        auto vr = vex::velb_verify_signature(bytes, key_path);
+        auto vr = vx::velb_verify_signature(bytes, key_path);
         if (vr.ok) {
             std::cerr << "[verify] " << in_path << ": firma VALIDA\n";
             return EXIT_SUCCESS;
@@ -1565,19 +1565,19 @@ int main(int argc, char *argv[]) {
                                std::istreambuf_iterator<char>());
         ifs.close();
 
-        // Compilar hasta el IR.  Reutilizamos compile_vex_source que ya
+        // Compilar hasta el IR.  Reutilizamos compile_vx_source que ya
         // rellena ir_module_cache_bytes (modulo POST-O2) y, con
         // @c emit_ir_preopt, tambien ir_module_cache_bytes_preopt
         // (modulo PRE-opt: la complejidad algoritmica del fuente).
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = "main";
         copts.opt_level = 2;
         copts.emit_ir_preopt = true;
-        vex::CompileResult cr =
-            vex::compile_vex_source(vex_source, vex_path, copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(vex_source, vex_path, copts);
         // Volcar diagnosticos (errores/warnings) del frontend.
         for (const auto &d : cr.diagnostics.all())
-            vex::print_diagnostic(std::cerr, d);
+            vx::print_diagnostic(std::cerr, d);
         if (!cr.ok) {
             std::cerr << "[analyze] la compilacion fallo; no hay IR que "
                          "analizar.\n";
@@ -1883,7 +1883,7 @@ int main(int argc, char *argv[]) {
         }
         if (mod_name.empty()) mod_name = "main";
 
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = mod_name;
         copts.opt_level = 2;
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
@@ -2011,7 +2011,7 @@ int main(int argc, char *argv[]) {
          * Flow:
          *   1. Compute key.
          *   2. Si el cache hit existe, setear @c VESTA_MC_PREBUILT antes
-         *      de la primera invocacion de @c compile_vex_source.  Una
+         *      de la primera invocacion de @c compile_vx_source.  Una
          *      sola compilacion + VM eval directo.
          *   3. Si miss + el modulo tiene @Macros, ejecutar pase 1 (AST
          *      eval), persistir el .velb resultante al cache_path, luego
@@ -2246,7 +2246,7 @@ int main(int argc, char *argv[]) {
         const bool verbose_mc = (std::getenv("VESTA_MC_VERBOSE") != nullptr &&
                                  std::getenv("VESTA_MC_VERBOSE")[0] == '1');
 
-        /* CACHE HIT path: setear env var ANTES del primer compile_vex_source.
+        /* CACHE HIT path: setear env var ANTES del primer compile_vx_source.
          * Solo 1 invocacion de compile, con VM eval activo desde el inicio. */
         if (cache_hit && !user_already_set_prebuilt) {
 #if defined(_WIN32)
@@ -2272,15 +2272,15 @@ int main(int argc, char *argv[]) {
             const char *v = std::getenv("VEX_VERBOSE_PROJECT_CACHE");
             return v && v[0] == '1';
         }();
-        const bool has_imports = vex::vex_source_has_imports(vex_source);
+        const bool has_imports = vx::vex_source_has_imports(vex_source);
 
-        vex::ProjectCacheKey pck;
+        vx::ProjectCacheKey pck;
         pck.opt_level = copts.opt_level;
         pck.emit_debug = copts.emit_debug;
-        pck.vex_base = 0; // no usado por compile_vex_project; queda 0
+        pck.vex_base = 0; // no usado por compile_vx_project; queda 0
         pck.instrument_mode = copts.instrument_mode;
         pck.port_target = copts.port_target;
-        const uint32_t opts_hash = vex::project_cache_opts_hash(pck);
+        const uint32_t opts_hash = vx::project_cache_opts_hash(pck);
 
         // Path canonico del root para el cache key.
         std::string canonical_root;
@@ -2290,9 +2290,9 @@ int main(int argc, char *argv[]) {
         } catch (...) {
             canonical_root = vex_path;
         }
-        const std::string pc_dir = vex::default_project_cache_dir();
+        const std::string pc_dir = vx::default_project_cache_dir();
         const std::string pc_path =
-            vex::project_cache_path(canonical_root, pc_dir);
+            vx::project_cache_path(canonical_root, pc_dir);
 
         // Artefactos que SOLO se producen recorriendo el pipeline completo
         // (no estan en el .velb cacheado): diagramas (mmd/dot/html), dump de
@@ -2316,13 +2316,13 @@ int main(int argc, char *argv[]) {
         if (project_cache_enabled && has_imports && !wants_pipeline_artifacts &&
             !aot_mode) {
             uint32_t cached_opts_hash = 0;
-            std::vector<vex::ProjectCacheDep> cached_deps;
+            std::vector<vx::ProjectCacheDep> cached_deps;
             std::vector<uint8_t> cached_velb;
-            if (vex::project_cache_load(pc_path, cached_opts_hash, cached_deps,
+            if (vx::project_cache_load(pc_path, cached_opts_hash, cached_deps,
                                         cached_velb) &&
                 cached_opts_hash == opts_hash && !cached_deps.empty() &&
                 !cached_velb.empty() &&
-                vex::project_cache_validate(cached_deps)) {
+                vx::project_cache_validate(cached_deps)) {
                 // HIT: escribir el .velb cacheado al output y salir.
                 const std::string out_velb = out_prefix + ".velb";
                 std::ofstream f(out_velb, std::ios::binary);
@@ -2352,9 +2352,9 @@ int main(int argc, char *argv[]) {
         // compilador multi-modulo.  Este construye el dep graph,
         // compila cada dep en topo order, inyecta .vexi, y mergea
         // todas las funciones en un solo .vel.
-        vex::CompileResult cr =
-            has_imports ? vex::compile_vex_project(vex_path, copts)
-                        : vex::compile_vex_source(vex_source, vex_path, copts);
+        vx::CompileResult cr =
+            has_imports ? vx::compile_vx_project(vex_path, copts)
+                        : vx::compile_vx_source(vex_source, vex_path, copts);
 
         /* Phase MC.16+: diagnostico de macros que el lowering rechazo
          * por usar builtins comptime-only no aliasables (comptime_compile,
@@ -2379,7 +2379,7 @@ int main(int argc, char *argv[]) {
 
         if (!cr.ok) {
             for (const auto &d : cr.diagnostics.all()) {
-                vex::print_diagnostic(std::cerr, d);
+                vx::print_diagnostic(std::cerr, d);
             }
             return EXIT_FAILURE;
         }
@@ -2470,7 +2470,7 @@ int main(int argc, char *argv[]) {
                     std::ifstream vef(ve_path);
                     std::string ve_src((std::istreambuf_iterator<char>(vef)),
                                        std::istreambuf_iterator<char>());
-                    vex::CompileOptions ve_opts;
+                    vx::CompileOptions ve_opts;
                     ve_opts.module_name = "vex_exc";
                     ve_opts.opt_level = 2;
                     ve_opts.native_poo = true;
@@ -2478,8 +2478,8 @@ int main(int argc, char *argv[]) {
                     // Mismo target bits que el modulo principal (el @Naked
                     // setjmp/longjmp x86-32 debe ensamblarse en mode32).
                     ve_opts.asm_target_bits = copts.asm_target_bits;
-                    vex::CompileResult ve_cr =
-                        vex::compile_vex_source(ve_src, ve_path, ve_opts);
+                    vx::CompileResult ve_cr =
+                        vx::compile_vx_source(ve_src, ve_path, ve_opts);
                     ir::IrModule ve_mod;
                     if (!ve_cr.ok || ve_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(ve_cr.ir_module_cache_bytes,
@@ -2561,13 +2561,13 @@ int main(int argc, char *argv[]) {
                     std::ifstream vsf(vs_path);
                     std::string vs_src((std::istreambuf_iterator<char>(vsf)),
                                        std::istreambuf_iterator<char>());
-                    vex::CompileOptions vs_opts;
+                    vx::CompileOptions vs_opts;
                     vs_opts.module_name = "vex_sync";
                     vs_opts.opt_level = 2;
                     vs_opts.native_poo = true;
                     vs_opts.asm_target_bits = copts.asm_target_bits;
-                    vex::CompileResult vs_cr =
-                        vex::compile_vex_source(vs_src, vs_path, vs_opts);
+                    vx::CompileResult vs_cr =
+                        vx::compile_vx_source(vs_src, vs_path, vs_opts);
                     ir::IrModule vs_mod;
                     if (!vs_cr.ok || vs_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
@@ -2648,13 +2648,13 @@ int main(int argc, char *argv[]) {
                     std::ifstream vaf(va_path);
                     std::string va_src((std::istreambuf_iterator<char>(vaf)),
                                        std::istreambuf_iterator<char>());
-                    vex::CompileOptions va_opts;
+                    vx::CompileOptions va_opts;
                     va_opts.module_name = "vex_async";
                     va_opts.opt_level = 2;
                     va_opts.native_poo = true;
                     va_opts.asm_target_bits = copts.asm_target_bits;
-                    vex::CompileResult va_cr =
-                        vex::compile_vex_source(va_src, va_path, va_opts);
+                    vx::CompileResult va_cr =
+                        vx::compile_vx_source(va_src, va_path, va_opts);
                     ir::IrModule va_mod;
                     if (!va_cr.ok || va_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(va_cr.ir_module_cache_bytes,
@@ -2731,13 +2731,13 @@ int main(int argc, char *argv[]) {
                     std::ifstream vff(vf_path);
                     std::string vf_src((std::istreambuf_iterator<char>(vff)),
                                        std::istreambuf_iterator<char>());
-                    vex::CompileOptions vf_opts;
+                    vx::CompileOptions vf_opts;
                     vf_opts.module_name = "vex_fiber";
                     vf_opts.opt_level = 2;
                     vf_opts.native_poo = true;
                     vf_opts.asm_target_bits = copts.asm_target_bits;
-                    vex::CompileResult vf_cr =
-                        vex::compile_vex_source(vf_src, vf_path, vf_opts);
+                    vx::CompileResult vf_cr =
+                        vx::compile_vx_source(vf_src, vf_path, vf_opts);
                     ir::IrModule vf_mod;
                     if (!vf_cr.ok || vf_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
@@ -2822,13 +2822,13 @@ int main(int argc, char *argv[]) {
                     std::ifstream iof(io_path);
                     std::string io_src((std::istreambuf_iterator<char>(iof)),
                                        std::istreambuf_iterator<char>());
-                    vex::CompileOptions io_opts;
+                    vx::CompileOptions io_opts;
                     io_opts.module_name = "vex_io";
                     io_opts.opt_level = 2;
                     io_opts.native_poo = true;
                     io_opts.asm_target_bits = copts.asm_target_bits;
-                    vex::CompileResult io_cr =
-                        vex::compile_vex_source(io_src, io_path, io_opts);
+                    vx::CompileResult io_cr =
+                        vx::compile_vx_source(io_src, io_path, io_opts);
                     ir::IrModule io_mod;
                     if (!io_cr.ok || io_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
@@ -3110,13 +3110,13 @@ int main(int argc, char *argv[]) {
                 std::ifstream mf(mem_path);
                 std::string mem_src((std::istreambuf_iterator<char>(mf)),
                                     std::istreambuf_iterator<char>());
-                vex::CompileOptions mem_opts;
+                vx::CompileOptions mem_opts;
                 mem_opts.module_name = "vex_mem";
                 mem_opts.opt_level = 2;
                 mem_opts.native_poo = true;
                 mem_opts.asm_target_bits = copts.asm_target_bits;
-                vex::CompileResult mem_cr =
-                    vex::compile_vex_source(mem_src, mem_path, mem_opts);
+                vx::CompileResult mem_cr =
+                    vx::compile_vx_source(mem_src, mem_path, mem_opts);
                 if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
                     !ir::parse_ir_module_cache(mem_cr.ir_module_cache_bytes,
                                                mem_mod) ||
@@ -3179,13 +3179,13 @@ int main(int argc, char *argv[]) {
                     std::string ffi_src(
                         (std::istreambuf_iterator<char>(ff)),
                         std::istreambuf_iterator<char>());
-                    vex::CompileOptions ffi_opts;
+                    vx::CompileOptions ffi_opts;
                     ffi_opts.module_name = "vex_ffi";
                     ffi_opts.opt_level = 2;
                     ffi_opts.native_poo = true;
                     ffi_opts.asm_target_bits = copts.asm_target_bits;
-                    vex::CompileResult ffi_cr =
-                        vex::compile_vex_source(ffi_src, ffi_path, ffi_opts);
+                    vx::CompileResult ffi_cr =
+                        vx::compile_vx_source(ffi_src, ffi_path, ffi_opts);
                     if (!ffi_cr.ok || ffi_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(
                             ffi_cr.ir_module_cache_bytes, ffi_mod)) {
@@ -4670,11 +4670,11 @@ int main(int argc, char *argv[]) {
                 setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
 #endif
                 // Phase M.2.e: same dispatch en el path two-phase del macro
-                // cache.  Si el source tiene imports, usar compile_vex_project.
-                vex::CompileResult cr2 =
-                    vex::vex_source_has_imports(vex_source)
-                        ? vex::compile_vex_project(vex_path, copts)
-                        : vex::compile_vex_source(vex_source, vex_path, copts);
+                // cache.  Si el source tiene imports, usar compile_vx_project.
+                vx::CompileResult cr2 =
+                    vx::vex_source_has_imports(vex_source)
+                        ? vx::compile_vx_project(vex_path, copts)
+                        : vx::compile_vx_source(vex_source, vex_path, copts);
 #if defined(_WIN32)
                 _putenv_s("VESTA_MC_PREBUILT", "");
 #else
@@ -4697,8 +4697,8 @@ int main(int argc, char *argv[]) {
 
         // Mostrar warnings (cr.ok no impide los warnings).
         for (const auto &d : cr.diagnostics.all()) {
-            if (d.level != vex::DiagLevel::ERR)
-                vex::print_diagnostic(std::cerr, d);
+            if (d.level != vx::DiagLevel::ERR)
+                vx::print_diagnostic(std::cerr, d);
         }
 
         // si --vex-base fue especificado y es != 0, parchear el
@@ -4921,7 +4921,7 @@ int main(int argc, char *argv[]) {
             /*emit_map=*/(result.count("emit-map") > 0));
 
         // Phase M5.B: persistir el .velb final al project cache si
-        // (a) el compile usa imports (compile_vex_project tiene
+        // (a) el compile usa imports (compile_vx_project tiene
         // dep_paths populated), (b) el link fue exitoso, y (c) el cache
         // esta enabled.
         if (rc == EXIT_SUCCESS && project_cache_enabled && has_imports &&
@@ -4938,7 +4938,7 @@ int main(int argc, char *argv[]) {
                 }
                 vf.close();
                 if (!velb_bytes.empty()) {
-                    std::vector<vex::ProjectCacheDep> deps;
+                    std::vector<vx::ProjectCacheDep> deps;
                     deps.reserve(cr.dep_paths.size());
                     for (const auto &p : cr.dep_paths) {
                         std::ifstream df(p, std::ios::binary | std::ios::ate);
@@ -4951,13 +4951,13 @@ int main(int argc, char *argv[]) {
                             df.read(reinterpret_cast<char *>(dbytes.data()),
                                     dsz);
                         }
-                        vex::ProjectCacheDep d;
+                        vx::ProjectCacheDep d;
                         d.path = p;
                         d.source_hash =
-                            vex::fnv1a64_bytes(dbytes.data(), dbytes.size());
+                            vx::fnv1a64_bytes(dbytes.data(), dbytes.size());
                         deps.push_back(std::move(d));
                     }
-                    const bool saved = vex::project_cache_save(
+                    const bool saved = vx::project_cache_save(
                         pc_path, opts_hash, deps, velb_bytes);
                     if (project_cache_verbose) {
                         std::cerr << "[vex-project-cache] "
@@ -4985,7 +4985,7 @@ int main(int argc, char *argv[]) {
                         (std::istreambuf_iterator<char>(f)),
                         std::istreambuf_iterator<char>());
                     f.close();
-                    vex::ComptimeRuntime ctr;
+                    vx::ComptimeRuntime ctr;
                     const bool loaded =
                         ctr.load_macros_from_bytes(std::move(bytes));
                     std::cerr << "[mc-probe] load_macros_from_bytes -> "
@@ -5053,7 +5053,7 @@ int main(int argc, char *argv[]) {
                             ctr.record_expectation(e.macro_name, e.args,
                                                    e.expected_str, e.src_loc);
                         }
-                        std::vector<vex::ComptimeRuntime::ShadowMismatch>
+                        std::vector<vx::ComptimeRuntime::ShadowMismatch>
                             report;
                         const size_t mismatches = ctr.shadow_validate(report);
                         std::cerr << "[mc-shadow] expectations="

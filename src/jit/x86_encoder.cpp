@@ -1417,7 +1417,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     case MOp::INLINE_ASM_RAW: {
         /* Phase AS inc.5: apendea los bytes del bloque inline-asm ya
-         * ensamblado (via vex::g_asm_backend) verbatim al code cache.
+         * ensamblado (via vx::g_asm_backend) verbatim al code cache.
          * El indice del blob viaja como IMM32 en src1.  Los inputs/
          * outputs register-bound ya estan en sus registros fisicos
          * (pineados por el regalloc); el asm opera sobre ellos. */

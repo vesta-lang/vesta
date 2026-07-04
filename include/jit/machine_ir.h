@@ -527,7 +527,7 @@ enum class MOp : uint8_t {
 
     /* Pseudo (Phase AS inc.5): bloque de inline-asm nativo.  src1 =
      * IMM32(blob_idx) -> indice en @c MFunction::asm_blobs.  El encoder
-     * apendea los bytes ya ensamblados (via @c vex::g_asm_backend) verbatim
+     * apendea los bytes ya ensamblados (via @c vx::g_asm_backend) verbatim
      * al code cache.  No tiene operandos vreg propios: los inputs/outputs
      * register-bound viven en sus registros fisicos ANTES/DESPUES (pineados
      * por el regalloc via @c MFunction::vreg_fixed).  Para la liveness, el
@@ -1300,7 +1300,7 @@ struct Stackmap {
  * @brief Bloque de inline-asm nativo ya ensamblado (Phase AS inc.5).
  *
  * Lo referencia un @c MInstr de op @c INLINE_ASM_RAW via el indice en
- * @c MFunction::asm_blobs.  @c bytes es la salida de @c vex::g_asm_backend
+ * @c MFunction::asm_blobs.  @c bytes es la salida de @c vx::g_asm_backend
  * (NASM Intel -> x86-64) que el encoder apendea verbatim.  El resto es
  * metadata que el regalloc consume para tratar el asm como un punto de
  * use/def + clobber sin descodificar los bytes:
@@ -1337,7 +1337,7 @@ struct AsmBlob {
     /// (DATA_REL32 si @c rip_relative, ABS64 si imm).  @c symbol es el nombre
     /// Vex (el driver lo resuelve a la dir de la funcion/dato).
     /// Tipo segun la forma de la instruccion (decidido por el usuario en el
-    /// asm).  Espejo de @c vex::AsmAssembleResult::SymRefKind; el encoder lo
+    /// asm).  Espejo de @c vx::AsmAssembleResult::SymRefKind; el encoder lo
     /// mapea a @c MRelocKind.
     enum class AsmSymRefKind : uint8_t {
         BranchRel32, ///< jmp/call sym (directo) -> CALL_REL32

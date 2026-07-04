@@ -42,11 +42,11 @@
 #include <sstream>
 
 #include "lsp/document_store.h"
-#include "vex/ast.h"
-#include "vex/diagnostic.h"
-#include "vex/lexer.h"
-#include "vex/parser.h"
-#include "vex/token.h"
+#include "vx/ast.h"
+#include "vx/diagnostic.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
+#include "vx/token.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -91,7 +91,7 @@ namespace {
 
 /// Token "ligero" capturado del lexer: lo justo para localizar nombres.
 struct LexTok {
-    vex::TokenKind kind = vex::TokenKind::END_OF_FILE;
+    vx::TokenKind kind = vx::TokenKind::END_OF_FILE;
     std::string lexeme;
     size_t offset = 0;
     size_t length = 0;
@@ -109,13 +109,13 @@ std::vector<LexTok> lex_all(const std::string &text,
                             const std::string &filename) {
     std::vector<LexTok> out;
     try {
-        vex::Diagnostics diags; // descartables.
-        vex::Lexer lex(text, filename, diags);
+        vx::Diagnostics diags; // descartables.
+        vx::Lexer lex(text, filename, diags);
         const size_t kMaxTokens = text.size() + 1024;
         size_t produced = 0;
         for (;;) {
-            vex::Token tok = lex.next();
-            if (tok.kind == vex::TokenKind::END_OF_FILE)
+            vx::Token tok = lex.next();
+            if (tok.kind == vx::TokenKind::END_OF_FILE)
                 break;
             if (++produced > kMaxTokens)
                 break;
@@ -142,7 +142,7 @@ std::vector<LexTok> lex_all(const std::string &text,
  */
 std::string make_signature(
     const std::string &name,
-    const std::vector<std::unique_ptr<vex::ast::ParamDecl>> &params) {
+    const std::vector<std::unique_ptr<vx::ast::ParamDecl>> &params) {
     std::string sig = name;
     sig += "(";
     for (size_t i = 0; i < params.size(); ++i) {
@@ -172,9 +172,9 @@ struct DeclName {
  * variantes de enum).  Robusto frente a nodos nulos (AST parcial mientras se
  * teclea).
  */
-void collect_decl_names(const vex::ast::ModuleNode &mod,
+void collect_decl_names(const vx::ast::ModuleNode &mod,
                         std::vector<DeclName> &out) {
-    using namespace vex::ast;
+    using namespace vx::ast;
 
     // Helper: registrar parametros de una lista.
     auto add_params =
@@ -351,7 +351,7 @@ DocSymbols build_doc_symbols(const std::string &text,
     // 1) Lexar: las referencias son todos los IDENTIFIER.
     std::vector<LexTok> toks = lex_all(text, filename);
     for (const auto &t : toks) {
-        if (t.kind == vex::TokenKind::IDENTIFIER && t.length > 0) {
+        if (t.kind == vx::TokenKind::IDENTIFIER && t.length > 0) {
             SymbolRef r;
             r.name = t.lexeme;
             r.byte_offset = t.offset;
@@ -363,10 +363,10 @@ DocSymbols build_doc_symbols(const std::string &text,
     // 2) Parsear el AST para nombres + kinds (best-effort, descartando diags).
     std::vector<DeclName> names;
     try {
-        vex::Diagnostics diags;
-        vex::Lexer lex(text, filename, diags);
-        vex::Parser parser(lex, diags);
-        std::unique_ptr<vex::ast::ModuleNode> mod = parser.parse_program();
+        vx::Diagnostics diags;
+        vx::Lexer lex(text, filename, diags);
+        vx::Parser parser(lex, diags);
+        std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
         if (mod)
             collect_decl_names(*mod, names);
     } catch (...) {
@@ -387,7 +387,7 @@ DocSymbols build_doc_symbols(const std::string &text,
             if (used[i])
                 continue;
             const LexTok &t = toks[i];
-            if (t.kind != vex::TokenKind::IDENTIFIER)
+            if (t.kind != vx::TokenKind::IDENTIFIER)
                 continue;
             if (t.lexeme != dn.name)
                 continue;

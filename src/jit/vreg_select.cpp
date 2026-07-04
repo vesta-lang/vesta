@@ -34,8 +34,8 @@
 #include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"        // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
 #include "gc/raw_allocator.h" // Phase D.7 perf: inline slab fast-path
-#include "vex/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
-#include "vex/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
+#include "vx/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
+#include "vx/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
 /* arena -> windows.h (Win32) define macros que chocan con nombres del enum
  * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST.
  */
@@ -397,7 +397,7 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
 
 /**
  * @brief Phase AS inc.5: mapea un nombre de registro CANONICO de 64
- *        bits (de @c vex::asm_canonical_reg) al id de @c MReg GP (0..15),
+ *        bits (de @c vx::asm_canonical_reg) al id de @c MReg GP (0..15),
  *        o -1 si no es un GP usable como pin de inline-asm.
  *
  * RECHAZA explicitamente rsp/rbp (frame del JIT) y rbx (ProcessVM* en
@@ -613,7 +613,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     const bool has_inline_asm = !fn.asm_reg_bindings.empty();
     if (has_inline_asm) {
         /* El ensamblado requiere un backend activo (lo registra main.cpp). */
-        if (vex::g_asm_backend == nullptr) {
+        if (vx::g_asm_backend == nullptr) {
             vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
             return false;
         }
@@ -626,7 +626,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 vreg_dbg(fn.name.c_str(), "inline-asm(vector-bind)");
                 return false;
             }
-            const std::string canon = vex::asm_canonical_reg(b.reg);
+            const std::string canon = vx::asm_canonical_reg(b.reg);
             const int phys = canon_gp_to_mreg(canon);
             if (phys < 0) { /* reservado (rbx/rsp/rbp) o no GP -> fallback */
                 vreg_dbg(fn.name.c_str(), "inline-asm(reg-no-usable)");
@@ -3106,16 +3106,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * caia por @c !has_inline_asm.  El unico requisito real es el
                  * backend de ensamblado; sin bindings, @c in.operands esta
                  * vacio y el blob no marca in/out vregs (correcto). */
-                if (vex::g_asm_backend == nullptr) {
+                if (vx::g_asm_backend == nullptr) {
                     vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
                     return false;
                 }
                 // El inline-asm de @Naked/asm{} se ensambla en el modo del
                 // TARGET (no del host): x86-32 -> KS_MODE_32 (si no, `jmp ecx`
                 // y demas codificaciones de 32 bits fallan en KS_MODE_64).
-                vex::AsmAssembleResult ar = vex::g_asm_backend->assemble(
+                vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(
                     in.func_name,
-                    mode32 ? vex::AsmArch::X86_32 : vex::AsmArch::X86_64);
+                    mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
                 if (!ar.ok || ar.bytes.empty()) {
                     vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
                     return false;
@@ -3131,7 +3131,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     br.size = sr.size;
                     br.pcrel_trailing = sr.pcrel_trailing;
                     br.symbol = sr.symbol;
-                    using SK = vex::AsmAssembleResult::SymRefKind;
+                    using SK = vx::AsmAssembleResult::SymRefKind;
                     using BK = AsmBlob::AsmSymRefKind;
                     switch (sr.kind) {
                     case SK::BranchRel32: br.kind = BK::BranchRel32; break;
@@ -3235,7 +3235,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const uint64_t asm_id = (in.imm >> 8) & 0xFFFFFFull;
                     if (asm_id < fn.asm_clobber_lists.size()) {
                         for (const auto &cn : fn.asm_clobber_lists[asm_id]) {
-                            const std::string c = vex::asm_canonical_reg(cn);
+                            const std::string c = vx::asm_canonical_reg(cn);
                             const int phys = canon_gp_to_mreg(c);
                             if (phys >= 0) {
                                 blob.clobbers.push_back(

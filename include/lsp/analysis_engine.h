@@ -22,7 +22,7 @@
  *
  * Diseno:
  *  - @c analyze_document(uri, text) compila el fuente con
- *    @c vex::compile_vex_source envuelto en try/catch para que un fallo
+ *    @c vx::compile_vx_source envuelto en try/catch para que un fallo
  *    del frontend NO tumbe el servidor.
  *  - Cachea por (uri, hash del texto): si el texto no cambio, devuelve el
  *    analisis previo sin recompilar.  Esto evita recompilaciones en
@@ -42,7 +42,7 @@
 #include <unordered_set>
 
 #include "analyze/bigo.h"
-#include "vex/compiler.h"
+#include "vx/compiler.h"
 
 namespace lsp {
 
@@ -56,7 +56,7 @@ namespace lsp {
  */
 struct DocAnalysis {
     uint64_t text_hash = 0;       ///< Hash FNV-1a del texto analizado.
-    vex::CompileResult result;    ///< Resultado completo de la compilacion.
+    vx::CompileResult result;    ///< Resultado completo de la compilacion.
 
     /// Nombres de clases declaradas top-level (para enriquecer el resaltado
     /// semantico: un IDENTIFIER que coincide se clasifica como @c class).
@@ -98,7 +98,7 @@ class AnalysisEngine {
      * @brief Analiza un documento, reutilizando la cache si el texto no
      *        cambio.
      *
-     * Compila @p text con @c vex::compile_vex_source bajo try/catch.  Si la
+     * Compila @p text con @c vx::compile_vx_source bajo try/catch.  Si la
      * compilacion lanza una excepcion (fuente parcial/invalida mientras se
      * teclea), devuelve un @c DocAnalysis con un unico diagnostico de error
      * interno en la posicion 0:0 en lugar de propagar el fallo.

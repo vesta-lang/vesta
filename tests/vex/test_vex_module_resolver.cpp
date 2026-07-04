@@ -16,9 +16,9 @@
  * No usamos framework (consistente con el resto del proyecto).
  */
 
-#include "vex/module_resolver.h"
-#include "vex/diagnostic.h"
-#include "vex/ast.h"
+#include "vx/module_resolver.h"
+#include "vx/diagnostic.h"
+#include "vx/ast.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -80,8 +80,8 @@ void test_simple_chain() {
     write_file(root + "/a.vex", "import \"b\";\n"
                                 "i32 main() { return 3; }\n");
 
-    vex::Diagnostics diags;
-    vex::ModuleGraph graph(diags);
+    vx::Diagnostics diags;
+    vx::ModuleGraph graph(diags);
 
     const uint32_t root_id = graph.build_from_root(root + "/a.vex");
     CHECK(root_id != UINT32_MAX, "build_from_root devuelve id valido");
@@ -120,8 +120,8 @@ void test_diamond() {
                                 "import \"c\";\n"
                                 "i32 main() { return 1; }\n");
 
-    vex::Diagnostics diags;
-    vex::ModuleGraph graph(diags);
+    vx::Diagnostics diags;
+    vx::ModuleGraph graph(diags);
 
     const uint32_t root_id = graph.build_from_root(root + "/a.vex");
     CHECK(root_id != UINT32_MAX, "build_from_root OK");
@@ -166,8 +166,8 @@ void test_cycle() {
     write_file(root + "/b.vex", "import \"a\";\n"
                                 "i32 fn_b() { return 2; }\n");
 
-    vex::Diagnostics diags;
-    vex::ModuleGraph graph(diags);
+    vx::Diagnostics diags;
+    vx::ModuleGraph graph(diags);
 
     const uint32_t root_id = graph.build_from_root(root + "/a.vex");
     CHECK(root_id != UINT32_MAX, "build_from_root devuelve id (parse OK)");
@@ -193,8 +193,8 @@ void test_not_found() {
     write_file(root + "/a.vex", "import \"no_existe\";\n"
                                 "i32 main() { return 0; }\n");
 
-    vex::Diagnostics diags;
-    vex::ModuleGraph graph(diags);
+    vx::Diagnostics diags;
+    vx::ModuleGraph graph(diags);
 
     const uint32_t root_id = graph.build_from_root(root + "/a.vex");
     // root_id es valido (a.vex existe y parsea) pero hay error de import.
@@ -218,8 +218,8 @@ void test_path_normalization() {
                "import \"sub/lib\";\n" // import normal
                "i32 main() { return 0; }\n");
 
-    vex::Diagnostics diags;
-    vex::ModuleGraph graph(diags);
+    vx::Diagnostics diags;
+    vx::ModuleGraph graph(diags);
 
     const uint32_t root_id = graph.build_from_root(root + "/main.vex");
     CHECK(root_id != UINT32_MAX, "build OK");
@@ -259,8 +259,8 @@ void test_import_alias_and_only() {
                                    "import \"lib\" only fn_a, fn_b as bee;\n"
                                    "i32 main() { return 0; }\n");
 
-    vex::Diagnostics diags;
-    vex::ModuleGraph graph(diags);
+    vx::Diagnostics diags;
+    vx::ModuleGraph graph(diags);
 
     const uint32_t root_id = graph.build_from_root(root + "/main.vex");
     CHECK(root_id != UINT32_MAX, "build OK");
@@ -271,8 +271,8 @@ void test_import_alias_and_only() {
     if (main_mod && main_mod->parsed_ast) {
         int alias_imports = 0, only_imports = 0;
         for (auto &d : main_mod->parsed_ast->decls) {
-            if (d && d->kind == vex::ast::NodeKind::ImportDecl) {
-                auto *imp = static_cast<vex::ast::ImportDecl *>(d.get());
+            if (d && d->kind == vx::ast::NodeKind::ImportDecl) {
+                auto *imp = static_cast<vx::ast::ImportDecl *>(d.get());
                 if (!imp->alias.empty()) ++alias_imports;
                 if (!imp->only_symbols.empty()) ++only_imports;
                 // Verificar rename en only: "fn_b as bee".

@@ -22,7 +22,7 @@
  * asm del usuario, guarda los 16 GP host de vuelta a @c ctx, restaura los
  * callee-saved.  El @c ctx vive en la PILA durante el asm (reentrante; ademas
  * resuelve el clobber de rbx/rbp -- el asm puede pisarlos, se recargan de la
- * pila).  El ENSAMBLADO usa @c vex::g_asm_backend (Keystone) -- NO el selector/
+ * pila).  El ENSAMBLADO usa @c vx::g_asm_backend (Keystone) -- NO el selector/
  * regalloc del JIT, asi que funciona en interp puro.
  *
  * Convencion del trampoline emitido: @c void tramp(uint64_t ctx[16]).  El

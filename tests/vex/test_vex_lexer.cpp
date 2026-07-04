@@ -35,7 +35,7 @@
  * fallo aborta inmediatamente con detalle del caso fallido.
  */
 
-#include "vex/lexer.h"
+#include "vx/lexer.h"
 
 #include <cassert>
 #include <cstdint>
@@ -44,10 +44,10 @@
 #include <string>
 #include <vector>
 
-using vex::Diagnostics;
-using vex::Lexer;
-using vex::Token;
-using vex::TokenKind;
+using vx::Diagnostics;
+using vx::Lexer;
+using vx::Token;
+using vx::TokenKind;
 
 // -----------------------------------------------------------------------
 // Helpers de aserto con mensaje legible si fallan.

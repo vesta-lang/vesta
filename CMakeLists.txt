@@ -108,12 +108,12 @@ set(VEX_VM_VERSION_MAJOR       ${PROJECT_VERSION_MAJOR})
 set(VEX_VM_VERSION_MINOR       ${PROJECT_VERSION_MINOR})
 set(VEX_VM_VERSION_PATCH       ${PROJECT_VERSION_PATCH})
 
-# Generar include/vex/version_generated.h con las constantes para que
+# Generar include/vx/version_generated.h con las constantes para que
 # el frontend lea las versiones desde un solo punto.  Build incremental
 # regenera automaticamente cuando cambia el numero en este CMakeLists.
 configure_file(
     "${CMAKE_SOURCE_DIR}/cmake/version_generated.h.in"
-    "${CMAKE_BINARY_DIR}/generated/include/vex/version_generated.h"
+    "${CMAKE_BINARY_DIR}/generated/include/vx/version_generated.h"
     @ONLY
 )
 include_directories(BEFORE "${CMAKE_BINARY_DIR}/generated/include")
@@ -250,9 +250,9 @@ endif ()
 # Decision arquitectonica: el frontend del HLL se compila
 # fuera del GLOB principal y se enlaza al ejecutable como dependencia
 # explicita, prefigurando la futura libvesta_rt.
-add_subdirectory(src/vex)
+add_subdirectory(src/vx)
 
-# Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vex/
+# Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vx/
 # porque ya se compilan dentro de vex_lib (incluirlos en ambos lados
 # causaria definicion multiple de simbolos en el linker).
 file(GLOB_RECURSE VM_SOURCES
@@ -260,9 +260,9 @@ file(GLOB_RECURSE VM_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein_c.c
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
 )
-list(FILTER VM_SOURCES EXCLUDE REGEX "/src/vex/")
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/vx/")
 # Port transpiler IR -> codigo (C, futuro Java/JS) vive en vex_lib (ver
-# src/vex/CMakeLists.txt).  Excluir para evitar definicion duplicada.
+# src/vx/CMakeLists.txt).  Excluir para evitar definicion duplicada.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/port/")
 # Subsistema de coste (analyze::bigo) vive en vex_lib para que los renderers
 # de diagramas (tambien en vex_lib) puedan anotar el coste por funcion.  Solo
@@ -381,7 +381,7 @@ if(VESTA_BUILD_PREPROCESSOR)
 endif()
 
 # OpenSSL: vm enlaza el target INTERFACE `vesta_openssl` (definido arriba, antes
-# de add_subdirectory(src/vex)).  Estatico (standalone) o FireDaemon segun el
+# de add_subdirectory(src/vx)).  Estatico (standalone) o FireDaemon segun el
 # entorno; un unico punto de verdad para todos los consumidores.
 if (WIN32)
     target_link_libraries(vm PRIVATE

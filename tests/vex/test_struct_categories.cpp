@@ -17,20 +17,20 @@
  * verifican (a) los flags cacheados @c cat_* y (b) los metodos query.
  */
 
-#include "vex/lexer.h"
-#include "vex/parser.h"
-#include "vex/type_checker.h"
-#include "vex/types.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
+#include "vx/type_checker.h"
+#include "vx/types.h"
 
 #include <cstdio>
 #include <string>
 
-using vex::Diagnostics;
-using vex::Lexer;
-using vex::Parser;
-using vex::PrimitiveKind;
-using vex::TypeChecker;
-using vex::Type;
+using vx::Diagnostics;
+using vx::Lexer;
+using vx::Parser;
+using vx::PrimitiveKind;
+using vx::TypeChecker;
+using vx::Type;
 
 static int g_pass = 0;
 static int g_fail = 0;

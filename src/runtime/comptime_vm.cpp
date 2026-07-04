@@ -18,7 +18,7 @@
  * .velb in-memory que contenga los `__macro_*` lowered).
  */
 
-#include "vex/comptime_vm.h"
+#include "vx/comptime_vm.h"
 
 /* Headers runtime full: estos pueden cascade-incluir openssl/capstone
  * pero solo se compilan en este TU (no se filtran al header publico
@@ -37,7 +37,7 @@
 #include <thread>
 #include <vector>
 
-namespace vex {
+namespace vx {
 
 /**
  * @brief Pimpl interno de @c ComptimeRuntime.  Contiene todo el
@@ -594,4 +594,4 @@ bool ComptimeRuntime::load_macros_from_bytes(
     }
 }
 
-} // namespace vex
+} // namespace vx

@@ -30,7 +30,7 @@
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "util/assembler_multiprocess.h"
-#include "vex/compiler.h"
+#include "vx/compiler.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -160,10 +160,10 @@ bool read_file_bytes_local(const std::string &path, std::vector<uint8_t> &out) {
 // Compila la fuente Vex combinada a bytes .velb (frontend + ensamblador).
 bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
                      std::string &err) {
-    vex::CompileOptions copts;
+    vx::CompileOptions copts;
     copts.module_name = "linkscript";
-    vex::CompileResult cr =
-        vex::compile_vex_source(src, "linkscript.vex", copts);
+    vx::CompileResult cr =
+        vx::compile_vx_source(src, "linkscript.vex", copts);
     if (!cr.ok || cr.diagnostics.has_errors()) {
         err = "link-script: error de compilacion Vex";
         return false;

@@ -14,7 +14,7 @@
 #include "jit/inline_asm_trampoline.h"
 
 #include "jit/code_cache.h"
-#include "vex/asm_backend.h"
+#include "vx/asm_backend.h"
 #include "ffi/virtual_lib_registry.h" // inc.6: registrar el helper runner
 #include "runtime/proceso_runtime.h" // inc.6: acceso a ProcessVM::asm_ctx + vm_mem
 #include "ir/ssa_ir.h"               // inc.6: IrFunction/IrInstr/IrOp del batch
@@ -111,7 +111,7 @@ void register_inline_asm_runner() {
 
 void build_and_register_inline_asm_trampolines(
     const std::vector<ir::IrFunction> &fns) {
-    if (vex::g_asm_backend == nullptr) return; // sin ensamblador -> no-op
+    if (vx::g_asm_backend == nullptr) return; // sin ensamblador -> no-op
     // CodeCache de vida-proceso: los trampolines deben sobrevivir mientras
     // el programa corra.  Una sola instancia compartida por todos los
     // bloques asm (de cualquier modulo cargado).
@@ -160,7 +160,7 @@ void build_and_register_inline_asm_trampolines(
  */
 AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
                                      std::string *err) {
-    if (vex::g_asm_backend == nullptr) {
+    if (vx::g_asm_backend == nullptr) {
         if (err) *err = "no hay backend de ensamblado (Keystone) registrado";
         return nullptr;
     }
@@ -238,8 +238,8 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
     }
 
     /* --- ensamblar (Keystone) --- */
-    vex::AsmAssembleResult ar =
-        vex::g_asm_backend->assemble(nasm, vex::AsmArch::X86_64);
+    vx::AsmAssembleResult ar =
+        vx::g_asm_backend->assemble(nasm, vx::AsmArch::X86_64);
     if (!ar.ok || ar.bytes.empty()) {
         if (err) *err = ar.ok ? "ensamblado vacio" : ar.error;
         return nullptr;

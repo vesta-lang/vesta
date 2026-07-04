@@ -29,7 +29,7 @@
 #include "lsp/param_hints.h"
 #include "lsp/semantic_tokens.h"
 #include "lsp/symbol_index.h"
-#include "vex/diagnostic.h"
+#include "vx/diagnostic.h"
 
 namespace lsp {
 
@@ -44,11 +44,11 @@ namespace {
  * @param level Nivel del diagnostico Vex.
  * @return Codigo de severidad LSP.
  */
-int diag_severity_to_lsp(vex::DiagLevel level) {
+int diag_severity_to_lsp(vx::DiagLevel level) {
     switch (level) {
-    case vex::DiagLevel::ERR: return 1;  // Error
-    case vex::DiagLevel::WARN: return 2; // Warning
-    case vex::DiagLevel::NOTE: return 3; // Information
+    case vx::DiagLevel::ERR: return 1;  // Error
+    case vx::DiagLevel::WARN: return 2; // Warning
+    case vx::DiagLevel::NOTE: return 3; // Information
     }
     return 1;
 }
@@ -242,7 +242,7 @@ void LspServer::publish_diagnostics(const std::string &uri) {
     for (const auto &d : an.result.diagnostics.all()) {
         // El compilador da linea/columna 1-based en bytes; el LSP exige
         // 0-based + caracter en UTF-16.  Convertir cada extremo del span.
-        const vex::SourceLoc &loc = d.loc;
+        const vx::SourceLoc &loc = d.loc;
         // Linea 0-based (proteger contra line==0 hipotetico).
         uint32_t line0 = loc.line > 0 ? loc.line - 1 : 0;
         // Texto de la linea para la conversion de columnas.

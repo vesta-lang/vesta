@@ -25,11 +25,11 @@
 #include <unordered_set>
 #include <vector>
 
-#include "vex/ast.h"
-#include "vex/diagnostic.h"
-#include "vex/lexer.h"
-#include "vex/parser.h"
-#include "vex/token.h"
+#include "vx/ast.h"
+#include "vx/diagnostic.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
+#include "vx/token.h"
 
 namespace lsp {
 
@@ -122,7 +122,7 @@ class PosIndex {
 
 /// Clave compacta (linea<<32 | columna) de una posicion fuente, para el set de
 /// posiciones de los parametros de las declaraciones.
-inline uint64_t loc_key(const vex::SourceLoc &l) {
+inline uint64_t loc_key(const vx::SourceLoc &l) {
     return (static_cast<uint64_t>(l.line) << 32) | static_cast<uint64_t>(l.column);
 }
 
@@ -138,7 +138,7 @@ struct DeclInfo {
 
 /// Anota los nombres de @p params (en @p names) y registra sus posiciones en
 /// @p locs (para reconocer luego el sitio de la declaracion).
-void take_params(const std::vector<std::unique_ptr<vex::ast::ParamDecl>> &params,
+void take_params(const std::vector<std::unique_ptr<vx::ast::ParamDecl>> &params,
                  std::vector<std::string> &names,
                  std::unordered_set<uint64_t> &locs) {
     names.reserve(params.size());
@@ -165,31 +165,31 @@ void register_method(DeclInfo &di, const std::string &name,
     }
 }
 
-void collect_decls(const vex::ast::ModuleNode *mod, DeclInfo &di) {
+void collect_decls(const vx::ast::ModuleNode *mod, DeclInfo &di) {
     if (!mod)
         return;
     for (const auto &node : mod->decls) {
         if (!node)
             continue;
         switch (node->kind) {
-        case vex::ast::NodeKind::FunctionDecl: {
-            auto *d = static_cast<const vex::ast::FunctionDecl *>(node.get());
+        case vx::ast::NodeKind::FunctionDecl: {
+            auto *d = static_cast<const vx::ast::FunctionDecl *>(node.get());
             std::vector<std::string> names;
             take_params(d->params, names, di.param_decl_locs);
             if (!d->name.empty())
                 di.fn_params[d->name] = std::move(names);
             break;
         }
-        case vex::ast::NodeKind::ExternFnDecl: {
-            auto *d = static_cast<const vex::ast::ExternFnDecl *>(node.get());
+        case vx::ast::NodeKind::ExternFnDecl: {
+            auto *d = static_cast<const vx::ast::ExternFnDecl *>(node.get());
             std::vector<std::string> names;
             take_params(d->params, names, di.param_decl_locs);
             if (!d->name.empty())
                 di.fn_params[d->name] = std::move(names);
             break;
         }
-        case vex::ast::NodeKind::ClassDecl: {
-            auto *d = static_cast<const vex::ast::ClassDecl *>(node.get());
+        case vx::ast::NodeKind::ClassDecl: {
+            auto *d = static_cast<const vx::ast::ClassDecl *>(node.get());
             for (const auto &m : d->methods) {
                 if (!m)
                     continue;
@@ -199,8 +199,8 @@ void collect_decls(const vex::ast::ModuleNode *mod, DeclInfo &di) {
             }
             break;
         }
-        case vex::ast::NodeKind::StructDecl: {
-            auto *d = static_cast<const vex::ast::StructDecl *>(node.get());
+        case vx::ast::NodeKind::StructDecl: {
+            auto *d = static_cast<const vx::ast::StructDecl *>(node.get());
             for (const auto &m : d->methods) {
                 if (!m)
                     continue;
@@ -227,24 +227,24 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
         //    una llamada).
         DeclInfo di;
         {
-            vex::Diagnostics diags;
-            vex::Lexer lex(text, filename, diags);
-            vex::Parser parser(lex, diags);
-            std::unique_ptr<vex::ast::ModuleNode> mod = parser.parse_program();
+            vx::Diagnostics diags;
+            vx::Lexer lex(text, filename, diags);
+            vx::Parser parser(lex, diags);
+            std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
             collect_decls(mod.get(), di);
         }
         if (di.fn_params.empty() && di.method_params.empty())
             return hints;
 
         // 2) Lexar a un vector de tokens (necesitamos mirar adelante/atras).
-        std::vector<vex::Token> toks;
+        std::vector<vx::Token> toks;
         {
-            vex::Diagnostics diags;
-            vex::Lexer lex(text, filename, diags);
+            vx::Diagnostics diags;
+            vx::Lexer lex(text, filename, diags);
             const size_t kMaxTokens = text.size() + 1024;
             for (;;) {
-                vex::Token t = lex.next();
-                if (t.kind == vex::TokenKind::END_OF_FILE)
+                vx::Token t = lex.next();
+                if (t.kind == vx::TokenKind::END_OF_FILE)
                     break;
                 toks.push_back(t);
                 if (toks.size() > kMaxTokens)
@@ -253,7 +253,7 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
         }
 
         PosIndex idx(text);
-        using TK = vex::TokenKind;
+        using TK = vx::TokenKind;
         const int n = static_cast<int>(toks.size());
 
         // 3) Buscar el patron IDENT( y resolver sus parametros.

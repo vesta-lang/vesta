@@ -26,15 +26,15 @@
  * No ejecuta el .vel en la VM (eso lo hace test_vex_e2e.cpp via la CLI).
  */
 
-#include "vex/compiler.h"
+#include "vx/compiler.h"
 
 #include <cassert>
 #include <cstdio>
 #include <string>
 
-using vex::compile_vex_source;
-using vex::CompileOptions;
-using vex::CompileResult;
+using vx::compile_vx_source;
+using vx::CompileOptions;
+using vx::CompileResult;
 
 static int g_passed = 0;
 static int g_failed = 0;
@@ -60,7 +60,7 @@ static void test_minimal_main_emits_vel() {
     opts.module_name = "min";
     opts.opt_level = 1;
     CompileResult r =
-        compile_vex_source("i32 main() { return 42; }", "<min>", opts);
+        compile_vx_source("i32 main() { return 42; }", "<min>", opts);
     if (!r.ok) {
         std::fprintf(stderr, "Diagnosticos:\n");
         for (auto &d : r.diagnostics.all()) {
@@ -91,7 +91,7 @@ static void test_factorial_recursive_emits_vel() {
         }
         i64 main() { return fact(5); }
     )";
-    CompileResult r = compile_vex_source(src, "<fact>", opts);
+    CompileResult r = compile_vx_source(src, "<fact>", opts);
     if (!r.ok) {
         for (auto &d : r.diagnostics.all()) {
             std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file.c_str(),
@@ -112,7 +112,7 @@ static void test_error_propagates() {
     // .vel.  El test verifica que NO se aborta y que los diagnosticos
     // estan disponibles para que el caller los imprima.
     CompileResult r =
-        compile_vex_source("i32 main() { return ; }", "<bad>", {});
+        compile_vx_source("i32 main() { return ; }", "<bad>", {});
     VEX_ASSERT(!r.ok, "error sintactico => no ok");
     VEX_ASSERT(r.diagnostics.has_errors(), "diagnosticos contienen error");
 }

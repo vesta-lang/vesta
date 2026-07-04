@@ -41,9 +41,9 @@
 #include <vector>
 
 #include "lsp/analysis_engine.h"
-#include "vex/diagnostic.h"
-#include "vex/lexer.h"
-#include "vex/token.h"
+#include "vx/diagnostic.h"
+#include "vx/lexer.h"
+#include "vx/token.h"
 
 namespace lsp {
 
@@ -171,8 +171,8 @@ class PositionIndex {
  * y los smart pointers (unique/shared/borrow) tambien se resaltan como
  * tipo por ergonomia.
  */
-bool is_primitive_type_kw(vex::TokenKind k) {
-    using TK = vex::TokenKind;
+bool is_primitive_type_kw(vx::TokenKind k) {
+    using TK = vx::TokenKind;
     switch (k) {
     case TK::KW_VOID:
     case TK::KW_BOOL:
@@ -222,8 +222,8 @@ bool is_primitive_type_kw(vex::TokenKind k) {
  * El enum agrupa los keywords entre @c KW_VOID y @c KW_CASE (categorias
  * 4..7).  Se comprueba por rango ordinal para no enumerar cada uno.
  */
-bool is_keyword(vex::TokenKind k) {
-    using TK = vex::TokenKind;
+bool is_keyword(vx::TokenKind k) {
+    using TK = vx::TokenKind;
     // El primer keyword es KW_VOID; el ultimo de la zona de keywords es
     // KW_CASE.  TRUE_KW/FALSE_KW/NULL_KW se tratan aparte (literales).
     return k >= TK::KW_VOID && k <= TK::KW_CASE;
@@ -236,8 +236,8 @@ bool is_keyword(vex::TokenKind k) {
  * dos puntos, punto, @) NO se emiten: el editor los deja en su color por
  * defecto.  Solo se resaltan operadores reales.
  */
-bool is_operator(vex::TokenKind k) {
-    using TK = vex::TokenKind;
+bool is_operator(vx::TokenKind k) {
+    using TK = vx::TokenKind;
     switch (k) {
     case TK::PLUS:
     case TK::MINUS:
@@ -288,7 +288,7 @@ bool is_operator(vex::TokenKind k) {
  * El lexer emite estos nombres como IDENTIFIER (no hay un KW_* dedicado)
  * porque su caracter de palabra reservada depende del contexto
  * sintactico.  El parser los reconoce comparando el lexema (ver
- * @c src/vex/parser.cpp).  Para el resaltado los tratamos siempre como
+ * @c src/vx/parser.cpp).  Para el resaltado los tratamos siempre como
  * keyword: es lo que el usuario espera ver coloreado.
  *
  * Lista derivada de las comparaciones @c current_.lexeme == "..." del
@@ -323,9 +323,9 @@ bool is_contextual_keyword(const std::string &name) {
  *
  * Los builtins son IDENTIFIER que el frontend reconoce por nombre: o bien
  * registrados en el type checker (@c reg_builtin en
- * @c src/vex/type_checker.cpp), o evaluados como intrinsecos comptime
- * (@c src/vex/comptime_introspect.cpp) o bajados especialmente en el
- * lowering (@c src/vex/lowering.cpp: reflexion + introspeccion).  Los
+ * @c src/vx/type_checker.cpp), o evaluados como intrinsecos comptime
+ * (@c src/vx/comptime_introspect.cpp) o bajados especialmente en el
+ * lowering (@c src/vx/lowering.cpp: reflexion + introspeccion).  Los
  * clasificamos como @c Function para que tengan el color de funcion.
  */
 bool is_builtin_name(const std::string &name) {
@@ -569,9 +569,9 @@ SemTokenType classify_asm_ident(const std::string &name) {
  * @return Lista de rangos [open, close) de byte del contenido asm.
  */
 std::vector<std::pair<size_t, size_t>>
-find_asm_ranges(const std::vector<vex::Token> &toks) {
+find_asm_ranges(const std::vector<vx::Token> &toks) {
     std::vector<std::pair<size_t, size_t>> ranges;
-    using TK = vex::TokenKind;
+    using TK = vx::TokenKind;
     const int n = static_cast<int>(toks.size());
     for (int i = 0; i < n; ++i) {
         if (toks[i].kind != TK::KW_ASM)
@@ -1031,13 +1031,13 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
         //    completo para localizar los bloques asm { ... } antes de
         //    clasificar (un identificador dentro de asm se colorea distinto:
         //    registro, instruccion aritmetica, logica, control o movimiento).
-        vex::Diagnostics diags; // descartables: solo queremos los tokens.
-        vex::Lexer lex(text, filename, diags);
+        vx::Diagnostics diags; // descartables: solo queremos los tokens.
+        vx::Lexer lex(text, filename, diags);
         const size_t kMaxTokens = text.size() + 1024;
-        std::vector<vex::Token> toks;
+        std::vector<vx::Token> toks;
         for (;;) {
-            vex::Token tok = lex.next();
-            if (tok.kind == vex::TokenKind::END_OF_FILE)
+            vx::Token tok = lex.next();
+            if (tok.kind == vx::TokenKind::END_OF_FILE)
                 break;
             toks.push_back(tok);
             if (toks.size() > kMaxTokens)
@@ -1048,8 +1048,8 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
             find_asm_ranges(toks);
 
         // 2) Clasificar cada token.
-        using TK = vex::TokenKind;
-        for (const vex::Token &tok : toks) {
+        using TK = vx::TokenKind;
+        for (const vx::Token &tok : toks) {
             const bool in_asm =
                 !asm_ranges.empty() && offset_in_asm(tok.loc.offset, asm_ranges);
 

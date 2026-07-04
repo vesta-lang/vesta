@@ -41,7 +41,7 @@
 #include "ir/liveness.h"
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
-#include "vex/asm_effects.h"           // inc.6: asm_canonical_reg
+#include "vx/asm_effects.h"           // inc.6: asm_canonical_reg
 #include "jit/inline_asm_trampoline.h" // inc.6: fnv1a64_asm (clave del trampoline)
 #include "loader/interp_stackmap.h"    // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
 #include <sstream>
@@ -4933,7 +4933,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 if (b.alloca_value != opv) continue;
                 if (b.is_vector) break; // banco FP no soportado en interp v1
                 const int phys =
-                    gp_phys_of_canon(vex::asm_canonical_reg(b.reg));
+                    gp_phys_of_canon(vx::asm_canonical_reg(b.reg));
                 if (phys >= 0) binds.push_back({opv, phys});
                 break;
             }

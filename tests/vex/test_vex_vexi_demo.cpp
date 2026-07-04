@@ -7,7 +7,7 @@
 //   - El hex dump del binario.
 //   - El round-trip parse -> verificacion.
 
-#include "vex/vexi_format.h"
+#include "vx/vexi_format.h"
 
 #include <cstdio>
 #include <fstream>
@@ -71,21 +71,21 @@ int main() {
 
     // VexiModule equivalente (construido a mano para que la demo sea
     // independiente del TypeChecker y se vea limpia).
-    vex::VexiModule m;
-    m.source_hash = vex::vexi_fnv1a(std::string("// buffer.vex\n..."));
+    vx::VexiModule m;
+    m.source_hash = vx::vexi_fnv1a(std::string("// buffer.vex\n..."));
 
     {
-        vex::VexiSymbol s;
-        s.kind = vex::VexiSymbolKind::TYPEDEF_NEW;
+        vx::VexiSymbol s;
+        s.kind = vx::VexiSymbolKind::TYPEDEF_NEW;
         s.name = "user_id";
         s.underlying_type = "u64";
         s.is_opaque = true;
-        s.nominal_abi = vex::vexi_fnv1a(s.name);
+        s.nominal_abi = vx::vexi_fnv1a(s.name);
         m.symbols.push_back(std::move(s));
     }
     {
-        vex::VexiSymbol s;
-        s.kind = vex::VexiSymbolKind::STRUCT;
+        vx::VexiSymbol s;
+        s.kind = vx::VexiSymbolKind::STRUCT;
         s.name = "Point";
         s.size_bytes = 16;
         s.align_bytes = 8;
@@ -96,8 +96,8 @@ int main() {
         m.symbols.push_back(std::move(s));
     }
     {
-        vex::VexiSymbol s;
-        s.kind = vex::VexiSymbolKind::FUNCTION;
+        vx::VexiSymbol s;
+        s.kind = vx::VexiSymbolKind::FUNCTION;
         s.name = "doblar";
         s.return_type = "i32";
         s.param_types = {"i32"};
@@ -105,8 +105,8 @@ int main() {
         m.symbols.push_back(std::move(s));
     }
 
-    auto bytes = vex::vexi_emit(m);
-    auto parsed = vex::vexi_parse(bytes.data(), bytes.size());
+    auto bytes = vx::vexi_emit(m);
+    auto parsed = vx::vexi_parse(bytes.data(), bytes.size());
 
     std::printf("Total bytes emitidos: %zu\n", bytes.size());
     std::printf("Magic:              'VEXI' (0x49584556 LE)\n");
@@ -123,22 +123,22 @@ int main() {
     for (const auto &s : parsed.module_.symbols) {
         const char *k = "?";
         switch (s.kind) {
-        case vex::VexiSymbolKind::TYPEDEF_ALIAS: k = "TYPEDEF    "; break;
-        case vex::VexiSymbolKind::TYPEDEF_NEW: k = "TYPEDEF_NEW"; break;
-        case vex::VexiSymbolKind::STRUCT: k = "STRUCT     "; break;
-        case vex::VexiSymbolKind::CLASS: k = "CLASS      "; break;
-        case vex::VexiSymbolKind::ENUM: k = "ENUM       "; break;
-        case vex::VexiSymbolKind::FUNCTION: k = "FUNCTION   "; break;
-        case vex::VexiSymbolKind::GLOBAL_VAR: k = "GLOBAL     "; break;
+        case vx::VexiSymbolKind::TYPEDEF_ALIAS: k = "TYPEDEF    "; break;
+        case vx::VexiSymbolKind::TYPEDEF_NEW: k = "TYPEDEF_NEW"; break;
+        case vx::VexiSymbolKind::STRUCT: k = "STRUCT     "; break;
+        case vx::VexiSymbolKind::CLASS: k = "CLASS      "; break;
+        case vx::VexiSymbolKind::ENUM: k = "ENUM       "; break;
+        case vx::VexiSymbolKind::FUNCTION: k = "FUNCTION   "; break;
+        case vx::VexiSymbolKind::GLOBAL_VAR: k = "GLOBAL     "; break;
         }
         std::printf("  [%s] %-10s", k, s.name.c_str());
-        if (s.kind == vex::VexiSymbolKind::TYPEDEF_NEW ||
-            s.kind == vex::VexiSymbolKind::TYPEDEF_ALIAS) {
+        if (s.kind == vx::VexiSymbolKind::TYPEDEF_NEW ||
+            s.kind == vx::VexiSymbolKind::TYPEDEF_ALIAS) {
             std::printf(" : %s", s.underlying_type.c_str());
             if (s.is_opaque) std::printf("  @opaque");
             if (s.align_override) std::printf("  @align(%u)", s.align_override);
-        } else if (s.kind == vex::VexiSymbolKind::STRUCT ||
-                   s.kind == vex::VexiSymbolKind::CLASS) {
+        } else if (s.kind == vx::VexiSymbolKind::STRUCT ||
+                   s.kind == vx::VexiSymbolKind::CLASS) {
             std::printf(" { ");
             for (size_t i = 0; i < s.fields.size(); ++i) {
                 if (i) std::printf(", ");
@@ -146,7 +146,7 @@ int main() {
                             s.fields[i].name.c_str());
             }
             std::printf(" }  size=%u align=%u", s.size_bytes, s.align_bytes);
-        } else if (s.kind == vex::VexiSymbolKind::FUNCTION) {
+        } else if (s.kind == vx::VexiSymbolKind::FUNCTION) {
             std::printf("(");
             for (size_t i = 0; i < s.param_types.size(); ++i) {
                 if (i) std::printf(", ");

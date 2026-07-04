@@ -24,21 +24,21 @@
  *   - Que el campo result_type queda relleno tras el check.
  */
 
-#include "vex/lexer.h"
-#include "vex/parser.h"
-#include "vex/type_checker.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
+#include "vx/type_checker.h"
 
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
-using vex::Diagnostics;
-using vex::Lexer;
-using vex::Parser;
-using vex::PrimitiveKind;
-using vex::TypeChecker;
-namespace ast = vex::ast;
+using vx::Diagnostics;
+using vx::Lexer;
+using vx::Parser;
+using vx::PrimitiveKind;
+using vx::TypeChecker;
+namespace ast = vx::ast;
 
 static int g_passed = 0;
 static int g_failed = 0;

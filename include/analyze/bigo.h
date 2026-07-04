@@ -24,7 +24,7 @@
  *      en bigo.cpp; el hook @c MeasureResult queda reservado.
  *
  * El resultado @c CostResult es una estructura de DATOS para que un
- * renderer de diagramas (Graphviz/Mermaid/HTML, ver src/vex/*_diagrams.cpp)
+ * renderer de diagramas (Graphviz/Mermaid/HTML, ver src/vx/*_diagrams.cpp)
  * lo consuma.  @c cost_result_to_json produce la forma serializada.
  */
 #ifndef VESTA_ANALYZE_BIGO_H

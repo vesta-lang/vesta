@@ -32,7 +32,7 @@
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
 #include "vesta_rt/abi.h"
-#include "vex/asm_backend.h"
+#include "vx/asm_backend.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -64,10 +64,10 @@ static_assert(offsetof(Proxy, regs) == VESTA_PROC_REGISTERS_OFFSET,
               "regs debe quedar en el offset que usa el codigo JIT");
 
 /** @brief Backend de ensamblado STUB: tabla nasm-string -> bytes. */
-struct StubAsm : vex::AsmBackend {
-    vex::AsmAssembleResult assemble(const std::string &nasm,
-                                    vex::AsmArch) override {
-        vex::AsmAssembleResult r;
+struct StubAsm : vx::AsmBackend {
+    vx::AsmAssembleResult assemble(const std::string &nasm,
+                                    vx::AsmArch) override {
+        vx::AsmAssembleResult r;
         r.ok = true;
         if (nasm == "popcnt rax, rdi") {
             r.bytes = {0xF3, 0x48, 0x0F, 0xB8, 0xC7}; // popcnt rax, rdi
@@ -261,7 +261,7 @@ static void test_add_two() {
 int main() {
     std::printf("=== test_inline_asm (Phase AS inc.5 / AS.10) ===\n");
     static StubAsm stub;
-    vex::g_asm_backend = &stub; // registrar el backend para vreg_select
+    vx::g_asm_backend = &stub; // registrar el backend para vreg_select
 
     test_popcount();
     test_double_inout();

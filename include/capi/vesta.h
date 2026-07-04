@@ -121,7 +121,7 @@ VESTA_API int vesta_eval(const char *src, const char *unit_name, int *out_exit,
 /**
  * @brief Compila fuente Vex a texto .vel (bytecode textual intermedio).
  *
- * Reusa el frontend Vex (@c vex::compile_vex_source) y devuelve el texto
+ * Reusa el frontend Vex (@c vx::compile_vx_source) y devuelve el texto
  * @c .vel que el ensamblador consume.  Util para inspeccionar la salida
  * del lowering sin pasar por el ensamblado.
  *

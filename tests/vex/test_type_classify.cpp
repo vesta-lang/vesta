@@ -14,22 +14,22 @@
  * TypeChecker completo: el clasificador es una funcion pura + resolver.
  */
 
-#include "vex/type_classify.h"
-#include "vex/type_checker.h" // StructLayout, StructFieldInfo, ClassMethodInfo
-#include "vex/types.h"        // Type, PrimitiveKind
+#include "vx/type_classify.h"
+#include "vx/type_checker.h" // StructLayout, StructFieldInfo, ClassMethodInfo
+#include "vx/types.h"        // Type, PrimitiveKind
 
 #include <cstdio>
 #include <map>
 #include <string>
 
-using vex::ClassMethodInfo;
-using vex::is_c_representable;
-using vex::is_managed;
-using vex::PrimitiveKind;
-using vex::StructFieldInfo;
-using vex::StructLayout;
-using vex::StructResolver;
-using vex::Type;
+using vx::ClassMethodInfo;
+using vx::is_c_representable;
+using vx::is_managed;
+using vx::PrimitiveKind;
+using vx::StructFieldInfo;
+using vx::StructLayout;
+using vx::StructResolver;
+using vx::Type;
 
 static int g_checks = 0;
 static int g_fail = 0;

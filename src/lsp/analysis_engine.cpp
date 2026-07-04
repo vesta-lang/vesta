@@ -32,11 +32,11 @@
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "lsp/symbol_index.h" // uri_to_fs_path (multi-modulo)
-#include "vex/ast.h"
-#include "vex/compiler.h" // compile_vex_project (multi-modulo)
-#include "vex/diagnostic.h"
-#include "vex/lexer.h"
-#include "vex/parser.h"
+#include "vx/ast.h"
+#include "vx/compiler.h" // compile_vx_project (multi-modulo)
+#include "vx/diagnostic.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
 
 namespace lsp {
 
@@ -98,7 +98,7 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
  * @param filename Nombre logico del fichero para la SourceLoc.
  * @param out_cost Destino del coste por funcion (queda vacio si no hubo IR).
  */
-void attach_complexity_warnings(vex::CompileResult &result,
+void attach_complexity_warnings(vx::CompileResult &result,
                                 const std::string &filename,
                                 analyze::ModuleCost &out_cost) {
     if (result.ir_module_cache_bytes.empty())
@@ -128,7 +128,7 @@ void attach_complexity_warnings(vex::CompileResult &result,
             if (line == 0)
                 continue; // sin linea fiable: no ubicar el warning.
 
-            vex::SourceLoc loc;
+            vx::SourceLoc loc;
             loc.file = filename;
             loc.line = line;
             loc.column = 1;
@@ -170,10 +170,10 @@ void attach_complexity_warnings(vex::CompileResult &result,
 void extract_declared_names(const std::string &text, const std::string &uri,
                             DocAnalysis &out) {
     // Diagnosticos locales y descartables: solo queremos el AST.
-    vex::Diagnostics local_diags;
-    vex::Lexer lex(text, uri, local_diags);
-    vex::Parser parser(lex, local_diags);
-    std::unique_ptr<vex::ast::ModuleNode> mod = parser.parse_program();
+    vx::Diagnostics local_diags;
+    vx::Lexer lex(text, uri, local_diags);
+    vx::Parser parser(lex, local_diags);
+    std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
     if (!mod)
         return;
     // Recorrer SOLO las declaraciones top-level: nombres de tipos y funciones
@@ -183,8 +183,8 @@ void extract_declared_names(const std::string &text, const std::string &uri,
         if (!node)
             continue;
         switch (node->kind) {
-        case vex::ast::NodeKind::ClassDecl: {
-            auto *d = static_cast<const vex::ast::ClassDecl *>(node.get());
+        case vx::ast::NodeKind::ClassDecl: {
+            auto *d = static_cast<const vx::ast::ClassDecl *>(node.get());
             if (!d->name.empty())
                 out.class_names.insert(d->name);
             // Parametros de plantilla de una clase generica (class Box<T>).
@@ -193,14 +193,14 @@ void extract_declared_names(const std::string &text, const std::string &uri,
                     out.type_params.insert(tp);
             break;
         }
-        case vex::ast::NodeKind::StructDecl: {
-            auto *d = static_cast<const vex::ast::StructDecl *>(node.get());
+        case vx::ast::NodeKind::StructDecl: {
+            auto *d = static_cast<const vx::ast::StructDecl *>(node.get());
             if (!d->name.empty())
                 out.struct_names.insert(d->name);
             break;
         }
-        case vex::ast::NodeKind::EnumDecl: {
-            auto *d = static_cast<const vex::ast::EnumDecl *>(node.get());
+        case vx::ast::NodeKind::EnumDecl: {
+            auto *d = static_cast<const vx::ast::EnumDecl *>(node.get());
             if (!d->name.empty())
                 out.enum_names.insert(d->name);
             // Parametros de plantilla de un enum generico (enum Maybe<T>).
@@ -209,14 +209,14 @@ void extract_declared_names(const std::string &text, const std::string &uri,
                     out.type_params.insert(tp);
             break;
         }
-        case vex::ast::NodeKind::TypeAliasDecl: {
-            auto *d = static_cast<const vex::ast::TypeAliasDecl *>(node.get());
+        case vx::ast::NodeKind::TypeAliasDecl: {
+            auto *d = static_cast<const vx::ast::TypeAliasDecl *>(node.get());
             if (!d->name.empty())
                 out.type_names.insert(d->name);
             break;
         }
-        case vex::ast::NodeKind::FunctionDecl: {
-            auto *d = static_cast<const vex::ast::FunctionDecl *>(node.get());
+        case vx::ast::NodeKind::FunctionDecl: {
+            auto *d = static_cast<const vx::ast::FunctionDecl *>(node.get());
             if (!d->name.empty())
                 out.function_names.insert(d->name);
             // Parametros de plantilla de una funcion comptime generica
@@ -226,10 +226,10 @@ void extract_declared_names(const std::string &text, const std::string &uri,
                     out.type_params.insert(tp);
             break;
         }
-        case vex::ast::NodeKind::ExternFnDecl: {
+        case vx::ast::NodeKind::ExternFnDecl: {
             // Las funciones extern (FFI declarativo) tambien se clasifican
             // como funciones para el resaltado.
-            auto *d = static_cast<const vex::ast::ExternFnDecl *>(node.get());
+            auto *d = static_cast<const vx::ast::ExternFnDecl *>(node.get());
             if (!d->name.empty())
                 out.function_names.insert(d->name);
             break;
@@ -258,7 +258,7 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
     try {
         // Compilar el fuente.  No aplicamos VPP en Fase 1 (el frontend no lo
         // hace por si mismo; integrarlo es trabajo de una fase posterior).
-        vex::CompileOptions opts;
+        vx::CompileOptions opts;
         opts.module_name = "main";
         // Capturar los valores comptime (consts + builtins sizeof/kind/...) con
         // su ubicacion, para que el hover y el inspector los muestren.  Coste
@@ -301,9 +301,9 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
                 }
             }
             analysis->result =
-                vex::compile_vex_project(fs_path, opts, &overlay, &anc);
+                vx::compile_vx_project(fs_path, opts, &overlay, &anc);
         } else {
-            analysis->result = vex::compile_vex_source(text, uri, opts);
+            analysis->result = vx::compile_vx_source(text, uri, opts);
         }
         // Enganchar (best-effort) el warning de discrepancia de @complexity y
         // cachear el coste/complejidad para el hover.
@@ -315,9 +315,9 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
     } catch (const std::exception &e) {
         // Un fallo del frontend NO debe tumbar el servidor: convertirlo en un
         // diagnostico de error interno en 0:0 para que el cliente lo vea.
-        analysis->result = vex::CompileResult{};
+        analysis->result = vx::CompileResult{};
         analysis->result.ok = false;
-        vex::SourceLoc loc;
+        vx::SourceLoc loc;
         loc.file = uri;
         loc.line = 1; // LSP es 0-based; el mapeo restara 1 -> linea 0.
         loc.column = 1;
@@ -327,9 +327,9 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         analysis->result.diagnostics.error(loc, msg);
     } catch (...) {
         // Captura de cualquier otra excepcion no estandar.
-        analysis->result = vex::CompileResult{};
+        analysis->result = vx::CompileResult{};
         analysis->result.ok = false;
-        vex::SourceLoc loc;
+        vx::SourceLoc loc;
         loc.file = uri;
         loc.line = 1;
         loc.column = 1;

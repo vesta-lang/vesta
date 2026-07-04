@@ -13,7 +13,7 @@
 #include "pkg/sha256.h"
 #include "pkg/auditor.h"
 
-#include "vex/vexi_format.h"
+#include "vx/vexi_format.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -460,28 +460,28 @@ static int cmd_convert(const std::vector<std::string> &args) {
 // ------------------------------------------------------------------
 // inspect <ruta.vexi>: dump del contenido de un fichero .vexi
 // ------------------------------------------------------------------
-static const char *kind_to_str(vex::VexiSymbolKind k) {
+static const char *kind_to_str(vx::VexiSymbolKind k) {
     switch (k) {
-    case vex::VexiSymbolKind::TYPEDEF_ALIAS: return "typedef";
-    case vex::VexiSymbolKind::TYPEDEF_NEW: return "typedef-new";
-    case vex::VexiSymbolKind::STRUCT: return "struct";
-    case vex::VexiSymbolKind::CLASS: return "class";
-    case vex::VexiSymbolKind::ENUM: return "enum";
-    case vex::VexiSymbolKind::GLOBAL_VAR: return "global";
-    case vex::VexiSymbolKind::FUNCTION: return "fn";
+    case vx::VexiSymbolKind::TYPEDEF_ALIAS: return "typedef";
+    case vx::VexiSymbolKind::TYPEDEF_NEW: return "typedef-new";
+    case vx::VexiSymbolKind::STRUCT: return "struct";
+    case vx::VexiSymbolKind::CLASS: return "class";
+    case vx::VexiSymbolKind::ENUM: return "enum";
+    case vx::VexiSymbolKind::GLOBAL_VAR: return "global";
+    case vx::VexiSymbolKind::FUNCTION: return "fn";
     }
     return "?";
 }
 
 static const char *blob_kind_to_str(uint32_t k) {
-    switch (static_cast<vex::VexiBlobKind>(k)) {
-    case vex::VexiBlobKind::STRING: return "string";
-    case vex::VexiBlobKind::ARRAY_PRIM: return "array_prim";
-    case vex::VexiBlobKind::STRUCT_PRIM: return "struct_prim";
-    case vex::VexiBlobKind::STRUCT_NESTED: return "struct_nested";
-    case vex::VexiBlobKind::ARRAY_REF: return "array_ref";
-    case vex::VexiBlobKind::TYPE_DESC: return "type_desc";
-    case vex::VexiBlobKind::NONE: return "none";
+    switch (static_cast<vx::VexiBlobKind>(k)) {
+    case vx::VexiBlobKind::STRING: return "string";
+    case vx::VexiBlobKind::ARRAY_PRIM: return "array_prim";
+    case vx::VexiBlobKind::STRUCT_PRIM: return "struct_prim";
+    case vx::VexiBlobKind::STRUCT_NESTED: return "struct_nested";
+    case vx::VexiBlobKind::ARRAY_REF: return "array_ref";
+    case vx::VexiBlobKind::TYPE_DESC: return "type_desc";
+    case vx::VexiBlobKind::NONE: return "none";
     }
     return "?";
 }
@@ -505,13 +505,13 @@ static int cmd_inspect(const std::vector<std::string> &args) {
     std::ostringstream ss;
     ss << in.rdbuf();
     std::string raw = ss.str();
-    auto pr = vex::vexi_parse(reinterpret_cast<const uint8_t *>(raw.data()),
+    auto pr = vx::vexi_parse(reinterpret_cast<const uint8_t *>(raw.data()),
                               raw.size());
     if (!pr.ok) {
         ui::error("parse fallo: " + pr.error_message);
         return 1;
     }
-    const vex::VexiModule &mod = pr.module_;
+    const vx::VexiModule &mod = pr.module_;
 
     ui::header("Inspeccion de " + path);
     ui::kv("format_version", std::to_string(mod.format_version));
@@ -551,7 +551,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
         std::cout << "  " << ui::magenta() << kind_to_str(s.kind) << ui::reset()
                   << "  " << ui::pkg_name(s.name);
         // Tipo / firma.
-        if (s.kind == vex::VexiSymbolKind::FUNCTION) {
+        if (s.kind == vx::VexiSymbolKind::FUNCTION) {
             std::cout << "  " << ui::gray() << "(";
             for (size_t i = 0; i < s.param_types.size(); ++i) {
                 if (i) std::cout << ", ";
@@ -562,7 +562,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                 std::cout << "  " << ui::yellow() << "[extern " << s.extern_lib
                           << "]" << ui::reset();
             }
-        } else if (s.kind == vex::VexiSymbolKind::GLOBAL_VAR) {
+        } else if (s.kind == vx::VexiSymbolKind::GLOBAL_VAR) {
             std::cout << "  " << ui::gray() << ": " << s.underlying_type
                       << ui::reset();
             if (s.is_const)
@@ -579,11 +579,11 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                           << ui::reset();
                 // Si es STRING, mostrar el contenido decodificado.
                 if (s.blob_kind_hint ==
-                    static_cast<uint8_t>(vex::VexiBlobKind::STRING)) {
-                    const vex::VexiBlobHeader *bh =
-                        vex::vexi_blob_read(mod.blob_pool, s.blob_offset);
+                    static_cast<uint8_t>(vx::VexiBlobKind::STRING)) {
+                    const vx::VexiBlobHeader *bh =
+                        vx::vexi_blob_read(mod.blob_pool, s.blob_offset);
                     const uint8_t *bp =
-                        vex::vexi_blob_payload(mod.blob_pool, s.blob_offset);
+                        vx::vexi_blob_payload(mod.blob_pool, s.blob_offset);
                     if (bh && bp) {
                         std::string sv(reinterpret_cast<const char *>(bp),
                                        bh->count);
@@ -604,7 +604,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
             if (!s.attr_section.empty())
                 std::cout << "  " << ui::cyan() << "@section(\""
                           << s.attr_section << "\")" << ui::reset();
-        } else if (s.kind == vex::VexiSymbolKind::CLASS) {
+        } else if (s.kind == vx::VexiSymbolKind::CLASS) {
             std::cout << "  " << ui::gray() << "size=" << s.size_bytes
                       << " fields=" << s.fields.size()
                       << " methods=" << s.methods.size() << ui::reset();
@@ -612,10 +612,10 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                 std::cout << "  " << ui::cyan() << "extends " << s.super_class
                           << ui::reset();
             }
-        } else if (s.kind == vex::VexiSymbolKind::ENUM) {
+        } else if (s.kind == vx::VexiSymbolKind::ENUM) {
             std::cout << "  " << ui::gray() << "variants=" << s.variants.size()
                       << ui::reset();
-        } else if (s.kind == vex::VexiSymbolKind::STRUCT) {
+        } else if (s.kind == vx::VexiSymbolKind::STRUCT) {
             std::cout << "  " << ui::gray() << "size=" << s.size_bytes
                       << " fields=" << s.fields.size() << ui::reset();
         }
@@ -627,9 +627,9 @@ static int cmd_inspect(const std::vector<std::string> &args) {
         ui::header("Blob pool");
         size_t off = 0;
         int blob_idx = 0;
-        while (off + sizeof(vex::VexiBlobHeader) <= mod.blob_pool.size()) {
-            const vex::VexiBlobHeader *bh =
-                vex::vexi_blob_read(mod.blob_pool, static_cast<uint32_t>(off));
+        while (off + sizeof(vx::VexiBlobHeader) <= mod.blob_pool.size()) {
+            const vx::VexiBlobHeader *bh =
+                vx::vexi_blob_read(mod.blob_pool, static_cast<uint32_t>(off));
             if (!bh || bh->kind == 0) break;
             char hh[32];
             std::snprintf(hh, sizeof(hh), "0x%016llx",
@@ -639,7 +639,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                       << ui::reset() << "  count=" << bh->count
                       << " bytes=" << bh->total_bytes << "  "
                       << ui::short_hash(hh) << "\n";
-            off += sizeof(vex::VexiBlobHeader) + bh->total_bytes;
+            off += sizeof(vx::VexiBlobHeader) + bh->total_bytes;
             // Padding al multiplo de 8.
             while (off % 8 != 0 && off < mod.blob_pool.size())
                 ++off;

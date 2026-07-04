@@ -12,17 +12,17 @@
 
 /**
  * @file keystone_asm_backend.cpp
- * @brief Phase AS inc.4b: impl de @c vex::AsmBackend con Keystone.
+ * @brief Phase AS inc.4b: impl de @c vx::AsmBackend con Keystone.
  *
  * UNICO fichero del proyecto que incluye @c keystone.h para Phase AS (la
  * decision de diseno exige aislar la dependencia tras la interfaz pura
- * @c vex::AsmBackend).  Ensambla texto NASM Intel a bytes; usado hoy para
+ * @c vx::AsmBackend).  Ensambla texto NASM Intel a bytes; usado hoy para
  * validar la sintaxis del body en compile-time (inc.4b) y, en inc.5, para
  * producir los bytes que van al code-cache del JIT.
  */
 
 #include "jit/keystone_asm_backend.h"
-#include "vex/asm_backend.h"
+#include "vx/asm_backend.h"
 
 #include <capstone/capstone.h>
 #include <keystone/keystone.h>
@@ -177,26 +177,26 @@ std::string route_imm64_syms(const std::string &nasm,
     return out;
 }
 
-/// Traduce @c vex::AsmArch a (ks_arch, mode) de Keystone.
-bool arch_to_ks(vex::AsmArch a, ks_arch &arch, ks_mode &mode) {
+/// Traduce @c vx::AsmArch a (ks_arch, mode) de Keystone.
+bool arch_to_ks(vx::AsmArch a, ks_arch &arch, ks_mode &mode) {
     switch (a) {
-    case vex::AsmArch::X86_64:
+    case vx::AsmArch::X86_64:
         arch = KS_ARCH_X86;
         mode = KS_MODE_64;
         return true;
-    case vex::AsmArch::X86_32:
+    case vx::AsmArch::X86_32:
         arch = KS_ARCH_X86;
         mode = KS_MODE_32;
         return true;
-    case vex::AsmArch::X86_16:
+    case vx::AsmArch::X86_16:
         arch = KS_ARCH_X86;
         mode = KS_MODE_16;
         return true;
-    case vex::AsmArch::ARM64:
+    case vx::AsmArch::ARM64:
         arch = KS_ARCH_ARM64;
         mode = KS_MODE_LITTLE_ENDIAN;
         return true;
-    case vex::AsmArch::ARM32:
+    case vx::AsmArch::ARM32:
         arch = KS_ARCH_ARM;
         mode = KS_MODE_ARM;
         return true;
@@ -207,10 +207,10 @@ bool arch_to_ks(vex::AsmArch a, ks_arch &arch, ks_mode &mode) {
 /// Impl concreta: abre Keystone por cada @c assemble (stateless y
 /// thread-safe; el coste de @c ks_open es despreciable frente al
 /// compile-time global).
-struct KeystoneAsmBackend final : vex::AsmBackend {
-    vex::AsmAssembleResult assemble(const std::string &nasm,
-                                    vex::AsmArch arch) override {
-        vex::AsmAssembleResult r;
+struct KeystoneAsmBackend final : vx::AsmBackend {
+    vx::AsmAssembleResult assemble(const std::string &nasm,
+                                    vx::AsmArch arch) override {
+        vx::AsmAssembleResult r;
         ks_arch ka;
         ks_mode km;
         if (!arch_to_ks(arch, ka, km)) {
@@ -243,11 +243,11 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
         // Keystone (que no sabe el fixup de 64 bits) y registra los patches.
         std::vector<Imm64SymPatch> imm64_patches;
         std::string src;
-        if (arch == vex::AsmArch::X86_64) {
+        if (arch == vx::AsmArch::X86_64) {
             src = "default rel\n";
             src += route_imm64_syms(nasm, imm64_patches);
         }
-        const char *asm_text = (arch == vex::AsmArch::X86_64) ? src.c_str()
+        const char *asm_text = (arch == vx::AsmArch::X86_64) ? src.c_str()
                                                               : nasm.c_str();
         unsigned char *enc = nullptr;
         size_t enc_size = 0, stat_count = 0;
@@ -270,10 +270,10 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
         // la inspeccion solo consume insn_offsets.  Un backend hand-rolled lo
         // rellenaria nativo sin Capstone.  Solo x86 por ahora.
         if (r.ok && !r.bytes.empty() &&
-            (arch == vex::AsmArch::X86_64 || arch == vex::AsmArch::X86_32 ||
-             arch == vex::AsmArch::X86_16)) {
-            cs_mode cm = arch == vex::AsmArch::X86_64   ? CS_MODE_64
-                         : arch == vex::AsmArch::X86_32 ? CS_MODE_32
+            (arch == vx::AsmArch::X86_64 || arch == vx::AsmArch::X86_32 ||
+             arch == vx::AsmArch::X86_16)) {
+            cs_mode cm = arch == vx::AsmArch::X86_64   ? CS_MODE_64
+                         : arch == vx::AsmArch::X86_32 ? CS_MODE_32
                                                         : CS_MODE_16;
             csh h;
             if (cs_open(CS_ARCH_X86, cm, &h) == CS_ERR_OK) {
@@ -312,7 +312,7 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
                             break;
                         }
                     }
-                    using K = vex::AsmAssembleResult::SymRefKind;
+                    using K = vx::AsmAssembleResult::SymRefKind;
                     for (uint8_t k = 0; k < x.op_count; ++k) {
                         const cs_x86_op &op = x.operands[k];
                         if (op.type == X86_OP_IMM) {
@@ -325,7 +325,7 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
                                 sym_val -= x.encoding.imm_size;
                             const std::string *s = sym_state.symbol_for(sym_val);
                             if (!s || !x.encoding.imm_size) continue;
-                            vex::AsmAssembleResult::SymRef ref;
+                            vx::AsmAssembleResult::SymRef ref;
                             ref.offset = static_cast<uint32_t>(
                                 ia_rel + x.encoding.imm_offset);
                             ref.size = x.encoding.imm_size;
@@ -370,7 +370,7 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
                                              s ? 1 : 0, x.encoding.disp_offset,
                                              x.encoding.disp_size);
                             if (!s || !x.encoding.disp_size) continue;
-                            vex::AsmAssembleResult::SymRef ref;
+                            vx::AsmAssembleResult::SymRef ref;
                             ref.offset = static_cast<uint32_t>(
                                 ia_rel + x.encoding.disp_offset);
                             ref.size = x.encoding.disp_size; // 4
@@ -403,10 +403,10 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
                                                   0xFF);
                 for (size_t off = 0; off + 8 <= r.bytes.size(); ++off) {
                     if (std::memcmp(r.bytes.data() + off, pat, 8) == 0) {
-                        vex::AsmAssembleResult::SymRef ref;
+                        vx::AsmAssembleResult::SymRef ref;
                         ref.offset = static_cast<uint32_t>(off);
                         ref.size = 8;
-                        ref.kind = vex::AsmAssembleResult::SymRefKind::Abs64;
+                        ref.kind = vx::AsmAssembleResult::SymRefKind::Abs64;
                         ref.symbol = p.symbol;
                         r.sym_refs.push_back(std::move(ref));
                         break; // un solo match por placeholder unico
@@ -422,7 +422,7 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
 void register_keystone_asm_backend() {
     static std::once_flag once;
     static KeystoneAsmBackend backend;
-    std::call_once(once, [] { vex::g_asm_backend = &backend; });
+    std::call_once(once, [] { vx::g_asm_backend = &backend; });
 }
 
 } // namespace jit

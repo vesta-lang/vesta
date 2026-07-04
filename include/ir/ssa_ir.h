@@ -1411,7 +1411,7 @@ struct IrModule {
         /// Clave de global compartido a nivel de PROGRAMA: cuando no esta
         /// vacia, este slot es un unico global identificado por la clave en
         /// todo el binario (aunque sea NON_DEDUP).  El merge cross-module
-        /// (compile_vex_project) unifica todas las entries con la misma
+        /// (compile_vx_project) unifica todas las entries con la misma
         /// shared_key en UN solo slot.  Usado por los globals del CPU
         /// dispatch (__vex_cpu_features, __vex_memcpy_fp, etc.) que deben
         /// ser program-globales para que el init del root inicialice el slot
@@ -1438,7 +1438,7 @@ struct IrModule {
      * Garantia de offsets: el orden de @c push_back determina el orden
      * de las entries; dos builds del mismo source producen el mismo
      * pool byte-a-byte (estable cross-build) tras el dedup deterministico
-     * en @c compile_vex_project.
+     * en @c compile_vx_project.
      */
     struct StaticDataStore {
         /// Pool contiguo: todos los blobs concatenados con padding.

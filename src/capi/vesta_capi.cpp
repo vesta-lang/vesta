@@ -8,7 +8,7 @@
  *
  * Estrategia de reuso (sin reescribir el pipeline):
  *   - Compilar .vex -> .velb: se replica la secuencia que usa el path
- *     @c --vex de @c main.cpp: @c vex::compile_vex_source produce el texto
+ *     @c --vex de @c main.cpp: @c vx::compile_vx_source produce el texto
  *     @c .vel + el IR serializado; se escribe el @c .vel a un fichero
  *     temporal y se invoca @c asm_multi_process::run_worker (que ensambla
  *     + linka) para producir el @c .velb final; se leen sus bytes a memoria
@@ -31,7 +31,7 @@
 // VirtualAlloc), porque Windows define VOID/CONST/IN/OUT/... como macros que
 // colisionan con los miembros del enum.  Con types.h ya parseado (guardado),
 // las macros posteriores son inocuas.
-#include "vex/ast.h"
+#include "vx/ast.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -55,9 +55,9 @@
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "util/assembler_multiprocess.h"
-#include "vex/compiler.h"
-#include "vex/diagnostic.h"
-#include "vex/parser.h" // set/get_aot_condcomp_target (vistas por @Target)
+#include "vx/compiler.h"
+#include "vx/diagnostic.h"
+#include "vx/parser.h" // set/get_aot_condcomp_target (vistas por @Target)
 
 #include "jit/code_cache.h"      // vista JIT
 #include "jit/jit_compiler.h"    // vista JIT
@@ -102,15 +102,15 @@ void set_err(char **out_err, const std::string &msg) {
 }
 
 /// Construye un texto legible con todos los diagnosticos de error.
-std::string format_diags(const vex::Diagnostics &diags) {
+std::string format_diags(const vx::Diagnostics &diags) {
     std::ostringstream os;
     // Recorrer todos los diagnosticos; mostrar errores y warnings con
     // su localizacion en formato gcc-like (fichero:linea:columna).
     for (const auto &d : diags.all()) {
         const char *lvl = "info";
-        if (d.level == vex::DiagLevel::ERR) lvl = "error";
-        else if (d.level == vex::DiagLevel::WARN) lvl = "warning";
-        else if (d.level == vex::DiagLevel::NOTE) lvl = "note";
+        if (d.level == vx::DiagLevel::ERR) lvl = "error";
+        else if (d.level == vx::DiagLevel::WARN) lvl = "warning";
+        else if (d.level == vx::DiagLevel::NOTE) lvl = "note";
         os << d.loc.file << ":" << d.loc.line << ":" << d.loc.column << ": "
            << lvl << ": " << d.message << "\n";
     }
@@ -165,11 +165,11 @@ void try_remove(const std::string &path) {
 bool compile_to_velb_bytes(const std::string &src, const std::string &unit_name,
                            std::vector<uint8_t> &out_bytes, std::string &err) {
     // 1. Compilar .vex -> texto .vel + IR serializado (reusa el frontend).
-    vex::CompileOptions copts;
+    vx::CompileOptions copts;
     copts.module_name = unit_name.empty() ? std::string("main") : unit_name;
 
-    vex::CompileResult cr =
-        vex::compile_vex_source(src, copts.module_name + ".vex", copts);
+    vx::CompileResult cr =
+        vx::compile_vx_source(src, copts.module_name + ".vex", copts);
 
     if (!cr.ok || cr.diagnostics.has_errors()) {
         err = "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics);
@@ -489,9 +489,9 @@ VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
         return 1;
     }
     try {
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
@@ -523,10 +523,10 @@ VESTA_API int vesta_compile_to_ir(const char *src, const char *unit_name,
         return 1;
     }
     try {
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = true; // habilita CompileResult::ir_text
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
@@ -658,7 +658,7 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
             return 1;
         }
 
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         // Activar solo el flag de la vista + formato pedidos.
         const bool ast = (k == "ast");
@@ -682,7 +682,7 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
             copts.dump_html_vel = vel;
         }
 
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
@@ -772,19 +772,19 @@ struct TargetGuard {
         std::string arch = vt_norm_arch_(t->arch);
         // Solo activar si hay un override real (os no-host o arch != default).
         if (os.empty() && arch == "x86_64") return;
-        vex::get_aot_condcomp_target(prev_os, prev_arch);
-        vex::set_aot_condcomp_target(os, arch);
+        vx::get_aot_condcomp_target(prev_os, prev_arch);
+        vx::set_aot_condcomp_target(os, arch);
         active = true;
     }
     ~TargetGuard() {
-        if (active) vex::set_aot_condcomp_target(prev_os, prev_arch);
+        if (active) vx::set_aot_condcomp_target(prev_os, prev_arch);
     }
     TargetGuard(const TargetGuard &) = delete;
     TargetGuard &operator=(const TargetGuard &) = delete;
 };
 
 /// Rellena @c copts con el target: native_poo + bits del arch.
-void vt_apply_opts_(const VestaTarget *t, vex::CompileOptions &copts) {
+void vt_apply_opts_(const VestaTarget *t, vx::CompileOptions &copts) {
     if (!t) return;
     if (t->native_poo) copts.native_poo = true;
 }
@@ -825,11 +825,11 @@ VESTA_API int vesta_compile_to_ir_t(const char *src, const char *unit_name,
     }
     try {
         TargetGuard guard(target);
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = true;
         vt_apply_opts_(target, copts);
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
@@ -863,10 +863,10 @@ VESTA_API int vesta_compile_to_vel_t(const char *src, const char *unit_name,
     }
     try {
         TargetGuard guard(target);
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         vt_apply_opts_(target, copts);
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
@@ -924,10 +924,10 @@ VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
         const std::string arch = vt_norm_arch_(target ? target->arch : nullptr);
         const bool mode32 = (arch == "x86");
 
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         copts.native_poo = true; // la vista asm nativa requiere el lowering AOT
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
@@ -987,9 +987,9 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
     try {
         // El JIT es x86-64 host; el @c os solo afecta las ramas @Target.
         TargetGuard guard(target);
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
@@ -1097,10 +1097,10 @@ VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
     }
     try {
         // Compilar una sola vez activando dump_ir.
-        vex::CompileOptions copts;
+        vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = (out_ir != nullptr);
-        vex::CompileResult cr = vex::compile_vex_source(
+        vx::CompileResult cr = vx::compile_vx_source(
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,

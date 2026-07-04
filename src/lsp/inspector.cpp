@@ -51,8 +51,8 @@
 #include "jit/selector.h"
 #include "jit/vreg_pipeline.h"
 #include "lsp/document_store.h"
-#include "vex/compiler.h"
-#include "vex/parser.h" // set/get_aot_condcomp_target (vistas por OS/arch)
+#include "vx/compiler.h"
+#include "vx/parser.h" // set/get_aot_condcomp_target (vistas por OS/arch)
 
 namespace lsp {
 
@@ -72,12 +72,12 @@ struct InspectTargetGuard {
     bool active = false;
     explicit InspectTargetGuard(const InspectTarget &t) {
         if (!t.active()) return;
-        vex::get_aot_condcomp_target(prev_os, prev_arch);
-        vex::set_aot_condcomp_target(t.os, norm_arch(t.arch));
+        vx::get_aot_condcomp_target(prev_os, prev_arch);
+        vx::set_aot_condcomp_target(t.os, norm_arch(t.arch));
         active = true;
     }
     ~InspectTargetGuard() {
-        if (active) vex::set_aot_condcomp_target(prev_os, prev_arch);
+        if (active) vx::set_aot_condcomp_target(prev_os, prev_arch);
     }
     InspectTargetGuard(const InspectTargetGuard &) = delete;
     InspectTargetGuard &operator=(const InspectTargetGuard &) = delete;
@@ -127,7 +127,7 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
  * @return true si la deserializacion fue exitosa y el modulo tiene
  *         funciones; false en otro caso.
  */
-bool parse_post_opt_module(const vex::CompileResult &result, ir::IrModule &out) {
+bool parse_post_opt_module(const vx::CompileResult &result, ir::IrModule &out) {
     if (result.ir_module_cache_bytes.empty())
         return false;
     return ir::parse_ir_module_cache(result.ir_module_cache_bytes, out);
@@ -1056,9 +1056,9 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     // Sin funcion (panel del inspector): modulo entero, texto plano.
     if (function.empty()) {
         if (target.active()) {
-            vex::CompileOptions opts;
+            vx::CompileOptions opts;
             opts.module_name = "main";
-            vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+            vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
             return {{"text", res.vel_text}};
         }
         const DocAnalysis &an = engine_.analyze_document(uri, text);
@@ -1077,11 +1077,11 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     if (it != view_cache_.end())
         return nlohmann::json::parse(it->second);
 
-    vex::CompileOptions opts;
+    vx::CompileOptions opts;
     opts.module_name = "main";
     opts.emit_debug = true;         // emite `// @line N` en el .vel
     opts.emit_comptime_fns = true;  // incluir comptime fns (inspeccion)
-    vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+    vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
     const std::string block = vel_extract_fn(res.vel_text, function);
 
     // Parsear el IR una vez: fuente + args + ir_by_line, y sembrar el rastreo
@@ -1190,10 +1190,10 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
         if (it != view_cache_.end())
             return {{"text", it->second}};
 
-        vex::CompileOptions opts;
+        vx::CompileOptions opts;
         opts.module_name = "main";
         opts.emit_ir_preopt = true;
-        vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+        vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
         if (res.ir_module_cache_bytes_preopt.empty())
             return {{"error", "no se pudo generar el IR pre-optimizacion"}};
         ir::IrModule mod;
@@ -1211,9 +1211,9 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
     ir::IrModule mod;
     bool got = false;
     if (target.active()) {
-        vex::CompileOptions opts;
+        vx::CompileOptions opts;
         opts.module_name = "main";
-        vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+        vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
         got = parse_post_opt_module(res, mod);
     } else {
         const DocAnalysis &an = engine_.analyze_document(uri, text);
@@ -1475,7 +1475,7 @@ nlohmann::json Inspector::diagram(const std::string &uri,
         return {{"text", it->second}};
 
     // Activar SOLO el flag de la vista pedida (uno por kind x format).
-    vex::CompileOptions opts;
+    vx::CompileOptions opts;
     opts.module_name = "main";
     opts.annotate_cost = cost;
     if (format == "mermaid") {
@@ -1495,7 +1495,7 @@ nlohmann::json Inspector::diagram(const std::string &uri,
         else opts.dump_html_vel = true;
     }
 
-    vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+    vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
     // Seleccionar el campo del CompileResult que corresponde a la vista.
     std::string out_text;
     if (format == "mermaid") {
@@ -1593,9 +1593,9 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
     ir::IrModule mod;
     bool got_ir = false;
     if (target.active()) {
-        vex::CompileOptions co;
+        vx::CompileOptions co;
         co.module_name = "main";
-        vex::CompileResult cr = vex::compile_vex_source(doc_text, uri, co);
+        vx::CompileResult cr = vx::compile_vx_source(doc_text, uri, co);
         got_ir = parse_post_opt_module(cr, mod);
     } else {
         const DocAnalysis &an = engine_.analyze_document(uri, doc_text);
@@ -1609,10 +1609,10 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
         // Fallback: la funcion puede ser @c comptime (no-macro), que el
         // frontend elide del IR normal.  Recompilar incluyendola para
         // poder inspeccionar su codegen.
-        vex::CompileOptions co;
+        vx::CompileOptions co;
         co.module_name = "main";
         co.emit_comptime_fns = true;
-        vex::CompileResult cr2 = vex::compile_vex_source(doc_text, uri, co);
+        vx::CompileResult cr2 = vx::compile_vx_source(doc_text, uri, co);
         ir::IrModule m2;
         if (parse_post_opt_module(cr2, m2)) {
             mod = std::move(m2);
@@ -1709,10 +1709,10 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     ir::IrModule mod;
     bool got_ir = false;
     if (target.active()) {
-        vex::CompileOptions co;
+        vx::CompileOptions co;
         co.module_name = "main";
         co.native_poo = true; // la vista AOT usa el lowering nativo
-        vex::CompileResult cr = vex::compile_vex_source(doc_text, uri, co);
+        vx::CompileResult cr = vx::compile_vx_source(doc_text, uri, co);
         got_ir = parse_post_opt_module(cr, mod);
     } else {
         const DocAnalysis &an = engine_.analyze_document(uri, doc_text);
@@ -1726,11 +1726,11 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         // Fallback: la funcion puede ser @c comptime (no-macro), que el
         // frontend elide del IR normal.  Recompilar incluyendola para
         // poder inspeccionar su codegen.
-        vex::CompileOptions co;
+        vx::CompileOptions co;
         co.module_name = "main";
         co.emit_comptime_fns = true;
         if (target.active()) co.native_poo = true;
-        vex::CompileResult cr2 = vex::compile_vex_source(doc_text, uri, co);
+        vx::CompileResult cr2 = vx::compile_vx_source(doc_text, uri, co);
         ir::IrModule m2;
         if (parse_post_opt_module(cr2, m2)) {
             mod = std::move(m2);
@@ -1849,7 +1849,7 @@ nlohmann::json Inspector::macro_expand(const std::string &uri) {
     // Las expectaciones de @Macro y las razones de skip se pueblan en la
     // compilacion normal: reutilizar el CompileResult cacheado por el motor.
     const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
-    const vex::CompileResult &res = an.result;
+    const vx::CompileResult &res = an.result;
 
     nlohmann::json expansions = nlohmann::json::array();
     for (const auto &e : res.macro_expectations) {
@@ -1892,10 +1892,10 @@ nlohmann::json Inspector::comptime_values(const std::string &uri) {
     if (it != view_cache_.end())
         return nlohmann::json::parse(it->second);
 
-    vex::CompileOptions opts;
+    vx::CompileOptions opts;
     opts.module_name = "main";
     opts.dump_comptime_values = true;
-    vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+    vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
 
     nlohmann::json values = nlohmann::json::array();
     for (const auto &v : res.comptime_values) {
