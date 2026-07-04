@@ -840,6 +840,21 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         apply_pending_visibility(n.get());
         return n;
     }
+    // NS.6-ext: extension Tipo { ... }  (keyword contextual; exige IDENT tras).
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        current_.lexeme == "extension" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_extension_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // NS.6-ext: impl Concept for Tipo { ... }  (keyword contextual).
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "impl" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_impl_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
     // typedef <tipo> <nombre> ;
     if (current_.kind == TokenKind::KW_TYPEDEF) {
         // typedef struct/enum C-style.
@@ -3515,6 +3530,192 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
     return s;
+}
+
+// -----------------------------------------------------------------
+// NS.6-ext: extension / impl -- anyaden metodos a un tipo existente.
+//
+//   extension Tipo { metodos }
+//   impl Concept for Tipo { metodos }
+//
+// El cuerpo solo contiene METODOS (no campos): `[ret] name(params) body`.
+// Dispatch estatico (CALL directo a Tipo__metodo), inline-able.
+// -----------------------------------------------------------------
+
+std::unique_ptr<ast::ClassMethodDecl>
+Parser::parse_extension_method(uint8_t access) {
+    if (!starts_type()) {
+        error_here("se esperaba un tipo de retorno de metodo dentro de la "
+                   "extension/impl");
+        return nullptr;
+    }
+    const SourceLoc mloc = current_.loc;
+    auto type_node = parse_type_node();
+    if (!type_node) return nullptr;
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del metodo tras el tipo de retorno");
+        return nullptr;
+    }
+    std::string member_name = consume().lexeme;
+    // Type-params de metodo generico `<U>` opcionales.
+    std::vector<std::string> method_tparams;
+    std::vector<ast::TypeBound> method_tbounds;
+    if (current_.kind == TokenKind::LT)
+        parse_type_params_with_bounds(method_tparams, method_tbounds);
+    if (current_.kind != TokenKind::LPAREN) {
+        error_here("una extension/impl solo puede contener metodos "
+                   "(se esperaba '(' tras el nombre)");
+        return nullptr;
+    }
+    auto m = std::make_unique<ast::ClassMethodDecl>();
+    m->loc = mloc;
+    m->name = std::move(member_name);
+    m->return_type = std::move(type_node);
+    m->access = access;
+    m->method_type_params = method_tparams;
+    m->type_bounds = method_tbounds;
+    (void)consume(); // '('
+    while (current_.kind != TokenKind::RPAREN &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        auto p = std::make_unique<ast::ParamDecl>();
+        p->loc = current_.loc;
+        p->type = parse_type_node();
+        if (!p->type) {
+            synchronize();
+            break;
+        }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del parametro");
+            synchronize();
+            break;
+        }
+        p->name = consume().lexeme;
+        m->params.push_back(std::move(p));
+        if (!match(TokenKind::COMMA)) break;
+    }
+    (void)expect(TokenKind::RPAREN,
+                 "se esperaba ')' al cerrar parametros del metodo");
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
+        parse_where_clause(m->type_bounds);
+    }
+    const auto temp_aliases = register_temp_type_aliases(method_tparams);
+    m->body = parse_method_body(/*is_void=*/false);
+    unregister_temp_type_aliases(temp_aliases);
+    return m;
+}
+
+std::unique_ptr<ast::ExtensionDecl> Parser::parse_extension_decl() {
+    auto e = std::make_unique<ast::ExtensionDecl>();
+    e->loc = current_.loc;
+    (void)consume(); // 'extension'
+    // Tipo destino: identificador (posiblemente cualificado a.b.C via '.').
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del tipo tras 'extension'");
+        return nullptr;
+    }
+    std::string tgt = consume().lexeme;
+    while (current_.kind == TokenKind::DOT) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un identificador tras '.' en el tipo de "
+                       "la extension");
+            return nullptr;
+        }
+        tgt += ".";
+        tgt += consume().lexeme;
+    }
+    e->target_type = std::move(tgt);
+    (void)expect(TokenKind::LBRACE,
+                 "se esperaba '{' al abrir el cuerpo de la extension");
+    while (current_.kind != TokenKind::RBRACE &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        uint8_t access = 0;
+        if (current_.kind == TokenKind::KW_PUBLIC) {
+            (void)consume();
+        } else if (current_.kind == TokenKind::KW_PRIVATE) {
+            access = 1;
+            (void)consume();
+        }
+        auto m = parse_extension_method(access);
+        if (!m) {
+            synchronize();
+            if (current_.kind == TokenKind::RBRACE ||
+                current_.kind == TokenKind::END_OF_FILE)
+                break;
+            continue;
+        }
+        e->methods.push_back(std::move(m));
+    }
+    (void)expect(TokenKind::RBRACE,
+                 "se esperaba '}' al cerrar la extension");
+    return e;
+}
+
+std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
+    auto im = std::make_unique<ast::ImplDecl>();
+    im->loc = current_.loc;
+    (void)consume(); // 'impl'
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del concept tras 'impl'");
+        return nullptr;
+    }
+    std::string cname = consume().lexeme;
+    while (current_.kind == TokenKind::DOT) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un identificador tras '.' en el concept");
+            return nullptr;
+        }
+        cname += ".";
+        cname += consume().lexeme;
+    }
+    im->concept_name = std::move(cname);
+    // 'for' (keyword contextual).
+    if (!(current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "for") &&
+        current_.kind != TokenKind::KW_FOR) {
+        error_here("se esperaba 'for' en 'impl Concept for Tipo'");
+        return nullptr;
+    }
+    (void)consume(); // 'for'
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del tipo tras 'for'");
+        return nullptr;
+    }
+    std::string tgt = consume().lexeme;
+    while (current_.kind == TokenKind::DOT) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un identificador tras '.' en el tipo del "
+                       "impl");
+            return nullptr;
+        }
+        tgt += ".";
+        tgt += consume().lexeme;
+    }
+    im->target_type = std::move(tgt);
+    (void)expect(TokenKind::LBRACE,
+                 "se esperaba '{' al abrir el cuerpo del impl");
+    while (current_.kind != TokenKind::RBRACE &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        uint8_t access = 0;
+        if (current_.kind == TokenKind::KW_PUBLIC) {
+            (void)consume();
+        } else if (current_.kind == TokenKind::KW_PRIVATE) {
+            access = 1;
+            (void)consume();
+        }
+        auto m = parse_extension_method(access);
+        if (!m) {
+            synchronize();
+            if (current_.kind == TokenKind::RBRACE ||
+                current_.kind == TokenKind::END_OF_FILE)
+                break;
+            continue;
+        }
+        im->methods.push_back(std::move(m));
+    }
+    (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el impl");
+    return im;
 }
 
 // -----------------------------------------------------------------

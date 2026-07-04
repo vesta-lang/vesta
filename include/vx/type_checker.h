@@ -186,6 +186,10 @@ struct ClassMethodInfo {
     bool is_destructor = false;
     bool is_static = false;
     bool is_final = false;
+    /// NS.6-ext: metodo anyadido por una @c extension / @c impl.  Dispatch
+    /// ESTATICO (CALL directo a @c defining_class__name con @c this como primer
+    /// arg), no entra en la vtable.  Inline-able.
+    bool is_extension = false;
     /// el lowering, si encuentra un metodo expression-bodied
     /// con esta marca, sustituye la llamada por el cuerpo en el call
     /// site (sin CALLVIRT).  No es heredable: cada override decide su
@@ -1467,6 +1471,16 @@ class TypeChecker {
     /// namespace ya registrado.  Usado para que @c "import a.b.c as x;" haga
     /// que @c x.Sym resuelva igual que @c a.b.c.Sym cuando el namespace
     /// declarado difiere del nombre del fichero/alias.
+    /// @brief NS.6-ext: re-apendea un metodo de extension importado (desde el
+    /// .vxi de otro modulo) al layout del tipo destino en este consumidor, para
+    /// que @c obj.metodo() resuelva (dispatch estatico al @p mangled_label).
+    void inject_imported_ext_method(const std::string &target_key,
+                                    bool target_is_class,
+                                    const std::string &name,
+                                    const std::string &return_type_str,
+                                    const std::vector<std::string> &param_strs,
+                                    const std::string &mangled_label);
+
     void point_namespace_alias(const std::string &alias, uint32_t ns_index) {
         ns_idx_by_local_name_[alias] = ns_index;
         // El Symbol::Namespace de @p alias se crea desde la cola pendiente con
@@ -1588,6 +1602,12 @@ class TypeChecker {
     /// args) -> indice en mod_.decls.  Cada uso `Maybe<i32>` se
     /// monomorphiza on demand via monomorphize_enum().
     std::unordered_map<std::string, size_t> generic_enum_templates_;
+    /// NS.6-ext: conformidades declaradas via @c "impl Concept for Tipo".
+    /// Mapea nombre-de-tipo -> conjunto de concepts implementados.  Consultado
+    /// por la verificacion de bounds (un tipo con impl explicito satisface el
+    /// concept aunque el predicado estructural tambien lo confirme).
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        impl_conformances_;
     /// Templates de struct genericos (`struct Box<T> { ... }`).  Mapea
     /// template_name -> indice en mod_.decls.  Cada uso `Box<i32>` se
     /// monomorphiza on demand via monomorphize_struct() (mismo modelo que

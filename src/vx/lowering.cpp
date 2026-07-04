@@ -1557,6 +1557,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         lower_struct_methods(sd, out_module);
     }
 
+    // NS.6-ext: metodos de extension / impl (funciones libres <clave>__metodo).
+    lower_extension_methods(out_module);
+
     // Generar funciones auxiliares de POO:
     //  - __new_<X>(args) por cada clase: encapsula findclass+newobj+ctor.
     //  - __module_init(): registra todas las clases via defclass+...
@@ -24763,6 +24766,12 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const ir::IrValueId this_vid = fn.new_value(ir::IrType::PTR, "%this");
         fn.values[this_vid].is_param = true;
         if (native_poo_) fn.values[this_vid].is_host_ptr = true;
+        // NS.6-ext: extension sobre una CLASE -> `this` es un objeto GC
+        // (host_ptr al payload, refrescable tras GC), no un buffer VM-stack.
+        if (ext_this_is_class_) {
+            fn.values[this_vid].is_host_ptr = true;
+            fn.values[this_vid].is_gc_object = true;
+        }
         fn.params.push_back(this_vid);
         bindings.emplace_back("this", this_vid);
 
@@ -24956,6 +24965,65 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         propagate_is_gc_object_through_phis(fn);
         out.add_function(std::move(fn));
         fn_ = nullptr;
+    }
+}
+
+// -----------------------------------------------------------------
+// NS.6-ext: baja los metodos de extension / impl como funciones libres
+// <clave_layout>__<metodo>.  Reusa la emision de lower_struct_methods via un
+// StructDecl temporal cuyo `name` es la clave del layout destino (mangled si
+// es importado).  El cuerpo ya lo tipo el checker (con current_struct_/
+// current_class_ correcto), asi que la emision es agnostica del kind salvo el
+// binding de `this` (parametrizado por ext_this_is_class_).
+// -----------------------------------------------------------------
+void Lowering::lower_extension_methods(ir::IrModule &out) {
+    for (auto &decl : mod_.decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src;
+        std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods = nullptr;
+        if (is_ext) {
+            auto *e = static_cast<ast::ExtensionDecl *>(decl.get());
+            target_src = e->target_type;
+            methods = &e->methods;
+        } else {
+            auto *im = static_cast<ast::ImplDecl *>(decl.get());
+            target_src = im->target_type;
+            methods = &im->methods;
+        }
+        // Resolver la clave del layout destino (misma logica que el checker).
+        std::string key;
+        bool is_class = false;
+        auto set_key = [&](const std::string &k) -> bool {
+            if (tc_.struct_layouts().count(k)) { key = k; is_class = false; return true; }
+            if (tc_.class_layouts().count(k)) { key = k; is_class = true; return true; }
+            return false;
+        };
+        if (!set_key(target_src)) {
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !set_key(mangled)) {
+                const Type rt = tc_.resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    set_key(rt.struct_name);
+            }
+        }
+        if (key.empty()) continue;
+        // StructDecl temporal: name = clave, methods = los de la extension
+        // (movidos temporalmente y devueltos al terminar).
+        ast::StructDecl tmp;
+        tmp.name = key;
+        tmp.methods = std::move(*methods);
+        const bool saved = ext_this_is_class_;
+        ext_this_is_class_ = is_class;
+        lower_struct_methods(&tmp, out);
+        ext_this_is_class_ = saved;
+        *methods = std::move(tmp.methods); // devolver para no invalidar el AST
     }
 }
 
@@ -28058,6 +28126,25 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // es el retbuf (PTR); para calls normales es dst.
     const ir::IrValueId visible_dst =
         method_call_sret ? v_method_call_retbuf : dst;
+
+    // NS.6-ext: metodo anyadido por una extension / impl -> dispatch ESTATICO
+    // (CALL directo a <defining_class>__<name>), NO CALLVIRT.  El label usa
+    // defining_class (la clave del layout, mangled si el tipo es importado).
+    // Correcto tambien cross-modulo: el metodo se emitio como funcion libre en
+    // el modulo de la extension y el linker resuelve el simbolo.
+    if (mtd->is_extension) {
+        ir::IrInstr ca{};
+        ca.op = ir::IrOp::CALL;
+        ca.type = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
+        ca.dst = method_call_sret ? ir::IR_NO_VALUE : dst;
+        ca.func_name = mtd->defining_class + "__" + mtd->name;
+        ca.operands.push_back(obj);
+        if (method_call_sret) ca.operands.push_back(v_method_call_retbuf);
+        for (const ir::IrValueId av : arg_vals) ca.operands.push_back(av);
+        ca.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ca));
+        return visible_dst;
+    }
 
     // -----------------------------------------------------------------
     // Devirtualizacion compile-time: si el tipo concreto del receptor

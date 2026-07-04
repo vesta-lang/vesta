@@ -1427,6 +1427,34 @@ CompileResult compile_vx_project(
             }
         }
 
+        // NS.6-ext: re-apendear los metodos de `extension`/`impl` que declararon
+        // los deps (directos + transitivos) al layout del tipo destino en este
+        // consumidor.  Asi `obj.metodo()` resuelve cross-modulo (dispatch
+        // estatico al mangled_label del .velb del dep).  Los layouts de los
+        // tipos importados ya estan registrados (import loop de arriba).
+        {
+            std::unordered_set<std::string> seen;
+            std::vector<std::string> queue;
+            for (const auto &req : imports)
+                if (seen.insert(req.module_name).second)
+                    queue.push_back(req.module_name);
+            for (size_t qi = 0; qi < queue.size(); ++qi) {
+                auto itd = by_name.find(queue[qi]);
+                if (itd == by_name.end()) continue;
+                for (const auto &de : work[itd->second].vxi.deps)
+                    if (seen.insert(de.name).second) queue.push_back(de.name);
+            }
+            for (const auto &mn : queue) {
+                auto itd = by_name.find(mn);
+                if (itd == by_name.end()) continue;
+                for (const auto &em : work[itd->second].vxi.ext_methods) {
+                    pm.tc->inject_imported_ext_method(
+                        em.target_key, em.target_is_class, em.name,
+                        em.return_type, em.param_types, em.mangled_label);
+                }
+            }
+        }
+
         if (!pm.tc->run()) {
             pm.ok = false;
             return;

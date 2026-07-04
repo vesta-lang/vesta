@@ -1,0 +1,25 @@
+// NS.6-ext: `extension Tipo { metodos }` anyade metodos a un tipo existente
+// (struct o clase), estilo Swift/C#.  Dispatch estatico (CALL directo,
+// inline-able).  Coherencia: colision de metodo+aridad = error de compilacion.
+struct Punto { i64 x; i64 y; }
+extension Punto {
+    i64 suma() { return this.x + this.y; }
+    i64 escala(i64 k) { return (this.x + this.y) * k; }
+}
+
+class Contador {
+    i64 n;
+    Contador(i64 v) { this.n = v; }
+    i64 get() { return this.n; }
+}
+extension Contador {
+    i64 doble() { return this.get() * 2; }
+}
+
+i64 main() {
+    Punto p = { .x = 15, .y = 5 };
+    Contador c = new Contador(6);
+    i64 r = p.suma() + p.escala(1) + c.doble();  // 20 + 20 + 12 = 52
+    println("r=${r}");
+    return r - 10;                                // 42
+}

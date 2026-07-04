@@ -87,6 +87,10 @@ enum class NodeKind : uint8_t {
                    ///< estilo NASM, AOT).
     ConceptDecl,   ///< @c concept Name<T> = pred; | { stmts } | { metodos }
                    ///< (constraints/bounds de genericos, #6; compile-time puro).
+    ExtensionDecl, ///< @c extension Tipo { metodos }  (NS.6-ext: anyade metodos
+                   ///< a un tipo existente; dispatch estatico directo).
+    ImplDecl,      ///< @c impl Concept for Tipo { metodos }  (NS.6-ext: implementa
+                   ///< un concept para un tipo; conformance estructural).
 
     // ----- Statements -----
     BlockStmt,
@@ -1624,6 +1628,39 @@ struct ConceptDecl : Node {
     std::vector<StructuralMethod> structural_methods;
     bool is_public = true;
     ConceptDecl() : Node(NodeKind::ConceptDecl) {}
+};
+
+/**
+ * @struct ExtensionDecl
+ * @brief NS.6-ext: @c "extension Tipo { metodos }".  anyade metodos a un tipo
+ * (struct o clase) ya declarado, posiblemente desde otro fichero/namespace
+ * (estilo Swift extension / C# extension methods).  Los metodos se APENDEAN al
+ * layout del tipo destino; el dispatch es ESTATICO (CALL directo a
+ * @c Tipo__metodo, inline-able, coste cero) -- no entran en la vtable.
+ * Coherencia (Vesta): permisivo (cualquier tipo, local o foraneo); error duro
+ * solo en la colision real de un metodo+aridad ya existente en el tipo.
+ */
+struct ExtensionDecl : Node {
+    std::string target_type; ///< nombre del tipo a extender (struct o clase)
+    std::vector<std::unique_ptr<ClassMethodDecl>> methods;
+    bool is_public = true;
+    ExtensionDecl() : Node(NodeKind::ExtensionDecl) {}
+};
+
+/**
+ * @struct ImplDecl
+ * @brief NS.6-ext: @c "impl Concept for Tipo { metodos }".  Implementa un
+ * @c concept para un tipo anyadiendo los metodos requeridos (estilo Rust impl).
+ * Como los concepts de Vesta son PREDICADOS comptime estructurales (cero
+ * codigo), un @c impl es identico a una @c extension mas la VALIDACION de que
+ * el tipo satisface el concept tras anyadir los metodos.
+ */
+struct ImplDecl : Node {
+    std::string concept_name; ///< concept que se implementa
+    std::string target_type;  ///< tipo para el que se implementa
+    std::vector<std::unique_ptr<ClassMethodDecl>> methods;
+    bool is_public = true;
+    ImplDecl() : Node(NodeKind::ImplDecl) {}
 };
 
 /**

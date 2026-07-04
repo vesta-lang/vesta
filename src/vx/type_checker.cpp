@@ -2952,6 +2952,113 @@ void TypeChecker::collect_globals() {
         }
     }
 
+    // NS.6-ext: APENDEAR los metodos de `extension Tipo { ... }` e
+    // `impl Concept for Tipo { ... }` al layout del tipo destino (struct o
+    // clase, LOCAL o IMPORTADO -- ambos viven en struct_layouts_/class_layouts_).
+    // Dispatch ESTATICO: los metodos son CALL directos a `<clave>__metodo`
+    // (defining_class = la clave del layout, mangled si es importado).  Cross-
+    // modulo: el tipo importado ya tiene su layout via .vxi, y el metodo se
+    // emite como funcion libre en ESTE modulo.  Coherencia (Vesta): permisivo;
+    // error duro solo en la colision real (mismo nombre+aridad ya presente).
+    for (const auto &decl : mod_.decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src, concept_name;
+        const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods =
+            nullptr;
+        if (is_ext) {
+            auto *e = static_cast<const ast::ExtensionDecl *>(decl.get());
+            target_src = e->target_type;
+            methods = &e->methods;
+        } else {
+            auto *im = static_cast<const ast::ImplDecl *>(decl.get());
+            target_src = im->target_type;
+            concept_name = im->concept_name;
+            methods = &im->methods;
+        }
+        // Resolver el nombre destino a la clave del layout (directo o via
+        // resolve_type_string para tipos importados/cualificados).
+        std::string key;
+        std::vector<ClassMethodInfo> *dst = nullptr;
+        bool is_class_target = false;
+        auto try_key = [&](const std::string &k) -> bool {
+            auto sit = struct_layouts_.find(k);
+            if (sit != struct_layouts_.end()) {
+                key = k;
+                dst = &sit->second.methods;
+                is_class_target = false;
+                return true;
+            }
+            auto cit = class_layouts_.find(k);
+            if (cit != class_layouts_.end()) {
+                key = k;
+                dst = &cit->second.methods;
+                is_class_target = true;
+                return true;
+            }
+            return false;
+        };
+        if (!try_key(target_src)) {
+            // Nombre cualificado `mod.Tipo` -> clave mangled `mod__Tipo`.
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !try_key(mangled)) {
+                const Type rt = resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    try_key(rt.struct_name);
+            }
+        }
+        if (!dst) {
+            diags_.error(decl->loc,
+                         std::string(is_impl ? "impl" : "extension") +
+                             " sobre un tipo desconocido: '" + target_src + "'");
+            continue;
+        }
+        for (const auto &m_uptr : *methods) {
+            auto *m = m_uptr.get();
+            if (!m) continue;
+            if (!m->method_type_params.empty()) continue; // template: on-use
+            bool collision = false;
+            for (const auto &ex : *dst) {
+                if (ex.name == m->name &&
+                    ex.param_types.size() == m->params.size()) {
+                    collision = true;
+                    break;
+                }
+            }
+            if (collision) {
+                diags_.error(m->loc, "el metodo '" + m->name + "' (aridad " +
+                                         std::to_string(m->params.size()) +
+                                         ") ya existe en el tipo '" + key +
+                                         "'; una extension/impl no puede "
+                                         "redefinirlo");
+                continue;
+            }
+            ClassMethodInfo mi;
+            mi.name = m->name;
+            mi.defining_class = key; // label = <key>__<name>
+            mi.is_extension = true;
+            mi.source_file = m->loc.file;
+            mi.source_line = m->loc.line;
+            mi.return_type = m->return_type
+                                 ? type_from_node(m->return_type.get())
+                                 : Type{PrimitiveKind::VOID};
+            mi.param_types.reserve(m->params.size());
+            for (const auto &p : m->params)
+                mi.param_types.push_back(type_from_node(p->type.get()));
+            if (is_class_target)
+                mi.vtable_index = static_cast<uint32_t>(dst->size());
+            dst->push_back(std::move(mi));
+        }
+        if (is_impl && !concept_name.empty())
+            impl_conformances_[key].insert(concept_name);
+    }
+
     // Fase 2b ownership: destructibilidad de STRUCTS (value-types).  Se computa
     // ANTES que la de clases para que una clase con un campo struct destructible
     // lo vea (incluido el dtor SINTETIZADO de un struct con composicion).  Un
@@ -3680,6 +3787,70 @@ void TypeChecker::check_functions() {
             check_struct_method(lay, m.get());
         }
         current_struct_ = saved_struct;
+    }
+
+    // NS.6-ext: chequear los cuerpos de los metodos de extension / impl.
+    // Enrutar por check_struct_method / check_class_method con el
+    // current_struct_/current_class_ = clave del layout destino (asi `this`
+    // se tipa correcto y el rewrite implicit-this funciona).
+    for (auto &decl : mod_.decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src;
+        std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods = nullptr;
+        if (is_ext) {
+            auto *e = static_cast<ast::ExtensionDecl *>(decl.get());
+            target_src = e->target_type;
+            methods = &e->methods;
+        } else {
+            auto *im = static_cast<ast::ImplDecl *>(decl.get());
+            target_src = im->target_type;
+            methods = &im->methods;
+        }
+        // Resolver la clave del layout (directo o via resolve_type_string).
+        std::string key;
+        bool is_class_target = false;
+        auto find_key = [&](const std::string &k) -> bool {
+            if (struct_layouts_.count(k)) { key = k; is_class_target = false; return true; }
+            if (class_layouts_.count(k)) { key = k; is_class_target = true; return true; }
+            return false;
+        };
+        if (!find_key(target_src)) {
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !find_key(mangled)) {
+                const Type rt = resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    find_key(rt.struct_name);
+            }
+        }
+        if (key.empty()) continue;
+        if (!is_class_target) {
+            auto it = struct_layouts_.find(key);
+            const std::string saved = current_struct_;
+            current_struct_ = key;
+            for (auto &m : *methods) {
+                if (!m || !m->body) continue;
+                if (!m->method_type_params.empty()) continue;
+                check_struct_method(it->second, m.get());
+            }
+            current_struct_ = saved;
+        } else {
+            auto it = class_layouts_.find(key);
+            const std::string saved = current_class_;
+            current_class_ = key;
+            for (auto &m : *methods) {
+                if (!m || !m->body) continue;
+                if (!m->method_type_params.empty()) continue;
+                check_class_method(it->second, m.get());
+            }
+            current_class_ = saved;
+        }
     }
 
     // #4: drenar las monomorphizaciones de metodos genericos encoladas

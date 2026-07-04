@@ -317,6 +317,36 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
 // Phase M.7: registrar un namespace importado.  Devuelve el indice
 // asignado.  El namespace se declara como Symbol::Namespace al inicio
 // de run() (via la cola pending_imported_ns_names_).
+void TypeChecker::inject_imported_ext_method(
+    const std::string &target_key, bool target_is_class,
+    const std::string &name, const std::string &return_type_str,
+    const std::vector<std::string> &param_strs,
+    const std::string &mangled_label) {
+    std::vector<ClassMethodInfo> *dst = nullptr;
+    if (target_is_class) {
+        auto it = class_layouts_.find(target_key);
+        if (it != class_layouts_.end()) dst = &it->second.methods;
+    } else {
+        auto it = struct_layouts_.find(target_key);
+        if (it != struct_layouts_.end()) dst = &it->second.methods;
+    }
+    if (!dst) return; // el tipo destino no esta cargado -> silencioso
+    // Dedup: si ya existe (mismo nombre+aridad), no re-apendear.
+    for (const auto &ex : *dst)
+        if (ex.name == name && ex.param_types.size() == param_strs.size())
+            return;
+    ClassMethodInfo mi;
+    mi.name = name;
+    mi.defining_class = target_key; // label = target_key__name
+    mi.is_extension = true;
+    mi.return_type = resolve_type_string(return_type_str);
+    for (const auto &ps : param_strs)
+        mi.param_types.push_back(resolve_type_string(ps));
+    if (target_is_class) mi.vtable_index = static_cast<uint32_t>(dst->size());
+    (void)mangled_label; // el label se deriva de defining_class + name
+    dst->push_back(std::move(mi));
+}
+
 uint32_t
 TypeChecker::register_imported_namespace(const std::string &local_name,
                                          const std::string &module_name) {
@@ -921,6 +951,66 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             }
         }
         out.generic_templates.push_back(std::move(g));
+    }
+
+    // NS.6-ext: exportar los metodos de `extension`/`impl` de ESTE modulo para
+    // que un consumidor los re-apendee al layout del tipo destino (dispatch
+    // estatico al mangled_label, que vive en el .velb de este modulo).
+    for (const auto &decl : tc.ast_module().decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src;
+        if (is_ext)
+            target_src =
+                static_cast<const ast::ExtensionDecl *>(decl.get())->target_type;
+        else
+            target_src =
+                static_cast<const ast::ImplDecl *>(decl.get())->target_type;
+        // Resolver la clave del layout (directo / mangled / resolve_type_string).
+        std::string key;
+        bool is_class = false;
+        const std::vector<ClassMethodInfo> *layout_methods = nullptr;
+        auto set_key = [&](const std::string &k) -> bool {
+            auto sit = tc.struct_layouts().find(k);
+            if (sit != tc.struct_layouts().end()) {
+                key = k; is_class = false; layout_methods = &sit->second.methods;
+                return true;
+            }
+            auto cit = tc.class_layouts().find(k);
+            if (cit != tc.class_layouts().end()) {
+                key = k; is_class = true; layout_methods = &cit->second.methods;
+                return true;
+            }
+            return false;
+        };
+        if (!set_key(target_src)) {
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !set_key(mangled)) {
+                const Type rt = tc.resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    set_key(rt.struct_name);
+            }
+        }
+        if (!layout_methods) continue;
+        for (const auto &mi : *layout_methods) {
+            if (!mi.is_extension) continue;
+            if (mi.defining_class != key) continue;
+            VxiModule::ExtMethod em;
+            em.target_key = key;
+            em.name = mi.name;
+            em.return_type = canonical_typename_of(mi.return_type);
+            em.mangled_label = key + "__" + mi.name;
+            em.target_is_class = is_class;
+            for (const auto &pt : mi.param_types)
+                em.param_types.push_back(canonical_typename_of(pt));
+            out.ext_methods.push_back(std::move(em));
+        }
     }
 }
 

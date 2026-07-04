@@ -314,6 +314,15 @@ class Parser {
     /// Precondicion: @c current_ es el identificador contextual @c concept.
     std::unique_ptr<ast::ConceptDecl> parse_concept_decl();
 
+    /// @brief NS.6-ext: @c "extension Tipo { metodos }".
+    std::unique_ptr<ast::ExtensionDecl> parse_extension_decl();
+    /// @brief NS.6-ext: @c "impl Concept for Tipo { metodos }".
+    std::unique_ptr<ast::ImplDecl> parse_impl_decl();
+    /// @brief NS.6-ext: parsea UN metodo de instancia (return name(params) body)
+    /// para el cuerpo de una extension/impl.  @p target_tparams son los type
+    /// params del tipo destino (para reconocer casts).  nullptr si error.
+    std::unique_ptr<ast::ClassMethodDecl> parse_extension_method(uint8_t access);
+
     /// @brief Registra @p names como type-aliases temporales para que
     /// `(T)x` se reconozca como cast dentro de un body generico (los
     /// type-params del struct/clase contenedor y del metodo no son
