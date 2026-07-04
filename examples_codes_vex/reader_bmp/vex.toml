@@ -1,0 +1,38 @@
+[package]
+name        = "reader_bmp"
+version     = "1.0.0"
+authors     = ["VestaVM team"]
+license     = "MIT"
+edition     = 1
+
+[capabilities]
+# Lee el fichero BMP via vex_fileio (kernel32 en Windows, libc en POSIX)
+# y parsea el flag -r WxH via el plugin nativo vesta_io.  Sin escritura ni red.
+declared = ["fs:read", "ffi:call=kernel32.dll", "ffi:call=libc.so.6"]
+
+# Sin dependencias externas: usa la stdlib (vex_fileio) y builtins del lenguaje.
+[dependencies]
+
+[scripts]
+# Build hiper-sencillo: compila la version MODULAR (main.vex importa bmp.vex
+# + vex_fileio) a reader_bmp.velb.  Un solo comando: `vesta pkg run build`.
+build = "vesta --vex main.vex -o reader_bmp"
+
+# Ejecuta el .velb sobre la imagen de ejemplo sin padding (60x3).  El `--`
+# separa los argumentos del programa de los flags de la VM.
+run   = "vesta --run reader_bmp.velb -- Ejemplo60x3.bmp"
+
+# Igual pero sobre la imagen con padding de fila (3x60), para validar el
+# manejo del padding a multiplo de 4 bytes por fila.
+run-padded = "vesta --run reader_bmp.velb -- Ejemplo3x60.bmp"
+
+# Ejecuta mostrando estadisticas (instrucciones, MIPS, GC).
+stats = "vesta --run reader_bmp.velb --stats -- Ejemplo60x3.bmp"
+
+# Ejecuta con el JIT activo (path vreg de produccion).
+jit   = "vesta --run reader_bmp.velb -m jit -- Ejemplo60x3.bmp"
+
+# Compilacion nativa AOT (PE en Windows / ELF en Linux) de la variante
+# single-file, que SI compila a nativo.  La version MODULAR aun no compila a
+# AOT por BUG-5 (metodos de clase cross-modulo) -- ver BUGS_LIMITACIONES.md.
+aot   = "vesta -m aot --vex reader_bmp.vex -o reader_bmp_native --emit exe"
