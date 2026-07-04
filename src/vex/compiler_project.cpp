@@ -619,12 +619,20 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
     return levels;
 }
 
-CompileResult compile_vex_project(const std::string &root_path,
-                                  const CompileOptions &opts) {
+CompileResult compile_vex_project(
+    const std::string &root_path, const CompileOptions &opts,
+    const std::unordered_map<std::string, std::string> *source_overlay) {
     CompileResult res;
 
     // 1. Construir el dep graph + topo sort.
     ModuleGraph graph(res.diagnostics);
+    // LSP: overlay del buffer en memoria (root con ediciones sin guardar).  Se
+    // aplica ANTES de build_from_root para que la lectura del root use el texto
+    // inyectado en vez del disco; los imports se siguen leyendo del disco.
+    if (source_overlay) {
+        for (const auto &kv : *source_overlay)
+            graph.set_source_overlay(kv.first, kv.second);
+    }
     // Permitir override del directorio de busqueda via env var VEX_PATH.
     graph.add_vex_path_env();
     // Cablear el directorio de la stdlib Vex (stdlib/vex).  Permite que

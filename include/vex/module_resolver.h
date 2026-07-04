@@ -147,6 +147,22 @@ class ModuleGraph {
     void set_stdlib_dir(const std::string &dir);
 
     /**
+     * @brief Inyecta el texto de un fichero en memoria (overlay), en vez de
+     *        leerlo del disco.
+     *
+     * Usado por el LSP: el buffer del editor (con ediciones sin guardar) se
+     * pasa como overlay del fichero raiz, mientras las dependencias (imports)
+     * se siguen leyendo del disco.  Asi el analisis multi-modulo refleja el
+     * buffer actual y resuelve los imports a la vez.  La clave se normaliza
+     * igual que los paths canonicos del graph, asi que basta pasar el mismo
+     * path que se le da a @c build_from_root .
+     *
+     * @param path Path del fichero (se normaliza internamente).
+     * @param text Contenido a usar en lugar del disco.
+     */
+    void set_source_overlay(const std::string &path, const std::string &text);
+
+    /**
      * @brief Resuelve el path de un import respecto al fichero importador.
      *
      * @param raw_path Path tal como aparece en @c import "path";
@@ -227,6 +243,9 @@ class ModuleGraph {
     std::unordered_map<uint64_t, uint32_t> by_path_hash_;
     std::vector<std::string> search_paths_;
     std::string stdlib_dir_;
+    /// Overlay LSP: path canonico -> texto en memoria (buffer del editor).
+    /// @c read_file_ lo consulta antes de leer el disco.
+    std::unordered_map<std::string, std::string> source_overlay_;
     bool cycle_detected_ = false;
 };
 

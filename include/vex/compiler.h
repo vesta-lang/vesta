@@ -28,6 +28,7 @@
 #define VEX_COMPILER_H
 
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -448,10 +449,15 @@ CompileResult compile_vex_source(const std::string &source,
  *
  * @param root_path Path absoluto o relativo del @c .vex raiz.
  * @param opts      Opciones de compilacion.
+ * @param source_overlay Opcional: mapa path->texto en memoria (overlay).  Usado
+ *        por el LSP para analizar el buffer del editor (root) resolviendo los
+ *        imports del disco.  @c nullptr => todo del disco (ruta normal).
  * @return CompileResult con el @c .vel mergeado + diagnostics.
  */
-CompileResult compile_vex_project(const std::string &root_path,
-                                  const CompileOptions &opts = {});
+CompileResult compile_vex_project(
+    const std::string &root_path, const CompileOptions &opts = {},
+    const std::unordered_map<std::string, std::string> *source_overlay =
+        nullptr);
 
 /**
  * @brief Detecta si el source @c .vex contiene @c import declaraciones

@@ -85,6 +85,14 @@ bool ModuleGraph::is_absolute_(const std::string &path) noexcept {
 // ---------------------------------------------------------------------------
 // Lectura de fichero a string.  Lee binary-safe.  Devuelve false en error.
 // ---------------------------------------------------------------------------
+void ModuleGraph::set_source_overlay(const std::string &path,
+                                     const std::string &text) {
+    // Normalizar igual que los paths canonicos (build_from_root usa
+    // normalize_path_(root_file, "")), asi la clave del overlay coincide con
+    // el @c canonical_path que llega a read_file_.
+    source_overlay_[normalize_path_(path, "")] = text;
+}
+
 bool ModuleGraph::read_file_(const std::string &path, std::string &out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) return false;
@@ -239,9 +247,19 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
         return it->second;
     }
 
-    // Leer fichero.
+    // Leer fichero.  Overlay LSP: si hay texto inyectado en memoria para este
+    // path (buffer del editor con ediciones sin guardar), usarlo en vez del
+    // disco.  read_file_ es static, asi que el overlay se resuelve aqui.
     std::string source;
-    if (!read_file_(canonical_path, source)) {
+    bool got_source = false;
+    if (!source_overlay_.empty()) {
+        auto ov = source_overlay_.find(canonical_path);
+        if (ov != source_overlay_.end()) {
+            source = ov->second;
+            got_source = true;
+        }
+    }
+    if (!got_source && !read_file_(canonical_path, source)) {
         SourceLoc l;
         l.file = canonical_path;
         diags_.error(l, "no se pudo leer el modulo: '" + canonical_path + "'");

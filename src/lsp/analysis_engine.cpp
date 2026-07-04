@@ -25,11 +25,15 @@
 #include "lsp/analysis_engine.h"
 
 #include <exception>
+#include <fstream>
+#include <unordered_map>
 
 #include "analyze/bigo.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
+#include "lsp/symbol_index.h" // uri_to_fs_path (multi-modulo)
 #include "vex/ast.h"
+#include "vex/compiler.h" // compile_vex_project (multi-modulo)
 #include "vex/diagnostic.h"
 #include "vex/lexer.h"
 #include "vex/parser.h"
@@ -260,7 +264,24 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // su ubicacion, para que el hover y el inspector los muestren.  Coste
         // bajo (un vector pequeno) y solo en el analisis del LSP.
         opts.dump_comptime_values = true;
-        analysis->result = vex::compile_vex_source(text, uri, opts);
+        // Multi-modulo: si el buffer tiene `import "..."`, compilar el PROYECTO
+        // (resuelve los imports del disco) usando el buffer como overlay del
+        // root.  Sin esto el analisis single-file reporta "nombre no declarado"
+        // para cualquier simbolo de un modulo importado (serial/fb/... de un
+        // programa multi-fichero).  El fs_path se deriva del uri file://.
+        const std::string fs_path = uri_to_fs_path(uri);
+        const bool has_imports =
+            (text.find("import \"") != std::string::npos ||
+             text.find("import\t\"") != std::string::npos);
+        const bool file_on_disk =
+            !fs_path.empty() && std::ifstream(fs_path).good();
+        if (has_imports && file_on_disk) {
+            std::unordered_map<std::string, std::string> overlay;
+            overlay[fs_path] = text;
+            analysis->result = vex::compile_vex_project(fs_path, opts, &overlay);
+        } else {
+            analysis->result = vex::compile_vex_source(text, uri, opts);
+        }
         // Enganchar (best-effort) el warning de discrepancia de @complexity y
         // cachear el coste/complejidad para el hover.
         attach_complexity_warnings(analysis->result, uri, analysis->cost);
