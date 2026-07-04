@@ -11,7 +11,7 @@
  *
  * Funciones puras (modulo el resolver de structs) sin estado global.  La
  * recursion sobre campos de struct lleva un limite de profundidad defensivo:
- * los structs Vex no pueden contenerse a si mismos por valor (tamano infinito,
+ * los structs Vesta no pueden contenerse a si mismos por valor (tamano infinito,
  * el type checker ya lo rechazaria), pero acotamos por si el resolver
  * devolviera un ciclo por error.
  */

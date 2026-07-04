@@ -1,12 +1,12 @@
 /**
  * @file native_callback.cpp
- * @brief Resolucion de callbacks Vex -> C nativos.
+ * @brief Resolucion de callbacks Vesta -> C nativos.
  *
  * Sprint B.1 (2026-06-01): version inicial via thunk hand-emitted que
- * adaptaba la convencion C nativa -> VM_ABI -> codigo JIT de la fn Vex,
+ * adaptaba la convencion C nativa -> VM_ABI -> codigo JIT de la fn Vesta,
  * salvando/restaurando los 16 registros VM en cada invocacion.
  *
- * callback-ABI (2026-06-06): el thunk se ELIMINA.  En su lugar la fn Vex
+ * callback-ABI (2026-06-06): el thunk se ELIMINA.  En su lugar la fn Vesta
  * se compila DIRECTAMENTE con un entry de ABI C nativo (modo callback del
  * selector, ver @c jit::compile_native_callback).  El prologo nativo lee
  * @c ProcessVM* via TLS/call y mueve los args nativos a los slots de los
@@ -41,7 +41,7 @@
 #include <cpuid.h> // __get_cpuid / __get_cpuid_count (CPU dispatch)
 #endif
 
-/* Wrapper extern "C" para que el builtin Vex `as_native_callback(fn)` lo
+/* Wrapper extern "C" para que el builtin Vesta `as_native_callback(fn)` lo
  * invoque via CALLN.  Args en proc->registers.regs[R01]=fn_pc, R02=argc.
  * Retorno en proc->registers.regs[R00] = direccion host del codigo callback.
  *

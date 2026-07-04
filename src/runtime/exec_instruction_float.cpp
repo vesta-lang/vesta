@@ -873,7 +873,7 @@ void exec_instr_fcmp(ProcessVM *vm, const DecodedInstr &instr) {
 
     /* Sprint edge-bugs (2026-06-02): semantica IEEE 754 correcta para
      * unordered (NaN).  Antes el codigo emulaba x86 UCOMISD que setea
-     * ZF=1 para unordered (junto con PF=1) -- pero Vex no expone PF,
+     * ZF=1 para unordered (junto con PF=1) -- pero Vesta no expone PF,
      * asi que el frontend trataba "NaN == NaN" como TRUE (ZF=1 -> je
      * salta a then).
      *

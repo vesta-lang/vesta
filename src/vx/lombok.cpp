@@ -33,7 +33,7 @@
  *   - @Log (clase) -> field static logger (placeholder; usa vio_print)
  *
  * @NonNull se traduce a la palabra reservada @c nonnull del lenguaje
- * Vex, que el TypeChecker ya valida en compile-time (rechazo de null
+ * Vesta, que el TypeChecker ya valida en compile-time (rechazo de null
  * literal + warning si el value source no es probadamente non-null).
  * Esto evita el overhead de un check runtime cuando el flujo de tipos
  * es estatico.

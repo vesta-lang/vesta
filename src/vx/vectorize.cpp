@@ -12,7 +12,7 @@
 
 /**
  * @file vectorize.cpp
- * @brief Auto-vectorizacion del frontend Vex.
+ * @brief Auto-vectorizacion del frontend Vesta.
  *
  * Reconocimiento de idiomas de bucle (de momento la COPIA de elementos
  * `dst[i] = src[i]` en su forma @c while y @c for) y su bajada a operaciones

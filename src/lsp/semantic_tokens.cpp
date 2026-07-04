@@ -12,10 +12,10 @@
 
 /**
  * @file semantic_tokens.cpp
- * @brief Implementacion del resaltado semantico del LSP de Vex.
+ * @brief Implementacion del resaltado semantico del LSP de Vesta.
  *
  * Estrategia general:
- *  1. LEXAR el fuente con el lexer de Vex y, por cada token, emitir un
+ *  1. LEXAR el fuente con el lexer de Vesta y, por cada token, emitir un
  *     "token absoluto" (linea 0-based, caracter UTF-16 0-based, longitud
  *     UTF-16, tipo, modificadores).  Los identificadores se enriquecen
  *     consultando los sets de nombres declarados del @c DocAnalysis.
@@ -164,7 +164,7 @@ class PositionIndex {
 };
 
 /**
- * @brief Indica si un TokenKind es un tipo primitivo de Vex.
+ * @brief Indica si un TokenKind es un tipo primitivo de Vesta.
  *
  * Cubre i8..i64, u8..u64, los alias int*_t/uint*_t, f32/f64/float/double,
  * bool/char/void/string.  Las colecciones builtin (ArrayList, HashMap, ...)
@@ -283,7 +283,7 @@ bool is_operator(vx::TokenKind k) {
 }
 
 /**
- * @brief Indica si @p name es un keyword CONTEXTUAL de Vex.
+ * @brief Indica si @p name es un keyword CONTEXTUAL de Vesta.
  *
  * El lexer emite estos nombres como IDENTIFIER (no hay un KW_* dedicado)
  * porque su caracter de palabra reservada depende del contexto
@@ -319,7 +319,7 @@ bool is_contextual_keyword(const std::string &name) {
 }
 
 /**
- * @brief Indica si @p name es un builtin/intrinseco de Vex.
+ * @brief Indica si @p name es un builtin/intrinseco de Vesta.
  *
  * Los builtins son IDENTIFIER que el frontend reconoce por nombre: o bien
  * registrados en el type checker (@c reg_builtin en
@@ -686,7 +686,7 @@ void emit_span_by_lines(const std::string &src, const PositionIndex &idx,
  *
  * Scanner ligero, robusto, que respeta el contexto de string/char para no
  * confundir un // dentro de una cadena con un comentario.  No intenta
- * interpretar la semantica de Vex; solo reconoce:
+ * interpretar la semantica de Vesta; solo reconoce:
  *   - @c "..." y @c '...' (con escape @c \\) para SALTARLOS.
  *   - @c r"..." se trata como string normal a efectos de salto (el prefijo
  *     @c r se consume como identificador antes; aqui solo importa la comilla).
@@ -1078,7 +1078,7 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
                     break;
                 }
             } else {
-                // Reglas normales de Vex.
+                // Reglas normales de Vesta.
                 switch (tok.kind) {
                 case TK::STRING_LIT:
                 case TK::RAW_STRING_LIT:

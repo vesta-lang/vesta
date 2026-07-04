@@ -1160,7 +1160,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
      * (raros), el overhead es relativo pero absoluto despreciable. */
     /* La emision per-block se hace MAS ABAJO, en el inicio del loop
      * de blocks (linea ~547).  El prologue NO necesita counter porque
-     * no representa work del programa Vex; solo setup. */
+     * no representa work del programa Vesta; solo setup. */
 
     /* preservar regs callee-saved usados por regalloc.
      * Conteo PAR garantizado por @c compute_jit_regalloc para que el
@@ -1650,7 +1650,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                  * Sprint JIT-cross-fn 2026-06-01: necesario para
                  * `as_native_callback(fn)` builtin (B.1) y para
                  * cualquier funcion que necesite el PC virtual
-                 * de otra fn Vex como valor (passing fn por valor,
+                 * de otra fn Vesta como valor (passing fn por valor,
                  * trampolines, registro de handlers, etc.).
                  *
                  * El nombre del label vive en @c ins.func_name.
@@ -5930,7 +5930,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                             const std::string &dst = args[0];
                             const std::string &src = args[1];
 
-                            /* Placeholders del frontend Vex: {dst} y {srcN}
+                            /* Placeholders del frontend Vesta: {dst} y {srcN}
                              * referencian SSA values del IR instruction.
                              * {dst}  -> slot SSA del ins.dst (en frame nativo)
                              * {srcN} -> slot SSA de ins.operands[N]
@@ -7021,7 +7021,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                          * ==================================================
                          * Variante del handler `gchandle rN, rM` ya existente
                          * que acepta {dst}/{srcN} en lugar de VMregs.  Usado
-                         * cuando el frontend Vex emite la version multi-linea
+                         * cuando el frontend Vesta emite la version multi-linea
                          * (synchronized prologue: comment + gchandle +
                          * monenter).
                          *
@@ -8200,7 +8200,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
 
         /* Si el IrBlock no termina con RET/BR/BR_COND explicito y
          * tiene un sucesor unico, agregar fallthrough JMP.  En
-         * general el IR Vex ya garantiza terminator, pero el v1
+         * general el IR Vesta ya garantiza terminator, pero el v1
          * es defensivo. */
         if (!ir_block.instrs.empty()) {
             const auto last_op = ir_block.instrs.back().op;

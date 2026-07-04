@@ -992,7 +992,7 @@ exit_error:
     // Usa pattern.opcode para codegen
     auto instr =
         std::make_unique<Instruction>(pattern.opcode, std::move(operands));
-    // Captura la linea fuente Vex del marcador `// @line N` mas
+    // Captura la linea fuente Vesta del marcador `// @line N` mas
     // reciente (rellenado por el lexer en skip_whitespace).  Esto
     // se usa luego por el bytecode emitter para registrar el par
     // (byte_offset, source_line) en la tabla debug del linker.

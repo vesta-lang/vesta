@@ -306,7 +306,7 @@ std::string fmt_expr_brief(const ast::Expr *e, int depth) {
 std::string fmt_expr(const ast::Expr *e) {
     // Sin truncamiento ni limite de profundidad: el usuario pidio
     // explicitamente que no se omita ninguna informacion.  Los AST
-    // de Vex son DAGs (no ciclicos) asi que no hay riesgo de
+    // de Vesta son DAGs (no ciclicos) asi que no hay riesgo de
     // recursion infinita; usamos un cap alto (32) por defensa
     // contra patrones patologicos no anticipados.
     return fmt_expr_brief(e, 32);
@@ -393,11 +393,11 @@ size_t count_stmts(const ast::Stmt *s) {
 }
 
 // =====================================================================
-//  GENERADOR 1: AST Vex -> Mermaid
+//  GENERADOR 1: AST Vesta -> Mermaid
 // =====================================================================
 
 /**
- * @brief Renderiza el AST de un modulo Vex completo.
+ * @brief Renderiza el AST de un modulo Vesta completo.
  *
  * Topologia del diagrama:
  *   - Module nodo raiz.
@@ -1618,7 +1618,7 @@ bool is_call_mnemonic(const std::string &mn) {
 std::string mermaid_from_ast(const ast::ModuleNode &mod) {
     std::ostringstream os;
     os << "```mermaid\n";
-    os << "%% Diagrama AST Vex generado por VestaVM\n";
+    os << "%% Diagrama AST Vesta generado por VestaVM\n";
     os << "%% Cada nodo lleva la info relevante para debug:\n";
     os << "%%   funciones: nombre, return type, conteo de stmts del body\n";
     os << "%%   clases:    super, interfaces, fields, metodos con "
@@ -1786,7 +1786,7 @@ std::string mermaid_from_ir_module(const ir::IrModule &mod,
 std::string mermaid_from_vel_text(const std::string &vel_text) {
     std::ostringstream os;
     os << "```mermaid\n";
-    os << "%% Diagrama bytecode .vel (output final del frontend Vex)\n";
+    os << "%% Diagrama bytecode .vel (output final del frontend Vesta)\n";
     os << "%% Cada nodo = un label del .vel (bloque basico).\n";
     os << "%% Edges:\n";
     os << "%%   solid                = jmp incondicional al label\n";

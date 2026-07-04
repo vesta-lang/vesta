@@ -12,7 +12,7 @@
 
 /**
  * @file lsp_main.cpp
- * @brief Punto de entrada del servidor LSP de Vex (binario @c vesta_lsp).
+ * @brief Punto de entrada del servidor LSP de Vesta (binario @c vesta_lsp).
  *
  * Habla Language Server Protocol por stdio.  El editor lanza este proceso
  * y se comunica con el via stdin/stdout (JSON-RPC enmarcado por

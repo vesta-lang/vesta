@@ -641,7 +641,7 @@ struct Lowerer {
         /* (offset_rsp, loc, is_fp): is_fp -> store por MOVSD. */
         std::vector<std::tuple<int32_t, MOperand, bool>> smoves;
         /* G = nº de GP-stack-args (overflow GP).  Los FP-stack van DESPUES en
-         * la convencion Vex-interna -> [base+(G+(fi-fmax))*8].  Espejo de la
+         * la convencion Vesta-interna -> [base+(G+(fi-fmax))*8].  Espejo de la
          * carga del callee en vreg_select. */
         uint32_t G = 0;
         for (const auto &pa : pending_args)

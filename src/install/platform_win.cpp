@@ -239,7 +239,7 @@ static bool is_build_garbage(const std::filesystem::path &p) {
         ext == ".pdb" || ext == ".ilk" || ext == ".d" || ext == ".rsp" ||
         ext == ".cmake")
         return true;
-    // Intermediarios del frontend Vex (debug-only).  El usuario final
+    // Intermediarios del frontend Vesta (debug-only).  El usuario final
     // no necesita: .ir (SSA dump), .velb-map (debug map del linker).
     // Conservamos .vex (source), .vel (assembly), .velb (ejecutable).
     if (ext == ".ir") return true;

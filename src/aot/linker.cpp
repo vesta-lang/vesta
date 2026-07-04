@@ -24,7 +24,7 @@
 
 #include "aot/aot_native.h"  // aot_make_start_stub, AotArch
 #include "aot/ar_archive.h"  // Phase AOT.5: lector de archivos estaticos .a
-#include "aot/link_script.h" // Phase AOT.5: link-script Vex (configurable)
+#include "aot/link_script.h" // Phase AOT.5: link-script Vesta (configurable)
 
 #include <cstdint>
 #include <cstdio>  // std::snprintf (cabeceras ar)
@@ -1120,7 +1120,7 @@ bool aot_link(const std::vector<std::string> &inputs,
         }
     }
 
-    // 2.5. Link-script Vex (configurable por el usuario): ejecuta fn link()
+    // 2.5. Link-script Vesta (configurable por el usuario): ejecuta fn link()
     //      con los builtins de configuracion.  Da los tamanos de seccion ya
     //      fusionados a section_size().  Lo que fije (base/entry/stack) se
     //      aplica abajo; los CLI flags (--link-base/--entry) tienen prioridad.
@@ -1161,7 +1161,7 @@ bool aot_link(const std::vector<std::string> &inputs,
     // recolectan APARTE (no en globals: cada .o tiene su propio init con su
     // mismo nombre -> no es una definicion multiple) y el linker los ejecuta
     // TODOS antes de main (en orden cpu -> memcpy -> strdisp, porque memcpy/
-    // strdisp leen el global de features que cpu_init escribe).  Asi un .o Vex
+    // strdisp leen el global de features que cpu_init escribe).  Asi un .o Vesta
     // SIN main (libreria que usa strings/memcpy) tambien inicializa sus slots.
     std::vector<std::pair<int, uint64_t>> init_cpu, init_memcpy, init_strdisp;
     for (size_t oi = 0; oi < objs.size(); ++oi) {

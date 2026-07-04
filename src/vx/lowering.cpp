@@ -12,7 +12,7 @@
 
 /**
  * @file lowering.cpp
- * @brief Implementacion del pase AST -> ir::IrModule de Vex.
+ * @brief Implementacion del pase AST -> ir::IrModule de Vesta.
  */
 
 #include "vx/lowering.h"
@@ -480,7 +480,7 @@ bool asmblk_is_register(const std::string &w) {
 }
 
 /// @brief Ensambla un bloque @c asm.  @p sym_refs (opcional) recibe las
-/// referencias a SiMBOLOS externos (funciones Vex) que aparecen como
+/// referencias a SiMBOLOS externos (funciones Vesta) que aparecen como
 /// @c call/jmp @c <ident>: se emite @c E8/@c E9 + placeholder rel32 y el
 /// driver las resuelve (REL32) contra la funcion -> un trampolin asm
 /// puede invocar codigo generado (p.ej. un kernel multiboot que llama a
@@ -539,7 +539,7 @@ bool asmblk_assemble(
         std::string rest = asmblk_strip_label(t, had_label);
         std::string w = asmblk_first_word(rest);
         const bool is_data = (asmblk_data_width(w) > 0) || (w == "times");
-        /* call/jmp a un simbolo externo (funcion Vex): emitir E8/E9 +
+        /* call/jmp a un simbolo externo (funcion Vesta): emitir E8/E9 +
          * placeholder rel32 + sym_ref REL32 (lo resuelve el driver). */
         std::string wl;
         for (char c : w)
@@ -1052,7 +1052,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 is_smartptr_ret = true;
                 fn_returns_smartptr_.insert(fd->name);
             }
-            // Vex Embed (native_poo_): `string` es value-type de 24
+            // Vesta Embed (native_poo_): `string` es value-type de 24
             // bytes -> retorno por valor via SRET (igual que struct).
             // Solo en native; en Full/JIT `string` es handle i64.
             bool is_str_value_ret = false;
@@ -1406,7 +1406,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
         } else if (decl->kind == ast::NodeKind::GlobalVarDecl) {
             // Las variables globales con storage real no estan soportadas
-            // en el frontend Vex actual.  Pero `const T NAME = lit;` SI
+            // en el frontend Vesta actual.  Pero `const T NAME = lit;` SI
             // funciona porque @c lower_ident las inlinea como CONST en
             // cada uso (no necesitan storage).  Solo avisamos para las
             // globales NO-const o las que tienen inicializador no-literal
@@ -1609,7 +1609,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             std::string aerr;
             // Mini-ensamblador: instrucciones via Keystone + db/dw/dd/dq/
             // times/$/$$ propios, intercalados en orden (estilo NASM).  Los
-            // call/jmp a un simbolo (funcion Vex) salen como sym_refs REL32.
+            // call/jmp a un simbolo (funcion Vesta) salen como sym_refs REL32.
             std::vector<ir::IrModule::StaticDataMeta::SymRef> asm_syms;
             if (!asmblk_assemble(bd->asm_body, bd->asm_bits, asm_bytes, aerr,
                                  &asm_syms)) {
@@ -1624,7 +1624,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             m.section_perms = bd->attr_section_perms;
             m.section_at = bd->attr_at;
             m.section_order = bd->attr_order;
-            m.sym_refs = std::move(asm_syms); // call/jmp -> funcion Vex
+            m.sym_refs = std::move(asm_syms); // call/jmp -> funcion Vesta
             // Phase NR / dev-OS: exportar el nombre del bloque como simbolo
             // resoluble por otros bloques (cross-block jmp/call/dd).
             m.symbol_name = bd->name;
@@ -2690,7 +2690,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Smart pointers: SRET de 8 bytes para `unique<T>` / `shared<T>`.
     const bool sret_smartptr = (sem_ret.kind == PrimitiveKind::UNIQUE_PTR ||
                                 sem_ret.kind == PrimitiveKind::SHARED_PTR);
-    // Vex Embed (native_poo_): `string` value-type de 24 bytes -> SRET.
+    // Vesta Embed (native_poo_): `string` value-type de 24 bytes -> SRET.
     const bool sret_str_value =
         (native_poo_ && sem_ret.kind == PrimitiveKind::STRING);
     const bool sret = (sem_ret.kind == PrimitiveKind::OPTIONAL ||
@@ -2743,7 +2743,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         if (p->type && p->type->kind == ast::NodeKind::PrimitiveTypeNode) {
             auto *ptn = static_cast<ast::PrimitiveTypeNode *>(p->type.get());
             pt = ir_type_from_primitive(ptn->prim);
-            // Vex Embed (native_poo_): un param `string` es value-type
+            // Vesta Embed (native_poo_): un param `string` es value-type
             // (24 bytes); el caller pasa un PTR HOST al value-string en
             // su stack.  Marcar host_ptr para que los LOAD del callee
             // (s.length(), s.cstr(), concat operand) usen `movh` (host).
@@ -4498,7 +4498,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 }
             }
         }
-        // Vex Embed Inc 0: en modo native_poo_ (AOT) el tipo `string`
+        // Vesta Embed Inc 0: en modo native_poo_ (AOT) el tipo `string`
         // es VALUE-TYPE (struct {ptr,len,cap} de 24 bytes en stack,
         // HEAP-ALWAYS, RAII), NO un StringObject GC.  Dos casos:
         //   (a) `string s = "literal"`  -> construir el repr (ALLOCA +
@@ -4699,7 +4699,7 @@ bind_and_cleanup:
     }
 
     // Destructor automatico (RAII) para instancias locales de
-    // clase Vex que tienen `~ClassName()` declarado y NO escapan.
+    // clase Vesta que tienen `~ClassName()` declarado y NO escapan.
     // Emite CALLVIRT al destructor al exit del scope/funcion via
     // cleanup_stack_, mismo mecanismo que el auto-free de colecciones.
     // gc<Clase>: se EXCLUYE -- su ~Clase() lo corre el finalizador GC
@@ -4977,7 +4977,7 @@ bind_and_cleanup:
             if (!act.literal_deleter.empty())
                 unique_var_deleter_[vd->name] = act.literal_deleter;
 
-            // Bug fix bug2: si el inner T es una CLASS Vex con destructor,
+            // Bug fix bug2: si el inner T es una CLASS Vesta con destructor,
             // registrar el vtable_index para que el cleanup invoque
             // `~T()` sobre el objeto contenido ANTES de liberar el slot.
             // Sin esto, `unique_box(new Recurso(1))` perdia el destructor
@@ -6020,7 +6020,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 }
             }
         }
-        // Vex Embed (native_poo_): si la funcion retorna `string`
+        // Vesta Embed (native_poo_): si la funcion retorna `string`
         // value-type y el `return <expr>` es un literal NO interpolado,
         // construir el value-string nativo ({ptr,len,cap} con buffer
         // heap propio) en vez de devolver el str_lit_addr crudo (que
@@ -6107,7 +6107,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     add.source_line = s->loc.line;
                     fn_->append(current_block_, std::move(add));
                 }
-                // Vex Embed (native_poo_): el value-string fuente vive en
+                // Vesta Embed (native_poo_): el value-string fuente vive en
                 // host stack (ALLOCA host) -> propagar is_host_ptr del
                 // v_local al v_src_at para que el LOAD use `movh` (host) en
                 // lugar de `mov` (VM mem).  Sin esto, el retorno de un
@@ -6157,7 +6157,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     fn_->append(current_block_, std::move(st));
                 }
             }
-            // Vex Embed (native_poo_): `return <ident_string>` (devolver
+            // Vesta Embed (native_poo_): `return <ident_string>` (devolver
             // una variable/param string POR VALOR) hace MOVE: tras copiar
             // los 24 bytes al retbuf, ZERAR el ptr@0 del slot fuente para
             // transferir el ownership del buffer al caller.  Sin esto, la
@@ -6851,7 +6851,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
     // Multi-catch: cada catch tiene su propio tryenter ANTES del body.
     // El runtime apila los frames; do_throw los recorre desde el tope
     // (el ultimo apilado se prueba primero).  Para que el ORDEN
-    // textual del codigo Vex se respete (catch[0] se prueba primero),
+    // textual del codigo Vesta se respete (catch[0] se prueba primero),
     // apilamos los catches en orden INVERSO: ultimo primero, primero
     // ultimo (queda en el tope).
     const size_t n_catches = s->catches.size();
@@ -7868,7 +7868,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             break;
         }
         case CleanupAction::Kind::STRING_FREE: {
-            // Vex Embed Inc 0 / Inc 5 (SSO): liberar el buffer de un
+            // Vesta Embed Inc 0 / Inc 5 (SSO): liberar el buffer de un
             // string value-type al exit del scope.  opnds[0] = PTR al slot
             // de 24 bytes.  emit_native_str_free_if_heap libera SOLO si el
             // slot esta en modo HEAP (la data SSO es inline, no se libera)
@@ -7969,7 +7969,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 fn_->append(current_block_, std::move(ld));
             }
 
-            // Bug fix bug2: si el inner T es una CLASS Vex con
+            // Bug fix bug2: si el inner T es una CLASS Vesta con
             // destructor, invocar `~T()` ANTES del free.  El
             // CALLVIRT requiere host_ptr no nulo; emitimos guard
             // implicito via skip si v_ptr == 0 (no debe ocurrir
@@ -9957,7 +9957,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
     // alocamos en HEAP via RAW_ALLOC, owned por el campo.  Su destructor
     // libera el slot Y el env (RAII puro, sin GC).  Sin esto el campo
     // apuntaria a un slot de stack que cuelga cuando el objeto escapa.
-    // Ver doc/VMdoc/Vex/ClosuresEnCampos.md y emit_free_closure_env_field.
+    // Ver doc/VMdoc/Vesta/ClosuresEnCampos.md y emit_free_closure_env_field.
     // -------------------------------------------------------------
     ir::IrValueId fv_addr = fn_->new_value(ir::IrType::PTR);
     if (e->env_owned_by_field) {
@@ -11315,7 +11315,7 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
 //
 // Incremento 1 (aditivo): el cuerpo NASM viaja verbatim en func_name y
 // los calificadores + efectos (memory/flags) en un bitfield en imm.  El
-// marker no produce valor SSA ni consume operandos (las variables Vex se
+// marker no produce valor SSA ni consume operandos (las variables Vesta se
 // enlazaran a registros via register() en el Incremento 2).
 //
 // Backends:
@@ -11442,7 +11442,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
 
     // Phase AS inc.4b: validacion de sintaxis en compile-time via el
     // backend de ensamblado (Keystone).  Si esta registrado y rechaza el
-    // body, emitimos un error con la linea Vex (mejor que esperar a que
+    // body, emitimos un error con la linea Vesta (mejor que esperar a que
     // GCC falle al compilar el .c).  Si no hay backend (tests sin main),
     // se omite: GCC valida en port-C.  Solo es validacion -- los bytes se
     // descartan (se usaran en inc.5 JIT).
@@ -11827,7 +11827,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     const Type &dst_type = e->result_type;          // tipo destino del cast
     const Type &src_type = e->operand->result_type; // tipo del operando
 
-    // Vex Embed: cast (string)<char> -> value-string de un caracter.
+    // Vesta Embed: cast (string)<char> -> value-string de un caracter.
     // En native_poo_ el `string` es value-type {ptr,len,cap}; el cast
     // construye un slot owned de 1 char (buffer malloc de 2 bytes).
     // El resultado es TEMPORAL (sin RAII) salvo que el caller lo ligue
@@ -12547,7 +12547,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
     }
 
     // const-globals - inlining de constantes globales `const T NAME = lit;`.
-    // Vex aun no genera storage para variables globales (solo warning),
+    // Vesta aun no genera storage para variables globales (solo warning),
     // pero para const con inicializador literal podemos emitir un CONST
     // inline en el call site.  Cero overhead, util para nombrar codigos
     // de tecla (KEY_*), VK constants, magic numbers.
@@ -12686,7 +12686,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
         e->result_type.kind == PrimitiveKind::ARRAY ||
         e->result_type.kind == PrimitiveKind::OPTIONAL ||
         e->result_type.kind == PrimitiveKind::RESULT ||
-        // Vex Embed Inc 0: en native_poo_ el `string` es value-type
+        // Vesta Embed Inc 0: en native_poo_ el `string` es value-type
         // (struct {ptr,len,cap}); su "valor" es el PTR al slot de 24
         // bytes, igual que un struct.  El path Full (sin native_poo_)
         // mantiene `string` como handle GC (cae a read_local mas abajo).
@@ -13636,7 +13636,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                 ir::IrType::BOOL, /*negate=*/(e->op == ast::BinOp::Neq),
                 e->loc.line);
         }
-        // Vex Embed Inc 1: en native_poo_ el `string` es value-type
+        // Vesta Embed Inc 1: en native_poo_ el `string` es value-type
         // {ptr,len,cap}; `a + b` produce un NUEVO string owned (buffer
         // fresco malloc + ambos contenidos copiados).  Los operandos
         // literales se materializan como slots value-string temporales;
@@ -13696,7 +13696,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             if (b_temp) emit_native_str_free_if_heap(v_nb, e->loc.line);
             return v_res;
         }
-        // Vex Embed Inc 4: comparacion native de strings value-type via
+        // Vesta Embed Inc 4: comparacion native de strings value-type via
         // helper __vex_strcmp (lexicografica, -1/0/1).  Cubre == != < > <= >=.
         // El resultado del strcmp se mapea a BOOL con la comparacion entera
         // correspondiente.
@@ -14878,7 +14878,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     }
                 }
             }
-            // Vex Embed: un retorno `string` value-type (24B) tambien usa
+            // Vesta Embed: un retorno `string` value-type (24B) tambien usa
             // SRET en native_poo_ (igual que un struct); el retbuf vive en
             // host stack.  Sin esto, una fn importada que devuelve string
             // (p.ej. `string greet(...)`) escribia el value-string a R0 en
@@ -14940,7 +14940,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     a->kind == ast::NodeKind::StringLitExpr) {
                     auto *slit = static_cast<ast::StringLitExpr *>(a.get());
                     if (native_poo_) {
-                        // Vex Embed cross-module: value-string nativo (24B),
+                        // Vesta Embed cross-module: value-string nativo (24B),
                         // no StringObject GC (mismo fix que el path regular).
                         ir::IrValueId v_lit = build_native_string_from_literal(
                             slit, slit->loc.line);
@@ -15562,7 +15562,7 @@ skip_comptime_eval_for_macro_to_macro:
     // via fn_returns_smartptr_; el slot tiene 8 bytes (host_ptr).
     const bool callee_is_smartptr_sret =
         (fn_returns_smartptr_.find(id->name) != fn_returns_smartptr_.end());
-    // Vex Embed (native_poo_): callee que retorna `string` value-type
+    // Vesta Embed (native_poo_): callee que retorna `string` value-type
     // (24 bytes) usa SRET igual que un struct; el caller aloca el retbuf.
     const bool callee_is_str_value_sret =
         (fn_returns_str_value_.find(id->name) != fn_returns_str_value_.end());
@@ -15633,7 +15633,7 @@ skip_comptime_eval_for_macro_to_macro:
     std::vector<ir::IrValueId> arg_ids;
     arg_ids.reserve(e->args.size() + (callee_is_sret ? 1 : 0));
     if (callee_is_sret) arg_ids.push_back(v_call_retbuf);
-    // Vex Embed (native_poo_): args que son value-strings TEMPORALES
+    // Vesta Embed (native_poo_): args que son value-strings TEMPORALES
     // (resultado de `mk(...)` SRET-string, concat `a+b`, o cast a string)
     // tienen un buffer heap owned que nadie libera tras pasarlo al call.
     // Los recolectamos y emitimos RAW_FREE de su ptr@0 DESPUES del CALL
@@ -15655,7 +15655,7 @@ skip_comptime_eval_for_macro_to_macro:
             ae->kind == ast::NodeKind::StringLitExpr) {
             auto *sl = static_cast<ast::StringLitExpr *>(ae);
             if (native_poo_) {
-                // Vex Embed: el param espera un value-string nativo (24B),
+                // Vesta Embed: el param espera un value-string nativo (24B),
                 // NO un StringObject GC.  Construimos el value-string desde
                 // el literal (mismo path que `string s = "..."`) en vez de
                 // STRMAKE.  Lo marcamos temporal -> liberar su buffer heap
@@ -16358,7 +16358,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     // correcto y zero-cost para el caso no-escapante (el comun); un struct
     // con closure que se copia fuera de scope comparte el env de stack (misma
     // limitacion que cualquier struct con puntero crudo).  Ver
-    // doc/VMdoc/Vex/ClosuresEnCampos.md.
+    // doc/VMdoc/Vesta/ClosuresEnCampos.md.
     // El RHS es "una lambda" tanto si es un LambdaExpr directo como si es un
     // metodo ligado `&obj.metodo` (UnaryExpr AddrOf con desugared_bound_method,
     // que el lowering baja como un lambda que captura el receptor).  Sin
@@ -16986,9 +16986,9 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     const ir::IrValueId src = lower_expr(e->value.get());
                     if (src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
                     // Copia qword a qword.  Para size_bytes no multiplo
-                    // de 8 usariamos byte-loops; los structs Vex tienen
+                    // de 8 usariamos byte-loops; los structs Vesta tienen
                     // padding a 8-bytes por field-alignment, asi que
-                    // size_bytes siempre es multiplo de 8 para Vex
+                    // size_bytes siempre es multiplo de 8 para Vesta
                     // structs.  Defensa por bytes <8: fall-through.
                     // Propagamos is_host_ptr de src/addr a los LOAD/STORE
                     // para emitir movh cuando corresponda.
@@ -17106,7 +17106,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     }
     auto *id = static_cast<ast::IdentExpr *>(e->target.get());
 
-    // Vex Embed Inc 2: `s += t` / `s += 'c'` / `s += "lit"` en native_poo_.
+    // Vesta Embed Inc 2: `s += t` / `s += 'c'` / `s += "lit"` en native_poo_.
     // El target `s` es un value-string (PTR al slot {ptr,len,cap}); el
     // append muta el slot in-place (grow del buffer si hace falta) sin
     // crear slot nuevo.  Soportamos RHS string (otra var/concat/literal) y
@@ -17412,7 +17412,7 @@ ir::IrValueId Lowering::lower_string_lit(ast::StringLitExpr *e) {
         error_at(e->loc, "lowering: out_mod_ nulo al bajar StringLitExpr");
         return ir::IR_NO_VALUE;
     }
-    // Vex Embed Inc 2: en native_poo_ un literal INTERPOLADO se baja a un
+    // Vesta Embed Inc 2: en native_poo_ un literal INTERPOLADO se baja a un
     // value-string {ptr,len,cap} construido inline (sin StringObject GC ni
     // STRMAKE/STRCAT).  Devuelve el PTR al slot owned; el caller registra
     // su STRING_FREE (var-decl caso (c) ya lo hace).  El path Full/JIT/
@@ -17514,8 +17514,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Sprint B.1: as_native_callback(fn) -> i64 (host_ptr al thunk).
     //
     // Lowering: emite CALLN a vesta_runtime:vex_get_native_thunk con:
-    //   r1 = @Absolute("code.<fn_name>")  (PC virtual de la fn Vex)
-    //   r2 = argc (numero de parametros que la fn Vex recibe)
+    //   r1 = @Absolute("code.<fn_name>")  (PC virtual de la fn Vesta)
+    //   r2 = argc (numero de parametros que la fn Vesta recibe)
     // El runtime genera (o reusa) un thunk x86-64 callable con cc C
     // nativa y devuelve el host_ptr.
     if (name == "as_native_callback" && e->args.size() == 1) {
@@ -17523,11 +17523,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (fn_id == nullptr) {
             error_at(
                 e->loc,
-                "as_native_callback: arg debe ser identificador de fn Vex");
+                "as_native_callback: arg debe ser identificador de fn Vesta");
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        /* Resolver la signature de la fn Vex para conocer argc. */
+        /* Resolver la signature de la fn Vesta para conocer argc. */
         uint32_t argc = 0;
         const FunctionSig *fsig = tc_.function_sig_by_name(fn_id->name);
         if (fsig != nullptr) {
@@ -18662,7 +18662,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // -----------------------------------------------------------------
 
     // emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
-    // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vex con
+    // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vesta con
     // ese nombre (p.ej. `void __vex_write(u8* b, u64 n) {...}`) se llama a la
     // SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
     // si no, se usa el simbolo C por defecto (CALLN vex_bare_io:<prim>, lo
@@ -18705,7 +18705,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
         if (native_poo_) {
             // AOT/bare: sin proc -> escribir los bytes via __vex_write (el
-            // usuario puede redefinirlo en Vex).  v_str es host_ptr.
+            // usuario puede redefinirlo en Vesta).  v_str es host_ptr.
             fn_->values[v_str].is_host_ptr = true;
             emit_io_prim("__vex_write", {v_str, v_len}, line);
             return;
@@ -18943,7 +18943,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (native_poo_) {
             if (t.kind == PrimitiveKind::F32 || t.kind == PrimitiveKind::F64) {
                 // AOT: __vex_print_float(f64) del runtime de I/O (formateo %g
-                // aproximado en Vex puro).  F32 se promociona a F64 antes.
+                // aproximado en Vesta puro).  F32 se promociona a F64 antes.
                 ir::IrValueId vf = v;
                 if (t.kind == PrimitiveKind::F32) {
                     ir::IrValueId vp = fn_->new_value(ir::IrType::F64);
@@ -19730,7 +19730,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     // ----- fwrite(fp, buf) -> i64 -----
-    // En Vex la firma natural es fwrite(fp, buf), pero la firma C
+    // En Vesta la firma natural es fwrite(fp, buf), pero la firma C
     // de vesta_io es vio_fwrite(proc_ptr, vm_addr, size, handle).
     // El lowering reordena: (proc, buf_addr, buf_len, fp).
     if (is_fwrite) {
@@ -20948,12 +20948,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Cada uno se baja a un solo opcode bytecode mediante RAW_ASM
     // con substitucion {dst}/{src0}/{src1}.  Cero overhead vs .vel
     // crudo; el regalloc decide los registros.
-    // Vex Embed Inc 0: en native_poo_ el `string` es value-type
+    // Vesta Embed Inc 0: en native_poo_ el `string` es value-type
     // {ptr,len,cap}.  s.length() -> LOAD len@[slot+8]; s.cstr() ->
     // LOAD ptr@[slot+0] (ya nul-terminado).  No emitimos STRLEN/STRRAW
     // (RUNTIME_DEPENDENT en AOT).  Solo length/cstr en Inc 0; el resto
     // (bytes/hash/intern/wstr) sigue su path normal (no se prueba en AOT).
-    // Vex Embed Inc 0/5/6: en native_poo_ el value-string {ptr,len,cap}
+    // Vesta Embed Inc 0/5/6: en native_poo_ el value-string {ptr,len,cap}
     // resuelve length/bytes/cstr/wstr SIN STRMAKE/STRLEN/STRRAW
     // (RUNTIME_DEPENDENT en AOT).  Inc 6 (encoding UTF-8):
     //   .length() -> conteo de CODE-POINTS (UTF-8).
@@ -21097,7 +21097,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ir::IrType::BOOL, /*negate=*/false, e->loc.line);
             return true;
         }
-        // Vex Embed Inc 1: en native_poo_ str_concat(a, b) == `a + b`
+        // Vesta Embed Inc 1: en native_poo_ str_concat(a, b) == `a + b`
         // (value-string).  Mismo lowering: buffer nuevo owned + copia de
         // ambos.  str_equals (cmp) es Inc 4 -> sigue su path normal.
         if (native_poo_ && is_str_concat) {
@@ -21148,7 +21148,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = v_res;
             return true;
         }
-        // Vex Embed Inc 4 (builtin): en native_poo_ str_equals(a, b) usa el
+        // Vesta Embed Inc 4 (builtin): en native_poo_ str_equals(a, b) usa el
         // mismo helper native __vex_strcmp que el operador `==` (value-string,
         // CERO GC), en vez de STRCMP (StringObject GC).  Devuelve bool (==0).
         if (native_poo_ && is_str_equals) {
@@ -21276,7 +21276,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        // Vex Embed (native_poo_): str_make(ptr, len) COPIA len bytes a un
+        // Vesta Embed (native_poo_): str_make(ptr, len) COPIA len bytes a un
         // value-string PROPIO (sin GC), NO un StringObject GC.  Si len es un
         // literal entero -> Tier B (decision SSO/HEAP compile-time, sin rama).
         if (native_poo_) {
@@ -22610,7 +22610,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         const ir::IrType payload_t = fn_->values[v_payload].type;
-        // Determinar el tipo Vex semantico para saber si es struct value
+        // Determinar el tipo Vesta semantico para saber si es struct value
         // (necesita memcpy a host heap) o si es CLASS/primitivo.
         const Type sem_payload = e->args[0]->result_type;
         const bool payload_is_struct_value =
@@ -23270,7 +23270,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     //
     // NOTA: el resultado de share() es una NUEVA referencia.  El
     // original sigue en el gc_heap local (se libera por sweep).
-    // Patron correcto en Vex:
+    // Patron correcto en Vesta:
     //   Counter c = new Counter();
     //   c = share(c);                  // c ahora apunta a la copia shared
     if (is_z6_share) {
@@ -24206,7 +24206,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 }
 
 // ---------------------------------------------------------------------
-// POO: clases en Vex. la integracion completa
+// POO: clases en Vesta. la integracion completa
 // (registro en module init, NEWOBJ + CALLVIRT, GETFIELD/SETFIELD)
 // se implementa por fases.  Cada metodo nuevo emite un error claro
 // hasta que su implementacion concreta este lista.
@@ -24466,7 +24466,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     // Campo FUNCTION (lambda): el campo guarda un PTR a un slot
                     // HEAP de 16 bytes {fn,env} (RAW_ALLOC owned por el campo).
                     // Liberamos el env (si tiene capturas) y el slot -- RAII
-                    // puro, sin GC.  Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+                    // puro, sin GC.  Ver doc/VMdoc/Vesta/ClosuresEnCampos.md.
                     if (f.type.kind == PrimitiveKind::FUNCTION &&
                         !f.type.fn_is_raw) {
                         emit_free_closure_env_field(this_vid, f.offset,
@@ -24969,7 +24969,7 @@ static uint64_t intern_class_cache_slot(ir::IrModule &mod,
 /**
  * @brief Emite la liberacion RAII del closure almacenado en un campo: libera
  *        el env (RAW_ALLOC, si tiene capturas) y el slot de 16 bytes (RAW_ALLOC
- *        owned por el campo).  Modelo sin GC; ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+ *        owned por el campo).  Modelo sin GC; ver doc/VMdoc/Vesta/ClosuresEnCampos.md.
  *
  * El campo guarda un PTR a un slot heap de 16 bytes {fn_addr@+0, env_ptr@+8}.
  * Secuencia:
@@ -27126,7 +27126,7 @@ static ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
         // El frontend marca el resultado como host_ptr para que LOAD/
         // STORE usen movh.  Si la base ya tiene is_host_ptr=true, la
         // propagacion es trivial; si no, lo forzamos aqui (siempre lo
-        // sera para nuestros punteros de objeto Vex).
+        // sera para nuestros punteros de objeto Vesta).
         fn->values[base].is_host_ptr = true;
         return base;
     }
@@ -27604,7 +27604,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     // slot/env viejos se fugarian.  Null-guard interno (campo == 0 -> no libera
     // nada).  El nuevo slot+env (rhs) ya estan alocados y son distintos de los
     // viejos -> sin use-after-free.  Modelo sin GC -- ver
-    // doc/VMdoc/Vex/ClosuresEnCampos.md.
+    // doc/VMdoc/Vesta/ClosuresEnCampos.md.
     if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
         emit_free_closure_env_field(obj, off, loc.line);
     }
@@ -28859,7 +28859,7 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
         if (fs && !fs->mangled_label.empty()) callee_name = fs->mangled_label;
     }
 
-    // Vex Embed (native_poo_): si el override (@StringConcat) retorna un
+    // Vesta Embed (native_poo_): si el override (@StringConcat) retorna un
     // `string` value-type, su firma IR real es void + retbuf hidden (SRET
     // de 24 bytes).  El call site debe alocar el retbuf, pasarlo PRIMERO,
     // y devolver el retbuf como "valor" del override.  Sin esto, el CALL
@@ -29003,7 +29003,7 @@ ir::IrValueId Lowering::emit_strgetbytes(ir::IrValueId v_str,
 }
 
 // -----------------------------------------------------------------------
-// Vex Embed Inc 0: string value-type (solo native_poo_).
+// Vesta Embed Inc 0: string value-type (solo native_poo_).
 //
 // Repr: struct de 24 bytes en stack (ALLOCA) { u8* ptr; u64 len; u64 cap }.
 // HEAP-ALWAYS (sin SSO todavia): incluso "hi" aloca un buffer.  El valor
@@ -29236,7 +29236,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
 
 ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
                                                       uint32_t source_line) {
-    // Vex Embed: cast (string)<char> -> value-string de UN caracter.
+    // Vesta Embed: cast (string)<char> -> value-string de UN caracter.
     // String Inc 5 (SSO): un solo char (len=1 <= 22) SIEMPRE es SSO ->
     // CERO malloc.  La data inline en bytes[0..1]: byte[0]=char, byte[1]=
     // nul, byte[23]=1 (flag SSO=0).
@@ -29294,7 +29294,7 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
 ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
                                                    ir::IrValueId v_b,
                                                    uint32_t source_line) {
-    // Vex Embed Inc 1: a + b -> nuevo string owned.  String Inc 5 (SSO):
+    // Vesta Embed Inc 1: a + b -> nuevo string owned.  String Inc 5 (SSO):
     // si el total cabe inline (<= 22) construye SSO (cero malloc); si no,
     // HEAP.  v_a / v_b son PTR a slots value-string (no se consumen);
     // leemos su (ptr, len) via los accesores flag-aware.  Branch real
@@ -29757,7 +29757,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
                                                   ir::IrValueId v_app_ptr,
                                                   ir::IrValueId v_app_len,
                                                   uint32_t source_line) {
-    // Vex Embed Inc 2: `s += t` (y append de interpolacion).  Muta el
+    // Vesta Embed Inc 2: `s += t` (y append de interpolacion).  Muta el
     // value-string apuntado por @p v_dst_slot in place.  String Inc 5
     // (SSO): branch en new_len > 22.  Como un HEAP nunca decrece
     // (new_len >= old_len), HEAP solo transiciona a HEAP; SSO puede
@@ -29928,7 +29928,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
                                                 ir::IrValueId v_val,
                                                 bool is_signed,
                                                 uint32_t source_line) {
-    // Vex Embed Inc 2: itoa decimal INLINE (sin helper nativo, AOT bare no
+    // Vesta Embed Inc 2: itoa decimal INLINE (sin helper nativo, AOT bare no
     // tiene plugin).  Escribe la representacion ASCII de v_val (I64) en
     // v_buf (host, >= 24 bytes garantizados por el caller) y devuelve la
     // longitud escrita (sin nul).
@@ -30226,7 +30226,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
 }
 
 std::string Lowering::ensure_itoa_helper(bool is_signed) {
-    // Vex Embed Inc 2: emite (una vez por modulo + signedness) el helper
+    // Vesta Embed Inc 2: emite (una vez por modulo + signedness) el helper
     // itoa como funcion IR independiente.  Firma:
     //   i64 __vex_itoa_{s|u}(u8* buf, i64 val)
     // El cuerpo reutiliza emit_native_itoa_to_buf, que construye los loops
@@ -30286,7 +30286,7 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
 }
 
 std::string Lowering::ensure_btoa_helper() {
-    // Vex Embed Inc 2: helper bool->string nativo (una vez por modulo).
+    // Vesta Embed Inc 2: helper bool->string nativo (una vez por modulo).
     //   i64 __vex_btoa(u8* buf, i64 b)
     //     if (b != 0) { buf <- "true";  ret 4; }
     //     else        { buf <- "false"; ret 5; }
@@ -31685,7 +31685,7 @@ void Lowering::ensure_strdisp() {
 }
 
 std::string Lowering::ensure_strcmp_helper() {
-    // Vex Embed Inc 4: helper de comparacion lexicografica de strings
+    // Vesta Embed Inc 4: helper de comparacion lexicografica de strings
     // value-type nativos.  Firma:
     //   i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb)
     // Devuelve -1/0/1 (memcmp + tie-break por longitud):
@@ -31703,7 +31703,7 @@ std::string Lowering::ensure_strcmp_helper() {
     //
     // CPU dispatch Inc 5a: este es el BASELINE escalar (`__vex_strcmp_base`)
     // al que apunta __vex_strcmp_fp por defecto.  Es llamable por nombre desde
-    // Vex (un override puede delegar a el).
+    // Vesta (un override puede delegar a el).
     const std::string name = "__vex_strcmp_base";
     if (strcmp_helper_emitted_) return name;
     strcmp_helper_emitted_ = true;
@@ -31960,7 +31960,7 @@ std::string Lowering::ensure_strcmp_helper() {
 }
 
 ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
-    // Vex Embed Inc 2: interpolacion native.  Construimos un value-string
+    // Vesta Embed Inc 2: interpolacion native.  Construimos un value-string
     // owned partiendo de un buffer vacio + appendeando cada parte (literal
     // o ${expr}).  El resultado es un slot {ptr,len,cap} de 24 bytes; el
     // caller registra su STRING_FREE.  Layout del literal: parts[0] +
@@ -32918,7 +32918,7 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
 }
 
 // -------------------------------------------------------------------------
-// Vex Embed Inc 6 (encoding UTF-8): conteo de code-points + conversion a
+// Vesta Embed Inc 6 (encoding UTF-8): conteo de code-points + conversion a
 // UTF-16 (.length() / .wstr()).  Ambos como helpers IR aparte (loop) ->
 // fuera del const-fold y del inliner (prefijo __vex_str), self-contained
 // (solo malloc en utf16, overridable) -> funciona freestanding.
@@ -33545,7 +33545,7 @@ std::string Lowering::ensure_strlen_helper() {
     // byte[23]&0x7F).
     //
     // CPU dispatch Inc 5a: BASELINE escalar al que apunta __vex_strlen_fp por
-    // defecto.  Llamable por nombre desde Vex (un override puede delegar a el).
+    // defecto.  Llamable por nombre desde Vesta (un override puede delegar a el).
     const std::string name = "__vex_strlen_base";
     if (strlen_helper_emitted_) return name;
     strlen_helper_emitted_ = true;
@@ -35248,7 +35248,7 @@ void Lowering::export_classes_to_ir(ir::IrModule &out) {
         icls.super_name = cl.super_name;
         icls.interfaces = cl.interface_names;
         icls.size_bytes = cl.size_bytes;
-        icls.is_final = false; /* Vex frontend lo trackea por metodo;
+        icls.is_final = false; /* Vesta frontend lo trackea por metodo;
                                   agregado lo deducimos en transpiler
                                   via hierarchy analysis cuando es
                                   necesario.  Default false = seguro. */

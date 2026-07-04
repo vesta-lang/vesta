@@ -182,7 +182,7 @@ void exec_instr_spawn(ProcessVM *vm, const DecodedInstr &instr) {
 /**
  * @brief Implementa la instruccion SPAWN_ON con hint explicito de scheduler.
  *
- * Es la version "controlada" de SPAWN: el programador Vex puede dictar
+ * Es la version "controlada" de SPAWN: el programador Vesta puede dictar
  * en que OS-thread (scheduler) corre el hijo.  Sirve a:
  *   - `spawn here { body }`  -> hint = -1 -> mismo scheduler que el padre.
  *   - `spawn on(N) { body }` -> hint = N  -> scheduler N % num_schedulers.

@@ -9,7 +9,7 @@
  *       una arista @c (u -> h) donde @c h DOMINA a @c u (o, en la
  *       aproximacion conservadora que usamos: @c h aparece ANTES que @c u
  *       en el orden de bloques Y es alcanzable hacia atras desde @c u).
- *       El frontend Vex emite los loops con el header ANTES del body, asi
+ *       El frontend Vesta emite los loops con el header ANTES del body, asi
  *       que un sucesor con id <= id del bloque actual que ademas alcanza al
  *       bloque actual es un back-edge.
  *   (b) Profundidad de anidamiento: cuantos headers de loop CONTIENEN a
@@ -248,7 +248,7 @@ static uint32_t block_loop_depth(ir::IrBlockId b,
  * @brief Calcula la profundidad de anidamiento de cada header de loop.
  *
  * Aproximacion estructural por contencion de rango de bloques: el frontend
- * Vex emite el CFG de modo que un loop interno tiene su header CON id mayor
+ * Vesta emite el CFG de modo que un loop interno tiene su header CON id mayor
  * que el del externo y su back-edge tambien dentro del rango del externo.
  * El loop A anida dentro de B si el rango de A esta contenido estrictamente
  * en el de B.  Recibe los rangos ya calculados por @c compute_loop_ranges.

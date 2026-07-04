@@ -2296,7 +2296,7 @@ void emit_instr_fulfillhlt(const vm::Instruction *instruction_parser,
  * o LabelOperand (referencia directa).  Para labels, registra una reloc
  * @c Type::Absolute32 que el linker resolvera tras layout.  Si el VA del
  * target excede 4GB, el linker lanzara error -- limitacion conocida; la
- * VM Vex hoy nunca emite codigo en VA > 1GB.
+ * VM Vesta hoy nunca emite codigo en VA > 1GB.
  */
 static void emit_target_u32_label(const vm::ASTNode *op, ByteWriter &code_final,
                                   Assembler *assembly_ctx,

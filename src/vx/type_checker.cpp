@@ -12,7 +12,7 @@
 
 /**
  * @file type_checker.cpp
- * @brief Implementacion del pase de tipos de Vex.
+ * @brief Implementacion del pase de tipos de Vesta.
  *
  * Estructura:
  *   1. collect_globals() - pase superficial que llena el scope global
@@ -54,7 +54,7 @@
 
 /* extern "C" decl global del thunk generator.  La impl esta
  * en src/runtime/native_callback.cpp.  La registramos como virtual_fn
- * "vesta_runtime:vex_get_native_thunk" para que el builtin Vex
+ * "vesta_runtime:vex_get_native_thunk" para que el builtin Vesta
  * `as_native_callback(fn)` la invoque via CALLN. */
 extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t argc);
 
@@ -92,7 +92,7 @@ thread_local TypeChecker *g_active_typechecker = nullptr;
 /**
  * @brief virtual fn `comptime_compile(src) -> string`.
  *
- * Toma source Vex como C-string, lo trata como una EXPRESION Vex y
+ * Toma source Vesta como C-string, lo trata como una EXPRESION Vesta y
  * la devuelve TAL CUAL como string.  Sirve para componer codigo
  * desde macros sin que el AST evaluator se queje de "no es comptime
  * evaluable".  El AST resultante se parsea en el call site de la
@@ -232,7 +232,7 @@ TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
         ffi::register_virtual_fn(
             "vesta_comptime", "comptime_compile",
             reinterpret_cast<void *>(&vex_comptime_compile));
-        /* Sprint B.1: thunk generator para callbacks Vex -> C nativos.
+        /* Sprint B.1: thunk generator para callbacks Vesta -> C nativos.
          * Builtin `as_native_callback(fn)` se baja a un CALLN a esta
          * fn que retorna el host_ptr al thunk callable con cc nativa.
          * El extern "C" decl global esta arriba del namespace. */
@@ -1944,7 +1944,7 @@ void TypeChecker::collect_globals() {
     // El usuario llama @c arraylist(N) (N >= 16 internamente capado) o
     // @c arraylist() (caso 0-args sin registrar firma extra: usamos el
     // bypass relajado en check_call analogo a print).  Para esta primera
-    // iteracion exigimos siempre 1 arg explicito o wrapper Vex; suficiente
+    // iteracion exigimos siempre 1 arg explicito o wrapper Vesta; suficiente
     // para validar la integracion.
     for (size_t i = 0; i < COL_TYPES_N; ++i) {
         const ColType &ct = COL_TYPES[i];
@@ -2015,7 +2015,7 @@ void TypeChecker::collect_globals() {
     reg_builtin("rotr", Type{PrimitiveKind::U64},
                 {PrimitiveKind::U64, PrimitiveKind::U64});
 
-    /* Sprint B.1: callback Vex -> C nativo.  Toma una fn Vex como
+    /* Sprint B.1: callback Vesta -> C nativo.  Toma una fn Vesta como
      * argumento y devuelve un host_ptr (i64) a un thunk con cc C
      * estandar (Win64 o SysV).  El check_call hace bypass especial
      * para validar que el arg es una IdentExpr a una funcion
@@ -2654,7 +2654,7 @@ void TypeChecker::collect_globals() {
                     // interfaz, no una clase.  Promocionamos a la lista
                     // de interfaces implementadas y vaciamos super_name
                     // (la clase queda sin super, equivalente a Object).
-                    // Esto permite la sintaxis natural Vex
+                    // Esto permite la sintaxis natural Vesta
                     // `class X : IFoo, IBar` sin requerir un super
                     // dummy en primera posicion.
                     layout.interface_names.insert(
@@ -6120,7 +6120,7 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
     const ClassLayout &cls = it->second;
 
     // BugFix R4: clases excepcion estandar (is_runtime_predefined=true)
-    // no tienen constructor Vex; aceptan 1 arg string (message).
+    // no tienen constructor Vesta; aceptan 1 arg string (message).
     // Devolvemos directamente CLASS sin validar ctor.  El lowering
     // detecta el caso y emite newobj + store message inline.
     if (cls.is_runtime_predefined && cls.name != "FatalError") {
@@ -6322,7 +6322,7 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
 // ---------------------------------------------------------------------
 Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
     // Construir lista de tipos de parametros.  Los parametros sin
-    // tipo declarado se asumen i64 (el tipo "todo cabe" de Vex).
+    // tipo declarado se asumen i64 (el tipo "todo cabe" de Vesta).
     // Inferencia desde contexto (asignacion a fn(T1, T2) -> R) queda
     // como mejora futura: aqui solo soportamos tipos explicitos o
     // i64 por defecto.
@@ -8578,7 +8578,7 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
     // segun el destino (fn_is_raw del target); el lowering emite LABEL_ADDR
     // (+ slot {fn_addr,env=0} si lambda) -- ver lower_ident.
     tv = maybe_promote_func_ref(e->value.get(), s->type, tv);
-    // Vex Embed Inc 2: `string += string` y `string += char` son legales
+    // Vesta Embed Inc 2: `string += string` y `string += char` son legales
     // (append sugar).  El RHS char NO es assignable a string en general,
     // pero en compound `+=` sobre string lo aceptamos: el lowering native
     // appenda 1 byte (igual que str + char).  Aceptamos tambien string.
@@ -10060,7 +10060,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         return rt;
     }
     /* comptime_emit_expr(str) -- macros Lisp con splice/emit.
-     * El string se parsea como una EXPRESION Vex, se type-checa en el
+     * El string se parsea como una EXPRESION Vesta, se type-checa en el
      * contexto actual y se SUSTITUYE en el AST runtime (no solo
      * comptime eval).  El lowering ve el AST sustituido y emite
      * codigo runtime real.  Equivalente al unquote/splice de Lisp.
@@ -10082,7 +10082,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                          "comptime-evaluable");
             return Type{};
         }
-        /* Parsear el fragmento como expresion Vex. */
+        /* Parsear el fragmento como expresion Vesta. */
         Lexer fragment_lex(sarg.str, "<comptime_emit_expr>", diags_);
         Parser fragment_par(fragment_lex, diags_);
         std::unique_ptr<ast::Expr> parsed = fragment_par.parse_one_expr();
@@ -10100,7 +10100,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         return rt;
     }
     /* comptime_compile(str) -> result.  MVP de macros estilo
-     * Lisp: el string se parsea como una EXPRESION Vex y se evalua
+     * Lisp: el string se parsea como una EXPRESION Vesta y se evalua
      * en compile-time.  Permite construir codigo a partir de datos
      * (typename<T>, comptime_concat, comptime_to_str, etc.) y
      * ejecutarlo sin runtime.  Limitaciones:
@@ -11379,7 +11379,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             return Type{};
         }
         // BugFix R2: para inner CLASS, devolver el tipo CLASS
-        // directamente (no T*).  En Vex una instancia CLASS ya es un
+        // directamente (no T*).  En Vesta una instancia CLASS ya es un
         // host_ptr al ObjectHeader; unique<Class> guarda el host_ptr
         // directo sin doble indireccion (M7 in-place).  Asi
         // `ptr_of(unique<Resource>).method()` funciona naturalmente.
@@ -11636,7 +11636,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     }
 
     /* A.43.16: @Macro -- comptime fn cuyo string de retorno se
-     * INYECTA como codigo Vex en el call site (auto-emit).  El
+     * INYECTA como codigo Vesta en el call site (auto-emit).  El
      * call site evalua la fn al compile-time, parsea el resultado
      * como expresion y type-checa la expresion en el contexto
      * actual.  El tipo retornado por el call es el de la expresion
@@ -11790,7 +11790,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                  "' debe ser comptime-evaluable a string");
                 return Type{};
             }
-            /* Parsear el string como expresion Vex. */
+            /* Parsear el string como expresion Vesta. */
             Lexer fragment_lex(r.str, "<macro:" + id->name + ">", diags_);
             Parser fragment_par(fragment_lex, diags_);
             std::unique_ptr<ast::Expr> parsed = fragment_par.parse_one_expr();
@@ -12061,7 +12061,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     if (id->name == "as_native_callback") {
         if (e->args.size() != 1) {
             diags_.error(e->loc, "'as_native_callback' espera 1 argumento "
-                                 "(nombre de funcion Vex)");
+                                 "(nombre de funcion Vesta)");
             return Type{PrimitiveKind::I64};
         }
         auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());

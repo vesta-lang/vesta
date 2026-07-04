@@ -1831,7 +1831,7 @@ InstrFormat decode_table_extended[0X100] = {
     /* 0x56 */
     {// gchandle r_dst, r_src  - lookup inverso payload_ptr -> GcHandle
      // (O(1) via mapa hash en GcHeap).  Devuelve GC_NULL_HANDLE si el
-     // puntero no corresponde a ningun objeto vivo.  Usado por Vex
+     // puntero no corresponde a ningun objeto vivo.  Usado por Vesta
      // synchronized(obj) para obtener el handle desde el host_ptr.
      "gchandle", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_gchandle,
@@ -1847,7 +1847,7 @@ InstrFormat decode_table_extended[0X100] = {
     /* 0x58  spawnon r_fn, r_hint - spawn con scheduler hint:
               hint = -1 (signed) -> Here (mismo scheduler que el padre)
               hint >= 0          -> Pinned al scheduler hint%num_schedulers
-              Sirve a Vex `spawn here { }` y `spawn on(N) { }`. */
+              Sirve a Vesta `spawn here { }` y `spawn on(N) { }`. */
     {"spawnon", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_spawn_on,
      decode_instr_two_op_reg},
@@ -1863,14 +1863,14 @@ InstrFormat decode_table_extended[0X100] = {
 
     /* 0x5A  panic r_msg_addr, r_msg_len - lanza FatalError con
               kind = FATAL_USER_ABORT y message = bytes[vm_addr,len].
-              Capturable desde Vex via try/catch (FatalError e). */
+              Capturable desde Vesta via try/catch (FatalError e). */
     {"panic", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_panic,
      decode_instr_two_op_reg},
 
     /* 0x5B  setmethdbg r_method, r_params - : registra debug
               info para un MethodInfo (file + start_line) en la tabla
-              global g_method_debug.  Lo emite el frontend Vex tras
+              global g_method_debug.  Lo emite el frontend Vesta tras
               cada defmethod en __module_init.  El stack trace lo
               consulta para mostrar "(file.vex:42)" en vez de
               "(pc=0xADDR)" en cada frame. */
@@ -1879,14 +1879,14 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_two_op_reg},
 
     /* 0x5C  fextend zmm_dst, zmm_src - convierte f32 -> f64 dentro del
-              banco ZMM.  Lo emite IrOp::F32TOF64 (frontend Vex hace
+              banco ZMM.  Lo emite IrOp::F32TOF64 (frontend Vesta hace
               `f64 d = f32_var;`).  Mismo encoding que fadd/fmov. */
     {"fextend", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_fextend,
      decode_instr_simple_mov},
 
     /* 0x5D  fnarrow zmm_dst, zmm_src - convierte f64 -> f32 dentro del
-              banco ZMM.  Lo emite IrOp::F64TOF32 (frontend Vex hace
+              banco ZMM.  Lo emite IrOp::F64TOF32 (frontend Vesta hace
               `f32 f = f64_var;`).  Mismo encoding que fadd/fmov. */
     {"fnarrow", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_fnarrow,
@@ -1911,7 +1911,7 @@ InstrFormat decode_table_extended[0X100] = {
 
     /* 0x60  getstatic r_dst, r_class, offset_u32 (FIXED_8)
              Lee 8 bytes desde cls->static_data + offset (HOST mem).
-             El frontend Vex hace truncate post-load para tipos < 8 bytes.
+             El frontend Vesta hace truncate post-load para tipos < 8 bytes.
              Ver exec_instr_getstatic en exec_instruction_meta.cpp. */
     {"getstatic", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_getstatic,
@@ -1919,7 +1919,7 @@ InstrFormat decode_table_extended[0X100] = {
 
     /* 0x61  setstatic r_class, r_value, offset_u32 (FIXED_8)
              Escribe 8 bytes a cls->static_data + offset (HOST mem).
-             El frontend Vex hace truncate / sign-ext pre-store si
+             El frontend Vesta hace truncate / sign-ext pre-store si
              necesario.  Ver exec_instr_setstatic. */
     {"setstatic", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_setstatic,
@@ -2002,7 +2002,7 @@ InstrFormat decode_table_extended[0X100] = {
 
     /* 0x6B  getargc r_dst (FIXED_4)
              Deposita el numero de argumentos del script (argv del programa
-             Vex) en r_dst.  Builtin Vex `args_count() -> i32`.  Lee de
+             Vesta) en r_dst.  Builtin Vesta `args_count() -> i32`.  Lee de
              vm->scheduler.vm_reference.script_args.size(). */
     {"getargc", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_getargc,
@@ -2011,7 +2011,7 @@ InstrFormat decode_table_extended[0X100] = {
     /* 0x6C  getarg r_dst, r_idx (FIXED_4)
              Aloca un StringObject FLAT con el contenido del arg[idx] y
              deposita su GcHandle en r_dst.  Si idx fuera de rango,
-             deposita 0 (GC_NULL_HANDLE).  Builtin Vex `args_get(i) -> string`.
+             deposita 0 (GC_NULL_HANDLE).  Builtin Vesta `args_get(i) -> string`.
      */
     {"getarg", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_getarg,
@@ -2020,14 +2020,14 @@ InstrFormat decode_table_extended[0X100] = {
     /* 0x6D  unloadmod r_path_addr, r_path_len (FIXED_4)
              Descarga un modulo previamente cargado via loadmod.  Mismo
              formato de operandos.  R0 = 1 si descargado, 0 si no encontrado.
-             Builtin Vex `unloadmodule(path) -> i32`. */
+             Builtin Vesta `unloadmodule(path) -> i32`. */
     {"unloadmod", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_unloadmod,
      decode_instr_two_op_reg},
 
     /* 0x6E  getmethat r_class, r_idx (FIXED_4)
              Variante reg-reg de getmethod (0xD9).  R00 = &cls->methods[idx]
-             o 0 si fuera de rango / nulo.  Builtin Vex `getMethodAt(cls, i)`.
+             o 0 si fuera de rango / nulo.  Builtin Vesta `getMethodAt(cls, i)`.
      */
     {"getmethat", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_getmethat,
@@ -2035,7 +2035,7 @@ InstrFormat decode_table_extended[0X100] = {
 
     /* 0x6F  getfldat r_class, r_idx (FIXED_4)
              Variante reg-reg de getfield (0xD8).  R00 = &cls->fields[idx]
-             o 0 si fuera de rango / nulo.  Builtin Vex `getFieldAt(cls, i)`. */
+             o 0 si fuera de rango / nulo.  Builtin Vesta `getFieldAt(cls, i)`. */
     {"getfldat", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_getfldat,
      decode_instr_two_op_reg},
@@ -2228,7 +2228,7 @@ InstrFormat decode_table_extended[0X100] = {
      Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
 
     /* 0x8C  gccollect (ZERO, FIXED_2): fuerza minor+major GC del proceso +
-             drena finalizadores.  Builtin Vex gc_collect(). */
+             drena finalizadores.  Builtin Vesta gc_collect(). */
     {"gccollect", Assembly::Bytecode::AddressingMode::NONE,
      Assembly::Bytecode::InstrSizeMode::FIXED_2, exec_instr_gccollect,
      decode_instr_simple},
@@ -2244,7 +2244,7 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_two_op_reg},
 
     /* 0x8E  gcfinall (ZERO, FIXED_2): finaliza todo objeto GC vivo con recurso
-             interno.  Builtin Vex gc_finalize_all().  Determinista. */
+             interno.  Builtin Vesta gc_finalize_all().  Determinista. */
     {"gcfinall", Assembly::Bytecode::AddressingMode::NONE,
      Assembly::Bytecode::InstrSizeMode::FIXED_2, exec_instr_gcfinall,
      decode_instr_simple},

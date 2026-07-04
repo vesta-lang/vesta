@@ -485,7 +485,7 @@ uint64_t vrt_callvirt(vrt_proc *proc, uint8_t *obj_payload, uint32_t vtbl_idx) {
     }
     runtime::ProcessVM *p = as_proc(proc);
 
-    /* Convencion bytecode/Vex: obj_payload APUNTA al ObjectHeader (NO al
+    /* Convencion bytecode/Vesta: obj_payload APUNTA al ObjectHeader (NO al
      * payload de campos).  El gcderef del bytecode devuelve `addr +
      * sizeof(GcHeader)` que ES la direccion del ObjectHeader; y los campos
      * siguen DESPUES del header a offset >= sizeof(ObjectHeader).  Tratar
@@ -1245,9 +1245,9 @@ VRT_FORCE_FP uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls) {
     hdr->class_ptr = ci;
     hdr->flags = loader::OBJ_FLAG_GC_OWNED;
     /* El resto del header viene zeroed por el alloc. */
-    /* Retornar el host_ptr al ObjectHeader (convencion bytecode/Vex:
+    /* Retornar el host_ptr al ObjectHeader (convencion bytecode/Vesta:
      * gcderef devuelve addr+sizeof(GcHeader) = ObjectHeader start, NO
-     * FIELDS start).  Los accesos a campos en Vex usan offset >=
+     * FIELDS start).  Los accesos a campos en Vesta usan offset >=
      * sizeof(ObjectHeader) desde este puntero. */
     return payload;
 }

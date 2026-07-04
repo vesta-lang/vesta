@@ -358,7 +358,7 @@ GcHandle GcHeap::new_handle(uint8_t *addr) {
     // llamada para que ningun handle valido sea 0.  Sin esto, el
     // primer alloc del proceso retornaba 0, indistinguible de
     // "alloc fallo" -- causa real de strmake retornando NULL_HANDLE
-    // en programas Vex donde el primer use de string era el primer
+    // en programas Vesta donde el primer use de string era el primer
     // alloc del GC heap (caso comun).
     if (handles_.empty()) {
         handles_.push_back({nullptr, false}); // sentinela inalcanzable
@@ -1038,11 +1038,11 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
 
     JitPreciseCtx ctx{this, &worklist, 0, young};
 
-    /* MODO AOT: WALK POR TAMANO DE FRAME desde el frame Vex capturado en la
-     * frontera C<-Vex (set_aot_scan_boundary, fijado por cada runtime-entry del
+    /* MODO AOT: WALK POR TAMANO DE FRAME desde el frame Vesta capturado en la
+     * frontera C<-Vesta (set_aot_scan_boundary, fijado por cada runtime-entry del
      * GC que puede colectar).  Reconstruye cada RBP con frame_size en vez de la
      * cadena RBP -> salta los frames C++ de libvesta_gc (no-walkables por
-     * -fomit-frame-pointer) y arranca en el primer frame Vex real.  Es lo que
+     * -fomit-frame-pointer) y arranca en el primer frame Vesta real.  Es lo que
      * cierra el bug de raices vivas colectadas en AOT.  El path interp/JIT
      * (abajo) NO cambia. */
     if (aot_precise_roots_ && aot_boundary_valid_) {
@@ -1052,7 +1052,7 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
         stats_.precise_frames_scanned += stats.jit_frames;
         /* Invalidar el boundary: cada runtime-entry del GC lo re-captura antes
          * de colectar.  Asi un hipotetico major_gc que no pase por la frontera
-         * nunca caminaria un frame Vex ya muerto (defensa anti-corrupcion). */
+         * nunca caminaria un frame Vesta ya muerto (defensa anti-corrupcion). */
         aot_boundary_valid_ = false;
         return;
     }
@@ -1846,7 +1846,7 @@ void GcHeap::minor_gc() {
     // un minor_gc generacional preciso NECESITA un WRITE-BARRIER old->young para
     // encontrar los YOUNG alcanzables SOLO a traves de un campo de un objeto OLD
     // (p.ej. `l.head` cuando `l` ya se promovio).  El opcode `gcwb` +
-    // remembered_set EXISTEN, pero el frontend Vex NUNCA los emite en stores de
+    // remembered_set EXISTEN, pero el frontend Vesta NUNCA los emite en stores de
     // campo (los baja a STORE/movh de host_ptr, sin barrier) -> remembered_set
     // queda VACIO.  El scan CONSERVADOR enmascara este hueco al retener esos
     // young via slots rancios de la pila VM.  Sin el write-barrier, hacer el
@@ -2230,7 +2230,7 @@ void GcHeap::major_gc() {
 #if !defined(VESTA_GC_FREESTANDING)
     // SOUNDNESS DEL MOVING con marcado PRECISO.  El scan preciso del interprete
     // es ahora COMPLETO: cada raiz GC viva (regs + slots de spill + slots de
-    // Vex ALLOCA materializados como spill del SSA value) queda cubierta por el
+    // Vesta ALLOCA materializados como spill del SSA value) queda cubierta por el
     // stackmap del PC del safepoint.  Cerrados los dos huecos que lo rompian:
     //   (1) el offset del stackmap se registraba TRAS la instruccion (rip+size)
     //       en vez de en su INICIO -> el scan (match exacto con rip) nunca lo
@@ -2987,7 +2987,7 @@ bool GcHeap::compact_old_gen_aot() {
     }();
     if (!compact_always && !has_threshold) return false;
 
-    // Sin frontera Vex valida NO podemos reescribir las raices de la pila
+    // Sin frontera Vesta valida NO podemos reescribir las raices de la pila
     // nativa -> mover corromperia.  Abortamos ANTES de mutar nada (los valores
     // pc/sp persisten tras el mark; solo se limpio el flag valid_).
     const uint64_t bpc = aot_boundary_pc_;

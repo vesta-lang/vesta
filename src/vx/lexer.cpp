@@ -12,7 +12,7 @@
 
 /**
  * @file lexer.cpp
- * @brief Implementacion del tokenizador del lenguaje Vex.
+ * @brief Implementacion del tokenizador del lenguaje Vesta.
  *
  * Optimizaciones aplicadas:
  *  - classify_identifier() despacha por primera letra (switch sobre char,
@@ -1167,7 +1167,7 @@ Token Lexer::lex_string(bool raw) {
                         // formato se almacena en @c str_val del
                         // token ISTR_EXPR_FMT.  No permitimos `:`
                         // como operador ternario dentro de la expr
-                        // (Vex no tiene ternario).  Si se necesita
+                        // (Vesta no tiene ternario).  Si se necesita
                         // un `:` dentro del formato (improbable),
                         // habria que usar paren-balanced sub-spec.
                         std::string fmt;

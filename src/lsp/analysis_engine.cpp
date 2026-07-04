@@ -15,7 +15,7 @@
  * @brief Implementacion del motor de analisis de documentos del LSP.
  *
  * RIESGO conocido (fase futura): el frontend del compilador podria llegar
- * a segfaultear con fuente Vex muy parcial o malformada.  Las excepciones
+ * a segfaultear con fuente Vesta muy parcial o malformada.  Las excepciones
  * C++ SI se capturan aqui, pero un segfault no.  Una fase futura debe
  * aislar el analisis en un subproceso o thread con sandbox para que un
  * crash del frontend no tumbe el servidor LSP.  De momento se confia en

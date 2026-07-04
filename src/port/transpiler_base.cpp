@@ -30,7 +30,7 @@
  *       v_phi_dst = v_phi_arg_for_pred;
  *
  *   Si hay ciclos en las asignaciones (raro pero posible con PHI swaps),
- *   se usa un temporal -- pero el frontend Vex/IR genera siempre PHIs sin
+ *   se usa un temporal -- pero el frontend Vesta/IR genera siempre PHIs sin
  *   ciclos auto-resolubles, asi que en v1 no manejamos ese caso.
  */
 
@@ -611,7 +611,7 @@ void Transpiler::emit_block(EmitContext &ctx, const ir::IrBlock &bb,
 bool Transpiler::block_has_phis(const ir::IrFunction &fn,
                                 ir::IrBlockId bid) const {
     // Detecta si el bloque sucesor tiene PHIs (para decidir si emitimos
-    // parallel-move antes del salto).  Por convencion del lowering Vex,
+    // parallel-move antes del salto).  Por convencion del lowering Vesta,
     // los PHIs estan SIEMPRE al principio del bloque -- en cuanto vemos
     // otra op, ya no hay PHIs.
     if (bid == ir::IR_NO_BLOCK || bid >= fn.blocks.size()) return false;
@@ -1449,7 +1449,7 @@ void Transpiler::emit_region(EmitContext &ctx, const ir::IrFunction &fn,
             cur = ir::IR_NO_BLOCK;
             break;
         case ir::IrOp::RAW_ASM:
-            // El frontend Vex usa raw_asm como ultimo instr para
+            // El frontend Vesta usa raw_asm como ultimo instr para
             // emitir @c fulfillhlt (async helpers) y otros patrones
             // de exit-from-function.  Tratarlo como instruccion
             // normal + terminar region.

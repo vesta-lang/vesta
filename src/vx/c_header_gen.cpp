@@ -28,7 +28,7 @@ namespace vx {
 
 namespace {
 
-/// Mapea un primitivo escalar Vex a su tipo C (stdint).  Devuelve nullptr si
+/// Mapea un primitivo escalar Vesta a su tipo C (stdint).  Devuelve nullptr si
 /// no es un escalar simple (struct/ptr/fn/etc. se manejan aparte).
 const char *c_scalar(PrimitiveKind k) {
     switch (k) {
@@ -152,7 +152,7 @@ std::string generate_c_header(const ast::ModuleNode &mod, const TypeChecker &tc,
     const std::string guard = guard_of(guard_base);
 
     os << "/* Header C generado por VestaVM (vex --emit-header).\n"
-       << " * Interfaz publica del modulo Vex: structs C-compat + funciones\n"
+       << " * Interfaz publica del modulo Vesta: structs C-compat + funciones\n"
        << " * con firma C-representable.  Los structs cruzan POR PUNTERO\n"
        << " * (ABI de agregados; un T* == void* a nivel ABI).  Editar a mano\n"
        << " * bajo tu propio riesgo; regenera con vex --emit-header. */\n";
@@ -210,7 +210,7 @@ std::string generate_c_header(const ast::ModuleNode &mod, const TypeChecker &tc,
         bool c_ok = tc.type_is_c_representable(sig->return_type);
         for (const auto &pt : sig->param_types)
             c_ok = c_ok && tc.type_is_c_representable(pt);
-        if (sig->is_variadic) c_ok = false; // variadicos Vex != C (v1)
+        if (sig->is_variadic) c_ok = false; // variadicos Vesta != C (v1)
         if (!c_ok) {
             ++skipped;
             continue;

@@ -12,7 +12,7 @@
 
 /**
  * @file inspector.cpp
- * @brief Implementacion del inspector del ecosistema Vex (peticiones
+ * @brief Implementacion del inspector del ecosistema Vesta (peticiones
  *        @c vesta/* del LSP).
  *
  * Cada metodo es BAJO DEMANDA: se sirve cuando el editor lo pide, no en

@@ -10,13 +10,13 @@
 
 /**
  * @file aot/link_script.cpp
- * @brief Phase AOT.5 -- runner del script de enlace Vex.
+ * @brief Phase AOT.5 -- runner del script de enlace Vesta.
  *
- * Construye un programa Vex completo a partir del script del usuario (que solo
+ * Construye un programa Vesta completo a partir del script del usuario (que solo
  * define @c fn link()): le antepone los @c extern "vexlink" de los builtins +
  * unos wrappers que pasan los strings via @c str_cstr (host ptr), y le anyade
  * un @c main que llama a @c link().  Compila ese programa a @c .velb in-process
- * (frontend Vex + ensamblador) y lo ejecuta en una VM con los builtins de
+ * (frontend Vesta + ensamblador) y lo ejecuta en una VM con los builtins de
  * configuracion registrados via @c ffi::register_virtual_fn.  Los builtins
  * escriben en una @c LinkScriptConfig apuntada por un puntero file-static
  * (la ejecucion del script es single-thread, una vez por enlace).
@@ -157,7 +157,7 @@ bool read_file_bytes_local(const std::string &path, std::vector<uint8_t> &out) {
     return (bool)f;
 }
 
-// Compila la fuente Vex combinada a bytes .velb (frontend + ensamblador).
+// Compila la fuente Vesta combinada a bytes .velb (frontend + ensamblador).
 bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
                      std::string &err) {
     vx::CompileOptions copts;
@@ -165,7 +165,7 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
     vx::CompileResult cr =
         vx::compile_vx_source(src, "linkscript.vex", copts);
     if (!cr.ok || cr.diagnostics.has_errors()) {
-        err = "link-script: error de compilacion Vex";
+        err = "link-script: error de compilacion Vesta";
         return false;
     }
     // Ensamblar el .vel a .velb via run_worker (opera sobre ficheros).

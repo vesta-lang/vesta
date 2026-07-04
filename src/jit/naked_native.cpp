@@ -100,7 +100,7 @@ loader::Executable *find_exe_with_fn(runtime::ProcessVM *vm,
 
 /// Resuelve una direccion NATIVA para un simbolo referenciado desde el asm de
 /// una funcion @Naked.  Devuelve 0 si no resuelve (el caller aborta).
-/// Compila recursivamente las callees Vex (naked o no) como HOST_LEAF.
+/// Compila recursivamente las callees Vesta (naked o no) como HOST_LEAF.
 uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
                            bool debug);
 
@@ -164,7 +164,7 @@ uint64_t resolve_naked_symbol(runtime::ProcessVM *vm, const std::string &sym,
 }
 
 /**
- * @brief Compila (o recupera de cache) la funcion Vex @p name como una entrada
+ * @brief Compila (o recupera de cache) la funcion Vesta @p name como una entrada
  *        NATIVA (ABI HOST_LEAF, respetando @c is_naked) con TODOS sus relocs
  *        resueltos a direcciones vivas.  Devuelve la direccion, o 0 si falla.
  */
@@ -177,7 +177,7 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
     // error CLARO en vez de ensamblar codigo x86 en una CPU que no lo ejecuta
     // (lo que produciria una instruccion ilegal / crash).  El interprete de
     // bytecode NORMAL sigue siendo 100% portable: este path SOLO se alcanza
-    // desde inline-asm @Naked, nunca desde un programa Vex corriente.
+    // desde inline-asm @Naked, nunca desde un programa Vesta corriente.
 #if !(defined(__x86_64__) || defined(_M_X64) || defined(__amd64__))
     (void)vm;
     (void)debug;

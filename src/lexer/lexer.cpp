@@ -56,7 +56,7 @@ void Lexer::skip_whitespace() {
         // Caso especial: `// @line N` capturado en `last_src_line`
         // (no consumido como token; queda accesible al parser).
         // Esto permite asociar cada instruccion del .vel a su linea
-        // Vex original sin anadir un opcode dedicado al bytecode.
+        // Vesta original sin anadir un opcode dedicado al bytecode.
         if (peek() == '/' && peek_token(1) == '/') {
             size_t save_pos = pos;
             int save_ln = line;

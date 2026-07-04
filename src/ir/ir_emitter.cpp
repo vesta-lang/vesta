@@ -2802,7 +2802,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // si esta spilled e is_gc_object).
         std::string r_obj = ctx.load_src(ins.operands[0], 0);
 
-        // Convencion del frontend Vex: el metodo recibe `this` como
+        // Convencion del frontend Vesta: el metodo recibe `this` como
         // primer parametro (r1) y los argumentos declarados a partir
         // de r2.  Por eso colocamos obj en r1 y los demas operandos
         // en r2, r3, ...  El parallel-move resuelve cualquier
@@ -3046,7 +3046,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- Memoria ---
     case IrOp::ALLOCA: {
         // Reservar espacio en pila.  Tamano = count * sizeof(type).
-        // El frontend Vex pasa type=i8, imm=N para reservar N bytes
+        // El frontend Vesta pasa type=i8, imm=N para reservar N bytes
         // (variables struct); otros frontends pueden usar
         // type=i64, imm=N para arrays de N qwords.
         const uint64_t bytes = ins.imm * ir_type_size(ins.type);
@@ -3765,7 +3765,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::GETFIELD: {
         // Restaurada la version que funciona con GcHandle (codigo .vel
-        // manual de POO).  El frontend Vex calcula el puntero al
+        // manual de POO).  El frontend Vesta calcula el puntero al
         // campo via ADD antes de invocar LOAD para usar la ruta de
         // memoria host (movh) sin cur0.  Por tanto este case sigue
         // funcionando para handles tipicos.
@@ -3780,7 +3780,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     case IrOp::SETFIELD: {
-        // Version original (GcHandle): el frontend Vex calcula el
+        // Version original (GcHandle): el frontend Vesta calcula el
         // puntero via ADD y usa STORE con is_host_ptr=true en lugar
         // de SETFIELD para acceso directo via host pointer.
         if (ins.operands.size() < 2) break;

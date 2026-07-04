@@ -711,7 +711,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             if (is_f) {
                 /* FP: overflow permitido -> stack arg.  El rewrite lo coloca
                  * tras los GP-stack en [rsp+base+(G+(fi-fmax))*8] (convencion
-                 * Vex-interna consistente con la carga del callee). */
+                 * Vesta-interna consistente con la carga del callee). */
                 (void)fmax;
                 OO.push_back(
                     MInstr::make_arg(static_cast<uint8_t>(fi_a), vrt(av)));
@@ -3940,7 +3940,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* CALL intra-modulo a otra funcion Vex (VM_ABI): los args
+            /* CALL intra-modulo a otra funcion Vesta (VM_ABI): los args
              * van a proc->registers.regs[1..N] (NO a arg_regs host),
              * proc en RCX/RDI, resultado en regs[0]. */
             case ir::IrOp::CALL: {

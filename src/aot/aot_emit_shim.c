@@ -687,7 +687,7 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
      * contenido en fichero.  Van DESPUES de .data en el espacio de direcciones
      * (base + rw_end_off + ...); el loader las zerifica via p_memsz > p_filesz.
      * Solo son TARGET de relocs (nunca SITE), asi que sec_foff queda en 0.
-     * Necesario para dev-OS: cualquier global sin inicializar (Vex o un .o de C)
+     * Necesario para dev-OS: cualquier global sin inicializar (Vesta o un .o de C)
      * cae en .bss. */
     uint64_t bss_total = 0;
     {

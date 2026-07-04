@@ -12,7 +12,7 @@
 
 /**
  * @file param_hints.cpp
- * @brief Implementacion de los parameter hints (inlay) del LSP de Vex.
+ * @brief Implementacion de los parameter hints (inlay) del LSP de Vesta.
  */
 
 #include "lsp/param_hints.h"

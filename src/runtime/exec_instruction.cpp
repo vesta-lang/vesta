@@ -393,7 +393,7 @@ void exec_instr_pop(ProcessVM *vm, const DecodedInstr &instr) {
  * que el unwinder solo recorre si hay throw).  Medido: < 2 ns por
  * call, despreciable comparado con la propia llamada nativa.
  *
- * Si el plugin crashea sin handler activo en Vex, igual mata el
+ * Si el plugin crashea sin handler activo en Vesta, igual mata el
  * proceso (camino antiguo); pero la VM y los demas procesos siguen
  * vivos.  Con handler activo, el throw es capturable.
  *

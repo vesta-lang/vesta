@@ -12,7 +12,7 @@
 
 /**
  * @file borrow_checker.cpp
- * @brief Implementacion del borrow checker compile-time de Vex.
+ * @brief Implementacion del borrow checker compile-time de Vesta.
  *
  * Mantiene un mapa por funcion de @c owner -> BorrowRecord (estado del
  * prestamo) y un mapa @c borrower -> BorrowMeta (referencia al owner).

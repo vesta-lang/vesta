@@ -461,7 +461,7 @@ void exec_instr_addadvice(ProcessVM *vm, const DecodedInstr &instr) {
 //   setstatic: r0=r_class, r1=r_value
 //
 // El opcode lee/escribe SIEMPRE 8 bytes (i64) en cls->static_data + offset.
-// El frontend Vex hace truncate post-load para tipos mas pequenos (i8/i16/
+// El frontend Vesta hace truncate post-load para tipos mas pequenos (i8/i16/
 // i32) usando shl+sar igual que en LOAD generico.  Esto mantiene los dos
 // opcodes minimos (no necesitan size_code) sin perder funcionalidad.
 // -------------------------------------------------------------------------
@@ -518,7 +518,7 @@ void exec_instr_setstatic(ProcessVM *vm, const DecodedInstr &instr) {
 // FFI runtime dinamico: dlopen (0x62), dlsym (0x63), callni (0x64).
 //
 // Los tres opcodes complementan al @c calln estatico (declarado en el
-// .velb por el linker via tabla de imports).  Permiten al usuario Vex
+// .velb por el linker via tabla de imports).  Permiten al usuario Vesta
 // decidir EN RUNTIME que DLL cargar y que funcion llamar, igual que VSH
 // expone @c ffi_open / @c ffi_sym / @c ffi_call.  Usan el mismo backend
 // (LoadLibraryA / GetProcAddress en Win, dlopen / dlsym en POSIX) y la

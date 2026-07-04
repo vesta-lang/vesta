@@ -7,7 +7,7 @@
 
 /**
  * @file builtin_docs.cpp
- * @brief Tabla estatica de documentacion de los builtins de Vex (LSP).
+ * @brief Tabla estatica de documentacion de los builtins de Vesta (LSP).
  *
  * Cada entrada describe la firma, una descripcion breve (que recibe / hace /
  * retorna) y los nombres de los parametros (para los ghost args inline).  El
@@ -226,7 +226,7 @@ const std::unordered_map<std::string, BuiltinDoc> &table() {
              "Bitmask de features del CPU detectadas via cpuid.", {}});
         add({"as_native_callback",
              "as_native_callback(fn) -> u64",
-             "Adapta una funcion Vex a un puntero de callback C nativo.",
+             "Adapta una funcion Vesta a un puntero de callback C nativo.",
              {"fn"}});
         add({"dispose", "dispose(x) -> void",
              "Libera explicitamente un recurso (unique/coleccion) ahora.",

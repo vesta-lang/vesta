@@ -9,7 +9,7 @@
  * @file ssa_ir_serialize.cpp
  * @brief Serializer/deserializer binario del IR SSA para embeber en .velb.
  *
- * El IR generado por el frontend Vex se puede persistir dentro del
+ * El IR generado por el frontend Vesta se puede persistir dentro del
  * binario @c .velb en una seccion @c @ir (magic @c VEIR).  Esto permite:
  *
  *   - **JIT a partir del binario sin recompilar**: el loader recupera el
@@ -184,7 +184,7 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     write_u64(o, i.imm);
     // operands: lista de IrValueId.  Maximo 255 por op (suficiente
     // para cualquier op concebible; CALL con mas args es raro pero
-    // tampoco esperamos > 255 args reales en codigo Vex normal).
+    // tampoco esperamos > 255 args reales en codigo Vesta normal).
     const size_t opc = i.operands.size();
     write_u8(o, opc > 255 ? 255 : static_cast<uint8_t>(opc));
     for (size_t k = 0; k < opc && k < 255; ++k) {
@@ -398,7 +398,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     for (const auto &b : fn.blocks)
         write_block(out, b);
 
-    // Metadata para generics monomorphizados: el frontend Vex setea
+    // Metadata para generics monomorphizados: el frontend Vesta setea
     // template_name (e.g. "List") y type_args (e.g. ["i32"]) al
     // monomorphizar @c List<i32>.  Util para tools que quieran
     // mostrar el template original en stack traces; el JIT no lo usa.

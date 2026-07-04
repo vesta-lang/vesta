@@ -538,7 +538,7 @@ void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
             if (m.is_static) mi.flags |= 0x01;
             if (m.is_constructor) mi.flags |= 0x02;
             // Todos los metodos de instancia son virtuales por defecto
-            // en Vex (mismo despacho que Java).
+            // en Vesta (mismo despacho que Java).
             if (!m.is_static) mi.flags |= 0x04;
             // El label real en el .vel: si la clase fue mangled (deps en
             // compile_vx_project), el method label tiene el mismo

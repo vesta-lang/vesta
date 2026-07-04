@@ -1,6 +1,6 @@
 /**
  * @file vesta_gc/gc_lib.cpp
- * @brief Implementacion de la C-ABI de `libvesta_gc` (GC opt-in de Vex en AOT).
+ * @brief Implementacion de la C-ABI de `libvesta_gc` (GC opt-in de Vesta en AOT).
  *
  * Envuelve un `gc::GcHeap` GLOBAL (singleton) sin `ProcessVM`: el mismo motor
  * generacional mark-sweep del interprete/JIT, pero con un unico heap de proceso.
@@ -117,13 +117,13 @@ void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) 
 
 } // namespace
 
-// Captura el frame Vex LLAMADOR (frontera C<-Vex) para el WALK POR TAMANO DE
+// Captura el frame Vesta LLAMADOR (frontera C<-Vesta) para el WALK POR TAMANO DE
 // FRAME del scan preciso de AOT.  Debe expandirse DENTRO de la runtime-entry que
-// el codigo Vex llama directamente, para que:
-//   __builtin_return_address(0) = PC de retorno al frame Vex (dentro de la
-//                                 funcion Vex que hizo `call vex_gc_*`).
+// el codigo Vesta llama directamente, para que:
+//   __builtin_return_address(0) = PC de retorno al frame Vesta (dentro de la
+//                                 funcion Vesta que hizo `call vex_gc_*`).
 //   __builtin_frame_address(0)  = RBP de ESTA entry = RSP_entry - 8, luego el
-//                                 RSP del frame Vex justo antes del `call` es
+//                                 RSP del frame Vesta justo antes del `call` es
 //                                 frame_addr + 16 (RSP_entry + 8).
 // La relacion +16 exige que la entry conserve frame pointer -> se marca con el
 // atributo optimize("no-omit-frame-pointer") (ver abajo).  Desde ese par
@@ -256,8 +256,8 @@ uint8_t *vex_gc_deref(uint32_t handle) {
 }
 
 VEX_GC_FORCE_FP void vex_gc_collect(void) {
-    // Capturar el frame Vex llamador ANTES de colectar: el major_gc de abajo
-    // arranca el scan preciso desde aqui (frontera C<-Vex).
+    // Capturar el frame Vesta llamador ANTES de colectar: el major_gc de abajo
+    // arranca el scan preciso desde aqui (frontera C<-Vesta).
     VEX_GC_CAPTURE_VEX_FRAME();
     gc::GcHeap &h = gc_heap();
     h.minor_gc();
@@ -279,7 +279,7 @@ void vex_gc_unregister_finalizer(uint8_t *payload) {
 }
 
 VEX_GC_FORCE_FP void vex_gc_finalize_all(void) {
-    // Capturar el frame Vex llamador por si finalize_all_live disparara un
+    // Capturar el frame Vesta llamador por si finalize_all_live disparara un
     // scan de raices en el futuro (hoy solo corre finalizadores, sin mark/sweep;
     // capturar es defensivo y mantiene el boundary fresco).
     VEX_GC_CAPTURE_VEX_FRAME();

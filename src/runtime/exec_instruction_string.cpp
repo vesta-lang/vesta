@@ -1556,7 +1556,7 @@ void exec_instr_strfinalize(ProcessVM *vm, const DecodedInstr &instr) {
  * @brief Ejecuta GETARGC: deposita el numero de argumentos del script en r_dst.
  *
  * Lee `vm->scheduler.vm_reference.script_args.size()` y lo escribe como
- * uint64 en el registro destino.  Permite que un programa Vex consulte
+ * uint64 en el registro destino.  Permite que un programa Vesta consulte
  * argc via el builtin `args_count()` que baja a esta instruccion.
  *
  * No falla nunca; si no hay args, devuelve 0.
@@ -1575,7 +1575,7 @@ void exec_instr_getargc(ProcessVM *vm, const DecodedInstr &instr) {
 // 0x6F  GETFLDAT  r_class, r_idx       - variante reg-reg de getfield
 // =========================================================================
 // El opcode existente getmethod 0xD9 toma idx como inmediato (rango 0..255)
-// lo cual no permite iteracion dinamica desde Vex.  Estos opcodes nuevos
+// lo cual no permite iteracion dinamica desde Vesta.  Estos opcodes nuevos
 // toman idx en registro para que `getMethodAt(cls, i)` funcione con i
 // runtime.  Mismo comportamiento: R00 = &cls->methods[idx] o 0 si fuera de
 // rango / nulo.
@@ -1617,7 +1617,7 @@ void exec_instr_getfldat(ProcessVM *vm, const DecodedInstr &instr) {
  * Encoding por defecto: UTF-8 (la VM asume args UTF-8 desde main.cpp).
  *
  * En caso de indice fuera de rango o fallo de alocacion, devuelve
- * GC_NULL_HANDLE (0) que el frontend Vex interpretara como string vacio /
+ * GC_NULL_HANDLE (0) que el frontend Vesta interpretara como string vacio /
  * nulo (la verificacion de rango debe hacerla el llamador con
  * `args_count()` antes).
  *

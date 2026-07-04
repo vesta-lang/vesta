@@ -623,7 +623,7 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
     // parsear la seccion @c @ir si existe.  El header
     // tiene offset_ir_section + size_ir_section (post bump VERSION_VELB
     // a 0x3).  Si offset == 0 o size == 0, el .velb no tiene IR
-    // embebido (build sin frontend Vex o version antigua) -> se queda
+    // embebido (build sin frontend Vesta o version antigua) -> se queda
     // ir_functions vacio y el auto-JIT no se dispara para este modulo.
     if (exe->header.offset_ir_section != 0 && exe->header.size_ir_section > 0 &&
         static_cast<size_t>(exe->header.offset_ir_section) +
@@ -1130,7 +1130,7 @@ static void apply_relocations_for_rebase(
 // helper: parchea el PRIMER `hlt` (extended `0x00 0x03`) que
 // aparezca en el code section del modulo, reemplazandolo por `ret`
 // (`0xC3`) seguido de un byte de relleno (0x00).  Esto convierte el
-// epilogo de `main_ret` (default `leave hlt` para Vex standalone) en
+// epilogo de `main_ret` (default `leave hlt` para Vesta standalone) en
 // `leave ret`, haciendo el main LLAMABLE via CALLVM desde loadmod del
 // caller.  Para plugins que no usan spawn, el primer hlt es siempre
 // el de main; plugins con spawn helpers tendrian otros hlts mas
@@ -1164,7 +1164,7 @@ uint64_t Loader::load_module_dynamic(runtime::VM &vm,
     if (!exe) return 0;
 
     // ---- Detectar solapamiento de VA y reasignar si es necesario ----
-    // Encontrar el code section.  Conviccion del emisor Vex: la primera
+    // Encontrar el code section.  Conviccion del emisor Vesta: la primera
     // seccion en el .velb es siempre "code".  El emisor (annotations.cpp)
     // deja sec->memory.address_init/final = 0 -> sec->size_real = 0, asi
     // que NO podemos descartar secciones vacias; tomamos directamente la

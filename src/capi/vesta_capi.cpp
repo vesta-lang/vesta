@@ -26,7 +26,7 @@
 
 #include "capi/vesta.h"
 
-// IMPORTANTE: parsear los tipos Vex (PrimitiveKind::VOID/CONST/...) ANTES que
+// IMPORTANTE: parsear los tipos Vesta (PrimitiveKind::VOID/CONST/...) ANTES que
 // cualquier header que arrastre <windows.h> (los headers del JIT lo hacen via
 // VirtualAlloc), porque Windows define VOID/CONST/IN/OUT/... como macros que
 // colisionan con los miembros del enum.  Con types.h ya parseado (guardado),
@@ -154,7 +154,7 @@ void try_remove(const std::string &path) {
 }
 
 /**
- * @brief Compila fuente Vex a bytes .velb (logica interna compartida).
+ * @brief Compila fuente Vesta a bytes .velb (logica interna compartida).
  *
  * @param src        Codigo fuente.
  * @param unit_name  Nombre logico del modulo.
@@ -172,7 +172,7 @@ bool compile_to_velb_bytes(const std::string &src, const std::string &unit_name,
         vx::compile_vx_source(src, copts.module_name + ".vex", copts);
 
     if (!cr.ok || cr.diagnostics.has_errors()) {
-        err = "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics);
+        err = "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics);
         return false;
     }
 
@@ -308,7 +308,7 @@ bool map_cs_arch(const std::string &arch_name, cs_arch &arch, cs_mode &mode) {
  * @brief Ejecuta bytes .velb en una VM nueva y recupera R0 (logica interna).
  *
  * @param velb_bytes  Bytes del .velb.
- * @param argv        Argumentos del programa Vex.
+ * @param argv        Argumentos del programa Vesta.
  * @param out_exit    [salida] Valor de R0 del proceso main.
  * @param err         [salida] Mensaje de error si retorna false.
  * @return true si exito.
@@ -333,7 +333,7 @@ bool run_velb_bytes(std::vector<uint8_t> velb_bytes,
         return false;
     }
 
-    // Argumentos del programa (args_count/args_get del lado Vex).
+    // Argumentos del programa (args_count/args_get del lado Vesta).
     if (!argv.empty()) {
         vm->script_args = argv;
     }
@@ -495,7 +495,7 @@ VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
         *out_vel = dup_cstr(cr.vel_text);
@@ -530,7 +530,7 @@ VESTA_API int vesta_compile_to_ir(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
         *out_ir = dup_cstr(cr.ir_text);
@@ -686,7 +686,7 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
 
@@ -833,7 +833,7 @@ VESTA_API int vesta_compile_to_ir_t(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
         *out_ir = dup_cstr(cr.ir_text);
@@ -870,7 +870,7 @@ VESTA_API int vesta_compile_to_vel_t(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
         *out_vel = dup_cstr(cr.vel_text);
@@ -931,7 +931,7 @@ VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
         ir::IrModule mod;
@@ -993,7 +993,7 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
         ir::IrModule mod;
@@ -1104,7 +1104,7 @@ VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
             src, copts.module_name + ".vex", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
             set_err(out_err,
-                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
             return 1;
         }
 

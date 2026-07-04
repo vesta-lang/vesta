@@ -424,7 +424,7 @@ void exec_instr_gcfinalc(ProcessVM *vm, const DecodedInstr &instr) {
  * @brief GCCOLLECT (opcode 0x8C, ZERO, FIXED_2): fuerza un ciclo de GC del
  *        proceso (minor + major) + drena finalizadores.
  *
- * Builtin Vex @c gc_collect().  Util para pruebas de finalizacion (observar
+ * Builtin Vesta @c gc_collect().  Util para pruebas de finalizacion (observar
  * el finalizador de un objeto que escapo y murio sin esperar a la presion de
  * memoria) y para liberacion deterministica de recursos GC cuando el programa
  * lo desea explicitamente.  Los finalizadores encolados por el sweep se
@@ -441,7 +441,7 @@ void exec_instr_gccollect(ProcessVM *vm, const DecodedInstr &instr) {
 
 /**
  * @brief GCFINALL (opcode 0x8E, ZERO, FIXED_2): finaliza TODO objeto GC vivo
- *        con recurso interno (deleter/dtor).  Builtin Vex gc_finalize_all().
+ *        con recurso interno (deleter/dtor).  Builtin Vesta gc_finalize_all().
  *
  * A diferencia de gccollect (que solo finaliza lo INALCANZABLE), este stagea el
  * finalizador de CADA objeto vivo con has_finalizer y lo drena.  Determinista:
@@ -919,7 +919,7 @@ void exec_instr_atomiccas(ProcessVM *vm, const DecodedInstr &instr) {
 //   r_op == 1 -> r_dst = total_allocated_bytes
 //   r_op == 2 -> r_dst = shared_gc_collect (slots barridos)
 //
-// Codigos alineados con la convencion del lowering Vex
+// Codigos alineados con la convencion del lowering Vesta
 // (shared_heap_live_count/bytes/gc_collect en lower_call).
 void exec_instr_sharedstat(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t rdst = instr.data_instruction.reg_data.reg1;

@@ -83,7 +83,7 @@ inline size_t round_up(size_t value, size_t align) noexcept {
  * @brief Constructor: solo valida y guarda los parametros.
  *
  * Por que NO reservamos el primer chunk aqui: si el programa nunca
- * llama a @c alloc (caso comun: programa Vex puro sin JIT), nunca
+ * llama a @c alloc (caso comun: programa Vesta puro sin JIT), nunca
  * pagamos las 1 MiB de memoria virtual.  Lazy allocation = mejor para
  * el caso "JIT instalado pero no usado".
  */

@@ -12,7 +12,7 @@
 
 /**
  * @file symbol_index.cpp
- * @brief Implementacion del indice de simbolos del LSP de Vex (Fase 4).
+ * @brief Implementacion del indice de simbolos del LSP de Vesta (Fase 4).
  *
  * LIMITACION ACEPTADA v1: la resolucion es POR NOMBRE.  No se modelan scope,
  * shadowing, imports ni sobrecarga: un nombre repetido en varios sitios

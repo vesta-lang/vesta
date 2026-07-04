@@ -12,7 +12,7 @@
 
 /**
  * @file compiler.cpp
- * @brief Implementacion del facade del compilador Vex.
+ * @brief Implementacion del facade del compilador Vesta.
  */
 
 #include "vx/compiler.h"
@@ -211,7 +211,7 @@ CompileResult compile_vx_source(const std::string &source,
     // 2.5. (opcional) Diagrama Mermaid del AST post type-check.  Lo
     // generamos AHORA porque ya tenemos los result_type rellenos pero
     // antes de que el lowering altere el AST.  Util para ver la
-    // estructura del programa Vex (clases, herencia, anotaciones,
+    // estructura del programa Vesta (clases, herencia, anotaciones,
     // tipos resueltos) sin saturar con detalles de lowering.
     if (opts.dump_mermaid_ast) {
         res.mermaid_ast = mermaid_from_ast(*mod);
@@ -646,7 +646,7 @@ CompileResult compile_vx_source(const std::string &source,
 
         // Fase 4 interop C: header C publico (structs C-compat + prototipos
         // de funciones C-representables).  Se genera del frontend (AST + tc),
-        // no del IR: es la API Vex tal cual la ve un programador C.
+        // no del IR: es la API Vesta tal cual la ve un programador C.
         if (opts.emit_header) {
             res.header_text = vx::generate_c_header(*mod, tc, mod_name);
         }

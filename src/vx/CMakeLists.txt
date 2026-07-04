@@ -1,5 +1,5 @@
 # ============================================================================
-# vex_lib: frontend del lenguaje Vex (lexer, parser, type checker, lowering,
+# vex_lib: frontend del lenguaje Vesta (lexer, parser, type checker, lowering,
 # facade del compilador).  Diseno aislado segun la decision arquitectonica
 # del roadmap: el frontend es una libreria estatica separada que prefigura
 # la futura libvesta_rt y permite reutilizarla desde tests, herramientas
@@ -20,7 +20,7 @@
 #
 # vexi_compiler_version_hash() usa VEXI_COMPILER_BUILD_ID si esta definido.
 # Aqui generamos ese identificador como un hash de las fuentes que afectan la
-# SALIDA del compilador (frontend Vex + IR + emisores de bytecode + AOT/JIT).
+# SALIDA del compilador (frontend Vesta + IR + emisores de bytecode + AOT/JIT).
 # El header solo se reescribe cuando ese hash cambia, de modo que:
 #   - cambiar lowering/IR/emisores -> nuevo hash -> caches invalidados.
 #   - recompilar sin tocar codegen  -> mismo hash -> caches conservados.
@@ -45,7 +45,7 @@ add_custom_command(
         "-DSRCS=${VEX_CODEGEN_SRCS}"
         -P ${CMAKE_SOURCE_DIR}/cmake/gen_codegen_version.cmake
     DEPENDS ${VEX_CODEGEN_SRCS} ${CMAKE_SOURCE_DIR}/cmake/gen_codegen_version.cmake
-    COMMENT "Calculando version de codegen Vex (invalidacion de cache)"
+    COMMENT "Calculando version de codegen Vesta (invalidacion de cache)"
     VERBATIM
 )
 

@@ -499,7 +499,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     runtime::VM &owning_vm = vm->scheduler.vm_reference;
 
     /* Construir lista de claves alternativas a probar (en orden de
-     * preferencia).  Los constructores en Vex se mangleean como
+     * preferencia).  Los constructores en Vesta se mangleean como
      * "ClassName__ctor" en IR, pero MethodInfo::name == ClassName
      * para constructores -> el key naive "ClassName__ClassName"
      * no funciona.  Detectamos el caso y agregamos fallback. */
@@ -572,7 +572,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
 
     /* Phase D.7: el intento vreg se MOVIO mas abajo (tras construir el
      * resolver recursivo de user-fns + native_resolver) para que un metodo
-     * que llama a otra funcion Vex resuelva la callee por vreg en vez de
+     * que llama a otra funcion Vesta resuelva la callee por vreg en vez de
      * caer a slots por "call(no-resolver)". */
 
     /* Phase: compile_with_opts pasando el symbol_table de la
@@ -814,7 +814,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     }
 
     /* Phase D.7 (opt-in): intento vreg con el resolver recursivo + native
-     * resolver ya construidos (mc_opts) -> los CALL a otras funciones Vex se
+     * resolver ya construidos (mc_opts) -> los CALL a otras funciones Vesta se
      * resuelven/compilan por vreg en vez de bailar a slots.  Si la funcion no
      * es del subset vreg, cae al compile_with_opts (slots) de abajo. */
     if (g_jit_use_vregs) {
@@ -951,7 +951,7 @@ CompileResult eager_compile_function(
 
     /* Phase D.7 perf-gaps (2026-06-06): el intento vreg top-level se
      * MOVIO mas abajo (tras construir el resolver recursivo de user-fns),
-     * para que `main` y cualquier funcion que llame a otras funciones Vex
+     * para que `main` y cualquier funcion que llame a otras funciones Vesta
      * compile por el path de registros virtuales en vez de caer a slots.
      * Antes este bloque corria aqui con resolve_call = {} (vacio): el
      * primer `IrOp::CALL` a una user-fn hacia bailar el vreg a slots
@@ -1144,7 +1144,7 @@ CompileResult eager_compile_function(
 
     /* Phase D.7 perf-gaps (2026-06-06): intento vreg top-level CON el
      * resolver recursivo de user-fns ya construido.  Ahora `main` (y
-     * cualquier funcion con `IrOp::CALL` a otra funcion Vex) compila por
+     * cualquier funcion con `IrOp::CALL` a otra funcion Vesta) compila por
      * el path de registros virtuales en vez de bailar a slots al primer
      * call.  El resolver compila recursivamente las callees y devuelve su
      * direccion; los CALLs del vreg emiten `CALL addr` directo.
@@ -1560,7 +1560,7 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
         auto pn_it = pc_to_name.find(target_pc);
         if (pn_it == pc_to_name.end()) continue;
         std::string candidate_name = pn_it->second;
-        /* Sprint JIT-cross-fn 2026-06-01: el frontend Vex añade
+        /* Sprint JIT-cross-fn 2026-06-01: el frontend Vesta añade
          * sufijo `_entry_<N>` al label del bytecode (entry block).
          * El ir_lookup usa el nombre limpio.  Strip el sufijo si
          * existe para que el lookup matchee. */
@@ -1691,7 +1691,7 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
 }
 
 /* ===================================================================== */
-/* compile_native_callback: entry de ABI C nativo para callbacks Vex      */
+/* compile_native_callback: entry de ABI C nativo para callbacks Vesta      */
 /* ===================================================================== */
 
 uint64_t compile_native_callback(runtime::ProcessVM *vm,
@@ -1911,7 +1911,7 @@ void jit_frame_exit() noexcept {
  * El codigo C1 viejo NO se libera (leak aceptable v1, sin use-after-free:
  * los frames en curso y las entradas de PIC que lo referencian siguen
  * siendo validos).  Idempotente via g_tiered_pcs.  El recompile corre en el
- * host stack del frame JIT que disparo el contador; no ejecuta codigo Vex
+ * host stack del frame JIT que disparo el contador; no ejecuta codigo Vesta
  * -> no hay GC ni re-entrancia de compile (g_compile_mtx no lo tiene este
  * thread).
  */

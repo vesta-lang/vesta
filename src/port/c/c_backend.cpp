@@ -637,7 +637,7 @@ void CBackend::infer_concrete_types(const ir::IrFunction &fn) {
                     if (all_same && !first_t.empty()) new_type = first_t;
                 } else if (ins.op == ir::IrOp::NEWOBJ) {
                     // NEWOBJ: el operando[0] es un class_ptr; sin info
-                    // estatica no podemos resolver el nombre aqui.  Vex
+                    // estatica no podemos resolver el nombre aqui.  Vesta
                     // emite NEWOBJ desde __new_<X> que es donde lo
                     // detectamos via la rama CALL.
                 }
@@ -814,7 +814,7 @@ void CBackend::emit_class_bodies(EmitContext &ctx, const ir::IrModule &mod) {
         // @c Class__new(args...) : calloc + Class__ctor(self, args...).
         //  calloc da zero-init de un golpe (mas eficiente que malloc+memset).
         //  Si la clase tiene multiples ctors, solo el primero se invoca
-        //  desde new -- el frontend Vex elige cual via overload resolution.
+        //  desde new -- el frontend Vesta elige cual via overload resolution.
         ctx.out << "static VEX_UNUSED " << cls.name << " *" << cls.name
                 << "__new(";
         if (ctor && !ctor->param_types.empty()) {
@@ -991,7 +991,7 @@ static bool module_uses_async(const ir::IrModule &mod) {
 
 /**
  * @brief Detecta si el modulo usa try/catch (via raw_asm patterns
- * tryenter/panic/tryleave del frontend Vex).
+ * tryenter/panic/tryleave del frontend Vesta).
  */
 static bool module_uses_exceptions(const ir::IrModule &mod) {
     for (const auto &fn : mod.functions) {
@@ -1031,7 +1031,7 @@ void CBackend::emit_static_data(EmitContext &ctx, const ir::IrModule &mod) {
     if (mod.static_data.empty()) return;
     if (opts_.emit_comments) {
         ctx.out << "/* Literales estaticos del modulo (interned por el "
-                   "frontend Vex).\n"
+                   "frontend Vesta).\n"
                    " * Layout pool unificado (M.staticdata-pool):\n"
                    " *   - __vex_static_pool[]: todos los bytes contiguos.\n"
                    " *   - __str_<i>: macro que retorna ptr al inicio de la "
@@ -1292,7 +1292,7 @@ void CBackend::emit_str_lit_addr(EmitContext &ctx, ir::IrValueId dst,
 
 // -------- Tabla compartida de reconocimiento raw_asm --------
 //
-// Mantenemos las firmas exactas que emite el frontend Vex.  Cualquier
+// Mantenemos las firmas exactas que emite el frontend Vesta.  Cualquier
 // cambio en el lowering (ej. añadir un atributo de instr) requiere
 // actualizar esta tabla.  Compartido conceptualmente con el JIT
 // selector (D.3-G) -- la diferencia es el destino: aqui emit C,
@@ -1392,7 +1392,7 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
 
     // -------- Try/catch (substring patterns) --------
     //
-    // El frontend Vex baja try/catch a SECUENCIAS de raw_asm que
+    // El frontend Vesta baja try/catch a SECUENCIAS de raw_asm que
     // emulan la maquinaria de tryenter/throw/tryleave del bytecode.
     // Pattern-match para reemitirlos en C con setjmp/longjmp +
     // GCC labels-as-values (&&label + goto *ptr).
@@ -1422,7 +1422,7 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
     {
         const std::string MOV_ABS = "mov {dst}, @Absolute(\"";
         // Encontrar el patron incluso si hay lineas de comentario @c "// ..."
-        // antes -- el frontend Vex prepende a veces un comentario
+        // antes -- el frontend Vesta prepende a veces un comentario
         // descriptivo a sus raw_asm.
         size_t mov_pos = asm_text.find(MOV_ABS);
         if (mov_pos != std::string::npos) {
@@ -1623,7 +1623,7 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
     }
 
     // -------- Closures con captura: leer env de R14 --------
-    // El frontend Vex emite "mov {dst}, r14" en el prologue de cada
+    // El frontend Vesta emite "mov {dst}, r14" en el prologue de cada
     // lambda que captura, para acceder al env_ptr (que llega en R14
     // segun la calling convention bytecode).  En port C, la firma de
     // la lambda es @c (void* __vex_env, ...) -> ret asi que basta
@@ -2125,7 +2125,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         if (!declared.empty()) ctx.out << "\n";
     }
 
-    // Static data (literales de string interned por el frontend Vex).
+    // Static data (literales de string interned por el frontend Vesta).
     // Se emite ANTES del runtime + clases para que las referencias
     // @c __str_<i> esten visibles a todo lo que sigue.
     emit_static_data(ctx, mod);
@@ -2519,7 +2519,7 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
                 }
                 std::string t = type_for(v.type, v.is_host_ptr);
                 ctx.out << t << " ";
-                // @c __restrict__ en TODOS los pointer params: en Vex
+                // @c __restrict__ en TODOS los pointer params: en Vesta
                 // los parametros no aliasing por convencion del lenguaje
                 // (sin & address-of cross-param), asi habilitamos
                 // vectorizacion automatica de GCC.
@@ -2596,10 +2596,10 @@ void CBackend::emit_assign_lhs(EmitContext &ctx, ir::IrValueId dst) const {
 // =========================================================================
 
 void CBackend::emit_return(EmitContext &ctx, ir::IrValueId val) {
-    // NOTA: NO emitimos cleanups RAII aqui porque el frontend Vex YA
+    // NOTA: NO emitimos cleanups RAII aqui porque el frontend Vesta YA
     // inserta @c callvirt %obj, vtbl_idx_dtor() en el IR antes del
     // RET para cada objeto con destructor en scope (modelo "destructor
-    // virtual" del propio Vex).  @c emit_callvirt los devirtualiza a
+    // virtual" del propio Vesta).  @c emit_callvirt los devirtualiza a
     // @c Class____dtor(obj) directos.  Si emitieramos aqui ademas, el
     // objeto se destruiria dos veces.
     ctx.indent();
@@ -3321,7 +3321,7 @@ void CBackend::emit_callm(EmitContext &ctx, ir::IrValueId dst,
                           ir::IrType ret_type) {
     // En port C el dispatch dinamico via @c MethodInfo* no es viable
     // sin ClassRegistry runtime.  La devirtualizacion compile-time
-    // (en lowering Vex) reescribe el patron a CALLVIRT cuando el tipo
+    // (en lowering Vesta) reescribe el patron a CALLVIRT cuando el tipo
     // concreto del receiver es conocido.  Si llegamos aqui con CALLM,
     // es que el receptor es genuinamente abstracto sin info -- emit
     // stub que el usuario puede completar manualmente.

@@ -12,7 +12,7 @@
 
 /**
  * @file lsp_server.cpp
- * @brief Implementacion del dispatcher y bucle de eventos del LSP de Vex.
+ * @brief Implementacion del dispatcher y bucle de eventos del LSP de Vesta.
  */
 
 #include "lsp/lsp_server.h"
@@ -41,7 +41,7 @@ namespace {
  * LSP: 1=Error, 2=Warning, 3=Information, 4=Hint.  Las NOTE del
  * compilador se mapean a Information (3).
  *
- * @param level Nivel del diagnostico Vex.
+ * @param level Nivel del diagnostico Vesta.
  * @return Codigo de severidad LSP.
  */
 int diag_severity_to_lsp(vx::DiagLevel level) {
@@ -484,7 +484,7 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
     return out;
 }
 
-/// @brief Palabras clave de Vex ofrecidas en el completado general (curadas a
+/// @brief Palabras clave de Vesta ofrecidas en el completado general (curadas a
 ///        partir del conjunto @c KW_* del lexer del frontend).
 const std::vector<std::string> &vex_keywords() {
     static const std::vector<std::string> kws = {
@@ -557,7 +557,7 @@ bool has_prefix(const std::string &name, const std::string &prefix) {
     return name.compare(0, prefix.size(), prefix) == 0;
 }
 
-/// @brief true si @p c es valido dentro de un identificador de Vex.
+/// @brief true si @p c es valido dentro de un identificador de Vesta.
 bool is_ident_char(char c) {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
            (c >= '0' && c <= '9') || c == '_';

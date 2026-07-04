@@ -14,7 +14,7 @@
  * @file generic_clone.h
  * @brief Utilidades de clonacion de AST con sustitucion de type-params.
  *
- * Modulo interno del frontend Vex extraido de type_checker.cpp para
+ * Modulo interno del frontend Vesta extraido de type_checker.cpp para
  * mantener cada fichero manejable (la monomorphizacion de clases,
  * structs, funciones y metodos genericos comparte estas rutinas).
  *

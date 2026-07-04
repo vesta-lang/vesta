@@ -544,7 +544,7 @@ static const char *kHtmlTemplate = R"VEXHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>__TITLE_TEXT__ - Vex diagrama interactivo</title>
+<title>__TITLE_TEXT__ - Vesta diagrama interactivo</title>
 <style>
   :root{
     --bg:#0b1020; --panel:#111827; --bar:#0f172a; --line:#1f2937;
@@ -1130,7 +1130,7 @@ std::string html_from_dot(const std::string &dot_source,
 }
 
 std::string html_from_ast(const ast::ModuleNode &mod) {
-    return html_from_dot(graphviz_from_ast(mod), "AST Vex (post type-check)",
+    return html_from_dot(graphviz_from_ast(mod), "AST Vesta (post type-check)",
                          "ast");
 }
 

@@ -130,18 +130,18 @@ JitScanStats scan_aot_frames(JitRootCallback cb, void *cb_ctx, uint64_t start_pc
     if (!cb || start_pc == 0 || start_sp == 0) return stats;
 
     JitRegistry &reg = JitRegistry::instance();
-    uint64_t pc = start_pc; // return address dentro del frame Vex actual
-    uint64_t sp = start_sp; // RSP del frame Vex justo antes de su `call`
+    uint64_t pc = start_pc; // return address dentro del frame Vesta actual
+    uint64_t sp = start_sp; // RSP del frame Vesta justo antes de su `call`
 
     for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
         /* RSP siempre 8-alineado; un desalineo indica corrupcion o que se
-         * salio de la cadena Vex -> parar (defensa anti-crash). */
+         * salio de la cadena Vesta -> parar (defensa anti-crash). */
         if (sp & 7u) break;
 
         const JitFunctionInfo *info =
             reg.lookup(reinterpret_cast<const uint8_t *>(pc));
-        /* PC fuera de toda funcion Vex registrada (CRT / _start / thunk):
-         * fin del walk.  Los frames Vex intermedios SIEMPRE se registran (con
+        /* PC fuera de toda funcion Vesta registrada (CRT / _start / thunk):
+         * fin del walk.  Los frames Vesta intermedios SIEMPRE se registran (con
          * frame_size real), aunque no retengan roots, para poder atravesarlos. */
         if (!info) break;
 

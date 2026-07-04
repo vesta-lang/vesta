@@ -59,7 +59,7 @@ int run_worker(const std::string &file_name, const std::string &output_prefix,
 #ifdef VESTA_HAS_PREPROCESSOR
     // Preprocesado: expandir macros, directivas #define/#if/#foreach/#import,
     // etc. Saltable si el caller lo pidio (p.ej. el .vel proviene del lowering
-    // de Vex y ya ha sido preprocesado al nivel del .vex original).
+    // de Vesta y ya ha sido preprocesado al nivel del .vex original).
     if (!skip_preprocessor) {
         vpp::Preprocessor pp;
 
@@ -141,7 +141,7 @@ int run_worker(const std::string &file_name, const std::string &output_prefix,
 
     // Ensamblar
     Assembler asmblr;
-    // Propagar el path del archivo fuente Vex (capturado por el
+    // Propagar el path del archivo fuente Vesta (capturado por el
     // lexer del marcador `// @file <path>` al inicio del .vel) al
     // Context para que el linker lo emita en la seccion debug del
     // .velb.  Si no hay marcador (compilacion sin --vex-debug),
@@ -196,7 +196,7 @@ int run_worker(const std::string &file_name, const std::string &output_prefix,
     // linker.add_static_library("stdlib.vela");
 
     // pasar IR section bytes pre-serializados al linker.
-    // El frontend Vex los produjo via @c ir::emit_ir_section.
+    // El frontend Vesta los produjo via @c ir::emit_ir_section.
     // El linker los appendea a la seccion @c @ir del .velb v3.
     if (ir_section_bytes && !ir_section_bytes->empty()) {
         linker.set_ir_section_bytes(*ir_section_bytes);

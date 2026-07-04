@@ -43,7 +43,7 @@
 #endif
 #include <windows.h>
 /* Defensas adicionales contra symbols Windows que colisionan con
- * identifiers del codigo Vex.  Estos #undef solo afectan a este TU. */
+ * identifiers del codigo Vesta.  Estos #undef solo afectan a este TU. */
 #ifdef interface
 #undef interface
 #endif
@@ -203,7 +203,7 @@ std::string comptime_type_name(const TypeChecker &tc, const Type &t) {
         return t.struct_name.empty() ? "?" : t.struct_name;
     case PrimitiveKind::FUNCTION: {
         std::string r = "fn(";
-        /* FunctionSig opcional almacenado en t.fn_sig si Vex lo expone.
+        /* FunctionSig opcional almacenado en t.fn_sig si Vesta lo expone.
          * Si no, devolvemos "fn(...)->?".  Mantener simple para Sprint 1. */
         r += "...)";
         return r;
@@ -1625,7 +1625,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             }
             /* A.43.9: comptime_compile(s) -> result.  Macro MVP
              * estilo Lisp eval: el string se parsea como una
-             * EXPRESION Vex y se evalua comptime recursivamente.
+             * EXPRESION Vesta y se evalua comptime recursivamente.
              * Permite construir codigo a partir de datos (concat
              * de strings comptime) y evaluarlo en compile-time.
              * Limitacion: solo expresion (no stmt); el AST

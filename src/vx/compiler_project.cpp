@@ -643,8 +643,8 @@ CompileResult compile_vx_project(
     }
     // Permitir override del directorio de busqueda via env var VEX_PATH.
     graph.add_vex_path_env();
-    // Cablear el directorio de la stdlib Vex (stdlib/vex).  Permite que
-    // `import "simd_string"` (y futuras libs Vex de la stdlib) resuelva sin
+    // Cablear el directorio de la stdlib Vesta (stdlib/vex).  Permite que
+    // `import "simd_string"` (y futuras libs Vesta de la stdlib) resuelva sin
     // que el usuario tenga que copiar la lib a su proyecto.  Autodetect por
     // candidatos comunes desde el cwd (override via env var VEX_STDLIB_DIR).
     {

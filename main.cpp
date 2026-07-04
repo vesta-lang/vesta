@@ -203,7 +203,7 @@ static void apply_dist_config(runtime::VM *vm,
     }
 }
 
-/* forzar registro de virtual fns runtime (callbacks Vex->C). */
+/* forzar registro de virtual fns runtime (callbacks Vesta->C). */
 extern "C" void runtime_ensure_vex_callback_registered(void);
 
 int main(int argc, char *argv[]) {
@@ -213,7 +213,7 @@ int main(int argc, char *argv[]) {
 #endif
     runtime_ensure_vex_callback_registered();
     // Phase AS inc.4b: registrar el backend de ensamblado Keystone para que el
-    // frontend Vex valide la sintaxis del inline asm en compile-time.
+    // frontend Vesta valide la sintaxis del inline asm en compile-time.
     jit::register_keystone_asm_backend();
     // Phase AS inc.6: registrar el helper nativo vrt:inline_asm_exec que el
     // interprete (modo -m vm, sin JIT) invoca por cada bloque inline-asm.
@@ -438,7 +438,7 @@ int main(int argc, char *argv[]) {
          "'fs:read,net,ffi:call=kernel32.dll;user32.dll'. Vacio = ALL granted "
          "(default). 'none' = sandbox total.",
          cxxopts::value<std::string>()->default_value(""))
-        // Diagramas para debug y traceo del pipeline Vex.  Tres formatos
+        // Diagramas para debug y traceo del pipeline Vesta.  Tres formatos
         // seleccionables via --diagram-format:
         //   mermaid (default): escribe .mmd con bloque ```mermaid```;
         //                      listo para VS Code / GitHub / mermaid.live.
@@ -454,7 +454,7 @@ int main(int argc, char *argv[]) {
         // --diagram-all genera las 4 vistas (AST, IR pre, IR post, VEL)
         // en el formato escogido.
         ("diagram-vex",
-         "Generar diagrama del AST Vex post type-check (.ast.<ext>)")(
+         "Generar diagrama del AST Vesta post type-check (.ast.<ext>)")(
             "diagram-ir",
             "Generar diagrama del SSA IR pre-optimizacion (.ir.pre.<ext>)")(
             "diagram-ir-opt",
@@ -540,12 +540,12 @@ int main(int argc, char *argv[]) {
             "con el, el proceso solo escucha el socket TCP.")(
             "vex-debug",
             "Emitir comentarios `// @line N` en el .vel intermedio del "
-            "compilador Vex y, cuando se integre la pipeline completa de debug "
+            "compilador Vesta y, cuando se integre la pipeline completa de debug "
             "section (Phase 2), embeber la tabla bytecode_offset -> (file, "
             "line) en el .velb final.  Sin este flag, el .vel/.velb no "
             "contienen info de debug -> el ejecutable es mas pequeno y el "
             "frontend NO genera datos extra.  Con el flag, el cliente del "
-            "debugger puede setear breakpoints por linea Vex (`b file.vex:42`) "
+            "debugger puede setear breakpoints por linea Vesta (`b file.vex:42`) "
             "en lugar de solo por addr.")(
             "port",
             "Transpilar el IR a codigo fuente del lenguaje destino y escribir "
@@ -553,7 +553,7 @@ int main(int argc, char *argv[]) {
             "'java', 'js', 'rust'.  Con --port=c se genera codigo C99 portable "
             "listo para compilar con gcc/clang -O3 -std=c11 SIN dependencias "
             "de VestaVM (a menos que --port-gc=vesta).  Implica --vex (se "
-            "aplica al pipeline Vex post-optimizacion).",
+            "aplica al pipeline Vesta post-optimizacion).",
             cxxopts::value<std::string>())(
             "emit-header",
             "Generar el header C publico del modulo (<output>.h): typedefs de "
@@ -599,7 +599,7 @@ int main(int argc, char *argv[]) {
             "Desactivar atributos agresivos (const/cold/restrict/always_inline "
             "+ __builtin_expect/unreachable).  Default: activado.")(
             "instrument",
-            "Instrumentacion en el IR Vex (heredada por bytecode VM, JIT, port "
+            "Instrumentacion en el IR Vesta (heredada por bytecode VM, JIT, port "
             "C, port futuros): none (default) | trace (calls a "
             "vex_trace:enter/exit por funcion) | profile (timing per-funcion).",
             cxxopts::value<std::string>()->default_value("none"))
@@ -1532,11 +1532,11 @@ int main(int argc, char *argv[]) {
             /*emit_map=*/(result.count("emit-map") > 0));
     }
 
-    // Compilar un archivo .vex (lenguaje Vex) a .velb.
+    // Compilar un archivo .vex (lenguaje Vesta) a .velb.
     // Pipeline:
     //   .vex source
     //     -> [VPP opcional]    (metaprogramacion compartida con .vel)
-    //     -> Vex frontend      (lex + parse + tipos + lowering)
+    //     -> Vesta frontend      (lex + parse + tipos + lowering)
     //     -> ir::IrModule
     //     -> ir_emit_module    (texto .vel)
     //     -> run_worker(.vel, skip_preprocessor=true)
@@ -1832,7 +1832,7 @@ int main(int argc, char *argv[]) {
                                std::istreambuf_iterator<char>());
 
         // 2 Aplicar VPP (mismo pipeline que run_worker).  Esto es
-        // best-effort: si una macro genera sintaxis no soportada por Vex,
+        // best-effort: si una macro genera sintaxis no soportada por Vesta,
         // el frontend reportara el error con la posicion preprocesada.
 #ifdef VESTA_HAS_PREPROCESSOR
         {
@@ -1869,7 +1869,7 @@ int main(int argc, char *argv[]) {
         }
 #endif
 
-        // 3 Frontend Vex: source -> IR -> .vel.
+        // 3 Frontend Vesta: source -> IR -> .vel.
         // Sanitizar el nombre del modulo: el parser .vel rechaza
         // identificadores que empiezan con digito o que contienen caracteres no
         // [A-Za-z0-9_], pero los nombres de fichero pueden tener cualquier
@@ -1956,7 +1956,7 @@ int main(int argc, char *argv[]) {
         copts.annotate_cost = result.count("diagram-cost") > 0;
 
         // Flag --port=<lang>: si presente, configurar el transpiler IR ->
-        // codigo. El frontend Vex llama al port::Transpiler tras la fase de
+        // codigo. El frontend Vesta llama al port::Transpiler tras la fase de
         // optimizacion del IR; el resultado queda en cr.port_text para que aqui
         // lo escribamos a archivo con la extension correspondiente.
         if (result.count("emit-header")) {
@@ -2040,7 +2040,7 @@ int main(int argc, char *argv[]) {
          * Implementacion text-scan: detecta `@Macro`, scanea atras al
          * inicio de linea + lineas de anotacion previas, scanea adelante
          * a la llave de cierre balanceada (saltando strings y comentarios
-         * line-style).  Heuristica suficiente para 99% de codigo Vex
+         * line-style).  Heuristica suficiente para 99% de codigo Vesta
          * estandar.  Edge cases (comentarios de bloque con `@Macro`
          * dentro, etc.) producen cache miss falso pero no incorrectness.
          *
@@ -2700,7 +2700,7 @@ int main(int argc, char *argv[]) {
             // native_poo (FN.2) emite CALL __vex_swapctx (context-switch nativo
             // @Naked, host-stack).  Fusionamos vex_fiber.vex -> .o autocontenido,
             // salvo que el modulo YA lo defina (import explicito).  Mismo patron
-            // que vex_async: el context-switch es puro Vex (inline-asm), sin
+            // que vex_async: el context-switch es puro Vesta (inline-asm), sin
             // runtime.
             // ----------------------------------------------------------------
             {
@@ -2782,8 +2782,8 @@ int main(int argc, char *argv[]) {
             // Si el modulo usa print/println, el lowering native_poo emite
             // CALLN `vex_bare_io:__vex_*` (write + formateadores).  En vez de
             // exigir enlazar vesta_io_bare.o (libc/printf), fusionamos un
-            // runtime Vex puro que escribe via FFI a write/_write (fd 1, sin
-            // printf -> mas rapido) y formatea los numeros en Vex.  Tras el
+            // runtime Vesta puro que escribe via FFI a write/_write (fd 1, sin
+            // printf -> mas rapido) y formatea los numeros en Vesta.  Tras el
             // merge reescribimos esas CALLN a CALL plano (__vex_*) -> resuelven
             // a las funciones bundle-adas (no quedan como import externo).  El
             // usuario puede REDEFINIR cualquier __vex_* en su modulo: si lo
@@ -2930,7 +2930,7 @@ int main(int argc, char *argv[]) {
                 // dead-strip del ejecutable (--gc-sections), asi que esto NO
                 // infla el .exe: con `main`, la poda desde main mantiene el exe
                 // lean (una funcion no alcanzable se elimina).  Sin esto, una
-                // libreria Vex compilaba a 0 funciones.
+                // libreria Vesta compilaba a 0 funciones.
                 const bool is_library = (by_name.count("main") == 0);
                 add_live("main");
                 add_live("__module_init");
@@ -3066,7 +3066,7 @@ int main(int argc, char *argv[]) {
             // malloc/free/abort).
             aot::AotLowerConfig lcfg;
             // Detectar si el modulo usa el allocator (RAW_ALLOC/RAW_FREE o el
-            // calloc del `new`) para decidir el auto-bundle del slab Vex.
+            // calloc del `new`) para decidir el auto-bundle del slab Vesta.
             bool aot_uses_alloc = false;
             for (const auto &af : aot_mod.functions)
                 for (const auto &b : af.blocks)
@@ -3085,7 +3085,7 @@ int main(int argc, char *argv[]) {
                 lcfg.has_alloc_override =
                     true; // __new calloc -> alloc_sym(size)
             } else if (aot_uses_alloc && !aot_no_mem && !aot_freestanding) {
-                // Sin @AllocatorOverride del usuario -> el slab Vex
+                // Sin @AllocatorOverride del usuario -> el slab Vesta
                 // (stdlib/vex/vex_mem.vx) es el allocator por DEFECTO, via el
                 // MISMO mecanismo @AllocatorOverride (reciclamos la sintaxis):
                 // compilamos vex_mem y leemos sus simbolos override
@@ -3146,7 +3146,7 @@ int main(int argc, char *argv[]) {
 
             // FFI dinamico (ffi_open/ffi_sym -> DLOPEN/DLSYM): bundle
             // stdlib/vex/vex_ffi.vx que define __vex_dlopen/__vex_dlsym
-            // (LoadLibraryA/dlopen via @Target, Vex puro).  Igual que vex_mem:
+            // (LoadLibraryA/dlopen via @Target, Vesta puro).  Igual que vex_mem:
             // el usuario puede REDEFINIR esas funciones en su modulo (el merge
             // respeta las suyas).  Se detecta ANTES de aot_lower (que convierte
             // DLOPEN/DLSYM en CALL __vex_dlopen/__vex_dlsym).
@@ -4192,7 +4192,7 @@ int main(int argc, char *argv[]) {
                 // Exporta como GLOBAL todas las funciones de USUARIO (no
                 // empiezan por "__").  Los helpers internos (__vex_*/__new_*/
                 // __module_init/...) quedan LOCALES -> no colisionan al enlazar
-                // varios .o Vex (cada .o lleva su propia copia, referenciada via
+                // varios .o Vesta (cada .o lleva su propia copia, referenciada via
                 // relocs de seccion).  Asi una libreria .o (sin main) expone sus
                 // funciones y otro .o las resuelve cross-file con el linker.
                 for (const AotFn &af : compiled) {
@@ -4717,7 +4717,7 @@ int main(int argc, char *argv[]) {
         // ADEMAS: insertar `@InitPc(main)` antes del @Module(...) para que
         // el linker compute start_pc = absolute_addr_of_main = base +
         // offset(main) = base + 0 (main es siempre el primer label en
-        // codigo Vex).  Sin esto, start_pc queda en 0 y loadmodule ejecuta
+        // codigo Vesta).  Sin esto, start_pc queda en 0 y loadmodule ejecuta
         // codigo del caller en vez del plugin.
         if (vex_base_addr != 0) {
             const std::string from = "@IniAddress(0x0000000000000000)";
@@ -4737,7 +4737,7 @@ int main(int argc, char *argv[]) {
             // assembler procesa anotaciones single-pass y `main` no esta
             // definido todavia cuando @InitPc se evalua, asi que usamos el
             // valor absoluto (= base, ya que main es siempre el primer label
-            // en codigo Vex y la seccion code tiene @Align(0x1000) que se
+            // en codigo Vesta y la seccion code tiene @Align(0x1000) que se
             // alinea con la base hex que pasa el usuario).
             const std::string mod_marker = "@Module(";
             size_t mod_pos = cr.vel_text.find(mod_marker);
@@ -4755,7 +4755,7 @@ int main(int argc, char *argv[]) {
             }
             // Convertir el `hlt` final del main del modulo en `ret` para que
             // sea LLAMABLE via callvm desde loadmod del caller.  Por defecto
-            // main de Vex termina con `leave\nhlt` (convencion entry-point);
+            // main de Vesta termina con `leave\nhlt` (convencion entry-point);
             // un plugin necesita main RET-able para que el push de return
             // address en loadmod resulte en flujo de vuelta al caller.
             // El standalone execution del plugin no funciona tras esta
@@ -5213,11 +5213,11 @@ int main(int argc, char *argv[]) {
             }
             const long long ns_load = t_load.ns();
 
-            // Argumentos del script Vex.  Convencion: el path del .velb es
+            // Argumentos del script Vesta.  Convencion: el path del .velb es
             // el "argv[0]" implicito del programa; los positionals que el
             // usuario pasa tras `--run prog.velb` son args[0..N-1] desde el
-            // punto de vista del programa Vex (mismo modelo que VSH).  Los
-            // builtins Vex `args_count()` y `args_get(i)` los exponen via
+            // punto de vista del programa Vesta (mismo modelo que VSH).  Los
+            // builtins Vesta `args_count()` y `args_get(i)` los exponen via
             // los opcodes getargc/getarg.
             if (result.count("positional")) {
                 vm->script_args =

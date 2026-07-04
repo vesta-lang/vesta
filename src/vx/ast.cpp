@@ -12,7 +12,7 @@
 
 /**
  * @file ast.cpp
- * @brief Implementaciones auxiliares del AST de Vex.
+ * @brief Implementaciones auxiliares del AST de Vesta.
  *
  * Aqui viven los helpers de mapeo TokenKind -> BinOp / AssignOp.  Se
  * sacan del header para evitar inflar las traducciones que solo

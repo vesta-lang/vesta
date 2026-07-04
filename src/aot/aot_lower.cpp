@@ -121,7 +121,7 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
 
                 case ir::IrOp::DLOPEN:
                     // ffi_open: dlopen %path_addr, %path_len  ->  call
-                    // __vex_dlopen(%path_addr).  La funcion Vex (vex_ffi.vex)
+                    // __vex_dlopen(%path_addr).  La funcion Vesta (vex_ffi.vex)
                     // usa LoadLibraryA/dlopen segun @Target.  El path es una
                     // cstring NUL-terminada (el frontend la NUL-termina).  Se
                     // descarta %path_len (las APIs nativas leen hasta el NUL).

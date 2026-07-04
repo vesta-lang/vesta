@@ -439,7 +439,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
     /* ---- 3) Liveness por dataflow iterativo a punto fijo ----
      * live_out[b] = U live_in[succ];  live_in[b] = gen[b] U (live_out − kill).
      * Iterar en orden REVERSO de layout converge rapido para CFGs
-     * reducibles (lo normal en codigo Vex). */
+     * reducibles (lo normal en codigo Vesta). */
     std::vector<Bitset> live_in(NB, Bitset(NV)), live_out(NB, Bitset(NV));
     bool changed = true;
     /* Scratch reusado entre iteraciones (cero alocaciones en el loop). */

@@ -487,7 +487,7 @@ uint64_t IrModule::intern_static_data(std::vector<uint8_t> bytes) {
 /**
  * @brief Registra (con deduplicacion) un par (lib, name) en native_imports.
  *
- * Comparacion lineal sobre native_imports.  El frontend Vex puede
+ * Comparacion lineal sobre native_imports.  El frontend Vesta puede
  * llamar a esta funcion desde cada CALLN sin preocuparse por
  * duplicados; el numero tipico de imports nativos por modulo es
  * pequeno (decenas como mucho), por lo que la busqueda lineal es

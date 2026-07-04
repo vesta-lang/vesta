@@ -342,7 +342,7 @@ static bool strmake_reads_immutable(const IrFunction &fn, IrValueId vm_addr) {
 // =========================================================================
 //
 // Elimina CALLs a funciones synthetic @c __new_<X> (helpers de allocacion
-// emitidos por el frontend Vex para @c new ClassName()) cuyo resultado
+// emitidos por el frontend Vesta para @c new ClassName()) cuyo resultado
 // nunca se usa.  Estos calls solo hacen @c newobj + @c gcderef + @c mov
 // internos y no tienen otros efectos secundarios observables salvo
 // presion GC -- que es aceptable eliminar para casos no referenciados.
@@ -369,7 +369,7 @@ static bool is_pure_allocator_name(const std::string &name) {
      * de 6).  Debe ir ANTES del check __new_. */
     if (name.size() >= 7 && name.compare(name.size() - 7, 7, "_shared") == 0)
         return false;
-    /* Frontend Vex emite @c __new_<ClassName> para cada @c new X(). */
+    /* Frontend Vesta emite @c __new_<ClassName> para cada @c new X(). */
     if (name.size() > 6 && name.compare(0, 6, "__new_") == 0) return true;
     /* Runtime entries de alloc puros. */
     if (name == "vrt_newobj") return true;
@@ -408,7 +408,7 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn) {
                 !used.count(ins.dst) && !ins.preserve &&
                 is_pure_allocator_name(ins.func_name)) {
                 /* CALL a allocator puro, resultado no usado -> eliminar.
-                 * El frontend Vex no espera efectos secundarios visibles
+                 * El frontend Vesta no espera efectos secundarios visibles
                  * de @c new X() salvo el handle/host_ptr (que se descarta). */
                 keep = false;
                 changed = true;
@@ -2809,7 +2809,7 @@ SrDom sr_compute_dom(const IrFunction &fn) {
 //    - El objeto NO escapa y TODOS sus usos son field-access (load/store de
 //      `obj` o de `add obj, Kconst`), nunca en phi_args/func_ptr/CALL/RET.
 //    - El ctor es un inicializador trivial (modelo @p model).
-//    - CFG reducible (el frontend Vex lo garantiza).
+//    - CFG reducible (el frontend Vesta lo garantiza).
 //
 //  Conservador: si cualquier campo accedido no esta en el modelo, no es entero,
 //  o los tipos no son consistentes -> bail (no muta nada).
@@ -5439,7 +5439,7 @@ bool ir_pass_const_fold(IrFunction &fn) {
 // Es conservador con side-effects: cualquier CALL/RAW_ASM/CALLN limpia el
 // estado (no podemos garantizar que el callee no lea la memoria).
 //
-// Patron comun en frontend Vex:
+// Patron comun en frontend Vesta:
 //   %a = const.i64 0
 //   store %a, %slot
 //   ...   (sin LOAD de %slot, sin CALL)
@@ -5450,7 +5450,7 @@ bool ir_pass_const_fold(IrFunction &fn) {
 //   - El primer STORE se marca para eliminar
 //   - La CONST que solo alimentaba al store dead queda dead -> DCE la quita
 //
-// Ahorro: en codigo generado por frontend Vex se ven STOREs de zero seguidos
+// Ahorro: en codigo generado por frontend Vesta se ven STOREs de zero seguidos
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
 bool ir_pass_dse(IrFunction &fn) {
     bool changed = false;
@@ -6520,7 +6520,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* rspawn body helpers. */
         if (name.size() > 9 && name.compare(0, 9, "__rspawn_") == 0)
             return true;
-        /* Helpers de string value-type (Vex Embed): __vex_strlen, __vex_strdata,
+        /* Helpers de string value-type (Vesta Embed): __vex_strlen, __vex_strdata,
          * __vex_strcmp.  Se mantienen como funciones APARTE: cada accesor de
          * longitud/data inline expandia ~10 instrs (AND-mask select heap/SSO);
          * sumar varias en una funcion reventaba el regalloc SysV (4 callee-saved

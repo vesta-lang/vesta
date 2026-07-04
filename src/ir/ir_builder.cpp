@@ -354,7 +354,7 @@ IrValueId IrBuilder::cmp_uge(IrValueId a, IrValueId b) {
 //  El frontend debe escoger la correcta para no corromper valores.  Por
 //  ejemplo @c sext(i8 -1) -> i32 produce -1 (0xFFFFFFFF), mientras que
 //  @c zext(i8 -1) -> i32 produce 255 (0x000000FF): los dos son validos,
-//  pero solo uno es lo que el programa Vex pidio segun el tipo declarado.
+//  pero solo uno es lo que el programa Vesta pidio segun el tipo declarado.
 // =========================================================================
 
 /**
@@ -643,7 +643,7 @@ void IrBuilder::call_void(const std::string &fn_name,
  * @c fn_ptr debe ser un SSA value que contiene la direccion del codigo.
  * Tipicamente proviene de un @c LOAD de un slot que guarda function
  * values, o de un @c STR_LIT_ADDR (no esta soportado en este builder
- * por simplicidad; el frontend Vex tiene helpers especializados).
+ * por simplicidad; el frontend Vesta tiene helpers especializados).
  */
 IrValueId IrBuilder::call_indirect(IrValueId fn_ptr,
                                    const std::vector<IrValueId> &args,

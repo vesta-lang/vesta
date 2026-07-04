@@ -299,7 +299,7 @@ std::string fmt_expr_brief(const ast::Expr *e, int depth) {
 std::string fmt_expr(const ast::Expr *e) {
     // Sin truncamiento ni limite de profundidad efectivo: el usuario
     // pidio explicitamente que no se omita ninguna informacion.  Los
-    // AST de Vex son DAGs (no ciclicos); usamos depth=32 por defensa.
+    // AST de Vesta son DAGs (no ciclicos); usamos depth=32 por defensa.
     return fmt_expr_brief(e, 32);
 }
 
@@ -554,7 +554,7 @@ void emit_edge(std::ostringstream &os, const std::string &from,
 }
 
 // =====================================================================
-//  GENERADOR 1: AST Vex -> Graphviz
+//  GENERADOR 1: AST Vesta -> Graphviz
 // =====================================================================
 
 void render_function_decl(std::ostringstream &os, const ast::FunctionDecl *fd,
@@ -1641,7 +1641,7 @@ bool is_opt_instr(const std::string &mn) {
 
 std::string graphviz_from_ast(const ast::ModuleNode &mod) {
     std::ostringstream os;
-    os << "// Diagrama AST Vex (Graphviz DOT)\n";
+    os << "// Diagrama AST Vesta (Graphviz DOT)\n";
     os << "// Cada nodo lleva la info relevante para debug:\n";
     os << "//   funciones: nombre, return type, params, body con control "
           "flow\n";

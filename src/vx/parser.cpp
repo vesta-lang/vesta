@@ -12,7 +12,7 @@
 
 /**
  * @file parser.cpp
- * @brief Implementacion del parser recursivo descendente de Vex.
+ * @brief Implementacion del parser recursivo descendente de Vesta.
  *
  * Notas de rendimiento:
  *  - Cada nivel de precedencia se inlinea bien porque las funciones son
@@ -504,7 +504,7 @@ void Parser::synchronize() {
     // parse_program quedaria en bucle infinito: parse_top_level_decl
     // falla -> synchronize ve KW_FN -> retorna sin consumir -> retry.
     // Bug observado: `fn my_release(p: i64) { }` con sintaxis Rust-style
-    // a nivel top-level (Vex usa C-style `T name(T param)`) causaba
+    // a nivel top-level (Vesta usa C-style `T name(T param)`) causaba
     // 5+ GB de RAM al crecer indefinidamente el AST.
     if (current_.kind == TokenKind::END_OF_FILE) return;
     (void)consume(); // forzar progreso
@@ -708,7 +708,7 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
                     // Sin nombre explicito: sintetizamos uno para que
                     // el resto del frontend (type checker, lowering)
                     // pueda referirlo.  Los externs no se ejecutan en
-                    // Vex (solo son marcas), asi que el nombre interno
+                    // Vesta (solo son marcas), asi que el nombre interno
                     // no aparece nunca.
                     pd->name = "__arg" + std::to_string(params.size());
                 }
@@ -1700,7 +1700,7 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
         parse_where_clause(fn->type_bounds);
     }
 
-    // Cuerpo: bloque obligatorio para funciones Vex; las funciones
+    // Cuerpo: bloque obligatorio para funciones Vesta; las funciones
     // sin cuerpo (FFI extern) se modelan via @c ExternFnDecl aparte.
     // Bug fix 2026-05-23: forward declaration `i32 fn(args);` -- si
     // vemos `;` en lugar de `{`, registramos la firma sin body.  El
@@ -3034,7 +3034,7 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_asm_block_decl() {
 //       ...                   (coma trailing opcional)
 //   }
 //
-// No se admiten valor por defecto ni herencia: los enums Vex son
+// No se admiten valor por defecto ni herencia: los enums Vesta son
 // tipos de datos algebraicos planos.  Los tags se asignan
 // implicitamente como el indice 0..N-1 de la variante en el bloque.
 // -----------------------------------------------------------------

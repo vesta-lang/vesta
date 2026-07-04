@@ -93,7 +93,7 @@ void exec_instr_rspawn(ProcessVM *vm, const DecodedInstr &instr) {
  *   - 0 si el archivo no existe, esta vacio o el parse falla.
  *   - init_pc del modulo cargado (>0) en exito.
  *
- * NO ejecuta automaticamente el modulo: el caller (la builtin Vex
+ * NO ejecuta automaticamente el modulo: el caller (la builtin Vesta
  * `loadmodule`) usa `callvmr r0` para invocar el main del nuevo modulo,
  * cuyo prologo ejecuta `__module_init` y registra las clases en el
  * ClassRegistry global de la VM.

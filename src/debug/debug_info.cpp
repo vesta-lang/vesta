@@ -157,7 +157,7 @@ LineInfo DebugInfo::lookup_line(uint32_t bytecode_offset) const {
  *
  * Util para resolver breakpoints "file.vex:42" emitidos por el
  * cliente del debugger.  Puede haber multiples instrucciones VM
- * para una misma linea Vex (e.g. ALLOCA + CONST + STORE); elegimos
+ * para una misma linea Vesta (e.g. ALLOCA + CONST + STORE); elegimos
  * la PRIMERA de ese rango (menor offset), que corresponde al
  * "inicio" de la linea desde el punto de vista del usuario.
  */
@@ -176,7 +176,7 @@ uint32_t DebugInfo::lookup_offset_for_line(const std::string &file_target,
     // toda en minusculas.  Asi `F:\C\VM\file.vex` matchea con
     // `f:/c/vm/file.vex` y `F:/C/VM/file.vex`.  Necesario porque el
     // IDE Electron envia paths en estilo forward-slash mientras que
-    // el frontend Vex incrusta el path original (Windows backslash)
+    // el frontend Vesta incrusta el path original (Windows backslash)
     // en la debug section del .velb.
     auto norm_path = [](const char *p, size_t len) {
         std::string out;

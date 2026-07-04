@@ -132,7 +132,7 @@ void init_exception_classes(loader::Loader &loader_ref) {
             fields.push_back(f);
         }
 
-        // Sin metodos por ahora (en Vex se accederan via getfield
+        // Sin metodos por ahora (en Vesta se accederan via getfield
         // directo).  Sin super (hereda de Object implicito).
         g_fatal_error_class = reg.define_class("FatalError",
                                                /*super=*/nullptr,
@@ -142,7 +142,7 @@ void init_exception_classes(loader::Loader &loader_ref) {
 
         // BugFix R4: registrar las clases excepcion estandar comunes
         // con solo un field `message` (string ptr).  El lowering del
-        // frontend Vex detecta `new <ExceptionClass>(msg)` y emite la
+        // frontend Vesta detecta `new <ExceptionClass>(msg)` y emite la
         // secuencia inline (newobj + store message) sin requerir
         // constructor explicito en bytecode.  El `catch (X e)` accede
         // a `e.message` via getfield offset 24 (justo despues del

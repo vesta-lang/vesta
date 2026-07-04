@@ -15,7 +15,7 @@
  * @brief Implementacion del asignador de memoria contigua para FFI.
  *
  * @c RawAllocator es el backend de @c malloc / @c free / @c realloc del
- * bytecode VM cuando el codigo Vex pide memoria que tiene que ser
+ * bytecode VM cuando el codigo Vesta pide memoria que tiene que ser
  * accesible directamente desde funciones C nativas (FFI).
  *
  * Diferencias con el GC heap (@c gc_heap):
@@ -127,7 +127,7 @@ fallback_vm_alloc:
         vm::allocate_memory(size, vm::MemPerm::READ | vm::MemPerm::WRITE);
     // Si el sistema operativo no pudo satisfacer la peticion (OOM,
     // limite de VAS, etc.), devolvemos 0.  El caller (FFI o codigo
-    // Vex) decide como manejarlo (panic, throw, retry...).
+    // Vesta) decide como manejarlo (panic, throw, retry...).
     if (!ptr) return 0;
 
     // Zero-init: garantiza comportamiento predecible (lectura sin
@@ -317,7 +317,7 @@ uint64_t RawAllocator::realloc(uint64_t ptr, size_t new_size) {
  * @brief Libera TODOS los bloques activos de una sola pasada.
  *
  * Llamado tipicamente desde el destructor del ProcessVM para limpiar
- * fugas si el codigo Vex olvido alguna llamada a @c free.  Tras
+ * fugas si el codigo Vesta olvido alguna llamada a @c free.  Tras
  * @c free_all, cualquier puntero previamente devuelto queda dangling
  * y NO debe usarse.
  */

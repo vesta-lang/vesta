@@ -239,7 +239,7 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
     // portadora (@c instr_start_offset), al final de esta funcion.
     std::optional<Context::StackmapRec> pending_stackmap;
 
-    // Si la instruccion tiene linea fuente Vex registrada por el
+    // Si la instruccion tiene linea fuente Vesta registrada por el
     // parser (capturada del marcador `// @line N` del lexer),
     // anadirla a la tabla debug del Context.  El offset que
     // guardamos es el del INICIO de la instruccion en el bytecode
