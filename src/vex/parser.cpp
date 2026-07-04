@@ -2653,14 +2653,53 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     ns->loc = current_.loc;
     (void)consume(); // 'namespace'
 
+    // Phase NS.1: nombre con PATH punteado (a.b.c).  Se almacena como texto
+    // punteado en @c name; el mangling posterior lo parte por '.' y une con
+    // '__' (std.collections -> std__collections).
     if (current_.kind != TokenKind::IDENTIFIER) {
         error_here("se esperaba el nombre del namespace tras 'namespace'");
         return nullptr;
     }
-    ns->name = consume().lexeme;
+    std::string path = consume().lexeme;
+    while (current_.kind == TokenKind::DOT) {
+        (void)consume(); // '.'
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un identificador tras '.' en el path del "
+                       "namespace");
+            return nullptr;
+        }
+        path += ".";
+        path += consume().lexeme;
+    }
+    ns->name = path;
+
+    // Phase NS.1: forma STATEMENT `namespace a.b.c;` -- aplica al RESTO del
+    // fichero (recoge las decls top-level siguientes hasta el proximo
+    // `namespace` statement o EOF).  La forma BLOQUE `namespace a.b.c { ... }`
+    // acota las decls con llaves (permite varios namespaces por fichero y
+    // anidamiento).  Ambas producen un @c NamespaceDecl con @c decls anidadas.
+    if (current_.kind == TokenKind::SEMICOLON) {
+        (void)consume(); // ';'
+        ns->is_statement_form = true;
+        while (current_.kind != TokenKind::END_OF_FILE &&
+               current_.kind != TokenKind::KW_NAMESPACE) {
+            auto inner = parse_top_level_decl();
+            if (!inner) {
+                synchronize();
+                // synchronize se para en KW_NAMESPACE/EOF (fin de este ns) o en
+                // el siguiente keyword aprovechable; el bucle re-evalua.
+                if (current_.kind == TokenKind::KW_NAMESPACE ||
+                    current_.kind == TokenKind::END_OF_FILE)
+                    break;
+                continue;
+            }
+            ns->decls.push_back(std::move(inner));
+        }
+        return ns;
+    }
 
     (void)expect(TokenKind::LBRACE,
-                 "se esperaba '{' tras el nombre del namespace");
+                 "se esperaba '{' o ';' tras el nombre del namespace");
 
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {

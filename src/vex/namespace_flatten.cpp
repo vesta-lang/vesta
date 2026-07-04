@@ -32,6 +32,24 @@ namespace vex {
 
 namespace {
 
+/// Phase NS.1: convierte un path de namespace PUNTEADO (`std.collections`) a su
+/// forma MANGLED con separador `__` (`std__collections`).  Los nombres de un
+/// solo segmento (M.7.c) quedan intactos.  Se usa SOLO al construir el prefijo
+/// fisico de mangling; el nombre HUMANO (para resolucion / acceso qualified)
+/// conserva los puntos.
+std::string mangle_ns_path_(const std::string &dotted) {
+    if (dotted.find('.') == std::string::npos) return dotted;
+    std::string out;
+    out.reserve(dotted.size() + 4);
+    for (char c : dotted) {
+        if (c == '.')
+            out += "__";
+        else
+            out += c;
+    }
+    return out;
+}
+
 /// Aplica el prefix `<ns_path>__` a un nombre si NO empieza con `__`
 /// (identificadores reservados) y no es `main` (entry point unico).
 std::string mangle_name_(const std::string &ns_path, const std::string &name) {
@@ -366,7 +384,8 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
             // Pre-recolectar los nombres del namespace anidado con
             // el prefix combinado.
             auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
-            const std::string nested_path = ns_path + "__" + nd->name;
+            const std::string nested_path =
+                ns_path + "__" + mangle_ns_path_(nd->name);
             mangle_decls_(nd->decls, nested_path, rename_map);
             // El namespace decl mismo no se renombra; se procesa al
             // aplanar en collect_and_flatten_.
@@ -424,7 +443,8 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             // siendo el namespace LOCAL (e.g. "controls" dentro de "ui").
             // El path completo del prefix de mangling es ya `ui__controls`.
             auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
-            const std::string nested_path = full_path + "__" + nd->name;
+            const std::string nested_path =
+                full_path + "__" + mangle_ns_path_(nd->name);
             // El namespace anidado se trata como un namespace SEPARADO
             // accesible via `ui.controls.X` (anidamiento de simbolos).
             // En MVP solo soportamos un nivel (ui.X); los simbolos del
@@ -445,7 +465,8 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
                 // El nombre publico que se accede como `ui.<X>` donde X
                 // es `<nested_name>__<sym_name>`.  E.g. `controls__Button`.
                 FlattenedNamespace::Sym child = sym;
-                child.public_name = nd->name + "__" + sym.public_name;
+                child.public_name =
+                    mangle_ns_path_(nd->name) + "__" + sym.public_name;
                 out_ns.symbols.push_back(std::move(child));
             }
             continue;
@@ -546,12 +567,17 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod) {
         if (d->kind == ast::NodeKind::NamespaceDecl) {
             auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
             // Mangle todos los decls internos con el prefijo del namespace.
+            // El prefijo FISICO usa la forma mangled (std.collections ->
+            // std__collections); el nombre HUMANO (ns.name / local_ns_name)
+            // conserva los puntos para la resolucion / acceso qualified.
+            const std::string mangled_prefix = mangle_ns_path_(nd->name);
             std::unordered_map<std::string, std::string> rename_map;
-            mangle_decls_(nd->decls, nd->name, rename_map);
+            mangle_decls_(nd->decls, mangled_prefix, rename_map);
             // Recolectar simbolos publicos + subir decls al top-level.
             FlattenedNamespace ns;
-            ns.name = nd->name;
-            collect_and_flatten_(nd->decls, nd->name, nd->name, ns, new_decls);
+            ns.name = nd->name; // humano (con puntos)
+            collect_and_flatten_(nd->decls, nd->name, mangled_prefix, ns,
+                                 new_decls);
             namespaces.push_back(std::move(ns));
             // El NamespaceDecl wrapper se descarta (no se añade a new_decls).
             // Sus decls internos ya estan en new_decls con nombres mangled.

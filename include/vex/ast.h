@@ -1835,8 +1835,13 @@ struct ImportDecl : Node {
  * (no @c foo::X -- Vex prefiere el punto sobre el scope-op de C++).
  */
 struct NamespaceDecl : Node {
-    std::string name;                         ///< "ui", "audio", etc.
+    std::string name; ///< "ui", "audio", "std.collections" (path punteado)
     std::vector<std::unique_ptr<Node>> decls; ///< contenidos top-level
+    /// Phase NS.1: true si vino de la forma STATEMENT `namespace a.b.c;` (agrupa
+    /// el resto del fichero) en lugar de la forma BLOQUE `namespace a.b.c {...}`.
+    /// Semanticamente equivalentes (ambas manglan sus @c decls con el path); el
+    /// flag es informativo para diagnosticos.
+    bool is_statement_form = false;
     NamespaceDecl() : Node(NodeKind::NamespaceDecl) {}
 };
 
