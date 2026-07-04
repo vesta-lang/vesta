@@ -42,26 +42,30 @@ Performance del intérprete y JIT C1, metodología, y comparativas con otras VMs
 | **bench_polymorphic** (peor caso pre)    | 3660 ms           | **683 ms**        | **-81%**    |
 | **bench_struct_field** (LOAD-heavy)      | 3800 ms           | **1994 ms**       | **-48%**    |
 
-**JIT C1 baseline** (27 benches multi-lenguaje, hardware i7-13700KF,
-mediana de 3 runs + 1 warmup, AV desactivado):
+**JIT C1 baseline** (29 workloads multi-lenguaje, 10 lenguajes incl. Go,
+hardware i7-13700KF, mediana de 3 runs + 1 warmup, AV desactivado;
+`cmp_fusion` sin medición JIT, así que las métricas intérprete→JIT y
+comparativas con JIT son sobre 28 workloads):
 
 | Métrica                                  | Valor             |
 | :--------------------------------------- | :---------------: |
 | **Cobertura del selector**               | **~87%** de metodos reales |
-| **Speedup JIT vs interp (geomean)**      | **18.95×**        |
-| **Speedup JIT vs interp (median)**       | **15.5×**         |
-| **Speedup peak**                         | **184.6×** (`intops_jit`) |
-| **Benches con ≥100×**                    | 2/27              |
-| **Benches con ≥50×**                     | 7/27              |
-| **Benches con ≥25×**                     | 11/27             |
-| **Benches con ≥10×**                     | 19/27 (70%)       |
-| **Geomean slowdown vs C nativo**         | **10.42×**        |
-| **HotSpot C2 geomean slowdown vs C**     | 11.49×            |
-| **C++ geomean slowdown vs C**            | 1.01× (paridad)   |
-| **Vs HotSpot**: vence (>10%) en          | **15/27** (56%)   |
-| **Vs HotSpot**: paridad ±10%             | 6/27 (22%)        |
-| **Vs HotSpot**: Java vence (>10%)        | 6/27 (22%)        |
-| **Vs CPython 3.11**: supera en           | 25/27 (93%)       |
+| **Speedup JIT vs interp (geomean)**      | **17.73×**        |
+| **Speedup JIT vs interp (median)**       | **23.3×**         |
+| **Speedup peak**                         | **301×** (`vec_axpy`) |
+| **Benches con ≥100×**                    | 1/28              |
+| **Benches con ≥50×**                     | 4/28              |
+| **Benches con ≥25×**                     | 14/28             |
+| **Benches con ≥10×**                     | 20/28 (71%)       |
+| **Geomean slowdown vs C nativo**         | **6.50×**         |
+| **HotSpot C2 (Java) geomean slowdown vs C** | 10.80×         |
+| **Go (gc) geomean slowdown vs C**        | 2.42×             |
+| **C++ geomean slowdown vs C**            | 0.97× (paridad)   |
+| **CPython 3.11 geomean slowdown vs C**   | 141.26×           |
+| **Vs HotSpot**: vence en                 | **26/28**         |
+| **Vs HotSpot**: Java vence en            | 2/28 (`fp_jit`, `string_workout`) |
+| **Vs Go (gc)**: Go vence en              | 26/28             |
+| **Vs CPython 3.11**: supera en           | 27/28 (96%)       |
 
 Optimizaciones aplicadas (orden cronologico del sprint):
 1. `ir_pass_load_narrow` - elide sign-extension redundante
@@ -206,36 +210,37 @@ instrucciones VM ejecutadas.
 JIT C1 completo con **cobertura del ~87%** de metodos reales. El JIT se
 activa con `--jit-threshold N` o `-m jit` (= threshold 1):
 
-**Speedup JIT vs interp medio: 10.98× sobre 25 benchmarks** (best-of-3,
-mediana). Distribucion:
+**Speedup JIT vs interp geomean: 17.73× sobre 28 benchmarks** (best-of-3,
+mediana; `cmp_fusion` sin medición JIT). Distribucion:
 
 | Speedup        | Count                         |
 | :------------- | :---------------------------: |
-| ≥ 10×          | 15 benches (60%)              |
-| 5-10×          | 2 benches (8%)                |
-| 2-5×           | 4 benches (16%)               |
-| 1-2×           | 2 benches (8%)                |
-| < 1× (margen)  | 2 benches (8% — overhead init)|
+| ≥ 25×          | 14 benches (50%)              |
+| 10-25×         | 6 benches (21%)               |
+| 5-10×          | 4 benches (14%)               |
+| 2-5×           | 1 bench (4%)                  |
+| 1-2×           | 3 benches (11% — float/strings) |
+| < 1× (margen)  | 0 benches                     |
 
 **Top 5 mas acelerados**:
 
-| Bench                    | Interp (ms) | JIT (ms) | Speedup    |
-| :----------------------- | ----------: | -------: | ---------: |
-| `bench_fp_jit`           | 22542       | **98**   | **230×**   |
-| `bench_intops_jit`       | 6831        | **38**   | **179×**   |
-| `bench_hash_lookup`      | 8640        | **92**   | **94×**    |
-| `bench_mem_malloc_free`  | 3692        | **45**   | **82×**    |
-| `bench_int_mixed`        | 5111        | **74**   | **70×**    |
+| Bench            | Interp (ms) | JIT (ms) | Speedup    |
+| :--------------- | ----------: | -------: | ---------: |
+| `vec_axpy`       | 24540       | **81**   | **301×**   |
+| `obj_accum`      | 3976        | **72**   | **55×**    |
+| `int_mixed`      | 2872        | **57**   | **51×**    |
+| `memcpy_loop`    | 1854        | **37**   | **50×**    |
+| `bitops`         | 3320        | **68**   | **49×**    |
 
-**Bottom 5** (sin speedup significativo):
+**Bottom 5** (menor speedup):
 
-| Bench                  | Speedup | Causa                                                    |
-| :--------------------- | ------: | :------------------------------------------------------- |
-| `bench_nested_loops`   | 2.10×   | bench muy corto (56 ms interp), overhead JIT init pesa   |
-| `bench_mem_struct`     | 1.54×   | ALLOCA in-loop no se promueve correctamente              |
-| `bench_rotops_jit`     | 1.26×   | bench triv (32 ms interp), overhead amortizado           |
-| `bench_fib_recursive`  | 0.99×   | regresion marginal: CALL/RET overhead inlinable solo en C2 |
-| `bench_bitops_jit`     | 0.92×   | bench corto (25 ms), JIT init no amortiza                |
+| Bench            | Speedup | Causa                                                    |
+| :--------------- | ------: | :------------------------------------------------------- |
+| `string_workout` | 6.05×   | string ops sin small-string-optimization                 |
+| `alloc`          | 4.67×   | bench corto (162 ms interp), overhead JIT init pesa      |
+| `mem_class`      | 1.48×   | bench triv (48 ms interp), overhead amortizado           |
+| `string_hot`     | 1.32×   | bench triv (44 ms interp), string overhead               |
+| `fp_jit`         | 1.00×   | path float **escalar** no acelerado (auto-vec en curso)  |
 
 **Cobertura del selector evolucion**:
 
@@ -252,89 +257,98 @@ o bridge al scheduler. NO afecta hot paths sincronos.
 
 ---
 
-## 5.5. Comparativa multi-lenguaje (Vex vs C / C++ / Java / Python)
+## 5.5. Comparativa multi-lenguaje (Vex vs C / C++ / Java / Python / Go)
 
 Comparativa empirica contra los principales lenguajes del ecosistema
 usando **workloads identicos** implementados en cada uno. Los benchmarks
 viven en `examples_codes_vex/benchmark/<bench_name>/` con un fichero
-por lenguaje (`main.vex`, `main.c`, `main.cpp`, `main.py`, `Main.java`).
+por lenguaje (`main.vex`, `main.c`, `main.cpp`, `main.py`, `Main.java`,
+`main.go`).
 
 **Toolchain de comparacion**:
 
-- C: `gcc -O3 -march=native`
-- C++: `g++ -O3 -march=native`
+- C: `gcc -O3 -march=native` (TDM-GCC 10.3.0)
+- C++: `g++ -O3 -march=native` (TDM-GCC 10.3.0)
 - Java: HotSpot 25 (default C2 enabled)
 - Python: CPython 3.11 (sin JIT externo)
+- Go: toolchain `gc` (compilacion nativa)
 - Vex: VestaVM JIT C1 (`-m jit`)
 - Vex interp: VestaVM intérprete puro (sin JIT)
 
-### Tiempos wall (mediana de 3 runs, ms; 27 benches multi-lenguaje)
+### Tiempos wall (mediana de 3 runs, ms; 29 workloads multi-lenguaje)
 
-| Bench              |    C |  C++ | Vex JIT | Java | Python | Vex interp |
-| :----------------- | ---: | ---: | ------: | ---: | -----: | ---------: |
-| `alloc`            |  3.0 |  2.7 |    33.4 | 69.8 |    536 |        150 |
-| `array_sum`        |  4.7 |  4.6 |    55.9 | 77.5 |    424 |       1477 |
-| `bitops`           | 25.8 | 25.9 |    77.5 | 90.0 |   7170 |       3994 |
-| `branch_unpredict` | 17.3 | 17.1 |   562.7 |  165 |   3016 |       6620 |
-| `callvirt`         |  2.6 |  2.9 |    54.5 | 68.0 |   1772 |        843 |
-| `callvirt_hot`     | 10.5 |  4.6 |    45.3 | 68.5 |    692 |        360 |
-| `cmp_fusion`       |  2.8 |  2.8 |    65.7 | 65.9 |   1813 |        752 |
-| `fib_recursive`    |  5.8 | 11.2 |    43.7 | 74.9 |    207 |        618 |
-| `fp_jit`           |  9.8 |  9.8 |    93.5 | 84.6 |   1317 |        782 |
-| `hash_lookup`      | 12.4 | 13.4 |   103.7 |  128 |   6524 |       8583 |
-| `int_mixed`        | 18.4 | 18.4 |    80.6 | 83.0 |  10736 |       4994 |
-| `intops_jit`       |  3.0 |  5.7 |    36.3 | 71.6 |   1065 |       6710 |
-| `jit_method`       |  3.7 |  3.8 |    49.0 | 76.8 |   1165 |        449 |
-| `mem_class`        |  2.7 |  3.6 |    83.1 | 72.1 |    148 |        666 |
-| `mem_malloc_free`  |  5.2 |  4.2 |    39.7 | 70.1 |    556 |       2478 |
-| `mem_struct`       |  2.8 |  3.3 |   129.3 | 68.7 |    395 |       1697 |
-| `memcpy_loop`      |  7.3 |  6.3 |    71.2 | 99.3 |   3054 |       2470 |
-| `nested_loops`     | 13.6 | 14.1 |    80.6 | 85.1 |   1573 |       2118 |
-| `pic_real`         |  5.2 |  5.9 |   485.5 | 71.3 |    274 |       1854 |
-| `polymorphic`      | 10.8 |  8.8 |    55.9 | 81.5 |   1001 |       1332 |
-| `quicksort`        |  9.9 |  7.1 |    40.3 | 74.2 |    116 |        328 |
-| `rotops_jit`       |  3.6 |  4.8 |    36.4 | 78.8 |   1361 |       4246 |
-| `state_machine`    | 19.4 | 19.4 |    80.2 | 84.9 |   1545 |       4366 |
-| `string_hot`       |  8.0 |  5.1 |    30.0 | 84.9 |     25 |         41 |
-| `string_workout`   | 30.2 | 39.8 |   416.9 |  193 |    524 |       5557 |
-| `struct_field`     |  5.2 |  5.1 |    80.1 | 74.3 |   5152 |       1874 |
-| `tight_loop`       | 12.4 | 12.4 |    80.8 | 75.6 |    992 |       2048 |
+| Bench              |    C |  C++ | Vex JIT | Java | Python |   Go | Vex interp |
+| :----------------- | ---: | ---: | ------: | ---: | -----: | ---: | ---------: |
+| `alloc`            |  4.2 |  3.7 |    34.8 | 84.4 |    643 | 49.8 |        162 |
+| `array_sum`        |  5.4 |  5.2 |    42.6 | 84.3 |    516 | 13.1 |       1632 |
+| `bitops`           | 26.9 | 27.5 |    67.9 |  100 |   8321 | 33.2 |       3320 |
+| `branch_unpredict` | 19.7 | 20.2 |   165.4 |  187 |   3399 | 21.5 |       4586 |
+| `callvirt`         |  3.6 |  3.8 |    43.3 | 77.9 |   2029 | 31.0 |        913 |
+| `callvirt_hot`     | 11.3 |  5.7 |    37.0 | 77.3 |    802 | 14.9 |        322 |
+| `cmp_fusion`       |  3.6 |  3.6 |       — | 79.5 |   2021 | 15.9 |        735 |
+| `fib_recursive`    |  6.9 |  6.6 |    41.7 | 86.7 |    289 | 13.5 |        374 |
+| `fp_jit`           | 14.2 | 10.9 |   814.0 | 95.0 |   1463 | 23.2 |        815 |
+| `hash_lookup`      | 13.1 | 14.6 |    92.6 |  139 |   7185 | 68.0 |       4342 |
+| `int_mixed`        | 20.5 | 19.9 |    56.7 | 95.4 |  11711 | 22.0 |       2872 |
+| `intops_jit`       |  3.7 |  3.9 |    40.3 | 82.7 |   1186 |  8.9 |       1589 |
+| `jit_method`       |  4.8 |  4.6 |    39.3 | 86.3 |   1306 | 15.2 |        448 |
+| `mem_class`        |  3.6 |  3.8 |    32.1 | 81.1 |    199 | 14.9 |         48 |
+| `mem_malloc_free`  |  4.4 |  4.6 |    35.9 | 77.8 |    645 | 96.3 |        689 |
+| `mem_struct`       |  3.9 |  3.6 |    34.9 | 83.5 |    464 | 21.1 |        538 |
+| `memcpy_loop`      |  8.5 |  6.7 |    37.0 |  110 |   3702 | 23.0 |       1854 |
+| `nested_loops`     | 14.3 | 14.2 |    51.3 |  102 |   1827 | 25.2 |       2227 |
+| `obj_accum`        | 29.1 | 31.3 |    72.3 |  108 |   4520 | 34.0 |       3976 |
+| `pic_real`         |  6.0 |  8.3 |    40.9 | 85.3 |    338 |  8.4 |        466 |
+| `polymorphic`      | 10.0 | 10.2 |    60.0 | 89.0 |   1144 | 14.5 |        805 |
+| `quicksort`        |  8.0 |  8.5 |    38.0 | 86.3 |    177 | 10.9 |        289 |
+| `rotops_jit`       |  4.9 |  4.8 |    35.7 | 85.3 |   1498 |  7.6 |       1048 |
+| `state_machine`    | 21.6 | 20.8 |    73.6 |  101 |   1701 | 25.1 |       3193 |
+| `string_hot`       |  9.0 |  6.2 |    33.1 |  103 |     76 | 22.7 |         44 |
+| `string_workout`   | 31.7 | 42.3 |   647.5 |  198 |    575 | 22.0 |       3915 |
+| `struct_field`     |  6.3 |  6.3 |    77.3 | 87.7 |   5489 | 20.5 |       1976 |
+| `tight_loop`       | 14.3 | 14.0 |    48.4 | 89.4 |   1110 | 23.1 |       2183 |
+| `vec_axpy`         | 17.8 | 19.1 |    81.4 |  136 |   6552 | 73.2 |      24540 |
 
 ### Findings clave
 
-**Vex JIT geomean slowdown vs C nativo: 10.42×.  HotSpot C2: 11.49×.**
-VestaVM ~9-10% mas rapido que Java en promedio sobre toda la suite.
+**Vex JIT geomean slowdown vs C nativo: 6.50×.  HotSpot C2 (Java): 10.80×.
+Go (gc): 2.42×.  C++: 0.97× (paridad).  CPython 3.11: 141.26×.**
+VestaVM ~40% mas rapido que Java en promedio sobre toda la suite, con un
+JIT C1 template-based todavia sin C2 optimizador.
 
-**Vex JIT vence a HotSpot C2 (>10%) en 15 de 27 benches (56%)**:
-`alloc`, `array_sum`, `callvirt_hot`, `fib_recursive`, `hash_lookup`,
-`int_mixed` (paridad +0.4%), `intops_jit`, `jit_method`,
-`mem_malloc_free`, `polymorphic`, `quicksort`, `rotops_jit`,
-`state_machine`, `string_hot`, otros.
+**Vex JIT vence a HotSpot C2 (Java) en 26 de 28 benches**. Java solo gana
+en `fp_jit` (path float escalar no acelerado en el JIT) y `string_workout`
+(HotSpot tiene small-string-optimization). En el resto de la tabla el JIT
+C1 de Vex es consistentemente mas rapido que la JVM.
 
-**Paridad ±10% en 6 benches**: `bitops`, `callvirt`, `cmp_fusion`,
-`memcpy_loop` (gap cerrable con vectorizer SIMD), `nested_loops`,
-`tight_loop`.
+**Go (gc) es el nuevo referente rapido** de la tabla junto a C/C++. Un
+compilador AOT maduro como el `gc` de Go queda por delante del JIT C1 de
+Vex: Go vence en 26 de 28 benches (Vex solo gana en `alloc` y
+`mem_malloc_free`). Es honesto reconocerlo — cerrar ese hueco es trabajo
+del C2 optimizador y del backend AOT nativo de Vex, ambos en desarrollo.
 
-**Java vence claramente (>10%) en 6 benches** (targets de optimizaciones
-futuras):
-- `pic_real` (JIT 485 ms vs Java 71 ms) — polymorphic inline cache con
-  clases dispersas; cerrable con inliner inter-procedural.
-- `branch_unpredict` (563 ms vs 165 ms) — branches genuinamente
-  impredecibles; cerrable con branch hints del perfil PGO.
-- `string_workout` (417 ms vs 193 ms) — sin small-string-optim en
+**Targets de optimizaciones futuras del JIT**:
+
+- `fp_jit` (JIT 814 ms == intérprete) — el path float **escalar** no se
+  acelera; la auto-vectorización SSE2/AVX en curso lo cierra.
+- `string_workout` (648 ms vs Java 198 ms) — sin small-string-optim en
   StringObject.
-- `mem_struct` (129 ms vs 69 ms) — struct copy overhead.
-- `mem_class`, `struct_field` (gap < 12%).
+- `branch_unpredict` (165 ms vs C 20 ms) — branches genuinamente
+  impredecibles; cerrable con branch hints del perfil PGO.
+- `pic_real` (JIT 41 ms vs C 6 ms) — polymorphic inline cache con clases
+  dispersas; cerrable con inliner inter-procedural.
 
-**Vex JIT supera a CPython 3.11 en 25 de 27 benches (93%)**. Las dos
-excepciones son `string_hot` (CPython tiene refcount + SSO nativos) y
-`mem_class` (Python pequeño data, sin GC overhead aqui).
+**Vex JIT supera a CPython 3.11 en 27 de 28 benches (96%)**. La única
+excepción es `string_workout` (648 ms vs 575 ms; CPython tiene refcount
+y small-string-optimization nativos). El peor caso de Vex sigue siendo
+dramáticamente mejor que el mejor caso de Python en hot loops puros
+(geomean Python: 141× más lento que C).
 
 ### Cierre del gap recursivo (`fib_recursive`)
 
 Originalmente `fib_recursive` era el unico bench donde Vex JIT perdia
-claramente vs Java HotSpot (1.0× speedup sobre interp; ratio 9.43× vs C).
-Dos optimizaciones especificas para recursion lo cerraron:
+claramente vs Java HotSpot (1.0× speedup sobre interp). Dos optimizaciones
+especificas para recursion lo cerraron:
 
 1. **TAILCALL nativo en el JIT**: el opcode IR `TAILCALL` se emite como
    `CALL` + `RET` fusionados directamente en x86-64, sin pasar por el
@@ -348,30 +362,33 @@ Dos optimizaciones especificas para recursion lo cerraron:
    produciendo un `call rel32` puro a si mismo (~3 ns vs ~30 ns del
    trampoline).
 
-Resultado medido: fib_recursive JIT pasa de 1.0× a **14× speedup** sobre
-interp, **vence claramente a HotSpot** (43.7 ms vs 74.9 ms) y se acerca
-a C nativo (43.7 ms vs 5.8 ms, ratio 7.5× — competitivo entre JITs C1).
+Resultado medido: fib_recursive JIT pasa de 1.0× a **9× speedup** sobre
+interp (374 ms → 41.7 ms), **vence claramente a HotSpot** (41.7 ms vs
+86.7 ms) y se acerca a C nativo (41.7 ms vs 6.9 ms, ratio 6.0× —
+competitivo entre JITs C1).
 
-**Vex interp**: 9-786× mas lento que C, lo esperado para un intérprete
-de bytecode con dispatch overhead. La diferencia entre interp y JIT en
-hot paths puros (`fp_jit`: 18565 ms vs 97 ms = 191× speedup) demuestra
-el valor del JIT.
+**Vex interp**: ~9-117× mas lento que C (geomean 117×), lo esperado para
+un intérprete de bytecode con dispatch overhead. La diferencia entre
+interp y JIT en hot loops vectorizables (`vec_axpy`: 24540 ms vs 81 ms =
+301× speedup) demuestra el valor del JIT.
 
 ### Conclusiones
 
-Vex JIT C1 (sin asignador de registros real ni inliner) **compite
-directamente con Java HotSpot** — una JVM con 30 años de optimizacion —
-en hot loops aritmeticos. Esto valida la arquitectura:
+Vex JIT C1 (sin asignador de registros real ni inliner) **bate a Java
+HotSpot** — una JVM con 30 años de optimizacion — en 26 de 28 benches,
+con un geomean de 6.50× vs C frente al 10.80× de HotSpot. Esto valida la
+arquitectura:
 
-1. **Hot paths puros**: Vex JIT esta dentro de 1.5-2× de C nativo,
-   competitivo con cualquier lenguaje gestionado moderno.
-2. **Recursion profunda**: el unico punto donde HotSpot brilla y Vex
-   pierde claramente. El inliner del C2 cerrara ese gap.
-3. **Vectorizacion** (`memcpy_loop`): margen claro de mejora con un
-   vectorizer SIMD futuro.
-4. **Strings**: CPython gana en `string_hot` porque sus strings son
-   refcounted + small-string-optimization. Si esto fuera critico
-   para Vex, se podria implementar small-string-optim en StringObject.
+1. **Hot loops aritmeticos**: Vex JIT es mas rapido que la JVM en casi
+   toda la tabla y competitivo con cualquier lenguaje gestionado moderno.
+2. **Referente rapido = Go (gc) y C/C++**: un compilador AOT maduro (Go
+   2.42× vs C) queda por delante del JIT C1; cerrar ese hueco es trabajo
+   del C2 optimizador y del backend AOT nativo de Vex.
+3. **Float escalar** (`fp_jit`): el path float escalar aun no se acelera
+   en el JIT (814 ms == interp); la auto-vectorizacion SSE2/AVX lo cierra.
+4. **Strings**: `string_workout` es el punto debil restante (Java y
+   CPython ganan ahi por small-string-optimization); implementable en
+   StringObject si se vuelve critico.
 
 ---
 
@@ -557,7 +574,7 @@ Vistas adicionales: `00_system_info.png` (hardware + toolchains),
 `03_radar_profile.png` (perfil radar por lenguaje),
 `05_scatter_ratio_vs_c.png` (scatter dispersion), `06_ranking_lines.png`
 (consistencia de ranking cross-bench), y `per_bench/` con una grafica
-dedicada por cada uno de los 27 benches.
+dedicada por cada uno de los 29 benches.
 
 ### Resiliencia del runner contra flakes
 

@@ -6,9 +6,9 @@
 **Una máquina virtual distribuida y un lenguaje moderno, diseñados juntos desde cero.**
 
 [![Licencia](https://img.shields.io/badge/licencia-VMProject-blue.svg)](./LICENSE.md)
-[![Estado](https://img.shields.io/badge/estado-Phase%20A%20Complete-brightgreen.svg)](./doc/ROADMAP.md)
-[![Tests](https://img.shields.io/badge/tests-213%2F213%20PASS-brightgreen.svg)](./tests/vex/)
-[![JIT](https://img.shields.io/badge/JIT-C1%20geomean%2016×%20%2F%20peak%20155×-orange.svg)](./doc/BENCHMARKS.md)
+[![Estado](https://img.shields.io/badge/estado-interp%20%2B%20JIT%20%2B%20AOT%20nativo-brightgreen.svg)](./doc/ROADMAP.md)
+[![Tests](https://img.shields.io/badge/tests-314%2F314%20PASS-brightgreen.svg)](./tests/vex/)
+[![JIT](https://img.shields.io/badge/JIT-C1%20geomean%2017.73×%20%2F%20peak%20301×-orange.svg)](./doc/BENCHMARKS.md)
 [![Plataformas](https://img.shields.io/badge/plataformas-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#inicio-r%C3%A1pido)
 
 [**Inicio rápido**](./doc/QUICKSTART.md) · [**El lenguaje Vex**](./doc/LANGUAGE.md) · [**Arquitectura**](./doc/ARCHITECTURE.md) · [**Benchmarks**](./doc/BENCHMARKS.md) · [**Roadmap**](./doc/ROADMAP.md)
@@ -31,10 +31,14 @@ componentes diseñados desde cero para trabajar juntos:
 
 2. **Compilador y runtime** — pipeline `Vex -> SSA IR -> bytecode .velb -> VM`. Más
    de 15 pasadas de optimización SSA, dispatcher threaded computed-goto
-   (~340 MIPS sostenidos), GC generacional con stack scanning conservativo +
-   stackmaps precisos, y JIT C1 template-based con **20-60× speedup** sobre
-   el intérprete en métodos hot (throughput efectivo ~7-20 GIPS de instr-VM
-   equivalentes).
+   (~340 MIPS sostenidos), GC generacional **preciso y movible** (young+old,
+   scan por stackmaps + mark-compact deslizante del OldGen + nursery preciso
+   + write-barrier old->young), y JIT C1 template-based con **hasta 301× speedup**
+   sobre el intérprete en métodos hot (throughput efectivo ~7-20 GIPS de
+   instr-VM equivalentes). Además, un **compilador AOT** que produce
+   ejecutables nativos **standalone** (PE en Windows y ELF en Linux) sin
+   runtime de la VM, con **linker y archivador propios** (`vm --link` /
+   `vm --ar`, sin depender de `ld`/`gcc`/`ar` del sistema).
 
 3. **Sistema distribuido nativo (VDP)** — protocolo propio sobre TCP/TLS para
    `rspawn` (spawn remoto), mensajería entre nodos, descubrimiento UDP en LAN,
@@ -99,10 +103,16 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 - **Reflexión runtime**: `forName`, `getClass`, `getField`, `getMethod`,
   `invoke`, `newInstance`.
 - **Genéricos** por monomorphización compile-time + fallback runtime con
-  `specialize`.
+  `specialize`. Clases, enums, **structs** (`struct Caja<T>`) y **funciones
+  libres** (`R id<T>(...)`) genéricas, con inferencia de tipos (`auto`/CTAD).
 - **Async / concurrencia**: `@Async`/`await`/`Future<T>`, `spawn`/`spawn here`/
   `spawn on(N)`/`rspawn`, mailboxes (`msgsend`/`msgrecv`), `synchronized` con
   cleanup automático.
+- **Fibras / green threads** cooperativos self-hosted en Vex (cuerpos de fibra
+  en Vex normal, scheduler cooperativo `yield`/`resume`). Context-switch por
+  backend (`swapctx` en intérprete, `fiber_switch` nativo en JIT/AOT) y
+  comportamiento **idéntico en los 3 modos** (interp/JIT/AOT, PE y ELF); el JIT
+  compila las fibras a nativo sin recaer en el intérprete.
 - **Pattern matching** exhaustivo (`match`/`case` con bindings).
 - **Smart pointers** zero-overhead: `unique<T>`, `shared<T>` con deleters custom
   para adoptar cualquier recurso del SO.
@@ -110,8 +120,17 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
   suspend stack + lifetime elision.
 - **FFI** declarativo a DLLs (`extern "lib.dll" { fn ...; }`) y runtime
   (`ffi_open`/`ffi_sym`/`ffi_call`).
+- **Punteros a función / funciones de primera clase** nativos: `cfn(...)->R`
+  (puntero crudo, 8 bytes) distinto del lambda `fn(...)->R` (fat-pointer 16
+  bytes), con `&funcion`/`&obj.metodo`; `CALLIND`/`&fn` resuelven a código
+  nativo tanto en JIT como en AOT.
+- **`synchronized` hookeable** via `@SyncImpl`: el programador sustituye el
+  monitor por spinlock, pthread, disable-IRQ (kernel) o lock cooperativo de
+  fibras — igual que `@AllocatorOverride`/`@PanicHandler`/`@CustomGC`.
 - **Strings** UTF-8/16/32, interpolación `${expr}`, format specifiers
-  `${expr:hex:>20}`, triple-quoted.
+  `${expr:hex:>20}`, triple-quoted. Color de terminal via identificadores
+  mágicos (`RED`/`GREEN`/`BOLD`/`RESET`) y **truecolor ANSI 24-bit** con
+  `fg_rgb(r,g,b)`/`bg_rgb(r,g,b)` (componentes runtime).
 - **Metaprogramación compile-time**: `@Macro` que genera código Vex inyectable,
   captura raw de expresiones arbitrarias (`asm walk(ptr -> 0x10 -> 0x20)`),
   introspección de tipos sin overhead (`sizeof<T>`, `typename<T>`, `kind<T>`,
@@ -129,12 +148,13 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
   (intérprete ~340 MIPS promedio).
 - **JIT C1** baseline (template-based, sin regalloc real) con stackmaps
   precisos para GC. Throughput efectivo **~7-20 GIPS** (instr-VM equivalentes
-  por segundo), **20-60× speedup** sobre intérprete en métodos hot.
+  por segundo), **17.73× speedup geomean** (hasta 301×) sobre intérprete en métodos hot.
 - **Super-instrucciones**: `cmpjmp`/`cmpjmpu`, `decjnz`, `alu3` (9 variantes
   fusionando `mov+OP`), `loadz`/`loadzh` (zero-extend LOAD), `mvtake`,
   `gcallocp`, `spawnargs`, `fulfillhlt`.
-- **GC generacional** Young/Old con stack scanning conservativo + interior
-  pointer scanning + write barriers para colecciones externas.
+- **GC generacional preciso y movible** Young/Old: scan preciso vía stackmaps
+  + **mark-compact** (OldGen deslizante in-place) + nursery preciso +
+  write-barrier old->young, funcionando en intérprete, JIT y AOT.
 - **Multi-threading** real opcional con scheduler placement (`spawn here`,
   `spawn on(N)`).
 - **Profile-Guided Optimization (PGO) foundation**: contadores runtime
@@ -209,69 +229,85 @@ Guía completa: [**doc/QUICKSTART.md**](./doc/QUICKSTART.md) (5 minutos).
 
 ## Estado del proyecto
 
-VestaVM está en **Phase A completa** (frontend Vex + intérprete + GC + distribuido)
-y **Phase C/D parcial** (libvesta_rt + JIT C1 con cobertura **~87%** de métodos
-reales). **Phase MC** (macros lowered al IR + ejecutados via VM con cache
-persistente y JIT opcional) también completa. **PGO foundation** disponible
-vía `--profile <path>` que genera `.vprof` consumible por el JIT (warm-start)
-y el futuro compilador AOT (decisiones especulativas hard-coded).
+VestaVM tiene el frontend Vex + intérprete + GC + distribuido completos, JIT C1
+(libvesta_rt + selector con el path vreg de producción cubriendo el corpus
+completo sin divergencia) y un **compilador AOT nativo funcional**: `-m aot`
+produce ejecutables **standalone** (PE en Windows y ELF en Linux, este último
+validado corriendo en WSL) sin runtime de la VM, con linker y archivador
+propios (`vm --link`/`vm --ar`, sin `ld`/`gcc`/`ar` del sistema). Los tres
+tiers de deployment (Full/Embed/Bare) están en construcción; el path nativo
+core — enteros, float, structs, POO no-virtual, FFI e inline-asm — ya genera
+binarios que corren. El **GC** es ahora **preciso y movible** (mark-compact +
+nursery preciso + write-barrier) en los tres modos. Las **fibras nativas
+suspendibles** (green threads cooperativos) funcionan idéntico en interp/JIT/AOT.
+Los macros bajan al IR y se ejecutan vía VM con cache persistente y JIT opcional.
+**PGO foundation** disponible vía `--profile <path>` que genera `.vprof`
+consumible por el JIT (warm-start) y el compilador AOT.
 
-**Suite de tests E2E**: **213/213 PASS** (`tests/vex/test_vex_e2e.sh`), cubriendo
+**Suite de tests E2E**: **314/314 PASS** (`tests/vex/test_vex_e2e.sh`), cubriendo
 los 180+ ejemplos del repo + 6 tests negativos del borrow checker + 11 tests
 positivos realistas del borrow checker.
 
 ### Estadísticas clave
 
-Datos generados por `tools/bench/run_all_benches.py` sobre **27 workloads
-multi-lenguaje** en hardware Intel Core i7-13700KF (16P/24L, 3.4 GHz
-base) + 47.8 GB RAM, Windows 10, 3 runs + 1 warmup por bench, AV
-desactivado durante el bench, 27/27 benches completados sin timeouts:
+La suite de benchmarks abarca **29 workloads multi-lenguaje** con `main.vex`,
+`main.c`, `main.cpp`, `main.py`, `Main.java` y `main.go` cada uno; el runner
+`tools/bench/run_all_benches.py` incluye **Go (gc)** con su propio color en las
+gráficas. Las cifras publicadas abajo provienen de la última corrida completa
+multi-lenguaje (10 lenguajes, 29 workloads) en hardware Intel Core i7-13700KF
+(16P/24L, 3.4 GHz base) + 63.8 GB RAM, Windows 10, 3 runs + 1 warmup por bench,
+AV desactivado durante el bench, todos los benches completados sin timeouts.
+`cmp_fusion` no tiene medición JIT, así que las métricas intérprete→JIT y las
+comparativas con JIT se calculan sobre 28 workloads:
 
 | Métrica | Valor |
 |---|:---:|
-| **Suite e2e Vex** | 213/213 PASS (0 FAIL) |
+| **Suite e2e Vex** | 314/314 PASS (0 FAIL) |
 | **Intérprete: MIPS promedio** | ~340 (threaded computed-goto + super-instr) |
-| **JIT C1: cobertura del selector** | **~87%** de métodos reales |
-| **JIT vs intérprete: speedup geomean** | **18.95×** sobre 27 benchmarks |
-| **JIT vs intérprete: speedup median** | **15.5×** |
-| **JIT vs intérprete: peak speedup** | **184.6×** (`intops_jit`) |
-| **JIT vs intérprete: ≥100×** | 2/27 benches |
-| **JIT vs intérprete: ≥50×** | 7/27 benches |
-| **JIT vs intérprete: ≥25×** | 11/27 benches |
-| **JIT vs intérprete: ≥10×** | 19/27 benches (70%) |
-| **JIT geomean slowdown vs C nativo** | **10.42×** |
-| **HotSpot C2 geomean slowdown vs C** | 11.49× |
-| **C++ geomean slowdown vs C** | 1.01× (paridad) |
-| **Vex JIT vs HotSpot (geomean global)** | **JIT ~9-10% más rápido que HotSpot** |
-| **JIT vs HotSpot: vence (>10%) en** | **15/27** benches (56%) |
-| **JIT vs HotSpot: paridad ±10%** | 6/27 benches (22%) |
-| **JIT vs HotSpot: Java vence (>10%)** | 6/27 benches (22%) |
-| **JIT vs CPython 3.11: supera en** | 25/27 benches (93%) |
+| **JIT C1: cobertura del selector** | path vreg de producción sin divergencia en el corpus |
+| **JIT vs intérprete: speedup geomean** | **17.73×** sobre 28 benchmarks |
+| **JIT vs intérprete: speedup median** | **23.3×** |
+| **JIT vs intérprete: peak speedup** | **301×** (`vec_axpy`) |
+| **JIT vs intérprete: ≥100×** | 1/28 benches |
+| **JIT vs intérprete: ≥50×** | 4/28 benches |
+| **JIT vs intérprete: ≥25×** | 14/28 benches |
+| **JIT vs intérprete: ≥10×** | 20/28 benches (71%) |
+| **JIT geomean slowdown vs C nativo** | **6.50×** |
+| **HotSpot C2 (Java) geomean slowdown vs C** | 10.80× |
+| **Go (gc) geomean slowdown vs C** | 2.42× |
+| **C++ geomean slowdown vs C** | 0.97× (paridad) |
+| **CPython 3.11 geomean slowdown vs C** | 141.26× |
+| **Vex JIT vs HotSpot (geomean global)** | **JIT ~40% más rápido que Java** (6.50× vs 10.80×) |
+| **JIT vs HotSpot: vence en** | **26/28** benches |
+| **JIT vs HotSpot: Java vence en** | 2/28 benches (`fp_jit`, `string_workout`) |
+| **JIT vs Go (gc): Go vence en** | 26/28 benches |
+| **JIT vs CPython 3.11: supera en** | 27/28 benches (96%) |
 
 **Top speedups intérprete → JIT** (mediana de 3 runs):
 
 | Benchmark | Intérp. | JIT | Speedup |
 |---|---:|---:|---:|
-| `intops_jit` (int ops mixtas) | 6 710 ms | **36 ms** | **185×** |
-| `rotops_jit` (rotaciones bitwise) | 4 246 ms | **36 ms** | **117×** |
-| `hash_lookup` (FNV-style 50M iter) | 8 583 ms | **104 ms** | **83×** |
-| `mem_malloc_free` (5M malloc+free) | 2 478 ms | **40 ms** | **62×** |
-| `int_mixed` (10 int ops/iter × 20M) | 4 994 ms | **81 ms** | **62×** |
-| `state_machine` (FSM 10M tokens) | 4 366 ms | **80 ms** | **54×** |
-| `bitops` (popcnt/clz/ctz heavy) | 3 994 ms | **78 ms** | **52×** |
-| `memcpy_loop` (1MB × 100 iter) | 2 470 ms | **71 ms** | **35×** |
-| `array_sum` (10M loads + ADD) | 1 477 ms | **56 ms** | **26×** |
-| `nested_loops` (1000×1000) | 2 118 ms | **81 ms** | **26×** |
-| `tight_loop` (50M iter ALU) | 2 048 ms | **81 ms** | **25×** |
-| `fib_recursive` (recursión profunda) | 618 ms | **45 ms** | **14×** |
+| `vec_axpy` (SAXPY float 128M) | 24 540 ms | **81 ms** | **301×** |
+| `obj_accum` (acumulador OOP) | 3 976 ms | **72 ms** | **55×** |
+| `int_mixed` (10 int ops/iter × 20M) | 2 872 ms | **57 ms** | **51×** |
+| `memcpy_loop` (1MB × 100 iter) | 1 854 ms | **37 ms** | **50×** |
+| `bitops` (popcnt/clz/ctz heavy) | 3 320 ms | **68 ms** | **49×** |
+| `hash_lookup` (FNV-style 50M iter) | 4 342 ms | **93 ms** | **47×** |
+| `tight_loop` (50M iter ALU) | 2 183 ms | **48 ms** | **45×** |
+| `state_machine` (FSM 10M tokens) | 3 193 ms | **74 ms** | **43×** |
+| `nested_loops` (1000×1000) | 2 227 ms | **51 ms** | **43×** |
+| `intops_jit` (int ops mixtas) | 1 589 ms | **40 ms** | **39×** |
+| `array_sum` (10M loads + ADD) | 1 632 ms | **43 ms** | **38×** |
+| `rotops_jit` (rotaciones bitwise) | 1 048 ms | **36 ms** | **29×** |
 
 **Intérprete promedio**: ~340 MIPS sobre la suite completa. Dispatcher
 threaded computed-goto, super-instrucciones (alu3, loadz, cmpjmp, decjnz),
 regalloc coalescing, IR pass schedule, load_narrow elision.
 
-**JIT C1**: cobertura del selector **~87%** de métodos reales (subió desde
-63% inicial). Hot loops aritméticos consiguen **50-155× speedup**. La
-recursión profunda — caso histórico difícil para JITs C1 — pasa de
+**JIT C1**: el path vreg de producción cubre el corpus completo sin divergencia
+(`diff_harness` reporta interp==vreg siempre); los pocos casos no cubiertos caen
+a un path legacy en jubilación. Hot loops aritméticos consiguen **29-301×
+speedup** (`vec_axpy` vectorizable llega a 301×). La recursión profunda — caso histórico difícil para JITs C1 — pasa de
 1.0× a **13× speedup** gracias a TAILCALL emitido nativamente
 (`call + ret` fusionados sin FrameHeader pool) + self-recursive call
 patcheado directo a `code_start` (sin trampoline JIT→intérprete). Los
@@ -281,66 +317,78 @@ futures) caen al intérprete graciosamente.
 ### Comparativa multi-lenguaje (workloads idénticos)
 
 Tiempos wall en ms (mediana de 3 runs; hardware i7-13700KF). Para cada
-fila, el **valor más rápido marcado en negrita**:
+fila, el **valor más rápido marcado en negrita** (entre C, C++, Vex JIT,
+Java, Python y Go):
 
-| Bench | C | C++ | Vex JIT | Java HotSpot 25 | Python 3.11 |
-|---|---:|---:|---:|---:|---:|
-| `alloc` | 3.0 | **2.7** | 33.4 | 69.8 | 535.6 |
-| `array_sum` | 4.7 | **4.6** | 55.9 | 77.5 | 423.7 |
-| `bitops` | **25.8** | 25.9 | 77.5 | 90.0 | 7169.7 |
-| `branch_unpredict` | 17.3 | **17.1** | 562.7 | 165.0 | 3016.0 |
-| `callvirt` | **2.6** | 2.9 | 54.5 | 68.0 | 1771.8 |
-| `callvirt_hot` | 10.5 | **4.6** | 45.3 | 68.5 | 691.9 |
-| `cmp_fusion` | **2.8** | **2.8** | 65.7 | 65.9 | 1812.9 |
-| `fib_recursive` | **5.8** | 11.2 | 43.7 | 74.9 | 206.8 |
-| `fp_jit` | **9.8** | **9.8** | 93.5 | 84.6 | 1316.7 |
-| `hash_lookup` | **12.4** | 13.4 | 103.7 | 128.3 | 6523.5 |
-| `int_mixed` | **18.4** | **18.4** | 80.6 | 83.0 | 10736.0 |
-| `intops_jit` | **3.0** | 5.7 | 36.3 | 71.6 | 1064.7 |
-| `jit_method` | **3.7** | 3.8 | 49.0 | 76.8 | 1165.0 |
-| `mem_class` | **2.7** | 3.6 | 83.1 | 72.1 | 147.7 |
-| `mem_malloc_free` | 5.2 | **4.2** | 39.7 | 70.1 | 556.3 |
-| `mem_struct` | **2.8** | 3.3 | 129.3 | 68.7 | 394.8 |
-| `memcpy_loop` | 7.3 | **6.3** | 71.2 | 99.3 | 3053.5 |
-| `nested_loops` | **13.6** | 14.1 | 80.6 | 85.1 | 1572.5 |
-| `pic_real` | **5.2** | 5.9 | 485.5 | 71.3 | 274.4 |
-| `polymorphic` | 10.8 | **8.8** | 55.9 | 81.5 | 1000.9 |
-| `quicksort` | 9.9 | **7.1** | 40.3 | 74.2 | 116.0 |
-| `rotops_jit` | **3.6** | 4.8 | 36.4 | 78.8 | 1360.9 |
-| `state_machine` | **19.4** | **19.4** | 80.2 | 84.9 | 1544.6 |
-| `string_hot` | 8.0 | 5.1 | 30.0 | 84.9 | **25.0** |
-| `string_workout` | **30.2** | 39.8 | 416.9 | 192.5 | 524.4 |
-| `struct_field` | 5.2 | **5.1** | 80.1 | 74.3 | 5152.1 |
-| `tight_loop` | **12.4** | **12.4** | 80.8 | 75.6 | 992.4 |
+| Bench | C | C++ | Vex JIT | Java HotSpot 25 | Python 3.11 | Go (gc) |
+|---|---:|---:|---:|---:|---:|---:|
+| `alloc` | 4.2 | **3.7** | 34.8 | 84.4 | 643.2 | 49.8 |
+| `array_sum` | 5.4 | **5.2** | 42.6 | 84.3 | 516.1 | 13.1 |
+| `bitops` | **26.9** | 27.5 | 67.9 | 100.2 | 8321.0 | 33.2 |
+| `branch_unpredict` | **19.7** | 20.2 | 165.4 | 187.3 | 3399.2 | 21.5 |
+| `callvirt` | **3.6** | 3.8 | 43.3 | 77.9 | 2028.7 | 31.0 |
+| `callvirt_hot` | 11.3 | **5.7** | 37.0 | 77.3 | 802.2 | 14.9 |
+| `cmp_fusion` | **3.6** | 3.6 | — | 79.5 | 2021.2 | 15.9 |
+| `fib_recursive` | 6.9 | **6.6** | 41.7 | 86.7 | 289.3 | 13.5 |
+| `fp_jit` | 14.2 | **10.9** | 814.0 | 95.0 | 1462.8 | 23.2 |
+| `hash_lookup` | **13.1** | 14.6 | 92.6 | 139.3 | 7184.9 | 68.0 |
+| `int_mixed` | 20.5 | **19.9** | 56.7 | 95.4 | 11710.6 | 22.0 |
+| `intops_jit` | **3.7** | 3.9 | 40.3 | 82.7 | 1185.7 | 8.9 |
+| `jit_method` | 4.8 | **4.6** | 39.3 | 86.3 | 1305.5 | 15.2 |
+| `mem_class` | **3.6** | 3.8 | 32.1 | 81.1 | 199.0 | 14.9 |
+| `mem_malloc_free` | **4.4** | 4.6 | 35.9 | 77.8 | 644.8 | 96.3 |
+| `mem_struct` | 3.9 | **3.6** | 34.9 | 83.5 | 464.3 | 21.1 |
+| `memcpy_loop` | 8.5 | **6.7** | 37.0 | 109.5 | 3701.9 | 23.0 |
+| `nested_loops` | 14.3 | **14.2** | 51.3 | 102.2 | 1827.1 | 25.2 |
+| `obj_accum` | **29.1** | 31.3 | 72.3 | 107.6 | 4520.1 | 34.0 |
+| `pic_real` | **6.0** | 8.3 | 40.9 | 85.3 | 338.3 | 8.4 |
+| `polymorphic` | **10.0** | 10.2 | 60.0 | 89.0 | 1143.5 | 14.5 |
+| `quicksort` | **8.0** | 8.5 | 38.0 | 86.3 | 176.6 | 10.9 |
+| `rotops_jit` | 4.9 | **4.8** | 35.7 | 85.3 | 1497.8 | 7.6 |
+| `state_machine` | 21.6 | **20.8** | 73.6 | 101.4 | 1701.0 | 25.1 |
+| `string_hot` | 9.0 | **6.2** | 33.1 | 102.5 | 76.2 | 22.7 |
+| `string_workout` | 31.7 | 42.3 | 647.5 | 197.8 | 574.7 | **22.0** |
+| `struct_field` | **6.3** | 6.3 | 77.3 | 87.7 | 5488.8 | 20.5 |
+| `tight_loop` | 14.3 | **14.0** | 48.4 | 89.4 | 1110.2 | 23.1 |
+| `vec_axpy` | **17.8** | 19.1 | 81.4 | 135.5 | 6552.2 | 73.2 |
 
-**Vex JIT C1 vence a HotSpot C2 en 15 de 27 benches (56%)**, paridad
-±10% en 6 (22%), Java vence claramente en 6 (22%). En geomean global
-de slowdown vs C, **Vex JIT está en 10.42× mientras HotSpot está en
-11.49×** — VestaVM es ~9-10% más rápido que Java en promedio.
+**Vex JIT C1 vence a HotSpot C2 (Java) en 26 de 28 benches**; Java solo
+gana en `fp_jit` y `string_workout`. En geomean global de slowdown vs C,
+**Vex JIT está en 6.50× mientras HotSpot está en 10.80×** — VestaVM es
+~40% más rápido que Java en promedio y **bate a HotSpot en casi toda la
+tabla** para un JIT C1 template-based (sin C2 optimizador todavía).
 
-Casos donde JIT queda detrás (target de optimizaciones futuras):
+**Go (gc) es el nuevo referente rápido** de la tabla junto a C/C++: Go
+compilado nativo alcanza **2.42× slowdown vs C** y supera al JIT C1 de
+Vex en 26 de 28 benches (Vex gana en `alloc` y `mem_malloc_free`). Es
+honesto reconocerlo — un compilador AOT maduro como el `gc` de Go queda
+por delante de nuestro JIT C1; cerrar ese hueco es trabajo del C2
+optimizador y del backend AOT nativo de Vex, ambos en desarrollo.
 
-- `pic_real` (JIT 485 ms vs Java 71 ms) — el JIT C1 no devirtualiza
-  el patrón PIC con clases dispersas; el inliner futuro lo cerrará.
-- `branch_unpredict` (563 ms vs 165 ms) — branches genuinamente
-  impredecibles; mejora con branch hints del perfil PGO ya recolectado.
-- `string_workout` (417 ms vs 192 ms) — HotSpot tiene
+Casos donde el JIT queda detrás (targets de optimizaciones futuras):
+
+- `fp_jit` (JIT 814 ms == intérprete) — el path float **escalar** no se
+  acelera en el JIT actual; la auto-vectorización SSE2/AVX en curso lo cierra.
+- `string_workout` (648 ms vs Java 198 ms) — HotSpot tiene
   small-string-optimization; mejora con SSO en StringObject.
-- `mem_struct` (129 ms vs 69 ms) — overhead de struct copy en JIT.
+- `branch_unpredict` (165 ms vs C 20 ms) — branches genuinamente
+  impredecibles; mejora con branch hints del perfil PGO ya recolectado.
+- `pic_real` (JIT 41 ms vs C 6 ms) — el JIT C1 no devirtualiza el
+  patrón PIC con clases dispersas; el inliner futuro lo cerrará.
 
-**Vex JIT supera a CPython 3.11 en 25 de 27 benches (93%)**. Las dos
-excepciones son `string_hot` (CPython tiene refcount + SSO nativos) y
-`mem_class` (Python pequeño data + sin GC overhead aquí). El peor caso
-de Vex sigue siendo significativamente mejor que el mejor caso de
-Python en hot loops puros.
+**Vex JIT supera a CPython 3.11 en 27 de 28 benches (96%)**. La única
+excepción es `string_hot` (CPython tiene refcount + SSO nativos). El
+peor caso de Vex sigue siendo dramáticamente mejor que el mejor caso de
+Python en hot loops puros (geomean Python: 141× más lento que C).
 
 Detalles + metodología + cómo correr los benchmarks en
-[doc/BENCHMARKS.md](./doc/BENCHMARKS.md). Los workloads multi-lenguaje
+[doc/BENCHMARKS.md](./doc/BENCHMARKS.md). Los **29 workloads** multi-lenguaje
 viven en `examples_codes_vex/benchmark/<bench>/` con `main.vex`, `main.c`,
-`main.cpp`, `main.py`, `Main.java` cada uno. Runner orquestador:
-`python tools/bench/run_all_benches.py` (genera `bench_results.json`
-con `runs_individual`, `stats` p50/p95/min/max/stddev por lenguaje, y
-9 gráficas matplotlib en `bench_plots/` + reporte HTML navegable).
+`main.cpp`, `main.py`, `Main.java` y `main.go` cada uno. Runner orquestador:
+`python tools/bench/run_all_benches.py` (incluye **Go (gc)** con su propio
+color; genera `bench_results.json` con `runs_individual`, `stats`
+p50/p95/min/max/stddev por lenguaje, y 9 gráficas matplotlib en
+`bench_plots/` + reporte HTML navegable).
 
 ### Visualización gráfica de resultados
 
@@ -374,7 +422,7 @@ radar por lenguaje),
 (scatter de ratio vs C), y
 [`06_ranking_lines.png`](./bench_plots/06_ranking_lines.png) (ranking
 por bench mostrando consistencia entre lenguajes).  El runner además
-genera una gráfica dedicada por cada uno de los 27 benches en
+genera una gráfica dedicada por cada bench en
 `bench_plots/per_bench/` (no commiteadas, regenerar localmente con
 `python tools/bench/run_all_benches.py`).
 
@@ -406,12 +454,12 @@ distribución y herramientas se diseñan juntos. Comparativa de features clave:
 | Captura raw de DSL embebido | ✓ (`expr`) | ✗ | `macro_rules!` | macros texto | ✗ | ✗ |
 | Format specs en interpolación | ✓ | ✗ | ✓ | parcial (C++20) | ✓ | ✓ |
 | Strings UTF-8/16/32 nativos | ✓ | UTF-16 | UTF-8 | varios | varios | UTF-8 |
-| GC generacional precise+conservative | ✓ | ✓ | ✗ | ✗ | refcount+gc | ✓ |
+| GC generacional preciso + movible (mark-compact) | ✓ | ✓ | ✗ | ✗ | refcount+gc | ✓ |
 | JIT integrado | ✓ (C1) | ✓ (C1+C2+Graal) | ✗ | ✗ | parcial (PyPy) | ✗ |
 | Bytecode portable | ✓ (`.velb`) | ✓ (.class) | ✗ | ✗ | ✓ (.pyc) | ✗ |
-| Ejecutables nativos (3 tiers: con runtime / embebido / sin runtime) | roadmap (Phase AOT) | parcial (GraalVM) | ✓ (no_std) | ✓ (freestanding) | externa | ✓ |
+| Ejecutables nativos (3 tiers: con runtime / embebido / sin runtime) | funcional (PE+ELF standalone; 3 tiers en progreso) | parcial (GraalVM) | ✓ (no_std) | ✓ (freestanding) | externa | ✓ |
 | Profile-Guided Optimization (PGO) | ✓ (foundation `.vprof`) | ✓ | externa (cargo-pgo) | ✓ (GCC/MSVC) | externa | parcial |
-| Inline assembly | roadmap (Phase AS) | ✗ | ✓ | ✓ | ✗ | parcial |
+| Inline assembly | parcial (`@Asm` whole-function; `asm{}` inline en progreso) | ✗ | ✓ | ✓ | ✗ | parcial |
 | REPL interactivo | ✓ | ✓ (JShell) | ✗ | ✗ | ✓ | ✗ |
 | Debugger source-aware integrado | ✓ (TCP) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Diagramas Mermaid del pipeline | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
@@ -437,9 +485,13 @@ distribución y herramientas se diseñan juntos. Comparativa de features clave:
 - **Velocidad bruta**: el JIT C1 está al 5-10% de la velocidad de C nativo
   optimizado en hot loops (C2 cerrará la brecha cuando llegue).
 - **Documentación en inglés**: toda la doc del proyecto está en español ASCII.
-- **Plataformas ARM/AArch64**: el JIT solo soporta x86-64 hoy; ARM en Phase H.
-- **Madurez del Phase D**: cobertura del JIT C1 al ~52% de métodos reales;
-  el resto cae al intérprete (que es rápido pero no nativo).
+- **Plataformas ARM/AArch64**: el JIT solo soporta x86-64 hoy; ARM más adelante.
+- **AOT nativo en construcción**: el path core (int/float/structs/POO
+  no-virtual/FFI/inline-asm) ya produce ejecutables PE/ELF standalone, pero
+  los tres tiers (Full/Embed/Bare) y features managed sobre AOT siguen en
+  desarrollo activo. El JIT C1 cubre el corpus por el path vreg de producción;
+  las pocas features no cubiertas (excepciones polimórficas, spawn/distrib,
+  futures) caen a un path legacy o al intérprete graciosamente.
 
 ---
 
@@ -554,10 +606,11 @@ Detalles completos (Valgrind, ASan, errores comunes, XMake alternativo) en
   diseñado para ser legible, con cada feature documentada y comentada
   exhaustivamente en español ASCII.
 
-### Casos de uso futuros (Phase AOT)
+### Casos de uso: compilación nativa (AOT)
 
-La arquitectura está preparada para tres tiers de deployment cuando aterrice
-la compilación a binarios nativos. La **misma fuente** podrá compilar a:
+El compilador AOT (`-m aot`) ya produce ejecutables nativos standalone PE/ELF
+para el subset core del lenguaje. La arquitectura está preparada para tres
+tiers de deployment (en construcción); la **misma fuente** podrá compilar a:
 
 - **Vex Full** (3-5 MB con runtime linkado dinámicamente) — apps managed
   con todo el lenguaje disponible: GC, async, reflexión, distribución.
@@ -599,7 +652,7 @@ donde lenguaje, runtime, distribución y herramientas se diseñan juntos:
 - **Documentación binding**: cada feature del lenguaje y cada opcode del
   bytecode tienen doc autoritativa en español. 
   referencia para futuras decisiones).
-- **Tests no negociables**: 230/230 e2e antes de cada commit. Cada nueva feature
+- **Tests no negociables**: 314/314 e2e antes de cada commit. Cada nueva feature
   ships con su test en `tests/vex/`.
 
 ---
