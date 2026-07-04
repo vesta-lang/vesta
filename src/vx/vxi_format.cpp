@@ -475,7 +475,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // v6: crece a 80 (gen_templates_offset u32 + gen_templates_count u32 +
     // 8 pad en offsets 64..79).
     const size_t HEADER_BYTES = 80;
-    const size_t GEN_ENTRY_BYTES = 20; // name_off+name_len+kind(u32)+src_off+src_len
+    const size_t GEN_ENTRY_BYTES =
+        28; // name_off+name_len+kind+src_off+src_len+ns_off+ns_len (v9)
     const size_t SYMENTRY_BYTES = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
     const size_t DEP_ENTRY_BYTES =
         16; // u32 name_off + u32 name_len + u64 abi_hash
@@ -495,7 +496,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     }
     // v6: pre-internar nombre + fuente de cada plantilla generica exportada.
     struct GenTplOff {
-        uint32_t name_off, name_len, kind, src_off, src_len;
+        uint32_t name_off, name_len, kind, src_off, src_len, ns_off, ns_len;
     };
     std::vector<GenTplOff> gen_offs;
     gen_offs.reserve(mod.generic_templates.size());
@@ -506,6 +507,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         go.kind = g.kind;
         go.src_off = pool.intern(g.source);
         go.src_len = static_cast<uint32_t>(g.source.size());
+        go.ns_off = pool.intern(g.ns_path);
+        go.ns_len = static_cast<uint32_t>(g.ns_path.size());
         gen_offs.push_back(go);
     }
 
@@ -565,6 +568,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         write_u32(out, go.kind);
         write_u32(out, go.src_off);
         write_u32(out, go.src_len);
+        write_u32(out, go.ns_off);
+        write_u32(out, go.ns_len);
     }
 
     // String pool al final.
@@ -1059,7 +1064,7 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     constexpr size_t SYMENTRY_BYTES = 20;
     constexpr size_t HEADER_BYTES = 80;
     constexpr size_t DEP_ENTRY_BYTES = 16;
-    constexpr size_t GEN_ENTRY_BYTES = 20;
+    constexpr size_t GEN_ENTRY_BYTES = 28; // v9: +ns_off+ns_len
     // v4: blob_pool extraido a un std::vector para conservar la API
     // existente.  Validamos rangos antes de copiar.
     if (blob_pool_size_hdr != 0) {
@@ -1198,12 +1203,15 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     r.module_.generic_templates.reserve(gen_count_hdr);
     for (uint32_t i = 0; i < gen_count_hdr; ++i) {
         size_t g_off = gen_offset_hdr + i * GEN_ENTRY_BYTES;
-        uint32_t n_off = 0, n_len = 0, kind = 0, s_off = 0, s_len = 0;
+        uint32_t n_off = 0, n_len = 0, kind = 0, s_off = 0, s_len = 0,
+                 ns_off = 0, ns_len = 0;
         if (!read_u32(data, size, g_off, n_off) ||
             !read_u32(data, size, g_off, n_len) ||
             !read_u32(data, size, g_off, kind) ||
             !read_u32(data, size, g_off, s_off) ||
-            !read_u32(data, size, g_off, s_len)) {
+            !read_u32(data, size, g_off, s_len) ||
+            !read_u32(data, size, g_off, ns_off) ||
+            !read_u32(data, size, g_off, ns_len)) {
             r.error_message = "gen template entry truncada";
             return r;
         }
@@ -1214,6 +1222,8 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
             r.error_message = "gen template name/source fuera de bounds";
             return r;
         }
+        if (ns_len > 0)
+            read_name(data, size, ns_off, ns_len, pool_start, g.ns_path);
         r.module_.generic_templates.push_back(std::move(g));
     }
 

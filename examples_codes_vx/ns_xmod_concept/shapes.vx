@@ -1,0 +1,4 @@
+// NS.2 cross-modulo: un concepto declarado en un namespace, exigido por su
+// nombre cualificado desde OTRO modulo.
+namespace geo;
+public concept Numerico<T> = is_numeric<T>();

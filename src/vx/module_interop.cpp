@@ -909,6 +909,15 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         g.name = tex.name;
         g.kind = tex.kind;
         g.source = tex.source;
+        // NS.2: si la plantilla/concepto se declaro en un namespace, propagar
+        // su ns_path.  El tex.name es el nombre publico (sin manglar); lo
+        // buscamos en declared_ns_symbols (keyed por mangled -> (ns, public)).
+        for (const auto &dns : tc.declared_ns_symbols()) {
+            if (dns.second.second == tex.name) {
+                g.ns_path = dns.second.first;
+                break;
+            }
+        }
         out.generic_templates.push_back(std::move(g));
     }
 }
@@ -991,9 +1000,24 @@ void inject_generic_templates_from_vxi(
         // Filtro `only` (si wanted no esta vacio).  Las specs comparten el
         // nombre del primario, asi que el filtro por nombre las incluye.
         if (!wanted.empty() && wanted.find(nm) == wanted.end()) continue;
-        // Rename para imports con namespace: `Caja` -> `lib.Caja`.
-        if (!ns_prefix.empty() && !nm.empty())
+        // NS.2: si la plantilla/concepto declaraba un namespace en el dep,
+        // registrarla bajo el nombre ns-mangled (`mat__X`) para que el acceso
+        // cualificado `mat.X` resuelva (misma convencion `.`->`__`).  Si no,
+        // usar el prefijo del modulo con punto (comportamiento previo).
+        std::string tpl_ns;
+        for (const auto &g : mod.generic_templates)
+            if (g.name == nm) {
+                tpl_ns = g.ns_path;
+                break;
+            }
+        if (!tpl_ns.empty()) {
+            std::string ns_m;
+            for (char c : tpl_ns)
+                ns_m += (c == '.') ? std::string("__") : std::string(1, c);
+            set_decl_name(decl.get(), ns_m + "__" + nm);
+        } else if (!ns_prefix.empty() && !nm.empty()) {
             set_decl_name(decl.get(), ns_prefix + "." + nm);
+        }
         tc.inject_decl(std::move(decl));
     }
 }

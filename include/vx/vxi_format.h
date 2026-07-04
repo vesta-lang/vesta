@@ -51,7 +51,7 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// `@align`/`@hot`/`@cold`/`@section` viajan en el blob.
 /// v6: seccion de plantillas genericas exportadas (texto fuente) para
 /// monomorphizacion cross-module.
-inline constexpr uint16_t VXI_FORMAT_VERSION = 8; // NS.2: ns_path tambien en tipos
+inline constexpr uint16_t VXI_FORMAT_VERSION = 9; // NS.2: ns_path en templates
 
 /// Kind del payload dentro de un BlobHeader (.vxi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
@@ -303,6 +303,7 @@ struct VxiModule {
         std::string name;   ///< nombre del template
         uint8_t kind = 0;   ///< NodeKind del decl (Struct/Class/Function/...)
         std::string source; ///< texto fuente completo del decl
+        std::string ns_path; ///< NS.2 (v9): namespace declarado (vacio = ninguno)
     };
     std::vector<GenericTemplateSource> generic_templates;
 };

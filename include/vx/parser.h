@@ -221,6 +221,13 @@ class Parser {
     std::unique_ptr<ast::ImportDecl> parse_import_decl(bool is_public_reexport);
     /// @brief Parsea @c "namespace foo { decls }" (Phase M.7.c).
     std::unique_ptr<ast::NamespaceDecl> parse_namespace_decl();
+    /// #cross-module-generics: captura el texto fuente de una plantilla/concepto
+    /// (top-level o dentro de un namespace) en @c generic_template_exports.
+    void collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
+                                  uint32_t decl_start_off);
+    /// Modulo actual en curso (para que parse_namespace_decl exporte las
+    /// plantillas/concepts de sus decls anidadas).  Set por parse_program.
+    ast::ModuleNode *tpl_export_mod_ = nullptr;
     /// @c bytes name { db/dw/dd/dq/times ... }  (datos crudos NASM, AOT).
     std::unique_ptr<ast::BytesDecl> parse_bytes_decl();
     /// @c asm name { <nasm 16/32/64> }  (codigo ensamblado por Keystone, AOT).

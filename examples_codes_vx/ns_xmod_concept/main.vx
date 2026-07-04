@@ -1,0 +1,11 @@
+import "shapes";
+
+// El bound usa el CONCEPTO del namespace de OTRO modulo (geo.Numerico),
+// aplicado a un generico LOCAL.  Constraint 100% compile-time cross-modulo.
+public T triple<T: geo.Numerico>(T x) { return x + x + x; }
+
+i64 main() {
+    i64 a = triple<i64>(14);      // 42 (i64 satisface geo.Numerico del dep)
+    println("a=${a}");
+    return a;
+}
