@@ -1,6 +1,6 @@
 # Roadmap de VestaVM
 
-Plan publico de fases A-H, desde el frontend Vex hasta ejecutables nativos
+Plan publico de fases A-H, desde el frontend Vesta hasta ejecutables nativos
 standalone.
 
 > **Snapshot**: 2026-05-17.
@@ -12,7 +12,7 @@ standalone.
 - [Roadmap de VestaVM](#roadmap-de-vestavm)
   - [Indice](#indice)
   - [1. Vision general de fases](#1-vision-general-de-fases)
-  - [2. Phase A: Frontend Vex (completa)](#2-phase-a-frontend-vex-completa)
+  - [2. Phase A: Frontend Vesta (completa)](#2-phase-a-frontend-vex-completa)
   - [3. Phase B: IR cleanups (completa)](#3-phase-b-ir-cleanups-completa)
   - [4. Phase C: libvesta\_rt extraction (parcial)](#4-phase-c-libvesta_rt-extraction-parcial)
   - [5. Phase D: JIT C1+C2 (en progreso)](#5-phase-d-jit-c1c2-en-progreso)
@@ -33,7 +33,7 @@ standalone.
 ## 1. Vision general de fases
 
 ```text
-Phase A  -->  Frontend Vex completo                          [COMPLETO]
+Phase A  -->  Frontend Vesta completo                          [COMPLETO]
 Phase B  -->  IR cleanups + monomorphization contract        [COMPLETO]
 Phase C  -->  Extraer libvesta_rt como libreria standalone   [PARCIAL]
 Phase D  -->  JIT C1+C2 (template + optimizing)              [PARCIAL: D.0-D.3-I]
@@ -52,7 +52,7 @@ correspondientes.
 
 ---
 
-## 2. Phase A: Frontend Vex (completa)
+## 2. Phase A: Frontend Vesta (completa)
 
 **Status**: 200/200 e2e PASS. Cubre TODAS las features del lenguaje listadas
 en [doc/LANGUAGE.md](./LANGUAGE.md).
@@ -279,12 +279,12 @@ el plan para macOS comparte gran parte de la infraestructura ELF + DWARF.
 
 Mas alla de Phase H, items que se han considerado pero no priorizado:
 
-- **WASM backend**: emitir WebAssembly desde el SSA IR, ejecutar Vex en el
+- **WASM backend**: emitir WebAssembly desde el SSA IR, ejecutar Vesta en el
   browser. Requeriria portar `libvesta_rt` a WASM (GC stub via reference
   types).
 - **GPU compute**: bytecode VM que ejecuta en GPU para workloads paralelos
   masivos. Requeriria SIMT abstraction sobre los procesos ligeros.
-- **Lenguaje 2.0**: Vex post-Phase H podria incorporar features que hoy
+- **Lenguaje 2.0**: Vesta post-Phase H podria incorporar features que hoy
   faltan: type classes / traits, effect system, dependent types.
 - **Multi-lenguaje sobre IR**: el SSA IR + libvesta_rt podrian ser target
   de OTROS lenguajes (frontend Python-like, frontend Lisp, etc.). El proyecto
@@ -350,7 +350,7 @@ privado, impidiendo `synchronized`/`notify`/`wait` cross-process.
 
 **Verificacion** (snapshot 2026-05-23):
 
-- Vex e2e: **237/237 OK, 0 fallidos**.
+- Vesta e2e: **237/237 OK, 0 fallidos**.
 - Tests Z unitarios: **8141 PASS**.
 - `bench_shared_contention --schedulers 4`: R0 = 400000 exacto.
 - t13 (Java-style synchronized + wait/notify cross-process): R0 = 42.
@@ -367,7 +367,7 @@ Documentos relacionados:
 
 - [doc/ARCHITECTURE.md](./ARCHITECTURE.md) - arquitectura interna actual
 - [doc/BENCHMARKS.md](./BENCHMARKS.md) - performance numbers
-- [doc/LANGUAGE.md](./LANGUAGE.md) - lo que Vex soporta hoy
+- [doc/LANGUAGE.md](./LANGUAGE.md) - lo que Vesta soporta hoy
 - [doc/VMdoc/IR/SSA.md](./VMdoc/IR/SSA.md) - representacion intermedia + pasadas de optimizacion
 - [doc/VMdoc/SetInstruccionesVM/](./VMdoc/SetInstruccionesVM/) - referencia del bytecode
 - [doc/VMdoc/PhaseZ/SharedMemory.md](./VMdoc/PhaseZ/SharedMemory.md) - memoria compartida cross-process

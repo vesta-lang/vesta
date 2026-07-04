@@ -101,7 +101,7 @@ Flags Release: `-O3 -DNDEBUG -march=x86-64 -mtune=native -ffast-math
 
 **Metodologia**:
 
-- Cada bench se compila con `vm --vex bench.vx -o /tmp/b -O2` (opt level 2).
+- Cada bench se compila con `vm --vesta bench.vx -o /tmp/b -O2` (opt level 2).
 - Se ejecuta 3 veces; se reporta el **best-of-3** (mejor tiempo) para reducir
   variabilidad por scheduling del OS.
 - MIPS se calcula como `(profiler_instr_counter / wall_time_ns) * 1000`.
@@ -257,7 +257,7 @@ o bridge al scheduler. NO afecta hot paths sincronos.
 
 ---
 
-## 5.5. Comparativa multi-lenguaje (Vex vs C / C++ / Java / Python / Go)
+## 5.5. Comparativa multi-lenguaje (Vesta vs C / C++ / Java / Python / Go)
 
 Comparativa empirica contra los principales lenguajes del ecosistema
 usando **workloads identicos** implementados en cada uno. Los benchmarks
@@ -272,12 +272,12 @@ por lenguaje (`main.vx`, `main.c`, `main.cpp`, `main.py`, `Main.java`,
 - Java: HotSpot 25 (default C2 enabled)
 - Python: CPython 3.11 (sin JIT externo)
 - Go: toolchain `gc` (compilacion nativa)
-- Vex: VestaVM JIT C1 (`-m jit`)
-- Vex interp: VestaVM intérprete puro (sin JIT)
+- Vesta: VestaVM JIT C1 (`-m jit`)
+- Vesta interp: VestaVM intérprete puro (sin JIT)
 
 ### Tiempos wall (mediana de 3 runs, ms; 29 workloads multi-lenguaje)
 
-| Bench              |    C |  C++ | Vex JIT | Java | Python |   Go | Vex interp |
+| Bench              |    C |  C++ | Vesta JIT | Java | Python |   Go | Vesta interp |
 | :----------------- | ---: | ---: | ------: | ---: | -----: | ---: | ---------: |
 | `alloc`            |  4.2 |  3.7 |    34.8 | 84.4 |    643 | 49.8 |        162 |
 | `array_sum`        |  5.4 |  5.2 |    42.6 | 84.3 |    516 | 13.1 |       1632 |
@@ -311,21 +311,21 @@ por lenguaje (`main.vx`, `main.c`, `main.cpp`, `main.py`, `Main.java`,
 
 ### Findings clave
 
-**Vex JIT geomean slowdown vs C nativo: 6.50×.  HotSpot C2 (Java): 10.80×.
+**Vesta JIT geomean slowdown vs C nativo: 6.50×.  HotSpot C2 (Java): 10.80×.
 Go (gc): 2.42×.  C++: 0.97× (paridad).  CPython 3.11: 141.26×.**
 VestaVM ~40% mas rapido que Java en promedio sobre toda la suite, con un
 JIT C1 template-based todavia sin C2 optimizador.
 
-**Vex JIT vence a HotSpot C2 (Java) en 26 de 28 benches**. Java solo gana
+**Vesta JIT vence a HotSpot C2 (Java) en 26 de 28 benches**. Java solo gana
 en `fp_jit` (path float escalar no acelerado en el JIT) y `string_workout`
 (HotSpot tiene small-string-optimization). En el resto de la tabla el JIT
-C1 de Vex es consistentemente mas rapido que la JVM.
+C1 de Vesta es consistentemente mas rapido que la JVM.
 
 **Go (gc) es el nuevo referente rapido** de la tabla junto a C/C++. Un
 compilador AOT maduro como el `gc` de Go queda por delante del JIT C1 de
-Vex: Go vence en 26 de 28 benches (Vex solo gana en `alloc` y
+Vesta: Go vence en 26 de 28 benches (Vesta solo gana en `alloc` y
 `mem_malloc_free`). Es honesto reconocerlo — cerrar ese hueco es trabajo
-del C2 optimizador y del backend AOT nativo de Vex, ambos en desarrollo.
+del C2 optimizador y del backend AOT nativo de Vesta, ambos en desarrollo.
 
 **Targets de optimizaciones futuras del JIT**:
 
@@ -338,15 +338,15 @@ del C2 optimizador y del backend AOT nativo de Vex, ambos en desarrollo.
 - `pic_real` (JIT 41 ms vs C 6 ms) — polymorphic inline cache con clases
   dispersas; cerrable con inliner inter-procedural.
 
-**Vex JIT supera a CPython 3.11 en 27 de 28 benches (96%)**. La única
+**Vesta JIT supera a CPython 3.11 en 27 de 28 benches (96%)**. La única
 excepción es `string_workout` (648 ms vs 575 ms; CPython tiene refcount
-y small-string-optimization nativos). El peor caso de Vex sigue siendo
+y small-string-optimization nativos). El peor caso de Vesta sigue siendo
 dramáticamente mejor que el mejor caso de Python en hot loops puros
 (geomean Python: 141× más lento que C).
 
 ### Cierre del gap recursivo (`fib_recursive`)
 
-Originalmente `fib_recursive` era el unico bench donde Vex JIT perdia
+Originalmente `fib_recursive` era el unico bench donde Vesta JIT perdia
 claramente vs Java HotSpot (1.0× speedup sobre interp). Dos optimizaciones
 especificas para recursion lo cerraron:
 
@@ -367,23 +367,23 @@ interp (374 ms → 41.7 ms), **vence claramente a HotSpot** (41.7 ms vs
 86.7 ms) y se acerca a C nativo (41.7 ms vs 6.9 ms, ratio 6.0× —
 competitivo entre JITs C1).
 
-**Vex interp**: ~9-117× mas lento que C (geomean 117×), lo esperado para
+**Vesta interp**: ~9-117× mas lento que C (geomean 117×), lo esperado para
 un intérprete de bytecode con dispatch overhead. La diferencia entre
 interp y JIT en hot loops vectorizables (`vec_axpy`: 24540 ms vs 81 ms =
 301× speedup) demuestra el valor del JIT.
 
 ### Conclusiones
 
-Vex JIT C1 (sin asignador de registros real ni inliner) **bate a Java
+Vesta JIT C1 (sin asignador de registros real ni inliner) **bate a Java
 HotSpot** — una JVM con 30 años de optimizacion — en 26 de 28 benches,
 con un geomean de 6.50× vs C frente al 10.80× de HotSpot. Esto valida la
 arquitectura:
 
-1. **Hot loops aritmeticos**: Vex JIT es mas rapido que la JVM en casi
+1. **Hot loops aritmeticos**: Vesta JIT es mas rapido que la JVM en casi
    toda la tabla y competitivo con cualquier lenguaje gestionado moderno.
 2. **Referente rapido = Go (gc) y C/C++**: un compilador AOT maduro (Go
    2.42× vs C) queda por delante del JIT C1; cerrar ese hueco es trabajo
-   del C2 optimizador y del backend AOT nativo de Vex.
+   del C2 optimizador y del backend AOT nativo de Vesta.
 3. **Float escalar** (`fp_jit`): el path float escalar aun no se acelera
    en el JIT (814 ms == interp); la auto-vectorizacion SSE2/AVX lo cierra.
 4. **Strings**: `string_workout` es el punto debil restante (Java y
@@ -469,7 +469,7 @@ restante en codigo recursion-heavy.
 # Compilar todos los benches en un script
 for b in examples_codes_vex/benchmark/bench_*.vx; do
   name=$(basename "$b" .vx)
-  ./build/vm --vex "$b" -o /tmp/$name -O2 > /dev/null
+  ./build/vm --vesta "$b" -o /tmp/$name -O2 > /dev/null
 done
 
 # Ejecutar uno especifico con stats
@@ -507,7 +507,7 @@ implementaciones, una por lenguaje:
 
 ```text
 examples_codes_vex/benchmark/<bench>/
-    main.vx      # Vex
+    main.vx      # Vesta
     main.c        # C    (gcc -O3 -march=native)
     main.cpp      # C++  (g++ -O3 -march=native)
     main.py       # Python (CPython 3.11)
@@ -549,7 +549,7 @@ absoluto, ratio vs C nativo, ranking por bench y speedup JIT vs interp.
 ![Dashboard](../bench_plots/01_dashboard.png)
 
 **Resumen geomean vs C** (`08_geomean_summary.png`): media geometrica
-del slowdown vs C por lenguaje.  Vex JIT compite directamente con
+del slowdown vs C por lenguaje.  Vesta JIT compite directamente con
 HotSpot C2 y lo supera en promedio.
 
 ![Geomean vs C](../bench_plots/08_geomean_summary.png)
@@ -560,7 +560,7 @@ en escala logaritmica con codigo de colores verde-amarillo-rojo.
 ![Heatmap](../bench_plots/02_heatmap.png)
 
 **Boxplot de variabilidad** (`04_boxplot_variability.png`): distribucion
-min/p50/p95/max por lenguaje × bench.  Vex JIT y Vex interp muestran
+min/p50/p95/max por lenguaje × bench.  Vesta JIT y Vesta interp muestran
 varianza muy baja entre runs, demostrando determinismo del dispatcher.
 
 ![Variabilidad](../bench_plots/04_boxplot_variability.png)

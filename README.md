@@ -11,7 +11,7 @@
 [![JIT](https://img.shields.io/badge/JIT-C1%20geomean%2017.73×%20%2F%20peak%20301×-orange.svg)](./doc/BENCHMARKS.md)
 [![Plataformas](https://img.shields.io/badge/plataformas-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#inicio-r%C3%A1pido)
 
-[**Inicio rápido**](./doc/QUICKSTART.md) · [**El lenguaje Vex**](./doc/LANGUAGE.md) · [**Arquitectura**](./doc/ARCHITECTURE.md) · [**Benchmarks**](./doc/BENCHMARKS.md) · [**Roadmap**](./doc/ROADMAP.md)
+[**Inicio rápido**](./doc/QUICKSTART.md) · [**El lenguaje Vesta**](./doc/LANGUAGE.md) · [**Arquitectura**](./doc/ARCHITECTURE.md) · [**Benchmarks**](./doc/BENCHMARKS.md) · [**Roadmap**](./doc/ROADMAP.md)
 
 </div>
 
@@ -22,14 +22,14 @@
 **VestaVM** es una plataforma completa de ejecución de programas que integra tres
 componentes diseñados desde cero para trabajar juntos:
 
-1. **[Vex](./doc/LANGUAGE.md)** — un lenguaje multi-paradigma estáticamente tipado
+1. **[Vesta](./doc/LANGUAGE.md)** — un lenguaje multi-paradigma estáticamente tipado
    con sintaxis C/Java/Python combinada. Soporta clases con herencia/interfaces/AOP,
    genéricos, async/await, pattern matching, borrow checker estilo Rust, smart
    pointers (`unique<T>`/`shared<T>`), FFI nativo declarativo, reflexión runtime,
    y un sistema de **metaprogramación** compile-time potente (`@Macro`, captura
    raw `expr`, introspección zero-overhead, FFI en tiempo de compilación).
 
-2. **Compilador y runtime** — pipeline `Vex -> SSA IR -> bytecode .velb -> VM`. Más
+2. **Compilador y runtime** — pipeline `Vesta -> SSA IR -> bytecode .velb -> VM`. Más
    de 15 pasadas de optimización SSA, dispatcher threaded computed-goto
    (~340 MIPS sostenidos), GC generacional **preciso y movible** (young+old,
    scan por stackmaps + mark-compact deslizante del OldGen + nursery preciso
@@ -47,11 +47,11 @@ componentes diseñados desde cero para trabajar juntos:
 
 El proyecto incluye también una shell interactiva (REPL), un lenguaje de scripting
 embebido (VestaShellScript `.vsh`), un debugger TCP, y un editor TUI escrito
-en el propio Vex.
+en el propio Vesta.
 
 ---
 
-## Ejemplo: cómo se ve Vex
+## Ejemplo: cómo se ve Vesta
 
 ```vex
 // Pattern matching, genéricos, smart pointers y borrow checker en 20 líneas.
@@ -90,7 +90,7 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 
 ## Características destacadas
 
-### Lenguaje (Vex)
+### Lenguaje (Vesta)
 
 - **Multi-paradigma**: imperativo + POO + funcional ligero. Sin envoltura
   `class` obligatoria.
@@ -108,8 +108,8 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 - **Async / concurrencia**: `@Async`/`await`/`Future<T>`, `spawn`/`spawn here`/
   `spawn on(N)`/`rspawn`, mailboxes (`msgsend`/`msgrecv`), `synchronized` con
   cleanup automático.
-- **Fibras / green threads** cooperativos self-hosted en Vex (cuerpos de fibra
-  en Vex normal, scheduler cooperativo `yield`/`resume`). Context-switch por
+- **Fibras / green threads** cooperativos self-hosted en Vesta (cuerpos de fibra
+  en Vesta normal, scheduler cooperativo `yield`/`resume`). Context-switch por
   backend (`swapctx` en intérprete, `fiber_switch` nativo en JIT/AOT) y
   comportamiento **idéntico en los 3 modos** (interp/JIT/AOT, PE y ELF); el JIT
   compila las fibras a nativo sin recaer en el intérprete.
@@ -131,7 +131,7 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
   `${expr:hex:>20}`, triple-quoted. Color de terminal via identificadores
   mágicos (`RED`/`GREEN`/`BOLD`/`RESET`) y **truecolor ANSI 24-bit** con
   `fg_rgb(r,g,b)`/`bg_rgb(r,g,b)` (componentes runtime).
-- **Metaprogramación compile-time**: `@Macro` que genera código Vex inyectable,
+- **Metaprogramación compile-time**: `@Macro` que genera código Vesta inyectable,
   captura raw de expresiones arbitrarias (`asm walk(ptr -> 0x10 -> 0x20)`),
   introspección de tipos sin overhead (`sizeof<T>`, `typename<T>`, `kind<T>`,
   `field_count<T>`, `for_each_field<T>`), FFI en tiempo de compilación que
@@ -210,17 +210,17 @@ cd VM
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
-# Hola Mundo en Vex
+# Hola Mundo en Vesta
 cat > hola.vx << 'EOF'
 i32 main() {
-    println("Hola desde Vex ${1 + 1}!");
+    println("Hola desde Vesta ${1 + 1}!");
     return 0;
 }
 EOF
 
-./build/vm --vex hola.vx -o hola
+./build/vm --vesta hola.vx -o hola
 ./build/vm --run hola.velb
-# -> Hola desde Vex 2!
+# -> Hola desde Vesta 2!
 ```
 
 Guía completa: [**doc/QUICKSTART.md**](./doc/QUICKSTART.md) (5 minutos).
@@ -229,7 +229,7 @@ Guía completa: [**doc/QUICKSTART.md**](./doc/QUICKSTART.md) (5 minutos).
 
 ## Estado del proyecto
 
-VestaVM tiene el frontend Vex + intérprete + GC + distribuido completos, JIT C1
+VestaVM tiene el frontend Vesta + intérprete + GC + distribuido completos, JIT C1
 (libvesta_rt + selector con el path vreg de producción cubriendo el corpus
 completo sin divergencia) y un **compilador AOT nativo funcional**: `-m aot`
 produce ejecutables **standalone** (PE en Windows y ELF en Linux, este último
@@ -262,7 +262,7 @@ comparativas con JIT se calculan sobre 28 workloads:
 
 | Métrica | Valor |
 |---|:---:|
-| **Suite e2e Vex** | 314/314 PASS (0 FAIL) |
+| **Suite e2e Vesta** | 314/314 PASS (0 FAIL) |
 | **Intérprete: MIPS promedio** | ~340 (threaded computed-goto + super-instr) |
 | **JIT C1: cobertura del selector** | path vreg de producción sin divergencia en el corpus |
 | **JIT vs intérprete: speedup geomean** | **17.73×** sobre 28 benchmarks |
@@ -277,7 +277,7 @@ comparativas con JIT se calculan sobre 28 workloads:
 | **Go (gc) geomean slowdown vs C** | 2.42× |
 | **C++ geomean slowdown vs C** | 0.97× (paridad) |
 | **CPython 3.11 geomean slowdown vs C** | 141.26× |
-| **Vex JIT vs HotSpot (geomean global)** | **JIT ~40% más rápido que Java** (6.50× vs 10.80×) |
+| **Vesta JIT vs HotSpot (geomean global)** | **JIT ~40% más rápido que Java** (6.50× vs 10.80×) |
 | **JIT vs HotSpot: vence en** | **26/28** benches |
 | **JIT vs HotSpot: Java vence en** | 2/28 benches (`fp_jit`, `string_workout`) |
 | **JIT vs Go (gc): Go vence en** | 26/28 benches |
@@ -317,10 +317,10 @@ futures) caen al intérprete graciosamente.
 ### Comparativa multi-lenguaje (workloads idénticos)
 
 Tiempos wall en ms (mediana de 3 runs; hardware i7-13700KF). Para cada
-fila, el **valor más rápido marcado en negrita** (entre C, C++, Vex JIT,
+fila, el **valor más rápido marcado en negrita** (entre C, C++, Vesta JIT,
 Java, Python y Go):
 
-| Bench | C | C++ | Vex JIT | Java HotSpot 25 | Python 3.11 | Go (gc) |
+| Bench | C | C++ | Vesta JIT | Java HotSpot 25 | Python 3.11 | Go (gc) |
 |---|---:|---:|---:|---:|---:|---:|
 | `alloc` | 4.2 | **3.7** | 34.8 | 84.4 | 643.2 | 49.8 |
 | `array_sum` | 5.4 | **5.2** | 42.6 | 84.3 | 516.1 | 13.1 |
@@ -352,18 +352,18 @@ Java, Python y Go):
 | `tight_loop` | 14.3 | **14.0** | 48.4 | 89.4 | 1110.2 | 23.1 |
 | `vec_axpy` | **17.8** | 19.1 | 81.4 | 135.5 | 6552.2 | 73.2 |
 
-**Vex JIT C1 vence a HotSpot C2 (Java) en 26 de 28 benches**; Java solo
+**Vesta JIT C1 vence a HotSpot C2 (Java) en 26 de 28 benches**; Java solo
 gana en `fp_jit` y `string_workout`. En geomean global de slowdown vs C,
-**Vex JIT está en 6.50× mientras HotSpot está en 10.80×** — VestaVM es
+**Vesta JIT está en 6.50× mientras HotSpot está en 10.80×** — VestaVM es
 ~40% más rápido que Java en promedio y **bate a HotSpot en casi toda la
 tabla** para un JIT C1 template-based (sin C2 optimizador todavía).
 
 **Go (gc) es el nuevo referente rápido** de la tabla junto a C/C++: Go
 compilado nativo alcanza **2.42× slowdown vs C** y supera al JIT C1 de
-Vex en 26 de 28 benches (Vex gana en `alloc` y `mem_malloc_free`). Es
+Vesta en 26 de 28 benches (Vesta gana en `alloc` y `mem_malloc_free`). Es
 honesto reconocerlo — un compilador AOT maduro como el `gc` de Go queda
 por delante de nuestro JIT C1; cerrar ese hueco es trabajo del C2
-optimizador y del backend AOT nativo de Vex, ambos en desarrollo.
+optimizador y del backend AOT nativo de Vesta, ambos en desarrollo.
 
 Casos donde el JIT queda detrás (targets de optimizaciones futuras):
 
@@ -376,9 +376,9 @@ Casos donde el JIT queda detrás (targets de optimizaciones futuras):
 - `pic_real` (JIT 41 ms vs C 6 ms) — el JIT C1 no devirtualiza el
   patrón PIC con clases dispersas; el inliner futuro lo cerrará.
 
-**Vex JIT supera a CPython 3.11 en 27 de 28 benches (96%)**. La única
+**Vesta JIT supera a CPython 3.11 en 27 de 28 benches (96%)**. La única
 excepción es `string_hot` (CPython tiene refcount + SSO nativos). El
-peor caso de Vex sigue siendo dramáticamente mejor que el mejor caso de
+peor caso de Vesta sigue siendo dramáticamente mejor que el mejor caso de
 Python en hot loops puros (geomean Python: 141× más lento que C).
 
 Detalles + metodología + cómo correr los benchmarks en
@@ -396,7 +396,7 @@ El runner genera un dashboard completo en `bench_plots/index.html` con
 9 vistas distintas. Las más representativas:
 
 **Resumen geomean vs C** (`08_geomean_summary.png`): media geométrica
-del slowdown vs C nativo por lenguaje. Vex JIT compite directamente
+del slowdown vs C nativo por lenguaje. Vesta JIT compite directamente
 con HotSpot C2 y los supera ligeramente en promedio:
 
 ![Geomean vs C](./bench_plots/08_geomean_summary.png)
@@ -437,7 +437,7 @@ VestaVM no busca competir con runtimes maduros en velocidad bruta o ecosistema,
 sino ofrecer un **ecosistema completo y autocontenido** donde lenguaje, runtime,
 distribución y herramientas se diseñan juntos. Comparativa de features clave:
 
-| Feature | VestaVM (Vex) | Java/JVM | Rust | C++ | Python | Go |
+| Feature | VestaVM (Vesta) | Java/JVM | Rust | C++ | Python | Go |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
 | Tipado estático con inferencia local | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
 | Pattern matching exhaustivo | ✓ | parcial (21+) | ✓ | parcial (C++26) | parcial | ✗ |
@@ -502,28 +502,28 @@ distribución y herramientas se diseñan juntos. Comparativa de features clave:
 | Documento | Para qué sirve |
 |---|---|
 | [QUICKSTART](./doc/QUICKSTART.md) | Instalación + primer programa en 5 minutos |
-| [LANGUAGE](./doc/LANGUAGE.md) | Visión general del lenguaje Vex |
+| [LANGUAGE](./doc/LANGUAGE.md) | Visión general del lenguaje Vesta |
 | [EXAMPLES](./doc/EXAMPLES.md) | Catálogo curado de ejemplos por tema |
 | [ARCHITECTURE](./doc/ARCHITECTURE.md) | Arquitectura interna de la VM |
 | [BENCHMARKS](./doc/BENCHMARKS.md) | Performance comparada + metodología |
 | [ROADMAP](./doc/ROADMAP.md) | Plan de fases A-H, estado actual |
 
-### Referencia del lenguaje (doc/VMdoc/Vex/)
+### Referencia del lenguaje (doc/VMdoc/Vesta/)
 
 | Sintaxis y semántica | Modelo de programación |
 |---|---|
-| [TiposDatos](./doc/VMdoc/Vex/TiposDatos.md) | [OOP](./doc/VMdoc/Vex/OOP.md) |
-| [Operadores](./doc/VMdoc/Vex/Operadores.md) | [Generics](./doc/VMdoc/Vex/Generics.md) |
-| [ControlFlow](./doc/VMdoc/Vex/ControlFlow.md) | [ReflexionAOP](./doc/VMdoc/Vex/ReflexionAOP.md) |
-| [Strings](./doc/VMdoc/Vex/Strings.md) | [Metaprogramacion](./doc/VMdoc/Vex/Metaprogramacion.md) |
-| [OptionalResult](./doc/VMdoc/Vex/OptionalResult.md) | [Colecciones](./doc/VMdoc/Vex/Colecciones.md) |
-| [Closures](./doc/VMdoc/Vex/Closures.md) | [Excepciones](./doc/VMdoc/Vex/Excepciones.md) |
+| [TiposDatos](./doc/VMdoc/Vesta/TiposDatos.md) | [OOP](./doc/VMdoc/Vesta/OOP.md) |
+| [Operadores](./doc/VMdoc/Vesta/Operadores.md) | [Generics](./doc/VMdoc/Vesta/Generics.md) |
+| [ControlFlow](./doc/VMdoc/Vesta/ControlFlow.md) | [ReflexionAOP](./doc/VMdoc/Vesta/ReflexionAOP.md) |
+| [Strings](./doc/VMdoc/Vesta/Strings.md) | [Metaprogramacion](./doc/VMdoc/Vesta/Metaprogramacion.md) |
+| [OptionalResult](./doc/VMdoc/Vesta/OptionalResult.md) | [Colecciones](./doc/VMdoc/Vesta/Colecciones.md) |
+| [Closures](./doc/VMdoc/Vesta/Closures.md) | [Excepciones](./doc/VMdoc/Vesta/Excepciones.md) |
 
 | Memoria y seguridad | Concurrencia y FFI |
 |---|---|
-| [SmartPointers](./doc/VMdoc/Vex/SmartPointers.md) | [Async](./doc/VMdoc/Vex/Async.md) |
-| [BorrowChecker](./doc/VMdoc/Vex/BorrowChecker.md) | [Sincronizacion](./doc/VMdoc/Vex/Sincronizacion.md) |
-| | [FFI](./doc/VMdoc/Vex/FFI.md) |
+| [SmartPointers](./doc/VMdoc/Vesta/SmartPointers.md) | [Async](./doc/VMdoc/Vesta/Async.md) |
+| [BorrowChecker](./doc/VMdoc/Vesta/BorrowChecker.md) | [Sincronizacion](./doc/VMdoc/Vesta/Sincronizacion.md) |
+| | [FFI](./doc/VMdoc/Vesta/FFI.md) |
 
 ### Referencia de la VM (doc/VMdoc/)
 
@@ -602,7 +602,7 @@ Detalles completos (Valgrind, ASan, errores comunes, XMake alternativo) en
 - **DSLs y generación de código**: el sistema de macros `@Macro` + `expr`
   capture permite implementar mini-lenguajes embebidos (parsers, builders,
   pattern matching custom) cuyo código se reduce a literales en compile-time.
-- **Aprendizaje de lenguajes**: el código del frontend Vex (~30K LOC) está
+- **Aprendizaje de lenguajes**: el código del frontend Vesta (~30K LOC) está
   diseñado para ser legible, con cada feature documentada y comentada
   exhaustivamente en español ASCII.
 
@@ -612,21 +612,21 @@ El compilador AOT (`-m aot`) ya produce ejecutables nativos standalone PE/ELF
 para el subset core del lenguaje. La arquitectura está preparada para tres
 tiers de deployment (en construcción); la **misma fuente** podrá compilar a:
 
-- **Vex Full** (3-5 MB con runtime linkado dinámicamente) — apps managed
+- **Vesta Full** (3-5 MB con runtime linkado dinámicamente) — apps managed
   con todo el lenguaje disponible: GC, async, reflexión, distribución.
   Modelo análogo a Go, Java, C#.
-- **Vex Embed** (500 KB – 1 MB con mini-runtime embebido estáticamente) —
+- **Vesta Embed** (500 KB – 1 MB con mini-runtime embebido estáticamente) —
   CLI tools, ETL, scripts standalone. Subset del lenguaje sin reflexión
   ni distribución pero con clases/strings/closures/excepciones. Modelo
   análogo a Rust con std, Swift, OCaml native.
-- **Vex Bare** (50-200 KB sin runtime, solo libc o freestanding) —
+- **Vesta Bare** (50-200 KB sin runtime, solo libc o freestanding) —
   desarrollo de sistemas operativos, drivers de kernel, firmware
   embedded ARM Cortex-M/RISC-V, bootloaders y aplicaciones UEFI,
   hot-path libs distribuidas como `.dll`/`.so` con cero overhead vs
   C++ optimizado. Modelo análogo a Zig minimal, Rust `#![no_std]`,
   C/C++ embedded.
 
-Vex Bare incluirá mecanismos de extensibilidad para que el programador
+Vesta Bare incluirá mecanismos de extensibilidad para que el programador
 implemente lo que falta según su caso de uso: `@AllocatorOverride` para
 hookear `kmalloc/kfree` del kernel, `@PanicHandler` para reemplazar el
 default `fputs+exit` por halt CPU / reboot / log a UART, `@CustomGC`

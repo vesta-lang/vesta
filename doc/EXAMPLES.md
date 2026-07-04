@@ -1,11 +1,11 @@
-# Ejemplos de Vex - Catalogo curado
+# Ejemplos de Vesta - Catalogo curado
 
 Esta pagina selecciona los ejemplos mas instructivos de
 [`examples_codes_vex/`](../examples_codes_vex/) organizados por tema. Cada uno
 es ejecutable directamente con:
 
 ```bash
-./build/vm --vex examples_codes_vex/<archivo>.vx -o /tmp/ej
+./build/vm --vesta examples_codes_vex/<archivo>.vx -o /tmp/ej
 ./build/vm --run /tmp/ej.velb
 ```
 
@@ -16,7 +16,7 @@ separados en `examples_codes_vex/benchmark/`.
 
 ## Indice
 
-- [Ejemplos de Vex - Catalogo curado](#ejemplos-de-vex---catalogo-curado)
+- [Ejemplos de Vesta - Catalogo curado](#ejemplos-de-vex---catalogo-curado)
   - [Indice](#indice)
   - [1. Hola Mundo y basico](#1-hola-mundo-y-basico)
   - [2. Tipos y operaciones](#2-tipos-y-operaciones)
@@ -53,7 +53,7 @@ separados en `examples_codes_vex/benchmark/`.
 
 ```vex
 i32 main() {
-    println("Hola Mundo desde Vex!");
+    println("Hola Mundo desde Vesta!");
     return 0;
 }
 ```
@@ -715,7 +715,7 @@ Compilar y ejecutar entre 2 procesos:
 ./build/vm --dist-server --dist-port 7789
 
 # Terminal 2: cliente que envia rspawn
-./build/vm --vex examples_codes_vex/47_rspawn_basico.vx -o /tmp/rsp
+./build/vm --vesta examples_codes_vex/47_rspawn_basico.vx -o /tmp/rsp
 ./build/vm --run /tmp/rsp.velb --dist-port 7790 --dist-add-node 127.0.0.1:7789
 ```
 
@@ -724,7 +724,7 @@ Compilar y ejecutar entre 2 procesos:
 ## 20. Metaprogramacion
 
 Macros compile-time que generan codigo, capturan DSLs y consultan tipos
-sin overhead runtime. Detalles completos: [Metaprogramacion.md](./VMdoc/Vex/Metaprogramacion.md).
+sin overhead runtime. Detalles completos: [Metaprogramacion.md](./VMdoc/Vesta/Metaprogramacion.md).
 
 **[`159_macro_expr_capture.vx`](../examples_codes_vex/159_macro_expr_capture.vx)** -
 captura raw de codigo arbitrario con `expr`:
@@ -870,13 +870,13 @@ return "(" + to_str(n) + ")";
 
 ### Hello World
 
-| Vex                                  | Python                          | Rust                                    |
+| Vesta                                  | Python                          | Rust                                    |
 | :----------------------------------- | :------------------------------ | :-------------------------------------- |
 | `i32 main() { println("hi"); return 0; }` | `print("hi")`                | `fn main() { println!("hi"); }`         |
 
 ### Fibonacci recursivo
 
-**Vex**:
+**Vesta**:
 
 ```vex
 i64 fib(i64 n) {
@@ -913,7 +913,7 @@ print(fib(30))
 
 ### Patron Optional (vs nullable)
 
-**Vex** (Optional builtin SRET, cero heap):
+**Vesta** (Optional builtin SRET, cero heap):
 
 ```vex
 Optional<i32> find(i32[] arr, i32 t) {
@@ -945,7 +945,7 @@ Optional<Integer> find(int[] arr, int t) {
 
 ### Pattern matching
 
-**Vex**:
+**Vesta**:
 
 ```vex
 enum Shape { Circle(f64), Square(f64) }
@@ -991,7 +991,7 @@ double area(Shape s) {
 ## Donde mirar a continuacion
 
 Si tienes una caracteristica especifica en mente, busca el doc dedicado en
-[doc/VMdoc/Vex/](./VMdoc/Vex/). Cada uno tiene ejemplos completos y
+[doc/VMdoc/Vesta/](./VMdoc/Vesta/). Cada uno tiene ejemplos completos y
 referencia tecnica.
 
 Si vas a contribuir codigo, ver  [doc/CONTRIBUTING.md](./CONTRIBUTING.md).

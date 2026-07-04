@@ -1,14 +1,14 @@
-# El lenguaje Vex
+# El lenguaje Vesta
 
-**Vex** es el lenguaje de alto nivel de VestaVM. Esta pagina es una vision
+**Vesta** es el lenguaje de alto nivel de VestaVM. Esta pagina es una vision
 general; para detalles de cada feature consulta los docs especificos en
-[doc/VMdoc/Vex/](./VMdoc/Vex/).
+[doc/VMdoc/Vesta/](./VMdoc/Vesta/).
 
 ---
 
 ## Indice
 
-- [El lenguaje Vex](#el-lenguaje-vex)
+- [El lenguaje Vesta](#el-lenguaje-vex)
   - [Indice](#indice)
   - [1. Filosofia de diseño](#1-filosofia-de-diseño)
   - [2. Comparativa rapida con otros lenguajes](#2-comparativa-rapida-con-otros-lenguajes)
@@ -35,7 +35,7 @@ general; para detalles de cada feature consulta los docs especificos en
 
 ## 1. Filosofia de diseño
 
-Vex se diseño con cuatro principios no negociables:
+Vesta se diseño con cuatro principios no negociables:
 
 1. **Multi-paradigma sin ceremonias**: combina imperativo + POO + funcional
    ligero. Un `.vx` puede ser solo funciones y variables, sin envoltura
@@ -58,7 +58,7 @@ Vex se diseño con cuatro principios no negociables:
 
 ## 2. Comparativa rapida con otros lenguajes
 
-| Caracteristica           | Vex       | Java/C# | Rust      | C++       | Python |
+| Caracteristica           | Vesta       | Java/C# | Rust      | C++       | Python |
 | :----------------------- | :-------: | :-----: | :-------: | :-------: | :----: |
 | Tipado estatico          | si        | si      | si        | si        | no     |
 | GC                       | si        | si      | no        | manual    | si     |
@@ -73,7 +73,7 @@ Vex se diseño con cuatro principios no negociables:
 | Sintaxis tipo            | C/Java    | Java    | propia    | C         | propia |
 | Memoria sin GC opcional  | malloc/free | no    | si (def)  | si        | no     |
 
-Vex toma elementos buenos de cada uno: la sintaxis legible de Java, el borrow
+Vesta toma elementos buenos de cada uno: la sintaxis legible de Java, el borrow
 checker de Rust, la concurrencia ligera de Erlang/Go, la flexibilidad de C/C++
 y la dinamica de Python (reflexion).
 
@@ -111,7 +111,7 @@ VirtualPtr<i32> vp = ...;     // VM pointer (memoria virtual VM)
 *p = 100;
 ```
 
-Detalles: [doc/VMdoc/Vex/TiposDatos.md](./VMdoc/Vex/TiposDatos.md).
+Detalles: [doc/VMdoc/Vesta/TiposDatos.md](./VMdoc/Vesta/TiposDatos.md).
 
 ### Funciones
 
@@ -130,7 +130,7 @@ i32 square(i32 x) => x * x;
 // void greet(string name = "world");
 ```
 
-Vex tiene **closures de primera clase** con captura lexica:
+Vesta tiene **closures de primera clase** con captura lexica:
 
 ```vex
 i32 main() {
@@ -158,7 +158,7 @@ i32 main() {
 }
 ```
 
-Detalles: [doc/VMdoc/Vex/Closures.md](./VMdoc/Vex/Closures.md).
+Detalles: [doc/VMdoc/Vesta/Closures.md](./VMdoc/Vesta/Closures.md).
 
 ### Clases y OOP
 
@@ -210,8 +210,8 @@ modificadores `public`/`private`/`protected`/`static`/`final`, propiedades
 get/set, expression-bodied, destructores RAII (`~Class()`), AOP via
 `@Aspect class`.
 
-Detalles: [doc/VMdoc/Vex/OOP.md](./VMdoc/Vex/OOP.md) y
-[doc/VMdoc/Vex/ReflexionAOP.md](./VMdoc/Vex/ReflexionAOP.md).
+Detalles: [doc/VMdoc/Vesta/OOP.md](./VMdoc/Vesta/OOP.md) y
+[doc/VMdoc/Vesta/ReflexionAOP.md](./VMdoc/Vesta/ReflexionAOP.md).
 
 ### Genericos
 
@@ -233,7 +233,7 @@ Monomorphizacion compile-time: cada `Box<i32>` y `Box<string>` genera clases
 separadas (`Box_i32`, `Box_string`) con vtables propias. Cero overhead vs
 codigo no-generico.
 
-Detalles: [doc/VMdoc/Vex/Generics.md](./VMdoc/Vex/Generics.md).
+Detalles: [doc/VMdoc/Vesta/Generics.md](./VMdoc/Vesta/Generics.md).
 
 ### Pattern matching y enums
 
@@ -267,7 +267,7 @@ i32 main() {
 Match con bindings + exhaustividad obligatoria. Layout en stack:
 `[tag][payload[0]][payload[1]]...` sin heap allocations.
 
-Detalles: [doc/VMdoc/Vex/ControlFlow.md](./VMdoc/Vex/ControlFlow.md) seccion 6.
+Detalles: [doc/VMdoc/Vesta/ControlFlow.md](./VMdoc/Vesta/ControlFlow.md) seccion 6.
 
 ### Optional y Result
 
@@ -308,7 +308,7 @@ Builtins del compilador (no templates). Layout fijo 16/24 bytes en stack, ABI
 SRET, cero heap. `Result` tiene must-handle (rechaza ExprStmt que descarte el
 valor).
 
-Detalles: [doc/VMdoc/Vex/OptionalResult.md](./VMdoc/Vex/OptionalResult.md).
+Detalles: [doc/VMdoc/Vesta/OptionalResult.md](./VMdoc/Vesta/OptionalResult.md).
 
 ### Smart pointers y borrow checker
 
@@ -343,8 +343,8 @@ Smart pointers son **tipos primitivos del lenguaje** (no templates), cero
 overhead (8-16 bytes en stack, deleter inline). Borrow checker es compile-time:
 verifica 4 reglas + NLL + reborrow + lifetime elision.
 
-Detalles: [doc/VMdoc/Vex/SmartPointers.md](./VMdoc/Vex/SmartPointers.md) y
-[doc/VMdoc/Vex/BorrowChecker.md](./VMdoc/Vex/BorrowChecker.md).
+Detalles: [doc/VMdoc/Vesta/SmartPointers.md](./VMdoc/Vesta/SmartPointers.md) y
+[doc/VMdoc/Vesta/BorrowChecker.md](./VMdoc/Vesta/BorrowChecker.md).
 
 ### Async y concurrencia
 
@@ -408,8 +408,8 @@ procesos hijos via spawn.  Los monitores funcionan transparente cross-scheduler
 unico globalmente.  Atomic primitives (`atomic_load/store/cas/add_i64`) para
 casos lock-free sin lock.
 
-Detalles: [doc/VMdoc/Vex/Async.md](./VMdoc/Vex/Async.md),
-[doc/VMdoc/Vex/Sincronizacion.md](./VMdoc/Vex/Sincronizacion.md) y
+Detalles: [doc/VMdoc/Vesta/Async.md](./VMdoc/Vesta/Async.md),
+[doc/VMdoc/Vesta/Sincronizacion.md](./VMdoc/Vesta/Sincronizacion.md) y
 [doc/VMdoc/PhaseZ/SharedMemory.md](./VMdoc/PhaseZ/SharedMemory.md).
 
 ### Strings con interpolacion
@@ -446,7 +446,7 @@ bool same = (s == "Hola World");
 `string` es GcHandle a StringObject. Soporta UTF-8/16/32, FNV-1a hash cacheado,
 intern pool, encoding conversion, ROPE/SLICE/FLAT internamente.
 
-Detalles: [doc/VMdoc/Vex/Strings.md](./VMdoc/Vex/Strings.md).
+Detalles: [doc/VMdoc/Vesta/Strings.md](./VMdoc/Vesta/Strings.md).
 
 ### FFI a APIs nativas
 
@@ -477,12 +477,12 @@ i32 dynamic() {
 }
 ```
 
-Detalles: [doc/VMdoc/Vex/FFI.md](./VMdoc/Vex/FFI.md).
+Detalles: [doc/VMdoc/Vesta/FFI.md](./VMdoc/Vesta/FFI.md).
 
 ### Metaprogramacion
 
-Vex tiene un sistema de macros compile-time potente: `@Macro` ejecuta
-codigo arbitrario en tiempo de compilacion y emite codigo Vex que se
+Vesta tiene un sistema de macros compile-time potente: `@Macro` ejecuta
+codigo arbitrario en tiempo de compilacion y emite codigo Vesta que se
 inyecta en el call site. Combinable con introspeccion de tipos, FFI
 compile-time y captura de DSLs arbitrarios.
 
@@ -526,7 +526,7 @@ i32 main() {
 - `static_assert(cond, "msg")` -- verifica invariantes en compile-time.
 - Arrays + structs nativos usables dentro del body del macro.
 
-Detalles completos: [doc/VMdoc/Vex/Metaprogramacion.md](./VMdoc/Vex/Metaprogramacion.md).
+Detalles completos: [doc/VMdoc/Vesta/Metaprogramacion.md](./VMdoc/Vesta/Metaprogramacion.md).
 
 ---
 
@@ -537,9 +537,9 @@ Detalles completos: [doc/VMdoc/Vex/Metaprogramacion.md](./VMdoc/Vex/Metaprograma
         |
         v  VPP preprocesador
         |  (#define, #include, #if, #foreach, ...)
-        v  Lexer Vex
+        v  Lexer Vesta
         |  (tokens, string interpolation, multiline string)
-        v  Parser Vex
+        v  Parser Vesta
         |  (AST: decls, stmts, exprs, tipos)
         v  Type checker
         |  (inferencia, aliases, generics, nullability, borrow checker)
@@ -589,34 +589,34 @@ Variables de entorno utiles para profiling/diagnostico:
 
 ### Sintaxis y semantica
 
-- [TiposDatos](./VMdoc/Vex/TiposDatos.md) - primitivos, punteros, struct, enum, string
-- [Operadores](./VMdoc/Vex/Operadores.md) - referencia completa con precedencia
-- [ControlFlow](./VMdoc/Vex/ControlFlow.md) - if/while/for/foreach/break/continue/goto/match
-- [Strings](./VMdoc/Vex/Strings.md) - tipo string, interpolacion, format specs, FFI
-- [OptionalResult](./VMdoc/Vex/OptionalResult.md) - Optional, Result, !!, nonnull
-- [Closures](./VMdoc/Vex/Closures.md) - lambdas, captura, HOF, top-level promotion
+- [TiposDatos](./VMdoc/Vesta/TiposDatos.md) - primitivos, punteros, struct, enum, string
+- [Operadores](./VMdoc/Vesta/Operadores.md) - referencia completa con precedencia
+- [ControlFlow](./VMdoc/Vesta/ControlFlow.md) - if/while/for/foreach/break/continue/goto/match
+- [Strings](./VMdoc/Vesta/Strings.md) - tipo string, interpolacion, format specs, FFI
+- [OptionalResult](./VMdoc/Vesta/OptionalResult.md) - Optional, Result, !!, nonnull
+- [Closures](./VMdoc/Vesta/Closures.md) - lambdas, captura, HOF, top-level promotion
 
 ### Modelo de programacion
 
-- [OOP](./VMdoc/Vex/OOP.md) - clases, herencia, interfaces, properties, modificadores
-- [Generics](./VMdoc/Vex/Generics.md) - class T, monomorphizacion
-- [ReflexionAOP](./VMdoc/Vex/ReflexionAOP.md) - forName, getClass, @Aspect, advice
-- [Metaprogramacion](./VMdoc/Vex/Metaprogramacion.md) - @Macro, expr capture, introspeccion, FFI compile-time
-- [Colecciones](./VMdoc/Vex/Colecciones.md) - ArrayList, HashMap, Queue, etc.
-- [Excepciones](./VMdoc/Vex/Excepciones.md) - try/catch/finally, FatalError, panic
+- [OOP](./VMdoc/Vesta/OOP.md) - clases, herencia, interfaces, properties, modificadores
+- [Generics](./VMdoc/Vesta/Generics.md) - class T, monomorphizacion
+- [ReflexionAOP](./VMdoc/Vesta/ReflexionAOP.md) - forName, getClass, @Aspect, advice
+- [Metaprogramacion](./VMdoc/Vesta/Metaprogramacion.md) - @Macro, expr capture, introspeccion, FFI compile-time
+- [Colecciones](./VMdoc/Vesta/Colecciones.md) - ArrayList, HashMap, Queue, etc.
+- [Excepciones](./VMdoc/Vesta/Excepciones.md) - try/catch/finally, FatalError, panic
 
 ### Memoria y seguridad
 
-- [SmartPointers](./VMdoc/Vex/SmartPointers.md) - unique/shared, RAII, deleters
-- [BorrowChecker](./VMdoc/Vex/BorrowChecker.md) - borrow/borrow_mut, 4 reglas + F1-F4
+- [SmartPointers](./VMdoc/Vesta/SmartPointers.md) - unique/shared, RAII, deleters
+- [BorrowChecker](./VMdoc/Vesta/BorrowChecker.md) - borrow/borrow_mut, 4 reglas + F1-F4
 
 ### Concurrencia y FFI
 
-- [Async](./VMdoc/Vex/Async.md) - @Async, spawn, await, msgsend/msgrecv
-- [Sincronizacion](./VMdoc/Vex/Sincronizacion.md) - synchronized, monitor, wait/notify
-- [FFI](./VMdoc/Vex/FFI.md) - extern, ffi_open/sym/call, plugins nativos
+- [Async](./VMdoc/Vesta/Async.md) - @Async, spawn, await, msgsend/msgrecv
+- [Sincronizacion](./VMdoc/Vesta/Sincronizacion.md) - synchronized, monitor, wait/notify
+- [FFI](./VMdoc/Vesta/FFI.md) - extern, ffi_open/sym/call, plugins nativos
 
 ---
 
 Si vienes de otro lenguaje, [doc/EXAMPLES.md](./EXAMPLES.md) tiene side-by-side
-comparisons (Java -> Vex, Python -> Vex, etc.).
+comparisons (Java -> Vesta, Python -> Vesta, etc.).

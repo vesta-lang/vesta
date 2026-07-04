@@ -37,7 +37,7 @@ Capas, de arriba a abajo:
 
 ```text
 +-------------------------------------------------------------+
-|  Vex (lenguaje fuente)                                      |
+|  Vesta (lenguaje fuente)                                      |
 +-------------------------------------------------------------+
 |  SSA IR (representacion intermedia compartida)              |
 +-------------------------------------------------------------+
@@ -67,11 +67,11 @@ Desde `.vx` hasta bytecode ejecutable:
     +-----> VPP preprocesador (~5000 LOC C)
     |       #define / #include / #if / #foreach / #repeat / #array / #exec
     |
-    +-----> Lexer Vex (~1000 LOC C++)
+    +-----> Lexer Vesta (~1000 LOC C++)
     |       Token stream: keywords, identifiers, literals, string parts,
     |       interpolation markers (ISTR_*), triple-quoted detection.
     |
-    +-----> Parser Vex (~3000 LOC)
+    +-----> Parser Vesta (~3000 LOC)
     |       AST: decls (function, class, struct, enum, typedef),
     |       stmts (if, while, for, foreach, return, throw, try, sync, ...),
     |       exprs (binary, unary, call, field, index, new, lambda, match, ...),
@@ -373,7 +373,7 @@ Detalles: [doc/CLI_DIST.md](./CLI_DIST.md).
 
 ## 9. JIT C1 baseline
 
-**Phase D.3 implementado** (cobertura ~52% de metodos reales en programas Vex).
+**Phase D.3 implementado** (cobertura ~52% de metodos reales en programas Vesta).
 
 ### Cuando se dispara
 
@@ -590,7 +590,7 @@ VM/
 │   ├── runtime/           # ProcessVM, scheduler, exec, decode_table
 │   ├── util/              # ThreadPool, sqlite_singleton
 │   ├── vesta_rt/          # public.h API (Phase C)
-│   └── vex/               # frontend Vex (lexer, parser, type checker, lowering)
+│   └── vex/               # frontend Vesta (lexer, parser, type checker, lowering)
 │
 ├── src/                   # implementaciones (mirror de include/)
 │
@@ -610,7 +610,7 @@ VM/
 │
 ├── doc/                   # documentacion (.md)
 │   ├── VMdoc/             # docs en formato Obsidian-friendly
-│   │   ├── Vex/           # docs del lenguaje (17 archivos)
+│   │   ├── Vesta/           # docs del lenguaje (17 archivos)
 │   │   ├── IR/            # SSA.md
 │   │   ├── SetInstruccionesVM/  # 50+ docs por familia de opcodes
 │   │   ├── runtime/       # ProcessVM, scheduler, plugins
