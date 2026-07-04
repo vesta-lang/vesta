@@ -349,6 +349,19 @@ void mangle_global_var_decl_(
     if (gd->init) rewrite_refs_in_expr_(gd->init.get(), rename_map);
 }
 
+void mangle_concept_decl_(
+    ast::ConceptDecl *cd, const std::string &ns_path,
+    std::unordered_map<std::string, std::string> &rename_map) {
+    const std::string newn = mangle_name_(ns_path, cd->name);
+    if (newn != cd->name) {
+        rename_map.emplace(cd->name, newn);
+        cd->name = newn;
+    }
+    // El predicado puede referenciar otros conceptos del mismo namespace
+    // (composicion `A<T>() && B<T>()`); reescribir sus referencias.
+    if (cd->predicate) rewrite_refs_in_expr_(cd->predicate.get(), rename_map);
+}
+
 void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
                    const std::string &ns_path,
                    std::unordered_map<std::string, std::string> &rename_map) {
@@ -394,6 +407,12 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
             if (newn != gd->name) rename_map.emplace(gd->name, newn);
             break;
         }
+        case ast::NodeKind::ConceptDecl: {
+            auto *cd = static_cast<ast::ConceptDecl *>(d.get());
+            const std::string newn = mangle_name_(ns_path, cd->name);
+            if (newn != cd->name) rename_map.emplace(cd->name, newn);
+            break;
+        }
         case ast::NodeKind::NamespaceDecl: {
             // Pre-recolectar los nombres del namespace anidado con
             // el prefix combinado.
@@ -435,6 +454,10 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
         case ast::NodeKind::GlobalVarDecl:
             mangle_global_var_decl_(static_cast<ast::GlobalVarDecl *>(d.get()),
                                     ns_path, rename_map);
+            break;
+        case ast::NodeKind::ConceptDecl:
+            mangle_concept_decl_(static_cast<ast::ConceptDecl *>(d.get()),
+                                 ns_path, rename_map);
             break;
         default: break;
         }
@@ -549,6 +572,16 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             sym.public_name =
                 strip_ns_prefix_(gd->name, full_path);
             sym.mangled_label = gd->name;
+            out_ns.symbols.push_back(std::move(sym));
+            out_decls.push_back(std::move(d));
+            break;
+        }
+        case ast::NodeKind::ConceptDecl: {
+            auto *cd = static_cast<ast::ConceptDecl *>(d.get());
+            FlattenedNamespace::Sym sym;
+            sym.kind = FlattenedNamespace::Sym::Type; // concepto = simbolo tipo-like
+            sym.public_name = strip_ns_prefix_(cd->name, full_path);
+            sym.mangled_label = cd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
             break;

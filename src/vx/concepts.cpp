@@ -137,6 +137,14 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
     }
 
     auto it = tc.concepts().find(name);
+    if (it == tc.concepts().end() && name.find('.') != std::string::npos) {
+        // NS.2: concepto cualificado por namespace (`mat.Numerico`).  El flatten
+        // lo registro como `mat__Numerico`; mapear `.`->`__` y reintentar.
+        std::string mangled;
+        for (char c : name)
+            mangled += (c == '.') ? std::string("__") : std::string(1, c);
+        it = tc.concepts().find(mangled);
+    }
     if (it == tc.concepts().end()) {
         r.found = false; // ni built-in ni de usuario
         return r;

@@ -4035,7 +4035,14 @@ void Parser::parse_type_params_with_bounds(
             tb.type_param = pname;
             tb.loc = bl;
             while (current_.kind == TokenKind::IDENTIFIER) {
-                tb.concepts.push_back(consume().lexeme);
+                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
+                std::string cname = consume().lexeme;
+                while (current_.kind == TokenKind::DOT) {
+                    (void)consume(); // '.'
+                    if (current_.kind != TokenKind::IDENTIFIER) break;
+                    cname += "." + consume().lexeme;
+                }
+                tb.concepts.push_back(std::move(cname));
                 if (current_.kind == TokenKind::PLUS) {
                     (void)consume(); // '+' : otro concepto exigido
                     continue;
@@ -4115,7 +4122,14 @@ void Parser::parse_where_clause(std::vector<ast::TypeBound> &bounds) {
         if (current_.kind == TokenKind::COLON) {
             (void)consume(); // ':'
             while (current_.kind == TokenKind::IDENTIFIER) {
-                tb.concepts.push_back(consume().lexeme);
+                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
+                std::string cname = consume().lexeme;
+                while (current_.kind == TokenKind::DOT) {
+                    (void)consume(); // '.'
+                    if (current_.kind != TokenKind::IDENTIFIER) break;
+                    cname += "." + consume().lexeme;
+                }
+                tb.concepts.push_back(std::move(cname));
                 if (current_.kind == TokenKind::PLUS) {
                     (void)consume();
                     continue;
