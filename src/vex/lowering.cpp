@@ -18745,9 +18745,47 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return out;
     };
 
-    auto emit_print_typed_value = [&](ast::Expr *ex,
-                                      const std::string &fmt_str) {
+    // Declarada como std::function para permitir recursion desde el
+    // caso especial de truecolor (fg_rgb/bg_rgb reemiten sus enteros
+    // r,g,b via esta misma funcion).
+    std::function<void(ast::Expr *, const std::string &)>
+        emit_print_typed_value;
+    emit_print_typed_value = [&](ast::Expr *ex, const std::string &fmt_str) {
         if (!ex) return;
+        // Caso especial: builtins de truecolor fg_rgb(r,g,b) /
+        // bg_rgb(r,g,b) dentro de la interpolacion.  Se expanden a la
+        // secuencia SGR 24-bit: fg -> "\x1b[38;2;R;G;Bm", bg ->
+        // "\x1b[48;2;R;G;Bm".  Reusamos emit_print_string_literal para
+        // los fragmentos ANSI y la propia emit_print_typed_value para
+        // R,G,B (que se imprimen como enteros decimales).  Asi funciona
+        // en interp/JIT/AOT sin construir StringObject ni helper nativo
+        // nuevo, y r,g,b pueden ser literales o expresiones runtime.
+        if (ex->kind == ast::NodeKind::CallExpr) {
+            auto *ce = static_cast<ast::CallExpr *>(ex);
+            if (ce->callee &&
+                ce->callee->kind == ast::NodeKind::IdentExpr) {
+                const std::string &cn =
+                    static_cast<ast::IdentExpr *>(ce->callee.get())->name;
+                const bool is_fg = (cn == "fg_rgb");
+                const bool is_bg = (cn == "bg_rgb");
+                if (is_fg || is_bg) {
+                    if (ce->args.size() != 3) {
+                        error_at(ex->loc,
+                                 cn + ": requiere 3 argumentos (r, g, b)");
+                        return;
+                    }
+                    emit_print_string_literal(
+                        is_fg ? "\x1b[38;2;" : "\x1b[48;2;", ex->loc.line);
+                    emit_print_typed_value(ce->args[0].get(), std::string());
+                    emit_print_string_literal(";", ex->loc.line);
+                    emit_print_typed_value(ce->args[1].get(), std::string());
+                    emit_print_string_literal(";", ex->loc.line);
+                    emit_print_typed_value(ce->args[2].get(), std::string());
+                    emit_print_string_literal("m", ex->loc.line);
+                    return;
+                }
+            }
+        }
         const Type t = ex->result_type;
         // Parsear formato y, si hay alineacion right, calcular y emitir
         // padding ANTES del valor (para left-align se emite DESPUES).

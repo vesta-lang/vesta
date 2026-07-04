@@ -2097,6 +2097,22 @@ void TypeChecker::collect_globals() {
     reg_const_string("CLEAR_SCREEN");
     reg_const_string("CURSOR_HOME");
 
+    // Builtins de color verdadero (truecolor, SGR 24-bit).  A
+    // diferencia de los identificadores magicos anteriores (cadenas
+    // constantes), estos toman r,g,b como parametros y se usan dentro
+    // de la interpolacion de print/println: por ejemplo
+    // @c println("${fg_rgb(255,128,0)}texto${RESET}").  El lowering de
+    // la interpolacion los reconoce como caso especial y los expande a
+    // la secuencia ANSI truecolor reusando la maquinaria de emision de
+    // literales + enteros (funciona identico en interp/JIT/AOT y sin
+    // construir un StringObject).  El tipo de retorno I32 solo sirve
+    // para que pasen la validacion de la interpolacion (no puede ser
+    // void); el valor nunca se imprime como entero.
+    reg_builtin("fg_rgb", Type{PrimitiveKind::I32},
+                {PrimitiveKind::I32, PrimitiveKind::I32, PrimitiveKind::I32});
+    reg_builtin("bg_rgb", Type{PrimitiveKind::I32},
+                {PrimitiveKind::I32, PrimitiveKind::I32, PrimitiveKind::I32});
+
     // registrar @c FatalError como clase pre-definida en
     // runtime.  El @c init_exception_classes del runtime ya la creo
     // en el ClassRegistry; aqui solo damos al type checker / lowering
