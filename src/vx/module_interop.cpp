@@ -1014,7 +1014,19 @@ void inject_generic_templates_from_vxi(
             std::string ns_m;
             for (char c : tpl_ns)
                 ns_m += (c == '.') ? std::string("__") : std::string(1, c);
-            set_decl_name(decl.get(), ns_m + "__" + nm);
+            const std::string mangled_full = ns_m + "__" + nm;
+            set_decl_name(decl.get(), mangled_full);
+            // NS.2: registrar el template bajo su namespace DECLARADO para que
+            // el acceso cualificado resuelva (`geo.doble<i64>()` / `geo.Caja`).
+            // El concepto usa la ruta comptime_eval_concept (`.`->`__`), pero
+            // registrarlo aqui tambien es inocuo.  Para fn el kind=0, tipos=2.
+            const uint32_t tns_idx =
+                tc.register_imported_namespace(tpl_ns, tpl_ns);
+            TypeChecker::ImportedNamespace::Sym nsym;
+            nsym.mangled_label = mangled_full;
+            nsym.kind =
+                (decl->kind == ast::NodeKind::FunctionDecl) ? 0 : 2;
+            tc.register_namespace_symbol(tns_idx, nm, std::move(nsym));
         } else if (!ns_prefix.empty() && !nm.empty()) {
             set_decl_name(decl.get(), ns_prefix + "." + nm);
         }
