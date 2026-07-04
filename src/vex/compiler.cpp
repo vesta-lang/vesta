@@ -427,7 +427,7 @@ CompileResult compile_vex_source(const std::string &source,
     // opcode VM SWAPCTX; el interp lo ejecuta directamente, pero el JIT emite
     // un CALL nativo al primitivo @Naked `__vex_swapctx` (context-switch host)
     // y `__fiber_trampoline` (arranque de fibra).  Esas dos funciones viven en
-    // stdlib/vex/vex_fiber.vex y el opcode NO las referencia -> no estarian en
+    // stdlib/vex/vex_fiber.vx y el opcode NO las referencia -> no estarian en
     // el .velb del usuario.  Cuando detectamos uso de SWAPCTX, compilamos
     // vex_fiber.vex (interp/JIT) y fusionamos SOLO esas dos funciones @Naked en
     // el modulo, para que su IR llegue a la seccion @ir del .velb y el JIT las
@@ -446,17 +446,17 @@ CompileResult compile_vex_source(const std::string &source,
                     if (ins.op == ir::IrOp::SWAPCTX) uses_swapctx = true;
         }
         if (uses_swapctx && !defines_swapctx) {
-            std::vector<std::string> cands = {"stdlib/vex/vex_fiber.vex",
-                                              "../stdlib/vex/vex_fiber.vex",
-                                              "../../stdlib/vex/vex_fiber.vex"};
+            std::vector<std::string> cands = {"stdlib/vex/vex_fiber.vx",
+                                              "../stdlib/vex/vex_fiber.vx",
+                                              "../../stdlib/vex/vex_fiber.vx"};
             const std::string exe = fs::get_executable_path();
             if (!exe.empty()) {
                 std::filesystem::path ed =
                     std::filesystem::path(exe).parent_path();
                 cands.push_back(
-                    (ed / "stdlib" / "vex" / "vex_fiber.vex").string());
+                    (ed / "stdlib" / "vex" / "vex_fiber.vx").string());
                 cands.push_back(
-                    (ed.parent_path() / "stdlib" / "vex" / "vex_fiber.vex")
+                    (ed.parent_path() / "stdlib" / "vex" / "vex_fiber.vx")
                         .string());
             }
             std::string vf_path;
@@ -468,7 +468,7 @@ CompileResult compile_vex_source(const std::string &source,
             if (vf_path.empty()) {
                 res.diagnostics.warning(
                     SourceLoc{mod_name, 0, 0},
-                    "fiber_swapctx: no encuentro stdlib/vex/vex_fiber.vex; el "
+                    "fiber_swapctx: no encuentro stdlib/vex/vex_fiber.vx; el "
                     "context-switch de fibra no estara disponible en JIT");
             } else {
                 std::ifstream vff(vf_path);

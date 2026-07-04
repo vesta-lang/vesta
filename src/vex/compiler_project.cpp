@@ -654,7 +654,7 @@ CompileResult compile_vex_project(
             static const char *cands[] = {"stdlib/vex", "../stdlib/vex",
                                           "../../stdlib/vex"};
             for (const char *c : cands) {
-                std::ifstream test(std::string(c) + "/simd_string.vex");
+                std::ifstream test(std::string(c) + "/simd_string.vx");
                 if (test.good()) {
                     sd = c;
                     break;
@@ -674,7 +674,7 @@ CompileResult compile_vex_project(
                     ed / "stdlib" / "vex",
                     ed.parent_path() / "stdlib" / "vex"};
                 for (const auto &c : exe_cands) {
-                    std::ifstream test((c / "simd_string.vex").string());
+                    std::ifstream test((c / "simd_string.vx").string());
                     if (test.good()) {
                         sd = c.string();
                         break;

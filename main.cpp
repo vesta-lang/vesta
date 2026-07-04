@@ -382,11 +382,11 @@ int main(int argc, char *argv[]) {
             "kernels/freestanding sin runtime de excepciones.")(
             "no-io",
             "AOT (-m aot): NO auto-incluye el runtime de I/O "
-            "(stdlib/vex/vex_io.vex).  El usuario aporta __vex_write y los "
+            "(stdlib/vex/vex_io.vx).  El usuario aporta __vex_write y los "
             "__vex_print_* (p.ej. enlazar vesta_io_bare.o, o freestanding).")(
             "no-mem",
             "AOT (-m aot): NO auto-incluye el slab allocator "
-            "(stdlib/vex/vex_mem.vex).  El allocator usa libc malloc/free (o el "
+            "(stdlib/vex/vex_mem.vx).  El allocator usa libc malloc/free (o el "
             "@AllocatorOverride del usuario).")(
             "format",
             "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en "
@@ -2424,7 +2424,7 @@ int main(int argc, char *argv[]) {
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de excepciones (stdlib/vex/vex_exc.vex).
+            // Auto-bundle del runtime de excepciones (stdlib/vex/vex_exc.vx).
             // Si el modulo usa try/catch/throw (THROW o CALL __vex_setjmp en el
             // IR) y no define el runtime el mismo, lo compilamos inline (mismo
             // native_poo + el @Target ya seleccionado para el target AOT) y
@@ -2452,9 +2452,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_exc.vex",
-                        exe_dir + "/../stdlib/vex/vex_exc.vex",
-                        "stdlib/vex/vex_exc.vex"};
+                        exe_dir + "/stdlib/vex/vex_exc.vx",
+                        exe_dir + "/../stdlib/vex/vex_exc.vx",
+                        "stdlib/vex/vex_exc.vx"};
                     std::string ve_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2463,7 +2463,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (ve_path.empty()) {
                         std::cerr << "[aot] usa excepciones pero no encuentro "
-                                     "stdlib/vex/vex_exc.vex (enlazalo a mano o "
+                                     "stdlib/vex/vex_exc.vx (enlazalo a mano o "
                                      "compila con --no-exceptions).\n";
                         return EXIT_FAILURE;
                     }
@@ -2514,13 +2514,13 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : ve_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] runtime de excepciones "
-                                 "(stdlib/vex/vex_exc.vex) incluido en el "
+                                 "(stdlib/vex/vex_exc.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de monitores (stdlib/vex/vex_sync.vex).
+            // Auto-bundle del runtime de monitores (stdlib/vex/vex_sync.vx).
             // Si el modulo usa `synchronized`/`monitor`, el lowering native_poo
             // emite CALL __vex_monenter/__vex_monexit (monitor reentrante inline
             // en el objeto, palabra en obj+16) en vez de las IR ops MONENTER/
@@ -2544,9 +2544,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_sync.vex",
-                        exe_dir + "/../stdlib/vex/vex_sync.vex",
-                        "stdlib/vex/vex_sync.vex"};
+                        exe_dir + "/stdlib/vex/vex_sync.vx",
+                        exe_dir + "/../stdlib/vex/vex_sync.vx",
+                        "stdlib/vex/vex_sync.vx"};
                     std::string vs_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2555,7 +2555,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (vs_path.empty()) {
                         std::cerr << "[aot] usa synchronized pero no encuentro "
-                                     "stdlib/vex/vex_sync.vex (enlazalo a mano).\n";
+                                     "stdlib/vex/vex_sync.vx (enlazalo a mano).\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream vsf(vs_path);
@@ -2597,13 +2597,13 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : vs_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] runtime de monitores "
-                                 "(stdlib/vex/vex_sync.vex) incluido en el "
+                                 "(stdlib/vex/vex_sync.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de asincronia (stdlib/vex/vex_async.vex).
+            // Auto-bundle del runtime de asincronia (stdlib/vex/vex_async.vx).
             // Si el modulo usa spawn/future/await/fulfill, el lowering
             // native_poo emite CALL __vex_spawn/__vex_future_new/__vex_await/
             // __vex_fulfill (scheduler cooperativo, no hilos del SO).
@@ -2631,9 +2631,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_async.vex",
-                        exe_dir + "/../stdlib/vex/vex_async.vex",
-                        "stdlib/vex/vex_async.vex"};
+                        exe_dir + "/stdlib/vex/vex_async.vx",
+                        exe_dir + "/../stdlib/vex/vex_async.vx",
+                        "stdlib/vex/vex_async.vx"};
                     std::string va_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2642,7 +2642,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (va_path.empty()) {
                         std::cerr << "[aot] usa spawn/async pero no encuentro "
-                                     "stdlib/vex/vex_async.vex (enlazalo a mano).\n";
+                                     "stdlib/vex/vex_async.vx (enlazalo a mano).\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream vaf(va_path);
@@ -2684,13 +2684,13 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : va_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] runtime de asincronia "
-                                 "(stdlib/vex/vex_async.vex) incluido en el "
+                                 "(stdlib/vex/vex_async.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del primitivo de fibras (stdlib/vex/vex_fiber.vex).
+            // Auto-bundle del primitivo de fibras (stdlib/vex/vex_fiber.vx).
             // Si el modulo usa el builtin `fiber_swapctx`, el lowering
             // native_poo (FN.2) emite CALL __vex_swapctx (context-switch nativo
             // @Naked, host-stack).  Fusionamos vex_fiber.vex -> .o autocontenido,
@@ -2714,9 +2714,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_fiber.vex",
-                        exe_dir + "/../stdlib/vex/vex_fiber.vex",
-                        "stdlib/vex/vex_fiber.vex"};
+                        exe_dir + "/stdlib/vex/vex_fiber.vx",
+                        exe_dir + "/../stdlib/vex/vex_fiber.vx",
+                        "stdlib/vex/vex_fiber.vx"};
                     std::string vf_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2725,7 +2725,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (vf_path.empty()) {
                         std::cerr << "[aot] usa fiber_swapctx pero no encuentro "
-                                     "stdlib/vex/vex_fiber.vex (enlazalo a mano).\n";
+                                     "stdlib/vex/vex_fiber.vx (enlazalo a mano).\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream vff(vf_path);
@@ -2767,13 +2767,13 @@ int main(int argc, char *argv[]) {
                     for (auto &ni : vf_mod.native_imports)
                         aot_mod.register_native_import(ni.lib, ni.name);
                     std::cout << "[aot] primitivo de fibras "
-                                 "(stdlib/vex/vex_fiber.vex) incluido en el "
+                                 "(stdlib/vex/vex_fiber.vx) incluido en el "
                                  "objeto.\n";
                 }
             }
 
             // ----------------------------------------------------------------
-            // Auto-bundle del runtime de I/O (stdlib/vex/vex_io.vex).
+            // Auto-bundle del runtime de I/O (stdlib/vex/vex_io.vx).
             // Si el modulo usa print/println, el lowering native_poo emite
             // CALLN `vex_bare_io:__vex_*` (write + formateadores).  En vez de
             // exigir enlazar vesta_io_bare.o (libc/printf), fusionamos un
@@ -2803,9 +2803,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_io.vex",
-                        exe_dir + "/../stdlib/vex/vex_io.vex",
-                        "stdlib/vex/vex_io.vex"};
+                        exe_dir + "/stdlib/vex/vex_io.vx",
+                        exe_dir + "/../stdlib/vex/vex_io.vx",
+                        "stdlib/vex/vex_io.vx"};
                     std::string io_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -2814,7 +2814,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (io_path.empty()) {
                         std::cerr << "[aot] usa print/println pero no encuentro "
-                                     "stdlib/vex/vex_io.vex (enlazalo a mano o "
+                                     "stdlib/vex/vex_io.vx (enlazalo a mano o "
                                      "compila con --freestanding y aporta "
                                      "__vex_write).\n";
                         return EXIT_FAILURE;
@@ -2898,7 +2898,7 @@ int main(int argc, char *argv[]) {
                             b.instrs = std::move(ni);
                         }
                     }
-                    std::cout << "[aot] runtime de I/O (stdlib/vex/vex_io.vex) "
+                    std::cout << "[aot] runtime de I/O (stdlib/vex/vex_io.vx) "
                                  "incluido en el objeto.\n";
                 }
             }
@@ -3081,7 +3081,7 @@ int main(int argc, char *argv[]) {
                     true; // __new calloc -> alloc_sym(size)
             } else if (aot_uses_alloc && !aot_no_mem && !aot_freestanding) {
                 // Sin @AllocatorOverride del usuario -> el slab Vex
-                // (stdlib/vex/vex_mem.vex) es el allocator por DEFECTO, via el
+                // (stdlib/vex/vex_mem.vx) es el allocator por DEFECTO, via el
                 // MISMO mecanismo @AllocatorOverride (reciclamos la sintaxis):
                 // compilamos vex_mem y leemos sus simbolos override
                 // (__vex_malloc / __vex_free) genericamente, no hardcoded.  Sin
@@ -3092,9 +3092,9 @@ int main(int argc, char *argv[]) {
                         .parent_path()
                         .string();
                 const std::vector<std::string> cands = {
-                    exe_dir + "/stdlib/vex/vex_mem.vex",
-                    exe_dir + "/../stdlib/vex/vex_mem.vex",
-                    "stdlib/vex/vex_mem.vex"};
+                    exe_dir + "/stdlib/vex/vex_mem.vx",
+                    exe_dir + "/../stdlib/vex/vex_mem.vx",
+                    "stdlib/vex/vex_mem.vx"};
                 std::string mem_path;
                 for (const auto &c : cands)
                     if (std::filesystem::exists(c)) {
@@ -3103,7 +3103,7 @@ int main(int argc, char *argv[]) {
                     }
                 if (mem_path.empty()) {
                     std::cerr << "[aot] usa el allocator pero no encuentro "
-                                 "stdlib/vex/vex_mem.vex (enlazalo a mano, usa "
+                                 "stdlib/vex/vex_mem.vx (enlazalo a mano, usa "
                                  "@AllocatorOverride o compila con --no-mem).\n";
                     return EXIT_FAILURE;
                 }
@@ -3140,7 +3140,7 @@ int main(int argc, char *argv[]) {
             }
 
             // FFI dinamico (ffi_open/ffi_sym -> DLOPEN/DLSYM): bundle
-            // stdlib/vex/vex_ffi.vex que define __vex_dlopen/__vex_dlsym
+            // stdlib/vex/vex_ffi.vx que define __vex_dlopen/__vex_dlsym
             // (LoadLibraryA/dlopen via @Target, Vex puro).  Igual que vex_mem:
             // el usuario puede REDEFINIR esas funciones en su modulo (el merge
             // respeta las suyas).  Se detecta ANTES de aot_lower (que convierte
@@ -3161,9 +3161,9 @@ int main(int argc, char *argv[]) {
                             .parent_path()
                             .string();
                     const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vex/vex_ffi.vex",
-                        exe_dir + "/../stdlib/vex/vex_ffi.vex",
-                        "stdlib/vex/vex_ffi.vex"};
+                        exe_dir + "/stdlib/vex/vex_ffi.vx",
+                        exe_dir + "/../stdlib/vex/vex_ffi.vx",
+                        "stdlib/vex/vex_ffi.vx"};
                     std::string ffi_path;
                     for (const auto &c : cands)
                         if (std::filesystem::exists(c)) {
@@ -3172,7 +3172,7 @@ int main(int argc, char *argv[]) {
                         }
                     if (ffi_path.empty()) {
                         std::cerr << "[aot] usa ffi_open/ffi_sym pero no "
-                                     "encuentro stdlib/vex/vex_ffi.vex.\n";
+                                     "encuentro stdlib/vex/vex_ffi.vx.\n";
                         return EXIT_FAILURE;
                     }
                     std::ifstream ff(ffi_path);
@@ -3199,7 +3199,7 @@ int main(int argc, char *argv[]) {
 
             aot::aot_lower_runtime(aot_mod, lcfg);
 
-            // Merge del slab (stdlib/vex/vex_mem.vex, ya compilado en mem_mod)
+            // Merge del slab (stdlib/vex/vex_mem.vx, ya compilado en mem_mod)
             // DESPUES de aot_lower: ahora RAW_ALLOC/calloc/RAW_FREE ya son CALL
             // __vex_malloc/__vex_free, asi que el codegen BFS los alcanza desde
             // main.  Mismo patron de merge que vex_io/vex_exc.
@@ -3224,7 +3224,7 @@ int main(int argc, char *argv[]) {
                     aot_mod.globals.emplace(gv.first, gv.second);
                 for (auto &ni : mem_mod.native_imports)
                     aot_mod.register_native_import(ni.lib, ni.name);
-                std::cout << "[aot] slab allocator (stdlib/vex/vex_mem.vex) "
+                std::cout << "[aot] slab allocator (stdlib/vex/vex_mem.vx) "
                              "incluido en el objeto.\n";
             }
 
@@ -3253,7 +3253,7 @@ int main(int argc, char *argv[]) {
                     aot_mod.globals.emplace(gv.first, gv.second);
                 for (auto &ni : ffi_mod.native_imports)
                     aot_mod.register_native_import(ni.lib, ni.name);
-                std::cout << "[aot] FFI dinamico (stdlib/vex/vex_ffi.vex) "
+                std::cout << "[aot] FFI dinamico (stdlib/vex/vex_ffi.vx) "
                              "incluido en el objeto.\n";
             }
 
