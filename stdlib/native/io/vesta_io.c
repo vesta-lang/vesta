@@ -363,20 +363,35 @@ static size_t vio_u64_to_str(uint64_t v, char *out) {
 }
 
 /**
- * @brief Convierte un uint64 a hex con prefijo "0x" y 16 digitos en mayus.
+ * @brief Convierte un uint64 a hex compacto con prefijo "0x" en minusculas.
  *
- * Formato fijo de 18 caracteres ("0x" + 16 hex).  Util para volcado de
- * direcciones / handles / bits binarios.
+ * Formato variable: "0x" + N digitos hex (sin ceros a la izquierda), digitos
+ * en minuscula.  Para v=0 emite "0x0".  Maximo 18 chars ("0x" + 16 hex).
+ *
+ * CANONICO (fix divergencia interp/JIT vs AOT/port-C): esta forma compacta y
+ * en minusculas ES la que ya producen el backend AOT (@c __vex_print_hex en
+ * @c stdlib/vex/vex_io.vex) y el backend port-C (@c "0x%llx").  Antes este
+ * helper del interprete/JIT emitia 18 chars fijos en MAYUS ("0x0000...004D42")
+ * lo que hacia que el mismo @c ${x:hex} diese un string distinto segun el
+ * modo.  Ahora los cuatro caminos (interp, JIT, AOT, port-C) coinciden.
  */
 static size_t vio_u64_to_hex(uint64_t v, char *out) {
-    static const char hex[] = "0123456789ABCDEF";
+    static const char hex[] = "0123456789abcdef";
     out[0] = '0';
     out[1] = 'x';
-    for (int i = 15; i >= 0; --i) {
-        out[2 + i] = hex[v & 0xFu];
-        v >>= 4;
+    if (v == 0) {
+        out[2] = '0';
+        return 3;
     }
-    return 18;
+    /* Encontrar el nibble mas alto significativo (sin ceros a la izquierda). */
+    int high = 15;
+    while (high > 0 && ((v >> (high * 4)) & 0xFu) == 0)
+        --high;
+    size_t k = 2;
+    for (int i = high; i >= 0; --i) {
+        out[k++] = hex[(v >> (i * 4)) & 0xFu];
+    }
+    return k;
 }
 
 /**
@@ -659,6 +674,107 @@ VESTA_PLUGIN_EXPORT uint64_t vio_gchandle_to_vmbuf(uint64_t proc_ptr,
 static uint64_t g_vio_gensym_counter = 0;
 VESTA_PLUGIN_EXPORT uint64_t vio_gensym(void) {
     return g_vio_gensym_counter++;
+}
+
+/* -------------------------------------------------------------------------
+ * Parseo de entero desde un buffer de bytes (LIM-8).
+ *
+ * CERO libc: no usa atoi/strtoll.  Recorre los bytes a mano detectando la
+ * base por prefijo:
+ *   - "0x"/"0X" -> hexadecimal
+ *   - "0b"/"0B" -> binario
+ *   - "0o"/"0O" -> octal
+ *   - resto     -> decimal
+ * Acepta un signo opcional ('+'/'-') y espacios/tabs a ambos lados.  Detecta
+ * error de: buffer vacio, digito invalido, digito fuera de la base, basura
+ * despues del numero, y overflow del rango i64.
+ *
+ * ABI: recibe un HOST pointer @p s_host (el resultado de @c str_cstr /
+ * @c str_raw sobre un @c string) + su longitud en bytes @p len.  Cero copia:
+ * trabaja directamente sobre el buffer host.  El proc_ptr NO se necesita
+ * (no hay acceso a memoria VM).
+ *
+ * Deteccion de error via flag global @c g_vio_parse_err: tras cada llamada,
+ * @c vio_parse_ok() devuelve 1 si el parseo fue valido, 0 si hubo error.  En
+ * error, @c vio_parse_int devuelve 0.  El flag es global (no thread-safe),
+ * suficiente para el caso de uso previsto: parsear argumentos de CLI al
+ * arrancar (single-thread).  El caller debe consultar @c vio_parse_ok()
+ * inmediatamente despues, antes de otra llamada al parser.
+ * ----------------------------------------------------------------------- */
+static int g_vio_parse_err = 0;
+
+VESTA_PLUGIN_EXPORT int64_t vio_parse_int(uint64_t s_host, uint64_t len) {
+    g_vio_parse_err = 1; /* pesimista: solo se limpia si TODO cuadra */
+    const unsigned char *p = (const unsigned char *)(uintptr_t)s_host;
+    if (!p || len == 0) return 0;
+    size_t n = (size_t)len;
+    size_t i = 0;
+    /* Espacios/tabs iniciales. */
+    while (i < n && (p[i] == ' ' || p[i] == '\t'))
+        ++i;
+    int neg = 0;
+    if (i < n && (p[i] == '+' || p[i] == '-')) {
+        neg = (p[i] == '-');
+        ++i;
+    }
+    /* Base por prefijo (solo si hay al menos un caracter tras el '0'). */
+    unsigned base = 10u;
+    if (i + 1 < n && p[i] == '0') {
+        unsigned char c1 = p[i + 1];
+        if (c1 == 'x' || c1 == 'X') {
+            base = 16u;
+            i += 2;
+        } else if (c1 == 'b' || c1 == 'B') {
+            base = 2u;
+            i += 2;
+        } else if (c1 == 'o' || c1 == 'O') {
+            base = 8u;
+            i += 2;
+        }
+    }
+    int any = 0;
+    uint64_t acc = 0;
+    while (i < n) {
+        unsigned char c = p[i];
+        if (c == ' ' || c == '\t') break; /* fin del numero */
+        unsigned d;
+        if (c >= '0' && c <= '9')
+            d = (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f')
+            d = 10u + (unsigned)(c - 'a');
+        else if (c >= 'A' && c <= 'F')
+            d = 10u + (unsigned)(c - 'A');
+        else
+            return 0; /* caracter no hexadecimal */
+        if (d >= base) return 0; /* digito fuera de la base activa */
+        /* Overflow de u64: acc*base + d > UINT64_MAX. */
+        if (acc > (UINT64_MAX - d) / base) return 0;
+        acc = acc * base + d;
+        any = 1;
+        ++i;
+    }
+    if (!any) return 0; /* no habia ningun digito */
+    /* Espacios/tabs finales; cualquier otra cosa es basura -> error. */
+    while (i < n) {
+        if (p[i] != ' ' && p[i] != '\t') return 0;
+        ++i;
+    }
+    int64_t r;
+    if (neg) {
+        /* Magnitud negativa maxima = 2^63 (INT64_MIN). */
+        if (acc > 0x8000000000000000ULL) return 0;
+        r = (acc == 0x8000000000000000ULL) ? INT64_MIN : -(int64_t)acc;
+    } else {
+        if (acc > 0x7FFFFFFFFFFFFFFFULL) return 0;
+        r = (int64_t)acc;
+    }
+    g_vio_parse_err = 0; /* exito */
+    return r;
+}
+
+/** @brief 1 si el ultimo @c vio_parse_int fue valido, 0 si hubo error. */
+VESTA_PLUGIN_EXPORT int64_t vio_parse_ok(void) {
+    return g_vio_parse_err == 0 ? 1 : 0;
 }
 
 /* -------------------------------------------------------------------------
