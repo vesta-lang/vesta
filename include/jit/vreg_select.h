@@ -118,6 +118,14 @@ struct VregEntries {
         0; ///< vrt_call_bc_function(proc, vm_addr) -- deleter dinamico
     uint64_t callclosure =
         0; ///< vrt_callclosure(proc, fn_addr, env_addr) -> result
+    /* Fibras nativas en JIT (FN.3).  swapctx = direccion NATIVA de
+     * @c __vex_swapctx (@Naked, compilado via compile_native_fn en el
+     * force-eager del grafo de fibra); el vreg emite un CALL nativo a el
+     * para @c IrOp::SWAPCTX.  callind = @c vrt_callind(proc, func_ptr), el
+     * helper de runtime que replica @c exec_instr_callvmr (distingue
+     * naked-native/jit-VM_ABI/VA por rango) para @c IrOp::CALLIND en JIT. */
+    uint64_t swapctx = 0; ///< addr nativa de __vex_swapctx (SWAPCTX en JIT)
+    uint64_t callind = 0; ///< vrt_callind(proc, func_ptr) (CALLIND en JIT)
     /* Fallback page-miss de LOAD_VM/STORE_VM (acceso a vm_mem).  0 = no
      * disponible -> esos ops caen a fallback. */
     uint64_t vm_read_u8 = 0;   ///< vrt_vm_read_u8(proc, vaddr)  -> u8

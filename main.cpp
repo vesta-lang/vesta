@@ -224,6 +224,10 @@ int main(int argc, char *argv[]) {
     // para punteros a funcion que fluyen a codigo nativo).
     jit::register_naked_dispatch_runner();
     jit::register_naked_fnaddr_runner();
+    // FN.3: registrar vrt:jit_active (modo interp vs JIT) y vrt:getproc
+    // (ProcessVM* actual), que `fiber_init` usa para elegir el modelo de
+    // fibra en JIT (pila/ctx host + trampolin + proc).
+    jit::register_fiber_runtime_runner();
 
     // ------------------------------------------------------------------
     // Subcomando especial: @c vm pkg <subcmd> ...

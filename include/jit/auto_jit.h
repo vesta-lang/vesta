@@ -130,6 +130,30 @@ extern uint64_t g_jit_unsupported_count;
 extern uint64_t g_jit_no_ir_count;
 
 /**
+ * @brief FN.3: direccion NATIVA de @c __vex_swapctx (context-switch @Naked de
+ *        vex_fiber.vex), compilada por el force-eager del grafo de fibra.
+ *        El vreg la lee (via @c make_vreg_entries -> VregEntries::swapctx) para
+ *        emitir un CALL nativo directo en @c IrOp::SWAPCTX (JIT).  0 = fibras
+ *        en JIT no inicializadas (o arquitectura sin backend x86-64).
+ */
+extern uint64_t g_vex_swapctx_native;
+
+/**
+ * @brief FN.3: materializa @c __vex_swapctx (context-switch @Naked) como codigo
+ *        NATIVO y deja su direccion en @c g_vex_swapctx_native (idempotente).
+ *
+ * Es el primer paso del force-eager del grafo de fibra: compila el primitivo de
+ * fiber-switch por la via naked (@c compile_naked_native, HOST_LEAF) para que el
+ * vreg pueda emitir un CALL nativo directo a el en @c IrOp::SWAPCTX (pieza 3).
+ * Arch-guard x86-64: fuera de esa arquitectura no hay asm valido -> devuelve 0
+ * (el llamante deja el grafo de fibra en el interprete con un aviso claro).
+ *
+ * @param vm  ProcessVM del proceso principal (acceso al Loader/executables).
+ * @return la direccion nativa de __vex_swapctx, o 0 si no se pudo compilar.
+ */
+uint64_t ensure_vex_swapctx_native(runtime::ProcessVM *vm) noexcept;
+
+/**
  * @brief Devuelve un snapshot legible del estado del JIT
  *        (counters + threshold).  Util para printear al final del
  *        programa con @c --jit-stats flag.

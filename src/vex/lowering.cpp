@@ -15222,6 +15222,24 @@ skip_comptime_eval_for_macro_to_macro:
         auto it_ext = extern_lib_by_fn_name_.find(id->name);
         if (it_ext != extern_lib_by_fn_name_.end()) {
             const std::string &lib = it_ext->second;
+            // FN.3: en AOT (native_poo) los externs de coordinacion de fibras
+            // `vrt:jit_active` / `vrt:getproc` NO existen como simbolos nativos
+            // (viven en el runtime interp/JIT).  Se pliegan a CONST 0:
+            // jit_active=0 convierte la rama JIT del setup de fibras en codigo
+            // muerto (lo elimina el optimizador), y getproc solo vive dentro
+            // de esa rama.  Asi el binario AOT enlaza sin simbolos indefinidos
+            // y usa el modelo directo (contexto/pila globales, entry nativa).
+            if (native_poo_ && lib == "vrt" &&
+                (id->name == "jit_active" || id->name == "getproc" ||
+                 id->name == "fiber_jit_ctx" ||
+                 id->name == "fiber_jit_scratch")) {
+                ir::IrType rt = ir::IrType::I64;
+                auto it_rt0 = fn_return_types_.find(id->name);
+                if (it_rt0 != fn_return_types_.end() &&
+                    it_rt0->second != ir::IrType::VOID)
+                    rt = it_rt0->second;
+                return emit_const(rt, 0, e->loc.line);
+            }
             out_mod_->register_native_import(lib, id->name);
             std::vector<ir::IrValueId> arg_ids;
             arg_ids.reserve(e->args.size());

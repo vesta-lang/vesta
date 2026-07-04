@@ -27,6 +27,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "jit/auto_jit.h" // FN.3: lookup_jit_code_at_pc (LABEL_ADDR -> nativo)
+
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
 #include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
@@ -4061,8 +4063,55 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                     break;
                 }
-                vreg_dbg(fn.name.c_str(), "callind(vm-abi)");
-                return false;
+                /* FN.3 pieza 2: CALLIND en VM_ABI (JIT).  En runtime el
+                 * func_ptr puede ser (a) un puntero nativo naked (HOST_LEAF,
+                 * de `(cfn)fn`), (b) un jit_code VM_ABI (de `&fn` con la pieza
+                 * 1) o (c) una VA de bytecode (fn no compilada aun).  Replicamos
+                 * EXACTAMENTE la semantica del interp `exec_instr_callvmr` via el
+                 * helper de runtime `vrt_callind`: marshalling de los args a
+                 * proc->registers.regs[1..N] + regs[15]=nargs (la MISMA
+                 * convencion que el bytecode CALLIND emite), luego CALL nativo a
+                 * vrt_callind(proc, func_ptr) que dispatcha por rango (naked ->
+                 * ABI host via invoke_native_unchecked; jit/VA -> VM_ABI, con
+                 * compile-on-demand para la VA).  El resultado queda en regs[0].
+                 * El caller es JIT y el callee corre nativo -> ni caller ni
+                 * callee caen a interp (para el corpus la VA compila siempre). */
+                if (ent.callind == 0 || in.func_ptr == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), "callind(no-entry)");
+                    return false;
+                }
+                /* 1. Args -> proc->registers.regs[i+1] (float-aware). */
+                for (size_t i = 0; i < in.operands.size(); ++i)
+                    store_vm_arg(O, static_cast<int>(i) + 1, in.operands[i]);
+                /* 2. nargs -> regs[15] (argc para el bridge naked host-ABI). */
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vm_reg_mem(15),
+                    MOperand::make_imm32(
+                        static_cast<int32_t>(in.operands.size()))));
+                /* 3. func_ptr -> arg1 (via R10 temporal, como SMARTPTR_FREE,
+                 *    para no chocar con el orden de asignacion de arg-regs);
+                 *    proc (RBX) -> arg0. */
+#if defined(_WIN32)
+                const MReg ci_a0 = MReg::RCX, ci_a1 = MReg::RDX;
+#else
+                const MReg ci_a0 = MReg::RDI, ci_a1 = MReg::RSI;
+#endif
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R10, 8),
+                    vr(in.func_ptr)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(ci_a1, 8),
+                    MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(ci_a0, 8),
+                    MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.callind)));
+                /* 4. Resultado desde regs[0]. */
+                if (in.dst != ir::IR_NO_VALUE)
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                                   vm_reg_mem(0)));
+                break;
             }
 
             /* TAILCALL: tail-call con REUSO de frame (TCO genuina).  El
@@ -5076,6 +5125,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "label_addr(no-symbol)");
                     return false; // sin resolver -> fallback a slots
                 }
+                /* FN.3 pieza 1: si la funcion destino YA tiene codigo nativo
+                 * JIT (registrado en el pc-map por el force-eager del grafo de
+                 * fibra o por el cascade resolver), emitimos el puntero de
+                 * codigo NATIVO en vez de la VA de bytecode.  `fiber_entry(fn)`
+                 * lo hereda -> el ctx.r12 de una fibra apunta a codigo nativo
+                 * VM_ABI (el trampolin salta a el); un cfn `&fn` ya compilado
+                 * se llama directo por CALLIND.  Si aun no esta compilada, se
+                 * emite la VA como hasta ahora (CALLIND la resuelve a nativo
+                 * on-demand; para fibras el force-eager garantiza el native). */
+                if (void *jc = lookup_jit_code_at_pc(addr))
+                    addr = reinterpret_cast<uint64_t>(jc);
                 const uint32_t idx = out.intern_imm64(addr);
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                MOperand::make_imm64_idx(idx)));
@@ -5124,6 +5184,33 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, vr(in.dst), MOperand::make_reg(MReg::RBX, 8)));
+                break;
+            }
+
+            /* FN.3 pieza 3: SWAPCTX en VM_ABI (JIT) -> CALL nativo a
+             * `__vex_swapctx` (@Naked, host-ABI).  operands[0]=to_ctx (a
+             * cargar), operands[1]=from_ctx (a guardar).  El primitivo toma
+             * sus args en los arg-regs NATIVOS (arg0=to, arg1=from), NO en
+             * proc->registers -> usamos ARG + CALL_ABS (misma via que un CALLN
+             * host-ABI).  ent.swapctx = direccion nativa de __vex_swapctx que
+             * el force-eager del grafo de fibra dejo lista (compilada por
+             * compile_native_fn).  Es un context-switch: al reanudar (cuando
+             * alguien vuelva a esta fibra) los callee-saved los restaura el
+             * propio __vex_swapctx; los caller-saved vivos a traves de la
+             * llamada los spillea el regalloc (CALL_ABS = call-position).  El
+             * path INTERPRETE sigue usando el opcode VM `swapctx` (FN.1); aqui
+             * solo el path JIT nativo. */
+            case ir::IrOp::SWAPCTX: {
+                flush_pending();
+                if (abi != AbiKind::VM || ent.swapctx == 0 ||
+                    in.operands.size() != 2) {
+                    vreg_dbg(fn.name.c_str(), "swapctx(no-native)");
+                    return false;
+                }
+                O.push_back(MInstr::make_arg(0, vr(in.operands[0]))); // to_ctx
+                O.push_back(MInstr::make_arg(1, vr(in.operands[1]))); // from_ctx
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.swapctx)));
                 break;
             }
 

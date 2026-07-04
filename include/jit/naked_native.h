@@ -37,6 +37,11 @@
 #define VESTA_JIT_NAKED_NATIVE_H
 
 #include <cstdint>
+#include <string>
+
+namespace runtime {
+class ProcessVM;
+}
 
 namespace jit {
 
@@ -85,6 +90,83 @@ inline uint64_t fnv1a64_name(const char *s) {
     }
     return h;
 }
+
+/* ===================================================================== */
+/* FN.3: fibras nativas en JIT                                            */
+/* ===================================================================== */
+
+/**
+ * @brief Compila (o recupera de cache) la funcion Vex @p name como una entrada
+ *        NATIVA HOST_LEAF (respetando @c is_naked), con sus relocs resueltos.
+ *        Wrapper publico y thread-safe de la maquinaria @Naked interna.
+ *
+ * Lo usa el force-eager del grafo de fibra para materializar @c __vex_swapctx
+ * (context-switch @Naked) antes de compilar los cuerpos de fibra, de modo que
+ * el vreg pueda emitir un CALL nativo directo a el para @c IrOp::SWAPCTX.
+ *
+ * @return direccion nativa (en el code cache naked), o 0 si no se pudo (p.ej.
+ *         arquitectura sin backend x86-64 -> fibras-en-JIT deshabilitadas).
+ */
+uint64_t compile_naked_native(runtime::ProcessVM *vm, const std::string &name);
+
+/**
+ * @brief Helper de runtime para @c IrOp::CALLIND en JIT (FN.3 pieza 2).
+ *
+ * Replica EXACTAMENTE @c exec_instr_callvmr del interprete: dado @p addr (el
+ * valor del puntero a funcion) distingue por rango y despacha:
+ *   - naked-native (HOST_LEAF)  -> @c invoke_native_unchecked (ABI host).
+ *   - jit_code VM_ABI            -> @c enter_jit (VM_ABI).
+ *   - VA de bytecode             -> compile-on-demand -> enter_jit; ultimo
+ *                                   recurso: ejecutar el bytecode.
+ * Convencion (ya establecida por el caller JIT): args en
+ * @c proc->registers.regs[1..N], argc en @c regs[15], resultado en @c regs[0].
+ */
+extern "C" void vrt_callind(uint64_t proc, uint64_t addr);
+
+/**
+ * @brief FN.3: extern `vrt:jit_active` -> 1 si hay codigo JIT activo (el
+ *        proceso corre en modo JIT), 0 si es interprete puro.  Lo usa
+ *        `fiber_init` para elegir el modelo de fibra (JIT: pila/ctx HOST +
+ *        trampolin + proc; interp: pila/ctx en memoria VM).  En AOT este
+ *        extern se pliega a 0 en el lowering (no llega aqui).
+ */
+extern "C" int32_t vrt_jit_active(void);
+
+/**
+ * @brief FN.3: extern `vrt:getproc` -> ProcessVM* del proceso en ejecucion
+ *        (via TLS, como `vex_get_native_thunk`).  Lo usa `fiber_init` en la
+ *        rama JIT para poner `proc` en el ctx de la fibra (rbx del entry
+ *        VM_ABI).  En AOT se pliega a 0 en el lowering.
+ */
+extern "C" uint64_t vrt_getproc(void);
+
+/**
+ * @brief FN.3: extern `vrt:fiber_jit_ctx(entry)` -> construye en memoria HOST el
+ *        contexto de una fibra para el context-switch nativo (JIT).
+ *
+ * Reserva ctx (152 B) + pila (64 KiB) con malloc (memoria host), materializa el
+ * trampolin `__fiber_trampoline` nativo, y rellena el ctx con el layout que
+ * `__vex_swapctx` espera al PRIMER arranque: PC=trampolin, SP=BP=cima de la
+ * pila host, rbx=proc (recuperado via TLS), r12=@p entry (jit_code nativo del
+ * cuerpo, que @c fiber_entry resuelve via la pieza 1).  El trampolin pone proc
+ * en el arg-reg y salta al entry VM_ABI.  Devuelve la direccion del ctx host.
+ * Solo se llama en JIT (la rama `if(jit_active())` del setup de fibras); en AOT
+ * se pliega a 0 en el lowering.
+ */
+extern "C" uint64_t vrt_fiber_jit_ctx(uint64_t entry);
+
+/**
+ * @brief FN.3: extern `vrt:fiber_jit_scratch()` -> ctx host vacio (152 B a cero)
+ *        para el scheduler/main (se rellena en el primer swap-out).  Solo JIT.
+ */
+extern "C" uint64_t vrt_fiber_jit_scratch(void);
+
+/**
+ * @brief Registra `vrt:jit_active`, `vrt:getproc`, `vrt:fiber_jit_ctx` y
+ *        `vrt:fiber_jit_scratch` en el registro de funciones virtuales (FFI).
+ *        Llamar una vez al arranque (junto a `register_naked_fnaddr_runner`).
+ */
+void register_fiber_runtime_runner();
 
 } // namespace jit
 

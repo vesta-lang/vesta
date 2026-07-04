@@ -34,9 +34,14 @@
 
 #include "port/transpiler_base.h"
 #include "port/c/c_backend.h"
+#include "util/fs_utils.h" // FN.3: get_executable_path (auto-bundle fibras)
 
+#include <filesystem>
+#include <fstream>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace vex {
 
@@ -412,6 +417,91 @@ CompileResult compile_vex_source(const std::string &source,
     if (!lo.run(irmod, mod_name)) {
         res.ok = false;
         return res;
+    }
+
+    // FN.3: auto-bundle del context-switch de fibra para el JIT.
+    // En el path interp/JIT (native_poo == false), `fiber_swapctx` baja al
+    // opcode VM SWAPCTX; el interp lo ejecuta directamente, pero el JIT emite
+    // un CALL nativo al primitivo @Naked `__vex_swapctx` (context-switch host)
+    // y `__fiber_trampoline` (arranque de fibra).  Esas dos funciones viven en
+    // stdlib/vex/vex_fiber.vex y el opcode NO las referencia -> no estarian en
+    // el .velb del usuario.  Cuando detectamos uso de SWAPCTX, compilamos
+    // vex_fiber.vex (interp/JIT) y fusionamos SOLO esas dos funciones @Naked en
+    // el modulo, para que su IR llegue a la seccion @ir del .velb y el JIT las
+    // materialice (find_exe_with_fn -> compile_native_fn).  Son asm puro (sin
+    // static_data / globals / native_imports), asi que basta con las funciones.
+    // El path AOT (native_poo) tiene su propio auto-bundle en main.cpp; alli
+    // fiber_swapctx baja a CALL __vex_swapctx (no al opcode) -> no entra aqui.
+    // Recursion imposible: vex_fiber.vex DEFINE __vex_swapctx pero NO usa el
+    // opcode SWAPCTX (usa fiber_switch/asm), asi que no re-dispara el bundle.
+    if (!opts.native_poo) {
+        bool uses_swapctx = false, defines_swapctx = false;
+        for (const auto &f : irmod.functions) {
+            if (f.name == "__vex_swapctx") defines_swapctx = true;
+            for (const auto &b : f.blocks)
+                for (const auto &ins : b.instrs)
+                    if (ins.op == ir::IrOp::SWAPCTX) uses_swapctx = true;
+        }
+        if (uses_swapctx && !defines_swapctx) {
+            std::vector<std::string> cands = {"stdlib/vex/vex_fiber.vex",
+                                              "../stdlib/vex/vex_fiber.vex",
+                                              "../../stdlib/vex/vex_fiber.vex"};
+            const std::string exe = fs::get_executable_path();
+            if (!exe.empty()) {
+                std::filesystem::path ed =
+                    std::filesystem::path(exe).parent_path();
+                cands.push_back(
+                    (ed / "stdlib" / "vex" / "vex_fiber.vex").string());
+                cands.push_back(
+                    (ed.parent_path() / "stdlib" / "vex" / "vex_fiber.vex")
+                        .string());
+            }
+            std::string vf_path;
+            for (const auto &c : cands)
+                if (std::filesystem::exists(c)) {
+                    vf_path = c;
+                    break;
+                }
+            if (vf_path.empty()) {
+                res.diagnostics.warning(
+                    SourceLoc{mod_name, 0, 0},
+                    "fiber_swapctx: no encuentro stdlib/vex/vex_fiber.vex; el "
+                    "context-switch de fibra no estara disponible en JIT");
+            } else {
+                std::ifstream vff(vf_path);
+                std::string vf_src((std::istreambuf_iterator<char>(vff)),
+                                   std::istreambuf_iterator<char>());
+                CompileOptions vf_opts;
+                vf_opts.module_name = "vex_fiber";
+                vf_opts.opt_level = 2;
+                vf_opts.native_poo = false;
+                vf_opts.asm_target_bits = opts.asm_target_bits;
+                CompileResult vf_cr =
+                    compile_vex_source(vf_src, vf_path, vf_opts);
+                ir::IrModule vf_mod;
+                if (vf_cr.ok && !vf_cr.ir_module_cache_bytes.empty() &&
+                    ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
+                                              vf_mod)) {
+                    std::unordered_set<std::string> have;
+                    for (const auto &f : irmod.functions)
+                        have.insert(f.name);
+                    for (auto &fn : vf_mod.functions) {
+                        if (fn.name != "__vex_swapctx" &&
+                            fn.name != "__fiber_trampoline")
+                            continue;
+                        if (have.count(fn.name)) continue;
+                        irmod.functions.push_back(std::move(fn));
+                    }
+                    // Las funciones @Naked emiten un CALLN a `vrt:inline_asm_exec`
+                    // (ejecutor de inline-asm del interp) en su bytecode; el
+                    // linker necesita el native_import para resolverlo aunque en
+                    // interp ese bytecode nunca se ejecute (la fibra corre por el
+                    // opcode SWAPCTX / el JIT las materializa nativas).
+                    for (const auto &ni : vf_mod.native_imports)
+                        irmod.register_native_import(ni.lib, ni.name);
+                }
+            }
+        }
     }
 
     // AOT.2.d: detectar @AllocatorOverride / @PanicHandler.  El allocador

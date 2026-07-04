@@ -978,6 +978,70 @@ Loader::load_executable(runtime::VM &vm,
             }
             const uint64_t jit_counter_addr = reinterpret_cast<uint64_t>(
                 &proccess->scheduler.profiler_jit_instr_counter);
+            // FN.3: force-eager del grafo de fibra ANTES de compilar main.
+            // Si algun IR usa el opcode SWAPCTX (fibras via `fiber_swapctx`),
+            // (1) materializamos `__vex_swapctx` nativo (deja
+            // g_vex_swapctx_native, que el vreg lee para emitir el CALL nativo
+            // del SWAPCTX) y (2) eager-compilamos cada CUERPO de fibra por vreg,
+            // para que `fiber_entry(fn)` (LABEL_ADDR) resuelva a su jit_code
+            // nativo (pieza 1) -- el ctx.r12 de la fibra debe apuntar a codigo
+            // nativo VM_ABI, no a una VA.  Los cuerpos se referencian solo via
+            // LABEL_ADDR (no CALL), asi que el cascade resolver no los tocaria.
+            {
+                auto ir_uses_swapctx = [](const ir::IrFunction &f) {
+                    for (const auto &blk : f.blocks)
+                        for (const auto &ins : blk.instrs)
+                            if (ins.op == ir::IrOp::SWAPCTX) return true;
+                    return false;
+                };
+                bool any_swapctx = false;
+                for (const auto &irf : last_exe->ir_functions)
+                    if (ir_uses_swapctx(irf)) {
+                        any_swapctx = true;
+                        break;
+                    }
+                if (any_swapctx) {
+                    const uint64_t sc =
+                        jit::ensure_vex_swapctx_native(proccess);
+                    if (sc == 0) {
+                        std::fprintf(
+                            stderr,
+                            "[jit] context-switch de fibra sin backend nativo "
+                            "en esta arquitectura; el grafo de fibra corre en "
+                            "el interprete\n");
+                    } else {
+                        for (const auto &irf : last_exe->ir_functions) {
+                            if (irf.name == "main") continue;
+                            if (!ir_uses_swapctx(irf)) continue;
+                            try {
+                                jit::CompileResult fr =
+                                    jit::eager_compile_function(
+                                        irf, &last_exe->ir_lookup,
+                                        &last_exe->ir_functions,
+                                        &last_exe->symbol_table, resolve_native,
+                                        read_vmem_cb, exc_off, exc_free_off,
+                                        jit_counter_addr);
+                                /* Registrar pc -> jit_code: el path vreg
+                                 * top-level NO lo hace por si mismo, y
+                                 * `fiber_entry(cuerpo)` (LABEL_ADDR, pieza 1)
+                                 * necesita hallar esta direccion nativa para
+                                 * que el ctx.r12 de la fibra apunte a codigo
+                                 * nativo VM_ABI (no a una VA de bytecode). */
+                                if (fr.fn != nullptr) {
+                                    auto sit = last_exe->symbol_table.find(
+                                        "code." + irf.name);
+                                    if (sit != last_exe->symbol_table.end() &&
+                                        sit->second != 0)
+                                        jit::register_jit_code_at_pc(
+                                            sit->second,
+                                            reinterpret_cast<void *>(fr.fn));
+                                }
+                            } catch (...) {
+                            }
+                        }
+                    }
+                }
+            }
             try {
                 jit::CompileResult res = jit::eager_compile_function(
                     ir_main, &last_exe->ir_lookup, &last_exe->ir_functions,

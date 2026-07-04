@@ -21,6 +21,7 @@
 #include "jit/runtime_entries.h"
 #include "jit/vreg_pipeline.h"
 #include "jit/regalloc_rewrite.h" // OSR glue (set_osr_handler / osr_loop_*)
+#include "jit/naked_native.h"      // FN.3: vrt_callind + compile_naked_native
 #include "vesta_rt/public.h"
 #include "ffi/virtual_lib_registry.h" // Sprint JIT-cross-fn: virtual fn lookup
 #include "loader/loader.h"
@@ -96,6 +97,9 @@ bool g_jit_emit_instr_counter = false;
 uint64_t g_jit_compiled_count = 0;
 uint64_t g_jit_unsupported_count = 0;
 uint64_t g_jit_no_ir_count = 0;
+
+/* FN.3: direccion nativa de __vex_swapctx (la fija el force-eager de fibras). */
+uint64_t g_vex_swapctx_native = 0;
 
 /* C2 tier-up (2026-06-07).  OPT-IN: g_c2_threshold == 0 (default) deja el
  * C2 totalmente apagado -> el Selector NO emite el contador on-entry y el
@@ -282,6 +286,11 @@ VregEntries make_vreg_entries() {
             reinterpret_cast<uint64_t>(g_runtime_entries->call_bc_function);
         e.callclosure =
             reinterpret_cast<uint64_t>(g_runtime_entries->callclosure);
+        /* FN.3: fibras nativas en JIT.  swapctx la fija el force-eager al
+         * compilar __vex_swapctx (0 si el programa no usa fibras); callind es
+         * el helper de runtime, un simbolo estatico siempre disponible. */
+        e.swapctx = g_vex_swapctx_native;
+        e.callind = reinterpret_cast<uint64_t>(&vrt_callind);
         /* Fallback de LOAD_VM/STORE_VM (page-miss del vm_mem). */
         e.vm_read_u8 =
             reinterpret_cast<uint64_t>(g_runtime_entries->vm_read_u8);
@@ -383,6 +392,17 @@ uint64_t reserve_tier_counter(uint64_t fn_pc) {
 CodeCache *get_or_init_code_cache() noexcept {
     std::call_once(g_jit_init_flag, init_jit_subsystem);
     return g_code_cache;
+}
+
+/* FN.3: fuera del namespace anonimo -- la llama loader.cpp (linkage externa). */
+uint64_t ensure_vex_swapctx_native(runtime::ProcessVM *vm) noexcept {
+    if (g_vex_swapctx_native != 0) return g_vex_swapctx_native;
+    if (vm == nullptr) return 0;
+    /* compile_naked_native aplica el arch-guard x86-64 y devuelve 0 fuera de
+     * esa arquitectura -> el llamante deja el grafo de fibra en el interp. */
+    const uint64_t a = jit::compile_naked_native(vm, "__vex_swapctx");
+    if (a != 0) g_vex_swapctx_native = a;
+    return g_vex_swapctx_native;
 }
 
 namespace {

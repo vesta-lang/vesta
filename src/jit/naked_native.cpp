@@ -16,14 +16,21 @@
 
 #include "jit/code_cache.h"
 #include "jit/vreg_pipeline.h"
+#include "jit/auto_jit.h"          // FN.3: lookup/compile/get_or_init_code_cache
+#include "jit/interp_jit_bridge.h" // FN.3: enter_jit (VM_ABI dispatch)
 #include "ffi/virtual_lib_registry.h"
 #include "ffi/native_ffi.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/scheduler.h"
-#include "runtime/native_invoke.h" // invoke_native_unchecked (no lo usamos aqui)
+#include "runtime/native_invoke.h"     // invoke_native_unchecked (CALLIND naked)
+#include "runtime/exception_runtime.h" // throw_fatal (CALLIND null)
+#include "vesta_rt/public.h"           // vrt_call_bc_function (CALLIND VA)
+#include "vesta_rt/abi.h"              // VESTA_FATAL_* codes
 #include "loader/loader.h"
 #include "ir/ssa_ir.h"
+
+#include <cstdlib> // getenv (VESTA_NAKED_DEBUG)
 
 #include <cstdint>
 #include <cstdio>
@@ -445,6 +452,124 @@ extern "C" uint64_t vrt_naked_fnaddr(uint64_t proc, uint64_t name_hash) {
 void register_naked_fnaddr_runner() {
     ffi::register_virtual_fn("vrt", "naked_fnaddr",
                              reinterpret_cast<void *>(&vrt_naked_fnaddr));
+}
+
+/* ===================================================================== */
+/* FN.3: fibras nativas en JIT                                            */
+/* ===================================================================== */
+
+uint64_t compile_naked_native(runtime::ProcessVM *vm, const std::string &name) {
+    static const bool debug = std::getenv("VESTA_NAKED_DEBUG") != nullptr;
+    NakedState &st = state();
+    std::lock_guard<std::mutex> lk(st.mtx);
+    return compile_native_fn(vm, name, debug);
+}
+
+extern "C" void vrt_callind(uint64_t proc_u, uint64_t addr) {
+    auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc_u);
+    if (vm == nullptr) return;
+    /* Puntero a funcion nulo: lo delegamos a vrt_call_bc_function(...,0),
+     * que lanza un FatalError de null-pointer capturable (mismo trato que
+     * el interp al saltar a la VA 0). */
+    if (addr == 0) {
+        vrt_call_bc_function(reinterpret_cast<vrt_proc *>(vm), 0);
+        return;
+    }
+    /* (a) naked-native (HOST_LEAF): `(cfn)fn` via naked_fnaddr o el thunk
+     *     de un extern.  Se invoca con ABI del host, args marshalizados
+     *     desde los regs VM (identico a exec_instr_callvmr).  regs[15]=argc. */
+    if (is_naked_native_addr(addr)) {
+        const uint64_t argc = vm->registers.regs[15].qword();
+        const uint64_t r = runtime::invoke_native_unchecked(
+            reinterpret_cast<void *>(addr), argc, vm);
+        vm->registers.regs[0].qword(r);
+        return;
+    }
+    /* (b) jit_code VM_ABI: `&fn` de una funcion ya compilada (pieza 1 dejo
+     *     el puntero de codigo nativo del JIT).  Entramos directo: la fn lee
+     *     sus params de proc->registers (ya stagedos) y escribe regs[0]. */
+    if (CodeCache *cc = get_or_init_code_cache()) {
+        if (cc->contains(reinterpret_cast<const uint8_t *>(addr))) {
+            enter_jit(reinterpret_cast<JitFn>(addr),
+                      reinterpret_cast<vrt_proc *>(vm));
+            return;
+        }
+    }
+    /* (c) VA de bytecode: la fn aun no esta compilada.  Buscamos su jit_code
+     *     por VA; si no hay, compile-on-demand; y solo como ultimo recurso
+     *     (que el corpus no alcanza) ejecutamos el bytecode -- el resultado
+     *     es identico en todo caso, garantizando vm==jit. */
+    void *jc = lookup_jit_code_at_pc(addr);
+    if (jc == nullptr && g_jit_threshold != UINT32_MAX) {
+        maybe_compile_callvm_target(vm, addr);
+        jc = lookup_jit_code_at_pc(addr);
+    }
+    if (jc != nullptr) {
+        enter_jit(reinterpret_cast<JitFn>(jc),
+                  reinterpret_cast<vrt_proc *>(vm));
+        return;
+    }
+    vrt_call_bc_function(reinterpret_cast<vrt_proc *>(vm), addr);
+}
+
+extern "C" int32_t vrt_jit_active(void) {
+    /* g_pc_jit_active pasa a true en cuanto se registra la primera funcion
+     * JIT (en -m jit el force-eager + el eager-compile de main lo hacen al
+     * cargar, antes de que main ejecute).  En -m vm (threshold desactivado)
+     * no se compila nada -> sigue false.  Es exactamente la senal que el
+     * setup de fibras necesita: main corre nativo (JIT) vs interp. */
+    return g_pc_jit_active ? 1 : 0;
+}
+
+extern "C" uint64_t vrt_getproc(void) {
+    return reinterpret_cast<uint64_t>(runtime::get_current_executing_process());
+}
+
+/* Tamano de una pila de fibra en JIT (host).  Fijo, sin guard page (v1). */
+static constexpr size_t kFiberJitStackBytes = 65536;
+/* Slots del ctx (qwords): PC/SP/BP + 8 callee-saved (rbx,r12..r15,rdi,rsi) +
+ * holgura.  152 bytes = 19 qwords; reservamos 20 (160 B) por alineacion. */
+static constexpr size_t kFiberJitCtxQwords = 20;
+
+extern "C" uint64_t vrt_fiber_jit_ctx(uint64_t entry) {
+    runtime::ProcessVM *vm = runtime::get_current_executing_process();
+    if (vm == nullptr) return 0;
+    /* Trampolin nativo: pone proc en el arg-reg y salta al entry VM_ABI. */
+    const uint64_t tramp = compile_naked_native(vm, "__fiber_trampoline");
+    if (tramp == 0) return 0;
+    auto *ctx = static_cast<uint64_t *>(std::calloc(kFiberJitCtxQwords, 8));
+    auto *stk = static_cast<uint8_t *>(std::malloc(kFiberJitStackBytes));
+    if (ctx == nullptr || stk == nullptr) {
+        std::free(ctx);
+        std::free(stk);
+        return 0;
+    }
+    /* Cima de la pila host, 16-alineada (la pila crece hacia abajo). */
+    const uint64_t top =
+        (reinterpret_cast<uint64_t>(stk) + kFiberJitStackBytes) & ~15ULL;
+    ctx[0] = tramp;                             // PC   (arranque = trampolin)
+    ctx[1] = top;                               // SP
+    ctx[2] = top;                               // BP
+    ctx[3] = reinterpret_cast<uint64_t>(vm);    // rbx = proc (VM_ABI del entry)
+    ctx[4] = entry;                             // r12 = entry (trampolin: jmp r12)
+    /* ctx[5..] (r13,r14,r15,rdi,rsi,...) ya a 0 por calloc. */
+    return reinterpret_cast<uint64_t>(ctx);
+}
+
+extern "C" uint64_t vrt_fiber_jit_scratch(void) {
+    auto *ctx = static_cast<uint64_t *>(std::calloc(kFiberJitCtxQwords, 8));
+    return reinterpret_cast<uint64_t>(ctx);
+}
+
+void register_fiber_runtime_runner() {
+    ffi::register_virtual_fn("vrt", "jit_active",
+                             reinterpret_cast<void *>(&vrt_jit_active));
+    ffi::register_virtual_fn("vrt", "getproc",
+                             reinterpret_cast<void *>(&vrt_getproc));
+    ffi::register_virtual_fn("vrt", "fiber_jit_ctx",
+                             reinterpret_cast<void *>(&vrt_fiber_jit_ctx));
+    ffi::register_virtual_fn("vrt", "fiber_jit_scratch",
+                             reinterpret_cast<void *>(&vrt_fiber_jit_scratch));
 }
 
 } // namespace jit
