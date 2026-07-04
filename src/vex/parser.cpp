@@ -153,6 +153,18 @@ void set_aot_condcomp_target(const std::string &os,
     g_cc_target_arch = arch;
 }
 
+// Lee el override actual del target de @Target.  Necesario para propagar el
+// thread_local a los workers del compile paralelo (M8): estos parsean los
+// modulos en threads distintos, donde @c g_cc_target_os arranca vacio y las
+// variantes @Target("os:...") caerian al HOST -> HALLAZGO-2 (cross-compile
+// modular seleccionaba la rama del host, p.ej. kernel32 al emitir ELF desde
+// Windows).  El dispatcher captura estos valores en el main thread y los
+// re-aplica en cada worker antes de parsear.
+void get_aot_condcomp_target(std::string &os, std::string &arch) noexcept {
+    os = g_cc_target_os;
+    arch = g_cc_target_arch;
+}
+
 // Deteccion de features de CPU.  En x86 usa cpuid; en arm64 NEON es
 // baseline.  SSE/SSE2 son baseline garantizado del ABI x86_64.
 static bool target_cpu_has_(const std::string &feat) noexcept {

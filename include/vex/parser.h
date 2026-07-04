@@ -64,6 +64,11 @@ namespace vex {
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 
+/// Lee el override actual del target de @Target (el thread_local).  Usado por
+/// el compile paralelo (M8) para propagar el target a los workers, que de otro
+/// modo parsearian las variantes @Target contra el host (HALLAZGO-2).
+void get_aot_condcomp_target(std::string &os, std::string &arch) noexcept;
+
 /**
  * @class Parser
  * @brief Construye un AST a partir de los tokens producidos por @c Lexer.

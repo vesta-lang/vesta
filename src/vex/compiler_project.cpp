@@ -226,23 +226,27 @@ static std::string global_cache_path_(const std::string &source_path,
     return (fs::path(dir) / (std::string(hex) + "_" + base + ext)).string();
 }
 
-std::string vexi_path_for_(const std::string &source_path) {
+std::string vexi_path_for_(const std::string &source_path,
+                           const std::string &tgt_suffix = "") {
     if (!global_cache_dir_().empty()) {
-        return global_cache_path_(source_path, ".vexi");
+        return global_cache_path_(source_path, tgt_suffix + ".vexi");
     }
     size_t dot = source_path.find_last_of('.');
-    if (dot == std::string::npos) return source_path + ".vexi";
-    return source_path.substr(0, dot) + ".vexi";
+    if (dot == std::string::npos) return source_path + tgt_suffix + ".vexi";
+    return source_path.substr(0, dot) + tgt_suffix + ".vexi";
 }
 
-/// Idem para el cache de IR del dep (.vexir).
-std::string vexir_path_for_(const std::string &source_path) {
+/// Idem para el cache de IR del dep (.vexir).  @c tgt_suffix separa el cache por
+/// target (p.ej. ".linux-x86_64") para modulos con @Target -> alternar de
+/// target no recompila (HALLAZGO-2).  Vacio => fichero unico compartido.
+std::string vexir_path_for_(const std::string &source_path,
+                            const std::string &tgt_suffix = "") {
     if (!global_cache_dir_().empty()) {
-        return global_cache_path_(source_path, ".vexir");
+        return global_cache_path_(source_path, tgt_suffix + ".vexir");
     }
     size_t dot = source_path.find_last_of('.');
-    if (dot == std::string::npos) return source_path + ".vexir";
-    return source_path.substr(0, dot) + ".vexir";
+    if (dot == std::string::npos) return source_path + tgt_suffix + ".vexir";
+    return source_path.substr(0, dot) + tgt_suffix + ".vexir";
 }
 
 /// Phase M5.C: path del @c .vel cacheado per-dep (output secundario
@@ -876,6 +880,15 @@ CompileResult compile_vex_project(const std::string &root_path,
     // hacemos una sola @c cerr<< con lock.  En modo secuencial, el lock
     // es un no-op virtual (un solo thread nunca contiende).
     std::mutex verbose_mtx;
+    // HALLAZGO-2: capturar el override de @Target (thread_local del parser) en
+    // el main thread.  Se usa para (a) mezclarlo en el source_hash del cache
+    // -> PE y ELF del MISMO proyecto no comparten `.vexir` (si no, cross-compilar
+    // a un target y luego a otro reusaba el IR del target equivocado), y (b)
+    // re-aplicarlo en los workers del compile paralelo (el thread_local arranca
+    // vacio en un thread nuevo).
+    std::string cc_tgt_os, cc_tgt_arch;
+    vex::get_aot_condcomp_target(cc_tgt_os, cc_tgt_arch);
+
     auto compile_one_module = [&](size_t i) -> void {
         auto &pm = work[i];
         const bool is_root = (i + 1 == work.size());
@@ -912,6 +925,19 @@ CompileResult compile_vex_project(const std::string &root_path,
             source_hash ^= 0xA07A07A07A07A07AULL + (source_hash << 7) +
                            (source_hash >> 3);
         }
+        // HALLAZGO-2: un modulo SOLO es target-especifico si usa @Target (que
+        // descarta decls distintas segun os/arch al parsear).  Para NO
+        // recompilar al alternar de target, separamos su cache por FICHERO (no
+        // por source_hash, que sobrescribiria el unico .vexir y forzaria
+        // recompilar en cada cambio).  Asi persisten `mod.<os>-<arch>.vexir`
+        // para cada target y alternar PE<->ELF es cache-hit.  Los modulos SIN
+        // @Target usan el fichero unico compartido (mismo IR para todos los
+        // targets).  El sufijo va vacio cuando no aplica.
+        std::string cache_tgt_suffix;
+        if ((!cc_tgt_os.empty() || !cc_tgt_arch.empty()) &&
+            pm.source.find("@Target") != std::string::npos) {
+            cache_tgt_suffix = "." + cc_tgt_os + "-" + cc_tgt_arch;
+        }
 
         // ---- M4: cache hit path ----
         // Solo se aplica a DEPS, no al root.  Verifica:
@@ -920,8 +946,10 @@ CompileResult compile_vex_project(const std::string &root_path,
         //   3. Existe `<source>.vexir` para reusar el IR.
         // Si los 3 se cumplen, se skipea el recompile del dep.
         if (cache_enabled && !is_root) {
-            const std::string vp = vexi_path_for_(pm.canonical_path);
-            const std::string ip = vexir_path_for_(pm.canonical_path);
+            const std::string vp =
+                vexi_path_for_(pm.canonical_path, cache_tgt_suffix);
+            const std::string ip =
+                vexir_path_for_(pm.canonical_path, cache_tgt_suffix);
             std::vector<uint8_t> vbytes;
             if (read_file_bytes_(vp, vbytes)) {
                 auto pr = vexi_parse(vbytes.data(), vbytes.size());
@@ -1277,8 +1305,10 @@ CompileResult compile_vex_project(const std::string &root_path,
 
         // ---- M3: persistir .vexi + .vexir a disco para futuro cache ----
         if (cache_enabled && !is_root) {
-            const std::string vp = vexi_path_for_(pm.canonical_path);
-            const std::string ip = vexir_path_for_(pm.canonical_path);
+            const std::string vp =
+                vexi_path_for_(pm.canonical_path, cache_tgt_suffix);
+            const std::string ip =
+                vexir_path_for_(pm.canonical_path, cache_tgt_suffix);
             auto vbytes = vexi_emit(pm.vexi);
             // Phase M4.ext L.13: capturar el abi_hash recien calculado
             // por vexi_emit (lo escribio en offset 8 del header) para
@@ -1395,7 +1425,14 @@ CompileResult compile_vex_project(const std::string &root_path,
                 threads.reserve(end_idx - base);
                 for (size_t k = base; k < end_idx; ++k) {
                     threads.emplace_back(
-                        [&compile_one_module, idx = mods[k]]() {
+                        [&compile_one_module, idx = mods[k], cc_tgt_os,
+                         cc_tgt_arch]() {
+                            // HALLAZGO-2: re-aplicar el target de @Target en
+                            // este worker antes de parsear (el thread_local del
+                            // parser arranca vacio en un thread nuevo).
+                            if (!cc_tgt_os.empty() || !cc_tgt_arch.empty())
+                                vex::set_aot_condcomp_target(cc_tgt_os,
+                                                             cc_tgt_arch);
                             compile_one_module(idx);
                         });
                 }
