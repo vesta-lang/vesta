@@ -68,7 +68,9 @@ claude*
 chatgpt*
 copilot*
 deepseck*
-tests/vex/test_vex_e2e.sh
+# Politica: NUNCA se commitea ningun .sh (solo scripts Python en el repo).
+# Cubre runners e2e, benches y cualquier script auxiliar de shell.
+*.sh
 
 # temporales
 *.vexi
@@ -85,20 +87,17 @@ temp
 tmp
 presentacion
 tests/bugs/**/*.vel
-tests/bugs/**/*.vex
-tests/bugs/**/*.sh
+tests/bugs/**/*.vx
 
 AUDIT_REPORT.md
-salida_vex.txt
+salida_vx.txt
 sample.out.txt
 sample.txt
-examples_codes_vex/benchmark/run_mem_benches.sh
 doc/AUDIT_REPORT_2026-05-23_continuacion.md
 doc/AUDITS_FINALES_2026-05-23.md
 doc/BUG*
 doc/FIXES*
-tests/vex/bench_shared_runner.sh
-tests/vex/test_vex_vexi_format.cpp
+tests/vx/test_vx_vxi_format.cpp
 bench_results.json
 
 doc/HISTORY.md
