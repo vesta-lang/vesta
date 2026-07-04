@@ -152,7 +152,7 @@ sin depender de ld/gcc.  Reusa el motor de relocs del `ObjectWriter`.
 
 Validado por ejecucion (ELF64, WSL): un solo .o Vex -> 42; .o Vex + .o de C
 (gcc) cross-file (Vex referencia un extern que C define) -> 42; `--entry`
-custom sin main/stub -> 42.  Test: `tests/aot/link_test.sh`.
+custom sin main/stub -> 42.  Test: `tests/aot/link_test.py`.
 Slice 1 = ELF64 in/out; PE/COFF y x86-32 son follow-ups.
 
 ### Slice 2: multi-.o Vex + .bss
@@ -342,7 +342,7 @@ Garantias del codegen AOT:
 
 Un `asm { ... }` SIN `register(...)` bindings (lee directamente los registros
 del ABI) es valido en `@Naked`: el cuerpo se ensambla verbatim y no marca
-in/out vregs.  Ejemplo completo: `60_naked_isr.vx`.  Test: `tests/aot/naked_test.sh`.
+in/out vregs.  Ejemplo completo: `60_naked_isr.vx`.  Test: `tests/aot/naked_test.py`.
 Validado por ejecucion (PE host): `add_naked(40,2)` -> exit 42; ISR void ->
 `.o` ELF con `isr_timer` GLOBAL y cuerpo byte-exacto.
 
