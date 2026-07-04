@@ -5,7 +5,7 @@ Phase AOT.5 -- validacion del "pull" perezoso de archivos estaticos .a por el
 linker propio (vm --link), sin ld/gcc para el enlace final.
 
 Escenario (PE, corre nativo en Windows):
-  1. kern.vex declara `extern "rt" { fn rt_value() -> i64; }` y main() lo llama.
+  1. kern.vx declara `extern "rt" { fn rt_value() -> i64; }` y main() lo llama.
   2. rt.c (compilado con gcc -c -> COFF .obj) define rt_value().
   3. Se archiva rt.obj en una libreria estatica librt.a (con 'ar rcs').
   4. `vm --link kern.obj librt.a -o prog.exe` debe EXTRAER rt.obj del .a
@@ -44,7 +44,7 @@ def main():
     work = tempfile.mkdtemp(prefix="ar_link_")
     rc = 0
 
-    kern = os.path.join(work, "kern.vex")
+    kern = os.path.join(work, "kern.vx")
     with open(kern, "w") as f:
         f.write('extern "rt" { fn rt_value() -> i64; }\n'
                 'i64 main() { return rt_value() + 2; }\n')
@@ -58,7 +58,7 @@ def main():
     lib_a = os.path.join(work, "librt.a")
     prog = os.path.join(work, "prog.exe")
 
-    # 1. kern.vex -> kern.obj (COFF PE)
+    # 1. kern.vx -> kern.obj (COFF PE)
     r = run([vm, "--vex", kern, "-m", "aot", "--emit", "obj",
              "--format", "pe", "-o", kern_obj])
     if not os.path.exists(kern_obj):

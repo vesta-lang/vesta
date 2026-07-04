@@ -5,7 +5,7 @@ run.py -- construye y ejecuta VestaOS (kernel AOT de Vesta) en QEMU.
 
 Portable (Windows / Linux / macOS): localiza el binario `vm`/`vm.exe` del
 build y un `qemu-system-*` en el PATH (o en ubicaciones habituales), compila
-el .vex a un binario plano de boot (.bin) con el AOT de Vesta y lo arranca.
+el .vx a un binario plano de boot (.bin) con el AOT de Vesta y lo arranca.
 
 Uso:
     python run.py build [target] [--build-dir DIR]
@@ -29,11 +29,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # .../examples_codes_vex/aot/os -> raiz del repo
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 
-# Cada target: fuente .vex, emulador adecuado y la cadena que el kernel emite
+# Cada target: fuente .vx, emulador adecuado y la cadena que el kernel emite
 # por el debugcon (puerto 0xE9) para validar la ejecucion headless.
 TARGETS = {
     "kernel": {
-        "vex": "kernel.vex",
+        "vex": "kernel.vx",
         "qemu": "qemu-system-x86_64",
         # El kernel lanza un shell INTERACTIVO (no termina solo en headless);
         # el auto-test del arranque carga el programa 'calc' del disco y lo
@@ -43,7 +43,7 @@ TARGETS = {
         "interactive": True,
     },
     "protected": {
-        "vex": "os_protected.vex",
+        "vex": "os_protected.vx",
         "qemu": "qemu-system-i386",
         "want": "Protected mode OK!",
         "interactive": False,
@@ -83,7 +83,7 @@ def find_qemu(name):
 
 
 def build(vm, vexfile, out):
-    """Compila el .vex a un .bin de boot con el AOT de Vesta.  --no-pie:
+    """Compila el .vx a un .bin de boot con el AOT de Vesta.  --no-pie:
     direcciones absolutas (la imagen se carga en una base fija), necesario
     para que `(u64) funcion` de una direccion correcta."""
     cmd = [vm, "-m", "aot", "--vex", vexfile, "--emit", "bin",
@@ -115,10 +115,10 @@ def qemu_args(qemu, path, headless, debugcon, media="disk"):
 
 import struct
 
-# Programas de disco del kernel: (nombre de comando, fuente .vex).
+# Programas de disco del kernel: (nombre de comando, fuente .vx).
 KERNEL_PROGRAMS = [
-    ("calc", "prog_calc.vex"),
-    ("edit", "prog_notepad.vex"),
+    ("calc", "prog_calc.vx"),
+    ("edit", "prog_notepad.vx"),
 ]
 _DIR_SECTOR = 96          # sector del directorio de programas
 _IMG_SECTORS = 128        # tamano de la imagen (64 KiB); el boot lee 127
@@ -165,7 +165,7 @@ def build_kernel_disk(build_dir):
     out = os.path.join(HERE, "kernel.bin")
     # 1. Kernel (boot + drivers + shell + cargador), base 0x7C00.
     kbin = os.path.join(HERE, "_kernel_core.bin")
-    build(vm, os.path.join(HERE, "kernel.vex"), kbin)
+    build(vm, os.path.join(HERE, "kernel.vx"), kbin)
     with open(kbin, "rb") as f:
         kb = f.read()
     os.remove(kbin)

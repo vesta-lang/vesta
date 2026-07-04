@@ -165,7 +165,7 @@ def main():
         src = VEX_TEMPLATE.format(inner=inner, n=args.n, reps=args.reps,
                                   dt=dt, sz=di["sz"], ia=di["ia"], ib=di["ib"],
                                   ic=di["ic"])
-        vex_path = os.path.join(tmp, "k.vex")
+        vex_path = os.path.join(tmp, "k.vx")
         with open(vex_path, "w") as f:
             f.write(src)
 

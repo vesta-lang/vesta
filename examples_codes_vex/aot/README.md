@@ -5,17 +5,17 @@ con CALL intra-modulo + tail-call con TCO genuino.
 
 Compilar (PE para Windows, ELF para Linux):
 
-    vm --vex examples_codes_vex/aot/01_call.vex -m aot -o 01_call.exe        # PE (default host)
-    vm --vex examples_codes_vex/aot/01_call.vex -m aot --format elf -o 01_call.elf
+    vm --vex examples_codes_vex/aot/01_call.vx -m aot -o 01_call.exe        # PE (default host)
+    vm --vex examples_codes_vex/aot/01_call.vx -m aot --format elf -o 01_call.elf
 
 Ejecutar -> el `return` de `main` es el codigo de salida del proceso:
 
 | Ejemplo                 | exit-code esperado |
 |:------------------------|-------------------:|
-| 01_call.vex             | 42                 |
-| 02_call_chain.vex       | 40 (main->inc->triple) |
-| 03_recursion.vex        | 120 (fact(5), recursion no-tail) |
-| 04_tail_call_tco.vex    | 64 (loop(5000000,0) mod 256; TCO O(1) pila, no desborda) |
+| 01_call.vx             | 42                 |
+| 02_call_chain.vx       | 40 (main->inc->triple) |
+| 03_recursion.vx        | 120 (fact(5), recursion no-tail) |
+| 04_tail_call_tco.vx    | 64 (loop(5000000,0) mod 256; TCO O(1) pila, no desborda) |
 
 El codegen va por el path vreg en ABI HOST_LEAF (args en arg_regs, retorno en
 RAX, sin ProcessVM*); las CALL cross-funcion y los tail-call se resuelven con
@@ -25,8 +25,8 @@ relocations rel32 parcheadas tras el layout de `.text`.
 
 | Ejemplo            | exit-code | nota |
 |:-------------------|----------:|:-----|
-| 05_rodata.vex      | 67 ('C')  | `char* m="ABC"; m[2]` -> literal en `.rodata` |
-| 06_call_rodata.vex | 69 ('E')  | CALL + dato `.rodata` cruzando la llamada |
+| 05_rodata.vx      | 67 ('C')  | `char* m="ABC"; m[2]` -> literal en `.rodata` |
+| 06_call_rodata.vx | 69 ('E')  | CALL + dato `.rodata` cruzando la llamada |
 
 Por defecto las refs a datos son **RIP-relativas** (position-independent, listo
 para PIE/.so). Con `--no-pie` se emiten **absolutas** (`mov reg,imm64`, requieren
@@ -43,7 +43,7 @@ cross-seccion las resuelve el ObjectWriter (relocs rel32).  Una funcion con
 
 | Ejemplo               | exit-code | nota |
 |:----------------------|----------:|:-----|
-| 07_section_devos.vex  | 42        | `boot_entry` en `.boot` (RWX), main en `.text`, call cross-seccion |
+| 07_section_devos.vx  | 42        | `boot_entry` en `.boot` (RWX), main en `.text`, call cross-seccion |
 
 ## Simbolos de seccion (dev OS) -- Paso 2c
 
@@ -54,7 +54,7 @@ El writer AOT los resuelve tras el layout (relocs ADDR/END/SIZE).  En `-m vm`/`-
 
 | Ejemplo               | exit-code | nota |
 |:----------------------|----------:|:-----|
-| 08_section_symbols.vex | size de .boot | valida `end-start == size` (28 con este codegen) |
+| 08_section_symbols.vx | size de .boot | valida `end-start == size` (28 con este codegen) |
 
 ## Objeto relocatable .o (AOT.4-ext) -- linkable con toolchains externos
 
@@ -63,7 +63,7 @@ SIN `_start`, con `main` como simbolo GLOBAL y las relocs como registros
 (`.rela.text`: R_X86_64_PC32 / R_X86_64_64).  Se linka con `ld`/`gcc`/`clang`,
 que aportan el crt (`_start` -> `main`) + libc + permiten linker scripts (dev OS):
 
-    vm --vex examples_codes_vex/aot/01_call.vex -m aot --format elf --emit obj -o 01_call.o
+    vm --vex examples_codes_vex/aot/01_call.vx -m aot --format elf --emit obj -o 01_call.o
     gcc 01_call.o -o prog        # el crt de gcc llama a main
     ./prog; echo $?              # 42
 
@@ -78,7 +78,7 @@ como simbolo EXTERNAL, relocs COFF (IMAGE_REL_AMD64_REL32 / ADDR64) contra el
 simbolo de seccion del target.  COFF lleva el addend EN el campo (no en un record
 aparte), asi que el emisor pre-escribe target_off en el sitio.
 
-    vm --vex examples_codes_vex/aot/01_call.vex -m aot --format pe --emit obj -o 01_call.obj
+    vm --vex examples_codes_vex/aot/01_call.vx -m aot --format pe --emit obj -o 01_call.obj
     gcc 01_call.obj -o prog.exe        # gcc-mingw aporta el crt -> main
     ./prog.exe; echo $?                # 42
 
@@ -90,7 +90,7 @@ gcc-mingw (TDM-GCC) y devuelven 42/69/42.  (Reusa la API de LibCOFFparse.)
 `--emit shared --format elf` produce un ELF ET_DYN (.so) PIC que EXPORTA todas
 sus funciones (sin main; sin _start).  Cargable con dlopen + dlsym:
 
-    vm --vex examples_codes_vex/aot/09_shared_lib.vex -m aot --format elf --emit shared -o libfoo.so
+    vm --vex examples_codes_vex/aot/09_shared_lib.vx -m aot --format elf --emit shared -o libfoo.so
     // host C: dlopen("./libfoo.so") + dlsym("add") -> add(40,2) == 42
 
 Validado: libfoo.so (add/triple) cargado via dlopen+dlsym en Linux -> 42/42.
@@ -107,7 +107,7 @@ Validado: ELF generado en Windows corre en WSL Linux (01/03/06 = 42/120/69).
 `--emit shared --format pe` produce una DLL PE32+ (IMAGE_FILE_DLL + tabla de
 exports .edata).  Cargable con LoadLibrary + GetProcAddress:
 
-    vm --vex examples_codes_vex/aot/10_shared_dll.vex -m aot --format pe --emit shared -o foo.dll
+    vm --vex examples_codes_vex/aot/10_shared_dll.vx -m aot --format pe --emit shared -o foo.dll
     // host C: LoadLibraryA("foo.dll") + GetProcAddress("add") -> add(40,2) == 42
 
 Validado: foo.dll (add/triple) cargada via LoadLibrary+GetProcAddress -> 42/42.
@@ -126,7 +126,7 @@ y exponen las dos vistas que necesita el FFI de Windows:
   para code-points astrales (> U+FFFF).  El CALLER es dueno del buffer
   (transitorio para FFI).
 
-    vm --vex examples_codes_vex/aot/59_string_utf8.vex -m aot --emit exe -o 59.exe
+    vm --vex examples_codes_vex/aot/59_string_utf8.vx -m aot --emit exe -o 59.exe
 
 Validado (PE Windows + ELF WSL): "hello" con e-acento = 5 code-points, 6 bytes,
 `wstr()[1]` == 0xE9; clef de sol (U+1D11E) = 1 code-point, 4 bytes, par suplente
@@ -146,7 +146,7 @@ sin depender de ld/gcc.  Reusa el motor de relocs del `ObjectWriter`.
   (kernel/bootloader cuyo punto de entrada es propio).  `--link-base` fija la
   base de carga (e.g. `0x100000`).
 
-    vm --vex kernel.vex -m aot --emit obj --format elf -o kernel.o
+    vm --vex kernel.vx -m aot --emit obj --format elf -o kernel.o
     gcc -c -ffreestanding rt.c -o rt.o          # runtime/driver en C
     vm --link kernel.o rt.o -o kernel.elf --format elf --entry _kstart
 
@@ -157,13 +157,13 @@ Slice 1 = ELF64 in/out; PE/COFF y x86-32 son follow-ups.
 
 ### Slice 2: multi-.o Vex + .bss
 
-- **Multi-.o Vex**: una libreria `.vex` SIN `main` compila a un `.o` que EXPORTA
+- **Multi-.o Vex**: una libreria `.vx` SIN `main` compila a un `.o` que EXPORTA
   sus funciones de usuario como globales (los helpers internos `__vex_*`/`__new_*`
   quedan locales -> no colisionan al enlazar varios `.o` Vex).  Otro `.o` las
   referencia con `extern "lib" { fn ...; }` y el linker las resuelve cross-file.
 
-      vm --vex lib.vex -m aot --emit obj --format elf -o lib.o   # sin main
-      vm --vex app.vex -m aot --emit obj --format elf -o app.o   # extern + main
+      vm --vex lib.vx -m aot --emit obj --format elf -o lib.o   # sin main
+      vm --vex app.vx -m aot --emit obj --format elf -o app.o   # extern + main
       vm --link app.o lib.o -o app.elf --format elf
 
 - **.bss**: el emisor ELF EXEC soporta secciones NOBITS (globales sin
@@ -191,7 +191,7 @@ se respeta porque estos leen el global de features que `cpu_init` escribe.  El
 init del `.o` de `main` ademas corre via su propio prologo: es idempotente
 (re-ejecutarlo deja el mismo valor).
 
-Validado: una libreria `.vex` SIN `main` que usa `.length()`, enlazada con el
+Validado: una libreria `.vx` SIN `main` que usa `.length()`, enlazada con el
 `.o` de `main` y un runtime C (`malloc`/`free`), ejecuta correctamente.
 
 Con `--entry` (sin `main`/stub) el `__vex_premain` no se sintetiza: el punto de
@@ -204,7 +204,7 @@ El linker auto-detecta el formato de cada objeto de entrada por su magic
 (ELF64 o COFF AMD64) y produce el ejecutable segun `--format` (elf|pe).  Asi el
 mismo `vm --link` enlaza objetos de Windows:
 
-    vm --vex kernel.vex -m aot --emit obj --format pe -o kernel.obj
+    vm --vex kernel.vx -m aot --emit obj --format pe -o kernel.obj
     gcc -c rt.c -o rt.obj           # COFF de MinGW/TDM-GCC (o cl /c con MSVC)
     vm --link kernel.obj rt.obj -o kernel.exe --format pe
 
@@ -225,10 +225,10 @@ Validado por ejecucion (Windows): un solo `.obj` Vex -> 42; multi-`.obj` Vex
 extension estandar (`.o`/`.obj`) para enlazarlos con toolchains externos
 (gcc -m32, ld, link.exe):
 
-    vm --vex prog.vex -m aot --aot-arch x86-32 --emit obj --format elf -o prog.o
+    vm --vex prog.vx -m aot --aot-arch x86-32 --emit obj --format elf -o prog.o
     gcc -m32 prog.o -o prog        # ELF32 i386, el crt llama a main
 
-    vm --vex prog.vex -m aot --aot-arch x86-32 --emit obj --format pe -o prog.obj
+    vm --vex prog.vx -m aot --aot-arch x86-32 --emit obj --format pe -o prog.obj
     # COFF i386 (Machine 0x14c), linkable con link.exe / i686-mingw
 
 ELF32 usa `SHT_REL` (i386: el addend vive EN el campo, no en un record RELA),
@@ -241,12 +241,12 @@ end-to-end requiere un linker de 32-bit para Windows).
 
 ### Script de enlace ESCRITO EN VEX (configurable) -- `--link-script`
 
-El linker es configurable con un `.vex` normal (sin sintaxis nueva): defines una
+El linker es configurable con un `.vx` normal (sin sintaxis nueva): defines una
 funcion `void link()` que llama a builtins de configuracion, y el linker la
 compila + ejecuta para leer el layout.  Es intuitivo (es Vex) y potente (logica/
 condicionales/comptime completos para CALCULAR las direcciones).
 
-    vm --link kernel.o -o kernel.elf --format elf --link-script link_layout.vex
+    vm --link kernel.o -o kernel.elf --format elf --link-script link_layout.vx
 
 ```vex
 void link() {
@@ -261,7 +261,7 @@ void link() {
 Builtins: `base(u64)`, `entry(string)`, `stack_size(u64)`, `place_section(string,
 u64)`, `section_bytes(string)` (tamano de una seccion ya fusionada), `align_up(u64,
 u64)`, `debug_build()` (true con `--link-debug`).  Los CLI `--link-base`/`--entry`
-tienen prioridad sobre el script.  Mecanismo: el linker compila el `.vex` a `.velb`
+tienen prioridad sobre el script.  Mecanismo: el linker compila el `.vx` a `.velb`
 in-process y lo ejecuta en una VM con los builtins registrados (FFI in-process);
 estos escriben la config que el linker aplica.
 
@@ -277,7 +277,7 @@ seccion (`place_section`) se aplicara cuando el emisor soporte VAs fijas (siguie
 (ELF32/PE32 vs ELF64/PE32+).  Todos los objetos de un enlace deben coincidir en
 32 vs 64 bits.  Cierra el ciclo "sin toolchain externo" tambien para 32-bit:
 
-    vm --vex kernel.vex -m aot --aot-arch x86-32 --emit obj --format elf -o k.o
+    vm --vex kernel.vx -m aot --aot-arch x86-32 --emit obj --format elf -o k.o
     vm --link k.o -o k.elf --format elf        # ELF32 EXEC, sin ld
 
 ELF32 i386 usa `SHT_REL` (addend en el campo, no en un record); el linker lo
@@ -342,7 +342,7 @@ Garantias del codegen AOT:
 
 Un `asm { ... }` SIN `register(...)` bindings (lee directamente los registros
 del ABI) es valido en `@Naked`: el cuerpo se ensambla verbatim y no marca
-in/out vregs.  Ejemplo completo: `60_naked_isr.vex`.  Test: `tests/aot/naked_test.sh`.
+in/out vregs.  Ejemplo completo: `60_naked_isr.vx`.  Test: `tests/aot/naked_test.sh`.
 Validado por ejecucion (PE host): `add_naked(40,2)` -> exit 42; ISR void ->
 `.o` ELF con `isr_timer` GLOBAL y cuerpo byte-exacto.
 
@@ -353,9 +353,9 @@ un bootloader propio que pasa a modo protegido (32) y luego a modo largo (64),
 con un **kernel escrito en Vesta** (driver VGA, punteros, bucles, FFI inline-asm),
 todo compilado por el AOT (sin gcc/ld/nasm).  Ver [`os/README.md`](os/README.md).
 
-- `os/kernel.vex`: boot(16) -> protegido(32, paginacion PAE+LME+PG) ->
+- `os/kernel.vx`: boot(16) -> protegido(32, paginacion PAE+LME+PG) ->
   largo(64) -> `kmain()` en Vesta sobre VGA.
-- `os/os_protected.vex`: variante minima de 32 bits.
+- `os/os_protected.vx`: variante minima de 32 bits.
 - `os/run.py`: construir / ejecutar / validar en QEMU (portable).
 
 Las transiciones de modo usan FAR JUMPS SIMBOLICOS y la base del GDT es un
@@ -390,13 +390,13 @@ ni sincronizacion (cada hilo accede a su copia directamente).
 
 | Ejemplo | Que demuestra | exit |
 |:--------|:--------------|-----:|
-| [`64_thread_local_basico.vex`](64_thread_local_basico.vex) | una variable por-hilo basica | 5 |
-| [`65_thread_local_multi.vex`](65_thread_local_multi.vex) | varias variables, tamanos mixtos, mutacion | 112 |
-| [`66_thread_local_fn_loop.vex`](66_thread_local_fn_loop.vex) | persistencia por-hilo en funcion + loop | 10 |
-| [`67_thread_local_hilos.vex`](67_thread_local_hilos.vex) | aislamiento por-hilo REAL con un hilo Win32 | 11099 |
-| [`68_thread_local_float.vex`](68_thread_local_float.vex) | plantilla float (f64) + `comptime` const | 42 |
-| [`69_thread_local_puntero.vex`](69_thread_local_puntero.vex) | `&` de un thread_local + `thread_local T*` | 33 |
-| [`70_thread_local_dll.vex`](70_thread_local_dll.vex) | TLS en una `.dll` PE (plantilla via DllMain sintetico) | host C: 0 |
+| [`64_thread_local_basico.vx`](64_thread_local_basico.vx) | una variable por-hilo basica | 5 |
+| [`65_thread_local_multi.vx`](65_thread_local_multi.vx) | varias variables, tamanos mixtos, mutacion | 112 |
+| [`66_thread_local_fn_loop.vx`](66_thread_local_fn_loop.vx) | persistencia por-hilo en funcion + loop | 10 |
+| [`67_thread_local_hilos.vx`](67_thread_local_hilos.vx) | aislamiento por-hilo REAL con un hilo Win32 | 11099 |
+| [`68_thread_local_float.vx`](68_thread_local_float.vx) | plantilla float (f64) + `comptime` const | 42 |
+| [`69_thread_local_puntero.vx`](69_thread_local_puntero.vx) | `&` de un thread_local + `thread_local T*` | 33 |
+| [`70_thread_local_dll.vx`](70_thread_local_dll.vx) | TLS en una `.dll` PE (plantilla via DllMain sintetico) | host C: 0 |
 
 ### Por que usarlo
 
@@ -452,7 +452,7 @@ iniciales no-cero en el bloque por-hilo y devuelve TRUE) y fija el
 `AddressOfEntryPoint` de la `.dll` a esa funcion -- un `DllMain` minimo.  ntdll
 lo invoca en cada `DLL_PROCESS_ATTACH` / `DLL_THREAD_ATTACH`, de modo que cada
 hilo recibe su copia inicializada.  Funciona con cualquier consumidor (con o sin
-CRT).  Ver [`70_thread_local_dll.vex`](70_thread_local_dll.vex) +
+CRT).  Ver [`70_thread_local_dll.vx`](70_thread_local_dll.vx) +
 [`70_thread_local_dll_host.c`](70_thread_local_dll_host.c) (host C que verifica
 plantilla + aislamiento por-hilo).
 
@@ -460,13 +460,13 @@ plantilla + aislamiento por-hilo).
 
 ```
 # PE (Windows): ejecutable directo
-vm -m aot --vex 64_thread_local_basico.vex --format pe --emit exe -o t.exe
+vm -m aot --vex 64_thread_local_basico.vx --format pe --emit exe -o t.exe
 
 # ELF (Linux): ejecutable directo
-vm -m aot --vex 64_thread_local_basico.vex --format elf --emit exe -o t
+vm -m aot --vex 64_thread_local_basico.vx --format elf --emit exe -o t
 
 # ELF: objeto + enlazado con el linker propio (interopera con libc)
-vm -m aot --vex 64_thread_local_basico.vex --format elf --emit obj -o t.o
+vm -m aot --vex 64_thread_local_basico.vx --format elf --emit obj -o t.o
 vm --link t.o libc.so.6 -o t --format elf
 ```
 

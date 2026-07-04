@@ -3,7 +3,7 @@
 
 Sprint bench-multilang (2026-06-02):
 - Descubre benches en @c examples_codes_vex/benchmark/<bench_name>/ con
-  multiples implementaciones (main.vex, main.c, main.cpp, main.py,
+  multiples implementaciones (main.vx, main.c, main.cpp, main.py,
   Main.java).
 - Detecta compiladores/runtimes disponibles (gcc, g++, javac+java,
   python, vesta).
@@ -11,13 +11,13 @@ Sprint bench-multilang (2026-06-02):
   N runs).
 - Reporta tabla agrupada por bench con todos los lenguajes lado a lado.
 - Genera grafica matplotlib comparativa + JSON con todos los datos.
-- Tambien soporta el layout legacy @c benchmark/*.vex (un fichero
+- Tambien soporta el layout legacy @c benchmark/*.vx (un fichero
   Vex sin carpeta) ejecutando solo en Vex interp + JIT.
 
 Modos de ejecucion del Vex:
 - @b interp: VESTA_JIT_THRESHOLD=UINT32_MAX (forzado; el default del vm es 1500), 100% interp.
 - @b jit: VESTA_JIT_THRESHOLD=1, fuerza JIT en el primer call.
-- @b aot: compila el .vex a un .exe nativo standalone (-m aot --emit exe) y
+- @b aot: compila el .vx a un .exe nativo standalone (-m aot --emit exe) y
   mide el wall time de la ejecucion nativa.  Solo cubre el subset nativo
   del lenguaje; los benches no soportados quedan N/A en esa columna.
 
@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 
-# Benches legacy (single-file .vex) excluidos del modo multi-lenguaje.
+# Benches legacy (single-file .vx) excluidos del modo multi-lenguaje.
 LEGACY_SKIP_PATTERN = re.compile(
     r"^(bench_macro_|bench_shared_|bench_native_callback|"
     r"100_reflection|get_time|test_vptr_loop)"
@@ -110,7 +110,7 @@ VEX_AOT_MODES: dict[str, str] = {
     "vex_aot_avx":  "avx",
     "vex_aot_auto": "auto",
 }
-# Todos los lenguajes "Vex" (comparten la variante .vex; difieren en como se
+# Todos los lenguajes "Vex" (comparten la variante .vx; difieren en como se
 # compila/ejecuta).  Usado en los dispatch de compile + run.
 VEX_LANGS = ("vex_interp", "vex_jit", *VEX_AOT_MODES.keys())
 
@@ -662,7 +662,7 @@ class Bench:
     """Un benchmark con todas sus variantes en distintos lenguajes."""
     name: str
     variants: dict[str, BenchVariant] = field(default_factory=dict)
-    is_legacy: bool = False  # True si es un .vex single-file old style
+    is_legacy: bool = False  # True si es un .vx single-file old style
 
 
 def discover_benches(bench_dir: Path) -> list[Bench]:
@@ -674,7 +674,7 @@ def discover_benches(bench_dir: Path) -> list[Bench]:
             continue
         b = Bench(name=d.name)
         candidates = {
-            "vex":    d / "main.vex",
+            "vex":    d / "main.vx",
             "c":      d / "main.c",
             "cpp":    d / "main.cpp",
             "python": d / "main.py",
@@ -688,13 +688,13 @@ def discover_benches(bench_dir: Path) -> list[Bench]:
         if b.variants:
             benches.append(b)
             multilang_names.add(d.name)
-    # 2. Single-file legacy (.vex) -- solo Vex.
-    # Sprint string-perf-6 (2026-06-02): skip de duplicados.  Si el .vex
-    # legacy tiene contrapartida multi-lenguaje (e.g. bench_array_sum.vex
+    # 2. Single-file legacy (.vx) -- solo Vex.
+    # Sprint string-perf-6 (2026-06-02): skip de duplicados.  Si el .vx
+    # legacy tiene contrapartida multi-lenguaje (e.g. bench_array_sum.vx
     # vs carpeta array_sum/), saltar el legacy para evitar filas dobles
     # en la tabla de resultados.  El nombre logico del legacy se deriva
     # quitando el prefijo "bench_" si existe.
-    for f in sorted(bench_dir.glob("*.vex")):
+    for f in sorted(bench_dir.glob("*.vx")):
         if LEGACY_SKIP_PATTERN.match(f.stem):
             continue
         logical = f.stem
@@ -963,7 +963,7 @@ def compile_vex_aot(variant: BenchVariant, work_dir: Path,
                     vm_bin: Path,
                     float_isa: str = "sse2"
                     ) -> Optional[tuple[list[str], Path, float]]:
-    """Compila el .vex a un ejecutable nativo standalone via el driver AOT.
+    """Compila el .vx a un ejecutable nativo standalone via el driver AOT.
 
     @p float_isa elige el backend SIMD (--float-isa): "sse2" (128b, baseline),
     "avx" (AVX2 256b) o "auto" (multiversion por cpuid).  Cada modo produce un
@@ -1778,7 +1778,7 @@ def main() -> int:
     parser.add_argument("--out-json", type=str, default="bench_results.json")
     parser.add_argument("--out-plot", type=str, default="bench_results.png")
     parser.add_argument("--skip-legacy", action="store_true",
-                        help="No correr benches legacy single-file .vex")
+                        help="No correr benches legacy single-file .vx")
     parser.add_argument("--compile-jobs", type=int, default=0,
                         help=("Paralelismo de compilacion (default: os.cpu_count()).  "
                               "Las EJECUCIONES siguen secuenciales para no contaminar "

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """diff_harness.py -- red de seguridad diferencial interp vs JIT para VestaVM.
 
-Sprint JIT-hardening (Fase 0).  Corre cada @c .vex del corpus en los 3 modos
+Sprint JIT-hardening (Fase 0).  Corre cada @c .vx del corpus en los 3 modos
 de ejecucion y clasifica cada programa comparando contra el INTERPRETE como
 oraculo.  Convierte bugs latentes del JIT (corrupcion silenciosa, divergencia
 interp!=jit, crashes) en un backlog conocido ANTES de tocar el codegen.
@@ -77,11 +77,11 @@ def find_vm(arg: str | None, root: Path) -> Path | None:
 def discover(root: Path, want_bench: bool):
     """Devuelve [(name, path)] del corpus."""
     items = []
-    for p in sorted((root / "examples_codes_vex").glob("*.vex")):
+    for p in sorted((root / "examples_codes_vex").glob("*.vx")):
         items.append((p.stem, p))
     if want_bench:
         for d in sorted((root / "examples_codes_vex" / "benchmark").iterdir()):
-            mv = d / "main.vex"
+            mv = d / "main.vx"
             if mv.is_file():
                 items.append((d.name, mv))
     return items

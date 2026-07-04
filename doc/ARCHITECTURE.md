@@ -59,10 +59,10 @@ la semantica consistente entre los modos.
 
 ## 2. Pipeline de compilacion
 
-Desde `.vex` hasta bytecode ejecutable:
+Desde `.vx` hasta bytecode ejecutable:
 
 ```text
-.vex source
+.vx source
     |
     +-----> VPP preprocesador (~5000 LOC C)
     |       #define / #include / #if / #foreach / #repeat / #array / #exec
@@ -617,7 +617,7 @@ VM/
 │   │   └── ...
 │   └── *.md               # QUICKSTART, ARCHITECTURE, BENCHMARKS, ROADMAP
 │
-├── examples_codes_vex/    # ~140 ejemplos .vex
+├── examples_codes_vex/    # ~140 ejemplos .vx
 │   ├── benchmark/         # benches sinteticos
 │   └── ...
 │

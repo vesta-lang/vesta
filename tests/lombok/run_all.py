@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sprint lombok (2026-06-03): runner de tests de anotaciones tipo Lombok.
 
-Compila cada .vex, lo ejecuta en interp y JIT, parsea R00 hex y verifica
+Compila cada .vx, lo ejecuta en interp y JIT, parsea R00 hex y verifica
 que coincida con 0x2A (42) para PASS.  Reporta PASS/FAIL/DIFF/COMPILE_FAIL.
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ def run_vex(test: Path, mode: str) -> tuple[str, int | None]:
 
 
 def main() -> int:
-    tests = sorted(HERE.glob("*.vex"))
+    tests = sorted(HERE.glob("*.vx"))
     if not tests:
         print("[lombok] sin tests en", HERE)
         return 0

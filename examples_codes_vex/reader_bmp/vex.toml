@@ -14,9 +14,9 @@ declared = ["fs:read", "ffi:call=kernel32.dll", "ffi:call=libc.so.6"]
 [dependencies]
 
 [scripts]
-# Build hiper-sencillo: compila la version MODULAR (main.vex importa bmp.vex
+# Build hiper-sencillo: compila la version MODULAR (main.vx importa bmp.vx
 # + vex_fileio) a reader_bmp.velb.  Un solo comando: `vesta pkg run build`.
-build = "vesta --vex main.vex -o reader_bmp"
+build = "vesta --vex main.vx -o reader_bmp"
 
 # Ejecuta el .velb sobre la imagen de ejemplo sin padding (60x3).  El `--`
 # separa los argumentos del programa de los flags de la VM.
@@ -36,4 +36,4 @@ jit   = "vesta --run reader_bmp.velb -m jit -- Ejemplo60x3.bmp"
 # single-file.  Los metodos de clase cross-modulo ya compilan a AOT (BUG-5
 # cerrado); la variante MODULAR completa aun necesita `args_get` en AOT (LIM-5)
 # para leer el nombre del fichero -- ver BUGS_LIMITACIONES.md.
-aot   = "vesta -m aot --vex reader_bmp.vex -o reader_bmp_native --emit exe"
+aot   = "vesta -m aot --vex reader_bmp.vx -o reader_bmp_native --emit exe"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """jit_coverage.py -- mide la cobertura del path JIT-vreg y los gaps.
 
-Sprint JIT-hardening (Fase 2).  Corre cada .vex del corpus en modo jit
+Sprint JIT-hardening (Fase 2).  Corre cada .vx del corpus en modo jit
 (threshold=1) con los flags de debug del vreg, y agrega:
   - cuantos metodos compilan por VREG (path por defecto, limpio).
   - cuantos CAEN al selector (slots) y por QUE op del IR.
@@ -28,10 +28,10 @@ def find_vm(arg, root):
     return None
 
 def discover(root, want_bench):
-    items = [(p.stem, p) for p in sorted((root/"examples_codes_vex").glob("*.vex"))]
+    items = [(p.stem, p) for p in sorted((root/"examples_codes_vex").glob("*.vx"))]
     if want_bench:
         for d in sorted((root/"examples_codes_vex"/"benchmark").iterdir()):
-            if (d/"main.vex").is_file(): items.append((d.name, d/"main.vex"))
+            if (d/"main.vx").is_file(): items.append((d.name, d/"main.vx"))
     return items
 
 def main():

@@ -5,7 +5,7 @@ Esta pagina selecciona los ejemplos mas instructivos de
 es ejecutable directamente con:
 
 ```bash
-./build/vm --vex examples_codes_vex/<archivo>.vex -o /tmp/ej
+./build/vm --vex examples_codes_vex/<archivo>.vx -o /tmp/ej
 ./build/vm --run /tmp/ej.velb
 ```
 
@@ -49,7 +49,7 @@ separados en `examples_codes_vex/benchmark/`.
 
 ## 1. Hola Mundo y basico
 
-**[`02_hola_mundo.vex`](../examples_codes_vex/02_hola_mundo.vex)**
+**[`02_hola_mundo.vx`](../examples_codes_vex/02_hola_mundo.vx)**
 
 ```vex
 i32 main() {
@@ -58,7 +58,7 @@ i32 main() {
 }
 ```
 
-**[`03_contador.vex`](../examples_codes_vex/03_contador.vex)** - loop while + print
+**[`03_contador.vx`](../examples_codes_vex/03_contador.vx)** - loop while + print
 con interpolacion:
 
 ```vex
@@ -76,7 +76,7 @@ i32 main() {
 
 ## 2. Tipos y operaciones
 
-**[`00_aritmetica.vex`](../examples_codes_vex/00_aritmetica.vex)** - operadores
+**[`00_aritmetica.vx`](../examples_codes_vex/00_aritmetica.vx)** - operadores
 basicos:
 
 ```vex
@@ -87,7 +87,7 @@ i32 main() {
 }
 ```
 
-**[`01_factorial.vex`](../examples_codes_vex/01_factorial.vex)** - recursion:
+**[`01_factorial.vx`](../examples_codes_vex/01_factorial.vx)** - recursion:
 
 ```vex
 i64 factorial(i64 n) {
@@ -104,7 +104,7 @@ i32 main() {
 
 ## 3. Estructuras de datos
 
-**[`05_struct_punto.vex`](../examples_codes_vex/05_struct_punto.vex)** - struct
+**[`05_struct_punto.vx`](../examples_codes_vex/05_struct_punto.vx)** - struct
 basico:
 
 ```vex
@@ -119,7 +119,7 @@ i32 main() {
 }
 ```
 
-**[`06_struct_multi.vex`](../examples_codes_vex/06_struct_multi.vex)** -
+**[`06_struct_multi.vx`](../examples_codes_vex/06_struct_multi.vx)** -
 struct compuesto:
 
 ```vex
@@ -140,7 +140,7 @@ i32 main() {
 
 ## 4. Punteros y memoria
 
-**[`07_punteros.vex`](../examples_codes_vex/07_punteros.vex)** - punteros raw:
+**[`07_punteros.vx`](../examples_codes_vex/07_punteros.vx)** - punteros raw:
 
 ```vex
 i32 read_ptr(i32* p) {
@@ -154,7 +154,7 @@ i32 main() {
 }
 ```
 
-**[`10_heap_malloc.vex`](../examples_codes_vex/10_heap_malloc.vex)** - malloc/free:
+**[`10_heap_malloc.vx`](../examples_codes_vex/10_heap_malloc.vx)** - malloc/free:
 
 ```vex
 i32 main() {
@@ -175,7 +175,7 @@ i32 main() {
 
 ## 5. POO: clases, herencia, interfaces
 
-**[`12_clases_basico.vex`](../examples_codes_vex/12_clases_basico.vex)** - clase
+**[`12_clases_basico.vx`](../examples_codes_vex/12_clases_basico.vx)** - clase
 simple con ctor:
 
 ```vex
@@ -197,7 +197,7 @@ i32 main() {
 }
 ```
 
-**[`15_herencia_basica.vex`](../examples_codes_vex/15_herencia_basica.vex)** -
+**[`15_herencia_basica.vx`](../examples_codes_vex/15_herencia_basica.vx)** -
 herencia + override:
 
 ```vex
@@ -216,7 +216,7 @@ class Dog : Animal {
 }
 ```
 
-**[`21_interfaces_basico.vex`](../examples_codes_vex/21_interfaces_basico.vex)** -
+**[`21_interfaces_basico.vx`](../examples_codes_vex/21_interfaces_basico.vx)** -
 interfaces + polimorfismo:
 
 ```vex
@@ -247,7 +247,7 @@ i32 main() {
 
 ## 6. Genericos
 
-**[`27_generics_box.vex`](../examples_codes_vex/27_generics_box.vex)** -
+**[`27_generics_box.vx`](../examples_codes_vex/27_generics_box.vx)** -
 generic monomorfizado:
 
 ```vex
@@ -268,7 +268,7 @@ i32 main() {
 
 ## 7. Pattern matching y enums
 
-**[`54_enum_payload.vex`](../examples_codes_vex/54_enum_payload.vex)** - enum con
+**[`54_enum_payload.vx`](../examples_codes_vex/54_enum_payload.vx)** - enum con
 variantes:
 
 ```vex
@@ -295,7 +295,7 @@ i32 main() {
 
 ## 8. Optional y Result
 
-**[`33_optional_basic.vex`](../examples_codes_vex/33_optional_basic.vex)** -
+**[`33_optional_basic.vx`](../examples_codes_vex/33_optional_basic.vx)** -
 Optional con implicit Some:
 
 ```vex
@@ -338,7 +338,7 @@ i32 main() {
 
 ## 9. Smart pointers
 
-**[`95_unique_ptr_basico.vex`](../examples_codes_vex/95_unique_ptr_basico.vex)** -
+**[`95_unique_ptr_basico.vx`](../examples_codes_vex/95_unique_ptr_basico.vx)** -
 unique_box:
 
 ```vex
@@ -350,7 +350,7 @@ i32 main() {
 }
 ```
 
-**[`106_virtualalloc_unique.vex`](../examples_codes_vex/106_virtualalloc_unique.vex)** -
+**[`106_virtualalloc_unique.vx`](../examples_codes_vex/106_virtualalloc_unique.vx)** -
 unique_with + deleter custom (Windows API):
 
 ```vex
@@ -376,7 +376,7 @@ i32 main() {
 
 ## 10. Borrow checker
 
-**[`112_borrow_mut_ok.vex`](../examples_codes_vex/112_borrow_mut_ok.vex)** -
+**[`112_borrow_mut_ok.vx`](../examples_codes_vex/112_borrow_mut_ok.vx)** -
 borrow_mut basico:
 
 ```vex
@@ -389,7 +389,7 @@ i32 main() {
 }
 ```
 
-**[`118_borrow_nll.vex`](../examples_codes_vex/118_borrow_nll.vex)** -
+**[`118_borrow_nll.vx`](../examples_codes_vex/118_borrow_nll.vx)** -
 Non-Lexical Lifetimes (NLL):
 
 ```vex
@@ -404,7 +404,7 @@ i32 main() {
 }
 ```
 
-**[`131_borrow_combined_real.vex`](../examples_codes_vex/131_borrow_combined_real.vex)** -
+**[`131_borrow_combined_real.vx`](../examples_codes_vex/131_borrow_combined_real.vx)** -
 patron real: pipeline mut con reborrow encadenado + multiples shared + F4
 elision. Modelando un cache simple.
 
@@ -412,7 +412,7 @@ elision. Modelando un cache simple.
 
 ## 11. Closures y HOF
 
-**[`50_lambda_simple.vex`](../examples_codes_vex/50_lambda_simple.vex)** -
+**[`50_lambda_simple.vx`](../examples_codes_vex/50_lambda_simple.vx)** -
 lambda inline:
 
 ```vex
@@ -422,7 +422,7 @@ i32 main() {
 }
 ```
 
-**[`51_lambda_captura.vex`](../examples_codes_vex/51_lambda_captura.vex)** -
+**[`51_lambda_captura.vx`](../examples_codes_vex/51_lambda_captura.vx)** -
 captura lexica:
 
 ```vex
@@ -433,7 +433,7 @@ i32 main() {
 }
 ```
 
-**[`63_topfn_as_fnvalue.vex`](../examples_codes_vex/63_topfn_as_fnvalue.vex)** -
+**[`63_topfn_as_fnvalue.vx`](../examples_codes_vex/63_topfn_as_fnvalue.vx)** -
 top-level fn promotion:
 
 ```vex
@@ -456,7 +456,7 @@ i32 main() {
 
 ## 12. Async, spawn, futures
 
-**[`43_async_basico.vex`](../examples_codes_vex/43_async_basico.vex)** - @Async:
+**[`43_async_basico.vx`](../examples_codes_vex/43_async_basico.vx)** - @Async:
 
 ```vex
 @Async
@@ -471,7 +471,7 @@ i32 main() {
 }
 ```
 
-**[`44_spawn_basico.vex`](../examples_codes_vex/44_spawn_basico.vex)** - spawn
+**[`44_spawn_basico.vx`](../examples_codes_vex/44_spawn_basico.vx)** - spawn
 + msgsend:
 
 ```vex
@@ -487,7 +487,7 @@ i32 main() {
 }
 ```
 
-**[`45_spawn_placement.vex`](../examples_codes_vex/45_spawn_placement.vex)** -
+**[`45_spawn_placement.vx`](../examples_codes_vex/45_spawn_placement.vx)** -
 spawn placement (multi-thread real con `--schedulers N`):
 
 ```vex
@@ -502,7 +502,7 @@ i32 main() {
 
 ## 13. Sincronizacion
 
-**[`35_synchronized_basico.vex`](../examples_codes_vex/35_synchronized_basico.vex)** -
+**[`35_synchronized_basico.vx`](../examples_codes_vex/35_synchronized_basico.vx)** -
 monitor:
 
 ```vex
@@ -525,7 +525,7 @@ i32 main() {
 
 ## 14. Reflexion y AOP
 
-**[`100_reflection_full.vex`](../examples_codes_vex/100_reflection_full.vex)** -
+**[`100_reflection_full.vx`](../examples_codes_vex/100_reflection_full.vx)** -
 reflexion completa:
 
 ```vex
@@ -566,7 +566,7 @@ class Service {
 
 ## 15. FFI: extern y dinamico
 
-**[`85_extern_winapi.vex`](../examples_codes_vex/85_extern_winapi.vex)** - extern
+**[`85_extern_winapi.vx`](../examples_codes_vex/85_extern_winapi.vx)** - extern
 declarativo:
 
 ```vex
@@ -582,7 +582,7 @@ i32 main() {
 }
 ```
 
-**[`86_ffi_runtime.vex`](../examples_codes_vex/86_ffi_runtime.vex)** - FFI runtime:
+**[`86_ffi_runtime.vx`](../examples_codes_vex/86_ffi_runtime.vx)** - FFI runtime:
 
 ```vex
 i32 main() {
@@ -597,7 +597,7 @@ i32 main() {
 
 ## 16. Excepciones
 
-**[`36_synchronized_exception.vex`](../examples_codes_vex/36_synchronized_exception.vex)** -
+**[`36_synchronized_exception.vx`](../examples_codes_vex/36_synchronized_exception.vx)** -
 try/catch + monitor cleanup:
 
 ```vex
@@ -634,7 +634,7 @@ i32 main() {
 
 ## 17. Colecciones
 
-**[`92_collections_primitive.vex`](../examples_codes_vex/92_collections_primitive.vex)** -
+**[`92_collections_primitive.vx`](../examples_codes_vex/92_collections_primitive.vx)** -
 ArrayList + HashMap + free automatico:
 
 ```vex
@@ -656,7 +656,7 @@ i32 main() {
 
 ## 18. Strings
 
-**[`76_string_exhaustive.vex`](../examples_codes_vex/76_string_exhaustive.vex)** -
+**[`76_string_exhaustive.vx`](../examples_codes_vex/76_string_exhaustive.vx)** -
 strings completos (UTF-8, interpolacion, multi-alfabeto):
 
 ```vex
@@ -694,7 +694,7 @@ i32 main() {
 
 ## 19. Distribuido
 
-**[`47_rspawn_basico.vex`](../examples_codes_vex/47_rspawn_basico.vex)** - rspawn
+**[`47_rspawn_basico.vx`](../examples_codes_vex/47_rspawn_basico.vx)** - rspawn
 cross-node:
 
 ```vex
@@ -715,7 +715,7 @@ Compilar y ejecutar entre 2 procesos:
 ./build/vm --dist-server --dist-port 7789
 
 # Terminal 2: cliente que envia rspawn
-./build/vm --vex examples_codes_vex/47_rspawn_basico.vex -o /tmp/rsp
+./build/vm --vex examples_codes_vex/47_rspawn_basico.vx -o /tmp/rsp
 ./build/vm --run /tmp/rsp.velb --dist-port 7790 --dist-add-node 127.0.0.1:7789
 ```
 
@@ -726,7 +726,7 @@ Compilar y ejecutar entre 2 procesos:
 Macros compile-time que generan codigo, capturan DSLs y consultan tipos
 sin overhead runtime. Detalles completos: [Metaprogramacion.md](./VMdoc/Vex/Metaprogramacion.md).
 
-**[`159_macro_expr_capture.vex`](../examples_codes_vex/159_macro_expr_capture.vex)** -
+**[`159_macro_expr_capture.vx`](../examples_codes_vex/159_macro_expr_capture.vx)** -
 captura raw de codigo arbitrario con `expr`:
 
 ```vex
@@ -744,7 +744,7 @@ i32 main() {
 }
 ```
 
-**[`160_macro_walk_pchase.vex`](../examples_codes_vex/160_macro_walk_pchase.vex)** -
+**[`160_macro_walk_pchase.vx`](../examples_codes_vex/160_macro_walk_pchase.vx)** -
 DSL real: pointer chase anidado generado en compile-time:
 
 ```vex
@@ -769,7 +769,7 @@ i32 main() {
 El `.vel` emitido contiene exactamente 3 instrucciones `movh` consecutivas,
 una por hop. Sin overhead vs escribir el chase manualmente.
 
-**[`161_macro_ffi_compile_time.vex`](../examples_codes_vex/161_macro_ffi_compile_time.vex)** -
+**[`161_macro_ffi_compile_time.vx`](../examples_codes_vex/161_macro_ffi_compile_time.vx)** -
 FFI a DLLs del sistema en tiempo de compilacion:
 
 ```vex
@@ -803,7 +803,7 @@ Cada compilacion produce un binario distinto (depende del PID + tick del
 compilador). El `.velb` final NO referencia kernel32 -- solo contiene
 `mov rN, <literal>` con el valor calculado al compilar.
 
-**[`162_macro_comptime_data.vex`](../examples_codes_vex/162_macro_comptime_data.vex)** -
+**[`162_macro_comptime_data.vx`](../examples_codes_vex/162_macro_comptime_data.vx)** -
 arrays y "diccionario" via arrays paralelos en compile-time:
 
 ```vex

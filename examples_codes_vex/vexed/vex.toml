@@ -14,7 +14,7 @@ declared = ["fs:read", "fs:write", "ffi:call=msvcrt.dll"]
 
 [scripts]
 # Compila el proyecto a vexed.velb listo para ejecutar.
-build = "vesta --vex src/main.vex -o vexed"
+build = "vesta --vex src/main.vx -o vexed"
 
 # Ejecuta el binario compilado en modo interactivo (lee de stdin).
 run   = "vesta --run vexed.velb"
@@ -29,7 +29,7 @@ stats = "vesta --run vexed.velb --stats"
 #
 # Uso:
 #   vesta pkg run tests       # compila + ejecuta, reporta PASS/FAIL
-tests = "vesta --vex tests/run_all.vex -o tests/run_all && vesta --run tests/run_all.velb"
+tests = "vesta --vex tests/run_all.vx -o tests/run_all && vesta --run tests/run_all.velb"
 
 # Genera diagramas Mermaid (.mmd) y Graphviz (.dot) del pipeline de
 # compilacion para el editor.  Util para inspeccionar AST/IR/bytecode
@@ -42,4 +42,4 @@ tests = "vesta --vex tests/run_all.vex -o tests/run_all && vesta --run tests/run
 #
 # Uso:
 #   vesta pkg run diagrams
-diagrams = "vesta --vex src/main.vex -o vexed --diagram-all --diagram-format all"
+diagrams = "vesta --vex src/main.vx -o vexed --diagram-all --diagram-format all"

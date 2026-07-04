@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """aot_coverage.py -- mide la cobertura AOT sobre examples_codes_vex/.
 
-Compila cada .vex con `-m aot --emit obj` y clasifica:
+Compila cada .vx con `-m aot --emit obj` y clasifica:
   - OK: se genero el .o.
   - FAIL-ANALYZE: aot_analyze rechaza una op RUNTIME_DEPENDENT (reporta cual).
   - FAIL-CODEGEN: el selector vreg no soporta una op.
@@ -93,10 +93,10 @@ def main() -> int:
     base = Path(args.dir)
     if not base.is_absolute():
         base = (root / base) if not base.exists() else base
-    pat = "**/*.vex" if args.recurse else "*.vex"
+    pat = "**/*.vx" if args.recurse else "*.vx"
     files = sorted(base.glob(pat))
     if not files:
-        raise SystemExit(f"sin .vex en {base}")
+        raise SystemExit(f"sin .vx en {base}")
 
     cat_count: Counter[str] = Counter()
     reason_count: Counter[str] = Counter()

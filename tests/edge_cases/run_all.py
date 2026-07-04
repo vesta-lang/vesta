@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bateria de edge case tests para Vex JIT + INTERP.
 
-Compila cada .vex del directorio actual y lo ejecuta en ambos modos.
+Compila cada .vx del directorio actual y lo ejecuta en ambos modos.
 Reporta:
   - Compile fails.
   - Crashes (interp/jit).
@@ -42,7 +42,7 @@ BLD = lambda s: c("1",  s)
 
 
 def compile_vex(src: Path) -> Path | None:
-    """Compila src.vex -> tmp/<stem>.velb.  None si falla."""
+    """Compila src.vx -> tmp/<stem>.velb.  None si falla."""
     stem = src.stem
     out_stem = TMP / stem
     velb = TMP / f"{stem}.velb"
@@ -93,7 +93,7 @@ def main():
         print(RED(f"vm.exe no existe: {VM}"), file=sys.stderr)
         return 1
 
-    tests = sorted(HERE.glob("*.vex"))
+    tests = sorted(HERE.glob("*.vx"))
     if args.filter:
         flt = re.compile(args.filter)
         tests = [t for t in tests if flt.search(t.name)]

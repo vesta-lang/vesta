@@ -101,7 +101,7 @@ Flags Release: `-O3 -DNDEBUG -march=x86-64 -mtune=native -ffast-math
 
 **Metodologia**:
 
-- Cada bench se compila con `vm --vex bench.vex -o /tmp/b -O2` (opt level 2).
+- Cada bench se compila con `vm --vex bench.vx -o /tmp/b -O2` (opt level 2).
 - Se ejecuta 3 veces; se reporta el **best-of-3** (mejor tiempo) para reducir
   variabilidad por scheduling del OS.
 - MIPS se calcula como `(profiler_instr_counter / wall_time_ns) * 1000`.
@@ -133,7 +133,7 @@ Ubicacion: [`examples_codes_vex/benchmark/`](../examples_codes_vex/benchmark/).
 | `bench_alloc`        | `new Foo()` con ctor zero-init        | 5M        | 116 ms    | 346     |
 | `bench_jit_method`   | Hot loop dentro de metodo virtual      | 30M       | 415 ms    | 359     |
 | `bench_fib_recursive`| CALL/RET recursivo (fib 30)            | 2.7M call | 210 ms    | 220     |
-| `bench_callvirt_hot.vex` (variante) | Stress test callvirt        | 30M       | 360 ms    | 333     |
+| `bench_callvirt_hot.vx` (variante) | Stress test callvirt        | 30M       | 360 ms    | 333     |
 
 **Patrones observables**:
 
@@ -146,7 +146,7 @@ Ubicacion: [`examples_codes_vex/benchmark/`](../examples_codes_vex/benchmark/).
 ### Benchmarks memoria compartida cross-process
 
 Suite dedicada para validar throughput del `SharedHeap` + monitores cross-scheduler
-+ STW GC.  Implementadas como ficheros `bench_shared_*.vex` en
++ STW GC.  Implementadas como ficheros `bench_shared_*.vx` en
 `examples_codes_vex/benchmark/`.
 
 Ejecucion via `bash tests/vex/bench_shared_runner.sh cmake-build-windows`
@@ -262,7 +262,7 @@ o bridge al scheduler. NO afecta hot paths sincronos.
 Comparativa empirica contra los principales lenguajes del ecosistema
 usando **workloads identicos** implementados en cada uno. Los benchmarks
 viven en `examples_codes_vex/benchmark/<bench_name>/` con un fichero
-por lenguaje (`main.vex`, `main.c`, `main.cpp`, `main.py`, `Main.java`,
+por lenguaje (`main.vx`, `main.c`, `main.cpp`, `main.py`, `Main.java`,
 `main.go`).
 
 **Toolchain de comparacion**:
@@ -467,8 +467,8 @@ restante en codigo recursion-heavy.
 
 ```bash
 # Compilar todos los benches en un script
-for b in examples_codes_vex/benchmark/bench_*.vex; do
-  name=$(basename "$b" .vex)
+for b in examples_codes_vex/benchmark/bench_*.vx; do
+  name=$(basename "$b" .vx)
   ./build/vm --vex "$b" -o /tmp/$name -O2 > /dev/null
 done
 
@@ -507,7 +507,7 @@ implementaciones, una por lenguaje:
 
 ```text
 examples_codes_vex/benchmark/<bench>/
-    main.vex      # Vex
+    main.vx      # Vex
     main.c        # C    (gcc -O3 -march=native)
     main.cpp      # C++  (g++ -O3 -march=native)
     main.py       # Python (CPython 3.11)

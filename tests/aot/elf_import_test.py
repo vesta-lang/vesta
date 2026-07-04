@@ -9,7 +9,7 @@ Como el binario es ELF, se compila y ejecuta a traves de WSL (Linux).  En
 Windows, libc.so.6 no esta en el sistema de archivos local, asi que se copia a
 una ruta accesible y se pasa explicitamente como entrada al enlazador.
 
-Escenario: un .vex llama a toupper() de libc; toupper(97) = 'A' = 65.
+Escenario: un .vx llama a toupper() de libc; toupper(97) = 'A' = 65.
 
 Uso:  python tests/aot/elf_import_test.py <build_dir>
 """
@@ -56,12 +56,12 @@ def main():
             print("ELF-IMPORT: no se encontro libc.so.6 en WSL, omitido")
             return 0
 
-        with open(os.path.join(work, "m.vex"), "w") as f:
+        with open(os.path.join(work, "m.vx"), "w") as f:
             f.write('extern "libc.so.6" { fn toupper(i32 c) -> i32; }\n'
                     'i64 main() { return (i64)toupper(97); }\n')
         obj = os.path.join(work, "m.o")
         prog = os.path.join(work, "p")
-        run([vm, "--vex", os.path.join(work, "m.vex"), "-m", "aot",
+        run([vm, "--vex", os.path.join(work, "m.vx"), "-m", "aot",
              "--emit", "obj", "--format", "elf", "-o", obj])
         run([vm, "--link", obj, libc, "-o", prog, "--format", "elf"])
         if not os.path.exists(prog):

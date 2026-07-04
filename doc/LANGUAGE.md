@@ -38,7 +38,7 @@ general; para detalles de cada feature consulta los docs especificos en
 Vex se diseño con cuatro principios no negociables:
 
 1. **Multi-paradigma sin ceremonias**: combina imperativo + POO + funcional
-   ligero. Un `.vex` puede ser solo funciones y variables, sin envoltura
+   ligero. Un `.vx` puede ser solo funciones y variables, sin envoltura
    `class`. Llaves estilo C, no indentacion significativa.
 
 2. **Tipado estatico con inferencia local**: declaraciones explicitas pero
@@ -533,7 +533,7 @@ Detalles completos: [doc/VMdoc/Vex/Metaprogramacion.md](./VMdoc/Vex/Metaprograma
 ## 4. El pipeline de compilacion
 
 ```text
-   .vex source
+   .vx source
         |
         v  VPP preprocesador
         |  (#define, #include, #if, #foreach, ...)

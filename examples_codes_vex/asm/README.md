@@ -1,10 +1,10 @@
 # Ejemplos de inline-asm (Phase AS)
 
-Estos `.vex` usan **inline-asm nativo** (`asm { ... }` en sintaxis NASM Intel +
+Estos `.vx` usan **inline-asm nativo** (`asm { ... }` en sintaxis NASM Intel +
 storage-class `register("reg")`).  Se compilan y ejecutan **sin flags**:
 
 ```sh
-vm --vex 01_popcount.vex -o popcount
+vm --vex 01_popcount.vx -o popcount
 vm --run popcount.velb
 ```
 
@@ -57,5 +57,5 @@ interno del asm.  Asi se evita ligar registros vectoriales directamente.
 - **Clobber de `rsp`**: un asm que pisa el stack pointer no es envolvible
   (las push/pop del trampolin/wrapper usan rsp) -> se rechaza.
 
-Tambien se puede portar cualquiera de estos `.vex` a C con `--port c` (GCC
+Tambien se puede portar cualquiera de estos `.vx` a C con `--port c` (GCC
 ensambla el asm); ver `tests/vex/test_vex_e2e.sh` (Phase AS) para la paridad.

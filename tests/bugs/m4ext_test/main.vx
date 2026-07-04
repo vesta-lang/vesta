@@ -1,0 +1,2 @@
+import "b" only b_value;
+i32 main() { return b_value() + 31; }

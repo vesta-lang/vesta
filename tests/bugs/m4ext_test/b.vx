@@ -1,0 +1,2 @@
+import "c" only c_value;
+public i32 b_value() { return c_value() + 1; }

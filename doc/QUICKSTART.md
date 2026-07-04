@@ -86,7 +86,7 @@ El binario resultante es `build/vm` (Linux/macOS) o `build/vm.exe` (Windows).
 
 ## 3. Hola Mundo en Vex
 
-Crea `hola.vex`:
+Crea `hola.vx`:
 
 ```vex
 i32 main() {
@@ -98,14 +98,14 @@ i32 main() {
 Compila y ejecuta:
 
 ```bash
-./build/vm --vex hola.vex -o hola
+./build/vm --vex hola.vx -o hola
 ./build/vm --run hola.velb
 # -> Hola desde Vex 2!
 ```
 
 **Que pasa**:
 
-1. `vm --vex hola.vex -o hola` ejecuta el pipeline completo: lexer -> parser ->
+1. `vm --vex hola.vx -o hola` ejecuta el pipeline completo: lexer -> parser ->
    type checker -> lowering a SSA IR -> 15 pasadas de optimizacion -> emit
    `.vel` (ensamblador VM) -> assembler -> linker -> `hola.velb` (bytecode
    distribuible).
@@ -123,16 +123,16 @@ cubriendo todas las features del lenguaje:
 
 ```bash
 # Factorial recursivo
-./build/vm --vex examples_codes_vex/01_factorial.vex -o /tmp/fact
+./build/vm --vex examples_codes_vex/01_factorial.vx -o /tmp/fact
 ./build/vm --run /tmp/fact.velb
 # -> 3628800
 
 # Clases con herencia
-./build/vm --vex examples_codes_vex/15_herencia_basica.vex -o /tmp/h
+./build/vm --vex examples_codes_vex/15_herencia_basica.vx -o /tmp/h
 ./build/vm --run /tmp/h.velb
 
 # Async + futures
-./build/vm --vex examples_codes_vex/43_async_basico.vex -o /tmp/a
+./build/vm --vex examples_codes_vex/43_async_basico.vx -o /tmp/a
 ./build/vm --run /tmp/a.velb
 ```
 
@@ -140,24 +140,24 @@ Para ver el `.vel` (ensamblador VM intermedio) o el SSA IR:
 
 ```bash
 # Ver el .vel generado (lo escribe al lado del .velb)
-./build/vm --vex examples_codes_vex/01_factorial.vex -o /tmp/fact
+./build/vm --vex examples_codes_vex/01_factorial.vx -o /tmp/fact
 cat /tmp/fact.vel
 
 # Volcar el SSA IR (pre y post optimizacion)
-./build/vm --vex examples_codes_vex/01_factorial.vex -o /tmp/fact --vex-emit-ir
+./build/vm --vex examples_codes_vex/01_factorial.vx -o /tmp/fact --vex-emit-ir
 cat /tmp/fact.ir
 
 # Generar diagramas Mermaid de AST, IR y .vel
-./build/vm --vex examples_codes_vex/01_factorial.vex -o /tmp/fact --diagram-all
+./build/vm --vex examples_codes_vex/01_factorial.vx -o /tmp/fact --diagram-all
 ls /tmp/fact.*.mmd
 # -> /tmp/fact.ast.mmd, /tmp/fact.ir.pre.mmd, /tmp/fact.ir.post.mmd, /tmp/fact.vel.mmd
 
 # Map file de simbolos y secciones (debug; opt-in porque cuesta ~60% del linker)
-./build/vm --vex examples_codes_vex/01_factorial.vex -o /tmp/fact --emit-map
+./build/vm --vex examples_codes_vex/01_factorial.vx -o /tmp/fact --emit-map
 cat /tmp/fact.velb-map        # tabla de symbols + sections + addresses
 
 # Debug info (file:line) embebida en el .velb para el debugger TCP
-./build/vm --vex examples_codes_vex/01_factorial.vex -o /tmp/fact --vex-debug
+./build/vm --vex examples_codes_vex/01_factorial.vx -o /tmp/fact --vex-debug
 ```
 
 ---
@@ -239,7 +239,7 @@ Protocol) sobre TCP. Para una prueba rapida en localhost:
 **Terminal 2** (nodo cliente que envia un programa al nodo 1):
 
 ```bash
-./build/vm --vex examples_codes_vex/47_rspawn_basico.vex -o /tmp/rsp
+./build/vm --vex examples_codes_vex/47_rspawn_basico.vx -o /tmp/rsp
 ./build/vm --run /tmp/rsp.velb \
     --dist-port 7790 \
     --dist-add-node 127.0.0.1:7789

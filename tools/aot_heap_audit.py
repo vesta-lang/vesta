@@ -2,7 +2,7 @@
 """aot_heap_audit.py -- audita el uso de HEAP (malloc/calloc/free/realloc) en
 los .o que el AOT genera para examples_codes_vex/.
 
-Para cada .vex que compila a .o, hace `nm` y reporta si quedan simbolos libc de
+Para cada .vx que compila a .o, hace `nm` y reporta si quedan simbolos libc de
 heap sin resolver.  Agrupa los que SI usan heap para priorizar el barrido
 stack-first (convertir malloc local no-escapante -> ALLOCA de pila).
 
@@ -52,7 +52,7 @@ def main() -> int:
     nm = nm_tool()
     args.out = str(Path(args.out).resolve())
     base = Path(args.dir)
-    pat = "**/*.vex" if args.recurse else "*.vex"
+    pat = "**/*.vx" if args.recurse else "*.vx"
     files = sorted(base.glob(pat))
 
     compiled = 0

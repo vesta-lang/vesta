@@ -2,7 +2,7 @@
 """VestaVM - smoke test del inspector del LSP de Vex (portable Linux/Windows).
 
 Reemplaza al antiguo smoke_inspector.sh (bash, no portable a Windows).  Envia
-por stdin una secuencia JSON-RPC (initialize + initialized + didOpen de un .vex
+por stdin una secuencia JSON-RPC (initialize + initialized + didOpen de un .vx
 con una funcion aritmetica JIT-compilable, un loop para la complejidad y una
 clase) al binario vesta_lsp e invoca CADA peticion a medida vesta/*, verificando
 que cada una responde de forma no vacia o estructurada:
@@ -38,7 +38,7 @@ SRC = (
     "class Punto { public i64 x; public i64 getX() { return this.x; } }\n"
     "i64 main() { return suma(2, 3); }\n"
 )
-URI = "file:///inspector_demo.vex"
+URI = "file:///inspector_demo.vx"
 
 
 def frame(obj):

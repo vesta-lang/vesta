@@ -101,7 +101,7 @@ endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vex/"
         DESTINATION "examples/vex" COMPONENT examples
         FILES_MATCHING
-            PATTERN "*.vex"
+            PATTERN "*.vx"
             PATTERN "*.md"
             PATTERN "*.toml")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vsh/"
@@ -112,7 +112,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vsh/"
 
 # === tools (opcional): herramientas del lenguaje ===========================
 # Scripts (cobertura AOT/JIT, benchmarks, cliente de depuracion VSH).  Se
-# excluyen los artefactos de build (.velb/.vel/.vex de scratch).
+# excluyen los artefactos de build (.velb/.vel/.vx de scratch).
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/tools/"
         DESTINATION "tools" COMPONENT tools
         FILES_MATCHING

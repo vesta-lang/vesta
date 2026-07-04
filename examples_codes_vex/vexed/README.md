@@ -65,15 +65,15 @@ vexed/
   vex.toml           manifest del proyecto
   README.md          este archivo
   src/
-    main.vex         orquestador + loop principal
+    main.vx         orquestador + loop principal
     modules/
-      buffer.vex     buffer de texto (insert, delete, cursor)
-      file_io.vex    lectura y escritura via FFI msvcrt
-      history.vex    pila de snapshots para Ctrl-Z (max 64)
-      input.vex      entrada raw + parser dual scancode/VT100
-      keys.vex       constantes KEY_*/VK_*
-      screen.vex     render ANSI + consulta de tamano de consola
-      search.vex     busqueda de substring sobre el buffer
+      buffer.vx     buffer de texto (insert, delete, cursor)
+      file_io.vx    lectura y escritura via FFI msvcrt
+      history.vx    pila de snapshots para Ctrl-Z (max 64)
+      input.vx      entrada raw + parser dual scancode/VT100
+      keys.vx       constantes KEY_*/VK_*
+      screen.vx     render ANSI + consulta de tamano de consola
+      search.vx     busqueda de substring sobre el buffer
   sample.txt         (opcional) archivo que se cargara al abrir
   vexed.velb         (generado por build) ejecutable
   sample.out.txt     (generado al guardar) salida
@@ -95,7 +95,7 @@ vm pkg install
 vm pkg run build
 ```
 
-El script `build` invoca al compilador Vex sobre `src/main.vex` y
+El script `build` invoca al compilador Vex sobre `src/main.vx` y
 produce `vexed.velb`.
 
 ### 3. Preparar un archivo opcional

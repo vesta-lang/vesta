@@ -9,7 +9,7 @@ modificado.  Imagenes de prueba: `Ejemplo60x3.bmp` (60x3, sin padding) y
 `Ejemplo3x60.bmp` (3x60, padding de 2 bytes/fila), ambas 24bpp BGR.
 
 **Verificacion byte-exacta**: el volcado de pixeles a terminal se comparo BYTE
-A BYTE entre modos y contra la referencia single-file `reader_bmp.vex` (que ya
+A BYTE entre modos y contra la referencia single-file `reader_bmp.vx` (que ya
 era byte-exacta).  Ambas imagenes (con y sin padding de fila) coinciden.
 
 ---
@@ -19,10 +19,10 @@ era byte-exacta).  Ambas imagenes (con y sin padding de fila) coinciden.
 La version modular fue modernizada para usar la stdlib y los builtins nuevos,
 eliminando TODOS los workarounds locales:
 
-- `bmp_io.vex` (lectura binaria via kernel32 local) -> **eliminado**.  Ahora
+- `bmp_io.vx` (lectura binaria via kernel32 local) -> **eliminado**.  Ahora
   se usa la stdlib: `import "vex_fileio"` con `file_size(path)` +
   `file_read_into(path, buf, size)` (Windows kernel32 / POSIX libc, libc-free).
-- `colors.vex` (truecolor ANSI local via `chr(27)`) -> **eliminado**.  Ahora
+- `colors.vx` (truecolor ANSI local via `chr(27)`) -> **eliminado**.  Ahora
   se usan los **builtins del lenguaje** `bg_rgb(r,g,b)` / `fg_rgb(r,g,b)` /
   `RESET` dentro de la interpolacion de `print`/`println`.
 - El flag opcional `-r WxH` se parsea con `vio_parse_int` de la stdlib nativa
@@ -37,11 +37,11 @@ eliminando TODOS los workarounds locales:
 | Impresion de atributos | OK | OK | OK | OK |
 | Volcado ANSI truecolor (builtin `bg_rgb`) | **byte-exacto** | **byte-exacto** | **byte-exacto** | **byte-exacto** |
 | CLI args (`args_get`) | OK | OK | no (LIM-5) | no (LIM-5) |
-| **Modulo con clase cruzada** (`main_aot.vex` + `bmp.vex`) | OK | OK | **OK** | **OK** |
+| **Modulo con clase cruzada** (`main_aot.vx` + `bmp.vx`) | OK | OK | **OK** | **OK** |
 
 \* AOT PE: la clase `BMP_Image` vive en un modulo importado.  Los metodos de
 instancia cruzando modulo ya compilan a nativo (BUG-5 CERRADO 2026-07-04); el
-unico bloqueante restante para el `main.vex` modular completo es el gap de
+unico bloqueante restante para el `main.vx` modular completo es el gap de
 `args_get` (LIM-5), no el codegen de metodos de clase.
 
 \*\* AOT ELF (cross-compile desde Windows): validado byte-exacto con la variante
@@ -99,9 +99,9 @@ simbolo mangled indefinido (y el dead-elim descartaba el body por no-usado).
 Solucion en `lower_class_method_call` (lowering.cpp): al devirtualizar, resolver
 el nombre de la clase via `imported_helper_suffix` del layout (nombre local),
 igual que ya hacia el ctor.  Verificado byte-exacto en interp/JIT/AOT-PE/AOT-ELF
-con el repro minimo (`widget.vex` + `mainx.vex`, `w.bump(41)` -> 42).
+con el repro minimo (`widget.vx` + `mainx.vx`, `w.bump(41)` -> 42).
 
-**Que intentaba**: la version modular (`main_aot.vex` importa `bmp.vex`, que
+**Que intentaba**: la version modular (`main_aot.vx` importa `bmp.vx`, que
 define `class BMP_Image`) compilada a nativo.  `main` hace
 `new bmp.BMP_Image()` y luego `img.load(...)`, `img.printBMPAttributes()`,
 `img.dumpTerminal()`.
@@ -128,9 +128,9 @@ solo fallan las llamadas a metodos regulares sobre el objeto.
 - Funciones LIBRES cruzadas de modulo (`vex_fileio.file_size`, etc.) -> AOT OK.
 - interp y JIT de la version modular -> OK (byte-exacto).
 
-**Repro minimo** (2 ficheros; `widget.vex` + `mainx.vex`):
+**Repro minimo** (2 ficheros; `widget.vx` + `mainx.vx`):
 ```vex
-// widget.vex
+// widget.vx
 public class Widget {
     public i32 v;
     public Widget() { this.v = 0; }
@@ -138,7 +138,7 @@ public class Widget {
 }
 ```
 ```vex
-// mainx.vex
+// mainx.vx
 import "widget";
 i32 main() {
     widget.Widget w = new widget.Widget();
@@ -149,7 +149,7 @@ i32 main() {
 ```
 - `vm --run mx.velb -m vm`  -> `r=41`  (interp OK)
 - `vm --run mx.velb -m jit` -> `r=41`  (JIT OK)
-- `vm -m aot --vex mainx.vex --format pe --emit exe -o mainx.exe` -> el .exe
+- `vm -m aot --vex mainx.vx --format pe --emit exe -o mainx.exe` -> el .exe
   hace `STATUS_ENTRYPOINT_NOT_FOUND` (importa `widget__Widget__bump` de
   msvcrt.dll).  Igual en ELF.
 
@@ -157,7 +157,7 @@ i32 main() {
 llamada devirtualizada (nombre mangled del consumer) y el body (nombre local del
 dep).  Ya CERRADO (ver el fix arriba): los metodos de instancia de una clase
 importada compilan a nativo en PE y ELF.  El unico bloqueante restante del
-`main.vex` modular completo en AOT es el gap de `args_get`/`args_count` (LIM-5),
+`main.vx` modular completo en AOT es el gap de `args_get`/`args_count` (LIM-5),
 independiente de este bug.
 
 ---
@@ -198,7 +198,7 @@ por lo que funcionan identico en interp / JIT / AOT.
 ### LIM-8 [CERRADO] Parseo de entero desde string
 `extern "stdlib/native/io/vesta_io" { fn vio_parse_int(u64 s, u64 len) -> i64;
 fn vio_parse_ok() -> i64; }`.  Detecta base por prefijo (0x/0b/0o), signo,
-espacios y overflow.  Usado en `main.vex` para el flag `-r WxH`.
+espacios y overflow.  Usado en `main.vx` para el flag `-r WxH`.
 
 ---
 
@@ -215,7 +215,7 @@ Hay que usar el separador `--`: `vm --run p.velb -m vm -- foo -r 32x32`.
 
 ### LIM-5 [AOT] `args_count()`/`args_get()` no compilan a nativo
 `op 'getarg' requiere scheduler/procesos (runtime)`.  Cualquier programa que lea
-argumentos de CLI no compila en target nativo.  Por eso el AOT usa `main_aot.vex`
+argumentos de CLI no compila en target nativo.  Por eso el AOT usa `main_aot.vx`
 (path fijo).  ORTOGONAL a BUG-5 (esta es una limitacion conocida de args).
 
 ### LIM-7 [lenguaje] `streq` es comptime-only; para runtime hay que usar `str_equals`
@@ -235,7 +235,7 @@ parsea y reporta las dimensiones (demo de `vio_parse_int`).
 
 - **Warnings de narrowing** en cada `... << 24` y en los `return i32`: ruido;
   obligan a casts `(i32)` explicitos para silenciar.
-- **Warning "import 'bmp' no se usa"** en `main.vex` aunque `bmp.BMP_Image` SI
+- **Warning "import 'bmp' no se usa"** en `main.vx` aunque `bmp.BMP_Image` SI
   se usa (acceso cualificado): falso positivo del detector de imports sin usar.
 - **Cross-module: acceso siempre cualificado.**  Con `import "x"` hay que
   escribir `x.fn(...)` / `x.Tipo` / `new x.Tipo()`.  Por diseno.

@@ -23,19 +23,19 @@ modelo clásico de un SO: kernel + programas de usuario + una ABI entre ambos.
 
 | Fichero | Rol |
 | :------ | :-- |
-| `kernel.vex` | Raíz: bootloader (asm 16/32/64) + `kmain` + auto-test. |
-| `prog.vex` | Cargador de programas + tabla de API del kernel. |
-| `fat.vex` | Driver **FAT12** de solo-lectura (BPB, FAT, root dir, cadenas de cluster). |
-| `fb.vex` | Consola de texto sobre framebuffer **VBE** 800×600×32 (fuente 8×16 del BIOS). |
-| `shell.vex` | Terminal: builtins (help/ver/cls/echo/exit) + lanza programas de disco. |
-| `term.vex` | E/S: teclado/serie de entrada; VGA/serie/debugcon de salida; `read_line`. |
-| `kbd.vex` | Driver de teclado PS/2 (scancode → ASCII, Shift). |
-| `console.vex` | Driver VGA 80×25 (cursor, scroll, color). |
-| `serial.vex` | Driver COM1 (in/out). |
-| `lib.vex` | Utilidades (`itoa`, `memset`). |
-| `prog_calc.vex` | **Programa**: calculadora (evaluador de expresiones). |
-| `prog_notepad.vex` | **Programa**: editor de texto por líneas. |
-| `os_protected.vex` | Variante mínima de 32 bits (modo protegido). |
+| `kernel.vx` | Raíz: bootloader (asm 16/32/64) + `kmain` + auto-test. |
+| `prog.vx` | Cargador de programas + tabla de API del kernel. |
+| `fat.vx` | Driver **FAT12** de solo-lectura (BPB, FAT, root dir, cadenas de cluster). |
+| `fb.vx` | Consola de texto sobre framebuffer **VBE** 800×600×32 (fuente 8×16 del BIOS). |
+| `shell.vx` | Terminal: builtins (help/ver/cls/echo/exit) + lanza programas de disco. |
+| `term.vx` | E/S: teclado/serie de entrada; VGA/serie/debugcon de salida; `read_line`. |
+| `kbd.vx` | Driver de teclado PS/2 (scancode → ASCII, Shift). |
+| `console.vx` | Driver VGA 80×25 (cursor, scroll, color). |
+| `serial.vx` | Driver COM1 (in/out). |
+| `lib.vx` | Utilidades (`itoa`, `memset`). |
+| `prog_calc.vx` | **Programa**: calculadora (evaluador de expresiones). |
+| `prog_notepad.vx` | **Programa**: editor de texto por líneas. |
+| `os_protected.vx` | Variante mínima de 32 bits (modo protegido). |
 | `run.py` | Builder: construir / ejecutar / validar / ISO. |
 
 ## Requisitos
@@ -94,7 +94,7 @@ externas (`mtools`, `mount -t vfat`).
 2. **kmain** ejecuta un auto-test (carga `calc` del disco y lo corre) y luego
    lanza la **terminal**.
 3. La terminal lee una línea (teclado o serie), separa comando y argumentos.
-   Si es un builtin lo ejecuta; si no, el driver **FAT** (`fat.vex`) busca el
+   Si es un builtin lo ejecuta; si no, el driver **FAT** (`fat.vx`) busca el
    nombre 8.3 en el root directory, sigue su **cadena de clusters** para cargar
    el fichero a 0x100000 y **salta a su entry** vía puntero de función:
    `prog_main(tabla_api, args)`.
@@ -115,7 +115,7 @@ externas (`mtools`, `mount -t vfat`).
 
 ## Ampliarlo
 
-- Más programas de disco: crea `prog_<x>.vex` (entry `prog_main(api, args)`) y
+- Más programas de disco: crea `prog_<x>.vx` (entry `prog_main(api, args)`) y
   añádelo a `KERNEL_PROGRAMS` en `run.py`.
 - IDT + interrupciones (teclado/timer) con funciones `@Naked` como ISRs.
 - Escritura FAT12 + driver ATA on-demand (hoy la FAT es solo-lectura sobre el

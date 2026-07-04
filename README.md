@@ -181,7 +181,7 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 - **REPL** con TAB completion, historial, búsqueda incremental Ctrl+R, aliases,
   variables de entorno, scripts de inicio (`~/.vestarc`).
 - **VestaShellScript (.vsh)** — lenguaje embebido para scripting del REPL.
-- **Debugger TCP** con protocolo JSON: breakpoints (por addr o `file.vex:line`),
+- **Debugger TCP** con protocolo JSON: breakpoints (por addr o `file.vx:line`),
   step/continue, inspección de registros/memoria/stack, GC stats, source-aware.
 - **Diagramas Mermaid** del pipeline: `--diagram-vex/ir/vel/all` para AST, SSA
   IR, bytecode visualizado.
@@ -211,14 +211,14 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
 # Hola Mundo en Vex
-cat > hola.vex << 'EOF'
+cat > hola.vx << 'EOF'
 i32 main() {
     println("Hola desde Vex ${1 + 1}!");
     return 0;
 }
 EOF
 
-./build/vm --vex hola.vex -o hola
+./build/vm --vex hola.vx -o hola
 ./build/vm --run hola.velb
 # -> Hola desde Vex 2!
 ```
@@ -250,7 +250,7 @@ positivos realistas del borrow checker.
 
 ### Estadísticas clave
 
-La suite de benchmarks abarca **29 workloads multi-lenguaje** con `main.vex`,
+La suite de benchmarks abarca **29 workloads multi-lenguaje** con `main.vx`,
 `main.c`, `main.cpp`, `main.py`, `Main.java` y `main.go` cada uno; el runner
 `tools/bench/run_all_benches.py` incluye **Go (gc)** con su propio color en las
 gráficas. Las cifras publicadas abajo provienen de la última corrida completa
@@ -383,7 +383,7 @@ Python en hot loops puros (geomean Python: 141× más lento que C).
 
 Detalles + metodología + cómo correr los benchmarks en
 [doc/BENCHMARKS.md](./doc/BENCHMARKS.md). Los **29 workloads** multi-lenguaje
-viven en `examples_codes_vex/benchmark/<bench>/` con `main.vex`, `main.c`,
+viven en `examples_codes_vex/benchmark/<bench>/` con `main.vx`, `main.c`,
 `main.cpp`, `main.py`, `Main.java` y `main.go` cada uno. Runner orquestador:
 `python tools/bench/run_all_benches.py` (incluye **Go (gc)** con su propio
 color; genera `bench_results.json` con `runs_individual`, `stats`

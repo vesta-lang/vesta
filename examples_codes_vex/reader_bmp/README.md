@@ -22,16 +22,16 @@ La version modular ya NO usa modulos-parche locales.  Usa la **stdlib** y los
   funcionan identico en interp/JIT/AOT).
 - Flag `-r WxH`: parseado con `vio_parse_int` de la stdlib nativa.
 
-Los antiguos `bmp_io.vex` y `colors.vex` se **eliminaron**.
+Los antiguos `bmp_io.vx` y `colors.vx` se **eliminaron**.
 
 ## Ficheros
 
 | Fichero | Rol |
 |:--------|:----|
-| `bmp.vex` | `class BMP_Image` (mirror de la clase Java): parseo + atributos + volcado.  Usa `vex_fileio` + `bg_rgb`. |
-| `main.vex` | Entry con CLI args (interp/JIT).  Flag opcional `-r WxH` via `vio_parse_int`. |
-| `main_aot.vex` | Variante sin args (path fijo) para AOT.  Codigo correcto; su AOT esta bloqueado por BUG-5 (ver abajo). |
-| `reader_bmp.vex` | Version single-file historica (structs + `ffi_open` msvcrt).  Byte-exacta en interp/JIT/AOT-PE.  Referencia de validacion. |
+| `bmp.vx` | `class BMP_Image` (mirror de la clase Java): parseo + atributos + volcado.  Usa `vex_fileio` + `bg_rgb`. |
+| `main.vx` | Entry con CLI args (interp/JIT).  Flag opcional `-r WxH` via `vio_parse_int`. |
+| `main_aot.vx` | Variante sin args (path fijo) para AOT.  Codigo correcto; su AOT esta bloqueado por BUG-5 (ver abajo). |
+| `reader_bmp.vx` | Version single-file historica (structs + `ffi_open` msvcrt).  Byte-exacta en interp/JIT/AOT-PE.  Referencia de validacion. |
 | `Ejemplo60x3.bmp`, `Ejemplo3x60.bmp` | Imagenes de prueba (60x3 sin padding, 3x60 con padding). |
 
 ## Uso
@@ -41,22 +41,22 @@ Desde `examples_codes_vex/reader_bmp/`, con `vm` = `../../cmake-build-release/vm
 ```sh
 # Version modular con CLI (interp / JIT).  El separador `--` es OBLIGATORIO
 # para pasar el path (ver LIM-4 en BUGS_LIMITACIONES.md):
-vm --vex main.vex -o reader_bmp
+vm --vex main.vx -o reader_bmp
 vm --run reader_bmp.velb -m vm  -- Ejemplo60x3.bmp
 vm --run reader_bmp.velb -m jit -- Ejemplo3x60.bmp
 vm --run reader_bmp.velb -m vm  -- Ejemplo60x3.bmp -r 32x24   # demo parse_int
 
 # Version single-file, portable a los 3 modos (path fijo Ejemplo60x3.bmp):
-vm --vex reader_bmp.vex -o reader_bmp_sf
+vm --vex reader_bmp.vx -o reader_bmp_sf
 vm --run reader_bmp_sf.velb -m vm
-vm -m aot --vex reader_bmp.vex --format pe --emit exe -o reader_bmp_sf_aot.exe
+vm -m aot --vex reader_bmp.vx --format pe --emit exe -o reader_bmp_sf_aot.exe
 ```
 
 ## Validacion byte-exacta
 
 El volcado de pixeles (atributos + bloques truecolor) es **byte-identico** en
 `interp == JIT == AOT-PE == AOT-ELF (WSL)` para ambas imagenes (con y sin
-padding de fila), comparado contra la referencia `reader_bmp.vex`.
+padding de fila), comparado contra la referencia `reader_bmp.vx`.
 
 - `interp` / `JIT`: version modular con CLI args -> byte-exacto.
 - `AOT` (PE y ELF-WSL): validado byte-exacto con una variante auto-contenida

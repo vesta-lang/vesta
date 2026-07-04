@@ -52,11 +52,11 @@ def main():
         print("FALLO: vm --ar no creo libfoo.a")
         print(r.stdout, r.stderr)
         return 1
-    with open(os.path.join(work, "mainA.vex"), "w") as f:
+    with open(os.path.join(work, "mainA.vx"), "w") as f:
         f.write('extern "foo" { fn foo_value() -> i64; }\n'
                 'i64 main() { return foo_value() + 2; }\n')
     mainA_obj = os.path.join(work, "mainA.obj")
-    run([vm, "--vex", os.path.join(work, "mainA.vex"), "-m", "aot",
+    run([vm, "--vex", os.path.join(work, "mainA.vx"), "-m", "aot",
          "--emit", "obj", "--format", "pe", "-o", mainA_obj])
     progA = os.path.join(work, "progA.exe")
     run([vm, "--link", mainA_obj, lib_a, "-o", progA, "--format", "pe"])
@@ -67,19 +67,19 @@ def main():
         rc = 1
 
     # --- B) nuestra .dll ---------------------------------------------------
-    with open(os.path.join(work, "bar.vex"), "w") as f:
+    with open(os.path.join(work, "bar.vx"), "w") as f:
         f.write("i64 bar_value() { return 40; }\n")
     bar_dll = os.path.join(work, "bar.dll")
-    run([vm, "--vex", os.path.join(work, "bar.vex"), "-m", "aot",
+    run([vm, "--vex", os.path.join(work, "bar.vx"), "-m", "aot",
          "--emit", "shared", "--format", "pe", "-o", bar_dll])
     if not os.path.exists(bar_dll):
         print("FALLO: no se emitio bar.dll")
         return 1
-    with open(os.path.join(work, "mainB.vex"), "w") as f:
+    with open(os.path.join(work, "mainB.vx"), "w") as f:
         f.write('extern "bar.dll" { fn bar_value() -> i64; }\n'
                 'i64 main() { return bar_value() + 2; }\n')
     mainB_obj = os.path.join(work, "mainB.obj")
-    run([vm, "--vex", os.path.join(work, "mainB.vex"), "-m", "aot",
+    run([vm, "--vex", os.path.join(work, "mainB.vx"), "-m", "aot",
          "--emit", "obj", "--format", "pe", "-o", mainB_obj])
     progB = os.path.join(work, "progB.exe")
     run([vm, "--link", mainB_obj, bar_dll, "-o", progB, "--format", "pe"])

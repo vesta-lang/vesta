@@ -5,7 +5,7 @@ Phase AOT.5 / gc<T> -- enlace standalone de un programa con GC opt-in usando
 NUESTRO linker (vm --link), sin g++/ld externos.
 
 Escenario (PE, nativo Windows):
-  1. Un .vex usa gc<Box> (GC opt-in) -> el .obj referencia vex_gc_alloc_ptr /
+  1. Un .vx usa gc<Box> (GC opt-in) -> el .obj referencia vex_gc_alloc_ptr /
      vex_gc_register_aot_stackmaps (definidos en libvesta_gc.a, libc-only).
   2. `vm --link prog.obj libvesta_gc.a -o prog.exe` debe:
        - extraer del .a solo los miembros necesarios (pull perezoso),
@@ -43,7 +43,7 @@ def main():
         return 2
 
     work = tempfile.mkdtemp(prefix="gc_link_")
-    src = os.path.join(work, "gc.vex")
+    src = os.path.join(work, "gc.vx")
     with open(src, "w") as f:
         f.write("class Box { i64 v; Box(i64 x) { this.v = x; } }\n"
                 "i64 main() { gc<Box> b = new Box(42); return b.v; }\n")
