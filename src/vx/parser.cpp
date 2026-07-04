@@ -571,6 +571,14 @@ void Parser::collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
             tex.name = fd->name;
             tex.is_public = fd->is_public;
             is_template = true;
+        } else if (fd->is_comptime || fd->is_macro) {
+            // NS.2/MC: exportar el TEXTO de una fn comptime/macro para que el
+            // consumidor la inyecte, la lowere a IR (__macro_<name>) y la
+            // evalue en compile-time con su ComptimeRuntime (JIT) -- cross-
+            // modulo + explota el cache de IR del consumidor.
+            tex.name = fd->name;
+            tex.is_public = fd->is_public;
+            is_template = true;
         }
         break;
     }
