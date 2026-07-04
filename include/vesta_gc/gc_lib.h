@@ -1,8 +1,8 @@
 /**
  * @file vesta_gc/gc_lib.h
- * @brief C-ABI de `libvesta_gc` -- el GC opt-in de Vex para codigo nativo AOT.
+ * @brief C-ABI de `libvesta_gc` -- el GC opt-in de Vesta para codigo nativo AOT.
  *
- * `gc<T>` de Vex (opt-in via `import vex.gc`) baja a CALLs a estas funciones,
+ * `gc<T>` de Vesta (opt-in via `import vex.gc`) baja a CALLs a estas funciones,
  * igual que vex_io / vex_mem.  El motor por debajo es EL MISMO `gc::GcHeap` que
  * usan el interprete y el JIT (generacional mark-sweep + handle table) -> el
  * comportamiento es UNIFORME en los tres backends por construccion, sin

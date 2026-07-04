@@ -135,15 +135,15 @@ bool ir_pass_elide_unwrap(IrFunction &fn);
  * @brief Pase Dead Alloc Elimination.
  *
  * Elimina CALLs a funciones synthetic @c __new_<ClassName> (helpers de
- * allocacion emitidos por el frontend Vex) y otros allocators puros
+ * allocacion emitidos por el frontend Vesta) y otros allocators puros
  * (@c vrt_newobj, @c vrt_newobj_handle, @c vrt_register_alloc) cuyo
  * resultado nunca se usa.
  *
- * El frontend Vex emite @c new ClassName() como un @c call ptr
+ * El frontend Vesta emite @c new ClassName() como un @c call ptr
  * @c @__new_ClassName().  Si el SSA value resultante no se usa
  * (e.g. @c Calculadora a = new Calculadora(); return 0; donde @c a
  * nunca se referencia), eliminar la CALL es semanticamente seguro
- * para Vex (solo presion GC adicional como efecto observable).
+ * para Vesta (solo presion GC adicional como efecto observable).
  *
  * Coste eliminado: 1 alloc completa (~10 ns con PtrHandleMap) por
  * iteracion del loop.  Para benches como @c 100_reflection_full con
@@ -194,7 +194,7 @@ bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
  * @brief Promociona patrones `malloc(N) + ... + free(p)` locales sin
  *        escape a `ALLOCA host_alloca`.
  *
- * Cuando una funcion Vex usa @c malloc/free localmente (sin escape via
+ * Cuando una funcion Vesta usa @c malloc/free localmente (sin escape via
  * return ni stores a memoria GC), el coste del allocator (~200-500 ns
  * por call) en loops domina el wall-time.  Esta pasada convierte el
  * patron a `sub rsp, N` (1 instr, ~1 ns) y elimina el RAW_FREE
@@ -285,7 +285,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
  *
  *   (B) Cast de constantes: @c sext.T @c (const @c K) -> @c const.T
  *       @c sign_extend(K).  Idem para @c zext / @c trunc / @c bitcast.
- *       Aplica sobre las cadenas que el frontend Vex emite cuando
+ *       Aplica sobre las cadenas que el frontend Vesta emite cuando
  *       i32 ops se promueven a i64 y vuelven (visible en el JIT como
  *       @c shl rax,32 / @c sar rax,32 sobre un imm-zero).
  *

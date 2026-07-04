@@ -12,7 +12,7 @@
 
 /**
  * @file ast.h
- * @brief Arbol de Sintaxis Abstracta (AST) para el lenguaje Vex.
+ * @brief Arbol de Sintaxis Abstracta (AST) para el lenguaje Vesta.
  *
  * Modelo de jerarquia plana con discriminador (NodeKind) + downcast
  * controlado.  Cada nodo lleva su SourceLoc para reportes y la propiedad
@@ -23,7 +23,7 @@
  *   - ModuleNode (raiz): lista de FunctionDecl, GlobalVarDecl, ClassDecl,
  *                       StructDecl, EnumDecl, ExternFnDecl.
  *   - Statements: Block, VarDecl, ExprStmt, If, While, DoWhile, For (C),
- *                 ForEach (Vex), Return, Break, Continue, Goto, Label,
+ *                 ForEach (Vesta), Return, Break, Continue, Goto, Label,
  *                 Try/Catch/Finally, Synchronized, Throw, Match.
  *   - Expressions: literales (int/float/bool/null/char/string con
  *                  interpolacion), Ident, Binary, Unary, Assign, Call,
@@ -308,7 +308,7 @@ struct TypeNode : Node {
  * @struct PrimitiveTypeNode
  * @brief Nodo de tipo primitivo (i32, u8, f64, ...).
  *
- * La categoria primitiva se almacena ya canonicalizada (Vex acepta
+ * La categoria primitiva se almacena ya canonicalizada (Vesta acepta
  * ambos estilos i32 / int32_t y aqui se guarda solo la forma canonica).
  */
 struct PrimitiveTypeNode : TypeNode {
@@ -371,7 +371,7 @@ struct PointerTypeNode : TypeNode {
  * @brief Tipo array nativo: T[N] (size fijo) o T[] (size variable /
  * decay-to-ptr).
  *
- * En Vex los arrays nativos son simplemente bloques contiguos de
+ * En Vesta los arrays nativos son simplemente bloques contiguos de
  * memoria; @c element_type indica el tipo de cada elemento y
  * @c size_expr el numero de elementos.  Cuando @c size_expr es nulo
  * el array es @c T[] (sin tamano conocido en compile time, util como
@@ -697,7 +697,7 @@ struct CallExpr : Expr {
     std::vector<std::unique_ptr<TypeNode>> type_args;
     /// A.43.10: macros Lisp con quote/emit/splicing.  Cuando el type
     /// checker detecta @c comptime_emit_expr("texto"), parsea el
-    /// texto como una expresion Vex, lo type-checa en el contexto
+    /// texto como una expresion Vesta, lo type-checa en el contexto
     /// actual y guarda el AST resultante aqui.  El lowering, al ver
     /// este campo no-null, baja la expresion sustituida en lugar de
     /// emitir una llamada.  Equivalente al `splice` de Lisp/Scheme
@@ -1109,7 +1109,7 @@ struct LambdaExpr : Expr {
     /// almacena en un campo).  Implica @c env_in_heap, pero el env se aloca
     /// con @c RAW_ALLOC host SIN etiqueta (no GC, no "__closure_env"): el
     /// destructor del contenedor lo libera (RAII), igual que un campo
-    /// @c unique<T>.  Modelo "sin GC" -- ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+    /// @c unique<T>.  Modelo "sin GC" -- ver doc/VMdoc/Vesta/ClosuresEnCampos.md.
     bool env_owned_by_field = false;
 
     LambdaExpr() : Expr(NodeKind::LambdaExpr) {}
@@ -1142,7 +1142,7 @@ struct VarDeclStmt : Stmt {
     /// Phase AS inc.2: storage-class `register("reg") T name;` -- la
     /// variable vive en el registro fisico nombrado (NASM).  En el
     /// cuerpo @c asm el programador usa el registro directamente, no el
-    /// nombre Vex.  Vacio = sin storage register (var-decl normal).  Lo
+    /// nombre Vesta.  Vacio = sin storage register (var-decl normal).  Lo
     /// consumen el backend port-C (inc.3) y el JIT (inc.5).
     std::string reg_binding;
     VarDeclStmt() : Stmt(NodeKind::VarDeclStmt) {}
@@ -1364,7 +1364,7 @@ struct SynchronizedStmt : Stmt {
  *        (que es bytecode .vel de la VM).
  *
  * El cuerpo es texto NASM Intel verbatim, capturado por raw-slicing del
- * source (no se tokeniza).  Las variables Vex se enlazan a registros via
+ * source (no se tokeniza).  Las variables Vesta se enlazan a registros via
  * la storage-class @c register("reg") en su declaracion (Incremento 2);
  * en el Incremento 1 el cuerpo es opaco.  Los calificadores siguen la
  * semantica C (@c volatile por defecto): @c nomem, @c preserves_flags,
@@ -1478,7 +1478,7 @@ struct FunctionDecl : Node {
     /// En ambos casos se rellena este vector; @c is_comptime distingue el modo.
     std::vector<std::string> type_params;
     /// marca `@Macro` -- comptime fn cuyo string de retorno
-    /// se INYECTA como codigo Vex en el call site (parse + lower).
+    /// se INYECTA como codigo Vesta en el call site (parse + lower).
     /// Equivalente a invocar `comptime_emit_expr(my_fn(args))`
     /// transparentemente.  Solo aplica a comptime fns que retornan
     /// string.  Permite la sintaxis `i32 r = mi_macro(args);` con
@@ -1626,7 +1626,7 @@ struct ConceptDecl : Node {
  * @struct ExternFnDecl
  * @brief FFI declarativo - declaracion `extern "lib.dll" fn name(...) -> R;`
  *
- * Sintaxis Vex:
+ * Sintaxis Vesta:
  * @code
  *     extern "user32.dll" {
  *         fn MessageBoxA(i64 hwnd, ptr text, ptr caption, i32 type) -> i32;
@@ -1832,7 +1832,7 @@ struct ImportDecl : Node {
  * puramente lexical.
  *
  * Acceso desde fuera del namespace: sintaxis qualified @c foo.X
- * (no @c foo::X -- Vex prefiere el punto sobre el scope-op de C++).
+ * (no @c foo::X -- Vesta prefiere el punto sobre el scope-op de C++).
  */
 struct NamespaceDecl : Node {
     std::string name; ///< "ui", "audio", "std.collections" (path punteado)
@@ -2070,7 +2070,7 @@ struct ClassMethodDecl : Node {
 
 /**
  * @struct ClassDecl
- * @brief Declaracion de una clase Vex.
+ * @brief Declaracion de una clase Vesta.
  *
  * Reference type con semantica Java: instancias creadas con
  * @c new ClassName(args) viven en heap (NEWOBJ), gestionadas por GC.

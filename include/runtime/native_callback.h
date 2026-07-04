@@ -1,8 +1,8 @@
 /**
  * @file native_callback.h
- * @brief Callbacks Vex -> C nativos.
+ * @brief Callbacks Vesta -> C nativos.
  *
- * callback-ABI (2026-06-06).  Permite pasar una funcion Vex como callback
+ * callback-ABI (2026-06-06).  Permite pasar una funcion Vesta como callback
  * a una funcion C nativa (qsort, Win32 wndproc, etc.).  Patron de uso:
  *
  *   extern "msvcrt.dll" {
@@ -24,7 +24,7 @@
  *
  * Implementacion: @c as_native_callback baja a un CALLN al wrapper
  * @c vex_get_native_thunk, que llama a @c jit::compile_native_callback.
- * Este compila la fn Vex DIRECTAMENTE con un entry de ABI C nativo (modo
+ * Este compila la fn Vesta DIRECTAMENTE con un entry de ABI C nativo (modo
  * callback del selector): el prologo lee @c ProcessVM* via TLS/call, mueve
  * los args nativos a los slots de los params, y solo salva/restaura el
  * banco de registros VM si el cuerpo puede ensuciarlo (re-entrancia).  Una

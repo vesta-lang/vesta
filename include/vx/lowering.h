@@ -12,7 +12,7 @@
 
 /**
  * @file lowering.h
- * @brief Pase de bajada AST de Vex -> ir::IrModule (SSA).
+ * @brief Pase de bajada AST de Vesta -> ir::IrModule (SSA).
  *
  * Subset cubierto en(intencionalmente reducido para validar el
  * pipeline end-to-end pronto):
@@ -141,7 +141,7 @@ class Lowering {
         string_eq_override_ = eq;
     }
 
-    /// @SyncImpl: registra los nombres de las funciones Vex que reemplazan
+    /// @SyncImpl: registra los nombres de las funciones Vesta que reemplazan
     /// la primitiva de monitor de `synchronized`.  Cuando NO estan vacios,
     /// @c emit_monitor_op emite un CALL a @p enter / @p exit en LOS 3 MODOS
     /// (interp/JIT/AOT) en vez del opcode MONENTER/MONEXIT (interp/JIT) o
@@ -758,7 +758,7 @@ class Lowering {
     /**
      * @brief Exporta @c TypeChecker::class_layouts_ al @c IrModule::classes.
      *
-     * Convierte el modelo interno del frontend Vex a la representacion
+     * Convierte el modelo interno del frontend Vesta a la representacion
      * portable del IR.  Cada @c ClassLayout produce un @c ir::IrClass
      * con sus fields/methods/super/interfaces.  Esta info la consumen
      * los transpilers (port-C, port-Java, ...) para emitir POO eficiente
@@ -812,7 +812,7 @@ class Lowering {
     ir::IrValueId lower_index_addr(ast::IndexExpr *e);
 
     /**
-     * @brief Tamano en bytes del tipo Vex (consulta layout para STRUCT).
+     * @brief Tamano en bytes del tipo Vesta (consulta layout para STRUCT).
      *
      * @return Tamano del tipo, o 0 si no se puede determinar (e.g. void
      *         o struct desconocido).
@@ -1005,7 +1005,7 @@ class Lowering {
     /// existe para el callee de @c lower_call, emitimos
     /// @c CALLN @Method("<lib>:<name>") con args en R1..RN y registramos
     /// el import via @c out_mod_->register_native_import.  Sin entry,
-    /// el flujo normal CALLVM (funcion Vex local) sigue intacto.
+    /// el flujo normal CALLVM (funcion Vesta local) sigue intacto.
     std::unordered_map<std::string, std::string> extern_lib_by_fn_name_;
 
     /// Externs cuyo `&fn` (o promocion a cfn) se uso como function value.
@@ -1313,7 +1313,7 @@ class Lowering {
                                uint32_t source_line);
     ir::IrValueId emit_strgetbytes(ir::IrValueId v_str, uint32_t source_line);
 
-    // --- Vex Embed Inc 0: string value-type (solo native_poo_) ---
+    // --- Vesta Embed Inc 0: string value-type (solo native_poo_) ---
     /// Construye el repr value-string {ptr,len,cap} (24 bytes) en stack
     /// (ALLOCA) desde un literal: aloca buffer en heap (RAW_ALLOC len+1),
     /// copia los bytes del literal + nul final, y escribe los 3 campos
@@ -1322,7 +1322,7 @@ class Lowering {
     /// @c native_poo_ (AOT Embed/Bare); el path Full usa StringObject GC.
     ir::IrValueId build_native_string_from_literal(ast::StringLitExpr *slit,
                                                    uint32_t source_line);
-    /// Vex Embed: construye un value-string {ptr,len,cap} (24 bytes) en
+    /// Vesta Embed: construye un value-string {ptr,len,cap} (24 bytes) en
     /// stack desde un valor @c char en runtime (@p v_char).  Aloca un
     /// buffer de 2 bytes (RAW_ALLOC), escribe el byte del char en
     /// buf[0] + nul en buf[1], y rellena los campos len=1, cap=2.
@@ -1375,7 +1375,7 @@ class Lowering {
     /// @c i64 __vex_strlen(u8* s).
     std::string ensure_strdata_helper();
     std::string ensure_strlen_helper();
-    /// Vex Embed Inc 6 (encoding UTF-8): @c .length() cuenta CODE-POINTS (no
+    /// Vesta Embed Inc 6 (encoding UTF-8): @c .length() cuenta CODE-POINTS (no
     /// bytes; @c .bytes() da los bytes via @c emit_native_str_len).  El helper
     /// @c __vex_str_cplen(u8* p, i64 byte_len) -> i64 recorre los bytes y suma
     /// 1 por cada byte que NO sea continuacion UTF-8 ((b & 0xC0) != 0x80).
@@ -1384,7 +1384,7 @@ class Lowering {
     std::string ensure_str_cplen_helper();
     ir::IrValueId emit_native_str_cplen(ir::IrValueId v_ptr, ir::IrValueId v_blen,
                                         uint32_t source_line);
-    /// Vex Embed Inc 6: @c .wstr() devuelve un @c u16* NUL-terminado en
+    /// Vesta Embed Inc 6: @c .wstr() devuelve un @c u16* NUL-terminado en
     /// UTF-16LE para FFI Win32 @c *W.  El helper
     /// @c __vex_str_to_utf16(u8* p, i64 byte_len) -> u16* aloca un buffer
     /// (@c RAW_ALLOC -> malloc/override), decodifica UTF-8 -> UTF-16 (pares
@@ -1453,14 +1453,14 @@ class Lowering {
                                       ir::IrValueId v_len,
                                       uint32_t source_line,
                                       int64_t known_len = -1);
-    /// str_make optimo (Vex Embed): COPIA @p v_len bytes de @p v_ptr a un
+    /// str_make optimo (Vesta Embed): COPIA @p v_len bytes de @p v_ptr a un
     /// value-string PROPIO (slot 24B + buffer; RAII lo libera).  Sin GC.
     /// @p known_len >= 0 -> especializa (Tier B sin rama).  Solo native_poo_.
     ir::IrValueId build_native_string_from_buffer(ir::IrValueId v_ptr,
                                                   ir::IrValueId v_len,
                                                   uint32_t source_line,
                                                   int64_t known_len = -1);
-    /// Vex Embed Inc 1: concatena dos value-strings nativos @p v_a y
+    /// Vesta Embed Inc 1: concatena dos value-strings nativos @p v_a y
     /// @p v_b produciendo un NUEVO string owned (slot de 24 bytes en
     /// stack + buffer fresco en heap de total+1 bytes con ambos
     /// contenidos copiados y nul final).  Devuelve el PTR al slot
@@ -1501,7 +1501,7 @@ class Lowering {
     void emit_word_copy_loop(ir::IrValueId dst_base, ir::IrValueId src_base,
                              ir::IrValueId v_len, uint32_t source_line);
 
-    // --- Vex Embed Inc 2: mutacion += + interpolacion (solo native_poo_) ---
+    // --- Vesta Embed Inc 2: mutacion += + interpolacion (solo native_poo_) ---
     /// Append in-place de @p v_app_len bytes (en @p v_app_ptr, host) al
     /// value-string cuyo slot {ptr,len,cap} apunta @p v_dst_slot.  Crece
     /// el buffer si la capacidad es insuficiente (RAW_ALLOC nuevo de
@@ -1515,7 +1515,7 @@ class Lowering {
                                              ir::IrValueId v_app_ptr,
                                              ir::IrValueId v_app_len,
                                              uint32_t source_line);
-    /// Vex Embed Inc 2: construye un value-string owned a partir de un
+    /// Vesta Embed Inc 2: construye un value-string owned a partir de un
     /// literal interpolado @p slit ("texto ${a} mas ${b}").  Concatena las
     /// partes literales con cada @c ${expr} convertido a texto INLINE
     /// (string -> bytes directos, char -> 1 byte, int -> itoa decimal por
@@ -1523,7 +1523,7 @@ class Lowering {
     /// value-string resultado (owned; el caller registra STRING_FREE).
     /// Solo en @c native_poo_.
     ir::IrValueId build_native_string_interp(ast::StringLitExpr *slit);
-    /// Vex Embed Inc 2: escribe en @p v_buf (host, >= 24 bytes) la
+    /// Vesta Embed Inc 2: escribe en @p v_buf (host, >= 24 bytes) la
     /// representacion decimal ASCII de @p v_val (un I64).  @p is_signed
     /// controla el manejo del signo (emite '-' si negativo).  Devuelve el
     /// IrValue I64 con la longitud escrita (sin nul).  itoa INLINE via
@@ -1532,7 +1532,7 @@ class Lowering {
     ir::IrValueId emit_native_itoa_to_buf(ir::IrValueId v_buf,
                                           ir::IrValueId v_val, bool is_signed,
                                           uint32_t source_line);
-    /// Vex Embed Inc 2: garantiza que el helper itoa nativo
+    /// Vesta Embed Inc 2: garantiza que el helper itoa nativo
     /// @c __vex_itoa_s (signed) / @c __vex_itoa_u (unsigned) este emitido
     /// como funcion IR independiente en @c out_mod_ (una sola vez por
     /// modulo y signedness).  Firma: @c (u8* buf, i64 val) -> i64 len.
@@ -1546,7 +1546,7 @@ class Lowering {
     /// Flags: el helper itoa signed/unsigned ya esta emitido en este
     /// modulo (indice 0=unsigned, 1=signed).  Evita duplicar la funcion.
     bool itoa_helper_emitted_[2] = {false, false};
-    /// Vex Embed Inc 2: helper bool->string nativo
+    /// Vesta Embed Inc 2: helper bool->string nativo
     /// @c i64 __vex_btoa(u8* buf, i64 b): escribe "true" (4) o "false"
     /// (5) en @p buf y devuelve la longitud.  Como funcion APARTE con
     /// branch -> evita el const-fold mid-expression del append condicional.
@@ -1560,7 +1560,7 @@ class Lowering {
     /// Solo en @c native_poo_.
     std::string ensure_ctoa_helper();
     bool ctoa_helper_emitted_ = false; ///< El helper ctoa ya esta emitido.
-    /// Vex Embed Inc 4: helper de comparacion lexicografica de strings
+    /// Vesta Embed Inc 4: helper de comparacion lexicografica de strings
     /// value-type nativos.  Firma:
     /// @c i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb).
     /// Devuelve -1/0/1 (memcmp + tie-break por longitud: a la izquierda
@@ -1636,7 +1636,7 @@ class Lowering {
     ///   - global @c __vex_strlen_fp (slot 8 B en ".data").
     ///   - los helpers BASELINE @c __vex_strcmp_base / @c __vex_strlen_base
     ///     (la impl escalar del compilador; el dispatch los usa por defecto y
-    ///     son llamables por nombre desde Vex para que un override delegue).
+    ///     son llamables por nombre desde Vesta para que un override delegue).
     ///   - el helper @c __vex_strdisp_init() que setea ambos fp (override del
     ///     usuario si existe, si no el baseline).  El compilador NO hace cpuid
     ///     aqui: el default es baseline; la SIMD vendra de la lib importada.
@@ -1858,7 +1858,7 @@ class Lowering {
                         ///< clase NATIVA (calloc) al exit del scope (RAII; sin
                         ///< GC). aot_lower lo convierte en call<free>.  Sin
                         ///< dangling.
-            STRING_FREE, ///< Vex Embed Inc 0: liberar el buffer de un
+            STRING_FREE, ///< Vesta Embed Inc 0: liberar el buffer de un
                         ///< string value-type (native_poo_) al exit del
                         ///< scope.  operands[0] = PTR al slot de 24 bytes
                         ///< {ptr,len,cap}.  Emite LOAD ptr@[slot+0] +

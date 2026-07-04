@@ -123,7 +123,7 @@ vrt_handle vrt_gc_alloc_pinned(vrt_proc *proc, size_t size);
  * El bloque vive hasta que se invoca @c vrt_raw_free.  No participa
  * del GC: el caller es responsable de liberarlo.
  *
- * Usado por callbacks Vex que necesitan alocar structs (WNDCLASSEXW,
+ * Usado por callbacks Vesta que necesitan alocar structs (WNDCLASSEXW,
  * MSG, etc) o buffers para pasar a APIs nativas que esperan host_ptr.
  *
  * @return Puntero host dereferenciable, o @c NULL si OOM.

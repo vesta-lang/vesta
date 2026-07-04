@@ -12,9 +12,9 @@
 
 /**
  * @file types.h
- * @brief Representacion canonica del sistema de tipos del lenguaje Vex.
+ * @brief Representacion canonica del sistema de tipos del lenguaje Vesta.
  *
- * En Vex se aceptan dos estilos sintacticos para los tipos primitivos
+ * En Vesta se aceptan dos estilos sintacticos para los tipos primitivos
  * (estilo C++/stdint con sufijo _t y estilo corto sin sufijo); ambos
  * son tokens distintos pero designan exactamente el mismo tipo a
  * efectos semanticos.  Este modulo concentra la conversion canonica:
@@ -50,7 +50,7 @@ namespace vx {
 
 /**
  * @enum PrimitiveKind
- * @brief Tipos primitivos canonicos del lenguaje Vex.
+ * @brief Tipos primitivos canonicos del lenguaje Vesta.
  *
  * Los valores ordinales son estables.  Si se añaden nuevos tipos,
  * hacerlo SIEMPRE al final del enum para que las tablas planas
@@ -78,7 +78,7 @@ enum class PrimitiveKind : uint8_t {
     /// guarda en @c Type::struct_name; el TypeChecker mantiene el
     /// layout (offsets de campos + tamano total) en una tabla aparte.
     STRUCT,
-    /// Tipo de instancia de clase Vex (reference type).  El nombre de
+    /// Tipo de instancia de clase Vesta (reference type).  El nombre de
     /// la clase se guarda en @c Type::struct_name (reusamos el campo
     /// para no duplicar storage).  A diferencia de STRUCT, las
     /// instancias viven en heap (NEWOBJ) y se acceden via puntero;
@@ -116,7 +116,7 @@ enum class PrimitiveKind : uint8_t {
     /// and `pointee` (return type); el call site las usa para validar
     /// aridad y compatibilidad de argumentos en compile time.
     FUNCTION,
-    /// Tipo @c string de Vex.  Reference-type al @c StringObject
+    /// Tipo @c string de Vesta.  Reference-type al @c StringObject
     /// gestionado por GC.  Internamente es un GcHandle (i64) que el
     /// runtime dereferencia para acceder al header (encoding, length,
     /// byte_len, hash) y al buffer FLAT/ROPE/SLICE.  Cero overhead vs
@@ -1103,7 +1103,7 @@ inline PrimitiveKind promote_arith(PrimitiveKind a, PrimitiveKind b) noexcept {
 /**
  * @brief Mapea CHAR a U8 para las decisiones de aritmetica entera.
  *
- * En Vex un @c char es un byte sin signo (0-255), estilo C.  El resto
+ * En Vesta un @c char es un byte sin signo (0-255), estilo C.  El resto
  * del checker NO considera CHAR como numerico (is_numeric falso) para
  * evitar coerciones implicitas no deseadas, pero la aritmetica de char
  * (`'a' + 'b'`) debe tratarse como aritmetica u8.  Este helper traduce

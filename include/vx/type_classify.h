@@ -10,7 +10,7 @@
  * @brief Clasificador de tipos para la frontera C / ownership de structs.
  *
  * Fase 0 del plan de interop C + ownership (ver
- * doc/VMdoc/Vex/InteropC.md y la memoria del proyecto).  Define dos
+ * doc/VMdoc/Vesta/InteropC.md y la memoria del proyecto).  Define dos
  * predicados PUROS sobre un @c Type (con un resolver de layouts de struct
  * para recursar sobre campos).  NO tocan codegen: son analisis estatico que
  * alimentan la inferencia de structs (Fase 1), el move-checker (Fase 3) y la

@@ -213,7 +213,7 @@ typedef struct DecodedInstr {
          *                    r1 = r_value (valor a almacenar).
          *
          * El opcode siempre opera sobre @c i64 (8 bytes); el frontend
-         * Vex realiza @c truncate post-load para tipos mas pequenos
+         * Vesta realiza @c truncate post-load para tipos mas pequenos
          * (mismo patron que los accesos a campos de instancia).
          */
         struct {

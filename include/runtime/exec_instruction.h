@@ -461,7 +461,7 @@ void exec_instr_strmake(ProcessVM *vm, const DecodedInstr &instr);
  *
  * Variante de STRMAKE (0x46) para casos donde el buffer reside en memoria
  * del proceso host (resultado de @c malloc, @c gcallocp, etc.) en lugar de
- * memoria VM.  Este escenario aparece naturalmente en codigo Vex que
+ * memoria VM.  Este escenario aparece naturalmente en codigo Vesta que
  * combina punteros raw (`u8* buf = malloc(n)`) con la API de strings:
  * `string s = str_make(buf, n)`.
  *
@@ -584,7 +584,7 @@ void exec_instr_strfinalize(ProcessVM *vm, const DecodedInstr &instr);
  *
  * Devuelve en R00 el puntero host a MethodInfo del metodo i-esimo, o 0 si
  * cls es nulo o idx >= cls->method_count.  Permite iteracion dinamica
- * via builtin Vex `getMethodAt(cls, i)` (idx desde registro, no inmediato).
+ * via builtin Vesta `getMethodAt(cls, i)` (idx desde registro, no inmediato).
  * Encoding FIXED_4: [0x00][0x6E][ctrl][0x00] con ctrl=(r_idx<<4)|r_cls.
  */
 void exec_instr_getmethat(ProcessVM *vm, const DecodedInstr &instr);
@@ -593,7 +593,7 @@ void exec_instr_getmethat(ProcessVM *vm, const DecodedInstr &instr);
  * @brief Ejecuta GETFLDAT r_cls, r_idx: variante reg-reg de getfield (0xD8).
  *
  * Devuelve en R00 el puntero host a FieldInfo del campo i-esimo, o 0.
- * Builtin Vex `getFieldAt(cls, i)`.  Encoding FIXED_4 igual que getmethat.
+ * Builtin Vesta `getFieldAt(cls, i)`.  Encoding FIXED_4 igual que getmethat.
  */
 void exec_instr_getfldat(ProcessVM *vm, const DecodedInstr &instr);
 
@@ -602,7 +602,7 @@ void exec_instr_getfldat(ProcessVM *vm, const DecodedInstr &instr);
  *
  * Lee `vm->scheduler.vm_reference.script_args.size()` y lo escribe en r_dst.
  * Encoding FIXED_4: [0x00][0x6B][ctrl][0x00] con ctrl=(r_dst<<4).
- * Builtin Vex `args_count()`.
+ * Builtin Vesta `args_count()`.
  */
 void exec_instr_getargc(ProcessVM *vm, const DecodedInstr &instr);
 
@@ -613,7 +613,7 @@ void exec_instr_getargc(ProcessVM *vm, const DecodedInstr &instr);
  * (UTF-8) con los bytes del arg correspondiente y deposita el GcHandle en
  * r_dst.  Si idx fuera de rango, deposita 0 (GC_NULL_HANDLE).
  * Encoding FIXED_4: [0x00][0x6C][ctrl][0x00] con ctrl=(r_dst<<4)|r_idx.
- * Builtin Vex `args_get(i)`.
+ * Builtin Vesta `args_get(i)`.
  */
 void exec_instr_getarg(ProcessVM *vm, const DecodedInstr &instr);
 
@@ -789,7 +789,7 @@ void exec_instr_getpid(ProcessVM *vm, const DecodedInstr &instr);
  * inverso), devuelve @c GC_NULL_HANDLE.  El llamante puede comprobar este
  * caso para fallar limpio (no hay segfault ni corrupcion).
  *
- * Caso de uso primario: @c synchronized(obj) en Vex.  El frontend tiene
+ * Caso de uso primario: @c synchronized(obj) en Vesta.  El frontend tiene
  * @c obj como host_ptr (resultado de @c gcderef en el constructor); para
  * @c monenter necesita el GcHandle, que lo obtiene con @c GCHANDLE.
  *
@@ -860,7 +860,7 @@ void exec_instr_gcfinall(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
  * @brief GCCOLLECT (0x8C): fuerza minor+major GC del proceso + drena
- *        finalizadores.  Builtin Vex gc_collect().
+ *        finalizadores.  Builtin Vesta gc_collect().
  */
 void exec_instr_gccollect(ProcessVM *vm, const DecodedInstr &instr);
 
@@ -1171,7 +1171,7 @@ void exec_instr_spawn(ProcessVM *vm, const DecodedInstr &instr);
  *   - reg2 == -1 (Here): mismo scheduler que el padre.
  *   - reg2 >=  0       : pinned al scheduler reg2 % num_schedulers.
  *
- * Sirve a `spawn here { ... }` y `spawn on(N) { ... }` en Vex.
+ * Sirve a `spawn here { ... }` y `spawn on(N) { ... }` en Vesta.
  * El resto (PC, RSP/RBP, copia de codigo, make_ready, retorno del PID
  * encoded en R0) es identico a SPAWN.
  *
@@ -1189,7 +1189,7 @@ void exec_instr_spawn_on(ProcessVM *vm, const DecodedInstr &instr);
  *   - 0 si el archivo no existe o esta vacio (failure).
  *   - init_pc del modulo cargado (>0) en caso de exito.
  *
- * NO ejecuta automaticamente el modulo cargado: el caller (la builtin Vex
+ * NO ejecuta automaticamente el modulo cargado: el caller (la builtin Vesta
  * @c loadmodule) debe usar `callvmr` con el init_pc devuelto para
  * invocar el main del nuevo modulo, cuyo prologo llama a `__module_init`
  * y registra las clases en el ClassRegistry global.
@@ -1213,7 +1213,7 @@ void exec_instr_unloadmod(ProcessVM *vm, const DecodedInstr &instr);
  * @brief PANIC (0x5A): lanza un @c FatalError con kind=FATAL_USER_ABORT
  *        y message = bytes leidos de @c [vm_addr, len] desde la VM mem.
  *
- * Usado por el builtin Vex @c panic("...") para abortar el proceso de
+ * Usado por el builtin Vesta @c panic("...") para abortar el proceso de
  * forma capturable.  Si hay try/catch FatalError activo lo captura;
  * si no, mata el proceso (no la VM).
  *
@@ -1233,7 +1233,7 @@ void exec_instr_panic(ProcessVM *vm, const DecodedInstr &instr);
  *   +20 [4]  start_line   (linea 1-based del inicio del metodo)
  *
  * Idempotente: sobreescribe entrada previa para el mismo MethodInfo.
- * Emitido por @c __module_init del frontend Vex tras cada @c defmethod.
+ * Emitido por @c __module_init del frontend Vesta tras cada @c defmethod.
  */
 void exec_instr_setmethdbg(ProcessVM *vm, const DecodedInstr &instr);
 
@@ -1609,7 +1609,7 @@ void exec_instr_addadvice(ProcessVM *vm, const DecodedInstr &instr);
  *   offset = byte offset dentro de @c ClassInfo::static_data
  *
  * Lee 8 bytes desde @c cls->static_data + offset (memoria HOST).  El
- * frontend Vex hace truncate post-load para tipos mas pequenos
+ * frontend Vesta hace truncate post-load para tipos mas pequenos
  * (i8/i16/i32) usando el mismo patron que para fields de instancia.
  *
  * Si @c cls es nullptr o @c cls->static_data es nullptr (la clase no
@@ -1661,7 +1661,7 @@ void exec_instr_dlsym(ProcessVM *vm, const DecodedInstr &instr);
  * @c invoke_native_unchecked para mantener la misma calling convention.
  * Sin proteccion SEH/EH: si necesitas captura de crashes nativos, usa
  * el wrapper estatico CALLN o envuelve la llamada en @c try/@c catch
- * @c FatalError desde Vex.
+ * @c FatalError desde Vesta.
  */
 void exec_instr_callni(ProcessVM *vm, const DecodedInstr &instr);
 
@@ -1783,7 +1783,7 @@ void exec_instr_fastpop(ProcessVM *vm, const DecodedInstr &instr);
  *   offset = byte offset dentro de @c ClassInfo::static_data
  *
  * Escribe 8 bytes a @c cls->static_data + offset (memoria HOST).  El
- * frontend Vex hace truncate / sign-extend pre-store para tipos mas
+ * frontend Vesta hace truncate / sign-extend pre-store para tipos mas
  * pequenos cuando el field declarado es signed.
  *
  * Mismo manejo de errores que @c getstatic: @c FATAL_NULL_POINTER si

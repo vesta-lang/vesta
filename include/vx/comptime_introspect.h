@@ -37,7 +37,7 @@ namespace vx {
 /**
  * @brief Codigos del builtin @c kind<T>().
  *
- * Devuelto como i32 al codigo Vex.  Los valores son ESTABLES entre
+ * Devuelto como i32 al codigo Vesta.  Los valores son ESTABLES entre
  * builds: si se añade un kind nuevo, va al final de la lista para
  * no romper codigo existente que cheque kinds via comparacion entera.
  */
@@ -61,7 +61,7 @@ enum class ComptimeKind : int32_t {
 };
 
 /**
- * @brief Tamano en bytes de un tipo Vex resuelto.
+ * @brief Tamano en bytes de un tipo Vesta resuelto.
  *
  * Para PRIMITIVE / OPTIONAL / RESULT / FUNCTION / STRING / PTR el valor
  * sale de @c primitive_size_bytes.  Para STRUCT / CLASS / ARRAY / ENUM
@@ -81,7 +81,7 @@ enum class ComptimeKind : int32_t {
 uint64_t comptime_type_size(const TypeChecker &tc, const Type &t);
 
 /**
- * @brief Alineamiento en bytes de un tipo Vex.
+ * @brief Alineamiento en bytes de un tipo Vesta.
  *
  * Para primitivos = sizeof (excepto BOOL/CHAR/I8 = 1).  Para STRUCT
  * usa @c StructLayout::align_bytes.  Para CLASS = 8 (puntero alineado).

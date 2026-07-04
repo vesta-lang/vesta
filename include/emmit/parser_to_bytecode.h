@@ -454,7 +454,7 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
            emit_instr_reg}}},
 
         // unloadmod r_path_addr, r_path_len -- descarga modulo cargado
-        // dinamicamente (builtin Vex `unloadmodule(path) -> i32`).  Mismo
+        // dinamicamente (builtin Vesta `unloadmodule(path) -> i32`).  Mismo
         // formato de operandos que loadmod; R0 = 1 si descargado, 0 si no.
         {"unloadmod",
          {{0x00, 0x6D, InstrSizeMode::FIXED_4, AddressingMode::REG,
@@ -463,7 +463,7 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         // getmethat / getfldat r_class, r_idx -- variantes reg-reg de
         // getmethod / getfield para iteracion dinamica.  R00 =
         // &cls->methods[idx] o &cls->fields[idx] respectivamente, o 0 si fuera
-        // de rango. Builtins Vex: getMethodAt(cls, i), getFieldAt(cls, i).
+        // de rango. Builtins Vesta: getMethodAt(cls, i), getFieldAt(cls, i).
         {"getmethat",
          {{0x00, 0x6E, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_reg}}},
@@ -590,7 +590,7 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         /* --- Lookup inverso ptr -> handle (opcode 0x56) ---
          *  gchandle r_dst, r_src  -> r_dst = GcHandle(host_ptr) o
          * GC_NULL_HANDLE Es el inverso de gcderef.  O(1) via hash map en
-         * GcHeap.  Usado por Vex synchronized(obj) para obtener el handle desde
+         * GcHeap.  Usado por Vesta synchronized(obj) para obtener el handle desde
          * el host_ptr.
          */
         {"gchandle",
@@ -608,7 +608,7 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         /* --- argv del script (opcodes 0x6B y 0x6C) ---
          *  getargc r_dst         -> r_dst = numero de args del script
          *  getarg  r_dst, r_idx  -> r_dst = GcHandle de StringObject con
-         * args[idx] (0 si idx fuera de rango) Builtins Vex: args_count() y
+         * args[idx] (0 si idx fuera de rango) Builtins Vesta: args_count() y
          * args_get(i).
          */
         {"getargc",
@@ -1167,7 +1167,7 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          * byte (encolado por is_host_sib() en emit_instr_sib) selecciona
          * el modo MOVH en el ejecutor.  Solo se admite en modo SIB
          * (con [reg]); registro-registro o inmediato directos siguen
-         * usando 'mov'.  Lo emite el frontend Vex para LOAD/STORE de
+         * usando 'mov'.  Lo emite el frontend Vesta para LOAD/STORE de
          * punteros marcados is_host_ptr (e.g. resultado de malloc).
          */
         {
@@ -1302,7 +1302,7 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x64, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_callni}}},
 
-        // Optimizaciones del frontend Vex (slots reservados 0x65-0x67):
+        // Optimizaciones del frontend Vesta (slots reservados 0x65-0x67):
         //   gcallocp   = GC alloc + host_ptr en 1 instr (closure env heap).
         //   spawnargs  = spawn que copia R1..R[R15] del padre al child.
         //   fulfillhlt = fulfill + hlt fusionados (path critico @Async helper).

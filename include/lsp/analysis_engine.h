@@ -12,7 +12,7 @@
 
 /**
  * @file analysis_engine.h
- * @brief Motor de analisis de documentos Vex reutilizable por el LSP.
+ * @brief Motor de analisis de documentos Vesta reutilizable por el LSP.
  *
  * Punto UNICO por el que pasan todas las peticiones del servidor que
  * necesitan compilar/analizar un documento.  En esta Fase 1 produce
@@ -88,7 +88,7 @@ struct DocAnalysis {
 
 /**
  * @class AnalysisEngine
- * @brief Compila y cachea analisis de documentos Vex para el LSP.
+ * @brief Compila y cachea analisis de documentos Vesta para el LSP.
  *
  * No es thread-safe: el servidor procesa peticiones secuencialmente.
  */

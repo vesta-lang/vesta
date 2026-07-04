@@ -12,7 +12,7 @@
 
 /**
  * @file borrow_checker.h
- * @brief Borrow checker compile-time estilo Rust para Vex.
+ * @brief Borrow checker compile-time estilo Rust para Vesta.
  *
  * El borrow checker valida en tiempo de compilacion que los punteros
  * (borrows) cumplen las reglas de aliasing y lifetime de Rust:

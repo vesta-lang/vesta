@@ -12,7 +12,7 @@
 
 /**
  * @file lexer.h
- * @brief Analizador lexico (tokenizador) del lenguaje Vex.
+ * @brief Analizador lexico (tokenizador) del lenguaje Vesta.
  *
  * Convierte el codigo fuente .vex en una secuencia de tokens (vx::Token)
  * que el parser consume.  Se ejecuta DESPUES del preprocesador VPP (cuando
@@ -22,7 +22,7 @@
  *  - Reporta errores via vx::Diagnostics (no lanza excepciones).
  *  - Lookahead de 1 token con un buffer interno (mas barato que clonar
  *    todo el estado como hace el lexer .vel original).
- *  - Reconoce TODOS los tokens cerrados de Vex, incluyendo interpolacion
+ *  - Reconoce TODOS los tokens cerrados de Vesta, incluyendo interpolacion
  *    @c ${...} (emite secuencia ISTR_BEGIN/TEXT/EXPR_BEGIN/.../END), strings
  *    triple-quoted @c """...""" y raw @c r"...".
  *  - Comentarios //... y bloque slash-asterisco se descartan (no se emiten

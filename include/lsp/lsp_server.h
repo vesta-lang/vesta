@@ -12,7 +12,7 @@
 
 /**
  * @file lsp_server.h
- * @brief Servidor Language Server Protocol para Vex (Fase 1).
+ * @brief Servidor Language Server Protocol para Vesta (Fase 1).
  *
  * Despacha los metodos del LSP que esta fase soporta:
  *   - @c initialize / @c initialized / @c shutdown / @c exit
@@ -143,7 +143,7 @@ class LspServer {
      *     directamente el nombre de un tipo), lista sus METODOS y CAMPOS
      *     (tomados del indice por-documento, @c container == tipo).  Si el tipo
      *     no se resuelve, devuelve lista vacia para el caso miembro (no inunda).
-     *   - COMPLETADO GENERAL (sin @c '.'): une palabras clave de Vex, tipos
+     *   - COMPLETADO GENERAL (sin @c '.'): une palabras clave de Vesta, tipos
      *     primitivos, builtins comunes y simbolos del documento/workspace,
      *     deduplicados por label y filtrados por el prefijo que se esta
      *     escribiendo bajo el cursor.

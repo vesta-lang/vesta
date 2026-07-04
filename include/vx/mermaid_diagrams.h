@@ -12,7 +12,7 @@
 
 /**
  * @file mermaid_diagrams.h
- * @brief Generadores de diagramas Mermaid para AST Vex, SSA IR y bytecode .vel.
+ * @brief Generadores de diagramas Mermaid para AST Vesta, SSA IR y bytecode .vel.
  *
  * Pensado para debug, traceo y analisis post-mortem.  El output es markdown
  * con un bloque @c mermaid envolvente, listo para abrir en VS Code (con la
@@ -21,7 +21,7 @@
  *
  * Cuatro vistas complementarias del programa cubren el pipeline completo:
  *
- *   1. mermaid_from_ast(): forma del codigo fuente Vex (post type-check).
+ *   1. mermaid_from_ast(): forma del codigo fuente Vesta (post type-check).
  *      Util para ver la estructura logica: jerarquia clase/metodo, herencia,
  *      anotaciones (@Async, @Override, @Aspect), parametros y returns.
  *
@@ -38,7 +38,7 @@
  *
  * Cada uno emite una vista complementaria del MISMO programa.  Usar los
  * cuatro juntos durante una sesion de debug permite trazar como una
- * funcion va de codigo Vex -> AST -> IR -> IR optimizado -> .vel sin
+ * funcion va de codigo Vesta -> AST -> IR -> IR optimizado -> .vel sin
  * cambiar de herramienta.
  *
  * Filosofia de informacion:
@@ -70,7 +70,7 @@ struct ModuleCost;
 namespace vx {
 
 /**
- * @brief Genera un diagrama Mermaid a partir del AST Vex post type-check.
+ * @brief Genera un diagrama Mermaid a partir del AST Vesta post type-check.
  *
  * Estructura del diagrama (flowchart TD):
  *   - Nodo raiz: el modulo (con nombre y conteo de declaraciones).
@@ -130,7 +130,7 @@ std::string mermaid_from_ir_module(const ir::IrModule &mod,
 /**
  * @brief Genera un diagrama Mermaid a partir del texto .vel ensamblador.
  *
- * El texto .vel es lo que produce el frontend Vex tras lowering+emit.
+ * El texto .vel es lo que produce el frontend Vesta tras lowering+emit.
  * El parser interno de este generador es simple: detecta lineas con
  * @c label: para delimitar bloques, y dentro de cada bloque captura
  * las instrucciones hasta el siguiente label o EOF.

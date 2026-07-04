@@ -9,12 +9,12 @@
  * @file c_header_gen.h
  * @brief Generador del header C publico (`vex --emit-header`, Fase 4 interop C).
  *
- * Emite un `.h` C99 con la interfaz publica del modulo Vex: typedefs de los
+ * Emite un `.h` C99 con la interfaz publica del modulo Vesta: typedefs de los
  * structs C-representables (named, layout C garantizado), prototipos de las
  * funciones cuya firma es C-representable, y punteros a funcion (`cfn`) inline.
  *
  * El header se genera a nivel FRONTEND (TypeChecker + AST), no del IR: es la
- * API Vex tal cual la ve un programador C.  Es ABI-compatible con el `.c` del
+ * API Vesta tal cual la ve un programador C.  Es ABI-compatible con el `.c` del
  * port-C (los structs cruzan POR PUNTERO -- la ABI de agregados del port-C --
  * y un puntero a struct == void* a nivel ABI).
  *

@@ -1335,7 +1335,7 @@ struct AsmBlob {
     /// [global]`, `mov rax, fn`, ...).  @c offset es RELATIVO al inicio del
     /// blob; el encoder lo reubica al offset de la funcion y emite un MReloc
     /// (DATA_REL32 si @c rip_relative, ABS64 si imm).  @c symbol es el nombre
-    /// Vex (el driver lo resuelve a la dir de la funcion/dato).
+    /// Vesta (el driver lo resuelve a la dir de la funcion/dato).
     /// Tipo segun la forma de la instruccion (decidido por el usuario en el
     /// asm).  Espejo de @c vx::AsmAssembleResult::SymRefKind; el encoder lo
     /// mapea a @c MRelocKind.
@@ -1530,7 +1530,7 @@ struct MFunction {
     /** @brief añade un imm64 al pool y devuelve su indice. */
     uint32_t intern_imm64(uint64_t value) {
         /* O(n) lookup para deduplicar.  Aceptable para el v1: el
-         * codigo Vex tipico tiene < 100 imm64 distintos por funcion. */
+         * codigo Vesta tipico tiene < 100 imm64 distintos por funcion. */
         for (uint32_t i = 0; i < imm64_pool.size(); ++i) {
             if (imm64_pool[i] == value) return i;
         }

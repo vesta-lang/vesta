@@ -12,10 +12,10 @@
 
 /**
  * @file semantic_tokens.h
- * @brief Resaltado semantico (semantic tokens) del LSP de Vex.
+ * @brief Resaltado semantico (semantic tokens) del LSP de Vesta.
  *
  * Implementa @c textDocument/semanticTokens/full: lexa el documento con el
- * lexer de Vex, clasifica cada token (keyword, type, class, function,
+ * lexer de Vesta, clasifica cada token (keyword, type, class, function,
  * literal, operador, comentario, ...) y lo codifica en el formato plano de
  * quintetos que exige el protocolo:
  *
@@ -70,7 +70,7 @@ enum class SemTokenType : uint32_t {
     Number,
     Operator,
     Macro,
-    // Tipos NO estandar propios de Vex (la leyenda es custom; el cliente
+    // Tipos NO estandar propios de Vesta (la leyenda es custom; el cliente
     // mapea por nombre, asi que anyadirlos al final es seguro):
     EscapeSequence, ///< \n \t \xHH \uHHHH y secuencias ANSI dentro de strings.
     Interpolation,  ///< delimitadores ${ y } de la interpolacion de strings.
@@ -113,7 +113,7 @@ const std::vector<std::string> &semantic_token_modifiers();
 /**
  * @brief Calcula los semantic tokens de un documento.
  *
- * Lexa @p text con el lexer de Vex, escanea aparte los comentarios (el
+ * Lexa @p text con el lexer de Vesta, escanea aparte los comentarios (el
  * lexer los descarta), clasifica cada elemento y produce el array plano de
  * datos LSP (longitud multiplo de 5, deltas relativos, UTF-16).
  *

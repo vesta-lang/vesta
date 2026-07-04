@@ -12,7 +12,7 @@
 
 /**
  * @file inspector.h
- * @brief Inspector del ecosistema Vex para el LSP (Fase 3).
+ * @brief Inspector del ecosistema Vesta para el LSP (Fase 3).
  *
  * Implementa las peticiones a medida @c vesta/* que el editor llama
  * BAJO DEMANDA (el usuario pulsa "ver IR / bytecode / JIT / AOT / ...")
@@ -215,7 +215,7 @@ class Inspector {
      * Lee las expectaciones de @Macro capturadas por el TypeChecker
      * (@c CompileResult::macro_expectations, ya cacheadas por el motor: no
      * requiere flag ni recompilar).  Cada entrada describe un call site con
-     * su nombre, args y el codigo Vex generado por la expansion.  Incluye
+     * su nombre, args y el codigo Vesta generado por la expansion.  Incluye
      * tambien los @Macro que NO se pudieron expandir
      * (@c macro_skip_reasons) y por que.
      *

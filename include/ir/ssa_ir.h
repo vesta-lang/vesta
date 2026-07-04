@@ -324,7 +324,7 @@ enum class IrOp : uint16_t {
     ///< lambda no captura nada, env = 0 (sentinela).  El campo
     ///< @c func_ptr lleva el SSA del fn_addr; el primer operando
     ///< es el env_ptr; los restantes son los args declarados.
-    ///< Lowering: el frontend Vex emite un helper sintetico
+    ///< Lowering: el frontend Vesta emite un helper sintetico
     ///< @c __lambda_<N> con el cuerpo del lambda y el call site
     ///< usa este opcode pasando fn_addr + env_addr en el slot
     ///< stack del function value (16 bytes inline, cero heap).
@@ -411,10 +411,10 @@ enum class IrOp : uint16_t {
                              ///< 2=SHARED).  interp/JIT: opcode gcfinal;
                              ///< AOT: CALL vex_gc_register_finalizer.
     GC_COLLECT = 0xD4, ///< gccollect  (fuerza minor+major GC del proceso +
-                       ///< drena finalizadores).  Builtin Vex gc_collect().
+                       ///< drena finalizadores).  Builtin Vesta gc_collect().
                        ///< interp/JIT: opcode gccollect; AOT: CALL vex_gc_collect.
     GC_FINALIZE_ALL = 0xD5, ///< gcfinall  (finaliza TODO objeto GC vivo con
-                            ///< recurso interno).  Builtin Vex gc_finalize_all().
+                            ///< recurso interno).  Builtin Vesta gc_finalize_all().
                             ///< interp/JIT: opcode gcfinall; AOT: CALL
                             ///< vex_gc_finalize_all.  Determinista.
     GC_ALLOCP = 0x98, ///< %dst = gc_allocp.ptr %size  (gcallocp: alloc + deref
@@ -754,7 +754,7 @@ struct IrValue {
     /// patrones con mas niveles (e.g. @c &pp) caen al modelo legacy.
     bool pointee_is_host_ptr = false;
     /// true si el valor es un host_ptr a un objeto GESTIONADO por el GC
-    /// (instancia de clase Vex tipicamente).  El emisor IR usa este flag
+    /// (instancia de clase Vesta tipicamente).  El emisor IR usa este flag
     /// para que cualquier @c push/@c pop alrededor de un CALL que pueda
     /// disparar GC se haga sobre el GcHandle (estable a traves de la
     /// evacuacion), no sobre el host_ptr crudo (que el collector
@@ -998,7 +998,7 @@ struct DevirtCandidate {
 };
 
 /**
- * @brief Phase AS inc.3: variable Vex con storage-class register("reg").
+ * @brief Phase AS inc.3: variable Vesta con storage-class register("reg").
  *
  * El lowering fuerza estas variables a un slot ALLOCA estable (para que
  * sobrevivan al optimizer y tengan identidad) y registra aqui la
@@ -1014,7 +1014,7 @@ struct AsmRegBinding {
     std::string reg;        ///< nombre del registro RAW (eax/rax/xmm0...)
     IrType type;            ///< tipo escalar del var (para el ctype en C)
     bool is_vector;         ///< true si reg es xmm/ymm/zmm (constraint "x")
-    std::string name;       ///< nombre Vex de la variable (para filtrar
+    std::string name;       ///< nombre Vesta de la variable (para filtrar
                             ///< por scope activo en lower_asm)
 };
 
@@ -1109,7 +1109,7 @@ struct IrFunction {
      * @brief Phase AS inc.2: storage-class @c register("reg") de
      *        var-decls dentro de esta funcion.
      *
-     * Mapea el nombre de la variable Vex -> nombre del registro fisico
+     * Mapea el nombre de la variable Vesta -> nombre del registro fisico
      * solicitado (tal cual lo escribio el usuario: eax/rax/xmm0/...).  El
      * backend port-C (inc.3) lo materializa como
      * @c "register T x __asm__(\"rax\")"; el JIT (inc.5) lo usa para
@@ -1165,7 +1165,7 @@ struct IrFunction {
 
     /**
      * @brief Subsistema de coste (modo --analyze): contrato @complexity
-     *        declarado por el usuario en el fuente Vex.
+     *        declarado por el usuario en el fuente Vesta.
      *
      * Metadata PURA, propagada desde @c ast::FunctionDecl por el lowering.
      * NO afecta el codegen (interp/JIT/AOT la ignoran por completo).  La
@@ -1254,7 +1254,7 @@ struct IrSectionDef {
  * @brief Importacion de una funcion nativa desde una libreria dinamica.
  *
  * Corresponde a un bloque @c "@Method { @Lib(\"...\") @Name(\"...\") }" dentro
- * del bloque @c @Import del .vel.  El frontend (Vex u otro) registra una
+ * del bloque @c @Import del .vel.  El frontend (Vesta u otro) registra una
  * IrNativeImport por cada funcion nativa que sus llamadas (CALLN) van a
  * usar.  El emisor agrupa todas en un unico bloque @Import.
  */
@@ -1276,12 +1276,12 @@ struct IrNativeImport {
 //  para el transpiler.  Mantiene compatibilidad backwards: modulos sin
 //  classes (e.g. solo funciones libres) tienen los vectores vacios.
 //
-//  Origen: el frontend Vex (TypeChecker::class_layouts_) lo llena
+//  Origen: el frontend Vesta (TypeChecker::class_layouts_) lo llena
 //  durante el lowering.  Otros frontends pueden hacer lo mismo.
 // =========================================================================
 
 /**
- * @brief Campo de instancia (o estatico) de una clase Vex.
+ * @brief Campo de instancia (o estatico) de una clase Vesta.
  */
 struct IrField {
     std::string name;    ///< Nombre del campo.
@@ -1297,7 +1297,7 @@ struct IrField {
 };
 
 /**
- * @brief Metodo de una clase Vex (incluyendo ctor/dtor).
+ * @brief Metodo de una clase Vesta (incluyendo ctor/dtor).
  */
 struct IrMethod {
     std::string name; ///< Nombre legible del metodo ("inc", "ctor", "dtor").
@@ -1321,7 +1321,7 @@ struct IrMethod {
 };
 
 /**
- * @brief Descriptor completo de una clase / interface Vex.
+ * @brief Descriptor completo de una clase / interface Vesta.
  */
 struct IrClass {
     std::string name;       ///< Nombre simple ("Counter", "Animal").
@@ -1360,7 +1360,7 @@ struct IrModule {
     std::vector<std::string> native_libs; ///< libs nativas (@native_lib)
 
     /// Metadata de clases + interfaces declaradas en el modulo.  Llena
-    /// por el frontend (Vex TypeChecker) en lowering.  Consumida por
+    /// por el frontend (Vesta TypeChecker) en lowering.  Consumida por
     /// el port transpiler (C/Java/JS) para emitir POO eficiente.
     /// Vacio en modulos sin POO -- el transpiler entonces opera solo
     /// sobre funciones libres.  El IR emitter (a .vel) la ignora.

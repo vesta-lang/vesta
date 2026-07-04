@@ -12,11 +12,11 @@
 
 /**
  * @file symbol_index.h
- * @brief Indice de simbolos para la navegacion del LSP de Vex (Fase 4).
+ * @brief Indice de simbolos para la navegacion del LSP de Vesta (Fase 4).
  *
  * Provee dos indices complementarios:
  *
- *  - @c DocSymbols: indice POR DOCUMENTO, barato.  De un fuente Vex extrae,
+ *  - @c DocSymbols: indice POR DOCUMENTO, barato.  De un fuente Vesta extrae,
  *    via un unico recorrido del lexer:
  *      (a) DEFINICIONES: por cada declaracion top-level/miembro reconocida en
  *          el flujo de tokens (funcion, clase, struct, enum, typedef/using,
@@ -27,7 +27,7 @@
  *          un LSP util sin necesidad del AST completo.
  *
  *  - @c WorkspaceIndex: indice de TODOS los @c .vex bajo la raiz del proyecto
- *    (recursivo y acotado) MAS los directorios de busqueda de modulos de Vex
+ *    (recursivo y acotado) MAS los directorios de busqueda de modulos de Vesta
  *    que sean faciles de detectar.  Mapea @c nombre -> [definiciones] y
  *    @c nombre -> [referencias] con su fichero y rango.  Esto es lo que
  *    permite "buscar referencias en librerias": una referencia a un simbolo
@@ -129,7 +129,7 @@ struct DocSymbols {
  * @brief Construye el indice de simbolos de un documento a partir de su
  *        fuente.
  *
- * Hace un unico recorrido del lexer de Vex bajo try/catch: un fallo del
+ * Hace un unico recorrido del lexer de Vesta bajo try/catch: un fallo del
  * lexer devuelve el indice parcial acumulado en lugar de propagar.
  *
  * @param text     Texto fuente del documento.

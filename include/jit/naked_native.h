@@ -21,7 +21,7 @@
  * La solucion aqui es una mini-AOT AL VUELO: cuando el codigo VM/JIT (VM_ABI)
  * llama a una funcion @Naked, la llamada se ha bajado a un CALLN al dispatcher
  * @c vrt_naked_dispatch.  El dispatcher (1) native-compila la funcion @Naked y
- * TODAS sus callees Vex alcanzables via @c vreg_compile_native (ABI HOST_LEAF,
+ * TODAS sus callees Vesta alcanzables via @c vreg_compile_native (ABI HOST_LEAF,
  * naked), (2) resuelve sus relocs a direcciones VIVAS (funcion -> code cache;
  * global -> direccion HOST del slot en @c vm_mem, que es donde el codigo VM_ABI
  * escribe/lee el global), (3) cachea el resultado por nombre, y (4) invoca la
@@ -64,7 +64,7 @@ bool is_naked_native_addr(uint64_t addr);
 
 /**
  * @brief Devuelve (compilando al vuelo si hace falta) la direccion NATIVA de
- *        la funcion Vex @p name.  La usa el lowering del cast a puntero de
+ *        la funcion Vesta @p name.  La usa el lowering del cast a puntero de
  *        funcion (`(fn(...)) foo`) en interp/JIT para que un puntero a funcion
  *        que puede fluir a codigo nativo (asm @Naked o callvmr nativo) porte la
  *        direccion nativa en vez de la VA de bytecode.  0 si no se pudo.
@@ -96,7 +96,7 @@ inline uint64_t fnv1a64_name(const char *s) {
 /* ===================================================================== */
 
 /**
- * @brief Compila (o recupera de cache) la funcion Vex @p name como una entrada
+ * @brief Compila (o recupera de cache) la funcion Vesta @p name como una entrada
  *        NATIVA HOST_LEAF (respetando @c is_naked), con sus relocs resueltos.
  *        Wrapper publico y thread-safe de la maquinaria @Naked interna.
  *

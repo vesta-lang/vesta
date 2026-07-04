@@ -1115,7 +1115,7 @@ class Linker {
 
     /**
      * @brief Opcion W: setea los bytes pre-serializados de la seccion
-     *        @c @ir.  Llamado por el frontend Vex (via assembler)
+     *        @c @ir.  Llamado por el frontend Vesta (via assembler)
      *        antes de @c build_executable.
      *
      * Los bytes deben venir de @c ir::emit_ir_section(functions),

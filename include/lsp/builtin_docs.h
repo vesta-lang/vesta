@@ -7,7 +7,7 @@
 
 /**
  * @file lsp/builtin_docs.h
- * @brief Tabla central de metadatos de los builtins de Vex para el LSP.
+ * @brief Tabla central de metadatos de los builtins de Vesta para el LSP.
  *
  * Fuente unica de verdad consumida por:
  *   - @c vesta/symbolInfo (hover): firma + descripcion de que recibe / hace /

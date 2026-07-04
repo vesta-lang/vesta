@@ -169,10 +169,10 @@ class VM {
     uint32_t shared_gc_collect();
 
     // ---------------------------------------------------------------------
-    // Argumentos de linea de comandos del programa Vex (argv).
+    // Argumentos de linea de comandos del programa Vesta (argv).
     // ---------------------------------------------------------------------
     // Se pueblan desde main.cpp cuando se invoca `vm --run prog.velb arg1 arg2
-    // ...`. El programa los consulta via los builtins Vex `args_count()` y
+    // ...`. El programa los consulta via los builtins Vesta `args_count()` y
     // `args_get(i)`, que bajan a los opcodes bytecode `getargc` (0x6B) y
     // `getarg` (0x6C) respectivamente.  El opcode `getarg` aloca un
     // StringObject GC-managed con el contenido del arg solicitado.

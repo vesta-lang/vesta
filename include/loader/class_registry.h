@@ -21,7 +21,7 @@
  * @c ClassRegistry desde el bytecode (instrucciones @c defclass /
  * @c defmethod / @c deffield) o desde C++.  Esto unifica el modelo:
  *
- *   1. Las clases declaradas estaticamente en Vex se traducen a un
+ *   1. Las clases declaradas estaticamente en Vesta se traducen a un
  *      bloque @c __module_init que invoca al registry al cargar el
  *      modulo.
  *   2. Programas de meta-programacion pueden crear clases nuevas en

@@ -69,9 +69,9 @@ struct AotLowerConfig {
     /// la libc.  El override debe devolver memoria ZERIFICADA (convencion
     /// @c kzalloc) para preservar el cero-init de los campos no escritos.
     bool has_alloc_override = false;
-    /// FFI dinamico: DLOPEN/DLSYM -> CALL a estas funciones Vex (definidas en
+    /// FFI dinamico: DLOPEN/DLSYM -> CALL a estas funciones Vesta (definidas en
     /// stdlib/vex/vex_ffi.vx, bundled, y REDEFINIBLES por el usuario).  No se
-    /// hardcodea LoadLibraryA/dlopen: la funcion Vex elige por @Target.
+    /// hardcodea LoadLibraryA/dlopen: la funcion Vesta elige por @Target.
     std::string dlopen_sym = "__vex_dlopen"; ///< DLOPEN -> call <dlopen_sym>(path)
     std::string dlsym_sym = "__vex_dlsym";   ///< DLSYM -> call <dlsym_sym>(h,name)
 };

@@ -169,7 +169,7 @@ int run_driver(const std::string &folder, int threads,
  *
  * El parametro @p skip_preprocessor permite saltarse VPP cuando el
  * .vel de entrada ya viene de una fuente que lo aplico previamente
- * (por ejemplo, texto generado por el lowering Vex -> ir_emitter,
+ * (por ejemplo, texto generado por el lowering Vesta -> ir_emitter,
  * que ya esta totalmente expandido).  Pasar el .vel por VPP en ese
  * caso seria redundante y puede romper si el codigo generado contiene
  * tokens que VPP malinterprete.

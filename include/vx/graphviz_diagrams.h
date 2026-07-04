@@ -12,7 +12,7 @@
 
 /**
  * @file graphviz_diagrams.h
- * @brief Generadores de diagramas Graphviz (DOT) para AST Vex, SSA IR y
+ * @brief Generadores de diagramas Graphviz (DOT) para AST Vesta, SSA IR y
  * bytecode .vel.
  *
  * Equivalente al modulo Mermaid (@c mermaid_diagrams.h) pero produciendo el
@@ -67,7 +67,7 @@ struct ModuleCost;
 namespace vx {
 
 /**
- * @brief Genera un diagrama Graphviz (DOT) a partir del AST Vex post
+ * @brief Genera un diagrama Graphviz (DOT) a partir del AST Vesta post
  * type-check.
  *
  * Estructura del diagrama:

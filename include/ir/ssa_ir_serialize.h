@@ -60,7 +60,7 @@
  *
  *   Funcion pequena (~10 instrs): ~300 bytes serializada.
  *   Funcion media (100 instrs): ~3 KB.
- *   Modulo Vex tipico (`vexed_modular.vex` ~30 fns x 50 instrs/fn):
+ *   Modulo Vesta tipico (`vexed_modular.vex` ~30 fns x 50 instrs/fn):
  *      ~30 * 1.5 KB = 45 KB de IR vs ~150 KB de bytecode -> 1.3x total.
  *
  *   La compresion LZ4 (no implementada en v1) reduce IR ~3x adicional.

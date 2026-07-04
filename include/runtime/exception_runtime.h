@@ -1,6 +1,6 @@
 /**
  * @file exception_runtime.h
- * @brief Sistema de excepciones FatalError capturables desde Vex.
+ * @brief Sistema de excepciones FatalError capturables desde Vesta.
  *
  * Antes los errores VM "duros" (NPE, div0, illegal opcode,
  * stack overflow, segfault, etc.) escribian @c vm->err_thread =
@@ -20,7 +20,7 @@
  *     llena los campos (kind, pc, message, stack_trace), y delega en
  *     @c do_throw para que la pila de TRYENTER + @c handler_pc lo
  *     atrape igual que cualquier otra excepcion.  El usuario captura
- *     con @c try { ... } catch (FatalError e) { ... } en Vex.
+ *     con @c try { ... } catch (FatalError e) { ... } en Vesta.
  *
  * @c FatalError tiene 4 fields ABI fijos (offsets se exponen al
  * lowering del frontend):
@@ -60,7 +60,7 @@ namespace runtime {
  *
  * Coinciden con @c state_err_thread (@c proceso_runtime.h) para que
  * el usuario pueda comparar facilmente: @c if (e.kind == 1) -> NPE.
- * Documentar en la API de Vex como constantes.
+ * Documentar en la API de Vesta como constantes.
  */
 enum FatalKind : uint32_t {
     FATAL_NULL_POINTER = 1,        ///< deref de puntero null o handle invalido
@@ -73,7 +73,7 @@ enum FatalKind : uint32_t {
     FATAL_NATIVE_CRASH = 8,        ///< plugin nativo crasheo (SEH/SIGSEGV)
     FATAL_NATIVE_EXCEPTION = 9,    ///< plugin nativo lanzo C++ exception
     FATAL_OUT_OF_MEMORY = 10,      ///< alloc fallo (raw o GC)
-    FATAL_USER_ABORT = 11,         ///< builtin Vex @c panic("...")
+    FATAL_USER_ABORT = 11,         ///< builtin Vesta @c panic("...")
 };
 
 /**
@@ -143,7 +143,7 @@ void throw_fatalf(ProcessVM *vm, uint32_t kind, const char *fmt, ...);
 /**
  * @brief Metadata de debug por metodo.  Se rellena durante
  *        @c __module_init via el opcode @c setmethdbg que el frontend
- *        Vex emite tras cada @c defmethod con la info del .vex source.
+ *        Vesta emite tras cada @c defmethod con la info del .vex source.
  *
  * Layout muy compacto: nombre de archivo (compartido entre todos los
  * metodos del modulo) + linea de inicio del metodo en el source.

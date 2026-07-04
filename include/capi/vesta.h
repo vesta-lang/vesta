@@ -7,7 +7,7 @@
  * libreria compartida @c libvesta (vesta.dll / libvesta.so).
  *
  * Capacidades:
- *   - Compilar fuente Vex (.vex) a bytecode .velb en memoria.
+ *   - Compilar fuente Vesta (.vex) a bytecode .velb en memoria.
  *   - Ejecutar bytecode .velb en una instancia de la VM.
  *   - Compilar + ejecutar en una sola llamada (eval).
  *
@@ -74,9 +74,9 @@ typedef struct {
 VESTA_API const char *vesta_version(void);
 
 /**
- * @brief Compila fuente Vex a bytecode .velb en memoria.
+ * @brief Compila fuente Vesta a bytecode .velb en memoria.
  *
- * @param src        Codigo fuente Vex terminado en NUL.
+ * @param src        Codigo fuente Vesta terminado en NUL.
  * @param unit_name  Nombre logico del modulo (para diagnosticos); puede ser
  *                   NULL (se usa "main").
  * @param out_velb   [salida] Recibe un puntero al buffer con los bytes del
@@ -106,9 +106,9 @@ VESTA_API int vesta_run(const unsigned char *velb, size_t len, int argc,
                         const char *const *argv, int *out_exit, char **out_err);
 
 /**
- * @brief Compila y ejecuta fuente Vex en una sola llamada.
+ * @brief Compila y ejecuta fuente Vesta en una sola llamada.
  *
- * @param src        Codigo fuente Vex terminado en NUL.
+ * @param src        Codigo fuente Vesta terminado en NUL.
  * @param unit_name  Nombre logico del modulo; puede ser NULL.
  * @param out_exit   [salida, opcional] Valor de retorno de main (R0).
  * @param out_err    [salida, opcional] Mensaje de error en heap si falla.
@@ -119,13 +119,13 @@ VESTA_API int vesta_eval(const char *src, const char *unit_name, int *out_exit,
                          char **out_err);
 
 /**
- * @brief Compila fuente Vex a texto .vel (bytecode textual intermedio).
+ * @brief Compila fuente Vesta a texto .vel (bytecode textual intermedio).
  *
- * Reusa el frontend Vex (@c vx::compile_vx_source) y devuelve el texto
+ * Reusa el frontend Vesta (@c vx::compile_vx_source) y devuelve el texto
  * @c .vel que el ensamblador consume.  Util para inspeccionar la salida
  * del lowering sin pasar por el ensamblado.
  *
- * @param src        Codigo fuente Vex terminado en NUL.
+ * @param src        Codigo fuente Vesta terminado en NUL.
  * @param unit_name  Nombre logico del modulo; puede ser NULL (se usa "main").
  * @param out_vel    [salida] Recibe el texto .vel en heap (liberar con
  *                   @c vesta_free).
@@ -136,12 +136,12 @@ VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
                                    char **out_vel, char **out_err);
 
 /**
- * @brief Compila fuente Vex a texto del IR SSA (dump legible del IrModule).
+ * @brief Compila fuente Vesta a texto del IR SSA (dump legible del IrModule).
  *
  * Activa @c CompileOptions::dump_ir y devuelve @c CompileResult::ir_text,
  * el mismo dump que produce @c --vex-emit-ir.
  *
- * @param src        Codigo fuente Vex terminado en NUL.
+ * @param src        Codigo fuente Vesta terminado en NUL.
  * @param unit_name  Nombre logico del modulo; puede ser NULL.
  * @param out_ir     [salida] Recibe el texto del IR en heap (liberar con
  *                   @c vesta_free).
@@ -185,9 +185,9 @@ VESTA_API int vesta_disasm(const unsigned char *bytes, size_t len,
                            const char *arch, char **out_text, char **out_err);
 
 /**
- * @brief Genera un diagrama del pipeline Vex para un fuente dado.
+ * @brief Genera un diagrama del pipeline Vesta para un fuente dado.
  *
- * @param src        Codigo fuente Vex terminado en NUL.
+ * @param src        Codigo fuente Vesta terminado en NUL.
  * @param unit_name  Nombre logico del modulo; puede ser NULL.
  * @param kind       Vista del diagrama: "ast" | "ir-pre" | "ir-post" | "vel".
  * @param format     Formato de salida: "mermaid" | "graphviz" | "html".
@@ -274,13 +274,13 @@ VESTA_API int vesta_diagram_t(const char *src, const char *unit_name,
 VESTA_API int vesta_vsh_eval(const char *script, int *out_rc, char **out_err);
 
 /**
- * @brief Compila fuente Vex y devuelve a la vez el .vel, el IR y el .velb.
+ * @brief Compila fuente Vesta y devuelve a la vez el .vel, el IR y el .velb.
  *
  * Conveniencia que evita compilar tres veces el mismo fuente.  Cada salida
  * es opcional (pasar NULL para omitirla).  Las cadenas/buffer devueltos se
  * liberan con @c vesta_free.
  *
- * @param src        Codigo fuente Vex terminado en NUL.
+ * @param src        Codigo fuente Vesta terminado en NUL.
  * @param unit_name  Nombre logico del modulo; puede ser NULL.
  * @param out_vel    [salida, opcional] Texto .vel en heap.
  * @param out_ir     [salida, opcional] Texto del IR en heap.

@@ -687,7 +687,7 @@ typedef struct Context {
     // absolutos dentro del .velb.
     struct DebugLineRec {
         uint32_t byte_offset; ///< offset dentro del bytecode del modulo
-        uint32_t source_line; ///< linea fuente Vex (1-based)
+        uint32_t source_line; ///< linea fuente Vesta (1-based)
     };
     std::vector<DebugLineRec> debug_lines;
 
@@ -708,7 +708,7 @@ typedef struct Context {
     };
     std::vector<StackmapRec> stackmap_recs;
 
-    // Nombre del archivo fuente Vex que origino este modulo.  Se usa
+    // Nombre del archivo fuente Vesta que origino este modulo.  Se usa
     // como `file_offset` (resuelto al strings blob) en la seccion
     // debug del .velb.  Si vacio, el linker no escribe info de file.
     std::string debug_source_file;

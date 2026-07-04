@@ -2,7 +2,7 @@
  * @file vexi_format.h
  * @brief Formato binario del fichero de interfaz `.vexi` (Phase M.2).
  *
- * El `.vexi` es la interfaz publica de un modulo Vex.  Contiene SOLO los
+ * El `.vexi` es la interfaz publica de un modulo Vesta.  Contiene SOLO los
  * simbolos exportados (marcados `public`) + sus firmas, sin
  * implementacion.  El TypeChecker de un modulo CONSUMIDOR carga los
  * `.vexi` de sus deps para resolver nombres cross-module sin reparsear

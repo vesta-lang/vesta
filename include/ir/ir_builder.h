@@ -11,7 +11,7 @@
  *
  * Esta clase es el equivalente de @c llvm::IRBuilder en LLVM: encapsula los
  * detalles de construccion de @c IrInstr / @c IrValue / @c IrBlock detras de
- * una API ergonomica.  Cualquier frontend (Vex, futuro Java-like, C-like,
+ * una API ergonomica.  Cualquier frontend (Vesta, futuro Java-like, C-like,
  * Python-like, etc.) puede targetar este IR sin tener que conocer la
  * representacion interna.
  *

@@ -1,6 +1,6 @@
 /**
  * @file module_resolver.h
- * @brief Resolver de paths + dep graph para el sistema de modulos Vex (Phase
+ * @brief Resolver de paths + dep graph para el sistema de modulos Vesta (Phase
  * M).
  *
  * Multi-plataforma (Windows + POSIX), multi-arquitectura.  Aprovecha

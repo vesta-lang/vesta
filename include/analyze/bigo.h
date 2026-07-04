@@ -5,7 +5,7 @@
  * Modulo del MODO ANALISIS del compilador (opt-in, activado por
  * @c vm --analyze).  Es un subsistema PARALELO: NO afecta el codegen
  * normal (interp/JIT/AOT) ni el path de compilacion estandar.  Mide el
- * coste computacional del codigo Vex sobre el SSA IR.
+ * coste computacional del codigo Vesta sobre el SSA IR.
  *
  * Niveles ("Subsistema de coste / Big-O"):
  *   1. ESTATICO ESTRUCTURAL (este modulo, increment 1): sobre el

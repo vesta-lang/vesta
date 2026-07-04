@@ -12,10 +12,10 @@
 
 /**
  * @file token.h
- * @brief Tipos de token y estructura Token para el frontend Vex.
+ * @brief Tipos de token y estructura Token para el frontend Vesta.
  *
  * El conjunto de TokenKind declarado aqui cubre TODA la sintaxis cerrada
- * de Vex.  Esto evita renombres y reordenamientos del enum (que
+ * de Vesta.  Esto evita renombres y reordenamientos del enum (que
  * invalidarian tablas planas indexadas por ordinal en el parser) cuando
  * se añaden caracteristicas nuevas: cualquier futuro feature reusa
  * tokens existentes o añade nuevos al final.
@@ -47,7 +47,7 @@ namespace vx {
 
 /**
  * @enum TokenKind
- * @brief Categorias semanticas de los tokens del lexer Vex.
+ * @brief Categorias semanticas de los tokens del lexer Vesta.
  *
  * Los valores ordinales son estables: el parser y el reportador de
  * errores los usan como indice en tablas planas (operator precedence,
@@ -292,7 +292,7 @@ const char *token_kind_name(TokenKind k) noexcept;
 
 /**
  * @struct Token
- * @brief Unidad lexica producida por el lexer Vex.
+ * @brief Unidad lexica producida por el lexer Vesta.
  *
  * Layout disenyado para 64 bytes (cache line) en la mayoria de tokens
  * comunes, gracias a SSO en std::string para lexemas cortos.  Los

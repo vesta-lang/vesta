@@ -16,7 +16,7 @@
  * define una funcion @c link() que llama a builtins de configuracion.  El
  * linker compila ese @c .vex, lo ejecuta in-process (VM) con los builtins
  * registrados como funciones nativas, y lee la configuracion resultante.  Es
- * intuitivo (es Vex) y potente (logica/bucles/comptime completos para CALCULAR
+ * intuitivo (es Vesta) y potente (logica/bucles/comptime completos para CALCULAR
  * la disposicion).  Builtins disponibles dentro de @c link():
  *
  *   base(u64 addr)            -- direccion de carga del ejecutable
@@ -38,7 +38,7 @@
 namespace aot {
 
 /**
- * @brief Configuracion producida por un link-script Vex (campos opcionales).
+ * @brief Configuracion producida por un link-script Vesta (campos opcionales).
  */
 struct LinkScriptConfig {
     bool has_base = false;

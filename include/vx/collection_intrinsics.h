@@ -16,7 +16,7 @@
  *        a sus builtins de constructor / metodos / liberacion del plugin
  *        nativo @c vesta_collections.dll.
  *
- * El frontend Vex (type checker + lowering) consulta estas tablas para:
+ * El frontend Vesta (type checker + lowering) consulta estas tablas para:
  *   1. Registrar el constructor (@c arraylist(), @c hashmap(), ...) como
  *      builtin que devuelve el tipo correspondiente.
  *   2. Despachar @c xs.method(...) a @c CALLN @c vcol_*_method directo
@@ -45,9 +45,9 @@ static constexpr const char *COL_NATIVE_LIB =
  *        construccion / liberacion + capacidad inicial sugerida.
  */
 struct ColType {
-    PrimitiveKind kind; ///< PrimitiveKind del tipo Vex.
+    PrimitiveKind kind; ///< PrimitiveKind del tipo Vesta.
     const char
-        *vex_ctor_name; ///< Nombre del constructor Vex (ej. "arraylist").
+        *vex_ctor_name; ///< Nombre del constructor Vesta (ej. "arraylist").
     const char *native_new_fn; ///< Funcion native (ej. "vcol_alist_new").
     const char
         *native_free_fn; ///< Funcion native de free (ej. "vcol_alist_free").
@@ -74,7 +74,7 @@ struct ColType {
  */
 struct ColMethod {
     PrimitiveKind type;    ///< Tipo del receiver (this).
-    const char *vex_name;  ///< Nombre del metodo en Vex.
+    const char *vex_name;  ///< Nombre del metodo en Vesta.
     const char *native_fn; ///< Funcion native (no-GC).
     /// Variante GC-aware (recibe @c proc como primer arg adicional);
     /// nullptr si esta operacion no necesita write-barrier.  Las

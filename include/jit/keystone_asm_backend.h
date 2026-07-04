@@ -16,7 +16,7 @@
  *
  * Declara @c register_keystone_asm_backend, llamado UNA vez por el ejecutable
  * (target @c vm, que enlaza Keystone) para instalar la impl de
- * @c vx::AsmBackend en @c vx::g_asm_backend.  El frontend Vex no incluye
+ * @c vx::AsmBackend en @c vx::g_asm_backend.  El frontend Vesta no incluye
  * este header ni keystone.h: solo usa la interfaz abstracta.
  */
 

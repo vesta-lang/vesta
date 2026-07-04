@@ -12,7 +12,7 @@
 
 /**
  * @file parser.h
- * @brief Parser recursivo descendente para el lenguaje Vex.
+ * @brief Parser recursivo descendente para el lenguaje Vesta.
  *
  * Estrategia:
  *  - Declaraciones, statements y tipos: descenso recursivo clasico.
@@ -442,7 +442,7 @@ class Parser {
     /// permitir `(MyTypedef) x` cuando el identifier es un alias
     /// conocido (cierre de Item 19 de pendientes).  Limitacion
     /// single-pass: el typedef debe declararse ANTES del uso (igual
-    /// que cualquier forward decl en C/Vex).
+    /// que cualquier forward decl en C/Vesta).
     std::unordered_set<std::string> declared_aliases_;
 
     /// Phase M.L24: flag indicando si la ultima invocacion de

@@ -12,7 +12,7 @@
 
 /**
  * @file diagnostic.h
- * @brief Sistema de diagnosticos para el frontend Vex.
+ * @brief Sistema de diagnosticos para el frontend Vesta.
  *
  * Define la representacion de un diagnostico (error, warning, nota), el
  * contenedor que los acumula durante la compilacion y la plantilla

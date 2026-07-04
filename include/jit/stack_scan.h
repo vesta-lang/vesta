@@ -112,16 +112,16 @@ JitScanStats scan_jit_frames(JitRootCallback cb, void *cb_ctx,
  * @c next_pc = [rbp+8].  Al no leer nunca @c [rbp] (el saved-RBP), es robusto
  * ante frames que omiten el frame pointer (-fomit-frame-pointer) o inlining.
  *
- * Arranca en el primer frame Vex REAL, cuyo (PC, SP) se captura en la frontera
- * C<-Vex (ver @c GcHeap::set_aot_scan_boundary), saltando los frames C++
+ * Arranca en el primer frame Vesta REAL, cuyo (PC, SP) se captura en la frontera
+ * C<-Vesta (ver @c GcHeap::set_aot_scan_boundary), saltando los frames C++
  * no-walkables de libvesta_gc.  Sube hasta que un PC no pertenece a ninguna
- * funcion Vex registrada (CRT / _start) o hasta @c MAX_FRAMES.
+ * funcion Vesta registrada (CRT / _start) o hasta @c MAX_FRAMES.
  *
  * @param cb        callback por cada root GC encontrado.
  * @param cb_ctx    contexto opaco para @p cb.
- * @param start_pc  PC de retorno al primer frame Vex (return address).
- * @param start_sp  RSP de ese frame Vex justo antes del @c call al GC.
- * @return estadisticas del scan (jit_frames = frames Vex recorridos).
+ * @param start_pc  PC de retorno al primer frame Vesta (return address).
+ * @param start_sp  RSP de ese frame Vesta justo antes del @c call al GC.
+ * @return estadisticas del scan (jit_frames = frames Vesta recorridos).
  */
 JitScanStats scan_aot_frames(JitRootCallback cb, void *cb_ctx, uint64_t start_pc,
                              uint64_t start_sp) noexcept;

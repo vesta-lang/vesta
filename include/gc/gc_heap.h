@@ -1473,20 +1473,20 @@ class GcHeap {
     void set_aot_mode(bool v) noexcept { aot_precise_roots_ = v; }
 
     /**
-     * @brief Fija el frame Vex de ENTRADA para el WALK POR TAMANO DE FRAME del
+     * @brief Fija el frame Vesta de ENTRADA para el WALK POR TAMANO DE FRAME del
      *        scan preciso de AOT.
      *
      * Lo captura cada runtime-entry del GC que puede colectar (vex_gc_collect,
-     * vex_gc_finalize_all) EN LA FRONTERA C<-Vex: @p pc es la direccion de
-     * retorno al frame Vex llamador (dentro de la funcion nativa que llamo al
+     * vex_gc_finalize_all) EN LA FRONTERA C<-Vesta: @p pc es la direccion de
+     * retorno al frame Vesta llamador (dentro de la funcion nativa que llamo al
      * GC) y @p sp es el RSP de ese frame justo antes del @c call.  A partir de
      * ese par, @c scan_jit_roots_precise (en modo AOT) sube por la pila usando
      * el @c frame_size de cada funcion en lugar de la cadena RBP -> salta los
      * frames C++ no-walkables de libvesta_gc (que pueden usar
-     * -fomit-frame-pointer) y arranca en el primer frame Vex real.
+     * -fomit-frame-pointer) y arranca en el primer frame Vesta real.
      *
-     * @param pc direccion de retorno al frame Vex (0 = invalida el boundary).
-     * @param sp RSP del frame Vex llamador antes del @c call.
+     * @param pc direccion de retorno al frame Vesta (0 = invalida el boundary).
+     * @param sp RSP del frame Vesta llamador antes del @c call.
      */
     void set_aot_scan_boundary(uint64_t pc, uint64_t sp) noexcept {
         aot_boundary_pc_ = pc;
@@ -1644,9 +1644,9 @@ class GcHeap {
      * entonces @c handle_for_ptr(host_payload_ptr) devuelve @p h.
      *
      * Usado por la instruccion bytecode @c gchandle (0x55) para que el
-     * frontend Vex pueda obtener el GcHandle de un objeto cuando solo
+     * frontend Vesta pueda obtener el GcHandle de un objeto cuando solo
      * tiene el host pointer (caso comun: tras @c gcderef en un constructor).
-     * El uso primario es @c synchronized(obj) en Vex, que necesita el handle
+     * El uso primario es @c synchronized(obj) en Vesta, que necesita el handle
      * para @c monenter / @c monexit.
      *
      * Coste O(1) amortizado (unordered_map lookup + bucket walk corto).
@@ -2128,8 +2128,8 @@ class GcHeap {
 
     /// Boundary del WALK POR TAMANO DE FRAME (scan preciso de AOT).  Lo fija
     /// @c set_aot_scan_boundary en cada runtime-entry del GC que puede colectar,
-    /// capturado en la frontera C<-Vex.  @c aot_boundary_pc_ es el PC de retorno
-    /// al frame Vex y @c aot_boundary_sp_ su RSP antes del @c call.  Mientras sea
+    /// capturado en la frontera C<-Vesta.  @c aot_boundary_pc_ es el PC de retorno
+    /// al frame Vesta y @c aot_boundary_sp_ su RSP antes del @c call.  Mientras sea
     /// valido, @c scan_jit_roots_precise usa @c scan_aot_frames (frame_size) en
     /// vez de la cadena RBP.  Fresco en cada coleccion (cada entry lo re-fija).
     uint64_t aot_boundary_pc_ = 0;
@@ -2188,7 +2188,7 @@ class GcHeap {
 
     /// Mapa inverso payload_ptr_host -> GcHandle.  Permite lookup O(1)
     /// cuando un objeto se accede por su host pointer pero se necesita
-    /// el handle (caso: synchronized en Vex, donde @c this es host_ptr
+    /// el handle (caso: synchronized en Vesta, donde @c this es host_ptr
     /// pero @c monenter requiere GcHandle).  Se mantiene incrementalmente:
     ///   - new_handle()    => insert(addr+sizeof(GcHeader), h)
     ///   - release_handle() => erase

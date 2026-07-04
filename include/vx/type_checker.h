@@ -12,7 +12,7 @@
 
 /**
  * @file type_checker.h
- * @brief Pase de comprobacion de tipos del frontend Vex.
+ * @brief Pase de comprobacion de tipos del frontend Vesta.
  *
  * Recorre el AST producido por el parser, resuelve nombres, infiere
  * el tipo de cada expresion (rellenando @c Expr::result_type) y verifica
@@ -109,7 +109,7 @@ struct FunctionSig {
     /// una funcion con @c extern_lib != "" emite directamente
     /// @c CALLN @Method("<extern_lib>:<name>") con args en R1..RN,
     /// registrando el import via @c register_native_import.  Sin entry
-    /// para extern_lib se trata como funcion Vex normal (CALLVM).
+    /// para extern_lib se trata como funcion Vesta normal (CALLVM).
     std::string extern_lib;
     /// Phase M.5: nombre real del label generado para esta funcion.
     /// Vacio = el nombre visible coincide con el label (caso normal).
@@ -256,7 +256,7 @@ struct StructLayout {
     /// (`S b = a`, `obj.f = a`, paso por valor) en vez de un memcpy bit a bit,
     /// para que la copia tenga efecto (p.ej. ++refcount de shared<T>).  Un
     /// `return`/`move` NO lo invoca (es transferencia).  Ver
-    /// doc/VMdoc/Vex/SmartPointers.md y proj_ownership_hooks.
+    /// doc/VMdoc/Vesta/SmartPointers.md y proj_ownership_hooks.
     bool has_copy_hook = false;
     /// marca `@Introspect` -- el lowering emite
     /// IntrospectInfo POD en static_data para que `find_type("Name")`
@@ -309,7 +309,7 @@ struct EnumLayout {
 
 /**
  * @struct ClassLayout
- * @brief Layout completo de una clase Vex.
+ * @brief Layout completo de una clase Vesta.
  *
  * Reusa @c StructFieldInfo para los campos (offset, size, type).
  * @c size_bytes es el tamano total de la instancia (sin contar el
@@ -1838,7 +1838,7 @@ class TypeChecker {
     // que sobrevive: campo/indice/deref) el env queda colgante (use-after-
     // scope).  Se taintea en @c check_assign y se rechaza el escape en
     // @c check_return / @c check_assign.  Se limpia al entrar en cada funcion.
-    // Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+    // Ver doc/VMdoc/Vesta/ClosuresEnCampos.md.
     std::unordered_set<std::string> struct_stack_closure_taint_;
 
     // Ruta B (H2 move-only): locales que han sido MOVIDOS -- `S b = a` de un

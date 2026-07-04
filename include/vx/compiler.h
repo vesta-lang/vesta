@@ -12,7 +12,7 @@
 
 /**
  * @file compiler.h
- * @brief Facade del compilador Vex: encadena los pases
+ * @brief Facade del compilador Vesta: encadena los pases
  * lex/parse/check/lower/emit.
  *
  * Esta es la interfaz que el dispatcher CLI llama cuando recibe
@@ -39,7 +39,7 @@ namespace vx {
 
 /**
  * @struct CompileOptions
- * @brief Opciones del compilador Vex.
+ * @brief Opciones del compilador Vesta.
  */
 struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
@@ -68,7 +68,7 @@ struct CompileOptions {
     bool emit_ir_preopt = false;
 
     /// Cuando true, llena @c CompileResult::mermaid_ast con un diagrama
-    /// Mermaid del AST Vex post type-check.  Util para visualizar la
+    /// Mermaid del AST Vesta post type-check.  Util para visualizar la
     /// estructura del codigo fuente: clases, herencia, anotaciones.
     bool dump_mermaid_ast = false;
     /// Cuando true, llena @c CompileResult::mermaid_ir_pre con el
@@ -199,7 +199,7 @@ struct CompileOptions {
 
 /**
  * @struct CompileResult
- * @brief Resultado de la compilacion Vex.
+ * @brief Resultado de la compilacion Vesta.
  *
  * @c ok == true implica @c vel_text valido y diagnosticos sin errores
  * (puede haber warnings).
@@ -423,7 +423,7 @@ struct CompileResult {
  * No aplica VPP; el caller debe haberlo aplicado antes si quiere
  * habilitar la metaprogramacion.
  *
- * @param source   Codigo fuente Vex.
+ * @param source   Codigo fuente Vesta.
  * @param filename Nombre logico del fichero para diagnosticos.
  * @param opts     Opciones de compilacion.
  * @return CompileResult con el .vel y el set de diagnosticos.
@@ -470,7 +470,7 @@ CompileResult compile_vx_project(
  * comentarios y strings).  Usado por @c main.cpp para decidir si
  * dispatchar a @c compile_vx_project en lugar de @c compile_vx_source.
  *
- * @param source Texto Vex.
+ * @param source Texto Vesta.
  * @return @c true si encuentra al menos un @c import top-level.
  */
 bool vex_source_has_imports(const std::string &source);

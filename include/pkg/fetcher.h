@@ -13,7 +13,7 @@
  *   - Si no coincide, aborta y limpia el directorio temporal.
  *   - Las descargas pasan primero por @c $VEX_HOME/cache para reutilizar.
  *
- * Sin postinstall scripts.  El paquete fetched es PURO codigo Vex.
+ * Sin postinstall scripts.  El paquete fetched es PURO codigo Vesta.
  */
 #ifndef VESTAVM_PKG_FETCHER_H
 #define VESTAVM_PKG_FETCHER_H

@@ -82,7 +82,7 @@ std::string html_from_dot(const std::string &dot_source,
                           const std::string &view_kind);
 
 /**
- * @brief HTML interactivo del AST Vex post type-check.
+ * @brief HTML interactivo del AST Vesta post type-check.
  *
  * Conveniencia simetrica a @c mermaid_from_ast / @c graphviz_from_ast:
  * genera el DOT del AST internamente y lo pasa a @c html_from_dot.

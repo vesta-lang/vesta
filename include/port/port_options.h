@@ -24,7 +24,7 @@
  *   - Exc = SetJmp    (portable, ~3 ns overhead aceptable).
  *   - Types = StdInt  (uint64_t, int32_t, ... portatil entre toolchains).
  *
- * Si un programa Vex usa NEW/closures/strings (que requieren GC), el usuario
+ * Si un programa Vesta usa NEW/closures/strings (que requieren GC), el usuario
  * debe pasar @c --port-gc=vesta o @c --port-gc=boehm explicitamente.  En
  * caso contrario, esas IR ops se emiten como comentarios "unsupported".
  */
@@ -68,7 +68,7 @@ enum class GcMode {
 /**
  * @brief Politica de manejo de excepciones.
  *
- * Vex/IR usa @c TRYENTER + @c THROW + @c LANDINGPAD para EH.  El backend
+ * Vesta/IR usa @c TRYENTER + @c THROW + @c LANDINGPAD para EH.  El backend
  * debe escoger una representacion en el lenguaje destino:
  */
 enum class ExcMode {
@@ -122,7 +122,7 @@ enum class StringMode {
     /// Soporta @c STRMAKE/STRCAT/STREQ/STRLEN/STRRAW/STRGETBYTES con
     /// helpers @c vex_str_*.  Tracking per-thread de alocaciones via
     /// linked list; warning al exit del thread si quedan blocks vivos.
-    /// Default v1 (cubre el 99% de programas Vex con strings).
+    /// Default v1 (cubre el 99% de programas Vesta con strings).
     Managed,
 };
 
@@ -177,7 +177,7 @@ struct PortOptions {
     bool emit_compiler_hints = true;
 
     /// Nombre del modulo de salida.  Se usa como prefijo del simbolo
-    /// @c main_<module>() cuando el frontend Vex emite una funcion
+    /// @c main_<module>() cuando el frontend Vesta emite una funcion
     /// llamada "main" -- evita colision con el @c main() de C.  Si
     /// vacio, usa @c "vex" como fallback.
     std::string module_name;

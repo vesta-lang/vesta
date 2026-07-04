@@ -75,7 +75,7 @@ using JitFn = uint64_t (*)(vrt_proc *);
 /* Sprint JIT-cross-fn 2026-06-01: setear TLS proc antes de entrar
  * al JIT.  Esto asegura que cualquier callback C invocado DESDE el
  * JIT-eated code (e.g. CALLN a vex_get_native_thunk para callbacks
- * Vex->C, o cualquier FFI nativa que necesite acceder al
+ * Vesta->C, o cualquier FFI nativa que necesite acceder al
  * ProcessVM) pueda hacer `runtime::get_current_executing_process()`
  * y obtener el proc correcto.  Coste: 1 store TLS (~1 ns) al
  * entrar al JIT.  Negligible vs el coste del JIT dispatch.

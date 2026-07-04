@@ -70,7 +70,7 @@ inline uint64_t invoke_native_unchecked(void *fn, uint64_t argc,
      * `runtime::get_current_executing_process()` para obtener el
      * proc actual sin pasar arg implicito.  Critico para:
      *   - `vex_get_native_thunk` (callbacks B.1): necesita el proc
-     *     para forzar JIT compile de la fn Vex callee.
+     *     para forzar JIT compile de la fn Vesta callee.
      *   - cualquier fn C futura que necesite acceder al GC, classes,
      *     o cualquier estado del proceso VM.
      *

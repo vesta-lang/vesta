@@ -18,7 +18,7 @@
  * cubre SOLO el ensamblado texto->bytes (lo "pesado").  La inferencia es
  * propia y NO consume esta interfaz.
  *
- * Decision de diseno (cerrada): ningun fichero del frontend Vex incluye
+ * Decision de diseno (cerrada): ningun fichero del frontend Vesta incluye
  * @c keystone.h directamente.  El unico contacto vive en UN solo .cpp
  * (@c src/jit/keystone_asm_backend.cpp) detras de esta interfaz pura.  El
  * ejecutable que enlaza Keystone (target @c vm) registra una instancia en
@@ -26,7 +26,7 @@
  * Keystone).  Swap futuro a un encoder hand-rolled = otra impl de la interfaz.
  *
  * Hoy (inc.4b) se usa para VALIDAR la sintaxis del body en compile-time
- * (errores con la linea Vex).  En inc.5 (JIT) el mismo @c assemble produce
+ * (errores con la linea Vesta).  En inc.5 (JIT) el mismo @c assemble produce
  * los BYTES que van al code-cache.
  */
 
@@ -77,7 +77,7 @@ struct AsmAssembleResult {
         /// el fin del campo disp.  El consumidor resta este valor al addend.
         uint8_t pcrel_trailing = 0;
         SymRefKind kind = SymRefKind::DataRel32;
-        std::string symbol;   ///< nombre del simbolo Vex
+        std::string symbol;   ///< nombre del simbolo Vesta
     };
     std::vector<SymRef> sym_refs;
 };

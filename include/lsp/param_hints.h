@@ -12,7 +12,7 @@
 
 /**
  * @file param_hints.h
- * @brief Calculo de "parameter hints" (inlay) del LSP de Vex.
+ * @brief Calculo de "parameter hints" (inlay) del LSP de Vesta.
  *
  * Para cada llamada a una funcion conocida @c f(a, b, c) produce un hint con el
  * NOMBRE de cada parametro justo ANTES de su argumento, de modo que el cliente
@@ -49,7 +49,7 @@ struct ParamHint {
 };
 
 /**
- * @brief Calcula los parameter hints de un documento Vex.
+ * @brief Calcula los parameter hints de un documento Vesta.
  *
  * Robusto: cualquier fallo interno (excepcion del lexer/parser) se captura y la
  * funcion devuelve lo acumulado (posiblemente vacio).  Nunca lanza.
