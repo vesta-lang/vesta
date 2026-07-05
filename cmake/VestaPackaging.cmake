@@ -136,8 +136,11 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/tools/"
 # libvesta.dll (FFI, OpenSSL + libstdc++ estaticos -> autocontenida) + header
 # C + helper CMake.
 if (TARGET vesta_ffi)
+    # El DLL embebible (libvesta.dll) va en CORE, junto a vesta.exe y el LSP en
+    # <prefix>/bin -- se instala siempre (no solo con el componente SDK).  La
+    # import-lib (libvesta.dll.a, para enlazar) queda en el componente SDK.
     install(TARGETS vesta_ffi
-            RUNTIME DESTINATION bin  COMPONENT sdk
+            RUNTIME DESTINATION bin  COMPONENT core
             ARCHIVE DESTINATION lib  COMPONENT sdk)
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/include/ffi/vesta_plugin.h"
