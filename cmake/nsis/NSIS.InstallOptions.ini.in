@@ -1,0 +1,46 @@
+[Settings]
+NumFields=5
+
+[Field 1]
+Type=label
+Text=Vesta puede anadir su carpeta al PATH para que puedas ejecutar 'vesta' desde cualquier terminal. Por defecto se anade solo para tu usuario (no requiere administrador).
+Left=0
+Right=-1
+Top=0
+Bottom=30
+
+[Field 2]
+Type=radiobutton
+Text=No anadir @CPACK_PACKAGE_NAME@ al PATH
+Left=0
+Right=-1
+Top=35
+Bottom=45
+State=0
+
+[Field 3]
+Type=radiobutton
+Text=Anadir @CPACK_PACKAGE_NAME@ al PATH para TODOS los usuarios (requiere administrador)
+Left=0
+Right=-1
+Top=47
+Bottom=57
+State=0
+
+[Field 4]
+Type=radiobutton
+Text=Anadir @CPACK_PACKAGE_NAME@ al PATH solo para el usuario actual (recomendado)
+Left=0
+Right=-1
+Top=59
+Bottom=69
+State=1
+
+[Field 5]
+Type=CheckBox
+Text=Crear icono de @CPACK_PACKAGE_NAME@ en el Escritorio
+Left=0
+Right=-1
+Top=85
+Bottom=95
+State=0
