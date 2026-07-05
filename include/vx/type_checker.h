@@ -642,15 +642,14 @@ class TypeChecker {
     bool try_monomorphize_method_call(ast::CallExpr *e,
                                       ast::FieldAccessExpr *fa, const Type &bt);
 
-    /// L2.3: el nombre es un enum template generico?
-    bool is_generic_enum_template(const std::string &name) const noexcept {
-        return generic_enum_templates_.count(name) > 0;
-    }
+    /// L2.3: el nombre es un enum template generico?  Acepta el nombre CRUDO,
+    /// el cualificado por namespace (`col.Maybe` -> `col__Maybe`) y el simple
+    /// con un unico match `<ns>__<name>` (resolucion namespace-relativa).
+    bool is_generic_enum_template(const std::string &name) const;
 
-    /// El nombre es un struct template generico?
-    bool is_generic_struct_template(const std::string &name) const noexcept {
-        return generic_struct_templates_.count(name) > 0;
-    }
+    /// El nombre es un struct template generico?  (misma resolucion que
+    /// is_generic_enum_template.)
+    bool is_generic_struct_template(const std::string &name) const;
 
     /// El nombre es una funcion generica (template)?
     bool is_generic_fn_template(const std::string &name) const noexcept {

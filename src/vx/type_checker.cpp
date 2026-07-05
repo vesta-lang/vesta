@@ -281,6 +281,48 @@ static std::string mangle_sanitize(const std::string &s) {
     return out;
 }
 
+// Resuelve la CLAVE real de un template generico referido de forma
+// CUALIFICADA.  El uso `col.Box<T>` llega como "col.Box" (dotted), pero segun
+// el origen el template esta registrado como: "col.Box" (import cross-module
+// con namespace), "col__Box" (MISMO fichero: el aplanador de namespaces
+// manglea con "__"), o "Box" (sin namespace).  Devuelve la clave que exista en
+// @p m, o "" si ninguna.  Reglas (mas especifica primero):
+//   1. nombre tal cual;  2. dotted -> mangled con "__";  3. si el nombre es
+//   SIMPLE (sin punto), unico key del mapa que termine en "__<name>".
+template <class MapT>
+static std::string resolve_generic_key(const std::string &name, const MapT &m) {
+    if (m.count(name)) return name;
+    if (name.find('.') != std::string::npos) {
+        std::string dd = name;
+        size_t p;
+        while ((p = dd.find('.')) != std::string::npos) dd.replace(p, 1, "__");
+        if (m.count(dd)) return dd;
+    } else {
+        // Nombre simple `Box`: buscar un unico `<ns>__Box` (namespace-relativo).
+        const std::string suf = "__" + name;
+        std::string hit;
+        int n = 0;
+        for (const auto &kv : m) {
+            const std::string &k = kv.first;
+            if (k.size() > suf.size() &&
+                k.compare(k.size() - suf.size(), suf.size(), suf) == 0) {
+                hit = k;
+                if (++n > 1) break;
+            }
+        }
+        if (n == 1) return hit;
+    }
+    return {};
+}
+
+bool TypeChecker::is_generic_enum_template(const std::string &name) const {
+    return !resolve_generic_key(name, generic_enum_templates_).empty();
+}
+
+bool TypeChecker::is_generic_struct_template(const std::string &name) const {
+    return !resolve_generic_key(name, generic_struct_templates_).empty();
+}
+
 std::string TypeChecker::monomorphize_class(const std::string &template_name,
                                             const std::vector<Type> &args,
                                             const SourceLoc &loc) {
@@ -293,7 +335,10 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
-    auto it = generic_templates_.find(template_name);
+    const std::string gkey =
+        resolve_generic_key(template_name, generic_templates_);
+    auto it = gkey.empty() ? generic_templates_.end()
+                           : generic_templates_.find(gkey);
     if (it == generic_templates_.end()) {
         diags_.error(loc, "tipo generico desconocido: '" + template_name + "'");
         return std::string();
@@ -428,7 +473,10 @@ std::string TypeChecker::monomorphize_enum(const std::string &template_name,
         mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
-    auto it = generic_enum_templates_.find(template_name);
+    const std::string gkey =
+        resolve_generic_key(template_name, generic_enum_templates_);
+    auto it = gkey.empty() ? generic_enum_templates_.end()
+                           : generic_enum_templates_.find(gkey);
     if (it == generic_enum_templates_.end()) {
         diags_.error(loc, "enum generico desconocido: '" + template_name + "'");
         return std::string();
@@ -511,7 +559,10 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
-    auto it = generic_struct_templates_.find(template_name);
+    const std::string gkey =
+        resolve_generic_key(template_name, generic_struct_templates_);
+    auto it = gkey.empty() ? generic_struct_templates_.end()
+                           : generic_struct_templates_.find(gkey);
     if (it == generic_struct_templates_.end()) {
         diags_.error(loc,
                      "struct generico desconocido: '" + template_name + "'");
