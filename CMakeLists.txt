@@ -701,11 +701,15 @@ if (VESTA_BUILD_FFI)
     if (WIN32)
         target_link_libraries(vesta_ffi PRIVATE
                 vesta_openssl ws2_32 synchronization)
-        # DLL autocontenido: enlazar estaticamente libgcc/libstdc++ (y OpenSSL,
-        # via vesta_openssl) para que el consumidor de vesta.dll no necesite
-        # ningun runtime DLL adicional de MinGW ni de OpenSSL.
+        # DLL autocontenido: enlazar TODO estaticamente (libgcc, libstdc++ y
+        # libwinpthread via -static, mas OpenSSL via vesta_openssl) para que el
+        # consumidor de vesta.dll no necesite NINGUN runtime DLL adicional de
+        # MinGW ni de OpenSSL.  Sin -static (solo -static-libgcc/-libstdc++),
+        # libwinpthread-1.dll quedaba como dependencia dinamica -> el consumidor
+        # fallaba con "no se encuentra el punto de entrada clock_gettime64" en un
+        # sistema con un libwinpthread distinto.
         target_link_options(vesta_ffi PRIVATE
-                -static-libgcc -static-libstdc++)
+                -static -static-libgcc -static-libstdc++)
     else ()
         target_link_libraries(vesta_ffi PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
     endif ()
