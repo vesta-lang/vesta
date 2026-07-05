@@ -538,6 +538,21 @@ class Lowering {
     std::string generate_lambda_helper(ast::LambdaExpr *e);
 
     /**
+     * @brief Overlay F3: sintetiza (una vez) la funcion resolvedora del offset
+     *        de bloque de un campo -- `__ovl_resolve_<Struct>_<campo>(self)`.
+     *
+     * El body es el `@offset { ... }` del campo, lowered con `base` (= @c self)
+     * y los campos hermanos ligados como locales; `return <dir>` se vuelve el
+     * RET de la funcion.  Reusa TODO el control de flujo (if/else, multiples
+     * return) sin ALLOCA-en-bucle; el optimizer puede inlinearla.  Devuelve el
+     * nombre; @c generated_overlay_resolvers_ evita duplicados.
+     */
+    std::string generate_overlay_resolver(const StructLayout &lay,
+                                          const StructFieldInfo &fi);
+    /// Nombres de resolvedores de overlay ya sintetizados (dedup).
+    std::unordered_set<std::string> generated_overlay_resolvers_;
+
+    /**
      * @brief ADTs: lowering de un constructor de variante de
      *        enum (`Color.Green(42)` o `Color.Red`).
      *

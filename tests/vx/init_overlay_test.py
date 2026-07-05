@@ -41,6 +41,7 @@ CASES = [
     ("examples_codes_vx/173_overlay_basics.vx", 23629),
     ("examples_codes_vx/174_overlay_dynamic.vx", 128),
     ("examples_codes_vx/175_overlay_block.vx", 1337),
+    ("examples_codes_vx/176_overlay_block_if.vx", 666),
 ]
 
 

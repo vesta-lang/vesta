@@ -13291,6 +13291,108 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
 // ruido en el .vel para el caso comun de "campo cero".
 // ---------------------------------------------------------------------
 
+std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
+                                                const StructFieldInfo &fi) {
+    const std::string fn_name = "__ovl_resolve_" + lay.name + "_" + fi.name;
+    if (generated_overlay_resolvers_.count(fn_name)) return fn_name; // dedup
+
+    // Salvar contexto del padre (mismo protocolo que generate_lambda_helper).
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
+        std::move(scopes_);
+    std::unordered_set<std::string> saved_addr_taken =
+        std::move(address_taken_locals_);
+    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    const bool saved_sret_active = sret_active_;
+    const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
+    const uint64_t saved_sret_buf_size = sret_buf_size_;
+    const bool saved_returns_fn = current_fn_returns_function_;
+    sret_active_ = false;
+    sret_retbuf_ = ir::IR_NO_VALUE;
+    sret_buf_size_ = 0;
+    current_fn_returns_function_ = false;
+
+    ir::IrFunction child_fn;
+    child_fn.name = fn_name;
+    child_fn.ret_type = ir::IrType::PTR; // devuelve una DIRECCION (host)
+
+    // Param unico: `self` = puntero base de la vista (host).
+    ir::IrValueId self_pv = child_fn.new_value(ir::IrType::PTR, "%self");
+    child_fn.values[self_pv].is_param = true;
+    child_fn.values[self_pv].is_host_ptr = true;
+    child_fn.params.push_back(self_pv);
+
+    const ir::IrBlockId entry = child_fn.new_block("entry");
+    fn_ = &child_fn;
+    current_block_ = entry;
+    block_terminated_ = false;
+    scopes_.clear();
+    push_scope();
+    address_taken_locals_.clear();
+    host_bearing_locals_.clear();
+    cleanup_stack_.clear();
+
+    // `base` = self; cada campo hermano de offset CONSTANTE se lee de
+    // [self + off] (host) y se liga por nombre -> el body los usa como locales.
+    bind("base", self_pv);
+    for (const auto &sib : lay.fields) {
+        if (sib.offset_expr || sib.offset_block) continue; // solo constantes
+        ir::IrValueId saddr = self_pv;
+        if (sib.offset != 0) {
+            ir::IrValueId so =
+                emit_const(ir::IrType::I64, (uint64_t)sib.offset, 0);
+            saddr = child_fn.new_value(ir::IrType::PTR);
+            child_fn.values[saddr].is_host_ptr = true;
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = saddr;
+            a.operands = {self_pv, so};
+            child_fn.append(entry, std::move(a));
+        }
+        const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+        ir::IrValueId sv = child_fn.new_value(st);
+        ir::IrInstr l{};
+        l.op = ir::IrOp::LOAD;
+        l.type = st;
+        l.dst = sv;
+        l.operands = {saddr};
+        child_fn.append(entry, std::move(l));
+        bind(sib.name, sv);
+    }
+
+    // Lower del body: if/else, multiples return, etc. -> RET (la direccion).
+    lower_block(fi.offset_block);
+    if (!block_terminated_) {
+        // Defensa: si el body no termina en return, devolvemos base (identidad).
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::PTR;
+        rt.operands = {self_pv};
+        fn_->append(current_block_, std::move(rt));
+        block_terminated_ = true;
+    }
+
+    pop_scope();
+    pending_spawn_helpers_.push_back(std::move(child_fn));
+    generated_overlay_resolvers_.insert(fn_name);
+
+    // Restaurar contexto del padre.
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    scopes_ = std::move(saved_scopes);
+    address_taken_locals_ = std::move(saved_addr_taken);
+    cleanup_stack_ = std::move(saved_cleanups);
+    sret_active_ = saved_sret_active;
+    sret_retbuf_ = saved_sret_retbuf;
+    sret_buf_size_ = saved_sret_buf_size;
+    current_fn_returns_function_ = saved_returns_fn;
+    return fn_name;
+}
+
 ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     const ir::IrValueId base = lower_expr(e->base.get());
     if (base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
@@ -13324,73 +13426,23 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         return ir::IR_NO_VALUE;
     }
 
-    // Helper (F2/F3): enlaza en el scope actual `base` (puntero de la vista) y
-    // cada campo hermano de offset CONSTANTE a `LOAD [base + off]` (host), para
-    // que `lower_expr` de un resolvedor los resuelva por @c lookup.
-    auto bind_overlay_env = [&]() {
-        bind("base", base);
-        for (const auto &sib : lay.fields) {
-            if (sib.offset_expr || sib.offset_block) continue; // solo constantes
-            ir::IrValueId saddr = base;
-            if (sib.offset != 0) {
-                ir::IrValueId so = emit_const(ir::IrType::I64,
-                                              (uint64_t)sib.offset, e->loc.line);
-                saddr = fn_->new_value(ir::IrType::PTR);
-                fn_->values[saddr].is_host_ptr = fn_->values[base].is_host_ptr;
-                ir::IrInstr a{};
-                a.op = ir::IrOp::ADD;
-                a.type = ir::IrType::PTR;
-                a.dst = saddr;
-                a.operands = {base, so};
-                a.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(a));
-            }
-            const ir::IrType st = ir_type_from_primitive(sib.type.kind);
-            ir::IrValueId sv = fn_->new_value(st);
-            ir::IrInstr l{};
-            l.op = ir::IrOp::LOAD;
-            l.type = st;
-            l.dst = sv;
-            l.operands = {saddr};
-            l.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(l));
-            bind(sib.name, sv);
-        }
-    };
-
     // Overlay F3: resolver de BLOQUE `@offset { ...; return <direccion>; }`.
-    // Devuelve la DIRECCION final (no un offset).  F3a-min: linea recta (`let`
-    // locales + `return`); el `if/else` en resolver llega en el siguiente
-    // incremento.  El ternario en las expresiones ya da condicionales.
+    // Se sintetiza como funcion `__ovl_resolve_<S>_<f>(self)` (control de flujo
+    // completo: if/else, multiples return; sin ALLOCA-en-bucle) y se llama con
+    // el puntero base.  El resultado ES la direccion (host) donde leer/escribir.
     if (fifound->offset_block) {
-        push_scope();
-        bind_overlay_env();
-        ir::IrValueId addr = ir::IR_NO_VALUE;
-        for (auto &st : fifound->offset_block->body) {
-            if (st->kind == ast::NodeKind::ReturnStmt) {
-                auto *rs = static_cast<ast::ReturnStmt *>(st.get());
-                addr = rs->value ? lower_expr(rs->value.get()) : ir::IR_NO_VALUE;
-                break; // la direccion es el resultado del resolver
-            }
-            if (st->kind == ast::NodeKind::VarDeclStmt ||
-                st->kind == ast::NodeKind::ExprStmt) {
-                lower_stmt(st.get());
-                continue;
-            }
-            error_at(e->loc,
-                     "resolver @offset { } de '" + e->field_name +
-                     "': por ahora solo `let` y `return` (el control de flujo "
-                     "if/else en resolver llega en el siguiente incremento)");
-            break;
-        }
-        pop_scope();
-        if (addr == ir::IR_NO_VALUE) {
-            error_at(e->loc, "resolver @offset { } de '" + e->field_name +
-                                 "' debe terminar en `return <direccion>`");
-            return ir::IR_NO_VALUE;
-        }
-        // El resolver devuelve una DIRECCION host (memoria ajena).
+        const std::string rname = generate_overlay_resolver(lay, *fifound);
+        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
         fn_->values[addr].is_host_ptr = fn_->values[base].is_host_ptr;
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = rname;
+        ins.type = ir::IrType::PTR;
+        ins.dst = addr;
+        ins.operands = {base};
+        ins.is_call_site = true;
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
         return addr;
     }
 
