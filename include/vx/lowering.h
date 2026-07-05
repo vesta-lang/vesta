@@ -570,6 +570,24 @@ class Lowering {
      */
     ir::IrValueId lower_overlay_root(ast::Expr *e);
     /**
+     * @brief Merge SSA N-vias tras un `match` (Braun): inserta PHIs en @c merge_bb
+     *        para cada variable del scope enclosing que quedo con SSA values
+     *        DISTINTOS entre los arms que alcanzan el merge, y rebindea el nombre
+     *        al PHI.  Sin esto, una variable ASIGNADA (no `return`) dentro de un
+     *        arm se quedaba con el valor del ULTIMO arm bajado.  @c arm_scopes /
+     *        @c arm_preds / @c arm_reaches son paralelos (uno por arm; solo cuentan
+     *        los que @c arm_reaches[i]==true).  Deja @c scopes_ listo en el merge.
+     */
+    void emit_match_arm_phis(
+        const std::vector<std::unordered_map<std::string, ir::IrValueId>>
+            &entry_scopes,
+        const std::vector<
+            std::vector<std::unordered_map<std::string, ir::IrValueId>>>
+            &arm_scopes,
+        const std::vector<ir::IrBlockId> &arm_preds,
+        const std::vector<char> &arm_reaches, ir::IrBlockId merge_bb,
+        uint32_t line);
+    /**
      * @brief F5: aplica el swap de endianness `@endian(expr)` a @c value (un
      *        entero de 2/4/8 bytes recien leido/por escribir).  Evalua la expr
      *        de endianness del campo @c fi (con los campos hermanos de @c lay

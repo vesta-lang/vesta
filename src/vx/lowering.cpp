@@ -10408,6 +10408,54 @@ static int64_t eval_scalar_pattern(const ast::Expr *p) {
     return 0;
 }
 
+void Lowering::emit_match_arm_phis(
+    const std::vector<std::unordered_map<std::string, ir::IrValueId>>
+        &entry_scopes,
+    const std::vector<
+        std::vector<std::unordered_map<std::string, ir::IrValueId>>> &arm_scopes,
+    const std::vector<ir::IrBlockId> &arm_preds,
+    const std::vector<char> &arm_reaches, ir::IrBlockId merge_bb,
+    uint32_t line) {
+    // Base: partimos del scope de entry (variables no tocadas conservan su valor).
+    scopes_ = entry_scopes;
+    const size_t depth = entry_scopes.size();
+    for (size_t lvl = 0; lvl < depth; ++lvl) {
+        for (auto &kv : entry_scopes[lvl]) {
+            const std::string &name = kv.first;
+            // Recolectar (val, pred) de cada arm que ALCANZA el merge.
+            std::vector<std::pair<ir::IrValueId, ir::IrBlockId>> args;
+            bool all_same = true;
+            ir::IrValueId first = ir::IR_NO_VALUE;
+            for (size_t i = 0; i < arm_scopes.size(); ++i) {
+                if (!arm_reaches[i]) continue;
+                if (lvl >= arm_scopes[i].size()) continue;
+                auto it = arm_scopes[i][lvl].find(name);
+                if (it == arm_scopes[i][lvl].end()) continue;
+                args.push_back({it->second, arm_preds[i]});
+                if (first == ir::IR_NO_VALUE) first = it->second;
+                else if (it->second != first) all_same = false;
+            }
+            if (args.empty()) continue;
+            if (all_same) {
+                scopes_[lvl][name] = first; // coherente en todos los arms
+                continue;
+            }
+            // PHI N-vias al inicio del merge (uno por arm que llega).
+            const ir::IrType phi_ty = fn_->values[first].type;
+            ir::IrValueId phi_v = fn_->new_value(phi_ty);
+            ir::IrInstr phi{};
+            phi.op = ir::IrOp::PHI;
+            phi.type = phi_ty;
+            phi.dst = phi_v;
+            for (auto &a : args) phi.phi_args.push_back({a.first, a.second});
+            phi.source_line = line;
+            fn_->blocks[merge_bb].instrs.insert(
+                fn_->blocks[merge_bb].instrs.begin(), std::move(phi));
+            scopes_[lvl][name] = phi_v;
+        }
+    }
+}
+
 ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     // 1. Valor del scrutinee (entero/char).  Se compara como i64.
     ir::IrValueId tag_v = lower_expr(e->scrutinee.get());
@@ -10597,7 +10645,16 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
         sw_edge(current_block_, default_bb);
     }
 
-    // 4. Bodies (con guard opcional).
+    // 4. Bodies (con guard opcional).  SSA N-vias: snapshot del scope de entry,
+    // cada arm parte de ese entry, y en el merge se insertan PHIs para las
+    // variables mutadas (sin esto, una var ASIGNADA en un arm se quedaba con el
+    // valor del ultimo arm bajado).
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> entry_scopes =
+        scopes_;
+    std::vector<std::vector<std::unordered_map<std::string, ir::IrValueId>>>
+        arm_scopes(e->arms.size());
+    std::vector<ir::IrBlockId> arm_preds(e->arms.size(), ir::IR_NO_BLOCK);
+    std::vector<char> arm_reaches(e->arms.size(), 0);
     for (size_t i = 0; i < e->arms.size(); ++i) {
         const auto &arm = e->arms[i];
         const ir::IrBlockId target =
@@ -10605,6 +10662,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
         if (target == ir::IR_NO_BLOCK) continue;
         current_block_ = target;
         block_terminated_ = false;
+        scopes_ = entry_scopes; // cada arm parte del mismo entry
         push_scope();
         if (arm.guard) {
             ir::IrValueId g = lower_expr(arm.guard.get());
@@ -10626,6 +10684,9 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
         }
         if (arm.body) lower_stmt(arm.body.get());
         if (!block_terminated_) {
+            arm_reaches[i] = 1;
+            arm_preds[i] = current_block_;
+            arm_scopes[i] = scopes_; // snapshot ANTES del pop
             ir::IrInstr br{};
             br.op = ir::IrOp::BR;
             br.target_block = merge_bb;
@@ -10638,6 +10699,8 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
 
     current_block_ = merge_bb;
     block_terminated_ = false;
+    emit_match_arm_phis(entry_scopes, arm_scopes, arm_preds, arm_reaches,
+                        merge_bb, e->loc.line);
     return ir::IR_NO_VALUE; // statement-like (VOID)
 }
 
@@ -10900,7 +10963,13 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         sw_edge(current_block_, default_bb);
     }
 
-    // Bodies (con guard opcional: fallo del guard -> default) + merge.
+    // Bodies (con guard opcional: fallo del guard -> default) + merge N-vias.
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> entry_scopes =
+        scopes_;
+    std::vector<std::vector<std::unordered_map<std::string, ir::IrValueId>>>
+        arm_scopes(e->arms.size());
+    std::vector<ir::IrBlockId> arm_preds(e->arms.size(), ir::IR_NO_BLOCK);
+    std::vector<char> arm_reaches(e->arms.size(), 0);
     for (size_t i = 0; i < e->arms.size(); ++i) {
         const auto &arm = e->arms[i];
         const ir::IrBlockId target =
@@ -10908,6 +10977,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         if (target == ir::IR_NO_BLOCK) continue;
         current_block_ = target;
         block_terminated_ = false;
+        scopes_ = entry_scopes;
         push_scope();
         if (arm.guard) {
             ir::IrValueId g = lower_expr(arm.guard.get());
@@ -10926,6 +10996,9 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         }
         if (arm.body) lower_stmt(arm.body.get());
         if (!block_terminated_) {
+            arm_reaches[i] = 1;
+            arm_preds[i] = current_block_;
+            arm_scopes[i] = scopes_;
             ir::IrInstr br{};
             br.op = ir::IrOp::BR;
             br.target_block = merge_bb;
@@ -10938,6 +11011,8 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
 
     current_block_ = merge_bb;
     block_terminated_ = false;
+    emit_match_arm_phis(entry_scopes, arm_scopes, arm_preds, arm_reaches,
+                        merge_bb, e->loc.line);
     return ir::IR_NO_VALUE;
 }
 
