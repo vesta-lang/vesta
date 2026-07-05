@@ -46,21 +46,8 @@ import "vx_fileio";
     u64 raw @0x00;
     // Nombre de la funcion = cstring en translate((raw & 0x7FFFFFFF) + 2).
     u8 fname @offset {
-        u64 rb = (u64) parent<PeImage>();
         u32 rva = (u32)(self.raw & 0x7FFFFFFF) + 2;   // +2 salta el hint u16
-        i32 i = 0;
-        while ((u32)i < (u32)parent<PeImage>().num_sections) {
-            u32 va = parent<PeImage>().Sections[i].virt_addr;
-            u32 vs = parent<PeImage>().Sections[i].virt_size;
-            u32 rs = parent<PeImage>().Sections[i].raw_size;
-            if (vs < rs) { vs = rs; }
-            if (rva >= va && rva < va + vs) {
-                return rb + (u64)parent<PeImage>().Sections[i].raw_ptr
-                          + (u64)(rva - va);
-            }
-            i = i + 1;
-        }
-        return rb + (u64)rva;
+        return parent<PeImage>().translate(rva);
     };
 }
 
@@ -74,40 +61,13 @@ import "vx_fileio";
     // ILT: tabla de thunks anclada en translate(oft_rva, o ft_rva si oft==0), sin
     // count (fin en entrada nula).  El base lo traduce parent<PeImage>().Sections.
     Thunk thunks[] @offset {
-        u64 rb = (u64) parent<PeImage>();
         u32 rva = self.oft_rva;
         if (rva == 0) { rva = self.ft_rva; }
-        i32 i = 0;
-        while ((u32)i < (u32)parent<PeImage>().num_sections) {
-            u32 va = parent<PeImage>().Sections[i].virt_addr;
-            u32 vs = parent<PeImage>().Sections[i].virt_size;
-            u32 rs = parent<PeImage>().Sections[i].raw_size;
-            if (vs < rs) { vs = rs; }
-            if (rva >= va && rva < va + vs) {
-                return rb + (u64)parent<PeImage>().Sections[i].raw_ptr
-                          + (u64)(rva - va);
-            }
-            i = i + 1;
-        }
-        return rb + (u64)rva;
+        return parent<PeImage>().translate(rva);
     } stride(8);
     // Nombre de la DLL = cstring en translate(name_rva) por las secciones del PADRE.
     u8 dll_name @offset {
-        u64 rb = (u64) parent<PeImage>();
-        u32 rva = self.name_rva;
-        i32 i = 0;
-        while ((u32)i < (u32)parent<PeImage>().num_sections) {
-            u32 va = parent<PeImage>().Sections[i].virt_addr;
-            u32 vs = parent<PeImage>().Sections[i].virt_size;
-            u32 rs = parent<PeImage>().Sections[i].raw_size;
-            if (vs < rs) { vs = rs; }
-            if (rva >= va && rva < va + vs) {
-                return rb + (u64)parent<PeImage>().Sections[i].raw_ptr
-                          + (u64)(rva - va);
-            }
-            i = i + 1;
-        }
-        return rb + (u64)rva;
+        return parent<PeImage>().translate(self.name_rva);
     };
 }
 
@@ -145,46 +105,32 @@ import "vx_fileio";
     // Tabla de secciones (stride 40, count runtime).
     Section Sections[num_sections] @offset(e_lfanew + 24 + opt_size) stride(40);
 
-    // Campo-resolver: su DIRECCION es el offset de fichero del directorio de
-    // imports (Dirs[1]), TRADUCIDO recorriendo self.Sections (RVA -> file off).
-    // `offsetof(pe.import_dir)` da ese offset.  Toda la logica de traduccion es
-    // declarativa, dentro del overlay -- sin helper, sin punteros a mano.
-    u8 import_dir @offset {
-        u32 rva = self.Dirs[1].rva;
-        if (rva == 0) { return base; }
+    // LA abstraccion: traducir un RVA a direccion de fichero recorriendo la tabla
+    // de secciones.  Un METODO del overlay (navega self.Sections); lo usan todos
+    // los resolvers via `self.translate(...)` / `parent<PeImage>().translate(...)`
+    // -- una sola copia del algoritmo, no cinco.
+    public u64 translate(u32 rva) {
+        u64 rb = (u64) this;
         i32 i = 0;
-        while ((u32)i < (u32)self.num_sections) {
-            u32 va = self.Sections[i].virt_addr;
-            u32 vs = self.Sections[i].virt_size;
-            u32 rs = self.Sections[i].raw_size;
+        while ((u32)i < (u32)this.num_sections) {
+            u32 va = this.Sections[i].virt_addr;
+            u32 vs = this.Sections[i].virt_size;
+            u32 rs = this.Sections[i].raw_size;
             if (vs < rs) { vs = rs; }
             if (rva >= va && rva < va + vs) {
-                return base + (u64)self.Sections[i].raw_ptr + (u64)(rva - va);
+                return rb + (u64)this.Sections[i].raw_ptr + (u64)(rva - va);
             }
             i = i + 1;
         }
-        return base + (u64)rva;   // fallback: dentro de las cabeceras
-    };
+        return rb + (u64)rva;   // fallback: dentro de las cabeceras
+    }
 
-    // Tabla de descriptores de import, anclada en translate(Dirs[1].rva) y sin
-    // count (el usuario termina al leer el descriptor nulo).  La base la da un
-    // resolver que recorre self.Sections (RVA -> file off), como import_dir.
+    // Offset de fichero del directorio de imports (`offsetof(pe.import_dir)`).
+    u8 import_dir @offset { return self.translate(self.Dirs[1].rva); };
+    // Tabla de descriptores de import, anclada en translate(Dirs[1].rva), sin
+    // count (el usuario termina al leer el descriptor nulo).
     ImportDesc Imports[] @offset {
-        u64 rb = (u64) base;
-        u32 rva = self.Dirs[1].rva;
-        if (rva == 0) { return base; }
-        i32 i = 0;
-        while ((u32)i < (u32)self.num_sections) {
-            u32 va = self.Sections[i].virt_addr;
-            u32 vs = self.Sections[i].virt_size;
-            u32 rs = self.Sections[i].raw_size;
-            if (vs < rs) { vs = rs; }
-            if (rva >= va && rva < va + vs) {
-                return rb + (u64)self.Sections[i].raw_ptr + (u64)(rva - va);
-            }
-            i = i + 1;
-        }
-        return rb + (u64)rva;
+        return self.translate(self.Dirs[1].rva);
     } stride(20);
 }
 

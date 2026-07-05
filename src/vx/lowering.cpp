@@ -26421,6 +26421,12 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const ir::IrValueId this_vid = fn.new_value(ir::IrType::PTR, "%this");
         fn.values[this_vid].is_param = true;
         if (native_poo_) fn.values[this_vid].is_host_ptr = true;
+        // Overlay: la vista ES un puntero HOST (memoria ajena) en TODOS los modos
+        // (interp/jit/aot).  Sin esto, un metodo de overlay leeria sus campos con
+        // `mov` (memoria VM) en lugar de `movh` (host) -> basura.  Habilita
+        // `self.translate(rva)` / `parent<T>().translate(rva)` (abstraccion que
+        // evita duplicar la logica del formato en cada resolver).
+        if (sd->is_overlay) fn.values[this_vid].is_host_ptr = true;
         // NS.6-ext: extension sobre una CLASE -> `this` es un objeto GC
         // (host_ptr al payload, refrescable tras GC), no un buffer VM-stack.
         if (ext_this_is_class_) {
