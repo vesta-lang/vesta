@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <sstream>
 
@@ -530,11 +531,26 @@ ModuleGraph::resolve_namespace_(const std::string &ns,
 void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
     if (!mod.parsed_ast) return;
 
-    for (auto &decl : mod.parsed_ast->decls) {
-        if (!decl) continue;
-        if (decl->kind != ast::NodeKind::ImportDecl) continue;
-        auto *imp = static_cast<ast::ImportDecl *>(decl.get());
+    // NS.1 fix: los imports pueden estar ANIDADOS dentro de un NamespaceDecl
+    // (forma statement `namespace a.b.c;` que envuelve el resto del fichero,
+    // imports incluidos).  Recolectarlos recursivamente; si no, el grafo de
+    // modulos no ve el import -> el dep no se compila -> "funcion no declarada".
+    std::vector<ast::ImportDecl *> imports;
+    std::function<void(std::vector<std::unique_ptr<ast::Node>> &)> gather =
+        [&](std::vector<std::unique_ptr<ast::Node>> &decls) {
+            for (auto &decl : decls) {
+                if (!decl) continue;
+                if (decl->kind == ast::NodeKind::ImportDecl) {
+                    imports.push_back(
+                        static_cast<ast::ImportDecl *>(decl.get()));
+                } else if (decl->kind == ast::NodeKind::NamespaceDecl) {
+                    gather(static_cast<ast::NamespaceDecl *>(decl.get())->decls);
+                }
+            }
+        };
+    gather(mod.parsed_ast->decls);
 
+    for (auto *imp : imports) {
         ResolveResult r = imp->by_namespace
                               ? resolve_namespace_(imp->path, mod.canonical_path)
                               : resolve(imp->path, mod.canonical_path);

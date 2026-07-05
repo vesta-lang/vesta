@@ -573,9 +573,24 @@ std::vector<ImportRequest>
 collect_imports_(const ast::ModuleNode &mod,
                  const NsToModname *ns_to_modname = nullptr) {
     std::vector<ImportRequest> out;
-    for (const auto &d : mod.decls) {
-        if (!d || d->kind != ast::NodeKind::ImportDecl) continue;
-        const auto *im = static_cast<const ast::ImportDecl *>(d.get());
+    // NS.1 fix: en la forma statement `namespace a.b.c;` los imports quedan
+    // ANIDADOS dentro del NamespaceDecl -> recolectarlos recursivamente (si no,
+    // no se procesan y el dep no se inyecta).
+    std::vector<const ast::ImportDecl *> imports;
+    std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)> gather =
+        [&](const std::vector<std::unique_ptr<ast::Node>> &decls) {
+            for (const auto &d : decls) {
+                if (!d) continue;
+                if (d->kind == ast::NodeKind::ImportDecl)
+                    imports.push_back(
+                        static_cast<const ast::ImportDecl *>(d.get()));
+                else if (d->kind == ast::NodeKind::NamespaceDecl)
+                    gather(static_cast<const ast::NamespaceDecl *>(d.get())
+                               ->decls);
+            }
+        };
+    gather(mod.decls);
+    for (const auto *im : imports) {
         ImportRequest req;
         req.by_namespace = im->by_namespace;
         if (im->by_namespace) {

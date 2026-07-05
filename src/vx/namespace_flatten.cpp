@@ -367,6 +367,20 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
                    const std::string &ns_path,
                    std::unordered_map<std::string, std::string> &rename_map);
 
+/// NS.1 fix: reescribe los nombres de CONCEPTS en los bounds de genericos
+/// (`<T: MiConcepto>` / `where T: A + B`).  Sin esto, un concept declarado en el
+/// namespace (mangled) no se resuelve en el bound ("concepto desconocido").
+void rewrite_bounds_(
+    std::vector<ast::TypeBound> &bounds,
+    const std::unordered_map<std::string, std::string> &rename_map) {
+    for (auto &b : bounds) {
+        for (auto &c : b.concepts) {
+            auto it = rename_map.find(c);
+            if (it != rename_map.end()) c = it->second;
+        }
+    }
+}
+
 void mangle_function_decl_(
     ast::FunctionDecl *fd, const std::string &ns_path,
     std::unordered_map<std::string, std::string> &rename_map) {
@@ -381,6 +395,7 @@ void mangle_function_decl_(
         // ParamDecl::type es un TypeNode.
         rewrite_refs_in_type_(p->type.get(), rename_map);
     }
+    rewrite_bounds_(fd->type_bounds, rename_map);
     rewrite_refs_in_stmt_(fd->body.get(), rename_map);
 }
 
@@ -392,6 +407,7 @@ void mangle_struct_decl_(
         rename_map.emplace(sd->name, newn);
         sd->name = newn;
     }
+    rewrite_bounds_(sd->type_bounds, rename_map);
     for (auto &f : sd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
     }
@@ -403,6 +419,7 @@ void mangle_struct_decl_(
         rewrite_refs_in_type_(m->return_type.get(), rename_map);
         for (auto &p : m->params)
             rewrite_refs_in_type_(p->type.get(), rename_map);
+        rewrite_bounds_(m->type_bounds, rename_map);
         rewrite_refs_in_stmt_(m->body.get(), rename_map);
     }
 }
@@ -428,10 +445,12 @@ void mangle_class_decl_(
     for (auto &f : cd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
     }
+    rewrite_bounds_(cd->type_bounds, rename_map);
     for (auto &m : cd->methods) {
         rewrite_refs_in_type_(m->return_type.get(), rename_map);
         for (auto &p : m->params)
             rewrite_refs_in_type_(p->type.get(), rename_map);
+        rewrite_bounds_(m->type_bounds, rename_map);
         rewrite_refs_in_stmt_(m->body.get(), rename_map);
     }
 }
@@ -444,6 +463,7 @@ void mangle_enum_decl_(
         rename_map.emplace(ed->name, newn);
         ed->name = newn;
     }
+    rewrite_bounds_(ed->type_bounds, rename_map);
     // Variantes: pueden tener payload types que apunten a otros
     // namespace-types.
     for (auto &v : ed->variants) {
