@@ -7699,14 +7699,14 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     }
 
     // Operadores nativos para STRING.
-    // Auto-coerce: si un lado es STRING y el otro es un literal de
-    // string (PTR no-interp), el lowering lo promovera a StringObject
-    // via STRMAKE.  Permite escribir "ASCII " + var sin declarar
-    // variables intermedias.
+    // Auto-coerce: si un lado es STRING y el otro es un literal de string
+    // (`"ASCII " + var`, o `base + "${n}"`), el lowering lo promovera a
+    // StringObject / value-string (via STRMAKE o STRMAKE+STRCAT para los
+    // interpolados).  Un literal INTERPOLADO tambien es un operando string
+    // valido: produce una cadena en runtime -> cuenta como string para el
+    // concat/comparacion (antes se excluia -> `base + "${n}"` fallaba).
     auto is_str_lit = [](ast::Expr *e) {
-        if (!e || e->kind != ast::NodeKind::StringLitExpr) return false;
-        auto *sl = static_cast<ast::StringLitExpr *>(e);
-        return !sl->is_interpolated();
+        return e && e->kind == ast::NodeKind::StringLitExpr;
     };
     const bool lhs_str =
         (tl.kind == PrimitiveKind::STRING) ||

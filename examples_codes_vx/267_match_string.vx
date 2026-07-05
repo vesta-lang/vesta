@@ -10,13 +10,13 @@
 //   2. Dentro de un grupo de la misma longitud, se verifica con `strcmp` (que
 //      ya compara bytes, longitudes iguales).  Normalmente 1 solo strcmp.
 //
-// Tipico: 1 comparacion de tamano + 1 strcmp, no N comparaciones de cadena.
-// El default `case _` es obligatorio (no se pueden enumerar todas las cadenas).
+// Tipico: 1 comparacion de tamano + 1 comparacion de bytes, no N comparaciones
+// de cadena.  El default `case _` es obligatorio (no se pueden enumerar todas
+// las cadenas).
 //
-// NOTA: los strings son un tipo gestionado por GC.  El AOT es libre de GC POR
-// DISENO (nunca uso GC), asi que un match sobre strings corre en interprete y
-// JIT, donde vive el GC.  El match escalar (int/char) si es AOT-nativo: no
-// necesita GC.
+// Funciona en interprete, JIT y AOT.  El AOT es libre de GC: alli un `string` es
+// un value-type {ptr,len,cap}, la longitud es un campo (O(1)) y la verificacion
+// es un memcmp nativo -- el mismo algoritmo, sin GC y sin coste extra.
 
 // Metodo HTTP -> codigo.  "GET" y "PUT" comparten longitud (3): mismo grupo, el
 // strcmp los desambigua.  "PATCH" (5) no coincide con ninguna longitud -> default

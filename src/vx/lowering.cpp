@@ -10608,11 +10608,22 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
     if (s_h == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
     // FAST PATH: la longitud en bytes es el discriminador MAS BARATO (O(1), sin
     // iterar bytes).  Despachamos por longitud primero; la mayoria de inputs que
-    // no coinciden con ningun case se descartan aqui sin un solo strcmp.  Dentro
-    // de un bucket (misma longitud) verificamos con STRCMP (que ya compara bytes,
-    // longitud igual).  Tipico: 1 comparacion de tamano + 1 strcmp.
-    ir::IrValueId L_v = fn_->new_value(ir::IrType::I64);
-    {
+    // no coinciden con ningun case se descartan aqui sin una sola comparacion.
+    // Dentro de un bucket (misma longitud) verificamos byte-a-byte (longitud
+    // igual).  Tipico: 1 comparacion de tamano + 1 comparacion de bytes.
+    //
+    // Dos modos, mismo algoritmo:
+    //   * native_poo_ (AOT / Embed, SIN GC): value-string {ptr,len,cap}.  La
+    //     longitud es un campo (emit_native_str_len) y la verificacion es
+    //     emit_strcmp_dispatched(ptr,len,...) -- todo AOT-nativo.
+    //   * GC (interp / JIT): StringObject via STRGETBYTES + STRCMP.
+    ir::IrValueId s_ptr = ir::IR_NO_VALUE; // solo native
+    ir::IrValueId L_v;
+    if (native_poo_) {
+        s_ptr = emit_native_str_data_ptr(s_h, e->loc.line);
+        L_v = emit_native_str_len(s_h, e->loc.line);
+    } else {
+        L_v = fn_->new_value(ir::IrType::I64);
         ir::IrInstr gb{};
         gb.op = ir::IrOp::STRGETBYTES;
         gb.type = ir::IrType::I64;
@@ -10787,15 +10798,35 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         for (size_t idx : by_len[L]) {
             auto *sl =
                 static_cast<ast::StringLitExpr *>(e->arms[idx].value_pattern.get());
-            ir::IrValueId case_h = lower_string_literal_to_string_object(sl);
-            ir::IrValueId scmp = fn_->new_value(ir::IrType::I64);
-            {
+            const uint32_t aln = e->arms[idx].loc.line;
+            ir::IrValueId scmp; // -1/0/1
+            if (native_poo_) {
+                // AOT: literal -> .rodata (STR_LIT_ADDR) + len const; compara
+                // via el strcmp CPU-dispatched (mismo que el `==` nativo).
+                std::vector<uint8_t> data(sl->value.begin(), sl->value.end());
+                data.push_back(0);
+                const uint64_t li = out_mod_->intern_static_data(std::move(data));
+                ir::IrValueId lit_ptr = fn_->new_value(ir::IrType::PTR);
+                fn_->values[lit_ptr].is_host_ptr = true;
+                ir::IrInstr sa{};
+                sa.op = ir::IrOp::STR_LIT_ADDR;
+                sa.type = ir::IrType::PTR;
+                sa.dst = lit_ptr;
+                sa.imm = li;
+                sa.source_line = aln;
+                fn_->append(current_block_, std::move(sa));
+                ir::IrValueId lit_len =
+                    emit_const(ir::IrType::I64, (uint64_t)sl->value.size(), aln);
+                scmp = emit_strcmp_dispatched(s_ptr, L_v, lit_ptr, lit_len, aln);
+            } else {
+                ir::IrValueId case_h = lower_string_literal_to_string_object(sl);
+                scmp = fn_->new_value(ir::IrType::I64);
                 ir::IrInstr sc{};
                 sc.op = ir::IrOp::STRCMP;
                 sc.type = ir::IrType::I64;
                 sc.dst = scmp;
                 sc.operands = {s_h, case_h};
-                sc.source_line = e->arms[idx].loc.line;
+                sc.source_line = aln;
                 fn_->append(current_block_, std::move(sc));
             }
             ir::IrValueId zero =
@@ -14528,20 +14559,24 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     // "ambos operandos STRING" en el bytecode.
     auto coerce_string_operand = [&](ast::Expr *ex) -> ir::IrValueId {
         if (ex && ex->kind == ast::NodeKind::StringLitExpr) {
-            auto *sl = static_cast<ast::StringLitExpr *>(ex);
-            if (!sl->is_interpolated()) {
-                return lower_string_literal_to_string_object(sl);
-            }
+            // Literal de string (interpolado o no): construir el StringObject.
+            // lower_string_literal_to_string_object maneja AMBOS casos (fast
+            // path 1 STRMAKE para simples, STRMAKE+STRCAT para interpolados).
+            // OJO: NO usar lower_expr aqui -- en modo GC, lower_string_lit de un
+            // literal INTERPOLADO cae a STR_LIT_ADDR (bytes estaticos vacios
+            // para `"${n}"`) en vez de construir la interpolacion.
+            return lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(ex));
         }
         return lower_expr(ex);
     };
     /* En el body de @Macro los StringLitExpr pueden no haber pasado
      * por check_string (que setea result_type=PTR).  Aceptamos
-     * literales no interpolados como strings aunque su result_type
-     * sea VOID -- solo importa el StringLitExpr kind. */
+     * cualquier StringLitExpr como string -- solo importa el kind.
+     * Los INTERPOLADOS tambien cuentan (`base + "${n}"`): coerce_string_operand
+     * los baja via lower_expr (STRMAKE+STRCAT) a un handle STRING. */
     auto is_string_lit_node = [](const ast::Expr *ex) -> bool {
-        return ex && ex->kind == ast::NodeKind::StringLitExpr &&
-               !static_cast<const ast::StringLitExpr *>(ex)->is_interpolated();
+        return ex && ex->kind == ast::NodeKind::StringLitExpr;
     };
     const bool lhs_is_str =
         (ltk == PrimitiveKind::STRING) ||
