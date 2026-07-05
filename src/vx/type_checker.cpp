@@ -6902,10 +6902,21 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
                                      "el patron de un match sobre string debe "
                                      "ser un literal de cadena");
                     }
+                    if (arm.value_pattern_hi)
+                        diags_.error(arm.loc,
+                                     "los rangos `a..b` no aplican a strings");
                 } else if (!is_int_or_char(pt.kind)) {
                     diags_.error(arm.loc,
                                  "el patron de un match escalar debe ser un "
                                  "literal entero o char");
+                }
+                // Rango: el endpoint alto tambien debe ser entero/char.
+                if (arm.value_pattern_hi) {
+                    Type ph = check_expr(arm.value_pattern_hi.get());
+                    if (!is_int_or_char(ph.kind))
+                        diags_.error(arm.loc,
+                                     "el fin del rango debe ser un literal "
+                                     "entero o char");
                 }
             } else if (arm.variant_name == "_") {
                 has_default = true;

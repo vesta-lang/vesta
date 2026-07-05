@@ -10420,10 +10420,16 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     bool any_guard = false;
     for (const auto &a : e->arms)
         if (a.guard) { any_guard = true; break; }
+    // Rangos `case a..b =>`: si hay alguno, forzamos dispatch LINEAL en orden de
+    // arm (preserva la prioridad first-match y permite el check `lo<=v<(=)hi`).
+    bool any_range = false;
+    for (const auto &a : e->arms)
+        if (a.value_pattern_hi) { any_range = true; break; }
 
     std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
     for (size_t i = 0; i < e->arms.size(); ++i) {
         if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern) continue;
+        if (e->arms[i].value_pattern_hi) continue; // rango: no es caso puntual
         sw_cases.push_back(
             {eval_scalar_pattern(e->arms[i].value_pattern.get()), arm_blocks[i]});
     }
@@ -10435,7 +10441,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     };
 
     // Dispatch DENSO O(1): marker SWITCH_DENSE (island nativo en JIT).
-    if (!any_guard && sw_cases.size() >= 4) {
+    if (!any_guard && !any_range && sw_cases.size() >= 4) {
         const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
         const int64_t range = hi - lo + 1, n = (int64_t)sw_cases.size();
         if (lo >= 0 && range >= n && range <= 2 * n && range <= 256) {
@@ -10455,7 +10461,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
         }
     }
 
-    const bool use_bst = !any_guard && sw_cases.size() >= 5;
+    const bool use_bst = !any_guard && !any_range && sw_cases.size() >= 5;
     if (use_bst) {
         // BST balanceado O(log N): cmp_lt en nodos, cmp_eq en hojas.
         std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
@@ -10521,33 +10527,53 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             };
         emit_bst(0, sw_cases.size(), current_block_);
     } else {
-        // Cadena lineal (pocos casos o con guards).
-        for (size_t i = 0; i < e->arms.size(); ++i) {
-            if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern)
-                continue;
+        // Cadena lineal en orden de arm (pocos casos, guards, o rangos).
+        // Helper: emite BR_COND cmp -> target, else fall.
+        auto emit_cmp_br = [&](ir::IrOp op, ir::IrValueId a, int64_t b,
+                               ir::IrBlockId target, ir::IrBlockId fall,
+                               uint32_t line) {
             ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
-            ir::IrValueId tc = emit_const(
-                ir::IrType::I64,
-                (uint64_t)eval_scalar_pattern(e->arms[i].value_pattern.get()),
-                e->arms[i].loc.line);
+            ir::IrValueId tc = emit_const(ir::IrType::I64, (uint64_t)b, line);
             ir::IrInstr cm{};
-            cm.op = ir::IrOp::CMP_EQ;
+            cm.op = op;
             cm.type = ir::IrType::BOOL;
             cm.dst = cmp;
-            cm.operands = {tag_v, tc};
-            cm.source_line = e->arms[i].loc.line;
+            cm.operands = {a, tc};
+            cm.source_line = line;
             fn_->append(current_block_, std::move(cm));
-            ir::IrBlockId fall = fn_->new_block("smatch_next");
-            arm_fall_bbs[i] = fall;
             ir::IrInstr br{};
             br.op = ir::IrOp::BR_COND;
             br.operands.push_back(cmp);
-            br.target_block = arm_blocks[i];
+            br.target_block = target;
             br.false_block = fall;
-            br.source_line = e->arms[i].loc.line;
+            br.source_line = line;
             fn_->append(current_block_, std::move(br));
-            sw_edge(current_block_, arm_blocks[i]);
+            sw_edge(current_block_, target);
             sw_edge(current_block_, fall);
+        };
+        for (size_t i = 0; i < e->arms.size(); ++i) {
+            if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern)
+                continue;
+            const uint32_t ln = e->arms[i].loc.line;
+            const int64_t lo =
+                eval_scalar_pattern(e->arms[i].value_pattern.get());
+            ir::IrBlockId fall = fn_->new_block("smatch_next");
+            arm_fall_bbs[i] = fall;
+            if (e->arms[i].value_pattern_hi) {
+                // Rango `lo <= v <(=) hi`: dos comparaciones.
+                const int64_t hi =
+                    eval_scalar_pattern(e->arms[i].value_pattern_hi.get());
+                ir::IrBlockId mid = fn_->new_block("smatch_rmid");
+                emit_cmp_br(ir::IrOp::CMP_GE, tag_v, lo, mid, fall, ln);
+                current_block_ = mid;
+                block_terminated_ = false;
+                const ir::IrOp hi_op = e->arms[i].range_inclusive
+                                           ? ir::IrOp::CMP_LE
+                                           : ir::IrOp::CMP_LT;
+                emit_cmp_br(hi_op, tag_v, hi, arm_blocks[i], fall, ln);
+            } else {
+                emit_cmp_br(ir::IrOp::CMP_EQ, tag_v, lo, arm_blocks[i], fall, ln);
+            }
             current_block_ = fall;
             block_terminated_ = false;
         }

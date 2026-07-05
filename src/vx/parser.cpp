@@ -3480,6 +3480,42 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
                 (void)consume();
                 arm.value_pattern = std::move(lit);
             }
+            // Rango `case a..b =>` (exclusivo) / `case a..=b =>` (inclusivo).
+            // Solo enteros/chars (no strings).  El literal alto se parsea igual.
+            if (!is_str_pat && (current_.kind == TokenKind::DOTDOT ||
+                                current_.kind == TokenKind::DOTDOTEQ)) {
+                arm.range_inclusive = (current_.kind == TokenKind::DOTDOTEQ);
+                (void)consume(); // '..' o '..='
+                if (current_.kind == TokenKind::MINUS &&
+                    lex_.peek_at(0).kind == TokenKind::INT_LIT) {
+                    SourceLoc mloc = current_.loc;
+                    (void)consume();
+                    auto lit = std::make_unique<ast::IntLitExpr>();
+                    lit->loc = current_.loc;
+                    lit->value = current_.int_val;
+                    (void)consume();
+                    auto neg = std::make_unique<ast::UnaryExpr>();
+                    neg->loc = mloc;
+                    neg->op = ast::UnOp::Neg;
+                    neg->operand = std::move(lit);
+                    arm.value_pattern_hi = std::move(neg);
+                } else if (current_.kind == TokenKind::INT_LIT) {
+                    auto lit = std::make_unique<ast::IntLitExpr>();
+                    lit->loc = current_.loc;
+                    lit->value = current_.int_val;
+                    (void)consume();
+                    arm.value_pattern_hi = std::move(lit);
+                } else if (current_.kind == TokenKind::CHAR_LIT) {
+                    auto lit = std::make_unique<ast::CharLitExpr>();
+                    lit->loc = current_.loc;
+                    lit->codepoint = (uint32_t)current_.int_val;
+                    (void)consume();
+                    arm.value_pattern_hi = std::move(lit);
+                } else {
+                    error_here("se esperaba un literal entero/char tras "
+                               "'..' / '..=' en el rango del case");
+                }
+            }
             // Cae al flujo compartido de guard + `=>` + body (variant_name
             // queda vacio: es un arm de VALOR, no de variante ni default).
         } else {

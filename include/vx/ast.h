@@ -982,7 +982,15 @@ struct MatchArm {
     /// `case 'a' =>`.  no-owning-al-cuerpo IntLitExpr/CharLitExpr.  null en las
     /// arms de variante ADT y en el default `_`.  El type checker exige que el
     /// scrutinee sea entero/char y todos los patrones literales de ese tipo.
+    /// Tambien es el literal de un match sobre string (StringLitExpr).
     std::unique_ptr<Expr> value_pattern;
+    /// Fin (alto) de un patron de RANGO `case a..b =>` (exclusivo) o
+    /// `case a..=b =>` (inclusivo), donde @c value_pattern es el inicio (bajo).
+    /// null = patron de valor unico.  Solo para enteros/chars.
+    std::unique_ptr<Expr> value_pattern_hi;
+    /// true si el rango es inclusivo (`..=`): `a <= v <= b`.  false si es
+    /// exclusivo (`..`): `a <= v < b`.  Solo relevante si value_pattern_hi.
+    bool range_inclusive = false;
     std::unique_ptr<Stmt> body;
     /// Bug fix 2026-05-23: guard opcional `case Pat if expr =>`.  Si
     /// presente, el lowering evalua la expr DESPUES del tag match;

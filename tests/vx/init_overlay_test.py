@@ -46,6 +46,7 @@ CASES = [
     ("examples_codes_vx/266_match_int.vx", 9334),
     ("examples_codes_vx/267_match_string.vx", 54231),
     ("examples_codes_vx/268_match_string_runtime.vx", 321),
+    ("examples_codes_vx/269_match_range.vx", 1321),
 ]
 
 
