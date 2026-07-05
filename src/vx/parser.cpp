@@ -2808,6 +2808,15 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
         ns->is_statement_form = true;
         while (current_.kind != TokenKind::END_OF_FILE &&
                current_.kind != TokenKind::KW_NAMESPACE) {
+            // extern "lib" { fn ...; } produce N decls (una por fn); parse_program
+            // lo maneja como caso especial y parse_top_level_decl NO -> replicarlo
+            // aqui para que un `extern` dentro de un namespace funcione.
+            if (current_.kind == TokenKind::KW_EXTERN) {
+                ast::ModuleNode tmp;
+                parse_extern_block(tmp);
+                for (auto &d : tmp.decls) ns->decls.push_back(std::move(d));
+                continue;
+            }
             const uint32_t inner_start = current_.loc.offset;
             auto inner = parse_top_level_decl();
             if (!inner) {
@@ -2831,6 +2840,13 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
 
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
+        // extern "lib" { ... } dentro del namespace (ver forma statement arriba).
+        if (current_.kind == TokenKind::KW_EXTERN) {
+            ast::ModuleNode tmp;
+            parse_extern_block(tmp);
+            for (auto &d : tmp.decls) ns->decls.push_back(std::move(d));
+            continue;
+        }
         const uint32_t inner_start = current_.loc.offset;
         auto inner = parse_top_level_decl();
         if (!inner) {
