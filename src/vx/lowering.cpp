@@ -22,6 +22,7 @@
 #include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime_introspect.h"   // helpers compartidos rama A
+#include "generic_clone.h"             // clone_expr (custom print to_string)
 #include "vx/lexer.h"                 // parse de fragments para @Macro
 #include "vx/parser.h"                // parse_one_expr para @Macro
 #include "ir/ir_optimizer.h"           // register_pure_new_helper
@@ -20764,6 +20765,31 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         emit_print_typed_value;
     emit_print_typed_value = [&](ast::Expr *ex, const std::string &fmt_str) {
         if (!ex) return;
+        // Impresion PERSONALIZADA (patron Display / __str__): si `ex` es un
+        // struct/overlay que declara `to_string() -> string`, imprimimos
+        // `ex.to_string()`.  Se sintetiza el call clonando `ex` como receptor.
+        if (ex->result_type.kind == PrimitiveKind::STRUCT &&
+            ex->kind != ast::NodeKind::CallExpr) {   // evita recursion infinita
+            auto itl = tc_.struct_layouts().find(ex->result_type.struct_name);
+            if (itl != tc_.struct_layouts().end()) {
+                for (const auto &mth : itl->second.methods) {
+                    if (mth.name == "to_string" &&
+                        mth.return_type.kind == PrimitiveKind::STRING) {
+                        auto synth = std::make_unique<ast::CallExpr>();
+                        synth->loc = ex->loc;
+                        auto fa = std::make_unique<ast::FieldAccessExpr>();
+                        fa->loc = ex->loc;
+                        fa->field_name = "to_string";
+                        fa->base = vxgen::clone_expr(ex);
+                        if (fa->base) fa->base->result_type = ex->result_type;
+                        synth->callee = std::move(fa);
+                        synth->result_type = Type{PrimitiveKind::STRING};
+                        emit_print_typed_value(synth.get(), fmt_str);
+                        return;
+                    }
+                }
+            }
+        }
         // Caso especial: builtins de truecolor fg_rgb(r,g,b) /
         // bg_rgb(r,g,b) dentro de la interpolacion.  Se expanden a la
         // secuencia SGR 24-bit: fg -> "\x1b[38;2;R;G;Bm", bg ->
