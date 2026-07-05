@@ -69,7 +69,23 @@ namespace {
  * encerrados en `["..."]`, lo que permite mostrar genericos como
  * `Future<i32>` sin romper el parser.
  */
-std::string escape_label(const std::string &s) {
+std::string escape_label(const std::string &s_in) {
+    // NS: los nombres de un namespace estan mangled con `__` como separador
+    // (org__geo__shapes__area).  Para el diagrama los mostramos CUALIFICADOS con
+    // puntos (org.geo.shapes.area), mucho mas legibles.  Se preserva un `__`
+    // INICIAL (nombres sinteticos: __module_init, __new_X, __lambda_N).
+    std::string s;
+    s.reserve(s_in.size());
+    for (size_t i = 0; i < s_in.size();) {
+        if (i > 0 && i + 1 < s_in.size() && s_in[i] == '_' &&
+            s_in[i + 1] == '_') {
+            s.push_back('.');
+            i += 2;
+        } else {
+            s.push_back(s_in[i]);
+            ++i;
+        }
+    }
     // Mermaid label rules:
     //   - Dentro de `["..."]` o edges `|"..."|` Mermaid acepta
     //     practicamente cualquier carater excepto `"` literal.

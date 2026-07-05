@@ -66,7 +66,27 @@ namespace {
  * usamos aqui.  Para nuestro caso de labels estandar quoted, no hay
  * que escapar HTML entities.
  */
-std::string escape_label(const std::string &s) {
+// NS: convierte el separador de mangling `__` en `.` para mostrar los nombres
+// de namespace cualificados (org__geo__shapes__area -> org.geo.shapes.area).
+// Preserva un `__` INICIAL (nombres sinteticos: __module_init, __new_X).
+static std::string ns_demangle(const std::string &s_in) {
+    std::string s;
+    s.reserve(s_in.size());
+    for (size_t i = 0; i < s_in.size();) {
+        if (i > 0 && i + 1 < s_in.size() && s_in[i] == '_' &&
+            s_in[i + 1] == '_') {
+            s.push_back('.');
+            i += 2;
+        } else {
+            s.push_back(s_in[i]);
+            ++i;
+        }
+    }
+    return s;
+}
+
+std::string escape_label(const std::string &s_raw) {
+    const std::string s = ns_demangle(s_raw);
     std::string out;
     out.reserve(s.size() + 8);
     for (char c : s) {
@@ -94,7 +114,8 @@ std::string escape_label(const std::string &s) {
  * }"`. Los caracteres `{`, `}`, `|`, `<`, `>` son sintaxis del record y deben
  * ir escapados con `\` cuando aparecen como contenido literal.
  */
-std::string escape_record(const std::string &s) {
+std::string escape_record(const std::string &s_raw) {
+    const std::string s = ns_demangle(s_raw);
     std::string out;
     out.reserve(s.size() + 8);
     for (char c : s) {
