@@ -38,6 +38,32 @@ import "vx_fileio";
     u32 size @0x04;
 }
 
+// Entrada de la ILT (8 bytes, PE32+).  bit63=1 -> import por ordinal; si no, los
+// 31 bits bajos son un RVA a IMAGE_IMPORT_BY_NAME (hint u16 + nombre).  El nombre
+// de la funcion se resuelve alcanzando el PeImage RAIZ (a DOS niveles) via
+// parent<PeImage>().
+@overlay struct Thunk {
+    u64 raw @0x00;
+    // Nombre de la funcion = cstring en translate((raw & 0x7FFFFFFF) + 2).
+    u8 fname @offset {
+        u64 rb = (u64) parent<PeImage>();
+        u32 rva = (u32)(self.raw & 0x7FFFFFFF) + 2;   // +2 salta el hint u16
+        i32 i = 0;
+        while ((u32)i < (u32)parent<PeImage>().num_sections) {
+            u32 va = parent<PeImage>().Sections[i].virt_addr;
+            u32 vs = parent<PeImage>().Sections[i].virt_size;
+            u32 rs = parent<PeImage>().Sections[i].raw_size;
+            if (vs < rs) { vs = rs; }
+            if (rva >= va && rva < va + vs) {
+                return rb + (u64)parent<PeImage>().Sections[i].raw_ptr
+                          + (u64)(rva - va);
+            }
+            i = i + 1;
+        }
+        return rb + (u64)rva;
+    };
+}
+
 // IMAGE_IMPORT_DESCRIPTOR (20 bytes).  El nombre de la DLL vive en SU PROPIO RVA;
 // se resuelve alcanzando las secciones del PeImage CONTENEDOR via parent<PeImage>()
 // -- toda la traduccion, declarativa, dentro del overlay.
@@ -45,6 +71,26 @@ import "vx_fileio";
     u32 oft_rva  @0x00;   // OriginalFirstThunk (RVA a la ILT)
     u32 name_rva @0x0C;   // RVA al nombre de la DLL
     u32 ft_rva   @0x10;   // FirstThunk (RVA a la IAT)
+    // ILT: tabla de thunks anclada en translate(oft_rva, o ft_rva si oft==0), sin
+    // count (fin en entrada nula).  El base lo traduce parent<PeImage>().Sections.
+    Thunk thunks[] @offset {
+        u64 rb = (u64) parent<PeImage>();
+        u32 rva = self.oft_rva;
+        if (rva == 0) { rva = self.ft_rva; }
+        i32 i = 0;
+        while ((u32)i < (u32)parent<PeImage>().num_sections) {
+            u32 va = parent<PeImage>().Sections[i].virt_addr;
+            u32 vs = parent<PeImage>().Sections[i].virt_size;
+            u32 rs = parent<PeImage>().Sections[i].raw_size;
+            if (vs < rs) { vs = rs; }
+            if (rva >= va && rva < va + vs) {
+                return rb + (u64)parent<PeImage>().Sections[i].raw_ptr
+                          + (u64)(rva - va);
+            }
+            i = i + 1;
+        }
+        return rb + (u64)rva;
+    } stride(8);
     // Nombre de la DLL = cstring en translate(name_rva) por las secciones del PADRE.
     u8 dll_name @offset {
         u64 rb = (u64) parent<PeImage>();
@@ -260,6 +306,18 @@ i32 main() {
     while (pe.Imports[i].name_rva != 0 && i < 64) {
         print("  ");
         print_cstr(&pe.Imports[i].dll_name);
+        print(":");
+        // funciones importadas: recorrer la ILT (nombres, saltando ordinales)
+        i32 k = 0;
+        while (pe.Imports[i].thunks[k].raw != 0 && k < 6) {
+            if (pe.Imports[i].thunks[k].raw < 0x8000000000000000) {
+                print(" ");
+                print_cstr(&pe.Imports[i].thunks[k].fname);
+            } else {
+                print(" ord");
+            }
+            k = k + 1;
+        }
         println("");
         i = i + 1;
     }
