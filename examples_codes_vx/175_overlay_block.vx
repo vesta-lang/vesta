@@ -1,0 +1,71 @@
+// -----------------------------------------------------------------------------
+// Overlay structs (F3a): resolver de BLOQUE `@offset { ...; return <dir>; }`
+// -----------------------------------------------------------------------------
+// F2 permitia offsets como UNA expresion (`@offset(prev + 0x10)`).  F3 permite
+// un BLOQUE con logica: variables intermedias (`let`) y una direccion final.
+// El bloque:
+//   * ve los campos HERMANOS por su nombre (leidos de la vista),
+//   * ve `base` (el puntero base de la vista) para aritmetica,
+//   * DEVUELVE la DIRECCION final (no un offset) con `return`.
+//
+// Asi describes layouts donde la posicion de un campo depende de LOGICA sobre
+// otros campos (uniones etiquetadas, formatos con cabecera de longitud
+// variable, etc.), sin escribir funciones de parseo a mano.  El ternario en el
+// `return` da direcciones CONDICIONALES.
+//
+// (F3a-min: el cuerpo es `let` + `return`; el ternario cubre los condicionales.
+//  El `if/else` como sentencia dentro del resolver llega en el siguiente
+//  incremento.)  Igual en interprete, JIT y AOT.
+
+// Union etiquetada: `kind` decide donde vive `payload`.
+//   kind==0 -> payload justo tras la cabecera:      base + hdr_len
+//   kind!=0 -> hay un desplazamiento extra:          base + hdr_len + extra
+@overlay struct TaggedRec {
+    u32 kind    @0x00;   // 0 = inline, !=0 = con desplazamiento extra
+    u32 hdr_len @0x04;   // longitud de la cabecera (variable)
+    u32 extra   @0x08;   // desplazamiento extra (solo si kind!=0)
+    u32 payload @offset {
+        u64 hdr = base + hdr_len;              // intermedio nombrado
+        return kind == 0 ? hdr : hdr + extra;  // ternario -> direccion condicional
+    };
+}
+
+// Crea un registro con kind!=0 (rama hdr+extra) y devuelve payload.
+u32 make_extra(u8* buf) {
+    TaggedRec r = TaggedRec(buf);
+    r.kind    = (u32)1;      // rama con extra
+    r.hdr_len = (u32)16;     // cabecera de 16 bytes
+    r.extra   = (u32)8;      // +8 mas
+    r.payload = (u32)1000;   // STORE en base + 16 + 8 = base + 24
+    return r.payload;        // relee via el resolver -> 1000
+}
+
+// Crea un registro con kind==0 (rama sin extra) y devuelve payload.
+u32 make_inline(u8* buf) {
+    TaggedRec r = TaggedRec(buf);
+    r.kind    = (u32)0;      // rama inline
+    r.hdr_len = (u32)12;     // cabecera de 12 bytes
+    r.extra   = (u32)999;    // ignorado (kind==0)
+    r.payload = (u32)337;    // STORE en base + 12
+    return r.payload;        // relee via el resolver -> 337
+}
+
+i32 main() {
+    u8* a = (u8*) malloc(64);
+    u8* b = (u8*) malloc(64);
+
+    u32 pa = make_extra(a);    // rama kind!=0 -> 1000
+    u32 pb = make_inline(b);   // rama kind==0 -> 337
+    println("payload_extra=${pa} payload_inline=${pb}");   // 1000 337
+
+    // Comprobamos que cada payload aterrizo en la direccion CORRECTA (memoria
+    // cruda): extra -> a+24, inline -> b+12.
+    u32 raw_a = *(u32*)(a + 24);
+    u32 raw_b = *(u32*)(b + 12);
+    println("crudo a@24=${raw_a} b@12=${raw_b}");           // 1000 337
+
+    i32 result = (i32)pa + (i32)pb;   // 1000 + 337 = 1337
+    free(a);
+    free(b);
+    return result;   // 1337 (ambas ramas del ternario resueltas)
+}

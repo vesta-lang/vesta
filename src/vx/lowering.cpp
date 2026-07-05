@@ -13324,6 +13324,76 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         return ir::IR_NO_VALUE;
     }
 
+    // Helper (F2/F3): enlaza en el scope actual `base` (puntero de la vista) y
+    // cada campo hermano de offset CONSTANTE a `LOAD [base + off]` (host), para
+    // que `lower_expr` de un resolvedor los resuelva por @c lookup.
+    auto bind_overlay_env = [&]() {
+        bind("base", base);
+        for (const auto &sib : lay.fields) {
+            if (sib.offset_expr || sib.offset_block) continue; // solo constantes
+            ir::IrValueId saddr = base;
+            if (sib.offset != 0) {
+                ir::IrValueId so = emit_const(ir::IrType::I64,
+                                              (uint64_t)sib.offset, e->loc.line);
+                saddr = fn_->new_value(ir::IrType::PTR);
+                fn_->values[saddr].is_host_ptr = fn_->values[base].is_host_ptr;
+                ir::IrInstr a{};
+                a.op = ir::IrOp::ADD;
+                a.type = ir::IrType::PTR;
+                a.dst = saddr;
+                a.operands = {base, so};
+                a.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(a));
+            }
+            const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+            ir::IrValueId sv = fn_->new_value(st);
+            ir::IrInstr l{};
+            l.op = ir::IrOp::LOAD;
+            l.type = st;
+            l.dst = sv;
+            l.operands = {saddr};
+            l.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(l));
+            bind(sib.name, sv);
+        }
+    };
+
+    // Overlay F3: resolver de BLOQUE `@offset { ...; return <direccion>; }`.
+    // Devuelve la DIRECCION final (no un offset).  F3a-min: linea recta (`let`
+    // locales + `return`); el `if/else` en resolver llega en el siguiente
+    // incremento.  El ternario en las expresiones ya da condicionales.
+    if (fifound->offset_block) {
+        push_scope();
+        bind_overlay_env();
+        ir::IrValueId addr = ir::IR_NO_VALUE;
+        for (auto &st : fifound->offset_block->body) {
+            if (st->kind == ast::NodeKind::ReturnStmt) {
+                auto *rs = static_cast<ast::ReturnStmt *>(st.get());
+                addr = rs->value ? lower_expr(rs->value.get()) : ir::IR_NO_VALUE;
+                break; // la direccion es el resultado del resolver
+            }
+            if (st->kind == ast::NodeKind::VarDeclStmt ||
+                st->kind == ast::NodeKind::ExprStmt) {
+                lower_stmt(st.get());
+                continue;
+            }
+            error_at(e->loc,
+                     "resolver @offset { } de '" + e->field_name +
+                     "': por ahora solo `let` y `return` (el control de flujo "
+                     "if/else en resolver llega en el siguiente incremento)");
+            break;
+        }
+        pop_scope();
+        if (addr == ir::IR_NO_VALUE) {
+            error_at(e->loc, "resolver @offset { } de '" + e->field_name +
+                                 "' debe terminar en `return <direccion>`");
+            return ir::IR_NO_VALUE;
+        }
+        // El resolver devuelve una DIRECCION host (memoria ajena).
+        fn_->values[addr].is_host_ptr = fn_->values[base].is_host_ptr;
+        return addr;
+    }
+
     // Overlay F2: offset DINAMICO `@offset(hermano + N)`.  Evaluamos la
     // expresion en tiempo de acceso; los nombres desnudos de campos hermanos
     // se enlazan a `LOAD [base + hermano.offset]` (host) en un scope temporal

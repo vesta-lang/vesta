@@ -2604,7 +2604,12 @@ void TypeChecker::collect_globals() {
                 // auto-layout secuencial).  Si un campo de un overlay no lo
                 // trae, es error (F1).
                 if (s->is_overlay) {
-                    if (f.offset_expr) {
+                    if (f.offset_block) {
+                        // Resolver de BLOQUE (F3): `@offset { ... }`.  Devuelve
+                        // la direccion final; se resuelve en tiempo de acceso.
+                        fi.offset = 0;
+                        fi.offset_block = f.offset_block.get();
+                    } else if (f.offset_expr) {
                         // Offset DINAMICO: `@offset(hermano + N)`.  Se resuelve
                         // en tiempo de acceso; @c offset base queda a 0.
                         fi.offset = 0;
@@ -2612,8 +2617,8 @@ void TypeChecker::collect_globals() {
                     } else if (f.explicit_offset < 0) {
                         diags_.error(f.loc,
                                      "campo '" + f.name + "' de un @overlay "
-                                     "struct requiere @offset(N) o "
-                                     "@offset(expr)");
+                                     "struct requiere @offset(N), @offset(expr) "
+                                     "o @offset { ... }");
                         fi.offset = 0;
                     } else {
                         fi.offset = (uint32_t)f.explicit_offset;
@@ -2646,20 +2651,20 @@ void TypeChecker::collect_globals() {
                 // buffer de respaldo exacto al CREAR la vista.
                 uint32_t extent = 0;
                 for (auto &fi : layout.fields) {
-                    if (fi.offset_expr) continue; // dinamico: no cuenta
+                    if (fi.offset_expr || fi.offset_block) continue; // dinamico
                     uint32_t end = fi.offset + fi.size;
                     if (end > extent) extent = end;
                 }
                 if (extent % 8 != 0) extent += 8 - (extent % 8);
                 layout.overlay_extent = extent;
-                // Chequeo de los offset dinamicos (`@offset(hermano + N)`):
-                // los nombres desnudos que aparecen en la expresion se
-                // resuelven contra los campos hermanos del overlay.  Metemos
-                // cada campo como simbolo entero en un scope temporal y
-                // chequeamos la expresion (debe evaluar a un entero).
+                // Chequeo de los resolvedores dinamicos (`@offset(hermano+N)` y
+                // `@offset { ... }`): los nombres desnudos resuelven contra los
+                // campos hermanos + el puntero `base` de la vista.  Metemos cada
+                // campo (como entero) y `base` (u64) en un scope temporal.  La
+                // expr debe evaluar a un entero; el bloque devuelve una direccion.
                 bool any_dyn = false;
                 for (auto &f : s->fields)
-                    if (f.offset_expr) { any_dyn = true; break; }
+                    if (f.offset_expr || f.offset_block) { any_dyn = true; break; }
                 if (any_dyn) {
                     push_scope();
                     for (auto &fi : layout.fields) {
@@ -2668,19 +2673,31 @@ void TypeChecker::collect_globals() {
                         sym.type = fi.type;
                         (void)declare(fi.name, sym);
                     }
+                    auto is_int_kind = [](PrimitiveKind k) {
+                        return k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+                               k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+                               k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+                               k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+                    };
                     for (auto &f : s->fields) {
-                        if (!f.offset_expr) continue;
-                        Type ot = check_expr(f.offset_expr.get());
-                        const PrimitiveKind k = ot.kind;
-                        const bool is_int =
-                            k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-                            k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
-                            k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
-                            k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
-                        if (!is_int) {
-                            diags_.error(f.loc,
-                                         "el @offset(expr) del campo '" +
-                                         f.name + "' debe evaluar a un entero");
+                        if (f.offset_expr) {
+                            // La expr es un OFFSET (base no esta en scope aqui).
+                            Type ot = check_expr(f.offset_expr.get());
+                            if (!is_int_kind(ot.kind))
+                                diags_.error(f.loc,
+                                             "el @offset(expr) del campo '" +
+                                             f.name + "' debe evaluar a un entero");
+                        } else if (f.offset_block) {
+                            // El bloque devuelve una DIRECCION y ve `base` (el
+                            // puntero de la vista), en un scope propio.
+                            push_scope();
+                            Symbol bsym;
+                            bsym.kind = SymbolKind::Variable;
+                            bsym.type = Type{PrimitiveKind::U64};
+                            (void)declare("base", bsym);
+                            check_block(f.offset_block.get(),
+                                        Type{PrimitiveKind::U64});
+                            pop_scope();
                         }
                     }
                     pop_scope();

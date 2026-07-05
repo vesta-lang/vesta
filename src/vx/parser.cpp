@@ -3705,15 +3705,24 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             if (current_.kind == TokenKind::IDENTIFIER &&
                 current_.lexeme == "offset") {
                 (void)consume(); // 'offset'
-                (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @offset");
-                auto oe = parse_expr();
-                (void)expect(TokenKind::RPAREN,
-                             "se esperaba ')' tras @offset(expr)");
-                if (oe && oe->kind == ast::NodeKind::IntLitExpr) {
-                    f.explicit_offset =
-                        (int64_t)static_cast<ast::IntLitExpr *>(oe.get())->value;
+                if (current_.kind == TokenKind::LBRACE) {
+                    // F3: resolver de BLOQUE `@offset { ...; return <dir>; }`.
+                    // Puede tener `let` locales + referenciar campos hermanos y
+                    // `base`; devuelve la DIRECCION final.
+                    f.offset_block = parse_block();
                 } else {
-                    f.offset_expr = std::move(oe);
+                    (void)expect(TokenKind::LPAREN,
+                                 "se esperaba '(' o '{' tras @offset");
+                    auto oe = parse_expr();
+                    (void)expect(TokenKind::RPAREN,
+                                 "se esperaba ')' tras @offset(expr)");
+                    if (oe && oe->kind == ast::NodeKind::IntLitExpr) {
+                        f.explicit_offset = (int64_t)static_cast<ast::IntLitExpr *>(
+                                                oe.get())
+                                                ->value;
+                    } else {
+                        f.offset_expr = std::move(oe);
+                    }
                 }
             } else {
                 // Atajo `@0x30`: solo constante entera.

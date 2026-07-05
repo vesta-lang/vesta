@@ -168,6 +168,11 @@ struct StructFieldInfo {
     /// lowering evalua esta expresion (los nombres desnudos de hermanos leen
     /// @c LOAD [base + hermano.offset]) y direcciona en @c base + resultado.
     ast::Expr *offset_expr = nullptr;
+    /// Resolver de BLOQUE del offset (F3): `@offset { ...; return <dir>; }`.
+    /// no-owning al AST.  A diferencia de @c offset_expr, el bloque DEVUELVE la
+    /// DIRECCION final (no un offset relativo); tiene `base` (el puntero de la
+    /// vista) y los campos hermanos en scope.  null = usa expr/offset constante.
+    ast::BlockStmt *offset_block = nullptr;
 };
 
 /**

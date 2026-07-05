@@ -1935,6 +1935,11 @@ struct StructFieldDecl {
     /// @c explicit_offset (constante).  Se evalua en tiempo de acceso; el caso
     /// puramente constante se pliega a @c explicit_offset en el parser.
     std::unique_ptr<Expr> offset_expr;
+    /// Overlay (F3): resolver de BLOQUE del offset -- `@offset { ...; return
+    /// <direccion>; }`.  El bloque puede tener `let` locales y referenciar
+    /// campos hermanos + el puntero `base` de la vista; DEVUELVE la DIRECCION
+    /// final (no un offset).  null = usa @c offset_expr/@c explicit_offset.
+    std::unique_ptr<BlockStmt> offset_block;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`
