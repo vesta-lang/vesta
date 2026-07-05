@@ -90,6 +90,9 @@ add_library(vx_lib STATIC
     module_resolver.cpp
     module_interop.cpp
     namespace_flatten.cpp
+    # Indice semantico por-declaracion (hash de contenido + grafo de deps):
+    # sustrato de la compilacion incremental granular y distribuida.
+    semantic_index.cpp
     vxi_format.cpp
     project_cache.cpp
     velb_signature.cpp

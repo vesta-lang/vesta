@@ -46,6 +46,9 @@
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
+#include "vx/semantic_index.h"
 // Forward-decl (evita incluir vx/parser.h, que arrastra cabeceras Windows que
 // desbalancean el push/pop_macro(VOID) de ssa_ir.h).  @Target target-aware AOT.
 namespace vx {
@@ -362,6 +365,11 @@ int main(int argc, char *argv[]) {
             "vx-emit-ir",
             "Emitir el SSA IR del .vx (pre y post optimizacion) en "
             "<output>.ir; util para debug del frontend")(
+            "dump-semantic-index",
+            "Volcar el indice semantico por-declaracion (hash de contenido + "
+            "grafo de deps) de un .vx como JSON; sustrato de la compilacion "
+            "incremental granular",
+            cxxopts::value<std::string>())(
             "analyze",
             "Subsistema de coste: analiza la complejidad algoritmica (Big-O) "
             "estatica de cada funcion de un .vx y la imprime; valida el "
@@ -1764,6 +1772,32 @@ int main(int argc, char *argv[]) {
                "===========\n";
         std::cout << "Funciones analizadas: " << mc_post.functions.size()
                   << "; contratos con discrepancia: " << mismatches << "\n";
+        return EXIT_SUCCESS;
+    }
+
+    // Volcado del indice semantico por-declaracion (hash de contenido + grafo
+    // de deps).  Sustrato de la compilacion incremental granular / distribuida:
+    // permite comprobar que editar un simbolo solo cambia SU hash.
+    if (result.count("dump-semantic-index")) {
+        const std::string vx_path =
+            result["dump-semantic-index"].as<std::string>();
+        std::ifstream ifs(vx_path);
+        if (!ifs) {
+            std::cerr << "error: no se pudo abrir '" << vx_path << "'\n";
+            return EXIT_FAILURE;
+        }
+        std::string src((std::istreambuf_iterator<char>(ifs)),
+                        std::istreambuf_iterator<char>());
+        vx::Diagnostics diags;
+        vx::Lexer lx(src, vx_path, diags);
+        vx::Parser p(lx, diags);
+        auto mod = p.parse_program();
+        if (!mod) {
+            std::cerr << "error: fallo al parsear '" << vx_path << "'\n";
+            return EXIT_FAILURE;
+        }
+        vx::SemanticIndex idx = vx::build_semantic_index(*mod, src, vx_path);
+        std::cout << vx::semantic_index_to_json(idx) << "\n";
         return EXIT_SUCCESS;
     }
 
