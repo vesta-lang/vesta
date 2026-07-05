@@ -434,6 +434,14 @@ class Parser {
      */
     [[nodiscard]] bool looks_like_cast() const noexcept;
 
+    /**
+     * @brief Detecta un compound literal C99: `(Tipo){...}` o
+     *        `(Tipo<args>){...}`.  Precondicion: @c current_ es '('.  Es
+     *        inequivoco (un `(expr){` no tiene otro significado), asi que
+     *        acepta un nombre de tipo aunque @c looks_like_cast lo rechace.
+     */
+    [[nodiscard]] bool looks_like_compound_literal() const noexcept;
+
     Lexer &lex_;
     Diagnostics &diags_;
     Token current_;
@@ -460,6 +468,13 @@ class Parser {
     /// single-pass: el typedef debe declararse ANTES del uso (igual
     /// que cualquier forward decl en C/Vesta).
     std::unordered_set<std::string> declared_aliases_;
+
+    /// Nombres de @c struct declarados (single-pass, antes de su uso).  Lo
+    /// consulta @c looks_like_compound_literal para distinguir un compound
+    /// literal `(Struct){...}` de un scrutinee de control de flujo como
+    /// `match (val) {` -- solo se trata como compound literal si el nombre es
+    /// un struct conocido.
+    std::unordered_set<std::string> declared_structs_;
 
     /// Phase M.L24: flag indicando si la ultima invocacion de
     /// @c parse_top_level_decl skipeo la decl por @c @Target no

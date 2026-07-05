@@ -1,0 +1,49 @@
+// -----------------------------------------------------------------------------
+// Compound literals: valores struct anonimos inline (sintaxis C moderna)
+// -----------------------------------------------------------------------------
+// Un compound literal `(Tipo){...}` construye un valor struct SIN necesidad de
+// una variable intermedia.  Se puede usar en cualquier sitio donde se espere un
+// valor struct: como ARGUMENTO de una funcion, en un RETURN, etc.  Aplica los
+// valores por defecto de los campos igual que `{...}`, y funciona con structs
+// genericos (templates).  Igual en interprete, JIT y AOT.
+
+struct Punto {
+    i32 x;
+    i32 y;
+}
+
+struct Caja<T> {
+    T   val;
+    u8  tag = 0x7;   // default conservado en el compound literal
+}
+
+i32 distancia_manhattan(Punto p) {
+    i32 ax = p.x < 0 ? -p.x : p.x;
+    i32 ay = p.y < 0 ? -p.y : p.y;
+    return ax + ay;
+}
+
+// Un compound literal como valor de RETORNO (sin variable intermedia).
+Punto origen_desplazado(i32 d) {
+    return (Punto){.x = d, .y = d};
+}
+
+i64 caja_total(Caja<i64> c) {
+    return c.val + (i64)c.tag;
+}
+
+i32 main() {
+    // 1. Como ARGUMENTO: sin declarar una variable Punto aparte.
+    i32 d1 = distancia_manhattan((Punto){.x = -3, .y = 4});
+    println("dist   = ${d1}");                       // 7
+
+    // 2. En un RETURN: la funcion devuelve el compound literal.
+    Punto o = origen_desplazado(5);
+    println("origen = (${o.x}, ${o.y})");            // (5, 5)
+
+    // 3. Con un TEMPLATE como argumento: el default de `tag` (0x7) se aplica.
+    i64 t = caja_total((Caja<i64>){.val = 100});
+    println("caja   = ${t}");                        // 100 + 7 = 107
+
+    return 0;
+}

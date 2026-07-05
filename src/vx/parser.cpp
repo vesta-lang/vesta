@@ -2101,6 +2101,42 @@ bool Parser::looks_like_cast() const noexcept {
     }
 }
 
+bool Parser::looks_like_compound_literal() const noexcept {
+    // Precondicion: current_ es '('.  Patron inequivoco: `( IDENT [<...>] ) {`.
+    Lexer &mut_lex = const_cast<Lexer &>(lex_);
+    size_t off = 0;
+    const Token &name_tok = mut_lex.peek_at(off);
+    if (name_tok.kind != TokenKind::IDENTIFIER) return false;
+    // Solo un NOMBRE DE STRUCT declarado dispara el compound literal; asi
+    // `match (val) {` / `(x) {` con `x`/`val` no-struct NO se confunden.
+    if (declared_structs_.count(name_tok.lexeme) == 0) return false;
+    ++off;
+    // Argumentos genericos opcionales `<...>` balanceados (>> = dos >).
+    if (mut_lex.peek_at(off).kind == TokenKind::LT) {
+        int depth = 1;
+        ++off;
+        const size_t MAXL = 64;
+        while (depth > 0 && off < MAXL) {
+            TokenKind k = mut_lex.peek_at(off).kind;
+            if (k == TokenKind::END_OF_FILE) return false;
+            if (k == TokenKind::LT)
+                ++depth;
+            else if (k == TokenKind::GT)
+                --depth;
+            else if (k == TokenKind::SHR) {
+                depth -= 2;
+                if (depth < 0) return false;
+            }
+            ++off;
+        }
+        if (depth != 0) return false;
+    }
+    // Debe seguir ')' y despues '{'.
+    if (mut_lex.peek_at(off).kind != TokenKind::RPAREN) return false;
+    ++off;
+    return mut_lex.peek_at(off).kind == TokenKind::LBRACE;
+}
+
 bool Parser::looks_like_register_storage() const noexcept {
     // Patron exacto: register ( "reg" ) <type-starter>.
     //   current_     = IDENTIFIER "register"
@@ -3478,6 +3514,9 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
         return nullptr;
     }
     s->name = consume().lexeme;
+    // Registrar el nombre para que `looks_like_compound_literal` distinga
+    // `(Struct){...}` de un scrutinee `match (val) {`.
+    declared_structs_.insert(s->name);
     // Genericos opcionales `<T>`, `<K, V>` tras el nombre.  Mismo patron que
     // parse_class_decl / parse_enum_decl: cada parametro es un identificador;
     // el struct se trata como plantilla y se monomorphiza en cada uso
@@ -5776,6 +5815,25 @@ std::unique_ptr<ast::Expr> Parser::parse_unary() {
     // Cast C-style `(T) expr`.  Comprobamos antes de los demas
     // unarios porque el cast tambien empieza con `(` y queremos
     // reconocerlo antes de caer al patron `(expr)`.
+    // Compound literal C99: `(Tipo){...}` / `(Tipo<args>){...}`.  Construye un
+    // valor struct anonimo inline (usable como arg, en un return, etc.) sin una
+    // variable intermedia.  Se representa como un CastExpr con operando
+    // InitListExpr; el type checker y el lowering lo tratan como construccion
+    // de struct.  Debe comprobarse ANTES del cast (un nombre de struct plano no
+    // pasa looks_like_cast, pero `(Nombre){` es inequivoco).
+    if (current_.kind == TokenKind::LPAREN && looks_like_compound_literal()) {
+        const SourceLoc loc = current_.loc;
+        (void)consume(); // '('
+        auto type_node = parse_type_node();
+        (void)expect(TokenKind::RPAREN,
+                     "se esperaba ')' tras el tipo del compound literal");
+        auto init = parse_primary(); // el '{...}' -> InitListExpr
+        auto ce = std::make_unique<ast::CastExpr>();
+        ce->loc = loc;
+        ce->target_type = std::move(type_node);
+        ce->operand = std::move(init);
+        return ce;
+    }
     if (current_.kind == TokenKind::LPAREN && looks_like_cast()) {
         const SourceLoc loc = current_.loc;
         (void)consume(); // '('

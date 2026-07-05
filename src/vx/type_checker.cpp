@@ -6081,6 +6081,20 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         } else {
             t = Type{};
         }
+        // Compound literal `(Struct){...}`: el operando es un InitListExpr y el
+        // target un struct.  No es una conversion sino la CONSTRUCCION inline de
+        // un struct; anotamos el nombre del struct en el init-list y devolvemos
+        // el tipo struct.  Funciona con templates (t ya esta monomorphizado).
+        if (t.kind == PrimitiveKind::STRUCT && ce->operand &&
+            ce->operand->kind == ast::NodeKind::InitListExpr) {
+            auto *il = static_cast<ast::InitListExpr *>(ce->operand.get());
+            il->target_type_name = t.struct_name;
+            for (auto &el : il->elements)
+                (void)check_expr(el.get());
+            il->result_type = t;
+            e->result_type = t;
+            return t;
+        }
         if (ce->operand) {
             Type to = check_expr(ce->operand.get());
             ce->operand->result_type = to;

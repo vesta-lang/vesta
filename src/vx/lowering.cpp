@@ -11901,6 +11901,36 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
 ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (!e || !e->operand) return ir::IR_NO_VALUE;
 
+    // Compound literal `(Struct){...}`: construir un struct anonimo inline.
+    // Aloca + zero-fill + defaults + init-list, y devuelve su direccion (un
+    // valor struct como cualquier otro).  Funciona en interp/JIT/AOT.
+    if (e->target_type &&
+        e->operand->kind == ast::NodeKind::InitListExpr) {
+        Type tt = tc_.resolve_type_node(e->target_type.get());
+        if (tt.kind == PrimitiveKind::STRUCT) {
+            auto it = tc_.struct_layouts().find(tt.struct_name);
+            if (it != tc_.struct_layouts().end()) {
+                const StructLayout &lay = it->second;
+                ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.dst = addr;
+                al.imm = (uint64_t)lay.size_bytes;
+                al.source_line = e->loc.line;
+                if (native_poo_) al.host_alloca = true;
+                fn_->append(current_block_, std::move(al));
+                if (native_poo_) fn_->values[addr].is_host_ptr = true;
+                emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
+                emit_struct_init_fields(
+                    addr, lay,
+                    static_cast<ast::InitListExpr *>(e->operand.get()),
+                    e->loc.line);
+                return addr;
+            }
+        }
+    }
+
     // Function pointer: `(u64) foo` / `(fn(...)->R) foo` donde foo es una
     // funcion top-level -> emitir LABEL_ADDR (direccion cruda del codigo).
     // El resultado es un puntero de 8 bytes valido para meter en una tabla
