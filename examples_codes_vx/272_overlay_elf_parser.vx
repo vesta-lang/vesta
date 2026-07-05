@@ -1,18 +1,19 @@
 // -----------------------------------------------------------------------------
-// Parser ELF64 COMPLETO con overlays: lee un ELF real y parsea todo
+// Parser ELF64 con overlays: SOLO main + overlays, cero punteros a mano
 // -----------------------------------------------------------------------------
-// Describimos el formato ELF64 con `@overlay struct`s y parseamos un ELF REAL de
-// disco (no uno fabricado en memoria).  Cubre:
-//   * e_ident (clase/endianness/osabi),
-//   * la cabecera completa (16 campos),
+// Describimos ELF64 con `@overlay struct`s y parseamos un ELF REAL de disco SIN
+// una sola funcion auxiliar y SIN aritmetica de punteros C (`*(T*)(buf+off)`):
+//   * e_ident (clase/endianness), la cabecera completa (16 campos),
 //   * la tabla de PROGRAM HEADERS (`@offset(e_phoff) stride(e_phentsize)`),
 //   * la tabla de SECTION HEADERS (`@offset(e_shoff) stride(e_shentsize)`),
-//   * el nombre de cada seccion (leido de la .shstrtab, offset dinamico).
-// Todo con offset/stride RUNTIME, sin aritmetica de punteros a mano.
+//   * el nombre de cada seccion (leido de la .shstrtab via una sub-vista).
+// Todo con offset/stride RUNTIME.  `main` solo abre el fichero, itera y lee.
+//
+// SEGURIDAD: cada acceso a un array se COMPRUEBA en el lenguaje con
+// `in_bounds(campo, size)` contra el tamano real del fichero.
 //
 // La salida es legible por maquina; el harness tests/vx/elf_parser_test.py la
-// valida contra un parseo INDEPENDIENTE de los mismos bytes (no circular).
-// Layout: Elf64_Ehdr=64, Elf64_Phdr=56, Elf64_Shdr=64.  interp/JIT/AOT.
+// valida contra un parseo INDEPENDIENTE (no circular).  interp/JIT/AOT.
 
 import "vx_fileio";
 
@@ -60,27 +61,34 @@ import "vx_fileio";
     u16 e_shstrndx  @0x3E;
     Elf64_Phdr Phdrs[e_phnum] @offset(e_phoff) stride(e_phentsize);
     Elf64_Shdr Shdrs[e_shnum] @offset(e_shoff) stride(e_shentsize);
+
+    // Campo-resolver: su DIRECCION es la base de la .shstrtab (sh_offset de la
+    // seccion e_shstrndx), navegando self.Shdrs.  `offsetof(eh.strtab_base)` da
+    // ese offset -- toda la logica declarativa, dentro del overlay.
+    u8 strtab_base @offset {
+        return base + self.Shdrs[(i32)self.e_shstrndx].sh_offset;
+    };
 }
 
-// Imprime el nombre nul-terminado en `base + off` (para nombres de seccion).
-void print_name_at(u8* base, u64 off) {
-    u64 p = off;
-    while (*(u8*)(base + p) != 0) {
-        print_char((char)*(u8*)(base + p));
-        p = p + 1;
-    }
+// Sub-vista para un nombre nul-terminado en la .shstrtab (construida en el
+// puntero raiz + offset, como cualquier sub-overlay).  `&nm.c0` = su direccion.
+@overlay struct CName {
+    u8 c0 @0x00;
 }
+
+i64 g_faults = 0;
 
 i32 main() {
     string path = "elf_target.bin";
-    i64 size = vx_fileio.file_size(path);
-    if (size < 64) {
+    i64 fsize = vx_fileio.file_size(path);
+    if (fsize < 64) {
         println("uso: coloca un ELF64 en 'elf_target.bin' en el dir actual");
         return 2;
     }
-    u8* buf = (u8*) malloc(size);
-    i64 n = vx_fileio.file_read_into(path, buf, size);
-    if (n != size) { println("error de lectura"); free(buf); return 3; }
+    u64 size = (u64) fsize;
+    u8* buf = (u8*) malloc(fsize);
+    i64 n = vx_fileio.file_read_into(path, buf, fsize);
+    if (n != fsize) { println("error de lectura"); free(buf); return 3; }
 
     Elf64_Ehdr eh = Elf64_Ehdr(buf);
     if (eh.magic != 0x464C457F) {
@@ -106,32 +114,46 @@ i32 main() {
     println("E_SHNUM=${eh.e_shnum}");
     println("E_SHSTRNDX=${eh.e_shstrndx}");
 
-    // --- program headers ---
+    // offset de la .shstrtab, resuelto declarativamente por el resolver.
+    println("STRTAB_OFF=${offsetof(eh.strtab_base)}");
+
+    // --- program headers (cada acceso comprobado) ---
     i32 i = 0;
     while ((u32)i < (u32)eh.e_phnum) {
-        println("PHDR ${i} TYPE=${eh.Phdrs[i].p_type} FLAGS=${eh.Phdrs[i].p_flags} OFFSET=${eh.Phdrs[i].p_offset} VADDR=${eh.Phdrs[i].p_vaddr} FILESZ=${eh.Phdrs[i].p_filesz} MEMSZ=${eh.Phdrs[i].p_memsz} ALIGN=${eh.Phdrs[i].p_align}");
+        if (!in_bounds(eh.Phdrs[i].p_align, size)) {
+            g_faults = g_faults + 1;
+            println("PHDR ${i} FUERA-DE-RANGO");
+        } else {
+            println("PHDR ${i} TYPE=${eh.Phdrs[i].p_type} FLAGS=${eh.Phdrs[i].p_flags} OFFSET=${eh.Phdrs[i].p_offset} VADDR=${eh.Phdrs[i].p_vaddr} FILESZ=${eh.Phdrs[i].p_filesz} MEMSZ=${eh.Phdrs[i].p_memsz} ALIGN=${eh.Phdrs[i].p_align}");
+        }
         i = i + 1;
     }
 
-    // --- section headers (con nombre desde la .shstrtab) ---
-    // La .shstrtab es la seccion e_shstrndx; su sh_offset es la base de nombres.
-    u64 strtab = eh.Shdrs[(i32)eh.e_shstrndx].sh_offset;
+    // --- section headers (con NAMEOFF; comprobados) ---
     i = 0;
     while ((u32)i < (u32)eh.e_shnum) {
-        println("SHDR ${i} TYPE=${eh.Shdrs[i].sh_type} ADDR=${eh.Shdrs[i].sh_addr} OFFSET=${eh.Shdrs[i].sh_offset} SIZE=${eh.Shdrs[i].sh_size} NAMEOFF=${eh.Shdrs[i].sh_name}");
+        if (!in_bounds(eh.Shdrs[i].sh_entsize, size)) {
+            g_faults = g_faults + 1;
+            println("SHDR ${i} FUERA-DE-RANGO");
+        } else {
+            println("SHDR ${i} TYPE=${eh.Shdrs[i].sh_type} ADDR=${eh.Shdrs[i].sh_addr} OFFSET=${eh.Shdrs[i].sh_offset} SIZE=${eh.Shdrs[i].sh_size} NAMEOFF=${eh.Shdrs[i].sh_name}");
+        }
         i = i + 1;
     }
 
-    // Bonus visual: nombres de las primeras secciones (offset dinamico en strtab).
+    // --- nombres de seccion via la .shstrtab (sub-vista CName + print_cstr) ---
+    u64 strtab = (u64) offsetof(eh.strtab_base);   // base de nombres (file off)
     print("secciones:");
     i = 0;
     while ((u32)i < (u32)eh.e_shnum) {
         print(" ");
-        print_name_at(buf, strtab + (u64)eh.Shdrs[i].sh_name);
+        CName nm = CName(buf + strtab + (u64)eh.Shdrs[i].sh_name);
+        print_cstr(&nm.c0);
         i = i + 1;
     }
     println("");
 
+    println("FAULTS=${g_faults}");
     free(buf);
     return 0;
 }
