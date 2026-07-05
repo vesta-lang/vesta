@@ -1380,6 +1380,14 @@ class TypeChecker {
     /// namespaces porque viven en @c scopes_ (popped).
     std::unordered_map<std::string, uint32_t> ns_idx_by_local_name_;
 
+    /// NS short-form: alias del ULTIMO segmento de un namespace punteado
+    /// (`org.geo.shapes` -> `shapes`) hacia su indice, cuando es UNICO.  Permite
+    /// acceder por el ultimo segmento (`shapes.area`) ademas del path completo.
+    /// @c ns_short_ambiguous_ marca los segmentos que aparecen en 2+ namespaces
+    /// (no se resuelve el short-form; hay que usar el path completo).
+    std::unordered_map<std::string, uint32_t> ns_short_alias_;
+    std::unordered_set<std::string> ns_short_ambiguous_;
+
     /// NS.2 round-trip: namespaces DECLARADOS por este modulo (via
     /// `namespace X;`), para que el export al .vxi sepa que la funcion
     /// mangled `mylib__helper` pertenece al namespace `mylib` con nombre

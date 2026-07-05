@@ -1094,6 +1094,11 @@ bool TypeChecker::run() {
     // declaramos como Symbol::Namespace en el scope global para
     // que `lib_a.simbolo` se resuelva via check_field_access.
     for (const auto &pn : pending_imported_ns_names_) {
+        // NS short-form: un ultimo segmento que resulto AMBIGUO (2+ namespaces)
+        // no se declara como Symbol::Namespace -> forzar el path completo.
+        if (ns_short_ambiguous_.count(pn.first) &&
+            ns_idx_by_local_name_.find(pn.first) == ns_idx_by_local_name_.end())
+            continue;
         Symbol s;
         s.kind = SymbolKind::Namespace;
         s.ns_index = pn.second;
@@ -6987,15 +6992,28 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
         // que debe emitir CALL al mangled_label.
         {
             const Symbol *ns_sym = lookup(base_id->name);
+            uint32_t ns_idx_base = UINT32_MAX;
             if (ns_sym && ns_sym->kind == SymbolKind::Namespace) {
+                ns_idx_base = ns_sym->ns_index;
+            } else if (!ns_sym) {
+                // NS short-form: la base NO es un simbolo (ni variable ni
+                // funcion), pero SI un namespace registrado -- incluido el alias
+                // del ultimo segmento (`shapes` -> `org.geo.shapes`).  Fallback
+                // guardado por `!ns_sym` para no robar un nombre que ya sea una
+                // funcion/variable homonima.
+                auto itns = ns_idx_by_local_name_.find(base_id->name);
+                if (itns != ns_idx_by_local_name_.end())
+                    ns_idx_base = itns->second;
+            }
+            if (ns_idx_base != UINT32_MAX) {
                 // L.26: marcar el namespace como referenciado para
                 // que el linter de "import no se usa" no genere
                 // falsos positivos.  El `lookup` plano no toca
                 // @c referenced_names_ ; aqui sabemos que el acceso
                 // namespace.X tuvo exito, asi que marcamos manualmente.
                 referenced_names_.insert(base_id->name);
-                if (ns_sym->ns_index < imported_namespaces_.size()) {
-                    const auto &ns = imported_namespaces_[ns_sym->ns_index];
+                if (ns_idx_base < imported_namespaces_.size()) {
+                    const auto &ns = imported_namespaces_[ns_idx_base];
                     auto its = ns.by_name.find(e->field_name);
                     if (its == ns.by_name.end()) {
                         diags_.error(e->loc,
@@ -7006,8 +7024,8 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                         return Type{};
                     }
                     const auto &sym = ns.symbols[its->second];
-                    e->property_kind = 4;           // namespace member
-                    e->ns_index = ns_sym->ns_index; // M.7: para lowering
+                    e->property_kind = 4;         // namespace member
+                    e->ns_index = ns_idx_base;    // M.7: para lowering
                     // Para functions, el "tipo" del FieldAccess es VOID
                     // (no es una expresion valor); el call site lo trata
                     // como una callable.  Pero retornamos un Type
@@ -9122,7 +9140,18 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
             auto *idb = static_cast<ast::IdentExpr *>(fa->base.get());
             const Symbol *ns_sym = lookup(idb->name);
+            uint32_t ns_idx_b = UINT32_MAX;
             if (ns_sym && ns_sym->kind == SymbolKind::Namespace) {
+                ns_idx_b = ns_sym->ns_index;
+            } else if (!ns_sym) {
+                // NS short-form: la base no es un simbolo (ni funcion ni
+                // variable) pero SI un namespace registrado (incluido el alias
+                // del ultimo segmento `shapes` -> `org.geo.shapes`).  Guardado
+                // por `!ns_sym` para no robar un nombre que ya sea funcion.
+                auto itb = ns_idx_by_local_name_.find(idb->name);
+                if (itb != ns_idx_by_local_name_.end()) ns_idx_b = itb->second;
+            }
+            if (ns_idx_b != UINT32_MAX) {
                 // L.26 fix (2026-06-04): marcar el namespace como
                 // referenciado para que el linter de "import no se
                 // usa" no genere falsos positivos en namespace calls
@@ -9131,8 +9160,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 // import via call.  Mismo patron que check_field_access
                 // ya hacia para namespace field access.
                 referenced_names_.insert(idb->name);
-                if (ns_sym->ns_index < imported_namespaces_.size()) {
-                    const auto &ns = imported_namespaces_[ns_sym->ns_index];
+                if (ns_idx_b < imported_namespaces_.size()) {
+                    const auto &ns = imported_namespaces_[ns_idx_b];
                     auto its = ns.by_name.find(fa->field_name);
                     if (its == ns.by_name.end()) {
                         diags_.error(e->loc,
@@ -9172,7 +9201,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     // reconozca como namespace call y emita CALLVM al
                     // mangled_label.
                     fa->property_kind = 4;
-                    fa->ns_index = ns_sym->ns_index; // M.7
+                    fa->ns_index = ns_idx_b; // M.7
                     fa->result_type = Type::make_function(use_sig->param_types,
                                                           use_sig->return_type);
                     e->result_type = use_sig->return_type;

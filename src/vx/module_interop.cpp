@@ -400,6 +400,39 @@ TypeChecker::register_imported_namespace(const std::string &local_name,
     imported_namespaces_.push_back(std::move(ns));
     pending_imported_ns_names_.push_back({local_name, idx});
     ns_idx_by_local_name_[local_name] = idx;
+
+    // NS short-form: si el nombre es multi-segmento (`org.geo.shapes`), registrar
+    // tambien su ULTIMO segmento (`shapes`) como alias, para poder acceder por el
+    // (`shapes.area()`) ademas del path completo -- SOLO cuando sea UNICO.
+    const size_t dot = local_name.rfind('.');
+    if (dot != std::string::npos) {
+        const std::string last = local_name.substr(dot + 1);
+        // No pisar un namespace REAL llamado igual que el ultimo segmento, ni
+        // reprocesar un segmento ya marcado ambiguo.
+        const bool is_real_full =
+            ns_idx_by_local_name_.count(last) && !ns_short_alias_.count(last);
+        if (is_real_full || ns_short_ambiguous_.count(last)) {
+            // colision con nombre real o ya ambiguo -> no crear alias corto.
+        } else {
+            auto ex = ns_short_alias_.find(last);
+            if (ex != ns_short_alias_.end() && ex->second != idx) {
+                // Segundo namespace con el mismo ultimo segmento -> AMBIGUO:
+                // retirar el alias; ambos deberan usar el path completo.
+                ns_short_alias_.erase(last);
+                ns_idx_by_local_name_.erase(last);
+                ns_short_ambiguous_.insert(last);
+            } else if (ex == ns_short_alias_.end()) {
+                // NO declaramos un Symbol::Namespace global para el alias corto
+                // (eso sombrearia una funcion/variable homonima -- p.ej. un
+                // namespace `x.fiber_swapctx` cuyo ultimo segmento coincide con
+                // la funcion `fiber_swapctx`).  El alias vive solo en los mapas;
+                // la base de un `alias.Symbol` lo resuelve como FALLBACK cuando
+                // el nombre no es ya otro simbolo.
+                ns_short_alias_[last] = idx;
+                ns_idx_by_local_name_[last] = idx;
+            }
+        }
+    }
     return idx;
 }
 
