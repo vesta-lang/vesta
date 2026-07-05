@@ -54,6 +54,52 @@ else()
     message(STATUS "[NSIS] listo: ${_makensis}")
 endif()
 
+# ---------------------------------------------------------------------------
+# Overlay "large strings" (NSIS_MAX_STRLEN=8192).  El build estandar de NSIS
+# limita las cadenas a 1024 chars: si el PATH del sistema/usuario supera ese
+# limite, AddToPath aborta con "PATH too long" (visto en Win10 con PATH largo).
+# El build oficial strlen_8192 sube el limite a 8192 y cubre PATHs reales.  Se
+# aplica SOLO al NSIS descargado por nosotros (no al makensis del sistema).
+# ---------------------------------------------------------------------------
+if(_nsis_bindir STREQUAL "${_nsis_root}" AND
+   NOT EXISTS "${_nsis_root}/.strlen8192_applied")
+    set(_ov_url "https://downloads.sourceforge.net/project/nsis/NSIS%203/${NSIS_VERSION}/nsis-${NSIS_VERSION}-strlen_8192.zip")
+    set(_ov_zip "${BUILD_DIR}/_nsis/nsis-${NSIS_VERSION}-strlen_8192.zip")
+    set(_ov_dir "${BUILD_DIR}/_nsis/_strlen8192")
+    message(STATUS "[NSIS] aplicando overlay large-strings (strlen_8192) para PATHs largos...")
+    # Nota: el hash NO se fija (a diferencia del NSIS base) -- es un binario de
+    # toolchain build-time del MISMO proyecto NSIS en sourceforge (https).  Si se
+    # quiere reproducibilidad estricta, fijar EXPECTED_HASH tras el primer bajado.
+    if(NOT EXISTS "${_ov_zip}")
+        file(DOWNLOAD "${_ov_url}" "${_ov_zip}" SHOW_PROGRESS STATUS _ovst)
+        list(GET _ovst 0 _ovcode)
+        if(NOT _ovcode EQUAL 0)
+            list(GET _ovst 1 _ovmsg)
+            message(WARNING "[NSIS] overlay strlen_8192 no se pudo descargar (${_ovcode}): ${_ovmsg}.\n  Se sigue con el NSIS estandar (limite de PATH 1024).")
+        endif()
+    endif()
+    if(EXISTS "${_ov_zip}")
+        file(REMOVE_RECURSE "${_ov_dir}")
+        file(MAKE_DIRECTORY "${_ov_dir}")
+        file(ARCHIVE_EXTRACT INPUT "${_ov_zip}" DESTINATION "${_ov_dir}")
+        # El zip trae (misma estructura que el NSIS base): Bin/makensis.exe (el
+        # ejecutable REAL con strlen 8192), makensis.exe (wrapper en la raiz) y
+        # Stubs/ (los stubs 8192 que se embeben en cada instalador generado).
+        # Se copian SOBRE el NSIS base.
+        if(EXISTS "${_ov_dir}/Bin/makensis.exe")
+            file(COPY "${_ov_dir}/Bin/makensis.exe" DESTINATION "${_nsis_root}/Bin")
+        endif()
+        if(EXISTS "${_ov_dir}/makensis.exe")
+            file(COPY "${_ov_dir}/makensis.exe" DESTINATION "${_nsis_root}")
+        endif()
+        if(EXISTS "${_ov_dir}/Stubs")
+            file(COPY "${_ov_dir}/Stubs" DESTINATION "${_nsis_root}")
+        endif()
+        file(WRITE "${_nsis_root}/.strlen8192_applied" "")
+        message(STATUS "[NSIS] overlay large-strings aplicado (limite de PATH ~8192).")
+    endif()
+endif()
+
 # cpack vive junto al cmake que ejecuta este script.
 get_filename_component(_cmake_bin "${CMAKE_COMMAND}" DIRECTORY)
 find_program(_cpack NAMES cpack PATHS "${_cmake_bin}" NO_DEFAULT_PATH)
