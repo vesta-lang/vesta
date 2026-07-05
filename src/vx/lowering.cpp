@@ -18817,6 +18817,102 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return true;
     }
 
+    // Overlay: forma-VALOR de offsetof / in_bounds (runtime).  Sin type
+    // args; el 1er arg es un acceso a campo/elemento de una vista @overlay
+    // (el type checker ya lo valido y fijo result_type a U64/BOOL).
+    //   offsetof(v.campo)       = (u64) &campo - base_de_la_vista
+    //   in_bounds(v.campo, len) = offsetof(v.campo) + sizeof(campo) <= len
+    // Reusa la resolucion de direccion de lower_field_addr/lower_index_addr
+    // (que ya resuelve @offset(expr) dinamico + stride de arrays); la raiz
+    // de la cadena de accesos ES el puntero base construido con `T(buf)`.
+    if (e->type_args.empty() && !e->args.empty() &&
+        (name == "offsetof" || name == "in_bounds") &&
+        (e->result_type.kind == PrimitiveKind::U64 ||
+         e->result_type.kind == PrimitiveKind::BOOL)) {
+        const uint32_t ln = e->loc.line;
+        ast::Expr *arg = e->args[0].get();
+        // Direccion (host) del campo/elemento accedido.
+        ir::IrValueId field_addr = ir::IR_NO_VALUE;
+        if (arg->kind == ast::NodeKind::FieldAccessExpr) {
+            field_addr =
+                lower_field_addr(static_cast<ast::FieldAccessExpr *>(arg));
+        } else if (arg->kind == ast::NodeKind::IndexExpr) {
+            field_addr = lower_index_addr(static_cast<ast::IndexExpr *>(arg));
+        }
+        if (field_addr == ir::IR_NO_VALUE) {
+            error_at(e->loc, name + ": el argumento debe ser un acceso a "
+                                    "campo/elemento de un overlay");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // Puntero base de la vista: raiz de la cadena de accesos.
+        ast::Expr *root = arg;
+        for (;;) {
+            if (root->kind == ast::NodeKind::FieldAccessExpr) {
+                root = static_cast<ast::FieldAccessExpr *>(root)->base.get();
+                continue;
+            }
+            if (root->kind == ast::NodeKind::IndexExpr) {
+                root = static_cast<ast::IndexExpr *>(root)->base.get();
+                continue;
+            }
+            break;
+        }
+        const ir::IrValueId base_ptr = lower_expr(root);
+        if (base_ptr == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // off = field_addr - base_ptr   (u64)
+        ir::IrValueId off = fn_->new_value(ir::IrType::U64);
+        {
+            ir::IrInstr s{};
+            s.op = ir::IrOp::SUB;
+            s.type = ir::IrType::U64;
+            s.dst = off;
+            s.operands = {field_addr, base_ptr};
+            s.source_line = ln;
+            fn_->append(current_block_, std::move(s));
+        }
+        if (name == "offsetof") {
+            out_value = off;
+            return true;
+        }
+        // in_bounds: (off + sizeof(campo)) <= len   (sin signo).
+        const uint64_t fsize = comptime_type_size(tc_, arg->result_type);
+        ir::IrValueId endv = off;
+        if (fsize != 0) {
+            ir::IrValueId fc = emit_const(ir::IrType::U64, fsize, ln);
+            endv = fn_->new_value(ir::IrType::U64);
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::U64;
+            a.dst = endv;
+            a.operands = {off, fc};
+            a.source_line = ln;
+            fn_->append(current_block_, std::move(a));
+        }
+        ir::IrValueId lenv = lower_expr(e->args[1].get());
+        if (lenv == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // Coaccionar len a u64 para una comparacion sin signo de 64 bits.
+        const ir::IrType lfrom =
+            ir_type_from_primitive(e->args[1]->result_type.kind);
+        lenv = cast_if_needed(lenv, lfrom, ir::IrType::U64, ln);
+        ir::IrValueId res = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_ULE;
+        c.type = ir::IrType::BOOL;
+        c.dst = res;
+        c.operands = {endv, lenv};
+        c.source_line = ln;
+        fn_->append(current_block_, std::move(c));
+        out_value = res;
+        return true;
+    }
+
     if (!e->type_args.empty() &&
         (name == "sizeof" || name == "alignof" || name == "typename" ||
          name == "type_id" || name == "kind")) {

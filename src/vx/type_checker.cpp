@@ -10346,6 +10346,79 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     const auto *id = static_cast<const ast::IdentExpr *>(e->callee.get());
 
     // -----------------------------------------------------------------
+    // Overlay: `offsetof(v.campo)` / `in_bounds(v.campo, len)` -- forma
+    // VALOR (runtime), distinta del `offsetof<T>("campo")` COMPTIME de
+    // mas abajo (esa lleva type args).  Sin type args; el primer arg es
+    // un acceso a un campo/elemento de una vista @overlay:
+    //   offsetof(v.campo)      -> u64  (offset resuelto del campo dentro
+    //                                    de la vista, sin leer memoria)
+    //   in_bounds(v.campo,len) -> bool (offsetof(v.campo)+sizeof(campo)<=len)
+    // Azucar legible para que el usuario componga sus propias
+    // comprobaciones sin aritmetica de punteros a mano.  No son keywords
+    // de la gramatica: se reconocen aqui por nombre + forma del arg.
+    // -----------------------------------------------------------------
+    if (e->type_args.empty() && !e->args.empty() &&
+        (id->name == "offsetof" || id->name == "in_bounds")) {
+        // Predicado: el arg accede a un campo/elemento de un overlay.
+        auto is_overlay_access = [&](const ast::Expr *x) -> bool {
+            while (x != nullptr) {
+                if (x->kind == ast::NodeKind::FieldAccessExpr) {
+                    const auto *fa =
+                        static_cast<const ast::FieldAccessExpr *>(x);
+                    const Type &bt = fa->base->result_type;
+                    if (bt.kind == PrimitiveKind::STRUCT) {
+                        auto it = struct_layouts_.find(bt.struct_name);
+                        if (it != struct_layouts_.end() && it->second.is_overlay)
+                            return true;
+                    }
+                    x = fa->base.get();
+                    continue;
+                }
+                if (x->kind == ast::NodeKind::IndexExpr) {
+                    const auto *ix = static_cast<const ast::IndexExpr *>(x);
+                    if (ix->is_overlay_array) return true;
+                    x = ix->base.get();
+                    continue;
+                }
+                return false;
+            }
+            return false;
+        };
+        // Poblar result_type de toda la cadena del acceso.
+        (void)check_expr(e->args[0].get());
+        if (is_overlay_access(e->args[0].get())) {
+            const bool is_ib = (id->name == "in_bounds");
+            if (is_ib) {
+                if (e->args.size() != 2) {
+                    diags_.error(
+                        e->loc,
+                        "in_bounds(v.campo, len): se esperan 2 argumentos");
+                } else {
+                    const Type lt = check_expr(e->args[1].get());
+                    const PrimitiveKind lk = lt.kind;
+                    const bool int_len =
+                        lk == PrimitiveKind::I8 || lk == PrimitiveKind::I16 ||
+                        lk == PrimitiveKind::I32 || lk == PrimitiveKind::I64 ||
+                        lk == PrimitiveKind::U8 || lk == PrimitiveKind::U16 ||
+                        lk == PrimitiveKind::U32 || lk == PrimitiveKind::U64;
+                    if (!int_len)
+                        diags_.error(e->args[1]->loc,
+                                     "in_bounds: 'len' debe ser un entero");
+                }
+                e->result_type = Type{PrimitiveKind::BOOL};
+                return e->result_type;
+            }
+            if (e->args.size() != 1)
+                diags_.error(e->loc, "offsetof(v.campo): se espera 1 argumento");
+            e->result_type = Type{PrimitiveKind::U64};
+            return e->result_type;
+        }
+        // No es un overlay: dejar caer.  `offsetof<T>` comptime necesita
+        // type args (se maneja abajo); `in_bounds` solo aplica a overlays
+        // -> se reportara como funcion desconocida, con mensaje normal.
+    }
+
+    // -----------------------------------------------------------------
     // Builtins comptime de introspection (Sprint 1).
     // Toman <T> en e->type_args.  Resolvidos a CONSTANTES literales
     // por el lowering.  Cero overhead runtime.  Validamos:

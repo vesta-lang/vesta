@@ -49,6 +49,7 @@ CASES = [
     ("examples_codes_vx/269_match_range.vx", 1321),
     ("examples_codes_vx/270_overlay_array.vx", 660),
     ("examples_codes_vx/271_overlay_pe_sections.vx", 39936),
+    ("examples_codes_vx/274_overlay_checked.vx", 351),
 ]
 
 
