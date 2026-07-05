@@ -401,3 +401,4 @@ tests/bugs/naked_call_xmod/lim5real/racelib.vex
 tests/bugs/naked_xmodule_test/main.vex
 tests/bugs/naked_xmodule_test/naked_mod.vex
 salida_vex.txt
+wsl-asan/

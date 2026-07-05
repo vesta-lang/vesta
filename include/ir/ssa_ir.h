@@ -1026,7 +1026,7 @@ struct AsmRegBinding {
  */
 struct IrFunction {
     std::string name;              ///< nombre calificado ("com.pkg.Foo.add")
-    IrType ret_type;               ///< tipo de retorno
+    IrType ret_type = IrType::VOID; ///< tipo de retorno
     std::vector<IrValueId> params; ///< IDs de los valores parametro
     std::vector<IrValue> values;   ///< pool de todos los valores SSA
     std::vector<IrBlock> blocks;   ///< bloques basicos (bloques[0] = entry)
@@ -1191,10 +1191,11 @@ struct IrFunction {
     std::string complexity_partial_post;
     std::string complexity_total_pre;
     std::string complexity_total_post;
-    // Nota: los contratos de huella (@pure/@alloc/...) NO viven aqui: se llevan
-    // en CompileResult (por nombre).  Anadir campos a IrFunction cambia su
-    // sizeof y dispara una UB latente del analizador sobre modulos
-    // deserializados (ver proj_summary_codegen_fingerprint en la memoria).
+    // Nota de diseno: los contratos de huella (@pure/@alloc/@stack/...) NO
+    // viven aqui.  Se llevan en CompileResult (indexados por nombre) porque
+    // son metadata puramente de compile-time (modo --analyze) que ni el JIT ni
+    // el AOT ni la serializacion del IR necesitan; mantener IrFunction esbelto
+    // evita hincharlo con campos que no se usan en el hot path del backend.
 
     /**
      * @brief Crea un nuevo valor SSA en el pool.
