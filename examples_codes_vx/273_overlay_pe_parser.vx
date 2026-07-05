@@ -38,6 +38,33 @@ import "vx_fileio";
     u32 size @0x04;
 }
 
+// IMAGE_IMPORT_DESCRIPTOR (20 bytes).  El nombre de la DLL vive en SU PROPIO RVA;
+// se resuelve alcanzando las secciones del PeImage CONTENEDOR via parent<PeImage>()
+// -- toda la traduccion, declarativa, dentro del overlay.
+@overlay struct ImportDesc {
+    u32 oft_rva  @0x00;   // OriginalFirstThunk (RVA a la ILT)
+    u32 name_rva @0x0C;   // RVA al nombre de la DLL
+    u32 ft_rva   @0x10;   // FirstThunk (RVA a la IAT)
+    // Nombre de la DLL = cstring en translate(name_rva) por las secciones del PADRE.
+    u8 dll_name @offset {
+        u64 rb = (u64) parent<PeImage>();
+        u32 rva = self.name_rva;
+        i32 i = 0;
+        while ((u32)i < (u32)parent<PeImage>().num_sections) {
+            u32 va = parent<PeImage>().Sections[i].virt_addr;
+            u32 vs = parent<PeImage>().Sections[i].virt_size;
+            u32 rs = parent<PeImage>().Sections[i].raw_size;
+            if (vs < rs) { vs = rs; }
+            if (rva >= va && rva < va + vs) {
+                return rb + (u64)parent<PeImage>().Sections[i].raw_ptr
+                          + (u64)(rva - va);
+            }
+            i = i + 1;
+        }
+        return rb + (u64)rva;
+    };
+}
+
 @overlay struct PeImage {
     u16 e_magic  @0x00;   // 'MZ'
     u32 e_lfanew @0x3C;
@@ -92,6 +119,27 @@ import "vx_fileio";
         }
         return base + (u64)rva;   // fallback: dentro de las cabeceras
     };
+
+    // Tabla de descriptores de import, anclada en translate(Dirs[1].rva) y sin
+    // count (el usuario termina al leer el descriptor nulo).  La base la da un
+    // resolver que recorre self.Sections (RVA -> file off), como import_dir.
+    ImportDesc Imports[] @offset {
+        u64 rb = (u64) base;
+        u32 rva = self.Dirs[1].rva;
+        if (rva == 0) { return base; }
+        i32 i = 0;
+        while ((u32)i < (u32)self.num_sections) {
+            u32 va = self.Sections[i].virt_addr;
+            u32 vs = self.Sections[i].virt_size;
+            u32 rs = self.Sections[i].raw_size;
+            if (vs < rs) { vs = rs; }
+            if (rva >= va && rva < va + vs) {
+                return rb + (u64)self.Sections[i].raw_ptr + (u64)(rva - va);
+            }
+            i = i + 1;
+        }
+        return rb + (u64)rva;
+    } stride(20);
 }
 
 // Contador global de accesos fuera de rango (POLITICA de este programa).
@@ -201,6 +249,18 @@ i32 main() {
             }
             println(": rva=${pe.Dirs[i].rva:hex} size=${pe.Dirs[i].size}");
         }
+        i = i + 1;
+    }
+
+    // --- tabla de imports: DLLs, recorrida declarativamente (sub-overlays +
+    //     parent<PeImage>() para traducir cada name_rva).  El usuario termina al
+    //     leer el descriptor nulo. ---
+    println("imports:");
+    i = 0;
+    while (pe.Imports[i].name_rva != 0 && i < 64) {
+        print("  ");
+        print_cstr(&pe.Imports[i].dll_name);
+        println("");
         i = i + 1;
     }
 

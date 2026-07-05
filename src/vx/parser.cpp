@@ -3772,7 +3772,12 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // nombre (estilo C).  El tipo del campo es el tipo del ELEMENTO.
         if (s->is_overlay && current_.kind == TokenKind::LBRACKET) {
             (void)consume(); // '['
-            f.array_count = parse_expr();
+            f.is_array = true;
+            // Count OPCIONAL: `T Name[]` (no acotado; el usuario termina el
+            // bucle, p.ej. al leer una entrada nula) o `T Name[count]`.
+            if (current_.kind != TokenKind::RBRACKET) {
+                f.array_count = parse_expr();
+            }
             (void)expect(TokenKind::RBRACKET,
                          "se esperaba ']' tras el count del array de overlay");
         }

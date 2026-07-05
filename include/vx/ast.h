@@ -1964,6 +1964,10 @@ struct StructFieldDecl {
     /// a `base + pos + i*stride`.  null = campo escalar (no array).
     std::unique_ptr<Expr> array_count;
     std::unique_ptr<Expr> array_stride;
+    /// Overlay array marcado con `[` (aunque el count este vacio: `T Name[]`).
+    /// Distingue un array NO acotado (el usuario gestiona la terminacion) de un
+    /// campo escalar.  true = es un array (con o sin @c array_count).
+    bool is_array = false;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`

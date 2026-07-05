@@ -551,6 +551,14 @@ class Lowering {
                                           const StructFieldInfo &fi);
     /// Nombres de resolvedores de overlay ya sintetizados (dedup).
     std::unordered_set<std::string> generated_overlay_resolvers_;
+    /**
+     * @brief F4: baja el puntero de la vista RAIZ de una cadena de accesos
+     *        overlay.  Camina @c e por sus bases (FieldAccess/Index) hasta la
+     *        expresion que ya no es un acceso a campo/elemento (la vista raiz,
+     *        p.ej. `pe` en `pe.Imports[i].name`) y la baja con @c lower_expr.
+     *        Es el `root` que se enhebra a un resolver que usa `parent<T>()`.
+     */
+    ir::IrValueId lower_overlay_root(ast::Expr *e);
 
     /**
      * @brief ADTs: lowering de un constructor de variante de

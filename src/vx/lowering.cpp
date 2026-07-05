@@ -13005,15 +13005,46 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             if (off_v == ir::IR_NO_VALUE) continue;
             bind_sib_at(sib, add_off(off_v));
         }
-        // pos (base de la tabla): const o expr.
-        ir::IrValueId pos_v =
-            afi->offset_expr
-                ? lower_expr(afi->offset_expr)
-                : emit_const(ir::IrType::I64, (uint64_t)afi->offset, e->loc.line);
+        // Base de la tabla.  Dos formas:
+        //  (a) `@offset { block }`: un RESOLVER devuelve la DIRECCION ABSOLUTA de
+        //      la tabla (p.ej. traducir un RVA).  table_base = resolver(self).
+        //  (b) `@offset(pos)`/const: table_base = ov_base + pos.
         ir::IrValueId stride_v = lower_expr(afi->array_stride);
+        ir::IrValueId table_base = ir::IR_NO_VALUE;
+        bool base_absolute = false;
+        if (afi->offset_block) {
+            base_absolute = true;
+        } else {
+            table_base =
+                afi->offset_expr
+                    ? lower_expr(afi->offset_expr)
+                    : emit_const(ir::IrType::I64, (uint64_t)afi->offset,
+                                 e->loc.line);
+        }
         pop_scope();
-        if (pos_v == ir::IR_NO_VALUE || stride_v == ir::IR_NO_VALUE)
+        if (stride_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        if (base_absolute) {
+            // F4/pieza2: la direccion base la da el resolver de bloque.  Se
+            // enhebra `root` si el resolver usa parent<T>() (F4).
+            const std::string rname = generate_overlay_resolver(lay, *afi);
+            table_base = fn_->new_value(ir::IrType::PTR);
+            fn_->values[table_base].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALL;
+            ins.func_name = rname;
+            ins.type = ir::IrType::PTR;
+            ins.dst = table_base;
+            ins.operands = {ov_base};
+            if (afi->resolver_uses_parent) {
+                const ir::IrValueId root_v = lower_overlay_root(e->base.get());
+                if (root_v != ir::IR_NO_VALUE) ins.operands.push_back(root_v);
+            }
+            ins.is_call_site = true;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+        } else if (table_base == ir::IR_NO_VALUE) {
             return ir::IR_NO_VALUE;
+        }
         ir::IrValueId i_v = lower_expr(e->index.get());
         if (i_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         i_v = cast_if_needed(i_v, fn_->values[i_v].type, ir::IrType::I64,
@@ -13029,15 +13060,18 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             mul.source_line = e->loc.line;
             fn_->append(current_block_, std::move(mul));
         }
-        // addr = ov_base + pos + scaled
-        ir::IrValueId t1 = fn_->new_value(ir::IrType::PTR);
-        fn_->values[t1].is_host_ptr = fn_->values[ov_base].is_host_ptr;
-        {
+        // addr = (base_absolute ? table_base : ov_base + pos) + scaled
+        ir::IrValueId t1;
+        if (base_absolute) {
+            t1 = table_base;   // ya es una direccion absoluta
+        } else {
+            t1 = fn_->new_value(ir::IrType::PTR);
+            fn_->values[t1].is_host_ptr = fn_->values[ov_base].is_host_ptr;
             ir::IrInstr a{};
             a.op = ir::IrOp::ADD;
             a.type = ir::IrType::PTR;
             a.dst = t1;
-            a.operands = {ov_base, pos_v};
+            a.operands = {ov_base, table_base};
             a.source_line = e->loc.line;
             fn_->append(current_block_, std::move(a));
         }
@@ -14024,6 +14058,24 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
 // ruido en el .vel para el caso comun de "campo cero".
 // ---------------------------------------------------------------------
 
+ir::IrValueId Lowering::lower_overlay_root(ast::Expr *e) {
+    // Camina hasta la vista raiz: la base mas profunda que NO es un acceso a
+    // campo/elemento overlay (p.ej. `pe` en `pe.Imports[i].name`).
+    ast::Expr *root = e;
+    for (;;) {
+        if (root->kind == ast::NodeKind::FieldAccessExpr) {
+            root = static_cast<ast::FieldAccessExpr *>(root)->base.get();
+            continue;
+        }
+        if (root->kind == ast::NodeKind::IndexExpr) {
+            root = static_cast<ast::IndexExpr *>(root)->base.get();
+            continue;
+        }
+        break;
+    }
+    return lower_expr(root);
+}
+
 std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
                                                 const StructFieldInfo &fi) {
     const std::string fn_name = "__ovl_resolve_" + lay.name + "_" + fi.name;
@@ -14051,11 +14103,20 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     child_fn.name = fn_name;
     child_fn.ret_type = ir::IrType::PTR; // devuelve una DIRECCION (host)
 
-    // Param unico: `self` = puntero base de la vista (host).
+    // Param `self` = puntero base de la vista (host).
     ir::IrValueId self_pv = child_fn.new_value(ir::IrType::PTR, "%self");
     child_fn.values[self_pv].is_param = true;
     child_fn.values[self_pv].is_host_ptr = true;
     child_fn.params.push_back(self_pv);
+    // F4: si el resolver usa parent<T>(), un 2o param `root` = puntero de la
+    // vista RAIZ (el call site lo enhebra caminando la cadena de accesos).
+    ir::IrValueId root_pv = ir::IR_NO_VALUE;
+    if (fi.resolver_uses_parent) {
+        root_pv = child_fn.new_value(ir::IrType::PTR, "%root");
+        child_fn.values[root_pv].is_param = true;
+        child_fn.values[root_pv].is_host_ptr = true;
+        child_fn.params.push_back(root_pv);
+    }
 
     const ir::IrBlockId entry = child_fn.new_block("entry");
     fn_ = &child_fn;
@@ -14075,6 +14136,8 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     bind("base", self_pv);
     bind("this", self_pv);
     bind("self", self_pv);
+    // F4: `parent<T>()` en el body baja a este valor (el puntero raiz).
+    if (root_pv != ir::IR_NO_VALUE) bind("__ovl_root", root_pv);
     for (const auto &sib : lay.fields) {
         // Saltar dinamicos y ARRAYS: los arrays no son un escalar cargable; se
         // navegan por `this.<array>[i]` (no como nombre desnudo).
@@ -14182,6 +14245,12 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         ins.type = ir::IrType::PTR;
         ins.dst = addr;
         ins.operands = {base};
+        // F4: enhebrar `root` si el resolver usa parent<T>() (la vista raiz de
+        // la cadena de accesos: `pe` en `pe.Imports[i].name`).
+        if (fifound->resolver_uses_parent) {
+            const ir::IrValueId root_v = lower_overlay_root(e->base.get());
+            if (root_v != ir::IR_NO_VALUE) ins.operands.push_back(root_v);
+        }
         ins.is_call_site = true;
         ins.source_line = e->loc.line;
         fn_->append(current_block_, std::move(ins));
@@ -18823,6 +18892,21 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         out_value = emit_label_addr(fn_id->name, e->loc.line);
+        return true;
+    }
+
+    // F4: `parent<T>()` dentro de un resolver `@offset { }` = el puntero de la
+    // vista RAIZ, enhebrado como 2o param `root` (bind "__ovl_root").  Devuelve
+    // ese puntero tipado como la vista T (el CallExpr ya tiene result_type=T).
+    if (name == "parent" && !e->type_args.empty() && e->args.empty()) {
+        const ir::IrValueId rv = lookup("__ovl_root");
+        if (rv == ir::IR_NO_VALUE) {
+            error_at(e->loc, "parent<T>() solo es valido dentro de un resolver "
+                             "@offset { } (de un overlay accedido como sub-vista)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_value = rv;
         return true;
     }
 

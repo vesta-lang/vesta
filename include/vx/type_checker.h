@@ -181,6 +181,16 @@ struct StructFieldInfo {
     /// no-owning al AST.
     ast::Expr *array_count = nullptr;
     ast::Expr *array_stride = nullptr;
+    /// Overlay array SIN count (`T Name[] @offset(...) stride(s)`): el usuario
+    /// gestiona la terminacion (p.ej. bucle hasta entrada nula).  @c array_count
+    /// null + @c is_array true = array no acotado.
+    bool is_array = false;
+    /// F4: el resolver `@offset { }` de este campo usa `parent<T>()`.  Entonces
+    /// la funcion sintetizada recibe un param extra `root` (el puntero de la
+    /// vista RAIZ) que el call site enhebra caminando la cadena de accesos.
+    /// @c resolver_parent_type = nombre del tipo overlay raiz (T).
+    bool resolver_uses_parent = false;
+    std::string resolver_parent_type;
 };
 
 /**
@@ -1933,6 +1943,21 @@ class TypeChecker {
     // VOID).  Se settea al entrar en @c check_function /
     // @c check_class_method y se restaura al salir.
     Type current_fn_return_type_{PrimitiveKind::VOID};
+
+    // F4: contexto de chequeo de un resolver `@offset { }` de overlay.  Cuando
+    // @c overlay_resolver_active_ es true y el body llama a `parent<T>()`, se
+    // marca @c overlay_resolver_used_parent_ y se guarda T; tras el check se
+    // copia a @c StructFieldInfo::resolver_uses_parent del campo resolver.
+    bool overlay_resolver_active_ = false;
+    bool overlay_resolver_used_parent_ = false;
+    std::string overlay_resolver_parent_type_;
+    /// F4: resolvers `@offset { }` cuyo check se DIFIERE a un 2o pase (tras
+    /// construir TODOS los layouts de overlay), para que un resolver pueda usar
+    /// `parent<Otro>()` aunque Otro se defina despues (dependencia circular:
+    /// PeImage.Imports usa ImportDesc; ImportDesc.name usa parent<PeImage>()).
+    std::vector<std::pair<const ast::StructDecl *, const ast::StructFieldDecl *>>
+        pending_overlay_resolvers_;
+    void check_overlay_resolvers_deferred();
 
     // Safety net (item 1): variables LOCALES de tipo STRUCT a las que se les
     // asigno un closure CAPTURADOR en un campo.  El env de ese closure vive en

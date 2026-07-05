@@ -2607,6 +2607,7 @@ void TypeChecker::collect_globals() {
                     // Array (F3b): copiar count/stride; el offset es `pos`.
                     fi.array_count = f.array_count.get();
                     fi.array_stride = f.array_stride.get();
+                    fi.is_array = f.is_array;
                     if (f.offset_block) {
                         // Resolver de BLOQUE (F3): `@offset { ... }`.  Devuelve
                         // la direccion final; se resuelve en tiempo de acceso.
@@ -2701,36 +2702,13 @@ void TypeChecker::collect_globals() {
                                              "el @offset(expr) del campo '" +
                                              f.name + "' debe evaluar a un entero");
                         } else if (f.offset_block) {
-                            // El bloque devuelve una DIRECCION y ve `base` (el
-                            // puntero de la vista), en un scope propio.  El
-                            // return type del resolver es u64: lo fijamos en
-                            // @c current_fn_return_type_ para que los `return`
-                            // (directos y dentro de un `match`) validen contra
-                            // u64 (check_match usa el miembro, no el param).
-                            const Type saved_ret = current_fn_return_type_;
-                            current_fn_return_type_ = Type{PrimitiveKind::U64};
-                            push_scope();
-                            Symbol bsym;
-                            bsym.kind = SymbolKind::Variable;
-                            bsym.type = Type{PrimitiveKind::U64};
-                            (void)declare("base", bsym);
-                            // F4: `this`/`self` = la propia vista (tipo overlay)
-                            // para poder navegar arrays hermanos declarativamente
-                            // (`this.Sections[i].campo`) SIN aritmetica de
-                            // punteros ni helpers -- toda la logica de formato
-                            // (p.ej. traducir un RVA por la tabla de secciones)
-                            // vive en el resolver.
-                            Symbol tsym;
-                            tsym.kind = SymbolKind::Variable;
-                            tsym.type = Type{};
-                            tsym.type.kind = PrimitiveKind::STRUCT;
-                            tsym.type.struct_name = s->name;
-                            (void)declare("this", tsym);
-                            (void)declare("self", tsym);
-                            check_block(f.offset_block.get(),
-                                        Type{PrimitiveKind::U64});
-                            pop_scope();
-                            current_fn_return_type_ = saved_ret;
+                            // F4: DIFERIR el check del resolver de bloque a un 2o
+                            // pase (tras construir TODOS los layouts), para que
+                            // pueda usar `parent<Otro>().campo` aunque Otro se
+                            // defina despues (dependencia circular).  El check
+                            // real (scope base/this/self + parent detection) lo
+                            // hace check_overlay_resolvers_deferred().
+                            pending_overlay_resolvers_.push_back({s, &f});
                         }
                         // Array (F3b): count y stride pueden referenciar
                         // hermanos; deben evaluar a enteros.
@@ -3751,9 +3729,68 @@ void TypeChecker::collect_globals() {
             }
         }
     }
+    // F4: 2o pase de resolvers de overlay `@offset { }`, ahora que TODOS los
+    // layouts estan construidos (permite parent<Otro>() con dependencia circular).
+    check_overlay_resolvers_deferred();
     // Fase 1 interop C: con todos los structs ya registrados, cachear su
     // categoria (C-compat vs gestionado) inferida de los campos.
     compute_struct_categories();
+}
+
+// ---------------------------------------------------------------------
+// F4: 2o pase -- chequea los resolvers `@offset { }` de overlay tras
+// construir todos los layouts.  Reconstruye el scope (siblings + base +
+// this/self) y detecta parent<T>() para marcar el campo resolver.
+// ---------------------------------------------------------------------
+void TypeChecker::check_overlay_resolvers_deferred() {
+    for (auto &pr : pending_overlay_resolvers_) {
+        const ast::StructDecl *s = pr.first;
+        const ast::StructFieldDecl *f = pr.second;
+        if (!f->offset_block) continue;
+        auto it = struct_layouts_.find(s->name);
+        if (it == struct_layouts_.end()) continue;
+        StructLayout &lay = it->second;
+        push_scope();
+        // Hermanos (como enteros / su tipo) para los nombres desnudos.
+        for (auto &fi : lay.fields) {
+            Symbol sym;
+            sym.kind = SymbolKind::Variable;
+            sym.type = fi.type;
+            (void)declare(fi.name, sym);
+        }
+        const Type saved_ret = current_fn_return_type_;
+        current_fn_return_type_ = Type{PrimitiveKind::U64};
+        push_scope();
+        Symbol bsym;
+        bsym.kind = SymbolKind::Variable;
+        bsym.type = Type{PrimitiveKind::U64};
+        (void)declare("base", bsym);
+        Symbol tsym;
+        tsym.kind = SymbolKind::Variable;
+        tsym.type = Type{};
+        tsym.type.kind = PrimitiveKind::STRUCT;
+        tsym.type.struct_name = s->name;
+        (void)declare("this", tsym);
+        (void)declare("self", tsym);
+        overlay_resolver_active_ = true;
+        overlay_resolver_used_parent_ = false;
+        overlay_resolver_parent_type_.clear();
+        check_block(const_cast<ast::BlockStmt *>(f->offset_block.get()),
+                    Type{PrimitiveKind::U64});
+        if (overlay_resolver_used_parent_) {
+            for (auto &lf : lay.fields)
+                if (lf.name == f->name) {
+                    lf.resolver_uses_parent = true;
+                    lf.resolver_parent_type = overlay_resolver_parent_type_;
+                    break;
+                }
+        }
+        overlay_resolver_active_ = false;
+        current_fn_return_type_ = saved_ret;
+        pop_scope();
+        pop_scope();
+    }
+    pending_overlay_resolvers_.clear();
 }
 
 // ---------------------------------------------------------------------
@@ -10377,6 +10414,24 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // comprobaciones sin aritmetica de punteros a mano.  No son keywords
     // de la gramatica: se reconocen aqui por nombre + forma del arg.
     // -----------------------------------------------------------------
+    // F4: `parent<T>()` dentro de un resolver `@offset { }` -> la vista RAIZ,
+    // de tipo overlay T.  Marca que el resolver usa parent (para enhebrar `root`).
+    if (id->name == "parent" && e->type_args.size() == 1 && e->args.empty()) {
+        const Type t = type_from_node(e->type_args[0].get());
+        if (t.kind != PrimitiveKind::STRUCT) {
+            diags_.error(e->loc, "parent<T>(): T debe ser un tipo @overlay");
+        }
+        if (overlay_resolver_active_) {
+            overlay_resolver_used_parent_ = true;
+            overlay_resolver_parent_type_ = t.struct_name;
+        } else {
+            diags_.error(e->loc, "parent<T>() solo es valido dentro de un "
+                                 "resolver @offset { } de un overlay");
+        }
+        e->result_type = t;
+        return t;
+    }
+
     if (e->type_args.empty() && !e->args.empty() &&
         (id->name == "offsetof" || id->name == "in_bounds")) {
         // Predicado: el arg accede a un campo/elemento de un overlay.
