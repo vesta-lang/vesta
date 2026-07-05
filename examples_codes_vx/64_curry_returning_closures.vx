@@ -1,3 +1,5 @@
+namespace ejemplos.curry_returning_closures;
+
 // funciones que devuelven closures (curry, factories).
 //
 // Antes esto fallaba en runtime: el ABI de retorno solo devolvia

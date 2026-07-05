@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -87,6 +87,10 @@ enum class NodeKind : uint8_t {
                    ///< estilo NASM, AOT).
     ConceptDecl,   ///< @c concept Name<T> = pred; | { stmts } | { metodos }
                    ///< (constraints/bounds de genericos, #6; compile-time puro).
+    ExtensionDecl, ///< @c extension Tipo { metodos }  (NS.6-ext: anyade metodos
+                   ///< a un tipo existente; dispatch estatico directo).
+    ImplDecl,      ///< @c impl Concept for Tipo { metodos }  (NS.6-ext: implementa
+                   ///< un concept para un tipo; conformance estructural).
 
     // ----- Statements -----
     BlockStmt,
@@ -1462,6 +1466,10 @@ struct FunctionDecl : Node {
     /// segun keyword `public`/`private` precedente; sin keyword = true
     /// (default permisivo para compat con codigo existente).
     bool is_public = true;
+    /// Phase NS.3: @c "internal" -- visible en TODO el paquete (mismo
+    /// PackageId) pero NO exportado a paquetes distintos.  Se exporta al .vxi
+    /// con flag; el consumidor de OTRO paquete lo filtra.
+    bool is_internal = false;
     bool is_async = false; ///< @Async: el cuerpo se ejecuta en un proceso hijo,
                            ///< devuelve handle de Future
     /// marca `comptime fn` -- la funcion se interpreta en
@@ -1623,6 +1631,39 @@ struct ConceptDecl : Node {
 };
 
 /**
+ * @struct ExtensionDecl
+ * @brief NS.6-ext: @c "extension Tipo { metodos }".  anyade metodos a un tipo
+ * (struct o clase) ya declarado, posiblemente desde otro fichero/namespace
+ * (estilo Swift extension / C# extension methods).  Los metodos se APENDEAN al
+ * layout del tipo destino; el dispatch es ESTATICO (CALL directo a
+ * @c Tipo__metodo, inline-able, coste cero) -- no entran en la vtable.
+ * Coherencia (Vesta): permisivo (cualquier tipo, local o foraneo); error duro
+ * solo en la colision real de un metodo+aridad ya existente en el tipo.
+ */
+struct ExtensionDecl : Node {
+    std::string target_type; ///< nombre del tipo a extender (struct o clase)
+    std::vector<std::unique_ptr<ClassMethodDecl>> methods;
+    bool is_public = true;
+    ExtensionDecl() : Node(NodeKind::ExtensionDecl) {}
+};
+
+/**
+ * @struct ImplDecl
+ * @brief NS.6-ext: @c "impl Concept for Tipo { metodos }".  Implementa un
+ * @c concept para un tipo anyadiendo los metodos requeridos (estilo Rust impl).
+ * Como los concepts de Vesta son PREDICADOS comptime estructurales (cero
+ * codigo), un @c impl es identico a una @c extension mas la VALIDACION de que
+ * el tipo satisface el concept tras anyadir los metodos.
+ */
+struct ImplDecl : Node {
+    std::string concept_name; ///< concept que se implementa
+    std::string target_type;  ///< tipo para el que se implementa
+    std::vector<std::unique_ptr<ClassMethodDecl>> methods;
+    bool is_public = true;
+    ImplDecl() : Node(NodeKind::ImplDecl) {}
+};
+
+/**
  * @struct ExternFnDecl
  * @brief FFI declarativo - declaracion `extern "lib.dll" fn name(...) -> R;`
  *
@@ -1667,6 +1708,8 @@ struct GlobalVarDecl : Node {
     bool is_const = false;
     /// Phase M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
+    /// Phase NS.3: @c "internal" -- package-scoped (ver FunctionDecl::is_internal).
+    bool is_internal = false;
     ///  marca `comptime const`.  El init debe ser comptime-
     /// evaluable; el type checker guarda el valor en
     /// @c TypeChecker::comptime_const_values_ y los usos posteriores
@@ -1794,8 +1837,15 @@ struct TypeAliasDecl : Node {
  */
 struct ImportDecl : Node {
     /// Ruta literal tal como aparecio en el source (sin las comillas).
-    /// E.g. @c "editor/buffer" o @c "std/io".
+    /// E.g. @c "editor/buffer" o @c "std/io".  Cuando @c by_namespace es
+    /// true, contiene el path punteado del namespace (e.g. @c "std.collections").
     std::string path;
+    /// Phase NS.2-full: true si el import vino de la forma por-NAMESPACE
+    /// @c "import a.b.c;" (identificadores punteados) en lugar de la forma
+    /// por-PATH @c "import \"a/b/c\";" (literal string).  En ese caso @c path
+    /// contiene el namespace punteado y el resolver lo mapea a fichero via el
+    /// indice de namespaces (no via el sistema de ficheros directo).
+    bool by_namespace = false;
     /// Alias opcional para el namespace.  Vacio si no hay @c as.
     std::string alias;
     /// Lista de simbolos especificos a importar al scope local
@@ -1842,6 +1892,10 @@ struct NamespaceDecl : Node {
     /// Semanticamente equivalentes (ambas manglan sus @c decls con el path); el
     /// flag es informativo para diagnosticos.
     bool is_statement_form = false;
+    /// Phase NS.3: override opcional del PackageId via @c "namespace X @id(\"..\");".
+    /// Vacio = usar el PackageId derivado del vx.toml.  Permite renombrar el
+    /// namespace manteniendo la identidad ABI (el .vxi del modulo lo estampa).
+    std::string package_id_override;
     NamespaceDecl() : Node(NodeKind::NamespaceDecl) {}
 };
 

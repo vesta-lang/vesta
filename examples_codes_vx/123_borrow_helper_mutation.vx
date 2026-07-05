@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_helper_mutation;
+
 // Patron clasico Rust: pasar &mut a una funcion auxiliar que muta el
 // valor.  El compilador prueba que el aliasing es seguro y el helper
 // puede leer/escribir libremente sin race conditions ni double-mut.

@@ -1,3 +1,5 @@
+namespace ejemplos.check_chain;
+
 // Chain: make_chain calls make_inner.
 
 unique<i32> make_inner() {

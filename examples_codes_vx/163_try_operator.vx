@@ -1,3 +1,5 @@
+namespace ejemplos.try_operator;
+
 // P2: Operador `?` postfix para Result<V,E> -- early-return sintactico.
 //
 // Sintaxis: `expr?` donde expr es Result<V,E>.

@@ -1,3 +1,5 @@
+namespace ejemplos.metaprog_completa;
+
 // metaprogramacion completa al nivel de Nim.
 //
 // (1) `comptime NAME = expr;` local (dentro de funciones)

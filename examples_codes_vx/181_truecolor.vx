@@ -1,3 +1,5 @@
+namespace ejemplos.truecolor;
+
 // Demostracion del truecolor como feature del lenguaje: los builtins
 // fg_rgb(r,g,b) / bg_rgb(r,g,b) integrados en la interpolacion de
 // print/println emiten las secuencias SGR de 24 bits.  Funcionan

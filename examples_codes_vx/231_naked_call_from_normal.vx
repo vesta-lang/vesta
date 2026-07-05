@@ -1,3 +1,5 @@
+namespace ejemplos.naked_call_from_normal;
+
 // 231_naked_call_from_normal.vx
 //
 // LIM-B: una funcion Vex NORMAL (no @Naked) llama a una funcion @Naked del

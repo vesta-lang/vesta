@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -393,13 +393,20 @@ static bool target_matches_(const std::string &spec_in) noexcept {
 // no hereden la visibilidad del top-level que los envuelve.
 void Parser::apply_pending_visibility(ast::Node *n) noexcept {
     if (n == nullptr || pending_visibility_ == 0) return;
-    const bool is_public = (pending_visibility_ == 1);
+    // NS.3: internal (3) es EXPORTABLE (visible en el paquete) -> is_public=true
+    // ademas de is_internal=true.  public (1) e internal (3) exportan; private
+    // (2) no.
+    const bool is_public =
+        (pending_visibility_ == 1 || pending_visibility_ == 3);
+    const bool is_internal = (pending_visibility_ == 3);
     switch (n->kind) {
     case ast::NodeKind::FunctionDecl:
         static_cast<ast::FunctionDecl *>(n)->is_public = is_public;
+        static_cast<ast::FunctionDecl *>(n)->is_internal = is_internal;
         break;
     case ast::NodeKind::GlobalVarDecl:
         static_cast<ast::GlobalVarDecl *>(n)->is_public = is_public;
+        static_cast<ast::GlobalVarDecl *>(n)->is_internal = is_internal;
         break;
     case ast::NodeKind::TypeAliasDecl:
         static_cast<ast::TypeAliasDecl *>(n)->is_public = is_public;
@@ -534,6 +541,84 @@ void Parser::synchronize() {
 }
 
 // ---------------------------------------------------------------------
+// #cross-module-generics: si @p decl es una plantilla generica o un concepto,
+// captura su texto fuente [decl_start_off, current) y lo apila en
+// @c generic_template_exports para exportarlo via `.vxi`.  Compartido por el
+// top-level (parse_program) y las decls dentro de un `namespace` (para que las
+// plantillas/concepts namespaced tambien se exporten cross-module).
+// ---------------------------------------------------------------------
+void Parser::collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
+                                      uint32_t decl_start_off) {
+    if (!mod || !decl) return;
+    ast::GenericTemplateExport tex;
+    bool is_template = false;
+    switch (decl->kind) {
+    case ast::NodeKind::StructDecl: {
+        auto *sd = static_cast<ast::StructDecl *>(decl);
+        if (!sd->type_params.empty() || sd->is_specialization) {
+            tex.name = sd->name;
+            tex.is_public = sd->is_public;
+            is_template = true;
+        }
+        break;
+    }
+    case ast::NodeKind::ClassDecl: {
+        auto *cd = static_cast<ast::ClassDecl *>(decl);
+        if (!cd->type_params.empty() || cd->is_specialization) {
+            tex.name = cd->name;
+            tex.is_public = cd->is_public;
+            is_template = true;
+        }
+        break;
+    }
+    case ast::NodeKind::FunctionDecl: {
+        auto *fd = static_cast<ast::FunctionDecl *>(decl);
+        if ((!fd->type_params.empty() || fd->is_specialization) &&
+            !fd->is_comptime && !fd->is_macro) {
+            tex.name = fd->name;
+            tex.is_public = fd->is_public;
+            is_template = true;
+        } else if (fd->is_comptime || fd->is_macro) {
+            // NS.2/MC: exportar el TEXTO de una fn comptime/macro para que el
+            // consumidor la inyecte, la lowere a IR (__macro_<name>) y la
+            // evalue en compile-time con su ComptimeRuntime (JIT) -- cross-
+            // modulo + explota el cache de IR del consumidor.
+            tex.name = fd->name;
+            tex.is_public = fd->is_public;
+            is_template = true;
+        }
+        break;
+    }
+    case ast::NodeKind::EnumDecl: {
+        auto *en = static_cast<ast::EnumDecl *>(decl);
+        if (!en->type_params.empty()) {
+            tex.name = en->name;
+            tex.is_public = en->is_public;
+            is_template = true;
+        }
+        break;
+    }
+    case ast::NodeKind::ConceptDecl: {
+        auto *cn = static_cast<ast::ConceptDecl *>(decl);
+        tex.name = cn->name;
+        tex.is_public = cn->is_public;
+        is_template = true;
+        break;
+    }
+    default: break;
+    }
+    if (!is_template) return;
+    const std::string &src = lex_.source_buffer();
+    uint32_t end_off = current_.loc.offset; // inicio del sig. token
+    if (end_off > src.size()) end_off = static_cast<uint32_t>(src.size());
+    if (decl_start_off < end_off && end_off <= src.size()) {
+        tex.kind = static_cast<uint8_t>(decl->kind);
+        tex.source = src.substr(decl_start_off, end_off - decl_start_off);
+        mod->generic_template_exports.push_back(std::move(tex));
+    }
+}
+
+// ---------------------------------------------------------------------
 // Punto de entrada: parse_program.
 // ---------------------------------------------------------------------
 
@@ -555,71 +640,14 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
         // #cross-module-generics: capturar el span fuente del decl para poder
         // exportar las plantillas genericas (struct/clase/fn/enum con
         // type_params) y los conceptos a otros modulos via `.vxi`.
+        tpl_export_mod_ = mod.get();
         const uint32_t decl_start_off = current_.loc.offset;
         auto decl = parse_top_level_decl();
         if (decl) {
-            // ¿Es una plantilla generica o un concepto?  Si lo es, guardar su
-            // texto fuente [start, end) para el `.vxi`.
-            ast::GenericTemplateExport tex;
-            bool is_template = false;
-            switch (decl->kind) {
-            case ast::NodeKind::StructDecl: {
-                auto *sd = static_cast<ast::StructDecl *>(decl.get());
-                if (!sd->type_params.empty() || sd->is_specialization) {
-                    tex.name = sd->name;
-                    tex.is_public = sd->is_public;
-                    is_template = true;
-                }
-                break;
-            }
-            case ast::NodeKind::ClassDecl: {
-                auto *cd = static_cast<ast::ClassDecl *>(decl.get());
-                if (!cd->type_params.empty() || cd->is_specialization) {
-                    tex.name = cd->name;
-                    tex.is_public = cd->is_public;
-                    is_template = true;
-                }
-                break;
-            }
-            case ast::NodeKind::FunctionDecl: {
-                auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-                if ((!fd->type_params.empty() || fd->is_specialization) &&
-                    !fd->is_comptime && !fd->is_macro) {
-                    tex.name = fd->name;
-                    tex.is_public = fd->is_public;
-                    is_template = true;
-                }
-                break;
-            }
-            case ast::NodeKind::EnumDecl: {
-                auto *en = static_cast<ast::EnumDecl *>(decl.get());
-                if (!en->type_params.empty()) {
-                    tex.name = en->name;
-                    tex.is_public = en->is_public;
-                    is_template = true;
-                }
-                break;
-            }
-            case ast::NodeKind::ConceptDecl: {
-                auto *cn = static_cast<ast::ConceptDecl *>(decl.get());
-                tex.name = cn->name;
-                tex.is_public = cn->is_public;
-                is_template = true;
-                break;
-            }
-            default: break;
-            }
-            if (is_template) {
-                const std::string &src = lex_.source_buffer();
-                uint32_t end_off = current_.loc.offset; // inicio del sig. decl
-                if (end_off > src.size()) end_off = (uint32_t)src.size();
-                if (decl_start_off < end_off && end_off <= src.size()) {
-                    tex.kind = static_cast<uint8_t>(decl->kind);
-                    tex.source =
-                        src.substr(decl_start_off, end_off - decl_start_off);
-                    mod->generic_template_exports.push_back(std::move(tex));
-                }
-            }
+            // #cross-module-generics: capturar el span fuente si es plantilla/
+            // concepto (para el `.vxi`).  Helper compartido con
+            // parse_namespace_decl (decls dentro de un namespace).
+            collect_template_export_(mod.get(), decl.get(), decl_start_off);
             mod->decls.push_back(std::move(decl));
         } else if (last_decl_was_target_skip_) {
             // L.24: skip intencional via @Target no matcheado.
@@ -792,6 +820,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     } else if (current_.kind == TokenKind::KW_PRIVATE) {
         (void)consume();
         pending_visibility_ = 2; // 2 = private explicito
+    } else if (current_.kind == TokenKind::IDENTIFIER &&
+               current_.lexeme == "internal") {
+        // Phase NS.3: `internal` (keyword contextual) -- package-scoped.
+        (void)consume();
+        pending_visibility_ = 3; // 3 = internal explicito
     }
     // Cleanup garantizado al salir de parse_top_level_decl.
     struct VisGuard {
@@ -804,6 +837,21 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "concept" &&
         lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
         auto n = parse_concept_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // NS.6-ext: extension Tipo { ... }  (keyword contextual; exige IDENT tras).
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        current_.lexeme == "extension" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_extension_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // NS.6-ext: impl Concept for Tipo { ... }  (keyword contextual).
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "impl" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_impl_decl();
         apply_pending_visibility(n.get());
         return n;
     }
@@ -1258,6 +1306,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (pending_visibility_ == 0 && (current_.kind == TokenKind::KW_PUBLIC ||
                                      current_.kind == TokenKind::KW_PRIVATE)) {
         pending_visibility_ = (current_.kind == TokenKind::KW_PUBLIC) ? 1 : 2;
+        (void)consume();
+    } else if (pending_visibility_ == 0 &&
+               current_.kind == TokenKind::IDENTIFIER &&
+               current_.lexeme == "internal") {
+        pending_visibility_ = 3; // NS.3: internal tras annotations
         (void)consume();
     }
     // bytes <nombre> { db/dw/dd/dq/times ... }  (datos crudos estilo NASM)
@@ -2576,18 +2629,72 @@ Parser::parse_import_decl(bool is_public_reexport) {
 
     (void)consume(); // 'import'
 
-    // El path debe ser un literal string puro.  Strings interpolados
-    // arrancan con ISTR_BEGIN (no STRING_LIT) -- el check con
-    // STRING_LIT/RAW_STRING_LIT garantiza implicitamente que no hay
-    // interpolacion en la ruta.
-    if (current_.kind != TokenKind::STRING_LIT &&
-        current_.kind != TokenKind::RAW_STRING_LIT) {
-        error_here("se esperaba un literal string como ruta del modulo, "
-                   "e.g. import \"editor/buffer\";");
+    // Phase NS.2-full: dos formas de import.
+    //   (a) por-PATH:      import "editor/buffer";   (literal string)
+    //   (b) por-NAMESPACE: import a.b.c;             (identificadores punteados)
+    // La forma (b) resuelve el namespace a fichero via el indice de
+    // namespaces (escaneo de las cabeceras `namespace` de las source roots).
+    if (current_.kind == TokenKind::STRING_LIT ||
+        current_.kind == TokenKind::RAW_STRING_LIT) {
+        // Forma (a) por-path.  Strings interpolados arrancan con ISTR_BEGIN
+        // (no STRING_LIT), asi que el check garantiza que no hay interpolacion.
+        im->path = current_.str_val;
+        (void)consume();
+    } else if (current_.kind == TokenKind::IDENTIFIER) {
+        // Forma (b) por-namespace: recolectar el path punteado a.b.c.
+        im->by_namespace = true;
+        std::string ns = consume().lexeme;
+        while (current_.kind == TokenKind::DOT) {
+            // `a.b.c.{A, B}` -> el `.{` cierra el path y abre la lista selectiva.
+            if (lex_.peek_at(0).kind == TokenKind::LBRACE) break;
+            (void)consume(); // '.'
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba un identificador tras '.' en el "
+                           "namespace del import");
+                return nullptr;
+            }
+            ns += ".";
+            ns += consume().lexeme;
+        }
+        im->path = std::move(ns);
+        // Forma selectiva `.{A, B as C}` (equivalente a `only`).
+        if (current_.kind == TokenKind::DOT && lex_.peek_at(0).kind == TokenKind::LBRACE) {
+            (void)consume(); // '.'
+            (void)consume(); // '{'
+            for (;;) {
+                if (current_.kind != TokenKind::IDENTIFIER) {
+                    error_here("se esperaba un identificador en la lista "
+                               "selectiva '.{ ... }' del import");
+                    return nullptr;
+                }
+                ast::ImportDecl::OnlySymbol os;
+                os.name = consume().lexeme;
+                if (current_.kind == TokenKind::IDENTIFIER &&
+                    current_.lexeme == "as") {
+                    (void)consume(); // 'as'
+                    if (current_.kind != TokenKind::IDENTIFIER) {
+                        error_here("se esperaba un identificador tras 'as' en "
+                                   "la lista selectiva del import");
+                        return nullptr;
+                    }
+                    os.rename = consume().lexeme;
+                }
+                im->only_symbols.push_back(std::move(os));
+                if (current_.kind == TokenKind::COMMA) {
+                    (void)consume();
+                    continue;
+                }
+                break;
+            }
+            (void)expect(TokenKind::RBRACE,
+                         "se esperaba '}' al final de la lista selectiva "
+                         "'.{ ... }' del import");
+        }
+    } else {
+        error_here("se esperaba un literal string (import \"a/b\";) o un "
+                   "namespace punteado (import a.b.c;) tras 'import'");
         return nullptr;
     }
-    im->path = current_.str_val;
-    (void)consume();
 
     // Opcional: as alias  (contextual 'as').
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "as") {
@@ -2673,6 +2780,24 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     }
     ns->name = path;
 
+    // Phase NS.3: override opcional de PackageId: `namespace X @id("...")`.
+    // Permite renombrar el namespace manteniendo la identidad ABI.
+    if (current_.kind == TokenKind::AT &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+        lex_.peek_at(0).lexeme == "id") {
+        (void)consume(); // '@'
+        (void)consume(); // 'id'
+        (void)expect(TokenKind::LPAREN, "se esperaba '(' tras '@id'");
+        if (current_.kind != TokenKind::STRING_LIT &&
+            current_.kind != TokenKind::RAW_STRING_LIT) {
+            error_here("se esperaba un literal string en '@id(\"...\")'");
+            return nullptr;
+        }
+        ns->package_id_override = current_.str_val;
+        (void)consume();
+        (void)expect(TokenKind::RPAREN, "se esperaba ')' tras el id de '@id'");
+    }
+
     // Phase NS.1: forma STATEMENT `namespace a.b.c;` -- aplica al RESTO del
     // fichero (recoge las decls top-level siguientes hasta el proximo
     // `namespace` statement o EOF).  La forma BLOQUE `namespace a.b.c { ... }`
@@ -2683,8 +2808,22 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
         ns->is_statement_form = true;
         while (current_.kind != TokenKind::END_OF_FILE &&
                current_.kind != TokenKind::KW_NAMESPACE) {
+            // extern "lib" { fn ...; } produce N decls (una por fn); parse_program
+            // lo maneja como caso especial y parse_top_level_decl NO -> replicarlo
+            // aqui para que un `extern` dentro de un namespace funcione.
+            if (current_.kind == TokenKind::KW_EXTERN) {
+                ast::ModuleNode tmp;
+                parse_extern_block(tmp);
+                for (auto &d : tmp.decls) ns->decls.push_back(std::move(d));
+                continue;
+            }
+            const uint32_t inner_start = current_.loc.offset;
             auto inner = parse_top_level_decl();
             if (!inner) {
+                // L.24: skip intencional via @Target no matcheado -- la decl ya
+                // fue consumida por skip_target_skipped_decl; NO sincronizar
+                // (igual que parse_program), o nos comeriamos la siguiente decl.
+                if (last_decl_was_target_skip_) continue;
                 synchronize();
                 // synchronize se para en KW_NAMESPACE/EOF (fin de este ns) o en
                 // el siguiente keyword aprovechable; el bucle re-evalua.
@@ -2693,6 +2832,8 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
                     break;
                 continue;
             }
+            // NS.2: exportar plantillas/concepts namespaced cross-module.
+            collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
             ns->decls.push_back(std::move(inner));
         }
         return ns;
@@ -2703,13 +2844,26 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
 
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
+        // extern "lib" { ... } dentro del namespace (ver forma statement arriba).
+        if (current_.kind == TokenKind::KW_EXTERN) {
+            ast::ModuleNode tmp;
+            parse_extern_block(tmp);
+            for (auto &d : tmp.decls) ns->decls.push_back(std::move(d));
+            continue;
+        }
+        const uint32_t inner_start = current_.loc.offset;
         auto inner = parse_top_level_decl();
         if (!inner) {
+            // L.24: skip intencional via @Target no matcheado (ver forma
+            // statement arriba) -- NO sincronizar.
+            if (last_decl_was_target_skip_) continue;
             // Error de parse en una decl interna -- skipear hasta el
             // siguiente token aprovechable para no quedarnos en bucle.
             synchronize();
             continue;
         }
+        // NS.2: exportar plantillas/concepts namespaced cross-module.
+        collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
         ns->decls.push_back(std::move(inner));
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al final del namespace");
@@ -3306,7 +3460,15 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             synchronize();
             continue;
         }
-        if (current_.kind != TokenKind::IDENTIFIER) {
+        // El nombre del miembro puede ser un IDENTIFIER o los keywords
+        // contextuales `get`/`set`: aqui YA parseamos un tipo, asi que esto es
+        // la forma `<tipo> <nombre>(...)` (campo o metodo), nunca una property
+        // (que se detecta ANTES, sin tipo previo).  Permitir `get`/`set` como
+        // nombre de metodo/campo (p.ej. `T get()`) evita rechazarlos por
+        // colisionar con los keywords de property.
+        if (current_.kind != TokenKind::IDENTIFIER &&
+            current_.kind != TokenKind::KW_GET &&
+            current_.kind != TokenKind::KW_SET) {
             error_here("se esperaba un nombre de campo o metodo tras el tipo");
             synchronize();
             continue;
@@ -3399,6 +3561,192 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
     return s;
+}
+
+// -----------------------------------------------------------------
+// NS.6-ext: extension / impl -- anyaden metodos a un tipo existente.
+//
+//   extension Tipo { metodos }
+//   impl Concept for Tipo { metodos }
+//
+// El cuerpo solo contiene METODOS (no campos): `[ret] name(params) body`.
+// Dispatch estatico (CALL directo a Tipo__metodo), inline-able.
+// -----------------------------------------------------------------
+
+std::unique_ptr<ast::ClassMethodDecl>
+Parser::parse_extension_method(uint8_t access) {
+    if (!starts_type()) {
+        error_here("se esperaba un tipo de retorno de metodo dentro de la "
+                   "extension/impl");
+        return nullptr;
+    }
+    const SourceLoc mloc = current_.loc;
+    auto type_node = parse_type_node();
+    if (!type_node) return nullptr;
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del metodo tras el tipo de retorno");
+        return nullptr;
+    }
+    std::string member_name = consume().lexeme;
+    // Type-params de metodo generico `<U>` opcionales.
+    std::vector<std::string> method_tparams;
+    std::vector<ast::TypeBound> method_tbounds;
+    if (current_.kind == TokenKind::LT)
+        parse_type_params_with_bounds(method_tparams, method_tbounds);
+    if (current_.kind != TokenKind::LPAREN) {
+        error_here("una extension/impl solo puede contener metodos "
+                   "(se esperaba '(' tras el nombre)");
+        return nullptr;
+    }
+    auto m = std::make_unique<ast::ClassMethodDecl>();
+    m->loc = mloc;
+    m->name = std::move(member_name);
+    m->return_type = std::move(type_node);
+    m->access = access;
+    m->method_type_params = method_tparams;
+    m->type_bounds = method_tbounds;
+    (void)consume(); // '('
+    while (current_.kind != TokenKind::RPAREN &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        auto p = std::make_unique<ast::ParamDecl>();
+        p->loc = current_.loc;
+        p->type = parse_type_node();
+        if (!p->type) {
+            synchronize();
+            break;
+        }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del parametro");
+            synchronize();
+            break;
+        }
+        p->name = consume().lexeme;
+        m->params.push_back(std::move(p));
+        if (!match(TokenKind::COMMA)) break;
+    }
+    (void)expect(TokenKind::RPAREN,
+                 "se esperaba ')' al cerrar parametros del metodo");
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
+        parse_where_clause(m->type_bounds);
+    }
+    const auto temp_aliases = register_temp_type_aliases(method_tparams);
+    m->body = parse_method_body(/*is_void=*/false);
+    unregister_temp_type_aliases(temp_aliases);
+    return m;
+}
+
+std::unique_ptr<ast::ExtensionDecl> Parser::parse_extension_decl() {
+    auto e = std::make_unique<ast::ExtensionDecl>();
+    e->loc = current_.loc;
+    (void)consume(); // 'extension'
+    // Tipo destino: identificador (posiblemente cualificado a.b.C via '.').
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del tipo tras 'extension'");
+        return nullptr;
+    }
+    std::string tgt = consume().lexeme;
+    while (current_.kind == TokenKind::DOT) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un identificador tras '.' en el tipo de "
+                       "la extension");
+            return nullptr;
+        }
+        tgt += ".";
+        tgt += consume().lexeme;
+    }
+    e->target_type = std::move(tgt);
+    (void)expect(TokenKind::LBRACE,
+                 "se esperaba '{' al abrir el cuerpo de la extension");
+    while (current_.kind != TokenKind::RBRACE &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        uint8_t access = 0;
+        if (current_.kind == TokenKind::KW_PUBLIC) {
+            (void)consume();
+        } else if (current_.kind == TokenKind::KW_PRIVATE) {
+            access = 1;
+            (void)consume();
+        }
+        auto m = parse_extension_method(access);
+        if (!m) {
+            synchronize();
+            if (current_.kind == TokenKind::RBRACE ||
+                current_.kind == TokenKind::END_OF_FILE)
+                break;
+            continue;
+        }
+        e->methods.push_back(std::move(m));
+    }
+    (void)expect(TokenKind::RBRACE,
+                 "se esperaba '}' al cerrar la extension");
+    return e;
+}
+
+std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
+    auto im = std::make_unique<ast::ImplDecl>();
+    im->loc = current_.loc;
+    (void)consume(); // 'impl'
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del concept tras 'impl'");
+        return nullptr;
+    }
+    std::string cname = consume().lexeme;
+    while (current_.kind == TokenKind::DOT) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un identificador tras '.' en el concept");
+            return nullptr;
+        }
+        cname += ".";
+        cname += consume().lexeme;
+    }
+    im->concept_name = std::move(cname);
+    // 'for' (keyword contextual).
+    if (!(current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "for") &&
+        current_.kind != TokenKind::KW_FOR) {
+        error_here("se esperaba 'for' en 'impl Concept for Tipo'");
+        return nullptr;
+    }
+    (void)consume(); // 'for'
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba el nombre del tipo tras 'for'");
+        return nullptr;
+    }
+    std::string tgt = consume().lexeme;
+    while (current_.kind == TokenKind::DOT) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un identificador tras '.' en el tipo del "
+                       "impl");
+            return nullptr;
+        }
+        tgt += ".";
+        tgt += consume().lexeme;
+    }
+    im->target_type = std::move(tgt);
+    (void)expect(TokenKind::LBRACE,
+                 "se esperaba '{' al abrir el cuerpo del impl");
+    while (current_.kind != TokenKind::RBRACE &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        uint8_t access = 0;
+        if (current_.kind == TokenKind::KW_PUBLIC) {
+            (void)consume();
+        } else if (current_.kind == TokenKind::KW_PRIVATE) {
+            access = 1;
+            (void)consume();
+        }
+        auto m = parse_extension_method(access);
+        if (!m) {
+            synchronize();
+            if (current_.kind == TokenKind::RBRACE ||
+                current_.kind == TokenKind::END_OF_FILE)
+                break;
+            continue;
+        }
+        im->methods.push_back(std::move(m));
+    }
+    (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el impl");
+    return im;
 }
 
 // -----------------------------------------------------------------
@@ -4035,7 +4383,14 @@ void Parser::parse_type_params_with_bounds(
             tb.type_param = pname;
             tb.loc = bl;
             while (current_.kind == TokenKind::IDENTIFIER) {
-                tb.concepts.push_back(consume().lexeme);
+                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
+                std::string cname = consume().lexeme;
+                while (current_.kind == TokenKind::DOT) {
+                    (void)consume(); // '.'
+                    if (current_.kind != TokenKind::IDENTIFIER) break;
+                    cname += "." + consume().lexeme;
+                }
+                tb.concepts.push_back(std::move(cname));
                 if (current_.kind == TokenKind::PLUS) {
                     (void)consume(); // '+' : otro concepto exigido
                     continue;
@@ -4115,7 +4470,14 @@ void Parser::parse_where_clause(std::vector<ast::TypeBound> &bounds) {
         if (current_.kind == TokenKind::COLON) {
             (void)consume(); // ':'
             while (current_.kind == TokenKind::IDENTIFIER) {
-                tb.concepts.push_back(consume().lexeme);
+                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
+                std::string cname = consume().lexeme;
+                while (current_.kind == TokenKind::DOT) {
+                    (void)consume(); // '.'
+                    if (current_.kind != TokenKind::IDENTIFIER) break;
+                    cname += "." + consume().lexeme;
+                }
+                tb.concepts.push_back(std::move(cname));
                 if (current_.kind == TokenKind::PLUS) {
                     (void)consume();
                     continue;

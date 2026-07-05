@@ -1,3 +1,5 @@
+namespace ejemplos.generics_avanzado;
+
 // Generics avanzado: dos type params + uso cross-class.
 //
 // Verifica:

@@ -1,3 +1,5 @@
+namespace ejemplos.foreach;
+
 // foreach sobre arrays nativos T[N].
 //
 // Sintaxis:

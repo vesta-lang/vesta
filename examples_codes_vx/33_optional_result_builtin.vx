@@ -1,3 +1,5 @@
+namespace ejemplos.optional_result_builtin;
+
 // Optional<T> y Result<V,E> como BUILTINS del compilador.
 //
 // Ambos tipos son nativos del frontend (no clases generadas por

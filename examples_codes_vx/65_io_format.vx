@@ -1,3 +1,5 @@
+namespace ejemplos.io_format;
+
 // I/O optimo: interpolacion ${expr} + builtins print/println/echo/flush
 // + variantes coloreadas con codigos ANSI.
 //

@@ -1,3 +1,5 @@
+namespace ejemplos.structs_genericos;
+
 // Structs genericos: `struct Nombre<T> { ... }`.
 //
 // Un struct puede declarar parametros de tipo y usarse con tipos concretos.

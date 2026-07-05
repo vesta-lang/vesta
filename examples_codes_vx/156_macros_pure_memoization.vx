@@ -1,3 +1,5 @@
+namespace ejemplos.macros_pure_memoization;
+
 // memoizacion automatica de macros @Pure + move semantics.
 //
 // Dos optimizaciones coordinadas:

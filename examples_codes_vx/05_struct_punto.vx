@@ -1,3 +1,5 @@
+namespace ejemplos.struct_punto;
+
 // examples_codes_vx/05_struct_punto.vx
 //
 // Demuestra structs: tipos agregados con campos, asignacion

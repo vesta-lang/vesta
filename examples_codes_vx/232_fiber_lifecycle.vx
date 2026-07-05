@@ -1,3 +1,5 @@
+namespace ejemplos.fiber_lifecycle;
+
 // 232_fiber_lifecycle.vx
 //
 // F2 de las fibras nativas: valida el CICLO DE VIDA COMPLETO de una fibra

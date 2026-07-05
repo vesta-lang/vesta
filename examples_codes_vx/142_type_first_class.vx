@@ -1,3 +1,5 @@
+namespace ejemplos.type_first_class;
+
 // Type-as-first-class-value -- `Type` es un tipo primer-clase en
 // compile-time.  `comptime_type<T>()` empaca un Type como ComptimeValue;
 // se guarda en un `comptime Type X` y se usa luego en cualquier

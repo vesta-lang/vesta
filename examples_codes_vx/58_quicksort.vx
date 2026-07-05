@@ -1,3 +1,5 @@
+namespace ejemplos.quicksort;
+
 // Algoritmo real: Quicksort recursivo sobre array nativo i32[].
 //
 // Pone a prueba:

@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -186,6 +186,10 @@ struct ClassMethodInfo {
     bool is_destructor = false;
     bool is_static = false;
     bool is_final = false;
+    /// NS.6-ext: metodo anyadido por una @c extension / @c impl.  Dispatch
+    /// ESTATICO (CALL directo a @c defining_class__name con @c this como primer
+    /// arg), no entra en la vtable.  Inline-able.
+    bool is_extension = false;
     /// el lowering, si encuentra un metodo expression-bodied
     /// con esta marca, sustituye la llamada por el cuerpo en el call
     /// site (sin CALLVIRT).  No es heredable: cada override decide su
@@ -638,15 +642,14 @@ class TypeChecker {
     bool try_monomorphize_method_call(ast::CallExpr *e,
                                       ast::FieldAccessExpr *fa, const Type &bt);
 
-    /// L2.3: el nombre es un enum template generico?
-    bool is_generic_enum_template(const std::string &name) const noexcept {
-        return generic_enum_templates_.count(name) > 0;
-    }
+    /// L2.3: el nombre es un enum template generico?  Acepta el nombre CRUDO,
+    /// el cualificado por namespace (`col.Maybe` -> `col__Maybe`) y el simple
+    /// con un unico match `<ns>__<name>` (resolucion namespace-relativa).
+    bool is_generic_enum_template(const std::string &name) const;
 
-    /// El nombre es un struct template generico?
-    bool is_generic_struct_template(const std::string &name) const noexcept {
-        return generic_struct_templates_.count(name) > 0;
-    }
+    /// El nombre es un struct template generico?  (misma resolucion que
+    /// is_generic_enum_template.)
+    bool is_generic_struct_template(const std::string &name) const;
 
     /// El nombre es una funcion generica (template)?
     bool is_generic_fn_template(const std::string &name) const noexcept {
@@ -1340,6 +1343,22 @@ class TypeChecker {
     std::unordered_map<std::string, bool> function_is_public_;
     std::unordered_map<std::string, bool> global_is_public_;
     std::unordered_map<std::string, bool> typedef_is_public_;
+    /// Phase NS.3: nombres marcados @c "internal" (package-scoped).  El emitter
+    /// de .vxi los exporta con flag; el consumidor de OTRO paquete los filtra.
+    std::unordered_set<std::string> function_is_internal_;
+    std::unordered_set<std::string> global_is_internal_;
+
+  public:
+    /// @brief Phase NS.3: @c true si la funcion @p name es @c internal.
+    bool function_is_internal(const std::string &name) const {
+        return function_is_internal_.count(name) != 0;
+    }
+    /// @brief Phase NS.3: @c true si el global @p name es @c internal.
+    bool global_is_internal(const std::string &name) const {
+        return global_is_internal_.count(name) != 0;
+    }
+
+  private:
 
     /// Phase M.L26: set de nombres que @c lookup_with_depth resolvio
     /// exitosamente.  Mutable porque el lookup es @c const pero el
@@ -1446,6 +1465,30 @@ class TypeChecker {
     void register_namespace_symbol(uint32_t ns_index,
                                    const std::string &public_name,
                                    ImportedNamespace::Sym sym);
+
+    /// @brief Phase NS.2-full: apunta un nombre local (alias del import) a un
+    /// namespace ya registrado.  Usado para que @c "import a.b.c as x;" haga
+    /// que @c x.Sym resuelva igual que @c a.b.c.Sym cuando el namespace
+    /// declarado difiere del nombre del fichero/alias.
+    /// @brief NS.6-ext: re-apendea un metodo de extension importado (desde el
+    /// .vxi de otro modulo) al layout del tipo destino en este consumidor, para
+    /// que @c obj.metodo() resuelva (dispatch estatico al @p mangled_label).
+    void inject_imported_ext_method(const std::string &target_key,
+                                    bool target_is_class,
+                                    const std::string &name,
+                                    const std::string &return_type_str,
+                                    const std::vector<std::string> &param_strs,
+                                    const std::string &mangled_label);
+
+    void point_namespace_alias(const std::string &alias, uint32_t ns_index) {
+        ns_idx_by_local_name_[alias] = ns_index;
+        // El Symbol::Namespace de @p alias se crea desde la cola pendiente con
+        // el ns_index capturado al registrarlo; corregirlo aqui para que
+        // @c alias.Sym resuelva contra el namespace destino.
+        for (auto &pn : pending_imported_ns_names_) {
+            if (pn.first == alias) pn.second = ns_index;
+        }
+    }
 
   private:
     /// Phase NS.1b: resuelve un nombre qualified punteado `a.b.c.Symbol` a su
@@ -1558,6 +1601,12 @@ class TypeChecker {
     /// args) -> indice en mod_.decls.  Cada uso `Maybe<i32>` se
     /// monomorphiza on demand via monomorphize_enum().
     std::unordered_map<std::string, size_t> generic_enum_templates_;
+    /// NS.6-ext: conformidades declaradas via @c "impl Concept for Tipo".
+    /// Mapea nombre-de-tipo -> conjunto de concepts implementados.  Consultado
+    /// por la verificacion de bounds (un tipo con impl explicito satisface el
+    /// concept aunque el predicado estructural tambien lo confirme).
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        impl_conformances_;
     /// Templates de struct genericos (`struct Box<T> { ... }`).  Mapea
     /// template_name -> indice en mod_.decls.  Cada uso `Box<i32>` se
     /// monomorphiza on demand via monomorphize_struct() (mismo modelo que

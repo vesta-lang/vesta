@@ -1,3 +1,5 @@
+namespace ejemplos.ternary_comptime_const;
+
 // tres mejoras de expresividad coordinadas.
 //
 // (1) Ternario `cond ? a : b` -- operador de seleccion de expresion.

@@ -378,6 +378,11 @@ static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
             write_u32(payload, static_cast<uint32_t>(pt.size()));
         }
     }
+    // NS.2 (v8): ns_path del tipo al final del payload (off+len; vacio = nivel
+    // de modulo).  Permite el round-trip cross-modulo de tipos namespaced.
+    const uint32_t nsp_off = pool.intern(sym.ns_path);
+    write_u32(payload, nsp_off);
+    write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
 }
 
 static void emit_payload_for_enum(std::vector<uint8_t> &payload,
@@ -402,6 +407,10 @@ static void emit_payload_for_enum(std::vector<uint8_t> &payload,
             write_u32(payload, static_cast<uint32_t>(pt.size()));
         }
     }
+    // NS.2 (v8): ns_path del enum al final del payload (off+len).
+    const uint32_t nsp_off = pool.intern(sym.ns_path);
+    write_u32(payload, nsp_off);
+    write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
 }
 
 std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
@@ -430,7 +439,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         if (sym.is_opaque) so.flags |= 0x01;
         if (sym.is_extern) so.flags |= 0x02;
         if (sym.is_const) so.flags |= 0x04; // L.7: GLOBAL_VAR const
-        if (sym.is_naked) so.flags |= 0x08; // LIM-A: FUNCTION @Naked
+        if (sym.is_naked) so.flags |= 0x08;    // LIM-A: FUNCTION @Naked
+        if (sym.is_internal) so.flags |= 0x10; // NS.3: internal (package-scoped)
         so.align_override = sym.align_override;
 
         switch (sym.kind) {
@@ -465,8 +475,9 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // blob_pool_size u32 + blob_pool_alignment u8 + 7 pad en offsets 48..63).
     // v6: crece a 80 (gen_templates_offset u32 + gen_templates_count u32 +
     // 8 pad en offsets 64..79).
-    const size_t HEADER_BYTES = 80;
-    const size_t GEN_ENTRY_BYTES = 20; // name_off+name_len+kind(u32)+src_off+src_len
+    const size_t HEADER_BYTES = 88; // v11: +ext_off(80) +ext_count(84)
+    const size_t GEN_ENTRY_BYTES =
+        28; // name_off+name_len+kind+src_off+src_len+ns_off+ns_len (v9)
     const size_t SYMENTRY_BYTES = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
     const size_t DEP_ENTRY_BYTES =
         16; // u32 name_off + u32 name_len + u64 abi_hash
@@ -486,7 +497,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     }
     // v6: pre-internar nombre + fuente de cada plantilla generica exportada.
     struct GenTplOff {
-        uint32_t name_off, name_len, kind, src_off, src_len;
+        uint32_t name_off, name_len, kind, src_off, src_len, ns_off, ns_len;
     };
     std::vector<GenTplOff> gen_offs;
     gen_offs.reserve(mod.generic_templates.size());
@@ -497,7 +508,36 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         go.kind = g.kind;
         go.src_off = pool.intern(g.source);
         go.src_len = static_cast<uint32_t>(g.source.size());
+        go.ns_off = pool.intern(g.ns_path);
+        go.ns_len = static_cast<uint32_t>(g.ns_path.size());
         gen_offs.push_back(go);
+    }
+    // NS.3 (v10): internar el package_id (vacio = paquete anonimo).
+    const uint32_t pkgid_off = pool.intern(mod.package_id);
+    const uint32_t pkgid_len = static_cast<uint32_t>(mod.package_id.size());
+    // NS.6-ext (v11): pre-internar los strings de cada ext_method.
+    struct ExtOff {
+        uint32_t tk_off, tk_len, nm_off, nm_len, rt_off, rt_len, ml_off, ml_len;
+        uint8_t is_class;
+        std::vector<std::pair<uint32_t, uint32_t>> params; // (off, len)
+    };
+    std::vector<ExtOff> ext_offs;
+    ext_offs.reserve(mod.ext_methods.size());
+    for (const auto &em : mod.ext_methods) {
+        ExtOff eo{};
+        eo.tk_off = pool.intern(em.target_key);
+        eo.tk_len = static_cast<uint32_t>(em.target_key.size());
+        eo.nm_off = pool.intern(em.name);
+        eo.nm_len = static_cast<uint32_t>(em.name.size());
+        eo.rt_off = pool.intern(em.return_type);
+        eo.rt_len = static_cast<uint32_t>(em.return_type.size());
+        eo.ml_off = pool.intern(em.mangled_label);
+        eo.ml_len = static_cast<uint32_t>(em.mangled_label.size());
+        eo.is_class = em.target_is_class ? 1 : 0;
+        for (const auto &pt : em.param_types)
+            eo.params.emplace_back(pool.intern(pt),
+                                   static_cast<uint32_t>(pt.size()));
+        ext_offs.push_back(std::move(eo));
     }
 
     std::vector<uint8_t> out;
@@ -556,6 +596,32 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         write_u32(out, go.kind);
         write_u32(out, go.src_off);
         write_u32(out, go.src_len);
+        write_u32(out, go.ns_off);
+        write_u32(out, go.ns_len);
+    }
+
+    // NS.6-ext (v11): tabla de ext_methods tras las plantillas genericas.
+    // Entrada variable: tk+nm+rt+ml (off+len c/u) + is_class(u8) + pad(3) +
+    // param_count(u32) + params[param_count] (off+len c/u).
+    const uint32_t ext_start = static_cast<uint32_t>(out.size());
+    for (const auto &eo : ext_offs) {
+        write_u32(out, eo.tk_off);
+        write_u32(out, eo.tk_len);
+        write_u32(out, eo.nm_off);
+        write_u32(out, eo.nm_len);
+        write_u32(out, eo.rt_off);
+        write_u32(out, eo.rt_len);
+        write_u32(out, eo.ml_off);
+        write_u32(out, eo.ml_len);
+        out.push_back(eo.is_class);
+        out.push_back(0);
+        out.push_back(0);
+        out.push_back(0);
+        write_u32(out, static_cast<uint32_t>(eo.params.size()));
+        for (const auto &pp : eo.params) {
+            write_u32(out, pp.first);
+            write_u32(out, pp.second);
+        }
     }
 
     // String pool al final.
@@ -608,10 +674,17 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     out[61] = 0;
     out[62] = 0;
     out[63] = 0;
-    // v6: gen_templates_offset (64) + gen_templates_count (68) + 8 pad (72..79).
+    // v6: gen_templates_offset (64) + gen_templates_count (68).
     patch_u32(64, gen_start);
     patch_u32(68, static_cast<uint32_t>(mod.generic_templates.size()));
-    for (size_t i = 72; i < 80; ++i) out[i] = 0;
+    // NS.3 (v10): package_id en el pad v6 (72 = offset RELATIVO al pool,
+    // 76 = longitud).  El parser suma string_pool_offset al leerlo.
+    patch_u32(72, pkgid_off);
+    patch_u32(76, pkgid_len);
+    // NS.6-ext (v11): ext_methods (80 = offset absoluto de la tabla en el
+    // fichero, 84 = numero de entradas).
+    patch_u32(80, ext_start);
+    patch_u32(84, static_cast<uint32_t>(mod.ext_methods.size()));
 
     // Adjustar payload_off de cada entry: hasta ahora son relativos al
     // BLOQUE de payloads (empieza en 0).  Sumar payloads_start para que
@@ -912,6 +985,15 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
         }
         out.methods.push_back(std::move(m));
     }
+    // NS.2 (v8): ns_path del tipo al final (off+len).  Guardado defensivo por
+    // si el payload es de una version anterior sin este campo.
+    if (off + 8 <= static_cast<size_t>(payload_off) + payload_len) {
+        uint32_t nsp_off = 0, nsp_len = 0;
+        if (read_u32(data, size, off, nsp_off) &&
+            read_u32(data, size, off, nsp_len) && nsp_len > 0) {
+            read_name(data, size, nsp_off, nsp_len, pool_start, out.ns_path);
+        }
+    }
     return true;
 }
 
@@ -946,6 +1028,14 @@ static bool parse_payload_enum(const uint8_t *data, size_t size,
             v.payload_types.push_back(std::move(tnm));
         }
         out.variants.push_back(std::move(v));
+    }
+    // NS.2 (v8): ns_path del enum al final (off+len; guardado defensivo).
+    if (off + 8 <= static_cast<size_t>(payload_off) + payload_len) {
+        uint32_t nsp_off = 0, nsp_len = 0;
+        if (read_u32(data, size, off, nsp_off) &&
+            read_u32(data, size, off, nsp_len) && nsp_len > 0) {
+            read_name(data, size, nsp_off, nsp_len, pool_start, out.ns_path);
+        }
     }
     return true;
 }
@@ -989,7 +1079,14 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     uint32_t gen_count_hdr = 0;                         // v6
     read_u32(data, size, off, gen_offset_hdr);
     read_u32(data, size, off, gen_count_hdr);
-    off += 8; // pad (offsets 72..79)
+    uint32_t pkgid_off_hdr = 0; // NS.3 v10 (offset 72, rel al pool)
+    uint32_t pkgid_len_hdr = 0; // NS.3 v10 (offset 76)
+    read_u32(data, size, off, pkgid_off_hdr);
+    read_u32(data, size, off, pkgid_len_hdr);
+    uint32_t ext_offset_hdr = 0; // NS.6-ext v11 (offset 80, abs)
+    uint32_t ext_count_hdr = 0;  // NS.6-ext v11 (offset 84)
+    read_u32(data, size, off, ext_offset_hdr);
+    read_u32(data, size, off, ext_count_hdr);
 
     if (magic != VXI_MAGIC) {
         r.error_message = "magic invalido en .vxi";
@@ -1029,11 +1126,11 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     r.module_.compiler_version_hash = cvh;
     r.module_.symbols.reserve(symbol_count);
 
-    // Symbol entries empiezan en offset 80 (tras el header v6).
+    // Symbol entries empiezan en offset 88 (tras el header v11).
     constexpr size_t SYMENTRY_BYTES = 20;
-    constexpr size_t HEADER_BYTES = 80;
+    constexpr size_t HEADER_BYTES = 88;
     constexpr size_t DEP_ENTRY_BYTES = 16;
-    constexpr size_t GEN_ENTRY_BYTES = 20;
+    constexpr size_t GEN_ENTRY_BYTES = 28; // v9: +ns_off+ns_len
     // v4: blob_pool extraido a un std::vector para conservar la API
     // existente.  Validamos rangos antes de copiar.
     if (blob_pool_size_hdr != 0) {
@@ -1086,7 +1183,8 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
         s.is_opaque = (flags & 0x01) != 0;
         s.is_extern = (flags & 0x02) != 0;
         s.is_const = (flags & 0x04) != 0;  // L.7
-        s.is_naked = (flags & 0x08) != 0;  // LIM-A: FUNCTION @Naked
+        s.is_naked = (flags & 0x08) != 0;    // LIM-A: FUNCTION @Naked
+        s.is_internal = (flags & 0x10) != 0; // NS.3: internal (package-scoped)
         s.align_override = align_override;
         if (!read_name(data, size, name_off, name_len, pool_start, s.name)) {
             r.error_message = "name fuera de bounds";
@@ -1172,12 +1270,15 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     r.module_.generic_templates.reserve(gen_count_hdr);
     for (uint32_t i = 0; i < gen_count_hdr; ++i) {
         size_t g_off = gen_offset_hdr + i * GEN_ENTRY_BYTES;
-        uint32_t n_off = 0, n_len = 0, kind = 0, s_off = 0, s_len = 0;
+        uint32_t n_off = 0, n_len = 0, kind = 0, s_off = 0, s_len = 0,
+                 ns_off = 0, ns_len = 0;
         if (!read_u32(data, size, g_off, n_off) ||
             !read_u32(data, size, g_off, n_len) ||
             !read_u32(data, size, g_off, kind) ||
             !read_u32(data, size, g_off, s_off) ||
-            !read_u32(data, size, g_off, s_len)) {
+            !read_u32(data, size, g_off, s_len) ||
+            !read_u32(data, size, g_off, ns_off) ||
+            !read_u32(data, size, g_off, ns_len)) {
             r.error_message = "gen template entry truncada";
             return r;
         }
@@ -1188,7 +1289,78 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
             r.error_message = "gen template name/source fuera de bounds";
             return r;
         }
+        if (ns_len > 0)
+            read_name(data, size, ns_off, ns_len, pool_start, g.ns_path);
         r.module_.generic_templates.push_back(std::move(g));
+    }
+
+    // NS.6-ext (v11): parsear la tabla de ext_methods.
+    if (ext_count_hdr > 1000000) {
+        r.error_message = "ext_methods_count excesivo (posible corrupcion)";
+        return r;
+    }
+    r.module_.ext_methods.reserve(ext_count_hdr);
+    {
+        size_t e_off = ext_offset_hdr;
+        for (uint32_t i = 0; i < ext_count_hdr; ++i) {
+            uint32_t tk_off = 0, tk_len = 0, nm_off = 0, nm_len = 0, rt_off = 0,
+                     rt_len = 0, ml_off = 0, ml_len = 0;
+            if (!read_u32(data, size, e_off, tk_off) ||
+                !read_u32(data, size, e_off, tk_len) ||
+                !read_u32(data, size, e_off, nm_off) ||
+                !read_u32(data, size, e_off, nm_len) ||
+                !read_u32(data, size, e_off, rt_off) ||
+                !read_u32(data, size, e_off, rt_len) ||
+                !read_u32(data, size, e_off, ml_off) ||
+                !read_u32(data, size, e_off, ml_len)) {
+                r.error_message = "ext_method entry truncada";
+                return r;
+            }
+            uint8_t is_class = 0;
+            if (!read_u8(data, size, e_off, is_class)) {
+                r.error_message = "ext_method is_class truncado";
+                return r;
+            }
+            e_off += 3; // pad
+            uint32_t pcount = 0;
+            if (!read_u32(data, size, e_off, pcount) || pcount > 100000) {
+                r.error_message = "ext_method param_count invalido";
+                return r;
+            }
+            VxiModule::ExtMethod em;
+            em.target_is_class = is_class != 0;
+            if (!read_name(data, size, tk_off, tk_len, pool_start,
+                           em.target_key) ||
+                !read_name(data, size, nm_off, nm_len, pool_start, em.name) ||
+                !read_name(data, size, ml_off, ml_len, pool_start,
+                           em.mangled_label)) {
+                r.error_message = "ext_method strings fuera de bounds";
+                return r;
+            }
+            if (rt_len > 0)
+                read_name(data, size, rt_off, rt_len, pool_start,
+                          em.return_type);
+            em.param_types.reserve(pcount);
+            for (uint32_t p = 0; p < pcount; ++p) {
+                uint32_t p_off = 0, p_len = 0;
+                if (!read_u32(data, size, e_off, p_off) ||
+                    !read_u32(data, size, e_off, p_len)) {
+                    r.error_message = "ext_method param truncado";
+                    return r;
+                }
+                std::string pt;
+                if (p_len > 0)
+                    read_name(data, size, p_off, p_len, pool_start, pt);
+                em.param_types.push_back(std::move(pt));
+            }
+            r.module_.ext_methods.push_back(std::move(em));
+        }
+    }
+
+    // NS.3 (v10): package_id desde el pool (vacio = paquete anonimo).
+    if (pkgid_len_hdr > 0) {
+        read_name(data, size, pkgid_off_hdr, pkgid_len_hdr, pool_start,
+                  r.module_.package_id);
     }
 
     r.ok = true;

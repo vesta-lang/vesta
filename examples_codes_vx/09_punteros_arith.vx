@@ -1,3 +1,5 @@
+namespace ejemplos.punteros_arith;
+
 // examples_codes_vx/09_punteros_arith.vx
 //
 // Demuestra aritmetica de punteros:

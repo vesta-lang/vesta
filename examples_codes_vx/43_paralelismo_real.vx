@@ -1,3 +1,5 @@
+namespace ejemplos.paralelismo_real;
+
 // paralelismo OS-thread real:
 //
 // Lanza 4 hijos CPU-bound; cada uno suma 1+2+...+1000 = 500500 y envia

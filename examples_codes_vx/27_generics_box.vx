@@ -1,3 +1,5 @@
+namespace ejemplos.generics_box;
+
 // Generics MVP via monomorphizacion.
 //
 // Sintaxis:

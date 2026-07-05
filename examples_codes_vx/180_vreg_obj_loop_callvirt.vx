@@ -1,3 +1,5 @@
+namespace ejemplos.vreg_obj_loop_callvirt;
+
 // Regresion vreg (2026-06-09): objeto GC (host_ptr) vivo LOOP-CARRIED a
 // traves de un CALLVIRT.  El inline dispatch de CALLVIRT del path vreg
 // cargaba method->jit_code en un registro que el regalloc podia asignar

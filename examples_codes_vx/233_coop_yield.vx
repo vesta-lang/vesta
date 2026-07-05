@@ -1,3 +1,5 @@
+namespace ejemplos.coop_yield;
+
 // 233_coop_yield.vx
 //
 // F3 de las fibras nativas: SUSPENSION cooperativa del scheduler de vx_async.

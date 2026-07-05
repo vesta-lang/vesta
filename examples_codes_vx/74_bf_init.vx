@@ -1,3 +1,5 @@
+namespace ejemplos.bf_init;
+
 // Bit fields dentro de init list de struct.
 
 struct Flags {

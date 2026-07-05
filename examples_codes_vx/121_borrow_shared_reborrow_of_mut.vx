@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_shared_reborrow_of_mut;
+
 // Test F3 ext - Shared reborrow de un borrow_mut:
 //   lend(borrow_mut_var) crea un borrow SHARED desde un mut.
 //   El mut original queda SUSPENDIDO mientras viva el shared.

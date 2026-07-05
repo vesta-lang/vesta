@@ -1,3 +1,5 @@
+namespace ejemplos.init_lists;
+
 // Inicializacion C-style.
 
 struct Point {

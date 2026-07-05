@@ -1,3 +1,5 @@
+namespace ejemplos.shared_use_count;
+
 // Test exhaustivo de shared<T>:
 //   - shared_box(value) crea control block con refcount=1.
 //   - move() transfiere ownership sin tocar refcount (sigue 1).

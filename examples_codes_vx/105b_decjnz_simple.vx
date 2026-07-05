@@ -1,3 +1,5 @@
+namespace ejemplos.e105b_decjnz_simple;
+
 // Test simple de decjnz fusion: 100 iter para que termine rapido.
 
 i32 main() {

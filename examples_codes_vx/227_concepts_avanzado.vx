@@ -1,3 +1,5 @@
+namespace ejemplos.concepts_avanzado;
+
 // Conceptos avanzados (#6 ext): firma estructural completa + where en metodos.
 //
 // - Un concepto ESTRUCTURAL ahora chequea la FIRMA completa del metodo

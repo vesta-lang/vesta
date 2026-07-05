@@ -1,3 +1,5 @@
+namespace ejemplos.collections_hashmap;
+
 // examples_codes_vx/87_collections_hashmap.vx
 //
 // HashMap nativo reescrito (swisstable + wyhash64 + SSE2).

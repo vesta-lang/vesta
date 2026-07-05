@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_reborrow_mut;
+
 // Test F3 ext - Reborrow MUT (suspend semantics):
 //   lend_mut(borrow_mut_var) reborrowea el mutable, SUSPENDIENDO el
 //   original mientras viva el reborrow.

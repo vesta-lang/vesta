@@ -1,3 +1,5 @@
+namespace ejemplos.unique_with_vesta;
+
 // Test unique_with con deleter Vesta personalizado:
 //   - El usuario declara su propia funcion de liberacion en Vesta.
 //   - unique_with(value, deleter_fn) registra el cleanup al exit.

@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_reborrow;
+
 // Test F3 - Reborrowing:
 //   lend(borrow_var) crea un nuevo shared borrow del root owner.
 //   Permite cadenas: r1 derivado de owner; r2 = lend(r1) derivado de

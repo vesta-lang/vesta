@@ -1,3 +1,5 @@
+namespace ejemplos.gc_nested_generic;
+
 // examples_codes_vx/245_gc_nested_generic.vx
 //
 // bug6 - gc<T> acepta como T CUALQUIER tipo: un primitivo (gc<i64>, gc<f64>),

@@ -1,3 +1,5 @@
+namespace ejemplos.extern_winapi;
+
 // examples_codes_vx/85_extern_winapi.vx
 //
 // FFI declarativo: extern "lib.dll" { fn ...; }

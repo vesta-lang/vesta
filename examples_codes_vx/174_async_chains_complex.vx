@@ -1,3 +1,5 @@
+namespace ejemplos.async_chains_complex;
+
 // examples_codes_vx/174_async_chains_complex.vx
 //
 // Cadenas de @Async complejas con paralelismo + fan-in + propagacion

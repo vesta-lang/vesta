@@ -1,3 +1,5 @@
+namespace ejemplos.newtype_advanced;
+
 // =====================================================================
 // 169_newtype_advanced.vx - @align(N) + explicit from/to + module-privacy
 // =====================================================================

@@ -1,3 +1,5 @@
+namespace ejemplos.string_methods;
+
 // Metodos OO sobre string.
 
 i32 main() {

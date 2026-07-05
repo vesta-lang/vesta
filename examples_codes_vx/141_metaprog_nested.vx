@@ -1,3 +1,5 @@
+namespace ejemplos.metaprog_nested;
+
 // ComptimeValue recursivo + strings dinamicos.
 // Cubre:
 //  (1) Arrays de strings comptime

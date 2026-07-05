@@ -2,7 +2,7 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  */
 
 /**
@@ -172,12 +172,22 @@ uint64_t comptime_type_align(const TypeChecker &tc, const Type &t) {
     }
 }
 
+// NS.1: los tipos declarados en un namespace tienen nombre FISICO mangled
+// (`a__b__Vec3`); la introspeccion (typename<T> etc.) debe devolver el nombre
+// PUBLICO simple (`Vec3`), no el interno.  El separador de namespace es `__`;
+// el nombre publico es el ultimo segmento.
+static std::string ns_public_name_(const std::string &n) {
+    size_t p = n.rfind("__");
+    return (p == std::string::npos) ? n : n.substr(p + 2);
+}
+
 std::string comptime_type_name(const TypeChecker &tc, const Type &t) {
     // Newtype (typedef T name new): es NOMINALMENTE distinto del underlying.
     // Devolver su nombre propio para que is_same<user_id, group_id> sea false
     // aunque ambos compartan representacion u64 (bug 168/169).  nominal_id>0
     // identifica univocamente al newtype.
-    if (t.nominal_id != 0 && !t.nominal_name.empty()) return t.nominal_name;
+    if (t.nominal_id != 0 && !t.nominal_name.empty())
+        return ns_public_name_(t.nominal_name);
     switch (t.kind) {
     case PrimitiveKind::VOID: return "void";
     case PrimitiveKind::BOOL: return "bool";
@@ -200,7 +210,7 @@ std::string comptime_type_name(const TypeChecker &tc, const Type &t) {
     }
     case PrimitiveKind::CLASS:
     case PrimitiveKind::STRUCT:
-        return t.struct_name.empty() ? "?" : t.struct_name;
+        return t.struct_name.empty() ? "?" : ns_public_name_(t.struct_name);
     case PrimitiveKind::FUNCTION: {
         std::string r = "fn(";
         /* FunctionSig opcional almacenado en t.fn_sig si Vesta lo expone.

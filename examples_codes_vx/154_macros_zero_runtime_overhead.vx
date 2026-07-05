@@ -1,3 +1,5 @@
+namespace ejemplos.macros_zero_runtime_overhead;
+
 // stress test que demuestra que los @Macro tienen CERO
 // overhead runtime aunque esten profundamente anidados o compuestos.
 //

@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_combined_real;
+
 // Test integrador: combina todos los patrones realistas en un solo
 // programa que imita un cache simple con operaciones de lectura y
 // escritura.  Cubre simultaneamente:

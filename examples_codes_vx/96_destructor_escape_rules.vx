@@ -1,3 +1,5 @@
+namespace ejemplos.destructor_escape_rules;
+
 // examples_codes_vx/96_destructor_escape_rules.vx
 //
 // Reglas de escape para clases con destructor `~Class()`.

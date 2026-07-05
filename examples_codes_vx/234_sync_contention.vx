@@ -1,3 +1,5 @@
+namespace ejemplos.sync_contention;
+
 // 234_sync_contention.vx
 //
 // F4-(a) de las fibras nativas: monitor-yield COOPERATIVO en el runtime

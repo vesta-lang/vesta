@@ -1,3 +1,5 @@
+namespace ejemplos.comptime_imperativo;
+
 // metaprogramacion imperativa completa.
 // (1) `comptime var T NAME = expr;` -- variable comptime mutable
 // (2) Asignacion + compound assign a comptime vars en contexto comptime

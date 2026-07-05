@@ -1,3 +1,5 @@
+namespace ejemplos.aop_around;
+
 // AROUND advice + proceed().
 //
 // El advice @Around envuelve completamente la invocacion del target.

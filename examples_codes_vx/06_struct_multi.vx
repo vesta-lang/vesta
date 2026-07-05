@@ -1,3 +1,5 @@
+namespace ejemplos.struct_multi;
+
 // examples_codes_vx/06_struct_multi.vx
 //
 // Test de multiples instancias struct vivas a la vez con tres campos

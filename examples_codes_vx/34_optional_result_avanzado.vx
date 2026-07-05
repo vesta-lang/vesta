@@ -1,3 +1,5 @@
+namespace ejemplos.optional_result_avanzado;
+
 // Optional/Result avanzado:
 //   1. Funcion devuelve Result<V, E> (heap alloc, sobrevive return).
 //   2. Optional<T> con asignacion implicita: `Optional<i32> x = 50;`

@@ -1,3 +1,5 @@
+namespace ejemplos.conceptos_genericos;
+
 // Conceptos / constraints de genericos: `<T: Concepto>` y `where` (#6).
 //
 // Un CONCEPTO es un predicado COMPTIME sobre un tipo (devuelve bool).  Se

@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -221,6 +221,13 @@ class Parser {
     std::unique_ptr<ast::ImportDecl> parse_import_decl(bool is_public_reexport);
     /// @brief Parsea @c "namespace foo { decls }" (Phase M.7.c).
     std::unique_ptr<ast::NamespaceDecl> parse_namespace_decl();
+    /// #cross-module-generics: captura el texto fuente de una plantilla/concepto
+    /// (top-level o dentro de un namespace) en @c generic_template_exports.
+    void collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
+                                  uint32_t decl_start_off);
+    /// Modulo actual en curso (para que parse_namespace_decl exporte las
+    /// plantillas/concepts de sus decls anidadas).  Set por parse_program.
+    ast::ModuleNode *tpl_export_mod_ = nullptr;
     /// @c bytes name { db/dw/dd/dq/times ... }  (datos crudos NASM, AOT).
     std::unique_ptr<ast::BytesDecl> parse_bytes_decl();
     /// @c asm name { <nasm 16/32/64> }  (codigo ensamblado por Keystone, AOT).
@@ -306,6 +313,15 @@ class Parser {
     ///   - `concept N { <metodo-sigs> }`        (estructural -> has_method)
     /// Precondicion: @c current_ es el identificador contextual @c concept.
     std::unique_ptr<ast::ConceptDecl> parse_concept_decl();
+
+    /// @brief NS.6-ext: @c "extension Tipo { metodos }".
+    std::unique_ptr<ast::ExtensionDecl> parse_extension_decl();
+    /// @brief NS.6-ext: @c "impl Concept for Tipo { metodos }".
+    std::unique_ptr<ast::ImplDecl> parse_impl_decl();
+    /// @brief NS.6-ext: parsea UN metodo de instancia (return name(params) body)
+    /// para el cuerpo de una extension/impl.  @p target_tparams son los type
+    /// params del tipo destino (para reconocer casts).  nullptr si error.
+    std::unique_ptr<ast::ClassMethodDecl> parse_extension_method(uint8_t access);
 
     /// @brief Registra @p names como type-aliases temporales para que
     /// `(T)x` se reconozca como cast dentro de un body generico (los

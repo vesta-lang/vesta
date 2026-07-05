@@ -1,3 +1,5 @@
+namespace ejemplos.string_basico;
+
 // Test integral del tipo string + builtins.
 //
 // Cubre:

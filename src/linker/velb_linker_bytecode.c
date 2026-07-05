@@ -2,10 +2,10 @@
  * VestaVM - Máquina Virtual Distribuida
  *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
  * USO LIBRE NO COMERCIAL con atribución obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */

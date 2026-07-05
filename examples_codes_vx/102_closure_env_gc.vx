@@ -1,3 +1,5 @@
+namespace ejemplos.closure_env_gc;
+
 // Test de la mejora: closure env auto-free via GC.
 //
 // Antes: cuando una funcion devolvia un closure, el env block se

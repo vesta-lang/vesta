@@ -1,3 +1,5 @@
+namespace ejemplos.hot_loop_bench;
+
 // Benchmark de hot loop para validar la fusion cmpjmp.
 //
 // Antes: cada iteracion del while emite `cmps + jmp.jX` (2 instr VM).

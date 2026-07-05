@@ -1,3 +1,5 @@
+namespace ejemplos.optional;
+
 // Optional via instrucciones VM isnull/unwrap.
 //
 // Modelo (consistente con la VM):

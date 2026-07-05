@@ -1,0 +1,7 @@
+// NS.2 cross-modulo: concepto + generico declarados en un namespace y usados
+// desde OTRO modulo por su nombre cualificado (geo.Numerico / geo.doble).
+namespace geo;
+
+public concept Numerico<T> = is_numeric<T>();
+
+public T doble<T: geo.Numerico>(T x) { return x + x; }

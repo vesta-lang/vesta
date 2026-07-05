@@ -1,0 +1,9 @@
+import "mathlib";
+
+i64 main() {
+    i64 s = mat.sq(5);          // 25 (comptime fn cross-modulo -> fold)
+    i64 m = mat.veces7(3);      // 21 (macro cross-modulo -> literal)
+    i64 r = s + m - 4;          // 25 + 21 - 4 = 42
+    println("s=${s} m=${m} r=${r}");
+    return r;
+}

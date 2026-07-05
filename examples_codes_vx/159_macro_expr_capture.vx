@@ -1,3 +1,5 @@
+namespace ejemplos.macro_expr_capture;
+
 // Demo de @Macro con parametro `expr`: captura raw del texto del call site.
 // El macro recibe la cadena verbatim y puede procesarla con builtins de strings.
 

@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_aggregator;
+
 // Patron Rust: agregar/computar sobre multiples valores via shared borrows
 // pasados como argumentos a una funcion read-only.  El borrow checker
 // prueba que ningun argumento es mutable mientras los shared estan vivos

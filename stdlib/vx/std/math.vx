@@ -1,0 +1,23 @@
+// std.math -- utilidades matematicas namespaced sobre los builtins de math.
+// Capa IMPORTABLE de la stdlib (el runtime interno vive en stdlib/vx/*.vx sin
+// namespace).  Uso:  import std.math;  f64 h = std.math.hypot(3.0, 4.0);
+namespace std.math;
+
+/// Hipotenusa: raiz de la suma de cuadrados.
+public f64 hypot(f64 a, f64 b) { return sqrt(a * a + b * b); }
+
+/// Interpolacion lineal entre a y b por t en [0, 1].
+public f64 lerp(f64 a, f64 b, f64 t) { return a + (b - a) * t; }
+
+/// Maximo de tres enteros.
+public i64 imax3(i64 a, i64 b, i64 c) { return imax(imax(a, b), c); }
+
+/// Minimo de tres enteros.
+public i64 imin3(i64 a, i64 b, i64 c) { return imin(imin(a, b), c); }
+
+/// Restringe x al rango [lo, hi] (enteros).
+public i64 iclamp(i64 x, i64 lo, i64 hi) {
+    if (x < lo) { return lo; }
+    if (x > hi) { return hi; }
+    return x;
+}

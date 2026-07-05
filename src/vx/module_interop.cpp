@@ -308,6 +308,43 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
             return Type{PrimitiveKind::STRUCT, type_str};
         }
     }
+    // NS.1 fix: fallback de namespace para tipos referenciados por su nombre
+    // PUBLICO simple dentro de codigo emitido por comptime (`sizeof<Vec3>()`
+    // via comptime_compile).  El tipo real quedo mangled (`ejemplos__X__Vec3`);
+    // el string no lo reescribe el flatten.  Buscar un match UNICO que termine
+    // en `__<type_str>` en los layouts.  Solo para identificadores simples.
+    if (type_str.find("__") == std::string::npos &&
+        type_str.find('<') == std::string::npos &&
+        type_str.find('.') == std::string::npos) {
+        const std::string suffix = "__" + type_str;
+        auto ends_with = [&](const std::string &n) {
+            return n.size() > suffix.size() &&
+                   n.compare(n.size() - suffix.size(), suffix.size(), suffix) ==
+                       0;
+        };
+        std::string found;
+        PrimitiveKind kind = PrimitiveKind::VOID;
+        int matches = 0;
+        for (const auto &kv : struct_layouts_)
+            if (ends_with(kv.first)) {
+                found = kv.first;
+                kind = PrimitiveKind::STRUCT;
+                ++matches;
+            }
+        for (const auto &kv : class_layouts_)
+            if (ends_with(kv.first)) {
+                found = kv.first;
+                kind = PrimitiveKind::CLASS;
+                ++matches;
+            }
+        for (const auto &kv : enum_layouts_)
+            if (ends_with(kv.first)) {
+                found = kv.first;
+                kind = PrimitiveKind::STRUCT;
+                ++matches;
+            }
+        if (matches == 1) return Type{kind, found};
+    }
     // No se pudo resolver: devolver VOID (sentinel).  El caller decide
     // si emitir error o intentar resolver mas adelante (round-trip
     // cross-modulo cuando se inyectan tipos en orden equivocado).
@@ -317,6 +354,36 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
 // Phase M.7: registrar un namespace importado.  Devuelve el indice
 // asignado.  El namespace se declara como Symbol::Namespace al inicio
 // de run() (via la cola pending_imported_ns_names_).
+void TypeChecker::inject_imported_ext_method(
+    const std::string &target_key, bool target_is_class,
+    const std::string &name, const std::string &return_type_str,
+    const std::vector<std::string> &param_strs,
+    const std::string &mangled_label) {
+    std::vector<ClassMethodInfo> *dst = nullptr;
+    if (target_is_class) {
+        auto it = class_layouts_.find(target_key);
+        if (it != class_layouts_.end()) dst = &it->second.methods;
+    } else {
+        auto it = struct_layouts_.find(target_key);
+        if (it != struct_layouts_.end()) dst = &it->second.methods;
+    }
+    if (!dst) return; // el tipo destino no esta cargado -> silencioso
+    // Dedup: si ya existe (mismo nombre+aridad), no re-apendear.
+    for (const auto &ex : *dst)
+        if (ex.name == name && ex.param_types.size() == param_strs.size())
+            return;
+    ClassMethodInfo mi;
+    mi.name = name;
+    mi.defining_class = target_key; // label = target_key__name
+    mi.is_extension = true;
+    mi.return_type = resolve_type_string(return_type_str);
+    for (const auto &ps : param_strs)
+        mi.param_types.push_back(resolve_type_string(ps));
+    if (target_is_class) mi.vtable_index = static_cast<uint32_t>(dst->size());
+    (void)mangled_label; // el label se deriva de defining_class + name
+    dst->push_back(std::move(mi));
+}
+
 uint32_t
 TypeChecker::register_imported_namespace(const std::string &local_name,
                                          const std::string &module_name) {
@@ -480,6 +547,16 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         VxiSymbol s;
         s.kind = VxiSymbolKind::STRUCT;
         s.name = name;
+        // NS.2: si el tipo se declaro en un `namespace X;`, exportarlo con su
+        // nombre publico (sin manglar) + ns_path para que el consumidor lo vea
+        // como `X.Tipo` cross-modulo.
+        {
+            auto itns = tc.declared_ns_symbols().find(name);
+            if (itns != tc.declared_ns_symbols().end()) {
+                s.ns_path = itns->second.first;
+                s.name = itns->second.second;
+            }
+        }
         s.size_bytes = layout.size_bytes;
         s.align_bytes = layout.align_bytes;
         s.fields.reserve(layout.fields.size());
@@ -510,6 +587,15 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         VxiSymbol s;
         s.kind = VxiSymbolKind::CLASS;
         s.name = name;
+        // NS.2: export namespaced (nombre publico + ns_path).  `name` (mangled)
+        // se conserva para construir los mangled_label de los metodos.
+        {
+            auto itns = tc.declared_ns_symbols().find(name);
+            if (itns != tc.declared_ns_symbols().end()) {
+                s.ns_path = itns->second.first;
+                s.name = itns->second.second;
+            }
+        }
         s.super_class = layout.super_name;
         s.size_bytes = layout.size_bytes;
         s.align_bytes = 8; // las instancias se alinean a 8 (ObjectHeader)
@@ -565,6 +651,14 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         VxiSymbol s;
         s.kind = VxiSymbolKind::ENUM;
         s.name = name;
+        // NS.2: export namespaced (nombre publico + ns_path).
+        {
+            auto itns = tc.declared_ns_symbols().find(name);
+            if (itns != tc.declared_ns_symbols().end()) {
+                s.ns_path = itns->second.first;
+                s.name = itns->second.second;
+            }
+        }
         // Preservar size_bytes para que el consumidor pueda allocar
         // slots del enum (8 + 8*max_payload_fields).  Sin esto, el
         // consumer ve size_bytes=0 -> ALLOCA cero -> corrupcion de
@@ -672,6 +766,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         // en interp/JIT enrute al dispatcher naked (y no ejecute el asm como
         // bytecode).
         s.is_naked = sig->is_naked;
+        s.is_internal = tc.function_is_internal(fname); // NS.3: package-scoped
         s.param_types.reserve(sig->param_types.size());
         for (const auto &pt : sig->param_types) {
             s.param_types.push_back(canonical_typename_of(pt));
@@ -727,6 +822,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         s.name = public_name;
         s.mangled_label = mangled_label;
         s.ns_path = ns_path_for_gv; // NS.2: namespace declarado (vacio si none)
+        s.is_internal = gv->is_internal; // NS.3: package-scoped
         Type gv_type =
             const_cast<TypeChecker &>(tc).resolve_type_node(gv->type.get());
         s.underlying_type = canonical_typename_of(gv_type);
@@ -882,7 +978,76 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         g.name = tex.name;
         g.kind = tex.kind;
         g.source = tex.source;
+        // NS.2: si la plantilla/concepto se declaro en un namespace, propagar
+        // su ns_path.  El tex.name es el nombre publico (sin manglar); lo
+        // buscamos en declared_ns_symbols (keyed por mangled -> (ns, public)).
+        for (const auto &dns : tc.declared_ns_symbols()) {
+            if (dns.second.second == tex.name) {
+                g.ns_path = dns.second.first;
+                break;
+            }
+        }
         out.generic_templates.push_back(std::move(g));
+    }
+
+    // NS.6-ext: exportar los metodos de `extension`/`impl` de ESTE modulo para
+    // que un consumidor los re-apendee al layout del tipo destino (dispatch
+    // estatico al mangled_label, que vive en el .velb de este modulo).
+    for (const auto &decl : tc.ast_module().decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src;
+        if (is_ext)
+            target_src =
+                static_cast<const ast::ExtensionDecl *>(decl.get())->target_type;
+        else
+            target_src =
+                static_cast<const ast::ImplDecl *>(decl.get())->target_type;
+        // Resolver la clave del layout (directo / mangled / resolve_type_string).
+        std::string key;
+        bool is_class = false;
+        const std::vector<ClassMethodInfo> *layout_methods = nullptr;
+        auto set_key = [&](const std::string &k) -> bool {
+            auto sit = tc.struct_layouts().find(k);
+            if (sit != tc.struct_layouts().end()) {
+                key = k; is_class = false; layout_methods = &sit->second.methods;
+                return true;
+            }
+            auto cit = tc.class_layouts().find(k);
+            if (cit != tc.class_layouts().end()) {
+                key = k; is_class = true; layout_methods = &cit->second.methods;
+                return true;
+            }
+            return false;
+        };
+        if (!set_key(target_src)) {
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !set_key(mangled)) {
+                const Type rt = tc.resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    set_key(rt.struct_name);
+            }
+        }
+        if (!layout_methods) continue;
+        for (const auto &mi : *layout_methods) {
+            if (!mi.is_extension) continue;
+            if (mi.defining_class != key) continue;
+            VxiModule::ExtMethod em;
+            em.target_key = key;
+            em.name = mi.name;
+            em.return_type = canonical_typename_of(mi.return_type);
+            em.mangled_label = key + "__" + mi.name;
+            em.target_is_class = is_class;
+            for (const auto &pt : mi.param_types)
+                em.param_types.push_back(canonical_typename_of(pt));
+            out.ext_methods.push_back(std::move(em));
+        }
     }
 }
 
@@ -964,9 +1129,36 @@ void inject_generic_templates_from_vxi(
         // Filtro `only` (si wanted no esta vacio).  Las specs comparten el
         // nombre del primario, asi que el filtro por nombre las incluye.
         if (!wanted.empty() && wanted.find(nm) == wanted.end()) continue;
-        // Rename para imports con namespace: `Caja` -> `lib.Caja`.
-        if (!ns_prefix.empty() && !nm.empty())
+        // NS.2: si la plantilla/concepto declaraba un namespace en el dep,
+        // registrarla bajo el nombre ns-mangled (`mat__X`) para que el acceso
+        // cualificado `mat.X` resuelva (misma convencion `.`->`__`).  Si no,
+        // usar el prefijo del modulo con punto (comportamiento previo).
+        std::string tpl_ns;
+        for (const auto &g : mod.generic_templates)
+            if (g.name == nm) {
+                tpl_ns = g.ns_path;
+                break;
+            }
+        if (!tpl_ns.empty()) {
+            std::string ns_m;
+            for (char c : tpl_ns)
+                ns_m += (c == '.') ? std::string("__") : std::string(1, c);
+            const std::string mangled_full = ns_m + "__" + nm;
+            set_decl_name(decl.get(), mangled_full);
+            // NS.2: registrar el template bajo su namespace DECLARADO para que
+            // el acceso cualificado resuelva (`geo.doble<i64>()` / `geo.Caja`).
+            // El concepto usa la ruta comptime_eval_concept (`.`->`__`), pero
+            // registrarlo aqui tambien es inocuo.  Para fn el kind=0, tipos=2.
+            const uint32_t tns_idx =
+                tc.register_imported_namespace(tpl_ns, tpl_ns);
+            TypeChecker::ImportedNamespace::Sym nsym;
+            nsym.mangled_label = mangled_full;
+            nsym.kind =
+                (decl->kind == ast::NodeKind::FunctionDecl) ? 0 : 2;
+            tc.register_namespace_symbol(tns_idx, nm, std::move(nsym));
+        } else if (!ns_prefix.empty() && !nm.empty()) {
             set_decl_name(decl.get(), ns_prefix + "." + nm);
+        }
         tc.inject_decl(std::move(decl));
     }
 }
@@ -1312,7 +1504,17 @@ void register_namespace_for_import(TypeChecker &tc,
         // M7.b: tipos cross-module via namespace qualified.
         // Compute mangled name = module_name + "__" + s.name.  Asi el
         // tipo no colisiona con un tipo del mismo nombre en el consumer.
-        const std::string mangled = module_name + "__" + s.name;
+        // NS.2: si el tipo pertenece a un `namespace X;` DECLARADO por el dep,
+        // su label real en el dep es `X__Tipo` (ns-mangled por flatten); usamos
+        // ESE como clave local para que fields/fns que lo referencian por
+        // `X__Tipo` resuelvan directo, y para que `__new_X__Tipo` coincida.
+        std::string ns_mangled_prefix;
+        for (char c : s.ns_path)
+            ns_mangled_prefix += (c == '.') ? std::string("__")
+                                            : std::string(1, c);
+        const std::string mangled =
+            s.ns_path.empty() ? (module_name + "__" + s.name)
+                              : (ns_mangled_prefix + "__" + s.name);
         switch (s.kind) {
         case VxiSymbolKind::TYPEDEF_ALIAS:
         case VxiSymbolKind::TYPEDEF_NEW: {
@@ -1366,7 +1568,9 @@ void register_namespace_for_import(TypeChecker &tc,
         case VxiSymbolKind::CLASS: {
             ClassLayout L;
             L.name = mangled;
-            L.imported_helper_suffix = s.name; // dep emitio __new_<s.name>
+            // dep emitio __new_<label real>.  Para clase namespaced el label
+            // real es el ns-mangled (mylib__MyClass); si no, el nombre publico.
+            L.imported_helper_suffix = s.ns_path.empty() ? s.name : mangled;
             L.super_name = s.super_class;
             L.size_bytes = s.size_bytes;
             L.fields.reserve(s.fields.size());
@@ -1471,7 +1675,13 @@ void register_namespace_for_import(TypeChecker &tc,
         TypeChecker::ImportedNamespace::Sym sym;
         sym.kind = 2; // TypeAlias
         sym.mangled_label = mangled;
-        tc.register_namespace_symbol(ns_idx, s.name, std::move(sym));
+        // NS.2: si el tipo pertenece a un namespace DECLARADO por el dep,
+        // registrarlo bajo ESE namespace (mylib.MyClass), no bajo el del modulo.
+        const uint32_t type_target_ns =
+            s.ns_path.empty()
+                ? ns_idx
+                : tc.register_imported_namespace(s.ns_path, module_name);
+        tc.register_namespace_symbol(type_target_ns, s.name, std::move(sym));
     }
 
     // PASE 2: registrar FUNCTIONS y GLOBAL_VAR (que tambien podrian usar
@@ -1545,6 +1755,30 @@ void register_namespace_for_import(TypeChecker &tc,
                     ? ns_idx
                     : tc.register_imported_namespace(s.ns_path, module_name);
             tc.register_namespace_symbol(target_ns_g, s.name, std::move(sym));
+        }
+    }
+
+    // NS.2-full: si el modulo declara UN namespace (ns_path) y el local_name
+    // (alias del import o el module_name por defecto) difiere de el, apuntar
+    // el alias a ese namespace para que `alias.Sym` resuelva igual que
+    // `ns_path.Sym`.  Arregla `import a.b.c as x;` (y el alias por-path con
+    // namespace declarado, que estaba roto pre-existente).
+    {
+        std::string primary_ns;
+        bool multiple = false;
+        for (const auto &s : mod.symbols) {
+            if (s.ns_path.empty()) continue;
+            if (primary_ns.empty()) {
+                primary_ns = s.ns_path;
+            } else if (primary_ns != s.ns_path) {
+                multiple = true;
+                break;
+            }
+        }
+        if (!multiple && !primary_ns.empty() && primary_ns != local_name) {
+            const uint32_t target =
+                tc.register_imported_namespace(primary_ns, module_name);
+            tc.point_namespace_alias(local_name, target);
         }
     }
 }

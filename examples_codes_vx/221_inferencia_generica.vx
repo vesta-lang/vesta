@@ -1,3 +1,5 @@
+namespace ejemplos.inferencia_generica;
+
 // Inferencia de tipos genericos en declaraciones (CTAD y `auto`).
 //
 // Al declarar una variable inicializada con una expresion de tipo generico, no

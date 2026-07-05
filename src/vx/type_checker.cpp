@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -281,6 +281,48 @@ static std::string mangle_sanitize(const std::string &s) {
     return out;
 }
 
+// Resuelve la CLAVE real de un template generico referido de forma
+// CUALIFICADA.  El uso `col.Box<T>` llega como "col.Box" (dotted), pero segun
+// el origen el template esta registrado como: "col.Box" (import cross-module
+// con namespace), "col__Box" (MISMO fichero: el aplanador de namespaces
+// manglea con "__"), o "Box" (sin namespace).  Devuelve la clave que exista en
+// @p m, o "" si ninguna.  Reglas (mas especifica primero):
+//   1. nombre tal cual;  2. dotted -> mangled con "__";  3. si el nombre es
+//   SIMPLE (sin punto), unico key del mapa que termine en "__<name>".
+template <class MapT>
+static std::string resolve_generic_key(const std::string &name, const MapT &m) {
+    if (m.count(name)) return name;
+    if (name.find('.') != std::string::npos) {
+        std::string dd = name;
+        size_t p;
+        while ((p = dd.find('.')) != std::string::npos) dd.replace(p, 1, "__");
+        if (m.count(dd)) return dd;
+    } else {
+        // Nombre simple `Box`: buscar un unico `<ns>__Box` (namespace-relativo).
+        const std::string suf = "__" + name;
+        std::string hit;
+        int n = 0;
+        for (const auto &kv : m) {
+            const std::string &k = kv.first;
+            if (k.size() > suf.size() &&
+                k.compare(k.size() - suf.size(), suf.size(), suf) == 0) {
+                hit = k;
+                if (++n > 1) break;
+            }
+        }
+        if (n == 1) return hit;
+    }
+    return {};
+}
+
+bool TypeChecker::is_generic_enum_template(const std::string &name) const {
+    return !resolve_generic_key(name, generic_enum_templates_).empty();
+}
+
+bool TypeChecker::is_generic_struct_template(const std::string &name) const {
+    return !resolve_generic_key(name, generic_struct_templates_).empty();
+}
+
 std::string TypeChecker::monomorphize_class(const std::string &template_name,
                                             const std::vector<Type> &args,
                                             const SourceLoc &loc) {
@@ -293,7 +335,10 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
-    auto it = generic_templates_.find(template_name);
+    const std::string gkey =
+        resolve_generic_key(template_name, generic_templates_);
+    auto it = gkey.empty() ? generic_templates_.end()
+                           : generic_templates_.find(gkey);
     if (it == generic_templates_.end()) {
         diags_.error(loc, "tipo generico desconocido: '" + template_name + "'");
         return std::string();
@@ -428,7 +473,10 @@ std::string TypeChecker::monomorphize_enum(const std::string &template_name,
         mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
-    auto it = generic_enum_templates_.find(template_name);
+    const std::string gkey =
+        resolve_generic_key(template_name, generic_enum_templates_);
+    auto it = gkey.empty() ? generic_enum_templates_.end()
+                           : generic_enum_templates_.find(gkey);
     if (it == generic_enum_templates_.end()) {
         diags_.error(loc, "enum generico desconocido: '" + template_name + "'");
         return std::string();
@@ -511,7 +559,10 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         mangle_sanitize(template_name) + "_" + mangle_args(args);
     if (monomorphized_.count(mangled)) return mangled;
 
-    auto it = generic_struct_templates_.find(template_name);
+    const std::string gkey =
+        resolve_generic_key(template_name, generic_struct_templates_);
+    auto it = gkey.empty() ? generic_struct_templates_.end()
+                           : generic_struct_templates_.find(gkey);
     if (it == generic_struct_templates_.end()) {
         diags_.error(loc,
                      "struct generico desconocido: '" + template_name + "'");
@@ -1059,11 +1110,13 @@ bool TypeChecker::run() {
         case ast::NodeKind::FunctionDecl: {
             auto *fd = static_cast<const ast::FunctionDecl *>(decl.get());
             function_is_public_[fd->name] = fd->is_public;
+            if (fd->is_internal) function_is_internal_.insert(fd->name);
             break;
         }
         case ast::NodeKind::GlobalVarDecl: {
             auto *gd = static_cast<const ast::GlobalVarDecl *>(decl.get());
             global_is_public_[gd->name] = gd->is_public;
+            if (gd->is_internal) global_is_internal_.insert(gd->name);
             break;
         }
         case ast::NodeKind::TypeAliasDecl: {
@@ -2950,6 +3003,113 @@ void TypeChecker::collect_globals() {
         }
     }
 
+    // NS.6-ext: APENDEAR los metodos de `extension Tipo { ... }` e
+    // `impl Concept for Tipo { ... }` al layout del tipo destino (struct o
+    // clase, LOCAL o IMPORTADO -- ambos viven en struct_layouts_/class_layouts_).
+    // Dispatch ESTATICO: los metodos son CALL directos a `<clave>__metodo`
+    // (defining_class = la clave del layout, mangled si es importado).  Cross-
+    // modulo: el tipo importado ya tiene su layout via .vxi, y el metodo se
+    // emite como funcion libre en ESTE modulo.  Coherencia (Vesta): permisivo;
+    // error duro solo en la colision real (mismo nombre+aridad ya presente).
+    for (const auto &decl : mod_.decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src, concept_name;
+        const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods =
+            nullptr;
+        if (is_ext) {
+            auto *e = static_cast<const ast::ExtensionDecl *>(decl.get());
+            target_src = e->target_type;
+            methods = &e->methods;
+        } else {
+            auto *im = static_cast<const ast::ImplDecl *>(decl.get());
+            target_src = im->target_type;
+            concept_name = im->concept_name;
+            methods = &im->methods;
+        }
+        // Resolver el nombre destino a la clave del layout (directo o via
+        // resolve_type_string para tipos importados/cualificados).
+        std::string key;
+        std::vector<ClassMethodInfo> *dst = nullptr;
+        bool is_class_target = false;
+        auto try_key = [&](const std::string &k) -> bool {
+            auto sit = struct_layouts_.find(k);
+            if (sit != struct_layouts_.end()) {
+                key = k;
+                dst = &sit->second.methods;
+                is_class_target = false;
+                return true;
+            }
+            auto cit = class_layouts_.find(k);
+            if (cit != class_layouts_.end()) {
+                key = k;
+                dst = &cit->second.methods;
+                is_class_target = true;
+                return true;
+            }
+            return false;
+        };
+        if (!try_key(target_src)) {
+            // Nombre cualificado `mod.Tipo` -> clave mangled `mod__Tipo`.
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !try_key(mangled)) {
+                const Type rt = resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    try_key(rt.struct_name);
+            }
+        }
+        if (!dst) {
+            diags_.error(decl->loc,
+                         std::string(is_impl ? "impl" : "extension") +
+                             " sobre un tipo desconocido: '" + target_src + "'");
+            continue;
+        }
+        for (const auto &m_uptr : *methods) {
+            auto *m = m_uptr.get();
+            if (!m) continue;
+            if (!m->method_type_params.empty()) continue; // template: on-use
+            bool collision = false;
+            for (const auto &ex : *dst) {
+                if (ex.name == m->name &&
+                    ex.param_types.size() == m->params.size()) {
+                    collision = true;
+                    break;
+                }
+            }
+            if (collision) {
+                diags_.error(m->loc, "el metodo '" + m->name + "' (aridad " +
+                                         std::to_string(m->params.size()) +
+                                         ") ya existe en el tipo '" + key +
+                                         "'; una extension/impl no puede "
+                                         "redefinirlo");
+                continue;
+            }
+            ClassMethodInfo mi;
+            mi.name = m->name;
+            mi.defining_class = key; // label = <key>__<name>
+            mi.is_extension = true;
+            mi.source_file = m->loc.file;
+            mi.source_line = m->loc.line;
+            mi.return_type = m->return_type
+                                 ? type_from_node(m->return_type.get())
+                                 : Type{PrimitiveKind::VOID};
+            mi.param_types.reserve(m->params.size());
+            for (const auto &p : m->params)
+                mi.param_types.push_back(type_from_node(p->type.get()));
+            if (is_class_target)
+                mi.vtable_index = static_cast<uint32_t>(dst->size());
+            dst->push_back(std::move(mi));
+        }
+        if (is_impl && !concept_name.empty())
+            impl_conformances_[key].insert(concept_name);
+    }
+
     // Fase 2b ownership: destructibilidad de STRUCTS (value-types).  Se computa
     // ANTES que la de clases para que una clase con un campo struct destructible
     // lo vea (incluido el dtor SINTETIZADO de un struct con composicion).  Un
@@ -3397,11 +3557,20 @@ void TypeChecker::compute_struct_categories() {
 // ---------------------------------------------------------------------
 
 void TypeChecker::check_functions() {
-    for (auto &decl : mod_.decls) {
+    // Fix (generic-fn inference): las monomorphizaciones por INFERENCIA
+    // (`usa(p)` sin type-arg explicito) se crean DURANTE este check (en
+    // check_call) y se anyaden al FINAL de mod_.decls.  Iteramos por INDICE
+    // re-evaluando size() cada vuelta para que esos clones nuevos tambien se
+    // chequeen (sin esto su body queda sin result_types -> el lowering falla
+    // con "callee no es identificador" al bajar `v.metodo()`).  El puntero al
+    // objeto es estable ante realloc del vector (los unique_ptr mueven de slot
+    // pero el objeto apuntado no), asi que `fn`/`gv` siguen validos.
+    for (size_t di_ = 0; di_ < mod_.decls.size(); ++di_) {
+        ast::Node *decl = mod_.decls[di_].get();
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) {
             // Globales: si tienen init, chequear el tipo.
             if (decl && decl->kind == ast::NodeKind::GlobalVarDecl) {
-                auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
+                auto *gv = static_cast<ast::GlobalVarDecl *>(decl);
                 if (gv->init) {
                     Type t = check_expr(gv->init.get());
                     const Type want = type_from_node(gv->type.get());
@@ -3508,7 +3677,7 @@ void TypeChecker::check_functions() {
             }
             continue;
         }
-        auto *fn = static_cast<ast::FunctionDecl *>(decl.get());
+        auto *fn = static_cast<ast::FunctionDecl *>(decl);
         if (!fn->body) continue;
         // Templates genericos RUNTIME: NO se type-checkea el body del template
         // (su `T` no esta resuelto -> resolveria a void).  Solo se chequean sus
@@ -3678,6 +3847,70 @@ void TypeChecker::check_functions() {
             check_struct_method(lay, m.get());
         }
         current_struct_ = saved_struct;
+    }
+
+    // NS.6-ext: chequear los cuerpos de los metodos de extension / impl.
+    // Enrutar por check_struct_method / check_class_method con el
+    // current_struct_/current_class_ = clave del layout destino (asi `this`
+    // se tipa correcto y el rewrite implicit-this funciona).
+    for (auto &decl : mod_.decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src;
+        std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods = nullptr;
+        if (is_ext) {
+            auto *e = static_cast<ast::ExtensionDecl *>(decl.get());
+            target_src = e->target_type;
+            methods = &e->methods;
+        } else {
+            auto *im = static_cast<ast::ImplDecl *>(decl.get());
+            target_src = im->target_type;
+            methods = &im->methods;
+        }
+        // Resolver la clave del layout (directo o via resolve_type_string).
+        std::string key;
+        bool is_class_target = false;
+        auto find_key = [&](const std::string &k) -> bool {
+            if (struct_layouts_.count(k)) { key = k; is_class_target = false; return true; }
+            if (class_layouts_.count(k)) { key = k; is_class_target = true; return true; }
+            return false;
+        };
+        if (!find_key(target_src)) {
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !find_key(mangled)) {
+                const Type rt = resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    find_key(rt.struct_name);
+            }
+        }
+        if (key.empty()) continue;
+        if (!is_class_target) {
+            auto it = struct_layouts_.find(key);
+            const std::string saved = current_struct_;
+            current_struct_ = key;
+            for (auto &m : *methods) {
+                if (!m || !m->body) continue;
+                if (!m->method_type_params.empty()) continue;
+                check_struct_method(it->second, m.get());
+            }
+            current_struct_ = saved;
+        } else {
+            auto it = class_layouts_.find(key);
+            const std::string saved = current_class_;
+            current_class_ = key;
+            for (auto &m : *methods) {
+                if (!m || !m->body) continue;
+                if (!m->method_type_params.empty()) continue;
+                check_class_method(it->second, m.get());
+            }
+            current_class_ = saved;
+        }
     }
 
     // #4: drenar las monomorphizaciones de metodos genericos encoladas
@@ -6824,7 +7057,26 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                         e->result_type = Type{};
                         return Type{};
                     }
-                    // Variables / Constants.
+                    // Variables / Constants.  NS.2: si es un comptime const
+                    // del namespace (`mod.ANSWER`), su valor vive en
+                    // comptime_const_values_ bajo el label mangled; lo
+                    // resolvemos y anotamos en el nodo para que el lowering
+                    // emita un CONST inline (cero overhead, compile-time).
+                    {
+                        auto itcc =
+                            comptime_const_values_.find(sym.mangled_label);
+                        if (itcc != comptime_const_values_.end()) {
+                            e->comptime_const_resolved = true;
+                            if (itcc->second.is_str) {
+                                e->comptime_const_is_str = true;
+                                e->comptime_const_str = itcc->second.str_value;
+                            } else {
+                                e->comptime_const_int = itcc->second.value;
+                            }
+                            e->result_type = itcc->second.type;
+                            return e->result_type;
+                        }
+                    }
                     e->result_type = sym.var_type;
                     return sym.var_type;
                 }
@@ -8603,6 +8855,66 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         for (auto &a : e->args)
             (void)check_expr(a.get());
         return Type{};
+    }
+
+    // NS.2: llamada cualificada a un namespace (`mod.sq(3)` / `a.b.mk(21)`) cuyo
+    // simbolo resuelto es una funcion COMPTIME o un MACRO.  Estas NO se emiten
+    // como codigo runtime (se pliegan en compile-time via el ComptimeRuntime),
+    // asi que reescribimos el callee al nombre mangled desnudo (`mod__sq`) para
+    // que la maquinaria de bare-call comptime/macro lo maneje uniformemente.
+    if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        std::string ns_path;
+        bool got_ns = false;
+        if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+            ns_path = static_cast<ast::IdentExpr *>(fa->base.get())->name;
+            got_ns = true;
+        } else if (fa->base &&
+                   fa->base->kind == ast::NodeKind::FieldAccessExpr) {
+            got_ns = collect_dotted_path(fa->base.get(), ns_path);
+        }
+        if (got_ns) {
+            uint32_t ns_idx = UINT32_MAX;
+            auto itn = ns_idx_by_local_name_.find(ns_path);
+            if (itn != ns_idx_by_local_name_.end()) {
+                ns_idx = itn->second;
+            } else {
+                const Symbol *s = lookup(ns_path);
+                if (s && s->kind == SymbolKind::Namespace) ns_idx = s->ns_index;
+            }
+            if (ns_idx < imported_namespaces_.size()) {
+                const auto &ns = imported_namespaces_[ns_idx];
+                auto its = ns.by_name.find(fa->field_name);
+                if (its != ns.by_name.end()) {
+                    const std::string mangled =
+                        ns.symbols[its->second].mangled_label;
+                    // Buscar la FunctionDecl mangled y comprobar comptime/macro.
+                    const ast::FunctionDecl *fd = nullptr;
+                    for (auto &d2 : mod_.decls) {
+                        if (!d2 || d2->kind != ast::NodeKind::FunctionDecl)
+                            continue;
+                        auto *cand = static_cast<ast::FunctionDecl *>(d2.get());
+                        if (cand->name == mangled) {
+                            fd = cand;
+                            break;
+                        }
+                    }
+                    // Comptime/macro -> fold; generico -> monomorfizacion.  En
+                    // los tres casos reescribimos el callee al nombre mangled
+                    // desnudo para reusar la maquinaria de bare-call (fold /
+                    // is_generic_fn_template + monomorphize_function).
+                    if (fd && (fd->is_comptime || fd->is_macro ||
+                               !fd->type_params.empty())) {
+                        referenced_names_.insert(ns_path);
+                        auto id = std::make_unique<ast::IdentExpr>();
+                        id->name = mangled;
+                        id->loc = fa->loc;
+                        e->callee = std::move(id);
+                        // fall-through: se procesa como bare `mangled(args)`.
+                    }
+                }
+            }
+        }
     }
 
     // Funcion generica (`id<i64>(42)` o `id(42)` con inferencia): reescribir el
@@ -11905,6 +12217,32 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
 
     size_t id_depth = 0;
     const Symbol *s = lookup_with_depth(id->name, &id_depth);
+    if (!s) {
+        // NS.1 fix: fallback de namespace para codigo emitido por comptime
+        // (comptime_compile / comptime_emit_expr) cuyo string referencia un
+        // hermano por su nombre PUBLICO (`doblar`), pero el simbolo real quedo
+        // mangled por el namespace (`ejemplos__X__doblar`).  El string no lo
+        // reescribe el flatten (es data), asi que aqui buscamos un match UNICO
+        // que termine en `__<name>` y reescribimos la llamada.
+        if (id->name.find("__") == std::string::npos) {
+            const std::string suffix = "__" + id->name;
+            std::string found;
+            int matches = 0;
+            for (const auto &kv : sig_by_name_) {
+                const std::string &fn = kv.first;
+                if (fn.size() > suffix.size() &&
+                    fn.compare(fn.size() - suffix.size(), suffix.size(),
+                               suffix) == 0) {
+                    found = fn;
+                    if (++matches > 1) break;
+                }
+            }
+            if (matches == 1) {
+                const_cast<ast::IdentExpr *>(id)->name = found;
+                s = lookup_with_depth(found, &id_depth);
+            }
+        }
+    }
     if (!s) {
         diags_.error(e->loc, "funcion no declarada: '" + id->name + "'");
         for (auto &a : e->args)

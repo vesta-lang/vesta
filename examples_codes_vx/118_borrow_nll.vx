@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_nll;
+
 // Test F1 - Non-Lexical Lifetimes (NLL):
 //   Un borrow se "libera" en compile-time tras su ULTIMO USO real,
 //   no al exit del scope.  Patron clasico: tomar un borrow, usarlo,

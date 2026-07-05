@@ -1,3 +1,5 @@
+namespace ejemplos.vectorize_int_widths;
+
 // Auto-vectorizacion de TODOS los anchos enteros HOST:
 //   i16/u16 (PADDW/PSUBW/PMULLW, W=8 SSE2), i8/u8 (PADDB/PSUBB, W=16),
 //   i32 mul (PMULLD, SSE4.1/AVX2).  add/sub/mul donde hay packed.

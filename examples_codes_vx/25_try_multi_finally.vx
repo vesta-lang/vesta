@@ -1,3 +1,5 @@
+namespace ejemplos.try_multi_finally;
+
 // Multi-catch + finally.
 //
 // Verifica:

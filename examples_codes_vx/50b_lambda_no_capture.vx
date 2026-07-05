@@ -1,3 +1,5 @@
+namespace ejemplos.e50b_lambda_no_capture;
+
 // Test minimo: lambda sin captura, llamada directa.
 //
 // Resultado esperado: R0 = 42 (square(6) = 6*7 que es lo que hace el lambda

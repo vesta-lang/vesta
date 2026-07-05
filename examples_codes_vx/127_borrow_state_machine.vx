@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_state_machine;
+
 // Patron Rust: state machine que muta su estado via borrow_mut.
 // Una sola variable contiene el estado completo; las operaciones lo
 // modifican via &mut.  El borrow checker garantiza que no hay dos

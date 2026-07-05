@@ -1,3 +1,5 @@
+namespace ejemplos.reflexion_field;
+
 // Reflexion: getField busca un campo por nombre.
 //
 // Builtin nuevo:

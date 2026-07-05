@@ -1,3 +1,5 @@
+namespace ejemplos.typedef_cstyle;
+
 // typedef struct estilo C.
 
 typedef struct {

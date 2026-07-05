@@ -1,3 +1,5 @@
+namespace ejemplos.fiber_swapctx;
+
 // 235_fiber_swapctx.vx
 //
 // FN.3 de la arquitectura v2 de fibras: el fiber-switch como primitivo SEMANTICO

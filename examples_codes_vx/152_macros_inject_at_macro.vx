@@ -1,3 +1,5 @@
+namespace ejemplos.macros_inject_at_macro;
+
 // macros con auto-inyeccion via `@Macro`.
 //
 // Un `@Macro comptime string fn(...)` es un macro: cuando se llama,

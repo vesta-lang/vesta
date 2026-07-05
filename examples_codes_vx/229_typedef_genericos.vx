@@ -1,3 +1,5 @@
+namespace ejemplos.typedef_genericos;
+
 // Interaccion de typedef/using con genericos (#4/#6/#7).
 //
 // Los alias de tipo (`typedef i64 Edad;`, `using Cantidad = i64;`) se resuelven

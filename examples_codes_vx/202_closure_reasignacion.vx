@@ -1,3 +1,5 @@
+namespace ejemplos.closure_reasignacion;
+
 // Reasignacion de un campo closure: liberar el slot+env anterior antes de
 // guardar el nuevo, como reasignar un unique<T> (RAII puro, sin GC).  El env
 // (y el slot {fn_addr, env} de 16 bytes) viven en heap, propiedad del objeto

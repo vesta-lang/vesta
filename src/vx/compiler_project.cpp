@@ -300,8 +300,16 @@ struct ImportRequest {
     std::vector<TypeChecker::VxiOnlyEntry> only_symbols;
     bool is_plain = false;           // sin only -> registra namespace
     bool is_public_reexport = false; // L.23: public import
+    bool by_namespace = false;       // NS.2-full: import a.b.c; (por-namespace)
     SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
 };
+
+/// Phase NS.2-full: mapa namespace punteado -> module_name (filename) del
+/// modulo que lo declara.  Se construye desde los AST de todos los modulos
+/// del proyecto y traduce los imports por-namespace (`import a.b.c;`) al
+/// module_name del dep resuelto, para reusar toda la maquinaria de imports
+/// por-path (que ya soporta acceso cualificado multi-segmento via ns_path).
+using NsToModname = std::unordered_map<std::string, std::string>;
 
 /// Phase M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
 /// modulo con un prefijo `<modname>__`.  Esto evita colisiones de
@@ -561,19 +569,51 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
     }
 }
 
-std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
+std::vector<ImportRequest>
+collect_imports_(const ast::ModuleNode &mod,
+                 const NsToModname *ns_to_modname = nullptr) {
     std::vector<ImportRequest> out;
-    for (const auto &d : mod.decls) {
-        if (!d || d->kind != ast::NodeKind::ImportDecl) continue;
-        const auto *im = static_cast<const ast::ImportDecl *>(d.get());
+    // NS.1 fix: en la forma statement `namespace a.b.c;` los imports quedan
+    // ANIDADOS dentro del NamespaceDecl -> recolectarlos recursivamente (si no,
+    // no se procesan y el dep no se inyecta).
+    std::vector<const ast::ImportDecl *> imports;
+    std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)> gather =
+        [&](const std::vector<std::unique_ptr<ast::Node>> &decls) {
+            for (const auto &d : decls) {
+                if (!d) continue;
+                if (d->kind == ast::NodeKind::ImportDecl)
+                    imports.push_back(
+                        static_cast<const ast::ImportDecl *>(d.get()));
+                else if (d->kind == ast::NodeKind::NamespaceDecl)
+                    gather(static_cast<const ast::NamespaceDecl *>(d.get())
+                               ->decls);
+            }
+        };
+    gather(mod.decls);
+    for (const auto *im : imports) {
         ImportRequest req;
-        // Extraer el nombre del modulo del path (ultimo segmento).
-        size_t slash = im->path.find_last_of('/');
-        req.module_name = (slash == std::string::npos)
-                              ? im->path
-                              : im->path.substr(slash + 1);
-        // local_name: alias o module_name si no hay alias.
-        req.local_name = im->alias.empty() ? req.module_name : im->alias;
+        req.by_namespace = im->by_namespace;
+        if (im->by_namespace) {
+            // NS.2-full: import a.b.c;  El `path` es el namespace punteado.
+            // Lo traducimos al module_name (filename) del dep que lo declara,
+            // para reusar la maquinaria de imports por-path.  Si no hay mapa
+            // (o el ns no esta), dejamos el dotted (fallara el by_name lookup
+            // con diagnostico claro mas arriba/abajo).
+            req.module_name = im->path; // dotted por defecto
+            if (ns_to_modname) {
+                auto it = ns_to_modname->find(im->path);
+                if (it != ns_to_modname->end()) req.module_name = it->second;
+            }
+            req.local_name =
+                im->alias.empty() ? req.module_name : im->alias;
+        } else {
+            // Por-path: module_name = ultimo segmento del path.
+            size_t slash = im->path.find_last_of('/');
+            req.module_name = (slash == std::string::npos)
+                                  ? im->path
+                                  : im->path.substr(slash + 1);
+            req.local_name = im->alias.empty() ? req.module_name : im->alias;
+        }
         // Mapear OnlySymbol AST -> TypeChecker::VxiOnlyEntry.
         req.only_symbols.reserve(im->only_symbols.size());
         for (const auto &os : im->only_symbols) {
@@ -588,6 +628,108 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
     return out;
 }
 
+/// Phase NS.2-full: construye el mapa namespace -> module_name recorriendo
+/// los AST de todos los modulos del proyecto.  Cada @c NamespaceDecl top-level
+/// (formas statement y bloque) mapea su path punteado al module_name del
+/// modulo que lo contiene.  Namespaces parciales (varios modulos, mismo ns):
+/// gana el primero registrado (MVP; el import trae ese fichero).
+NsToModname build_ns_to_modname_(const std::vector<ProjectModuleWork> &work) {
+    NsToModname out;
+    for (const auto &pm : work) {
+        if (!pm.ast) continue;
+        for (const auto &d : pm.ast->decls) {
+            if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+            const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
+            if (ns->name.empty()) continue;
+            out.emplace(ns->name, pm.module_name);
+        }
+    }
+    return out;
+}
+
+/// Phase NS.3: deriva el PackageId del proyecto.  Camina hacia arriba desde el
+/// directorio del fichero raiz buscando @c "vx.toml" (o @c "vx.json"); lee el
+/// @c [package] con un scan minimo (sin dependencia de @c src/pkg).  El id es:
+///   - el valor explicito de @c id / @c "id" si esta presente, o
+///   - @c fnv1a_hex(name @ version) derivado, o
+///   - vacio (paquete anonimo) si no hay manifest ni nombre.
+std::string derive_package_id_(const std::string &root_path) {
+    namespace fs = std::filesystem;
+    // Normalizar + obtener el directorio del root.
+    std::string norm = root_path;
+    for (char &c : norm)
+        if (c == '\\') c = '/';
+    std::error_code ec;
+    fs::path dir = fs::path(norm).parent_path();
+    std::string manifest;
+    for (int depth = 0; depth < 32 && !dir.empty(); ++depth) {
+        for (const char *fname : {"vx.toml", "vx.json"}) {
+            fs::path cand = dir / fname;
+            if (fs::exists(cand, ec) && fs::is_regular_file(cand, ec)) {
+                std::ifstream f(cand.string(), std::ios::binary);
+                if (f) {
+                    std::stringstream ss;
+                    ss << f.rdbuf();
+                    manifest = ss.str();
+                }
+                break;
+            }
+        }
+        if (!manifest.empty()) break;
+        fs::path parent = dir.parent_path();
+        if (parent == dir) break; // llegamos a la raiz del FS
+        dir = parent;
+    }
+    if (manifest.empty()) return {}; // sin manifest -> anonimo
+
+    // Scan minimo del [package]: name / version / id.  Acepta TOML
+    // (`key = "val"`) y JSON (`"key": "val"`) de forma tolerante: extraemos
+    // el primer string tras el nombre de la clave.
+    auto extract = [&](const std::string &key) -> std::string {
+        // Buscar la clave como token de palabra.
+        size_t pos = 0;
+        while ((pos = manifest.find(key, pos)) != std::string::npos) {
+            // Verificar que es un limite de palabra por la izquierda.
+            bool lok = (pos == 0) || (!std::isalnum((unsigned char)manifest[pos - 1]) &&
+                                      manifest[pos - 1] != '_');
+            size_t after = pos + key.size();
+            bool rok = after >= manifest.size() ||
+                       (!std::isalnum((unsigned char)manifest[after]) &&
+                        manifest[after] != '_');
+            if (lok && rok) {
+                // Buscar el primer '"' tras la clave en la misma logica linea.
+                size_t q1 = manifest.find('"', after);
+                size_t nl = manifest.find('\n', after);
+                if (q1 != std::string::npos &&
+                    (nl == std::string::npos || q1 < nl)) {
+                    size_t q2 = manifest.find('"', q1 + 1);
+                    if (q2 != std::string::npos) {
+                        return manifest.substr(q1 + 1, q2 - q1 - 1);
+                    }
+                }
+            }
+            pos = after;
+        }
+        return {};
+    };
+    const std::string explicit_id = extract("id");
+    if (!explicit_id.empty()) return explicit_id;
+    const std::string name = extract("name");
+    if (name.empty()) return {};
+    const std::string version = extract("version");
+    const std::string ident = name + "@" + version;
+    // FNV-1a 64 sobre name@version -> hex.  Mismo esquema que abi_hash.
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (unsigned char c : ident) {
+        h ^= c;
+        h *= 0x100000001B3ull;
+    }
+    char buf[19];
+    std::snprintf(buf, sizeof(buf), "pkg:%012llx",
+                  (unsigned long long)(h & 0xFFFFFFFFFFFFull));
+    return std::string(buf);
+}
+
 } // namespace
 
 /// Phase M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
@@ -597,7 +739,8 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
 /// paralelo.  El root siempre tiene el nivel maximo.
 std::vector<int>
 compute_module_levels_(const std::vector<ProjectModuleWork> &work,
-                       const std::unordered_map<std::string, size_t> &by_name) {
+                       const std::unordered_map<std::string, size_t> &by_name,
+                       const NsToModname &ns_to_modname) {
     std::vector<int> levels(work.size(), 0);
     // Procesamos en orden topologico (work ya esta en topo).  Para cada
     // modulo, recogemos los imports de su AST + calculamos su nivel
@@ -606,7 +749,7 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         const auto &pm = work[i];
         if (!pm.ast) continue;
         int max_dep_level = -1;
-        auto imports = collect_imports_(*pm.ast);
+        auto imports = collect_imports_(*pm.ast, &ns_to_modname);
         for (const auto &req : imports) {
             auto itd = by_name.find(req.module_name);
             if (itd == by_name.end()) continue;
@@ -732,6 +875,28 @@ CompileResult compile_vx_project(
         by_name.emplace(rm_mut->module_name, i);
     }
 
+    // Phase NS.2-full: mapa namespace -> module_name para traducir los
+    // imports por-namespace (`import a.b.c;`) al module_name del dep.
+    const NsToModname ns_to_modname = build_ns_to_modname_(work);
+
+    // Phase NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
+    // Compartido por todos los modulos del proyecto salvo override @id.
+    const std::string project_package_id = derive_package_id_(root_path);
+    // Phase NS.3: override @id por-modulo, capturado AQUI (antes de que el
+    // flatten elimine el NamespaceDecl del AST durante compile_one_module).
+    std::vector<std::string> module_pkgid_override(work.size());
+    for (size_t i = 0; i < work.size(); ++i) {
+        if (!work[i].ast) continue;
+        for (const auto &d : work[i].ast->decls) {
+            if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+            const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
+            if (!ns->package_id_override.empty()) {
+                module_pkgid_override[i] = ns->package_id_override;
+                break;
+            }
+        }
+    }
+
     // 3. Compilar cada modulo en orden topologico (deps primero).
     //
     // Estrategia con cache (M3+M4):
@@ -762,7 +927,7 @@ CompileResult compile_vx_project(
     // safety review del TypeChecker compartido + file lock cache que
     // M5.A ya cubre via atomic write.
     const std::vector<int> module_levels =
-        compute_module_levels_(work, by_name);
+        compute_module_levels_(work, by_name, ns_to_modname);
     int max_level = 0;
     for (int L : module_levels) {
         if (L > max_level) max_level = L;
@@ -1101,7 +1266,7 @@ CompileResult compile_vx_project(
         //   - `import "x" only A, B;`   -> inyecta A, B directos en scope.
         //   - `import "x" [as alias];`  -> registra namespace para `x.A` o
         //                                   `alias.A` (Phase M.7).
-        auto imports = collect_imports_(*pm.ast);
+        auto imports = collect_imports_(*pm.ast, &ns_to_modname);
 
         // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
         // antes de procesar los imports explicitos.  Si main tiene
@@ -1125,6 +1290,35 @@ CompileResult compile_vx_project(
         // usa operator[] (overwrite) y register_imported_namespace ahora
         // dedupea por local_name, asi que registrar el mismo dep dos
         // veces es no-op.
+
+        // NS.3: PackageId del consumidor + helper para filtrar los simbolos
+        // `internal` de un dep que pertenece a OTRO paquete (package_id
+        // distinto, ambos no vacios).  Dentro del mismo paquete, internal es
+        // visible (no se filtra).  El storage lo aporta el caller (vive lo que
+        // dure el uso del &const devuelto).
+        const std::string consumer_pkgid =
+            (i < module_pkgid_override.size() &&
+             !module_pkgid_override[i].empty())
+                ? module_pkgid_override[i]
+                : project_package_id;
+        auto filter_internal_ = [&](const VxiModule &v,
+                                    VxiModule &storage) -> const VxiModule & {
+            if (consumer_pkgid.empty() || v.package_id.empty() ||
+                consumer_pkgid == v.package_id) {
+                return v; // mismo paquete (o anonimo) -> internal visible
+            }
+            bool any_internal = false;
+            for (const auto &s : v.symbols)
+                if (s.is_internal) { any_internal = true; break; }
+            if (!any_internal) return v;
+            storage = v;
+            auto &syms = storage.symbols;
+            syms.erase(std::remove_if(
+                           syms.begin(), syms.end(),
+                           [](const VxiSymbol &s) { return s.is_internal; }),
+                       syms.end());
+            return storage;
+        };
         {
             std::unordered_set<std::string> seen;
             std::vector<std::string> queue;
@@ -1149,7 +1343,9 @@ CompileResult compile_vx_project(
                 auto itd = by_name.find(mn);
                 if (itd == by_name.end()) continue;
                 const ProjectModuleWork &transit = work[itd->second];
-                register_namespace_for_import(*pm.tc, mn, mn, transit.vxi);
+                VxiModule tstore;
+                register_namespace_for_import(
+                    *pm.tc, mn, mn, filter_internal_(transit.vxi, tstore));
             }
         }
 
@@ -1157,14 +1353,17 @@ CompileResult compile_vx_project(
             auto itd = by_name.find(req.module_name);
             if (itd == by_name.end()) continue;
             const ProjectModuleWork &dep = work[itd->second];
+            VxiModule dep_filtered_storage;
+            const VxiModule &dep_vxi =
+                filter_internal_(dep.vxi, dep_filtered_storage);
             if (req.is_plain) {
                 // M.7: registrar namespace.
                 register_namespace_for_import(*pm.tc, req.local_name,
-                                              req.module_name, dep.vxi);
+                                              req.module_name, dep_vxi);
                 // #cross-module-generics: inyectar TODAS las plantillas del
                 // dep bajo el namespace (`lib.Caja<i64>`).
                 inject_generic_templates_from_vxi(
-                    *pm.tc, dep.vxi, /*wanted=*/{}, req.local_name);
+                    *pm.tc, dep_vxi, /*wanted=*/{}, req.local_name);
                 // M.reexport ext: para `public import "base";` (sin only),
                 // inyectar TAMBIEN cada simbolo publico del dep como si
                 // fuera un `only A, B, ...` sintetico Y marcarlo
@@ -1173,14 +1372,14 @@ CompileResult compile_vx_project(
                 // consumidores.
                 if (req.is_public_reexport) {
                     std::vector<TypeChecker::VxiOnlyEntry> synth_only;
-                    for (const auto &sym : dep.vxi.symbols) {
+                    for (const auto &sym : dep_vxi.symbols) {
                         // skip simbolos privados o synthetic (mangled).
                         if (sym.name.empty()) continue;
                         if (sym.name[0] == '_') continue;
                         synth_only.push_back({sym.name, ""});
                     }
                     auto missing = import_vxi_into_typechecker_with_missing(
-                        *pm.tc, dep.vxi, synth_only);
+                        *pm.tc, dep_vxi, synth_only);
                     (void)missing; // best-effort; los privados ya fueron
                                    //              filtrados al construir el
                                    //              .vxi.
@@ -1197,18 +1396,18 @@ CompileResult compile_vx_project(
                 // inertes si no se usan (se monomorphizan solo on-use).  Se
                 // hace ANTES de la inyeccion de simbolos para que el template
                 // exista en mod_.decls cuando run() registre los templates.
-                inject_generic_templates_from_vxi(*pm.tc, dep.vxi,
+                inject_generic_templates_from_vxi(*pm.tc, dep_vxi,
                                                    /*wanted=*/{},
                                                    /*ns_prefix=*/"");
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 auto missing = import_vxi_into_typechecker_with_missing(
-                    *pm.tc, dep.vxi, req.only_symbols);
+                    *pm.tc, dep_vxi, req.only_symbols);
                 // #cross-module-generics: un nombre `only` puede ser una
                 // PLANTILLA generica (no esta en symbols sino en
                 // generic_templates) -> no es "missing".
                 std::unordered_set<std::string> gen_names;
-                for (const auto &g : dep.vxi.generic_templates)
+                for (const auto &g : dep_vxi.generic_templates)
                     gen_names.insert(g.name);
                 for (const auto &m : missing) {
                     if (gen_names.count(m)) continue; // es un template: OK
@@ -1239,6 +1438,34 @@ CompileResult compile_vx_project(
                     const std::string &local =
                         os.rename.empty() ? os.name : os.rename;
                     pm.tc->mark_imported(local, req.is_public_reexport);
+                }
+            }
+        }
+
+        // NS.6-ext: re-apendear los metodos de `extension`/`impl` que declararon
+        // los deps (directos + transitivos) al layout del tipo destino en este
+        // consumidor.  Asi `obj.metodo()` resuelve cross-modulo (dispatch
+        // estatico al mangled_label del .velb del dep).  Los layouts de los
+        // tipos importados ya estan registrados (import loop de arriba).
+        {
+            std::unordered_set<std::string> seen;
+            std::vector<std::string> queue;
+            for (const auto &req : imports)
+                if (seen.insert(req.module_name).second)
+                    queue.push_back(req.module_name);
+            for (size_t qi = 0; qi < queue.size(); ++qi) {
+                auto itd = by_name.find(queue[qi]);
+                if (itd == by_name.end()) continue;
+                for (const auto &de : work[itd->second].vxi.deps)
+                    if (seen.insert(de.name).second) queue.push_back(de.name);
+            }
+            for (const auto &mn : queue) {
+                auto itd = by_name.find(mn);
+                if (itd == by_name.end()) continue;
+                for (const auto &em : work[itd->second].vxi.ext_methods) {
+                    pm.tc->inject_imported_ext_method(
+                        em.target_key, em.target_is_class, em.name,
+                        em.return_type, em.param_types, em.mangled_label);
                 }
             }
         }
@@ -1331,6 +1558,15 @@ CompileResult compile_vx_project(
             is_root ? std::string() // root: sin prefix (no se exporta)
                     : (pm.module_name + "__");
         export_typechecker_to_vxi(*pm.tc, source_hash, pm.vxi, strip_prefix);
+
+        // Phase NS.3: estampar el PackageId en el .vxi del modulo.  Por defecto
+        // el del proyecto (vx.toml); si el modulo declaro `namespace X @id(..)`,
+        // ese override gana (identidad ABI por-namespace).  El override se
+        // capturo antes del flatten (que borra el NamespaceDecl del AST).
+        pm.vxi.package_id = (i < module_pkgid_override.size() &&
+                             !module_pkgid_override[i].empty())
+                                ? module_pkgid_override[i]
+                                : project_package_id;
 
         // Phase M4.ext L.13: poblar dep table con los (name, abi_hash) de
         // los deps directos del modulo.  El loader del cache verifica
@@ -1542,7 +1778,7 @@ CompileResult compile_vx_project(
         const auto &root_pm = work.back();
         const auto &root_refs = root_pm.tc ? root_pm.tc->referenced_names()
                                            : std::unordered_set<std::string>{};
-        auto root_imports = collect_imports_(*root_pm.ast);
+        auto root_imports = collect_imports_(*root_pm.ast, &ns_to_modname);
         for (const auto &req : root_imports) {
             if (req.is_plain) continue;           // namespace -> nunca shake
             if (req.is_public_reexport) continue; // re-export consume el dep

@@ -1,3 +1,5 @@
+namespace ejemplos.host_ptr_null_branch;
+
 // BUG-1: un T* (host pointer) devuelto por una funcion con rama `return null`
 // debe conservar su naturaleza host en el llamante.
 u8* make_buf(i32 bad) {

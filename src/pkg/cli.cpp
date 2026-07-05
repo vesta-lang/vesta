@@ -527,6 +527,8 @@ static int cmd_inspect(const std::vector<std::string> &args) {
                       (unsigned long long)mod.compiler_version_hash);
         ui::kv("compiler_version_hash", buf);
     }
+    ui::kv("package_id",
+           mod.package_id.empty() ? std::string("(anonimo)") : mod.package_id);
     ui::kv("symbols", std::to_string(mod.symbols.size()));
     ui::kv("deps", std::to_string(mod.deps.size()));
     ui::kv("blob_pool_bytes", std::to_string(mod.blob_pool.size()));

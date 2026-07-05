@@ -1,3 +1,4 @@
+namespace ejemplos.inline_asm_symbols;
 // 198_inline_asm_symbols.vx
 //
 // Inline-asm que referencia SIMBOLOS PROPIOS (funciones y globales del modulo).

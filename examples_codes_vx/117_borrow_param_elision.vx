@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_param_elision;
+
 // Test F2 + F4: param borrow + lifetime elision rule 1.
 //
 // F2: el parametro `p` se registra como Param -> su borrow puede

@@ -1,3 +1,5 @@
+namespace ejemplos.unique_en_campo;
+
 // unique<T> como campo de un contenedor (ownership, RAII sin GC).
 //
 // Un contenedor (clase o struct) con un campo unique<T> se vuelve destructible:

@@ -1,3 +1,5 @@
+namespace ejemplos.factorial;
+
 // examples_codes_vx/01_factorial.vx
 //
 // Ejemplo de funcion recursiva del lenguaje Vex.

@@ -1,3 +1,5 @@
+namespace ejemplos.spawn_here_observable;
+
 // verifica que `spawn here` coloca al hijo en el
 // mismo scheduler que el padre, comparando los scheduler_id encoded
 // en el PID devuelto por spawn.

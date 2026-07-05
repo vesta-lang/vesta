@@ -1,3 +1,5 @@
+namespace ejemplos.check_return_unique;
+
 // Test minimal: una sola funcion devuelve unique<i32>.
 
 unique<i32> make_unique() {

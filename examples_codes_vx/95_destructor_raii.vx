@@ -1,3 +1,5 @@
+namespace ejemplos.destructor_raii;
+
 // examples_codes_vx/95_destructor_raii.vx
 //
 // Destructores `~Class()` automaticos via RAII (auto-call al exit

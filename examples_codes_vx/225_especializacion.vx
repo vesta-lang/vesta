@@ -1,3 +1,5 @@
+namespace ejemplos.especializacion;
+
 // Especializacion de structs genericos: total + parcial (#7).
 //
 // Tras el template PRIMARIO `struct Caja<T>`, se pueden declarar
