@@ -137,6 +137,41 @@ void rewrite_refs_in_expr_(
             rewrite_refs_in_expr_(a.get(), rename_map);
         for (auto &ta : c->type_args)
             rewrite_refs_in_type_(ta.get(), rename_map);
+        // NS.1 fix: reflexion.  forName("ClassName") / Class.forName("ClassName")
+        // referencian una clase por STRING; si la clase es del namespace esta
+        // mangled -> reescribir el literal para que el lookup runtime la
+        // encuentre.
+        {
+            const ast::IdentExpr *cid = nullptr;
+            if (c->callee &&
+                c->callee->kind == ast::NodeKind::IdentExpr)
+                cid = static_cast<const ast::IdentExpr *>(c->callee.get());
+            else if (c->callee &&
+                     c->callee->kind == ast::NodeKind::FieldAccessExpr)
+                // Class.forName(...) -> el field es "forName".
+                cid = nullptr; // el field_name se chequea abajo
+            const std::string fname =
+                cid ? cid->name
+                    : (c->callee &&
+                       c->callee->kind == ast::NodeKind::FieldAccessExpr)
+                          ? static_cast<const ast::FieldAccessExpr *>(
+                                c->callee.get())
+                                ->field_name
+                          : std::string();
+            // Builtins de reflexion que reciben un nombre de tipo/clase como
+            // STRING literal: forName (clase), find_type (@Introspect).
+            if (fname == "forName" || fname == "find_type") {
+                for (auto &a : c->args) {
+                    if (a && a->kind == ast::NodeKind::StringLitExpr) {
+                        auto *sl = static_cast<ast::StringLitExpr *>(a.get());
+                        if (sl->interp_exprs.empty()) {
+                            auto it = rename_map.find(sl->value);
+                            if (it != rename_map.end()) sl->value = it->second;
+                        }
+                    }
+                }
+            }
+        }
         break;
     }
     case ast::NodeKind::NewExpr: {
@@ -408,6 +443,13 @@ void mangle_struct_decl_(
         sd->name = newn;
     }
     rewrite_bounds_(sd->type_bounds, rename_map);
+    // Especializacion total/parcial: el patron `struct Caja<Punto>` guarda
+    // los TypeNode del patron en spec_pattern.  Si un tipo del patron es del
+    // namespace (e.g. Punto), debe manglearse igual que el arg de la
+    // instanciacion, si no el match exacto (pt == arg) falla y cae al primario.
+    for (auto &sp : sd->spec_pattern) {
+        rewrite_refs_in_type_(sp.get(), rename_map);
+    }
     for (auto &f : sd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
     }
@@ -441,6 +483,10 @@ void mangle_class_decl_(
         auto it = rename_map.find(iname);
         if (it != rename_map.end()) iname = it->second;
     }
+    // Especializacion total/parcial de clase (mismo motivo que en struct).
+    for (auto &sp : cd->spec_pattern) {
+        rewrite_refs_in_type_(sp.get(), rename_map);
+    }
     // Fields + metodos.
     for (auto &f : cd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
@@ -452,6 +498,21 @@ void mangle_class_decl_(
             rewrite_refs_in_type_(p->type.get(), rename_map);
         rewrite_bounds_(m->type_bounds, rename_map);
         rewrite_refs_in_stmt_(m->body.get(), rename_map);
+        // NS.1 fix: AOP.  El pointcut de un advice (@Before/@After/@Around) se
+        // guarda como string "ClassName.methodName" en advice_target.  Si la
+        // clase target es del namespace, esta mangled -> reescribir la parte de
+        // la clase para que el pointcut matchee (si no, el advice no se registra
+        // y el @After no pisa el resultado).
+        if (!m->advice_target.empty()) {
+            size_t dot = m->advice_target.find('.');
+            if (dot != std::string::npos) {
+                std::string cls = m->advice_target.substr(0, dot);
+                auto it = rename_map.find(cls);
+                if (it != rename_map.end())
+                    m->advice_target =
+                        it->second + m->advice_target.substr(dot);
+            }
+        }
     }
 }
 

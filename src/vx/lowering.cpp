@@ -2087,6 +2087,14 @@ void Lowering::emit_introspect_info_chunks() {
         }
         return buf;
     };
+    /* El nombre almacenado en el chunk (lo que devuelve type_info_name)
+     * debe ser el nombre PUBLICO del tipo -- el ultimo segmento tras el
+     * separador de namespace "__".  La clave del indice sigue siendo el
+     * nombre mangled (lo que find_type resuelve en compile-time). */
+    auto public_seg = [](const std::string &mangled) -> std::string {
+        const size_t p = mangled.rfind("__");
+        return (p == std::string::npos) ? mangled : mangled.substr(p + 2);
+    };
 
     /* Structs marcados @Introspect. */
     for (const auto &kv : tc_.struct_layouts()) {
@@ -2097,8 +2105,7 @@ void Lowering::emit_introspect_info_chunks() {
         for (const auto &f : lay.fields) {
             fs.push_back({f.name, {f.offset, f.size}});
         }
-        std::vector<uint8_t> chunk = build_chunk(
-            lay.name, /*Struct=*/2, lay.size_bytes, lay.align_bytes, fs);
+        std::vector<uint8_t> chunk = build_chunk(public_seg(lay.name), /*Struct=*/2, lay.size_bytes, lay.align_bytes, fs);
         const uint64_t idx = out_mod_->intern_static_data(std::move(chunk));
         introspect_idx_by_name_[lay.name] = idx;
     }
@@ -2113,7 +2120,7 @@ void Lowering::emit_introspect_info_chunks() {
             fs.push_back({f.name, {f.offset, f.size}});
         }
         std::vector<uint8_t> chunk =
-            build_chunk(lay.name, /*Class=*/1, lay.size_bytes, /*align=*/8, fs);
+            build_chunk(public_seg(lay.name), /*Class=*/1, lay.size_bytes, /*align=*/8, fs);
         const uint64_t idx = out_mod_->intern_static_data(std::move(chunk));
         introspect_idx_by_name_[lay.name] = idx;
     }
@@ -2129,7 +2136,7 @@ void Lowering::emit_introspect_info_chunks() {
             fs.push_back({v.name, {v.tag, 0}});
         }
         std::vector<uint8_t> chunk =
-            build_chunk(lay.name, /*Enum=*/3, lay.size_bytes, /*align=*/8, fs);
+            build_chunk(public_seg(lay.name), /*Enum=*/3, lay.size_bytes, /*align=*/8, fs);
         const uint64_t idx = out_mod_->intern_static_data(std::move(chunk));
         introspect_idx_by_name_[lay.name] = idx;
     }
