@@ -1,0 +1,243 @@
+// -----------------------------------------------------------------------------
+// Dump PE (PE32+) COMPLETO con overlays: lee un .exe/.dll real y lo disecciona
+// -----------------------------------------------------------------------------
+// Un dumpbin-lite escrito solo con `@overlay struct`s.  Parsea, de un PE REAL:
+//   * IMAGE_DOS_HEADER (magic + e_lfanew),
+//   * IMAGE_FILE_HEADER (COFF, 7 campos),
+//   * IMAGE_OPTIONAL_HEADER64 (~30 campos: entry, image base, alineamientos,
+//     subsystem, tamanos de stack/heap, ...),
+//   * los 16 DATA DIRECTORIES (Export/Import/Resource/... con nombre, RVA, size),
+//   * IMAGE_SECTION_HEADER[NumberOfSections] (nombre + tamanos + caracteristicas),
+//   * la TABLA DE IMPORTS: cada DLL importada + sus funciones (recorre los
+//     IMAGE_IMPORT_DESCRIPTOR y las ILT, traduciendo RVA -> offset de fichero).
+//
+// Todo el direccionamiento es declarativo (`@offset(expr)` con campos hermanos,
+// arrays con stride), sin aritmetica de punteros a mano salvo el recorrido de
+// listas de RVAs (que es logica del formato, no direccionamiento de campos).
+//
+// Parsea `pe_target.bin` (p.ej. vm.exe).  La salida estructural es legible por
+// maquina; el harness tests/vx/pe_parser_test.py la valida contra un parseo
+// INDEPENDIENTE.  interp/JIT/AOT.
+
+import "vx_fileio";
+
+// IMAGE_SECTION_HEADER (40 bytes).
+@overlay struct Section {
+    u32 virt_size @0x08;
+    u32 virt_addr @0x0C;
+    u32 raw_size  @0x10;
+    u32 raw_ptr   @0x14;
+    u32 chars     @0x24;
+}
+
+// IMAGE_DATA_DIRECTORY (8 bytes).
+@overlay struct DataDir {
+    u32 rva  @0x00;
+    u32 size @0x04;
+}
+
+@overlay struct PeImage {
+    u16 e_magic  @0x00;   // 'MZ'
+    u32 e_lfanew @0x3C;
+
+    // --- IMAGE_NT_HEADERS64 en base + e_lfanew ---
+    u32 pe_sig       @offset(e_lfanew);        // 'PE\0\0'
+    // IMAGE_FILE_HEADER (base + e_lfanew + 4).
+    u16 machine      @offset(e_lfanew + 4);
+    u16 num_sections @offset(e_lfanew + 6);
+    u32 timestamp    @offset(e_lfanew + 8);
+    u16 opt_size     @offset(e_lfanew + 20);   // SizeOfOptionalHeader
+    u16 characteristics @offset(e_lfanew + 22);
+    // IMAGE_OPTIONAL_HEADER64 (base + e_lfanew + 24).
+    u16 opt_magic    @offset(e_lfanew + 24);      // 0x20B = PE32+
+    u32 size_code    @offset(e_lfanew + 24 + 4);
+    u32 size_idata   @offset(e_lfanew + 24 + 8);
+    u32 entry        @offset(e_lfanew + 24 + 16); // AddressOfEntryPoint
+    u32 base_code    @offset(e_lfanew + 24 + 20);
+    u64 image_base   @offset(e_lfanew + 24 + 24);
+    u32 sect_align   @offset(e_lfanew + 24 + 32);
+    u32 file_align   @offset(e_lfanew + 24 + 36);
+    u32 size_image   @offset(e_lfanew + 24 + 56);
+    u32 size_headers @offset(e_lfanew + 24 + 60);
+    u16 subsystem    @offset(e_lfanew + 24 + 68);
+    u16 dll_chars    @offset(e_lfanew + 24 + 70);
+    u64 stack_reserve @offset(e_lfanew + 24 + 72);
+    u64 heap_reserve  @offset(e_lfanew + 24 + 88);
+    u32 num_dirs     @offset(e_lfanew + 24 + 108); // NumberOfRvaAndSizes
+
+    // Los 16 DATA DIRECTORIES: base + e_lfanew + 24 + 112, 8 bytes cada uno.
+    DataDir Dirs[16] @offset(e_lfanew + 24 + 112) stride(8);
+    // Tabla de secciones: base + e_lfanew + 24 + opt_size, 40 bytes cada una.
+    Section Sections[num_sections] @offset(e_lfanew + 24 + opt_size) stride(40);
+}
+
+// --- Helpers ------------------------------------------------------------------
+
+// Traduce un RVA a offset de fichero buscando la seccion que lo contiene.
+u64 rva_to_off(PeImage pe, u8* buf, u32 rva) {
+    i32 i = 0;
+    while ((u32)i < (u32)pe.num_sections) {
+        u32 va = pe.Sections[i].virt_addr;
+        u32 sz = pe.Sections[i].virt_size;
+        if (sz < pe.Sections[i].raw_size) { sz = pe.Sections[i].raw_size; }
+        if (rva >= va && rva < va + sz) {
+            return (u64)pe.Sections[i].raw_ptr + (u64)(rva - va);
+        }
+        i = i + 1;
+    }
+    return (u64)rva;   // fallback (dentro de las cabeceras)
+}
+
+// Imprime hasta `max` bytes ASCII desde base+off (nombre de seccion/DLL/func).
+void print_name(u8* base, u64 off, i32 max) {
+    i32 j = 0;
+    while (j < max) {
+        u8 c = *(u8*)(base + off + (u64)j);
+        if (c == 0) { return; }
+        print_char((char)c);
+        j = j + 1;
+    }
+}
+
+// Nombre de un data directory por indice.
+string dir_name(i32 i) {
+    match (i) {
+        case 0  => return "Export";
+        case 1  => return "Import";
+        case 2  => return "Resource";
+        case 3  => return "Exception";
+        case 4  => return "Security";
+        case 5  => return "BaseReloc";
+        case 6  => return "Debug";
+        case 9  => return "TLS";
+        case 10 => return "LoadConfig";
+        case 12 => return "IAT";
+        case 13 => return "DelayImport";
+        case _  => return "-";
+    }
+    return "-";
+}
+
+// Recorre la tabla de imports: cada DLL + sus funciones.
+void dump_imports(PeImage pe, u8* buf) {
+    u32 imp_rva = pe.Dirs[1].rva;
+    if (imp_rva == 0) { println("(sin imports)"); return; }
+    u64 desc = rva_to_off(pe, buf, imp_rva);
+
+    // IMAGE_IMPORT_DESCRIPTOR = 20 bytes: OFT@0, Name@0xC, FirstThunk@0x10.
+    i32 d = 0;
+    while (d < 64) {
+        u64 base_d = desc + (u64)d * 20;
+        u32 oft      = *(u32*)(buf + base_d + 0x00);
+        u32 name_rva = *(u32*)(buf + base_d + 0x0C);
+        u32 ft       = *(u32*)(buf + base_d + 0x10);
+        if (name_rva == 0) { return; }   // descriptor nulo = fin
+
+        print("  ");
+        print_name(buf, rva_to_off(pe, buf, name_rva), 64);
+        print(":");
+
+        // ILT: la tabla de thunks (OFT si != 0, si no FirstThunk).  Cada entrada
+        // u64 (PE32+): bit 63 = import por ordinal; si no, RVA a {hint(u16), name}.
+        u32 thunks_rva = oft;
+        if (thunks_rva == 0) { thunks_rva = ft; }
+        u64 t = rva_to_off(pe, buf, thunks_rva);
+        i32 k = 0;
+        while (k < 8) {   // limite de nombres por DLL para el ejemplo
+            u64 ent = *(u64*)(buf + t + (u64)k * 8);
+            if (ent == 0) { k = 8; }   // fin de la ILT
+            else {
+                if (ent >= 0x8000000000000000) {
+                    print(" ord#");
+                    print_uint(ent & 0xFFFF);
+                } else {
+                    u32 by_name_rva = (u32)(ent & 0x7FFFFFFF);
+                    print(" ");
+                    // IMAGE_IMPORT_BY_NAME: hint(u16) + nombre en +2.
+                    print_name(buf, rva_to_off(pe, buf, by_name_rva) + 2, 48);
+                }
+                k = k + 1;
+            }
+        }
+        println("");
+        d = d + 1;
+    }
+}
+
+i32 main() {
+    string path = "pe_target.bin";
+    i64 size = vx_fileio.file_size(path);
+    if (size < 64) {
+        println("uso: coloca un PE en 'pe_target.bin' en el dir actual");
+        return 2;
+    }
+    u8* buf = (u8*) malloc(size);
+    i64 n = vx_fileio.file_read_into(path, buf, size);
+    if (n != size) { println("error de lectura"); free(buf); return 3; }
+
+    PeImage pe = PeImage(buf);
+    if (pe.e_magic != 0x5A4D || pe.pe_sig != 0x00004550) {
+        println("no es un PE valido");
+        free(buf);
+        return 4;
+    }
+
+    // --- cabeceras (legible por maquina) ---
+    println("E_MAGIC=${pe.e_magic:hex}");
+    println("E_LFANEW=${pe.e_lfanew}");
+    println("PE_SIG=${pe.pe_sig:hex}");
+    println("MACHINE=${pe.machine:hex}");
+    println("NUM_SECTIONS=${pe.num_sections}");
+    println("TIMESTAMP=${pe.timestamp}");
+    println("OPT_SIZE=${pe.opt_size}");
+    println("CHARACTERISTICS=${pe.characteristics:hex}");
+    println("OPT_MAGIC=${pe.opt_magic:hex}");
+    println("SIZE_CODE=${pe.size_code}");
+    println("SIZE_IDATA=${pe.size_idata}");
+    println("ENTRY=${pe.entry}");
+    println("BASE_CODE=${pe.base_code}");
+    println("IMAGE_BASE=${pe.image_base}");
+    println("SECT_ALIGN=${pe.sect_align}");
+    println("FILE_ALIGN=${pe.file_align}");
+    println("SIZE_IMAGE=${pe.size_image}");
+    println("SIZE_HEADERS=${pe.size_headers}");
+    println("SUBSYSTEM=${pe.subsystem}");
+    println("DLL_CHARS=${pe.dll_chars:hex}");
+    println("STACK_RESERVE=${pe.stack_reserve}");
+    println("HEAP_RESERVE=${pe.heap_reserve}");
+    println("NUM_DIRS=${pe.num_dirs}");
+
+    // --- data directories ---
+    i32 i = 0;
+    while (i < 16) {
+        println("DIR ${i} RVA=${pe.Dirs[i].rva} SIZE=${pe.Dirs[i].size}");
+        i = i + 1;
+    }
+
+    // --- section headers (+ nombres) ---
+    u64 tab = (u64)pe.e_lfanew + 24 + (u64)pe.opt_size;
+    i = 0;
+    while ((u32)i < (u32)pe.num_sections) {
+        print("SEC ${i} ");
+        print_name(buf, tab + (u64)i * 40, 8);
+        println(" VSIZE=${pe.Sections[i].virt_size} VADDR=${pe.Sections[i].virt_addr} RSIZE=${pe.Sections[i].raw_size} RPTR=${pe.Sections[i].raw_ptr} CHARS=${pe.Sections[i].chars:hex}");
+        i = i + 1;
+    }
+
+    // --- data directories con nombre (visual) ---
+    println("directorios:");
+    i = 0;
+    while (i < 16) {
+        if (pe.Dirs[i].rva != 0) {
+            println("  ${dir_name(i)}: rva=${pe.Dirs[i].rva:hex} size=${pe.Dirs[i].size}");
+        }
+        i = i + 1;
+    }
+
+    // --- tabla de imports (DLLs + funciones) ---
+    println("imports:");
+    dump_imports(pe, buf);
+
+    free(buf);
+    return 0;
+}

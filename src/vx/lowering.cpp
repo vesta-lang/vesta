@@ -12913,35 +12913,97 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             error_at(e->loc, "lowering: campo array de overlay no encontrado");
             return ir::IR_NO_VALUE;
         }
-        // Ligar `base` + hermanos de offset constante para pos/stride exprs.
+        // Ligar `base` + hermanos para las exprs de pos/stride.  Helper: LOAD
+        // en `addr` con el ancho del hermano y bind por nombre.
         push_scope();
         bind("base", ov_base);
-        for (const auto &sib : lay.fields) {
-            if (sib.offset_expr || sib.offset_block || sib.array_stride) continue;
-            ir::IrValueId saddr = ov_base;
-            if (sib.offset != 0) {
-                ir::IrValueId so = emit_const(ir::IrType::I64,
-                                              (uint64_t)sib.offset, e->loc.line);
-                saddr = fn_->new_value(ir::IrType::PTR);
-                fn_->values[saddr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
-                ir::IrInstr a{};
-                a.op = ir::IrOp::ADD;
-                a.type = ir::IrType::PTR;
-                a.dst = saddr;
-                a.operands = {ov_base, so};
-                a.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(a));
-            }
+        auto bind_sib_at = [&](const StructFieldInfo &sib, ir::IrValueId addr) {
             const ir::IrType stt = ir_type_from_primitive(sib.type.kind);
             ir::IrValueId sv = fn_->new_value(stt);
             ir::IrInstr l{};
             l.op = ir::IrOp::LOAD;
             l.type = stt;
             l.dst = sv;
-            l.operands = {saddr};
+            l.operands = {addr};
             l.source_line = e->loc.line;
             fn_->append(current_block_, std::move(l));
             bind(sib.name, sv);
+        };
+        auto add_off = [&](ir::IrValueId off_v) -> ir::IrValueId {
+            ir::IrValueId a = fn_->new_value(ir::IrType::PTR);
+            fn_->values[a].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::ADD;
+            ins.type = ir::IrType::PTR;
+            ins.dst = a;
+            ins.operands = {ov_base, off_v};
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return a;
+        };
+        // Pass 1: hermanos de offset CONSTANTE.
+        for (const auto &sib : lay.fields) {
+            if (sib.offset_expr || sib.offset_block || sib.array_stride) continue;
+            ir::IrValueId saddr = ov_base;
+            if (sib.offset != 0)
+                saddr = add_off(
+                    emit_const(ir::IrType::I64, (uint64_t)sib.offset,
+                               e->loc.line));
+            bind_sib_at(sib, saddr);
+        }
+        // Pass 2: hermanos de offset DINAMICO (@offset(expr)) REFERENCIADOS por
+        // la pos/stride del array (transitivamente).  Solo los usados: bindear
+        // los no-usados es innecesario y ademas corrompe (un LOAD u64 de un
+        // hermano dinamico no referenciado clobbereaba la direccion del array).
+        // Recolector recursivo de nombres de IdentExpr en una expr.
+        std::function<void(const ast::Expr *, std::set<std::string> &)>
+            collect_idents = [&](const ast::Expr *ex,
+                                 std::set<std::string> &out) {
+                if (!ex) return;
+                switch (ex->kind) {
+                case ast::NodeKind::IdentExpr:
+                    out.insert(static_cast<const ast::IdentExpr *>(ex)->name);
+                    break;
+                case ast::NodeKind::BinaryExpr: {
+                    auto *b = static_cast<const ast::BinaryExpr *>(ex);
+                    collect_idents(b->lhs.get(), out);
+                    collect_idents(b->rhs.get(), out);
+                    break;
+                }
+                case ast::NodeKind::UnaryExpr:
+                    collect_idents(
+                        static_cast<const ast::UnaryExpr *>(ex)->operand.get(),
+                        out);
+                    break;
+                case ast::NodeKind::CastExpr:
+                    collect_idents(
+                        static_cast<const ast::CastExpr *>(ex)->operand.get(),
+                        out);
+                    break;
+                default:
+                    break;
+                }
+            };
+        std::set<std::string> referenced;
+        collect_idents(afi->offset_expr, referenced);
+        collect_idents(afi->array_stride, referenced);
+        // Fixpoint: un hermano dinamico referenciado puede referenciar otros.
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const auto &sib : lay.fields) {
+                if (!sib.offset_expr || sib.array_stride) continue;
+                if (!referenced.count(sib.name)) continue;
+                size_t before = referenced.size();
+                collect_idents(sib.offset_expr, referenced);
+                if (referenced.size() != before) changed = true;
+            }
+        }
+        for (const auto &sib : lay.fields) {
+            if (!sib.offset_expr || sib.array_stride) continue;
+            if (!referenced.count(sib.name)) continue; // solo los usados
+            ir::IrValueId off_v = lower_expr(sib.offset_expr);
+            if (off_v == ir::IR_NO_VALUE) continue;
+            bind_sib_at(sib, add_off(off_v));
         }
         // pos (base de la tabla): const o expr.
         ir::IrValueId pos_v =
