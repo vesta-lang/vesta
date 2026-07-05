@@ -1,0 +1,15 @@
+// std.text -- utilidades de texto namespaced sobre los builtins de string.
+// Capa IMPORTABLE de la stdlib.  Uso:  import std.text;  i64 n = std.text.len(s);
+namespace std.text;
+
+/// Longitud en code-points de un string.
+public i64 len(string s) { return (i64)str_length(s); }
+
+/// true si dos strings son iguales.
+public bool same(string a, string b) { return str_equals(a, b); }
+
+/// Concatena dos strings.
+public string join(string a, string b) { return str_concat(a, b); }
+
+/// true si el string esta vacio.
+public bool empty(string s) { return str_length(s) == 0; }

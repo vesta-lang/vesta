@@ -1,0 +1,14 @@
+// Uso de la capa importable std.* de la stdlib (namespaced).  El runtime
+// interno del AOT (stdlib/vx/vx_io.vx etc.) NO lleva namespace; esta capa
+// std.math / std.text SI, y se importa por su namespace.
+import std.math;
+import std.text;
+
+i64 main() {
+    f64 h = std.math.hypot(3.0, 4.0);              // 5.0
+    i64 c = std.math.iclamp(100, 0, 37);           // 37
+    i64 n = std.text.len("vesta");                 // 5
+    string s = std.text.join("na", "me");          // "name"
+    println("h=${(i64)h} c=${c} n=${n} s=${s} empty=${std.text.empty(s)}");
+    return (i64)h + c;                              // 5 + 37 = 42
+}
