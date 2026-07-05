@@ -109,6 +109,13 @@ void rewrite_refs_in_type_(
         for (auto &pt : ft->param_types)
             rewrite_refs_in_type_(pt.get(), rename_map);
         rewrite_refs_in_type_(ft->return_type.get(), rename_map);
+    } else if (t->kind == ast::NodeKind::PrimitiveTypeNode) {
+        // NS.1 fix: los smart pointers (gc<T>/unique<T>/shared<T>/borrow<T>) y
+        // las colecciones (ArrayList<T>/HashMap<K,V>/...) se parsean como
+        // PrimitiveTypeNode con type_args -> hay que manglar los tipos internos.
+        auto *pn = static_cast<ast::PrimitiveTypeNode *>(t);
+        for (auto &ta : pn->type_args)
+            rewrite_refs_in_type_(ta.get(), rename_map);
     }
 }
 
@@ -387,6 +394,16 @@ void mangle_struct_decl_(
     }
     for (auto &f : sd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
+    }
+    // NS.1 fix: los STRUCTS tambien tienen metodos (dispatch estatico) + dtor.
+    // Sus cuerpos deben reescribirse igual que los de clase, si no las refs a
+    // globals/hermanos del namespace dentro de un metodo de struct fallan.
+    for (auto &m : sd->methods) {
+        if (!m) continue;
+        rewrite_refs_in_type_(m->return_type.get(), rename_map);
+        for (auto &p : m->params)
+            rewrite_refs_in_type_(p->type.get(), rename_map);
+        rewrite_refs_in_stmt_(m->body.get(), rename_map);
     }
 }
 

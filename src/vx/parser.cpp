@@ -2820,6 +2820,10 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
             const uint32_t inner_start = current_.loc.offset;
             auto inner = parse_top_level_decl();
             if (!inner) {
+                // L.24: skip intencional via @Target no matcheado -- la decl ya
+                // fue consumida por skip_target_skipped_decl; NO sincronizar
+                // (igual que parse_program), o nos comeriamos la siguiente decl.
+                if (last_decl_was_target_skip_) continue;
                 synchronize();
                 // synchronize se para en KW_NAMESPACE/EOF (fin de este ns) o en
                 // el siguiente keyword aprovechable; el bucle re-evalua.
@@ -2850,6 +2854,9 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
         const uint32_t inner_start = current_.loc.offset;
         auto inner = parse_top_level_decl();
         if (!inner) {
+            // L.24: skip intencional via @Target no matcheado (ver forma
+            // statement arriba) -- NO sincronizar.
+            if (last_decl_was_target_skip_) continue;
             // Error de parse en una decl interna -- skipear hasta el
             // siguiente token aprovechable para no quedarnos en bucle.
             synchronize();
