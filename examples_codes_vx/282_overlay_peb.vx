@@ -1,19 +1,40 @@
 // -----------------------------------------------------------------------------
-// Dump COMPLETO del PEB REAL (Process Environment Block) de Windows x64
+// Dump COMPLETO del PEB REAL de Windows x64 -- el overlay se disecciona a SI MISMO
 // -----------------------------------------------------------------------------
-// Lee el PEB del PROPIO proceso con INLINE ASM (`mov rax, gs:[0x60]` -- en x64 el
-// PEB vive en gs:[0x60]) y lo disecciona entero con overlays: los ~45 campos
-// documentados (offsets x64 de ReactOS / Geoff Chappell), el BitField
-// decodificado, los flags cruzados, y ADEMAS recorre la lista de modulos cargados
-// (Ldr -> InLoadOrderModuleList) imprimiendo el nombre de cada DLL.  Campos fijos
-// = @offset(N); campos que se MUEVEN entre versiones (SessionId) = un resolver que
-// ramifica sobre la version del propio PEB (contexto runtime en g_os_build).
-//
-// El inline asm es codigo NATIVO -> requiere JIT (`-m jit`) o AOT; el interprete
-// puro no tiene segmento gs.  Windows x64.
+// Lee el PEB del propio proceso con INLINE ASM (`mov rax, gs:[0x60]` en una
+// funcion get_peb() -- corre en interp via auto-JIT, JIT y AOT) y lo vuelca con
+// overlays.  TODA la logica vive DENTRO del overlay:
+//   * un metodo `dump()` que se imprime a si mismo,
+//   * el CONTEXTO (version de Windows) se lee del propio PEB (self.OSBuildNumber)
+//     -> tanto los campos cuyo OFFSET cambio (SessionId, resolver) como los que
+//     solo EXISTEN a partir de cierta version (Telemetry/CloudFile/LeapSecond/
+//     NtGlobalFlag2) se discriminan desde el overlay: en un Windows viejo NO se
+//     leen (evita leer basura), sin que main sepa nada.
+// Offsets x64 de ReactOS / Geoff Chappell.  interp = JIT = AOT (Windows).
 
-// Contexto: build de Windows, leido del propio PEB en runtime.
-u64 g_os_build = 0;
+// El PEB del proceso via INLINE ASM (en x64 vive en gs:[0x60]).
+u64 get_peb() {
+    register("rax") u64 r;
+    asm { mov rax, gs:[0x60] };
+    return r;
+}
+
+// _PEB_LDR_DATA (x64): cabeza de las listas de modulos.
+@overlay struct LdrData {
+    u32 Length             @0x000;
+    u8  Initialized        @0x004;
+    u64 SsHandle           @0x008;
+    u64 InLoadOrderFlink   @0x010;   // LIST_ENTRY.Flink (primer modulo)
+}
+
+// _LDR_DATA_TABLE_ENTRY (x64): un modulo cargado.  InLoadOrderLinks @+0.
+@overlay struct LdrEntry {
+    u64 InLoadFlink   @0x000;
+    u64 DllBase       @0x030;
+    u32 SizeOfImage   @0x040;
+    u16 NameLen       @0x058;   // BaseDllName : UNICODE_STRING
+    u64 NameBuf       @0x060;   // PWSTR (UTF-16)
+}
 
 // _PEB (x64).
 @overlay struct PEB {
@@ -21,7 +42,6 @@ u64 g_os_build = 0;
     u8  ReadImageFileExecOptions       @0x001;
     u8  BeingDebugged                  @0x002;   // flag anti-debug clasico
     u8  BitField                       @0x003;
-    // BitField decodificado (bits, x86 order = bit0 primero):
     u8  ImageUsesLargePages       : 1 @0x003;
     u8  IsProtectedProcess        : 1 @0x003;
     u8  IsImageDynamicallyReloc   : 1 @0x003;
@@ -30,10 +50,9 @@ u64 g_os_build = 0;
     u8  IsAppContainer            : 1 @0x003;
     u8  IsProtectedProcessLight   : 1 @0x003;
     u8  IsLongPathAwareProcess    : 1 @0x003;
-    // punteros clave
     u64 Mutant                         @0x008;
     u64 ImageBaseAddress               @0x010;
-    u64 Ldr                            @0x018;   // -> PEB_LDR_DATA
+    u64 Ldr                            @0x018;
     u64 ProcessParameters              @0x020;
     u64 SubSystemData                  @0x028;
     u64 ProcessHeap                    @0x030;
@@ -41,12 +60,19 @@ u64 g_os_build = 0;
     u64 AtlThunkSListPtr               @0x040;
     u64 IFEOKey                        @0x048;
     u32 CrossProcessFlags              @0x050;
+    u32 ProcessInJob            : 1 @0x050;
+    u32 ProcessInitializing     : 1 @0x050;
+    u32 ProcessUsingVEH         : 1 @0x050;
+    u32 ProcessUsingVCH         : 1 @0x050;
+    u32 ProcessUsingFTH         : 1 @0x050;
     u64 KernelCallbackTable            @0x058;
     u32 SystemReserved                 @0x060;
+    u32 AtlThunkSListPtr32             @0x064;
     u64 ApiSetMap                      @0x068;
     u32 TlsExpansionCounter            @0x070;
     u64 TlsBitmap                      @0x078;
     u64 ReadOnlySharedMemoryBase       @0x088;
+    u64 SharedData                     @0x090;
     u64 ReadOnlyStaticServerData       @0x098;
     u64 AnsiCodePageData               @0x0A0;
     u64 OemCodePageData                @0x0A8;
@@ -62,10 +88,12 @@ u64 g_os_build = 0;
     u32 MaximumNumberOfHeaps           @0x0EC;
     u64 ProcessHeaps                   @0x0F0;
     u64 GdiSharedHandleTable           @0x0F8;
+    u64 ProcessStarterHelper           @0x100;
+    u32 GdiDCAttributeList             @0x108;
     u64 LoaderLock                     @0x110;
     u32 OSMajorVersion                 @0x118;
     u32 OSMinorVersion                 @0x11C;
-    u16 OSBuildNumber                  @0x120;
+    u16 OSBuildNumber                  @0x120;   // <- el CONTEXTO de version
     u16 OSCSDVersion                   @0x122;
     u32 OSPlatformId                   @0x124;
     u32 ImageSubsystem                 @0x128;
@@ -73,135 +101,146 @@ u64 g_os_build = 0;
     u32 ImageSubsystemMinorVersion     @0x130;
     u64 ActiveProcessAffinityMask      @0x138;
     u64 PostProcessInitRoutine         @0x230;
-    // SessionId: su offset cambia entre versiones -> resolver sobre el contexto.
+    u64 TlsExpansionBitmap             @0x238;
+    // SessionId: su OFFSET cambia entre versiones -> resolver que lee el propio
+    // build del PEB (self.OSBuildNumber) para elegir el offset.  Contexto interno.
     u32 SessionId @offset {
-        if (g_os_build >= 10240) { return base + 0x2C0; }   // Win10 / Win11
-        return base + 0x2A0;                                 // 8.1 y anteriores
+        if (self.OSBuildNumber >= 10240) { return base + 0x2C0; }   // Win10/11
+        return base + 0x2A0;                                         // 8.1 y antes
     };
     u64 AppCompatFlags                 @0x2C8;
     u64 AppCompatFlagsUser             @0x2D0;
     u64 pShimData                      @0x2D8;
+    u64 AppCompatInfo                  @0x2E0;
+    u64 ActivationContextData          @0x2F8;
+    u64 SystemDefaultActivationContextData @0x308;
     u64 MinimumStackCommit             @0x318;
+    u64 FlsBitmap                      @0x338;
     u32 FlsHighIndex                   @0x350;
-    u32 TracingFlags                   @0x37C;
-}
+    u64 WerRegistrationData            @0x358;
+    u64 WerShipAssertPtr               @0x360;
+    u64 pImageHeaderHash               @0x370;
+    u32 TracingFlags                   @0x378;
+    u64 CsrServerReadOnlySharedMemoryBase @0x380;
+    // --- campos version-dependientes (offsets validos donde EXISTEN) ---
+    u64 TelemetryCoverageHeader        @0x7A0;   // Win10 1703+
+    u32 CloudFileFlags                 @0x7A8;   // Win10 1709+
+    u32 CloudFileDiagFlags             @0x7AC;   // Win10 1803+
+    u8  PlaceholderCompatibilityMode   @0x7B0;   // Win10 1803+
+    u64 LeapSecondData                 @0x7B8;   // Win10 1809+
+    u32 LeapSecondFlags                @0x7C0;   // Win10 1809+
+    u32 NtGlobalFlag2                  @0x7C4;   // Win10 1903+
 
-// _PEB_LDR_DATA (x64): la cabeza de las listas de modulos.
-@overlay struct LdrData {
-    u32 Length                     @0x000;
-    u8  Initialized                @0x004;
-    u64 SsHandle                   @0x008;
-    u64 InLoadOrderFlink           @0x010;   // LIST_ENTRY.Flink (primer modulo)
-}
+    // -------- el overlay se DISECCIONA a si mismo, discriminando por version ----
+    // Devuelve 42 si el PEB se parseo bien (MZ en ImageBase + OSPlatformId==2 +
+    // al menos 1 modulo).
+    public i32 dump() {
+        u16 b = this.OSBuildNumber;   // el CONTEXTO, leido de si mismo
+        print("Windows ");
+        if (b >= 26100)      { println("11 24H2 (${b})"); }
+        else if (b >= 22000) { println("11 (${b})"); }
+        else if (b >= 19041) { println("10 20H1+ (${b})"); }
+        else if (b >= 10240) { println("10 (${b})"); }
+        else if (b >= 9600)  { println("8.1 (${b})"); }
+        else                 { println("<= 8 (${b})"); }
 
-// _LDR_DATA_TABLE_ENTRY (x64): un modulo cargado.  InLoadOrderLinks esta en +0,
-// asi que el puntero del nodo de lista ES el inicio de la entry.
-@overlay struct LdrEntry {
-    u64 InLoadFlink   @0x000;   // siguiente nodo (LIST_ENTRY.Flink)
-    u64 DllBase       @0x030;
-    u64 EntryPoint    @0x038;
-    u32 SizeOfImage   @0x040;
-    // BaseDllName : UNICODE_STRING { u16 Length; u16 MaxLength; u64 Buffer }
-    u16 NameLen       @0x058;
-    u64 NameBuf       @0x060;   // PWSTR (UTF-16)
-}
+        println("BeingDebugged=${this.BeingDebugged}");
+        println("BitField=${this.BitField:hex}  [LargePages=${this.ImageUsesLargePages} ProtProc=${this.IsProtectedProcess} DynReloc=${this.IsImageDynamicallyReloc} AppContainer=${this.IsAppContainer} LongPathAware=${this.IsLongPathAwareProcess}]");
+        println("Mutant=${this.Mutant:hex}");
+        println("ImageBaseAddress=${this.ImageBaseAddress:hex}");
+        println("Ldr=${this.Ldr:hex}");
+        println("ProcessParameters=${this.ProcessParameters:hex}");
+        println("ProcessHeap=${this.ProcessHeap:hex}");
+        println("FastPebLock=${this.FastPebLock:hex}");
+        println("AtlThunkSListPtr=${this.AtlThunkSListPtr:hex}");
+        println("IFEOKey=${this.IFEOKey:hex}");
+        println("CrossProcessFlags=${this.CrossProcessFlags:hex}  [InJob=${this.ProcessInJob} Init=${this.ProcessInitializing} VEH=${this.ProcessUsingVEH} VCH=${this.ProcessUsingVCH} FTH=${this.ProcessUsingFTH}]");
+        println("KernelCallbackTable=${this.KernelCallbackTable:hex}");
+        println("ApiSetMap=${this.ApiSetMap:hex}");
+        println("TlsExpansionCounter=${this.TlsExpansionCounter}");
+        println("ReadOnlySharedMemoryBase=${this.ReadOnlySharedMemoryBase:hex}");
+        println("AnsiCodePageData=${this.AnsiCodePageData:hex}");
+        println("OemCodePageData=${this.OemCodePageData:hex}");
+        println("UnicodeCaseTableData=${this.UnicodeCaseTableData:hex}");
+        println("NumberOfProcessors=${this.NumberOfProcessors}");
+        println("NtGlobalFlag=${this.NtGlobalFlag:hex}");
+        println("HeapSegmentReserve=${this.HeapSegmentReserve:hex}");
+        println("HeapSegmentCommit=${this.HeapSegmentCommit:hex}");
+        println("NumberOfHeaps=${this.NumberOfHeaps}");
+        println("MaximumNumberOfHeaps=${this.MaximumNumberOfHeaps}");
+        println("ProcessHeaps=${this.ProcessHeaps:hex}");
+        println("GdiSharedHandleTable=${this.GdiSharedHandleTable:hex}");
+        println("LoaderLock=${this.LoaderLock:hex}");
+        println("OSVersion=${this.OSMajorVersion}.${this.OSMinorVersion} build ${this.OSBuildNumber}");
+        println("OSPlatformId=${this.OSPlatformId}");
+        println("ImageSubsystem=${this.ImageSubsystem}.${this.ImageSubsystemMajorVersion}.${this.ImageSubsystemMinorVersion}");
+        println("ActiveProcessAffinityMask=${this.ActiveProcessAffinityMask:hex}");
+        println("SessionId=${this.SessionId}");   // offset segun version (resolver)
+        println("AppCompatFlags=${this.AppCompatFlags:hex}");
+        println("pShimData=${this.pShimData:hex}");
+        println("ActivationContextData=${this.ActivationContextData:hex}");
+        println("MinimumStackCommit=${this.MinimumStackCommit:hex}");
+        println("FlsBitmap=${this.FlsBitmap:hex}");
+        println("FlsHighIndex=${this.FlsHighIndex}");
+        println("WerRegistrationData=${this.WerRegistrationData:hex}");
+        println("pImageHeaderHash=${this.pImageHeaderHash:hex}");
+        println("TracingFlags=${this.TracingFlags:hex}");
+        println("CsrServerReadOnlySharedMemoryBase=${this.CsrServerReadOnlySharedMemoryBase:hex}");
 
-// El PEB del proceso via INLINE ASM: en x64 vive en gs:[0x60].  El asm nativo
-// dentro de una funcion corre en interp (auto-JIT), JIT y AOT.
-u64 get_peb() {
-    register("rax") u64 r;
-    asm { mov rax, gs:[0x60] };
-    return r;
+        // --- campos version-dependientes: la DISCRIMINACION vive aqui dentro; en
+        //     un Windows viejo NO se leen (esos offsets no existen -> serian basura).
+        println("-- campos version-dependientes --");
+        if (b >= 15063) { println("TelemetryCoverageHeader=${this.TelemetryCoverageHeader:hex}"); }
+        else { println("TelemetryCoverageHeader: (no existe < 1703)"); }
+        if (b >= 16299) { println("CloudFileFlags=${this.CloudFileFlags:hex}"); }
+        else { println("CloudFileFlags: (no existe < 1709)"); }
+        if (b >= 17134) {
+            println("CloudFileDiagFlags=${this.CloudFileDiagFlags:hex}");
+            println("PlaceholderCompatibilityMode=${this.PlaceholderCompatibilityMode}");
+        } else { println("CloudFileDiag/Placeholder: (no existe < 1803)"); }
+        if (b >= 17763) {
+            println("LeapSecondData=${this.LeapSecondData:hex}");
+            println("LeapSecondFlags=${this.LeapSecondFlags:hex}");
+        } else { println("LeapSecond: (no existe < 1809)"); }
+        if (b >= 18362) { println("NtGlobalFlag2=${this.NtGlobalFlag2:hex}"); }
+        else { println("NtGlobalFlag2: (no existe < 1903)"); }
+
+        // --- modulos cargados: Ldr -> InLoadOrderModuleList (sub-overlays) ---
+        println("modulos cargados:");
+        LdrData ld = LdrData((u8*) this.Ldr);
+        u64 head = this.Ldr + 0x10;
+        u64 cur  = ld.InLoadOrderFlink;
+        i32 count = 0;
+        while (cur != head && cur != 0 && count < 64) {
+            LdrEntry m = LdrEntry((u8*) cur);
+            if (m.DllBase != 0 && m.NameLen > 0) {
+                print("  ");
+                u8* nb = (u8*) m.NameBuf;   // BaseDllName UTF-16 -> byte bajo (ASCII)
+                i32 j = 0;
+                i32 wchars = (i32)(m.NameLen / 2);
+                while (j < wchars && j < 128) {
+                    print_char((char) *(u8*)(nb + (u64)j * 2));
+                    j = j + 1;
+                }
+                println("  (base=${m.DllBase:hex} size=${m.SizeOfImage:hex})");
+            }
+            cur = m.InLoadFlink;
+            count = count + 1;
+        }
+        println("total_modulos=${count}");
+
+        // invariante: MZ en ImageBase + plataforma NT + al menos 1 modulo.
+        u8* ib = (u8*) this.ImageBaseAddress;
+        if (*(u8*)(ib+0) == 0x4D && *(u8*)(ib+1) == 0x5A
+            && this.OSPlatformId == 2 && count > 0) { return 42; }
+        return 0;
+    }
 }
 
 i32 main() {
     u64 peb_ptr = get_peb();
     if (peb_ptr == 0) { println("sin PEB (no Windows?)"); return 1; }
     PEB p = PEB((u8*) peb_ptr);
-
-    // contexto: la version del propio PEB decide el offset de SessionId.
-    g_os_build = (u64) p.OSBuildNumber;
-
     println("PEB @ ${peb_ptr:hex}");
-    println("InheritedAddressSpace=${p.InheritedAddressSpace}");
-    println("ReadImageFileExecOptions=${p.ReadImageFileExecOptions}");
-    println("BeingDebugged=${p.BeingDebugged}");
-    println("BitField=${p.BitField:hex}  [LargePages=${p.ImageUsesLargePages} ProtProc=${p.IsProtectedProcess} DynReloc=${p.IsImageDynamicallyReloc} AppContainer=${p.IsAppContainer} LongPathAware=${p.IsLongPathAwareProcess}]");
-    println("Mutant=${p.Mutant:hex}");
-    println("ImageBaseAddress=${p.ImageBaseAddress:hex}");
-    println("Ldr=${p.Ldr:hex}");
-    println("ProcessParameters=${p.ProcessParameters:hex}");
-    println("SubSystemData=${p.SubSystemData:hex}");
-    println("ProcessHeap=${p.ProcessHeap:hex}");
-    println("FastPebLock=${p.FastPebLock:hex}");
-    println("AtlThunkSListPtr=${p.AtlThunkSListPtr:hex}");
-    println("IFEOKey=${p.IFEOKey:hex}");
-    println("CrossProcessFlags=${p.CrossProcessFlags:hex}");
-    println("KernelCallbackTable=${p.KernelCallbackTable:hex}");
-    println("ApiSetMap=${p.ApiSetMap:hex}");
-    println("TlsExpansionCounter=${p.TlsExpansionCounter}");
-    println("TlsBitmap=${p.TlsBitmap:hex}");
-    println("ReadOnlySharedMemoryBase=${p.ReadOnlySharedMemoryBase:hex}");
-    println("AnsiCodePageData=${p.AnsiCodePageData:hex}");
-    println("OemCodePageData=${p.OemCodePageData:hex}");
-    println("UnicodeCaseTableData=${p.UnicodeCaseTableData:hex}");
-    println("NumberOfProcessors=${p.NumberOfProcessors}");
-    println("NtGlobalFlag=${p.NtGlobalFlag:hex}");
-    println("CriticalSectionTimeout=${p.CriticalSectionTimeout:hex}");
-    println("HeapSegmentReserve=${p.HeapSegmentReserve:hex}");
-    println("HeapSegmentCommit=${p.HeapSegmentCommit:hex}");
-    println("HeapDeCommitTotalFreeThreshold=${p.HeapDeCommitTotalFreeThreshold:hex}");
-    println("HeapDeCommitFreeBlockThreshold=${p.HeapDeCommitFreeBlockThreshold:hex}");
-    println("NumberOfHeaps=${p.NumberOfHeaps}");
-    println("MaximumNumberOfHeaps=${p.MaximumNumberOfHeaps}");
-    println("ProcessHeaps=${p.ProcessHeaps:hex}");
-    println("GdiSharedHandleTable=${p.GdiSharedHandleTable:hex}");
-    println("LoaderLock=${p.LoaderLock:hex}");
-    println("OSVersion=${p.OSMajorVersion}.${p.OSMinorVersion} build ${p.OSBuildNumber} (CSD ${p.OSCSDVersion})");
-    println("OSPlatformId=${p.OSPlatformId}");
-    println("ImageSubsystem=${p.ImageSubsystem}.${p.ImageSubsystemMajorVersion}.${p.ImageSubsystemMinorVersion}");
-    println("ActiveProcessAffinityMask=${p.ActiveProcessAffinityMask:hex}");
-    println("PostProcessInitRoutine=${p.PostProcessInitRoutine:hex}");
-    println("SessionId=${p.SessionId}");
-    println("AppCompatFlags=${p.AppCompatFlags:hex}");
-    println("pShimData=${p.pShimData:hex}");
-    println("MinimumStackCommit=${p.MinimumStackCommit:hex}");
-    println("FlsHighIndex=${p.FlsHighIndex}");
-    println("TracingFlags=${p.TracingFlags:hex}");
-
-    // --- recorrer la lista de modulos cargados (Ldr -> InLoadOrderModuleList) ---
-    println("modulos cargados:");
-    LdrData ld = LdrData((u8*) p.Ldr);
-    u64 head = p.Ldr + 0x10;          // direccion del LIST_ENTRY cabeza
-    u64 cur  = ld.InLoadOrderFlink;   // primer nodo
-    i32 count = 0;
-    while (cur != head && cur != 0 && count < 64) {
-        LdrEntry m = LdrEntry((u8*) cur);
-        if (m.DllBase != 0 && m.NameLen > 0) {
-            print("  ");
-            // BaseDllName es UTF-16; imprimimos el byte bajo de cada wchar (ASCII)
-            u8* nb = (u8*) m.NameBuf;
-            i32 j = 0;
-            i32 wchars = (i32)(m.NameLen / 2);
-            while (j < wchars && j < 128) {
-                print_char((char) *(u8*)(nb + (u64)j * 2));
-                j = j + 1;
-            }
-            println("  (base=${m.DllBase:hex} size=${m.SizeOfImage:hex})");
-        }
-        cur = m.InLoadFlink;
-        count = count + 1;
-    }
-    println("total_modulos=${count}");
-
-    // verificacion invariante (R0 deterministico en cualquier Windows x64):
-    //   - ImageBase apunta a un header 'MZ'
-    //   - OSPlatformId == 2 (VER_PLATFORM_WIN32_NT)
-    //   - se encontro al menos 1 modulo
-    u8* ib = (u8*) p.ImageBaseAddress;
-    i32 ok = 0;
-    if (*(u8*)(ib+0) == 0x4D && *(u8*)(ib+1) == 0x5A
-        && p.OSPlatformId == 2 && count > 0) { ok = 42; }
-    println("ok=${ok}");
-    return ok;   // 42 si el PEB real se parseo bien
+    return p.dump();   // el overlay se disecciona a si mismo; 42 si OK
 }
