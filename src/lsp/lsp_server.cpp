@@ -899,6 +899,29 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
             locs.push_back(make_location(l));
     }
 
+    // NS.4: fallback por indice semantico -- resuelve el acceso CUALIFICADO por
+    // namespace (`shapes.area`, cursor sobre `area`).  El word bajo el cursor es
+    // el ULTIMO segmento; buscamos en el indice los simbolos cuyo nombre simple
+    // (ultimo segmento del nombre cualificado) coincide y devolvemos su span.
+    if (locs.empty()) {
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        for (const auto &s : an.sem_index.symbols) {
+            const std::string &q = s.name;
+            const size_t dot = q.rfind('.');
+            const std::string simple =
+                (dot == std::string::npos) ? q : q.substr(dot + 1);
+            if (simple != word)
+                continue;
+            WorkspaceLocation l;
+            l.uri = uri;
+            byte_offset_to_lsp_position(text, s.src_offset, l.start_line,
+                                        l.start_char);
+            byte_offset_to_lsp_position(text, s.src_offset + s.src_length,
+                                        l.end_line, l.end_char);
+            locs.push_back(make_location(l));
+        }
+    }
+
     if (locs.empty()) {
         send_result(msg.at("id"), nullptr);
         return;
