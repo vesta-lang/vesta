@@ -6882,19 +6882,27 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
     bool any_value_arm = false;
     for (auto &a : e->arms)
         if (a.value_pattern) { any_value_arm = true; break; }
-    if (any_value_arm || (st.kind != PrimitiveKind::STRUCT &&
-                          is_int_or_char(st.kind))) {
-        if (!is_int_or_char(st.kind)) {
+    const bool scrut_is_string = (st.kind == PrimitiveKind::STRING);
+    if (any_value_arm || scrut_is_string ||
+        (st.kind != PrimitiveKind::STRUCT && is_int_or_char(st.kind))) {
+        if (!is_int_or_char(st.kind) && !scrut_is_string) {
             diags_.error(e->scrutinee->loc,
                          "match con patrones de valor requiere un scrutinee "
-                         "entero o char, recibido " + type_to_string(st));
+                         "entero, char o string, recibido " + type_to_string(st));
             return Type{PrimitiveKind::VOID};
         }
         bool has_default = false;
         for (auto &arm : e->arms) {
             if (arm.value_pattern) {
                 Type pt = check_expr(arm.value_pattern.get());
-                if (!is_int_or_char(pt.kind)) {
+                if (scrut_is_string) {
+                    if (arm.value_pattern->kind !=
+                        ast::NodeKind::StringLitExpr) {
+                        diags_.error(arm.loc,
+                                     "el patron de un match sobre string debe "
+                                     "ser un literal de cadena");
+                    }
+                } else if (!is_int_or_char(pt.kind)) {
                     diags_.error(arm.loc,
                                  "el patron de un match escalar debe ser un "
                                  "literal entero o char");
@@ -6903,8 +6911,8 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
                 has_default = true;
             } else {
                 diags_.error(arm.loc,
-                             "en un match escalar los patrones deben ser "
-                             "literales enteros/char o '_' (default)");
+                             "en un match escalar/string los patrones deben ser "
+                             "literales o '_' (default)");
             }
             if (arm.guard) {
                 Type tg = check_expr(arm.guard.get());
@@ -6919,8 +6927,8 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
         }
         if (!has_default) {
             diags_.error(e->loc,
-                         "match escalar no exhaustivo: anyade 'case _ =>' como "
-                         "default (no se puede enumerar todo el rango entero)");
+                         "match no exhaustivo: anyade 'case _ =>' como default "
+                         "(no se puede enumerar todos los valores)");
         }
         return Type{PrimitiveKind::VOID};
     }

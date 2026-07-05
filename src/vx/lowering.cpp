@@ -10603,17 +10603,287 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     return ir::IR_NO_VALUE; // statement-like (VOID)
 }
 
+ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
+    ir::IrValueId s_h = lower_expr(e->scrutinee.get());
+    if (s_h == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+    // FAST PATH: la longitud en bytes es el discriminador MAS BARATO (O(1), sin
+    // iterar bytes).  Despachamos por longitud primero; la mayoria de inputs que
+    // no coinciden con ningun case se descartan aqui sin un solo strcmp.  Dentro
+    // de un bucket (misma longitud) verificamos con STRCMP (que ya compara bytes,
+    // longitud igual).  Tipico: 1 comparacion de tamano + 1 strcmp.
+    ir::IrValueId L_v = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr gb{};
+        gb.op = ir::IrOp::STRGETBYTES;
+        gb.type = ir::IrType::I64;
+        gb.dst = L_v;
+        gb.operands = {s_h};
+        gb.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(gb));
+    }
+
+    ssize_t default_arm_idx = -1;
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if (!e->arms[i].value_pattern && e->arms[i].variant_name == "_") {
+            default_arm_idx = (ssize_t)i;
+            break;
+        }
+
+    // Agrupar arms por LONGITUD en bytes del literal (orden estable).  La
+    // longitud del StringLitExpr::value = bytes UTF-8, igual que STRGETBYTES.
+    std::vector<int64_t> distinct_lens;
+    std::map<int64_t, std::vector<size_t>> by_len;
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern) continue;
+        auto *sl = static_cast<ast::StringLitExpr *>(e->arms[i].value_pattern.get());
+        const int64_t L = (int64_t)sl->value.size();
+        if (!by_len.count(L)) distinct_lens.push_back(L);
+        by_len[L].push_back(i);
+    }
+
+    const ir::IrBlockId merge_bb = fn_->new_block("strmatch_end");
+    ir::IrBlockId default_bb =
+        (default_arm_idx >= 0) ? fn_->new_block("strmatch_default") : merge_bb;
+    std::map<int64_t, ir::IrBlockId> verify_bb;
+    for (int64_t L : distinct_lens)
+        verify_bb[L] = fn_->new_block("strmatch_verify");
+    std::vector<ir::IrBlockId> arm_blocks(e->arms.size(), ir::IR_NO_BLOCK);
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if ((ssize_t)i != default_arm_idx && e->arms[i].value_pattern)
+            arm_blocks[i] = fn_->new_block("strmatch_arm");
+
+    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
+        fn_->blocks[from].succs.push_back(to);
+        fn_->blocks[to].preds.push_back(from);
+    };
+
+    // Dispatch por LONGITUD (entero): SWITCH_DENSE si las longitudes son densas
+    // (comun: 3,4,5,6...), BST O(log N) si dispersas y muchas, else lineal.
+    std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
+    for (int64_t L : distinct_lens)
+        sw_cases.push_back({L, verify_bb[L]});
+    std::sort(sw_cases.begin(), sw_cases.end());
+    ir::IrValueId h_v = L_v; // el dispatch de abajo compara contra L_v
+    if (!sw_cases.empty()) {
+        const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
+        const int64_t range = hi - lo + 1, n = (int64_t)sw_cases.size();
+        if (lo >= 0 && n >= 4 && range >= n && range <= 2 * n && range <= 256) {
+            std::vector<uint32_t> table((size_t)range, (uint32_t)default_bb);
+            for (const auto &c : sw_cases)
+                table[(size_t)(c.first - lo)] = (uint32_t)c.second;
+            ir::IrInstr sd{};
+            sd.op = ir::IrOp::SWITCH_DENSE;
+            sd.type = ir::IrType::VOID;
+            sd.dst = ir::IR_NO_VALUE;
+            sd.operands = {L_v};
+            sd.imm = (uint64_t)lo;
+            sd.target_block = default_bb;
+            sd.jump_targets = std::move(table);
+            sd.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(sd));
+        }
+    }
+    const bool use_bst = sw_cases.size() >= 5;
+    if (use_bst) {
+        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
+            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
+                current_block_ = cur;
+                if (hi - lo <= 2) {
+                    for (size_t k = lo; k < hi; ++k) {
+                        ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                        ir::IrValueId tc = emit_const(
+                            ir::IrType::I64, (uint64_t)sw_cases[k].first,
+                            e->loc.line);
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_EQ;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = cmp;
+                        cm.operands = {h_v, tc};
+                        cm.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(cm));
+                        ir::IrBlockId nb = fn_->new_block("h_next");
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.operands.push_back(cmp);
+                        br.target_block = sw_cases[k].second;
+                        br.false_block = nb;
+                        br.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(br));
+                        sw_edge(current_block_, sw_cases[k].second);
+                        sw_edge(current_block_, nb);
+                        current_block_ = nb;
+                    }
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.target_block = default_bb;
+                    br.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(br));
+                    sw_edge(current_block_, default_bb);
+                    return;
+                }
+                const size_t mid = lo + (hi - lo) / 2;
+                ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                ir::IrValueId tc = emit_const(
+                    ir::IrType::I64, (uint64_t)sw_cases[mid].first, e->loc.line);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LT;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp;
+                cm.operands = {h_v, tc};
+                cm.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(cm));
+                ir::IrBlockId lb = fn_->new_block("h_lt");
+                ir::IrBlockId rb = fn_->new_block("h_ge");
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands.push_back(cmp);
+                br.target_block = lb;
+                br.false_block = rb;
+                br.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(br));
+                sw_edge(current_block_, lb);
+                sw_edge(current_block_, rb);
+                emit_bst(lo, mid, lb);
+                emit_bst(mid, hi, rb);
+            };
+        emit_bst(0, sw_cases.size(), current_block_);
+    } else {
+        for (const auto &c : sw_cases) {
+            ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+            ir::IrValueId tc =
+                emit_const(ir::IrType::I64, (uint64_t)c.first, e->loc.line);
+            ir::IrInstr cm{};
+            cm.op = ir::IrOp::CMP_EQ;
+            cm.type = ir::IrType::BOOL;
+            cm.dst = cmp;
+            cm.operands = {h_v, tc};
+            cm.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(cm));
+            ir::IrBlockId nb = fn_->new_block("h_next");
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(cmp);
+            br.target_block = c.second;
+            br.false_block = nb;
+            br.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, c.second);
+            sw_edge(current_block_, nb);
+            current_block_ = nb;
+        }
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = default_bb;
+        br.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(br));
+        sw_edge(current_block_, default_bb);
+    }
+
+    // Verify: en cada verify block, STRCMP del scrutinee contra cada case string
+    // del grupo (normalmente 1); ==0 -> arm body; ninguno -> default.
+    for (int64_t L : distinct_lens) {
+        current_block_ = verify_bb[L];
+        block_terminated_ = false;
+        for (size_t idx : by_len[L]) {
+            auto *sl =
+                static_cast<ast::StringLitExpr *>(e->arms[idx].value_pattern.get());
+            ir::IrValueId case_h = lower_string_literal_to_string_object(sl);
+            ir::IrValueId scmp = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr sc{};
+                sc.op = ir::IrOp::STRCMP;
+                sc.type = ir::IrType::I64;
+                sc.dst = scmp;
+                sc.operands = {s_h, case_h};
+                sc.source_line = e->arms[idx].loc.line;
+                fn_->append(current_block_, std::move(sc));
+            }
+            ir::IrValueId zero =
+                emit_const(ir::IrType::I64, 0, e->arms[idx].loc.line);
+            ir::IrValueId eqb = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_EQ;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = eqb;
+                cm.operands = {scmp, zero};
+                cm.source_line = e->arms[idx].loc.line;
+                fn_->append(current_block_, std::move(cm));
+            }
+            ir::IrBlockId vnext = fn_->new_block("strmatch_vnext");
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(eqb);
+            br.target_block = arm_blocks[idx];
+            br.false_block = vnext;
+            br.source_line = e->arms[idx].loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, arm_blocks[idx]);
+            sw_edge(current_block_, vnext);
+            current_block_ = vnext;
+            block_terminated_ = false;
+        }
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = default_bb;
+        br.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(br));
+        sw_edge(current_block_, default_bb);
+    }
+
+    // Bodies (con guard opcional: fallo del guard -> default) + merge.
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        const auto &arm = e->arms[i];
+        const ir::IrBlockId target =
+            ((ssize_t)i == default_arm_idx) ? default_bb : arm_blocks[i];
+        if (target == ir::IR_NO_BLOCK) continue;
+        current_block_ = target;
+        block_terminated_ = false;
+        push_scope();
+        if (arm.guard) {
+            ir::IrValueId g = lower_expr(arm.guard.get());
+            ir::IrBlockId body_bb = fn_->new_block("strmatch_body");
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(g);
+            br.target_block = body_bb;
+            br.false_block = default_bb;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, body_bb);
+            sw_edge(current_block_, default_bb);
+            current_block_ = body_bb;
+            block_terminated_ = false;
+        }
+        if (arm.body) lower_stmt(arm.body.get());
+        if (!block_terminated_) {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = merge_bb;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, merge_bb);
+        }
+        pop_scope();
+    }
+
+    current_block_ = merge_bb;
+    block_terminated_ = false;
+    return ir::IR_NO_VALUE;
+}
+
 ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     if (!e || !e->scrutinee) {
         error_at(e ? e->loc : SourceLoc{}, "lowering: match sin scrutinee");
         return ir::IR_NO_VALUE;
     }
-    // match ESCALAR (enteros/chars): scrutinee no-enum + arms con value_pattern.
+    // match ESCALAR (int/char) o STRING: scrutinee no-enum + arms value_pattern.
     const Type st = e->scrutinee->result_type;
     if (st.kind != PrimitiveKind::STRUCT) {
         bool any_value_arm = false;
         for (const auto &a : e->arms)
             if (a.value_pattern) { any_value_arm = true; break; }
+        if (st.kind == PrimitiveKind::STRING) return lower_match_string(e);
         if (any_value_arm) return lower_match_scalar(e);
     }
     // Tipo del scrutinee debe ser STRUCT con struct_name en

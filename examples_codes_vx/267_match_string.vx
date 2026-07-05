@@ -1,0 +1,45 @@
+// -----------------------------------------------------------------------------
+// match sobre STRINGS, hiper-eficiente (despacho por longitud + strcmp)
+// -----------------------------------------------------------------------------
+// `match` tambien despacha por una CADENA, evitando las O(N) comparaciones de
+// un if/else-if encadenado.  Estrategia (fast path primero):
+//
+//   1. LONGITUD en bytes: el discriminador MAS BARATO (O(1), sin mirar bytes).
+//      Se despacha por longitud; los inputs cuya longitud no coincide con
+//      ningun case caen a `_` (default) SIN un solo strcmp.
+//   2. Dentro de un grupo de la misma longitud, se verifica con `strcmp` (que
+//      ya compara bytes, longitudes iguales).  Normalmente 1 solo strcmp.
+//
+// Tipico: 1 comparacion de tamano + 1 strcmp, no N comparaciones de cadena.
+// El default `case _` es obligatorio (no se pueden enumerar todas las cadenas).
+//
+// NOTA: los strings son un tipo gestionado por GC.  El AOT es libre de GC POR
+// DISENO (nunca uso GC), asi que un match sobre strings corre en interprete y
+// JIT, donde vive el GC.  El match escalar (int/char) si es AOT-nativo: no
+// necesita GC.
+
+// Metodo HTTP -> codigo.  "GET" y "PUT" comparten longitud (3): mismo grupo, el
+// strcmp los desambigua.  "PATCH" (5) no coincide con ninguna longitud -> default
+// directo, sin strcmp.
+i32 metodo(string m) {
+    match (m) {
+        case "GET"     => return 1;
+        case "POST"    => return 2;
+        case "PUT"     => return 3;
+        case "DELETE"  => return 4;
+        case "OPTIONS" => return 5;
+        case _         => return 0;   // desconocido (obligatorio)
+    }
+    return -1;   // inalcanzable
+}
+
+i32 main() {
+    println("GET=${metodo("GET")} PUT=${metodo("PUT")} POST=${metodo("POST")}");
+    println("DELETE=${metodo("DELETE")} OPTIONS=${metodo("OPTIONS")}");
+    println("PATCH=${metodo("PATCH")}");   // 0 (longitud 5 no listada como tal)
+
+    // 1 + 30 + 200 + 4000 + 50000 + 0 = 54231
+    return metodo("GET") + metodo("PUT")*10 + metodo("POST")*100
+         + metodo("DELETE")*1000 + metodo("OPTIONS")*10000
+         + metodo("PATCH")*100000;
+}

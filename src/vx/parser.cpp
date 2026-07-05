@@ -3442,11 +3442,20 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
         // entero/char.
         const bool is_neg_int = (current_.kind == TokenKind::MINUS &&
                                  lex_.peek_at(0).kind == TokenKind::INT_LIT);
+        const bool is_str_pat = (current_.kind == TokenKind::STRING_LIT ||
+                                 current_.kind == TokenKind::RAW_STRING_LIT);
         const bool is_value_pat = (current_.kind == TokenKind::INT_LIT ||
                                    current_.kind == TokenKind::CHAR_LIT ||
-                                   is_neg_int);
+                                   is_neg_int || is_str_pat);
         if (is_value_pat) {
-            if (is_neg_int) {
+            if (is_str_pat) {
+                auto lit = std::make_unique<ast::StringLitExpr>();
+                lit->loc = current_.loc;
+                lit->is_raw = (current_.kind == TokenKind::RAW_STRING_LIT);
+                lit->value = current_.str_val;
+                (void)consume();
+                arm.value_pattern = std::move(lit);
+            } else if (is_neg_int) {
                 SourceLoc mloc = current_.loc;
                 (void)consume(); // '-'
                 auto lit = std::make_unique<ast::IntLitExpr>();

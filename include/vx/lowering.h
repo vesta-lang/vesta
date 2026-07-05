@@ -617,6 +617,12 @@ class Lowering {
     /// (O(log N)) si dispersos, cadena lineal si pocos o con guards.
     /// Statement-like (VOID); el valor se produce con `return` en cada arm.
     ir::IrValueId lower_match_scalar(ast::MatchExpr *e);
+    /// match sobre STRINGS.  Hiper-eficiente: computa el hash del scrutinee
+    /// (STRHASH) una vez, despacha por los hashes de los literales (calculados
+    /// en compile-time, mismo FNV-1a 32-bit que el runtime) via dispatch entero
+    /// (BST O(log N) / lineal), y en el candidato hace UN STRCMP de verificacion
+    /// (colisiones).  Tipico: 1 hash + 1 strcmp, no N comparaciones.
+    ir::IrValueId lower_match_string(ast::MatchExpr *e);
 
     /**
      * @brief Lower @c CastExpr `(T) operand`.
