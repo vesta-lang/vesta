@@ -1676,13 +1676,49 @@ int main(int argc, char *argv[]) {
         };
 
         if (want_json) {
-            // JSON con dos arrays: "pre" y "post".  Cada CostResult expone
-            // ya su "partial" (big_o) y "total" + calls[] para diagramas.
+            // JSON: coste (pre/post) + huella (recursos/efectos) + contratos.
+            auto jstr = [](const std::string &s) {
+                std::string o;
+                for (char c : s) {
+                    if (c == '"' || c == '\\') o.push_back('\\');
+                    o.push_back(c);
+                }
+                return o;
+            };
             std::ostringstream js;
             js << "{\"pre\":"
                << (have_pre ? analyze::module_cost_to_json(mc_pre)
                             : std::string("[]"))
-               << ",\"post\":" << analyze::module_cost_to_json(mc_post) << "}";
+               << ",\"post\":" << analyze::module_cost_to_json(mc_post);
+            // Huella por funcion.
+            js << ",\"fingerprint\":[";
+            for (size_t i = 0; i < fps_post.size(); ++i) {
+                const auto &f = fps_post[i];
+                if (i) js << ",";
+                js << "{\"function\":\"" << jstr(f.function) << "\",\"allocs\":"
+                   << f.alloc_sites_total << ",\"stack\":" << f.stack_bytes
+                   << ",\"pure\":" << (f.pure ? "true" : "false")
+                   << ",\"throws\":" << (f.throws_total ? "true" : "false")
+                   << ",\"panics\":" << (f.panics_total ? "true" : "false")
+                   << ",\"recursion\":" << (f.recursive ? "true" : "false")
+                   << ",\"effects_known\":" << (f.effects_known ? "true" : "false")
+                   << "}";
+            }
+            js << "]";
+            // Contratos verificados.
+            js << ",\"contracts\":[";
+            for (size_t i = 0; i < contract_checks.size(); ++i) {
+                const auto &ck = contract_checks[i];
+                if (i) js << ",";
+                const char *st =
+                    ck.status == analyze::ContractCheck::OK          ? "ok"
+                    : ck.status == analyze::ContractCheck::VIOLATED  ? "violated"
+                                                                     : "unverifiable";
+                js << "{\"function\":\"" << jstr(ck.function) << "\",\"contract\":\""
+                   << jstr(ck.contract) << "\",\"status\":\"" << st
+                   << "\",\"detail\":\"" << jstr(ck.detail) << "\"}";
+            }
+            js << "]}";
             std::cout << js.str() << "\n";
             return EXIT_SUCCESS;
         }
