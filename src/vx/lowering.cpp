@@ -14772,6 +14772,59 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         return lower_expr(e->macro_expanded.get());
     }
 
+    // `Tipo.default([{...}])` / `val.default([{...}])`: struct con sus valores
+    // por defecto (+ overrides opcionales).  Reutiliza zero-fill + defaults de
+    // campo + init-list.  Forma estatica (base = nombre de struct) aloca un
+    // struct fresco; forma de instancia (base = variable struct) lo resetea.
+    if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr &&
+        e->result_type.kind == PrimitiveKind::STRUCT) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        if (fa->field_name == "default") {
+            const std::string &sname = e->result_type.struct_name;
+            auto it = tc_.struct_layouts().find(sname);
+            if (it != tc_.struct_layouts().end()) {
+                const StructLayout &lay = it->second;
+                bool is_static = false;
+                if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+                    const std::string &bn =
+                        static_cast<ast::IdentExpr *>(fa->base.get())->name;
+                    if (lookup(bn) == ir::IR_NO_VALUE &&
+                        tc_.struct_layouts().count(bn))
+                        is_static = true;
+                }
+                ir::IrValueId addr;
+                if (is_static) {
+                    addr = fn_->new_value(ir::IrType::PTR);
+                    ir::IrInstr al{};
+                    al.op = ir::IrOp::ALLOCA;
+                    al.type = ir::IrType::I8;
+                    al.dst = addr;
+                    al.imm = (uint64_t)lay.size_bytes;
+                    al.source_line = e->loc.line;
+                    if (native_poo_) al.host_alloca = true;
+                    fn_->append(current_block_, std::move(al));
+                    if (native_poo_) fn_->values[addr].is_host_ptr = true;
+                } else {
+                    addr = lower_expr(fa->base.get());
+                    if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                }
+                emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
+                if (e->args.size() == 1 &&
+                    e->args[0]->kind == ast::NodeKind::InitListExpr) {
+                    // emit_struct_init_fields ya aplica los defaults + el
+                    // override; evita duplicar los defaults.
+                    emit_struct_init_fields(
+                        addr, lay,
+                        static_cast<ast::InitListExpr *>(e->args[0].get()),
+                        e->loc.line);
+                } else {
+                    emit_struct_field_defaults(addr, lay, e->loc.line);
+                }
+                return addr;
+            }
+        }
+    }
+
     // Function pointers: llamada INDIRECTA.  Evaluamos el callee a un SSA
     // value (la direccion del codigo: una variable fn(...), un cast, etc.) y
     // emitimos CALLIND con func_ptr = ese valor.  El tipo de retorno viene

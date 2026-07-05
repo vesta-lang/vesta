@@ -1,0 +1,64 @@
+// -----------------------------------------------------------------------------
+// Valores por defecto de campos + inicializacion concisa de structs
+// -----------------------------------------------------------------------------
+// Vesta permite dar a cada campo de un struct un VALOR POR DEFECTO con la
+// sintaxis C++ `tipo campo = valor;`.  A partir de ahi:
+//
+//   * `Valores v = {};`        -> todos los campos a su valor por defecto.
+//   * `Valores v = {.b = X};`  -> los listados toman su valor, el resto el default.
+//   * `Valores v;`             -> declaracion sin init: tambien aplica defaults.
+//   * `Valores.default()`      -> (forma estatica) instancia nueva con defaults.
+//   * `v.default()`            -> (forma de instancia) resetea v a sus defaults.
+//   * `v.default({.b = X})`    -> resetea a defaults pero con overrides puntuales.
+//
+// SEGURIDAD: los campos SIN valor por defecto y NO listados se ponen a 0 (nunca
+// basura de la pila).  Todo esto funciona en interprete, JIT y AOT, y tambien
+// con structs genericos (templates).
+
+struct Valores {
+    u8 a = 0x10;
+    u8 b = 0x20;
+    i32 c = 100;   // los defaults pueden ser de cualquier tipo primitivo
+}
+
+// Struct generico: los defaults se conservan al monomorphizar `Caja<T>`.
+struct Caja<T> {
+    T   val;        // sin default -> 0
+    u8  tag = 0x7;  // default conservado en cada instanciacion
+}
+
+i32 sumar(Valores v) {
+    return (i32)v.a + (i32)v.b + v.c;
+}
+
+i32 main() {
+    // 1. `= {}` -> todos los defaults: 16 + 32 + 100 = 148.
+    Valores full = {};
+    i32 s1 = sumar(full);
+    println("full   = ${s1}");                       // 148
+
+    // 2. Init parcial: b explicito, a y c por defecto: 16 + 5 + 100 = 121.
+    Valores parc = {.b = 5};
+    println("parcial= ${sumar(parc)}");              // 121
+
+    // 3. Forma estatica: instancia nueva con defaults.
+    Valores est = Valores.default();
+    println("estatic= ${sumar(est)}");               // 148
+
+    // 4. Mutar y luego resetear a defaults con `.default()`.
+    est.a = 0x77; est.b = 0x77; est.c = 7;
+    est.default();
+    println("reset  = ${sumar(est)}");               // 148
+
+    // 5. Reset con overrides puntuales: a y c por defecto, b = 50.
+    est.default({.b = 50});
+    println("reset+ov=${(i32)est.a} ${(i32)est.b} ${est.c}");  // 16 50 100
+
+    // 6. Generico: el default de `tag` (0x7) se conserva.
+    Caja<i64> caja = {.val = 42};
+    println("caja   = val=${caja.val} tag=${(i32)caja.tag}");  // val=42 tag=7
+    caja.default({.val = 99});
+    println("caja2  = val=${caja.val} tag=${(i32)caja.tag}");  // val=99 tag=7
+
+    return 0;
+}

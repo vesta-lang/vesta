@@ -606,6 +606,10 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         nf.name = f.name;
         nf.bit_width = f.bit_width;
         nf.type = clone_type_with_subst(f.type.get(), g);
+        // Clonar el valor por defecto del campo (`u8 tag = 0x7`) para que el
+        // struct monomorphizado conserve sus defaults.
+        if (f.default_init)
+            nf.default_init = clone_expr(f.default_init.get(), g);
         cloned->fields.push_back(std::move(nf));
     }
     // Clonar metodos (dtor `__dtor`, copy-hook `__clone__`, y metodos normales;
@@ -8882,6 +8886,47 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // como codigo runtime (se pliegan en compile-time via el ComptimeRuntime),
     // asi que reescribimos el callee al nombre mangled desnudo (`mod__sq`) para
     // que la maquinaria de bare-call comptime/macro lo maneje uniformemente.
+    // `Tipo.default([{...}])` / `val.default([{...}])`: crea o resetea un struct
+    // con sus valores por defecto (+ overrides opcionales via un init-list).  El
+    // tipo resultado es el propio struct.  Funciona con templates: la forma de
+    // instancia usa el tipo ya monomorphizado del receptor.
+    if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa0 = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        if (fa0->field_name == "default") {
+            std::string sname;
+            // Forma estatica: la base es el NOMBRE de un struct conocido.
+            if (fa0->base && fa0->base->kind == ast::NodeKind::IdentExpr) {
+                const std::string &bn =
+                    static_cast<ast::IdentExpr *>(fa0->base.get())->name;
+                if (struct_layouts_.count(bn)) sname = bn;
+            }
+            // Forma de instancia: la base es un valor struct (incl. templates).
+            if (sname.empty()) {
+                Type bt = check_expr(fa0->base.get());
+                if (bt.kind == PrimitiveKind::STRUCT) sname = bt.struct_name;
+            }
+            if (!sname.empty()) {
+                if (e->args.size() > 1) {
+                    diags_.error(e->loc,
+                                 "default() acepta a lo sumo un '{...}' de "
+                                 "overrides");
+                } else if (e->args.size() == 1 &&
+                           e->args[0]->kind != ast::NodeKind::InitListExpr) {
+                    diags_.error(e->loc,
+                                 "el argumento de default() debe ser un "
+                                 "init-list '{...}'");
+                } else if (e->args.size() == 1) {
+                    (void)check_expr(e->args[0].get()); // valida el init-list.
+                }
+                Type rt;
+                rt.kind = PrimitiveKind::STRUCT;
+                rt.struct_name = sname;
+                e->result_type = rt;
+                return rt;
+            }
+        }
+    }
+
     if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
         std::string ns_path;
