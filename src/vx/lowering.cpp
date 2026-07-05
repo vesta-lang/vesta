@@ -10380,15 +10380,245 @@ ir::IrValueId Lowering::lower_enum_constructor(
     return addr;
 }
 
+// Evalua un patron de valor de un match escalar (IntLit / CharLit / -IntLit)
+// a int64.  Los patrones estan validados por el type checker.
+static int64_t eval_scalar_pattern(const ast::Expr *p) {
+    if (!p) return 0;
+    if (p->kind == ast::NodeKind::IntLitExpr)
+        return (int64_t)static_cast<const ast::IntLitExpr *>(p)->value;
+    if (p->kind == ast::NodeKind::CharLitExpr)
+        return (int64_t)static_cast<const ast::CharLitExpr *>(p)->codepoint;
+    if (p->kind == ast::NodeKind::UnaryExpr) {
+        const auto *u = static_cast<const ast::UnaryExpr *>(p);
+        if (u->op == ast::UnOp::Neg)
+            return -eval_scalar_pattern(u->operand.get());
+    }
+    return 0;
+}
+
+ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
+    // 1. Valor del scrutinee (entero/char).  Se compara como i64.
+    ir::IrValueId tag_v = lower_expr(e->scrutinee.get());
+    if (tag_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+
+    const ir::IrBlockId merge_bb = fn_->new_block("smatch_end");
+    ssize_t default_arm_idx = -1;
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if (!e->arms[i].value_pattern && e->arms[i].variant_name == "_") {
+            default_arm_idx = (ssize_t)i;
+            break;
+        }
+    ir::IrBlockId default_bb =
+        (default_arm_idx >= 0) ? fn_->new_block("smatch_default") : merge_bb;
+
+    std::vector<ir::IrBlockId> arm_blocks(e->arms.size(), ir::IR_NO_BLOCK);
+    std::vector<ir::IrBlockId> arm_fall_bbs(e->arms.size(), ir::IR_NO_BLOCK);
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if ((ssize_t)i != default_arm_idx && e->arms[i].value_pattern)
+            arm_blocks[i] = fn_->new_block("smatch_arm");
+
+    bool any_guard = false;
+    for (const auto &a : e->arms)
+        if (a.guard) { any_guard = true; break; }
+
+    std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern) continue;
+        sw_cases.push_back(
+            {eval_scalar_pattern(e->arms[i].value_pattern.get()), arm_blocks[i]});
+    }
+    std::sort(sw_cases.begin(), sw_cases.end());
+
+    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
+        fn_->blocks[from].succs.push_back(to);
+        fn_->blocks[to].preds.push_back(from);
+    };
+
+    // Dispatch DENSO O(1): marker SWITCH_DENSE (island nativo en JIT).
+    if (!any_guard && sw_cases.size() >= 4) {
+        const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
+        const int64_t range = hi - lo + 1, n = (int64_t)sw_cases.size();
+        if (lo >= 0 && range >= n && range <= 2 * n && range <= 256) {
+            std::vector<uint32_t> table((size_t)range, (uint32_t)default_bb);
+            for (const auto &c : sw_cases)
+                table[(size_t)(c.first - lo)] = (uint32_t)c.second;
+            ir::IrInstr sd{};
+            sd.op = ir::IrOp::SWITCH_DENSE;
+            sd.type = ir::IrType::VOID;
+            sd.dst = ir::IR_NO_VALUE;
+            sd.operands = {tag_v};
+            sd.imm = (uint64_t)lo;
+            sd.target_block = default_bb;
+            sd.jump_targets = std::move(table);
+            sd.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(sd));
+        }
+    }
+
+    const bool use_bst = !any_guard && sw_cases.size() >= 5;
+    if (use_bst) {
+        // BST balanceado O(log N): cmp_lt en nodos, cmp_eq en hojas.
+        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
+            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
+                current_block_ = cur;
+                if (hi - lo <= 2) {
+                    for (size_t k = lo; k < hi; ++k) {
+                        ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                        ir::IrValueId tc = emit_const(
+                            ir::IrType::I64, (uint64_t)sw_cases[k].first,
+                            e->loc.line);
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_EQ;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = cmp;
+                        cm.operands = {tag_v, tc};
+                        cm.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(cm));
+                        ir::IrBlockId nb = fn_->new_block("s_next");
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.operands.push_back(cmp);
+                        br.target_block = sw_cases[k].second;
+                        br.false_block = nb;
+                        br.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(br));
+                        sw_edge(current_block_, sw_cases[k].second);
+                        sw_edge(current_block_, nb);
+                        current_block_ = nb;
+                    }
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.target_block = default_bb;
+                    br.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(br));
+                    sw_edge(current_block_, default_bb);
+                    return;
+                }
+                const size_t mid = lo + (hi - lo) / 2;
+                ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                ir::IrValueId tc = emit_const(
+                    ir::IrType::I64, (uint64_t)sw_cases[mid].first, e->loc.line);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LT;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp;
+                cm.operands = {tag_v, tc};
+                cm.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(cm));
+                ir::IrBlockId lb = fn_->new_block("s_lt");
+                ir::IrBlockId rb = fn_->new_block("s_ge");
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands.push_back(cmp);
+                br.target_block = lb;
+                br.false_block = rb;
+                br.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(br));
+                sw_edge(current_block_, lb);
+                sw_edge(current_block_, rb);
+                emit_bst(lo, mid, lb);
+                emit_bst(mid, hi, rb);
+            };
+        emit_bst(0, sw_cases.size(), current_block_);
+    } else {
+        // Cadena lineal (pocos casos o con guards).
+        for (size_t i = 0; i < e->arms.size(); ++i) {
+            if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern)
+                continue;
+            ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+            ir::IrValueId tc = emit_const(
+                ir::IrType::I64,
+                (uint64_t)eval_scalar_pattern(e->arms[i].value_pattern.get()),
+                e->arms[i].loc.line);
+            ir::IrInstr cm{};
+            cm.op = ir::IrOp::CMP_EQ;
+            cm.type = ir::IrType::BOOL;
+            cm.dst = cmp;
+            cm.operands = {tag_v, tc};
+            cm.source_line = e->arms[i].loc.line;
+            fn_->append(current_block_, std::move(cm));
+            ir::IrBlockId fall = fn_->new_block("smatch_next");
+            arm_fall_bbs[i] = fall;
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(cmp);
+            br.target_block = arm_blocks[i];
+            br.false_block = fall;
+            br.source_line = e->arms[i].loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, arm_blocks[i]);
+            sw_edge(current_block_, fall);
+            current_block_ = fall;
+            block_terminated_ = false;
+        }
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = default_bb;
+        br.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(br));
+        sw_edge(current_block_, default_bb);
+    }
+
+    // 4. Bodies (con guard opcional).
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        const auto &arm = e->arms[i];
+        const ir::IrBlockId target =
+            ((ssize_t)i == default_arm_idx) ? default_bb : arm_blocks[i];
+        if (target == ir::IR_NO_BLOCK) continue;
+        current_block_ = target;
+        block_terminated_ = false;
+        push_scope();
+        if (arm.guard) {
+            ir::IrValueId g = lower_expr(arm.guard.get());
+            ir::IrBlockId body_bb = fn_->new_block("smatch_body");
+            ir::IrBlockId gfall = (arm_fall_bbs[i] != ir::IR_NO_BLOCK)
+                                      ? arm_fall_bbs[i]
+                                      : default_bb;
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(g);
+            br.target_block = body_bb;
+            br.false_block = gfall;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, body_bb);
+            sw_edge(current_block_, gfall);
+            current_block_ = body_bb;
+            block_terminated_ = false;
+        }
+        if (arm.body) lower_stmt(arm.body.get());
+        if (!block_terminated_) {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = merge_bb;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, merge_bb);
+        }
+        pop_scope();
+    }
+
+    current_block_ = merge_bb;
+    block_terminated_ = false;
+    return ir::IR_NO_VALUE; // statement-like (VOID)
+}
+
 ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     if (!e || !e->scrutinee) {
         error_at(e ? e->loc : SourceLoc{}, "lowering: match sin scrutinee");
         return ir::IR_NO_VALUE;
     }
+    // match ESCALAR (enteros/chars): scrutinee no-enum + arms con value_pattern.
+    const Type st = e->scrutinee->result_type;
+    if (st.kind != PrimitiveKind::STRUCT) {
+        bool any_value_arm = false;
+        for (const auto &a : e->arms)
+            if (a.value_pattern) { any_value_arm = true; break; }
+        if (any_value_arm) return lower_match_scalar(e);
+    }
     // Tipo del scrutinee debe ser STRUCT con struct_name en
     // enum_layouts_.  Si no, el type checker ya reporto error y
     // devolvemos NO_VALUE silenciosamente para no inundar.
-    const Type st = e->scrutinee->result_type;
     if (st.kind != PrimitiveKind::STRUCT) return ir::IR_NO_VALUE;
     const auto &elays = tc_.enum_layouts();
     auto it = elays.find(st.struct_name);

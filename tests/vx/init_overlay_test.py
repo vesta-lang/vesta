@@ -43,6 +43,7 @@ CASES = [
     ("examples_codes_vx/263_overlay_block.vx", 1337),
     ("examples_codes_vx/264_overlay_block_if.vx", 666),
     ("examples_codes_vx/265_overlay_scan.vx", 140),
+    ("examples_codes_vx/266_match_int.vx", 9334),
 ]
 
 

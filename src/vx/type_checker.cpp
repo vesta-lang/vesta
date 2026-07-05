@@ -2689,7 +2689,13 @@ void TypeChecker::collect_globals() {
                                              f.name + "' debe evaluar a un entero");
                         } else if (f.offset_block) {
                             // El bloque devuelve una DIRECCION y ve `base` (el
-                            // puntero de la vista), en un scope propio.
+                            // puntero de la vista), en un scope propio.  El
+                            // return type del resolver es u64: lo fijamos en
+                            // @c current_fn_return_type_ para que los `return`
+                            // (directos y dentro de un `match`) validen contra
+                            // u64 (check_match usa el miembro, no el param).
+                            const Type saved_ret = current_fn_return_type_;
+                            current_fn_return_type_ = Type{PrimitiveKind::U64};
                             push_scope();
                             Symbol bsym;
                             bsym.kind = SymbolKind::Variable;
@@ -2698,6 +2704,7 @@ void TypeChecker::collect_globals() {
                             check_block(f.offset_block.get(),
                                         Type{PrimitiveKind::U64});
                             pop_scope();
+                            current_fn_return_type_ = saved_ret;
                         }
                     }
                     pop_scope();
@@ -6858,6 +6865,66 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
     }
     const Type st = check_expr(e->scrutinee.get());
     e->scrutinee->result_type = st;
+
+    // ---- match sobre ESCALARES (enteros/chars), estilo switch ----
+    // El scrutinee es entero/char y las arms usan patrones de VALOR
+    // (`case 1 =>`, `case 'a' =>`) + `case _ =>` default (obligatorio: no se
+    // puede enumerar el rango).  Dispatch eficiente en el lowering (jumptable
+    // denso / busqueda binaria dispersa).  Statement-like (VOID), como el
+    // match de enums; el valor se produce con `return` dentro de cada arm.
+    auto is_int_or_char = [](PrimitiveKind k) {
+        return k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+               k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+               k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+               k == PrimitiveKind::U32 || k == PrimitiveKind::U64 ||
+               k == PrimitiveKind::CHAR;
+    };
+    bool any_value_arm = false;
+    for (auto &a : e->arms)
+        if (a.value_pattern) { any_value_arm = true; break; }
+    if (any_value_arm || (st.kind != PrimitiveKind::STRUCT &&
+                          is_int_or_char(st.kind))) {
+        if (!is_int_or_char(st.kind)) {
+            diags_.error(e->scrutinee->loc,
+                         "match con patrones de valor requiere un scrutinee "
+                         "entero o char, recibido " + type_to_string(st));
+            return Type{PrimitiveKind::VOID};
+        }
+        bool has_default = false;
+        for (auto &arm : e->arms) {
+            if (arm.value_pattern) {
+                Type pt = check_expr(arm.value_pattern.get());
+                if (!is_int_or_char(pt.kind)) {
+                    diags_.error(arm.loc,
+                                 "el patron de un match escalar debe ser un "
+                                 "literal entero o char");
+                }
+            } else if (arm.variant_name == "_") {
+                has_default = true;
+            } else {
+                diags_.error(arm.loc,
+                             "en un match escalar los patrones deben ser "
+                             "literales enteros/char o '_' (default)");
+            }
+            if (arm.guard) {
+                Type tg = check_expr(arm.guard.get());
+                if (tg.kind != PrimitiveKind::BOOL && !is_numeric(tg.kind) &&
+                    tg.kind != PrimitiveKind::COUNT)
+                    diags_.error(arm.loc,
+                                 "el guard del case debe ser booleano");
+            }
+            push_scope();
+            if (arm.body) check_stmt(arm.body.get(), current_fn_return_type_);
+            pop_scope();
+        }
+        if (!has_default) {
+            diags_.error(e->loc,
+                         "match escalar no exhaustivo: anyade 'case _ =>' como "
+                         "default (no se puede enumerar todo el rango entero)");
+        }
+        return Type{PrimitiveKind::VOID};
+    }
+
     if (st.kind != PrimitiveKind::STRUCT) {
         diags_.error(e->scrutinee->loc,
                      std::string("match: el scrutinee debe ser un valor de "

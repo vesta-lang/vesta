@@ -978,6 +978,11 @@ struct MatchArm {
     std::string variant_name; ///< "Red", "Green", "_" (default), etc.
     std::vector<std::string>
         bindings; ///< Nombres locales para los payload fields.
+    /// Patron de VALOR para `match` sobre escalares (enteros/chars): `case 1 =>`,
+    /// `case 'a' =>`.  no-owning-al-cuerpo IntLitExpr/CharLitExpr.  null en las
+    /// arms de variante ADT y en el default `_`.  El type checker exige que el
+    /// scrutinee sea entero/char y todos los patrones literales de ese tipo.
+    std::unique_ptr<Expr> value_pattern;
     std::unique_ptr<Stmt> body;
     /// Bug fix 2026-05-23: guard opcional `case Pat if expr =>`.  Si
     /// presente, el lowering evalua la expr DESPUES del tag match;

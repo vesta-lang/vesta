@@ -612,6 +612,11 @@ class Lowering {
      * @return @c IR_NO_VALUE (match es statement-like en MVP).
      */
     ir::IrValueId lower_match_expr(ast::MatchExpr *e);
+    /// match sobre ESCALARES (enteros/chars), estilo switch.  Dispatch
+    /// eficiente: SWITCH_DENSE (O(1)) si los casos son densos, BST balanceado
+    /// (O(log N)) si dispersos, cadena lineal si pocos o con guards.
+    /// Statement-like (VOID); el valor se produce con `return` en cada arm.
+    ir::IrValueId lower_match_scalar(ast::MatchExpr *e);
 
     /**
      * @brief Lower @c CastExpr `(T) operand`.

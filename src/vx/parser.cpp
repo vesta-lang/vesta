@@ -3435,6 +3435,45 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
         // el patron `Color.Red(...)`, pero internamente almacenamos solo
         // la parte tras el ultimo `.` ya que el match scrutinee fija el
         // tipo enum y el variant_name es suficiente.
+        //
+        // Patron de VALOR escalar (match sobre enteros/chars): `case 1 =>`,
+        // `case 'a' =>`, `case -3 =>`.  Se guarda en @c value_pattern y el arm
+        // NO lleva variant_name (queda vacio).  El type checker exige scrutinee
+        // entero/char.
+        const bool is_neg_int = (current_.kind == TokenKind::MINUS &&
+                                 lex_.peek_at(0).kind == TokenKind::INT_LIT);
+        const bool is_value_pat = (current_.kind == TokenKind::INT_LIT ||
+                                   current_.kind == TokenKind::CHAR_LIT ||
+                                   is_neg_int);
+        if (is_value_pat) {
+            if (is_neg_int) {
+                SourceLoc mloc = current_.loc;
+                (void)consume(); // '-'
+                auto lit = std::make_unique<ast::IntLitExpr>();
+                lit->loc = current_.loc;
+                lit->value = current_.int_val;
+                (void)consume(); // INT_LIT
+                auto neg = std::make_unique<ast::UnaryExpr>();
+                neg->loc = mloc;
+                neg->op = ast::UnOp::Neg;
+                neg->operand = std::move(lit);
+                arm.value_pattern = std::move(neg);
+            } else if (current_.kind == TokenKind::INT_LIT) {
+                auto lit = std::make_unique<ast::IntLitExpr>();
+                lit->loc = current_.loc;
+                lit->value = current_.int_val;
+                (void)consume();
+                arm.value_pattern = std::move(lit);
+            } else { // CHAR_LIT
+                auto lit = std::make_unique<ast::CharLitExpr>();
+                lit->loc = current_.loc;
+                lit->codepoint = (uint32_t)current_.int_val;
+                (void)consume();
+                arm.value_pattern = std::move(lit);
+            }
+            // Cae al flujo compartido de guard + `=>` + body (variant_name
+            // queda vacio: es un arm de VALOR, no de variante ni default).
+        } else {
         if (current_.kind != TokenKind::IDENTIFIER) {
             error_here("se esperaba un nombre de variante o '_' tras 'case'");
             synchronize();
@@ -3468,6 +3507,7 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar bindings del patron");
         }
+        } // fin del path de variante ADT (else del patron de valor)
         // Bug fix 2026-05-23: match guards `case Pat if cond =>`.
         // Tras parsear el patron (con o sin bindings), aceptar `if expr`
         // opcional antes del `=>`.  La expr se guarda en @c arm.guard
