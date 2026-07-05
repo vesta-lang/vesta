@@ -187,6 +187,67 @@ void rewrite_refs_in_expr_(
         rewrite_refs_in_expr_(tn->else_expr.get(), rename_map);
         break;
     }
+    // NS.1 fix: nodos que faltaban en el walker -> referencias a simbolos del
+    // namespace dentro de estos NO se re-manglaban (bug: `${fn()}`, lambdas,
+    // match, spawn, init-lists, super(...), try-op).
+    case ast::NodeKind::StringLitExpr: {
+        auto *sl = static_cast<ast::StringLitExpr *>(e);
+        for (auto &ie : sl->interp_exprs)
+            rewrite_refs_in_expr_(ie.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::TryExpr: {
+        auto *te = static_cast<ast::TryExpr *>(e);
+        rewrite_refs_in_expr_(te->operand.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::SpawnExpr: {
+        auto *sp = static_cast<ast::SpawnExpr *>(e);
+        rewrite_refs_in_expr_(sp->sched_idx.get(), rename_map);
+        rewrite_refs_in_stmt_(sp->body.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::RSpawnExpr: {
+        auto *rs = static_cast<ast::RSpawnExpr *>(e);
+        rewrite_refs_in_expr_(rs->node_idx.get(), rename_map);
+        rewrite_refs_in_stmt_(rs->body.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::LambdaExpr: {
+        auto *lm = static_cast<ast::LambdaExpr *>(e);
+        for (auto &p : lm->params)
+            rewrite_refs_in_type_(p->type.get(), rename_map);
+        rewrite_refs_in_type_(lm->return_type.get(), rename_map);
+        rewrite_refs_in_stmt_(lm->body.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::MatchExpr: {
+        auto *mt = static_cast<ast::MatchExpr *>(e);
+        rewrite_refs_in_expr_(mt->scrutinee.get(), rename_map);
+        for (auto &arm : mt->arms) {
+            rewrite_refs_in_expr_(arm.guard.get(), rename_map);
+            rewrite_refs_in_stmt_(arm.body.get(), rename_map);
+        }
+        break;
+    }
+    case ast::NodeKind::SuperCallExpr: {
+        auto *sc = static_cast<ast::SuperCallExpr *>(e);
+        for (auto &a : sc->args)
+            rewrite_refs_in_expr_(a.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::SuperMethodCallExpr: {
+        auto *sm = static_cast<ast::SuperMethodCallExpr *>(e);
+        for (auto &a : sm->args)
+            rewrite_refs_in_expr_(a.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::InitListExpr: {
+        auto *il = static_cast<ast::InitListExpr *>(e);
+        for (auto &el : il->elements)
+            rewrite_refs_in_expr_(el.get(), rename_map);
+        break;
+    }
     default: break;
     }
 }
@@ -237,6 +298,55 @@ void rewrite_refs_in_stmt_(
     case ast::NodeKind::ReturnStmt: {
         auto *r = static_cast<ast::ReturnStmt *>(s);
         rewrite_refs_in_expr_(r->value.get(), rename_map);
+        break;
+    }
+    // NS.1 fix: stmts que faltaban en el walker.
+    case ast::NodeKind::DoWhileStmt: {
+        auto *dw = static_cast<ast::DoWhileStmt *>(s);
+        rewrite_refs_in_stmt_(dw->body.get(), rename_map);
+        rewrite_refs_in_expr_(dw->cond.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::ForEachStmt: {
+        auto *fe = static_cast<ast::ForEachStmt *>(s);
+        rewrite_refs_in_type_(fe->iter_type.get(), rename_map);
+        rewrite_refs_in_expr_(fe->iter_expr.get(), rename_map);
+        rewrite_refs_in_stmt_(fe->body.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::ThrowStmt: {
+        auto *th = static_cast<ast::ThrowStmt *>(s);
+        rewrite_refs_in_expr_(th->value.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::TryStmt: {
+        auto *ts = static_cast<ast::TryStmt *>(s);
+        rewrite_refs_in_stmt_(ts->body.get(), rename_map);
+        for (auto &c : ts->catches) {
+            auto it = rename_map.find(c.exc_class_name);
+            if (it != rename_map.end()) c.exc_class_name = it->second;
+            rewrite_refs_in_stmt_(c.body.get(), rename_map);
+        }
+        rewrite_refs_in_stmt_(ts->finally_body.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::SynchronizedStmt: {
+        auto *sy = static_cast<ast::SynchronizedStmt *>(s);
+        rewrite_refs_in_expr_(sy->target.get(), rename_map);
+        rewrite_refs_in_stmt_(sy->body.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::ComptimeBlockStmt: {
+        auto *cb = static_cast<ast::ComptimeBlockStmt *>(s);
+        for (auto &st : cb->stmts)
+            rewrite_refs_in_stmt_(st.get(), rename_map);
+        break;
+    }
+    case ast::NodeKind::ComptimeForStmt: {
+        auto *cf = static_cast<ast::ComptimeForStmt *>(s);
+        rewrite_refs_in_expr_(cf->lo_expr.get(), rename_map);
+        rewrite_refs_in_expr_(cf->hi_expr.get(), rename_map);
+        rewrite_refs_in_stmt_(cf->body.get(), rename_map);
         break;
     }
     default: break;

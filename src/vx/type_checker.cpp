@@ -3506,11 +3506,20 @@ void TypeChecker::compute_struct_categories() {
 // ---------------------------------------------------------------------
 
 void TypeChecker::check_functions() {
-    for (auto &decl : mod_.decls) {
+    // Fix (generic-fn inference): las monomorphizaciones por INFERENCIA
+    // (`usa(p)` sin type-arg explicito) se crean DURANTE este check (en
+    // check_call) y se anyaden al FINAL de mod_.decls.  Iteramos por INDICE
+    // re-evaluando size() cada vuelta para que esos clones nuevos tambien se
+    // chequeen (sin esto su body queda sin result_types -> el lowering falla
+    // con "callee no es identificador" al bajar `v.metodo()`).  El puntero al
+    // objeto es estable ante realloc del vector (los unique_ptr mueven de slot
+    // pero el objeto apuntado no), asi que `fn`/`gv` siguen validos.
+    for (size_t di_ = 0; di_ < mod_.decls.size(); ++di_) {
+        ast::Node *decl = mod_.decls[di_].get();
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) {
             // Globales: si tienen init, chequear el tipo.
             if (decl && decl->kind == ast::NodeKind::GlobalVarDecl) {
-                auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
+                auto *gv = static_cast<ast::GlobalVarDecl *>(decl);
                 if (gv->init) {
                     Type t = check_expr(gv->init.get());
                     const Type want = type_from_node(gv->type.get());
@@ -3617,7 +3626,7 @@ void TypeChecker::check_functions() {
             }
             continue;
         }
-        auto *fn = static_cast<ast::FunctionDecl *>(decl.get());
+        auto *fn = static_cast<ast::FunctionDecl *>(decl);
         if (!fn->body) continue;
         // Templates genericos RUNTIME: NO se type-checkea el body del template
         // (su `T` no esta resuelto -> resolveria a void).  Solo se chequean sus
