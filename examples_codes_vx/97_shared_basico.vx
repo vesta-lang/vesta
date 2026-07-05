@@ -1,3 +1,5 @@
+namespace ejemplos.shared_basico;
+
 // Test basico de shared<T>:
 //   - shared_box(value) crea un control block GC-managed con refcount=1
 //   - ptr_of(s) devuelve un puntero al payload (ctrl + 16)

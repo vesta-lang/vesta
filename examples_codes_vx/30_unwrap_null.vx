@@ -1,3 +1,5 @@
+namespace ejemplos.unwrap_null;
+
 // unwrap de null lanza NullPointerException; capturable
 // con try/catch (catch-all en MVP, ya que la excepcion no tiene
 // ClassInfo asignada en el bytecode `unwrap`).

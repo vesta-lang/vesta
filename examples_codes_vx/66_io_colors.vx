@@ -1,3 +1,5 @@
+namespace ejemplos.io_colors;
+
 // I/O con colores ANSI: identificadores magicos RED/GREEN/BOLD/RESET
 // que se interpolan dentro de strings sin alocacion en runtime.
 //

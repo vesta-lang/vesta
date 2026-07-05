@@ -1,3 +1,5 @@
+namespace ejemplos.shared_wraps_gc;
+
 // examples_codes_vx/236_shared_wraps_gc.vx
 //
 // Combinacion de modelos de memoria: shared<gc<T>>.  Un smart pointer

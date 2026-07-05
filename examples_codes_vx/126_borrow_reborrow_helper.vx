@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_reborrow_helper;
+
 // Patron Rust idiomatic: una funcion auxiliar acepta &mut T y dentro
 // hace reborrow al llamar a otra funcion, todo sin perder el ownership
 // original.  Imita:

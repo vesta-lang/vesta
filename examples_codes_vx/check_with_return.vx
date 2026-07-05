@@ -1,3 +1,5 @@
+namespace ejemplos.check_with_return;
+
 // Test: factory que usa unique_with con tracking deleter.
 
 class C {

@@ -1,3 +1,5 @@
+namespace ejemplos.unique_wraps_rawptr;
+
 // combo memoria: unique<T*> que envuelve un PUNTERO RAW (bug2).
 // Un `i64*` es un VALOR de 8 bytes (no un host_ptr a un objeto gestionado),
 // asi que unique_box lo caja en una celda heap de 8 bytes.  `ptr_of(u)`

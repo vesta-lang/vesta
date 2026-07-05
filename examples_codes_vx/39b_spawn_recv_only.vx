@@ -1,3 +1,5 @@
+namespace ejemplos.e39b_spawn_recv_only;
+
 // Test simplificado: hijo envia un valor al padre, padre lo recibe.
 // El hijo necesita conocer el PID del padre.  Como no hay capturas
 // lambda, usamos el hecho de que el padre es siempre PID=0 (primer

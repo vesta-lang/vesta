@@ -1,3 +1,5 @@
+namespace ejemplos.vreg_alloca_vm_escape;
+
 // Regresion vreg (2026-06-09): ALLOCA-vm (struct local cuyo puntero ESCAPA a
 // otra funcion -> el frontend NO lo promueve a host_alloca; debe vivir en el
 // VM stack con un vaddr valido).  Ejercita el codegen ALLOCA_VM del path vreg

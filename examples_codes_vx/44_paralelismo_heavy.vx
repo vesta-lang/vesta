@@ -1,3 +1,5 @@
+namespace ejemplos.paralelismo_heavy;
+
 // prueba de paralelismo OS-thread real con carga
 // computacional pesada (10 millones de iteraciones por hijo).
 //

@@ -1,3 +1,5 @@
+namespace ejemplos.gc_unique_shared_finalize;
+
 // examples_codes_vx/248_gc_unique_shared_finalize.vx
 //
 // FINALIZADOR GC de gc<unique<T>> y gc<shared<T>> con gc_finalize_all().

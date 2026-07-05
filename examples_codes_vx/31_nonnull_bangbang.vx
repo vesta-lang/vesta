@@ -1,3 +1,5 @@
+namespace ejemplos.nonnull_bangbang;
+
 // Operador !! (assert non-null) + modificador nonnull.
 //
 // Sintaxis nueva:

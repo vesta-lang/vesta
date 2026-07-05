@@ -1,3 +1,5 @@
+namespace ejemplos.hola_mundo;
+
 // examples_codes_vx/02_hola_mundo.vx
 //
 // Hola Mundo en Vex

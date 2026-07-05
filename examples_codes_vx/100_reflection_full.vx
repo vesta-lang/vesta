@@ -1,3 +1,5 @@
+namespace ejemplos.reflection_full;
+
 // Reflexion completa: getMethod + newInstance + invoke.
 //
 // Verifica el ciclo completo de reflexion dinamica:

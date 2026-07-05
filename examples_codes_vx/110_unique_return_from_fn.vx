@@ -1,3 +1,5 @@
+namespace ejemplos.unique_return_from_fn;
+
 // Test: devolver smart pointers desde funciones (SRET 16 bytes Tier 1).
 //
 // Demuestra que las funciones pueden devolver `unique<T>` correctamente

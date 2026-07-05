@@ -1,3 +1,5 @@
+namespace ejemplos.str_split;
+
 // examples_codes_vx/91_str_split.vx
 //
 // str_split via vstr_split_offsets + iteracion + STRMAKE.

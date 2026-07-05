@@ -1,3 +1,5 @@
+namespace ejemplos.aritmetica;
+
 // examples_codes_vx/00_aritmetica.vx
 //
 // Ejemplo end-to-end mas minimo: expresion aritmetica.

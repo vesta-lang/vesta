@@ -1,3 +1,5 @@
+namespace ejemplos.dtor_recursive_fields;
+
 // 99_dtor_recursive_fields.vx
 //
 // A.32 - Relax de la regla de escape + sintesis automatica de un destructor

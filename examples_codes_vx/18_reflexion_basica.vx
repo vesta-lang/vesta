@@ -1,3 +1,5 @@
+namespace ejemplos.reflexion_basica;
+
 // Reflexion MVP en Vex.
 //
 // Demuestra dos builtins de reflexion:

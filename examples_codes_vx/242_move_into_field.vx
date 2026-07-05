@@ -1,3 +1,5 @@
+namespace ejemplos.move_into_field;
+
 // combo memoria: move(unique) HACIA UN CAMPO (bug3).
 // `c.h = move(local)` donde `local` es unique<i64> y `c.h` es campo unique<i64>.
 // El slot movido debe materializarse en HEAP (el campo lo posee; el dtor del

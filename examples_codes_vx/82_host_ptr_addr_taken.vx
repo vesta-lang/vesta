@@ -1,3 +1,5 @@
+namespace ejemplos.host_ptr_addr_taken;
+
 // examples_codes_vx/82_host_ptr_addr_taken.vx
 //
 // Antes del fix: si una variable de tipo T* (host pointer via malloc)

@@ -1,3 +1,5 @@
+namespace ejemplos.shared_refcount_nogc;
+
 // shared<T>: conteo de referencias puro, sin recolector de basura.
 //
 // Copiar un `shared<T>` (`shared<T> b = a`) incrementa el conteo de referencias;

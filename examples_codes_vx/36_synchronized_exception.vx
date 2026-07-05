@@ -1,3 +1,5 @@
+namespace ejemplos.synchronized_exception;
+
 // synchronized + exception safety:
 //
 // Verifica que cuando el body del synchronized lanza una excepcion,

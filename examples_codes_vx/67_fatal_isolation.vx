@@ -1,3 +1,5 @@
+namespace ejemplos.fatal_isolation;
+
 // Test exhaustivo: PHI en variables compartidas + capture
 // FatalError + panic.  Resultado esperado: R0 = 142.
 

@@ -1,3 +1,5 @@
+namespace ejemplos.ecs_basico;
+
 // ECS basico (Entity Component System) sobre Vex.
 //
 // Ejemplo minimal de un patron ECS Struct-of-Arrays (SoA).  Cada componente

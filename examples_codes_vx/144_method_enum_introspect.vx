@@ -1,3 +1,5 @@
+namespace ejemplos.method_enum_introspect;
+
 // introspeccion de metodos + enums + comptime_print.
 //   method_name<T>(idx)        -> string del metodo idx-esimo
 //   method_return_type<T>(idx) -> Type del return del metodo idx

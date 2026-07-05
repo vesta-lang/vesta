@@ -1,3 +1,5 @@
+namespace ejemplos.string_op_override;
+
 // C-3: override del `string` built-in via @StringConcat / @StringEq.
 //
 // Demuestra que el usuario puede SOBRESCRIBIR las operaciones del tipo

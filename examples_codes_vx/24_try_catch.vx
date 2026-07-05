@@ -1,3 +1,5 @@
+namespace ejemplos.try_catch;
+
 // try / catch / throw basico.
 //
 // Verifica el flujo completo:

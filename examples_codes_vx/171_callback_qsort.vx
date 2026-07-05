@@ -1,3 +1,5 @@
+namespace ejemplos.callback_qsort;
+
 // examples_codes_vx/171_callback_qsort.vx
 //
 // Callback nativo Vex->C real: msvcrt:qsort invoca un comparator escrito

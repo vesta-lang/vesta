@@ -1,3 +1,5 @@
+namespace ejemplos.panic_capture;
+
 // panic + captura + stack trace con file:line.
 
 class Service {

@@ -1,3 +1,5 @@
+namespace ejemplos.funciones_genericas;
+
 // Funciones libres genericas: `R nombre<T>(...)`.
 //
 // Una funcion puede declarar parametros de tipo tras su nombre y monomorphizarse

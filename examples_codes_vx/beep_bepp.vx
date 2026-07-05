@@ -1,3 +1,5 @@
+namespace ejemplos.beep_bepp;
+
 extern "kernel32.dll" {
     fn GetCurrentProcessId() -> u32;
     fn GetTickCount() -> u32;

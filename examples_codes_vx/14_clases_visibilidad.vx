@@ -1,3 +1,5 @@
+namespace ejemplos.clases_visibilidad;
+
 // examples_codes_vx/14_clases_visibilidad.vx
 //
 // Demuestra modificadores de acceso:

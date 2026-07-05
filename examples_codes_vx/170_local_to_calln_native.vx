@@ -1,3 +1,5 @@
+namespace ejemplos.local_to_calln_native;
+
 // examples_codes_vx/170_local_to_calln_native.vx
 //
 // Phase D.jit-mem-model AUTO-PROMOTE: pasar &local a funcion nativa

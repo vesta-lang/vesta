@@ -1,3 +1,5 @@
+namespace ejemplos.concat_multichunk;
+
 // optimizacion O(N) para concat MULTI-CHUNK `s = s + X + Y + ...`.
 //
 // Antes solo el patron simple `s = s + X` era O(N).  El parser

@@ -1,3 +1,5 @@
+namespace ejemplos.bangbang_decl;
+
 // Sintaxis `T !!name` en var-decl y parametros.
 //
 // `Tag !!tag = init` es sugar para `nonnull Tag tag = !!init`:

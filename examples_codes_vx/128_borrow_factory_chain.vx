@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_factory_chain;
+
 // Patron Rust: chain de transformaciones via factory que devuelven
 // borrows.  F4 lifetime elision: una funcion 1-input-borrow ->
 // 1-output-borrow propaga el lifetime automaticamente.

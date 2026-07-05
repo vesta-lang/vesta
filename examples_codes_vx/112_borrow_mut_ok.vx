@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_mut_ok;
+
 // Test borrow checker: mutable borrow exclusivo.
 // Despues de un lend_mut, podemos escribir a traves del borrow.
 // El owner mismo no es accesible directamente mientras esta prestado.

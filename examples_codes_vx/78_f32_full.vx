@@ -1,3 +1,5 @@
+namespace ejemplos.f32_full;
+
 // Test exhaustivo f32 + casts f32<->f64 + arith.
 //
 // Cobertura del backend float-32 anadido en este sprint:

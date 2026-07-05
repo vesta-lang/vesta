@@ -1,3 +1,5 @@
+namespace ejemplos.punteros;
+
 // examples_codes_vx/07_punteros.vx
 //
 // Demuestra punteros VIRTUALES (al stack VM) en Vex:

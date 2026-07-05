@@ -1,3 +1,5 @@
+namespace ejemplos.struct_dtor_store_err;
+
 // Clase-contenedor con campo struct destructible + move-on-store (Fase 2b/3).
 //
 // Una clase que CONTIENE un struct con `~Struct()` gana un destructor implicito

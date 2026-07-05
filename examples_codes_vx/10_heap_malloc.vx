@@ -1,3 +1,5 @@
+namespace ejemplos.heap_malloc;
+
 // examples_codes_vx/10_heap_malloc.vx
 //
 // Demuestra el allocator manual:

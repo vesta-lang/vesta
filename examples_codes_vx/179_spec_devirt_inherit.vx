@@ -1,3 +1,5 @@
+namespace ejemplos.spec_devirt_inherit;
+
 // Regresion de la devirtualizacion especulativa (TAREA 2 / C2):
 // el dispatch polimorfico de interfaz (CALLITF) se reescribe en un
 // guard-chain por tipo + fallback al dispatch original.

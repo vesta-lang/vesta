@@ -1,3 +1,5 @@
+namespace ejemplos.test_fmt_spec;
+
 class Foo {
     i32 x;
     Foo(i32 x) { this.x = x; }

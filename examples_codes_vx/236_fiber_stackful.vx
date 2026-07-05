@@ -1,3 +1,5 @@
+namespace ejemplos.fiber_stackful;
+
 // 236_fiber_stackful.vx
 //
 // FN.3 (2o test, mas rico): TRES fibras stackful con ESTADO LOCAL que sobrevive

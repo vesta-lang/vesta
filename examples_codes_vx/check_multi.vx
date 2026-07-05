@@ -1,3 +1,5 @@
+namespace ejemplos.check_multi;
+
 // Test: multiples factories que devuelven unique<i64> con deleter custom.
 // El deleter incrementa un contador.  No dereferenciamos el value porque
 // unique_with(111, ...) stores 111 literal en el slot (no aloca).

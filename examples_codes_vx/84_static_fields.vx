@@ -1,3 +1,5 @@
+namespace ejemplos.static_fields;
+
 // examples_codes_vx/84_static_fields.vx
 //
 // static fields plenamente lowered.

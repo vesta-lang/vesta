@@ -1,3 +1,5 @@
+namespace ejemplos.contador;
+
 // examples_codes_vx/03_contador.vx
 //
 // Cuenta del 1 al 5 imprimiendo un mensaje en cada iteracion

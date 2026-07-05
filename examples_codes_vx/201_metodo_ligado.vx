@@ -1,3 +1,5 @@
+namespace ejemplos.metodo_ligado;
+
 // Puntero a metodo LIGADO: `&obj.metodo` (Fase 2).
 //
 // A diferencia de `&Tipo.metodo` (NO ligado, un cfn que recibe el receptor

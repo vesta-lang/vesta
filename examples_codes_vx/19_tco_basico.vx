@@ -1,3 +1,5 @@
+namespace ejemplos.tco_basico;
+
 // Verificacion de TCO (tail call optimization).
 //
 // El optimizador `ir_pass_tailcall` (O2) detecta el patron

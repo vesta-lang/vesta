@@ -1,3 +1,5 @@
+namespace ejemplos.move_custom_deleter;
+
 // combo memoria: move(unique_with) transfiere el deleter custom (bug4).
 // `unique<i64> b = move(a)` donde `a = unique_with(9, del)`.  El move copia el
 // deleter de `a` al slot de `b`; el cleanup de `b` resuelve el deleter

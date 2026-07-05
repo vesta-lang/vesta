@@ -1,3 +1,5 @@
+namespace ejemplos.struct_operator;
+
 // examples_codes_vx/42_struct_operator.vx
 //
 // Operator overloading en structs (C-1 ext).  Igual que las clases,

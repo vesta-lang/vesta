@@ -1,3 +1,5 @@
+namespace ejemplos.gc_nursery_precise;
+
 // 253 -- Nursery PRECISO primario + write-barrier old->young.
 //
 // Cierra la ultima pieza del GC preciso: el minor_gc del nursery usa raices

@@ -1,3 +1,5 @@
+namespace ejemplos.e173b_wndproc_visible;
+
 // examples_codes_vx/173b_wndproc_visible.vx
 //
 // Variante visible del WndProc Win32: abre una ventana real en pantalla,

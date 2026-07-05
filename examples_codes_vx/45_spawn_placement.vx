@@ -1,3 +1,5 @@
+namespace ejemplos.spawn_placement;
+
 // control de placement de spawn desde Vex.
 //
 // Tres formas de invocar spawn:

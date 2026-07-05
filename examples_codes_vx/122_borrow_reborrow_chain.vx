@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_reborrow_chain;
+
 // Test F3 ext - Cadena de reborrows mut (3 niveles):
 //   m1 -> m2 -> m3.  Cada reborrow suspende al anterior.
 //   Al dropear m3 (NLL), m2 se restaura como activo; al dropear m2,

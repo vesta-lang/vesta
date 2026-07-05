@@ -1,3 +1,5 @@
+namespace ejemplos.copy_hook_en_campo;
+
 // Copy-hook en campos de contenedor (ruta B, H1).
 //
 // El copy-hook `__clone__` no solo se invoca en `S b = a`, sino tambien al

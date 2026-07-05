@@ -1,3 +1,5 @@
+namespace ejemplos.metodo_ligado_compuesto;
+
 // Metodo ligado `&obj.metodo` con base COMPUESTA (no una variable simple):
 // `&getObj().metodo`.  El receptor se evalua UNA sola vez (al crear el puntero
 // ligado) y se captura; las llamadas posteriores operan sobre ESE receptor.

@@ -1,3 +1,5 @@
+namespace ejemplos.macros_lowered_to_ir;
+
 // validacion de que @Macro bodies se lowerean a IR como
 // IrFunction `__macro_<name>`.  Este test confirma que el pipeline
 // IR -> bytecode soporta codigo simple de macros (foundation para

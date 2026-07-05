@@ -1,3 +1,5 @@
+namespace ejemplos.operator_overload;
+
 // examples_codes_vx/40_operator_overload.vx
 //
 // Operator overloading via metodos dunder (C-1).  Una clase puede

@@ -1,3 +1,5 @@
+namespace ejemplos.string_array_ops;
+
 // examples_codes_vx/89_string_array_ops.vx
 //
 // String ops + Array ops nativas.

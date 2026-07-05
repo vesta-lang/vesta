@@ -1,3 +1,5 @@
+namespace ejemplos.stack_iface;
+
 // Estructura real: Stack<i32> via interfaz IStack +
 // implementaciones LinkedListStack y ArrayStack, escogidas en runtime.
 //

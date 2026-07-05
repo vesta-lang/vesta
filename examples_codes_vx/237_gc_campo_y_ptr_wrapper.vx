@@ -1,3 +1,5 @@
+namespace ejemplos.gc_campo_y_ptr_wrapper;
+
 // examples_codes_vx/237_gc_campo_y_ptr_wrapper.vx
 //
 // Combinacion de modelos: un objeto GC (gc<Nodo>) guardado como CAMPO de

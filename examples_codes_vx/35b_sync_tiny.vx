@@ -1,3 +1,5 @@
+namespace ejemplos.e35b_sync_tiny;
+
 // Test minimo de synchronized: 1 iteracion, sin loop.
 class Counter {
     i32 value;

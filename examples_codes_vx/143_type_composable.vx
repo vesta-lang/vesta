@@ -1,3 +1,5 @@
+namespace ejemplos.type_composable;
+
 //  Type-returning builtins composables.
 //   parent_class<T>()    -> Type del super de una CLASS (vacio si no tiene)
 //   element_type<T>()    -> Type interior de T*/T[N]/Optional<T>/Future<T>/borrow<T>

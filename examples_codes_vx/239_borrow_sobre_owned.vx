@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_sobre_owned;
+
 // examples_codes_vx/239_borrow_sobre_owned.vx
 //
 // Combinacion de modelos: prestar (borrow) el contenido de un unique<T>

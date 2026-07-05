@@ -1,3 +1,5 @@
+namespace ejemplos.float_arith;
+
 // Aritmetica float completa: FADD/FSUB/FMUL/FDIV + FNEG/FABS/FSQRT
 // + FCMP (comparaciones) + ITOF/FTOI (conversiones int<->float).
 //

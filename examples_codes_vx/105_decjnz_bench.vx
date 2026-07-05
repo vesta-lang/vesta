@@ -1,3 +1,5 @@
+namespace ejemplos.decjnz_bench;
+
 // Benchmark de loop reverse-counter para validar fusion decjnz.
 //
 // El patron clasico `do { ... } while (--i != 0);` o `do {...} while (i != 0);`

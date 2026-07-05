@@ -1,3 +1,5 @@
+namespace ejemplos.closure_en_campo;
+
 // Closure (lambda con captura) almacenado en un CAMPO -- modelo de ownership
 // sin GC.  El env (las variables capturadas) es PROPIEDAD del objeto
 // contenedor y se libera de forma determinista por su destructor (clase) o

@@ -1,3 +1,5 @@
+namespace ejemplos.aop_basico;
+
 // AOP basico: @Aspect + @After.
 //
 // Verifica que el dispatcher CALLVIRT recorre la cadena de advices y

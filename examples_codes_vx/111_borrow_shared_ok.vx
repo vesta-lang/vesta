@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_shared_ok;
+
 // Test borrow checker: multiples shared borrows del mismo owner.
 // REGLA R2: pueden coexistir N borrow<T> mientras NINGUN borrow_mut<T>
 // este activo.  Lectura a traves de los borrows es siempre OK.

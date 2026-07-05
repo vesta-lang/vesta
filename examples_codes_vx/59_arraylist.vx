@@ -1,3 +1,5 @@
+namespace ejemplos.arraylist;
+
 // Estructura de datos real: IntArrayList<i32> dinamico.
 //
 // Pone a prueba:

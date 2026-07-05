@@ -1,3 +1,5 @@
+namespace ejemplos.callback_many_args;
+
 // examples_codes_vx/177_callback_many_args.vx
 //
 // Callback nativo con argc > 4 (limite previo en Win64) y argc > 6 (limite

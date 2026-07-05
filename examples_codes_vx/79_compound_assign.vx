@@ -1,3 +1,5 @@
+namespace ejemplos.compound_assign;
+
 // Compound assign sobre lvalues no-triviales (struct field, class
 // field, array indexado, deref de puntero) y sobre todos los operadores
 // soportados (+= -= *= /= %= &= |= ^= <<= >>=).  Antes de este sprint el

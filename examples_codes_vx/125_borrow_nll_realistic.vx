@@ -1,3 +1,5 @@
+namespace ejemplos.borrow_nll_realistic;
+
 // Patron Rust: NLL permite borrow + uso + move(owner) en SECUENCIA
 // porque el borrow se libera tras su ultimo uso, no al exit del scope.
 // Imita un workflow tipico de "leer un valor, usarlo en un calculo,

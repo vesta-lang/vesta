@@ -1,3 +1,5 @@
+namespace ejemplos.virtualalloc_unique;
+
 // Demo: smart pointer auto-released con VirtualAlloc / VirtualFree.
 //
 // Estructura del test:

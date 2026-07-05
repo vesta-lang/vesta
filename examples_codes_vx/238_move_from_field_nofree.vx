@@ -1,3 +1,5 @@
+namespace ejemplos.move_from_field_nofree;
+
 // examples_codes_vx/238_move_from_field_nofree.vx
 //
 // Combinacion de modelos: mover (move) un campo unique<T> FUERA de su

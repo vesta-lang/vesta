@@ -1,3 +1,5 @@
+namespace ejemplos.vectorize_scalar;
+
 // Auto-vectorizacion de difusion escalar (scalar broadcast).
 // c[i] = a[i] * k, c[i] = k + a[i] (conmutativo), c[i] += k (compound).
 // f64 HOST -> VEC_BINOP_S (escalar difundido a todos los lanes).

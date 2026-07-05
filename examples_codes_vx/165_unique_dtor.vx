@@ -1,3 +1,5 @@
+namespace ejemplos.unique_dtor;
+
 // Regresion test para bug2.vx: el destructor de la clase contenida en
 // un `unique<T>` no se invocaba al cleanup automatico al salir del scope.
 //

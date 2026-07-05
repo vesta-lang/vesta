@@ -1,3 +1,5 @@
+namespace ejemplos.dispose_explicit;
+
 // examples_codes_vx/93_dispose_explicit.vx
 //
 // dispose(xs) explicito + auto-free idempotente.
