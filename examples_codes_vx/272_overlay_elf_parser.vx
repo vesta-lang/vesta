@@ -39,6 +39,13 @@ import "vx_fileio";
     u32 sh_info      @0x2C;
     u64 sh_addralign @0x30;
     u64 sh_entsize   @0x38;
+    // Nombre de la seccion: cstring en (base + strtab + sh_name).  Alcanza la
+    // .shstrtab del Ehdr CONTENEDOR via parent<Elf64_Ehdr>() y su metodo strtab().
+    u8 name @offset {
+        return (u64) parent<Elf64_Ehdr>()
+             + parent<Elf64_Ehdr>().strtab()
+             + (u64) self.sh_name;
+    };
 }
 
 @overlay struct Elf64_Ehdr {
@@ -62,18 +69,14 @@ import "vx_fileio";
     Elf64_Phdr Phdrs[e_phnum] @offset(e_phoff) stride(e_phentsize);
     Elf64_Shdr Shdrs[e_shnum] @offset(e_shoff) stride(e_shentsize);
 
-    // Campo-resolver: su DIRECCION es la base de la .shstrtab (sh_offset de la
-    // seccion e_shstrndx), navegando self.Shdrs.  `offsetof(eh.strtab_base)` da
-    // ese offset -- toda la logica declarativa, dentro del overlay.
-    u8 strtab_base @offset {
-        return base + self.Shdrs[(i32)self.e_shstrndx].sh_offset;
-    };
-}
-
-// Sub-vista para un nombre nul-terminado en la .shstrtab (construida en el
-// puntero raiz + offset, como cualquier sub-overlay).  `&nm.c0` = su direccion.
-@overlay struct CName {
-    u8 c0 @0x00;
+    // Metodo: offset de fichero de la .shstrtab (el sh_offset de la seccion
+    // e_shstrndx).  Lo usan el resolver de nombre de Shdr y strtab_base.
+    public u64 strtab() {
+        return (u64) this.Shdrs[(i32) this.e_shstrndx].sh_offset;
+    }
+    // Campo-resolver: su DIRECCION es la base de la .shstrtab.
+    // `offsetof(eh.strtab_base)` da ese offset.
+    u8 strtab_base @offset { return base + self.strtab(); };
 }
 
 i64 g_faults = 0;
@@ -141,14 +144,13 @@ i32 main() {
         i = i + 1;
     }
 
-    // --- nombres de seccion via la .shstrtab (sub-vista CName + print_cstr) ---
-    u64 strtab = (u64) offsetof(eh.strtab_base);   // base de nombres (file off)
+    // --- nombres de seccion: el nombre es un campo-resolver de Shdr (alcanza la
+    //     .shstrtab del Ehdr via parent), simetrico con el dll_name del PE ---
     print("secciones:");
     i = 0;
     while ((u32)i < (u32)eh.e_shnum) {
         print(" ");
-        CName nm = CName(buf + strtab + (u64)eh.Shdrs[i].sh_name);
-        print_cstr(&nm.c0);
+        print_cstr(&eh.Shdrs[i].name);
         i = i + 1;
     }
     println("");
