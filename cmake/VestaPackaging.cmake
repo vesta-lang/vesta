@@ -75,6 +75,11 @@ endif()
 if (TARGET vesta_gc)
     install(FILES "$<TARGET_FILE:vesta_gc>" DESTINATION bin COMPONENT core)
 endif()
+# Icono del lenguaje (para las asociaciones de ficheros .vx / .vsh).
+if (EXISTS "${CMAKE_SOURCE_DIR}/icono.ico")
+    install(FILES "${CMAKE_SOURCE_DIR}/icono.ico"
+            DESTINATION bin RENAME vesta.ico COMPONENT core)
+endif()
 # Variantes ESTATICAS de los plugins de stdlib (colecciones / math): el AOT las
 # auto-enlaza JUNTO a vesta.exe cuando el programa las usa -> .exe standalone sin
 # DLLs.  Se instalan en core (parte del toolchain AOT).
@@ -262,6 +267,30 @@ endif()
 set(CPACK_NSIS_MENU_LINKS
         "README.md" "VestaVM - Leeme")
 
+# Asociaciones de ficheros .vx (fuente Vesta) y .vsh (script VestaShell) con el
+# icono del lenguaje y el binario vesta.  SHCTX = HKLM si la instalacion es para
+# todos (admin) o HKCU si es solo para el usuario (no-admin) -- coherente con el
+# modo de instalacion elegido (RequestExecutionLevel highest en la plantilla).
+# .vsh se abre ejecutando el script (--script); .vx se compila (--vesta).
+set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [==[
+  WriteRegStr SHCTX "Software\Classes\.vx" "" "Vesta.vx"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vx" "" "Codigo fuente Vesta"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vx\DefaultIcon" "" "$INSTDIR\bin\vesta.ico"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vx\shell\open\command" "" '$\"$INSTDIR\bin\vesta.exe$\" --vesta $\"%1$\"'
+  WriteRegStr SHCTX "Software\Classes\.vsh" "" "Vesta.vsh"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vsh" "" "Script VestaShell"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vsh\DefaultIcon" "" "$INSTDIR\bin\vesta.ico"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vsh\shell\open\command" "" '$\"$INSTDIR\bin\vesta.exe$\" --script $\"%1$\"'
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+]==])
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [==[
+  DeleteRegKey SHCTX "Software\Classes\Vesta.vx"
+  DeleteRegKey SHCTX "Software\Classes\Vesta.vsh"
+  DeleteRegValue SHCTX "Software\Classes\.vx" ""
+  DeleteRegValue SHCTX "Software\Classes\.vsh" ""
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+]==])
+
 # ---------------------------------------------------------------------------
 # WiX  -- instalador .msi (despliegue corporativo / GPO / Intune)
 # ---------------------------------------------------------------------------
@@ -279,6 +308,13 @@ endif()
 if (NOT CPACK_GENERATOR)
     set(CPACK_GENERATOR "ZIP")
 endif()
+
+# Plantilla NSIS PROPIA (override de la de CPack) para habilitar instalacion
+# SIN admin (per-user): cambia `RequestExecutionLevel admin` -> `highest` y el
+# dir "solo yo" a %LOCALAPPDATA%\Programs.  CPack busca `NSIS.template.in` en
+# CPACK_MODULE_PATH (que por defecto es CMAKE_MODULE_PATH); prependemos el dir
+# con nuestra plantilla para que gane a la interna.
+set(CPACK_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/nsis" ${CMAKE_MODULE_PATH})
 
 include(CPack)
 
