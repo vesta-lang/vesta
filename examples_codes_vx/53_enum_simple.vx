@@ -1,3 +1,5 @@
+namespace ejemplos.enum_simple;
+
 // Test minimo de enum + match: solo variantes sin payload.
 //
 // Resultado esperado: R0 = 42

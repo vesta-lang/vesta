@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -1557,6 +1557,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         lower_struct_methods(sd, out_module);
     }
 
+    // NS.6-ext: metodos de extension / impl (funciones libres <clave>__metodo).
+    lower_extension_methods(out_module);
+
     // Generar funciones auxiliares de POO:
     //  - __new_<X>(args) por cada clase: encapsula findclass+newobj+ctor.
     //  - __module_init(): registra todas las clases via defclass+...
@@ -2084,6 +2087,14 @@ void Lowering::emit_introspect_info_chunks() {
         }
         return buf;
     };
+    /* El nombre almacenado en el chunk (lo que devuelve type_info_name)
+     * debe ser el nombre PUBLICO del tipo -- el ultimo segmento tras el
+     * separador de namespace "__".  La clave del indice sigue siendo el
+     * nombre mangled (lo que find_type resuelve en compile-time). */
+    auto public_seg = [](const std::string &mangled) -> std::string {
+        const size_t p = mangled.rfind("__");
+        return (p == std::string::npos) ? mangled : mangled.substr(p + 2);
+    };
 
     /* Structs marcados @Introspect. */
     for (const auto &kv : tc_.struct_layouts()) {
@@ -2094,8 +2105,7 @@ void Lowering::emit_introspect_info_chunks() {
         for (const auto &f : lay.fields) {
             fs.push_back({f.name, {f.offset, f.size}});
         }
-        std::vector<uint8_t> chunk = build_chunk(
-            lay.name, /*Struct=*/2, lay.size_bytes, lay.align_bytes, fs);
+        std::vector<uint8_t> chunk = build_chunk(public_seg(lay.name), /*Struct=*/2, lay.size_bytes, lay.align_bytes, fs);
         const uint64_t idx = out_mod_->intern_static_data(std::move(chunk));
         introspect_idx_by_name_[lay.name] = idx;
     }
@@ -2110,7 +2120,7 @@ void Lowering::emit_introspect_info_chunks() {
             fs.push_back({f.name, {f.offset, f.size}});
         }
         std::vector<uint8_t> chunk =
-            build_chunk(lay.name, /*Class=*/1, lay.size_bytes, /*align=*/8, fs);
+            build_chunk(public_seg(lay.name), /*Class=*/1, lay.size_bytes, /*align=*/8, fs);
         const uint64_t idx = out_mod_->intern_static_data(std::move(chunk));
         introspect_idx_by_name_[lay.name] = idx;
     }
@@ -2126,7 +2136,7 @@ void Lowering::emit_introspect_info_chunks() {
             fs.push_back({v.name, {v.tag, 0}});
         }
         std::vector<uint8_t> chunk =
-            build_chunk(lay.name, /*Enum=*/3, lay.size_bytes, /*align=*/8, fs);
+            build_chunk(public_seg(lay.name), /*Enum=*/3, lay.size_bytes, /*align=*/8, fs);
         const uint64_t idx = out_mod_->intern_static_data(std::move(chunk));
         introspect_idx_by_name_[lay.name] = idx;
     }
@@ -11347,6 +11357,46 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         const auto &cmap = tc_.comptime_const_values();
         const std::string &b = s->body;
         body_sub.reserve(b.size());
+        // Resolucion NAMESPACE-RELATIVA de simbolos propios en el asm.  El
+        // cuerpo asm es texto opaco que el aplanador de namespaces NO reescribe,
+        // asi que lleva el nombre CRUDO (p.ej. `call fiber_switch`).  Pero si la
+        // funcion ACTUAL esta en un namespace, el simbolo hermano real es
+        // <prefijo>__fiber_switch.  Probamos primero el nombre crudo (simbolo
+        // global) y, si no existe, el cualificado con el prefijo del namespace
+        // de la funcion actual (scoping normal: el local sombrea al global).
+        // Sin esto, un @Naked que llama a otro @Naked hermano por nombre no
+        // resolveria bajo un namespace -> el asm saltaria a basura (SIGSEGV).
+        std::string ns_prefix;
+        if (fn_) {
+            const std::string &cur = fn_->name;
+            const size_t sep = cur.rfind("__");
+            if (sep != std::string::npos) ns_prefix = cur.substr(0, sep + 2);
+        }
+        // Devuelve el label REAL (mangled) a decorar con __vxf_, o "" si @p nm
+        // no es una funcion (ni cruda ni cualificada por el namespace actual).
+        auto asm_fn_label = [&](const std::string &nm) -> std::string {
+            const FunctionSig *fs = tc_.function_sig_by_name(nm);
+            std::string key = nm;
+            if (fs == nullptr && !ns_prefix.empty()) {
+                const std::string cand = ns_prefix + nm;
+                fs = tc_.function_sig_by_name(cand);
+                if (fs) key = cand;
+            }
+            if (fs == nullptr) return {};
+            return fs->mangled_label.empty() ? key : fs->mangled_label;
+        };
+        // Devuelve el slot del global (crudo o cualificado), o -1 si no lo es.
+        auto asm_gslot = [&](const std::string &nm) -> long long {
+            auto it = runtime_global_slots_.find(nm);
+            if (it != runtime_global_slots_.end())
+                return static_cast<long long>(it->second);
+            if (!ns_prefix.empty()) {
+                auto it2 = runtime_global_slots_.find(ns_prefix + nm);
+                if (it2 != runtime_global_slots_.end())
+                    return static_cast<long long>(it2->second);
+            }
+            return -1;
+        };
         size_t i = 0;
         while (i < b.size()) {
             const char c = b[i];
@@ -11401,7 +11451,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                                   static_cast<uint64_t>(it->second.value)));
                 body_sub += buf;
             } else if (!is_mnemonic_pos && !is_reg &&
-                       tc_.function_sig_by_name(tok) != nullptr) {
+                       !asm_fn_label(tok).empty()) {
                 // Referencia a una FUNCION del modulo -> nombre canonico
                 // __vxf_<label>.  El backend lo resuelve a un sentinela; el
                 // encoder lo decodifica al reloc (CALL_REL32 bare / fnsym: abs)
@@ -11412,21 +11462,16 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                 // naked_native mapea __vxf_<label> a la direccion NATIVA de la
                 // funcion (native-compilada al vuelo).  Sin decorar, el token
                 // quedaba bare y Keystone lo resolvia a un sentinela que nadie
-                // parchea -> SIGSEGV al ejecutar el asm.
-                const FunctionSig *fs = tc_.function_sig_by_name(tok);
-                const std::string label =
-                    fs->mangled_label.empty() ? tok : fs->mangled_label;
-                body_sub += "__vxf_" + label;
-            } else if (!is_mnemonic_pos && !is_reg &&
-                       runtime_global_slots_.find(tok) !=
-                           runtime_global_slots_.end()) {
+                // parchea -> SIGSEGV al ejecutar el asm.  El label ya viene
+                // resuelto namespace-relativo (crudo o <prefijo>__crudo).
+                body_sub += "__vxf_" + asm_fn_label(tok);
+            } else if (!is_mnemonic_pos && !is_reg && asm_gslot(tok) >= 0) {
                 // Referencia a un GLOBAL del modulo -> __vxg_<slot>.  En AOT el
                 // encoder lo resuelve a rodata.<slot> (.data del global); en
                 // interp/JIT el resolver de naked_native lo mapea a la direccion
                 // HOST del slot en vm_mem (donde el codigo VM_ABI escribe/lee el
-                // global).
-                body_sub += "__vxg_" + std::to_string(
-                                           runtime_global_slots_[tok]);
+                // global).  Slot resuelto namespace-relativo.
+                body_sub += "__vxg_" + std::to_string(asm_gslot(tok));
             } else {
                 body_sub += tok;
             }
@@ -13111,6 +13156,34 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
 }
 
 ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
+    // NS.2: comptime const de un namespace (`mod.ANSWER`).  El type checker
+    // anoto el valor (resuelto en compile-time); emitimos CONST inline igual
+    // que un comptime const desnudo -- cero overhead runtime.
+    if (e->comptime_const_resolved) {
+        if (e->comptime_const_is_str) {
+            std::vector<uint8_t> bytes(e->comptime_const_str.begin(),
+                                       e->comptime_const_str.end());
+            const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
+            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_addr;
+                is.imm = idx;
+                is.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(is));
+            }
+            ir::IrValueId v_len = emit_const(
+                ir::IrType::I64,
+                static_cast<uint64_t>(e->comptime_const_str.size()),
+                e->loc.line);
+            return emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
+        }
+        ir::IrType t = ir_type_from_primitive(e->result_type.kind);
+        return emit_const(t, static_cast<uint64_t>(e->comptime_const_int),
+                          e->loc.line);
+    }
     // ADTs: variante sin payload `Color.Red` (sin parens).  El
     // type checker la marco con property_kind=99.  Despachar al
     // constructor de variante con args vacio en lugar del manejo
@@ -24735,6 +24808,12 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const ir::IrValueId this_vid = fn.new_value(ir::IrType::PTR, "%this");
         fn.values[this_vid].is_param = true;
         if (native_poo_) fn.values[this_vid].is_host_ptr = true;
+        // NS.6-ext: extension sobre una CLASE -> `this` es un objeto GC
+        // (host_ptr al payload, refrescable tras GC), no un buffer VM-stack.
+        if (ext_this_is_class_) {
+            fn.values[this_vid].is_host_ptr = true;
+            fn.values[this_vid].is_gc_object = true;
+        }
         fn.params.push_back(this_vid);
         bindings.emplace_back("this", this_vid);
 
@@ -24928,6 +25007,65 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         propagate_is_gc_object_through_phis(fn);
         out.add_function(std::move(fn));
         fn_ = nullptr;
+    }
+}
+
+// -----------------------------------------------------------------
+// NS.6-ext: baja los metodos de extension / impl como funciones libres
+// <clave_layout>__<metodo>.  Reusa la emision de lower_struct_methods via un
+// StructDecl temporal cuyo `name` es la clave del layout destino (mangled si
+// es importado).  El cuerpo ya lo tipo el checker (con current_struct_/
+// current_class_ correcto), asi que la emision es agnostica del kind salvo el
+// binding de `this` (parametrizado por ext_this_is_class_).
+// -----------------------------------------------------------------
+void Lowering::lower_extension_methods(ir::IrModule &out) {
+    for (auto &decl : mod_.decls) {
+        if (!decl) continue;
+        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
+        if (!is_ext && !is_impl) continue;
+        std::string target_src;
+        std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods = nullptr;
+        if (is_ext) {
+            auto *e = static_cast<ast::ExtensionDecl *>(decl.get());
+            target_src = e->target_type;
+            methods = &e->methods;
+        } else {
+            auto *im = static_cast<ast::ImplDecl *>(decl.get());
+            target_src = im->target_type;
+            methods = &im->methods;
+        }
+        // Resolver la clave del layout destino (misma logica que el checker).
+        std::string key;
+        bool is_class = false;
+        auto set_key = [&](const std::string &k) -> bool {
+            if (tc_.struct_layouts().count(k)) { key = k; is_class = false; return true; }
+            if (tc_.class_layouts().count(k)) { key = k; is_class = true; return true; }
+            return false;
+        };
+        if (!set_key(target_src)) {
+            std::string mangled = target_src;
+            for (size_t p = mangled.find('.'); p != std::string::npos;
+                 p = mangled.find('.'))
+                mangled.replace(p, 1, "__");
+            if (mangled == target_src || !set_key(mangled)) {
+                const Type rt = tc_.resolve_type_string(target_src);
+                if (rt.kind == PrimitiveKind::STRUCT ||
+                    rt.kind == PrimitiveKind::CLASS)
+                    set_key(rt.struct_name);
+            }
+        }
+        if (key.empty()) continue;
+        // StructDecl temporal: name = clave, methods = los de la extension
+        // (movidos temporalmente y devueltos al terminar).
+        ast::StructDecl tmp;
+        tmp.name = key;
+        tmp.methods = std::move(*methods);
+        const bool saved = ext_this_is_class_;
+        ext_this_is_class_ = is_class;
+        lower_struct_methods(&tmp, out);
+        ext_this_is_class_ = saved;
+        *methods = std::move(tmp.methods); // devolver para no invalidar el AST
     }
 }
 
@@ -28030,6 +28168,25 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // es el retbuf (PTR); para calls normales es dst.
     const ir::IrValueId visible_dst =
         method_call_sret ? v_method_call_retbuf : dst;
+
+    // NS.6-ext: metodo anyadido por una extension / impl -> dispatch ESTATICO
+    // (CALL directo a <defining_class>__<name>), NO CALLVIRT.  El label usa
+    // defining_class (la clave del layout, mangled si el tipo es importado).
+    // Correcto tambien cross-modulo: el metodo se emitio como funcion libre en
+    // el modulo de la extension y el linker resuelve el simbolo.
+    if (mtd->is_extension) {
+        ir::IrInstr ca{};
+        ca.op = ir::IrOp::CALL;
+        ca.type = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
+        ca.dst = method_call_sret ? ir::IR_NO_VALUE : dst;
+        ca.func_name = mtd->defining_class + "__" + mtd->name;
+        ca.operands.push_back(obj);
+        if (method_call_sret) ca.operands.push_back(v_method_call_retbuf);
+        for (const ir::IrValueId av : arg_vals) ca.operands.push_back(av);
+        ca.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ca));
+        return visible_dst;
+    }
 
     // -----------------------------------------------------------------
     // Devirtualizacion compile-time: si el tipo concreto del receptor

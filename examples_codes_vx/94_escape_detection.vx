@@ -1,3 +1,5 @@
+namespace ejemplos.escape_detection;
+
 // examples_codes_vx/94_escape_detection.vx
 //
 // Escape detection: si el handle de una coleccion se devuelve

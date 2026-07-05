@@ -1,3 +1,5 @@
+namespace ejemplos.clases_modificadores;
+
 // examples_codes_vx/13_clases_modificadores.vx
 //
 // Demuestra modificadores de visibilidad (public/private/protected) y

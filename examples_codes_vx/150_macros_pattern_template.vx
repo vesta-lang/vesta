@@ -1,3 +1,5 @@
+namespace ejemplos.macros_pattern_template;
+
 // pattern matching declarativo para macros via templates.
 //
 // `comptime_replace(s, needle, replacement)` substituye TODAS las

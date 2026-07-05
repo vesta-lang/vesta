@@ -1,3 +1,5 @@
+namespace ejemplos.struct_methods;
+
 // examples_codes_vx/41_struct_methods.vx
 //
 // Metodos en structs (value-types, dispatch estatico).  Un struct

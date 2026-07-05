@@ -1,3 +1,5 @@
+namespace ejemplos.bug3_struct;
+
 // Test: struct host-managed con borrow checker.
 
 struct Punto {

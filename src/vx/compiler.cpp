@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -286,8 +286,15 @@ CompileResult compile_vx_source(const std::string &source,
                 if (nm.size() < suf.size()) return false;
                 if (nm.compare(nm.size() - suf.size(), suf.size(), suf) != 0)
                     return false;
-                return nm.size() == suf.size() ||
-                       nm[nm.size() - suf.size() - 1] == '.';
+                if (nm.size() == suf.size()) return true;
+                const size_t sep = nm.size() - suf.size() - 1;
+                // Separador de namespace: '.' (fuente) o el mangling '__' que
+                // aplica el aplanador de namespaces (namespace_flatten).  Tras
+                // el flatten el nombre es 'ns__..__monitor_enter'.
+                if (nm[sep] == '.') return true;
+                if (nm[sep] == '_' && sep >= 1 && nm[sep - 1] == '_')
+                    return true;
+                return false;
             };
             if (tail_is("monitor_enter")) {
                 if (!res.sync_enter_override.empty()) {

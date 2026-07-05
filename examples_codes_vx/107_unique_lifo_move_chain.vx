@@ -1,3 +1,5 @@
+namespace ejemplos.unique_lifo_move_chain;
+
 // Test exhaustivo: multiples unique<T> en mismo scope + cleanup LIFO + move chain.
 //
 // Verificamos:

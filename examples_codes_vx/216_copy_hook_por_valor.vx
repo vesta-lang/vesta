@@ -1,3 +1,5 @@
+namespace ejemplos.copy_hook_por_valor;
+
 // Copy-hook en paso por valor (ruta B, H1).
 //
 // Pasar un struct con copy-hook `__clone__` POR VALOR a una funcion (`f(a)`)

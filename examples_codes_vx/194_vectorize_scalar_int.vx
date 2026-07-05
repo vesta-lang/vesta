@@ -1,3 +1,5 @@
+namespace ejemplos.vectorize_scalar_int;
+
 // Auto-vectorizacion de difusion escalar ENTERA (scalar broadcast):
 //   c[i] = a[i] OP k   con k escalar entero invariante del loop.
 // El escalar se REPLICA a 64 bits y se difunde a todos los lanes

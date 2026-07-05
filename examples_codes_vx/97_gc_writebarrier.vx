@@ -1,3 +1,5 @@
+namespace ejemplos.gc_writebarrier;
+
 // examples_codes_vx/97_gc_writebarrier.vx
 //
 // Write-barrier para colecciones que retienen GcHandles.

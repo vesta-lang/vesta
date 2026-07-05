@@ -1,3 +1,5 @@
+namespace ejemplos.spawn_pingpong;
+
 // spawn + IPC (msgsend/msgrecv) ping-pong:
 //
 // Demuestra concurrencia + paso de mensajes entre padre e hijo:

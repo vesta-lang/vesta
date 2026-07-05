@@ -1,3 +1,5 @@
+namespace ejemplos.macros_compose_recurse_global;
+
 // @Macro avanzado -- composicion, recursion, globales mutables.
 //
 // Tres caracteristicas que cierran el modelo de macros maximalistas:

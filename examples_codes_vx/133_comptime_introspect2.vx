@@ -1,3 +1,5 @@
+namespace ejemplos.comptime_introspect2;
+
 // introspeccion comptime: queries de fields/methods/types.
 // cada llamada baja a UN solo
 // IrOp::CONST (o STR_LIT_ADDR + STRMAKE para field_name/field_type).

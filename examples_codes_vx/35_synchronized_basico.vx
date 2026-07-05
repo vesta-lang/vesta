@@ -1,3 +1,5 @@
+namespace ejemplos.synchronized_basico;
+
 // synchronized basico:
 //
 // El bloque synchronized(obj) { ... } envuelve el body con monenter/monexit

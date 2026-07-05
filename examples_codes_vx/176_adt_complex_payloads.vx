@@ -1,3 +1,5 @@
+namespace ejemplos.adt_complex_payloads;
+
 // examples_codes_vx/176_adt_complex_payloads.vx
 //
 // ADTs (tagged unions / sum types) con payloads complejos.

@@ -1,3 +1,5 @@
+namespace ejemplos.struct_composition;
+
 // Composicion de structs con RAII recursivo (Fase 2b, ownership).
 //
 // Un struct que CONTIENE otro struct con destructor obtiene un destructor

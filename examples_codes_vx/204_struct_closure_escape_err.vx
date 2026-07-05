@@ -1,3 +1,5 @@
+namespace ejemplos.struct_closure_escape_err;
+
 // Struct con closure capturador que escapa por valor (move-on-return).
 //
 // Un struct value-type puede contener un closure (lambda con captura) y

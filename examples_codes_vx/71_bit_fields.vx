@@ -1,3 +1,5 @@
+namespace ejemplos.bit_fields;
+
 // Bit fields read + write.
 
 struct Flags {

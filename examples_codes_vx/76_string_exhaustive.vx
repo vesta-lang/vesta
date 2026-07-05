@@ -1,3 +1,5 @@
+namespace ejemplos.string_exhaustive;
+
 // Test exhaustivo de strings + print/println + interpolacion ${...}.
 //
 // Ejercita el contrato pleno que un programador veria al usar SOLO las

@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -641,6 +641,18 @@ class Lowering {
      * con retbuf hidden tras @c this, igual que las funciones libres.
      */
     void lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out);
+
+    /**
+     * @brief NS.6-ext: baja los metodos de @c "extension Tipo { ... }" e
+     * @c "impl Concept for Tipo { ... }" como funciones libres
+     * @c <clave_layout>__<metodo> (dispatch estatico).  Reusa la emision de
+     * @c lower_struct_methods via un @c StructDecl temporal; para targets
+     * CLASE se activa @c ext_this_is_class_ para ligar @c this como objeto GC.
+     */
+    void lower_extension_methods(ir::IrModule &out);
+    /// NS.6-ext: cuando @c true, @c lower_struct_methods liga @c this como
+    /// host_ptr + objeto GC (target de una extension que es una CLASE).
+    bool ext_this_is_class_ = false;
 
     /**
      * @brief Genera el bloque @c __module_init que registra todas las

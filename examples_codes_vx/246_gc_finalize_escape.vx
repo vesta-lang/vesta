@@ -1,3 +1,5 @@
+namespace ejemplos.gc_finalize_escape;
+
 // examples_codes_vx/246_gc_finalize_escape.vx
 //
 // FINALIZACION GC (caso ESCAPE, DETERMINISTA): varios objetos GC que POSEEN un

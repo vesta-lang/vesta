@@ -1,3 +1,5 @@
+namespace ejemplos.macro_ffi_compile_time;
+
 // Demo de FFI en tiempo de compilacion: macros que invocan funciones
 // nativas (DLLs del sistema + virtual lib `vesta_comptime` registrada
 // in-process) durante la compilacion y embeben el resultado como literal

@@ -1,3 +1,5 @@
+namespace ejemplos.genericos_tipos_usuario;
+
 // Genericos instanciados con tipos de USUARIO (struct/clase) y punteros.
 //
 // Un struct o clase generico puede instanciarse no solo con primitivos sino con

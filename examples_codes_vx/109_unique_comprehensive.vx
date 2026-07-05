@@ -1,3 +1,5 @@
+namespace ejemplos.unique_comprehensive;
+
 // Test integral de smart pointers:
 //   - unique_box (deleter por defecto = free): aloca un i32 con value 42.
 //   - unique_with (deleter Vesta custom): aloca FILE* virtual con cleanup

@@ -1,3 +1,5 @@
+namespace ejemplos.escribe_fichero;
+
 // examples_codes_vx/04_escribe_fichero.vx
 //
 // Escribe un fichero "salida_vx.txt" con un contenido predefinido

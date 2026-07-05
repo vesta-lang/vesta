@@ -1,3 +1,5 @@
+namespace ejemplos.metaprog_avanzada;
+
 // metaprogramacion sin limitaciones.
 // (1) comptime var/const en for-init
 // (2) arrays comptime con indexing/asignacion

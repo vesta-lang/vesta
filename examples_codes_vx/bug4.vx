@@ -1,3 +1,5 @@
+namespace ejemplos.bug4;
+
 enum JsonValue {
     JNull,
     JBool(bool),

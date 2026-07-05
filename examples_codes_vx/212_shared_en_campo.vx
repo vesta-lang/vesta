@@ -1,3 +1,5 @@
+namespace ejemplos.shared_en_campo;
+
 // shared<T> almacenado en un campo de contenedor (refcount no-GC).
 //
 // Guardar un shared<T> en un campo (`obj.s = a`) es una COPIA: incrementa el

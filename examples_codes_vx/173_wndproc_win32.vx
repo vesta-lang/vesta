@@ -1,3 +1,5 @@
+namespace ejemplos.wndproc_win32;
+
 // examples_codes_vx/173_wndproc_win32.vx
 //
 // Test e2e de WndProc Win32 real con callback Vex.

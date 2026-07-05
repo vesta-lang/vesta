@@ -46,6 +46,9 @@
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
+#include "vx/semantic_index.h"
 // Forward-decl (evita incluir vx/parser.h, que arrastra cabeceras Windows que
 // desbalancean el push/pop_macro(VOID) de ssa_ir.h).  @Target target-aware AOT.
 namespace vx {
@@ -355,11 +358,18 @@ int main(int argc, char *argv[]) {
             "ir-emit-only", "Solo emitir el texto .vel; no compilar a .velb")(
             "vesta", "Compilar archivo .vx (lenguaje Vesta) a .velb",
             cxxopts::value<std::string>())(
+            "vx", "Alias de --vesta (compilar archivo .vx a .velb)",
+            cxxopts::value<std::string>())(
             "vx-emit-only",
             "Solo emitir el .vel intermedio del .vx; no compilar a .velb")(
             "vx-emit-ir",
             "Emitir el SSA IR del .vx (pre y post optimizacion) en "
             "<output>.ir; util para debug del frontend")(
+            "dump-semantic-index",
+            "Volcar el indice semantico por-declaracion (hash de contenido + "
+            "grafo de deps) de un .vx como JSON; sustrato de la compilacion "
+            "incremental granular",
+            cxxopts::value<std::string>())(
             "analyze",
             "Subsistema de coste: analiza la complejidad algoritmica (Big-O) "
             "estatica de cada funcion de un .vx y la imprime; valida el "
@@ -844,7 +854,7 @@ int main(int argc, char *argv[]) {
         // (1) Acciones primarias mutuamente excluyentes: solo una a la vez.
         static const char *const kPrimaryActions[] = {
             "run",      "worker",       "driver", "build",
-            "vesta",    "asm-file",     "disasm-file", "script"};
+            "vesta",    "vx",           "asm-file", "disasm-file", "script"};
         std::vector<std::string> present;
         for (const char *a : kPrimaryActions)
             if (result.count(a)) present.emplace_back(std::string("--") + a);
@@ -857,7 +867,7 @@ int main(int argc, char *argv[]) {
         }
 
         // (2) -m aot solo tiene sentido compilando un .vx a binario nativo.
-        if (aot_mode && !result.count("vesta")) {
+        if (aot_mode && !result.count("vesta") && !result.count("vx")) {
             std::cerr << "[cli] -m aot requiere --vesta <archivo.vx> "
                          "(compilacion nativa desde fuente Vesta).\n";
             if (result.count("run"))
@@ -1765,9 +1775,37 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
+    // Volcado del indice semantico por-declaracion (hash de contenido + grafo
+    // de deps).  Sustrato de la compilacion incremental granular / distribuida:
+    // permite comprobar que editar un simbolo solo cambia SU hash.
+    if (result.count("dump-semantic-index")) {
+        const std::string vx_path =
+            result["dump-semantic-index"].as<std::string>();
+        std::ifstream ifs(vx_path);
+        if (!ifs) {
+            std::cerr << "error: no se pudo abrir '" << vx_path << "'\n";
+            return EXIT_FAILURE;
+        }
+        std::string src((std::istreambuf_iterator<char>(ifs)),
+                        std::istreambuf_iterator<char>());
+        vx::Diagnostics diags;
+        vx::Lexer lx(src, vx_path, diags);
+        vx::Parser p(lx, diags);
+        auto mod = p.parse_program();
+        if (!mod) {
+            std::cerr << "error: fallo al parsear '" << vx_path << "'\n";
+            return EXIT_FAILURE;
+        }
+        vx::SemanticIndex idx = vx::build_semantic_index(*mod, src, vx_path);
+        std::cout << vx::semantic_index_to_json(idx) << "\n";
+        return EXIT_SUCCESS;
+    }
+
     // Ejemplo: vm.exe --vesta src/main.vx -o main.velb
-    if (result.count("vesta")) {
-        const std::string vx_path = result["vesta"].as<std::string>();
+    if (result.count("vesta") || result.count("vx")) {
+        const std::string vx_path = result.count("vesta")
+                                        ? result["vesta"].as<std::string>()
+                                        : result["vx"].as<std::string>();
         bool emit_only = result.count("vx-emit-only") > 0;
         bool emit_ir = result.count("vx-emit-ir") > 0;
 
@@ -5398,6 +5436,28 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         return EXIT_SUCCESS;
+    }
+
+    // BUG FIX: flags no reconocidos.  cxxopts corre con
+    // allow_unrecognised_options (para pass-through de args a scripts), asi que
+    // un flag mal escrito (`--vx`, `--vex`, combinaciones invalidas) NO abortaba
+    // el parse -> el programa caia SILENCIOSAMENTE al REPL interactivo (que
+    // bloquea en stdin).  Si llegamos aqui es que ningun modo se selecciono; si
+    // el usuario paso algun token que EMPIEZA con `-` (un flag), es un flag
+    // desconocido -> error claro + usage en lugar de abrir el REPL.  El REPL
+    // legitimo sin args (o `--interprete`) no pasa flags -> no se ve afectado.
+    {
+        std::vector<std::string> bad_flags;
+        for (const auto &u : result.unmatched()) {
+            if (!u.empty() && u[0] == '-') bad_flags.push_back(u);
+        }
+        if (!bad_flags.empty()) {
+            std::cerr << "[error] flag(s) no reconocido(s):";
+            for (const auto &f : bad_flags) std::cerr << " " << f;
+            std::cerr << "\n        usa 'vesta --help' para ver las opciones "
+                         "validas.\n";
+            return EXIT_FAILURE;
+        }
     }
 
     cli::Config cfg;

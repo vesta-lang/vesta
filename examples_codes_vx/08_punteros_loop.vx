@@ -1,3 +1,5 @@
+namespace ejemplos.punteros_loop;
+
 // examples_codes_vx/08_punteros_loop.vx
 //
 // Demuestra que las variables address-taken (`&i`) sobreviven correctamente

@@ -1,6 +1,6 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia VMProject
+ * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia: GPLv2 + excepcion de runtime (ver LICENSE)
  */
 /**
  * @file include/runtime/profile.h

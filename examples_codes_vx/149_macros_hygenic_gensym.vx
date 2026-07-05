@@ -1,3 +1,5 @@
+namespace ejemplos.macros_hygenic_gensym;
+
 // macros hygenic + sugar comptime + gensym.
 //
 // (1) SUGAR: `comptime X = expr;` equivale a `comptime auto X = expr;`.

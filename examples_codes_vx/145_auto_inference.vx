@@ -1,3 +1,5 @@
+namespace ejemplos.auto_inference;
+
 // inferencia local de tipo con `auto` / `var`.
 // Ambos son sinonimos contextuales (no keywords reservados); solo se
 // interpretan como tipo-decl cuando van seguidos inmediatamente por un

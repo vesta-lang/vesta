@@ -1,3 +1,5 @@
+namespace ejemplos.macro_walk_pchase;
+
 // Demo de metaprogramacion real: macro `walk` que parsea un DSL
 // arbitrario tipo `base -> 0x90 -> 0x10 -> 0x20` y emite codigo Vex
 // valido de pointer chase anidado.

@@ -1,3 +1,5 @@
+namespace ejemplos.gc_compact_aot;
+
 // 251 -- Compactacion mark-compact del OldGen en AOT (native_poo) via
 // FIELD-MAPS del descriptor de tipo.
 //

@@ -1,3 +1,5 @@
+namespace ejemplos.macro_comptime_data;
+
 // Demo: estructuras de datos en COMPILE-TIME via @Macro.
 //
 // Vex soporta arrays nativos `T[N]`, structs, strings y aritmetica

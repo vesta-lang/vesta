@@ -1,3 +1,5 @@
+namespace ejemplos.wait_inside_synchronized;
+
 // validacion estatica de wait/notify/notifyAll requieren un
 // bloque synchronized envolvente.  El positivo: dentro de synchronized
 // pasa el check estatico.  La negacion (146b) verifica el error.

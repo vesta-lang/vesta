@@ -1,3 +1,5 @@
+namespace ejemplos.unique_wraps_owned;
+
 // combo memoria: unique<T> que envuelve OTRO smart pointer owned (bug1).
 // unique<shared<i64>> y unique<unique<i64>>: el wrapper externo posee una
 // COPIA en heap del wrapper interno (sus bytes de slot: shared=8, unique=16);

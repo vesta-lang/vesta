@@ -1,3 +1,5 @@
+namespace ejemplos.iface_polimorfismo;
+
 // Polimorfismo via interface type.
 //
 // Verifica el dispatch dinamico cuando el receptor esta tipado como

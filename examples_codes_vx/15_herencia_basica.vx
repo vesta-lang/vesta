@@ -1,3 +1,5 @@
+namespace ejemplos.herencia_basica;
+
 // herencia basica + override + super
 //
 // Caso de prueba: una jerarquia Animal -> Perro.

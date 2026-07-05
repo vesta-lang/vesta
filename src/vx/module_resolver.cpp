@@ -15,11 +15,16 @@
 
 #include "vx/module_resolver.h"
 
+#include "vx/lexer.h"
+#include "vx/token.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <functional>
 #include <fstream>
 #include <sstream>
 
@@ -399,15 +404,156 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
 // se procesan sus deps tambien.  La proteccion contra ciclos vive en
 // topological_order via DFS coloreado (no aqui).
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Phase NS.2-full: extraccion ligera de los namespaces declarados en un
+// source .vx.  Lexemos (sin parsear) y buscamos el patron:
+//   KW_NAMESPACE IDENT (DOT IDENT)* (SEMICOLON | LBRACE)
+// Cubre la forma statement `namespace a.b.c;` y la forma bloque
+// `namespace a.b.c { ... }`.  Un mismo fichero puede declarar varios.
+// ---------------------------------------------------------------------------
+void ModuleGraph::extract_namespaces_(const std::string &source,
+                                      std::vector<std::string> &out) {
+    // Diagnostics throwaway: el lex no debe emitir errores relevantes aqui;
+    // si los hay, los ignoramos (el parse real reportara).
+    Diagnostics scratch;
+    Lexer lex(source, "<ns-scan>", scratch);
+    Token t = lex.next();
+    while (t.kind != TokenKind::END_OF_FILE) {
+        if (t.kind == TokenKind::KW_NAMESPACE) {
+            Token id = lex.next();
+            if (id.kind != TokenKind::IDENTIFIER) {
+                t = id;
+                continue;
+            }
+            std::string ns = id.lexeme;
+            Token nxt = lex.next();
+            while (nxt.kind == TokenKind::DOT) {
+                Token seg = lex.next();
+                if (seg.kind != TokenKind::IDENTIFIER) break;
+                ns += ".";
+                ns += seg.lexeme;
+                nxt = lex.next();
+            }
+            // nxt deberia ser SEMICOLON o LBRACE; en cualquier caso el ns ya
+            // esta completo.  Registramos si no esta duplicado.
+            if (std::find(out.begin(), out.end(), ns) == out.end()) {
+                out.push_back(ns);
+            }
+            t = nxt;
+            continue;
+        }
+        t = lex.next();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase NS.2-full: construye el indice namespace -> fichero(s) escaneando
+// recursivamente los .vx bajo las source roots (dir del root, search paths,
+// stdlib).  Lazy + idempotente.
+// ---------------------------------------------------------------------------
+void ModuleGraph::build_namespace_index_() {
+    if (ns_index_built_) return;
+    ns_index_built_ = true;
+
+    namespace fs = std::filesystem;
+
+    // Recolectar las raices a escanear (sin duplicados).
+    std::vector<std::string> roots;
+    auto add_root = [&](const std::string &d) {
+        if (d.empty()) return;
+        if (std::find(roots.begin(), roots.end(), d) == roots.end()) {
+            roots.push_back(d);
+        }
+    };
+    add_root(root_dir_);
+    for (const auto &sp : search_paths_) add_root(sp);
+    add_root(stdlib_dir_);
+
+    for (const auto &root : roots) {
+        std::error_code ec;
+        if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) continue;
+        fs::recursive_directory_iterator it(
+            root, fs::directory_options::skip_permission_denied, ec);
+        fs::recursive_directory_iterator end;
+        for (; it != end; it.increment(ec)) {
+            if (ec) { ec.clear(); continue; }
+            const fs::directory_entry &de = *it;
+            if (!de.is_regular_file(ec)) continue;
+            const fs::path &p = de.path();
+            if (p.extension() != ".vx") continue;
+            std::string canonical = normalize_path_(p.string(), "");
+            std::string source;
+            if (!read_file_(canonical, source)) continue;
+            std::vector<std::string> namespaces;
+            extract_namespaces_(source, namespaces);
+            for (const auto &ns : namespaces) {
+                auto &files = ns_index_[ns];
+                if (std::find(files.begin(), files.end(), canonical) ==
+                    files.end()) {
+                    files.push_back(canonical);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase NS.2-full: resuelve `import a.b.c;` consultando el indice.  Si el
+// namespace lo declaran varios ficheros (namespace parcial), devuelve el
+// PRIMERO (el resto se cargan como deps adicionales por process_dependencies_
+// via un segundo lookup).  MVP: un fichero por namespace es el caso comun.
+// ---------------------------------------------------------------------------
+ResolveResult
+ModuleGraph::resolve_namespace_(const std::string &ns,
+                                const std::string & /*importer_file*/) {
+    ResolveResult res;
+    build_namespace_index_();
+    auto it = ns_index_.find(ns);
+    if (it == ns_index_.end() || it->second.empty()) {
+        res.status = ResolveResult::Status::NOT_FOUND;
+        res.error_message =
+            "namespace '" + ns +
+            "' no encontrado. Ningun .vx bajo las source roots lo declara.";
+        return res;
+    }
+    const std::string &file = it->second.front();
+    const uint32_t id = load_and_parse_(file);
+    if (id == UINT32_MAX) {
+        res.status = ResolveResult::Status::PARSE_ERROR;
+        res.error_message = "fallo al cargar/parsear: " + file;
+        return res;
+    }
+    res.status = ResolveResult::Status::OK;
+    res.module_id = id;
+    return res;
+}
+
 void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
     if (!mod.parsed_ast) return;
 
-    for (auto &decl : mod.parsed_ast->decls) {
-        if (!decl) continue;
-        if (decl->kind != ast::NodeKind::ImportDecl) continue;
-        auto *imp = static_cast<ast::ImportDecl *>(decl.get());
+    // NS.1 fix: los imports pueden estar ANIDADOS dentro de un NamespaceDecl
+    // (forma statement `namespace a.b.c;` que envuelve el resto del fichero,
+    // imports incluidos).  Recolectarlos recursivamente; si no, el grafo de
+    // modulos no ve el import -> el dep no se compila -> "funcion no declarada".
+    std::vector<ast::ImportDecl *> imports;
+    std::function<void(std::vector<std::unique_ptr<ast::Node>> &)> gather =
+        [&](std::vector<std::unique_ptr<ast::Node>> &decls) {
+            for (auto &decl : decls) {
+                if (!decl) continue;
+                if (decl->kind == ast::NodeKind::ImportDecl) {
+                    imports.push_back(
+                        static_cast<ast::ImportDecl *>(decl.get()));
+                } else if (decl->kind == ast::NodeKind::NamespaceDecl) {
+                    gather(static_cast<ast::NamespaceDecl *>(decl.get())->decls);
+                }
+            }
+        };
+    gather(mod.parsed_ast->decls);
 
-        ResolveResult r = resolve(imp->path, mod.canonical_path);
+    for (auto *imp : imports) {
+        ResolveResult r = imp->by_namespace
+                              ? resolve_namespace_(imp->path, mod.canonical_path)
+                              : resolve(imp->path, mod.canonical_path);
         if (r.status == ResolveResult::Status::NOT_FOUND) {
             diags_.error(imp->loc, r.error_message);
             continue;
@@ -455,6 +601,14 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
         l.file = root_file;
         diags_.error(l, "el fichero raiz no existe: '" + root_file + "'");
         return UINT32_MAX;
+    }
+    // Phase NS.2-full: recordar el directorio del root para el indice de
+    // namespaces (escaneo recursivo del arbol del proyecto).
+    {
+        size_t slash = canonical.find_last_of('/');
+        if (slash != std::string::npos) {
+            root_dir_ = canonical.substr(0, slash);
+        }
     }
     const uint32_t id = load_and_parse_(canonical);
     if (id == UINT32_MAX) return UINT32_MAX;

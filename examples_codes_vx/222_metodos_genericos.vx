@@ -1,3 +1,5 @@
+namespace ejemplos.metodos_genericos;
+
 // Metodos genericos: `R metodo<U>(...)` (#4).
 //
 // Un metodo puede declarar SUS PROPIOS parametros de tipo, independientes de

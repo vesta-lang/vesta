@@ -1,3 +1,5 @@
+namespace ejemplos.gc_ref_field;
+
 // 252 -- Campo-referencia gc<Clase> dentro de un objeto gc<Clase> en los 3
 // modos (interp / JIT / AOT), atravesando un major_gc.
 //

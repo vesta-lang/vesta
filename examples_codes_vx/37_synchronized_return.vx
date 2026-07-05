@@ -1,3 +1,5 @@
+namespace ejemplos.synchronized_return;
+
 // synchronized + return safety:
 //
 // Verifica que un `return` dentro del body del synchronized libera

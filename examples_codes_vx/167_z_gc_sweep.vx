@@ -1,3 +1,5 @@
+namespace ejemplos.z_gc_sweep;
+
 // Z.10 ext: GC mark+sweep STW del SharedHeap.  Verifica:
 //   - sweep colecta shared objects no alcanzables (~rooted) en single-thread.
 //   - sweep funciona con multi-scheduler via STW poll en run_loop.

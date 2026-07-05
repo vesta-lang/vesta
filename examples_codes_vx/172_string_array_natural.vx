@@ -1,3 +1,5 @@
+namespace ejemplos.string_array_natural;
+
 // examples_codes_vx/172_string_array_natural.vx
 //
 // Sintaxis C-style natural para arrays de bytes + char literals.

@@ -1,3 +1,5 @@
+namespace ejemplos.comptime_introspect;
+
 // introspeccion comptime: builtins atomicos que se
 // resuelven 100% en tiempo de compilacion.  Cada llamada baja a
 // UN solo IrOp::CONST (o STRMAKE para typename) -- cero overhead

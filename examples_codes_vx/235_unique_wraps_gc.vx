@@ -1,3 +1,5 @@
+namespace ejemplos.unique_wraps_gc;
+
 // examples_codes_vx/235_unique_wraps_gc.vx
 //
 // Combinacion de modelos de memoria: unique<gc<T>>.  Un smart pointer

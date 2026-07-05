@@ -1,3 +1,5 @@
+namespace ejemplos.linkedlist_hof;
+
 // Test integrador: LinkedList con higher-order functions.
 //
 // Pone a prueba:

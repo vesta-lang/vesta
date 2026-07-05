@@ -1,3 +1,5 @@
+namespace ejemplos.generics_deep_nesting;
+
 // examples_codes_vx/175_generics_deep_nesting.vx
 //
 // Generics anidados a profundidad arbitraria con monomorphizacion

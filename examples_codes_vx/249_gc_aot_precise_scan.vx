@@ -1,3 +1,5 @@
+namespace ejemplos.gc_aot_precise_scan;
+
 // 249 -- Scan PRECISO de raices del GC de AOT (walk por tamano de frame).
 //
 // De-enmascara el bug historico: el scan preciso de AOT arrancaba el walk

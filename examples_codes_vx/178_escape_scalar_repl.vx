@@ -1,3 +1,5 @@
+namespace ejemplos.escape_scalar_repl;
+
 // Regresion C2.13: escape analysis + scalar replacement de objetos GC.
 //
 // Ejercita los patrones que el pase `ir_pass_scalar_replace_gc` debe manejar

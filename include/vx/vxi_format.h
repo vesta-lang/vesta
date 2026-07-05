@@ -51,7 +51,10 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// `@align`/`@hot`/`@cold`/`@section` viajan en el blob.
 /// v6: seccion de plantillas genericas exportadas (texto fuente) para
 /// monomorphizacion cross-module.
-inline constexpr uint16_t VXI_FORMAT_VERSION = 7; // NS.2: ns_path por simbolo
+/// v9: ns_path en templates genericas (NS.2 cross-module).
+/// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
+/// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count 84).
+inline constexpr uint16_t VXI_FORMAT_VERSION = 11; // NS.6-ext: ext_methods
 
 /// Kind del payload dentro de un BlobHeader (.vxi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
@@ -271,6 +274,9 @@ struct VxiSymbol {
     /// @c FunctionSig::is_naked para enrutar la llamada cross-modulo al
     /// dispatcher @c vrt:naked_dispatch en interp/JIT.
     bool is_naked = false;
+    /// Phase NS.3: @c "internal" (package-scoped).  Bit 0x10 del byte de flags.
+    /// El simbolo se exporta pero el consumidor de OTRO package_id lo filtra.
+    bool is_internal = false;
 };
 
 /**
@@ -303,8 +309,29 @@ struct VxiModule {
         std::string name;   ///< nombre del template
         uint8_t kind = 0;   ///< NodeKind del decl (Struct/Class/Function/...)
         std::string source; ///< texto fuente completo del decl
+        std::string ns_path; ///< NS.2 (v9): namespace declarado (vacio = ninguno)
     };
     std::vector<GenericTemplateSource> generic_templates;
+    /// NS.6-ext (v11): metodos de @c extension / @c impl que este modulo
+    /// anyade a un tipo (posiblemente IMPORTADO de otro modulo).  El
+    /// consumidor los re-apendea al layout del tipo destino para que
+    /// @c obj.metodo() resuelva cross-modulo (dispatch estatico al
+    /// @c mangled_label, que vive en el .velb de ESTE modulo).
+    struct ExtMethod {
+        std::string target_key;   ///< clave del layout destino (p.ej. shapes__Punto)
+        std::string name;         ///< nombre del metodo
+        std::string return_type;  ///< tipo de retorno canonico
+        std::vector<std::string> param_types; ///< tipos de los params
+        std::string mangled_label; ///< label real (target_key__name)
+        bool target_is_class = false;
+    };
+    std::vector<ExtMethod> ext_methods;
+    /// Phase NS.3 (v10): identidad del PAQUETE que produjo este .vxi.
+    /// Derivado de @c "vx.toml" ([package] name@version) o de @c "@id(...)"
+    /// opt-in; vacio = paquete anonimo.  Usado para: (a) desambiguar
+    /// namespaces homonimos de paquetes distintos, (b) frontera de la
+    /// visibilidad @c internal (visible solo dentro del mismo package_id).
+    std::string package_id;
 };
 
 /// Helper: alocar un blob en el pool y devolver su offset.  El emitter

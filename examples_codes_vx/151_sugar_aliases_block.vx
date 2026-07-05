@@ -1,3 +1,5 @@
+namespace ejemplos.sugar_aliases_block;
+
 // azucar sintactico exhaustivo para metaprogramacion.
 //
 // (1) ALIASES GLOBALES sin prefijo `comptime_`:

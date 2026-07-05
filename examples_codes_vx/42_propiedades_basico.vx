@@ -1,3 +1,5 @@
+namespace ejemplos.propiedades_basico;
+
 // propiedades basicas (getter + setter) y @Inline.
 //
 // El programador usa la sintaxis Java/C# de propiedades:

@@ -1,3 +1,5 @@
+namespace ejemplos.unique_ptr_basico;
+
 // Test basico de unique<T>:
 //   - unique_box(value) crea un slot stack + host_ptr al recurso
 //   - ptr_of(p) extrae el ptr raw para acceder al recurso

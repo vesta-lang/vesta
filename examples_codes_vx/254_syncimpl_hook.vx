@@ -1,3 +1,5 @@
+namespace ejemplos.syncimpl_hook;
+
 // 254_syncimpl_hook.vx
 //
 // @SyncImpl: `synchronized` HOOKEABLE.  Cuando el programa declara un par de

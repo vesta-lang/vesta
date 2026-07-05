@@ -1,3 +1,5 @@
+namespace ejemplos.lambda_captura;
+
 // Test de lambda con captura lexica.
 //
 // La lambda captura `y` del scope outer y lo usa dentro del body.

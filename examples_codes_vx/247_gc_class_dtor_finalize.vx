@@ -1,3 +1,5 @@
+namespace ejemplos.gc_class_dtor_finalize;
+
 // examples_codes_vx/247_gc_class_dtor_finalize.vx
 //
 // FINALIZADOR GC de gc<Clase> con ~Clase() (CLASS_DTOR).  Un objeto gestionado

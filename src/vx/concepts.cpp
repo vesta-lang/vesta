@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -137,6 +137,14 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
     }
 
     auto it = tc.concepts().find(name);
+    if (it == tc.concepts().end() && name.find('.') != std::string::npos) {
+        // NS.2: concepto cualificado por namespace (`mat.Numerico`).  El flatten
+        // lo registro como `mat__Numerico`; mapear `.`->`__` y reintentar.
+        std::string mangled;
+        for (char c : name)
+            mangled += (c == '.') ? std::string("__") : std::string(1, c);
+        it = tc.concepts().find(mangled);
+    }
     if (it == tc.concepts().end()) {
         r.found = false; // ni built-in ni de usuario
         return r;

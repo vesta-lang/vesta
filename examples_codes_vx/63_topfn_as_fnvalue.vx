@@ -1,3 +1,5 @@
+namespace ejemplos.topfn_as_fnvalue;
+
 // funciones top-level promocionables a function value.
 //
 //   "argumento N: tipo (void) incompatible con parametro (fn(...) -> ...)"

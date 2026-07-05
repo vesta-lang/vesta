@@ -1,3 +1,5 @@
+namespace ejemplos.operator_overload2;
+
 // examples_codes_vx/44_operator_overload2.vx
 //
 // Operator overloading C-2: resto de operadores binarios, unario neg

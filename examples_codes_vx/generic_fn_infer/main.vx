@@ -1,0 +1,15 @@
+// Fix: funcion generica con type-arg INFERIDO que llama un metodo sobre el
+// parametro generico.  Antes fallaba con "callee no es identificador" porque
+// el clon monomorfizado por inferencia no se re-chequeaba.
+concept Sumable<T> { i64 suma(); }
+
+struct Par { i64 a; i64 b; i64 suma() { return this.a + this.b; } }
+
+i64 aplica<T: Sumable>(T v) { return v.suma(); }
+
+i64 main() {
+    Par p = { .a = 40, .b = 2 };
+    i64 r = aplica(p);         // type-arg inferido -> Par; llama Par.suma()
+    println("r=${r}");
+    return r;                   // 42
+}

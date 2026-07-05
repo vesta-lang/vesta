@@ -1,3 +1,5 @@
+namespace ejemplos.unique_reassign;
+
 // Reasignacion de un campo unique<T> (ownership, sin fuga).
 //
 // Al reasignar un campo unique<T> (`c.p = a; c.p = b;`), el recurso ANTERIOR se

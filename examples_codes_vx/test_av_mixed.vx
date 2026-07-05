@@ -1,3 +1,5 @@
+namespace ejemplos.test_av_mixed;
+
 void main() {
     println("=== mix: panic + AV + null en mismo try ===");
 

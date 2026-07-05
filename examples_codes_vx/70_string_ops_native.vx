@@ -1,3 +1,5 @@
+namespace ejemplos.string_ops_native;
+
 // Operadores nativos + cstring + encoding.
 
 i32 main() {

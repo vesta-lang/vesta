@@ -1,3 +1,5 @@
+namespace ejemplos.linkedlist_option;
+
 // Test integrador: LinkedList con ADT IntOption (Some/None).
 //
 // Pone a prueba:

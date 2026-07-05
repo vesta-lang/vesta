@@ -1,3 +1,5 @@
+namespace ejemplos.struct_dtor;
+
 // Destructor de struct `~Struct()` (Fase 2a, ownership de value-types).
 //
 // Un struct value-type puede declarar un destructor `~Struct()` que se ejecuta

@@ -1,3 +1,5 @@
+namespace ejemplos.linkedlist_basico;
+
 // Test integrador: LinkedList<i32> basico (forma natural).
 //
 // Pone a prueba:

@@ -1,0 +1,13 @@
+import "shapes";
+
+// (a) el bound usa el CONCEPTO del namespace del otro modulo (geo.Numerico);
+// (b) se LLAMA a la funcion GENERICA del namespace cualificada (geo.doble).
+public T triple<T: geo.Numerico>(T x) { return x + x + x; }
+
+i64 main() {
+    i64 a = geo.doble<i64>(19);   // 38 (generico namespaced cross-modulo)
+    i64 b = triple<i64>(0);       // 0  (concepto namespaced cross-modulo)
+    i64 r = a + b + 4;            // 42
+    println("r=${r}");
+    return r;
+}

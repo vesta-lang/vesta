@@ -1,0 +1,24 @@
+// NS.2: comptime const, funcion comptime y macro declarados en un `namespace`
+// y usados por su nombre cualificado.  Todo se pliega/expande en compile-time
+// (el codigo runtime solo ve constantes / la expansion del macro).
+namespace mat;
+
+comptime i64 BASE = 40;                 // comptime const
+comptime i64 DOBLE = BASE * 2;          // comptime const derivada (compile-time)
+
+comptime i64 cuadrado(i64 n) {          // funcion comptime -> se pliega
+    return n * n;
+}
+
+@Macro
+comptime string veces7(i64 n) {         // macro -> expande a un literal
+    return to_str(n * 7);
+}
+
+i64 main() {
+    i64 c = mat.cuadrado(1);            // 1 (comptime fold)
+    i64 m = mat.veces7(0);             // 0 (macro)
+    i64 r = mat.BASE + c + m;          // 40 + 1 + 0 = 41... +1 abajo
+    println("BASE=${mat.BASE} DOBLE=${mat.DOBLE} r=${r + 1}");
+    return r + 1;                       // 42
+}

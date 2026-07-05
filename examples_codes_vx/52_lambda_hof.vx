@@ -1,3 +1,5 @@
+namespace ejemplos.lambda_hof;
+
 // Higher-order function: pasa lambda como parametro.
 //
 // `apply` recibe un fn(i32) -> i32 y un i32, llama fn(x) y devuelve.

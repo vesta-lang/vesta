@@ -1,3 +1,5 @@
+namespace ejemplos.gc_compact;
+
 // 250 -- Compactacion mark-compact (sliding in-place) del OldGen.
 //
 // Valida el GC MOVIBLE del OldGen sobre un GRAFO DE OBJETOS real (lista

@@ -2,10 +2,10 @@
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
- * Licencia VMProject
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  *
- * USO LIBRE NO COMERCIAL con atribucion obligatoria.
- * PROHIBIDO lucro sin permiso escrito.
+ * Software libre bajo GPLv2.  La salida del compilador (programas
+ * escritos en Vesta) NO queda sujeta a la GPL (excepcion de runtime).
  *
  * Descargo: Autor no responsable por modificaciones.
  */
@@ -48,7 +48,7 @@
 
 /**
  * @namespace vm
- * @brief Namespace principal del VMProject.
+ * @brief Namespace principal de Vesta.
  *
  * Contiene lexer, parser, AST y componentes
  */
@@ -328,7 +328,7 @@ class ParseWarning : public std::runtime_error {
 
 /**
  * @class Parser
- * @brief Parser recursivo descendente (top-down) para el lenguaje VMProject.
+ * @brief Parser recursivo descendente (top-down) para el lenguaje Vesta.
  *
  * Implementa un parser predictivo LL(1) que consume tokens del Lexer y genera
  * un AST. Soporta la gramatica:

@@ -1,3 +1,5 @@
+namespace ejemplos.async_args_typed;
+
 // Mejora II: @Async con argumentos y Future<T> tipado.
 //
 // Antes: @Async solo soportaba funciones SIN argumentos

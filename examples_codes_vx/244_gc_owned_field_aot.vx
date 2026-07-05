@@ -1,3 +1,5 @@
+namespace ejemplos.gc_owned_field_aot;
+
 // 244 -- Objeto GC con campo owned (shared<T>) compilable en AOT.
 //
 // Una clase GC (`gc<Caja>`) con un campo owned `shared<i64>` obliga al

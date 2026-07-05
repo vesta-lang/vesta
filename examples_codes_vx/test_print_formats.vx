@@ -1,3 +1,5 @@
+namespace ejemplos.test_print_formats;
+
 class Foo {
     i32 x;
     Foo(i32 x) {

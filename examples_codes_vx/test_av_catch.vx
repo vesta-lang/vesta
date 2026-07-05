@@ -1,3 +1,5 @@
+namespace ejemplos.test_av_catch;
+
 void main() {
     println("=== test 1: deref nullptr host ===");
     try {

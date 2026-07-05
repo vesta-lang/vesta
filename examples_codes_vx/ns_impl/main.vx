@@ -1,0 +1,17 @@
+// NS.6-ext: `impl Concept for Tipo { metodos }` implementa un concept para un
+// tipo anyadiendo los metodos requeridos.  Como los concepts de Vesta son
+// predicados comptime estructurales, el impl satisface el concept al anyadir
+// los metodos.
+concept Sumable<T> { i64 suma(); }
+
+struct Par { i64 a; i64 b; }
+impl Sumable for Par {
+    i64 suma() { return this.a + this.b; }
+}
+
+i64 main() {
+    Par p = { .a = 40, .b = 2 };
+    i64 r = p.suma();          // 42
+    println("r=${r}");
+    return r;
+}

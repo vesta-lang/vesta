@@ -1,3 +1,5 @@
+namespace ejemplos.enum_f64_payload;
+
 // Regresion test para bug Shape (bugs1.vx): enum variants con payload
 // f64 se truncaban a int por lowering incorrecto.
 //

@@ -1,3 +1,5 @@
+namespace ejemplos.bug3;
+
 // Refactor del bug3 original.  El borrow checker rechaza `lend(local_plain)`
 // en compile-time porque viola la promesa zero-cost (el slot vive en VM
 // stack, no en host heap; no se puede pasar cross-funcion sin overhead).

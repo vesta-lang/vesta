@@ -1,3 +1,5 @@
+namespace ejemplos.future_basico;
+
 // future basico:
 //
 // Patron primitivo de future + fulfill + await.  Sin sugar @Async todavia.

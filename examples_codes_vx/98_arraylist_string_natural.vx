@@ -1,3 +1,5 @@
+namespace ejemplos.arraylist_string_natural;
+
 // examples_codes_vx/98_arraylist_string_natural.vx
 //
 // Sintaxis natural ArrayList<string>:

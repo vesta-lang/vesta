@@ -1,3 +1,5 @@
+namespace ejemplos.math_builtins;
+
 // Math builtins delegando a stdlib/native/math/vesta_math.dll.
 // Cubre: sqrt, pow, fabs, floor, ceil, round, fmin, fmax, log, log2,
 // log10, sin, cos, tan, abs (i64), imin, imax, clamp.  El lowering los

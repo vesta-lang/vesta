@@ -1,3 +1,5 @@
+namespace ejemplos.spawn_basico;
+
 // spawn basico:
 //
 // Verifica que `spawn { body }` arranca un proceso hijo y devuelve un
