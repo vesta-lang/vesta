@@ -1,0 +1,69 @@
+// -----------------------------------------------------------------------------
+// Valores por defecto de campos de CLASE + auto-init con `new`
+// -----------------------------------------------------------------------------
+// Igual que los structs, los campos de una clase pueden tener un VALOR POR
+// DEFECTO (`i32 a = 5;`).  Al crear la instancia con `new`, esos defaults se
+// aplican AUTOMATICAMENTE antes del cuerpo del constructor (semantica Java/C++:
+// los field-initializers corren tras el `super()` y antes del cuerpo del ctor).
+//
+//   * `new C()`                 -> aplica los defaults; el ctor puede sobrescribir.
+//   * clase sin ctor declarado  -> se sintetiza uno que aplica los defaults.
+//   * herencia                  -> cada clase aporta los defaults de SUS campos.
+//   * genericos (`Box<T>`)      -> los defaults se conservan al instanciar.
+//
+// Funciona en interprete, JIT y AOT.
+
+// Clase sin constructor declarado: los defaults se aplican igualmente.
+class Config {
+    i32 ancho  = 80;
+    i32 alto   = 24;
+    bool color = true;
+}
+
+// El ctor con argumento sobrescribe SU campo; el resto queda en su default.
+class Ventana {
+    i32 x = 0;
+    i32 y = 0;
+    i32 z = 100;   // profundidad por defecto
+    public Ventana(i32 px, i32 py) {
+        this.x = px;
+        this.y = py;
+        // z NO se toca -> conserva su default (100).
+    }
+    public i32 area_z() { return this.z; }
+}
+
+// Herencia: Base aporta su default, Deriv el suyo.
+class Base {
+    i32 base_v = 7;
+    public Base() {}
+}
+class Panel : Base {
+    i32 panel_v = 30;
+    public Panel() { super(); }
+    public i32 total() { return this.base_v + this.panel_v; }
+}
+
+// Generico: el default de `n` se conserva en cada instanciacion.
+class Contador<T> {
+    T   valor;
+    i32 n = 42;
+    public Contador() {}
+    public i32 get_n() { return this.n; }
+}
+
+i32 main() {
+    Config cfg = new Config();
+    println("config = ${cfg.ancho}x${cfg.alto} color=${cfg.color}");  // 80x24 color=true
+
+    Ventana v = new Ventana(10, 20);
+    println("ventana= (${v.x},${v.y}) z=${v.area_z()}");             // (10,20) z=100
+
+    Panel p = new Panel();
+    println("panel  = ${p.total()}");                                // 7 + 30 = 37
+
+    Contador<i64> c = new Contador<i64>();
+    println("cont   = n=${c.get_n()}");                              // 42
+
+    return 0;
+}

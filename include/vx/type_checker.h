@@ -924,6 +924,19 @@ class TypeChecker {
     void expand_lombok_annotations();
 
     /**
+     * @brief Inyecta los valores por defecto de los campos de instancia de cada
+     *        clase (`i32 a = 5;`) al INICIO de sus constructores como
+     *        asignaciones `this.campo = default` (estilo Java/C++: los field
+     *        initializers corren antes del cuerpo del ctor, tras un super()).
+     *        Asi `new C()` aplica los defaults.  Si la clase con defaults no
+     *        declara ningun constructor, se sintetiza uno vacio.  Debe correr
+     *        tras @c expand_lombok_annotations (para cubrir ctors generados) y
+     *        antes de @c collect_classes (para que @c is_zero_init_ctor vea las
+     *        asignaciones inyectadas).
+     */
+    void apply_class_field_defaults_to_ctors();
+
+    /**
      * @brief Pase 0 extendido: registra todas las clases del modulo
      *        con sus layouts (fields + methods) antes del checking
      *        de cuerpos.  Permite que un metodo refiera a otra clase

@@ -1047,6 +1047,96 @@ static void pre_mono_collect_in_stmt(TypeChecker &tc, const ast::Stmt *s) {
     }
 }
 
+void TypeChecker::apply_class_field_defaults_to_ctors() {
+    // Construye un statement `this.<campo> = <default>;`.
+    auto make_field_init_stmt =
+        [](const std::string &fname, const ast::Expr *init,
+           SourceLoc loc) -> std::unique_ptr<ast::Stmt> {
+        GenSubst empty; // clon literal (sin sustitucion de tipos).
+        auto this_e = std::make_unique<ast::ThisExpr>();
+        this_e->loc = loc;
+        auto fa = std::make_unique<ast::FieldAccessExpr>();
+        fa->loc = loc;
+        fa->base = std::move(this_e);
+        fa->field_name = fname;
+        auto assign = std::make_unique<ast::AssignExpr>();
+        assign->loc = loc;
+        assign->op = ast::AssignOp::Assign;
+        assign->target = std::move(fa);
+        assign->value = clone_expr(init, empty);
+        auto stmt = std::make_unique<ast::ExprStmt>();
+        stmt->loc = loc;
+        stmt->expr = std::move(assign);
+        return stmt;
+    };
+
+    // Procesa un vector de decls (recursivo para NamespaceDecl).
+    std::function<void(std::vector<std::unique_ptr<ast::Node>> &)> visit =
+        [&](std::vector<std::unique_ptr<ast::Node>> &decls) {
+            for (auto &d : decls) {
+                if (!d) continue;
+                if (d->kind == ast::NodeKind::NamespaceDecl) {
+                    visit(static_cast<ast::NamespaceDecl *>(d.get())->decls);
+                    continue;
+                }
+                if (d->kind != ast::NodeKind::ClassDecl) continue;
+                auto *cd = static_cast<ast::ClassDecl *>(d.get());
+                if (cd->is_interface) continue;
+                // Campos de instancia PROPIOS con default (en orden de decl).
+                std::vector<const ast::ClassFieldDecl *> defs;
+                for (const auto &f : cd->fields) {
+                    if (f.is_static || !f.init) continue;
+                    defs.push_back(&f);
+                }
+                if (defs.empty()) continue;
+
+                // Localizar los constructores propios de la clase.
+                std::vector<ast::ClassMethodDecl *> ctors;
+                for (auto &m : cd->methods) {
+                    if (m && m->is_constructor) ctors.push_back(m.get());
+                }
+                // Sin constructor declarado: sintetizar uno vacio para tener
+                // donde aplicar los defaults (equivalente al ctor por defecto).
+                if (ctors.empty()) {
+                    auto ctor = std::make_unique<ast::ClassMethodDecl>();
+                    ctor->loc = cd->loc;
+                    ctor->name = cd->name;
+                    ctor->is_constructor = true;
+                    ctor->access = 0; // public
+                    ctor->body = std::make_unique<ast::BlockStmt>();
+                    ctor->body->loc = cd->loc;
+                    ctors.push_back(ctor.get());
+                    cd->methods.push_back(std::move(ctor));
+                }
+
+                for (auto *ctor : ctors) {
+                    if (!ctor->body)
+                        ctor->body = std::make_unique<ast::BlockStmt>();
+                    auto &stmts = ctor->body->body;
+                    // Los field-init corren tras un super()/this() inicial (que
+                    // debe ir primero); si no lo hay, al inicio del cuerpo.
+                    size_t pos = 0;
+                    if (!stmts.empty() &&
+                        stmts[0]->kind == ast::NodeKind::ExprStmt) {
+                        auto *es = static_cast<ast::ExprStmt *>(stmts[0].get());
+                        if (es->expr &&
+                            es->expr->kind == ast::NodeKind::SuperCallExpr)
+                            pos = 1; // super() debe ir primero.
+                    }
+                    std::vector<std::unique_ptr<ast::Stmt>> inits;
+                    inits.reserve(defs.size());
+                    for (const auto *f : defs)
+                        inits.push_back(
+                            make_field_init_stmt(f->name, f->init.get(), f->loc));
+                    stmts.insert(stmts.begin() + pos,
+                                 std::make_move_iterator(inits.begin()),
+                                 std::make_move_iterator(inits.end()));
+                }
+            }
+        };
+    visit(mod_.decls);
+}
+
 bool TypeChecker::run() {
     initial_errors_ = diags_.error_count();
     push_scope(); // global
@@ -1178,6 +1268,11 @@ bool TypeChecker::run() {
     // @Builder, @Synchronized, @Log.  @NonNull se traduce a la
     // sintaxis `nonnull T` del lenguaje (validacion compile-time).
     expand_lombok_annotations();
+
+    // Inyectar los valores por defecto de campos de instancia en los
+    // constructores (antes de monomorphizar: los templates los propagan a sus
+    // instanciaciones al clonar los cuerpos).
+    apply_class_field_defaults_to_ctors();
 
     // -------- registrar templates + monomorphizar.
     // Primero localizamos todas las clases con type_params y las
