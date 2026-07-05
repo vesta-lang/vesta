@@ -52,6 +52,7 @@ CASES = [
     ("examples_codes_vx/274_overlay_checked.vx", 351),
     ("examples_codes_vx/275_overlay_rva_resolver.vx", 31693),
     ("examples_codes_vx/276_overlay_parent_walk.vx", 162),
+    ("examples_codes_vx/277_overlay_element_tlv.vx", 170),
 ]
 
 

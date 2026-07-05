@@ -181,6 +181,10 @@ struct StructFieldInfo {
     /// no-owning al AST.
     ast::Expr *array_count = nullptr;
     ast::Expr *array_stride = nullptr;
+    /// Overlay array POR-ELEMENTO (`T Name[c] @element { ... }`): resolver que da
+    /// la DIRECCION del elemento `index` (stride variable / TLV).  no-owning al
+    /// AST.  null = array de stride fijo (usa @c array_stride).
+    ast::BlockStmt *element_block = nullptr;
     /// Overlay array SIN count (`T Name[] @offset(...) stride(s)`): el usuario
     /// gestiona la terminacion (p.ej. bucle hasta entrada nula).  @c array_count
     /// null + @c is_array true = array no acotado.

@@ -548,7 +548,8 @@ class Lowering {
      * nombre; @c generated_overlay_resolvers_ evita duplicados.
      */
     std::string generate_overlay_resolver(const StructLayout &lay,
-                                          const StructFieldInfo &fi);
+                                          const StructFieldInfo &fi,
+                                          bool is_element = false);
     /// Nombres de resolvedores de overlay ya sintetizados (dedup).
     std::unordered_set<std::string> generated_overlay_resolvers_;
     /**

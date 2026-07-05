@@ -12909,9 +12909,36 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         const StructFieldInfo *afi = nullptr;
         for (const auto &fi : lay.fields)
             if (fi.name == fa->field_name) { afi = &fi; break; }
-        if (!afi || !afi->array_stride) {
+        if (!afi || (!afi->array_stride && !afi->element_block)) {
             error_at(e->loc, "lowering: campo array de overlay no encontrado");
             return ir::IR_NO_VALUE;
+        }
+        // @element: la direccion del elemento la da un resolver POR-ELEMENTO
+        // `__ovl_element_<S>_<f>(self, index, [root])` (stride variable / TLV).
+        // Devuelve directamente la direccion del elemento `index`.
+        if (afi->element_block) {
+            const std::string rname =
+                generate_overlay_resolver(lay, *afi, /*is_element=*/true);
+            ir::IrValueId idx_v = lower_expr(e->index.get());
+            if (idx_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            idx_v = cast_if_needed(idx_v, fn_->values[idx_v].type,
+                                   ir::IrType::I64, e->loc.line);
+            ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[addr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALL;
+            ins.func_name = rname;
+            ins.type = ir::IrType::PTR;
+            ins.dst = addr;
+            ins.operands = {ov_base, idx_v};
+            if (afi->resolver_uses_parent) {
+                const ir::IrValueId root_v = lower_overlay_root(e->base.get());
+                if (root_v != ir::IR_NO_VALUE) ins.operands.push_back(root_v);
+            }
+            ins.is_call_site = true;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return addr;
         }
         // Ligar `base` + hermanos para las exprs de pos/stride.  Helper: LOAD
         // en `addr` con el ancho del hermano y bind por nombre.
@@ -14077,9 +14104,18 @@ ir::IrValueId Lowering::lower_overlay_root(ast::Expr *e) {
 }
 
 std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
-                                                const StructFieldInfo &fi) {
-    const std::string fn_name = "__ovl_resolve_" + lay.name + "_" + fi.name;
+                                                const StructFieldInfo &fi,
+                                                bool is_element) {
+    const std::string fn_name =
+        (is_element ? "__ovl_element_" : "__ovl_resolve_") + lay.name + "_" +
+        fi.name;
     if (generated_overlay_resolvers_.count(fn_name)) return fn_name; // dedup
+    // Insertar YA el nombre: un resolver @element puede RECURSAR
+    // (`self.Name[index-1]`); sin esto la generacion compile-time no terminaria.
+    // La recursion se vuelve un CALL runtime al mismo resolver.
+    generated_overlay_resolvers_.insert(fn_name);
+    ast::BlockStmt *body_block =
+        is_element ? fi.element_block : fi.offset_block;
 
     // Salvar contexto del padre (mismo protocolo que generate_lambda_helper).
     ir::IrFunction *saved_fn = fn_;
@@ -14108,8 +14144,16 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     child_fn.values[self_pv].is_param = true;
     child_fn.values[self_pv].is_host_ptr = true;
     child_fn.params.push_back(self_pv);
-    // F4: si el resolver usa parent<T>(), un 2o param `root` = puntero de la
-    // vista RAIZ (el call site lo enhebra caminando la cadena de accesos).
+    // @element: 2o param `index` (i64) = el elemento a resolver.  Orden de
+    // params: self, [index], [root].
+    ir::IrValueId index_pv = ir::IR_NO_VALUE;
+    if (is_element) {
+        index_pv = child_fn.new_value(ir::IrType::I64, "%index");
+        child_fn.values[index_pv].is_param = true;
+        child_fn.params.push_back(index_pv);
+    }
+    // F4: si el resolver usa parent<T>(), un param `root` = puntero de la vista
+    // RAIZ (el call site lo enhebra caminando la cadena de accesos).
     ir::IrValueId root_pv = ir::IR_NO_VALUE;
     if (fi.resolver_uses_parent) {
         root_pv = child_fn.new_value(ir::IrType::PTR, "%root");
@@ -14138,11 +14182,13 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     bind("self", self_pv);
     // F4: `parent<T>()` en el body baja a este valor (el puntero raiz).
     if (root_pv != ir::IR_NO_VALUE) bind("__ovl_root", root_pv);
+    // @element: `index` en scope.
+    if (index_pv != ir::IR_NO_VALUE) bind("index", index_pv);
     for (const auto &sib : lay.fields) {
         // Saltar dinamicos y ARRAYS: los arrays no son un escalar cargable; se
         // navegan por `this.<array>[i]` (no como nombre desnudo).
         if (sib.offset_expr || sib.offset_block || sib.array_count ||
-            sib.array_stride)
+            sib.array_stride || sib.element_block)
             continue; // solo escalares de offset constante
         ir::IrValueId saddr = self_pv;
         if (sib.offset != 0) {
@@ -14169,7 +14215,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     }
 
     // Lower del body: if/else, multiples return, etc. -> RET (la direccion).
-    lower_block(fi.offset_block);
+    lower_block(body_block);
     if (!block_terminated_) {
         // Defensa: si el body no termina en return, devolvemos base (identidad).
         ir::IrInstr rt{};

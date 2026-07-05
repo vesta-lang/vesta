@@ -2607,8 +2607,13 @@ void TypeChecker::collect_globals() {
                     // Array (F3b): copiar count/stride; el offset es `pos`.
                     fi.array_count = f.array_count.get();
                     fi.array_stride = f.array_stride.get();
+                    fi.element_block = f.element_block.get();
                     fi.is_array = f.is_array;
-                    if (f.offset_block) {
+                    if (f.element_block) {
+                        // Array POR-ELEMENTO `@element { }`: la direccion de cada
+                        // elemento la da el resolver; no hay offset/pos de tabla.
+                        fi.offset = 0;
+                    } else if (f.offset_block) {
                         // Resolver de BLOQUE (F3): `@offset { ... }`.  Devuelve
                         // la direccion final; se resuelve en tiempo de acceso.
                         fi.offset = 0;
@@ -2675,7 +2680,8 @@ void TypeChecker::collect_globals() {
                 // expr debe evaluar a un entero; el bloque devuelve una direccion.
                 bool any_dyn = false;
                 for (auto &f : s->fields)
-                    if (f.offset_expr || f.offset_block || f.array_stride) {
+                    if (f.offset_expr || f.offset_block || f.array_stride ||
+                        f.element_block) {
                         any_dyn = true;
                         break;
                     }
@@ -2725,6 +2731,11 @@ void TypeChecker::collect_globals() {
                                 diags_.error(f.loc, "el stride del array '" +
                                                         f.name +
                                                         "' debe ser entero");
+                        }
+                        // F4/@element: resolver POR-ELEMENTO -> pase diferido
+                        // (con `index` en scope, y puede usar parent<T>()).
+                        if (f.element_block) {
+                            pending_overlay_resolvers_.push_back({s, &f});
                         }
                     }
                     pop_scope();
@@ -3746,7 +3757,11 @@ void TypeChecker::check_overlay_resolvers_deferred() {
     for (auto &pr : pending_overlay_resolvers_) {
         const ast::StructDecl *s = pr.first;
         const ast::StructFieldDecl *f = pr.second;
-        if (!f->offset_block) continue;
+        // Resolver de campo (@offset{}) o POR-ELEMENTO (@element{}).
+        const bool is_element = (f->element_block != nullptr);
+        ast::BlockStmt *block =
+            is_element ? f->element_block.get() : f->offset_block.get();
+        if (!block) continue;
         auto it = struct_layouts_.find(s->name);
         if (it == struct_layouts_.end()) continue;
         StructLayout &lay = it->second;
@@ -3772,10 +3787,17 @@ void TypeChecker::check_overlay_resolvers_deferred() {
         tsym.type.struct_name = s->name;
         (void)declare("this", tsym);
         (void)declare("self", tsym);
+        // @element: `index` (i64) del elemento a resolver, en scope.
+        if (is_element) {
+            Symbol isym;
+            isym.kind = SymbolKind::Variable;
+            isym.type = Type{PrimitiveKind::I64};
+            (void)declare("index", isym);
+        }
         overlay_resolver_active_ = true;
         overlay_resolver_used_parent_ = false;
         overlay_resolver_parent_type_.clear();
-        check_block(const_cast<ast::BlockStmt *>(f->offset_block.get()),
+        check_block(const_cast<ast::BlockStmt *>(block),
                     Type{PrimitiveKind::U64});
         if (overlay_resolver_used_parent_) {
             for (auto &lf : lay.fields)
@@ -6752,7 +6774,8 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
                 auto it = struct_layouts_.find(ovt.struct_name);
                 if (it != struct_layouts_.end() && it->second.is_overlay) {
                     for (const auto &fi : it->second.fields) {
-                        if (fi.name == fa->field_name && fi.array_stride) {
+                        if (fi.name == fa->field_name &&
+                            (fi.array_stride || fi.element_block)) {
                             if (e->index) {
                                 Type idt = check_expr(e->index.get());
                                 e->index->result_type = idt;

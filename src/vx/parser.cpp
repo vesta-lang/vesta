@@ -3805,6 +3805,20 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         if (current_.kind == TokenKind::AT) {
             (void)consume(); // '@'
             if (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "element") {
+                // Overlay array POR-ELEMENTO: `T Name[c] @element { ...; return
+                // <dir del elemento index>; }`.  Solo valido en un array.
+                (void)consume(); // 'element'
+                if (!f.is_array) {
+                    error_here("@element solo es valido en un campo array "
+                               "(`T Name[] @element { ... }`)");
+                }
+                if (current_.kind == TokenKind::LBRACE) {
+                    f.element_block = parse_block();
+                } else {
+                    error_here("se esperaba '{' tras @element");
+                }
+            } else if (current_.kind == TokenKind::IDENTIFIER &&
                 current_.lexeme == "offset") {
                 (void)consume(); // 'offset'
                 if (current_.kind == TokenKind::LBRACE) {

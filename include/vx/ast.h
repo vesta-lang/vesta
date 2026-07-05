@@ -1964,6 +1964,11 @@ struct StructFieldDecl {
     /// a `base + pos + i*stride`.  null = campo escalar (no array).
     std::unique_ptr<Expr> array_count;
     std::unique_ptr<Expr> array_stride;
+    /// Overlay array POR-ELEMENTO (`T Name[count] @element { ... }`): resolver que
+    /// devuelve la DIRECCION del elemento `index` (con `index` en scope), para
+    /// stride VARIABLE / records de longitud variable / TLV.  Puede acceder al
+    /// elemento anterior (`self.Name[index-1]`).  null = array de stride fijo.
+    std::unique_ptr<BlockStmt> element_block;
     /// Overlay array marcado con `[` (aunque el count este vacio: `T Name[]`).
     /// Distingue un array NO acotado (el usuario gestiona la terminacion) de un
     /// campo escalar.  true = es un array (con o sin @c array_count).
