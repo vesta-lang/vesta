@@ -1,0 +1,74 @@
+// -----------------------------------------------------------------------------
+// Overlay structs (F3b-ext): ARRAY de ELEMENTOS OVERLAY-STRUCT (tabla PE)
+// -----------------------------------------------------------------------------
+// El elemento de un array de overlay puede ser OTRO @overlay struct.  Entonces
+// `v.Tabla[i]` es una vista tipada del elemento i (en base + pos + i*stride), y
+// `v.Tabla[i].campo` lee/escribe un campo de ese elemento -- sin aritmetica de
+// punteros a mano.  Es exactamente el patron para parsear la tabla de secciones
+// de un PE, los program headers de un ELF, cualquier tabla de records tipados.
+//
+// count y stride pueden ser campos hermanos (runtime): la tabla se describe una
+// vez y se recorre con un bucle normal.  Funciona en interprete, JIT y AOT.
+
+// Cabecera de seccion de un PE (simplificada; el real tiene mas campos).
+@overlay struct SectionHeader {
+    u32 VirtualSize     @0x00;
+    u32 VirtualAddress  @0x04;
+    u32 SizeOfRawData   @0x08;
+    u32 PointerToRawData @0x0C;
+}
+
+// Imagen PE: magic + numero de secciones + offset a la tabla + la tabla.
+@overlay struct PeImage {
+    u16 magic         @0x00;   // 'MZ' = 0x5A4D
+    u32 num_sections  @0x04;   // count RUNTIME
+    u32 sec_off       @0x08;   // offset a la tabla RUNTIME
+    // Tabla de secciones (cada SectionHeader ocupa 40 bytes en un PE real).
+    SectionHeader Sections[num_sections] @offset(sec_off) stride(40);
+}
+
+// Rellena la seccion i con valores derivados de i (para el ejemplo).
+void escribe_seccion(PeImage pe, i32 i) {
+    pe.Sections[i].VirtualSize     = (u32)(0x1000 * (i + 1));
+    pe.Sections[i].VirtualAddress  = (u32)(0x2000 + 0x1000 * i);
+    pe.Sections[i].SizeOfRawData   = (u32)(0x200 * (i + 1));
+    pe.Sections[i].PointerToRawData = (u32)(0x400 + 0x200 * i);
+}
+
+i32 main() {
+    u8* buf = (u8*) malloc(512);
+    PeImage pe = PeImage(buf);
+    pe.magic        = (u16)0x5A4D;   // 'MZ'
+    pe.num_sections = (u32)3;
+    pe.sec_off      = (u32)0x40;     // tabla en 0x40 (secciones en 0x40, 0x68, 0x90)
+
+    // Crear la tabla escribiendo cada seccion a traves de la vista.
+    i32 i = 0;
+    while (i < 3) {
+        escribe_seccion(pe, i);
+        i = i + 1;
+    }
+
+    // Recorrer la tabla tipada con un bucle: sumar VirtualAddress + SizeOfRawData.
+    u32 total = 0;
+    i = 0;
+    while ((u32)i < pe.num_sections) {
+        u32 va = pe.Sections[i].VirtualAddress;
+        u32 rd = pe.Sections[i].SizeOfRawData;
+        println("sec ${i}: VA=${va:hex} raw=${rd:hex}");
+        total = total + va + rd;
+        i = i + 1;
+    }
+
+    // Verificacion cruda: la seccion 1 (0x40 + 1*40 = 0x68) VirtualAddress@+4.
+    u32 raw_va1 = *(u32*)(buf + 0x68 + 0x04);   // 0x2000 + 0x1000 = 0x3000
+    println("magic=${pe.magic:hex} raw VA[1]=${raw_va1:hex}");
+
+    free(buf);
+    // total = sum_i VirtualAddress + SizeOfRawData:
+    //   i=0: 0x2000 + 0x200  = 0x2200
+    //   i=1: 0x3000 + 0x400  = 0x3400
+    //   i=2: 0x4000 + 0x600  = 0x4600
+    //   total = 0x9C00 = 39936
+    return (i32)total;   // 39936 (AOT exit-code = 39936 & 0xFF = 0)
+}

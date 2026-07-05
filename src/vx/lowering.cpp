@@ -2784,6 +2784,18 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 !sem.is_virtual) {
                 param_is_host_ptr = true;
             }
+            // Overlay: un valor overlay ES un puntero (host) de 8 bytes a la
+            // memoria ajena.  Pasado como parametro se recibe como PTR host;
+            // sin esto los accesos `v.campo`/`v.arr[i]` dentro del callee
+            // emiten mov/loadz (VM) en vez de movh/loadzh -> memoria erronea.
+            if (sem.kind == PrimitiveKind::STRUCT && !sem.struct_name.empty()) {
+                auto ovit = tc_.struct_layouts().find(sem.struct_name);
+                if (ovit != tc_.struct_layouts().end() &&
+                    ovit->second.is_overlay) {
+                    pt = ir::IrType::PTR;
+                    param_is_host_ptr = true;
+                }
+            }
             // BugFix sret-cross-mem (2026-06-04): los parametros de
             // tipo Optional<T>/Result<V,E> son PTRs al buffer SRET
             // alocado por el caller (que ahora siempre es host_alloca).
