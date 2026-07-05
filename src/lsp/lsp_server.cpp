@@ -784,6 +784,49 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         }
     }
 
+    // NS.4: fallback por indice semantico -- resuelve el acceso CUALIFICADO por
+    // namespace (`shapes.area`, cursor sobre `area`) que build_doc_symbols no
+    // cubre.  El word es el ULTIMO segmento; el contenedor es el namespace.  La
+    // complejidad Big-O de abajo ya encuentra el coste por sufijo `__area`
+    // (el nombre mangled `org__geo__shapes__area` termina asi).
+    if (!resolved) {
+        const DocAnalysis &anx = engine_.analyze_document(uri, text);
+        for (const auto &s : anx.sem_index.symbols) {
+            const std::string &q = s.name;
+            const size_t dot = q.rfind('.');
+            const std::string simple =
+                (dot == std::string::npos) ? q : q.substr(dot + 1);
+            if (simple != word)
+                continue;
+            switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+            case vx::ast::NodeKind::StructDecl: kind = SymbolKind::Struct; break;
+            case vx::ast::NodeKind::ClassDecl: kind = SymbolKind::Class; break;
+            case vx::ast::NodeKind::EnumDecl: kind = SymbolKind::Enum; break;
+            case vx::ast::NodeKind::TypeAliasDecl:
+                kind = SymbolKind::TypeAlias;
+                break;
+            case vx::ast::NodeKind::GlobalVarDecl:
+                kind = SymbolKind::Variable;
+                break;
+            default: kind = SymbolKind::Function; break;
+            }
+            container = (dot == std::string::npos) ? std::string()
+                                                   : q.substr(0, dot);
+            // Firma = cabecera del decl (primera linea del span, hasta '{'/';').
+            const size_t len = std::min<size_t>(s.src_length, 240);
+            std::string span = text.substr(s.src_offset, len);
+            const size_t cut = span.find_first_of("{;\n");
+            signature = (cut == std::string::npos) ? span : span.substr(0, cut);
+            // trim trailing spaces.
+            while (!signature.empty() && (signature.back() == ' ' ||
+                                          signature.back() == '\t' ||
+                                          signature.back() == '\r'))
+                signature.pop_back();
+            resolved = true;
+            break;
+        }
+    }
+
     if (!resolved) {
         send_result(msg.at("id"), nullptr);
         return;
