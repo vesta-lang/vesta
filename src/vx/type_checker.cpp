@@ -12167,6 +12167,32 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     size_t id_depth = 0;
     const Symbol *s = lookup_with_depth(id->name, &id_depth);
     if (!s) {
+        // NS.1 fix: fallback de namespace para codigo emitido por comptime
+        // (comptime_compile / comptime_emit_expr) cuyo string referencia un
+        // hermano por su nombre PUBLICO (`doblar`), pero el simbolo real quedo
+        // mangled por el namespace (`ejemplos__X__doblar`).  El string no lo
+        // reescribe el flatten (es data), asi que aqui buscamos un match UNICO
+        // que termine en `__<name>` y reescribimos la llamada.
+        if (id->name.find("__") == std::string::npos) {
+            const std::string suffix = "__" + id->name;
+            std::string found;
+            int matches = 0;
+            for (const auto &kv : sig_by_name_) {
+                const std::string &fn = kv.first;
+                if (fn.size() > suffix.size() &&
+                    fn.compare(fn.size() - suffix.size(), suffix.size(),
+                               suffix) == 0) {
+                    found = fn;
+                    if (++matches > 1) break;
+                }
+            }
+            if (matches == 1) {
+                const_cast<ast::IdentExpr *>(id)->name = found;
+                s = lookup_with_depth(found, &id_depth);
+            }
+        }
+    }
+    if (!s) {
         diags_.error(e->loc, "funcion no declarada: '" + id->name + "'");
         for (auto &a : e->args)
             (void)check_expr(a.get());

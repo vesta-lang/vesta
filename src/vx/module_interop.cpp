@@ -308,6 +308,43 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
             return Type{PrimitiveKind::STRUCT, type_str};
         }
     }
+    // NS.1 fix: fallback de namespace para tipos referenciados por su nombre
+    // PUBLICO simple dentro de codigo emitido por comptime (`sizeof<Vec3>()`
+    // via comptime_compile).  El tipo real quedo mangled (`ejemplos__X__Vec3`);
+    // el string no lo reescribe el flatten.  Buscar un match UNICO que termine
+    // en `__<type_str>` en los layouts.  Solo para identificadores simples.
+    if (type_str.find("__") == std::string::npos &&
+        type_str.find('<') == std::string::npos &&
+        type_str.find('.') == std::string::npos) {
+        const std::string suffix = "__" + type_str;
+        auto ends_with = [&](const std::string &n) {
+            return n.size() > suffix.size() &&
+                   n.compare(n.size() - suffix.size(), suffix.size(), suffix) ==
+                       0;
+        };
+        std::string found;
+        PrimitiveKind kind = PrimitiveKind::VOID;
+        int matches = 0;
+        for (const auto &kv : struct_layouts_)
+            if (ends_with(kv.first)) {
+                found = kv.first;
+                kind = PrimitiveKind::STRUCT;
+                ++matches;
+            }
+        for (const auto &kv : class_layouts_)
+            if (ends_with(kv.first)) {
+                found = kv.first;
+                kind = PrimitiveKind::CLASS;
+                ++matches;
+            }
+        for (const auto &kv : enum_layouts_)
+            if (ends_with(kv.first)) {
+                found = kv.first;
+                kind = PrimitiveKind::STRUCT;
+                ++matches;
+            }
+        if (matches == 1) return Type{kind, found};
+    }
     // No se pudo resolver: devolver VOID (sentinel).  El caller decide
     // si emitir error o intentar resolver mas adelante (round-trip
     // cross-modulo cuando se inyectan tipos en orden equivocado).
