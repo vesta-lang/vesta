@@ -2609,6 +2609,7 @@ void TypeChecker::collect_globals() {
                     fi.array_stride = f.array_stride.get();
                     fi.element_block = f.element_block.get();
                     fi.is_array = f.is_array;
+                    fi.endian = f.endian;
                     if (f.element_block) {
                         // Array POR-ELEMENTO `@element { }`: la direccion de cada
                         // elemento la da el resolver; no hay offset/pos de tabla.

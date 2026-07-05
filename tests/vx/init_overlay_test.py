@@ -55,6 +55,7 @@ CASES = [
     ("examples_codes_vx/277_overlay_element_tlv.vx", 170),
     ("examples_codes_vx/278_overlay_extent.vx", 40),
     ("examples_codes_vx/279_overlay_assembler.vx", 972),
+    ("examples_codes_vx/280_overlay_endian.vx", 51482),
 ]
 
 

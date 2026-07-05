@@ -1973,6 +1973,11 @@ struct StructFieldDecl {
     /// Distingue un array NO acotado (el usuario gestiona la terminacion) de un
     /// campo escalar.  true = es un array (con o sin @c array_count).
     bool is_array = false;
+    /// Overlay ENDIANNESS del campo (F5): 0 = nativo/host (sin swap), 1 = big-
+    /// endian (`@be`), 2 = little-endian explicito (`@le`).  Un campo `@be` en un
+    /// host little-endian (x86-64) emite BYTESWAP en cada read/write.  Para
+    /// formatos de endianness fija (red = BE, ELF lo declara en e_ident).
+    uint8_t endian = 0;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`

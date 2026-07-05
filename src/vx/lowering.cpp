@@ -14691,7 +14691,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     }
 
     const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
-    const ir::IrValueId dst = fn_->new_value(ft);
+    ir::IrValueId dst = fn_->new_value(ft);
     ir::IrInstr ins{};
     ins.op = ir::IrOp::LOAD;
     ins.type = ft;
@@ -14699,6 +14699,52 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     ins.operands = {addr};
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
+
+    // F5: campo `@be` (big-endian) en host little-endian -> BYTESWAP del valor
+    // cargado (solo enteros multi-byte).  El resto (bit-field, host_ptr) opera
+    // sobre el valor ya en orden nativo.
+    {
+        const Type bt_e = e->base ? e->base->result_type : Type{};
+        if (bt_e.kind == PrimitiveKind::STRUCT) {
+            auto it_e = tc_.struct_layouts().find(bt_e.struct_name);
+            if (it_e != tc_.struct_layouts().end()) {
+                for (const auto &f : it_e->second.fields) {
+                    if (f.name == e->field_name && f.endian == 1 &&
+                        (f.size == 2 || f.size == 4 || f.size == 8)) {
+                        // BYTESWAP swapea los 8 bytes del registro: para un campo
+                        // de w bytes, bswap64 deja los w bytes utiles ARRIBA;
+                        // un SHR de (8-w)*8 los baja ya en orden nativo.
+                        ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);
+                        {
+                            ir::IrInstr b{};
+                            b.op = ir::IrOp::BYTESWAP;
+                            b.type = ir::IrType::U64;
+                            b.dst = sw64;
+                            b.operands = {dst};
+                            b.source_line = e->loc.line;
+                            fn_->append(current_block_, std::move(b));
+                        }
+                        ir::IrValueId res = sw64;
+                        if (f.size < 8) {
+                            ir::IrValueId shamt = emit_const(
+                                ir::IrType::U64, (uint64_t)(8 - f.size) * 8,
+                                e->loc.line);
+                            res = fn_->new_value(ir::IrType::U64);
+                            ir::IrInstr s{};
+                            s.op = ir::IrOp::SHR;
+                            s.type = ir::IrType::U64;
+                            s.dst = res;
+                            s.operands = {sw64, shamt};
+                            s.source_line = e->loc.line;
+                            fn_->append(current_block_, std::move(s));
+                        }
+                        dst = res;
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     // Propagar is_host_ptr cuando el campo es un puntero/array host.
     // Critico para casos como `(*virtual_ptr).buf` donde el struct
@@ -18053,6 +18099,49 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         }
         rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft,
                              e->value ? e->value->loc : e->loc);
+
+        // F5: campo `@be` -> BYTESWAP del valor a escribir (simetrico con el
+        // read): el store LE deja los bytes en orden big-endian en memoria.
+        {
+            const Type bt_w = fa->base ? fa->base->result_type : Type{};
+            if (bt_w.kind == PrimitiveKind::STRUCT) {
+                auto it_w = tc_.struct_layouts().find(bt_w.struct_name);
+                if (it_w != tc_.struct_layouts().end()) {
+                    for (const auto &f : it_w->second.fields) {
+                        if (f.name == fa->field_name && f.endian == 1 &&
+                            f.bit_width == 0 &&
+                            (f.size == 2 || f.size == 4 || f.size == 8)) {
+                            ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);
+                            {
+                                ir::IrInstr b{};
+                                b.op = ir::IrOp::BYTESWAP;
+                                b.type = ir::IrType::U64;
+                                b.dst = sw64;
+                                b.operands = {rhs};
+                                b.source_line = e->loc.line;
+                                fn_->append(current_block_, std::move(b));
+                            }
+                            ir::IrValueId res = sw64;
+                            if (f.size < 8) {
+                                ir::IrValueId shamt = emit_const(
+                                    ir::IrType::U64, (uint64_t)(8 - f.size) * 8,
+                                    e->loc.line);
+                                res = fn_->new_value(ir::IrType::U64);
+                                ir::IrInstr s{};
+                                s.op = ir::IrOp::SHR;
+                                s.type = ir::IrType::U64;
+                                s.dst = res;
+                                s.operands = {sw64, shamt};
+                                s.source_line = e->loc.line;
+                                fn_->append(current_block_, std::move(s));
+                            }
+                            rhs = res;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         // WRITE de bit field: read-modify-write.  Si el campo es bit
         // field, leemos el storage word completo, le limpiamos los

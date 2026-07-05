@@ -3802,9 +3802,15 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // (constante) o `@offset(expr)` (F2: expresion que puede referenciar
         // campos hermanos, `@offset(prev + 0x10)`).  El caso puramente constante
         // se pliega a explicit_offset; el resto va a offset_expr.
-        if (current_.kind == TokenKind::AT) {
+        while (current_.kind == TokenKind::AT) {
             (void)consume(); // '@'
             if (current_.kind == TokenKind::IDENTIFIER &&
+                (current_.lexeme == "be" || current_.lexeme == "le")) {
+                // Overlay endianness (F5): `@be` (big-endian) / `@le` (little).
+                // Combinable con @offset: `u32 x @be @0x00;`.
+                f.endian = (current_.lexeme == "be") ? 1 : 2;
+                (void)consume();
+            } else if (current_.kind == TokenKind::IDENTIFIER &&
                 current_.lexeme == "element") {
                 // Overlay array POR-ELEMENTO: `T Name[c] @element { ...; return
                 // <dir del elemento index>; }`.  Solo valido en un array.

@@ -1,0 +1,51 @@
+// -----------------------------------------------------------------------------
+// Endianness @be / @le: parsear y CREAR formatos big-endian (red, ELF BE, ...)
+// -----------------------------------------------------------------------------
+// El orden de bytes de un campo lo declara `@be` (big-endian) o `@le` (little).
+// En un host little-endian (x86-64) un campo `@be` emite BYTESWAP en cada
+// read/write, asi que el codigo trabaja siempre en orden nativo pero la memoria
+// queda en el orden del formato.  Simetrico: la MISMA vista parsea Y construye.
+// Ejemplo: una cabecera de red (todo big-endian, "network byte order").
+// interp = JIT = AOT.
+
+// Cabecera tipo TCP (campos big-endian, como en la red).
+@overlay struct NetHdr {
+    u16 src_port @be @0x00;
+    u16 dst_port @be @0x02;
+    u32 seq      @be @0x04;
+    u32 ack      @be @0x08;
+    u16 window   @be @0x0C;
+    // un campo little-endian explicito (p.ej. un tag local del host).
+    u16 local    @le @0x0E;
+}
+
+i32 main() {
+    u8* buf = (u8*) malloc(32);
+
+    // --- CONSTRUIR: escribir en orden nativo; la memoria queda big-endian ---
+    NetHdr h = NetHdr(buf);
+    h.src_port = 43210;        // 0xA8CA
+    h.dst_port = 80;           // 0x0050  (http)
+    h.seq      = 0x11223344;
+    h.ack      = 0x55667788;
+    h.window   = 8192;         // 0x2000
+    h.local    = 0x0102;
+
+    // los bytes en memoria estan en BIG-ENDIAN (dst_port 80 -> 00 50):
+    println("dst_bytes=${*(u8*)(buf+2):hex} ${*(u8*)(buf+3):hex}");   // 0 50
+    // el seq big-endian en memoria: 11 22 33 44
+    println("seq_b0=${*(u8*)(buf+4):hex} seq_b3=${*(u8*)(buf+7):hex}"); // 11 44
+    // el campo @le queda little-endian: 0x0102 -> 02 01
+    println("local_b0=${*(u8*)(buf+14):hex}");                          // 2
+
+    // --- PARSEAR: releer via la misma vista (round-trip, orden nativo) ---
+    println("src=${h.src_port} dst=${h.dst_port} win=${h.window}");
+    println("seq=${h.seq:hex} ack=${h.ack:hex} local=${h.local:hex}");
+
+    // suma verificable: src(43210) + dst(80) + window(8192) = 51482
+    i64 sum = (i64) h.src_port + (i64) h.dst_port + (i64) h.window;
+    println("sum=${sum}");
+
+    free(buf);
+    return (i32) sum;   // 51482
+}
