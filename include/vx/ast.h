@@ -839,6 +839,10 @@ struct IndexExpr : Expr {
     bool is_range = false;            ///< true para `s[a..b]` / `s[a..=b]`.
     bool range_inclusive = false;     ///< true para `..=` (incluye b).
     std::unique_ptr<Expr> range_hi;   ///< limite superior @c b del rango.
+    /// Overlay F3b: true si @c base es `v.arr` (campo array de un overlay).
+    /// El lowering computa `base_overlay + pos + index*stride` (escala por el
+    /// STRIDE del overlay, no por sizeof).  @c result_type = tipo del elemento.
+    bool is_overlay_array = false;
     IndexExpr() : Expr(NodeKind::IndexExpr) {}
 };
 
@@ -1954,6 +1958,12 @@ struct StructFieldDecl {
     /// de flujo (if/else, bucles), `let` locales y referenciar los campos
     /// hermanos + el puntero `base` de la vista.  null = usa expr/offset const.
     std::unique_ptr<BlockStmt> offset_block;
+    /// Overlay (F3b) ARRAY: `T Name[count] @offset(pos) stride(s)`.  count = num
+    /// de elementos (expr, para bounds), stride = bytes entre elementos (expr).
+    /// El tipo del campo (@c type) es el tipo del ELEMENTO.  `v.Name[i]` resuelve
+    /// a `base + pos + i*stride`.  null = campo escalar (no array).
+    std::unique_ptr<Expr> array_count;
+    std::unique_ptr<Expr> array_stride;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`

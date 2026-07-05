@@ -232,7 +232,7 @@ class Parser {
     std::unique_ptr<ast::BytesDecl> parse_bytes_decl();
     /// @c asm name { <nasm 16/32/64> }  (codigo ensamblado por Keystone, AOT).
     std::unique_ptr<ast::BytesDecl> parse_asm_block_decl();
-    std::unique_ptr<ast::StructDecl> parse_struct_decl();
+    std::unique_ptr<ast::StructDecl> parse_struct_decl(bool is_overlay = false);
     /// `typedef struct {...} Name;` o
     /// `typedef enum {...} Name;`.  Devuelve StructDecl o EnumDecl.
     std::unique_ptr<ast::Node> parse_typedef_struct_or_enum();

@@ -12878,6 +12878,108 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         error_at(e->loc, "lowering: subscript con base o indice nulo");
         return ir::IR_NO_VALUE;
     }
+    // Overlay F3b: `v.arr[i]` (campo array de un overlay).  Direccion del
+    // elemento = base_overlay + pos + index*stride (escala por STRIDE, no por
+    // sizeof).  pos/stride pueden referenciar campos hermanos.
+    if (e->is_overlay_array &&
+        e->base->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->base.get());
+        const ir::IrValueId ov_base = lower_expr(fa->base.get());
+        if (ov_base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        const Type ovt = fa->base->result_type;
+        const auto &lays = tc_.struct_layouts();
+        auto it = lays.find(ovt.struct_name);
+        if (it == lays.end()) {
+            error_at(e->loc, "lowering: overlay array sin layout");
+            return ir::IR_NO_VALUE;
+        }
+        const StructLayout &lay = it->second;
+        const StructFieldInfo *afi = nullptr;
+        for (const auto &fi : lay.fields)
+            if (fi.name == fa->field_name) { afi = &fi; break; }
+        if (!afi || !afi->array_stride) {
+            error_at(e->loc, "lowering: campo array de overlay no encontrado");
+            return ir::IR_NO_VALUE;
+        }
+        // Ligar `base` + hermanos de offset constante para pos/stride exprs.
+        push_scope();
+        bind("base", ov_base);
+        for (const auto &sib : lay.fields) {
+            if (sib.offset_expr || sib.offset_block || sib.array_stride) continue;
+            ir::IrValueId saddr = ov_base;
+            if (sib.offset != 0) {
+                ir::IrValueId so = emit_const(ir::IrType::I64,
+                                              (uint64_t)sib.offset, e->loc.line);
+                saddr = fn_->new_value(ir::IrType::PTR);
+                fn_->values[saddr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+                ir::IrInstr a{};
+                a.op = ir::IrOp::ADD;
+                a.type = ir::IrType::PTR;
+                a.dst = saddr;
+                a.operands = {ov_base, so};
+                a.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(a));
+            }
+            const ir::IrType stt = ir_type_from_primitive(sib.type.kind);
+            ir::IrValueId sv = fn_->new_value(stt);
+            ir::IrInstr l{};
+            l.op = ir::IrOp::LOAD;
+            l.type = stt;
+            l.dst = sv;
+            l.operands = {saddr};
+            l.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(l));
+            bind(sib.name, sv);
+        }
+        // pos (base de la tabla): const o expr.
+        ir::IrValueId pos_v =
+            afi->offset_expr
+                ? lower_expr(afi->offset_expr)
+                : emit_const(ir::IrType::I64, (uint64_t)afi->offset, e->loc.line);
+        ir::IrValueId stride_v = lower_expr(afi->array_stride);
+        pop_scope();
+        if (pos_v == ir::IR_NO_VALUE || stride_v == ir::IR_NO_VALUE)
+            return ir::IR_NO_VALUE;
+        ir::IrValueId i_v = lower_expr(e->index.get());
+        if (i_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        i_v = cast_if_needed(i_v, fn_->values[i_v].type, ir::IrType::I64,
+                             e->loc.line);
+        // scaled = i * stride
+        ir::IrValueId scaled = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr mul{};
+            mul.op = ir::IrOp::MUL;
+            mul.type = ir::IrType::I64;
+            mul.dst = scaled;
+            mul.operands = {i_v, stride_v};
+            mul.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(mul));
+        }
+        // addr = ov_base + pos + scaled
+        ir::IrValueId t1 = fn_->new_value(ir::IrType::PTR);
+        fn_->values[t1].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+        {
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = t1;
+            a.operands = {ov_base, pos_v};
+            a.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(a));
+        }
+        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[addr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+        {
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = addr;
+            a.operands = {t1, scaled};
+            a.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(a));
+        }
+        return addr;
+    }
     const Type bt = e->base->result_type;
     const bool is_ptr_like =
         (bt.kind == PrimitiveKind::PTR || bt.kind == PrimitiveKind::ARRAY) &&

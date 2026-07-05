@@ -2604,6 +2604,9 @@ void TypeChecker::collect_globals() {
                 // auto-layout secuencial).  Si un campo de un overlay no lo
                 // trae, es error (F1).
                 if (s->is_overlay) {
+                    // Array (F3b): copiar count/stride; el offset es `pos`.
+                    fi.array_count = f.array_count.get();
+                    fi.array_stride = f.array_stride.get();
                     if (f.offset_block) {
                         // Resolver de BLOQUE (F3): `@offset { ... }`.  Devuelve
                         // la direccion final; se resuelve en tiempo de acceso.
@@ -2664,7 +2667,10 @@ void TypeChecker::collect_globals() {
                 // expr debe evaluar a un entero; el bloque devuelve una direccion.
                 bool any_dyn = false;
                 for (auto &f : s->fields)
-                    if (f.offset_expr || f.offset_block) { any_dyn = true; break; }
+                    if (f.offset_expr || f.offset_block || f.array_stride) {
+                        any_dyn = true;
+                        break;
+                    }
                 if (any_dyn) {
                     push_scope();
                     for (auto &fi : layout.fields) {
@@ -2705,6 +2711,22 @@ void TypeChecker::collect_globals() {
                                         Type{PrimitiveKind::U64});
                             pop_scope();
                             current_fn_return_type_ = saved_ret;
+                        }
+                        // Array (F3b): count y stride pueden referenciar
+                        // hermanos; deben evaluar a enteros.
+                        if (f.array_count) {
+                            Type ct = check_expr(f.array_count.get());
+                            if (!is_int_kind(ct.kind))
+                                diags_.error(f.loc, "el count del array '" +
+                                                        f.name +
+                                                        "' debe ser entero");
+                        }
+                        if (f.array_stride) {
+                            Type st2 = check_expr(f.array_stride.get());
+                            if (!is_int_kind(st2.kind))
+                                diags_.error(f.loc, "el stride del array '" +
+                                                        f.name +
+                                                        "' debe ser entero");
                         }
                     }
                     pop_scope();
@@ -6661,6 +6683,32 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
     if (!e->base) {
         diags_.error(e->loc, "subscript sin base");
         return Type{};
+    }
+    // Overlay F3b: `v.arr[i]` donde `arr` es un campo ARRAY de un overlay.
+    // Se resuelve `base + pos + i*stride`; el resultado es el tipo del elemento.
+    if (e->base->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->base.get());
+        if (fa->base) {
+            Type ovt = check_expr(fa->base.get());
+            fa->base->result_type = ovt;
+            if (ovt.kind == PrimitiveKind::STRUCT) {
+                auto it = struct_layouts_.find(ovt.struct_name);
+                if (it != struct_layouts_.end() && it->second.is_overlay) {
+                    for (const auto &fi : it->second.fields) {
+                        if (fi.name == fa->field_name && fi.array_stride) {
+                            if (e->index) {
+                                Type idt = check_expr(e->index.get());
+                                e->index->result_type = idt;
+                            }
+                            e->is_overlay_array = true;
+                            fa->result_type = fi.type; // tipo del elemento
+                            e->result_type = fi.type;
+                            return fi.type;
+                        }
+                    }
+                }
+            }
+        }
     }
     const Type bt = check_expr(e->base.get());
     if (e->index) (void)check_expr(e->index.get());

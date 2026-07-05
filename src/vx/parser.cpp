@@ -1426,7 +1426,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     }
     // struct <nombre> { ... }
     if (current_.kind == TokenKind::KW_STRUCT) {
-        auto sd = parse_struct_decl();
+        auto sd = parse_struct_decl(top_is_overlay);
         if (sd && top_is_introspect) sd->is_introspect = true;
         if (sd && top_is_overlay) sd->is_overlay = true;
         if (sd) {
@@ -3593,9 +3593,13 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
     return m;
 }
 
-std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
+std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
     auto s = std::make_unique<ast::StructDecl>();
     s->loc = current_.loc;
+    // Overlay: fijarlo YA (antes de los campos) para que el parseo de campos vea
+    // `s->is_overlay` (arrays `[count]` + `stride(...)`).  El call site tambien
+    // lo re-asegura tras el return.
+    s->is_overlay = is_overlay;
     (void)consume(); // 'struct'
 
     if (current_.kind != TokenKind::IDENTIFIER) {
@@ -3764,6 +3768,14 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
         f.loc = mloc;
         f.type = std::move(type_node);
         f.name = std::move(member_name);
+        // Overlay F3b ARRAY: `T Name[count] ...`.  El `[count]` va tras el
+        // nombre (estilo C).  El tipo del campo es el tipo del ELEMENTO.
+        if (s->is_overlay && current_.kind == TokenKind::LBRACKET) {
+            (void)consume(); // '['
+            f.array_count = parse_expr();
+            (void)expect(TokenKind::RBRACKET,
+                         "se esperaba ']' tras el count del array de overlay");
+        }
         // Bit field width: `i32 flag : 3;`.  El bit_width
         // se guarda en el AST y el type checker calcula el packing.
         if (current_.kind == TokenKind::COLON) {
@@ -3819,6 +3831,15 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
                     (void)consume();
                 }
             }
+        }
+        // Overlay F3b: `stride(s)` tras @offset -- bytes entre elementos del
+        // array (fijo).  `T Name[count] @offset(pos) stride(s)`.
+        if (s->is_overlay && current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == "stride") {
+            (void)consume(); // 'stride'
+            (void)expect(TokenKind::LPAREN, "se esperaba '(' tras stride");
+            f.array_stride = parse_expr();
+            (void)expect(TokenKind::RPAREN, "se esperaba ')' tras stride(expr)");
         }
         // Valor por defecto del campo: `u8 a = 0x10;`.  Debe ser una expresion
         // comptime-constante (se valida en el type checker); se aplica al crear

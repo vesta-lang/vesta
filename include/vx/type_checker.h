@@ -174,6 +174,13 @@ struct StructFieldInfo {
     /// control de flujo completo; tiene `base` (el puntero de la vista) y los
     /// campos hermanos en scope.  null = usa expr/offset constante.
     ast::BlockStmt *offset_block = nullptr;
+    /// Overlay ARRAY (F3b): `T Name[count] @offset(pos) stride(s)`.  Si
+    /// @c array_stride != null, el campo es un array: @c offset/@c offset_expr da
+    /// `pos` (base de la tabla), @c array_stride los bytes por elemento, y
+    /// @c type es el tipo del ELEMENTO.  `v.Name[i]` = base + pos + i*stride.
+    /// no-owning al AST.
+    ast::Expr *array_count = nullptr;
+    ast::Expr *array_stride = nullptr;
 };
 
 /**
