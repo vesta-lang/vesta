@@ -6555,6 +6555,13 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * OFF, el comportamiento de inline previo se mantiene). */
         static const bool sr_on = !env_flag_on("VESTA_NO_ESCAPE_SCALAR");
         if (sr_on && is_new_helper_name(fn.name, nullptr)) return false;
+        /* Resolvedores de overlay `__ovl_resolve_<S>_<f>(self)`: devuelven la
+         * DIRECCION (host) de un campo de una vista.  El marcado is_host_ptr del
+         * resultado vive en el CALL del caller; si se inlinan, el valor de la
+         * direccion pierde is_host_ptr y el STORE/LOAD del campo emite `mov`
+         * (VM) en vez de `movh` (host) -> lee/escribe la memoria equivocada.
+         * Mantenerlos como CALL preserva la naturaleza host del acceso. */
+        if (fn.name.compare(0, 14, "__ovl_resolve_") == 0) return false;
         if (fn.blocks.size() != 1) return false;
         if (fn.blocks[0].instrs.empty()) return false;
         /* Ultima instr debe ser RET. */
@@ -7776,6 +7783,10 @@ static bool is_inlineable_mb(const IrFunction &fn, size_t threshold) {
     if (fn.name == "__module_init") return false;
     if (fn.name.rfind("__lambda", 0) == 0) return false;
     if (is_new_helper_name(fn.name, nullptr)) return false;
+    /* Resolvedores de overlay: inlinarlos pierde la naturaleza host de la
+     * direccion del campo -> `mov`/`loadz` (VM) en vez de `movh`/`loadzh`
+     * (host).  Mantener como CALL (mismo motivo que en @c is_inlineable). */
+    if (fn.name.compare(0, 14, "__ovl_resolve_") == 0) return false;
     size_t total = 0;
     bool has_ret = false;
     for (size_t k = 0; k < fn.blocks.size(); ++k) {

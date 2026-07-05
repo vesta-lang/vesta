@@ -1,8 +1,9 @@
 // -----------------------------------------------------------------------------
 // Overlay structs (F3a-ext): if/else + multiples return en el resolver de bloque
 // -----------------------------------------------------------------------------
-// F3a resolvia el offset con un bloque de LINEA RECTA (let + return + ternario).
-// Ahora el resolver admite LOGICA COMPLETA: sentencias `if`/`else`, variables
+// El salto conceptual de F3: el bloque NO resuelve un offset, resuelve la
+// DIRECCION del campo (`return base + hdr_len` es una direccion absoluta, no un
+// desplazamiento).  Y admite LOGICA COMPLETA: sentencias `if`/`else`, variables
 // intermedias y VARIOS `return`.  Internamente el bloque se compila como una
 // funcion `__ovl_resolve_<Struct>_<campo>(self)` -- reutiliza todo el control de
 // flujo del lenguaje, sin coste extra en el sitio de acceso (el optimizador la
@@ -33,7 +34,7 @@
 }
 
 // Crea un registro de la variante `tag` y escribe/relee `value` a traves del
-// resolver.  Devuelve donde aterrizo (offset desde base) para verificar.
+// resolver.  Devuelve el valor releido para verificar.
 u32 build(u8* buf, u8 tag, u32 hdr_len, u32 val) {
     MultiRec r = MultiRec(buf);
     r.tag     = tag;

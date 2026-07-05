@@ -34,14 +34,15 @@ TMP = tempfile.mkdtemp(prefix="vxinit_")
 # (ruta del .vx relativa a la raiz, R00 esperado).  El valor de retorno de cada
 # ejemplo esta calculado para ejercitar la feature completa.
 CASES = [
-    ("examples_codes_vx/170_struct_defaults.vx", 155),
-    ("examples_codes_vx/171_compound_literals.vx", 119),
-    ("examples_codes_vx/172_class_defaults.vx", 159),
+    ("examples_codes_vx/258_struct_defaults.vx", 155),
+    ("examples_codes_vx/259_compound_literals.vx", 119),
+    ("examples_codes_vx/260_class_defaults.vx", 159),
     ("examples_codes_vx/analyze/type_contracts.vx", 140),
-    ("examples_codes_vx/173_overlay_basics.vx", 23629),
-    ("examples_codes_vx/174_overlay_dynamic.vx", 128),
-    ("examples_codes_vx/175_overlay_block.vx", 1337),
-    ("examples_codes_vx/176_overlay_block_if.vx", 666),
+    ("examples_codes_vx/261_overlay_basics.vx", 23629),
+    ("examples_codes_vx/262_overlay_dynamic.vx", 128),
+    ("examples_codes_vx/263_overlay_block.vx", 1337),
+    ("examples_codes_vx/264_overlay_block_if.vx", 666),
+    ("examples_codes_vx/265_overlay_scan.vx", 140),
 ]
 
 
