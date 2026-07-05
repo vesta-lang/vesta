@@ -544,7 +544,7 @@ FunctionEnd
   !insertmacro MUI_PAGE_WELCOME
 
   @CPACK_NSIS_LICENSE_PAGE@
-  Page custom InstallOptionsPage
+  Page custom InstallOptionsPage InstallOptionsPageLeave
   !insertmacro MUI_PAGE_DIRECTORY
 
   ;Start Menu Folder Page Configuration
@@ -755,9 +755,45 @@ SectionEnd
 ;--------------------------------
 ; Create custom pages
 Function InstallOptionsPage
-  !insertmacro MUI_HEADER_TEXT "Install Options" "Choose options for installing @CPACK_NSIS_PACKAGE_NAME@"
+  !insertmacro MUI_HEADER_TEXT "Opciones de instalacion" "Elige el ambito de la instalacion de @CPACK_NSIS_PACKAGE_NAME@"
   !insertmacro MUI_INSTALLOPTIONS_DISPLAY "NSIS.InstallOptions.ini"
 
+FunctionEnd
+
+; Vesta: al salir de la pagina de opciones, el radio de ambito del PATH decide
+; TAMBIEN la carpeta de instalacion y el contexto (per-user vs all-users):
+;   - "para TODOS los usuarios" (Field 3): Program Files + contexto all + HKLM.
+;     Requiere admin (RequestExecutionLevel highest ya elevo si el usuario lo es).
+;   - "solo el usuario actual" (Field 4, por defecto): %LOCALAPPDATA%\Programs +
+;     contexto current + HKCU.  Sin admin.
+; Solo se cambia $INSTDIR si sigue siendo el default (el usuario no lo edito).
+Function InstallOptionsPageLeave
+  Push $0
+  Push $1
+  !insertmacro MUI_INSTALLOPTIONS_READ $0 "NSIS.InstallOptions.ini" "Field 3" "State"
+
+  ; Es $INSTDIR todavia uno de los defaults conocidos?  Si el usuario ya lo
+  ; edito a mano, respetarlo.
+  StrCpy $1 "0"
+  StrCmp "$INSTDIR" "@CPACK_NSIS_INSTALL_ROOT@\@CPACK_PACKAGE_INSTALL_DIRECTORY@" 0 +2
+    StrCpy $1 "1"
+  StrCmp "$INSTDIR" "$LOCALAPPDATA\Programs\@CPACK_PACKAGE_INSTALL_DIRECTORY@" 0 +2
+    StrCpy $1 "1"
+
+  StrCmp $0 "1" allUsers currentUser
+
+  allUsers:
+    SetShellVarContext all
+    StrCmp $1 "1" 0 +2
+      StrCpy $INSTDIR "@CPACK_NSIS_INSTALL_ROOT@\@CPACK_PACKAGE_INSTALL_DIRECTORY@"
+    Goto leaveDone
+  currentUser:
+    SetShellVarContext current
+    StrCmp $1 "1" 0 +2
+      StrCpy $INSTDIR "$LOCALAPPDATA\Programs\@CPACK_PACKAGE_INSTALL_DIRECTORY@"
+  leaveDone:
+  Pop $1
+  Pop $0
 FunctionEnd
 
 ;--------------------------------
