@@ -53,7 +53,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/preprocessor/include_lib"
 # Documentacion (LICENSE en texto plano para que el asistente lo muestre bien).
 install(FILES
         "${CMAKE_SOURCE_DIR}/README.md"
-        "${CMAKE_SOURCE_DIR}/LICENSE.txt"
+        "${CMAKE_SOURCE_DIR}/LICENSE"
         DESTINATION . COMPONENT core)
 # OpenSSL: si NO se embebio (fallback FireDaemon), enviar sus DLLs.  Con enlace
 # estatico (VESTA_OPENSSL_STATIC) no se envia nada -- el .exe es standalone.
@@ -209,7 +209,12 @@ set(CPACK_COMPONENT_SDK_DESCRIPTION
 set(CPACK_COMPONENT_SDK_DISABLED ON)   # desmarcado por defecto
 
 # Recursos mostrados por el asistente (licencia en texto plano + readme).
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE.txt")
+# El repo mantiene UN solo fichero de licencia (LICENSE, sin extension).  El
+# asistente NSIS espera un .txt, asi que generamos una copia en el build dir
+# (no versionada) a partir del LICENSE canonico.
+configure_file("${CMAKE_SOURCE_DIR}/LICENSE"
+               "${CMAKE_BINARY_DIR}/LICENSE.txt" COPYONLY)
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_BINARY_DIR}/LICENSE.txt")
 set(CPACK_RESOURCE_FILE_README  "${CMAKE_SOURCE_DIR}/README.md")
 
 # Acceso directo del Menu Inicio -> abre el REPL de Vesta.
