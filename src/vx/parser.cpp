@@ -932,6 +932,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // Contratos comprobables de recurso/efecto (huella computacional).
     bool top_c_pure = false, top_c_nothrow = false, top_c_nopanic = false;
     int64_t top_c_alloc = -1, top_c_stack = -1;
+    // Contratos de TIPO (struct/clase/enum): @pod / @no_heap / @size(N).
+    bool top_t_pod = false, top_t_no_heap = false;
+    int64_t top_t_size = -1;
     std::string top_attr_section;
     std::string top_attr_section_perms;  // AOT 2b: @section(".x","rwx")
     int64_t top_attr_at = -1;            // AOT: @at(N) offset/VA fijo (.bin)
@@ -1013,6 +1016,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             const bool is_c_nopanic = (current_.lexeme == "nopanic");
             const bool is_c_alloc = (current_.lexeme == "alloc");
             const bool is_c_stack = (current_.lexeme == "stack");
+            // Contratos de TIPO (layout/recurso): flags @pod/@no_heap + @size(N).
+            const bool is_t_pod = (current_.lexeme == "pod");
+            const bool is_t_no_heap = (current_.lexeme == "no_heap");
+            const bool is_t_size = (current_.lexeme == "size");
             // CPU dispatch Inc 4: @HelperOverride(<helper>).
             const bool is_helper_override =
                 (current_.lexeme == "HelperOverride");
@@ -1155,6 +1162,32 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             }
             if (is_c_nopanic) {
                 top_c_nopanic = true;
+                continue;
+            }
+            // Contratos de TIPO sin argumento: @pod / @no_heap.
+            if (is_t_pod) {
+                top_t_pod = true;
+                continue;
+            }
+            if (is_t_no_heap) {
+                top_t_no_heap = true;
+                continue;
+            }
+            // Contrato de TIPO con argumento entero: @size(N) (tamano exacto).
+            if (is_t_size) {
+                (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @size");
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("@size(N) requiere un entero literal");
+                } else {
+                    const int64_t n = current_.int_val;
+                    (void)consume();
+                    if (n < 0) {
+                        error_here("@size(N): N debe ser >= 0");
+                    } else {
+                        top_t_size = n;
+                    }
+                }
+                (void)expect(TokenKind::RPAREN, "se esperaba ')' tras N en @size(N)");
                 continue;
             }
             // Contratos con argumento entero: @alloc(N) / @stack(N).
@@ -1392,6 +1425,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (current_.kind == TokenKind::KW_STRUCT) {
         auto sd = parse_struct_decl();
         if (sd && top_is_introspect) sd->is_introspect = true;
+        if (sd) {
+            sd->contract_pod = top_t_pod;
+            sd->contract_no_heap = top_t_no_heap;
+            sd->contract_size = top_t_size;
+        }
         apply_pending_visibility(sd.get());
         return sd;
     }
@@ -1415,6 +1453,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             cd->lombok_with_all = top_lk_with_all;
             cd->lombok_log = top_lk_log;
             cd->lombok_sync_methods = top_lk_sync_methods;
+            cd->contract_pod = top_t_pod;
+            cd->contract_no_heap = top_t_no_heap;
+            cd->contract_size = top_t_size;
         }
         apply_pending_visibility(cd.get());
         return cd;
@@ -1432,6 +1473,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (current_.kind == TokenKind::KW_ENUM) {
         auto ed = parse_enum_decl();
         if (ed && top_is_introspect) ed->is_introspect = true;
+        if (ed) {
+            ed->contract_pod = top_t_pod;
+            ed->contract_no_heap = top_t_no_heap;
+            ed->contract_size = top_t_size;
+        }
         apply_pending_visibility(ed.get());
         return ed;
     }
@@ -3606,6 +3652,13 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
                 }
                 (void)consume();
             }
+        }
+        // Valor por defecto del campo: `u8 a = 0x10;`.  Debe ser una expresion
+        // comptime-constante (se valida en el type checker); se aplica al crear
+        // el struct con `= {}` / campos no listados y por `default()`.
+        if (current_.kind == TokenKind::ASSIGN) {
+            (void)consume(); // '='
+            f.default_init = parse_expr();
         }
         (void)expect(TokenKind::SEMICOLON,
                      "se esperaba ';' al final del campo");

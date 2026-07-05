@@ -1926,6 +1926,11 @@ struct StructFieldDecl {
     /// calcula bit_offset y los empaqueta en storage words del tipo
     /// declarado (i32 -> 32 bits por word, etc.).  Estilo C/C++.
     uint8_t bit_width = 0;
+    /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
+    /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
+    /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`
+    /// sintetizado.  Debe ser una expresion comptime-constante.
+    std::unique_ptr<Expr> default_init;
 };
 
 /**
@@ -1973,6 +1978,12 @@ struct StructDecl : Node {
     /// que matchee (exacto > patron > primario).  Compile-time puro.
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
+    /// Contratos de layout/recurso comprobables (modo --analyze): @pod,
+    /// @no_heap, @size(N).  Metadata compile-time; el codegen los ignora.
+    /// -1 en @c contract_size = no declarado.
+    bool contract_pod = false;
+    bool contract_no_heap = false;
+    int64_t contract_size = -1;
     StructDecl() : Node(NodeKind::StructDecl) {}
 };
 
@@ -2037,6 +2048,11 @@ struct EnumDecl : Node {
     std::vector<std::string> type_params;
     /// #6: constraints de los type-params (`enum E<T: Concepto>`).
     std::vector<TypeBound> type_bounds;
+    /// Contratos de layout comprobables (modo --analyze): @size(N) (@pod/@no_heap
+    /// aplican tambien, aunque un enum sin payload es trivialmente @pod).
+    bool contract_pod = false;
+    bool contract_no_heap = false;
+    int64_t contract_size = -1;
     EnumDecl() : Node(NodeKind::EnumDecl) {}
 };
 
@@ -2186,6 +2202,13 @@ struct ClassDecl : Node {
     bool is_interface = false;
     /// marca `@Introspect`.  Ver `StructDecl`.
     bool is_introspect = false;
+    /// Contratos de layout/recurso comprobables (modo --analyze): @pod,
+    /// @no_heap, @size(N).  Una clase es un tipo por REFERENCIA (vive en el
+    /// heap), asi que @pod/@no_heap sobre una clase siempre resultan VIOLATED;
+    /// @size(N) verifica el tamano de la instancia.  Metadata compile-time.
+    bool contract_pod = false;
+    bool contract_no_heap = false;
+    int64_t contract_size = -1;
     // Sprint lombok (2026-06-03): anotaciones tipo Lombok a nivel de
     // clase.  El pre-pase de TypeChecker genera metodos sinteticos +
     // expanding combos como @Data / @Value antes de check_classes.

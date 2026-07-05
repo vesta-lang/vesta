@@ -723,6 +723,29 @@ class Lowering {
     /// (struct/array) -- e.g. inicializar un campo struct en un init-list.
     void emit_memberwise_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
                               uint64_t size_bytes, uint32_t line);
+    /// Rellena con CEROS @p size_bytes a partir de @p addr (STORE 0 en trozos
+    /// de 8/4/2/1 bytes, sin desbordar).  Garantiza que todo struct/array en
+    /// pila queda zero-inicializado por defecto (seguridad: nada de basura de
+    /// la pila en campos no listados en el init).  @p addr es una direccion VM
+    /// (ALLOCA); hereda su naturaleza para el STORE.
+    void emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes, uint32_t line);
+    /// Emite los valores por defecto de los campos de @p lay (los `u8 a = 0x10`)
+    /// sobre el struct ya alocado y zero-inicializado en @p base_addr.  Recurre
+    /// en campos struct anidados que tengan defaults propios.  Se llama tras el
+    /// zero-fill y ANTES del init-list explicito (que sobrescribe lo que toque).
+    void emit_struct_field_defaults(ir::IrValueId base_addr,
+                                    const StructLayout &lay, uint32_t line);
+    /// Rellena los campos de un struct YA alocado en @p base_addr desde el
+    /// init-list @p il segun el layout @p lay.  RECURSIVO: un campo de tipo
+    /// struct inicializado con un init-list ANIDADO (`{.min = {.x=..,.y=..}}`)
+    /// se rellena in-place en la direccion del campo (lower_expr no baja un
+    /// InitListExpr como valor).  Un campo struct/array inicializado con una
+    /// EXPRESION (otra variable, llamada, ...) usa copia memberwise; un campo
+    /// escalar usa STORE.  Comparte la logica del init-list de struct de
+    /// @c lower_var_decl para que ambos caminos (top-level y anidado) coincidan.
+    void emit_struct_init_fields(ir::IrValueId base_addr,
+                                 const StructLayout &lay, ast::InitListExpr *il,
+                                 uint32_t line);
     /// Ruta B (H1 paso por valor): copia un struct con copy-hook para pasarlo
     /// por valor a una funcion.  Aloca una copia, memcpy del origen, invoca
     /// `copia.__clone__()` y devuelve la direccion de la copia.  El caller debe

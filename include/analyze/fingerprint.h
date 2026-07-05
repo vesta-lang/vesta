@@ -85,10 +85,11 @@ void compose_fingerprints(std::vector<FunctionFingerprint> &fps);
  * @struct FunctionContracts
  * @brief Contratos de huella declarados por el usuario para UNA funcion.
  *
- * Se llevan APARTE del IR (no en @c IrFunction) a proposito: anadir campos a
- * @c IrFunction cambia su @c sizeof y ese cambio de layout dispara una UB
- * latente en el analizador sobre modulos deserializados.  Viajan en el
- * @c CompileResult (una instancia, sin serializar) y se verifican por NOMBRE.
+ * Se llevan APARTE del IR (no en @c IrFunction) por DISENO: son metadata
+ * puramente de compile-time (modo @c --analyze) que ni el JIT ni el AOT ni la
+ * serializacion del IR necesitan; mantener @c IrFunction esbelto evita
+ * hincharlo.  Viajan en el @c CompileResult (una instancia, sin serializar) y
+ * se verifican por NOMBRE.
  */
 struct FunctionContracts {
     bool pure = false;    ///< @pure.
@@ -128,6 +129,60 @@ struct ContractCheck {
 std::vector<ContractCheck> verify_contracts(
     const std::vector<FunctionFingerprint> &fps,
     const std::unordered_map<std::string, FunctionContracts> &contracts);
+
+/**
+ * @struct TypeFingerprint
+ * @brief Huella de un TIPO agregado (struct / clase / enum): propiedades de
+ *        layout y de recurso que el compilador INFIERE de sus campos.
+ *
+ * INVARIANTE DEL LENGUAJE: TODO @c struct tiene layout C-compatible SIEMPRE
+ * (orden de campos + alineamiento natural + padding estilo C, sin necesidad de
+ * `@repr(C)`).  Por tanto "tener layout C" NO es una propiedad que se contrate
+ * (es universal).  Lo que SI varia -- y por eso se contrata -- es si el tipo es
+ * @pod: TRIVIALMENTE copiable/pasable a C POR VALOR, es decir sin destructor
+ * `~Tipo()` ni campos gestionados (@c unique<T> / @c shared<T> / @c string /
+ * referencias de clase).  Un struct con un campo gestionado o un dtor conserva
+ * su layout C pero NO es @pod (carril move-only + RAII).
+ *
+ * Se computa a partir del LAYOUT ya resuelto (tamano, alineamiento, tipos de
+ * campo) y de la composicion sobre los CAMPOS: @pod sii todos sus campos son
+ * C-representables por valor y no hay destructor; @no_heap sii ningun campo
+ * referencia el heap gestionado.  Son propiedades EXACTAS/sound (decidibles del
+ * layout), asi que su contrato es DURO (OK / VIOLATED, sin UNVERIFIABLE).
+ */
+struct TypeFingerprint {
+    std::string type_name;
+    enum Kind { STRUCT, CLASS, ENUM } kind = STRUCT;
+    uint64_t size_bytes = 0;    ///< tamano total del tipo (con padding).
+    uint32_t align_bytes = 1;   ///< alineamiento requerido.
+    uint32_t field_count = 0;   ///< numero de campos de instancia.
+    bool is_pod = false;        ///< value-type C-representable, sin dtor ni campos gestionados.
+    bool no_heap = false;       ///< ningun campo referencia el heap gestionado (GC/string/smart-ptr).
+    bool has_destructor = false; ///< declara `~Tipo()` (o algun campo destructible).
+    bool is_reference = false;  ///< tipo por referencia (clase): vive en el heap por naturaleza.
+};
+
+/**
+ * @struct TypeContracts
+ * @brief Contratos de layout/recurso declarados por el usuario sobre un TIPO
+ *        (`@pod`, `@no_heap`, `@size(N)`).  Se llevan en el @c CompileResult
+ *        (compile-time, sin serializar) y se verifican por NOMBRE de tipo.
+ */
+struct TypeContracts {
+    bool pod = false;     ///< @pod: value-type sin recursos gestionados ni dtor.
+    bool no_heap = false; ///< @no_heap: ningun campo apunta al heap gestionado.
+    int64_t size = -1;    ///< @size(N): tamano exacto en bytes; -1 = no declarado.
+    bool any() const { return pod || no_heap || size >= 0; }
+};
+
+/**
+ * @brief Verifica los contratos de TIPO @p contracts contra las huellas de tipo
+ *        @p fps.  Todas las propiedades son decidibles del layout -> solo
+ *        produce @c OK o @c VIOLATED (nunca @c UNVERIFIABLE).
+ */
+std::vector<ContractCheck> verify_type_contracts(
+    const std::vector<TypeFingerprint> &fps,
+    const std::unordered_map<std::string, TypeContracts> &contracts);
 
 } // namespace analyze
 

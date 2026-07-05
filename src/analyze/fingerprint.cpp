@@ -349,4 +349,60 @@ std::vector<ContractCheck> verify_contracts(
     return out;
 }
 
+std::vector<ContractCheck> verify_type_contracts(
+    const std::vector<TypeFingerprint> &fps,
+    const std::unordered_map<std::string, TypeContracts> &contracts) {
+    std::vector<ContractCheck> out;
+    if (contracts.empty()) return out;
+    // Indice por nombre de tipo (el nombre del contrato es el nombre declarado).
+    std::unordered_map<std::string, const TypeFingerprint *> byname;
+    byname.reserve(fps.size() * 2 + 1);
+    for (const auto &f : fps) byname.emplace(f.type_name, &f);
+
+    using St = ContractCheck::Status;
+    for (const auto &kv : contracts) {
+        const std::string &name = kv.first;
+        const TypeContracts &c = kv.second;
+        if (!c.any()) continue;
+        auto it = byname.find(name);
+        if (it == byname.end()) continue; // el tipo no llego al layout.
+        const TypeFingerprint &fp = *it->second;
+
+        auto add = [&](const char *cn, St st, std::string detail) {
+            out.push_back({name, cn, st, std::move(detail)});
+        };
+
+        // @pod: value-type trivialmente copiable (sin dtor ni campos gestionados).
+        // Decidible del layout -> OK / VIOLATED (nunca UNVERIFIABLE).
+        if (c.pod) {
+            if (fp.is_pod) {
+                add("@pod", St::OK, "value-type trivialmente copiable");
+            } else {
+                std::string why =
+                    fp.is_reference
+                        ? "es un tipo por referencia (clase), no un value-type"
+                    : fp.has_destructor
+                        ? "tiene destructor (~Tipo) -> carril move-only"
+                        : "tiene algun campo gestionado (heap/GC/smart-pointer)";
+                add("@pod", St::VIOLATED, std::move(why));
+            }
+        }
+        // @no_heap: ningun campo referencia el heap gestionado.
+        if (c.no_heap) {
+            add("@no_heap", fp.no_heap ? St::OK : St::VIOLATED,
+                fp.no_heap ? "sin campos en el heap gestionado"
+                           : "algun campo referencia el heap gestionado");
+        }
+        // @size(N): tamano EXACTO (estabilidad de ABI).  Decidible del layout.
+        if (c.size >= 0) {
+            const uint64_t got = fp.size_bytes;
+            const uint64_t want = static_cast<uint64_t>(c.size);
+            std::string d = "esperado " + std::to_string(want) + "B, inferido " +
+                            std::to_string(got) + "B";
+            add("@size", got == want ? St::OK : St::VIOLATED, std::move(d));
+        }
+    }
+    return out;
+}
+
 } // namespace analyze

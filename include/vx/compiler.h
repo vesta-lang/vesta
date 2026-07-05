@@ -297,10 +297,19 @@ struct CompileResult {
     std::vector<uint8_t> ir_module_cache_bytes;
 
     /// Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
-    /// por el usuario, por nombre de funcion.  Se llevan aqui (no en el IR) para
-    /// no cambiar el @c sizeof de @c IrFunction.  El modo --analyze los verifica
-    /// contra la huella inferida.  Ver @c analyze::FunctionContracts.
+    /// por el usuario, por nombre de funcion.  Se llevan aqui (no en el IR)
+    /// porque son metadata compile-time que el codegen no necesita.  El modo
+    /// --analyze los verifica contra la huella inferida.  Ver
+    /// @c analyze::FunctionContracts.
     std::unordered_map<std::string, analyze::FunctionContracts> contracts;
+
+    /// Contratos de TIPO (@pod/@no_heap/@size) declarados sobre struct/clase/
+    /// enum, por nombre de tipo.  Verificados contra @c type_fingerprints.
+    std::unordered_map<std::string, analyze::TypeContracts> type_contracts;
+
+    /// Huella de cada TIPO agregado (layout + propiedades de recurso) inferida
+    /// de los layouts del type checker.  La consume --analyze (reporte + checks).
+    std::vector<analyze::TypeFingerprint> type_fingerprints;
 
     /**
      * @brief Modo --analisis: IR del modulo completo serializado ANTES de

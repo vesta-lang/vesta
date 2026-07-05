@@ -3379,6 +3379,222 @@ void Lowering::lower_stmt(ast::Stmt *s) {
     }
 }
 
+void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
+                              uint32_t line) {
+    // Emite STORE 0 en trozos decrecientes (8/4/2/1) sin desbordar el rango.
+    auto store_zero = [&](ir::IrType ty, uint64_t o) {
+        ir::IrValueId v_addr = addr;
+        if (o > 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, o, line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            // Heredar la naturaleza host/VM de la base (AOT native_poo aloca el
+            // struct en la pila NATIVA -> el STORE debe ir a host, no a vm_mem).
+            fn_->values[v_addr].is_host_ptr = fn_->values[addr].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrValueId v_zero = emit_const(ty, 0, line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_zero, v_addr};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    };
+    uint64_t off = 0;
+    while (size_bytes - off >= 8) {
+        store_zero(ir::IrType::I64, off);
+        off += 8;
+    }
+    if (size_bytes - off >= 4) {
+        store_zero(ir::IrType::I32, off);
+        off += 4;
+    }
+    if (size_bytes - off >= 2) {
+        store_zero(ir::IrType::I16, off);
+        off += 2;
+    }
+    if (size_bytes - off >= 1) {
+        store_zero(ir::IrType::I8, off);
+        off += 1;
+    }
+}
+
+void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
+                                          const StructLayout &lay,
+                                          uint32_t line) {
+    for (const auto &fi : lay.fields) {
+        // Direccion del campo (base + offset), heredando naturaleza host/VM.
+        auto field_addr = [&]() -> ir::IrValueId {
+            if (fi.offset == 0) return base_addr;
+            ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)fi.offset, line);
+            ir::IrValueId v_a = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_a].is_host_ptr = fn_->values[base_addr].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_a;
+            ad.operands = {base_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+            return v_a;
+        };
+        if (!fi.default_init) {
+            // Campo struct anidado SIN default propio: si su TIPO declara
+            // defaults, aplicarlos recursivamente en la sub-direccion.
+            if (fi.type.kind == PrimitiveKind::STRUCT) {
+                auto it = tc_.struct_layouts().find(fi.type.struct_name);
+                if (it != tc_.struct_layouts().end()) {
+                    bool any_def = false;
+                    for (const auto &sf : it->second.fields)
+                        if (sf.default_init) {
+                            any_def = true;
+                            break;
+                        }
+                    if (any_def)
+                        emit_struct_field_defaults(field_addr(), it->second,
+                                                   line);
+                }
+            }
+            continue;
+        }
+        // Campo escalar con default comptime-constante: lower + STORE.
+        ir::IrValueId v_val = lower_expr(fi.default_init);
+        if (v_val == ir::IR_NO_VALUE) continue;
+        const ir::IrType ir_ft = ir_type_from_primitive(fi.type.kind);
+        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, line,
+                               /*is_explicit=*/true);
+        ir::IrValueId v_addr = field_addr();
+        if (fi.bit_width > 0) {
+            // Bit field con default: por ahora se ignora (raro); el zero-fill
+            // deja el campo a 0.  Un default de bit field requeriria RMW.
+            continue;
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir_ft;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    }
+}
+
+void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
+                                       const StructLayout &lay,
+                                       ast::InitListExpr *il, uint32_t line) {
+    // Aplicar primero los valores por defecto de los campos; el init-list
+    // explicito de abajo sobrescribe los campos que liste (DSE limpia lo muerto).
+    emit_struct_field_defaults(base_addr, lay, line);
+    for (size_t i = 0; i < il->elements.size(); ++i) {
+        const StructFieldInfo *fi = nullptr;
+        if (il->is_designated) {
+            const std::string &fname = il->field_names[i];
+            for (const auto &f : lay.fields) {
+                if (f.name == fname) {
+                    fi = &f;
+                    break;
+                }
+            }
+            if (!fi) {
+                error_at(il->loc, "lowering: campo '" + fname +
+                                      "' no existe en struct '" + lay.name + "'");
+                continue;
+            }
+        } else {
+            if (i >= lay.fields.size()) {
+                error_at(il->loc, "lowering: init list excede campos del struct");
+                break;
+            }
+            fi = &lay.fields[i];
+        }
+        // Direccion del campo destino (base + offset).
+        ir::IrValueId v_addr = base_addr;
+        if (fi->offset > 0) {
+            ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)fi->offset, line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {base_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ast::Expr *elem = il->elements[i].get();
+        // Campo de tipo STRUCT inicializado con un init-list ANIDADO
+        // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
+        // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
+        // baja un InitListExpr como valor, por eso hay que tratarlo aqui.
+        if (fi->type.kind == PrimitiveKind::STRUCT &&
+            elem->kind == ast::NodeKind::InitListExpr) {
+            auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+            if (it_sl == tc_.struct_layouts().end()) {
+                error_at(il->loc, "lowering: struct '" + fi->type.struct_name +
+                                      "' sin layout (init anidado)");
+                continue;
+            }
+            emit_struct_init_fields(v_addr, it_sl->second,
+                                    static_cast<ast::InitListExpr *>(elem), line);
+            continue;
+        }
+        ir::IrValueId v_val = lower_expr(elem);
+        if (v_val == ir::IR_NO_VALUE) continue;
+        // Campo AGREGADO inline (struct/array) desde una EXPRESION (otra
+        // variable, llamada, ...): copia memberwise desde la direccion origen
+        // (no un STORE escalar, que guardaria la direccion como puntero).
+        if (fi->type.kind == PrimitiveKind::STRUCT ||
+            fi->type.kind == PrimitiveKind::ARRAY) {
+            uint64_t sz = size_of_type(fi->type);
+            if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl != tc_.struct_layouts().end())
+                    sz = (uint64_t)it_sl->second.size_bytes;
+            }
+            if (sz == 0) sz = 8;
+            emit_memberwise_copy(v_addr, v_val, sz, line);
+            if (fi->type.kind == PrimitiveKind::STRUCT) {
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl != tc_.struct_layouts().end() &&
+                    it_sl->second.has_copy_hook) {
+                    emit_struct_method_on_host_field(
+                        v_addr, fi->type.struct_name,
+                        fi->type.struct_name + "____clone__", line);
+                }
+            }
+            continue;
+        }
+        const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
+        const bool elem_is_literal =
+            elem->kind == ast::NodeKind::IntLitExpr ||
+            elem->kind == ast::NodeKind::FloatLitExpr ||
+            elem->kind == ast::NodeKind::BoolLitExpr ||
+            elem->kind == ast::NodeKind::CharLitExpr ||
+            elem->kind == ast::NodeKind::NullLitExpr;
+        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, line,
+                               /*is_explicit=*/elem_is_literal);
+        if (fi->bit_width > 0) {
+            error_at(il->loc, "lowering: init list no soporta bit fields aun");
+            continue;
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir_ft;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    }
+}
+
 void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     // Resolver el Type semantico (aplicando aliases y structs).
     // A.43.7: con `auto`/`var` (vd->infer_type), el AST no tiene
@@ -3562,6 +3778,13 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.imm = (uint64_t)lay.size_bytes;
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
+        // Seguridad: zero-inicializar TODO el struct antes de escribir los
+        // campos listados.  Asi los campos NO presentes en el init-list quedan
+        // a 0 (no basura de la pila).  Subsume el zero de los bit fields.
+        emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
+        // Valores por defecto de los campos (`u8 a = 0x10`); el init-list
+        // explicito de abajo sobrescribe los campos que liste.
+        emit_struct_field_defaults(addr, lay, vd->loc.line);
         // Zero los storage words de bit fields antes del
         // loop para evitar que el RMW lea basura del ALLOCA.  Los
         // unique (offset, size) ya estan en lay.fields para bit
@@ -3615,6 +3838,38 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     break;
                 }
                 fi = &lay.fields[i];
+            }
+            // Campo STRUCT inicializado con un init-list ANIDADO
+            // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
+            // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
+            // baja un InitListExpr como valor -> hay que tratarlo aqui.
+            if (fi->type.kind == PrimitiveKind::STRUCT &&
+                il->elements[i]->kind == ast::NodeKind::InitListExpr) {
+                ir::IrValueId v_faddr = addr;
+                if (fi->offset > 0) {
+                    ir::IrValueId v_off = emit_const(
+                        ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
+                    v_faddr = fn_->new_value(ir::IrType::PTR);
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_faddr;
+                    ad.operands = {addr, v_off};
+                    ad.source_line = vd->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl == tc_.struct_layouts().end()) {
+                    error_at(vd->loc, "lowering: struct '" +
+                                          fi->type.struct_name +
+                                          "' sin layout (init anidado)");
+                    continue;
+                }
+                emit_struct_init_fields(
+                    v_faddr, it_sl->second,
+                    static_cast<ast::InitListExpr *>(il->elements[i].get()),
+                    vd->loc.line);
+                continue;
             }
             ir::IrValueId v_val = lower_expr(il->elements[i].get());
             if (v_val == ir::IR_NO_VALUE) continue;
@@ -3824,38 +4079,18 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         fn_->append(current_block_, std::move(ins));
         if (native_poo_) fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
-        // H5: si el struct tiene campos destructibles (shared/unique/closure/
-        // struct anidado), zero-inicializamos el buffer.  Un struct local en
-        // stack NO se zeroea (a diferencia de un objeto GC), asi que un campo
-        // shared/unique sin asignar contendria basura -> el dtor del struct
-        // leeria un ctrl/slot basura y haria free de basura (UAF).  Con el
-        // buffer a 0, el dtor de un campo no asignado es un no-op (null-guard).
-        // El init-list / copy posterior sobrescribe los campos que toque.
-        if (lay.has_destructible_field) {
-            const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, vd->loc.line);
-            const uint64_t qwords = (lay.size_bytes + 7) / 8;
-            for (uint64_t qi = 0; qi < qwords; ++qi) {
-                const ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, static_cast<int64_t>(qi * 8), vd->loc.line);
-                const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_at].is_host_ptr = fn_->values[addr].is_host_ptr;
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_at;
-                    ad.operands = {addr, v_off};
-                    ad.source_line = vd->loc.line;
-                    fn_->append(current_block_, std::move(ad));
-                }
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_z, v_at};
-                st.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(st));
-            }
-        }
+        // Seguridad + RAII: zero-inicializar SIEMPRE el buffer del struct.  Un
+        // struct local en pila NO se zeroea solo (a diferencia de un objeto GC);
+        // sin esto, (a) los campos no asignados exponen basura de la pila
+        // (seguridad), y (b) un campo shared/unique/closure sin asignar tendria
+        // un ctrl/slot basura y su dtor haria free de basura (UAF).  El
+        // init-list / copy posterior sobrescribe los campos que toque.
+        emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
+        // Declaracion sin init (`P p;`): aplicar los valores por defecto de los
+        // campos.  Si hay init (copia de otro struct/llamada) el copy de abajo
+        // sobrescribe todo, asi que los defaults solo aplican sin init.
+        if (!vd->init)
+            emit_struct_field_defaults(addr, lay, vd->loc.line);
         // Ownership ruta B (copy-hook): `S b = a;` donde S declara `__clone__`
         // y `a` es un lvalue struct existente (IdentExpr) es una COPIA.  Modelo
         // (estilo Rust Clone): memcpy bit a bit a->b (abajo) y DESPUES
@@ -4194,103 +4429,8 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.imm = (uint64_t)lay.size_bytes;
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
-        // STORE cada elemento al campo correspondiente.
-        for (size_t i = 0; i < il->elements.size(); ++i) {
-            const StructFieldInfo *fi = nullptr;
-            if (il->is_designated) {
-                const std::string &fname = il->field_names[i];
-                for (const auto &f : lay.fields) {
-                    if (f.name == fname) {
-                        fi = &f;
-                        break;
-                    }
-                }
-                if (!fi) {
-                    error_at(vd->loc, "lowering: campo '" + fname +
-                                          "' no existe en struct '" +
-                                          sem_type.struct_name + "'");
-                    continue;
-                }
-            } else {
-                if (i >= lay.fields.size()) {
-                    error_at(vd->loc,
-                             "lowering: init list excede campos del struct");
-                    break;
-                }
-                fi = &lay.fields[i];
-            }
-            ir::IrValueId v_val = lower_expr(il->elements[i].get());
-            if (v_val == ir::IR_NO_VALUE) continue;
-            const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-            // Direccion del campo de destino (addr + offset).
-            ir::IrValueId v_addr = addr;
-            if (fi->offset > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-                v_addr = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr;
-                ad.operands = {addr, v_off};
-                ad.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ad));
-            }
-            // Campo AGREGADO inline (struct/array value-type): @c v_val es la
-            // DIRECCION del agregado origen -> copia memberwise (qword a
-            // qword) sus bytes al campo, NO un STORE escalar (que guardaria la
-            // direccion origen como si fuera un puntero).  Sin esto un
-            // `Outer o = {.w = inner}` guardaba &inner en o.w y leer o.w.v
-            // devolvia la direccion en vez del valor (bug struct-en-struct).
-            if (fi->type.kind == PrimitiveKind::STRUCT ||
-                fi->type.kind == PrimitiveKind::ARRAY) {
-                uint64_t sz = size_of_type(fi->type);
-                if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
-                    auto it_sl =
-                        tc_.struct_layouts().find(fi->type.struct_name);
-                    if (it_sl != tc_.struct_layouts().end())
-                        sz = (uint64_t)it_sl->second.size_bytes;
-                }
-                if (sz == 0) sz = 8;
-                emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
-                // Copy-hook (__clone__) del struct, si lo declara.
-                if (fi->type.kind == PrimitiveKind::STRUCT) {
-                    auto it_sl =
-                        tc_.struct_layouts().find(fi->type.struct_name);
-                    if (it_sl != tc_.struct_layouts().end() &&
-                        it_sl->second.has_copy_hook) {
-                        emit_struct_method_on_host_field(
-                            v_addr, fi->type.struct_name,
-                            fi->type.struct_name + "____clone__", vd->loc.line);
-                    }
-                }
-                continue;
-            }
-            const bool elem_is_literal =
-                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft,
-                                   vd->loc.line,
-                                   /*is_explicit=*/elem_is_literal);
-            // Bit field: necesitaria read-modify-write; en init list
-            // simple solo se admiten campos normales.  Reportar error
-            // si fi->bit_width > 0 (uso raro: usar asignacion despues).
-            if (fi->bit_width > 0) {
-                error_at(vd->loc,
-                         "lowering: init list no soporta bit fields aun");
-                continue;
-            }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir_ft;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_val, v_addr};
-            st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
-        }
+        // STORE cada campo en su offset (recursivo para structs anidados).
+        emit_struct_init_fields(addr, lay, il, vd->loc.line);
         bind(vd->name, addr);
         return;
     }

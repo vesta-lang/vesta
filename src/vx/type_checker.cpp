@@ -2485,6 +2485,7 @@ void TypeChecker::collect_globals() {
                     fi.size = bf_size;
                     fi.bit_offset = bf_used;
                     fi.bit_width = bw;
+                    fi.default_init = f.default_init.get();
                     layout.fields.push_back(std::move(fi));
                     bf_used += bw;
                     continue;
@@ -2502,6 +2503,7 @@ void TypeChecker::collect_globals() {
                 fi.type = ft;
                 fi.offset = offset;
                 fi.size = fsize;
+                fi.default_init = f.default_init.get();
                 layout.fields.push_back(std::move(fi));
 
                 offset += fsize;

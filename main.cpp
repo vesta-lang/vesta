@@ -1854,6 +1854,40 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
+        // Huella + contratos de TIPO (structs/clases/enums).  El layout de todo
+        // struct es C-compatible por invariante del lenguaje; @pod indica ademas
+        // que es trivialmente copiable (sin dtor ni campos gestionados).
+        if (!cr.type_fingerprints.empty()) {
+            auto type_checks = analyze::verify_type_contracts(
+                cr.type_fingerprints, cr.type_contracts);
+            std::cout << "\n--- Tipos ---\n";
+            for (const auto &tf : cr.type_fingerprints) {
+                const char *kind =
+                    tf.kind == analyze::TypeFingerprint::STRUCT ? "struct"
+                    : tf.kind == analyze::TypeFingerprint::CLASS ? "class"
+                                                                 : "enum";
+                std::cout << "  " << kind << " " << tf.type_name
+                          << " : size=" << tf.size_bytes << "B"
+                          << " align=" << tf.align_bytes
+                          << " fields=" << tf.field_count
+                          << (tf.is_pod ? " [pod]" : "")
+                          << (tf.no_heap ? " [no_heap]" : "")
+                          << (tf.has_destructor ? " [~dtor]" : "")
+                          << (tf.is_reference ? " [ref]" : "") << "\n";
+                for (const auto &ck : type_checks) {
+                    if (ck.function != tf.type_name) continue;
+                    const char *st =
+                        ck.status == analyze::ContractCheck::OK ? "OK  "
+                        : ck.status == analyze::ContractCheck::VIOLATED
+                            ? "FALLA"
+                            : "????";
+                    std::cout << "      " << st << " " << ck.contract << " -> "
+                              << ck.detail << "\n";
+                    if (ck.status == analyze::ContractCheck::VIOLATED)
+                        ++mismatches;
+                }
+            }
+        }
         std::cout
             << "=================================================="
                "===========\n";

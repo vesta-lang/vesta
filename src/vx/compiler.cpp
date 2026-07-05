@@ -52,9 +52,8 @@ namespace vx {
  * Cualquier valor fuera de rango cae en O1 (default conservador).
  */
 // Recolecta los contratos de huella declarados en el AST (recorriendo los
-// NamespaceDecl) a un mapa por nombre de funcion.  Se lleva APARTE del IR para
-// no cambiar el sizeof de IrFunction (que dispara una UB latente del analizador
-// sobre modulos deserializados).
+// NamespaceDecl) a un mapa por nombre de funcion.  Se lleva APARTE del IR por
+// diseno: son metadata compile-time (modo --analyze) que el codegen no necesita.
 static void collect_contracts_(
     const std::vector<std::unique_ptr<ast::Node>> &decls,
     std::unordered_map<std::string, analyze::FunctionContracts> &out) {
@@ -76,6 +75,119 @@ static void collect_contracts_(
             if (c.any()) out[fd->name] = c;
         }
     }
+}
+
+// Recolecta los contratos de TIPO (@pod/@no_heap/@size) declarados sobre
+// struct/clase/enum a un mapa por nombre de tipo.  Mismo criterio que
+// collect_contracts_ (compile-time, sin serializar).
+static void collect_type_contracts_(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::unordered_map<std::string, analyze::TypeContracts> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::NamespaceDecl) {
+            collect_type_contracts_(
+                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
+            continue;
+        }
+        auto take = [&](const std::string &name, bool pod, bool no_heap,
+                        int64_t size) {
+            analyze::TypeContracts c;
+            c.pod = pod;
+            c.no_heap = no_heap;
+            c.size = size;
+            if (c.any()) out[name] = c;
+        };
+        if (d->kind == ast::NodeKind::StructDecl) {
+            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
+            take(sd->name, sd->contract_pod, sd->contract_no_heap,
+                 sd->contract_size);
+        } else if (d->kind == ast::NodeKind::ClassDecl) {
+            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
+            take(cd->name, cd->contract_pod, cd->contract_no_heap,
+                 cd->contract_size);
+        } else if (d->kind == ast::NodeKind::EnumDecl) {
+            const auto *ed = static_cast<const ast::EnumDecl *>(d.get());
+            take(ed->name, ed->contract_pod, ed->contract_no_heap,
+                 ed->contract_size);
+        }
+    }
+}
+
+// Computa la huella de cada TIPO agregado (struct/clase/enum) a partir de los
+// layouts ya resueltos del type checker.  @pod/@no_heap se componen sobre los
+// tipos de campo via los clasificadores del type checker (type_is_managed /
+// type_is_c_representable), que son la verdad de la frontera C.
+static std::vector<analyze::TypeFingerprint>
+compute_type_fingerprints_(const TypeChecker &tc) {
+    std::vector<analyze::TypeFingerprint> out;
+    using TF = analyze::TypeFingerprint;
+
+    // Structs: value-types.  @pod = C-representable por valor + sin dtor.
+    for (const auto &kv : tc.struct_layouts()) {
+        const StructLayout &lay = kv.second;
+        TF tf;
+        tf.type_name = lay.name;
+        tf.kind = TF::STRUCT;
+        tf.size_bytes = lay.size_bytes;
+        tf.align_bytes = lay.align_bytes;
+        tf.field_count = static_cast<uint32_t>(lay.fields.size());
+        bool has_dtor = lay.has_destructible_field;
+        for (const auto &m : lay.methods)
+            if (m.is_destructor) has_dtor = true;
+        tf.has_destructor = has_dtor;
+        bool no_heap = true, all_c_repr = true;
+        for (const auto &f : lay.fields) {
+            if (tc.type_is_managed(f.type)) no_heap = false;
+            if (!tc.type_is_c_representable(f.type)) all_c_repr = false;
+        }
+        tf.no_heap = no_heap;
+        tf.is_pod = all_c_repr && !has_dtor && no_heap;
+        tf.is_reference = false;
+        out.push_back(std::move(tf));
+    }
+
+    // Clases: tipos por REFERENCIA (viven en el heap gestionado) -> nunca @pod
+    // ni @no_heap; @size verifica el tamano de la instancia.
+    for (const auto &kv : tc.class_layouts()) {
+        const ClassLayout &lay = kv.second;
+        if (lay.is_interface) continue; // sin instancias.
+        TF tf;
+        tf.type_name = lay.name;
+        tf.kind = TF::CLASS;
+        tf.size_bytes = lay.size_bytes;
+        tf.field_count = static_cast<uint32_t>(lay.fields.size());
+        bool has_dtor = false;
+        for (const auto &m : lay.methods)
+            if (m.is_destructor) has_dtor = true;
+        tf.has_destructor = has_dtor;
+        tf.is_reference = true;
+        tf.is_pod = false;
+        tf.no_heap = false;
+        out.push_back(std::move(tf));
+    }
+
+    // Enums: tagged unions inline (value-types).  @pod si ningun payload es
+    // gestionado y todos son C-representables; un enum sin payload es @pod.
+    for (const auto &kv : tc.enum_layouts()) {
+        const EnumLayout &lay = kv.second;
+        TF tf;
+        tf.type_name = lay.name;
+        tf.kind = TF::ENUM;
+        tf.size_bytes = lay.size_bytes;
+        tf.field_count = lay.max_payload_fields;
+        bool no_heap = true, all_c_repr = true;
+        for (const auto &v : lay.variants)
+            for (const auto &ft : v.field_types) {
+                if (tc.type_is_managed(ft)) no_heap = false;
+                if (!tc.type_is_c_representable(ft)) all_c_repr = false;
+            }
+        tf.no_heap = no_heap;
+        tf.is_pod = all_c_repr && no_heap;
+        tf.is_reference = false;
+        out.push_back(std::move(tf));
+    }
+    return out;
 }
 
 static ir::OptLevel opt_level_from_int(int n) noexcept {
@@ -817,6 +929,31 @@ CompileResult compile_vx_source(const std::string &source,
                 violated = true;
             }
             if (violated) {
+                res.ok = false;
+                return res;
+            }
+        }
+        // Contratos de TIPO (@pod/@no_heap/@size): recoger + computar la huella
+        // de los tipos (desde los layouts del type checker) + verificar.  La
+        // huella se calcula SIEMPRE (para el reporte de --analyze); los checks
+        // solo si hay contratos.  Decidibles del layout -> un VIOLATED es error.
+        collect_type_contracts_(mod->decls, res.type_contracts);
+        res.type_fingerprints = compute_type_fingerprints_(tc);
+        if (!res.type_contracts.empty()) {
+            auto tchecks = analyze::verify_type_contracts(res.type_fingerprints,
+                                                          res.type_contracts);
+            bool tviolated = false;
+            for (const auto &ck : tchecks) {
+                if (ck.status != analyze::ContractCheck::VIOLATED) continue;
+                SourceLoc loc;
+                loc.file = filename;
+                res.diagnostics.error(std::move(loc),
+                                      "contrato de tipo " + ck.contract +
+                                          " incumplido en '" + ck.function +
+                                          "': " + ck.detail);
+                tviolated = true;
+            }
+            if (tviolated) {
                 res.ok = false;
                 return res;
             }

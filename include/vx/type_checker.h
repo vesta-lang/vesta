@@ -158,6 +158,10 @@ struct StructFieldInfo {
     /// y @c size pero con distintos @c bit_offset.
     uint8_t bit_offset = 0;
     uint8_t bit_width = 0;
+    /// Valor por defecto del campo (`u8 a = 0x10;`), no-owning al AST (vive
+    /// durante toda la compilacion).  null = sin default (zero-init).  Lo usa
+    /// el lowering para `= {}`, campos no listados en el init y `default()`.
+    ast::Expr *default_init = nullptr;
 };
 
 /**
