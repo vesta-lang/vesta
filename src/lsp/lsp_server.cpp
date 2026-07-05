@@ -29,6 +29,7 @@
 #include "lsp/param_hints.h"
 #include "lsp/semantic_tokens.h"
 #include "lsp/symbol_index.h"
+#include "vx/ast.h"
 #include "vx/diagnostic.h"
 
 namespace lsp {
@@ -1006,6 +1007,44 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
                 } else if (d.kind == SymbolKind::Field) {
                     add_item(d.name, CompletionKind::Field, type_name);
                 }
+            }
+        }
+        // NS.4: completado de miembro de NAMESPACE (`ns.simbolo`).  Si el
+        // receptor no resolvio a un tipo, puede ser un namespace: ofrecer sus
+        // simbolos desde el indice semantico (nombres CUALIFICADOS).  Coincide
+        // si el receptor es el PATH completo del namespace o su ULTIMO segmento
+        // (short-form), consistente con la resolucion del compilador.
+        if (type_name.empty()) {
+            for (const auto &s : an.sem_index.symbols) {
+                const std::string &q = s.name;
+                const size_t dot = q.rfind('.');
+                if (dot == std::string::npos)
+                    continue; // simbolo sin namespace.
+                const std::string ns = q.substr(0, dot);
+                const std::string member = q.substr(dot + 1);
+                bool match = (ns == receiver);
+                if (!match) {
+                    const size_t nd = ns.rfind('.');
+                    const std::string last =
+                        (nd == std::string::npos) ? ns : ns.substr(nd + 1);
+                    match = (last == receiver);
+                }
+                if (!match || !has_prefix(member, prefix))
+                    continue;
+                // Mapear el ast::NodeKind (u8) del indice a CompletionKind.
+                CompletionKind k = CompletionKind::Function;
+                switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+                case vx::ast::NodeKind::StructDecl: k = CompletionKind::Struct; break;
+                case vx::ast::NodeKind::ClassDecl: k = CompletionKind::Class; break;
+                case vx::ast::NodeKind::EnumDecl: k = CompletionKind::Enum; break;
+                case vx::ast::NodeKind::TypeAliasDecl:
+                case vx::ast::NodeKind::ConceptDecl: k = CompletionKind::Class; break;
+                case vx::ast::NodeKind::GlobalVarDecl:
+                    k = CompletionKind::Variable;
+                    break;
+                default: k = CompletionKind::Function; break;
+                }
+                add_item(member, k, ns);
             }
         }
         // Caso miembro: NO mezclamos el completado general (evitar inundar con

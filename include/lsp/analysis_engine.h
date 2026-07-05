@@ -43,6 +43,7 @@
 
 #include "analyze/bigo.h"
 #include "vx/compiler.h"
+#include "vx/semantic_index.h"
 
 namespace lsp {
 
@@ -84,6 +85,13 @@ struct DocAnalysis {
     /// Lo consume el hover para mostrar la complejidad Big-O de una funcion.
     /// Vacio si el fuente no produjo IR (errores de compilacion).
     analyze::ModuleCost cost;
+
+    /// Indice semantico por-declaracion (NS.4): nombres CUALIFICADOS por
+    /// namespace + hash + deps.  Se construye del AST RAW (pre-flatten) para
+    /// que el LSP pueda ofrecer completado de miembro de namespace
+    /// (`ns.simbolo`), resolver acceso cualificado, etc.  Vacio si el parse
+    /// fallo.
+    vx::SemanticIndex sem_index;
 };
 
 /**

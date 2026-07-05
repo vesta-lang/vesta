@@ -312,6 +312,21 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // Best-effort: un fallo del parse extra no debe afectar a los
         // diagnosticos (el catch externo cubre cualquier excepcion).
         extract_declared_names(text, uri, *analysis);
+        // NS.4: indice semantico del AST RAW (pre-flatten) -- nombres
+        // CUALIFICADOS por namespace, para completado de miembro `ns.simbolo`
+        // y resolucion de acceso cualificado.  Parse independiente del compile
+        // (que aplana los namespaces); best-effort (sin indice si el parse peta).
+        try {
+            vx::Diagnostics sidiag;
+            vx::Lexer slx(text, uri, sidiag);
+            vx::Parser sp(slx, sidiag);
+            auto smod = sp.parse_program();
+            if (smod)
+                analysis->sem_index =
+                    vx::build_semantic_index(*smod, text, uri);
+        } catch (...) {
+            // sin indice; el resto del analisis sigue valido.
+        }
     } catch (const std::exception &e) {
         // Un fallo del frontend NO debe tumbar el servidor: convertirlo en un
         // diagnostico de error interno en 0:0 para que el cliente lo vea.
