@@ -705,8 +705,8 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
  * para que la reconstruccion sea byte-exacta (el merge cross-module
  * depende de offsets estables dentro del pool del dep).
  */
-static void serialize_static_data(const IrModule::StaticDataStore &sd,
-                                  std::vector<uint8_t> &out) {
+void serialize_static_data(const IrModule::StaticDataStore &sd,
+                           std::vector<uint8_t> &out) {
     write_u8(out, sd.alignment_default);
     // Pool de bytes contiguo.
     write_u32(out, static_cast<uint32_t>(sd.bytes.size()));
@@ -739,8 +739,8 @@ static void serialize_static_data(const IrModule::StaticDataStore &sd,
     }
 }
 
-static bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
-                                    IrModule::StaticDataStore &sd) {
+bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
+                             IrModule::StaticDataStore &sd) {
     sd.clear();
     if (!read_u8(in, off, sd.alignment_default)) return false;
     uint32_t pool_len = 0;

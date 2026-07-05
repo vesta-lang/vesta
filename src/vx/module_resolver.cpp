@@ -48,8 +48,36 @@ static inline bool vx_file_access_ok(const char *p) {
 #include "vx/ast.h"
 #include "vx/lexer.h"
 #include "vx/parser.h"
+#include "util/fs_utils.h"
 
 namespace vx {
+
+// Autodetecta el directorio de la stdlib Vesta.  Misma logica que usaba
+// compiler_project.cpp inline; factorizada aqui para que el LSP (indices de
+// modulos importados) la reuse sin duplicar la sonda.
+std::string detect_stdlib_vx_dir() {
+    std::string sd;
+    if (const char *env = std::getenv("VX_STDLIB_DIR")) sd = env;
+    if (!sd.empty()) return sd;
+    // (2) Candidatos relativos al cwd.
+    static const char *cands[] = {"stdlib/vx", "../stdlib/vx", "../../stdlib/vx"};
+    for (const char *c : cands) {
+        std::ifstream test(std::string(c) + "/simd_string.vx");
+        if (test.good()) return c;
+    }
+    // (3) Candidatos relativos al ejecutable (instalacion + build-tree).
+    std::string exe = fs::get_executable_path();
+    if (!exe.empty()) {
+        std::filesystem::path ed = std::filesystem::path(exe).parent_path();
+        const std::filesystem::path exe_cands[] = {
+            ed / "stdlib" / "vx", ed.parent_path() / "stdlib" / "vx"};
+        for (const auto &c : exe_cands) {
+            std::ifstream test((c / "simd_string.vx").string());
+            if (test.good()) return c.string();
+        }
+    }
+    return {};
+}
 
 // ---------------------------------------------------------------------------
 // FNV-1a 64-bit.  Constante recomendada por Eric Niebler / FNV reference.

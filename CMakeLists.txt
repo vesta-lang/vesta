@@ -648,6 +648,34 @@ else ()
     target_link_libraries(test_gc_lib PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Driver incremental granular (claves Merkle + CAS + plan_rebuild + fragmentos
+# de IR).  vx_lib aporta el indice + el driver; vmcore aporta ir:: (IrModule,
+# serializacion).  vx_lib va PRIMERO: referencia simbolos ir:: de vmcore.
+add_executable(test_vx_incremental tests/vx/test_incremental.cpp)
+target_include_directories(test_vx_incremental PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_vx_incremental PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_vx_incremental PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_vx_incremental PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_vx_incremental PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Huella computacional por-funcion (recursos + efectos + composicion).
+add_executable(test_analyze_fingerprint tests/analyze/test_fingerprint.cpp)
+target_include_directories(test_analyze_fingerprint PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_analyze_fingerprint PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_analyze_fingerprint PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_analyze_fingerprint PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_analyze_fingerprint PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone

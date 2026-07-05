@@ -1191,6 +1191,10 @@ struct IrFunction {
     std::string complexity_partial_post;
     std::string complexity_total_pre;
     std::string complexity_total_post;
+    // Nota: los contratos de huella (@pure/@alloc/...) NO viven aqui: se llevan
+    // en CompileResult (por nombre).  Anadir campos a IrFunction cambia su
+    // sizeof y dispara una UB latente del analizador sobre modulos
+    // deserializados (ver proj_summary_codegen_fingerprint en la memoria).
 
     /**
      * @brief Crea un nuevo valor SSA en el pool.

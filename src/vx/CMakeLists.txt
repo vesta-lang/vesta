@@ -85,6 +85,9 @@ add_library(vx_lib STATIC
     # ir::IrModule; vive aqui para que los renderers de diagramas puedan
     # anotar el coste por funcion (--diagram-cost).
     ${CMAKE_SOURCE_DIR}/src/analyze/bigo.cpp
+    # Huella computacional por-declaracion (recursos + efectos): base del
+    # modelo dirigido por resumenes y de las anotaciones comprobables.
+    ${CMAKE_SOURCE_DIR}/src/analyze/fingerprint.cpp
     comptime_introspect.cpp
     # Sistema de modulos.
     module_resolver.cpp
@@ -93,6 +96,8 @@ add_library(vx_lib STATIC
     # Indice semantico por-declaracion (hash de contenido + grafo de deps):
     # sustrato de la compilacion incremental granular y distribuida.
     semantic_index.cpp
+    # Driver incremental granular: claves Merkle + CAS + plan_rebuild.
+    incremental.cpp
     vxi_format.cpp
     project_cache.cpp
     velb_signature.cpp

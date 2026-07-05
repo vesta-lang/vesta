@@ -26,6 +26,8 @@
  */
 
 #include "vx/compiler.h"
+#include "analyze/fingerprint.h" // verificacion de contratos
+#include "vx/incremental.h" // CAS global direccionado por contenido (cross-proyecto)
 #include <algorithm> // UCRT64: no transitivo
 #include <unordered_set>
 
@@ -189,6 +191,82 @@ bool read_file_bytes_(const std::string &path, std::vector<uint8_t> &out) {
     out.resize(static_cast<size_t>(sz));
     if (sz > 0) f.read(reinterpret_cast<char *>(out.data()), sz);
     return f.good();
+}
+
+/// Clave de CONTENIDO de un modulo para el CAS global (cross-proyecto).
+///
+/// A diferencia del cache por-path (.vxi/.vxir junto al source), esta clave es
+/// independiente de la RUTA: solo depende del contenido del modulo + los
+/// abi_hashes (ya de por si content-based) de sus deps directos + la version
+/// del compilador + el sufijo de target.  Asi dos proyectos con la MISMA
+/// stdlib (aunque este en rutas distintas) obtienen la MISMA clave -> hit en el
+/// store global -> se compila una sola vez para toda la maquina.  Es tambien la
+/// base de la compilacion DISTRIBUIDA (misma clave -> mismo artefacto en
+/// cualquier nodo).  @p dep_hashes debe venir ORDENADO por el caller.
+uint64_t module_content_key_(uint64_t source_hash,
+                             const std::vector<uint64_t> &dep_hashes,
+                             const std::string &tgt_suffix,
+                             uint64_t config_fp) {
+    uint64_t h = 1469598103934665603ull; // FNV-1a 64 offset basis.
+    auto mix = [&](uint64_t v) {
+        for (int i = 0; i < 8; ++i) {
+            h ^= (v >> (i * 8)) & 0xFF;
+            h *= 1099511628211ull;
+        }
+    };
+    mix(0x5641434B4559ull);          // dominio "CAS module key".
+    mix(vxi_compiler_version_hash()); // build del compilador -> no reusar stale.
+    mix(source_hash);                 // contenido (incl. instrument/native_poo).
+    // Config que afecta al IR pre-optimize (BuildConfig::ir_fingerprint):
+    // asm_target_bits, native_poo, exceptions, instrument.  Cierra el hueco de
+    // cross-bits AOT (@Naked/asm{} baja distinto en 32/64) con CAS compartido.
+    mix(config_fp);
+    if (!tgt_suffix.empty()) mix(vxi_fnv1a(tgt_suffix)); // @Target (PE/ELF/...).
+    for (uint64_t d : dep_hashes) mix(d);
+    return h;
+}
+
+/// Empaqueta el par (.vxi, .vxir) en un blob del CAS: `[u32 len][vxi][u32
+/// len][vxir]` (little-endian).  Es el artefacto por-modulo (interfaz + IR
+/// completo: functions + static_data + globals + native_imports).
+std::vector<uint8_t> cas_pack_module_(const std::vector<uint8_t> &vxi,
+                                      const std::vector<uint8_t> &vxir) {
+    std::vector<uint8_t> out;
+    out.reserve(8 + vxi.size() + vxir.size());
+    auto put_u32 = [&](uint32_t v) {
+        out.push_back(v & 0xFF);
+        out.push_back((v >> 8) & 0xFF);
+        out.push_back((v >> 16) & 0xFF);
+        out.push_back((v >> 24) & 0xFF);
+    };
+    put_u32(static_cast<uint32_t>(vxi.size()));
+    out.insert(out.end(), vxi.begin(), vxi.end());
+    put_u32(static_cast<uint32_t>(vxir.size()));
+    out.insert(out.end(), vxir.begin(), vxir.end());
+    return out;
+}
+
+/// Divide un blob del CAS en sus partes (.vxi, .vxir).  @return false si el
+/// blob esta truncado o mal formado.
+bool cas_unpack_module_(const std::vector<uint8_t> &blob,
+                        std::vector<uint8_t> &vxi, std::vector<uint8_t> &vxir) {
+    size_t off = 0;
+    auto get_u32 = [&](uint32_t &v) -> bool {
+        if (off + 4 > blob.size()) return false;
+        v = static_cast<uint32_t>(blob[off]) |
+            (static_cast<uint32_t>(blob[off + 1]) << 8) |
+            (static_cast<uint32_t>(blob[off + 2]) << 16) |
+            (static_cast<uint32_t>(blob[off + 3]) << 24);
+        off += 4;
+        return true;
+    };
+    uint32_t vl = 0, il = 0;
+    if (!get_u32(vl) || off + vl > blob.size()) return false;
+    vxi.assign(blob.begin() + off, blob.begin() + off + vl);
+    off += vl;
+    if (!get_u32(il) || off + il > blob.size()) return false;
+    vxir.assign(blob.begin() + off, blob.begin() + off + il);
+    return true;
 }
 
 /// Calcula el path del .vxi cacheado para un .vx.  Convencion:
@@ -791,40 +869,9 @@ CompileResult compile_vx_project(
     // que el usuario tenga que copiar la lib a su proyecto.  Autodetect por
     // candidatos comunes desde el cwd (override via env var VX_STDLIB_DIR).
     {
-        std::string sd;
-        if (const char *env = std::getenv("VX_STDLIB_DIR")) sd = env;
-        if (sd.empty()) {
-            static const char *cands[] = {"stdlib/vx", "../stdlib/vx",
-                                          "../../stdlib/vx"};
-            for (const char *c : cands) {
-                std::ifstream test(std::string(c) + "/simd_string.vx");
-                if (test.good()) {
-                    sd = c;
-                    break;
-                }
-            }
-        }
-        // Fallback relativo al EJECUTABLE: cubre la instalacion (vesta.exe junto
-        // a stdlib/vx/) y el build-tree (vm.exe en cmake-build-X/, stdlib en la
-        // raiz del repo).  Asi el compilador instalado encuentra la stdlib desde
-        // cualquier directorio de trabajo.
-        if (sd.empty()) {
-            std::string exe = fs::get_executable_path();
-            if (!exe.empty()) {
-                std::filesystem::path ed =
-                    std::filesystem::path(exe).parent_path();
-                const std::filesystem::path exe_cands[] = {
-                    ed / "stdlib" / "vx",
-                    ed.parent_path() / "stdlib" / "vx"};
-                for (const auto &c : exe_cands) {
-                    std::ifstream test((c / "simd_string.vx").string());
-                    if (test.good()) {
-                        sd = c.string();
-                        break;
-                    }
-                }
-            }
-        }
+        // Autodetect de la stdlib Vesta (env VX_STDLIB_DIR, cwd, o relativo al
+        // ejecutable).  Factorizado en detect_stdlib_vx_dir() para reuso del LSP.
+        std::string sd = detect_stdlib_vx_dir();
         if (!sd.empty()) graph.set_stdlib_dir(sd);
     }
     // añadir como search path implicito la carpeta del modulo root.  Asi
@@ -1070,6 +1117,32 @@ CompileResult compile_vx_project(
     std::string cc_tgt_os, cc_tgt_arch;
     vx::get_aot_condcomp_target(cc_tgt_os, cc_tgt_arch);
 
+    // CAS global direccionado por contenido (opt-in via VX_CAS_DIR): tier de
+    // cache ADICIONAL, independiente de la ruta, que permite reusar el artefacto
+    // de un modulo (interfaz + IR) entre proyectos distintos y entre maquinas.
+    // Ejemplo: la stdlib se compila una sola vez para toda la maquina.  Default
+    // OFF -> comportamiento y builds actuales intactos.  Comparte un solo
+    // CasStore entre threads (sus ops de fichero son atomicas / read-only).
+    std::unique_ptr<CasStore> cas;
+    if (cache_enabled && std::getenv("VX_CAS_DIR") != nullptr)
+        cas = std::make_unique<CasStore>(CasStore::open_default());
+    // Config de build que afecta al IR pre-optimize (fold en la clave del CAS).
+    // Layered: opt_level / aot_vec_width / os/arch de codegen NO entran (son
+    // post-merge) -> el IR se comparte entre esas configs.  Su fingerprint
+    // COMPLETO (BuildConfig::full_fingerprint) queda para el futuro cache del
+    // ARTEFACTO FINAL (.velb/.exe AOT).
+    uint64_t cas_config_fp = 0;
+    if (cas) {
+        BuildConfig bcfg;
+        bcfg.asm_target_bits = opts.asm_target_bits;
+        bcfg.native_poo = opts.native_poo;
+        bcfg.exceptions_enabled = opts.exceptions_enabled;
+        bcfg.instrument_mode = opts.instrument_mode;
+        // tgt_os/tgt_arch quedan vacios: la precision por-modulo de @Target la
+        // aporta cache_tgt_suffix (solo divide los modulos que USAN @Target).
+        cas_config_fp = bcfg.ir_fingerprint();
+    }
+
     auto compile_one_module = [&](size_t i) -> void {
         auto &pm = work[i];
         const bool is_root = (i + 1 == work.size());
@@ -1118,6 +1191,57 @@ CompileResult compile_vx_project(
         if ((!cc_tgt_os.empty() || !cc_tgt_arch.empty()) &&
             pm.source.find("@Target") != std::string::npos) {
             cache_tgt_suffix = "." + cc_tgt_os + "-" + cc_tgt_arch;
+        }
+
+        // ---- CAS global (content-addressed, cross-proyecto) ----
+        // Clave de contenido del modulo (independiente de la ruta).  Se calcula
+        // aqui para reusarla tambien en el write path (mas abajo).  Solo DEPS
+        // (el root se ensambla, no se cachea como artefacto reusable).
+        uint64_t cas_key = 0;
+        bool cas_key_ok = false;
+        if (cas && !is_root && pm.ast) {
+            std::vector<uint64_t> dep_hashes;
+            auto imps = collect_imports_(*pm.ast, &ns_to_modname);
+            for (const auto &req : imps) {
+                auto itd = by_name.find(req.module_name);
+                if (itd != by_name.end())
+                    dep_hashes.push_back(work[itd->second].vxi.abi_hash);
+            }
+            std::sort(dep_hashes.begin(), dep_hashes.end());
+            cas_key = module_content_key_(source_hash, dep_hashes,
+                                          cache_tgt_suffix, cas_config_fp);
+            cas_key_ok = true;
+            std::vector<uint8_t> blob;
+            if (cas->get(cas_key, blob)) {
+                std::vector<uint8_t> vb, ib;
+                if (cas_unpack_module_(blob, vb, ib)) {
+                    auto pr = vxi_parse(vb.data(), vb.size());
+                    ir::IrModule dep_mod;
+                    if (pr.ok && ir::parse_ir_module_cache(ib, dep_mod)) {
+                        pm.vxi = std::move(pr.module_);
+                        // abi_hash: leerlo del header del .vxi (offset 8).
+                        if (vb.size() >= 16) {
+                            uint64_t hh = 0;
+                            for (int b = 0; b < 8; ++b)
+                                hh |= static_cast<uint64_t>(vb[8 + b]) << (b * 8);
+                            pm.vxi.abi_hash = hh;
+                        }
+                        pm.ir.functions = std::move(dep_mod.functions);
+                        pm.ir.static_data = std::move(dep_mod.static_data);
+                        pm.ir.globals = std::move(dep_mod.globals);
+                        pm.ir.native_imports =
+                            std::move(dep_mod.native_imports);
+                        pm.ok = true;
+                        if (verbose_cache) {
+                            std::ostringstream tmp;
+                            tmp << "[vx-cas] hit: " << pm.canonical_path << "\n";
+                            std::lock_guard<std::mutex> lk(verbose_mtx);
+                            std::cerr << tmp.str();
+                        }
+                        return; // artefacto reusado del CAS global.
+                    }
+                }
+            }
         }
 
         // ---- M4: cache hit path ----
@@ -1201,6 +1325,18 @@ CompileResult compile_vx_project(
                                 pm.ir.native_imports =
                                     std::move(dep_mod.native_imports);
                                 pm.ok = true;
+                                // Seed del CAS global desde un HIT del cache
+                                // por-path: asi el primer build con .vxir
+                                // caliente (pero CAS frio) puebla el store
+                                // global para otros proyectos/maquinas, no solo
+                                // el build que compila desde cero.  El .vxi
+                                // valido ya confirmo que corresponde al
+                                // contenido actual -> cas_key es la clave
+                                // correcta para este artefacto.
+                                if (cas && cas_key_ok)
+                                    (void)cas->put(
+                                        cas_key,
+                                        cas_pack_module_(vbytes, ibytes));
                                 if (verbose_cache) {
                                     std::ostringstream tmp;
                                     tmp << "[vx-cache] hit: "
@@ -1610,6 +1746,12 @@ CompileResult compile_vx_project(
             // los perdia.
             auto ibytes = ir::emit_ir_module_cache(pm.ir);
             (void)write_file_atomic_(ip, ibytes);
+            // Poblar el CAS global (content-addressed) con el mismo par
+            // (interfaz, IR).  Idempotente: la clave es el contenido.  Asi el
+            // siguiente proyecto/maquina con esta misma stdlib hace hit sin
+            // recompilar, sin importar en que ruta viva.
+            if (cas && cas_key_ok)
+                (void)cas->put(cas_key, cas_pack_module_(vbytes, ibytes));
             // Phase M5.C L.18: ademas del .vxi (interfaz) + .vxir (IR
             // serializado), emitir el .vel del dep solo (sin merge) para
             // que la libreria sea distribuible standalone.  El
@@ -2213,6 +2355,61 @@ CompileResult compile_vx_project(
                 }
             }
             merged.static_data = std::move(new_store);
+        }
+    }
+
+    // 5.b. Verificar los CONTRATOS de huella (@pure/@nothrow/@nopanic/@alloc/
+    // @stack) sobre el IR PRE-opt (snapshot antes de optimizar): ahi TODAS las
+    // funciones existen (el inline/DCE aun no las elimino) -> enforcement
+    // completo.  Semantica source-level (source<=N => efectivo<=N, sound).
+    // Solo ERROR cuando la violacion es DEMOSTRABLE.  Parte del sistema de tipos.
+    {
+        // Recoger los contratos declarados en los AST de los modulos (root +
+        // deps), guardarlos en el resultado (para --analyze) y verificar.
+        std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
+            collect = [&](const std::vector<std::unique_ptr<ast::Node>> &decls) {
+                for (const auto &d : decls) {
+                    if (!d) continue;
+                    if (d->kind == ast::NodeKind::NamespaceDecl) {
+                        collect(static_cast<const ast::NamespaceDecl *>(d.get())
+                                    ->decls);
+                        continue;
+                    }
+                    if (d->kind == ast::NodeKind::FunctionDecl) {
+                        const auto *fd =
+                            static_cast<const ast::FunctionDecl *>(d.get());
+                        analyze::FunctionContracts c;
+                        c.pure = fd->contract_pure;
+                        c.nothrow = fd->contract_nothrow;
+                        c.nopanic = fd->contract_nopanic;
+                        c.alloc = fd->contract_alloc;
+                        c.stack = fd->contract_stack;
+                        if (c.any()) res.contracts[fd->name] = c;
+                    }
+                }
+            };
+        for (auto &pm : work)
+            if (pm.ast) collect(pm.ast->decls);
+
+        if (!res.contracts.empty()) {
+            auto fps = analyze::compute_module_fingerprints(merged);
+            analyze::compose_fingerprints(fps);
+            auto checks = analyze::verify_contracts(fps, res.contracts);
+            bool violated = false;
+            for (const auto &ck : checks) {
+                if (ck.status != analyze::ContractCheck::VIOLATED) continue;
+                SourceLoc loc;
+                loc.file = root_path;
+                res.diagnostics.error(std::move(loc),
+                                      "contrato " + ck.contract +
+                                          " incumplido en '" + ck.function +
+                                          "': " + ck.detail);
+                violated = true;
+            }
+            if (violated) {
+                res.ok = false;
+                return res;
+            }
         }
     }
 

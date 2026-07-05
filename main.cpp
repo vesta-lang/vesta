@@ -26,7 +26,8 @@
 #include "cli/cli.h"
 #include "cli/vsh.h"
 #include "cli/version_info.h" // Banner de `vesta --version` / `-v`
-#include "analyze/bigo.h" // Subsistema de coste: modo --analyze (Big-O)
+#include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
+#include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa
@@ -1617,6 +1618,22 @@ int main(int argc, char *argv[]) {
         analyze::ModuleCost mc_post = analyze::analyze_module(amod_post);
         analyze::compose_interproc(mc_post);
 
+        // Huella computacional (recursos + efectos) sobre el modulo POST-opt +
+        // composicion interprocedural.  Complementa el coste Big-O con
+        // propiedades EXACTAS/sound: allocs, stack, pure, throws, panics,
+        // recursion.  Es tambien el resumen del codegen dirigido por resumenes.
+        auto fps_post = analyze::compute_module_fingerprints(amod_post);
+        analyze::compose_fingerprints(fps_post);
+        auto find_fp = [&](const std::string &name)
+            -> const analyze::FunctionFingerprint * {
+            for (const auto &f : fps_post)
+                if (f.function == name) return &f;
+            return nullptr;
+        };
+        // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
+        // por el usuario, verificados contra la huella inferida.
+        auto contract_checks = analyze::verify_contracts(fps_post, cr.contracts);
+
         // Deserializar el modulo PRE-opt (complejidad algoritmica del fuente
         // tal como se escribio).  Si por alguna razon no esta disponible,
         // caemos al post (mejor mostrar algo que fallar).
@@ -1719,6 +1736,32 @@ int main(int argc, char *argv[]) {
                 std::cout << "      >> callees elevan el coste: parcial "
                           << analyze::cost_class_str(rp.big_o) << " -> total "
                           << analyze::cost_class_str(rp.total_class) << "\n";
+            }
+
+            // Huella computacional (propiedades EXACTAS/sound).
+            if (const auto *fp = find_fp(rp.function)) {
+                std::cout << "      Huella  : allocs=" << fp->alloc_sites_total
+                          << " stack=" << fp->stack_bytes << "B"
+                          << " pure=" << (fp->pure ? "si" : "no")
+                          << " throws=" << (fp->throws_total ? "si" : "no")
+                          << " panics=" << (fp->panics_total ? "si" : "no")
+                          << " recursion=" << (fp->recursive ? "si" : "no");
+                if (!fp->effects_known)
+                    std::cout << "  (efectos parcialmente desconocidos: "
+                                 "llamada dinamica/externa)";
+                std::cout << "\n";
+            }
+
+            // Contratos de huella declarados por el usuario para esta funcion.
+            for (const auto &ck : contract_checks) {
+                if (ck.function != rp.function) continue;
+                const char *mark =
+                    ck.status == analyze::ContractCheck::OK          ? "OK  "
+                    : ck.status == analyze::ContractCheck::VIOLATED  ? "FALLA"
+                                                                     : "?   ";
+                std::cout << "      " << mark << " " << ck.contract << " -> "
+                          << ck.detail << "\n";
+                if (ck.status == analyze::ContractCheck::VIOLATED) ++mismatches;
             }
 
             // Contrato @complexity: validar CADA dimension declarada contra

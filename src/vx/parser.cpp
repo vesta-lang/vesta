@@ -929,6 +929,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_attr_hot = false;
     bool top_attr_cold = false;
     uint16_t top_attr_align = 0;
+    // Contratos comprobables de recurso/efecto (huella computacional).
+    bool top_c_pure = false, top_c_nothrow = false, top_c_nopanic = false;
+    int64_t top_c_alloc = -1, top_c_stack = -1;
     std::string top_attr_section;
     std::string top_attr_section_perms;  // AOT 2b: @section(".x","rwx")
     int64_t top_attr_at = -1;            // AOT: @at(N) offset/VA fijo (.bin)
@@ -1004,6 +1007,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             const bool is_order = (current_.lexeme == "order");
             const bool is_bits = (current_.lexeme == "bits");
             const bool is_complexity = (current_.lexeme == "complexity");
+            // Contratos de huella (recurso/efecto): flags + con-arg.
+            const bool is_c_pure = (current_.lexeme == "pure");
+            const bool is_c_nothrow = (current_.lexeme == "nothrow");
+            const bool is_c_nopanic = (current_.lexeme == "nopanic");
+            const bool is_c_alloc = (current_.lexeme == "alloc");
+            const bool is_c_stack = (current_.lexeme == "stack");
             // CPU dispatch Inc 4: @HelperOverride(<helper>).
             const bool is_helper_override =
                 (current_.lexeme == "HelperOverride");
@@ -1133,6 +1142,43 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             }
             if (is_cold) {
                 top_attr_cold = true;
+                continue;
+            }
+            // Contratos de huella: flags sin argumento.
+            if (is_c_pure) {
+                top_c_pure = true;
+                continue;
+            }
+            if (is_c_nothrow) {
+                top_c_nothrow = true;
+                continue;
+            }
+            if (is_c_nopanic) {
+                top_c_nopanic = true;
+                continue;
+            }
+            // Contratos con argumento entero: @alloc(N) / @stack(N).
+            if (is_c_alloc || is_c_stack) {
+                if (is_c_alloc) {
+                    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @alloc");
+                } else {
+                    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @stack");
+                }
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("@alloc(N)/@stack(N) requiere un entero literal");
+                } else {
+                    const int64_t n = current_.int_val;
+                    (void)consume();
+                    if (n < 0) {
+                        error_here("@alloc(N)/@stack(N): N debe ser >= 0");
+                    } else if (is_c_alloc) {
+                        top_c_alloc = n;
+                    } else {
+                        top_c_stack = n;
+                    }
+                }
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' tras N en @alloc(N)/@stack(N)");
                 continue;
             }
             if (is_align) {
@@ -1637,6 +1683,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             if (fd->complexity_total_post.empty() &&
                 !top_complexity_expr.empty())
                 fd->complexity_total_post = top_complexity_expr;
+            // Contratos de huella (recurso/efecto).
+            fd->contract_pure = top_c_pure;
+            fd->contract_nothrow = top_c_nothrow;
+            fd->contract_nopanic = top_c_nopanic;
+            fd->contract_alloc = top_c_alloc;
+            fd->contract_stack = top_c_stack;
         }
         // AOT 2b (dev OS): seccion de salida del codigo + permisos.
         if (fd && !top_attr_section.empty()) {

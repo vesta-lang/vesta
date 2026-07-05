@@ -825,6 +825,50 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             resolved = true;
             break;
         }
+        // Cross-module: el simbolo puede vivir en un modulo importado.
+        if (!resolved) {
+            for (const auto &im : anx.imported_sem_indexes) {
+                for (const auto &s : im.index.symbols) {
+                    if (!s.is_public)
+                        continue; // solo public es accesible cross-module.
+                    const std::string &q = s.name;
+                    const size_t dot = q.rfind('.');
+                    const std::string simple =
+                        (dot == std::string::npos) ? q : q.substr(dot + 1);
+                    if (simple != word)
+                        continue;
+                    switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+                    case vx::ast::NodeKind::StructDecl: kind = SymbolKind::Struct; break;
+                    case vx::ast::NodeKind::ClassDecl: kind = SymbolKind::Class; break;
+                    case vx::ast::NodeKind::EnumDecl: kind = SymbolKind::Enum; break;
+                    case vx::ast::NodeKind::TypeAliasDecl:
+                        kind = SymbolKind::TypeAlias;
+                        break;
+                    case vx::ast::NodeKind::GlobalVarDecl:
+                        kind = SymbolKind::Variable;
+                        break;
+                    default: kind = SymbolKind::Function; break;
+                    }
+                    container = (dot == std::string::npos) ? std::string()
+                                                           : q.substr(0, dot);
+                    const size_t len = std::min<size_t>(s.src_length, 240);
+                    if (s.src_offset < im.source.size()) {
+                        std::string span = im.source.substr(s.src_offset, len);
+                        const size_t cut = span.find_first_of("{;\n");
+                        signature = (cut == std::string::npos) ? span
+                                                               : span.substr(0, cut);
+                        while (!signature.empty() && (signature.back() == ' ' ||
+                                                      signature.back() == '\t' ||
+                                                      signature.back() == '\r'))
+                            signature.pop_back();
+                    }
+                    resolved = true;
+                    break;
+                }
+                if (resolved)
+                    break;
+            }
+        }
     }
 
     if (!resolved) {
@@ -963,6 +1007,30 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
                                         l.end_line, l.end_char);
             locs.push_back(make_location(l));
         }
+        // Cross-module: un simbolo cuyo ultimo segmento coincide puede vivir en
+        // un modulo importado.  Devolvemos su Location en el fichero de origen.
+        if (locs.empty()) {
+            for (const auto &im : an.imported_sem_indexes) {
+                for (const auto &s : im.index.symbols) {
+                    if (!s.is_public)
+                        continue; // solo public es accesible cross-module.
+                    const std::string &q = s.name;
+                    const size_t dot = q.rfind('.');
+                    const std::string simple =
+                        (dot == std::string::npos) ? q : q.substr(dot + 1);
+                    if (simple != word)
+                        continue;
+                    WorkspaceLocation l;
+                    l.uri = im.uri;
+                    byte_offset_to_lsp_position(im.source, s.src_offset,
+                                                l.start_line, l.start_char);
+                    byte_offset_to_lsp_position(im.source,
+                                                s.src_offset + s.src_length,
+                                                l.end_line, l.end_char);
+                    locs.push_back(make_location(l));
+                }
+            }
+        }
     }
 
     if (locs.empty()) {
@@ -1081,55 +1149,71 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
         // si el receptor es el PATH completo del namespace o su ULTIMO segmento
         // (short-form), consistente con la resolucion del compilador.
         if (type_name.empty()) {
-            for (const auto &s : an.sem_index.symbols) {
-                const std::string &q = s.name;
-                const size_t dot = q.rfind('.');
-                if (dot == std::string::npos)
-                    continue; // simbolo sin namespace.
-                const std::string ns = q.substr(0, dot);
-                const std::string member = q.substr(dot + 1);
-                bool match = (ns == receiver);
-                if (!match) {
-                    const size_t nd = ns.rfind('.');
-                    const std::string last =
-                        (nd == std::string::npos) ? ns : ns.substr(nd + 1);
-                    match = (last == receiver);
-                }
-                if (!match || !has_prefix(member, prefix))
-                    continue;
-                // Mapear el ast::NodeKind (u8) del indice a CompletionKind.
-                CompletionKind k = CompletionKind::Function;
-                switch (static_cast<vx::ast::NodeKind>(s.kind)) {
-                case vx::ast::NodeKind::StructDecl: k = CompletionKind::Struct; break;
-                case vx::ast::NodeKind::ClassDecl: k = CompletionKind::Class; break;
-                case vx::ast::NodeKind::EnumDecl: k = CompletionKind::Enum; break;
-                case vx::ast::NodeKind::TypeAliasDecl:
-                case vx::ast::NodeKind::ConceptDecl: k = CompletionKind::Class; break;
-                case vx::ast::NodeKind::GlobalVarDecl:
-                    k = CompletionKind::Variable;
-                    break;
-                default: k = CompletionKind::Function; break;
-                }
-                // Detalle = firma (cabecera del decl) + namespace, como el hover.
-                std::string detail;
-                {
-                    const size_t len = std::min<size_t>(s.src_length, 200);
-                    if (s.src_offset < text.size()) {
-                        std::string span = text.substr(s.src_offset, len);
-                        const size_t cut = span.find_first_of("{;\n");
-                        std::string sig =
-                            (cut == std::string::npos) ? span : span.substr(0, cut);
-                        while (!sig.empty() && (sig.back() == ' ' ||
-                                                sig.back() == '\t' ||
-                                                sig.back() == '\r'))
-                            sig.pop_back();
-                        detail = sig.empty() ? ns : (sig + "  (" + ns + ")");
-                    } else {
-                        detail = ns;
+            // Ofrece los miembros de un namespace desde un conjunto de simbolos
+            // (nombres CUALIFICADOS) + su fuente (para extraer la firma).  Se
+            // aplica al indice del documento Y a los de los modulos importados
+            // (cross-module: `import "lib"; lib.<TAB>`).
+            auto offer_ns_members = [&](const std::vector<vx::SymbolEntry> &syms,
+                                        const std::string &src, bool public_only) {
+                for (const auto &s : syms) {
+                    // Cross-module: solo los `public` son importables.
+                    if (public_only && !s.is_public)
+                        continue;
+                    const std::string &q = s.name;
+                    const size_t dot = q.rfind('.');
+                    if (dot == std::string::npos)
+                        continue; // simbolo sin namespace.
+                    const std::string ns = q.substr(0, dot);
+                    const std::string member = q.substr(dot + 1);
+                    bool match = (ns == receiver);
+                    if (!match) {
+                        const size_t nd = ns.rfind('.');
+                        const std::string last =
+                            (nd == std::string::npos) ? ns : ns.substr(nd + 1);
+                        match = (last == receiver);
                     }
+                    if (!match || !has_prefix(member, prefix))
+                        continue;
+                    // Mapear el ast::NodeKind (u8) del indice a CompletionKind.
+                    CompletionKind k = CompletionKind::Function;
+                    switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+                    case vx::ast::NodeKind::StructDecl: k = CompletionKind::Struct; break;
+                    case vx::ast::NodeKind::ClassDecl: k = CompletionKind::Class; break;
+                    case vx::ast::NodeKind::EnumDecl: k = CompletionKind::Enum; break;
+                    case vx::ast::NodeKind::TypeAliasDecl:
+                    case vx::ast::NodeKind::ConceptDecl: k = CompletionKind::Class; break;
+                    case vx::ast::NodeKind::GlobalVarDecl:
+                        k = CompletionKind::Variable;
+                        break;
+                    default: k = CompletionKind::Function; break;
+                    }
+                    // Detalle = firma (cabecera del decl) + namespace, como el hover.
+                    std::string detail;
+                    {
+                        const size_t len = std::min<size_t>(s.src_length, 200);
+                        if (s.src_offset < src.size()) {
+                            std::string span = src.substr(s.src_offset, len);
+                            const size_t cut = span.find_first_of("{;\n");
+                            std::string sig = (cut == std::string::npos)
+                                                  ? span
+                                                  : span.substr(0, cut);
+                            while (!sig.empty() && (sig.back() == ' ' ||
+                                                    sig.back() == '\t' ||
+                                                    sig.back() == '\r'))
+                                sig.pop_back();
+                            detail = sig.empty() ? ns : (sig + "  (" + ns + ")");
+                        } else {
+                            detail = ns;
+                        }
+                    }
+                    add_item(member, k, detail);
                 }
-                add_item(member, k, detail);
-            }
+            };
+            // Namespaces del propio documento (todos, incl. privados de fichero).
+            offer_ns_members(an.sem_index.symbols, text, /*public_only=*/false);
+            // Namespaces de los modulos importados (solo los public).
+            for (const auto &im : an.imported_sem_indexes)
+                offer_ns_members(im.index.symbols, im.source, /*public_only=*/true);
         }
         // Caso miembro: NO mezclamos el completado general (evitar inundar con
         // todo el universo de nombres tras un punto).  Respondemos lo hallado

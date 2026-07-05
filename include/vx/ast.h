@@ -1582,6 +1582,16 @@ struct FunctionDecl : Node {
     std::string complexity_partial_post;
     std::string complexity_total_pre;
     std::string complexity_total_post;
+    /// Contratos comprobables de recurso/efecto (huella computacional).  El
+    /// compilador los VERIFICA contra la huella inferida del IR (sound: solo
+    /// error cuando la violacion es demostrable).  Ausente = no declarado.
+    ///   @pure @nothrow @nopanic  (flags)
+    ///   @alloc(N) @stack(N)       (N = maximo permitido)
+    bool contract_pure = false;      ///< @pure declarado.
+    bool contract_nothrow = false;   ///< @nothrow declarado.
+    bool contract_nopanic = false;   ///< @nopanic declarado.
+    int64_t contract_alloc = -1;     ///< @alloc(N): max allocs; -1 = no declarado.
+    int64_t contract_stack = -1;     ///< @stack(N): max bytes de stack; -1 = no decl.
     FunctionDecl() : Node(NodeKind::FunctionDecl) {}
 };
 

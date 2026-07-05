@@ -1,0 +1,101 @@
+// examples_codes_vx/analyze/contracts.vx
+//
+// CONTRATOS COMPROBABLES de recurso/efecto (la "huella computacional").
+//
+// El compilador INFIERE del IR las propiedades de cada funcion (cuantas
+// allocaciones hace, cuanto stack usa, si es pura, si puede lanzar/panic,
+// si es recursiva...) y las compone interprocedural (una funcion es pura sii
+// todo lo que llama es puro; sus allocaciones = las propias + las de sus
+// callees; etc.).
+//
+// Estas propiedades NO son documentacion pasiva: son CONTRATOS que el
+// compilador VERIFICA.  Se declaran como anotaciones y forman parte del
+// "tipo" de la funcion:
+//
+//     @pure @nothrow @nopanic @alloc(N) @stack(N)
+//
+// Reglas de verificacion (SOUND / asimetricas):
+//   - Exactas -> error de compilacion si se DEMUESTRA la violacion.
+//   - Si los efectos no se conocen del todo (llamada dinamica/externa
+//     opaca) -> el contrato queda "no verificable" (ni se afirma ni se niega:
+//     el compilador nunca miente).
+//
+// Uso:
+//   vm --analyze examples_codes_vx/analyze/contracts.vx
+//     -> muestra por funcion la linea "Huella:" (allocs/stack/pure/throws/
+//        panics/recursion) y el estado de cada contrato (OK / FALLA / ?).
+//   vm --vesta examples_codes_vx/analyze/contracts.vx -o contracts
+//     -> compila; un contrato incumplido ABORTA la compilacion con el
+//        mensaje "contrato @X incumplido en 'f': esperado ... , inferido ...".
+
+// --------------------------------------------------------------------------
+// 1. Funcion PURA y sin efectos: no aloca, no lanza, no hace panic.
+//    El compilador PRUEBA las cuatro propiedades a la vez.
+// --------------------------------------------------------------------------
+@pure @nothrow @nopanic @alloc(0)
+i64 cuadrado(i64 x) {
+    return x * x;
+}
+
+// --------------------------------------------------------------------------
+// 2. PUREZA POR COMPOSICION: 'combina' no tiene efectos propios y solo llama
+//    a 'cuadrado', que es pura -> el compilador deduce que 'combina' es pura.
+//    Cambiar 'cuadrado' para que tenga efectos invalidaria este contrato
+//    automaticamente (el efecto se propaga por el call-graph).
+// --------------------------------------------------------------------------
+@pure @alloc(0) @nothrow
+i64 combina(i64 a, i64 b) {
+    return cuadrado(a) + cuadrado(b);
+}
+
+// --------------------------------------------------------------------------
+// 3. SIN ALLOCACIONES en un bucle: @alloc(0) garantiza que la funcion no
+//    reserva memoria de heap (util para hot paths / codigo sin GC).  El
+//    acumulador y el indice viven en registros/stack, no en heap.
+// --------------------------------------------------------------------------
+@alloc(0) @nothrow @nopanic
+i64 suma_hasta(i64 n) {
+    i64 acc = 0;
+    i64 i = 0;
+    while (i < n) {
+        acc = acc + i;
+        i = i + 1;
+    }
+    return acc;
+}
+
+// --------------------------------------------------------------------------
+// 4. Contrato de STACK: @stack(N) acota los bytes de marco propio.  Una
+//    funcion de aritmetica pura no reserva stack explicito -> encaja en
+//    cualquier cota.
+// --------------------------------------------------------------------------
+@stack(256) @alloc(0)
+i64 poligono(i64 lado, i64 n) {
+    return lado * lado * n;
+}
+
+// --------------------------------------------------------------------------
+// EJEMPLOS DE VIOLACION (comentados: romperian la compilacion a proposito).
+// Descomenta uno para ver el error del compilador:
+//
+//   @alloc(0)
+//   Punto crea() { return new Punto(); }
+//     -> error: contrato @alloc incumplido en 'crea':
+//               esperado <=0, inferido 1
+//
+//   @pure
+//   void escribe(i64* p) { *p = 5; }
+//     -> error: contrato @pure incumplido en 'escribe':
+//               la funcion tiene efectos de dato
+//
+//   @nopanic
+//   i64 fuerza(i64 x) { if (x < 0) { panic("negativo"); } return x; }
+//     -> error: contrato @nopanic incumplido en 'fuerza': puede hacer panic
+// --------------------------------------------------------------------------
+
+i32 main() {
+    i64 r = combina(3, 4) + suma_hasta(10) + poligono(2, 5);
+    // combina(3,4) = 9 + 16 = 25 ; suma_hasta(10) = 45 ; poligono(2,5) = 20
+    // total = 25 + 45 + 20 = 90
+    return (i32) r;
+}

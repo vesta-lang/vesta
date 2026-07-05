@@ -8,8 +8,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+
+#include "vx/diagnostic.h"
+#include "vx/module_resolver.h"
 
 namespace vx {
 
@@ -58,12 +63,40 @@ std::string decl_name(const ast::Node *d) {
     }
 }
 
+/// @brief Visibilidad publica de una decl top-level (para el completado
+/// cross-module: solo los @c public son importables desde otro modulo).
+/// Las decls que no llevan flag (extension/impl) se consideran publicas
+/// (no ocultan simbolos).
+bool decl_is_public(const ast::Node *d) {
+    if (!d) return false;
+    using K = ast::NodeKind;
+    switch (d->kind) {
+    case K::FunctionDecl:
+        return static_cast<const ast::FunctionDecl *>(d)->is_public;
+    case K::GlobalVarDecl:
+        return static_cast<const ast::GlobalVarDecl *>(d)->is_public;
+    case K::TypeAliasDecl:
+        return static_cast<const ast::TypeAliasDecl *>(d)->is_public;
+    case K::StructDecl:
+        return static_cast<const ast::StructDecl *>(d)->is_public;
+    case K::ClassDecl:
+        return static_cast<const ast::ClassDecl *>(d)->is_public;
+    case K::EnumDecl:
+        return static_cast<const ast::EnumDecl *>(d)->is_public;
+    case K::ConceptDecl:
+        return static_cast<const ast::ConceptDecl *>(d)->is_public;
+    default:
+        return true;
+    }
+}
+
 /// @brief Aplana recursivamente los simbolos con nombre a una lista
 /// {nombre_cualificado, kind, offset}, recorriendo los NamespaceDecl.
 struct FlatDecl {
     std::string qname; ///< nombre cualificado con el namespace.
     uint8_t kind;
     uint32_t offset;
+    bool is_public; ///< @c public (importable desde otro modulo).
 };
 
 void flatten_decls(const std::vector<std::unique_ptr<ast::Node>> &decls,
@@ -81,7 +114,8 @@ void flatten_decls(const std::vector<std::unique_ptr<ast::Node>> &decls,
         const std::string nm = decl_name(d.get());
         if (nm.empty()) continue; // ImportDecl u otros no-simbolo.
         const std::string q = ns_prefix.empty() ? nm : ns_prefix + "." + nm;
-        out.push_back({q, static_cast<uint8_t>(d->kind), d->loc.offset});
+        out.push_back({q, static_cast<uint8_t>(d->kind), d->loc.offset,
+                       decl_is_public(d.get())});
     }
 }
 
@@ -165,6 +199,7 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
         se.kind = flat[k].kind;
         se.src_offset = b;
         se.src_length = len;
+        se.is_public = flat[k].is_public;
         se.content_hash = fnv1a64(source.data() + b, len);
 
         // Deps: identificadores del span que sean nombre de OTRO simbolo del
@@ -192,7 +227,9 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
 // ---------------------------------------------------------------------------
 namespace {
 constexpr uint32_t VXIDX_MAGIC = 0x58495856u; // 'VXIX' little-endian
-constexpr uint16_t VXIDX_VERSION = 1;
+// Ecosistema alpha: SIN compat de versiones.  Un sidecar con version distinta
+// se rechaza y se regenera; no hay ramas de parseo legacy.
+constexpr uint16_t VXIDX_VERSION = 2;
 
 void put_u16(std::vector<uint8_t> &b, uint16_t v) {
     b.push_back(v & 0xFF);
@@ -263,6 +300,7 @@ std::vector<uint8_t> serialize_semantic_index(const SemanticIndex &idx) {
         put_u64(b, s.content_hash);
         put_u32(b, s.src_offset);
         put_u32(b, s.src_length);
+        b.push_back(s.is_public ? 1 : 0); // v2
         put_u32(b, static_cast<uint32_t>(s.deps.size()));
         for (const auto &d : s.deps) put_str(b, d);
     }
@@ -273,7 +311,7 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes,
                           SemanticIndex &out) {
     Reader r{bytes.data(), bytes.data() + bytes.size()};
     if (r.u32() != VXIDX_MAGIC) return false;
-    if (r.u16() != VXIDX_VERSION) return false;
+    if (r.u16() != VXIDX_VERSION) return false; // sin legacy: version exacta.
     r.u16(); // _pad
     out = SemanticIndex{};
     out.module_hash = r.u64();
@@ -289,6 +327,8 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes,
         s.content_hash = r.u64();
         s.src_offset = r.u32();
         s.src_length = r.u32();
+        if (r.p >= r.end) { r.ok = false; break; }
+        s.is_public = (*r.p++ != 0);
         const uint32_t dc = r.u32();
         if (!r.ok || dc > 1'000'000u) return false;
         s.deps.reserve(dc);
@@ -385,6 +425,61 @@ std::string semantic_index_to_json(const SemanticIndex &idx) {
     }
     j += "]}";
     return j;
+}
+
+// -- Indices de modulos importados (CROSS-MODULE, para el LSP) ---------------
+
+std::vector<ImportedModuleSemIndex> build_imported_sem_indexes(
+    const std::string &root_file, const std::string &root_overlay_text,
+    const std::vector<std::string> &extra_search_paths) {
+    std::vector<ImportedModuleSemIndex> out;
+    // Grafo de modulos con la MISMA resolucion de paths que el compilador.
+    Diagnostics diags;
+    ModuleGraph graph(diags);
+    // El buffer del editor como overlay del root; las deps se leen del disco.
+    graph.set_source_overlay(root_file, root_overlay_text);
+    for (const auto &d : extra_search_paths) graph.add_search_path(d);
+    graph.add_vx_path_env();
+    {
+        std::string sd = detect_stdlib_vx_dir();
+        if (!sd.empty()) graph.set_stdlib_dir(sd);
+    }
+    // Search path implicito: la carpeta del root (hermanos con path relativo).
+    {
+        std::string norm = root_file;
+        for (char &c : norm)
+            if (c == '\\') c = '/';
+        size_t slash = norm.find_last_of('/');
+        if (slash != std::string::npos) graph.add_search_path(norm.substr(0, slash));
+    }
+    const uint32_t root_id = graph.build_from_root(root_file);
+    if (root_id == UINT32_MAX) return out; // root irresoluble: sin cross-module.
+
+    // Un indice por cada modulo != root que resolvio y parseo.
+    const size_t n = graph.module_count();
+    out.reserve(n ? n - 1 : 0);
+    for (uint32_t id = 0; id < n; ++id) {
+        if (id == root_id) continue;
+        const ResolvedModule *m = graph.module(id);
+        if (!m || !m->parsed_ast) continue;
+        // Leer la fuente cruda de la dependencia (esta en disco).
+        std::ifstream f(m->canonical_path, std::ios::binary);
+        if (!f.good()) continue;
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        std::string src = ss.str();
+        ImportedModuleSemIndex e;
+        e.uri = "file://" + m->canonical_path;
+        e.source = std::move(src);
+        try {
+            e.index =
+                build_semantic_index(*m->parsed_ast, e.source, m->canonical_path);
+        } catch (...) {
+            continue; // modulo con AST raro: se omite, sin abortar.
+        }
+        out.push_back(std::move(e));
+    }
+    return out;
 }
 
 } // namespace vx

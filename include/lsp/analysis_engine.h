@@ -92,6 +92,12 @@ struct DocAnalysis {
     /// (`ns.simbolo`), resolver acceso cualificado, etc.  Vacio si el parse
     /// fallo.
     vx::SemanticIndex sem_index;
+
+    /// Indices semanticos de los modulos IMPORTADOS por este documento (cada
+    /// uno con su fuente y uri), para completado / navegacion CROSS-MODULE:
+    /// `import "lib"; lib.<TAB>` ofrece los simbolos publicos de @c lib aunque
+    /// vivan en otro fichero.  Vacio si el documento no importa nada.
+    std::vector<vx::ImportedModuleSemIndex> imported_sem_indexes;
 };
 
 /**

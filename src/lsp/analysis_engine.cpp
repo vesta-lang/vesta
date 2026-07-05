@@ -302,6 +302,16 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
             }
             analysis->result =
                 vx::compile_vx_project(fs_path, opts, &overlay, &anc);
+            // Cross-module: indexar los modulos importados para el completado
+            // `lib.<TAB>` y la navegacion cualificada.  Best-effort (misma
+            // resolucion de paths que el compile de arriba); un fallo aqui no
+            // afecta a los diagnosticos.
+            try {
+                analysis->imported_sem_indexes =
+                    vx::build_imported_sem_indexes(fs_path, text, anc);
+            } catch (...) {
+                // sin indices importados; el resto del analisis sigue valido.
+            }
         } else {
             analysis->result = vx::compile_vx_source(text, uri, opts);
         }

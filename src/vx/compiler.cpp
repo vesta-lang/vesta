@@ -19,6 +19,7 @@
 #include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
 
 #include "analyze/bigo.h"
+#include "analyze/fingerprint.h" // verificacion de contratos de huella
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
 #include "ir/ssa_ir.h"
@@ -50,6 +51,33 @@ namespace vx {
  *
  * Cualquier valor fuera de rango cae en O1 (default conservador).
  */
+// Recolecta los contratos de huella declarados en el AST (recorriendo los
+// NamespaceDecl) a un mapa por nombre de funcion.  Se lleva APARTE del IR para
+// no cambiar el sizeof de IrFunction (que dispara una UB latente del analizador
+// sobre modulos deserializados).
+static void collect_contracts_(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::unordered_map<std::string, analyze::FunctionContracts> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::NamespaceDecl) {
+            collect_contracts_(
+                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
+            continue;
+        }
+        if (d->kind == ast::NodeKind::FunctionDecl) {
+            const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
+            analyze::FunctionContracts c;
+            c.pure = fd->contract_pure;
+            c.nothrow = fd->contract_nothrow;
+            c.nopanic = fd->contract_nopanic;
+            c.alloc = fd->contract_alloc;
+            c.stack = fd->contract_stack;
+            if (c.any()) out[fd->name] = c;
+        }
+    }
+}
+
 static ir::OptLevel opt_level_from_int(int n) noexcept {
     switch (n) {
     case 0: return ir::OptLevel::O0;
@@ -766,6 +794,32 @@ CompileResult compile_vx_source(const std::string &source,
         if (opts.emit_ir_preopt) {
             res.ir_module_cache_bytes_preopt =
                 ir::emit_ir_module_cache(irmod);
+        }
+        // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack): recoger
+        // del AST + guardarlos en el resultado (para --analyze) + VERIFICAR
+        // contra la huella del IR PRE-opt (@c irmod, donde TODAS las funciones
+        // existen -> enforcement completo; semantica source-level: source<=N =>
+        // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
+        collect_contracts_(mod->decls, res.contracts);
+        if (!res.contracts.empty()) {
+            auto fps = analyze::compute_module_fingerprints(irmod);
+            analyze::compose_fingerprints(fps);
+            auto checks = analyze::verify_contracts(fps, res.contracts);
+            bool violated = false;
+            for (const auto &ck : checks) {
+                if (ck.status != analyze::ContractCheck::VIOLATED) continue;
+                SourceLoc loc;
+                loc.file = filename;
+                res.diagnostics.error(std::move(loc),
+                                      "contrato " + ck.contract +
+                                          " incumplido en '" + ck.function +
+                                          "': " + ck.detail);
+                violated = true;
+            }
+            if (violated) {
+                res.ok = false;
+                return res;
+            }
         }
         ir::IrModule irmod_for_section = irmod;
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level));

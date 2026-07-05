@@ -34,6 +34,7 @@
 
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
+#include "analyze/fingerprint.h" // FunctionContracts
 
 namespace vx {
 
@@ -294,6 +295,12 @@ struct CompileResult {
      * Vacio si la compilacion no produjo IR (caso de errores).
      */
     std::vector<uint8_t> ir_module_cache_bytes;
+
+    /// Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
+    /// por el usuario, por nombre de funcion.  Se llevan aqui (no en el IR) para
+    /// no cambiar el @c sizeof de @c IrFunction.  El modo --analyze los verifica
+    /// contra la huella inferida.  Ver @c analyze::FunctionContracts.
+    std::unordered_map<std::string, analyze::FunctionContracts> contracts;
 
     /**
      * @brief Modo --analisis: IR del modulo completo serializado ANTES de

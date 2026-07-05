@@ -275,6 +275,18 @@ class ModuleGraph {
     bool ns_index_built_ = false;
 };
 
+/**
+ * @brief Autodetecta el directorio de la stdlib Vesta (@c stdlib/vx).
+ *
+ * Prueba, en orden: (1) la env var @c VX_STDLIB_DIR, (2) candidatos
+ * relativos al cwd (@c stdlib/vx, @c ../stdlib/vx, ...), (3) candidatos
+ * relativos al ejecutable (cubre la instalacion y el build-tree).  Sonda
+ * la presencia de @c simd_string.vx para validar el candidato.
+ *
+ * @return El directorio si se encontro; cadena vacia si no.
+ */
+std::string detect_stdlib_vx_dir();
+
 } // namespace vx
 
 #endif // VX_MODULE_RESOLVER_H
