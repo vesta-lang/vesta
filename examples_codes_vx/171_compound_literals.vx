@@ -45,5 +45,6 @@ i32 main() {
     i64 t = caja_total((Caja<i64>){.val = 100});
     println("caja   = ${t}");                        // 100 + 7 = 107
 
-    return 0;
+    // Retorno determinista (harness): 30 (arg) + 10 (return o.x) + 107 (templ) = 147.
+    return distancia_manhattan((Punto){.x = -3, .y = 4}) + o.x + (i32)t;
 }

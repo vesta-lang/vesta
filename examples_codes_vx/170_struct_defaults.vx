@@ -60,5 +60,6 @@ i32 main() {
     caja.default({.val = 99});
     println("caja2  = val=${caja.val} tag=${(i32)caja.tag}");  // val=99 tag=7
 
-    return 0;
+    // Retorno determinista (harness): defaults 16+32+100 + tag 7 = 155.
+    return sumar(Valores.default()) + (i32)caja.tag;
 }

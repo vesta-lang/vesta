@@ -65,5 +65,6 @@ i32 main() {
     Contador<i64> c = new Contador<i64>();
     println("cont   = n=${c.get_n()}");                              // 42
 
-    return 0;
+    // Retorno determinista (harness): 80 (cfg.ancho) + 37 (p.total) + 42 (c.n) = 159.
+    return cfg.ancho + p.total() + c.get_n();
 }

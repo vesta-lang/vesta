@@ -1926,6 +1926,11 @@ struct StructFieldDecl {
     /// calcula bit_offset y los empaqueta en storage words del tipo
     /// declarado (i32 -> 32 bits por word, etc.).  Estilo C/C++.
     uint8_t bit_width = 0;
+    /// Overlay (F1): offset EXPLICITO del campo dentro de la vista
+    /// (`ptr X @offset(0x30);`).  -1 = sin offset explicito (campo normal o
+    /// auto-layout).  Solo valido en `@overlay struct`.  En F1 es un entero
+    /// constante; fases posteriores permitiran una expresion/bloque.
+    int64_t explicit_offset = -1;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`
@@ -1960,6 +1965,12 @@ struct StructDecl : Node {
     /// runtime lo encuentre.  Sin esta marca, el tipo solo es
     /// introspectable via builtins comptime (sin overhead).
     bool is_introspect = false;
+    /// marca `@overlay` -- el struct es una VISTA tipada sobre un puntero base
+    /// ajeno (PEB, cabeceras PE/ELF, ...), no un value-type que se posee.  Un
+    /// valor overlay ES un puntero (8 bytes): no aloca, no zero-init, no copia;
+    /// `v.campo` se baja a `*(T*)(base + offset)`.  Los campos usan @c
+    /// explicit_offset (`@offset(N)`).
+    bool is_overlay = false;
     /// Parametros de tipo opcionales (templates).  `struct Box<T> { T v; }`
     /// produce type_params = ["T"].  Vacio para structs no genericos.  Si no
     /// esta vacio, el struct es una plantilla: NO se procesa como concreto;

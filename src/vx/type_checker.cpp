@@ -2600,7 +2600,21 @@ void TypeChecker::collect_globals() {
                 StructFieldInfo fi;
                 fi.name = f.name;
                 fi.type = ft;
-                fi.offset = offset;
+                // Overlay: el offset lo da @offset(N) explicito (no el
+                // auto-layout secuencial).  Si un campo de un overlay no lo
+                // trae, es error (F1).
+                if (s->is_overlay) {
+                    if (f.explicit_offset < 0) {
+                        diags_.error(f.loc,
+                                     "campo '" + f.name + "' de un @overlay "
+                                     "struct requiere @offset(N)");
+                        fi.offset = 0;
+                    } else {
+                        fi.offset = (uint32_t)f.explicit_offset;
+                    }
+                } else {
+                    fi.offset = offset;
+                }
                 fi.size = fsize;
                 fi.default_init = f.default_init.get();
                 layout.fields.push_back(std::move(fi));
@@ -2615,8 +2629,16 @@ void TypeChecker::collect_globals() {
             if (max_align > 1 && offset % max_align != 0) {
                 offset += max_align - (offset % max_align);
             }
-            layout.size_bytes = offset;
-            layout.align_bytes = max_align;
+            // Overlay: es una VISTA = un puntero (host) de 8 bytes; no un buffer
+            // de @c offset bytes.  Los offsets de campo apuntan a memoria ajena.
+            if (s->is_overlay) {
+                layout.is_overlay = true;
+                layout.size_bytes = 8;
+                layout.align_bytes = 8;
+            } else {
+                layout.size_bytes = offset;
+                layout.align_bytes = max_align;
+            }
             /* preservar la marca @Introspect que
              * la pre-pasada copio del AST.  Como aqui sobrescribimos
              * la entrada con un layout local fresco, hay que re-copiar
@@ -8988,6 +9010,29 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         for (auto &a : e->args)
             (void)check_expr(a.get());
         return Type{};
+    }
+
+    // Overlay F1: construccion `PEB(ptr)` donde PEB es un `@overlay struct`.  El
+    // valor resultante ES un puntero (la vista sobre esa memoria base); el tipo
+    // resultado es el propio overlay.  1 argumento: el puntero base.
+    if (e->callee->kind == ast::NodeKind::IdentExpr) {
+        const std::string &cn =
+            static_cast<ast::IdentExpr *>(e->callee.get())->name;
+        auto ito = struct_layouts_.find(cn);
+        if (ito != struct_layouts_.end() && ito->second.is_overlay) {
+            if (e->args.size() != 1) {
+                diags_.error(e->loc, "construccion de overlay '" + cn +
+                                         "' requiere 1 argumento (el puntero "
+                                         "base)");
+            } else {
+                (void)check_expr(e->args[0].get()); // valida el puntero base.
+            }
+            Type rt;
+            rt.kind = PrimitiveKind::STRUCT;
+            rt.struct_name = cn;
+            e->result_type = rt;
+            return rt;
+        }
     }
 
     // NS.2: llamada cualificada a un namespace (`mod.sq(3)` / `a.b.mk(21)`) cuyo

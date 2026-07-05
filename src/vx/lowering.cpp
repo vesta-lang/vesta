@@ -3604,6 +3604,28 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     Type sem_type = vd->type ? tc_.resolve_type_node(vd->type.get())
                              : (vd->init ? vd->init->result_type : Type{});
 
+    // Overlay F1: `PEB peb = PEB(ptr);`.  Un overlay ES un puntero (la vista);
+    // NO se aloca buffer.  Bajamos el init (que produce el puntero base host) y
+    // bindeamos la variable directamente a ese valor.  El acceso a campos
+    // (lower_field_access) reusa el camino de struct (base + offset + LOAD) con
+    // is_host_ptr=true -> loads/stores host.
+    if (sem_type.kind == PrimitiveKind::STRUCT) {
+        auto it = tc_.struct_layouts().find(sem_type.struct_name);
+        if (it != tc_.struct_layouts().end() && it->second.is_overlay) {
+            if (!vd->init) {
+                error_at(vd->loc, "un overlay '" + sem_type.struct_name +
+                                      "' requiere un puntero base en su "
+                                      "declaracion");
+                return;
+            }
+            ir::IrValueId base = lower_expr(vd->init.get());
+            if (base == ir::IR_NO_VALUE) return;
+            fn_->values[base].is_host_ptr = true;
+            bind(vd->name, base);
+            return;
+        }
+    }
+
     // Phase Z.6: propagar el modificador @c shared del var-decl al
     // @c NewExpr del init.  Si el init es `new T(...)` y el var-decl
     // tiene `shared`, el `new` debe alocar en el SharedHeap en lugar
@@ -14800,6 +14822,24 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * en codigo runtime real generado a partir de string compile-time. */
     if (e->macro_expanded) {
         return lower_expr(e->macro_expanded.get());
+    }
+
+    // Overlay F1: construccion `PEB(ptr)` de un `@overlay struct`.  El valor del
+    // overlay ES el puntero base (memoria host ajena): lo bajamos y lo marcamos
+    // como host_ptr para que el acceso a campos emita loads/stores host.
+    if (e->callee && e->callee->kind == ast::NodeKind::IdentExpr &&
+        e->result_type.kind == PrimitiveKind::STRUCT) {
+        const std::string &cn =
+            static_cast<ast::IdentExpr *>(e->callee.get())->name;
+        auto it = tc_.struct_layouts().find(cn);
+        if (it != tc_.struct_layouts().end() && it->second.is_overlay &&
+            e->args.size() == 1) {
+            ir::IrValueId base = lower_expr(e->args[0].get());
+            if (base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            // El overlay es una VISTA sobre memoria host: forzar la naturaleza.
+            fn_->values[base].is_host_ptr = true;
+            return base;
+        }
     }
 
     // `Tipo.default([{...}])` / `val.default([{...}])`: struct con sus valores

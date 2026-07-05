@@ -239,6 +239,10 @@ struct StructLayout {
     std::vector<ClassMethodInfo> methods;
     uint32_t size_bytes = 0;
     uint32_t align_bytes = 1;
+    /// Overlay F1: el struct es una VISTA sobre un puntero base ajeno.  Un valor
+    /// de este tipo ES un puntero (host) de 8 bytes; no se aloca buffer ni se
+    /// zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS (@offset).
+    bool is_overlay = false;
     /// Fase 1 interop C: categoria INFERIDA de los campos (clasificador de
     /// Fase 0).  @c cat_c_representable: el struct cruza la frontera C por
     /// valor (todos sus campos C-representables y sin `~Struct()`).
