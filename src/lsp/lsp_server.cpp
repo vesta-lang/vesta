@@ -1110,7 +1110,25 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
                     break;
                 default: k = CompletionKind::Function; break;
                 }
-                add_item(member, k, ns);
+                // Detalle = firma (cabecera del decl) + namespace, como el hover.
+                std::string detail;
+                {
+                    const size_t len = std::min<size_t>(s.src_length, 200);
+                    if (s.src_offset < text.size()) {
+                        std::string span = text.substr(s.src_offset, len);
+                        const size_t cut = span.find_first_of("{;\n");
+                        std::string sig =
+                            (cut == std::string::npos) ? span : span.substr(0, cut);
+                        while (!sig.empty() && (sig.back() == ' ' ||
+                                                sig.back() == '\t' ||
+                                                sig.back() == '\r'))
+                            sig.pop_back();
+                        detail = sig.empty() ? ns : (sig + "  (" + ns + ")");
+                    } else {
+                        detail = ns;
+                    }
+                }
+                add_item(member, k, detail);
             }
         }
         // Caso miembro: NO mezclamos el completado general (evitar inundar con
