@@ -2660,6 +2660,13 @@ void TypeChecker::collect_globals() {
                 }
                 if (extent % 8 != 0) extent += 8 - (extent % 8);
                 layout.overlay_extent = extent;
+                // F4: registrar el layout PROVISIONALMENTE (copia) ANTES de
+                // chequear los resolvers, para que un resolver `@offset { }`
+                // pueda acceder a arrays hermanos via `this.<array>[i].<campo>`
+                // (la maquinaria overlay resuelve el array mirando el layout de
+                // la vista, que debe estar registrado).  El registro definitivo
+                // (con metodos) se hace mas abajo con std::move.
+                struct_layouts_[s->name] = layout;
                 // Chequeo de los resolvedores dinamicos (`@offset(hermano+N)` y
                 // `@offset { ... }`): los nombres desnudos resuelven contra los
                 // campos hermanos + el puntero `base` de la vista.  Metemos cada
@@ -2707,6 +2714,19 @@ void TypeChecker::collect_globals() {
                             bsym.kind = SymbolKind::Variable;
                             bsym.type = Type{PrimitiveKind::U64};
                             (void)declare("base", bsym);
+                            // F4: `this`/`self` = la propia vista (tipo overlay)
+                            // para poder navegar arrays hermanos declarativamente
+                            // (`this.Sections[i].campo`) SIN aritmetica de
+                            // punteros ni helpers -- toda la logica de formato
+                            // (p.ej. traducir un RVA por la tabla de secciones)
+                            // vive en el resolver.
+                            Symbol tsym;
+                            tsym.kind = SymbolKind::Variable;
+                            tsym.type = Type{};
+                            tsym.type.kind = PrimitiveKind::STRUCT;
+                            tsym.type.struct_name = s->name;
+                            (void)declare("this", tsym);
+                            (void)declare("self", tsym);
                             check_block(f.offset_block.get(),
                                         Type{PrimitiveKind::U64});
                             pop_scope();

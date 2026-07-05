@@ -14069,9 +14069,18 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
 
     // `base` = self; cada campo hermano de offset CONSTANTE se lee de
     // [self + off] (host) y se liga por nombre -> el body los usa como locales.
+    // F4: `this`/`self` = la vista completa (el propio puntero base), para que el
+    // resolver navegue arrays hermanos declarativamente (`this.Sections[i].campo`)
+    // via la maquinaria overlay -- sin aritmetica de punteros ni helpers.
     bind("base", self_pv);
+    bind("this", self_pv);
+    bind("self", self_pv);
     for (const auto &sib : lay.fields) {
-        if (sib.offset_expr || sib.offset_block) continue; // solo constantes
+        // Saltar dinamicos y ARRAYS: los arrays no son un escalar cargable; se
+        // navegan por `this.<array>[i]` (no como nombre desnudo).
+        if (sib.offset_expr || sib.offset_block || sib.array_count ||
+            sib.array_stride)
+            continue; // solo escalares de offset constante
         ir::IrValueId saddr = self_pv;
         if (sib.offset != 0) {
             ir::IrValueId so =
