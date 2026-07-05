@@ -569,6 +569,19 @@ class Lowering {
      *        Es el `root` que se enhebra a un resolver que usa `parent<T>()`.
      */
     ir::IrValueId lower_overlay_root(ast::Expr *e);
+    /**
+     * @brief F5: aplica el swap de endianness `@endian(expr)` a @c value (un
+     *        entero de 2/4/8 bytes recien leido/por escribir).  Evalua la expr
+     *        de endianness del campo @c fi (con los campos hermanos de @c lay
+     *        ligados desde la base de la vista @c base_expr) -> `big`; devuelve
+     *        `big ? bswap(value) : value` (select sin ramas; comptime se pliega).
+     *        Simetrico: sirve para read y para write.
+     */
+    ir::IrValueId emit_overlay_endian_swap(ast::Expr *base_expr,
+                                           const StructLayout &lay,
+                                           const StructFieldInfo &fi,
+                                           ir::IrValueId value,
+                                           uint32_t line);
 
     /**
      * @brief ADTs: lowering de un constructor de variante de

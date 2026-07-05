@@ -3805,11 +3805,18 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         while (current_.kind == TokenKind::AT) {
             (void)consume(); // '@'
             if (current_.kind == TokenKind::IDENTIFIER &&
-                (current_.lexeme == "be" || current_.lexeme == "le")) {
-                // Overlay endianness (F5): `@be` (big-endian) / `@le` (little).
-                // Combinable con @offset: `u32 x @be @0x00;`.
-                f.endian = (current_.lexeme == "be") ? 1 : 2;
-                (void)consume();
+                current_.lexeme == "endian") {
+                // Overlay ENDIANNESS (F5): `@endian(expr)` -- la expr (nonzero =
+                // big-endian) decide el orden de bytes.  Es la UNICA forma:
+                //   fijo big:     @endian(true)
+                //   fijo little:  @endian(false)   (o sin @endian = nativo)
+                //   por contexto: @endian(self.ei_data == 2)  (ELF), comptime, ...
+                // Si la expr es comptime, el swap condicional se pliega (cero
+                // coste); si es runtime, es un select sin ramas.
+                (void)consume(); // 'endian'
+                (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @endian");
+                f.endian_expr = parse_expr();
+                (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @endian(expr)");
             } else if (current_.kind == TokenKind::IDENTIFIER &&
                 current_.lexeme == "element") {
                 // Overlay array POR-ELEMENTO: `T Name[c] @element { ...; return

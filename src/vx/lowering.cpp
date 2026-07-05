@@ -14544,6 +14544,107 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     return fld_addr;
 }
 
+ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
+                                                 const StructLayout &lay,
+                                                 const StructFieldInfo &fi,
+                                                 ir::IrValueId value,
+                                                 uint32_t line) {
+    if (!fi.endian_expr) return value;
+    // 1. Evaluar la expr de endianness con los hermanos ligados desde la base.
+    const ir::IrValueId ov_base = lower_expr(base_expr);
+    if (ov_base == ir::IR_NO_VALUE) return value;
+    push_scope();
+    bind("base", ov_base);
+    bind("this", ov_base);
+    bind("self", ov_base);
+    for (const auto &sib : lay.fields) {
+        if (sib.offset_expr || sib.offset_block || sib.array_count ||
+            sib.array_stride || sib.element_block)
+            continue; // solo escalares de offset constante
+        ir::IrValueId saddr = ov_base;
+        if (sib.offset != 0) {
+            ir::IrValueId so = emit_const(ir::IrType::I64,
+                                          (uint64_t)sib.offset, line);
+            saddr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[saddr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = saddr;
+            a.operands = {ov_base, so};
+            a.source_line = line;
+            fn_->append(current_block_, std::move(a));
+        }
+        const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+        ir::IrValueId sv = fn_->new_value(st);
+        ir::IrInstr l{};
+        l.op = ir::IrOp::LOAD;
+        l.type = st;
+        l.dst = sv;
+        l.operands = {saddr};
+        l.source_line = line;
+        fn_->append(current_block_, std::move(l));
+        bind(sib.name, sv);
+    }
+    const ir::IrValueId big = lower_expr(fi.endian_expr);
+    pop_scope();
+    if (big == ir::IR_NO_VALUE) return value;
+
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId d = fn_->new_value(ir::IrType::U64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::U64;
+        in.dst = d;
+        in.operands = {a, b};
+        in.source_line = line;
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+    // 2. sw = bswap64(value) >> (8-w)*8  (BYTESWAP swapea los 8 bytes).
+    ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);
+    {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BYTESWAP;
+        b.type = ir::IrType::U64;
+        b.dst = sw64;
+        b.operands = {value};
+        b.source_line = line;
+        fn_->append(current_block_, std::move(b));
+    }
+    ir::IrValueId sw = sw64;
+    if (fi.size < 8) {
+        ir::IrValueId shamt =
+            emit_const(ir::IrType::U64, (uint64_t)(8 - fi.size) * 8, line);
+        sw = bin(ir::IrOp::SHR, sw64, shamt);
+    }
+    // 3. select sin ramas: big ? sw : value = value ^ ((value ^ sw) & -(big!=0)).
+    ir::IrValueId zero = emit_const(ir::IrType::U64, 0, line);
+    ir::IrValueId nz = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_NE;
+        c.type = ir::IrType::BOOL;
+        c.dst = nz;
+        c.operands = {big, zero};
+        c.source_line = line;
+        fn_->append(current_block_, std::move(c));
+    }
+    ir::IrValueId mask = fn_->new_value(ir::IrType::U64);
+    {
+        ir::IrInstr n{};
+        n.op = ir::IrOp::NEG;
+        n.type = ir::IrType::U64;
+        n.dst = mask;
+        n.operands = {nz};
+        n.source_line = line;
+        fn_->append(current_block_, std::move(n));
+    }
+    ir::IrValueId vxs = bin(ir::IrOp::XOR, value, sw);
+    ir::IrValueId tmp = bin(ir::IrOp::AND, vxs, mask);
+    return bin(ir::IrOp::XOR, value, tmp);
+}
+
 ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // NS.2: comptime const de un namespace (`mod.ANSWER`).  El type checker
     // anoto el valor (resuelto en compile-time); emitimos CONST inline igual
@@ -14700,45 +14801,21 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
 
-    // F5: campo `@be` (big-endian) en host little-endian -> BYTESWAP del valor
-    // cargado (solo enteros multi-byte).  El resto (bit-field, host_ptr) opera
-    // sobre el valor ya en orden nativo.
+    // F5: campo `@endian(expr)` -> swap CONDICIONAL segun la expr (nonzero =
+    // big-endian).  Comptime -> se pliega (cero coste); runtime -> select sin
+    // ramas.  Solo enteros multi-byte; el resto opera en orden nativo.
     {
         const Type bt_e = e->base ? e->base->result_type : Type{};
         if (bt_e.kind == PrimitiveKind::STRUCT) {
             auto it_e = tc_.struct_layouts().find(bt_e.struct_name);
             if (it_e != tc_.struct_layouts().end()) {
                 for (const auto &f : it_e->second.fields) {
-                    if (f.name == e->field_name && f.endian == 1 &&
+                    if (f.name == e->field_name && f.endian_expr &&
+                        f.bit_width == 0 &&
                         (f.size == 2 || f.size == 4 || f.size == 8)) {
-                        // BYTESWAP swapea los 8 bytes del registro: para un campo
-                        // de w bytes, bswap64 deja los w bytes utiles ARRIBA;
-                        // un SHR de (8-w)*8 los baja ya en orden nativo.
-                        ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);
-                        {
-                            ir::IrInstr b{};
-                            b.op = ir::IrOp::BYTESWAP;
-                            b.type = ir::IrType::U64;
-                            b.dst = sw64;
-                            b.operands = {dst};
-                            b.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(b));
-                        }
-                        ir::IrValueId res = sw64;
-                        if (f.size < 8) {
-                            ir::IrValueId shamt = emit_const(
-                                ir::IrType::U64, (uint64_t)(8 - f.size) * 8,
-                                e->loc.line);
-                            res = fn_->new_value(ir::IrType::U64);
-                            ir::IrInstr s{};
-                            s.op = ir::IrOp::SHR;
-                            s.type = ir::IrType::U64;
-                            s.dst = res;
-                            s.operands = {sw64, shamt};
-                            s.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(s));
-                        }
-                        dst = res;
+                        dst = emit_overlay_endian_swap(e->base.get(),
+                                                       it_e->second, f, dst,
+                                                       e->loc.line);
                         break;
                     }
                 }
@@ -18100,42 +18177,21 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft,
                              e->value ? e->value->loc : e->loc);
 
-        // F5: campo `@be` -> BYTESWAP del valor a escribir (simetrico con el
-        // read): el store LE deja los bytes en orden big-endian en memoria.
+        // F5: campo `@endian(expr)` -> swap CONDICIONAL del valor a escribir
+        // (simetrico con el read): el store LE deja los bytes en el orden que
+        // dicta la expr.  Comptime se pliega; runtime = select sin ramas.
         {
             const Type bt_w = fa->base ? fa->base->result_type : Type{};
             if (bt_w.kind == PrimitiveKind::STRUCT) {
                 auto it_w = tc_.struct_layouts().find(bt_w.struct_name);
                 if (it_w != tc_.struct_layouts().end()) {
                     for (const auto &f : it_w->second.fields) {
-                        if (f.name == fa->field_name && f.endian == 1 &&
+                        if (f.name == fa->field_name && f.endian_expr &&
                             f.bit_width == 0 &&
                             (f.size == 2 || f.size == 4 || f.size == 8)) {
-                            ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);
-                            {
-                                ir::IrInstr b{};
-                                b.op = ir::IrOp::BYTESWAP;
-                                b.type = ir::IrType::U64;
-                                b.dst = sw64;
-                                b.operands = {rhs};
-                                b.source_line = e->loc.line;
-                                fn_->append(current_block_, std::move(b));
-                            }
-                            ir::IrValueId res = sw64;
-                            if (f.size < 8) {
-                                ir::IrValueId shamt = emit_const(
-                                    ir::IrType::U64, (uint64_t)(8 - f.size) * 8,
-                                    e->loc.line);
-                                res = fn_->new_value(ir::IrType::U64);
-                                ir::IrInstr s{};
-                                s.op = ir::IrOp::SHR;
-                                s.type = ir::IrType::U64;
-                                s.dst = res;
-                                s.operands = {sw64, shamt};
-                                s.source_line = e->loc.line;
-                                fn_->append(current_block_, std::move(s));
-                            }
-                            rhs = res;
+                            rhs = emit_overlay_endian_swap(fa->base.get(),
+                                                           it_w->second, f, rhs,
+                                                           e->loc.line);
                             break;
                         }
                     }

@@ -188,6 +188,9 @@ struct StructFieldInfo {
     /// Overlay endianness (F5): 0=nativo, 1=big-endian (`@be`), 2=little (`@le`).
     /// Un campo `@be` emite BYTESWAP en read/write (host x86-64 = little-endian).
     uint8_t endian = 0;
+    /// Overlay endianness DINAMICA (F5): `@endian(expr)` -- expr (nonzero=BE)
+    /// decide el orden en tiempo de acceso.  no-owning al AST.  null = estatico.
+    ast::Expr *endian_expr = nullptr;
     /// Overlay array SIN count (`T Name[] @offset(...) stride(s)`): el usuario
     /// gestiona la terminacion (p.ej. bucle hasta entrada nula).  @c array_count
     /// null + @c is_array true = array no acotado.

@@ -1978,6 +1978,12 @@ struct StructFieldDecl {
     /// host little-endian (x86-64) emite BYTESWAP en cada read/write.  Para
     /// formatos de endianness fija (red = BE, ELF lo declara en e_ident).
     uint8_t endian = 0;
+    /// Overlay endianness DINAMICA (F5): `@endian(expr)` -- la expr (bool/int:
+    /// nonzero = big-endian) decide el orden EN TIEMPO DE ACCESO.  Puede
+    /// referenciar campos hermanos (`@endian(ei_data == 2)`, ELF) o un comptime
+    /// const (se pliega).  null = usa @c endian estatico.  El swap es condicional
+    /// (branchless select) cuando la expr es runtime.
+    std::unique_ptr<Expr> endian_expr;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`

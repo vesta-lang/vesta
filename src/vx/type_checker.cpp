@@ -2610,6 +2610,7 @@ void TypeChecker::collect_globals() {
                     fi.element_block = f.element_block.get();
                     fi.is_array = f.is_array;
                     fi.endian = f.endian;
+                    fi.endian_expr = f.endian_expr.get();
                     if (f.element_block) {
                         // Array POR-ELEMENTO `@element { }`: la direccion de cada
                         // elemento la da el resolver; no hay offset/pos de tabla.
@@ -2682,7 +2683,7 @@ void TypeChecker::collect_globals() {
                 bool any_dyn = false;
                 for (auto &f : s->fields)
                     if (f.offset_expr || f.offset_block || f.array_stride ||
-                        f.element_block) {
+                        f.element_block || f.endian_expr) {
                         any_dyn = true;
                         break;
                     }
@@ -2737,6 +2738,17 @@ void TypeChecker::collect_globals() {
                         // (con `index` en scope, y puede usar parent<T>()).
                         if (f.element_block) {
                             pending_overlay_resolvers_.push_back({s, &f});
+                        }
+                        // F5 @endian(expr): la expr ve los hermanos + comptime
+                        // consts; debe evaluar a entero/bool (nonzero = big).
+                        if (f.endian_expr) {
+                            Type et = check_expr(f.endian_expr.get());
+                            if (!is_int_kind(et.kind) &&
+                                et.kind != PrimitiveKind::BOOL)
+                                diags_.error(f.loc,
+                                             "el @endian(expr) del campo '" +
+                                                 f.name +
+                                                 "' debe evaluar a bool/entero");
                         }
                     }
                     pop_scope();

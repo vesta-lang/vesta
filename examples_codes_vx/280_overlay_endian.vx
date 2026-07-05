@@ -1,8 +1,8 @@
 // -----------------------------------------------------------------------------
-// Endianness @be / @le: parsear y CREAR formatos big-endian (red, ELF BE, ...)
+// Endianness @endian(expr): parsear y CREAR formatos big-endian (red, ELF, ...)
 // -----------------------------------------------------------------------------
-// El orden de bytes de un campo lo declara `@be` (big-endian) o `@le` (little).
-// En un host little-endian (x86-64) un campo `@be` emite BYTESWAP en cada
+// El orden de bytes lo declara `@endian(expr)` (nonzero = big-endian).
+// En un host little-endian (x86-64) un campo big-endian emite BYTESWAP en cada
 // read/write, asi que el codigo trabaja siempre en orden nativo pero la memoria
 // queda en el orden del formato.  Simetrico: la MISMA vista parsea Y construye.
 // Ejemplo: una cabecera de red (todo big-endian, "network byte order").
@@ -10,13 +10,13 @@
 
 // Cabecera tipo TCP (campos big-endian, como en la red).
 @overlay struct NetHdr {
-    u16 src_port @be @0x00;
-    u16 dst_port @be @0x02;
-    u32 seq      @be @0x04;
-    u32 ack      @be @0x08;
-    u16 window   @be @0x0C;
+    u16 src_port @endian(true) @0x00;
+    u16 dst_port @endian(true) @0x02;
+    u32 seq      @endian(true) @0x04;
+    u32 ack      @endian(true) @0x08;
+    u16 window   @endian(true) @0x0C;
     // un campo little-endian explicito (p.ej. un tag local del host).
-    u16 local    @le @0x0E;
+    u16 local    @endian(false) @0x0E;
 }
 
 i32 main() {
