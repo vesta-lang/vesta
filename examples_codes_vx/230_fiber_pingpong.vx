@@ -1,3 +1,4 @@
+namespace ejemplos.fiber_pingpong;
 // 230_fiber_pingpong.vx
 //
 // F1 de las fibras nativas: prueba AISLADA del primitivo de context-switch

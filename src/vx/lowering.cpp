@@ -11357,6 +11357,46 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         const auto &cmap = tc_.comptime_const_values();
         const std::string &b = s->body;
         body_sub.reserve(b.size());
+        // Resolucion NAMESPACE-RELATIVA de simbolos propios en el asm.  El
+        // cuerpo asm es texto opaco que el aplanador de namespaces NO reescribe,
+        // asi que lleva el nombre CRUDO (p.ej. `call fiber_switch`).  Pero si la
+        // funcion ACTUAL esta en un namespace, el simbolo hermano real es
+        // <prefijo>__fiber_switch.  Probamos primero el nombre crudo (simbolo
+        // global) y, si no existe, el cualificado con el prefijo del namespace
+        // de la funcion actual (scoping normal: el local sombrea al global).
+        // Sin esto, un @Naked que llama a otro @Naked hermano por nombre no
+        // resolveria bajo un namespace -> el asm saltaria a basura (SIGSEGV).
+        std::string ns_prefix;
+        if (fn_) {
+            const std::string &cur = fn_->name;
+            const size_t sep = cur.rfind("__");
+            if (sep != std::string::npos) ns_prefix = cur.substr(0, sep + 2);
+        }
+        // Devuelve el label REAL (mangled) a decorar con __vxf_, o "" si @p nm
+        // no es una funcion (ni cruda ni cualificada por el namespace actual).
+        auto asm_fn_label = [&](const std::string &nm) -> std::string {
+            const FunctionSig *fs = tc_.function_sig_by_name(nm);
+            std::string key = nm;
+            if (fs == nullptr && !ns_prefix.empty()) {
+                const std::string cand = ns_prefix + nm;
+                fs = tc_.function_sig_by_name(cand);
+                if (fs) key = cand;
+            }
+            if (fs == nullptr) return {};
+            return fs->mangled_label.empty() ? key : fs->mangled_label;
+        };
+        // Devuelve el slot del global (crudo o cualificado), o -1 si no lo es.
+        auto asm_gslot = [&](const std::string &nm) -> long long {
+            auto it = runtime_global_slots_.find(nm);
+            if (it != runtime_global_slots_.end())
+                return static_cast<long long>(it->second);
+            if (!ns_prefix.empty()) {
+                auto it2 = runtime_global_slots_.find(ns_prefix + nm);
+                if (it2 != runtime_global_slots_.end())
+                    return static_cast<long long>(it2->second);
+            }
+            return -1;
+        };
         size_t i = 0;
         while (i < b.size()) {
             const char c = b[i];
@@ -11411,7 +11451,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                                   static_cast<uint64_t>(it->second.value)));
                 body_sub += buf;
             } else if (!is_mnemonic_pos && !is_reg &&
-                       tc_.function_sig_by_name(tok) != nullptr) {
+                       !asm_fn_label(tok).empty()) {
                 // Referencia a una FUNCION del modulo -> nombre canonico
                 // __vxf_<label>.  El backend lo resuelve a un sentinela; el
                 // encoder lo decodifica al reloc (CALL_REL32 bare / fnsym: abs)
@@ -11422,21 +11462,16 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                 // naked_native mapea __vxf_<label> a la direccion NATIVA de la
                 // funcion (native-compilada al vuelo).  Sin decorar, el token
                 // quedaba bare y Keystone lo resolvia a un sentinela que nadie
-                // parchea -> SIGSEGV al ejecutar el asm.
-                const FunctionSig *fs = tc_.function_sig_by_name(tok);
-                const std::string label =
-                    fs->mangled_label.empty() ? tok : fs->mangled_label;
-                body_sub += "__vxf_" + label;
-            } else if (!is_mnemonic_pos && !is_reg &&
-                       runtime_global_slots_.find(tok) !=
-                           runtime_global_slots_.end()) {
+                // parchea -> SIGSEGV al ejecutar el asm.  El label ya viene
+                // resuelto namespace-relativo (crudo o <prefijo>__crudo).
+                body_sub += "__vxf_" + asm_fn_label(tok);
+            } else if (!is_mnemonic_pos && !is_reg && asm_gslot(tok) >= 0) {
                 // Referencia a un GLOBAL del modulo -> __vxg_<slot>.  En AOT el
                 // encoder lo resuelve a rodata.<slot> (.data del global); en
                 // interp/JIT el resolver de naked_native lo mapea a la direccion
                 // HOST del slot en vm_mem (donde el codigo VM_ABI escribe/lee el
-                // global).
-                body_sub += "__vxg_" + std::to_string(
-                                           runtime_global_slots_[tok]);
+                // global).  Slot resuelto namespace-relativo.
+                body_sub += "__vxg_" + std::to_string(asm_gslot(tok));
             } else {
                 body_sub += tok;
             }
