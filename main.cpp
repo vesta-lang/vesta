@@ -1073,6 +1073,14 @@ int main(int argc, char *argv[]) {
         pp.options().import_paths.push_back(exe_dir +
                                             "/preprocessor/include_lib");
         pp.options().import_paths.push_back(exe_dir + "/include_lib");
+        {
+            std::string _plib =
+                std::filesystem::path(exe_dir).parent_path().string();
+            if (!_plib.empty()) {
+                pp.options().import_paths.push_back(_plib + "/include_lib");
+                pp.options().import_paths.push_back(_plib + "/preprocessor/include_lib");
+            }
+        }
         pp.options().import_paths.push_back(source_dir);
 #ifdef _WIN32
         pp.options().predefines.push_back("__VPP_WINDOWS__");
@@ -1880,6 +1888,14 @@ int main(int argc, char *argv[]) {
             pp.options().import_paths.push_back(exe_dir +
                                                 "/preprocessor/include_lib");
             pp.options().import_paths.push_back(exe_dir + "/include_lib");
+            {
+                std::string _plib =
+                    std::filesystem::path(exe_dir).parent_path().string();
+                if (!_plib.empty()) {
+                    pp.options().import_paths.push_back(_plib + "/include_lib");
+                    pp.options().import_paths.push_back(_plib + "/preprocessor/include_lib");
+                }
+            }
             pp.options().import_paths.push_back(source_dir);
 #ifdef _WIN32
             pp.options().predefines.push_back("__VPP_WINDOWS__");

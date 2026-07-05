@@ -44,10 +44,16 @@ endif()
 # ---------------------------------------------------------------------------
 
 # === core (OBLIGATORIO): el lenguaje en si =================================
+# El RUNTIME (vesta.exe + todo lo que el ejecutable resuelve relativo a su
+# propia ubicacion: include_lib/, stdlib/, libvesta_gc.a, DLLs) se instala en
+# <prefix>/bin.  Asi el acceso directo del Menu Inicio y el PATH del sistema
+# (ambos gestionados por CPack, que asume `bin/`) apuntan correctamente a
+# <prefix>/bin/vesta.exe y `vesta` funciona desde cualquier shell.
 # Ejecutable principal instalado como vesta.exe (no vm.exe).
 install(PROGRAMS "$<TARGET_FILE:vm>"
-        DESTINATION . RENAME vesta.exe COMPONENT core)
-# stdlib del preprocesador VPP: #import <vesta/...> se resuelve aqui.
+        DESTINATION bin RENAME vesta.exe COMPONENT core)
+# stdlib del preprocesador VPP (fuente, NO binario): va en la RAIZ; el
+# ejecutable en bin/ la resuelve relativo a su padre (exe_dir/../include_lib).
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/preprocessor/include_lib"
         DESTINATION . COMPONENT core)
 # Documentacion (LICENSE en texto plano para que el asistente lo muestre bien).
@@ -61,23 +67,23 @@ if (NOT VESTA_OPENSSL_STATIC)
     install(FILES
             "$<TARGET_FILE_DIR:vm>/libssl-3-x64.dll"
             "$<TARGET_FILE_DIR:vm>/libcrypto-3-x64.dll"
-            DESTINATION . COMPONENT core)
+            DESTINATION bin COMPONENT core)
 endif()
 # GC estatico para AOT: al compilar un programa con `gc<T>` en modo AOT, el
 # enlazador interno busca libvesta_gc.a JUNTO a vesta.exe.  Sin esto, gc<T> en
 # AOT falla con "no se encontro libvesta_gc.a".
 if (TARGET vesta_gc)
-    install(FILES "$<TARGET_FILE:vesta_gc>" DESTINATION . COMPONENT core)
+    install(FILES "$<TARGET_FILE:vesta_gc>" DESTINATION bin COMPONENT core)
 endif()
 # Variantes ESTATICAS de los plugins de stdlib (colecciones / math): el AOT las
 # auto-enlaza JUNTO a vesta.exe cuando el programa las usa -> .exe standalone sin
 # DLLs.  Se instalan en core (parte del toolchain AOT).
 if (TARGET vesta_collections_a)
     install(FILES "$<TARGET_FILE:vesta_collections_a>"
-            DESTINATION . COMPONENT core)
+            DESTINATION bin COMPONENT core)
 endif()
 if (TARGET vesta_math_a)
-    install(FILES "$<TARGET_FILE:vesta_math_a>" DESTINATION . COMPONENT core)
+    install(FILES "$<TARGET_FILE:vesta_math_a>" DESTINATION bin COMPONENT core)
 endif()
 
 # === stdlib (opcional): biblioteca estandar del lenguaje ===================
@@ -93,7 +99,7 @@ install(DIRECTORY
 
 # === lsp (opcional): servidor de lenguaje para editores ====================
 if (TARGET vesta_lsp)
-    install(PROGRAMS "$<TARGET_FILE:vesta_lsp>" DESTINATION . COMPONENT lsp)
+    install(PROGRAMS "$<TARGET_FILE:vesta_lsp>" DESTINATION bin COMPONENT lsp)
 endif()
 
 # === examples (opcional): programas de ejemplo de AMBOS lenguajes ==========
@@ -126,7 +132,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/tools/"
 # C + helper CMake.
 if (TARGET vesta_ffi)
     install(TARGETS vesta_ffi
-            RUNTIME DESTINATION .    COMPONENT sdk
+            RUNTIME DESTINATION bin  COMPONENT sdk
             ARCHIVE DESTINATION lib  COMPONENT sdk)
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/include/ffi/vesta_plugin.h"
@@ -238,7 +244,7 @@ set(CPACK_NSIS_MODIFY_PATH         ON)
 # desinstalador (auto-reparable), sin depender de un Uninstall.exe que pudo
 # borrarse.  CPack no expone un hook en .onInit para hacerlo tolerante.
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL OFF)
-set(CPACK_NSIS_INSTALLED_ICON_NAME "vesta.exe")
+set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\vesta.exe")
 set(CPACK_NSIS_BRANDING_TEXT       "VestaVM ${PROJECT_VERSION}")
 if (EXISTS "${_vesta_icon}")
     set(CPACK_NSIS_MUI_ICON   "${_vesta_icon}")  # icono del instalador

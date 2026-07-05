@@ -818,8 +818,19 @@ static void command_vpp(const std::string &args) {
     // rutas de stdlib (igual que en run_worker)
     std::string exe_dir =
         std::filesystem::path(fs::get_executable_path()).parent_path().string();
+    // Relativo al exe (dev: vm.exe junto a preprocessor/include_lib o al repo).
     pp.options().import_paths.push_back(exe_dir + "/preprocessor/include_lib");
     pp.options().import_paths.push_back(exe_dir + "/include_lib");
+    // Relativo al PADRE del exe: instalacion con vesta.exe en <prefix>/bin y el
+    // include_lib (fuente VPP, no binario) en <prefix>/include_lib.
+    {
+        std::string parent = std::filesystem::path(exe_dir).parent_path().string();
+        if (!parent.empty()) {
+            pp.options().import_paths.push_back(parent + "/include_lib");
+            pp.options().import_paths.push_back(parent +
+                                                "/preprocessor/include_lib");
+        }
+    }
     pp.options().import_paths.push_back(src_dir);
 
     // rutas adicionales del usuario
