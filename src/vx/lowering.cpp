@@ -14244,6 +14244,174 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     return fn_name;
 }
 
+std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
+    const std::string fn_name = "__ovl_extent_" + lay.name;
+    if (generated_overlay_resolvers_.count(fn_name)) return fn_name; // dedup
+    generated_overlay_resolvers_.insert(fn_name);
+
+    // Salvar contexto (mismo protocolo que generate_overlay_resolver).
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
+        std::move(scopes_);
+    std::unordered_set<std::string> saved_addr_taken =
+        std::move(address_taken_locals_);
+    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    const bool saved_sret_active = sret_active_;
+    const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
+    const uint64_t saved_sret_buf_size = sret_buf_size_;
+    const bool saved_returns_fn = current_fn_returns_function_;
+    sret_active_ = false;
+    sret_retbuf_ = ir::IR_NO_VALUE;
+    sret_buf_size_ = 0;
+    current_fn_returns_function_ = false;
+
+    ir::IrFunction child_fn;
+    child_fn.name = fn_name;
+    child_fn.ret_type = ir::IrType::U64;   // el span en bytes
+    ir::IrValueId self_pv = child_fn.new_value(ir::IrType::PTR, "%self");
+    child_fn.values[self_pv].is_param = true;
+    child_fn.values[self_pv].is_host_ptr = true;
+    child_fn.params.push_back(self_pv);
+
+    const ir::IrBlockId entry = child_fn.new_block("entry");
+    fn_ = &child_fn;
+    current_block_ = entry;
+    block_terminated_ = false;
+    scopes_.clear();
+    push_scope();
+    address_taken_locals_.clear();
+    host_bearing_locals_.clear();
+    cleanup_stack_.clear();
+
+    bind("base", self_pv);
+    bind("this", self_pv);
+    bind("self", self_pv);
+    // Ligar hermanos escalares de offset constante (para offset_expr/count/stride).
+    for (const auto &sib : lay.fields) {
+        if (sib.offset_expr || sib.offset_block || sib.array_count ||
+            sib.array_stride || sib.element_block)
+            continue;
+        ir::IrValueId saddr = self_pv;
+        if (sib.offset != 0) {
+            ir::IrValueId so = emit_const(ir::IrType::I64, (uint64_t)sib.offset, 0);
+            saddr = child_fn.new_value(ir::IrType::PTR);
+            child_fn.values[saddr].is_host_ptr = true;
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = saddr;
+            a.operands = {self_pv, so};
+            child_fn.append(entry, std::move(a));
+        }
+        const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+        ir::IrValueId sv = child_fn.new_value(st);
+        ir::IrInstr l{};
+        l.op = ir::IrOp::LOAD;
+        l.type = st;
+        l.dst = sv;
+        l.operands = {saddr};
+        child_fn.append(entry, std::move(l));
+        bind(sib.name, sv);
+    }
+
+    // Helpers de emision (u64).
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
+                   ir::IrType t) -> ir::IrValueId {
+        ir::IrValueId d = fn_->new_value(t);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = t;
+        in.dst = d;
+        in.operands = {a, b};
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+    // max sin ramas: max(a,b) = b ^ ((a^b) & -(a>b)).
+    auto emit_max = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId gt = bin(ir::IrOp::CMP_UGT, a, b, ir::IrType::BOOL);
+        ir::IrValueId mask = fn_->new_value(ir::IrType::U64);
+        {
+            ir::IrInstr n{};
+            n.op = ir::IrOp::NEG;
+            n.type = ir::IrType::U64;
+            n.dst = mask;
+            n.operands = {gt};
+            fn_->append(current_block_, std::move(n));
+        }
+        ir::IrValueId axb = bin(ir::IrOp::XOR, a, b, ir::IrType::U64);
+        ir::IrValueId tmp = bin(ir::IrOp::AND, axb, mask, ir::IrType::U64);
+        return bin(ir::IrOp::XOR, b, tmp, ir::IrType::U64);
+    };
+
+    ir::IrValueId maxv = emit_const(ir::IrType::U64, 0, 0);
+    for (const auto &fi : lay.fields) {
+        // Saltar lo que extent no cubre (documentado).
+        if (fi.resolver_uses_parent) continue;         // necesita root
+        if (fi.is_array && (!fi.array_count || fi.element_block))
+            continue;                                    // sin count / @element
+        ir::IrValueId end = ir::IR_NO_VALUE;
+        const uint64_t fsz = fi.size;
+        // base_off del campo/array (relativo a self).
+        ir::IrValueId base_off;
+        if (fi.offset_block) {
+            const std::string rname = generate_overlay_resolver(lay, fi);
+            ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[addr].is_host_ptr = true;
+            ir::IrInstr in{};
+            in.op = ir::IrOp::CALL;
+            in.func_name = rname;
+            in.type = ir::IrType::PTR;
+            in.dst = addr;
+            in.operands = {self_pv};
+            in.is_call_site = true;
+            fn_->append(current_block_, std::move(in));
+            base_off = bin(ir::IrOp::SUB, addr, self_pv, ir::IrType::U64);
+        } else if (fi.offset_expr) {
+            base_off = lower_expr(fi.offset_expr);
+            if (base_off == ir::IR_NO_VALUE) continue;
+        } else {
+            base_off = emit_const(ir::IrType::U64, (uint64_t)fi.offset, 0);
+        }
+        if (fi.is_array) {
+            ir::IrValueId cnt = lower_expr(fi.array_count);
+            ir::IrValueId strd = lower_expr(fi.array_stride);
+            if (cnt == ir::IR_NO_VALUE || strd == ir::IR_NO_VALUE) continue;
+            ir::IrValueId span = bin(ir::IrOp::MUL, cnt, strd, ir::IrType::U64);
+            end = bin(ir::IrOp::ADD, base_off, span, ir::IrType::U64);
+        } else {
+            ir::IrValueId sz = emit_const(ir::IrType::U64, fsz, 0);
+            end = bin(ir::IrOp::ADD, base_off, sz, ir::IrType::U64);
+        }
+        maxv = emit_max(maxv, end);
+    }
+
+    {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::U64;
+        rt.operands = {maxv};
+        fn_->append(current_block_, std::move(rt));
+        block_terminated_ = true;
+    }
+
+    pop_scope();
+    pending_spawn_helpers_.push_back(std::move(child_fn));
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    scopes_ = std::move(saved_scopes);
+    address_taken_locals_ = std::move(saved_addr_taken);
+    cleanup_stack_ = std::move(saved_cleanups);
+    sret_active_ = saved_sret_active;
+    sret_retbuf_ = saved_sret_retbuf;
+    sret_buf_size_ = saved_sret_buf_size;
+    current_fn_returns_function_ = saved_returns_fn;
+    return fn_name;
+}
+
 ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     const ir::IrValueId base = lower_expr(e->base.get());
     if (base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
@@ -18938,6 +19106,44 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         out_value = emit_label_addr(fn_id->name, e->loc.line);
+        return true;
+    }
+
+    // Overlay: `extent(v)` -> span total en runtime del layout de la vista.
+    // Baja a un CALL a `__ovl_extent_<S>(base)`.
+    if (name == "extent" && e->type_args.empty() && e->args.size() == 1) {
+        ast::Expr *arg = e->args[0].get();
+        const Type vt = arg->result_type;
+        if (vt.kind != PrimitiveKind::STRUCT) {
+            error_at(e->loc, "extent(v): v debe ser una vista @overlay");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const auto &lays = tc_.struct_layouts();
+        auto it = lays.find(vt.struct_name);
+        if (it == lays.end() || !it->second.is_overlay) {
+            error_at(e->loc, "extent(v): '" + vt.struct_name +
+                                 "' no es una vista @overlay");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId base = lower_expr(arg);
+        if (base == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const std::string rname = generate_overlay_extent(it->second);
+        ir::IrValueId d = fn_->new_value(ir::IrType::U64);
+        ir::IrInstr in{};
+        in.op = ir::IrOp::CALL;
+        in.func_name = rname;
+        in.type = ir::IrType::U64;
+        in.dst = d;
+        in.operands = {base};
+        in.is_call_site = true;
+        in.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(in));
+        out_value = d;
         return true;
     }
 

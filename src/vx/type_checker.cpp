@@ -10455,6 +10455,24 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         return t;
     }
 
+    // Overlay: `extent(v)` -> u64.  Span TOTAL en runtime del layout declarado
+    // de la vista v (max(fin de campo) - base), con los datos de la instancia
+    // (counts dinamicos, resolvers).  Cubre escalares + arrays de stride con
+    // count; NO cubre arrays sin count ni @element (documentado).
+    if (id->name == "extent" && e->type_args.empty() && e->args.size() == 1) {
+        const Type vt = check_expr(e->args[0].get());
+        if (vt.kind == PrimitiveKind::STRUCT) {
+            auto it = struct_layouts_.find(vt.struct_name);
+            if (it != struct_layouts_.end() && it->second.is_overlay) {
+                e->result_type = Type{PrimitiveKind::U64};
+                return e->result_type;
+            }
+        }
+        diags_.error(e->loc, "extent(v): v debe ser una vista @overlay");
+        e->result_type = Type{PrimitiveKind::U64};
+        return e->result_type;
+    }
+
     if (e->type_args.empty() && !e->args.empty() &&
         (id->name == "offsetof" || id->name == "in_bounds")) {
         // Predicado: el arg accede a un campo/elemento de un overlay.

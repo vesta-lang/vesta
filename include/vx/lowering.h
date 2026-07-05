@@ -553,6 +553,15 @@ class Lowering {
     /// Nombres de resolvedores de overlay ya sintetizados (dedup).
     std::unordered_set<std::string> generated_overlay_resolvers_;
     /**
+     * @brief `extent(v)`: sintetiza `__ovl_extent_<S>(self) -> u64` que computa el
+     *        SPAN total del layout de la vista con los datos de la instancia
+     *        (max(fin de campo) - base).  Cubre escalares (offset const/expr/
+     *        block) + arrays de stride CON count; salta arrays sin count y
+     *        @element (variable) y resolvers que usan parent<T>().  Devuelve el
+     *        nombre de la funcion (dedup via @c generated_overlay_resolvers_).
+     */
+    std::string generate_overlay_extent(const StructLayout &lay);
+    /**
      * @brief F4: baja el puntero de la vista RAIZ de una cadena de accesos
      *        overlay.  Camina @c e por sus bases (FieldAccess/Index) hasta la
      *        expresion que ya no es un acceso a campo/elemento (la vista raiz,
