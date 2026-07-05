@@ -3696,26 +3696,35 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
                 (void)consume();
             }
         }
-        // Overlay F1: offset explicito del campo.  `ptr X @offset(0x30);` o el
-        // atajo `ptr X @0x30;`.  Por ahora solo una constante entera (fases
-        // posteriores: expresion/bloque que referencia campos hermanos).
+        // Overlay: offset del campo.  `@0x30` (atajo constante), `@offset(0x30)`
+        // (constante) o `@offset(expr)` (F2: expresion que puede referenciar
+        // campos hermanos, `@offset(prev + 0x10)`).  El caso puramente constante
+        // se pliega a explicit_offset; el resto va a offset_expr.
         if (current_.kind == TokenKind::AT) {
             (void)consume(); // '@'
-            bool with_parens = false;
             if (current_.kind == TokenKind::IDENTIFIER &&
                 current_.lexeme == "offset") {
                 (void)consume(); // 'offset'
                 (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @offset");
-                with_parens = true;
-            }
-            if (current_.kind != TokenKind::INT_LIT) {
-                error_here("@offset requiere un offset entero constante");
+                auto oe = parse_expr();
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' tras @offset(expr)");
+                if (oe && oe->kind == ast::NodeKind::IntLitExpr) {
+                    f.explicit_offset =
+                        (int64_t)static_cast<ast::IntLitExpr *>(oe.get())->value;
+                } else {
+                    f.offset_expr = std::move(oe);
+                }
             } else {
-                f.explicit_offset = (int64_t)current_.int_val;
-                (void)consume();
+                // Atajo `@0x30`: solo constante entera.
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("@<offset> requiere un entero constante (o usa "
+                               "@offset(expr))");
+                } else {
+                    f.explicit_offset = (int64_t)current_.int_val;
+                    (void)consume();
+                }
             }
-            if (with_parens)
-                (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @offset(N)");
         }
         // Valor por defecto del campo: `u8 a = 0x10;`.  Debe ser una expresion
         // comptime-constante (se valida en el type checker); se aplica al crear

@@ -109,6 +109,10 @@ uint64_t comptime_type_size(const TypeChecker &tc, const Type &t) {
     case PrimitiveKind::STRUCT: {
         auto it = tc.struct_layouts().find(t.struct_name);
         if (it != tc.struct_layouts().end()) {
+            // Overlay: `sizeof(T)` = HUELLA de la vista (para reservar el
+            // buffer de respaldo), no @c size_bytes=8 (el puntero).
+            if (it->second.is_overlay)
+                return it->second.overlay_extent;
             return it->second.size_bytes;
         }
         auto en = tc.enum_layouts().find(t.struct_name);

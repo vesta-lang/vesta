@@ -13309,19 +13309,68 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     }
     const StructLayout &lay = it->second;
     uint32_t offset = 0;
-    bool found = false;
+    const StructFieldInfo *fifound = nullptr;
     for (const auto &f : lay.fields) {
         if (f.name == e->field_name) {
             offset = f.offset;
-            found = true;
+            fifound = &f;
             break;
         }
     }
-    if (!found) {
+    if (!fifound) {
         error_at(e->loc, "lowering: campo '" + e->field_name +
                              "' no encontrado en struct '" + bt.struct_name +
                              "'");
         return ir::IR_NO_VALUE;
+    }
+
+    // Overlay F2: offset DINAMICO `@offset(hermano + N)`.  Evaluamos la
+    // expresion en tiempo de acceso; los nombres desnudos de campos hermanos
+    // se enlazan a `LOAD [base + hermano.offset]` (host) en un scope temporal
+    // y `lower_expr` los resuelve por @c lookup.  El DAG del type checker
+    // garantiza que no hay ciclos.  fld_addr = base + offset_dinamico.
+    if (fifound->offset_expr) {
+        push_scope();
+        for (const auto &sib : lay.fields) {
+            if (sib.offset_expr) continue; // solo hermanos de offset constante
+            ir::IrValueId saddr = base;
+            if (sib.offset != 0) {
+                ir::IrValueId so = emit_const(ir::IrType::I64,
+                                              (uint64_t)sib.offset, e->loc.line);
+                saddr = fn_->new_value(ir::IrType::PTR);
+                fn_->values[saddr].is_host_ptr = fn_->values[base].is_host_ptr;
+                ir::IrInstr a{};
+                a.op = ir::IrOp::ADD;
+                a.type = ir::IrType::PTR;
+                a.dst = saddr;
+                a.operands = {base, so};
+                a.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(a));
+            }
+            const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+            ir::IrValueId sv = fn_->new_value(st);
+            ir::IrInstr l{};
+            l.op = ir::IrOp::LOAD;
+            l.type = st;
+            l.dst = sv;
+            l.operands = {saddr};
+            l.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(l));
+            bind(sib.name, sv);
+        }
+        const ir::IrValueId off_val = lower_expr(fifound->offset_expr);
+        pop_scope();
+        if (off_val == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        const ir::IrValueId fld_addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[fld_addr].is_host_ptr = fn_->values[base].is_host_ptr;
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::ADD;
+        ins.type = ir::IrType::PTR;
+        ins.dst = fld_addr;
+        ins.operands = {base, off_val};
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        return fld_addr;
     }
 
     if (offset == 0) return base;

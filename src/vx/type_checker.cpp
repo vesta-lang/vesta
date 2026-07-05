@@ -2604,10 +2604,16 @@ void TypeChecker::collect_globals() {
                 // auto-layout secuencial).  Si un campo de un overlay no lo
                 // trae, es error (F1).
                 if (s->is_overlay) {
-                    if (f.explicit_offset < 0) {
+                    if (f.offset_expr) {
+                        // Offset DINAMICO: `@offset(hermano + N)`.  Se resuelve
+                        // en tiempo de acceso; @c offset base queda a 0.
+                        fi.offset = 0;
+                        fi.offset_expr = f.offset_expr.get();
+                    } else if (f.explicit_offset < 0) {
                         diags_.error(f.loc,
                                      "campo '" + f.name + "' de un @overlay "
-                                     "struct requiere @offset(N)");
+                                     "struct requiere @offset(N) o "
+                                     "@offset(expr)");
                         fi.offset = 0;
                     } else {
                         fi.offset = (uint32_t)f.explicit_offset;
@@ -2635,6 +2641,50 @@ void TypeChecker::collect_globals() {
                 layout.is_overlay = true;
                 layout.size_bytes = 8;
                 layout.align_bytes = 8;
+                // Huella estatica = max(offset+size) sobre los campos de offset
+                // constante.  `sizeof(overlay)` la devuelve para reservar el
+                // buffer de respaldo exacto al CREAR la vista.
+                uint32_t extent = 0;
+                for (auto &fi : layout.fields) {
+                    if (fi.offset_expr) continue; // dinamico: no cuenta
+                    uint32_t end = fi.offset + fi.size;
+                    if (end > extent) extent = end;
+                }
+                if (extent % 8 != 0) extent += 8 - (extent % 8);
+                layout.overlay_extent = extent;
+                // Chequeo de los offset dinamicos (`@offset(hermano + N)`):
+                // los nombres desnudos que aparecen en la expresion se
+                // resuelven contra los campos hermanos del overlay.  Metemos
+                // cada campo como simbolo entero en un scope temporal y
+                // chequeamos la expresion (debe evaluar a un entero).
+                bool any_dyn = false;
+                for (auto &f : s->fields)
+                    if (f.offset_expr) { any_dyn = true; break; }
+                if (any_dyn) {
+                    push_scope();
+                    for (auto &fi : layout.fields) {
+                        Symbol sym;
+                        sym.kind = SymbolKind::Variable;
+                        sym.type = fi.type;
+                        (void)declare(fi.name, sym);
+                    }
+                    for (auto &f : s->fields) {
+                        if (!f.offset_expr) continue;
+                        Type ot = check_expr(f.offset_expr.get());
+                        const PrimitiveKind k = ot.kind;
+                        const bool is_int =
+                            k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+                            k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+                            k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+                            k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+                        if (!is_int) {
+                            diags_.error(f.loc,
+                                         "el @offset(expr) del campo '" +
+                                         f.name + "' debe evaluar a un entero");
+                        }
+                    }
+                    pop_scope();
+                }
             } else {
                 layout.size_bytes = offset;
                 layout.align_bytes = max_align;

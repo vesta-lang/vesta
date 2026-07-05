@@ -39,6 +39,7 @@ CASES = [
     ("examples_codes_vx/172_class_defaults.vx", 159),
     ("examples_codes_vx/analyze/type_contracts.vx", 140),
     ("examples_codes_vx/173_overlay_basics.vx", 23629),
+    ("examples_codes_vx/174_overlay_dynamic.vx", 128),
 ]
 
 

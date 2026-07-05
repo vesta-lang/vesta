@@ -162,6 +162,12 @@ struct StructFieldInfo {
     /// durante toda la compilacion).  null = sin default (zero-init).  Lo usa
     /// el lowering para `= {}`, campos no listados en el init y `default()`.
     ast::Expr *default_init = nullptr;
+    /// Offset DINAMICO de un campo de overlay dado por una expresion que puede
+    /// referenciar campos hermanos (`@offset(prev_off + 0x10)`).  no-owning al
+    /// AST.  null = offset estatico (usa @c offset).  Al resolver un acceso el
+    /// lowering evalua esta expresion (los nombres desnudos de hermanos leen
+    /// @c LOAD [base + hermano.offset]) y direcciona en @c base + resultado.
+    ast::Expr *offset_expr = nullptr;
 };
 
 /**
@@ -243,6 +249,12 @@ struct StructLayout {
     /// de este tipo ES un puntero (host) de 8 bytes; no se aloca buffer ni se
     /// zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS (@offset).
     bool is_overlay = false;
+    /// Overlay: HUELLA estatica de la vista = max(offset+size) sobre los campos
+    /// de offset constante, redondeada al alineamiento.  Es lo que `sizeof(T)`
+    /// devuelve para un overlay (no @c size_bytes=8, que es el puntero): permite
+    /// reservar `u8[sizeof(PEB)] buf;` con el tamano exacto para CREAR la vista.
+    /// Los campos de offset dinamico (@offset(expr)) no cuentan (data-dependent).
+    uint32_t overlay_extent = 0;
     /// Fase 1 interop C: categoria INFERIDA de los campos (clasificador de
     /// Fase 0).  @c cat_c_representable: el struct cruza la frontera C por
     /// valor (todos sus campos C-representables y sin `~Struct()`).

@@ -1926,11 +1926,15 @@ struct StructFieldDecl {
     /// calcula bit_offset y los empaqueta en storage words del tipo
     /// declarado (i32 -> 32 bits por word, etc.).  Estilo C/C++.
     uint8_t bit_width = 0;
-    /// Overlay (F1): offset EXPLICITO del campo dentro de la vista
-    /// (`ptr X @offset(0x30);`).  -1 = sin offset explicito (campo normal o
-    /// auto-layout).  Solo valido en `@overlay struct`.  En F1 es un entero
-    /// constante; fases posteriores permitiran una expresion/bloque.
+    /// Overlay (F1): offset EXPLICITO CONSTANTE del campo dentro de la vista
+    /// (`ptr X @offset(0x30);` o `@0x30`).  -1 = sin offset constante (campo
+    /// normal, o offset dado por @c offset_expr).  Fast-path del caso constante.
     int64_t explicit_offset = -1;
+    /// Overlay (F2): offset del campo dado por una EXPRESION que puede
+    /// referenciar campos hermanos (`@offset(prev_off + 0x10)`).  null = usa
+    /// @c explicit_offset (constante).  Se evalua en tiempo de acceso; el caso
+    /// puramente constante se pliega a @c explicit_offset en el parser.
+    std::unique_ptr<Expr> offset_expr;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`
