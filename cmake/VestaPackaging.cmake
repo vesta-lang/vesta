@@ -273,6 +273,18 @@ set(CPACK_NSIS_MENU_LINKS
 # modo de instalacion elegido (RequestExecutionLevel highest en la plantilla).
 # .vsh se abre ejecutando el script (--script); .vx se compila (--vesta).
 set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [==[
+  ; Limpiar CUALQUIER asociacion previa (incluida una instalacion defectuosa)
+  ; en AMBOS hives antes de reescribir, para un overwrite limpio: una instalacion
+  ; anterior como admin pudo dejarla en HKLM y la nueva per-user escribe en HKCU.
+  DeleteRegKey HKLM "Software\Classes\Vesta.vx"
+  DeleteRegKey HKLM "Software\Classes\Vesta.vsh"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vx"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vsh"
+  ; Windows guarda la eleccion del usuario en UserChoice (protegido); borrarlo
+  ; fuerza a Explorer a reevaluar la asociacion con el ProgID nuevo.  Si esta
+  ; bloqueado, el DeleteRegKey es un no-op inofensivo.
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vx\UserChoice"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vsh\UserChoice"
   WriteRegStr SHCTX "Software\Classes\.vx" "" "Vesta.vx"
   WriteRegStr SHCTX "Software\Classes\Vesta.vx" "" "Codigo fuente Vesta"
   WriteRegStr SHCTX "Software\Classes\Vesta.vx\DefaultIcon" "" "$INSTDIR\bin\vesta.ico"
@@ -284,10 +296,18 @@ set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [==[
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 ]==])
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [==[
-  DeleteRegKey SHCTX "Software\Classes\Vesta.vx"
-  DeleteRegKey SHCTX "Software\Classes\Vesta.vsh"
-  DeleteRegValue SHCTX "Software\Classes\.vx" ""
-  DeleteRegValue SHCTX "Software\Classes\.vsh" ""
+  ; Limpiar la asociacion en AMBOS hives (una instalacion pudo dejarla en
+  ; cualquiera de los dos segun fuese admin o per-user).
+  DeleteRegKey HKLM "Software\Classes\Vesta.vx"
+  DeleteRegKey HKLM "Software\Classes\Vesta.vsh"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vx"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vsh"
+  DeleteRegValue HKLM "Software\Classes\.vx" ""
+  DeleteRegValue HKLM "Software\Classes\.vsh" ""
+  DeleteRegValue HKCU "Software\Classes\.vx" ""
+  DeleteRegValue HKCU "Software\Classes\.vsh" ""
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vx\UserChoice"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vsh\UserChoice"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 ]==])
 
