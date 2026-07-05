@@ -3460,7 +3460,15 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             synchronize();
             continue;
         }
-        if (current_.kind != TokenKind::IDENTIFIER) {
+        // El nombre del miembro puede ser un IDENTIFIER o los keywords
+        // contextuales `get`/`set`: aqui YA parseamos un tipo, asi que esto es
+        // la forma `<tipo> <nombre>(...)` (campo o metodo), nunca una property
+        // (que se detecta ANTES, sin tipo previo).  Permitir `get`/`set` como
+        // nombre de metodo/campo (p.ej. `T get()`) evita rechazarlos por
+        // colisionar con los keywords de property.
+        if (current_.kind != TokenKind::IDENTIFIER &&
+            current_.kind != TokenKind::KW_GET &&
+            current_.kind != TokenKind::KW_SET) {
             error_here("se esperaba un nombre de campo o metodo tras el tipo");
             synchronize();
             continue;
