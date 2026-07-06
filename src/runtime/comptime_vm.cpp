@@ -134,7 +134,7 @@ struct ComptimeVmImpl {
      * ~98%.  El peak memory queda bounded a ~64 * 128 B = 8 KB lo
      * cual es perfectamente aceptable.
      *
-     * Override via env var @c VESTA_ GC_INTERVAL.  Valor 0 = GC
+     * Override via env var @c VESTA_MC_GC_INTERVAL.  Valor 0 = GC
      * cada call (modo original); valor grande = menos GCs pero
      * mayor peak memory.
      */
@@ -156,7 +156,7 @@ struct ComptimeVmImpl {
           vm(mgr, /*id_vm=*/0xC03171EULL, /*num_schedulers=*/1) {
         /*   : configurar GC interval desde env var.
          * Default = 64 (good tradeoff entre peak memory y overhead). */
-        if (const char *env = std::getenv("VESTA_ GC_INTERVAL")) {
+        if (const char *env = std::getenv("VESTA_MC_GC_INTERVAL")) {
             char *end = nullptr;
             const unsigned long v = std::strtoul(env, &end, 10);
             if (end != env) gc_interval = v;
@@ -365,7 +365,7 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     /*   : capturamos old_used pre-call solo si trace activo. */
     size_t old_used_before = 0;
     const bool gc_trace_active = []() {
-        const char *t = std::getenv("VESTA_ GC_TRACE");
+        const char *t = std::getenv("VESTA_MC_GC_TRACE");
         return t && t[0] == '1';
     }();
     if (gc_trace_active && impl_ && impl_->proc) {
@@ -409,7 +409,7 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
          *
          * Peak memory queda bounded a ~gc_interval * 128 B (~8KB
          * con default 64), aceptable.  Override via
-         * @c VESTA_ GC_INTERVAL.
+         * @c VESTA_MC_GC_INTERVAL.
          *
          * Limpiar R0..R15 SIEMPRE (no en batch) -- esos handles
          * deben morir inmediatamente para que el siguiente call
@@ -545,20 +545,19 @@ bool ComptimeRuntime::load_macros_from_bytes(
             macro_entry_pc_[clean] = kv.second;
         }
 
-        /*   : eager-compile cada macro via JIT.  OPT-IN via
-         * @c VESTA_ JIT=1.  Razon: eager_compile_function tarda
-         * ~5-15ms por macro (segun size del IR + Keystone encode).
-         * Para macros pequenos invocados pocas veces, el costo del
-         * compile excede el ahorro en runtime.  Para builds con
-         * macros pesados o invocaciones repetidas (e.g. metaprog
-         * heavy), el JIT da 10-50x speedup en la ejecucion de la
-         * macro.  El user decide con el env var.
+        /* Eager-compile cada macro/fn comptime via JIT: es lo que acelera
+         * TODO el proceso comptime.  JIT-FIRST por defecto; el interprete
+         * queda como fallback automatico (si @c eager_compile_function no
+         * puede compilar una fn -- op IR no soportada -- @c res.fn es null y
+         * @c jit_code_by_pc no se setea, asi que el scheduler la ejecuta por
+         * interp).  Opt-out completo via @c VESTA_MC_NO_JIT=1 (fuerza interp
+         * puro, util para diagnostico o A/B).
          *
-         * TODO   futuro: lazy compile (contador de invocaciones)
-         * para que el JIT solo dispare cuando el macro se justifique.
-         * Eso elimina la decision manual y da lo mejor de ambos. */
-        const char *mc_jit_env = std::getenv("VESTA_ JIT");
-        const bool mc_jit_on = (mc_jit_env && mc_jit_env[0] == '1');
+         * El coste del compile (~5-15ms por fn) se amortiza con el cache del
+         * codigo comptime (compilado aparte, cacheado aparte): el comptime
+         * casi nunca cambia y se reusa mucho, asi que se paga una vez. */
+        const char *mc_nojit_env = std::getenv("VESTA_MC_NO_JIT");
+        const bool mc_jit_on = !(mc_nojit_env && mc_nojit_env[0] == '1');
         if (mc_jit_on) {
             const uint32_t saved_threshold = jit::g_jit_threshold;
             if (saved_threshold == UINT32_MAX) {
