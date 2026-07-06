@@ -2438,53 +2438,6 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
     }
 }
 
-/* F1: ¿el body contiene inline asm directo (AsmStmt) en cualquier container?
- * Una `comptime fn` con asm no es tree-walkeable (el evaluador AST no ejecuta
- * codigo nativo) -> se ruta al ComptimeVM (JIT + interp fallback), que si lo
- * ejecuta (INLINE_ASM). */
-static bool stmt_contains_asm(const ast::Stmt *s) {
-    if (!s) return false;
-    switch (s->kind) {
-    case ast::NodeKind::AsmStmt:
-        return true;
-    case ast::NodeKind::BlockStmt: {
-        const auto *bs = static_cast<const ast::BlockStmt *>(s);
-        for (const auto &st : bs->body)
-            if (stmt_contains_asm(st.get())) return true;
-        return false;
-    }
-    case ast::NodeKind::IfStmt: {
-        const auto *is = static_cast<const ast::IfStmt *>(s);
-        return stmt_contains_asm(is->then_branch.get()) ||
-               stmt_contains_asm(is->else_branch.get());
-    }
-    case ast::NodeKind::WhileStmt:
-        return stmt_contains_asm(
-            static_cast<const ast::WhileStmt *>(s)->body.get());
-    case ast::NodeKind::DoWhileStmt:
-        return stmt_contains_asm(
-            static_cast<const ast::DoWhileStmt *>(s)->body.get());
-    case ast::NodeKind::ForStmt: {
-        const auto *fs = static_cast<const ast::ForStmt *>(s);
-        return stmt_contains_asm(fs->init.get()) ||
-               stmt_contains_asm(fs->body.get());
-    }
-    default:
-        return false;
-    }
-}
-
-/* F1: una `comptime fn` que usa inline asm en su propio body (o es @Naked =
- * cuerpo asm entero) debe ejecutarse en el ComptimeVM.  Transitivo (llama a un
- * helper @Naked) NO se cubre: `vrt:naked_dispatch` no resuelve el simbolo en
- * el contexto del ComptimeVM -> caeria a 0 silencioso; ese caso da el error
- * claro del call site en su lugar. */
-static bool comptime_fn_uses_asm(const ast::FunctionDecl *fd) {
-    if (!fd) return false;
-    if (fd->is_naked) return true;
-    return stmt_contains_asm(fd->body.get());
-}
-
 /* Pre-pase de annotation de tipos para body de @Macro.
  *
  * Los macros NO pasan por `check_functions` (los saltea porque su

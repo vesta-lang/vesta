@@ -498,6 +498,45 @@ bool comptime_is_enum(const TypeChecker &tc, const Type &t) {
     return tc.enum_layouts().find(t.struct_name) != tc.enum_layouts().end();
 }
 
+/* F1: ¿el body contiene inline asm directo (AsmStmt) en cualquier container? */
+static bool stmt_contains_asm_ci(const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::AsmStmt:
+        return true;
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body)
+            if (stmt_contains_asm_ci(st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        return stmt_contains_asm_ci(is->then_branch.get()) ||
+               stmt_contains_asm_ci(is->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt:
+        return stmt_contains_asm_ci(
+            static_cast<const ast::WhileStmt *>(s)->body.get());
+    case ast::NodeKind::DoWhileStmt:
+        return stmt_contains_asm_ci(
+            static_cast<const ast::DoWhileStmt *>(s)->body.get());
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        return stmt_contains_asm_ci(fs->init.get()) ||
+               stmt_contains_asm_ci(fs->body.get());
+    }
+    default:
+        return false;
+    }
+}
+
+bool comptime_fn_uses_asm(const ast::FunctionDecl *fd) {
+    if (!fd) return false;
+    if (fd->is_naked) return true;
+    return stmt_contains_asm_ci(fd->body.get());
+}
+
 // -------------------------------------------------------------------
 // A.39: mini-interprete para `comptime fn`.
 //
@@ -1419,6 +1458,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 } else {
                     r.value = hit->second.value;
                 }
+                r.deferred = hit->second.deferred; /* #2: propaga diferido */
                 return r;
             }
         }
@@ -1438,6 +1478,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
         } else {
             r.value = it->second.value;
         }
+        r.deferred = it->second.deferred; /* #2: propaga diferido */
         return r;
     }
     case ast::NodeKind::CallExpr: {
@@ -2200,6 +2241,33 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     args.push_back(comptime_eval_expr(tc, a.get()));
                     if (!args.back().ok) return r;
                 }
+                /* F1/#2: comptime fn con inline asm -> NO es tree-walkeable;
+                 * se ejecuta en el ComptimeVM (JIT + interp fallback).  En
+                 * pass 2 (bytecode comptime cargado via prebuilt) devuelve el
+                 * valor real; en pass 1 (sin bytecode) devuelve un placeholder
+                 * DIFERIDO (ok=true para que consts/exprs no den error, pero
+                 * static_assert no debe dispararse -- se resuelve en pass 2). */
+                if (comptime_fn_uses_asm(fn_it->second)) {
+                    std::vector<uint64_t> vm_args;
+                    vm_args.reserve(args.size());
+                    for (const auto &a : args)
+                        vm_args.push_back(static_cast<uint64_t>(a.value));
+                    uint64_t r0 = 0;
+                    const bool inv =
+                        const_cast<TypeChecker &>(tc)
+                            .comptime_runtime()
+                            .invoke_simple_macro("__macro_" + cid->name,
+                                                 vm_args, r0);
+                    ComptimeEvalResult vr;
+                    vr.ok = true;
+                    if (inv) {
+                        vr.value = static_cast<int64_t>(r0);
+                    } else {
+                        vr.value = 0;
+                        vr.deferred = true; /* pass 1: sin bytecode aun */
+                    }
+                    return vr;
+                }
                 /* A.41: resolver type-args del call site. */
                 std::vector<Type> type_args;
                 type_args.reserve(ce->type_args.size());
@@ -2379,12 +2447,14 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             if (a.value == 0) {
                 r.ok = true;
                 r.value = 0;
+                r.deferred = a.deferred;
                 return r;
             }
             ComptimeEvalResult b = comptime_eval_expr(tc, bn->rhs.get());
             if (!b.ok) return r;
             r.ok = true;
             r.value = (b.value != 0) ? 1 : 0;
+            r.deferred = a.deferred || b.deferred;
             return r;
         }
         if (bn->op == ast::BinOp::LogicalOr) {
@@ -2393,18 +2463,24 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             if (a.value != 0) {
                 r.ok = true;
                 r.value = 1;
+                r.deferred = a.deferred;
                 return r;
             }
             ComptimeEvalResult b = comptime_eval_expr(tc, bn->rhs.get());
             if (!b.ok) return r;
             r.ok = true;
             r.value = (b.value != 0) ? 1 : 0;
+            r.deferred = a.deferred || b.deferred;
             return r;
         }
         ComptimeEvalResult a = comptime_eval_expr(tc, bn->lhs.get());
         if (!a.ok) return r;
         ComptimeEvalResult b = comptime_eval_expr(tc, bn->rhs.get());
         if (!b.ok) return r;
+        /* #2: si algun operando es un placeholder diferido (valor de una
+         * comptime fn via ComptimeVM aun no cargada), el resultado tambien
+         * lo es -> static_assert no debe dispararse (se resuelve en pass 2). */
+        r.deferred = a.deferred || b.deferred;
         /* A.43.14: operadores sobre strings comptime.
          *   `s1 + s2`  -> concat
          *   `s1 == s2` -> streq

@@ -209,6 +209,13 @@ struct ComptimeEvalResult {
     bool is_array = false;
     bool is_struct = false;
     bool is_type = false;
+    /// F1/#2: el valor es un PLACEHOLDER porque provino de una `comptime fn`
+    /// que necesita el ComptimeVM (p.ej. inline asm) y el bytecode aun no
+    /// estaba cargado (pass 1 del two-phase).  `ok=true` para que consts y
+    /// expresiones no den error, pero `static_assert` NO debe dispararse sobre
+    /// un valor diferido (se resuelve en pass 2).  Se propaga por ident-reads
+    /// y binops.
+    bool deferred = false;
     int64_t value = 0;
     std::string str;
     std::vector<std::shared_ptr<ComptimeValue>> array_vals;
@@ -332,6 +339,17 @@ bool comptime_is_struct(const TypeChecker &tc, const Type &t);
  * asi que para esos este predicado devuelve @c false (son su backing).
  */
 bool comptime_is_enum(const TypeChecker &tc, const Type &t);
+
+/**
+ * @brief @c true si el body de @p fd usa inline asm directo (`asm {}` en
+ * cualquier container, o la fn es @Naked = cuerpo asm entero).
+ *
+ * Una `comptime fn` con asm no es tree-walkeable (el evaluador AST no ejecuta
+ * codigo nativo) -> se ejecuta en el ComptimeVM (JIT + interp fallback).  NO
+ * cubre el asm transitivo (llamar a un helper @Naked): `vrt:naked_dispatch` no
+ * resuelve ese simbolo en el contexto del ComptimeVM.
+ */
+bool comptime_fn_uses_asm(const ast::FunctionDecl *fd);
 
 /**
  * @brief @c true si @c t es un primitivo escalar (i*, u*, f*, bool, char,

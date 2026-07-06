@@ -1106,6 +1106,11 @@ class TypeChecker {
         bool is_struct = false;
         bool is_type = false; ///< contiene un Type
         bool is_mutable = false;
+        /// #2: valor placeholder diferido (init dependia de una comptime fn
+        /// via ComptimeVM aun no cargada, pass 1 del two-phase).  Se resuelve
+        /// en pass 2; los reads propagan `deferred` para que static_assert no
+        /// se dispare sobre el placeholder.
+        bool deferred = false;
         int64_t value = 0;
         std::string str_value;
         std::vector<std::shared_ptr<ComptimeValue>> array_vals;

@@ -1560,6 +1560,7 @@ bool TypeChecker::run() {
         c.is_struct = r.is_struct;
         c.is_type = r.is_type;
         c.is_mutable = !gv->is_const;
+        c.deferred = r.deferred; /* #2: propaga placeholder diferido */
         if (r.is_str)
             c.str_value = r.str;
         else if (r.is_array)
@@ -4112,6 +4113,7 @@ void TypeChecker::check_functions() {
                              * Las @Macro y comptime fn pueden modificar
                              * globals mutables via apply_comptime_assign. */
                             c.is_mutable = !gv->is_const;
+                            c.deferred = r.deferred; /* #2: propaga placeholder */
                             if (r.is_str)
                                 c.str_value = r.str;
                             else if (r.is_array)
@@ -11466,7 +11468,10 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
          * ComptimeRuntime). */
         const ComptimeEvalResult r =
             comptime_eval_expr(*this, e->args[0].get());
-        if (r.ok && r.value == 0) {
+        /* #2: NO disparar sobre un valor DIFERIDO (placeholder de una comptime
+         * fn via ComptimeVM aun no cargada, pass 1 del two-phase).  El pass 2
+         * (bytecode cargado) re-evalua la cond con el valor real. */
+        if (r.ok && !r.deferred && r.value == 0) {
             diags_.error(
                 e->loc,
                 std::string("static_assert FAILED: ") +
