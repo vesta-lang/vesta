@@ -1,71 +1,103 @@
 // -----------------------------------------------------------------------------
-// Un ensamblador/desensamblador x86-64 a base de OVERLAYS
+// Ensamblador/desensamblador x86-64 con overlays: varias formas de codificacion
 // -----------------------------------------------------------------------------
-// Una instruccion maquina ES un struct de campos: prefijo REX, opcode, y el byte
-// ModR/M (mod[7:6], reg[5:3], rm[2:0]) son CAMPOS -- bitfields de un overlay sobre
-// el buffer de codigo.  Con `@overlay` ESCRIBES los campos para ENSAMBLAR y los
-// LEES para DESENSAMBLAR (la misma vista, simetrica).  Nombres de registro/opcode
-// como constantes y `match` (opcode -> mnemonico) hacen el codigo legible.
-// interp = JIT = AOT.
+// Una instruccion maquina ES un struct de campos (REX, opcode, ModR/M con
+// mod/reg/rm como BITFIELDS, inmediatos...).  La MISMA vista ENSAMBLA (metodo
+// encode) y DESENSAMBLA -- y expone `to_string()` para la representacion humana,
+// asi que `println(ins)` la imprime sola (impresion personalizada, patron Display).
+// Se separan responsabilidades: overlay=interpreta memoria, campos=layout,
+// to_string()=texto, encode()=construccion.  Tres formas de codificacion:
+//   * RegReg     : REX.W + opcode + ModR/M          (op reg, reg)   3 bytes
+//   * MovImm64   : REX.W + (0xB8+reg) + imm64        (mov reg, imm)  10 bytes
+//   * PushPop    : (0x50|0x58)+reg                   (push/pop reg)  1 byte
+// interp = JIT.  (AOT: el retorno de `string` desde un METODO de overlay es un
+// bug conocido de native_poo -- los metodos de overlay que devuelven enteros SI
+// funcionan en AOT; solo el retorno de string falla.  Se ejecuta con -m jit.)
 
-// Registros x86-64 (encoding de 3 bits) y opcodes r/m64,r64 con nombres legibles.
 const u8 RAX = 0; const u8 RCX = 1; const u8 RDX = 2; const u8 RBX = 3;
 const u8 RSP = 4; const u8 RBP = 5; const u8 RSI = 6; const u8 RDI = 7;
-const u8 OP_ADD = 0x01;
-const u8 OP_SUB = 0x29;
-const u8 OP_XOR = 0x31;
+const u8 OP_ADD = 0x01; const u8 OP_OR  = 0x09; const u8 OP_AND = 0x21;
+const u8 OP_SUB = 0x29; const u8 OP_XOR = 0x31; const u8 OP_CMP = 0x39;
 const u8 OP_MOV = 0x89;
 
-// Instruccion registro-registro de 3 bytes: REX.W + opcode + ModR/M.
-// El ModR/M son tres bitfields empaquetados en el byte @0x02 (orden x86: rm en
-// los bits bajos, luego reg, luego mod en los altos).
-@overlay struct RegReg {
-    u8 rex    @0x00;         // 0x48 = REX.W (operandos de 64 bits)
-    u8 opcode @0x01;
-    u8 rm  : 3 @0x02;        // ModR/M.rm  (bits 2:0)  -> registro DESTINO
-    u8 reg : 3 @0x02;        // ModR/M.reg (bits 5:3)  -> registro FUENTE
-    u8 mod : 2 @0x02;        // ModR/M.mod (bits 7:6)  -> 3 = registro directo
-
-    // ENSAMBLAR: rellena los campos de una instr `op dst, src` (reg,reg).
-    public void encode(u8 op, u8 dst, u8 src) {
-        this.rex = 0x48;
-        this.opcode = op;
-        this.mod = 3;         // modo registro directo
-        this.reg = src;
-        this.rm  = dst;
-    }
-}
-
-// Nombre de un registro (para el desensamblado legible).
+// Nombre de registro (representacion legible).
 string rn(u8 r) {
     match (r) {
-        case 0 => return "rax";
-        case 1 => return "rcx";
-        case 2 => return "rdx";
-        case 3 => return "rbx";
-        case 4 => return "rsp";
-        case 5 => return "rbp";
-        case 6 => return "rsi";
-        case 7 => return "rdi";
+        case 0 => return "rax";  case 1 => return "rcx";
+        case 2 => return "rdx";  case 3 => return "rbx";
+        case 4 => return "rsp";  case 5 => return "rbp";
+        case 6 => return "rsi";  case 7 => return "rdi";
         case _ => return "r?";
     }
     return "r?";
 }
 
+// op dst, src -- registro-registro (REX.W + opcode + ModR/M mod=3).
+@overlay struct RegReg {
+    u8 rex    @0x00;
+    u8 opcode @0x01;
+    u8 rm  : 3 @0x02;   // destino
+    u8 reg : 3 @0x02;   // fuente
+    u8 mod : 2 @0x02;
+
+    public void encode(u8 op, u8 dst, u8 src) {
+        this.rex = 0x48; this.opcode = op; this.mod = 3;
+        this.reg = src; this.rm = dst;
+    }
+    public string to_string() {
+        string m;
+        match (this.opcode) {
+            case 0x01 => m = "add"; case 0x09 => m = "or";  case 0x21 => m = "and";
+            case 0x29 => m = "sub"; case 0x31 => m = "xor"; case 0x39 => m = "cmp";
+            case 0x89 => m = "mov"; case _    => m = "db";
+        }
+        return "${m} ${rn(this.rm)}, ${rn(this.reg)}";
+    }
+}
+
+// mov reg, imm64 -- REX.W + (0xB8+reg) + imm64.
+@overlay struct MovImm64 {
+    u8  rex    @0x00;
+    u8  opcode @0x01;   // 0xB8 + reg
+    u64 imm    @0x02;
+
+    public void encode(u8 reg, u64 value) {
+        this.rex = 0x48; this.opcode = 0xB8 + reg; this.imm = value;
+    }
+    public string to_string() {
+        return "mov ${rn(this.opcode - 0xB8)}, ${this.imm:hex}";
+    }
+}
+
+// push reg / pop reg -- 1 byte (0x50+reg / 0x58+reg).
+@overlay struct PushPop {
+    u8 opcode @0x00;
+    public void enc_push(u8 reg) { this.opcode = 0x50 + reg; }
+    public void enc_pop(u8 reg)  { this.opcode = 0x58 + reg; }
+    public string to_string() {
+        if (this.opcode >= 0x58) { return "pop ${rn(this.opcode - 0x58)}"; }
+        return "push ${rn(this.opcode - 0x50)}";
+    }
+}
+
 i32 main() {
     u8* code = (u8*) malloc(64);
+    u64 pos = 0;
 
-    // --- ENSAMBLAR: tres instrucciones, cada una una vista RegReg sobre el buffer.
-    //     add rax, rcx  |  sub rbx, rdx  |  xor rsi, rdi
-    RegReg i0 = RegReg(code + 0);  i0.encode(OP_ADD, RAX, RCX);
-    RegReg i1 = RegReg(code + 3);  i1.encode(OP_SUB, RBX, RDX);
-    RegReg i2 = RegReg(code + 6);  i2.encode(OP_XOR, RSI, RDI);
+    // --- ENSAMBLAR una mezcla de formas ---
+    PushPop  p0 = PushPop(code + pos);  p0.enc_push(RBP);              pos = pos + 1;
+    RegReg   i0 = RegReg(code + pos);   i0.encode(OP_MOV, RBP, RSP);   pos = pos + 3;
+    MovImm64 m0 = MovImm64(code + pos); m0.encode(RAX, 0x1122334455667788); pos = pos + 10;
+    RegReg   i1 = RegReg(code + pos);   i1.encode(OP_ADD, RAX, RCX);   pos = pos + 3;
+    RegReg   i2 = RegReg(code + pos);   i2.encode(OP_XOR, RSI, RDI);   pos = pos + 3;
+    RegReg   i3 = RegReg(code + pos);   i3.encode(OP_CMP, RBX, RDX);   pos = pos + 3;
+    PushPop  p1 = PushPop(code + pos);  p1.enc_pop(RBP);               pos = pos + 1;
 
-    // --- bytes maquina resultantes (hex): 48 01 c8  48 29 d3  48 31 fe ---
+    // --- bytes maquina (hex) ---
     print("code:");
-    i32 b = 0;
+    u64 b = 0;
     i64 sum = 0;
-    while (b < 9) {
+    while (b < pos) {
         u8 by = *(u8*)(code + b);
         print(" ${by:hex}");
         sum = sum + (i64) by;
@@ -73,25 +105,16 @@ i32 main() {
     }
     println("");
 
-    // --- DESENSAMBLAR: leer los campos de cada vista + match(opcode) -> mnemonico.
-    i32 k = 0;
-    while (k < 3) {
-        RegReg ins = RegReg(code + k * 3);
-        print("  ");
-        match (ins.opcode) {
-            case 0x01 => print("add");
-            case 0x29 => print("sub");
-            case 0x31 => print("xor");
-            case 0x89 => print("mov");
-            case _    => print("???");
-        }
-        // en ModR/M: rm = destino, reg = fuente.
-        println(" ${rn(ins.rm)}, ${rn(ins.reg)}");
-        k = k + 1;
-    }
+    // --- DESENSAMBLAR: println(ins) usa to_string() automaticamente ---
+    println(p0);   // push rbp
+    println(i0);   // mov rbp, rsp
+    println(m0);   // mov rax, 0x1122334455667788
+    println(i1);   // add rax, rcx
+    println(i2);   // xor rsi, rdi
+    println(i3);   // cmp rbx, rdx
+    println(p1);   // pop rbp
 
-    // suma de los 9 bytes (verificable): (48+01+c8)+(48+29+d3)+(48+31+fe) = 972
     println("sum=${sum}");
     free(code);
-    return (i32) sum;   // 972
+    return (i32) sum;
 }
