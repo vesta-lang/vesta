@@ -534,6 +534,13 @@ static bool stmt_contains_asm_ci(const ast::Stmt *s) {
 bool comptime_fn_uses_asm(const ast::FunctionDecl *fd) {
     if (!fd) return false;
     if (fd->is_naked) return true;
+    /* Solo asm DIRECTO.  El transitivo (una comptime fn que LLAMA a un helper
+     * @Naked) NO se cubre a proposito: dentro del ComptimeVM el CALLN a
+     * `vrt:naked_dispatch` (que SI resuelve en el registry) no ejecuta el
+     * dispatcher -- el import queda sin efecto en el bytecode invocado -> daria
+     * 0 silencioso.  Ese caso cae al error claro del call site.  Workaround:
+     * escribir el asm DIRECTO en la comptime fn (funciona interp=JIT=AOT).
+     * Pendiente: root-cause del patch/FFI de naked_dispatch en el ComptimeVM. */
     return stmt_contains_asm_ci(fd->body.get());
 }
 

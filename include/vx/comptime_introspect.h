@@ -341,13 +341,14 @@ bool comptime_is_struct(const TypeChecker &tc, const Type &t);
 bool comptime_is_enum(const TypeChecker &tc, const Type &t);
 
 /**
- * @brief @c true si el body de @p fd usa inline asm directo (`asm {}` en
+ * @brief @c true si el body de @p fd usa inline asm DIRECTO (`asm {}` en
  * cualquier container, o la fn es @Naked = cuerpo asm entero).
  *
  * Una `comptime fn` con asm no es tree-walkeable (el evaluador AST no ejecuta
  * codigo nativo) -> se ejecuta en el ComptimeVM (JIT + interp fallback).  NO
- * cubre el asm transitivo (llamar a un helper @Naked): `vrt:naked_dispatch` no
- * resuelve ese simbolo en el contexto del ComptimeVM.
+ * cubre el asm TRANSITIVO (llamar a un helper @Naked): dentro del ComptimeVM
+ * el CALLN a `vrt:naked_dispatch` no ejecuta el dispatcher; ese caso cae al
+ * error claro del call site.  Workaround: asm directo en la comptime fn.
  */
 bool comptime_fn_uses_asm(const ast::FunctionDecl *fd);
 
