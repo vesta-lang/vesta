@@ -93,6 +93,17 @@ struct EmitCtx {
     int64_t r14_cache = -1;
     int64_t r13_cache = -1;
 
+    // Optimizacion FP: valor SSA que YA esta en el registro ZMM f0 (resultado
+    // de la ultima op float).  Entre ops float consecutivas (fsqrt->fsub->fabs
+    // ...) el emisor guarda f0 a un GP (bitz2g) y lo vuelve a cargar (bitg2z)
+    // en la siguiente op -- pero f0 no cambia entre medias, asi que el reload
+    // es redundante.  Cuando el src1 de una op float == last_f0, se omite el
+    // reload.  IR_NO_VALUE = f0 desconocido (se invalida en cada label y en
+    // cualquier instruccion que NO sea una op float binaria/unaria, que podria
+    // clobrear f0).  Elimina los round-trips GP<->ZMM redundantes en loops
+    // float-heavy (el mayor coste del backend FP del interprete).
+    IrValueId last_f0 = IR_NO_VALUE;
+
     // nombre base para etiquetas de esta funcion
     std::string fn_lbl;
 
@@ -1223,15 +1234,19 @@ static void emit_zmm_to_gp_bits(EmitCtx &ctx, const std::string &zmm_reg,
 static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
                              IrType type, IrValueId dst, IrValueId src1,
                              IrValueId src2) {
-    std::string rs1 = ctx.load_src(src1, 0);
+    // Si src1 ya esta en f0 (resultado de la op float anterior), NO recargar:
+    // ahorra el par bitz2g/bitg2z redundante entre ops float encadenadas.
+    const bool f0_has_src1 = (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src1);
+    std::string rs1 = f0_has_src1 ? std::string() : ctx.load_src(src1, 0);
     std::string rs2 = ctx.load_src(src2, 1);
     std::string rd = ctx.dst_of(dst);
     const std::string suffix = (type == IrType::F32) ? ".ps" : "";
-    emit_gp_to_zmm_bits(ctx, rs1, "f0");
+    if (!f0_has_src1) emit_gp_to_zmm_bits(ctx, rs1, "f0");
     emit_gp_to_zmm_bits(ctx, rs2, "f1");
     ctx.out << "    " << mnemonic << suffix << " f0, f1\n";
     emit_zmm_to_gp_bits(ctx, "f0", rd);
     ctx.store_spilled(dst);
+    ctx.last_f0 = dst;  // f0 ahora contiene el valor de dst
 }
 
 // Emite una operacion float unaria con bitcast automatico.
@@ -1241,13 +1256,43 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
 // anade cuando @c type es F32.
 static void emit_float_unop(EmitCtx &ctx, const std::string &mnemonic,
                             IrType type, IrValueId dst, IrValueId src) {
-    std::string rs = ctx.load_src(src, 0);
+    const bool f0_has_src = (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src);
+    std::string rs = f0_has_src ? std::string() : ctx.load_src(src, 0);
     std::string rd = ctx.dst_of(dst);
     const std::string suffix = (type == IrType::F32) ? ".ps" : "";
-    emit_gp_to_zmm_bits(ctx, rs, "f0");
+    if (!f0_has_src) emit_gp_to_zmm_bits(ctx, rs, "f0");
     ctx.out << "    " << mnemonic << suffix << " f0, f0\n";
     emit_zmm_to_gp_bits(ctx, "f0", rd);
     ctx.store_spilled(dst);
+    ctx.last_f0 = dst;  // f0 ahora contiene el valor de dst
+}
+
+// True si la op deja f0 conteniendo el valor de su dst (las binarias/unarias
+// float que pasan por emit_float_binop/emit_float_unop).  Cualquier otra op
+// debe invalidar ctx.last_f0 porque puede clobbear f0 (FCMP, FCVT, conversiones,
+// CALL, prints, aritmetica entera que reusa el scratch, etc.).
+static inline bool is_tracked_float_op(IrOp op) {
+    switch (op) {
+        case IrOp::FADD:
+        case IrOp::FSUB:
+        case IrOp::FMUL:
+        case IrOp::FDIV:
+        case IrOp::FMIN:
+        case IrOp::FMAX:
+        case IrOp::FNEG:
+        case IrOp::FABS:
+        case IrOp::FSQRT:
+        case IrOp::FFLOOR:
+        case IrOp::FCEIL:
+        case IrOp::FROUND:
+        case IrOp::FTRUNC:
+        // ITOF/UITOF dejan el valor convertido en f0 (fcvt gp,f0 -> bitz2g).
+        case IrOp::ITOF:
+        case IrOp::UITOF:
+            return true;
+        default:
+            return false;
+    }
 }
 
 // Mnemonic de dos-direcciones para operaciones aritmeticas/logicas segun tipo.
@@ -2108,6 +2153,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    fcvt" << suffix << " " << rs << ", f0\n";
             emit_zmm_to_gp_bits(ctx, "f0", rd);
             ctx.store_spilled(ins.dst);
+            ctx.last_f0 = ins.dst;  // f0 conserva el valor float convertido
         }
         break;
     case IrOp::FTOI:
@@ -5168,6 +5214,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         // el control flow puede llegar aqui desde cualquier predecesor,
         // asi que no podemos asumir nada sobre el contenido de r14/r13.
         invalidate_scratch_caches(ctx);
+        // Mismo motivo para f0: no sabemos que valor float tiene tras un salto.
+        ctx.last_f0 = IR_NO_VALUE;
 
         // skip_count > 0 indica que las proximas N instrucciones ya
         // fueron consumidas por un peephole (cmpjmp fusion = 1, decjnz
@@ -5179,6 +5227,10 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                 continue;
             }
             emit_instr(ctx, bb, i, skip_count);
+            // Si esta instruccion no es una op float que deje su dst en f0,
+            // el contenido de f0 ya no es fiable para la siguiente op float.
+            if (!is_tracked_float_op(bb.instrs[i].op))
+                ctx.last_f0 = IR_NO_VALUE;
         }
 
         // Si el bloque no termina en terminador (bloque vacio o sin ret/br),
