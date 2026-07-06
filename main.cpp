@@ -2208,38 +2208,19 @@ int main(int argc, char *argv[]) {
          *
          * Si NO hay @Macros en el fuente, fallback a hash full-source
          * (el cache no se usa en ese caso de todos modos). */
+        /* #4: escanea los rangos de TODO el codigo comptime relevante para el
+         * cache -- no solo @Macro, tambien `comptime` (fn/const/block) y los
+         * helpers asm (@Naked/@Asm) que una comptime fn puede invocar.  Sin
+         * esto, cambiar el body de una comptime fn (p.ej. su inline asm) no
+         * invalidaba el cache scoped -> valor STALE.  Para cada trigger captura
+         * desde el inicio de linea (+ anotaciones precedentes) hasta el fin de
+         * la declaracion: body balanceado `{}` o, para consts, hasta `;`. */
         const auto find_macro_ranges = [](const std::string &src)
             -> std::vector<std::pair<size_t, size_t>> {
             std::vector<std::pair<size_t, size_t>> ranges;
-            size_t pos = 0;
-            while ((pos = src.find("@Macro", pos)) != std::string::npos) {
-                /* Skip si @Macro aparece dentro de un literal o comentario.
-                 * Heuristica simple: si los 2 chars previos son "//" o "/ *",
-                 * salta.  Mejorable; v1 acepta falsos positivos. */
-                /* Scan back al inicio de linea + lineas de anotacion. */
-                size_t line_start = pos;
-                while (line_start > 0 && src[line_start - 1] != '\n')
-                    --line_start;
-                /* Incluir anotaciones precedentes (@Pure, @Inline, etc.) */
-                while (line_start > 0) {
-                    size_t prev_end = line_start - 1;
-                    if (prev_end == 0 || src[prev_end] != '\n') break;
-                    size_t prev_start = prev_end;
-                    while (prev_start > 0 && src[prev_start - 1] != '\n')
-                        --prev_start;
-                    size_t k = prev_start;
-                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t'))
-                        ++k;
-                    if (k < prev_end && src[k] == '@') {
-                        line_start = prev_start;
-                    } else {
-                        break;
-                    }
-                }
-                /* Avanzar hasta llave de apertura del body. */
-                size_t bs = src.find('{', pos + 6);
-                if (bs == std::string::npos) break;
-                /* Scan balanced close, skipping strings/line-comments. */
+            /* Fin del body balanceado desde la `{` en @p bs (salta strings y
+             * comentarios de linea).  Devuelve el indice tras la `}`. */
+            auto scan_body = [&src](size_t bs) -> size_t {
                 int depth = 1;
                 size_t i = bs + 1;
                 while (i < src.size() && depth > 0) {
@@ -2264,8 +2245,78 @@ int main(int argc, char *argv[]) {
                         --depth;
                     ++i;
                 }
-                ranges.emplace_back(line_start, i);
-                pos = i;
+                return i;
+            };
+            /* Inicio de la declaracion desde @p pos: retrocede al inicio de
+             * linea + anotaciones @X precedentes. */
+            auto decl_start = [&src](size_t pos) -> size_t {
+                size_t line_start = pos;
+                while (line_start > 0 && src[line_start - 1] != '\n')
+                    --line_start;
+                while (line_start > 0) {
+                    size_t prev_end = line_start - 1;
+                    if (prev_end == 0 || src[prev_end] != '\n') break;
+                    size_t prev_start = prev_end;
+                    while (prev_start > 0 && src[prev_start - 1] != '\n')
+                        --prev_start;
+                    size_t k = prev_start;
+                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t'))
+                        ++k;
+                    if (k < prev_end && src[k] == '@')
+                        line_start = prev_start;
+                    else
+                        break;
+                }
+                return line_start;
+            };
+            auto is_word = [](char c) {
+                return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                       (c >= '0' && c <= '9') || c == '_';
+            };
+            /* Triggers: @-anotaciones (siempre body) + `comptime` (body o `;`).
+             * `require_word_bound` = true para `comptime` (excluir
+             * `comptime_concat` etc. y evitar match en medio de un identifier). */
+            struct Trig {
+                const char *kw;
+                bool require_word_bound;
+            };
+            const Trig triggers[] = {{"@Macro", false},
+                                     {"@Naked", false},
+                                     {"@Asm", false},
+                                     {"comptime", true}};
+            for (const auto &t : triggers) {
+                const std::string kw = t.kw;
+                size_t pos = 0;
+                while ((pos = src.find(kw, pos)) != std::string::npos) {
+                    const size_t after = pos + kw.size();
+                    /* Word-boundary para keywords alfanumericos. */
+                    if (t.require_word_bound) {
+                        const bool lead_ok =
+                            (pos == 0) || !is_word(src[pos - 1]);
+                        const bool trail_ok =
+                            (after >= src.size()) || !is_word(src[after]);
+                        if (!lead_ok || !trail_ok) {
+                            pos = after;
+                            continue;
+                        }
+                    }
+                    const size_t ls = decl_start(pos);
+                    /* Fin de la declaracion: primer `{` vs primer `;` tras la
+                     * keyword.  `{` antes -> body; si no -> const/var hasta `;`. */
+                    size_t bs = src.find('{', after);
+                    size_t sc = src.find(';', after);
+                    size_t end;
+                    if (bs != std::string::npos &&
+                        (sc == std::string::npos || bs < sc)) {
+                        end = scan_body(bs);
+                    } else if (sc != std::string::npos) {
+                        end = sc + 1; /* incluir el `;` */
+                    } else {
+                        end = src.size();
+                    }
+                    ranges.emplace_back(ls, end);
+                    pos = (end > after) ? end : after;
+                }
             }
             return ranges;
         };
