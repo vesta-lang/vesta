@@ -4,7 +4,7 @@
 // Muchos formatos NO tienen un orden de bytes fijo: el propio fichero declara si
 // es little o big endian (ELF en `e_ident[EI_DATA]`, TIFF en su firma, ...).  Con
 // `@endian(expr)` el orden lo decide una EXPRESION en tiempo de acceso -- puede
-// leer un campo hermano (`self.ei_data == 2`) o un comptime const.  Si la expr es
+// leer un campo hermano (`this.ei_data == 2`) o un comptime const.  Si la expr es
 // runtime el swap es un select SIN ramas; si es comptime, se pliega (cero coste).
 // Una sola forma cubre fijo Y dinamico.  interp = JIT = AOT.
 

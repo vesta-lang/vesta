@@ -2,12 +2,12 @@
 // Resolver que navega un array HERMANO: traduccion de RVA sin helpers ni punteros
 // -----------------------------------------------------------------------------
 // Un resolver de campo (`@offset { }`) puede recorrer un ARRAY hermano de la
-// vista via `self.<array>[i].<campo>` -- toda la logica del formato (aqui:
+// vista via `this.<array>[i].<campo>` -- toda la logica del formato (aqui:
 // traducir un RVA a offset de fichero buscando la seccion que lo contiene) vive
 // DENTRO del overlay, declarativamente.  Nada de helpers, nada de `*(T*)(buf+..)`.
 //
-// `Img.at_rva` resuelve su propia direccion traduciendo `self.target_rva` por la
-// tabla `self.secs`, exactamente como haria un cargador PE con un RVA.  El campo
+// `Img.at_rva` resuelve su propia direccion traduciendo `this.target_rva` por la
+// tabla `this.secs`, exactamente como haria un cargador PE con un RVA.  El campo
 // se lee/escribe como cualquier otro (el overlay dice DONDE; el compilador el COMO).
 // interp = JIT = AOT.
 
@@ -26,11 +26,11 @@
         u32 rva = target_rva;
         i32 i = 0;
         while ((u32)i < count) {
-            u32 va  = self.secs[i].va;
-            u32 vsz = self.secs[i].vsz;
+            u32 va  = this.secs[i].va;
+            u32 vsz = this.secs[i].vsz;
             if (rva >= va && rva < va + vsz) {
                 // direccion de fichero = base + rptr_de_la_seccion + (rva - va)
-                return base + (u64)self.secs[i].rptr + (u64)(rva - va);
+                return base + (u64)this.secs[i].rptr + (u64)(rva - va);
             }
             i = i + 1;
         }

@@ -5,7 +5,7 @@
 // DIRECCION del campo (`return base + hdr_len` es una direccion absoluta, no un
 // desplazamiento).  Y admite LOGICA COMPLETA: sentencias `if`/`else`, variables
 // intermedias y VARIOS `return`.  Internamente el bloque se compila como una
-// funcion `__ovl_resolve_<Struct>_<campo>(self)` -- reutiliza todo el control de
+// funcion `__ovl_resolve_<Struct>_<campo>(this)` -- reutiliza todo el control de
 // flujo del lenguaje, sin coste extra en el sitio de acceso (el optimizador la
 // puede inlinar).
 //

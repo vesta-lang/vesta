@@ -10,7 +10,7 @@
 //   * los 16 DATA DIRECTORIES (array de overlay),
 //   * IMAGE_SECTION_HEADER[NumberOfSections] (array de overlay, con nombre),
 //   * el offset de fichero del directorio de imports, TRADUCIDO por un resolver
-//     que recorre `self.Sections` (RVA -> file offset, declarativo).
+//     que recorre `this.Sections` (RVA -> file offset, declarativo).
 //
 // SEGURIDAD: cada acceso se COMPRUEBA en el lenguaje con `in_bounds(campo, size)`
 // contra el tamano real del fichero -- sin maquinaria impuesta; la politica
@@ -46,7 +46,7 @@ import "vx_fileio";
     u64 raw @0x00;
     // Nombre de la funcion = cstring en translate((raw & 0x7FFFFFFF) + 2).
     u8 fname @offset {
-        u32 rva = (u32)(self.raw & 0x7FFFFFFF) + 2;   // +2 salta el hint u16
+        u32 rva = (u32)(this.raw & 0x7FFFFFFF) + 2;   // +2 salta el hint u16
         return parent<PeImage>().translate(rva);
     };
 }
@@ -61,13 +61,13 @@ import "vx_fileio";
     // ILT: tabla de thunks anclada en translate(oft_rva, o ft_rva si oft==0), sin
     // count (fin en entrada nula).  El base lo traduce parent<PeImage>().Sections.
     Thunk thunks[] @offset {
-        u32 rva = self.oft_rva;
-        if (rva == 0) { rva = self.ft_rva; }
+        u32 rva = this.oft_rva;
+        if (rva == 0) { rva = this.ft_rva; }
         return parent<PeImage>().translate(rva);
     } stride(8);
     // Nombre de la DLL = cstring en translate(name_rva) por las secciones del PADRE.
     u8 dll_name @offset {
-        return parent<PeImage>().translate(self.name_rva);
+        return parent<PeImage>().translate(this.name_rva);
     };
 }
 
@@ -106,8 +106,8 @@ import "vx_fileio";
     Section Sections[num_sections] @offset(e_lfanew + 24 + opt_size) stride(40);
 
     // LA abstraccion: traducir un RVA a direccion de fichero recorriendo la tabla
-    // de secciones.  Un METODO del overlay (navega self.Sections); lo usan todos
-    // los resolvers via `self.translate(...)` / `parent<PeImage>().translate(...)`
+    // de secciones.  Un METODO del overlay (navega this.Sections); lo usan todos
+    // los resolvers via `this.translate(...)` / `parent<PeImage>().translate(...)`
     // -- una sola copia del algoritmo, no cinco.
     public u64 translate(u32 rva) {
         u64 rb = (u64) this;
@@ -126,11 +126,11 @@ import "vx_fileio";
     }
 
     // Offset de fichero del directorio de imports (`offsetof(pe.import_dir)`).
-    u8 import_dir @offset { return self.translate(self.Dirs[1].rva); };
+    u8 import_dir @offset { return this.translate(this.Dirs[1].rva); };
     // Tabla de descriptores de import, anclada en translate(Dirs[1].rva), sin
     // count (el usuario termina al leer el descriptor nulo).
     ImportDesc Imports[] @offset {
-        return self.translate(self.Dirs[1].rva);
+        return this.translate(this.Dirs[1].rva);
     } stride(20);
 }
 

@@ -5,7 +5,7 @@
 // funcion get_peb() -- corre en interp via auto-JIT, JIT y AOT) y lo vuelca con
 // overlays.  TODA la logica vive DENTRO del overlay:
 //   * un metodo `dump()` que se imprime a si mismo,
-//   * el CONTEXTO (version de Windows) se lee del propio PEB (self.OSBuildNumber)
+//   * el CONTEXTO (version de Windows) se lee del propio PEB (this.OSBuildNumber)
 //     -> tanto los campos cuyo OFFSET cambio (SessionId, resolver) como los que
 //     solo EXISTEN a partir de cierta version (Telemetry/CloudFile/LeapSecond/
 //     NtGlobalFlag2) se discriminan desde el overlay: en un Windows viejo NO se
@@ -103,9 +103,9 @@ u64 get_peb() {
     u64 PostProcessInitRoutine         @0x230;
     u64 TlsExpansionBitmap             @0x238;
     // SessionId: su OFFSET cambia entre versiones -> resolver que lee el propio
-    // build del PEB (self.OSBuildNumber) para elegir el offset.  Contexto interno.
+    // build del PEB (this.OSBuildNumber) para elegir el offset.  Contexto interno.
     u32 SessionId @offset {
-        if (self.OSBuildNumber >= 10240) { return base + 0x2C0; }   // Win10/11
+        if (this.OSBuildNumber >= 10240) { return base + 0x2C0; }   // Win10/11
         return base + 0x2A0;                                         // 8.1 y antes
     };
     u64 AppCompatFlags                 @0x2C8;

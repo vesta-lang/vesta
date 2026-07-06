@@ -14255,7 +14255,6 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     // via la maquinaria overlay -- sin aritmetica de punteros ni helpers.
     bind("base", self_pv);
     bind("this", self_pv);
-    bind("self", self_pv);
     // F4: `parent<T>()` en el body baja a este valor (el puntero raiz).
     if (root_pv != ir::IR_NO_VALUE) bind("__ovl_root", root_pv);
     // @element: `index` en scope.
@@ -14363,7 +14362,6 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
 
     bind("base", self_pv);
     bind("this", self_pv);
-    bind("self", self_pv);
     // Ligar hermanos escalares de offset constante (para offset_expr/count/stride).
     for (const auto &sib : lay.fields) {
         if (sib.offset_expr || sib.offset_block || sib.array_count ||
@@ -14632,7 +14630,6 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
     push_scope();
     bind("base", ov_base);
     bind("this", ov_base);
-    bind("self", ov_base);
     for (const auto &sib : lay.fields) {
         if (sib.offset_expr || sib.offset_block || sib.array_count ||
             sib.array_stride || sib.element_block)

@@ -3799,7 +3799,6 @@ void TypeChecker::check_overlay_resolvers_deferred() {
         tsym.type.kind = PrimitiveKind::STRUCT;
         tsym.type.struct_name = s->name;
         (void)declare("this", tsym);
-        (void)declare("self", tsym);
         // @element: `index` (i64) del elemento a resolver, en scope.
         if (is_element) {
             Symbol isym;
@@ -6509,6 +6508,14 @@ Type TypeChecker::check_expr(ast::Expr *e) {
 }
 
 Type TypeChecker::check_this(ast::ThisExpr *e) {
+    // Resolver de overlay (@offset/@element): `this` es la vista (STRUCT).
+    // Se declara como variable `this`/`self` en scope; permitimos ademas la
+    // forma con palabra clave `this.campo` como alias del acceso al hermano
+    // por nombre.  Mismo tipo, misma bajada (lower_this ve el binding).
+    if (overlay_resolver_active_) {
+        if (const Symbol *s = lookup("this"))
+            return s->type;
+    }
     // Metodo de struct: @c this es un value-type (STRUCT).
     if (!current_struct_.empty()) {
         return Type{PrimitiveKind::STRUCT, current_struct_};

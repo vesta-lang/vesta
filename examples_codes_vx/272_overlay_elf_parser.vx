@@ -44,7 +44,7 @@ import "vx_fileio";
     u8 name @offset {
         return (u64) parent<Elf64_Ehdr>()
              + parent<Elf64_Ehdr>().strtab()
-             + (u64) self.sh_name;
+             + (u64) this.sh_name;
     };
 }
 
@@ -76,7 +76,7 @@ import "vx_fileio";
     }
     // Campo-resolver: su DIRECCION es la base de la .shstrtab.
     // `offsetof(eh.strtab_base)` da ese offset.
-    u8 strtab_base @offset { return base + self.strtab(); };
+    u8 strtab_base @offset { return base + this.strtab(); };
 }
 
 i64 g_faults = 0;

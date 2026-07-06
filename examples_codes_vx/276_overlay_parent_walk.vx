@@ -19,7 +19,7 @@
     // nombre en translate(name_rva) por las secciones del ROOT.
     u8 name @offset {
         u64 rb = (u64) parent<Root>();
-        u32 rva = self.name_rva;
+        u32 rva = this.name_rva;
         i32 i = 0;
         while ((u32)i < (u32)parent<Root>().count) {
             u32 va = parent<Root>().secs[i].va;
@@ -40,13 +40,13 @@
     // tabla de descriptores anclada en translate(desc_rva), sin count.
     Desc Descs[] @offset {
         u64 rb = (u64) base;
-        u32 rva = self.desc_rva;
+        u32 rva = this.desc_rva;
         i32 i = 0;
-        while ((u32)i < (u32)self.count) {
-            u32 va = self.secs[i].va;
-            u32 vs = self.secs[i].vsz;
+        while ((u32)i < (u32)this.count) {
+            u32 va = this.secs[i].va;
+            u32 vs = this.secs[i].vsz;
             if (rva >= va && rva < va + vs) {
-                return rb + (u64)self.secs[i].rptr + (u64)(rva - va);
+                return rb + (u64)this.secs[i].rptr + (u64)(rva - va);
             }
             i = i + 1;
         }
