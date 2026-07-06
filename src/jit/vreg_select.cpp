@@ -2195,7 +2195,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 const ir::IrBlockId t = in.target_block;
                 emit_phi_copies(t); // pred 1-succ: seguro
-                O.push_back(MInstr::make_jmp(blbl[t]));
+                // Fall-through: los bloques se emiten en orden 0..NB, asi que un
+                // BR al bloque SIGUIENTE (b+1) es un `jmp` a la instruccion que
+                // le sigue -> redundante.  Se omite (cae por fall-through).
+                if (t != b + 1) {
+                    O.push_back(MInstr::make_jmp(blbl[t]));
+                }
                 mb.succ_a = static_cast<MBlockId>(t);
                 break;
             }
@@ -2215,6 +2220,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 const ir::IrValueId cond = in.operands[0];
 
+                // La rama FALSE cae por fall-through si su target es el bloque
+                // siguiente (b+1) -> se omite el `jmp` redundante.
+                const bool false_fallthrough = (tf == b + 1);
                 if (has_pend && pend_dst == cond &&
                     vreg_count_uses(fn, pend_dst) == 1) {
                     /* FUSION: CMP a,b + Jcc(cc) true + JMP false.  Solo si el
@@ -2222,13 +2230,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * hay que materializarlo via SETcc para el otro uso). */
                     O.push_back(mk_cmp(pend_a, pend_b));
                     O.push_back(MInstr::make_jcc(pend_cc, blbl[tt]));
-                    O.push_back(MInstr::make_jmp(blbl[tf]));
+                    if (!false_fallthrough) {
+                        O.push_back(MInstr::make_jmp(blbl[tf]));
+                    }
                     has_pend = false;
                 } else {
                     flush_pending();
                     O.push_back(mk_test(cond, cond));
                     O.push_back(MInstr::make_jcc(MCond::NE, blbl[tt]));
-                    O.push_back(MInstr::make_jmp(blbl[tf]));
+                    if (!false_fallthrough) {
+                        O.push_back(MInstr::make_jmp(blbl[tf]));
+                    }
                 }
                 mb.succ_a = static_cast<MBlockId>(tt);
                 mb.succ_b = static_cast<MBlockId>(tf);
