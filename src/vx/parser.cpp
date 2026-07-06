@@ -3355,6 +3355,19 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
         parse_where_clause(e->type_bounds);
     }
 
+    // C-style: tipo base opcional `enum Op : u8 { ... }` -> enum con VALOR
+    // entero (las variantes son constantes del tipo base, no una tagged union).
+    if (current_.kind == TokenKind::COLON) {
+        (void)consume(); // ':'
+        auto bt = parse_type_node();
+        if (bt && bt->kind == ast::NodeKind::PrimitiveTypeNode) {
+            auto *pt = static_cast<ast::PrimitiveTypeNode *>(bt.get());
+            e->backing_type = primitive_name(pt->prim);
+        } else {
+            error_here("el tipo base de un enum debe ser un entero (u8/i32/...)");
+        }
+    }
+
     (void)expect(TokenKind::LBRACE,
                  "se esperaba '{' al abrir el cuerpo del enum");
 
@@ -3380,6 +3393,11 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar payload de variante");
+        } else if (current_.kind == TokenKind::ASSIGN) {
+            // C-style: valor entero explicito `A = 0x01`.  Solo para enums con
+            // tipo base; el checker lo pliega a constante y valida.
+            (void)consume(); // '='
+            v.value_expr = parse_expr();
         }
         e->variants.push_back(std::move(v));
         // Coma separadora (con coma trailing opcional gracias al check

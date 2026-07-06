@@ -337,6 +337,7 @@ struct StructLayout {
 struct EnumVariantInfo {
     std::string name;
     uint32_t tag = 0;
+    int64_t int_value = 0;  ///< Valor (enums con tipo base C-style).
     std::vector<Type> field_types;
 };
 
@@ -356,6 +357,8 @@ struct EnumVariantInfo {
 struct EnumLayout {
     std::string name;
     std::vector<EnumVariantInfo> variants;
+    bool is_valued = false;              ///< enum con VALOR (`: u8`).
+    PrimitiveKind backing = PrimitiveKind::I64;  ///< tipo base si is_valued.
     uint32_t size_bytes = 8;         ///< Minimum: solo el tag.
     uint32_t max_payload_fields = 0; ///< 0 si todas son sin payload.
     /// marca `@Introspect`.

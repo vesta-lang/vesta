@@ -278,6 +278,12 @@ struct Type {
     /// slot se marca @c is_gc_object para los stackmaps precisos del GC.  El
     /// resto (acceso a campos/metodos) es identico a una ref de clase normal.
     bool gc_managed = false;
+    /// @c true si este tipo es un enum con VALOR entero (C-style,
+    /// `enum Op : u8 { ... }`).  @c kind es el tipo base (U8/U16/...)
+    /// y @c struct_name el nombre del enum, para resolver variantes y
+    /// distinguirlo de un entero plano.  El lowering lo trata como su
+    /// entero base en todos los sitios.
+    bool is_valued_enum = false;
     /// Tipo apuntado cuando @c kind == PTR o tipo de elemento cuando
     /// @c kind == ARRAY; nulo para todo lo demas.  Se usa @c shared_ptr
     /// porque @c Type debe ser copiable (el AST Type vive como valor en

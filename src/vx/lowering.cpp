@@ -14518,7 +14518,6 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
                              "'");
         return ir::IR_NO_VALUE;
     }
-
     // Overlay F3: resolver de BLOQUE `@offset { ...; return <direccion>; }`.
     // Se sintetiza como funcion `__ovl_resolve_<S>_<f>(self)` (control de flujo
     // completo: if/else, multiples return; sin ALLOCA-en-bucle) y se llama con
@@ -14752,6 +14751,33 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // constructor de variante con args vacio en lugar del manejo
     // generico de field-access (struct/clase) que fallaria al no
     // encontrar un campo llamado "Red" en un struct.
+    // C-style: enum con VALOR (property_kind=98).  La variante ES una constante
+    // del tipo base -> emitir un CONST del ancho base.  Base puede ser el
+    // nombre del enum (`Op.MOV`) o un acceso cualificado (`ns.Op.MOV`, cuyo
+    // result_type.struct_name es el nombre del enum).
+    if (e->property_kind == 98 && e->base) {
+        std::string enum_name;
+        if (e->base->kind == ast::NodeKind::IdentExpr) {
+            enum_name = static_cast<ast::IdentExpr *>(e->base.get())->name;
+        } else if (e->base->kind == ast::NodeKind::FieldAccessExpr) {
+            enum_name = e->base->result_type.struct_name;
+        }
+        const auto &elays = tc_.enum_layouts();
+        auto it = elays.find(enum_name);
+        if (it != elays.end() && it->second.is_valued) {
+            for (const auto &v : it->second.variants) {
+                if (v.name == e->field_name) {
+                    const ir::IrType t =
+                        ir_type_from_primitive(it->second.backing);
+                    return emit_const(t, static_cast<uint64_t>(v.int_value),
+                                      e->loc.line);
+                }
+            }
+        }
+        error_at(e->loc, "lowering: variante de enum con valor '" +
+                             e->field_name + "' no resuelta");
+        return ir::IR_NO_VALUE;
+    }
     if (e->property_kind == 99 && e->base &&
         e->base->kind == ast::NodeKind::IdentExpr) {
         auto *base_id = static_cast<ast::IdentExpr *>(e->base.get());
@@ -26360,23 +26386,26 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         // native_poo_ string SRET (mismo tratamiento que structs/funciones):
         // construir el value-string real en el `return`.
         const bool saved_sret_str_value_c = current_fn_sret_str_value_;
-        if (method_sret) {
-            sret_active_ = true;
-            sret_retbuf_ = v_method_retbuf;
-            sret_buf_size_ =
-                (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
-            current_fn_sret_str_value_ =
-                (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
-        }
+        // SIEMPRE fijar segun ESTE metodo (ver nota en lower_struct_methods):
+        // un metodo no-string debe tener el flag en false aunque un metodo
+        // string previo lo dejara true, o su `return <cte>` se compilaria como
+        // copia value-string de 24 bytes -> deref invalido en AOT.
+        current_fn_sret_str_value_ =
+            (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
+        sret_active_ = method_sret;
+        sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
+        sret_buf_size_ =
+            method_sret
+                ? ((sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL)
+                : 0ULL;
 
         lower_block(m->body.get());
 
-        if (method_sret) {
-            sret_active_ = saved_sret_active;
-            sret_retbuf_ = saved_sret_retbuf;
-            sret_buf_size_ = saved_sret_buf_size;
-            current_fn_sret_str_value_ = saved_sret_str_value_c;
-        }
+        // Restaurar SIEMPRE (se fijaron incondicionalmente arriba).
+        sret_active_ = saved_sret_active;
+        sret_retbuf_ = saved_sret_retbuf;
+        sret_buf_size_ = saved_sret_buf_size;
+        current_fn_sret_str_value_ = saved_sret_str_value_c;
 
         current_class_lowering_ = saved_class;
         current_fn_returns_string_ = saved_returns_str;
@@ -26786,13 +26815,22 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const bool saved_sret_str_value = current_fn_sret_str_value_;
         const bool method_str_sret =
             (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
-        if (method_sret) {
-            sret_active_ = true;
-            sret_retbuf_ = v_method_retbuf;
-            sret_buf_size_ =
-                (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
-            current_fn_sret_str_value_ = method_str_sret;
-        }
+        // SIEMPRE fijar el contexto SRET segun ESTE metodo (no solo cuando hay
+        // SRET): un metodo que NO usa SRET (u64/void/...) debe tener
+        // sret_active_/sret_retbuf_/current_fn_sret_str_value_ en false/none
+        // aunque un metodo o funcion-libre STRING previo los dejara activos
+        // (lower_function pone sret_active_=true para `-> string` en native_poo
+        // y no lo restaura).  Sin este reset, el `return <cte>` de rex_len se
+        // compila como copia value-string de 24 bytes desde el valor como
+        // puntero -> deref invalido -> crash en AOT.  Reset incondicional =
+        // robusto y cero-coste (asignaciones triviales).
+        current_fn_sret_str_value_ = method_str_sret;
+        sret_active_ = method_sret;
+        sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
+        sret_buf_size_ =
+            method_sret
+                ? ((sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL)
+                : 0ULL;
 
         lower_block(m->body.get());
 
@@ -26868,12 +26906,11 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             }
         }
 
-        if (method_sret) {
-            sret_active_ = saved_sret_active;
-            sret_retbuf_ = saved_sret_retbuf;
-            sret_buf_size_ = saved_sret_buf_size;
-            current_fn_sret_str_value_ = saved_sret_str_value;
-        }
+        // Restaurar SIEMPRE (se fijaron incondicionalmente arriba).
+        sret_active_ = saved_sret_active;
+        sret_retbuf_ = saved_sret_retbuf;
+        sret_buf_size_ = saved_sret_buf_size;
+        current_fn_sret_str_value_ = saved_sret_str_value;
         current_fn_returns_string_ = saved_returns_str;
 
         // RET por defecto si el body no termino con uno.
@@ -36503,6 +36540,39 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
                                        ir::IrType to, const SourceLoc &loc,
                                        bool is_explicit) {
     if (from == to || v == ir::IR_NO_VALUE) return v;
+    // Un valor CONSTANTE compile-time que CABE en el tipo destino no pierde
+    // informacion aunque el destino sea mas estrecho: `u8 x = 0x48` o
+    // `this.mod = 3` (bitfield) o un valued-enum (`Enc.RET`, cuyo valor es una
+    // constante) no deben avisar de narrowing.  Misma politica que C/C++: no
+    // se avisa por `char c = 65`.  Suprime el warning tratando el cast como
+    // explicito (la conversion de bits sigue emitiendose igual).
+    if (!is_explicit && v < fn_->values.size() && fn_->values[v].is_const) {
+        const uint64_t cv = fn_->values[v].const_val;
+        bool fits = false;
+        switch (to) {
+        case ir::IrType::U8:   fits = (cv <= 0xFFULL); break;
+        case ir::IrType::U16:  fits = (cv <= 0xFFFFULL); break;
+        case ir::IrType::U32:  fits = (cv <= 0xFFFFFFFFULL); break;
+        case ir::IrType::BOOL: fits = (cv <= 1ULL); break;
+        case ir::IrType::I8: {
+            const int64_t s = (int64_t)cv;
+            fits = (s >= -128 && s <= 255);
+            break;
+        }
+        case ir::IrType::I16: {
+            const int64_t s = (int64_t)cv;
+            fits = (s >= -32768 && s <= 65535);
+            break;
+        }
+        case ir::IrType::I32: {
+            const int64_t s = (int64_t)cv;
+            fits = (s >= -2147483648LL && s <= 4294967295LL);
+            break;
+        }
+        default: break;
+        }
+        if (fits) is_explicit = true;
+    }
     // Warning de seguridad para casts implicitos que pueden perder
     // informacion: narrowing entero, float -> int, int -> float (los
     // grandes pierden mantissa).  Solo se emite cuando el usuario NO

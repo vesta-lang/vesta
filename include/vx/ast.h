@@ -2067,6 +2067,9 @@ struct StructDecl : Node {
  */
 struct EnumVariantDecl {
     std::string name;
+    /// Valor entero explicito para enums con tipo base (C-style,
+    /// `A = 0x01`).  Nulo -> auto-incremento (prev+1, primero 0).
+    std::unique_ptr<Expr> value_expr;
     std::vector<std::unique_ptr<TypeNode>>
         field_types; ///< Vacio para variantes sin payload.
     SourceLoc loc;
@@ -2101,6 +2104,9 @@ struct EnumVariantDecl {
  */
 struct EnumDecl : Node {
     std::string name;
+    /// Tipo base para enums con VALOR entero (C-style):
+    /// `enum Op : u8 { ... }`.  Vacio -> enum ADT (tagged union).
+    std::string backing_type;
     std::vector<EnumVariantDecl> variants;
     /// marca `@Introspect`.  Ver `StructDecl`.
     bool is_introspect = false;

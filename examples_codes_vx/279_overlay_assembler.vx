@@ -1,120 +1,456 @@
 // -----------------------------------------------------------------------------
-// Ensamblador/desensamblador x86-64 con overlays: varias formas de codificacion
+// Ensamblador/desensamblador x86-64: UN SOLO overlay para todo el formato
 // -----------------------------------------------------------------------------
-// Una instruccion maquina ES un struct de campos (REX, opcode, ModR/M con
-// mod/reg/rm como BITFIELDS, inmediatos...).  La MISMA vista ENSAMBLA (metodo
-// encode) y DESENSAMBLA -- y expone `to_string()` para la representacion humana,
-// asi que `println(ins)` la imprime sola (impresion personalizada, patron Display).
-// Se separan responsabilidades: overlay=interpreta memoria, campos=layout,
-// to_string()=texto, encode()=construccion.  Tres formas de codificacion:
-//   * RegReg     : REX.W + opcode + ModR/M          (op reg, reg)   3 bytes
-//   * MovImm64   : REX.W + (0xB8+reg) + imm64        (mov reg, imm)  10 bytes
-//   * PushPop    : (0x50|0x58)+reg                   (push/pop reg)  1 byte
-// interp = JIT.  (AOT: el retorno de `string` desde un METODO de overlay es un
-// bug conocido de native_poo -- los metodos de overlay que devuelven enteros SI
-// funcionan en AOT; solo el retorno de string falla.  Se ejecuta con -m jit.)
+// Una instruccion x86-64 es un STRUCT DINAMICO: sus componentes (prefijo REX,
+// opcode de 1 o 2 bytes, ModR/M, SIB, desplazamiento, inmediato) estan PRESENTES
+// o no y en POSICIONES que dependen de los bytes previos.  Eso es exactamente lo
+// que un overlay expresa: cada campo declara su direccion con un resolver
+// `@offset { return base + <metodo>(); }` que calcula la posicion mirando los
+// campos hermanos (`this.rex`, `this.op0`, `this.mod`...).  Los metodos helper
+// (rex_len/op_bytes/modrm_off_rel/disp_len/imm_len/len) encapsulan las reglas de
+// codificacion una sola vez.  La MISMA vista ENSAMBLA (enc_*), DESENSAMBLA
+// (to_string, que `println(ins)` invoca solo) y CAMINA la secuencia (len()).
+// interp = JIT = AOT.
+//
+// Registros y opcodes son ENUMS con VALOR (`enum Op : u8 { MOV = 0x89 }`): el
+// valor de la variante ES el byte del encoding, y se usa directo (sin cast) en
+// aritmetica y comparaciones con u8.  Cada test de RANGO es `o >= LO && o <= HI`.
+//
+// Formas soportadas (variedad de longitudes y codificaciones):
+//   push/pop reg        50+r / 58+r                         1 byte
+//   ret                 C3                                  1 byte
+//   syscall             0F 05                               2 bytes (opcode 2B)
+//   op reg, reg         REX.W + opc + ModR/M                3 bytes  (add/.../mov)
+//   imul reg, reg       REX.W + 0F AF + ModR/M              4 bytes  (opcode 2B)
+//   op reg, imm32       REX.W + 81 /d + ModR/M + imm32      7 bytes  (/digit)
+//   mov reg, [b+disp32] REX.W + 8B + ModR/M(mod2) + disp32  7 bytes  (disp)
+//   mov reg, imm64      REX.W + B8+r + imm64                10 bytes (imm64)
 
-const u8 RAX = 0; const u8 RCX = 1; const u8 RDX = 2; const u8 RBX = 3;
-const u8 RSP = 4; const u8 RBP = 5; const u8 RSI = 6; const u8 RDI = 7;
-const u8 OP_ADD = 0x01; const u8 OP_OR  = 0x09; const u8 OP_AND = 0x21;
-const u8 OP_SUB = 0x29; const u8 OP_XOR = 0x31; const u8 OP_CMP = 0x39;
-const u8 OP_MOV = 0x89;
+// Registros de 64 bits: el valor ES el numero de registro del encoding (0..7).
+enum Reg : u8 { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI }
 
-// Nombre de registro (representacion legible).
+// Opcodes /r (op reg, reg): el valor ES el byte de opcode.
+enum Op : u8 {
+    ADD = 0x01,
+    OR  = 0x09,
+    AND = 0x21,
+    SUB = 0x29,
+    XOR = 0x31,
+    CMP = 0x39,
+    MOV = 0x89
+}
+
+// /digit del grupo 0x81 (op reg, imm32): el valor ES el campo reg del ModR/M.
+enum Ext : u8 {
+    ADD = 0,
+    OR  = 1,
+    AND = 4,
+    SUB = 5,
+    XOR = 6,
+    CMP = 7
+}
+
+// Bytes de codificacion con significado fijo (bases de rango y opcodes sueltos).
+enum Enc : u8 {
+    PUSH_BASE   = 0x50,
+    POP_BASE    = 0x58,
+    RET         = 0xC3,
+    MOVIMM_BASE = 0xB8,
+    GRP1        = 0x81,
+    LOAD        = 0x8B,
+    ESC         = 0x0F,
+    SYSCALL     = 0x05,
+    IMUL        = 0xAF
+}
+
+// Nombre de registro de 64 bits (representacion legible).
 string rn(u8 r) {
     match (r) {
-        case 0 => return "rax";  case 1 => return "rcx";
-        case 2 => return "rdx";  case 3 => return "rbx";
-        case 4 => return "rsp";  case 5 => return "rbp";
-        case 6 => return "rsi";  case 7 => return "rdi";
+        case 0 => return "rax";
+        case 1 => return "rcx";
+        case 2 => return "rdx";
+        case 3 => return "rbx";
+        case 4 => return "rsp";
+        case 5 => return "rbp";
+        case 6 => return "rsi";
+        case 7 => return "rdi";
         case _ => return "r?";
     }
     return "r?";
 }
 
-// op dst, src -- registro-registro (REX.W + opcode + ModR/M mod=3).
-@overlay struct RegReg {
-    u8 rex    @0x00;
-    u8 opcode @0x01;
-    u8 rm  : 3 @0x02;   // destino
-    u8 reg : 3 @0x02;   // fuente
-    u8 mod : 2 @0x02;
-
-    public void encode(u8 op, u8 dst, u8 src) {
-        this.rex = 0x48; this.opcode = op; this.mod = 3;
-        this.reg = src; this.rm = dst;
+// Mnemonico de un opcode /r (op reg, reg).
+string alu_name(u8 op) {
+    match (op) {
+        case 0x01 => return "add";
+        case 0x09 => return "or";
+        case 0x21 => return "and";
+        case 0x29 => return "sub";
+        case 0x31 => return "xor";
+        case 0x39 => return "cmp";
+        case 0x89 => return "mov";
+        case _    => return "db";
     }
-    public string to_string() {
-        string m;
-        match (this.opcode) {
-            case 0x01 => m = "add"; case 0x09 => m = "or";  case 0x21 => m = "and";
-            case 0x29 => m = "sub"; case 0x31 => m = "xor"; case 0x39 => m = "cmp";
-            case 0x89 => m = "mov"; case _    => m = "db";
+    return "db";
+}
+
+// Mnemonico del grupo 0x81 segun el /digit (campo reg del ModR/M).
+string alu_name_ext(u8 d) {
+    match (d) {
+        case 0 => return "add";
+        case 1 => return "or";
+        case 4 => return "and";
+        case 5 => return "sub";
+        case 6 => return "xor";
+        case 7 => return "cmp";
+        case _ => return "db";
+    }
+    return "db";
+}
+
+// -----------------------------------------------------------------------------
+// UN overlay para TODA instruccion x86-64.  Las posiciones son dinamicas:
+// cada resolver devuelve `base + <offset relativo calculado por un metodo>`.
+// -----------------------------------------------------------------------------
+@overlay struct X86 {
+    // Byte 0: candidato a prefijo REX (0x40..0x4F).  Si no lo es, ES el opcode.
+    u8 rex @0x00;
+
+    // Opcode (1 o 2 bytes).  op0 salta el REX si esta presente; op1 solo importa
+    // cuando op0 == 0x0F (mapa de dos bytes: syscall, imul, ...).
+    u8 op0 @offset {
+        return base + this.rex_len();
+    };
+    u8 op1 @offset {
+        return base + this.rex_len() + 1;
+    };
+
+    // ModR/M (bits mod:2 reg:3 rm:3, empaquetados low->high por orden aqui).
+    u8 rm  : 3 @offset {
+        return base + this.modrm_off_rel();
+    };
+    u8 reg : 3 @offset {
+        return base + this.modrm_off_rel();
+    };
+    u8 mod : 2 @offset {
+        return base + this.modrm_off_rel();
+    };
+
+    // SIB (bits base:3 index:3 scale:2).  Presente si hay ModR/M, mod!=3 y rm==4.
+    u8 sbase : 3 @offset {
+        return base + this.sib_off_rel();
+    };
+    u8 sidx  : 3 @offset {
+        return base + this.sib_off_rel();
+    };
+    u8 sscale: 2 @offset {
+        return base + this.sib_off_rel();
+    };
+
+    // Desplazamiento (disp32) e inmediatos (imm32 / imm64) en su sitio dinamico.
+    u32 disp  @offset {
+        return base + this.disp_off_rel();
+    };
+    u32 imm32 @offset {
+        return base + this.imm_off_rel();
+    };
+    u64 imm64 @offset {
+        return base + this.imm_off_rel();
+    };
+
+    // --- Reglas de codificacion (una sola vez, reusadas por resolvers y len) ---
+
+    // Longitud del prefijo REX en bytes (0 o 1).
+    public u64 rex_len() {
+        if (this.rex >= 0x40 && this.rex <= 0x4F) {
+            return 1;
         }
-        return "${m} ${rn(this.rm)}, ${rn(this.reg)}";
+        return 0;
     }
-}
 
-// mov reg, imm64 -- REX.W + (0xB8+reg) + imm64.
-@overlay struct MovImm64 {
-    u8  rex    @0x00;
-    u8  opcode @0x01;   // 0xB8 + reg
-    u64 imm    @0x02;
-
-    public void encode(u8 reg, u64 value) {
-        this.rex = 0x48; this.opcode = 0xB8 + reg; this.imm = value;
+    // Bytes de opcode (2 si es mapa 0x0F, si no 1).
+    public u64 op_bytes() {
+        if (this.op0 == Enc.ESC) {
+            return 2;
+        }
+        return 1;
     }
+
+    // Este opcode lleva ModR/M?  (push/pop, mov imm64, ret y syscall NO.)
+    public u64 has_modrm() {
+        u8 o = this.op0;
+        if (o == Enc.ESC) {
+            // 0F AF = imul (con ModR/M); 0F 05 = syscall (sin).
+            if (this.op1 == Enc.IMUL) {
+                return 1;
+            }
+            return 0;
+        }
+        if (o >= Enc.PUSH_BASE && o <= Enc.POP_BASE + 7) {
+            return 0;   // push / pop
+        }
+        if (o >= Enc.MOVIMM_BASE && o <= Enc.MOVIMM_BASE + 7) {
+            return 0;   // mov reg, imm64
+        }
+        if (o == Enc.RET) {
+            return 0;
+        }
+        return 1;
+    }
+
+    // Offset relativo del ModR/M respecto a base.
+    public u64 modrm_off_rel() {
+        return this.rex_len() + this.op_bytes();
+    }
+
+    // Hay byte SIB?  (mod!=3 y rm==4).
+    public u64 has_sib() {
+        if (this.has_modrm() == 0) {
+            return 0;
+        }
+        if (this.mod == 3) {
+            return 0;
+        }
+        if (this.rm == 4) {
+            return 1;
+        }
+        return 0;
+    }
+
+    public u64 sib_off_rel() {
+        return this.modrm_off_rel() + 1;
+    }
+
+    // Longitud del desplazamiento segun el campo mod.
+    public u64 disp_len() {
+        if (this.has_modrm() == 0) {
+            return 0;
+        }
+        u8 m = this.mod;
+        if (m == 1) {
+            return 1;   // disp8
+        }
+        if (m == 2) {
+            return 4;   // disp32
+        }
+        if (m == 0 && this.rm == 5) {
+            return 4;   // RIP-relativo
+        }
+        return 0;
+    }
+
+    public u64 disp_off_rel() {
+        return this.modrm_off_rel() + 1 + this.has_sib();
+    }
+
+    // Longitud del inmediato segun el opcode.
+    public u64 imm_len() {
+        u8 o = this.op0;
+        if (o >= Enc.MOVIMM_BASE && o <= Enc.MOVIMM_BASE + 7) {
+            return 8;   // mov reg, imm64
+        }
+        if (o == Enc.GRP1) {
+            return 4;   // grupo op reg, imm32
+        }
+        return 0;
+    }
+
+    // Offset del inmediato: mov-imm64 va justo tras el opcode; el resto, tras
+    // ModR/M (+SIB +disp).
+    public u64 imm_off_rel() {
+        u8 o = this.op0;
+        if (o >= Enc.MOVIMM_BASE && o <= Enc.MOVIMM_BASE + 7) {
+            return this.rex_len() + 1;
+        }
+        return this.disp_off_rel() + this.disp_len();
+    }
+
+    // Longitud TOTAL de la instruccion (permite caminar la secuencia).
+    public u64 len() {
+        u64 n = this.rex_len() + this.op_bytes();
+        if (this.has_modrm() == 1) {
+            n = n + 1 + this.has_sib() + this.disp_len();
+        }
+        return n + this.imm_len();
+    }
+
+    // --- Ensamblado (escribe en orden de dependencia: rex, opcode, modrm, ...) ---
+
+    // op reg, reg (/r): reg = fuente, rm = destino.
+    public void enc_alu_rr(Op op, Reg dst, Reg src) {
+        this.rex = 0x48;
+        this.op0 = op;
+        this.mod = 3;
+        this.reg = src;
+        this.rm  = dst;
+    }
+
+    // imul reg, reg -- 0F AF /r: reg = destino, rm = fuente.
+    public void enc_imul_rr(Reg dst, Reg src) {
+        this.rex = 0x48;
+        this.op0 = Enc.ESC;
+        this.op1 = Enc.IMUL;
+        this.mod = 3;
+        this.reg = dst;
+        this.rm  = src;
+    }
+
+    // op reg, imm32 -- grupo 0x81 /digit id (el /digit va en el campo reg).
+    public void enc_alu_ri(Ext ext, Reg dst, u32 imm) {
+        this.rex = 0x48;
+        this.op0 = Enc.GRP1;
+        this.mod = 3;
+        this.reg = ext;
+        this.rm  = dst;
+        this.imm32 = imm;
+    }
+
+    // mov reg, [basereg + disp32] -- 8B /r con mod=2 (disp32).
+    public void enc_load(Reg dst, Reg basereg, u32 d) {
+        this.rex = 0x48;
+        this.op0 = Enc.LOAD;
+        this.mod = 2;
+        this.reg = dst;
+        this.rm  = basereg;
+        this.disp = d;
+    }
+
+    // mov reg, imm64 -- REX.W + (B8+reg) + imm64.
+    public void enc_mov_imm64(Reg reg, u64 val) {
+        this.rex = 0x48;
+        this.op0 = Enc.MOVIMM_BASE + reg;
+        this.imm64 = val;
+    }
+
+    public void enc_push(Reg reg) {
+        this.op0 = Enc.PUSH_BASE + reg;
+    }
+
+    public void enc_pop(Reg reg) {
+        this.op0 = Enc.POP_BASE + reg;
+    }
+
+    public void enc_ret() {
+        this.op0 = Enc.RET;
+    }
+
+    public void enc_syscall() {
+        this.op0 = Enc.ESC;
+        this.op1 = Enc.SYSCALL;
+    }
+
+    // --- Desensamblado: decodifica por opcode leyendo los campos dinamicos ---
     public string to_string() {
-        return "mov ${rn(this.opcode - 0xB8)}, ${this.imm:hex}";
-    }
-}
-
-// push reg / pop reg -- 1 byte (0x50+reg / 0x58+reg).
-@overlay struct PushPop {
-    u8 opcode @0x00;
-    public void enc_push(u8 reg) { this.opcode = 0x50 + reg; }
-    public void enc_pop(u8 reg)  { this.opcode = 0x58 + reg; }
-    public string to_string() {
-        if (this.opcode >= 0x58) { return "pop ${rn(this.opcode - 0x58)}"; }
-        return "push ${rn(this.opcode - 0x50)}";
+        u8 o = this.op0;
+        if (o >= Enc.PUSH_BASE && o <= Enc.PUSH_BASE + 7) {
+            return "push ${rn(o - Enc.PUSH_BASE)}";
+        }
+        if (o >= Enc.POP_BASE && o <= Enc.POP_BASE + 7) {
+            return "pop ${rn(o - Enc.POP_BASE)}";
+        }
+        if (o >= Enc.MOVIMM_BASE && o <= Enc.MOVIMM_BASE + 7) {
+            return "mov ${rn(o - Enc.MOVIMM_BASE)}, ${this.imm64:hex}";
+        }
+        if (o == Enc.RET) {
+            return "ret";
+        }
+        if (o == Enc.ESC) {
+            if (this.op1 == Enc.SYSCALL) {
+                return "syscall";
+            }
+            if (this.op1 == Enc.IMUL) {
+                return "imul ${rn(this.reg)}, ${rn(this.rm)}";
+            }
+            return "db 0f";
+        }
+        if (o == Enc.GRP1) {
+            return "${alu_name_ext(this.reg)} ${rn(this.rm)}, ${this.imm32:hex}";
+        }
+        if (o == Enc.LOAD) {
+            return "mov ${rn(this.reg)}, [${rn(this.rm)}+${this.disp:hex}]";
+        }
+        // op reg, reg (/r): reg = fuente, rm = destino.
+        return "${alu_name(o)} ${rn(this.rm)}, ${rn(this.reg)}";
     }
 }
 
 i32 main() {
-    u8* code = (u8*) malloc(64);
+    u8* code = (u8*) malloc(96);
+
+    // Buffer limpio: los resolvers leen el byte0 como candidato a REX antes de
+    // escribir el opcode; para instrucciones SIN REX (push/ret/...) ese byte
+    // debe empezar en 0 para que rex_len() de 0.
+    for (u64 z = 0; z < 96; z++) {
+        *(u8*)(code + z) = 0;
+    }
+
     u64 pos = 0;
 
-    // --- ENSAMBLAR una mezcla de formas ---
-    PushPop  p0 = PushPop(code + pos);  p0.enc_push(RBP);              pos = pos + 1;
-    RegReg   i0 = RegReg(code + pos);   i0.encode(OP_MOV, RBP, RSP);   pos = pos + 3;
-    MovImm64 m0 = MovImm64(code + pos); m0.encode(RAX, 0x1122334455667788); pos = pos + 10;
-    RegReg   i1 = RegReg(code + pos);   i1.encode(OP_ADD, RAX, RCX);   pos = pos + 3;
-    RegReg   i2 = RegReg(code + pos);   i2.encode(OP_XOR, RSI, RDI);   pos = pos + 3;
-    RegReg   i3 = RegReg(code + pos);   i3.encode(OP_CMP, RBX, RDX);   pos = pos + 3;
-    PushPop  p1 = PushPop(code + pos);  p1.enc_pop(RBP);               pos = pos + 1;
+    // Una funcion tipica: prologo, calculos, syscall y epilogo.  Los operandos
+    // son ENUMS (Reg/Op/Ext), no numeros magicos.
+    X86 a = X86(code + pos);
+    a.enc_push(Reg.RBP);
+    pos += a.len();
 
-    // --- bytes maquina (hex) ---
+    X86 b = X86(code + pos);
+    b.enc_alu_rr(Op.MOV, Reg.RBP, Reg.RSP);
+    pos += b.len();
+
+    X86 c = X86(code + pos);
+    c.enc_mov_imm64(Reg.RAX, 0x1122334455667788);
+    pos += c.len();
+
+    X86 d = X86(code + pos);
+    d.enc_alu_rr(Op.ADD, Reg.RAX, Reg.RCX);
+    pos += d.len();
+
+    X86 e = X86(code + pos);
+    e.enc_imul_rr(Reg.RDX, Reg.RBX);
+    pos += e.len();
+
+    X86 f = X86(code + pos);
+    f.enc_alu_ri(Ext.SUB, Reg.RSI, 0x100);
+    pos += f.len();
+
+    X86 g = X86(code + pos);
+    g.enc_load(Reg.RDI, Reg.RBP, 0x10);
+    pos += g.len();
+
+    X86 h = X86(code + pos);
+    h.enc_alu_rr(Op.XOR, Reg.RSI, Reg.RDI);
+    pos += h.len();
+
+    X86 i = X86(code + pos);
+    i.enc_syscall();
+    pos += i.len();
+
+    X86 j = X86(code + pos);
+    j.enc_pop(Reg.RBP);
+    pos += j.len();
+
+    X86 k = X86(code + pos);
+    k.enc_ret();
+    pos += k.len();
+
+    // --- Bytes maquina (hex) + checksum ---
     print("code:");
-    u64 b = 0;
     i64 sum = 0;
-    while (b < pos) {
-        u8 by = *(u8*)(code + b);
+    for (u64 bi = 0; bi < pos; bi++) {
+        u8 by = *(u8*)(code + bi);
         print(" ${by:hex}");
         sum = sum + (i64) by;
-        b = b + 1;
     }
     println("");
 
-    // --- DESENSAMBLAR: println(ins) usa to_string() automaticamente ---
-    println(p0);   // push rbp
-    println(i0);   // mov rbp, rsp
-    println(m0);   // mov rax, 0x1122334455667788
-    println(i1);   // add rax, rcx
-    println(i2);   // xor rsi, rdi
-    println(i3);   // cmp rbx, rdx
-    println(p1);   // pop rbp
+    // --- DESENSAMBLAR caminando: la MISMA vista decodifica y len() avanza ---
+    u64 p = 0;
+    while (p < pos) {
+        X86 ins = X86(code + p);
+        println(ins);              // to_string() se invoca sola
+        p += ins.len();
+    }
 
-    println("sum=${sum}");
+    println("bytes=${pos} sum=${sum}");
     free(code);
     return (i32) sum;
 }

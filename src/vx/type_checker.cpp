@@ -281,6 +281,34 @@ static std::string mangle_sanitize(const std::string &s) {
     return out;
 }
 
+// True si @p k es un tipo entero (con o sin signo).  Usado para validar el
+// tipo base de un enum con valor y para el lowering de valued-enums.
+static bool is_integer_kind(PrimitiveKind k) {
+    switch (k) {
+    case PrimitiveKind::I8:  case PrimitiveKind::I16:
+    case PrimitiveKind::I32: case PrimitiveKind::I64:
+    case PrimitiveKind::U8:  case PrimitiveKind::U16:
+    case PrimitiveKind::U32: case PrimitiveKind::U64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Mapea el nombre textual de un tipo base ("u8", "i32", ...) a su
+// PrimitiveKind.  Devuelve VOID si no es un entero reconocido.
+static PrimitiveKind prim_kind_from_name(const std::string &n) {
+    if (n == "u8")  return PrimitiveKind::U8;
+    if (n == "u16") return PrimitiveKind::U16;
+    if (n == "u32") return PrimitiveKind::U32;
+    if (n == "u64") return PrimitiveKind::U64;
+    if (n == "i8")  return PrimitiveKind::I8;
+    if (n == "i16") return PrimitiveKind::I16;
+    if (n == "i32") return PrimitiveKind::I32;
+    if (n == "i64") return PrimitiveKind::I64;
+    return PrimitiveKind::VOID;
+}
+
 // Resuelve la CLAVE real de un template generico referido de forma
 // CUALIFICADA.  El uso `col.Box<T>` llega como "col.Box" (dotted), pero segun
 // el origen el template esta registrado como: "col.Box" (import cross-module
@@ -1827,6 +1855,14 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
         auto it_e = enum_layouts_.find(lookup);
         if (it_e != enum_layouts_.end()) {
             referenced_names_.insert(lookup); // L.26: enum usado
+            // C-style: un enum con VALOR es su tipo base (U8/...) etiquetado
+            // con el nombre del enum -> el lowering lo trata como entero.
+            if (it_e->second.is_valued) {
+                Type vt{it_e->second.backing};
+                vt.struct_name = lookup;
+                vt.is_valued_enum = true;
+                return vt;
+            }
             return Type{PrimitiveKind::STRUCT, lookup};
         }
         // 3) Clase registrada: devolvemos Type{CLASS, name}.  CLASS
@@ -2585,6 +2621,20 @@ void TypeChecker::collect_globals() {
                     fi.bit_offset = bf_used;
                     fi.bit_width = bw;
                     fi.default_init = f.default_init.get();
+                    // Overlay: un bitfield puede llevar @offset dinamico
+                    // (`u8 mod : 2 @offset { ... }`).  Sin copiar el resolver, la
+                    // direccion del BYTE contenedor caeria al offset estatico
+                    // (bf_offset), que solo coincide con el resolver por
+                    // casualidad -> escrituras al byte equivocado.  El
+                    // bit_offset (posicion DENTRO del byte) sigue siendo el que
+                    // asigna el empaquetador secuencial (correcto para bitfields
+                    // consecutivos que comparten byte, p.ej. mod/reg/rm).
+                    if (s->is_overlay) {
+                        fi.offset_block = f.offset_block.get();
+                        fi.offset_expr = f.offset_expr.get();
+                        fi.endian = f.endian;
+                        fi.endian_expr = f.endian_expr.get();
+                    }
                     layout.fields.push_back(std::move(fi));
                     bf_used += bw;
                     continue;
@@ -2843,8 +2893,22 @@ void TypeChecker::collect_globals() {
             }
             EnumLayout elay;
             elay.name = en->name;
+            // C-style: enum con VALOR entero (`enum Op : u8 { ... }`).
+            const bool valued = !en->backing_type.empty();
+            elay.is_valued = valued;
+            if (valued) {
+                elay.backing = prim_kind_from_name(en->backing_type);
+                if (!is_integer_kind(elay.backing)) {
+                    diags_.error(en->loc,
+                                 "el tipo base de un enum debe ser un entero "
+                                 "(u8/u16/u32/u64/i8/i16/i32/i64): '" +
+                                     en->backing_type + "'");
+                    elay.backing = PrimitiveKind::I64;
+                }
+            }
             std::unordered_map<std::string, bool> seen_v;
             uint32_t max_pl = 0;
+            int64_t next_val = 0;  // auto-incremento para enums con valor.
             for (size_t vi = 0; vi < en->variants.size(); ++vi) {
                 const auto &vd = en->variants[vi];
                 if (!seen_v.emplace(vd.name, true).second) {
@@ -2855,6 +2919,28 @@ void TypeChecker::collect_globals() {
                 EnumVariantInfo vi_info;
                 vi_info.name = vd.name;
                 vi_info.tag = static_cast<uint32_t>(vi);
+                // Valor entero de la variante (solo enums con tipo base).
+                if (valued) {
+                    if (!vd.field_types.empty()) {
+                        diags_.error(vd.loc,
+                                     "una variante de un enum con valor (tipo "
+                                     "base) no puede llevar payload: '" +
+                                         vd.name + "'");
+                    }
+                    if (vd.value_expr) {
+                        const ComptimeEvalResult r =
+                            comptime_eval_expr(*this, vd.value_expr.get());
+                        if (!r.ok || r.is_str || r.is_array || r.is_struct) {
+                            diags_.error(vd.loc,
+                                         "el valor de la variante '" + vd.name +
+                                             "' debe ser una constante entera");
+                        } else {
+                            next_val = r.value;
+                        }
+                    }
+                    vi_info.int_value = next_val;
+                    next_val = next_val + 1;
+                }
                 vi_info.field_types.reserve(vd.field_types.size());
                 for (const auto &ft : vd.field_types) {
                     vi_info.field_types.push_back(type_from_node(ft.get()));
@@ -7604,6 +7690,17 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
             const EnumLayout &elay = it_en->second;
             for (const auto &v : elay.variants) {
                 if (v.name == e->field_name) {
+                    // C-style: enum con valor -> la variante ES una constante
+                    // del tipo base.  property_kind=98; el tipo es el base
+                    // etiquetado con el nombre del enum (is_valued_enum).
+                    if (elay.is_valued) {
+                        e->property_kind = 98;
+                        Type rt{elay.backing};
+                        rt.struct_name = elay.name;
+                        rt.is_valued_enum = true;
+                        e->result_type = rt;
+                        return rt;
+                    }
                     if (!v.field_types.empty()) {
                         diags_.error(
                             e->loc, std::string("variante '") + v.name +
