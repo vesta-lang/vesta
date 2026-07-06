@@ -364,6 +364,9 @@ struct EnumLayout {
     std::vector<EnumVariantInfo> variants;
     bool is_valued = false;              ///< enum con VALOR (`: u8`).
     PrimitiveKind backing = PrimitiveKind::I64;  ///< tipo base si is_valued.
+    /// Nombre del tipo de USUARIO cuando @c backing es STRUCT/CLASS (`enum
+    /// Color : Rgb {..}`).  Un valor del enum ES un valor de este tipo.
+    std::string backing_type_name;
     uint32_t size_bytes = 8;         ///< Minimum: solo el tag.
     uint32_t max_payload_fields = 0; ///< 0 si todas son sin payload.
     /// marca `@Introspect`.

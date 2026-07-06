@@ -3363,8 +3363,13 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
         if (bt && bt->kind == ast::NodeKind::PrimitiveTypeNode) {
             auto *pt = static_cast<ast::PrimitiveTypeNode *>(bt.get());
             e->backing_type = primitive_name(pt->prim);
+        } else if (bt && bt->kind == ast::NodeKind::NamedTypeNode) {
+            // Backing de tipo de USUARIO (struct/clase): cada variante es una
+            // constante de ese tipo.  El checker valida que exista.
+            e->backing_type = static_cast<ast::NamedTypeNode *>(bt.get())->name;
         } else {
-            error_here("el tipo base de un enum debe ser un entero (u8/i32/...)");
+            error_here("el tipo base de un enum debe ser un entero, float, "
+                       "string, o un struct/clase (u8/.../f64/string/Nombre)");
         }
     }
 

@@ -1863,6 +1863,15 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
             // C-style: un enum con VALOR es su tipo base (U8/...) etiquetado
             // con el nombre del enum -> el lowering lo trata como entero.
             if (it_e->second.is_valued) {
+                // Backing struct/clase: el enum ES ese tipo (un valor de Color
+                // es un Rgb) -> devolver el tipo base con su nombre.
+                if (!it_e->second.backing_type_name.empty()) {
+                    Type vt{it_e->second.backing};
+                    vt.struct_name = it_e->second.backing_type_name;
+                    return vt;
+                }
+                // Backing entero/float/string: el enum ES su tipo base,
+                // etiquetado con el nombre del enum (is_valued_enum).
                 Type vt{it_e->second.backing};
                 vt.struct_name = lookup;
                 vt.is_valued_enum = true;
@@ -2906,6 +2915,7 @@ void TypeChecker::collect_globals() {
             bool backing_is_int = false;
             bool backing_is_float = false;
             bool backing_is_string = false;
+            bool backing_is_user = false;  // struct o clase
             if (valued) {
                 elay.backing = prim_kind_from_name(en->backing_type);
                 backing_is_int = is_integer_kind(elay.backing);
@@ -2913,14 +2923,27 @@ void TypeChecker::collect_globals() {
                                     elay.backing == PrimitiveKind::F64);
                 backing_is_string = (elay.backing == PrimitiveKind::STRING);
                 if (!backing_is_int && !backing_is_float && !backing_is_string) {
-                    diags_.error(en->loc,
-                                 "el tipo base de un enum debe ser entero, "
-                                 "float o string (u8/.../i64, f32/f64, string): '" +
-                                     en->backing_type + "'");
-                    elay.backing = PrimitiveKind::I64;
-                    backing_is_int = true;
+                    // Tipo de USUARIO: struct o clase ya registrada.  Un valor
+                    // del enum ES un valor de ese tipo.
+                    if (struct_layouts_.count(en->backing_type)) {
+                        elay.backing = PrimitiveKind::STRUCT;
+                        elay.backing_type_name = en->backing_type;
+                        backing_is_user = true;
+                    } else if (class_layouts_.count(en->backing_type)) {
+                        elay.backing = PrimitiveKind::CLASS;
+                        elay.backing_type_name = en->backing_type;
+                        backing_is_user = true;
+                    } else {
+                        diags_.error(en->loc,
+                                     "el tipo base de un enum debe ser entero, "
+                                     "float, string o un struct/clase existente: '" +
+                                         en->backing_type + "'");
+                        elay.backing = PrimitiveKind::I64;
+                        backing_is_int = true;
+                    }
                 }
             }
+            (void)backing_is_user;
             std::unordered_map<std::string, bool> seen_v;
             uint32_t max_pl = 0;
             int64_t next_val = 0;  // auto-incremento para enums con valor entero.
@@ -7725,12 +7748,18 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                 if (v.name == e->field_name) {
                     // C-style: enum con valor -> la variante ES una constante
                     // del tipo base.  property_kind=98; el tipo es el base
-                    // etiquetado con el nombre del enum (is_valued_enum).
+                    // (etiquetado con el nombre del enum si es entero/float/
+                    // string; el nombre del struct/clase si el backing es de
+                    // usuario -- un Color.RED ES un Rgb).
                     if (elay.is_valued) {
                         e->property_kind = 98;
                         Type rt{elay.backing};
-                        rt.struct_name = elay.name;
-                        rt.is_valued_enum = true;
+                        if (!elay.backing_type_name.empty()) {
+                            rt.struct_name = elay.backing_type_name;
+                        } else {
+                            rt.struct_name = elay.name;
+                            rt.is_valued_enum = true;
+                        }
                         e->result_type = rt;
                         return rt;
                     }
@@ -7772,6 +7801,22 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                 const EnumLayout &elay = it_en_ns->second;
                 for (const auto &v : elay.variants) {
                     if (v.name == e->field_name) {
+                        // Valued enum via namespace (`ns.Op.MOV`): la variante
+                        // ES una constante del tipo base.  El lowering
+                        // (property_kind=98) resuelve el enum por
+                        // e->base->result_type.struct_name.
+                        if (elay.is_valued) {
+                            e->property_kind = 98;
+                            Type rt{elay.backing};
+                            if (!elay.backing_type_name.empty()) {
+                                rt.struct_name = elay.backing_type_name;
+                            } else {
+                                rt.struct_name = elay.name;
+                                rt.is_valued_enum = true;
+                            }
+                            e->result_type = rt;
+                            return rt;
+                        }
                         if (!v.field_types.empty()) {
                             diags_.error(
                                 e->loc,
