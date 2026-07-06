@@ -26182,7 +26182,9 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             sem_ret_m = tc_.resolve_type_node(m->return_type.get());
         const bool method_sret =
             !m->is_constructor && (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
-                                   sem_ret_m.kind == PrimitiveKind::RESULT);
+                                   sem_ret_m.kind == PrimitiveKind::RESULT ||
+                                   (native_poo_ &&
+                                    sem_ret_m.kind == PrimitiveKind::STRING));
         if (m->is_constructor) {
             fn.ret_type = ir::IrType::VOID;
         } else if (method_sret) {
@@ -26358,11 +26360,16 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         const bool saved_sret_active = sret_active_;
         ir::IrValueId saved_sret_retbuf = sret_retbuf_;
         uint64_t saved_sret_buf_size = sret_buf_size_;
+        // native_poo_ string SRET (mismo tratamiento que structs/funciones):
+        // construir el value-string real en el `return`.
+        const bool saved_sret_str_value_c = current_fn_sret_str_value_;
         if (method_sret) {
             sret_active_ = true;
             sret_retbuf_ = v_method_retbuf;
             sret_buf_size_ =
                 (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
+            current_fn_sret_str_value_ =
+                (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
         }
 
         lower_block(m->body.get());
@@ -26371,6 +26378,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             sret_active_ = saved_sret_active;
             sret_retbuf_ = saved_sret_retbuf;
             sret_buf_size_ = saved_sret_buf_size;
+            current_fn_sret_str_value_ = saved_sret_str_value_c;
         }
 
         current_class_lowering_ = saved_class;
@@ -26639,8 +26647,17 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         Type sem_ret_m = Type{PrimitiveKind::VOID};
         if (m->return_type)
             sem_ret_m = tc_.resolve_type_node(m->return_type.get());
+        // Vesta Embed (native_poo_): `string` es value-type de 24 bytes
+        // {ptr,len,cap} -> SRET, igual que en lower_function (2707).  Sin
+        // esto un metodo que CONSTRUYE un string (interpolacion, concat) lo
+        // arma en su propio host-stack y devuelve un puntero colgante ->
+        // SIGSEGV en el caller.  Un string CONSTANTE no lo necesitaba
+        // (retorna un puntero a un value-string en .rodata), por eso el bug
+        // solo se veia con retornos construidos.  Caller simetrico abajo.
         const bool method_sret = (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
-                                  sem_ret_m.kind == PrimitiveKind::RESULT);
+                                  sem_ret_m.kind == PrimitiveKind::RESULT ||
+                                  (native_poo_ &&
+                                   sem_ret_m.kind == PrimitiveKind::STRING));
         if (method_sret) {
             fn.ret_type = ir::IrType::VOID;
         } else if (m->return_type &&
@@ -26765,11 +26782,19 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const bool saved_sret_active = sret_active_;
         const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
         const uint64_t saved_sret_buf_size = sret_buf_size_;
+        // native_poo_ string: activar current_fn_sret_str_value_ para que el
+        // `return <literal>` construya un value-string real (build_native_
+        // string_from_literal + emit_native_str_move_copy) en vez de copiar
+        // los bytes crudos del str_lit_addr como si fueran {ptr,len,cap}.
+        const bool saved_sret_str_value = current_fn_sret_str_value_;
+        const bool method_str_sret =
+            (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
         if (method_sret) {
             sret_active_ = true;
             sret_retbuf_ = v_method_retbuf;
             sret_buf_size_ =
                 (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
+            current_fn_sret_str_value_ = method_str_sret;
         }
 
         lower_block(m->body.get());
@@ -26850,6 +26875,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             sret_active_ = saved_sret_active;
             sret_retbuf_ = saved_sret_retbuf;
             sret_buf_size_ = saved_sret_buf_size;
+            current_fn_sret_str_value_ = saved_sret_str_value;
         }
         current_fn_returns_string_ = saved_returns_str;
 
@@ -29947,11 +29973,12 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // retbuf (PTR), que se bindea a la var-decl o se pasa a otras fns.
     const bool method_call_sret =
         (mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-         mtd->return_type.kind == PrimitiveKind::RESULT);
+         mtd->return_type.kind == PrimitiveKind::RESULT ||
+         (native_poo_ && mtd->return_type.kind == PrimitiveKind::STRING));
     ir::IrValueId v_method_call_retbuf = ir::IR_NO_VALUE;
     if (method_call_sret) {
         uint64_t buf_bytes =
-            (mtd->return_type.kind == PrimitiveKind::RESULT) ? 24ULL : 16ULL;
+            (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
         v_method_call_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -30708,12 +30735,17 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     // retbuf (host_alloca para que callee/caller usen movh) y lo pasa
     // como segundo "arg" (tras this).  El dst del CALL es VOID; el
     // valor visible es el retbuf.
+    // native_poo_: un metodo que devuelve `string` value-type usa SRET
+    // (simetrico con el callee en lower_struct_methods).  El caller aloca el
+    // retbuf de 24 bytes en host-stack y lo pasa tras 'this'.
     const bool method_sret = (mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-                              mtd->return_type.kind == PrimitiveKind::RESULT);
+                              mtd->return_type.kind == PrimitiveKind::RESULT ||
+                              (native_poo_ &&
+                               mtd->return_type.kind == PrimitiveKind::STRING));
     ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
     if (method_sret) {
         const uint64_t buf_bytes =
-            (mtd->return_type.kind == PrimitiveKind::RESULT) ? 24ULL : 16ULL;
+            (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
         v_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
