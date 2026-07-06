@@ -2552,6 +2552,58 @@ int main(int argc, char *argv[]) {
         }
 
         // ------------------------------------------------------------------
+        // Comptime two-phase para AOT.  El emit nativo (bloque `if (aot_mode)`
+        // de abajo) usa `cr` y RETORNA antes del two-phase del path .velb (que
+        // vive tras el emit AOT), asi que el codigo comptime que se ejecuta en
+        // el ComptimeVM (p.ej. inline asm en una comptime fn) no se resolveria
+        // en AOT -> daria placeholder.  Aqui hacemos el mismo two-phase ANTES
+        // del emit: compilar el pass-1 a un `.velb` cacheado (contiene el
+        // bytecode comptime `__macro_*`), cargarlo via VESTA_MC_PREBUILT, y
+        // recompilar (pass 2) para que los call sites comptime invoquen la VM.
+        // Solo en cache-miss (en hit el prebuilt ya se seteo antes del pass 1).
+        // ------------------------------------------------------------------
+        if (aot_mode && !cache_hit && cr.has_lowerable_macros &&
+            !user_already_set_prebuilt) {
+            std::error_code aec;
+            std::filesystem::create_directories(cache_dir, aec);
+            const std::string tmp_vel_path = cache_prefix + ".vel.tmp";
+            {
+                std::ofstream tmp(tmp_vel_path, std::ios::binary);
+                if (tmp) {
+                    if (copts.emit_debug) tmp << "// @file " << vx_path << "\n";
+                    tmp << cr.vel_text;
+                }
+            }
+            const int tmp_rc = asm_multi_process::run_worker(
+                tmp_vel_path, cache_prefix,
+                /*skip_preprocessor=*/true, /*keep_labels=*/false,
+                /*ir_section_bytes=*/&cr.ir_section_bytes, /*emit_map=*/false);
+            if (tmp_rc == EXIT_SUCCESS) {
+#if defined(_WIN32)
+                _putenv_s("VESTA_MC_PREBUILT", cache_path.c_str());
+#else
+                setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
+#endif
+                vx::CompileResult cr2 =
+                    vx::vx_source_has_imports(vx_source)
+                        ? vx::compile_vx_project(vx_path, copts)
+                        : vx::compile_vx_source(vx_source, vx_path, copts);
+#if defined(_WIN32)
+                _putenv_s("VESTA_MC_PREBUILT", "");
+#else
+                unsetenv("VESTA_MC_PREBUILT");
+#endif
+                if (cr2.ok) cr = std::move(cr2);
+                if (verbose_mc) {
+                    std::cerr << "[mc-cache] aot two-phase populated: "
+                              << cache_path << "\n";
+                }
+                std::remove(tmp_vel_path.c_str());
+                std::remove((cache_path + "-map").c_str());
+            }
+        }
+
+        // ------------------------------------------------------------------
         // Phase AOT (Paso 1): modo -m aot.  Analiza la compatibilidad nativa
         // del modulo (sin emitir binario aun -- eso es el Paso 2: codegen
         // HOST_LEAF -> ObjectWriter).  El IR optimizado viaja en

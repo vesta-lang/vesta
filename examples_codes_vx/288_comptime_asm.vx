@@ -2,7 +2,7 @@
 // Inline asm ejecutado en COMPILE-TIME: una `comptime fn` con `asm {}` se baja a
 // IR y se ejecuta en el ComptimeVM (JIT primario + interprete de fallback), no en
 // el evaluador AST (que no ejecuta codigo nativo).  El resultado se pliega a una
-// constante -- cero coste en runtime.  Path .velb (interp / JIT).
+// constante -- cero coste en runtime.  interp = JIT = AOT.
 // -----------------------------------------------------------------------------
 
 // Suma via inline asm x86-64, evaluada en compile-time.

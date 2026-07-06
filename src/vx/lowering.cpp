@@ -2637,18 +2637,18 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * Por ahora el IR queda en el modulo como dead code; el call
      * site del macro sigue usando el evaluator AST. */
     /* F1: una `comptime fn` (no-macro) con inline asm se baja a IR y se
-     * ejecuta en el ComptimeVM (JIT + interp fallback).  Solo en el path
-     * .velb (interp/JIT): el AOT no hace el two-phase que carga el bytecode
-     * comptime, asi que ahi cae al error claro del call site (sin 0
-     * silencioso).  `native_poo_` = compilacion AOT. */
-    const bool is_vm_comptime_fn = fd->is_comptime && !fd->is_macro &&
-                                   !native_poo_ && comptime_fn_uses_asm(fd);
+     * ejecuta en el ComptimeVM (JIT + interp fallback).  Funciona en .velb
+     * (interp/JIT) y en AOT: ambos hacen el two-phase que compila el codigo
+     * comptime a un `.velb` cacheado y lo carga, asi que los call sites
+     * comptime invocan la VM y el valor se pliega a constante. */
+    const bool is_vm_comptime_fn =
+        fd->is_comptime && !fd->is_macro && comptime_fn_uses_asm(fd);
     if (fd->is_comptime && !fd->is_macro) {
         /* comptime fn (no-macro): por defecto NO se baja (se evalua en
          * compile-time y se elide).  Solo-LSP: con emit_comptime_fns_ la
          * bajamos como funcion normal para poder inspeccionar su codegen
          * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro.
-         * F1: si usa asm (y no es AOT), SI se baja (para el ComptimeVM). */
+         * F1: si usa asm, SI se baja (para ejecutar en el ComptimeVM). */
         if (!emit_comptime_fns_ && !is_vm_comptime_fn) return;
     } else if (fd->is_comptime) {
         /* @Macro: intentar lowear el body al IR.  Si contiene
@@ -16855,14 +16855,12 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 goto skip_comptime_eval_for_macro_to_macro;
             }
             /* F1: comptime fn con asm -> ejecutar en el ComptimeVM (JIT +
-             * interp fallback).  Solo path .velb (!native_poo_): con el
-             * two-phase, pass 2 (bytecode comptime cargado via prebuilt) da
-             * el valor real; el pass 1 (sin bytecode) emite placeholder 0 --
-             * inocuo, porque el cr del pass 1 se descarta y el pass 2
-             * recompila.  La fn ya se bajo a `__macro_<name>` en
-             * lower_function.  En AOT no se entra aqui (is_vm_comptime_fn era
-             * false) -> cae al error claro de abajo. */
-            if (!r.ok && !native_poo_ && comptime_fn_uses_asm(cit->second)) {
+             * interp fallback).  Con el two-phase (.velb y AOT), pass 2
+             * (bytecode comptime cargado via prebuilt) da el valor real; el
+             * pass 1 (sin bytecode) emite placeholder 0 -- inocuo, porque el
+             * cr del pass 1 se descarta y el pass 2 recompila.  La fn ya se
+             * bajo a `__macro_<name>` en lower_function. */
+            if (!r.ok && comptime_fn_uses_asm(cit->second)) {
                 const uint32_t src_line_asm = e->loc.line;
                 ir::IrType t_asm = ir::IrType::I64;
                 if (cit->second->return_type) {
