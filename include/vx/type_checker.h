@@ -337,7 +337,12 @@ struct StructLayout {
 struct EnumVariantInfo {
     std::string name;
     uint32_t tag = 0;
-    int64_t int_value = 0;  ///< Valor (enums con tipo base C-style).
+    int64_t int_value = 0;  ///< Valor (enums con tipo base ENTERO C-style).
+    /// Enums con VALOR de tipo NO-entero (float/string/struct/clase): el
+    /// lowering de @c E.A baja directamente esta expresion AST (reusa el
+    /// lowering de literales float/string/init-list).  Para backing entero
+    /// se usa @c int_value (soporta auto-incremento sin AST).
+    const ast::Expr *value_ast = nullptr;
     std::vector<Type> field_types;
 };
 

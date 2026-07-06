@@ -295,8 +295,10 @@ static bool is_integer_kind(PrimitiveKind k) {
     }
 }
 
-// Mapea el nombre textual de un tipo base ("u8", "i32", ...) a su
-// PrimitiveKind.  Devuelve VOID si no es un entero reconocido.
+// Mapea el nombre textual de un tipo base ("u8", "i32", "f64", "string", ...) a
+// su PrimitiveKind.  Devuelve VOID si no es un tipo base reconocido para enums.
+// Los nombres de USUARIO (struct/clase) no se mapean aqui: el checker los
+// resuelve por separado y deja backing=STRUCT/CLASS con el nombre en otro campo.
 static PrimitiveKind prim_kind_from_name(const std::string &n) {
     if (n == "u8")  return PrimitiveKind::U8;
     if (n == "u16") return PrimitiveKind::U16;
@@ -306,6 +308,9 @@ static PrimitiveKind prim_kind_from_name(const std::string &n) {
     if (n == "i16") return PrimitiveKind::I16;
     if (n == "i32") return PrimitiveKind::I32;
     if (n == "i64") return PrimitiveKind::I64;
+    if (n == "f32") return PrimitiveKind::F32;
+    if (n == "f64") return PrimitiveKind::F64;
+    if (n == "string") return PrimitiveKind::STRING;
     return PrimitiveKind::VOID;
 }
 
@@ -2893,22 +2898,32 @@ void TypeChecker::collect_globals() {
             }
             EnumLayout elay;
             elay.name = en->name;
-            // C-style: enum con VALOR entero (`enum Op : u8 { ... }`).
+            // C-style: enum con VALOR (`enum Op : u8 { ... }`, `enum M : f64 {..}`,
+            // `enum V : string {..}`).  El backing puede ser entero, float o
+            // string; cada variante es una CONSTANTE de ese tipo.
             const bool valued = !en->backing_type.empty();
             elay.is_valued = valued;
+            bool backing_is_int = false;
+            bool backing_is_float = false;
+            bool backing_is_string = false;
             if (valued) {
                 elay.backing = prim_kind_from_name(en->backing_type);
-                if (!is_integer_kind(elay.backing)) {
+                backing_is_int = is_integer_kind(elay.backing);
+                backing_is_float = (elay.backing == PrimitiveKind::F32 ||
+                                    elay.backing == PrimitiveKind::F64);
+                backing_is_string = (elay.backing == PrimitiveKind::STRING);
+                if (!backing_is_int && !backing_is_float && !backing_is_string) {
                     diags_.error(en->loc,
-                                 "el tipo base de un enum debe ser un entero "
-                                 "(u8/u16/u32/u64/i8/i16/i32/i64): '" +
+                                 "el tipo base de un enum debe ser entero, "
+                                 "float o string (u8/.../i64, f32/f64, string): '" +
                                      en->backing_type + "'");
                     elay.backing = PrimitiveKind::I64;
+                    backing_is_int = true;
                 }
             }
             std::unordered_map<std::string, bool> seen_v;
             uint32_t max_pl = 0;
-            int64_t next_val = 0;  // auto-incremento para enums con valor.
+            int64_t next_val = 0;  // auto-incremento para enums con valor entero.
             for (size_t vi = 0; vi < en->variants.size(); ++vi) {
                 const auto &vd = en->variants[vi];
                 if (!seen_v.emplace(vd.name, true).second) {
@@ -2919,7 +2934,7 @@ void TypeChecker::collect_globals() {
                 EnumVariantInfo vi_info;
                 vi_info.name = vd.name;
                 vi_info.tag = static_cast<uint32_t>(vi);
-                // Valor entero de la variante (solo enums con tipo base).
+                // Valor de la variante (solo enums con tipo base).
                 if (valued) {
                     if (!vd.field_types.empty()) {
                         diags_.error(vd.loc,
@@ -2927,19 +2942,37 @@ void TypeChecker::collect_globals() {
                                      "base) no puede llevar payload: '" +
                                          vd.name + "'");
                     }
-                    if (vd.value_expr) {
-                        const ComptimeEvalResult r =
-                            comptime_eval_expr(*this, vd.value_expr.get());
-                        if (!r.ok || r.is_str || r.is_array || r.is_struct) {
+                    if (backing_is_int) {
+                        // Entero: se pliega a constante (soporta auto-incremento).
+                        if (vd.value_expr) {
+                            const ComptimeEvalResult r =
+                                comptime_eval_expr(*this, vd.value_expr.get());
+                            if (!r.ok || r.is_str || r.is_array || r.is_struct) {
+                                diags_.error(vd.loc, "el valor de la variante '" +
+                                                         vd.name +
+                                                         "' debe ser una "
+                                                         "constante entera");
+                            } else {
+                                next_val = r.value;
+                            }
+                        }
+                        vi_info.int_value = next_val;
+                        next_val = next_val + 1;
+                    } else {
+                        // Float/string/...: el valor es OBLIGATORIO y explicito;
+                        // el lowering baja la expresion AST tal cual (reusa el
+                        // lowering de literales float/string/init-list).
+                        if (!vd.value_expr) {
                             diags_.error(vd.loc,
-                                         "el valor de la variante '" + vd.name +
-                                             "' debe ser una constante entera");
+                                         "la variante '" + vd.name +
+                                             "' de un enum con tipo base '" +
+                                             en->backing_type +
+                                             "' requiere un valor explicito "
+                                             "(= <valor>)");
                         } else {
-                            next_val = r.value;
+                            vi_info.value_ast = vd.value_expr.get();
                         }
                     }
-                    vi_info.int_value = next_val;
-                    next_val = next_val + 1;
                 }
                 vi_info.field_types.reserve(vd.field_types.size());
                 for (const auto &ft : vd.field_types) {

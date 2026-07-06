@@ -14765,12 +14765,35 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
         const auto &elays = tc_.enum_layouts();
         auto it = elays.find(enum_name);
         if (it != elays.end() && it->second.is_valued) {
+            const PrimitiveKind bk = it->second.backing;
+            const bool backing_int =
+                (bk == PrimitiveKind::I8 || bk == PrimitiveKind::I16 ||
+                 bk == PrimitiveKind::I32 || bk == PrimitiveKind::I64 ||
+                 bk == PrimitiveKind::U8 || bk == PrimitiveKind::U16 ||
+                 bk == PrimitiveKind::U32 || bk == PrimitiveKind::U64);
             for (const auto &v : it->second.variants) {
                 if (v.name == e->field_name) {
-                    const ir::IrType t =
-                        ir_type_from_primitive(it->second.backing);
-                    return emit_const(t, static_cast<uint64_t>(v.int_value),
-                                      e->loc.line);
+                    if (backing_int) {
+                        // Entero: CONST del ancho base (soporta auto-incremento).
+                        const ir::IrType t = ir_type_from_primitive(bk);
+                        return emit_const(t, static_cast<uint64_t>(v.int_value),
+                                          e->loc.line);
+                    }
+                    // String: construir un StringObject real (no el puntero
+                    // crudo a los bytes que produce lower_string_lit).
+                    if (bk == PrimitiveKind::STRING && v.value_ast &&
+                        v.value_ast->kind == ast::NodeKind::StringLitExpr) {
+                        return lower_string_literal_to_string_object(
+                            const_cast<ast::StringLitExpr *>(
+                                static_cast<const ast::StringLitExpr *>(
+                                    v.value_ast)));
+                    }
+                    // Float/...: bajar la expresion AST de la variante (reusa
+                    // el lowering de literales float/init-list).
+                    if (v.value_ast) {
+                        return lower_expr(const_cast<ast::Expr *>(v.value_ast));
+                    }
+                    break;
                 }
             }
         }

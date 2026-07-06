@@ -907,6 +907,15 @@ inline const char *primitive_name(PrimitiveKind k) noexcept {
  */
 inline bool types_assignable(const Type &target, const Type &value) noexcept {
     if (target == value) return true;
+    // Valued enum (`enum Op : u8 {..}`, `enum M : string {..}`): ES su tipo
+    // base.  El @c struct_name solo distingue el enum para resolver variantes,
+    // no para asignabilidad.  Assignable a/desde su tipo base y a otro valued
+    // enum del mismo backing cuando el @c kind coincide (int<->int de distinto
+    // ancho lo cubre @c is_numeric mas abajo).
+    if ((target.is_valued_enum || value.is_valued_enum) &&
+        target.kind == value.kind) {
+        return true;
+    }
     // Newtype barrier: si target O value es un newtype (nominal_id > 0)
     // y NO son el mismo newtype (operator== ya lo cubrio), el tipo
     // es nominalmente distinto y requiere cast explicito `(T)x`.
