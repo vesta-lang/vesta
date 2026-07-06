@@ -22,6 +22,7 @@
 #include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime_introspect.h"   // helpers compartidos rama A
+#include "concepts.h"                  // conceptos como predicado -> CONST bool
 #include "generic_clone.h"             // clone_expr (custom print to_string)
 #include "vx/lexer.h"                 // parse de fragments para @Macro
 #include "vx/parser.h"                // parse_one_expr para @Macro
@@ -20112,6 +20113,23 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st.source_line = e->loc.line;
         fn_->append(current_block_, std::move(st));
         out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
+    // -----------------------------------------------------------------
+    // Concepto como PREDICADO: `Concepto<T>()` -> CONST bool.  El type
+    // checker ya valido que sea un concepto (built-in o de usuario) con
+    // 1 type-arg y 0 args runtime.
+    // -----------------------------------------------------------------
+    if (!e->type_args.empty() && e->args.empty() &&
+        (is_builtin_concept(name) ||
+         tc_.concepts().find(name) != tc_.concepts().end())) {
+        const uint32_t src_line = e->loc.line;
+        const Type t1 = tc_.resolve_type_node(e->type_args[0].get());
+        const ConceptEval ce = comptime_eval_concept(tc_, name, t1);
+        out_value = emit_const(ir::IrType::BOOL,
+                               (ce.found && ce.satisfied) ? 1ULL : 0ULL,
+                               src_line);
         return true;
     }
 

@@ -1,0 +1,39 @@
+// -----------------------------------------------------------------------------
+// Bloque comptime { }: TODA declaracion/definicion de variable es comptime por
+// contexto -- no hace falta anotar `comptime` en cada una.  Soporta enums,
+// casts, reasignacion mutable, uso de vars previas y control de flujo.  Todo se
+// evalua en compile-time (cero runtime); los static_assert validan el estado.
+// -----------------------------------------------------------------------------
+
+enum Op : u8 { ADD = 0x01, SUB = 0x29, MOV = 0x89 }
+
+i32 main() {
+    comptime {
+        i32 x = 5;                       // decl + init (sin `comptime` explicito)
+        x = x + 1;                       // reasignacion mutable
+        static_assert(x == 6, "x == 6");
+
+        i32 op = (i32) Op.MOV;           // valor desde un enum C-style
+        static_assert(op == 0x89, "MOV == 0x89");
+
+        i32 combo = (i32) Op.ADD + (i32) Op.SUB;  // aritmetica con enums
+        static_assert(combo == 0x2a, "ADD + SUB == 0x2a");
+
+        i32 z = x + op;                  // uso de vars previas
+        static_assert(z == 0x8f, "z == 0x8f");
+
+        bool flag = (x == 6) && (op == 0x89);
+        static_assert(flag, "flag true");
+
+        u64 mask = 0x100;                // otro tipo entero
+        mask = mask * 2;
+        static_assert(mask == 0x200, "mask == 0x200");
+
+        // Control de flujo con contador mutable.
+        i32 i = 0;
+        i32 acc = 0;
+        while (i < 4) { acc = acc + i; i = i + 1; }
+        static_assert(acc == 6, "0+1+2+3 == 6");
+    }
+    return 42;
+}

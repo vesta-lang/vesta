@@ -35,6 +35,7 @@
 #include "vx/type_classify.h"         // is_c_representable / is_managed (Fase 1)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime_introspect.h"   // comptime_field_type
+#include "concepts.h"                 // conceptos como predicado comptime
 #include "vx/lexer.h"  // parse de fragments en comptime_emit_expr
 #include "vx/parser.h" // parse_one_expr para macros con splice
 #include "loader/oop_types.h" // para sizeof(loader::ObjectHeader) en el layout de clases
@@ -5185,7 +5186,13 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
             bool valid = false;
             if (inner->kind == ast::NodeKind::VarDeclStmt) {
                 auto *v = static_cast<ast::VarDeclStmt *>(inner.get());
-                if (v->is_comptime) valid = true;
+                // Dentro de un comptime block TODA var local es comptime por
+                // contexto: el usuario no necesita anotar `comptime` en cada
+                // una (`i32 x = 5;` == `comptime i32 x = 5;` aqui).  El init
+                // debe seguir siendo comptime-evaluable (si no, error claro
+                // mas abajo al ejecutar).
+                v->is_comptime = true;
+                valid = true;
             } else if (inner->kind == ast::NodeKind::ExprStmt ||
                        inner->kind == ast::NodeKind::IfStmt ||
                        inner->kind == ast::NodeKind::WhileStmt ||
@@ -10960,6 +10967,34 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
         }
         const Type rt{PrimitiveKind::VOID};
+        e->result_type = rt;
+        return rt;
+    }
+
+    // -----------------------------------------------------------------
+    // Concepto como PREDICADO directo: `Concepto<T>()` evalua a un bool
+    // compile-time (0/1), igual que dentro de un predicado de concepto o de
+    // un `where`.  Permite usar cualquier concepto (built-in o de usuario)
+    // como una funcion booleana comptime: `if (Enum<T>()) {...}`,
+    // `static_assert(Numeric<T>(), ...)`, `bool b = AnyEnum<Shape>();`.
+    // Requiere 1 type-arg y 0 args runtime.  El lowering lo dobla a CONST.
+    // -----------------------------------------------------------------
+    if (!e->type_args.empty() &&
+        (is_builtin_concept(id->name) ||
+         concepts().find(id->name) != concepts().end())) {
+        if (e->type_args.size() != 1) {
+            diags_.error(e->loc, "concepto '" + id->name +
+                                     "' como predicado: se esperaba 1 type arg, "
+                                     "recibidos " +
+                                     std::to_string(e->type_args.size()));
+        }
+        if (!e->args.empty()) {
+            diags_.error(e->loc, "concepto '" + id->name +
+                                     "' como predicado no toma argumentos "
+                                     "runtime (solo el type-arg <T>)");
+        }
+        (void)type_from_node(e->type_args[0].get());
+        const Type rt{PrimitiveKind::BOOL};
         e->result_type = rt;
         return rt;
     }
