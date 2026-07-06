@@ -74,6 +74,17 @@ std::string mangle_type(const Type &t) {
 // no colapsar a un PrimitiveTypeNode{PTR/ARRAY} que pierde esa info (#2).
 std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
                                                           const SourceLoc &loc) {
+    // Enum con valor de backing entero/float/string: el kind es el del backing
+    // pero la IDENTIDAD del tipo es el nombre del enum (con is_valued_enum).
+    // Reconstruir como NamedTypeNode con ese nombre para que la re-resolucion
+    // recupere el flag is_valued_enum (si colapsara al primitivo, un
+    // `concept<T: Enum>` o `is_enum<T>()` con T=enum perderia la identidad).
+    if (a.is_valued_enum && !a.struct_name.empty()) {
+        auto n = std::make_unique<ast::NamedTypeNode>();
+        n->loc = loc;
+        n->name = a.struct_name;
+        return n;
+    }
     switch (a.kind) {
     case PrimitiveKind::PTR: {
         auto p = std::make_unique<ast::PointerTypeNode>();

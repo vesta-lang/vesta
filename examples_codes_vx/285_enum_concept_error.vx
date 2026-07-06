@@ -1,0 +1,13 @@
+// -----------------------------------------------------------------------------
+// Negativo: el concepto `ValuedEnum` exige un enum C-style CON VALOR.  Un enum
+// ADT (tagged union, sin `: tipo`) NO lo satisface -> error de compilacion.
+// -----------------------------------------------------------------------------
+
+enum Shape { Circle(i32), Square(i32, i32) }   // ADT: sin valor de backing
+
+i32 tag<T: ValuedEnum>(T x) { return 7; }
+
+i32 main() {
+    // Shape es un enum, pero NO es ValuedEnum -> constraint violada.
+    return tag(Shape.Circle(5));
+}

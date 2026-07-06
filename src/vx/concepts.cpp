@@ -41,7 +41,7 @@ bool is_builtin_concept(const std::string &name) {
         "String",   "Comparable", "Ordered", "Eq",       "Sized",
         "Copyable", "Hashable", "Stringable", "Default",  "Primitive",
         "Class",    "Struct",   "Callable",  "Destructible", "Iterable",
-        "Shareable",
+        "Shareable", "Enum",    "ValuedEnum",
     };
     return set.count(name) > 0;
 }
@@ -76,6 +76,11 @@ static bool eval_builtin_concept(const TypeChecker &tc, const std::string &name,
     if (name == "Primitive") return is_prim;
     if (name == "Class") return comptime_is_class(t);
     if (name == "Struct") return comptime_is_struct(tc, t);
+    // Enum: cualquier enum (ADT tagged-union o C-style con valor).
+    if (name == "Enum") return comptime_is_enum(tc, t);
+    // ValuedEnum: solo los C-style con backing entero/float/string
+    // (los ADT no tienen valor).  Backing struct/clase son su tipo base.
+    if (name == "ValuedEnum") return t.is_valued_enum;
     if (name == "Callable") return k == PrimitiveKind::FUNCTION;
     // Comparable / Ordered: soportan `<` / `>` -> numericos, char, bool.
     if (name == "Comparable" || name == "Ordered")

@@ -321,6 +321,19 @@ bool comptime_is_class(const Type &t);
 bool comptime_is_struct(const TypeChecker &tc, const Type &t);
 
 /**
+ * @brief @c true si @c t es un ENUM (tagged-union ADT o C-style con valor).
+ *
+ * Cubre dos representaciones: los enum ADT llegan como
+ * @c PrimitiveKind::STRUCT con su @c struct_name en @c enum_layouts_; los
+ * enum con valor de backing entero/float/string llegan con el kind del
+ * backing y el flag @c is_valued_enum (su @c struct_name es el nombre del
+ * enum, tambien en @c enum_layouts_).  Los enum con backing struct/clase
+ * son indistinguibles de su tipo base por diseno ("un Color ES un Rgb"),
+ * asi que para esos este predicado devuelve @c false (son su backing).
+ */
+bool comptime_is_enum(const TypeChecker &tc, const Type &t);
+
+/**
  * @brief @c true si @c t es un primitivo escalar (i*, u*, f*, bool, char,
  * void).
  *

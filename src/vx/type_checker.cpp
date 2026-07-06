@@ -5999,6 +5999,10 @@ bool TypeChecker::lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out) 
         *out = comptime_is_primitive(t1) ? 1 : 0;
         return true;
     }
+    if (nm == "is_enum") {
+        *out = comptime_is_enum(*this, t1) ? 1 : 0;
+        return true;
+    }
     if ((nm == "is_subtype" || nm == "is_same") && e->type_args.size() == 2) {
         const Type t2 = type_from_node(e->type_args[1].get());
         *out = (nm == "is_subtype" ? comptime_is_subtype(*this, t1, t2)
@@ -10974,8 +10978,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         const std::string &nm = id->name;
         const bool one_targ_no_args =
             nm == "field_count" || nm == "method_count" || nm == "is_class" ||
-            nm == "is_struct" || nm == "is_primitive" || nm == "is_newtype" ||
-            nm == "is_opaque" || nm == "underlying_of";
+            nm == "is_struct" || nm == "is_primitive" || nm == "is_enum" ||
+            nm == "is_newtype" || nm == "is_opaque" || nm == "underlying_of";
         const bool one_targ_str_arg = nm == "offsetof" || nm == "has_field" ||
                                       nm == "has_method" || nm == "field_type";
         const bool one_targ_int_arg =
@@ -11097,6 +11101,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     hit.value_str = yn(comptime_is_struct(*this, t1));
                 } else if (nm == "is_primitive") {
                     hit.value_str = yn(comptime_is_primitive(t1));
+                } else if (nm == "is_enum") {
+                    hit.value_str = yn(comptime_is_enum(*this, t1));
                 } else if (nm == "field_name") {
                     hit.type_kind = "string";
                     hit.value_str =

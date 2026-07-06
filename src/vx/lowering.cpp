@@ -20126,8 +20126,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         const bool one_targ_no_args =
             name == "field_count" || name == "method_count" ||
             name == "is_class" || name == "is_struct" ||
-            name == "is_primitive" || name == "is_newtype" ||
-            name == "is_opaque" || name == "underlying_of";
+            name == "is_primitive" || name == "is_enum" ||
+            name == "is_newtype" || name == "is_opaque" ||
+            name == "underlying_of";
         const bool one_targ_str_arg =
             name == "offsetof" || name == "has_field" || name == "has_method" ||
             name == "field_type";
@@ -20193,6 +20194,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             }
             if (name == "is_struct") {
                 const bool v = comptime_is_struct(tc_, t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (name == "is_enum") {
+                const bool v = comptime_is_enum(tc_, t1);
                 out_value =
                     emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
                 return true;

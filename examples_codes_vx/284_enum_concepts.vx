@@ -1,0 +1,55 @@
+// -----------------------------------------------------------------------------
+// Concepts + enums: introspeccion `is_enum<T>()`, conceptos built-in `Enum` y
+// `ValuedEnum`, concepto de usuario apoyado en la introspeccion, y un enum con
+// backing entero satisfaciendo su concepto de backing (`Numeric`).
+// -----------------------------------------------------------------------------
+// interp = JIT = AOT; cero runtime (todo se resuelve en compile-time).
+
+enum Dir  : u8     { NORTH, EAST, SOUTH, WEST }   // C-style con valor (entero)
+enum Verb : string { GET = "GET", POST = "POST" } // C-style con valor (string)
+enum Shape { Circle(i32), Square(i32, i32) }      // ADT (tagged union)
+
+// Concepto de USUARIO apoyado en el builtin comptime `is_enum`.
+concept AnyEnum<T> = is_enum<T>();
+
+// Generica restringida por el concepto de usuario.
+i32 mark<T: AnyEnum>(T x) { return 1; }
+
+// Restringida por el built-in `Enum` (ADT o C-style con valor).
+i32 count_enum<T: Enum>(T x) { return 2; }
+
+// Restringida por `ValuedEnum` (solo C-style con valor, no ADT).
+i32 tag<T: ValuedEnum>(T x) { return 4; }
+
+// Restringida por `Numeric`: un `enum : u8` lo satisface (ES un u8).
+i32 as_num<T: Numeric>(T x) { return (i32) x; }
+
+i32 main() {
+    i32 acc = 0;
+
+    // is_enum<T>() en compile-time sobre cada categoria de enum + un no-enum.
+    if (is_enum<Dir>())   { acc = acc + 1; }   // valued int  -> 1
+    if (is_enum<Verb>())  { acc = acc + 2; }   // valued str  -> 3
+    if (is_enum<Shape>()) { acc = acc + 4; }   // ADT         -> 7
+    if (is_enum<i32>())   { acc = acc + 99; }  // no-enum     -> no suma
+
+    // Concepto de usuario AnyEnum como bound (ADT y valued-string).
+    acc = acc + mark(Shape.Circle(5));         // 8
+    acc = acc + mark<Verb>(Verb.GET);          // 9
+
+    // Built-in Enum como bound.
+    acc = acc + count_enum<Dir>(Dir.EAST);     // 11
+    acc = acc + count_enum(Shape.Square(1, 2));// 13
+
+    // ValuedEnum: Dir (C-style con valor) lo satisface.
+    acc = acc + tag(Dir.WEST);                 // 17
+
+    // Un enum : u8 satisface Numeric y se usa como su backing.
+    acc = acc + as_num(Dir.SOUTH);             // 17 + 2 = 19
+
+    // Ajuste a 42 para la convencion de los tests e2e.
+    acc = acc + 23;                            // 42
+
+    println("acc=${acc}");
+    return acc;                                // 42
+}

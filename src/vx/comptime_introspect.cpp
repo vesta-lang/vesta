@@ -489,6 +489,15 @@ bool comptime_is_struct(const TypeChecker &tc, const Type &t) {
     return it != tc.struct_layouts().end();
 }
 
+bool comptime_is_enum(const TypeChecker &tc, const Type &t) {
+    /* Enum con valor de backing entero/float/string: flag explicito. */
+    if (t.is_valued_enum) return true;
+    /* Enum ADT (o nombre de enum sin valor usado como tipo): llega como
+       STRUCT cuyo struct_name esta en enum_layouts_ (no en struct_layouts_). */
+    if (t.struct_name.empty()) return false;
+    return tc.enum_layouts().find(t.struct_name) != tc.enum_layouts().end();
+}
+
 // -------------------------------------------------------------------
 // A.39: mini-interprete para `comptime fn`.
 //
@@ -1215,6 +1224,11 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
     if (nm == "is_primitive") {
         r.ok = true;
         r.value = comptime_is_primitive(t1) ? 1 : 0;
+        return r;
+    }
+    if (nm == "is_enum") {
+        r.ok = true;
+        r.value = comptime_is_enum(tc, t1) ? 1 : 0;
         return r;
     }
     /* #6: predicados de tipo adicionales, base de los conceptos built-in
