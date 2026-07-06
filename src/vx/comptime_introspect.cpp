@@ -2241,6 +2241,34 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
         /* A.41/A.42: `obj.field` -- field puede ser cualquier kind. */
         auto *fa = static_cast<const ast::FieldAccessExpr *>(expr);
         if (!fa->base) return r;
+        /* Valued enum: `Op.MOV` -> valor comptime de la variante.  Entero
+         * directo (int_value); float/string se evaluan de su value_ast. */
+        if (fa->base->kind == ast::NodeKind::IdentExpr) {
+            const auto *bid =
+                static_cast<const ast::IdentExpr *>(fa->base.get());
+            const auto &elays = tc.enum_layouts();
+            auto ite = elays.find(bid->name);
+            if (ite != elays.end() && ite->second.is_valued) {
+                const PrimitiveKind bk = ite->second.backing;
+                const bool is_int =
+                    (bk == PrimitiveKind::I8 || bk == PrimitiveKind::I16 ||
+                     bk == PrimitiveKind::I32 || bk == PrimitiveKind::I64 ||
+                     bk == PrimitiveKind::U8 || bk == PrimitiveKind::U16 ||
+                     bk == PrimitiveKind::U32 || bk == PrimitiveKind::U64);
+                for (const auto &v : ite->second.variants) {
+                    if (v.name == fa->field_name) {
+                        if (is_int) {
+                            r.ok = true;
+                            r.value = v.int_value;
+                            return r;
+                        }
+                        if (v.value_ast)
+                            return comptime_eval_expr(tc, v.value_ast);
+                        return r;
+                    }
+                }
+            }
+        }
         ComptimeEvalResult obj = comptime_eval_expr(tc, fa->base.get());
         if (!obj.ok || !obj.is_struct) return r;
         auto it = obj.struct_fields.find(fa->field_name);

@@ -402,3 +402,8 @@ tests/bugs/naked_xmodule_test/main.vex
 tests/bugs/naked_xmodule_test/naked_mod.vex
 salida_vex.txt
 wsl-asan/
+
+
+*.id1
+*.id0
+*.nam
