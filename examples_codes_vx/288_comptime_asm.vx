@@ -1,0 +1,24 @@
+// -----------------------------------------------------------------------------
+// Inline asm ejecutado en COMPILE-TIME: una `comptime fn` con `asm {}` se baja a
+// IR y se ejecuta en el ComptimeVM (JIT primario + interprete de fallback), no en
+// el evaluador AST (que no ejecuta codigo nativo).  El resultado se pliega a una
+// constante -- cero coste en runtime.  Path .velb (interp / JIT).
+// -----------------------------------------------------------------------------
+
+// Suma via inline asm x86-64, evaluada en compile-time.
+comptime i64 asm_add(i64 a, i64 b) {
+    register("rdi") i64 x = a;
+    register("rsi") i64 y = b;
+    register("rax") i64 out;
+    asm volatile {
+        mov rax, rdi
+        add rax, rsi
+    }
+    return out;
+}
+
+i32 main() {
+    // asm_add(40, 2) corre en el ComptimeVM durante la compilacion; el 42 queda
+    // plegado como constante en main.
+    return (i32) asm_add(40, 2);   // 42
+}

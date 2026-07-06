@@ -2438,6 +2438,53 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
     }
 }
 
+/* F1: ¿el body contiene inline asm directo (AsmStmt) en cualquier container?
+ * Una `comptime fn` con asm no es tree-walkeable (el evaluador AST no ejecuta
+ * codigo nativo) -> se ruta al ComptimeVM (JIT + interp fallback), que si lo
+ * ejecuta (INLINE_ASM). */
+static bool stmt_contains_asm(const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::AsmStmt:
+        return true;
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body)
+            if (stmt_contains_asm(st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        return stmt_contains_asm(is->then_branch.get()) ||
+               stmt_contains_asm(is->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt:
+        return stmt_contains_asm(
+            static_cast<const ast::WhileStmt *>(s)->body.get());
+    case ast::NodeKind::DoWhileStmt:
+        return stmt_contains_asm(
+            static_cast<const ast::DoWhileStmt *>(s)->body.get());
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        return stmt_contains_asm(fs->init.get()) ||
+               stmt_contains_asm(fs->body.get());
+    }
+    default:
+        return false;
+    }
+}
+
+/* F1: una `comptime fn` que usa inline asm en su propio body (o es @Naked =
+ * cuerpo asm entero) debe ejecutarse en el ComptimeVM.  Transitivo (llama a un
+ * helper @Naked) NO se cubre: `vrt:naked_dispatch` no resuelve el simbolo en
+ * el contexto del ComptimeVM -> caeria a 0 silencioso; ese caso da el error
+ * claro del call site en su lugar. */
+static bool comptime_fn_uses_asm(const ast::FunctionDecl *fd) {
+    if (!fd) return false;
+    if (fd->is_naked) return true;
+    return stmt_contains_asm(fd->body.get());
+}
+
 /* Pre-pase de annotation de tipos para body de @Macro.
  *
  * Los macros NO pasan por `check_functions` (los saltea porque su
@@ -2589,12 +2636,20 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * una ComptimeVM para acelerar la metaprogramacion ~10-1000x.
      * Por ahora el IR queda en el modulo como dead code; el call
      * site del macro sigue usando el evaluator AST. */
+    /* F1: una `comptime fn` (no-macro) con inline asm se baja a IR y se
+     * ejecuta en el ComptimeVM (JIT + interp fallback).  Solo en el path
+     * .velb (interp/JIT): el AOT no hace el two-phase que carga el bytecode
+     * comptime, asi que ahi cae al error claro del call site (sin 0
+     * silencioso).  `native_poo_` = compilacion AOT. */
+    const bool is_vm_comptime_fn = fd->is_comptime && !fd->is_macro &&
+                                   !native_poo_ && comptime_fn_uses_asm(fd);
     if (fd->is_comptime && !fd->is_macro) {
         /* comptime fn (no-macro): por defecto NO se baja (se evalua en
          * compile-time y se elide).  Solo-LSP: con emit_comptime_fns_ la
          * bajamos como funcion normal para poder inspeccionar su codegen
-         * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro. */
-        if (!emit_comptime_fns_) return;
+         * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro.
+         * F1: si usa asm (y no es AOT), SI se baja (para el ComptimeVM). */
+        if (!emit_comptime_fns_ && !is_vm_comptime_fn) return;
     } else if (fd->is_comptime) {
         /* @Macro: intentar lowear el body al IR.  Si contiene
          * caracteristicas no soportadas todavia (introspect,
@@ -2647,7 +2702,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     /* Phase MC.1: nombre prefijado para macros lowered al IR.
      * Asi no colisionan con funciones runtime y son identificables
      * por el TypeChecker para invocacion desde ComptimeVM (MC.2). */
-    if (fd->is_macro && fd->is_comptime) {
+    if ((fd->is_macro && fd->is_comptime) || is_vm_comptime_fn) {
+        /* @Macro, o comptime fn con asm (F1): nombre prefijado + registro en
+         * el ComptimeRuntime para invocacion via VM.  El prefijo `__macro_`
+         * identifica "codigo comptime lowered" (macro o fn). */
         fn.name = "__macro_" + fd->name;
         fn.is_macro_compiled = true;
         ++macro_lowered_count_;
@@ -16795,6 +16853,41 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             ComptimeEvalResult r = comptime_eval_expr(tc_, e);
             if (!r.ok && emit_comptime_fns_) {
                 goto skip_comptime_eval_for_macro_to_macro;
+            }
+            /* F1: comptime fn con asm -> ejecutar en el ComptimeVM (JIT +
+             * interp fallback).  Solo path .velb (!native_poo_): con el
+             * two-phase, pass 2 (bytecode comptime cargado via prebuilt) da
+             * el valor real; el pass 1 (sin bytecode) emite placeholder 0 --
+             * inocuo, porque el cr del pass 1 se descarta y el pass 2
+             * recompila.  La fn ya se bajo a `__macro_<name>` en
+             * lower_function.  En AOT no se entra aqui (is_vm_comptime_fn era
+             * false) -> cae al error claro de abajo. */
+            if (!r.ok && !native_poo_ && comptime_fn_uses_asm(cit->second)) {
+                const uint32_t src_line_asm = e->loc.line;
+                ir::IrType t_asm = ir::IrType::I64;
+                if (cit->second->return_type) {
+                    Type rt =
+                        tc_.resolve_type_node(cit->second->return_type.get());
+                    t_asm = ir_type_from_primitive(rt.kind);
+                }
+                std::vector<uint64_t> vm_args;
+                bool args_ok = true;
+                for (const auto &a : e->args) {
+                    ComptimeEvalResult av = comptime_eval_expr(tc_, a.get());
+                    if (!av.ok) {
+                        args_ok = false;
+                        break;
+                    }
+                    vm_args.push_back(static_cast<uint64_t>(av.value));
+                }
+                uint64_t r0 = 0;
+                if (args_ok) {
+                    (void)const_cast<TypeChecker &>(tc_)
+                        .comptime_runtime()
+                        .invoke_simple_macro("__macro_" + cid->name, vm_args,
+                                             r0);
+                }
+                return emit_const(t_asm, r0, src_line_asm);
             }
             if (!r.ok) {
                 error_at(e->loc,
