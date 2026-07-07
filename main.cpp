@@ -2617,18 +2617,32 @@ int main(int argc, char *argv[]) {
             !user_already_set_prebuilt) {
             std::error_code aec;
             std::filesystem::create_directories(cache_dir, aec);
+            /* CRITICO: el prebuilt lo carga y EJECUTA el ComptimeVM, que corre
+             * BYTECODE VM -- no codigo nativo.  Con native_poo el `cr` de arriba
+             * bajo las clases/@Naked a lowering NATIVO, que el ComptimeVM no
+             * ejecuta (el CALLN a vrt:naked_dispatch, p.ej., no se materializa
+             * igual) -> las comptime fn con asm daban 0.  Por eso compilamos una
+             * version VM-lowered (native_poo=false) SOLO para el prebuilt del
+             * ComptimeVM; el binario final AOT lo produce el pass-2 con
+             * native_poo. */
+            vx::CompileOptions copts_vm = copts;
+            copts_vm.native_poo = false;
+            vx::CompileResult cr_vm =
+                vx::vx_source_has_imports(vx_source)
+                    ? vx::compile_vx_project(vx_path, copts_vm)
+                    : vx::compile_vx_source(vx_source, vx_path, copts_vm);
             const std::string tmp_vel_path = cache_prefix + ".vel.tmp";
             {
                 std::ofstream tmp(tmp_vel_path, std::ios::binary);
                 if (tmp) {
                     if (copts.emit_debug) tmp << "// @file " << vx_path << "\n";
-                    tmp << cr.vel_text;
+                    tmp << cr_vm.vel_text;
                 }
             }
             const int tmp_rc = asm_multi_process::run_worker(
                 tmp_vel_path, cache_prefix,
                 /*skip_preprocessor=*/true, /*keep_labels=*/false,
-                /*ir_section_bytes=*/&cr.ir_section_bytes, /*emit_map=*/false);
+                /*ir_section_bytes=*/&cr_vm.ir_section_bytes, /*emit_map=*/false);
             if (tmp_rc == EXIT_SUCCESS) {
 #if defined(_WIN32)
                 _putenv_s("VESTA_MC_PREBUILT", cache_path.c_str());

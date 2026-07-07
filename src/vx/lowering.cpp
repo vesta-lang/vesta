@@ -2595,7 +2595,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * comptime a un `.velb` cacheado y lo carga, asi que los call sites
      * comptime invocan la VM y el valor se pliega a constante. */
     const bool is_vm_comptime_fn =
-        fd->is_comptime && !fd->is_macro && comptime_fn_uses_asm(fd);
+        fd->is_comptime && !fd->is_macro && comptime_fn_uses_asm(tc_, fd);
     if (fd->is_comptime && !fd->is_macro) {
         /* comptime fn (no-macro): por defecto NO se baja (se evalua en
          * compile-time y se elide).  Solo-LSP: con emit_comptime_fns_ la
@@ -16813,7 +16813,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
              * pass 1 (sin bytecode) emite placeholder 0 -- inocuo, porque el
              * cr del pass 1 se descarta y el pass 2 recompila.  La fn ya se
              * bajo a `__macro_<name>` en lower_function. */
-            if (!r.ok && comptime_fn_uses_asm(cit->second)) {
+            if (!r.ok && comptime_fn_uses_asm(tc_, cit->second)) {
                 const uint32_t src_line_asm = e->loc.line;
                 ir::IrType t_asm = ir::IrType::I64;
                 if (cit->second->return_type) {

@@ -531,17 +531,89 @@ static bool stmt_contains_asm_ci(const ast::Stmt *s) {
     }
 }
 
-bool comptime_fn_uses_asm(const ast::FunctionDecl *fd) {
+/* #3: ¿la expresion llama (directamente) a una fn @Naked (cuerpo asm)? */
+static bool expr_calls_naked_ci(const TypeChecker &tc, const ast::Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case ast::NodeKind::CallExpr: {
+        const auto *ce = static_cast<const ast::CallExpr *>(e);
+        if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
+            const auto *cid =
+                static_cast<const ast::IdentExpr *>(ce->callee.get());
+            const FunctionSig *sig = tc.function_sig_by_name(cid->name);
+            if (sig && sig->is_naked) return true;
+        }
+        for (const auto &a : ce->args)
+            if (expr_calls_naked_ci(tc, a.get())) return true;
+        return expr_calls_naked_ci(tc, ce->callee.get());
+    }
+    case ast::NodeKind::BinaryExpr: {
+        const auto *bn = static_cast<const ast::BinaryExpr *>(e);
+        return expr_calls_naked_ci(tc, bn->lhs.get()) ||
+               expr_calls_naked_ci(tc, bn->rhs.get());
+    }
+    case ast::NodeKind::UnaryExpr:
+        return expr_calls_naked_ci(
+            tc, static_cast<const ast::UnaryExpr *>(e)->operand.get());
+    case ast::NodeKind::CastExpr:
+        return expr_calls_naked_ci(
+            tc, static_cast<const ast::CastExpr *>(e)->operand.get());
+    default:
+        return false;
+    }
+}
+
+static bool stmt_calls_naked_ci(const TypeChecker &tc, const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body)
+            if (stmt_calls_naked_ci(tc, st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::ExprStmt:
+        return expr_calls_naked_ci(
+            tc, static_cast<const ast::ExprStmt *>(s)->expr.get());
+    case ast::NodeKind::ReturnStmt:
+        return expr_calls_naked_ci(
+            tc, static_cast<const ast::ReturnStmt *>(s)->value.get());
+    case ast::NodeKind::VarDeclStmt:
+        return expr_calls_naked_ci(
+            tc, static_cast<const ast::VarDeclStmt *>(s)->init.get());
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        return expr_calls_naked_ci(tc, is->cond.get()) ||
+               stmt_calls_naked_ci(tc, is->then_branch.get()) ||
+               stmt_calls_naked_ci(tc, is->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt: {
+        const auto *ws = static_cast<const ast::WhileStmt *>(s);
+        return expr_calls_naked_ci(tc, ws->cond.get()) ||
+               stmt_calls_naked_ci(tc, ws->body.get());
+    }
+    case ast::NodeKind::DoWhileStmt: {
+        const auto *ds = static_cast<const ast::DoWhileStmt *>(s);
+        return expr_calls_naked_ci(tc, ds->cond.get()) ||
+               stmt_calls_naked_ci(tc, ds->body.get());
+    }
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        return stmt_calls_naked_ci(tc, fs->init.get()) ||
+               expr_calls_naked_ci(tc, fs->cond.get()) ||
+               expr_calls_naked_ci(tc, fs->step.get()) ||
+               stmt_calls_naked_ci(tc, fs->body.get());
+    }
+    default:
+        return false;
+    }
+}
+
+bool comptime_fn_uses_asm(const TypeChecker &tc, const ast::FunctionDecl *fd) {
     if (!fd) return false;
     if (fd->is_naked) return true;
-    /* Solo asm DIRECTO.  El transitivo (una comptime fn que LLAMA a un helper
-     * @Naked) NO se cubre a proposito: dentro del ComptimeVM el CALLN a
-     * `vrt:naked_dispatch` (que SI resuelve en el registry) no ejecuta el
-     * dispatcher -- el import queda sin efecto en el bytecode invocado -> daria
-     * 0 silencioso.  Ese caso cae al error claro del call site.  Workaround:
-     * escribir el asm DIRECTO en la comptime fn (funciona interp=JIT=AOT).
-     * Pendiente: root-cause del patch/FFI de naked_dispatch en el ComptimeVM. */
-    return stmt_contains_asm_ci(fd->body.get());
+    if (stmt_contains_asm_ci(fd->body.get())) return true;
+    return stmt_calls_naked_ci(tc, fd->body.get());
 }
 
 // -------------------------------------------------------------------
@@ -2254,7 +2326,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * valor real; en pass 1 (sin bytecode) devuelve un placeholder
                  * DIFERIDO (ok=true para que consts/exprs no den error, pero
                  * static_assert no debe dispararse -- se resuelve en pass 2). */
-                if (comptime_fn_uses_asm(fn_it->second)) {
+                if (comptime_fn_uses_asm(tc, fn_it->second)) {
                     std::vector<uint64_t> vm_args;
                     vm_args.reserve(args.size());
                     for (const auto &a : args)

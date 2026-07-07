@@ -350,7 +350,7 @@ bool comptime_is_enum(const TypeChecker &tc, const Type &t);
  * el CALLN a `vrt:naked_dispatch` no ejecuta el dispatcher; ese caso cae al
  * error claro del call site.  Workaround: asm directo en la comptime fn.
  */
-bool comptime_fn_uses_asm(const ast::FunctionDecl *fd);
+bool comptime_fn_uses_asm(const TypeChecker &tc, const ast::FunctionDecl *fd);
 
 /**
  * @brief @c true si @c t es un primitivo escalar (i*, u*, f*, bool, char,

@@ -29,6 +29,7 @@
 #include "loader/loader.h"
 #include "distrib/dist_runtime.h" /* dtor de VM destruye DistRuntime via unique_ptr */
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
+#include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
 #include "jit/jit_compiler.h" /* CompileResult */
 
 #include <chrono>
@@ -573,9 +574,24 @@ bool ComptimeRuntime::load_macros_from_bytes(
                     const ir::IrFunction &ir_fn =
                         exe->ir_functions[fnit->second];
                     try {
+                        /* #3: resolver de FFI nativo para que el JIT del
+                         * ComptimeVM pueda compilar CALLNs a virtual fns
+                         * `vrt:*` (p.ej. `vrt:naked_dispatch` cuando una
+                         * comptime fn llama a un helper @Naked).  Sin esto el
+                         * CALLN caia a "no-resolver" -> bail a interp (que no
+                         * ejecuta bien el inline-asm/naked en el ComptimeVM)
+                         * -> valor 0 silencioso. */
+                        auto native_resolver =
+                            [](const std::string &name) -> uint64_t {
+                            size_t colon = name.find(':');
+                            if (colon == std::string::npos) return 0;
+                            void *vfn = ffi::lookup_virtual_fn(
+                                name.substr(0, colon), name.substr(colon + 1));
+                            return reinterpret_cast<uint64_t>(vfn);
+                        };
                         jit::CompileResult res = jit::eager_compile_function(
                             ir_fn, &exe->ir_lookup, &exe->ir_functions,
-                            &exe->symbol_table);
+                            &exe->symbol_table, native_resolver);
                         if (res.fn) {
                             impl_->jit_code_by_pc[entry_pc] =
                                 reinterpret_cast<void *>(res.fn);
