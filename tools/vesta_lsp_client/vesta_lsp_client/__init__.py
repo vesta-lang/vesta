@@ -22,15 +22,21 @@ from .client import (
     LspError,
     decode_semantic_tokens,
     discover_lsp,
+    find_binary,
 )
 from .highlight import iter_token_spans, render
+from .runtime import VestaRunner, RunResult, discover_vm
 
 __all__ = [
     "VestaLspClient",
     "LspError",
     "decode_semantic_tokens",
     "discover_lsp",
+    "find_binary",
     "iter_token_spans",
     "render",
+    "VestaRunner",
+    "RunResult",
+    "discover_vm",
 ]
-__version__ = "1.0.0"
+__version__ = "1.1.0"

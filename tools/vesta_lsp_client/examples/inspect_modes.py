@@ -18,6 +18,7 @@ Demuestra:
 import argparse
 import sys
 
+import _console as con
 from vesta_lsp_client import VestaLspClient
 
 DEMO = """\
@@ -74,35 +75,35 @@ def main():
             report = lsp.modes(uri)
             fn = pick_demo_function(lsp, uri, report)
 
-            print("== Modos (interp / JIT / AOT) ==")
+            con.title("Modos (interp / JIT / AOT)")
             for m in report.get("modes", []):
-                print("  [%s]" % m["mode"], m.get("note", ""))
+                con.kv(m["mode"], m.get("note", ""), status="accent")
                 if m["mode"] == "jit":
-                    print("     compilables:", m.get("compilable_functions"))
-                    print("     fallback   :", m.get("fallback_functions"))
+                    con.note("compilables: %s" % m.get("compilable_functions"))
+                    con.note("fallback   : %s" % m.get("fallback_functions"))
                 if m["mode"] == "aot":
-                    print("     compatible :", m.get("compatible"),
-                          "| ok:", m.get("ok_functions"))
+                    con.note("compatible : %s | ok: %s"
+                             % (m.get("compatible"), m.get("ok_functions")))
 
             if fn:
-                print("\n== asm AOT de '%s' por OS/arch ==" % fn)
+                con.title("asm AOT de '%s' por OS/arch" % fn)
                 for os_, arch in (("windows", "x86-64"), ("linux", "x86-32")):
                     r = lsp.aot_asm(uri, function=fn, os_=os_, arch=arch)
                     body = (r.get("text", "") or r.get("reason", "")
                             or r.get("error", ""))
                     head = body.splitlines()[:1]
-                    print("  %-8s %-7s ->" % (os_, arch),
-                          head[0] if head else "(vacio)")
+                    con.kv("%s %s" % (os_, arch),
+                           head[0] if head else "(vacio)")
 
-                print("\n== CFG del codigo nativo de '%s' (mermaid) ==" % fn)
+                con.title("CFG del codigo nativo de '%s' (mermaid)" % fn)
                 cfg = lsp.diagram(uri, kind="asm", fmt="mermaid", function=fn)
                 for ln in cfg.get("text", "").splitlines()[:6]:
-                    print("  " + ln)
+                    con.note(ln)
 
-            print("\n== Diagrama de tipos (classDiagram) ==")
+            con.title("Diagrama de tipos (classDiagram)")
             ty = lsp.diagram(uri, kind="types", fmt="mermaid")
             for ln in ty.get("text", "").splitlines()[:10]:
-                print("  " + ln)
+                con.note(ln)
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write("inspect_modes: %s\n" % exc)
         return 1

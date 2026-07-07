@@ -109,25 +109,39 @@ def discover_lsp(explicit: Optional[str] = None) -> Optional[str]:
     :param explicit: ruta candidata prioritaria (p.ej. la de un argumento CLI).
     :returns: ruta absoluta al binario, o ``None`` si no se encuentra.
     """
-    names = _exe_names()
+    return find_binary(_exe_names(), env_var="VESTA_LSP",
+                       subdirs=[os.path.join("lsp", "bin"), "bin", ""],
+                       explicit=explicit)
 
-    # 1) Ruta explicita.
+
+def find_binary(names: List[str], *, env_var: Optional[str] = None,
+                subdirs: Optional[List[str]] = None,
+                explicit: Optional[str] = None) -> Optional[str]:
+    """Localiza un ejecutable de VestaVM de forma portable (motor comun).
+
+    Orden: ``explicit`` -> variable de entorno ``env_var`` -> ``PATH`` -> raices
+    de instalacion (``VESTA_HOME``/``VEX_HOME`` + ubicaciones estandar por SO) ->
+    builds del repo (``cmake-build-*``, ``build``).  Es el motor detras de
+    :func:`discover_lsp` y :func:`vesta_lsp_client.runtime.discover_vm`.
+
+    :param names: nombres candidatos del binario (con y sin extension).
+    :param env_var: variable de entorno con la ruta directa al binario.
+    :param subdirs: subdirectorios a probar bajo cada raiz de instalacion.
+    :param explicit: ruta candidata prioritaria.
+    :returns: ruta absoluta o ``None``.
+    """
+    if subdirs is None:
+        subdirs = ["bin", ""]
     if explicit and os.path.isfile(explicit):
         return os.path.abspath(explicit)
-
-    # 2) Variable de entorno directa al binario.
-    env_bin = os.environ.get("VESTA_LSP")
-    if env_bin and os.path.isfile(env_bin):
-        return os.path.abspath(env_bin)
-
-    # 3) PATH.
+    if env_var:
+        env_bin = os.environ.get(env_var)
+        if env_bin and os.path.isfile(env_bin):
+            return os.path.abspath(env_bin)
     for name in names:
         found = shutil.which(name)
         if found:
             return os.path.abspath(found)
-
-    # 4) Raices de instalacion + 5) builds del repo.
-    subdirs = [os.path.join("lsp", "bin"), "bin", ""]
     for root in _install_roots() + _repo_build_dirs():
         for sub in subdirs:
             for name in names:
@@ -594,6 +608,57 @@ class VestaLspClient:
         """Valores ``comptime`` (consts + builtins ``sizeof``/``kind``/...)."""
         return self._request("vesta/comptimeValues",
                              {"textDocument": {"uri": uri}, "uri": uri})
+
+    # ------------------------------------------------------------------ #
+    #  Compilacion (el LSP embebe el compilador)                          #
+    # ------------------------------------------------------------------ #
+    def compile(self, uri: str, *, output: Optional[str] = None,
+                mode: str = "vm", project: Optional[bool] = None,
+                debug: bool = False, instrument: Optional[str] = None,
+                keep_labels: bool = False, emit_map: bool = False) -> Any:
+        """Compila el documento a ``.velb`` con el compilador embebido del LSP.
+
+        No ejecuta nada (la ejecucion corre en un proceso aparte; ver
+        :class:`vesta_lsp_client.VestaRunner`).  Si el documento esta abierto se
+        usa su buffer; si no, se lee del disco.
+
+        :param uri: URI del fichero a compilar.
+        :param output: prefijo de salida (produce ``<output>.velb``); ``None``
+            = derivar del nombre del fichero.
+        :param mode: ``"vm"`` | ``"jit"`` | ``"aot"`` (AOT nativo aun no
+            disponible en el compilador embebido).
+        :param project: forzar compilacion de proyecto (resuelve ``import``);
+            ``None`` = auto-detectar si el fuente tiene ``import "..."``.
+        :param debug: emitir info de depuracion (mapeo linea<->bytecode).
+        :param instrument: modo de instrumentacion (``None`` = ninguno).
+        :param keep_labels: conservar nombres de label en el ``.velb``.
+        :param emit_map: emitir un ``.velb-map`` con info de simbolos.
+        :returns: ``{ok, output, diagnostics, frontend_us, mode, project,
+            message?}``.
+        """
+        params: Dict[str, Any] = {
+            "textDocument": {"uri": uri}, "uri": uri, "mode": mode,
+            "debug": debug, "keepLabels": keep_labels, "emitMap": emit_map,
+        }
+        if output is not None:
+            params["output"] = output
+        if project is not None:
+            params["project"] = project
+        if instrument is not None:
+            params["instrument"] = instrument
+        method = "vesta/compileProject" if project else "vesta/compile"
+        return self._request(method, params)
+
+    def compile_project(self, uri: str, *, output: Optional[str] = None,
+                        mode: str = "vm", debug: bool = False,
+                        instrument: Optional[str] = None) -> Any:
+        """Compila un PROYECTO multi-fichero (resuelve ``import``) a ``.velb``.
+
+        :param uri: URI del ``.vx`` raiz del proyecto.
+        :returns: igual que :meth:`compile`.
+        """
+        return self.compile(uri, output=output, mode=mode, project=True,
+                            debug=debug, instrument=instrument)
 
     # ------------------------------------------------------------------ #
     #  Helpers internos                                                   #

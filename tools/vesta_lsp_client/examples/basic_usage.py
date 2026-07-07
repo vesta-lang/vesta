@@ -8,12 +8,13 @@ Uso:
 Si no se da fichero, usa un fuente de demostracion incrustado.  El binario del
 LSP se auto-detecta (PATH + rutas de instalacion); usa --lsp para forzarlo.
 
-Muestra diagnosticos, hover, info de simbolo, completado, lista de funciones y
-complejidad Big-O.
+Muestra diagnosticos, funciones, complejidad Big-O y completado, con salida
+coloreada.
 """
 import argparse
 import sys
 
+import _console as con
 from vesta_lsp_client import VestaLspClient
 
 DEMO = """\
@@ -51,36 +52,24 @@ def main():
         with VestaLspClient(args.lsp) as lsp:
             uri = lsp.open(name, text=source)
 
-            print("== Diagnosticos ==")
-            diags = lsp.diagnostics(uri)
-            if not diags:
-                print("  (ninguno)")
-            for d in diags:
-                sev = {1: "error", 2: "aviso", 3: "info",
-                       4: "pista"}.get(d.get("severity"), "?")
-                rng = d.get("range", {}).get("start", {})
-                print("  %s %s:%s  %s" % (
-                    sev, rng.get("line"), rng.get("character"),
-                    d.get("message")))
+            con.title("Diagnosticos")
+            con.print_diagnostics(lsp.diagnostics(uri))
 
-            # Info del primer simbolo declarado (hover + symbolInfo).
-            print("\n== Funciones del modulo ==")
-            fns = lsp.functions(uri).get("functions", [])
-            for f in fns:
-                print("  -", f.get("name"))
+            con.title("Funciones del modulo")
+            for f in lsp.functions(uri).get("functions", []):
+                con.kv(f.get("name"), f.get("signature", ""), status="accent")
 
-            print("\n== Complejidad Big-O ==")
+            con.title("Complejidad Big-O")
             for f in lsp.complexity(uri).get("functions", []):
-                print("  %-12s total=%s" % (f.get("name"), f.get("total")))
+                con.kv(f.get("name"), "total=%s" % f.get("total"))
 
-            # Completado en la primera linea (offere keywords/tipos/builtins).
-            print("\n== Completado (inicio del documento) ==")
+            con.title("Completado (inicio del documento)")
             comp = lsp.completion(uri, line=0, character=0)
             items = comp if isinstance(comp, list) else comp.get("items", [])
-            print("   %d items; primeros:" % len(items),
-                  [it["label"] for it in items[:8]])
+            con.kv("items", len(items))
+            con.note(", ".join(it["label"] for it in items[:12]) + " ...")
     except Exception as exc:  # noqa: BLE001
-        sys.stderr.write("basic_usage: %s\n" % exc)
+        con.err(str(exc))
         return 1
     return 0
 
