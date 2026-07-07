@@ -33,9 +33,9 @@ namespace lsp {
  * @brief Metadatos de un builtin para el hover y los ghost args.
  */
 struct BuiltinDoc {
-    const char *name;      ///< Nombre del builtin.
-    const char *signature; ///< Firma legible, p.ej. "println(value) -> void".
-    const char *doc;       ///< Descripcion (que recibe / hace / retorna).
+    const char *name;      ///< Nombre del builtin (clave; siempre un literal).
+    std::string signature; ///< Firma legible, p.ej. "println(value) -> void".
+    std::string doc;       ///< Descripcion (que recibe / hace / retorna).
     std::vector<std::string> params; ///< Nombres de parametros (ghost args).
 };
 
