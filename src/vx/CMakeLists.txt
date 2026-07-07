@@ -126,6 +126,9 @@ set_source_files_properties(vxi_format.cpp PROPERTIES
 
 # C++17 minimo (consistente con el resto del proyecto).
 target_compile_features(vx_lib PUBLIC cxx_std_17)
+# PIC se activa globalmente en el CMakeLists raiz (CMAKE_POSITION_INDEPENDENT_
+# CODE ON) para que vx_lib enlace tambien en la libreria compartida embebible
+# vesta_ffi (libvesta.so).  No hace falta fijarlo aqui.
 
 # velb_signature.cpp usa OpenSSL EVP_DigestSign / EVP_DigestVerify.
 # Enlace centralizado en `vesta_openssl` (estatico/standalone o FireDaemon).

@@ -121,6 +121,17 @@ include_directories(BEFORE "${CMAKE_BINARY_DIR}/generated/include")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Codigo posicion-independiente (PIC) en TODOS los objetos.  El proyecto
+# produce ademas de los ejecutables una libreria COMPARTIDA embebible
+# (vesta_ffi -> libvesta.so/.dll) que enlaza las libs estaticas del proyecto y
+# las vendored (vx_lib, capstone, keystone, sqlite3, ...).  En ELF, enlazar un
+# objeto NO-PIC dentro de un .so falla (relocaciones R_X86_64_PC32 /
+# R_X86_64_TPOFF32 "recompile with -fPIC"), p.ej. el TLS `thread_local` de
+# vx_lib o simbolos de capstone.  Con PIC global el shared object enlaza en
+# Linux; en x86-64 el coste de PIC es despreciable y en Windows/MinGW el flag
+# es inocuo para los .a.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
