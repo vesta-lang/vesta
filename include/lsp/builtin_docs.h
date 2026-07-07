@@ -46,6 +46,16 @@ struct BuiltinDoc {
  */
 const BuiltinDoc *lookup_builtin(const std::string &name);
 
+/**
+ * @brief Devuelve todos los nombres de builtins documentados (orden estable).
+ *
+ * Fuente unica para el completado del LSP: el handler de completion une esta
+ * lista con las palabras clave y los simbolos del proyecto.  Mantenerla junto
+ * a la tabla de docs evita que el completado y el hover diverjan.
+ * @return Referencia estable al vector de nombres.
+ */
+const std::vector<std::string> &all_builtin_names();
+
 } // namespace lsp
 
 #endif // VESTA_LSP_BUILTIN_DOCS_H

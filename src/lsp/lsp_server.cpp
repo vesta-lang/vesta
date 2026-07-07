@@ -373,6 +373,7 @@ enum class CompletionKind : int {
     Field = 5,
     Variable = 6,
     Class = 7,
+    Interface = 8,
     Enum = 13,
     Keyword = 14,
     Struct = 22,
@@ -1180,8 +1181,8 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
                     case vx::ast::NodeKind::StructDecl: k = CompletionKind::Struct; break;
                     case vx::ast::NodeKind::ClassDecl: k = CompletionKind::Class; break;
                     case vx::ast::NodeKind::EnumDecl: k = CompletionKind::Enum; break;
-                    case vx::ast::NodeKind::TypeAliasDecl:
-                    case vx::ast::NodeKind::ConceptDecl: k = CompletionKind::Class; break;
+                    case vx::ast::NodeKind::TypeAliasDecl: k = CompletionKind::Class; break;
+                    case vx::ast::NodeKind::ConceptDecl: k = CompletionKind::Interface; break;
                     case vx::ast::NodeKind::GlobalVarDecl:
                         k = CompletionKind::Variable;
                         break;
@@ -1231,10 +1232,21 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
     for (const auto &ty : vx_types())
         if (has_prefix(ty, prefix))
             add_item(ty, CompletionKind::Class, "tipo");
-    // Builtins comunes (lista curada).
+    // Builtins comunes (lista curada, incluye los que no tienen doc formal).
     for (const auto &b : vx_builtins())
         if (has_prefix(b, prefix))
             add_item(b, CompletionKind::Function, "builtin");
+    // Builtins documentados (introspeccion, conceptos, overlay, strings, ...):
+    // la tabla de docs es la fuente de verdad; el detalle es su firma real.
+    for (const auto &b : all_builtin_names())
+        if (has_prefix(b, prefix)) {
+            const BuiltinDoc *d = lookup_builtin(b);
+            // Los conceptos se ofrecen como interfaz/clase (bound o predicado);
+            // el resto como funcion builtin.
+            bool is_concept = d && d->signature.find("<T>()  |  <T:") != std::string::npos;
+            add_item(b, is_concept ? CompletionKind::Interface : CompletionKind::Function,
+                     d ? d->signature : std::string("builtin"));
+        }
 
     // Simbolos del propio documento (con su firma como detalle cuando exista).
     DocSymbols sym = build_doc_symbols(text, uri);
@@ -1253,6 +1265,7 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
         case SymbolKind::Method: k = CompletionKind::Method; break;
         case SymbolKind::Field: k = CompletionKind::Field; break;
         case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+        case SymbolKind::Concept: k = CompletionKind::Interface; break;
         default: k = CompletionKind::Variable; break;
         }
         add_item(d.name, k, d.signature);
@@ -1279,6 +1292,7 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
                 case SymbolKind::Method: k = CompletionKind::Method; break;
                 case SymbolKind::Field: k = CompletionKind::Field; break;
                 case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+                case SymbolKind::Concept: k = CompletionKind::Interface; break;
                 default: k = CompletionKind::Variable; break;
                 }
                 add_item(name, k, signature);

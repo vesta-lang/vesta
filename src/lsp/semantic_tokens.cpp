@@ -362,7 +362,10 @@ bool is_builtin_name(const std::string &name) {
         "is_newtype", "offsetof", "has_field", "has_method", "is_subtype",
         "is_same", "comptime_type", "parent_class", "element_type",
         "error_type", "method_name", "method_return_type", "field_name",
-        "field_type", "field_type_at",
+        "field_type", "field_type_at", "is_enum", "is_opaque", "is_shared",
+        "underlying_of",
+        // --- Overlay (vistas tipadas sobre memoria) ---
+        "in_bounds", "extent",
         // --- Builtins comptime de string + utilidades ---
         "comptime_concat", "comptime_streq", "comptime_strlen", "comptime_chr",
         "comptime_ord", "comptime_substr", "comptime_repeat",
@@ -383,6 +386,24 @@ bool is_builtin_name(const std::string &name) {
         "loadmodule", "unloadmodule",
     };
     return kBuiltins.count(name) != 0;
+}
+
+/**
+ * @brief @c true si @p name es un concepto integrado (comptime).
+ *
+ * Los conceptos (Numeric, Integer, Comparable, ...) se usan como bound
+ * (@c <T: Numeric>) o como predicado (@c Numeric<T>()).  Se resaltan como
+ * @c interface para distinguirlos de clases y funciones.  La lista debe
+ * seguir a la de @c src/vx/concepts.cpp (conceptos integrados).
+ */
+bool is_builtin_concept_name(const std::string &name) {
+    static const std::unordered_set<std::string> kConcepts = {
+        "Number", "Numeric", "Integer", "Int", "Float", "Signed", "Unsigned",
+        "Bool", "Char", "Pointer", "String", "Comparable", "Ordered", "Eq",
+        "Sized", "Copyable", "Hashable", "Stringable", "Default", "Primitive",
+        "Class", "Struct", "Callable", "Destructible", "Iterable", "Shareable",
+        "Enum", "ValuedEnum"};
+    return kConcepts.count(name) != 0;
 }
 
 /**
@@ -407,8 +428,13 @@ SemTokenType classify_identifier(const std::string &name,
     // 2) Builtins/intrinsecos (lista fija, no depende del analisis).
     if (is_builtin_name(name))
         return SemTokenType::Function;
+    // 2b) Conceptos integrados (comptime): bound o predicado -> interface.
+    if (is_builtin_concept_name(name))
+        return SemTokenType::Interface;
     if (an != nullptr) {
         // 3) Nombres declarados top-level en el documento.
+        if (an->concept_names.count(name))
+            return SemTokenType::Interface;
         if (an->class_names.count(name))
             return SemTokenType::Class;
         if (an->struct_names.count(name))

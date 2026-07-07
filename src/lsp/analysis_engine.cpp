@@ -215,6 +215,16 @@ void extract_declared_names(const std::string &text, const std::string &uri,
                 out.type_names.insert(d->name);
             break;
         }
+        case vx::ast::NodeKind::ConceptDecl: {
+            auto *d = static_cast<const vx::ast::ConceptDecl *>(node.get());
+            if (!d->name.empty())
+                out.concept_names.insert(d->name);
+            // Parametros de plantilla del concepto (concept N<T>).
+            for (const auto &tp : d->type_params)
+                if (!tp.empty())
+                    out.type_params.insert(tp);
+            break;
+        }
         case vx::ast::NodeKind::FunctionDecl: {
             auto *d = static_cast<const vx::ast::FunctionDecl *>(node.get());
             if (!d->name.empty())

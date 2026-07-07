@@ -66,6 +66,9 @@ struct DocAnalysis {
     std::unordered_set<std::string> struct_names;
     /// Nombres de enums declarados top-level (clasificados como @c enum).
     std::unordered_set<std::string> enum_names;
+    /// Nombres de conceptos declarados top-level (clasificados como
+    /// @c interface, igual que los conceptos integrados: bound o predicado).
+    std::unordered_set<std::string> concept_names;
     /// Nombres de alias de tipo (typedef/using) declarados (clasificados
     /// como @c type).
     std::unordered_set<std::string> type_names;

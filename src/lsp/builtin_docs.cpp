@@ -17,6 +17,7 @@
 
 #include "lsp/builtin_docs.h"
 
+#include <algorithm>
 #include <unordered_map>
 
 namespace lsp {
@@ -404,6 +405,21 @@ const BuiltinDoc *lookup_builtin(const std::string &name) {
     const auto &T = table();
     auto it = T.find(name);
     return it == T.end() ? nullptr : &it->second;
+}
+
+const std::vector<std::string> &all_builtin_names() {
+    // Se construye una sola vez a partir de las claves de la tabla, ordenadas
+    // para que el completado del LSP tenga un orden estable.
+    static const std::vector<std::string> names = [] {
+        const auto &T = table();
+        std::vector<std::string> v;
+        v.reserve(T.size());
+        for (const auto &kv : T)
+            v.push_back(kv.first);
+        std::sort(v.begin(), v.end());
+        return v;
+    }();
+    return names;
 }
 
 } // namespace lsp
