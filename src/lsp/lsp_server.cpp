@@ -151,7 +151,7 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     experimental["vestaMethods"] = nlohmann::json::array(
         {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
          "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
-         "vesta/macroExpand", "vesta/comptimeValues"});
+         "vesta/modes", "vesta/macroExpand", "vesta/comptimeValues"});
     caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
@@ -1362,6 +1362,11 @@ bool LspServer::handle_vesta_request(const std::string &method,
         } else if (method == "vesta/aotCompat") {
             const std::string tier = params.value("tier", std::string("bare"));
             result = inspector_.aot_compat(uri, tier);
+        } else if (method == "vesta/modes") {
+            // Reporte del modulo en interp/JIT/AOT (todos, o el 'mode' pedido).
+            const std::string md = params.value("mode", std::string());
+            const std::string tier = params.value("tier", std::string("bare"));
+            result = inspector_.modes(uri, md, tier);
         } else if (method == "vesta/jitAsm") {
             const std::string fn = params.value("function", std::string());
             result = inspector_.jit_asm(uri, fn, itarget);

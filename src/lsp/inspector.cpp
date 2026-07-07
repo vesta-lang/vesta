@@ -2221,6 +2221,136 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     return out;
 }
 
+namespace {
+
+/// @brief Cuenta errores y warnings de un CompileResult (para el reporte de
+///        modos).  @return {errores, warnings}.
+std::pair<size_t, size_t> count_diags(const vx::CompileResult &res) {
+    size_t err = 0, warn = 0;
+    for (const auto &d : res.diagnostics.all()) {
+        if (d.level == vx::DiagLevel::ERR)
+            ++err;
+        else if (d.level == vx::DiagLevel::WARN)
+            ++warn;
+    }
+    return {err, warn};
+}
+
+} // namespace
+
+nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
+                                const std::string &tier) {
+    if (!docs_.has(uri))
+        return {{"error", "documento no abierto"}};
+    const std::string &text = docs_.text(uri);
+    const bool all = mode.empty();
+    nlohmann::json arr = nlohmann::json::array();
+
+    // ---- interprete / VM (analisis siempre-activo) ----
+    if (all || mode == "interp") {
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        auto [err, warn] = count_diags(an.result);
+        nlohmann::json m;
+        m["mode"] = "interp";
+        m["ok"] = !an.result.diagnostics.has_errors();
+        m["errors"] = static_cast<uint64_t>(err);
+        m["warnings"] = static_cast<uint64_t>(warn);
+        m["note"] = "semantica de interprete/VM (runtime completo)";
+        arr.push_back(std::move(m));
+    }
+
+    // ---- JIT (mismo IR que el interprete; compilabilidad por funcion) ----
+    if (all || mode == "jit") {
+        nlohmann::json m;
+        m["mode"] = "jit";
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        ir::IrModule mod;
+        if (!parse_post_opt_module(an.result, mod)) {
+            m["ok"] = false;
+            m["note"] = "el modulo no produjo IR (revisa los diagnosticos)";
+        } else {
+            nlohmann::json compilable = nlohmann::json::array();
+            nlohmann::json fallback = nlohmann::json::array();
+            for (const auto &fn : mod.functions) {
+                std::vector<uint8_t> bytes;
+                try {
+                    bytes = jit::vreg_compile_native(
+                        fn, /*resolve_call=*/{}, /*ent=*/{},
+                        /*resolve_native=*/{}, /*resolve_symbol=*/{},
+                        /*relocs=*/nullptr, /*pic=*/true,
+                        /*target_sysv=*/false, /*mode32=*/false,
+                        jit::FloatIsa::SSE2, /*emit_line_map=*/false,
+                        /*line_map=*/nullptr, /*asm_labels=*/nullptr);
+                } catch (...) {
+                    bytes.clear();
+                }
+                if (bytes.empty())
+                    fallback.push_back(fn.name);
+                else
+                    compilable.push_back(fn.name);
+            }
+            m["ok"] = true;
+            m["compilable_functions"] = std::move(compilable);
+            m["fallback_functions"] = std::move(fallback);
+            m["note"] =
+                "JIT vreg; las funciones no compilables caen al interprete";
+        }
+        arr.push_back(std::move(m));
+    }
+
+    // ---- AOT nativo (recompila con POO nativa + compat al tier) ----
+    if (all || mode == "aot") {
+        nlohmann::json m;
+        m["mode"] = "aot";
+        const std::string t = tier.empty() ? std::string("bare") : tier;
+        m["tier"] = t;
+        // Recompilar con la semantica AOT para no reportar los constructos
+        // AOT-only como errores del modo interprete.
+        vx::CompileOptions co;
+        co.module_name = "main";
+        co.native_poo = true;
+        vx::CompileResult res = vx::compile_vx_source(text, uri, co);
+        auto [err, warn] = count_diags(res);
+        m["errors"] = static_cast<uint64_t>(err);
+        m["warnings"] = static_cast<uint64_t>(warn);
+        ir::IrModule mod;
+        if (!parse_post_opt_module(res, mod)) {
+            m["ok"] = false;
+            m["compatible"] = false;
+            m["note"] = "el modulo no produjo IR en modo AOT";
+        } else {
+            aot::AotTarget atgt;
+            atgt.tier = tier_from_str(t);
+            aot::AotCompatReport report = aot::aot_analyze_module(mod, atgt);
+            nlohmann::json issues = nlohmann::json::array();
+            for (const auto &iss : report.issues) {
+                nlohmann::json ji;
+                ji["fn_name"] = iss.fn_name;
+                ji["source_line"] = iss.source_line;
+                ji["op"] = ir::ir_op_name(iss.op);
+                ji["reason"] = iss.reason;
+                issues.push_back(std::move(ji));
+            }
+            nlohmann::json okfns = nlohmann::json::array();
+            for (const auto &name : report.ok_functions)
+                okfns.push_back(name);
+            m["ok"] = !res.diagnostics.has_errors();
+            m["compatible"] = report.compatible;
+            m["issues"] = std::move(issues);
+            m["ok_functions"] = std::move(okfns);
+            m["note"] = "compilacion nativa standalone (POO nativa, tier " + t +
+                        ")";
+        }
+        arr.push_back(std::move(m));
+    }
+
+    if (arr.empty())
+        return {{"error", "modo invalido (use interp|jit|aot o vacio)"}};
+    nlohmann::json out;
+    out["modes"] = std::move(arr);
+    return out;
+}
+
 nlohmann::json Inspector::macro_expand(const std::string &uri) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};

@@ -214,6 +214,30 @@ class Inspector {
                            const InspectTarget &target = {});
 
     /**
+     * @brief @c vesta/modes: reporte del modulo en los tres modos de ejecucion.
+     *
+     * El LSP no conoce (ni asume) el modo de ejecucion del programa: reporta
+     * los TRES -- interprete/VM, JIT y AOT nativo -- para que el cliente los
+     * muestre en paralelo.  Si se pide un @p mode concreto, devuelve solo ese.
+     *
+     * - @c interp: diagnosticos del frontend con semantica de VM (runtime
+     *   completo).  Es el analisis siempre-activo (mismo que publishDiagnostics).
+     * - @c jit: reusa el IR del interprete y clasifica cada funcion en
+     *   compilable por el backend vreg vs con fallback al interprete.
+     * - @c aot: recompila con POO nativa (native_poo) y ejecuta el analisis de
+     *   compatibilidad AOT al @p tier pedido, mas los diagnosticos propios de
+     *   ese modo (asi los constructos AOT-only no aparecen como errores).
+     *
+     * @param uri  URI del documento.
+     * @param mode "interp"|"jit"|"aot" para uno solo; vacio = los tres.
+     * @param tier Tier AOT (bare|embed|full); solo afecta al modo aot.
+     * @return @c { "modes": [ { "mode": ..., ... por modo }, ... ] } o
+     *         @c { "error": "..." }.
+     */
+    nlohmann::json modes(const std::string &uri, const std::string &mode,
+                         const std::string &tier);
+
+    /**
      * @brief @c vesta/macroExpand: codigo que generan los @Macro del modulo.
      *
      * Lee las expectaciones de @Macro capturadas por el TypeChecker

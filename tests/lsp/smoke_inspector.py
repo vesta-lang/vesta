@@ -94,6 +94,11 @@ def build_input():
          "params": {"uri": URI, "kind": "types", "format": "mermaid"}},
         {"jsonrpc": "2.0", "id": 25, "method": "vesta/diagram",
          "params": {"uri": URI, "kind": "types", "format": "graphviz"}},
+        # Reporte multi-modo: los tres (interp/jit/aot) + filtrado por uno.
+        {"jsonrpc": "2.0", "id": 26, "method": "vesta/modes",
+         "params": {"uri": URI}},
+        {"jsonrpc": "2.0", "id": 27, "method": "vesta/modes",
+         "params": {"uri": URI, "mode": "aot"}},
         {"jsonrpc": "2.0", "id": 99, "method": "shutdown", "params": None},
         {"jsonrpc": "2.0", "method": "exit", "params": None},
     ]
@@ -204,6 +209,15 @@ def main():
           and r["text"].lstrip().startswith("digraph")
           and "Punto" in r["text"],
           "vesta/diagram kind=types (graphviz) incluye la clase Punto")
+
+    def modes_of(r):
+        return {m.get("mode") for m in r.get("modes", [])} \
+            if isinstance(r, dict) else set()
+    check(26, lambda r: modes_of(r) == {"interp", "jit", "aot"},
+          "vesta/modes (sin filtro) reporta interp+jit+aot")
+    check(27, lambda r: modes_of(r) == {"aot"}
+          and any("compatible" in m for m in r.get("modes", [])),
+          "vesta/modes mode=aot devuelve solo el modo aot con compat")
 
     if fails == 0:
         print("smoke_inspector: TODO OK")
