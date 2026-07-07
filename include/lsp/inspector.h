@@ -156,14 +156,18 @@ class Inspector {
     /**
      * @brief @c vesta/diagram: diagrama de una fase en un formato.
      * @param uri    URI del documento.
-     * @param kind   "ast" | "ir-pre" | "ir-post" | "vel".
+     * @param kind   "ast" | "ir-pre" | "ir-post" | "vel" | "asm".
      * @param format "mermaid" | "graphviz" | "html".
      * @param cost   Si true, anota los nodos-funcion con su coste Big-O.
+     * @param target OS/arch para las ramas @Target y la ABI.
+     * @param function Para @c kind="asm": funcion a diagramar (vacio = la
+     *                 primera compilable / @c main).  Ignorado para el resto.
      * @return @c { "text": "<diagrama>" } o @c { "error": "..." }.
      */
     nlohmann::json diagram(const std::string &uri, const std::string &kind,
                            const std::string &format, bool cost,
-                           const InspectTarget &target = {});
+                           const InspectTarget &target = {},
+                           const std::string &function = std::string());
 
     /**
      * @brief @c vesta/functions: lista de funciones del modulo.

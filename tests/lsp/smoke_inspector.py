@@ -81,6 +81,14 @@ def build_input():
         {"jsonrpc": "2.0", "id": 21, "method": "vesta/aotAsm",
          "params": {"uri": URI, "function": "suma",
                     "os": "linux", "arch": "x86-32"}},
+        # CFG del codigo nativo (kind=asm): mermaid con >=1 bloque para
+        # 'acumular' (tiene un while -> varios bloques y un back-edge).
+        {"jsonrpc": "2.0", "id": 22, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "asm", "format": "mermaid",
+                    "function": "acumular"}},
+        {"jsonrpc": "2.0", "id": 23, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "asm", "format": "graphviz",
+                    "function": "acumular"}},
         {"jsonrpc": "2.0", "id": 99, "method": "shutdown", "params": None},
         {"jsonrpc": "2.0", "method": "exit", "params": None},
     ]
@@ -173,6 +181,16 @@ def main():
           "vesta/aotAsm windows/x86-64 sin error")
     check(21, lambda r: isinstance(r, dict) and not r.get("error"),
           "vesta/aotAsm linux/x86-32 sin error")
+    # CFG nativo: mermaid empieza por 'flowchart' y tiene >=2 bloques + una
+    # arista (el while genera bloques con back-edge).
+    check(22, lambda r: isinstance(r, dict) and has_text(r)
+          and r["text"].lstrip().startswith("flowchart")
+          and r["text"].count("[\"") >= 2 and "-->" in r["text"],
+          "vesta/diagram kind=asm (mermaid) devuelve CFG con bloques + aristas")
+    check(23, lambda r: isinstance(r, dict) and has_text(r)
+          and r["text"].lstrip().startswith("digraph")
+          and "->" in r["text"],
+          "vesta/diagram kind=asm (graphviz) devuelve digraph con aristas")
 
     if fails == 0:
         print("smoke_inspector: TODO OK")

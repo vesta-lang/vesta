@@ -1354,7 +1354,9 @@ bool LspServer::handle_vesta_request(const std::string &method,
             const std::string format =
                 params.value("format", std::string("mermaid"));
             const bool cost = params.value("cost", false);
-            result = inspector_.diagram(uri, kind, format, cost, itarget);
+            // 'function' solo lo usa kind="asm" (CFG del codigo nativo).
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.diagram(uri, kind, format, cost, itarget, fn);
         } else if (method == "vesta/functions") {
             result = inspector_.functions(uri);
         } else if (method == "vesta/aotCompat") {
