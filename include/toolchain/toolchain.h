@@ -102,6 +102,12 @@ struct CompileRequest {
     bool no_preprocessor = false;
     /// Rutas extra de busqueda para resolver @c import (proyectos anidados).
     std::vector<std::string> search_paths;
+    /// Silenciar la salida estandar del ensamblado/linkado durante la
+    /// compilacion.  Imprescindible cuando el consumidor usa stdout como canal
+    /// de protocolo (el LSP: si @c run_worker escribiera en stdout romperia el
+    /// framing JSON-RPC).  El binario @c vm lo deja en false para ver el
+    /// progreso.
+    bool quiet = false;
 };
 
 /**

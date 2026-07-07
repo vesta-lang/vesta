@@ -90,6 +90,9 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     req.keep_labels = params.value("keepLabels", false);
     req.emit_map = params.value("emitMap", false);
     req.no_preprocessor = params.value("noPreprocessor", false);
+    // Critico: silenciar el stdout del ensamblado/linkado; en el LSP el stdout
+    // es el canal JSON-RPC y cualquier print de run_worker lo corromperia.
+    req.quiet = true;
 
     // Modo: vm | jit | aot.
     const std::string mode = params.value("mode", std::string("vm"));

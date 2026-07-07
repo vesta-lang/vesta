@@ -13,8 +13,23 @@
 #include "toolchain/toolchain.h"
 
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <unordered_map>
+
+#if defined(_WIN32)
+#include <io.h>
+#define VESTA_DUP _dup
+#define VESTA_DUP2 _dup2
+#define VESTA_FILENO _fileno
+#define VESTA_NULLDEV "NUL"
+#else
+#include <unistd.h>
+#define VESTA_DUP dup
+#define VESTA_DUP2 dup2
+#define VESTA_FILENO fileno
+#define VESTA_NULLDEV "/dev/null"
+#endif
 
 #include "util/assembler_multiprocess.h" // asm_multi_process::run_worker
 #include "vx/compiler.h"                  // vx::compile_vx_source / _project
@@ -60,6 +75,49 @@ bool collect_diags(const vx::CompileResult &res, std::vector<Diag> &out) {
     }
     return had_error;
 }
+
+/// @brief Redirige temporalmente la salida estandar (fd 1) a el dispositivo
+///        nulo mientras vive el objeto, restaurandola en el destructor.
+///
+/// El ensamblado/linkado (@c run_worker) imprime progreso en stdout con
+/// @c std::cout / printf; un consumidor que use stdout como canal de protocolo
+/// (el LSP) debe silenciarlo.  Un simple swap de @c std::cout::rdbuf no basta
+/// porque hay escrituras via C stdio; por eso se redirige el descriptor de
+/// fichero a bajo nivel (captura cout + printf + fwrite).
+class StdoutSilencer {
+public:
+    explicit StdoutSilencer(bool active) : active_(active) {
+        if (!active_)
+            return;
+        std::fflush(stdout);
+        saved_ = VESTA_DUP(VESTA_FILENO(stdout));
+        null_ = std::fopen(VESTA_NULLDEV, "w");
+        if (null_ && saved_ != -1)
+            VESTA_DUP2(VESTA_FILENO(null_), VESTA_FILENO(stdout));
+    }
+    ~StdoutSilencer() {
+        if (!active_)
+            return;
+        std::fflush(stdout);
+        if (saved_ != -1) {
+            VESTA_DUP2(saved_, VESTA_FILENO(stdout));
+#if defined(_WIN32)
+            _close(saved_);
+#else
+            close(saved_);
+#endif
+        }
+        if (null_)
+            std::fclose(null_);
+    }
+    StdoutSilencer(const StdoutSilencer &) = delete;
+    StdoutSilencer &operator=(const StdoutSilencer &) = delete;
+
+private:
+    bool active_;
+    int saved_ = -1;
+    std::FILE *null_ = nullptr;
+};
 
 /// @brief Deriva el prefijo de salida a partir del @c input si no se dio @c -o.
 ///        Quita la extension @c .vx (o cualquier extension) del nombre.
@@ -111,6 +169,12 @@ CompileResponse compile(const CompileRequest &req) {
     opts.instrument_mode = req.instrument;
     // mode VM/JIT producen el mismo .velb (native_poo solo lo activa AOT, ya
     // descartado arriba).
+
+    // Silenciar stdout durante toda la compilacion si el consumidor lo pide
+    // (el LSP, para no romper su canal JSON-RPC).  Vive hasta el final de la
+    // funcion; los diagnosticos NO se pierden (se recolectan del CompileResult,
+    // no se leen de stdout).
+    StdoutSilencer silencer(req.quiet);
 
     // 3) Frontend: .vx -> .vel (+ IR embebido) + diagnosticos.
     const auto t0 = std::chrono::steady_clock::now();
