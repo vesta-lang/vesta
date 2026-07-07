@@ -276,6 +276,10 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/capi/")
 # main(); excluirlo del ejecutable `vm` y de vmcore para no duplicar main ni
 # arrastrar el dispatcher LSP donde no se usa.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/lsp/")
+# El driver de compilacion reutilizable (src/toolchain/) es su propia libreria
+# estatica (vesta_toolchain): pega el frontend (vx_lib) con el back-end de
+# ensamblado (vmcore) sin meterlo en vmcore (que no debe depender de vx_lib).
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/toolchain/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
@@ -364,6 +368,7 @@ target_link_libraries(vm
         PRIVATE capstone
         PRIVATE keystone
         PRIVATE vx_lib
+        PRIVATE vesta_toolchain
         PRIVATE aot_emit
 )
 if(VESTA_BUILD_PREPROCESSOR)
@@ -506,6 +511,22 @@ else ()
 endif ()
 
 # ---------------------------------------------------------------------------
+# vesta_toolchain: driver de compilacion reutilizable (.vx -> .velb).
+#
+# Pega el frontend (vx_lib: compile_vx_source/_project) con el back-end de
+# ensamblado/linkado (vmcore: run_worker) en una funcion unica que comparten el
+# ejecutable `vm`, el servidor `vesta_lsp` (metodos vesta/compile*) y, via el
+# LSP, la libreria cliente Python.  Es una libreria aparte porque vx_lib es
+# standalone (no puede depender de vmcore) y vmcore no debe depender de vx_lib.
+# Como libreria estatica solo necesita los headers para compilar; los simbolos
+# de vx_lib/vmcore se resuelven al enlazar el ejecutable final (que ya enlaza
+# ambos).
+# ---------------------------------------------------------------------------
+add_library(vesta_toolchain STATIC src/toolchain/toolchain.cpp)
+target_include_directories(vesta_toolchain PRIVATE ${VM_INCLUDES})
+target_compile_features(vesta_toolchain PUBLIC cxx_std_17)
+
+# ---------------------------------------------------------------------------
 # vesta_lsp: servidor Language Server Protocol para Vex (Fase 1).
 #
 # Binario independiente que habla LSP por stdio (JSON-RPC enmarcado por
@@ -534,6 +555,7 @@ add_executable(vesta_lsp
 target_include_directories(vesta_lsp PRIVATE ${VM_INCLUDES})
 target_link_libraries(vesta_lsp
         PRIVATE vx_lib
+        PRIVATE vesta_toolchain
         PRIVATE vmcore
         PRIVATE sqlite3
         PRIVATE capstone

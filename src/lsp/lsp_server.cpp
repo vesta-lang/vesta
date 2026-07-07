@@ -18,6 +18,7 @@
 #include "lsp/lsp_server.h"
 
 #include "lsp/builtin_docs.h"
+#include "toolchain/toolchain.h" // vesta::tc::compile (compilar embebido)
 
 #include <exception>
 #include <fstream>
@@ -67,6 +68,89 @@ void LspServer::send_result(const nlohmann::json &id,
     resp["id"] = id;
     resp["result"] = result;
     transport_.write_message(resp);
+}
+
+nlohmann::json LspServer::compile_request(const std::string &method,
+                                          const std::string &uri,
+                                          const nlohmann::json &params) {
+    namespace tc = vesta::tc;
+    const std::string fs_path = uri_to_fs_path(uri);
+    if (fs_path.empty())
+        return {{"ok", false}, {"message", "uri sin ruta de fichero"}};
+
+    tc::CompileRequest req;
+    req.input = fs_path;
+    // Si el documento esta abierto, usar su buffer (overlay) en vez del disco.
+    if (docs_.has(uri))
+        req.source_overlay = docs_.text(uri);
+    req.output = params.value("output", std::string());
+    req.module_name = params.value("moduleName", std::string("main"));
+    req.debug = params.value("debug", false);
+    req.instrument = params.value("instrument", std::string());
+    req.keep_labels = params.value("keepLabels", false);
+    req.emit_map = params.value("emitMap", false);
+    req.no_preprocessor = params.value("noPreprocessor", false);
+
+    // Modo: vm | jit | aot.
+    const std::string mode = params.value("mode", std::string("vm"));
+    if (mode == "aot")
+        req.mode = tc::ExecMode::AOT;
+    else if (mode == "jit")
+        req.mode = tc::ExecMode::JIT;
+    else
+        req.mode = tc::ExecMode::VM;
+
+    // Proyecto: explicito por el metodo/param, o auto-detectado si el fuente
+    // tiene algun `import "..."`.
+    const std::string &src =
+        docs_.has(uri) ? docs_.text(uri) : std::string();
+    const bool has_imports = src.find("import \"") != std::string::npos ||
+                             src.find("import\t\"") != std::string::npos;
+    req.is_project = (method == "vesta/compileProject") ||
+                     params.value("project", has_imports);
+
+    // Para proyectos, pasar los directorios ancestros como search paths (igual
+    // que el analisis), para resolver imports relativos al root.
+    if (req.is_project) {
+        std::string d = fs_path;
+        size_t slash = d.find_last_of("/\\");
+        if (slash != std::string::npos)
+            d = d.substr(0, slash);
+        for (int lvl = 0; lvl < 40 && !d.empty(); ++lvl) {
+            req.search_paths.push_back(d);
+            size_t s = d.find_last_of("/\\");
+            if (s == std::string::npos || s == 0 || (s == 2 && d[1] == ':'))
+                break;
+            d = d.substr(0, s);
+        }
+    }
+
+    tc::CompileResponse cr = tc::compile(req);
+
+    nlohmann::json diags = nlohmann::json::array();
+    for (const auto &d : cr.diagnostics) {
+        nlohmann::json jd;
+        jd["level"] = (d.level == tc::DiagLevel::Error)
+                          ? "error"
+                          : (d.level == tc::DiagLevel::Warning ? "warning"
+                                                               : "note");
+        jd["line"] = d.line;
+        jd["column"] = d.column;
+        jd["message"] = d.message;
+        jd["file"] = d.file;
+        diags.push_back(std::move(jd));
+    }
+
+    nlohmann::json out;
+    out["ok"] = cr.ok;
+    out["output"] = cr.output_path;
+    out["diagnostics"] = std::move(diags);
+    out["frontend_us"] = cr.frontend_us;
+    out["mode"] = mode;
+    out["project"] = req.is_project;
+    if (!cr.message.empty())
+        out["message"] = cr.message;
+    return out;
 }
 
 void LspServer::handle_initialize(const nlohmann::json &msg) {
@@ -151,7 +235,8 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     experimental["vestaMethods"] = nlohmann::json::array(
         {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
          "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
-         "vesta/modes", "vesta/macroExpand", "vesta/comptimeValues"});
+         "vesta/modes", "vesta/compile", "vesta/compileProject",
+         "vesta/macroExpand", "vesta/comptimeValues"});
     caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
@@ -1367,6 +1452,13 @@ bool LspServer::handle_vesta_request(const std::string &method,
             const std::string md = params.value("mode", std::string());
             const std::string tier = params.value("tier", std::string("bare"));
             result = inspector_.modes(uri, md, tier);
+        } else if (method == "vesta/compile" ||
+                   method == "vesta/compileProject") {
+            // El LSP embebe el compilador: produce un .velb en disco usando el
+            // driver reutilizable (vesta::tc).  No ejecuta nada (eso corre en
+            // un proceso aparte: correrlo aqui escribiria en el stdout del LSP
+            // y romperia el canal JSON-RPC).
+            result = compile_request(method, uri, params);
         } else if (method == "vesta/jitAsm") {
             const std::string fn = params.value("function", std::string());
             result = inspector_.jit_asm(uri, fn, itarget);
