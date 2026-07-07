@@ -1,0 +1,6 @@
+# Configuracion de build (PEP 517/518).  La metadata efectiva vive en
+# setup.py; aqui solo se declara el backend para que `pip install .` funcione
+# en entornos aislados sin setuptools preinstalado en el PATH del build.
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"

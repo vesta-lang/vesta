@@ -1,0 +1,5 @@
+# vesta_lsp_client no tiene dependencias de terceros: usa solo la libreria
+# estandar de Python (subprocess, json, shutil, os, sys, ctypes en Windows).
+#
+# Este fichero se mantiene vacio a proposito para dejarlo explicito.  Requisito
+# unico: Python 3.7 o superior (declarado en setup.py como python_requires).
