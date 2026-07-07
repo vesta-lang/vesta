@@ -625,8 +625,11 @@ class VestaLspClient:
         :param uri: URI del fichero a compilar.
         :param output: prefijo de salida (produce ``<output>.velb``); ``None``
             = derivar del nombre del fichero.
-        :param mode: ``"vm"`` | ``"jit"`` | ``"aot"`` (AOT nativo aun no
-            disponible en el compilador embebido).
+        :param mode: ``"vm"`` | ``"jit"`` (producen ``.velb``) | ``"aot"``
+            (artefacto nativo ``.exe``/``.o``/``.so``/``.bin`` PE/ELF, tambien
+            con el compilador embebido).  Para AOT hay parametros extra opcionales
+            (``format``, ``emit``, ``arch``, ``tier``, ...) que se pueden pasar
+            via :meth:`request` a ``vesta/compile``.
         :param project: forzar compilacion de proyecto (resuelve ``import``);
             ``None`` = auto-detectar si el fuente tiene ``import "..."``.
         :param debug: emitir info de depuracion (mapeo linea<->bytecode).

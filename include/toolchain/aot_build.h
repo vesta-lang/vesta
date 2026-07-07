@@ -13,19 +13,40 @@
 #ifndef VESTA_TOOLCHAIN_AOT_BUILD_H
 #define VESTA_TOOLCHAIN_AOT_BUILD_H
 
+#include <cstdint>
 #include <string>
 
 #include "aot/aot_analyze.h" // aot::Tier
 #include "vx/compiler.h"     // vx::CompileResult / vx::CompileOptions
 
-// Declaracion adelantada del tipo de cxxopts para no arrastrar el header
-// completo a los consumidores que solo declaren la firma.
-namespace cxxopts {
-class ParseResult;
-}
-
 namespace vesta {
 namespace tc {
+
+/**
+ * @struct AotOptions
+ * @brief Opciones del emisor AOT (sin acoplar a cxxopts).
+ *
+ * Reune los flags @c -m aot que antes se leian del @c cxxopts::ParseResult.
+ * Al ser una struct plana, cualquier consumidor (el binario @c vm, el servidor
+ * @c vesta_lsp) la puede rellenar y llamar a @c compile_aot sin depender del
+ * parser de la CLI.  Las cadenas vacias significan "no especificado" (se aplica
+ * el valor por defecto por host/tier).
+ */
+struct AotOptions {
+    aot::Tier tier = aot::Tier::BARE; ///< bare|embed|full.
+    bool freestanding = false;        ///< --freestanding (sin libc).
+    bool no_exceptions = false;       ///< --no-exceptions.
+    bool no_io = false;               ///< --no-io.
+    bool no_mem = false;              ///< --no-mem (sin slab allocator).
+    std::string arch = "x86-64";      ///< --aot-arch: x86-64 | x86-32.
+    std::string float_isa = "sse2";   ///< --float-isa: sse2|x87|avx|avx512f|auto.
+    std::string format;               ///< --format: "" (host) | pe | elf.
+    std::string emit;                 ///< --emit: "" (exe) | obj | shared | bin.
+    bool no_pie = false;              ///< --no-pie (refs absolutas, no PIC).
+    std::string bin_base;             ///< --bin-base (hex; solo .bin).
+    std::string sysroot;              ///< --sysroot (para el auto-link).
+    std::string argv0;                ///< Ruta del ejecutable (localizar stdlib).
+};
 
 /**
  * @brief Emite el artefacto AOT nativo del modulo ya compilado por el frontend.
@@ -36,25 +57,14 @@ namespace tc {
  * escribe el .exe/.o/.so/.bin (PE o ELF, x86-64/x86-32) con el emisor y el
  * linker propios.
  *
- * @param result      Flags de la CLI (AOT: --format/--emit/--aot-arch/
- *                    --float-isa/--no-pie/--bin-base/--sysroot).
  * @param cr          Resultado del frontend (IR embebido + simbolos AOT).
  * @param copts       Opciones de compilacion usadas por el frontend.
  * @param out_prefix  Prefijo del artefacto de salida (@c -o).
- * @param aot_tier    Tier nativo (bare|embed|full).
- * @param aot_freestanding  --freestanding (sin libc).
- * @param aot_no_exceptions --no-exceptions (no auto-bundle del runtime de exc).
- * @param aot_no_io   --no-io (no auto-incluir el runtime de I/O).
- * @param aot_no_mem  --no-mem (no auto-incluir el slab allocator).
- * @param argv0       @c argv[0] del proceso (para localizar la stdlib junto al
- *                    ejecutable).
+ * @param opt         Opciones AOT (formato, emit, arch, tier, ...).
  * @return @c EXIT_SUCCESS / @c EXIT_FAILURE.
  */
-int compile_aot(const cxxopts::ParseResult &result,
-                const vx::CompileResult &cr, const vx::CompileOptions &copts,
-                std::string out_prefix, aot::Tier aot_tier,
-                bool aot_freestanding, bool aot_no_exceptions, bool aot_no_io,
-                bool aot_no_mem, const char *argv0);
+int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
+                std::string out_prefix, const AotOptions &opt);
 
 } // namespace tc
 } // namespace vesta

@@ -38,8 +38,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "cxxopts.hpp"
-
 #include "aot/aot_analyze.h"
 #include "aot/aot_lower.h"
 #include "aot/aot_native.h"
@@ -57,11 +55,16 @@
 namespace vesta {
 namespace tc {
 
-int compile_aot(const cxxopts::ParseResult &result,
-                const vx::CompileResult &cr, const vx::CompileOptions &copts,
-                std::string out_prefix, aot::Tier aot_tier,
-                bool aot_freestanding, bool aot_no_exceptions, bool aot_no_io,
-                bool aot_no_mem, const char *argv0) {
+int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
+                std::string out_prefix, const AotOptions &opt) {
+            // Alias locales de las opciones para no alterar el cuerpo movido.
+            const aot::Tier aot_tier = opt.tier;
+            const bool aot_freestanding = opt.freestanding;
+            const bool aot_no_exceptions = opt.no_exceptions;
+            const bool aot_no_io = opt.no_io;
+            const bool aot_no_mem = opt.no_mem;
+            const char *argv0 = opt.argv0.c_str();
+            (void)aot_no_mem; // usado condicionalmente segun el codegen
             aot::AotTarget tgt;
             tgt.tier = aot_tier;
             tgt.freestanding = aot_freestanding;
@@ -605,9 +608,7 @@ int compile_aot(const cxxopts::ParseResult &result,
                 // toda funcion con ops VEC (la base de la que el driver deriva
                 // las 3 variantes); su recorrido arrastra sus callees (p.ej.
                 // sum_f64).  Espejo de la siembra del BFS de codegen.
-                const bool auto_keep_vec =
-                    (result.count("float-isa") &&
-                     result["float-isa"].as<std::string>() == "auto");
+                const bool auto_keep_vec = (opt.float_isa == "auto");
                 auto has_vec = [](const ir::IrFunction &f) -> bool {
                     for (const auto &b : f.blocks)
                         for (const auto &in : b.instrs) {
@@ -951,7 +952,7 @@ int compile_aot(const cxxopts::ParseResult &result,
             // subset entero de 32-bit (i32/u32/ptr32).
             bool aot_mode32 = false;
             {
-                const std::string a = result["aot-arch"].as<std::string>();
+                const std::string a = opt.arch;
                 if (a == "x86-32" || a == "x86_32" || a == "i386")
                     aot_mode32 = true;
                 else if (a == "x86-64" || a == "x86_64" || a == "amd64")
@@ -970,7 +971,7 @@ int compile_aot(const cxxopts::ParseResult &result,
             // queda cableado para que el selector elija el backend cuando llegue.
             jit::FloatIsa aot_fisa = jit::FloatIsa::SSE2;
             {
-                const std::string f = result["float-isa"].as<std::string>();
+                const std::string f = opt.float_isa;
                 if (f == "sse2" || f == "sse")
                     aot_fisa = jit::FloatIsa::SSE2;
                 else if (f == "x87" || f == "fpu")
@@ -995,8 +996,8 @@ int compile_aot(const cxxopts::ParseResult &result,
 #else
                 aot::ObjFormat::ELF;
 #endif
-            if (result.count("format")) {
-                const std::string f = result["format"].as<std::string>();
+            if (!opt.format.empty()) {
+                const std::string f = opt.format;
                 if (f == "pe" || f == "PE")
                     fmt = aot::ObjFormat::PE;
                 else if (f == "elf" || f == "ELF")
@@ -1010,7 +1011,7 @@ int compile_aot(const cxxopts::ParseResult &result,
 
             // Referencias a datos: PIC (RIP-relativo, default) vs absoluto
             // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
-            const bool aot_pic = (result.count("no-pie") == 0);
+            const bool aot_pic = !opt.no_pie;
 
             // --emit exe|obj|shared.
             //   EXEC   : ejecutable standalone con _start (requiere main).
@@ -1020,8 +1021,8 @@ int compile_aot(const cxxopts::ParseResult &result,
             //   SHARED : .so/.dll (sin _start; exporta TODAS las funciones;
             //   PIC).
             bool emit_obj = false, emit_shared = false, emit_bin = false;
-            if (result.count("emit")) {
-                const std::string em = result["emit"].as<std::string>();
+            if (!opt.emit.empty()) {
+                const std::string em = opt.emit;
                 if (em == "exe" || em == "exec") {
                 } else if (em == "obj" || em == "o")
                     emit_obj = true;
@@ -1119,9 +1120,8 @@ int compile_aot(const cxxopts::ParseResult &result,
             // base de carga del binario plano (.bin) -- solo afecta refs
             // absolutas.
             uint64_t bin_base = 0;
-            if (result.count("bin-base")) {
-                bin_base = std::strtoull(
-                    result["bin-base"].as<std::string>().c_str(), nullptr, 0);
+            if (!opt.bin_base.empty()) {
+                bin_base = std::strtoull(opt.bin_base.c_str(), nullptr, 0);
             }
             // OBJECT/SHARED/BIN no llevan _start (lo aporta el
             // crt/host/loader).
@@ -2117,10 +2117,7 @@ int compile_aot(const cxxopts::ParseResult &result,
                 namespace fs = std::filesystem;
                 aot::LinkOptions lopts;
                 lopts.fmt = fmt; // PE o ELF, segun el destino
-                lopts.sysroot =
-                    result.count("sysroot")
-                        ? result["sysroot"].as<std::string>()
-                        : std::string();
+                lopts.sysroot = opt.sysroot;
                 std::vector<std::string> inputs;
                 inputs.push_back(link_tmp_obj);
                 for (const auto &l : autolink_libs) inputs.push_back(l);

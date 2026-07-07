@@ -118,11 +118,20 @@ Proyectos multi-fichero (resuelve `import`) con `compile_project()`:
 res = lsp.compile_project(root_uri, output="build/app")
 ```
 
-`compile()` acepta `mode` (`"vm"`|`"jit"`), `debug=True` (info de depuracion),
-`instrument=...` (instrumentacion), `keep_labels`, `emit_map`.  El compilador
-embebido cubre `.velb` (vm/jit); para AOT nativo (`.exe`/`.o`/formatos PE/ELF)
-usa `VestaRunner.compile_status(src, mode="aot", output=...)`, que delega en el
-binario `vm` (soporta todos los flags).
+`compile()` acepta `mode` (`"vm"`|`"jit"`|`"aot"`), `debug=True` (info de
+depuracion), `instrument=...` (instrumentacion), `keep_labels`, `emit_map`.  El
+compilador embebido del LSP cubre **tambien AOT nativo** (`.exe`/`.o`/`.so`/
+`.bin`, PE/ELF, x86-64/x86-32); pasa las opciones AOT (`format`, `emit`,
+`arch`, `tier`, `freestanding`, ...) a `vesta/compile` via `request()`:
+
+```python
+lsp.request("vesta/compile", {"uri": uri, "uri": uri, "mode": "aot",
+                              "output": "build/app", "emit": "exe",
+                              "format": "pe", "arch": "x86-64"})
+```
+
+Alternativamente, `VestaRunner.compile_status(src, mode="aot", output=...)`
+compila AOT lanzando el binario `vm` (equivalente, fuera de proceso).
 
 ---
 

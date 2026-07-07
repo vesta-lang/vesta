@@ -31,6 +31,7 @@
 #define VESTA_NULLDEV "/dev/null"
 #endif
 
+#include "toolchain/aot_build.h"          // vesta::tc::compile_aot
 #include "util/assembler_multiprocess.h" // asm_multi_process::run_worker
 #include "vx/compiler.h"                  // vx::compile_vx_source / _project
 
@@ -139,16 +140,7 @@ CompileResponse compile(const CompileRequest &req) {
         resp.message = "no se indico fichero de entrada";
         return resp;
     }
-    if (req.mode == ExecMode::AOT) {
-        // El emisor nativo AOT (PE/ELF, formatos exe/obj/...) todavia vive en
-        // main.cpp; se portara a este driver sin cambiar la firma.  Hasta
-        // entonces el consumidor debe usar el binario @c vm para AOT.
-        resp.message =
-            "el modo AOT (artefacto nativo) aun no esta disponible en el "
-            "toolchain embebido; usa el binario 'vm -m aot' para compilar a "
-            ".exe/.o/formatos nativos";
-        return resp;
-    }
+    const bool aot = (req.mode == ExecMode::AOT);
 
     // 1) Leer el fuente del raiz (o usar el overlay del buffer en memoria).
     std::string source = req.source_overlay;
@@ -167,8 +159,8 @@ CompileResponse compile(const CompileRequest &req) {
     opts.module_name = req.module_name.empty() ? "main" : req.module_name;
     opts.emit_debug = req.debug;
     opts.instrument_mode = req.instrument;
-    // mode VM/JIT producen el mismo .velb (native_poo solo lo activa AOT, ya
-    // descartado arriba).
+    // AOT usa POO nativa (clases sin registry); VM/JIT producen el mismo .velb.
+    opts.native_poo = aot;
 
     // Silenciar stdout durante toda la compilacion si el consumidor lo pide
     // (el LSP, para no romper su canal JSON-RPC).  Vive hasta el final de la
@@ -202,9 +194,24 @@ CompileResponse compile(const CompileRequest &req) {
         return resp;
     }
 
-    // 5) Escribir el .vel intermedio junto al artefacto de salida.
     const std::string out_prefix =
         req.output.empty() ? derive_output(req.input) : req.output;
+
+    // 4-AOT) Modo AOT: emitir el artefacto nativo (.exe/.o/.so/.bin) con el
+    // emisor extraido; no se escribe .vel/.velb.  compile_aot imprime su
+    // progreso con std::cout, ya silenciado por el StdoutSilencer si quiet.
+    if (aot) {
+        const int rc = compile_aot(cr, opts, out_prefix, req.aot);
+        if (rc != 0) {
+            resp.message = "la emision AOT nativa fallo";
+            return resp;
+        }
+        resp.ok = true;
+        resp.output_path = out_prefix; // el emisor decide la extension real
+        return resp;
+    }
+
+    // 5) Escribir el .vel intermedio junto al artefacto de salida.
     const std::string vel_path = out_prefix + ".vel";
     {
         std::ofstream ofs(vel_path);

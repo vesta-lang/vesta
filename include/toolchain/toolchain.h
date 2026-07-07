@@ -36,6 +36,8 @@
 #include <string>
 #include <vector>
 
+#include "toolchain/aot_build.h" // AotOptions (opciones del emisor nativo)
+
 namespace vesta {
 namespace tc {
 
@@ -108,6 +110,9 @@ struct CompileRequest {
     /// framing JSON-RPC).  El binario @c vm lo deja en false para ver el
     /// progreso.
     bool quiet = false;
+    /// Opciones del emisor nativo, usadas solo cuando @c mode == @c AOT
+    /// (formato PE/ELF, emit exe/obj/shared/bin, arch, tier, ...).
+    AotOptions aot;
 };
 
 /**

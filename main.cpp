@@ -2653,10 +2653,28 @@ int main(int argc, char *argv[]) {
         // ------------------------------------------------------------------
         if (aot_mode) {
             // Emision AOT nativa: delegada a vesta::tc::compile_aot
-            // (src/toolchain/aot_build.cpp) para no monolitizar main.cpp.
-            return vesta::tc::compile_aot(
-                result, cr, copts, out_prefix, aot_tier, aot_freestanding,
-                aot_no_exceptions, aot_no_io, aot_no_mem, argv[0]);
+            // (src/toolchain/aot_build.cpp) para no monolitizar main.cpp.  Los
+            // flags de la CLI se mapean a una struct de opciones desacoplada de
+            // cxxopts (asi el LSP tambien puede emitir AOT embebido).
+            vesta::tc::AotOptions aopt;
+            aopt.tier = aot_tier;
+            aopt.freestanding = aot_freestanding;
+            aopt.no_exceptions = aot_no_exceptions;
+            aopt.no_io = aot_no_io;
+            aopt.no_mem = aot_no_mem;
+            aopt.arch = result["aot-arch"].as<std::string>();
+            aopt.float_isa = result["float-isa"].as<std::string>();
+            if (result.count("format"))
+                aopt.format = result["format"].as<std::string>();
+            if (result.count("emit"))
+                aopt.emit = result["emit"].as<std::string>();
+            aopt.no_pie = result.count("no-pie") > 0;
+            if (result.count("bin-base"))
+                aopt.bin_base = result["bin-base"].as<std::string>();
+            if (result.count("sysroot"))
+                aopt.sysroot = result["sysroot"].as<std::string>();
+            aopt.argv0 = argv[0];
+            return vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
         }
 
         /* CACHE MISS + @Macros presentes: hacer two-phase y persistir

@@ -19,6 +19,7 @@
 
 #include "lsp/builtin_docs.h"
 #include "toolchain/toolchain.h" // vesta::tc::compile (compilar embebido)
+#include "util/fs_utils.h"       // fs::get_executable_path (localizar stdlib)
 
 #include <exception>
 #include <fstream>
@@ -96,9 +97,27 @@ nlohmann::json LspServer::compile_request(const std::string &method,
 
     // Modo: vm | jit | aot.
     const std::string mode = params.value("mode", std::string("vm"));
-    if (mode == "aot")
+    if (mode == "aot") {
         req.mode = tc::ExecMode::AOT;
-    else if (mode == "jit")
+        // Opciones del emisor nativo (todas opcionales; defaults por host/tier).
+        const std::string tier = params.value("tier", std::string("bare"));
+        req.aot.tier = (tier == "embed")
+                           ? aot::Tier::EMBED
+                           : (tier == "full" ? aot::Tier::FULL : aot::Tier::BARE);
+        req.aot.freestanding = params.value("freestanding", false);
+        req.aot.no_exceptions = params.value("noExceptions", false);
+        req.aot.no_io = params.value("noIo", false);
+        req.aot.no_mem = params.value("noMem", false);
+        req.aot.arch = params.value("arch", std::string("x86-64"));
+        req.aot.float_isa = params.value("floatIsa", std::string("sse2"));
+        req.aot.format = params.value("format", std::string());
+        req.aot.emit = params.value("emit", std::string());
+        req.aot.no_pie = params.value("noPie", false);
+        req.aot.bin_base = params.value("binBase", std::string());
+        req.aot.sysroot = params.value("sysroot", std::string());
+        // Para localizar la stdlib (auto-bundle de exc/io): junto al ejecutable.
+        req.aot.argv0 = fs::get_executable_path();
+    } else if (mode == "jit")
         req.mode = tc::ExecMode::JIT;
     else
         req.mode = tc::ExecMode::VM;
