@@ -2027,6 +2027,25 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     ffi::lookup_virtual_fn("vesta_comptime", cid->name)) {
                     implicit_lib_name = "vesta_comptime";
                 }
+                /* #2: static_assert cuya CONDICION es un placeholder DIFERIDO
+                 * (depende de una comptime fn con asm via ComptimeVM aun no
+                 * cargada, pass 1 del two-phase) NO debe dispararse aqui -- el
+                 * FFI `vesta_comptime:static_assert` no distingue deferred de
+                 * false y daria un error espurio.  Se resuelve en pass 2 (con el
+                 * bytecode comptime cargado, la cond da su valor real).  Cubre
+                 * el static_assert DENTRO de un `comptime {}` block, que pasa
+                 * por esta ruta (el top-level pasa por check_call, ya arreglado). */
+                if (cid->name == "static_assert" && !ce->args.empty()) {
+                    ComptimeEvalResult cond =
+                        comptime_eval_expr(tc, ce->args[0].get());
+                    if (cond.ok && cond.deferred) {
+                        ComptimeEvalResult skip{};
+                        skip.ok = true;
+                        skip.value = 0;
+                        skip.deferred = true;
+                        return skip;
+                    }
+                }
                 if ((sig && !sig->extern_lib.empty()) ||
                     !implicit_lib_name.empty()) {
                     ComptimeEvalResult err{};

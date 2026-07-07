@@ -2658,13 +2658,26 @@ int main(int argc, char *argv[]) {
 #else
                 unsetenv("VESTA_MC_PREBUILT");
 #endif
-                if (cr2.ok) cr = std::move(cr2);
+                /* pass-2 es AUTORITATIVO: se compilo con el bytecode comptime
+                 * cargado, asi que sus valores (y sus static_assert) son los
+                 * reales.  Adoptamos su cr SIEMPRE -- incluso si tiene errores
+                 * (p.ej. un static_assert que resolvio a false con el valor
+                 * real).  Si nos quedaramos con pass-1 (que tenia los asserts
+                 * diferidos SALTADOS) el compile "tendria exito" con valores
+                 * incorrectos, ocultando el fallo. */
+                cr = std::move(cr2);
                 if (verbose_mc) {
                     std::cerr << "[mc-cache] aot two-phase populated: "
                               << cache_path << "\n";
                 }
                 std::remove(tmp_vel_path.c_str());
                 std::remove((cache_path + "-map").c_str());
+                /* Si pass-2 fallo (assert real / error), propagar y abortar. */
+                if (!cr.ok) {
+                    for (const auto &d : cr.diagnostics.all())
+                        vx::print_diagnostic(std::cerr, d);
+                    return EXIT_FAILURE;
+                }
             }
         }
 
@@ -4964,9 +4977,12 @@ int main(int argc, char *argv[]) {
 #else
                 unsetenv("VESTA_MC_PREBUILT");
 #endif
-                if (cr2.ok) {
-                    cr = std::move(cr2);
-                }
+                /* pass-2 es AUTORITATIVO (compilado con el bytecode comptime
+                 * cargado): adoptamos su cr SIEMPRE, incluso con errores (p.ej.
+                 * un static_assert que resolvio a false con el valor real).
+                 * Quedarnos con pass-1 (asserts diferidos SALTADOS) ocultaria
+                 * el fallo -> compile con valores incorrectos. */
+                cr = std::move(cr2);
                 if (verbose_mc) {
                     std::cerr << "[mc-cache] miss + populated: " << cache_path
                               << "\n";
@@ -4976,6 +4992,12 @@ int main(int argc, char *argv[]) {
                 std::remove(tmp_vel_path.c_str());
                 const std::string cache_velb_map = cache_path + "-map";
                 std::remove(cache_velb_map.c_str());
+                /* Si pass-2 fallo (assert real / error), propagar y abortar. */
+                if (!cr.ok) {
+                    for (const auto &d : cr.diagnostics.all())
+                        vx::print_diagnostic(std::cerr, d);
+                    return EXIT_FAILURE;
+                }
             }
         }
 

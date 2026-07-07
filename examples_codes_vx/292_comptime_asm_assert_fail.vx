@@ -1,0 +1,23 @@
+// -----------------------------------------------------------------------------
+// Negativo: un `static_assert` sobre un valor de inline asm que resulta FALSO
+// debe DETENER la compilacion con un error claro.  El two-phase difiere el
+// assert en el pass 1 y lo valida en el pass 2 con el valor real (aqui, 42),
+// que NO cumple la condicion -> error.
+// -----------------------------------------------------------------------------
+
+comptime i64 asm_v() {
+    register("rax") i64 out;
+    asm volatile {
+        mov rax, 42
+    }
+    return out;
+}
+
+comptime i64 V = asm_v();
+
+// 42 != 99 -> la compilacion debe fallar.
+static_assert(V == 99, "V debe ser 99");
+
+i32 main() {
+    return (i32) V;
+}
