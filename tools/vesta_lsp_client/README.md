@@ -88,6 +88,44 @@ with VestaLspClient("build/vesta_lsp.exe") as lsp:
 
 ---
 
+## Compilar y ejecutar
+
+El servidor LSP **embebe el compilador**: `compile()` produce un `.velb` en
+disco con el compilador embebido (sin lanzar procesos).  La EJECUCION corre en
+un proceso aparte (el binario `vm`, aislado) via :class:`VestaRunner` — nunca
+en el proceso del LSP, cuyo stdout es el canal JSON-RPC.
+
+```python
+from vesta_lsp_client import VestaLspClient, VestaRunner
+
+with VestaLspClient() as lsp:
+    uri = lsp.open("programa.vx")
+    res = lsp.compile(uri, output="build/programa", mode="vm")  # -> .velb
+    if not res["ok"]:
+        for d in res["diagnostics"]:
+            print(d["level"], d["line"], d["message"])
+
+# Ejecutar (proceso vm aislado): captura salida + valor de retorno (R00).
+runner = VestaRunner()
+rr = runner.run("build/programa.velb", want_value=True)
+print(rr.program_output)   # salida del programa (sin el volcado de --stats)
+print("retorno:", rr.value)
+```
+
+Proyectos multi-fichero (resuelve `import`) con `compile_project()`:
+
+```python
+res = lsp.compile_project(root_uri, output="build/app")
+```
+
+`compile()` acepta `mode` (`"vm"`|`"jit"`), `debug=True` (info de depuracion),
+`instrument=...` (instrumentacion), `keep_labels`, `emit_map`.  El compilador
+embebido cubre `.velb` (vm/jit); para AOT nativo (`.exe`/`.o`/formatos PE/ELF)
+usa `VestaRunner.compile_status(src, mode="aot", output=...)`, que delega en el
+binario `vm` (soporta todos los flags).
+
+---
+
 ## Multi-modo: interprete / JIT / AOT
 
 El LSP **no asume** el modo de ejecucion del programa. `modes()` reporta los
@@ -232,8 +270,14 @@ Peticiones (todas devuelven el JSON ya parseado):
 | `diagram` | `vesta/diagram` |
 | `jit_asm`, `aot_asm`, `aot_compat` | `vesta/jitAsm`, `vesta/aotAsm`, `vesta/aotCompat` |
 | `modes` | `vesta/modes` |
+| `compile`, `compile_project` | `vesta/compile`, `vesta/compileProject` (compilador embebido) |
 | `macro_expand`, `comptime_values` | `vesta/macroExpand`, `vesta/comptimeValues` |
 | `request(method, params)` | escotilla generica para cualquier metodo |
+
+Ejecucion (modulo `runtime`, no LSP): `VestaRunner(vm_path=None)` con
+`run(velb, *, args, mode, schedulers, want_value)` -> `RunResult(exit_code,
+stdout, stderr, value, program_output)`; `discover_vm()` auto-detecta el binario
+`vm`.
 
 Errores: cualquier respuesta con `error` del servidor lanza
 `vesta_lsp_client.LspError`.
@@ -242,17 +286,26 @@ Errores: cualquier respuesta con `error` del servidor lanza
 
 ## Ejemplos incluidos
 
+Todos auto-detectan los binarios (o pasa `--lsp` / `--vm`) y toman un fichero
+opcional; su salida es coloreada y con resaltado de sintaxis.
+
 | fichero | que muestra |
 |---------|-------------|
-| `examples/basic_usage.py` | diagnosticos, hover, completado, funciones, Big-O |
+| `examples/basic_usage.py` | diagnosticos, funciones, Big-O, completado (coloreado) |
 | `examples/inspect_modes.py` | modos, asm JIT/AOT por OS/arch, CFG y diagrama de tipos |
-| `examples/vxcat.py` | `cat` con resaltado ANSI (esquema de color propio del ejemplo) |
+| `examples/vxcat.py` | `cat` con resaltado de sintaxis y numeros de linea |
+| `examples/compile_and_run.py` | resalta el fuente, compila (embebido) y ejecuta |
+| `examples/project_build.py` | compila y ejecuta un proyecto multi-modulo |
 
 ```bash
-python examples/basic_usage.py   /ruta/a/vesta_lsp
-python examples/inspect_modes.py /ruta/a/vesta_lsp
-python examples/vxcat.py         programa.vx      # auto-detecta vesta_lsp
+python examples/basic_usage.py                 # demo incrustada
+python examples/vxcat.py         programa.vx    # auto-detecta vesta_lsp
+python examples/compile_and_run.py programa.vx  # compila + ejecuta
+python examples/project_build.py raiz.vx        # proyecto (o demo)
 ```
+
+> El color se activa si la salida es una terminal; forzarlo con
+> `VESTA_FORCE_COLOR=1` (util al canalizar a un pager).
 
 ```bash
 python examples/basic_usage.py   /ruta/a/vesta_lsp
