@@ -1631,6 +1631,129 @@ bool is_call_mnemonic(const std::string &mn) {
 //  API publica
 // =========================================================================
 
+namespace {
+
+/// @brief Simbolo UML del modificador de acceso (0=public, 1=private,
+///        2=protected).
+const char *access_sym(uint8_t a) {
+    switch (a) {
+    case 1: return "-";
+    case 2: return "#";
+    default: return "+";
+    }
+}
+
+} // namespace
+
+std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
+    std::ostringstream os;
+    os << "```mermaid\n";
+    os << "%% Diagrama de tipos Vesta (clases, herencia, interfaces, structs, "
+          "enums)\n";
+    os << "classDiagram\n";
+
+    // Aristas de relacion recolectadas para emitir tras los nodos.
+    std::vector<std::string> rels;
+
+    for (const auto &node : mod.decls) {
+        if (!node)
+            continue;
+        switch (node->kind) {
+        case ast::NodeKind::ClassDecl: {
+            auto *d = static_cast<const ast::ClassDecl *>(node.get());
+            if (d->name.empty())
+                break;
+            os << "    class " << d->name << " {\n";
+            if (d->is_final)
+                os << "        <<final>>\n";
+            for (const auto &f : d->fields) {
+                os << "        " << access_sym(f.access) << fmt_type(f.type.get())
+                   << ' ' << f.name;
+                if (f.is_static)
+                    os << "$"; // '$' = estatico en mermaid classDiagram.
+                os << '\n';
+            }
+            for (const auto &m : d->methods) {
+                if (!m || m->name.empty())
+                    continue;
+                os << "        " << access_sym(m->access) << m->name << "(";
+                for (size_t i = 0; i < m->params.size(); ++i) {
+                    if (i)
+                        os << ", ";
+                    if (m->params[i])
+                        os << fmt_type(m->params[i]->type.get());
+                }
+                os << ")";
+                if (m->return_type)
+                    os << ' ' << fmt_type(m->return_type.get());
+                if (m->is_static)
+                    os << "$";
+                if (m->is_final || m->is_override)
+                    os << "*"; // '*' = abstracto/override en mermaid.
+                os << '\n';
+            }
+            os << "    }\n";
+            // Herencia (solida) e interfaces (punteada).
+            if (!d->super_name.empty())
+                rels.push_back("    " + d->super_name + " <|-- " + d->name);
+            for (const auto &iface : d->interface_names)
+                rels.push_back("    " + iface + " <|.. " + d->name);
+            break;
+        }
+        case ast::NodeKind::StructDecl: {
+            auto *d = static_cast<const ast::StructDecl *>(node.get());
+            if (d->name.empty())
+                break;
+            os << "    class " << d->name << " {\n";
+            os << "        <<struct>>\n";
+            for (const auto &f : d->fields)
+                os << "        +" << fmt_type(f.type.get()) << ' ' << f.name
+                   << '\n';
+            for (const auto &m : d->methods) {
+                if (!m || m->name.empty())
+                    continue;
+                os << "        +" << m->name << "()";
+                if (m->return_type)
+                    os << ' ' << fmt_type(m->return_type.get());
+                os << '\n';
+            }
+            os << "    }\n";
+            break;
+        }
+        case ast::NodeKind::EnumDecl: {
+            auto *d = static_cast<const ast::EnumDecl *>(node.get());
+            if (d->name.empty())
+                break;
+            os << "    class " << d->name << " {\n";
+            os << "        <<enumeration>>\n";
+            if (!d->backing_type.empty())
+                os << "        %% base: " << d->backing_type << '\n';
+            for (const auto &v : d->variants)
+                os << "        " << v.name << '\n';
+            os << "    }\n";
+            break;
+        }
+        case ast::NodeKind::ConceptDecl: {
+            auto *d = static_cast<const ast::ConceptDecl *>(node.get());
+            if (d->name.empty())
+                break;
+            os << "    class " << d->name << " {\n";
+            os << "        <<concept>>\n";
+            os << "    }\n";
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    for (const auto &r : rels)
+        os << r << '\n';
+
+    os << "```\n";
+    return os.str();
+}
+
 std::string mermaid_from_ast(const ast::ModuleNode &mod) {
     std::ostringstream os;
     os << "```mermaid\n";

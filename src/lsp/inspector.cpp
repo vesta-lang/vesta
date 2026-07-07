@@ -1732,9 +1732,11 @@ nlohmann::json Inspector::diagram(const std::string &uri,
 
     // Validar kind y format antes de recompilar.
     const bool kind_ok = (kind == "ast" || kind == "ir-pre" ||
-                          kind == "ir-post" || kind == "vel" || kind == "asm");
+                          kind == "ir-post" || kind == "vel" || kind == "asm" ||
+                          kind == "types");
     if (!kind_ok)
-        return {{"error", "kind invalido (use ast|ir-pre|ir-post|vel|asm)"}};
+        return {{"error",
+                 "kind invalido (use ast|ir-pre|ir-post|vel|asm|types)"}};
     const bool fmt_ok =
         (format == "mermaid" || format == "graphviz" || format == "html");
     if (!fmt_ok)
@@ -1852,16 +1854,19 @@ nlohmann::json Inspector::diagram(const std::string &uri,
         if (kind == "ast") opts.dump_mermaid_ast = true;
         else if (kind == "ir-pre") opts.dump_mermaid_ir_pre = true;
         else if (kind == "ir-post") opts.dump_mermaid_ir_post = true;
+        else if (kind == "types") opts.dump_mermaid_types = true;
         else opts.dump_mermaid_vel = true;
     } else if (format == "graphviz") {
         if (kind == "ast") opts.dump_graphviz_ast = true;
         else if (kind == "ir-pre") opts.dump_graphviz_ir_pre = true;
         else if (kind == "ir-post") opts.dump_graphviz_ir_post = true;
+        else if (kind == "types") opts.dump_graphviz_types = true;
         else opts.dump_graphviz_vel = true;
     } else { // html
         if (kind == "ast") opts.dump_html_ast = true;
         else if (kind == "ir-pre") opts.dump_html_ir_pre = true;
         else if (kind == "ir-post") opts.dump_html_ir_post = true;
+        else if (kind == "types") opts.dump_html_types = true;
         else opts.dump_html_vel = true;
     }
 
@@ -1872,16 +1877,19 @@ nlohmann::json Inspector::diagram(const std::string &uri,
         if (kind == "ast") out_text = res.mermaid_ast;
         else if (kind == "ir-pre") out_text = res.mermaid_ir_pre;
         else if (kind == "ir-post") out_text = res.mermaid_ir_post;
+        else if (kind == "types") out_text = res.mermaid_types;
         else out_text = res.mermaid_vel;
     } else if (format == "graphviz") {
         if (kind == "ast") out_text = res.graphviz_ast;
         else if (kind == "ir-pre") out_text = res.graphviz_ir_pre;
         else if (kind == "ir-post") out_text = res.graphviz_ir_post;
+        else if (kind == "types") out_text = res.graphviz_types;
         else out_text = res.graphviz_vel;
     } else {
         if (kind == "ast") out_text = res.html_ast;
         else if (kind == "ir-pre") out_text = res.html_ir_pre;
         else if (kind == "ir-post") out_text = res.html_ir_post;
+        else if (kind == "types") out_text = res.html_types;
         else out_text = res.html_vel;
     }
 

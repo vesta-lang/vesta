@@ -86,6 +86,11 @@ struct CompileOptions {
     /// diagrama Mermaid del bytecode .vel final.  Independiente de
     /// dump_ir / dump_mermaid_ir_*: opera solo sobre el texto del .vel.
     bool dump_mermaid_vel = false;
+    /// Cuando true, llena @c CompileResult::mermaid_types con un diagrama
+    /// de tipos (mermaid classDiagram): clases con sus campos/metodos +
+    /// herencia + interfaces implementadas + structs + enums (con su tipo
+    /// base y variantes).  Vista de alto nivel de la POO del modulo.
+    bool dump_mermaid_types = false;
 
     /// Variantes Graphviz (DOT) de los flags Mermaid.  Producen archivos
     /// .dot listos para `dot -Tpng/-Tsvg`, con la misma topologia y
@@ -98,6 +103,8 @@ struct CompileOptions {
     bool dump_graphviz_ir_pre = false;
     bool dump_graphviz_ir_post = false;
     bool dump_graphviz_vel = false;
+    /// Variante Graphviz del diagrama de tipos (ver dump_mermaid_types).
+    bool dump_graphviz_types = false;
 
     /// Variantes HTML interactivas (CSS+JS embebidos, sin dependencias).
     /// Producen un .html autocontenido por vista que el usuario abre en
@@ -109,6 +116,8 @@ struct CompileOptions {
     bool dump_html_ir_pre = false;
     bool dump_html_ir_post = false;
     bool dump_html_vel = false;
+    /// Variante HTML del diagrama de tipos (ver dump_mermaid_types).
+    bool dump_html_types = false;
 
     /// --diagram-cost: anotar cada nodo-funcion de los diagramas IR (pre y
     /// post) con su coste Big-O (parcial + total) calculado por
@@ -246,6 +255,7 @@ struct CompileResult {
                                  ///< (dump_mermaid_ir_post).
     std::string
         mermaid_vel; ///< Mermaid del bytecode .vel final (dump_mermaid_vel).
+    std::string mermaid_types; ///< classDiagram de tipos (dump_mermaid_types).
     /// Variantes Graphviz (DOT) llenas cuando los flags @c dump_graphviz_*
     /// estan activos.  Vacias en otro caso.  El contenido es texto DOT
     /// completo (con `digraph G { ... }`), listo para `dot -Tpng/-Tsvg`.
@@ -253,6 +263,7 @@ struct CompileResult {
     std::string graphviz_ir_pre;
     std::string graphviz_ir_post;
     std::string graphviz_vel;
+    std::string graphviz_types; ///< DOT del diagrama de tipos.
     /// Variantes HTML interactivas (documento completo `<!DOCTYPE html>...`)
     /// llenas cuando los flags @c dump_html_* estan activos.  Vacias en
     /// otro caso.  Cada una es una pagina autocontenida lista para abrir.
@@ -260,6 +271,7 @@ struct CompileResult {
     std::string html_ir_pre;
     std::string html_ir_post;
     std::string html_vel;
+    std::string html_types; ///< HTML del diagrama de tipos.
     Diagnostics diagnostics; ///< Errores y warnings acumulados.
 
     /**

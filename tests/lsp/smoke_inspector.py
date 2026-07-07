@@ -89,6 +89,11 @@ def build_input():
         {"jsonrpc": "2.0", "id": 23, "method": "vesta/diagram",
          "params": {"uri": URI, "kind": "asm", "format": "graphviz",
                     "function": "acumular"}},
+        # Diagrama de tipos: la clase Punto debe aparecer en el classDiagram.
+        {"jsonrpc": "2.0", "id": 24, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "types", "format": "mermaid"}},
+        {"jsonrpc": "2.0", "id": 25, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "types", "format": "graphviz"}},
         {"jsonrpc": "2.0", "id": 99, "method": "shutdown", "params": None},
         {"jsonrpc": "2.0", "method": "exit", "params": None},
     ]
@@ -191,6 +196,14 @@ def main():
           and r["text"].lstrip().startswith("digraph")
           and "->" in r["text"],
           "vesta/diagram kind=asm (graphviz) devuelve digraph con aristas")
+    # Diagrama de tipos: classDiagram con la clase Punto.
+    check(24, lambda r: isinstance(r, dict) and has_text(r)
+          and "classDiagram" in r["text"] and "class Punto" in r["text"],
+          "vesta/diagram kind=types (mermaid) incluye la clase Punto")
+    check(25, lambda r: isinstance(r, dict) and has_text(r)
+          and r["text"].lstrip().startswith("digraph")
+          and "Punto" in r["text"],
+          "vesta/diagram kind=types (graphviz) incluye la clase Punto")
 
     if fails == 0:
         print("smoke_inspector: TODO OK")

@@ -93,6 +93,19 @@ namespace vx {
 std::string mermaid_from_ast(const ast::ModuleNode &mod);
 
 /**
+ * @brief Genera un diagrama de TIPOS (mermaid classDiagram) del modulo.
+ *
+ * Muestra clases (campos + metodos con acceso), herencia (`<|--`), interfaces
+ * implementadas (`<|..`), structs (`<<struct>>`), enums (`<<enumeration>>` con
+ * su tipo base y variantes) y conceptos (`<<concept>>`).  Vista de alto nivel
+ * de la POO del modulo, complementaria al AST detallado de @c mermaid_from_ast.
+ *
+ * @param mod AST modulo (post type-check).
+ * @return    Bloque ```mermaid ... ``` con el classDiagram.
+ */
+std::string mermaid_types_from_ast(const ast::ModuleNode &mod);
+
+/**
  * @brief Genera un diagrama Mermaid del SSA IR de un IrModule.
  *
  * Estructura del diagrama (flowchart TD):

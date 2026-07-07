@@ -93,6 +93,18 @@ namespace vx {
 std::string graphviz_from_ast(const ast::ModuleNode &mod);
 
 /**
+ * @brief Variante Graphviz (DOT) del diagrama de tipos.
+ *
+ * Un nodo record por tipo (clase/struct/enum/concepto) con sus campos y
+ * metodos; aristas de herencia (solidas) e implementacion de interfaz
+ * (punteadas).  Ver @c mermaid_types_from_ast para la version Mermaid.
+ *
+ * @param mod AST modulo (post type-check).
+ * @return    Codigo DOT completo (digraph tipos { ... }).
+ */
+std::string graphviz_types_from_ast(const ast::ModuleNode &mod);
+
+/**
  * @brief Genera un diagrama Graphviz (DOT) del SSA IR.
  *
  * Estructura:

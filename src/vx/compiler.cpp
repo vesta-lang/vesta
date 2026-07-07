@@ -369,6 +369,19 @@ CompileResult compile_vx_source(const std::string &source,
     if (opts.dump_html_ast) {
         res.html_ast = html_from_ast(*mod);
     }
+    // Diagrama de tipos (classDiagram): clases/herencia/interfaces/structs/
+    // enums/conceptos.  Vista de alto nivel de la POO, independiente del AST
+    // detallado.  Cada formato se llena solo si su flag esta activo.
+    if (opts.dump_mermaid_types) {
+        res.mermaid_types = mermaid_types_from_ast(*mod);
+    }
+    if (opts.dump_graphviz_types) {
+        res.graphviz_types = graphviz_types_from_ast(*mod);
+    }
+    if (opts.dump_html_types) {
+        res.html_types =
+            html_from_dot(graphviz_types_from_ast(*mod), "Tipos", "types");
+    }
 
     // 3. Lowering: AST -> ir::IrModule.  Pasamos el TypeChecker para
     // que el lowering pueda consultar StructLayout (offsets/tamanos)

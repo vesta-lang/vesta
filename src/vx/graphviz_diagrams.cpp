@@ -1660,6 +1660,89 @@ bool is_opt_instr(const std::string &mn) {
 //  API publica
 // =========================================================================
 
+std::string graphviz_types_from_ast(const ast::ModuleNode &mod) {
+    // Nodo por tipo (record con campos + metodos); aristas de herencia
+    // (solidas) e interfaces (punteadas).
+    std::ostringstream os;
+    os << "digraph tipos {\n";
+    os << "  rankdir=BT;\n"; // subclases abajo, bases arriba.
+    os << "  node [shape=record, fontname=\"monospace\", fontsize=10];\n";
+
+    auto acc = [](uint8_t a) -> const char * {
+        return a == 1 ? "-" : (a == 2 ? "#" : "+");
+    };
+    std::vector<std::string> rels;
+
+    for (const auto &node : mod.decls) {
+        if (!node)
+            continue;
+        if (node->kind == ast::NodeKind::ClassDecl) {
+            auto *d = static_cast<const ast::ClassDecl *>(node.get());
+            if (d->name.empty())
+                continue;
+            std::string rec = "{" + d->name;
+            if (d->is_final)
+                rec += " (final)";
+            rec += "|";
+            for (const auto &f : d->fields)
+                rec += std::string(acc(f.access)) +
+                       escape_record(fmt_type(f.type.get()) + " " + f.name) +
+                       "\\l";
+            rec += "|";
+            for (const auto &m : d->methods) {
+                if (!m || m->name.empty())
+                    continue;
+                rec += std::string(acc(m->access)) + escape_record(m->name) +
+                       "()";
+                if (m->return_type)
+                    rec += escape_record(" " + fmt_type(m->return_type.get()));
+                rec += "\\l";
+            }
+            rec += "}";
+            os << "  " << d->name << " [label=\"" << rec << "\"];\n";
+            if (!d->super_name.empty())
+                rels.push_back("  " + d->name + " -> " + d->super_name + ";");
+            for (const auto &iface : d->interface_names)
+                rels.push_back("  " + d->name + " -> " + iface +
+                               " [style=dashed];");
+        } else if (node->kind == ast::NodeKind::StructDecl) {
+            auto *d = static_cast<const ast::StructDecl *>(node.get());
+            if (d->name.empty())
+                continue;
+            std::string rec = "{[struct] " + d->name + "|";
+            for (const auto &f : d->fields)
+                rec += escape_record(fmt_type(f.type.get()) + " " + f.name) +
+                       "\\l";
+            rec += "}";
+            os << "  " << d->name
+               << " [label=\"" << rec << "\", style=filled, fillcolor=\"#fef3c7\"];\n";
+        } else if (node->kind == ast::NodeKind::EnumDecl) {
+            auto *d = static_cast<const ast::EnumDecl *>(node.get());
+            if (d->name.empty())
+                continue;
+            std::string rec = "{[enum] " + d->name;
+            if (!d->backing_type.empty())
+                rec += " : " + d->backing_type;
+            rec += "|";
+            for (const auto &v : d->variants)
+                rec += escape_record(v.name) + "\\l";
+            rec += "}";
+            os << "  " << d->name
+               << " [label=\"" << rec << "\", style=filled, fillcolor=\"#ccfbf1\"];\n";
+        } else if (node->kind == ast::NodeKind::ConceptDecl) {
+            auto *d = static_cast<const ast::ConceptDecl *>(node.get());
+            if (d->name.empty())
+                continue;
+            os << "  " << d->name << " [label=\"[concept] " << d->name
+               << "\", style=filled, fillcolor=\"#e9d5ff\"];\n";
+        }
+    }
+    for (const auto &r : rels)
+        os << r << '\n';
+    os << "}\n";
+    return os.str();
+}
+
 std::string graphviz_from_ast(const ast::ModuleNode &mod) {
     std::ostringstream os;
     os << "// Diagrama AST Vesta (Graphviz DOT)\n";
