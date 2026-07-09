@@ -259,6 +259,15 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
         auto jit_it = impl_->jit_code_by_pc.find(entry_pc);
         if (jit_it != impl_->jit_code_by_pc.end() && jit_it->second) {
             proc->jit_entry_fn = jit_it->second;
+        } else {
+            /* BUG FIX: si ESTE macro no tiene codigo JIT eager, hay que LIMPIAR
+             * jit_entry_fn -- si no, un valor STALE de un macro anterior (o de
+             * otra fn eager-compilada) haria que el scheduler salte a codigo
+             * nativo AJENO (JIT-ENTRY path), ejecutando la fn equivocada y
+             * devolviendo basura (p.ej. un macro string que devolvia el entero
+             * 40+2=42 en vez del handle).  Con jit_entry_fn=null el proceso
+             * ejecuta ESTE macro por interp, que es correcto. */
+            proc->jit_entry_fn = nullptr;
         }
         impl_->vm.make_ready(impl_->proc_pid);
         impl_->vm.start();
