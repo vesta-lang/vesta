@@ -2251,9 +2251,20 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                 return "ref a comptime global string '" + id->name + "'";
             }
             if (cit->second.is_mutable) {
+                /* comptime var MUTABLE global: se comparte entre lectores
+                 * AST-eval (p.ej. `static_assert(g == 3)` top-level, otros
+                 * comptime blocks) y el macro.  Si el macro VM-evaluara y mutara
+                 * un slot static_data de la VM mientras el static_assert lee la
+                 * copia AST (comptime_const_values_) -> DESYNC (el assert ve el
+                 * valor viejo).  Por eso el macro que referencia un mutable
+                 * global se deja AST-eval (misma copia que los lectores) --
+                 * arquitectural, no un gap de codegen.  Los mutables SOLO se
+                 * podrian VM-evaluar si TODO lector comptime (incl. static_assert)
+                 * leyera el slot de la VM, lo que exigiria ejecutar la VM en cada
+                 * eval comptime -- fuera de alcance. */
                 return "ref a comptime var (mutable) global '" + id->name + "'";
             }
-            /* comptime const int OK. */
+            /* comptime const int (INMUTABLE) OK: slot static_data read-only. */
             return "";
         }
         return "";
