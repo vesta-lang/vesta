@@ -158,7 +158,7 @@ enum MemProt {
 }
 
 /// Tamano de chunk que el slab pide al SO (comptime: constante de compilacion).
-comptime u64 VMEM_CHUNK_BYTES = 1048576; // 1 MiB
+const u64 VMEM_CHUNK_BYTES = 1048576; // 1 MiB
 
 /**
  * @brief Traduce @ref MemProt a flags PAGE_* de Windows.

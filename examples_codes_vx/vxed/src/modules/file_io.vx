@@ -17,17 +17,17 @@ import "modules/buffer";
 
 // Codigos de error como comptime: cero overhead, el codigo emitido es
 // un literal i64 inline.
-public comptime i32 FE_OK         = 0;
-public comptime i32 FE_NOT_FOUND  = 1;
-public comptime i32 FE_READ_FAIL  = 2;
-public comptime i32 FE_WRITE_FAIL = 3;
-public comptime i32 FE_BAD_HANDLE = 4;
+public const i32 FE_OK         = 0;
+public const i32 FE_NOT_FOUND  = 1;
+public const i32 FE_READ_FAIL  = 2;
+public const i32 FE_WRITE_FAIL = 3;
+public const i32 FE_BAD_HANDLE = 4;
 
 // Modos de apertura como strings inmutables.  Atributo `@cold` porque
 // solo se leen al abrir un archivo (no en el hot loop del editor).
-@cold public comptime string MODE_READ   = "rb";
-@cold public comptime string MODE_WRITE  = "wb";
-@cold public comptime string MODE_APPEND = "ab";
+@cold public const string MODE_READ   = "rb";
+@cold public const string MODE_WRITE  = "wb";
+@cold public const string MODE_APPEND = "ab";
 
 // Cache del handle DLL + simbolos: alocado una vez al primer uso.
 // PRIVADOS al modulo (no `public`): el lowering Vex actual no soporta

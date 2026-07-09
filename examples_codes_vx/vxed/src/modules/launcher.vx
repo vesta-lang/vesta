@@ -18,14 +18,14 @@ import "modules/keys";
 import "modules/input";
 import "modules/screen";
 
-comptime i32 LC_MAX_ENTRIES = 1024;
-comptime i32 LC_NAME_MAX    = 260;
-comptime i32 LC_FINDDATA    = 320;
+const i32 LC_MAX_ENTRIES = 1024;
+const i32 LC_NAME_MAX    = 260;
+const i32 LC_FINDDATA    = 320;
 
-public comptime i32 LR_CANCEL  = 0;
-public comptime i32 LR_FILE    = 1;
-public comptime i32 LR_PROJECT = 2;
-public comptime i32 LR_NEW     = 3;
+public const i32 LR_CANCEL  = 0;
+public const i32 LR_FILE    = 1;
+public const i32 LR_PROJECT = 2;
+public const i32 LR_NEW     = 3;
 
 public class LauncherResult {
     public i32    mode;

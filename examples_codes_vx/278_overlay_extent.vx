@@ -30,7 +30,7 @@ i32 main() {
     u64 ext = extent(im);
     println("extent=${ext}");                 // 40
 
-    // sizeof estatico (solo campos de offset constante) vs extent runtime:
+    //  estatico (solo campos de offset constante) vs extent runtime:
     println("sizeof=${sizeof<Img>()}");        // huella estatica (< extent aqui)
 
     // uso: validar que la vista completa cabe en el fichero, en una linea.

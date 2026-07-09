@@ -41,9 +41,9 @@ import "modules/autocomplete";
 // Pulsar Enter sobre un fichero lo abre en una pestana nueva.
 // =============================================================================
 
-comptime i32 SB_MAX_ENTRIES = 1024;
-comptime i32 SB_NAME_MAX    = 260;
-comptime i32 FINDDATA_BYTES = 320;
+const i32 SB_MAX_ENTRIES = 1024;
+const i32 SB_NAME_MAX    = 260;
+const i32 FINDDATA_BYTES = 320;
 
 // Volcado opcional de diagnostico a `vxed_diag.log` (linea por evento).
 // Util para depurar regresiones; se mantiene a 0 en builds normales para
@@ -55,7 +55,7 @@ comptime i32 FINDDATA_BYTES = 320;
 // Activar a 1 + rebuild para recopilar trazas en `vxed_diag.log`
 // (append).  Util para diagnosticar bugs en entornos donde no hay
 // debugger interactivo conectado.
-comptime i32 DEBUG_LOG = 0;
+const i32 DEBUG_LOG = 0;
 
 // F8: Configuracion del editor (toggleable en runtime).
 //   show_line_numbers -> Ctrl-E

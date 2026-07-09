@@ -1,0 +1,25 @@
+namespace std.comptime.basics;
+
+/// @brief Captures the source text of an expression.
+///
+/// Returns the exact source text passed at the call site as a string literal.
+/// The argument is captured verbatim before semantic analysis, allowing macros
+/// to implement custom DSLs or perform source-level transformations.
+///
+/// @param code Source text to capture.
+/// @return A string literal containing the captured source text.
+///
+/// @code
+/// string s = comptime.source(a + b * c);
+/// // s == "a + b * c"
+///
+/// string path = comptime.source(ptr -> 0x90 -> 0x10);
+/// // path == "ptr -> 0x90 -> 0x10"
+/// @endcode
+///
+/// @note The captured text is not parsed or evaluated by the compiler before
+/// being passed to the macro.
+@Macro
+public comptime string source(expr code) {
+    return "\"" + code + "\"";
+}

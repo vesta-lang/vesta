@@ -1,0 +1,17 @@
+/**
+ * Todos los tipos viven bajo el mismo namespace std.types, y se importan 
+ * segun la arquitectura de destino.
+ */
+namespace std.types;
+
+// importar tipos para la arquitectura x86 32 bits unicamente
+@Target("arch:x86")
+import std.types.x86_32;
+
+// importar tipos para la arquitectura x86 64 bits unicamente
+@Target("arch:x86_64")
+import std.types.x86_64;
+
+// importar tipos para la arquitectura arm 64 bits unicamente
+@Target("arch:arm64")
+import std.types.x86_64;

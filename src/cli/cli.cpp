@@ -44,7 +44,6 @@
 #include "disasm/disasm.h"
 #include "util/ansi.h"
 #include "util/fs_utils.h"
-#include "install/install.h"
 #include <cstring>
 #include <iomanip>
 #include <unordered_set>
@@ -1706,23 +1705,6 @@ static void dist_print_help() {
         << "Nota: <id> es el mgr_id que muestra 'vms'. "
            "--dist-server en linea de comandos lanza un nodo servidor puro.\n"
         << ansi::c(ansi::RESET);
-}
-
-static void command_install(const std::string &args) {
-    install::run_install_repl(args);
-}
-
-static void command_uninstall(const std::string &args) {
-    install::run_uninstall_repl(args);
-}
-
-static void command_repair(const std::string &args) {
-    std::filesystem::path mf;
-    auto words = split_words(args);
-    for (auto &w : words) {
-        if (w.rfind("--manifest=", 0) == 0) mf = w.substr(11);
-    }
-    install::repair(mf, false);
 }
 
 /**
@@ -3882,16 +3864,6 @@ static const CmdEntry cmd_table[] = {
      command_script},
     {"vsh", "vsh", "Abrir el interprete interactivo VestaShell (REPL .vsh)",
      command_vsh},
-    {"install",
-     "install [--silent] [--per-user] [--system-wide] [--prefix=<dir>] "
-     "[--no-path] [--assoc=...]",
-     "Instalar Vesta VM en el sistema (asociaciones, PATH, accesos directos)",
-     command_install},
-    {"uninstall", "uninstall [--manifest=<path>]",
-     "Desinstalar Vesta VM usando el manifest registrado", command_uninstall},
-    {"repair", "repair [--manifest=<path>]",
-     "Reparar asociaciones y PATH de una instalacion existente",
-     command_repair},
 };
 
 // numero de entradas en la tabla

@@ -16,7 +16,7 @@
 
 import "modules/buffer";
 
-public comptime i32 MC_MAX = 16;
+public const i32 MC_MAX = 16;
 
 public class MultiCursor {
     public i32* offsets;

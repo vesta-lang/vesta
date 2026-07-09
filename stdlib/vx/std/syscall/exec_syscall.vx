@@ -1,0 +1,10 @@
+namespace std.syscall;
+
+private comptime string source(expr code) {
+    return "\"" + code + "\"";
+}
+
+@Macro
+public comptime string syscall_asm(i64 x_unused) {
+    return source(x_unused);
+}

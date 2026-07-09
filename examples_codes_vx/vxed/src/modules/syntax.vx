@@ -21,18 +21,18 @@ import "modules/buffer";
 
 // Codigos ANSI 16 colors (universal -- funciona en cualquier terminal VT100+).
 // Paleta Dracula en truecolor (24-bit RGB) -- restaurada tras Win10+ con VT.
-public comptime string SX_RESET    = "\x1b[0m";
-public comptime string SX_KW       = "\x1b[38;2;255;121;198m";  // Dracula pink   (keyword)
-public comptime string SX_TYPE     = "\x1b[38;2;139;233;253m";  // Dracula cyan   (type)
-public comptime string SX_BUILTIN  = "\x1b[38;2;80;250;123m";   // Dracula green  (builtin)
-public comptime string SX_FUNC     = "\x1b[38;2;80;250;123m";   // Dracula green  (func call)
-public comptime string SX_STR      = "\x1b[38;2;241;250;140m";  // Dracula yellow (string)
-public comptime string SX_DOCSTR   = "\x1b[38;2;241;250;140m";  // Dracula yellow (docstring)
-public comptime string SX_CMT      = "\x1b[38;2;98;114;164m";   // Dracula comment gray
-public comptime string SX_NUM      = "\x1b[38;2;189;147;249m";  // Dracula purple (number)
-public comptime string SX_OP       = "\x1b[38;2;255;121;198m";  // Dracula pink   (operator)
-public comptime string SX_ID       = "\x1b[38;2;248;248;242m";  // Dracula fg     (identifier)
-public comptime string SX_ANNOT    = "\x1b[38;2;255;184;108m";  // Dracula orange (@annot)
+public const string SX_RESET    = "\x1b[0m";
+public const string SX_KW       = "\x1b[38;2;255;121;198m";  // Dracula pink   (keyword)
+public const string SX_TYPE     = "\x1b[38;2;139;233;253m";  // Dracula cyan   (type)
+public const string SX_BUILTIN  = "\x1b[38;2;80;250;123m";   // Dracula green  (builtin)
+public const string SX_FUNC     = "\x1b[38;2;80;250;123m";   // Dracula green  (func call)
+public const string SX_STR      = "\x1b[38;2;241;250;140m";  // Dracula yellow (string)
+public const string SX_DOCSTR   = "\x1b[38;2;241;250;140m";  // Dracula yellow (docstring)
+public const string SX_CMT      = "\x1b[38;2;98;114;164m";   // Dracula comment gray
+public const string SX_NUM      = "\x1b[38;2;189;147;249m";  // Dracula purple (number)
+public const string SX_OP       = "\x1b[38;2;255;121;198m";  // Dracula pink   (operator)
+public const string SX_ID       = "\x1b[38;2;248;248;242m";  // Dracula fg     (identifier)
+public const string SX_ANNOT    = "\x1b[38;2;255;184;108m";  // Dracula orange (@annot)
 
 // Listas de keywords Vex (orden alfabetico, busqueda lineal O(N)).
 //
