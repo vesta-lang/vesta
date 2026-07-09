@@ -15,7 +15,7 @@ comptime i64 asm_mul3(i64 a) {
     return out;
 }
 
-comptime i64 R = asm_mul3(14);   // 42, computado por asm
+const i64 R = asm_mul3(14);   // 42, computado por asm
 
 i32 main() {
     // static_assert dentro de un comptime block (se resuelve en el ComptimeVM).

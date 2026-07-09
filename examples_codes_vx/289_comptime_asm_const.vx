@@ -16,7 +16,7 @@ comptime i64 asm_add(i64 a, i64 b) {
 }
 
 // La constante se computa por asm en compile-time.
-comptime i64 SUM = asm_add(40, 2);
+const i64 SUM = asm_add(40, 2);
 
 // static_assert (top-level) valida el valor comptime.  Si fuese distinto de 42,
 // la compilacion se detendria con un error claro.

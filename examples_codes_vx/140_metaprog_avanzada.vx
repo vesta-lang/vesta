@@ -31,9 +31,9 @@ static_assert(ITEMS_FIRST.id == 7,      "items first id");
 static_assert(ITEMS_FIRST.weight == 50, "items first weight");
 
 // (3) Type-level + global const.
-comptime u32 DIM_V3   = vec_dim<Vec3>();          // 3
-comptime u32 DIM_V4   = vec_dim<Vec4>();          // 4
-comptime u64 ARR_BYTES = stride_of<Vec3>(100);    // 24*100 = 2400
+const u32 DIM_V3   = vec_dim<Vec3>();          // 3
+const u32 DIM_V4   = vec_dim<Vec4>();          // 4
+const u64 ARR_BYTES = stride_of<Vec3>(100);    // 24*100 = 2400
 static_assert(DIM_V3 == 3,         "dim Vec3");
 static_assert(DIM_V4 == 4,         "dim Vec4");
 static_assert(ARR_BYTES == 2400,   "stride Vec3 100");

@@ -13,7 +13,7 @@ comptime i64 asm_v() {
     return out;
 }
 
-comptime i64 V = asm_v();
+const i64 V = asm_v();
 
 // 42 != 99 -> la compilacion debe fallar.
 static_assert(V == 99, "V debe ser 99");

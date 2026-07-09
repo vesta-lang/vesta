@@ -48,7 +48,7 @@ enum Anchor : Point {
 }
 
 // Comptime: el valor de una variante es una constante compile-time.
-comptime i32 MOV_OPCODE = (i32) Op.MOV;   // 0x89
+const i32 MOV_OPCODE = (i32) Op.MOV;   // 0x89
 
 i32 main() {
     // Entero: aritmetica/comparacion directas (sin cast).

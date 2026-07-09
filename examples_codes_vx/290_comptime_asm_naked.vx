@@ -17,7 +17,7 @@
 comptime i64 c_get() { return fortytwo(); }
 
 // El valor se usa en una constante compile-time + static_assert.
-comptime i64 V = c_get();
+const i64 V = c_get();
 static_assert(V == 42, "fortytwo() debe ser 42");
 
 i32 main() {
