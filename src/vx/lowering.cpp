@@ -2574,15 +2574,6 @@ static void annotate_macro_param_idents(
 void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Bug fix 2026-05-23: forward declarations no tienen body -- skip.
     if (fd->is_forward_decl || !fd->body) return;
-    // BugFix cross-module: una comptime/macro fn RE-PARSEADA e inyectada desde
-    // un dep (is_imported_comptime) NO se re-baja a IR en el importer.  Su
-    // cuerpo re-parseado referencia helpers del dep por nombre SIMPLE, que
-    // pueden ser PRIVADOS (invisibles aqui) -> el lowering emitiria un
-    // `callvm code.<helper>` colgante que el linker no resuelve.  El dep ya
-    // baja (o rechaza a AST-only) su propia version; el importer solo la
-    // AST-evalua al invocarla.  (El objetivo a futuro es CACHEAR el IR/AST
-    // comptime del dep en vez de re-parsear el texto fuente.)
-    if (fd->is_imported_comptime) return;
     // Templates genericos (con type_params) y especializaciones (#7) se
     // omiten: sus monomorphizaciones concretas (que SI aparecen en
     // mod_.decls) se bajan normalmente.
