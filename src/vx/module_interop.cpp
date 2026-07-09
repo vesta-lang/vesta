@@ -1090,7 +1090,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
 void inject_generic_templates_from_vxi(
     TypeChecker &tc, const VxiModule &mod,
     const std::unordered_set<std::string> &wanted,
-    const std::string &ns_prefix) {
+    const std::string &ns_prefix,
+    const std::unordered_set<std::string> &alias_unqualified) {
     if (mod.generic_templates.empty()) return;
 
     // Dedup a nivel de (modulo + namespace): un modulo importado dos veces
@@ -1202,6 +1203,21 @@ void inject_generic_templates_from_vxi(
             tc.register_namespace_symbol(tns_idx, nm, std::move(nsym));
         } else if (!ns_prefix.empty() && !nm.empty()) {
             set_decl_name(decl.get(), ns_prefix + "." + nm);
+        }
+        /* only-import de una comptime/macro fn: registrar tambien el nombre SIN
+         * cualificar (`nm`) apuntando al decl, para que la invocacion suelta
+         * (`emit_val(...)`) la resuelva -- consistente con una fn regular via
+         * `only`.  El acceso cualificado ya quedo cubierto por
+         * register_namespace_symbol.  El decl ya tiene su nombre MANGLED; el
+         * alias es una segunda clave en comptime_fns_ hacia el mismo decl.
+         * Solo para los nombres listados en `only` (alias_unqualified): un
+         * import plano NO expone el nombre suelto (higiene de namespace, igual
+         * que las fns regulares). */
+        if (alias_unqualified.count(nm) &&
+            decl->kind == ast::NodeKind::FunctionDecl) {
+            auto *cfd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (cfd->is_comptime || cfd->is_macro)
+                tc.register_comptime_fn(nm, cfd);
         }
         tc.inject_decl(std::move(decl));
     }

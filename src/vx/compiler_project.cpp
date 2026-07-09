@@ -1532,9 +1532,18 @@ CompileResult compile_vx_project(
                 // inertes si no se usan (se monomorphizan solo on-use).  Se
                 // hace ANTES de la inyeccion de simbolos para que el template
                 // exista en mod_.decls cuando run() registre los templates.
+                // Los nombres listados en `only` que sean comptime/macro fns
+                // deben quedar invocables SIN cualificar (como una fn regular
+                // via only) -> pasarlos como alias_unqualified.
+                // Nota: el matching en el inject es por el nombre ORIGINAL del
+                // decl (`nm`), por eso usamos os.name.  El `as <rename>` de un
+                // macro invocado sin cualificar es un caso raro no cubierto aun.
+                std::unordered_set<std::string> only_alias;
+                for (const auto &os : req.only_symbols)
+                    only_alias.insert(os.name);
                 inject_generic_templates_from_vxi(*pm.tc, dep_vxi,
                                                    /*wanted=*/{},
-                                                   /*ns_prefix=*/"");
+                                                   /*ns_prefix=*/"", only_alias);
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 auto missing = import_vxi_into_typechecker_with_missing(

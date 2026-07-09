@@ -92,11 +92,16 @@ void register_namespace_for_import(TypeChecker &tc,
  * (import `only`); si esta vacio, inyecta todas (import plain/namespace).
  * @p ns_prefix: si no esta vacio, registra ademas el nombre cualificado
  * `<ns>.<Template>` como alias del template para los imports con namespace.
+ * @p alias_unqualified: nombres (originales) de comptime/macro fns que deben
+ * quedar invocables SIN cualificar (import `only`).  Para cada uno se registra
+ * su nombre suelto en comptime_fns_ apuntando al decl mangled -- consistente con
+ * como una fn regular via `only` queda en scope sin cualificar.
  */
 void inject_generic_templates_from_vxi(
     TypeChecker &tc, const VxiModule &mod,
     const std::unordered_set<std::string> &wanted,
-    const std::string &ns_prefix);
+    const std::string &ns_prefix,
+    const std::unordered_set<std::string> &alias_unqualified = {});
 
 } // namespace vx
 
