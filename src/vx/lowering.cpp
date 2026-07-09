@@ -2324,7 +2324,18 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
              * linker no resuelve (RelocationError).  Se fuerza a que el macro
              * corra en comptime (AST/VM eval), que SI resuelve el nombre via
              * lookup_virtual_fn y embebe el resultado como literal. */
-            if (ffi::lookup_virtual_fn("vesta_comptime", id->name)) {
+            /* Las type-metadata (`comptime_type_sizeof/alignof/kind`) con arg
+             * LITERAL string son CONSTANTES compile-time: el lowering las
+             * pliega a un CONST (ver lower_call), asi que NO rechazan el macro.
+             * El resto de virtual fns (static_assert, comptime_compile) sin
+             * simbolo bytecode siguen forzando AST/VM-eval del call site. */
+            static const std::unordered_set<std::string> FOLDABLE_TYPE_META = {
+                "comptime_type_sizeof", "comptime_type_alignof",
+                "comptime_type_kind"};
+            if (ffi::lookup_virtual_fn("vesta_comptime", id->name) &&
+                !(FOLDABLE_TYPE_META.count(id->name) && ce->args.size() == 1 &&
+                  ce->args[0] &&
+                  ce->args[0]->kind == ast::NodeKind::StringLitExpr)) {
                 return "virtual comptime fn '" + id->name + "'";
             }
             /* Phase MC.17.3: calls a @Macros user-defined SE ACEPTAN
@@ -19736,6 +19747,37 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         c.source_line = ln;
         fn_->append(current_block_, std::move(c));
         out_value = res;
+        return true;
+    }
+
+    /* Type-metadata con arg LITERAL string: comptime_type_sizeof/alignof/kind
+     * ("u64").  Son CONSTANTES compile-time -- se pliegan a un CONST para que
+     * un @Macro que las use se baje a IR y corra por VM/JIT (no AST-eval).
+     * El nombre del tipo se resuelve via resolve_type_string (misma ruta que
+     * los typenames canonicos importados). */
+    if (e->args.size() == 1 && e->args[0] &&
+        e->args[0]->kind == ast::NodeKind::StringLitExpr &&
+        (name == "comptime_type_sizeof" || name == "comptime_type_alignof" ||
+         name == "comptime_type_kind")) {
+        const std::string tn =
+            static_cast<ast::StringLitExpr *>(e->args[0].get())->value;
+        const Type t = tc_.resolve_type_string(tn);
+        const uint32_t src_line = e->loc.line;
+        if (name == "comptime_type_sizeof") {
+            out_value =
+                emit_const(ir::IrType::U64, comptime_type_size(tc_, t), src_line);
+            return true;
+        }
+        if (name == "comptime_type_alignof") {
+            out_value = emit_const(ir::IrType::U64, comptime_type_align(tc_, t),
+                                   src_line);
+            return true;
+        }
+        /* comptime_type_kind */
+        const ComptimeKind k = comptime_type_kind(t);
+        out_value = emit_const(
+            ir::IrType::I32, static_cast<uint64_t>(static_cast<int32_t>(k)),
+            src_line);
         return true;
     }
 
