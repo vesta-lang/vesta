@@ -667,6 +667,17 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
             mangle_concept_decl_(static_cast<ast::ConceptDecl *>(d.get()),
                                  ns_path, rename_map);
             break;
+        /* Bloques `comptime { }` / `comptime for` / `comptime if` a nivel
+         * modulo: reescribir las referencias de su cuerpo (tipos, funciones,
+         * globales) al nombre mangled del namespace.  Sin esto, un
+         * `sizeof<Punto>()` o una llamada dentro del bloque no resuelve el
+         * nombre sin cualificar -> introspeccion comptime rota con
+         * namespaces (critico para stdlib/comptime). */
+        case ast::NodeKind::ComptimeBlockStmt:
+        case ast::NodeKind::ComptimeForStmt:
+            rewrite_refs_in_stmt_(static_cast<ast::Stmt *>(d.get()),
+                                  rename_map);
+            break;
         default: break;
         }
     }
