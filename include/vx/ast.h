@@ -1518,6 +1518,16 @@ struct FunctionDecl : Node {
     /// marca @Pure una fn impura, el resultado es indefinido --
     /// la memoizacion no detecta el cheating.
     bool is_pure = false;
+    /// BugFix cross-module (import de @Macro/comptime fn): esta fn comptime/
+    /// macro fue RE-PARSEADA e inyectada por el importer desde el texto fuente
+    /// exportado del dep (ver parser.cpp generic_template_exports).  El importer
+    /// la registra para poder AST-evaluarla, pero NO debe re-bajarla a IR
+    /// (`__macro_<name>`): su cuerpo re-parseado referencia helpers del dep por
+    /// su nombre SIMPLE (`helper`), que puede ser PRIVADO y por tanto invisible
+    /// en el importer -> el lowering emitiria un `callvm code.helper` colgante.
+    /// El dep ya baja (o rechaza a AST-only) su propia version; el importer solo
+    /// necesita el AST para invocarla en comptime.  Solo el importer marca esto.
+    bool is_imported_comptime = false;
     /// Bug fix 2026-05-23: forward declaration `T fn(args);` sin body.
     /// El parser lo setea cuando ve `;` post-`)`.  El type checker
     /// registra la firma sin requerir body; otra FunctionDecl con el

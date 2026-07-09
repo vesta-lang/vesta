@@ -1158,6 +1158,16 @@ void inject_generic_templates_from_vxi(
 
     for (auto &decl : parsed->decls) {
         if (!decl) continue;
+        // BugFix cross-module: marcar las comptime/macro fns re-parseadas como
+        // IMPORTADAS para que el importer NO las re-baje a IR (su cuerpo puede
+        // referenciar helpers PRIVADOS del dep, invisibles aqui -> callvm
+        // colgante).  El dep ya gestiona el runtime; el importer solo las
+        // AST-evalua.  Ver ast::FunctionDecl::is_imported_comptime.
+        if (decl->kind == ast::NodeKind::FunctionDecl) {
+            auto *ifd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (ifd->is_comptime || ifd->is_macro)
+                ifd->is_imported_comptime = true;
+        }
         const std::string nm = decl_name(decl.get());
         // Filtro `only` (si wanted no esta vacio).  Las specs comparten el
         // nombre del primario, asi que el filtro por nombre las incluye.
