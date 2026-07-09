@@ -1063,6 +1063,14 @@ class Lowering {
     uint32_t macro_lowered_count_ = 0;
     uint32_t macro_skipped_count_ = 0;
 
+    /// Force-lower de comptime helpers: nombres (mangled) de las comptime fns
+    /// no-macro que un @Macro lowereable referencia (transitivamente) y que por
+    /// tanto DEBEN bajarse a runtime (`code.<helper>`) para que el `__macro_<X>`
+    /// que las llama resuelva.  Poblado por un pre-pase en @c run() antes del
+    /// lowering; consumido por @c lower_function (baja la comptime fn como fn
+    /// runtime normal en vez de elidirla).
+    std::unordered_set<std::string> comptime_fns_to_force_lower_;
+
     /// por cada @Macro que el lowering rechazo (usa
     /// builtins comptime-only no aliasables, comptime globals, etc.),
     /// guarda @c (macro_name, reason).  El compiler los propaga al

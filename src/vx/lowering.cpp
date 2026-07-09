@@ -916,6 +916,14 @@ void Lowering::compute_type_intervals() {
     for (const std::string &r : roots) dfs(r);
 }
 
+// Forward-decl del chequeo de lowereabilidad de macros (definido mas abajo) +
+// definicion del contexto force-lower, para que el pre-pase de run() los use.
+static std::string macro_body_unsupported_reason(const TypeChecker &tc,
+                                                 const ast::Stmt *s);
+static thread_local std::unordered_set<std::string> *g_macro_force_lower =
+    nullptr;
+static thread_local std::unordered_set<std::string> *g_macro_visiting = nullptr;
+
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     const size_t initial_errors = diags_.error_count();
     out_module.name = module_name;
@@ -1394,6 +1402,43 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
         }
     }
+    /* PRE-PASE force-lower: determinar que comptime fns hay que bajar a runtime
+     * porque un @Macro (o comptime fn con asm) lowereable las referencia
+     * (transitivamente).  Sin esto, el `__macro_<X>` que llama a un helper
+     * comptime emitiria un `callvm code.<helper>` colgante (los comptime helpers
+     * no se bajan por defecto).  Poblamos @c comptime_fns_to_force_lower_ ANTES
+     * del lowering para que el orden de bajada de decls sea irrelevante. */
+    {
+        std::unordered_set<std::string> visiting;
+        g_macro_force_lower = &comptime_fns_to_force_lower_;
+        g_macro_visiting = &visiting;
+        for (auto &decl : mod_.decls) {
+            if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+            auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (!fd->body) continue;
+            const bool is_lowerable_comptime =
+                (fd->is_comptime && fd->is_macro) ||
+                (fd->is_comptime && !fd->is_macro &&
+                 comptime_fn_uses_asm(tc_, fd));
+            if (!is_lowerable_comptime) continue;
+            visiting.clear();
+            // Efecto colateral: recolecta los helpers lowereables.  Si el macro
+            // NO es lowereable, no pasa nada (sus helpers no se fuerzan; el
+            // macro caera a AST-only en lower_function como antes).
+            if (macro_body_unsupported_reason(tc_, fd->body.get()).empty()) {
+                // macro lowereable: sus helpers ya estan en el set.
+            } else {
+                // No lowereable: quitar cualquier helper que solo el aportara
+                // seria complejo; es inocuo dejarlos (una comptime fn lowerada
+                // de mas es dead code si nadie la llama en runtime).  Los
+                // helpers recolectados de un macro no-lowereable igual pueden
+                // ser referenciados por otro macro lowereable.
+            }
+        }
+        g_macro_force_lower = nullptr;
+        g_macro_visiting = nullptr;
+    }
+
     if (main_decl) lower_function(main_decl, out_module);
 
     for (auto &decl : mod_.decls) {
@@ -2174,6 +2219,15 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
 static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                                                       const ast::Expr *e);
 
+/* Force-lower de comptime helpers: cuando @c g_macro_force_lower != nullptr, el
+ * chequeo de lowereabilidad NO rechaza las llamadas a comptime fns no-macro,
+ * sino que RECURRE en su body (chequeo transitivo) y, si son lowereables,
+ * recolecta su nombre en @c g_macro_force_lower para que @c lower_function las
+ * baje a runtime (`code.<helper>`), permitiendo que el `__macro_<X>` que las
+ * llama resuelva.  @c g_macro_visiting es la guarda de ciclos.  thread_local
+ * porque M8 compila modulos en paralelo (cada thread con su propio contexto).
+ * (Definidos arriba, antes de Lowering::run.) */
+
 static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                                                       const ast::Expr *e) {
     if (!e) return "";
@@ -2278,6 +2332,28 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                      * CALLVM fallara en runtime -- ese caso
                      * cae al fallback AST por inconsistencia. */
                     return "";
+                }
+                /* Llamada a una comptime fn NO-macro.  Con force-lower activo
+                 * (g_macro_force_lower != null): recurrir en su body; si es
+                 * lowereable, recolectarla para bajarla a runtime y ACEPTAR la
+                 * llamada.  Sin force-lower (call sites legacy): rechazar
+                 * (AST-only), comportamiento previo. */
+                if (g_macro_force_lower && fn_it->second &&
+                    fn_it->second->body) {
+                    const std::string &hn = fn_it->first; // nombre registrado
+                    if (g_macro_visiting->count(hn)) {
+                        return ""; // ciclo: asumir OK (el otro nivel decide)
+                    }
+                    g_macro_visiting->insert(hn);
+                    std::string sub = macro_body_unsupported_reason(
+                        tc, fn_it->second->body.get());
+                    g_macro_visiting->erase(hn);
+                    if (sub.empty()) {
+                        g_macro_force_lower->insert(hn);
+                        return "";
+                    }
+                    return "helper comptime no-lowereable '" + id->name +
+                           "': " + sub;
                 }
                 return "call a comptime fn user-defined '" + id->name + "'";
             }
@@ -2596,20 +2672,38 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * comptime invocan la VM y el valor se pliega a constante. */
     const bool is_vm_comptime_fn =
         fd->is_comptime && !fd->is_macro && comptime_fn_uses_asm(tc_, fd);
+    /* Force-lower: una comptime fn (no-macro) que un @Macro lowereable
+     * referencia (recolectada en el pre-pase de run()) SI se baja, como fn
+     * runtime normal (nombre plano `fd->name`), para que el `callvm code.<X>`
+     * del macro resuelva. */
+    const bool is_force_lowered_comptime =
+        fd->is_comptime && !fd->is_macro &&
+        comptime_fns_to_force_lower_.count(fd->name) != 0;
     if (fd->is_comptime && !fd->is_macro) {
         /* comptime fn (no-macro): por defecto NO se baja (se evalua en
          * compile-time y se elide).  Solo-LSP: con emit_comptime_fns_ la
          * bajamos como funcion normal para poder inspeccionar su codegen
          * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro.
-         * F1: si usa asm, SI se baja (para ejecutar en el ComptimeVM). */
-        if (!emit_comptime_fns_ && !is_vm_comptime_fn) return;
+         * F1: si usa asm, SI se baja (para ejecutar en el ComptimeVM).
+         * Force-lower: si un macro la referencia, tambien se baja. */
+        if (!emit_comptime_fns_ && !is_vm_comptime_fn &&
+            !is_force_lowered_comptime)
+            return;
     } else if (fd->is_comptime) {
         /* @Macro: intentar lowear el body al IR.  Si contiene
          * caracteristicas no soportadas todavia (introspect,
          * comptime var, builtins comptime-only), saltar limpiamente
-         * y dejar que el evaluator AST haga el trabajo. */
+         * y dejar que el evaluator AST haga el trabajo.
+         *
+         * Activamos el contexto force-lower para que las llamadas a comptime
+         * fns lowereables NO se rechacen (se bajaran junto al macro). */
+        g_macro_force_lower = &comptime_fns_to_force_lower_;
+        std::unordered_set<std::string> ml_visiting;
+        g_macro_visiting = &ml_visiting;
         const std::string reason =
             macro_body_unsupported_reason(tc_, fd->body.get());
+        g_macro_force_lower = nullptr;
+        g_macro_visiting = nullptr;
         if (!reason.empty()) {
             /* No soportado -- fallback silencioso al AST eval.
              * Capturamos el reason para diagnostico via
@@ -16839,6 +16933,16 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                                              r0);
                 }
                 return emit_const(t_asm, r0, src_line_asm);
+            }
+            /* Force-lower: si la comptime fn fue recolectada para bajarse a
+             * runtime (porque un @Macro lowereable la referencia), su llamada
+             * NO se comptime-evalua -- se emite un CALL normal a `code.<helper>`
+             * (via el label mas abajo).  El arg puede ser un param runtime del
+             * macro; el helper es ahora una fn runtime que lo recibe.  El
+             * rewrite a `__macro_` NO aplica (la fn no es is_macro), asi que el
+             * nombre queda plano y resuelve contra la fn force-lowered. */
+            if (!r.ok && comptime_fns_to_force_lower_.count(cid->name)) {
+                goto skip_comptime_eval_for_macro_to_macro;
             }
             if (!r.ok) {
                 error_at(e->loc,
