@@ -37,8 +37,8 @@ static_assert(comptime_streq(SETTER_V3, "set_Vec3"), "setter Vec3");
 
 // (4) Comptime fn iterativa que construye string de A..N.
 comptime string alphabet_up_to(i64 n) {
-    comptime var string buf = "";
-    comptime var i64 c = 65;
+    string buf = "";
+    i64 c = 65;
     while (c <= n) {
         buf = comptime_concat(buf, comptime_chr(c));
         c = c + 1;

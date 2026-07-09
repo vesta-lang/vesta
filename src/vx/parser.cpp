@@ -1543,38 +1543,52 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 "(comptime ya implica const, salvo 'comptime var')");
             is_comptime_const = true;
         } else if (mut_lex.peek_at(0).kind == TokenKind::IDENTIFIER &&
-                   (mut_lex.peek_at(0).lexeme == "var" ||
-                    mut_lex.peek_at(0).lexeme == "auto")) {
-            /* `comptime auto X` y `comptime var X` aceptados
-             * como alias.  Soportan DOS modos:
-             *   (a) `comptime var T NAME = init;` -- tipo explicito.
-             *   (b) `comptime var NAME = init;`   -- inferencia.
-             *   (c) `comptime auto NAME = init;`  -- idem (b).
-             */
+                   mut_lex.peek_at(0).lexeme == "var") {
+            /* Hard break v4: `comptime var` ELIMINADO.  La mutabilidad es
+             * el comportamiento por defecto en compile-time -- todo
+             * `comptime`/`const` es mutable DURANTE la compilacion y se
+             * congela al terminar -- asi que el marcador `var` es
+             * redundante y confuso.  Usa `comptime X` (tipo explicito) o
+             * `comptime auto X` (inferencia). */
+            const SourceLoc bad_loc = current_.loc;
+            (void)consume(); /* 'comptime' */
+            (void)consume(); /* 'var' */
+            diags_.error(
+                bad_loc,
+                "'comptime var' fue eliminado: usa 'comptime X' o "
+                "'comptime auto X' (comptime ya es mutable en compile-time)");
+            /* Consumir hasta ';' para no encadenar errores. */
+            while (current_.kind != TokenKind::SEMICOLON &&
+                   current_.kind != TokenKind::END_OF_FILE)
+                (void)consume();
+            (void)match(TokenKind::SEMICOLON);
+            return nullptr;
+        } else if (mut_lex.peek_at(0).kind == TokenKind::IDENTIFIER &&
+                   mut_lex.peek_at(0).lexeme == "auto") {
+            /* `comptime auto NAME = init;` -- inferencia de tipo.  `auto`
+             * (inferencia; valido en comptime y en runtime) es DISTINTO de
+             * `var` (marcador de mutabilidad, eliminado).  El tipo se
+             * deduce del init; mutable en compile-time por el pre-pase
+             * (is_mutable=true), congelado tras compilar. */
             const SourceLoc sugar_loc = current_.loc;
             (void)consume(); /* 'comptime' */
-            (void)consume(); /* 'var' o 'auto' */
-            /* Detectar modo (b)/(c): siguiente token es IDENT seguido
-             * de `=`.  Si si, build GlobalVarDecl con type=nullptr +
-             * is_const=false + is_comptime=true + infer. */
-            if (current_.kind == TokenKind::IDENTIFIER &&
-                mut_lex.peek_at(0).kind == TokenKind::ASSIGN) {
-                auto gv = std::make_unique<ast::GlobalVarDecl>();
-                gv->loc = sugar_loc;
-                gv->name = consume().lexeme;
-                gv->is_const = false; /* mutable */
-                gv->is_comptime = true;
-                gv->type = nullptr; /* infer */
-                (void)expect(
-                    TokenKind::ASSIGN,
-                    "se esperaba '=' tras 'comptime var/auto' + nombre");
-                gv->init = parse_expr();
-                (void)expect(
-                    TokenKind::SEMICOLON,
-                    "se esperaba ';' al final de la decl comptime var");
-                return gv;
-            }
-            is_comptime_var = true;
+            (void)consume(); /* 'auto' */
+            auto gv = std::make_unique<ast::GlobalVarDecl>();
+            gv->loc = sugar_loc;
+            gv->name = consume().lexeme;
+            /* comptime -> mutable en compile-time.  Un `comptime X` global es
+             * solo-compile-time (no se emite como var runtime), asi que
+             * is_const=false no introduce mutabilidad-runtime real; la marca
+             * el estado comptime mutable (id counters, tablas). */
+            gv->is_const = false;
+            gv->is_comptime = true;
+            gv->type = nullptr; /* infer desde init */
+            (void)expect(TokenKind::ASSIGN,
+                         "se esperaba '=' tras 'comptime auto' + nombre");
+            gv->init = parse_expr();
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' al final de la decl comptime auto");
+            return gv;
         } else if (mut_lex.peek_at(0).kind == TokenKind::IDENTIFIER &&
                    mut_lex.peek_at(1).kind == TokenKind::ASSIGN) {
             /* sugar: `comptime NAME = expr;` -> equivale a
@@ -1591,7 +1605,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             auto gv = std::make_unique<ast::GlobalVarDecl>();
             gv->loc = sugar_loc;
             gv->name = std::move(nm);
-            gv->is_const = true;
+            /* comptime -> mutable en compile-time (solo-compile-time; no se
+             * emite como var runtime).  Los VALORES constantes usan `const`
+             * (is_const=true, runtime-inmutable). */
+            gv->is_const = false;
             gv->is_comptime = true;
             gv->type = nullptr; /* infer desde init */
             gv->init = parse_expr();
@@ -1774,12 +1791,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // `comptime T NAME = expr;` (forma canonica v4) -> comptime const
     // (inmutable, exportable, va al .vxi).
     // `comptime var T NAME = init;` -> comptime mutable (local al eval AST).
-    // v4: si veniamos como `is_comptime_const` (set tentativamente cuando
-    // se vio `comptime` sin `var`/`auto`/`<>`), forzamos @c is_const=true
-    // porque comptime SIEMPRE implica const en var-decls top-level.
-    if (is_comptime_const) {
-        is_const = true;
-    }
+    // v4: un `comptime X` (var-decl top-level) es MUTABLE en compile-time
+    // (la mutabilidad es el comportamiento por defecto de comptime; ya no
+    // existe `comptime var`).  Por eso NO forzamos is_const=true: queda
+    // is_const=false (mutable en comptime, solo-compile-time).  Los VALORES
+    // constantes usan `const X` (is_const=true, runtime-inmutable).
+    // is_comptime_const solo sirve para propagar gv->is_comptime abajo.
     auto gv = parse_global_var_decl(std::move(type_node), std::move(name), loc,
                                     is_const);
     if (gv && (is_comptime_const || is_comptime_var)) gv->is_comptime = true;

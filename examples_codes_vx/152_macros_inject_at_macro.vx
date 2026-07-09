@@ -33,8 +33,8 @@ comptime string macro_double(i64 n) {
 //   make_inc_chain(N) -> "mas_uno(mas_uno(...mas_uno(x)...))" con N niveles
 @Macro
 comptime string make_inc_chain(i64 depth) {
-    comptime var string code = "x";
-    comptime var i64 i = 0;
+    string code = "x";
+    i64 i = 0;
     while (i < depth) {
         code = "mas_uno(" + code + ")";
         i = i + 1;
@@ -45,9 +45,9 @@ comptime string make_inc_chain(i64 depth) {
 // Macro con template + replace declarativo.
 @Macro
 comptime string make_sum(i64 a, i64 b) {
-    comptime var string tpl = "sumar({a}, {b})";
-    comptime var string t1  = replace(tpl, "{a}", to_str(a));
-    comptime var string t2  = replace(t1,  "{b}", to_str(b));
+    string tpl = "sumar({a}, {b})";
+    string t1  = replace(tpl, "{a}", to_str(a));
+    string t2  = replace(t1,  "{b}", to_str(b));
     return t2;
 }
 

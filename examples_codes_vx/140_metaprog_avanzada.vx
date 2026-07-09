@@ -1,7 +1,7 @@
 namespace ejemplos.metaprog_avanzada;
 
 // metaprogramacion sin limitaciones.
-// (1) comptime var/const en for-init
+// (1) locales mutables + const en for-init
 // (2) arrays comptime con indexing/asignacion
 // (3) comptime fn con type params (type-level metaprog)
 // (4) structs first-class como valores comptime
@@ -42,8 +42,8 @@ i32 main() {
     // (1) comptime en for-init dentro de comptime fn body.
     comptime {
         // (2)+(4) Construir array via while + assignment.
-        comptime var i64[8] squares = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (comptime var i64 i = 0; i < 8; i = i + 1) {
+        i64[8] squares = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (i64 i = 0; i < 8; i = i + 1) {
             squares[i] = i * i;
         }
         static_assert(squares[0] == 0,   "0^2");
@@ -51,8 +51,8 @@ i32 main() {
         static_assert(squares[7] == 49,  "7^2");
 
         // (4) Struct mutable: simular un acumulador con dos counters.
-        comptime var Item totals = {.id = 0, .weight = 0};
-        for (comptime var i64 j = 1; j <= 5; j = j + 1) {
+        Item totals = {.id = 0, .weight = 0};
+        for (i64 j = 1; j <= 5; j = j + 1) {
             totals.id += 1;
             totals.weight += (i32)(j * 10);
         }

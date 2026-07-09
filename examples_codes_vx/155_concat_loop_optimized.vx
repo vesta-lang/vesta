@@ -28,8 +28,8 @@ namespace ejemplos.concat_loop_optimized;
 // El loop es ahora O(N) puro: dobalr N solo dobla el tiempo.
 
 comptime u64 builder(i64 n) {
-    comptime var string s = "";
-    comptime var i64 i = 0;
+    string s = "";
+    i64 i = 0;
     while (i < n) {
         s = s + "X";   // fast path -> O(1) amortizado
         i = i + 1;
@@ -39,8 +39,8 @@ comptime u64 builder(i64 n) {
 
 // Variantes que tambien estan optimizadas:
 comptime u64 builder_prepend(i64 n) {
-    comptime var string s = "";
-    comptime var i64 i = 0;
+    string s = "";
+    i64 i = 0;
     while (i < n) {
         s = "Y" + s;   // fast path commutativo (insert al inicio)
         i = i + 1;
@@ -49,8 +49,8 @@ comptime u64 builder_prepend(i64 n) {
 }
 
 comptime u64 builder_compound(i64 n) {
-    comptime var string s = "";
-    comptime var i64 i = 0;
+    string s = "";
+    i64 i = 0;
     while (i < n) {
         s += "Z";       // AddAssign directo, ya era O(1) desde antes
         i = i + 1;

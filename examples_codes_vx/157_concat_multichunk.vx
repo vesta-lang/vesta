@@ -39,8 +39,8 @@ namespace ejemplos.concat_multichunk;
 i32 doblar(i32 x) { return x * 2; }
 
 comptime u64 build_csv(i64 n) {
-    comptime var string s = "";
-    comptime var i64 i = 0;
+    string s = "";
+    i64 i = 0;
     while (i < n) {
         // 3 chunks: to_str(i) + "," + " "  -- todos en una sola asignacion.
         s = s + to_str(i) + "," + " ";
@@ -50,8 +50,8 @@ comptime u64 build_csv(i64 n) {
 }
 
 comptime u64 build_lit3(i64 n) {
-    comptime var string s = "";
-    comptime var i64 i = 0;
+    string s = "";
+    i64 i = 0;
     while (i < n) {
         s = s + "[" + "X" + "]";
         i = i + 1;
@@ -60,8 +60,8 @@ comptime u64 build_lit3(i64 n) {
 }
 
 comptime u64 build_mixed(i64 n) {
-    comptime var string s = "";
-    comptime var i64 i = 0;
+    string s = "";
+    i64 i = 0;
     while (i < n) {
         s = s + "row=" + to_str(i) + ";";
         i = i + 1;

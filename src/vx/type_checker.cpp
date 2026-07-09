@@ -1569,7 +1569,11 @@ bool TypeChecker::run() {
         c.is_array = r.is_array;
         c.is_struct = r.is_struct;
         c.is_type = r.is_type;
-        c.is_mutable = !gv->is_const;
+        /* Todo global `const` o `comptime` es MUTABLE en compile-time (el
+         * codigo comptime lo puede alterar); INMUTABLE en runtime (is_const).
+         * Un global puede declararse con cualquiera de las dos palabras y
+         * funciona igual: mutable durante la compilacion, congelado al final. */
+        c.is_mutable = true;
         c.deferred = r.deferred; /* #2: propaga placeholder diferido */
         if (r.is_str)
             c.str_value = r.str;
@@ -4166,11 +4170,12 @@ void TypeChecker::check_functions() {
                             c.is_array = r.is_array;
                             c.is_struct = r.is_struct;
                             c.is_type = r.is_type;
-                            /* A.43.17: globales `comptime var` son mutables.
-                             * Los `comptime const` mantienen is_mutable=false.
-                             * Las @Macro y comptime fn pueden modificar
-                             * globals mutables via apply_comptime_assign. */
-                            c.is_mutable = !gv->is_const;
+                            /* Todo global `const` o `comptime` es MUTABLE en
+                             * compile-time (las @Macro y comptime fn lo
+                             * modifican via apply_comptime_assign) e INMUTABLE
+                             * en runtime.  Da igual con cual de las dos
+                             * palabras se declare: funciona igual. */
+                            c.is_mutable = true;
                             c.deferred = r.deferred; /* #2: propaga placeholder */
                             if (r.is_str)
                                 c.str_value = r.str;

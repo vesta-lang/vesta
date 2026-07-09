@@ -7,7 +7,7 @@ i32 doblar(i32 x) { return x * 2; }
 i32 mas_uno(i32 x) { return x + 1; }
 
 // Contador global compartido entre N macros.
-comptime var i64 g_n = 0;
+const i64 g_n = 0;
 
 // Macro recursivo profundo: genera mas_uno(mas_uno(...x...)) con N niveles.
 @Macro
@@ -20,8 +20,8 @@ comptime string M_chain(i64 n) {
 // Macro de tabla: genera una expresion con N llamadas a doblar(i).
 @Macro
 comptime string M_sum_doubles(i64 n) {
-    comptime var string code = "0";
-    comptime var i64 i = 1;
+    string code = "0";
+    i64 i = 1;
     while (i <= n) {
         code = code + " + doblar(" + to_str(i) + ")";
         i = i + 1;

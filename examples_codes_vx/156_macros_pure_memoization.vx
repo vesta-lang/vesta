@@ -31,8 +31,8 @@ i32 doblar(i32 x) { return x * 2; }
 // devuelven el resultado cacheado.
 @Pure @Macro
 comptime string build_sum(i64 n) {
-    comptime var string s = "0";
-    comptime var i64 i = 1;
+    string s = "0";
+    i64 i = 1;
     while (i <= n) {
         s = s + " + " + to_str(i);
         i = i + 1;
@@ -42,7 +42,7 @@ comptime string build_sum(i64 n) {
 
 // Macro NO puro: usa gensym y/o global mutable.  NO se marca @Pure
 // porque cada call debe re-ejecutar el body para incrementar el counter.
-comptime var i64 g_counter = 0;
+const i64 g_counter = 0;
 @Macro
 comptime string make_uniq() {
     g_counter = g_counter + 1;
