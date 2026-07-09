@@ -1576,11 +1576,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             auto gv = std::make_unique<ast::GlobalVarDecl>();
             gv->loc = sugar_loc;
             gv->name = consume().lexeme;
-            /* comptime -> mutable en compile-time.  Un `comptime X` global es
-             * solo-compile-time (no se emite como var runtime), asi que
-             * is_const=false no introduce mutabilidad-runtime real; la marca
-             * el estado comptime mutable (id counters, tablas). */
-            gv->is_const = false;
+            /* is_const=true -> INMUTABLE en runtime (reasignarlo en runtime es
+             * error).  La mutabilidad comptime la da is_mutable=true en el
+             * pre-pase (todo global const/comptime es mutable en compile-time,
+             * congelado despues). */
+            gv->is_const = true;
             gv->is_comptime = true;
             gv->type = nullptr; /* infer desde init */
             (void)expect(TokenKind::ASSIGN,
@@ -1605,10 +1605,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             auto gv = std::make_unique<ast::GlobalVarDecl>();
             gv->loc = sugar_loc;
             gv->name = std::move(nm);
-            /* comptime -> mutable en compile-time (solo-compile-time; no se
-             * emite como var runtime).  Los VALORES constantes usan `const`
-             * (is_const=true, runtime-inmutable). */
-            gv->is_const = false;
+            /* is_const=true -> INMUTABLE en runtime; mutable SOLO en
+             * compile-time (is_mutable=true en el pre-pase). */
+            gv->is_const = true;
             gv->is_comptime = true;
             gv->type = nullptr; /* infer desde init */
             gv->init = parse_expr();
@@ -1791,12 +1790,13 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // `comptime T NAME = expr;` (forma canonica v4) -> comptime const
     // (inmutable, exportable, va al .vxi).
     // `comptime var T NAME = init;` -> comptime mutable (local al eval AST).
-    // v4: un `comptime X` (var-decl top-level) es MUTABLE en compile-time
-    // (la mutabilidad es el comportamiento por defecto de comptime; ya no
-    // existe `comptime var`).  Por eso NO forzamos is_const=true: queda
-    // is_const=false (mutable en comptime, solo-compile-time).  Los VALORES
-    // constantes usan `const X` (is_const=true, runtime-inmutable).
-    // is_comptime_const solo sirve para propagar gv->is_comptime abajo.
+    // v4: un `comptime X` (var-decl top-level) es INMUTABLE en runtime
+    // (is_const=true) pero MUTABLE en compile-time (is_mutable=true en el
+    // pre-pase).  Reasignarlo en runtime es error; el codigo comptime SI lo
+    // puede alterar durante la compilacion.  Ya no existe `comptime var`.
+    if (is_comptime_const) {
+        is_const = true;
+    }
     auto gv = parse_global_var_decl(std::move(type_node), std::move(name), loc,
                                     is_const);
     if (gv && (is_comptime_const || is_comptime_var)) gv->is_comptime = true;
