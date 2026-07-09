@@ -2374,19 +2374,25 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
         return macro_body_unsupported_reason_expr(tc, bn->rhs.get());
     }
     case ast::NodeKind::InitListExpr: {
-        /* Init list `{a, b, c}` o `{.x=1, .y=2}` requiere ALLOCA
-         * tipado del destino (array o struct) en runtime.  El
-         * path del macro lowering no lo soporta; cae al AST
-         * evaluator que SI maneja arrays/structs (A.42). */
-        return "init list `{...}` en macro body (usa AST eval)";
+        /* Init list `{a, b, c}` de un array local: el lowering del macro lo
+         * soporta via el var-decl tipado (`i64 xs[N] = {...}`) que hace ALLOCA
+         * + STOREs.  Recurrir en los elementos por si alguno no es lowereable
+         * (p.ej. un init list de structs, que si requiere layout). */
+        const auto *il = static_cast<const ast::InitListExpr *>(e);
+        for (const auto &el : il->elements) {
+            auto r = macro_body_unsupported_reason_expr(tc, el.get());
+            if (!r.empty()) return r;
+        }
+        return "";
     }
     case ast::NodeKind::IndexExpr: {
-        /* Array indexing `arr[i]` requiere conocer el tipo de
-         * `arr` y el sizeof del elemento para emitir ADD + LOAD
-         * correctos.  En el body de un macro las vars locales
-         * pueden ser arrays comptime que NO existen en runtime;
-         * fallback al AST evaluator. */
-        return "array indexing `arr[i]` en macro body (usa AST eval)";
+        /* Array indexing `arr[i]`: lowereable en macro body cuando `arr` es un
+         * array local tipado (el lowering conoce el elem type via el var-decl).
+         * Recurrir en base + index. */
+        const auto *ix = static_cast<const ast::IndexExpr *>(e);
+        auto r = macro_body_unsupported_reason_expr(tc, ix->base.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason_expr(tc, ix->index.get());
     }
     case ast::NodeKind::UnaryExpr: {
         const auto *un = static_cast<const ast::UnaryExpr *>(e);
@@ -2441,7 +2447,13 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
         if (vd->type) {
             const auto *t = vd->type.get();
             if (t->kind == ast::NodeKind::ArrayTypeNode) {
-                return "var local de tipo array en macro body (usa AST eval)";
+                /* Array local `T[N]`: el lowering hace ALLOCA + init (STOREs) y
+                 * el indexing usa el elem type del var-decl.  Validar solo el
+                 * init. */
+                if (vd->init)
+                    return macro_body_unsupported_reason_expr(tc,
+                                                              vd->init.get());
+                return "";
             }
             if (t->kind == ast::NodeKind::NamedTypeNode) {
                 /* Si el nombre matchea un struct declarado, es
@@ -2694,6 +2706,19 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             !is_force_lowered_comptime)
             return;
     } else if (fd->is_comptime) {
+        /* @Macro con un param `expr` (captura raw del texto del call site):
+         * NO es VM-evaluable -- el `expr` es texto compile-time, no tiene
+         * representacion runtime que marshalar como arg.  DEBE evaluarse por
+         * AST-eval (donde el texto crudo esta disponible).  No es un gap: es la
+         * naturaleza de `expr`. */
+        for (const auto &p : fd->params) {
+            if (p && p->is_expr_capture) {
+                ++macro_skipped_count_;
+                macro_skip_reasons_.emplace_back(
+                    fd->name, "param `expr` (captura raw, solo AST-eval)");
+                return;
+            }
+        }
         /* @Macro: intentar lowear el body al IR.  Si contiene
          * caracteristicas no soportadas todavia (introspect,
          * comptime var, builtins comptime-only), saltar limpiamente

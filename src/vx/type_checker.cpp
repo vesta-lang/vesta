@@ -4196,13 +4196,20 @@ void TypeChecker::check_functions() {
         // #7: especializaciones de funcion no se chequean como concretas (su
         // body usa el patron); cada uso se monomorphiza eligiendo la spec.
         if (fn->is_specialization && !fn->is_comptime && !fn->is_macro) continue;
-        /* comptime fn -- el body solo se interpreta al
+        /* comptime fn NO-macro -- el body solo se interpreta al
          * call site via comptime_eval_stmt.  No type-check estatico
          * aqui (los IdentExpr no necesitan annotation; el eval los
          * busca en tc.comptime_const_locals_).  Si hay errores de
          * sintaxis o expresiones invalidas, el eval fallara con
-         * `ok=false` en el call y emitiremos error alli. */
-        if (fn->is_comptime) continue;
+         * `ok=false` en el call y emitiremos error alli.
+         *
+         * Los @Macro SI se type-checkean (mas abajo, con
+         * current_fn_is_macro_): su body se baja a IR (`__macro_`) y se
+         * VM-evalua, asi que los exprs necesitan result_type correcto
+         * (arrays, string concat, indexing...).  El check_block con
+         * current_fn_is_macro_ trata los locals como comptime const y
+         * es tolerante con los patrones de macro. */
+        if (fn->is_comptime && !fn->is_macro) continue;
 
         // Mejora II: validacion @Async extendida.  Antes solo permitia
         // funciones sin parametros y return type i64.  Ahora:
@@ -4303,7 +4310,17 @@ void TypeChecker::check_functions() {
         // Tambien empujamos un scope comptime nuevo para los locals del
         // macro body (para que find_comptime_local_mut los encuentre).
         if (fn->is_macro) push_comptime_scope();
+        /* Type-check del cuerpo de @Macro = SOLO-ANOTACION: rellena los
+         * result_type (para que el lowering maneje arrays, string concat,
+         * indexing...) pero SUPRIME los diagnosticos -- los patrones comptime
+         * (macro-a-macro, comptime globals, introspect, code-injection) no son
+         * errores reales aqui; se resuelven en el lowering (macro_body_
+         * unsupported_reason gatea los no-lowereables a AST-eval) o al expandir
+         * el macro en su call site. */
+        const bool sup_prev =
+            fn->is_macro ? diags_.set_suppressed(true) : false;
         check_block(fn->body.get(), fn_ret);
+        if (fn->is_macro) diags_.set_suppressed(sup_prev);
         if (fn->is_macro) pop_comptime_scope();
         current_fn_is_macro_ = saved_is_macro;
         current_fn_is_noexcept_ = saved_noexcept;
@@ -10819,7 +10836,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
          * Type con kind=VOID si no logro resolver -- pero NO emite
          * diagnostico por si mismo; hay que detectarlo aqui para no
          * devolver 0 en silencio (p.ej. sizeof<uintptr>() con uintptr
-         * indefinido).  sizeof<void>() explicito sigue permitido. */
+         * indefinido).  sizeof<void>() explicito sigue permitido.  @c resolved
+         * es el Type de T (usado por el size real + el hover LSP); @c rt es el
+         * tipo de RETORNO del builtin (u64 para sizeof, etc.). */
         Type resolved = e->type_args.empty()
                             ? Type{}
                             : type_from_node(e->type_args[0].get());
@@ -11455,6 +11474,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     if (!deferrable && comptime_const_values_.count(id->name)) {
                         deferrable = true;
                     }
+                }
+                /* Dentro de un @Macro body, el arg puede ser una expresion
+                 * RUNTIME (param del macro, indexing de un array local, etc.):
+                 * el builtin (to_str/chr/substr/...) se baja a una CALL runtime
+                 * (MC.15) y se VM-evalua, no se pliega en compile-time.  No
+                 * exigir que el arg sea comptime-evaluable en ese contexto. */
+                if (!deferrable && current_fn_is_macro_) {
+                    deferrable = true;
                 }
                 if (!deferrable) {
                     diags_.error(e->args[i]->loc,
@@ -12869,6 +12896,21 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
      * generada, NO `string` (el tipo declarado de la fn). */
     {
         auto fn_it = comptime_fns_.find(id->name);
+        if (fn_it != comptime_fns_.end() && fn_it->second &&
+            fn_it->second->is_macro && current_fn_is_macro_) {
+            /* Macro invocado DENTRO del body de OTRO macro (composicion /
+             * recursion): NO se expande aqui -- el body del macro externo se
+             * baja a IR y la llamada al macro interno se lowerea como una CALL
+             * runtime a `__macro_<interno>` (que devuelve un StringObject).  El
+             * tipo del call es STRING (el retorno declarado del macro), no la
+             * expansion.  Sin esto, el type-check intentaria expandir el macro
+             * interno con args RUNTIME (params del externo) -> "debe ser
+             * comptime-evaluable a string" + cascada de errores VOID. */
+            for (auto &a : e->args)
+                (void)check_expr(a.get());
+            e->result_type = Type{PrimitiveKind::STRING};
+            return e->result_type;
+        }
         if (fn_it != comptime_fns_.end() && fn_it->second &&
             fn_it->second->is_macro) {
             /* Phase MC.9/MC.10: VM eval es el camino DEFAULT cuando

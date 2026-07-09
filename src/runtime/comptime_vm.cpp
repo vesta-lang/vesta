@@ -389,7 +389,14 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     try {
         /* Deref handle -> payload host_ptr.  El payload es el
          * StringObject completo (sin GcHeader). */
-        const auto handle = static_cast<gc::GcHandle>(r0);
+        /* El macro pudo devolver un StringObject ROPE (STRCAT) o SLICE
+         * (STRSLICE): sus bytes NO estan contiguos en data[40], sino en una
+         * estructura de arbol/vista.  Leerlo como FLAT daria basura (incl. NUL
+         * bytes -> "caracter inesperado" al parsear el codigo generado).
+         * Materializar a FLAT primero. */
+        gc::GcHandle handle =
+            runtime::flatten_string_public(impl_->proc,
+                                           static_cast<gc::GcHandle>(r0));
         uint8_t *payload = impl_->proc->gc_heap.deref(handle);
         if (!payload) return false;
 

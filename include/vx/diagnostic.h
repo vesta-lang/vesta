@@ -117,10 +117,24 @@ class Diagnostics {
      * @param d Diagnostico a añadir.
      */
     void emit(Diagnostic d) {
+        // Supresion: durante el type-check "solo-anotacion" del cuerpo de un
+        // @Macro, queremos que check_expr rellene los result_type SIN emitir
+        // diagnosticos (los patrones comptime -- macro-a-macro, comptime
+        // globals, introspect -- no son errores reales; se manejan en el
+        // lowering / AST-eval).  Con suppress_ activo emit() es no-op.
+        if (suppress_) return;
         // Actualizar el contador de errores antes de mover el diagnostico.
         if (d.level == DiagLevel::ERR) ++error_count_;
         // Mover al vector evita una copia de message/code/file.
         entries_.push_back(std::move(d));
+    }
+
+    /// Activa/desactiva la supresion de diagnosticos.  Devuelve el estado
+    /// anterior (para restaurar con RAII/guard).
+    bool set_suppressed(bool on) {
+        bool prev = suppress_;
+        suppress_ = on;
+        return prev;
     }
 
     /**
@@ -205,6 +219,7 @@ class Diagnostics {
   private:
     std::vector<Diagnostic> entries_; ///< Almacenamiento contiguo.
     size_t error_count_ = 0;          ///< Cache O(1) para has_errors().
+    bool suppress_ = false;           ///< No-op emit() mientras este activo.
 };
 
 /**
