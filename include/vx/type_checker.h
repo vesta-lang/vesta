@@ -1074,6 +1074,18 @@ class TypeChecker {
     Type type_from_node(const ast::TypeNode *tn) const;
 
     /**
+     * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.
+     *
+     * Recorre punteros/arrays/optional hasta el @c NamedTypeNode base.  Si ese
+     * nombre no corresponde a ningun tipo conocido (primitivo, alias, struct/
+     * clase/enum, parametro de tipo comptime, ni un especial/generico que
+     * @c type_from_node reconozca), devuelve el nombre; en otro caso, cadena
+     * vacia.  Sirve para dar un error CLARO en vez de tratar el tipo como
+     * @c void (tamano 0) en silencio (return types, @c sizeof<T>, ...).
+     */
+    std::string first_unresolved_type(const ast::TypeNode *tn) const;
+
+    /**
      * @brief Verifica si una asignacion entre tipos CLASS es valida
      *        considerando la jerarquia de interfaces / superclases.
      *

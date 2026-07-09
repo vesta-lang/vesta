@@ -1950,6 +1950,41 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
     return Type{};
 }
 
+std::string
+TypeChecker::first_unresolved_type(const ast::TypeNode *tn) const {
+    if (!tn)
+        return {};
+    switch (tn->kind) {
+    case ast::NodeKind::PointerTypeNode:
+        return first_unresolved_type(
+            static_cast<const ast::PointerTypeNode *>(tn)->pointee.get());
+    case ast::NodeKind::ArrayTypeNode:
+        return first_unresolved_type(
+            static_cast<const ast::ArrayTypeNode *>(tn)->element_type.get());
+    case ast::NodeKind::NamedTypeNode: {
+        const auto *nt = static_cast<const ast::NamedTypeNode *>(tn);
+        // Casos legitimos que producen VOID o que ya son conocidos: no son
+        // "no resueltos".
+        if (nt->name == "void" || nt->name == "never")
+            return {};
+        if (type_aliases_.count(nt->name)) // alias (incluido alias-a-void)
+            return {};
+        Type bound;
+        if (lookup_comptime_type(nt->name, bound)) // parametro de tipo comptime
+            return {};
+        // type_from_node reconoce primitivos, struct/clase/enum, genericos y
+        // especiales (Optional/Result/Array/VirtualPtr/...), namespaces, y
+        // Type-as-value; todos ellos devuelven algo != VOID.  Solo un nombre
+        // GENUINAMENTE desconocido cae a VOID aqui.
+        if (type_from_node(tn).kind == PrimitiveKind::VOID)
+            return nt->name;
+        return {};
+    }
+    default:
+        return {};
+    }
+}
+
 // ---------------------------------------------------------------------
 // Pase 1: declaraciones globales.
 // ---------------------------------------------------------------------
@@ -3791,6 +3826,19 @@ void TypeChecker::collect_globals() {
             }
 
             FunctionSig sig;
+            // Tipo de retorno no reconocido -> error CLARO (en vez de tratarlo
+            // como void en silencio y disparar luego "return con valor en void").
+            // Se omite en funciones TEMPLATE (con parametros de tipo): ahi el
+            // tipo de retorno puede ser un placeholder (`T`, `Caja<T>`) que no
+            // resuelve hasta monomorphizar; las instancias concretas (sin
+            // type_params) si se validan.
+            if (fn->return_type && fn->type_params.empty()) {
+                const std::string bad =
+                    first_unresolved_type(fn->return_type.get());
+                if (!bad.empty())
+                    diags_.error(fn->loc,
+                                 "tipo de retorno no reconocido: '" + bad + "'");
+            }
             Type ret_t = type_from_node(fn->return_type.get());
             // Mejora II: si la funcion es @Async, el wrapper publico
             // visible al callsite devuelve Future<T> donde T es el tipo
@@ -10768,14 +10816,19 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->loc, id->name + ": no acepta argumentos runtime (solo <T>)");
         }
         /* Validar que T sea resoluble.  type_from_node devuelve un
-         * Type con kind=VOID si no logro resolver. */
+         * Type con kind=VOID si no logro resolver -- pero NO emite
+         * diagnostico por si mismo; hay que detectarlo aqui para no
+         * devolver 0 en silencio (p.ej. sizeof<uintptr>() con uintptr
+         * indefinido).  sizeof<void>() explicito sigue permitido. */
         Type resolved = e->type_args.empty()
                             ? Type{}
                             : type_from_node(e->type_args[0].get());
-        if (resolved.kind == PrimitiveKind::VOID && e->type_args.size() == 1) {
-            /* Si el usuario escribio sizeof<void>() o similar,
-             * permitirlo (sizeof(void)=0).  Pero si fue por fallo de
-             * resolucion, type_from_node ya emitio diagnostico. */
+        if (e->type_args.size() == 1) {
+            const std::string bad =
+                first_unresolved_type(e->type_args[0].get());
+            if (!bad.empty())
+                diags_.error(e->loc,
+                             id->name + ": tipo no reconocido: '" + bad + "'");
         }
         /* Tipo de retorno segun el builtin. */
         Type rt{};

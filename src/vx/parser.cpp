@@ -1752,10 +1752,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && is_comptime_fn)
             fd->type_params = std::move(comptime_type_params);
         // Registrar posiciones de params @c expr para que el parser sepa
-        // hacer raw-text capture en los call sites de este @Macro.  Solo
-        // se honra el flag cuando la funcion es @Macro: en otro contexto
-        // produciria un mensaje de error en el type checker.
-        if (fd && top_is_macro && !fd->params.empty()) {
+        // hacer raw-text capture en los call sites de esta funcion.  Se honra
+        // para CUALQUIER funcion con params @c expr (no solo @Macro): permite
+        // helpers comptime como `comptime string source(expr code)` que
+        // capturan el texto crudo del argumento (p.ej. un bloque `asm`) sin
+        // parsearlo como expresion.
+        if (fd && !fd->params.empty()) {
             std::vector<int> positions;
             for (size_t i = 0; i < fd->params.size(); ++i) {
                 if (fd->params[i] && fd->params[i]->is_expr_capture) {
