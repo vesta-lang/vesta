@@ -1543,7 +1543,17 @@ bool TypeChecker::run() {
     for (auto &decl : mod_.decls) {
         if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
         auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
-        if (!gv->is_comptime || !gv->init) continue;
+        /* Toda CONSTANTE es comptime por definicion: los globales `const`
+         * (ademas de los `comptime`) se evaluan aqui y entran en
+         * comptime_const_values_ para que el evaluador comptime los pueda
+         * LEER igual que un `comptime` (p.ej. `const N = 5;
+         * comptime_to_str(N)`).  Si el init de un `const` NO es comptime-
+         * evaluable (depende de runtime), comptime_eval_expr devuelve
+         * r.ok=false y se skipea -> el const sigue su ruta runtime normal
+         * (collect_globals + lowering).  Un const en comptime_const_values_
+         * ademas se inlina en sus usos, asi que si solo se usa en comptime
+         * queda muerto y la DCE elimina su slot runtime. */
+        if ((!gv->is_comptime && !gv->is_const) || !gv->init) continue;
         const ComptimeEvalResult r = comptime_eval_expr(*this, gv->init.get());
         if (!r.ok) continue; /* check_functions emitira diagnostico */
         ComptimeConst c;
