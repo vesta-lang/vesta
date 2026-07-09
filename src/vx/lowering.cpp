@@ -15427,19 +15427,44 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     auto is_string_lit_node = [](const ast::Expr *ex) -> bool {
         return ex && ex->kind == ast::NodeKind::StringLitExpr;
     };
+    /* En un cuerpo de @Macro los exprs tienen result_type=VOID (el macro no
+     * pasa por check_functions), asi que una llamada a un builtin que DEVUELVE
+     * string (`to_str`, `chr`, `substr`, `concat`, ...) no se reconoce como
+     * STRING -> `s + to_str(n)` caia a suma ENTERA en vez de STRCAT.  Este
+     * helper detecta esas llamadas por nombre para que el concat se lowere
+     * correctamente tambien dentro de macros (necesario para VM-evaluarlos). */
+    auto is_string_returning_builtin_call = [](const ast::Expr *ex) -> bool {
+        if (!ex || ex->kind != ast::NodeKind::CallExpr) return false;
+        const auto *ce = static_cast<const ast::CallExpr *>(ex);
+        if (!ce->callee || ce->callee->kind != ast::NodeKind::IdentExpr)
+            return false;
+        const std::string &n =
+            static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
+        static const std::unordered_set<std::string> STR_RET_BUILTINS = {
+            "to_str",  "chr",         "substr",         "concat",
+            "repeat",  "replace",     "str_concat",     "str_intern",
+            "gensym",  "comptime_to_str", "comptime_concat", "comptime_chr",
+            "comptime_substr",         "comptime_repeat", "comptime_replace",
+        };
+        return STR_RET_BUILTINS.count(n) != 0;
+    };
     const bool lhs_is_str =
         (ltk == PrimitiveKind::STRING) ||
         (is_string_lit_node(e->lhs.get()) &&
-         (ltk == PrimitiveKind::PTR || ltk == PrimitiveKind::VOID));
+         (ltk == PrimitiveKind::PTR || ltk == PrimitiveKind::VOID)) ||
+        is_string_returning_builtin_call(e->lhs.get());
     const bool rhs_is_str =
         (rtk == PrimitiveKind::STRING) ||
         (is_string_lit_node(e->rhs.get()) &&
-         (rtk == PrimitiveKind::PTR || rtk == PrimitiveKind::VOID));
+         (rtk == PrimitiveKind::PTR || rtk == PrimitiveKind::VOID)) ||
+        is_string_returning_builtin_call(e->rhs.get());
     // `"a" + "b"` (ambos literales): concat tambien (espejo del checker).
     const bool both_str_lit =
         is_string_lit_node(e->lhs.get()) && is_string_lit_node(e->rhs.get());
-    const bool any_real_str = (ltk == PrimitiveKind::STRING) ||
-                              (rtk == PrimitiveKind::STRING) || both_str_lit;
+    const bool any_real_str =
+        (ltk == PrimitiveKind::STRING) || (rtk == PrimitiveKind::STRING) ||
+        both_str_lit || is_string_returning_builtin_call(e->lhs.get()) ||
+        is_string_returning_builtin_call(e->rhs.get());
     if (lhs_is_str && rhs_is_str && any_real_str) {
         // C-3: si el usuario marco una fn libre @StringConcat / @StringEq,
         // rutear el operador a una CALL a esa fn (mecanismo override).
