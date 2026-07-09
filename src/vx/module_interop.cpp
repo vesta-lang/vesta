@@ -1158,6 +1158,17 @@ void inject_generic_templates_from_vxi(
 
     for (auto &decl : parsed->decls) {
         if (!decl) continue;
+        // Cross-module comptime/macro: marcar las fns comptime/macro
+        // re-parseadas como IMPORTADAS para que el importer NO las re-baje a IR
+        // (el dep ya baja `__macro_<X>` + helpers force-lowered, que el importer
+        // mergea).  Re-bajar aqui produce un `code.<helper>` colgante por el
+        // mangling incoherente del cuerpo re-parseado.  El importer solo las
+        // AST-evalua al invocarlas.  Ver ast::FunctionDecl::is_imported_comptime.
+        if (decl->kind == ast::NodeKind::FunctionDecl) {
+            auto *ifd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (ifd->is_comptime || ifd->is_macro)
+                ifd->is_imported_comptime = true;
+        }
         const std::string nm = decl_name(decl.get());
         // Filtro `only` (si wanted no esta vacio).  Las specs comparten el
         // nombre del primario, asi que el filtro por nombre las incluye.

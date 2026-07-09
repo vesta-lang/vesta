@@ -1415,7 +1415,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         for (auto &decl : mod_.decls) {
             if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-            if (!fd->body) continue;
+            if (!fd->body || fd->is_imported_comptime) continue;
             const bool is_lowerable_comptime =
                 (fd->is_comptime && fd->is_macro) ||
                 (fd->is_comptime && !fd->is_macro &&
@@ -2650,6 +2650,10 @@ static void annotate_macro_param_idents(
 void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Bug fix 2026-05-23: forward declarations no tienen body -- skip.
     if (fd->is_forward_decl || !fd->body) return;
+    // Cross-module: una comptime/macro fn re-parseada de un dep NO se re-baja
+    // aqui (el dep ya bajo su `__macro_<X>` + helpers, que el importer mergea).
+    // Solo el AST se conserva para AST-eval al invocarla.
+    if (fd->is_imported_comptime) return;
     // Templates genericos (con type_params) y especializaciones (#7) se
     // omiten: sus monomorphizaciones concretas (que SI aparecen en
     // mod_.decls) se bajan normalmente.

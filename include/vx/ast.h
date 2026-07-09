@@ -1518,6 +1518,15 @@ struct FunctionDecl : Node {
     /// marca @Pure una fn impura, el resultado es indefinido --
     /// la memoizacion no detecta el cheating.
     bool is_pure = false;
+    /// Cross-module comptime/macro: esta fn fue RE-PARSEADA e inyectada por el
+    /// importer desde el texto fuente exportado del dep (generic_template_
+    /// exports).  El importer la registra para AST-evaluarla, pero NO debe
+    /// re-bajarla a IR: su cuerpo re-parseado referencia helpers del dep por su
+    /// nombre SIMPLE (`helper`), invisible/incoherente en el importer -> el
+    /// lowering emitiria un `callvm code.helper` colgante.  El dep ya baja el
+    /// `__macro_<X>` + sus helpers force-lowered, y el importer MERGEA ese IR;
+    /// re-bajar en el importer es redundante Y rompe el mangling.
+    bool is_imported_comptime = false;
     /// Bug fix 2026-05-23: forward declaration `T fn(args);` sin body.
     /// El parser lo setea cuando ve `;` post-`)`.  El type checker
     /// registra la firma sin requerir body; otra FunctionDecl con el
