@@ -687,11 +687,11 @@ bool comptime_fn_needs_vm(const TypeChecker &tc, const ast::FunctionDecl *fd) {
      * needs_vm controla el path de las comptime FN normales (2430); no debe
      * incluir @Macros o los rutearia por el path equivocado (codigo vacio). */
     if (fd->is_macro) return false;
-    /* P1 rewrite: TODA comptime fn corre en la ComptimeVM, EXCEPTO las que
-     * manipulan TIPOS en compile-time (no tienen representacion runtime en la
-     * VM): (a) GENERICAS (type_params: sizeof<T> se pliega per-instancia), y
-     * (b) las que devuelven `Type` (type-as-value: pick() -> Type).  Esas se
-     * quedan en el tree-walker (manipulacion de tipos pura, cero runtime). */
+    /* P1 rewrite: TODA comptime fn corre en la ComptimeVM.  Las GENERICAS se
+     * monomorfizan antes (la instancia concreta llega aqui sin type_params); el
+     * template en si nunca se invoca directo.  Las que devuelven `Type` no se
+     * "ejecutan" para producir un valor VM: su resultado (un tipo) se pliega en
+     * el consumidor (typename/sizeof) al bajarlo, asi que caen al tree-walker. */
     if (!fd->type_params.empty()) return false;
     if (fd->return_type) {
         const Type rt = tc.resolve_type_node(fd->return_type.get());
