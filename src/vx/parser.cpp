@@ -1466,6 +1466,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             sd->contract_no_heap = top_t_no_heap;
             sd->contract_size = top_t_size;
         }
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(sd.get());
         return sd;
     }
@@ -1478,6 +1479,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             sd->contract_no_heap = top_t_no_heap;
             sd->contract_size = top_t_size;
         }
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(sd.get());
         return sd;
     }
@@ -1505,6 +1507,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             cd->contract_no_heap = top_t_no_heap;
             cd->contract_size = top_t_size;
         }
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(cd.get());
         return cd;
     }
@@ -1526,6 +1529,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             ed->contract_no_heap = top_t_no_heap;
             ed->contract_size = top_t_size;
         }
+        // `;` final opcional estilo C: `enum E { ... };`.
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(ed.get());
         return ed;
     }
