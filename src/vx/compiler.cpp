@@ -232,7 +232,7 @@ CompileResult compile_vx_source(const std::string &source,
     // transitivas).  Es la base del futuro artefacto comptime separado.  Hoy
     // solo diagnostico opt-in (VESTA_DUMP_COMPTIME_UNIT=1); no cambia codegen.
     if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
-        const ComptimeUnit cu = collect_comptime_unit(*mod);
+        const ComptimeUnit cu = collect_comptime_unit(*mod, source);
         dump_comptime_unit(cu, std::cerr);
     }
 

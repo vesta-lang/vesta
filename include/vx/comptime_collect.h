@@ -45,6 +45,13 @@ struct ComptimeUnit {
     std::vector<std::string> helper_deps; ///< fns no-comptime llamadas por el
                                           ///< codigo comptime (transitivo).
 
+    /// FNV-1a 64 del TEXTO FUENTE de todas las decls del conjunto (comptime +
+    /// deps).  Es la CLAVE DE CACHE del futuro artefacto comptime separado:
+    /// cambia si y solo si cambia alguna decl comptime o una dep; los cambios
+    /// en codigo no-comptime (main, helpers no usados por comptime) NO lo
+    /// alteran -> el artefacto comptime se reusa entre builds.  0 si @c empty().
+    uint64_t content_hash = 0;
+
     /// @return true si el modulo no tiene nada comptime (el artefacto seria
     /// vacio y P1 no aplica).
     bool empty() const {
@@ -61,11 +68,15 @@ struct ComptimeUnit {
  * ellas mismas comptime.  El cierre transitivo garantiza que el artefacto
  * separado sea auto-suficiente.
  *
- * @param mod Modulo ya parseado (post-namespace-flatten preferentemente, para
- *            que los nombres esten mangled y las llamadas resuelvan).
+ * @param mod    Modulo ya parseado (post-namespace-flatten preferentemente,
+ *               para que los nombres esten mangled y las llamadas resuelvan).
+ * @param source Texto fuente original del modulo.  Si no esta vacio, se computa
+ *               @c content_hash a partir de los spans de las decls del
+ *               conjunto (clave de cache del artefacto).  Vacio -> hash 0.
  * @return El conjunto comptime.  @c empty() si no hay nada que compilar aparte.
  */
-ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod);
+ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
+                                   const std::string &source = "");
 
 /**
  * @brief Vuelca el conjunto a un stream, legible, para diagnostico.

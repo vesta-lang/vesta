@@ -137,7 +137,8 @@ void collect_calls_stmt(const ast::Stmt *s,
 
 } // namespace
 
-ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod) {
+ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
+                                   const std::string &source) {
     ComptimeUnit u;
 
     // Indice nombre -> FunctionDecl para resolver dependencias.
@@ -205,6 +206,56 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod) {
     std::sort(u.macros.begin(), u.macros.end());
     std::sort(u.comptime_consts.begin(), u.comptime_consts.end());
     std::sort(u.helper_deps.begin(), u.helper_deps.end());
+
+    // Clave de cache del artefacto: FNV-1a 64 del texto fuente de las decls del
+    // conjunto (spans [decl.offset, siguiente_decl.offset)).  Reproducible e
+    // independiente del codigo no-comptime del modulo.
+    if (!source.empty() && !u.empty()) {
+        std::unordered_set<std::string> unit_names;
+        for (const auto &n : u.comptime_fns) unit_names.insert(n);
+        for (const auto &n : u.macros) unit_names.insert(n);
+        for (const auto &n : u.comptime_consts) unit_names.insert(n);
+        for (const auto &n : u.helper_deps) unit_names.insert(n);
+
+        struct Span {
+            uint32_t off;
+            bool in_unit;
+        };
+        std::vector<Span> spans;
+        spans.reserve(mod.decls.size());
+        for (const auto &d : mod.decls) {
+            if (!d) continue;
+            bool in = false;
+            if (d->kind == ast::NodeKind::FunctionDecl)
+                in = unit_names.count(
+                         static_cast<const ast::FunctionDecl *>(d.get())->name) >
+                     0;
+            else if (d->kind == ast::NodeKind::GlobalVarDecl)
+                in = unit_names.count(
+                         static_cast<const ast::GlobalVarDecl *>(d.get())
+                             ->name) > 0;
+            else if (d->kind == ast::NodeKind::ComptimeBlockStmt)
+                in = true; // el bloque comptime es parte del conjunto.
+            spans.push_back({d->loc.offset, in});
+        }
+        std::sort(spans.begin(), spans.end(),
+                  [](const Span &a, const Span &b) { return a.off < b.off; });
+
+        uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis.
+        const uint32_t src_len = static_cast<uint32_t>(source.size());
+        for (size_t i = 0; i < spans.size(); ++i) {
+            if (!spans[i].in_unit) continue;
+            uint32_t start = spans[i].off;
+            uint32_t end = (i + 1 < spans.size()) ? spans[i + 1].off : src_len;
+            if (start > src_len) start = src_len;
+            if (end > src_len) end = src_len;
+            for (uint32_t j = start; j < end; ++j) {
+                h ^= static_cast<uint8_t>(source[j]);
+                h *= 1099511628211ULL; // FNV-1a prime.
+            }
+        }
+        u.content_hash = h;
+    }
     return u;
 }
 
@@ -218,7 +269,8 @@ void dump_comptime_unit(const ComptimeUnit &u, std::ostream &os) {
     for (const auto &n : u.comptime_consts) os << " " << n;
     os << "\n  helper deps    (" << u.helper_deps.size() << "):";
     for (const auto &n : u.helper_deps) os << " " << n;
-    os << "\n";
+    os << "\n  content_hash   : 0x" << std::hex << u.content_hash << std::dec
+       << "  (clave de cache del artefacto comptime)\n";
 }
 
 } // namespace vx
