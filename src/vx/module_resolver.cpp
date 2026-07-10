@@ -591,26 +591,32 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
             diags_.error(imp->loc, r.error_message);
             continue;
         }
-        // Auto-import (M se importa a si mismo): legal pero ignorado.
-        if (r.module_id == mod.module_id) {
-            continue;
-        }
-        // añadir dependencia.  Evitamos duplicados (un mismo modulo
-        // importado dos veces solo aparece una vez).
-        bool dup = false;
-        for (uint32_t d : mod.dependencies) {
-            if (d == r.module_id) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) {
-            mod.dependencies.push_back(r.module_id);
-            // Procesar deps del modulo nuevo recursivamente.  Solo si su
-            // dep list aun no esta computada (evita re-entrada).
-            ResolvedModule *child = modules_[r.module_id].get();
-            if (child->dependencies.empty() && child->parsed_ast) {
+        // Helper: registra un module_id como dependencia (dedup + recursion).
+        auto add_dep = [&](uint32_t mid) {
+            if (mid == UINT32_MAX || mid == mod.module_id) return;
+            for (uint32_t d : mod.dependencies)
+                if (d == mid) return; // dup
+            mod.dependencies.push_back(mid);
+            ResolvedModule *child = modules_[mid].get();
+            if (child && child->dependencies.empty() && child->parsed_ast)
                 process_dependencies_(*child);
+        };
+        add_dep(r.module_id);
+        // Namespace PARCIAL: un mismo `namespace X;` puede estar declarado por
+        // VARIOS ficheros (p.ej. std.types + std/types/x86_64.vx).
+        // resolve_namespace_ devuelve solo el PRIMERO; aqui cargamos el RESTO
+        // para que sus simbolos (tipos/fns) tambien se fusionen en el namespace
+        // que ve el importador.  Sin esto, `import std.types` solo veia el
+        // primer fichero y `sizeof<std.types.uintptr>` (definido en el arch
+        // file) daba "tipo no reconocido".
+        if (imp->by_namespace) {
+            build_namespace_index_();
+            auto itns = ns_index_.find(imp->path);
+            if (itns != ns_index_.end()) {
+                for (const auto &file : itns->second) {
+                    const uint32_t mid = load_and_parse_(file);
+                    add_dep(mid);
+                }
             }
         }
     }

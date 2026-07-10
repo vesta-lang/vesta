@@ -1,3 +1,4 @@
 namespace std.types;
 
-typedef u16 uintptr new;
+@Target("arch:x86_16")
+public typedef u16 uintptr new;

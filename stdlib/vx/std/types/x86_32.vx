@@ -1,3 +1,4 @@
 namespace std.types;
 
-typedef u32 uintptr new;
+@Target("arch:x86")
+public typedef u32 uintptr new;

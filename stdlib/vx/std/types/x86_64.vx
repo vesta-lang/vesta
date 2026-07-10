@@ -1,3 +1,4 @@
 namespace std.types;
 
-typedef u64 uintptr new;
+@Target("arch:x86_64")
+public typedef u64 uintptr new;

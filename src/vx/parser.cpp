@@ -1424,6 +1424,27 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         apply_pending_visibility(bd.get());
         return bd;
     }
+    // typedef / using tras anotaciones (`@Target("arch:x86_64") public
+    // typedef u64 uintptr new;`).  El caso SIN anotaciones se maneja arriba
+    // (~L859) ANTES del loop de `@`; aqui cubrimos el caso post-anotacion,
+    // que antes caia a "se esperaba un tipo" (typedef no estaba en el
+    // dispatch post-@).  Habilita @Target por typedef (tipos por arquitectura).
+    if (current_.kind == TokenKind::KW_TYPEDEF) {
+        const auto nk = lex_.peek_at(0).kind;
+        std::unique_ptr<ast::Node> n;
+        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM) {
+            n = parse_typedef_struct_or_enum();
+        } else {
+            n = parse_typedef_decl();
+        }
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    if (current_.kind == TokenKind::KW_USING) {
+        auto n = parse_using_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
     // struct <nombre> { ... }
     if (current_.kind == TokenKind::KW_STRUCT) {
         auto sd = parse_struct_decl(top_is_overlay);

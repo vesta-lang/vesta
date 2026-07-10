@@ -379,6 +379,9 @@ struct ImportRequest {
     bool is_plain = false;           // sin only -> registra namespace
     bool is_public_reexport = false; // L.23: public import
     bool by_namespace = false;       // NS.2-full: import a.b.c; (por-namespace)
+    std::string ns_path;             // namespace original (por-namespace): para
+                                     // registrar TODOS los ficheros de un
+                                     // namespace PARCIAL (varios modulos = 1 ns)
     SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
 };
 
@@ -671,6 +674,7 @@ collect_imports_(const ast::ModuleNode &mod,
     for (const auto *im : imports) {
         ImportRequest req;
         req.by_namespace = im->by_namespace;
+        if (im->by_namespace) req.ns_path = im->path; // namespace parcial
         if (im->by_namespace) {
             // NS.2-full: import a.b.c;  El `path` es el namespace punteado.
             // Lo traducimos al module_name (filename) del dep que lo declara,
@@ -720,6 +724,29 @@ NsToModname build_ns_to_modname_(const std::vector<ProjectModuleWork> &work) {
             const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
             if (ns->name.empty()) continue;
             out.emplace(ns->name, pm.module_name);
+        }
+    }
+    return out;
+}
+
+/// Namespace PARCIAL: mapa namespace -> TODOS los module_name que lo declaran.
+/// A diferencia de @c build_ns_to_modname_ (que gana el primero), este recoge
+/// la lista completa para que `import std.types` registre los simbolos de
+/// TODOS los ficheros del namespace (base + arch-specific), no solo el primero.
+using NsToAllModnames =
+    std::unordered_map<std::string, std::vector<std::string>>;
+NsToAllModnames
+build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
+    NsToAllModnames out;
+    for (const auto &pm : work) {
+        if (!pm.ast) continue;
+        for (const auto &d : pm.ast->decls) {
+            if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+            const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
+            if (ns->name.empty()) continue;
+            auto &v = out[ns->name];
+            if (std::find(v.begin(), v.end(), pm.module_name) == v.end())
+                v.push_back(pm.module_name);
         }
     }
     return out;
@@ -925,6 +952,9 @@ CompileResult compile_vx_project(
     // Phase NS.2-full: mapa namespace -> module_name para traducir los
     // imports por-namespace (`import a.b.c;`) al module_name del dep.
     const NsToModname ns_to_modname = build_ns_to_modname_(work);
+    // Namespace parcial: todos los module_name por namespace (para registrar
+    // los simbolos de TODOS los ficheros de un `namespace X;` compartido).
+    const NsToAllModnames ns_to_all_modnames = build_ns_to_all_modnames_(work);
 
     // Phase NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
     // Compartido por todos los modulos del proyecto salvo override @id.
@@ -1500,6 +1530,30 @@ CompileResult compile_vx_project(
                 // dep bajo el namespace (`lib.Caja<i64>`).
                 inject_generic_templates_from_vxi(
                     *pm.tc, dep_vxi, /*wanted=*/{}, req.local_name);
+                // Namespace PARCIAL: registrar tambien los simbolos de los
+                // OTROS ficheros que declaran el mismo `namespace X;` (p.ej.
+                // std.types + std/types/x86_64.vx).  Sin esto, `import
+                // std.types` solo veia el primer fichero y los tipos del arch
+                // file (`std.types.uintptr`) no resolvian.
+                if (req.by_namespace && !req.ns_path.empty()) {
+                    auto ita = ns_to_all_modnames.find(req.ns_path);
+                    if (ita != ns_to_all_modnames.end()) {
+                        for (const auto &other_mn : ita->second) {
+                            if (other_mn == req.module_name) continue;
+                            auto ito = by_name.find(other_mn);
+                            if (ito == by_name.end()) continue;
+                            VxiModule other_store;
+                            const VxiModule &other_vxi = filter_internal_(
+                                work[ito->second].vxi, other_store);
+                            register_namespace_for_import(*pm.tc,
+                                                          req.local_name,
+                                                          other_mn, other_vxi);
+                            inject_generic_templates_from_vxi(
+                                *pm.tc, other_vxi, /*wanted=*/{},
+                                req.local_name);
+                        }
+                    }
+                }
                 // M.reexport ext: para `public import "base";` (sin only),
                 // inyectar TAMBIEN cada simbolo publico del dep como si
                 // fuera un `only A, B, ...` sintetico Y marcarlo
