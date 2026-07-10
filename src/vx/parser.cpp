@@ -6164,10 +6164,14 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             case TokenKind::RBRACE:
             // binops + asignacion + comparacion + dot (chain)
             case TokenKind::PLUS:
-            case TokenKind::STAR:
+            // STAR y AMP NO van aqui: son tambien unarios prefijo (deref `*p`
+            // y addr-of `&x`), asi que `cond ? *ptr : x` / `cond ? &v : w`
+            // deben leerse como TERNARIO (rama then = deref/addr-of), no como
+            // postfix-? seguido de mul/and.  Mismo criterio que MINUS/LT/GT
+            // (default = ternario); para el postfix-? con `*`/`&` agrupar
+            // explicitamente: `(expr?) * x`.
             case TokenKind::SLASH:
             case TokenKind::PERCENT:
-            case TokenKind::AMP:
             case TokenKind::PIPE:
             case TokenKind::CARET:
             case TokenKind::AND_AND:
