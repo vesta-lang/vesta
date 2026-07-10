@@ -236,6 +236,64 @@ CompileResult compile_vx_source(const std::string &source,
         dump_comptime_unit(cu, std::cerr);
     }
 
+    // P1: eliminar el tree-walker tambien para los `comptime { }` de modulo.
+    // Cada bloque se transforma en una comptime fn sintetica `__ctblock_N`
+    // (que corre en la ComptimeVM como cualquier comptime fn) + una const que
+    // la invoca.  Asi el `println`/buffers del bloque se ejecutan de verdad en
+    // compile-time.  Los sinteticos se anexan al FINAL (preservan la semantica
+    // de que el bloque corre tras todos los globales del modulo).
+    {
+        std::vector<std::unique_ptr<ast::Node>> kept;
+        std::vector<std::unique_ptr<ast::Node>> synth;
+        int ctblock_n = 0;
+        for (auto &d : mod->decls) {
+            if (d && d->kind == ast::NodeKind::ComptimeBlockStmt) {
+                auto *cb = static_cast<ast::ComptimeBlockStmt *>(d.get());
+                const std::string fname =
+                    "__ctblock_" + std::to_string(ctblock_n++);
+                // comptime i64 __ctblock_N() { <stmts>; return 0; }
+                auto fn = std::make_unique<ast::FunctionDecl>();
+                fn->name = fname;
+                fn->is_comptime = true;
+                fn->loc = cb->loc;
+                auto rt = std::make_unique<ast::PrimitiveTypeNode>();
+                rt->prim = PrimitiveKind::I64;
+                fn->return_type = std::move(rt);
+                auto body = std::make_unique<ast::BlockStmt>();
+                for (auto &st : cb->stmts) body->body.push_back(std::move(st));
+                auto ret = std::make_unique<ast::ReturnStmt>();
+                auto zero = std::make_unique<ast::IntLitExpr>();
+                zero->value = 0;
+                ret->value = std::move(zero);
+                body->body.push_back(std::move(ret));
+                fn->body = std::move(body);
+                // const i64 __ctblock_N_r = __ctblock_N();
+                auto gv = std::make_unique<ast::GlobalVarDecl>();
+                gv->name = fname + "_r";
+                gv->is_const = true;
+                gv->loc = cb->loc;
+                auto gt = std::make_unique<ast::PrimitiveTypeNode>();
+                gt->prim = PrimitiveKind::I64;
+                gv->type = std::move(gt);
+                auto call = std::make_unique<ast::CallExpr>();
+                auto callee = std::make_unique<ast::IdentExpr>();
+                callee->name = fname;
+                call->callee = std::move(callee);
+                call->loc = cb->loc;
+                gv->init = std::move(call);
+                synth.push_back(std::move(fn));
+                synth.push_back(std::move(gv));
+                // el ComptimeBlockStmt original se descarta.
+            } else {
+                kept.push_back(std::move(d));
+            }
+        }
+        // Reasignar SIEMPRE: el loop ya movio cada decl a `kept`, dejando
+        // `mod->decls` con punteros moved-from aunque no hubiera bloques.
+        for (auto &s : synth) kept.push_back(std::move(s));
+        mod->decls = std::move(kept);
+    }
+
     // 2. TypeChecker: rellena result_type y valida semantica.
     TypeChecker tc(*mod, res.diagnostics);
     // Registrar namespaces inline en el checker ANTES de run().
