@@ -2033,6 +2033,11 @@ class TypeChecker {
     /// `comptime const` automaticamente para que los IdentExpr
     /// posteriores sean resoluble por el comptime evaluator.
     bool current_fn_is_macro_ = false;
+    /// P1: true si la fn actual es una comptime fn ruteada a la ComptimeVM (NO
+    /// un @Macro).  Se ejecuta SIEMPRE en la VM, asi que sus locales runtime NO
+    /// deben registrarse como comptime_const_locals (evita que un builtin como
+    /// comptime_concat pliegue el snapshot inicial en un loop de acumulacion).
+    bool current_fn_is_vm_comptime_fn_ = false;
     /// @NoExcept/@NoExceptions: la funcion actual no admite excepciones.
     /// check_stmt rechaza throw/try/catch cuando es true.
     bool current_fn_is_noexcept_ = false;

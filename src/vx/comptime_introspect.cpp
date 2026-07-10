@@ -682,10 +682,22 @@ static bool stmt_uses_io_ci(const ast::Stmt *s) {
 
 bool comptime_fn_needs_vm(const TypeChecker &tc, const ast::FunctionDecl *fd) {
     if (!fd) return false;
-    // Corre en la ComptimeVM (no tree-walker) si usa asm/@Naked O I/O.  El
-    // rewrite completo (TODA fn -> VM) exige que el lowering lea los valores
-    // comptime desde la VM (inline-as-const, comptime for); fase 3, grande.
-    return comptime_fn_uses_asm(tc, fd) || stmt_uses_io_ci(fd->body.get());
+    /* Los @Macro tienen su PROPIO path de invocacion en la VM (check_call:
+     * marshalling de args incl. string, memoizacion @Pure, splice del codigo).
+     * needs_vm controla el path de las comptime FN normales (2430); no debe
+     * incluir @Macros o los rutearia por el path equivocado (codigo vacio). */
+    if (fd->is_macro) return false;
+    /* P1 rewrite: TODA comptime fn corre en la ComptimeVM, EXCEPTO las que
+     * manipulan TIPOS en compile-time (no tienen representacion runtime en la
+     * VM): (a) GENERICAS (type_params: sizeof<T> se pliega per-instancia), y
+     * (b) las que devuelven `Type` (type-as-value: pick() -> Type).  Esas se
+     * quedan en el tree-walker (manipulacion de tipos pura, cero runtime). */
+    if (!fd->type_params.empty()) return false;
+    if (fd->return_type) {
+        const Type rt = tc.resolve_type_node(fd->return_type.get());
+        if (rt.kind == PrimitiveKind::TYPE_META) return false;
+    }
+    return true;
 }
 
 // -------------------------------------------------------------------
@@ -1676,6 +1688,15 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult b =
                     comptime_eval_expr(tc, ce->args[1].get());
+                /* P1: si algun arg es DIFERIDO (const de fn-VM sin valor en
+                 * pass 1) el resultado tambien es diferido -> pass 2 lo
+                 * resuelve; NO computar con el placeholder vacio. */
+                if ((a.ok && a.deferred) || (b.ok && b.deferred)) {
+                    r.ok = true;
+                    r.is_str = true;
+                    r.deferred = true;
+                    return r;
+                }
                 if (a.ok && b.ok && a.is_str && b.is_str) {
                     r.ok = true;
                     r.is_str = true;
@@ -1689,6 +1710,11 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult b =
                     comptime_eval_expr(tc, ce->args[1].get());
+                if ((a.ok && a.deferred) || (b.ok && b.deferred)) {
+                    r.ok = true;
+                    r.deferred = true;
+                    return r;
+                }
                 if (a.ok && b.ok && a.is_str && b.is_str) {
                     r.ok = true;
                     r.value = (a.str == b.str) ? 1 : 0;
@@ -1699,6 +1725,11 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             if (cid->name == "comptime_strlen" && ce->args.size() == 1) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
+                if (a.ok && a.deferred) {
+                    r.ok = true;
+                    r.deferred = true;
+                    return r;
+                }
                 if (a.ok && a.is_str) {
                     r.ok = true;
                     r.value = (int64_t)a.str.size();
@@ -2425,23 +2456,35 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * DIFERIDO (ok=true para que consts/exprs no den error, pero
                  * static_assert no debe dispararse -- se resuelve en pass 2). */
                 if (comptime_fn_needs_vm(tc, fn_it->second)) {
+                    bool ret_is_str = false;
+                    if (fn_it->second->return_type) {
+                        const Type rt = tc.resolve_type_node(
+                            fn_it->second->return_type.get());
+                        ret_is_str = (rt.kind == PrimitiveKind::STRING);
+                    }
                     std::vector<uint64_t> vm_args;
                     vm_args.reserve(args.size());
                     for (const auto &a : args)
                         vm_args.push_back(static_cast<uint64_t>(a.value));
-                    uint64_t r0 = 0;
-                    const bool inv =
-                        const_cast<TypeChecker &>(tc)
-                            .comptime_runtime()
-                            .invoke_simple_macro("__macro_" + cid->name,
-                                                 vm_args, r0);
                     ComptimeEvalResult vr;
                     vr.ok = true;
-                    if (inv) {
-                        vr.value = static_cast<int64_t>(r0);
+                    if (ret_is_str) {
+                        std::string out;
+                        const bool inv =
+                            const_cast<TypeChecker &>(tc).comptime_runtime()
+                                .invoke_string_macro("__macro_" + cid->name,
+                                                     vm_args, out);
+                        vr.is_str = true;
+                        if (inv) vr.str = std::move(out);
+                        else vr.deferred = true;
                     } else {
-                        vr.value = 0;
-                        vr.deferred = true; /* pass 1: sin bytecode aun */
+                        uint64_t r0 = 0;
+                        const bool inv =
+                            const_cast<TypeChecker &>(tc).comptime_runtime()
+                                .invoke_simple_macro("__macro_" + cid->name,
+                                                     vm_args, r0);
+                        if (inv) vr.value = static_cast<int64_t>(r0);
+                        else { vr.value = 0; vr.deferred = true; }
                     }
                     return vr;
                 }

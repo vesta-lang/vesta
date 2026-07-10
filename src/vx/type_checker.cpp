@@ -4324,7 +4324,11 @@ void TypeChecker::check_functions() {
         // funcione naturalmente sin que el usuario tenga que escribir
         // `comptime const string n = ...`.
         const bool saved_is_macro = current_fn_is_macro_;
-        current_fn_is_macro_ = fn->is_macro;
+        const bool saved_is_vm_ct = current_fn_is_vm_comptime_fn_;
+        /* P1: fn-VM type-checkea en modo macro (builtins comptime args runtime OK). */
+        current_fn_is_vm_comptime_fn_ =
+            fn->is_comptime && !fn->is_macro && comptime_fn_needs_vm(*this, fn);
+        current_fn_is_macro_ = fn->is_macro || current_fn_is_vm_comptime_fn_;
         const bool saved_noexcept = current_fn_is_noexcept_;
         current_fn_is_noexcept_ = fn->is_noexcept || mod_.no_exceptions;
         // Tambien empujamos un scope comptime nuevo para los locals del
@@ -4343,6 +4347,7 @@ void TypeChecker::check_functions() {
         if (fn->is_macro) diags_.set_suppressed(sup_prev);
         if (fn->is_macro) pop_comptime_scope();
         current_fn_is_macro_ = saved_is_macro;
+        current_fn_is_vm_comptime_fn_ = saved_is_vm_ct;
         current_fn_is_noexcept_ = saved_noexcept;
         current_fn_return_type_ = saved_ret;
         pop_scope();
@@ -5476,7 +5481,14 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
     // @c comptime_const_locals_ para que el AST evaluator resuelva
     // IdentExprs cuando otros builtins comptime (comptime_concat,
     // etc.) los necesitan.  NO marcamos is_comptime en el AST.
-    if (current_fn_is_macro_ && !vd->is_comptime && vd->init) {
+    /* P1: en una comptime fn ruteada a la VM (no @Macro) NO registramos los
+     * locales runtime como comptime_const_locals.  Si lo hicieramos, un builtin
+     * como comptime_concat(buf, ...) dentro de un loop pliega el snapshot
+     * INICIAL de buf ("") en vez de bajarse como STRCAT runtime que acumula ->
+     * el loop devolveria solo el primer elemento (bug alphabet_up_to="A").  La
+     * fn corre SIEMPRE en la VM, no necesita el snapshot para AST-eval. */
+    if (current_fn_is_macro_ && !current_fn_is_vm_comptime_fn_ &&
+        !vd->is_comptime && vd->init) {
         const ComptimeEvalResult r = comptime_eval_expr(*this, vd->init.get());
         if (r.ok) {
             ComptimeConst c;
@@ -11514,11 +11526,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                  nm + ": argumento " + std::to_string(i) +
                                      " no es comptime-evaluable");
                 }
-            } else if (need_str && !r.is_str) {
+            } else if (!r.deferred && need_str && !r.is_str) {
                 diags_.error(e->args[i]->loc, nm + ": argumento " +
                                                   std::to_string(i) +
                                                   " debe ser string comptime");
-            } else if (!need_str && r.is_str) {
+            } else if (!r.deferred && !need_str && r.is_str) {
                 diags_.error(e->args[i]->loc, nm + ": argumento " +
                                                   std::to_string(i) +
                                                   " debe ser int comptime");

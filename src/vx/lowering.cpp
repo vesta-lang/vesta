@@ -2789,7 +2789,8 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * `comptime var/const` LOCALES como vars runtime regulares.
      * Reset al salir de la funcion. */
     const bool prev_is_macro = current_fn_is_macro_;
-    current_fn_is_macro_ = (fd->is_comptime && fd->is_macro);
+    /* P1: fn-VM comparte modo macro. */
+    current_fn_is_macro_ = (fd->is_comptime && fd->is_macro) || is_vm_comptime_fn;
     struct ScopeGuard {
         bool *flag;
         bool saved;
@@ -17799,8 +17800,10 @@ skip_comptime_eval_for_macro_to_macro:
     std::string callee_name = id->name;
     {
         auto fn_it = tc_.comptime_fns().find(id->name);
+        /* P1: rewrite a __macro_ para @Macros Y comptime fns-VM (recursion). */
         if (fn_it != tc_.comptime_fns().end() && fn_it->second &&
-            fn_it->second->is_macro) {
+            (fn_it->second->is_macro ||
+             comptime_fn_needs_vm(tc_, fn_it->second))) {
             callee_name = "__macro_" + id->name;
         }
     }
@@ -19389,6 +19392,31 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             error_at(e->loc,
                      "lowering: nombre no resuelto: '" + id->name + "'");
             return ir::IR_NO_VALUE;
+        }
+        /* P1: `string += X` en el path Full/VM (no native_poo_).  El path arith
+         * generico de abajo (promote_arith + emit_binop) NO hace STRCAT sobre
+         * StringObject -> daba string vacio.  Emitimos STRCAT como `s = s + X`.
+         * (Antes funcionaba solo porque la comptime fn se AST-evaluaba; con el
+         * rewrite corre en la VM y necesita el lowering correcto.) */
+        if (!native_poo_ &&
+            e->target->result_type.kind == PrimitiveKind::STRING &&
+            e->op == ast::AssignOp::AddAssign && e->value) {
+            /* Coercion: un literal RHS debe promoverse a StringObject (STRMAKE),
+             * no dejarse como STR_LIT_ADDR crudo (STRCAT espera handles). */
+            ir::IrValueId v_rhs;
+            if (e->value->kind == ast::NodeKind::StringLitExpr &&
+                !static_cast<ast::StringLitExpr *>(e->value.get())
+                     ->is_interpolated()) {
+                v_rhs = lower_string_literal_to_string_object(
+                    static_cast<ast::StringLitExpr *>(e->value.get()));
+            } else {
+                v_rhs = lower_expr(e->value.get());
+            }
+            if (v_rhs == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            const ir::IrValueId v_cat =
+                emit_strcat(cur, v_rhs, static_cast<uint32_t>(e->loc.line));
+            write_local(id->name, v_cat, dst_ir, e->loc.line);
+            return v_cat;
         }
         // Promocion al tipo comun entre cur y rhs (igual que en
         // lower_binary).  En la mayoria de casos ambos tienen el
