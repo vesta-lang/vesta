@@ -2593,6 +2593,28 @@ static const ast::TypeNode *strip_pointers_td_(const ast::TypeNode *t) {
     return t;
 }
 
+std::unique_ptr<ast::TypeNode>
+Parser::wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base) {
+    std::vector<std::unique_ptr<ast::Expr>> dims; // null => [] sin acotar
+    while (current_.kind == TokenKind::LBRACKET) {
+        (void)consume(); // '['
+        std::unique_ptr<ast::Expr> n;
+        if (current_.kind != TokenKind::RBRACKET) n = parse_expr();
+        (void)expect(TokenKind::RBRACKET,
+                     "se esperaba ']' en la dimension del array");
+        dims.push_back(std::move(n));
+    }
+    // Envolver de la ULTIMA dimension a la PRIMERA (el primer `[` = mas externo).
+    for (auto it = dims.rbegin(); it != dims.rend(); ++it) {
+        auto arr = std::make_unique<ast::ArrayTypeNode>();
+        arr->loc = base ? base->loc : SourceLoc{};
+        arr->element_type = std::move(base);
+        arr->size_expr = std::move(*it);
+        base = std::move(arr);
+    }
+    return base;
+}
+
 void Parser::parse_c_typedef_ptr_aliases_(const ast::TypeNode *base) {
     // Se entra con current_ == ','.  Cada iteracion: `, [*]* NOMBRE`.
     while (current_.kind == TokenKind::COMMA) {
@@ -2682,6 +2704,10 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
                 continue;
             }
             f.name = consume().lexeme;
+            // Array C-style `T name[N][M]` (uni/multidimensional).
+            if (current_.kind == TokenKind::LBRACKET) {
+                f.type = wrap_c_array_dims_(std::move(f.type));
+            }
             if (current_.kind == TokenKind::COLON) {
                 (void)consume();
                 if (current_.kind == TokenKind::INT_LIT) {
@@ -3979,6 +4005,10 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             }
             (void)expect(TokenKind::RBRACKET,
                          "se esperaba ']' tras el count del array de overlay");
+        } else if (current_.kind == TokenKind::LBRACKET) {
+            // Array de campo C-style `T name[N][M]` (uni/multidimensional):
+            // el tipo del campo pasa a ser `T[N][M]`.
+            f.type = wrap_c_array_dims_(std::move(f.type));
         }
         // Bit field width: `i32 flag : 3;`.  El bit_width
         // se guarda en el AST y el type checker calcula el packing.

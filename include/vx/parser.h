@@ -482,6 +482,14 @@ class Parser {
     /// tipo especificador SIN los punteros del primer declarador.
     void parse_c_typedef_ptr_aliases_(const ast::TypeNode *base);
 
+    /// Consume un sufijo de array C-style `[N][M]...` (uni o multidimensional,
+    /// dimension opcional para `[]`) tras el nombre de un campo/variable y
+    /// envuelve @c base en @c ArrayTypeNode anidados.  `T[N][M]` = array de N de
+    /// (array de M de T): el primer `[` es el mas externo.  Devuelve @c base sin
+    /// cambios si no hay `[`.
+    std::unique_ptr<ast::TypeNode>
+    wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base);
+
     /// Nombres de @c struct declarados (single-pass, antes de su uso).  Lo
     /// consulta @c looks_like_compound_literal para distinguir un compound
     /// literal `(Struct){...}` de un scrutinee de control de flujo como

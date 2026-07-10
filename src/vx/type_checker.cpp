@@ -2651,6 +2651,35 @@ void TypeChecker::collect_globals() {
                     }
                     fsize = it->second.size_bytes;
                     falign = it->second.align_bytes;
+                } else if (ft.kind == PrimitiveKind::ARRAY) {
+                    // Array inline `T campo[N]` / multidimensional `T c[N][M]`:
+                    // tamano = element_size * count (recursivo); align = del
+                    // elemento.  Un array vacio (`T[]`) cuenta como puntero.
+                    std::function<void(const Type &, uint32_t &, uint32_t &)>
+                        size_align_of = [&](const Type &t, uint32_t &sz,
+                                            uint32_t &al) {
+                            if (t.kind == PrimitiveKind::STRUCT) {
+                                auto it2 = struct_layouts_.find(t.struct_name);
+                                if (it2 != struct_layouts_.end()) {
+                                    sz = it2->second.size_bytes;
+                                    al = it2->second.align_bytes;
+                                } else { sz = 1; al = 1; }
+                            } else if (t.kind == PrimitiveKind::ARRAY) {
+                                uint32_t es = 1, ea = 1;
+                                if (t.pointee) size_align_of(*t.pointee, es, ea);
+                                sz = t.array_size > 0 ? es * t.array_size : 8;
+                                al = ea;
+                            } else {
+                                sz = (uint32_t)primitive_size_bytes(t.kind);
+                                al = sz;
+                            }
+                            if (sz == 0) sz = 1;
+                            if (al == 0) al = 1;
+                        };
+                    uint32_t es = 1, ea = 1;
+                    if (ft.pointee) size_align_of(*ft.pointee, es, ea);
+                    fsize = ft.array_size > 0 ? es * ft.array_size : 8;
+                    falign = ea;
                 }
                 if (fsize == 0) {
                     // Defensa: deberia haber sido atrapado arriba.
