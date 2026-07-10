@@ -522,13 +522,27 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         VxiSymbol s;
         const Type &t = kv.second;
         s.name = kv.first;
+        // NS.2: si el typedef/newtype se declaro en un `namespace X;`,
+        // exportarlo con su nombre publico (sin manglar) + ns_path, igual que
+        // struct/class/enum.  Sin esto, el import recalculaba un mangled
+        // distinto (module__name en vez de X__name) y `type_aliases_[mangled]`
+        // no coincidia -> `sizeof<X.Tipo>` / `X.Tipo var` daban VOID.
+        {
+            auto itns = tc.declared_ns_symbols().find(kv.first);
+            if (itns != tc.declared_ns_symbols().end()) {
+                s.ns_path = itns->second.first;
+                s.name = itns->second.second;
+            }
+        }
         if (t.nominal_id != 0) {
             s.kind = VxiSymbolKind::TYPEDEF_NEW;
             s.is_opaque = t.is_opaque;
             s.align_override = t.align_override;
-            s.nominal_abi = vxi_fnv1a(s.name);
+            // Los registros de newtype (underlying/info) estan keyeados por el
+            // nombre LOCAL (kv.first), no por el public renombrado arriba.
+            s.nominal_abi = vxi_fnv1a(kv.first);
             // El underlying canonico se obtiene del registro de newtypes.
-            const Type *u = tc.newtype_underlying(s.name);
+            const Type *u = tc.newtype_underlying(kv.first);
             if (u != nullptr) {
                 s.underlying_type = canonical_typename_of(*u);
             } else {
@@ -545,7 +559,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             // Solo se exportan las conversiones marcadas @c is_public ;
             // las privadas (module-scope del fichero origen) NO viajan
             // cross-module porque su semantica solo aplica intra-modulo.
-            const TypeChecker::NewtypeInfo *ni = tc.newtype_info(s.name);
+            const TypeChecker::NewtypeInfo *ni = tc.newtype_info(kv.first);
             if (ni != nullptr) {
                 for (const auto &conv : ni->from_conversions) {
                     if (!conv.is_public) continue;
