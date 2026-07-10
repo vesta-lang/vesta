@@ -2248,6 +2248,14 @@ bool Parser::starts_type() const noexcept {
     // es el keyword reservado.
     if (current_.kind == TokenKind::KW_FN) return true;
     if (current_.kind == TokenKind::KW_CFN) return true;
+    // Especificador elaborado C `struct Tag` / `union Tag` / `enum Tag` como
+    // REFERENCIA de tipo (seguido de IDENT, no de `{` que es definicion inline).
+    if ((current_.kind == TokenKind::KW_STRUCT ||
+         current_.kind == TokenKind::KW_UNION ||
+         current_.kind == TokenKind::KW_ENUM)) {
+        Lexer &ml = const_cast<Lexer &>(lex_);
+        return ml.peek_at(0).kind == TokenKind::IDENTIFIER;
+    }
     if (current_.kind != TokenKind::IDENTIFIER) return false;
     /* `auto NAME = init;` y `var NAME = init;` cuentan como
      * inicio de var-decl (con inferencia local de tipo).  `auto`/`var`
@@ -2340,6 +2348,16 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
     if (current_.kind == TokenKind::KW_NONNULL) {
         nonnull = true;
         (void)consume();
+    }
+    // Especificador de tipo ELABORADO estilo C: `struct Tag`, `union Tag`,
+    // `enum Tag` como REFERENCIA a un tipo (no definicion inline).  Vesta usa
+    // solo el nombre, asi que descartamos el keyword y seguimos con el IDENT.
+    // (La forma con `{` -- definicion inline -- la maneja el caller antes.)
+    if ((current_.kind == TokenKind::KW_STRUCT ||
+         current_.kind == TokenKind::KW_UNION ||
+         current_.kind == TokenKind::KW_ENUM) &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        (void)consume(); // 'struct' / 'union' / 'enum'
     }
     std::unique_ptr<ast::TypeNode> base;
     // closures: `fn(T1, T2, ...) -> R` produce un FunctionTypeNode.
