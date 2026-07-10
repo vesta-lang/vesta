@@ -647,6 +647,11 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             // #cross-module-generics: capturar el span fuente si es plantilla/
             // concepto (para el `.vxi`).  Helper compartido con
             // parse_namespace_decl (decls dentro de un namespace).
+            // Agregados anonimos sintetizados durante el parseo de este decl
+            // van ANTES (el decl los referencia por nombre).
+            for (auto &b : pending_before_decls_)
+                mod->decls.push_back(std::move(b));
+            pending_before_decls_.clear();
             collect_template_export_(mod.get(), decl.get(), decl_start_off);
             mod->decls.push_back(std::move(decl));
             // Drenar los aliases extra de un typedef C-style multi-declarador.
@@ -2593,6 +2598,86 @@ static const ast::TypeNode *strip_pointers_td_(const ast::TypeNode *t) {
     return t;
 }
 
+std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
+    const bool is_union = (current_.kind == TokenKind::KW_UNION);
+    const SourceLoc loc = current_.loc;
+    (void)consume(); // 'struct' / 'union'
+    // Tag opcional (ignorado): `struct _FOO { ... }`.
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        lex_.peek_at(0).kind == TokenKind::LBRACE) {
+        (void)consume();
+    }
+    (void)expect(TokenKind::LBRACE,
+                 "se esperaba '{' en el agregado anonimo");
+    auto s = std::make_unique<ast::StructDecl>();
+    s->loc = loc;
+    s->is_union = is_union;
+    s->name = "__anon" + std::to_string(anon_aggr_counter_++);
+    declared_structs_.insert(s->name);
+    // Cuerpo: campos `T name [array] [: bits] ;` + agregados anidados.
+    while (current_.kind != TokenKind::RBRACE &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        // Agregado anonimo anidado.
+        if ((current_.kind == TokenKind::KW_STRUCT ||
+             current_.kind == TokenKind::KW_UNION) &&
+            (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+             (lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+              lex_.peek_at(1).kind == TokenKind::LBRACE))) {
+            auto nested = parse_inline_anon_aggregate_();
+            const std::string nname = nested->name;
+            pending_before_decls_.push_back(std::move(nested));
+            ast::StructFieldDecl f;
+            f.loc = current_.loc;
+            auto nt = std::make_unique<ast::NamedTypeNode>();
+            nt->loc = f.loc;
+            nt->name = nname;
+            f.type = std::move(nt);
+            if (current_.kind == TokenKind::IDENTIFIER) {
+                f.name = consume().lexeme;
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+            } else {
+                f.is_anonymous = true;
+                f.name = nname;
+            }
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' tras el agregado anonimo");
+            s->fields.push_back(std::move(f));
+            continue;
+        }
+        if (!starts_type()) {
+            error_here("se esperaba un tipo de campo dentro del agregado");
+            synchronize();
+            continue;
+        }
+        ast::StructFieldDecl f;
+        f.loc = current_.loc;
+        f.type = parse_type_node();
+        if (!f.type) { synchronize(); continue; }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un nombre de campo tras el tipo");
+            synchronize();
+            continue;
+        }
+        f.name = consume().lexeme;
+        if (current_.kind == TokenKind::LBRACKET)
+            f.type = wrap_c_array_dims_(std::move(f.type));
+        if (current_.kind == TokenKind::COLON) {
+            (void)consume();
+            if (current_.kind == TokenKind::INT_LIT) {
+                f.bit_width = (uint8_t)current_.int_val;
+                (void)consume();
+            }
+        }
+        (void)expect(TokenKind::SEMICOLON,
+                     "se esperaba ';' al final del campo");
+        s->fields.push_back(std::move(f));
+    }
+    (void)expect(TokenKind::RBRACE,
+                 "se esperaba '}' al cerrar el agregado anonimo");
+    return s;
+}
+
 std::unique_ptr<ast::TypeNode>
 Parser::wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base) {
     std::vector<std::unique_ptr<ast::Expr>> dims; // null => [] sin acotar
@@ -2686,6 +2771,34 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
         // Reusar logica de parse_struct_decl (cuerpo del struct).
         while (current_.kind != TokenKind::RBRACE &&
                current_.kind != TokenKind::END_OF_FILE) {
+            // Agregado anonimo inline dentro del typedef struct/union.
+            if ((current_.kind == TokenKind::KW_STRUCT ||
+                 current_.kind == TokenKind::KW_UNION) &&
+                (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+                 (lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+                  lex_.peek_at(1).kind == TokenKind::LBRACE))) {
+                auto anon = parse_inline_anon_aggregate_();
+                const std::string anon_name = anon->name;
+                pending_before_decls_.push_back(std::move(anon));
+                ast::StructFieldDecl f;
+                f.loc = current_.loc;
+                auto nt = std::make_unique<ast::NamedTypeNode>();
+                nt->loc = f.loc;
+                nt->name = anon_name;
+                f.type = std::move(nt);
+                if (current_.kind == TokenKind::IDENTIFIER) {
+                    f.name = consume().lexeme;
+                    if (current_.kind == TokenKind::LBRACKET)
+                        f.type = wrap_c_array_dims_(std::move(f.type));
+                } else {
+                    f.is_anonymous = true;
+                    f.name = anon_name;
+                }
+                (void)expect(TokenKind::SEMICOLON,
+                             "se esperaba ';' tras el agregado anonimo");
+                s->fields.push_back(std::move(f));
+                continue;
+            }
             if (!starts_type()) {
                 error_here("se esperaba un tipo de campo dentro del struct");
                 synchronize();
@@ -3169,6 +3282,9 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
                 continue;
             }
             // NS.2: exportar plantillas/concepts namespaced cross-module.
+            for (auto &b : pending_before_decls_)
+                ns->decls.push_back(std::move(b));
+            pending_before_decls_.clear();
             collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
             ns->decls.push_back(std::move(inner));
             // Drenar aliases extra de un typedef C-style multi-declarador.
@@ -3900,6 +4016,38 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             (void)expect(TokenKind::RPAREN, "se esperaba ')' tras destructor");
             m->body = parse_method_body(/*is_void=*/true);
             s->methods.push_back(std::move(m));
+            continue;
+        }
+
+        // Agregado ANONIMO inline (`struct { ... } campo;` o miembro C11
+        // `union { ... };`).  Se emite como struct sintetico top-level y el
+        // campo lo referencia; sin nombre de campo -> miembro anonimo (aplanado).
+        if ((current_.kind == TokenKind::KW_STRUCT ||
+             current_.kind == TokenKind::KW_UNION) &&
+            (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+             (lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+              lex_.peek_at(1).kind == TokenKind::LBRACE))) {
+            auto anon = parse_inline_anon_aggregate_();
+            const std::string anon_name = anon->name;
+            pending_before_decls_.push_back(std::move(anon));
+            ast::StructFieldDecl f;
+            f.loc = current_.loc;
+            auto nt = std::make_unique<ast::NamedTypeNode>();
+            nt->loc = f.loc;
+            nt->name = anon_name;
+            f.type = std::move(nt);
+            if (current_.kind == TokenKind::IDENTIFIER) {
+                f.name = consume().lexeme;
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+            } else {
+                // Miembro anonimo C11: sus campos se aplanan en este struct.
+                f.is_anonymous = true;
+                f.name = anon_name;
+            }
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' tras el agregado anonimo");
+            s->fields.push_back(std::move(f));
             continue;
         }
 

@@ -1947,6 +1947,11 @@ struct StructFieldDecl {
     std::unique_ptr<TypeNode> type;
     std::string name;
     SourceLoc loc;
+    /// Miembro ANONIMO C11: `struct { ... };` / `union { ... };` sin nombre de
+    /// campo.  Sus campos se APLANAN en el struct contenedor (se accede a
+    /// `parent.inner_field` directamente).  @c type apunta al agregado sintetico
+    /// y @c name es un placeholder sintetico (no usado para acceso).
+    bool is_anonymous = false;
     /// Bit field width.  0 = campo normal (byte-aligned).
     /// >0 = bit field con esta cantidad de bits.  El type checker
     /// calcula bit_offset y los empaqueta en storage words del tipo

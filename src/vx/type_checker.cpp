@@ -2622,6 +2622,49 @@ void TypeChecker::collect_globals() {
             };
 
             for (const auto &f : s->fields) {
+                // Miembro ANONIMO C11 (`union { ... };` sin nombre): aplanar sus
+                // campos en ESTE struct (accesibles como `parent.inner`).  El
+                // agregado ocupa espacio como un campo normal; sus campos se
+                // copian al offset base + su offset interno.
+                if (f.is_anonymous) {
+                    close_bf();
+                    Type at = type_from_node(f.type.get());
+                    auto ita = (at.kind == PrimitiveKind::STRUCT)
+                                   ? struct_layouts_.find(at.struct_name)
+                                   : struct_layouts_.end();
+                    if (ita == struct_layouts_.end()) {
+                        diags_.error(f.loc,
+                                     "agregado anonimo no resuelto en '" +
+                                         s->name + "'");
+                        continue;
+                    }
+                    const StructLayout &inner = ita->second;
+                    uint32_t abase = offset;
+                    if (!s->is_union && inner.align_bytes > 1 &&
+                        abase % inner.align_bytes != 0)
+                        abase += inner.align_bytes - (abase % inner.align_bytes);
+                    for (const auto &inf : inner.fields) {
+                        if (!seen_names.emplace(inf.name, true).second) {
+                            diags_.error(f.loc,
+                                         "campo '" + inf.name +
+                                             "' del agregado anonimo colisiona "
+                                             "con otro campo de '" + s->name +
+                                             "'");
+                            continue;
+                        }
+                        StructFieldInfo fi = inf; // copia (nombre + tipo + size)
+                        fi.offset = (s->is_union ? 0 : abase) + inf.offset;
+                        layout.fields.push_back(std::move(fi));
+                    }
+                    if (s->is_union) {
+                        if (inner.size_bytes > offset) offset = inner.size_bytes;
+                    } else {
+                        offset = abase + inner.size_bytes;
+                    }
+                    if (inner.align_bytes > max_align)
+                        max_align = inner.align_bytes;
+                    continue;
+                }
                 if (!seen_names.emplace(f.name, true).second) {
                     diags_.error(f.loc, "campo duplicado en struct '" +
                                             s->name + "': '" + f.name + "'");

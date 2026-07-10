@@ -476,6 +476,15 @@ class Parser {
     /// nivel del modulo.  Reusa el patron de @c parse_extern_block (N decls).
     std::vector<std::unique_ptr<ast::Node>> pending_extra_decls_;
 
+    /// Structs/uniones ANONIMOS sintetizados dentro del cuerpo de otro struct
+    /// (`struct { ... } campo;` o miembro anonimo C11 `union { ... };`).  Se
+    /// emiten como decls top-level ANTES del struct contenedor (que los
+    /// referencia por su nombre sintetico), asi que se drenan ANTES del decl
+    /// actual en parse_program / parse_namespace_decl.
+    std::vector<std::unique_ptr<ast::Node>> pending_before_decls_;
+    /// Contador para nombres sinteticos de agregados anonimos.
+    int anon_aggr_counter_ = 0;
+
     /// Parsea la cola de declaradores C-style tras el primer alias:
     /// mientras haya `,`, consume `[*]* NOMBRE` y encola un TypeAliasDecl
     /// (base clonado + N punteros) en @c pending_extra_decls_.  @c base es el
@@ -489,6 +498,14 @@ class Parser {
     /// cambios si no hay `[`.
     std::unique_ptr<ast::TypeNode>
     wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base);
+
+    /// Parsea un agregado ANONIMO inline (`struct { ... }` / `union { ... }`,
+    /// tag opcional) dentro del cuerpo de otro struct.  Devuelve un StructDecl
+    /// con nombre SINTETICO (`__anon<N>`) que el caller encola en
+    /// @c pending_before_decls_ y referencia como tipo del campo.  Precondicion:
+    /// current_ es 'struct'/'union' y el siguiente token (tras un tag opcional)
+    /// es '{'.
+    std::unique_ptr<ast::StructDecl> parse_inline_anon_aggregate_();
 
     /// Nombres de @c struct declarados (single-pass, antes de su uso).  Lo
     /// consulta @c looks_like_compound_literal para distinguir un compound
