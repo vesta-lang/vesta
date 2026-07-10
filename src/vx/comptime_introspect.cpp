@@ -617,6 +617,76 @@ bool comptime_fn_uses_asm(const TypeChecker &tc, const ast::FunctionDecl *fd) {
 }
 
 // -------------------------------------------------------------------
+// Deteccion de I/O (println/print/...) en el cuerpo de una comptime fn.
+// El tree-walker AST NO ejecuta I/O; esas fns deben correr en la ComptimeVM
+// (motor real) para que el `println` salga EN compile-time.  Es un paso de la
+// migracion "todo comptime corre en la VM": cada construccion que ruteamos a
+// la VM es una menos que hace el tree-walker (que se elimina al final).
+// -------------------------------------------------------------------
+static bool expr_is_io_call_ci(const ast::Expr *e) {
+    if (!e) return false;
+    if (e->kind == ast::NodeKind::CallExpr) {
+        const auto *ce = static_cast<const ast::CallExpr *>(e);
+        if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
+            const std::string &nm =
+                static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
+            // builtins de I/O que solo tienen efecto ejecutandose de verdad.
+            if (nm == "println" || nm == "print" || nm == "ct_print" ||
+                nm == "comptime_print" || nm == "flush")
+                return true;
+        }
+        for (const auto &a : ce->args)
+            if (expr_is_io_call_ci(a.get())) return true;
+    }
+    return false;
+}
+
+static bool stmt_uses_io_ci(const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::ExprStmt:
+        return expr_is_io_call_ci(
+            static_cast<const ast::ExprStmt *>(s)->expr.get());
+    case ast::NodeKind::VarDeclStmt:
+        return expr_is_io_call_ci(
+            static_cast<const ast::VarDeclStmt *>(s)->init.get());
+    case ast::NodeKind::ReturnStmt:
+        return expr_is_io_call_ci(
+            static_cast<const ast::ReturnStmt *>(s)->value.get());
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body)
+            if (stmt_uses_io_ci(st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        return stmt_uses_io_ci(is->then_branch.get()) ||
+               stmt_uses_io_ci(is->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt:
+        return stmt_uses_io_ci(
+            static_cast<const ast::WhileStmt *>(s)->body.get());
+    case ast::NodeKind::DoWhileStmt:
+        return stmt_uses_io_ci(
+            static_cast<const ast::DoWhileStmt *>(s)->body.get());
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        return stmt_uses_io_ci(fs->init.get()) ||
+               stmt_uses_io_ci(fs->body.get());
+    }
+    default:
+        return false;
+    }
+}
+
+bool comptime_fn_needs_vm(const TypeChecker &tc, const ast::FunctionDecl *fd) {
+    if (!fd) return false;
+    // Corre en la ComptimeVM (no tree-walker) si usa asm/@Naked O I/O.
+    return comptime_fn_uses_asm(tc, fd) || stmt_uses_io_ci(fd->body.get());
+}
+
+// -------------------------------------------------------------------
 // A.39: mini-interprete para `comptime fn`.
 //
 // Ejecuta el body de una funcion comptime con los args bindeados.
@@ -2345,7 +2415,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * valor real; en pass 1 (sin bytecode) devuelve un placeholder
                  * DIFERIDO (ok=true para que consts/exprs no den error, pero
                  * static_assert no debe dispararse -- se resuelve en pass 2). */
-                if (comptime_fn_uses_asm(tc, fn_it->second)) {
+                if (comptime_fn_needs_vm(tc, fn_it->second)) {
                     std::vector<uint64_t> vm_args;
                     vm_args.reserve(args.size());
                     for (const auto &a : args)
@@ -2533,6 +2603,35 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             r.ok = true;
             r.value = ~v.value;
             return r;
+        case ast::UnOp::PreInc:
+        case ast::UnOp::PostInc:
+        case ast::UnOp::PreDec:
+        case ast::UnOp::PostDec: {
+            /* Incremento/decremento sobre un identificador comptime mutable:
+             * actualiza el binding EN SITIO y devuelve el valor viejo (post-)
+             * o nuevo (pre-).  Necesario para `for (...; i++)` en comptime
+             * (el step cae aqui como UnaryExpr, no como AssignExpr). */
+            if (un->operand->kind != ast::NodeKind::IdentExpr) return r;
+            const auto *id =
+                static_cast<const ast::IdentExpr *>(un->operand.get());
+            auto *binding = find_comptime_local_mut(
+                const_cast<TypeChecker &>(tc), id->name);
+            if (!binding || !binding->is_mutable || binding->is_str ||
+                binding->is_array || binding->is_struct)
+                return r;
+            const int64_t old_v = binding->value;
+            const int64_t delta = (un->op == ast::UnOp::PreInc ||
+                                   un->op == ast::UnOp::PostInc)
+                                      ? 1
+                                      : -1;
+            binding->value = old_v + delta;
+            r.ok = true;
+            r.value = (un->op == ast::UnOp::PostInc ||
+                       un->op == ast::UnOp::PostDec)
+                          ? old_v
+                          : binding->value;
+            return r;
+        }
         default: return r;
         }
     }

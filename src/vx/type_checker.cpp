@@ -4224,7 +4224,12 @@ void TypeChecker::check_functions() {
          * (arrays, string concat, indexing...).  El check_block con
          * current_fn_is_macro_ trata los locals como comptime const y
          * es tolerante con los patrones de macro. */
-        if (fn->is_comptime && !fn->is_macro) continue;
+        /* Las comptime fn que corren en la ComptimeVM (asm/@Naked O I/O) SI se
+         * type-checkean: su body se baja a IR (`__macro_`) y se VM-evalua, asi
+         * que los exprs necesitan result_type correcto (arrays, indexing,
+         * string concat...) -- igual que los @Macro. */
+        if (fn->is_comptime && !fn->is_macro && !comptime_fn_needs_vm(*this, fn))
+            continue;
 
         // Mejora II: validacion @Async extendida.  Antes solo permitia
         // funciones sin parametros y return type i64.  Ahora:

@@ -353,6 +353,15 @@ bool comptime_is_enum(const TypeChecker &tc, const Type &t);
 bool comptime_fn_uses_asm(const TypeChecker &tc, const ast::FunctionDecl *fd);
 
 /**
+ * @brief @c true si la comptime fn debe correr en la ComptimeVM (motor real)
+ * en vez del tree-walker AST.  Hoy: usa asm/@Naked O I/O (println/print/...).
+ * El tree-walker no ejecuta I/O ni asm; esas fns deben ir a la VM para que su
+ * efecto (imprimir, etc.) ocurra EN compile-time.  Paso de la migracion "todo
+ * comptime corre en la VM" (el tree-walker se elimina al completarla).
+ */
+bool comptime_fn_needs_vm(const TypeChecker &tc, const ast::FunctionDecl *fd);
+
+/**
  * @brief @c true si @c t es un primitivo escalar (i*, u*, f*, bool, char,
  * void).
  *

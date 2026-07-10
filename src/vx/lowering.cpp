@@ -1419,7 +1419,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             const bool is_lowerable_comptime =
                 (fd->is_comptime && fd->is_macro) ||
                 (fd->is_comptime && !fd->is_macro &&
-                 comptime_fn_uses_asm(tc_, fd));
+                 comptime_fn_needs_vm(tc_, fd));
             if (!is_lowerable_comptime) continue;
             visiting.clear();
             // Efecto colateral: recolecta los helpers lowereables.  Si el macro
@@ -2709,7 +2709,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * comptime a un `.velb` cacheado y lo carga, asi que los call sites
      * comptime invocan la VM y el valor se pliega a constante. */
     const bool is_vm_comptime_fn =
-        fd->is_comptime && !fd->is_macro && comptime_fn_uses_asm(tc_, fd);
+        fd->is_comptime && !fd->is_macro && comptime_fn_needs_vm(tc_, fd);
     /* Force-lower: una comptime fn (no-macro) que un @Macro lowereable
      * referencia (recolectada en el pre-pase de run()) SI se baja, como fn
      * runtime normal (nombre plano `fd->name`), para que el `callvm code.<X>`
