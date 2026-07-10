@@ -755,6 +755,11 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
     cloned->is_public = src->is_public;
     cloned->is_noexcept = src->is_noexcept;
     cloned->is_pure = src->is_pure;
+    // Preservar el caracter comptime: una comptime fn generica monomorfizada
+    // sigue siendo comptime (su instancia concreta se ejecuta en la ComptimeVM
+    // como cualquier otra comptime fn; su introspeccion `sizeof<Vec3>` etc. se
+    // pliega a constante al bajarla).  is_macro NO (los @Macro tienen su path).
+    cloned->is_comptime = src->is_comptime;
     // type_params vacio: ya es concreta.
     if (src->return_type)
         cloned->return_type = clone_type_with_subst(src->return_type.get(), g);
@@ -781,6 +786,14 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
     info.type_arg_types = args; // #7: Types concretos para matching anidado
     for (const auto &t : args) info.type_args.push_back(type_to_string(t));
     monomorph_info_[mangled] = std::move(info);
+
+    // Instancia de una comptime fn generica: registrarla como comptime fn
+    // (collect_globals ya paso; sin esto el path VM no la encontraria y la
+    // instancia caeria al tree-walker).  Ahora `vec_dim_Vec3` es una comptime
+    // fn concreta que se rutea a la ComptimeVM como cualquier otra.
+    if (cloned->is_comptime) {
+        register_comptime_fn(mangled, cloned.get());
+    }
 
     mod_.decls.push_back(std::move(cloned));
     return mangled;
@@ -1341,11 +1354,15 @@ bool TypeChecker::run() {
             // genericas (`comptime <T> ...`) y los @Macro tienen su propio
             // manejo (evaluacion comptime), no se monomorphizan a runtime.
             auto *fd = static_cast<ast::FunctionDecl *>(d);
-            if (fd->is_specialization && !fd->is_comptime && !fd->is_macro) {
+            if (fd->is_specialization && !fd->is_macro) {
                 // #7: especializacion (total/parcial) de una funcion generica.
                 function_specializations_[fd->name].push_back(i);
-            } else if (!fd->type_params.empty() && !fd->is_comptime &&
-                       !fd->is_macro) {
+            } else if (!fd->type_params.empty() && !fd->is_macro) {
+                // Templates genericos RUNTIME y COMPTIME.  Las comptime fns
+                // genericas se monomorfizan igual (la instancia concreta se
+                // rutea a la ComptimeVM: su introspeccion `sizeof<Vec3>` se
+                // pliega a constante al bajarla).  Los @Macro conservan su
+                // propio path de invocacion.
                 generic_fn_templates_[fd->name] = i;
             }
         } else if (d && d->kind == ast::NodeKind::ConceptDecl) {
