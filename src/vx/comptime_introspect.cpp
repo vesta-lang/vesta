@@ -883,6 +883,13 @@ bool comptime_eval_stmt(TypeChecker &tc, const ast::Stmt *s,
         c.is_array = v.is_array;
         c.is_struct = v.is_struct;
         c.is_mutable = !vd->is_const;
+        /* #2 (P1): propagar el flag DIFERIDO.  Si el init depende de una
+         * comptime fn ruteada a la VM (que en pass 1 aun no tiene bytecode),
+         * v.deferred=true; sin copiarlo, un `static_assert` posterior sobre
+         * este local dispararia con el valor placeholder (0) en pass 1 en vez
+         * de esperar a pass 2.  Es el bloqueador central para que un block
+         * consuma valores calculados en la ComptimeVM. */
+        c.deferred = v.deferred;
         if (v.is_str)
             c.str_value = v.str;
         else if (v.is_array)
