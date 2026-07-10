@@ -469,6 +469,19 @@ class Parser {
     /// que cualquier forward decl en C/Vesta).
     std::unordered_set<std::string> declared_aliases_;
 
+    /// Aliases extra producidos por un typedef C-style multi-declarador
+    /// (`typedef LONG *PLONG, *LPLONG;` o `typedef struct {...} FOO, *PFOO;`).
+    /// parse_typedef_* solo devuelve el PRIMER declarador; los siguientes se
+    /// encolan aqui y @c parse_program / @c parse_namespace_decl los drenan al
+    /// nivel del modulo.  Reusa el patron de @c parse_extern_block (N decls).
+    std::vector<std::unique_ptr<ast::Node>> pending_extra_decls_;
+
+    /// Parsea la cola de declaradores C-style tras el primer alias:
+    /// mientras haya `,`, consume `[*]* NOMBRE` y encola un TypeAliasDecl
+    /// (base clonado + N punteros) en @c pending_extra_decls_.  @c base es el
+    /// tipo especificador SIN los punteros del primer declarador.
+    void parse_c_typedef_ptr_aliases_(const ast::TypeNode *base);
+
     /// Nombres de @c struct declarados (single-pass, antes de su uso).  Lo
     /// consulta @c looks_like_compound_literal para distinguir un compound
     /// literal `(Struct){...}` de un scrutinee de control de flujo como

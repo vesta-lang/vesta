@@ -153,6 +153,7 @@ enum class TokenKind : uint16_t {
     KW_USING,
     KW_NAMESPACE, ///< Phase M.7.c: namespace foo { ... } inline.
     KW_STRUCT,
+    KW_UNION, ///< union C-style: struct con todos los campos en offset 0.
     KW_CLASS,
     KW_INTERFACE,
     KW_ENUM,

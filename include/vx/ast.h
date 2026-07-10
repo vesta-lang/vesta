@@ -2033,6 +2033,10 @@ struct StructDecl : Node {
     /// `v.campo` se baja a `*(T*)(base + offset)`.  Los campos usan @c
     /// explicit_offset (`@offset(N)`).
     bool is_overlay = false;
+    /// union C-style: todos los campos comparten el offset 0; el tamano es el
+    /// del campo mayor y el alineamiento el maximo.  Reusa toda la maquinaria
+    /// de struct salvo el calculo de layout (offsets/size).
+    bool is_union = false;
     /// Parametros de tipo opcionales (templates).  `struct Box<T> { T v; }`
     /// produce type_params = ["T"].  Vacio para structs no genericos.  Si no
     /// esta vacio, el struct es una plantilla: NO se procesa como concreto;

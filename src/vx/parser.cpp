@@ -649,6 +649,10 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             // parse_namespace_decl (decls dentro de un namespace).
             collect_template_export_(mod.get(), decl.get(), decl_start_off);
             mod->decls.push_back(std::move(decl));
+            // Drenar los aliases extra de un typedef C-style multi-declarador.
+            for (auto &e : pending_extra_decls_)
+                mod->decls.push_back(std::move(e));
+            pending_extra_decls_.clear();
         } else if (last_decl_was_target_skip_) {
             // L.24: skip intencional via @Target no matcheado.
             // El skip_target_skipped_decl ya consumio la decl
@@ -862,7 +866,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // StructDecl/EnumDecl con name al final.  Sin esto solo se
         // soportaba `typedef i32 Foo;` (alias de tipo basico).
         const TokenKind nk = lex_.peek_at(0).kind;
-        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM) {
+        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM ||
+            nk == TokenKind::KW_UNION) {
             auto n = parse_typedef_struct_or_enum();
             apply_pending_visibility(n.get());
             return n;
@@ -1432,7 +1437,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (current_.kind == TokenKind::KW_TYPEDEF) {
         const auto nk = lex_.peek_at(0).kind;
         std::unique_ptr<ast::Node> n;
-        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM) {
+        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM ||
+            nk == TokenKind::KW_UNION) {
             n = parse_typedef_struct_or_enum();
         } else {
             n = parse_typedef_decl();
@@ -1451,6 +1457,18 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (sd && top_is_introspect) sd->is_introspect = true;
         if (sd && top_is_overlay) sd->is_overlay = true;
         if (sd) {
+            sd->contract_pod = top_t_pod;
+            sd->contract_no_heap = top_t_no_heap;
+            sd->contract_size = top_t_size;
+        }
+        apply_pending_visibility(sd.get());
+        return sd;
+    }
+    // union <nombre> { ... }  (struct con todos los campos en offset 0)
+    if (current_.kind == TokenKind::KW_UNION) {
+        auto sd = parse_struct_decl(/*is_overlay=*/false);
+        if (sd) {
+            sd->is_union = true;
             sd->contract_pod = top_t_pod;
             sd->contract_no_heap = top_t_no_heap;
             sd->contract_size = top_t_size;
@@ -2524,6 +2542,97 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
 // preserva en is_using_form solo para diagnosticos.
 // -----------------------------------------------------------------
 
+// Deep-clone minimal de un TypeNode (Named/Primitive/Pointer/Array).  Suficiente
+// para replicar el tipo base de un typedef C-style en cada declarador extra.
+static std::unique_ptr<ast::TypeNode> clone_type_node_td_(const ast::TypeNode *t) {
+    if (!t) return nullptr;
+    switch (t->kind) {
+    case ast::NodeKind::PrimitiveTypeNode: {
+        auto *s = static_cast<const ast::PrimitiveTypeNode *>(t);
+        auto p = std::make_unique<ast::PrimitiveTypeNode>();
+        p->loc = s->loc;
+        p->prim = s->prim;
+        for (auto &ta : s->type_args)
+            p->type_args.push_back(clone_type_node_td_(ta.get()));
+        return p;
+    }
+    case ast::NodeKind::NamedTypeNode: {
+        auto *s = static_cast<const ast::NamedTypeNode *>(t);
+        auto p = std::make_unique<ast::NamedTypeNode>();
+        p->loc = s->loc;
+        p->name = s->name;
+        for (auto &ta : s->type_args)
+            p->type_args.push_back(clone_type_node_td_(ta.get()));
+        return p;
+    }
+    case ast::NodeKind::PointerTypeNode: {
+        auto *s = static_cast<const ast::PointerTypeNode *>(t);
+        auto p = std::make_unique<ast::PointerTypeNode>();
+        p->loc = s->loc;
+        p->pointee = clone_type_node_td_(s->pointee.get());
+        p->is_virtual = s->is_virtual;
+        return p;
+    }
+    case ast::NodeKind::ArrayTypeNode: {
+        auto *s = static_cast<const ast::ArrayTypeNode *>(t);
+        auto p = std::make_unique<ast::ArrayTypeNode>();
+        p->loc = s->loc;
+        p->element_type = clone_type_node_td_(s->element_type.get());
+        return p;
+    }
+    default:
+        return nullptr;
+    }
+}
+
+// Quita todos los niveles de puntero envolventes de un TypeNode: `LONG**` ->
+// `LONG`.  Devuelve un puntero al nodo base interno (no toma ownership).
+static const ast::TypeNode *strip_pointers_td_(const ast::TypeNode *t) {
+    while (t && t->kind == ast::NodeKind::PointerTypeNode)
+        t = static_cast<const ast::PointerTypeNode *>(t)->pointee.get();
+    return t;
+}
+
+void Parser::parse_c_typedef_ptr_aliases_(const ast::TypeNode *base) {
+    // Se entra con current_ == ','.  Cada iteracion: `, [*]* NOMBRE`.
+    while (current_.kind == TokenKind::COMMA) {
+        (void)consume(); // ','
+        int stars = 0;
+        while (current_.kind == TokenKind::STAR) {
+            (void)consume();
+            ++stars;
+        }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un nombre de alias tras ',' en el typedef");
+            break;
+        }
+        const SourceLoc nloc = current_.loc;
+        const std::string alias_name = consume().lexeme;
+        // Construir el tipo: base clonado + `stars` niveles de puntero.
+        std::unique_ptr<ast::TypeNode> ty = clone_type_node_td_(base);
+        if (!ty) {
+            error_here("typedef C-style: tipo base no clonable para el alias");
+            break;
+        }
+        for (int i = 0; i < stars; ++i) {
+            auto p = std::make_unique<ast::PointerTypeNode>();
+            p->loc = nloc;
+            p->pointee = std::move(ty);
+            ty = std::move(p);
+        }
+        auto a = std::make_unique<ast::TypeAliasDecl>();
+        a->loc = nloc;
+        a->is_using_form = false;
+        a->name = alias_name;
+        a->aliased = std::move(ty);
+        // Misma visibilidad que el typedef primario (pending_visibility_ sigue
+        // vigente; apply_pending_visibility no lo limpia).
+        apply_pending_visibility(a.get());
+        declared_aliases_.insert(alias_name);
+        pending_extra_decls_.push_back(std::move(a));
+    }
+}
+
 std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
     // Sintaxis C: `typedef struct { ... } Name;` y
     // `typedef enum { ... } Name;`.  Tag opcional tras struct/enum:
@@ -2531,8 +2640,10 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
     const SourceLoc loc_td = current_.loc;
     (void)consume(); // 'typedef'
 
-    const bool is_struct = (current_.kind == TokenKind::KW_STRUCT);
-    (void)consume(); // 'struct' o 'enum'
+    const bool is_union = (current_.kind == TokenKind::KW_UNION);
+    const bool is_struct =
+        (current_.kind == TokenKind::KW_STRUCT) || is_union;
+    (void)consume(); // 'struct' / 'union' / 'enum'
 
     // Tag opcional (ignorado; el name real va al final).
     if (current_.kind == TokenKind::IDENTIFIER &&
@@ -2549,6 +2660,7 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
     if (is_struct) {
         auto s = std::make_unique<ast::StructDecl>();
         s->loc = loc_td;
+        s->is_union = is_union;
         // Reusar logica de parse_struct_decl (cuerpo del struct).
         while (current_.kind != TokenKind::RBRACE &&
                current_.kind != TokenKind::END_OF_FILE) {
@@ -2587,6 +2699,13 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
             return nullptr;
         }
         s->name = consume().lexeme;
+        // `typedef struct {...} FOO, *PFOO;`: alias de puntero a la estructura.
+        if (current_.kind == TokenKind::COMMA) {
+            auto base = std::make_unique<ast::NamedTypeNode>();
+            base->loc = s->loc;
+            base->name = s->name;
+            parse_c_typedef_ptr_aliases_(base.get());
+        }
         (void)expect(TokenKind::SEMICOLON,
                      "se esperaba ';' al final del typedef");
         return s;
@@ -2625,6 +2744,13 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
         return nullptr;
     }
     e->name = consume().lexeme;
+    // `typedef enum {...} FOO, *PFOO;`: alias de puntero al enum.
+    if (current_.kind == TokenKind::COMMA) {
+        auto base = std::make_unique<ast::NamedTypeNode>();
+        base->loc = e->loc;
+        base->name = e->name;
+        parse_c_typedef_ptr_aliases_(base.get());
+    }
     (void)expect(TokenKind::SEMICOLON, "se esperaba ';' al final del typedef");
     return e;
 }
@@ -2748,6 +2874,12 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
             declared_aliases_.insert(a->name);
             return a;
         }
+    }
+    // typedef C-style multi-declarador: `typedef LONG *PLONG, *LPLONG;`.
+    // El primer alias (a) ya esta parseado (aliased puede incluir sus '*').
+    // Para los siguientes el tipo base es `aliased` SIN sus punteros.
+    if (current_.kind == TokenKind::COMMA) {
+        parse_c_typedef_ptr_aliases_(strip_pointers_td_(a->aliased.get()));
     }
     (void)expect(TokenKind::SEMICOLON, "se esperaba ';' al final de 'typedef'");
     // Item 19: registrar alias para que `looks_like_cast` lo reconozca
@@ -3013,6 +3145,10 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
             // NS.2: exportar plantillas/concepts namespaced cross-module.
             collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
             ns->decls.push_back(std::move(inner));
+            // Drenar aliases extra de un typedef C-style multi-declarador.
+            for (auto &e : pending_extra_decls_)
+                ns->decls.push_back(std::move(e));
+            pending_extra_decls_.clear();
         }
         return ns;
     }

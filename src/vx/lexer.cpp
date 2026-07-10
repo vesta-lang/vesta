@@ -105,6 +105,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::KW_USING: return "using";
     case TokenKind::KW_NAMESPACE: return "namespace";
     case TokenKind::KW_STRUCT: return "struct";
+    case TokenKind::KW_UNION: return "union";
     case TokenKind::KW_CLASS: return "class";
     case TokenKind::KW_INTERFACE: return "interface";
     case TokenKind::KW_ENUM: return "enum";
@@ -353,6 +354,7 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
         VX_KW_EXACT("uint64_t", TokenKind::KW_UINT64_T);
         VX_KW_EXACT("using", TokenKind::KW_USING);
         VX_KW_EXACT("unique", TokenKind::KW_UNIQUE);
+        VX_KW_EXACT("union", TokenKind::KW_UNION);
         break;
     case 'v': VX_KW_EXACT("void", TokenKind::KW_VOID); break;
     case 'w': VX_KW_EXACT("while", TokenKind::KW_WHILE); break;
@@ -494,6 +496,25 @@ Token Lexer::lex_number() {
     bool is_float = false;
     uint64_t int_val = 0;
 
+    // Sufijos de literal estilo C.  Se ACEPTAN y se consumen; el tipo del
+    // literal lo sigue infiriendo el contexto (igual que un literal desnudo),
+    // asi que el sufijo no cambia el valor.  Habilita portar headers C
+    // (`0L`, `2U`, `0xFFFFFFFFUL`, `1.5f`) sin reescribir cada constante.
+    //   - entero: cualquier combinacion de u/U y l/L (U, L, UL, LL, ULL, ...).
+    //   - float:  f/F (float) y l/L (long double).
+    auto eat_suffix = [&](bool floaty) {
+        while (pos_ < source_.size()) {
+            const char c = source_[pos_];
+            const bool ok = floaty ? (c == 'f' || c == 'F' || c == 'l' ||
+                                      c == 'L')
+                                   : (c == 'u' || c == 'U' || c == 'l' ||
+                                      c == 'L');
+            if (!ok) break;
+            ++pos_;
+            ++column_;
+        }
+    };
+
     // Detectar prefijo de base: 0x / 0b / 0o.
     if (source_[pos_] == '0' && pos_ + 1 < source_.size()) {
         const char b = source_[pos_ + 1];
@@ -520,6 +541,7 @@ Token Lexer::lex_number() {
                 ++pos_;
                 ++column_;
             }
+            eat_suffix(/*floaty=*/false);
             std::string lex = source_.substr(begin, pos_ - begin);
             SourceLoc loc = start;
             loc.length = (uint32_t)(pos_ - begin);
@@ -542,6 +564,7 @@ Token Lexer::lex_number() {
                 ++pos_;
                 ++column_;
             }
+            eat_suffix(/*floaty=*/false);
             std::string lex = source_.substr(begin, pos_ - begin);
             SourceLoc loc = start;
             loc.length = (uint32_t)(pos_ - begin);
@@ -564,6 +587,7 @@ Token Lexer::lex_number() {
                 ++pos_;
                 ++column_;
             }
+            eat_suffix(/*floaty=*/false);
             std::string lex = source_.substr(begin, pos_ - begin);
             SourceLoc loc = start;
             loc.length = (uint32_t)(pos_ - begin);
@@ -626,6 +650,7 @@ Token Lexer::lex_number() {
         }
     }
 
+    eat_suffix(is_float);
     std::string lex = source_.substr(begin, pos_ - begin);
     SourceLoc loc = start;
     loc.length = (uint32_t)(pos_ - begin);

@@ -2598,6 +2598,9 @@ void TypeChecker::collect_globals() {
             // consistente entre elementos.
             StructLayout layout;
             layout.name = s->name;
+            layout.is_union = s->is_union;
+            // union: `offset` se reutiliza como MAXIMO tamano de campo (todos
+            // los campos viven en offset 0); en struct es el offset secuencial.
             uint32_t offset = 0;
             uint32_t max_align = 1;
             std::unordered_map<std::string, bool> seen_names;
@@ -2724,8 +2727,9 @@ void TypeChecker::collect_globals() {
                 // Campo normal: cerrar bit field activo si lo hay.
                 close_bf();
 
-                // Padding hasta multiplo de falign.
-                if (offset % falign != 0) {
+                // Padding hasta multiplo de falign (solo struct: en union todos
+                // los campos van a offset 0, no hay layout secuencial).
+                if (!s->is_union && offset % falign != 0) {
                     offset += falign - (offset % falign);
                 }
 
@@ -2767,13 +2771,19 @@ void TypeChecker::collect_globals() {
                         fi.offset = (uint32_t)f.explicit_offset;
                     }
                 } else {
-                    fi.offset = offset;
+                    // union: todos los campos comparten offset 0.
+                    fi.offset = s->is_union ? 0 : offset;
                 }
                 fi.size = fsize;
                 fi.default_init = f.default_init.get();
                 layout.fields.push_back(std::move(fi));
 
-                offset += fsize;
+                if (s->is_union) {
+                    // El "tamano" de la union es el del campo mayor.
+                    if (fsize > offset) offset = fsize;
+                } else {
+                    offset += fsize;
+                }
                 if (falign > max_align) max_align = falign;
             }
             // Cerrar bit field activo al final del struct.
