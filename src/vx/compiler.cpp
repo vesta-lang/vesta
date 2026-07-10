@@ -31,6 +31,9 @@
 #include "vx/html_diagrams.h"
 #include "vx/namespace_flatten.h"
 #include "vx/parser.h"
+#include <iostream>
+
+#include "vx/comptime_collect.h"
 #include "vx/type_checker.h"
 
 #include "port/transpiler_base.h"
@@ -223,6 +226,15 @@ CompileResult compile_vx_source(const std::string &source,
     //      se registra en el TypeChecker como Symbol::Namespace para
     //      que el resolver de `ns.X` lo encuentre.
     auto inline_namespaces = flatten_namespaces(*mod);
+
+    // P1 fase 1 (recolector): con los nombres ya mangled, identificar el
+    // conjunto comptime del modulo (comptime fns/@Macro/consts + deps
+    // transitivas).  Es la base del futuro artefacto comptime separado.  Hoy
+    // solo diagnostico opt-in (VESTA_DUMP_COMPTIME_UNIT=1); no cambia codegen.
+    if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
+        const ComptimeUnit cu = collect_comptime_unit(*mod);
+        dump_comptime_unit(cu, std::cerr);
+    }
 
     // 2. TypeChecker: rellena result_type y valida semantica.
     TypeChecker tc(*mod, res.diagnostics);

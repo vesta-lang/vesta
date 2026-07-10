@@ -89,6 +89,9 @@ add_library(vx_lib STATIC
     # modelo dirigido por resumenes y de las anotaciones comprobables.
     ${CMAKE_SOURCE_DIR}/src/analyze/fingerprint.cpp
     comptime_introspect.cpp
+    # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
+    # separado que compilara/ejecutara todo el comptime en la ComptimeVM).
+    comptime_collect.cpp
     # Sistema de modulos.
     module_resolver.cpp
     module_interop.cpp
