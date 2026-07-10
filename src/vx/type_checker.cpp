@@ -5587,6 +5587,12 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         c.is_struct = r.is_struct;
         c.is_type = r.is_type;
         c.is_mutable = !vd->is_const;
+        /* P1: propagar DIFERIDO.  Un comptime local cuyo init depende de una
+         * comptime fn ruteada a la ComptimeVM (sin bytecode en pass 1) es
+         * diferido; sin esto, un static_assert posterior sobre el local
+         * dispararia con el placeholder (0) en pass 1 en vez de resolverse en
+         * pass 2.  Mismo fix que el pre-pase global (1547) y el block-local. */
+        c.deferred = r.deferred;
         if (r.is_str)
             c.str_value = r.str;
         else if (r.is_array)

@@ -682,7 +682,9 @@ static bool stmt_uses_io_ci(const ast::Stmt *s) {
 
 bool comptime_fn_needs_vm(const TypeChecker &tc, const ast::FunctionDecl *fd) {
     if (!fd) return false;
-    // Corre en la ComptimeVM (no tree-walker) si usa asm/@Naked O I/O.
+    // Corre en la ComptimeVM (no tree-walker) si usa asm/@Naked O I/O.  El
+    // rewrite completo (TODA fn -> VM) exige que el lowering lea los valores
+    // comptime desde la VM (inline-as-const, comptime for); fase 3, grande.
     return comptime_fn_uses_asm(tc, fd) || stmt_uses_io_ci(fd->body.get());
 }
 
