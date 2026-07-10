@@ -14,6 +14,7 @@
 namespace std.ctypes;
 
 /* --- enteros con signo (ancho fijo) --- */
+public typedef u32 int;            // C `int` (32 bits)
 public typedef i8  signed_char;
 public typedef i16 short_int;      // C `short` / `short int`
 public typedef i64 long_long;      // C `long long` / `long long int`
