@@ -5917,21 +5917,34 @@ std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const,
         if (inner) inner->is_const = true;
         vd->is_const = false; // el puntero/binding es mutable (C)
     }
+    // Puntero a funcion estilo C como variable: `R (*name)(params) = init;`.
+    bool got_fp_name = false;
+    {
+        std::string fp_name;
+        std::unique_ptr<ast::TypeNode> fp_type;
+        if (vd->type && try_parse_c_func_ptr_(vd->type, fp_name, fp_type)) {
+            vd->type = std::move(fp_type);
+            vd->name = std::move(fp_name);
+            got_fp_name = true;
+        }
+    }
     // azucar: `T !!name = init;` equivale a
     // `nonnull T name = !!init;`.  El `!!` entre tipo y nombre
     // marca el tipo como no-null y envuelve el inicializador con
     // unwrap para insertar el check runtime + assert compile-time.
     bool inline_nonnull = false;
-    if (current_.kind == TokenKind::BANG_BANG) {
+    if (!got_fp_name && current_.kind == TokenKind::BANG_BANG) {
         inline_nonnull = true;
         (void)consume();
         if (vd->type) vd->type->is_nonnull = true;
     }
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo");
-        return nullptr;
+    if (!got_fp_name) {
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un nombre tras el tipo");
+            return nullptr;
+        }
+        vd->name = consume().lexeme;
     }
-    vd->name = consume().lexeme;
     // Sintaxis C-style: `T name[N]` -> wrappear el tipo base en
     // ArrayTypeNode(N).  Acepta tambien `T name[]` (sin tamano,
     // tipico de parametros con decay-to-ptr).  Cadena permitida
