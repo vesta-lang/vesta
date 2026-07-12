@@ -1131,6 +1131,33 @@ void inject_generic_templates_from_vxi(
     Diagnostics tmp_diags;
     Lexer lex(combined, "<vxi-templates:" + ns_prefix + ">", tmp_diags);
     Parser parser(lex, tmp_diags);
+    // Sembrar los nombres de TIPO del modulo (typedefs, structs, enums, clases)
+    // como aliases conocidos ANTES de parsear.  Sin esto, una fn comptime cuya
+    // firma referencia un typedef del modulo (p.ej. `comptime WORD MK(...)`) se
+    // re-parsea con el parser sin conocer `WORD` -> lo interpreta como retorno
+    // void y falla ("return con valor en funcion void").
+    for (const auto &sym : mod.symbols) {
+        if (sym.kind == VxiSymbolKind::TYPEDEF_ALIAS ||
+            sym.kind == VxiSymbolKind::TYPEDEF_NEW ||
+            sym.kind == VxiSymbolKind::STRUCT ||
+            sym.kind == VxiSymbolKind::CLASS ||
+            sym.kind == VxiSymbolKind::ENUM) {
+            parser.add_known_alias(sym.name);
+        }
+    }
+    // Las plantillas comptime/macro se inyectan TODAS (wanted vacio) y se
+    // type-checkean; si su firma referencia un typedef transparente del modulo
+    // (WORD -> u16) que NO fue importado por `only`, el checker no lo resolveria
+    // (-> void).  Registrar aqui los alias transparentes del modulo (idempotente)
+    // para que esas firmas resuelvan.  Son alias a primitivos: inocuos.
+    for (const auto &sym : mod.symbols) {
+        if (sym.kind != VxiSymbolKind::TYPEDEF_ALIAS) continue;
+        Type u = tc.resolve_type_string(sym.underlying_type);
+        if (u.kind == PrimitiveKind::VOID && sym.underlying_type != "void")
+            continue;  // underlying no resoluble aun; skip.
+        // emplace es idempotente: no pisa un alias ya registrado (local o import).
+        tc.register_imported_type_alias(sym.name, std::move(u));
+    }
     auto parsed = parser.parse_program();
     if (!parsed || tmp_diags.has_errors()) return; // best-effort
 

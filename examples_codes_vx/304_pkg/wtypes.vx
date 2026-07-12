@@ -1,0 +1,14 @@
+// Modulo con un typedef transparente y una comptime fn cuya FIRMA usa ese
+// typedef.  Al importarse cross-modulo, la fn comptime se inyecta y type-checkea
+// en el importador; sin registrar el alias del modulo, su retorno `WORD` no
+// resolveria y daria "return con valor en funcion void".  Ver 304.
+namespace wtypes;
+
+public typedef u16 WORD;
+
+// comptime fn con retorno = typedef del modulo.
+public comptime WORD MK(u16 p, u16 s) {
+    return ((s << 10) | p);
+}
+
+public const u32 BASE = 40;

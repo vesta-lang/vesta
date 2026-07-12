@@ -2130,6 +2130,12 @@ struct EnumDecl : Node {
     /// Tipo base para enums con VALOR entero (C-style):
     /// `enum Op : u8 { ... }`.  Vacio -> enum ADT (tagged union).
     std::string backing_type;
+    /// C-style `typedef enum { ... } Name;` sin `: tipo` explicito.  El enum
+    /// es un conjunto de constantes enteras (NO una tagged union), pero el
+    /// ancho del backing se INFIERE del rango de valores en el type checker
+    /// (i32 si todos caben en int, si no se ensancha a u32/i64/u64), imitando
+    /// las reglas de C.  No confundir con `backing_type` fijo.
+    bool c_style_auto_backing = false;
     std::vector<EnumVariantDecl> variants;
     /// marca `@Introspect`.  Ver `StructDecl`.
     bool is_introspect = false;

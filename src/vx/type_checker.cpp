@@ -3076,12 +3076,87 @@ void TypeChecker::collect_globals() {
             // C-style: enum con VALOR (`enum Op : u8 { ... }`, `enum M : f64 {..}`,
             // `enum V : string {..}`).  El backing puede ser entero, float o
             // string; cada variante es una CONSTANTE de ese tipo.
-            const bool valued = !en->backing_type.empty();
+            const bool valued = !en->backing_type.empty() ||
+                                en->c_style_auto_backing;
             elay.is_valued = valued;
             bool backing_is_int = false;
             bool backing_is_float = false;
             bool backing_is_string = false;
             bool backing_is_user = false;  // struct o clase
+            // C-style `typedef enum { ... }` sin `: tipo`: se infiere el backing
+            // del KIND de los valores.  Caso normal (C): todas las variantes son
+            // constantes ENTERAS (o no llevan valor) -> se pre-pliegan con
+            // auto-incremento y se elige el ancho minimo que cubre el rango
+            // (i32 si todo cabe en int; si no u32; si no i64), imitando C.  Si en
+            // cambio los valores son STRING, se infiere backing `string`.  Los
+            // backings de struct/array/float requieren la forma explicita
+            // `enum Name : Tipo { ... }` (un enum bare no puede inferirlos).
+            std::vector<int64_t> auto_vals;
+            bool auto_have_vals = false;
+            if (en->c_style_auto_backing) {
+                // Detectar el kind mirando el primer valor explicito.
+                bool any_str = false, any_bad = false;
+                for (const auto &vd : en->variants) {
+                    if (!vd.value_expr) continue;
+                    const ComptimeEvalResult r =
+                        comptime_eval_expr(*this, vd.value_expr.get());
+                    if (r.is_str) { any_str = true; }
+                    else if (r.is_array || r.is_struct || !r.ok) { any_bad = true; }
+                    break;  // basta el primero para decidir el kind.
+                }
+                if (any_str) {
+                    // Backing string: cada variante requiere valor explicito; el
+                    // bucle principal baja value_ast (no hay auto-incremento).
+                    en->backing_type = "string";
+                } else if (any_bad) {
+                    diags_.error(en->loc,
+                                 "un enum C-style 'typedef enum { ... }' solo "
+                                 "infiere backing entero o string; para struct/"
+                                 "array/float usa la forma explicita "
+                                 "'enum " + en->name + " : Tipo { ... }'");
+                    en->backing_type = "i32";  // recuperacion.
+                } else {
+                    // Entero (o sin valores): pre-plegar con auto-incremento.
+                    auto_vals.reserve(en->variants.size());
+                    int64_t nv = 0;
+                    for (const auto &vd : en->variants) {
+                        if (vd.value_expr) {
+                            const ComptimeEvalResult r =
+                                comptime_eval_expr(*this, vd.value_expr.get());
+                            if (r.ok && !r.is_str && !r.is_array && !r.is_struct) {
+                                nv = r.value;
+                            } else {
+                                diags_.error(vd.loc,
+                                             "el valor de la variante '" +
+                                                 vd.name + "' debe ser una "
+                                                 "constante entera");
+                            }
+                        }
+                        auto_vals.push_back(nv);
+                        nv = nv + 1;
+                    }
+                    auto_have_vals = true;
+                    // Elegir el ancho minimo que cubre el rango (C-style).
+                    int64_t lo = 0, hi = 0;
+                    for (int64_t v : auto_vals) {
+                        if (v < lo) lo = v;
+                        if (v > hi) hi = v;
+                    }
+                    std::string inferred;
+                    if (lo < 0) {
+                        // Con negativos hay que usar tipo con signo.
+                        if (lo >= INT32_MIN && hi <= INT32_MAX) inferred = "i32";
+                        else inferred = "i64";
+                    } else {
+                        // Todos no negativos.  C prefiere int; ensancha si no cabe.
+                        if (hi <= INT32_MAX) inferred = "i32";
+                        else if (hi <= static_cast<int64_t>(UINT32_MAX))
+                            inferred = "u32";
+                        else inferred = "i64";
+                    }
+                    en->backing_type = inferred;  // fijar para el resto del flujo.
+                }
+            }
             if (valued) {
                 elay.backing = prim_kind_from_name(en->backing_type);
                 backing_is_int = is_integer_kind(elay.backing);
@@ -3133,20 +3208,29 @@ void TypeChecker::collect_globals() {
                     }
                     if (backing_is_int) {
                         // Entero: se pliega a constante (soporta auto-incremento).
-                        if (vd.value_expr) {
-                            const ComptimeEvalResult r =
-                                comptime_eval_expr(*this, vd.value_expr.get());
-                            if (!r.ok || r.is_str || r.is_array || r.is_struct) {
-                                diags_.error(vd.loc, "el valor de la variante '" +
-                                                         vd.name +
-                                                         "' debe ser una "
-                                                         "constante entera");
-                            } else {
-                                next_val = r.value;
+                        // Si el backing se infirio (C-style auto), reusamos los
+                        // valores ya plegados en el pre-pase para no duplicar
+                        // evaluacion ni diagnosticos.
+                        if (auto_have_vals) {
+                            vi_info.int_value = auto_vals[vi];
+                        } else {
+                            if (vd.value_expr) {
+                                const ComptimeEvalResult r =
+                                    comptime_eval_expr(*this, vd.value_expr.get());
+                                if (!r.ok || r.is_str || r.is_array ||
+                                    r.is_struct) {
+                                    diags_.error(vd.loc,
+                                                 "el valor de la variante '" +
+                                                     vd.name +
+                                                     "' debe ser una "
+                                                     "constante entera");
+                                } else {
+                                    next_val = r.value;
+                                }
                             }
+                            vi_info.int_value = next_val;
+                            next_val = next_val + 1;
                         }
-                        vi_info.int_value = next_val;
-                        next_val = next_val + 1;
                     } else {
                         // Float/string/...: el valor es OBLIGATORIO y explicito;
                         // el lowering baja la expresion AST tal cual (reusa el

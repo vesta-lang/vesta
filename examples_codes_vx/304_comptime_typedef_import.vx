@@ -1,0 +1,20 @@
+// examples_codes_vx/304_comptime_typedef_import.vx
+//
+// Regresion: una `comptime fn` cuyo tipo de retorno es un TYPEDEF del propio
+// modulo (`comptime WORD MK(...)`) rompia al importarse cross-modulo.  Las
+// plantillas comptime se inyectan TODAS en el importador y se type-checkean
+// alli; sin registrar los alias transparentes del modulo, el retorno `WORD` no
+// resolvia (-> void) y daba "return con valor en funcion void".
+//
+// El fix siembra los alias del modulo (parser + type checker) al inyectar las
+// plantillas, de modo que la firma resuelve.  Aqui importamos y USAMOS MK.
+//
+// Resultado esperado: R0 == 42.
+
+import wtypes only MK, BASE;
+
+i32 main() {
+    // MK(2, 0) = (0 << 10) | 2 = 2.  2 + BASE(40) = 42.
+    i32 r = (i32)MK(2, 0) + (i32)BASE;
+    return r;   // 42
+}

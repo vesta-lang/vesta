@@ -1,17 +1,21 @@
 namespace std.windows;
 
+import std.ctypes only int, short_int, long_int, long_long,
+                      unsigned_char, unsigned_short_int, unsigned_int,
+                      unsigned_long_int, unsigned_long_long;
 const u16 PATH_MAX = 260;
 
 typedef int                 BOOL;
 typedef char                CHAR;
-typedef short               SHORT;
+typedef short_int               SHORT;
 typedef int                 INT;
-typedef long                LONG;
+typedef long_int                LONG;
 typedef u8                  UCHAR;
 typedef u16                 USHORT;
 typedef u32                 UINT;
 typedef u32                 ULONG;
 typedef u8                  BYTE;
+typedef u8                  BOOLEAN;      // Win32: un byte (0/1)
 typedef u16                 WORD;
 typedef float               FLOAT;
 typedef u32                 DWORD;
@@ -58,9 +62,16 @@ typedef HANDLE *            LPHANDLE;
 
 typedef WCHAR *             PWSTR;
 typedef BYTE *              LPBYTE;
-typedef long *              LPLONG;
 typedef DWORD *             LPDWORD;
 typedef void *              LPCVOID;
+
+// GUID (128 bits): identificador global de Windows.
+typedef struct _GUID {
+    u32 Data1;
+    u16 Data2;
+    u16 Data3;
+    u8  Data4[8];
+} GUID, *LPGUID, *PGUID;
 
 //#ifdef _WIN64
 typedef i64                 INT_PTR;
@@ -69,9 +80,9 @@ typedef u64                 UINT_PTR;
 typedef u64                 ULONG_PTR;
 //#else
 //typedef int                 INT_PTR;
-//typedef long                LONG_PTR;
-//typedef unsigned int        UINT_PTR;
-//typedef unsigned long       ULONG_PTR;
+//typedef long_int                LONG_PTR;
+//typedef unsigned_int        UINT_PTR;
+//typedef unsigned_long_int       ULONG_PTR;
 //#endif
 
 typedef ULONG_PTR           DWORD_PTR;
@@ -92,7 +103,7 @@ typedef LPCWSTR             LPCTSTR;
 typedef LPWSTR              LPTSTR;
 //#else
 //typedef char                TCHAR;
-//typedef unsigned char       TBYTE;
+//typedef unsigned_char       TBYTE;
 //typedef LPCSTR              LPCTSTR;
 //typedef LPSTR               LPTSTR;
 //#endif
@@ -546,31 +557,31 @@ const u32 FILE_READ_ATTRIBUTES        = 0x0080;
 const u32 FILE_WRITE_ATTRIBUTES       = 0x0100;
 const u32 FILE_ALL_ACCESS             = (
     STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x1FF
-)
+);
 
 const u32 FILE_GENERIC_READ           = (
-    STANDARD_RIGHTS_READ | 
-    FILE_READ_DATA | 
-    FILE_READ_ATTRIBUTES | 
-    FILE_READ_EA | 
+    STANDARD_RIGHTS_READ |
+    FILE_READ_DATA |
+    FILE_READ_ATTRIBUTES |
+    FILE_READ_EA |
     SYNCHRONIZE
-)
+);
 
 const u32 FILE_GENERIC_WRITE          = (
-    STANDARD_RIGHTS_WRITE | 
-    FILE_WRITE_DATA | 
-    FILE_WRITE_ATTRIBUTES | 
-    FILE_WRITE_EA | 
-    FILE_APPEND_DATA | 
+    STANDARD_RIGHTS_WRITE |
+    FILE_WRITE_DATA |
+    FILE_WRITE_ATTRIBUTES |
+    FILE_WRITE_EA |
+    FILE_APPEND_DATA |
     SYNCHRONIZE
-)
+);
 
 const u32 FILE_GENERIC_EXECUTE        = (
-    STANDARD_RIGHTS_EXECUTE | 
-    FILE_READ_ATTRIBUTES | 
-    FILE_EXECUTE | 
+    STANDARD_RIGHTS_EXECUTE |
+    FILE_READ_ATTRIBUTES |
+    FILE_EXECUTE |
     SYNCHRONIZE
-)
+);
 
 /* Creation Disposition: */
 const u32 CREATE_ALWAYS               = 2;
@@ -580,12 +591,12 @@ const u32 OPEN_EXISTING               = 3;
 const u32 TRUNCATE_EXISTING           = 5;
 
 /* File Attributes: */
-const  INVALID_FILE_ATTRIBUTES         = 0xffffffff;
-const  FILE_ATTRIBUTE_HIDDEN           = 0x2;
-const  FILE_ATTRIBUTE_NORMAL           = 0x80;
-const  FILE_ATTRIBUTE_DIRECTORY        = 0x10;
-const  FILE_ATTRIBUTE_TEMPORARY        = 0x100;
-const  FILE_ATTRIBUTE_REPARSE_POINT    = 0x400;
+const u32 INVALID_FILE_ATTRIBUTES      = 0xffffffff;
+const u32 FILE_ATTRIBUTE_HIDDEN        = 0x2;
+const u32 FILE_ATTRIBUTE_NORMAL        = 0x80;
+const u32 FILE_ATTRIBUTE_DIRECTORY     = 0x10;
+const u32 FILE_ATTRIBUTE_TEMPORARY     = 0x100;
+const u32 FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
 
 /* File Offsets: */
 const u32 FILE_BEGIN                  = 0;
@@ -614,12 +625,8 @@ const u32 FILE_MAP_READ                   = SECTION_MAP_READ;
 const u32 FILE_MAP_ALL_ACCESS             = SECTION_ALL_ACCESS;
 const u32 FILE_MAP_EXECUTE                = SECTION_MAP_EXECUTE_EXPLICIT;
 
-const u32 PAGE_EXECUTE_READ               = 0x20;
-const u32 PAGE_EXECUTE_READWRITE          = 0x40;
-const u32 PAGE_EXECUTE_WRITECOPY          = 0x80;
-const u32 PAGE_READONLY                   = 0x02;
-const u32 PAGE_READWRITE                  = 0x04;
-const u32 PAGE_WRITECOPY                  = 0x08;
+// (Las constantes PAGE_* de proteccion se definen mas abajo, en la seccion
+//  "VirtualAlloc.flProtect".)
 
 /* File Change Notifications: */
 const u32 FILE_NOTIFY_CHANGE_FILE_NAME    = 0x00000001;
@@ -663,11 +670,11 @@ enum GET_FILEEX_INFO_LEVELS {
 
 
 /* GetStdHandle: */
-const i32 STD_INPUT_HANDLE        = ((DWORD)-10)
-const i32 STD_OUTPUT_HANDLE       = ((DWORD)-11)
-const i32 STD_ERROR_HANDLE        = ((DWORD)-12)
-const i32 INVALID_HANDLE_VALUE    = ((HANDLE)(LONG_PTR)-1)
-const i32 ATTACH_PARENT_PROCESS   = ((DWORD)-1)
+const i32 STD_INPUT_HANDLE        = ((DWORD)-10);
+const i32 STD_OUTPUT_HANDLE       = ((DWORD)-11);
+const i32 STD_ERROR_HANDLE        = ((DWORD)-12);
+const i32 INVALID_HANDLE_VALUE    = ((HANDLE)(LONG_PTR)-1);
+const i32 ATTACH_PARENT_PROCESS   = ((DWORD)-1);
 
 const i32 HANDLE_FLAG_INHERIT             = 0x00000001;
 const i32 HANDLE_FLAG_PROTECT_FROM_CLOSE  = 0x00000002;
@@ -770,7 +777,7 @@ typedef struct _MEMORY_BASIC_INFORMATION32 {
     DWORD       Type;
 } MEMORY_BASIC_INFORMATION32, *PMEMORY_BASIC_INFORMATION32;
 
-typedef struct __declspec(align(16)) _MEMORY_BASIC_INFORMATION64 {
+typedef struct _MEMORY_BASIC_INFORMATION64 {
     ULONGLONG   BaseAddress;
     ULONGLONG   AllocationBase;
     DWORD       AllocationProtect;
@@ -819,13 +826,13 @@ const u32 FORMAT_MESSAGE_FROM_STRING      = 0x00000400;
 
 /* Language ID: */
 comptime WORD MAKELANGID(u16 p, u16 s) {
-    return ((((WORD)(s)) << 10) | (WORD)(p));
+    return ((s << 10) | p);
 }
 comptime WORD PRIMARYLANGID(u16 lgid) {
-    return ((WORD)(lgid) & 0x3ff);
+    return (lgid & 0x3ff);
 }
 comptime WORD SUBLANGID(u16 lgid) {
-    return ((WORD)(lgid) >> 10);
+    return (lgid >> 10);
 }
 
 const u32 LANG_NEUTRAL                    = 0x00;
@@ -872,10 +879,10 @@ typedef struct _TIME_ZONE_INFORMATION {
 typedef PTIME_ZONE_INFORMATION LPTIME_ZONE_INFORMATION;
 
 comptime u32 _byteswap_ulong(u32 x) {
-    return (((u32)(x) << 24) | 
-            (((u32)(x) << 8) & 0xff0000) | 
-            (((u32)(x) >> 8) & 0xff00) | 
-            ((u32)(x) >> 24))
+    return (((u32)(x) << 24) |
+            (((u32)(x) << 8) & 0xff0000) |
+            (((u32)(x) >> 8) & 0xff00) |
+            ((u32)(x) >> 24));
 }
 
 comptime u64 _byteswap_uint64(u64 x) {
@@ -886,22 +893,17 @@ comptime u64 _byteswap_uint64(u64 x) {
             (((u64)(x) >> 8)  & 0xff000000ULL) |
             (((u64)(x) >> 24) & 0xff0000ULL) |
             (((u64)(x) >> 40) & 0xff00ULL) |
-            ((u64)(x)  >> 56))
+            ((u64)(x)  >> 56));
 }
 
 
 
 /* ========================================================================== */
-/* Multi Media Timer:                                                         */
-const u32 TIMERR_NOERROR        = (0)                  /* no error */
-const u32 TIMERR_NOCANDO        = (TIMERR_BASE+1)      /* request not completed */
-const u32 TIMERR_STRUCT         = (TIMERR_BASE+33)     /* time struct size */
-
+/* Multi Media Timer:  (TIMERR_* ya se definen arriba)                        */
 typedef struct timecaps_tag {
     UINT    wPeriodMin;     /* minimum period supported  */
     UINT    wPeriodMax;     /* maximum period supported  */
 } TIMECAPS, *PTIMECAPS, *NPTIMECAPS, *LPTIMECAPS;
-typedef UINT MMRESULT;
 
 
 
@@ -910,13 +912,7 @@ typedef UINT MMRESULT;
 const u32 INFINITE                = 0xffffffff;
 //#endif
 
-/* Originally defined in file.h */
-//#ifndef STANDARD_RIGHTS_REQUIRED
-const u32 STANDARD_RIGHTS_REQUIRED = 0x000F0000L;
-//#endif
-//#ifndef SYNCHRONIZE
-const u32 SYNCHRONIZE = 0x00100000L;
-//#endif
+/* (STANDARD_RIGHTS_REQUIRED y SYNCHRONIZE ya se definen arriba.) */
 
 /* Process Access Rights: */
 const u32 PROCESS_DUP_HANDLE          = (0x0040);
@@ -951,7 +947,7 @@ const u32 TOKEN_ALL_ACCESS_P = (
     TOKEN_ADJUST_PRIVILEGES   |
     TOKEN_ADJUST_GROUPS       |
     TOKEN_ADJUST_DEFAULT
-)
+);
 
 const u32 SE_PRIVILEGE_ENABLED_BY_DEFAULT = (0x00000001L);
 const u32 SE_PRIVILEGE_ENABLED            = (0x00000002L);
@@ -1053,8 +1049,10 @@ typedef struct _STARTUPINFOW {
     HANDLE hStdError;
 } STARTUPINFOW, *LPSTARTUPINFOW;
 
-typedef struct _PROC_THREAD_ATTRIBUTE_LIST
-*PPROC_THREAD_ATTRIBUTE_LIST, *LPPROC_THREAD_ATTRIBUTE_LIST;
+// _PROC_THREAD_ATTRIBUTE_LIST es un struct opaco (sin cuerpo publico en los
+// headers de Windows); sus punteros se modelan como void *.
+typedef void * PPROC_THREAD_ATTRIBUTE_LIST;
+typedef void * LPPROC_THREAD_ATTRIBUTE_LIST;
 typedef struct _STARTUPINFOEXA {
     STARTUPINFOA                    StartupInfo;
     PPROC_THREAD_ATTRIBUTE_LIST     lpAttributeList;
@@ -1181,29 +1179,29 @@ const u32 KEY_READ                            = (
         KEY_ENUMERATE_SUB_KEYS  | 
         KEY_NOTIFY
     ) & (~SYNCHRONIZE)
-)
+);
 
 const u32 KEY_WRITE                           = (
     (
-        STANDARD_RIGHTS_WRITE   | 
-        KEY_SET_VALUE           | 
+        STANDARD_RIGHTS_WRITE   |
+        KEY_SET_VALUE           |
         KEY_CREATE_SUB_KEY
     ) & (~SYNCHRONIZE)
-)
+);
 
-const u32 KEY_EXECUTE                         = ((KEY_READ) & (~SYNCHRONIZE))
+const u32 KEY_EXECUTE                         = ((KEY_READ) & (~SYNCHRONIZE));
 
 const u32 KEY_ALL_ACCESS                      = (
     (
-        STANDARD_RIGHTS_ALL     | 
-        KEY_QUERY_VALUE         | 
-        KEY_SET_VALUE           | 
-        KEY_CREATE_SUB_KEY      | 
-        KEY_ENUMERATE_SUB_KEYS  | 
-        KEY_NOTIFY              | 
+        STANDARD_RIGHTS_ALL     |
+        KEY_QUERY_VALUE         |
+        KEY_SET_VALUE           |
+        KEY_CREATE_SUB_KEY      |
+        KEY_ENUMERATE_SUB_KEYS  |
+        KEY_NOTIFY              |
         KEY_CREATE_LINK
     ) & (~SYNCHRONIZE)
-)
+);
 
 
 /* ========================================================================== */
@@ -1284,7 +1282,7 @@ enum LOGICAL_PROCESSOR_RELATIONSHIP {
     RelationAll               = 0xffff
 };
 
-enum PROCESSOR_CACHE_TYPE {
+enum PROCESSOR_CACHE_TYPE : u32 {
     CacheUnified,
     CacheInstruction,
     CacheData,
@@ -1413,57 +1411,9 @@ const u16 ALL_PROCESSOR_GROUPS      = 0xffff;
 
 const u8 MAX_COMPUTERNAME_LENGTH    = 31;
 
-void GetWindowsVersionCUSTOM(PWORD major, PWORD minor, PWORD srvpack) {
-    if (GREATER(HIBYTE(_WIN32_WINNT_WIN10), LOBYTE(_WIN32_WINNT_WIN10), 0)) {
-        *major = 10;
-        *minor = 0;
-        *srvpack = 0;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_WIN81), LOBYTE(_WIN32_WINNT_WIN81), 0)) {
-        *major = 6;
-        *minor = 3;
-        *srvpack = 0;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_WIN8), LOBYTE(_WIN32_WINNT_WIN8), 0)) {
-        *major = 6;
-        *minor = 2;
-        *srvpack = 0;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_WIN7), LOBYTE(_WIN32_WINNT_WIN7), 1)) {
-        *major = 6;
-        *minor = 1;
-        *srvpack = 1;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_WIN7), LOBYTE(_WIN32_WINNT_WIN7), 0)) {
-        *major = 6;
-        *minor = 1;
-        *srvpack = 0;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_VISTA), LOBYTE(_WIN32_WINNT_VISTA), 2)) {
-        *major = 6;
-        *minor = 0;
-        *srvpack = 2;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_VISTA), LOBYTE(_WIN32_WINNT_VISTA), 1)) {
-        *major = 6;
-        *minor = 0;
-        *srvpack = 1;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_VISTA), LOBYTE(_WIN32_WINNT_VISTA), 0)) {
-        *major = 6;
-        *minor = 0;
-        *srvpack = 0;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_WINXP), LOBYTE(_WIN32_WINNT_WINXP), 3)) {
-        *major = 5;
-        *minor = 1;
-        *srvpack = 2;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_WINXP), LOBYTE(_WIN32_WINNT_WINXP), 1)) {
-        *major = 5;
-        *minor = 1;
-        *srvpack = 1;
-    } else if (GREATER(HIBYTE(_WIN32_WINNT_WINXP), LOBYTE(_WIN32_WINNT_WINXP), 0)) {
-        *major = 5;
-        *minor = 1;
-        *srvpack = 0;
-    } else {
-        *major = 0;
-        *minor = 0;
-        *srvpack = 0;
-    }
-}
+// GetWindowsVersionCUSTOM se omite: en C detecta la version via macros de
+// preprocesador (_WIN32_WINNT_*, HIBYTE/LOBYTE) resueltos en tiempo de
+// compilacion; no aplica en Vesta.  Usar GetVersionEx / RtlGetVersion en runtime.
 
 
 /* Thread creation flags: */
@@ -1532,7 +1482,10 @@ typedef struct _RECT {
 } RECT, *PRECT, *LPRECT;
 
 /* Window: */
-typedef LRESULT (CALLBACK *WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+// WNDPROC: en C es `LRESULT (CALLBACK *)(HWND, UINT, WPARAM, LPARAM)`.  En x64
+// la convencion CALLBACK (__stdcall) coincide con la unica ABI; se modela con
+// el puntero a funcion crudo de Vesta `cfn(...) -> R`.
+typedef cfn(HWND, UINT, WPARAM, LPARAM) -> LRESULT WNDPROC;
 typedef struct tagWNDCLASS {
     UINT        style;
     WNDPROC     lpfnWndProc;
@@ -1561,26 +1514,24 @@ typedef struct tagMSG {
     POINT       pt;
 } MSG, *PMSG, *LPMSG;
 
-PVOID GetCurrentFiber64(u16 lgid) {
+// GetCurrentFiber: el puntero al fibra actual vive en el TEB.  En x64 esta en
+// gs:[0x20]; en x86 en fs:[0x10].  Se seleccionan con @Target a nivel de
+// declaracion (la conmutacion condicional por arch es por-declaracion, no por
+// statement): se compila solo la definicion cuyo @Target casa con el objetivo.
+@Target("arch:x86_64")
+PVOID GetCurrentFiber() {
     asm volatile {
         mov rax, gs:[0x20]
         ret
     }
 }
 
-PVOID GetCurrentFiber32(u16 lgid) {
+@Target("arch:x86")
+PVOID GetCurrentFiber() {
     asm volatile {
         mov rax, fs:[0x10]
         ret
     }
-}
-
-PVOID GetCurrentFiber(u16 lgid) {
-    @target("arch:x86_64")
-    GetCurrentFiber64(lgid)
-
-    @target("arch:x86")
-    GetCurrentFiber32(lgid)
 }
 
 PVOID GetFiberData() {
@@ -1609,17 +1560,7 @@ const u16 ENABLE_VIRTUAL_TERMINAL_PROCESSING  = 0x0004;
 const u16 DISABLE_NEWLINE_AUTO_RETURN         = 0x0008;
 const u16 ENABLE_LVB_GRID_WORLDWIDE           = 0x0010;
 
-/* HeapAlloc, HeapReAlloc, etc: */
-const u32 HEAP_NO_SERIALIZE                   = 0x00000001;
-const u32 HEAP_ZERO_MEMORY                    = 0x00000008;
-const u32 HEAP_REALLOC_IN_PLACE_ONLY          = 0x00000010;
-
-/* Heap / Memory: */
-enum HEAP_INFORMATION_CLASS {
-    HeapCompatibilityInformation = 0,
-    HeapEneableTerminationOnCorruption = 1,
-    HeapOptimizeResources = 3
-};
+/* HeapAlloc flags y HEAP_INFORMATION_CLASS ya se definen arriba. */
 
 /* ========================================================================== */
 /* Pipe Functions: */
@@ -1735,39 +1676,11 @@ const u32 FILE_DEVICE_SVM                     = 0x00000063;
 const u32 FILE_DEVICE_HARDWARE_ACCELERATOR    = 0x00000064;
 const u32 FILE_DEVICE_I3C                     = 0x00000065;
 
-// TODO (v2+): move hid desc to libusb.h?
-struct libusb_hid_descriptor {
-	uint8_t bLength;
-	uint8_t bDescriptorType;
-	uint16_t bcdHID;
-	uint8_t bCountryCode;
-	uint8_t bNumDescriptors;
-	uint8_t bClassDescriptorType;
-	uint16_t wClassDescriptorLength;
-};
-const u8 LIBUSB_DT_HID_SIZE		               = 9;
-const u64 HID_MAX_CONFIG_DESC_SIZE             = (
-    LIBUSB_DT_CONFIG_SIZE                      + 
-    LIBUSB_DT_INTERFACE_SIZE                   + 
-    LIBUSB_DT_HID_SIZE                         + 
-    2 * LIBUSB_DT_ENDPOINT_SIZE
-);
+// (El descriptor HID de libusb y los helpers LIBUSB_REQ_* / LIBUSB_DT_* se
+//  omiten: son de libusb, no de la API Win32.)
 const u16 HID_MAX_REPORT_SIZE                  = 1024;
 const u16 HID_IN_EP                            = 0x81;
 const u16 HID_OUT_EP                           = 0x02;
-
-u64 LIBUSB_REQ_RECIPIENT(u64 request_type) {
-    return ((request_type) & 0x1F);
-}
-u64 LIBUSB_REQ_TYPE(u64 request_type) {
-    return ((request_type) & (0x03 << 5));
-}
-u64 LIBUSB_REQ_IN(u64 request_type) {
-    return ((request_type) & LIBUSB_ENDPOINT_IN);
-}
-u64 LIBUSB_REQ_OUT(u64 request_type) {
-    return (!LIBUSB_REQ_IN(request_type));
-}
 
 enum libusb_hid_request_type {
 	HID_REQ_GET_REPORT = 0x01,
@@ -1805,60 +1718,9 @@ const u32 SUB_API_WINUSB		= 2;
 const u32 SUB_API_MAX		    = 3;
 const char** WINUSBX_DRV_NAMES	= {"libusbK", "libusb0", "WinUSB"};
 
-struct windows_usb_api_backend {
-	const u8 id;
-	const char *designation;
-	const char **driver_name_list; // Driver name, without .sys, e.g. "usbccgp"
-	const u8 nb_driver_names;
-	int (*init)(
-        int sub_api, struct libusb_context *ctx
-    );
-	int (*exit)(
-        int sub_api
-    );
-	int (*open)(
-        int sub_api, struct libusb_device_handle *dev_handle
-    );
-	void (*close)(
-        int sub_api, struct libusb_device_handle *dev_handle
-    );
-	int (*configure_endpoints)(
-        int sub_api, struct libusb_device_handle *dev_handle, int iface
-    );
-	int (*claim_interface)(
-        int sub_api, struct libusb_device_handle *dev_handle, int iface
-    );
-	int (*set_interface_altsetting)(
-        int sub_api, struct libusb_device_handle *dev_handle, int iface, int altsetting
-    );
-	int (*release_interface)(
-        int sub_api, struct libusb_device_handle *dev_handle, int iface
-    );
-	int (*clear_halt)(
-        int sub_api, struct libusb_device_handle *dev_handle, unsigned char endpoint
-    );
-	int (*reset_device)(
-        int sub_api, struct libusb_device_handle *dev_handle
-    );
-	int (*submit_bulk_transfer)(
-        int sub_api, struct usbi_transfer *itransfer
-    );
-	int (*submit_iso_transfer)(
-        int sub_api, struct usbi_transfer *itransfer
-    );
-	int (*submit_control_transfer)(
-        int sub_api, struct usbi_transfer *itransfer
-    );
-	int (*abort_control)(
-        int sub_api, struct usbi_transfer *itransfer
-    );
-	int (*abort_transfers)(
-        int sub_api, struct usbi_transfer *itransfer
-    );
-	int (*copy_transfer_data)(
-        int sub_api, struct usbi_transfer *itransfer, uint32_t io_size
-    );
-};
+// El backend interno de libusb (struct windows_usb_api_backend con punteros
+// a funcion y tipos opacos struct libusb_context/device_handle/usbi_transfer)
+// se omite aqui: es interno de libusb, no parte de la API Win32.
 
 // Missing from MSVC6 setupapi.h
 const u32 SPDRP_ADDRESS              = 28;
@@ -1873,10 +1735,9 @@ const u32 MAX_KEY_LENGTH             = 256;
 const char LIST_SEPARATOR            = ';';
 
 // Handle code for HID interface that have been claimed ("dibs")
-const HANDLE INTERFACE_CLAIMED	= ((HANDLE)0xD1B5)
+const HANDLE INTERFACE_CLAIMED	= ((HANDLE)0xD1B5);
 
-// Additional return code for HID operations that completed synchronously
-const int LIBUSB_COMPLETED	    = LIBUSB_SUCCESS + 1;
+// (LIBUSB_COMPLETED se omite: es un codigo de retorno interno de libusb.)
 
 // http://msdn.microsoft.com/en-us/library/ff545978.aspx
 // http://msdn.microsoft.com/en-us/library/ff545972.aspx
@@ -1921,7 +1782,7 @@ enum libusb_endpoint_direction {
 	LIBUSB_ENDPOINT_OUT = 0x00
 };
 
-const u32 LIBUSB_TRANSFER_TYPE_MASK			= 0x03    /* in bmAttributes */
+const u32 LIBUSB_TRANSFER_TYPE_MASK			= 0x03;   /* in bmAttributes */
 
 /** \ingroup desc
  * Endpoint transfer type. Values for bits 0:1 of the
@@ -2043,22 +1904,24 @@ const u32 LIBUSB_ISO_USAGE_TYPE_MASK = 0x30;
 
 const u32 CR_SUCCESS				                = 0x00000000;
 const u32 CR_NO_SUCH_DEVNODE			            = 0x0000000D;
-const u32 USB_DEVICE_DESCRIPTOR_TYPE		        = LIBUSB_DT_DEVICE;
-const u32 USB_CONFIGURATION_DESCRIPTOR_TYPE	        = LIBUSB_DT_CONFIG;
-const u32 USB_STRING_DESCRIPTOR_TYPE		        = LIBUSB_DT_STRING;
-const u32 USB_INTERFACE_DESCRIPTOR_TYPE		        = LIBUSB_DT_INTERFACE;
-const u32 USB_ENDPOINT_DESCRIPTOR_TYPE		        = LIBUSB_DT_ENDPOINT;
-const u32 USB_REQUEST_GET_STATUS			        = LIBUSB_REQUEST_GET_STATUS;
-const u32 USB_REQUEST_CLEAR_FEATURE			        = LIBUSB_REQUEST_CLEAR_FEATURE;
-const u32 USB_REQUEST_SET_FEATURE			        = LIBUSB_REQUEST_SET_FEATURE;
-const u32 USB_REQUEST_SET_ADDRESS			        = LIBUSB_REQUEST_SET_ADDRESS;
-const u32 USB_REQUEST_GET_DESCRIPTOR		        = LIBUSB_REQUEST_GET_DESCRIPTOR;
-const u32 USB_REQUEST_SET_DESCRIPTOR		        = LIBUSB_REQUEST_SET_DESCRIPTOR;
-const u32 USB_REQUEST_GET_CONFIGURATION		        = LIBUSB_REQUEST_GET_CONFIGURATION;
-const u32 USB_REQUEST_SET_CONFIGURATION		        = LIBUSB_REQUEST_SET_CONFIGURATION;
-const u32 USB_REQUEST_GET_INTERFACE			        = LIBUSB_REQUEST_GET_INTERFACE;
-const u32 USB_REQUEST_SET_INTERFACE			        = LIBUSB_REQUEST_SET_INTERFACE;
-const u32 USB_REQUEST_SYNC_FRAME			        = LIBUSB_REQUEST_SYNCH_FRAME;
+// Tipos de descriptor y peticiones USB estandar (usbspec.h); los valores son
+// los del estandar USB (identicos a los LIBUSB_DT_*/LIBUSB_REQUEST_* de libusb).
+const u32 USB_DEVICE_DESCRIPTOR_TYPE		        = 0x01;
+const u32 USB_CONFIGURATION_DESCRIPTOR_TYPE	        = 0x02;
+const u32 USB_STRING_DESCRIPTOR_TYPE		        = 0x03;
+const u32 USB_INTERFACE_DESCRIPTOR_TYPE		        = 0x04;
+const u32 USB_ENDPOINT_DESCRIPTOR_TYPE		        = 0x05;
+const u32 USB_REQUEST_GET_STATUS			        = 0x00;
+const u32 USB_REQUEST_CLEAR_FEATURE			        = 0x01;
+const u32 USB_REQUEST_SET_FEATURE			        = 0x03;
+const u32 USB_REQUEST_SET_ADDRESS			        = 0x05;
+const u32 USB_REQUEST_GET_DESCRIPTOR		        = 0x06;
+const u32 USB_REQUEST_SET_DESCRIPTOR		        = 0x07;
+const u32 USB_REQUEST_GET_CONFIGURATION		        = 0x08;
+const u32 USB_REQUEST_SET_CONFIGURATION		        = 0x09;
+const u32 USB_REQUEST_GET_INTERFACE			        = 0x0A;
+const u32 USB_REQUEST_SET_INTERFACE			        = 0x0B;
+const u32 USB_REQUEST_SYNC_FRAME			        = 0x0C;
 const u32 USB_GET_NODE_INFORMATION			        = 258;
 const u32 USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION	= 260;
 const u32 USB_GET_NODE_CONNECTION_NAME		        = 261;
@@ -2066,8 +1929,14 @@ const u32 USB_GET_HUB_CAPABILITIES			        = 271;
 const u32 USB_GET_NODE_CONNECTION_INFORMATION_EX	= 274;
 const u32 USB_GET_HUB_CAPABILITIES_EX		        = 276;
 const u32 USB_GET_NODE_CONNECTION_INFORMATION_EX_V2	= 279;
+const u32 USB_GET_NODE_CONNECTION_ATTRIBUTES        = 272;
+const u32 HCD_GET_ROOT_HUB_NAME                     = 258;
 
+// winioctl.h: metodos de transferencia + acceso de DeviceIoControl.
 const u32 METHOD_BUFFERED				            = 0;
+const u32 METHOD_IN_DIRECT                          = 1;
+const u32 METHOD_OUT_DIRECT                         = 2;
+const u32 METHOD_NEITHER                            = 3;
 const u32 FILE_ANY_ACCESS				            = 0x00000000;
 const u32 FILE_DEVICE_USB				            = FILE_DEVICE_UNKNOWN;
 
@@ -2088,30 +1957,19 @@ typedef enum USB_HUB_NODE {
 } USB_HUB_NODE;
 
 
-const u64 CTL_CODE(DeviceType, Function, Method, Access) {
-    return (
-        ((DeviceType)   << 16) | 
-        ((Access)       << 14) | 
-        ((Function)     << 2)  | 
-        (Method)
-    )
+// CTL_CODE: en C es un macro que compone un codigo de DeviceIoControl.  Aqui
+// se modela como funcion comptime (se pliega a constante en cada uso).
+comptime u64 CTL_CODE(u64 DeviceType, u64 Function, u64 Method, u64 Access) {
+    return ((DeviceType) << 16) | ((Access) << 14) | ((Function) << 2) | (Method);
 }
 
-const u64 FSCTL_READ_FILE_USN_DATA(DeviceType, Function, Method, Access) {
-    return CTL_CODE(
-        FILE_DEVICE_FILE_SYSTEM, 58,  METHOD_NEITHER,  FILE_ANY_ACCESS
-    );
-}
-const u64 FSCTL_QUERY_USN_JOURNAL(DeviceType, Function, Method, Access) {
-    return CTL_CODE(
-        FILE_DEVICE_FILE_SYSTEM, 61,  METHOD_BUFFERED, FILE_ANY_ACCESS
-    );
-}
-const u64 FSCTL_READ_UNPRIVILEGED_USN_JOURNAL(DeviceType, Function, Method, Access) {
-    return CTL_CODE(
-        FILE_DEVICE_FILE_SYSTEM, 234, METHOD_NEITHER,  FILE_ANY_ACCESS
-    );
-}
+// FSCTL_*: en C son macros CONSTANTES (sin parametros); cada uno fija su codigo.
+const u64 FSCTL_READ_FILE_USN_DATA =
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 58,  METHOD_NEITHER,  FILE_ANY_ACCESS);
+const u64 FSCTL_QUERY_USN_JOURNAL =
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 61,  METHOD_BUFFERED, FILE_ANY_ACCESS);
+const u64 FSCTL_READ_UNPRIVILEGED_USN_JOURNAL =
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 234, METHOD_NEITHER,  FILE_ANY_ACCESS);
 
 const u64 IOCTL_USB_GET_HUB_CAPABILITIES_EX                = CTL_CODE(
     FILE_DEVICE_USB,
@@ -2168,24 +2026,25 @@ const u64 IOCTL_USB_GET_NODE_CONNECTION_NAME               = CTL_CODE(
     FILE_ANY_ACCESS
 );
 
-// The following are used for HID reports IOCTLs
-const u64 HID_CTL_CODE(id) = CTL_CODE(
-    FILE_DEVICE_KEYBOARD, (id), METHOD_NEITHER, FILE_ANY_ACCESS
-);
-const u64 HID_BUFFER_CTL_CODE(id) = CTL_CODE(
-    FILE_DEVICE_KEYBOARD, (id), METHOD_BUFFERED, FILE_ANY_ACCESS
-);
-const u64 HID_IN_CTL_CODE(id) = CTL_CODE (
-    FILE_DEVICE_KEYBOARD, (id), METHOD_IN_DIRECT, FILE_ANY_ACCESS
-);
-const u64 HID_OUT_CTL_CODE(id) = CTL_CODE (
-    FILE_DEVICE_KEYBOARD, (id), METHOD_OUT_DIRECT, FILE_ANY_ACCESS
-);
+// HID report IOCTLs: en C son macros parametrizados `HID_*_CTL_CODE(id)`; aqui
+// funciones comptime que se pliegan en cada uso.
+comptime u64 HID_CTL_CODE(u64 id) {
+    return CTL_CODE(FILE_DEVICE_KEYBOARD, id, METHOD_NEITHER, FILE_ANY_ACCESS);
+}
+comptime u64 HID_BUFFER_CTL_CODE(u64 id) {
+    return CTL_CODE(FILE_DEVICE_KEYBOARD, id, METHOD_BUFFERED, FILE_ANY_ACCESS);
+}
+comptime u64 HID_IN_CTL_CODE(u64 id) {
+    return CTL_CODE(FILE_DEVICE_KEYBOARD, id, METHOD_IN_DIRECT, FILE_ANY_ACCESS);
+}
+comptime u64 HID_OUT_CTL_CODE(u64 id) {
+    return CTL_CODE(FILE_DEVICE_KEYBOARD, id, METHOD_OUT_DIRECT, FILE_ANY_ACCESS);
+}
 
-const u64 IOCTL_HID_GET_FEATURE                   = HID_OUT_CTL_CODE(100)
-const u64 IOCTL_HID_GET_INPUT_REPORT              = HID_OUT_CTL_CODE(104)
-const u64 IOCTL_HID_SET_FEATURE                   = HID_IN_CTL_CODE(100)
-const u64 IOCTL_HID_SET_OUTPUT_REPORT             = HID_IN_CTL_CODE(101)
+const u64 IOCTL_HID_GET_FEATURE                   = HID_OUT_CTL_CODE(100);
+const u64 IOCTL_HID_GET_INPUT_REPORT              = HID_OUT_CTL_CODE(104);
+const u64 IOCTL_HID_SET_FEATURE                   = HID_IN_CTL_CODE(100);
+const u64 IOCTL_HID_SET_OUTPUT_REPORT             = HID_IN_CTL_CODE(101);
 
 
 /* USN Reasons: */
@@ -2215,6 +2074,34 @@ const u32 USN_REASON_CLOSE                        = 0x80000000;
 const u32 FIND_FIRST_EX_CASE_SENSITIVE            = 0x00000001;
 const u32 FIND_FIRST_EX_LARGE_FETCH               = 0x00000002;
 const u32 FIND_FIRST_EX_ON_DISK_ENTRIES_ONLY      = 0x00000004;
+
+typedef struct USB_DEVICE_DESCRIPTOR {
+	UCHAR  bLength;
+	UCHAR  bDescriptorType;
+	USHORT bcdUSB;
+	UCHAR  bDeviceClass;
+	UCHAR  bDeviceSubClass;
+	UCHAR  bDeviceProtocol;
+	UCHAR  bMaxPacketSize0;
+	USHORT idVendor;
+	USHORT idProduct;
+	USHORT bcdDevice;
+	UCHAR  iManufacturer;
+	UCHAR  iProduct;
+	UCHAR  iSerialNumber;
+	UCHAR  bNumConfigurations;
+} USB_DEVICE_DESCRIPTOR, *PUSB_DEVICE_DESCRIPTOR;
+
+typedef struct USB_CONFIGURATION_DESCRIPTOR {
+	UCHAR  bLength;
+	UCHAR  bDescriptorType;
+	USHORT wTotalLength;
+	UCHAR  bNumInterfaces;
+	UCHAR  bConfigurationValue;
+	UCHAR  iConfiguration;
+	UCHAR  bmAttributes;
+	UCHAR  MaxPower;
+} USB_CONFIGURATION_DESCRIPTOR, *PUSB_CONFIGURATION_DESCRIPTOR;
 
 typedef struct USB_INTERFACE_DESCRIPTOR {
 	UCHAR bLength;
@@ -2376,7 +2263,7 @@ const u8 LowSpeed                                 = 0x01;
 const u8 FullSpeed                                = 0x02;
 const u8 HighSpeed                                = 0x03;
 
-enum USBD_PIPE_TYPE {
+enum USBD_PIPE_TYPE : u32 {
 	UsbdPipeTypeControl,
 	UsbdPipeTypeIsochronous,
 	UsbdPipeTypeBulk,
@@ -2742,8 +2629,8 @@ const u32 FILE_FLAG_OPEN_REPARSE_POINT                   = 0x00200000;
 const u32 FILE_FLAG_OPEN_NO_RECALL                       = 0x00100000;
 const u32 FILE_FLAG_FIRST_PIPE_INSTANCE                  = 0x00080000;
 
-bool HasOverlappedIoCompleted(DWORD lpOverlapped) {
-    return (((DWORD)(lpOverlapped)->Internal) != STATUS_PENDING);
+bool HasOverlappedIoCompleted(LPOVERLAPPED lpOverlapped) {
+    return ((*lpOverlapped).Internal != (ULONG_PTR)STATUS_PENDING);
 }
 
 

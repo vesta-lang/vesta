@@ -1456,6 +1456,15 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         apply_pending_visibility(n.get());
         return n;
     }
+    // struct C-tagless: `struct { ... } Name, *PName;` (nombre al final, sin
+    // `typedef`).  Se trata igual que `typedef struct { ... } Name;`.
+    if ((current_.kind == TokenKind::KW_STRUCT ||
+         current_.kind == TokenKind::KW_UNION) &&
+        lex_.peek_at(0).kind == TokenKind::LBRACE) {
+        auto n = parse_typedef_struct_or_enum(/*leading_typedef=*/false);
+        apply_pending_visibility(n.get());
+        return n;
+    }
     // struct <nombre> { ... }
     if (current_.kind == TokenKind::KW_STRUCT) {
         auto sd = parse_struct_decl(top_is_overlay);
@@ -2800,6 +2809,8 @@ std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
             synchronize();
             continue;
         }
+        // Clon del tipo BASE para el multi-declarador C `T a, b, c;`.
+        auto anon_base_clone = clone_type_node_td_(f.type.get());
         f.name = consume().lexeme;
         if (current_.kind == TokenKind::LBRACKET)
             f.type = wrap_c_array_dims_(std::move(f.type));
@@ -2810,9 +2821,31 @@ std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
                 (void)consume();
             }
         }
+        s->fields.push_back(std::move(f));
+        // Multi-declarador C `T a, b, c;` dentro del agregado anonimo inline.
+        while (current_.kind == TokenKind::COMMA) {
+            (void)consume(); // ','
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba el nombre del campo tras ','");
+                break;
+            }
+            ast::StructFieldDecl g;
+            g.loc = current_.loc;
+            g.type = clone_type_node_td_(anon_base_clone.get());
+            g.name = consume().lexeme;
+            if (current_.kind == TokenKind::LBRACKET)
+                g.type = wrap_c_array_dims_(std::move(g.type));
+            if (current_.kind == TokenKind::COLON) {
+                (void)consume();
+                if (current_.kind == TokenKind::INT_LIT) {
+                    g.bit_width = (uint8_t)current_.int_val;
+                    (void)consume();
+                }
+            }
+            s->fields.push_back(std::move(g));
+        }
         (void)expect(TokenKind::SEMICOLON,
                      "se esperaba ';' al final del campo");
-        s->fields.push_back(std::move(f));
     }
     (void)expect(TokenKind::RBRACE,
                  "se esperaba '}' al cerrar el agregado anonimo");
@@ -2881,22 +2914,56 @@ void Parser::parse_c_typedef_ptr_aliases_(const ast::TypeNode *base) {
     }
 }
 
-std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
+std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum(
+    bool leading_typedef) {
     // Sintaxis C: `typedef struct { ... } Name;` y
     // `typedef enum { ... } Name;`.  Tag opcional tras struct/enum:
     // `typedef struct Tag { ... } Name;` (Tag se ignora; usamos Name).
+    // Cuando leading_typedef=false se acepta la forma sin la palabra `typedef`:
+    // `struct { ... } Name, *PName;` (struct C-tagless con el nombre al final).
     const SourceLoc loc_td = current_.loc;
-    (void)consume(); // 'typedef'
+    if (leading_typedef) (void)consume(); // 'typedef'
 
     const bool is_union = (current_.kind == TokenKind::KW_UNION);
     const bool is_struct =
         (current_.kind == TokenKind::KW_STRUCT) || is_union;
+    const bool is_enum = !is_struct;
     (void)consume(); // 'struct' / 'union' / 'enum'
 
-    // Tag opcional (ignorado; el name real va al final).
+    // Tag opcional (ignorado; el name real va al final).  En un enum C-style
+    // el tag puede ir seguido de `{` o de `:` (tipo base): `typedef enum Tag :
+    // int { ... } Name;`.
     if (current_.kind == TokenKind::IDENTIFIER &&
-        lex_.peek_at(0).kind == TokenKind::LBRACE) {
+        (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+         (is_enum && lex_.peek_at(0).kind == TokenKind::COLON))) {
         (void)consume(); // skip tag
+    }
+
+    // Tipo base opcional del enum C-style: `typedef enum : u8 { ... } Name;`.
+    // Si no se especifica un `: tipo`, el enum sigue siendo un conjunto de
+    // constantes enteras (NO una tagged union), pero su ancho se INFIERE del
+    // rango de valores en el type checker (marca c_style_auto_backing), imitando
+    // C: `int`/i32 si todo cabe, ensanchando a u32/i64/u64 si algun valor no
+    // cabe.  Esto evita el desbordamiento silencioso de fijar i32 (p.ej. valores
+    // 0xFFFFFFFF o de 64 bits).
+    std::string enum_backing;
+    bool enum_auto_backing = false;
+    if (is_enum) {
+        if (current_.kind == TokenKind::COLON) {
+            (void)consume(); // ':'
+            auto bt = parse_type_node();
+            if (bt && bt->kind == ast::NodeKind::PrimitiveTypeNode) {
+                auto *pt = static_cast<ast::PrimitiveTypeNode *>(bt.get());
+                enum_backing = primitive_name(pt->prim);
+            } else if (bt && bt->kind == ast::NodeKind::NamedTypeNode) {
+                enum_backing = static_cast<ast::NamedTypeNode *>(bt.get())->name;
+            } else {
+                error_here("el tipo base de un enum debe ser un entero "
+                           "(u8/.../i64)");
+            }
+        } else {
+            enum_auto_backing = true;
+        }
     }
 
     if (current_.kind != TokenKind::LBRACE) {
@@ -2972,6 +3039,8 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
                 synchronize();
                 continue;
             }
+            // Clon del tipo BASE para el multi-declarador C `T a, b, c;`.
+            auto base_type_clone = clone_type_node_td_(f.type.get());
             f.name = consume().lexeme;
             // Array C-style `T name[N][M]` (uni/multidimensional).
             if (current_.kind == TokenKind::LBRACKET) {
@@ -2984,9 +3053,32 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
                     (void)consume();
                 }
             }
+            s->fields.push_back(std::move(f));
+            // Multi-declarador C `T a, b, c;` en el cuerpo del typedef struct.
+            while (current_.kind == TokenKind::COMMA) {
+                (void)consume(); // ','
+                if (current_.kind != TokenKind::IDENTIFIER) {
+                    error_here("se esperaba el nombre del campo tras ','");
+                    break;
+                }
+                ast::StructFieldDecl g;
+                g.loc = current_.loc;
+                g.type = clone_type_node_td_(base_type_clone.get());
+                g.name = consume().lexeme;
+                if (current_.kind == TokenKind::LBRACKET) {
+                    g.type = wrap_c_array_dims_(std::move(g.type));
+                }
+                if (current_.kind == TokenKind::COLON) {
+                    (void)consume();
+                    if (current_.kind == TokenKind::INT_LIT) {
+                        g.bit_width = (uint8_t)current_.int_val;
+                        (void)consume();
+                    }
+                }
+                s->fields.push_back(std::move(g));
+            }
             (void)expect(TokenKind::SEMICOLON,
                          "se esperaba ';' al final del campo");
-            s->fields.push_back(std::move(f));
         }
         (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
         if (current_.kind != TokenKind::IDENTIFIER) {
@@ -3008,6 +3100,8 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
     // typedef enum { ... } Name;
     auto e = std::make_unique<ast::EnumDecl>();
     e->loc = loc_td;
+    e->backing_type = enum_backing;             // vacio si se infiere.
+    e->c_style_auto_backing = enum_auto_backing; // C-style: infiere el ancho.
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
         ast::EnumVariantDecl v;
@@ -3029,6 +3123,11 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar payload");
+        } else if (current_.kind == TokenKind::ASSIGN) {
+            // C-style: valor entero explicito `A = 0x01`.  El checker lo pliega
+            // a constante del tipo base y auto-incrementa los siguientes.
+            (void)consume(); // '='
+            v.value_expr = parse_expr();
         }
         e->variants.push_back(std::move(v));
         if (!match(TokenKind::COMMA)) break;
@@ -3899,6 +3998,19 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
         if (!match(TokenKind::COMMA)) break;
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el enum");
+    // C-style directo `enum Name { A = 0, B }` (sin `: tipo`, sin payloads):
+    // si alguna variante lleva valor entero explicito, es un enum de valores
+    // (no una tagged union).  Se marca c_style_auto_backing para que el checker
+    // infiera el ancho del backing (i32/u32/i64) igual que en `typedef enum`.
+    // Un `enum Color { Red, Green }` SIN valores sigue siendo ADT.
+    if (e->backing_type.empty() && e->type_params.empty()) {
+        bool any_value = false, any_payload = false;
+        for (const auto &v : e->variants) {
+            if (v.value_expr) any_value = true;
+            if (!v.field_types.empty()) any_payload = true;
+        }
+        if (any_value && !any_payload) e->c_style_auto_backing = true;
+    }
     return e;
 }
 
@@ -4327,6 +4439,9 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // Campo.  Reusa el manejo de bit fields del codigo previo.
         ast::StructFieldDecl f;
         f.loc = mloc;
+        // Clon del tipo BASE (sin dims de array) para el multi-declarador C
+        // `T a, b, c;`: cada declarador extra reutiliza el mismo tipo base.
+        auto base_type_clone = clone_type_node_td_(type_node.get());
         f.type = std::move(type_node);
         f.name = std::move(member_name);
         // Overlay F3b ARRAY: `T Name[count] ...`.  El `[count]` va tras el
@@ -4445,9 +4560,46 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             (void)consume(); // '='
             f.default_init = parse_expr();
         }
+        s->fields.push_back(std::move(f));
+        // Multi-declarador C `T a, b, c;`: cada declarador extra reutiliza el
+        // tipo BASE (clon), con sus propias dims de array y bit-width opcionales.
+        while (current_.kind == TokenKind::COMMA) {
+            (void)consume(); // ','
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba el nombre del campo tras ','");
+                break;
+            }
+            ast::StructFieldDecl g;
+            g.loc = current_.loc;
+            g.type = clone_type_node_td_(base_type_clone.get());
+            g.name = consume().lexeme;
+            // Array C-style por-declarador: `T a, b[4];`.
+            if (current_.kind == TokenKind::LBRACKET) {
+                g.type = wrap_c_array_dims_(std::move(g.type));
+            }
+            // Bit-width por-declarador: `u32 a : 3, b : 5;`.
+            if (current_.kind == TokenKind::COLON) {
+                (void)consume();
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("se esperaba un literal entero tras ':' (bit width)");
+                } else {
+                    const int64_t w = (int64_t)current_.int_val;
+                    if (w <= 0 || w > 64)
+                        error_here("bit width debe estar en rango 1..64");
+                    else
+                        g.bit_width = (uint8_t)w;
+                    (void)consume();
+                }
+            }
+            // Valor por defecto por-declarador: `T a, b = 0;`.
+            if (current_.kind == TokenKind::ASSIGN) {
+                (void)consume();
+                g.default_init = parse_expr();
+            }
+            s->fields.push_back(std::move(g));
+        }
         (void)expect(TokenKind::SEMICOLON,
                      "se esperaba ';' al final del campo");
-        s->fields.push_back(std::move(f));
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
     return s;
