@@ -267,6 +267,80 @@ void ModuleGraph::set_stdlib_dir(const std::string &dir) {
 }
 
 // ---------------------------------------------------------------------------
+// collect_expr_param_fns_: recorre las decls de un modulo (recursivo dentro de
+// NamespaceDecl) y anota, por cada FunctionDecl con params @c expr, el mapa
+// `nombre -> [posiciones]`.  Usado para sembrar el parser de los modulos que
+// importan estas funciones (cross-module expr-capture).  Reusa el AST YA
+// parseado del dep; no re-parsea nada.
+// ---------------------------------------------------------------------------
+static void
+collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
+                        std::unordered_map<std::string, std::vector<int>> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::FunctionDecl) {
+            auto *fd = static_cast<ast::FunctionDecl *>(d.get());
+            std::vector<int> pos;
+            for (size_t i = 0; i < fd->params.size(); ++i) {
+                if (fd->params[i] && fd->params[i]->is_expr_capture)
+                    pos.push_back(static_cast<int>(i));
+            }
+            if (!pos.empty()) out[fd->name] = std::move(pos);
+        } else if (d->kind == ast::NodeKind::NamespaceDecl) {
+            collect_expr_param_fns_(
+                static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// scan_import_paths_: escaneo BARATO (solo lex, sin parse) de las sentencias
+// `import` de un fichero.  Devuelve (path, by_namespace) por cada import.
+// Permite resolver los deps ANTES de parsear el cuerpo del modulo, para
+// sembrar los params @c expr de las fns importadas.  Cubre `import a.b.c;`,
+// `import "path";`, `public import ...;` y la forma selectiva `a.b.{...}`.
+// ---------------------------------------------------------------------------
+static std::vector<std::pair<std::string, bool>>
+scan_import_paths_(const std::string &source) {
+    std::vector<std::pair<std::string, bool>> out;
+    Diagnostics tmp; // sumidero desechable: no reportamos errores de lex aqui
+    Lexer lex(source, "<import-scan>", tmp);
+    Token t = lex.next();
+    while (t.kind != TokenKind::END_OF_FILE) {
+        if (t.kind == TokenKind::KW_IMPORT) {
+            Token nxt = lex.next();
+            if (nxt.kind == TokenKind::STRING_LIT ||
+                nxt.kind == TokenKind::RAW_STRING_LIT) {
+                out.emplace_back(nxt.str_val, /*by_namespace=*/false);
+                t = lex.next();
+                continue;
+            }
+            if (nxt.kind == TokenKind::IDENTIFIER) {
+                std::string ns = nxt.lexeme;
+                t = lex.next();
+                // path punteado a.b.c; parar en `.{` (lista selectiva).
+                while (t.kind == TokenKind::DOT) {
+                    Token after = lex.next();
+                    if (after.kind != TokenKind::IDENTIFIER) {
+                        t = after; // `.{...}` o error: cerrar el path
+                        break;
+                    }
+                    ns += ".";
+                    ns += after.lexeme;
+                    t = lex.next();
+                }
+                out.emplace_back(std::move(ns), /*by_namespace=*/true);
+                continue;
+            }
+            t = nxt;
+            continue;
+        }
+        t = lex.next();
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Carga + parse de un modulo.  Crea ResolvedModule, computa hashes,
 // invoca lex + parse.  No procesa las deps todavia (eso lo hace
 // process_dependencies_ tras añadir el modulo al graph).
@@ -334,10 +408,37 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     by_path_hash_.emplace(path_hash, id);
     modules_.push_back(std::move(mod));
 
+    // Cross-module expr-capture: ANTES de parsear el cuerpo, resolver los
+    // imports (barato: solo lex) y cargar los deps para conocer sus fns con
+    // param @c expr.  El parser las necesita para capturar el texto crudo del
+    // argumento en vez de parsearlo como expresion (un `source(asm ...)`
+    // importado no parsearia).  load_and_parse_ DEDUPLICA (by_path_hash_) ->
+    // cada modulo se parsea UNA sola vez: reusa la cache de parseo, no
+    // re-parsea.  Coste en el caso comun (imports sin fns expr) = un lookup
+    // por dep.  La entrada de ESTE modulo ya esta reservada (id arriba), asi
+    // que un ciclo de imports se corta por el dedup.
+    std::unordered_map<std::string, std::vector<int>> imported_expr_params;
+    {
+        const auto scanned = scan_import_paths_(source);
+        for (const auto &ip : scanned) {
+            ResolveResult r = ip.second
+                                  ? resolve_namespace_(ip.first, canonical_path)
+                                  : resolve(ip.first, canonical_path);
+            if (r.status != ResolveResult::Status::OK) continue;
+            if (r.module_id >= modules_.size()) continue;
+            ResolvedModule *dep = modules_[r.module_id].get();
+            if (dep && dep->parsed_ast)
+                collect_expr_param_fns_(dep->parsed_ast->decls,
+                                        imported_expr_params);
+        }
+    }
+
     // Lex + parse.  Cada modulo reusa el mismo Diagnostics del graph para
     // que los errores aparezcan agregados al final del build.
     Lexer lexer(source, canonical_path, diags_);
     Parser parser(lexer, diags_);
+    if (!imported_expr_params.empty())
+        parser.seed_imported_expr_params(imported_expr_params);
     auto ast = parser.parse_program();
     if (!ast) {
         SourceLoc l;

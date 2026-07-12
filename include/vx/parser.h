@@ -99,6 +99,25 @@ class Parser {
     }
 
     /**
+     * @brief Siembra las posiciones de params @c expr de funciones IMPORTADAS
+     * de otros modulos, ANTES de parsear.
+     *
+     * Cross-module expr-capture: el raw-text slicing de un arg @c expr es una
+     * decision de PARSEO (el arg puede no ser una expresion valida, p.ej. un
+     * bloque @c asm).  Para una fn importada (`source(expr code)` de otro
+     * modulo) el parser no conoceria su firma a tiempo.  El @c ModuleGraph
+     * resuelve los imports ANTES de parsear el cuerpo (reusando el AST ya
+     * parseado del dep -- sin re-parseo) y siembra aqui `nombre -> posiciones`.
+     * No sobreescribe las fns declaradas en ESTE fichero (esas se registran
+     * durante el parseo).  Idempotente.
+     */
+    void seed_imported_expr_params(
+        const std::unordered_map<std::string, std::vector<int>> &m) {
+        for (const auto &kv : m)
+            macro_expr_params_.emplace(kv.first, kv.second);
+    }
+
+    /**
      * @brief Parsea el programa completo desde el cursor actual del lexer.
      *
      * @return Un ModuleNode con todas las declaraciones top-level encontradas.
