@@ -347,7 +347,8 @@ class Parser {
 
     std::unique_ptr<ast::BlockStmt> parse_block();
     std::unique_ptr<ast::Stmt> parse_statement();
-    std::unique_ptr<ast::Stmt> parse_var_decl_stmt(bool is_const);
+    std::unique_ptr<ast::Stmt> parse_var_decl_stmt(bool is_const,
+                                                   bool from_comptime = false);
     std::unique_ptr<ast::Stmt> parse_if_stmt();
     std::unique_ptr<ast::Stmt> parse_while_stmt();
     std::unique_ptr<ast::Stmt> parse_do_while_stmt();
@@ -506,6 +507,16 @@ class Parser {
     /// current_ es 'struct'/'union' y el siguiente token (tras un tag opcional)
     /// es '{'.
     std::unique_ptr<ast::StructDecl> parse_inline_anon_aggregate_();
+
+    /// Declarador de PUNTERO A FUNCION estilo C: `R (*name)(params)`.  Tras
+    /// parsear el tipo de retorno @c ret, si en la posicion actual hay
+    /// `( * IDENT ) ( params )`, lo parsea: devuelve true, escribe el nombre en
+    /// @c out_name y un @c FunctionTypeNode (is_raw = cfn, 8 bytes) en
+    /// @c out_type.  Si no coincide el patron, devuelve false sin consumir.
+    /// Cubre campos/typedefs/params/vars de headers C (`int (*cb)(void*)`).
+    bool try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
+                               std::string &out_name,
+                               std::unique_ptr<ast::TypeNode> &out_type);
 
     /// Nombres de @c struct declarados (single-pass, antes de su uso).  Lo
     /// consulta @c looks_like_compound_literal para distinguir un compound

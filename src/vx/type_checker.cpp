@@ -2691,6 +2691,14 @@ void TypeChecker::collect_globals() {
                 // pase) emitimos error de orden de declaracion.
                 uint32_t fsize = (uint32_t)primitive_size_bytes(ft.kind);
                 uint32_t falign = fsize;
+                // Tipos funcion en un campo: cfn (`fn_is_raw`) = 1 puntero (8
+                // bytes); fn (lambda fat) = par (fn_addr, env) = 16 bytes.  En
+                // ambos casos la ALINEACION es 8 (punteros), no 16.  Sin esto un
+                // campo `R (*f)(...)`/`cfn(...)->R` inflaba el struct.
+                if (ft.kind == PrimitiveKind::FUNCTION) {
+                    fsize = ft.fn_is_raw ? 8 : 16;
+                    falign = 8;
+                }
                 if (ft.kind == PrimitiveKind::STRUCT) {
                     auto it = struct_layouts_.find(ft.struct_name);
                     if (it == struct_layouts_.end()) {

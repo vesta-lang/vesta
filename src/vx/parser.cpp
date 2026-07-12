@@ -1984,6 +1984,16 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = current_.loc;
     p->type = parse_type_node();
+    // Parametro puntero a funcion estilo C: `R (*name)(params)`.
+    {
+        std::string fp_name;
+        std::unique_ptr<ast::TypeNode> fp_type;
+        if (try_parse_c_func_ptr_(p->type, fp_name, fp_type)) {
+            p->type = std::move(fp_type);
+            p->name = std::move(fp_name);
+            return p;
+        }
+    }
     // Parametro VARIADICO: `T... name`.  El `...` tras el tipo del elemento
     // marca el param como rest (debe ser el ultimo; la validacion de posicion
     // la hace el type checker).  El callee lo recibe como `T*` + un count
@@ -2661,6 +2671,60 @@ static const ast::TypeNode *strip_pointers_td_(const ast::TypeNode *t) {
     return t;
 }
 
+bool Parser::try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
+                                   std::string &out_name,
+                                   std::unique_ptr<ast::TypeNode> &out_type) {
+    // Patron: `( '*'+ IDENT ) (`.  Lookahead sin consumir hasta confirmarlo.
+    if (current_.kind != TokenKind::LPAREN) return false;
+    Lexer &ml = const_cast<Lexer &>(lex_);
+    size_t off = 0;
+    int stars = 0;
+    while (ml.peek_at(off).kind == TokenKind::STAR) {
+        ++off;
+        ++stars;
+    }
+    if (stars == 0) return false; // `(algo` que no empieza por '*' no es func-ptr
+    if (ml.peek_at(off).kind != TokenKind::IDENTIFIER) return false;
+    ++off; // el nombre
+    if (ml.peek_at(off).kind != TokenKind::RPAREN) return false;
+    ++off; // ')'
+    if (ml.peek_at(off).kind != TokenKind::LPAREN) return false; // '(' de params
+    // Confirmado.  Consumir: '(' '*'... IDENT ')'.
+    (void)consume(); // '('
+    for (int i = 0; i < stars; ++i) (void)consume(); // '*'...
+    out_name = consume().lexeme;                      // nombre
+    (void)expect(TokenKind::RPAREN,
+                 "se esperaba ')' en el declarador de puntero a funcion");
+    (void)expect(TokenKind::LPAREN,
+                 "se esperaba '(' con los parametros del puntero a funcion");
+    auto fn = std::make_unique<ast::FunctionTypeNode>();
+    fn->loc = ret ? ret->loc : SourceLoc{};
+    fn->is_raw = true; // puntero a funcion crudo (cfn, 8 bytes)
+    fn->return_type = std::move(ret);
+    // Lista de parametros: tipos separados por coma.  Aceptamos `void` solo
+    // (C: sin parametros) descartandolo.  Nombres de parametro opcionales
+    // (estilo C `R (*f)(int a, int b)`) se ignoran.
+    if (!(current_.kind == TokenKind::KW_VOID &&
+          ml.peek_at(0).kind == TokenKind::RPAREN)) {
+        while (current_.kind != TokenKind::RPAREN &&
+               current_.kind != TokenKind::END_OF_FILE) {
+            auto pt = parse_type_node();
+            if (!pt) break;
+            // Nombre de parametro opcional (se descarta).
+            if (current_.kind == TokenKind::IDENTIFIER) (void)consume();
+            fn->param_types.push_back(std::move(pt));
+            if (!match(TokenKind::COMMA)) break;
+        }
+    } else {
+        (void)consume(); // 'void'
+    }
+    (void)expect(TokenKind::RPAREN,
+                 "se esperaba ')' al cerrar los parametros del puntero a "
+                 "funcion");
+    out_type = std::move(fn);
+    return true;
+}
+
 std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
     const bool is_union = (current_.kind == TokenKind::KW_UNION);
     const SourceLoc loc = current_.loc;
@@ -2717,6 +2781,20 @@ std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
         f.loc = current_.loc;
         f.type = parse_type_node();
         if (!f.type) { synchronize(); continue; }
+        {
+            std::string fp_name;
+            std::unique_ptr<ast::TypeNode> fp_type;
+            if (try_parse_c_func_ptr_(f.type, fp_name, fp_type)) {
+                f.type = std::move(fp_type);
+                f.name = std::move(fp_name);
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+                (void)expect(TokenKind::SEMICOLON,
+                             "se esperaba ';' tras el campo puntero a funcion");
+                s->fields.push_back(std::move(f));
+                continue;
+            }
+        }
         if (current_.kind != TokenKind::IDENTIFIER) {
             error_here("se esperaba un nombre de campo tras el tipo");
             synchronize();
@@ -2874,6 +2952,21 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
                 synchronize();
                 continue;
             }
+            {
+                std::string fp_name;
+                std::unique_ptr<ast::TypeNode> fp_type;
+                if (try_parse_c_func_ptr_(f.type, fp_name, fp_type)) {
+                    f.type = std::move(fp_type);
+                    f.name = std::move(fp_name);
+                    if (current_.kind == TokenKind::LBRACKET)
+                        f.type = wrap_c_array_dims_(std::move(f.type));
+                    (void)expect(
+                        TokenKind::SEMICOLON,
+                        "se esperaba ';' tras el campo puntero a funcion");
+                    s->fields.push_back(std::move(f));
+                    continue;
+                }
+            }
             if (current_.kind != TokenKind::IDENTIFIER) {
                 error_here("se esperaba un nombre de campo tras el tipo");
                 synchronize();
@@ -2969,6 +3062,21 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
     }
     a->aliased = parse_type_node();
     if (!a->aliased) return nullptr;
+
+    // typedef de PUNTERO A FUNCION C: `typedef R (*NAME)(params);`.
+    {
+        std::string fp_name;
+        std::unique_ptr<ast::TypeNode> fp_type;
+        if (try_parse_c_func_ptr_(a->aliased, fp_name, fp_type)) {
+            a->name = std::move(fp_name);
+            a->aliased = std::move(fp_type);
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' al final del typedef de puntero a "
+                         "funcion");
+            declared_aliases_.insert(a->name);
+            return a;
+        }
+    }
 
     if (current_.kind != TokenKind::IDENTIFIER) {
         error_here("se esperaba un nombre tras el tipo en 'typedef'");
@@ -4125,6 +4233,23 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         if (!type_node) {
             synchronize();
             continue;
+        }
+        // Puntero a funcion estilo C como campo: `R (*name)(params);`.
+        {
+            std::string fp_name;
+            std::unique_ptr<ast::TypeNode> fp_type;
+            if (try_parse_c_func_ptr_(type_node, fp_name, fp_type)) {
+                ast::StructFieldDecl f;
+                f.loc = mloc;
+                f.type = std::move(fp_type);
+                f.name = std::move(fp_name);
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+                (void)expect(TokenKind::SEMICOLON,
+                             "se esperaba ';' tras el campo puntero a funcion");
+                s->fields.push_back(std::move(f));
+                continue;
+            }
         }
         // El nombre del miembro puede ser un IDENTIFIER o los keywords
         // contextuales `get`/`set`: aqui YA parseamos un tipo, asi que esto es
