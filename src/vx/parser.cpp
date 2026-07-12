@@ -2253,6 +2253,25 @@ bool Parser::starts_type() const noexcept {
     // es el keyword reservado.
     if (current_.kind == TokenKind::KW_FN) return true;
     if (current_.kind == TokenKind::KW_CFN) return true;
+    // Qualifier C `const T` / `volatile T` en posicion de TIPO (campo/param):
+    // cuenta como inicio de tipo SOLO si lo que sigue empieza un tipo.  (El
+    // `const`/`volatile` de un const-var-decl lo detecta el statement parser
+    // antes, por su cuenta; esto solo aplica donde se consulta starts_type para
+    // decidir "campo o metodo" dentro de un struct/param.)
+    if (current_.kind == TokenKind::KW_CONST ||
+        (current_.kind == TokenKind::IDENTIFIER &&
+         current_.lexeme == "volatile")) {
+        Lexer &ml = const_cast<Lexer &>(lex_);
+        const Token &nx = ml.peek_at(0);
+        if (primitive_kind_from_token(nx.kind) != PrimitiveKind::COUNT)
+            return true;
+        if (nx.kind == TokenKind::IDENTIFIER) return true;
+        if (nx.kind == TokenKind::KW_STRUCT || nx.kind == TokenKind::KW_UNION ||
+            nx.kind == TokenKind::KW_ENUM || nx.kind == TokenKind::KW_FN ||
+            nx.kind == TokenKind::KW_CFN || nx.kind == TokenKind::KW_NONNULL)
+            return true;
+        return false;
+    }
     // Especificador elaborado C `struct Tag` / `union Tag` / `enum Tag` como
     // REFERENCIA de tipo (seguido de IDENT, no de `{` que es definicion inline).
     if ((current_.kind == TokenKind::KW_STRUCT ||
@@ -2349,6 +2368,17 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
     // como no-null.  Solo afecta semantica del type checker
     // (rechazo de null literal); el lowering trata el tipo igual
     // que una referencia normal.
+    // Qualifiers C que preceden al tipo base (`const T`, `volatile T`).  El
+    // `const` de un const-var-decl se consume ANTES (statement/decl parser), asi
+    // que aqui solo aparece como qualifier DE TIPO.  `const` marca el nivel base
+    // como inmutable (const-correctness A); `volatile` se parsea pero se ignora.
+    bool base_const = false;
+    while (current_.kind == TokenKind::KW_CONST ||
+           (current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == "volatile")) {
+        if (current_.kind == TokenKind::KW_CONST) base_const = true;
+        (void)consume();
+    }
     bool nonnull = false;
     if (current_.kind == TokenKind::KW_NONNULL) {
         nonnull = true;
@@ -2527,14 +2557,24 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         }
         return nullptr;
     }
+    // const del nivel BASE (`const char`): marca el nodo del tipo apuntado.
+    if (base && base_const) base->is_const = true;
     // Postfix: cada '*' apila un PointerTypeNode adicional.
     // Ejemplo: 'i32**' -> Pointer(Pointer(Primitive(i32))).
+    // C permite `const`/`volatile` TRAS cada '*' (`char * const * const`): marca
+    // ESE nivel de puntero como const (puntero inmutable).
     while (current_.kind == TokenKind::STAR) {
         const SourceLoc loc = current_.loc;
         (void)consume(); // '*'
         auto pn = std::make_unique<ast::PointerTypeNode>();
         pn->loc = loc;
         pn->pointee = std::move(base);
+        while (current_.kind == TokenKind::KW_CONST ||
+               (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "volatile")) {
+            if (current_.kind == TokenKind::KW_CONST) pn->is_const = true;
+            (void)consume();
+        }
         base = std::move(pn);
     }
     // Postfix '[N]' o '[]': arrays nativos.  Aceptamos solo literales
@@ -5426,7 +5466,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
             mut_lex.peek_at(0).kind == TokenKind::KW_CONST) {
             (void)consume(); // 'comptime'
             (void)consume(); // 'const'
-            auto vd = parse_var_decl_stmt(true);
+            auto vd = parse_var_decl_stmt(true, /*from_comptime=*/true);
             if (vd && vd->kind == ast::NodeKind::VarDeclStmt) {
                 auto *v = static_cast<ast::VarDeclStmt *>(vd.get());
                 v->is_comptime = true;
@@ -5514,7 +5554,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
                 synchronize();
                 return nullptr;
             }
-            auto vd = parse_var_decl_stmt(true); // comptime implica const
+            auto vd = parse_var_decl_stmt(true, /*from_comptime=*/true);
             if (vd && vd->kind == ast::NodeKind::VarDeclStmt) {
                 auto *v = static_cast<ast::VarDeclStmt *>(vd.get());
                 v->is_comptime = true;
@@ -5691,7 +5731,8 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
     }
 }
 
-std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const) {
+std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const,
+                                                       bool from_comptime) {
     auto vd = std::make_unique<ast::VarDeclStmt>();
     vd->loc = current_.loc;
     vd->is_const = is_const;
@@ -5737,6 +5778,19 @@ std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const) {
         vd->infer_type = true;
     } else {
         vd->type = parse_type_node();
+    }
+    // const-correctness C-style: un `const` LIDER sobre un tipo PUNTERO
+    // qualifica el APUNTADO (`const char *p` = puntero a const char, puntero
+    // MUTABLE), no el binding.  Sobre un tipo no-puntero, `const` sigue siendo
+    // binding const (valor inmutable -- semantica Vesta existente + comptime).
+    // No aplica a comptime (su `const` es "compile-time", no del pointee).
+    if (is_const && !from_comptime && vd->type &&
+        vd->type->kind == ast::NodeKind::PointerTypeNode) {
+        ast::TypeNode *inner = vd->type.get();
+        while (inner->kind == ast::NodeKind::PointerTypeNode)
+            inner = static_cast<ast::PointerTypeNode *>(inner)->pointee.get();
+        if (inner) inner->is_const = true;
+        vd->is_const = false; // el puntero/binding es mutable (C)
     }
     // azucar: `T !!name = init;` equivale a
     // `nonnull T name = !!init;`.  El `!!` entre tipo y nombre

@@ -870,6 +870,10 @@ class TypeChecker {
     Type check_binary(ast::BinaryExpr *e);
     Type check_unary(ast::UnaryExpr *e);
     Type check_assign(ast::AssignExpr *e);
+    /// Nucleo de check_assign; devuelve el tipo del LVALUE (campo/pointee/
+    /// elemento/variable).  El wrapper usa ese @c is_const para el enforcement
+    /// de const-correctness (escritura a lvalue const = error).
+    Type check_assign_impl(ast::AssignExpr *e);
     /// Safety net (item 1): true si @c e es un closure CAPTURADOR -- un
     /// LambdaExpr con capturas o un metodo ligado `&obj.m` (que captura el
     /// receptor).  Un closure asi guardado en un campo de struct deja el env
@@ -1070,9 +1074,16 @@ class TypeChecker {
 
   private:
     /**
-     * @brief Convierte un TypeNode AST a Type semantico.
+     * @brief Convierte un TypeNode AST a Type semantico.  Wrapper que propaga
+     * la const-correctness POR NIVEL: tras resolver la forma del tipo con
+     * @c type_from_node_impl, marca @c Type::is_const con el @c is_const de
+     * ESTE nodo (el nivel base o el nivel de puntero correspondiente; la const
+     * del apuntado la aporta la recursion sobre el pointee).
      */
     Type type_from_node(const ast::TypeNode *tn) const;
+    /// Nucleo de @c type_from_node (resuelve la FORMA del tipo).  No aplica el
+    /// @c is_const del nodo raiz -- eso lo hace el wrapper.
+    Type type_from_node_impl(const ast::TypeNode *tn) const;
 
     /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.

@@ -316,6 +316,17 @@ struct Type {
     /// asignacion / comparacion es error de tipo.
     bool is_virtual = false;
 
+    /// const-correctness C-style, POR NIVEL.  @c is_const marca que ESTE nivel
+    /// del tipo es inmutable: para un escalar/struct, el valor no se puede
+    /// escribir; para un PTR, el PUNTERO no se puede reasignar (la const del
+    /// APUNTADO vive en @c pointee->is_const).  Asi `const char *` =
+    /// PTR{is_const=false, pointee=char{is_const=true}} y `char *const` =
+    /// PTR{is_const=true, pointee=char{is_const=false}}.  El enforcement es
+    /// uniforme: escribir a un lvalue es error si @c lvalue.result_type.is_const.
+    /// Ortogonal a @c is_virtual y a la forma del tipo (NO entra en la igualdad
+    /// estructural).
+    bool is_const = false;
+
     /// Tipos de los parametros cuando @c kind == FUNCTION.  Vacio para
     /// los demas kinds.  La lista se materializa solo cuando se crea un
     /// tipo @c fn(...), por lo que el coste de cache para tipos no-fn
@@ -906,6 +917,22 @@ inline const char *primitive_name(PrimitiveKind k) noexcept {
  * diagnostico claro indicando ambos tipos.
  */
 inline bool types_assignable(const Type &target, const Type &value) noexcept {
+    // const-correctness A: no DESCARTAR const al asignar punteros.  Se recorren
+    // las cadenas de pointee en paralelo; si en algun nivel el VALUE es const y
+    // el TARGET no, la asignacion "lavaria" el const (aliasing a traves de un
+    // puntero mutable) -> se rechaza.  Al reves (target const, value no) SI se
+    // permite (anadir const es seguro).  Va ANTES del `==` porque este ignora
+    // @c is_const.  Para no-punteros el bucle no corre (no hay laundering: copiar
+    // un valor const a uno mutable es una COPIA, no un alias).
+    {
+        const Type *tt = &target, *vv = &value;
+        while (tt->kind == PrimitiveKind::PTR &&
+               vv->kind == PrimitiveKind::PTR && tt->pointee && vv->pointee) {
+            tt = tt->pointee.get();
+            vv = vv->pointee.get();
+            if (vv->is_const && !tt->is_const) return false; // discard const
+        }
+    }
     if (target == value) return true;
     // Valued enum (`enum Op : u8 {..}`, `enum M : string {..}`): ES su tipo
     // base.  El @c struct_name solo distingue el enum para resolver variantes,

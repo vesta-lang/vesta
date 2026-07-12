@@ -305,6 +305,11 @@ constexpr bool is_stmt_kind(NodeKind k) noexcept {
  */
 struct TypeNode : Node {
     bool is_nonnull = false;
+    /// const-correctness C-style POR NIVEL: `const T` marca el nodo del tipo
+    /// base; `T *const` marca el PointerTypeNode de ese nivel.  Se propaga a
+    /// @c Type::is_const en type_from_node.  (volatile se parsea pero se ignora:
+    /// Vesta no tiene semantica volatile.)
+    bool is_const = false;
     explicit TypeNode(NodeKind k) : Node(k) {}
 };
 

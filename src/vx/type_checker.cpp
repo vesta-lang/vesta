@@ -1710,6 +1710,14 @@ const Symbol *TypeChecker::lookup_with_depth(const std::string &name,
 }
 
 Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
+    Type t = type_from_node_impl(tn);
+    // const-correctness A: propagar el const de ESTE nivel.  La recursion sobre
+    // pointee/element ya marco los niveles interiores.
+    if (tn && tn->is_const) t.is_const = true;
+    return t;
+}
+
+Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
     if (!tn) return Type{};
     if (tn->kind == ast::NodeKind::PrimitiveTypeNode) {
         const auto *pt = static_cast<const ast::PrimitiveTypeNode *>(tn);
@@ -8795,6 +8803,23 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
         if (!is_integral(t.kind)) {
             diags_.error(e->loc, "++/-- requieren operando entero");
         }
+        // const-correctness A: ++/-- MUTAN el lvalue -> prohibido si es const.
+        // Cubre el const de TIPO (pointee/campo/elemento via t.is_const) Y el
+        // binding const de una variable simple (`const i32 x; x++`).
+        if (t.is_const) {
+            diags_.error(e->loc,
+                         "no se puede modificar (++/--) un lvalue 'const'");
+        } else if (e->operand &&
+                   e->operand->kind == ast::NodeKind::IdentExpr) {
+            const auto *oid =
+                static_cast<const ast::IdentExpr *>(e->operand.get());
+            const Symbol *sv = lookup(oid->name);
+            if (sv && sv->is_const) {
+                diags_.error(e->loc, "no se puede modificar (++/--) la "
+                                     "variable 'const' '" +
+                                         oid->name + "'");
+            }
+        }
         // bug4: aceptar IdentExpr (var local), FieldAccessExpr
         // (this.x, obj.x), IndexExpr (arr[i]) y UnaryExpr Deref
         // (*p) como lvalues validos para ++/--.
@@ -9102,6 +9127,21 @@ bool TypeChecker::is_capturing_closure_expr(const ast::Expr *e) const {
 }
 
 Type TypeChecker::check_assign(ast::AssignExpr *e) {
+    // const-correctness A: check_assign_impl devuelve el tipo del LVALUE (el
+    // nivel correcto: campo, pointee de `*p`, elemento de `a[i]`, o la var).
+    // Si ESE nivel es const, escribir es error -- un solo check cubre todos los
+    // kinds.  `const char *p; *p=x` -> impl devuelve char{is_const} -> error;
+    // `char *const q; q=x` -> impl devuelve el PTR{is_const} -> error.
+    Type t = check_assign_impl(e);
+    if (t.is_const) {
+        diags_.error(e->loc,
+                     "no se puede escribir a un lvalue 'const' (el tipo de "
+                     "destino es de solo lectura)");
+    }
+    return t;
+}
+
+Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
     // Target debe ser un lvalue.  admitimos:
     //  - IdentExpr        (variable simple).
     //  - FieldAccessExpr  (p.x = v).
