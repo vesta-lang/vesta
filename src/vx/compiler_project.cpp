@@ -1602,6 +1602,58 @@ CompileResult compile_vx_project(
                 // que devuelve los missing para emitir diagnostico claro.
                 auto missing = import_vxi_into_typechecker_with_missing(
                     *pm.tc, dep_vxi, req.only_symbols);
+                // Namespace PARCIAL: un `import std.types only uintptr` resuelve
+                // `req.module_name` al PRIMER fichero del namespace (p.ej.
+                // arm64), donde el simbolo puede estar @Target-inactivo -> queda
+                // en `missing`.  Reintentar los que faltan contra los OTROS
+                // ficheros del mismo `namespace X;` (p.ej. std/types/x86_64.vx),
+                // igual que el plain-import de arriba.  Sin esto, `only X` de un
+                // namespace multi-fichero fallaba con "no exporta 'X'".
+                if (!missing.empty() && req.by_namespace &&
+                    !req.ns_path.empty()) {
+                    auto ita = ns_to_all_modnames.find(req.ns_path);
+                    if (ita != ns_to_all_modnames.end()) {
+                        // `retry` = los only_symbols que aun faltan.
+                        std::vector<TypeChecker::VxiOnlyEntry> retry;
+                        for (const auto &os : req.only_symbols) {
+                            for (const auto &m : missing) {
+                                if (os.name == m) {
+                                    retry.push_back(os);
+                                    break;
+                                }
+                            }
+                        }
+                        for (const auto &other_mn : ita->second) {
+                            if (retry.empty()) break;
+                            if (other_mn == req.module_name) continue;
+                            auto ito = by_name.find(other_mn);
+                            if (ito == by_name.end()) continue;
+                            VxiModule other_store;
+                            const VxiModule &other_vxi = filter_internal_(
+                                work[ito->second].vxi, other_store);
+                            auto still =
+                                import_vxi_into_typechecker_with_missing(
+                                    *pm.tc, other_vxi, retry);
+                            // reducir retry a los que aun faltan tras este fichero
+                            std::vector<TypeChecker::VxiOnlyEntry> next_retry;
+                            for (const auto &os : retry) {
+                                for (const auto &m : still) {
+                                    if (os.name == m) {
+                                        next_retry.push_back(os);
+                                        break;
+                                    }
+                                }
+                            }
+                            retry = std::move(next_retry);
+                        }
+                        // el `missing` final = lo que aun no aparecio en NINGUN
+                        // fichero del namespace.
+                        std::vector<std::string> final_missing;
+                        for (const auto &os : retry)
+                            final_missing.push_back(os.name);
+                        missing = std::move(final_missing);
+                    }
+                }
                 // #cross-module-generics: un nombre `only` puede ser una
                 // PLANTILLA generica (no esta en symbols sino en
                 // generic_templates) -> no es "missing".
