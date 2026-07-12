@@ -1443,6 +1443,13 @@ struct ParamDecl : Node {
      * caller; el numero de args variadicos se lee con el builtin @c vacount().
      * El @c type guarda el tipo del ELEMENTO (T), no el del puntero. */
     bool is_variadic = false;
+    /** @c true si el parametro es un VARIADICO CRUDO: un `...` pelado (sin tipo
+     * ni nombre), estilo C.  Acepta N args de CUALQUIER tipo; cada uno se coloca
+     * segun su propia regla de ABI en el call site (enteros/punteros -> arg-regs
+     * GP, float -> arg-regs XMM).  El callee NO los empaqueta ni ofrece
+     * @c vacount()/array: es para funciones @c @Naked, donde el cuerpo asm lee
+     * los registros ABI directamente.  Implica @c is_variadic. */
+    bool is_raw_variadic = false;
     ParamDecl() : Node(NodeKind::ParamDecl) {}
 };
 

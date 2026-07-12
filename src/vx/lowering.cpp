@@ -2975,6 +2975,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             // new Shape[N]), usar `T*` explicito en el parametro
             // hasta que la distincion se resuelva en el type system.
         }
+        // Variadico CRUDO (`...` pelado): PASS-THROUGH.  El compilador NO
+        // empaqueta los args -- ocupan los arg-regs del ABI segun la convencion
+        // de llamada, y el cuerpo asm (para @Naked) los accede directamente.  No
+        // se crea binding ni __vacount: no hay array ni vacount().  Es el
+        // equivalente a una `F(a, ...)` en C, que acepta N args crudos.
+        if (p->is_raw_variadic) {
+            continue;
+        }
         // Variadico (`T... name`): el callee lo recibe como `T*` (puntero host
         // al array empaquetado por el caller), NO como T.  El count va en un
         // param i64 OCULTO que se anñade tras el loop (leido con vacount()).
@@ -2995,8 +3003,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         param_bindings.emplace_back(p->name, vid);
     }
     // Variadicos: param OCULTO i64 del count, tras el `T*` del ultimo param.
-    // `vacount()` en el body resuelve a este binding.
-    if (!fd->params.empty() && fd->params.back()->is_variadic) {
+    // `vacount()` en el body resuelve a este binding.  (Un variadico CRUDO
+    // `...` no empaqueta ni tiene count: los args pasan crudos en los arg-regs.)
+    if (!fd->params.empty() && fd->params.back()->is_variadic &&
+        !fd->params.back()->is_raw_variadic) {
         const ir::IrValueId vcnt = fn.new_value(ir::IrType::I64, "%__vacount");
         fn.values[vcnt].is_param = true;
         fn.params.push_back(vcnt);
@@ -17744,7 +17754,8 @@ skip_comptime_eval_for_macro_to_macro:
     // en un array de pila host y reemplazarlos por (ptr, count).  El callee
     // recibe `T*` + el count (leido con vacount()).  Mismo patron que el argv
     // de vx_async, ahora como feature del lenguaje.
-    if (callee_sig && callee_sig->is_variadic && !callee_is_sret &&
+    if (callee_sig && callee_sig->is_variadic && !callee_sig->is_raw_variadic &&
+        !callee_is_sret &&
         arg_ids.size() >= callee_sig->param_types.size() - 1) {
         const size_t fixed = callee_sig->param_types.size() - 1;
         const size_t vcount = arg_ids.size() - fixed;

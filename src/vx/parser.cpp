@@ -1991,6 +1991,20 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
         p->name = consume().lexeme;
         return p;
     }
+    // Variadico CRUDO estilo C: `...` pelado (sin tipo ni nombre).  Acepta N
+    // args de CUALQUIER tipo; cada uno se coloca segun su ABI en el call site.
+    // El callee (para @Naked) los lee de los registros ABI en su asm; no hay
+    // empaquetado ni vacount().  Debe ser el ultimo parametro.
+    if (current_.kind == TokenKind::DOTDOTDOT) {
+        auto p = std::make_unique<ast::ParamDecl>();
+        p->loc = current_.loc;
+        (void)consume(); // '...'
+        p->is_variadic = true;
+        p->is_raw_variadic = true;
+        // Sin tipo ni nombre: el type checker valida que sea el ultimo y que la
+        // funcion sea @Naked.
+        return p;
+    }
     // Z.6: aceptar `shared T name` en params (con disambiguation vs
     // `shared<T>` smart pointer).  Hoy es sugar documental; el type
     // system trata `T` y `shared T` como mismo tipo en parametros

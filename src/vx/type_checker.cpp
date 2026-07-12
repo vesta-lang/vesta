@@ -4099,6 +4099,24 @@ void TypeChecker::collect_globals() {
             sig.param_types.reserve(fn->params.size());
             for (size_t pi = 0; pi < fn->params.size(); ++pi) {
                 auto &p = fn->params[pi];
+                // Variadico CRUDO (`...` pelado): sin tipo ni nombre.  No es un
+                // slot de param -- son N args extra crudos.  Solo valido como
+                // ultimo param de una funcion @Naked.
+                if (p->is_raw_variadic) {
+                    if (pi + 1 != fn->params.size())
+                        diags_.error(p->loc,
+                                     "el variadico crudo '...' debe ser el "
+                                     "ultimo parametro");
+                    if (!fn->is_naked)
+                        diags_.error(
+                            p->loc,
+                            "un variadico crudo '...' solo es valido en una "
+                            "funcion @Naked (el cuerpo asm accede a los "
+                            "registros de argumento del ABI directamente)");
+                    sig.is_variadic = true;
+                    sig.is_raw_variadic = true;
+                    continue;  // no anñade param_type.
+                }
                 Type pt = type_from_node(p->type.get());
                 if (p->is_variadic) {
                     // Variadico (`T... name`, ultimo param): el callee lo
@@ -4505,6 +4523,9 @@ void TypeChecker::check_functions() {
         const Type fn_ret = type_from_node(fn->return_type.get());
         push_scope(); // scope de la funcion (parametros)
         for (auto &p : fn->params) {
+            // Variadico CRUDO (`...`): sin nombre ni tipo, no se declara -- el
+            // cuerpo asm accede a los registros de argumento directamente.
+            if (p->is_raw_variadic) continue;
             Symbol sp;
             sp.kind = SymbolKind::Param;
             // Variadico: dentro del body, `name` es un `T*` (puntero al array
@@ -13761,7 +13782,13 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // de N-1) contra el tipo del ELEMENTO T.  El lowering empaqueta los
     // trailing en un array de pila y pasa (ptr, count).
     if (sig.is_variadic) {
-        const size_t fixed = sig.param_types.size() - 1;
+        // Variadico CRUDO (`...`): todos los param_types son FIJOS (el `...` no
+        // aporta slot); los args trailing aceptan CUALQUIER tipo (no se validan).
+        // Variadico EMPAQUETADO (`T... rest`): el ultimo param_type es el T*, asi
+        // que hay N-1 fijos y los trailing se validan contra variadic_elem.
+        const bool raw = sig.is_raw_variadic;
+        const size_t fixed =
+            raw ? sig.param_types.size() : sig.param_types.size() - 1;
         if (e->args.size() < fixed) {
             diags_.error(e->loc,
                          std::string("numero de argumentos insuficiente en "
@@ -13771,14 +13798,30 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         for (size_t i = 0; i < e->args.size(); ++i) {
             Type ta = check_expr(e->args[i].get());
-            const Type tp = (i < fixed) ? sig.param_types[i] : sig.variadic_elem;
+            if (i >= fixed) {
+                // Args del `...`: crudos = cualquier tipo (sin check);
+                // empaquetados = contra variadic_elem.
+                if (raw) continue;
+                const Type tp = sig.variadic_elem;
+                if (ta.kind != PrimitiveKind::COUNT &&
+                    !types_assignable(tp, ta) &&
+                    !value_assignable_to_interface(tp, ta)) {
+                    diags_.error(e->args[i]->loc,
+                                 std::string("argumento ") +
+                                     std::to_string(i + 1) + ": tipo (" +
+                                     type_to_string(ta) +
+                                     ") incompatible con elemento variadico (" +
+                                     type_to_string(tp) + ")");
+                }
+                continue;
+            }
+            const Type tp = sig.param_types[i];
             if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
                 !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  ": tipo (" + type_to_string(ta) +
-                                 ") incompatible con " +
-                                 (i < fixed ? "parametro (" : "elemento variadico (") +
+                                 ") incompatible con parametro (" +
                                  type_to_string(tp) + ")");
             }
         }

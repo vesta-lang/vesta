@@ -126,6 +126,10 @@ struct FunctionSig {
     /// count); el count va en un param i64 OCULTO al final.
     bool is_variadic = false;
     Type variadic_elem;
+    /// Variadico CRUDO: el ULTIMO param es un `...` pelado (sin tipo ni nombre).
+    /// El caller NO empaqueta los args trailing -- los pasa crudos en los
+    /// arg-regs del ABI segun el tipo de cada uno.  Solo para funciones @Naked.
+    bool is_raw_variadic = false;
     /// Bug/feature 198: @Naked -- funcion cuyo cuerpo es asm nativo puro (sin
     /// prologo/epilogo VM).  El lowering, al ver una llamada a una @Naked,
     /// emite un CALLN al dispatcher @c vrt:naked_dispatch (que la compila al
