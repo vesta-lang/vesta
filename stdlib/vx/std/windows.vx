@@ -777,6 +777,7 @@ typedef struct _MEMORY_BASIC_INFORMATION32 {
     DWORD       Type;
 } MEMORY_BASIC_INFORMATION32, *PMEMORY_BASIC_INFORMATION32;
 
+@align(16)
 typedef struct _MEMORY_BASIC_INFORMATION64 {
     ULONGLONG   BaseAddress;
     ULONGLONG   AllocationBase;

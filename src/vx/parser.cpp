@@ -1445,6 +1445,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM ||
             nk == TokenKind::KW_UNION) {
             n = parse_typedef_struct_or_enum();
+            // `@align(N)` sobre un `typedef struct { ... } Name;`.
+            if (n && n->kind == ast::NodeKind::StructDecl && top_attr_align > 0)
+                static_cast<ast::StructDecl *>(n.get())->attr_align =
+                    top_attr_align;
         } else {
             n = parse_typedef_decl();
         }
@@ -1462,6 +1466,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
          current_.kind == TokenKind::KW_UNION) &&
         lex_.peek_at(0).kind == TokenKind::LBRACE) {
         auto n = parse_typedef_struct_or_enum(/*leading_typedef=*/false);
+        if (n && n->kind == ast::NodeKind::StructDecl && top_attr_align > 0)
+            static_cast<ast::StructDecl *>(n.get())->attr_align = top_attr_align;
         apply_pending_visibility(n.get());
         return n;
     }
@@ -1474,6 +1480,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             sd->contract_pod = top_t_pod;
             sd->contract_no_heap = top_t_no_heap;
             sd->contract_size = top_t_size;
+            sd->attr_align = top_attr_align;
         }
         if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(sd.get());

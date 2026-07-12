@@ -3009,6 +3009,16 @@ void TypeChecker::collect_globals() {
                 layout.size_bytes = offset;
                 layout.align_bytes = max_align;
             }
+            // `@align(N)` a nivel de struct (C __declspec(align(N))/_Alignas):
+            // fuerza la alineacion a max(natural, N) y padea el tamano a un
+            // multiplo de esa alineacion.  No reduce nunca la alineacion natural.
+            if (s->attr_align > 0) {
+                uint32_t a = s->attr_align;
+                if (a > layout.align_bytes) layout.align_bytes = a;
+                const uint32_t al = layout.align_bytes;
+                if (al > 0 && (layout.size_bytes % al) != 0)
+                    layout.size_bytes += al - (layout.size_bytes % al);
+            }
             /* preservar la marca @Introspect que
              * la pre-pasada copio del AST.  Como aqui sobrescribimos
              * la entrada con un layout local fresco, hay que re-copiar

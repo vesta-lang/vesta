@@ -2071,6 +2071,10 @@ struct StructDecl : Node {
     bool contract_pod = false;
     bool contract_no_heap = false;
     int64_t contract_size = -1;
+    /// `@align(N)` a nivel de struct: fuerza la alineacion del layout a N (max
+    /// con la natural) y padea el tamano a un multiplo de N.  0 = sin override.
+    /// Equivalente a C `__declspec(align(N))` / `_Alignas(N)`.
+    uint16_t attr_align = 0;
     StructDecl() : Node(NodeKind::StructDecl) {}
 };
 
