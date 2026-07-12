@@ -587,6 +587,15 @@ class TypeChecker {
      */
     const ast::ModuleNode &ast_module() const noexcept { return mod_; }
 
+    /**
+     * @brief Anyade una plantilla generica / comptime fn / @Macro re-exportada
+     * a los exports de ESTE modulo (via `public import`).  El emitter del `.vxi`
+     * la vuelca como fuente para que los consumidores del re-exportador la vean.
+     */
+    void add_reexported_generic_template(ast::GenericTemplateExport tex) {
+        mod_.generic_template_exports.push_back(std::move(tex));
+    }
+
     /// #cross-module-generics: inyecta un decl (plantilla generica o
     /// concepto) re-parseado de un `.vxi` importado en este modulo, para
     /// que se pueda monomorphizar `Caja<i64>` cross-module.  Debe llamarse

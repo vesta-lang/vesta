@@ -293,6 +293,28 @@ collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
     }
 }
 
+// gather_public_reexports_: recolecta (path, by_namespace) de las sentencias
+// `public import` (re-export) de un modulo ya parseado (recursivo dentro de
+// NamespaceDecl).  Sirve para seguir la CADENA de re-exports al sembrar los
+// params @c expr: una fn `source(expr)` re-exportada por std.comptime desde
+// std.comptime.basics debe seguir siendo capturada como texto crudo en el
+// modulo que importa std.comptime.
+static void gather_public_reexports_(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::vector<std::pair<std::string, bool>> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::ImportDecl) {
+            auto *im = static_cast<ast::ImportDecl *>(d.get());
+            if (im->is_public_reexport && !im->path.empty())
+                out.emplace_back(im->path, im->by_namespace);
+        } else if (d->kind == ast::NodeKind::NamespaceDecl) {
+            gather_public_reexports_(
+                static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // scan_import_paths_: escaneo BARATO (solo lex, sin parse) de las sentencias
 // `import` de un fichero.  Devuelve (path, by_namespace) por cada import.
@@ -419,17 +441,41 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     // que un ciclo de imports se corta por el dedup.
     std::unordered_map<std::string, std::vector<int>> imported_expr_params;
     {
-        const auto scanned = scan_import_paths_(source);
-        for (const auto &ip : scanned) {
-            ResolveResult r = ip.second
-                                  ? resolve_namespace_(ip.first, canonical_path)
-                                  : resolve(ip.first, canonical_path);
-            if (r.status != ResolveResult::Status::OK) continue;
-            if (r.module_id >= modules_.size()) continue;
-            ResolvedModule *dep = modules_[r.module_id].get();
-            if (dep && dep->parsed_ast)
-                collect_expr_param_fns_(dep->parsed_ast->decls,
-                                        imported_expr_params);
+        // Worklist de module_ids a inspeccionar: los imports directos + la
+        // cadena de `public import` (re-exports) transitiva.  Asi una fn `expr`
+        // re-exportada (std.comptime -> std.comptime.basics::source) tambien se
+        // siembra en el importador de std.comptime.
+        std::unordered_set<uint32_t> visited_dep;
+        std::vector<uint32_t> worklist;
+        auto resolve_to_id = [&](const std::string &p,
+                                 bool by_ns,
+                                 const std::string &importer) -> uint32_t {
+            ResolveResult r = by_ns ? resolve_namespace_(p, importer)
+                                    : resolve(p, importer);
+            if (r.status != ResolveResult::Status::OK) return UINT32_MAX;
+            if (r.module_id >= modules_.size()) return UINT32_MAX;
+            return r.module_id;
+        };
+        for (const auto &ip : scan_import_paths_(source)) {
+            uint32_t did = resolve_to_id(ip.first, ip.second, canonical_path);
+            if (did != UINT32_MAX) worklist.push_back(did);
+        }
+        while (!worklist.empty()) {
+            const uint32_t dep_id = worklist.back();
+            worklist.pop_back();
+            if (!visited_dep.insert(dep_id).second) continue;
+            ResolvedModule *dep = modules_[dep_id].get();
+            if (!dep || !dep->parsed_ast) continue;
+            collect_expr_param_fns_(dep->parsed_ast->decls,
+                                    imported_expr_params);
+            // Seguir los `public import` del dep (re-export transitivo).
+            std::vector<std::pair<std::string, bool>> reexp;
+            gather_public_reexports_(dep->parsed_ast->decls, reexp);
+            for (const auto &rp : reexp) {
+                uint32_t rid =
+                    resolve_to_id(rp.first, rp.second, dep->canonical_path);
+                if (rid != UINT32_MAX) worklist.push_back(rid);
+            }
         }
     }
 

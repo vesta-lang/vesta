@@ -1,0 +1,19 @@
+// -----------------------------------------------------------------------------
+// `source(expr)` de la stdlib (std.comptime, re-exportado desde
+// std.comptime.basics).  Ejercita:
+//   - re-export de una comptime fn via `public import` (aparece en el .vxi).
+//   - siembra TRANSITIVA del param `expr` a traves de la cadena de re-export.
+//   - evaluacion por tree-walk de la comptime fn importada.
+// `source` stringifica el codigo con comillas: source(X) -> "\"X\"".
+// -----------------------------------------------------------------------------
+import std.comptime only source;
+
+i32 main() {
+    i32 a = 7;
+    i32 b = 6;
+    string s = source(a * b);          // -> "\"a * b\""  (con comillas literales)
+    println("s=[${s}]");               // s=["a * b"]
+    // El valor incluye las comillas que anyade source.
+    if (str_equals(s, "\"a * b\"")) { return 42; }
+    return 0;
+}

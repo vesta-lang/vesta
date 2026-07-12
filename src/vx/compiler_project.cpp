@@ -1576,6 +1576,29 @@ CompileResult compile_vx_project(
                     for (const auto &os : synth_only) {
                         pm.tc->mark_imported(os.name, /*is_reexport=*/true);
                     }
+                    // Re-exportar TAMBIEN las plantillas genericas / comptime
+                    // fns / @Macros: viven en `generic_templates` (texto fuente),
+                    // NO en `symbols`.  Sin esto, `public import std.comptime.
+                    // basics` no reexpone `source`/`inject` (comptime fns) ->
+                    // `import std.comptime only source` daba "no exporta source".
+                    // La rama is_plain de arriba YA las inyecto en este modulo
+                    // (inject_generic_templates_from_vxi con ns_prefix=local);
+                    // aqui solo las anyadimos a sus exports marcadas re-export
+                    // para que floten a su .vxi.  NO re-inyectar (doble inject ->
+                    // "redefinicion de comptime fn").
+                    if (!dep_vxi.generic_templates.empty()) {
+                        for (const auto &g : dep_vxi.generic_templates) {
+                            if (g.name.empty() || g.name[0] == '_') continue;
+                            ast::GenericTemplateExport tex;
+                            tex.name = g.name;
+                            tex.kind = g.kind;
+                            tex.source = g.source;
+                            tex.is_public = true;
+                            pm.tc->add_reexported_generic_template(
+                                std::move(tex));
+                            pm.tc->mark_imported(g.name, /*is_reexport=*/true);
+                        }
+                    }
                 }
             } else {
                 // #cross-module-generics: inyectar las plantillas del dep
