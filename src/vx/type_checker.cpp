@@ -13451,6 +13451,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         function_sigs_[s_arg->sig_index];
                     Type fnv = Type::make_function(arg_sig.param_types,
                                                    arg_sig.return_type);
+                    // Respetar la naturaleza del parametro: cfn (puntero puro a
+                    // codigo, 8 bytes) vs fn (closure fat, 16 bytes).  Sin esto
+                    // un param cfn recibia un function value de 16 bytes (o el
+                    // match fallaba por fn_is_raw distinto).
+                    fnv.fn_is_raw = tp.fn_is_raw;
                     if (types_assignable(tp, fnv)) {
                         ta = fnv;
                         id_arg->result_type = fnv;
@@ -13677,6 +13682,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
                 Type fnv = Type::make_function(arg_sig.param_types,
                                                arg_sig.return_type);
+                // cfn (puntero puro a codigo) vs fn (closure): respetar la
+                // naturaleza del parametro.
+                fnv.fn_is_raw = tp.fn_is_raw;
                 if (types_assignable(tp, fnv)) {
                     ta = fnv;
                     id_arg->result_type = fnv;
