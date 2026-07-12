@@ -2701,15 +2701,37 @@ void TypeChecker::collect_globals() {
                 }
                 if (ft.kind == PrimitiveKind::STRUCT) {
                     auto it = struct_layouts_.find(ft.struct_name);
-                    if (it == struct_layouts_.end()) {
+                    if (it != struct_layouts_.end()) {
+                        fsize = it->second.size_bytes;
+                        falign = it->second.align_bytes;
+                    } else if (auto ie = enum_layouts_.find(ft.struct_name);
+                               ie != enum_layouts_.end()) {
+                        // enum ADT como campo: usa su layout de tagged-union
+                        // (tag i64, 8 bytes), alineado a 8.  Un enum con backing
+                        // (`: u8`) NO llega aqui: resuelve a su primitivo antes
+                        // (kind entero, no STRUCT).  Solo se permite el enum
+                        // PAYLOADLESS: su valor es un unico qword (el tag), asi
+                        // que la asignacion/lectura del campo es una copia escalar.
+                        // Un enum con payload requeriria copiar N qwords en el
+                        // store/load del campo (lowering pendiente).
+                        if (ie->second.max_payload_fields > 0) {
+                            diags_.error(
+                                f.loc,
+                                "un enum con payload ('" + ft.struct_name +
+                                    "') no puede usarse como campo de struct "
+                                    "todavia; usa un puntero o un enum con "
+                                    "backing entero (': u32')");
+                            continue;
+                        }
+                        fsize = ie->second.size_bytes;
+                        falign = 8;
+                    } else {
                         diags_.error(
                             f.loc,
                             "struct '" + ft.struct_name +
                                 "' debe declararse antes de usarse como campo");
                         continue;
                     }
-                    fsize = it->second.size_bytes;
-                    falign = it->second.align_bytes;
                 } else if (ft.kind == PrimitiveKind::ARRAY) {
                     // Array inline `T campo[N]` / multidimensional `T c[N][M]`:
                     // tamano = element_size * count (recursivo); align = del
