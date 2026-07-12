@@ -6149,10 +6149,21 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         }
         if (t.kind != PrimitiveKind::COUNT && !types_assignable(s.type, t) &&
             !class_is_assignable(s.type, t) && !null_to_class) {
-            diags_.error(vd->loc, std::string("tipo del inicializador (") +
-                                      type_to_string(t) +
-                                      ") incompatible con tipo declarado (" +
-                                      type_to_string(s.type) + ")");
+            std::string msg = std::string("tipo del inicializador (") +
+                              type_to_string(t) +
+                              ") incompatible con tipo declarado (" +
+                              type_to_string(s.type) + ")";
+            // La conversion entero<->puntero NUNCA es implicita: si el mismatch
+            // es exactamente ese, sugerir el cast explicito (el usuario debe
+            // indicar la intencion con `(T)expr`).
+            const bool decl_ptr = (s.type.kind == PrimitiveKind::PTR);
+            const bool init_ptr = (t.kind == PrimitiveKind::PTR);
+            const bool decl_int = is_integer_kind(s.type.kind);
+            const bool init_int = is_integer_kind(t.kind);
+            if ((decl_ptr && init_int) || (decl_int && init_ptr))
+                msg += "; la conversion entero<->puntero no es implicita, usa un "
+                       "cast explicito: (" + type_to_string(s.type) + ")expr";
+            diags_.error(vd->loc, msg);
         }
         // Bug fix 2026-05-23 (LR1): detectar overflow de literales
         // enteros al tipo declarado.  `i32 x = 2147483648;` ahora
