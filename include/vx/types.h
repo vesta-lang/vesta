@@ -745,6 +745,14 @@ constexpr size_t primitive_size_bytes(PrimitiveKind k) noexcept {
  * @return std::string nuevo con la representacion textual.
  */
 inline std::string type_to_string(const Type &t) {
+    // const-correctness: mostrar el qualifier en los mensajes de error para
+    // que un discard de const (`i32* = const i32*`) sea legible ("const i32*
+    // incompatible con i32*") en vez de "i32* incompatible con i32*".
+    if (t.is_const) {
+        Type nc = t;
+        nc.is_const = false;
+        return "const " + type_to_string(nc);
+    }
     // Newtype: mostrar el nombre nominal (e.g. "fd" en vez de "u64").
     // Asi los mensajes de error son legibles ("incompatible con fd"
     // en lugar de "incompatible con u64").
