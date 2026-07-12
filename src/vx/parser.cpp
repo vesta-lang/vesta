@@ -2960,6 +2960,57 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum(
     const bool is_enum = !is_struct;
     (void)consume(); // 'struct' / 'union' / 'enum'
 
+    // Struct OPACO (forward-decl sin cuerpo): `typedef struct Tag *P, *LP;`.
+    // Idioma C de handle opaco.  Se registra `Tag` como un struct INCOMPLETO
+    // (sin campos; completable mas tarde definiendo `struct Tag { ... }` que
+    // sobrescribe el layout) y se crean los typedefs de puntero (`P = Tag*`).
+    // Un puntero a incompleto es valido (8 bytes); derefenciarlo sin completar
+    // falla naturalmente (no tiene campos).
+    if (is_struct && current_.kind == TokenKind::IDENTIFIER &&
+        lex_.peek_at(0).kind == TokenKind::STAR) {
+        const SourceLoc tag_loc = current_.loc;
+        const std::string tag = consume().lexeme;
+        declared_structs_.insert(tag);
+        auto incomplete = std::make_unique<ast::StructDecl>();
+        incomplete->loc = loc_td;
+        incomplete->name = tag;
+        incomplete->is_incomplete = true;
+        // Base = `Tag`; parsear el PRIMER alias `[*]+ NAME` (empieza con `*`) y
+        // luego el resto `, *NAME` con el helper compartido.
+        auto base = std::make_unique<ast::NamedTypeNode>();
+        base->loc = tag_loc;
+        base->name = tag;
+        int stars = 0;
+        while (current_.kind == TokenKind::STAR) { (void)consume(); ++stars; }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del alias de puntero tras "
+                       "'typedef struct Tag *'");
+        } else {
+            const SourceLoc nloc = current_.loc;
+            const std::string alias_name = consume().lexeme;
+            std::unique_ptr<ast::TypeNode> ty = clone_type_node_td_(base.get());
+            for (int i = 0; i < stars; ++i) {
+                auto p = std::make_unique<ast::PointerTypeNode>();
+                p->loc = nloc;
+                p->pointee = std::move(ty);
+                ty = std::move(p);
+            }
+            auto a = std::make_unique<ast::TypeAliasDecl>();
+            a->loc = nloc;
+            a->is_using_form = false;
+            a->name = alias_name;
+            a->aliased = std::move(ty);
+            apply_pending_visibility(a.get());
+            declared_aliases_.insert(alias_name);
+            pending_extra_decls_.push_back(std::move(a));
+        }
+        if (current_.kind == TokenKind::COMMA)
+            parse_c_typedef_ptr_aliases_(base.get());
+        (void)expect(TokenKind::SEMICOLON,
+                     "se esperaba ';' al final del typedef de struct opaco");
+        return incomplete;
+    }
+
     // Tag opcional (ignorado; el name real va al final).  En un enum C-style
     // el tag puede ir seguido de `{` o de `:` (tipo base): `typedef enum Tag :
     // int { ... } Name;`.

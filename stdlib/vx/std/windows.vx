@@ -1051,9 +1051,9 @@ typedef struct _STARTUPINFOW {
 } STARTUPINFOW, *LPSTARTUPINFOW;
 
 // _PROC_THREAD_ATTRIBUTE_LIST es un struct opaco (sin cuerpo publico en los
-// headers de Windows); sus punteros se modelan como void *.
-typedef void * PPROC_THREAD_ATTRIBUTE_LIST;
-typedef void * LPPROC_THREAD_ATTRIBUTE_LIST;
+// headers de Windows): forward-decl incompleto usable solo via puntero.
+typedef struct _PROC_THREAD_ATTRIBUTE_LIST
+    *PPROC_THREAD_ATTRIBUTE_LIST, *LPPROC_THREAD_ATTRIBUTE_LIST;
 typedef struct _STARTUPINFOEXA {
     STARTUPINFOA                    StartupInfo;
     PPROC_THREAD_ATTRIBUTE_LIST     lpAttributeList;

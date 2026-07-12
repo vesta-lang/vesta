@@ -2082,6 +2082,10 @@ struct StructDecl : Node {
     /// con la natural) y padea el tamano a un multiplo de N.  0 = sin override.
     /// Equivalente a C `__declspec(align(N))` / `_Alignas(N)`.
     uint16_t attr_align = 0;
+    /// Struct INCOMPLETO (forward-decl opaco `typedef struct Tag *P;` sin cuerpo).
+    /// Se registra el tipo (usable via puntero, 8 bytes) pero sin campos; una
+    /// definicion posterior `struct Tag { ... }` lo completa (sobrescribe).
+    bool is_incomplete = false;
     StructDecl() : Node(NodeKind::StructDecl) {}
 };
 
