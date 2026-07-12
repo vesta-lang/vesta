@@ -489,6 +489,13 @@ class Parser {
     /// single-pass: el typedef debe declararse ANTES del uso (igual
     /// que cualquier forward decl en C/Vesta).
     std::unordered_set<std::string> declared_aliases_;
+    /// Nombres de los parametros `expr` de la funcion cuyo CUERPO se esta
+    /// parseando ahora mismo.  Sirve para el forwarding de expr-capture anidado:
+    /// si el argumento de una llamada a otra fn expr-capture es exactamente uno
+    /// de estos nombres (`return src(code);` donde `code` es un `expr` param del
+    /// macro), NO se re-captura el identificador como texto ("code") sino que se
+    /// emite un IdentExpr que en AST-eval resuelve al texto ya capturado.
+    std::unordered_set<std::string> current_expr_param_names_;
 
     /// Aliases extra producidos por un typedef C-style multi-declarador
     /// (`typedef LONG *PLONG, *LPLONG;` o `typedef struct {...} FOO, *PFOO;`).

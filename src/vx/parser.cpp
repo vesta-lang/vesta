@@ -1955,7 +1955,16 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
         error_here("se esperaba '{' para abrir el cuerpo de la funcion");
         return fn;
     }
+    // Forwarding de expr-capture anidado: registrar los nombres de params `expr`
+    // de ESTA funcion mientras se parsea su cuerpo, para que una llamada interna
+    // `otra(code)` con `code` = param expr no re-capture el identificador como
+    // texto sino que lo forwardee (ver parse_postfix).
+    auto saved_expr_params = std::move(current_expr_param_names_);
+    current_expr_param_names_.clear();
+    for (const auto &p : fn->params)
+        if (p && p->is_expr_capture) current_expr_param_names_.insert(p->name);
     fn->body = parse_block();
+    current_expr_param_names_ = std::move(saved_expr_params);
     return fn;
 }
 
@@ -7107,10 +7116,36 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
                             captured =
                                 src.substr(start_off, end_off - start_off);
                         }
-                        auto slit = std::make_unique<ast::StringLitExpr>();
-                        slit->loc = loc;
-                        slit->value = std::move(captured);
-                        call->args.push_back(std::move(slit));
+                        // Forwarding de expr-capture anidado: si el arg es
+                        // EXACTAMENTE un identificador que es un param `expr` de
+                        // la funcion actual, emitir un IdentExpr (referencia) en
+                        // vez del texto crudo -- asi en AST-eval `code` resuelve
+                        // al texto ya capturado por el macro externo, no al
+                        // literal "code".
+                        auto is_ident = [](const std::string &s) -> bool {
+                            if (s.empty()) return false;
+                            if (!(std::isalpha((unsigned char)s[0]) ||
+                                  s[0] == '_'))
+                                return false;
+                            for (char c : s)
+                                if (!(std::isalnum((unsigned char)c) ||
+                                      c == '_'))
+                                    return false;
+                            return true;
+                        };
+                        if (is_ident(captured) &&
+                            current_expr_param_names_.count(captured)) {
+                            auto id = std::make_unique<ast::IdentExpr>();
+                            id->loc = loc;
+                            id->name = std::move(captured);
+                            call->args.push_back(std::move(id));
+                        } else {
+                            auto slit =
+                                std::make_unique<ast::StringLitExpr>();
+                            slit->loc = loc;
+                            slit->value = std::move(captured);
+                            call->args.push_back(std::move(slit));
+                        }
                     } else {
                         auto arg = parse_expr();
                         if (arg) call->args.push_back(std::move(arg));
