@@ -17026,7 +17026,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
              * macro; el helper es ahora una fn runtime que lo recibe.  El
              * rewrite a `__macro_` NO aplica (la fn no es is_macro), asi que el
              * nombre queda plano y resuelve contra la fn force-lowered. */
-            if (!r.ok && comptime_fns_to_force_lower_.count(cid->name)) {
+            if ((!r.ok || r.deferred) &&
+                comptime_fns_to_force_lower_.count(cid->name)) {
+                /* El fold en pass-1 puede devolver DIFERIDO (r.ok=true pero
+                 * r.deferred): la comptime fn corre en la ComptimeVM que aun no
+                 * tiene bytecode -> el fold da un valor vacio/placeholder.  Para
+                 * una fn force-lowered (un @Macro lowereable la referencia), NO
+                 * hornear ese vacio: emitir CALLVM a code.<helper>, que se
+                 * ejecuta al INVOCAR el macro (cuando el helper ya existe).  Sin
+                 * esto, un @Macro que llama a un helper comptime devolvia "". */
                 goto skip_comptime_eval_for_macro_to_macro;
             }
             if (!r.ok) {
