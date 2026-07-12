@@ -16449,6 +16449,14 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * emitir una llamada al builtin.  Esto convierte el call site
      * en codigo runtime real generado a partir de string compile-time. */
     if (e->macro_expanded) {
+        // Si el @Macro se expandio a un literal string (`source(expr)` ->
+        // `"texto"`), coaccionarlo a StringObject GC-managed en lugar de bajarlo
+        // como puntero crudo (STR_LIT_ADDR).  Sin esto, `string s = macro()` y
+        // `${macro()}` recibian una direccion cruda en vez del contenido.
+        if (e->macro_expanded->kind == ast::NodeKind::StringLitExpr) {
+            return lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(e->macro_expanded.get()));
+        }
         return lower_expr(e->macro_expanded.get());
     }
 

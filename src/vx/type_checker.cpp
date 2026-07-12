@@ -13255,7 +13255,15 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
             parsed->loc = e->loc;
             /* Type-checar y guardar el AST para que el lowering lo recoja. */
-            const Type rt = check_expr(parsed.get());
+            Type rt = check_expr(parsed.get());
+            /* Si el macro se expandio a un literal string (`source(expr)` ->
+             * `"texto"`), su tipo es STRING (no el char* raw que check_expr da a
+             * un literal desnudo).  Asi la interpolacion `${macro()}` y las
+             * asignaciones a `string` lo tratan como StringObject, no como
+             * puntero crudo.  El lowering coacciona a StringObject. */
+            if (parsed->kind == ast::NodeKind::StringLitExpr) {
+                rt = Type{PrimitiveKind::STRING};
+            }
             e->macro_expanded = std::move(parsed);
             e->result_type = rt;
 
