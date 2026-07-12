@@ -2464,10 +2464,37 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     }
                     std::vector<uint64_t> vm_args;
                     vm_args.reserve(args.size());
-                    for (const auto &a : args)
-                        vm_args.push_back(static_cast<uint64_t>(a.value));
+                    /* Marshalling de args a la ComptimeVM: los STRING (p.ej.
+                     * un `expr code` capturado como texto crudo del call site)
+                     * se convierten a un GcHandle de un StringObject via
+                     * @c marshal_string -- misma maquinaria que el path @Macro
+                     * en check_call.  Sin esto, un `comptime string f(expr c)`
+                     * recibiria 0 en vez del texto y devolveria vacio. */
+                    bool marshal_ok = true;
+                    for (const auto &a : args) {
+                        if (a.is_str) {
+                            uint64_t handle = 0;
+                            if (!const_cast<TypeChecker &>(tc)
+                                     .comptime_runtime()
+                                     .marshal_string(a.str, handle)) {
+                                marshal_ok = false;
+                                break;
+                            }
+                            vm_args.push_back(handle);
+                        } else {
+                            vm_args.push_back(
+                                static_cast<uint64_t>(a.value));
+                        }
+                    }
                     ComptimeEvalResult vr;
                     vr.ok = true;
+                    if (!marshal_ok) {
+                        /* No pudimos marshalizar (VM no lista en pass 1):
+                         * diferir; pass 2 lo resuelve con el bytecode cargado. */
+                        if (ret_is_str) vr.is_str = true;
+                        vr.deferred = true;
+                        return vr;
+                    }
                     if (ret_is_str) {
                         std::string out;
                         const bool inv =
