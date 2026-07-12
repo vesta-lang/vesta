@@ -1,0 +1,23 @@
+// -----------------------------------------------------------------------------
+// Captura `expr` CROSS-MODULO: `src(expr)` vive en otro modulo (strtools).
+// El parser del importador siembra el param `expr` resolviendo el import antes
+// de parsear (reusa el AST del dep, sin re-parsear), asi captura el texto crudo
+// del argumento en vez de parsearlo como expresion.  La fn importada se evalua
+// por tree-walk (no tiene bytecode en el importer).
+// -----------------------------------------------------------------------------
+import strtools only src;
+
+i32 main() {
+    i32 a = 10;
+    i32 b = 3;
+    // El texto EXACTO del argumento se captura como string.
+    string s1 = src(a * b + 1);
+    string s2 = src(ptr -> 0x90 -> 0x10);   // DSL: ni siquiera es una expr Vesta valida
+    println("s1=[${s1}]");   // a * b + 1
+    println("s2=[${s2}]");   // ptr -> 0x90 -> 0x10
+
+    i32 ok = 0;
+    if (str_equals(s1, "a * b + 1"))        { ok = ok + 20; }
+    if (str_equals(s2, "ptr -> 0x90 -> 0x10")) { ok = ok + 22; }
+    return ok;   // 42
+}

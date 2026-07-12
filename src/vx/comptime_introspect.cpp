@@ -2454,8 +2454,16 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * pass 2 (bytecode comptime cargado via prebuilt) devuelve el
                  * valor real; en pass 1 (sin bytecode) devuelve un placeholder
                  * DIFERIDO (ok=true para que consts/exprs no den error, pero
-                 * static_assert no debe dispararse -- se resuelve en pass 2). */
-                if (comptime_fn_needs_vm(tc, fn_it->second)) {
+                 * static_assert no debe dispararse -- se resuelve en pass 2).
+                 *
+                 * EXCEPCION: las comptime fns IMPORTADAS de otro modulo NO se
+                 * re-bajan a IR en el importer (is_imported_comptime -> no hay
+                 * `__macro_<fn>` que invocar en la ComptimeVM local).  Deben
+                 * evaluarse por el TREE-WALKER (comptime_call_fn abajo).  Sin
+                 * este skip, un `source(expr)` importado caia al path VM,
+                 * fallaba el invoke y devolvia vacio. */
+                if (comptime_fn_needs_vm(tc, fn_it->second) &&
+                    !fn_it->second->is_imported_comptime) {
                     bool ret_is_str = false;
                     if (fn_it->second->return_type) {
                         const Type rt = tc.resolve_type_node(
