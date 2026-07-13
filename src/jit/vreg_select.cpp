@@ -433,29 +433,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * proc->registers antes de que el prologo normal (mas abajo) los relea.  El
      * cuerpo y el RET consultan @c cb_entry.  Solo aplica en AbiKind::VM. */
     const bool cb_entry = cb.callback_entry && abi == AbiKind::VM;
-    /* Callback save-set: un cuerpo NO hoja-puro (algun CALL/CALLN/... que use
-     * proc->registers) puede ser invocado desde el interp o una re-entrada ->
-     * hay que salvar/restaurar proc->registers[0..15] del caller.  Se computa
-     * aqui (una pasada) para que el prologo emita CB_SAVE_REGS y cada RET emita
-     * CB_RESTORE_REGS; el rewrite reserva la work-area de 128B. */
-    bool cb_save_set = false;
-    if (cb_entry) {
-        for (const auto &blk : fn_in.blocks) {
-            for (const auto &ins : blk.instrs) {
-                const ir::IrOp o = ins.op;
-                if (o == ir::IrOp::CALL || o == ir::IrOp::CALLN ||
-                    o == ir::IrOp::CALLVIRT || o == ir::IrOp::CALLM ||
-                    o == ir::IrOp::CALLIND || o == ir::IrOp::NEWOBJ ||
-                    o == ir::IrOp::THROW || o == ir::IrOp::TRYENTER ||
-                    o == ir::IrOp::SPAWN || o == ir::IrOp::FUTURE ||
-                    o == ir::IrOp::RAW_ASM) {
-                    cb_save_set = true;
-                    break;
-                }
-            }
-            if (cb_save_set) break;
-        }
-    }
+    /* Callback save-set: SIEMPRE para callbacks.  El marshalling del prologo
+     * escribe proc->registers[1..N] (+ argc) y el RET escribe regs[0]; si el
+     * callback se invoca desde un contexto donde proc->registers es el banco de
+     * registros VIVO del caller (el INTERPRETE, o una re-entrada), eso lo
+     * corromperia.  No podemos saber el contexto del caller en compile-time, asi
+     * que salvamos/restauramos regs[0..15] incondicionalmente (CB_SAVE_REGS en
+     * el prologo, CB_RESTORE_REGS en cada RET; el rewrite reserva 128B).  En
+     * codigo JIT-eado el caller no usa proc->registers a traves del call, pero
+     * el coste (32 mem-ops) es la garantia de correctness pedida. */
+    const bool cb_save_set = cb_entry;
     /* CRITICAL-EDGE SPLITTING (out-of-SSA): si hay >=1 arista critica que
      * entra a un bloque con PHIs, trabajamos sobre una COPIA de la funcion
      * con los puentes insertados (zero-cost para el caso comun sin aristas
@@ -901,11 +888,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
          * slots (seguro).  El RET escribe el retorno en regs[0] Y en RAX. */
         if (cb_entry && b == 0) {
             const size_t np = fn.params.size();
-            /* Bail: TLS-direct requerido (call-fallback clobbea arg-regs -> v2). */
-            if (cb.tls_gs_disp == -1) {
-                vreg_dbg(fn.name.c_str(), "callback(call-fallback)");
-                return false;
-            }
+            /* Call-fallback (tls_gs_disp == -1, p.ej. Linux/ELF donde el proc no
+             * es gs-direct): LOAD_PROC carga proc via un CALL al stub que
+             * PRESERVA los arg-regs (get_proc_addr = cb_preserving_get_proc).
+             * Ya soportado -> no baila.  El marshalling (abajo) lee los args
+             * intactos tras el LOAD_PROC. */
             /* Native arg regs por ABI.  GP (enteros/punteros) + XMM (floats).
              * Win64: la POSICION ordinal del arg es compartida entre bancos
              * (arg i -> GP_i O XMM_i, 4 slots; args 4+ en pila).  SysV: bancos

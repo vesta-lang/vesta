@@ -262,6 +262,9 @@ struct Lowerer {
                    alloca_total == 0u && !has_vm_alloca &&
                    !has_stack_params_in && /* params en pila -> [rbp+off]
                   necesita el frame pointer estable (push rbp; mov rbp,rsp). */
+                   !cb_save_regs_in && /* save-set del callback: la work-area de
+                  128B vive en el frame ([rbp-...]) -> necesita frame estable +
+                  su reserva en spill_bytes (sub rsp). */
                    !jit_no_frameless() &&
                    !jit_osr_count(); /* el trigger (1b) añade un
                   call -> necesita frame con rsp 16-alineado. */

@@ -349,6 +349,122 @@ uint64_t get_ic_slot(uint64_t key) {
     return addr;
 }
 
+/* Callback call-fallback (jubilacion de slots): cuando no hay TLS-direct (Linux,
+ * o Windows si TlsAlloc fallo), el prologo del callback debe cargar proc via un
+ * CALL a get_current_executing_process.  Ese call clobbea los arg-regs nativos
+ * (que aun tienen los args del callback).  Este stub los PRESERVA: guarda los
+ * GP-args (push/pop) + los FP-args (movsd) alrededor del call y devuelve proc en
+ * RAX, para que el marshalling posterior lea los args intactos.  Se genera una
+ * vez en el code cache (ABI del HOST: JIT == host==target).  Devuelve 0 si el
+ * subsistema JIT no esta listo. */
+uint64_t cb_preserving_get_proc() {
+    static uint64_t g_stub = 0;
+    if (g_stub != 0) return g_stub;
+    /* Asegurar el subsistema JIT (code cache) inicializado: en modo interp
+     * (-m vm) este helper puede llamarse antes de que nada mas lo inicialice
+     * -> sin esto g_code_cache seria null, el stub 0, y el LOAD_PROC-fallback
+     * del callback haria `call 0` (SIGSEGV). */
+    std::call_once(g_jit_init_flag, init_jit_subsystem);
+    if (g_code_cache == nullptr) return 0;
+    const uint64_t getproc =
+        reinterpret_cast<uint64_t>(&runtime::get_current_executing_process);
+    std::vector<uint8_t> b;
+    auto imm64 = [&](uint64_t v) {
+        for (int i = 0; i < 8; ++i) b.push_back((v >> (i * 8)) & 0xFF);
+    };
+    /* Prologo comun: alinear rsp a 16 via rbp (agnostico a la alineacion de
+     * entrada, que depende del nº de callee-saved del frame del callback). */
+    const uint8_t pro[] = {
+        0x55,                   /* push rbp */
+        0x48, 0x89, 0xE5,       /* mov rbp, rsp */
+        0x48, 0x83, 0xE4, 0xF0, /* and rsp, -16 */
+    };
+    b.assign(pro, pro + sizeof(pro));
+    const uint8_t epi[] = {
+        0x48, 0x89, 0xEC, /* mov rsp, rbp */
+        0x5D,             /* pop rbp */
+        0xC3,             /* ret */
+    };
+#if defined(_WIN32)
+    /* Win64: preservar RCX,RDX,R8,R9 + XMM0-3.  0x60 = shadow(0x20) + 4 GP
+     * (0x20) + 4 XMM (0x20); 16-aligned.  GP en [rsp+0x20..], XMM en
+     * [rsp+0x40..]; shadow [rsp+0..0x20] para el call a get_proc. */
+    const uint8_t win[] = {
+        0x48, 0x83, 0xEC, 0x60,             /* sub rsp, 0x60 */
+        0x48, 0x89, 0x4C, 0x24, 0x20,       /* mov [rsp+0x20], rcx */
+        0x48, 0x89, 0x54, 0x24, 0x28,       /* mov [rsp+0x28], rdx */
+        0x4C, 0x89, 0x44, 0x24, 0x30,       /* mov [rsp+0x30], r8 */
+        0x4C, 0x89, 0x4C, 0x24, 0x38,       /* mov [rsp+0x38], r9 */
+        0xF2, 0x0F, 0x11, 0x44, 0x24, 0x40, /* movsd [rsp+0x40], xmm0 */
+        0xF2, 0x0F, 0x11, 0x4C, 0x24, 0x48, /* movsd [rsp+0x48], xmm1 */
+        0xF2, 0x0F, 0x11, 0x54, 0x24, 0x50, /* movsd [rsp+0x50], xmm2 */
+        0xF2, 0x0F, 0x11, 0x5C, 0x24, 0x58, /* movsd [rsp+0x58], xmm3 */
+        0x48, 0xB8};                        /* mov rax, imm64 */
+    b.insert(b.end(), win, win + sizeof(win));
+    imm64(getproc);
+    const uint8_t win2[] = {
+        0xFF, 0xD0,                         /* call rax  (rax = proc) */
+        0x48, 0x8B, 0x4C, 0x24, 0x20,       /* mov rcx, [rsp+0x20] */
+        0x48, 0x8B, 0x54, 0x24, 0x28,       /* mov rdx, [rsp+0x28] */
+        0x4C, 0x8B, 0x44, 0x24, 0x30,       /* mov r8, [rsp+0x30] */
+        0x4C, 0x8B, 0x4C, 0x24, 0x38,       /* mov r9, [rsp+0x38] */
+        0xF2, 0x0F, 0x10, 0x44, 0x24, 0x40, /* movsd xmm0, [rsp+0x40] */
+        0xF2, 0x0F, 0x10, 0x4C, 0x24, 0x48, /* movsd xmm1, [rsp+0x48] */
+        0xF2, 0x0F, 0x10, 0x54, 0x24, 0x50, /* movsd xmm2, [rsp+0x50] */
+        0xF2, 0x0F, 0x10, 0x5C, 0x24, 0x58, /* movsd xmm3, [rsp+0x58] */
+    };
+    b.insert(b.end(), win2, win2 + sizeof(win2));
+#else
+    /* SysV: preservar RDI,RSI,RDX,RCX,R8,R9 + XMM0-7.  0x70 = 6 GP (0x30) +
+     * 8 XMM (0x40); 16-aligned.  Sin shadow.  GP en [rsp+0..], XMM en
+     * [rsp+0x30..]. */
+    const uint8_t sv[] = {
+        0x48, 0x83, 0xEC, 0x70,             /* sub rsp, 0x70 */
+        0x48, 0x89, 0x3C, 0x24,             /* mov [rsp+0x00], rdi */
+        0x48, 0x89, 0x74, 0x24, 0x08,       /* mov [rsp+0x08], rsi */
+        0x48, 0x89, 0x54, 0x24, 0x10,       /* mov [rsp+0x10], rdx */
+        0x48, 0x89, 0x4C, 0x24, 0x18,       /* mov [rsp+0x18], rcx */
+        0x4C, 0x89, 0x44, 0x24, 0x20,       /* mov [rsp+0x20], r8 */
+        0x4C, 0x89, 0x4C, 0x24, 0x28,       /* mov [rsp+0x28], r9 */
+        0xF2, 0x0F, 0x11, 0x44, 0x24, 0x30, /* movsd [rsp+0x30], xmm0 */
+        0xF2, 0x0F, 0x11, 0x4C, 0x24, 0x38, /* movsd [rsp+0x38], xmm1 */
+        0xF2, 0x0F, 0x11, 0x54, 0x24, 0x40, /* movsd [rsp+0x40], xmm2 */
+        0xF2, 0x0F, 0x11, 0x5C, 0x24, 0x48, /* movsd [rsp+0x48], xmm3 */
+        0xF2, 0x0F, 0x11, 0x64, 0x24, 0x50, /* movsd [rsp+0x50], xmm4 */
+        0xF2, 0x0F, 0x11, 0x6C, 0x24, 0x58, /* movsd [rsp+0x58], xmm5 */
+        0xF2, 0x0F, 0x11, 0x74, 0x24, 0x60, /* movsd [rsp+0x60], xmm6 */
+        0xF2, 0x0F, 0x11, 0x7C, 0x24, 0x68, /* movsd [rsp+0x68], xmm7 */
+        0x48, 0xB8};                        /* mov rax, imm64 */
+    b.insert(b.end(), sv, sv + sizeof(sv));
+    imm64(getproc);
+    const uint8_t sv2[] = {
+        0xFF, 0xD0,                         /* call rax  (rax = proc) */
+        0x48, 0x8B, 0x3C, 0x24,             /* mov rdi, [rsp+0x00] */
+        0x48, 0x8B, 0x74, 0x24, 0x08,       /* mov rsi, [rsp+0x08] */
+        0x48, 0x8B, 0x54, 0x24, 0x10,       /* mov rdx, [rsp+0x10] */
+        0x48, 0x8B, 0x4C, 0x24, 0x18,       /* mov rcx, [rsp+0x18] */
+        0x4C, 0x8B, 0x44, 0x24, 0x20,       /* mov r8, [rsp+0x20] */
+        0x4C, 0x8B, 0x4C, 0x24, 0x28,       /* mov r9, [rsp+0x28] */
+        0xF2, 0x0F, 0x10, 0x44, 0x24, 0x30, /* movsd xmm0, [rsp+0x30] */
+        0xF2, 0x0F, 0x10, 0x4C, 0x24, 0x38, /* movsd xmm1, [rsp+0x38] */
+        0xF2, 0x0F, 0x10, 0x54, 0x24, 0x40, /* movsd xmm2, [rsp+0x40] */
+        0xF2, 0x0F, 0x10, 0x5C, 0x24, 0x48, /* movsd xmm3, [rsp+0x48] */
+        0xF2, 0x0F, 0x10, 0x64, 0x24, 0x50, /* movsd xmm4, [rsp+0x50] */
+        0xF2, 0x0F, 0x10, 0x6C, 0x24, 0x58, /* movsd xmm5, [rsp+0x58] */
+        0xF2, 0x0F, 0x10, 0x74, 0x24, 0x60, /* movsd xmm6, [rsp+0x60] */
+        0xF2, 0x0F, 0x10, 0x7C, 0x24, 0x68, /* movsd xmm7, [rsp+0x68] */
+    };
+    b.insert(b.end(), sv2, sv2 + sizeof(sv2));
+#endif
+    b.insert(b.end(), epi, epi + sizeof(epi));
+    uint8_t *code = g_code_cache->alloc(b.size(), 16);
+    if (code == nullptr) return 0;
+    std::memcpy(code, b.data(), b.size());
+    g_code_cache->commit(code, b.size());
+    g_stub = reinterpret_cast<uint64_t>(code);
+    return g_stub;
+}
+
 /* C2 tier-up: contador de invocaciones por funcion (keyed por fn_pc),
  * conjunto de fns ya tieradas (idempotencia), y mapa fn_pc -> MethodInfo
  * (para hacer swap de method->jit_code ademas del pc-map).  Tocados
@@ -1853,12 +1969,20 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
                   &vm->scheduler.profiler_jit_instr_counter)
             : 0;
 
-    /* Resolver TLS-direct (Win64) o fallback por call para LOAD_PROC. */
-    const uint64_t getproc_addr =
-        reinterpret_cast<uint64_t>(&runtime::get_current_executing_process);
+    /* Resolver TLS-direct (Win64) o fallback por call para LOAD_PROC.  El
+     * fallback usa el STUB que preserva los arg-regs alrededor del call a
+     * get_current_executing_process (sin el, el call borraria los args del
+     * callback antes del marshalling). */
+    const uint64_t getproc_addr = cb_preserving_get_proc();
     int32_t tls_gs_disp = -1;
 #if defined(_WIN32)
-    {
+    /* VESTA_CB_FORCE_CALL=1: fuerza el fallback por call (para validar el stub
+     * en Windows, donde normalmente hay TLS-direct). */
+    static const bool force_call = [] {
+        const char *v = std::getenv("VESTA_CB_FORCE_CALL");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    if (!force_call) {
         const unsigned long idx = runtime::jit_proc_tls_index();
         if (idx != 0xFFFFFFFFu && idx < 64) {
             tls_gs_disp = static_cast<int32_t>(0x1480u + idx * 8u);
