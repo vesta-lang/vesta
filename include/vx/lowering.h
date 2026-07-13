@@ -1867,6 +1867,10 @@ class Lowering {
     std::string instrument_mode_ = "none";
     /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
+    /// Multihilo AOT: true si esta funcion (o el modulo) uso `spawn { }` que bajo
+    /// a un hilo real (__vx_thread_run).  Al lowerar `main` con este flag, se
+    /// inyecta CALL __vx_thread_join_all() antes de su RET (join-all implicito).
+    bool vx_thread_used_ = false;
     /// Bits del target para validar el inline-asm (@Naked/asm{}); 64 por defecto.
     uint8_t asm_target_bits_ = 64;
     /// Ancho del chunk SIMD del vectorizador en AOT (16/32/64 bytes); 16 default.

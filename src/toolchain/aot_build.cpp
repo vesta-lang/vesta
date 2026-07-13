@@ -280,6 +280,88 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             }
 
             // ----------------------------------------------------------------
+            // Auto-bundle del runtime de MULTIHILO (stdlib/vx/vx_thread.vx).
+            // `spawn { }` en AOT baja a CALL __vx_thread_run (hilo real del SO) +
+            // el lowering inyecta CALL __vx_thread_join_all al final de main.
+            // Fusionamos vx_thread.vx (CreateThread/pthread) -> .o autocontenido.
+            // ----------------------------------------------------------------
+            {
+                bool uses_thread = false, defines_thread = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vx_thread_run") defines_thread = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALL &&
+                                (ins.func_name == "__vx_thread_run" ||
+                                 ins.func_name == "__vx_thread_join_all"))
+                                uses_thread = true;
+                }
+                if (uses_thread && !defines_thread) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vx/vx_thread.vx",
+                        exe_dir + "/../stdlib/vx/vx_thread.vx",
+                        "stdlib/vx/vx_thread.vx"};
+                    std::string vt_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            vt_path = c;
+                            break;
+                        }
+                    if (vt_path.empty()) {
+                        std::cerr << "[aot] usa spawn (hilo) pero no encuentro "
+                                     "stdlib/vx/vx_thread.vx (enlazalo a mano).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vtf(vt_path);
+                    std::string vt_src(
+                        (std::istreambuf_iterator<char>(vtf)),
+                        std::istreambuf_iterator<char>());
+                    vx::CompileOptions vt_opts;
+                    vt_opts.module_name = "vx_thread";
+                    vt_opts.opt_level = 2;
+                    vt_opts.native_poo = true;
+                    vt_opts.asm_target_bits = copts.asm_target_bits;
+                    vx::CompileResult vt_cr =
+                        vx::compile_vx_source(vt_src, vt_path, vt_opts);
+                    ir::IrModule vt_mod;
+                    if (!vt_cr.ok || vt_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(vt_cr.ir_module_cache_bytes,
+                                                   vt_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de "
+                                     "multihilo vx_thread.vx.\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : vt_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(vt_mod.static_data));
+                    for (auto &gv : vt_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : vt_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] runtime de multihilo "
+                                 "(stdlib/vx/vx_thread.vx) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
+            // ----------------------------------------------------------------
             // Auto-bundle del runtime de asincronia (stdlib/vx/vx_async.vx).
             // Si el modulo usa spawn/future/await/fulfill, el lowering
             // native_poo emite CALL __vx_spawn/__vx_future_new/__vx_await/

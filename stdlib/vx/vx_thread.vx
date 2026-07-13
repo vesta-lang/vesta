@@ -80,3 +80,47 @@ public void vx_thread_join(u64 handle) {
     }
     pthread_join(handle, 0); // handle = pthread_t (valor), sin heap que liberar
 }
+
+// ---------------------------------------------------------------------------
+// Sugar `spawn { }` en AOT: hilo real registrado + join-all implicito al salir.
+// El lowering de native_poo baja `spawn { body }` a CALL __vx_thread_run(body) e
+// INYECTA CALL __vx_thread_join_all() antes del RET de main -> el programa espera
+// a todos los hilos lanzados antes de terminar (sin join explicito del usuario).
+// ---------------------------------------------------------------------------
+
+comptime i64 VX_THREAD_MAX = 256;   ///< Hilos simultaneos por `spawn` (registro).
+u64[256] __vx_thread_handles;       ///< HANDLEs de los hilos lanzados por spawn.
+i64 __vx_thread_n = 0;              ///< Numero de hilos registrados.
+
+/**
+ * @brief Lanza un hilo real para un `spawn { body }` y registra su HANDLE.
+ * @param body Direccion nativa de la fn del cuerpo del spawn.
+ * @return HANDLE del hilo (>0), o 0 si fallo / tabla llena.
+ * @note El HANDLE queda registrado para @ref __vx_thread_join_all (join-all
+ *       implicito que el lowering inyecta al final de main).
+ */
+public u64 __vx_thread_run(u64 body) {
+    if (__vx_thread_n >= VX_THREAD_MAX) {
+        return 0;
+    }
+    u64 h = vx_thread_spawn(body, 0);
+    if (h == 0) {
+        return 0;
+    }
+    __vx_thread_handles[__vx_thread_n] = h;
+    __vx_thread_n = __vx_thread_n + 1;
+    return h;
+}
+
+/**
+ * @brief Espera a que TODOS los hilos lanzados por `spawn` terminen.
+ * @note Lo inyecta el lowering antes del RET de main; el usuario no lo llama.
+ */
+public void __vx_thread_join_all() {
+    i64 i = 0;
+    while (i < __vx_thread_n) {
+        vx_thread_join(__vx_thread_handles[i]);
+        i = i + 1;
+    }
+    __vx_thread_n = 0;
+}

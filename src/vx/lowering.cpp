@@ -3355,6 +3355,18 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // añadir RET con valor por defecto (0) en funciones no-void, o
     // RET sin valor en void.
     if (!block_terminated_) {
+        // Multihilo AOT: join-all implicito de los hilos de `spawn` en el RET
+        // por caida-al-final de main (sin return explicito).
+        if (native_poo_ && vx_thread_used_ && fd->name == "main") {
+            ir::IrInstr jc{};
+            jc.op = ir::IrOp::CALL;
+            jc.type = ir::IrType::VOID;
+            jc.dst = ir::IR_NO_VALUE;
+            jc.func_name = "__vx_thread_join_all";
+            jc.is_call_site = true;
+            jc.source_line = fd->loc.line;
+            fn.append(current_block_, std::move(jc));
+        }
         // emitir cleanups de auto-free de colecciones antes
         // del RET implicito.  Garantiza liberacion incluso si la
         // funcion cae al final sin un return explicito.
@@ -6485,6 +6497,21 @@ void Lowering::lower_for(ast::ForStmt *s) {
 }
 
 void Lowering::lower_return(ast::ReturnStmt *s) {
+    // Multihilo AOT: join-all implicito de los hilos lanzados por `spawn` ANTES
+    // del RET de main, para que sus efectos (sobre globals compartidos) esten
+    // completos cuando main lee su valor de retorno.  Se inyecta en CADA return
+    // de main; __vx_thread_join_all es no-op si no hay hilos.
+    if (native_poo_ && vx_thread_used_ && fn_ != nullptr &&
+        fn_->name == "main") {
+        ir::IrInstr jc{};
+        jc.op = ir::IrOp::CALL;
+        jc.type = ir::IrType::VOID;
+        jc.dst = ir::IR_NO_VALUE;
+        jc.func_name = "__vx_thread_join_all";
+        jc.is_call_site = true;
+        jc.source_line = s->loc.line;
+        fn_->append(current_block_, std::move(jc));
+    }
     // sret: si la funcion declara devolver Optional/Result, no
     // emitimos un RET con valor; en cambio:
     //   1. Bajamos s->value a un buffer local (Some/Ok/Err producen
@@ -12016,18 +12043,20 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     // regs al child antes de make_ready.  Aplica para Auto policy.
     const auto &caps = spawn_captured_ssa_values_;
 
-    // AOT/bare (native_poo_): spawn = hilo 1:1 del SO via CALL __vx_spawn
-    // (CreateThread en Win, clone en Linux), bundle-ado desde vx_thread.vx.
-    // El hint de `here`/`on(N)` se ignora (sin schedulers; cada spawn es un
-    // hilo).  Las capturas (SPAWN_ARGS) llegan en la Fase 2; por ahora solo
-    // el caso sin capturas (las capturas caen al rechazo de aot_analyze).
+    // AOT/bare (native_poo_): spawn = HILO REAL del SO via CALL __vx_thread_run
+    // (CreateThread en Win, pthread en Linux), bundle-ado desde vx_thread.vx.  El
+    // hint de `here`/`on(N)` se ignora (cada spawn es un hilo del SO).  El HANDLE
+    // se registra para el join-all implicito que se inyecta al final de main
+    // (vx_thread_used_ marca que hay que inyectarlo).  Las capturas (SPAWN_ARGS)
+    // llegan en la Fase 2; por ahora solo el caso sin capturas.
     if (native_poo_ && caps.empty()) {
+        vx_thread_used_ = true;
         const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
         ir::IrInstr c{};
         c.op = ir::IrOp::CALL;
         c.type = ir::IrType::I64;
         c.dst = v_pid;
-        c.func_name = "__vx_spawn";
+        c.func_name = "__vx_thread_run";
         c.operands = {v_pc};
         c.is_call_site = true;
         c.source_line = e->loc.line;
