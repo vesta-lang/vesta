@@ -1592,15 +1592,60 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
         return r;
     }
     case ast::NodeKind::StringLitExpr: {
-        /* A.39: string literal compile-time.  Solo aceptamos NO
-         * interpolados (los interpolados requieren evaluar las
-         * expresiones de interpolacion, lo cual delegamos al
-         * lowering normal). */
+        /* String literal compile-time.  Los NO interpolados devuelven su texto.
+         * Los INTERPOLADOS (`"a ${e} b"`, tambien triple-quoted) se construyen
+         * iterando parts/exprs: cada expr de interpolacion se comptime-evalua
+         * (string -> tal cual, int/char -> ASCII decimal) y se concatena.
+         *
+         * Esto es el BOOTSTRAP del pass-1 del two-phase: un @Macro que emite
+         * codigo via interpolacion (`"() => { ${bf_compile_body(src)} }"`)
+         * necesita expandirse en pass-1 para conocer el tipo de la expansion;
+         * la EJECUCION final (pass-2) corre en la ComptimeVM (interp/JIT) sobre
+         * el `__macro_<X>` ya compilado.  Sin esto, un macro interpolado no era
+         * evaluable (solo funcionaba con concat `+`). */
         auto *sl = static_cast<const ast::StringLitExpr *>(expr);
-        if (sl->is_interpolated()) return r;
+        if (!sl->is_interpolated()) {
+            r.ok = true;
+            r.is_str = true;
+            r.str = sl->value;
+            return r;
+        }
+        std::string out;
+        bool any_deferred = false;
+        const auto &parts = sl->interp_parts;
+        const auto &exprs = sl->interp_exprs;
+        for (size_t k = 0; k < parts.size(); ++k) {
+            out.append(parts[k]);
+            if (k < exprs.size()) {
+                ComptimeEvalResult er = comptime_eval_expr(tc, exprs[k].get());
+                /* Deferido (pass-1 del two-phase: la ComptimeVM aun no tiene el
+                 * bytecode del helper): usamos un placeholder VACIO y marcamos
+                 * el resultado como deferido.  Asi la interpolacion produce la
+                 * ESTRUCTURA (`"() => { ... }"` con cuerpo vacio) -> el type-
+                 * check de pass-1 ve un lambda valido y resuelve su tipo; pass-2
+                 * (VM cargada) reconstruye el texto completo.  Sin esto, un solo
+                 * expr deferido tumbaria toda la interpolacion (bf_gen -> ""). */
+                if (er.deferred) {
+                    any_deferred = true;
+                    continue;
+                }
+                if (!er.ok) return r; /* r.ok sigue false -> no evaluable */
+                if (er.is_str) {
+                    out.append(er.str);
+                } else if (!er.is_array && !er.is_struct) {
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "%lld",
+                                  static_cast<long long>(er.value));
+                    out.append(buf);
+                } else {
+                    return r; /* array/struct en interpolacion: no soportado */
+                }
+            }
+        }
         r.ok = true;
         r.is_str = true;
-        r.str = sl->value;
+        r.deferred = any_deferred;
+        r.str = std::move(out);
         return r;
     }
     case ast::NodeKind::IdentExpr: {

@@ -11821,14 +11821,19 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         deferrable = true;
                     }
                 }
-                /* Dentro de un @Macro body, el arg puede ser una expresion
-                 * RUNTIME (param del macro, indexing de un array local, etc.):
-                 * el builtin (to_str/chr/substr/...) se baja a una CALL runtime
-                 * (MC.15) y se VM-evalua, no se pliega en compile-time.  No
-                 * exigir que el arg sea comptime-evaluable en ese contexto. */
-                if (!deferrable && current_fn_is_macro_) {
-                    deferrable = true;
-                }
+                /* Estos builtins (concat/streq/strlen/chr/ord/substr/repeat/
+                 * to_str/replace/contains) son las FUNCIONES ESTANDAR del
+                 * lenguaje: bajan a ops runtime (STRLEN/STRCAT/STRCMP/...) que la
+                 * ComptimeVM (interp/JIT) ejecuta.  Cuando el argumento NO es un
+                 * comptime const (p.ej. `strlen(src)` donde `src` es un param de
+                 * una fn -- comptime o no -- llamada desde un @Macro), NO se
+                 * pliega en compile-time: se difiere a la CALL runtime y se
+                 * VM-evalua al invocar.  Por eso NO es un error -- son las mismas
+                 * funciones estandar, sin helper comptime-especifico.  (El fold
+                 * estatico sigue ocurriendo cuando el arg SI es const: r.ok=true,
+                 * no se llega aqui.) */
+                (void)current_fn_is_macro_;
+                deferrable = true;
                 if (!deferrable) {
                     diags_.error(e->args[i]->loc,
                                  nm + ": argumento " + std::to_string(i) +
@@ -13259,6 +13264,24 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         if (fn_it != comptime_fns_.end() && fn_it->second &&
             fn_it->second->is_macro) {
+            /* Pass-1 del two-phase: si algun ARG del macro resuelve a un valor
+             * comptime aun DEFERIDO (p.ej. `inject(CODE)` con
+             * `comptime string CODE = gen(...)` cuyo `gen` se rutea a la
+             * ComptimeVM sin bytecode todavia), no podemos expandir el macro:
+             * el arg no tiene valor real en esta pasada.  DIFERIMOS -> COUNT
+             * (tipo "desconocido" que suprime los chequeos en cascada del
+             * inicializador/interpolacion); pass-2 (con el bytecode cargado)
+             * evalua los args reales y expande el macro.  Un arg no
+             * comptime-evaluable devuelve ok=false (no deferred) y no dispara
+             * esto -- solo los DEFERIDOS genuinos. */
+            for (const auto &a : e->args) {
+                if (!a) continue;
+                const ComptimeEvalResult ar = comptime_eval_expr(*this, a.get());
+                if (ar.deferred) {
+                    e->result_type = Type{PrimitiveKind::COUNT};
+                    return e->result_type;
+                }
+            }
             /* Phase MC.9/MC.10: VM eval es el camino DEFAULT cuando
              * el bytecode esta disponible.  Sin flags ni opt-in: si
              * @c comptime_runtime_ tiene el macro registrado y los
@@ -13397,6 +13420,18 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             /* Fallback AST: corre solo si VM-only no aplico o fallo. */
             if (!used_vm) {
                 r = comptime_eval_expr(*this, e);
+            }
+            /* Pass-1 del two-phase: si la expansion del macro es DEFERIDA (sus
+             * args dependen de un valor comptime que aun no esta disponible
+             * porque la ComptimeVM no esta cargada -- p.ej. `inject(CODE)` con
+             * `comptime string CODE = gen(...)` ruteado a la VM), NO parseamos
+             * el resultado (vacio) ni erramos.  Devolvemos el sentinel COUNT
+             * (tipo "desconocido") que suprime los chequeos en cascada del
+             * inicializador/interpolacion; pass-2 (con VESTA_MC_PREBUILT) tiene
+             * el bytecode, regenera el cuerpo real y resuelve el tipo. */
+            if (r.deferred) {
+                e->result_type = Type{PrimitiveKind::COUNT};
+                return e->result_type;
             }
             if (!r.ok || !r.is_str) {
                 diags_.error(e->loc,

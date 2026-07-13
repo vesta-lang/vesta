@@ -7208,7 +7208,78 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
                             auto slit =
                                 std::make_unique<ast::StringLitExpr>();
                             slit->loc = loc;
-                            slit->value = std::move(captured);
+                            /* Huecos de interpolacion `${expr}` en el texto
+                             * capturado: `source(...)` funciona como quasi-quote
+                             * -- el argumento se escribe como CODIGO legible (el
+                             * IDE lo resalta) y los `${expr}` se evaluan y
+                             * splicean.  Escaneamos el texto crudo: cada `${...}`
+                             * (con tracking de profundidad de llaves) se lex+parsea
+                             * como una expresion y va a @c interp_exprs; el texto
+                             * entre huecos va a @c interp_parts (layout N exprs ->
+                             * N+1 parts).  Sin huecos, es un StringLit simple. */
+                            std::string cur_part;
+                            bool has_interp = false;
+                            size_t sp = 0;
+                            while (sp < captured.size()) {
+                                /* Escape `\${...}`: hueco de interpolacion
+                                 * RUNTIME que ATRAVIESA hasta el codigo generado
+                                 * (no se evalua en comptime).  Emitimos `${`
+                                 * literal y seguimos -- el `${...}` queda en el
+                                 * texto de salida para que la interpolacion del
+                                 * lambda generado lo resuelva en runtime.  Asi
+                                 * `source( print("\${tape[p]:char}"); )` produce
+                                 * `print("${tape[p]:char}")` en el codigo. */
+                                if (sp + 1 < captured.size() &&
+                                    captured[sp] == '\\' &&
+                                    captured[sp + 1] == '$') {
+                                    cur_part.push_back('$');
+                                    sp += 2; /* saltar `\$`; el `{` queda literal */
+                                    continue;
+                                }
+                                if (sp + 1 < captured.size() &&
+                                    captured[sp] == '$' &&
+                                    captured[sp + 1] == '{') {
+                                    has_interp = true;
+                                    slit->interp_parts.push_back(cur_part);
+                                    cur_part.clear();
+                                    sp += 2; /* saltar `${` */
+                                    const size_t estart = sp;
+                                    int bdepth = 1;
+                                    while (sp < captured.size() && bdepth > 0) {
+                                        if (captured[sp] == '{')
+                                            ++bdepth;
+                                        else if (captured[sp] == '}') {
+                                            --bdepth;
+                                            if (bdepth == 0) break;
+                                        }
+                                        ++sp;
+                                    }
+                                    std::string expr_txt =
+                                        captured.substr(estart, sp - estart);
+                                    if (sp < captured.size())
+                                        ++sp; /* saltar `}` de cierre */
+                                    /* lex+parse el texto del hueco como expr. */
+                                    Lexer hole_lex(expr_txt,
+                                                   "<source-interp>", diags_);
+                                    Parser hole_par(hole_lex, diags_);
+                                    std::unique_ptr<ast::Expr> he =
+                                        hole_par.parse_one_expr();
+                                    slit->interp_exprs.push_back(std::move(he));
+                                    slit->interp_formats.emplace_back();
+                                } else {
+                                    cur_part.push_back(captured[sp]);
+                                    ++sp;
+                                }
+                            }
+                            if (has_interp) {
+                                slit->interp_parts.push_back(cur_part);
+                            } else {
+                                /* Sin huecos: el texto va en @c value.  Usamos
+                                 * @c cur_part (procesado -- con los escapes `\$`
+                                 * ya resueltos a `$`), NO @c captured (crudo),
+                                 * para que `\${...}` se emita como `${...}`. */
+                                slit->value = std::move(cur_part);
+                            }
                             call->args.push_back(std::move(slit));
                         }
                     } else {

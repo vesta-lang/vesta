@@ -2,32 +2,33 @@
 //
 // Compilador Brainfuck -> Vesta escrito USANDO SOLO COMPTIME.
 //
-// El @Macro `bf(codigo)` recibe el fuente Brainfuck como EXPRESION (captura
-// `expr`, texto crudo en el sitio de llamada) y, en tiempo de compilacion,
-// EMITE codigo Vesta valido: un lambda `fn() -> i32` que ejecuta el programa
-// sobre una cinta de celdas.  El test lo asigna a una variable y lo invoca ->
-// el codigo generado se compila y ejecuta como cualquier otro codigo Vesta
-// (cero interprete Brainfuck en runtime).
+// `bf_gen(src)` compila un fuente Brainfuck a codigo Vesta (un lambda
+// `fn() -> i32` que ejecuta el programa sobre una cinta de celdas).  El @Macro
+// `bf(src)` lo INYECTA como expresion (para asignarlo a una variable y correrlo)
+// y `comptime string CODE = bf_gen(PROG)` lo captura como string (para
+// MOSTRARLO).  El programa Brainfuck se define UNA sola vez (`PROG`); el codigo
+// generado y el codigo ejecutado se derivan de esa unica fuente.  Cero
+// interprete Brainfuck en runtime.
 //
-// Mapeo de los 8 comandos Brainfuck a Vesta:
-//   >   ->  p = p + 1;                (mover puntero a la derecha)
-//   <   ->  p = p - 1;                (mover puntero a la izquierda)
-//   +   ->  tape[p] = tape[p] + 1;    (incrementar celda)
-//   -   ->  tape[p] = tape[p] - 1;    (decrementar celda)
-//   .   ->  print_char(tape[p]);      (imprimir celda como caracter)
-//   ,   ->  tape[p] = 0;              (leer entrada: EOF -> 0)
-//   [   ->  while (tape[p] != 0) {    (inicio de bucle)
-//   ]   ->  }                         (fin de bucle)
-// Cualquier otro caracter se ignora (comentarios en el fuente BF).
+// Todo el compilador corre en la ComptimeVM (interprete/JIT): `bf_classify` /
+// `bf_emit` / `bf_compile_body` / `bf_gen` son `comptime fn` (corren en
+// compile-time para GENERAR el codigo) y usan las FUNCIONES ESTANDAR del
+// lenguaje (`strlen`, `+` de strings, `s[i]`, `source`), no helpers especificos
+// de comptime.
 //
-// Nota sobre la captura `expr`: el texto se recorta rastreando la profundidad
-// de () [] {}, asi que el fuente Brainfuck debe tener los corchetes `[ ]`
-// balanceados (todo programa BF valido lo cumple) y no puede contener `,`
-// (colisiona con el separador de argumentos); por eso el compilador de este
-// test cubre el nucleo Turing-completo `> < + - [ ] .`.
+// Los fragmentos de codigo Vesta se escriben con `comptime.source(...)`: el IDE
+// resalta el argumento como CODIGO real (no un string opaco) y `source`
+// devuelve su texto crudo, que se splicea en el cuerpo generado.  Los
+// fragmentos con llaves desbalanceadas (`while (...) {` y `}`) no pueden
+// capturarse con `source` (rastrea la profundidad de {}) y se dejan como string.
+//
+// Los 8 comandos Brainfuck se modelan con un `enum` de tokens y se despachan
+// con `match` (dos matches: caracter -> token, token -> fragmento de codigo).
 //
 // El programa BF de prueba `++++++[>+++++++<-]>` calcula 6*7 = 42 en la
 // celda 1 y deja el puntero ahi.  Resultado esperado: R0 == 42.
+
+import std.comptime only source, inject;
 
 // --- El compilador Brainfuck (comptime puro) -------------------------------
 
@@ -50,15 +51,20 @@ comptime BfTok bf_classify(char c) {
     return BfTok.Nop;
 }
 
-// Emite el fragmento de codigo Vesta de un token (match sobre el enum).
+// Emite el fragmento de codigo Vesta de un token (match sobre el enum).  Los
+// fragmentos balanceados se escriben como CODIGO real via `source(...)` (el IDE
+// los resalta); `Loop`/`EndLoop` (llaves sueltas) quedan como string.
 comptime string bf_emit(BfTok t) {
+
+    // usamos "\${tape[p]:char}" para que no se procese en tiempo de compilacion
+    // sino en run-time
     match t {
-        case Right   => return " p = p + 1;";
-        case Left    => return " p = p - 1;";
-        case Inc     => return " tape[p] = tape[p] + 1;";
-        case Dec     => return " tape[p] = tape[p] - 1;";
-        case Out     => return " print_char(tape[p]);";
-        case In      => return " tape[p] = 0;";
+        case Right   => return source( p++; );
+        case Left    => return source( p--; );
+        case Inc     => return source( tape[p]++; );
+        case Dec     => return source( tape[p]--; );
+        case Out     => return source( print("\${tape[p]:char}"); );
+        case In      => return source( tape[p] = 0; );
         case Loop    => return " while (tape[p] != 0) {";
         case EndLoop => return " }";
         case Nop     => return "";
@@ -76,23 +82,32 @@ comptime string bf_compile_body(string src) {
     return body;
 }
 
-// @Macro: recibe el fuente Brainfuck como EXPRESION y EMITE un lambda Vesta
-// que lo ejecuta.  El codigo generado es una expresion (un lambda) -> encaja
-// en el re-parse del macro (que espera una expresion).  El cuerpo del lambda
-// lleva los statements compilados.  Un @Macro/comptime fn puede llamar a otras
-// comptime fns en su cuerpo (aqui `bf_compile_body`).
-@Macro comptime string bf(expr src) {
-    return "() => { i32[4096] tape; i32 p = 0;" + bf_compile_body(src) +
-           " return tape[p]; }";
+// Compila un fuente Brainfuck a un lambda Vesta completo (como string de
+// codigo).  El cuerpo se interpola con `${bf_compile_body(src)}`.
+comptime string bf_gen(string src, u32 size_stack) {
+    return source(
+        () => {
+            i32[${size_stack}] tape;
+            i32 p = 0;
+            ${bf_compile_body(src)}
+            return tape[p];
+        }
+    );
 }
 
-// --- Uso: compilar y ejecutar un programa Brainfuck ------------------------
-
 i32 main() {
-    // `bf(...)` se expande, en compile-time, al lambda Vesta equivalente.
-    // El fuente Brainfuck se pasa como expresion cruda (sin comillas).
-    fn() -> i32 programa = bf(++++++[>+++++++<-]>);
+    comptime string PROG = source(++++++[>+++++++<-]>);
+    comptime string CODE = bf_gen(PROG, 4096);
+
+    // Imprime el codigo Vesta que el compilador Brainfuck comptime genero.
+    println("=== Codigo Vesta generado por el compilador Brainfuck (comptime) ===");
+    println("${CODE}");
+
+    // `inject(PROG)` se expande, en compile-time, al mismo lambda Vesta.
+    fn() -> i32 programa = inject(CODE);
+
     i32 r = programa();
     println("brainfuck -> ${r}");
+
     return r;
 }

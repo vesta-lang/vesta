@@ -2578,6 +2578,20 @@ CompileResult compile_vx_project(
     // single-file lo rellena en compile_vx_source; aqui lo rellenamos desde
     // el modulo mergeado de todos los .vx del proyecto.
     res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
+    /* has_lowerable_macros: gate del two-phase compile.  El single-file
+     * (compile_vx_source) lo setea escaneando su irmod; en el path multi-modulo
+     * hay que escanear el MODULO MERGEADO -- si cualquier funcion (root o dep)
+     * es `is_macro_compiled` (un @Macro o una comptime fn ruteada a la
+     * ComptimeVM, `__macro_<X>`), el proyecto necesita el two-phase para que
+     * esos call sites se evaluen en la VM (si no, quedan deferidos -> codigo
+     * vacio).  Sin esto, un proyecto CON imports que use comptime fns nunca
+     * disparaba el segundo pase. */
+    for (const auto &fn : merged.functions) {
+        if (fn.is_macro_compiled) {
+            res.has_lowerable_macros = true;
+            break;
+        }
+    }
     res.ok = !res.diagnostics.has_errors();
 
     // Diagramas (Mermaid / Graphviz) del AST del root + IR mergeado +

@@ -2411,6 +2411,21 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
         if (!r.empty()) return r;
         return macro_body_unsupported_reason_expr(tc, bn->rhs.get());
     }
+    case ast::NodeKind::StringLitExpr: {
+        /* Un string interpolado `"... ${expr} ..."` (o triple-quoted) que un
+         * @Macro devuelve puede llevar en su interpolacion llamadas a otras
+         * comptime fns (p.ej. `"() => { ${bf_compile_body(src)} }"`).  Recorrer
+         * las exprs de interpolacion para que esos callees entren al set de
+         * force-lower; sin esto la interpolacion emitia un CALLVM colgante y el
+         * macro no era comptime-evaluable a string (solo funcionaba con concat
+         * `"a" + f(x) + "b"`, que si se recorre por el case BinaryExpr). */
+        const auto *sl = static_cast<const ast::StringLitExpr *>(e);
+        for (const auto &ie : sl->interp_exprs) {
+            auto r = macro_body_unsupported_reason_expr(tc, ie.get());
+            if (!r.empty()) return r;
+        }
+        return "";
+    }
     case ast::NodeKind::InitListExpr: {
         /* Init list `{a, b, c}` de un array local: el lowering del macro lo
          * soporta via el var-decl tipado (`i64 xs[N] = {...}`) que hace ALLOCA
@@ -2561,6 +2576,95 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
     case ast::NodeKind::ComptimeForStmt:
         return "comptime block/for en macro body (requiere MC.5)";
     default: return "";
+    }
+}
+
+/* Detecta si el body de un @Macro FORWARDEA un expr-capture: llama a una
+ * comptime fn que tiene un parametro `expr` (p.ej. `source(e)` / `inject(e)`).
+ * Esos casos NO pueden correr en la ComptimeVM porque el helper necesita
+ * re-capturar el texto en SU sitio de llamada (no una representacion runtime);
+ * se dejan a AST-eval.  Un macro con `expr` param que solo lo usa como string
+ * (p.ej. `bf_compile_body(src)`) NO forwardea y SI va a la VM. */
+static bool macro_body_forwards_expr_capture_expr(const TypeChecker &tc,
+                                                  const ast::Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case ast::NodeKind::CallExpr: {
+        const auto *ce = static_cast<const ast::CallExpr *>(e);
+        if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
+            const std::string &n =
+                static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
+            auto it = tc.comptime_fns().find(n);
+            if (it != tc.comptime_fns().end() && it->second) {
+                for (const auto &p : it->second->params)
+                    if (p && p->is_expr_capture) return true;
+            }
+        }
+        for (const auto &a : ce->args)
+            if (macro_body_forwards_expr_capture_expr(tc, a.get())) return true;
+        return macro_body_forwards_expr_capture_expr(tc, ce->callee.get());
+    }
+    case ast::NodeKind::BinaryExpr: {
+        const auto *bn = static_cast<const ast::BinaryExpr *>(e);
+        return macro_body_forwards_expr_capture_expr(tc, bn->lhs.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, bn->rhs.get());
+    }
+    case ast::NodeKind::StringLitExpr: {
+        const auto *sl = static_cast<const ast::StringLitExpr *>(e);
+        for (const auto &ie : sl->interp_exprs)
+            if (macro_body_forwards_expr_capture_expr(tc, ie.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::TernaryExpr: {
+        const auto *te = static_cast<const ast::TernaryExpr *>(e);
+        return macro_body_forwards_expr_capture_expr(tc, te->cond.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, te->then_expr.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, te->else_expr.get());
+    }
+    default: return false;
+    }
+}
+static bool macro_body_forwards_expr_capture(const TypeChecker &tc,
+                                             const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body)
+            if (macro_body_forwards_expr_capture(tc, st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::ReturnStmt: {
+        const auto *rs = static_cast<const ast::ReturnStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, rs->value.get());
+    }
+    case ast::NodeKind::ExprStmt: {
+        const auto *es = static_cast<const ast::ExprStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, es->expr.get());
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        const auto *vd = static_cast<const ast::VarDeclStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, vd->init.get());
+    }
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, is->cond.get()) ||
+               macro_body_forwards_expr_capture(tc, is->then_branch.get()) ||
+               macro_body_forwards_expr_capture(tc, is->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt: {
+        const auto *ws = static_cast<const ast::WhileStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, ws->cond.get()) ||
+               macro_body_forwards_expr_capture(tc, ws->body.get());
+    }
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        return macro_body_forwards_expr_capture(tc, fs->init.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, fs->cond.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, fs->step.get()) ||
+               macro_body_forwards_expr_capture(tc, fs->body.get());
+    }
+    default: return false;
     }
 }
 
@@ -2744,18 +2848,24 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             !is_force_lowered_comptime)
             return;
     } else if (fd->is_comptime) {
-        /* @Macro con un param `expr` (captura raw del texto del call site):
-         * NO es VM-evaluable -- el `expr` es texto compile-time, no tiene
-         * representacion runtime que marshalar como arg.  DEBE evaluarse por
-         * AST-eval (donde el texto crudo esta disponible).  No es un gap: es la
-         * naturaleza de `expr`. */
-        for (const auto &p : fd->params) {
-            if (p && p->is_expr_capture) {
-                ++macro_skipped_count_;
-                macro_skip_reasons_.emplace_back(
-                    fd->name, "param `expr` (captura raw, solo AST-eval)");
-                return;
-            }
+        /* @Macro con un param `expr`: el parser tipa `expr` como STRING (captura
+         * el texto crudo del call site como StringLitExpr).  Es VM-evaluable
+         * como cualquier macro con param string -> se baja a `__macro_<X>` y
+         * corre en la ComptimeVM (interp/JIT), marshalando el texto como
+         * StringObject.  El unico caso que NO puede ir a la VM es el FORWARDING
+         * del expr a un helper expr-capture (`source(e)`/`inject(e)`), donde el
+         * texto debe re-capturarse en el sitio del helper: esos SI se dejan a
+         * AST-eval.  (Antes se forzaba AST-eval para TODO expr-param macro; el
+         * usuario exige "nada de AST-eval, todo interp/JIT".) */
+        bool has_expr_param = false;
+        for (const auto &p : fd->params)
+            if (p && p->is_expr_capture) { has_expr_param = true; break; }
+        if (has_expr_param &&
+            macro_body_forwards_expr_capture(tc_, fd->body.get())) {
+            ++macro_skipped_count_;
+            macro_skip_reasons_.emplace_back(
+                fd->name, "forwarding de `expr` a helper expr-capture (AST-eval)");
+            return;
         }
         /* @Macro: intentar lowear el body al IR.  Si contiene
          * caracteristicas no soportadas todavia (introspect,
@@ -16590,6 +16700,34 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 static_cast<ast::StringLitExpr *>(e->macro_expanded.get()));
         }
         return lower_expr(e->macro_expanded.get());
+    }
+
+    /* `source(arg)` (y cualquier comptime fn IMPORTADA pass-through con un
+     * unico param `expr` cuyo body es `return code`): es un quasi-quote --
+     * captura su argumento como texto/plantilla y lo DEVUELVE tal cual.  No
+     * tiene bytecode local que invocar (es importada), asi que un CALLVM
+     * `code.__macro_source` colgaria en el linker.  La INLINEAMOS: `source(X)`
+     * baja exactamente como `X`.  Cuando `X` es una plantilla con huecos
+     * `${expr}` (StringLitExpr interpolado que arma el parser), se baja por el
+     * path normal de interpolacion de strings -> funciona en interp/JIT/AOT
+     * igual que cualquier `"...${x}..."`, no solo en comptime. */
+    if (e->callee && e->callee->kind == ast::NodeKind::IdentExpr &&
+        e->args.size() == 1 && e->args[0]) {
+        const std::string &cn =
+            static_cast<ast::IdentExpr *>(e->callee.get())->name;
+        auto cf_it = tc_.comptime_fns().find(cn);
+        if (cf_it != tc_.comptime_fns().end() && cf_it->second &&
+            cf_it->second->is_imported_comptime &&
+            !cf_it->second->is_macro && cf_it->second->params.size() == 1 &&
+            cf_it->second->params[0] &&
+            cf_it->second->params[0]->is_expr_capture) {
+            ast::Expr *arg = e->args[0].get();
+            if (arg->kind == ast::NodeKind::StringLitExpr) {
+                return lower_string_literal_to_string_object(
+                    static_cast<ast::StringLitExpr *>(arg));
+            }
+            return lower_expr(arg);
+        }
     }
 
     // Overlay F1: construccion `PEB(ptr)` de un `@overlay struct`.  El valor del
