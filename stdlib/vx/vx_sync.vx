@@ -32,6 +32,14 @@
  *       palabra, y el cache de TID pasa a ser thread-local.
  */
 
+// FN.4 (LIM-5): el runtime de asincronia expone el fiber-id de la tarea en
+// ejecucion (0 = main / sin fibra) y el yield cooperativo.  El monitor usa el
+// fiber-id como duenño (las fibras comparten TID -> el TID no distingue) y CEDE
+// en contencion en vez de spin (que deadlockearia en el modelo cooperativo
+// single-thread: el duenño nunca correria).  Cross-modulo via el auto-bundle
+// multi-modulo (compile_vx_project).
+import "vx_async" only vasync_yield, vasync_cur_fiber;
+
 // ---------------------------------------------------------------------------
 // FFI minima: identificador del hilo actual.
 // ---------------------------------------------------------------------------
@@ -153,6 +161,19 @@ i64 __vsync_depth(i64 word) {
     return word & 0xFFFF;
 }
 
+/**
+ * @brief Identidad del "duenño" del monitor en el modelo cooperativo.
+ * @return `__vasync_current_fiber + 1` -> main/sin-fibra = 1; fibra i = i+2.
+ * @note Se usa el FIBER-ID (no el TID): en el scheduler cooperativo todas las
+ *       fibras corren en el MISMO hilo (mismo TID), asi que el TID no
+ *       distinguiria una fibra de otra (dos fibras se creerian mutuamente
+ *       reentrantes).  El `+1` mantiene 0 como centinela de "libre" en la
+ *       palabra de monitor (main es fiber 0 -> owner 1, nunca 0).
+ */
+i64 __vsync_self() {
+    return vasync_cur_fiber() + 1;
+}
+
 // ---------------------------------------------------------------------------
 // API publica: monenter / monexit.
 // ---------------------------------------------------------------------------
@@ -171,8 +192,8 @@ i64 __vsync_depth(i64 word) {
  */
 void __vx_monenter(i64* obj) {
     i64* word_addr = obj + 2; // obj + 16 bytes
-    i64 tid = __vsync_tid();
-    i64 want1 = __vsync_make(tid, 1);
+    i64 self = __vsync_self(); // fiber-id+1 (owner en el modelo cooperativo)
+    i64 want1 = __vsync_make(self, 1);
     // Fast path optimista: monitor libre -> tomarlo con una unica CAS.
     if (__vsync_cas64(word_addr, 0, want1) == 0) {
         return; // adquirido sin contienda
@@ -186,16 +207,24 @@ void __vx_monenter(i64* obj) {
             if (__vsync_cas64(word_addr, 0, want1) == 0) {
                 return;
             }
-        } else if (__vsync_owner(cur) == tid) {
-            // Reentrante: incrementar la profundidad (CAS para no pisar un
-            // wake concurrente; en single-thread siempre triunfa).
-            i64 want = __vsync_make(tid, depth + 1);
+        } else if (__vsync_owner(cur) == self) {
+            // Reentrante (misma fibra): incrementar la profundidad.
+            i64 want = __vsync_make(self, depth + 1);
             if (__vsync_cas64(word_addr, cur, want) == cur) {
                 return;
             }
+        } else {
+            // Contienda REAL: otra fibra posee el monitor.  En el scheduler
+            // cooperativo hay que CEDER (no spin): la fibra duenña solo puede
+            // liberar si el scheduler la corre.  Si estamos en una fibra
+            // (__vasync_current_fiber != 0) cedemos al scheduler; si no (main
+            // sin scheduler) no hay contienda posible -> pause defensivo.
+            if (vasync_cur_fiber() != 0) {
+                vasync_yield();
+            } else {
+                __vsync_pause();
+            }
         }
-        // Ocupado por otro hilo: ceder y reintentar.
-        __vsync_pause();
     }
 }
 

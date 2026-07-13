@@ -231,16 +231,20 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                      "stdlib/vx/vx_sync.vx (enlazalo a mano).\n";
                         return EXIT_FAILURE;
                     }
-                    std::ifstream vsf(vs_path);
-                    std::string vs_src((std::istreambuf_iterator<char>(vsf)),
-                                       std::istreambuf_iterator<char>());
                     vx::CompileOptions vs_opts;
                     vs_opts.module_name = "vx_sync";
                     vs_opts.opt_level = 2;
                     vs_opts.native_poo = true;
                     vs_opts.asm_target_bits = copts.asm_target_bits;
+                    // LIM-5: vx_sync `import`a vx_async (monitor cooperativo:
+                    // fiber-id + vasync_yield).  compile_vx_project resuelve el
+                    // import y MERGEA ambos modulos -> el .o queda con las fns de
+                    // vx_sync Y vx_async cross-resueltas (single-module fallaba
+                    // con "simbolo no resuelto").  Si el programa ademas usa
+                    // async directo, el bloque de vx_async de abajo ve sus fns ya
+                    // presentes (dedup por `have`) y las salta.
                     vx::CompileResult vs_cr =
-                        vx::compile_vx_source(vs_src, vs_path, vs_opts);
+                        vx::compile_vx_project(vs_path, vs_opts);
                     ir::IrModule vs_mod;
                     if (!vs_cr.ok || vs_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
