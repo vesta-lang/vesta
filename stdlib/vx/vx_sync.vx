@@ -162,16 +162,20 @@ i64 __vsync_depth(i64 word) {
 }
 
 /**
- * @brief Identidad del "duenño" del monitor en el modelo cooperativo.
- * @return `__vasync_current_fiber + 1` -> main/sin-fibra = 1; fibra i = i+2.
- * @note Se usa el FIBER-ID (no el TID): en el scheduler cooperativo todas las
- *       fibras corren en el MISMO hilo (mismo TID), asi que el TID no
- *       distinguiria una fibra de otra (dos fibras se creerian mutuamente
- *       reentrantes).  El `+1` mantiene 0 como centinela de "libre" en la
- *       palabra de monitor (main es fiber 0 -> owner 1, nunca 0).
+ * @brief Identidad del "duenño" del monitor: COMPUESTO (tid, fiber-id).
+ * @return `(tid << 16) | fiber_id` -> distingue tanto HILOS REALES del SO (tids
+ *         distintos) como FIBRAS cooperativas del mismo hilo (fiber_id distinto).
+ * @note El owner ocupa los bits 63..16 de la palabra de monitor (48 bits): tid
+ *       (32b, GetCurrentThreadId/gettid) en 47..16 y fiber_id (16b) en 15..0 del
+ *       owner.  Nunca 0 (tid nunca es 0) -> compatible con el centinela "libre".
+ *       Cubre a la vez el modelo COOPERATIVO (single-thread, fibras) y el
+ *       MULTIHILO real (spawn = hilo del SO): un hilo real tiene fiber_id 0 y su
+ *       tid lo identifica; dos fibras del mismo hilo comparten tid pero difieren
+ *       en fiber_id.  La contienda cede (fibra) o spinea (hilo real) segun el
+ *       caso en __vx_monenter.
  */
 i64 __vsync_self() {
-    return vasync_cur_fiber() + 1;
+    return (__vsync_tid() << 16) | vasync_cur_fiber();
 }
 
 // ---------------------------------------------------------------------------
