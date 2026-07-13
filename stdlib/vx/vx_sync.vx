@@ -70,23 +70,18 @@ i64 __vsync_tid_raw() {
     return rax_t;
 }
 
-/// Cache del TID (0 = sin inicializar).  Valido en el modelo cooperativo
-/// single-thread; con hilos reales (Phase 4) debe pasar a thread-local.
-i64 __vsync_tid_cache = 0;
-
 /**
- * @brief TID del hilo actual, cacheado para evitar un syscall por adquisicion.
+ * @brief TID del hilo actual.
  * @return Id de hilo (>0).
- * @note El TID nunca es 0 (ni en Windows ni en Linux), por eso 0 sirve de
- *       centinela de "sin inicializar".
+ * @note NO se cachea: con MULTIHILO real un cache en un global compartido daria
+ *       el mismo TID a todos los hilos (el 2o hilo leeria el del 1o) -> se
+ *       creerian mutuamente reentrantes y el monitor NO daria exclusion.  En
+ *       Windows @c GetCurrentThreadId lee el TEB (barato); en Linux @c gettid es
+ *       un syscall (correcto).  Una optimizacion futura seria un cache
+ *       thread-local (thread_local emite TLS nativo en AOT).
  */
 i64 __vsync_tid() {
-    i64 t = __vsync_tid_cache;
-    if (t == 0) {
-        t = __vsync_tid_raw();
-        __vsync_tid_cache = t;
-    }
-    return t;
+    return __vsync_tid_raw();
 }
 
 // ---------------------------------------------------------------------------
@@ -249,4 +244,27 @@ void __vx_monexit(i64* obj) {
         // Todavia reentrante: decrementar manteniendo el duenño.
         *word_addr = __vsync_make(__vsync_owner(cur), depth - 1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// API publica exportable (monitor sobre un host_ptr crudo al objeto).
+// `synchronized` baja a __vx_monenter/__vx_monexit via el bundle; estos wrappers
+// (sin prefijo `__`, exportables al .vxi) permiten a OTROS modulos (p.ej.
+// vx_thread + codigo multihilo) tomar/soltar el monitor de un objeto por puntero.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Adquiere el monitor reentrante del objeto en @p obj (host_ptr).
+ * @param obj host_ptr al ObjectHeader (palabra de monitor en obj+16).
+ */
+public void vx_lock(i64* obj) {
+    __vx_monenter(obj);
+}
+
+/**
+ * @brief Libera el monitor reentrante del objeto en @p obj (host_ptr).
+ * @param obj host_ptr al ObjectHeader.
+ */
+public void vx_unlock(i64* obj) {
+    __vx_monexit(obj);
 }

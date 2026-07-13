@@ -37675,6 +37675,22 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
             visit_expr(ix->index.get());
             return;
         }
+        case ast::NodeKind::CastExpr: {
+            // `(T)(&x)`: el cast ENVUELVE el `&x`.  Sin recursar en el operando,
+            // el `&x` interno no se veia y `x` no se promocionaba a address-taken
+            // -> error "& sobre variable no promocionada".  Bug de deteccion.
+            auto *ce = static_cast<ast::CastExpr *>(e);
+            visit_expr(ce->operand.get());
+            return;
+        }
+        case ast::NodeKind::TernaryExpr: {
+            // `cond ? &a : &b` -- recursar en las 3 ramas por el mismo motivo.
+            auto *te = static_cast<ast::TernaryExpr *>(e);
+            visit_expr(te->cond.get());
+            visit_expr(te->then_expr.get());
+            visit_expr(te->else_expr.get());
+            return;
+        }
         default: return; // literales, IdentExpr puro, etc. no aportan
         }
     };

@@ -1,0 +1,82 @@
+/**
+ * @file vx_thread.vx
+ * @brief Multihilo REAL del SO para Vex AOT (paralelismo verdadero).
+ *
+ * SEPARADO de vx_async: la ASINCRONIA (vx_async: spawn/future/await) es
+ * cooperativa de UN SOLO hilo (event-loop / fibras); el MULTIHILO (este modulo)
+ * son hilos 1:1 del SO con paralelismo real.  La exclusion mutua entre hilos la
+ * da el monitor de vx_sync (`synchronized` / vx_lock/vx_unlock), cuyo owner
+ * compuesto (tid, fiber-id) distingue hilos reales por su tid.
+ *
+ * @par Modelo
+ * Un "hilo" es una fn nativa @c body(arg) que corre en paralelo sobre su propia
+ * pila del SO.  El body recibe @p arg en el 1er registro del ABI (rcx Win64 /
+ * rdi SysV) y debe RETORNAR.  El HANDLE de @ref vx_thread_spawn se pasa a
+ * @ref vx_thread_join para esperar su fin.
+ *
+ * @par Multiplataforma
+ * Windows: kernel32 (CreateThread / WaitForSingleObject / CloseHandle).
+ * Linux/ELF: libpthread (pthread_create / pthread_join).
+ */
+
+// ---------------------------------------------------------------------------
+// Windows: kernel32.
+// ---------------------------------------------------------------------------
+extern "kernel32.dll" {
+    fn CreateThread(u64 attrs, u64 stacksize, u64 startaddr, u64 param,
+                    u64 flags, u64 threadid) -> u64;
+    fn WaitForSingleObject(u64 handle, u32 ms) -> u32;
+    fn CloseHandle(u64 handle) -> i32;
+}
+
+// ---------------------------------------------------------------------------
+// Linux: libpthread.  pthread_create escribe el pthread_t (unsigned long, 8B)
+// en su 1er arg (out-ptr); lo devolvemos por valor como HANDLE.
+// ---------------------------------------------------------------------------
+extern "libpthread.so.0" {
+    fn pthread_create(u64 thread_out, u64 attr, u64 start_routine, u64 arg) -> i32;
+    fn pthread_join(u64 thread, u64 retval_out) -> i32;
+}
+
+/**
+ * @brief Crea un HILO REAL del SO que ejecuta @p body(@p arg) en paralelo.
+ * @param body Direccion nativa de la fn del hilo (recibe @p arg en rcx/rdi).
+ * @param arg  Argumento (host_ptr al estado del hilo, o 0).
+ * @return HANDLE del hilo (>0), o 0 si fallo.
+ */
+@Target("os:windows")
+public u64 vx_thread_spawn(u64 body, u64 arg) {
+    return CreateThread(0, 0, body, arg, 0, 0);
+}
+
+@Target("!os:windows")
+public u64 vx_thread_spawn(u64 body, u64 arg) {
+    // pthread_t es un `unsigned long` (8 bytes) -> CABE en el u64 del HANDLE, sin
+    // heap.  pthread_create lo ESCRIBE en su 1er arg (out-ptr); pasamos la
+    // direccion de un local y devolvemos su valor; pthread_join lo recibe por
+    // valor.
+    u64 th = 0;
+    i32 rc = pthread_create((u64)(&th), 0, body, arg);
+    if (rc != 0) {
+        return 0;
+    }
+    return th; // pthread_t (valor), no un puntero
+}
+
+/**
+ * @brief Espera a que el hilo @p handle termine y libera sus recursos.
+ * @param handle HANDLE devuelto por @ref vx_thread_spawn.
+ */
+@Target("os:windows")
+public void vx_thread_join(u64 handle) {
+    WaitForSingleObject(handle, 0xFFFFFFFF); // INFINITE
+    CloseHandle(handle);
+}
+
+@Target("!os:windows")
+public void vx_thread_join(u64 handle) {
+    if (handle == 0) {
+        return;
+    }
+    pthread_join(handle, 0); // handle = pthread_t (valor), sin heap que liberar
+}
