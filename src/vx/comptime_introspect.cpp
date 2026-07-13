@@ -2462,8 +2462,27 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * evaluarse por el TREE-WALKER (comptime_call_fn abajo).  Sin
                  * este skip, un `source(expr)` importado caia al path VM,
                  * fallaba el invoke y devolvia vacio. */
+                /* Forwarding de expr-capture anidado: si la fn tiene un param
+                 * `expr` cuyo argumento NO es un StringLit crudo (es un IdentExpr
+                 * forwardeado desde un `expr` param del macro/comptime fn
+                 * llamante), el path VM (`__macro_<fn>`) no maneja el texto
+                 * forwardeado (devuelve vacio).  Se rutea al TREE-WALKER, que
+                 * evalua `return code` con `code` = el texto ya capturado. */
+                bool forwarded_expr_arg = false;
+                {
+                    const auto &prms = fn_it->second->params;
+                    for (size_t pi = 0; pi < prms.size() && pi < ce->args.size();
+                         ++pi) {
+                        if (prms[pi] && prms[pi]->is_expr_capture &&
+                            ce->args[pi] &&
+                            ce->args[pi]->kind != ast::NodeKind::StringLitExpr) {
+                            forwarded_expr_arg = true;
+                            break;
+                        }
+                    }
+                }
                 if (comptime_fn_needs_vm(tc, fn_it->second) &&
-                    !fn_it->second->is_imported_comptime) {
+                    !fn_it->second->is_imported_comptime && !forwarded_expr_arg) {
                     bool ret_is_str = false;
                     if (fn_it->second->return_type) {
                         const Type rt = tc.resolve_type_node(
