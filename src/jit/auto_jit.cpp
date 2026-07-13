@@ -154,13 +154,14 @@ void init_threshold_from_env() {
     if (stats && stats[0] != '\0' && stats[0] != '0') {
         g_jit_emit_instr_counter = true;
     }
-    /* Phase D.7: el path de REGISTROS VIRTUALES es el DEFAULT del JIT
-     * (mide ~2x sobre el path de slots en codigo con presion de
-     * registros; fallback transparente a slots para ops no soportadas,
-     * con la misma robustez -- vregs==slots en la suite e2e).
-     * VESTA_JIT_VREGS=0 lo desactiva (fuerza slots, para A/B testing). */
-    const char *vr = std::getenv("VESTA_JIT_VREGS");
-    g_jit_use_vregs = !(vr && vr[0] == '0');
+    /* Phase D.7: el path de REGISTROS VIRTUALES es el UNICO path del JIT.
+     * El selector-slots legacy (src/jit/selector.cpp, backlog B-JIT-1) esta
+     * JUBILADO: una op fuera del subset vreg cae al INTERPRETE (siempre
+     * correcto), no a slots.  Por eso `g_jit_use_vregs` es siempre true; el
+     * env-var `VESTA_JIT_VREGS=0` ya NO reactiva slots (queda como no-op).
+     * Consecuencia: los "SLOTS_BUG" del selector legacy no pueden manifestarse
+     * (slots inalcanzable).  El C2 tambien recompila por vreg (ver mas abajo). */
+    g_jit_use_vregs = true;
     /* C2 tier-up (opt-in).  VESTA_C2_THRESHOLD=N activa el tier-up con
      * umbral N; ausente o 0 = C2 apagado (default). */
     const char *c2t = std::getenv("VESTA_C2_THRESHOLD");
@@ -770,6 +771,13 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                                      n.c_str());
                     return a;
                 }
+                /* Jubilacion slots (A3): vreg no soporta esta callee -> NO cae
+                 * al selector-slots (legacy, B-JIT-1).  Devolvemos 0: el caller
+                 * vera la CALL sin resolver y bailara tambien a interp (siempre
+                 * correcto).  VESTA_JIT_VREGS=0 reactiva slots para A/B. */
+                g_eager_cache[n] = 0;
+                ++g_jit_unsupported_count;
+                return 0;
             }
             CompileResult cres =
                 g_compiler->compile_with_opts(child_ir, child_opts);
@@ -1060,6 +1068,11 @@ CompileResult eager_compile_function(
                                      name.c_str());
                     return va;
                 }
+                /* Jubilacion slots (A3): vreg no soporta -> interp, NO slots.
+                 * Devolvemos 0; el caller vera la CALL sin resolver y bailara a
+                 * interp tambien.  VESTA_JIT_VREGS=0 reactiva slots para A/B. */
+                g_eager_cache[name] = 0;
+                return 0;
             }
             CompileResult cres = g_compiler->compile_with_opts(child_ir, opts);
             const uint64_t addr =
@@ -2216,7 +2229,12 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
         size_t c2_size = 0;
         const uint8_t *c2_code = nullptr;
         bool c2_unsupported = false;
-        if (g_c2_vreg) {
+        /* Camino preparado para el C2 sin slots: con vregs on (default) el C2
+         * recompila el IR especulado por el PATH VREG (regalloc real), igual que
+         * el JIT normal.  `g_c2_vreg` (VESTA_C2_VREG) fuerza el path vreg incluso
+         * con vregs off (para A/B del propio C2).  Solo cae a slots (abajo) si
+         * vregs esta off. */
+        if (g_c2_vreg || g_jit_use_vregs) {
             ffi::FFI *ffi2 = &owning_vm.loader_public.ffi_loader;
             auto nat_res = [ffi2](const std::string &name) -> uint64_t {
                 size_t colon = name.find(':');
@@ -2250,7 +2268,11 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
             }
         }
         CompileResult res{};
-        if (c2_fn == nullptr) {
+        /* Jubilacion slots (A3): con vregs on (default), el C2 NO cae al
+         * selector-slots.  Si el recompile por vreg (arriba, cuando g_c2_vreg ||
+         * g_jit_use_vregs) no produjo codigo, queda C1 (tier-1 vreg) -- ver el
+         * "queda C1" de abajo.  Solo VESTA_JIT_VREGS=0 reactiva slots para A/B. */
+        if (c2_fn == nullptr && !g_jit_use_vregs) {
             res = g_compiler->compile_with_opts(*compile_target, c2);
             c2_fn = res.fn;
             c2_size = res.code_size;
