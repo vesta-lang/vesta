@@ -880,19 +880,55 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 vreg_dbg(fn.name.c_str(), "callback(call-fallback)");
                 return false;
             }
-            /* Native arg regs por ABI. */
+            /* Native arg regs por ABI.  GP (enteros/punteros) + XMM (floats).
+             * Win64: la POSICION ordinal del arg es compartida entre bancos
+             * (arg i -> GP_i O XMM_i, 4 slots).  SysV: contadores SEPARADOS
+             * (int -> siguiente GP de 6; float -> siguiente XMM de 8). */
             static const MReg CB_WIN[] = {MReg::RCX, MReg::RDX, MReg::R8,
                                           MReg::R9};
             static const MReg CB_SYSV[] = {MReg::RDI, MReg::RSI, MReg::RDX,
                                            MReg::RCX, MReg::R8,  MReg::R9};
+            static const MReg CB_XMM[] = {MReg::XMM0, MReg::XMM1, MReg::XMM2,
+                                          MReg::XMM3, MReg::XMM4, MReg::XMM5,
+                                          MReg::XMM6, MReg::XMM7};
             const MReg *cbr = target_sysv ? CB_SYSV : CB_WIN;
-            const size_t cb_nreg = target_sysv ? 6u : 4u;
-            /* Bail: stack-args o params float (marshalizacion aun no en v1). */
-            for (size_t i = 0; i < np; ++i) {
-                if (i >= cb_nreg ||
-                    (i < fn.values.size() && ir_type_is_float(fn.values[fn.params[i]].type))) {
-                    vreg_dbg(fn.name.c_str(), "callback(stack-or-float-arg)");
-                    return false;
+            const size_t gp_max = target_sysv ? 6u : 4u;
+            const size_t fp_max = target_sysv ? 8u : 4u;
+            /* Bail: (a) params f32 -- el nativo pasa f32 en XMM low-32 pero la
+             * VM_ABI espera bits f64 de 8 bytes (promocion CVTSS2SD pendiente,
+             * v3); (b) tipos que no caben en un slot regs[] de 64-bit (SIMD >8
+             * bytes); (c) args por PILA (mas alla de los arg-regs de su banco).
+             * Los f64 SI se marshalean (XMM -> regs[] como bits de 8 bytes). */
+            {
+                size_t gpn = 0, fpn = 0;
+                for (size_t i = 0; i < np; ++i) {
+                    const ir::IrType pt = (fn.params[i] < fn.values.size())
+                                              ? fn.values[fn.params[i]].type
+                                              : ir::IrType::I64;
+                    if (pt == ir::IrType::F32) {
+                        vreg_dbg(fn.name.c_str(), "callback(f32-arg)");
+                        return false;
+                    }
+                    const bool isf = ir_type_is_float(pt); /* f64 */
+                    if (!target_sysv) {
+                        /* Win64: posicion ordinal compartida, 4 slots. */
+                        if (i >= 4) {
+                            vreg_dbg(fn.name.c_str(), "callback(win-stack-arg)");
+                            return false;
+                        }
+                    } else if (isf) {
+                        if (fpn++ >= fp_max) {
+                            vreg_dbg(fn.name.c_str(),
+                                     "callback(sysv-fp-stack-arg)");
+                            return false;
+                        }
+                    } else {
+                        if (gpn++ >= gp_max) {
+                            vreg_dbg(fn.name.c_str(),
+                                     "callback(sysv-gp-stack-arg)");
+                            return false;
+                        }
+                    }
                 }
             }
             /* SAFE save-set: un cuerpo NO hoja-puro necesitaria salvar/restaurar
@@ -913,14 +949,36 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
             }
             /* Cargar proc -> RBX via TLS-direct (gs:[disp]); no toca arg-regs. */
-            const uint32_t gp_idx = out.intern_imm64(cb.get_proc_addr);
-            O.push_back(
-                MInstr::make_load_proc(MReg::RBX, cb.tls_gs_disp, gp_idx));
-            /* Marshalear args nativos -> proc->regs[1..N]. */
-            for (size_t i = 0; i < np; ++i)
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               vm_reg_mem(static_cast<int>(i) + 1),
-                                               MOperand::make_reg(cbr[i], 8)));
+            const uint32_t proc_pool_idx = out.intern_imm64(cb.get_proc_addr);
+            O.push_back(MInstr::make_load_proc(MReg::RBX, cb.tls_gs_disp,
+                                               proc_pool_idx));
+            /* Marshalear args nativos -> proc->regs[1..N].  Float (f64): el
+             * valor llega en XMM; se mueve a RAX (scratch, NO es arg-reg de
+             * ningun ABI) via MOVQ y se guarda su bit-pattern i64 en regs[i+1]
+             * (la VM_ABI lee luego regs[i+1] via MOVSD -> XMM del param). */
+            {
+                size_t gpn = 0, fpn = 0;
+                for (size_t i = 0; i < np; ++i) {
+                    const ir::IrType pt = (fn.params[i] < fn.values.size())
+                                              ? fn.values[fn.params[i]].type
+                                              : ir::IrType::I64;
+                    const bool isf = ir_type_is_float(pt); /* f64 (f32 bailo) */
+                    if (isf) {
+                        const size_t k = target_sysv ? fpn++ : i;
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVQ_XMM_GP, MOperand::make_reg(MReg::RAX, 8),
+                            MOperand::make_reg(CB_XMM[k], 8)));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
+                            MOperand::make_reg(MReg::RAX, 8)));
+                    } else {
+                        const size_t k = target_sysv ? gpn++ : i;
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
+                            MOperand::make_reg(cbr[k], 8)));
+                    }
+                }
+            }
             /* argc -> regs[15]. */
             O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(15),
                                            MOperand::make_imm32(
