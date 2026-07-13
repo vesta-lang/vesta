@@ -10769,6 +10769,11 @@ ir::IrValueId Lowering::lower_enum_constructor(
         ad.operands = {addr, off_v};
         ad.source_line = loc.line;
         fn_->append(current_block_, std::move(ad));
+        // Propagar is_host_ptr del buffer al puntero buf+off (patron
+        // is_host_ptr-en-add): el STORE del payload usa la naturaleza del
+        // buffer.  No-op hoy (el buffer del constructor es VM stack) pero
+        // unifica el patron con Some/Ok/value/error/unwrap.
+        fn_->values[addr_i].is_host_ptr = fn_->values[addr].is_host_ptr;
 
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -11766,6 +11771,14 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     ad.source_line = arm.loc.line;
                     fn_->append(current_block_, std::move(ad));
                 }
+                // Propagar is_host_ptr del scrutinee al puntero scrut+off (patron
+                // is_host_ptr-en-add: el LOAD del payload debe usar la misma
+                // naturaleza -- host o VM -- que el buffer del enum).  Hoy los
+                // enum viven en VM stack (no-op), pero unifica el patron con
+                // Some/Ok/value/error/unwrap y evita un fallo silencioso si el
+                // scrutinee llega en host.
+                fn_->values[addr_i].is_host_ptr =
+                    fn_->values[scrut_addr].is_host_ptr;
                 ir::IrValueId v = fn_->new_value(ir::IrType::I64);
                 {
                     ir::IrInstr ld{};
