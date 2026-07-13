@@ -43,6 +43,13 @@ R00_RE = re.compile(r"R00=0x([0-9a-fA-F]+)")
 NODET = {
     "bug3_struct",            # puntero host en R0
     "160_macro_walk_pchase",  # macro: ERR en interp por diseno
+    # 282: lee el PEB REAL de Windows via inline asm `mov rax, gs:[0x60]`.
+    # El JIT/default(threshold 1500)/AOT lo compilan a nativo -> PEB real (42).
+    # El oraculo interp PURO (-m vm, sin JIT) usa el trampolin vrt:inline_asm_exec
+    # y, con el get_peb INLINEADO en main dentro de este programa overlay-heavy,
+    # devuelve 0 -> "sin PEB" -> 1.  No es un bug del codegen JIT (el JIT acierta);
+    # es una limitacion del trampolin interp para asm inlineado con segmento gs:.
+    "282_overlay_peb",
 }
 
 # Programas que necesitan setup externo (loadmodule de un .velb concreto,
