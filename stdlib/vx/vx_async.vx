@@ -113,7 +113,8 @@ i64 __vasync_cur_done = 0;      ///< 1 si la tarea en ejecucion termino.
 /// (@SyncImpl) para saber que fibra posee un monitor.  Sin scheduler de fibras
 /// (run-to-completion o main) queda en 0 -> el fast-path del lock nunca ve
 /// contienda (single-thread), asi el override es correcto tambien sin fibras.
-i64 __vasync_current_fiber = 0;
+/// `public`: FN.4 (LIM-5) -- vx_sync lo importa para el monitor cooperativo.
+public i64 __vasync_current_fiber = 0;
 
 // Tabla de fibras (una entrada por tarea suspendible viva).  VASYNC_FIBCAP
 // entradas; cada una: ctx (host_ptr), stack_top (host_ptr, para liberar),
