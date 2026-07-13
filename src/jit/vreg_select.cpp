@@ -920,11 +920,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             const MReg *cbr = target_sysv ? CB_SYSV : CB_WIN;
             /* Bail: (a) la convencion VM cabe en regs[1..12] + argc en regs[15]
              * (regs[13]/[14] reservados) -> >12 params no representable; (b)
-             * params f32 -- el nativo pasa f32 en XMM low-32 pero la VM_ABI
-             * espera bits f64 de 8 bytes (promocion CVTSS2SD pendiente, v-sig);
-             * (c) tipos que no caben en un slot regs[] de 64-bit (SIMD >8 bytes,
-             * hoy tratados como GP -> bail defensivo por tamano).  f64 y args
-             * por PILA SI se marshalean (incremento stack-args). */
+             * tipos que no caben en un slot regs[] de 64-bit (SIMD >8 bytes,
+             * hoy tratados como GP -> bail defensivo por tamano).  f32/f64 y
+             * args por PILA SI se marshalean.  f32: el nativo lo pasa en XMM
+             * low-32; MOVQ copia los 8 bytes (low-32 = bits f32) y el load
+             * VM_ABI del param usa MOVSS (width=4 via vrt) -> lee solo esos 32
+             * bits correctos (sin promocion CVTSS2SD). */
             if (np > 12) {
                 vreg_dbg(fn.name.c_str(), "callback(argc>12)");
                 return false;
@@ -933,10 +934,6 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const ir::IrType pt = (fn.params[i] < fn.values.size())
                                           ? fn.values[fn.params[i]].type
                                           : ir::IrType::I64;
-                if (pt == ir::IrType::F32) {
-                    vreg_dbg(fn.name.c_str(), "callback(f32-arg)");
-                    return false;
-                }
                 if (ir_type_bytes(pt) > 8) {
                     vreg_dbg(fn.name.c_str(), "callback(wide-arg>8)");
                     return false;
@@ -968,7 +965,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const ir::IrType pt = (fn.params[i] < fn.values.size())
                                               ? fn.values[fn.params[i]].type
                                               : ir::IrType::I64;
-                    const bool isf = ir_type_is_float(pt); /* f64 (f32 bailo) */
+                    const bool isf = ir_type_is_float(pt); /* f32 o f64 */
                     bool on_stack = false;
                     int32_t stk_off = 0;
                     MReg srcreg = MReg::RAX;
