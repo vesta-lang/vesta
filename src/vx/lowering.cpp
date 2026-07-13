@@ -10522,22 +10522,38 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
 // Optional / Result.
 // ---------------------------------------------------------------------
 
-uint64_t Lowering::nested_sret_flat_size(const std::string &callee) const {
-    // Tamano del buffer SRET de un ENUM value-type que devuelve @p callee, o 0
-    // si no devuelve un enum SRET.  El fix nested-SRET copia el retbuf del
-    // productor a un slot VM-stack fresco; eso encaja para ENUM (el callee lee
-    // el enum via acceso VM).  Optional/Result NO se incluyen: aunque tambien
-    // son buffers planos, el callee los lee via acceso HOST (convencion
-    // distinta), asi que la copia a slot VM-stack no sirve para ellos -- su
-    // patron nested SRET queda como limitacion aparte (raro en la practica:
-    // pasar un Optional/Result devuelto por una fn DIRECTAMENTE como arg
-    // anidado a otra).  function/smart-ptr se excluyen por ownership.
+uint64_t Lowering::nested_sret_flat_size(const std::string &callee,
+                                         bool *out_is_host) const {
+    // Tamano del buffer SRET de BUFFER PLANO (value-type) que devuelve @p
+    // callee, o 0 si no lo es.  El fix nested-SRET copia el retbuf del productor
+    // a un slot fresco; la NATURALEZA de ese slot (via @p out_is_host) debe
+    // coincidir con como el CALLEE lee su parametro:
+    //   - ENUM: el callee lee el enum via acceso VM (`mov [t]`) -> fresh
+    //     VM-STACK (out_is_host=false).  Un slot host daria basura.
+    //   - Optional/Result: el callee los lee via acceso HOST (isPresent/unwrap/
+    //     value/error con is_host_ptr) -> fresh HOST (out_is_host=true).  Un
+    //     slot VM daria segfault (leeria host en una direccion VM).
+    // function/smart-ptr se excluyen (ownership de env/ctrl: copiar el buffer
+    // los duplicaria).
+    if (out_is_host) *out_is_host = false;
     auto it_er = fn_ret_enum_name_.find(callee);
     if (it_er != fn_ret_enum_name_.end()) {
         const auto &elays = tc_.enum_layouts();
         auto it_e = elays.find(it_er->second);
         if (it_e != elays.end())
             return static_cast<uint64_t>(it_e->second.size_bytes);
+        return 0;
+    }
+    auto it_kind = fn_ret_kind_.find(callee);
+    if (it_kind != fn_ret_kind_.end()) {
+        if (it_kind->second == PrimitiveKind::OPTIONAL) {
+            if (out_is_host) *out_is_host = true;
+            return 16ULL;
+        }
+        if (it_kind->second == PrimitiveKind::RESULT) {
+            if (out_is_host) *out_is_host = true;
+            return 24ULL;
+        }
     }
     return 0;
 }
@@ -18011,17 +18027,17 @@ skip_comptime_eval_for_macro_to_macro:
                     const std::string &cn =
                         static_cast<ast::IdentExpr *>(ce_arg->callee.get())
                             ->name;
-                    const uint64_t sret_sz = nested_sret_flat_size(cn);
+                    bool fresh_is_host = false;
+                    const uint64_t sret_sz =
+                        nested_sret_flat_size(cn, &fresh_is_host);
                     if (sret_sz > 0) {
-                        // Slot fresco en VM STACK (host_alloca=false -> `subsp`,
-                        // direccion VM), EXACTAMENTE como el slot de un var-decl
-                        // `T t = productor(x)`.  El callee lee el buffer via
-                        // acceso VM (`mov [t]`), asi que el slot DEBE ser VM;
-                        // si fuese host (GC alloc) el callee leeria basura.  La
-                        // copia (emit_enum_copy) lee el retbuf productor con su
-                        // naturaleza real (host, via `movh`) y escribe al slot
-                        // VM (`mov`) -- mismo patron que el caso local que ya
-                        // funcionaba.
+                        // Slot fresco cuya NATURALEZA coincide con como el callee
+                        // lee su param: VM-STACK para enum (lectura VM), HOST
+                        // para Optional/Result (lectura host).  Igual que el slot
+                        // de un var-decl `T t = productor(x)` del tipo
+                        // correspondiente.  La copia (emit_enum_copy) lee el
+                        // retbuf productor con su naturaleza real y escribe al
+                        // fresh; desacopla del retbuf fragil del productor.
                         const ir::IrValueId fresh =
                             fn_->new_value(ir::IrType::PTR);
                         ir::IrInstr al{};
@@ -18029,8 +18045,11 @@ skip_comptime_eval_for_macro_to_macro:
                         al.type = ir::IrType::I8;
                         al.dst = fresh;
                         al.imm = sret_sz;
+                        al.host_alloca = fresh_is_host;
                         al.source_line = e->loc.line;
                         fn_->append(current_block_, std::move(al));
+                        if (fresh_is_host)
+                            fn_->values[fresh].is_host_ptr = true;
                         emit_enum_copy(fresh, v_arg,
                                        fn_->values[v_arg].is_host_ptr, sret_sz,
                                        e->loc.line);
