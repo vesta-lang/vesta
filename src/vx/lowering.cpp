@@ -4806,8 +4806,17 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         ins.dst = addr;
         ins.imm = (uint64_t)bytes;
         ins.source_line = vd->loc.line;
+        if (native_poo_) ins.host_alloca = true;
         fn_->append(current_block_, std::move(ins));
+        if (native_poo_) fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
+        // Zero-inicializar SIEMPRE el buffer del array local (mismo motivo que
+        // los structs, ~L4415): un array en pila NO se zeroea solo.  El interp
+        // daba 0 solo porque su VM stack esta a cero; el JIT (pila HOST) leia
+        // basura -> DIVERGENCIA interp/JIT (un `i32[N] a` leido sin escribir, o
+        // `a[i]++` sobre un elemento no inicializado, daba garbage en JIT).
+        // Ademas es seguridad: sin esto el array expone basura de la pila.
+        emit_zero_fill(addr, (uint64_t)bytes, vd->loc.line);
         if (vd->init) {
             error_at(vd->loc, "lowering: inicializador de array aun no "
                               "soportado en esta ruta");
