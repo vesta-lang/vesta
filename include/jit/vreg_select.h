@@ -155,6 +155,29 @@ struct VregEntries {
  *             valido; @c false si encuentra un op fuera del subset (en
  *             ese caso @p out queda indefinido y el caller hace fallback).
  */
+/**
+ * @brief Opciones del callback-ABI para el path vreg (jubilacion de slots).
+ *
+ * Cuando @c callback_entry es true y el @c AbiKind es @c VM, la funcion se
+ * compila como un ENTRY de ABI C nativo: los argumentos llegan por la
+ * convencion del host (arg_regs), no en @c proc->registers; el prologo carga el
+ * @c ProcessVM* en RBX (TLS-direct @c gs:[disp] o el call de fallback),
+ * marshalea los args nativos a @c proc->registers.regs[1..N] (+ argc en R15) y,
+ * en modo SAFE (cuerpo no hoja-puro), salva/restaura @c proc->registers[0..15]
+ * para re-entrancia; el RET escribe el retorno tanto en @c regs[0] como en RAX
+ * (retorno nativo).  Replica el @c callback_entry del selector-slots que se esta
+ * jubilando, para que los callbacks (qsort, WndProc, ...) los compile vreg.
+ */
+struct VregCallbackOpts {
+    bool callback_entry = false;
+    /// Direccion de @c runtime::get_current_executing_process (fallback del
+    /// LOAD_PROC cuando no hay TLS-direct).
+    uint64_t get_proc_addr = 0;
+    /// Desplazamiento @c gs:[disp] para leer @c ProcessVM* en TLS-direct
+    /// (Win64).  -1 = usar el fallback por call.
+    int32_t tls_gs_disp = -1;
+};
+
 bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                  AbiKind abi = AbiKind::HOST_LEAF,
                  const CallResolver &resolve_call = {},
@@ -169,7 +192,8 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
 #endif
                  ,
                  bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2,
-                 bool emit_line_map = false);
+                 bool emit_line_map = false,
+                 const VregCallbackOpts &cb = {});
 
 } // namespace jit
 

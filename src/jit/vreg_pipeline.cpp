@@ -138,6 +138,79 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     return code;
 }
 
+uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
+                               const VregCallbackOpts &cb,
+                               const CallResolver &resolve_call,
+                               const VregEntries &ent,
+                               const CallResolver &resolve_native,
+                               const CallResolver &resolve_symbol) {
+    /* Identico a vreg_compile pero pasando el VregCallbackOpts al selector:
+     * el prologo/epilogo del entry siguen la convencion de ABI C nativo. */
+    MFunction mf;
+    if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native,
+                     resolve_symbol, /*pic=*/true,
+#if defined(_WIN32)
+                     /*target_sysv=*/false,
+#else
+                     /*target_sysv=*/true,
+#endif
+                     /*mode32=*/false, FloatIsa::SSE2, /*emit_line_map=*/false,
+                     cb))
+        return nullptr;
+
+    const TargetRegInfo &tri = target_x86_64_vm_abi();
+
+    IntervalResult ivs = build_intervals(mf, tri);
+    if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
+    RegAlloc ra = linear_scan(ivs, tri);
+
+    /* Verificador adversarial de GC roots (igual que vreg_compile). */
+    if (!ivs.call_positions.empty()) {
+        for (uint32_t v = 0; v < mf.vreg_count; ++v) {
+            const LiveInterval &lv = ivs.intervals[v];
+            if (!lv.is_gc()) continue;
+            for (uint32_t cp : ivs.call_positions) {
+                if (lv.covers(cp) && !ra.spilled(v)) return nullptr;
+            }
+        }
+    }
+
+    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
+    peephole_physical(pf);
+
+    X86Encoder enc;
+    std::vector<uint8_t> bytes;
+    if (enc.encode(pf, bytes) == 0 || bytes.empty()) return nullptr;
+
+    uint8_t *code = cc.alloc(bytes.size(), 16);
+    if (!code) return nullptr;
+    std::memcpy(code, bytes.data(), bytes.size());
+    for (const auto &f : pf.addr_table_fixups) {
+        if (f.label < pf.label_offsets.size() &&
+            pf.label_offsets[f.label] != UINT32_MAX) {
+            const uint64_t target =
+                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
+            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
+        }
+    }
+    cc.commit(code, bytes.size());
+
+    static const bool dis = [] {
+        const char *v = std::getenv("VESTA_JIT_DISASM");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    if (dis) debug_dump_jit_code(fn.name + " [vreg-cb]", code, bytes.size());
+
+    const uint32_t scan_frame_size =
+        pf.stackmaps.empty()
+            ? static_cast<uint32_t>(8u * ra.num_spill_slots)
+            : pf.stackmaps.front().frame_size;
+    JitRegistry::instance().register_function(
+        code, code + bytes.size(), pf.stackmaps, scan_frame_size, "vreg-cb");
+
+    return code;
+}
+
 std::vector<uint8_t>
 vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                     const VregEntries &ent, const CallResolver &resolve_native,

@@ -426,7 +426,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  const CallResolver &resolve_call, const VregEntries &ent,
                  const CallResolver &resolve_native,
                  const CallResolver &resolve_symbol, bool pic, bool target_sysv,
-                 bool mode32, FloatIsa fisa, bool emit_line_map) {
+                 bool mode32, FloatIsa fisa, bool emit_line_map,
+                 const VregCallbackOpts &cb) {
+    /* Callback-ABI (jubilacion de slots): un callback nativo se compila en
+     * VM_ABI pero con un prologo que carga proc y marshalea los args nativos a
+     * proc->registers antes de que el prologo normal (mas abajo) los relea.  El
+     * cuerpo y el RET consultan @c cb_entry.  Solo aplica en AbiKind::VM. */
+    const bool cb_entry = cb.callback_entry && abi == AbiKind::VM;
     /* CRITICAL-EDGE SPLITTING (out-of-SSA): si hay >=1 arista critica que
      * entra a un bloque con PHIs, trabajamos sobre una COPIA de la funcion
      * con los puentes insertados (zero-cost para el caso comun sin aristas
@@ -856,6 +862,70 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         MBlock mb;
         mb.label_id = blbl[b];
         auto &O = mb.instrs;
+
+        /* ===== callback-ABI (jubilacion de slots): prologo nativo =====
+         * Un callback llega por la convencion C del host (args en arg_regs), NO
+         * en proc->registers.  Cargamos proc en RBX (TLS-direct gs:[disp]) y
+         * marshaleamos los args nativos a proc->registers.regs[1..N] (+ argc en
+         * R15) ANTES de que el prologo VM_ABI normal (abajo) los relea de ahi.
+         * Modo SAFE (cuerpo no hoja-puro): salvamos proc->registers[0..15] a la
+         * work-area del frame para re-entrancia, y los restauramos en cada RET.
+         * v1: solo register-args + TLS-direct; call-fallback o stack-args (o
+         * params float, cuya marshalizacion nativa->XMM aun no esta) -> bail a
+         * slots (seguro).  El RET escribe el retorno en regs[0] Y en RAX. */
+        if (cb_entry && b == 0) {
+            const size_t np = fn.params.size();
+            /* Bail: TLS-direct requerido (call-fallback clobbea arg-regs -> v2). */
+            if (cb.tls_gs_disp == -1) {
+                vreg_dbg(fn.name.c_str(), "callback(call-fallback)");
+                return false;
+            }
+            /* Native arg regs por ABI. */
+            static const MReg CB_WIN[] = {MReg::RCX, MReg::RDX, MReg::R8,
+                                          MReg::R9};
+            static const MReg CB_SYSV[] = {MReg::RDI, MReg::RSI, MReg::RDX,
+                                           MReg::RCX, MReg::R8,  MReg::R9};
+            const MReg *cbr = target_sysv ? CB_SYSV : CB_WIN;
+            const size_t cb_nreg = target_sysv ? 6u : 4u;
+            /* Bail: stack-args o params float (marshalizacion aun no en v1). */
+            for (size_t i = 0; i < np; ++i) {
+                if (i >= cb_nreg ||
+                    (i < fn.values.size() && ir_type_is_float(fn.values[fn.params[i]].type))) {
+                    vreg_dbg(fn.name.c_str(), "callback(stack-or-float-arg)");
+                    return false;
+                }
+            }
+            /* SAFE save-set: un cuerpo NO hoja-puro necesitaria salvar/restaurar
+             * proc->registers[0..15] (re-entrancia) en una work-area del frame.
+             * v1 aun no reserva esa area en regalloc_rewrite -> los callbacks
+             * no-hoja BAILAN a slots (seguro).  v2 anadira el save-set. */
+            for (const auto &blk : fn.blocks) {
+                for (const auto &ins : blk.instrs) {
+                    const ir::IrOp op = ins.op;
+                    if (op == ir::IrOp::CALL || op == ir::IrOp::CALLN ||
+                        op == ir::IrOp::CALLVIRT || op == ir::IrOp::CALLM ||
+                        op == ir::IrOp::RAW_ASM || op == ir::IrOp::NEWOBJ ||
+                        op == ir::IrOp::THROW || op == ir::IrOp::TRYENTER ||
+                        op == ir::IrOp::SPAWN || op == ir::IrOp::FUTURE) {
+                        vreg_dbg(fn.name.c_str(), "callback(non-leaf-v1)");
+                        return false;
+                    }
+                }
+            }
+            /* Cargar proc -> RBX via TLS-direct (gs:[disp]); no toca arg-regs. */
+            const uint32_t gp_idx = out.intern_imm64(cb.get_proc_addr);
+            O.push_back(
+                MInstr::make_load_proc(MReg::RBX, cb.tls_gs_disp, gp_idx));
+            /* Marshalear args nativos -> proc->regs[1..N]. */
+            for (size_t i = 0; i < np; ++i)
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               vm_reg_mem(static_cast<int>(i) + 1),
+                                               MOperand::make_reg(cbr[i], 8)));
+            /* argc -> regs[15]. */
+            O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(15),
+                                           MOperand::make_imm32(
+                                               static_cast<int32_t>(np))));
+        }
 
         /* VM_ABI: al entrar, cargar cada parametro desde
          * proc->registers.regs[i+1] (regs[0] reservado al retorno).
@@ -2275,6 +2345,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                        vr(gpb), vrt(rv)));
                         O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(0),
                                                        vr(gpb)));
+                        /* Callback: el retorno nativo float va en XMM0. */
+                        if (cb_entry)
+                            O.push_back(MInstr::make_unary(
+                                MOp::MOV, MOperand::make_reg(MReg::XMM0, 8),
+                                vrt(rv)));
                         O.push_back(MInstr::make_ret());
                         break;
                     }
@@ -2283,6 +2358,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vm ? vm_reg_mem(0) : MOperand::make_reg(MReg::RAX, 8);
                     O.push_back(
                         MInstr::make_unary(MOp::MOV, dst, vr(in.operands[0])));
+                    /* Callback: el retorno nativo (entero/ptr) va en RAX ademas
+                     * de regs[0] (que lee el interp). */
+                    if (cb_entry && vm)
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
+                            vr(in.operands[0])));
                 } else if (vm) {
                     /* RET void en VM_ABI: regs[0] es el "exit code"
                      * observable de main.  Sin esto quedaria con basura

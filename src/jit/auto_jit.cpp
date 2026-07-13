@@ -1300,6 +1300,38 @@ CompileResult eager_compile_function(
      * (va a una API C: qsort/Win32/CRT) -> el interprete no es un puntero de fn
      * valido, asi que siguen usando el selector-slots como unica via hasta que
      * el vreg cubra su subset (fase A4).  VESTA_JIT_VREGS=0 reactiva slots. */
+    /* Jubilacion slots (A4): intentar compilar el callback por el PATH VREG.
+     * Gate opt-in VESTA_VREG_CALLBACKS=1 (migracion incremental: por defecto
+     * los callbacks siguen en slots hasta validar el subset vreg-callback).
+     * Si vreg no soporta el cuerpo, cae a slots (abajo). */
+    static const bool g_vreg_callbacks = [] {
+        const char *v = std::getenv("VESTA_VREG_CALLBACKS");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    if (callback_entry && g_jit_use_vregs && g_vreg_callbacks) {
+        VregCallbackOpts cbopts;
+        cbopts.callback_entry = true;
+        cbopts.get_proc_addr = callback_get_proc_addr;
+        cbopts.tls_gs_disp = callback_tls_gs_disp;
+        uint8_t *vcode = vreg_compile_callback(
+            ir_fn, *g_code_cache, cbopts, resolver, make_vreg_entries(),
+            resolve_native_fn, sym_resolver);
+        if (vcode != nullptr) {
+            if (g_jit_warn_unsupported)
+                std::fprintf(stderr,
+                             "[jit-vreg] callback compilado '%s'\n",
+                             ir_fn.name.c_str());
+            CompileResult r{};
+            r.fn = reinterpret_cast<JitFn>(vcode);
+            r.code_start = vcode;
+            return r;
+        }
+        if (g_jit_warn_unsupported)
+            std::fprintf(stderr,
+                         "[jit-vreg] callback '%s' no soportado -> slots\n",
+                         ir_fn.name.c_str());
+    }
+
     CompileResult res;
     if (callback_entry || !g_jit_use_vregs) {
         res = g_compiler->compile_with_opts(ir_fn, top_opts);

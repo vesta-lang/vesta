@@ -85,6 +85,31 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_symbol = {});
 
 /**
+ * @brief Compila @p fn como un ENTRY de callback de ABI C nativo por el path
+ *        vreg (jubilacion del selector-slots).
+ *
+ * Igual que @c vreg_compile (VM_ABI, @c ProcessVM* en RBX, runtime entries)
+ * pero el prologo/epilogo siguen la convencion del @c VregCallbackOpts: los
+ * argumentos llegan en los @c arg_regs del host, el @c ProcessVM* se carga de
+ * TLS (@c gs:[disp]) o via el call de fallback, los args nativos se marshalean
+ * a @c proc->registers.regs[1..N] (+ argc en R15) y el RET escribe el retorno
+ * en RAX (retorno nativo) ademas de @c regs[0].  Sirve para pasar una funcion
+ * Vesta a APIs nativas (qsort, WndProc, hooks, ...).
+ *
+ * @param cb  Opciones del callback (callback_entry=true, get_proc_addr,
+ *            tls_gs_disp).  Si @c vreg_select decide que el cuerpo no encaja en
+ *            el subset de callback soportado, devuelve @c nullptr -> el caller
+ *            hace fallback (hoy: al selector-slots).
+ * @return    Puntero al codigo nativo, o @c nullptr si no soportado.
+ */
+uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
+                               const VregCallbackOpts &cb,
+                               const CallResolver &resolve_call = {},
+                               const VregEntries &ent = {},
+                               const CallResolver &resolve_native = {},
+                               const CallResolver &resolve_symbol = {});
+
+/**
  * @brief Compila @p fn por el path vreg en ABI HOST_LEAF y devuelve los
  *        BYTES nativos (Phase AOT.3 Paso 2).
  *
