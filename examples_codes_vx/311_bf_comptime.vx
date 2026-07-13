@@ -76,8 +76,7 @@ comptime string bf_emit(BfTok t) {
 comptime string bf_compile_body(string src) {
     string body = "";
     for (i64 i = 0; i < strlen(src); i++) {
-        BfTok t = bf_classify(src[i]);   // caracter -> token
-        body += bf_emit(t);              // token    -> codigo
+        body += bf_emit(bf_classify(src[i]));   // char -> token -> codigo
     }
     return body;
 }

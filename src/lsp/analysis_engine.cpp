@@ -280,9 +280,14 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // para cualquier simbolo de un modulo importado (serial/fb/... de un
         // programa multi-fichero).  El fs_path se deriva del uri file://.
         const std::string fs_path = uri_to_fs_path(uri);
-        const bool has_imports =
-            (text.find("import \"") != std::string::npos ||
-             text.find("import\t\"") != std::string::npos);
+        // Usar el MISMO detector que el compilador (@c vx_source_has_imports):
+        // reconoce imports con puntos (`import std.comptime only source;`) igual
+        // que los de string (`import "modules/foo";`), ignorando strings y
+        // comentarios.  El check anterior solo miraba `import "` -> un fichero
+        // con imports DOTTED caia al path single-file, que no resuelve el modulo
+        // ni siembra los params `expr` importados (source/inject) -> el parser
+        // reportaba errores FALSOS en `source(...)` (raw-capture no reconocido).
+        const bool has_imports = vx::vx_source_has_imports(text);
         const bool file_on_disk =
             !fs_path.empty() && std::ifstream(fs_path).good();
         if (has_imports && file_on_disk) {

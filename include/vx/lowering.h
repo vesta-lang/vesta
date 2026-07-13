@@ -812,6 +812,12 @@ class Lowering {
     /// `match` -- PHI de punteros de naturaleza mixta).
     void emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
                         bool src_is_host, uint64_t size_bytes, uint32_t line);
+    /// Tamano del buffer SRET de BUFFER PLANO (enum / Optional / Result /
+    /// string value-type) que devuelve la fn @p callee, o 0 si no devuelve un
+    /// SRET copiable.  Usado por el fix nested-SRET de @c lower_call para copiar
+    /// el retbuf de una llamada anidada a un slot fresco (y no depender del slot
+    /// fragil del productor cuando la presion de registros clobbea su registro).
+    uint64_t nested_sret_flat_size(const std::string &callee) const;
     /// Emite los valores por defecto de los campos de @p lay (los `u8 a = 0x10`)
     /// sobre el struct ya alocado y zero-inicializado en @p base_addr.  Recurre
     /// en campos struct anidados que tengan defaults propios.  Se llama tras el

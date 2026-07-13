@@ -10522,6 +10522,26 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
 // Optional / Result.
 // ---------------------------------------------------------------------
 
+uint64_t Lowering::nested_sret_flat_size(const std::string &callee) const {
+    // Tamano del buffer SRET de un ENUM value-type que devuelve @p callee, o 0
+    // si no devuelve un enum SRET.  El fix nested-SRET copia el retbuf del
+    // productor a un slot VM-stack fresco; eso encaja para ENUM (el callee lee
+    // el enum via acceso VM).  Optional/Result NO se incluyen: aunque tambien
+    // son buffers planos, el callee los lee via acceso HOST (convencion
+    // distinta), asi que la copia a slot VM-stack no sirve para ellos -- su
+    // patron nested SRET queda como limitacion aparte (raro en la practica:
+    // pasar un Optional/Result devuelto por una fn DIRECTAMENTE como arg
+    // anidado a otra).  function/smart-ptr se excluyen por ownership.
+    auto it_er = fn_ret_enum_name_.find(callee);
+    if (it_er != fn_ret_enum_name_.end()) {
+        const auto &elays = tc_.enum_layouts();
+        auto it_e = elays.find(it_er->second);
+        if (it_e != elays.end())
+            return static_cast<uint64_t>(it_e->second.size_bytes);
+    }
+    return 0;
+}
+
 void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
                              bool src_is_host, uint64_t size_bytes,
                              uint32_t line) {
@@ -17969,15 +17989,20 @@ skip_comptime_eval_for_macro_to_macro:
         }
         if (!promote_to_string) {
             ir::IrValueId v_arg = lower_expr(ae);
-            // Fix nested-SRET: si el argumento es una llamada anidada a una fn
-            // que devuelve un ENUM via SRET (p.ej. `emit(classify(x))`), su
-            // valor ES el retbuf de esa llamada -- un slot fragil.  Al montar
-            // los args de ESTA llamada (parallel-move + presion de registros),
-            // el registro que sostiene ese retbuf puede clobbearse y el callee
-            // recibiria un puntero equivocado -> `match` sobre basura (siempre
-            // la primera arm).  Copiamos el enum a un slot FRESCO justo aqui
-            // (mismo patron que `E t = classify(x)`, que ya funcionaba) y
-            // pasamos ESE, desacoplandolo del retbuf productor.
+            // Fix nested-SRET (general): si el argumento es una llamada anidada
+            // a una fn que devuelve un tipo de buffer PLANO via SRET (enum,
+            // Optional, Result, o string value-type de Vesta Embed -- p.ej.
+            // `emit(classify(x))`), su valor SSA ES el retbuf de esa llamada:
+            // un slot fragil.  Al montar los args de ESTA llamada (parallel-move
+            // + presion de registros), el registro que sostiene ese retbuf puede
+            // clobbearse y el callee recibiria un puntero equivocado -> lee
+            // basura (match sobre la primera arm, Optional vacio, etc.).
+            // Copiamos el buffer a un slot FRESCO justo aqui (mismo patron que
+            // `T t = productor(x)`, que ya funcionaba) y pasamos ESE,
+            // desacoplandolo del retbuf productor.  Antes solo cubria enum; el
+            // bug es identico para TODO SRET de buffer plano, asi que se atiende
+            // de forma uniforme (function/smart-ptr se excluyen: tienen
+            // semantica de ownership -- copiar el buffer duplicaria el env/ctrl).
             if (v_arg != ir::IR_NO_VALUE && ae &&
                 ae->kind == ast::NodeKind::CallExpr) {
                 auto *ce_arg = static_cast<ast::CallExpr *>(ae);
@@ -17986,26 +18011,30 @@ skip_comptime_eval_for_macro_to_macro:
                     const std::string &cn =
                         static_cast<ast::IdentExpr *>(ce_arg->callee.get())
                             ->name;
-                    auto it_er = fn_ret_enum_name_.find(cn);
-                    if (it_er != fn_ret_enum_name_.end()) {
-                        const auto &elays_ns = tc_.enum_layouts();
-                        auto it_e = elays_ns.find(it_er->second);
-                        if (it_e != elays_ns.end()) {
-                            const uint64_t sz = it_e->second.size_bytes;
-                            const ir::IrValueId fresh =
-                                fn_->new_value(ir::IrType::PTR);
-                            ir::IrInstr al{};
-                            al.op = ir::IrOp::ALLOCA;
-                            al.type = ir::IrType::I8;
-                            al.dst = fresh;
-                            al.imm = sz;
-                            al.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(al));
-                            emit_enum_copy(fresh, v_arg,
-                                           fn_->values[v_arg].is_host_ptr, sz,
-                                           e->loc.line);
-                            v_arg = fresh;
-                        }
+                    const uint64_t sret_sz = nested_sret_flat_size(cn);
+                    if (sret_sz > 0) {
+                        // Slot fresco en VM STACK (host_alloca=false -> `subsp`,
+                        // direccion VM), EXACTAMENTE como el slot de un var-decl
+                        // `T t = productor(x)`.  El callee lee el buffer via
+                        // acceso VM (`mov [t]`), asi que el slot DEBE ser VM;
+                        // si fuese host (GC alloc) el callee leeria basura.  La
+                        // copia (emit_enum_copy) lee el retbuf productor con su
+                        // naturaleza real (host, via `movh`) y escribe al slot
+                        // VM (`mov`) -- mismo patron que el caso local que ya
+                        // funcionaba.
+                        const ir::IrValueId fresh =
+                            fn_->new_value(ir::IrType::PTR);
+                        ir::IrInstr al{};
+                        al.op = ir::IrOp::ALLOCA;
+                        al.type = ir::IrType::I8;
+                        al.dst = fresh;
+                        al.imm = sret_sz;
+                        al.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(al));
+                        emit_enum_copy(fresh, v_arg,
+                                       fn_->values[v_arg].is_host_ptr, sret_sz,
+                                       e->loc.line);
+                        v_arg = fresh;
                     }
                 }
             }
@@ -24513,6 +24542,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         add.operands = {v_buf, v_eight};
         add.source_line = e->loc.line;
         fn_->append(current_block_, std::move(add));
+        // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
+        // buf+8.  Sin esto, el STORE del payload usa acceso VM (`mov`) sobre un
+        // buffer HOST (stack_alloc_buf con host_alloca) -> el valor se escribe a
+        // memoria VM en una direccion host (fuera de rango) y se pierde
+        // (unwrap devuelve 0).  Funcionaba por SUERTE cuando la direccion del
+        // alloc caia en rango VM.  Ok/Err ya tenian esta propagacion; Some no.
+        fn_->values[v_buf8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
         const ir::IrType payload_t = fn_->values[v_payload].type;
         ir::IrInstr st1{};
         st1.op = ir::IrOp::STORE;
@@ -24794,6 +24830,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             add.operands = {v_arg, v_eight};
             add.source_line = e->loc.line;
             fn_->append(current_block_, std::move(add));
+            // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
+            // buf+8 para que el LOAD del payload emita `loadzh`/`movh` (host).
+            // Sin esto, un Optional en buffer host (retornado por una fn SRET)
+            // se leia con `loadz` (VM) sobre direccion host -> unwrap daba 0.
+            // value/error ya lo hacian; unwrap no.
+            fn_->values[v_at].is_host_ptr = fn_->values[v_arg].is_host_ptr;
             const ir::IrValueId v_dst = fn_->new_value(payload_t);
             ir::IrInstr ldp{};
             ldp.op = ir::IrOp::LOAD;
