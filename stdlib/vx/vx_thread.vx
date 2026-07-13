@@ -99,11 +99,11 @@ i64 __vx_thread_n = 0;              ///< Numero de hilos registrados.
  * @note El HANDLE queda registrado para @ref __vx_thread_join_all (join-all
  *       implicito que el lowering inyecta al final de main).
  */
-public u64 __vx_thread_run(u64 body) {
+public u64 __vx_thread_run(u64 body, u64 arg) {
     if (__vx_thread_n >= VX_THREAD_MAX) {
         return 0;
     }
-    u64 h = vx_thread_spawn(body, 0);
+    u64 h = vx_thread_spawn(body, arg);
     if (h == 0) {
         return 0;
     }

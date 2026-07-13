@@ -9801,24 +9801,83 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     host_bearing_locals_.clear();
     cleanup_stack_.clear();
 
-    // BugFix R3: registrar las capturas como params del helper.  Cada
-    // captura llega via la calling convention spawnargs (R1, R2, ...).
-    for (size_t i = 0; i < captures.size(); ++i) {
-        ir::IrValueId v =
-            child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
-        child_fn.values[v].is_param = true;
-        // Si el SSA value original era host_ptr CLASS, propagarlo.
-        if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
-            spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
-            const auto &src_val =
-                saved_fn->values[spawn_captured_ssa_values_[i]];
-            if (src_val.is_host_ptr) child_fn.values[v].is_host_ptr = true;
-            if (src_val.is_gc_object) child_fn.values[v].is_gc_object = true;
+    // Registrar las capturas.
+    // - Ruta VM (no native_poo): cada captura es un PARAM del helper que llega
+    //   via la calling convention spawnargs (R1, R2, ...).
+    // - Ruta AOT (native_poo, hilo real): CreateThread/pthread pasan UN SOLO arg
+    //   -> el helper recibe UN param `cap_ptr` (host_ptr a un struct heap con las
+    //   N capturas, alocado por el caller); las LEE de cap_ptr[i], bindea los
+    //   nombres, y LIBERA el struct (RAW_FREE) tras leerlas.
+    if (native_poo_ && !captures.empty()) {
+        ir::IrValueId cap_ptr =
+            child_fn.new_value(ir::IrType::PTR, "%__cap_ptr");
+        child_fn.values[cap_ptr].is_param = true;
+        child_fn.values[cap_ptr].is_host_ptr = true;
+        child_fn.params.push_back(cap_ptr);
+        for (size_t i = 0; i < captures.size(); ++i) {
+            // addr = cap_ptr + i*8  (mantiene is_host_ptr).
+            ir::IrValueId addr = cap_ptr;
+            if (i != 0) {
+                addr = child_fn.new_value(ir::IrType::PTR);
+                child_fn.values[addr].is_host_ptr = true;
+                ir::IrValueId off = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(i * 8), loc.line);
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::PTR;
+                ad.dst = addr;
+                ad.operands = {cap_ptr, off};
+                ad.source_line = loc.line;
+                fn_->append(current_block_, std::move(ad));
+            }
+            // val = LOAD [addr] (host, qword).
+            ir::IrValueId val =
+                child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
+            if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
+                spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
+                const auto &src_val =
+                    saved_fn->values[spawn_captured_ssa_values_[i]];
+                if (src_val.is_host_ptr)
+                    child_fn.values[val].is_host_ptr = true;
+                if (src_val.is_gc_object)
+                    child_fn.values[val].is_gc_object = true;
+            }
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = val;
+            ld.operands = {addr};
+            ld.source_line = loc.line;
+            fn_->append(current_block_, std::move(ld));
+            scopes_.back()[captures[i]] = val;
         }
-        child_fn.params.push_back(v);
-        // Bindear el nombre en el topmost scope para que IdentExpr
-        // resuelva via @c lookup.
-        scopes_.back()[captures[i]] = v;
+        // Liberar el struct de capturas (ya leidas a locales).
+        ir::IrInstr fr{};
+        fr.op = ir::IrOp::RAW_FREE;
+        fr.type = ir::IrType::VOID;
+        fr.dst = ir::IR_NO_VALUE;
+        fr.operands = {cap_ptr};
+        fr.source_line = loc.line;
+        fn_->append(current_block_, std::move(fr));
+    } else {
+        // BugFix R3: capturas como params (R1..R12) via spawnargs (ruta VM).
+        for (size_t i = 0; i < captures.size(); ++i) {
+            ir::IrValueId v =
+                child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
+            child_fn.values[v].is_param = true;
+            // Si el SSA value original era host_ptr CLASS, propagarlo.
+            if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
+                spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
+                const auto &src_val =
+                    saved_fn->values[spawn_captured_ssa_values_[i]];
+                if (src_val.is_host_ptr) child_fn.values[v].is_host_ptr = true;
+                if (src_val.is_gc_object) child_fn.values[v].is_gc_object = true;
+            }
+            child_fn.params.push_back(v);
+            // Bindear el nombre en el topmost scope para que IdentExpr
+            // resuelva via @c lookup.
+            scopes_.back()[captures[i]] = v;
+        }
     }
 
     // Setup de pila: ahora lo hace exec_instr_spawn directamente al
@@ -12046,18 +12105,61 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     // AOT/bare (native_poo_): spawn = HILO REAL del SO via CALL __vx_thread_run
     // (CreateThread en Win, pthread en Linux), bundle-ado desde vx_thread.vx.  El
     // hint de `here`/`on(N)` se ignora (cada spawn es un hilo del SO).  El HANDLE
-    // se registra para el join-all implicito que se inyecta al final de main
-    // (vx_thread_used_ marca que hay que inyectarlo).  Las capturas (SPAWN_ARGS)
-    // llegan en la Fase 2; por ahora solo el caso sin capturas.
-    if (native_poo_ && caps.empty()) {
+    // se registra para el join-all implicito que se inyecta al final de main.
+    // CAPTURAS: si el body captura locals del outer, se aloca un struct heap
+    // (RAW_ALLOC N*8), se guarda cada captura, y se pasa el ptr como arg del hilo
+    // (el helper las LEE de cap_ptr[i] y libera el struct).  Sin capturas, arg=0.
+    if (native_poo_) {
         vx_thread_used_ = true;
+        ir::IrValueId v_arg;
+        if (caps.empty()) {
+            v_arg = emit_const(ir::IrType::I64, 0, e->loc.line);
+        } else {
+            ir::IrValueId v_size =
+                emit_const(ir::IrType::I64,
+                           static_cast<int64_t>(caps.size() * 8), e->loc.line);
+            ir::IrValueId cap_ptr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[cap_ptr].is_host_ptr = true;
+            ir::IrInstr al{};
+            al.op = ir::IrOp::RAW_ALLOC;
+            al.type = ir::IrType::PTR;
+            al.dst = cap_ptr;
+            al.operands = {v_size};
+            al.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(al));
+            for (size_t i = 0; i < caps.size(); ++i) {
+                ir::IrValueId addr = cap_ptr;
+                if (i != 0) {
+                    addr = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[addr].is_host_ptr = true;
+                    ir::IrValueId off =
+                        emit_const(ir::IrType::I64,
+                                   static_cast<int64_t>(i * 8), e->loc.line);
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::PTR;
+                    ad.dst = addr;
+                    ad.operands = {cap_ptr, off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.dst = ir::IR_NO_VALUE;
+                st.operands = {caps[i], addr};
+                st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            v_arg = cap_ptr;
+        }
         const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
         ir::IrInstr c{};
         c.op = ir::IrOp::CALL;
         c.type = ir::IrType::I64;
         c.dst = v_pid;
         c.func_name = "__vx_thread_run";
-        c.operands = {v_pc};
+        c.operands = {v_pc, v_arg};
         c.is_call_site = true;
         c.source_line = e->loc.line;
         fn_->append(current_block_, std::move(c));
