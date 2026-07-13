@@ -1300,13 +1300,14 @@ CompileResult eager_compile_function(
      * (va a una API C: qsort/Win32/CRT) -> el interprete no es un puntero de fn
      * valido, asi que siguen usando el selector-slots como unica via hasta que
      * el vreg cubra su subset (fase A4).  VESTA_JIT_VREGS=0 reactiva slots. */
-    /* Jubilacion slots (A4): intentar compilar el callback por el PATH VREG.
-     * Gate opt-in VESTA_VREG_CALLBACKS=1 (migracion incremental: por defecto
-     * los callbacks siguen en slots hasta validar el subset vreg-callback).
-     * Si vreg no soporta el cuerpo, cae a slots (abajo). */
+    /* Jubilacion slots (A4): compilar el callback por el PATH VREG (default).
+     * El subset vreg-callback cubre leaf/no-hoja (save-set) + args por reg y
+     * pila + retorno float + params f64.  Lo que aun no cubre (call-fallback
+     * sin TLS = Linux, params f32, SIMD >8B) BAILA a slots (abajo).
+     * VESTA_VREG_CALLBACKS=0 fuerza slots para todos (A/B testing). */
     static const bool g_vreg_callbacks = [] {
         const char *v = std::getenv("VESTA_VREG_CALLBACKS");
-        return v && v[0] != '\0' && v[0] != '0';
+        return !(v && v[0] == '0'); /* default true; solo "0" lo desactiva */
     }();
     if (callback_entry && g_jit_use_vregs && g_vreg_callbacks) {
         VregCallbackOpts cbopts;
