@@ -213,6 +213,13 @@ struct Lowerer {
     /// de allocas host, por encima del shadow space Win64).
     bool has_vm_alloca = false;
     int32_t vm_rsp_save_off = 0;
+    /// Callback-ABI save-set (jubilacion de slots): si @c cb_save_regs, el
+    /// frame reserva 128B (16 qwords) donde @c CB_SAVE_REGS salva
+    /// proc->registers[0..15] del caller VM.  @c cb_save_base_off es el offset
+    /// (negativo desde RBP) del slot del reg 0; el reg r vive en
+    /// @c cb_save_base_off - r*8.
+    bool cb_save_regs = false;
+    int32_t cb_save_base_off = 0;
     MReg scr0 = MReg::R10;
     MReg scr1 = MReg::R11;
     /// FP-regalloc (Phase AOT C1 float): scratch XMM del rewrite
@@ -233,9 +240,11 @@ struct Lowerer {
 
     Lowerer(const RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
             bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in,
-            uint32_t out_stack_args_in = 0, bool has_stack_params_in = false)
+            uint32_t out_stack_args_in = 0, bool has_stack_params_in = false,
+            bool cb_save_regs_in = false)
         : ra(r), tri(t), vm_abi(abi == AbiKind::VM),
-          has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in) {
+          has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in),
+          cb_save_regs(cb_save_regs_in) {
         SZ = t.pointer_size ? t.pointer_size : 8u;
         k = static_cast<uint32_t>(ra.callee_saved_used.size());
         total_saved = k + (vm_abi ? 1u : 0u); // +1 por el push rbx
@@ -268,6 +277,15 @@ struct Lowerer {
             vm_rsp_save_off = -static_cast<int32_t>(
                 8u * total_saved + 8u * ra.num_spill_slots + alloca_total + 8u);
             spill_bytes += 8;
+        }
+        /* Callback save-set: reservar 128B (16 qwords) debajo de todo lo
+         * anterior (spills + allocas + vm_rsp) para salvar regs[0..15] del
+         * caller VM.  cb_save_base_off = offset del slot del reg 0 (los demas
+         * hacia abajo, -r*8).  no_frame es false (cuerpo no-hoja -> has_calls). */
+        if (cb_save_regs) {
+            cb_save_base_off =
+                -(static_cast<int32_t>(8u * total_saved) + spill_bytes + 8);
+            spill_bytes += 128;
         }
         if (!no_frame) {
             /* stack_arg_base = offset RSP del primer arg por pila.  Win64
@@ -714,6 +732,30 @@ struct Lowerer {
              * de si es XMM. */
             pending_args.push_back(
                 {in.variant, resolve(in.src1), is_fp_operand(in.src1)});
+            return;
+        }
+
+        /* ===== Callback save-set (jubilacion de slots) ===== */
+        if (op == MOp::CB_SAVE_REGS || op == MOp::CB_RESTORE_REGS) {
+            /* Expandir con R11 (scratch): copiar los 16 qwords entre
+             * proc->registers[r] ([rbx + REGISTERS_OFFSET + r*8]) y la
+             * work-area del frame ([rbp + cb_save_base_off - r*8]).  RBX =
+             * ProcessVM* (VM_ABI), cargado por LOAD_PROC antes del SAVE. */
+            const bool save = (op == MOp::CB_SAVE_REGS);
+            for (uint32_t r = 0; r < 16u; ++r) {
+                const MOperand vmreg = MOperand::make_mem(
+                    MReg::RBX, VESTA_PROC_REGISTERS_OFFSET +
+                                   static_cast<int32_t>(r) * VESTA_REGISTER_SIZE);
+                const MOperand frame = MOperand::make_mem(
+                    MReg::RBP, cb_save_base_off - static_cast<int32_t>(r) * 8);
+                if (save) {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), vmreg));
+                    out.push_back(MInstr::make_unary(MOp::MOV, frame, reg(scr1)));
+                } else {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), frame));
+                    out.push_back(MInstr::make_unary(MOp::MOV, vmreg, reg(scr1)));
+                }
+            }
             return;
         }
 
@@ -1844,7 +1886,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
         vf.param_vregs.size() >
         tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca,
-               max_stack_args, has_stack_params);
+               max_stack_args, has_stack_params, vf.cb_save_regs);
     lw.naked = vf.naked; // Phase NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;

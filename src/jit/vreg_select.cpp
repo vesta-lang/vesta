@@ -433,6 +433,29 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * proc->registers antes de que el prologo normal (mas abajo) los relea.  El
      * cuerpo y el RET consultan @c cb_entry.  Solo aplica en AbiKind::VM. */
     const bool cb_entry = cb.callback_entry && abi == AbiKind::VM;
+    /* Callback save-set: un cuerpo NO hoja-puro (algun CALL/CALLN/... que use
+     * proc->registers) puede ser invocado desde el interp o una re-entrada ->
+     * hay que salvar/restaurar proc->registers[0..15] del caller.  Se computa
+     * aqui (una pasada) para que el prologo emita CB_SAVE_REGS y cada RET emita
+     * CB_RESTORE_REGS; el rewrite reserva la work-area de 128B. */
+    bool cb_save_set = false;
+    if (cb_entry) {
+        for (const auto &blk : fn_in.blocks) {
+            for (const auto &ins : blk.instrs) {
+                const ir::IrOp o = ins.op;
+                if (o == ir::IrOp::CALL || o == ir::IrOp::CALLN ||
+                    o == ir::IrOp::CALLVIRT || o == ir::IrOp::CALLM ||
+                    o == ir::IrOp::CALLIND || o == ir::IrOp::NEWOBJ ||
+                    o == ir::IrOp::THROW || o == ir::IrOp::TRYENTER ||
+                    o == ir::IrOp::SPAWN || o == ir::IrOp::FUTURE ||
+                    o == ir::IrOp::RAW_ASM) {
+                    cb_save_set = true;
+                    break;
+                }
+            }
+            if (cb_save_set) break;
+        }
+    }
     /* CRITICAL-EDGE SPLITTING (out-of-SSA): si hay >=1 arista critica que
      * entra a un bloque con PHIs, trabajamos sobre una COPIA de la funcion
      * con los puentes insertados (zero-cost para el caso comun sin aristas
@@ -476,6 +499,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     /* Phase NR @Naked: propagar para suprimir prologo/epilogo/ret en el
      * rewrite-to-physical.  El cuerpo (asm) provee su propia salida. */
     out.naked = fn.is_naked;
+    /* Callback save-set: propagar tras el reset de out (arriba lo borra un
+     * MFunction{}); el rewrite reserva 128B para CB_SAVE_REGS/CB_RESTORE_REGS. */
+    out.cb_save_regs = cb_save_set;
     /* Solo-LSP (vista "Godbolt"): activar la captura de source_line en el
      * codegen vreg (AOT).  OFF por defecto -> sin efecto en produccion. */
     out.emit_line_map = emit_line_map;
@@ -916,27 +942,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
             }
-            /* SAFE save-set: un cuerpo NO hoja-puro necesitaria salvar/restaurar
-             * proc->registers[0..15] (re-entrancia) en una work-area del frame.
-             * v1 aun no reserva esa area en regalloc_rewrite -> los callbacks
-             * no-hoja BAILAN a slots (seguro).  v2 anadira el save-set. */
-            for (const auto &blk : fn.blocks) {
-                for (const auto &ins : blk.instrs) {
-                    const ir::IrOp op = ins.op;
-                    if (op == ir::IrOp::CALL || op == ir::IrOp::CALLN ||
-                        op == ir::IrOp::CALLVIRT || op == ir::IrOp::CALLM ||
-                        op == ir::IrOp::RAW_ASM || op == ir::IrOp::NEWOBJ ||
-                        op == ir::IrOp::THROW || op == ir::IrOp::TRYENTER ||
-                        op == ir::IrOp::SPAWN || op == ir::IrOp::FUTURE) {
-                        vreg_dbg(fn.name.c_str(), "callback(non-leaf-v1)");
-                        return false;
-                    }
-                }
-            }
             /* Cargar proc -> RBX via TLS-direct (gs:[disp]); no toca arg-regs. */
             const uint32_t proc_pool_idx = out.intern_imm64(cb.get_proc_addr);
             O.push_back(MInstr::make_load_proc(MReg::RBX, cb.tls_gs_disp,
                                                proc_pool_idx));
+            /* Save-set (cuerpo no-hoja): salvar proc->registers[0..15] del
+             * caller VM a la work-area del frame ANTES de marshalear (que pisa
+             * regs[1..N]).  RBX ya = proc.  El rewrite reserva los 128B. */
+            if (cb_save_set)
+                O.push_back(MInstr::make_cb_save());
             /* Marshalear args nativos -> proc->regs[1..N].  Cada arg viene en un
              * reg (GP/XMM) o en la PILA del caller segun el ABI:
              *   Win64: posicion ordinal compartida; args 0..3 en reg, 4+ en
@@ -2428,6 +2442,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             O.push_back(MInstr::make_unary(
                                 MOp::MOV, MOperand::make_reg(MReg::XMM0, 8),
                                 vrt(rv)));
+                        /* Save-set: restaurar regs[0..15] del caller (no toca
+                         * RAX/XMM0 -> el retorno nativo sobrevive). */
+                        if (cb_save_set) O.push_back(MInstr::make_cb_restore());
                         O.push_back(MInstr::make_ret());
                         break;
                     }
@@ -2458,6 +2475,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(
                         MInstr::make_unary(MOp::MOV, vm_reg_mem(0), vr(zero)));
                 }
+                /* Save-set: restaurar regs[0..15] del caller antes del ret.
+                 * RAX (retorno nativo del callback) ya esta escrito y el
+                 * restore usa R11 -> no lo pisa. */
+                if (cb_save_set) O.push_back(MInstr::make_cb_restore());
                 O.push_back(MInstr::make_ret());
                 break;
             }

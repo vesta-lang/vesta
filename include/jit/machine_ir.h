@@ -666,6 +666,16 @@ enum class MOp : uint8_t {
     VXORPS = 157, ///< VXORPS dst,src1,src2 (VX.LIG.NP.0F 57) -- fneg
     VANDPS = 158, ///< VANDPS dst,src1,src2 (VX.LIG.NP.0F 54) -- fabs
 
+    /* Pseudo (callback-ABI save-set, jubilacion de slots): un callback NO
+     * hoja-puro puede ser invocado desde un contexto con proc->registers vivo
+     * (el interp, o una re-entrada nativa).  El cuerpo, al hacer un CALL VM_ABI,
+     * pisaria proc->registers[1..N] del caller.  CB_SAVE_REGS salva regs[0..15]
+     * a una work-area de 128B del frame (reservada por el rewrite si
+     * MFunction::cb_save_regs); CB_RESTORE_REGS los restaura antes del RET.  El
+     * rewrite los expande con R11 (scratch) sabiendo el offset RBP del area. */
+    CB_SAVE_REGS = 200,    ///< salva proc->regs[0..15] a la work-area del frame
+    CB_RESTORE_REGS = 201, ///< restaura proc->regs[0..15] desde la work-area
+
     /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
      * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y
      * UNPCKLPD (difunde el lane bajo a ambos -> construye la mascara de signo
@@ -863,6 +873,22 @@ struct MInstr {
         i.dst = MOperand::make_reg(dst);
         i.src1 = MOperand::make_imm32(tls_gs_disp);
         i.src2 = MOperand::make_imm64_idx(getproc_pool_idx);
+        return i;
+    }
+
+    /** @brief Pseudo CB_SAVE_REGS: salva proc->registers[0..15] a la work-area
+     *  del frame (callback-ABI save-set).  Requiere RBX = ProcessVM*.  El
+     *  rewrite lo expande sabiendo el offset RBP del area (R11 scratch). */
+    static MInstr make_cb_save() noexcept {
+        MInstr i;
+        i.op = MOp::CB_SAVE_REGS;
+        return i;
+    }
+    /** @brief Pseudo CB_RESTORE_REGS: restaura proc->registers[0..15] desde la
+     *  work-area del frame.  Emitido antes del RET del callback. */
+    static MInstr make_cb_restore() noexcept {
+        MInstr i;
+        i.op = MOp::CB_RESTORE_REGS;
         return i;
     }
 
@@ -1421,6 +1447,12 @@ struct MFunction {
     /// rewrite-to-physical.  El cuerpo (asm) provee su propia salida
     /// (ret/iretq).  Propagado desde @c IrFunction::is_naked por vreg-select.
     bool naked = false;
+    /// Callback-ABI (jubilacion de slots): si true, el rewrite reserva 128B
+    /// en el frame (save-area de proc->registers[0..15]) para que las
+    /// pseudo-ops @c CB_SAVE_REGS / @c CB_RESTORE_REGS del prologo/epilogo del
+    /// callback preserven el banco de registros del caller VM (re-entrancia).
+    /// Lo activa vreg-select cuando el cuerpo del callback NO es hoja-pura.
+    bool cb_save_regs = false;
     /// Solo-LSP: correlacion byte_offset -> source_line.  Vacia salvo que
     /// @c emit_line_map este activo.  Ver @c LineMapEntry.
     std::vector<LineMapEntry> line_map;
