@@ -2353,6 +2353,10 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                      * el __macro_<callee> no existira y la
                      * CALLVM fallara en runtime -- ese caso
                      * cae al fallback AST por inconsistencia. */
+                    for (const auto &a : ce->args) {
+                        auto ra = macro_body_unsupported_reason_expr(tc, a.get());
+                        if (!ra.empty()) return ra;
+                    }
                     return "";
                 }
                 /* Llamada a una comptime fn NO-macro.  Con force-lower activo
@@ -2372,6 +2376,18 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                     g_macro_visiting->erase(hn);
                     if (sub.empty()) {
                         g_macro_force_lower->insert(hn);
+                        /* Seguir recorriendo los ARGS de esta llamada: pueden
+                         * contener llamadas anidadas a OTRAS comptime fns
+                         * (p.ej. `bf_emit(bf_classify(x))`) que tambien hay que
+                         * recolectar para el force-lower.  Sin esto, el callee
+                         * del argumento quedaba fuera del set -> su CALL
+                         * emitiria "no es comptime-evaluable (argumento
+                         * runtime?)". */
+                        for (const auto &a : ce->args) {
+                            auto ra = macro_body_unsupported_reason_expr(
+                                tc, a.get());
+                            if (!ra.empty()) return ra;
+                        }
                         return "";
                     }
                     return "helper comptime no-lowereable '" + id->name +
@@ -4238,22 +4254,26 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 eal.imm = static_cast<uint64_t>(elay.size_bytes);
                 eal.source_line = vd->loc.line;
                 fn_->append(current_block_, std::move(eal));
-                // Si hay inicializador (constructor de variante),
-                // lower_expr produce un SSA value PTR al slot recien
-                // construido por @c lower_enum_constructor.  En vez
-                // de COPY-ar, simplemente bindeamos al slot del
-                // inicializador (la variable APUNTA al slot del
-                // constructor; el ALLOCA arriba queda sin uso pero
-                // el optimizer DCE lo eliminara).  Esto es equivalente
-                // semanticamente y evita un memcpy de @c size_bytes.
+                // La variable es un value-type: se bindea a un SLOT ESTABLE
+                // (@c eaddr, ALLOCA en VM stack) y el inicializador se COPIA
+                // qword-by-qword al slot -- MISMO modelo que un struct
+                // (ver rama STRUCT abajo).  Antes se bindeaba la variable al
+                // slot del constructor (repunte del puntero); eso rompia con
+                // una asignacion condicional (`if { t = X }` / arm de match):
+                // el var-decl apuntaba a un slot (p.ej. GC-host) y el assign
+                // a otro (ALLOCA VM), un PHI mezclaba punteros de naturaleza
+                // distinta y el LOAD del tag del `match t` usaba movh sobre
+                // una direccion VM -> SIGSEGV.  Con el slot estable, `t`
+                // tiene UNA sola direccion (VM) y el match lee siempre con mov.
+                bind(vd->name, eaddr);
                 if (vd->init) {
-                    ir::IrValueId init_addr = lower_expr(vd->init.get());
+                    const ir::IrValueId init_addr = lower_expr(vd->init.get());
                     if (init_addr != ir::IR_NO_VALUE) {
-                        bind(vd->name, init_addr);
-                        return;
+                        emit_enum_copy(eaddr, init_addr,
+                                       fn_->values[init_addr].is_host_ptr,
+                                       elay.size_bytes, vd->loc.line);
                     }
                 }
-                bind(vd->name, eaddr);
                 return;
             }
             error_at(vd->loc, "lowering: struct/enum desconocido '" +
@@ -10392,6 +10412,61 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
 // Optional / Result.
 // ---------------------------------------------------------------------
 
+void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
+                             bool src_is_host, uint64_t size_bytes,
+                             uint32_t line) {
+    if (dst_addr == ir::IR_NO_VALUE || src_addr == ir::IR_NO_VALUE) return;
+    const bool dst_is_host = fn_->values[dst_addr].is_host_ptr;
+    const uint64_t qwords = (size_bytes + 7) / 8;
+    for (uint64_t qi = 0; qi < qwords; ++qi) {
+        const uint64_t off = qi * 8;
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(off), line);
+        // src + off (hereda la naturaleza del origen para el LOAD).
+        const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_src_at].is_host_ptr = src_is_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_src_at;
+            ad.operands = {src_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_word;
+            ld.operands = {v_src_at};
+            ld.source_line = line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        // dst + off (naturaleza del slot destino, tipicamente VM ALLOCA).
+        const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_dst_at].is_host_ptr = dst_is_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_dst_at;
+            ad.operands = {dst_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {v_word, v_dst_at};
+            st.source_line = line;
+            fn_->append(current_block_, std::move(st));
+        }
+    }
+}
+
 ir::IrValueId Lowering::lower_enum_constructor(
     const std::string &enum_name, const std::string &variant_name,
     const std::vector<std::unique_ptr<ast::Expr>> &args, const SourceLoc &loc) {
@@ -13415,10 +13490,57 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // Full/JIT el string es GC-managed y este path no se implementa aun.
     if (e->base && e->base->result_type.kind == PrimitiveKind::STRING) {
         if (!native_poo_) {
-            error_at(e->loc,
-                     "indexado/slice de string solo soportado en compilacion "
-                     "nativa (AOT Embed/Bare) por ahora");
-            return ir::IR_NO_VALUE;
+            // VM/JIT/interp: el string es un StringObject GC-managed.  `s[i]`
+            // (char) = el BYTE i-esimo del buffer: strraw (host_ptr a data) +
+            // LOAD u8 en [data + i].  Mismo patron que el builtin `ord`.  Para
+            // ASCII / UTF-8 de 1 byte el byte coincide con el codepoint.  El
+            // slice `s[a..b]` sigue solo en AOT (requiere copiar un substring).
+            if (e->is_range) {
+                error_at(e->loc,
+                         "slice de string s[a..b] solo soportado en compilacion "
+                         "nativa (AOT) por ahora; usa substr(s, a, len)");
+                return ir::IR_NO_VALUE;
+            }
+            if (!e->index) {
+                error_at(e->loc, "indexado de string sin indice");
+                return ir::IR_NO_VALUE;
+            }
+            const ir::IrValueId v_src = lower_expr(e->base.get());
+            if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            ir::IrValueId v_idx = lower_expr(e->index.get());
+            if (v_idx == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type,
+                                   ir::IrType::I64, e->loc.line);
+            // host_ptr al buffer de datos.
+            const ir::IrValueId v_raw = emit_strraw(v_src, e->loc.line);
+            // addr = raw + idx (hereda naturaleza host de strraw).
+            const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_at].is_host_ptr = true;
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = v_at;
+                ad.operands = {v_raw, v_idx};
+                ad.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ad));
+            }
+            // LOAD u8 (host) -> byte, zero-extendido al ancho del char.
+            const ir::IrType rt = (e->result_type.kind == PrimitiveKind::COUNT)
+                                      ? ir::IrType::I64
+                                      : ir_type_from_primitive(
+                                            e->result_type.kind);
+            const ir::IrValueId v_byte = fn_->new_value(rt);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::U8;
+                ld.dst = v_byte;
+                ld.operands = {v_at};
+                ld.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            return v_byte;
         }
         const ir::IrValueId v_src = lower_expr(e->base.get());
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
@@ -17708,7 +17830,47 @@ skip_comptime_eval_for_macro_to_macro:
             promote_to_string = true;
         }
         if (!promote_to_string) {
-            const ir::IrValueId v_arg = lower_expr(ae);
+            ir::IrValueId v_arg = lower_expr(ae);
+            // Fix nested-SRET: si el argumento es una llamada anidada a una fn
+            // que devuelve un ENUM via SRET (p.ej. `emit(classify(x))`), su
+            // valor ES el retbuf de esa llamada -- un slot fragil.  Al montar
+            // los args de ESTA llamada (parallel-move + presion de registros),
+            // el registro que sostiene ese retbuf puede clobbearse y el callee
+            // recibiria un puntero equivocado -> `match` sobre basura (siempre
+            // la primera arm).  Copiamos el enum a un slot FRESCO justo aqui
+            // (mismo patron que `E t = classify(x)`, que ya funcionaba) y
+            // pasamos ESE, desacoplandolo del retbuf productor.
+            if (v_arg != ir::IR_NO_VALUE && ae &&
+                ae->kind == ast::NodeKind::CallExpr) {
+                auto *ce_arg = static_cast<ast::CallExpr *>(ae);
+                if (ce_arg->callee &&
+                    ce_arg->callee->kind == ast::NodeKind::IdentExpr) {
+                    const std::string &cn =
+                        static_cast<ast::IdentExpr *>(ce_arg->callee.get())
+                            ->name;
+                    auto it_er = fn_ret_enum_name_.find(cn);
+                    if (it_er != fn_ret_enum_name_.end()) {
+                        const auto &elays_ns = tc_.enum_layouts();
+                        auto it_e = elays_ns.find(it_er->second);
+                        if (it_e != elays_ns.end()) {
+                            const uint64_t sz = it_e->second.size_bytes;
+                            const ir::IrValueId fresh =
+                                fn_->new_value(ir::IrType::PTR);
+                            ir::IrInstr al{};
+                            al.op = ir::IrOp::ALLOCA;
+                            al.type = ir::IrType::I8;
+                            al.dst = fresh;
+                            al.imm = sz;
+                            al.source_line = e->loc.line;
+                            fn_->append(current_block_, std::move(al));
+                            emit_enum_copy(fresh, v_arg,
+                                           fn_->values[v_arg].is_host_ptr, sz,
+                                           e->loc.line);
+                            v_arg = fresh;
+                        }
+                    }
+                }
+            }
             // Ruta B (H1 paso por valor): si el param es un STRUCT por valor con
             // copy-hook y el arg es un lvalue existente (IdentExpr), la callee
             // debe recibir una COPIA.  Copiamos + `copia.__clone__()` y pasamos
@@ -19264,6 +19426,26 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         rhs = lower_expr(e->value.get());
     }
     if (rhs == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+
+    /* Value-type ENUM: `t = <enum>` COPIA los bytes del enum al slot ESTABLE
+     * de `t` (no repunta el puntero).  Igual modelo que un struct; sin esto,
+     * una asignacion (condicional o no) repuntaria `t` al slot del constructor
+     * (naturaleza VM/host distinta al slot del var-decl) y un PHI mezclaria
+     * punteros de naturaleza mixta -> el `match t` posterior leeria el tag con
+     * el load de la naturaleza equivocada (movh sobre direccion VM) -> SIGSEGV. */
+    if (e->op == ast::AssignOp::Assign &&
+        id->result_type.kind == PrimitiveKind::STRUCT) {
+        const auto &elays_e = tc_.enum_layouts();
+        auto ite_e = elays_e.find(id->result_type.struct_name);
+        if (ite_e != elays_e.end()) {
+            const ir::IrValueId slot = lookup(id->name);
+            if (slot != ir::IR_NO_VALUE) {
+                emit_enum_copy(slot, rhs, fn_->values[rhs].is_host_ptr,
+                               ite_e->second.size_bytes, e->loc.line);
+                return slot;
+            }
+        }
+    }
 
     /* L2.2: target es global runtime con storage en static_data.
      * Emit STORE al slot.  Soporta `=` directo y compound assigns

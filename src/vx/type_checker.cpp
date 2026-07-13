@@ -6538,8 +6538,19 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
             (void)borrow_checker_.on_borrow_escape(id->name, s->loc, "return");
         }
         if (fn_return_type.kind == PrimitiveKind::VOID) {
-            diags_.error(s->loc,
-                         "'return' con valor en funcion declarada void");
+            // Inferencia del retorno de un lambda block-body sin tipo
+            // declarado: capturamos el tipo del primer `return <valor>` en vez
+            // de emitir error.  check_lambda lee este tipo como el retorno del
+            // lambda.  Fuera de ese contexto (funcion void real), es error.
+            if (infer_lambda_void_return_ && t.kind != PrimitiveKind::COUNT &&
+                t.kind != PrimitiveKind::VOID) {
+                if (inferred_lambda_return_type_.kind == PrimitiveKind::VOID) {
+                    inferred_lambda_return_type_ = t; // primer return manda
+                }
+            } else {
+                diags_.error(s->loc,
+                             "'return' con valor en funcion declarada void");
+            }
         } else if (t.kind != PrimitiveKind::COUNT && t != fn_return_type) {
             // Aceptar conversiones numericas, asignabilidad de clases
             // (subtypes / interfaces) y compatibilidad de Optional/Result
@@ -7489,23 +7500,25 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
     // check_stmt; cuando no hay anotacion explicita, pasamos VOID y
     // luego inferimos del primer return encontrado.
     if (e->body) {
-        check_stmt(e->body.get(), return_t);
-        // Si el usuario no declaro return_type explicito, inferimos
-        // del primer ReturnStmt encontrado en el body.  El recorrido
-        // ya fue hecho por check_stmt; aqui solo extraemos el tipo
-        // del primer return statement directo en el body.
+        // Sin tipo declarado: activar la inferencia por `return`.  Asi un
+        // `return <valor>` en el cuerpo (incluso anidado en if/while, o cuando
+        // el lambda viene de un @Macro sin contexto de asignacion) NO dispara
+        // "return con valor en funcion void" -- su tipo se captura en
+        // @c inferred_lambda_return_type_.  Salvar/restaurar por nivel para
+        // lambdas anidados.
+        const bool saved_infer = infer_lambda_void_return_;
+        const Type saved_inferred = inferred_lambda_return_type_;
         if (!return_t_declared) {
-            for (auto &st : e->body->body) {
-                if (st && st->kind == ast::NodeKind::ReturnStmt) {
-                    auto *rs = static_cast<ast::ReturnStmt *>(st.get());
-                    if (rs->value &&
-                        rs->value->result_type.kind != PrimitiveKind::VOID) {
-                        return_t = rs->value->result_type;
-                    }
-                    break; // primer return manda
-                }
-            }
+            infer_lambda_void_return_ = true;
+            inferred_lambda_return_type_ = Type{PrimitiveKind::VOID};
         }
+        check_stmt(e->body.get(), return_t);
+        if (!return_t_declared &&
+            inferred_lambda_return_type_.kind != PrimitiveKind::VOID) {
+            return_t = inferred_lambda_return_type_;
+        }
+        infer_lambda_void_return_ = saved_infer;
+        inferred_lambda_return_type_ = saved_inferred;
     }
 
     pop_scope();

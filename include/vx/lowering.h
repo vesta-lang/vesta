@@ -804,6 +804,14 @@ class Lowering {
     /// la pila en campos no listados en el init).  @p addr es una direccion VM
     /// (ALLOCA); hereda su naturaleza para el STORE.
     void emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes, uint32_t line);
+    /// Copia @p size_bytes (redondeado a qword) de un valor ENUM desde
+    /// @p src_addr (naturaleza @p src_is_host) al slot @p dst_addr.  Modelo
+    /// value-type (mismo que un struct): la variable enum tiene un SLOT
+    /// ESTABLE y la construccion/asignacion COPIA sus bytes, en lugar de
+    /// repuntar el puntero (que rompia con asignaciones condicionales +
+    /// `match` -- PHI de punteros de naturaleza mixta).
+    void emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
+                        bool src_is_host, uint64_t size_bytes, uint32_t line);
     /// Emite los valores por defecto de los campos de @p lay (los `u8 a = 0x10`)
     /// sobre el struct ya alocado y zero-inicializado en @p base_addr.  Recurre
     /// en campos struct anidados que tengan defaults propios.  Se llama tras el

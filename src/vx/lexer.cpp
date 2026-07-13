@@ -722,6 +722,10 @@ static uint64_t decode_escape(Lexer * /*self*/, const std::string &source,
     case '\\': return '\\';
     case '\'': return '\'';
     case '"': return '"';
+    // \$ -> '$' literal: permite emitir un '$' sin disparar la interpolacion
+    // ${...}.  Necesario para generar codigo Vesta (via comptime/@Macro) que
+    // a su vez contenga interpolaciones que deben re-interpretarse mas tarde.
+    case '$': return '$';
     case 'a': return 7;
     case 'b': return 8;
     case 'f': return 12;

@@ -2101,6 +2101,15 @@ class TypeChecker {
                                ///< lambda.
     };
     std::vector<LambdaCtx> lambda_stack_;
+    /// Inferencia del tipo de retorno de un lambda block-body SIN tipo
+    /// declarado ni contexto (p.ej. el lambda que emite un @Macro).  Mientras
+    /// @c infer_lambda_void_return_ es true, un `return <valor>` en un cuerpo
+    /// declarado VOID NO es error: su tipo se captura en
+    /// @c inferred_lambda_return_type_ (el PRIMER return con valor manda) y se
+    /// usa como tipo de retorno del lambda.  Se salva/restaura por nivel para
+    /// soportar lambdas anidados.
+    bool infer_lambda_void_return_ = false;
+    Type inferred_lambda_return_type_{PrimitiveKind::VOID};
 };
 
 } // namespace vx

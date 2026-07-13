@@ -1,0 +1,98 @@
+// examples_codes_vx/311_bf_comptime.vx
+//
+// Compilador Brainfuck -> Vesta escrito USANDO SOLO COMPTIME.
+//
+// El @Macro `bf(codigo)` recibe el fuente Brainfuck como EXPRESION (captura
+// `expr`, texto crudo en el sitio de llamada) y, en tiempo de compilacion,
+// EMITE codigo Vesta valido: un lambda `fn() -> i32` que ejecuta el programa
+// sobre una cinta de celdas.  El test lo asigna a una variable y lo invoca ->
+// el codigo generado se compila y ejecuta como cualquier otro codigo Vesta
+// (cero interprete Brainfuck en runtime).
+//
+// Mapeo de los 8 comandos Brainfuck a Vesta:
+//   >   ->  p = p + 1;                (mover puntero a la derecha)
+//   <   ->  p = p - 1;                (mover puntero a la izquierda)
+//   +   ->  tape[p] = tape[p] + 1;    (incrementar celda)
+//   -   ->  tape[p] = tape[p] - 1;    (decrementar celda)
+//   .   ->  print_char(tape[p]);      (imprimir celda como caracter)
+//   ,   ->  tape[p] = 0;              (leer entrada: EOF -> 0)
+//   [   ->  while (tape[p] != 0) {    (inicio de bucle)
+//   ]   ->  }                         (fin de bucle)
+// Cualquier otro caracter se ignora (comentarios en el fuente BF).
+//
+// Nota sobre la captura `expr`: el texto se recorta rastreando la profundidad
+// de () [] {}, asi que el fuente Brainfuck debe tener los corchetes `[ ]`
+// balanceados (todo programa BF valido lo cumple) y no puede contener `,`
+// (colisiona con el separador de argumentos); por eso el compilador de este
+// test cubre el nucleo Turing-completo `> < + - [ ] .`.
+//
+// El programa BF de prueba `++++++[>+++++++<-]>` calcula 6*7 = 42 en la
+// celda 1 y deja el puntero ahi.  Resultado esperado: R0 == 42.
+
+// --- El compilador Brainfuck (comptime puro) -------------------------------
+
+// Los tokens del lenguaje Brainfuck.
+enum BfTok { Right, Left, Inc, Dec, Out, In, Loop, EndLoop, Nop }
+
+// Clasifica UN caracter Brainfuck a su token (match sobre el char).
+comptime BfTok bf_classify(char c) {
+    match c {
+        case '>' => return BfTok.Right;
+        case '<' => return BfTok.Left;
+        case '+' => return BfTok.Inc;
+        case '-' => return BfTok.Dec;
+        case '.' => return BfTok.Out;
+        case ',' => return BfTok.In;
+        case '[' => return BfTok.Loop;
+        case ']' => return BfTok.EndLoop;
+        case _   => return BfTok.Nop;   // no-comando: se ignora
+    }
+    return BfTok.Nop;
+}
+
+// Emite el fragmento de codigo Vesta de un token (match sobre el enum).
+comptime string bf_emit(BfTok t) {
+    match t {
+        case Right   => return " p = p + 1;";
+        case Left    => return " p = p - 1;";
+        case Inc     => return " tape[p] = tape[p] + 1;";
+        case Dec     => return " tape[p] = tape[p] - 1;";
+        case Out     => return " print_char(tape[p]);";
+        case In      => return " tape[p] = 0;";
+        case Loop    => return " while (tape[p] != 0) {";
+        case EndLoop => return " }";
+        case Nop     => return "";
+    }
+    return "";
+}
+
+// Compila un programa Brainfuck completo a un cuerpo de statements Vesta.
+comptime string bf_compile_body(string src) {
+    string body = "";
+    for (i64 i = 0; i < strlen(src); i++) {
+        BfTok t = bf_classify(src[i]);   // caracter -> token
+        body += bf_emit(t);              // token    -> codigo
+    }
+    return body;
+}
+
+// @Macro: recibe el fuente Brainfuck como EXPRESION y EMITE un lambda Vesta
+// que lo ejecuta.  El codigo generado es una expresion (un lambda) -> encaja
+// en el re-parse del macro (que espera una expresion).  El cuerpo del lambda
+// lleva los statements compilados.  Un @Macro/comptime fn puede llamar a otras
+// comptime fns en su cuerpo (aqui `bf_compile_body`).
+@Macro comptime string bf(expr src) {
+    return "() => { i32[4096] tape; i32 p = 0;" + bf_compile_body(src) +
+           " return tape[p]; }";
+}
+
+// --- Uso: compilar y ejecutar un programa Brainfuck ------------------------
+
+i32 main() {
+    // `bf(...)` se expande, en compile-time, al lambda Vesta equivalente.
+    // El fuente Brainfuck se pasa como expresion cruda (sin comillas).
+    fn() -> i32 programa = bf(++++++[>+++++++<-]>);
+    i32 r = programa();
+    println("brainfuck -> ${r}");
+    return r;
+}
