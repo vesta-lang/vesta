@@ -1443,19 +1443,23 @@ CompileResult eager_compile_function(
             r.code_start = vcode;
             return r;
         }
-        if (g_jit_warn_unsupported)
-            std::fprintf(stderr,
-                         "[jit-vreg] callback '%s' no soportado -> slots\n",
-                         ir_fn.name.c_str());
+        /* Un callback que el vreg no compila (solo el caso teorico SIMD >8B /
+         * argc>12, que no ocurre en la practica) queda SIN codigo nativo: el
+         * selector-slots esta retirado.  Se reporta claro y se devuelve 0 ->
+         * el builtin as_native_callback entrega 0 (el programa fallaria al
+         * invocarlo, pero ese subset no se genera). */
+        std::fprintf(stderr,
+                     "[jit] callback '%s' con arg SIMD>8B o argc>12: no "
+                     "soportado por el JIT (slots retirado)\n",
+                     ir_fn.name.c_str());
     }
 
+    /* Jubilacion slots (borrado): el selector-slots esta retirado.  El
+     * top-level de un no-callback que el vreg no compilo cae a interp
+     * (res.unsupported); un callback sin codigo vreg queda sin fn (arriba). */
     CompileResult res;
-    if (callback_entry || !g_jit_use_vregs) {
-        res = g_compiler->compile_with_opts(ir_fn, top_opts);
-    } else {
-        res.fn = nullptr;
-        res.unsupported = true;
-    }
+    res.fn = nullptr;
+    res.unsupported = true;
     if (res.fn != nullptr) {
         ++g_jit_compiled_count;
         /* callback-ABI: NO cachear by-name ni registrar en el pc-map (su
