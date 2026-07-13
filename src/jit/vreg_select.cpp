@@ -882,8 +882,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             /* Native arg regs por ABI.  GP (enteros/punteros) + XMM (floats).
              * Win64: la POSICION ordinal del arg es compartida entre bancos
-             * (arg i -> GP_i O XMM_i, 4 slots).  SysV: contadores SEPARADOS
-             * (int -> siguiente GP de 6; float -> siguiente XMM de 8). */
+             * (arg i -> GP_i O XMM_i, 4 slots; args 4+ en pila).  SysV: bancos
+             * SEPARADOS (6 GP / 8 XMM); overflow de cualquier banco en pila. */
             static const MReg CB_WIN[] = {MReg::RCX, MReg::RDX, MReg::R8,
                                           MReg::R9};
             static const MReg CB_SYSV[] = {MReg::RDI, MReg::RSI, MReg::RDX,
@@ -892,43 +892,28 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                           MReg::XMM3, MReg::XMM4, MReg::XMM5,
                                           MReg::XMM6, MReg::XMM7};
             const MReg *cbr = target_sysv ? CB_SYSV : CB_WIN;
-            const size_t gp_max = target_sysv ? 6u : 4u;
-            const size_t fp_max = target_sysv ? 8u : 4u;
-            /* Bail: (a) params f32 -- el nativo pasa f32 en XMM low-32 pero la
-             * VM_ABI espera bits f64 de 8 bytes (promocion CVTSS2SD pendiente,
-             * v3); (b) tipos que no caben en un slot regs[] de 64-bit (SIMD >8
-             * bytes); (c) args por PILA (mas alla de los arg-regs de su banco).
-             * Los f64 SI se marshalean (XMM -> regs[] como bits de 8 bytes). */
-            {
-                size_t gpn = 0, fpn = 0;
-                for (size_t i = 0; i < np; ++i) {
-                    const ir::IrType pt = (fn.params[i] < fn.values.size())
-                                              ? fn.values[fn.params[i]].type
-                                              : ir::IrType::I64;
-                    if (pt == ir::IrType::F32) {
-                        vreg_dbg(fn.name.c_str(), "callback(f32-arg)");
-                        return false;
-                    }
-                    const bool isf = ir_type_is_float(pt); /* f64 */
-                    if (!target_sysv) {
-                        /* Win64: posicion ordinal compartida, 4 slots. */
-                        if (i >= 4) {
-                            vreg_dbg(fn.name.c_str(), "callback(win-stack-arg)");
-                            return false;
-                        }
-                    } else if (isf) {
-                        if (fpn++ >= fp_max) {
-                            vreg_dbg(fn.name.c_str(),
-                                     "callback(sysv-fp-stack-arg)");
-                            return false;
-                        }
-                    } else {
-                        if (gpn++ >= gp_max) {
-                            vreg_dbg(fn.name.c_str(),
-                                     "callback(sysv-gp-stack-arg)");
-                            return false;
-                        }
-                    }
+            /* Bail: (a) la convencion VM cabe en regs[1..12] + argc en regs[15]
+             * (regs[13]/[14] reservados) -> >12 params no representable; (b)
+             * params f32 -- el nativo pasa f32 en XMM low-32 pero la VM_ABI
+             * espera bits f64 de 8 bytes (promocion CVTSS2SD pendiente, v-sig);
+             * (c) tipos que no caben en un slot regs[] de 64-bit (SIMD >8 bytes,
+             * hoy tratados como GP -> bail defensivo por tamano).  f64 y args
+             * por PILA SI se marshalean (incremento stack-args). */
+            if (np > 12) {
+                vreg_dbg(fn.name.c_str(), "callback(argc>12)");
+                return false;
+            }
+            for (size_t i = 0; i < np; ++i) {
+                const ir::IrType pt = (fn.params[i] < fn.values.size())
+                                          ? fn.values[fn.params[i]].type
+                                          : ir::IrType::I64;
+                if (pt == ir::IrType::F32) {
+                    vreg_dbg(fn.name.c_str(), "callback(f32-arg)");
+                    return false;
+                }
+                if (ir_type_bytes(pt) > 8) {
+                    vreg_dbg(fn.name.c_str(), "callback(wide-arg>8)");
+                    return false;
                 }
             }
             /* SAFE save-set: un cuerpo NO hoja-puro necesitaria salvar/restaurar
@@ -952,30 +937,65 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             const uint32_t proc_pool_idx = out.intern_imm64(cb.get_proc_addr);
             O.push_back(MInstr::make_load_proc(MReg::RBX, cb.tls_gs_disp,
                                                proc_pool_idx));
-            /* Marshalear args nativos -> proc->regs[1..N].  Float (f64): el
-             * valor llega en XMM; se mueve a RAX (scratch, NO es arg-reg de
-             * ningun ABI) via MOVQ y se guarda su bit-pattern i64 en regs[i+1]
-             * (la VM_ABI lee luego regs[i+1] via MOVSD -> XMM del param). */
+            /* Marshalear args nativos -> proc->regs[1..N].  Cada arg viene en un
+             * reg (GP/XMM) o en la PILA del caller segun el ABI:
+             *   Win64: posicion ordinal compartida; args 0..3 en reg, 4+ en
+             *          [rbp + 48 + 8*(i-4)]  (rbp+8=retaddr, rbp+16..47=shadow).
+             *   SysV : bancos separados (6 GP / 8 XMM); el overflow de cualquier
+             *          banco va a [rbp + 16 + 8*j]  (j = orden de aparicion en
+             *          pila; rbp+8=retaddr, sin shadow).
+             * Float (f64): reg -> MOVQ (XMM->RAX); pila -> load 8 bytes.  En
+             * ambos casos el valor termina en regs[i+1] como bit-pattern i64
+             * (la VM_ABI lo relee via MOVSD).  RAX es scratch (no arg-reg).
+             * RBP estable: has_stack_params (>arg_regs) fuerza el frame. */
             {
-                size_t gpn = 0, fpn = 0;
+                size_t gpn = 0, fpn = 0, stk = 0;
                 for (size_t i = 0; i < np; ++i) {
                     const ir::IrType pt = (fn.params[i] < fn.values.size())
                                               ? fn.values[fn.params[i]].type
                                               : ir::IrType::I64;
                     const bool isf = ir_type_is_float(pt); /* f64 (f32 bailo) */
-                    if (isf) {
-                        const size_t k = target_sysv ? fpn++ : i;
+                    bool on_stack = false;
+                    int32_t stk_off = 0;
+                    MReg srcreg = MReg::RAX;
+                    if (!target_sysv) {
+                        if (i < 4)
+                            srcreg = isf ? CB_XMM[i] : CB_WIN[i];
+                        else {
+                            on_stack = true;
+                            stk_off = 48 + 8 * static_cast<int32_t>(i - 4);
+                        }
+                    } else if (isf) {
+                        if (fpn < 8)
+                            srcreg = CB_XMM[fpn++];
+                        else {
+                            on_stack = true;
+                            stk_off = 16 + 8 * static_cast<int32_t>(stk++);
+                        }
+                    } else {
+                        if (gpn < 6)
+                            srcreg = cbr[gpn++];
+                        else {
+                            on_stack = true;
+                            stk_off = 16 + 8 * static_cast<int32_t>(stk++);
+                        }
+                    }
+                    const MOperand dst = vm_reg_mem(static_cast<int>(i) + 1);
+                    if (on_stack) {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
+                            MOperand::make_mem(MReg::RBP, stk_off)));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, dst, MOperand::make_reg(MReg::RAX, 8)));
+                    } else if (isf) {
                         O.push_back(MInstr::make_unary(
                             MOp::MOVQ_XMM_GP, MOperand::make_reg(MReg::RAX, 8),
-                            MOperand::make_reg(CB_XMM[k], 8)));
+                            MOperand::make_reg(srcreg, 8)));
                         O.push_back(MInstr::make_unary(
-                            MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
-                            MOperand::make_reg(MReg::RAX, 8)));
+                            MOp::MOV, dst, MOperand::make_reg(MReg::RAX, 8)));
                     } else {
-                        const size_t k = target_sysv ? gpn++ : i;
                         O.push_back(MInstr::make_unary(
-                            MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
-                            MOperand::make_reg(cbr[k], 8)));
+                            MOp::MOV, dst, MOperand::make_reg(srcreg, 8)));
                     }
                 }
             }
