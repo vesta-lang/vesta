@@ -145,7 +145,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions ve_opts;
                     ve_opts.module_name = "vx_exc";
-                    ve_opts.opt_level = 2;
+                    ve_opts.opt_level = copts.opt_level;
                     ve_opts.native_poo = true;
                     ve_opts.exceptions_enabled = true;
                     // Mismo target bits que el modulo principal (el @Naked
@@ -233,7 +233,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     }
                     vx::CompileOptions vs_opts;
                     vs_opts.module_name = "vx_sync";
-                    vs_opts.opt_level = 2;
+                    vs_opts.opt_level = copts.opt_level;
                     vs_opts.native_poo = true;
                     vs_opts.asm_target_bits = copts.asm_target_bits;
                     // LIM-5: vx_sync `import`a vx_async (monitor cooperativo:
@@ -322,7 +322,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         std::istreambuf_iterator<char>());
                     vx::CompileOptions vt_opts;
                     vt_opts.module_name = "vx_thread";
-                    vt_opts.opt_level = 2;
+                    vt_opts.opt_level = copts.opt_level;
                     vt_opts.native_poo = true;
                     vt_opts.asm_target_bits = copts.asm_target_bits;
                     vx::CompileResult vt_cr =
@@ -409,7 +409,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions va_opts;
                     va_opts.module_name = "vx_async";
-                    va_opts.opt_level = 2;
+                    va_opts.opt_level = copts.opt_level;
                     va_opts.native_poo = true;
                     va_opts.asm_target_bits = copts.asm_target_bits;
                     vx::CompileResult va_cr =
@@ -492,7 +492,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions vf_opts;
                     vf_opts.module_name = "vx_fiber";
-                    vf_opts.opt_level = 2;
+                    vf_opts.opt_level = copts.opt_level;
                     vf_opts.native_poo = true;
                     vf_opts.asm_target_bits = copts.asm_target_bits;
                     vx::CompileResult vf_cr =
@@ -583,7 +583,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                        std::istreambuf_iterator<char>());
                     vx::CompileOptions io_opts;
                     io_opts.module_name = "vx_io";
-                    io_opts.opt_level = 2;
+                    io_opts.opt_level = copts.opt_level;
                     io_opts.native_poo = true;
                     io_opts.asm_target_bits = copts.asm_target_bits;
                     vx::CompileResult io_cr =
@@ -869,7 +869,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                     std::istreambuf_iterator<char>());
                 vx::CompileOptions mem_opts;
                 mem_opts.module_name = "vx_mem";
-                mem_opts.opt_level = 2;
+                mem_opts.opt_level = copts.opt_level;
                 mem_opts.native_poo = true;
                 mem_opts.asm_target_bits = copts.asm_target_bits;
                 vx::CompileResult mem_cr =
@@ -938,7 +938,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         std::istreambuf_iterator<char>());
                     vx::CompileOptions ffi_opts;
                     ffi_opts.module_name = "vx_ffi";
-                    ffi_opts.opt_level = 2;
+                    ffi_opts.opt_level = copts.opt_level;
                     ffi_opts.native_poo = true;
                     ffi_opts.asm_target_bits = copts.asm_target_bits;
                     vx::CompileResult ffi_cr =

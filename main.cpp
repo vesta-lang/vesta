@@ -2021,7 +2021,13 @@ int main(int argc, char *argv[]) {
 
         vx::CompileOptions copts;
         copts.module_name = mod_name;
-        copts.opt_level = 2;
+        // Nivel de opt UNIVERSAL via --ir-opt (mismo flag que VM/JIT/emit-ir).
+        // Si el usuario NO lo pasa, AOT mantiene su default O2 (muy testeado);
+        // con --ir-opt 0 se compila sin inlining (util para depurar con gdb:
+        // las funciones no se funden y los breakpoints enganchan).
+        copts.opt_level = (result.count("ir-opt") > 0)
+                              ? result["ir-opt"].as<int>()
+                              : 2;
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
         copts.native_poo = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
         copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
