@@ -1,44 +1,54 @@
 /**
  * @file vx_pool.vx
- * @brief Scheduler M:N con work-stealing (deque Chase-Lev lock-free) para Vex
- *        AOT: reparte MUCHAS tareas ligeras sobre N hilos del SO, con robo de
- *        trabajo, cola local por worker y cola global de inyeccion.  SIN libc mas
- *        alla de malloc; SIN GC; SIN runtime del interprete.
+ * @brief Scheduler M:N de FIBRAS con work-stealing (deque Chase-Lev lock-free)
+ *        para Vex AOT.  UNIDAD DE EJECUCION UNICA: la Fibra.  Una "tarea"
+ *        run-to-completion es simplemente una fibra que nunca hace yield.  SIN
+ *        libc mas alla de malloc; SIN GC; SIN runtime del interprete.
  *
  * @par Regla de oro: coste CERO cuando no se usa
  * Solo entra al binario si el programa lo `import`a y usa su API.  No toca el
- * codegen -> el codigo mono-hilo es byte-identico con o sin este modulo.
+ * codegen -> el codigo mono-hilo es byte-identico.
  *
- * @par Modelo (tareas run-to-completion)
- * N workers (hilos del SO), cada uno con una DEQUE Chase-Lev:
- *   - OWNER (el propio worker) mete/saca por el extremo `bottom` SIN LOCK (solo
- *     una barrera): push/pop del owner no contienden con nada salvo el ultimo
- *     elemento.  Es la gracia de Chase-Lev: el dueno trabaja lock-free.
- *   - LADRON (worker ocioso) roba por el extremo `top` con CAS.  Elige la victima
- *     de forma PSEUDOALEATORIA (xorshift), no scan lineal -> con muchos workers
- *     no degrada a O(N) intentos.
- *   - Una tarea creada POR UN WORKER va a SU propia deque (localidad de cache).
- *   - Una tarea inyectada desde FUERA (main, que no es owner de ninguna deque)
- *     va a una COLA GLOBAL (lock) que los workers drenan.  Chase-Lev exige UN
- *     SOLO owner por deque, por eso el submit externo no puede empujar al bottom
- *     de un worker.
- *   - Sin trabajo: backoff (spin PAUSE, luego CEDE la CPU al SO) para no quemar
- *     un core en vacio.
+ * @par Modelo unificado (la Fibra es la unica unidad)
+ * N workers (hilos del SO), cada uno con una DEQUE Chase-Lev de `Fiber*`:
+ *   - El worker solo conoce `Fiber*`.  Hace `resume(f)` (fiber_switch HACIA la
+ *     fibra); cuando la fibra CEDE/BLOQUEA/TERMINA, el control vuelve al worker,
+ *     que mira `f.state` y decide (re-encolar / nada / liberar).  `resume` NO
+ *     devuelve un enum -> el estado vive en la fibra (extensible a WAIT_TIMER/
+ *     WAIT_IO/CANCELLED/... sin tocar la firma de resume).
+ *   - Una TAREA es una fibra cuyo body corre entero y retorna: el TRAMPOLIN DE
+ *     SALIDA (unica forma de abandonar una fibra) marca TERMINATED y switchea al
+ *     scheduler.  El worker nunca hace `return` desde dentro de una fibra.
+ *   - Deque Chase-Lev: OWNER lock-free (bottom), LADRON con CAS (top).  Robo con
+ *     victima PSEUDOALEATORIA.  Submit de un worker -> su deque local; submit
+ *     externo (main) -> COLA GLOBAL de inyeccion.
+ *   - WAKE GENERICO desacoplado: `sched_enqueue(Fiber*)` mete una fibra runnable
+ *     en una deque.  Canales/mutexes/timers/IO reusaran ESTO para despertar; no
+ *     tocan deques directamente ni saben nada del scheduler.
+ *   - POOL DE STACKS (freelist): las fibras terminadas devuelven su bloque
+ *     (stack + header) a un freelist -> evita malloc/free por fibra.
  *
  * @par Pendiente (futuros increments)
- *   - Parking real (WaitOnAddress/futex) en vez de yield: dormir al worker ocioso
- *     y despertarlo en submit (hoy: yield, mejor que puro spin pero aun activo).
- *   - `__vxp_pending` (contador submit++ / done--) basta para run-to-completion;
- *     con fibras suspendibles / continuations habra que revisarlo.
+ *   - Canales buffered -> park/wake -> rendezvous (cap 0) -> select.  Todos sobre
+ *     `park(current)` (state=BLOCKED + switch) + `sched_enqueue` (wake).
+ *   - Parking real del WORKER ocioso (futex/WaitOnAddress) en vez de yield-spin.
+ *   - Cola global -> MPMC lock-free si se escala a muchos productores externos.
+ *   - GC opcional: los stacks de fibras BLOQUEADAS tienen raices -> el root-scan
+ *     debe recorrerlos en los safe points (acopla a stackmaps).
  *
- * @par Multiplataforma
- * x86-64.  Dependiente de plataforma: spawn/join del hilo (kernel32/pthread) y el
- * yield (SwitchToThread/sched_yield).  El resto (Chase-Lev, atomicos, robo) es
- * Vex puro identico en PE y ELF.
+ * @par Rol: back-end nativo del sugar de concurrencia
+ * Este scheduler es la implementacion bajo AOT del MISMO sugar de concurrencia
+ * que el lenguaje ya soporta en interprete/JIT (`spawn`/`await`/`@Async`/
+ * `synchronized`/canales): alli baja al scheduler de la VM; aqui baja a este pool
+ * de fibras M:N.  Una goroutine-como-fibra es a la vez CONCURRENTE (cede/bloquea)
+ * y PARALELA (corre sobre N hilos del SO) -> un unico runtime cubre async y
+ * multihilo.  Como corre como codigo NATIVO (no reentra al interprete), yield/
+ * exit son funciones Vex NORMALES que leen thread_local; no necesitan el @Naked
+ * que vx_async exige para poder cederse desde el modo interprete.
  */
 
 // ---------------------------------------------------------------------------
-// FFI: hilos del SO + yield.
+// FFI: hilos del SO + yield del SO.
 // ---------------------------------------------------------------------------
 extern "kernel32.dll" {
     fn CreateThread(u64 attrs, u64 stacksize, u64 startaddr, u64 param,
@@ -78,7 +88,6 @@ void __vxp_os_join(u64 handle) {
     }
 }
 
-/// Cede el resto del quantum al planificador del SO (worker ocioso).
 @Target("os:windows")
 void __vxp_os_yield() {
     SwitchToThread();
@@ -90,11 +99,8 @@ void __vxp_os_yield() {
 }
 
 // ---------------------------------------------------------------------------
-// Primitivas atomicas / barreras (x86-64 inline-asm, autocontenidas).
+// Primitivas atomicas / barreras (x86-64 inline-asm).
 // ---------------------------------------------------------------------------
-
-/// CAS de 64 bits: `*addr = desired` si `*addr == expected`; devuelve el old.
-/// `lock cmpxchg` es una barrera completa.
 i64 __vxp_cas64(i64* addr, i64 expected, i64 desired) {
     register("rsi") i64* a = addr;
     register("rax") i64 ex = expected;
@@ -102,191 +108,308 @@ i64 __vxp_cas64(i64* addr, i64 expected, i64 desired) {
     asm volatile { lock cmpxchg [rsi], rdx };
     return ex;
 }
-
-/// fetch-and-add de 64 bits (`lock xadd`); devuelve el old.
 i64 __vxp_fetch_add(i64* addr, i64 delta) {
     register("rsi") i64* a = addr;
     register("rax") i64 d = delta;
     asm volatile { lock xadd [rsi], rax };
     return d;
 }
-
-/// Load de 64 bits (mov alineado ya es atomico en x86-64).  Es una LLAMADA
-/// opaca -> ademas actua de barrera del compilador (no reordena accesos a
-/// memoria a traves de ella).
+/// Load de 64 bits (mov alineado atomico).  Llamada opaca -> barrera del compilador.
 i64 __vxp_load64(i64* addr) {
     return *addr;
 }
-
 /// Store de 64 bits (mov alineado).  Llamada opaca -> barrera del compilador.
 void __vxp_store64(i64* addr, i64 v) {
     *addr = v;
 }
-
-/// Barrera de memoria completa (StoreLoad).  UNICO mfence del algoritmo: en el
-/// pop del owner de Chase-Lev, entre publicar `bottom` y leer `top`.  x86-TSO
-/// reordena Store->Load (el unico reordenamiento que permite), asi que aqui SI
-/// hace falta la barrera HW; push (Store->Store) y steal (Load->Load) no la
-/// necesitan (x86 no reordena esos pares) -> solo barrera del compilador.
+/// mfence: unico barrera HW del algoritmo (StoreLoad del pop del owner; x86-TSO
+/// solo reordena Store->Load).  push (Store->Store) y steal (Load->Load) no la
+/// necesitan.
 void __vxp_mfence() {
     asm volatile { mfence };
 }
-
-/// Hint de spin (`pause`).
 void __vxp_pause() {
     asm volatile { pause };
+}
+
+// ===========================================================================
+//  Primitivos de FIBRA (context-switch en asm).  Inlineados aqui (nombres
+//  __vxp_) para que vx_pool sea un modulo autocontenido, igual que vx_async.
+// ===========================================================================
+
+// fiber_switch: salva callee-saved + rsp en *from, carga de *to.
+// SysV: args rdi/rsi.  Win64: rcx/rdx.
+@Target("!os:windows")
+@Naked void __vxp_fiber_switch(u64 from_ctx, u64 to_ctx) {
+    asm volatile noinfer {
+        push rbp
+        push rbx
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rdi], rsp
+        mov rsp, [rsi]
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbx
+        pop rbp
+        ret
+    }
+}
+@Target("os:windows")
+@Naked void __vxp_fiber_switch(u64 from_ctx, u64 to_ctx) {
+    asm volatile noinfer {
+        push rbp
+        push rbx
+        push rdi
+        push rsi
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rcx], rsp
+        mov rsp, [rdx]
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rsi
+        pop rdi
+        pop rbx
+        pop rbp
+        ret
+    }
+}
+
+// Trampolin de arranque: arg (rbx) -> 1er arg del ABI; CALL body (r12) para que
+// body reciba una direccion de retorno valida (vuelve aqui); al retornar, salta
+// al trampolin de SALIDA.  `and rsp, -16` garantiza rsp 16-alineado antes del
+// call (ABI Win64/SysV).  Asi el retorno de body NO depende de colocar fiber_exit
+// en un slot magico del frame (el bug del jmp+shadow-space).
+@Target("!os:windows")
+@Naked void __vxp_fiber_trampoline() {
+    asm volatile noinfer {
+        mov rdi, rbx
+        and rsp, -16
+        call r12
+        jmp __vxp_fiber_exit
+    }
+}
+@Target("os:windows")
+@Naked void __vxp_fiber_trampoline() {
+    asm volatile noinfer {
+        mov rcx, rbx
+        and rsp, -16
+        sub rsp, 32
+        call r12
+        jmp __vxp_fiber_exit
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Layout de la Fibra (bloque host: header al inicio, stack por encima).
+// ---------------------------------------------------------------------------
+comptime i64 VXP_FIB_CTX   = 0;   ///< qword: rsp salvado (fiber_switch lo lee/escribe).
+comptime i64 VXP_FIB_STATE = 8;   ///< qword: FiberState.
+comptime i64 VXP_FIB_ARG   = 16;  ///< qword: argumento del body.
+comptime i64 VXP_FIB_NEXT  = 24;  ///< qword: enlace de freelist / wait-queue.
+comptime i64 VXP_FIB_HDR   = 64;  ///< bytes reservados al header (alineado).
+// Pila por fibra.  16 KiB (no 64 KiB fijos: no escalan -- 100k fibras serian
+// GiBs aunque esten ociosas).  Crecer bajo demanda (stack chaining/segmentado)
+// es un futuro increment; hoy 16 KiB cubre los cuerpos tipicos.
+comptime u64 VXP_FIB_STK   = 16384;
+
+// Estados de la fibra (extensible sin tocar resume()).
+comptime i64 VXP_READY      = 0;
+comptime i64 VXP_RUNNING    = 1;
+comptime i64 VXP_BLOCKED    = 2;
+comptime i64 VXP_TERMINATED = 3;
+
+// fiber_init: prepara la pila para que el 1er switch arranque body(arg), con el
+// TRAMPOLIN DE SALIDA como direccion de retorno (cuando body retorna, cae ahi).
+@Target("!os:windows")
+void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
+    u64 base = (top & ~((u64)15)) - 8 * 8;   // 6 saved + 2 retaddr
+    u64* s = (u64*)base;
+    s[0] = 0;      // r15
+    s[1] = 0;      // r14
+    s[2] = 0;      // r13
+    s[3] = body;   // r12 = entry (el body del usuario)
+    s[4] = arg;    // rbx = arg
+    s[5] = 0;      // rbp
+    s[6] = (u64)(cfn() -> void) __vxp_fiber_trampoline;
+    s[7] = (u64)(cfn() -> void) __vxp_fiber_exit; // retorno de body -> salida
+    u64* c = (u64*)(fib + VXP_FIB_CTX); c[0] = base;
+}
+@Target("os:windows")
+void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
+    u64 base = (top & ~((u64)15)) - 10 * 8;  // 8 saved + 2 retaddr
+    u64* s = (u64*)base;
+    s[0] = 0;      // r15
+    s[1] = 0;      // r14
+    s[2] = 0;      // r13
+    s[3] = body;   // r12 = entry
+    s[4] = 0;      // rsi
+    s[5] = 0;      // rdi
+    s[6] = arg;    // rbx = arg
+    s[7] = 0;      // rbp
+    s[8] = (u64)(cfn() -> void) __vxp_fiber_trampoline;
+    s[9] = (u64)(cfn() -> void) __vxp_fiber_exit;
+    u64* c = (u64*)(fib + VXP_FIB_CTX); c[0] = base;
 }
 
 // ---------------------------------------------------------------------------
 // Parametros de capacidad (comptime).  Potencias de 2.
 // ---------------------------------------------------------------------------
-comptime i64 VXP_MAXW  = 64;      ///< Workers maximos.
-comptime i64 VXP_DQCAP = 1024;    ///< Tareas por deque local (potencia de 2).
-comptime i64 VXP_DQMASK = 1023;   ///< Mascara de la deque (DQCAP-1).
-comptime i64 VXP_GQCAP = 65536;   ///< Tareas en la cola global (potencia de 2).
-comptime i64 VXP_GQMASK = 65535;  ///< Mascara de la cola global (GQCAP-1).
+comptime i64 VXP_MAXW  = 64;
+comptime i64 VXP_DQCAP = 1024;
+comptime i64 VXP_DQMASK = 1023;
+comptime i64 VXP_GQCAP = 65536;
+comptime i64 VXP_GQMASK = 65535;
 
 // ---------------------------------------------------------------------------
-// Estado global (BSS, zero-init).
+// Estado global (BSS, zero-init).  Las deques guardan Fiber* (1 qword/slot).
 // ---------------------------------------------------------------------------
-// Deques Chase-Lev por worker.  top = extremo de robo (CAS), bottom = extremo del
-// owner.  Ambos crecen monotonos; el slot del ring es (x & DQMASK).
-i64[65536] __vxp_body;   ///< [w*DQCAP + (idx & MASK)] = puntero al body.
-i64[65536] __vxp_arg;    ///< [w*DQCAP + (idx & MASK)] = argumento.
-i64[64] __vxp_top;        ///< Indice de robo (CAS por ladrones) por worker.
-i64[64] __vxp_bottom;     ///< Indice del owner (solo el propio worker) por worker.
+i64[65536] __vxp_dq;      ///< [w*DQCAP + (idx & MASK)] = Fiber*.
+i64[64] __vxp_top;        ///< extremo de robo (CAS) por worker.
+i64[64] __vxp_bottom;     ///< extremo del owner por worker.
 u64[64] __vxp_handle;     ///< HANDLE del hilo worker.
-i64 __vxp_n = 0;          ///< Numero de workers activos.
-i64 __vxp_stop = 0;       ///< 1 = drenar y salir (lo pone vx_pool_join).
-i64 __vxp_pending = 0;    ///< Tareas encoladas y no completadas (atomico).
+i64 __vxp_n = 0;
+i64 __vxp_stop = 0;
+i64 __vxp_pending = 0;    ///< fibras vivas no terminadas (atomico).
 
-// Cola GLOBAL de inyeccion (submits externos, p.ej. desde main).  Ring con lock.
-i64[65536] __vxp_gq_body;
-i64[65536] __vxp_gq_arg;
+i64[65536] __vxp_gq;      ///< cola global de inyeccion: Fiber*.
 i64 __vxp_gq_head = 0;
 i64 __vxp_gq_tail = 0;
-i64 __vxp_gq_lock = 0;    ///< Spinlock de la cola global (0 = libre).
+i64 __vxp_gq_lock = 0;
 
-// Estado POR-HILO (TLS nativo).  wid1 = id del worker + 1 (0 = no soy worker /
-// soy main).  rng = semilla xorshift para elegir victima de robo.
-thread_local i64 __vxp_tls_wid1 = 0;
-thread_local u64 __vxp_tls_rng = 0;
+i64 __vxp_pool_head = 0;  ///< freelist de bloques (Fiber*) reusables.
+i64 __vxp_pool_lock = 0;
+
+// Estado POR-HILO (TLS nativo).  Solo se leen/escriben por VALOR (funciona); NO
+// tomamos su direccion (el `&` de un thread_local puede dar el slot estatico
+// compartido, no la instancia por-hilo -> corrupcion cross-worker).
+thread_local i64 __vxp_tls_wid1 = 0;   ///< id worker + 1 (0 = main / no worker).
+thread_local u64 __vxp_tls_rng = 0;    ///< semilla xorshift.
+thread_local i64 __vxp_cur_fiber = 0;  ///< Fiber* en ejecucion en este worker.
+
+// ctx del scheduler (rsp salvado del worker) POR-WORKER en un array GLOBAL (no
+// thread_local): asi podemos tomar &celda[w] con una direccion real por-worker.
+// El worker actual se identifica por __vxp_tls_wid1 (valor del TLS).
+i64[64] __vxp_sched_ctx_arr;
+
+/// Direccion de la celda sched_ctx del worker que ejecuta ESTE hilo.
+i64 __vxp_my_sched() {
+    return (i64)(&__vxp_sched_ctx_arr[__vxp_tls_wid1 - 1]);
+}
 
 // ---------------------------------------------------------------------------
-// Deque Chase-Lev (owner lock-free; ladron con CAS).
+// Pool de stacks (freelist con lock).  alloc reusa un bloque o hace malloc.
 // ---------------------------------------------------------------------------
+i64 __vxp_fiber_alloc() {
+    // Intentar reusar del freelist Y, si esta vacio, hacer el malloc DENTRO del
+    // mismo lock: el slab allocator del AOT (vx_mem) es LOCKLESS -> mallocs
+    // concurrentes de varios workers lo corrompen.  Serializarlos aqui evita la
+    // corrupcion sin tocar el fast-path mono-hilo del allocator.
+    while (__vxp_cas64(&__vxp_pool_lock, 0, 1) != 0) { __vxp_pause(); }
+    i64 f = __vxp_pool_head;
+    if (f != 0) {
+        __vxp_pool_head = __vxp_load64((i64*)(f + VXP_FIB_NEXT));
+    } else {
+        f = (i64)malloc((i64)VXP_FIB_STK); // freelist vacio: malloc serializado
+    }
+    __vxp_store64(&__vxp_pool_lock, 0);
+    return f;
+}
+void __vxp_fiber_free(i64 f) {
+    while (__vxp_cas64(&__vxp_pool_lock, 0, 1) != 0) { __vxp_pause(); }
+    __vxp_store64((i64*)(f + VXP_FIB_NEXT), __vxp_pool_head);
+    __vxp_pool_head = f;
+    __vxp_store64(&__vxp_pool_lock, 0);
+}
 
-/// OWNER push (extremo bottom).  Solo el propio worker lo llama.  Sin lock.
-/// Devuelve 1 si cupo, 0 si la deque esta llena.
-i64 __vxp_push(i64 w, i64 body, i64 arg) {
-    i64 b = __vxp_bottom[w];              // solo el owner escribe bottom
-    i64 t = __vxp_load64(&__vxp_top[w]);  // los ladrones escriben top (CAS)
+// ---------------------------------------------------------------------------
+// Deque Chase-Lev de Fiber* (owner lock-free; ladron con CAS).
+// ---------------------------------------------------------------------------
+i64 __vxp_push(i64 w, i64 fib) {
+    i64 b = __vxp_bottom[w];
+    i64 t = __vxp_load64(&__vxp_top[w]);
     if ((b - t) >= VXP_DQCAP) {
         return 0; // llena
     }
-    i64 slot = b & VXP_DQMASK;
-    __vxp_body[w * VXP_DQCAP + slot] = body;
-    __vxp_arg[w * VXP_DQCAP + slot] = arg;
-    // x86-TSO no reordena Store->Store: los buf quedan visibles antes que bottom
-    // sin barrera HW; basta la barrera del COMPILADOR de la llamada opaca (impide
-    // que el optimizador mueva los stores de buf despues del store de bottom).
+    __vxp_dq[w * VXP_DQCAP + (b & VXP_DQMASK)] = fib;
+    // x86-TSO Store->Store: buf antes de bottom sin barrera HW; la llamada opaca
+    // da la barrera del compilador.
     __vxp_store64(&__vxp_bottom[w], b + 1);
     return 1;
 }
-
-/// OWNER pop (extremo bottom, LIFO).  Solo el propio worker.  Devuelve el body
-/// (0 si vacia) y escribe el arg en *out_arg.  Chase-Lev takeBottom.
-i64 __vxp_pop(i64 w, i64* out_arg) {
+i64 __vxp_pop(i64 w) {
     i64 b = __vxp_bottom[w] - 1;
-    __vxp_store64(&__vxp_bottom[w], b);   // reclama el slot bajando bottom
-    __vxp_mfence();                       // StoreLoad: bottom-store antes de top-load
+    __vxp_store64(&__vxp_bottom[w], b);
+    __vxp_mfence();                       // StoreLoad (unico mfence necesario)
     i64 t = __vxp_load64(&__vxp_top[w]);
     if (b < t) {
-        __vxp_store64(&__vxp_bottom[w], t); // estaba vacia: restaurar
+        __vxp_store64(&__vxp_bottom[w], t);
         return 0;
     }
-    i64 slot = b & VXP_DQMASK;
-    i64 body = __vxp_body[w * VXP_DQCAP + slot];
-    *out_arg = __vxp_arg[w * VXP_DQCAP + slot];
+    i64 fib = __vxp_dq[w * VXP_DQCAP + (b & VXP_DQMASK)];
     if (b > t) {
-        return body; // >1 elemento: sin contienda con ladrones
+        return fib;
     }
-    // b == t: ultimo elemento, carrera con un ladron por el mismo slot.
     i64 got = 0;
     if (__vxp_cas64(&__vxp_top[w], t, t + 1) == t) {
-        got = body; // ganamos la carrera
+        got = fib;
     }
-    __vxp_store64(&__vxp_bottom[w], t + 1); // dejar la deque vacia
+    __vxp_store64(&__vxp_bottom[w], t + 1);
     return got;
 }
-
-/// LADRON steal (extremo top, FIFO).  Cualquier worker sobre la victima @p v.
-/// Devuelve el body (0 si vacia o si perdio la carrera) y escribe el arg.
-/// Chase-Lev takeTop: lee el valor ANTES del CAS (el slot no se sobreescribe
-/// mientras top no avance, porque push rechaza cuando b-t>=CAP).
-i64 __vxp_steal(i64 v, i64* out_arg) {
+i64 __vxp_steal(i64 v) {
     i64 t = __vxp_load64(&__vxp_top[v]);
-    // x86-TSO no reordena Load->Load: el top-load precede al bottom-load sin
-    // barrera HW; las llamadas opacas dan la barrera del compilador.
+    // x86-TSO Load->Load: sin barrera HW; llamadas opacas dan barrera compilador.
     i64 b = __vxp_load64(&__vxp_bottom[v]);
     if (t >= b) {
-        return 0; // vacia
+        return 0;
     }
-    i64 slot = t & VXP_DQMASK;
-    i64 body = __vxp_body[v * VXP_DQCAP + slot];
-    i64 a = __vxp_arg[v * VXP_DQCAP + slot];
+    i64 fib = __vxp_dq[v * VXP_DQCAP + (t & VXP_DQMASK)];
     if (__vxp_cas64(&__vxp_top[v], t, t + 1) != t) {
-        return 0; // otro ladron / el owner se lo llevo: abortar
+        return 0;
     }
-    *out_arg = a;
-    return body;
+    return fib;
 }
 
-// ---------------------------------------------------------------------------
-// Cola global de inyeccion (lock).  Solo la tocan submits externos + workers
-// cuando su local y el robo fallan -> contienda baja.
-// ---------------------------------------------------------------------------
-i64 __vxp_gq_push(i64 body, i64 arg) {
-    while (__vxp_cas64(&__vxp_gq_lock, 0, 1) != 0) {
-        __vxp_pause();
-    }
+// Cola global de inyeccion (lock).
+i64 __vxp_gq_push(i64 fib) {
+    while (__vxp_cas64(&__vxp_gq_lock, 0, 1) != 0) { __vxp_pause(); }
     i64 tl = __vxp_gq_tail;
-    i64 hd = __vxp_gq_head;
-    if ((tl - hd) >= VXP_GQCAP) {
+    if ((tl - __vxp_gq_head) >= VXP_GQCAP) {
         __vxp_store64(&__vxp_gq_lock, 0);
-        return 0; // llena
+        return 0;
     }
-    i64 slot = tl & VXP_GQMASK;
-    __vxp_gq_body[slot] = body;
-    __vxp_gq_arg[slot] = arg;
+    __vxp_gq[tl & VXP_GQMASK] = fib;
     __vxp_gq_tail = tl + 1;
     __vxp_store64(&__vxp_gq_lock, 0);
     return 1;
 }
-i64 __vxp_gq_pop(i64* out_arg) {
+i64 __vxp_gq_pop() {
     if (__vxp_load64(&__vxp_gq_head) == __vxp_load64(&__vxp_gq_tail)) {
-        return 0; // probablemente vacia: evitar el lock si no hay nada
+        return 0;
     }
-    while (__vxp_cas64(&__vxp_gq_lock, 0, 1) != 0) {
-        __vxp_pause();
-    }
+    while (__vxp_cas64(&__vxp_gq_lock, 0, 1) != 0) { __vxp_pause(); }
     i64 hd = __vxp_gq_head;
-    i64 tl = __vxp_gq_tail;
-    if (hd == tl) {
+    if (hd == __vxp_gq_tail) {
         __vxp_store64(&__vxp_gq_lock, 0);
         return 0;
     }
-    i64 slot = hd & VXP_GQMASK;
-    i64 body = __vxp_gq_body[slot];
-    *out_arg = __vxp_gq_arg[slot];
+    i64 fib = __vxp_gq[hd & VXP_GQMASK];
     __vxp_gq_head = hd + 1;
     __vxp_store64(&__vxp_gq_lock, 0);
-    return body;
+    return fib;
 }
 
-// ---------------------------------------------------------------------------
-// PRNG xorshift64 por-hilo para elegir victima de robo.
-// ---------------------------------------------------------------------------
+// PRNG xorshift64 por-hilo para elegir victima.
 i64 __vxp_rand_victim(i64 n) {
     u64 x = __vxp_tls_rng;
     x = x ^ (x << 13);
@@ -297,54 +420,111 @@ i64 __vxp_rand_victim(i64 n) {
 }
 
 // ---------------------------------------------------------------------------
-// Cuerpo del worker.
+// Wake GENERICO: mete una fibra runnable en una deque.  Lo reusan canales/
+// mutexes/timers/... para despertar; no tocan deques directamente.  Desde un
+// worker -> su deque local; desde fuera -> cola global.
+// ---------------------------------------------------------------------------
+void __vxp_sched_enqueue(i64 fib) {
+    __vxp_store64((i64*)(fib + VXP_FIB_STATE), VXP_READY);
+    i64 s = __vxp_tls_wid1;
+    if (s > 0) {
+        if (__vxp_push(s - 1, fib) == 0) {
+            __vxp_gq_push(fib); // deque llena: fallback global
+        }
+    } else {
+        __vxp_gq_push(fib);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// resume / yield / exit.  Nunca se sale de una fibra salvo por el TRAMPOLIN.
+// ---------------------------------------------------------------------------
+
+/// El worker entra en la fibra.  Vuelve aqui cuando la fibra cede/bloquea/muere.
+/// El worker inspecciona f.state despues (resume no devuelve nada).
+void __vxp_resume(i64 fib) {
+    __vxp_cur_fiber = fib;
+    __vxp_store64((i64*)(fib + VXP_FIB_STATE), VXP_RUNNING);
+    // Salva el ctx del worker en su celda sched_ctx, carga el de la fibra.
+    __vxp_fiber_switch((u64)__vxp_my_sched(), (u64)(fib + VXP_FIB_CTX));
+}
+
+/// Cede la CPU de la fibra actual al scheduler (queda RUNNABLE).  Publico.
+public void vx_yield() {
+    i64 f = __vxp_cur_fiber;
+    if (f == 0) {
+        return; // no estamos en una fibra (main): no-op
+    }
+    __vxp_store64((i64*)(f + VXP_FIB_STATE), VXP_READY);
+    // Salva el ctx de la fibra, vuelve al scheduler (dentro de resume()).
+    __vxp_fiber_switch((u64)(f + VXP_FIB_CTX), (u64)__vxp_my_sched());
+    // Al ser reanudada, la ejecucion continua aqui.
+}
+
+/// TRAMPOLIN DE SALIDA: unica forma de abandonar una fibra.  El body cae aqui al
+/// retornar (fiber_init lo puso como direccion de retorno).  Marca TERMINATED y
+/// switchea al scheduler; NUNCA retorna.
+void __vxp_fiber_exit() {
+    i64 f = __vxp_cur_fiber;
+    __vxp_store64((i64*)(f + VXP_FIB_STATE), VXP_TERMINATED);
+    __vxp_fiber_switch((u64)(f + VXP_FIB_CTX), (u64)__vxp_my_sched());
+    // inalcanzable (el scheduler no reanuda una fibra TERMINATED).
+}
+
+/// UNICO sitio donde una fibra se destruye: devuelve el bloque al pool y
+/// decrementa `pending`.  Encapsularlo evita el doble-decremento cuando lleguen
+/// cancel/timeout/panic/select (nunca tocar pending fuera de aqui).
+void __vxp_fiber_destroy(i64 fib) {
+    __vxp_fiber_free(fib);
+    __vxp_fetch_add(&__vxp_pending, -1);
+}
+
+// ---------------------------------------------------------------------------
+// Cuerpo del worker: coge un Fiber*, lo resume, actua segun su estado.
 // ---------------------------------------------------------------------------
 void __vxp_worker(u64 wid) {
     i64 w = (i64)wid;
-    __vxp_tls_wid1 = w + 1;                       // marca "soy worker w" (TLS)
-    __vxp_tls_rng = ((u64)w + 1) * 0x9E3779B97F4A7C15; // semilla distinta por worker
-    i64 arg = 0;
+    __vxp_tls_wid1 = w + 1;
+    __vxp_tls_rng = ((u64)w + 1) * 0x9E3779B97F4A7C15;
     i64 idle = 0;
     while (true) {
-        // 1. Mi propia deque (lock-free).
-        i64 body = __vxp_pop(w, &arg);
-        // 2. Robar a una victima ALEATORIA (unos pocos intentos).
-        if (body == 0 && __vxp_n > 1) {
+        // 1. deque local.
+        i64 fib = __vxp_pop(w);
+        // 2. robar a victima aleatoria.
+        if (fib == 0 && __vxp_n > 1) {
             i64 tries = 0;
             while (tries < __vxp_n) {
                 i64 v = __vxp_rand_victim(__vxp_n);
                 if (v != w) {
-                    body = __vxp_steal(v, &arg);
-                    if (body != 0) {
-                        tries = __vxp_n; // salir con tarea
-                    }
+                    fib = __vxp_steal(v);
+                    if (fib != 0) { tries = __vxp_n; }
                 }
                 tries = tries + 1;
             }
         }
-        // 3. Cola global de inyeccion.
-        if (body == 0) {
-            body = __vxp_gq_pop(&arg);
+        // 3. cola global.
+        if (fib == 0) {
+            fib = __vxp_gq_pop();
         }
-        if (body == 0) {
-            // 4. Sin trabajo: salir si el pool para y no queda pendiente; si no,
-            //    backoff (spin y luego ceder la CPU al SO).
+        if (fib == 0) {
+            // 4. sin trabajo.
             if (__vxp_load64(&__vxp_stop) == 1 &&
                 __vxp_load64(&__vxp_pending) == 0) {
                 return;
             }
             idle = idle + 1;
-            if (idle < 64) {
-                __vxp_pause();
-            } else {
-                idle = 0;
-                __vxp_os_yield();
-            }
+            if (idle < 64) { __vxp_pause(); } else { idle = 0; __vxp_os_yield(); }
         } else {
             idle = 0;
-            fn(i64) -> void fp = (fn(i64) -> void) body; // llamada indirecta
-            fp(arg);
-            __vxp_fetch_add(&__vxp_pending, -1);
+            __vxp_resume(fib);
+            i64 st = __vxp_load64((i64*)(fib + VXP_FIB_STATE));
+            if (st == VXP_TERMINATED) {
+                __vxp_fiber_destroy(fib);   // unico sitio: free + pending--
+            } else if (st == VXP_READY) {
+                __vxp_sched_enqueue(fib);   // cedio: re-encolar (runnable)
+            }
+            // VXP_BLOCKED: no hacer nada (la posee quien la bloqueo; un wake la
+            // re-encolara via sched_enqueue).
         }
     }
 }
@@ -355,7 +535,7 @@ void __vxp_worker(u64 wid) {
 
 /**
  * @brief Arranca el pool con @p nworkers hilos del SO (1..VXP_MAXW).
- * @return Numero de workers realmente arrancados.
+ * @return Numero de workers arrancados.
  */
 public i64 vx_pool_start(i64 nworkers) {
     i64 n = nworkers;
@@ -385,33 +565,29 @@ public i64 vx_pool_start(i64 nworkers) {
 }
 
 /**
- * @brief Encola una tarea @c body(arg).  Desde un WORKER va a su deque local
- *        (localidad); desde fuera (main) va a la cola global de inyeccion.
- * @return 1 si se encolo, 0 si la cola destino estaba llena.
+ * @brief Crea una FIBRA que ejecuta @c body(arg) y la encola.  Desde un worker
+ *        -> su deque local (localidad); desde fuera (main) -> cola global.
+ * @return 1 si se encolo, 0 si no cupo.
  */
 public i64 vx_pool_submit(i64 body, i64 arg) {
     if (__vxp_n <= 0) {
         return 0;
     }
+    i64 fib = __vxp_fiber_alloc();
+    if (fib == 0) {
+        return 0;
+    }
+    __vxp_store64((i64*)(fib + VXP_FIB_STATE), VXP_READY);
+    __vxp_store64((i64*)(fib + VXP_FIB_ARG), arg);
+    // Inicializa la pila para arrancar body(arg); stack top = bloque + STK.
+    __vxp_fiber_init((u64)fib, (u64)fib + VXP_FIB_STK, (u64)body, (u64)arg);
     __vxp_fetch_add(&__vxp_pending, 1);
-    i64 ok = 0;
-    i64 s = __vxp_tls_wid1;
-    if (s > 0) {
-        ok = __vxp_push(s - 1, body, arg); // worker -> su propia deque (local)
-        if (ok == 0) {
-            ok = __vxp_gq_push(body, arg);  // deque local llena: fallback global
-        }
-    } else {
-        ok = __vxp_gq_push(body, arg);      // externo (main) -> cola global
-    }
-    if (ok == 0) {
-        __vxp_fetch_add(&__vxp_pending, -1); // no cupo: revertir
-    }
-    return ok;
+    __vxp_sched_enqueue(fib);
+    return 1;
 }
 
 /**
- * @brief Espera a que TODAS las tareas terminen y para los workers.
+ * @brief Espera a que TODAS las fibras terminen y para los workers.
  */
 public void vx_pool_join() {
     while (__vxp_load64(&__vxp_pending) > 0) {
