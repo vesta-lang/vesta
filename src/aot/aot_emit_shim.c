@@ -249,6 +249,97 @@ static int aot_pe_apply_tls_reloc(PE64FILE_struct *pe, const AotSection *secs,
     return 0;
 }
 
+/* --aot-debug=1 (PE): apende una tabla de simbolos COFF al final del .exe/.dll
+ * ya escrito y parchea el IMAGE_FILE_HEADER (PointerToSymbolTable +
+ * NumberOfSymbols) para exponerla.  gdb/WinDbg/objdump leen los IMAGE_SYMBOL
+ * (18 bytes: Name(8)/Value(4)/SectionNumber(2)/Type(2)/StorageClass(1)/NumAux(1)).
+ * Value = RVA (sec_rva[seccion] + offset): gdb calcula image_base + Value.  El
+ * symtab va TRAS todas las secciones -> no afecta la ejecucion.  Best-effort:
+ * ante cualquier fallo deja el fichero intacto (sin simbolos).  Los @p sec_rva
+ * son las RVAs finales de cada seccion (pe.sectionHeaders[i].VirtualAddress). */
+static void aot_pe_append_coff_symtab(const char *path, const AotSym *syms,
+                                      int n, const uint32_t *sec_rva) {
+    if (n <= 0 || !syms || !sec_rva) return;
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long fsz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (fsz < 0x40) {
+        fclose(f);
+        return;
+    }
+    uint8_t *buf = (uint8_t *)malloc((size_t)fsz);
+    if (!buf) {
+        fclose(f);
+        return;
+    }
+    if (fread(buf, 1, (size_t)fsz, f) != (size_t)fsz) {
+        free(buf);
+        fclose(f);
+        return;
+    }
+    fclose(f);
+    uint32_t e_lfanew = 0;
+    memcpy(&e_lfanew, buf + 0x3c, 4);
+    if ((size_t)e_lfanew + 24 > (size_t)fsz) {
+        free(buf);
+        return;
+    }
+    /* symtab COFF (18 bytes/sym, empaquetado a mano) + string table. */
+    uint8_t *symtab = (uint8_t *)calloc((size_t)n, 18);
+    uint32_t strtab_sz = 4; /* los primeros 4 bytes son el tamano */
+    char *strtab = (char *)malloc(4);
+    if (!symtab || !strtab) {
+        free(buf);
+        free(symtab);
+        free(strtab);
+        return;
+    }
+    for (int i = 0; i < n; ++i) {
+        uint8_t *s = symtab + (size_t)i * 18;
+        const char *nm = syms[i].name;
+        size_t l = strlen(nm);
+        if (l <= 8) {
+            memcpy(s, nm, l); /* nombre inline en Name[8] (resto ya a 0) */
+        } else {
+            uint32_t zero = 0;
+            memcpy(s, &zero, 4);           /* Name.Zeroes = 0 */
+            memcpy(s + 4, &strtab_sz, 4);  /* Name.Offset */
+            char *ns = (char *)realloc(strtab, strtab_sz + l + 1);
+            if (!ns) break;
+            strtab = ns;
+            memcpy(strtab + strtab_sz, nm, l + 1);
+            strtab_sz += (uint32_t)(l + 1);
+        }
+        uint32_t rva = sec_rva[syms[i].section] + (uint32_t)syms[i].offset;
+        memcpy(s + 8, &rva, 4); /* Value = RVA */
+        int16_t sn = (int16_t)(syms[i].section + 1);
+        memcpy(s + 12, &sn, 2); /* SectionNumber (1-based) */
+        uint16_t ty = syms[i].is_func ? 0x20 : 0; /* 0x20 = funcion */
+        memcpy(s + 14, &ty, 2);
+        s[16] = 2; /* IMAGE_SYM_CLASS_EXTERNAL */
+        s[17] = 0; /* sin aux */
+    }
+    memcpy(strtab, &strtab_sz, 4); /* el tamano al inicio del strtab */
+    /* Parchear el IMAGE_FILE_HEADER: PointerToSymbolTable (+8) y
+     * NumberOfSymbols (+12) tras la firma "PE\0\0" (e_lfanew + 4). */
+    uint32_t symtab_off = (uint32_t)fsz;
+    uint32_t nsyms = (uint32_t)n;
+    memcpy(buf + e_lfanew + 4 + 8, &symtab_off, 4);
+    memcpy(buf + e_lfanew + 4 + 12, &nsyms, 4);
+    FILE *o = fopen(path, "wb");
+    if (o) {
+        fwrite(buf, 1, (size_t)fsz, o);
+        fwrite(symtab, 1, (size_t)n * 18, o);
+        fwrite(strtab, 1, strtab_sz, o);
+        fclose(o);
+    }
+    free(buf);
+    free(symtab);
+    free(strtab);
+}
+
 int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 const AotSection *secs, int num_secs, int entry_sec,
                 uint64_t entry_off, const AotImport *imps, int num_imps,
@@ -530,8 +621,23 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
     pe.ntHeaders.OptionalHeader.AddressOfEntryPoint =
         (_DWORD)(pe.sectionHeaders[entry_sec].VirtualAddress + entry_off);
 
+    /* --aot-debug: capturar las RVAs de las secciones ANTES de free para el
+     * symtab COFF (post-proceso tras writePE64File). */
+    uint32_t *dbg_rva = NULL;
+    if (g_aot_dbg_n > 0) {
+        dbg_rva = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+        if (dbg_rva)
+            for (int i = 0; i < num_secs; ++i)
+                dbg_rva[i] = (uint32_t)pe.sectionHeaders[i].VirtualAddress;
+    }
+
     writePE64File(&pe, path);
     freePE64File(&pe);
+
+    if (dbg_rva) {
+        aot_pe_append_coff_symtab(path, g_aot_dbg_syms, g_aot_dbg_n, dbg_rva);
+        free(dbg_rva);
+    }
     return 1;
 }
 
@@ -3736,8 +3842,21 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
     } else {
         pe.ntHeaders.OptionalHeader.AddressOfEntryPoint = 0; /* sin DllMain */
     }
+    /* --aot-debug: symtab COFF con las RVAs de seccion (post-proceso). */
+    uint32_t *dbg_rva_dll = NULL;
+    if (g_aot_dbg_n > 0) {
+        dbg_rva_dll = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+        if (dbg_rva_dll)
+            for (int i = 0; i < num_secs; ++i)
+                dbg_rva_dll[i] = (uint32_t)pe.sectionHeaders[i].VirtualAddress;
+    }
     writePE64File(&pe, path);
     freePE64File(&pe);
+    if (dbg_rva_dll) {
+        aot_pe_append_coff_symtab(path, g_aot_dbg_syms, g_aot_dbg_n,
+                                  dbg_rva_dll);
+        free(dbg_rva_dll);
+    }
 
     free(order);
     free(name_soff);

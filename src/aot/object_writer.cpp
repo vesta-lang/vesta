@@ -119,6 +119,32 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     char errbuf[256] = {0};
     int ok = 0;
 
+    // --aot-debug=1: fija los simbolos de funcion (nombre->VA) para que el emisor
+    // de EXEC (ELF/PE) y de SHARED (.dll) embeban un .symtab ELF / symtab COFF.
+    // Se declara aqui (scope de la funcion) para sobrevivir a TODOS los caminos
+    // de emit (incluidos los early-return de SHARED/OBJECT/FLAT_BIN).  Se llama
+    // SIEMPRE (con nullptr si no aplica) para no arrastrar estado de un emit
+    // anterior.  OBJECT ya lleva symtab por diseno -> no se le fija aqui.
+    std::vector<AotSym> dbg_csyms;
+    std::vector<std::string> dbg_hold;
+    if (debug_ &&
+        (kind_ == OutputKind::EXEC || kind_ == OutputKind::SHARED) &&
+        !symbols_.empty()) {
+        dbg_csyms.resize(symbols_.size());
+        dbg_hold.resize(symbols_.size());
+        for (size_t i = 0; i < symbols_.size(); ++i) {
+            dbg_hold[i] = symbols_[i].name;
+            dbg_csyms[i].name = dbg_hold[i].c_str();
+            dbg_csyms[i].section = symbols_[i].section;
+            dbg_csyms[i].offset = symbols_[i].offset;
+            dbg_csyms[i].is_func = symbols_[i].is_func ? 1 : 0;
+        }
+        aot_set_debug_symbols(dbg_csyms.data(),
+                              static_cast<int>(dbg_csyms.size()));
+    } else {
+        aot_set_debug_symbols(nullptr, 0);
+    }
+
     // OBJECT relocatable: sin _start, sin imports; relocs como REGISTROS +
     // symtab.  v1: solo ELF (.o).  COFF (.obj) pendiente.
     if (kind_ == OutputKind::OBJECT) {
@@ -201,25 +227,6 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
             return false;
         }
         return true;
-    }
-
-    // --aot-debug=1: fija los simbolos de funcion para que el emisor de EXEC
-    // embeba un .symtab (ELF) / symtab COFF (PE).  csyms/hold sobreviven al
-    // emit (mismo scope de la funcion); se resetea el estado global tras emitir.
-    std::vector<AotSym> dbg_csyms;
-    std::vector<std::string> dbg_hold;
-    if (debug_ && kind_ == OutputKind::EXEC && !symbols_.empty()) {
-        dbg_csyms.resize(symbols_.size());
-        dbg_hold.resize(symbols_.size());
-        for (size_t i = 0; i < symbols_.size(); ++i) {
-            dbg_hold[i] = symbols_[i].name;
-            dbg_csyms[i].name = dbg_hold[i].c_str();
-            dbg_csyms[i].section = symbols_[i].section;
-            dbg_csyms[i].offset = symbols_[i].offset;
-            dbg_csyms[i].is_func = symbols_[i].is_func ? 1 : 0;
-        }
-        aot_set_debug_symbols(dbg_csyms.data(),
-                              static_cast<int>(dbg_csyms.size()));
     }
 
     if (fmt_ == ObjFormat::PE) {

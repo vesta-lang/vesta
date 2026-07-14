@@ -1932,6 +1932,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 // Libreria compartida: exporta TODAS las funciones como
                 // simbolos globales (dlsym).  Sin _start ni entry.
                 w.set_output_kind(aot::OutputKind::SHARED);
+                // --aot-debug: symtab COFF (.dll) / .symtab (.so via dynsym) con
+                // los nombres de funcion.
+                if (opt.debug_level >= 1) w.set_debug(true);
                 for (const AotFn &af : compiled) {
                     const FnLoc &fl = fn_loc[af.name];
                     w.add_symbol(af.name, fl.sec, fl.off, /*is_func=*/true);
