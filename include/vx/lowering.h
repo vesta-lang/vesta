@@ -1035,6 +1035,24 @@ class Lowering {
     void scan_address_taken(ast::Stmt *s);
 
     /**
+     * @brief Detecta si el body de un `spawn { }` usa primitivas de asincronia
+     *        COOPERATIVA (msgrecv/msgsend/fulfill/future_alloc/await).
+     *
+     * En AOT, `spawn { }` baja por defecto a un HILO REAL del SO
+     * (__vx_thread_run).  Pero si el cuerpo usa las primitivas cooperativas
+     * (mailbox/future), el spawn es una TAREA COOPERATIVA del scheduler de
+     * vx_async (un solo hilo, run-to-completion), no un hilo paralelo: en ese
+     * caso se baja a __vx_spawn/__vx_spawn_argv (que devuelven un pid que
+     * msgsend/await usan).  Esta distincion refleja el modelo del lenguaje:
+     * `spawn { compute }` = paralelismo real; `spawn { msgrecv/fulfill }` =
+     * tarea async cooperativa (identico a la semantica del interprete/JIT).
+     *
+     * @param s Cuerpo del spawn (BlockStmt).
+     * @return true si aparece alguna primitiva cooperativa.
+     */
+    bool spawn_body_uses_coop(ast::Stmt *s);
+
+    /**
      * @brief Lectura de una variable local respetando promocion address-taken.
      *
      * Si @p name esta marcada como address-taken (@c address_taken_locals_),

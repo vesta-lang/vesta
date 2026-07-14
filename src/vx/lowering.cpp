@@ -12102,13 +12102,36 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     // regs al child antes de make_ready.  Aplica para Auto policy.
     const auto &caps = spawn_captured_ssa_values_;
 
-    // AOT/bare (native_poo_): spawn = HILO REAL del SO via CALL __vx_thread_run
-    // (CreateThread en Win, pthread en Linux), bundle-ado desde vx_thread.vx.  El
-    // hint de `here`/`on(N)` se ignora (cada spawn es un hilo del SO).  El HANDLE
-    // se registra para el join-all implicito que se inyecta al final de main.
-    // CAPTURAS: si el body captura locals del outer, se aloca un struct heap
-    // (RAW_ALLOC N*8), se guarda cada captura, y se pasa el ptr como arg del hilo
-    // (el helper las LEE de cap_ptr[i] y libera el struct).  Sin capturas, arg=0.
+    // AOT/bare (native_poo_): `spawn { }` tiene DOS bajadas segun el body:
+    //
+    //  (A) COOPERATIVA (el body usa mailbox/future/await: msgrecv/msgsend/fulfill/
+    //      future_alloc/await) -> es una TAREA del scheduler cooperativo de
+    //      vx_async (single-thread, run-to-completion), NO un hilo paralelo.  Baja
+    //      a CALL __vx_spawn(body) que ENCOLA la tarea y devuelve un pid (que
+    //      msgsend/await usan).  Identico a la semantica del interprete/JIT.
+    //
+    //  (B) HILO REAL del SO (cualquier otro body: computo puro / synchronized) via
+    //      CALL __vx_thread_run (CreateThread en Win, pthread en Linux), bundle-ado
+    //      desde vx_thread.vx.  El HANDLE se registra para el join-all implicito
+    //      que se inyecta al final de main.  Capturas: struct heap (RAW_ALLOC N*8)
+    //      que el helper LEE de cap_ptr[i] y libera; sin capturas, arg=0.
+    //
+    // La distincion refleja el modelo del lenguaje: async = cooperativo un hilo;
+    // spawn de computo = paralelismo real.
+    if (native_poo_ && caps.empty() && spawn_body_uses_coop(e->body.get())) {
+        const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CALL;
+        c.type = ir::IrType::I64;
+        c.dst = v_pid;
+        c.func_name = "__vx_spawn";  // encola tarea cooperativa; devuelve pid
+        c.operands = {v_pc};
+        c.is_call_site = true;
+        c.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(c));
+        // NO marca vx_thread_used_: no es hilo real; el await bombea la cola.
+        return v_pid;
+    }
     if (native_poo_) {
         vx_thread_used_ = true;
         ir::IrValueId v_arg;
@@ -37902,6 +37925,149 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
         }
     };
     visit_stmt(s);
+}
+
+// ---------------------------------------------------------------------
+// spawn_body_uses_coop: recorre el body de un `spawn { }` buscando el uso
+// de primitivas de asincronia COOPERATIVA (mailbox / future / await).  Su
+// presencia indica que el spawn es una TAREA cooperativa del scheduler de
+// vx_async (single-thread, run-to-completion), NO un hilo real paralelo.
+// Ver la doc de la declaracion en lowering.h.
+// ---------------------------------------------------------------------
+bool Lowering::spawn_body_uses_coop(ast::Stmt *s) {
+    if (!s) return false;
+    bool found = false;
+    std::function<void(ast::Expr *)> visit_expr;
+    std::function<void(ast::Stmt *)> visit_stmt;
+
+    visit_expr = [&](ast::Expr *e) {
+        if (!e || found) return;
+        switch (e->kind) {
+        case ast::NodeKind::UnaryExpr: {
+            auto *u = static_cast<ast::UnaryExpr *>(e);
+            // `await fut` -> primitiva cooperativa.
+            if (u->op == ast::UnOp::Await) {
+                found = true;
+                return;
+            }
+            visit_expr(u->operand.get());
+            return;
+        }
+        case ast::NodeKind::CallExpr: {
+            auto *c = static_cast<ast::CallExpr *>(e);
+            if (c->callee &&
+                c->callee->kind == ast::NodeKind::IdentExpr) {
+                const std::string &nm =
+                    static_cast<ast::IdentExpr *>(c->callee.get())->name;
+                if (nm == "msgrecv" || nm == "msgsend" || nm == "fulfill" ||
+                    nm == "future_alloc") {
+                    found = true;
+                    return;
+                }
+            }
+            visit_expr(c->callee.get());
+            for (auto &arg : c->args) visit_expr(arg.get());
+            return;
+        }
+        case ast::NodeKind::BinaryExpr: {
+            auto *b = static_cast<ast::BinaryExpr *>(e);
+            visit_expr(b->lhs.get());
+            visit_expr(b->rhs.get());
+            return;
+        }
+        case ast::NodeKind::AssignExpr: {
+            auto *a = static_cast<ast::AssignExpr *>(e);
+            visit_expr(a->target.get());
+            visit_expr(a->value.get());
+            return;
+        }
+        case ast::NodeKind::FieldAccessExpr:
+            visit_expr(static_cast<ast::FieldAccessExpr *>(e)->base.get());
+            return;
+        case ast::NodeKind::IndexExpr: {
+            auto *ix = static_cast<ast::IndexExpr *>(e);
+            visit_expr(ix->base.get());
+            visit_expr(ix->index.get());
+            return;
+        }
+        case ast::NodeKind::CastExpr:
+            visit_expr(static_cast<ast::CastExpr *>(e)->operand.get());
+            return;
+        case ast::NodeKind::TernaryExpr: {
+            auto *te = static_cast<ast::TernaryExpr *>(e);
+            visit_expr(te->cond.get());
+            visit_expr(te->then_expr.get());
+            visit_expr(te->else_expr.get());
+            return;
+        }
+        default: return;
+        }
+    };
+
+    visit_stmt = [&](ast::Stmt *st) {
+        if (!st || found) return;
+        switch (st->kind) {
+        case ast::NodeKind::BlockStmt: {
+            auto *b = static_cast<ast::BlockStmt *>(st);
+            for (auto &child : b->body) visit_stmt(child.get());
+            return;
+        }
+        case ast::NodeKind::VarDeclStmt: {
+            auto *vd = static_cast<ast::VarDeclStmt *>(st);
+            if (vd->init) visit_expr(vd->init.get());
+            return;
+        }
+        case ast::NodeKind::ExprStmt:
+            visit_expr(static_cast<ast::ExprStmt *>(st)->expr.get());
+            return;
+        case ast::NodeKind::IfStmt: {
+            auto *si = static_cast<ast::IfStmt *>(st);
+            visit_expr(si->cond.get());
+            visit_stmt(si->then_branch.get());
+            visit_stmt(si->else_branch.get());
+            return;
+        }
+        case ast::NodeKind::WhileStmt: {
+            auto *w = static_cast<ast::WhileStmt *>(st);
+            visit_expr(w->cond.get());
+            visit_stmt(w->body.get());
+            return;
+        }
+        case ast::NodeKind::DoWhileStmt: {
+            auto *dw = static_cast<ast::DoWhileStmt *>(st);
+            visit_stmt(dw->body.get());
+            visit_expr(dw->cond.get());
+            return;
+        }
+        case ast::NodeKind::ForStmt: {
+            auto *f = static_cast<ast::ForStmt *>(st);
+            visit_stmt(f->init.get());
+            visit_expr(f->cond.get());
+            visit_expr(f->step.get());
+            visit_stmt(f->body.get());
+            return;
+        }
+        case ast::NodeKind::TryStmt: {
+            auto *ts = static_cast<ast::TryStmt *>(st);
+            visit_stmt(ts->body.get());
+            for (auto &cc : ts->catches) visit_stmt(cc.body.get());
+            if (ts->finally_body) visit_stmt(ts->finally_body.get());
+            return;
+        }
+        case ast::NodeKind::ReturnStmt:
+            visit_expr(static_cast<ast::ReturnStmt *>(st)->value.get());
+            return;
+        case ast::NodeKind::SynchronizedStmt: {
+            auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+            visit_expr(sy->target.get());
+            visit_stmt(sy->body.get());
+            return;
+        }
+        default: return;
+        }
+    };
+    visit_stmt(s);
+    return found;
 }
 
 // ---------------------------------------------------------------------
