@@ -1996,21 +1996,152 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         memcpy(img + thunk_va + 2, &disp, 4);
     }
 
+    /* --aot-debug=1: apendir .symtab/.strtab + tabla de section headers TRAS la
+     * imagen cargable (fuera de todo PT_LOAD -> no afecta la ejecucion; solo lo
+     * leen gdb/valgrind/lldb/...).  Simbolos section-relative (gdb usa mst_text
+     * para resolver PC->funcion; SHN_ABS no vale).  SHT: [0]NULL + secciones
+     * cargables + .symtab + .strtab + .shstrtab. */
+    uint8_t *final_buf = img;
+    size_t final_size = (size_t)total;
+    int final_owns = 0;
+    if (ok && g_aot_dbg_n > 0 && sec_va) {
+        const int n = g_aot_dbg_n;
+        const int nsec = num_secs;
+        /* shstrtab: "\0" + nombres de seccion + ".symtab" + ".strtab" +
+         * ".shstrtab". */
+        size_t shstr_cap = 1 + 8 + 8 + 10;
+        for (int i = 0; i < nsec; ++i)
+            shstr_cap += strlen(secs[i].name ? secs[i].name : ".sec") + 1;
+        char *shstr = (char *)calloc(1, shstr_cap);
+        uint32_t *sec_name_off = (uint32_t *)calloc((size_t)nsec, 4);
+        /* strtab: "\0" + nombres de simbolo. */
+        size_t strtab_sz = 1;
+        for (int i = 0; i < n; ++i)
+            strtab_sz += strlen(g_aot_dbg_syms[i].name) + 1;
+        char *strtab = (char *)calloc(1, strtab_sz);
+        Elf64_Sym *symtab =
+            (Elf64_Sym *)calloc((size_t)(n + 1), sizeof(Elf64_Sym));
+        const int nsh = 1 + nsec + 3; /* NULL + secs + symtab+strtab+shstrtab */
+        Elf64_Shdr *sht = (Elf64_Shdr *)calloc((size_t)nsh, sizeof(Elf64_Shdr));
+        if (shstr && sec_name_off && strtab && symtab && sht) {
+            /* shstrtab */
+            size_t p = 1;
+            for (int i = 0; i < nsec; ++i) {
+                const char *nm = secs[i].name ? secs[i].name : ".sec";
+                sec_name_off[i] = (uint32_t)p;
+                size_t l = strlen(nm);
+                memcpy(shstr + p, nm, l + 1);
+                p += l + 1;
+            }
+            uint32_t nm_symtab = (uint32_t)p;
+            memcpy(shstr + p, ".symtab", 8);
+            p += 8;
+            uint32_t nm_strtab = (uint32_t)p;
+            memcpy(shstr + p, ".strtab", 8);
+            p += 8;
+            uint32_t nm_shstr = (uint32_t)p;
+            memcpy(shstr + p, ".shstrtab", 10);
+            p += 10;
+            size_t shstr_sz = p;
+            /* strtab + symtab */
+            size_t sp = 1;
+            for (int i = 0; i < n; ++i) {
+                const AotSym *ds = &g_aot_dbg_syms[i];
+                size_t l = strlen(ds->name);
+                memcpy(strtab + sp, ds->name, l + 1);
+                Elf64_Sym *s = &symtab[1 + i];
+                s->st_name = (uint32_t)sp;
+                s->st_info = ELF64_ST_INFO(
+                    STB_GLOBAL, ds->is_func ? STT_FUNC : STT_OBJECT);
+                s->st_shndx = (uint16_t)(1 + ds->section); /* seccion en la SHT */
+                s->st_value = sec_va[ds->section] + ds->offset;
+                s->st_size = 0;
+                sp += l + 1;
+            }
+            /* layout apendido (8-aligned). */
+            size_t off = (size_t)total;
+            size_t strtab_off = (off + 7) & ~(size_t)7;
+            size_t symtab_off = (strtab_off + strtab_sz + 7) & ~(size_t)7;
+            size_t shstr_off = symtab_off + (size_t)(n + 1) * sizeof(Elf64_Sym);
+            size_t sht_off = (shstr_off + shstr_sz + 7) & ~(size_t)7;
+            final_size = sht_off + (size_t)nsh * sizeof(Elf64_Shdr);
+            final_buf = (uint8_t *)calloc(1, final_size);
+            if (final_buf) {
+                final_owns = 1;
+                memcpy(final_buf, img, (size_t)total);
+                memcpy(final_buf + strtab_off, strtab, strtab_sz);
+                memcpy(final_buf + symtab_off, symtab,
+                       (size_t)(n + 1) * sizeof(Elf64_Sym));
+                memcpy(final_buf + shstr_off, shstr, shstr_sz);
+                /* SHT: NULL + secciones cargables + symtab/strtab/shstrtab. */
+                Elf64_Shdr *sh = (Elf64_Shdr *)(final_buf + sht_off);
+                for (int i = 0; i < nsec; ++i) {
+                    Elf64_Shdr *e = &sh[1 + i];
+                    e->sh_name = sec_name_off[i];
+                    int is_bss = (secs[i].flags & AOT_SEC_BSS) ? 1 : 0;
+                    e->sh_type = is_bss ? SHT_NOBITS : SHT_PROGBITS;
+                    e->sh_flags = SHF_ALLOC;
+                    if (secs[i].flags & AOT_SEC_EXEC)
+                        e->sh_flags |= SHF_EXECINSTR;
+                    if (secs[i].flags & AOT_SEC_WRITE)
+                        e->sh_flags |= SHF_WRITE;
+                    e->sh_addr = sec_va[i];
+                    e->sh_offset = is_bss ? 0 : sec_va[i]; /* PIE base 0 */
+                    e->sh_size = aot_sec_size(&secs[i]);
+                    e->sh_addralign = secs[i].align ? secs[i].align : 8;
+                }
+                Elf64_Shdr *shsym = &sh[1 + nsec];
+                shsym->sh_name = nm_symtab;
+                shsym->sh_type = SHT_SYMTAB;
+                shsym->sh_offset = symtab_off;
+                shsym->sh_size = (uint64_t)(n + 1) * sizeof(Elf64_Sym);
+                shsym->sh_link = (uint32_t)(1 + nsec + 1); /* -> .strtab */
+                shsym->sh_info = 1;                         /* primer global */
+                shsym->sh_addralign = 8;
+                shsym->sh_entsize = sizeof(Elf64_Sym);
+                Elf64_Shdr *shstr_sh = &sh[1 + nsec + 1];
+                shstr_sh->sh_name = nm_strtab;
+                shstr_sh->sh_type = SHT_STRTAB;
+                shstr_sh->sh_offset = strtab_off;
+                shstr_sh->sh_size = strtab_sz;
+                shstr_sh->sh_addralign = 1;
+                Elf64_Shdr *shshstr = &sh[1 + nsec + 2];
+                shshstr->sh_name = nm_shstr;
+                shshstr->sh_type = SHT_STRTAB;
+                shshstr->sh_offset = shstr_off;
+                shshstr->sh_size = shstr_sz;
+                shshstr->sh_addralign = 1;
+                /* Parchear la cabecera ELF para exponer la SHT. */
+                Elf64_Ehdr *neh = (Elf64_Ehdr *)final_buf;
+                neh->e_shoff = sht_off;
+                neh->e_shnum = (uint16_t)nsh;
+                neh->e_shstrndx = (uint16_t)(1 + nsec + 2);
+                neh->e_shentsize = sizeof(Elf64_Shdr);
+            }
+        }
+        free(shstr);
+        free(sec_name_off);
+        free(strtab);
+        free(symtab);
+        free(sht);
+    }
+
     if (ok) {
         FILE *f = fopen(path, "wb");
         if (!f) {
             set_err(err, err_cap, "elf_dynexec: fopen fallo");
             ok = 0;
         } else {
-            size_t w = fwrite(img, 1, (size_t)total, f);
+            size_t w = fwrite(final_buf, 1, final_size, f);
             fclose(f);
-            if (w != total) {
+            if (w != final_size) {
                 set_err(err, err_cap, "elf_dynexec: escritura incompleta");
                 ok = 0;
             }
         }
     }
 
+    if (final_owns) free(final_buf);
     free(img);
     free(name_off);
     free(sonames);
