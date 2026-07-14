@@ -1,0 +1,22 @@
+// Phase AS inc.7: inout via read-back + memoria host.  `lock xadd [p], v`
+// deja el valor VIEJO en el registro de 'v' -> se lee tras el bloque.  addr y
+// v los elige el compilador (`reg`).  Memoria HOST (malloc) para que funcione
+// en interp/JIT/AOT por igual.
+// @expect 42
+i64 fetch_add(i64* addr, i64 delta) {
+    asm volatile (
+        reg p = addr,   // in: puntero (el compilador elige el registro base)
+        reg v = delta,  // inout: entra delta, sale el valor viejo
+    ) clobber(memory) {
+        lock xadd [p], v
+    }
+    return v;           // read-back: valor viejo
+}
+i32 main() {
+    i64* c = (i64*)malloc(8);
+    *c = 37;
+    i64 old = fetch_add(c, 5);   // old = 37, *c = 42
+    i64 v = *c;
+    free((u8*)c);
+    return (old == 37 && v == 42) ? 42 : 7;
+}

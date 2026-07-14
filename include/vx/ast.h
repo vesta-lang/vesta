@@ -1401,8 +1401,27 @@ struct SynchronizedStmt : Stmt {
  * que es asm de la VM).  Backends que lo materializan: port-C, JIT, AOT.
  * El backend bytecode/interp NO lo soporta y reporta error claro.
  */
+/**
+ * @struct AsmOperand
+ * @brief Phase AS inc.7: un enlace de la lista `( ... )` de un @c asm.  Modelo
+ *        moderno "read-back": la CLASE de registro es el tipo del enlace
+ *        (@c reg = el compilador elige; @c rax/rcx/... = fijo por ISA;
+ *        @c xmm/ymm = vector; @c mem = memoria).  La DIRECCION se infiere del
+ *        uso: con inicializador = entrada; el nombre leido tras el bloque =
+ *        salida; sin inicializador ni lectura posterior = scratch.
+ */
+struct AsmOperand {
+    std::string reg_class;         ///< "reg" | "rax".."r15" | "xmm"/"ymm"/... | "mem".
+    std::string name;              ///< placeholder usado en el cuerpo NASM.
+    std::unique_ptr<Expr> init;    ///< valor de entrada (nullptr = scratch/out-only).
+    SourceLoc loc;                 ///< para diagnosticos.
+};
+
 struct AsmStmt : Stmt {
     std::string body; ///< Cuerpo NASM Intel verbatim (raw-slice del source).
+    /// Phase AS inc.7: enlaces de operandos `( reg p = addr, rax a = exp, ... )`.
+    /// Vacio = modelo clasico (register() en var-decls, sin sustitucion).
+    std::vector<AsmOperand> operands;
     SourceLoc body_loc; ///< loc del primer token del cuerpo (para mapear el
                         ///< error de ensamblado a la linea/columna exactas).
     bool q_volatile =

@@ -6530,8 +6530,84 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
         (void)consume();
     }
 
+    // Phase AS inc.7: lista opcional de operandos `( <clase> <nombre> [= expr],
+    // ... )` ANTES del '{'.  El '{' queda como asm 100% real.  Cada enlace es
+    // `<clase-de-registro> <nombre> [= <expr-de-entrada>]`; la clase es el
+    // "tipo" (reg = el compilador elige; rax/... = fijo; xmm/ymm = vector;
+    // mem = memoria).  Coma final permitida.
+    if (current_.kind == TokenKind::LPAREN) {
+        (void)consume(); // '('
+        while (current_.kind != TokenKind::RPAREN &&
+               current_.kind != TokenKind::END_OF_FILE) {
+            ast::AsmOperand op;
+            op.loc = current_.loc;
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba la clase de registro (reg, rax, xmm, "
+                           "mem, ...) en el operando del asm");
+                return nullptr;
+            }
+            op.reg_class = current_.lexeme;
+            (void)consume();
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba el nombre del operando tras la clase "
+                           "de registro");
+                return nullptr;
+            }
+            op.name = current_.lexeme;
+            (void)consume();
+            // Inicializador opcional `= <expr>` (entrada).  Sin el = scratch/out.
+            if (current_.kind == TokenKind::ASSIGN) {
+                (void)consume(); // '='
+                op.init = parse_expr();
+            }
+            s->operands.push_back(std::move(op));
+            if (current_.kind == TokenKind::COMMA) {
+                (void)consume(); // ',' (coma final permitida)
+            } else {
+                break;
+            }
+        }
+        if (current_.kind != TokenKind::RPAREN) {
+            error_here("se esperaba ')' al cerrar la lista de operandos del asm");
+            return nullptr;
+        }
+        (void)consume(); // ')'
+    }
+
+    // Clausula opcional `clobber(...)` o `clobbers(...)` ANTES del '{' (modelo
+    // inc.7).  Mismo parseo que la clausula legacy tras '}'.
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        (current_.lexeme == "clobber" || current_.lexeme == "clobbers")) {
+        (void)consume(); // 'clobber'/'clobbers'
+        (void)expect(TokenKind::LPAREN, "se esperaba '(' tras 'clobber'");
+        // Acepta IDENTIFICADORES desnudos (modelo inc.7: `clobber(flags,
+        // memory)`) o strings (legacy `clobbers("flags")`).
+        while (current_.kind == TokenKind::STRING_LIT ||
+               current_.kind == TokenKind::RAW_STRING_LIT ||
+               current_.kind == TokenKind::IDENTIFIER) {
+            const std::string c = (current_.kind == TokenKind::IDENTIFIER)
+                                      ? current_.lexeme
+                                      : current_.str_val;
+            (void)consume();
+            if (c == "memory")
+                s->clobbers_memory = true;
+            else if (c == "flags" || c == "cc")
+                s->clobbers_flags = true;
+            else if (!c.empty())
+                s->clobbers.push_back(c);
+            if (current_.kind == TokenKind::COMMA) {
+                (void)consume();
+                continue;
+            }
+            break;
+        }
+        (void)expect(TokenKind::RPAREN,
+                     "se esperaba ')' al cerrar 'clobber(...)'");
+    }
+
     if (current_.kind != TokenKind::LBRACE) {
-        error_here("se esperaba '{' tras 'asm' (y calificadores opcionales)");
+        error_here("se esperaba '{' tras 'asm' (y calificadores/operandos "
+                   "opcionales)");
         return nullptr;
     }
     (void)consume(); // '{'

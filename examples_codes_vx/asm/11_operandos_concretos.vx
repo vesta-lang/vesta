@@ -1,0 +1,13 @@
+// Phase AS inc.7: operandos con registro CONCRETO (fijado por la ISA) +
+// read-back.  La clase es el nombre del registro (rax, rcx, ...).  Util cuando
+// una instruccion exige un registro concreto (p.ej. cmpxchg -> rax).
+// @expect 42
+u64 main() {
+    asm volatile (
+        rax a = 40,     // 'a' fijado a rax; tras el bloque contiene el resultado
+        rcx b = 2,      // 'b' fijado a rcx
+    ) clobber(flags) {
+        add rax, rcx
+    }
+    return a;           // read-back: a = 40 + 2 = 42
+}

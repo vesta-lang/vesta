@@ -12718,6 +12718,89 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     ia.dst = ir::IR_NO_VALUE;
     ia.source_line = s->loc.line;
 
+    // Phase AS inc.7: crear las variables register-bound de la lista de
+    // operandos `( <clase> <nombre> [= init] )` ANTES de tokenizar el body
+    // (para sustituir los placeholders por el registro).  Clase concreta ->
+    // el registro se conoce aqui: se crea el mismo AsmRegBinding que inc.5 y
+    // se sustituye el placeholder por el nombre del registro en el body ->
+    // queda IDENTICO al modelo register().  Clase `reg` (allocator elige) ->
+    // requiere sustitucion POST-regalloc en el backend (en desarrollo).
+    std::vector<std::pair<std::string, std::string>> ph_subst; // nombre -> reg
+    // Registros YA reservados: los operandos con clase CONCRETA + los clobbers
+    // explicitos.  Los operandos `reg` (allocator) eligen entre los libres.
+    std::set<std::string> used_regs;
+    for (const auto &op : s->operands) {
+        if (op.reg_class != "reg" && op.reg_class != "mem") {
+            const std::string c = vx::asm_canonical_reg(op.reg_class);
+            if (!c.empty()) used_regs.insert(c);
+        }
+    }
+    for (const auto &cb : s->clobbers) {
+        const std::string c = vx::asm_canonical_reg(cb);
+        if (!c.empty()) used_regs.insert(c);
+    }
+    // Preferencia de eleccion para `reg`: caller-saved primero (menos coste de
+    // salvado), rsp/rbp excluidos siempre.  El compilador elige el primero
+    // libre (no reservado por concretos/clobbers ni por otro `reg` previo).
+    static const char *kRegPref[] = {"r10", "r11", "r8",  "r9",  "rcx", "rdx",
+                                     "rsi", "rdi", "rax", "rbx", "r12", "r13",
+                                     "r14", "r15"};
+    for (auto &op : s->operands) {
+        std::string reg;
+        if (op.reg_class == "reg") {
+            // El COMPILADOR elige un registro GP libre (auto-seleccion).
+            for (const char *cand : kRegPref) {
+                if (used_regs.count(cand) == 0) {
+                    reg = cand;
+                    break;
+                }
+            }
+            if (reg.empty()) {
+                diags_.error(op.loc, "asm: sin registros GP libres para el "
+                                     "operando 'reg' (demasiados operandos/"
+                                     "clobbers)");
+                continue;
+            }
+            used_regs.insert(reg);
+        } else if (op.reg_class == "mem") {
+            continue; // ya reportado
+        } else {
+            reg = vx::asm_canonical_reg(op.reg_class);
+            if (reg.empty()) continue; // clase invalida (ya reportada)
+        }
+        // Lower del inicializador (entrada) para deducir el tipo del slot.
+        ir::IrType vt = ir::IrType::I64;
+        ir::IrValueId v0 = ir::IR_NO_VALUE;
+        if (op.init) {
+            v0 = lower_expr(op.init.get());
+            if (v0 != ir::IR_NO_VALUE) vt = fn_->values[v0].type;
+        }
+        const size_t bytes = ir_type_size(vt);
+        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        ir::IrInstr ai{};
+        ai.op = ir::IrOp::ALLOCA;
+        ai.type = ir::IrType::I8;
+        ai.dst = addr;
+        ai.imm = (uint64_t)bytes;
+        ai.source_line = s->loc.line;
+        fn_->append(current_block_, std::move(ai));
+        bind(op.name, addr);
+        address_taken_locals_.insert(op.name);
+        const bool is_vec = reg.rfind("xmm", 0) == 0 ||
+                            reg.rfind("ymm", 0) == 0 || reg.rfind("zmm", 0) == 0;
+        fn_->asm_reg_bindings.push_back(
+            ir::AsmRegBinding{addr, reg, vt, is_vec, op.name});
+        if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, s->loc.line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = vt;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v0, addr};
+        st.source_line = s->loc.line;
+        fn_->append(current_block_, std::move(st));
+        ph_subst.emplace_back(op.name, reg); // placeholder -> registro
+    }
+
     // Phase AS inc.5g (metaprogramacion): sustituir las `comptime` consts
     // ENTERAS por su literal en el cuerpo del asm ANTES de ensamblar, igual
     // que una macro textual (evita hardcodear el valor + mantiene el asm
@@ -12790,6 +12873,22 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     break;
             }
             const std::string tok = b.substr(i, j - i);
+            // Phase AS inc.7: si el token es el NOMBRE de un operando de la
+            // lista `( ... )`, sustituirlo por su REGISTRO (los concretos ya
+            // conocen el registro; los `reg` allocator se haran POST-regalloc
+            // en el backend).  Tiene prioridad sobre comptime/decoracion.
+            {
+                bool ph_done = false;
+                for (const auto &pr : ph_subst) {
+                    if (pr.first == tok) {
+                        body_sub += pr.second;
+                        i = j;
+                        ph_done = true;
+                        break;
+                    }
+                }
+                if (ph_done) continue;
+            }
             // Bug/feature 198: la decoracion de simbolos propios (__vxf_ fn /
             // __vxg_ global) solo debe aplicarse a tokens en posicion de
             // OPERANDO, NUNCA a un mnemonico ni a un registro.  Critico porque

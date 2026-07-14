@@ -5361,6 +5361,58 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
     case ast::NodeKind::VarDeclStmt:
         check_var_decl(static_cast<ast::VarDeclStmt *>(s));
         return;
+    case ast::NodeKind::AsmStmt: {
+        // Phase AS inc.7: cada operando de la lista `( <clase> <nombre> [=
+        // init] )` declara una variable register-bound en el scope actual
+        // (modelo read-back: legible tras el bloque = su valor de salida).
+        auto *as = static_cast<ast::AsmStmt *>(s);
+        for (auto &op : as->operands) {
+            // Tipo: inferido del inicializador; sin init (scratch) -> i64.
+            Type ty{PrimitiveKind::I64};
+            if (op.init) {
+                Type it = check_expr(op.init.get());
+                if (it.kind != PrimitiveKind::VOID) ty = it;
+            }
+            // Clase de registro: `reg` = el compilador elige; concreta =
+            // canonica x86; `mem` diferido.
+            std::string canon;
+            if (op.reg_class == "reg") {
+                canon = "reg"; // allocator-chosen (backend lo asigna)
+            } else if (op.reg_class == "mem") {
+                diags_.error(op.loc,
+                             "asm: la clase 'mem' aun no esta soportada; usa "
+                             "'reg' o un registro concreto");
+            } else {
+                canon = asm_canonical_reg(op.reg_class);
+                if (canon.empty()) {
+                    diags_.error(op.loc,
+                                 "asm: '" + op.reg_class +
+                                     "' no es una clase de registro valida "
+                                     "(reg, rax..r15, xmm.., mem)");
+                } else {
+                    // Conflicto same-reg concreto con otro binding vivo.
+                    for (auto it = scopes_.rbegin(); it != scopes_.rend();
+                         ++it) {
+                        for (const auto &kv : *it) {
+                            if (kv.second.reg_binding == canon) {
+                                diags_.error(op.loc,
+                                             "asm: el registro '" +
+                                                 op.reg_class +
+                                                 "' ya esta ligado a '" +
+                                                 kv.first + "'");
+                            }
+                        }
+                    }
+                }
+            }
+            Symbol sym;
+            sym.kind = SymbolKind::Variable;
+            sym.type = ty;
+            sym.reg_binding = canon;
+            (void)declare(op.name, sym);
+        }
+        return;
+    }
     case ast::NodeKind::ExprStmt: {
         auto *es = static_cast<ast::ExprStmt *>(s);
         if (es->expr) {
