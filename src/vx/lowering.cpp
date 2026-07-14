@@ -37843,6 +37843,27 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
     std::function<void(ast::Expr *)> visit_expr;
     std::function<void(ast::Stmt *)> visit_stmt;
 
+    // Marca address-taken toda variable asignada en @p n (parte de un loop):
+    // fuerza su ALLOCA en la declaracion (dominante), evitando el PHI
+    // direccion-vs-valor de un loop anidado en una rama condicional.
+    auto mark_loop_assigned = [&](const ast::Node *n) {
+        if (!n) return;
+        std::set<std::string> tmp;
+        collect_assigned_vars(n, tmp);
+        for (const auto &nm : tmp)
+            address_taken_locals_.insert(nm);
+    };
+
+    // Profundidad de anidamiento en ramas CONDICIONALES (then/else de un if,
+    // cuerpos de catch).  Solo promovemos las vars loop-carried a address-taken
+    // cuando el loop esta DENTRO de una rama condicional: ahi su ALLOCA (creado
+    // en el bloque del loop) no domina la rama hermana del if -> el merge
+    // produce el PHI direccion-vs-valor (el bug).  Un loop a nivel de funcion
+    // (cond_depth==0) crea su ALLOCA en un bloque que domina el exit -> no hay
+    // rama hermana problematica; ademas promover ahi romperia al vectorizador
+    // (que espera el contador/acumulador como PHI SSA).
+    int cond_depth = 0;
+
     visit_expr = [&](ast::Expr *e) {
         if (!e) return;
         switch (e->kind) {
@@ -37970,24 +37991,57 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
         case ast::NodeKind::IfStmt: {
             auto *si = static_cast<ast::IfStmt *>(st);
             visit_expr(si->cond.get());
+            // then/else son ramas condicionales: un loop dentro de ellas es el
+            // caso del bug (su ALLOCA no domina la rama hermana).
+            ++cond_depth;
             visit_stmt(si->then_branch.get());
             visit_stmt(si->else_branch.get());
+            --cond_depth;
             return;
         }
         case ast::NodeKind::WhileStmt: {
             auto *w = static_cast<ast::WhileStmt *>(st);
+            // Toda variable ASIGNADA dentro de un loop es loop-carried: el
+            // lowering le crea un ALLOCA para persistir su valor entre
+            // iteraciones (linea ~6377).  Si el loop esta dentro de una rama
+            // condicional, ese ALLOCA (creado en el bloque del loop) NO domina
+            // la rama HERMANA -> el merge del `if` termina con un PHI que mezcla
+            // la DIRECCION del alloca (rama del loop) con el VALOR original
+            // (rama sin loop) -> un `load` posterior deref-ea un valor como si
+            // fuera puntero (SIGSEGV / basura).  Marcarla address-taken AQUI
+            // (pre-pase) fuerza el ALLOCA en su DECLARACION (que domina todo) y
+            // todas las ramas la ven como memoria -> representacion consistente.
+            // Cero coste: el optimizer re-promueve a SSA los allocas que no
+            // escapan (mem2reg / promote_local_allocas).
+            if (cond_depth > 0) {
+                mark_loop_assigned(w->cond.get());
+                mark_loop_assigned(w->body.get());
+            }
             visit_expr(w->cond.get());
             visit_stmt(w->body.get());
             return;
         }
         case ast::NodeKind::DoWhileStmt: {
             auto *dw = static_cast<ast::DoWhileStmt *>(st);
+            if (cond_depth > 0) {
+                mark_loop_assigned(dw->body.get());
+                mark_loop_assigned(dw->cond.get());
+            }
             visit_stmt(dw->body.get());
             visit_expr(dw->cond.get());
             return;
         }
         case ast::NodeKind::ForStmt: {
             auto *f = static_cast<ast::ForStmt *>(st);
+            // Ver la nota en WhileStmt: toda variable asignada dentro del loop
+            // se marca address-taken para que su ALLOCA nazca en la declaracion
+            // (que domina todo), evitando el PHI direccion-vs-valor cuando el
+            // loop esta anidado en una rama condicional.
+            if (cond_depth > 0) {
+                mark_loop_assigned(f->cond.get());
+                mark_loop_assigned(f->step.get());
+                mark_loop_assigned(f->body.get());
+            }
             visit_stmt(f->init.get());
             visit_expr(f->cond.get());
             visit_expr(f->step.get());
@@ -38003,10 +38057,14 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
             // var-decl falla al evaluar `&var` y deja el binding
             // sin registrar.
             auto *ts = static_cast<ast::TryStmt *>(st);
+            // try/catch introducen ramas (el catch se alcanza por un edge
+            // de excepcion): un loop dentro puede sufrir el mismo PHI mixto.
+            ++cond_depth;
             visit_stmt(ts->body.get());
             for (auto &cc : ts->catches)
                 visit_stmt(cc.body.get());
             if (ts->finally_body) visit_stmt(ts->finally_body.get());
+            --cond_depth;
             return;
         }
         case ast::NodeKind::ReturnStmt: {
