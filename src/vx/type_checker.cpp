@@ -9750,8 +9750,13 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             ft.kind == PrimitiveKind::CLASS;
         // Tambien admitimos asignacion de instancia de subclase a
         // campo declarado como interfaz/superclase via class_is_assignable.
-        if (tv.kind != PrimitiveKind::COUNT && !types_assignable(ft, tv) &&
-            !class_is_assignable(ft, tv) && !null_to_class_field) {
+        // Constante numerica -> campo de tipo newtype numerico (p.ej.
+        // `Fiber(f).next = 0` donde next es `fiber`): permitido sin cast, igual
+        // que en var-decl/asignacion/args.
+        if (numeric_const_fits_newtype(ft, tv, e->value.get())) {
+            e->value->result_type = ft;
+        } else if (tv.kind != PrimitiveKind::COUNT && !types_assignable(ft, tv) &&
+                   !class_is_assignable(ft, tv) && !null_to_class_field) {
             diags_.error(e->loc, std::string("tipo del valor (") +
                                      type_to_string(tv) +
                                      ") incompatible con tipo del campo (" +
