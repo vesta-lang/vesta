@@ -204,12 +204,19 @@ bool arch_to_ks(vx::AsmArch a, ks_arch &arch, ks_mode &mode) {
     return false;
 }
 
-/// Impl concreta: abre Keystone por cada @c assemble (stateless y
-/// thread-safe; el coste de @c ks_open es despreciable frente al
-/// compile-time global).
+/// Impl concreta: abre un @c ks_engine por cada @c assemble.  El engine es
+/// LOCAL a la llamada, pero Keystone/LLVM mantiene ESTADO GLOBAL mutable (registro
+/// de targets + capa MC) que NO es thread-safe: dos @c ks_asm concurrentes (p.ej.
+/// dos modulos con inline-asm compilados en paralelo por M8) corren sobre ese
+/// estado -> corrupcion/crash.  Serializamos toda la operacion con un mutex
+/// global.  Ensamblar es un camino RARO (un bloque `asm { }` puntual), asi que la
+/// serializacion tiene coste despreciable frente al resto del compile paralelo.
 struct KeystoneAsmBackend final : vx::AsmBackend {
     vx::AsmAssembleResult assemble(const std::string &nasm,
                                     vx::AsmArch arch) override {
+        // Keystone/LLVM no es thread-safe: un unico assemble a la vez.
+        static std::mutex ks_global_mtx;
+        std::lock_guard<std::mutex> ks_lock(ks_global_mtx);
         vx::AsmAssembleResult r;
         ks_arch ka;
         ks_mode km;
