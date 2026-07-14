@@ -47,29 +47,34 @@
  * que vx_async exige para poder cederse desde el modo interprete.
  */
 
+import std.types only uintptr, usize;
+
 // ---------------------------------------------------------------------------
 // FFI: hilos del SO + yield del SO.
 // ---------------------------------------------------------------------------
 extern "kernel32.dll" {
-    fn CreateThread(u64 attrs, u64 stacksize, u64 startaddr, u64 param,
-                    u64 flags, u64 threadid) -> u64;
-    fn WaitForSingleObject(u64 handle, u32 ms) -> u32;
-    fn CloseHandle(u64 handle) -> i32;
+    // Punteros/handles del SO como uintptr (ancho de puntero, portable);
+    // tamano de pila como usize.
+    fn CreateThread(uintptr attrs, usize stacksize, uintptr startaddr,
+                    uintptr param, u32 flags, uintptr threadid) -> uintptr;
+    fn WaitForSingleObject(uintptr handle, u32 ms) -> u32;
+    fn CloseHandle(uintptr handle) -> i32;
     fn SwitchToThread() -> i32;
 }
 extern "libpthread.so.0" {
-    fn pthread_create(u64 thread_out, u64 attr, u64 start_routine, u64 arg) -> i32;
-    fn pthread_join(u64 thread, u64 retval_out) -> i32;
+    fn pthread_create(uintptr* thread_out, uintptr attr, uintptr start_routine,
+                      uintptr arg) -> i32;
+    fn pthread_join(uintptr thread, uintptr retval_out) -> i32;
 }
 
 @Target("os:windows")
-u64 __vxp_os_spawn(u64 body, u64 arg) {
+uintptr __vxp_os_spawn(uintptr body, uintptr arg) {
     return CreateThread(0, 0, body, arg, 0, 0);
 }
 @Target("!os:windows")
-u64 __vxp_os_spawn(u64 body, u64 arg) {
-    u64 th = 0;
-    i32 rc = pthread_create((u64)(&th), 0, body, arg);
+uintptr __vxp_os_spawn(uintptr body, uintptr arg) {
+    uintptr th = 0;
+    i32 rc = pthread_create(&th, 0, body, arg);
     if (rc != 0) {
         return 0;
     }
@@ -77,12 +82,12 @@ u64 __vxp_os_spawn(u64 body, u64 arg) {
 }
 
 @Target("os:windows")
-void __vxp_os_join(u64 handle) {
+void __vxp_os_join(uintptr handle) {
     WaitForSingleObject(handle, 0xFFFFFFFF);
     CloseHandle(handle);
 }
 @Target("!os:windows")
-void __vxp_os_join(u64 handle) {
+void __vxp_os_join(uintptr handle) {
     if (handle != 0) {
         pthread_join(handle, 0);
     }
@@ -285,7 +290,7 @@ const i64 VXP_GQMASK = 65535;
 i64[65536] __vxp_dq;      ///< [w*DQCAP + (idx & MASK)] = Fiber*.
 i64[64] __vxp_top;        ///< extremo de robo (CAS) por worker.
 i64[64] __vxp_bottom;     ///< extremo del owner por worker.
-u64[64] __vxp_handle;     ///< HANDLE del hilo worker.
+uintptr[64] __vxp_handle;     ///< HANDLE del hilo worker.
 i64 __vxp_n = 0;
 i64 __vxp_stop = 0;
 i64 __vxp_pending = 0;    ///< fibras vivas no terminadas (atomico).
@@ -645,7 +650,7 @@ public i64 vx_pool_start(i64 nworkers) {
     }
     i64 started = 0;
     for (i64 i = 0; i < n; i++) {
-        u64 h = __vxp_os_spawn((u64)(cfn(u64) -> void) __vxp_worker, (u64)i);
+        uintptr h = __vxp_os_spawn((uintptr)(cfn(u64) -> void) __vxp_worker, (uintptr)i);
         __vxp_handle[i] = h;
         if (h != 0) { started++; }
     }
