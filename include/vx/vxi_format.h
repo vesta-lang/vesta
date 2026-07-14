@@ -246,6 +246,15 @@ struct VxiSymbol {
     /// (STRUCT / CLASS) Tamano total + alineacion.
     uint32_t size_bytes = 0;
     uint32_t align_bytes = 1;
+    /// (STRUCT) @c true si el struct es un `@overlay struct` (vista tipada sobre
+    /// memoria ajena).  Se propaga para que el consumidor reconozca la
+    /// construccion `Tipo(ptr)` de un overlay importado (solo campos escalares
+    /// con @offset fijo; los overlays con offset dinamico/array/resolver usan
+    /// punteros al AST no serializables y no cruzan modulo).
+    bool is_overlay = false;
+    /// (STRUCT overlay) Extension real del overlay en bytes (no @c size_bytes,
+    /// que para un overlay es el tamano del puntero).  0 si no aplica.
+    uint32_t overlay_extent = 0;
 
     // === ENUM ===
     struct EnumVariant {

@@ -641,6 +641,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         }
         s.size_bytes = layout.size_bytes;
         s.align_bytes = layout.align_bytes;
+        s.is_overlay = layout.is_overlay;
+        s.overlay_extent = layout.overlay_extent;
         s.fields.reserve(layout.fields.size());
         for (const auto &f : layout.fields) {
             VxiSymbol::FieldInfo fi;
@@ -1387,6 +1389,10 @@ void import_vxi_into_typechecker(
             L.name = local_name;
             L.size_bytes = s.size_bytes;
             L.align_bytes = s.align_bytes;
+            // LIM-11: restaurar la condicion de overlay para que el consumidor
+            // reconozca la construccion `Tipo(ptr)` del overlay importado.
+            L.is_overlay = s.is_overlay;
+            L.overlay_extent = s.overlay_extent;
             L.fields.reserve(s.fields.size());
             for (const auto &fi : s.fields) {
                 StructFieldInfo sfi;

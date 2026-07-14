@@ -332,6 +332,9 @@ static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
     write_u32(payload, static_cast<uint32_t>(sym.super_class.size()));
     write_u32(payload, sym.size_bytes);
     write_u32(payload, sym.align_bytes);
+    // STRUCT overlay: flag + extension real (para reconocer `Tipo(ptr)` cross-modulo).
+    write_u8(payload, sym.is_overlay ? 1u : 0u);
+    write_u32(payload, sym.overlay_extent);
     write_u32(payload, static_cast<uint32_t>(sym.fields.size()));
     write_u32(payload, static_cast<uint32_t>(sym.interfaces.size()));
     // Phase M6.b L.6: method_count antes de las entries.
@@ -898,15 +901,19 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
                                           uint32_t payload_len,
                                           uint32_t pool_start,
                                           VxiSymbol &out) {
-    // Phase M6.b L.6: payload header crece a 28 bytes fijos (añade
-    // method_count).
-    if (payload_len < 28) return false;
+    // Header fijo: super(off+len) + size + align + is_overlay(1) +
+    // overlay_extent(4) + field_count + interface_count + method_count = 33 bytes.
+    if (payload_len < 33) return false;
     size_t off = payload_off;
     uint32_t super_off = 0, super_len = 0, fc = 0, ic = 0, mc = 0;
     if (!read_u32(data, size, off, super_off)) return false;
     if (!read_u32(data, size, off, super_len)) return false;
     if (!read_u32(data, size, off, out.size_bytes)) return false;
     if (!read_u32(data, size, off, out.align_bytes)) return false;
+    uint8_t ov_flag = 0;
+    if (!read_u8(data, size, off, ov_flag)) return false;
+    out.is_overlay = (ov_flag != 0);
+    if (!read_u32(data, size, off, out.overlay_extent)) return false;
     if (!read_u32(data, size, off, fc)) return false;
     if (!read_u32(data, size, off, ic)) return false;
     if (!read_u32(data, size, off, mc)) return false;
