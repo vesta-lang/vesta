@@ -412,11 +412,12 @@ int main(int argc, char *argv[]) {
             "protegido, kernels: 8 GP eax-edi, regparm(3), subset entero de "
             "32-bit).",
             cxxopts::value<std::string>()->default_value("x86-64"))(
-            "aot-debug",
-            "AOT: nivel de info de depuracion en el binario nativo (ELF/PE/.o/"
-            ".so/.dll): 0=ninguna (default, cero coste) | 1=simbolos de funcion "
-            "(.symtab/COFF -> backtraces con nombres en gdb/WinDbg/lldb) | "
-            "2=+lineas (futuro) | 3=+variables (futuro).",
+            "debug-info",
+            "Nivel de info de depuracion (flag UNIVERSAL, todos los targets): "
+            "0=ninguna (default, cero coste) | 1=simbolos de funcion (AOT: "
+            ".symtab/COFF en ELF/PE/.o/.so/.dll -> backtraces con nombres en "
+            "gdb/WinDbg/lldb/valgrind) | 2=+lineas (futuro) | 3=+variables "
+            "(futuro).",
             cxxopts::value<int>()->default_value("0"))(
             "float-isa",
             "AOT: backend de punto flotante / ancho SIMD del vectorizador: "
@@ -2676,7 +2677,7 @@ int main(int argc, char *argv[]) {
             aopt.no_mem = aot_no_mem;
             aopt.arch = result["aot-arch"].as<std::string>();
             aopt.float_isa = result["float-isa"].as<std::string>();
-            aopt.debug_level = result["aot-debug"].as<int>();
+            aopt.debug_level = result["debug-info"].as<int>();
             if (result.count("format"))
                 aopt.format = result["format"].as<std::string>();
             if (result.count("emit"))
