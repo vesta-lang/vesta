@@ -1,0 +1,45 @@
+namespace ejemplos.atomics;
+
+// 243_atomics.vx
+//
+// Libreria de atomicos (vx_atomic): 4 hilos reales incrementan un contador
+// compartido 50000 veces cada uno con vx_atomic_add64 (fetch-and-add atomico,
+// SIN lock).  4*50000 = 200000 EXACTO -> prueba que la RMW es atomica (sin
+// atomicos, la carrera perderia incrementos).  Tambien ejercita vx_spin_lock.
+//
+//   vm -m aot --vx 243_atomics.vx --format pe -o p.exe && ./p.exe   (exit 42)
+
+import "vx_thread" only vx_thread_spawn, vx_thread_join;
+import "vx_atomic" only vx_atomic_add64, vx_atomic_load64, vx_spin_lock, vx_spin_unlock;
+
+i64 g_counter = 0;   // contador atomico
+i64 g_locked = 0;    // contador protegido por spinlock
+i64 g_lock = 0;      // palabra del spinlock
+
+void worker(u64 id) {
+    i64 i = 0;
+    while (i < 50000) {
+        vx_atomic_add64(&g_counter, 1);        // RMW atomica
+        vx_spin_lock(&g_lock);
+        g_locked = g_locked + 1;                // seccion critica
+        vx_spin_unlock(&g_lock);
+        i = i + 1;
+    }
+}
+
+i32 main() {
+    u64[4] h;
+    i64 k = 0;
+    while (k < 4) {
+        h[k] = vx_thread_spawn((u64)(cfn(u64) -> void) worker, (u64)k);
+        k = k + 1;
+    }
+    k = 0;
+    while (k < 4) { vx_thread_join(h[k]); k = k + 1; }
+
+    // Ambos deben ser 4*50000 = 200000 exactos.
+    i64 a = vx_atomic_load64(&g_counter);
+    if (a != 200000) { return (i32)(a % 1000); }
+    if (g_locked != 200000) { return (i32)(g_locked % 1000 + 500); }
+    return 42;
+}
