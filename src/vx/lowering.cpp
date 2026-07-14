@@ -16591,18 +16591,47 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             fn_->append(current_block_, std::move(o));
             return nv;
         };
-        // IdentExpr: ruta original via read_local/write_local.
+        // IdentExpr: si es un LOCAL del scope, ruta SSA original via
+        // read_local/write_local (Braun on-the-fly, sin ALLOCA).
         if (e->operand->kind == ast::NodeKind::IdentExpr) {
             auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
             const ir::IrValueId old_val = read_local(id->name, vt, e->loc.line);
-            if (old_val == ir::IR_NO_VALUE) {
+            if (old_val != ir::IR_NO_VALUE) {
+                const ir::IrValueId new_val = compute_new(old_val);
+                write_local(id->name, new_val, vt, e->loc.line);
+                return is_pre ? new_val : old_val;
+            }
+            // No es un local del scope (p.ej. una variable GLOBAL runtime o
+            // un comptime global dentro de un @Macro): delegamos en
+            // lower_assign con un compound sintetico (`x += 1` / `x -= 1`)
+            // para REUTILIZAR exactamente la misma resolucion de lvalue que
+            // la asignacion compuesta (que resuelve runtime_global_slots_ y
+            // comptime globals via STR_LIT_ADDR + LOAD + combine + STORE).
+            // Para el postfijo capturamos el valor previo ANTES del store
+            // via lower_ident, que tambien sabe resolver globales.
+            ir::IrValueId prev = ir::IR_NO_VALUE;
+            if (!is_pre) prev = lower_ident(id);
+            auto tgt = std::make_unique<ast::IdentExpr>();
+            tgt->name = id->name;
+            tgt->result_type = id->result_type;
+            tgt->loc = id->loc;
+            auto one = std::make_unique<ast::IntLitExpr>();
+            one->value = 1;
+            one->result_type = e->operand->result_type;
+            one->loc = e->loc;
+            ast::AssignExpr asn;
+            asn.op = is_inc ? ast::AssignOp::AddAssign : ast::AssignOp::SubAssign;
+            asn.loc = e->loc;
+            asn.result_type = id->result_type;
+            asn.target = std::move(tgt);
+            asn.value = std::move(one);
+            const ir::IrValueId new_val = lower_assign(&asn);
+            if (new_val == ir::IR_NO_VALUE) {
                 error_at(e->loc,
                          "lowering: nombre no resuelto: '" + id->name + "'");
                 return ir::IR_NO_VALUE;
             }
-            const ir::IrValueId new_val = compute_new(old_val);
-            write_local(id->name, new_val, vt, e->loc.line);
-            return is_pre ? new_val : old_val;
+            return is_pre ? new_val : prev;
         }
         // bug4: FieldAccessExpr (this.x++, obj.x++) sobre struct field.
         // Class fields se manejan separadamente (CLASS property o getfield).
