@@ -1,0 +1,214 @@
+/**
+ * @file vx_chan.vx
+ * @brief Canales (estilo CSP) sobre el scheduler M:N de fibras (vx_pool).  Una
+ *        fibra que hace recv de un canal sin dato (o send de uno lleno) se
+ *        BLOQUEA -- sale de la run-queue -- y la operacion opuesta la despierta
+ *        EXACTAMENTE a ella, entregandole el valor DIRECTAMENTE.  SIN busy-wait,
+ *        SIN libc mas alla de malloc, SIN GC.  Buffered (cap >= 1) y rendezvous
+ *        (cap 0) con el MISMO codigo.
+ *
+ * @par Modelo (la FIBRA es el nodo de espera + entrega directa via su slot ELEM)
+ * Cuando una fibra se bloquea, se enlaza A SI MISMA (Fiber*, por VXP_FIB_NEXT)
+ * en la wait-queue del canal; el valor de la entrega directa vive en el slot
+ * ELEM de la fibra (en su STRUCT, heap).  El otro lado, bajo el lock: saca la
+ * fibra, ESCRIBE/LEE su ELEM (entrega directa, sin pasar por el ring) y la
+ * despierta.  El nodo va en el HEAP (struct), NO en la pila de la fibra: la pila
+ * de una fibra parkeada NO sobrevive de forma fiable a una lectura cross-fibra
+ * en algun backend (AOT/PE se leia 0); el struct si.  Ventajas: (1) rendezvous
+ * cap 0 natural (el buffer nunca tiene hueco); (2) al despertar, el receptor lee
+ * su ELEM (via el `self` capturado antes del park) sin re-tomar el lock;
+ * (3) select (futuro) encaja: un flag "reclamada" (CAS) en la fibra.
+ *
+ * @par Correccion del wakeup (hand-off del lock)
+ * El lock del canal se mantiene desde el chequeo hasta DESPUES de que la fibra
+ * hizo el context-switch (via `vx_park` con una accion diferida que suelta el
+ * lock).  La fibra ya esta fuera de CPU y encolada cuando el otro lado toma el
+ * lock -> nunca se pierde un wakeup.
+ *
+ * @par Invariante de propiedad
+ * Un nodo en una wait-queue -> su fibra es propiedad EXCLUSIVA del canal.  Quien
+ * saca el nodo (bajo el lock) es su unico dueno y el UNICO que hace `vx_wake`.
+ * Sacar-nodo y wake son exclusivos (aunque el wake vaya fuera del lock).  select
+ * respetara esto con un CAS de "reclamada" en la fibra.
+ *
+ * @par Rendimiento
+ * UN spinlock por canal (como los canales de Go): protege ring + ambas
+ * wait-queues; el `wake` va FUERA del lock.  Capacidad potencia de dos ->
+ * indexado `& mask` (sin division).  Escalar a locks por-endpoint / lock-free
+ * es un increment SOLO-SI-EL-PROFILING-LO-EXIGE (Go no lo hace); requeriria
+ * fijar el CAS de reclamacion -> se hara junto a select/close, no suelto.
+ *
+ * @par Uso
+ * Entre FIBRAS (tareas del pool).  main coordina con vx_pool_join (no es fibra:
+ * no puede bloquearse en un canal).
+ */
+
+import "vx_atomic" only vx_spin_lock, vx_spin_unlock;
+import "vx_pool" only vx_park, vx_wake, vx_cur_fiber, vx_wq_push, vx_wq_pop,
+                     vx_fib_set_elem, vx_fib_get_elem;
+
+// ---------------------------------------------------------------------------
+// Layout del canal (bloque host malloc'd: header + ring buffer inline).
+// ---------------------------------------------------------------------------
+comptime i64 CH_LOCK   = 0;   ///< spinlock (0=libre, 1=tomado).
+comptime i64 CH_CAP    = 8;   ///< capacidad del ring (0 = rendezvous; si >=1, pot. de 2).
+comptime i64 CH_MASK   = 16;  ///< cap - 1 (indexado del ring; 0 si cap 0).
+comptime i64 CH_HEAD   = 24;  ///< indice de lectura (monotono, enmascarado).
+comptime i64 CH_TAIL   = 32;  ///< indice de escritura.
+comptime i64 CH_COUNT  = 40;  ///< items en el buffer.
+comptime i64 CH_RWQ_H  = 48;  ///< recv wait-queue: cabeza (nodo*).
+comptime i64 CH_RWQ_T  = 56;  ///< recv wait-queue: cola.
+comptime i64 CH_SWQ_H  = 64;  ///< send wait-queue: cabeza.
+comptime i64 CH_SWQ_T  = 72;  ///< send wait-queue: cola.
+comptime i64 CH_CLOSED = 80;  ///< 1 si cerrado (reservado; close es futuro).
+comptime i64 CH_HDR    = 88;  ///< el ring empieza aqui: cap*8 bytes.
+
+// El "nodo de espera" es el STRUCT DE LA FIBRA (heap), NO un nodo en la pila:
+// las wait-queues enlazan Fiber* (por VXP_FIB_NEXT, via vx_wq_push/pop) y el
+// valor de la entrega directa vive en el slot ELEM de la fibra (vx_fib_set/get
+// _elem).  Motivo: la pila de una fibra parkeada NO sobrevive de forma fiable a
+// una lectura desde OTRA fibra en algun backend (AOT/PE: se lee 0); el struct,
+// al estar en heap, es estable cross-fibra.  Ademas evita reservar un nodo.
+
+// Helpers de acceso a qwords host (struct del canal + ring).
+void __vx_st(i64 addr, i64 v) {
+    i64* p = (i64*)addr;
+    *p = v;
+}
+i64 __vx_ld(i64 addr) {
+    i64* p = (i64*)addr;
+    return *p;
+}
+
+/// Accion diferida de park: el WORKER la ejecuta tras el switch -> suelta el
+/// lock del canal cuando la fibra ya esta fuera de CPU (hand-off).
+void __vxch_unlock_after_park(i64 lock_addr, i64 fib) {
+    vx_spin_unlock((i64*)lock_addr);
+}
+
+/**
+ * @brief Crea un canal de capacidad @p cap.  cap<=0 -> rendezvous (sin buffer).
+ *        cap>=1 -> buffered, REDONDEADA a la siguiente potencia de dos (ring
+ *        indexado con `& mask`, sin division).
+ * @return puntero host al canal (0 si OOM).
+ */
+public i64 vx_chan_new(i64 cap) {
+    i64 c = 0;
+    i64 mask = 0;
+    if (cap >= 1) {
+        c = 1;
+        while (c < cap) {
+            c = c * 2;
+        }
+        mask = c - 1;
+    }
+    i64 ch = (i64)malloc(CH_HDR + c * 8);
+    if (ch == 0) {
+        return 0;
+    }
+    __vx_st(ch + CH_LOCK, 0);
+    __vx_st(ch + CH_CAP, c);
+    __vx_st(ch + CH_MASK, mask);
+    __vx_st(ch + CH_HEAD, 0);
+    __vx_st(ch + CH_TAIL, 0);
+    __vx_st(ch + CH_COUNT, 0);
+    __vx_st(ch + CH_RWQ_H, 0);
+    __vx_st(ch + CH_RWQ_T, 0);
+    __vx_st(ch + CH_SWQ_H, 0);
+    __vx_st(ch + CH_SWQ_T, 0);
+    __vx_st(ch + CH_CLOSED, 0);
+    return ch;
+}
+
+/// Libera el canal (nadie debe estar bloqueado en el).
+public void vx_chan_free(i64 ch) {
+    if (ch != 0) {
+        free((u8*)ch);
+    }
+}
+
+/**
+ * @brief Envia @p v por el canal.  Prioridad: (1) receptor en espera -> entrega
+ *        directa; (2) hueco en el buffer -> encolar; (3) bloquear en la sendq.
+ */
+public void vx_chan_send(i64 ch, i64 v) {
+    vx_spin_lock((i64*)(ch + CH_LOCK));
+    // (1) Receptor en espera -> entrega directa en su slot ELEM (heap).
+    i64 r = vx_wq_pop(ch + CH_RWQ_H, ch + CH_RWQ_T);
+    if (r != 0) {
+        vx_fib_set_elem(r, v);
+        vx_spin_unlock((i64*)(ch + CH_LOCK));
+        vx_wake(r);
+        return;
+    }
+    // (2) Hueco en el buffer.
+    i64 count = __vx_ld(ch + CH_COUNT);
+    i64 cap = __vx_ld(ch + CH_CAP);
+    if (count < cap) {
+        i64 mask = __vx_ld(ch + CH_MASK);
+        i64 tail = __vx_ld(ch + CH_TAIL);
+        __vx_st(ch + CH_HDR + (tail & mask) * 8, v);
+        __vx_st(ch + CH_TAIL, tail + 1);
+        __vx_st(ch + CH_COUNT, count + 1);
+        vx_spin_unlock((i64*)(ch + CH_LOCK));
+        return;
+    }
+    // (3) Lleno (o rendezvous sin receptor) -> guardo mi valor en MI slot ELEM,
+    // me encolo (la fibra ES el nodo) y bloqueo.
+    i64 self = vx_cur_fiber();
+    vx_fib_set_elem(self, v);
+    vx_wq_push(ch + CH_SWQ_H, ch + CH_SWQ_T, self);
+    vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park, ch + CH_LOCK);
+    // Reanudada: un receptor tomo mi slot ELEM directamente.  Nada que leer.
+}
+
+/**
+ * @brief Recibe un valor.  Prioridad: (1) dato en el buffer (moviendo un emisor
+ *        en espera al hueco liberado); (2) emisor en espera (rendezvous) ->
+ *        entrega directa; (3) bloquear en la recvq.
+ * @return el valor recibido.
+ */
+public i64 vx_chan_recv(i64 ch) {
+    vx_spin_lock((i64*)(ch + CH_LOCK));
+    i64 count = __vx_ld(ch + CH_COUNT);
+    // (1) Dato en el buffer.
+    if (count > 0) {
+        i64 mask = __vx_ld(ch + CH_MASK);
+        i64 head = __vx_ld(ch + CH_HEAD);
+        i64 val = __vx_ld(ch + CH_HDR + (head & mask) * 8);
+        __vx_st(ch + CH_HEAD, head + 1);
+        // Un emisor en espera? su valor (slot ELEM) va al hueco liberado; wake.
+        i64 s = vx_wq_pop(ch + CH_SWQ_H, ch + CH_SWQ_T);
+        if (s != 0) {
+            i64 sv = vx_fib_get_elem(s);
+            i64 tail = __vx_ld(ch + CH_TAIL);
+            __vx_st(ch + CH_HDR + (tail & mask) * 8, sv);
+            __vx_st(ch + CH_TAIL, tail + 1);
+            // count: -1 (leimos) +1 (metimos) = igual.
+            vx_spin_unlock((i64*)(ch + CH_LOCK));
+            vx_wake(s);
+        } else {
+            __vx_st(ch + CH_COUNT, count - 1);
+            vx_spin_unlock((i64*)(ch + CH_LOCK));
+        }
+        return val;
+    }
+    // (2) Buffer vacio + emisor en espera (rendezvous cap 0) -> directa.
+    i64 s = vx_wq_pop(ch + CH_SWQ_H, ch + CH_SWQ_T);
+    if (s != 0) {
+        i64 val = vx_fib_get_elem(s);
+        vx_spin_unlock((i64*)(ch + CH_LOCK));
+        vx_wake(s);
+        return val;
+    }
+    // (3) Nada -> me encolo (la fibra ES el nodo) y bloqueo; el sender pondra
+    // mi slot ELEM.
+    i64 self = vx_cur_fiber();
+    vx_fib_set_elem(self, 0);
+    vx_wq_push(ch + CH_RWQ_H, ch + CH_RWQ_T, self);
+    vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park, ch + CH_LOCK);
+    // Reanudada: el sender dejo el valor en mi slot ELEM.  Uso 'self' capturado
+    // (sobrevive el park) en vez de re-llamar cur_fiber() tras migrar de worker.
+    return vx_fib_get_elem(self);
+}
+

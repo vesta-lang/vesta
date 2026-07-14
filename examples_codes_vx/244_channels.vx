@@ -1,0 +1,28 @@
+// Canales buffered sobre el scheduler M:N de fibras: productor/consumidor con
+// buffer pequeno (cap 4) -> fuerza park/wake real (buffer lleno/vacio).
+import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
+import "vx_chan" only vx_chan_new, vx_chan_send, vx_chan_recv, vx_chan_free;
+
+i64 g_ch = 0;
+i64 g_sum = 0;
+i64 g_n = 100;
+
+void producer(i64 arg) {
+    i64 i = 0;
+    while (i < g_n) { vx_chan_send(g_ch, i + 1); i = i + 1; }
+}
+void consumer(i64 arg) {
+    i64 s = 0;
+    i64 i = 0;
+    while (i < g_n) { s = s + vx_chan_recv(g_ch); i = i + 1; }
+    g_sum = s;
+}
+i32 main() {
+    g_ch = vx_chan_new(4);
+    vx_pool_start(2);
+    vx_pool_submit((i64)(cfn(i64) -> void) consumer, 0);
+    vx_pool_submit((i64)(cfn(i64) -> void) producer, 0);
+    vx_pool_join();
+    vx_chan_free(g_ch);
+    return (g_sum == 5050) ? 42 : (i32)g_sum;   // 1+2+..+100 = 5050
+}

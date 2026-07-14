@@ -213,6 +213,10 @@ comptime i64 VXP_FIB_ARG   = 16;  ///< qword: argumento del body.
 comptime i64 VXP_FIB_NEXT  = 24;  ///< qword: enlace de freelist / wait-queue.
 comptime i64 VXP_FIB_PARKFN  = 32; ///< cfn(arg,fib)->void diferida (park hand-off) o 0.
 comptime i64 VXP_FIB_PARKARG = 40; ///< arg de PARKFN.
+comptime i64 VXP_FIB_ELEM  = 48;  ///< qword: slot de valor para entrega directa
+                                  ///< (canales).  Vive en el STRUCT (heap), no
+                                  ///< en la pila de la fibra -> estable cuando
+                                  ///< otra fibra lo lee/escribe (cross-fibra).
 comptime i64 VXP_FIB_HDR   = 64;  ///< bytes reservados al header (alineado).
 // Pila por fibra.  16 KiB (no 64 KiB fijos: no escalan -- 100k fibras serian
 // GiBs aunque esten ociosas).  Crecer bajo demanda (stack chaining/segmentado)
@@ -451,6 +455,42 @@ public i64 vx_cur_fiber() {
 /// wait-queue bajo el lock (es su unico dueno).
 public void vx_wake(i64 fib) {
     __vxp_sched_enqueue(fib);
+}
+
+/// Slot de valor de la fibra (entrega directa de canales).  Vive en el struct
+/// (heap), no en la pila -> estable cuando otra fibra lo escribe/lee.
+public void vx_fib_set_elem(i64 fib, i64 v) {
+    __vxp_store64((i64*)(fib + VXP_FIB_ELEM), v);
+}
+public i64 vx_fib_get_elem(i64 fib) {
+    return __vxp_load64((i64*)(fib + VXP_FIB_ELEM));
+}
+
+/// Wait-queue de FIBRAS (enlazadas por VXP_FIB_NEXT, en el struct heap).
+/// head_ptr/tail_ptr = direcciones de dos slots i64 del llamante (canal).  Bajo
+/// el lock del canal.  La fibra ES el nodo -> estable cross-fibra (a diferencia
+/// de un nodo en la pila, que en algun backend no sobrevive al context-switch).
+public void vx_wq_push(i64 head_ptr, i64 tail_ptr, i64 fib) {
+    __vxp_store64((i64*)(fib + VXP_FIB_NEXT), 0);
+    i64 tl = __vxp_load64((i64*)tail_ptr);
+    if (tl == 0) {
+        __vxp_store64((i64*)head_ptr, fib);
+    } else {
+        __vxp_store64((i64*)(tl + VXP_FIB_NEXT), fib);
+    }
+    __vxp_store64((i64*)tail_ptr, fib);
+}
+public i64 vx_wq_pop(i64 head_ptr, i64 tail_ptr) {
+    i64 hd = __vxp_load64((i64*)head_ptr);
+    if (hd == 0) {
+        return 0;
+    }
+    i64 nx = __vxp_load64((i64*)(hd + VXP_FIB_NEXT));
+    __vxp_store64((i64*)head_ptr, nx);
+    if (nx == 0) {
+        __vxp_store64((i64*)tail_ptr, 0);
+    }
+    return hd;
 }
 
 // ---------------------------------------------------------------------------
