@@ -1,0 +1,52 @@
+namespace ejemplos.pool_workstealing;
+
+// 241_pool_workstealing.vx
+//
+// Scheduler M:N con work-stealing: 4 hilos WORKER del SO se reparten 1000 tareas
+// ligeras con robo de trabajo.  Cada tarea incrementa un contador compartido 100
+// veces bajo el monitor -> 1000*100 = 100000 EXACTO (exclusion mutua real +
+// balanceo de carga entre workers).
+//
+// Demuestra: muchas tareas (>> hilos) repartidas sobre pocos hilos del SO, con
+// deques por-worker y robo cuando uno se queda ocioso.  Coste CERO si el
+// programa no importa vx_pool (no se bundlea nada).
+//
+//   vm -m aot --vx 241_pool_workstealing.vx --format pe -o p.exe && ./p.exe  (exit 42)
+
+import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
+import "vx_sync" only vx_lock, vx_unlock;
+
+i64 g_lock = 0;     // objeto de lock (host_ptr; palabra de monitor en obj+16)
+i64 g_counter = 0;  // contador compartido entre workers
+
+// Cuerpo de una tarea: incrementa el contador 100 veces bajo el monitor.
+// El pool la invoca como body(arg); arg no se usa aqui.
+void task_body(i64 arg) {
+    i64 i = 0;
+    while (i < 100) {
+        vx_lock((i64*)g_lock);
+        g_counter = g_counter + 1;
+        vx_unlock((i64*)g_lock);
+        i = i + 1;
+    }
+}
+
+i32 main() {
+    g_lock = (i64)malloc(4 * 8);
+    i64* lo = (i64*)g_lock; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
+    g_counter = 0;
+
+    vx_pool_start(4);   // 4 hilos worker
+
+    // 1000 tareas ligeras: mucho mas que workers -> el balanceo las reparte.
+    i64 t = 0;
+    while (t < 1000) {
+        vx_pool_submit((i64)(cfn(i64) -> void) task_body, 0);
+        t = t + 1;
+    }
+
+    vx_pool_join();     // espera a que se drenen todas + para los workers
+
+    // 1000 tareas * 100 incrementos = 100000.
+    return (g_counter == 100000) ? 42 : (i32)(g_counter % 1000);
+}
