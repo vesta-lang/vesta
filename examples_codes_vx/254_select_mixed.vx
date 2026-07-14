@@ -1,0 +1,88 @@
+// select MIXTO (recepcion + envio en una sola espera): un reenviador ("pump")
+// mueve M elementos de un canal `src` a un canal `dst`.  Mantiene un pequeno
+// buffer interno (2 huecos) y en cada vuelta ofrece A LA VEZ, via vx_chan_select,
+// dos casos: RECIBIR de `src` (si aun quedan y hay hueco) y ENVIAR a `dst` (si
+// tiene algo pendiente).  Cuando ambos casos estan disponibles, el select elige
+// el que este listo -> multiplexado real de ambas direcciones.  El orden no es
+// determinista pero la SUMA transferida SI -> verificacion estable.
+//
+// Los casos se pasan como un array de tripletas i64 [chan, dir, val] (el layout
+// del overlay SelCase de vx_chan): dir 0 = recepcion (val recibe el valor), dir
+// 1 = envio (val es el valor a enviar).  3 qwords por caso.
+import std.types only uintptr;
+import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
+import "vx_chan" only vx_chan_new, vx_chan_send, vx_chan_recv, vx_chan_free,
+                     vx_chan_select;
+
+uintptr src = 0;
+uintptr dst = 0;
+i64 g_sum = 0;
+const i64 M = 200;
+const i64 CASE_RECV = 0;
+const i64 CASE_SEND = 1;
+
+void producer(i64 a) {
+    for (i64 k = 0; k < M; k++) {
+        vx_chan_send(src, k + 1);          // 1, 2, ..., M
+    }
+}
+void consumer(i64 a) {
+    for (i64 k = 0; k < M; k++) {
+        g_sum += vx_chan_recv(dst);
+    }
+}
+void pump(i64 a) {
+    i64[2] buf;                            // buffer interno de 2 huecos
+    i64 head = 0;
+    i64 tail = 0;
+    i64 cnt = 0;
+    i64 got = 0;
+    i64 sent = 0;
+    while (sent < M) {
+        i64[6] cases;                      // hasta 2 casos * 3 qwords [chan, dir, val]
+        i64 nc = 0;
+        i64 recv_case = -1;
+        i64 send_case = -1;
+        if (got < M && cnt < 2) {          // ofrece RECIBIR si quedan y hay hueco
+            cases[nc * 3 + 0] = (i64) src;
+            cases[nc * 3 + 1] = CASE_RECV;
+            cases[nc * 3 + 2] = 0;
+            recv_case = nc;
+            nc += 1;
+        }
+        if (cnt > 0) {                      // ofrece ENVIAR si tiene pendiente
+            cases[nc * 3 + 0] = (i64) dst;
+            cases[nc * 3 + 1] = CASE_SEND;
+            cases[nc * 3 + 2] = buf[head];
+            send_case = nc;
+            nc += 1;
+        }
+        i64 idx = vx_chan_select((i64)&cases[0], nc);
+        if (idx == recv_case) {
+            buf[tail] = cases[recv_case * 3 + 2];   // valor recibido (escrito por el select)
+            tail = (tail + 1) % 2;
+            cnt += 1;
+            got += 1;
+        } else {
+            head = (head + 1) % 2;          // el pendiente ofrecido se envio
+            cnt -= 1;
+            sent += 1;
+        }
+    }
+}
+i32 main() {
+    src = vx_chan_new(2);
+    dst = vx_chan_new(2);
+    vx_pool_start(4);
+    vx_pool_submit((i64)(cfn(i64) -> void) consumer, 0);
+    vx_pool_submit((i64)(cfn(i64) -> void) pump, 0);
+    vx_pool_submit((i64)(cfn(i64) -> void) producer, 0);
+    vx_pool_join();
+    vx_chan_free(src);
+    vx_chan_free(dst);
+    // suma transferida = 1+2+...+M = M*(M+1)/2.
+    if (g_sum == M * (M + 1) / 2) {
+        return 42;
+    }
+    return 1;
+}
