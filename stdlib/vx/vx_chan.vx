@@ -33,7 +33,7 @@
 
 import std.types only uintptr;
 import "vx_atomic" only vx_spin_lock, vx_spin_unlock;
-import "vx_pool" only vx_park, vx_wake, vx_cur_fiber, vx_wq_push, vx_wq_pop,
+import "vx_pool" only fiber, vx_park, vx_wake, vx_cur_fiber, vx_wq_push, vx_wq_pop,
                      vx_fib_set_elem, vx_fib_get_elem;
 
 // ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ public void vx_chan_send(uintptr ch_h, i64 v) {
         return;
     }
     // (1) Receptor en espera -> entrega directa en su slot ELEM (heap).
-    i64 r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
+    fiber r = vx_wq_pop((uintptr)&ch.rwq_h, (uintptr)&ch.rwq_t);
     if (r != 0) {
         vx_fib_set_elem(r, v);
         vx_spin_unlock(&ch.lock);
@@ -144,9 +144,9 @@ public void vx_chan_send(uintptr ch_h, i64 v) {
     }
     // (3) Lleno (o rendezvous sin receptor) -> guardo mi valor en MI slot ELEM,
     // me encolo (la fibra ES el nodo) y bloqueo.
-    i64 self = vx_cur_fiber();
+    fiber self = vx_cur_fiber();
     vx_fib_set_elem(self, v);
-    vx_wq_push((i64)&ch.swq_h, (i64)&ch.swq_t, self);
+    vx_wq_push((uintptr)&ch.swq_h, (uintptr)&ch.swq_t, self);
     vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park, (i64)&ch.lock);
     // Reanudada: un receptor tomo mi slot ELEM directamente.  Nada que leer.
 }
@@ -167,7 +167,7 @@ public i64 vx_chan_recv(uintptr ch_h) {
         i64 val = *rslot;
         ch.head = ch.head + 1;
         // Un emisor en espera? su valor (slot ELEM) va al hueco liberado; wake.
-        i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+        fiber s = vx_wq_pop((uintptr)&ch.swq_h, (uintptr)&ch.swq_t);
         if (s != 0) {
             i64* wslot = (i64*)__vxch_slot(ptr, ch.tail, ch.mask);
             *wslot = vx_fib_get_elem(s);
@@ -182,7 +182,7 @@ public i64 vx_chan_recv(uintptr ch_h) {
         return val;
     }
     // (2) Buffer vacio + emisor en espera (rendezvous cap 0) -> directa.
-    i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+    fiber s = vx_wq_pop((uintptr)&ch.swq_h, (uintptr)&ch.swq_t);
     if (s != 0) {
         i64 val = vx_fib_get_elem(s);
         vx_spin_unlock(&ch.lock);
@@ -199,9 +199,9 @@ public i64 vx_chan_recv(uintptr ch_h) {
     }
     // (3) Nada -> me encolo (la fibra ES el nodo) y bloqueo; el sender pondra
     // mi slot ELEM.  Uso el `self` capturado (no re-llamo cur_fiber tras el park).
-    i64 self = vx_cur_fiber();
+    fiber self = vx_cur_fiber();
     vx_fib_set_elem(self, 0);
-    vx_wq_push((i64)&ch.rwq_h, (i64)&ch.rwq_t, self);
+    vx_wq_push((uintptr)&ch.rwq_h, (uintptr)&ch.rwq_t, self);
     vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park, (i64)&ch.lock);
     return vx_fib_get_elem(self);
 }
@@ -221,17 +221,17 @@ public void vx_chan_close(uintptr ch_h) {
     // Despertar a TODOS los receptores en espera -> reciben 0 (drenado).  El
     // wake solo encola en el scheduler (no re-toma el lock del canal) -> seguro
     // bajo el lock.
-    i64 r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
+    fiber r = vx_wq_pop((uintptr)&ch.rwq_h, (uintptr)&ch.rwq_t);
     while (r != 0) {
         vx_fib_set_elem(r, 0);
         vx_wake(r);
-        r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
+        r = vx_wq_pop((uintptr)&ch.rwq_h, (uintptr)&ch.rwq_t);
     }
     // Despertar emisores bloqueados (su valor se descarta).
-    i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+    fiber s = vx_wq_pop((uintptr)&ch.swq_h, (uintptr)&ch.swq_t);
     while (s != 0) {
         vx_wake(s);
-        s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+        s = vx_wq_pop((uintptr)&ch.swq_h, (uintptr)&ch.swq_t);
     }
     vx_spin_unlock(&ch.lock);
 }
@@ -258,7 +258,7 @@ public i64 vx_chan_try_send(uintptr ch_h, i64 v) {
         return 0;
     }
     // (1) Receptor en espera -> entrega directa.
-    i64 r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
+    fiber r = vx_wq_pop((uintptr)&ch.rwq_h, (uintptr)&ch.rwq_t);
     if (r != 0) {
         vx_fib_set_elem(r, v);
         vx_spin_unlock(&ch.lock);
@@ -295,7 +295,7 @@ public i64 vx_chan_try_recv(uintptr ch_h, i64* out) {
         i64* rslot = (i64*)__vxch_slot(ptr, ch.head, ch.mask);
         i64 val = *rslot;
         ch.head = ch.head + 1;
-        i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+        fiber s = vx_wq_pop((uintptr)&ch.swq_h, (uintptr)&ch.swq_t);
         if (s != 0) {
             i64* wslot = (i64*)__vxch_slot(ptr, ch.tail, ch.mask);
             *wslot = vx_fib_get_elem(s);
@@ -310,7 +310,7 @@ public i64 vx_chan_try_recv(uintptr ch_h, i64* out) {
         return 1;
     }
     // (2) Emisor en espera (rendezvous) -> entrega directa.
-    i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+    fiber s = vx_wq_pop((uintptr)&ch.swq_h, (uintptr)&ch.swq_t);
     if (s != 0) {
         i64 val = vx_fib_get_elem(s);
         vx_spin_unlock(&ch.lock);

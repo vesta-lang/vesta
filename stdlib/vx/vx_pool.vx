@@ -49,6 +49,13 @@
 
 import std.types only uintptr, usize;
 
+// Handle de una FIBRA (puntero host al struct Fiber en el heap).  Tipo nominal
+// distinto de un uintptr/i64 cualquiera -> el codigo CSP (canales, mutexes)
+// distingue "una fibra" de "una direccion" y no los mezcla por accidente.  El
+// deque interno sigue guardando el valor crudo (via __vxp_load64/store64); la
+// conversion fiber<->i64 ocurre solo en la frontera de la API publica.
+public typedef uintptr fiber new;
+
 // ---------------------------------------------------------------------------
 // FFI: hilos del SO + yield del SO.
 // ---------------------------------------------------------------------------
@@ -458,52 +465,52 @@ void __vxp_sched_enqueue(i64 fib) {
 // la revive con vx_wake tras sacar su nodo de la wait-queue bajo el lock.
 // ---------------------------------------------------------------------------
 
-/// @return Fiber* de la fibra en ejecucion (0 si estamos en main / no-fibra).
-public i64 vx_cur_fiber() {
-    return __vxp_cur_fiber;
+/// @return la fibra en ejecucion (0 si estamos en main / no-fibra).
+public fiber vx_cur_fiber() {
+    return (fiber) __vxp_cur_fiber;
 }
 
 /// Despierta @p fib (BLOCKED -> READY + re-encolar).  Lo llama el waker (sender
 /// del canal, unlock del mutex, timer...) DESPUES de haberla sacado de la
 /// wait-queue bajo el lock (es su unico dueno).
-public void vx_wake(i64 fib) {
-    __vxp_sched_enqueue(fib);
+public void vx_wake(fiber fib) {
+    __vxp_sched_enqueue((i64) fib);
 }
 
 /// Slot de valor de la fibra (entrega directa de canales).  Vive en el struct
 /// (heap), no en la pila -> estable cuando otra fibra lo escribe/lee.
-public void vx_fib_set_elem(i64 fib, i64 v) {
-    Fiber(fib).elem = v;
+public void vx_fib_set_elem(fiber fib, i64 v) {
+    Fiber((i64) fib).elem = v;
 }
-public i64 vx_fib_get_elem(i64 fib) {
-    return Fiber(fib).elem;
+public i64 vx_fib_get_elem(fiber fib) {
+    return Fiber((i64) fib).elem;
 }
 
 /// Wait-queue de FIBRAS (enlazadas por VXP_FIB_NEXT, en el struct heap).
-/// head_ptr/tail_ptr = direcciones de dos slots i64 del llamante (canal).  Bajo
-/// el lock del canal.  La fibra ES el nodo -> estable cross-fibra (a diferencia
-/// de un nodo en la pila, que en algun backend no sobrevive al context-switch).
-public void vx_wq_push(i64 head_ptr, i64 tail_ptr, i64 fib) {
-    Fiber(fib).next = 0;
-    i64 tl = __vxp_load64((i64*)tail_ptr);
+/// head_ptr/tail_ptr = direcciones de dos slots del llamante (canal).  Bajo el
+/// lock del canal.  La fibra ES el nodo -> estable cross-fibra (a diferencia de
+/// un nodo en la pila, que en algun backend no sobrevive al context-switch).
+public void vx_wq_push(uintptr head_ptr, uintptr tail_ptr, fiber fib) {
+    Fiber((i64) fib).next = 0;
+    i64 tl = __vxp_load64((i64*)(i64) tail_ptr);
     if (tl == 0) {
-        __vxp_store64((i64*)head_ptr, fib);
+        __vxp_store64((i64*)(i64) head_ptr, (i64) fib);
     } else {
-        Fiber(tl).next = fib;
+        Fiber(tl).next = (i64) fib;
     }
-    __vxp_store64((i64*)tail_ptr, fib);
+    __vxp_store64((i64*)(i64) tail_ptr, (i64) fib);
 }
-public i64 vx_wq_pop(i64 head_ptr, i64 tail_ptr) {
-    i64 hd = __vxp_load64((i64*)head_ptr);
+public fiber vx_wq_pop(uintptr head_ptr, uintptr tail_ptr) {
+    i64 hd = __vxp_load64((i64*)(i64) head_ptr);
     if (hd == 0) {
-        return 0;
+        return (fiber) 0;
     }
     i64 nx = Fiber(hd).next;
-    __vxp_store64((i64*)head_ptr, nx);
+    __vxp_store64((i64*)(i64) head_ptr, nx);
     if (nx == 0) {
-        __vxp_store64((i64*)tail_ptr, 0);
+        __vxp_store64((i64*)(i64) tail_ptr, 0);
     }
-    return hd;
+    return (fiber) hd;
 }
 
 // ---------------------------------------------------------------------------
