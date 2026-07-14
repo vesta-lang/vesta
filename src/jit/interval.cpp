@@ -47,6 +47,16 @@ InstrRoles operand_roles(MOp op) noexcept {
         r.src1 = R::USE;
         r.src2 = R::USE;
         break;
+    /* Atomicas: CAS dst es IN/OUT (expected -> old); ADD dst solo salida. */
+    case MOp::ATOMICCAS_V:
+        r.dst = R::USEDEF; /* entra expected, sale old */
+        r.src1 = R::USE;   /* addr */
+        r.src2 = R::USE;   /* desired */
+        break;
+    case MOp::ATOMICADD_V:
+        r.dst = R::USEDEF; /* entra delta, sale old (xadd 2-address) */
+        r.src1 = R::USE;   /* addr */
+        break;
 
     /* Unarios: dst def, src1 use. */
     case MOp::MOV:
@@ -416,6 +426,9 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 in.op == MOp::CALL_SYM /* AOT: clobbea caller-saved */
                 || in.op == MOp::DIVMOD_V || in.op == MOp::LOAD_VM ||
                 in.op == MOp::STORE_VM
+                /* Atomicas: el rewrite usa RAX + scratch fijo -> call-position
+                 * para que los vregs vivos vayan a callee-saved. */
+                || in.op == MOp::ATOMICCAS_V || in.op == MOp::ATOMICADD_V
                 /* Phase AS inc.5: el inline-asm clobbea caller-saved (en v1
                  * conservador: cualquiera) -> los vregs vivos a traves van a
                  * callee-saved/spill.  Los binding precoloreados son EXENTOS:

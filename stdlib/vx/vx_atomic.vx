@@ -33,49 +33,47 @@
 //  x86-64: lock cmpxchg / lock xadd / xchg / mfence / pause.
 // ===========================================================================
 
+// Los primitivos de 64 bits (cas/add/load/store) usan los BUILTINS del lenguaje
+// (atomic_cas_i64/atomic_add_i64/atomic_load_i64/atomic_store_i64): el backend
+// (interp/JIT/AOT) los baja a la instruccion x86 atomica nativa (lock cmpxchg /
+// lock xadd / mov) con el regalloc gestionando los registros -> SIN inline-asm
+// (que en Win64 corrompia un valor vivo del caller: rsi/rdi/r8... como scratch
+// del asm no se modelaban como clobber).  Interfaz amigable + composable encima.
+
 /// CAS de 64 bits: si `*addr == expected` escribe `desired`.  Devuelve el valor
-/// ANTIGUO (== expected si triunfo).  `lock cmpxchg [mem], reg`: rax=expected
-/// (in) / old (out), reg=desired.  Barrera completa.
+/// ANTIGUO (== expected si triunfo).  Barrera completa (lock cmpxchg).
 @Target("arch:x86_64")
 public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
-    register("rsi") i64* a = addr;
-    register("rax") i64 ex = expected;
-    register("rdx") i64 de = desired;
-    asm volatile { lock cmpxchg [rsi], rdx };
-    return ex; // rax = old
+    return atomic_cas_i64(addr, expected, desired);
 }
 
-/// fetch-and-add de 64 bits (`lock xadd`).  Devuelve el valor ANTIGUO.
+/// fetch-and-add de 64 bits.  Devuelve el valor ANTIGUO (lock xadd).
 @Target("arch:x86_64")
 public i64 vx_atomic_add64(i64* addr, i64 delta) {
-    register("rsi") i64* a = addr;
-    register("rax") i64 d = delta;
-    asm volatile { lock xadd [rsi], rax };
-    return d; // rax = old
+    return atomic_add_i64(addr, delta);
 }
 
-/// exchange atomico (`xchg [mem], reg` -- implicitamente locked en x86).
-/// Devuelve el valor ANTIGUO.
+/// exchange atomico.  Devuelve el valor ANTIGUO.  COMPUESTO sobre CAS (no hay
+/// builtin de swap): bucle CAS hasta triunfar.
 @Target("arch:x86_64")
 public i64 vx_atomic_swap64(i64* addr, i64 v) {
-    register("rsi") i64* a = addr;
-    register("rax") i64 x = v;
-    asm volatile { xchg [rsi], rax };
-    return x; // rax = old
+    i64 old = atomic_load_i64(addr);
+    while (atomic_cas_i64(addr, old, v) != old) {
+        old = atomic_load_i64(addr);
+    }
+    return old;
 }
 
-/// Load atomico de 64 bits (mov alineado ya es atomico).  Llamada opaca ->
-/// barrera del compilador.
+/// Load atomico de 64 bits (mov alineado ya es atomico; acquire gratis en TSO).
 @Target("arch:x86_64")
 public i64 vx_atomic_load64(i64* addr) {
-    return *addr;
+    return atomic_load_i64(addr);
 }
 
-/// Store atomico de 64 bits (mov alineado; release en x86-TSO).  Llamada opaca
-/// -> barrera del compilador.
+/// Store atomico de 64 bits (mov alineado; release en x86-TSO).
 @Target("arch:x86_64")
 public void vx_atomic_store64(i64* addr, i64 v) {
-    *addr = v;
+    atomic_store_i64(addr, v);
 }
 
 /// Barrera de memoria COMPLETA (StoreLoad; x86 solo reordena Store->Load).

@@ -1929,6 +1929,63 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * [dst] = [src]; [src] = 0.  Inline puro (3 ops de memoria host)
              * cuando ambas direcciones son host_ptr (slots de unique/shared
              * en el frame host).  VM-addr -> fallback (raro). */
+            /* Atomicas del lenguaje (Phase Z / FN.4): a instrucciones x86
+             * atomicas nativas.  Buen uso de registros: CAS solo fija RAX
+             * (obligado por la ISA de cmpxchg) via precoloreo de un temp;
+             * addr/desired quedan LIBRES para el allocator.  ADD (xadd) no
+             * fija ningun registro (dst in/out estilo 2-address). */
+            case ir::IrOp::ATOMIC_LD_I64: {
+                flush_pending();
+                if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                /* mov dst, [addr] (load 64-bit alineado = atomico en x86). */
+                O.push_back(
+                    MInstr::make_load(vr(in.dst), vr(in.operands[0]), 8, false));
+                break;
+            }
+            case ir::IrOp::ATOMIC_ST_I64: {
+                flush_pending();
+                if (in.operands.size() != 2) return false;
+                /* mov [addr], val (store alineado; release en x86-TSO). */
+                O.push_back(MInstr::make_store(vr(in.operands[0]),
+                                               vr(in.operands[1]), 8));
+                break;
+            }
+            case ir::IrOp::ATOMIC_ADD_I64: {
+                flush_pending();
+                if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                /* dst = delta; lock xadd [addr], dst (dst = valor viejo). */
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               vr(in.operands[1])));
+                MInstr xa{};
+                xa.op = MOp::ATOMICADD_V;
+                xa.dst = vr(in.dst);          /* in/out: delta -> old */
+                xa.src1 = vr(in.operands[0]); /* addr */
+                O.push_back(xa);
+                break;
+            }
+            case ir::IrOp::ATOMIC_CAS_I64: {
+                flush_pending();
+                if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                /* rax_v = expected (precoloreado a RAX, obligado por cmpxchg);
+                 * lock cmpxchg [addr], desired; dst = rax_v (viejo). */
+                const ir::IrValueId rax_v = new_tmp();
+                out.set_vreg_fixed(static_cast<uint32_t>(rax_v),
+                                   static_cast<uint8_t>(MReg::RAX));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(rax_v),
+                                               vr(in.operands[1])));
+                MInstr cx{};
+                cx.op = MOp::ATOMICCAS_V;
+                cx.dst = vr(rax_v);           /* in/out: expected -> old (RAX) */
+                cx.src1 = vr(in.operands[0]); /* addr */
+                cx.src2 = vr(in.operands[2]); /* desired */
+                O.push_back(cx);
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               vr(rax_v)));
+                break;
+            }
             case ir::IrOp::MVTAKE_IR: {
                 flush_pending();
                 if (in.operands.size() < 2) {

@@ -478,6 +478,23 @@ enum class MOp : uint8_t {
      * call-position (clobber RAX/RDX -> live-across van a callee-saved). */
     DIVMOD_V = 79,
 
+    /* Pseudos atomicos (FN.4 2026-07-14): bajan los IR ops ATOMIC_*_I64 del
+     * lenguaje a instrucciones x86 atomicas nativas, sin inline-asm.  El
+     * rewrite (post-regalloc) los expande usando R11 (scratch reservado) para
+     * la @b direccion y RAX para el valor viejo/esperado; se marcan
+     * call-position (clobber caller-saved -> vregs vivos van a callee-saved).
+     *   ATOMICCAS_V: dst es IN/OUT (entra=expected, sale=old); src1=addr,
+     *                src2=desired.  -> mov rax,dst; lock cmpxchg [addr],desired;
+     *                mov dst,rax.
+     *   ATOMICADD_V: dst=old; src1=addr, src2=delta. -> lock xadd. */
+    ATOMICCAS_V = 203,
+    ATOMICADD_V = 204,
+    /* Instrucciones x86 atomicas que emite el rewrite (operandos fisicos):
+     *   LOCK_CMPXCHG: dst=mem [addr], src1=reg (desired).  F0 REX.W 0F B1 /r.
+     *   LOCK_XADD:    dst=mem [addr], src1=reg (valor).    F0 REX.W 0F C1 /r. */
+    LOCK_CMPXCHG = 205,
+    LOCK_XADD = 206,
+
     /* Pseudo (callback-ABI 2026-06-06): carga el @c ProcessVM* del
      * proceso actual en @c dst.reg (siempre RBX).  Encapsula la
      * decision TLS-direct-vs-call que el thunk hacia a mano:

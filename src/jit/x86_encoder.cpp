@@ -1050,6 +1050,27 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, 0x99);
         return true;
     }
+    case MOp::LOCK_CMPXCHG:
+    case MOp::LOCK_XADD: {
+        /* lock cmpxchg/xadd [mem], reg.  dst = mem [addr], src1 = reg fuente.
+         *   F0 (LOCK) + REX.W + 0F B1/C1 /r.  ModRM.reg = src1, r/m = mem. */
+        if (mi.dst.kind != MOperandKind::MEM ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        put8(out, 0xF0); /* prefijo LOCK */
+        const uint8_t srcreg = static_cast<uint8_t>(mi.src1.reg);
+        const MReg idx = mi.dst.mem_index();
+        const uint8_t rex =
+            rex_byte(true, srcreg, mi.dst.reg,
+                     idx == MReg::NONE ? 0 : static_cast<uint8_t>(idx));
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, mi.op == MOp::LOCK_CMPXCHG ? 0xB1 : 0xC1);
+        emit_modrm_mem(mi.dst, srcreg & 7, out);
+        return true;
+    }
     case MOp::MOVZX:
     case MOp::MOVSX: {
         /* MOVZX/MOVSX dst64, src_mem<width>.  Encoding:

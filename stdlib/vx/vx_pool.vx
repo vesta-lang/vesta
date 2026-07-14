@@ -99,28 +99,23 @@ void __vxp_os_yield() {
 }
 
 // ---------------------------------------------------------------------------
-// Primitivas atomicas / barreras (x86-64 inline-asm).
+// Primitivas atomicas / barreras.  Los RMW y load/store usan los BUILTINS del
+// lenguaje (atomic_cas_i64/atomic_add_i64/atomic_load_i64/atomic_store_i64): el
+// backend los baja a la instruccion x86 atomica nativa con el regalloc
+// gestionando los registros (SIN inline-asm, que en Win64 corrompia un valor
+// vivo del caller al usar rsi/rdi/... como scratch no modelado como clobber).
 // ---------------------------------------------------------------------------
 i64 __vxp_cas64(i64* addr, i64 expected, i64 desired) {
-    register("rsi") i64* a = addr;
-    register("rax") i64 ex = expected;
-    register("rdx") i64 de = desired;
-    asm volatile { lock cmpxchg [rsi], rdx };
-    return ex;
+    return atomic_cas_i64(addr, expected, desired);
 }
 i64 __vxp_fetch_add(i64* addr, i64 delta) {
-    register("rsi") i64* a = addr;
-    register("rax") i64 d = delta;
-    asm volatile { lock xadd [rsi], rax };
-    return d;
+    return atomic_add_i64(addr, delta);
 }
-/// Load de 64 bits (mov alineado atomico).  Llamada opaca -> barrera del compilador.
 i64 __vxp_load64(i64* addr) {
-    return *addr;
+    return atomic_load_i64(addr);
 }
-/// Store de 64 bits (mov alineado).  Llamada opaca -> barrera del compilador.
 void __vxp_store64(i64* addr, i64 v) {
-    *addr = v;
+    atomic_store_i64(addr, v);
 }
 /// mfence: unico barrera HW del algoritmo (StoreLoad del pop del owner; x86-TSO
 /// solo reordena Store->Load).  push (Store->Store) y steal (Load->Load) no la
@@ -216,6 +211,8 @@ comptime i64 VXP_FIB_CTX   = 0;   ///< qword: rsp salvado (fiber_switch lo lee/e
 comptime i64 VXP_FIB_STATE = 8;   ///< qword: FiberState.
 comptime i64 VXP_FIB_ARG   = 16;  ///< qword: argumento del body.
 comptime i64 VXP_FIB_NEXT  = 24;  ///< qword: enlace de freelist / wait-queue.
+comptime i64 VXP_FIB_PARKFN  = 32; ///< cfn(arg,fib)->void diferida (park hand-off) o 0.
+comptime i64 VXP_FIB_PARKARG = 40; ///< arg de PARKFN.
 comptime i64 VXP_FIB_HDR   = 64;  ///< bytes reservados al header (alineado).
 // Pila por fibra.  16 KiB (no 64 KiB fijos: no escalan -- 100k fibras serian
 // GiBs aunque esten ociosas).  Crecer bajo demanda (stack chaining/segmentado)
@@ -437,6 +434,26 @@ void __vxp_sched_enqueue(i64 fib) {
 }
 
 // ---------------------------------------------------------------------------
+// Primitivas PUBLICAS de suspension para construir canales/mutexes/timers sobre
+// el scheduler.  El llamante posee sus wait-queues (nodos en la pila de la fibra
+// que se bloquea; ver vx_chan) -- vx_pool solo park/wake/identidad.  Portable a
+// select/close: una fibra se bloquea con vx_park (hand-off del lock) y otro lado
+// la revive con vx_wake tras sacar su nodo de la wait-queue bajo el lock.
+// ---------------------------------------------------------------------------
+
+/// @return Fiber* de la fibra en ejecucion (0 si estamos en main / no-fibra).
+public i64 vx_cur_fiber() {
+    return __vxp_cur_fiber;
+}
+
+/// Despierta @p fib (BLOCKED -> READY + re-encolar).  Lo llama el waker (sender
+/// del canal, unlock del mutex, timer...) DESPUES de haberla sacado de la
+/// wait-queue bajo el lock (es su unico dueno).
+public void vx_wake(i64 fib) {
+    __vxp_sched_enqueue(fib);
+}
+
+// ---------------------------------------------------------------------------
 // resume / yield / exit.  Nunca se sale de una fibra salvo por el TRAMPOLIN.
 // ---------------------------------------------------------------------------
 
@@ -459,6 +476,26 @@ public void vx_yield() {
     // Salva el ctx de la fibra, vuelve al scheduler (dentro de resume()).
     __vxp_fiber_switch((u64)(f + VXP_FIB_CTX), (u64)__vxp_my_sched());
     // Al ser reanudada, la ejecucion continua aqui.
+}
+
+/// BLOQUEA la fibra actual (state=BLOCKED) y cede al scheduler.  HAND-OFF de
+/// park (estilo gopark): la fibra NO se re-encola; queda "en posesion" de quien
+/// la bloquea (canal/mutex).  @p parkfn (cfn(arg,fib)->void, o 0) la ejecuta el
+/// WORKER *despues* del context-switch -> la fibra ya esta fuera de CPU cuando
+/// se hace visible al waker (elimina el wakeup perdido: p.ej. parkfn = soltar el
+/// lock del canal tras haber encolado esta fibra en su wait-queue).  Un
+/// `__vxp_sched_enqueue(fib)` posterior la despierta y la ejecucion continua
+/// aqui.  main (no-fibra) -> no-op (no se puede parkear el hilo principal).
+public void vx_park(i64 parkfn, i64 parkarg) {
+    i64 f = __vxp_cur_fiber;
+    if (f == 0) {
+        return; // main / fuera de fibra: no-op
+    }
+    __vxp_store64((i64*)(f + VXP_FIB_PARKFN), parkfn);
+    __vxp_store64((i64*)(f + VXP_FIB_PARKARG), parkarg);
+    __vxp_store64((i64*)(f + VXP_FIB_STATE), VXP_BLOCKED);
+    __vxp_fiber_switch((u64)(f + VXP_FIB_CTX), (u64)__vxp_my_sched());
+    // Reanudada por un wake: continua aqui.
 }
 
 /// TRAMPOLIN DE SALIDA: unica forma de abandonar una fibra.  El body cae aqui al
@@ -522,9 +559,18 @@ void __vxp_worker(u64 wid) {
                 __vxp_fiber_destroy(fib);   // unico sitio: free + pending--
             } else if (st == VXP_READY) {
                 __vxp_sched_enqueue(fib);   // cedio: re-encolar (runnable)
+            } else if (st == VXP_BLOCKED) {
+                // HAND-OFF de park: la fibra ya esta fuera de CPU.  Ejecutar su
+                // accion diferida (encolar en wait-queue del canal + soltar su
+                // lock) AHORA la hace visible al waker sin wakeup perdido.  No
+                // re-encolar: la posee quien la bloqueo; un wake la revive.
+                i64 pf = __vxp_load64((i64*)(fib + VXP_FIB_PARKFN));
+                if (pf != 0) {
+                    __vxp_store64((i64*)(fib + VXP_FIB_PARKFN), 0); // una vez
+                    i64 pa = __vxp_load64((i64*)(fib + VXP_FIB_PARKARG));
+                    ((cfn(i64, i64) -> void) pf)(pa, fib);
+                }
             }
-            // VXP_BLOCKED: no hacer nada (la posee quien la bloqueo; un wake la
-            // re-encolara via sched_enqueue).
         }
     }
 }

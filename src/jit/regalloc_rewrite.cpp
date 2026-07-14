@@ -1262,6 +1262,72 @@ struct Lowerer {
             return;
         }
 
+        if (op == MOp::ATOMICADD_V) {
+            /* lock xadd [addr], val.  dst (in/out) trae delta y sale con el
+             * valor viejo; src1 = addr.  SIN registro fijo: dst y addr los
+             * asigno el allocator.  Spills -> scr1 (r11) para addr y un
+             * caller-saved libre (r10/r9) para el valor.  call-position ->
+             * los caller-saved no tienen vregs vivos aparte de estos operandos. */
+            const MOperand d = resolve(in.dst);  // delta in / old out
+            const MOperand a = resolve(in.src1); // addr
+            MReg base;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                base = scr1;
+            } else {
+                base = static_cast<MReg>(a.reg);
+            }
+            MReg valreg;
+            const bool val_spilled = (d.kind == MOperandKind::MEM);
+            if (val_spilled) {
+                valreg = (base != MReg::R10) ? MReg::R10 : MReg::R9;
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(valreg), d));
+            } else {
+                valreg = static_cast<MReg>(d.reg);
+            }
+            MInstr xa{};
+            xa.op = MOp::LOCK_XADD;
+            xa.dst = MOperand::make_mem(base, 0); // [addr]
+            xa.src1 = reg(valreg);                // valor (in/out)
+            out.push_back(xa);
+            if (val_spilled) {
+                out.push_back(MInstr::make_unary(MOp::MOV, d, reg(valreg)));
+            }
+            return;
+        }
+
+        if (op == MOp::ATOMICCAS_V) {
+            /* lock cmpxchg [addr], desired.  dst (in/out) esta PRECOLOREADO a
+             * RAX (obligado por la ISA de cmpxchg): entra expected, sale old.
+             * addr y desired son LIBRES (el precoloreo garantiza que no caen en
+             * RAX).  Spills -> scr1 (r11) para addr, caller-saved libre para
+             * desired.  call-position: los caller-saved estan libres. */
+            const MOperand a = resolve(in.src1);   // addr (!= RAX)
+            const MOperand des = resolve(in.src2); // desired (!= RAX)
+            MReg base;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                base = scr1;
+            } else {
+                base = static_cast<MReg>(a.reg);
+            }
+            MReg srcreg;
+            if (des.kind == MOperandKind::MEM) {
+                srcreg = (base != MReg::R10) ? MReg::R10 : MReg::R9;
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(srcreg), des));
+            } else {
+                srcreg = static_cast<MReg>(des.reg);
+            }
+            MInstr cx{};
+            cx.op = MOp::LOCK_CMPXCHG;
+            cx.dst = MOperand::make_mem(base, 0); // [addr]
+            cx.src1 = reg(srcreg);                // desired
+            out.push_back(cx);
+            /* El viejo queda en RAX = resolve(in.dst) (precoloreado); el selector
+             * ya emitio el MOV final dst_ir <- rax_v.  Nada mas que hacer. */
+            return;
+        }
+
         /* LOAD float HOST: dst es un vreg FP -> MOVSD/MOVSS xmm, [addr]. */
         if (op == MOp::LOAD && is_fp_operand(in.dst)) {
             const uint8_t width = static_cast<uint8_t>(in.flags >> 1);
