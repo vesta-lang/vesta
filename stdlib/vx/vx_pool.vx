@@ -123,8 +123,11 @@ void __vxp_store64(i64* addr, i64 v) {
     *addr = v;
 }
 
-/// Barrera de memoria completa (StoreLoad).  Necesaria en el pop del owner de
-/// Chase-Lev entre publicar `bottom` y leer `top` (x86 reordena Store->Load).
+/// Barrera de memoria completa (StoreLoad).  UNICO mfence del algoritmo: en el
+/// pop del owner de Chase-Lev, entre publicar `bottom` y leer `top`.  x86-TSO
+/// reordena Store->Load (el unico reordenamiento que permite), asi que aqui SI
+/// hace falta la barrera HW; push (Store->Store) y steal (Load->Load) no la
+/// necesitan (x86 no reordena esos pares) -> solo barrera del compilador.
 void __vxp_mfence() {
     asm volatile { mfence };
 }
@@ -184,7 +187,9 @@ i64 __vxp_push(i64 w, i64 body, i64 arg) {
     i64 slot = b & VXP_DQMASK;
     __vxp_body[w * VXP_DQCAP + slot] = body;
     __vxp_arg[w * VXP_DQCAP + slot] = arg;
-    __vxp_mfence();                       // publica los buf antes de avanzar bottom
+    // x86-TSO no reordena Store->Store: los buf quedan visibles antes que bottom
+    // sin barrera HW; basta la barrera del COMPILADOR de la llamada opaca (impide
+    // que el optimizador mueva los stores de buf despues del store de bottom).
     __vxp_store64(&__vxp_bottom[w], b + 1);
     return 1;
 }
@@ -221,7 +226,8 @@ i64 __vxp_pop(i64 w, i64* out_arg) {
 /// mientras top no avance, porque push rechaza cuando b-t>=CAP).
 i64 __vxp_steal(i64 v, i64* out_arg) {
     i64 t = __vxp_load64(&__vxp_top[v]);
-    __vxp_mfence();                       // top-load antes de bottom-load
+    // x86-TSO no reordena Load->Load: el top-load precede al bottom-load sin
+    // barrera HW; las llamadas opacas dan la barrera del compilador.
     i64 b = __vxp_load64(&__vxp_bottom[v]);
     if (t >= b) {
         return 0; // vacia
