@@ -3,7 +3,9 @@
 // En vez de fijar el registro (register("rax")), la lista `( ... )` antes del
 // `{}` declara operandos cuya CLASE es `reg` = "el compilador elige el mejor
 // registro GP libre".  El nombre del enlace se usa en el asm; su valor tras el
-// bloque es la salida (read-back).  El `{}` contiene SOLO asm real.
+// bloque es la salida (read-back).  El `{}` contiene SOLO asm real.  Los
+// clobbers (aqui las flags de `add`) los INFIERE el compilador: no hace falta
+// declararlos.
 //
 //     vm --vx 10_operandos_reg_auto.vx -o out && vm --run out.velb
 // @expect 42
@@ -12,7 +14,7 @@ u64 main() {
         reg x = 15,     // in: el compilador elige el registro
         reg y = 27,     // in
         reg s,          // scratch/salida (sin init): el compilador lo reserva
-    ) clobber(flags) {
+    ) {
         mov s, x
         add s, y
     }

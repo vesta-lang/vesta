@@ -1,13 +1,13 @@
 // Phase AS inc.7: scratch (temporales que el compilador reserva) + labels
 // locales.  Bucle que suma 1..N enteramente en registros elegidos por el
-// compilador.
+// compilador.  Clobbers (flags) inferidos.
 // @expect 55
 u64 main() {
     asm volatile (
         reg n = 10,     // in
         reg acc,        // scratch (acumulador) -> read-back
         reg i,          // scratch (contador)
-    ) clobber(flags) {
+    ) {
         xor acc, acc
         mov i, n
     .loop:
