@@ -1,45 +1,51 @@
 /**
  * @file vx_pool.vx
- * @brief Scheduler M:N con work-stealing para Vex AOT: reparte MUCHAS tareas
- *        ligeras sobre N hilos del SO, con robo de trabajo y balanceo de carga.
- *        SIN libc mas alla de malloc/free; SIN GC; SIN runtime del interprete.
+ * @brief Scheduler M:N con work-stealing (deque Chase-Lev lock-free) para Vex
+ *        AOT: reparte MUCHAS tareas ligeras sobre N hilos del SO, con robo de
+ *        trabajo, cola local por worker y cola global de inyeccion.  SIN libc mas
+ *        alla de malloc; SIN GC; SIN runtime del interprete.
  *
  * @par Regla de oro: coste CERO cuando no se usa
- * Este modulo SOLO entra al binario si el programa lo `import`a y llama a su API
- * (`vx_pool_start`/`vx_pool_submit`/`vx_pool_join`).  Un programa mono-hilo o que
- * use solo `spawn { }` (hilos 1:1) o `@Async`/`await` (cooperativo un hilo) NO
- * bundlea nada de esto: cero hilos, cero deques, cero coste.  Ademas no toca el
- * codegen -> el codigo mono-hilo es byte-identico con o sin este modulo presente.
+ * Solo entra al binario si el programa lo `import`a y usa su API.  No toca el
+ * codegen -> el codigo mono-hilo es byte-identico con o sin este modulo.
  *
- * @par Modelo (increment 1: tareas run-to-completion)
- * N hilos WORKER del SO (CreateThread/pthread), cada uno con su propia DEQUE de
- * tareas.  Una tarea es una fn nativa @c body(arg) que corre ENTERA (sin ceder).
- *   - El propio worker mete/saca de su deque por el EXTREMO INFERIOR (LIFO,
- *     localidad de cache: la ultima tarea creada suele estar caliente).
- *   - Un worker OCIOSO ROBA del extremo SUPERIOR de la deque de OTRO worker
- *     (FIFO en el ladron): balanceo automatico sin cola global contendida.
- *   - `vx_pool_submit` reparte round-robin entre las deques.
- *   - `vx_pool_join` espera a que TODAS las tareas terminen y para los workers.
+ * @par Modelo (tareas run-to-completion)
+ * N workers (hilos del SO), cada uno con una DEQUE Chase-Lev:
+ *   - OWNER (el propio worker) mete/saca por el extremo `bottom` SIN LOCK (solo
+ *     una barrera): push/pop del owner no contienden con nada salvo el ultimo
+ *     elemento.  Es la gracia de Chase-Lev: el dueno trabaja lock-free.
+ *   - LADRON (worker ocioso) roba por el extremo `top` con CAS.  Elige la victima
+ *     de forma PSEUDOALEATORIA (xorshift), no scan lineal -> con muchos workers
+ *     no degrada a O(N) intentos.
+ *   - Una tarea creada POR UN WORKER va a SU propia deque (localidad de cache).
+ *   - Una tarea inyectada desde FUERA (main, que no es owner de ninguna deque)
+ *     va a una COLA GLOBAL (lock) que los workers drenan.  Chase-Lev exige UN
+ *     SOLO owner por deque, por eso el submit externo no puede empujar al bottom
+ *     de un worker.
+ *   - Sin trabajo: backoff (spin PAUSE, luego CEDE la CPU al SO) para no quemar
+ *     un core en vacio.
  *
- * Correccion v1: cada deque se protege con un spinlock de 1 palabra (CAS `lock
- * cmpxchg`).  El camino del propio worker (push/pop) casi nunca contiende; solo
- * el robo toca la deque de otro.  Un futuro increment lo hara lock-free (deque
- * Chase-Lev) para exprimir el ultimo ciclo.
+ * @par Pendiente (futuros increments)
+ *   - Parking real (WaitOnAddress/futex) en vez de yield: dormir al worker ocioso
+ *     y despertarlo en submit (hoy: yield, mejor que puro spin pero aun activo).
+ *   - `__vxp_pending` (contador submit++ / done--) basta para run-to-completion;
+ *     con fibras suspendibles / continuations habra que revisarlo.
  *
  * @par Multiplataforma
- * x86-64.  El unico codigo dependiente de plataforma es el spawn/join del hilo
- * (kernel32 en Windows, libpthread en Linux) y el `gettid`; el resto (deque,
- * atomicos, work-stealing) es Vex puro identico en PE y ELF.
+ * x86-64.  Dependiente de plataforma: spawn/join del hilo (kernel32/pthread) y el
+ * yield (SwitchToThread/sched_yield).  El resto (Chase-Lev, atomicos, robo) es
+ * Vex puro identico en PE y ELF.
  */
 
 // ---------------------------------------------------------------------------
-// FFI: spawn/join de hilos del SO (mismo patron que vx_thread.vx).
+// FFI: hilos del SO + yield.
 // ---------------------------------------------------------------------------
 extern "kernel32.dll" {
     fn CreateThread(u64 attrs, u64 stacksize, u64 startaddr, u64 param,
                     u64 flags, u64 threadid) -> u64;
     fn WaitForSingleObject(u64 handle, u32 ms) -> u32;
     fn CloseHandle(u64 handle) -> i32;
+    fn SwitchToThread() -> i32;
 }
 extern "libpthread.so.0" {
     fn pthread_create(u64 thread_out, u64 attr, u64 start_routine, u64 arg) -> i32;
@@ -72,11 +78,23 @@ void __vxp_os_join(u64 handle) {
     }
 }
 
+/// Cede el resto del quantum al planificador del SO (worker ocioso).
+@Target("os:windows")
+void __vxp_os_yield() {
+    SwitchToThread();
+}
+@Target("!os:windows")
+void __vxp_os_yield() {
+    register("rax") i64 nr = 24; // SYS_sched_yield (x86-64), RAW sin libc
+    asm volatile { syscall };
+}
+
 // ---------------------------------------------------------------------------
-// Primitivas atomicas (x86-64 inline-asm, autocontenidas).
+// Primitivas atomicas / barreras (x86-64 inline-asm, autocontenidas).
 // ---------------------------------------------------------------------------
 
 /// CAS de 64 bits: `*addr = desired` si `*addr == expected`; devuelve el old.
+/// `lock cmpxchg` es una barrera completa.
 i64 __vxp_cas64(i64* addr, i64 expected, i64 desired) {
     register("rsi") i64* a = addr;
     register("rax") i64 ex = expected;
@@ -85,153 +103,240 @@ i64 __vxp_cas64(i64* addr, i64 expected, i64 desired) {
     return ex;
 }
 
-/// fetch-and-add de 64 bits: `old = *addr; *addr += delta;` devuelve old.
+/// fetch-and-add de 64 bits (`lock xadd`); devuelve el old.
 i64 __vxp_fetch_add(i64* addr, i64 delta) {
     register("rsi") i64* a = addr;
-    register("rax") i64 d = delta;      // in: delta / out: old value
+    register("rax") i64 d = delta;
     asm volatile { lock xadd [rsi], rax };
     return d;
 }
 
-/// Load atomico (mov alineado de 8 bytes ya es atomico en x86-64).
+/// Load de 64 bits (mov alineado ya es atomico en x86-64).  Es una LLAMADA
+/// opaca -> ademas actua de barrera del compilador (no reordena accesos a
+/// memoria a traves de ella).
 i64 __vxp_load64(i64* addr) {
     return *addr;
 }
 
-/// Hint de spin (`pause`) para el camino contended.
+/// Store de 64 bits (mov alineado).  Llamada opaca -> barrera del compilador.
+void __vxp_store64(i64* addr, i64 v) {
+    *addr = v;
+}
+
+/// Barrera de memoria completa (StoreLoad).  Necesaria en el pop del owner de
+/// Chase-Lev entre publicar `bottom` y leer `top` (x86 reordena Store->Load).
+void __vxp_mfence() {
+    asm volatile { mfence };
+}
+
+/// Hint de spin (`pause`).
 void __vxp_pause() {
     asm volatile { pause };
 }
 
 // ---------------------------------------------------------------------------
-// Parametros de capacidad (comptime).  DQCAP debe ser potencia de 2.
+// Parametros de capacidad (comptime).  Potencias de 2.
 // ---------------------------------------------------------------------------
 comptime i64 VXP_MAXW  = 64;      ///< Workers maximos.
-comptime i64 VXP_DQCAP = 1024;    ///< Tareas por deque (potencia de 2).
-comptime i64 VXP_DQMASK = 1023;   ///< Mascara de wraparound (DQCAP-1).
+comptime i64 VXP_DQCAP = 1024;    ///< Tareas por deque local (potencia de 2).
+comptime i64 VXP_DQMASK = 1023;   ///< Mascara de la deque (DQCAP-1).
+comptime i64 VXP_GQCAP = 65536;   ///< Tareas en la cola global (potencia de 2).
+comptime i64 VXP_GQMASK = 65535;  ///< Mascara de la cola global (GQCAP-1).
 
 // ---------------------------------------------------------------------------
-// Estado global (BSS, zero-init).  Deques por-worker + control del pool.
+// Estado global (BSS, zero-init).
 // ---------------------------------------------------------------------------
+// Deques Chase-Lev por worker.  top = extremo de robo (CAS), bottom = extremo del
+// owner.  Ambos crecen monotonos; el slot del ring es (x & DQMASK).
 i64[65536] __vxp_body;   ///< [w*DQCAP + (idx & MASK)] = puntero al body.
 i64[65536] __vxp_arg;    ///< [w*DQCAP + (idx & MASK)] = argumento.
-i64[64] __vxp_head;       ///< Indice de robo (extremo superior) por worker.
-i64[64] __vxp_tail;       ///< Indice de push/pop del propio worker (inferior).
-i64[64] __vxp_lock;       ///< Spinlock de la deque por worker (0 = libre).
+i64[64] __vxp_top;        ///< Indice de robo (CAS por ladrones) por worker.
+i64[64] __vxp_bottom;     ///< Indice del owner (solo el propio worker) por worker.
 u64[64] __vxp_handle;     ///< HANDLE del hilo worker.
 i64 __vxp_n = 0;          ///< Numero de workers activos.
 i64 __vxp_stop = 0;       ///< 1 = drenar y salir (lo pone vx_pool_join).
 i64 __vxp_pending = 0;    ///< Tareas encoladas y no completadas (atomico).
-i64 __vxp_rr = 0;         ///< Contador round-robin para repartir submit.
+
+// Cola GLOBAL de inyeccion (submits externos, p.ej. desde main).  Ring con lock.
+i64[65536] __vxp_gq_body;
+i64[65536] __vxp_gq_arg;
+i64 __vxp_gq_head = 0;
+i64 __vxp_gq_tail = 0;
+i64 __vxp_gq_lock = 0;    ///< Spinlock de la cola global (0 = libre).
+
+// Estado POR-HILO (TLS nativo).  wid1 = id del worker + 1 (0 = no soy worker /
+// soy main).  rng = semilla xorshift para elegir victima de robo.
+thread_local i64 __vxp_tls_wid1 = 0;
+thread_local u64 __vxp_tls_rng = 0;
 
 // ---------------------------------------------------------------------------
-// Lock de deque (spinlock CAS).  El camino del propio worker casi nunca
-// contiende; el robo si toca la deque ajena.
-// ---------------------------------------------------------------------------
-void __vxp_dq_lock(i64 w) {
-    i64* lk = &__vxp_lock[w];
-    while (__vxp_cas64(lk, 0, 1) != 0) {
-        __vxp_pause();
-    }
-}
-void __vxp_dq_unlock(i64 w) {
-    __vxp_lock[w] = 0; // release (store de 0)
-}
-
-// ---------------------------------------------------------------------------
-// push/pop del propio worker (extremo inferior = tail).  LIFO.
+// Deque Chase-Lev (owner lock-free; ladron con CAS).
 // ---------------------------------------------------------------------------
 
-/// Encola una tarea en la deque del worker @p w.  Devuelve 1 si cupo, 0 si llena.
+/// OWNER push (extremo bottom).  Solo el propio worker lo llama.  Sin lock.
+/// Devuelve 1 si cupo, 0 si la deque esta llena.
 i64 __vxp_push(i64 w, i64 body, i64 arg) {
-    __vxp_dq_lock(w);
-    i64 t = __vxp_tail[w];
-    i64 h = __vxp_head[w];
-    if ((t - h) >= VXP_DQCAP) {
-        __vxp_dq_unlock(w);
-        return 0; // deque llena
+    i64 b = __vxp_bottom[w];              // solo el owner escribe bottom
+    i64 t = __vxp_load64(&__vxp_top[w]);  // los ladrones escriben top (CAS)
+    if ((b - t) >= VXP_DQCAP) {
+        return 0; // llena
     }
-    i64 slot = t & VXP_DQMASK;
+    i64 slot = b & VXP_DQMASK;
     __vxp_body[w * VXP_DQCAP + slot] = body;
     __vxp_arg[w * VXP_DQCAP + slot] = arg;
-    __vxp_tail[w] = t + 1;
-    __vxp_dq_unlock(w);
+    __vxp_mfence();                       // publica los buf antes de avanzar bottom
+    __vxp_store64(&__vxp_bottom[w], b + 1);
     return 1;
 }
 
-/// Saca una tarea del propio worker (tail, LIFO).  Devuelve el body (0 si vacia)
-/// y escribe el arg en *out_arg.
+/// OWNER pop (extremo bottom, LIFO).  Solo el propio worker.  Devuelve el body
+/// (0 si vacia) y escribe el arg en *out_arg.  Chase-Lev takeBottom.
 i64 __vxp_pop(i64 w, i64* out_arg) {
-    __vxp_dq_lock(w);
-    i64 t = __vxp_tail[w];
-    i64 h = __vxp_head[w];
-    if (t == h) {
-        __vxp_dq_unlock(w);
-        return 0; // vacia
+    i64 b = __vxp_bottom[w] - 1;
+    __vxp_store64(&__vxp_bottom[w], b);   // reclama el slot bajando bottom
+    __vxp_mfence();                       // StoreLoad: bottom-store antes de top-load
+    i64 t = __vxp_load64(&__vxp_top[w]);
+    if (b < t) {
+        __vxp_store64(&__vxp_bottom[w], t); // estaba vacia: restaurar
+        return 0;
     }
-    i64 nt = t - 1;
-    i64 slot = nt & VXP_DQMASK;
+    i64 slot = b & VXP_DQMASK;
     i64 body = __vxp_body[w * VXP_DQCAP + slot];
     *out_arg = __vxp_arg[w * VXP_DQCAP + slot];
-    __vxp_tail[w] = nt;
-    __vxp_dq_unlock(w);
-    return body;
+    if (b > t) {
+        return body; // >1 elemento: sin contienda con ladrones
+    }
+    // b == t: ultimo elemento, carrera con un ladron por el mismo slot.
+    i64 got = 0;
+    if (__vxp_cas64(&__vxp_top[w], t, t + 1) == t) {
+        got = body; // ganamos la carrera
+    }
+    __vxp_store64(&__vxp_bottom[w], t + 1); // dejar la deque vacia
+    return got;
 }
 
-/// Roba una tarea del worker VICTIMA @p v (head, FIFO).  Devuelve el body (0 si
-/// vacia) y escribe el arg en *out_arg.
+/// LADRON steal (extremo top, FIFO).  Cualquier worker sobre la victima @p v.
+/// Devuelve el body (0 si vacia o si perdio la carrera) y escribe el arg.
+/// Chase-Lev takeTop: lee el valor ANTES del CAS (el slot no se sobreescribe
+/// mientras top no avance, porque push rechaza cuando b-t>=CAP).
 i64 __vxp_steal(i64 v, i64* out_arg) {
-    __vxp_dq_lock(v);
-    i64 h = __vxp_head[v];
-    i64 t = __vxp_tail[v];
-    if (h == t) {
-        __vxp_dq_unlock(v);
+    i64 t = __vxp_load64(&__vxp_top[v]);
+    __vxp_mfence();                       // top-load antes de bottom-load
+    i64 b = __vxp_load64(&__vxp_bottom[v]);
+    if (t >= b) {
         return 0; // vacia
     }
-    i64 slot = h & VXP_DQMASK;
+    i64 slot = t & VXP_DQMASK;
     i64 body = __vxp_body[v * VXP_DQCAP + slot];
-    *out_arg = __vxp_arg[v * VXP_DQCAP + slot];
-    __vxp_head[v] = h + 1;
-    __vxp_dq_unlock(v);
+    i64 a = __vxp_arg[v * VXP_DQCAP + slot];
+    if (__vxp_cas64(&__vxp_top[v], t, t + 1) != t) {
+        return 0; // otro ladron / el owner se lo llevo: abortar
+    }
+    *out_arg = a;
     return body;
 }
 
 // ---------------------------------------------------------------------------
-// Cuerpo del worker: saca del propio deque, si no roba, si no espera/sale.
+// Cola global de inyeccion (lock).  Solo la tocan submits externos + workers
+// cuando su local y el robo fallan -> contienda baja.
+// ---------------------------------------------------------------------------
+i64 __vxp_gq_push(i64 body, i64 arg) {
+    while (__vxp_cas64(&__vxp_gq_lock, 0, 1) != 0) {
+        __vxp_pause();
+    }
+    i64 tl = __vxp_gq_tail;
+    i64 hd = __vxp_gq_head;
+    if ((tl - hd) >= VXP_GQCAP) {
+        __vxp_store64(&__vxp_gq_lock, 0);
+        return 0; // llena
+    }
+    i64 slot = tl & VXP_GQMASK;
+    __vxp_gq_body[slot] = body;
+    __vxp_gq_arg[slot] = arg;
+    __vxp_gq_tail = tl + 1;
+    __vxp_store64(&__vxp_gq_lock, 0);
+    return 1;
+}
+i64 __vxp_gq_pop(i64* out_arg) {
+    if (__vxp_load64(&__vxp_gq_head) == __vxp_load64(&__vxp_gq_tail)) {
+        return 0; // probablemente vacia: evitar el lock si no hay nada
+    }
+    while (__vxp_cas64(&__vxp_gq_lock, 0, 1) != 0) {
+        __vxp_pause();
+    }
+    i64 hd = __vxp_gq_head;
+    i64 tl = __vxp_gq_tail;
+    if (hd == tl) {
+        __vxp_store64(&__vxp_gq_lock, 0);
+        return 0;
+    }
+    i64 slot = hd & VXP_GQMASK;
+    i64 body = __vxp_gq_body[slot];
+    *out_arg = __vxp_gq_arg[slot];
+    __vxp_gq_head = hd + 1;
+    __vxp_store64(&__vxp_gq_lock, 0);
+    return body;
+}
+
+// ---------------------------------------------------------------------------
+// PRNG xorshift64 por-hilo para elegir victima de robo.
+// ---------------------------------------------------------------------------
+i64 __vxp_rand_victim(i64 n) {
+    u64 x = __vxp_tls_rng;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x = x ^ (x << 17);
+    __vxp_tls_rng = x;
+    return (i64)(x % (u64)n);
+}
+
+// ---------------------------------------------------------------------------
+// Cuerpo del worker.
 // ---------------------------------------------------------------------------
 void __vxp_worker(u64 wid) {
     i64 w = (i64)wid;
+    __vxp_tls_wid1 = w + 1;                       // marca "soy worker w" (TLS)
+    __vxp_tls_rng = ((u64)w + 1) * 0x9E3779B97F4A7C15; // semilla distinta por worker
     i64 arg = 0;
+    i64 idle = 0;
     while (true) {
-        // 1. Sacar del propio deque (localidad de cache).
+        // 1. Mi propia deque (lock-free).
         i64 body = __vxp_pop(w, &arg);
-        if (body == 0) {
-            // 2. Robar a otro worker (scan round-robin desde w+1).
-            i64 k = 1;
-            while (k < __vxp_n) {
-                i64 v = (w + k) & (VXP_MAXW - 1); // wrap sobre MAXW (pot. de 2)
-                if (v >= __vxp_n) {
-                    v = v - __vxp_n; // reencajar dentro de [0, n)
-                }
+        // 2. Robar a una victima ALEATORIA (unos pocos intentos).
+        if (body == 0 && __vxp_n > 1) {
+            i64 tries = 0;
+            while (tries < __vxp_n) {
+                i64 v = __vxp_rand_victim(__vxp_n);
                 if (v != w) {
                     body = __vxp_steal(v, &arg);
                     if (body != 0) {
-                        k = __vxp_n; // salir del scan con tarea
+                        tries = __vxp_n; // salir con tarea
                     }
                 }
-                k = k + 1;
+                tries = tries + 1;
             }
         }
+        // 3. Cola global de inyeccion.
         if (body == 0) {
-            // 3. Sin trabajo.  Salir si el pool se detiene y no queda pendiente.
+            body = __vxp_gq_pop(&arg);
+        }
+        if (body == 0) {
+            // 4. Sin trabajo: salir si el pool para y no queda pendiente; si no,
+            //    backoff (spin y luego ceder la CPU al SO).
             if (__vxp_load64(&__vxp_stop) == 1 &&
                 __vxp_load64(&__vxp_pending) == 0) {
                 return;
             }
-            __vxp_pause();
+            idle = idle + 1;
+            if (idle < 64) {
+                __vxp_pause();
+            } else {
+                idle = 0;
+                __vxp_os_yield();
+            }
         } else {
-            // Ejecutar la tarea (llamada indirecta) y contar su fin.
-            fn(i64) -> void fp = (fn(i64) -> void) body;
+            idle = 0;
+            fn(i64) -> void fp = (fn(i64) -> void) body; // llamada indirecta
             fp(arg);
             __vxp_fetch_add(&__vxp_pending, -1);
         }
@@ -243,8 +348,7 @@ void __vxp_worker(u64 wid) {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Arranca el pool con @p nworkers hilos del SO.
- * @param nworkers Numero de workers (1..VXP_MAXW).  Se clampa al rango.
+ * @brief Arranca el pool con @p nworkers hilos del SO (1..VXP_MAXW).
  * @return Numero de workers realmente arrancados.
  */
 public i64 vx_pool_start(i64 nworkers) {
@@ -254,15 +358,15 @@ public i64 vx_pool_start(i64 nworkers) {
     __vxp_n = n;
     __vxp_stop = 0;
     __vxp_pending = 0;
-    __vxp_rr = 0;
+    __vxp_gq_head = 0;
+    __vxp_gq_tail = 0;
+    __vxp_gq_lock = 0;
     i64 i = 0;
     while (i < n) {
-        __vxp_head[i] = 0;
-        __vxp_tail[i] = 0;
-        __vxp_lock[i] = 0;
+        __vxp_top[i] = 0;
+        __vxp_bottom[i] = 0;
         i = i + 1;
     }
-    // Arrancar los workers (el body recibe wid en el 1er reg del ABI).
     i64 started = 0;
     i = 0;
     while (i < n) {
@@ -275,43 +379,38 @@ public i64 vx_pool_start(i64 nworkers) {
 }
 
 /**
- * @brief Encola una tarea @c body(arg) para ejecutarla en algun worker.
- * @param body Direccion de la fn de la tarea (recibe @p arg en el 1er reg).
- * @param arg  Argumento (host_ptr al estado de la tarea, o valor).
- * @return 1 si se encolo, 0 si la deque destino estaba llena.
- *
- * Reparte round-robin entre las deques.  Incrementa el contador de pendientes
- * ANTES de encolar (asi un worker no puede ver la tarea y decrementar pending a
- * -1 antes de que submit lo suba).
+ * @brief Encola una tarea @c body(arg).  Desde un WORKER va a su deque local
+ *        (localidad); desde fuera (main) va a la cola global de inyeccion.
+ * @return 1 si se encolo, 0 si la cola destino estaba llena.
  */
 public i64 vx_pool_submit(i64 body, i64 arg) {
     if (__vxp_n <= 0) {
         return 0;
     }
-    i64 w = __vxp_fetch_add(&__vxp_rr, 1);
-    w = w % __vxp_n;
-    if (w < 0) { w = 0; }
     __vxp_fetch_add(&__vxp_pending, 1);
-    i64 ok = __vxp_push(w, body, arg);
+    i64 ok = 0;
+    i64 s = __vxp_tls_wid1;
+    if (s > 0) {
+        ok = __vxp_push(s - 1, body, arg); // worker -> su propia deque (local)
+        if (ok == 0) {
+            ok = __vxp_gq_push(body, arg);  // deque local llena: fallback global
+        }
+    } else {
+        ok = __vxp_gq_push(body, arg);      // externo (main) -> cola global
+    }
     if (ok == 0) {
-        // No cupo: revertir el contador y avisar.
-        __vxp_fetch_add(&__vxp_pending, -1);
+        __vxp_fetch_add(&__vxp_pending, -1); // no cupo: revertir
     }
     return ok;
 }
 
 /**
- * @brief Espera a que TODAS las tareas encoladas terminen y para los workers.
- * @note Bloquea al hilo llamante (main) hasta pending==0, luego senaliza stop y
- *       hace join de cada worker.  Tras esto el pool queda inactivo (se puede
- *       re-arrancar con vx_pool_start).
+ * @brief Espera a que TODAS las tareas terminen y para los workers.
  */
 public void vx_pool_join() {
-    // 1. Esperar a que se drenen todas las tareas.
     while (__vxp_load64(&__vxp_pending) > 0) {
-        __vxp_pause();
+        __vxp_os_yield();
     }
-    // 2. Senalizar parada y hacer join de los workers.
     __vxp_stop = 1;
     i64 i = 0;
     while (i < __vxp_n) {
