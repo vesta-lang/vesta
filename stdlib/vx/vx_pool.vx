@@ -223,11 +223,14 @@ comptime i64 VXP_FIB_HDR   = 64;  ///< bytes reservados al header (alineado).
 // es un futuro increment; hoy 16 KiB cubre los cuerpos tipicos.
 comptime u64 VXP_FIB_STK   = 16384;
 
-// Estados de la fibra (extensible sin tocar resume()).
-comptime i64 VXP_READY      = 0;
-comptime i64 VXP_RUNNING    = 1;
-comptime i64 VXP_BLOCKED    = 2;
-comptime i64 VXP_TERMINATED = 3;
+// Estados de la fibra (enum con valor i64: cada variante folda a su literal,
+// cero runtime; extensible sin tocar resume()).
+enum FiberState : i64 {
+    VXP_READY      = 0,
+    VXP_RUNNING    = 1,
+    VXP_BLOCKED    = 2,
+    VXP_TERMINATED = 3
+}
 
 // fiber_init: prepara la pila para que el 1er switch arranque body(arg), con el
 // TRAMPOLIN DE SALIDA como direccion de retorno (cuando body retorna, cae ahi).
@@ -426,7 +429,7 @@ i64 __vxp_rand_victim(i64 n) {
 // worker -> su deque local; desde fuera -> cola global.
 // ---------------------------------------------------------------------------
 void __vxp_sched_enqueue(i64 fib) {
-    __vxp_store64((i64*)(fib + VXP_FIB_STATE), VXP_READY);
+    __vxp_store64((i64*)(fib + VXP_FIB_STATE), FiberState.VXP_READY);
     i64 s = __vxp_tls_wid1;
     if (s > 0) {
         if (__vxp_push(s - 1, fib) == 0) {
@@ -501,7 +504,7 @@ public i64 vx_wq_pop(i64 head_ptr, i64 tail_ptr) {
 /// El worker inspecciona f.state despues (resume no devuelve nada).
 void __vxp_resume(i64 fib) {
     __vxp_cur_fiber = fib;
-    __vxp_store64((i64*)(fib + VXP_FIB_STATE), VXP_RUNNING);
+    __vxp_store64((i64*)(fib + VXP_FIB_STATE), FiberState.VXP_RUNNING);
     // Salva el ctx del worker en su celda sched_ctx, carga el de la fibra.
     __vxp_fiber_switch((u64)__vxp_my_sched(), (u64)(fib + VXP_FIB_CTX));
 }
@@ -512,7 +515,7 @@ public void vx_yield() {
     if (f == 0) {
         return; // no estamos en una fibra (main): no-op
     }
-    __vxp_store64((i64*)(f + VXP_FIB_STATE), VXP_READY);
+    __vxp_store64((i64*)(f + VXP_FIB_STATE), FiberState.VXP_READY);
     // Salva el ctx de la fibra, vuelve al scheduler (dentro de resume()).
     __vxp_fiber_switch((u64)(f + VXP_FIB_CTX), (u64)__vxp_my_sched());
     // Al ser reanudada, la ejecucion continua aqui.
@@ -533,7 +536,7 @@ public void vx_park(i64 parkfn, i64 parkarg) {
     }
     __vxp_store64((i64*)(f + VXP_FIB_PARKFN), parkfn);
     __vxp_store64((i64*)(f + VXP_FIB_PARKARG), parkarg);
-    __vxp_store64((i64*)(f + VXP_FIB_STATE), VXP_BLOCKED);
+    __vxp_store64((i64*)(f + VXP_FIB_STATE), FiberState.VXP_BLOCKED);
     __vxp_fiber_switch((u64)(f + VXP_FIB_CTX), (u64)__vxp_my_sched());
     // Reanudada por un wake: continua aqui.
 }
@@ -543,7 +546,7 @@ public void vx_park(i64 parkfn, i64 parkarg) {
 /// switchea al scheduler; NUNCA retorna.
 void __vxp_fiber_exit() {
     i64 f = __vxp_cur_fiber;
-    __vxp_store64((i64*)(f + VXP_FIB_STATE), VXP_TERMINATED);
+    __vxp_store64((i64*)(f + VXP_FIB_STATE), FiberState.VXP_TERMINATED);
     __vxp_fiber_switch((u64)(f + VXP_FIB_CTX), (u64)__vxp_my_sched());
     // inalcanzable (el scheduler no reanuda una fibra TERMINATED).
 }
@@ -595,11 +598,11 @@ void __vxp_worker(u64 wid) {
             idle = 0;
             __vxp_resume(fib);
             i64 st = __vxp_load64((i64*)(fib + VXP_FIB_STATE));
-            if (st == VXP_TERMINATED) {
+            if (st == FiberState.VXP_TERMINATED) {
                 __vxp_fiber_destroy(fib);   // unico sitio: free + pending--
-            } else if (st == VXP_READY) {
+            } else if (st == FiberState.VXP_READY) {
                 __vxp_sched_enqueue(fib);   // cedio: re-encolar (runnable)
-            } else if (st == VXP_BLOCKED) {
+            } else if (st == FiberState.VXP_BLOCKED) {
                 // HAND-OFF de park: la fibra ya esta fuera de CPU.  Ejecutar su
                 // accion diferida (encolar en wait-queue del canal + soltar su
                 // lock) AHORA la hace visible al waker sin wakeup perdido.  No
@@ -663,7 +666,7 @@ public i64 vx_pool_submit(i64 body, i64 arg) {
     if (fib == 0) {
         return 0;
     }
-    __vxp_store64((i64*)(fib + VXP_FIB_STATE), VXP_READY);
+    __vxp_store64((i64*)(fib + VXP_FIB_STATE), FiberState.VXP_READY);
     __vxp_store64((i64*)(fib + VXP_FIB_ARG), arg);
     // Inicializa la pila para arrancar body(arg); stack top = bloque + STK.
     __vxp_fiber_init((u64)fib, (u64)fib + VXP_FIB_STK, (u64)body, (u64)arg);
