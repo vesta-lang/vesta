@@ -1980,6 +1980,18 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                             aot::RelocKind::REL32);
             }
 
+            // --aot-debug=1: en un EJECUTABLE, registra TODAS las funciones como
+            // simbolos (nombre -> VA) para que gdb/WinDbg/lldb muestren nombres
+            // en los backtraces.  OBJECT/SHARED ya llevan symtab por diseno; el
+            // EXEC solo lo anyade con este flag (cero coste sin el).
+            if (opt.debug_level >= 1 && !emit_shared && !emit_obj && !emit_bin) {
+                w.set_debug(true);
+                for (const AotFn &af : compiled) {
+                    const FnLoc &fl = fn_loc[af.name];
+                    w.add_symbol(af.name, fl.sec, fl.off, /*is_func=*/true);
+                }
+            }
+
             // PASADA 2: declarar las relocs de cada funcion (llamadas + datos +
             // simbolos de seccion).  El writer las resuelve (EXEC) o las emite
             // como registros (OBJECT) tras el layout.

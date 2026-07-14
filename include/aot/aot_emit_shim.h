@@ -270,6 +270,19 @@ typedef struct {
 } AotSym;
 
 /**
+ * @brief Fija los simbolos de DEPURACION (nivel 1) para los EJECUTABLES.
+ *
+ * Los emisores de EXEC (aot_emit_elf / aot_emit_elf_dynexec / PE) consultan esta
+ * lista global y, si no es vacia, embeben un @c .symtab (ELF) / symtab COFF (PE)
+ * con los simbolos de funcion -> gdb/WinDbg/lldb muestran nombres en backtraces.
+ * Estado global (el emit es single-thread por llamada); el driver lo fija antes
+ * de emitir y lo resetea (n=0) despues.  n=0 -> sin simbolos (cero coste, binario
+ * identico al modo release).  Los @c section/@c offset son los mismos que en un
+ * @c AotSym de export; @c st_value se calcula con la VA final de cada seccion.
+ */
+void aot_set_debug_symbols(const AotSym *syms, int n);
+
+/**
  * @brief Emite un objeto RELOCATABLE ELF64 (ET_REL, .o) a disco.
  *
  * A diferencia de @c aot_emit_elf (ejecutable: aplica relocs + _start), este

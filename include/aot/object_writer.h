@@ -241,6 +241,12 @@ class ObjectWriter {
     /// Fija el tipo de artefacto (EXEC por defecto, OBJECT relocatable).
     void set_output_kind(OutputKind k) { kind_ = k; }
 
+    /// Activa la emision de simbolos de DEPURACION (--aot-debug=1): en un EXEC,
+    /// los @c add_symbol registrados se embeben ademas como @c .symtab / COFF
+    /// symtab -> gdb/WinDbg/lldb muestran nombres en los backtraces.  OBJECT y
+    /// SHARED ya llevan symtab por diseno; esto solo afecta a EXEC.
+    void set_debug(bool on) { debug_ = on; }
+
     /// AOT x86-32: emite ELF32 (ET_EXEC, EM_386) en lugar de ELF64 para el
     /// EXEC.  El codegen (mode32) ya produjo bytes i386; esto solo cambia el
     /// contenedor.  Solo afecta a ELF EXEC (los .bin son crudos; PE32/.o32
@@ -312,6 +318,7 @@ class ObjectWriter {
     std::vector<ExportSym> symbols_;
     uint64_t flat_base_ = 0; ///< base de carga (.bin)
     bool mode32_ = false;    ///< AOT x86-32 -> ELF32 EXEC
+    bool debug_ = false;     ///< --aot-debug: symtab en el EXEC
 };
 
 } // namespace aot

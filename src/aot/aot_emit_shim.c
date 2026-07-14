@@ -29,6 +29,19 @@
 #include "LibCOFFparse.h"
 #include "LibPEparse.h" // lectura de exports de DLL (aot_pe_export_names)
 
+/* ------------------------------------------------------------------------
+ * Simbolos de DEPURACION (nivel 1): estado global fijado por el driver antes
+ * de emitir un EXEC (ver aot_set_debug_symbols en el header).  n=0 -> no hay
+ * simbolos (cero coste).  El emit es single-thread por llamada.
+ * ------------------------------------------------------------------------ */
+static const AotSym *g_aot_dbg_syms = NULL;
+static int g_aot_dbg_n = 0;
+
+void aot_set_debug_symbols(const AotSym *syms, int n) {
+    g_aot_dbg_syms = (n > 0) ? syms : NULL;
+    g_aot_dbg_n = (n > 0) ? n : 0;
+}
+
 /* Copia segura del mensaje de error al buffer del llamador. */
 static void set_err(char *err, size_t cap, const char *msg) {
     if (!err || cap == 0) return;
@@ -771,36 +784,72 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
             }
         }
     }
-    free(sec_va);
     free(sec_foff);
     free(sec_seen);
-    sec_va = NULL;
     sec_foff = NULL;
     sec_seen = NULL;
+    /* sec_va se libera DESPUES del symtab (los simbolos de debug calculan su
+     * st_value con sec_va[section]). */
 
-    /* .strtab + .symtab con _start. */
-    const char strtab_data[] = "\0_start";
-    size_t st_off = 0;
-    uint64_t st_va = 0;
-    size_t idx_strtab = elf_builder_add_section_ex(
-        b, ".strtab", SHT_STRTAB, 0, strtab_data, sizeof(strtab_data), 0, 1,
-        &st_off, &st_va, 0, 0, 0);
-
-    Elf64_Sym symtab[2];
-    memset(symtab, 0, sizeof(symtab));
-    symtab[0].st_info = ELF64_ST_INFO(STB_LOCAL, STT_NOTYPE);
-    symtab[0].st_shndx = SHN_UNDEF;
-    symtab[1].st_name = 1;
-    symtab[1].st_info = ELF64_ST_INFO(STB_GLOBAL, STT_FUNC);
-    symtab[1].st_shndx =
-        (uint16_t)(entry_sec + 1); /* +1: la seccion 0 es SHT_NULL */
-    symtab[1].st_value = entry_vaddr + entry_off;
-    symtab[1].st_size = secs[entry_sec].size;
-    size_t sy_off = 0;
-    uint64_t sy_va = 0;
-    elf_builder_add_section_ex(b, ".symtab", SHT_SYMTAB, 0, symtab,
-                               sizeof(symtab), 0, 8, &sy_off, &sy_va,
-                               (uint32_t)idx_strtab, 1, sizeof(Elf64_Sym));
+    /* .strtab + .symtab.  Siempre incluye _start; con --aot-debug=1 incluye
+     * ademas un STT_FUNC por cada funcion (nombre -> VA) para que gdb/lldb
+     * muestren nombres en los backtraces.  st_value = sec_va[sym.section] +
+     * offset (VA absoluta ya conocida tras el layout). */
+    {
+        const int ndbg = g_aot_dbg_n;
+        const AotSym *dsyms = g_aot_dbg_syms;
+        /* strtab: \0 + "_start\0" + nombres de debug. */
+        size_t strcap = 1 + 7; /* "\0" + "_start\0" */
+        for (int i = 0; i < ndbg; ++i)
+            strcap += strlen(dsyms[i].name) + 1;
+        char *strtab = (char *)calloc(1, strcap);
+        Elf64_Sym *symtab =
+            (Elf64_Sym *)calloc((size_t)(ndbg + 2), sizeof(Elf64_Sym));
+        if (strtab && symtab) {
+            size_t sp = 1;
+            /* _start (indice 1). */
+            memcpy(strtab + sp, "_start", 7);
+            symtab[1].st_name = (uint32_t)sp;
+            symtab[1].st_info = ELF64_ST_INFO(STB_GLOBAL, STT_FUNC);
+            symtab[1].st_shndx = (uint16_t)(entry_sec + 1);
+            symtab[1].st_value = entry_vaddr + entry_off;
+            /* st_size=0 (simbolo puntual): con varios simbolos en .text, un size
+             * que abarque toda la seccion haria que _start "engulla" a main y
+             * gdb resolveria como "_start+N"; con 0, gdb resuelve por el simbolo
+             * de mayor VA <= pc (el correcto). */
+            symtab[1].st_size = 0;
+            sp += 7;
+            /* funciones de debug (indices 2..). */
+            for (int i = 0; i < ndbg; ++i) {
+                size_t l = strlen(dsyms[i].name);
+                memcpy(strtab + sp, dsyms[i].name, l + 1);
+                Elf64_Sym *s = &symtab[2 + i];
+                s->st_name = (uint32_t)sp;
+                s->st_info = ELF64_ST_INFO(
+                    STB_GLOBAL, dsyms[i].is_func ? STT_FUNC : STT_OBJECT);
+                s->st_shndx = (uint16_t)(dsyms[i].section + 1);
+                s->st_value = (sec_va ? sec_va[dsyms[i].section] : 0) +
+                              dsyms[i].offset;
+                s->st_size = 0;
+                sp += l + 1;
+            }
+            size_t st_off = 0;
+            uint64_t st_va = 0;
+            size_t idx_strtab = elf_builder_add_section_ex(
+                b, ".strtab", SHT_STRTAB, 0, strtab, strcap, 0, 1, &st_off,
+                &st_va, 0, 0, 0);
+            size_t sy_off = 0;
+            uint64_t sy_va = 0;
+            elf_builder_add_section_ex(
+                b, ".symtab", SHT_SYMTAB, 0, symtab,
+                (size_t)(ndbg + 2) * sizeof(Elf64_Sym), 0, 8, &sy_off, &sy_va,
+                (uint32_t)idx_strtab, 1, sizeof(Elf64_Sym));
+        }
+        free(strtab);
+        free(symtab);
+    }
+    free(sec_va);
+    sec_va = NULL;
 
     /* Program headers.  Los filesz usan rx_end_off / rw_end_off (capturados
      * ANTES de .strtab/.symtab, que no son ALLOC y no se mapean).  El

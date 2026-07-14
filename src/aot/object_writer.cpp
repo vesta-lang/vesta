@@ -203,6 +203,25 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
         return true;
     }
 
+    // --aot-debug=1: fija los simbolos de funcion para que el emisor de EXEC
+    // embeba un .symtab (ELF) / symtab COFF (PE).  csyms/hold sobreviven al
+    // emit (mismo scope de la funcion); se resetea el estado global tras emitir.
+    std::vector<AotSym> dbg_csyms;
+    std::vector<std::string> dbg_hold;
+    if (debug_ && kind_ == OutputKind::EXEC && !symbols_.empty()) {
+        dbg_csyms.resize(symbols_.size());
+        dbg_hold.resize(symbols_.size());
+        for (size_t i = 0; i < symbols_.size(); ++i) {
+            dbg_hold[i] = symbols_[i].name;
+            dbg_csyms[i].name = dbg_hold[i].c_str();
+            dbg_csyms[i].section = symbols_[i].section;
+            dbg_csyms[i].offset = symbols_[i].offset;
+            dbg_csyms[i].is_func = symbols_[i].is_func ? 1 : 0;
+        }
+        aot_set_debug_symbols(dbg_csyms.data(),
+                              static_cast<int>(dbg_csyms.size()));
+    }
+
     if (fmt_ == ObjFormat::PE) {
         std::vector<AotImport> cimps(imports_.size());
         for (size_t i = 0; i < imports_.size(); ++i) {
@@ -271,6 +290,9 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                           static_cast<int>(csecs.size()), entry_sec_,
                           entry_off_, crel_ptr, crel_n, errbuf, sizeof(errbuf));
     }
+
+    // Reset del estado global de simbolos de debug (el emit ya termino).
+    aot_set_debug_symbols(nullptr, 0);
 
     if (!ok) {
         err = errbuf[0] ? errbuf : "ObjectWriter: error desconocido";

@@ -46,6 +46,14 @@ struct AotOptions {
     std::string bin_base;             ///< --bin-base (hex; solo .bin).
     std::string sysroot;              ///< --sysroot (para el auto-link).
     std::string argv0;                ///< Ruta del ejecutable (localizar stdlib).
+    /// Nivel de informacion de depuracion embebida en el artefacto nativo:
+    ///   0 = ninguna (default; cero coste, binario mas pequeno).
+    ///   1 = simbolos de FUNCION (.symtab / COFF symtab) -> backtraces con
+    ///       nombres en gdb/WinDbg/lldb.
+    ///   2 = + tabla de lineas (fuente<->PC)  [futuro: DWARF .debug_line].
+    ///   3 = + variables locales/tipos        [futuro: DWARF .debug_info].
+    /// Los niveles 2-3 se construyen sobre el mismo mapa nombre->VA del nivel 1.
+    int debug_level = 0;              ///< --aot-debug=N (0..3).
 };
 
 /**
