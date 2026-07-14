@@ -1675,7 +1675,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 dm.dst = vr(in.dst);
                 dm.src1 = vr(in.operands[0]); // dividendo
                 dm.src2 = vr(in.operands[1]); // divisor
+                /* variant: bit0 = MOD(1)/DIV(0), bit1 = UNSIGNED(2).  El tipo
+                 * del IR decide signed vs unsigned (idiv/cqo vs div/xor). */
                 dm.variant = (in.op == ir::IrOp::MOD) ? 1u : 0u;
+                if (!ir_type_signed(in.type)) dm.variant |= 2u;
                 O.push_back(dm);
                 break;
             }

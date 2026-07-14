@@ -1029,16 +1029,19 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
-    case MOp::IDIV: {
-        /* IDIV r/m64: REX.W + F7 /7 con divisor en src1.reg. */
+    case MOp::IDIV:
+    case MOp::DIV_U: {
+        /* IDIV r/m64 (signed): REX.W + F7 /7.  DIV r/m64 (unsigned): F7 /6.
+         * Divisor en src1.reg. */
         if (mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
             return true;
         }
+        const uint8_t ext = (mi.op == MOp::IDIV) ? 7 : 6;
         const uint8_t rex = rex_byte(true, 0, mi.src1.reg);
         if (rex) put8(out, rex);
         put8(out, 0xF7);
-        put8(out, modrm(3, 7, mi.src1.reg & 7));
+        put8(out, modrm(3, ext, mi.src1.reg & 7));
         return true;
     }
     case MOp::CQO: {

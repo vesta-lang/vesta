@@ -388,8 +388,9 @@ enum class MOp : uint8_t {
     SAR = 18,
     NEG = 19,
     NOT = 20,
-    IDIV = 21,  ///< IDIV src (RDX:RAX / src -> RAX, RDX = rem)
+    IDIV = 21,  ///< IDIV src (RDX:RAX / src -> RAX, RDX = rem) -- SIGNED
     CQO = 22,   ///< sign-extend RAX into RDX:RAX (CDQ for 32-bit)
+    DIV_U = 202, ///< DIV src (RDX:RAX / src -> RAX, RDX = rem) -- UNSIGNED (F7 /6)
     MOVZX = 23, ///< MOVZX dst, src (zero-extend u8/u16 -> u64)
     MOVSX = 24, ///< MOVSX dst, src (sign-extend i8/i16/i32 -> i64)
     INC = 25,   ///< INC dst (++dst, mas compacto que ADD dst, 1)

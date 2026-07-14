@@ -1237,15 +1237,26 @@ struct Lowerer {
              * en RAX/RDX (van a callee-saved), asi el clobber es seguro. */
             const MOperand a = resolve(in.src1); // dividendo
             const MOperand b = resolve(in.src2); // divisor
+            const bool uns = (in.variant & 2u) != 0u; // bit1 = unsigned
             out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), b));
             out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RAX), a));
-            {
+            if (uns) {
+                /* unsigned: RDX = 0 (xor rdx,rdx) + DIV (F7 /6).  Sin cqo:
+                 * el dividendo es u64, RDX:RAX = 0:dividendo. */
+                out.push_back(MInstr::make_binary(MOp::XOR, reg(MReg::RDX),
+                                                  reg(MReg::RDX),
+                                                  reg(MReg::RDX)));
+                out.push_back(
+                    MInstr::make_unary(MOp::DIV_U, MOperand{}, reg(scr1)));
+            } else {
+                /* signed: CQO (sign-extend RAX -> RDX:RAX) + IDIV (F7 /7). */
                 MInstr c;
                 c.op = MOp::CQO;
                 out.push_back(c);
+                out.push_back(
+                    MInstr::make_unary(MOp::IDIV, MOperand{}, reg(scr1)));
             }
-            out.push_back(MInstr::make_unary(MOp::IDIV, MOperand{}, reg(scr1)));
-            const MReg res = (in.variant == 1u) ? MReg::RDX : MReg::RAX;
+            const MReg res = (in.variant & 1u) ? MReg::RDX : MReg::RAX;
             out.push_back(
                 MInstr::make_unary(MOp::MOV, resolve(in.dst), reg(res)));
             return;
