@@ -19,14 +19,19 @@
  * Linux/ELF: libpthread (pthread_create / pthread_join).
  */
 
+import std.types only uintptr, usize;
+
 // ---------------------------------------------------------------------------
 // Windows: kernel32.
 // ---------------------------------------------------------------------------
 extern "kernel32.dll" {
-    fn CreateThread(u64 attrs, u64 stacksize, u64 startaddr, u64 param,
-                    u64 flags, u64 threadid) -> u64;
-    fn WaitForSingleObject(u64 handle, u32 ms) -> u32;
-    fn CloseHandle(u64 handle) -> i32;
+    // Los parametros que la API espera como PUNTERO/HANDLE se declaran uintptr
+    // (ancho de puntero, portable) en vez de u64: los valores uintptr de este
+    // modulo encajan sin cast y no se asume 64 bits.
+    fn CreateThread(uintptr attrs, usize stacksize, uintptr startaddr,
+                    uintptr param, u32 flags, uintptr threadid) -> uintptr;
+    fn WaitForSingleObject(uintptr handle, u32 ms) -> u32;
+    fn CloseHandle(uintptr handle) -> i32;
 }
 
 // ---------------------------------------------------------------------------
@@ -34,8 +39,9 @@ extern "kernel32.dll" {
 // en su 1er arg (out-ptr); lo devolvemos por valor como HANDLE.
 // ---------------------------------------------------------------------------
 extern "libpthread.so.0" {
-    fn pthread_create(u64 thread_out, u64 attr, u64 start_routine, u64 arg) -> i32;
-    fn pthread_join(u64 thread, u64 retval_out) -> i32;
+    fn pthread_create(uintptr* thread_out, uintptr attr, uintptr start_routine,
+                      uintptr arg) -> i32;
+    fn pthread_join(uintptr thread, uintptr retval_out) -> i32;
 }
 
 /**
@@ -45,18 +51,18 @@ extern "libpthread.so.0" {
  * @return HANDLE del hilo (>0), o 0 si fallo.
  */
 @Target("os:windows")
-public u64 vx_thread_spawn(u64 body, u64 arg) {
+public uintptr vx_thread_spawn(uintptr body, uintptr arg) {
     return CreateThread(0, 0, body, arg, 0, 0);
 }
 
 @Target("!os:windows")
-public u64 vx_thread_spawn(u64 body, u64 arg) {
+public uintptr vx_thread_spawn(uintptr body, uintptr arg) {
     // pthread_t es un `unsigned long` (8 bytes) -> CABE en el u64 del HANDLE, sin
     // heap.  pthread_create lo ESCRIBE en su 1er arg (out-ptr); pasamos la
     // direccion de un local y devolvemos su valor; pthread_join lo recibe por
     // valor.
-    u64 th = 0;
-    i32 rc = pthread_create((u64)(&th), 0, body, arg);
+    uintptr th = 0;
+    i32 rc = pthread_create(&th, 0, body, arg);
     if (rc != 0) {
         return 0;
     }
@@ -68,17 +74,17 @@ public u64 vx_thread_spawn(u64 body, u64 arg) {
  * @param handle HANDLE devuelto por @ref vx_thread_spawn.
  */
 @Target("os:windows")
-public void vx_thread_join(u64 handle) {
+public void vx_thread_join(uintptr handle) {
     WaitForSingleObject(handle, 0xFFFFFFFF); // INFINITE
     CloseHandle(handle);
 }
 
 @Target("!os:windows")
-public void vx_thread_join(u64 handle) {
+public void vx_thread_join(uintptr handle) {
     if (handle == 0) {
         return;
     }
-    pthread_join(handle, 0); // handle = pthread_t (valor), sin heap que liberar
+    pthread_join(handle, 0); // handle = pthread_t (valor), sin heap
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +95,7 @@ public void vx_thread_join(u64 handle) {
 // ---------------------------------------------------------------------------
 
 comptime i64 VX_THREAD_MAX = 256;   ///< Hilos simultaneos por `spawn` (registro).
-u64[256] __vx_thread_handles;       ///< HANDLEs de los hilos lanzados por spawn.
+uintptr[256] __vx_thread_handles;       ///< HANDLEs de los hilos lanzados por spawn.
 i64 __vx_thread_n = 0;              ///< Numero de hilos registrados.
 
 /**
@@ -99,11 +105,11 @@ i64 __vx_thread_n = 0;              ///< Numero de hilos registrados.
  * @note El HANDLE queda registrado para @ref __vx_thread_join_all (join-all
  *       implicito que el lowering inyecta al final de main).
  */
-public u64 __vx_thread_run(u64 body, u64 arg) {
+public uintptr __vx_thread_run(uintptr body, uintptr arg) {
     if (__vx_thread_n >= VX_THREAD_MAX) {
         return 0;
     }
-    u64 h = vx_thread_spawn(body, arg);
+    uintptr h = vx_thread_spawn(body, arg);
     if (h == 0) {
         return 0;
     }

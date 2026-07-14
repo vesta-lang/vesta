@@ -14,6 +14,7 @@ namespace ejemplos.real_threads;
 // vx_lock/vx_unlock = monitor de vx_sync sobre el objeto (palabra en obj+16).
 //   vm -m aot --vx 238_real_threads.vx --format pe -o p.exe && ./p.exe   (exit 42)
 
+import std.types only uintptr;
 import "vx_thread" only vx_thread_spawn, vx_thread_join;
 import "vx_sync" only vx_lock, vx_unlock;
 
@@ -41,8 +42,8 @@ i32 main() {
     i64* lo = (i64*)g_lock; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
     g_counter = 0;
 
-    u64 t1 = vx_thread_spawn((u64)(cfn(i64) -> i64) worker, 0);
-    u64 t2 = vx_thread_spawn((u64)(cfn(i64) -> i64) worker, 0);
+    uintptr t1 = vx_thread_spawn((uintptr)(cfn(i64) -> i64) worker, 0);
+    uintptr t2 = vx_thread_spawn((uintptr)(cfn(i64) -> i64) worker, 0);
     vx_thread_join(t1);
     vx_thread_join(t2);
 

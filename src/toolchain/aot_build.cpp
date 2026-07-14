@@ -325,8 +325,13 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     vt_opts.opt_level = copts.opt_level;
                     vt_opts.native_poo = true;
                     vt_opts.asm_target_bits = copts.asm_target_bits;
+                    // compile_vx_project (no _source) para resolver el
+                    // `import std.types` de vx_thread (uintptr/usize en las
+                    // firmas de los extern).  std.types son typedefs (sin
+                    // codigo) -> el merge no anade nada, solo resuelve tipos.
+                    (void)vt_src;
                     vx::CompileResult vt_cr =
-                        vx::compile_vx_source(vt_src, vt_path, vt_opts);
+                        vx::compile_vx_project(vt_path, vt_opts);
                     ir::IrModule vt_mod;
                     if (!vt_cr.ok || vt_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(vt_cr.ir_module_cache_bytes,

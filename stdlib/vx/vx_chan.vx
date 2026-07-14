@@ -242,3 +242,83 @@ public i64 vx_chan_is_closed(uintptr ch_h) {
     Chan ch = Chan(ptr);
     return ch.closed;
 }
+
+/**
+ * @brief Envio NO-BLOQUEANTE.  Igual que send pero sin el paso (3): si no hay
+ *        receptor esperando NI hueco en el buffer, NO bloquea -> devuelve 0.
+ *        Es el primitivo base para `select` (probar sin comprometerse).
+ * @return 1 si el valor se entrego/encolo; 0 si enviaria bloquearia (o cerrado).
+ */
+public i64 vx_chan_try_send(uintptr ch_h, i64 v) {
+    i64 ptr = (i64) ch_h;
+    Chan ch = Chan(ptr);
+    vx_spin_lock(&ch.lock);
+    if (ch.closed != 0) {
+        vx_spin_unlock(&ch.lock);
+        return 0;
+    }
+    // (1) Receptor en espera -> entrega directa.
+    i64 r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
+    if (r != 0) {
+        vx_fib_set_elem(r, v);
+        vx_spin_unlock(&ch.lock);
+        vx_wake(r);
+        return 1;
+    }
+    // (2) Hueco en el buffer.
+    if (ch.count < ch.cap) {
+        i64* slot = (i64*)__vxch_slot(ptr, ch.tail, ch.mask);
+        *slot = v;
+        ch.tail = ch.tail + 1;
+        ch.count = ch.count + 1;
+        vx_spin_unlock(&ch.lock);
+        return 1;
+    }
+    // Lleno / sin receptor -> NO bloquear.
+    vx_spin_unlock(&ch.lock);
+    return 0;
+}
+
+/**
+ * @brief Recepcion NO-BLOQUEANTE.  Igual que recv pero sin el paso (3): si no
+ *        hay dato en el buffer NI emisor esperando, NO bloquea -> devuelve 0 y
+ *        no toca @p out.  Base de `select`.
+ * @param out puntero donde escribir el valor recibido (solo si retorna 1).
+ * @return 1 si se recibio un valor (escrito en @p out); 0 si no habia nada.
+ */
+public i64 vx_chan_try_recv(uintptr ch_h, i64* out) {
+    i64 ptr = (i64) ch_h;
+    Chan ch = Chan(ptr);
+    vx_spin_lock(&ch.lock);
+    // (1) Dato en el buffer (mover un emisor en espera al hueco liberado).
+    if (ch.count > 0) {
+        i64* rslot = (i64*)__vxch_slot(ptr, ch.head, ch.mask);
+        i64 val = *rslot;
+        ch.head = ch.head + 1;
+        i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+        if (s != 0) {
+            i64* wslot = (i64*)__vxch_slot(ptr, ch.tail, ch.mask);
+            *wslot = vx_fib_get_elem(s);
+            ch.tail = ch.tail + 1;
+            vx_spin_unlock(&ch.lock);
+            vx_wake(s);
+        } else {
+            ch.count = ch.count - 1;
+            vx_spin_unlock(&ch.lock);
+        }
+        *out = val;
+        return 1;
+    }
+    // (2) Emisor en espera (rendezvous) -> entrega directa.
+    i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+    if (s != 0) {
+        i64 val = vx_fib_get_elem(s);
+        vx_spin_unlock(&ch.lock);
+        vx_wake(s);
+        *out = val;
+        return 1;
+    }
+    // Nada disponible -> NO bloquear (el caller consulta is_closed si procede).
+    vx_spin_unlock(&ch.lock);
+    return 0;
+}

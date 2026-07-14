@@ -856,7 +856,8 @@ ir::IrType Lowering::ir_type_from_primitive(PrimitiveKind p) noexcept {
 // elemento dimensionable (entonces no se le reserva storage estatico).
 // Habilita buffers estaticos globales (p.ej. heap de un allocator bump en
 // codigo bare-metal): @c u8[4096] g_heap; -> slot de 4096 bytes en .data.
-static uint64_t vx_global_array_bytes(const ast::TypeNode *tn) {
+static uint64_t vx_global_array_bytes(const ast::TypeNode *tn,
+                                      const TypeChecker &tc) {
     if (!tn || tn->kind != ast::NodeKind::ArrayTypeNode) return 0;
     auto *at = static_cast<const ast::ArrayTypeNode *>(tn);
     if (!at->element_type || !at->size_expr) return 0; // T[] decay = sin storage
@@ -870,6 +871,14 @@ static uint64_t vx_global_array_bytes(const ast::TypeNode *tn) {
                 ->prim);
     else if (at->element_type->kind == ast::NodeKind::PointerTypeNode)
         esz = 8;
+    else if (at->element_type->kind == ast::NodeKind::NamedTypeNode) {
+        // Elemento newtype (typedef-new, p.ej. `uintptr[256]`): tamano del
+        // primitivo subyacente (accesor const del type checker).
+        const auto *nt =
+            static_cast<const ast::NamedTypeNode *>(at->element_type.get());
+        if (const Type *u = tc.newtype_underlying(nt->name))
+            esz = primitive_size_bytes(u->kind);
+    }
     if (esz == 0 || count == 0) return 0;
     return count * esz;
 }
@@ -1265,7 +1274,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         }
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
         if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
-            const uint64_t ab = vx_global_array_bytes(gv->type.get());
+            const uint64_t ab = vx_global_array_bytes(gv->type.get(), tc_);
             if (ab > 0) {
                 const uint64_t slot =
                     get_or_create_runtime_global_slot(gv->name, ab);
@@ -1499,7 +1508,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             // Global array nativo T[N]: ya tiene slot (pre-pase); soportado.
             if (!gv->is_const && !is_comptime_silent && gv->type &&
                 gv->type->kind == ast::NodeKind::ArrayTypeNode &&
-                vx_global_array_bytes(gv->type.get()) > 0) {
+                vx_global_array_bytes(gv->type.get(), tc_) > 0) {
                 runtime_global_supported = true;
             }
             // Tipo primitivo directo O un newtype (typedef-new) que resuelve a

@@ -8415,6 +8415,34 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
     return Type{};
 }
 
+// ¿el argumento/valor @p e es una CONSTANTE numerica que puede coercionarse a
+// un newtype NUMERICO @p param sin cast?  Regla ergonomica (NO debilita el
+// tipado fuerte entre newtypes distintos): un tipo numerico -- incluido un
+// typedef-new como `uintptr` -- recibe constantes numericas directamente
+// (`f(0)`, `uintptr p = 4096`).  Un valor NO-constante (otra variable) sigue
+// requiriendo cast explicito.  Misma logica en check_var_decl / check_assign.
+static bool numeric_const_fits_newtype(const Type &param, const Type &arg,
+                                       const ast::Expr *e) {
+    if (param.nominal_id == 0 || !is_numeric(param.kind)) return false;
+    if (!(is_numeric(arg.kind) || arg.kind == PrimitiveKind::CHAR)) return false;
+    if (!e) return false;
+    switch (e->kind) {
+    case ast::NodeKind::IntLitExpr:
+    case ast::NodeKind::FloatLitExpr:
+    case ast::NodeKind::CharLitExpr:
+        return true;
+    case ast::NodeKind::UnaryExpr: {
+        auto *u = static_cast<const ast::UnaryExpr *>(e);
+        return (u->op == ast::UnOp::Neg || u->op == ast::UnOp::BitNot) &&
+               u->operand &&
+               (u->operand->kind == ast::NodeKind::IntLitExpr ||
+                u->operand->kind == ast::NodeKind::FloatLitExpr);
+    }
+    default:
+        return false;
+    }
+}
+
 Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     const Type tl = check_expr(e->lhs.get());
     const Type tr = check_expr(e->rhs.get());
@@ -13801,8 +13829,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     }
                 }
             }
-            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
-                !value_assignable_to_interface(tp, ta)) {
+            if (numeric_const_fits_newtype(tp, ta, e->args[i].get())) {
+                e->args[i]->result_type = tp; // constante numerica -> newtype
+            } else if (ta.kind != PrimitiveKind::COUNT &&
+                       !types_assignable(tp, ta) &&
+                       !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  ": tipo (" + type_to_string(ta) +
@@ -13999,8 +14030,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 continue;
             }
             const Type tp = sig.param_types[i];
-            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
-                !value_assignable_to_interface(tp, ta)) {
+            if (numeric_const_fits_newtype(tp, ta, e->args[i].get())) {
+                e->args[i]->result_type = tp; // el literal es del newtype
+            } else if (ta.kind != PrimitiveKind::COUNT &&
+                       !types_assignable(tp, ta) &&
+                       !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  ": tipo (" + type_to_string(ta) +
@@ -14052,8 +14086,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
             }
         }
-        if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
-            !value_assignable_to_interface(tp, ta)) {
+        if (numeric_const_fits_newtype(tp, ta, e->args[i].get())) {
+            e->args[i]->result_type = tp; // constante numerica -> newtype
+        } else if (ta.kind != PrimitiveKind::COUNT &&
+                   !types_assignable(tp, ta) &&
+                   !value_assignable_to_interface(tp, ta)) {
             diags_.error(e->args[i]->loc, std::string("argumento ") +
                                               std::to_string(i + 1) +
                                               ": tipo (" + type_to_string(ta) +

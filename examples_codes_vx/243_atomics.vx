@@ -9,6 +9,7 @@ namespace ejemplos.atomics;
 //
 //   vm -m aot --vx 243_atomics.vx --format pe -o p.exe && ./p.exe   (exit 42)
 
+import std.types only uintptr;
 import "vx_thread" only vx_thread_spawn, vx_thread_join;
 import "vx_atomic" only vx_atomic_add64, vx_atomic_load64, vx_spin_lock, vx_spin_unlock;
 
@@ -28,10 +29,10 @@ void worker(u64 id) {
 }
 
 i32 main() {
-    u64[4] h;
+    uintptr[4] h;
     i64 k = 0;
     while (k < 4) {
-        h[k] = vx_thread_spawn((u64)(cfn(u64) -> void) worker, (u64)k);
+        h[k] = vx_thread_spawn((uintptr)(cfn(u64) -> void) worker, (uintptr)k);
         k = k + 1;
     }
     k = 0;

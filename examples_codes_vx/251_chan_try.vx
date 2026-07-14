@@ -1,0 +1,30 @@
+// Operaciones NO-BLOQUEANTES sobre canal: try_send / try_recv.  Sin fibras
+// (corren en main directo): try_send llena el buffer y devuelve 0 cuando esta
+// lleno; try_recv drena y devuelve 0 cuando esta vacio.  Base de `select`.
+import std.types only uintptr;
+import "vx_chan" only vx_chan_new, vx_chan_try_send, vx_chan_try_recv,
+                     vx_chan_free;
+
+i32 main() {
+    uintptr ch = vx_chan_new(4);        // buffer capacidad 4
+
+    // Enviar hasta que el buffer se llene (try_send devuelve 0 al 5o intento).
+    
+    for (i64 sent = 0; vx_chan_try_send(ch, sent + 1) != 0; sent++) {
+        // envia 1,2,3,4 -> sent = 4
+    }
+
+    // Drenar hasta que el buffer se vacie (try_recv devuelve 0).  `got` se
+    // declara FUERA del for (se usa despues del bucle, en el return).
+    i64 sum = 0;
+    i64 v = 0;
+    i64 got = 0;
+    for (; vx_chan_try_recv(ch, &v) != 0; got++) {
+        sum += v;                  // 1+2+3+4 = 10
+        // got = 4
+    }
+
+    vx_chan_free(ch);
+    // sum=10, got=4 -> 10 + 4*8 = 42.
+    return (i32)(sum + got * 8);
+}

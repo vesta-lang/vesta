@@ -39,6 +39,14 @@ namespace vx {
 // serializar tipos de fields, returns, params, etc.
 // ---------------------------------------------------------------------------
 static std::string canonical_typename_of(const Type &t) {
+    // Newtype (typedef-new, p.ej. `uintptr`): enriquecer con su tipo SUBYACENTE
+    // en la forma `nombre#underlying` (p.ej. `uintptr#u64`).  Asi un modulo que
+    // importa una firma que USA el newtype PERO no importa su definicion puede
+    // RECONSTRUIRLO (kind + nominal) sin tener el typedef local -- sin esto el
+    // param resolvia a `void`.  type_to_string (usado en errores) NO cambia.
+    if (t.nominal_id != 0 && !t.nominal_name.empty() && is_integral(t.kind)) {
+        return t.nominal_name + "#" + type_to_string(Type{t.kind});
+    }
     // type_to_string ya produce un nombre canonico legible.  Por ejemplo:
     //   i32, u64*, Optional<i32>, Result<i32, string>, fn(i32) -> i64,
     //   VirtualPtr<T>, struct_name (para STRUCT), nominal_name (newtype).
@@ -120,6 +128,33 @@ static std::vector<std::string> split_type_list_(const std::string &s) {
 
 Type TypeChecker::resolve_type_string(const std::string &type_str) const {
     if (type_str.empty()) return Type{};
+
+    // Newtype enriquecido `nombre#underlying` (ver canonical_typename_of): un
+    // typedef-new importado en una firma cuyo modulo NO define el newtype.  Si
+    // el newtype SI esta definido localmente (mismo nombre en type_aliases_),
+    // se prefiere esa definicion (id nominal consistente).  Si no, se
+    // reconstruye: kind del underlying + nombre nominal + un id derivado
+    // DETERMINISTICAMENTE del nombre (asi todas las referencias al mismo
+    // newtype -- de cualquier modulo -- son == entre si sin importar el
+    // typedef).  El `#` no aparece en ningun otro typename canonico.
+    if (type_str.find('#') != std::string::npos) {
+        const size_t hp = type_str.find('#');
+        const std::string name = type_str.substr(0, hp);
+        const std::string under = type_str.substr(hp + 1);
+        auto it_local = type_aliases_.find(name);
+        if (it_local != type_aliases_.end()) return it_local->second;
+        Type u = resolve_type_string(under); // primitivo subyacente
+        u.nominal_name = name;
+        // id determinista != 0, en rango alto para no chocar con los ids de
+        // contador (que empiezan bajos).  FNV-1a 32 del nombre.
+        uint32_t h = 2166136261u;
+        for (char c : name) {
+            h ^= static_cast<uint8_t>(c);
+            h *= 16777619u;
+        }
+        u.nominal_id = 0x40000000u | (h & 0x3FFFFFFFu);
+        return u;
+    }
 
     // Punteros: stripear sufijo '*' antes del resto.
     if (type_str.back() == '*') {
