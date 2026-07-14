@@ -1,0 +1,61 @@
+// select sobre canales (fan-in): un consumidor multiplexa la RECEPCION de dos
+// canales con vx_chan_select_recv_block.  Dos productores envian por canales
+// distintos; el consumidor recibe de "el que este listo" hasta juntar todos los
+// mensajes.  El orden de llegada NO es determinista (depende del scheduler) pero
+// la SUMA y los conteos por-canal SI -> verificacion estable.
+import std.types only uintptr;
+import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
+import "vx_chan" only vx_chan_new, vx_chan_send, vx_chan_free,
+                     vx_chan_select_recv_block;
+
+uintptr g_ch_a = 0;
+uintptr g_ch_b = 0;
+i64 g_sum = 0;
+i64 g_from_a = 0;
+i64 g_from_b = 0;
+
+const i64 A_N = 2;   // el canal A envia 2 mensajes: 10, 11
+const i64 B_N = 3;   // el canal B envia 3 mensajes: 20, 21, 22
+
+void producer_a(i64 arg) {
+    for (i64 i = 0; i < A_N; i++) {
+        vx_chan_send(g_ch_a, 10 + i);
+    }
+}
+void producer_b(i64 arg) {
+    for (i64 i = 0; i < B_N; i++) {
+        vx_chan_send(g_ch_b, 20 + i);
+    }
+}
+void consumer(i64 arg) {
+    uintptr[2] chans;
+    chans[0] = g_ch_a;
+    chans[1] = g_ch_b;
+    i64 v = 0;
+    i64 total = A_N + B_N;              // 5 mensajes en total
+    for (i64 got = 0; got < total; got++) {
+        i64 idx = vx_chan_select_recv_block(&chans[0], 2, &v);
+        g_sum += v;
+        if (idx == 0) {
+            g_from_a += 1;
+        } else {
+            g_from_b += 1;
+        }
+    }
+}
+i32 main() {
+    g_ch_a = vx_chan_new(1);           // cap 1: fuerza send bloqueante -> park/wake
+    g_ch_b = vx_chan_new(1);
+    vx_pool_start(2);
+    vx_pool_submit((i64)(cfn(i64) -> void) consumer, 0);
+    vx_pool_submit((i64)(cfn(i64) -> void) producer_a, 0);
+    vx_pool_submit((i64)(cfn(i64) -> void) producer_b, 0);
+    vx_pool_join();
+    vx_chan_free(g_ch_a);
+    vx_chan_free(g_ch_b);
+    // sum = 10+11 + 20+21+22 = 84; from_a=2, from_b=3.
+    if (g_from_a == A_N && g_from_b == B_N && g_sum == 84) {
+        return 42;
+    }
+    return (i32)g_sum;
+}
