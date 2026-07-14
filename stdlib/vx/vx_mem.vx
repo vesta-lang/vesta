@@ -278,6 +278,43 @@ u64 __vmem_size_of(i32 cls) {
     return 4096;
 }
 
+// ---------------------------------------------------------------------------
+// Thread-safety OPT-IN del slab.  El allocator es LOCKLESS por defecto (mono-
+// hilo, ~66x): coste CERO.  Cuando el programa lanza hilos (vx_thread/vx_pool
+// llaman a vmem_enable_mt()), `__vmem_mt` pasa a 1 y las secciones criticas del
+// SLAB (free-list + bump) se protegen con un spinlock.  El camino LARGE (mmap +
+// header por-bloque) NO necesita lock (el kernel serializa mmap/munmap) -> los
+// allocs grandes siguen lock-free tambien en MT.  Atomicos INLINEADOS (mismo
+// motivo que vx_sync/vx_async: vx_mem se auto-bundlea single-module; vx_atomic
+// es la lib canonica reutilizable por el codigo de usuario y otras libs).
+i64 __vmem_mt = 0;    ///< 0 = single-thread (sin lock); 1 = multihilo.
+i64 __vmem_lock = 0;  ///< spinlock del slab (0 = libre).
+
+/// CAS de 64 bits (lock cmpxchg): rax=expected (in/old-out), rdx=desired.
+@Target("arch:x86_64")
+i64 __vmem_cas64(i64* addr, i64 expected, i64 desired) {
+    register("rsi") i64* a = addr;
+    register("rax") i64 ex = expected;
+    register("rdx") i64 de = desired;
+    asm volatile { lock cmpxchg [rsi], rdx };
+    return ex;
+}
+@Target("arch:x86_64")
+void __vmem_cpu_relax() { asm volatile { pause }; }
+
+/// Activa el modo multihilo (lo llaman vx_thread/vx_pool al crear el 1er hilo).
+public void vmem_enable_mt() { __vmem_mt = 1; }
+
+/// Toma el spinlock del slab si estamos en modo multihilo (si no, no-op).
+void __vmem_slab_lock() {
+    if (__vmem_mt == 0) { return; }
+    while (__vmem_cas64(&__vmem_lock, 0, 1) != 0) { __vmem_cpu_relax(); }
+}
+void __vmem_slab_unlock() {
+    if (__vmem_mt == 0) { return; }
+    __vmem_lock = 0;
+}
+
 /**
  * @brief Pide un chunk RW nuevo al SO y lo arma como region de bump.
  * @param min_need Tamano minimo necesario (si excede VMEM_CHUNK_BYTES).
@@ -316,12 +353,15 @@ u64 __vmem_alloc(u64 size) {
         return base + 16;
     }
     u64 csz = __vmem_size_of(cls);
+    // Seccion critica del SLAB (free-list + bump): protegida en modo multihilo.
+    __vmem_slab_lock();
     u64 head = __vmem_free[cls];
     if (head != 0) {
         // Pop: head es el block (header); next guardado en su payload (head+8).
         u64* hp = (u64*)head;
         __vmem_free[cls] = hp[1];
-        hp[0] = (u64)cls; // re-set header
+        __vmem_slab_unlock();
+        hp[0] = (u64)cls; // re-set header (fuera del lock: el bloque ya es nuestro)
         vx_memset(head + 8, 0, csz); // reciclado -> sucio: kzalloc
         return head + 8;
     }
@@ -331,6 +371,7 @@ u64 __vmem_alloc(u64 size) {
     if (__vmem_bump + need > __vmem_end) __vmem_new_chunk(need);
     u64 block = __vmem_bump;
     __vmem_bump = __vmem_bump + need;
+    __vmem_slab_unlock();
     u64* bp = (u64*)block;
     bp[0] = (u64)cls;
     return block + 8;
@@ -354,9 +395,12 @@ void __vmem_free_impl(u64 payload) {
         return;
     }
     // Push a la free-list: next = old head (guardado en el payload).
+    // Seccion critica del SLAB: protegida en modo multihilo.
+    __vmem_slab_lock();
     u64* pp = (u64*)payload;
     pp[0] = __vmem_free[h];
     __vmem_free[h] = block;
+    __vmem_slab_unlock();
 }
 
 /**
