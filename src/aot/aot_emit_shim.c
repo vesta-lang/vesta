@@ -936,8 +936,24 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                 s->st_shndx = (uint16_t)(dsyms[i].section + 1);
                 s->st_value = (sec_va ? sec_va[dsyms[i].section] : 0) +
                               dsyms[i].offset;
-                s->st_size = 0;
+                s->st_size = 0; /* se calcula abajo */
                 sp += l + 1;
+            }
+            /* st_size = distancia al siguiente simbolo de la misma seccion (o al
+             * fin de seccion) -> valgrind resuelve por RANGO (gdb por valor).
+             * Cubre _start (indice 1, seccion entry_sec) + funciones (2..). */
+            for (int k = 1; k <= ndbg + 1; ++k) {
+                int ksec = (k == 1) ? entry_sec : dsyms[k - 2].section;
+                uint64_t v = symtab[k].st_value;
+                uint64_t nxt = (sec_va ? sec_va[ksec] : 0) + secs[ksec].size;
+                for (int m = 1; m <= ndbg + 1; ++m) {
+                    if (m == k) continue;
+                    int msec = (m == 1) ? entry_sec : dsyms[m - 2].section;
+                    if (msec != ksec) continue;
+                    uint64_t vm = symtab[m].st_value;
+                    if (vm > v && vm < nxt) nxt = vm;
+                }
+                symtab[k].st_size = nxt - v;
             }
             size_t st_off = 0;
             uint64_t st_va = 0;
@@ -2161,8 +2177,24 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
                     STB_GLOBAL, ds->is_func ? STT_FUNC : STT_OBJECT);
                 s->st_shndx = (uint16_t)(1 + ds->section); /* seccion en la SHT */
                 s->st_value = sec_va[ds->section] + ds->offset;
-                s->st_size = 0;
+                s->st_size = 0; /* se calcula abajo */
                 sp += l + 1;
+            }
+            /* st_size = distancia al siguiente simbolo de la MISMA seccion (o
+             * al fin de la seccion).  valgrind resuelve PC->funcion por RANGO
+             * [value, value+size); con size 0 no cubre ningun PC (gdb si, por
+             * valor-mas-cercano).  O(n^2) pero n = numero de funciones. */
+            for (int i = 0; i < n; ++i) {
+                Elf64_Sym *s = &symtab[1 + i];
+                int sec = g_aot_dbg_syms[i].section;
+                uint64_t v = s->st_value;
+                uint64_t nxt = sec_va[sec] + aot_sec_size(&secs[sec]);
+                for (int j = 0; j < n; ++j) {
+                    if (j == i || g_aot_dbg_syms[j].section != sec) continue;
+                    uint64_t vj = symtab[1 + j].st_value;
+                    if (vj > v && vj < nxt) nxt = vj;
+                }
+                s->st_size = nxt - v;
             }
             /* layout apendido (8-aligned). */
             size_t off = (size_t)total;
