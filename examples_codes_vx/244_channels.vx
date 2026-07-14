@@ -1,9 +1,10 @@
 // Canales buffered sobre el scheduler M:N de fibras: productor/consumidor con
 // buffer pequeno (cap 4) -> fuerza park/wake real (buffer lleno/vacio).
+import std.types only uintptr;
 import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
 import "vx_chan" only vx_chan_new, vx_chan_send, vx_chan_recv, vx_chan_free;
 
-i64 g_ch = 0;
+uintptr g_ch = 0;
 i64 g_sum = 0;
 i64 g_n = 100;
 

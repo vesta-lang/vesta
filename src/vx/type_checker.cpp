@@ -6220,7 +6220,37 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
                 nt->name = t.struct_name;
             }
         }
-        if (t.kind != PrimitiveKind::COUNT && !types_assignable(s.type, t) &&
+        // Un newtype NUMERICO (typedef-new sobre int/float, p.ej. `uintptr`)
+        // ACEPTA una CONSTANTE numerica como inicializador sin cast (como C:
+        // `uintptr x = 0;`): el newtype ES un tipo numerico y recibir un
+        // literal/constante numerica es natural.  Un valor NO-constante (otra
+        // variable) sigue requiriendo cast explicito para preservar la
+        // seguridad del tipo nominal.  El literal toma el tipo del newtype.
+        bool numeric_const_to_newtype = false;
+        if (s.type.nominal_id != 0 && is_numeric(s.type.kind) && vd->init) {
+            const ast::Expr *ie = vd->init.get();
+            const bool is_num_const =
+                ie->kind == ast::NodeKind::IntLitExpr ||
+                ie->kind == ast::NodeKind::FloatLitExpr ||
+                ie->kind == ast::NodeKind::CharLitExpr ||
+                (ie->kind == ast::NodeKind::UnaryExpr &&
+                 (static_cast<const ast::UnaryExpr *>(ie)->op ==
+                      ast::UnOp::Neg ||
+                  static_cast<const ast::UnaryExpr *>(ie)->op ==
+                      ast::UnOp::BitNot) &&
+                 static_cast<const ast::UnaryExpr *>(ie)->operand &&
+                 (static_cast<const ast::UnaryExpr *>(ie)->operand->kind ==
+                      ast::NodeKind::IntLitExpr ||
+                  static_cast<const ast::UnaryExpr *>(ie)->operand->kind ==
+                      ast::NodeKind::FloatLitExpr));
+            if (is_num_const && (is_numeric(t.kind) ||
+                                 t.kind == PrimitiveKind::CHAR)) {
+                numeric_const_to_newtype = true;
+                vd->init->result_type = s.type; // el literal es del newtype
+            }
+        }
+        if (!numeric_const_to_newtype && t.kind != PrimitiveKind::COUNT &&
+            !types_assignable(s.type, t) &&
             !class_is_assignable(s.type, t) && !null_to_class) {
             std::string msg = std::string("tipo del inicializador (") +
                               type_to_string(t) +
@@ -8389,6 +8419,28 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     const Type tl = check_expr(e->lhs.get());
     const Type tr = check_expr(e->rhs.get());
 
+    // Newtype entero CERRADO bajo aritmetica/bitwise/shift: un typedef-new
+    // sobre un entero (nominal_id != 0), p.ej. `uintptr`/`usize`, conserva su
+    // identidad al operar con el MISMO newtype o con un entero plano.  Asi
+    // `uintptr p; p = p + 8;` o `p & ~15` (alinear) NO requieren un cast en
+    // cada paso -> los tipos semanticos son usables en la stdlib.  Sin esto,
+    // promote_arith devolveria el underlying (u64) y la reasignacion al
+    // newtype fallaria.  @p fallback = tipo entero plano si no aplica.
+    // @return el Type resultado (newtype preservado o @p fallback).
+    auto preserve_int_newtype = [&](const Type &a, const Type &b,
+                                    PrimitiveKind fallback) -> Type {
+        const bool a_nt = a.nominal_id != 0 && is_integral(a.kind);
+        const bool b_nt = b.nominal_id != 0 && is_integral(b.kind);
+        // a es newtype y b es el mismo newtype o un entero plano -> a.
+        if (a_nt && is_integral(b.kind) &&
+            (!b_nt || b.nominal_id == a.nominal_id))
+            return a;
+        // b es newtype y a es un entero plano -> b.
+        if (b_nt && is_integral(a.kind) && !a_nt)
+            return b;
+        return Type{fallback};
+    };
+
     // Operator overloading via metodos dunder (C-1 + C-2).  Si @c tl es
     // de tipo CLASS o STRUCT y declara el dunder correspondiente al
     // operador cuya firma acepta @c tr, el operador DESPACHA a
@@ -8652,7 +8704,8 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
                 adj_r = tl;
             }
         }
-        return Type{promote_arith(adj_l.kind, adj_r.kind)};
+        return preserve_int_newtype(adj_l, adj_r,
+                                    promote_arith(adj_l.kind, adj_r.kind));
     }
     case ast::BinOp::Eq:
     case ast::BinOp::Neq:
@@ -8730,7 +8783,10 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
         }
         const PrimitiveKind a = char_as_u8(tl.kind);
         const PrimitiveKind b = char_as_u8(tr.kind);
-        return Type{promote_arith(a, b)};
+        // Newtype cerrado bajo bitwise/shift: `p & ~15` (alinear una uintptr)
+        // conserva el tipo uintptr.  Para shift, el newtype relevante es el
+        // izquierdo (el valor desplazado); el contador (derecho) es un entero.
+        return preserve_int_newtype(tl, tr, promote_arith(a, b));
     }
     }
     return Type{};
@@ -9945,8 +10001,35 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         (e->op == ast::AssignOp::AddAssign &&
          s->type.kind == PrimitiveKind::STRING &&
          (tv.kind == PrimitiveKind::STRING || tv.kind == PrimitiveKind::CHAR));
+    // Newtype NUMERICO acepta una CONSTANTE numerica sin cast (como en
+    // check_var_decl): `uintptr p; p = 100;` es natural (el newtype ES
+    // numerico).  Solo para `=` directo y valor constante; un no-constante
+    // sigue requiriendo cast explicito (seguridad del tipo nominal).
+    bool num_const_to_newtype = false;
+    if (s->type.nominal_id != 0 && is_numeric(s->type.kind) && e->value &&
+        e->op == ast::AssignOp::Assign &&
+        (is_numeric(tv.kind) || tv.kind == PrimitiveKind::CHAR)) {
+        const ast::Expr *ie = e->value.get();
+        const bool is_num_const =
+            ie->kind == ast::NodeKind::IntLitExpr ||
+            ie->kind == ast::NodeKind::FloatLitExpr ||
+            ie->kind == ast::NodeKind::CharLitExpr ||
+            (ie->kind == ast::NodeKind::UnaryExpr &&
+             (static_cast<const ast::UnaryExpr *>(ie)->op == ast::UnOp::Neg ||
+              static_cast<const ast::UnaryExpr *>(ie)->op ==
+                  ast::UnOp::BitNot) &&
+             static_cast<const ast::UnaryExpr *>(ie)->operand &&
+             (static_cast<const ast::UnaryExpr *>(ie)->operand->kind ==
+                  ast::NodeKind::IntLitExpr ||
+              static_cast<const ast::UnaryExpr *>(ie)->operand->kind ==
+                  ast::NodeKind::FloatLitExpr));
+        if (is_num_const) {
+            num_const_to_newtype = true;
+            e->value->result_type = s->type; // el literal es del newtype
+        }
+    }
     if (tv.kind != PrimitiveKind::COUNT && !string_append_ok &&
-        !types_assignable(s->type, tv) &&
+        !num_const_to_newtype && !types_assignable(s->type, tv) &&
         !value_assignable_to_interface(s->type, tv)) {
         diags_.error(e->loc, std::string("tipo del valor (") +
                                  type_to_string(tv) +

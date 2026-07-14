@@ -1,4 +1,13 @@
+/**
+ * std.types para x86 modo real (16 bits): punteros y tamanos de 16 bits.
+ */
 namespace std.types;
 
 @Target("arch:x86_16")
 public typedef u16 uintptr new;
+@Target("arch:x86_16")
+public typedef i16 intptr  new;
+@Target("arch:x86_16")
+public typedef u16 usize   new;
+@Target("arch:x86_16")
+public typedef i16 isize   new;

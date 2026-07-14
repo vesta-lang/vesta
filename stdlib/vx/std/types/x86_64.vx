@@ -1,4 +1,16 @@
+/**
+ * std.types para x86-64 (LP64/LLP64): punteros y tamanos de 64 bits.
+ * Todos son typedef-new (tipos NOMINALES distintos): un uintptr NO es
+ * intercambiable con un u64 plano sin un cast explicito -> seguridad de tipos
+ * para direcciones/tamanos, cerrados bajo aritmetica y bitwise.
+ */
 namespace std.types;
 
 @Target("arch:x86_64")
-public typedef u64 uintptr new;
+public typedef u64 uintptr new;   // entero sin signo del ancho de un puntero
+@Target("arch:x86_64")
+public typedef i64 intptr  new;   // entero con signo del ancho de un puntero
+@Target("arch:x86_64")
+public typedef u64 usize   new;   // tamano/cuenta de objetos en memoria
+@Target("arch:x86_64")
+public typedef i64 isize   new;   // tamano/diferencia con signo (ptrdiff)

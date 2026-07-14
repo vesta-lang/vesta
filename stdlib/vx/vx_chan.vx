@@ -31,6 +31,7 @@
  * no puede bloquearse en un canal).
  */
 
+import std.types only uintptr;
 import "vx_atomic" only vx_spin_lock, vx_spin_unlock;
 import "vx_pool" only vx_park, vx_wake, vx_cur_fiber, vx_wq_push, vx_wq_pop,
                      vx_fib_set_elem, vx_fib_get_elem;
@@ -67,7 +68,7 @@ void __vxch_unlock_after_park(i64 lock_addr, i64 fib) {
  *        indexado con `& mask`, sin division).
  * @return puntero host al canal (0 si OOM).
  */
-public i64 vx_chan_new(i64 cap) {
+public uintptr vx_chan_new(i64 cap) {
     i64 c = 0;
     i64 mask = 0;
     if (cap >= 1) {
@@ -79,7 +80,7 @@ public i64 vx_chan_new(i64 cap) {
     }
     i64 ptr = (i64)malloc(CH_HDR + c * 8);
     if (ptr == 0) {
-        return 0;
+        return (uintptr) 0;
     }
     Chan ch = Chan(ptr);
     ch.lock = 0;
@@ -93,11 +94,12 @@ public i64 vx_chan_new(i64 cap) {
     ch.swq_h = 0;
     ch.swq_t = 0;
     ch.closed = 0;
-    return ptr;
+    return (uintptr) ptr;
 }
 
 /// Libera el canal (nadie debe estar bloqueado en el).
-public void vx_chan_free(i64 ptr) {
+public void vx_chan_free(uintptr ch) {
+    i64 ptr = (i64) ch;
     if (ptr != 0) {
         free((u8*)ptr);
     }
@@ -112,9 +114,17 @@ i64 __vxch_slot(i64 ptr, i64 idx, i64 mask) {
  * @brief Envia @p v por el canal.  Prioridad: (1) receptor en espera -> entrega
  *        directa; (2) hueco en el buffer -> encolar; (3) bloquear en la sendq.
  */
-public void vx_chan_send(i64 ptr, i64 v) {
+public void vx_chan_send(uintptr ch_h, i64 v) {
+    i64 ptr = (i64) ch_h;
     Chan ch = Chan(ptr);
     vx_spin_lock(&ch.lock);
+    // Enviar por un canal CERRADO es un error del programa: descartamos el
+    // valor y volvemos (no bloqueamos ni corrompemos el buffer).  El
+    // productor debe dejar de enviar tras cerrar.
+    if (ch.closed != 0) {
+        vx_spin_unlock(&ch.lock);
+        return;
+    }
     // (1) Receptor en espera -> entrega directa en su slot ELEM (heap).
     i64 r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
     if (r != 0) {
@@ -147,7 +157,8 @@ public void vx_chan_send(i64 ptr, i64 v) {
  *        entrega directa; (3) bloquear en la recvq.
  * @return el valor recibido.
  */
-public i64 vx_chan_recv(i64 ptr) {
+public i64 vx_chan_recv(uintptr ch_h) {
+    i64 ptr = (i64) ch_h;
     Chan ch = Chan(ptr);
     vx_spin_lock(&ch.lock);
     // (1) Dato en el buffer.
@@ -178,6 +189,14 @@ public i64 vx_chan_recv(i64 ptr) {
         vx_wake(s);
         return val;
     }
+    // Canal CERRADO y drenado (buffer vacio, sin emisores): devolver 0 sin
+    // bloquear (semantica CSP: recv de un canal cerrado no espera).  El
+    // consumidor distingue "cerrado" via vx_chan_is_closed en su condicion
+    // de bucle.
+    if (ch.closed != 0) {
+        vx_spin_unlock(&ch.lock);
+        return 0;
+    }
     // (3) Nada -> me encolo (la fibra ES el nodo) y bloqueo; el sender pondra
     // mi slot ELEM.  Uso el `self` capturado (no re-llamo cur_fiber tras el park).
     i64 self = vx_cur_fiber();
@@ -185,4 +204,41 @@ public i64 vx_chan_recv(i64 ptr) {
     vx_wq_push((i64)&ch.rwq_h, (i64)&ch.rwq_t, self);
     vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park, (i64)&ch.lock);
     return vx_fib_get_elem(self);
+}
+
+/**
+ * @brief Cierra el canal.  Marca cerrado y DESPIERTA a todos los que esperan:
+ *        los receptores en la recvq reciben 0 (canal drenado); los emisores
+ *        bloqueados en la sendq se despiertan (su envio se pierde -- enviar tras
+ *        close es un error).  Idempotente-seguro: cerrar dos veces solo re-marca.
+ *        Tras close, recv de un canal vacio devuelve 0 al instante (no bloquea).
+ */
+public void vx_chan_close(uintptr ch_h) {
+    i64 ptr = (i64) ch_h;
+    Chan ch = Chan(ptr);
+    vx_spin_lock(&ch.lock);
+    ch.closed = 1;
+    // Despertar a TODOS los receptores en espera -> reciben 0 (drenado).  El
+    // wake solo encola en el scheduler (no re-toma el lock del canal) -> seguro
+    // bajo el lock.
+    i64 r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
+    while (r != 0) {
+        vx_fib_set_elem(r, 0);
+        vx_wake(r);
+        r = vx_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t);
+    }
+    // Despertar emisores bloqueados (su valor se descarta).
+    i64 s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+    while (s != 0) {
+        vx_wake(s);
+        s = vx_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t);
+    }
+    vx_spin_unlock(&ch.lock);
+}
+
+/// @return 1 si el canal esta cerrado, 0 si no.
+public i64 vx_chan_is_closed(uintptr ch_h) {
+    i64 ptr = (i64) ch_h;
+    Chan ch = Chan(ptr);
+    return ch.closed;
 }

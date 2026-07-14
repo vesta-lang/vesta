@@ -1333,10 +1333,21 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
             continue;
         }
-        if (!gv->type || gv->type->kind != ast::NodeKind::PrimitiveTypeNode)
+        // Tipo primitivo directo O newtype (typedef-new) que resuelve a un
+        // primitivo (p.ej. `uintptr` -> u64): en ambos casos pre-creamos el
+        // slot del global para que TODAS las funciones (no solo la que lo
+        // escribe primero) resuelvan su lectura/escritura al mismo slot.
+        // Sin esto, un global de tipo std.types leido/escrito desde otra
+        // funcion daba "nombre no resuelto" o leia 0.
+        if (!gv->type ||
+            (gv->type->kind != ast::NodeKind::PrimitiveTypeNode &&
+             gv->type->kind != ast::NodeKind::NamedTypeNode))
             continue;
-        auto *pt = static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
-        switch (pt->prim) {
+        const PrimitiveKind pt_prim =
+            (gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
+                ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())->prim
+                : tc_.resolve_type_node(gv->type.get()).kind;
+        switch (pt_prim) {
         case PrimitiveKind::STRING:
         case PrimitiveKind::I8:
         case PrimitiveKind::I16:
@@ -1491,11 +1502,19 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 vx_global_array_bytes(gv->type.get()) > 0) {
                 runtime_global_supported = true;
             }
+            // Tipo primitivo directo O un newtype (typedef-new) que resuelve a
+            // un primitivo de <=8 bytes (p.ej. `uintptr` -> u64).  Resolvemos
+            // via resolve_type_node para que los tipos semanticos de std.types
+            // tengan storage global igual que su underlying.
             if (!gv->is_const && !is_comptime_silent && gv->type &&
-                gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
-                auto *pt =
-                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
-                switch (pt->prim) {
+                (gv->type->kind == ast::NodeKind::PrimitiveTypeNode ||
+                 gv->type->kind == ast::NodeKind::NamedTypeNode)) {
+                PrimitiveKind gpk =
+                    (gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
+                        ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())
+                              ->prim
+                        : tc_.resolve_type_node(gv->type.get()).kind;
+                switch (gpk) {
                 case PrimitiveKind::STRING:
                 case PrimitiveKind::I8:
                 case PrimitiveKind::I16:

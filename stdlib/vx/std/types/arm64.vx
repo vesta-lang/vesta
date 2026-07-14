@@ -1,4 +1,13 @@
+/**
+ * std.types para AArch64 (64 bits): punteros y tamanos de 64 bits.
+ */
 namespace std.types;
 
 @Target("arch:arm64")
 public typedef u64 uintptr new;
+@Target("arch:arm64")
+public typedef i64 intptr  new;
+@Target("arch:arm64")
+public typedef u64 usize   new;
+@Target("arch:arm64")
+public typedef i64 isize   new;

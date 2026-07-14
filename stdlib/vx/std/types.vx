@@ -5,3 +5,9 @@
  * `import std.types` fusiona automaticamente el fichero del arch correcto.
  */
 namespace std.types;
+
+/* Tipos NO dependientes de la arquitectura (mismo ancho en todas): van aqui,
+ * en el fichero base del namespace parcial. */
+
+/// Octeto sin signo (0..255).  Alias comodo y semantico para buffers de bytes.
+public typedef u8 byte new;

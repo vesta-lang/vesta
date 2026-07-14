@@ -3479,6 +3479,14 @@ Parser::parse_import_decl(bool is_public_reexport) {
                     }
                     os.rename = consume().lexeme;
                 }
+                // Registrar el nombre efectivo (rename o name) como posible
+                // type-alias para que `looks_like_cast` reconozca `(T) x`
+                // cuando T es un typedef importado de otro modulo (p.ej.
+                // `uintptr` de std.types).  El guard de looks_like_cast (el
+                // token tras `)` debe iniciar una expresion) evita misparsear
+                // `(fn_importada)(args)`.
+                declared_aliases_.insert(os.rename.empty() ? os.name
+                                                           : os.rename);
                 im->only_symbols.push_back(std::move(os));
                 if (current_.kind == TokenKind::COMMA) {
                     (void)consume();
@@ -3526,6 +3534,10 @@ Parser::parse_import_decl(bool is_public_reexport) {
                 }
                 os.rename = consume().lexeme;
             }
+            // Ver nota en la forma selectiva `.{...}`: el nombre efectivo se
+            // registra como posible type-alias para reconocer `(T) x` con T
+            // importado (typedef cross-modulo, p.ej. `uintptr`).
+            declared_aliases_.insert(os.rename.empty() ? os.name : os.rename);
             im->only_symbols.push_back(std::move(os));
             if (current_.kind == TokenKind::COMMA) {
                 (void)consume();
