@@ -26,9 +26,9 @@ i32 main() {
     // ALLOCA + STORE/LOAD por memoria.  Sin el fix, el LOAD posterior
     // de p para evaluar p[i] pierde is_host_ptr.
     //
-    // El tipo `VirtualPtr<i32*>` significa "direccion VM que contiene
-    // un puntero HOST".  La direccion exterior es virtual (p vive en
-    // stack VM) pero el contenido es el host_ptr de malloc.
+    // `i32**` = "direccion host que contiene un puntero host": un local
+    // address-taken se reserva en host, asi que tanto la direccion
+    // exterior como el host_ptr de malloc que contiene son host.
     i32** pp = &p;
 
     // Estos stores DEBEN ir a memoria HOST (movh).  Sin el fix

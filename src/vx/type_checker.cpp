@@ -9232,15 +9232,21 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
             }
         }
         // Bug host-vs-VM (2026-07-15): `&x` devuelve un `T*`, es decir una
-        // direccion HOST.  Antes el default era VirtualPtr<T> (memoria VM)
-        // porque los locales vivian en la pila VM, pero el resultado se
-        // asignaba/pasaba como `T*` sin queja del checker y el consumidor lo
-        // deref-eaba con movh -> SIGSEGV.  Ahora el lowering coloca todo local
-        // address-taken en memoria host (ver @c lower_var_decl), asi que la
-        // direccion ES host y ambos lados coinciden.  `VirtualPtr<T>` sigue
-        // siendo la unica forma de nombrar memoria VM, y los casos de abajo
-        // (deref de un VirtualPtr, subscript de un array virtual) la
-        // preservan.
+        // direccion HOST -- sea `x` un local o un global.  Antes el default era
+        // VirtualPtr<T> (memoria VM) porque el storage vivia en la memoria de
+        // la VM, pero el resultado se asignaba/pasaba como `T*` sin queja del
+        // checker y el consumidor lo deref-eaba con movh -> SIGSEGV.  Ahora el
+        // storage esta en host en los tres modos: los locales address-taken
+        // (ver @c lower_var_decl) y los globales (seccion `gdata`, que el
+        // loader materializa en un bloque host; en AOT ya es `.data`).  Asi la
+        // direccion ES host y ambos lados coinciden -- ademas de sobrevivir a
+        // viajar por memoria (a un campo, a la FFI, a un `lock cmpxchg`).
+        //
+        // Consecuencia: NINGUN `&` produce memoria VM.  `VirtualPtr<T>` queda
+        // como tipo de INTEROP para nombrar una direccion VM que ya se tiene
+        // (via cast explicito); los casos de abajo solo la PRESERVAN cuando ya
+        // se parte de una (deref de un VirtualPtr, subscript de un array
+        // virtual).
         //
         // Caso 1: campo de un objeto CLASS o STRUCT.  Si el operando
         // es FieldAccessExpr cuya base es CLASS o STRUCT alocado
@@ -9281,6 +9287,11 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                 }
             }
         }
+        // NOTA: `&global` NO entra aqui.  El storage de una variable global
+        // vive en memoria HOST (seccion `gdata`, que el loader materializa en
+        // un bloque host; en AOT ya es `.data`), asi que su direccion es un
+        // `T*` normal.  Es lo que permite que sobreviva a viajar por memoria y
+        // que la FFI o un `lock cmpxchg` la usen.
         return Type::make_ptr(t, result_is_virtual);
     }
     case ast::UnOp::Deref: {
@@ -9790,17 +9801,17 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                                      ") incompatible con tipo del campo (" +
                                      type_to_string(ft) + ")");
         }
-        // Mismatch host/VM: guardar un puntero VIRTUAL (VM, de `&local` o
-        // VirtualPtr<T>) en un campo `T*` (host) falla silenciosamente -- el
-        // campo se lee con `movh` (host) pero contiene una direccion VM.  Lo
-        // rechazamos en compile-time dirigiendo al tipo correcto.  (Un puntero
-        // host -- malloc, etc. -- en un campo `T*` SI es valido.)
+        // Mismatch host/VM: guardar un puntero VIRTUAL (VM, un `VirtualPtr<T>`)
+        // en un campo `T*` (host) falla silenciosamente -- el campo se lee con
+        // `movh` (host) pero contiene una direccion VM.  Lo rechazamos en
+        // compile-time dirigiendo al tipo correcto.  (Un puntero host --
+        // malloc, `&x`, etc. -- en un campo `T*` SI es valido.)
         if (ft.kind == PrimitiveKind::PTR && !ft.is_virtual &&
             tv.kind == PrimitiveKind::PTR && tv.is_virtual) {
             diags_.error(
                 e->loc,
-                "no se puede guardar un puntero virtual (VM, de '&local' o "
-                "VirtualPtr<T>) en un campo de tipo '" + type_to_string(ft) +
+                "no se puede guardar un puntero virtual (memoria VM, un "
+                "'VirtualPtr<T>') en un campo de tipo '" + type_to_string(ft) +
                 "' (puntero host): el campo se leeria como host y la direccion "
                 "es VM.  Declara el campo como 'VirtualPtr<...>' para guardar "
                 "direcciones de memoria VM.");

@@ -109,24 +109,32 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
  *        viva.  Casos:
  *   - "fnsym:<label>" / bare (CALL_REL32): direccion NATIVA de una funcion
  *     del modulo (compilada al vuelo) o de un extern (FFI).
- *   - "rodata.<slot>": direccion HOST del slot en vm_mem (global compartido
- *     con el codigo VM_ABI).
+ *   - "rodata.<slot>": direccion HOST del slot, este en `gdata` (bloque host,
+ *     donde vive el storage de las variables globales) o en `code` (memoria de
+ *     la VM, donde viven los literales).
  */
 uint64_t resolve_naked_symbol(runtime::ProcessVM *vm, const std::string &sym,
                               bool is_call, bool debug) {
-    // Global (slot de static_data): rodata.<slot> -> host addr en vm_mem.
+    // Global (slot de static_data): rodata.<slot> -> direccion HOST del slot.
     if (sym.rfind("rodata.", 0) == 0) {
         const std::string slot_str = sym.substr(7);
-        // El slot idx <slot> corresponde a la etiqueta "code.s_<slot>" que el
-        // linker resolvio a una VA en el symbol_table del Executable.
-        size_t dummy;
-        // Buscar la VA de code.s_<slot> en cualquier executable cargado.
+        // El slot idx <slot> es la etiqueta `<seccion>.s_<slot>` que el linker
+        // resolvio en el symbol_table del Executable.  Dos secciones posibles:
+        //   - `gdata`: storage de una variable global.  El loader la
+        //     materializa en un bloque HOST y ya reescribio su entrada del
+        //     symbol_table con la direccion host -> se usa TAL CUAL.
+        //   - `code`: literal en memoria de la VM -> hay que traducir.
         auto &loader = vm->scheduler.vm_reference.loader_public;
-        (void)dummy;
-        const std::string label = "code.s_" + slot_str;
         for (auto &exe : loader.executables) {
             if (!exe) continue;
-            auto it = exe->symbol_table.find(label);
+            auto it = exe->symbol_table.find("gdata.s_" + slot_str);
+            if (it != exe->symbol_table.end()) {
+                if (debug)
+                    std::fprintf(stderr, "[naked] global %s -> host=0x%llx\n",
+                                 sym.c_str(), (unsigned long long)it->second);
+                return it->second;
+            }
+            it = exe->symbol_table.find("code.s_" + slot_str);
             if (it != exe->symbol_table.end()) {
                 const uint64_t host = vm_addr_to_host(vm, it->second);
                 if (debug)
@@ -140,8 +148,9 @@ uint64_t resolve_naked_symbol(runtime::ProcessVM *vm, const std::string &sym,
         }
         if (debug)
             std::fprintf(stderr,
-                         "[naked] global %s: label '%s' no en symbol_table\n",
-                         sym.c_str(), label.c_str());
+                         "[naked] global %s: ni 'gdata.s_%s' ni 'code.s_%s' en "
+                         "symbol_table\n",
+                         sym.c_str(), slot_str.c_str(), slot_str.c_str());
         return 0;
     }
     // Referencia a la DIRECCION de una funcion (fnsym:) o CALL directo (bare).

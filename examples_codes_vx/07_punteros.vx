@@ -10,13 +10,14 @@ namespace ejemplos.punteros;
 // El tipo del puntero dice EN QUE MEMORIA vive lo apuntado, y son dos
 // espacios distintos que no se mezclan:
 //
-//   T*              memoria HOST.  Es lo que produce `&local` (un local cuya
-//                   direccion se toma se reserva en host), `malloc`, `str_cstr`,
-//                   la FFI a C y los campos de objetos GC.
-//   VirtualPtr<T>   memoria de la VM.  Es lo que produce la direccion de una
-//                   variable GLOBAL: su storage vive en la memoria de la VM,
-//                   que es paginada y de la que cada proceso recibe su propia
-//                   copia, asi que cada acceso se traduce.  Ver 08/09.
+//   T*              memoria HOST.  Es lo que produce `&x` -- lo mismo da que
+//                   `x` sea un local (uno cuya direccion se toma se reserva en
+//                   host) o un global (su storage vive en host) -- y tambien
+//                   `malloc`, `str_cstr`, la FFI a C y los campos de objetos GC.
+//   VirtualPtr<T>   memoria de la VM, la que la VM pagina y traduce en cada
+//                   acceso.  Ningun `&` la produce: es un tipo de interop, para
+//                   nombrar una direccion VM que ya tienes (via cast explicito).
+//                   No existe en AOT, donde no hay memoria VM.
 //
 // No se coercen entre si: una direccion VM usada como host segfaltea y una
 // host leida como VM devuelve basura, y en el sitio del deref el unico dato

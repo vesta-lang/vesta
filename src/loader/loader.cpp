@@ -718,6 +718,10 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
     return exe;
 }
 
+/// Definida mas abajo, junto a las demas rutinas de relocations; la usa
+/// load_executable, que va antes.
+static void materialize_gdata_host(Executable &exe);
+
 runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
     // Leer archivo completo
     std::ifstream file(path, std::ios::binary);
@@ -782,9 +786,17 @@ Loader::load_executable(runtime::VM &vm,
     proccess->stack_high = initial_rsp;
     proccess->stack_low_water = initial_rsp;
 
+    // `gdata` (storage de las variables globales) NO va a memoria de la VM:
+    // va a un bloque HOST.  Ver Executable::gdata_host para el porque.
+    materialize_gdata_host(*exe);
+
     // copiamos cada seccion del ejecutable a la memoria virtual
     // de la VM
     for (auto *sec : exe->sections) {
+        // `gdata` ya vive en el bloque host; copiarla tambien a vm_mem seria
+        // una copia muerta que ademas confundiria (dos storages para el mismo
+        // global, y el que el programa usa es el host).
+        if (sec->name == "gdata") continue;
         uint64_t vm_addr = sec->memory.address_init;
         uint64_t offset = sec->file_offset;
 
@@ -1089,6 +1101,75 @@ Loader::load_executable(runtime::VM &vm,
 // sabe exactamente que slots son addresses; los datos numericos
 // (frame sizes en `enter`, constantes literales en `mov reg, N`, etc.)
 // NO aparecen en la tabla de relocations.
+/**
+ * @brief Materializa la seccion `gdata` en un bloque HOST y fija sus refs.
+ *
+ * El storage de las variables globales pasa de la memoria de la VM a memoria
+ * host: se copia a un bloque contiguo propiedad del @ref Executable y toda
+ * referencia a el se reescribe con la direccion host real.
+ *
+ * No hace falta un tipo de relocation nuevo: cada `@Absolute("gdata.s_N")` ya
+ * dejo su entrada en la tabla de relocations del .velb, asi que basta con
+ * quedarse con las que apuntan al rango de `gdata`.  La tabla de simbolos se
+ * reescribe igual, porque es la que consulta el JIT para resolver `gdata.s_N`
+ * en compile-time.
+ *
+ * Se parchea sobre @c exe.bytecode ANTES de mapear las secciones, de modo que
+ * la imagen que se copia a `vm_mem` (y la que `copy_executables_to` replica en
+ * cada proceso hijo) ya lleva las direcciones host definitivas -> todos los
+ * actores comparten los mismos globales.
+ *
+ * @param exe Ejecutable ya parseado, con secciones y relocations.
+ */
+static void materialize_gdata_host(Executable &exe) {
+    const Assembly::Bytecode::Section *gsec = nullptr;
+    for (const auto *sec : exe.sections)
+        if (sec->name == "gdata") {
+            gsec = sec;
+            break;
+        }
+    if (gsec == nullptr) return; // modulo sin variables globales
+
+    const uint64_t va = gsec->memory.address_init;
+    const uint64_t end = gsec->memory.address_final;
+    if (end <= va) return; // seccion declarada pero vacia
+    const size_t size = static_cast<size_t>(end - va);
+
+    exe.gdata_host.reset(new uint8_t[size]());
+    exe.gdata_size = size;
+    exe.gdata_va = va;
+
+    // Valores iniciales: estan en la imagen, en el file_offset de la seccion.
+    const uint64_t foff = gsec->file_offset;
+    if (foff < exe.bytecode.size()) {
+        const size_t avail =
+            std::min(size, static_cast<size_t>(exe.bytecode.size() - foff));
+        std::memcpy(exe.gdata_host.get(), exe.bytecode.data() + foff, avail);
+    }
+
+    const uint64_t host_base = reinterpret_cast<uint64_t>(exe.gdata_host.get());
+
+    // 1. Referencias en el codigo: las entradas de la tabla de relocations cuyo
+    //    target cae en el rango de `gdata`.
+    for (const auto &rel : exe.velb_relocations) {
+        if (rel.type != static_cast<uint8_t>(RelocTypeVELB::ABSOLUTE64))
+            continue;
+        if (rel.target_value < va || rel.target_value >= end) continue;
+        const uint64_t host = host_base + (rel.target_value - va);
+        const size_t site = static_cast<size_t>(exe.offset_real_bytecode +
+                                               rel.bytecode_offset);
+        if (site + sizeof(uint64_t) > exe.bytecode.size()) continue; // defensivo
+        std::memcpy(&exe.bytecode[site], &host, sizeof(uint64_t));
+    }
+
+    // 2. Tabla de simbolos: el JIT resuelve `gdata.s_N` por aqui y debe obtener
+    //    la direccion host, no la virtual.
+    for (auto &kv : exe.symbol_table) {
+        if (kv.second < va || kv.second >= end) continue;
+        kv.second = host_base + (kv.second - va);
+    }
+}
+
 static void apply_relocations_for_rebase(
     std::vector<uint8_t> &data,
     size_t bytecode_base_in_file, // exe->offset_real_bytecode

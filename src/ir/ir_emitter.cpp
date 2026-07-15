@@ -84,6 +84,13 @@ struct EmitCtx {
     // register-held empujadas (el scan conservador las cubre en modo aditivo).
     bool has_alloca = false;
 
+    // Modulo al que pertenece la funcion.  Lo consulta STR_LIT_ADDR para saber
+    // a que seccion referenciar cada slot: el storage de una variable global
+    // vive en `gdata` (memoria host) y el resto en `code` (memoria VM).  Puede
+    // ser null en emisiones sueltas (tests) -> entonces todo va a `code`, que
+    // es el comportamiento historico.
+    const IrModule *mod = nullptr;
+
     // Cache de constantes en scratches para evitar `mov r14, K; mov r14, K`
     // consecutivos (patron tipico: dos SEXTs back-to-back con K=32 entre
     // los que no hay instrs que clobreen r14).  -1 = invalido (clobreado o
@@ -274,6 +281,25 @@ struct EmitCtx {
     // Todas las etiquetas internas del .vel viven en la seccion "code".
     static std::string abs_lbl(const std::string &lbl) { return "code." + lbl; }
 };
+
+/**
+ * @brief Indica si el slot @p idx es el storage de una variable global.
+ *
+ * Esos slots viven en memoria HOST (seccion `gdata`), no en la de la VM: su
+ * direccion se toma con `&global` y viaja hasta sitios donde el unico contrato
+ * es el tipo (`T*` = host) o donde hace falta una direccion de maquina (la FFI,
+ * un `lock cmpxchg`).  El lowering los distingue con section_name ".data" -- el
+ * mismo dato que ya usaba el codegen AOT para emitirlos en `.data` (rw) en vez
+ * de `.rodata`.
+ *
+ * @param mod Modulo con el pool de static_data.
+ * @param idx Indice del slot.
+ * @return true si el slot va a `gdata`.
+ */
+static bool slot_is_gdata(const IrModule &mod, size_t idx) {
+    return mod.static_data.meta_at(idx).section_name == ".data";
+}
+
 
 // =========================================================================
 //  Utilidades internas del emisor
@@ -1919,8 +1945,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // @Absolute("code.s_N").
     case IrOp::STR_LIT_ADDR: {
         std::string rd = ctx.dst_of(ins.dst);
-        ctx.out << "    mov " << rd << ", @Absolute(\"code.s_" << ins.imm
-                << "\")\n";
+        // El storage de una variable global vive en la seccion `gdata`
+        // (memoria host); el resto de slots -- literales que alimentan a
+        // STRMAKE, params de los opcodes meta -- en `code`, que es memoria de
+        // la VM porque es la que esos consumidores exigen.
+        const char *sec = (ctx.mod && slot_is_gdata(*ctx.mod, ins.imm))
+                              ? "gdata"
+                              : "code";
+        ctx.out << "    mov " << rd << ", @Absolute(\"" << sec << ".s_"
+                << ins.imm << "\")\n";
         ctx.store_spilled(ins.dst);
         break;
     }
@@ -5049,7 +5082,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
 static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                                  std::ostringstream &out,
-                                 bool is_entry_point = false) {
+                                 bool is_entry_point = false,
+                                 const IrModule *mod = nullptr) {
     // Liveness + asignacion de registros
     LivenessResult liveness = compute_liveness(fn);
     AllocResult alloc = allocate_regs(fn, liveness);
@@ -5132,6 +5166,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     EmitCtx ctx(fn, alloc, liveness, out, opts.emit_comments, opts.emit_debug,
                 has_frame, opts.emit_stackmaps);
     ctx.has_alloca = has_alloca;
+    ctx.mod = mod;
 
     // Etiqueta de funcion (exportada si corresponde)
     if (opts.export_all) {
@@ -5459,7 +5494,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                 << " (no se emite codigo)\n\n";
             continue;
         }
-        std::string err = emit_function(fn, opts, out, first_func);
+        std::string err = emit_function(fn, opts, out, first_func, &mod);
         first_func = false;
         if (!err.empty()) {
             result.ok = false;
@@ -5483,11 +5518,24 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // termina justo en VA(s_N) y los bytes db quedan fuera del rango
     // mapeado a memoria de la VM.  La etiqueta posterior end_data
     // empuja el rango hasta despues de los bytes.
-    if (!mod.static_data.empty()) {
+    // Un slot va a `gdata` (memoria host) si es el storage de una variable
+    // global.  El lowering los marca con section_name ".data" -- el mismo dato
+    // que ya consumia el codegen AOT para no meterlos en .rodata.
+    bool has_gdata = false;
+    bool has_code_data = false;
+    for (size_t i = 0; i < mod.static_data.size(); ++i) {
+        if (slot_is_gdata(mod, i))
+            has_gdata = true;
+        else
+            has_code_data = true;
+    }
+
+    if (has_code_data) {
         out << "// --- datos estaticos del modulo (mismas seccion que el "
                "codigo) ---\n";
         out << "align 16\n";
         for (size_t i = 0; i < mod.static_data.size(); ++i) {
+            if (slot_is_gdata(mod, i)) continue; // va a `gdata`
             auto [bp, bn] = mod.static_data.bytes_at(i);
             // M.staticdata-pool: respetar @c meta_at(i).alignment (default 1).
             // Si es mayor que el align 16 default del bloque, emitir un
@@ -5533,6 +5581,47 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         // de los ultimos bytes; sin ella el linker calcula el tamano del
         // bloque como VA(s_N) y los bytes db quedan truncados.
         out << "    end_data db 0x00\n";
+        out << "\n";
+    }
+
+    // --- seccion `gdata`: storage de las variables globales ---
+    //
+    // Va en su PROPIA seccion porque su memoria es HOST, no de la VM: la
+    // direccion de un global se toma con `&global` y viaja (a un campo, a un
+    // parametro `T*`, a la FFI, a un `lock cmpxchg`), y en el sitio del deref
+    // el unico contrato disponible es el del tipo.  El loader mapea esta
+    // seccion a un bloque host contiguo -- contiguo porque la memoria de la VM
+    // es paginada y una direccion suya solo vale dentro de su pagina.
+    //
+    // El resto de slots (literales que alimentan a STRMAKE, params de los
+    // opcodes meta defclass/deffield/defmethod) EXIGEN direccion VM y por eso
+    // se quedan arriba, en `code`.
+    if (has_gdata) {
+        out << "@Section {\n";
+        out << "    @Name(\"gdata\"),\n";
+        out << "    @SpaceAddress(\"anonymous\")\n";
+        out << "    @Align(0x1000)\n";
+        out << "}\n";
+        out << "// --- storage de variables globales (memoria host) ---\n";
+        for (size_t i = 0; i < mod.static_data.size(); ++i) {
+            if (!slot_is_gdata(mod, i)) continue;
+            auto [bp, bn] = mod.static_data.bytes_at(i);
+            const uint16_t a = mod.static_data.meta_at(i).alignment;
+            if (a > 1) out << "align " << a << "\n";
+            out << "    s_" << i << " db ";
+            for (size_t b = 0; b < bn; ++b) {
+                if (b > 0) out << ", ";
+                out << "0x" << std::hex << std::setw(2) << std::setfill('0')
+                    << static_cast<unsigned>(bp[b]) << std::dec
+                    << std::setfill(' ');
+            }
+            if (bn == 0) out << "0x00";
+            out << "\n";
+        }
+        // Mismo motivo que `end_data`: sin una etiqueta detras, el rango de la
+        // seccion se calcularia hasta VA(ultimo slot) y sus bytes quedarian
+        // fuera.
+        out << "    end_gdata db 0x00\n";
         out << "\n";
     }
 

@@ -136,6 +136,28 @@ typedef struct Executable {
     std::string format = "velb";
 
     /**
+     * @brief Bloque HOST con el storage de las variables globales (`gdata`).
+     *
+     * Una variable global es memoria estatica COMPARTIDA: su direccion se toma
+     * con `&global` y viaja (a un campo, a un parametro `T*`, a la FFI, a un
+     * `lock cmpxchg`), y en el sitio del deref el unico contrato disponible es
+     * el del tipo -- y `T*` significa host.  Ademas la memoria de la VM es
+     * paginada y de asignacion perezosa, asi que una direccion suya solo vale
+     * dentro de su pagina: un `T*` estable a memoria VM no puede existir.
+     *
+     * Por eso `gdata` no se mapea a `vm_mem`: se copia a este bloque, contiguo
+     * y con direccion estable (`unique_ptr` a un array, nunca un `vector`, que
+     * al crecer moveria los datos e invalidaria las direcciones ya fijadas).
+     *
+     * Se aloca UNA vez por modulo y NO se replica por proceso: los actores
+     * comparten sus globales (igual que en AOT), y su aislamiento viene de sus
+     * locals y su heap, no de aqui.
+     */
+    std::unique_ptr<uint8_t[]> gdata_host;
+    size_t gdata_size = 0;   ///< Bytes de @ref gdata_host.
+    uint64_t gdata_va = 0;   ///< VA de la seccion `gdata` (0 = el modulo no tiene).
+
+    /**
      * @brief Version del formato VELB.
      *
      * Permite compatibilidad futura entre versiones del loader y del linker.

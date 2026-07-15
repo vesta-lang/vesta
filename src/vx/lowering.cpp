@@ -14566,11 +14566,11 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             if (is_array) {
                 const int ln_a = e->loc.line;
                 ir::IrValueId v_a = fn_->new_value(ir::IrType::PTR);
-                // AOT (native_poo_): el slot vive en .data del host -> host_ptr.
-                // VM/JIT: el slot vive en vm_mem -> direccion VM (NO host;
-                // marcar host_ptr haria que el indexado use movh sobre una
-                // direccion VM y segfaultee).
-                fn_->values[v_a].is_host_ptr = native_poo_;
+                // El storage de un global vive en memoria HOST en los 3 modos:
+                // en AOT en `.data`, y en interp/JIT en el bloque host al que
+                // el loader mapea la seccion `gdata`.  Su direccion es un `T*`
+                // y el indexado usa movh.
+                fn_->values[v_a].is_host_ptr = true;
                 ir::IrInstr is{};
                 is.op = ir::IrOp::STR_LIT_ADDR;
                 is.type = ir::IrType::PTR;
@@ -14590,6 +14590,9 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.imm = slot_idx;
                 is.source_line = ln;
                 fn_->append(current_block_, std::move(is));
+                // El slot vive en memoria host (seccion `gdata`) -> el LOAD de
+                // abajo es un acceso host directo, sin traducir.
+                fn_->values[v_addr].is_host_ptr = true;
             }
             // Para STRING, LOAD i64 (GcHandle); para otros, LOAD con
             // ancho declarado.
@@ -17020,7 +17023,11 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 is.imm = git->second;
                 is.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(is));
-                if (native_poo_) fn_->values[va].is_host_ptr = true;
+                // `&global` es un `T*`: el storage vive en memoria host (en
+                // `.data` en AOT; en el bloque host de la seccion `gdata` en
+                // interp/JIT).  Asi la direccion sobrevive a viajar por memoria
+                // -- a un campo, a un parametro, a la FFI, a un `lock cmpxchg`.
+                fn_->values[va].is_host_ptr = true;
                 return va;
             }
             const ir::IrValueId addr = lookup(id->name);
@@ -20225,6 +20232,9 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 is.imm = slot_idx;
                 is.source_line = ln;
                 fn_->append(current_block_, std::move(is));
+                // El slot vive en memoria host (seccion `gdata`) -> el
+                // load-modify-store de abajo es acceso host directo.
+                fn_->values[v_addr].is_host_ptr = true;
             }
             // Tipo declarado del global.  El compound assign tiene que operar
             // con EL del global, no con i64: sobre un `f64 g`, un `g += x` con
@@ -30253,6 +30263,8 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
                 is.imm = slot_idx;
                 is.source_line = ln;
                 fn_->append(current_block_, std::move(is));
+                // El slot vive en memoria host (seccion `gdata`).
+                fn_->values[v_addr].is_host_ptr = true;
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;

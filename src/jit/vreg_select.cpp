@@ -5312,8 +5312,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     break;
                 }
                 uint64_t addr = 0;
-                if (resolve_symbol)
-                    addr = resolve_symbol("code.s_" + std::to_string(in.imm));
+                if (resolve_symbol) {
+                    /* Un slot vive en `code` (literales de STRMAKE, params de
+                     * los opcodes meta: memoria VM, que es la que esos
+                     * consumidores exigen) o en `gdata` (storage de variable
+                     * global: memoria host).  El IR embebido no lleva el pool
+                     * de static_data, asi que aqui no se sabe cual es: se
+                     * prueban los dos nombres -- cada slot existe en una sola
+                     * seccion, asi que no hay ambiguedad. */
+                    const std::string sfx = ".s_" + std::to_string(in.imm);
+                    addr = resolve_symbol("code" + sfx);
+                    if (addr == 0) addr = resolve_symbol("gdata" + sfx);
+                }
                 if (addr == 0) {
                     vreg_dbg(fn.name.c_str(), "str_lit_addr(no-symbol)");
                     return false; // sin resolver -> fallback a slots
