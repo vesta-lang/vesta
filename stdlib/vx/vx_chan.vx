@@ -310,17 +310,27 @@ public void vx_chan_send(uintptr ch_h, i64 v) {
         }
         return;
     }
-    // (3) Lleno (o rendezvous sin receptor) -> guardo mi valor en MI Waiter, me
-    // encolo en la sendq y bloqueo.  El Waiter vive en mi pila (estable parkeado).
-    i64[6] wbuf;
-    i64 w = (i64)&wbuf[0];
-    Waiter(w).fib = (i64) vx_cur_fiber();
-    Waiter(w).elem = v;
-    Waiter(w).sel = 0;
-    Waiter(w).next = 0;
-    __vxch_wq_push((i64)&ch.swq_h, (i64)&ch.swq_t, w);
-    vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park, (i64)&ch.lock);
-    // Reanudada: un receptor tomo mi elem directamente.  Nada que hacer.
+    // (3) Lleno (o rendezvous sin receptor) -> me encolo en la sendq y bloqueo.
+    // Solo una FIBRA puede suspenderse; main (None) no puede bloquearse en un
+    // canal (coordina con vx_pool_join) -> suelta el lock y vuelve sin bloquear.
+    match vx_cur_fiber() {
+        case None => {
+            vx_spin_unlock(&ch.lock);
+        }
+        case Some(self) => {
+            // El Waiter vive en mi pila (estable mientras la fibra esta parkeada).
+            i64[6] wbuf;
+            i64 w = (i64)&wbuf[0];
+            Waiter(w).fib = (i64) self;
+            Waiter(w).elem = v;
+            Waiter(w).sel = 0;
+            Waiter(w).next = 0;
+            __vxch_wq_push((i64)&ch.swq_h, (i64)&ch.swq_t, w);
+            vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park,
+                    (i64)&ch.lock);
+            // Reanudada: un receptor tomo mi elem directamente.  Nada que hacer.
+        }
+    }
 }
 
 /**
@@ -350,15 +360,26 @@ public i64 vx_chan_recv(uintptr ch_h) {
         return 0;
     }
     // (3) Nada -> me encolo (Waiter en mi pila) y bloqueo; el sender pondra mi elem.
-    i64[6] wbuf;
-    i64 w = (i64)&wbuf[0];
-    Waiter(w).fib = (i64) vx_cur_fiber();
-    Waiter(w).elem = 0;
-    Waiter(w).sel = 0;
-    Waiter(w).next = 0;
-    __vxch_wq_push((i64)&ch.rwq_h, (i64)&ch.rwq_t, w);
-    vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park, (i64)&ch.lock);
-    return Waiter(w).elem;
+    // Solo una FIBRA puede suspenderse; main (None) no puede bloquearse -> 0.
+    match vx_cur_fiber() {
+        case None => {
+            vx_spin_unlock(&ch.lock);
+            return 0;
+        }
+        case Some(self) => {
+            i64[6] wbuf;
+            i64 w = (i64)&wbuf[0];
+            Waiter(w).fib = (i64) self;
+            Waiter(w).elem = 0;
+            Waiter(w).sel = 0;
+            Waiter(w).next = 0;
+            __vxch_wq_push((i64)&ch.rwq_h, (i64)&ch.rwq_t, w);
+            vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park,
+                    (i64)&ch.lock);
+            return Waiter(w).elem;
+        }
+    }
+    return 0;   // inalcanzable (match exhaustivo); satisface el retorno de la fn
 }
 
 /**
@@ -524,17 +545,25 @@ public i64 vx_chan_select_recv_block(uintptr* chans, i64 n, i64* out) {
     if (n <= 0) {
         return -1;
     }
-    fiber self = vx_cur_fiber();
-    if (self == 0) {
-        // main / fuera de fibra: no se puede parkear -> poll no-bloqueante hasta
-        // que alguno este listo (main no deberia usar select bloqueante).
-        while (true) {
-            i64 idx = vx_chan_select_recv(chans, n, out);
-            if (idx >= 0) {
-                return idx;
+    // Solo una FIBRA puede parkear; sin fibra (main) degrada a poll no-bloqueante.
+    match vx_cur_fiber() {
+        case None => {
+            while (true) {
+                i64 idx = vx_chan_select_recv(chans, n, out);
+                if (idx >= 0) {
+                    return idx;
+                }
             }
         }
+        case Some(self) => {
+            return __vxch_sel_recv_parked(self, chans, n, out);
+        }
     }
+    return -1;   // inalcanzable (match exhaustivo)
+}
+
+/// Cuerpo parkeado del select de recepcion, ya resuelta la fibra actual @p self.
+i64 __vxch_sel_recv_parked(fiber self, uintptr* chans, i64 n, i64* out) {
     if (n > VXCH_SEL_MAX) {
         n = VXCH_SEL_MAX;   // cota de pila (VXCH_SEL_MAX Waiter + orden de lock)
     }
@@ -701,15 +730,25 @@ public i64 vx_chan_select_send_block(uintptr* chans, i64* vals, i64 n) {
     if (n <= 0) {
         return -1;
     }
-    fiber self = vx_cur_fiber();
-    if (self == 0) {
-        while (true) {
-            i64 idx = vx_chan_select_send(chans, vals, n);
-            if (idx >= 0) {
-                return idx;
+    // Solo una FIBRA puede parkear; main (None) degrada a poll no-bloqueante.
+    match vx_cur_fiber() {
+        case None => {
+            while (true) {
+                i64 idx = vx_chan_select_send(chans, vals, n);
+                if (idx >= 0) {
+                    return idx;
+                }
             }
         }
+        case Some(self) => {
+            return __vxch_sel_send_parked(self, chans, vals, n);
+        }
     }
+    return -1;   // inalcanzable (match exhaustivo)
+}
+
+/// Cuerpo parkeado del select de envio, ya resuelta la fibra actual @p self.
+i64 __vxch_sel_send_parked(fiber self, uintptr* chans, i64* vals, i64 n) {
     if (n > VXCH_SEL_MAX) {
         n = VXCH_SEL_MAX;
     }
@@ -897,15 +936,25 @@ public i64 vx_chan_select(i64 cases, i64 n) {
     if (n <= 0) {
         return -1;
     }
-    fiber self = vx_cur_fiber();
-    if (self == 0) {
-        while (true) {
-            i64 idx = vx_chan_select_try(cases, n);
-            if (idx >= 0) {
-                return idx;
+    // Solo una FIBRA puede parkear; main (None) degrada a poll no-bloqueante.
+    match vx_cur_fiber() {
+        case None => {
+            while (true) {
+                i64 idx = vx_chan_select_try(cases, n);
+                if (idx >= 0) {
+                    return idx;
+                }
             }
         }
+        case Some(self) => {
+            return __vxch_select_parked(self, cases, n);
+        }
     }
+    return -1;   // inalcanzable (match exhaustivo)
+}
+
+/// Cuerpo parkeado del select mixto, ya resuelta la fibra actual @p self.
+i64 __vxch_select_parked(fiber self, i64 cases, i64 n) {
     if (n > VXCH_SEL_MAX) {
         n = VXCH_SEL_MAX;
     }

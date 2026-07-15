@@ -473,9 +473,15 @@ void __vxp_sched_enqueue(fiber fib) {
 // la revive con vx_wake tras sacar su nodo de la wait-queue bajo el lock.
 // ---------------------------------------------------------------------------
 
-/// @return la fibra en ejecucion (0 si estamos en main / no-fibra).
-public fiber vx_cur_fiber() {
-    return __vxp_cur_fiber;
+/// @return la fibra en ejecucion, o None si estamos en main / fuera de fibra.
+/// Devolver Optional (en vez de un 0 centinela) obliga al llamante a tratar
+/// explicitamente el caso "no hay fibra" -> imposible olvidarlo por accidente.
+public Optional<fiber> vx_cur_fiber() {
+    fiber f = __vxp_cur_fiber;
+    if (f == 0) {
+        return None();
+    }
+    return Some(f);
 }
 
 /// Despierta @p fib (BLOCKED -> READY + re-encolar).  Lo llama el waker (sender
