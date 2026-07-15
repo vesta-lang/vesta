@@ -877,8 +877,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 mem_opts.opt_level = copts.opt_level;
                 mem_opts.native_poo = true;
                 mem_opts.asm_target_bits = copts.asm_target_bits;
+                // Como PROYECTO, no como fichero suelto: la stdlib es codigo
+                // Vesta normal y sus modulos se importan entre si (vx_mem usa
+                // los atomicos de vx_atomic en vez de reimplementarlos).
                 vx::CompileResult mem_cr =
-                    vx::compile_vx_source(mem_src, mem_path, mem_opts);
+                    vx::compile_vx_project(mem_path, mem_opts);
                 if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
                     !ir::parse_ir_module_cache(mem_cr.ir_module_cache_bytes,
                                                mem_mod) ||

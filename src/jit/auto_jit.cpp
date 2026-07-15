@@ -1443,14 +1443,17 @@ CompileResult eager_compile_function(
             r.code_start = vcode;
             return r;
         }
-        /* Un callback que el vreg no compila (solo el caso teorico SIMD >8B /
-         * argc>12, que no ocurre en la practica) queda SIN codigo nativo: el
-         * selector-slots esta retirado.  Se reporta claro y se devuelve 0 ->
-         * el builtin as_native_callback entrega 0 (el programa fallaria al
-         * invocarlo, pero ese subset no se genera). */
+        /* Un callback que el vreg no compila queda SIN codigo nativo (el
+         * selector-slots esta retirado): `as_native_callback` entrega 0 y el
+         * programa muere al invocarlo.  No damos por hecho la causa -- el
+         * mensaje anterior afirmaba "SIMD>8B o argc>12", y cuando la causa era
+         * otra (una op sin cubrir, un simbolo sin resolver) mandaba a
+         * investigar al sitio equivocado.  `VESTA_VREG_DEBUG=1` imprime el
+         * motivo real que decidio el selector. */
         std::fprintf(stderr,
-                     "[jit] callback '%s' con arg SIMD>8B o argc>12: no "
-                     "soportado por el JIT (slots retirado)\n",
+                     "[jit] callback '%s': el selector vreg no lo compila -> "
+                     "sin codigo nativo (as_native_callback devolvera 0).\n"
+                     "  motivo exacto: ejecuta con VESTA_VREG_DEBUG=1\n",
                      ir_fn.name.c_str());
     }
 

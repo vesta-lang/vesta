@@ -25,6 +25,8 @@
  * con `--no-mem`.
  */
 
+import "vx_atomic" only vx_atomic_cas64, vx_cpu_relax;
+
 extern "kernel32.dll" {
     fn VirtualAlloc(u64 addr, u64 size, u32 allocType, u32 protect) -> u64;
     fn VirtualFree(u64 addr, u64 size, u32 freeType) -> i32;
@@ -290,17 +292,10 @@ u64 __vmem_size_of(i32 cls) {
 i64 __vmem_mt = 0;    ///< 0 = single-thread (sin lock); 1 = multihilo.
 i64 __vmem_lock = 0;  ///< spinlock del slab (0 = libre).
 
-/// CAS de 64 bits (lock cmpxchg): rax=expected (in/old-out), rdx=desired.
-@Target("arch:x86_64")
-i64 __vmem_cas64(i64* addr, i64 expected, i64 desired) {
-    register("rsi") i64* a = addr;
-    register("rax") i64 ex = expected;
-    register("rdx") i64 de = desired;
-    asm volatile { lock cmpxchg [rsi], rdx };
-    return ex;
-}
-@Target("arch:x86_64")
-void __vmem_cpu_relax() { asm volatile { pause }; }
+// El CAS y el hint de spin los pone `vx_atomic` (ver el import de la cabecera):
+// son primitivas de la stdlib, no algo que este allocator deba reimplementar.
+// Antes tenia su propio `lock cmpxchg` en inline-asm, lo que lo ataba al codigo
+// maquina y dejaba a vx_mem fuera del interprete.
 
 /// Activa el modo multihilo (lo llaman vx_thread/vx_pool al crear el 1er hilo).
 public void vmem_enable_mt() { __vmem_mt = 1; }
@@ -308,7 +303,7 @@ public void vmem_enable_mt() { __vmem_mt = 1; }
 /// Toma el spinlock del slab si estamos en modo multihilo (si no, no-op).
 void __vmem_slab_lock() {
     if (__vmem_mt == 0) { return; }
-    while (__vmem_cas64(&__vmem_lock, 0, 1) != 0) { __vmem_cpu_relax(); }
+    while (vx_atomic_cas64(&__vmem_lock, 0, 1) != 0) { vx_cpu_relax(); }
 }
 void __vmem_slab_unlock() {
     if (__vmem_mt == 0) { return; }

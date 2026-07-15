@@ -2578,6 +2578,38 @@ CompileResult compile_vx_project(
     // single-file lo rellena en compile_vx_source; aqui lo rellenamos desde
     // el modulo mergeado de todos los .vx del proyecto.
     res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
+
+    // AOT.2.d: detectar @AllocatorOverride / @PanicHandler en el modulo ROOT,
+    // igual que hace compile_vx_source.  Sin esto, un .vx que declara el
+    // allocator NO podia tener imports: el driver -m aot lo compilaba como
+    // fichero suelto porque por el camino de proyecto no le llegaban estos
+    // simbolos, y abortaba con "no pude compilar el slab allocator (o no expone
+    // @AllocatorOverride)".  O sea: la stdlib era la unica parte del lenguaje
+    // que no podia importar.
+    if (!work.empty() && work.back().ast) {
+        for (auto &decl : work.back().ast->decls) {
+            if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+            auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (fd->is_panic_handler) res.aot_panic_sym = fd->name;
+            if (!fd->is_alloc_override) continue;
+            // El que devuelve puntero es el alloc; el que devuelve void, el free.
+            bool ret_ptr = false;
+            if (fd->return_type &&
+                fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                ret_ptr = (static_cast<ast::PrimitiveTypeNode *>(
+                               fd->return_type.get())
+                               ->prim == PrimitiveKind::PTR);
+            } else if (fd->return_type &&
+                       fd->return_type->kind ==
+                           ast::NodeKind::PointerTypeNode) {
+                ret_ptr = true;
+            }
+            if (ret_ptr)
+                res.aot_alloc_sym = fd->name;
+            else
+                res.aot_free_sym = fd->name;
+        }
+    }
     /* has_lowerable_macros: gate del two-phase compile.  El single-file
      * (compile_vx_source) lo setea escaneando su irmod; en el path multi-modulo
      * hay que escanear el MODULO MERGEADO -- si cualquier funcion (root o dep)
