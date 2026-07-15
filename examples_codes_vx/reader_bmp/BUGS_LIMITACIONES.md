@@ -240,3 +240,145 @@ parsea y reporta las dimensiones (demo de `vio_parse_int`).
 - **Cross-module: acceso siempre cualificado.**  Con `import "x"` hay que
   escribir `x.fn(...)` / `x.Tipo` / `new x.Tipo()`.  Por diseno.
 - **Line endings**: la VM emite `\n` (LF) puro; correcto.
+
+---
+
+## Sprint 2026-07-14: ESCRITURA de BMP con overlays (@overlay struct)
+
+Segunda fase del ejercicio: ademas de LEER, ahora se CREAN y ESCRIBEN ficheros
+BMP.  El formato se modela con VISTAS TIPADAS (`@overlay struct`) sobre el buffer
+host crudo del fichero (el idioma nativo de Vesta para formatos binarios, igual
+que los parsers de PE/ELF), y las operaciones son FUNCIONES LIBRES que reciben un
+`u8*` -- **sin clases**.  El "objeto BMP" es simplemente un `u8*` (buffer con
+cabecera + pixeles) cuyo tamano total vive en el propio campo
+`BmpFileHeader.size`.
+
+## Que se anadio
+
+- **`bmp.vx`** reescrito: dos overlays `BmpFileHeader` (14 bytes) +
+  `BmpInfoHeader` (40 bytes, base = buf + 14) + funciones libres:
+  - `bmp_create(w, h, bpp, compression, planes, res_h, res_v, palette, important)
+    -> u8*` : reserva el buffer, lo pone a cero (qwords) y rellena TODA la
+    configuracion del BMP a traves de los overlays.  `bmp_create24(w, h)` es el
+    atajo 24bpp.
+  - `bmp_set_pixel(buf, x, y, r, g, b)` / `bmp_get_r|g|b(buf, x, y)` : escritura/
+    lectura de pixel (BGR, bottom-up, con padding de fila a multiplo de 4).
+  - `bmp_save(buf, path) -> i32` : vuelca el buffer completo (tamano leido del
+    header) a disco via `vx_fileio.file_write_from`.
+  - `bmp_file_size(path)` + `bmp_read_into(path, buf, size)` : lectura en dos
+    pasos (ver LIM-10).
+  - Accesores overlay `bmp_magic/bmp_total_size/bmp_offset/bmp_width/bmp_height/
+    bmp_bpp`.
+  - `bmp_print_attributes(buf)` + `bmp_dump_terminal(buf)` (truecolor `bg_rgb`).
+- **`writer_bmp.vx`** (nuevo): crea una 8x8 24bpp con un gradiente conocido, la
+  escribe, la relee y verifica el round-trip (cabecera + pixeles).  `main`
+  devuelve 42 en exito.
+- **`vx_fileio.vx`** (stdlib) ampliado con `file_write_from(path, buf, size)`
+  (Windows kernel32 `WriteFile` + `CREATE_ALWAYS`; POSIX `open O_WRONLY|O_CREAT|
+  O_TRUNC` + `write`), simetrico a `file_read_into`.
+- `reader_bmp.vx` / `main.vx` / `main_aot.vx` adaptados al modelo overlays +
+  funciones libres (la clase `BMP_Image` se elimino).
+
+## Matriz de resultados (writer_bmp.vx, round-trip 8x8)
+
+| Modo | Escribe BMP | Round-trip | Exit-code de main |
+|:-----|:-----------:|:----------:|:-----------------:|
+| interp (`-m vm`)  | OK | OK | 42 (\*) |
+| JIT (`-m jit`)    | OK | OK | 42 (\*) |
+| AOT PE (nativo)   | OK | OK | **42** (medido) |
+| AOT ELF (nativo)  | codegen OK | no verificable aqui (\*\*) | -- |
+
+\* En interp/JIT, `vesta --run` devuelve exit 0 en exito por diseno; el valor 42
+de `main` se comprueba con el mensaje "Round-trip OK" y con la vista previa
+truecolor.  En AOT el exit-code del proceso SI es el `return` de `main` (medido:
+42).
+
+\*\* El ELF64 se genera correctamente (`file` lo reconoce como ELF x86-64), pero
+no se pudo ejecutar en WSL en esta maquina ("no se admite la virtualizacion
+anidada").  Ademas, compilado desde host Windows arrastra HALLAZGO-2 (vx_fileio
+selecciona la rama kernel32 -> el ELF referencia `CreateFileA`/`WriteFile`, que
+no existen en Linux).  Para un ELF ejecutable en Linux habria que usar
+`extern "libc.so.6"` directo (sin `@Target`) o un flag `--target-os`.
+
+El BMP generado es un fichero valido: `xxd` muestra `42 4d` ('BM'), size=246,
+offset=54, header=40, 8x8, 24bpp, res=2835 px/m; el gradiente se relee identico.
+
+---
+
+## BUG NUEVO (destapado por la escritura)
+
+### LIM-10 [lenguaje/codegen] El valor de RETORNO `u8*` de una funcion que llena su buffer via un `extern` pierde la naturaleza host-ptr; el caller lee memoria VM al parsear
+
+**Sintoma minimo**: una funcion `u8* bmp_load(path)` que hace
+`malloc` + `vx_fileio.file_read_into(path, buf, size)` (una llamada `extern`) +
+`return buf`.  En el caller, deref-ear el puntero devuelto lee CEROS (memoria
+VM), no el contenido del fichero -- de forma INCONSISTENTE entre accesos.
+
+Repro (con `salida8x8.bmp` ya escrito, magic 0x4D42 @ offset 0):
+```vx
+u8* back = bmp.bmp_load("salida8x8.bmp");   // u8* devuelto por fn con extern
+println("magic=${bmp.bmp_magic(back):hex}");   // -> 0x0   (ESPERADO 0x4d42)
+println("width=${bmp.bmp_width(back)}");       // -> 8     (correcto!)
+println("bytes=${back[0]}");                   // -> 0     (ESPERADO 66='B')
+```
+
+**Lo esperado**: `back` deberia comportarse como cualquier host-ptr; parsear la
+cabecera via overlays deberia devolver los valores reales del fichero.
+
+**Lo que pasa**: la naturaleza host del valor de RETORNO se degrada.  El sintoma
+es INCONSISTENTE: `bmp_width(back)` (campo `i32 @0x04` del info-header) devuelve
+8 correcto, pero `bmp_magic(back)` (campo `i16 @0x00` del file-header) devuelve 0.
+`back[0]` directo tambien da 0.  Es decir, ALGUNOS overlays leen bien y otros
+leen memoria VM, sin patron obvio (parece depender del offset/ancho del campo y
+del codegen).
+
+**Aislamiento** (que SI funciona, descartando causas):
+- `u8* bmp_create(...)` que escribe su buffer via OVERLAYS (stores host) antes de
+  `return buf` -> el retorno SI conserva la naturaleza host (el compilador la
+  prueba por los stores).  `bmp_magic` sobre su retorno da 0x4d42 correcto.
+- Hacer `malloc` LOCAL en el caller + pasar el buffer a `file_read_into` (dos
+  pasos) -> el buffer local conserva la naturaleza host; TODOS los accesos y
+  overlays leen bien.
+- Pasar el puntero degradado como ARGUMENTO a una funcion cross-modulo a veces
+  funciona (p.ej. `bmp_get_r(back, ...)` leyo pixeles correctos) y a veces no
+  (`bmp_magic(back)` fallo).  La inconsistencia confirma que es un problema de
+  tracking del flag `is_host_ptr`, no de valor.
+
+**Relacion con BUG-1**: BUG-1 (return-null pierde is_host_ptr) se documento como
+CERRADO para el caso `buf[0]` sobre el retorno de una fn con rama `return null`.
+LIM-10 es un residuo del mismo problema pero con un disparador distinto: el
+buffer se llena via una llamada `extern` (que el compilador no puede analizar), y
+el sintoma aparece al PARSEAR via overlays cross-modulo, no solo al indexar.
+
+**Workaround usado** (idiomatico, el que prescribe la propia `vx_fileio`): NO
+devolver el `u8*` desde una funcion loader.  Patron de DOS PASOS: el caller mide
+(`bmp_file_size`), reserva con `malloc` LOCAL, y pasa el buffer como ARGUMENTO a
+`bmp_read_into`.  El malloc local conserva la naturaleza host y todos los overlays
+parsean bien.  `bmp_load` se elimino en favor de `bmp_file_size` +
+`bmp_read_into`.
+
+### LIM-11 [lenguaje] La construccion de un `@overlay struct` importado NO admite la forma cualificada `modulo.Tipo(ptr)`
+
+**Sintoma**: con `import "bmp"`, intentar overlayar en el caller:
+```vx
+bmp.BmpFileHeader fh = bmp.BmpFileHeader(back);
+```
+falla en compilacion:
+```
+error: llamada a 'bmp.BmpFileHeader': se esperaban 0 args, recibidos 1
+error: tipo del inicializador (void) incompatible con tipo declarado (bmp__BmpFileHeader)
+```
+
+**Lo esperado**: igual que un overlay local `T(ptr)` mapea la vista, `mod.T(ptr)`
+deberia mapear una vista de un overlay importado.
+
+**Lo que pasa**: el constructor-overlay cualificado (`mod.Tipo(ptr)`) no se
+reconoce como tal; se interpreta como una llamada normal de 0 args.  Los overlays
+locales (single-file) SI funcionan con `Tipo(ptr)`.
+
+**Workaround usado**: no overlayar el buffer directamente en el caller.  Se
+exponen FUNCIONES LIBRES en `bmp.vx` (`bmp_magic`, `bmp_width`, `bmp_get_r`, ...)
+que reciben el `u8*` y construyen el overlay DENTRO del modulo (donde el tipo es
+local); el caller solo llama a esas funciones.  Es tambien el modelo pedido
+(operaciones = funciones libres sobre el `u8*`), asi que el workaround coincide
+con el diseno.

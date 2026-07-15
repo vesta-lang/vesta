@@ -1,12 +1,47 @@
 // =============================================================================
-// reader_bmp.vx - Migracion a Vex del proyecto Java ReaderBMP + JColorsTerm.
+// reader_bmp.vx - Migracion a Vesta del proyecto Java ReaderBMP + JColorsTerm.
 //
 // Lee un BMP de 24 bits (BGR, sin compresion), imprime sus atributos de
 // cabecera y vuelca los pixeles a la terminal como bloques de color ANSI
 // truecolor (secuencia 48;2;r;g;b), replicando dump_buffer_cli de JColorsTerm.
 //
-// Objetivo del ejercicio: destapar bugs y limitaciones del lenguaje Vex.
+// Version SINGLE-FILE (sin import): modela el BMP con VISTAS TIPADAS
+// (@overlay struct) sobre el buffer host del fichero + FUNCIONES LIBRES, el
+// idioma nativo de Vesta para formatos binarios.  El I/O binario usa FFI
+// dinamico a msvcrt (portable a interp / JIT / AOT-PE).
 // =============================================================================
+
+// ---------------------------------------------------------------------------
+// Vistas tipadas del formato BMP (@overlay struct): un overlay ES un puntero;
+// vista.campo lee/escribe en base+offset con el ancho declarado (little-endian).
+// ---------------------------------------------------------------------------
+
+// BITMAPFILEHEADER: los primeros 14 bytes del fichero.
+@overlay struct BmpFileHeader {
+    i16 magic  @0x00;   // firma 'BM' = 0x4D42
+    i32 size   @0x02;   // tamano total del fichero
+    i16 rsv1   @0x06;
+    i16 rsv2   @0x08;
+    i32 offset @0x0A;   // offset a los datos de pixel
+}
+
+// BITMAPINFOHEADER: 40 bytes que empiezan en el offset 14 del fichero (la vista
+// se construye con BmpInfoHeader(buf + 14); sus offsets son relativos a su base).
+@overlay struct BmpInfoHeader {
+    i32 hdr_size    @0x00;   // 40 = 0x28
+    i32 width       @0x04;
+    i32 height      @0x08;
+    i16 planes      @0x0C;
+    i16 bpp         @0x0E;
+    i32 compression @0x10;
+    i32 image_size  @0x14;
+    i32 res_h       @0x18;
+    i32 res_v       @0x1C;
+    i32 palette     @0x20;
+    i32 important   @0x24;
+}
+
+comptime i32 BMP_FILE_HDR_SIZE = 14;
 
 // ---------------------------------------------------------------------------
 // FFI dinamico a msvcrt para I/O binario de fichero.
@@ -30,160 +65,120 @@ void ensure_loaded() {
     g_fclose = ffi_sym(g_msvcrt, "fclose");
 }
 
-// Lee el fichero completo a un buffer host (malloc).  Devuelve el puntero
-// (o null si falla) y escribe la longitud en out_len (via puntero).
-u8* read_whole_file(string path, i64* out_len) {
+// Lee `size` bytes de `path` al buffer host `buf` (provisto por el caller).
+// Patron de DOS PASOS (el caller mide con file_size y reserva localmente) para
+// que el buffer conserve su naturaleza host (ver LIM-10).  Devuelve los bytes
+// leidos o -1.
+i64 read_file_into(string path, u8* buf, i64 size) {
     ensure_loaded();
     u8* path_c = str_cstr(path);
     u8* mode_c = str_cstr("rb");
     if (path_c == null || mode_c == null) {
-        return null;
+        return -1;
     }
     i64 fp = ffi_call(g_fopen, path_c, mode_c);
     if (fp == 0) {
-        return null;
+        return -1;
+    }
+    i64 nread = ffi_call(g_fread, buf, 1, size, fp);
+    ffi_call(g_fclose, fp);
+    return nread;
+}
+
+// Devuelve el tamano en bytes de `path`, o -1 si no se pudo abrir.
+i64 file_size(string path) {
+    ensure_loaded();
+    u8* path_c = str_cstr(path);
+    u8* mode_c = str_cstr("rb");
+    if (path_c == null || mode_c == null) {
+        return -1;
+    }
+    i64 fp = ffi_call(g_fopen, path_c, mode_c);
+    if (fp == 0) {
+        return -1;
     }
     ffi_call(g_fseek, fp, 0, 2);      // SEEK_END
     i64 size = ffi_call(g_ftell, fp);
-    ffi_call(g_fseek, fp, 0, 0);      // SEEK_SET (rewind)
-    if (size <= 0) {
-        ffi_call(g_fclose, fp);
-        return null;
-    }
-    u8* buf = malloc(size + 1);
-    i64 nread = ffi_call(g_fread, buf, 1, size, fp);
     ffi_call(g_fclose, fp);
-    if (nread != size) {
-        free(buf);
-        return null;
-    }
-    buf[size] = 0;
-    *out_len = size;
-    return buf;
+    return size;
 }
 
 // ---------------------------------------------------------------------------
-// Lectura little-endian desde el buffer.
+// Presentacion (funciones libres que reciben el u8* y leen via overlays).
 // ---------------------------------------------------------------------------
-i32 read_u16le(u8* buf, i32 off) {
-    i32 b0 = (i32) buf[off];
-    i32 b1 = (i32) buf[off + 1];
-    return b0 | (b1 << 8);
-}
 
-i32 read_u32le(u8* buf, i32 off) {
-    i32 b0 = (i32) buf[off];
-    i32 b1 = (i32) buf[off + 1];
-    i32 b2 = (i32) buf[off + 2];
-    i32 b3 = (i32) buf[off + 3];
-    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
-}
-
-// ---------------------------------------------------------------------------
-// Cabecera BMP parseada (struct value-type).
-// ---------------------------------------------------------------------------
-struct BmpHeader {
-    i32 file_magic;      // 'BM' = 0x4D42
-    i32 size_img;        // tamano total declarado
-    i32 offset_data;     // offset a los pixeles
-    i32 size_header;     // tamano del DIB header (0x28)
-    i32 width;
-    i32 height;
-    i32 color_planes;
-    i32 bit_pixel;
-    i32 method_compression;
-    i32 size_img_raw;
-    i32 horizontal_res;
-    i32 vertical_res;
-    i32 color_palette;
-    i32 important_colors;
-}
-
-BmpHeader parse_header(u8* buf) {
-    BmpHeader h;
-    h.file_magic         = read_u16le(buf, 0);
-    h.size_img           = read_u32le(buf, 2);
-    h.offset_data        = read_u32le(buf, 10);
-    h.size_header        = read_u32le(buf, 14);
-    h.width              = read_u32le(buf, 18);
-    h.height             = read_u32le(buf, 22);
-    h.color_planes       = read_u16le(buf, 26);
-    h.bit_pixel          = read_u16le(buf, 28);
-    h.method_compression = read_u32le(buf, 30);
-    h.size_img_raw       = read_u32le(buf, 34);
-    h.horizontal_res     = read_u32le(buf, 38);
-    h.vertical_res       = read_u32le(buf, 42);
-    h.color_palette      = read_u32le(buf, 46);
-    h.important_colors   = read_u32le(buf, 50);
-    return h;
-}
-
-void print_attributes(BmpHeader h) {
-    println("File Header: ${h.file_magic:hex}");
-    println("Image Size: ${h.size_img} bytes");
-    println("Offset Init Data: ${h.offset_data}");
+void print_attributes(u8* buf) {
+    BmpFileHeader fh = BmpFileHeader(buf);
+    u8* info_base    = buf + BMP_FILE_HDR_SIZE;
+    BmpInfoHeader ih = BmpInfoHeader(info_base);
+    println("File Header: ${fh.magic:hex}");
+    println("Image Size: ${fh.size} bytes");
+    println("Offset Init Data: ${fh.offset}");
     println("");
     println("Header:");
-    println("  Size Header: ${h.size_header} bytes");
-    println("  Width: ${h.width} pixels");
-    println("  Height: ${h.height} pixels");
-    println("  Color Planes: ${h.color_planes}");
-    println("  Bits per Pixel: ${h.bit_pixel}");
-    println("Compression Method: ${h.method_compression}");
-    println("Raw Image Size: ${h.size_img_raw} bytes");
-    println("Horizontal Resolution: ${h.horizontal_res} pixels/meter");
-    println("Vertical Resolution: ${h.vertical_res} pixels/meter");
-    println("Color Palette: ${h.color_palette}");
-    println("Important Colors: ${h.important_colors}");
+    println("  Size Header: ${ih.hdr_size} bytes");
+    println("  Width: ${ih.width} pixels");
+    println("  Height: ${ih.height} pixels");
+    println("  Color Planes: ${ih.planes}");
+    println("  Bits per Pixel: ${ih.bpp}");
+    println("Compression Method: ${ih.compression}");
+    println("Raw Image Size: ${ih.image_size} bytes");
+    println("Horizontal Resolution: ${ih.res_h} pixels/meter");
+    println("Vertical Resolution: ${ih.res_v} pixels/meter");
+    println("Color Palette: ${ih.palette}");
+    println("Important Colors: ${ih.important}");
 }
 
-// ---------------------------------------------------------------------------
-// Volcado ANSI truecolor: replica dump_buffer_cli (BMP = bottom-up, BGR).
-// ---------------------------------------------------------------------------
-void dump_terminal(u8* buf, BmpHeader h) {
-    i32 width  = h.width;
-    i32 height = h.height;
+// Volcado ANSI truecolor: replica dump_buffer_cli (BMP = bottom-up, BGR).  Usa
+// el builtin bg_rgb(r,g,b) para el color de fondo y RESET para limpiar.
+void dump_terminal(u8* buf) {
+    BmpFileHeader fh = BmpFileHeader(buf);
+    u8* info_base    = buf + BMP_FILE_HDR_SIZE;
+    BmpInfoHeader ih = BmpInfoHeader(info_base);
+    i32 width  = ih.width;
+    i32 height = ih.height;
     i32 bytes_per_row = width * 3;
     i32 padding = (4 - (bytes_per_row % 4)) % 4;
     i32 row_padded = bytes_per_row + padding;
-    i32 base = h.offset_data;
-
-    i32 esc = 27;   // caracter ESC (0x1B)
+    i32 base = (i32) fh.offset;
 
     // BMP se almacena de abajo hacia arriba: fila height-1 primero.
-    i32 fila = height - 1;
-    while (fila >= 0) {
-        i32 col = 0;
-        while (col < width) {
+    for (i32 fila = height - 1; fila >= 0; fila--) {
+        for (i32 col = 0; col < width; col++) {
             i32 index = base + fila * row_padded + col * 3;
             i32 b = (i32) buf[index];
             i32 g = (i32) buf[index + 1];
             i32 r = (i32) buf[index + 2];
-            print("${esc:char}[48;2;${r};${g};${b}m ${esc:char}[0m");
-            col = col + 1;
+            print("${bg_rgb(r, g, b)} ${RESET}");
         }
         println("");
-        fila = fila - 1;
     }
 }
 
-i32 main(string[] args) {
+i32 main() {
     // Path fijo: version portable que compila tambien a AOT (donde
     // args_count/args_get no estan disponibles).  Ejecutar desde el
     // directorio reader_bmp/.  La version con CLI esta en main.vx.
     string path = "Ejemplo60x3.bmp";
-    i64 len = 0;
-    u8* buf = read_whole_file(path, &len);
-    if (buf == null) {
-        println("Error: no se pudo leer ${path}");
+
+    // Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host).
+    i64 len = file_size(path);
+    if (len <= 0) {
+        println("Error: no se pudo medir ${path}");
         return 1;
     }
+    u8* buf = malloc(len + 1);
+    if (read_file_into(path, buf, len) != len) {
+        println("Error: no se pudo leer ${path}");
+        free(buf);
+        return 1;
+    }
+    buf[len] = 0;
     println("Leidos ${len} bytes de ${path}");
 
-    BmpHeader h = parse_header(buf);
-    print_attributes(h);
+    print_attributes(buf);
     println("");
-    dump_terminal(buf, h);
+    dump_terminal(buf);
 
     free(buf);
     return 0;

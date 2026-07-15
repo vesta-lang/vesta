@@ -1,0 +1,118 @@
+// =============================================================================
+// writer_bmp.vx - Demostracion de CREACION + ESCRITURA de un BMP con overlays.
+//
+// Construye una imagen 8x8 de 24 bpp con un gradiente conocido (funciones libres
+// sobre un u8*, sin clases), la vuelca a disco, la vuelve a leer con bmp_load y
+// verifica el round-trip (dimensiones + varios pixeles).  Devuelve 42 en exito.
+//
+// Path fijo (sin args de CLI) para que compile tambien a AOT nativo (LIM-5:
+// args_count/args_get no bajan al target nativo).
+// =============================================================================
+
+import "bmp";
+
+i32 main() {
+    string path = "salida8x8.bmp";
+    i32 W = 8;
+    i32 H = 8;
+
+    // --- CREAR: reserva el buffer y rellena las cabeceras via overlays. ---
+    u8* img = bmp.bmp_create24(W, H);
+    if (img == null) {
+        println("Error: no se pudo crear el BMP.");
+        return 1;
+    }
+
+    // Gradiente determinista: r depende de x, g de y, b de (x + y).  Todos los
+    // valores caben en un byte (max 224).
+    for (i32 y = 0; y < H; y++) {
+        for (i32 x = 0; x < W; x++) {
+            i32 r = x * 32;
+            i32 g = y * 32;
+            i32 b = (x + y) * 16;
+            bmp.bmp_set_pixel(img, x, y, r, g, b);
+        }
+    }
+
+    // --- ESCRIBIR: volcar el buffer completo a disco (tamano desde el header). ---
+    if (bmp.bmp_save(img, path) == 0) {
+        println("Error: no se pudo escribir ${path}.");
+        free(img);
+        return 1;
+    }
+    // El tamano total esta en el header; se lee via accessor overlay.
+    i32 total = bmp.bmp_total_size(img);
+    println("Escrito ${total} bytes en ${path} (${W}x${H}, 24bpp).");
+    free(img);
+
+    // --- RE-LEER: patron de dos pasos con malloc LOCAL (conserva la
+    // naturaleza host del puntero) y parseo via overlays. ---
+    i64 sz = bmp.bmp_file_size(path);
+    if (sz <= 0) {
+        println("Error: no se pudo medir ${path}.");
+        return 1;
+    }
+    u8* back = malloc(sz + 1);
+    if (bmp.bmp_read_into(path, back, sz) != sz) {
+        println("Error: no se pudo releer ${path}.");
+        free(back);
+        return 1;
+    }
+    back[sz] = 0;
+    println("");
+    bmp.bmp_print_attributes(back);
+
+    // --- VERIFICAR el round-trip: cabecera + pixeles muestreados. ---
+    // La cabecera se consulta con los accessors overlay (el puntero llega como
+    // arg y conserva su naturaleza host; ver LIM-10).
+    i32 r_width  = bmp.bmp_width(back);
+    i32 r_height = bmp.bmp_height(back);
+    i32 r_bpp    = bmp.bmp_bpp(back);
+    i32 r_magic  = bmp.bmp_magic(back);
+    i32 r_offset = bmp.bmp_offset(back);
+
+    i32 ok = 1;
+    if (r_width != W) {
+        ok = 0;
+    }
+    if (r_height != H) {
+        ok = 0;
+    }
+    if (r_bpp != 24) {
+        ok = 0;
+    }
+    if (r_magic != 0x4D42) {
+        ok = 0;
+    }
+    if (r_offset != 54) {
+        ok = 0;
+    }
+    // Pixel (0,0): r=0 g=0 b=0.
+    if (bmp.bmp_get_r(back, 0, 0) != 0 || bmp.bmp_get_g(back, 0, 0) != 0 ||
+        bmp.bmp_get_b(back, 0, 0) != 0) {
+        ok = 0;
+    }
+    // Pixel (7,7): r=224 g=224 b=224.
+    if (bmp.bmp_get_r(back, 7, 7) != 224 || bmp.bmp_get_g(back, 7, 7) != 224 ||
+        bmp.bmp_get_b(back, 7, 7) != 224) {
+        ok = 0;
+    }
+    // Pixel (3,1): r=96 g=32 b=64.
+    if (bmp.bmp_get_r(back, 3, 1) != 96 || bmp.bmp_get_g(back, 3, 1) != 32 ||
+        bmp.bmp_get_b(back, 3, 1) != 64) {
+        ok = 0;
+    }
+
+    println("");
+    if (ok == 0) {
+        println("Round-trip FALLIDO.");
+        free(back);
+        return 1;
+    }
+    println("Round-trip OK: dimensiones y pixeles coinciden.");
+    println("Vista previa truecolor de la imagen releida:");
+    bmp.bmp_dump_terminal(back);
+
+    free(back);
+    return 42;
+}

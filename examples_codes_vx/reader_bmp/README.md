@@ -24,14 +24,33 @@ La version modular ya NO usa modulos-parche locales.  Usa la **stdlib** y los
 
 Los antiguos `bmp_io.vx` y `colors.vx` se **eliminaron**.
 
+## Modelo: overlays + funciones libres (2026-07-14)
+
+El BMP se modela con VISTAS TIPADAS (`@overlay struct`) sobre el buffer host
+crudo del fichero -- el idioma nativo de Vesta para formatos binarios (igual que
+los parsers de PE/ELF).  **No hay clases**: el "objeto BMP" es simplemente un
+`u8*` (buffer con cabecera + pixeles), cuyo tamano total vive en el propio campo
+`BmpFileHeader.size`.  Las operaciones son FUNCIONES LIBRES que reciben ese `u8*`:
+
+- `bmp_create(w, h, bpp, compression, planes, res_h, res_v, palette, important)`
+  / `bmp_create24(w, h)` -- reservan el buffer y rellenan TODA la configuracion
+  del BMP a traves de los overlays.
+- `bmp_set_pixel(buf, x, y, r, g, b)` / `bmp_get_r|g|b(buf, x, y)` -- pixel BGR,
+  bottom-up, con padding de fila a multiplo de 4.
+- `bmp_save(buf, path)` -- vuelca el buffer a disco (`vx_fileio.file_write_from`).
+- `bmp_file_size(path)` + `bmp_read_into(path, buf, size)` -- lectura en dos pasos
+  (el caller reserva; ver LIM-10).
+- `bmp_print_attributes(buf)` + `bmp_dump_terminal(buf)` -- atributos + truecolor.
+
 ## Ficheros
 
 | Fichero | Rol |
 |:--------|:----|
-| `bmp.vx` | `class BMP_Image` (mirror de la clase Java): parseo + atributos + volcado.  Usa `vx_fileio` + `bg_rgb`. |
-| `main.vx` | Entry con CLI args (interp/JIT).  Flag opcional `-r WxH` via `vio_parse_int`. |
-| `main_aot.vx` | Variante sin args (path fijo) para AOT.  Codigo correcto; su AOT esta bloqueado por BUG-5 (ver abajo). |
-| `reader_bmp.vx` | Version single-file historica (structs + `ffi_open` msvcrt).  Byte-exacta en interp/JIT/AOT-PE.  Referencia de validacion. |
+| `bmp.vx` | Overlays `BmpFileHeader`/`BmpInfoHeader` + funciones libres (crear/leer/pixel/guardar/volcar).  Usa `vx_fileio` + `bg_rgb`. |
+| `writer_bmp.vx` | Crea una 8x8 24bpp con un gradiente, la escribe, la relee y verifica el round-trip.  `main` devuelve 42. |
+| `main.vx` | Reader con CLI args (interp/JIT).  Flag opcional `-r WxH` via `vio_parse_int`. |
+| `main_aot.vx` | Reader sin args (path fijo) para AOT.  Compila y corre nativo (PE/ELF). |
+| `reader_bmp.vx` | Version single-file (overlays + `ffi_open` msvcrt).  Byte-exacta en interp/JIT/AOT-PE. |
 | `Ejemplo60x3.bmp`, `Ejemplo3x60.bmp` | Imagenes de prueba (60x3 sin padding, 3x60 con padding). |
 
 ## Uso
