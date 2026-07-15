@@ -118,6 +118,10 @@ Assembler::assemble(const std::vector<std::unique_ptr<vm::ASTNode>> &ast) {
     for (auto &node : ast)
         first_pass(node.get(), offset);
 
+    // cerrar el tramo de la ultima seccion activa: su tamano son los bytes
+    // emitidos hasta el final del flujo.
+    close_section_layout(offset);
+
     current_section = nullptr;
     current_label = nullptr;
 
@@ -175,6 +179,28 @@ void Assembler::emit_pass(const vm::ASTNode *node) {
             }
 
             this->current_section = this->ctx.get_section(section_name);
+
+            // Reproducir el relleno de alineacion que la primera pasada dio por
+            // supuesto: la imagen es plana, asi que los bytes de la seccion
+            // deben empezar exactamente en su stream_offset.  Sin este relleno
+            // los offsets del flujo no cuadrarian con las direcciones
+            // virtuales calculadas.
+            if (this->current_section != nullptr &&
+                this->current_section->layout_started) {
+                if (output.offset > this->current_section->stream_offset) {
+                    // las dos pasadas discrepan: seria un fallo del ensamblador,
+                    // no del programa del usuario.  Mejor abortar que emitir un
+                    // binario con las direcciones corridas.
+                    throw std::runtime_error(
+                        "Error interno: descuadre entre pasadas en la seccion '" +
+                        section_name + "': el flujo va por " +
+                        std::to_string(output.offset) +
+                        " pero la seccion empieza en " +
+                        std::to_string(this->current_section->stream_offset));
+                }
+                while (output.offset < this->current_section->stream_offset)
+                    output.emit8(0x00);
+            }
         }
     }
     // Si el nodo es una instruccion
@@ -190,6 +216,32 @@ void Assembler::emit_pass(const vm::ASTNode *node) {
     }
 }
 
+void Assembler::close_section_layout(uint64_t offset) {
+    // solo tienen tramo las secciones en las que se llego a entrar
+    if (current_section == nullptr || !current_section->layout_started) return;
+
+    // el tamano real de la seccion son los bytes emitidos desde que se entro en
+    // ella.  Se calcula aqui (y no al emitir cada dato) para que cuente tambien
+    // el codigo, no solo las directivas de datos.
+    current_section->size_real = offset - current_section->stream_offset;
+}
+
+void Assembler::begin_section_layout(uint64_t &offset) {
+    if (current_section == nullptr) return;
+
+    uint32_t align = current_section->size_align_section;
+    if (align == 0) align = 1; // defensivo: align_up exige potencia de 2
+
+    // alinear el flujo: como la imagen es plana, alinear el offset del flujo es
+    // exactamente alinear la direccion virtual de la seccion.  El hueco lo
+    // rellenara emit_pass con ceros para que ambas pasadas coincidan.
+    offset = align_up(offset, align);
+
+    current_section->stream_offset = offset;
+    current_section->layout_started = true;
+    current_section->size_real = 0;
+}
+
 void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
     // --- LABELS ---
     if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
@@ -200,9 +252,13 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
         // offset inicial de la label
         uint64_t start = offset;
 
-        // registrar la label en la seccion, tamano temporal = 0
+        // registrar la label en la seccion, tamano temporal = 0.
+        // La direccion de una label es RELATIVA al inicio de su seccion; el
+        // linker le suma la direccion base de la seccion para obtener la
+        // direccion absoluta.
         if (current_section != nullptr) {
-            current_section->add_label(lab->name, offset, 0);
+            current_section->add_label(
+                lab->name, offset - current_section->stream_offset, 0);
             current_label = current_section->get_label(lab->name);
         }
 
@@ -226,7 +282,18 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
     // para nodos de tipo anotacion, no todos los nodos de este tipo, se tienen
     // en cuenta.
     else if (auto data = dynamic_cast<const vm::AnnotationNode *>(node)) {
-        apply_annotation(data);
+        // @Section declara Y activa una seccion: marca la frontera entre el
+        // tramo de flujo de la seccion anterior y el de la nueva.
+        const bool is_section = (data->key == "Section");
+
+        // cerrar el tramo de la seccion que termina (antes de alinear, para no
+        // imputarle el relleno de la siguiente)
+        if (is_section) close_section_layout(offset);
+
+        apply_annotation(data); // apply_section actualiza current_section
+
+        // abrir el tramo de la nueva seccion (alinea el flujo)
+        if (is_section) begin_section_layout(offset);
     }
 
     // --- DECLARACION DE DATOS CON SUS DIRECTIVAS ---
@@ -260,11 +327,6 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
                 size_of_label += elem_size;
                 offset += elem_size;
             }
-
-            // guardamos el tamano real de la seccion
-            if (current_section) {
-                current_section->size_real = offset;
-            }
         }
 
         if (current_section == nullptr) {
@@ -273,8 +335,12 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
             exit(EXIT_FAILURE);
         }
 
-        // anadir a la seccion actual el nuevo label
-        current_section->add_label(data->label, offset_label, size_of_label);
+        // anadir a la seccion actual el nuevo label, con direccion relativa al
+        // inicio de la seccion (el tamano real de la seccion se calcula al
+        // cerrar su tramo, en close_section_layout)
+        current_section->add_label(
+            data->label, offset_label - current_section->stream_offset,
+            size_of_label);
 
         // anadimos la label a la seccion, una vez obtenida su tamano real
         symbol_table[data->label] = current_section->get_label(data->label);

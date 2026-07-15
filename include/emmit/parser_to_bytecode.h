@@ -1636,6 +1636,30 @@ class Assembler {
     void first_pass(const vm::ASTNode *node, uint64_t &offset);
 
     /**
+     * @brief Cierra el tramo de flujo de la seccion activa (primera pasada).
+     *
+     * Fija @c size_real de @c current_section como el numero de bytes emitidos
+     * mientras esa seccion estuvo activa.  Debe llamarse ANTES de alinear el
+     * flujo para la siguiente seccion, de modo que el relleno de alineacion no
+     * se contabilice como contenido de la seccion que termina.
+     *
+     * @param offset Offset actual dentro del flujo de bytecode del modulo.
+     */
+    void close_section_layout(uint64_t offset);
+
+    /**
+     * @brief Abre el tramo de flujo de la seccion activa (primera pasada).
+     *
+     * Alinea @p offset a la alineacion de @c current_section y registra ahi su
+     * @c stream_offset.  El relleno introducido debe reproducirlo despues
+     * @c emit_pass como bytes reales, ya que la imagen .velb es plana y el
+     * offset del flujo es la direccion virtual de la seccion.
+     *
+     * @param offset Offset dentro del flujo; se avanza hasta quedar alineado.
+     */
+    void begin_section_layout(uint64_t &offset);
+
+    /**
      * @brief Aplica una anotacion del AST al contexto del ensamblador.
      *
      * Despacha el procesado de la anotacion a traves de @c annotation_handlers,
