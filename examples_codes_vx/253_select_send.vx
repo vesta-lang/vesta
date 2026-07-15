@@ -4,13 +4,12 @@
 // canal NO es determinista (depende del scheduler) pero la SUMA total y el CONTEO
 // total SI -> verificacion estable.  Termina cerrando los canales: los receptores
 // salen cuando su canal esta cerrado y drenado (recv devuelve 0).
-import std.types only uintptr;
 import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
-import "vx_chan" only vx_chan_new, vx_chan_recv, vx_chan_close, vx_chan_is_closed,
-                     vx_chan_free, vx_chan_select_send_block;
+import "vx_chan" only Chan, vx_chan_new, vx_chan_recv, vx_chan_close,
+                     vx_chan_is_closed, vx_chan_free, vx_chan_select_send_block;
 
-uintptr c0 = 0;
-uintptr c1 = 0;
+Chan c0;
+Chan c1;
 i64 g_s0 = 0;   // suma recibida por el canal 0
 i64 g_s1 = 0;   // suma recibida por el canal 1
 i64 g_n0 = 0;   // conteo recibido por el canal 0
@@ -18,7 +17,7 @@ i64 g_n1 = 0;   // conteo recibido por el canal 1
 const i64 M = 300;
 
 void sender(i64 a) {
-    uintptr[2] chans;
+    Chan[2] chans;
     chans[0] = c0;
     chans[1] = c1;
     i64[2] vals;
@@ -33,7 +32,7 @@ void sender(i64 a) {
 void recv0(i64 a) {
     while (true) {
         i64 v = vx_chan_recv(c0);
-        if (v == 0 && vx_chan_is_closed(c0) != 0) {
+        if (v == 0 && vx_chan_is_closed(c0)) {
             break;                     // cerrado y drenado
         }
         g_s0 += v;
@@ -43,7 +42,7 @@ void recv0(i64 a) {
 void recv1(i64 a) {
     while (true) {
         i64 v = vx_chan_recv(c1);
-        if (v == 0 && vx_chan_is_closed(c1) != 0) {
+        if (v == 0 && vx_chan_is_closed(c1)) {
             break;
         }
         g_s1 += v;

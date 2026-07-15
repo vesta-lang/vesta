@@ -8,14 +8,16 @@
 //
 // Los casos se pasan como un array de tripletas i64 [chan, dir, val] (el layout
 // del overlay SelCase de vx_chan): dir 0 = recepcion (val recibe el valor), dir
-// 1 = envio (val es el valor a enviar).  3 qwords por caso.
-import std.types only uintptr;
+// 1 = envio (val es el valor a enviar).  3 qwords por caso.  A diferencia del
+// resto del API (handles `Chan` tipados), este primitivo toma el array crudo: un
+// campo de tipo overlay dentro de un struct de valor aun no funciona (ver la nota
+// sobre SelCase en stdlib/vx/vx_chan.vx).
 import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
-import "vx_chan" only vx_chan_new, vx_chan_send, vx_chan_recv, vx_chan_free,
-                     vx_chan_select;
+import "vx_chan" only Chan, vx_chan_new, vx_chan_send, vx_chan_recv,
+                     vx_chan_free, vx_chan_select;
 
-uintptr src = 0;
-uintptr dst = 0;
+Chan src;
+Chan dst;
 i64 g_sum = 0;
 const i64 M = 200;
 const i64 CASE_RECV = 0;

@@ -3,13 +3,12 @@
 // distintos; el consumidor recibe de "el que este listo" hasta juntar todos los
 // mensajes.  El orden de llegada NO es determinista (depende del scheduler) pero
 // la SUMA y los conteos por-canal SI -> verificacion estable.
-import std.types only uintptr;
 import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
-import "vx_chan" only vx_chan_new, vx_chan_send, vx_chan_free,
+import "vx_chan" only Chan, vx_chan_new, vx_chan_send, vx_chan_free,
                      vx_chan_select_recv_block;
 
-uintptr g_ch_a = 0;
-uintptr g_ch_b = 0;
+Chan g_ch_a;
+Chan g_ch_b;
 i64 g_sum = 0;
 i64 g_from_a = 0;
 i64 g_from_b = 0;
@@ -28,7 +27,7 @@ void producer_b(i64 arg) {
     }
 }
 void consumer(i64 arg) {
-    uintptr[2] chans;
+    Chan[2] chans;
     chans[0] = g_ch_a;
     chans[1] = g_ch_b;
     i64 v = 0;

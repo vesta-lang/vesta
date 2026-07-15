@@ -2,12 +2,11 @@
 // recibe hasta que el canal esta cerrado Y drenado (idioma CSP productor/
 // consumidor con senal de fin).  Ejercita vx_chan_close + vx_chan_is_closed
 // sobre el scheduler M:N de fibras.
-import std.types only uintptr;
 import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
-import "vx_chan" only vx_chan_new, vx_chan_send, vx_chan_recv,
+import "vx_chan" only Chan, vx_chan_new, vx_chan_send, vx_chan_recv,
                      vx_chan_close, vx_chan_is_closed, vx_chan_free;
 
-uintptr g_ch = 0;
+Chan g_ch;
 i64 g_sum = 0;
 i64 g_count = 0;
 i64 g_n = 50;
@@ -28,7 +27,7 @@ void consumer(i64 arg) {
     // son 1..50 (nunca 0), asi que recv==0 solo ocurre en canal cerrado+vacio.
     while (true) {
         i64 v = vx_chan_recv(g_ch);
-        if (v == 0 && vx_chan_is_closed(g_ch) != 0) {
+        if (v == 0 && vx_chan_is_closed(g_ch)) {
             break;                   // cerrado + drenado
         }
         s = s + v;
