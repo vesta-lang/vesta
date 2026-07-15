@@ -948,6 +948,20 @@ class Lowering {
     size_t size_of_type(const Type &t) const;
 
     /**
+     * @brief ¿@p t es un `@overlay struct` (una VISTA sobre memoria ajena)?
+     *
+     * Un overlay comparte @c PrimitiveKind::STRUCT con los structs value-type,
+     * pero su semantica de valor es la OPUESTA: el valor de un overlay ES el
+     * puntero (8 bytes) al bloque host; no hay payload inline que copiar.  Todo
+     * sitio que trate un STRUCT como "buffer inline" (memcpy de @c size_bytes,
+     * o "el valor de un elemento es su direccion") debe excluir los overlays y
+     * tratarlos como un PTR normal.
+     *
+     * @return true si @p t es un STRUCT cuyo layout tiene @c is_overlay.
+     */
+    bool type_is_overlay(const Type &t) const;
+
+    /**
      * @brief Calcula el IrValueId del puntero al campo @c e->field_name.
      *
      * Helper compartido por @c lower_field_access (lectura) y por la

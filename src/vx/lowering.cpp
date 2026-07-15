@@ -878,6 +878,14 @@ static uint64_t vx_global_array_bytes(const ast::TypeNode *tn,
             static_cast<const ast::NamedTypeNode *>(at->element_type.get());
         if (const Type *u = tc.newtype_underlying(nt->name))
             esz = primitive_size_bytes(u->kind);
+        else {
+            // Elemento `@overlay struct` (p.ej. `Foo[4] g_hs;`): el valor de
+            // una vista ES un puntero de 8 bytes -> el array guarda N punteros.
+            // Sin esto esz=0 y el global se quedaba SIN storage estatico.
+            auto sit = tc.struct_layouts().find(nt->name);
+            if (sit != tc.struct_layouts().end() && sit->second.is_overlay)
+                esz = 8;
+        }
     }
     if (esz == 0 || count == 0) return 0;
     return count * esz;
@@ -3159,15 +3167,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 sem.kind == PrimitiveKind::RESULT) {
                 param_is_host_ptr = true;
             }
-            // Limitacion conocida (Phase A): `T[]` como tipo de
-            // parametro es ambiguo entre array dinamico (host_ptr de
-            // new T[N]) y stack-decay (VM addr de T[N] local).  Sin
-            // overload resolution o anotacion explicita, mantenemos
-            // is_virtual=true por defecto (VM addr) que cubre el
-            // patron decay-to-pointer del test 11_arrays_nativos.
-            // Para HOFs sobre arrays dinamicos (e.g. `Shape[]` de
-            // new Shape[N]), usar `T*` explicito en el parametro
-            // hasta que la distincion se resuelva en el type system.
+            // Bug host-vs-VM (2026-07-15): la ambiguedad historica de `T[]`
+            // como parametro (array dinamico host de `new T[N]` vs stack-decay
+            // de un `T[N]` local, que vivia en la pila VM) ESTA CERRADA: desde
+            // que @c ir_pass_promote_local_allocas promueve con force_all, todo
+            // `T[N]` local es tambien host.  Con ambos origenes en host, un
+            // `T[]` NO virtual es siempre una direccion host y se marca como
+            // tal arriba junto con `T*`.  `VirtualPtr<T>` (is_virtual=true)
+            // sigue siendo la unica forma de nombrar una direccion VM.
         }
         // Variadico CRUDO (`...` pelado): PASS-THROUGH.  El compilador NO
         // empaqueta los args -- ocupan los arg-regs del ABI segun la convencion
@@ -3938,7 +3945,10 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
         // Campo AGREGADO inline (struct/array) desde una EXPRESION (otra
         // variable, llamada, ...): copia memberwise desde la direccion origen
         // (no un STORE escalar, que guardaria la direccion como puntero).
-        if (fi->type.kind == PrimitiveKind::STRUCT ||
+        // Un campo de tipo `@overlay struct` NO es un agregado inline: guarda el
+        // HANDLE de la vista (8 bytes) -> STORE escalar del puntero (abajo).
+        if ((fi->type.kind == PrimitiveKind::STRUCT &&
+             !type_is_overlay(fi->type)) ||
             fi->type.kind == PrimitiveKind::ARRAY) {
             uint64_t sz = size_of_type(fi->type);
             if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
@@ -4185,6 +4195,13 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.type = ir::IrType::I8;
         al.dst = addr;
         al.imm = (uint64_t)lay.size_bytes;
+        // Bug host-vs-VM (2026-07-15): si se toma `&p`, el slot vive en host
+        // (`T*` = direccion host por convencion).  Ver el comentario extenso
+        // en la rama del struct sin init-list.
+        if (native_poo_ || address_taken_locals_.count(vd->name)) {
+            al.host_alloca = true;
+            fn_->values[addr].is_host_ptr = true;
+        }
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
         // Seguridad: zero-inicializar TODO el struct antes de escribir los
@@ -4311,7 +4328,10 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             // direccion origen).  Sin esto un `Outer o = {.w = inner}`
             // guardaba &inner en o.w y leer o.w.v devolvia la direccion
             // (bug struct-en-struct, value-type anidado).
-            if (fi->type.kind == PrimitiveKind::STRUCT ||
+            // Un campo de tipo `@overlay struct` NO es un agregado inline:
+            // guarda el HANDLE de la vista (8 bytes) -> STORE escalar (abajo).
+            if ((fi->type.kind == PrimitiveKind::STRUCT &&
+                 !type_is_overlay(fi->type)) ||
                 fi->type.kind == PrimitiveKind::ARRAY) {
                 uint64_t sz = size_of_type(fi->type);
                 if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
@@ -4485,12 +4505,22 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // en la pila nativa (host_alloca).  Sin esto, un struct que
         // escapa (p.ej. se pasa por puntero a un metodo s.metodo()) se
         // aloca con ALLOCA_VM ([rbx+0x40]); el .exe standalone no tiene
-        // ProcessVM en rbx -> SIGSEGV.  En el path interp/Full este flag
-        // queda en false (el ir_optimizer promueve a host solo los no
-        // escapantes; los escapantes usan VM stack que el runtime mapea).
-        if (native_poo_) ins.host_alloca = true;
+        // ProcessVM en rbx -> SIGSEGV.
+        //
+        // Bug host-vs-VM (2026-07-15): tambien en interp/JIT cuando se toma
+        // `&p`.  El comentario anterior daba por bueno que "los escapantes
+        // usan VM stack que el runtime mapea", pero el consumidor del `P*`
+        // resultante (param, campo o elemento) lo deref-ea con movh por la
+        // convencion `T*`=host -> movh sobre direccion VM -> SIGSEGV.  Solo
+        // pasaba inadvertido mientras el inliner borraba la llamada.  Un
+        // struct que NO se address-takea se queda en la pila VM (y el
+        // ir_optimizer ya lo promueve por perf si no escapa).
+        if (native_poo_ || address_taken_locals_.count(vd->name)) {
+            ins.host_alloca = true;
+        }
+        const bool struct_is_host = ins.host_alloca;
         fn_->append(current_block_, std::move(ins));
-        if (native_poo_) fn_->values[addr].is_host_ptr = true;
+        if (struct_is_host) fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
         // Seguridad + RAII: zero-inicializar SIEMPRE el buffer del struct.  Un
         // struct local en pila NO se zeroea solo (a diferencia de un objeto GC);
@@ -4840,6 +4870,13 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.type = ir::IrType::I8;
         al.dst = addr;
         al.imm = (uint64_t)lay.size_bytes;
+        // Bug host-vs-VM (2026-07-15): si se toma `&p`, el slot vive en host
+        // (`T*` = direccion host por convencion).  Ver el comentario extenso
+        // en la rama del struct sin init-list.
+        if (native_poo_ || address_taken_locals_.count(vd->name)) {
+            al.host_alloca = true;
+            fn_->values[addr].is_host_ptr = true;
+        }
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
         // STORE cada campo en su offset (recursivo para structs anidados).
@@ -4886,9 +4923,16 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         ins.dst = addr;
         ins.imm = (uint64_t)bytes;
         ins.source_line = vd->loc.line;
-        if (native_poo_) ins.host_alloca = true;
+        // Bug host-vs-VM (2026-07-15): el buffer de un `T[N]` local va SIEMPRE
+        // a memoria host, no solo en AOT.  Su tipo es un array NO virtual (ver
+        // @c type_from_node), asi que `arr` decaido a `T[]`/`T*` y `&arr[i]`
+        // son direcciones host y sus consumidores emiten movh.  Cuando el
+        // buffer se quedaba en la pila VM (interp/JIT) las dos rutas
+        // discrepaban: `sum_array(arr, n)` leia el array con movh sobre una
+        // direccion VM.  Un array VM explicito se nombra con `VirtualPtr<T>`.
+        ins.host_alloca = true;
         fn_->append(current_block_, std::move(ins));
-        if (native_poo_) fn_->values[addr].is_host_ptr = true;
+        fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
         // Zero-inicializar SIEMPRE el buffer del array local (mismo motivo que
         // los structs, ~L4415): un array en pila NO se zeroea solo.  El interp
@@ -4936,6 +4980,24 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         ai.type = ir::IrType::I8; // unidad: 1 byte
         ai.dst = addr;
         ai.imm = (uint64_t)bytes;
+        // Bug host-vs-VM (2026-07-15): si se toma `&x`, el puntero resultante
+        // es un `T*` y por convencion del lenguaje un `T*` es una direccion
+        // HOST: el callee que reciba `T*`, o el campo/elemento `T*` donde se
+        // guarde, lo deref-earan con movh.  Por tanto el slot debe vivir en
+        // memoria host desde el principio.  Antes se quedaba en la pila VM y
+        // solo "funcionaba" mientras el inliner o el store-to-load forwarding
+        // borraban el deref; en cuanto el puntero cruzaba una frontera real
+        // (callee no inlineado, o guardado en un struct/array y releido) se
+        // hacia movh sobre una direccion VM -> SIGSEGV.
+        //
+        // Es el mismo criterio que @c ir_pass_promote_callned_allocas aplica a
+        // los args de CALLN.  Se marca AQUI (y no en un pase del IR) porque
+        // solo el lowering distingue un consumidor host (`T*`) de uno VM: los
+        // structs de params de los opcodes meta viven en la pila VM y NO se
+        // address-takean desde el codigo del usuario, asi que no se ven
+        // afectados.  `VirtualPtr<T>` sigue siendo la via para memoria VM.
+        ai.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         ai.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(ai));
         bind(vd->name, addr);
@@ -10305,6 +10367,16 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
                 // a la celda en el outer scope.  Lo bindeamos como
                 // address_taken_local del helper para que read_local /
                 // write_local emitan LOAD/STORE indirectos.
+                //
+                // Bug host-vs-VM (2026-07-15): esa celda vive en memoria HOST.
+                // Una captura mutable obliga al owner a ser address-taken (el
+                // env guarda el puntero a su slot), y todo local address-taken
+                // se aloca ya en host -- ver @c lower_var_decl.  Sin marcarlo,
+                // los LOAD/STORE indirectos del helper emitian `mov` (VM) y
+                // escribian en una direccion VM mientras el owner leia la
+                // celda host: las mutaciones de la lambda no se veian desde
+                // fuera (el test 56_linkedlist_hof devolvia el `acc` base).
+                child_fn.values[raw_v].is_host_ptr = true;
                 address_taken_locals_.insert(e->captures[i]);
                 bind(e->captures[i], raw_v);
             } else {
@@ -13726,6 +13798,13 @@ size_t Lowering::size_of_type(const Type &t) const {
     return primitive_size_bytes(t.kind);
 }
 
+bool Lowering::type_is_overlay(const Type &t) const {
+    if (t.kind != PrimitiveKind::STRUCT || t.struct_name.empty()) return false;
+    const auto &layouts = tc_.struct_layouts();
+    auto it = layouts.find(t.struct_name);
+    return it != layouts.end() && it->second.is_overlay;
+}
+
 ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     // Calcula base + index * sizeof(*base) y devuelve el puntero al
     // elemento.  Si sizeof == 1 omitimos la multiplicacion para
@@ -14135,8 +14214,18 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // Sin esto, `lower_index(m[i])` emitia LOAD ptr [m+i*sizeof(row)]
     // que leia bytes del primer elemento como si fueran un host_ptr ->
     // aliasing entre filas distintas, valores incorrectos.
-    if (e->result_type.kind == PrimitiveKind::ARRAY ||
-        e->result_type.kind == PrimitiveKind::STRUCT) {
+    // Array de HANDLES overlay (`Foo[N] hs;` / `Foo* hs`): el elemento GUARDA un
+    // puntero de 8 bytes -> su valor se obtiene CARGANDO ese puntero (cae al
+    // LOAD de abajo), no devolviendo la direccion del slot.  Sin esto, `hs[i]`
+    // daba `&hs[i]` -> todos los elementos aliaseaban el propio array.
+    //
+    // NO confundir con `v.arr[i]` (@c is_overlay_array = campo array DENTRO de
+    // una vista, `Sec secs[n] @offset(p) stride(s)`): ahi el elemento vive
+    // INLINE en la memoria ajena, asi que su direccion (la que ya calculo
+    // @c lower_index_addr escalando por STRIDE) ES el valor de la vista.
+    if ((e->result_type.kind == PrimitiveKind::ARRAY ||
+         e->result_type.kind == PrimitiveKind::STRUCT) &&
+        (e->is_overlay_array || !type_is_overlay(e->result_type))) {
         // Resultado es un sub-array o struct value-type; addr ya es la
         // direccion correcta del elemento.  Sin esto, `arr[i].field` con
         // `arr: Struct[N]` cargaba el primer qword del struct como un
@@ -14145,6 +14234,22 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     }
     const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
     const ir::IrValueId dst = fn_->new_value(ft);
+    // El puntero cargado de un elemento overlay apunta a memoria HOST ajena:
+    // marcarlo para que los accesos `hs[i].campo` emitan movh/loadzh (host) y
+    // no mov/loadz (memoria VM).
+    if (type_is_overlay(e->result_type)) fn_->values[dst].is_host_ptr = true;
+    // Bug host-vs-VM (2026-07-15): mismo criterio que el campo de struct/clase
+    // en @c lower_field_access -- un elemento de tipo `T*` (puntero HOST crudo,
+    // no `VirtualPtr<T>`) guarda por convencion una direccion host, asi que su
+    // deref posterior debe emitir movh/loadzh.  Sin esto, `hs[i][0]` sobre un
+    // `i64*[N]` emitia `mov` (VM) sobre una direccion host y leia basura,
+    // mientras que el MISMO puntero guardado en un campo de struct si usaba
+    // movh -> las dos rutas discrepaban.  `VirtualPtr<T>` (is_virtual) queda
+    // fuera: esa SI es una direccion de la memoria VM.
+    if (e->result_type.kind == PrimitiveKind::PTR &&
+        !e->result_type.is_virtual) {
+        fn_->values[dst].is_host_ptr = true;
+    }
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
     ld.type = ft;
@@ -15717,7 +15822,16 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // primeros 8 bytes de `a` como un puntero -> direccion basura -> segfault
     // en AOT (host) o valor erroneo en VM.  Mismo patron que los fixes B1/B3
     // de ptr_of/read_borrow sobre agregados.
-    if (e->result_type.kind == PrimitiveKind::STRUCT ||
+    //
+    // EXCEPCION: un campo cuyo TIPO es un `@overlay struct` NO es un agregado
+    // inline: guarda el HANDLE de la vista (un puntero host de 8 bytes, igual
+    // que una variable/parametro/elemento de array overlay).  Su valor se
+    // obtiene CARGANDO ese puntero del slot -> cae al LOAD de abajo.  Sin esto
+    // el campo se interpretaba como una vista EMBEBIDA en ese offset y leerlo
+    // devolvia `base+offset` (la direccion del propio slot) en vez del handle.
+    // Mismo patron que el array de handles overlay en lower_index.
+    if ((e->result_type.kind == PrimitiveKind::STRUCT &&
+         !type_is_overlay(e->result_type)) ||
         e->result_type.kind == PrimitiveKind::ARRAY ||
         e->result_type.kind == PrimitiveKind::OPTIONAL ||
         e->result_type.kind == PrimitiveKind::RESULT ||
@@ -15730,6 +15844,11 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
 
     const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
     ir::IrValueId dst = fn_->new_value(ft);
+    // El handle cargado de un campo overlay apunta a memoria HOST ajena:
+    // marcarlo para que los accesos `h.ch.campo` emitan movh/loadzh (host) y no
+    // mov/loadz (memoria VM).  Mismo criterio que lower_index sobre arrays de
+    // handles overlay.
+    if (type_is_overlay(e->result_type)) fn_->values[dst].is_host_ptr = true;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::LOAD;
     ins.type = ft;
@@ -19432,7 +19551,13 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         // declara `__clone__` (copy-hook), tras la copia aplica el efecto sobre
         // la copia del campo (p.ej. ++refcount).  Mismo modelo que el path
         // CLASS (lower_class_field_store).
-        if (fa->result_type.kind == PrimitiveKind::STRUCT) {
+        //
+        // EXCEPCION: si el campo es de tipo `@overlay struct`, el slot guarda el
+        // HANDLE de la vista (8 bytes), no un agregado embebido -> STORE directo
+        // del puntero (cae al camino generico de abajo).  Sin esto la copia
+        // memberwise volcaba el PAYLOAD apuntado por el handle en el campo.
+        if (fa->result_type.kind == PrimitiveKind::STRUCT &&
+            !type_is_overlay(fa->result_type)) {
             uint64_t sz = 8;
             auto it_sl = tc_.struct_layouts().find(fa->result_type.struct_name);
             if (it_sl != tc_.struct_layouts().end())
@@ -19637,8 +19762,16 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         // necesita memcpy de sizeof(Struct) bytes desde el RHS PTR al
         // slot (igual que `*ptr = struct_value`).  Sin esto, solo se
         // copia el primer qword.
+        // Array de HANDLES overlay: el RHS ya ES el puntero de la vista (8
+        // bytes), no la direccion de un payload que copiar.  Excluirlo del
+        // memcpy: cae al STORE generico de abajo (pt = PTR) que guarda el
+        // puntero tal cual.  Sin esto, `hs[i] = Foo(p)` emitia LOAD [p] +
+        // STORE -> guardaba el CONTENIDO apuntado en vez del puntero.
+        // `v.arr[i] = ...` (@c is_overlay_array, elemento INLINE en la vista)
+        // conserva la copia de bytes: ahi no hay puntero que guardar.
         if ((ix->result_type.kind == PrimitiveKind::STRUCT ||
              ix->result_type.kind == PrimitiveKind::ARRAY) &&
+            (ix->is_overlay_array || !type_is_overlay(ix->result_type)) &&
             e->op == ast::AssignOp::Assign) {
             uint64_t struct_size = 0;
             if (ix->result_type.kind == PrimitiveKind::STRUCT) {

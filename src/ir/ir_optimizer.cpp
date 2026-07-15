@@ -12,6 +12,7 @@
 
 #include "ir/ir_optimizer.h"
 #include <unordered_map>
+#include <map>
 #include <set>
 #include <unordered_set>
 #include <vector>
@@ -953,6 +954,83 @@ bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all) {
 //  Beneficio: malloc/free de ~200-500 ns por iter en hot loops -> ~1 ns
 //  (sub/add rsp).  Speedup del alloc puro ~100-500x.
 //==============================================================================
+
+//==============================================================================
+//  Pase ir_pass_propagate_host_ptr (bug host-vs-VM, 2026-07-15)
+//
+//  Propaga @c is_host_ptr hacia adelante por las cadenas de aritmetica de
+//  punteros (ADD/SUB/casts/PHI), para CUALQUIER value ya marcado como host,
+//  sin importar quien lo marco.
+//
+//  Motivacion: @c ir_pass_promote_local_allocas hacia esta propagacion como su
+//  Step 5, pero SOLO para las ALLOCAs que el mismo promovia (su Step 1 filtra
+//  por `!ins.host_alloca`).  Cuando es el LOWERING quien marca una ALLOCA como
+//  host -- caso de los locales address-taken, ver @c lower_var_decl -- ese pase
+//  la salta y la propagacion no ocurria: `&p.x` (offset 0) emitia movh pero
+//  `&p.y` (offset != 0, un ADD) perdia la naturaleza host y emitia `mov` (VM),
+//  de modo que el struct se inicializaba a medias (`p.y` iba a la pila VM y el
+//  callee leia 0 en su sitio).
+//
+//  Es el mismo "patron is_host_ptr en add(ptr,off)" ya visto en otros bugs.
+//  Idempotente y conservador: solo añade el flag, nunca lo quita, asi que se
+//  puede correr las veces que haga falta.
+//==============================================================================
+
+bool ir_pass_propagate_host_ptr(IrFunction &fn) {
+    if (fn.is_native) return false;
+    if (fn.values.empty()) return false;
+
+    bool any = false;
+    bool changed = true;
+    int it = 16; // cota dura de convergencia (igual que el resto de pases)
+    while (changed && it-- > 0) {
+        changed = false;
+        for (auto &blk : fn.blocks) {
+            for (auto &ins : blk.instrs) {
+                if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size())
+                    continue;
+                auto &dv = fn.values[ins.dst];
+                if (dv.is_host_ptr) continue; // ya marcado
+                bool any_host = false;
+                auto chk = [&](IrValueId v) {
+                    if (v != IR_NO_VALUE && v < fn.values.size() &&
+                        fn.values[v].is_host_ptr)
+                        any_host = true;
+                };
+                switch (ins.op) {
+                /* Aritmetica de punteros y casts: el resultado apunta al mismo
+                 * espacio de direcciones que el operando base. */
+                case IrOp::ADD:
+                case IrOp::SUB:
+                case IrOp::BITCAST:
+                case IrOp::MOV:
+                case IrOp::CAST:
+                case IrOp::SEXT:
+                case IrOp::ZEXT:
+                case IrOp::TRUNC:
+                    for (auto opv : ins.operands) {
+                        chk(opv);
+                        if (any_host) break;
+                    }
+                    break;
+                case IrOp::PHI:
+                    for (const auto &pa : ins.phi_args) {
+                        chk(pa.value);
+                        if (any_host) break;
+                    }
+                    break;
+                default: break;
+                }
+                if (any_host) {
+                    dv.is_host_ptr = true;
+                    changed = true;
+                    any = true;
+                }
+            }
+        }
+    }
+    return any;
+}
 
 bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
     if (fn.is_native) return false;
@@ -5455,36 +5533,57 @@ bool ir_pass_const_fold(IrFunction &fn) {
 bool ir_pass_dse(IrFunction &fn) {
     bool changed = false;
 
-    // Alias-safety del store-to-load forwarding: conjunto de direcciones
-    // LOCALES PRECISAS = dst de un ALLOCA + todo lo derivado por ADD con
-    // offset CONSTANTE o por BITCAST/MOV.  Dos direcciones locales precisas
-    // distintas NO aliasan (allocas distintos, u offsets const distintos del
-    // mismo alloca).  Un STORE a un puntero FUERA de este conjunto (puntero
-    // "salvaje": resultado de un LOAD, parametro, calculo con offset variable)
-    // puede aliasar CUALQUIER direccion local -> es una barrera que invalida
-    // todo el forwarding.  Sin esto, `(*p).x = v` (p puntero cargado que en
-    // runtime == &s) NO invalidaba el valor conocido de `s.x` -> el SLF
-    // forwardeaba un valor stale (bug: `s.x` leia 1 tras `(*p).x = 10`).
-    std::unordered_set<IrValueId> safe_addr;
+    // Alias-safety del store-to-load forwarding.
+    //
+    // CANONICALIZACION DE DIRECCIONES (bug fix 2026-07-15): una direccion se
+    // representa por su par (RAIZ, OFFSET constante), NO por su IrValueId.
+    // La raiz es el dst de un ALLOCA (stack) o de un allocador (heap); el
+    // offset se acumula al derivar por ADD con constante.  Las COPIAS
+    // (MOV/BITCAST) heredan RAIZ Y OFFSET, es decir, la MISMA direccion.
+    //
+    // Antes se indexaba el forwarding por IrValueId crudo y las copias se
+    // metian en el conjunto de "direcciones precisas" como valores NUEVOS.
+    // Dos ids distintos se asumian NO aliasados, pero `%b2 = mov %b` es la
+    // MISMA direccion -> un STORE via la copia no invalidaba el valor
+    // conocido de la original y el LOAD posterior reenviaba un valor STALE
+    // (silenciosamente incorrecto en interp/JIT/AOT).  Repro: binding de un
+    // @overlay (que copia el puntero) escribiendo un campo, leido despues
+    // por el puntero original.
+    //
+    // Con (raiz, offset): la copia colapsa a la MISMA clave -> el store la
+    // invalida/sobreescribe correctamente.  Dos claves distintas siguen sin
+    // aliasar solo cuando es DEMOSTRABLE (raices distintas, u offsets const
+    // del mismo root cuyos rangos de bytes no se solapan).  Si no se puede
+    // probar, se es CONSERVADOR (no se reenvia).
+    //
+    // Un STORE a un puntero cuya raiz es DESCONOCIDA (resultado de un LOAD,
+    // parametro, PHI, calculo con offset variable) puede aliasar cualquier
+    // direccion local -> barrera que invalida todo el forwarding.  Sin esto,
+    // `(*p).x = v` (p cargado que en runtime == &s) no invalidaba `s.x`.
+    enum class RootKind : uint8_t { NONE = 0, STACK = 1, HEAP = 2 };
+    struct AddrInfo {
+        IrValueId root = IR_NO_VALUE; ///< raiz (ALLOCA o allocador)
+        int64_t off = 0;              ///< offset constante desde la raiz
+    };
+    std::unordered_map<IrValueId, AddrInfo> addr_of; // solo direcciones conocidas
+    std::unordered_map<IrValueId, RootKind> root_kind;
+
     for (auto &bb : fn.blocks)
-        for (auto &ins : bb.instrs)
-            if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE)
-                safe_addr.insert(ins.dst);
-    // Direcciones de HEAP: dst de un allocador (raw_alloc/gc_alloc/newobj) +
-    // derivados.  Un puntero de heap NUNCA aliasa una direccion de STACK
-    // (alloca) -> un store a traves de un puntero de heap NO invalida el
-    // contenido de los slots alloca trackeados (p.ej. `p[i]=v` con p host:
-    // escribe el heap, no el slot de p).  Distingue i5 (store via un puntero
-    // CARGADO = posible &alloca escapado -> barrera) de test 82 (store via un
-    // puntero de malloc -> no aliasa el slot de p).
-    std::unordered_set<IrValueId> heap_addr;
-    for (auto &bb : fn.blocks)
-        for (auto &ins : bb.instrs)
-            if ((ins.op == IrOp::RAW_ALLOC || ins.op == IrOp::GC_ALLOC ||
-                 ins.op == IrOp::NEWOBJ || ins.op == IrOp::NEWOBJS) &&
-                ins.dst != IR_NO_VALUE)
-                heap_addr.insert(ins.dst);
+        for (auto &ins : bb.instrs) {
+            if (ins.dst == IR_NO_VALUE) continue;
+            RootKind k = RootKind::NONE;
+            if (ins.op == IrOp::ALLOCA)
+                k = RootKind::STACK;
+            else if (ins.op == IrOp::RAW_ALLOC || ins.op == IrOp::GC_ALLOC ||
+                     ins.op == IrOp::NEWOBJ || ins.op == IrOp::NEWOBJS)
+                k = RootKind::HEAP;
+            if (k == RootKind::NONE) continue;
+            addr_of[ins.dst] = AddrInfo{ins.dst, 0};
+            root_kind[ins.dst] = k;
+        }
     {
+        // Fix-point: propagar (raiz, offset) por las cadenas derivadas.
+        // Cota dura de 16 iteraciones para garantizar convergencia.
         bool grew = true;
         int guard = 0;
         while (grew && guard++ < 16) {
@@ -5492,42 +5591,138 @@ bool ir_pass_dse(IrFunction &fn) {
             for (auto &bb : fn.blocks)
                 for (auto &ins : bb.instrs) {
                     if (ins.dst == IR_NO_VALUE) continue;
-                    auto derived_from = [&](std::unordered_set<IrValueId> &s) {
-                        if (s.count(ins.dst)) return false;
-                        if (ins.op == IrOp::ADD && ins.operands.size() == 2 &&
-                            s.count(ins.operands[0])) {
-                            uint64_t off;
-                            return get_const(fn, ins.operands[1], off);
-                        }
-                        if ((ins.op == IrOp::BITCAST || ins.op == IrOp::MOV) &&
-                            !ins.operands.empty() && s.count(ins.operands[0]))
-                            return true;
-                        return false;
-                    };
-                    if (derived_from(safe_addr)) {
-                        safe_addr.insert(ins.dst);
+                    if (addr_of.count(ins.dst)) continue; // ya resuelta
+                    if (ins.operands.empty()) continue;
+                    auto base = addr_of.find(ins.operands[0]);
+                    if (base == addr_of.end()) continue;
+                    if (ins.op == IrOp::BITCAST || ins.op == IrOp::MOV) {
+                        // COPIA: misma direccion exacta que el operando.
+                        addr_of[ins.dst] = base->second;
                         grew = true;
-                    }
-                    if (derived_from(heap_addr)) {
-                        heap_addr.insert(ins.dst);
+                    } else if (ins.op == IrOp::ADD && ins.operands.size() == 2) {
+                        uint64_t off;
+                        if (!get_const(fn, ins.operands[1], off)) continue;
+                        AddrInfo a = base->second;
+                        a.off += static_cast<int64_t>(off);
+                        addr_of[ins.dst] = a;
                         grew = true;
                     }
                 }
         }
     }
 
+    /* Tamano en bytes accedido por un LOAD/STORE segun su IrType.  Se usa
+     * para decidir SOLAPAMIENTO entre dos accesos al mismo root con offsets
+     * constantes distintos. */
+    auto access_bytes = [](IrType t) -> int64_t {
+        switch (t) {
+        case IrType::I8:
+        case IrType::U8:
+        case IrType::BOOL: return 1;
+        case IrType::I16:
+        case IrType::U16: return 2;
+        case IrType::I32:
+        case IrType::U32:
+        case IrType::F32:
+        case IrType::HANDLE: return 4;
+        default: return 8; /* I64/U64/F64/PTR/VOID: conservador */
+        }
+    };
+
+    /* Clave canonica de direccion: (raiz, offset const).  Dos punteros con
+     * la misma clave son la MISMA direccion aunque sean IrValueId distintos
+     * (copias via MOV/BITCAST). */
+    using AddrKey = std::pair<IrValueId, int64_t>;
+
+    /* STORE pendiente de veredicto: aun no se ha demostrado que sea dead ni
+     * se ha leido.  @c covered es una mascara de 1 bit por byte escrito por
+     * stores POSTERIORES: cuando cubre el rango entero, este store es dead
+     * (nadie puede observar sus bytes).  Esto recupera el DSE del zero-init
+     * ancho que luego se sobreescribe por campos estrechos (`{i32 x; i32 y}`
+     * inicializado a 0 y luego x=..., y=...), pero SOLO cuando la cobertura
+     * es COMPLETA -- a diferencia del codigo anterior, que mataba el store
+     * ancho en cuanto veia UNO estrecho a la misma direccion (incorrecto:
+     * los bytes no cubiertos seguian siendo observables). */
+    struct PendingStore {
+        size_t idx;      ///< indice de la instruccion STORE en el bloque
+        IrValueId root;  ///< raiz de la direccion
+        int64_t off;     ///< offset desde la raiz
+        int64_t size;    ///< bytes escritos
+        uint64_t covered; ///< bitmask de bytes ya sobreescritos (bit i = off+i)
+    };
+
     for (auto &bb : fn.blocks) {
-        // Mapa: ptr_vid -> indice del ultimo STORE a ese ptr (en este bloque)
-        std::unordered_map<IrValueId, size_t> last_store_idx;
+        // STOREs vivos del bloque, pendientes de veredicto de DSE.
+        std::vector<PendingStore> pending;
         // Phase D.7.opt: STORE-TO-LOAD FORWARDING.
-        // Mapa paralelo: ptr_vid -> (stored_value_vid, store_type) del
-        // ultimo STORE.  Cuando un LOAD lee de ese mismo ptr CON EL MISMO
-        // tipo, podemos reemplazar el LOAD por MOV del valor almacenado
-        // (ahorra la lectura de memoria + cualquier conversion).
-        std::unordered_map<IrValueId, std::pair<IrValueId, IrType>>
-            last_store_val;
+        // Mapa paralelo: addr_key -> (stored_value_vid, store_type) del
+        // ultimo STORE.  Cuando un LOAD lee de esa misma direccion CON EL
+        // MISMO tipo, podemos reemplazar el LOAD por MOV del valor
+        // almacenado (ahorra la lectura de memoria + cualquier conversion).
+        std::map<AddrKey, std::pair<IrValueId, IrType>> last_store_val;
         // Set de indices marcados como dead
         std::vector<bool> dead(bb.instrs.size(), false);
+
+        /* Invalida el forwarding de toda direccion del MISMO root cuyo rango
+         * de bytes se solape con [off, off+size) sin ser la clave exacta (esa
+         * la sobreescribe el propio store).  Roots distintos (alloca vs
+         * alloca, alloca vs heap, malloc vs malloc) NUNCA aliasan -> intactos.
+         * Se asume el ancho maximo (8 B) de la entrada trackeada: conservador. */
+        auto kill_val_overlapping = [&](const AddrKey &k, int64_t size) {
+            for (auto it = last_store_val.begin();
+                 it != last_store_val.end();) {
+                bool ov = it->first.first == k.first && it->first != k &&
+                          it->first.second < k.second + size &&
+                          k.second < it->first.second + 8;
+                if (ov)
+                    it = last_store_val.erase(it);
+                else
+                    ++it;
+            }
+        };
+
+        /* Un STORE posterior [off, off+size) marca como cubiertos esos bytes
+         * en los stores pendientes del mismo root; el que quede TOTALMENTE
+         * cubierto es dead.  Si el rango excede 64 B no se modela la mascara
+         * (se descarta el pendiente: conservador, no se mata). */
+        auto note_write = [&](IrValueId root, int64_t off, int64_t size) {
+            for (auto it = pending.begin(); it != pending.end();) {
+                if (it->root != root || it->off >= off + size ||
+                    off >= it->off + it->size) {
+                    ++it;
+                    continue;
+                }
+                if (it->size > 64) { /* no modelable -> olvidar (no matar) */
+                    it = pending.erase(it);
+                    continue;
+                }
+                const int64_t lo = std::max(it->off, off);
+                const int64_t hi = std::min(it->off + it->size, off + size);
+                for (int64_t b = lo; b < hi; ++b)
+                    it->covered |= (1ull << (b - it->off));
+                const uint64_t full = (it->size >= 64)
+                                          ? ~0ull
+                                          : ((1ull << it->size) - 1ull);
+                if ((it->covered & full) == full) {
+                    dead[it->idx] = true; /* sobreescrito por completo */
+                    changed = true;
+                    it = pending.erase(it);
+                } else
+                    ++it;
+            }
+        };
+
+        /* Un LOAD de [off, off+size) LEE los stores pendientes que solapa ->
+         * dejan de ser candidatos a dead. */
+        auto note_read = [&](IrValueId root, int64_t off, int64_t size) {
+            for (auto it = pending.begin(); it != pending.end();) {
+                if (it->root == root && it->off < off + size &&
+                    off < it->off + it->size)
+                    it = pending.erase(it);
+                else
+                    ++it;
+            }
+        };
 
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
             auto &ins = bb.instrs[i];
@@ -5547,23 +5742,32 @@ bool ir_pass_dse(IrFunction &fn) {
                 //  - puntero UNKNOWN (load/param/calculo): podria ser la
                 //    direccion de un alloca escapado (`&s` cargado de vuelta)
                 //    -> barrera de alias, invalida TODO el forwarding (i5).
-                if (!safe_addr.count(ptr)) {
-                    if (!heap_addr.count(ptr)) {
-                        last_store_idx.clear();
-                        last_store_val.clear();
-                    }
+                auto ai = addr_of.find(ptr);
+                if (ai == addr_of.end()) {
+                    // Raiz DESCONOCIDA -> puede aliasar cualquier cosa.
+                    pending.clear();
+                    last_store_val.clear();
                     break;
                 }
-                auto it = last_store_idx.find(ptr);
-                if (it != last_store_idx.end()) {
-                    // STORE anterior al mismo ptr SIN reads intermedios.
-                    // El anterior es DEAD.
-                    dead[it->second] = true;
-                    changed = true;
+                if (root_kind[ai->second.root] == RootKind::HEAP) {
+                    // Puntero de HEAP: no aliasa ningun slot de STACK, y las
+                    // direcciones de heap no se trackean -> ni invalida ni
+                    // registra (test 82: `p[i]=v` no toca el slot de p).
+                    break;
                 }
-                last_store_idx[ptr] = i;
+                const AddrKey key{ai->second.root, ai->second.off};
+                const int64_t sz = access_bytes(ins.type);
+                // Acumula cobertura sobre los stores pendientes que solapa
+                // (mata solo los que quedan cubiertos POR COMPLETO) e
+                // invalida el forwarding de las direcciones solapadas.
+                note_write(ai->second.root, ai->second.off, sz);
+                kill_val_overlapping(key, sz);
+                pending.push_back(
+                    PendingStore{i, ai->second.root, ai->second.off, sz, 0ull});
                 if (val != IR_NO_VALUE) {
-                    last_store_val[ptr] = {val, ins.type};
+                    last_store_val[key] = {val, ins.type};
+                } else {
+                    last_store_val.erase(key);
                 }
                 break;
             }
@@ -5571,7 +5775,21 @@ bool ir_pass_dse(IrFunction &fn) {
                 if (ins.operands.empty()) break;
                 IrValueId ptr = ins.operands[0];
                 if (ptr == IR_NO_VALUE) break;
-                auto it = last_store_val.find(ptr);
+                auto ai = addr_of.find(ptr);
+                if (ai == addr_of.end()) {
+                    // LOAD por un puntero de raiz DESCONOCIDA: puede leer
+                    // cualquier slot trackeado -> ningun STORE previo puede
+                    // declararse dead.  (El forwarding no se invalida: leer
+                    // no muta memoria.)
+                    pending.clear();
+                    break;
+                }
+                const AddrKey lkey{ai->second.root, ai->second.off};
+                // Un load LEE los stores pendientes que solapa -> dejan de
+                // ser candidatos a dead.
+                note_read(ai->second.root, ai->second.off,
+                          access_bytes(ins.type));
+                auto it = last_store_val.find(lkey);
                 if (it != last_store_val.end() &&
                     it->second.second == ins.type) {
                     // SLF: reemplazar LOAD por MOV del valor almacenado.
@@ -5607,9 +5825,8 @@ bool ir_pass_dse(IrFunction &fn) {
                     ins.operands = {it->second.first};
                     changed = true;
                 }
-                // No invalidar last_store_idx: el STORE no es dead
-                // (acabamos de demostrar que ESTE LOAD lo lee).
-                last_store_idx.erase(ptr);
+                // note_read ya retiro los stores leidos de 'pending'
+                // (no son dead: acabamos de demostrar que ESTE LOAD los lee).
                 break;
             }
             case IrOp::ARRAY_LOAD:
@@ -5618,7 +5835,7 @@ bool ir_pass_dse(IrFunction &fn) {
                 // Cualquier LOAD desde un ptr que tenemos seguido invalida
                 // la posibilidad de eliminar el STORE previo (no sabemos
                 // alias).  Conservador: limpiar todo el mapa.
-                last_store_idx.clear();
+                pending.clear();
                 last_store_val.clear();
                 break;
             // Side-effects/calls: limpiar (memoria puede cambiar dentro).
@@ -5718,7 +5935,7 @@ bool ir_pass_dse(IrFunction &fn) {
             // global del runtime); conservativo: invalidar el mapa.
             case IrOp::GETSTATIC:
             case IrOp::SETSTATIC:
-                last_store_idx.clear();
+                pending.clear();
                 last_store_val.clear();
                 break;
             default: break;
@@ -9153,6 +9370,16 @@ void ir_optimize(IrModule &mod, OptLevel level) {
      * pasado a CALLN seria VM-addr -> garbage.  Cero anotaciones del
      * usuario: el analisis es backward-flow desde args PTR de CALLN.
      * UNA pasada (no se itera con el resto). */
+    /* Bug host-vs-VM (2026-07-15): propagar is_host_ptr por las cadenas de
+     * aritmetica de punteros ANTES que el resto de pases, para que las ALLOCAs
+     * que marco el lowering (locales address-taken) tengan la naturaleza host
+     * en TODOS sus derivados (`&p.campo` con offset != 0).  Se corre en todos
+     * los niveles de opt (tambien O0): no es una optimizacion, es correctness
+     * del emit -- de este flag depende que se elija movh (host) o mov (VM). */
+    for (auto &fn : mod.functions) {
+        if (!fn.is_native) ir_pass_propagate_host_ptr(fn);
+    }
+
     if (level >= OptLevel::O1) {
         for (auto &fn : mod.functions) {
             if (!fn.is_native) ir_pass_promote_callned_allocas(fn);
@@ -9163,7 +9390,20 @@ void ir_optimize(IrModule &mod, OptLevel level) {
      * escapan a CALL*, RET, THROW, etc.) a `host_alloca=true`.  El JIT
      * emite `sub rsp, N` en host stack y los LOAD/STORE usan native mov
      * directo (1 instr) en lugar del inline cache check (~10 instr).
-     * Skippable via VESTA_NO_PROMOTE_LOCAL_ALLOCAS=1 para A/B testing. */
+     * Skippable via VESTA_NO_PROMOTE_LOCAL_ALLOCAS=1 para A/B testing.
+     *
+     * NOTA (bug host-vs-VM, 2026-07-15): NO usar force_all aqui.  Promover
+     * TODAS las ALLOCAs (tambien las escapantes) rompe a los consumidores que
+     * leen de memoria VM por diseno: los structs de params de los opcodes meta
+     * (DefClassParams/DefMethodParams que `__module_init` construye en la pila
+     * VM y pasa a defclass/defmethod via RAW_ASM) se leen con vm_mem, asi que
+     * moverlos a host les da basura.  Por eso RAW_ASM cuenta como op UNSAFE y
+     * su ALLOCA debe quedarse en la pila VM.
+     *
+     * La coherencia host/VM de los punteros del USUARIO no se resuelve aqui
+     * (a nivel IR ya no existen los tipos Vesta y no se puede distinguir un
+     * consumidor host de uno VM), sino en el lowering, que si conoce el tipo:
+     * ver @c mark_addr_taken_local_as_host en src/vx/lowering.cpp. */
     if (level >= OptLevel::O1) {
         const char *skip = std::getenv("VESTA_NO_PROMOTE_LOCAL_ALLOCAS");
         if (!skip || skip[0] == '\0' || skip[0] == '0') {

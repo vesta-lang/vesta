@@ -191,6 +191,23 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn);
 bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
 
 /**
+ * @brief Propaga @c is_host_ptr por las cadenas de aritmetica de punteros.
+ *
+ * Recorre ADD/SUB/casts/PHI marcando el destino como host cuando alguno de sus
+ * operandos ya lo es, hasta punto fijo.  Complementa a
+ * @c ir_pass_promote_local_allocas, cuya propagacion interna solo cubre las
+ * ALLOCAs que ese mismo pase promueve: las que marca el lowering (locales
+ * address-taken) necesitan esta.  Sin ella, `&p.campo` con offset != 0 pierde
+ * la naturaleza host y emite `mov` (VM) en lugar de `movh`.
+ *
+ * Solo añade el flag (nunca lo quita), asi que es idempotente.
+ *
+ * @param fn Funcion IR a procesar (se ignora si es nativa).
+ * @return true si marco algun value nuevo.
+ */
+bool ir_pass_propagate_host_ptr(IrFunction &fn);
+
+/**
  * @brief Promociona patrones `malloc(N) + ... + free(p)` locales sin
  *        escape a `ALLOCA host_alloca`.
  *

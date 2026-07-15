@@ -1968,7 +1968,16 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                 size = 0;
             }
         }
-        return Type::make_array(std::move(elem), size);
+        // Bug host-vs-VM (2026-07-15): un array nombrado en el codigo
+        // (`T[N]` local o `T[]` como parametro) NO es virtual.  Los `T[N]`
+        // locales viven en memoria host desde que @c
+        // ir_pass_promote_local_allocas promueve con force_all, y los
+        // dinamicos (`new T[N]`) siempre lo fueron, asi que ambos origenes
+        // coinciden.  Marcarlos virtual hacia que `&arr[i]` produjese un
+        // VirtualPtr que luego se asignaba/pasaba como `T*` (host) y se
+        // deref-eaba con movh sobre una direccion VM -> SIGSEGV.
+        // `VirtualPtr<T>` sigue siendo la unica forma de nombrar memoria VM.
+        return Type::make_array(std::move(elem), size, /*virt=*/false);
     }
     // `fn(P1, P2) -> R` -> Type{FUNCTION, [P1,P2], R}.
     // El parser garantiza que return_type nunca es null (usa VOID por
@@ -9222,9 +9231,16 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                 return Type{};
             }
         }
-        // `&x` siempre devuelve VirtualPtr<T>: la direccion es del
-        // stack VM (locales) o del payload de un objeto GC (que
-        // tambien vive en host -- ver caso 1 abajo).
+        // Bug host-vs-VM (2026-07-15): `&x` devuelve un `T*`, es decir una
+        // direccion HOST.  Antes el default era VirtualPtr<T> (memoria VM)
+        // porque los locales vivian en la pila VM, pero el resultado se
+        // asignaba/pasaba como `T*` sin queja del checker y el consumidor lo
+        // deref-eaba con movh -> SIGSEGV.  Ahora el lowering coloca todo local
+        // address-taken en memoria host (ver @c lower_var_decl), asi que la
+        // direccion ES host y ambos lados coinciden.  `VirtualPtr<T>` sigue
+        // siendo la unica forma de nombrar memoria VM, y los casos de abajo
+        // (deref de un VirtualPtr, subscript de un array virtual) la
+        // preservan.
         //
         // Caso 1: campo de un objeto CLASS o STRUCT.  Si el operando
         // es FieldAccessExpr cuya base es CLASS o STRUCT alocado
@@ -9232,29 +9248,26 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
         // HOST.  Lo distinguimos por el tipo del operando: si el
         // base.result_type es PTR is_virtual=false (host) o CLASS,
         // entonces la direccion del campo tambien es host.
-        bool result_is_virtual = true;
+        bool result_is_virtual = false;
         if (kind == ast::NodeKind::FieldAccessExpr) {
             auto *fa = static_cast<ast::FieldAccessExpr *>(e->operand.get());
             const Type bt = fa->base ? fa->base->result_type : Type{};
-            if (bt.kind == PrimitiveKind::CLASS) {
-                result_is_virtual =
-                    false; // CLASS payload vive en GC heap (host)
-            } else if (bt.kind == PrimitiveKind::PTR && !bt.is_virtual) {
-                result_is_virtual = false; // ptr host -> field es host
+            if (bt.kind == PrimitiveKind::PTR && bt.is_virtual) {
+                // Campo alcanzado a traves de un VirtualPtr<T>: sigue en
+                // memoria VM.
+                result_is_virtual = true;
             }
-            // STRUCT local sigue en stack VM por default (virtual).
         }
         // Caso 2: subscript (p[i]).  La direccion del elemento
-        // hereda la naturaleza del puntero base.
+        // hereda la naturaleza del puntero/array base: solo es VM si la
+        // base lo es (VirtualPtr<T> o array virtual).
         if (kind == ast::NodeKind::IndexExpr) {
             auto *ie = static_cast<ast::IndexExpr *>(e->operand.get());
             const Type bt = ie->base ? ie->base->result_type : Type{};
-            if (bt.kind == PrimitiveKind::PTR && !bt.is_virtual) {
-                result_is_virtual = false;
-            }
-            // ARRAY local: virtual.  ARRAY host: virtual=false.
-            if (bt.kind == PrimitiveKind::ARRAY && !bt.is_virtual) {
-                result_is_virtual = false;
+            if ((bt.kind == PrimitiveKind::PTR ||
+                 bt.kind == PrimitiveKind::ARRAY) &&
+                bt.is_virtual) {
+                result_is_virtual = true;
             }
         }
         // Caso 3: deref (*p).  &*p == p; preserva exactamente la
@@ -10085,6 +10098,28 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                                  type_to_string(s->type) + ")");
     }
     return s->type;
+}
+
+/**
+ * @brief Indica si @p t es un handle de overlay (una vista sobre memoria ajena).
+ *
+ * El valor de una variable overlay son los 8 bytes de la direccion de la vista:
+ * un overlay ES un puntero.  Por eso admite el mismo modelo nullable que
+ * CLASS/PTR en los builtins @c isPresent / @c unwrap, en lugar de obligar al
+ * usuario a comparar contra @c 0.  (No confundir con @c sizeof(T), que sobre un
+ * overlay devuelve la huella de la vista para reservar su buffer de respaldo.)
+ *
+ * @param layouts Tabla de layouts de struct del modulo.
+ * @param t       Tipo a examinar.
+ * @return true si @p t es un struct marcado @c \@overlay.
+ */
+static bool
+type_is_overlay_handle(const std::unordered_map<std::string, StructLayout> &layouts,
+                       const Type &t) {
+    if (t.kind != PrimitiveKind::STRUCT)
+        return false;
+    const auto it = layouts.find(t.struct_name);
+    return it != layouts.end() && it->second.is_overlay;
 }
 
 Type TypeChecker::check_call(ast::CallExpr *e) {
@@ -12565,7 +12600,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 at.kind != PrimitiveKind::PTR &&
                 at.kind != PrimitiveKind::I64 &&
                 at.kind != PrimitiveKind::OPTIONAL &&
-                at.kind != PrimitiveKind::COUNT) {
+                at.kind != PrimitiveKind::COUNT &&
+                !type_is_overlay_handle(struct_layouts_, at)) {
                 diags_.error(a->loc, "isPresent: el argumento debe ser "
                                      "Optional<T> o referencia, no '" +
                                          type_to_string(at) + "'");
@@ -12597,7 +12633,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             return rt;
         }
         if (at.kind != PrimitiveKind::CLASS && at.kind != PrimitiveKind::PTR &&
-            at.kind != PrimitiveKind::I64 && at.kind != PrimitiveKind::COUNT) {
+            at.kind != PrimitiveKind::I64 && at.kind != PrimitiveKind::COUNT &&
+            !type_is_overlay_handle(struct_layouts_, at)) {
             diags_.error(e->loc, std::string(bn) +
                                      ": el argumento debe ser una referencia "
                                      "o Optional<T>, no '" +
