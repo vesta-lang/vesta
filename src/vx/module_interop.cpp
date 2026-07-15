@@ -1081,7 +1081,31 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                 continue;
             }
         } else if (gv->is_const && gv->init) {
-            if (gv->init->kind == ast::NodeKind::IntLitExpr) {
+            if (gv->init->kind == ast::NodeKind::StringLitExpr) {
+                // `public const string S = "lit"`.  Un const string NO tiene
+                // storage ni en su propio modulo: cada uso materializa el
+                // StringObject desde el literal.  Cross-module vale lo mismo,
+                // asi que exportamos los bytes como blob STRING y el consumidor
+                // los materializa igual -- el mismo camino que un comptime
+                // string.  Sin esto el simbolo viajaba sin valor y el uso moria
+                // con "nombre no resuelto", que ni senalaba al global.
+                auto *sl = static_cast<ast::StringLitExpr *>(gv->init.get());
+                // Interpolado (`"a=${b}"`): el valor no es un literal, se
+                // construye en cada uso -> no exportable como blob.
+                if (sl->interp_exprs.empty()) {
+                    const std::string &sv = sl->value;
+                    const uint32_t blob_off = vxi_blob_append(
+                        out.blob_pool, VxiBlobKind::STRING,
+                        reinterpret_cast<const uint8_t *>(sv.data()), sv.size(),
+                        /*element_size=*/1u,
+                        /*count=*/static_cast<uint32_t>(sv.size()),
+                        /*alignment=*/8u);
+                    s.has_blob_ref = true;
+                    s.blob_offset = blob_off;
+                    s.blob_kind_hint =
+                        static_cast<uint8_t>(VxiBlobKind::STRING);
+                }
+            } else if (gv->init->kind == ast::NodeKind::IntLitExpr) {
                 auto *lit = static_cast<ast::IntLitExpr *>(gv->init.get());
                 s.has_init_value = true;
                 s.init_value = static_cast<uint64_t>(lit->value);
@@ -1601,8 +1625,31 @@ void import_vxi_into_typechecker(
             if (t.kind == PrimitiveKind::VOID && s.underlying_type != "void") {
                 continue; // tipo no resoluble (skip silente)
             }
+            // Const string/array/struct: el valor viaja como blob del .vxi.  Un
+            // const string no tiene storage (cada uso materializa el
+            // StringObject desde el literal), asi que el consumidor necesita
+            // los bytes, no una direccion.  Mismo trato que por namespace.
+            if (s.is_const && s.has_blob_ref) {
+                const VxiBlobHeader *bh =
+                    vxi_blob_read(mod.blob_pool, s.blob_offset);
+                const uint8_t *payload =
+                    vxi_blob_payload(mod.blob_pool, s.blob_offset);
+                if (bh && payload &&
+                    bh->kind == static_cast<uint32_t>(VxiBlobKind::STRING)) {
+                    std::string str_val(reinterpret_cast<const char *>(payload),
+                                        bh->count);
+                    tc.register_imported_global_str(local_name, t,
+                                                    std::move(str_val));
+                    break;
+                }
+            }
+            // El mangled_label identifica el slot en el modulo que lo define:
+            // los globals que no se inlinean comparten storage por esa clave.
+            // Vacio (global del root, sin mangle) => no exportable: se queda
+            // sin storage compartido y el uso falla al resolver, como antes.
             tc.register_imported_global(local_name, std::move(t), s.is_const,
-                                        s.has_init_value, s.init_value);
+                                        s.has_init_value, s.init_value,
+                                        s.mangled_label);
             break;
         }
         }

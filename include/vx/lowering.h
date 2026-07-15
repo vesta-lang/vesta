@@ -251,6 +251,45 @@ class Lowering {
                                                uint64_t bytes = 8);
 
     /**
+     * @brief Slot del storage de un global IMPORTADO de otro modulo.
+     *
+     * El consumidor no ve el AST del dep, asi que crea su propio slot con el
+     * nombre del dep (`lib__counter`) como clave: el slot lleva ese nombre en
+     * @c StaticDataMeta::shared_key y el merge cross-module unifica todas las
+     * entries con la misma clave en UNO -- el modulo que define el global y los
+     * que lo usan comparten storage.
+     *
+     * Solo aplica a los globals que NO se inlinean (mutables, y const cuyo
+     * valor no se conoce en compile time como un `const string`).
+     *
+     * @param mangled_label nombre del slot en el modulo que lo define.
+     * @param t             tipo declarado (fija el tamano del slot).
+     * @return indice del slot en @c static_data.
+     */
+    uint64_t shared_global_slot_for(const std::string &mangled_label,
+                                    const Type &t);
+
+    /**
+     * @brief Si @p name es un global importado con storage, garantiza que
+     *        @c runtime_global_slots_ lo mapea a su slot compartido.
+     *
+     * Con el alias registrado, las rutas de lectura/escritura/`&` del ident
+     * tratan al global importado igual que a uno propio.  Idempotente.
+     *
+     * @return true si @p name es (o ya era) un global con slot.
+     */
+    bool ensure_imported_global_slot(const std::string &name);
+
+    /**
+     * @brief Si @p e es `ns.G` sobre un global importado CON storage, devuelve
+     *        true y deja en @p out_slot su slot compartido.
+     *
+     * Falso para el resto (campo de struct/clase, constante inlineable, metodo
+     * estatico): esos siguen su ruta normal.
+     */
+    bool imported_global_slot_of(ast::FieldAccessExpr *e, uint64_t &out_slot);
+
+    /**
      * @brief Reserva el slot de la PLANTILLA de un `thread_local` (TLS).
      *
      * El slot lleva la plantilla por-hilo (bytes de inicializacion estaticos,
@@ -1298,6 +1337,11 @@ class Lowering {
     std::unordered_map<std::string, uint64_t> comptime_global_slots_;
     /// L2.2: slots para globales runtime no-const (string/int/etc.)
     std::unordered_map<std::string, uint64_t> runtime_global_slots_;
+    /// Nombres (ya mangled) de los globals declarados en ESTE modulo.  Sirve
+    /// para no confundir un simbolo de un namespace propio con uno importado:
+    /// el storage de los locales lo decide el pre-pase con el tipo delante, y
+    /// hay tipos que no llevan slot (p.ej. un global de tipo funcion).
+    std::unordered_set<std::string> local_global_names_;
 
     /// thread_local con init != 0: (slot static_data, valor inicial 8B LE).  El
     /// lowering sintetiza __vx_tls_init (TLS callback del PE) que escribe estos

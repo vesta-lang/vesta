@@ -1227,6 +1227,18 @@ bool TypeChecker::run() {
             ic.str_value = std::move(pg.str_value);
             imported_global_consts_.emplace(pg.name, std::move(ic));
         }
+        // El que no se inlinea (mutable, o const sin valor de compile time
+        // como un `const string` que construye el `__module_init` del dep)
+        // tiene STORAGE: se comparte por `shared_key` con el modulo que lo
+        // define.  Sin esto el lowering no encontraba el nombre y el uso moria
+        // con "nombre no resuelto", que ni siquiera senalaba al global.
+        const bool inlinable = (pg.is_const && pg.has_init_value) || pg.is_str;
+        if (!inlinable && !pg.mangled_label.empty()) {
+            ImportedGlobalStorage gs;
+            gs.type = pg.type;
+            gs.mangled_label = pg.mangled_label;
+            imported_global_storage_.emplace(pg.name, std::move(gs));
+        }
     }
     pending_imported_globals_.clear();
 

@@ -1525,6 +1525,11 @@ class TypeChecker {
         /// via STRMAKE en @c lower_ident.
         bool is_str = false;
         std::string str_value;
+        /// Nombre del slot en el modulo que lo DEFINE (`lib__counter`).  Es la
+        /// clave con la que el merge cross-module unifica el storage, asi que
+        /// el lowering la necesita para los globals que NO se inlinean (los
+        /// mutables y los const sin valor de compile-time).
+        std::string mangled_label;
     };
     std::vector<PendingGlobal> pending_imported_globals_;
     /// Phase M.L7: declaracion adelantada del struct + map.  El
@@ -1539,9 +1544,26 @@ class TypeChecker {
         std::string str_value;
     };
 
+    /**
+     * @brief Global importado que tiene STORAGE (no se inlinea): un mutable
+     *        (`public i64 counter`) o un const cuyo valor no se conoce en
+     *        compile time (`public const string S = "hola"` -> el StringObject
+     *        lo construye el `__module_init` del dep).
+     *
+     * El consumidor no ve el AST del dep, asi que crea su propio slot con
+     * @c mangled_label como `shared_key`: el merge cross-module unifica por esa
+     * clave y ambos modulos acaban leyendo y escribiendo el MISMO storage.
+     */
+    struct ImportedGlobalStorage {
+        Type type;                 ///< tipo declarado en el dep.
+        std::string mangled_label; ///< nombre del slot en el dep.
+    };
+
   private:
     std::unordered_map<std::string, ImportedGlobalConst>
         imported_global_consts_;
+    std::unordered_map<std::string, ImportedGlobalStorage>
+        imported_global_storage_;
 
     /// Phase M6.a L.3: visibilidad por simbolo top-level.
     /// El TypeChecker rellena estos sets al procesar cada decl segun
@@ -2003,13 +2025,15 @@ class TypeChecker {
     /// inline-ar el valor literal.
     void register_imported_global(const std::string &name, Type type,
                                   bool is_const, bool has_init_value = false,
-                                  uint64_t init_value = 0) {
+                                  uint64_t init_value = 0,
+                                  const std::string &mangled_label = "") {
         PendingGlobal pg;
         pg.name = name;
         pg.type = std::move(type);
         pg.is_const = is_const;
         pg.has_init_value = has_init_value;
         pg.init_value = init_value;
+        pg.mangled_label = mangled_label;
         pending_imported_globals_.push_back(std::move(pg));
     }
 
@@ -2036,6 +2060,14 @@ class TypeChecker {
     const std::unordered_map<std::string, ImportedGlobalConst> &
     imported_global_consts() const noexcept {
         return imported_global_consts_;
+    }
+
+    /// Globals importados que tienen storage propio (no inlinables).  El
+    /// lowering la consulta para crear el slot compartido con el dep.  Poblada
+    /// al final de run() drenando @c pending_imported_globals_.
+    const std::unordered_map<std::string, ImportedGlobalStorage> &
+    imported_global_storage() const noexcept {
+        return imported_global_storage_;
     }
 
     /// Phase M6.a L.3: setea visibilidad de un simbolo top-level.

@@ -1440,6 +1440,39 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         default: break;
         }
     }
+    // Globals IMPORTADOS de otro modulo: mismo pre-pase.  Tiene que ser AQUI y
+    // no al primer uso, porque el prologo de `main` decide si llama a
+    // `__module_init` mirando si hay algun slot -- y un modulo que solo USA
+    // globals de sus deps no tendria ninguno todavia, asi que el init no
+    // correria y el global se leeria a cero.  Como el merge los unifica con los
+    // del dep por `shared_key`, pre-crearlos no cuesta storage.
+    for (const auto &kv : tc_.imported_global_storage())
+        (void)ensure_imported_global_slot(kv.first);
+    // Los que se usan cualificados (`lib.counter`) no estan en esa tabla: viven
+    // en el namespace importado.  Mismo criterio (kind=1 = variable/constante,
+    // sin valor inlineable, y no un string que se materializa desde su blob).
+    //
+    // OJO: la tabla de namespaces incluye tambien los DECLARADOS en este mismo
+    // modulo (`namespace app;` registra sus propios simbolos para el acceso
+    // cualificado).  Esos son locales: su storage ya lo decidio el bucle de
+    // arriba, con el tipo delante -- y hay tipos que NO llevan slot (un global
+    // de tipo funcion se resuelve como closure).  Darles uno aqui los
+    // desviaria a la ruta de global plano y romperia su uso.
+    for (auto &decl : mod_.decls) {
+        if (decl && decl->kind == ast::NodeKind::GlobalVarDecl)
+            local_global_names_.insert(
+                static_cast<ast::GlobalVarDecl *>(decl.get())->name);
+    }
+    for (const auto &ns : tc_.imported_namespaces()) {
+        for (const auto &sym : ns.symbols) {
+            if (sym.kind != 1 || sym.has_const_value ||
+                sym.mangled_label.empty())
+                continue;
+            if (sym.var_type.kind == PrimitiveKind::STRING) continue;
+            if (local_global_names_.count(sym.mangled_label) != 0) continue;
+            (void)shared_global_slot_for(sym.mangled_label, sym.var_type);
+        }
+    }
     // AOT (native_poo_): los campos estaticos de clase se mapean a globales
     // planos (slot __static_<Clase>_<campo>).  Pre-grabamos su inicializador
     // constante en los bytes del slot (no hay __module_init en bare).  Las
@@ -14536,6 +14569,10 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
     // Antes del const-globals scan para preferir el storage real cuando
     // existe.  Cero overhead vs constantes (un LOAD adicional, ~2 ns).
     {
+        // Un global IMPORTADO de otro modulo no tiene decl en este AST: se le
+        // registra aqui su slot compartido para que el resto de la ruta lo
+        // trate igual que a uno propio.
+        (void)ensure_imported_global_slot(e->name);
         auto sit = runtime_global_slots_.find(e->name);
         if (sit != runtime_global_slots_.end()) {
             // Detectar el tipo declarado del global para emitir LOAD
@@ -14543,11 +14580,13 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ir::IrType t = ir::IrType::I64;
             bool is_string = false;
             bool is_array = false;
+            bool found_decl = false;
             for (auto &decl : mod_.decls) {
                 if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl)
                     continue;
                 auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
                 if (gv->name != e->name) continue;
+                found_decl = true;
                 if (gv->type &&
                     gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
                     auto *pt =
@@ -14559,6 +14598,19 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                     is_array = true;
                 }
                 break;
+            }
+            if (!found_decl) {
+                // Importado: el tipo lo da el .vxi del dep.  Sin esto el LOAD
+                // caeria al default i64 y un `i32` negativo del dep se leeria
+                // con los bytes altos del slot.
+                const auto &igs = tc_.imported_global_storage();
+                auto igt = igs.find(e->name);
+                if (igt != igs.end()) {
+                    const Type &gt = igt->second.type;
+                    is_string = (gt.kind == PrimitiveKind::STRING);
+                    is_array = (gt.kind == PrimitiveKind::ARRAY);
+                    if (!is_array) t = ir_type_from_primitive(gt.kind);
+                }
             }
             const uint64_t slot_idx = sit->second;
             // Array global: decae a su DIRECCION (host_ptr), no se carga
@@ -15444,6 +15496,24 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
 }
 
 ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
+    // `lib.G` sobre un global de otro modulo: no hay base que bajar (`lib` es
+    // un namespace, no un valor), la direccion ES la del slot compartido.
+    // Punto unico: por aqui pasan la lectura, la escritura y el `&`.
+    uint64_t ns_slot = 0;
+    if (imported_global_slot_of(e, ns_slot)) {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        // El storage vive en memoria host (seccion `gdata`), como el de
+        // cualquier global.
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr is{};
+        is.op = ir::IrOp::STR_LIT_ADDR;
+        is.type = ir::IrType::PTR;
+        is.dst = v;
+        is.imm = ns_slot;
+        is.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(is));
+        return v;
+    }
     const ir::IrValueId base = lower_expr(e->base.get());
     if (base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
@@ -37806,12 +37876,72 @@ uint64_t Lowering::get_or_create_runtime_global_slot(const std::string &name,
     // Marcar el slot como NON_DEDUP para que el merge cross-module
     // no colapse multiples globals con bytes iniciales identicos.
     gmeta.flags |= ir::IrModule::SD_FLAG_NON_DEDUP;
+    // Un global es UNO en todo el programa, identificado por su nombre (ya
+    // mangled por modulo/namespace, `lib__counter`).  El merge cross-module
+    // unifica por `shared_key`, asi que el modulo que DEFINE el global y el
+    // que solo lo USA (que crea su slot al vuelo, sin ver el AST del dep)
+    // acaban compartiendo el mismo storage en vez de tener uno cada uno.
+    gmeta.shared_key = name;
     // AOT: un global runtime es MUTABLE -> debe vivir en .data (rw), no en
     // .rodata (r): escribir a un slot read-only segfaultea en nativo.  El
     // interp/JIT ignoran section_name; solo lo consume el codegen AOT.
     gmeta.section_name = ".data";
     runtime_global_slots_[name] = idx;
     return idx;
+}
+
+uint64_t Lowering::shared_global_slot_for(const std::string &mangled_label,
+                                          const Type &t) {
+    // Tamano real del tipo: el slot del consumidor y el del dep se unifican por
+    // shared_key y gana el PRIMERO que aparezca en el merge, asi que los dos
+    // tienen que pedir el mismo tamano (con un global array, uno de 8 bytes
+    // recortaria el storage).  Minimo un qword, como todo global.
+    uint64_t nbytes = static_cast<uint64_t>(size_of_type(t));
+    if (nbytes < 8) nbytes = 8;
+    return get_or_create_runtime_global_slot(mangled_label, nbytes);
+}
+
+bool Lowering::imported_global_slot_of(ast::FieldAccessExpr *e,
+                                       uint64_t &out_slot) {
+    // property_kind=4 marca `ns.X`; ns_index dice CUAL namespace (el
+    // sentinel 0xFFFFFFFF = sin resolver).
+    if (e == nullptr || e->property_kind != 4 || e->ns_index == 0xFFFFFFFFu)
+        return false;
+    const auto &nss = tc_.imported_namespaces();
+    if (e->ns_index >= nss.size()) return false;
+    const auto &ns = nss[e->ns_index];
+    auto it_sym = ns.by_name.find(e->field_name);
+    if (it_sym == ns.by_name.end()) return false;
+    const auto &sym = ns.symbols[it_sym->second];
+    if (sym.kind != 1) return false;         // no es variable/constante
+    if (sym.has_const_value) return false;   // se inlinea como CONST
+    if (sym.mangled_label.empty()) return false;
+    // Simbolo de un namespace de ESTE modulo: es local, no importado.  Su
+    // storage (o su ausencia, p.ej. un global de tipo funcion) ya se decidio
+    // con el tipo delante; aqui solo pasan los de otros modulos.
+    if (local_global_names_.count(sym.mangled_label) != 0) return false;
+    // Un comptime const string se materializa via STRMAKE desde el blob del
+    // .vxi, no tiene storage que compartir.
+    if (sym.var_type.kind == PrimitiveKind::STRING) {
+        const auto &ics = tc_.imported_global_consts();
+        auto it_ic = ics.find(e->field_name);
+        if (it_ic != ics.end() && it_ic->second.is_str) return false;
+    }
+    out_slot = shared_global_slot_for(sym.mangled_label, sym.var_type);
+    return true;
+}
+
+bool Lowering::ensure_imported_global_slot(const std::string &name) {
+    if (runtime_global_slots_.count(name) != 0) return true;
+    const auto &igs = tc_.imported_global_storage();
+    auto it = igs.find(name);
+    if (it == igs.end()) return false;
+    const uint64_t slot =
+        shared_global_slot_for(it->second.mangled_label, it->second.type);
+    // Alias: en ESTE modulo el global se nombra `name` (el nombre local del
+    // import), pero su storage es el slot del dep.
+    runtime_global_slots_[name] = slot;
+    return true;
 }
 
 uint64_t Lowering::get_or_create_tls_global_slot(const std::string &name,
