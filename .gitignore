@@ -409,3 +409,5 @@ wsl-asan/
 *.nam
 *.id2
 *.til
+examples_codes_vx/reader_bmp/BUGS_LIMITACIONES.md
+examples_codes_vx/reader_bmp/*.bmp

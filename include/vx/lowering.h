@@ -1301,6 +1301,29 @@ class Lowering {
     /// valor devuelto directamente).
     std::unordered_map<std::string, PrimitiveKind> fn_ret_kind_;
 
+    /**
+     * @brief Registra la info de retorno de una funcion top-level (tipo IR,
+     *        kind semantico y pertenencia a los conjuntos SRET).
+     *
+     * Unico punto donde se decide si una funcion usa la convencion SRET
+     * (retbuf hidden como primer parametro).  Lo usan TANTO el registro de
+     * las funciones LOCALES (a partir del AST) como el de las IMPORTADAS de
+     * otro modulo (a partir de la @c FunctionSig del .vxi).  Compartir el
+     * criterio es lo que garantiza que caller y callee coincidan: si cada
+     * lado dedujera el SRET por su cuenta, una divergencia haria que el
+     * callee escribiese en un retbuf que el caller nunca paso.
+     *
+     * @param name             Nombre por el que el caller invoca la funcion.
+     * @param kind             Kind semantico del tipo de retorno.
+     * @param enum_struct_name Nombre del tipo cuando @p kind es STRUCT (para
+     *                         distinguir un enum de usuario de un struct).
+     * @param is_async         La fn es @Async: el bytecode devuelve el handle
+     *                         i64 del Future, no el tipo logico T.
+     */
+    void register_fn_ret_info(const std::string &name, PrimitiveKind kind,
+                              const std::string &enum_struct_name,
+                              bool is_async);
+
     /// Variables locales cuya direccion se ha tomado con '&' en alguna
     /// parte de la funcion actual.  Se rellena con scan_address_taken al
     /// inicio de lower_function y se limpia al terminarla.  Las entradas

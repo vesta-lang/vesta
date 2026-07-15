@@ -933,6 +933,65 @@ static thread_local std::unordered_set<std::string> *g_macro_force_lower =
     nullptr;
 static thread_local std::unordered_set<std::string> *g_macro_visiting = nullptr;
 
+void Lowering::register_fn_ret_info(const std::string &name, PrimitiveKind kind,
+                                    const std::string &enum_struct_name,
+                                    bool is_async) {
+    ir::IrType rt = (kind == PrimitiveKind::VOID || kind == PrimitiveKind::COUNT)
+                        ? ir::IrType::VOID
+                        : ir_type_from_primitive(kind);
+
+    // Enum de usuario: se modela como STRUCT cuyo struct_name esta en
+    // enum_layouts_.  Es SRET (retbuf del tamano del layout).
+    bool is_user_enum = false;
+    if (kind == PrimitiveKind::STRUCT && !enum_struct_name.empty()) {
+        const auto &elays = tc_.enum_layouts();
+        is_user_enum = (elays.find(enum_struct_name) != elays.end());
+    }
+    // (gap O): funciones que devuelven FUNCTION.  Mismo patron que los
+    // enums: el tipo IR pasa a VOID y el caller pasa un retbuf hidden de
+    // 16 bytes (slot del function value).
+    const bool is_function_ret = (kind == PrimitiveKind::FUNCTION);
+    if (is_function_ret) fn_returns_function_.insert(name);
+    // Smart pointers: SRET para `unique<T>` / `shared<T>`.  Sin esto,
+    // devolver un smart pointer seria inseguro (su slot vive en el stack
+    // del callee y muere al RET).  Con SRET el caller aloca el slot y el
+    // callee copia los bytes ahi.
+    const bool is_smartptr_ret = (kind == PrimitiveKind::UNIQUE_PTR ||
+                                  kind == PrimitiveKind::SHARED_PTR);
+    if (is_smartptr_ret) fn_returns_smartptr_.insert(name);
+    // Vesta Embed (native_poo_): `string` es value-type de 24 bytes ->
+    // retorno por valor via SRET (igual que un struct).  Solo en native;
+    // en Full/JIT `string` es un handle i64.
+    const bool is_str_value_ret = (native_poo_ && kind == PrimitiveKind::STRING);
+    if (is_str_value_ret) fn_returns_str_value_.insert(name);
+
+    // sret: estas funciones tienen ret_type IR = VOID y un retbuf hidden
+    // como primer param.  Sin este ajuste, fn_return_types_ apuntaria a PTR
+    // y los callers crearian un dst SSA "huerfano" que el emisor intentaria
+    // escribir desde la salida (que no existe).
+    if (kind == PrimitiveKind::OPTIONAL || kind == PrimitiveKind::RESULT ||
+        is_user_enum || is_function_ret || is_smartptr_ret ||
+        is_str_value_ret) {
+        rt = ir::IrType::VOID;
+    }
+    // Item 9: @Async wrapper retorna i64 (Future handle), no T.  El tipo
+    // logico T se preserva como Future<T> en el sig del type checker para
+    // el `await fut`, pero el bytecode del wrapper devuelve i64 raw en R0.
+    // Sin este ajuste, el lowering del call site marca dst con tipo T (e.g.
+    // f64), emite un cast i64->f64 erroneo (FTOI cambia el valor), y await
+    // opera sobre un handle corrupto.
+    if (is_async) {
+        rt = ir::IrType::I64;
+        kind = PrimitiveKind::I64;
+    }
+
+    fn_return_types_[name] = rt;
+    fn_ret_kind_[name] = kind;
+    // Guardamos el nombre del enum para que el caller pueda buscar su
+    // size_bytes al alocar el retbuf.
+    if (is_user_enum) fn_ret_enum_name_[name] = enum_struct_name;
+}
+
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     const size_t initial_errors = diags_.error_count();
     out_module.name = module_name;
@@ -998,7 +1057,6 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!decl) continue;
         if (decl->kind == ast::NodeKind::FunctionDecl) {
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-            ir::IrType rt = ir::IrType::VOID;
             PrimitiveKind kind = PrimitiveKind::VOID;
             if (fd->return_type &&
                 fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode &&
@@ -1006,7 +1064,6 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         ->prim != PrimitiveKind::GC_PTR) {
                 auto *pt = static_cast<ast::PrimitiveTypeNode *>(
                     fd->return_type.get());
-                rt = ir_type_from_primitive(pt->prim);
                 kind = pt->prim;
             } else if (fd->return_type) {
                 // NOTA gc<T>: `gc<unique<i64>>` es un PrimitiveTypeNode(GC_PTR)
@@ -1029,82 +1086,23 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 const Type sem = tc_.resolve_type_node(fd->return_type.get());
                 if (sem.kind != PrimitiveKind::COUNT &&
                     sem.kind != PrimitiveKind::VOID) {
-                    rt = ir_type_from_primitive(sem.kind);
                     kind = sem.kind;
                 }
             }
-            // sret: las funciones que devuelven Optional/Result o un
-            // enum declarado tienen ret_type IR = VOID y un retbuf
-            // hidden como primer param.  Sin este ajuste,
-            // fn_return_types_ apuntaria a PTR y los callers crearian
-            // un dst SSA "huerfano" que el emisor intentaria escribir
-            // desde la salida (que no existe).
-            bool is_user_enum = false;
+            // El nombre del tipo cuando el retorno es STRUCT: sirve para
+            // distinguir un enum de usuario (SRET) de un struct normal.
+            std::string enum_struct_name;
             if (kind == PrimitiveKind::STRUCT && fd->return_type) {
                 const Type sem_check =
                     tc_.resolve_type_node(fd->return_type.get());
-                if (sem_check.kind == PrimitiveKind::STRUCT) {
-                    const auto &elays = tc_.enum_layouts();
-                    if (elays.find(sem_check.struct_name) != elays.end()) {
-                        is_user_enum = true;
-                    }
-                }
+                if (sem_check.kind == PrimitiveKind::STRUCT)
+                    enum_struct_name = sem_check.struct_name;
             }
-            // (gap O): detectar funciones que devuelven FUNCTION
-            // y registrarlas para SRET.  Mismo patron que enums: el
-            // tipo IR pasa a VOID y el caller pasa un retbuf hidden
-            // de 16 bytes (slot del function value).
-            bool is_function_ret = false;
-            if (kind == PrimitiveKind::FUNCTION && fd->return_type) {
-                is_function_ret = true;
-                fn_returns_function_.insert(fd->name);
-            }
-            // Smart pointers: SRET de 8 bytes para `unique<T>` o
-            // `shared<T>`.  Sin esto, devolver un smart pointer
-            // desde una funcion seria inseguro (su slot vive en el
-            // stack del callee y muere al RET).  Con SRET el caller
-            // aloca el slot y el callee copia los 8 bytes ahi.
-            bool is_smartptr_ret = false;
-            if ((kind == PrimitiveKind::UNIQUE_PTR ||
-                 kind == PrimitiveKind::SHARED_PTR) &&
-                fd->return_type) {
-                is_smartptr_ret = true;
-                fn_returns_smartptr_.insert(fd->name);
-            }
-            // Vesta Embed (native_poo_): `string` es value-type de 24
-            // bytes -> retorno por valor via SRET (igual que struct).
-            // Solo en native; en Full/JIT `string` es handle i64.
-            bool is_str_value_ret = false;
-            if (native_poo_ && kind == PrimitiveKind::STRING &&
-                fd->return_type) {
-                is_str_value_ret = true;
-                fn_returns_str_value_.insert(fd->name);
-            }
-            if (kind == PrimitiveKind::OPTIONAL ||
-                kind == PrimitiveKind::RESULT || is_user_enum ||
-                is_function_ret || is_smartptr_ret || is_str_value_ret) {
-                rt = ir::IrType::VOID;
-            }
-            // Item 9: @Async wrapper retorna i64 (Future handle), no T.
-            // El tipo logico T se preserva como Future<T> en el sig del
-            // type checker para el `await fut`, pero el bytecode del
-            // wrapper devuelve i64 raw en R0.  Sin este ajuste, el
-            // lowering del call site marca dst con tipo T (e.g. f64),
-            // emite un cast i64->f64 erroneo (FTOI cambia el value),
-            // y await opera sobre handle corrupto.
-            if (fd->is_async) {
-                rt = ir::IrType::I64;
-                kind = PrimitiveKind::I64;
-            }
-            fn_return_types_[fd->name] = rt;
-            fn_ret_kind_[fd->name] = kind;
-            if (is_user_enum) {
-                // Marcar como sret enum.  Guardamos el nombre para
-                // que el caller pueda buscar el size_bytes.
-                const Type sem_check =
-                    tc_.resolve_type_node(fd->return_type.get());
-                fn_ret_enum_name_[fd->name] = sem_check.struct_name;
-            }
+            // El registro (incluida la decision de SRET) vive en un unico
+            // helper compartido con las funciones importadas -- ver
+            // register_fn_ret_info.
+            register_fn_ret_info(fd->name, kind, enum_struct_name,
+                                 fd->is_async);
         } else if (decl->kind == ast::NodeKind::ExternFnDecl) {
             // FFI declarativo: registrar tipo de retorno y
             // mapeo nombre -> libreria nativa para que @c lower_call
@@ -1128,6 +1126,29 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             fn_return_types_[efd->name] = rt;
             extern_lib_by_fn_name_[efd->name] = efd->lib;
         }
+    }
+
+    // Pase 1b: registrar el retorno de las funciones IMPORTADAS de otro
+    // modulo.  No estan en @c mod_.decls (el modulo actual solo ve su propio
+    // AST); llegan como @c FunctionSig inyectada desde el .vxi, con su Type
+    // ya reconstruido por @c resolve_type_string.  Sin este pase el caller
+    // no sabria que una fn cross-modulo devuelve Optional/Result/enum/... y
+    // omitiria el retbuf hidden de la convencion SRET: el callee escribiria
+    // en lo que hubiera en el registro del primer argumento (el primer arg
+    // real) -> escritura a puntero basura -> SEGV.  Se usa el MISMO helper
+    // que las locales, asi que caller y callee no pueden divergir.
+    for (const auto &kv : tc_.function_sigs_by_name()) {
+        const std::string &fname = kv.first;
+        // Las locales (y las extern declaradas aqui) ya estan registradas
+        // arriba con su AST, que es la fuente mas precisa.
+        if (fn_return_types_.find(fname) != fn_return_types_.end()) continue;
+        const FunctionSig *sig = tc_.function_sig_by_name(fname);
+        if (!sig) continue;
+        // FFI nativo: convencion CALLN propia (valor en R0), nunca SRET.
+        if (!sig->extern_lib.empty()) continue;
+        register_fn_ret_info(fname, sig->return_type.kind,
+                             sig->return_type.struct_name,
+                             /*is_async=*/false);
     }
 
     // Pase 2: bajar cada funcion.
@@ -1352,10 +1373,19 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             (gv->type->kind != ast::NodeKind::PrimitiveTypeNode &&
              gv->type->kind != ast::NodeKind::NamedTypeNode))
             continue;
-        const PrimitiveKind pt_prim =
+        PrimitiveKind pt_prim =
             (gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
                 ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())->prim
                 : tc_.resolve_type_node(gv->type.get()).kind;
+        // Un global de tipo overlay (`@overlay struct`) tiene como VALOR runtime
+        // un puntero al bloque host (8 bytes) -> darle slot como un PTR.
+        if (pt_prim == PrimitiveKind::STRUCT &&
+            gv->type->kind == ast::NodeKind::NamedTypeNode) {
+            Type rt = tc_.resolve_type_node(gv->type.get());
+            auto sit = tc_.struct_layouts().find(rt.struct_name);
+            if (sit != tc_.struct_layouts().end() && sit->second.is_overlay)
+                pt_prim = PrimitiveKind::PTR;
+        }
         switch (pt_prim) {
         case PrimitiveKind::STRING:
         case PrimitiveKind::I8:
@@ -1523,6 +1553,16 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())
                               ->prim
                         : tc_.resolve_type_node(gv->type.get()).kind;
+                // Global de tipo overlay: su valor runtime es un puntero (8 bytes)
+                // -> tratarlo como PTR (slot de 8 bytes, init por asignacion).
+                if (gpk == PrimitiveKind::STRUCT &&
+                    gv->type->kind == ast::NodeKind::NamedTypeNode) {
+                    Type rt = tc_.resolve_type_node(gv->type.get());
+                    auto sit = tc_.struct_layouts().find(rt.struct_name);
+                    if (sit != tc_.struct_layouts().end() &&
+                        sit->second.is_overlay)
+                        gpk = PrimitiveKind::PTR;
+                }
                 switch (gpk) {
                 case PrimitiveKind::STRING:
                 case PrimitiveKind::I8:
@@ -11541,21 +11581,34 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     }
     // match ESCALAR (int/char) o STRING: scrutinee no-enum + arms value_pattern.
     const Type st = e->scrutinee->result_type;
-    if (st.kind != PrimitiveKind::STRUCT) {
+    // Optional<T> / Result<V,E>: pseudo-enums de dos variantes (ver
+    // build_optlike_enum_layout).  El dispatch + bindings reusan la misma
+    // maquinaria del enum; el layout sale sintetico.
+    const bool st_optlike = (st.kind == PrimitiveKind::OPTIONAL ||
+                             st.kind == PrimitiveKind::RESULT);
+    if (st.kind != PrimitiveKind::STRUCT && !st_optlike) {
         bool any_value_arm = false;
         for (const auto &a : e->arms)
             if (a.value_pattern) { any_value_arm = true; break; }
         if (st.kind == PrimitiveKind::STRING) return lower_match_string(e);
         if (any_value_arm) return lower_match_scalar(e);
+        // Si no encaja en ningun path, el type checker ya reporto error;
+        // devolvemos NO_VALUE silenciosamente para no inundar.
+        return ir::IR_NO_VALUE;
     }
-    // Tipo del scrutinee debe ser STRUCT con struct_name en
-    // enum_layouts_.  Si no, el type checker ya reporto error y
-    // devolvemos NO_VALUE silenciosamente para no inundar.
-    if (st.kind != PrimitiveKind::STRUCT) return ir::IR_NO_VALUE;
+    // Tipo del scrutinee: STRUCT (enum real) u Optional/Result (sintetico).
     const auto &elays = tc_.enum_layouts();
-    auto it = elays.find(st.struct_name);
-    if (it == elays.end()) return ir::IR_NO_VALUE;
-    const EnumLayout &elay = it->second;
+    EnumLayout syn_optlike;
+    const EnumLayout *elayp = nullptr;
+    if (st_optlike) {
+        syn_optlike = build_optlike_enum_layout(st);
+        elayp = &syn_optlike;
+    } else {
+        auto it = elays.find(st.struct_name);
+        if (it == elays.end()) return ir::IR_NO_VALUE;
+        elayp = &it->second;
+    }
+    const EnumLayout &elay = *elayp;
 
     // 1. Lower del scrutinee -> SSA PTR al slot.
     ir::IrValueId scrut_addr = lower_expr(e->scrutinee.get());
@@ -11576,7 +11629,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
         mt.type = ir::IrType::VOID;
         mt.dst = ir::IR_NO_VALUE;
         mt.operands = {scrut_addr};
-        mt.func_name = st.struct_name; // nombre del enum
+        mt.func_name = elay.name; // nombre del enum (o Optional/Result)
         mt.imm = static_cast<uint64_t>(n_concrete);
         mt.source_line = e->loc.line;
         fn_->append(current_block_, std::move(mt));
@@ -11881,7 +11934,25 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 }
             }
             for (size_t bi = 0; bi < arm.bindings.size(); ++bi) {
-                const uint64_t off = 8ULL + 8ULL * static_cast<uint64_t>(bi);
+                // Offset del payload dentro del buffer.  Para Optional/Result
+                // (optlike) sale de field_offsets (Err vive en +16, no en +8);
+                // para enums reales es el layout uniforme 8 + 8*bi.
+                uint64_t off = 8ULL + 8ULL * static_cast<uint64_t>(bi);
+                if (elay.is_optlike && arm_var &&
+                    bi < arm_var->field_offsets.size()) {
+                    off = static_cast<uint64_t>(arm_var->field_offsets[bi]);
+                }
+                // Tipo del LOAD.  optlike: el payload se guardo con su tipo
+                // NATIVO (Some/Ok/Err no promueven a i64), asi que se lee
+                // directo -- igual que unwrap/value/error.  Enum real: i64
+                // (el constructor promueve todo payload a i64, floats via
+                // BITCAST) y se recupera abajo.
+                ir::IrType load_t = ir::IrType::I64;
+                if (elay.is_optlike && arm_var &&
+                    bi < arm_var->field_types.size()) {
+                    load_t = ir_type_from_primitive(
+                        arm_var->field_types[bi].kind);
+                }
                 ir::IrValueId addr_i = fn_->new_value(ir::IrType::PTR);
                 ir::IrValueId off_v =
                     emit_const(ir::IrType::I64, off, arm.loc.line);
@@ -11896,21 +11967,26 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 }
                 // Propagar is_host_ptr del scrutinee al puntero scrut+off (patron
                 // is_host_ptr-en-add: el LOAD del payload debe usar la misma
-                // naturaleza -- host o VM -- que el buffer del enum).  Hoy los
-                // enum viven en VM stack (no-op), pero unifica el patron con
-                // Some/Ok/value/error/unwrap y evita un fallo silencioso si el
-                // scrutinee llega en host.
+                // naturaleza -- host o VM -- que el buffer del enum).  Los enum
+                // reales viven en VM stack (no-op), pero Optional/Result viven en
+                // HOST alloca -> aqui el LOAD emite `movh`/`loadzh` correctamente.
                 fn_->values[addr_i].is_host_ptr =
                     fn_->values[scrut_addr].is_host_ptr;
-                ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+                ir::IrValueId v = fn_->new_value(load_t);
                 {
                     ir::IrInstr ld{};
                     ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
+                    ld.type = load_t;
                     ld.dst = v;
                     ld.operands = {addr_i};
                     ld.source_line = arm.loc.line;
                     fn_->append(current_block_, std::move(ld));
+                }
+                // optlike: el valor cargado ya es del tipo nativo del payload;
+                // sin recuperacion de bits (Some/Ok/Err guardan native).
+                if (elay.is_optlike) {
+                    bind(arm.bindings[bi], v);
+                    continue;
                 }
                 // Si el field declarado es float, bitcastear i64 -> f64
                 // (recupera los bits IEEE escritos por el constructor).

@@ -7708,21 +7708,36 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
         return Type{PrimitiveKind::VOID};
     }
 
-    if (st.kind != PrimitiveKind::STRUCT) {
-        diags_.error(e->scrutinee->loc,
-                     std::string("match: el scrutinee debe ser un valor de "
-                                 "tipo enum, recibido ") +
-                         type_to_string(st));
-        return Type{};
+    // ---- match sobre Optional<T> / Result<V,E> ----
+    // Ambos son conceptualmente enums (None|Some, Err|Ok); se tratan como
+    // un enum sintetico de dos variantes (ver build_optlike_enum_layout).
+    // Toda la maquinaria de arms/bindings/scope/exhaustividad de abajo se
+    // reutiliza sin cambios: solo cambia de donde sale el EnumLayout.
+    EnumLayout syn_optlike;
+    const EnumLayout *elayp = nullptr;
+    if (st.kind == PrimitiveKind::OPTIONAL ||
+        st.kind == PrimitiveKind::RESULT) {
+        syn_optlike = build_optlike_enum_layout(st);
+        elayp = &syn_optlike;
+    } else {
+        if (st.kind != PrimitiveKind::STRUCT) {
+            diags_.error(
+                e->scrutinee->loc,
+                std::string("match: el scrutinee debe ser un valor de "
+                            "tipo enum, recibido ") +
+                    type_to_string(st));
+            return Type{};
+        }
+        auto it = enum_layouts_.find(st.struct_name);
+        if (it == enum_layouts_.end()) {
+            diags_.error(e->scrutinee->loc, std::string("match: '") +
+                                                st.struct_name +
+                                                "' no es un enum (es struct?)");
+            return Type{};
+        }
+        elayp = &it->second;
     }
-    auto it = enum_layouts_.find(st.struct_name);
-    if (it == enum_layouts_.end()) {
-        diags_.error(e->scrutinee->loc, std::string("match: '") +
-                                            st.struct_name +
-                                            "' no es un enum (es struct?)");
-        return Type{};
-    }
-    const EnumLayout &elay = it->second;
+    const EnumLayout &elay = *elayp;
 
     bool has_default = false;
     std::unordered_map<std::string, bool> covered;

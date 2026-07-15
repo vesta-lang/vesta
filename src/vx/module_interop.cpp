@@ -47,6 +47,56 @@ static std::string canonical_typename_of(const Type &t) {
     if (t.nominal_id != 0 && !t.nominal_name.empty() && is_integral(t.kind)) {
         return t.nominal_name + "#" + type_to_string(Type{t.kind});
     }
+    // Tipos COMPUESTOS: recursar en cada sub-tipo con canonical_typename_of (no
+    // con type_to_string) para que los newtypes ANIDADOS -- Optional<fiber>,
+    // fiber*, Result<fiber, i32>, fn(fiber) -> ... -- tambien lleven su
+    // `#underlying` y sean reconstruibles cross-modulo.  Sin esto solo el
+    // newtype de TOP-LEVEL se enriquecia y `Optional<fiber>` se importaba como
+    // `Optional<void>` (el payload `fiber` no resolvia -> match/unwrap/value
+    // leian el payload con tipo void).  El formato coincide con type_to_string
+    // y resolve_type_string.
+    switch (t.kind) {
+    case PrimitiveKind::PTR:
+        if (t.pointee) {
+            const std::string inner = canonical_typename_of(*t.pointee);
+            return t.is_virtual ? ("VirtualPtr<" + inner + ">")
+                                : (inner + "*");
+        }
+        break;
+    case PrimitiveKind::OPTIONAL:
+        if (t.pointee)
+            return "Optional<" + canonical_typename_of(*t.pointee) + ">";
+        break;
+    case PrimitiveKind::RESULT:
+        if (t.pointee && t.pointee2)
+            return "Result<" + canonical_typename_of(*t.pointee) + ", " +
+                   canonical_typename_of(*t.pointee2) + ">";
+        break;
+    case PrimitiveKind::FUTURE:
+        if (t.pointee)
+            return "Future<" + canonical_typename_of(*t.pointee) + ">";
+        break;
+    case PrimitiveKind::UNIQUE_PTR:
+        if (t.pointee)
+            return "unique<" + canonical_typename_of(*t.pointee) + ">";
+        break;
+    case PrimitiveKind::SHARED_PTR:
+        if (t.pointee)
+            return "shared<" + canonical_typename_of(*t.pointee) + ">";
+        break;
+    case PrimitiveKind::FUNCTION: {
+        std::string s = "fn(";
+        for (size_t i = 0; i < t.fn_params.size(); ++i) {
+            if (i) s += ", ";
+            s += canonical_typename_of(t.fn_params[i]);
+        }
+        s += ") -> ";
+        s += t.pointee ? canonical_typename_of(*t.pointee) : "void";
+        return s;
+    }
+    default:
+        break;
+    }
     // type_to_string ya produce un nombre canonico legible.  Por ejemplo:
     //   i32, u64*, Optional<i32>, Result<i32, string>, fn(i32) -> i64,
     //   VirtualPtr<T>, struct_name (para STRUCT), nominal_name (newtype).
@@ -137,7 +187,25 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
     // DETERMINISTICAMENTE del nombre (asi todas las referencias al mismo
     // newtype -- de cualquier modulo -- son == entre si sin importar el
     // typedef).  El `#` no aparece en ningun otro typename canonico.
-    if (type_str.find('#') != std::string::npos) {
+    if (type_str.find('#') != std::string::npos &&
+        type_str.substr(0, type_str.find('#'))
+                .find_first_of("<([*") == std::string::npos &&
+        type_str.substr(type_str.find('#') + 1)
+                .find_first_of("<>([*], \t") == std::string::npos) {
+        // Solo un newtype de TOP-LEVEL, y con AMBOS lados del '#' simples:
+        //   - Antes del '#': un identificador.  Si lleva '<'/'('/'*'/'[' el
+        //     newtype esta ANIDADO en un compuesto (`Optional<fiber#u64>`) y
+        //     se maneja al recursar en el sub-tipo mas abajo.
+        //   - Despues del '#': el underlying, que canonical_typename_of emite
+        //     SIEMPRE como un primitivo integral pelado (`u64`).  Si lleva un
+        //     sufijo/compuesto (`u64*`, `u64[4]`) ese sufijo es del TOP-LEVEL
+        //     (`fiber#u64*` = puntero a `fiber`), no del underlying: dejamos
+        //     que las ramas de puntero/array de abajo lo stripeen y recursen
+        //     sobre `fiber#u64`.  Sin esta segunda condicion, `fiber#u64*` se
+        //     reconstruia como "PTR a u64 llamado fiber" -- un escalar con
+        //     nominal a ojos de type_to_string/types_assignable -> un param
+        //     `T* p` importado de otro modulo se veia como `T` y toda llamada
+        //     que le pasara un puntero fallaba el chequeo de tipos.
         const size_t hp = type_str.find('#');
         const std::string name = type_str.substr(0, hp);
         const std::string under = type_str.substr(hp + 1);
@@ -1324,7 +1392,39 @@ void import_vxi_into_typechecker(
         by_name.emplace(mod.symbols[i].name, i);
     }
 
-    for (const auto &os : only_symbols) {
+    // Orden de inyeccion: primero los TIPOS, luego lo que los USA (funciones
+    // y globales).  Las firmas se reconstruyen con resolve_type_string, que
+    // para un newtype prefiere la definicion ya registrada en type_aliases_ y
+    // solo si falta sintetiza un id determinista.  Si una funcion se inyectara
+    // antes que el typedef que usa (`only take_ptr, handle` -- el orden lo
+    // elige el usuario), su firma se quedaria con el id sintetizado mientras
+    // que el typedef recibiria despues un id del contador local: el MISMO
+    // newtype con dos ids -> `handle* p` dejaria de aceptar un `handle*`.
+    // Ordenando por kind, las firmas siempre ven los tipos ya registrados.
+    // Se conserva el orden relativo dentro de cada grupo (estable).
+    auto is_type_sym = [&](const TypeChecker::VxiOnlyEntry &os) noexcept {
+        auto it = by_name.find(os.name);
+        if (it == by_name.end()) return false;
+        switch (mod.symbols[it->second].kind) {
+        case VxiSymbolKind::TYPEDEF_ALIAS:
+        case VxiSymbolKind::TYPEDEF_NEW:
+        case VxiSymbolKind::STRUCT:
+        case VxiSymbolKind::CLASS:
+        case VxiSymbolKind::ENUM:
+            return true;
+        default:
+            return false;
+        }
+    };
+    std::vector<const TypeChecker::VxiOnlyEntry *> ordered;
+    ordered.reserve(only_symbols.size());
+    for (const auto &os : only_symbols)
+        if (is_type_sym(os)) ordered.push_back(&os);
+    for (const auto &os : only_symbols)
+        if (!is_type_sym(os)) ordered.push_back(&os);
+
+    for (const auto *os_ptr : ordered) {
+        const auto &os = *os_ptr;
         auto it = by_name.find(os.name);
         if (it == by_name.end()) {
             // El simbolo solicitado no existe en el modulo importado.

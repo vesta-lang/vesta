@@ -349,6 +349,12 @@ struct EnumVariantInfo {
     /// se usa @c int_value (soporta auto-incremento sin AST).
     const ast::Expr *value_ast = nullptr;
     std::vector<Type> field_types;
+    /// Offset EXPLICITO (en bytes) de cada payload field dentro del buffer.
+    /// Vacio = layout uniforme del enum (`8 + 8*i`).  Se usa para los
+    /// pseudo-enums sinteticos de @c Optional / @c Result (ver
+    /// @c EnumLayout::is_optlike), donde el payload de @c Err vive en +16
+    /// (no en +8) porque Ok(V) y Err(E) NO se solapan en el buffer.
+    std::vector<uint32_t> field_offsets;
 };
 
 /**
@@ -378,7 +384,72 @@ struct EnumLayout {
     bool is_introspect = false;
     /// Phase M6.a L.3: visibilidad cross-module.
     bool is_public = true;
+    /// Pseudo-enum sintetico para @c match sobre @c Optional<T> / @c
+    /// Result<V,E>.  Cuando es true: (a) los payloads se guardan/leen con
+    /// su tipo NATIVO (no promovidos a i64 con BITCAST como los enums
+    /// reales), y (b) el offset del payload sale de @c
+    /// EnumVariantInfo::field_offsets (no del layout uniforme).  Coincide
+    /// con como los construye @c Some/None/Ok/Err y los lee
+    /// @c unwrap/value/error/isPresent/isOk.
+    bool is_optlike = false;
 };
+
+/**
+ * @brief Construye un @c EnumLayout sintetico para tratar @c Optional<T>
+ * o @c Result<V,E> como un enum de dos variantes en @c match.
+ *
+ * Convenio de layout (identico al que emiten @c Some/None/Ok/Err):
+ *   - @c Optional<T>: buffer de 16 bytes; `[+0 i64 flag]` (None=0, Some=1),
+ *     Some.payload en +8 con tipo @p st.pointee.
+ *   - @c Result<V,E>: buffer de 24 bytes; `[+0 i64 tag]` (Err=0, Ok=1),
+ *     Ok.payload en +8 (@p st.pointee), Err.payload en +16 (@p st.pointee2).
+ *
+ * @param st Tipo del scrutinee (kind OPTIONAL o RESULT).
+ * @return Layout con @c is_optlike=true, variantes ordenadas por tag.
+ */
+inline EnumLayout build_optlike_enum_layout(const Type &st) {
+    EnumLayout lay;
+    lay.is_optlike = true;
+    lay.max_payload_fields = 1;
+    if (st.kind == PrimitiveKind::OPTIONAL) {
+        lay.name = "Optional";
+        lay.size_bytes = 16;
+        // None (tag 0, sin payload).
+        EnumVariantInfo vn;
+        vn.name = "None";
+        vn.tag = 0;
+        lay.variants.push_back(std::move(vn));
+        // Some (tag 1, payload T en +8).
+        EnumVariantInfo vs;
+        vs.name = "Some";
+        vs.tag = 1;
+        vs.field_types.push_back(st.pointee ? *st.pointee
+                                            : Type{PrimitiveKind::I64});
+        vs.field_offsets.push_back(8);
+        lay.variants.push_back(std::move(vs));
+    } else {
+        // Result<V,E>.
+        lay.name = "Result";
+        lay.size_bytes = 24;
+        // Err (tag 0, payload E en +16).
+        EnumVariantInfo ve;
+        ve.name = "Err";
+        ve.tag = 0;
+        ve.field_types.push_back(st.pointee2 ? *st.pointee2
+                                             : Type{PrimitiveKind::I64});
+        ve.field_offsets.push_back(16);
+        lay.variants.push_back(std::move(ve));
+        // Ok (tag 1, payload V en +8).
+        EnumVariantInfo vo;
+        vo.name = "Ok";
+        vo.tag = 1;
+        vo.field_types.push_back(st.pointee ? *st.pointee
+                                            : Type{PrimitiveKind::I64});
+        vo.field_offsets.push_back(8);
+        lay.variants.push_back(std::move(vo));
+    }
+    return lay;
+}
 
 /**
  * @struct ClassLayout
@@ -826,6 +897,23 @@ class TypeChecker {
      * @return Puntero a su FunctionSig o nullptr si no es funcion conocida.
      */
     const FunctionSig *function_sig_by_name(const std::string &name) const;
+
+    /**
+     * @brief Accesor publico al mapa nombre -> indice de firma.
+     *
+     * El lowering lo recorre en su pase 1 para registrar el tipo de retorno
+     * de las funciones IMPORTADAS de otro modulo.  Esas funciones NO estan en
+     * @c mod_.decls (solo viven como @c FunctionSig inyectada desde el .vxi),
+     * asi que sin este recorrido el caller no sabria que una fn cross-modulo
+     * devuelve Optional/Result/enum/... y omitiria el retbuf hidden de la
+     * convencion SRET (escritura a puntero basura -> SEGV).
+     *
+     * @return Mapa nombre publico -> indice en @c function_sigs_.
+     */
+    const std::unordered_map<std::string, uint32_t> &
+    function_sigs_by_name() const noexcept {
+        return sig_by_name_;
+    }
 
     /**
      * @brief Si @p name es una funcion extern, devuelve "@extern:<lib>:<name>".
