@@ -500,6 +500,93 @@ void Parser::error_at(const Token &tok, const char *msg) {
     diags_.error(tok.loc, msg);
 }
 
+// -----------------------------------------------------------------------
+// Palabras reservadas usadas como nombre: diagnostico especifico.
+//
+// El enum TokenKind agrupa TODAS las palabras reservadas en un rango
+// CONTIGUO (categorias 4..7 de token.h: tipos primitivos, declaracion,
+// control de flujo, concurrencia/meta).  Eso permite clasificarlas con
+// un par de comparaciones en lugar de una tabla o un switch gigante.
+// Si se anaden keywords nuevas DENTRO de esas categorias, esto sigue
+// funcionando sin tocar nada.
+// -----------------------------------------------------------------------
+
+/**
+ * @brief True si @p k es una palabra reservada del lenguaje.
+ */
+static bool is_reserved_keyword(TokenKind k) noexcept {
+    // Categorias 4..7: desde el primer tipo primitivo hasta la ultima
+    // keyword de meta.  Un rango, dos comparaciones.
+    if (k >= TokenKind::KW_VOID && k <= TokenKind::KW_CASE) return true;
+    // Los literales-palabra viven en la categoria de literales (1), fuera
+    // del rango anterior, pero tampoco pueden ser nombres.
+    return k == TokenKind::TRUE_KW || k == TokenKind::FALSE_KW ||
+           k == TokenKind::NULL_KW;
+}
+
+/**
+ * @brief Rol de la palabra reservada, para enriquecer el diagnostico.
+ *
+ * Se deriva del rango del enum (barato: comparaciones, sin tabla).  El
+ * objetivo es que el mensaje diga POR QUE el termino esta reservado.
+ *
+ * @param k Palabra reservada (precondicion: is_reserved_keyword(k)).
+ * @return Cadena estatica descriptiva (no liberar).
+ */
+static const char *keyword_role(TokenKind k) noexcept {
+    // Casos con un rol mas util que el de su categoria.
+    switch (k) {
+    case TokenKind::KW_GET:
+    case TokenKind::KW_SET: return "accesor de propiedad";
+    default: break;
+    }
+    if (k >= TokenKind::KW_VOID && k <= TokenKind::KW_BORROW_MUT)
+        return "tipo primitivo";
+    if (k >= TokenKind::KW_CONST && k <= TokenKind::KW_SET)
+        return "palabra clave de declaracion";
+    if (k >= TokenKind::KW_IF && k <= TokenKind::KW_SUPER)
+        return "palabra clave de control de flujo";
+    if (k >= TokenKind::KW_SYNCHRONIZED && k <= TokenKind::KW_CASE)
+        return "palabra clave de concurrencia/meta";
+    // TRUE_KW / FALSE_KW / NULL_KW.
+    return "literal del lenguaje";
+}
+
+bool Parser::is_name_token(TokenKind k) noexcept {
+    // `get`/`set` son CONTEXTUALES: solo son keywords en la forma
+    // property dentro de una clase (`get n => e;`, `set n(T v) {...}`),
+    // que se detecta ANTES de llegar aqui y siempre SIN tipo previo.
+    // En cualquier otra posicion (y en todas las que llaman a este
+    // helper ya hemos parseado un tipo, o venimos de un '.') son
+    // nombres corrientes, sin ambiguedad posible.
+    return k == TokenKind::IDENTIFIER || k == TokenKind::KW_GET ||
+           k == TokenKind::KW_SET;
+}
+
+void Parser::error_expected_name(const char *what, const char *generic_msg) {
+    const TokenKind k = current_.kind;
+    if (!is_reserved_keyword(k)) {
+        // No es palabra reservada: conservar el mensaje historico del
+        // sitio (otro tipo de error: un simbolo, un literal, EOF...).
+        error_here(generic_msg);
+        return;
+    }
+    // Palabra reservada: decir cual es, por que lo esta y como salir.
+    const char *kw = token_kind_name(k);
+    std::string m;
+    m.reserve(160);
+    m += '\'';
+    m += kw;
+    m += "' es una palabra reservada del lenguaje (";
+    m += keyword_role(k);
+    m += "); no puede usarse como ";
+    m += what;
+    m += ".  Sugerencia: renombralo (p.ej. '";
+    m += kw;
+    m += "_').";
+    diags_.error(current_.loc, std::move(m));
+}
+
 void Parser::synchronize() {
     // Avanza hasta el siguiente punto de "respiracion": fin de
     // statement, cierre de bloque, o el inicio de una declaracion
@@ -1753,7 +1840,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         }
     }
 
-    if (!starts_type()) {
+    // allow_reserved_name: a nivel top-level no hay expression-statements,
+    // asi que `T <palabra_reservada>` solo puede ser un intento de declarar
+    // algo con un nombre invalido.  Aceptarlo aqui permite que el error se
+    // reporte sobre el nombre (con el motivo) en lugar de degenerar en un
+    // "se esperaba un tipo" apuntando al inicio de la linea.
+    if (!starts_type(/*allow_reserved_name=*/true)) {
         error_here("se esperaba un tipo al inicio de la declaracion top-level");
         return nullptr;
     }
@@ -1762,8 +1854,14 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     auto type_node = parse_type_node();
     if (!type_node) return nullptr;
 
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo");
+    // El nombre puede ser IDENTIFIER o un keyword CONTEXTUAL (`get`/`set`):
+    // a nivel top-level no existe la sintaxis de property, asi que tras un
+    // tipo ya parseado `Optional<u64> get(i64 x)` es inequivocamente
+    // "tipo + nombre".  Mismo criterio que ya aplicaban los miembros de
+    // clase y el acceso `obj.get(...)`.
+    if (!is_name_token(current_.kind)) {
+        error_expected_name("nombre de funcion o variable global",
+                            "se esperaba un nombre tras el tipo");
         return nullptr;
     }
     std::string name = consume().lexeme;
@@ -2050,8 +2148,9 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
         (void)consume();
         if (p->type) p->type->is_nonnull = true;
     }
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo del parametro");
+    if (!is_name_token(current_.kind)) {
+        error_expected_name("nombre de parametro",
+                            "se esperaba un nombre tras el tipo del parametro");
         return p;
     }
     p->name = consume().lexeme;
@@ -2196,6 +2295,10 @@ bool Parser::looks_like_cast() const noexcept {
     const TokenKind after = mut_lex.peek_at(off).kind;
     switch (after) {
     case TokenKind::IDENTIFIER:
+    // Keywords contextuales que en posicion de expresion son nombres:
+    // permite `(u64) get(x)` (cast del retorno de una funcion `get`).
+    case TokenKind::KW_GET:
+    case TokenKind::KW_SET:
     case TokenKind::INT_LIT:
     case TokenKind::FLOAT_LIT:
     case TokenKind::CHAR_LIT:
@@ -2282,7 +2385,7 @@ bool Parser::looks_like_register_storage() const noexcept {
     return false;
 }
 
-bool Parser::starts_type() const noexcept {
+bool Parser::starts_type(bool allow_reserved_name) const noexcept {
     // Cualquier keyword que sea tipo primitivo, o un identificador
     // seguido de uno o mas '*' (cero permitidos) y luego otro
     // identificador (caso "Edad x = ..." o "Punto* p = ...").  Si el
@@ -2408,8 +2511,14 @@ bool Parser::starts_type() const noexcept {
     // ser nombres de metodo normales (ej. `HashMap.get`, `Queue.set`).
     // Sin esto, `public V get(K key)` no se reconocia como inicio de
     // metodo porque `get` no era IDENTIFIER.
-    return nm == TokenKind::IDENTIFIER || nm == TokenKind::KW_GET ||
-           nm == TokenKind::KW_SET;
+    if (is_name_token(nm)) return true;
+    // Modo diagnostico (solo top-level, donde no hay expression-stmts con
+    // los que confundirse): una palabra reservada en posicion de nombre
+    // sigue "pareciendo" una declaracion.  Devolver true deja que el
+    // caller parsee el tipo y falle sobre el NOMBRE, con el mensaje que
+    // explica que el termino esta reservado, en vez de reportar un
+    // "se esperaba un tipo" al principio de la linea.
+    return allow_reserved_name && is_reserved_keyword(nm);
 }
 
 std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
@@ -3258,8 +3367,9 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
         }
     }
 
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo en 'typedef'");
+    if (!is_name_token(current_.kind)) {
+        error_expected_name("nombre de tipo en 'typedef'",
+                            "se esperaba un nombre tras el tipo en 'typedef'");
         return nullptr;
     }
     a->name = consume().lexeme;
@@ -4462,10 +4572,10 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // (que se detecta ANTES, sin tipo previo).  Permitir `get`/`set` como
         // nombre de metodo/campo (p.ej. `T get()`) evita rechazarlos por
         // colisionar con los keywords de property.
-        if (current_.kind != TokenKind::IDENTIFIER &&
-            current_.kind != TokenKind::KW_GET &&
-            current_.kind != TokenKind::KW_SET) {
-            error_here("se esperaba un nombre de campo o metodo tras el tipo");
+        if (!is_name_token(current_.kind)) {
+            error_expected_name(
+                "nombre de campo o metodo",
+                "se esperaba un nombre de campo o metodo tras el tipo");
             synchronize();
             continue;
         }
@@ -5087,7 +5197,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             const SourceLoc sloc = current_.loc;
             (void)consume(); // 'set'
             if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba el nombre de la propiedad tras 'set'");
+                error_expected_name(
+                    "nombre de propiedad",
+                    "se esperaba el nombre de la propiedad tras 'set'");
                 synchronize();
                 continue;
             }
@@ -5244,7 +5356,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
             (void)consume(); // 'get'
             if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba el nombre de la propiedad tras 'get'");
+                error_expected_name(
+                    "nombre de propiedad",
+                    "se esperaba el nombre de la propiedad tras 'get'");
                 synchronize();
                 continue;
             }
@@ -5273,10 +5387,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         // ver `i32 get() { ... }` (KW_GET no es IDENTIFIER asi que
         // error_here + synchronize, y synchronize re-entraba en el
         // siguiente miembro produciendo el mismo error).
-        if (current_.kind != TokenKind::IDENTIFIER &&
-            current_.kind != TokenKind::KW_GET &&
-            current_.kind != TokenKind::KW_SET) {
-            error_here("se esperaba el nombre del miembro");
+        if (!is_name_token(current_.kind)) {
+            error_expected_name("nombre de miembro",
+                                "se esperaba el nombre del miembro");
             synchronize();
             continue;
         }
@@ -6184,8 +6297,9 @@ std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const,
         if (vd->type) vd->type->is_nonnull = true;
     }
     if (!got_fp_name) {
-        if (current_.kind != TokenKind::IDENTIFIER) {
-            error_here("se esperaba un nombre tras el tipo");
+        if (!is_name_token(current_.kind)) {
+            error_expected_name("nombre de variable",
+                                "se esperaba un nombre tras el tipo");
             return nullptr;
         }
         vd->name = consume().lexeme;
@@ -6378,7 +6492,8 @@ std::unique_ptr<ast::Stmt> Parser::parse_for_stmt() {
             s->body = parse_statement();
             return s;
         }
-        error_here("se esperaba un identificador tras el tipo en for");
+        error_expected_name("nombre de variable del 'for'",
+                            "se esperaba un identificador tras el tipo en for");
         return nullptr;
     }
 
@@ -7391,10 +7506,9 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             // un metodo llamado 'get' o 'set' (no son property
             // accessors aqui, son nombres normales).  Sin esto
             // `obj.get(...)` fallaba al ver KW_GET tras DOT.
-            if (current_.kind != TokenKind::IDENTIFIER &&
-                current_.kind != TokenKind::KW_GET &&
-                current_.kind != TokenKind::KW_SET) {
-                error_here("se esperaba un nombre de campo tras '.'");
+            if (!is_name_token(current_.kind)) {
+                error_expected_name("nombre de campo o metodo tras '.'",
+                                    "se esperaba un nombre de campo tras '.'");
                 return expr;
             }
             auto fa = std::make_unique<ast::FieldAccessExpr>();
@@ -7412,10 +7526,9 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             // y el lowering reusan el path de `(*a).b` sin cambios.
             const SourceLoc loc = current_.loc;
             (void)consume(); // '->'
-            if (current_.kind != TokenKind::IDENTIFIER &&
-                current_.kind != TokenKind::KW_GET &&
-                current_.kind != TokenKind::KW_SET) {
-                error_here("se esperaba un nombre de campo tras '->'");
+            if (!is_name_token(current_.kind)) {
+                error_expected_name("nombre de campo o metodo tras '->'",
+                                    "se esperaba un nombre de campo tras '->'");
                 return expr;
             }
             auto deref = std::make_unique<ast::UnaryExpr>();
@@ -7639,6 +7752,13 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         }
         return e;
     }
+    // `get`/`set` son keywords CONTEXTUALES (solo property dentro de una
+    // clase, y esa forma se detecta en el bucle de miembros, nunca aqui).
+    // En posicion de expresion son nombres corrientes, de modo que una
+    // funcion libre llamada `get` se puede INVOCAR (`get(x)`) igual que
+    // se puede declarar.
+    case TokenKind::KW_GET:
+    case TokenKind::KW_SET:
     case TokenKind::IDENTIFIER: {
         auto e = std::make_unique<ast::IdentExpr>();
         e->loc = loc;

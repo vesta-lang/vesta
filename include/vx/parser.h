@@ -208,6 +208,34 @@ class Parser {
      */
     void error_at(const Token &tok, const char *msg);
 
+    /**
+     * @brief True si @p k puede usarse como NOMBRE (de funcion, variable,
+     *        parametro, campo, metodo, alias...).
+     *
+     * Es IDENTIFIER, o uno de los keywords CONTEXTUALES del lenguaje.
+     * `get` y `set` solo son palabras clave dentro del cuerpo de una
+     * clase y unicamente en la forma de property (`get n => e;` /
+     * `set n(T v) {...}`); en cualquier otra posicion son nombres
+     * corrientes (`HashMap.get`, `V get(K k)`, `u64 get(i64 x)`).
+     */
+    static bool is_name_token(TokenKind k) noexcept;
+
+    /**
+     * @brief Reporta "se esperaba un nombre" con un mensaje ESPECIFICO
+     *        cuando el token actual es una palabra reservada.
+     *
+     * Sin esto el usuario recibia un generico ("se esperaba un nombre
+     * tras el tipo") que no decia el motivo real ni apuntaba al termino
+     * culpable, y ademas arrastraba una cascada de errores derivados.
+     *
+     * @param what        Que se esperaba, para el mensaje especifico
+     *                    (p.ej. "nombre de funcion o variable global").
+     * @param generic_msg Mensaje a emitir si el token NO es una palabra
+     *                    reservada (se preserva el texto historico de
+     *                    cada sitio para no cambiar diagnosticos ajenos).
+     */
+    void error_expected_name(const char *what, const char *generic_msg);
+
     // -----------------------------------------------------------------
     // Reglas gramaticales: top-level y declaraciones.
     // -----------------------------------------------------------------
@@ -427,8 +455,20 @@ class Parser {
 
     /**
      * @brief Decide si el token actual abre un tipo primitivo (i32, ...).
+     *
+     * Para tipos escritos como IDENTIFIER (`Punto`, `Cls<T>`) el criterio
+     * incluye un lookahead: tras el tipo debe venir un NOMBRE.  Sin ese
+     * lookahead no se podria distinguir `a * b;` (expresion) de
+     * `Punto* p;` (declaracion).
+     *
+     * @param allow_reserved_name Si true, acepta ademas una palabra
+     *        reservada en la posicion del nombre.  Solo debe usarse donde
+     *        NO exista ambiguedad con expresiones (top-level), y sirve
+     *        para que el error se reporte sobre el nombre culpable en vez
+     *        de degenerar en "se esperaba un tipo" al inicio de la linea.
      */
-    [[nodiscard]] bool starts_type() const noexcept;
+    [[nodiscard]] bool starts_type(bool allow_reserved_name = false)
+        const noexcept;
 
     /**
      * @brief Phase AS inc.2: decide si el statement actual es un var-decl
