@@ -29,7 +29,7 @@ i32 main() {
     // El tipo `VirtualPtr<i32*>` significa "direccion VM que contiene
     // un puntero HOST".  La direccion exterior es virtual (p vive en
     // stack VM) pero el contenido es el host_ptr de malloc.
-    VirtualPtr<i32*> pp = &p;
+    i32** pp = &p;
 
     // Estos stores DEBEN ir a memoria HOST (movh).  Sin el fix
     // emiten mov y corrompen memoria VM.

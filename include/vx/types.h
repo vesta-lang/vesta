@@ -981,14 +981,26 @@ inline bool types_assignable(const Type &target, const Type &value) noexcept {
         const bool v_void =
             !value.pointee || value.pointee->kind == PrimitiveKind::VOID;
         if (t_void || v_void) return true;
-        // Phase D.jit-mem-model AUTO-PROMOTE: VirtualPtr<T> -> T* y
-        // T* -> VirtualPtr<T> con mismo pointee se coercen
-        // implicitamente.  El runtime (interp/JIT) decide la
-        // naturaleza host vs VM segun el ALLOCA origen + analisis
-        // host_alloca.  Para el user, ambos kinds son "pointer a T"
-        // (estilo C clasico).
+        // `T*` y `VirtualPtr<T>` son tipos DISTINTOS: no se coercen.
+        //
+        // Nombran espacios de direcciones distintos.  `T*` es siempre HOST;
+        // `VirtualPtr<T>` es la memoria VM, que es paginada (4 KiB, mapeo
+        // perezoso) y per-proceso.  Una direccion VM usada como host
+        // segfaltea; una host leida como VM devuelve basura de vm_mem sin
+        // avisar.  Lo que hace irreducible la distincion es que en el sitio
+        // del DEREF el unico contrato disponible es el del tipo: en cuanto el
+        // puntero pasa por memoria (un campo, un parametro), no queda rastro
+        // de su origen que el compilador pueda seguir.
+        //
+        // (Hubo una regla de auto-promocion entre ambos, apoyada en deducir
+        // la naturaleza del ALLOCA de origen.  Deja de funcionar justo cuando
+        // el puntero viaja por memoria, y convertia el error en un SIGSEGV
+        // silencioso.)
+        //
+        // Para mezclarlos a proposito, cast explicito.
         if (target.pointee && value.pointee &&
-            *target.pointee == *value.pointee) {
+            *target.pointee == *value.pointee &&
+            target.is_virtual == value.is_virtual) {
             return true;
         }
     }
