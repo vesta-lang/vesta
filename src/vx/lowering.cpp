@@ -856,6 +856,32 @@ ir::IrType Lowering::ir_type_from_primitive(PrimitiveKind p) noexcept {
 // elemento dimensionable (entonces no se le reserva storage estatico).
 // Habilita buffers estaticos globales (p.ej. heap de un allocator bump en
 // codigo bare-metal): @c u8[4096] g_heap; -> slot de 4096 bytes en .data.
+/**
+ * @brief Bits IEEE de @p d listos para grabarse en el slot de un global float.
+ *
+ * El ancho lo manda el TIPO DECLARADO, no el literal: los literales de coma
+ * flotante se parsean como @c double, pero el slot de un @c f32 guarda un
+ * binary32 y su LOAD lee 4 bytes.  Grabar ahi los bits de un double deja en
+ * esos 4 bytes el resto de la mantisa (para 0.5 son ceros -> el global valia
+ * 0).  El resultado va en los bytes bajos del qword del slot.
+ *
+ * @param d      Valor del literal (ya parseado como double).
+ * @param is_f32 true si el global se declaro @c f32; false si @c f64.
+ * @return Patron de bits a grabar en el slot.
+ */
+static uint64_t float_bits_for_global(double d, bool is_f32) {
+    uint64_t bits = 0;
+    if (is_f32) {
+        const float f = static_cast<float>(d);
+        uint32_t u32 = 0;
+        std::memcpy(&u32, &f, sizeof(u32));
+        bits = u32;
+    } else {
+        std::memcpy(&bits, &d, sizeof(d));
+    }
+    return bits;
+}
+
 static uint64_t vx_global_array_bytes(const ast::TypeNode *tn,
                                       const TypeChecker &tc) {
     if (!tn || tn->kind != ast::NodeKind::ArrayTypeNode) return 0;
@@ -1600,6 +1626,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         // AOT puro, pero raro en codigo bare.)
                         uint64_t cval = 0;
                         bool have = false;
+                        // Un `f32 g = 0.5` guarda los bits de un binary32 (4
+                        // bytes), NO los de un double: el LOAD lee 4 bytes y
+                        // con los bits de f64 solo veria el resto de la
+                        // mantisa (0.5 en f64 tiene los 4 bytes bajos a cero
+                        // -> el global salia 0).
+                        const bool g_is_f32 = (gpk == PrimitiveKind::F32);
                         const ast::Expr *ie = gv->init.get();
                         if (ie) {
                             switch (ie->kind) {
@@ -1616,8 +1648,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                                 have = true;
                                 break;
                             case ast::NodeKind::FloatLitExpr: {
-                                double d = static_cast<const ast::FloatLitExpr *>(ie)->value;
-                                std::memcpy(&cval, &d, sizeof(double));
+                                const double d =
+                                    static_cast<const ast::FloatLitExpr *>(ie)->value;
+                                cval = float_bits_for_global(d, g_is_f32);
                                 have = true;
                                 break;
                             }
@@ -1630,9 +1663,10 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                                     have = true;
                                 } else if (u->op == ast::UnOp::Neg && u->operand &&
                                            u->operand->kind == ast::NodeKind::FloatLitExpr) {
-                                    double d = -static_cast<const ast::FloatLitExpr *>(
-                                        u->operand.get())->value;
-                                    std::memcpy(&cval, &d, sizeof(double));
+                                    const double d =
+                                        -static_cast<const ast::FloatLitExpr *>(
+                                            u->operand.get())->value;
+                                    cval = float_bits_for_global(d, g_is_f32);
                                     have = true;
                                 }
                                 break;
@@ -20192,25 +20226,58 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 is.source_line = ln;
                 fn_->append(current_block_, std::move(is));
             }
+            // Tipo declarado del global.  El compound assign tiene que operar
+            // con EL del global, no con i64: sobre un `f64 g`, un `g += x` con
+            // aritmetica entera sumaria los BITS IEEE (basura: 1.5+1.5+1.5 daba
+            // -0.75).  `g = g + x` no sufria porque va por el camino normal, con
+            // el tipo real.  Para STRING el valor es el GcHandle -> i64.
+            PrimitiveKind gprim = PrimitiveKind::I64;
+            for (auto &decl : mod_.decls) {
+                if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl)
+                    continue;
+                auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
+                if (gv->name != id->name) continue;
+                if (gv->type &&
+                    gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
+                    gprim =
+                        static_cast<ast::PrimitiveTypeNode *>(gv->type.get())
+                            ->prim;
+                break;
+            }
+            const bool gfloat =
+                (gprim == PrimitiveKind::F32 || gprim == PrimitiveKind::F64);
+            const ir::IrType gty =
+                gfloat ? ir_type_from_primitive(gprim) : ir::IrType::I64;
+            // El valor a guardar tiene que llegar en el ancho del global: los
+            // literales float se parsean como double, asi que `f32 g = 1.25`
+            // trae un f64 y guardarlo como F32 sin convertir escribe basura.
+            if (gfloat && e->value) {
+                const ir::IrType from =
+                    (e->value->result_type.kind == PrimitiveKind::F32)
+                        ? ir::IrType::F32
+                        : ir::IrType::F64;
+                rhs = cast_if_needed(rhs, from, gty, e->loc);
+            }
+
             // Compound assign: load cur + combine.
             if (e->op != ast::AssignOp::Assign) {
-                ir::IrValueId v_cur = fn_->new_value(ir::IrType::I64);
+                ir::IrValueId v_cur = fn_->new_value(gty);
                 {
                     ir::IrInstr ld{};
                     ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
+                    ld.type = gty;
                     ld.dst = v_cur;
                     ld.operands = {v_addr};
                     ld.source_line = ln;
                     fn_->append(current_block_, std::move(ld));
                 }
                 const ast::BinOp bop = compound_assign_op_to_binop(e->op);
-                rhs =
-                    emit_binop_ir(bop, v_cur, rhs, PrimitiveKind::I64, e->loc);
+                rhs = emit_binop_ir(bop, v_cur, rhs,
+                                    gfloat ? gprim : PrimitiveKind::I64, e->loc);
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
+            st.type = gty;
             st.operands = {rhs, v_addr};
             st.source_line = ln;
             fn_->append(current_block_, std::move(st));
@@ -30157,6 +30224,25 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
                 v_init = lower_expr(gv->init.get());
             }
             if (v_init == ir::IR_NO_VALUE) continue;
+            // El STORE tiene que respetar el TIPO DECLARADO del global.  Los
+            // literales de coma flotante se parsean como double, asi que un
+            // `f32 g = 0.5` produce un valor f64; guardarlo tal cual mete 8
+            // bytes de bits f64 en un slot cuyo LOAD lee 4 -> el global valia
+            // 0 (y ademas machacaba en runtime los bytes correctos que el
+            // pre-pase ya habia grabado en el slot).
+            ir::IrType sty = ir::IrType::I64;
+            if (gv->type && gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                const PrimitiveKind gpk =
+                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get())->prim;
+                if (gpk == PrimitiveKind::F32 || gpk == PrimitiveKind::F64) {
+                    sty = ir_type_from_primitive(gpk);
+                    const ir::IrType from =
+                        (gv->init->result_type.kind == PrimitiveKind::F32)
+                            ? ir::IrType::F32
+                            : ir::IrType::F64;
+                    v_init = cast_if_needed(v_init, from, sty, gv->loc);
+                }
+            }
             // STR_LIT_ADDR -> slot addr, STORE init.
             ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
             {
@@ -30170,7 +30256,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
+            st.type = sty;
             st.operands = {v_init, v_addr};
             st.source_line = ln;
             fn_->append(current_block_, std::move(st));

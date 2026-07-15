@@ -1,0 +1,63 @@
+// Asignacion compuesta (`+=`, `-=`, `*=`, ...) sobre una VARIABLE GLOBAL.
+//
+// El caso interesante es el global de coma flotante: el valor de un `f64` son
+// sus bits IEEE, asi que combinarlo con aritmetica ENTERA no da un resultado
+// aproximado -- da basura.  Antes, `g_acc += 1.5` tres veces devolvia -0.75 en
+// vez de 4.5, mientras que `g_acc = g_acc + 1.5` (que baja por el camino
+// normal, con el tipo real) si daba 4.5.  Esa asimetria entre las dos formas de
+// escribir lo mismo es lo que fija este ejemplo.
+//
+// Se comprueban tambien enteros (donde el bug no se veia) y varios operadores,
+// para que el arreglo no se limite al `+=`.
+
+f64 g_acc = 0.0;    // acumulador float: el caso que estaba roto
+i64 g_n = 0;        // contador entero: control
+i64 g_bits = 0xF0;  // entero para los operadores bit a bit
+f32 g_f32 = 0.5;    // f32: mismo razonamiento que f64, con otro ancho
+
+void acumular(f64 x) {
+    g_acc += x;     // compound assign sobre global f64
+    g_n += 1;       // compound assign sobre global i64
+}
+
+i32 main() {
+    for (i64 i = 0; i < 3; i++) {
+        acumular(1.5);
+    }
+    // 1.5 * 3 = 4.5 exacto en binario -> la comparacion es estable.
+    if (g_acc != 4.5) { return 1; }
+    if (g_n != 3) { return 2; }
+
+    g_acc -= 0.5;                       // 4.0
+    if (g_acc != 4.0) { return 3; }
+    g_acc *= 2.0;                       // 8.0
+    if (g_acc != 8.0) { return 4; }
+    g_acc /= 4.0;                       // 2.0
+    if (g_acc != 2.0) { return 5; }
+
+    g_f32 += 0.25;                      // 0.75, exacto en binario32
+    if (g_f32 != 0.75) { return 6; }
+
+    // Enteros: los operadores que no son aritmetica pura.
+    g_bits &= 0x3C;                     // 0xF0 & 0x3C = 0x30
+    if (g_bits != 0x30) { return 7; }
+    g_bits |= 0x03;                     // 0x33
+    if (g_bits != 0x33) { return 8; }
+    g_bits ^= 0x11;                     // 0x22
+    if (g_bits != 0x22) { return 9; }
+    g_bits >>= 1;                       // 0x11
+    if (g_bits != 0x11) { return 10; }
+    g_bits <<= 2;                       // 0x44
+    if (g_bits != 0x44) { return 11; }
+
+    // Las dos formas de escribir lo mismo deben coincidir.
+    f64 a = 0.0;
+    g_acc = 0.0;
+    for (i64 i = 0; i < 4; i++) {
+        g_acc += 0.25;                  // compound
+        a = a + 0.25;                   // explicito
+    }
+    if (g_acc != a) { return 12; }
+
+    return 42;
+}
