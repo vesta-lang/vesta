@@ -535,6 +535,19 @@ struct atomic<T: AtomicBuiltin> {
     /// instruccion.  Float: bucle CAS -- sumar dos patrones IEEE 754 como si
     /// fueran enteros no da la suma de los numeros.  El `if` lo resuelve la
     /// introspeccion en comptime: en el binario queda solo la rama que toca.
+    /// De ahi que el coste dependa de T: O(1) entero, O(n) float.  El frame
+    /// tambien: en arm64 el entero (una op nativa) gasta 24B y el float (bucle
+    /// CAS) 32B -- se declara cada uno, no el maximo, para no perder el dato.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(24, when: arch:arm64 && is_integer<T>())
+    @stack(32, when: arch:arm64 && is_float<T>())
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1), when: is_integer<T>())
+    @complexity(partial_pre: O(n), partial_post: O(n),
+                total_pre: O(n), total_post: O(n), when: is_float<T>())
     public T fetch_add(T d) {
         static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
         if (is_float<T>()) {
@@ -553,6 +566,16 @@ struct atomic<T: AtomicBuiltin> {
     }
 
     /// Resta @p d y devuelve el valor ANTERIOR.  Ver @ref fetch_add.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(24, when: arch:arm64 && is_integer<T>())
+    @stack(32, when: arch:arm64 && is_float<T>())
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1), when: is_integer<T>())
+    @complexity(partial_pre: O(n), partial_post: O(n),
+                total_pre: O(n), total_post: O(n), when: is_float<T>())
     public T fetch_sub(T d) {
         static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
         if (is_float<T>()) {
@@ -574,21 +597,41 @@ struct atomic<T: AtomicBuiltin> {
     // float -- y eso es util, no un accidente: `fetch_xor(0x8000000000000000)`
     // invierte el signo de un f64 atomicamente, sin leerlo ni escribirlo.
 
-    /// `|= mask`; devuelve el valor ANTERIOR.  Bucle CAS.
+    /// `|= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n) sobre los
+    /// reintentos.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n))
     public T fetch_or(T mask) {
         static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
         return bitcast<T>(
             vx_atomic_or64((i64*) &this.cell, bitcast<i64>(mask)));
     }
 
-    /// `&= mask`; devuelve el valor ANTERIOR.  Bucle CAS.
+    /// `&= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n).
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n))
     public T fetch_and(T mask) {
         static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
         return bitcast<T>(
             vx_atomic_and64((i64*) &this.cell, bitcast<i64>(mask)));
     }
 
-    /// `^= mask`; devuelve el valor ANTERIOR.  Bucle CAS.  Util para toggles.
+    /// `^= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n).  Util para
+    /// toggles.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n))
     public T fetch_xor(T mask) {
         static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
         return bitcast<T>(
@@ -604,23 +647,60 @@ struct atomic<T: AtomicBuiltin> {
     //  pueden operar.
     // -----------------------------------------------------------------------
 
-    /// `g += d` / `g = g + d` / `g++`.  Devuelve el valor NUEVO.
+    /// `g += d` / `g = g + d` / `g++`.  Devuelve el valor NUEVO.  Hereda el
+    /// coste de fetch_add: O(1) entero, O(n) float.  Frame propio 0 (solo
+    /// llama).
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1), when: is_integer<T>())
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n), when: is_float<T>())
     public T __iadd__(T d) { return this.fetch_add(d) + d; }
 
-    /// `g -= d` / `g = g - d` / `g--`.  Devuelve el valor NUEVO.
+    /// `g -= d` / `g = g - d` / `g--`.  Devuelve el valor NUEVO.  Ver __iadd__.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1), when: is_integer<T>())
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n), when: is_float<T>())
     public T __isub__(T d) { return this.fetch_sub(d) - d; }
 
-    /// `g |= m` / `g = g | m`.  Devuelve el valor NUEVO.
+    /// `g |= m` / `g = g | m`.  Devuelve el valor NUEVO.  Bucle CAS en la
+    /// primitiva: cuerpo O(1) (una llamada), total O(n) (reintentos).
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n))
     public T __ior__(T m) {
         return bitcast<T>(bitcast<i64>(this.fetch_or(m)) | bitcast<i64>(m));
     }
 
-    /// `g &= m` / `g = g & m`.  Devuelve el valor NUEVO.
+    /// `g &= m` / `g = g & m`.  Devuelve el valor NUEVO.  Ver __ior__.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n))
     public T __iand__(T m) {
         return bitcast<T>(bitcast<i64>(this.fetch_and(m)) & bitcast<i64>(m));
     }
 
-    /// `g ^= m` / `g = g ^ m`.  Devuelve el valor NUEVO.
+    /// `g ^= m` / `g = g ^ m`.  Devuelve el valor NUEVO.  Ver __ior__.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(n), total_post: O(n))
     public T __ixor__(T m) {
         return bitcast<T>(bitcast<i64>(this.fetch_xor(m)) ^ bitcast<i64>(m));
     }
@@ -633,6 +713,13 @@ struct atomic<T: AtomicBuiltin> {
     /// Devuelve el valor ANTIGUO (== @p expected si triunfo).  Con esto se
     /// construye cualquier read-modify-write que no tenga instruccion propia
     /// (multiplicar, saturar, maximo, ...): bucle hasta triunfar.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(32, when: arch:arm64)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1))
     public T compare_swap(T expected, T desired) {
         static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
         return bitcast<T>(vx_atomic_cas64((i64*) &this.cell,
@@ -648,7 +735,8 @@ struct atomic<T: AtomicBuiltin> {
     @nothrow
     @nopanic
     @alloc(0)
-    @stack(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(24, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(n),
                 total_pre: O(n), total_post: O(n), when: arch:x86_64)
     @complexity(partial_pre: O(1), partial_post: O(1),
@@ -661,6 +749,13 @@ struct atomic<T: AtomicBuiltin> {
     /// Como @ref compare_swap pero devuelve SI triunfo.  Es lo que se quiere
     /// saber casi siempre, y evita repetir `if (a.compare_swap(v, n) == v)` en
     /// cada sitio.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(32, when: arch:arm64)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1))
     public bool compare_exchange(T expected, T desired) {
         return this.compare_swap(expected, desired) == expected;
     }
@@ -677,12 +772,35 @@ struct atomic<T: AtomicBuiltin> {
     // -----------------------------------------------------------------------
 
     /// Load atomico.  Igual que `*g`.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1))
     public T load() { return this.__deref__(); }
 
     /// Store atomico.  Igual que `g = v`.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1))
     public T store(T v) { return this.__assign__(v); }
 
-    /// Exchange.  Alias de @ref swap, con el nombre de C++/Rust.
+    /// Exchange.  Alias de @ref swap, con el nombre de C++/Rust.  Hereda su
+    /// coste por arch: x86 bucle CAS O(n) (se inlinea, tambien la parte
+    /// parcial), arm64 LL/SC O(1).
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(24, when: arch:arm64)
+    @complexity(partial_pre: O(n), partial_post: O(n),
+                total_pre: O(n), total_post: O(n), when: arch:x86_64)
+    @complexity(partial_pre: O(1), partial_post: O(1),
+                total_pre: O(1), total_post: O(1), when: arch:arm64)
     public T exchange(T v) { return this.swap(v); }
 
     // -----------------------------------------------------------------------
@@ -690,7 +808,15 @@ struct atomic<T: AtomicBuiltin> {
     // -----------------------------------------------------------------------
 
     /// Deja el maximo entre el valor actual y @p v; devuelve el ANTERIOR.
-    /// Sin esto hay que escribir el bucle CAS a mano en cada sitio.
+    /// Sin esto hay que escribir el bucle CAS a mano en cada sitio.  El bucle
+    /// esta en el propio cuerpo -> O(n) tambien en la parte parcial.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(32, when: arch:arm64)
+    @complexity(partial_pre: O(n), partial_post: O(n),
+                total_pre: O(n), total_post: O(n))
     public T fetch_max(T v) {
         while (true) {
             T viejo = this.load();
@@ -701,6 +827,13 @@ struct atomic<T: AtomicBuiltin> {
     }
 
     /// Deja el minimo entre el valor actual y @p v; devuelve el ANTERIOR.
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(32, when: arch:arm64)
+    @complexity(partial_pre: O(n), partial_post: O(n),
+                total_pre: O(n), total_post: O(n))
     public T fetch_min(T v) {
         while (true) {
             T viejo = this.load();
@@ -733,10 +866,17 @@ struct atomic<T: AtomicBuiltin> {
     ///         T nuevo = calculo_caro(viejo);       // <- aqui decides tu
     ///         if (a.compare_exchange(viejo, nuevo)) { break; }
     ///     }
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(32, when: arch:arm64)
+    @complexity(partial_pre: O(n), partial_post: O(n),
+                total_pre: O(n), total_post: O(n))
     public T fetch_update(fn(T) -> T f) {
         while (true) {
             T viejo = this.load();
-            if (this.compare_exchange(viejo, f(viejo))) { 
+            if (this.compare_exchange(viejo, f(viejo))) {
                 return viejo; 
             }
             vx_cpu_relax();
@@ -748,6 +888,13 @@ struct atomic<T: AtomicBuiltin> {
     /// La misma relacion que hay entre `fetch_add` y `+=`: el patron habitual es
     /// `nuevo = contador.update((x) => x + 1);`, y con el fetch_ hay que
     /// recalcularlo fuera.  Mismas condiciones sobre @p f (pura y barata).
+    @nothrow
+    @nopanic
+    @alloc(0)
+    @stack(0,  when: arch:x86_64)
+    @stack(32, when: arch:arm64)
+    @complexity(partial_pre: O(n), partial_post: O(n),
+                total_pre: O(n), total_post: O(n))
     public T update(fn(T) -> T f) {
         while (true) {
             T viejo = this.load();
