@@ -8877,7 +8877,26 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
             // Permitimos bool == bool; resto de combinaciones invalidas.
             if (!(tl.kind == PrimitiveKind::BOOL &&
                   tr.kind == PrimitiveKind::BOOL)) {
-                diags_.error(e->loc, "operandos no numericos en comparacion");
+                // Igual que en la rama aritmetica: si el operando es un tipo que
+                // PODRIA declarar el operador, decirlo y nombrar el metodo.
+                const char *cdn = binop_dunder_name(e->op);
+                bool named = false;
+                for (const Type *t : {&tl, &tr}) {
+                    if (t->kind != PrimitiveKind::CLASS &&
+                        t->kind != PrimitiveKind::STRUCT)
+                        continue;
+                    if (cdn[0] == '\0') break;
+                    diags_.error(e->loc,
+                                 "el tipo '" + type_to_string(*t) +
+                                     "' no declara el operador '" +
+                                     binop_spelling(e->op) +
+                                     "' (le falta el metodo '" + cdn + "')");
+                    named = true;
+                    break;
+                }
+                if (!named)
+                    diags_.error(e->loc,
+                                 "operandos no numericos en comparacion");
             }
         }
         return Type{PrimitiveKind::BOOL};
@@ -14266,6 +14285,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             int matches = 0;
             for (const auto &kv : sig_by_name_) {
                 const std::string &fn = kv.first;
+                // Los helpers registrados para el cuerpo de una plantilla
+                // importada NO participan: existen para que la plantilla
+                // resuelva, no para que el consumidor los alcance por el
+                // nombre corto que su `only` no pidio.
+                if (template_only_fns_.count(fn)) continue;
                 if (fn.size() > suffix.size() &&
                     fn.compare(fn.size() - suffix.size(), suffix.size(),
                                suffix) == 0) {

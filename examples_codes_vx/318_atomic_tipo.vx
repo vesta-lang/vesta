@@ -1,0 +1,65 @@
+// `atomic<T>`: un entero atomico con la sintaxis de una variable normal.
+//
+// Vive en la stdlib (`vx_atomic`), no en el compilador: es un struct de un solo
+// campo que sobrecarga los operadores para que CADA uno sea una operacion
+// atomica.  Nada de esto es un caso especial del lenguaje.
+//
+// El coste es cero frente a llamar a las primitivas a mano: los metodos de un
+// struct se despachan estaticamente y se inlinean, asi que `g += 1` emite la
+// instruccion atomica y nada mas -- sin llamada ni objeto intermedio.
+//
+// Ver [[Operadores]] (sobrecarga y fusion read-modify-write) y
+// [[Sincronizacion]].
+namespace atomic_tipo;
+
+import "vx_atomic" only atomic;
+
+i32 main() {
+    atomic<i64> g;
+
+    g = 0;              // store atomico
+
+    // Las TRES formas del incremento bajan al MISMO `lock xadd`.  La larga
+    // (`g = g + 1`) es la que en C++ compila y es una carrera silenciosa: alli
+    // son tres pasos y otro hilo cabe en medio.  Aqui el compilador ve que las
+    // dos `g` son la misma posicion y las funde, asi que las tres son igual de
+    // correctas.
+    g = g + 20;
+    g += 20;
+    g++;
+    g = g - 1;          // y la resta igual
+
+    i64 v = *g;         // load atomico
+    println("g = ${v}");
+
+    // compare_swap: la primitiva con la que se construye cualquier RMW que no
+    // tenga instruccion propia (multiplicar, saturar, maximo, ...) -- bucle
+    // hasta triunfar.  Escribe solo si el valor es el esperado, y devuelve el
+    // que habia: si coincide con el esperado, triunfo.
+    //
+    // Aqui NO triunfa a proposito: g vale 40, no 99, asi que no la toca.  Ese
+    // es el caso que hay que saber leer -- otro hilo cambio el valor entre tu
+    // lectura y tu escritura, y por eso la operacion no se aplico.
+    i64 previo = g.compare_swap(99, 100);
+    println("compare_swap(99, 100) devolvio ${previo}; g sigue en ${*g}");
+
+    // swap: escribe y devuelve el anterior, incondicionalmente.
+    i64 anterior = g.swap(2);
+    println("swap(2) devolvio ${anterior}, ahora vale ${*g}");
+
+    // Lo que NO se puede escribir es tan importante como lo que si:
+    //
+    //     if (g < 10) { ... }     // error: atomic<i64> no declara '<'
+    //     i64 x = g + 1;          // error: atomic<i64> no declara '+'
+    //
+    // No son descuidos: comparar o sumar dos atomicos son DOS lecturas
+    // separadas, y el resultado ya no es atomico.  El tipo no las declara y el
+    // compilador lo dice, en vez de dejar pasar codigo que parece atomico y no
+    // lo es.  Para eso esta el load explicito:
+    if (*g < 10) {
+        println("*g < 10  (el load es explicito: se ve que hay una lectura)");
+    }
+
+    // 40 + 2 = 42
+    return (i32)(anterior + *g);
+}

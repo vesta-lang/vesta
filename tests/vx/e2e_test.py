@@ -2163,6 +2163,7 @@ r0_case("ovl314", "operadores sobrecargados: aritmeticos, compuestos, ++/--, bit
 r0_case("ovl315", "operadores de acceso sobrecargados: *x, x = v, x(...) y x{...}", "315_operadores_llamada_deref.vx", 42, line=3733)
 fails_case("ovl316", "'a{...}' sobre un tipo que no declara __braces__", "316_braces_sin_dunder_err.vx", "no declara '__braces__'", line=3735)
 r0_case("rmw317", "fusion read-modify-write: `g = g OP x` -> `g OP= x` (atomico sin load suelto, 10 operadores)", "317_rmw_fusion.vx", 42, line=3737)
+r0_case("atm318", "atomic<T> de la stdlib: las 3 formas del incremento, compare_swap y swap", "318_atomic_tipo.vx", 42, line=3739)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

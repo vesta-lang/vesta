@@ -214,3 +214,80 @@ public i64 vx_spin_trylock(i64* lock) {
     }
     return 0;
 }
+
+// ===========================================================================
+//  atomic<T>: la interfaz de arriba, con la sintaxis de una variable normal.
+// ===========================================================================
+//
+// Envuelve una celda de 64 bits y sobrecarga los operadores para que CADA uno
+// sea una operacion atomica.  Se escribe como un entero cualquiera:
+//
+//     atomic<i64> g;
+//     g = 0;              // store atomico
+//     g += 1;             // lock xadd -- indivisible
+//     g = g + 1;          // lo MISMO: el compilador funde el read-modify-write
+//     g++;                // lo mismo
+//     i64 v = *g;         // load atomico
+//
+// Las tres formas del incremento bajan al mismo `lock xadd`.  En C++ la larga
+// (`g = g + 1`) compila y es una carrera silenciosa -- tres pasos con sitio
+// para otro hilo en medio; aqui el compilador ve que las dos `g` son la misma
+// posicion y las funde (ver [[Operadores]], fusion read-modify-write).
+//
+// Cero coste frente a llamar a `vx_atomic_add64` a mano: los metodos de un
+// struct se despachan estaticamente y se inlinean, asi que `g += 1` emite la
+// instruccion atomica y nada mas -- sin llamada, sin objeto intermedio.
+//
+// Lo que NO declara es tan importante como lo que declara: sin `__add__` ni
+// comparaciones, un `g < n` o un `g + h` no compilan.  Son operaciones que NO
+// pueden ser atomicas (dos lecturas separadas), y el compilador prefiere
+// decirlo a dejar pasar codigo que parece atomico y no lo es.  Para eso esta el
+// load explicito: `*g < n`, `*g + *h`.
+//
+// La celda es SIEMPRE de 64 bits (es el ancho de los primitivos), asi que
+// `atomic<i32>` gasta 8 bytes.  A cambio, `T` puede ser cualquier entero de
+// hasta 64 bits: el valor se guarda extendido y se trunca al leerlo, asi que el
+// desbordamiento envuelve como el tipo pide.
+//
+// Alineacion: la celda es el unico campo del struct, y todo agregado nace
+// alineado a 8 -- que es lo que los primitivos exigen.
+//
+// Los metodos usan los wrappers `vx_atomic_*` de arriba, no los builtins: asi
+// `atomic<T>` hereda gratis el gating por `@Target("arch:...")` -- en arm64 los
+// wrappers son ldaxr/stlxr y el struct no se entera.
+struct atomic<T> {
+    i64 cell;
+
+    /// `*g` -- load atomico (acquire en x86-TSO).
+    public T __deref__() { return (T) vx_atomic_load64(&this.cell); }
+
+    /// `g = v` -- store atomico (release en x86-TSO).
+    public T __assign__(T v) {
+        vx_atomic_store64(&this.cell, (i64) v);
+        return v;
+    }
+
+    /// `g += d` / `g = g + d` / `g++` -- fetch-and-add (`lock xadd`).
+    /// Devuelve el valor NUEVO (el que tiene la celda tras sumar), como haria
+    /// la expresion `g + d`.
+    public T __iadd__(T d) {
+        return (T)(vx_atomic_add64(&this.cell, (i64) d) + (i64) d);
+    }
+
+    /// `g -= d` / `g = g - d` / `g--` -- fetch-and-add del negado.
+    public T __isub__(T d) {
+        return (T)(vx_atomic_add64(&this.cell, 0 - (i64) d) - (i64) d);
+    }
+
+    /// Compare-and-swap: si el valor es @p expected lo cambia por @p desired.
+    /// Devuelve el valor ANTIGUO (== @p expected si triunfo).  Es la primitiva
+    /// con la que se construye cualquier RMW que no tenga instruccion propia
+    /// (multiplicar, saturar, maximo, ...): bucle CAS hasta triunfar.
+    public T compare_swap(T expected, T desired) {
+        return (T) vx_atomic_cas64(&this.cell, (i64) expected, (i64) desired);
+    }
+
+    /// Exchange: escribe @p v y devuelve el valor ANTIGUO.  Compuesto sobre CAS
+    /// (no hay builtin de swap): bucle hasta triunfar.
+    public T swap(T v) { return (T) vx_atomic_swap64(&this.cell, (i64) v); }
+}
