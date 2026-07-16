@@ -20,11 +20,21 @@
 #
 # vxi_compiler_version_hash() usa VXI_COMPILER_BUILD_ID si esta definido.
 # Aqui generamos ese identificador como un hash de las fuentes que afectan la
-# SALIDA del compilador (frontend Vesta + IR + emisores de bytecode + AOT/JIT).
-# El header solo se reescribe cuando ese hash cambia, de modo que:
-#   - cambiar lowering/IR/emisores -> nuevo hash -> caches invalidados.
-#   - recompilar sin tocar codegen  -> mismo hash -> caches conservados.
+# SALIDA del compilador.  El header solo se reescribe cuando ese hash cambia:
+#   - cambiar lowering/IR/emisores/linker -> nuevo hash -> caches invalidados.
+#   - recompilar sin tocar codegen        -> mismo hash -> caches conservados.
 # Esto evita el bug de "edite el compilador pero el .vxir viejo se reuso".
+#
+# El criterio es TODO lo que decide los bytes del artefacto, no solo el
+# frontend.  El `.vpc` cachea el `.velb` FINAL, asi que la cadena entera cuenta:
+#
+#   .vx --[preprocesador]--> .vx --[frontend vx]--> IR --[ir_emitter]--> .vel
+#       --[lexer + parser + emmit + linker]--> .velb        (o AOT/JIT/port)
+#
+# Faltaban los cuatro ultimos: un cambio del LINKER (layout de secciones,
+# relocs, @sym) no invalidaba nada y el `.vpc` seguia sirviendo un `.velb`
+# emitido por el linker viejo.  Ante la duda, sobre-invalidar: reemitir es
+# barato y estas fuentes cambian poco; servir un artefacto stale no lo es.
 file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/vx/*.cpp     ${CMAKE_SOURCE_DIR}/src/vx/*.h
     ${CMAKE_SOURCE_DIR}/include/vx/*.h
@@ -36,6 +46,16 @@ file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/port/transpiler_base.cpp
     ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/port/snippet_loader.cpp
+    # --- .vel -> .velb: lo que ensambla y enlaza el bytecode final ---
+    ${CMAKE_SOURCE_DIR}/src/lexer/*.cpp   ${CMAKE_SOURCE_DIR}/include/lexer/*.h
+    ${CMAKE_SOURCE_DIR}/src/parser/*.cpp  ${CMAKE_SOURCE_DIR}/include/parser/*.h
+    ${CMAKE_SOURCE_DIR}/src/linker/*.cpp  ${CMAKE_SOURCE_DIR}/include/linker/*.h
+    ${CMAKE_SOURCE_DIR}/src/util/assembler_multiprocess.cpp
+    ${CMAKE_SOURCE_DIR}/include/util/assembler_multiprocess.h
+    # --- preprocesador: corre como primera etapa sobre cada .vx ---
+    ${CMAKE_SOURCE_DIR}/preprocessor/src/*.c
+    ${CMAKE_SOURCE_DIR}/preprocessor/src/*.cpp
+    ${CMAKE_SOURCE_DIR}/preprocessor/include/*.h
 )
 set(VX_CODEGEN_VERSION_HDR ${CMAKE_CURRENT_BINARY_DIR}/vx_codegen_version.h)
 add_custom_command(
