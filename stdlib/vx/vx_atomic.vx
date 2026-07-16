@@ -29,10 +29,15 @@
  *   vx_cpu_relax                            -- hint de spin (pause / yield)
  *
  * @par Contratos declarados (los verifica el compilador; `vm --analyze`)
- * Todas las operaciones de este modulo declaran `@nothrow @nopanic @alloc(0)
- * @stack(0)`: no lanzan, no hacen panic, no alocan y no gastan frame propio.
- * Son las propiedades que las hacen usables desde donde no hay heap ni runtime
- * (freestanding, un ISR, el interior de un allocator, un spinlock).
+ * Todas declaran `@nothrow @nopanic @alloc(0)`: no lanzan, no hacen panic y no
+ * alocan.  Son las propiedades que las hacen usables desde donde no hay heap ni
+ * runtime (freestanding, un ISR, el interior de un allocator, un spinlock).
+ *
+ * El `@stack` difiere por ARQUITECTURA: en x86-64 son builtins puros (frame 0);
+ * en arm64 los `register()` + el asm ldaxr/stlxr gastan pila, asi que declaran
+ * su frame real con `@stack(N, when: arch:arm64)` (medido por --analyze).  Las
+ * compuestas arch-independientes (sub/or/and/xor) tienen un solo cuerpo cuyo
+ * frame difiere por lo que llaman, y lo declaran con `when:` en la misma fn.
  *
  * NINGUNA declara `@pure`, y es a proposito: un atomico LEE o MUTA memoria
  * compartida, que es justo su razon de ser.  El verificador lo confirma
@@ -163,7 +168,9 @@ public void vx_cpu_relax() {
 @nothrow
 @nopanic
 @alloc(0)
-@stack(0)
+// Frame propio: los register("x0".."x3") + el asm ldaxr/stlxr gastan pila que
+// la variante x86-64 (builtins puros) no.  Medido por --analyze en arm64.
+@stack(32)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
@@ -188,7 +195,7 @@ public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
 @nothrow
 @nopanic
 @alloc(0)
-@stack(0)
+@stack(24) // los register + asm gastan frame que la variante x86-64 no
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_add64(i64* addr, i64 delta) {
@@ -211,7 +218,7 @@ public i64 vx_atomic_add64(i64* addr, i64 delta) {
 @nothrow
 @nopanic
 @alloc(0)
-@stack(0)
+@stack(24) // los register + asm gastan frame que la variante x86-64 no
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_swap64(i64* addr, i64 v) {
@@ -273,10 +280,13 @@ public void vx_cpu_relax() {
 // ===========================================================================
 
 /// fetch-and-sub: `*addr -= delta`; devuelve el OLD.  Sobre add64 con -delta.
+/// Un solo cuerpo, pero la primitiva que llama difiere por arch (x86: builtins;
+/// arm64: register+asm), asi que su frame propio tambien -> `when:`.
 @nothrow
 @nopanic
 @alloc(0)
-@stack(0)
+@stack(0,  when: arch:x86_64)
+@stack(24, when: arch:arm64)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_sub64(i64* addr, i64 delta) {
@@ -288,7 +298,8 @@ public i64 vx_atomic_sub64(i64* addr, i64 delta) {
 @nothrow
 @nopanic
 @alloc(0)
-@stack(0)
+@stack(0,  when: arch:x86_64)
+@stack(32, when: arch:arm64) // el CAS arm64 (register+asm) gasta mas frame
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public i64 vx_atomic_or64(i64* addr, i64 mask) {
@@ -306,7 +317,8 @@ public i64 vx_atomic_or64(i64* addr, i64 mask) {
 @nothrow
 @nopanic
 @alloc(0)
-@stack(0)
+@stack(0,  when: arch:x86_64)
+@stack(32, when: arch:arm64) // el CAS arm64 (register+asm) gasta mas frame
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public i64 vx_atomic_and64(i64* addr, i64 mask) {
@@ -326,7 +338,8 @@ public i64 vx_atomic_and64(i64* addr, i64 mask) {
 @nothrow
 @nopanic
 @alloc(0)
-@stack(0)
+@stack(0,  when: arch:x86_64)
+@stack(32, when: arch:arm64) // el CAS arm64 (register+asm) gasta mas frame
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public i64 vx_atomic_xor64(i64* addr, i64 mask) {
