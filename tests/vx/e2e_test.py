@@ -2138,6 +2138,7 @@ r0_case("def170", "defaults de campo + ={} + default() (struct + templates)", "2
 r0_case("cl171", "compound literals (Tipo){...} en args/returns + templates", "259_compound_literals.vx", 119, line=3692)
 r0_case("cd172", "new Clase() auto-init de defaults (herencia + generico)", "260_class_defaults.vx", 159, line=3693)
 r0_case("tc_ex", "contratos de tipo @pod/@no_heap/@size (--analyze)", "analyze/type_contracts.vx", 140, line=3694)
+r0_case("ctr_ex", "contratos de efecto/coste: fn libre + metodo + when: por arch y por T", "analyze/contracts.vx", 110, line=3694)
 r0_case("ov173", "overlay struct sobre buffer: read/write tipado por offset", "261_overlay_basics.vx", 23629, line=3699)
 r0_case("ctd294", "typedefs C (sufijos/ctypes/multi-decl/union/arrays/anonimos/elaborado)", "294_c_typedefs.vx", 42, line=3704)
 r0_case("cfp295", "punteros a funcion C (campo/typedef/param/var/promocion cfn)", "295_c_func_ptr.vx", 42, line=3705)
