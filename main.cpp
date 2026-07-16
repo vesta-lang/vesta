@@ -1886,10 +1886,15 @@ int main(int argc, char *argv[]) {
             std::string host_os, host_arch;
             vx::get_aot_condcomp_target(host_os, host_arch);
 
-            // arch -> (funcion -> "parcial/total"), o el motivo de no compilar.
+            // arch -> (funcion -> resumen), o el motivo de no compilar.  El
+            // resumen junta el coste Y la huella: las dos varian con la
+            // arquitectura -- el coste cuando un callee tiene cuerpos por-arch
+            // distintos, y la huella cuando el cuerpo si (los `register()` de
+            // una variante @Target("arch:arm64") gastan frame que su gemela
+            // x86-64 no), asi que las dos hay que reportarlas por arch.
             struct PorArch {
                 std::string arch;
-                std::map<std::string, std::string> coste;
+                std::map<std::string, std::string> resumen;
                 std::string fallo;
             };
             std::vector<PorArch> tabla;
@@ -1926,23 +1931,37 @@ int main(int argc, char *argv[]) {
                 }
                 analyze::ModuleCost c2 = analyze::analyze_module(m2);
                 analyze::compose_interproc(c2);
+                auto fp2 = analyze::compute_module_fingerprints(m2);
+                analyze::compose_fingerprints(fp2);
+                std::map<std::string, const analyze::FunctionFingerprint *> fpx;
+                for (const auto &f : fp2) fpx[f.function] = &f;
                 for (const auto &f : c2.functions) {
-                    pa.coste[f.function] =
-                        std::string(analyze::cost_class_str(f.big_o)) + " / " +
-                        analyze::cost_class_str(f.total_class);
+                    std::string s = std::string(analyze::cost_class_str(f.big_o)) +
+                                    " / " +
+                                    analyze::cost_class_str(f.total_class);
+                    auto it = fpx.find(f.function);
+                    if (it != fpx.end()) {
+                        const auto *h = it->second;
+                        s += "  allocs=" + std::to_string(h->alloc_sites_total) +
+                             " stack=" + std::to_string(h->stack_bytes) + "B" +
+                             " pure=" + (h->pure ? "si" : "no") +
+                             " throws=" + (h->throws_total ? "si" : "no") +
+                             " panics=" + (h->panics_total ? "si" : "no");
+                    }
+                    pa.resumen[f.function] = std::move(s);
                 }
                 tabla.push_back(std::move(pa));
             }
             vx::set_aot_condcomp_target(host_os, host_arch); // dejarlo como estaba
 
-            // Las funciones cuyo coste NO es el mismo en todas.
+            // Las funciones cuyo coste o huella NO son iguales en todas.
             std::set<std::string> difieren;
             for (const auto &f : mc_post.functions) {
                 const std::string *ref = nullptr;
                 for (const auto &pa : tabla) {
                     if (!pa.fallo.empty()) continue;
-                    auto it = pa.coste.find(f.function);
-                    if (it == pa.coste.end()) continue;
+                    auto it = pa.resumen.find(f.function);
+                    if (it == pa.resumen.end()) continue;
                     if (!ref)
                         ref = &it->second;
                     else if (*ref != it->second)
@@ -1955,8 +1974,9 @@ int main(int argc, char *argv[]) {
                     no_compilan.push_back(pa.arch + ": " + pa.fallo);
 
             if (!difieren.empty() || !no_compilan.empty()) {
-                std::cout << "\nCoste por arquitectura (parcial / total, "
-                             "POST-opt).  Solo lo que difiere del resto.\n";
+                std::cout << "\nCoste y huella por arquitectura (parcial / total"
+                             " POST-opt + allocs/stack/pure/throws/panics).  "
+                             "Solo lo que difiere.\n";
                 std::cout
                     << "=================================================="
                        "===========\n";
@@ -1964,8 +1984,8 @@ int main(int argc, char *argv[]) {
                     std::cout << "  " << fn << "\n";
                     for (const auto &pa : tabla) {
                         if (!pa.fallo.empty()) continue;
-                        auto it = pa.coste.find(fn);
-                        if (it == pa.coste.end()) continue;
+                        auto it = pa.resumen.find(fn);
+                        if (it == pa.resumen.end()) continue;
                         std::cout << "      " << pa.arch;
                         for (size_t k = pa.arch.size(); k < 8; ++k)
                             std::cout << ' ';
