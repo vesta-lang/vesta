@@ -35,6 +35,11 @@ struct IrModule;
 
 namespace analyze {
 
+/// Sentinela de `stack_bytes_total`: la profundidad de pila NO es acotable
+/// (hay recursion en el callgraph, o un callee externo cuyo frame no se ve).
+/// `verify` lo trata como inverificable (no se puede PROBAR una cota).
+constexpr uint64_t STACK_UNBOUNDED = UINT64_MAX;
+
 /**
  * @struct FunctionFingerprint
  * @brief Propiedades de recurso/efecto de una funcion (locales + compuestas).
@@ -48,13 +53,19 @@ struct FunctionFingerprint {
     bool throws = false;           ///< THROW/RETHROW propio.
     bool panics = false;           ///< PANIC propio.
     bool self_recursive = false;   ///< se llama a si misma directamente.
+    bool frame_opaque = false;     ///< tiene `asm { }` (INLINE_ASM): su marco de
+                                   ///< pila REAL no se ve en el IR (los register()
+                                   ///< + asm no son ALLOCAs).  Para el TOTAL de sus
+                                   ///< callers se usa su @stack declarado, no el 0
+                                   ///< medido.
     bool has_dynamic_call = false; ///< CALLVIRT/CALLM/CALLCLOSURE/CALLIND (efecto opaco).
     bool pure_local = true;        ///< sin efectos de dato observables PROPIOS.
     std::vector<std::string> calls; ///< callees ESTATICOS (CALL/TAILCALL/CALLN).
 
     // -- Compuestas (transitivas, tras compose_fingerprints) ----------------
-    uint32_t alloc_sites_total = 0; ///< sitios de alloc alcanzables (finito).
-    uint64_t stack_bytes_total = 0; ///< max/suma de stack alcanzable (ver nota).
+    uint32_t alloc_sites_total = 0; ///< sitios de alloc alcanzables (SUMA del cierre).
+    uint64_t stack_bytes_total = 0; ///< profundidad de pila peor caso = frame propio
+                                    ///< + MAX de callees; STACK_UNBOUNDED si no acotable.
     bool throws_total = false;      ///< la funcion o alguna alcanzable lanza.
     bool panics_total = false;      ///< idem panic.
     bool recursive = false;         ///< en un ciclo del callgraph (o self).
@@ -73,13 +84,26 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn);
 std::vector<FunctionFingerprint>
 compute_module_fingerprints(const ir::IrModule &mod);
 
+struct FunctionContracts; // definido abajo.
+
 /**
  * @brief Compone los totales interprocedurales in-place: llena los campos
  *        `*_total`, `recursive` y `effects_known` recorriendo el callgraph
  *        estatico (cierre transitivo).  Conservador ante llamadas dinamicas
  *        o callees externos no presentes en @p fps.
+ *
+ * @param contracts opcional.  Si se da, las funciones con marco OPACO
+ *        (`frame_opaque`: tienen `asm { }`, su pila no se ve en el IR)
+ *        contribuyen al `stack_bytes_total` de sus callers con su @stack
+ *        DECLARADO en vez del 0 medido -- asi un wrapper que llama a una
+ *        primitiva de asm refleja el marco real de esa primitiva.  El
+ *        `stack_bytes` (parcial) medido NO se toca (la verificacion sigue
+ *        siendo por cota superior sobre lo medido).
  */
-void compose_fingerprints(std::vector<FunctionFingerprint> &fps);
+void compose_fingerprints(
+    std::vector<FunctionFingerprint> &fps,
+    const std::unordered_map<std::string, FunctionContracts> *contracts =
+        nullptr);
 
 /**
  * @struct FunctionContracts
@@ -95,10 +119,17 @@ struct FunctionContracts {
     bool pure = false;    ///< @pure.
     bool nothrow = false; ///< @nothrow.
     bool nopanic = false; ///< @nopanic.
-    int64_t alloc = -1;   ///< @alloc(N); -1 = no declarado.
-    int64_t stack = -1;   ///< @stack(N); -1 = no declarado.
+    // @alloc y @stack tienen DOS dimensiones (como @complexity): parcial (lo
+    // propio de la funcion) y total (el cierre / la cadena de callees).  La
+    // forma corta `@alloc(N)`/`@stack(N)` es azucar del TOTAL (el peor caso
+    // que importa desde fuera).  -1 = esa dimension no se declaro.
+    int64_t alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t alloc_total = -1;   ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t stack_partial = -1; ///< @stack(partial: N).
+    int64_t stack_total = -1;   ///< @stack(total: N) o `@stack(N)`.
     bool any() const {
-        return pure || nothrow || nopanic || alloc >= 0 || stack >= 0;
+        return pure || nothrow || nopanic || alloc_partial >= 0 ||
+               alloc_total >= 0 || stack_partial >= 0 || stack_total >= 0;
     }
 };
 

@@ -211,6 +211,243 @@ static void apply_dist_config(runtime::VM *vm,
 /* forzar registro de virtual fns runtime (callbacks Vesta->C). */
 extern "C" void runtime_ensure_vx_callback_registered(void);
 
+// ---------------------------------------------------------------------------
+//  --analyze-write: escribir las anotaciones sugeridas al fichero analizado.
+//
+//  Parseo textual (el IR no lleva la posicion de la declaracion): recorre el
+//  fichero rastreando el nivel de llaves y el struct/class actual, y por cada
+//  declaracion de funcion o metodo cuya clave este en @p anot_por_clave,
+//  reemplaza las lineas de contrato que la preceden por las nuevas.  Preserva
+//  @Target/@Override/comentarios ///.  Solo toca lo DEFINIDO en este fichero
+//  (las funciones de imports no aparecen aqui).
+//
+//  Clave: funcion libre -> su nombre; metodo -> `Struct::metodo` (Struct sin
+//  los type-params, para casar con la clave `plantilla::metodo` del analisis).
+// ---------------------------------------------------------------------------
+static bool
+annotate_write_source(const std::string &path,
+                      const std::vector<std::string> &orden,
+                      const std::map<std::string, std::string> &display,
+                      const std::map<std::string, std::vector<std::string>>
+                          &anot_por_clave) {
+    (void)orden;
+    (void)display;
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        std::cerr << "[analyze-write] no se puede abrir: " << path << "\n";
+        return false;
+    }
+    std::vector<std::string> lin;
+    {
+        std::string l;
+        while (std::getline(in, l)) {
+            if (!l.empty() && l.back() == '\r') l.pop_back(); // CRLF
+            lin.push_back(std::move(l));
+        }
+    }
+    in.close();
+
+    auto trim = [](const std::string &s) {
+        size_t a = s.find_first_not_of(" \t");
+        if (a == std::string::npos) return std::string();
+        size_t b = s.find_last_not_of(" \t");
+        return s.substr(a, b - a + 1);
+    };
+    auto indent_de = [](const std::string &s) {
+        size_t a = s.find_first_not_of(" \t");
+        return (a == std::string::npos) ? std::string() : s.substr(0, a);
+    };
+    // Una linea de CONTRATO existente (a reemplazar): empieza por una de las
+    // anotaciones de huella/coste, o es continuacion multilinea de una de
+    // ellas (partial_/total_/when: sueltos).  @Target/@Override/// NO cuentan.
+    auto es_contrato = [&](const std::string &s) {
+        const std::string t = trim(s);
+        static const char *pref[] = {"@pure",  "@nothrow",    "@nopanic",
+                                     "@alloc", "@stack",      "@complexity",
+                                     "partial_pre:", "partial_post:",
+                                     "total_pre:",   "total_post:", "when:"};
+        for (const char *p : pref)
+            if (t.rfind(p, 0) == 0) return true;
+        return false;
+    };
+    // Nombre de un tipo-de-retorno plausible (primer token de una decl).  No
+    // hace falta ser exhaustivo: basta descartar palabras clave de sentencia.
+    auto es_palabra_sentencia = [](const std::string &w) {
+        static const std::set<std::string> kw = {
+            "return", "if", "while", "for", "do", "else", "match", "struct",
+            "class", "enum", "import", "namespace", "static_assert", "asm",
+            "break", "continue", "switch", "case", "concept", "using",
+            "typedef", "extern", "comptime"};
+        return kw.count(w) > 0;
+    };
+
+    // Detecta si `s` declara una funcion o metodo y devuelve su nombre; "" si
+    // no.  Heuristica: tiene `(`, el token justo antes del `(` es un
+    // identificador, hay al menos un token de tipo antes, y NO empieza por una
+    // palabra de sentencia.  El cuerpo (`{`) o el `=>` confirman la decl.
+    auto nombre_decl = [&](const std::string &s) -> std::string {
+        const std::string t = trim(s);
+        if (t.empty() || t[0] == '/' || t[0] == '@' || t[0] == '#') return "";
+        const size_t par = t.find('(');
+        if (par == std::string::npos) return "";
+        // El nombre es el identificador inmediatamente antes del '('.
+        size_t e = par;
+        while (e > 0 && (std::isspace((unsigned char)t[e - 1]))) --e;
+        size_t b = e;
+        while (b > 0 && (std::isalnum((unsigned char)t[b - 1]) ||
+                         t[b - 1] == '_'))
+            --b;
+        if (b == e) return "";
+        const std::string nombre = t.substr(b, e - b);
+        if (nombre.empty() ||
+            (!std::isalpha((unsigned char)nombre[0]) && nombre[0] != '_'))
+            return "";
+        // Debe haber algo ANTES del nombre (el tipo de retorno / modificadores)
+        // -> descarta llamadas `foo(...)`.  Y el primer token no puede ser una
+        // palabra de sentencia (`return foo(...)`, `if (...)`).
+        const std::string antes = trim(t.substr(0, b));
+        if (antes.empty()) return "";
+        std::string primero = antes;
+        size_t sp = primero.find_first_of(" \t");
+        if (sp != std::string::npos) primero = primero.substr(0, sp);
+        if (es_palabra_sentencia(primero)) return "";
+        // Confirma que parece una definicion: la linea acaba en `{`, `=>`, `;`
+        // (decl sin cuerpo) o el `(` abre parametros de una decl (heuristica:
+        // hay un `)` con `{`/`=>` cerca -- aceptamos si acaba en `{` o `=>` o
+        // contiene `) {` / `) =>`).
+        if (t.find("{") != std::string::npos ||
+            t.find("=>") != std::string::npos)
+            return nombre;
+        return ""; // p.ej. una llamada multilinea; conservador
+    };
+
+    // Una pasada del reescritor: recorre `src` rastreando llaves + la pila de
+    // struct/class, y sustituye los contratos que preceden a cada decl casada.
+    // Devuelve las lineas resultantes y cuantas decl se anotaron.
+    struct Ctx {
+        std::string nombre;
+        int nivel;
+    };
+    auto apply_once =
+        [&](const std::vector<std::string> &src)
+        -> std::pair<std::vector<std::string>, size_t> {
+        std::vector<Ctx> pila;
+        int nivel = 0;
+        std::string struct_pendiente; // visto `struct X` esperando su `{`
+        std::vector<std::string> out;
+        size_t reemplazos = 0;
+
+        for (const auto &l : src) {
+            const std::string t = trim(l);
+
+            // Apertura de struct/class: recordar el nombre hasta ver su `{`.
+            {
+                std::string kw;
+                if (t.rfind("struct ", 0) == 0) kw = t.substr(7);
+                else if (t.rfind("class ", 0) == 0) kw = t.substr(6);
+                else if (t.rfind("public struct ", 0) == 0) kw = t.substr(14);
+                else if (t.rfind("public class ", 0) == 0) kw = t.substr(13);
+                if (!kw.empty()) {
+                    size_t e = 0;
+                    while (e < kw.size() && (std::isalnum((unsigned char)kw[e]) ||
+                                             kw[e] == '_'))
+                        ++e;
+                    struct_pendiente = kw.substr(0, e);
+                }
+            }
+
+            // Declaracion de funcion/metodo?
+            const std::string nom = nombre_decl(l);
+            if (!nom.empty()) {
+                // Clave: metodo generico -> `Plantilla::metodo`; no generico ->
+                // mangled `Struct__metodo`.  Se prueban ambas formas.
+                auto it = anot_por_clave.end();
+                if (!pila.empty()) {
+                    const std::string &st = pila.back().nombre;
+                    it = anot_por_clave.find(st + "::" + nom);
+                    if (it == anot_por_clave.end())
+                        it = anot_por_clave.find(st + "__" + nom);
+                } else {
+                    it = anot_por_clave.find(nom);
+                }
+                // Fallback funcion libre: sufijo (namespace -> `ns__nom`).
+                if (it == anot_por_clave.end() && pila.empty()) {
+                    for (auto k = anot_por_clave.begin();
+                         k != anot_por_clave.end(); ++k) {
+                        const std::string &c = k->first;
+                        if (c.size() > nom.size() + 2 &&
+                            c.compare(c.size() - nom.size() - 2, nom.size() + 2,
+                                      "__" + nom) == 0) {
+                            it = k;
+                            break;
+                        }
+                    }
+                }
+                if (it != anot_por_clave.end()) {
+                    // Quitar los contratos ya emitidos (contiguos arriba).
+                    while (!out.empty() && es_contrato(out.back()))
+                        out.pop_back();
+                    const std::string ind = indent_de(l);
+                    for (const auto &a : it->second) out.push_back(ind + a);
+                    ++reemplazos;
+                }
+            }
+
+            out.push_back(l);
+
+            for (char c : l) {
+                if (c == '{') {
+                    if (!struct_pendiente.empty()) {
+                        pila.push_back({struct_pendiente, nivel});
+                        struct_pendiente.clear();
+                    }
+                    ++nivel;
+                } else if (c == '}') {
+                    --nivel;
+                    if (!pila.empty() && pila.back().nivel == nivel)
+                        pila.pop_back();
+                }
+            }
+        }
+        return {std::move(out), reemplazos};
+    };
+
+    auto pr = apply_once(lin);
+    const std::vector<std::string> &out = pr.first;
+    const size_t reemplazos = pr.second;
+
+    if (reemplazos == 0) {
+        std::cout << "[analyze-write] " << path
+                  << ": ninguna funcion/metodo de este fichero tenia contrato "
+                     "que actualizar (las de imports se anotan analizando su "
+                     "propio fichero).\n";
+        return true;
+    }
+
+    // Salvaguarda: aplicar el reescritor sobre su propia salida.  Si una 2a
+    // pasada la cambiaria, el mapeo texto->decl no es estable -> NO tocar el
+    // fichero (mejor abortar que corromperlo).
+    auto pr2 = apply_once(out);
+    if (pr2.first != out) {
+        std::cerr << "[analyze-write] " << path
+                  << ": el reescritor no es estable sobre su salida (posible "
+                     "decl ambigua); no se toca el fichero.\n";
+        return false;
+    }
+
+    std::ofstream ofs(path, std::ios::binary);
+    if (!ofs.is_open()) {
+        std::cerr << "[analyze-write] no se puede escribir: " << path << "\n";
+        return false;
+    }
+    for (const auto &l : out) ofs << l << "\n";
+    ofs.close();
+    std::cout << "[analyze-write] " << path << ": " << reemplazos
+              << " funcion(es)/metodo(s) anotados.  Re-ejecuta --analyze para "
+                 "verificar (0 discrepancias).\n";
+    return true;
+}
+
 int main(int argc, char *argv[]) {
 #if defined(WIN32) || defined(_WIN32) ||                                       \
     defined(__WIN32) && !defined(__CYGWIN__)
@@ -369,7 +606,13 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())(
             "analyze-json",
             "Con --analyze: emite el coste por funcion como JSON (para "
-            "consumir desde un renderer de diagramas) en vez de texto legible.")
+            "consumir desde un renderer de diagramas) en vez de texto legible.")(
+            "analyze-write",
+            "Con --analyze: ESCRIBE las anotaciones sugeridas al fichero "
+            "analizado (reemplaza las de contrato existentes de cada funcion/"
+            "metodo definido ahi).  Re-verifica antes de guardar; si algo no "
+            "cuadra, no toca el fichero.  Las funciones de imports no se tocan "
+            "(analiza ese fichero por separado).")
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1601,7 +1844,9 @@ int main(int argc, char *argv[]) {
         // propiedades EXACTAS/sound: allocs, stack, pure, throws, panics,
         // recursion.  Es tambien el resumen del codegen dirigido por resumenes.
         auto fps_post = analyze::compute_module_fingerprints(amod_post);
-        analyze::compose_fingerprints(fps_post);
+        // Pasar los contratos: las fn de marco opaco (`asm { }`) aportan su
+        // @stack DECLARADO al total de sus callers (su frame real no se ve).
+        analyze::compose_fingerprints(fps_post, &cr.contracts);
         auto find_fp = [&](const std::string &name)
             -> const analyze::FunctionFingerprint * {
             for (const auto &f : fps_post)
@@ -1794,10 +2039,17 @@ int main(int argc, char *argv[]) {
                           << analyze::cost_class_str(rp.total_class) << "\n";
             }
 
-            // Huella computacional (propiedades EXACTAS/sound).
+            // Huella computacional (propiedades EXACTAS/sound).  allocs y stack
+            // se muestran parcial/total (propio / cierre o pila peor caso).
             if (const auto *fp = find_fp(rp.function)) {
-                std::cout << "      Huella  : allocs=" << fp->alloc_sites_total
-                          << " stack=" << fp->stack_bytes << "B"
+                const std::string st_tot =
+                    fp->stack_bytes_total == analyze::STACK_UNBOUNDED
+                        ? std::string("inf")
+                        : std::to_string(fp->stack_bytes_total);
+                std::cout << "      Huella  : allocs=" << fp->alloc_sites << "/"
+                          << fp->alloc_sites_total
+                          << " stack=" << fp->stack_bytes << "/" << st_tot << "B"
+                          << " (parcial/total)"
                           << " pure=" << (fp->pure ? "si" : "no")
                           << " throws=" << (fp->throws_total ? "si" : "no")
                           << " panics=" << (fp->panics_total ? "si" : "no")
@@ -1940,7 +2192,11 @@ int main(int argc, char *argv[]) {
             struct FnData {
                 bool present = false;
                 std::string partial_pre, partial_post, total_pre, total_post;
-                uint64_t allocs = 0, stack = 0;
+                // @alloc y @stack en DOS dimensiones: parcial (propio) y total
+                // (cierre / pila peor caso).  stack_total = STACK_UNBOUNDED si
+                // no acotable (recursion/externo).
+                uint64_t alloc_partial = 0, alloc_total = 0;
+                uint64_t stack_partial = 0, stack_total = 0;
                 bool pure = false, throws = false, panics = false;
             };
             struct PorArch {
@@ -1957,6 +2213,11 @@ int main(int argc, char *argv[]) {
                 vx::CompileOptions o2;
                 o2.module_name = "main";
                 o2.opt_level = 2;
+                // IGUAL que el analisis principal: pedir tambien el IR PRE-opt.
+                // Sin esto, el POST se optimiza CON inline y el `partial` cuenta
+                // el cuerpo inlineado -> mide distinto que verify (que si usa el
+                // no-inline) y la sugerencia contradice la verificacion.
+                o2.emit_ir_preopt = true;
                 vx::CompileResult r2 =
                     vx::vx_source_has_imports(vx_source)
                         ? vx::compile_vx_project(vx_path, o2)
@@ -1975,6 +2236,8 @@ int main(int argc, char *argv[]) {
                     tabla.push_back(std::move(pa));
                     continue;
                 }
+                // POST-opt (sin inline, gracias a emit_ir_preopt): el `partial`
+                // es el cuerpo propio; el `total` lo compone el call-graph.
                 ir::IrModule m2;
                 if (!ir::parse_ir_module_cache(r2.ir_module_cache_bytes, m2)) {
                     pa.fallo = "no se pudo deserializar el IR";
@@ -1983,30 +2246,64 @@ int main(int argc, char *argv[]) {
                 }
                 analyze::ModuleCost c2 = analyze::analyze_module(m2);
                 analyze::compose_interproc(c2);
+                // PRE-opt (complejidad algoritmica del fuente).  Si falta, el
+                // pre cae al post (mejor mostrar algo que fallar).
+                ir::IrModule m2_pre;
+                analyze::ModuleCost c2_pre;
+                bool tiene_pre =
+                    !r2.ir_module_cache_bytes_preopt.empty() &&
+                    ir::parse_ir_module_cache(r2.ir_module_cache_bytes_preopt,
+                                              m2_pre);
+                if (tiene_pre) {
+                    c2_pre = analyze::analyze_module(m2_pre);
+                    analyze::compose_interproc(c2_pre);
+                }
+                auto find_c2 = [](const analyze::ModuleCost &m,
+                                  const std::string &nm)
+                    -> const analyze::CostResult * {
+                    for (const auto &f : m.functions)
+                        if (f.function == nm) return &f;
+                    return nullptr;
+                };
                 auto fp2 = analyze::compute_module_fingerprints(m2);
-                analyze::compose_fingerprints(fp2);
+                analyze::compose_fingerprints(fp2, &r2.contracts);
                 std::map<std::string, const analyze::FunctionFingerprint *> fpx;
                 for (const auto &f : fp2) fpx[f.function] = &f;
                 for (const auto &f : c2.functions) {
-                    std::string s = std::string(analyze::cost_class_str(f.big_o)) +
-                                    " / " +
-                                    analyze::cost_class_str(f.total_class);
+                    // Las 4 dimensiones, IGUAL que el analisis principal:
+                    //   partial_pre  = cuerpo propio, PRE-opt
+                    //   partial_post = cuerpo propio, POST-opt (sin inline)
+                    //   total_pre    = interproc, PRE-opt
+                    //   total_post   = interproc, POST-opt
+                    const analyze::CostResult *pre =
+                        tiene_pre ? find_c2(c2_pre, f.function) : nullptr;
                     FnData fd;
                     fd.present = true;
-                    fd.partial_pre = analyze::cost_class_str(f.big_o);
+                    fd.partial_pre = analyze::cost_class_str(
+                        pre ? pre->big_o : f.big_o);
                     fd.partial_post = analyze::cost_class_str(f.big_o);
-                    fd.total_pre = analyze::cost_class_str(f.total_class);
+                    fd.total_pre = analyze::cost_class_str(
+                        pre ? pre->total_class : f.total_class);
                     fd.total_post = analyze::cost_class_str(f.total_class);
+                    std::string s = fd.partial_post + " / " + fd.total_post;
                     auto it = fpx.find(f.function);
                     if (it != fpx.end()) {
                         const auto *h = it->second;
-                        fd.allocs = h->alloc_sites_total;
-                        fd.stack = h->stack_bytes;
+                        fd.alloc_partial = h->alloc_sites;
+                        fd.alloc_total = h->alloc_sites_total;
+                        fd.stack_partial = h->stack_bytes;
+                        fd.stack_total = h->stack_bytes_total;
                         fd.pure = h->pure;
                         fd.throws = h->throws_total;
                         fd.panics = h->panics_total;
-                        s += "  allocs=" + std::to_string(h->alloc_sites_total) +
-                             " stack=" + std::to_string(h->stack_bytes) + "B" +
+                        const std::string st_tot =
+                            h->stack_bytes_total == analyze::STACK_UNBOUNDED
+                                ? std::string("inf")
+                                : std::to_string(h->stack_bytes_total);
+                        s += "  allocs=" + std::to_string(h->alloc_sites) + "/" +
+                             std::to_string(h->alloc_sites_total) +
+                             " stack=" + std::to_string(h->stack_bytes) + "/" +
+                             st_tot + "B" +
                              " pure=" + (h->pure ? "si" : "no") +
                              " throws=" + (h->throws_total ? "si" : "no") +
                              " panics=" + (h->panics_total ? "si" : "no");
@@ -2169,14 +2466,11 @@ int main(int argc, char *argv[]) {
                     return ", when: " + w;
                 };
 
-                std::cout << "\nAnotaciones sugeridas.  Los contratos medidos "
-                             "que cada funcion deberia llevar; copialos delante "
-                             "de la definicion.\n";
-                std::cout
-                    << "=================================================="
-                       "===========\n";
+                // Para cada grupo, las lineas de anotacion (sin indentacion ni
+                // el comentario `//`), en un vector reutilizable: se imprimen a
+                // stdout Y, con --analyze-write, se insertan en el fichero.
+                std::map<std::string, std::vector<std::string>> anot_por_clave;
                 for (const auto &clave : orden_grupos) {
-                    // Reunir las combos del grupo y su universo (arch x tipo).
                     std::vector<Combo> combos;
                     std::set<std::string> all_archs, all_tcs;
                     for (const auto &inst : instancias[clave]) {
@@ -2194,24 +2488,24 @@ int main(int argc, char *argv[]) {
                         }
                     }
                     if (combos.empty()) continue;
-                    std::cout << "  // " << display[clave] << "\n";
 
-                    // Recorre las combos agrupando por el valor (string) que da
-                    // `get`, y emite una linea por valor con su `when:` minimo.
+                    std::vector<std::string> lineas; // "@nothrow", "@stack(...)"...
+
                     auto emitir =
                         [&](const std::function<std::string(const FnData &)> &get,
-                            const std::function<void(const std::string &,
-                                                     const std::string &)> &linea) {
+                            const std::function<std::string(const std::string &,
+                                                            const std::string &)>
+                                &render) {
                             std::map<std::string, std::vector<const Combo *>> porv;
                             for (const auto &c : combos)
                                 porv[get(*c.d)].push_back(&c);
                             for (const auto &kv : porv)
-                                linea(kv.first,
-                                      when_de(kv.second, all_archs, all_tcs));
+                                lineas.push_back(render(
+                                    kv.first,
+                                    when_de(kv.second, all_archs, all_tcs)));
                         };
 
-                    // Flags (@pure/@nothrow/@nopanic): se declaran donde la
-                    // propiedad se CUMPLE.
+                    // Flags (@pure/@nothrow/@nopanic): donde la prop se CUMPLE.
                     auto flag = [&](const char *nombre,
                                     const std::function<bool(const FnData &)> &p) {
                         std::vector<const Combo *> sel;
@@ -2220,28 +2514,50 @@ int main(int argc, char *argv[]) {
                         if (sel.empty()) return;
                         std::string w = when_de(sel, all_archs, all_tcs);
                         if (w.empty())
-                            std::cout << "  @" << nombre << "\n";
-                        else // el flag no lleva argumentos: `, when:` -> `(when:`
-                            std::cout << "  @" << nombre << "("
-                                      << w.substr(2) << ")\n";
+                            lineas.push_back(std::string("@") + nombre);
+                        else // el flag no lleva N: `, when:` -> `(when:`
+                            lineas.push_back(std::string("@") + nombre + "(" +
+                                             w.substr(2) + ")");
                     };
                     flag("pure", [](const FnData &d) { return d.pure; });
                     flag("nothrow", [](const FnData &d) { return !d.throws; });
                     flag("nopanic", [](const FnData &d) { return !d.panics; });
 
+                    // @alloc/@stack en dos dimensiones: agrupa por el par
+                    // (parcial,total) y emite forma corta `@X(N)` cuando
+                    // parcial==total (N=total, el peor caso), o nombrada
+                    // `@X(partial: P, total: T)` cuando difieren.  Un total no
+                    // acotable (pila con recursion) se emite solo con parcial.
                     auto num = [&](const char *nombre,
-                                   const std::function<uint64_t(const FnData &)> &g) {
-                        emitir([&](const FnData &d) { return std::to_string(g(d)); },
-                               [&](const std::string &v, const std::string &w) {
-                                   std::cout << "  @" << nombre << "(" << v << w
-                                             << ")\n";
-                               });
+                                   const std::function<uint64_t(const FnData &)> &gp,
+                                   const std::function<uint64_t(const FnData &)> &gt) {
+                        emitir(
+                            [&](const FnData &d) {
+                                return std::to_string(gp(d)) + "|" +
+                                       std::to_string(gt(d));
+                            },
+                            [&](const std::string &v, const std::string &w) {
+                                const size_t bar = v.find('|');
+                                const std::string ps = v.substr(0, bar);
+                                const std::string ts = v.substr(bar + 1);
+                                const uint64_t p = std::stoull(ps);
+                                const uint64_t t = std::stoull(ts);
+                                std::string dims;
+                                if (t == analyze::STACK_UNBOUNDED)
+                                    dims = "partial: " + ps; // total no acotable
+                                else if (p == t)
+                                    dims = ts; // forma corta = total
+                                else
+                                    dims = "partial: " + ps + ", total: " + ts;
+                                return std::string("@") + nombre + "(" + dims + w +
+                                       ")";
+                            });
                     };
-                    num("alloc", [](const FnData &d) { return d.allocs; });
-                    num("stack", [](const FnData &d) { return d.stack; });
+                    num("alloc", [](const FnData &d) { return d.alloc_partial; },
+                        [](const FnData &d) { return d.alloc_total; });
+                    num("stack", [](const FnData &d) { return d.stack_partial; },
+                        [](const FnData &d) { return d.stack_total; });
 
-                    // @complexity: las 4 dimensiones como una tupla (no partir
-                    // un contrato coherente).
                     emitir(
                         [](const FnData &d) {
                             return d.partial_pre + "|" + d.partial_post + "|" +
@@ -2256,14 +2572,36 @@ int main(int argc, char *argv[]) {
                                 p = q + 1;
                             }
                             dim.push_back(t.substr(p));
-                            if (dim.size() == 4)
-                                std::cout << "  @complexity(partial_pre: "
-                                          << dim[0] << ", partial_post: "
-                                          << dim[1] << ", total_pre: " << dim[2]
-                                          << ", total_post: " << dim[3] << w
-                                          << ")\n";
+                            if (dim.size() != 4) return std::string();
+                            return "@complexity(partial_pre: " + dim[0] +
+                                   ", partial_post: " + dim[1] +
+                                   ", total_pre: " + dim[2] +
+                                   ", total_post: " + dim[3] + w + ")";
                         });
-                    std::cout << "\n";
+
+                    anot_por_clave[clave] = std::move(lineas);
+                }
+
+                // --analyze-write: reescribir el fichero analizado.  Si no,
+                // imprimir las anotaciones para copiar/pegar o inspeccionar.
+                if (result.count("analyze-write")) {
+                    if (!annotate_write_source(vx_path, orden_grupos, display,
+                                               anot_por_clave))
+                        return EXIT_FAILURE;
+                } else {
+                    std::cout << "\nAnotaciones sugeridas.  Los contratos medidos"
+                                 " que cada funcion deberia llevar; copialos "
+                                 "delante de la definicion.\n";
+                    std::cout << "==========================================="
+                                 "==================\n";
+                    for (const auto &clave : orden_grupos) {
+                        auto it = anot_por_clave.find(clave);
+                        if (it == anot_por_clave.end()) continue;
+                        std::cout << "  // " << display[clave] << "\n";
+                        for (const auto &l : it->second)
+                            std::cout << "  " << l << "\n";
+                        std::cout << "\n";
+                    }
                 }
             }
         }

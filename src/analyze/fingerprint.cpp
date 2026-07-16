@@ -5,6 +5,7 @@
  */
 #include "analyze/fingerprint.h"
 
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -180,6 +181,13 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn) {
                 fp.has_dynamic_call = true;
                 fp.pure_local = false; // efecto opaco.
                 break;
+            case Op::INLINE_ASM:
+                // `asm { }` nativo: los register()+asm no son ALLOCAs, asi que
+                // el marco de pila real NO se ve en el IR.  Marca opaco: el
+                // TOTAL de sus callers usara el @stack DECLARADO de esta fn.
+                fp.frame_opaque = true;
+                fp.pure_local = false; // efecto opaco.
+                break;
             default:
                 // Cualquier op no-pura y no-CALL rompe la pureza local.
                 if (!is_pure_op(ins.op)) fp.pure_local = false;
@@ -207,12 +215,46 @@ compute_module_fingerprints(const ir::IrModule &mod) {
     return out;
 }
 
-void compose_fingerprints(std::vector<FunctionFingerprint> &fps) {
+void compose_fingerprints(
+    std::vector<FunctionFingerprint> &fps,
+    const std::unordered_map<std::string, FunctionContracts> *contracts) {
     const size_t n = fps.size();
     if (n == 0) return;
     std::unordered_map<std::string, uint32_t> idx;
     idx.reserve(n * 2 + 1);
     for (uint32_t i = 0; i < n; ++i) idx.emplace(fps[i].function, i);
+
+    // Marco de pila PROPIO a efectos del TOTAL: normalmente el medido
+    // (`stack_bytes`), pero para una fn de marco OPACO (`asm { }`, cuyo frame
+    // no se ve en el IR) se usa su @stack DECLARADO -- asi el total de sus
+    // callers refleja la pila real de la primitiva de asm.  No toca el parcial
+    // medido (la verificacion del parcial sigue siendo cota superior sobre 0).
+    auto frame_para_total = [&](uint32_t v) -> uint64_t {
+        const auto &f = fps[v];
+        if (f.frame_opaque && contracts) {
+            // El contrato se declara con el nombre SIMPLE (`vx_atomic_cas64`)
+            // pero el IR trae la fn mangled por modulo (`vx_atomic__vx_atomic_
+            // cas64`).  Se prueba el completo y luego el simple (ultimo `__`).
+            const FunctionContracts *c = nullptr;
+            auto it = contracts->find(f.function);
+            if (it != contracts->end()) {
+                c = &it->second;
+            } else {
+                const size_t p = f.function.rfind("__");
+                if (p != std::string::npos) {
+                    auto it2 = contracts->find(f.function.substr(p + 2));
+                    if (it2 != contracts->end()) c = &it2->second;
+                }
+            }
+            if (c) {
+                if (c->stack_partial >= 0)
+                    return static_cast<uint64_t>(c->stack_partial);
+                if (c->stack_total >= 0)
+                    return static_cast<uint64_t>(c->stack_total);
+            }
+        }
+        return f.stack_bytes;
+    };
 
     // Para cada funcion, DFS del cierre transitivo por el callgraph estatico.
     // O(F*(V+E)) -- aceptable para tamanos de modulo tipicos.
@@ -258,10 +300,61 @@ void compose_fingerprints(std::vector<FunctionFingerprint> &fps) {
         // Pura sii TODA funcion alcanzable es localmente pura Y conocemos todos
         // los efectos (sin dinamica ni externos no resueltos).
         fps[i].pure = all_pure_local && known;
-        // stack_bytes_total: por ahora el frame propio (la agregacion por
-        // camino mas profundo es un refinamiento posterior).
-        fps[i].stack_bytes_total = fps[i].stack_bytes;
     }
+
+    // stack_bytes_total = profundidad de pila PEOR CASO = frame propio + el
+    // MAXIMO de los callees (la cadena de llamadas mas honda), NO la suma del
+    // conjunto alcanzable (a diferencia de alloc_total): la pila se libera al
+    // volver, asi que solo importa el camino mas profundo.  Un ciclo del
+    // callgraph (recursion) o un callee externo hacen la profundidad NO
+    // acotable -> sentinela STACK_UNBOUNDED, que verify trata como
+    // inverificable.  DFS post-orden ITERATIVO (pila explicita, NO recursion
+    // de C++: un modulo con una cadena de llamadas muy honda -- p.ej. codigo
+    // generado en comptime -- desbordaria la pila del proceso).  Gris (en
+    // pila) = deteccion de ciclo (arista de vuelta).
+    std::vector<uint64_t> memo(n, 0);
+    std::vector<char> st(n, 0); // 0=blanco, 1=gris (en pila), 2=negro (hecho)
+    // Cada marco: (nodo, fase).  fase 0 = ENTRAR (marcar gris + apilar hijos);
+    // fase 1 = SALIR (todos los hijos hechos -> componer el maximo).
+    std::vector<std::pair<uint32_t, uint8_t>> dfs;
+    dfs.reserve(n);
+    for (uint32_t s = 0; s < n; ++s) {
+        if (st[s] != 0) continue;
+        dfs.push_back({s, 0});
+        while (!dfs.empty()) {
+            const uint32_t v = dfs.back().first;
+            const uint8_t fase = dfs.back().second;
+            if (fase == 0) {
+                if (st[v] == 2) { dfs.pop_back(); continue; }
+                st[v] = 1;            // gris (en pila)
+                dfs.back().second = 1; // al desapilar, componer
+                for (const auto &callee : fps[v].calls) {
+                    auto it = idx.find(callee);
+                    if (it == idx.end()) continue; // externo -> se ve en SALIR
+                    const uint32_t j = it->second;
+                    if (st[j] == 0) dfs.push_back({j, 0});
+                }
+            } else {
+                dfs.pop_back();
+                uint64_t best = 0; // maximo de los callees
+                for (const auto &callee : fps[v].calls) {
+                    auto it = idx.find(callee);
+                    if (it == idx.end()) { best = STACK_UNBOUNDED; break; }
+                    const uint32_t j = it->second;
+                    // Callee gris = arista de vuelta (ciclo); negro = hecho.
+                    const uint64_t d =
+                        (st[j] == 1) ? STACK_UNBOUNDED : memo[j];
+                    if (d == STACK_UNBOUNDED) { best = STACK_UNBOUNDED; break; }
+                    if (d > best) best = d;
+                }
+                memo[v] = (best == STACK_UNBOUNDED)
+                              ? STACK_UNBOUNDED
+                              : frame_para_total(v) + best;
+                st[v] = 2; // negro (hecho)
+            }
+        }
+    }
+    for (uint32_t i = 0; i < n; ++i) fps[i].stack_bytes_total = memo[i];
 }
 
 std::vector<ContractCheck> verify_contracts(
@@ -372,11 +465,20 @@ std::vector<ContractCheck> verify_contracts(
             else
                 add("@nopanic", St::UNVERIFIABLE, "efectos desconocidos");
         }
-        // @alloc(N): si hay AL MENOS mas de N sitios conocidos -> VIOLATED.
-        if (c.alloc >= 0) {
+        // @alloc: PARCIAL = sitios PROPIOS (exacto); TOTAL = cierre alcanzable
+        // (conservador si hay efectos desconocidos).  Se declara cualquiera de
+        // las dos (o ambas).  La forma corta `@alloc(N)` fija el TOTAL.
+        if (c.alloc_partial >= 0) {
+            const uint64_t got = fp.alloc_sites;
+            const uint64_t want = static_cast<uint64_t>(c.alloc_partial);
+            std::string d = "parcial: esperado <=" + std::to_string(want) +
+                            ", inferido " + std::to_string(got) + " (propio)";
+            add("@alloc", got > want ? St::VIOLATED : St::OK, std::move(d));
+        }
+        if (c.alloc_total >= 0) {
             const uint64_t got = fp.alloc_sites_total;
-            const uint64_t want = static_cast<uint64_t>(c.alloc);
-            std::string d = "esperado <=" + std::to_string(want) +
+            const uint64_t want = static_cast<uint64_t>(c.alloc_total);
+            std::string d = "total: esperado <=" + std::to_string(want) +
                             ", inferido " + std::to_string(got);
             if (got > want)
                 add("@alloc", St::VIOLATED, std::move(d));
@@ -386,13 +488,30 @@ std::vector<ContractCheck> verify_contracts(
                 add("@alloc", St::UNVERIFIABLE,
                     d + " (mas posibles: efectos desconocidos)");
         }
-        // @stack(N): el frame PROPIO es exacto -> verificable siempre.
-        if (c.stack >= 0) {
+        // @stack: PARCIAL = frame PROPIO (exacto, siempre verificable); TOTAL =
+        // profundidad de pila peor caso del arbol de llamadas.  Si el total no
+        // es acotable (recursion/callee externo) queda INVERIFICABLE.  Forma
+        // corta `@stack(N)` = TOTAL.
+        if (c.stack_partial >= 0) {
             const uint64_t got = fp.stack_bytes;
-            const uint64_t want = static_cast<uint64_t>(c.stack);
-            std::string d = "esperado <=" + std::to_string(want) + "B, inferido " +
-                            std::to_string(got) + "B (frame propio)";
+            const uint64_t want = static_cast<uint64_t>(c.stack_partial);
+            std::string d = "parcial: esperado <=" + std::to_string(want) +
+                            "B, inferido " + std::to_string(got) +
+                            "B (frame propio)";
             add("@stack", got > want ? St::VIOLATED : St::OK, std::move(d));
+        }
+        if (c.stack_total >= 0) {
+            const uint64_t got = fp.stack_bytes_total;
+            const uint64_t want = static_cast<uint64_t>(c.stack_total);
+            if (got == STACK_UNBOUNDED)
+                add("@stack", St::UNVERIFIABLE,
+                    "total: no acotable (recursion o callee externo)");
+            else {
+                std::string d = "total: esperado <=" + std::to_string(want) +
+                                "B, inferido " + std::to_string(got) +
+                                "B (peor caso de pila)";
+                add("@stack", got > want ? St::VIOLATED : St::OK, std::move(d));
+            }
         }
         } // for targets
     }

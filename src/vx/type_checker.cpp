@@ -484,14 +484,18 @@ void TypeChecker::resolve_pending_complexity_(ast::ClassMethodDecl &nm,
         base.nothrow_ = nm.contract_nothrow ? 1 : -1;
         base.nopanic = nm.contract_nopanic ? 1 : -1;
         base.alloc = nm.contract_alloc;
+        base.alloc_partial = nm.contract_alloc_partial;
         base.stack = nm.contract_stack;
+        base.stack_partial = nm.contract_stack_partial;
         cwhen::ResolvedFP r;
         cwhen::resolve_footprint(m.footprint_pending, base, ev, err, r);
         nm.contract_pure = (r.pure == 1);
         nm.contract_nothrow = (r.nothrow_ == 1);
         nm.contract_nopanic = (r.nopanic == 1);
         nm.contract_alloc = r.alloc;
+        nm.contract_alloc_partial = r.alloc_partial;
         nm.contract_stack = r.stack;
+        nm.contract_stack_partial = r.stack_partial;
     }
 }
 
@@ -584,7 +588,9 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         nm->contract_nothrow = m->contract_nothrow;
         nm->contract_nopanic = m->contract_nopanic;
         nm->contract_alloc = m->contract_alloc;
+        nm->contract_alloc_partial = m->contract_alloc_partial;
         nm->contract_stack = m->contract_stack;
+        nm->contract_stack_partial = m->contract_stack_partial;
         nm->complexity_expr = m->complexity_expr;
         nm->complexity_vars = m->complexity_vars;
         nm->complexity_partial_pre = m->complexity_partial_pre;
@@ -822,7 +828,9 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         nm->contract_nothrow = m->contract_nothrow;
         nm->contract_nopanic = m->contract_nopanic;
         nm->contract_alloc = m->contract_alloc;
+        nm->contract_alloc_partial = m->contract_alloc_partial;
         nm->contract_stack = m->contract_stack;
+        nm->contract_stack_partial = m->contract_stack_partial;
         nm->complexity_expr = m->complexity_expr;
         nm->complexity_vars = m->complexity_vars;
         nm->complexity_partial_pre = m->complexity_partial_pre;
@@ -1417,14 +1425,18 @@ void resolve_fp_sin_tipos(Decl &m, Diagnostics &diags) {
     base.nothrow_ = m.contract_nothrow ? 1 : -1;
     base.nopanic = m.contract_nopanic ? 1 : -1;
     base.alloc = m.contract_alloc;
+    base.alloc_partial = m.contract_alloc_partial;
     base.stack = m.contract_stack;
+    base.stack_partial = m.contract_stack_partial;
     cwhen::ResolvedFP r;
     cwhen::resolve_footprint(m.footprint_pending, base, ev, err, r);
     m.contract_pure = (r.pure == 1);
     m.contract_nothrow = (r.nothrow_ == 1);
     m.contract_nopanic = (r.nopanic == 1);
     m.contract_alloc = r.alloc;
+    m.contract_alloc_partial = r.alloc_partial;
     m.contract_stack = r.stack;
+    m.contract_stack_partial = r.stack_partial;
     m.footprint_pending.clear();
 }
 } // namespace

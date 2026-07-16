@@ -2520,8 +2520,10 @@ CompileResult compile_vx_project(
                         c.pure = fd->contract_pure;
                         c.nothrow = fd->contract_nothrow;
                         c.nopanic = fd->contract_nopanic;
-                        c.alloc = fd->contract_alloc;
-                        c.stack = fd->contract_stack;
+                        c.alloc_total = fd->contract_alloc;
+                        c.alloc_partial = fd->contract_alloc_partial;
+                        c.stack_total = fd->contract_stack;
+                        c.stack_partial = fd->contract_stack_partial;
                         if (c.any()) res.contracts[fd->name] = c;
                     }
                     // Metodos de struct/clase: mismo contrato sobre lo mismo.
@@ -2537,8 +2539,10 @@ CompileResult compile_vx_project(
                                 c.pure = m->contract_pure;
                                 c.nothrow = m->contract_nothrow;
                                 c.nopanic = m->contract_nopanic;
-                                c.alloc = m->contract_alloc;
-                                c.stack = m->contract_stack;
+                                c.alloc_total = m->contract_alloc;
+                                c.alloc_partial = m->contract_alloc_partial;
+                                c.stack_total = m->contract_stack;
+                                c.stack_partial = m->contract_stack_partial;
                                 if (c.any())
                                     res.contracts[tipo + "__" + m->name] = c;
                             }
@@ -2565,22 +2569,30 @@ CompileResult compile_vx_project(
 
         if (!res.contracts.empty()) {
             auto fps = analyze::compute_module_fingerprints(merged);
-            analyze::compose_fingerprints(fps);
-            auto checks = analyze::verify_contracts(fps, res.contracts);
-            bool violated = false;
-            for (const auto &ck : checks) {
-                if (ck.status != analyze::ContractCheck::VIOLATED) continue;
-                SourceLoc loc;
-                loc.file = root_path;
-                res.diagnostics.error(std::move(loc),
-                                      "contrato " + ck.contract +
-                                          " incumplido en '" + ck.function +
-                                          "': " + ck.detail);
-                violated = true;
-            }
-            if (violated) {
-                res.ok = false;
-                return res;
+            analyze::compose_fingerprints(fps, &res.contracts);
+            // En modo --analyze (`emit_ir_preopt`) una violacion NO se emite
+            // como error ni aborta: analyze mide y ensena (el reporte muestra
+            // la discrepancia aparte), no construye.  Si emitiera el error, la
+            // matriz por-arch marcaria fallo justo en el arch que hay que
+            // mostrar para corregirlo.  El build real (`--vesta`, sin
+            // emit_ir_preopt) SI emite el error y aborta.
+            if (!opts.emit_ir_preopt) {
+                auto checks = analyze::verify_contracts(fps, res.contracts);
+                bool violated = false;
+                for (const auto &ck : checks) {
+                    if (ck.status != analyze::ContractCheck::VIOLATED) continue;
+                    SourceLoc loc;
+                    loc.file = root_path;
+                    res.diagnostics.error(std::move(loc),
+                                          "contrato " + ck.contract +
+                                              " incumplido en '" + ck.function +
+                                              "': " + ck.detail);
+                    violated = true;
+                }
+                if (violated) {
+                    res.ok = false;
+                    return res;
+                }
             }
         }
     }

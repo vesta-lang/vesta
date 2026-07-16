@@ -544,8 +544,10 @@ class Parser {
         bool pure = false;
         bool nothrow_ = false;
         bool nopanic = false;
-        int64_t alloc = -1;
-        int64_t stack = -1;
+        int64_t alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+        int64_t alloc_partial = -1; ///< @alloc(partial: N).
+        int64_t stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+        int64_t stack_partial = -1; ///< @stack(partial: N).
         std::string complexity_expr;
         std::vector<std::string> complexity_vars;
         std::string partial_pre, partial_post, total_pre, total_post;
@@ -585,6 +587,23 @@ class Parser {
     /// consumir-- el `)` de nivel 0, respetando los parentesis de un predicado
     /// (`is_float<T>()`).  Devuelve "" y reporta si esta mal formado.
     std::string read_footprint_when_();
+
+    /// @brief Dimensiones parseadas de un `@alloc`/`@stack`.
+    ///
+    /// La forma corta `@alloc(N)` fija @c total (el peor caso que importa desde
+    /// fuera); la nombrada `@alloc(partial: N, total: M)` fija lo que liste.
+    /// -1 = esa dimension no se declaro.  @c when vacio = sin `when:`.
+    struct FootprintDims {
+        int64_t partial = -1;
+        int64_t total = -1;
+        std::string when;
+    };
+
+    /// @brief Parsea el contenido de `@alloc(...)`/`@stack(...)` TRAS consumir el
+    ///        `(` y hasta --sin consumir-- el `)`.  Acepta la forma corta
+    ///        (un entero -> total) y la nombrada (`partial:`/`total:`), con un
+    ///        `when:` opcional al final.  @p nm es "alloc"/"stack" (mensajes).
+    FootprintDims parse_footprint_dims_(const std::string &nm);
 
     /// @brief Consume las anotaciones de contrato que preceden a un miembro.
     /// @param out se rellena con lo declarado; @c out.any dice si habia alguna.

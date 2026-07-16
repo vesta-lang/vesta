@@ -73,8 +73,10 @@ static void collect_contracts_(
             c.pure = fd->contract_pure;
             c.nothrow = fd->contract_nothrow;
             c.nopanic = fd->contract_nopanic;
-            c.alloc = fd->contract_alloc;
-            c.stack = fd->contract_stack;
+            c.alloc_total = fd->contract_alloc;
+            c.alloc_partial = fd->contract_alloc_partial;
+            c.stack_total = fd->contract_stack;
+            c.stack_partial = fd->contract_stack_partial;
             if (c.any()) out[fd->name] = c;
         }
         // Metodos de struct/clase: el mismo contrato sobre lo mismo.  Un metodo
@@ -91,8 +93,10 @@ static void collect_contracts_(
                     c.pure = m->contract_pure;
                     c.nothrow = m->contract_nothrow;
                     c.nopanic = m->contract_nopanic;
-                    c.alloc = m->contract_alloc;
-                    c.stack = m->contract_stack;
+                    c.alloc_total = m->contract_alloc;
+                    c.alloc_partial = m->contract_alloc_partial;
+                    c.stack_total = m->contract_stack;
+                    c.stack_partial = m->contract_stack_partial;
                     if (c.any()) out[tipo + "__" + m->name] = c;
                 }
             };
@@ -1046,22 +1050,27 @@ CompileResult compile_vx_source(const std::string &source,
         collect_contracts_(mod->decls, res.contracts);
         if (!res.contracts.empty()) {
             auto fps = analyze::compute_module_fingerprints(irmod);
-            analyze::compose_fingerprints(fps);
-            auto checks = analyze::verify_contracts(fps, res.contracts);
-            bool violated = false;
-            for (const auto &ck : checks) {
-                if (ck.status != analyze::ContractCheck::VIOLATED) continue;
-                SourceLoc loc;
-                loc.file = filename;
-                res.diagnostics.error(std::move(loc),
-                                      "contrato " + ck.contract +
-                                          " incumplido en '" + ck.function +
-                                          "': " + ck.detail);
-                violated = true;
-            }
-            if (violated) {
-                res.ok = false;
-                return res;
+            analyze::compose_fingerprints(fps, &res.contracts);
+            // En --analyze (`emit_ir_preopt`) NO se emite el error ni se aborta
+            // (ver la nota en compiler_project.cpp): analyze mide, el build real
+            // enforça.
+            if (!opts.emit_ir_preopt) {
+                auto checks = analyze::verify_contracts(fps, res.contracts);
+                bool violated = false;
+                for (const auto &ck : checks) {
+                    if (ck.status != analyze::ContractCheck::VIOLATED) continue;
+                    SourceLoc loc;
+                    loc.file = filename;
+                    res.diagnostics.error(std::move(loc),
+                                          "contrato " + ck.contract +
+                                              " incumplido en '" + ck.function +
+                                              "': " + ck.detail);
+                    violated = true;
+                }
+                if (violated) {
+                    res.ok = false;
+                    return res;
+                }
             }
         }
         // Contratos de TIPO (@pod/@no_heap/@size): recoger + computar la huella

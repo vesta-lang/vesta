@@ -388,7 +388,7 @@ void resolve_footprint(const std::vector<ast::PendingFootprint> &decls,
         bool escrito = false;
         std::string por;
     };
-    Campo cpure, cnothrow, cnopanic, calloc, cstack;
+    Campo cpure, cnothrow, cnopanic, calloc, calloc_p, cstack, cstack_p;
 
     // Aplica un campo de un pending que ha casado: si nadie lo habia escrito con
     // un `when:`, gana sobre el default; si ya lo escribio otro `when:`, decide
@@ -447,8 +447,14 @@ void resolve_footprint(const std::vector<ast::PendingFootprint> &decls,
                     [&] { out.nopanic = d.nopanic; });
         if (d.alloc >= 0)
             aplicar(calloc, d.when, "alloc", [&] { out.alloc = d.alloc; });
+        if (d.alloc_partial >= 0)
+            aplicar(calloc_p, d.when, "alloc",
+                    [&] { out.alloc_partial = d.alloc_partial; });
         if (d.stack >= 0)
             aplicar(cstack, d.when, "stack", [&] { out.stack = d.stack; });
+        if (d.stack_partial >= 0)
+            aplicar(cstack_p, d.when, "stack",
+                    [&] { out.stack_partial = d.stack_partial; });
     }
 }
 

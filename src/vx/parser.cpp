@@ -948,31 +948,21 @@ void Parser::parse_member_contracts_(MemberContracts &out) {
             const std::string abre =
                 "se esperaba '(' tras @" + nm + " (usa @" + nm + "(N))";
             (void)expect(TokenKind::LPAREN, abre.c_str());
-            int64_t v = -1;
-            if (current_.kind != TokenKind::INT_LIT) {
-                const std::string msg = "@" + nm + "(N) requiere un entero literal";
-                error_here(msg.c_str());
-            } else {
-                v = static_cast<int64_t>(consume().int_val);
-            }
-            std::string when;
-            if (current_.kind == TokenKind::COMMA) {
-                (void)consume(); // ','
-                when = read_footprint_when_();
-            }
-            const std::string cierra = "se esperaba ')' al cerrar @" + nm + "(N)";
+            const FootprintDims d = parse_footprint_dims_(nm);
+            const std::string cierra = "se esperaba ')' al cerrar @" + nm;
             (void)expect(TokenKind::RPAREN, cierra.c_str());
-            if (v >= 0) {
-                if (when.empty()) {
-                    if (nm == "alloc") out.alloc = v;
-                    else out.stack = v;
-                } else {
-                    ast::PendingFootprint pf;
-                    pf.when = when;
-                    if (nm == "alloc") pf.alloc = v;
-                    else pf.stack = v;
-                    out.footprint_pending.push_back(std::move(pf));
-                }
+            const bool es_alloc = (nm == "alloc");
+            if (d.when.empty()) {
+                if (d.total >= 0) (es_alloc ? out.alloc : out.stack) = d.total;
+                if (d.partial >= 0)
+                    (es_alloc ? out.alloc_partial : out.stack_partial) =
+                        d.partial;
+            } else {
+                ast::PendingFootprint pf;
+                pf.when = d.when;
+                if (es_alloc) { pf.alloc = d.total; pf.alloc_partial = d.partial; }
+                else { pf.stack = d.total; pf.stack_partial = d.partial; }
+                out.footprint_pending.push_back(std::move(pf));
             }
         } else {
             // TODOS los @complexity van a la lista, tambien el que no lleva
@@ -997,7 +987,9 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
     m.contract_nothrow = mc.nothrow_;
     m.contract_nopanic = mc.nopanic;
     m.contract_alloc = mc.alloc;
+    m.contract_alloc_partial = mc.alloc_partial;
     m.contract_stack = mc.stack;
+    m.contract_stack_partial = mc.stack_partial;
     // Los @complexity van sin resolver: hay que verlos TODOS a la vez para
     // aplicar la prioridad por especificidad, y para un metodo generico el
     // ultimo dato (T) no llega hasta la monomorphizacion.  Los campos resueltos
@@ -1027,6 +1019,66 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
 //  anotacion en el sitio: aguas abajo (AST, huella, verificador) todo sigue
 //  viendo un solo contrato, el que aplica.  Sin `when:` -> aplica siempre.
 // ---------------------------------------------------------------------------
+Parser::FootprintDims Parser::parse_footprint_dims_(const std::string &nm) {
+    // Se entra TRAS el `(`; se sale con current_ en el `)` (el caller lo cierra).
+    FootprintDims d;
+    auto leer_int = [&](const char *que) -> int64_t {
+        if (current_.kind != TokenKind::INT_LIT) {
+            error_here((std::string("@") + nm + ": " + que +
+                        " requiere un entero literal")
+                           .c_str());
+            return -1;
+        }
+        const int64_t v = static_cast<int64_t>(consume().int_val);
+        if (v < 0) {
+            error_here((std::string("@") + nm + ": N debe ser >= 0").c_str());
+            return -1;
+        }
+        return v;
+    };
+    // Forma corta: un entero suelto -> TOTAL (el peor caso que importa fuera).
+    if (current_.kind == TokenKind::INT_LIT) {
+        d.total = leer_int("N");
+    } else {
+        // Forma nombrada: uno o mas `partial: N` / `total: N` por coma.
+        while (current_.kind == TokenKind::IDENTIFIER &&
+               (current_.lexeme == "partial" || current_.lexeme == "total")) {
+            const std::string campo = current_.lexeme;
+            (void)consume(); // 'partial'/'total'
+            (void)expect(TokenKind::COLON,
+                         (std::string("se esperaba ':' tras '") + campo +
+                          "' en @" + nm)
+                             .c_str());
+            const int64_t v = leer_int(campo.c_str());
+            if (campo == "partial") d.partial = v;
+            else d.total = v;
+            if (current_.kind == TokenKind::COMMA) {
+                // Puede ser separador entre dims O el inicio del `when:`.  Si lo
+                // que sigue NO es otra dim, se deja la coma para el `when:`.
+                // Peek: consumir la coma solo si tras ella hay otra dim.
+                (void)consume(); // ','
+            } else {
+                break;
+            }
+        }
+    }
+    // `when:` opcional (tras una coma ya consumida en la forma nombrada, o una
+    // coma nueva en la forma corta).
+    if (current_.kind == TokenKind::COMMA) {
+        (void)consume(); // ','
+        d.when = read_footprint_when_();
+    } else if (current_.kind == TokenKind::IDENTIFIER &&
+               current_.lexeme == "when") {
+        d.when = read_footprint_when_();
+    }
+    if (d.partial < 0 && d.total < 0)
+        error_here(
+            (std::string("@") + nm +
+             ": declara al menos una dimension (N, partial: N o total: N)")
+                .c_str());
+    return d;
+}
+
 std::string Parser::read_footprint_when_() {
     // current_ debe ser el identificador `when`.
     if (current_.kind != TokenKind::IDENTIFIER || current_.lexeme != "when") {
@@ -1388,6 +1440,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // arriba (el default).
     std::vector<ast::PendingFootprint> top_footprint_pending;
     int64_t top_c_alloc = -1, top_c_stack = -1;
+    int64_t top_c_alloc_partial = -1, top_c_stack_partial = -1;
     // Contratos de TIPO (struct/clase/enum): @pod / @no_heap / @size(N).
     bool top_t_pod = false, top_t_no_heap = false;
     int64_t top_t_size = -1;
@@ -1562,42 +1615,30 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             // Contratos con argumento entero: @alloc(N) / @stack(N), con un
             // `when:` opcional tras el N (`@alloc(0, when: arch:x86_64)`).
             if (is_c_alloc || is_c_stack) {
+                const std::string nm = is_c_alloc ? "alloc" : "stack";
                 (void)expect(TokenKind::LPAREN,
                              is_c_alloc ? "se esperaba '(' tras @alloc"
                                         : "se esperaba '(' tras @stack");
-                int64_t n = -1;
-                if (current_.kind != TokenKind::INT_LIT) {
-                    error_here("@alloc(N)/@stack(N) requiere un entero literal");
-                } else {
-                    n = current_.int_val;
-                    (void)consume();
-                    if (n < 0) {
-                        error_here("@alloc(N)/@stack(N): N debe ser >= 0");
-                        n = -1;
-                    }
-                }
-                std::string when;
-                if (current_.kind == TokenKind::COMMA) {
-                    (void)consume(); // ','
-                    when = read_footprint_when_();
-                }
+                const FootprintDims d = parse_footprint_dims_(nm);
                 (void)expect(TokenKind::RPAREN,
-                             "se esperaba ')' tras N en @alloc(N)/@stack(N)");
-                if (n >= 0) {
-                    if (when.empty()) {
-                        if (is_c_alloc)
-                            top_c_alloc = n;
-                        else
-                            top_c_stack = n;
+                             ("se esperaba ')' al cerrar @" + nm).c_str());
+                if (d.when.empty()) {
+                    if (d.total >= 0)
+                        (is_c_alloc ? top_c_alloc : top_c_stack) = d.total;
+                    if (d.partial >= 0)
+                        (is_c_alloc ? top_c_alloc_partial
+                                    : top_c_stack_partial) = d.partial;
+                } else {
+                    ast::PendingFootprint pf;
+                    pf.when = d.when;
+                    if (is_c_alloc) {
+                        pf.alloc = d.total;
+                        pf.alloc_partial = d.partial;
                     } else {
-                        ast::PendingFootprint pf;
-                        pf.when = when;
-                        if (is_c_alloc)
-                            pf.alloc = n;
-                        else
-                            pf.stack = n;
-                        top_footprint_pending.push_back(std::move(pf));
+                        pf.stack = d.total;
+                        pf.stack_partial = d.partial;
                     }
+                    top_footprint_pending.push_back(std::move(pf));
                 }
                 continue;
             }
@@ -2217,7 +2258,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             fd->contract_nothrow = top_c_nothrow;
             fd->contract_nopanic = top_c_nopanic;
             fd->contract_alloc = top_c_alloc;
+            fd->contract_alloc_partial = top_c_alloc_partial;
             fd->contract_stack = top_c_stack;
+            fd->contract_stack_partial = top_c_stack_partial;
             fd->footprint_pending = std::move(top_footprint_pending);
         }
         // AOT 2b (dev OS): seccion de salida del codigo + permisos.

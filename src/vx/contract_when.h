@@ -171,8 +171,10 @@ struct ResolvedFP {
     int8_t pure = -1;
     int8_t nothrow_ = -1;
     int8_t nopanic = -1;
-    int64_t alloc = -1;
-    int64_t stack = -1;
+    int64_t alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+    int64_t stack_partial = -1; ///< @stack(partial: N).
 };
 
 /// @brief Resuelve los contratos de HUELLA con `when:` aplicando la prioridad.

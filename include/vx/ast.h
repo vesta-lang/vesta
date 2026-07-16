@@ -315,8 +315,10 @@ struct PendingFootprint {
     int8_t pure = -1;
     int8_t nothrow_ = -1;
     int8_t nopanic = -1;
-    int64_t alloc = -1;
-    int64_t stack = -1;
+    int64_t alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+    int64_t stack_partial = -1; ///< @stack(partial: N).
 };
 
 /**
@@ -1721,8 +1723,12 @@ struct FunctionDecl : Node {
     bool contract_pure = false;      ///< @pure declarado.
     bool contract_nothrow = false;   ///< @nothrow declarado.
     bool contract_nopanic = false;   ///< @nopanic declarado.
-    int64_t contract_alloc = -1;     ///< @alloc(N): max allocs; -1 = no declarado.
-    int64_t contract_stack = -1;     ///< @stack(N): max bytes de stack; -1 = no decl.
+    // @alloc/@stack con DOS dimensiones (parcial=propio, total=cierre/pila peor
+    // caso).  La forma corta `@alloc(N)`/`@stack(N)` fija el TOTAL.  -1 = no decl.
+    int64_t contract_alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t contract_alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t contract_stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+    int64_t contract_stack_partial = -1; ///< @stack(partial: N).
     FunctionDecl() : Node(NodeKind::FunctionDecl) {}
 };
 
@@ -2335,8 +2341,10 @@ struct ClassMethodDecl : Node {
     bool contract_pure = false;    ///< @pure declarado.
     bool contract_nothrow = false; ///< @nothrow declarado.
     bool contract_nopanic = false; ///< @nopanic declarado.
-    int64_t contract_alloc = -1;   ///< @alloc(N): max allocs; -1 = no declarado.
-    int64_t contract_stack = -1;   ///< @stack(N): max bytes; -1 = no declarado.
+    int64_t contract_alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t contract_alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t contract_stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+    int64_t contract_stack_partial = -1; ///< @stack(partial: N).
     /// @complexity(...) del metodo.  Mismos campos y semantica que en
     /// @ref FunctionDecl: `complexity_expr` es azucar de `total_post`.
     std::string complexity_expr;
