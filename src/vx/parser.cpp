@@ -972,7 +972,7 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
 //  Se entra con el token de `complexity` ya consumido (el siguiente debe ser
 //  '('), y se sale tras el ')' de cierre.
 //
-//  Campo `when: "<expr>"` -- contrato CONDICIONAL.  El coste TOTAL de una
+//  Campo `when: <expr>` -- contrato CONDICIONAL.  El coste TOTAL de una
 //  funcion depende del target cuando algun callee tiene cuerpos por-arch de
 //  coste distinto: `atomic<T>::exchange` llama a `vx_atomic_swap64`, que en
 //  x86-64 es un bucle CAS escrito en Vesta (O(n)) y en arm64 el LL/SC nativo
@@ -1070,14 +1070,15 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                             if (col == std::string::npos) continue;
                             if (trim(s.substr(0, col)) != "when") continue;
                             std::string spec = trim(s.substr(col + 1));
-                            // El valor va entrecomillado, igual que en @Target.
-                            if (spec.size() >= 2 && spec.front() == '"' &&
-                                spec.back() == '"') {
-                                spec = spec.substr(1, spec.size() - 2);
-                            } else {
-                                error_here("@complexity: el `when:` requiere la "
-                                           "expresion entre comillas, como en "
-                                           "@Target (p.ej. when: \"arch:arm64\")");
+                            // SIN comillas: entrecomillado, un IDE lo ve como
+                            // una cadena y no puede completar ni validar los
+                            // atomos.  El troceo lo permite sin ambiguedad
+                            // porque el separador del campo es el PRIMER ':' de
+                            // nivel superior: `when: arch:x86_64` da clave
+                            // `when` y valor `arch:x86_64`.
+                            if (spec.size() >= 2 && spec.front() == '"') {
+                                error_here("@complexity: el `when:` va SIN "
+                                           "comillas (when: arch:arm64)");
                             }
                             if (!target_matches_(spec)) aplica = false;
                         }

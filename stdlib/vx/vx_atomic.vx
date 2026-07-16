@@ -637,9 +637,9 @@ struct atomic<T: AtomicBuiltin> {
     @alloc(0)
     @stack(0)
     @complexity(partial_pre: O(1), partial_post: O(n),
-                total_pre: O(n), total_post: O(n), when: "arch:x86_64")
+                total_pre: O(n), total_post: O(n), when: arch:x86_64)
     @complexity(partial_pre: O(1), partial_post: O(1),
-                total_pre: O(1), total_post: O(1), when: "arch:arm64")
+                total_pre: O(1), total_post: O(1), when: arch:arm64)
     public T swap(T v) {
         static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
         return bitcast<T>(vx_atomic_swap64((i64*) &this.cell, bitcast<i64>(v)));
