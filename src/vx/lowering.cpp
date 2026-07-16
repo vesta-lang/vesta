@@ -998,6 +998,22 @@ void Lowering::register_fn_ret_info(const std::string &name, PrimitiveKind kind,
     // en Full/JIT `string` es un handle i64.
     const bool is_str_value_ret = (native_poo_ && kind == PrimitiveKind::STRING);
     if (is_str_value_ret) fn_returns_str_value_.insert(name);
+    // STRUCT por valor: MISMO motivo que el smart pointer de arriba -- el
+    // buffer del struct vive en el frame del callee y muere al RET.  Era el
+    // unico agregado sin SRET: devolvia el puntero a esa memoria muerta y
+    // funcionaba solo si el caller la copiaba antes de tocar la pila.
+    // Los enums (STRUCT con enum_layout) ya salen por `is_user_enum`, y un
+    // `@overlay struct` es un puntero de 8 bytes -> por registro, correcto.
+    bool is_struct_ret = false;
+    if (kind == PrimitiveKind::STRUCT && !is_user_enum &&
+        !enum_struct_name.empty()) {
+        const auto &slays = tc_.struct_layouts();
+        auto it_s = slays.find(enum_struct_name);
+        if (it_s != slays.end() && !it_s->second.is_overlay) {
+            is_struct_ret = true;
+            fn_ret_struct_name_[name] = enum_struct_name;
+        }
+    }
 
     // sret: estas funciones tienen ret_type IR = VOID y un retbuf hidden
     // como primer param.  Sin este ajuste, fn_return_types_ apuntaria a PTR
@@ -1005,7 +1021,7 @@ void Lowering::register_fn_ret_info(const std::string &name, PrimitiveKind kind,
     // escribir desde la salida (que no existe).
     if (kind == PrimitiveKind::OPTIONAL || kind == PrimitiveKind::RESULT ||
         is_user_enum || is_function_ret || is_smartptr_ret ||
-        is_str_value_ret) {
+        is_str_value_ret || is_struct_ret) {
         rt = ir::IrType::VOID;
     }
     // Item 9: @Async wrapper retorna i64 (Future handle), no T.  El tipo
@@ -3132,9 +3148,25 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Vesta Embed (native_poo_): `string` value-type de 24 bytes -> SRET.
     const bool sret_str_value =
         (native_poo_ && sem_ret.kind == PrimitiveKind::STRING);
+    // STRUCT por valor -> SRET.  Era el UNICO agregado que no lo usaba, y por
+    // eso estaba roto: `return r` devolvia un PUNTERO al buffer de `r`, que
+    // vive en el frame del callee -- muerto tras el `ret`.  El caller leia esa
+    // memoria despues, y lo que hubiera pasado por la pila entre medias (el
+    // propio restore de registros del call) la pisaba.  Funcionaba de milagro
+    // cuando el caller copiaba antes de tocar la pila; con un `println` de por
+    // medio, el struct llegaba a ceros (medido).
+    //
+    // Un `@overlay struct` NO entra: su valor ES un puntero de 8 bytes a
+    // memoria ajena, asi que devolverlo por registro es correcto.
+    const auto &slays_check = tc_.struct_layouts();
+    auto it_slay_ret = slays_check.find(sem_ret.struct_name);
+    const bool sret_struct = sem_ret.kind == PrimitiveKind::STRUCT &&
+                             !sret_enum && it_slay_ret != slays_check.end() &&
+                             !it_slay_ret->second.is_overlay;
     const bool sret = (sem_ret.kind == PrimitiveKind::OPTIONAL ||
                        sem_ret.kind == PrimitiveKind::RESULT || sret_enum ||
-                       sret_function || sret_smartptr || sret_str_value);
+                       sret_function || sret_smartptr || sret_str_value ||
+                       sret_struct);
     if (fd->return_type &&
         fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode && !sret) {
         auto *pt = static_cast<ast::PrimitiveTypeNode *>(fd->return_type.get());
@@ -3318,6 +3350,15 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     } else if (sret_str_value) {
         // value-string: {ptr,len,cap} = 3 qwords = 24 bytes.
         sret_buf_size_ = 24ULL;
+    } else if (sret_struct) {
+        // Tamano del struct declarado, redondeado a multiplo de 8: la copia al
+        // retbuf va qword a qword (`sret_buf_size_ / 8`), asi que un struct de
+        // 12 bytes copiaria solo 8 y perderia el ultimo campo.  El caller aloca
+        // con ESTE mismo redondeo, asi que copiar el qword de mas es escribir
+        // en su propio buffer.
+        sret_buf_size_ =
+            (static_cast<uint64_t>(it_slay_ret->second.size_bytes) + 7ULL) &
+            ~7ULL;
     } else if (sret) {
         sret_buf_size_ =
             (sem_ret.kind == PrimitiveKind::OPTIONAL ? 16ULL : 24ULL);
@@ -18542,11 +18583,16 @@ skip_comptime_eval_for_macro_to_macro:
     // (24 bytes) usa SRET igual que un struct; el caller aloca el retbuf.
     const bool callee_is_str_value_sret =
         (fn_returns_str_value_.find(id->name) != fn_returns_str_value_.end());
+    // STRUCT por valor: el callee escribe en el retbuf que le pasa el caller.
+    // Sin esto devolvia un puntero a su propio frame, ya muerto.
+    auto it_struct_ret = fn_ret_struct_name_.find(id->name);
+    const bool callee_is_struct_sret =
+        (it_struct_ret != fn_ret_struct_name_.end());
     const bool callee_is_sret =
         (callee_kind == PrimitiveKind::OPTIONAL ||
          callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
          callee_is_function_sret || callee_is_smartptr_sret ||
-         callee_is_str_value_sret);
+         callee_is_str_value_sret || callee_is_struct_sret);
     ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
     if (callee_is_sret) {
         uint64_t buf_bytes = 16ULL; // default Optional
@@ -18568,6 +18614,16 @@ skip_comptime_eval_for_macro_to_macro:
             // usamos 16 que cubre ambos (shared solo usa los primeros 8 bytes;
             // la segunda mitad del slot es padding).
             buf_bytes = 16ULL;
+        } else if (callee_is_struct_sret) {
+            // Tamano del struct, redondeado a qword: el callee copia
+            // `sret_buf_size_/8` qwords y usa el mismo redondeo.
+            const auto &slays = tc_.struct_layouts();
+            auto it_s = slays.find(it_struct_ret->second);
+            if (it_s != slays.end()) {
+                buf_bytes =
+                    (static_cast<uint64_t>(it_s->second.size_bytes) + 7ULL) &
+                    ~7ULL;
+            }
         }
         v_call_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
@@ -27710,11 +27766,25 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         Type sem_ret_m = Type{PrimitiveKind::VOID};
         if (m->return_type)
             sem_ret_m = tc_.resolve_type_node(m->return_type.get());
+        // Y el STRUCT por valor, que arrastraba EXACTAMENTE el use-after-free
+        // que describe el comentario de arriba: era el unico agregado sin SRET.
+        // Un enum (STRUCT con enum_layout) y un `@overlay struct` (que ES un
+        // puntero de 8 bytes) van por registro y no entran.
+        const StructLayout *m_ret_slay = nullptr;
+        if (sem_ret_m.kind == PrimitiveKind::STRUCT &&
+            !sem_ret_m.struct_name.empty() &&
+            tc_.enum_layouts().find(sem_ret_m.struct_name) ==
+                tc_.enum_layouts().end()) {
+            auto it_ms = tc_.struct_layouts().find(sem_ret_m.struct_name);
+            if (it_ms != tc_.struct_layouts().end() && !it_ms->second.is_overlay)
+                m_ret_slay = &it_ms->second;
+        }
         const bool method_sret =
             !m->is_constructor && (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
                                    sem_ret_m.kind == PrimitiveKind::RESULT ||
                                    (native_poo_ &&
-                                    sem_ret_m.kind == PrimitiveKind::STRING));
+                                    sem_ret_m.kind == PrimitiveKind::STRING) ||
+                                   m_ret_slay != nullptr);
         if (m->is_constructor) {
             fn.ret_type = ir::IrType::VOID;
         } else if (method_sret) {
@@ -27901,10 +27971,16 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
         sret_active_ = method_sret;
         sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
+        // El tamano manda la copia al retbuf (qword a qword) de cada `return`.
+        // Un struct usa SU tamano redondeado a qword: con el 24 fijo, uno de 8
+        // bytes copiaria 24 y pisaria memoria del caller.
         sret_buf_size_ =
-            method_sret
-                ? ((sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL)
-                : 0ULL;
+            !method_sret ? 0ULL
+            : m_ret_slay != nullptr
+                ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
+                   ~7ULL)
+            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+                                                          : 24ULL;
 
         lower_block(m->body.get());
 
@@ -28187,10 +28263,25 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         // SIGSEGV en el caller.  Un string CONSTANTE no lo necesitaba
         // (retorna un puntero a un value-string en .rodata), por eso el bug
         // solo se veia con retornos construidos.  Caller simetrico abajo.
+        // Y un STRUCT por valor: EXACTAMENTE el mismo problema que el string de
+        // arriba -- se arma en el frame del callee y se devolvia un puntero a
+        // esa memoria, muerta tras el `ret`.  Era el unico agregado sin SRET.
+        // Un enum (STRUCT con enum_layout) y un `@overlay struct` (que ES un
+        // puntero de 8 bytes) no entran.
+        const StructLayout *m_ret_slay = nullptr;
+        if (sem_ret_m.kind == PrimitiveKind::STRUCT &&
+            !sem_ret_m.struct_name.empty() &&
+            tc_.enum_layouts().find(sem_ret_m.struct_name) ==
+                tc_.enum_layouts().end()) {
+            auto it_ms = tc_.struct_layouts().find(sem_ret_m.struct_name);
+            if (it_ms != tc_.struct_layouts().end() && !it_ms->second.is_overlay)
+                m_ret_slay = &it_ms->second;
+        }
         const bool method_sret = (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
                                   sem_ret_m.kind == PrimitiveKind::RESULT ||
                                   (native_poo_ &&
-                                   sem_ret_m.kind == PrimitiveKind::STRING));
+                                   sem_ret_m.kind == PrimitiveKind::STRING) ||
+                                  m_ret_slay != nullptr);
         if (method_sret) {
             fn.ret_type = ir::IrType::VOID;
         } else if (m->return_type &&
@@ -28334,10 +28425,16 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         current_fn_sret_str_value_ = method_str_sret;
         sret_active_ = method_sret;
         sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
+        // El tamano manda la copia al retbuf (qword a qword) de cada `return`.
+        // Un struct usa SU tamano redondeado a qword: con el 24 fijo, uno de 8
+        // bytes copiaria 24 y pisaria memoria del caller.
         sret_buf_size_ =
-            method_sret
-                ? ((sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL)
-                : 0ULL;
+            !method_sret ? 0ULL
+            : m_ret_slay != nullptr
+                ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
+                   ~7ULL)
+            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+                                                          : 24ULL;
 
         lower_block(m->body.get());
 
@@ -32300,14 +32397,31 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     // native_poo_: un metodo que devuelve `string` value-type usa SRET
     // (simetrico con el callee en lower_struct_methods).  El caller aloca el
     // retbuf de 24 bytes en host-stack y lo pasa tras 'this'.
+    // STRUCT por valor: mismo motivo que Optional/Result -- el buffer del
+    // struct vive en el frame del callee y muere al RET.  Un `@overlay struct`
+    // no: su valor ES un puntero de 8 bytes, va por registro.
+    const StructLayout *ret_slay = nullptr;
+    if (mtd->return_type.kind == PrimitiveKind::STRUCT &&
+        !mtd->return_type.struct_name.empty()) {
+        const auto &elays = tc_.enum_layouts();
+        if (elays.find(mtd->return_type.struct_name) == elays.end()) {
+            auto it_rs = tc_.struct_layouts().find(mtd->return_type.struct_name);
+            if (it_rs != tc_.struct_layouts().end() && !it_rs->second.is_overlay)
+                ret_slay = &it_rs->second;
+        }
+    }
     const bool method_sret = (mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
                               mtd->return_type.kind == PrimitiveKind::RESULT ||
                               (native_poo_ &&
-                               mtd->return_type.kind == PrimitiveKind::STRING));
+                               mtd->return_type.kind == PrimitiveKind::STRING) ||
+                              ret_slay != nullptr);
     ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
     if (method_sret) {
         const uint64_t buf_bytes =
-            (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
+            ret_slay != nullptr
+                ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) & ~7ULL)
+            : (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+                                                                 : 24ULL;
         v_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;

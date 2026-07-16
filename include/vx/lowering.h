@@ -1240,6 +1240,13 @@ class Lowering {
     /// lower_function para configurar @c sret_active_/@c sret_buf_size_.
     std::unordered_map<std::string, std::string> fn_ret_enum_name_;
 
+    /// Nombre del STRUCT que la funcion devuelve por valor (vacio si no
+    /// devuelve uno).  Igual que @c fn_ret_enum_name_: el caller lo usa para
+    /// alocar el retbuf con @c struct_layouts_[name].size_bytes.  Un struct
+    /// devuelto por valor es SRET porque su buffer vive en el frame del callee
+    /// y muere al RET.
+    std::unordered_map<std::string, std::string> fn_ret_struct_name_;
+
     /// (gap O cerrado): conjunto de funciones que retornan un
     /// valor de tipo FUNCTION (function value).  Se trata como SRET
     /// con buf_size=16 (mismo layout que el slot de lambda: fn_addr
