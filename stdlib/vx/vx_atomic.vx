@@ -737,7 +737,7 @@ struct atomic<T: AtomicBuiltin> {
     @alloc(0)
     @stack(0,  when: arch:x86_64)
     @stack(24, when: arch:arm64)
-    @complexity(partial_pre: O(1), partial_post: O(n),
+    @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n), when: arch:x86_64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1), when: arch:arm64)
@@ -789,15 +789,16 @@ struct atomic<T: AtomicBuiltin> {
                 total_pre: O(1), total_post: O(1))
     public T store(T v) { return this.__assign__(v); }
 
-    /// Exchange.  Alias de @ref swap, con el nombre de C++/Rust.  Hereda su
-    /// coste por arch: x86 bucle CAS O(n) (se inlinea, tambien la parte
-    /// parcial), arm64 LL/SC O(1).
+    /// Exchange.  Alias de @ref swap, con el nombre de C++/Rust.  Su cuerpo es
+    /// solo una llamada -> parcial O(1) (el analizador NO cuenta el inline en el
+    /// parcial); el total hereda el coste de swap (x86 bucle CAS O(n), arm64
+    /// LL/SC O(1)).
     @nothrow
     @nopanic
     @alloc(0)
     @stack(0,  when: arch:x86_64)
     @stack(24, when: arch:arm64)
-    @complexity(partial_pre: O(n), partial_post: O(n),
+    @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n), when: arch:x86_64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1), when: arch:arm64)
