@@ -28,6 +28,7 @@
 #include "cli/version_info.h" // Banner de `vesta --version` / `-v`
 #include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
 #include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
+#include "../src/vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa
@@ -1865,6 +1866,117 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
+        // ------------------------------------------------------------------
+        //  El coste POR ARQUITECTURA.
+        //
+        //  Todo lo de arriba es para el target del HOST.  Pero el coste TOTAL
+        //  cambia con la arquitectura cuando algun callee tiene variantes
+        //  @Target de cuerpos distintos -- `vx_atomic_swap64` es un bucle CAS
+        //  en x86-64 (no hay instruccion de exchange) y el LL/SC nativo en
+        //  arm64 --, asi que reportar solo el host enseña media foto.
+        //
+        //  Se recorre el registro CERRADO de arquitecturas, recompilando para
+        //  cada una (@Target se evalua contra el target, no contra el host: es
+        //  lo mismo que hace el driver AOT cross-target).  Solo se imprime lo
+        //  que DIFIERE: si una funcion cuesta igual en todas -- el caso comun,
+        //  y todo el fichero si no usa @Target -- no se dice nada y la salida
+        //  queda como estaba.
+        // ------------------------------------------------------------------
+        {
+            std::string host_os, host_arch;
+            vx::get_aot_condcomp_target(host_os, host_arch);
+
+            // arch -> (funcion -> "parcial/total"), o el motivo de no compilar.
+            struct PorArch {
+                std::string arch;
+                std::map<std::string, std::string> coste;
+                std::string fallo;
+            };
+            std::vector<PorArch> tabla;
+            for (const auto &arch : vx::cwhen::known_archs()) {
+                PorArch pa;
+                pa.arch = arch;
+                vx::set_aot_condcomp_target(host_os, arch);
+                vx::CompileOptions o2;
+                o2.module_name = "main";
+                o2.opt_level = 2;
+                vx::CompileResult r2 =
+                    vx::vx_source_has_imports(vx_source)
+                        ? vx::compile_vx_project(vx_path, o2)
+                        : vx::compile_vx_source(vx_source, vx_path, o2);
+                if (!r2.ok || r2.ir_module_cache_bytes.empty()) {
+                    // Que el fuente no compile para una arquitectura NO es un
+                    // error del analisis: es justo lo que hay que decir (p.ej.
+                    // los atomicos de 64 bits no tienen variante en x86-32).
+                    pa.fallo = "no compila para esta arquitectura";
+                    for (const auto &d : r2.diagnostics.all()) {
+                        if (d.level == vx::DiagLevel::ERR) {
+                            pa.fallo = d.message;
+                            break;
+                        }
+                    }
+                    tabla.push_back(std::move(pa));
+                    continue;
+                }
+                ir::IrModule m2;
+                if (!ir::parse_ir_module_cache(r2.ir_module_cache_bytes, m2)) {
+                    pa.fallo = "no se pudo deserializar el IR";
+                    tabla.push_back(std::move(pa));
+                    continue;
+                }
+                analyze::ModuleCost c2 = analyze::analyze_module(m2);
+                analyze::compose_interproc(c2);
+                for (const auto &f : c2.functions) {
+                    pa.coste[f.function] =
+                        std::string(analyze::cost_class_str(f.big_o)) + " / " +
+                        analyze::cost_class_str(f.total_class);
+                }
+                tabla.push_back(std::move(pa));
+            }
+            vx::set_aot_condcomp_target(host_os, host_arch); // dejarlo como estaba
+
+            // Las funciones cuyo coste NO es el mismo en todas.
+            std::set<std::string> difieren;
+            for (const auto &f : mc_post.functions) {
+                const std::string *ref = nullptr;
+                for (const auto &pa : tabla) {
+                    if (!pa.fallo.empty()) continue;
+                    auto it = pa.coste.find(f.function);
+                    if (it == pa.coste.end()) continue;
+                    if (!ref)
+                        ref = &it->second;
+                    else if (*ref != it->second)
+                        difieren.insert(f.function);
+                }
+            }
+            std::vector<std::string> no_compilan;
+            for (const auto &pa : tabla)
+                if (!pa.fallo.empty())
+                    no_compilan.push_back(pa.arch + ": " + pa.fallo);
+
+            if (!difieren.empty() || !no_compilan.empty()) {
+                std::cout << "\nCoste por arquitectura (parcial / total, "
+                             "POST-opt).  Solo lo que difiere del resto.\n";
+                std::cout
+                    << "=================================================="
+                       "===========\n";
+                for (const auto &fn : difieren) {
+                    std::cout << "  " << fn << "\n";
+                    for (const auto &pa : tabla) {
+                        if (!pa.fallo.empty()) continue;
+                        auto it = pa.coste.find(fn);
+                        if (it == pa.coste.end()) continue;
+                        std::cout << "      " << pa.arch;
+                        for (size_t k = pa.arch.size(); k < 8; ++k)
+                            std::cout << ' ';
+                        std::cout << " " << it->second << "\n";
+                    }
+                }
+                for (const auto &s : no_compilan)
+                    std::cout << "  [aviso] " << s << "\n";
+            }
+        }
+
         std::cout
             << "=================================================="
                "===========\n";

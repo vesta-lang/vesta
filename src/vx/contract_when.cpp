@@ -174,6 +174,12 @@ const std::vector<std::string> &type_preds() {
     return k;
 }
 
+const std::vector<std::string> &known_archs() {
+    // Las que el compilador sabe targetear (ver `g_cc_target_arch`).
+    static const std::vector<std::string> k = {"x86_64", "arm64", "x86"};
+    return k;
+}
+
 AtomKind atom_kind(const std::string &atomo, std::string *esperado) {
     const std::string a = trim(atomo);
     auto en = [](const std::vector<std::string> &v, const std::string &s) {

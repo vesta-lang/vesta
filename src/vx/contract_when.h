@@ -90,6 +90,14 @@ const std::vector<std::string> &target_vars();
 /// Predicados de la forma `pred<T>()` sobre un parametro de tipo.
 const std::vector<std::string> &type_preds();
 
+/// Valores conocidos de `arch:`.  Registro CERRADO, y la lista sobre la que
+/// `--analyze` recorre para reportar el coste de CADA arquitectura: el coste
+/// total cambia con ella cuando hay variantes `@Target` de cuerpos distintos, y
+/// analizar solo el host enseña media foto.  Se enumera el registro en vez de
+/// rascar los `arch:` del fuente a mano, que es la clase de heuristica que hace
+/// que un `archh:` mal escrito pase desapercibido.
+const std::vector<std::string> &known_archs();
+
 /// @brief Clasifica un atomo por su ESTRUCTURA contra los registros cerrados.
 ///
 /// Nada de mirar prefijos: `vm` como prefijo casaria con cualquier predicado
