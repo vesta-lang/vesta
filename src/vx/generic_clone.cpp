@@ -610,5 +610,213 @@ std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s,
     }
 }
 
+// ---------------------------------------------------------------------------
+//  rename_idents: reescritura in-place de referencias por nombre.
+//
+//  Recorre sin clonar (a diferencia del resto del fichero): el arbol ya es del
+//  llamante y solo cambian cadenas.  Los nodos que no tienen sub-expresiones
+//  caen al `default` -- un kind nuevo no rompe nada, simplemente no se recorre.
+// ---------------------------------------------------------------------------
+namespace {
+
+/// Estado del renombrado: el mapa activo durante el recorrido.
+thread_local const std::unordered_map<std::string, std::string> *g_renames =
+    nullptr;
+
+void rename_in_expr(ast::Expr *e);
+
+void rename_in_stmt(ast::Stmt *s);
+
+/// Aplica el mapa a un identificador suelto.
+void rename_name(std::string &nm) {
+    if (!g_renames) return;
+    auto it = g_renames->find(nm);
+    if (it != g_renames->end()) nm = it->second;
+}
+
+void rename_in_expr(ast::Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+    case ast::NodeKind::IdentExpr:
+        rename_name(static_cast<ast::IdentExpr *>(e)->name);
+        return;
+    case ast::NodeKind::CallExpr: {
+        auto *c = static_cast<ast::CallExpr *>(e);
+        rename_in_expr(c->callee.get());
+        for (auto &a : c->args)
+            rename_in_expr(a.get());
+        return;
+    }
+    case ast::NodeKind::BinaryExpr: {
+        auto *b = static_cast<ast::BinaryExpr *>(e);
+        rename_in_expr(b->lhs.get());
+        rename_in_expr(b->rhs.get());
+        return;
+    }
+    case ast::NodeKind::UnaryExpr:
+        rename_in_expr(static_cast<ast::UnaryExpr *>(e)->operand.get());
+        return;
+    case ast::NodeKind::AssignExpr: {
+        auto *a = static_cast<ast::AssignExpr *>(e);
+        rename_in_expr(a->target.get());
+        rename_in_expr(a->value.get());
+        return;
+    }
+    case ast::NodeKind::FieldAccessExpr:
+        // Solo la base: `x.campo` renombra `x`, nunca `campo`.
+        rename_in_expr(static_cast<ast::FieldAccessExpr *>(e)->base.get());
+        return;
+    case ast::NodeKind::IndexExpr: {
+        auto *ix = static_cast<ast::IndexExpr *>(e);
+        rename_in_expr(ix->base.get());
+        rename_in_expr(ix->index.get());
+        return;
+    }
+    case ast::NodeKind::CastExpr:
+        rename_in_expr(static_cast<ast::CastExpr *>(e)->operand.get());
+        return;
+    case ast::NodeKind::TernaryExpr: {
+        auto *t = static_cast<ast::TernaryExpr *>(e);
+        rename_in_expr(t->cond.get());
+        rename_in_expr(t->then_expr.get());
+        rename_in_expr(t->else_expr.get());
+        return;
+    }
+    case ast::NodeKind::InitListExpr:
+        for (auto &el : static_cast<ast::InitListExpr *>(e)->elements)
+            rename_in_expr(el.get());
+        return;
+    case ast::NodeKind::StringLitExpr:
+        for (auto &ie : static_cast<ast::StringLitExpr *>(e)->interp_exprs)
+            rename_in_expr(ie.get());
+        return;
+    case ast::NodeKind::NewExpr:
+        for (auto &a : static_cast<ast::NewExpr *>(e)->args)
+            rename_in_expr(a.get());
+        return;
+    case ast::NodeKind::LambdaExpr:
+        rename_in_stmt(static_cast<ast::LambdaExpr *>(e)->body.get());
+        return;
+    case ast::NodeKind::TryExpr:
+        rename_in_expr(static_cast<ast::TryExpr *>(e)->operand.get());
+        return;
+    case ast::NodeKind::MatchExpr: {
+        auto *m = static_cast<ast::MatchExpr *>(e);
+        rename_in_expr(m->scrutinee.get());
+        for (auto &arm : m->arms) {
+            rename_in_expr(arm.value_pattern.get());
+            rename_in_expr(arm.value_pattern_hi.get());
+            rename_in_expr(arm.guard.get());
+            rename_in_stmt(arm.body.get());
+        }
+        return;
+    }
+    default:
+        return; // literales y nodos sin sub-expresiones
+    }
+}
+
+void rename_in_stmt(ast::Stmt *s) {
+    if (!s) return;
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt:
+        for (auto &c : static_cast<ast::BlockStmt *>(s)->body)
+            rename_in_stmt(c.get());
+        return;
+    case ast::NodeKind::VarDeclStmt:
+        rename_in_expr(static_cast<ast::VarDeclStmt *>(s)->init.get());
+        return;
+    case ast::NodeKind::ExprStmt:
+        rename_in_expr(static_cast<ast::ExprStmt *>(s)->expr.get());
+        return;
+    case ast::NodeKind::ReturnStmt:
+        rename_in_expr(static_cast<ast::ReturnStmt *>(s)->value.get());
+        return;
+    case ast::NodeKind::IfStmt: {
+        auto *i = static_cast<ast::IfStmt *>(s);
+        rename_in_expr(i->cond.get());
+        rename_in_stmt(i->then_branch.get());
+        rename_in_stmt(i->else_branch.get());
+        return;
+    }
+    case ast::NodeKind::WhileStmt: {
+        auto *w = static_cast<ast::WhileStmt *>(s);
+        rename_in_expr(w->cond.get());
+        rename_in_stmt(w->body.get());
+        return;
+    }
+    case ast::NodeKind::DoWhileStmt: {
+        auto *d = static_cast<ast::DoWhileStmt *>(s);
+        rename_in_stmt(d->body.get());
+        rename_in_expr(d->cond.get());
+        return;
+    }
+    case ast::NodeKind::ForStmt: {
+        auto *f = static_cast<ast::ForStmt *>(s);
+        rename_in_stmt(f->init.get());
+        rename_in_expr(f->cond.get());
+        rename_in_expr(f->step.get());
+        rename_in_stmt(f->body.get());
+        return;
+    }
+    case ast::NodeKind::ForEachStmt: {
+        auto *f = static_cast<ast::ForEachStmt *>(s);
+        rename_in_expr(f->iter_expr.get());
+        rename_in_stmt(f->body.get());
+        return;
+    }
+    case ast::NodeKind::TryStmt: {
+        auto *t = static_cast<ast::TryStmt *>(s);
+        rename_in_stmt(t->body.get());
+        for (auto &c : t->catches)
+            rename_in_stmt(c.body.get());
+        rename_in_stmt(t->finally_body.get());
+        return;
+    }
+    case ast::NodeKind::ThrowStmt:
+        rename_in_expr(static_cast<ast::ThrowStmt *>(s)->value.get());
+        return;
+    case ast::NodeKind::SynchronizedStmt: {
+        auto *y = static_cast<ast::SynchronizedStmt *>(s);
+        rename_in_expr(y->target.get());
+        rename_in_stmt(y->body.get());
+        return;
+    }
+    default:
+        return;
+    }
+}
+
+} // namespace
+
+void rename_idents(
+    ast::Node *n,
+    const std::unordered_map<std::string, std::string> &renames) {
+    if (!n || renames.empty()) return;
+    g_renames = &renames;
+    switch (n->kind) {
+    case ast::NodeKind::FunctionDecl: {
+        auto *f = static_cast<ast::FunctionDecl *>(n);
+        rename_in_stmt(f->body.get());
+        break;
+    }
+    case ast::NodeKind::StructDecl: {
+        auto *sd = static_cast<ast::StructDecl *>(n);
+        for (auto &m : sd->methods)
+            if (m) rename_in_stmt(m->body.get());
+        break;
+    }
+    case ast::NodeKind::ClassDecl: {
+        auto *cd = static_cast<ast::ClassDecl *>(n);
+        for (auto &m : cd->methods)
+            if (m) rename_in_stmt(m->body.get());
+        break;
+    }
+    default:
+        break;
+    }
+    g_renames = nullptr;
+}
+
 } // namespace vxgen
 } // namespace vx

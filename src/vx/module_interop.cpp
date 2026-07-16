@@ -30,6 +30,7 @@
 #include "vx/vxi_format.h"
 #include "vx/diagnostic.h" // #cross-module-generics: re-parse de templates
 #include "vx/lexer.h"
+#include "generic_clone.h" // rename_idents: helpers del modulo de la plantilla
 #include "vx/parser.h"
 
 namespace vx {
@@ -1289,6 +1290,48 @@ void inject_generic_templates_from_vxi(
     }
     auto parsed = parser.parse_program();
     if (!parsed || tmp_diags.has_errors()) return; // best-effort
+
+    // El cuerpo de una plantilla puede llamar a funciones de SU PROPIO modulo
+    // (`struct atomic<T>` usando un helper de `vx_atomic`).  Como se re-parsea
+    // aqui, esos nombres no estan en el scope del consumidor -- y no deben
+    // estarlo: el consumidor puso `only atomic`, no pidio los helpers.
+    //
+    // Se reescriben en el AST de la plantilla al label REAL que el `.vxi` ya
+    // trae (`vx_atomic__vx_atomic_load64`) y se registra ESE label como funcion
+    // importada.  Asi la plantilla resuelve y enlaza, y el consumidor sigue sin
+    // ver los helpers: el label mangled no es un nombre que nadie escriba.
+    {
+        std::unordered_map<std::string, std::string> fn_renames;
+        for (const auto &sym : mod.symbols) {
+            if (sym.kind != VxiSymbolKind::FUNCTION) continue;
+            if (sym.mangled_label.empty() || sym.mangled_label == sym.name)
+                continue;
+            fn_renames.emplace(sym.name, sym.mangled_label);
+        }
+        if (!fn_renames.empty()) {
+            for (auto &decl : parsed->decls)
+                if (decl) vxgen::rename_idents(decl.get(), fn_renames);
+            // Registrar la firma de cada helper bajo su label.  Idempotente: si
+            // ya estaba (otro import), `register_imported_function` lo repite
+            // sin dano.
+            for (const auto &sym : mod.symbols) {
+                if (sym.kind != VxiSymbolKind::FUNCTION) continue;
+                auto it = fn_renames.find(sym.name);
+                if (it == fn_renames.end()) continue;
+                if (tc.function_sigs_by_name().count(it->second)) continue;
+                FunctionSig sig;
+                sig.return_type = tc.resolve_type_string(sym.return_type);
+                sig.param_types.reserve(sym.param_types.size());
+                for (const auto &pt : sym.param_types)
+                    sig.param_types.push_back(tc.resolve_type_string(pt));
+                sig.extern_lib = sym.is_extern ? sym.extern_lib : std::string();
+                sig.mangled_label = sym.mangled_label;
+                sig.is_naked = sym.is_naked;
+                tc.register_imported_function(it->second, std::move(sig));
+                tc.mark_template_only_fn(it->second);
+            }
+        }
+    }
 
     // Helper: nombre del decl (para el filtro `only` + rename namespace).
     auto decl_name = [](ast::Node *d) -> std::string {

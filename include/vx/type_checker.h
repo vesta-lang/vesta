@@ -1571,6 +1571,10 @@ class TypeChecker {
     /// rellena en cada @c function_sigs_.push_back y nunca se limpia.
     std::unordered_map<std::string, uint32_t> sig_by_name_;
 
+    /// Funciones registradas SOLO para que resuelvan los cuerpos de plantillas
+    /// importadas.  Ver @ref mark_template_only_fn.
+    std::unordered_set<std::string> template_only_fns_;
+
     /// Phase M.2.e: simbolos de funcion importados via .vxi que
     /// deben declararse en el scope global al inicio de run().  El
     /// constructor del TypeChecker NO ha pusheado scope todavia,
@@ -2073,6 +2077,19 @@ class TypeChecker {
     }
     void register_imported_enum(const std::string &name, EnumLayout L) {
         enum_layouts_[name] = std::move(L);
+    }
+    /**
+     * @brief Marca una funcion como visible SOLO para cuerpos de plantilla.
+     *
+     * El cuerpo de una plantilla generica importada se re-parsea en el modulo
+     * que la usa, donde los helpers de su modulo de origen no estan en scope.
+     * Se registran (bajo su label mangled) para que resuelva y enlace, pero el
+     * consumidor no los pidio: marcarlos aqui los excluye del fallback por
+     * sufijo de @c check_call, que si no dejaria que el nombre corto resolviera
+     * y romperia la higiene del `only`.
+     */
+    void mark_template_only_fn(const std::string &mangled) {
+        template_only_fns_.insert(mangled);
     }
     void register_imported_function(const std::string &name, FunctionSig sig) {
         const uint32_t idx = static_cast<uint32_t>(function_sigs_.size());

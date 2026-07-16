@@ -34,6 +34,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vx {
@@ -81,6 +82,24 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
 /// @brief Clona un @c Stmt aplicando la sustitucion @p g (default: vacia).
 std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s,
                                       const GenSubst &g = {});
+
+/**
+ * @brief Reescribe in-place los identificadores de un AST segun @p renames.
+ *
+ * Recorre expresiones y sentencias renombrando cada @c IdentExpr cuyo nombre
+ * este en el mapa.  No toca los campos (`obj.x`), ni los nombres de metodo, ni
+ * los declarados dentro del propio arbol: solo las REFERENCIAS por nombre.
+ *
+ * Lo usa la inyeccion de plantillas genericas cross-module: el cuerpo de una
+ * plantilla viaja como TEXTO en el `.vxi` y se re-parsea en el modulo que la
+ * usa, donde los simbolos de su modulo de origen no estan en scope.  Reescribir
+ * sus llamadas al label real (`vx_atomic__vx_atomic_load64`) hace que resuelvan
+ * y enlacen sin exponer esos nombres al consumidor.
+ *
+ * @param renames nombre original -> nombre nuevo.  Vacio = no-op.
+ */
+void rename_idents(ast::Node *n,
+                   const std::unordered_map<std::string, std::string> &renames);
 
 } // namespace vxgen
 } // namespace vx
