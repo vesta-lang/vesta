@@ -999,6 +999,22 @@ class TypeChecker {
                                             const Type &tv,
                                             Type &out_result) const;
 
+    /**
+     * @brief Fusiona `g = g OP x` en `g OP= x` (read-modify-write).
+     *
+     * Reescribe @p e in-place.  Es la INVERSA del desazucarado de
+     * @ref prepare_overloaded_compound_assign, y existe por los tipos ATOMICOS:
+     * reconocer que las dos `g` son la MISMA posicion permite fusionar los tres
+     * pasos (leer, operar, escribir) en el RMW indivisible del tipo.
+     *
+     * Solo actua si el tipo declara el metodo in-place, asi que los primitivos
+     * no se ven afectados.  Cubre los diez operadores con forma compuesta
+     * (`+ - * / %` y `& | ^ << >>`).
+     *
+     * @return true si @p e quedo reescrito.
+     */
+    bool try_fuse_rmw_assign(ast::AssignExpr *e);
+
   private:
     /// @brief Busca el dunder de compound assign (`+=` -> @c __iadd__) en el
     ///        tipo @p tt (CLASS o STRUCT) que acepte un valor @p tv.

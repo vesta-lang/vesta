@@ -9583,6 +9583,116 @@ bool TypeChecker::is_capturing_closure_expr(const ast::Expr *e) const {
     return false;
 }
 
+static const char *compound_assign_dunder(ast::AssignOp op);
+
+/**
+ * @brief Operador compuesto equivalente a un binario (`+` -> `+=`).
+ * @return @c AssignOp::Assign si el binario no tiene forma compuesta.
+ */
+static ast::AssignOp binop_to_compound_assign(ast::BinOp op) {
+    switch (op) {
+    case ast::BinOp::Add: return ast::AssignOp::AddAssign;
+    case ast::BinOp::Sub: return ast::AssignOp::SubAssign;
+    case ast::BinOp::Mul: return ast::AssignOp::MulAssign;
+    case ast::BinOp::Div: return ast::AssignOp::DivAssign;
+    case ast::BinOp::Mod: return ast::AssignOp::ModAssign;
+    case ast::BinOp::BitAnd: return ast::AssignOp::BitAndAssign;
+    case ast::BinOp::BitOr: return ast::AssignOp::BitOrAssign;
+    case ast::BinOp::BitXor: return ast::AssignOp::BitXorAssign;
+    case ast::BinOp::Shl: return ast::AssignOp::ShlAssign;
+    case ast::BinOp::Shr: return ast::AssignOp::ShrAssign;
+    default: return ast::AssignOp::Assign;
+    }
+}
+
+/**
+ * @brief ¿Menciona @p e el identificador @p name en algun sitio?
+ *
+ * Conservador: ante un nodo que no sabe recorrer, responde @c true (asume que
+ * si) para no fusionar de mas.
+ */
+static bool expr_mentions_ident(const ast::Expr *e, const std::string &name) {
+    if (!e) return false;
+    switch (e->kind) {
+    case ast::NodeKind::IdentExpr:
+        return static_cast<const ast::IdentExpr *>(e)->name == name;
+    case ast::NodeKind::IntLitExpr:
+    case ast::NodeKind::FloatLitExpr:
+    case ast::NodeKind::BoolLitExpr:
+    case ast::NodeKind::CharLitExpr:
+    case ast::NodeKind::NullLitExpr:
+        return false;
+    case ast::NodeKind::BinaryExpr: {
+        const auto *b = static_cast<const ast::BinaryExpr *>(e);
+        return expr_mentions_ident(b->lhs.get(), name) ||
+               expr_mentions_ident(b->rhs.get(), name);
+    }
+    case ast::NodeKind::UnaryExpr:
+        return expr_mentions_ident(
+            static_cast<const ast::UnaryExpr *>(e)->operand.get(), name);
+    case ast::NodeKind::CastExpr:
+        return expr_mentions_ident(
+            static_cast<const ast::CastExpr *>(e)->operand.get(), name);
+    default:
+        return true; // no se recorrer -> asumir que lo menciona
+    }
+}
+
+bool TypeChecker::try_fuse_rmw_assign(ast::AssignExpr *e) {
+    // `g = g OP x`  ->  `g OP= x`  cuando el tipo de `g` declara el metodo
+    // in-place (`__iadd__`, ...).  Es la INVERSA del desazucarado que ya hace
+    // `prepare_overloaded_compound_assign` (un tipo con `__add__` y sin
+    // `__iadd__` convierte `a += b` en `a = a + b`).
+    //
+    // Existe por los tipos ATOMICOS.  `g = g + 1` son tres pasos -- leer, sumar,
+    // escribir -- y otro hilo cabe en medio: en C++ compila y es una carrera
+    // silenciosa.  Aqui, reconocer que las dos `g` son la MISMA posicion permite
+    // fusionarlo en el RMW indivisible del tipo (un solo `lock xadd`, sin load
+    // suelto).  Asi el atomico se escribe en las tres formas -- `g++`, `g += 1`
+    // y `g = g + 1` -- y las tres son igual de correctas, en vez de tener que
+    // prohibir la larga.
+    //
+    // Estricto a proposito (ante la duda, no fusionar):
+    //   - el destino es un identificador simple: releerlo no tiene efectos
+    //     (`arr[f()] = arr[f()] + 1` llamaria a `f()` dos veces);
+    //   - el operando izquierdo del binario es ESE identificador, no otro;
+    //   - el derecho NO lo menciona (`g = g + g` no se fusiona: son dos
+    //     lecturas, y `g += g` solo seria una);
+    //   - el tipo declara el metodo in-place.  Sin esto no se toca nada: los
+    //     primitivos (`i64 g; g = g + 1`) siguen su camino de siempre.
+    if (!e || e->op != ast::AssignOp::Assign) return false;
+    if (!e->target || e->target->kind != ast::NodeKind::IdentExpr) return false;
+    if (!e->value || e->value->kind != ast::NodeKind::BinaryExpr) return false;
+    const std::string &nm = static_cast<ast::IdentExpr *>(e->target.get())->name;
+    auto *bin = static_cast<ast::BinaryExpr *>(e->value.get());
+    if (!bin->lhs || bin->lhs->kind != ast::NodeKind::IdentExpr) return false;
+    if (static_cast<ast::IdentExpr *>(bin->lhs.get())->name != nm) return false;
+    if (expr_mentions_ident(bin->rhs.get(), nm)) return false;
+    const ast::AssignOp cop = binop_to_compound_assign(bin->op);
+    if (cop == ast::AssignOp::Assign) return false;
+    const Symbol *s = lookup(nm);
+    if (!s || s->kind != SymbolKind::Variable) return false;
+    if (s->type.kind != PrimitiveKind::CLASS &&
+        s->type.kind != PrimitiveKind::STRUCT)
+        return false;
+    const char *nm_dunder = compound_assign_dunder(cop);
+    if (nm_dunder[0] == '\0') return false;
+    const std::vector<ClassMethodInfo> *ms = methods_of_type(s->type);
+    if (!ms) return false;
+    bool has_inplace = false;
+    for (const auto &m : *ms) {
+        if (m.is_constructor || m.is_static) continue;
+        if (m.name == nm_dunder && m.param_types.size() == 1) {
+            has_inplace = true;
+            break;
+        }
+    }
+    if (!has_inplace) return false;
+    e->value = std::move(bin->rhs);
+    e->op = cop;
+    return true;
+}
+
 Type TypeChecker::check_assign(ast::AssignExpr *e) {
     // const-correctness A: check_assign_impl devuelve el tipo del LVALUE (el
     // nivel correcto: campo, pointee de `*p`, elemento de `a[i]`, o la var).
@@ -9838,6 +9948,10 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         (void)check_expr(e->value.get());
         return Type{};
     }
+
+    // Fusion read-modify-write: `g = g OP x` -> `g OP= x`.  Antes de chequear
+    // nada mas, porque `g + x` por si solo puede no existir.
+    (void)try_fuse_rmw_assign(e);
 
     // Ruta B (H2 move-only): reasignar un local lo rehabilita tras un move.
     // `S b = a; a = make(); use(a)` es valido -- `a` vuelve a poseer un valor.
