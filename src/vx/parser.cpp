@@ -7713,6 +7713,32 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         e->loc = loc;
         e->is_raw = (current_.kind == TokenKind::RAW_STRING_LIT);
         e->value = consume().str_val;
+        /* Literales ADYACENTES se funden en uno, como en C:
+         *
+         *     string m = "primera parte "
+         *                "segunda parte";     // -> UN literal
+         *
+         * Es lo normal para partir un mensaje largo sin pasarse de ancho.  Y no
+         * es solo comodidad: con `+` hay que decidir, y sobre un `string` de
+         * runtime `"a" + "b"` emite un STRCAT para juntar dos cosas que ya se
+         * conocian al compilar.  Aqui no queda nada que ejecutar: es un literal.
+         *
+         * Un literal interpolado (`${...}`) NO entra: lo produce el lexer como
+         * una secuencia de tokens, no como un STRING_LIT suelto.  Pegar uno
+         * simple a uno interpolado no se funde, y el `+` lo cubre. */
+        while (current_.kind == TokenKind::STRING_LIT ||
+               current_.kind == TokenKind::RAW_STRING_LIT) {
+            /* Mezclar crudo y normal cambiaria el significado de los escapes de
+             * una de las dos mitades -> se pide que sean del mismo tipo. */
+            const bool nxt_raw = (current_.kind == TokenKind::RAW_STRING_LIT);
+            if (nxt_raw != e->is_raw) {
+                error_here("no se pueden pegar un literal normal y uno crudo "
+                           "(r\"...\"): sus escapes no significan lo mismo; "
+                           "usa '+' si es lo que quieres");
+                break;
+            }
+            e->value += consume().str_val;
+        }
         return e;
     }
     case TokenKind::ISTR_BEGIN: {

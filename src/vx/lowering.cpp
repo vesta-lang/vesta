@@ -16486,6 +16486,38 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     auto is_string_lit_node = [](const ast::Expr *ex) -> bool {
         return ex && ex->kind == ast::NodeKind::StringLitExpr;
     };
+    /* Plegado de `"a" + "b"`: si TODO el arbol de `+` son literales, el valor se
+     * conoce al compilar -> se emite UN literal, no una cadena de STRCAT.
+     * Ninguno de los dos aporta nada en runtime, y el STRCAT ademas aloca.
+     *
+     * Recursivo para que `"a" + "b" + "c"` -- que es `((a+b)+c)` -- colapse
+     * entero y no a medias.  Un literal INTERPOLADO no entra: su valor depende
+     * de las expresiones de dentro. */
+    {
+        std::function<bool(const ast::Expr *, std::string &)> fold_str;
+        fold_str = [&](const ast::Expr *ex, std::string &out) -> bool {
+            if (!ex) return false;
+            if (ex->kind == ast::NodeKind::StringLitExpr) {
+                const auto *sl = static_cast<const ast::StringLitExpr *>(ex);
+                if (sl->is_interpolated()) return false;
+                out += sl->value;
+                return true;
+            }
+            if (ex->kind != ast::NodeKind::BinaryExpr) return false;
+            const auto *b = static_cast<const ast::BinaryExpr *>(ex);
+            if (b->op != ast::BinOp::Add) return false;
+            return fold_str(b->lhs.get(), out) && fold_str(b->rhs.get(), out);
+        };
+        if (e->op == ast::BinOp::Add) {
+            std::string folded;
+            if (fold_str(e, folded)) {
+                ast::StringLitExpr lit;
+                lit.loc = e->loc;
+                lit.value = std::move(folded);
+                return lower_string_literal_to_string_object(&lit);
+            }
+        }
+    }
     /* En un cuerpo de @Macro los exprs tienen result_type=VOID (el macro no
      * pasa por check_functions), asi que una llamada a un builtin que DEVUELVE
      * string (`to_str`, `chr`, `substr`, `concat`, ...) no se reconoce como
