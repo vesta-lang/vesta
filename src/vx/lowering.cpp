@@ -11023,6 +11023,14 @@ ir::IrValueId Lowering::lower_enum_constructor(
     const auto &elays = tc_.enum_layouts();
     auto it = elays.find(enum_name);
     if (it == elays.end()) {
+        // `typedef Color Tinta new;` -> el layout (variantes, tags, payloads)
+        // es el del enum de debajo; el newtype solo anade la identidad, que ya
+        // viaja en el Type.
+        if (const std::string real = tc_.underlying_layout_name(enum_name);
+            !real.empty())
+            it = elays.find(real);
+    }
+    if (it == elays.end()) {
         error_at(loc, "lowering: enum desconocido '" + enum_name + "'");
         return ir::IR_NO_VALUE;
     }
@@ -30907,9 +30915,15 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     // no con el mangled del consumer ("buffer__Buffer").  Si el layout
     // tiene @c imported_helper_suffix , lo usamos como sufijo del label.
     std::string helper_class_name = e->class_name;
+    // `typedef Caja Sesion new;` -> `new Sesion()` construye la clase de debajo,
+    // asi que el helper es `__new_Caja`.  El newtype no genera uno propio: no
+    // tiene nada que construir de distinto, solo una identidad distinta.
+    if (const std::string real = tc_.underlying_layout_name(helper_class_name);
+        !real.empty())
+        helper_class_name = real;
     {
         const auto &class_layouts = tc_.class_layouts();
-        auto it_lay = class_layouts.find(e->class_name);
+        auto it_lay = class_layouts.find(helper_class_name);
         if (it_lay != class_layouts.end() &&
             !it_lay->second.imported_helper_suffix.empty()) {
             helper_class_name = it_lay->second.imported_helper_suffix;

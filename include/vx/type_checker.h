@@ -1878,6 +1878,27 @@ private:
         return (it != newtype_underlying_.end()) ? &it->second : nullptr;
     }
 
+    /**
+     * @brief Nombre del layout REAL detras de un newtype (cadena vacia si no lo
+     *        es, o si su underlying no es un tipo con layout).
+     *
+     * `typedef Caja Sesion new;` -> `underlying_layout_name("Sesion")` da
+     * "Caja".  Un newtype comparte la representacion del underlying -- y por
+     * tanto su layout, sus campos y sus metodos; lo unico que anade es ser
+     * NOMINALMENTE distinto, y eso viaja en el @c Type (nominal_id), no en el
+     * layout.  Sin esto, los lookups por NOMBRE (`class_layouts_`,
+     * `enum_layouts_`) no encuentran nada y un newtype sobre una clase o un
+     * enum no se podia usar.
+     */
+    /// @brief Tipo que vale `new X(...)` (ver la definicion en el .cpp).
+    Type new_expr_result_type(const std::string &name) const;
+
+    std::string underlying_layout_name(const std::string &name) const {
+        auto it = newtype_underlying_.find(name);
+        if (it == newtype_underlying_.end()) return std::string();
+        return it->second.struct_name;
+    }
+
     /// @brief Metadata de conversiones de un newtype (puede ser nullptr).
     const NewtypeInfo *newtype_info(const std::string &name) const noexcept {
         auto it = newtype_info_.find(name);

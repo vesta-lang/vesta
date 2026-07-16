@@ -7369,6 +7369,16 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
 
     auto it = class_layouts_.find(e->class_name);
     if (it == class_layouts_.end()) {
+        // `typedef Caja Sesion new;` -> `new Sesion()` construye la clase de
+        // debajo.  El newtype comparte la representacion (y por tanto el
+        // layout, los campos y los metodos); lo unico que anade es que sea
+        // NOMINALMENTE distinto, y eso lo lleva el Type, no el layout.
+        if (const std::string real = underlying_layout_name(e->class_name);
+            !real.empty()) {
+            it = class_layouts_.find(real);
+        }
+    }
+    if (it == class_layouts_.end()) {
         diags_.error(e->loc, "clase desconocida: '" + e->class_name + "'");
         return Type{};
     }
@@ -7392,7 +7402,7 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
                                                   "': message debe ser string");
             }
         }
-        return Type{PrimitiveKind::CLASS, e->class_name};
+        return new_expr_result_type(e->class_name);
     }
 
     // Localizar el constructor: debe tener el mismo nombre que la
@@ -7435,7 +7445,7 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             }
         }
     }
-    return Type{PrimitiveKind::CLASS, e->class_name};
+    return new_expr_result_type(e->class_name);
 }
 
 bool TypeChecker::value_assignable_to_interface(
@@ -8302,6 +8312,14 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
             return Type{};
         }
         auto it_en = enum_layouts_.find(base_id->name);
+        if (it_en == enum_layouts_.end()) {
+            // `typedef Color Tinta new;` -> `Tinta.Verde` es la variante del
+            // enum de debajo.  El newtype comparte su representacion y sus
+            // variantes; lo unico que anade es ser nominalmente distinto.
+            if (const std::string real = underlying_layout_name(base_id->name);
+                !real.empty())
+                it_en = enum_layouts_.find(real);
+        }
         if (it_en != enum_layouts_.end()) {
             const EnumLayout &elay = it_en->second;
             for (const auto &v : elay.variants) {
@@ -8337,7 +8355,16 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                     // para que el lowering la trate como constructor
                     // sin args.
                     e->property_kind = 99;
+                    // Si se llego por un newtype (`Tinta.Verde`), el valor es
+                    // del NEWTYPE, no del enum de debajo: devolver el Type
+                    // declarado, que lleva su nominal_id.  Con `elay.name` a
+                    // secas, `Tinta t = Tinta.Verde;` fallaba con "tipo (Color)
+                    // incompatible con tipo declarado (Tinta)".
                     Type rt{PrimitiveKind::STRUCT, elay.name};
+                    if (auto ait = type_aliases_.find(base_id->name);
+                        ait != type_aliases_.end() &&
+                        ait->second.nominal_id != 0)
+                        rt = ait->second;
                     e->result_type = rt;
                     return rt;
                 }
@@ -8527,6 +8554,22 @@ static bool numeric_const_fits_newtype(const Type &param, const Type &arg,
     default:
         return false;
     }
+}
+
+/**
+ * @brief Tipo que vale `new X(...)`.
+ *
+ * Normalmente `CLASS X`.  Pero si @p name es un newtype sobre una clase
+ * (`typedef Caja Sesion new;`), lo que vale es el Type DECLARADO -- que lleva su
+ * `nominal_id`.  Fabricar uno nuevo aqui daria un `CLASS Sesion` sin id, y
+ * asignarlo a un `Sesion` fallaba con el mensaje absurdo "tipo (Sesion)
+ * incompatible con tipo declarado (Sesion)": mismo nombre, distinta identidad.
+ */
+Type TypeChecker::new_expr_result_type(const std::string &name) const {
+    auto it = type_aliases_.find(name);
+    if (it != type_aliases_.end() && it->second.nominal_id != 0)
+        return it->second;
+    return Type{PrimitiveKind::CLASS, name};
 }
 
 /**
