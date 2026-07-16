@@ -28,6 +28,8 @@
 
 #include "vx/parser.h"
 
+#include "contract_when.h"
+
 #include <iostream>
 #include <string>
 #include <unordered_set>
@@ -133,61 +135,6 @@ void Parser::skip_target_skipped_decl() {
 // estandar: ! > && > ||.  Mapea directo a `#if defined(...)` (C),
 // `#[cfg(...)]` (Rust), `static if (...)` (D).
 
-// @c true si la expresion de un `when:` habla SOLO del target (os/arch/cpu/
-// mode/compiler/vm) y por tanto se puede resolver aqui mismo, al parsear.
-//
-// Un `when:` puede hablar tambien del PARAMETRO DE TIPO (`is_float<T>()`,
-// `sizeof<T>() == 8`), y eso no tiene respuesta hasta que T es concreto -- o
-// sea, hasta monomorphizar.  El parser guarda esos sin resolver
-// (@ref ast::PendingComplexity) y el clon de la monomorphizacion los evalua.
-//
-// La clasificacion es por ATOMO: se parte la expresion por los operadores
-// booleanos y los parentesis, y cada atomo es "de target" si empieza por
-// `os:`/`arch:`/`cpu:`/`mode:` o su primera palabra es `compiler`/`vm`.  Basta
-// con que uno no lo sea para diferir la anotacion entera (una expresion mixta
-// como `arch:x86_64 && is_float<T>()` se resuelve toda junta al monomorphizar).
-static bool when_solo_target_(const std::string &spec) noexcept {
-    std::string atomo;
-    bool todos = true;
-    auto cerrar = [&]() {
-        size_t a = atomo.find_first_not_of(" \t");
-        if (a == std::string::npos) { atomo.clear(); return; }
-        size_t b = atomo.find_last_not_of(" \t");
-        const std::string t = atomo.substr(a, b - a + 1);
-        atomo.clear();
-        if (t.empty()) return;
-        auto empieza = [&](const char *p) {
-            return t.rfind(p, 0) == 0;
-        };
-        if (empieza("os:") || empieza("arch:") || empieza("cpu:") ||
-            empieza("mode:") || empieza("compiler") || empieza("vm"))
-            return;
-        todos = false;
-    };
-    for (size_t i = 0; i < spec.size(); ++i) {
-        const char c = spec[i];
-        if (c == '&' || c == '|') {
-            cerrar();
-            if (i + 1 < spec.size() && spec[i + 1] == c) ++i;
-            continue;
-        }
-        if (c == '!') { cerrar(); continue; }
-        // Los parentesis de un predicado (`is_float<T>()`) son parte del atomo;
-        // los de agrupacion, no.  Se distinguen por si el atomo ya tiene algo:
-        // `(` tras texto es una llamada.
-        if (c == '(' && atomo.find_first_not_of(" \t") == std::string::npos) {
-            cerrar();
-            continue;
-        }
-        if (c == ')' && atomo.find('(') == std::string::npos) {
-            cerrar();
-            continue;
-        }
-        atomo.push_back(c);
-    }
-    cerrar();
-    return todos;
-}
 
 // Version del compilador / VM expuesta a @Target (M.m).  Bump al
 // publicar releases con semver.  El test M.condcomp espera
@@ -1000,33 +947,17 @@ void Parser::parse_member_contracts_(MemberContracts &out) {
             const std::string cierra = "se esperaba ')' al cerrar @" + nm + "(N)";
             (void)expect(TokenKind::RPAREN, cierra.c_str());
         } else {
-            // Se parsea a un temporal: si el `when:` resulta ser diferido (habla
-            // del parametro de tipo), lo declarado va a `pending` en vez de a
-            // los campos resueltos -- y ademas puede haber VARIOS @complexity
-            // sobre el mismo metodo, uno por cada valor de T.
-            MemberContracts tmp;
-            std::string defer;
-            parse_complexity_args_(tmp.complexity_expr, tmp.complexity_vars,
-                                   tmp.partial_pre, tmp.partial_post,
-                                   tmp.total_pre, tmp.total_post, &defer);
-            if (defer.empty()) {
-                out.complexity_expr = std::move(tmp.complexity_expr);
-                out.complexity_vars = std::move(tmp.complexity_vars);
-                out.partial_pre = std::move(tmp.partial_pre);
-                out.partial_post = std::move(tmp.partial_post);
-                out.total_pre = std::move(tmp.total_pre);
-                out.total_post = std::move(tmp.total_post);
-            } else {
-                ast::PendingComplexity pc;
-                pc.when = std::move(defer);
-                pc.expr = std::move(tmp.complexity_expr);
-                pc.vars = std::move(tmp.complexity_vars);
-                pc.partial_pre = std::move(tmp.partial_pre);
-                pc.partial_post = std::move(tmp.partial_post);
-                pc.total_pre = std::move(tmp.total_pre);
-                pc.total_post = std::move(tmp.total_post);
-                out.pending.push_back(std::move(pc));
-            }
+            // TODOS los @complexity van a la lista, tambien el que no lleva
+            // `when:` -- resolver aqui el primero y dejar que el siguiente lo
+            // pise es lo que hacia que ganase el ultimo TEXTUALMENTE.  Se
+            // resuelven todos juntos y por especificidad cuando se conoce el
+            // ultimo, que para un generico es al monomorphizar.
+            ast::PendingComplexity pc;
+            bool aplica = true;
+            parse_complexity_args_(pc.expr, pc.vars, pc.partial_pre,
+                                   pc.partial_post, pc.total_pre, pc.total_post,
+                                   &pc.when, &aplica);
+            if (aplica) out.pending.push_back(std::move(pc));
         }
     }
 }
@@ -1039,12 +970,10 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
     m.contract_nopanic = mc.nopanic;
     m.contract_alloc = mc.alloc;
     m.contract_stack = mc.stack;
-    m.complexity_expr = mc.complexity_expr;
-    m.complexity_vars = mc.complexity_vars;
-    m.complexity_partial_pre = mc.partial_pre;
-    m.complexity_partial_post = mc.partial_post;
-    m.complexity_total_pre = mc.total_pre;
-    m.complexity_total_post = mc.total_post;
+    // Los @complexity van sin resolver: hay que verlos TODOS a la vez para
+    // aplicar la prioridad por especificidad, y para un metodo generico el
+    // ultimo dato (T) no llega hasta la monomorphizacion.  Los campos resueltos
+    // los rellena el type checker.
     m.complexity_pending = mc.pending;
 }
 
@@ -1075,7 +1004,8 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                                     std::string &top_complexity_partial_post,
                                     std::string &top_complexity_total_pre,
                                     std::string &top_complexity_total_post,
-                                    std::string *defer_when) {
+                                    std::string *out_when, bool *out_aplica) {
+    if (out_aplica) *out_aplica = true;
                 if (current_.kind != TokenKind::LPAREN) {
                     error_here("@complexity requiere '(O(...))'");
                 } else {
@@ -1166,14 +1096,12 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                                 error_here("@complexity: el `when:` va SIN "
                                            "comillas (when: arch:arm64)");
                             }
-                            if (!when_solo_target_(spec)) {
-                                // Habla del parametro de tipo -> no se puede
-                                // resolver aqui.  Se devuelve tal cual, se
-                                // sigue parseando las dimensiones con
-                                // normalidad, y el caller las reubica a
-                                // `complexity_pending` para que las resuelva el
-                                // clon de la monomorphizacion con T concreto.
-                                if (!defer_when) {
+                            if (out_when) *out_when = spec;
+                            if (!cwhen::only_target(spec)) {
+                                // Habla del parametro de tipo: aqui T aun no es
+                                // nada.  Se deja SIN evaluar; lo resuelve el
+                                // clon de la monomorphizacion.
+                                if (!out_when) {
                                     error_here(
                                         "@complexity: el `when:` solo puede "
                                         "hablar del parametro de tipo "
@@ -1181,14 +1109,21 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                                         "metodo de un tipo generico");
                                     return;
                                 }
-                                *defer_when = spec;
                                 continue;
                             }
+                            // Solo target: se puede decidir ya si el contrato
+                            // es de esta compilacion.  El que NO casa se tira;
+                            // el que casa SOBREVIVE con su `when:` intacto,
+                            // porque hara falta para compararlo por
+                            // especificidad con los otros que tambien casen.
                             if (!target_matches_(spec)) aplica = false;
                         }
-                        // Contrato de otro target: fuera.  (Un `when:` diferido
+                        // Contrato de otro target: fuera.  (Un `when:` sobre T
                         // no llega aqui con aplica=false: no se evalua.)
-                        if (!aplica) return;
+                        if (!aplica) {
+                            if (out_aplica) *out_aplica = false;
+                            return;
+                        }
 
                         bool got_positional = false;
                         for (const std::string &s : segs) {

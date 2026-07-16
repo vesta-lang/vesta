@@ -751,6 +751,17 @@ class TypeChecker {
                                      const vxgen::GenSubst &g,
                                      const SourceLoc &loc);
 
+    /// Resuelve los @complexity de un metodo NO generico (todos sus atomos
+    /// deben ser de target: aqui no hay T al que referirse).
+    void resolve_complexity_no_generico_(ast::ClassMethodDecl &m);
+
+    /// Recorre las decls resolviendo los @complexity pendientes.  Las
+    /// instanciaciones ya vienen resueltas del clon; las plantillas se saltan
+    /// (no producen IR y sus `when:` sobre T no tienen respuesta fuera de una
+    /// instanciacion).
+    void resolve_complexity_decls_(
+        std::vector<std::unique_ptr<ast::Node>> &decls);
+
     /**
      * @brief Monomorphizacion de funcion generica.  Clona la FunctionDecl
      * template sustituyendo los type_params, la anyade a @c mod_.decls (para que

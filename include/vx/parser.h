@@ -560,16 +560,21 @@ class Parser {
     /// Compartido entre las anotaciones top-level y las de un metodo: es el
     /// mismo contrato sobre lo mismo.  Se entra con `complexity` ya consumido
     /// (el siguiente token debe ser `(`) y se sale tras el `)` de cierre.
-    /// @param defer_when si el `when:` habla del parametro de tipo, se devuelve
-    ///        aqui la expresion tal cual y NO se toca ninguna de las
-    ///        dimensiones: el que resuelve es el clon de la monomorphizacion,
-    ///        que es donde T ya es concreto.  El caller la guarda en
-    ///        @c complexity_pending.  Vacio = resuelto aqui (o sin `when:`).
+    /// Las dimensiones se parsean SIEMPRE; quien decide que hacer con ellas es
+    /// el caller, porque un contrato no se puede resolver mirandolo solo a el:
+    /// varios `when:` pueden casar a la vez y hay que compararlos por
+    /// especificidad (ver `contract_when.h`).
+    /// @param out_when  el texto del `when:` tal cual (vacio si no lo lleva).
+    /// @param out_aplica false si el `when:` habla SOLO del target y NO casa:
+    ///        el contrato no es de esta compilacion y el caller lo tira.  Los
+    ///        que hablan del parametro de tipo salen con true y sin evaluar --
+    ///        el que puede es el clon de la monomorphizacion, con T concreto.
     void parse_complexity_args_(std::string &expr, std::vector<std::string> &vars,
                                 std::string &partial_pre,
                                 std::string &partial_post, std::string &total_pre,
                                 std::string &total_post,
-                                std::string *defer_when = nullptr);
+                                std::string *out_when = nullptr,
+                                bool *out_aplica = nullptr);
 
     /// @brief Consume las anotaciones de contrato que preceden a un miembro.
     /// @param out se rellena con lo declarado; @c out.any dice si habia alguna.

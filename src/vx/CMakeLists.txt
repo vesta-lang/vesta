@@ -77,6 +77,12 @@ add_library(vx_lib STATIC
     asm_effects.cpp
     asm_backend.cpp
     type_checker.cpp
+    # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
+    # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs
+    # (parser.cpp resuelve los atomos de target, type_checker.cpp los que
+    # hablan del parametro de tipo) y tener dos copias del clasificador era
+    # justo lo que hacia falta evitar.
+    contract_when.cpp
     # Utilidades de clonacion de AST con sustitucion de type-params,
     # extraidas de type_checker.cpp (monolito) para mantenerlo manejable.
     generic_clone.cpp
