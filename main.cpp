@@ -369,7 +369,13 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())(
             "analyze-json",
             "Con --analyze: emite el coste por funcion como JSON (para "
-            "consumir desde un renderer de diagramas) en vez de texto legible.")
+            "consumir desde un renderer de diagramas) en vez de texto legible.")(
+            "annotate",
+            "Con --analyze: emite, por funcion, las anotaciones de contrato "
+            "(@pure/@nothrow/@nopanic/@alloc/@stack/@complexity) que deberia "
+            "llevar segun lo medido, con `when: arch:X` donde el valor difiere "
+            "entre arquitecturas.  Asi no hay que escribir a mano el coste por "
+            "arch/sistema.")
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1892,11 +1898,22 @@ int main(int argc, char *argv[]) {
             // distintos, y la huella cuando el cuerpo si (los `register()` de
             // una variante @Target("arch:arm64") gastan frame que su gemela
             // x86-64 no), asi que las dos hay que reportarlas por arch.
+            // Datos CRUDOS de una funcion en una arquitectura (no solo el string
+            // resumen): --annotate los necesita desglosados para generar cada
+            // anotacion y decidir si difiere entre arch.
+            struct FnData {
+                bool present = false;
+                std::string partial_pre, partial_post, total_pre, total_post;
+                uint64_t allocs = 0, stack = 0;
+                bool pure = false, throws = false, panics = false;
+            };
             struct PorArch {
                 std::string arch;
                 std::map<std::string, std::string> resumen;
+                std::map<std::string, FnData> datos;
                 std::string fallo;
             };
+            const bool want_annotate = result.count("annotate") > 0;
             std::vector<PorArch> tabla;
             for (const auto &arch : vx::cwhen::known_archs()) {
                 PorArch pa;
@@ -1939,9 +1956,20 @@ int main(int argc, char *argv[]) {
                     std::string s = std::string(analyze::cost_class_str(f.big_o)) +
                                     " / " +
                                     analyze::cost_class_str(f.total_class);
+                    FnData fd;
+                    fd.present = true;
+                    fd.partial_pre = analyze::cost_class_str(f.big_o);
+                    fd.partial_post = analyze::cost_class_str(f.big_o);
+                    fd.total_pre = analyze::cost_class_str(f.total_class);
+                    fd.total_post = analyze::cost_class_str(f.total_class);
                     auto it = fpx.find(f.function);
                     if (it != fpx.end()) {
                         const auto *h = it->second;
+                        fd.allocs = h->alloc_sites_total;
+                        fd.stack = h->stack_bytes;
+                        fd.pure = h->pure;
+                        fd.throws = h->throws_total;
+                        fd.panics = h->panics_total;
                         s += "  allocs=" + std::to_string(h->alloc_sites_total) +
                              " stack=" + std::to_string(h->stack_bytes) + "B" +
                              " pure=" + (h->pure ? "si" : "no") +
@@ -1949,6 +1977,7 @@ int main(int argc, char *argv[]) {
                              " panics=" + (h->panics_total ? "si" : "no");
                     }
                     pa.resumen[f.function] = std::move(s);
+                    pa.datos[f.function] = std::move(fd);
                 }
                 tabla.push_back(std::move(pa));
             }
@@ -1994,6 +2023,136 @@ int main(int argc, char *argv[]) {
                 }
                 for (const auto &s : no_compilan)
                     std::cout << "  [aviso] " << s << "\n";
+            }
+
+            // --annotate: las anotaciones que cada funcion deberia llevar,
+            // segun lo medido, con `when: arch:X` donde difieren.  Es lo que
+            // el programador tendria que escribir a mano; aqui lo genera el
+            // analizador (el valor ES lo que mide, no una suposicion).
+            if (want_annotate) {
+                // Las arch en las que la funcion compilo, en orden del registro.
+                auto archs_ok = [&]() {
+                    std::vector<const PorArch *> v;
+                    for (const auto &pa : tabla)
+                        if (pa.fallo.empty()) v.push_back(&pa);
+                    return v;
+                }();
+                // Agrupa las arch por el valor (string) de un campo.  Devuelve
+                // valor -> lista-de-arch.  Solo mira las arch donde la funcion
+                // esta presente.
+                auto agrupar =
+                    [&](const std::string &fn,
+                        const std::function<std::string(const FnData &)> &get)
+                    -> std::map<std::string, std::vector<std::string>> {
+                    std::map<std::string, std::vector<std::string>> m;
+                    for (const auto *pa : archs_ok) {
+                        auto it = pa->datos.find(fn);
+                        if (it == pa->datos.end() || !it->second.present) continue;
+                        m[get(it->second)].push_back(pa->arch);
+                    }
+                    return m;
+                };
+                // `when:` para un grupo de arch.  Vacio si el grupo cubre TODAS
+                // las arch presentes (no hace falta condicionar).
+                auto when_de =
+                    [&](const std::string &fn,
+                        const std::vector<std::string> &archs) -> std::string {
+                    size_t total = 0;
+                    for (const auto *pa : archs_ok)
+                        if (pa->datos.count(fn) && pa->datos.at(fn).present)
+                            ++total;
+                    if (archs.size() == total) return std::string();
+                    std::string w;
+                    for (size_t i = 0; i < archs.size(); ++i) {
+                        if (i) w += " || ";
+                        w += "arch:" + archs[i];
+                    }
+                    return ", when: " + w;
+                };
+
+                std::cout << "\nAnotaciones sugeridas (--annotate).  Copialas "
+                             "delante de cada funcion.\n";
+                std::cout
+                    << "=================================================="
+                       "===========\n";
+                for (const auto &f : mc_post.functions) {
+                    const std::string &fn = f.function;
+                    // Presente en alguna arch?
+                    bool any = false;
+                    for (const auto *pa : archs_ok)
+                        if (pa->datos.count(fn) && pa->datos.at(fn).present)
+                            any = true;
+                    if (!any) continue;
+                    std::cout << "  // " << fn << "\n";
+
+                    // Flags positivos (@pure/@nothrow/@nopanic): se declaran
+                    // donde la propiedad se cumple.  Si en todas -> sin when; si
+                    // en algunas -> when con esas; si en ninguna -> nada.
+                    auto flag = [&](const char *nombre,
+                                    const std::function<bool(const FnData &)> &p) {
+                        std::vector<std::string> si;
+                        size_t total = 0;
+                        for (const auto *pa : archs_ok) {
+                            auto it = pa->datos.find(fn);
+                            if (it == pa->datos.end() || !it->second.present)
+                                continue;
+                            ++total;
+                            if (p(it->second)) si.push_back(pa->arch);
+                        }
+                        if (si.empty()) return;
+                        if (si.size() == total) {
+                            std::cout << "  @" << nombre << "\n";
+                        } else {
+                            std::string w;
+                            for (size_t i = 0; i < si.size(); ++i) {
+                                if (i) w += " || ";
+                                w += "arch:" + si[i];
+                            }
+                            std::cout << "  @" << nombre << "(when: " << w
+                                      << ")\n";
+                        }
+                    };
+                    flag("pure", [](const FnData &d) { return d.pure; });
+                    flag("nothrow", [](const FnData &d) { return !d.throws; });
+                    flag("nopanic", [](const FnData &d) { return !d.panics; });
+
+                    // @alloc(N) / @stack(N): un valor por grupo de arch.
+                    auto num = [&](const char *nombre,
+                                   const std::function<uint64_t(const FnData &)> &g) {
+                        auto grupos = agrupar(
+                            fn, [&](const FnData &d) { return std::to_string(g(d)); });
+                        for (const auto &kv : grupos)
+                            std::cout << "  @" << nombre << "(" << kv.first
+                                      << when_de(fn, kv.second) << ")\n";
+                    };
+                    num("alloc", [](const FnData &d) { return d.allocs; });
+                    num("stack", [](const FnData &d) { return d.stack; });
+
+                    // @complexity: las 4 dimensiones.  Se agrupa por la tupla
+                    // entera para no partir un contrato coherente.
+                    auto cx = agrupar(fn, [](const FnData &d) {
+                        return d.partial_pre + "|" + d.partial_post + "|" +
+                               d.total_pre + "|" + d.total_post;
+                    });
+                    for (const auto &kv : cx) {
+                        // deshacer la tupla.
+                        std::vector<std::string> dim;
+                        size_t p = 0, q;
+                        std::string t = kv.first;
+                        while ((q = t.find('|', p)) != std::string::npos) {
+                            dim.push_back(t.substr(p, q - p));
+                            p = q + 1;
+                        }
+                        dim.push_back(t.substr(p));
+                        if (dim.size() == 4)
+                            std::cout << "  @complexity(partial_pre: " << dim[0]
+                                      << ", partial_post: " << dim[1]
+                                      << ", total_pre: " << dim[2]
+                                      << ", total_post: " << dim[3]
+                                      << when_de(fn, kv.second) << ")\n";
+                    }
+                    std::cout << "\n";
+                }
             }
         }
 
