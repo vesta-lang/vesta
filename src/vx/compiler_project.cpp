@@ -2607,6 +2607,13 @@ CompileResult compile_vx_project(
         res.ir_module_cache_bytes_preopt = ir::emit_ir_module_cache(merged);
     }
 
+    // --vx-emit-ir: copia del IR PRE-opt (antes de optimizar) para el dump.
+    // La ruta de proyecto (con imports) NO rellenaba res.ir_text -- solo lo
+    // hacia compile_vx_source --, asi que `vm --vesta prog.vx --vx-emit-ir`
+    // generaba un .ir VACIO en cuanto el fuente tenia un import.
+    ir::IrModule ir_pre_dump;
+    if (opts.dump_ir) ir_pre_dump = merged;
+
     // 5. Optimizar el IR mergeado.  En modo --analyze SIN inline: el coste
     //    PARCIAL es propiedad del cuerpo escrito -- si el inline lo alterase,
     //    dependeria del optimizador (`return this.swap(v)` es parcial O(1), no
@@ -2614,6 +2621,20 @@ CompileResult compile_vx_project(
     //    analizador via el callgraph.  Fuera de --analyze, inline normal.
     ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
                     /*allow_inline=*/!opts.emit_ir_preopt);
+
+    if (opts.dump_ir) {
+        std::ostringstream ir_oss;
+        ir_oss << "// ============================================\n";
+        ir_oss << "// SSA IR pre-optimizacion (frontend output, mergeado)\n";
+        ir_oss << "// ============================================\n";
+        ir::ir_print(ir_pre_dump, ir_oss);
+        ir_oss << "\n// ============================================\n";
+        ir_oss << "// SSA IR post-optimizacion (opt_level=" << opts.opt_level
+               << ")\n";
+        ir_oss << "// ============================================\n";
+        ir::ir_print(merged, ir_oss);
+        res.ir_text = ir_oss.str();
+    }
 
     // 6. Emitir .vel desde el IR mergeado.
     ir::EmitOptions emit_opts;
