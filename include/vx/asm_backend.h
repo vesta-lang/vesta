@@ -42,6 +42,23 @@ namespace vx {
 /// Arquitectura destino del ensamblado.
 enum class AsmArch { X86_64, X86_32, X86_16, ARM64, ARM32 };
 
+/// @brief El @ref AsmArch de un bloque de inline asm, segun el TARGET.
+///
+/// El inline asm se ensambla para la arquitectura del TARGET, no la del host:
+/// un `asm { ... }` dentro de una variante `@Target("arch:arm64")` es codigo
+/// ARM y hay que ensamblarlo en modo ARM aunque el build corra en x86.  Antes
+/// se elegia solo por los bits (`@bits(16|32|64)`) y salia SIEMPRE x86, con lo
+/// que las variantes arm64 daban "Invalid mnemonic" en Keystone: no se habian
+/// ensamblado nunca.
+///
+/// @param bits el ancho de `@bits(...)`, que solo tiene sentido en x86 (modo
+///        real / protegido / largo).  En ARM se ignora: la anchura del modo la
+///        fija el propio ISA, no una directiva.
+///
+/// Un solo sitio traduce `arch:` -> @ref AsmArch, para que anadir una
+/// arquitectura sea tocar aqui y no cada punto que ensambla.
+AsmArch asm_arch_for_target(int bits);
+
 /// Resultado de ensamblar un fragmento de asm.
 struct AsmAssembleResult {
     bool ok = false;            ///< true si ensamblo sin errores

@@ -21,6 +21,29 @@
 
 #include "vx/asm_backend.h"
 
+#include "vx/parser.h" // get_aot_condcomp_target: el arch del TARGET, no del host
+
 namespace vx {
 AsmBackend *g_asm_backend = nullptr;
+
+AsmArch asm_arch_for_target(int bits) {
+    std::string os, arch;
+    get_aot_condcomp_target(os, arch);
+    // Sin override -> el host.  El compilador nativo hoy es x86-64; ARM se
+    // ensambla cuando una variante @Target lo pide (o cuando el driver AOT
+    // genera para ese target).
+    if (arch.empty()) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+        arch = "arm64";
+#else
+        arch = "x86_64";
+#endif
+    }
+    if (arch == "arm64") return AsmArch::ARM64;
+    if (arch == "arm32" || arch == "arm") return AsmArch::ARM32;
+    // x86: aqui SI mandan los bits (@bits: modo real/protegido/largo).
+    if (bits == 16) return AsmArch::X86_16;
+    if (bits == 32) return AsmArch::X86_32;
+    return AsmArch::X86_64;
+}
 }

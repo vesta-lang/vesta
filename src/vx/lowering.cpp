@@ -492,9 +492,9 @@ bool asmblk_assemble(
     const std::string &body, uint8_t bits, std::vector<uint8_t> &out,
     std::string &err,
     std::vector<ir::IrModule::StaticDataMeta::SymRef> *sym_refs = nullptr) {
-    vx::AsmArch arch = bits == 16   ? vx::AsmArch::X86_16
-                        : bits == 32 ? vx::AsmArch::X86_32
-                                     : vx::AsmArch::X86_64;
+    // El arch lo decide el TARGET (una variante @Target("arch:arm64") ensambla
+    // en ARM aunque el build corra en x86); los bits solo mandan en x86.
+    vx::AsmArch arch = vx::asm_arch_for_target(bits);
     /* Pre-pase: recolectar los labels LOCALes (def `ident:`) para no
      * confundirlos con simbolos externos en call/jmp. */
     std::set<std::string> local_labels;
@@ -13321,11 +13321,9 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     if (vx::g_asm_backend && !body_sub.empty()) {
         // Ensamblar el cuerpo COMPLETO (preserva el contexto de etiquetas: un
         // `jmp .loop` necesita ver la definicion `.loop:` de otra linea).
-        // Arch del TARGET (no del host): 32/16 si --aot-arch lo pide.
-        const vx::AsmArch asm_arch = asm_target_bits_ == 32 ? vx::AsmArch::X86_32
-                                      : asm_target_bits_ == 16
-                                          ? vx::AsmArch::X86_16
-                                          : vx::AsmArch::X86_64;
+        // Arch del TARGET (no del host): ARM si @Target lo pide, o 32/16 en x86
+        // segun @bits / --aot-arch.
+        const vx::AsmArch asm_arch = vx::asm_arch_for_target(asm_target_bits_);
         vx::AsmAssembleResult ar =
             vx::g_asm_backend->assemble(body_sub, asm_arch);
         if (!ar.ok) {
