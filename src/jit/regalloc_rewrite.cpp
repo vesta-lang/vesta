@@ -1339,7 +1339,14 @@ struct Lowerer {
             } else {
                 addr_reg = static_cast<MReg>(a.reg);
             }
-            const MOperand mem = MOperand::make_mem(addr_reg, 0);
+            /* P2 SIB: si src2 es IMM32, es el disp fusionado (`[base+disp]`),
+             * igual que en la ruta GP de abajo.  Ignorarlo (disp 0) hacia que
+             * TODOS los campos float de un struct se leyeran del offset 0: un
+             * `struct Rect { Punto min; Punto max; }` con f64 devolvia
+             * min.x para max.x, etc. -- silencioso y con valores plausibles. */
+            const int32_t fld_disp =
+                (in.src2.kind == MOperandKind::IMM32) ? in.src2.value : 0;
+            const MOperand mem = MOperand::make_mem(addr_reg, fld_disp);
             const MOp mv = fp_mov_for_width(width ? width : 8);
             const bool dst_spilled =
                 in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
