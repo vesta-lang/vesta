@@ -16881,6 +16881,14 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             (e->op == ast::UnOp::PreInc || e->op == ast::UnOp::PostInc);
         const bool is_pre =
             (e->op == ast::UnOp::PreInc || e->op == ast::UnOp::PreDec);
+        // Tipo que SOBRECARGA la suma (`c++` es `c += 1`): tiene que salir por
+        // aqui, ANTES de las rutas enteras.  El valor SSA de un struct es su
+        // DIRECCION, asi que la ruta entera le sumaba 1 a la direccion del
+        // objeto (medido: `addu r3, r2`) y luego leia basura.
+        const PrimitiveKind opk = e->operand->result_type.kind;
+        if (opk == PrimitiveKind::CLASS || opk == PrimitiveKind::STRUCT) {
+            return lower_overloaded_step(e, is_inc, is_pre);
+        }
         auto compute_new = [&](ir::IrValueId old_val) -> ir::IrValueId {
             const ir::IrValueId one = emit_const(vt, 1, e->loc.line);
             const ir::IrValueId nv = fn_->new_value(vt);
@@ -19354,6 +19362,52 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
     return v_dst;
 }
 
+ir::IrValueId Lowering::lower_overloaded_step(ast::UnaryExpr *e, bool is_inc,
+                                              bool is_pre) {
+    // `c++` sobre un tipo que sobrecarga la suma ES `c += 1`.  Se fabrica ese
+    // compound y se le pide al type checker que lo resuelva igual que a uno
+    // escrito a mano (`__iadd__` in-place, o desazucarado a `c = c + 1`).  El
+    // AssignExpr nace AQUI, con el checker ya pasado, asi que hay que pedirselo
+    // explicitamente -- pero la regla vive en un solo sitio.
+    const Type &tt = e->operand->result_type;
+    const int ln = e->loc.line;
+    // Postfijo: el valor de la expresion es el ANTERIOR -> leerlo antes.  En
+    // los tres lvalues el "valor" de un agregado es su direccion, asi que esto
+    // devuelve la direccion del objeto, no una copia; para `c++` como
+    // sentencia (el uso normal) da igual, y en expresion es lo mismo que hace
+    // el resto del lowering con los agregados.
+    ir::IrValueId prev = ir::IR_NO_VALUE;
+    if (!is_pre) prev = lower_expr(e->operand.get());
+
+    auto one = std::make_unique<ast::IntLitExpr>();
+    one->value = 1;
+    // El `1` es un ENTERO aunque `c` no lo sea: el dunder recibe un i64.  Si le
+    // copiaramos el tipo de `c` (un STRUCT), el dispatch no casaria.
+    one->result_type = Type{PrimitiveKind::I64};
+    one->loc = e->loc;
+
+    ast::AssignExpr asn;
+    asn.op = is_inc ? ast::AssignOp::AddAssign : ast::AssignOp::SubAssign;
+    asn.loc = e->loc;
+    asn.result_type = tt;
+    asn.target = std::move(e->operand);
+    asn.value = std::move(one);
+    Type res;
+    const bool ok = tc_.prepare_overloaded_compound_assign(
+        &asn, tt, Type{PrimitiveKind::I64}, res);
+    ir::IrValueId new_val = ir::IR_NO_VALUE;
+    if (ok) new_val = lower_assign(&asn);
+    e->operand = std::move(asn.target); // devolver el operando al AST
+    if (!ok) {
+        error_at(e->loc,
+                 "lowering: '" + std::string(is_inc ? "++" : "--") +
+                     "' sobre un tipo que no sobrecarga la suma");
+        return ir::IR_NO_VALUE;
+    }
+    (void)ln;
+    return is_pre ? new_val : prev;
+}
+
 ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     // admitimos como lvalue: IdentExpr (variable simple) o
     // FieldAccessExpr (p.x = v).  Otros lvalues (deref de puntero,
@@ -19361,6 +19415,32 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     if (!e->target) {
         error_at(e->loc, "lowering: target de '=' nulo");
         return ir::IR_NO_VALUE;
+    }
+    // Compound assign IN-PLACE sobrecargado: el type checker dejo en
+    // @c overload_method el dunder (`__iadd__` para `+=`, ...).  Se desugara a
+    // UNA llamada `target.__iop__(value)` -- no a load-op-store.  Esa es toda
+    // la diferencia: para `atomic<T>` la operacion tiene que ser indivisible.
+    // Mismo patron que el binario sobrecargado (ver lower_binary): se roban los
+    // hijos para el call sintetico y se devuelven despues.
+    if (!e->overload_method.empty() && e->target && e->value) {
+        const bool recv_is_struct =
+            (e->target->result_type.kind == PrimitiveKind::STRUCT);
+        ast::CallExpr synth;
+        synth.loc = e->loc;
+        auto fa = std::make_unique<ast::FieldAccessExpr>();
+        fa->loc = e->loc;
+        fa->field_name = e->overload_method;
+        fa->base = std::move(e->target);
+        synth.callee = std::move(fa);
+        synth.args.push_back(std::move(e->value));
+        const ir::IrValueId v_call = recv_is_struct
+                                         ? lower_struct_method_call(&synth)
+                                         : lower_class_method_call(&synth);
+        auto *fa_back =
+            static_cast<ast::FieldAccessExpr *>(synth.callee.get());
+        e->target = std::move(fa_back->base);
+        e->value = std::move(synth.args[0]);
+        return v_call;
     }
     // Si el valor es un lambda-literal que se almacena en un campo / slot /
     // deref, su env ESCAPA del scope actual (el objeto contenedor puede

@@ -6510,7 +6510,11 @@ bool TypeChecker::lsp_eval_int(const ast::Expr *e, int64_t *out) {
 void TypeChecker::check_if(ast::IfStmt *s, const Type &fn_return_type) {
     if (s->cond) {
         Type tc = check_expr(s->cond.get());
-        if (tc.kind != PrimitiveKind::BOOL && !is_numeric(tc.kind)) {
+        // `if (obj)` sobre un tipo con `__bool__`: se lee su verdad con ESE
+        // metodo (mismo camino que `!x`, `&&` y `||`).
+        const bool via_bool = wrap_in_bool_dunder(s->cond, tc);
+        if (!via_bool && tc.kind != PrimitiveKind::BOOL &&
+            !is_numeric(tc.kind)) {
             diags_.error(s->cond->loc,
                          "condicion de 'if' debe ser numerica o bool");
         }
@@ -6567,7 +6571,9 @@ void TypeChecker::check_if(ast::IfStmt *s, const Type &fn_return_type) {
 void TypeChecker::check_while(ast::WhileStmt *s, const Type &fn_return_type) {
     if (s->cond) {
         Type tc = check_expr(s->cond.get());
-        if (tc.kind != PrimitiveKind::BOOL && !is_numeric(tc.kind)) {
+        const bool via_bool = wrap_in_bool_dunder(s->cond, tc);
+        if (!via_bool && tc.kind != PrimitiveKind::BOOL &&
+            !is_numeric(tc.kind)) {
             diags_.error(s->cond->loc,
                          "condicion de 'while' debe ser numerica o bool");
         }
@@ -8531,7 +8537,19 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
             case ast::BinOp::Gt: return "__gt__";
             case ast::BinOp::Le: return "__le__";
             case ast::BinOp::Ge: return "__ge__";
+            // Bitwise y shifts (nombres de Python).
+            case ast::BinOp::BitAnd: return "__and__";
+            case ast::BinOp::BitOr: return "__or__";
+            case ast::BinOp::BitXor: return "__xor__";
+            case ast::BinOp::Shl: return "__lshift__";
+            case ast::BinOp::Shr: return "__rshift__";
             // `==`/`!=` se manejan aparte (derivacion __ne__ via __eq__).
+            //
+            // `&&` y `||` NO tienen dunder propio a proposito: sobrecargarlos
+            // (como deja C++) mata el CORTOCIRCUITO -- `a && b` evaluaria `b`
+            // siempre.  Se sobrecarga `__bool__` y ellos lo usan, igual que
+            // `!x` y que `if (x)`: el cortocircuito se conserva y un solo
+            // metodo cubre los cuatro sitios.
             default: return "";
             }
         };
@@ -8822,12 +8840,19 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     }
     case ast::BinOp::LogicalAnd:
     case ast::BinOp::LogicalOr: {
-        // Aceptamos bool y numericos (estilo C).
-        if (tl.kind != PrimitiveKind::BOOL && !is_numeric(tl.kind)) {
+        // Aceptamos bool y numericos (estilo C), y ademas cualquier tipo que
+        // declare `__bool__`: el operando se convierte a bool con ESE metodo.
+        // Se marca CADA lado por separado (`obj && flag` es legal) y el
+        // CORTOCIRCUITO se conserva -- por eso no hay dunder de `&&`: el
+        // lowering sigue emitiendo las dos ramas, y solo llama a `__bool__`
+        // del lado que de verdad evalua.
+        const bool l_bool = wrap_in_bool_dunder(e->lhs, tl);
+        const bool r_bool = wrap_in_bool_dunder(e->rhs, tr);
+        if (!l_bool && tl.kind != PrimitiveKind::BOOL && !is_numeric(tl.kind)) {
             diags_.error(e->loc,
                          "operando izquierdo no booleano en operador logico");
         }
-        if (tr.kind != PrimitiveKind::BOOL && !is_numeric(tr.kind)) {
+        if (!r_bool && tr.kind != PrimitiveKind::BOOL && !is_numeric(tr.kind)) {
             diags_.error(e->loc,
                          "operando derecho no booleano en operador logico");
         }
@@ -9098,7 +9123,11 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                          "operador unario aritmetico requiere numerico");
         }
         return t;
-    case ast::UnOp::LogicalNot: return Type{PrimitiveKind::BOOL};
+    case ast::UnOp::LogicalNot:
+        // `!x` sobre un tipo con `__bool__`: se evalua la verdad del objeto y
+        // se niega.  Mismo metodo que usan `&&`, `||` y `if (x)`.
+        (void)wrap_in_bool_dunder(e->operand, t);
+        return Type{PrimitiveKind::BOOL};
     case ast::UnOp::Unwrap:
         // !!x assert non-null: requiere referencia (CLASS o PTR).
         // Lowering identico a unwrap(x) pero sintactico-mas-corto.
@@ -9132,17 +9161,36 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
         }
         return Type{PrimitiveKind::I64};
     }
-    case ast::UnOp::BitNot:
+    case ast::UnOp::BitNot: {
+        // `~x` -> x.__invert__() (nombre de Python).
+        if (const ClassMethodInfo *m = find_unary_dunder(t, "__invert__")) {
+            e->overload_method = "__invert__";
+            return m->return_type;
+        }
         if (!is_integral(t.kind)) {
-            diags_.error(e->loc, "'~' requiere operando entero");
+            diags_.error(e->loc, "'~' requiere operando entero, o un tipo que "
+                                 "declare `__invert__`; recibido " +
+                                     type_to_string(t));
         }
         return t;
+    }
     case ast::UnOp::PreInc:
     case ast::UnOp::PreDec:
     case ast::UnOp::PostInc:
-    case ast::UnOp::PostDec:
-        if (!is_integral(t.kind)) {
-            diags_.error(e->loc, "++/-- requieren operando entero");
+    case ast::UnOp::PostDec: {
+        // `x++` es `x += 1`: si el tipo sobrecarga esa suma (via `__iadd__`
+        // in-place o `__add__`), el incremento vale igual que el `+`.  Sin esto
+        // la sobrecarga quedaba incoherente: `c + 1` compilaba y `c++` no,
+        // significando lo mismo.
+        const bool overloads_inc =
+            (t.kind == PrimitiveKind::CLASS || t.kind == PrimitiveKind::STRUCT) &&
+            type_overloads_step(t);
+        if (!is_integral(t.kind) && !overloads_inc) {
+            diags_.error(e->loc,
+                         "++/-- requieren operando entero, o un tipo que "
+                         "sobrecargue la suma (`__iadd__` o `__add__`); "
+                         "recibido " +
+                             type_to_string(t));
         }
         // const-correctness A: ++/-- MUTAN el lvalue -> prohibido si es const.
         // Cubre el const de TIPO (pointee/campo/elemento via t.is_const) Y el
@@ -9178,6 +9226,7 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
             }
         }
         return t;
+    }
     case ast::UnOp::AddrOf: {
         // '&x' requiere un lvalue.  aceptamos:
         //  - IdentExpr (variable local; el lowering la promociona
@@ -9495,6 +9544,217 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                      "destino es de solo lectura)");
     }
     return t;
+}
+
+/**
+ * @brief Nombre del dunder de un compound assign (`+=` -> @c __iadd__).
+ * @return cadena vacia para @c Assign (no es compound) o si no tiene dunder.
+ *
+ * Tiene dunder PROPIO, distinto del binario: `a += b` NO es `a = a + b`.  Para
+ * un tipo que promete atomicidad la diferencia no es de estilo -- leer, sumar y
+ * escribir son tres pasos, y otro hilo cabe en medio.
+ */
+static const char *compound_assign_dunder(ast::AssignOp op) {
+    switch (op) {
+    case ast::AssignOp::AddAssign: return "__iadd__";
+    case ast::AssignOp::SubAssign: return "__isub__";
+    case ast::AssignOp::MulAssign: return "__imul__";
+    case ast::AssignOp::DivAssign: return "__idiv__";
+    case ast::AssignOp::ModAssign: return "__imod__";
+    case ast::AssignOp::BitAndAssign: return "__iand__";
+    case ast::AssignOp::BitOrAssign: return "__ior__";
+    case ast::AssignOp::BitXorAssign: return "__ixor__";
+    case ast::AssignOp::ShlAssign: return "__ilshift__";
+    case ast::AssignOp::ShrAssign: return "__irshift__";
+    // `=` tiene su propio dunder (`__assign__`), no es un compound.
+    case ast::AssignOp::Assign: return "";
+    }
+    return "";
+}
+
+/**
+ * @brief Si @p slot es de un tipo con `__bool__`, lo envuelve en
+ *        `(*slot).__bool__()`.
+ *
+ * Se DESAZUCARA en el AST en vez de marcar el nodo: el lowering ya sabe bajar
+ * una llamada a metodo (CALL directo para struct, CALLVIRT para clase), asi que
+ * no hay que tocarlo.  Se usa en los cuatro sitios donde un valor se lee como
+ * verdad -- `!x`, `x && y`, `x || y`, `if (x)`/`while (x)` -- y por eso `&&` y
+ * `||` NO tienen dunder propio: cada lado se convierte por separado y el
+ * lowering sigue emitiendo sus dos ramas, asi que el CORTOCIRCUITO se conserva
+ * (sobrecargar `&&`, como deja C++, lo perderia: evaluaria siempre el derecho).
+ *
+ * @return true si envolvio (el tipo del slot pasa a ser BOOL).
+ */
+bool TypeChecker::wrap_in_bool_dunder(std::unique_ptr<ast::Expr> &slot,
+                                      const Type &t) {
+    if (!slot) return false;
+    const ClassMethodInfo *m = find_unary_dunder(t, "__bool__");
+    if (!m) return false;
+    auto fa = std::make_unique<ast::FieldAccessExpr>();
+    fa->loc = slot->loc;
+    fa->field_name = "__bool__";
+    slot->result_type = t; // el lowering resuelve el layout por aqui
+    fa->base = std::move(slot);
+    auto call = std::make_unique<ast::CallExpr>();
+    call->loc = fa->loc;
+    call->callee = std::move(fa);
+    call->result_type = m->return_type;
+    slot = std::move(call);
+    return true;
+}
+
+/**
+ * @brief Busca un dunder UNARIO (sin parametros) llamado @p nm en @p t.
+ * @return el metodo, o nullptr si @p t no es CLASS/STRUCT o no lo declara.
+ */
+const ClassMethodInfo *TypeChecker::find_unary_dunder(const Type &t,
+                                                      const char *nm) const {
+    const std::vector<ClassMethodInfo> *methods = methods_of_type(t);
+    if (!methods) return nullptr;
+    for (const auto &m : *methods) {
+        if (m.is_constructor || m.is_static) continue;
+        if (m.name != nm) continue;
+        if (!m.param_types.empty()) continue;
+        return &m;
+    }
+    return nullptr;
+}
+
+/// @brief Operador binario equivalente a un compound assign (`+=` -> `+`).
+/// Para el desazucarado `a += b` -> `a = a + b` del fallback.
+static ast::BinOp compound_assign_op_to_binop_tc(ast::AssignOp op) {
+    switch (op) {
+    case ast::AssignOp::SubAssign: return ast::BinOp::Sub;
+    case ast::AssignOp::MulAssign: return ast::BinOp::Mul;
+    case ast::AssignOp::DivAssign: return ast::BinOp::Div;
+    case ast::AssignOp::ModAssign: return ast::BinOp::Mod;
+    case ast::AssignOp::BitAndAssign: return ast::BinOp::BitAnd;
+    case ast::AssignOp::BitOrAssign: return ast::BinOp::BitOr;
+    case ast::AssignOp::BitXorAssign: return ast::BinOp::BitXor;
+    case ast::AssignOp::ShlAssign: return ast::BinOp::Shl;
+    case ast::AssignOp::ShrAssign: return ast::BinOp::Shr;
+    default: return ast::BinOp::Add; // AddAssign (y Assign, que no llega aqui)
+    }
+}
+
+/// @brief Dunder BINARIO equivalente a un compound assign (`+=` -> @c __add__).
+///
+/// Es el fallback cuando el tipo no declara el in-place: `a += b` pasa a ser
+/// `a = a + b`.  Cadena vacia si el operador no tiene binario asociado.
+static const char *compound_assign_binary_dunder(ast::AssignOp op) {
+    switch (op) {
+    case ast::AssignOp::AddAssign: return "__add__";
+    case ast::AssignOp::SubAssign: return "__sub__";
+    case ast::AssignOp::MulAssign: return "__mul__";
+    case ast::AssignOp::DivAssign: return "__div__";
+    case ast::AssignOp::ModAssign: return "__mod__";
+    case ast::AssignOp::BitAndAssign: return "__and__";
+    case ast::AssignOp::BitOrAssign: return "__or__";
+    case ast::AssignOp::BitXorAssign: return "__xor__";
+    case ast::AssignOp::ShlAssign: return "__lshift__";
+    case ast::AssignOp::ShrAssign: return "__rshift__";
+    default: return "";
+    }
+}
+
+/// Lista de metodos de un CLASS/STRUCT, o nullptr si el tipo no los tiene.
+const std::vector<ClassMethodInfo> *
+TypeChecker::methods_of_type(const Type &t) const {
+    if (t.struct_name.empty()) return nullptr;
+    if (t.kind == PrimitiveKind::CLASS) {
+        auto it = class_layouts_.find(t.struct_name);
+        if (it != class_layouts_.end()) return &it->second.methods;
+    } else if (t.kind == PrimitiveKind::STRUCT) {
+        auto it = struct_layouts_.find(t.struct_name);
+        if (it != struct_layouts_.end()) return &it->second.methods;
+    }
+    return nullptr;
+}
+
+bool TypeChecker::type_overloads_step(const Type &t) const {
+    const auto *methods = methods_of_type(t);
+    if (!methods) return false;
+    for (const auto &m : *methods) {
+        if (m.is_constructor || m.is_static) continue;
+        if (m.param_types.size() != 1) continue;
+        // `x++` es `x += 1`: sirve el in-place (`__iadd__`) o, cayendo al
+        // clasico, `__add__`/`__isub__`/`__sub__` para `--`.
+        if (m.name == "__iadd__" || m.name == "__add__" ||
+            m.name == "__isub__" || m.name == "__sub__")
+            return true;
+    }
+    return false;
+}
+
+bool TypeChecker::prepare_overloaded_compound_assign(ast::AssignExpr *e,
+                                                     const Type &tt,
+                                                     const Type &tv,
+                                                     Type &out_result) const {
+    if (!e || e->op == ast::AssignOp::Assign) return false;
+    if (tt.kind != PrimitiveKind::CLASS && tt.kind != PrimitiveKind::STRUCT)
+        return false;
+    // Via 1 -- `__iadd__(V)`: in-place, UNA sola operacion.  Es lo que permite
+    // que `atomic<i64> g; g += 1;` sea una unica instruccion atomica.
+    if (const ClassMethodInfo *dm = find_compound_assign_dunder(tt, tv, e->op)) {
+        e->overload_method = compound_assign_dunder(e->op);
+        out_result = dm->return_type;
+        return true;
+    }
+    // Via 2 -- fallback clasico: `c += v` pasa a ser `c = c + v`.  Se
+    // DESAZUCARA en el AST (el value se sustituye por un BinaryExpr y el op por
+    // `=`), asi que el resto del pipeline ve una asignacion normal cuyo valor es
+    // un binario sobrecargado -- que ya funcionaba.  Cero codigo nuevo en el
+    // lowering.  Asi un tipo normal (Vector, BigInt) define SOLO `__add__` y
+    // obtiene `+=` y `++` gratis; el dunder in-place solo lo paga quien lo
+    // necesita.
+    //
+    // Exige que el binario devuelva algo asignable al propio target
+    // (`Cnt.__add__ -> Cnt`); si devuelve otra cosa no transforma, y el error de
+    // tipos del caller lo dice -- que es lo correcto: `__add__ -> i64` no
+    // define un `+=`.
+    const char *bin_nm = compound_assign_binary_dunder(e->op);
+    if (bin_nm[0] == '\0') return false;
+    const std::vector<ClassMethodInfo> *ms = methods_of_type(tt);
+    if (!ms) return false;
+    for (const auto &m : *ms) {
+        if (m.is_constructor || m.is_static) continue;
+        if (m.name != bin_nm) continue;
+        if (m.param_types.size() != 1) continue;
+        if (!types_assignable(m.param_types[0], tv)) continue;
+        if (!types_assignable(tt, m.return_type)) continue;
+        auto bin = std::make_unique<ast::BinaryExpr>();
+        bin->loc = e->loc;
+        bin->op = compound_assign_op_to_binop_tc(e->op);
+        // El target se LEE ademas de escribirse: hace falta una copia para el
+        // lado izquierdo del binario.
+        bin->lhs = vxgen::clone_expr(e->target.get());
+        bin->lhs->result_type = tt;
+        bin->rhs = std::move(e->value);
+        bin->overload_method = bin_nm;
+        bin->result_type = m.return_type;
+        e->value = std::move(bin);
+        e->op = ast::AssignOp::Assign;
+        out_result = tt;
+        return true;
+    }
+    return false;
+}
+
+const ClassMethodInfo *
+TypeChecker::find_compound_assign_dunder(const Type &tt, const Type &tv,
+                                         ast::AssignOp op) const {
+    const char *nm = compound_assign_dunder(op);
+    if (nm[0] == '\0') return nullptr;
+    const std::vector<ClassMethodInfo> *methods = methods_of_type(tt);
+    if (!methods) return nullptr;
+    for (const auto &m : *methods) {
+        if (m.is_constructor || m.is_static) continue;
+        if (m.name != nm) continue;
+        if (m.param_types.size() != 1) continue;
+        if (types_assignable(m.param_types[0], tv)) return &m;
+    }
+    return nullptr;
 }
 
 Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
@@ -10077,6 +10337,9 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
     // segun el destino (fn_is_raw del target); el lowering emite LABEL_ADDR
     // (+ slot {fn_addr,env=0} si lambda) -- ver lower_ident.
     tv = maybe_promote_func_ref(e->value.get(), s->type, tv);
+    // Compound assign sobre un tipo que sobrecarga operadores.
+    if (Type tr; prepare_overloaded_compound_assign(e, s->type, tv, tr))
+        return tr;
     // Vesta Embed Inc 2: `string += string` y `string += char` son legales
     // (append sugar).  El RHS char NO es assignable a string en general,
     // pero en compound `+=` sobre string lo aceptamos: el lowering native

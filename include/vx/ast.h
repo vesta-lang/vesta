@@ -691,6 +691,19 @@ struct AssignExpr : Expr {
     std::unique_ptr<Expr>
         target; // lvalue: IdentExpr, FieldAccess, IndexExpr o UnaryExpr Deref
     std::unique_ptr<Expr> value;
+    /// Operator overloading del COMPOUND ASSIGN via dunder propio
+    /// (@c __iadd__ para `+=`, @c __isub__ para `-=`, ...).  Cuando el type
+    /// checker ve que @c target es de tipo CLASS o STRUCT que declara el dunder
+    /// cuya firma acepta @c value, deja aqui su nombre; el lowering emite UNA
+    /// llamada a `target.__iop__(value)` en vez del clasico load-op-store.
+    ///
+    /// Tiene dunder PROPIO y no se desugara a `target = target OP value`
+    /// (@c __add__ + store) por una razon de fondo: eso son DOS operaciones.
+    /// Para un tipo que promete atomicidad (@c atomic<T>) la diferencia no es
+    /// de rendimiento sino de correccion -- `g += 1` tiene que ser UNA
+    /// instruccion indivisible, no leer-sumar-escribir.  Cadena vacia = sin
+    /// sobrecarga; comportamiento clasico.
+    std::string overload_method;
     AssignExpr() : Expr(NodeKind::AssignExpr) {}
 };
 
@@ -902,6 +915,7 @@ struct SpawnExpr : Expr {
     /// valor de retorno (Future<T> vs PID).
     enum class Policy : uint8_t { Auto = 0, Here = 1, Pinned = 2 };
     Policy policy = Policy::Auto;
+
     std::unique_ptr<Expr> sched_idx; ///< Solo @c Pinned: indice del scheduler.
     std::unique_ptr<BlockStmt> body;
     SpawnExpr() : Expr(NodeKind::SpawnExpr) {}

@@ -975,6 +975,56 @@ class TypeChecker {
     /// elemento/variable).  El wrapper usa ese @c is_const para el enforcement
     /// de const-correctness (escritura a lvalue const = error).
     Type check_assign_impl(ast::AssignExpr *e);
+
+  public:
+    /**
+     * @brief Resuelve un compound assign (`c += v`) sobre un tipo que
+     *        sobrecarga operadores, dejando @p e listo para el lowering.
+     *
+     * Dos vias, en este orden (el modelo de Python):
+     *   1. `__iadd__(V)` -> marca @c e->overload_method: UNA sola operacion
+     *      (lo que hace que `atomic<i64> g; g += 1;` sea indivisible).
+     *   2. si no lo declara -> DESAZUCARA el AST a `c = c + v` via `__add__`.
+     *
+     * Publico porque el lowering tambien lo necesita: `c++` fabrica su
+     * AssignExpr cuando el checker ya paso, y sin pasar por aqui caia al camino
+     * entero (sumaba 1 a la direccion del objeto).  Una sola implementacion
+     * para los dos.
+     *
+     * @param tt tipo del target; @p tv tipo del valor.
+     * @param out_result tipo resultante de la expresion, si devuelve true.
+     * @return true si @p e quedo resuelto como sobrecarga.
+     */
+    bool prepare_overloaded_compound_assign(ast::AssignExpr *e, const Type &tt,
+                                            const Type &tv,
+                                            Type &out_result) const;
+
+  private:
+    /// @brief Busca el dunder de compound assign (`+=` -> @c __iadd__) en el
+    ///        tipo @p tt (CLASS o STRUCT) que acepte un valor @p tv.
+    /// @return el metodo, o nullptr si el tipo no sobrecarga ese operador
+    ///         (entonces `a += b` sigue el camino clasico).
+    const ClassMethodInfo *find_compound_assign_dunder(const Type &tt,
+                                                       const Type &tv,
+                                                       ast::AssignOp op) const;
+
+    /// Metodos de un CLASS/STRUCT; nullptr si @p t no es uno o no esta
+    /// registrado.
+    const std::vector<ClassMethodInfo> *methods_of_type(const Type &t) const;
+
+    /// ¿@p t sobrecarga la suma/resta, de modo que `x++` / `x--` tengan
+    /// sentido?  (`__iadd__`/`__add__`/`__isub__`/`__sub__`.)
+    bool type_overloads_step(const Type &t) const;
+
+    /// @brief Busca un dunder UNARIO (sin parametros) por nombre en @p t.
+    /// @return el metodo, o nullptr si no aplica.
+    const ClassMethodInfo *find_unary_dunder(const Type &t,
+                                             const char *nm) const;
+
+    /// @brief Si @p t declara `__bool__`, envuelve @p slot en
+    ///        `(*slot).__bool__()` (desazucarado en el AST).
+    /// @return true si envolvio.
+    bool wrap_in_bool_dunder(std::unique_ptr<ast::Expr> &slot, const Type &t);
     /// Safety net (item 1): true si @c e es un closure CAPTURADOR -- un
     /// LambdaExpr con capturas o un metodo ligado `&obj.m` (que captura el
     /// receptor).  Un closure asi guardado en un campo de struct deja el env

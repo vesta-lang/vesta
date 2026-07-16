@@ -471,6 +471,19 @@ class Lowering {
                                       const SourceLoc &loc);
 
     /**
+     * @brief Baja `c++` / `c--` sobre un tipo que SOBRECARGA la suma.
+     *
+     * `c++` es `c += 1`: fabrica ese compound y deja que el type checker lo
+     * resuelva (`__iadd__` in-place, o desazucarado a `c = c + 1`).  Va antes
+     * que las rutas enteras porque el valor SSA de un struct es su DIRECCION:
+     * la ruta entera le sumaba 1 a la direccion del objeto.
+     *
+     * @param is_inc `++` (true) o `--`; @param is_pre prefijo (true) o postfijo.
+     */
+    ir::IrValueId lower_overloaded_step(ast::UnaryExpr *e, bool is_inc,
+                                        bool is_pre);
+
+    /**
      * @brief lowering de @c rspawn(node) { body }.
      *
      * Genera helper @c __rspawn_<N> con `is_rspawn_body_=true` (cualquier
