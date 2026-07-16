@@ -924,28 +924,56 @@ void Parser::parse_member_contracts_(MemberContracts &out) {
         (void)consume(); // '@'
         (void)consume(); // el nombre
         out.any = true;
-        if (nm == "pure") {
-            out.pure = true;
-        } else if (nm == "nothrow") {
-            out.nothrow_ = true;
-        } else if (nm == "nopanic") {
-            out.nopanic = true;
+        if (es_flag) {
+            // Flag con `when:` opcional (`@pure(when: arch:x86_64)`).  Con when
+            // a la lista pending; sin when al campo directo (el default).
+            if (current_.kind == TokenKind::LPAREN) {
+                (void)consume(); // '('
+                ast::PendingFootprint pf;
+                pf.when = read_footprint_when_();
+                if (nm == "pure") pf.pure = 1;
+                else if (nm == "nothrow") pf.nothrow_ = 1;
+                else pf.nopanic = 1;
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' tras el `when:`");
+                out.footprint_pending.push_back(std::move(pf));
+            } else if (nm == "pure") {
+                out.pure = true;
+            } else if (nm == "nothrow") {
+                out.nothrow_ = true;
+            } else {
+                out.nopanic = true;
+            }
         } else if (es_num) {
             const std::string abre =
                 "se esperaba '(' tras @" + nm + " (usa @" + nm + "(N))";
             (void)expect(TokenKind::LPAREN, abre.c_str());
+            int64_t v = -1;
             if (current_.kind != TokenKind::INT_LIT) {
                 const std::string msg = "@" + nm + "(N) requiere un entero literal";
                 error_here(msg.c_str());
             } else {
-                const int64_t v = static_cast<int64_t>(consume().int_val);
-                if (nm == "alloc")
-                    out.alloc = v;
-                else
-                    out.stack = v;
+                v = static_cast<int64_t>(consume().int_val);
+            }
+            std::string when;
+            if (current_.kind == TokenKind::COMMA) {
+                (void)consume(); // ','
+                when = read_footprint_when_();
             }
             const std::string cierra = "se esperaba ')' al cerrar @" + nm + "(N)";
             (void)expect(TokenKind::RPAREN, cierra.c_str());
+            if (v >= 0) {
+                if (when.empty()) {
+                    if (nm == "alloc") out.alloc = v;
+                    else out.stack = v;
+                } else {
+                    ast::PendingFootprint pf;
+                    pf.when = when;
+                    if (nm == "alloc") pf.alloc = v;
+                    else pf.stack = v;
+                    out.footprint_pending.push_back(std::move(pf));
+                }
+            }
         } else {
             // TODOS los @complexity van a la lista, tambien el que no lleva
             // `when:` -- resolver aqui el primero y dejar que el siguiente lo
@@ -975,6 +1003,7 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
     // ultimo dato (T) no llega hasta la monomorphizacion.  Los campos resueltos
     // los rellena el type checker.
     m.complexity_pending = mc.pending;
+    m.footprint_pending = mc.footprint_pending;
 }
 
 // ---------------------------------------------------------------------------
@@ -998,6 +1027,46 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
 //  anotacion en el sitio: aguas abajo (AST, huella, verificador) todo sigue
 //  viendo un solo contrato, el que aplica.  Sin `when:` -> aplica siempre.
 // ---------------------------------------------------------------------------
+std::string Parser::read_footprint_when_() {
+    // current_ debe ser el identificador `when`.
+    if (current_.kind != TokenKind::IDENTIFIER || current_.lexeme != "when") {
+        error_here("se esperaba `when:` en el contrato de huella");
+        return std::string();
+    }
+    (void)consume(); // when
+    if (expect(TokenKind::COLON, "se esperaba ':' tras `when`").kind !=
+        TokenKind::COLON)
+        return std::string();
+    // El valor va SIN comillas, como en @complexity (para que un editor lo vea
+    // como expresion y no como cadena).
+    if (current_.kind == TokenKind::STRING_LIT) {
+        error_here("el `when:` va SIN comillas (when: arch:arm64)");
+    }
+    const std::string &src = lex_.source_buffer();
+    const uint32_t start = current_.loc.offset;
+    uint32_t end = start;
+    int depth = 0;
+    while (current_.kind != TokenKind::END_OF_FILE) {
+        if (current_.kind == TokenKind::LPAREN) {
+            ++depth;
+        } else if (current_.kind == TokenKind::RPAREN) {
+            if (depth == 0) {
+                end = current_.loc.offset;
+                break; // NO se consume: lo cierra el caller
+            }
+            --depth;
+        }
+        (void)consume();
+    }
+    std::string spec = (start <= src.size() && end >= start && end <= src.size())
+                           ? src.substr(start, end - start)
+                           : std::string();
+    const size_t a = spec.find_first_not_of(" \t\r\n");
+    const size_t b = spec.find_last_not_of(" \t\r\n");
+    if (a == std::string::npos) return std::string();
+    return spec.substr(a, b - a + 1);
+}
+
 void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                                     std::vector<std::string> &top_complexity_vars,
                                     std::string &top_complexity_partial_pre,
@@ -1314,6 +1383,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     uint16_t top_attr_align = 0;
     // Contratos comprobables de recurso/efecto (huella computacional).
     bool top_c_pure = false, top_c_nothrow = false, top_c_nopanic = false;
+    // Contratos de huella CON `when:` (por arch/os/T): se resuelven aparte, por
+    // especificidad, en el type checker.  Los SIN when siguen en los campos de
+    // arriba (el default).
+    std::vector<ast::PendingFootprint> top_footprint_pending;
     int64_t top_c_alloc = -1, top_c_stack = -1;
     // Contratos de TIPO (struct/clase/enum): @pod / @no_heap / @size(N).
     bool top_t_pod = false, top_t_no_heap = false;
@@ -1436,17 +1509,28 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_attr_cold = true;
                 continue;
             }
-            // Contratos de huella: flags sin argumento.
-            if (is_c_pure) {
-                top_c_pure = true;
-                continue;
-            }
-            if (is_c_nothrow) {
-                top_c_nothrow = true;
-                continue;
-            }
-            if (is_c_nopanic) {
-                top_c_nopanic = true;
+            // Contratos de huella: flags, con `when:` opcional
+            // (`@pure(when: arch:x86_64)`).  Con when -> a la lista pending;
+            // sin when -> el campo directo (el default).
+            if (is_c_pure || is_c_nothrow || is_c_nopanic) {
+                const int8_t v_pure = is_c_pure ? 1 : -1;
+                const int8_t v_nothrow = is_c_nothrow ? 1 : -1;
+                const int8_t v_nopanic = is_c_nopanic ? 1 : -1;
+                if (current_.kind == TokenKind::LPAREN) {
+                    (void)consume(); // '('
+                    ast::PendingFootprint pf;
+                    pf.when = read_footprint_when_();
+                    pf.pure = v_pure;
+                    pf.nothrow_ = v_nothrow;
+                    pf.nopanic = v_nopanic;
+                    (void)expect(TokenKind::RPAREN,
+                                 "se esperaba ')' tras el `when:`");
+                    top_footprint_pending.push_back(std::move(pf));
+                } else {
+                    top_c_pure = top_c_pure || is_c_pure;
+                    top_c_nothrow = top_c_nothrow || is_c_nothrow;
+                    top_c_nopanic = top_c_nopanic || is_c_nopanic;
+                }
                 continue;
             }
             // Contratos de TIPO sin argumento: @pod / @no_heap.
@@ -1475,28 +1559,46 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 (void)expect(TokenKind::RPAREN, "se esperaba ')' tras N en @size(N)");
                 continue;
             }
-            // Contratos con argumento entero: @alloc(N) / @stack(N).
+            // Contratos con argumento entero: @alloc(N) / @stack(N), con un
+            // `when:` opcional tras el N (`@alloc(0, when: arch:x86_64)`).
             if (is_c_alloc || is_c_stack) {
-                if (is_c_alloc) {
-                    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @alloc");
-                } else {
-                    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @stack");
-                }
+                (void)expect(TokenKind::LPAREN,
+                             is_c_alloc ? "se esperaba '(' tras @alloc"
+                                        : "se esperaba '(' tras @stack");
+                int64_t n = -1;
                 if (current_.kind != TokenKind::INT_LIT) {
                     error_here("@alloc(N)/@stack(N) requiere un entero literal");
                 } else {
-                    const int64_t n = current_.int_val;
+                    n = current_.int_val;
                     (void)consume();
                     if (n < 0) {
                         error_here("@alloc(N)/@stack(N): N debe ser >= 0");
-                    } else if (is_c_alloc) {
-                        top_c_alloc = n;
-                    } else {
-                        top_c_stack = n;
+                        n = -1;
                     }
+                }
+                std::string when;
+                if (current_.kind == TokenKind::COMMA) {
+                    (void)consume(); // ','
+                    when = read_footprint_when_();
                 }
                 (void)expect(TokenKind::RPAREN,
                              "se esperaba ')' tras N en @alloc(N)/@stack(N)");
+                if (n >= 0) {
+                    if (when.empty()) {
+                        if (is_c_alloc)
+                            top_c_alloc = n;
+                        else
+                            top_c_stack = n;
+                    } else {
+                        ast::PendingFootprint pf;
+                        pf.when = when;
+                        if (is_c_alloc)
+                            pf.alloc = n;
+                        else
+                            pf.stack = n;
+                        top_footprint_pending.push_back(std::move(pf));
+                    }
+                }
                 continue;
             }
             if (is_align) {
@@ -2088,12 +2190,15 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // todos juntos.  Los campos resueltos los rellena el.
         if (fd) {
             fd->complexity_pending = std::move(top_complexity_pending);
-            // Contratos de huella (recurso/efecto).
+            // Contratos de huella (recurso/efecto).  Los SIN `when:` van a los
+            // campos directos (el default); los CON when a la lista, que el
+            // type checker resuelve por especificidad.
             fd->contract_pure = top_c_pure;
             fd->contract_nothrow = top_c_nothrow;
             fd->contract_nopanic = top_c_nopanic;
             fd->contract_alloc = top_c_alloc;
             fd->contract_stack = top_c_stack;
+            fd->footprint_pending = std::move(top_footprint_pending);
         }
         // AOT 2b (dev OS): seccion de salida del codigo + permisos.
         if (fd && !top_attr_section.empty()) {

@@ -457,21 +457,42 @@ void TypeChecker::resolve_pending_complexity_(ast::ClassMethodDecl &nm,
                                               const vxgen::GenSubst &g,
                                               const SourceLoc &loc) {
     nm.complexity_pending.clear();
-    if (m.complexity_pending.empty()) return;
+    nm.footprint_pending.clear();
 
     cwhen::AtomEval ev = [&](const std::string &at, bool &ok) {
         return when_atomo_(at, g, ok);
     };
     cwhen::ErrFn err = [&](const std::string &msg) { diags_.error(loc, msg); };
-    cwhen::Resolved r;
-    cwhen::resolve(m.complexity_pending, ev, err, r);
 
-    nm.complexity_expr = std::move(r.expr);
-    nm.complexity_vars = std::move(r.vars);
-    nm.complexity_partial_pre = std::move(r.partial_pre);
-    nm.complexity_partial_post = std::move(r.partial_post);
-    nm.complexity_total_pre = std::move(r.total_pre);
-    nm.complexity_total_post = std::move(r.total_post);
+    // @complexity con `when:` sobre T: aqui T ya es concreto.
+    if (!m.complexity_pending.empty()) {
+        cwhen::Resolved r;
+        cwhen::resolve(m.complexity_pending, ev, err, r);
+        nm.complexity_expr = std::move(r.expr);
+        nm.complexity_vars = std::move(r.vars);
+        nm.complexity_partial_pre = std::move(r.partial_pre);
+        nm.complexity_partial_post = std::move(r.partial_post);
+        nm.complexity_total_pre = std::move(r.total_pre);
+        nm.complexity_total_post = std::move(r.total_post);
+    }
+
+    // Contratos de HUELLA con `when:` sobre T (mismo motivo).  El default son
+    // los campos directos que el clon ya copio.
+    if (!m.footprint_pending.empty()) {
+        cwhen::ResolvedFP base;
+        base.pure = nm.contract_pure ? 1 : -1;
+        base.nothrow_ = nm.contract_nothrow ? 1 : -1;
+        base.nopanic = nm.contract_nopanic ? 1 : -1;
+        base.alloc = nm.contract_alloc;
+        base.stack = nm.contract_stack;
+        cwhen::ResolvedFP r;
+        cwhen::resolve_footprint(m.footprint_pending, base, ev, err, r);
+        nm.contract_pure = (r.pure == 1);
+        nm.contract_nothrow = (r.nothrow_ == 1);
+        nm.contract_nopanic = (r.nopanic == 1);
+        nm.contract_alloc = r.alloc;
+        nm.contract_stack = r.stack;
+    }
 }
 
 std::string TypeChecker::monomorphize_class(const std::string &template_name,
@@ -570,7 +591,9 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         nm->complexity_partial_post = m->complexity_partial_post;
         nm->complexity_total_pre = m->complexity_total_pre;
         nm->complexity_total_post = m->complexity_total_post;
-        // Los @complexity cuyo `when:` habla de T: aqui T ya es concreto.
+        // Contratos de HUELLA con `when:` (sobre arch o sobre T): al clon.
+        nm->footprint_pending = m->footprint_pending;
+        // Los @complexity/huella cuyo `when:` habla de T: aqui T ya es concreto.
         resolve_pending_complexity_(*nm, *m, g, loc);
         // #4: preservar los type-params del METODO (`metodo<U>`) tras
         // sustituir T; el metodo sigue siendo generico y se monomorphiza
@@ -806,7 +829,9 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         nm->complexity_partial_post = m->complexity_partial_post;
         nm->complexity_total_pre = m->complexity_total_pre;
         nm->complexity_total_post = m->complexity_total_post;
-        // Los @complexity cuyo `when:` habla de T: aqui T ya es concreto.
+        // Contratos de HUELLA con `when:` (sobre arch o sobre T): al clon.
+        nm->footprint_pending = m->footprint_pending;
+        // Los @complexity/huella cuyo `when:` habla de T: aqui T ya es concreto.
         resolve_pending_complexity_(*nm, *m, g, loc);
         // #4: preservar los type-params del METODO (`mezcla<U>`).  El
         // substituto @c g solo sustituye T (el type-param del struct); U
@@ -1371,6 +1396,37 @@ void resolve_cx_sin_tipos(Decl &m, Diagnostics &diags) {
     m.complexity_total_post = std::move(r.total_post);
     m.complexity_pending.clear();
 }
+
+/// Igual, pero para los contratos de HUELLA con `when:`.  El default son los
+/// campos directos (los declarados SIN when); un `when:` que casa gana sobre
+/// ellos por ser mas especifico.
+template <class Decl>
+void resolve_fp_sin_tipos(Decl &m, Diagnostics &diags) {
+    if (m.footprint_pending.empty()) return;
+    static const vxgen::GenSubst kSinTipos{};
+    cwhen::AtomEval ev = [&](const std::string &at, bool &ok) {
+        if (cwhen::atom_kind(at) == cwhen::AtomKind::TIPO) {
+            ok = false;
+            return false;
+        }
+        return when_atomo_(at, kSinTipos, ok);
+    };
+    cwhen::ErrFn err = [&](const std::string &msg) { diags.error(m.loc, msg); };
+    cwhen::ResolvedFP base;
+    base.pure = m.contract_pure ? 1 : -1;
+    base.nothrow_ = m.contract_nothrow ? 1 : -1;
+    base.nopanic = m.contract_nopanic ? 1 : -1;
+    base.alloc = m.contract_alloc;
+    base.stack = m.contract_stack;
+    cwhen::ResolvedFP r;
+    cwhen::resolve_footprint(m.footprint_pending, base, ev, err, r);
+    m.contract_pure = (r.pure == 1);
+    m.contract_nothrow = (r.nothrow_ == 1);
+    m.contract_nopanic = (r.nopanic == 1);
+    m.contract_alloc = r.alloc;
+    m.contract_stack = r.stack;
+    m.footprint_pending.clear();
+}
 } // namespace
 
 void TypeChecker::resolve_complexity_no_generico_(ast::ClassMethodDecl &m) {
@@ -1394,18 +1450,25 @@ void TypeChecker::resolve_complexity_decls_(
             continue;
         }
         if (d->kind == ast::NodeKind::FunctionDecl) {
-            resolve_cx_sin_tipos(
-                *static_cast<ast::FunctionDecl *>(d.get()), diags_);
+            auto *fd = static_cast<ast::FunctionDecl *>(d.get());
+            resolve_cx_sin_tipos(*fd, diags_);
+            resolve_fp_sin_tipos(*fd, diags_);
         } else if (d->kind == ast::NodeKind::StructDecl) {
             auto *sd = static_cast<ast::StructDecl *>(d.get());
             if (!sd->type_params.empty() || sd->is_specialization) continue;
             for (auto &m : sd->methods)
-                if (m) resolve_cx_sin_tipos(*m, diags_);
+                if (m) {
+                    resolve_cx_sin_tipos(*m, diags_);
+                    resolve_fp_sin_tipos(*m, diags_);
+                }
         } else if (d->kind == ast::NodeKind::ClassDecl) {
             auto *cd = static_cast<ast::ClassDecl *>(d.get());
             if (!cd->type_params.empty()) continue;
             for (auto &m : cd->methods)
-                if (m) resolve_cx_sin_tipos(*m, diags_);
+                if (m) {
+                    resolve_cx_sin_tipos(*m, diags_);
+                    resolve_fp_sin_tipos(*m, diags_);
+                }
         }
     }
 }

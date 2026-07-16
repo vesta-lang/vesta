@@ -376,5 +376,81 @@ Spec compare(const std::string &a, const std::string &b, bool &ok) {
     return Spec::AMBIGUAS;
 }
 
+void resolve_footprint(const std::vector<ast::PendingFootprint> &decls,
+                       const ResolvedFP &base, const AtomEval &ev,
+                       const ErrFn &err, ResolvedFP &out) {
+    out = base;
+
+    // Por campo: quien lo escribio (para comparar especificidad con el
+    // siguiente).  `escrito` false = solo esta el default de `base`, cuyo
+    // `when:` implicito es vacio (siempre) -> lo menos especifico.
+    struct Campo {
+        bool escrito = false;
+        std::string por;
+    };
+    Campo cpure, cnothrow, cnopanic, calloc, cstack;
+
+    // Aplica un campo de un pending que ha casado: si nadie lo habia escrito con
+    // un `when:`, gana sobre el default; si ya lo escribio otro `when:`, decide
+    // la especificidad.  `nombre` es para el mensaje de ambiguedad.
+    auto aplicar = [&](Campo &c, const std::string &when, const char *nombre,
+                       const std::function<void()> &set) {
+        if (!c.escrito) {
+            set();
+            c.escrito = true;
+            c.por = when;
+            return;
+        }
+        bool ok = true;
+        const Spec r = compare(when, c.por, ok);
+        if (!ok || r == Spec::AMBIGUAS) {
+            auto muestra = [](const std::string &w) {
+                return w.empty() ? std::string("<sin when>") : ("when: " + w);
+            };
+            err(std::string("@") + nombre +
+                ": dos contratos lo declaran y ninguno es mas especifico que el "
+                "otro (" + muestra(c.por) + " y " + muestra(when) +
+                "); acota uno de los dos para desempatar");
+            return;
+        }
+        if (r == Spec::B_MAS) return; // el que estaba es mas especifico
+        set();                        // A_MAS o IGUALES -> el nuevo
+        c.por = when;
+    };
+
+    for (const auto &d : decls) {
+        bool ok = true;
+        const bool casa = eval(d.when, ev, ok);
+        if (!ok) {
+            std::string detalle;
+            std::vector<std::string> at;
+            atoms(d.when, at);
+            for (const auto &a : at) {
+                std::string esp;
+                if (atom_kind(a, &esp) == AtomKind::DESCONOCIDO) {
+                    detalle = " ('" + a + "': " + esp + ")";
+                    break;
+                }
+            }
+            err("contrato de huella: no entiendo el `when: " + d.when + "'" +
+                detalle);
+            continue;
+        }
+        if (!casa) continue;
+        if (d.pure >= 0)
+            aplicar(cpure, d.when, "pure", [&] { out.pure = d.pure; });
+        if (d.nothrow_ >= 0)
+            aplicar(cnothrow, d.when, "nothrow",
+                    [&] { out.nothrow_ = d.nothrow_; });
+        if (d.nopanic >= 0)
+            aplicar(cnopanic, d.when, "nopanic",
+                    [&] { out.nopanic = d.nopanic; });
+        if (d.alloc >= 0)
+            aplicar(calloc, d.when, "alloc", [&] { out.alloc = d.alloc; });
+        if (d.stack >= 0)
+            aplicar(cstack, d.when, "stack", [&] { out.stack = d.stack; });
+    }
+}
+
 } // namespace cwhen
 } // namespace vx

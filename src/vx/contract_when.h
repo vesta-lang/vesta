@@ -165,6 +165,27 @@ using ErrFn = std::function<void(const std::string &msg)>;
 void resolve(const std::vector<ast::PendingComplexity> &decls,
              const AtomEval &ev, const ErrFn &err, Resolved &out);
 
+/// Los contratos de huella resueltos (tri-estado -1/0/1, o -1 para @alloc/@stack
+/// no declarados).
+struct ResolvedFP {
+    int8_t pure = -1;
+    int8_t nothrow_ = -1;
+    int8_t nopanic = -1;
+    int64_t alloc = -1;
+    int64_t stack = -1;
+};
+
+/// @brief Resuelve los contratos de HUELLA con `when:` aplicando la prioridad.
+///
+/// Igual que @ref resolve pero para @pure/@nothrow/@nopanic/@alloc/@stack.  Los
+/// que casan compiten por especificidad campo a campo; ante empate no decidible,
+/// error.  Se parte de @p base (los contratos SIN `when:`, que son el default,
+/// como si su `when:` fuese `true` -- lo menos especifico): un `when:` que casa
+/// siempre gana sobre ellos.
+void resolve_footprint(const std::vector<ast::PendingFootprint> &decls,
+                       const ResolvedFP &base, const AtomEval &ev,
+                       const ErrFn &err, ResolvedFP &out);
+
 } // namespace cwhen
 } // namespace vx
 

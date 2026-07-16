@@ -552,6 +552,8 @@ class Parser {
         /// Los @complexity cuyo `when:` habla del parametro de tipo: se
         /// resuelven al monomorphizar, no aqui.  Ver @ref ast::PendingComplexity.
         std::vector<ast::PendingComplexity> pending;
+        /// Contratos de HUELLA con `when:`, sin resolver.
+        std::vector<ast::PendingFootprint> footprint_pending;
         bool any = false; ///< true si se declaro alguno (para el diagnostico).
     };
 
@@ -575,6 +577,14 @@ class Parser {
                                 std::string &total_post,
                                 std::string *out_when = nullptr,
                                 bool *out_aplica = nullptr);
+
+    /// @brief Lee `when: <expr>` de un contrato de huella y devuelve el texto
+    ///        raw de la expresion (sin comillas, como en @complexity).
+    ///
+    /// Se entra con @c current_ en el identificador `when`.  Captura hasta --sin
+    /// consumir-- el `)` de nivel 0, respetando los parentesis de un predicado
+    /// (`is_float<T>()`).  Devuelve "" y reporta si esta mal formado.
+    std::string read_footprint_when_();
 
     /// @brief Consume las anotaciones de contrato que preceden a un miembro.
     /// @param out se rellena con lo declarado; @c out.any dice si habia alguna.

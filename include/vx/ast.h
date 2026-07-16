@@ -298,6 +298,28 @@ struct PendingComplexity {
 };
 
 /**
+ * @struct PendingFootprint
+ * @brief Un contrato de HUELLA (@pure/@nothrow/@nopanic/@alloc/@stack) con un
+ *        `when:`, sin resolver.
+ *
+ * La huella tambien varia con la arquitectura: una variante
+ * @Target("arch:arm64") con `register()` gasta frame y toca memoria que su
+ * gemela x86-64 no, asi que su `@stack`/`@pure` no son los mismos.  Como el
+ * @complexity, un contrato de huella puede condicionarse con `when:` y resolver
+ * por especificidad; los que hablan de un type param solo se resuelven al
+ * monomorphizar.  Cada entrada escribe UN campo (la anotacion que lo declaro).
+ * Los tri-estado son -1 = no declarado, 0/1 = valor.
+ */
+struct PendingFootprint {
+    std::string when; ///< expresion del `when:` (vacia = siempre).
+    int8_t pure = -1;
+    int8_t nothrow_ = -1;
+    int8_t nopanic = -1;
+    int64_t alloc = -1;
+    int64_t stack = -1;
+};
+
+/**
  * @brief @c true si k representa una expresion.
  */
 constexpr bool is_expr_kind(NodeKind k) noexcept {
@@ -1689,6 +1711,8 @@ struct FunctionDecl : Node {
     /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
     /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
     std::vector<PendingComplexity> complexity_pending;
+    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref PendingFootprint.
+    std::vector<PendingFootprint> footprint_pending;
     /// Contratos comprobables de recurso/efecto (huella computacional).  El
     /// compilador los VERIFICA contra la huella inferida del IR (sound: solo
     /// error cuando la violacion es demostrable).  Ausente = no declarado.
@@ -2325,6 +2349,8 @@ struct ClassMethodDecl : Node {
     /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
     /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
     std::vector<PendingComplexity> complexity_pending;
+    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref PendingFootprint.
+    std::vector<PendingFootprint> footprint_pending;
 
     /// @brief si !=0, el metodo es accesor de propiedad.
     /// 1 = getter (`public get name => expr;`).  Sin params, devuelve T.
