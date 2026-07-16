@@ -2543,14 +2543,20 @@ CompileResult compile_vx_project(
                                     res.contracts[tipo + "__" + m->name] = c;
                             }
                         };
+                    // Los TEMPLATES genericos se saltan: no producen IR (solo
+                    // sus instanciaciones), y su clave casaria por sufijo con
+                    // la instanciacion, duplicando cada incumplimiento.  La
+                    // monomorphizacion copia los contratos.
                     if (d->kind == ast::NodeKind::StructDecl) {
                         const auto *sd =
                             static_cast<const ast::StructDecl *>(d.get());
-                        tomar_metodos(sd->name, sd->methods);
+                        if (sd->type_params.empty() && !sd->is_specialization)
+                            tomar_metodos(sd->name, sd->methods);
                     } else if (d->kind == ast::NodeKind::ClassDecl) {
                         const auto *cd =
                             static_cast<const ast::ClassDecl *>(d.get());
-                        tomar_metodos(cd->name, cd->methods);
+                        if (cd->type_params.empty())
+                            tomar_metodos(cd->name, cd->methods);
                     }
                 }
             };

@@ -96,12 +96,19 @@ static void collect_contracts_(
                     if (c.any()) out[tipo + "__" + m->name] = c;
                 }
             };
+        // Los TEMPLATES genericos se saltan: no producen IR (solo lo hacen sus
+        // instanciaciones), asi que su clave no tiene nada contra que
+        // verificarse -- y como `Caja__leer` acaba casando por sufijo con
+        // `Caja_i64__leer`, registrarla haria que cada incumplimiento se
+        // reportase dos veces.  La monomorphizacion copia los contratos, asi
+        // que cada instanciacion se verifica por su cuenta.
         if (d->kind == ast::NodeKind::StructDecl) {
             const auto *sd = static_cast<const ast::StructDecl *>(d.get());
-            tomar_metodos(sd->name, sd->methods);
+            if (sd->type_params.empty() && !sd->is_specialization)
+                tomar_metodos(sd->name, sd->methods);
         } else if (d->kind == ast::NodeKind::ClassDecl) {
             const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
-            tomar_metodos(cd->name, cd->methods);
+            if (cd->type_params.empty()) tomar_metodos(cd->name, cd->methods);
         }
     }
 }

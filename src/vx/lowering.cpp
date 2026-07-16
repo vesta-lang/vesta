@@ -28429,6 +28429,19 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                                                      : m->name;
         fn.name = sd->name + "__" + suffix;
 
+        // B.3 contract: si el struct es una instanciacion generica
+        // (`atomic_i64` viene de `struct atomic<T>`), marcar la IrFunction con
+        // el template + los type args.  Lo mismo que hacen los metodos de clase
+        // y los helpers `__new_`; la ruta de structs genericos, que llego
+        // despues, se habia quedado sin ello.  Sin esta procedencia no hay
+        // forma de saber que `atomic_i64__swap` sale de `atomic<T>::swap`, y de
+        // eso depende que un contrato declarado sobre la PLANTILLA se pueda
+        // verificar contra sus instanciaciones.
+        if (const auto *mi = tc_.monomorph_info(sd->name)) {
+            fn.generic_template_name = mi->template_name;
+            fn.generic_type_args = mi->type_args;
+        }
+
         // @complexity del metodo al IR, igual que en una funcion libre (ver
         // lower_function): metadata pura que solo consume el analizador.
         fn.complexity_expr = m->complexity_expr;

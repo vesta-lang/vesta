@@ -971,6 +971,18 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
 //  lineas de troceado de texto para decir eso seria pedir que se separen.
 //  Se entra con el token de `complexity` ya consumido (el siguiente debe ser
 //  '('), y se sale tras el ')' de cierre.
+//
+//  Campo `when: "<expr>"` -- contrato CONDICIONAL.  El coste TOTAL de una
+//  funcion depende del target cuando algun callee tiene cuerpos por-arch de
+//  coste distinto: `atomic<T>::exchange` llama a `vx_atomic_swap64`, que en
+//  x86-64 es un bucle CAS escrito en Vesta (O(n)) y en arm64 el LL/SC nativo
+//  (O(1)).  Sin `when:` no habria ningun valor declarable correcto en las dos.
+//  La expresion es la MISMA de @Target (os/arch/cpu/semver/mode con &&/||/! y
+//  parentesis) y la evalua el MISMO `target_matches_`, asi que hereda gratis
+//  todo lo que @Target soporte hoy y manana.  Como @Target se resuelve al
+//  compilar (el target ya se conoce aqui), un `when:` que no case DESCARTA la
+//  anotacion en el sitio: aguas abajo (AST, huella, verificador) todo sigue
+//  viendo un solo contrato, el que aplica.  Sin `when:` -> aplica siempre.
 // ---------------------------------------------------------------------------
 void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                                     std::vector<std::string> &top_complexity_vars,
@@ -1049,6 +1061,28 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                             }
                             return std::string::npos;
                         };
+                        // Primera pasada: el `when:`.  Se mira ANTES de asignar
+                        // nada porque decide si esta anotacion aplica siquiera,
+                        // y el campo puede venir en cualquier posicion.
+                        bool aplica = true;
+                        for (const std::string &s : segs) {
+                            size_t col = top_colon(s);
+                            if (col == std::string::npos) continue;
+                            if (trim(s.substr(0, col)) != "when") continue;
+                            std::string spec = trim(s.substr(col + 1));
+                            // El valor va entrecomillado, igual que en @Target.
+                            if (spec.size() >= 2 && spec.front() == '"' &&
+                                spec.back() == '"') {
+                                spec = spec.substr(1, spec.size() - 2);
+                            } else {
+                                error_here("@complexity: el `when:` requiere la "
+                                           "expresion entre comillas, como en "
+                                           "@Target (p.ej. when: \"arch:arm64\")");
+                            }
+                            if (!target_matches_(spec)) aplica = false;
+                        }
+                        if (!aplica) return; // contrato de otro target
+
                         bool got_positional = false;
                         for (const std::string &s : segs) {
                             size_t col = top_colon(s);
@@ -1056,6 +1090,8 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                                 // Campo nombrado "dimension: O(...)".
                                 std::string key = trim(s.substr(0, col));
                                 std::string val = trim(s.substr(col + 1));
+                                if (key == "when")
+                                    continue; // ya tratado en la pasada de arriba
                                 if (key == "partial_pre")
                                     top_complexity_partial_pre = val;
                                 else if (key == "partial_post")
@@ -1066,10 +1102,10 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
                                     top_complexity_total_post = val;
                                 else
                                     error_here(
-                                        ("@complexity: dimension desconocida "
-                                         "'" + key + "' (usar partial_pre, "
-                                         "partial_post, total_pre o "
-                                         "total_post)")
+                                        ("@complexity: campo desconocido "
+                                         "'" + key + "' (dimensiones: "
+                                         "partial_pre, partial_post, total_pre, "
+                                         "total_post; condicion: when)")
                                             .c_str());
                                 continue;
                             }

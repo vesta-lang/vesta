@@ -438,6 +438,21 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         nm->is_constructor = m->is_constructor;
         nm->advice_kind = m->advice_kind;
         nm->advice_target = m->advice_target;
+        // Contratos de efectos y coste: son del METODO, asi que viajan a cada
+        // instanciacion.  Sin copiarlos, un contrato declarado sobre la
+        // plantilla se evaporaba al monomorphizar -- en silencio -- y no se
+        // verificaba en ninguna instanciacion.
+        nm->contract_pure = m->contract_pure;
+        nm->contract_nothrow = m->contract_nothrow;
+        nm->contract_nopanic = m->contract_nopanic;
+        nm->contract_alloc = m->contract_alloc;
+        nm->contract_stack = m->contract_stack;
+        nm->complexity_expr = m->complexity_expr;
+        nm->complexity_vars = m->complexity_vars;
+        nm->complexity_partial_pre = m->complexity_partial_pre;
+        nm->complexity_partial_post = m->complexity_partial_post;
+        nm->complexity_total_pre = m->complexity_total_pre;
+        nm->complexity_total_post = m->complexity_total_post;
         // #4: preservar los type-params del METODO (`metodo<U>`) tras
         // sustituir T; el metodo sigue siendo generico y se monomorphiza
         // por separado en cada llamada `obj.metodo<U>()`.
@@ -657,6 +672,21 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         nm->is_final = m->is_final;
         nm->is_inline = m->is_inline;
         nm->is_destructor = m->is_destructor;
+        // Contratos de efectos y coste: son del METODO, asi que viajan a cada
+        // instanciacion.  Sin copiarlos, un contrato declarado sobre la
+        // plantilla se evaporaba al monomorphizar -- en silencio -- y no se
+        // verificaba en ninguna instanciacion.
+        nm->contract_pure = m->contract_pure;
+        nm->contract_nothrow = m->contract_nothrow;
+        nm->contract_nopanic = m->contract_nopanic;
+        nm->contract_alloc = m->contract_alloc;
+        nm->contract_stack = m->contract_stack;
+        nm->complexity_expr = m->complexity_expr;
+        nm->complexity_vars = m->complexity_vars;
+        nm->complexity_partial_pre = m->complexity_partial_pre;
+        nm->complexity_partial_post = m->complexity_partial_post;
+        nm->complexity_total_pre = m->complexity_total_pre;
+        nm->complexity_total_post = m->complexity_total_post;
         // #4: preservar los type-params del METODO (`mezcla<U>`).  El
         // substituto @c g solo sustituye T (el type-param del struct); U
         // queda intacto y el metodo sigue siendo template generico, que se

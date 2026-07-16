@@ -139,6 +139,7 @@ bool is_pure_op(ir::IrOp op) {
 FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn) {
     FunctionFingerprint fp;
     fp.function = fn.name;
+
     fp.pure_local = true; // hasta encontrar un op impuro.
     using Op = ir::IrOp;
     for (const auto &bb : fn.blocks) {
@@ -297,30 +298,49 @@ std::vector<ContractCheck> verify_contracts(
         const std::string &name = kv.first;
         const FunctionContracts &c = kv.second;
         if (!c.any()) continue;
-        const FunctionFingerprint *fpp = nullptr;
+
+        // Reunir TODAS las huellas a las que aplica el contrato.  Casi siempre
+        // es una, pero el contrato de un metodo de PLANTILLA es una promesa
+        // para CADA instanciacion, asi que hay que comprobarlo contra todas:
+        // si `atomic<T>::swap` declara @alloc(0) y `atomic<f64>::swap` aloca,
+        // eso es un incumplimiento aunque `atomic<i64>::swap` cumpla.
+        std::vector<const FunctionFingerprint *> targets;
         auto it = byname.find(name);
         if (it != byname.end()) {
-            fpp = it->second;
+            targets.push_back(it->second);
         } else {
-            // Ni completo ni simple.  Queda el caso del metodo DENTRO de un
-            // namespace: la clave es `Tipo__metodo` pero el IR lo trae como
-            // `ns__Tipo__metodo`.  Buscamos por sufijo, y solo aceptamos si el
-            // resultado es unico (si no, seria adivinar).
+            // El metodo DENTRO de un namespace: la clave es `Tipo__metodo` y el
+            // IR trae `ns__Tipo__metodo`.  Por sufijo, y solo si el resultado
+            // es unico (si no, seria adivinar).
+            //
+            // Un metodo de PLANTILLA no necesita nada especial aqui: la
+            // monomorphizacion COPIA los contratos a cada instanciacion, asi
+            // que `atomic<T>::swap` se verifica como `atomic_i64__swap` por la
+            // via exacta -- una vez por instanciacion, que es justo lo que
+            // promete el contrato.
             const std::string suf = "__" + name;
+            const FunctionFingerprint *uniq = nullptr;
             for (const auto &f : fps) {
                 if (f.function.size() > suf.size() &&
                     f.function.compare(f.function.size() - suf.size(),
                                        suf.size(), suf) == 0) {
-                    if (fpp) { fpp = nullptr; break; } // ambiguo: no adivinar
-                    fpp = &f;
+                    if (uniq) { uniq = nullptr; break; } // ambiguo
+                    uniq = &f;
                 }
             }
+            if (uniq) targets.push_back(uniq);
         }
-        if (!fpp) continue; // la funcion no llego al IR (inline/DCE).
+        if (targets.empty()) continue; // no llego al IR (inline/DCE).
+
+        for (const FunctionFingerprint *fpp : targets) {
         const FunctionFingerprint &fp = *fpp;
 
+        // Con varias instanciaciones, el informe dice CUAL falla: "atomic__swap"
+        // a secas no distinguiria el i64 del f64.
+        const std::string etiqueta =
+            (targets.size() > 1) ? (name + " [" + fp.function + "]") : name;
         auto add = [&](const char *cn, St st, std::string detail) {
-            out.push_back({name, cn, st, std::move(detail)});
+            out.push_back({etiqueta, cn, st, std::move(detail)});
         };
 
         // @pure: probado puro -> OK; probado impuro (efectos conocidos) ->
@@ -374,6 +394,7 @@ std::vector<ContractCheck> verify_contracts(
                             std::to_string(got) + "B (frame propio)";
             add("@stack", got > want ? St::VIOLATED : St::OK, std::move(d));
         }
+        } // for targets
     }
     return out;
 }
