@@ -6481,6 +6481,50 @@ bool TypeChecker::lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out) 
         *out = comptime_is_enum(*this, t1) ? 1 : 0;
         return true;
     }
+    // Predicados numericos.  Estaban solo en el evaluador de CONCEPTOS, asi que
+    // `is_float<T>()` valia dentro de un `concept` y daba "funcion no declarada"
+    // en cualquier otro sitio -- mientras `sizeof<T>()` valia en los dos.  Son
+    // el mismo tipo de pregunta sobre el mismo tipo: o valen en todas partes o
+    // en ninguna.  Los necesita, por ejemplo, un metodo generico que elige en
+    // comptime entre `lock xadd` (entero) y bucle CAS (float).
+    if (nm == "is_float") {
+        *out = (t1.kind == PrimitiveKind::F32 || t1.kind == PrimitiveKind::F64)
+                   ? 1
+                   : 0;
+        return true;
+    }
+    if (nm == "is_integer") {
+        *out = is_integral(t1.kind) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_signed") {
+        *out = is_signed_integral(t1.kind) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_unsigned") {
+        *out = (is_integral(t1.kind) && !is_signed_integral(t1.kind)) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_numeric") {
+        *out = is_numeric(t1.kind) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_bool") {
+        *out = (t1.kind == PrimitiveKind::BOOL) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_char") {
+        *out = (t1.kind == PrimitiveKind::CHAR) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_pointer") {
+        *out = (t1.kind == PrimitiveKind::PTR) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_string") {
+        *out = (t1.kind == PrimitiveKind::STRING) ? 1 : 0;
+        return true;
+    }
     if ((nm == "is_subtype" || nm == "is_same") && e->type_args.size() == 2) {
         const Type t2 = type_from_node(e->type_args[1].get());
         *out = (nm == "is_subtype" ? comptime_is_subtype(*this, t1, t2)
@@ -11871,6 +11915,58 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // El RETURN type lo fijamos aqui; el VALOR concreto lo computa
     // lowering invocando los helpers en comptime_introspect.h.
     // -----------------------------------------------------------------
+    // `bitcast<T>(v)`: reinterpreta los BITS de @p v como un T del MISMO ancho.
+    // Distinto del cast `(T) v`, que convierte el VALOR (`(i64) 1.5` da 1;
+    // `bitcast<i64>(1.5)` da el patron IEEE 754).  Hace falta para leer un f64
+    // que se guardo/leyo como bits, que es lo que hacen los atomicos.
+    //
+    // No es comptime: es una operacion runtime con type-arg.  Baja a
+    // @c IrOp::BITCAST, que entre tipos del mismo ancho es un `mov` -> coste
+    // cero.  Exigir anchos iguales es lo que lo hace seguro: sin eso, leeria o
+    // escribiria fuera del valor.
+    if (id->name == "bitcast" && !e->type_args.empty()) {
+        if (e->type_args.size() != 1) {
+            diags_.error(e->loc,
+                         "bitcast: se esperaba 1 type arg <T>, recibidos " +
+                             std::to_string(e->type_args.size()));
+            return Type{};
+        }
+        if (e->args.size() != 1) {
+            diags_.error(e->loc, "bitcast<T>: se esperaba 1 argumento (el valor "
+                                 "cuyos bits reinterpretar)");
+            return Type{};
+        }
+        const Type dst = type_from_node(e->type_args[0].get());
+        const Type src = check_expr(e->args[0].get());
+        const size_t sz_dst = comptime_type_size(*this, dst);
+        const size_t sz_src = comptime_type_size(*this, src);
+        if (sz_dst != sz_src) {
+            diags_.error(e->loc,
+                         "bitcast<" + type_to_string(dst) + ">: el origen (" +
+                             type_to_string(src) + ", " +
+                             std::to_string(sz_src) + " bytes) y el destino (" +
+                             std::to_string(sz_dst) +
+                             " bytes) deben tener el MISMO ancho; para "
+                             "convertir el valor usa el cast '(" +
+                             type_to_string(dst) + ") x'");
+            return dst;
+        }
+        return dst;
+    }
+    // Predicados de tipo: `is_float<T>()` y companeros.  Devuelven bool y su
+    // valor lo computa el comptime-eval (que ya los conoce), asi que aqui solo
+    // hay que fijar el tipo de retorno.
+    if (e->type_args.size() == 1 && e->args.empty() &&
+        (id->name == "is_float" || id->name == "is_integer" ||
+         id->name == "is_signed" || id->name == "is_unsigned" ||
+         id->name == "is_numeric" || id->name == "is_bool" ||
+         id->name == "is_char" || id->name == "is_pointer" ||
+         id->name == "is_string" || id->name == "is_class" ||
+         id->name == "is_struct" || id->name == "is_primitive" ||
+         id->name == "is_enum")) {
+        (void)type_from_node(e->type_args[0].get());
+        return Type{PrimitiveKind::BOOL};
+    }
     if (e->type_args.size() >= 1 &&
         (id->name == "sizeof" || id->name == "alignof" ||
          id->name == "typename" || id->name == "type_id" ||
@@ -12588,15 +12684,25 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
          * intentamos evaluar de todas formas. */
         for (auto &a : e->args)
             (void)check_expr(a.get());
-        /* Extraer msg literal. */
+        /* Extraer el msg.  Un literal directo es el caso comun, pero vale
+         * CUALQUIER string comptime-evaluable: una `comptime string` con el
+         * mensaje, o una concatenacion de varias.  Exigir un literal obligaba a
+         * repetir el mismo texto en cada assert (o a meterlo todo en una linea
+         * larguisima) cuando varios comparten mensaje -- que es justo lo que
+         * pasa en un tipo generico con un guard por metodo. */
         std::string msg;
         auto *slit = dynamic_cast<ast::StringLitExpr *>(e->args[1].get());
-        if (!slit || slit->is_interpolated()) {
+        if (slit && !slit->is_interpolated()) {
+            msg = slit->value;
+        } else if (ComptimeEvalResult mv =
+                       comptime_eval_expr(*this, e->args[1].get());
+                   mv.ok && mv.is_str) {
+            msg = mv.str;
+        } else {
             diags_.error(e->args[1]->loc,
                          "static_assert: el segundo argumento debe ser un "
-                         "literal string compile-time (no interpolado)");
-        } else {
-            msg = slit->value;
+                         "string comptime-evaluable (un literal, una 'comptime "
+                         "string' o una concatenacion de ambos)");
         }
         /* try comptime eval first.  Si la cond ES
          * comptime-evaluable: fire diagnostic si false (same as

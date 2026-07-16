@@ -61,6 +61,9 @@ static bool is_comptime_builtin_name(const std::string &name) {
     static const std::unordered_set<std::string> set = {
         /* queries atomicas */
         "sizeof", "alignof", "typename", "type_id", "kind",
+        /* `bitcast<T>(v)`: RUNTIME (no comptime), pero lleva type-arg y el
+         * parser necesita saberlo para no tratar el `<` como comparacion. */
+        "bitcast",
         /* queries de fields/methods */
         "offsetof", "has_field", "has_method", "field_count", "method_count",
         "field_name", "field_type", "is_subtype", "is_same", "is_class",

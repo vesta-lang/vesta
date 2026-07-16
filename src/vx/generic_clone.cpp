@@ -179,6 +179,22 @@ clone_type_with_subst(const ast::TypeNode *t, const GenSubst &g) {
         if (src->size_expr) a->size_expr = clone_expr(src->size_expr.get(), g);
         return a;
     }
+    // Un tipo funcion tambien puede mencionar los type-params, en sus
+    // parametros o en su retorno.  Sin esto, `fn(T) -> T` en la firma de un
+    // metodo generico no se clonaba -> el param quedaba a `void` y llamarlo
+    // daba "no es una funcion".  Deja fuera a cualquier generico que tome un
+    // callback sobre T -- p.ej. un `fetch_update(fn(T) -> T)` atomico.
+    case ast::NodeKind::FunctionTypeNode: {
+        auto *src = static_cast<const ast::FunctionTypeNode *>(t);
+        auto f = std::make_unique<ast::FunctionTypeNode>();
+        f->loc = src->loc;
+        f->is_raw = src->is_raw;
+        f->param_types.reserve(src->param_types.size());
+        for (const auto &pt : src->param_types)
+            f->param_types.push_back(clone_type_with_subst(pt.get(), g));
+        f->return_type = clone_type_with_subst(src->return_type.get(), g);
+        return f;
+    }
     default: return nullptr;
     }
 }

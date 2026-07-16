@@ -21076,6 +21076,46 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return true;
     }
 
+    // `bitcast<T>(v)`: reinterpretar los BITS.  El type checker ya exigio que
+    // origen y destino midan lo mismo, asi que aqui es un BITCAST del IR -- que
+    // entre tipos del mismo ancho baja a un `mov`: coste cero.
+    if (name == "bitcast" && !e->type_args.empty() && e->args.size() == 1) {
+        const Type dst_t = tc_.resolve_type_node(e->type_args[0].get());
+        const ir::IrValueId v_src = lower_expr(e->args[0].get());
+        if (v_src == ir::IR_NO_VALUE) return true;
+        const ir::IrType dst_ir = ir_type_from_primitive(dst_t.kind);
+        const ir::IrValueId v_dst = fn_->new_value(dst_ir);
+        // Reinterpretar bits no cambia a que memoria apunta un puntero.
+        fn_->values[v_dst].is_host_ptr = fn_->values[v_src].is_host_ptr;
+        ir::IrInstr bc{};
+        bc.op = ir::IrOp::BITCAST;
+        bc.type = dst_ir;
+        bc.dst = v_dst;
+        bc.operands = {v_src};
+        bc.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(bc));
+        out_value = v_dst;
+        return true;
+    }
+    // Predicados de tipo: se responden en comptime -> una constante.  El `if`
+    // que los use lo pliega el optimizer y la rama muerta desaparece: en el
+    // binario solo queda el camino que corresponde a T.
+    if (e->type_args.size() == 1 && e->args.empty() &&
+        (name == "is_float" || name == "is_integer" || name == "is_signed" ||
+         name == "is_unsigned" || name == "is_numeric" || name == "is_bool" ||
+         name == "is_char" || name == "is_pointer" || name == "is_string" ||
+         name == "is_class" || name == "is_struct" || name == "is_primitive" ||
+         name == "is_enum")) {
+        int64_t v = 0;
+        if (!const_cast<TypeChecker &>(tc_).lsp_eval_builtin_scalar(e, &v)) {
+            error_at(e->loc, "lowering: '" + name +
+                                 "' no se pudo resolver en comptime");
+            return true;
+        }
+        out_value = emit_const(ir::IrType::I8, (uint64_t)(v != 0 ? 1 : 0),
+                               e->loc.line);
+        return true;
+    }
     if (!e->type_args.empty() &&
         (name == "sizeof" || name == "alignof" || name == "typename" ||
          name == "type_id" || name == "kind")) {

@@ -1487,8 +1487,13 @@ class TypeChecker {
     /// Devuelve true y escribe @p out si la expresion es evaluable.
     bool lsp_eval_int(const ast::Expr *e, int64_t *out);
     /// Evalua un builtin de introspeccion que da un escalar/bool (sizeof,
-    /// field_count, has_field, is_subtype, ...).  No cubre los que dan string.
+    /// field_count, has_field, is_subtype, is_float, ...).  No cubre los que dan
+    /// string.  Publico: ademas del LSP lo usa el lowering para resolver en
+    /// comptime los predicados de tipo y emitirlos como constante.
+public:
     bool lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out);
+
+private:
     std::unordered_map<std::string, ComptimeConst> comptime_const_values_;
     std::vector<std::unordered_map<std::string, ComptimeConst>>
         comptime_const_locals_;
