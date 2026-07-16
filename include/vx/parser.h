@@ -521,6 +521,14 @@ class Parser {
     /// un pre-scanner (Phase B futura).
     std::unordered_map<std::string, std::vector<int>> macro_expr_params_;
 
+    /// @brief Suprime el postfijo `{}` (sobrecarga de `__braces__`) mientras se
+    ///        parsea una expresion a la que SIGUE un bloque del lenguaje.
+    ///
+    /// El unico sitio donde una expresion no va parentizada y lleva un `{`
+    /// pegado es el scrutinee del `match` (`match s { case ... }`, estilo Rust).
+    /// Ahi el `{` abre el cuerpo del match, no una llamada.
+    bool no_braces_call_ = false;
+
     /// Set de identifiers declarados como typedef / using en el archivo
     /// (alias de tipos).  Poblado por @c parse_typedef_decl /
     /// @c parse_using_decl.  Consultado por @c looks_like_cast para

@@ -730,6 +730,12 @@ struct CallExpr : Expr {
     /// directa por nombre.  El lowering baja a CALLIND (llamada indirecta a
     /// traves del puntero que resulta de evaluar @c callee).
     bool is_indirect_call = false;
+    /// Sobrecarga de `{}`: el postfijo @c `a{3,4,5}` produce un CallExpr con
+    /// este flag, que el type checker resuelve a @c `a.__braces__(3,4,5)` en
+    /// lugar de a @c __call__.  Son operadores DISTINTOS: un tipo puede
+    /// definir uno, el otro o los dos.  No confundir con @c `T a = {2,3,3}`
+    /// (init-list de campos), que es un InitListExpr y no pasa por aqui.
+    bool is_braces_call = false;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 

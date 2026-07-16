@@ -19519,10 +19519,11 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         error_at(e->loc, "lowering: target de '=' nulo");
         return ir::IR_NO_VALUE;
     }
-    // Compound assign IN-PLACE sobrecargado: el type checker dejo en
-    // @c overload_method el dunder (`__iadd__` para `+=`, ...).  Se desugara a
-    // UNA llamada `target.__iop__(value)` -- no a load-op-store.  Esa es toda
-    // la diferencia: para `atomic<T>` la operacion tiene que ser indivisible.
+    // Asignacion sobrecargada: el type checker dejo en @c overload_method el
+    // dunder (`__assign__` para `=`, `__iadd__` para `+=`, ...).  Se desugara a
+    // UNA llamada `target.__op__(value)` -- ni copia memberwise ni
+    // load-op-store.  Esa es toda la diferencia: para `atomic<T>` la operacion
+    // tiene que ser indivisible.
     // Mismo patron que el binario sobrecargado (ver lower_binary): se roban los
     // hijos para el call sintetico y se devuelven despues.
     if (!e->overload_method.empty() && e->target && e->value) {

@@ -9366,6 +9366,14 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
             inner.gc_managed = false;
             return inner;
         }
+        // Sobrecarga: `*x` -> x.__deref__() cuando @c x es una CLASE o STRUCT
+        // que lo declara (metodo sin parametros).  Habilita los smart pointers
+        // escritos en el propio lenguaje.  Un tipo que no lo declara sigue
+        // exigiendo un puntero de verdad (abajo).
+        if (const ClassMethodInfo *dm = find_unary_dunder(t, "__deref__")) {
+            e->overload_method = "__deref__";
+            return dm->return_type;
+        }
         // '*p' requiere que p sea un puntero; el tipo resultante
         // es el del tipo apuntado.  Desreferenciar void (resultado
         // de un pointee no resuelto) emite error.
@@ -9691,9 +9699,28 @@ bool TypeChecker::prepare_overloaded_compound_assign(ast::AssignExpr *e,
                                                      const Type &tt,
                                                      const Type &tv,
                                                      Type &out_result) const {
-    if (!e || e->op == ast::AssignOp::Assign) return false;
+    if (!e) return false;
     if (tt.kind != PrimitiveKind::CLASS && tt.kind != PrimitiveKind::STRUCT)
         return false;
+    // `g = v` sobre un tipo que declara `__assign__(V)`: la escritura la hace
+    // ESE metodo, no la copia memberwise por defecto.  Es lo que permite que
+    // `atomic<i64> g; g = 5;` sea un store atomico.  Un tipo que no lo declara
+    // conserva la copia de siempre.  Ojo: `atomic<i64> g = 0;` es una
+    // declaracion (construccion), no un AssignExpr -- no pasa por aqui.
+    if (e->op == ast::AssignOp::Assign) {
+        const std::vector<ClassMethodInfo> *ams = methods_of_type(tt);
+        if (!ams) return false;
+        for (const auto &m : *ams) {
+            if (m.is_constructor || m.is_static) continue;
+            if (m.name != "__assign__") continue;
+            if (m.param_types.size() != 1) continue;
+            if (!types_assignable(m.param_types[0], tv)) continue;
+            e->overload_method = "__assign__";
+            out_result = m.return_type;
+            return true;
+        }
+        return false;
+    }
     // Via 1 -- `__iadd__(V)`: in-place, UNA sola operacion.  Es lo que permite
     // que `atomic<i64> g; g += 1;` sea una unica instruccion atomica.
     if (const ClassMethodInfo *dm = find_compound_assign_dunder(tt, tv, e->op)) {
@@ -14190,6 +14217,39 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // sepa que es una llamada indirecta a closure.
         e->callee->result_type = fn_type;
         return fn_type.pointee ? *fn_type.pointee : Type{PrimitiveKind::VOID};
+    }
+    // Sobrecarga de `()` y de `{}`: `c(4,4,4)` / `c{3,4,5}` sobre una VARIABLE
+    // de un tipo que declara `__call__` / `__braces__` se reescribe a
+    // `c.__call__(4,4,4)` / `c.__braces__(3,4,5)` y se re-chequea.  Asi el resto
+    // del pipeline (chequeo de args, marshalling, SRET, lowering) ve una llamada
+    // a metodo normal, sin codigo nuevo.  Son operadores DISTINTOS: un tipo
+    // puede definir uno, el otro o los dos.  Si no declara el que toca, el error
+    // de abajo lo dice: la sintaxis solo existe si el tipo la define.
+    if (s->kind == SymbolKind::Variable &&
+        (s->type.kind == PrimitiveKind::CLASS ||
+         s->type.kind == PrimitiveKind::STRUCT)) {
+        const char *dn = e->is_braces_call ? "__braces__" : "__call__";
+        if (const std::vector<ClassMethodInfo> *ms = methods_of_type(s->type)) {
+            for (const auto &m : *ms) {
+                if (m.is_constructor || m.is_static) continue;
+                if (m.name != dn) continue;
+                auto fa = std::make_unique<ast::FieldAccessExpr>();
+                fa->loc = e->callee->loc;
+                fa->field_name = dn;
+                fa->base = std::move(e->callee);
+                fa->base->result_type = s->type;
+                e->callee = std::move(fa);
+                return check_call(e);
+            }
+        }
+    }
+    if (e->is_braces_call) {
+        diags_.error(e->loc, "'" + id->name + "' no soporta la sintaxis '{...}'"
+                                              " (su tipo no declara "
+                                              "'__braces__')");
+        for (auto &a : e->args)
+            (void)check_expr(a.get());
+        return Type{};
     }
     if (s->kind != SymbolKind::Function) {
         diags_.error(e->loc, "'" + id->name + "' no es una funcion");

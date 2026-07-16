@@ -4239,7 +4239,16 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
     // parentesis (estilo Rust).  Esto permite tanto:
     //   match x { ... }
     //   match (x + 1) { ... }
-    m->scrutinee = parse_expr();
+    // Es el UNICO sitio del lenguaje donde una expresion no parentizada lleva
+    // un `{` pegado, asi que aqui el postfijo `{}` (sobrecarga de `__braces__`)
+    // se suprime: ese `{` abre el cuerpo del match.  Quien quiera un
+    // `a{...}` como scrutinee lo parentiza: `match (a{1,2}) { ... }`.
+    {
+        const bool prev_nb = no_braces_call_;
+        no_braces_call_ = true;
+        m->scrutinee = parse_expr();
+        no_braces_call_ = prev_nb;
+    }
     if (!m->scrutinee) return nullptr;
 
     (void)expect(TokenKind::LBRACE,
@@ -7498,6 +7507,38 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             expr = std::move(call);
             break;
         }
+        case TokenKind::LBRACE: {
+            /* `no_braces_call_`: el scrutinee de un `match` va sin parentesis y
+             * lleva el `{` del cuerpo pegado -> ahi este postfijo no aplica. */
+            if (no_braces_call_) return expr;
+            /* Sobrecarga de `{}`: postfijo `a{3,4,5}` -> CallExpr con
+             * `is_braces_call`, que el checker resuelve a `a.__braces__(...)`.
+             * Operador DISTINTO de `()`: un tipo puede definir uno, el otro o
+             * los dos.  No colisiona con nada: `T a = {2,3,3}` es un
+             * InitListExpr (el `{` va tras `=`, lo ve parse_primary), el
+             * compound literal lleva parentesis (`(T){...}`), `T{...}` desnudo
+             * no es sintaxis valida, y toda condicion del lenguaje va
+             * parentizada -- un `{` pegado a una expresion no puede ser un
+             * bloque.  Si el tipo no declara `__braces__`, el checker lo
+             * rechaza: la sintaxis solo existe si el tipo la define. */
+            const SourceLoc loc = current_.loc;
+            (void)consume(); // '{'
+            auto call = std::make_unique<ast::CallExpr>();
+            call->loc = loc;
+            call->callee = std::move(expr);
+            call->is_braces_call = true;
+            if (current_.kind != TokenKind::RBRACE) {
+                while (true) {
+                    auto arg = parse_expr();
+                    if (arg) call->args.push_back(std::move(arg));
+                    if (!match(TokenKind::COMMA)) break;
+                }
+            }
+            (void)expect(TokenKind::RBRACE,
+                         "se esperaba '}' al cerrar los argumentos de '{}'");
+            expr = std::move(call);
+            break;
+        }
         case TokenKind::DOT: {
             const SourceLoc loc = current_.loc;
             (void)consume(); // '.'
@@ -7973,7 +8014,16 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
             return parse_lambda_expr();
         }
         (void)consume();
-        auto inner = parse_expr();
+        // Dentro de parentesis un `{` ya no puede abrir un bloque del lenguaje,
+        // asi que el postfijo `{}` vuelve a estar disponible aunque el grupo
+        // este dentro del scrutinee de un match: `match (a{1,2}) { ... }`.
+        std::unique_ptr<ast::Expr> inner;
+        {
+            const bool prev_nb = no_braces_call_;
+            no_braces_call_ = false;
+            inner = parse_expr();
+            no_braces_call_ = prev_nb;
+        }
         (void)expect(TokenKind::RPAREN,
                      "se esperaba ')' al cerrar la expresion entre parentesis");
         return inner;

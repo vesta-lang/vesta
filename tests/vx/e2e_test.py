@@ -2160,6 +2160,8 @@ r0_case("bfc311", "compilador Brainfuck SOLO comptime (enum tokens + match + s[i
 r0_case("gca312", "compound assign sobre global float/int (bits IEEE vs aritmetica entera)", "312_global_compound_assign.vx", 42, line=3727)
 r0_case("gxm313", "globals de otro modulo: const inlineado + string desde su literal + mutable con storage compartido", "313_globals_cross_module/main.vx", 42, line=3729)
 r0_case("ovl314", "operadores sobrecargados: aritmeticos, compuestos, ++/--, bitwise, comparacion, ! y &&", "314_operadores_sobrecargados.vx", 42, line=3731)
+r0_case("ovl315", "operadores de acceso sobrecargados: *x, x = v, x(...) y x{...}", "315_operadores_llamada_deref.vx", 42, line=3733)
+fails_case("ovl316", "'a{...}' sobre un tipo que no declara __braces__", "316_braces_sin_dunder_err.vx", "no declara '__braces__'", line=3735)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)
