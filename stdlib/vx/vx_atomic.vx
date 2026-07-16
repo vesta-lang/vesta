@@ -190,6 +190,19 @@ public i64 vx_atomic_and64(i64* addr, i64 mask) {
     }
 }
 
+/// fetch-and-xor: `*addr ^= mask`; devuelve el OLD.  Bucle CAS.  Cierra el set
+/// completo (add/sub/or/and/xor/swap/cas): con or y and pero sin xor, un toggle
+/// de bits habia que escribirlo a mano.
+public i64 vx_atomic_xor64(i64* addr, i64 mask) {
+    while (true) {
+        i64 old = vx_atomic_load64(addr);
+        if (vx_atomic_cas64(addr, old, old ^ mask) == old) {
+            return old;
+        }
+        vx_cpu_relax();
+    }
+}
+
 // ===========================================================================
 //  Spinlock minimo construido sobre los atomicos (util para las libs).
 //  0 = libre, 1 = tomado.  No reentrante.
@@ -244,50 +257,308 @@ public i64 vx_spin_trylock(i64* lock) {
 // decirlo a dejar pasar codigo que parece atomico y no lo es.  Para eso esta el
 // load explicito: `*g < n`, `*g + *h`.
 //
-// La celda es SIEMPRE de 64 bits (es el ancho de los primitivos), asi que
-// `atomic<i32>` gasta 8 bytes.  A cambio, `T` puede ser cualquier entero de
-// hasta 64 bits: el valor se guarda extendido y se trunca al leerlo, asi que el
-// desbordamiento envuelve como el tipo pide.
+// La celda es del tipo T EXACTO: un `atomic<i64>` ocupa 8 bytes y ni uno mas.
+// El tipo no miente sobre su ancho ni sobre su alineacion.
 //
-// Alineacion: la celda es el unico campo del struct, y todo agregado nace
-// alineado a 8 -- que es lo que los primitivos exigen.
+// @par Que anchos se admiten: lo decide la INTROSPECCION, en comptime
+// Una operacion atomica existe para los anchos que la CPU sabe hacer
+// indivisibles, no para cualquier tipo.  En vez de fijar un ancho y castear
+// (que gastaria memoria y mentiria), cada metodo pregunta por `sizeof<T>()` y
+// elige.  Si no hay operacion para ese ancho, `static_assert` para la
+// compilacion con un mensaje que dice por que -- nunca se emite un atomico que
+// no lo sea.
+//
+// Hoy el unico ancho con primitiva es 8 bytes (`lock cmpxchg`/`lock xadd` de 64
+// bits).  La CPU tambien los tiene de 1/2/4, y de 16 con `cmpxchg16b`; cuando
+// esas primitivas aterricen, este mismo `static_assert` se abre y el resto del
+// tipo no cambia.  Ese es el sitio unico donde se toca.
+//
+// @par Coste
+// Cero frente a llamar a `vx_atomic_add64` a mano: los metodos de un struct se
+// despachan estaticamente y se inlinean, asi que `g += 1` emite la instruccion
+// atomica y nada mas -- sin llamada, sin objeto intermedio.  El chequeo de
+// ancho es comptime: no queda ni rastro en el binario.
+//
+// @par Lo que NO declara
+// Es tan importante como lo que declara: sin `__add__` ni comparaciones, un
+// `g < n` o un `g + h` no compilan.  Son operaciones que NO pueden ser atomicas
+// (dos lecturas separadas), y el compilador prefiere decirlo a dejar pasar
+// codigo que parece atomico y no lo es.  Para eso esta el load explicito:
+// `*g < n`, `*g + *h`.
 //
 // Los metodos usan los wrappers `vx_atomic_*` de arriba, no los builtins: asi
 // `atomic<T>` hereda gratis el gating por `@Target("arch:...")` -- en arm64 los
 // wrappers son ldaxr/stlxr y el struct no se entera.
-struct atomic<T> {
-    i64 cell;
+/// @brief Tipos que admiten una operacion atomica por su naturaleza.
+///
+/// Un atomico opera sobre un valor plano que la CPU sabe leer, escribir e
+/// intercambiar de una pieza: enteros, punteros y floats.  Un struct o una
+/// clase no entran -- caben en la celda, pero `lock cmpxchg` sobre ellos no
+/// significa nada.
+///
+/// Esto es lo PERMANENTE.  El limite de HOY -- que solo hay primitiva de 64
+/// bits -- no vive aqui, sino en el `static_assert` de cada metodo: cuando
+/// aterricen los anchos de 1/2/4 (y 16 con `cmpxchg16b`), se abre ese assert y
+/// este concepto no se toca.  Meter el ancho aqui haria que el concepto
+/// describiera el calendario en vez del tipo.
+concept AtomicBuiltin<T> {
+    return is_integer<T>() || is_pointer<T>() || is_float<T>();
+}
+
+/// Mensaje del guard de ancho.  En un sitio: lo comparten todos los metodos.
+/// Es lo UNICO que hay que tocar cuando aterricen los anchos de 1/2/4/16.
+comptime string VX_ATOMIC_ANCHO =
+    "atomic<T>: no hay operacion atomica para el ancho de T. " +
+    "Hoy solo la hay para tipos de 8 bytes (i64/u64/f64/punteros). " +
+    "Usa uno de esos, o protege el valor con 'synchronized'.";
+
+struct atomic<T: AtomicBuiltin> {
+    T cell;
+
+    // Los valores cruzan a la primitiva con `bitcast`, no con el cast `(i64) v`:
+    // el cast convierte el VALOR (un f64 1.5 se volveria el entero 1) y aqui hay
+    // que mover los BITS tal cual.  Como `sizeof<T>() == 8` esta garantizado por
+    // el guard, el bitcast es siempre legal -- y entre tipos del mismo ancho es
+    // un `mov`: coste cero.  Asi un `atomic<f64>` funciona igual que un
+    // `atomic<i64>` sin una sola linea de caso especial.
 
     /// `*g` -- load atomico (acquire en x86-TSO).
-    public T __deref__() { return (T) vx_atomic_load64(&this.cell); }
+    public T __deref__() {
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        return bitcast<T>(vx_atomic_load64((i64*) &this.cell));
+    }
 
     /// `g = v` -- store atomico (release en x86-TSO).
     public T __assign__(T v) {
-        vx_atomic_store64(&this.cell, (i64) v);
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        vx_atomic_store64((i64*) &this.cell, bitcast<i64>(v));
         return v;
     }
+    // -----------------------------------------------------------------------
+    //  fetch_*: devuelven el valor ANTERIOR.
+    //
+    //  Es la forma que necesitan las estructuras lock-free, y por eso son la
+    //  base y no un extra.  El patron canonico de un ring buffer:
+    //
+    //      i64 idx = tail.fetch_add(1);   // reservo ESTA casilla, no otra
+    //      buffer[idx] = x;
+    //
+    //  con el valor nuevo no se puede escribir: dos hilos que suman 1 obtienen
+    //  el mismo "nuevo" si van a la vez, mientras que el "anterior" es distinto
+    //  para cada uno -- eso es lo que reparte las casillas sin bloquear.
+    //
+    //  `+=` se construye sobre estos (`fetch_add(d) + d`), no al reves.
+    // -----------------------------------------------------------------------
 
-    /// `g += d` / `g = g + d` / `g++` -- fetch-and-add (`lock xadd`).
-    /// Devuelve el valor NUEVO (el que tiene la celda tras sumar), como haria
-    /// la expresion `g + d`.
-    public T __iadd__(T d) {
-        return (T)(vx_atomic_add64(&this.cell, (i64) d) + (i64) d);
+    /// Suma @p d y devuelve el valor ANTERIOR.  Entero: `lock xadd`, una
+    /// instruccion.  Float: bucle CAS -- sumar dos patrones IEEE 754 como si
+    /// fueran enteros no da la suma de los numeros.  El `if` lo resuelve la
+    /// introspeccion en comptime: en el binario queda solo la rama que toca.
+    public T fetch_add(T d) {
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        if (is_float<T>()) {
+            while (true) {
+                i64 viejo = vx_atomic_load64((i64*) &this.cell);
+                T nuevo = bitcast<T>(viejo) + d;
+                if (vx_atomic_cas64((i64*) &this.cell, viejo,
+                                    bitcast<i64>(nuevo)) == viejo) {
+                    return bitcast<T>(viejo);
+                }
+                vx_cpu_relax();
+            }
+        }
+        return bitcast<T>(
+            vx_atomic_add64((i64*) &this.cell, bitcast<i64>(d)));
     }
 
-    /// `g -= d` / `g = g - d` / `g--` -- fetch-and-add del negado.
-    public T __isub__(T d) {
-        return (T)(vx_atomic_add64(&this.cell, 0 - (i64) d) - (i64) d);
+    /// Resta @p d y devuelve el valor ANTERIOR.  Ver @ref fetch_add.
+    public T fetch_sub(T d) {
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        if (is_float<T>()) {
+            while (true) {
+                i64 viejo = vx_atomic_load64((i64*) &this.cell);
+                T nuevo = bitcast<T>(viejo) - d;
+                if (vx_atomic_cas64((i64*) &this.cell, viejo,
+                                    bitcast<i64>(nuevo)) == viejo) {
+                    return bitcast<T>(viejo);
+                }
+                vx_cpu_relax();
+            }
+        }
+        return bitcast<T>(
+            vx_atomic_add64((i64*) &this.cell, 0 - bitcast<i64>(d)));
     }
+
+    // Las operaciones de bits trabajan sobre el PATRON DE BITS, tambien en un
+    // float -- y eso es util, no un accidente: `fetch_xor(0x8000000000000000)`
+    // invierte el signo de un f64 atomicamente, sin leerlo ni escribirlo.
+
+    /// `|= mask`; devuelve el valor ANTERIOR.  Bucle CAS.
+    public T fetch_or(T mask) {
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        return bitcast<T>(
+            vx_atomic_or64((i64*) &this.cell, bitcast<i64>(mask)));
+    }
+
+    /// `&= mask`; devuelve el valor ANTERIOR.  Bucle CAS.
+    public T fetch_and(T mask) {
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        return bitcast<T>(
+            vx_atomic_and64((i64*) &this.cell, bitcast<i64>(mask)));
+    }
+
+    /// `^= mask`; devuelve el valor ANTERIOR.  Bucle CAS.  Util para toggles.
+    public T fetch_xor(T mask) {
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        return bitcast<T>(
+            vx_atomic_xor64((i64*) &this.cell, bitcast<i64>(mask)));
+    }
+
+    // -----------------------------------------------------------------------
+    //  Operadores: azucar sobre los fetch_*.  Devuelven el valor NUEVO, que es
+    //  lo que vale la expresion `g + d`.
+    //
+    //  Los de bits recomponen el nuevo valor por BITS (no con `|` sobre T):
+    //  asi valen igual para un entero que para un float, cuyos bits tambien se
+    //  pueden operar.
+    // -----------------------------------------------------------------------
+
+    /// `g += d` / `g = g + d` / `g++`.  Devuelve el valor NUEVO.
+    public T __iadd__(T d) { return this.fetch_add(d) + d; }
+
+    /// `g -= d` / `g = g - d` / `g--`.  Devuelve el valor NUEVO.
+    public T __isub__(T d) { return this.fetch_sub(d) - d; }
+
+    /// `g |= m` / `g = g | m`.  Devuelve el valor NUEVO.
+    public T __ior__(T m) {
+        return bitcast<T>(bitcast<i64>(this.fetch_or(m)) | bitcast<i64>(m));
+    }
+
+    /// `g &= m` / `g = g & m`.  Devuelve el valor NUEVO.
+    public T __iand__(T m) {
+        return bitcast<T>(bitcast<i64>(this.fetch_and(m)) & bitcast<i64>(m));
+    }
+
+    /// `g ^= m` / `g = g ^ m`.  Devuelve el valor NUEVO.
+    public T __ixor__(T m) {
+        return bitcast<T>(bitcast<i64>(this.fetch_xor(m)) ^ bitcast<i64>(m));
+    }
+
+    // -----------------------------------------------------------------------
+    //  CAS y exchange.
+    // -----------------------------------------------------------------------
 
     /// Compare-and-swap: si el valor es @p expected lo cambia por @p desired.
-    /// Devuelve el valor ANTIGUO (== @p expected si triunfo).  Es la primitiva
-    /// con la que se construye cualquier RMW que no tenga instruccion propia
-    /// (multiplicar, saturar, maximo, ...): bucle CAS hasta triunfar.
+    /// Devuelve el valor ANTIGUO (== @p expected si triunfo).  Con esto se
+    /// construye cualquier read-modify-write que no tenga instruccion propia
+    /// (multiplicar, saturar, maximo, ...): bucle hasta triunfar.
     public T compare_swap(T expected, T desired) {
-        return (T) vx_atomic_cas64(&this.cell, (i64) expected, (i64) desired);
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        return bitcast<T>(vx_atomic_cas64((i64*) &this.cell,
+                                          bitcast<i64>(expected),
+                                          bitcast<i64>(desired)));
     }
 
-    /// Exchange: escribe @p v y devuelve el valor ANTIGUO.  Compuesto sobre CAS
-    /// (no hay builtin de swap): bucle hasta triunfar.
-    public T swap(T v) { return (T) vx_atomic_swap64(&this.cell, (i64) v); }
+    /// Exchange: escribe @p v y devuelve el valor ANTERIOR, sin condiciones.
+    public T swap(T v) {
+        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+        return bitcast<T>(vx_atomic_swap64((i64*) &this.cell, bitcast<i64>(v)));
+    }
+
+    /// Como @ref compare_swap pero devuelve SI triunfo.  Es lo que se quiere
+    /// saber casi siempre, y evita repetir `if (a.compare_swap(v, n) == v)` en
+    /// cada sitio.
+    public bool compare_exchange(T expected, T desired) {
+        return this.compare_swap(expected, desired) == expected;
+    }
+
+    // -----------------------------------------------------------------------
+    //  Nombres explicitos.
+    //
+    //  Los operadores (`*g`, `g = v`, `g += d`) son comodos, pero en codigo
+    //  concurrente se suele preferir que la operacion atomica SE VEA:
+    //  `head.store(next)` dice mas que `head = next`.  Ademas es el vocabulario
+    //  de C++, Rust, Java, Zig y C#: quien viene de ahi ya lo conoce.
+    //
+    //  Son los mismos metodos, no otros: `load` ES `*g`.
+    // -----------------------------------------------------------------------
+
+    /// Load atomico.  Igual que `*g`.
+    public T load() { return this.__deref__(); }
+
+    /// Store atomico.  Igual que `g = v`.
+    public T store(T v) { return this.__assign__(v); }
+
+    /// Exchange.  Alias de @ref swap, con el nombre de C++/Rust.
+    public T exchange(T v) { return this.swap(v); }
+
+    // -----------------------------------------------------------------------
+    //  RMW compuestos sobre CAS.
+    // -----------------------------------------------------------------------
+
+    /// Deja el maximo entre el valor actual y @p v; devuelve el ANTERIOR.
+    /// Sin esto hay que escribir el bucle CAS a mano en cada sitio.
+    public T fetch_max(T v) {
+        while (true) {
+            T viejo = this.load();
+            if (viejo >= v) { return viejo; }
+            if (this.compare_exchange(viejo, v)) { return viejo; }
+            vx_cpu_relax();
+        }
+    }
+
+    /// Deja el minimo entre el valor actual y @p v; devuelve el ANTERIOR.
+    public T fetch_min(T v) {
+        while (true) {
+            T viejo = this.load();
+            if (viejo <= v) { return viejo; }
+            if (this.compare_exchange(viejo, v)) { return viejo; }
+            vx_cpu_relax();
+        }
+    }
+
+    /// Aplica @p f al valor de forma atomica y devuelve el ANTERIOR.
+    ///
+    /// Es el bucle CAS generico -- leer, calcular, intentar escribir, reintentar
+    /// si otro se adelanto -- que aparece una y otra vez.  Con esto CUALQUIER
+    /// operacion atomica se escribe sin tocar la libreria:
+    ///
+    ///     contador.fetch_update((x) => x * 2 + 1);
+    ///     tope.fetch_update((x) => max(x, limite));
+    ///
+    /// @p f debe ser PURA y BARATA.  Pura porque se ejecuta una vez por
+    /// reintento: si tiene efectos, ocurriran varias veces.  Y barata porque
+    /// cuanto mas tarda, mas facil es que otro hilo se adelante y haya que
+    /// repetirla -- con un calculo caro y contencion, el bucle puede no
+    /// avanzar.
+    ///
+    /// Si el calculo es caro, el bucle se escribe a mano y se decide que hacer
+    /// en cada reintento (reaprovechar parte del trabajo, abandonar, ...):
+    ///
+    ///     while (true) {
+    ///         T viejo = a.load();
+    ///         T nuevo = calculo_caro(viejo);       // <- aqui decides tu
+    ///         if (a.compare_exchange(viejo, nuevo)) { break; }
+    ///     }
+    public T fetch_update(fn(T) -> T f) {
+        while (true) {
+            T viejo = this.load();
+            if (this.compare_exchange(viejo, f(viejo))) { return viejo; }
+            vx_cpu_relax();
+        }
+    }
+
+    /// Como @ref fetch_update pero devuelve el valor NUEVO.
+    ///
+    /// La misma relacion que hay entre `fetch_add` y `+=`: el patron habitual es
+    /// `nuevo = contador.update((x) => x + 1);`, y con el fetch_ hay que
+    /// recalcularlo fuera.  Mismas condiciones sobre @p f (pura y barata).
+    public T update(fn(T) -> T f) {
+        while (true) {
+            T viejo = this.load();
+            T nuevo = f(viejo);
+            if (this.compare_exchange(viejo, nuevo)) { return nuevo; }
+            vx_cpu_relax();
+        }
+    }
 }

@@ -1,4 +1,4 @@
-// `atomic<T>`: un entero atomico con la sintaxis de una variable normal.
+// `atomic<T>`: un valor atomico con la sintaxis de una variable normal.
 //
 // Vive en la stdlib (`vx_atomic`), no en el compilador: es un struct de un solo
 // campo que sobrecarga los operadores para que CADA uno sea una operacion
@@ -16,50 +16,84 @@ import "vx_atomic" only atomic;
 
 i32 main() {
     atomic<i64> g;
-
     g = 0;              // store atomico
 
-    // Las TRES formas del incremento bajan al MISMO `lock xadd`.  La larga
-    // (`g = g + 1`) es la que en C++ compila y es una carrera silenciosa: alli
-    // son tres pasos y otro hilo cabe en medio.  Aqui el compilador ve que las
-    // dos `g` son la misma posicion y las funde, asi que las tres son igual de
-    // correctas.
+    // ---- Las TRES formas del incremento bajan al MISMO `lock xadd` --------
+    // La larga (`g = g + 1`) es la que en C++ compila y es una carrera
+    // silenciosa: alli son tres pasos y otro hilo cabe en medio.  Aqui el
+    // compilador ve que las dos `g` son la misma posicion y las funde.
     g = g + 20;
     g += 20;
     g++;
     g = g - 1;          // y la resta igual
+    println("g = ${*g}");                        // 40
 
-    i64 v = *g;         // load atomico
-    println("g = ${v}");
+    // ---- fetch_*: devuelven el valor ANTERIOR -----------------------------
+    // Es lo que necesitan las estructuras lock-free.  El patron de un ring
+    // buffer: cada hilo se lleva una casilla DISTINTA porque cada uno recibe el
+    // valor que habia antes de su suma.  Con el valor nuevo no se puede hacer.
+    atomic<i64> tail;
+    tail = 0;
+    i64 casilla_a = tail.fetch_add(1);           // 0
+    i64 casilla_b = tail.fetch_add(1);           // 1
+    println("casillas: ${casilla_a} y ${casilla_b}");
 
-    // compare_swap: la primitiva con la que se construye cualquier RMW que no
-    // tenga instruccion propia (multiplicar, saturar, maximo, ...) -- bucle
-    // hasta triunfar.  Escribe solo si el valor es el esperado, y devuelve el
-    // que habia: si coincide con el esperado, triunfo.
+    // ---- Nombres explicitos ----------------------------------------------
+    // Los operadores son comodos, pero en codigo concurrente muchas veces se
+    // prefiere que la operacion atomica SE VEA.  Son los mismos metodos.
+    atomic<i64> head;
+    head.store(7);
+    i64 leido = head.load();                     // 7
+    i64 previo = head.exchange(9);               // 7, deja 9
+    println("store/load/exchange: ${leido}, ${previo} -> ${head.load()}");
+
+    // ---- compare_exchange: como CAS pero dice SI triunfo -------------------
+    bool cambio = head.compare_exchange(9, 3);   // true  -> 3
+    bool no_cambio = head.compare_exchange(9, 8); // false -> sigue 3
+    println("cas: ${cambio} / ${no_cambio} -> ${head.load()}");
+
+    // ---- fetch_max / fetch_min --------------------------------------------
+    atomic<i64> tope;
+    tope.store(10);
+    tope.fetch_max(50);         // 50
+    tope.fetch_max(3);          // sigue 50 (no baja)
+    println("tope = ${tope.load()}");
+
+    // ---- fetch_update: cualquier operacion, sin tocar la stdlib ------------
+    // Es el bucle CAS generico (leer, calcular, intentar, reintentar) que
+    // aparece una y otra vez.  La lambda puede llamarse varias veces -- una por
+    // reintento -- asi que debe ser pura.
+    atomic<i64> u;
+    u.store(4);
+    i64 antes = u.fetch_update((x) => x * 2 + 1);  // devuelve 4, deja 9
+    println("fetch_update: ${antes} -> ${u.load()}");
+
+    // ---- atomic<f64>: los mismos operadores --------------------------------
+    // La suma de floats no puede ser un `lock xadd` (sumar dos patrones IEEE
+    // 754 como enteros no da la suma de los numeros), asi que va por bucle CAS.
+    // Lo elige la introspeccion en comptime: en el binario solo queda la rama
+    // que toca.
+    atomic<f64> acc;
+    acc = 0.5;
+    acc += 1.5;                                    // 2.0
+    println("float: ${(i64)(*acc)}");
+
+    // ---- Lo que NO compila, y por que --------------------------------------
     //
-    // Aqui NO triunfa a proposito: g vale 40, no 99, asi que no la toca.  Ese
-    // es el caso que hay que saber leer -- otro hilo cambio el valor entre tu
-    // lectura y tu escritura, y por eso la operacion no se aplico.
-    i64 previo = g.compare_swap(99, 100);
-    println("compare_swap(99, 100) devolvio ${previo}; g sigue en ${*g}");
-
-    // swap: escribe y devuelve el anterior, incondicionalmente.
-    i64 anterior = g.swap(2);
-    println("swap(2) devolvio ${anterior}, ahora vale ${*g}");
-
-    // Lo que NO se puede escribir es tan importante como lo que si:
+    //     if (g < 10) { ... }     // atomic<i64> no declara '<'
+    //     i64 x = g + 1;          // atomic<i64> no declara '+'
+    //     atomic<i32> chico;      // no hay atomico de 4 bytes (todavia)
     //
-    //     if (g < 10) { ... }     // error: atomic<i64> no declara '<'
-    //     i64 x = g + 1;          // error: atomic<i64> no declara '+'
-    //
-    // No son descuidos: comparar o sumar dos atomicos son DOS lecturas
-    // separadas, y el resultado ya no es atomico.  El tipo no las declara y el
-    // compilador lo dice, en vez de dejar pasar codigo que parece atomico y no
-    // lo es.  Para eso esta el load explicito:
-    if (*g < 10) {
-        println("*g < 10  (el load es explicito: se ve que hay una lectura)");
-    }
+    // Los dos primeros no son descuidos: comparar o sumar dos atomicos son DOS
+    // lecturas separadas, y el resultado ya no es atomico.  El tercero lo dice
+    // el guard de ancho.  En los tres casos el compilador prefiere decirlo a
+    // dejar pasar codigo que parece atomico y no lo es.  Para leer, el load se
+    // escribe explicito: `*g < 100`.
 
-    // 40 + 2 = 42
-    return (i32)(anterior + *g);
+    i64 total_g = *g;              // 40
+    i64 total_h = head.load();     // 3
+    i64 total_u = u.load();        // 9
+
+    // 40 - 3 + 9 - 4 = 42
+    return (i32)(total_g - total_h + total_u - 4);
 }

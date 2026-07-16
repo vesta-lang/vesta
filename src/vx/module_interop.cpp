@@ -1333,6 +1333,47 @@ void inject_generic_templates_from_vxi(
         }
     }
 
+    // Lo mismo con las `comptime const` del modulo: una plantilla que use la de
+    // su propia libreria (p.ej. el mensaje que comparten sus static_assert) no
+    // la resolveria aqui.  Se registra su VALOR bajo un nombre que nadie
+    // escribe (`<mod>__<NOMBRE>`) y se reescriben las referencias en el AST de
+    // la plantilla -- misma jugada que con las funciones, misma higiene: el
+    // consumidor no ve el nombre corto si su `only` no lo pidio.
+    {
+        std::unordered_map<std::string, std::string> const_renames;
+        for (const auto &sym : mod.symbols) {
+            if (sym.kind != VxiSymbolKind::GLOBAL_VAR) continue;
+            if (!sym.is_const) continue;
+            // El nombre solo tiene que ser unico y que nadie lo escriba: una
+            // `comptime const` se inlinea en el uso, no enlaza contra nada, asi
+            // que no hace falta que coincida con el mangling real del modulo.
+            const std::string mangled = "__tpl__" + ns_prefix + "__" + sym.name;
+            TypeChecker::ComptimeConst c;
+            c.type = tc.resolve_type_string(sym.underlying_type);
+            if (sym.has_blob_ref) {
+                const VxiBlobHeader *bh =
+                    vxi_blob_read(mod.blob_pool, sym.blob_offset);
+                const uint8_t *payload =
+                    vxi_blob_payload(mod.blob_pool, sym.blob_offset);
+                if (!bh || !payload ||
+                    bh->kind != static_cast<uint32_t>(VxiBlobKind::STRING))
+                    continue; // solo strings por ahora
+                c.is_str = true;
+                c.str_value.assign(reinterpret_cast<const char *>(payload),
+                                   bh->count);
+            } else if (sym.has_init_value) {
+                c.value = static_cast<int64_t>(sym.init_value);
+            } else {
+                continue; // sin valor conocido: nada que inyectar
+            }
+            tc.comptime_const_values().emplace(mangled, std::move(c));
+            const_renames.emplace(sym.name, mangled);
+        }
+        if (!const_renames.empty())
+            for (auto &decl : parsed->decls)
+                if (decl) vxgen::rename_idents(decl.get(), const_renames);
+    }
+
     // Helper: nombre del decl (para el filtro `only` + rename namespace).
     auto decl_name = [](ast::Node *d) -> std::string {
         switch (d->kind) {
