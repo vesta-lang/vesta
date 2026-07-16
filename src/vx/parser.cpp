@@ -1288,6 +1288,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     std::string top_complexity_partial_post;
     std::string top_complexity_total_pre;
     std::string top_complexity_total_post;
+    // TODOS los @complexity de la funcion, sin resolver: hay que verlos juntos
+    // para la regla de prioridad (por especificidad), igual que en los metodos.
+    // Sin esto ganaba el ultimo textualmente tambien en las funciones libres.
+    std::vector<ast::PendingComplexity> top_complexity_pending;
     // Sprint lombok (2026-06-03): anotaciones tipo Lombok a nivel
     // de clase.  El TypeChecker pre-pase las consume y genera
     // ClassMethodDecls sinteticos (getters, setters, toString, etc.).
@@ -1411,11 +1415,17 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             // bindings `var = ...` despues).  Metadata pura: el codegen la
             // ignora.  Tolerante a errores: si falta '(' se omite sin abortar.
             if (is_complexity) {
-                parse_complexity_args_(top_complexity_expr, top_complexity_vars,
-                                       top_complexity_partial_pre,
-                                       top_complexity_partial_post,
-                                       top_complexity_total_pre,
-                                       top_complexity_total_post);
+                // A la lista, tambien el que no lleva `when:`: resolver el
+                // primero al vuelo y dejar que el siguiente lo pise es lo que
+                // hacia ganar al ultimo textualmente.  Los de una funcion libre
+                // no tienen T, asi que todos sus atomos son de target; el
+                // type checker los resuelve por especificidad.
+                ast::PendingComplexity pc;
+                bool aplica = true;
+                parse_complexity_args_(pc.expr, pc.vars, pc.partial_pre,
+                                       pc.partial_post, pc.total_pre,
+                                       pc.total_post, &pc.when, &aplica);
+                if (aplica) top_complexity_pending.push_back(std::move(pc));
                 continue;
             }
             if (is_hot) {
@@ -2074,19 +2084,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && !top_helper_override_target.empty())
             fd->helper_override_target = top_helper_override_target;
         // Subsistema de coste: propagar el contrato @complexity al AST.
-        // @c complexity_expr (forma posicional) es azucar de total_post: si
-        // no se declaro total_post nombrado, lo usamos como tal.
+        // Sin resolver: el type checker aplica la regla de prioridad sobre
+        // todos juntos.  Los campos resueltos los rellena el.
         if (fd) {
-            fd->complexity_expr = top_complexity_expr;
-            fd->complexity_vars = top_complexity_vars;
-            fd->complexity_partial_pre = top_complexity_partial_pre;
-            fd->complexity_partial_post = top_complexity_partial_post;
-            fd->complexity_total_pre = top_complexity_total_pre;
-            fd->complexity_total_post = top_complexity_total_post;
-            // Azucar: la expr posicional rellena total_post si nadie lo declaro.
-            if (fd->complexity_total_post.empty() &&
-                !top_complexity_expr.empty())
-                fd->complexity_total_post = top_complexity_expr;
+            fd->complexity_pending = std::move(top_complexity_pending);
             // Contratos de huella (recurso/efecto).
             fd->contract_pure = top_c_pure;
             fd->contract_nothrow = top_c_nothrow;

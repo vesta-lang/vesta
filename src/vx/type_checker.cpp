@@ -1342,9 +1342,17 @@ void TypeChecker::apply_class_field_defaults_to_ctors() {
 /// resuelve el clon (con T); estos no tienen T, asi que todos sus atomos deben
 /// ser de target -- uno que hable de un parametro de tipo aqui no tiene a que
 /// referirse, y se dice.
-void TypeChecker::resolve_complexity_no_generico_(ast::ClassMethodDecl &m) {
+namespace {
+/// Resuelve los @complexity pendientes de CUALQUIER declaracion sin type
+/// params (funcion libre o metodo no generico): todos sus atomos deben ser de
+/// target -- aqui no hay T al que referirse.  Template porque FunctionDecl y
+/// ClassMethodDecl tienen los mismos campos de @complexity y no queria dos
+/// copias de esto.  Aplica la REGLA DE PRIORIDAD (cwhen::resolve): sin ella
+/// ganaba el ultimo textualmente, tambien en las funciones libres.
+template <class Decl>
+void resolve_cx_sin_tipos(Decl &m, Diagnostics &diags) {
     if (m.complexity_pending.empty()) return;
-    static const vxgen::GenSubst kSinTipos{}; // sin params: no hay T que valga
+    static const vxgen::GenSubst kSinTipos{};
     cwhen::AtomEval ev = [&](const std::string &at, bool &ok) {
         if (cwhen::atom_kind(at) == cwhen::AtomKind::TIPO) {
             ok = false;
@@ -1352,7 +1360,7 @@ void TypeChecker::resolve_complexity_no_generico_(ast::ClassMethodDecl &m) {
         }
         return when_atomo_(at, kSinTipos, ok);
     };
-    cwhen::ErrFn err = [&](const std::string &msg) { diags_.error(m.loc, msg); };
+    cwhen::ErrFn err = [&](const std::string &msg) { diags.error(m.loc, msg); };
     cwhen::Resolved r;
     cwhen::resolve(m.complexity_pending, ev, err, r);
     m.complexity_expr = std::move(r.expr);
@@ -1363,12 +1371,19 @@ void TypeChecker::resolve_complexity_no_generico_(ast::ClassMethodDecl &m) {
     m.complexity_total_post = std::move(r.total_post);
     m.complexity_pending.clear();
 }
+} // namespace
+
+void TypeChecker::resolve_complexity_no_generico_(ast::ClassMethodDecl &m) {
+    resolve_cx_sin_tipos(m, diags_);
+}
 
 /// Recorre las decls resolviendo los @complexity que queden pendientes.
 ///
 /// Las instanciaciones genericas ya vienen resueltas del clon (que es quien
-/// tiene T) y llegan con la lista vacia; esto cubre el resto.  Las PLANTILLAS
-/// se saltan: no producen IR, y sus `when:` sobre T no tienen respuesta aqui.
+/// tiene T) y llegan con la lista vacia; esto cubre el resto (funciones libres
+/// incluidas: sin este pase, la regla de prioridad no las tocaba y ganaba el
+/// ultimo textualmente).  Las PLANTILLAS se saltan: no producen IR, y sus
+/// `when:` sobre T no tienen respuesta aqui.
 void TypeChecker::resolve_complexity_decls_(
     std::vector<std::unique_ptr<ast::Node>> &decls) {
     for (auto &d : decls) {
@@ -1378,16 +1393,19 @@ void TypeChecker::resolve_complexity_decls_(
                 static_cast<ast::NamespaceDecl *>(d.get())->decls);
             continue;
         }
-        if (d->kind == ast::NodeKind::StructDecl) {
+        if (d->kind == ast::NodeKind::FunctionDecl) {
+            resolve_cx_sin_tipos(
+                *static_cast<ast::FunctionDecl *>(d.get()), diags_);
+        } else if (d->kind == ast::NodeKind::StructDecl) {
             auto *sd = static_cast<ast::StructDecl *>(d.get());
             if (!sd->type_params.empty() || sd->is_specialization) continue;
             for (auto &m : sd->methods)
-                if (m) resolve_complexity_no_generico_(*m);
+                if (m) resolve_cx_sin_tipos(*m, diags_);
         } else if (d->kind == ast::NodeKind::ClassDecl) {
             auto *cd = static_cast<ast::ClassDecl *>(d.get());
             if (!cd->type_params.empty()) continue;
             for (auto &m : cd->methods)
-                if (m) resolve_complexity_no_generico_(*m);
+                if (m) resolve_cx_sin_tipos(*m, diags_);
         }
     }
 }
