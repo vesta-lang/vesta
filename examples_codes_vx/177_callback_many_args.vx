@@ -9,8 +9,8 @@ namespace ejemplos.callback_many_args;
 //     el frame del thunk (push rbx + sub rsp, frame_size).
 //
 // Demuestra:
-//   - 12 args llegando correctamente al callback Vex.
-//   - Mezcla con globals Vex (g_total incrementado dentro del callback).
+//   - 12 args llegando correctamente al callback .
+//   - Mezcla con globals  (g_total incrementado dentro del callback).
 //   - Multiples invocaciones (verifica que el cache (pc, argc) reusa el
 //     mismo thunk sin regenerarlo).
 //

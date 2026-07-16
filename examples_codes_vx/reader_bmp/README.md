@@ -1,6 +1,6 @@
-# reader_bmp (ReaderBMP migrado a Vex)
+# reader_bmp (ReaderBMP migrado a )
 
-Migracion a **Vex** del proyecto Java [ReaderBMP](https://github.com/desmonHak/ReaderBMP)
+Migracion a **** del proyecto Java [ReaderBMP](https://github.com/desmonHak/ReaderBMP)
 + su libreria [JColorsTerm](https://github.com/desmonHak/JColorsTerm): lee un
 BMP de 24 bits (BGR, sin compresion), imprime los atributos de cabecera y
 vuelca los pixeles a la terminal como bloques de color ANSI truecolor
@@ -94,6 +94,6 @@ padding de fila), comparado contra la referencia `reader_bmp.vx`.
 ## Que NO se migro (y por que)
 
 - Decodificacion JPG/PNG -> BMP (`javax.imageio.ImageIO`) y resize bilinear
-  (`Graphics2D`): sin equivalente en Vex/stdlib.  Se migro solo la ruta
+  (`Graphics2D`): sin equivalente en /stdlib.  Se migro solo la ruta
   BMP-directo.  El flag `-r WxH` solo parsea y reporta las dimensiones (demo de
   `vio_parse_int`); el redimensionado real queda fuera.  Ver LIM-9.

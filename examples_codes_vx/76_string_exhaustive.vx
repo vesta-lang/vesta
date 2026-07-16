@@ -84,7 +84,7 @@ i32 main() {
 
     // String literal directo dentro de print/println (sin interp).
     print("frase plana: ");
-    println("Vex es genial");
+    println(" es genial");
 
     // -----------------------------------------------------------------
     // 3. Multi-alfabeto: latin/griego/cirilico/arabe/CJK/emoji.

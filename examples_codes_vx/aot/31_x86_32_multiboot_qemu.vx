@@ -1,7 +1,7 @@
 // KERNEL multiboot x86-32 ejecutable en QEMU (modo protegido bare-metal).
-// Valida que el codigo Vex de 32-bit corre SIN SO: QEMU -kernel carga la imagen
+// Valida que el codigo  de 32-bit corre SIN SO: QEMU -kernel carga la imagen
 // en modo protegido y salta a entry_addr.  El trampolin asm `_kstart` llama a
-// compute() (codigo Vex generado, REL32 resuelto por el driver) y senala el
+// compute() (codigo  generado, REL32 resuelto por el driver) y senala el
 // resultado por debugcon (0xE9) + isa-debug-exit (0xF4).
 //
 //   vm -m aot --vx examples_codes_vx/aot/31_x86_32_multiboot_qemu.vx \

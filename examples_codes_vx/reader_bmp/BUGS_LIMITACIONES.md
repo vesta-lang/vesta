@@ -1,7 +1,7 @@
-# ReaderBMP -> Vex: bugs y limitaciones encontrados
+# ReaderBMP -> : bugs y limitaciones encontrados
 
 Migracion del proyecto Java **ReaderBMP** (+ su libreria **JColorsTerm**) al
-lenguaje **Vex** de VestaVM.  El objetivo del ejercicio era destapar bugs y
+lenguaje **** de VestaVM.  El objetivo del ejercicio era destapar bugs y
 limitaciones; la migracion es el vehiculo.
 
 Binario usado: `cmake-build-release/vm.exe` (sin rebuild).  Compilador NO
@@ -224,7 +224,7 @@ argumentos de CLI no compila en target nativo.  Por eso el AOT usa `main_aot.vx`
 
 ### LIM-9 [no-portable] Codecs de imagen (JPG/PNG -> BMP) y resize AWT no migrables
 ReaderBMP usa `javax.imageio.ImageIO` (decodifica JPG/PNG) y `Graphics2D`/
-bilinear para redimensionar.  Sin equivalente en Vex/stdlib.  Se migro solo la
+bilinear para redimensionar.  Sin equivalente en /stdlib.  Se migro solo la
 ruta BMP-directo.  Los flags `-k`/`-s` (mantener convertido/redimensionado) y el
 redimensionado real de `-r` dependen de esos codecs y quedan fuera; `-r` solo
 parsea y reporta las dimensiones (demo de `vio_parse_int`).

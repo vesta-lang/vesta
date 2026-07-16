@@ -4,7 +4,7 @@ namespace ejemplos.cfn_vs_lambda;
 // METODO  vs  PUNTERO A FUNCION CRUDO (cfn)  vs  LAMBDA (fn)
 // ============================================================================
 //
-// En Vex hay TRES conceptos relacionados pero DISTINTOS, con representacion,
+// En  hay TRES conceptos relacionados pero DISTINTOS, con representacion,
 // coste y semantica diferentes.  Elegir el adecuado es clave para escribir
 // codigo eficiente (sobre todo en structs/clases y en bare-metal / FFI).
 //

@@ -139,7 +139,7 @@ static void profile_report(void) {
     for (ProfileEntry *e = g_profile_head; e; e = e->next)
         arr[i++] = e;
     qsort(arr, (size_t)n, sizeof(*arr), profile_cmp);
-    fprintf(stderr, "\n%s== Vex Profile (sorted by total time, pid=%d) ==%s\n",
+    fprintf(stderr, "\n%s==  Profile (sorted by total time, pid=%d) ==%s\n",
             vt_bold(), get_pid(), vt_reset());
     fprintf(stderr, "%s%-32s %10s %14s %12s %12s %12s%s\n", vt_dim(),
             "function", "count", "total_ns", "avg_ns", "min_ns", "max_ns",

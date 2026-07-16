@@ -1,11 +1,11 @@
 // examples_codes_vx/benchmark/bench_native_callback.vx
 //
-// Benchmark del overhead del thunk Vex->C->Vex.
+// Benchmark del overhead del thunk ->C->.
 //
 // Estrategia: usamos qsort de msvcrt como driver C que invoca un
-// comparator Vex N log N veces.  Comparamos:
+// comparator  N log N veces.  Comparamos:
 //   - qsort con N=1024 elementos -> ~10K invocaciones del thunk.
-//   - bench_callvirt con 30M iter -> CALLVIRT puro Vex->Vex sin thunk.
+//   - bench_callvirt con 30M iter -> CALLVIRT puro -> sin thunk.
 //
 // Esto mide el OVERHEAD DEL BRIDGE NATIVO (thunk + TLS + JIT call) en
 // micro-segundos por callback.

@@ -10,7 +10,7 @@
 //       inline en el slot de 24 bytes) y el caso HEAP (cadena larga,
 //       data en buffer malloc).  Sin bounds-check (C-style).
 //
-// Compilar nativo (AOT) -- validado en este modo (Vex Embed):
+// Compilar nativo (AOT) -- validado en este modo (bed):
 //   vm --vx examples_codes_vx/aot/54_index_set.vx -m aot --emit exe -o idxset.exe
 //   ./idxset.exe ; echo $?          (exit-code == 42)
 //

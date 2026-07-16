@@ -3,7 +3,7 @@ namespace ejemplos.macros_inject_at_macro;
 // macros con auto-inyeccion via `@Macro`.
 //
 // Un `@Macro comptime string fn(...)` es un macro: cuando se llama,
-// el string de retorno se PARSEA como expresion Vex y se INYECTA en
+// el string de retorno se PARSEA como expresion se INYECTA en
 // el call site (equivalente transparente a `comptime_emit_expr(fn(...))`).
 //
 // Esto cierra la brecha con Lisp/Scheme `define-syntax`/`defmacro`:

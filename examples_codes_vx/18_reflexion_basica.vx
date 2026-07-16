@@ -1,6 +1,6 @@
 namespace ejemplos.reflexion_basica;
 
-// Reflexion MVP en Vex.
+// Reflexion MVP en Vesta-lang.
 //
 // Demuestra dos builtins de reflexion:
 //   - forName("Animal")  -> i64 (ClassInfo*)  busca la clase por nombre

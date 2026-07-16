@@ -1,10 +1,10 @@
 namespace ejemplos.triple_quoted;
 
 // Strings triple-quoted ("""...""") con saltos de linea literales
-// dentro del literal y escapes (\t, \n) honrados.  Antes el lexer Vex
+// dentro del literal y escapes (\t, \n) honrados.  Antes el lexer 
 // emitia error "no soportados" y el preprocesador VPP confundia las
 // triples con varios literales sueltos -> ahora ambas pasadas (VPP +
-// Vex) reconocen """ como un solo token multilinea.
+// ) reconocen """ como un solo token multilinea.
 i32 main() {
     string s = """linea1
 linea2

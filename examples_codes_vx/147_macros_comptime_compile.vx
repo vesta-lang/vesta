@@ -1,7 +1,7 @@
 // Macros estilo Lisp -- MVP via `comptime_compile(string)`.
 //
 // `comptime_compile(s)` toma un string compile-time, lo parsea como
-// una EXPRESION Vex y la evalua recursivamente al compile-time.
+// una EXPRESION la evalua recursivamente al compile-time.
 // Permite construir codigo a partir de datos (typename<T>,
 // comptime_to_str, concat) y ejecutarlo sin runtime.
 //

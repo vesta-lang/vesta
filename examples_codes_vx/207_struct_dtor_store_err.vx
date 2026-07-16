@@ -9,7 +9,7 @@ namespace ejemplos.struct_dtor_store_err;
 // un MOVE -- copia los bytes del struct al campo y el local origen queda
 // detectado como escaping (su dtor de scope-exit se suprime).  Asi solo el dtor
 // del contenedor libera el recurso: un unico free, sin doble free.  Value-types
-// inline, sin GC.  Ver doc/VMdoc/Vex/InteropC.md.
+// inline, sin GC.  Ver doc/VMdoc/teropC.md.
 
 i64 freed = 0;
 

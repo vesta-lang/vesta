@@ -10,7 +10,7 @@ namespace ejemplos.struct_composition;
 // Tambien arregla un bug previo: acceder a un campo struct de una clase/struct
 // (`obj.campo.x`, `obj.campo.metodo()`) devuelve ahora la DIRECCION del campo
 // inline (antes hacia un LOAD extra tratandolo como puntero -> SIGSEGV en AOT).
-// Ver doc/VMdoc/Vex/InteropC.md.
+// Ver doc/VMdoc//InteropC.md.
 
 i64 freed = 0;
 

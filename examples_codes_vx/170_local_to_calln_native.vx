@@ -14,7 +14,7 @@ namespace ejemplos.local_to_calln_native;
 // Sin esta promocion (modelo VM-stack puro), `&msg[0]` seria una
 // VM-addr que vio_print_buf trataria como host_ptr -> garbage / crash.
 //
-// Esperado: imprime "Hola Vex!" + retorna R00=42.
+// Esperado: imprime "Hola !" + retorna R00=42.
 //
 // NOTA: funciona en AMBOS modos (interp puro y JIT).  El IR pass
 // `ir_pass_promote_callned_allocas` corre antes del backend, y tanto
@@ -29,7 +29,7 @@ extern "stdlib/native/io/vesta_io" {
 
 i32 main() {
     // Sintaxis C-style: string literal inicializa array de bytes.
-    u8[10] msg = "Hola Vex!\n";
+    u8[10] msg = "Hola !\n";
 
     // Pasar &local directamente a funcion nativa C.  Sin malloc, sin
     // anotaciones.  El frontend + IR pass + JIT cooperan automaticamente.

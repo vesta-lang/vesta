@@ -35,7 +35,7 @@
 }
 
 // @Naked tambien sirve para helpers de bajo nivel con ABI manual.  Aqui se
-// llama desde Vex normal: en SysV (ELF) los args llegan en rdi/rsi y el
+// llama desde rmal: en SysV (ELF) los args llegan en rdi/rsi y el
 // resultado se devuelve en rax, igual que cualquier funcion -- pero el cuerpo
 // es asm puro sin frame.  add_naked(40, 2) == 42.
 @Naked i64 add_naked(i64 a, i64 b) {

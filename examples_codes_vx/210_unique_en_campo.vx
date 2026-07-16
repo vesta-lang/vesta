@@ -7,7 +7,7 @@ namespace ejemplos.unique_en_campo;
 // invocando su deleter (el de por defecto, `free`, o uno personalizado dado a
 // unique_with).  El slot del unique vive en heap para sobrevivir junto al
 // contenedor; un unico free, deterministico, sin recolector de basura.
-// Ver doc/VMdoc/Vex/InteropC.md.
+// Ver doc/VMdoc//InteropC.md.
 
 class Counter { public static i64 liberados; }
 

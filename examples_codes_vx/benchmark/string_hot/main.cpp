@@ -1,5 +1,5 @@
 // Bench: strings en hot loop (concat + length + compare).
-// C++ usa std::string que es el equivalente idiomatico al string de Vex.
+// C++ usa std::string que es el equivalente idiomatico al string de .
 #include <cstdint>
 #include <string>
 

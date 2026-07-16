@@ -31,11 +31,11 @@ LANG_COLORS = {
 
 # Labels formateados.
 LANG_LABELS = {
-    "vx_interp":   "Vex interp",
-    "vx_jit":      "Vex JIT",
-    "vx_aot_sse2": "Vex AOT sse2",
-    "vx_aot_avx":  "Vex AOT avx2",
-    "vx_aot_auto": "Vex AOT auto",
+    "vx_interp":   "Vesta-lang interp",
+    "vx_jit":      "Vesta-lang JIT",
+    "vx_aot_sse2": "Vesta-lang AOT sse2",
+    "vx_aot_avx":  "Vesta-lang AOT avx2",
+    "vx_aot_auto": "Vesta-lang AOT auto",
     "c":            "C (gcc -O3)",
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
@@ -92,7 +92,7 @@ def plot_dashboard(rows: list[dict], langs: list[str], out_path: Path) -> bool:
     ax3 = fig.add_subplot(gs[1, 0])
     _plot_ranking_heatmap(ax3, rows, langs)
 
-    # 1.4 Speedup Vex JIT vs interp.
+    # 1.4 Speedup Vesta-lang JIT vs interp.
     ax4 = fig.add_subplot(gs[1, 1])
     _plot_vx_speedup(ax4, rows)
 
@@ -199,7 +199,7 @@ def _plot_ranking_heatmap(ax, rows, langs):
 
 
 def _plot_vx_speedup(ax, rows):
-    """Barras del speedup Vex JIT vs Vex interp para cada bench."""
+    """Barras del speedup Vesta-lang JIT vs Vesta-lang interp para cada bench."""
     names, speedups = [], []
     for r in rows:
         ti = r.get("vx_interp")
@@ -215,7 +215,7 @@ def _plot_vx_speedup(ax, rows):
     ax.set_yticks(y_pos)
     ax.set_yticklabels(names, fontsize=9)
     ax.set_xlabel("Speedup (interp_ms / JIT_ms)")
-    ax.set_title("(d) Vex JIT vs Vex interp")
+    ax.set_title("(d) Vesta-lang JIT vs Vesta-lang interp")
     ax.axvline(x=1.0, color="grey", linestyle="--", alpha=0.5)
     ax.axvline(x=10.0, color="green", linestyle=":", alpha=0.5)
     for i, sp in enumerate(speedups):

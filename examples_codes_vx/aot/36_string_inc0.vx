@@ -1,4 +1,4 @@
-// Vex Embed Inc 0: string value-type (native_poo_, AOT, sin GC).
+//  Embed Inc 0: string value-type (native_poo_, AOT, sin GC).
 // `string` es un struct {ptr,len,cap} de 24 bytes en stack, HEAP-ALWAYS,
 // con RAII free al exit del scope.  Cubre: decl-desde-literal, .length(),
 // .cstr(), move (string b = a, zera la fuente -> sin doble-free).

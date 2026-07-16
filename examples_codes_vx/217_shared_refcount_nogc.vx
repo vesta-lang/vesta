@@ -8,7 +8,7 @@ namespace ejemplos.shared_refcount_nogc;
 // cero -- de forma determinista, sin esperar al GC.  Por eso `shared<T>` funciona
 // igual en codigo gestionado (interp/JIT) y en binarios nativos sin runtime
 // (AOT standalone).  `use_count` refleja el numero de duenos vivos.
-// Ver doc/VMdoc/Vex/SmartPointers.md.
+// Ver doc/VMdoc//SmartPointers.md.
 
 i64 trabajo() {
     shared<i64> a = shared_box(10);   // refcount = 1

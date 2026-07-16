@@ -1,4 +1,4 @@
-// Vex Embed Inc 6 (encoding UTF-8): .length() cuenta CODE-POINTS, .bytes()
+//  Embed Inc 6 (encoding UTF-8): .length() cuenta CODE-POINTS, .bytes()
 // cuenta BYTES, .cstr() devuelve UTF-8 NUL-terminado (Win32 *A) y .wstr()
 // devuelve UTF-16LE NUL-terminado (Win32 *W, con pares suplentes).
 // "héllo" = 5 code-points, 6 bytes (é ocupa 2 bytes en UTF-8).

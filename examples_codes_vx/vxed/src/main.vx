@@ -1,5 +1,5 @@
 // =============================================================================
-// vxed - editor TUI fullscreen en Vex
+// vxed - editor TUI fullscreen en 
 // =============================================================================
 //
 // Editor visual estilo nano/pico.  La pantalla se redibuja entera tras
@@ -421,7 +421,7 @@ class Sidebar {
 // Usamos solo el ultimo mensaje.
 
 // Renderiza la barra superior con las pestanas (orden de creacion,
-// activa resaltada con INVERT).  Como Vex no soporta `class == class`
+// activa resaltada con INVERT).  Como  no soporta `class == class`
 // hoy, identificamos la activa por `id`.
 void render_tab_bar(tabs.Workspace ws, screen.Screen sc) {
     diag_log("RTB:0 enter");
@@ -662,7 +662,7 @@ void draw_full(tabs.Workspace ws, Sidebar sb, screen.Screen sc, i32 view_rows,
     diag_log("DF:3 post-sidebar");
 
     // 3. Cuerpo del editor (filas 2..sc.rows-1, cols editor_left..cols).
-    // Sintaxis Vex se aplica al render de TODAS las lineas visibles.
+    // Sintaxis  se aplica al render de TODAS las lineas visibles.
     // El highlighter mantiene estado multi-linea (block comments / triple
     // strings); reset al inicio del frame y luego scan desde la primera
     // linea visible.  Para evitar bugs en archivos donde una linea
@@ -1536,7 +1536,7 @@ i32 main() {
             if (indent_end > b.cursor) indent_end = b.cursor;
             i32 indent_n = indent_end - ls;
             // Smart-indent: si el ultimo char no-blanco de la linea anterior
-            // es `{`, añade 4 spaces extra.  Soporta estilo C/Java/Rust/Vex.
+            // es `{`, añade 4 spaces extra.  Soporta estilo C/Java/Rust/.
             i32 extra_indent = 0;
             i32 cur_cursor = b.cursor;
             i32 j = cur_cursor - 1;

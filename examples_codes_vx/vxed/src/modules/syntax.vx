@@ -1,8 +1,8 @@
 // =============================================================================
-// modules/syntax.vx - Highlighter de sintaxis Vex con paleta Dracula.
+// modules/syntax.vx - Highlighter de sintaxis  con paleta Dracula.
 // =============================================================================
 // Modelo igual que vnano.vsh seccion 6: tokeniza linea por linea con estado
-// (in_comment, in_docstr) y emite con escape ANSI.  Adaptado al lenguaje Vex:
+// (in_comment, in_docstr) y emite con escape ANSI.  Adaptado al lenguaje :
 // keywords/tipos/builtins distintos de VSH.
 //
 // Uso:
@@ -34,7 +34,7 @@ public const string SX_OP       = "\x1b[38;2;255;121;198m";  // Dracula pink   (
 public const string SX_ID       = "\x1b[38;2;248;248;242m";  // Dracula fg     (identifier)
 public const string SX_ANNOT    = "\x1b[38;2;255;184;108m";  // Dracula orange (@annot)
 
-// Listas de keywords Vex (orden alfabetico, busqueda lineal O(N)).
+// Listas de keywords  (orden alfabetico, busqueda lineal O(N)).
 //
 // IMPORTANTE: estas listas viven como funciones que se invocan por cada
 // identificador encontrado.  Para un editor con N <= 5000 lineas y ~100
@@ -333,7 +333,7 @@ i32 is_digit(u8 c) {
     return 0;
 }
 
-// Devuelve 1 si el caracter es operador o punctuation Vex.
+// Devuelve 1 si el caracter es operador o punctuation .
 i32 is_op(u8 c) {
     if (c == (u8)'+' || c == (u8)'-' || c == (u8)'*' || c == (u8)'/'
         || c == (u8)'=' || c == (u8)'<' || c == (u8)'>' || c == (u8)'!'
@@ -345,7 +345,7 @@ i32 is_op(u8 c) {
     return 0;
 }
 
-// Highlighter de sintaxis Vex.  Mantiene estado entre llamadas a render_line
+// Highlighter de sintaxis .  Mantiene estado entre llamadas a render_line
 // para soportar comentarios de bloque multilinea (/* ... */) y triple-quoted
 // strings ("""...""") que cruzan multiples lineas.
 public class SyntaxHighlighter {
@@ -365,7 +365,7 @@ public class SyntaxHighlighter {
         this.in_triple_str = 0;
     }
 
-    // Renderiza una linea con highlighting de sintaxis Vex.
+    // Renderiza una linea con highlighting de sintaxis .
     //
     // Parametros:
     //   data       - buffer.data del buffer activo (u8* host_ptr)
@@ -466,7 +466,7 @@ public class SyntaxHighlighter {
             // --- Apertura de triple string: """ ---
             // ASCII: '"'=34, '/'=47, '*'=42, '\\' (backslash)=92, "'"=39
             // Usar literales numericos para evitar bug del cast (u8)'X'
-            // observado con chars especiales en comparaciones de Vex.
+            // observado con chars especiales en comparaciones de .
             if (c == 34 && i + 2 < length
                 && data[i + 1] == 34 && data[i + 2] == 34) {
                 if (cur_color != 5) {
@@ -502,7 +502,7 @@ public class SyntaxHighlighter {
                     print(SX_CMT);
                     cur_color = 4;
                 }
-                // WORKAROUND bug Vex inner-while mutation: vars locales.
+                // WORKAROUND bug  inner-while mutation: vars locales.
                 i32 j = i;
                 i32 cc_count = col_count;
                 while (j < length && cc_count < max_chars) {
@@ -518,7 +518,7 @@ public class SyntaxHighlighter {
             }
 
             // --- String literal "..." ---
-            // WORKAROUND bug Vex: usar var local `j`/`cc_count` en el inner
+            // WORKAROUND bug : usar var local `j`/`cc_count` en el inner
             // while para evitar que las mutaciones de `i`/`col_count` se
             // pierdan al volver al outer while.
             if (c == 34) {
@@ -636,7 +636,7 @@ public class SyntaxHighlighter {
 
             // --- Identifier ---
             if (is_alpha_or_us(c) == 1) {
-                // WORKAROUND bug Vex: usar `j` para no perder el incremento.
+                // WORKAROUND bug : usar `j` para no perder el incremento.
                 i32 word_start = i;
                 i32 j = i;
                 while (j < length && is_alnum_or_us(data[j]) == 1) {

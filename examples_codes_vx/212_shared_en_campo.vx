@@ -7,7 +7,7 @@ namespace ejemplos.shared_en_campo;
 // origen `a` conserva su propia referencia.  El destructor del contenedor
 // decrementa el campo; el bloque se libera (free) cuando el conteo cae a cero,
 // de forma determinista y sin GC -- igual en interp/JIT y en AOT standalone.
-// Ver doc/VMdoc/Vex/SmartPointers.md.
+// Ver doc/VMdoc/artPointers.md.
 
 class Caja {
     shared<i64> s;             // campo shared (dtor sintetizado lo decrementa)

@@ -4,7 +4,7 @@ namespace ejemplos.gc_aot_precise_scan;
 //
 // De-enmascara el bug historico: el scan preciso de AOT arrancaba el walk
 // dentro de los frames C++ de libvesta_gc (compilados con -fomit-frame-pointer)
-// y caminaba la cadena RBP, que se rompe ahi -> NUNCA alcanzaba el frame Vex
+// y caminaba la cadena RBP, que se rompe ahi -> NUNCA alcanzaba el frame 
 // -> colectaba raices VIVAS.  Con el GC no-moving el R0 salia "bien" por leer
 // memoria stale; por eso la prueba de correctitud NO es solo el R0, sino que el
 // objeto VIVO sobreviva a un collect que libera cientos de muertos, y que su

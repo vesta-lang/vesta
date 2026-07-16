@@ -12,7 +12,7 @@ namespace ejemplos.string_array_natural;
 //   - `vio_print_buf(host_ptr, len)` para emisar bytes crudos.
 //
 // Esperado: R00 = 42, output a stdout:
-//   "Hola Vex!\n
+//   "Hola 
 //    -> bytes modificados: HOLA VX!\n
 //    -> codepoints: 65 76"
 
@@ -23,7 +23,7 @@ extern "stdlib/native/io/vesta_io" {
 i32 main() {
     // (1) Init C-style: array de 16 u8 con literal de 10 bytes; los 6
     //     restantes quedan a 0 (semantica C clasica).
-    u8[16] msg = "Hola Vex!\n";
+    u8[16] msg = "Hola !\n";
     vio_print_buf(&msg[0], 10);
 
     // (2) Mutacion in-place con char literals.  Convertimos a mayusculas

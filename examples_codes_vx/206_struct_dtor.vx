@@ -15,7 +15,7 @@ namespace ejemplos.struct_dtor;
 //     correcta y zero-cost.
 //   - Almacenar un struct-con-dtor en un campo todavia es error (Fase 2b: el
 //     dtor del contenedor recursara a sus campos struct).
-// Ver doc/VMdoc/Vex/InteropC.md.
+// Ver doc/VMdoc//InteropC.md.
 
 i64 freed = 0;
 

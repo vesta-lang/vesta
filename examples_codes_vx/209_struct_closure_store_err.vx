@@ -4,7 +4,7 @@
 // de otro contenedor requiere analisis adicional; mientras tanto el compilador
 // lo rechaza para no dejar un env colgante.  Usa una CLASE (env heap owned,
 // liberado por el destructor) si el closure debe vivir dentro de otro objeto.
-// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+// Ver doc/VMdoc//ClosuresEnCampos.md.
 
 struct Caja {
     fn() -> i64 leer;

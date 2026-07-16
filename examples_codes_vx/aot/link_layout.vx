@@ -1,5 +1,5 @@
 // Ejemplo de script de enlace ESCRITO EN VESTA (vm --link ... --link-script).
-// Es Vex puro: usa logica/condicionales/comptime para CALCULAR el layout.
+// Es  puro: usa logica/condicionales/comptime para CALCULAR el layout.
 // Builtins disponibles dentro de link():
 //   base(u64 addr)            direccion de carga
 //   entry(string sym)         simbolo de entrada (sin _start sintetico)

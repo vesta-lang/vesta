@@ -206,7 +206,7 @@ static void vt_profile_report_(void) {
         arr[i++] = e;
     qsort(arr, (size_t)n, sizeof(*arr), vt_cmp_total_desc_);
 
-    fprintf(stderr, "\n%s== Vex Profile (sorted by total time, pid=%d) ==%s\n",
+    fprintf(stderr, "\n%s==  Profile (sorted by total time, pid=%d) ==%s\n",
             VT_BOLD, vt_pid_(), VT_RESET);
     fprintf(stderr, "%s%-32s %10s %14s %12s %12s %12s%s\n", VT_DIM, "function",
             "count", "total_ns", "avg_ns", "min_ns", "max_ns", VT_RESET);

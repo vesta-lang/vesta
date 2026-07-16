@@ -1,5 +1,5 @@
 // =============================================================================
-// main.vx - Punto de entrada de ReaderBMP migrado a Vex (interp / JIT).
+// main.vx - Punto de entrada de ReaderBMP migrado a  (interp / JIT).
 //
 // Uso:  vm --run main.velb -m vm -- <archivo.bmp> [-r WxH]
 //   (el separador `--` es necesario para pasar flags con guion al programa;

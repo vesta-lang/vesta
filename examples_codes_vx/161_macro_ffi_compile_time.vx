@@ -13,7 +13,7 @@ namespace ejemplos.macro_ffi_compile_time;
 //      una "huella" distinta por cada compilacion sin tocar runtime.
 //   4. Tipos como first-class: el macro M_build_info construye una
 //      cadena de constantes (PID, tick, hash) en compile time y la
-//      retorna como literal de codigo Vex.
+//      retorna como literal de codigo .
 //
 // Pipeline al compilar:
 //   - El AST evaluator de macros detecta `GetCurrentProcessId()` como
@@ -21,7 +21,7 @@ namespace ejemplos.macro_ffi_compile_time;
 //     invoca la funcion en el proceso del COMPILADOR.
 //   - El valor retornado se trata como ComptimeValue u64.
 //   - El macro hace aritmetica con esos valores + genera un string que
-//     representa codigo Vex valido (literales numericos).
+//     representa codigo  valido (literales numericos).
 //   - El compilador re-parsea la salida del macro y la inyecta en el AST.
 //
 // Resultado final: el .velb contiene literales que son funcion del PID

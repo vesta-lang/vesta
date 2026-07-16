@@ -1,7 +1,7 @@
 # stdlib/port/c — Runtime snippets para el transpiler IR -> C
 
 Cada archivo `.v.c` es un fragmento de codigo C que el transpiler **inyecta
-en el .c generado** solo cuando el programa Vex usa la feature correspondiente.
+en el .c generado** solo cuando el programa  usa la feature correspondiente.
 
 ## Motivacion
 

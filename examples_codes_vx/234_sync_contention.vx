@@ -23,7 +23,7 @@ namespace ejemplos.sync_contention;
 // razon de ser de F4-(a).
 //
 // POR QUE @Naked los cuerpos:  un cuerpo de tarea con fibra corre sobre SU PROPIA
-// pila NATIVA; en -m vm una fn Vex normal asume un frame VM y crashea al correr
+// pila NATIVA; en -m vm una fn  normal asume un frame VM y crashea al correr
 // sobre la pila host.  Por eso el cuerpo es asm puro (@Naked), como en 230/232/233.
 // La CESION cooperativa se hace con `call vasync_yield` (fn @Naked de vx_async,
 // importada) directamente desde el cuerpo del bucle de espera del lock.
