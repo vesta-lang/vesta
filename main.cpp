@@ -369,13 +369,7 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())(
             "analyze-json",
             "Con --analyze: emite el coste por funcion como JSON (para "
-            "consumir desde un renderer de diagramas) en vez de texto legible.")(
-            "annotate",
-            "Con --analyze: emite, por funcion, las anotaciones de contrato "
-            "(@pure/@nothrow/@nopanic/@alloc/@stack/@complexity) que deberia "
-            "llevar segun lo medido, con `when: arch:X` donde el valor difiere "
-            "entre arquitecturas.  Asi no hay que escribir a mano el coste por "
-            "arch/sistema.")
+            "consumir desde un renderer de diagramas) en vez de texto legible.")
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1614,6 +1608,48 @@ int main(int argc, char *argv[]) {
                 if (f.function == name) return &f;
             return nullptr;
         };
+
+        // Procedencia generica (contrato B.3): que instanciaciones vienen del
+        // mismo template.  `atomic_i64__fetch_add` y `atomic_f64__fetch_add`
+        // son funciones distintas del IR, pero las dos salen de
+        // `atomic<T>::fetch_add`; agruparlas es lo que permite reportar (y
+        // sugerir) el coste POR TIPO -- "O(1) si is_integer<T>, O(n) si
+        // is_float<T>" -- en vez de dos lineas sueltas.
+        struct GenOrigen {
+            std::string plantilla;             // "atomic"
+            std::vector<std::string> type_args; // {"i64"}
+            std::string metodo;                 // "fetch_add"
+        };
+        std::map<std::string, GenOrigen> origen; // nombre mangled -> origen
+        for (const auto &f : amod_post.functions) {
+            if (f.generic_template_name.empty()) continue;
+            GenOrigen g;
+            g.plantilla = f.generic_template_name;
+            g.type_args = f.generic_type_args;
+            // El metodo es lo que queda al quitar el prefijo
+            // `<plantilla>_<join(type_args,"_")>__`.  Asi `atomic_i64____deref__`
+            // (prefijo `atomic_i64__`) deja `__deref__`.
+            std::string pref = f.generic_template_name;
+            for (const auto &t : f.generic_type_args) pref += "_" + t;
+            pref += "__";
+            if (f.name.size() > pref.size() &&
+                f.name.compare(0, pref.size(), pref) == 0)
+                g.metodo = f.name.substr(pref.size());
+            else
+                g.metodo = f.name; // fallback: no casa el mangle esperado
+            origen[f.name] = std::move(g);
+        }
+        // La clase de un type-arg, para elegir el predicado del `when:`.
+        auto clase_tipo = [](const std::string &t) -> std::string {
+            if (t.size() >= 2 && (t[0] == 'i' || t[0] == 'u') &&
+                std::isdigit(static_cast<unsigned char>(t[1])))
+                return "integer";
+            if (t == "f32" || t == "f64") return "float";
+            if (!t.empty() && (t.back() == '*' ||
+                               t.find("ptr") != std::string::npos))
+                return "pointer";
+            return "otro";
+        };
         // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
         // por el usuario, verificados contra la huella inferida.
         auto contract_checks = analyze::verify_contracts(fps_post, cr.contracts);
@@ -1913,7 +1949,6 @@ int main(int argc, char *argv[]) {
                 std::map<std::string, FnData> datos;
                 std::string fallo;
             };
-            const bool want_annotate = result.count("annotate") > 0;
             std::vector<PorArch> tabla;
             for (const auto &arch : vx::cwhen::known_archs()) {
                 PorArch pa;
@@ -2029,128 +2064,205 @@ int main(int argc, char *argv[]) {
             // segun lo medido, con `when: arch:X` donde difieren.  Es lo que
             // el programador tendria que escribir a mano; aqui lo genera el
             // analizador (el valor ES lo que mide, no una suposicion).
-            if (want_annotate) {
-                // Las arch en las que la funcion compilo, en orden del registro.
+            // Anotaciones sugeridas -- SIEMPRE con --analyze (no hay flag
+            // aparte: analizar y decir que contrato deberia llevar cada funcion
+            // es lo mismo).  Se emiten los contratos medidos, con el `when:`
+            // MiNIMO que describe donde vale cada valor: por arquitectura,
+            // por tipo (las instanciaciones de un generico se AGRUPAN bajo su
+            // plantilla), o los dos ejes a la vez -- solapando donde el valor
+            // coincide, sin perder informacion.
+            {
                 auto archs_ok = [&]() {
                     std::vector<const PorArch *> v;
                     for (const auto &pa : tabla)
                         if (pa.fallo.empty()) v.push_back(&pa);
                     return v;
                 }();
-                // Agrupa las arch por el valor (string) de un campo.  Devuelve
-                // valor -> lista-de-arch.  Solo mira las arch donde la funcion
-                // esta presente.
-                auto agrupar =
-                    [&](const std::string &fn,
-                        const std::function<std::string(const FnData &)> &get)
-                    -> std::map<std::string, std::vector<std::string>> {
-                    std::map<std::string, std::vector<std::string>> m;
-                    for (const auto *pa : archs_ok) {
-                        auto it = pa->datos.find(fn);
-                        if (it == pa->datos.end() || !it->second.present) continue;
-                        m[get(it->second)].push_back(pa->arch);
+
+                // Agrupar las funciones por su origen: las instanciaciones de
+                // un mismo `plantilla::metodo` van juntas; las no genericas,
+                // solas.
+                std::vector<std::string> orden_grupos;
+                std::map<std::string, std::vector<std::string>> instancias;
+                std::map<std::string, std::string> display;
+                for (const auto &f : mc_post.functions) {
+                    std::string clave, disp;
+                    auto it = origen.find(f.function);
+                    if (it != origen.end()) {
+                        clave = it->second.plantilla + "::" + it->second.metodo;
+                        disp = it->second.plantilla + "<T>::" + it->second.metodo;
+                    } else {
+                        clave = f.function;
+                        disp = f.function;
                     }
-                    return m;
+                    if (!instancias.count(clave)) orden_grupos.push_back(clave);
+                    instancias[clave].push_back(f.function);
+                    display[clave] = disp;
+                }
+
+                // Una combinacion (arquitectura, clase-de-tipo) y su FnData.
+                struct Combo {
+                    std::string arch;
+                    std::string tc; // "" si el grupo no es generico
+                    const FnData *d;
                 };
-                // `when:` para un grupo de arch.  Vacio si el grupo cubre TODAS
-                // las arch presentes (no hace falta condicionar).
+
+                // `when:` MiNIMO para el conjunto de combos que comparten un
+                // valor, dado el universo de combos del grupo.  Casos, de mas
+                // general a mas especifico:
+                //   - cubre TODAS las combos           -> sin when;
+                //   - todas las arch, un subconjunto de tipos -> solo is_X<T>();
+                //   - un subconjunto de arch, todos los tipos -> solo arch:X;
+                //   - resto -> OR de `arch:X && is_Y<T>()` por combo, factorizando
+                //     por arch cuando ese arch tiene todos sus tipos.
+                auto pred_tipo = [](const std::string &tc) {
+                    return "is_" + tc + "<T>()";
+                };
                 auto when_de =
-                    [&](const std::string &fn,
-                        const std::vector<std::string> &archs) -> std::string {
-                    size_t total = 0;
-                    for (const auto *pa : archs_ok)
-                        if (pa->datos.count(fn) && pa->datos.at(fn).present)
-                            ++total;
-                    if (archs.size() == total) return std::string();
+                    [&](const std::vector<const Combo *> &sel,
+                        const std::set<std::string> &all_archs,
+                        const std::set<std::string> &all_tcs) -> std::string {
+                    const bool generico = !(all_tcs.size() == 1 &&
+                                            all_tcs.count(""));
+                    if (sel.size() == all_archs.size() * all_tcs.size())
+                        return std::string(); // cubre todo
+                    // Agrupar la seleccion por arch -> tipos.
+                    std::map<std::string, std::set<std::string>> por_arch;
+                    for (const auto *c : sel) por_arch[c->arch].insert(c->tc);
+                    // Todas las arch presentes con el MISMO subconjunto de tipos
+                    // -> el eje arch no distingue; factorizar por tipo.
+                    if (generico && por_arch.size() == all_archs.size()) {
+                        bool iguales = true;
+                        const auto &ref = por_arch.begin()->second;
+                        for (const auto &kv : por_arch)
+                            if (kv.second != ref) { iguales = false; break; }
+                        if (iguales) {
+                            std::string w;
+                            bool first = true;
+                            for (const auto &tc : ref) {
+                                if (!first) w += " || ";
+                                w += pred_tipo(tc);
+                                first = false;
+                            }
+                            return ", when: " + w;
+                        }
+                    }
+                    // OR de terminos, uno por arch (factorizando el tipo si ese
+                    // arch tiene TODOS los tipos).
                     std::string w;
-                    for (size_t i = 0; i < archs.size(); ++i) {
-                        if (i) w += " || ";
-                        w += "arch:" + archs[i];
+                    bool first = true;
+                    for (const auto &kv : por_arch) {
+                        const bool todos_tc =
+                            !generico || kv.second.size() == all_tcs.size();
+                        if (todos_tc) {
+                            if (!first) w += " || ";
+                            w += "arch:" + kv.first;
+                            first = false;
+                        } else {
+                            for (const auto &tc : kv.second) {
+                                if (!first) w += " || ";
+                                w += "arch:" + kv.first + " && " + pred_tipo(tc);
+                                first = false;
+                            }
+                        }
                     }
                     return ", when: " + w;
                 };
 
-                std::cout << "\nAnotaciones sugeridas (--annotate).  Copialas "
-                             "delante de cada funcion.\n";
+                std::cout << "\nAnotaciones sugeridas.  Los contratos medidos "
+                             "que cada funcion deberia llevar; copialos delante "
+                             "de la definicion.\n";
                 std::cout
                     << "=================================================="
                        "===========\n";
-                for (const auto &f : mc_post.functions) {
-                    const std::string &fn = f.function;
-                    // Presente en alguna arch?
-                    bool any = false;
-                    for (const auto *pa : archs_ok)
-                        if (pa->datos.count(fn) && pa->datos.at(fn).present)
-                            any = true;
-                    if (!any) continue;
-                    std::cout << "  // " << fn << "\n";
-
-                    // Flags positivos (@pure/@nothrow/@nopanic): se declaran
-                    // donde la propiedad se cumple.  Si en todas -> sin when; si
-                    // en algunas -> when con esas; si en ninguna -> nada.
-                    auto flag = [&](const char *nombre,
-                                    const std::function<bool(const FnData &)> &p) {
-                        std::vector<std::string> si;
-                        size_t total = 0;
+                for (const auto &clave : orden_grupos) {
+                    // Reunir las combos del grupo y su universo (arch x tipo).
+                    std::vector<Combo> combos;
+                    std::set<std::string> all_archs, all_tcs;
+                    for (const auto &inst : instancias[clave]) {
+                        std::string tc;
+                        auto ito = origen.find(inst);
+                        if (ito != origen.end() && !ito->second.type_args.empty())
+                            tc = clase_tipo(ito->second.type_args[0]);
+                        all_tcs.insert(tc);
                         for (const auto *pa : archs_ok) {
-                            auto it = pa->datos.find(fn);
+                            auto it = pa->datos.find(inst);
                             if (it == pa->datos.end() || !it->second.present)
                                 continue;
-                            ++total;
-                            if (p(it->second)) si.push_back(pa->arch);
+                            combos.push_back({pa->arch, tc, &it->second});
+                            all_archs.insert(pa->arch);
                         }
-                        if (si.empty()) return;
-                        if (si.size() == total) {
+                    }
+                    if (combos.empty()) continue;
+                    std::cout << "  // " << display[clave] << "\n";
+
+                    // Recorre las combos agrupando por el valor (string) que da
+                    // `get`, y emite una linea por valor con su `when:` minimo.
+                    auto emitir =
+                        [&](const std::function<std::string(const FnData &)> &get,
+                            const std::function<void(const std::string &,
+                                                     const std::string &)> &linea) {
+                            std::map<std::string, std::vector<const Combo *>> porv;
+                            for (const auto &c : combos)
+                                porv[get(*c.d)].push_back(&c);
+                            for (const auto &kv : porv)
+                                linea(kv.first,
+                                      when_de(kv.second, all_archs, all_tcs));
+                        };
+
+                    // Flags (@pure/@nothrow/@nopanic): se declaran donde la
+                    // propiedad se CUMPLE.
+                    auto flag = [&](const char *nombre,
+                                    const std::function<bool(const FnData &)> &p) {
+                        std::vector<const Combo *> sel;
+                        for (const auto &c : combos)
+                            if (p(*c.d)) sel.push_back(&c);
+                        if (sel.empty()) return;
+                        std::string w = when_de(sel, all_archs, all_tcs);
+                        if (w.empty())
                             std::cout << "  @" << nombre << "\n";
-                        } else {
-                            std::string w;
-                            for (size_t i = 0; i < si.size(); ++i) {
-                                if (i) w += " || ";
-                                w += "arch:" + si[i];
-                            }
-                            std::cout << "  @" << nombre << "(when: " << w
-                                      << ")\n";
-                        }
+                        else // el flag no lleva argumentos: `, when:` -> `(when:`
+                            std::cout << "  @" << nombre << "("
+                                      << w.substr(2) << ")\n";
                     };
                     flag("pure", [](const FnData &d) { return d.pure; });
                     flag("nothrow", [](const FnData &d) { return !d.throws; });
                     flag("nopanic", [](const FnData &d) { return !d.panics; });
 
-                    // @alloc(N) / @stack(N): un valor por grupo de arch.
                     auto num = [&](const char *nombre,
                                    const std::function<uint64_t(const FnData &)> &g) {
-                        auto grupos = agrupar(
-                            fn, [&](const FnData &d) { return std::to_string(g(d)); });
-                        for (const auto &kv : grupos)
-                            std::cout << "  @" << nombre << "(" << kv.first
-                                      << when_de(fn, kv.second) << ")\n";
+                        emitir([&](const FnData &d) { return std::to_string(g(d)); },
+                               [&](const std::string &v, const std::string &w) {
+                                   std::cout << "  @" << nombre << "(" << v << w
+                                             << ")\n";
+                               });
                     };
                     num("alloc", [](const FnData &d) { return d.allocs; });
                     num("stack", [](const FnData &d) { return d.stack; });
 
-                    // @complexity: las 4 dimensiones.  Se agrupa por la tupla
-                    // entera para no partir un contrato coherente.
-                    auto cx = agrupar(fn, [](const FnData &d) {
-                        return d.partial_pre + "|" + d.partial_post + "|" +
-                               d.total_pre + "|" + d.total_post;
-                    });
-                    for (const auto &kv : cx) {
-                        // deshacer la tupla.
-                        std::vector<std::string> dim;
-                        size_t p = 0, q;
-                        std::string t = kv.first;
-                        while ((q = t.find('|', p)) != std::string::npos) {
-                            dim.push_back(t.substr(p, q - p));
-                            p = q + 1;
-                        }
-                        dim.push_back(t.substr(p));
-                        if (dim.size() == 4)
-                            std::cout << "  @complexity(partial_pre: " << dim[0]
-                                      << ", partial_post: " << dim[1]
-                                      << ", total_pre: " << dim[2]
-                                      << ", total_post: " << dim[3]
-                                      << when_de(fn, kv.second) << ")\n";
-                    }
+                    // @complexity: las 4 dimensiones como una tupla (no partir
+                    // un contrato coherente).
+                    emitir(
+                        [](const FnData &d) {
+                            return d.partial_pre + "|" + d.partial_post + "|" +
+                                   d.total_pre + "|" + d.total_post;
+                        },
+                        [&](const std::string &v, const std::string &w) {
+                            std::vector<std::string> dim;
+                            size_t p = 0, q;
+                            std::string t = v;
+                            while ((q = t.find('|', p)) != std::string::npos) {
+                                dim.push_back(t.substr(p, q - p));
+                                p = q + 1;
+                            }
+                            dim.push_back(t.substr(p));
+                            if (dim.size() == 4)
+                                std::cout << "  @complexity(partial_pre: "
+                                          << dim[0] << ", partial_post: "
+                                          << dim[1] << ", total_pre: " << dim[2]
+                                          << ", total_post: " << dim[3] << w
+                                          << ")\n";
+                        });
                     std::cout << "\n";
                 }
             }
