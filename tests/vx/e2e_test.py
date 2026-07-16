@@ -2166,6 +2166,7 @@ r0_case("rmw317", "fusion read-modify-write: `g = g OP x` -> `g OP= x` (atomico 
 r0_case("atm318", "atomic<T> de la stdlib: las 3 formas del incremento, compare_swap y swap", "318_atomic_tipo.vx", 42, line=3739)
 r0_case("atg319", "struct como global + contador atomico global compartido", "319_atomic_global.vx", 42, line=3741)
 r0_case("nwt320", "typedef T X new sobre tipos de usuario: struct, clase y enum", "320_newtype_tipos_usuario.vx", 42, line=3743)
+r0_case("str321", "cadenas conocidas al compilar: literales adyacentes, \"a\"+\"b\" y a+b via variables", "321_strings_comptime.vx", 42, line=3745)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

@@ -60,6 +60,36 @@ inline uint32_t f32_to_bits(float f) noexcept {
 // =========================================================================
 
 /** @brief Devuelve true si la instruccion tiene efectos laterales visibles. */
+/**
+ * @brief Ops de cadena cuyo UNICO efecto es alocar el resultado.
+ *
+ * Estan en @ref is_side_effecting porque alocan (y una alocacion puede disparar
+ * el GC), lo que impide deduplicarlas o moverlas.  Pero si NADIE usa el handle
+ * que devuelven, no hay nada que observar: alocar una cadena que no se lee no
+ * cambia el resultado del programa, solo gasta.  Asi que el DCE si puede
+ * quitarlas -- ver su uso alli.
+ *
+ * Hace falta desde que se pliega `a + b` con `a`/`b` conocidas: el STRMAKE de la
+ * parte que solo aparecia en el concat se queda sin usar, y sin esto seguia
+ * alocando una cadena que ya no lee nadie.
+ *
+ * Deja fuera a las que MUTAN algo ajeno: @c STRFINALIZE reescribe la cabecera de
+ * un FLAT existente, asi que su efecto no es solo el retorno.
+ */
+static bool alloc_only_string_op(IrOp op) {
+    switch (op) {
+    case IrOp::STRMAKE:
+    case IrOp::STRCAT:
+    case IrOp::STRCONV:
+    case IrOp::STRFLAT:
+    case IrOp::STRINTERN:
+    case IrOp::STRRESERVE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool is_side_effecting(IrOp op) {
     switch (op) {
     // llamadas (pueden lanzar excepciones o modificar estado)
@@ -1824,6 +1854,100 @@ bool ic_clean_owner_buf(const IrFunction &C, IrValueId buf,
 }
 
 } // namespace
+
+bool ir_pass_fold_strcat(IrModule &mod) {
+    bool changed = false;
+    for (auto &fn : mod.functions) {
+        // Definicion de cada SSA value, para reconocer `%a = strmake(lit, N)`.
+        // Una sola pasada: el IR es SSA, cada value se define una vez.
+        std::unordered_map<IrValueId, const IrInstr *> def;
+        for (const auto &bb : fn.blocks)
+            for (const auto &in : bb.instrs)
+                if (in.dst != IR_NO_VALUE) def.emplace(in.dst, &in);
+
+        // Si @p v es un STRMAKE sobre un literal de tamano constante, devuelve
+        // el indice de su entrada en static_data y su longitud.
+        auto literal_de = [&](IrValueId v, uint64_t &slot,
+                              uint64_t &len) -> bool {
+            auto it = def.find(v);
+            if (it == def.end() || it->second->op != IrOp::STRMAKE) return false;
+            const IrInstr &mk = *it->second;
+            if (mk.operands.size() != 2) return false;
+            auto ia = def.find(mk.operands[0]);
+            auto il = def.find(mk.operands[1]);
+            if (ia == def.end() || il == def.end()) return false;
+            if (ia->second->op != IrOp::STR_LIT_ADDR) return false;
+            if (il->second->op != IrOp::CONST) return false;
+            slot = ia->second->imm;
+            len = il->second->imm;
+            if (slot >= mod.static_data.size()) return false;
+            // La longitud tiene que ser la del literal: si el codigo pide otra
+            // (una vista parcial), no es "la cadena entera" y no se pliega.
+            return len == mod.static_data.len(slot);
+        };
+
+        for (auto &bb : fn.blocks) {
+            for (auto &in : bb.instrs) {
+                if (in.op != IrOp::STRCAT || in.operands.size() != 2) continue;
+                if (in.dst == IR_NO_VALUE) continue;
+                uint64_t sa = 0, la = 0, sb = 0, lb = 0;
+                if (!literal_de(in.operands[0], sa, la)) continue;
+                if (!literal_de(in.operands[1], sb, lb)) continue;
+                // Las dos mitades se conocen -> internar la union.  El intern
+                // dedupea, asi que dos `"aaa" + "bbb"` comparten entrada.
+                auto [pa, na] = mod.static_data.bytes_at(sa);
+                auto [pb, nb] = mod.static_data.bytes_at(sb);
+                std::vector<uint8_t> junto;
+                junto.reserve(na + nb);
+                junto.insert(junto.end(), pa, pa + na);
+                junto.insert(junto.end(), pb, pb + nb);
+                const uint64_t slot = mod.intern_static_data(std::move(junto));
+
+                // El STRCAT pasa a ser el STRMAKE de la cadena entera.  Sus dos
+                // instrucciones nuevas (la direccion y la longitud) van al mismo
+                // sitio: se insertan justo antes, en el segundo pase de abajo.
+                in.op = IrOp::STRMAKE;
+                in.operands.clear();
+                in.imm = slot; // marca para el pase de insercion
+                in.func_name = "__fold_strcat";
+                changed = true;
+                // Los STRMAKE de las partes NO se tocan: si nadie mas los usa,
+                // quedan muertos y los quita el DCE; si se usan, siguen.
+            }
+        }
+        // Segundo pase: dar a cada STRMAKE plegado sus operandos (la direccion
+        // del literal nuevo y su longitud), insertados justo delante.
+        for (auto &bb : fn.blocks) {
+            for (size_t i = 0; i < bb.instrs.size(); ++i) {
+                IrInstr &in = bb.instrs[i];
+                if (in.op != IrOp::STRMAKE || in.func_name != "__fold_strcat")
+                    continue;
+                const uint64_t slot = in.imm;
+                const IrValueId v_addr = fn.new_value(IrType::PTR);
+                const IrValueId v_len = fn.new_value(IrType::I64);
+                IrInstr ad{};
+                ad.op = IrOp::STR_LIT_ADDR;
+                ad.type = IrType::PTR;
+                ad.dst = v_addr;
+                ad.imm = slot;
+                ad.source_line = in.source_line;
+                IrInstr ln{};
+                ln.op = IrOp::CONST;
+                ln.type = IrType::I64;
+                ln.dst = v_len;
+                ln.imm = mod.static_data.len(slot);
+                ln.source_line = in.source_line;
+                in.operands = {v_addr, v_len};
+                in.imm = 0; // encoding por defecto, como cualquier literal
+                in.func_name.clear();
+                bb.instrs.insert(bb.instrs.begin() + i, std::move(ln));
+                bb.instrs.insert(bb.instrs.begin() + i, std::move(ad));
+                i += 2;
+            }
+        }
+    }
+    return changed;
+}
 
 bool ir_pass_own_closure_envs(IrModule &mod) {
     std::unordered_map<std::string, size_t> name_to_idx;
@@ -5258,7 +5382,8 @@ bool ir_pass_dce(IrFunction &fn) {
             // elimina, EXCEPTO si lleva el flag @c preserve (barreras del
             // codegen).
             if (ins.dst != IR_NO_VALUE && !used.count(ins.dst) &&
-                !is_side_effecting(ins.op) && !ins.preserve) {
+                (!is_side_effecting(ins.op) || alloc_only_string_op(ins.op)) &&
+                !ins.preserve) {
                 keep = false;
                 changed = true;
             }
@@ -9516,6 +9641,14 @@ void ir_optimize(IrModule &mod, OptLevel level) {
             }
 
             if (ir_pass_inline(mod)) any = true;
+
+            /* Plegado de `a + b` cuando las dos son literales conocidos.  En el
+             * fix-point y DESPUES del inline: asi ve tambien las cadenas que
+             * llegan por variables (tras promover los allocas, `%a` es el
+             * STRMAKE) o desde otra funcion ya inlineada.  Y como el resultado
+             * es otro STRMAKE de literal, `a + b + c` se pliega en dos vueltas.
+             * El DCE de mas abajo se lleva los STRMAKE que queden sin usar. */
+            if (ir_pass_fold_strcat(mod)) any = true;
 
             /* Inline MULTI-bloque: tras el single-block, inlinar callees con
              * ramas (`if`, etc.) pequenos.  Junta mas codigo en la misma fn

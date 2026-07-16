@@ -1,0 +1,45 @@
+// Cadenas que se conocen al compilar: no cuestan nada en runtime.
+//
+// Tres cosas distintas que acaban en lo mismo -- un literal en la seccion de
+// datos y cero trabajo al ejecutar:
+//
+//   1. Literales ADYACENTES se funden (estilo C), sin operadores.
+//   2. `"a" + "b"` se pliega a un literal.
+//   3. `a + b` con `a` y `b` conocidas TAMBIEN se pliega, aunque lleguen por
+//      variables -- y la parte que solo existia para el concat desaparece.
+//
+// Lo tercero lo hace el optimizer sobre el IR, asi que lo heredan el
+// interprete, el JIT y el AOT por igual.
+//
+// Ver [[Strings]] y [[Operadores]].
+namespace strings_comptime;
+
+i32 main() {
+    // ---- 1: literales adyacentes -> UN literal ---------------------------
+    // Para partir un mensaje largo sin pasarse de ancho ni meter operadores.
+    string aviso = "esto es una sola cadena, "
+                   "aunque este escrita en dos lineas";
+    println(aviso);
+
+    // ---- 2: "a" + "b" -> UN literal --------------------------------------
+    string saludo = "hola" + " " + "mundo";     // 0 strcat: se pliega entero
+    println(saludo);
+
+    // ---- 3: ...y tambien a traves de variables ---------------------------
+    string a = "aaa";
+    string b = "bbb";
+    string c = a + b;          // -> "aaabbb" al compilar, sin strcat
+
+    println(a);                // `a` se usa aqui -> sigue existiendo
+    println(c);                // `b` solo estaba en el concat -> desaparece
+
+    // ---- Lo que NO se puede plegar ---------------------------------------
+    // En cuanto una parte se conoce solo al ejecutar, el concat es real -- y
+    // debe serlo.
+    i64 n = 7;
+    string dinamico = "n=" + to_str(n) + "!";
+    println(dinamico);
+
+    // len("aaabbb") = 6;  6 + 36 = 42
+    return (i32)(str_length(c) + 36);
+}

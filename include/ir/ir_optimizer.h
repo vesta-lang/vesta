@@ -264,6 +264,33 @@ bool ir_pass_promote_closure_env(IrFunction &fn);
 bool ir_pass_own_closure_envs(IrModule &mod);
 
 /**
+ * @brief Pliega los @c STRCAT cuyas dos partes se conocen al compilar.
+ *
+ * `"aaa" + "bbb"` en la MISMA expresion ya lo pliega el frontend.  Este pase
+ * cubre lo que aquel no puede ver -- que las partes lleguen por VARIABLES:
+ *
+ *     string a = "aaa";
+ *     string b = "bbb";
+ *     string c = a + b;      // -> c = "aaabbb", sin STRCAT
+ *
+ * Aqui ya es facil: tras promover los allocas, `%a` y `%b` son valores SSA, asi
+ * que basta mirar si los dos son un @c STRMAKE sobre un literal de tamano
+ * constante.  Si lo son, se interna la concatenacion y el @c STRCAT pasa a ser
+ * un @c STRMAKE sobre ella: cero trabajo en runtime y una alocacion menos.
+ *
+ * Encadena solo (el resultado plegado es otro STRMAKE de literal, asi que
+ * `a + b + c` se pliega en dos vueltas del punto fijo).
+ *
+ * Los STRMAKE de las partes NO se tocan: si nadie mas las usa, quedan muertos y
+ * los quita el DCE; si se usan en otro sitio, siguen ahi.  Va a nivel de IR, asi
+ * que lo heredan el interprete, el JIT y el AOT.
+ *
+ * @param mod Modulo a transformar in-place (necesita internar la cadena nueva).
+ * @return true si plego algun STRCAT.
+ */
+bool ir_pass_fold_strcat(IrModule &mod);
+
+/**
  * @brief Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.
  *
  * Analiza los `call @__new_X(...)` de @p fn y determina cuales NO escapan
