@@ -12,24 +12,24 @@ namespace ejemplos.string_array_natural;
 //   - `vio_print_buf(host_ptr, len)` para emisar bytes crudos.
 //
 // Esperado: R00 = 42, output a stdout:
-//   "Hola 
-//    -> bytes modificados: HOLA VX!\n
-//    -> codepoints: 65 76"
+//   "Hola Vesta!
+//    -> bytes modificados: HOLA VESTA!
+//    -> codepoints: 72 33"
 
 extern "stdlib/native/io/vesta_io" {
     fn vio_print_buf(u8* buf, u64 len) -> i64;
 }
 
 i32 main() {
-    // (1) Init C-style: array de 16 u8 con literal de 10 bytes; los 6
+    // (1) Init C-style: array de 16 u8 con literal de 12 bytes; los 4
     //     restantes quedan a 0 (semantica C clasica).
-    u8[16] msg = "Hola !\n";
-    vio_print_buf(&msg[0], 10);
+    u8[16] msg = "Hola Vesta!\n";
+    vio_print_buf(&msg[0], 12);
 
     // (2) Mutacion in-place con char literals.  Convertimos a mayusculas
     //     los chars alfabeticos (A-Z = a-z - 32).
     i32 i = 0;
-    while (i < 10) {
+    while (i < 12) {
         u8 c = msg[i];
         if (c >= 'a' && c <= 'z') {
             msg[i] = c - 32;  // a..z -> A..Z (i32 - 32 -> u8 trunca)
@@ -37,18 +37,18 @@ i32 main() {
         i = i + 1;
     }
     print("-> bytes modificados: ");
-    vio_print_buf(&msg[0], 10);
+    vio_print_buf(&msg[0], 12);
 
     // (3) Verificar codepoints individuales.
-    u8 first = msg[0];   // 'H' = 72
-    u8 last  = msg[8];   // '!' = 33
+    u8 first = msg[0];    // 'H' = 72
+    u8 last  = msg[10];   // '!' = 33
     println("-> codepoints: ${first} ${last}");
 
     // (4) Validar.
     i32 acc = 0;
-    if (msg[0] == 'H') { acc = acc + 10; }   // 'H' = 72
-    if (msg[5] == 'V') { acc = acc + 10; }   // 'V' = 86
-    if (msg[9] == '\n') { acc = acc + 10; }  // '\n' = 10
+    if (msg[0] == 'H') { acc = acc + 10; }    // 'H' = 72
+    if (msg[5] == 'V') { acc = acc + 10; }    // 'V' = 86
+    if (msg[11] == '\n') { acc = acc + 10; }  // '\n' = 10
     if (first == 72 && last == 33) { acc = acc + 12; }
     return acc;  // 10+10+10+12 = 42
 }

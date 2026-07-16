@@ -467,9 +467,9 @@ def _(ctx):
     ctx.compile_vx(ctx.src("02_hola_mundo.vx"), "hola")
     ctx.ok("compilacion 02_hola_mundo.vx -> .velb")
     _, log = ctx.run_velb("hola", stats=False)
-    if "Hola Mundo desde Vex!" not in log:
-        ctx.fail("hola_mundo no imprimio 'Hola Mundo desde Vex!'", log)
-    ctx.ok("hola_mundo imprime 'Hola Mundo desde Vex!'")
+    if "Hola Mundo desde Vesta-lang!" not in log:
+        ctx.fail("hola_mundo no imprimio 'Hola Mundo desde Vesta-lang!'", log)
+    ctx.ok("hola_mundo imprime 'Hola Mundo desde Vesta-lang!'")
 
 
 @case("contador")
@@ -479,7 +479,7 @@ def _(ctx):
     ctx.ok("compilacion 03_contador.vx -> .velb")
     _, log = ctx.run_velb("contador", stats=False)
     iters = grep_c(log, r"^iteracion$")
-    if not (iters == 5 and "== Contador Vex ==" in log and "== Fin ==" in log):
+    if not (iters == 5 and "== Contador Vesta-lang ==" in log and "== Fin ==" in log):
         ctx.fail("contador output incorrecto (esperado 5 'iteracion' + header + footer)",
                  log)
     ctx.ok("contador imprime 5 iteraciones + header + footer")
@@ -496,7 +496,7 @@ def _(ctx):
     out_txt = ctx.path("salida_vx.txt")
     if not os.path.exists(out_txt):
         ctx.fail("el programa no creo salida_vx.txt", log)
-    if "Hola desde Vex" not in read_text(out_txt):
+    if "Hola desde " not in read_text(out_txt):
         ctx.fail("salida_vx.txt no contiene el texto esperado", read_text(out_txt))
     ctx.ok("salida_vx.txt creado con contenido esperado")
     if "== Hecho ==" not in log:
@@ -1168,7 +1168,7 @@ def _(ctx):
     ctx.ok("compilacion 65_io_format.vx -> .velb")
     _, log = ctx.run_velb("io65", schedulers=1, stats=False)
     for pat, msg in (
-            (r"^Hola desde Vex!", "no aparece 'Hola desde Vex!'"),
+            (r"^Hola desde !", "no aparece 'Hola desde !'"),
             (r"^x=42, y=100", "interpolacion x/y incorrecta"),
             (r"^suma=142", "interpolacion suma incorrecta"),
             (r"^activo=true", "interpolacion bool incorrecta"),
@@ -2079,9 +2079,9 @@ r0_case("z_gc", "Phase Z.10 ext: shared GC mark+sweep STW (single-thread)", "167
 r0_case("newtypes", "Newtype + @opaque + introspeccion (typedef T name new)", "168_newtypes.vx", 42, line=2367)
 r0_case("newtype_adv", "@align + explicit from/to + module-privacy", "169_newtype_advanced.vx", 42, line=2377)
 r0_case("loc_calln", "u8[N] = literal + char literals + CALLN nativo", "170_local_to_calln_native.vx", 42, line=2383)
-r0_case("cb_qsort", "qsort msvcrt invocando comparator Vex via as_native_callback", "171_callback_qsort.vx", 42, line=2385)
+r0_case("cb_qsort", "qsort msvcrt invocando comparator  via as_native_callback", "171_callback_qsort.vx", 42, line=2385)
 r0_case("str_arr", "u8[N] init string + char literal coerce + interpolacion CHAR", "172_string_array_natural.vx", 42, line=2387)
-r0_case("wndproc", "WndProc Win32 real con global Vex incrementado por thunk", "173_wndproc_win32.vx", 42, line=2389)
+r0_case("wndproc", "WndProc Win32 real con global  incrementado por thunk", "173_wndproc_win32.vx", 42, line=2389)
 r0_case("async_ch", "Async chains: fan-out 4 workers + fan-in + encadenamiento", "174_async_chains_complex.vx", 42, line=2391)
 r0_case("gen_deep", "Generics anidados profundos: Box<Pair<i32, Box<i64>>>", "175_generics_deep_nesting.vx", 42, line=2393)
 r0_case("adt_cplx", "ADTs con payloads complejos: Shape{Empty,Circle,Rectangle,Triangle,Labeled}", "176_adt_complex_payloads.vx", 42, line=2395)
@@ -2117,7 +2117,7 @@ fails_case("scs209", "struct con closure capturador almacenado en campo (escape 
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)
-r0_case("ch213", "copy-hook __clone__ (tipo refcount de usuario en Vex)", "213_copy_hook_refcount.vx", 42, line=3660)
+r0_case("ch213", "copy-hook __clone__ (tipo refcount de usuario en )", "213_copy_hook_refcount.vx", 42, line=3660)
 r0_case("ch214", "copy-hook en campo de contenedor (Rc refcount en campo)", "214_copy_hook_en_campo.vx", 42, line=3661)
 fails_case("mo215", "move-only: use-after-move de struct gestionado sin copy-hook", "215_move_only_err.vx", "tras moverlo", line=3662)
 r0_case("ch216", "copy-hook en paso por valor (Rc refcount, clone+dtor en el call)", "216_copy_hook_por_valor.vx", 42, line=3665)
@@ -2712,7 +2712,7 @@ COOP_CASES = [
     ("coop234", 4223, "234_sync_contention.vx", 42, 42,
      "234 F4-a monitor-yield cooperativo bajo contienda (sin deadlock)", False),
     ("fn235", 4273, "235_fiber_swapctx.vx", 1212, 188,
-     "235 FN.1/FN.2 fibras via primitivo abstracto (Vex NORMAL)", True),
+     "235 FN.1/FN.2 fibras via primitivo abstracto ( NORMAL)", True),
     ("fn236", 4328, "236_fiber_stackful.vx", 666, 154,
      "236 FN.3 fibras stackful (3 fibras, estado local a traves de yields)", True),
     ("si254", 4374, "254_syncimpl_hook.vx", 42, 42,

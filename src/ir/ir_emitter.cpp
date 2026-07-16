@@ -3213,9 +3213,22 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // leyendo basura o causando segfault al tocar memoria no
         // mapeada.
         std::string rd_full = ctx.dst_of(ins.dst);
-        std::string rd_sz = ctx.is_in_reg(ins.dst)
-                                ? reg_name_sized(ctx.reg_num(ins.dst), ins.type)
-                                : rd_full;
+        // El registro destino del load tiene que llevar SIEMPRE el sufijo de
+        // tamano.  ANTES, si el valor estaba DERRAMADO, esta rama caia a
+        // `rd_full` -- el registro entero, sin sufijo -- y el ensamblador
+        // codificaba el load como de 64 bits: un `u8 c = arr[i]` leia OCHO
+        // bytes.  El valor final salia bien igualmente (el sext/mascara de
+        // abajo descarta los bits altos), asi que el fallo solo se notaba
+        // cuando los 7 bytes de mas cruzaban a una pagina no mapeada ->
+        // SIGSEGV, y solo con suficiente presion de registros como para
+        // derramar.  `reg_num()` ya devuelve SCRATCH_REG para los derramados
+        // -- exactamente el mismo registro que devuelve `dst_of()` --, asi
+        // que sirve para los dos casos y lo unico que cambia es el sufijo.
+        // Es el mismo arreglo que STORE ya tenia desde `59_arraylist.vx`.
+        std::string rd_sz =
+            (ins.dst == IR_NO_VALUE)
+                ? rd_full
+                : reg_name_sized(ctx.reg_num(ins.dst), ins.type);
         // La VM NO hace zero-extend en `mov rXd/w/b, [src]` (a
         // diferencia de x86-64 con la mitad inferior).  Los bits
         // altos del registro destino conservan su valor previo,
