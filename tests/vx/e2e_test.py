@@ -2159,6 +2159,7 @@ r0_case("mne310", "@Macro inyecta codigo con expr-capture anidado (forward del e
 r0_case("bfc311", "compilador Brainfuck SOLO comptime (enum tokens + match + s[i] + lambda infer)", "311_bf_comptime.vx", 42, line=3721)
 r0_case("gca312", "compound assign sobre global float/int (bits IEEE vs aritmetica entera)", "312_global_compound_assign.vx", 42, line=3727)
 r0_case("gxm313", "globals de otro modulo: const inlineado + string desde su literal + mutable con storage compartido", "313_globals_cross_module/main.vx", 42, line=3729)
+r0_case("ovl314", "operadores sobrecargados: aritmeticos, compuestos, ++/--, bitwise, comparacion, ! y &&", "314_operadores_sobrecargados.vx", 42, line=3731)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

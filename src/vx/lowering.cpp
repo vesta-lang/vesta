@@ -3198,10 +3198,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // marcarlo host rompe el copia in-place.
         // El value-string (native_poo_) vive en host stack (ALLOCA host)
         // -> su retbuf tambien es host_ptr para que las copias usen `movh`.
+        // El retbuf de un agregado vive en host, como el propio agregado
+        // (ver lower_var_decl): el `return` copia ahi con `movh`.
         const bool sret_optres_like =
             (sem_ret.kind == PrimitiveKind::OPTIONAL ||
              sem_ret.kind == PrimitiveKind::RESULT || sret_enum ||
-             sret_str_value);
+             sret_str_value || sret_struct);
         if (sret_optres_like) {
             fn.values[v_retbuf].is_host_ptr = true;
         }
@@ -3253,8 +3255,11 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 if (ovit != tc_.struct_layouts().end() &&
                     ovit->second.is_overlay) {
                     pt = ir::IrType::PTR;
-                    param_is_host_ptr = true;
                 }
+                // Un agregado se pasa por su DIRECCION y vive en memoria HOST
+                // (ver lower_var_decl): struct, enum/ADT (que tambien son
+                // PrimitiveKind::STRUCT) y overlay (puntero host ajeno).
+                param_is_host_ptr = true;
             }
             // BugFix sret-cross-mem (2026-06-04): los parametros de
             // tipo Optional<T>/Result<V,E> son PTRs al buffer SRET
@@ -4023,6 +4028,11 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
             ir::IrValueId v_off =
                 emit_const(ir::IrType::I64, (uint64_t)fi->offset, line);
             v_addr = fn_->new_value(ir::IrType::PTR);
+            // `base + off` sigue apuntando a la MISMA memoria que `base`: la
+            // naturaleza (host / VM) se hereda.  Sin esto, un struct en host
+            // inicializado con una init-list anidada escribia sus campos con
+            // `mov` (VM) sobre una direccion host -> basura.
+            fn_->values[v_addr].is_host_ptr = fn_->values[base_addr].is_host_ptr;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
@@ -4303,13 +4313,9 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.type = ir::IrType::I8;
         al.dst = addr;
         al.imm = (uint64_t)lay.size_bytes;
-        // Bug host-vs-VM (2026-07-15): si se toma `&p`, el slot vive en host
-        // (`T*` = direccion host por convencion).  Ver el comentario extenso
-        // en la rama del struct sin init-list.
-        if (native_poo_ || address_taken_locals_.count(vd->name)) {
-            al.host_alloca = true;
-            fn_->values[addr].is_host_ptr = true;
-        }
+        // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
+        al.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
         // Seguridad: zero-inicializar TODO el struct antes de escribir los
@@ -4570,8 +4576,14 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 eal.type = ir::IrType::I8;
                 eal.dst = eaddr;
                 eal.imm = static_cast<uint64_t>(elay.size_bytes);
+                // Todo agregado (struct Y enum) vive en memoria HOST en los
+                // tres modos.  Ver la rama STRUCT: si unos acaban en host y
+                // otros en la pila VM, el callee -- que solo recibe una
+                // direccion -- lee unos u otros como basura.
+                eal.host_alloca = true;
                 eal.source_line = vd->loc.line;
                 fn_->append(current_block_, std::move(eal));
+                fn_->values[eaddr].is_host_ptr = true;
                 // La variable es un value-type: se bindea a un SLOT ESTABLE
                 // (@c eaddr, ALLOCA en VM stack) y el inicializador se COPIA
                 // qword-by-qword al slot -- MISMO modelo que un struct
@@ -4623,9 +4635,17 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // pasaba inadvertido mientras el inliner borraba la llamada.  Un
         // struct que NO se address-takea se queda en la pila VM (y el
         // ir_optimizer ya lo promueve por perf si no escapa).
-        if (native_poo_ || address_taken_locals_.count(vd->name)) {
-            ins.host_alloca = true;
-        }
+        // Host SIEMPRE, no solo en AOT ni solo si se toma la direccion.  Mismo
+        // criterio (y mismo motivo) que el buffer de un `T[N]` local.
+        //
+        // Que fuera CONDICIONAL era el bug: cualquier cosa que marcara UN local
+        // lo mandaba a host y dejaba al de al lado en la pila VM.  El callee no
+        // puede distinguirlos -- recibe una direccion y punto -- asi que leia
+        // uno de los dos como basura, con el otro funcionando (que es lo que lo
+        // hacia dificil de ver).  Medido: dos structs y un metodo con arg ->
+        // this=(0,0) y o=(1,2).  Con TODOS los agregados en host, caller y
+        // callee coinciden siempre.  Memoria VM explicita = `VirtualPtr<T>`.
+        ins.host_alloca = true;
         const bool struct_is_host = ins.host_alloca;
         fn_->append(current_block_, std::move(ins));
         if (struct_is_host) fn_->values[addr].is_host_ptr = true;
@@ -4700,10 +4720,14 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         ld.source_line = vd->loc.line;
                         fn_->append(current_block_, std::move(ld));
                     }
-                    // dst slot (ALLOCA, VM stack) + off
+                    // dst slot + off.  Su naturaleza se HEREDA del slot: dar
+                    // por hecho que es VM hacia que la copia escribiera con
+                    // `mov` sobre una direccion host -> el struct se quedaba a
+                    // ceros (y su copy-hook/dtor operaban sobre basura).
                     const ir::IrValueId v_dst_at =
                         fn_->new_value(ir::IrType::PTR);
-                    // dst NO es host_ptr (slot ALLOCA en VM stack).
+                    fn_->values[v_dst_at].is_host_ptr =
+                        fn_->values[addr].is_host_ptr;
                     {
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
@@ -4981,10 +5005,9 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // Bug host-vs-VM (2026-07-15): si se toma `&p`, el slot vive en host
         // (`T*` = direccion host por convencion).  Ver el comentario extenso
         // en la rama del struct sin init-list.
-        if (native_poo_ || address_taken_locals_.count(vd->name)) {
-            al.host_alloca = true;
-            fn_->values[addr].is_host_ptr = true;
-        }
+        // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
+        al.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
         // STORE cada campo en su offset (recursivo para structs anidados).
@@ -10501,6 +10524,22 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
                     cv.source_line = e->loc.line;
                     child_fn.append(entry, std::move(cv));
                 }
+                // El "valor" capturado de un AGREGADO (struct, enum/ADT, clase)
+                // es su DIRECCION, y vive en memoria host (ver lower_var_decl).
+                // Al releerla del env hay que devolverle esa naturaleza: sin
+                // esto el body de la lambda leia los campos del receptor con
+                // `mov` (VM) y los veia a cero.  Se notaba en `&mk(8).leer`
+                // (metodo ligado sobre un struct): el helper inlinea el metodo,
+                // asi que no pasa por el `this` de lower_struct_methods.
+                if (i < e->capture_types.size()) {
+                    const PrimitiveKind ck = e->capture_types[i].kind;
+                    if (ck == PrimitiveKind::STRUCT ||
+                        ck == PrimitiveKind::CLASS ||
+                        ck == PrimitiveKind::OPTIONAL ||
+                        ck == PrimitiveKind::RESULT) {
+                        child_fn.values[final_v].is_host_ptr = true;
+                    }
+                }
                 bind(e->captures[i], final_v);
             }
         }
@@ -11078,8 +11117,11 @@ ir::IrValueId Lowering::lower_enum_constructor(
         al.type = ir::IrType::I8;
         al.dst = addr;
         al.imm = static_cast<uint64_t>(elay.size_bytes);
+        // Host, como todo agregado (ver lower_var_decl).
+        al.host_alloca = true;
         al.source_line = loc.line;
         fn_->append(current_block_, std::move(al));
+        fn_->values[addr].is_host_ptr = true;
     }
 
     // 2. STORE i64 tag en offset 0 (= addr).
@@ -13533,9 +13575,12 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 al.dst = addr;
                 al.imm = (uint64_t)lay.size_bytes;
                 al.source_line = e->loc.line;
-                if (native_poo_) al.host_alloca = true;
+                // El buffer de un compound literal `(T){...}` es un agregado
+                // como cualquier otro -> host en los tres modos (ver
+                // lower_var_decl), no solo en AOT.
+                al.host_alloca = true;
                 fn_->append(current_block_, std::move(al));
-                if (native_poo_) fn_->values[addr].is_host_ptr = true;
+                fn_->values[addr].is_host_ptr = true;
                 emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
                 emit_struct_init_fields(
                     addr, lay,
@@ -17500,9 +17545,10 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     al.dst = addr;
                     al.imm = (uint64_t)lay.size_bytes;
                     al.source_line = e->loc.line;
-                    if (native_poo_) al.host_alloca = true;
+                    // Agregado -> host en los tres modos, no solo en AOT.
+                    al.host_alloca = true;
                     fn_->append(current_block_, std::move(al));
-                    if (native_poo_) fn_->values[addr].is_host_ptr = true;
+                    fn_->values[addr].is_host_ptr = true;
                 } else {
                     addr = lower_expr(fa->base.get());
                     if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
@@ -18639,10 +18685,11 @@ skip_comptime_eval_for_macro_to_macro:
         // El retbuf del value-string vive en host stack (igual que
         // Optional/Result/enum): host_alloca + is_host_ptr para que las
         // copias del callee usen `movh` y el caller lea/libere host mem.
+        // El retbuf de un agregado vive en host, como el propio agregado.
         const bool is_optres_retbuf =
             (callee_kind == PrimitiveKind::OPTIONAL ||
              callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
-             callee_is_str_value_sret);
+             callee_is_str_value_sret || callee_is_struct_sret);
         if (is_optres_retbuf) {
             al.host_alloca = true;
         }
@@ -27860,6 +27907,13 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     !sem.is_virtual) {
                     param_is_host_ptr = true;
                 }
+                // Agregado por valor: host, como en el resto de rutas.  Este
+                // path (metodos de CLASE) no lo marcaba NI en AOT.
+                if (sem.kind == PrimitiveKind::OPTIONAL ||
+                    sem.kind == PrimitiveKind::RESULT ||
+                    sem.kind == PrimitiveKind::STRUCT) {
+                    param_is_host_ptr = true;
+                }
             }
             const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
             fn.values[vid].is_param = true;
@@ -28307,13 +28361,13 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         std::vector<std::pair<std::string, ir::IrValueId>> bindings;
         const ir::IrValueId this_vid = fn.new_value(ir::IrType::PTR, "%this");
         fn.values[this_vid].is_param = true;
-        if (native_poo_) fn.values[this_vid].is_host_ptr = true;
-        // Overlay: la vista ES un puntero HOST (memoria ajena) en TODOS los modos
-        // (interp/jit/aot).  Sin esto, un metodo de overlay leeria sus campos con
-        // `mov` (memoria VM) en lugar de `movh` (host) -> basura.  Habilita
-        // `self.translate(rva)` / `parent<T>().translate(rva)` (abstraccion que
-        // evita duplicar la logica del formato en cada resolver).
-        if (sd->is_overlay) fn.values[this_vid].is_host_ptr = true;
+        // `this` es la DIRECCION del receptor y todo agregado vive en memoria
+        // host (ver lower_var_decl) -> host SIEMPRE, no solo en AOT.  Mientras
+        // fue condicional, un receptor en host se leia aqui con `mov` (VM) y
+        // `this` llegaba a CEROS.  Un overlay es host por su propia naturaleza
+        // (su vista ES un puntero a memoria ajena): habilita ademas
+        // `self.translate(rva)` / `parent<T>().translate(rva)`.
+        fn.values[this_vid].is_host_ptr = true;
         // NS.6-ext: extension sobre una CLASE -> `this` es un objeto GC
         // (host_ptr al payload, refrescable tras GC), no un buffer VM-stack.
         if (ext_this_is_class_) {
@@ -28358,10 +28412,13 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                     sem.kind == PrimitiveKind::RESULT) {
                     param_is_host_ptr = true;
                 }
-                // STRUCT por valor: el callee recibe un PTR al buffer.
-                // En AOT (native_poo_) ese buffer vive en pila nativa
-                // (host) -> el callee debe leer los campos con `movh`.
-                if (sem.kind == PrimitiveKind::STRUCT && native_poo_) {
+                // Agregado por valor: el callee recibe un PTR a su buffer,
+                // y todo agregado vive en memoria HOST en los TRES modos (ver
+                // lower_var_decl) -> `movh`.  El `&& native_poo_` que habia
+                // aqui era el bug: en interp/JIT el callee leia el buffer con
+                // `mov` (VM) y, en cuanto el receptor acababa en host, llegaba
+                // a CEROS -- con el arg de al lado funcionando.
+                if (sem.kind == PrimitiveKind::STRUCT) {
                     param_is_host_ptr = true;
                 }
             }
@@ -28873,13 +28930,14 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
 void Lowering::emit_struct_method_on_host_field(
     ir::IrValueId field_addr, const std::string &struct_name,
     const std::string &method_label, uint32_t line) {
-    // El metodo de struct se compila con this=VM (interp/JIT) o this=host (AOT,
-    // native_poo).  Solo necesitamos el temp VM intermedio cuando el campo es
-    // HOST pero el metodo espera VM (interp/JIT + campo en payload de clase).
-    // En AOT (todo host, metodo host-this) o si el campo ya es VM (struct
-    // contenedor en VM-stack) el CALL es directo sobre field_addr.
-    const bool need_temp =
-        !native_poo_ && fn_->values[field_addr].is_host_ptr;
+    // Historico: cuando un metodo de struct se compilaba con this=VM en
+    // interp/JIT, un campo en el payload HOST de una clase habia que COPIARLO a
+    // un temp VM para poder llamarlo.  Ese rodeo ya no hace falta -- `this` es
+    // host en los tres modos (ver lower_struct_methods) -- y ademas era DANINO
+    // para los metodos que MUTAN: el dtor o el `__clone__` operaban sobre la
+    // COPIA, asi que el refcount real no se tocaba (el free nunca llegaba, o
+    // llegaba de mas).  El CALL va directo sobre el campo.
+    const bool need_temp = false;
     if (!need_temp) {
         ir::IrInstr cd{};
         cd.op = ir::IrOp::CALL;
@@ -28984,7 +29042,10 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
     if (it_sl != tc_.struct_layouts().end())
         sz = static_cast<uint64_t>(it_sl->second.size_bytes);
     if (sz == 0) sz = 8;
-    // ALLOCA copia (host-ness identica a un struct local).
+    // ALLOCA copia: host-ness identica a un struct local, o sea HOST en los tres
+    // modos (ver lower_var_decl).  Cuando esta copia se quedaba en la pila VM en
+    // interp/JIT, el callee -- que lee sus params agregados con `movh` -- la leia
+    // como basura, y su `__clone__` / `~dtor` operaban sobre esa basura.
     const ir::IrValueId copy = fn_->new_value(ir::IrType::PTR);
     {
         ir::IrInstr al{};
@@ -28992,10 +29053,11 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
         al.type = ir::IrType::I8;
         al.imm = sz;
         al.dst = copy;
+        al.host_alloca = true;
         al.source_line = line;
         fn_->append(current_block_, std::move(al));
     }
-    if (native_poo_) fn_->values[copy].is_host_ptr = true;
+    fn_->values[copy].is_host_ptr = true;
     // memcpy v_src -> copy (respetando host-ness de origen y destino).
     const bool src_is_host = fn_->values[v_src].is_host_ptr;
     const bool dst_is_host = fn_->values[copy].is_host_ptr;
