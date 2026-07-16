@@ -1682,18 +1682,22 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(dm);
                 break;
             }
-            case ir::IrOp::NEG: {
-                flush_pending();
-                if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::NEG, vr(in.dst),
-                                               vr(in.operands[0])));
-                break;
-            }
+            /* NEG / NOT: x86 los tiene IN-PLACE (`neg rax` es rax = -rax), asi
+             * que su forma maquina es de UN operando -- el encoder ni mira
+             * src1.  Emitirlos como `NEG dst, src` con dst != src negaba lo que
+             * hubiera en dst y tiraba el operando: `r.x = -this.x` dentro de un
+             * metodo daba basura en JIT mientras el interprete daba lo correcto
+             * (`0 - this.x`, que baja a SUB, si funcionaba).  Se copia primero
+             * y se niega en sitio, como ya hacian ILOG2 y CTZ mas abajo. */
+            case ir::IrOp::NEG:
             case ir::IrOp::NOT: {
                 flush_pending();
-                if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::NOT, vr(in.dst),
+                if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const MOp mop = (in.op == ir::IrOp::NEG) ? MOp::NEG : MOp::NOT;
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(mop, vr(in.dst), vr(in.dst)));
                 break;
             }
 
