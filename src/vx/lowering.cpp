@@ -1343,6 +1343,27 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 tls_nonzero_inits_.push_back({tls_slot, init_val});
             continue;
         }
+        // Global de tipo STRUCT: reservar un slot de `size_bytes`, igual que un
+        // array.  Sin esto no habia storage y cualquier uso daba "nombre no
+        // resuelto" -- un struct simplemente no podia ser global, aunque un
+        // array de structs si.  El caso natural (un contador compartido, una
+        // config, un registro de estado) es justo una global.
+        //
+        // Un `@overlay struct` NO entra: su valor runtime es un puntero de 8
+        // bytes y lo cubre la rama de primitivos de abajo (lo trata como PTR).
+        if (gv->type && !gv->is_const && !gv->is_comptime &&
+            gv->type->kind == ast::NodeKind::NamedTypeNode) {
+            const Type gt = tc_.resolve_type_node(gv->type.get());
+            if (gt.kind == PrimitiveKind::STRUCT && !gt.struct_name.empty()) {
+                auto sit = tc_.struct_layouts().find(gt.struct_name);
+                if (sit != tc_.struct_layouts().end() &&
+                    !sit->second.is_overlay && sit->second.size_bytes > 0) {
+                    (void)get_or_create_runtime_global_slot(
+                        gv->name, (uint64_t)sit->second.size_bytes);
+                    continue;
+                }
+            }
+        }
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
         if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
             const uint64_t ab = vx_global_array_bytes(gv->type.get(), tc_);
@@ -14682,6 +14703,19 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 } else if (gv->type &&
                            gv->type->kind == ast::NodeKind::ArrayTypeNode) {
                     is_array = true;
+                } else if (gv->type &&
+                           gv->type->kind == ast::NodeKind::NamedTypeNode) {
+                    // Un STRUCT global decae a su DIRECCION, igual que un
+                    // array: el valor SSA de un agregado ES su direccion.
+                    // Cargar 8 bytes de el daria su primer campo.
+                    const Type gt = tc_.resolve_type_node(gv->type.get());
+                    if (gt.kind == PrimitiveKind::STRUCT &&
+                        !gt.struct_name.empty()) {
+                        auto sl = tc_.struct_layouts().find(gt.struct_name);
+                        if (sl != tc_.struct_layouts().end() &&
+                            !sl->second.is_overlay)
+                            is_array = true; // mismo trato: devolver la direccion
+                    }
                 }
                 break;
             }
