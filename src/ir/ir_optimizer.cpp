@@ -5624,6 +5624,61 @@ bool ir_pass_const_fold(IrFunction &fn) {
             }
         }
     }
+
+    /* Terminador con condicion CONSTANTE: `BR_COND const -> t, f` es un salto
+     * incondicional al lado que toca, y el otro deja de tener esta arista.
+     *
+     * Sin esto, TODO `if` resuelto en comptime dejaba sus dos ramas en el
+     * binario: `ir_pass_unreachable` marca alcanzables los DOS destinos de un
+     * BR_COND sin mirar la condicion, asi que el lado muerto sobrevivia entero.
+     * Se veia en `atomic<i64>::fetch_add`: el `if (is_float<T>())` foldea a
+     * CONST 0, pero el bucle CAS de la rama float se quedaba dentro -- codigo
+     * muerto en cada metodo, y un Big-O inferido de O(n) sobre algo que es un
+     * `lock xadd`.  Plegar aqui deja que `unreachable` haga su trabajo detras.
+     *
+     * Al perder la arista `bi -> dropped` hay que quitar de los PHI de
+     * `dropped` los args que vinieran de `bi`: si `dropped` sigue siendo
+     * alcanzable por otro camino, `unreachable` no lo tocaria y el PHI se
+     * quedaria citando a un predecesor que ya no salta ahi. */
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        auto &bb = fn.blocks[bi];
+        if (bb.instrs.empty()) continue;
+        IrInstr &term = bb.instrs.back();
+        if (term.op != IrOp::BR_COND || term.operands.empty()) continue;
+        uint64_t c = 0;
+        if (!get_const(fn, term.operands[0], c)) continue;
+
+        const IrBlockId taken = (c != 0) ? term.target_block : term.false_block;
+        const IrBlockId dropped = (c != 0) ? term.false_block : term.target_block;
+
+        term.op = IrOp::BR;
+        term.target_block = taken;
+        term.false_block = IR_NO_BLOCK;
+        term.operands.clear();
+        changed = true;
+
+        /* Los dos lados iban al mismo sitio: no se pierde ninguna arista. */
+        if (dropped == taken || dropped == IR_NO_BLOCK ||
+            dropped >= fn.blocks.size())
+            continue;
+
+        auto &dst = fn.blocks[dropped];
+        dst.preds.erase(std::remove(dst.preds.begin(), dst.preds.end(),
+                                    static_cast<IrBlockId>(bi)),
+                        dst.preds.end());
+        for (auto &ins : dst.instrs) {
+            if (ins.op != IrOp::PHI) continue;
+            ins.phi_args.erase(
+                std::remove_if(ins.phi_args.begin(), ins.phi_args.end(),
+                               [&](const IrPhiArg &pa) {
+                                   return pa.block ==
+                                          static_cast<IrBlockId>(bi);
+                               }),
+                ins.phi_args.end());
+        }
+        bb.succs.erase(std::remove(bb.succs.begin(), bb.succs.end(), dropped),
+                       bb.succs.end());
+    }
     return changed;
 }
 
