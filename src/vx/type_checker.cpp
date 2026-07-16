@@ -357,6 +357,221 @@ bool TypeChecker::is_generic_struct_template(const std::string &name) const {
     return !resolve_generic_key(name, generic_struct_templates_).empty();
 }
 
+namespace {
+
+/// Evalua UN atomo de un `when:` de contrato con los type params ya ligados.
+///
+/// Dos clases de atomo, un solo campo:
+///   - de target (`arch:x86_64`, `os:linux`, `cpu:avx2`, `mode:jit`,
+///     `compiler >= 1.0`): lo resuelve el evaluador de @Target, que es el mismo
+///     que usa la anotacion @Target -- una sola gramatica para todo.
+///   - sobre el parametro de tipo (`is_float<T>()`, `is_integer<T>()`,
+///     `sizeof<T>() == 8`): aqui es donde tienen respuesta, porque T ya es
+///     concreto.  Es lo que permite declarar que `atomic<i64>::fetch_add` es un
+///     `lock xadd` (O(1)) y `atomic<f64>::fetch_add` un bucle CAS (O(n)).
+static bool when_atomo_(const std::string &at, const vxgen::GenSubst &g,
+                        bool &ok) {
+    auto empieza = [&](const char *p) { return at.rfind(p, 0) == 0; };
+    if (empieza("os:") || empieza("arch:") || empieza("cpu:") ||
+        empieza("mode:") || empieza("compiler") || empieza("vm"))
+        return target_expr_matches(at);
+
+    // Predicado sobre un type param: `<pred>` `<` NOMBRE `>` `(` `)` [op N].
+    const size_t lt = at.find('<');
+    const size_t gt = at.find('>', lt == std::string::npos ? 0 : lt);
+    if (lt == std::string::npos || gt == std::string::npos || gt < lt) {
+        ok = false;
+        return false;
+    }
+    const std::string pred = at.substr(0, lt);
+    const std::string param = at.substr(lt + 1, gt - lt - 1);
+
+    // Resolver el nombre del param contra la sustitucion.
+    const Type *concreto = nullptr;
+    if (g.params && g.args) {
+        for (size_t i = 0; i < g.params->size() && i < g.args->size(); ++i) {
+            if ((*g.params)[i] == param) {
+                concreto = &(*g.args)[i];
+                break;
+            }
+        }
+    }
+    if (!concreto) {
+        ok = false;
+        return false;
+    }
+    const PrimitiveKind k = concreto->kind;
+    const bool es_float = (k == PrimitiveKind::F32 || k == PrimitiveKind::F64);
+    const bool es_int =
+        (k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+         k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+         k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+         k == PrimitiveKind::U32 || k == PrimitiveKind::U64);
+    const bool es_ptr = (k == PrimitiveKind::PTR);
+
+    if (pred == "is_float") return es_float;
+    if (pred == "is_integer") return es_int;
+    if (pred == "is_pointer") return es_ptr;
+    if (pred == "is_signed")
+        return (k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+                k == PrimitiveKind::I32 || k == PrimitiveKind::I64);
+    if (pred == "sizeof") {
+        // `sizeof<T>() OP N`.  El tamano de un escalar; el resto no aplica.
+        size_t bytes = 0;
+        switch (k) {
+        case PrimitiveKind::I8: case PrimitiveKind::U8:
+        case PrimitiveKind::BOOL: bytes = 1; break;
+        case PrimitiveKind::I16: case PrimitiveKind::U16: bytes = 2; break;
+        case PrimitiveKind::I32: case PrimitiveKind::U32:
+        case PrimitiveKind::F32: case PrimitiveKind::CHAR: bytes = 4; break;
+        case PrimitiveKind::I64: case PrimitiveKind::U64:
+        case PrimitiveKind::F64: case PrimitiveKind::PTR: bytes = 8; break;
+        default: ok = false; return false;
+        }
+        // Localizar el operador de comparacion tras el `)`.
+        const size_t par = at.find(')', gt);
+        if (par == std::string::npos) { ok = false; return false; }
+        std::string resto = at.substr(par + 1);
+        size_t a = resto.find_first_not_of(" \t");
+        if (a == std::string::npos) { ok = false; return false; }
+        resto = resto.substr(a);
+        std::string op;
+        while (!resto.empty() && (resto[0] == '=' || resto[0] == '!' ||
+                                  resto[0] == '<' || resto[0] == '>')) {
+            op.push_back(resto[0]);
+            resto.erase(resto.begin());
+        }
+        a = resto.find_first_not_of(" \t");
+        if (op.empty() || a == std::string::npos) { ok = false; return false; }
+        const long n = std::strtol(resto.c_str() + a, nullptr, 10);
+        const long b = static_cast<long>(bytes);
+        if (op == "==" || op == "=") return b == n;
+        if (op == "!=") return b != n;
+        if (op == "<") return b < n;
+        if (op == "<=") return b <= n;
+        if (op == ">") return b > n;
+        if (op == ">=") return b >= n;
+        ok = false;
+        return false;
+    }
+    ok = false;
+    return false;
+}
+
+/// Evalua la expresion completa de un `when:` (atomos + `!` + `&&` + `||` +
+/// parentesis) con los type params ligados.  Precedencia estandar: ! > && > ||.
+/// @param ok se pone a false si algun atomo no se reconoce -> el caller avisa
+///        en vez de tragarse el contrato en silencio.
+static bool when_expr_(const std::string &s, const vxgen::GenSubst &g,
+                       bool &ok) {
+    size_t i = 0;
+    std::function<bool()> p_or, p_and, p_un, p_at;
+
+    auto espacios = [&]() {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+    };
+    p_at = [&]() -> bool {
+        espacios();
+        if (i < s.size() && s[i] == '(') {
+            // Parentesis de AGRUPACION (los de un predicado van pegados a su
+            // nombre y los consume el atomo).
+            ++i;
+            const bool v = p_or();
+            espacios();
+            if (i < s.size() && s[i] == ')') ++i;
+            return v;
+        }
+        const size_t ini = i;
+        int d = 0;
+        while (i < s.size()) {
+            const char c = s[i];
+            if (c == '(') ++d;
+            else if (c == ')') {
+                if (d == 0) break; // cierra una agrupacion de fuera
+                --d;
+            } else if (d == 0 && (c == '&' || c == '|')) break;
+            ++i;
+        }
+        std::string at = s.substr(ini, i - ini);
+        size_t b = at.find_last_not_of(" \t");
+        if (b != std::string::npos) at = at.substr(0, b + 1);
+        size_t a = at.find_first_not_of(" \t");
+        at = (a == std::string::npos) ? std::string() : at.substr(a);
+        if (at.empty()) { ok = false; return false; }
+        return when_atomo_(at, g, ok);
+    };
+    p_un = [&]() -> bool {
+        espacios();
+        if (i < s.size() && s[i] == '!') {
+            ++i;
+            return !p_un();
+        }
+        return p_at();
+    };
+    p_and = [&]() -> bool {
+        bool v = p_un();
+        for (;;) {
+            espacios();
+            if (i + 1 < s.size() && s[i] == '&' && s[i + 1] == '&') {
+                i += 2;
+                const bool r = p_un();
+                v = v && r;
+            } else
+                break;
+        }
+        return v;
+    };
+    p_or = [&]() -> bool {
+        bool v = p_and();
+        for (;;) {
+            espacios();
+            if (i + 1 < s.size() && s[i] == '|' && s[i + 1] == '|') {
+                i += 2;
+                const bool r = p_and();
+                v = v || r;
+            } else
+                break;
+        }
+        return v;
+    };
+    const bool v = p_or();
+    espacios();
+    if (i != s.size()) ok = false; // sobra texto -> expresion mal formada
+    return v;
+}
+
+} // namespace
+
+void TypeChecker::resolve_pending_complexity_(ast::ClassMethodDecl &nm,
+                                              const ast::ClassMethodDecl &m,
+                                              const vxgen::GenSubst &g,
+                                              const SourceLoc &loc) {
+    nm.complexity_pending.clear();
+    for (const auto &pc : m.complexity_pending) {
+        bool ok = true;
+        const bool casa = when_expr_(pc.when, g, ok);
+        if (!ok) {
+            diags_.error(loc, "@complexity: no entiendo el `when:` '" + pc.when +
+                                 "' (atomos: os:/arch:/cpu:/mode:/compiler/vm, "
+                                 "o is_float<T>()/is_integer<T>()/"
+                                 "is_pointer<T>()/is_signed<T>()/sizeof<T>()"
+                                 " OP N)");
+            continue;
+        }
+        if (!casa) continue;
+        // Casa: vuelca a los campos resueltos de la instanciacion.  Si casan
+        // varios, el ultimo gana -- declarar dos contratos que se solapan sobre
+        // el mismo T es un error del programador que el verificador destapa.
+        if (!pc.expr.empty()) nm.complexity_expr = pc.expr;
+        if (!pc.vars.empty()) nm.complexity_vars = pc.vars;
+        if (!pc.partial_pre.empty()) nm.complexity_partial_pre = pc.partial_pre;
+        if (!pc.partial_post.empty())
+            nm.complexity_partial_post = pc.partial_post;
+        if (!pc.total_pre.empty()) nm.complexity_total_pre = pc.total_pre;
+        if (!pc.total_post.empty()) nm.complexity_total_post = pc.total_post;
+    }
+}
+
 std::string TypeChecker::monomorphize_class(const std::string &template_name,
                                             const std::vector<Type> &args,
                                             const SourceLoc &loc) {
@@ -453,6 +668,8 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         nm->complexity_partial_post = m->complexity_partial_post;
         nm->complexity_total_pre = m->complexity_total_pre;
         nm->complexity_total_post = m->complexity_total_post;
+        // Los @complexity cuyo `when:` habla de T: aqui T ya es concreto.
+        resolve_pending_complexity_(*nm, *m, g, loc);
         // #4: preservar los type-params del METODO (`metodo<U>`) tras
         // sustituir T; el metodo sigue siendo generico y se monomorphiza
         // por separado en cada llamada `obj.metodo<U>()`.
@@ -687,6 +904,8 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         nm->complexity_partial_post = m->complexity_partial_post;
         nm->complexity_total_pre = m->complexity_total_pre;
         nm->complexity_total_post = m->complexity_total_post;
+        // Los @complexity cuyo `when:` habla de T: aqui T ya es concreto.
+        resolve_pending_complexity_(*nm, *m, g, loc);
         // #4: preservar los type-params del METODO (`mezcla<U>`).  El
         // substituto @c g solo sustituye T (el type-param del struct); U
         // queda intacto y el metodo sigue siendo template generico, que se

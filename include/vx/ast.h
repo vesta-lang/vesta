@@ -272,6 +272,32 @@ struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de definir
 struct BlockStmt; ///< Necesaria para LambdaExpr antes de su definicion.
 
 /**
+ * @struct PendingComplexity
+ * @brief Un @c @complexity cuyo @c when: habla del PARAMETRO DE TIPO y por
+ *        tanto no se puede resolver al parsear.
+ *
+ * Los atomos de target (`arch:x86_64`) los resuelve el parser -- el target se
+ * conoce al compilar --, pero un predicado como `is_float<T>()` solo tiene
+ * respuesta cuando T es concreto, o sea al MONOMORPHIZAR.  El coste de un
+ * metodo generico depende de T de verdad: `atomic<i64>::fetch_add` es un
+ * `lock xadd` (O(1)) y `atomic<f64>::fetch_add` un bucle CAS (O(n)), porque el
+ * `if (is_float<T>())` lo decide en comptime.
+ *
+ * El parser guarda aqui esas declaraciones tal cual; el clon de la
+ * monomorphizacion evalua cada @c when con T ligado y vuelca la que casa a los
+ * campos normales de la instanciacion.
+ */
+struct PendingComplexity {
+    std::string when;  ///< expresion del `when:` (con al menos un atomo sobre T).
+    std::string expr;  ///< azucar posicional (= total_post).
+    std::vector<std::string> vars;
+    std::string partial_pre;
+    std::string partial_post;
+    std::string total_pre;
+    std::string total_post;
+};
+
+/**
  * @brief @c true si k representa una expresion.
  */
 constexpr bool is_expr_kind(NodeKind k) noexcept {
@@ -1659,6 +1685,10 @@ struct FunctionDecl : Node {
     std::string complexity_partial_post;
     std::string complexity_total_pre;
     std::string complexity_total_post;
+    /// @complexity con un `when:` que habla del parametro de tipo: no se puede
+    /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
+    /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
+    std::vector<PendingComplexity> complexity_pending;
     /// Contratos comprobables de recurso/efecto (huella computacional).  El
     /// compilador los VERIFICA contra la huella inferida del IR (sound: solo
     /// error cuando la violacion es demostrable).  Ausente = no declarado.
@@ -2291,6 +2321,10 @@ struct ClassMethodDecl : Node {
     std::string complexity_partial_post;
     std::string complexity_total_pre;
     std::string complexity_total_post;
+    /// @complexity con un `when:` que habla del parametro de tipo: no se puede
+    /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
+    /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
+    std::vector<PendingComplexity> complexity_pending;
 
     /// @brief si !=0, el metodo es accesor de propiedad.
     /// 1 = getter (`public get name => expr;`).  Sin params, devuelve T.

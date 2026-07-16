@@ -69,6 +69,16 @@ void set_aot_condcomp_target(const std::string &os,
 /// modo parsearian las variantes @Target contra el host (HALLAZGO-2).
 void get_aot_condcomp_target(std::string &os, std::string &arch) noexcept;
 
+/// Evalua una expresion de @c @Target (os/arch/cpu/mode/compiler/vm con
+/// &&/||/! y parentesis) contra el target activo.
+///
+/// Expuesta porque el `when:` de un contrato usa la MISMA gramatica, y el que
+/// habla del parametro de tipo lo resuelve el type checker al monomorphizar
+/// (donde T es concreto), no el parser.  Una expresion mixta
+/// (`arch:x86_64 && is_float<T>()`) se evalua alli, apoyandose en esta para sus
+/// atomos de target -- un solo evaluador de target para todo el compilador.
+bool target_expr_matches(const std::string &spec) noexcept;
+
 /**
  * @class Parser
  * @brief Construye un AST a partir de los tokens producidos por @c Lexer.
@@ -539,6 +549,9 @@ class Parser {
         std::string complexity_expr;
         std::vector<std::string> complexity_vars;
         std::string partial_pre, partial_post, total_pre, total_post;
+        /// Los @complexity cuyo `when:` habla del parametro de tipo: se
+        /// resuelven al monomorphizar, no aqui.  Ver @ref ast::PendingComplexity.
+        std::vector<ast::PendingComplexity> pending;
         bool any = false; ///< true si se declaro alguno (para el diagnostico).
     };
 
@@ -547,10 +560,16 @@ class Parser {
     /// Compartido entre las anotaciones top-level y las de un metodo: es el
     /// mismo contrato sobre lo mismo.  Se entra con `complexity` ya consumido
     /// (el siguiente token debe ser `(`) y se sale tras el `)` de cierre.
+    /// @param defer_when si el `when:` habla del parametro de tipo, se devuelve
+    ///        aqui la expresion tal cual y NO se toca ninguna de las
+    ///        dimensiones: el que resuelve es el clon de la monomorphizacion,
+    ///        que es donde T ya es concreto.  El caller la guarda en
+    ///        @c complexity_pending.  Vacio = resuelto aqui (o sin `when:`).
     void parse_complexity_args_(std::string &expr, std::vector<std::string> &vars,
                                 std::string &partial_pre,
                                 std::string &partial_post, std::string &total_pre,
-                                std::string &total_post);
+                                std::string &total_post,
+                                std::string *defer_when = nullptr);
 
     /// @brief Consume las anotaciones de contrato que preceden a un miembro.
     /// @param out se rellena con lo declarado; @c out.any dice si habia alguna.

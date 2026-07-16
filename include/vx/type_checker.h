@@ -51,6 +51,14 @@
 #include "vx/diagnostic.h"
 
 namespace vx {
+
+/// Sustitucion de type params de una instanciacion generica.  Se define en
+/// `src/vx/generic_clone.h` (interno del frontend, no publico); aqui basta la
+/// declaracion adelantada para pasarla por referencia.
+namespace vxgen {
+struct GenSubst;
+}
+
 /**
  * @brief ComptimeValue recursivo via shared_ptr.
  *
@@ -728,6 +736,20 @@ class TypeChecker {
     std::string monomorphize_struct(const std::string &template_name,
                                     const std::vector<Type> &args,
                                     const SourceLoc &loc);
+
+    /// @brief Resuelve los @c @complexity que el parser dejo pendientes.
+    ///
+    /// Su `when:` habla del parametro de tipo (`is_float<T>()`), asi que solo
+    /// tiene respuesta aqui, con T ya concreto: el coste de un metodo generico
+    /// depende de T de verdad (`atomic<i64>::fetch_add` es un `lock xadd` y
+    /// `atomic<f64>::fetch_add` un bucle CAS).  Vuelca el que casa a los campos
+    /// resueltos de @p nm y vacia su lista de pendientes.
+    /// @param nm el metodo CLONADO (la instanciacion).
+    /// @param m  el metodo de la PLANTILLA (de donde salen los pendientes).
+    void resolve_pending_complexity_(ast::ClassMethodDecl &nm,
+                                     const ast::ClassMethodDecl &m,
+                                     const vxgen::GenSubst &g,
+                                     const SourceLoc &loc);
 
     /**
      * @brief Monomorphizacion de funcion generica.  Clona la FunctionDecl
