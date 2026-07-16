@@ -1,6 +1,6 @@
 /**
  * @file vx_atomic.vx
- * @brief Operaciones ATOMICAS multi-arquitectura para Vex, en Vex puro (inline
+ * @brief Operaciones ATOMICAS multi-arquitectura para , en  puro (inline
  *        asm), SIN libc.  Libreria de bajo nivel reutilizable por CUALQUIER otra
  *        (vx_mem, vx_sync, vx_pool, colecciones concurrentes, ...).
  *

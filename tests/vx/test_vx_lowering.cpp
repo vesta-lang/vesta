@@ -12,7 +12,7 @@
 
 /**
  * @file test_vx_lowering.cpp
- * @brief Test del pase AST -> ir::IrModule de Vex.
+ * @brief Test del pase AST -> ir::IrModule de Vesta-lang.
  *
  * Verifica:
  *   - Programa minimo (main retornando entero) genera 1 funcion con

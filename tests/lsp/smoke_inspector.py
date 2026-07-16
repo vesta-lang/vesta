@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VestaVM - smoke test del inspector del LSP de Vex (portable Linux/Windows).
+"""VestaVM - smoke test del inspector del LSP de  (portable Linux/Windows).
 
 Reemplaza al antiguo smoke_inspector.sh (bash, no portable a Windows).  Envia
 por stdin una secuencia JSON-RPC (initialize + initialized + didOpen de un .vx
@@ -29,7 +29,7 @@ import os
 import subprocess
 import sys
 
-# Fuente Vex: (a) suma aritmetica pura JIT-compilable, (b) loop para la
+# Fuente : (a) suma aritmetica pura JIT-compilable, (b) loop para la
 # complejidad lineal, (c) una clase con un metodo.
 SRC = (
     "i64 suma(i64 a, i64 b) { return a + b; }\n"

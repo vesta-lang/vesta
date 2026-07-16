@@ -1,7 +1,7 @@
 /*
  * Test: IrBuilder API.
  *
- * Demuestra como un frontend ARBITRARIO (Vex, C-like, Java-like, Python-like,
+ * Demuestra como un frontend ARBITRARIO (, C-like, Java-like, Python-like,
  * cualquier lenguaje) puede emitir SSA IR de VestaVM usando solo el header
  * publico @c ir_builder.h, sin tocar la representacion interna.
  *

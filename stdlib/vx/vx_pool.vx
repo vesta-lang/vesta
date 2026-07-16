@@ -1,7 +1,7 @@
 /**
  * @file vx_pool.vx
  * @brief Scheduler M:N de FIBRAS con work-stealing (deque Chase-Lev lock-free)
- *        para Vex AOT.  UNIDAD DE EJECUCION UNICA: la Fibra.  Una "tarea"
+ *        para  AOT.  UNIDAD DE EJECUCION UNICA: la Fibra.  Una "tarea"
  *        run-to-completion es simplemente una fibra que nunca hace yield.  SIN
  *        libc mas alla de malloc; SIN GC; SIN runtime del interprete.
  *
@@ -43,7 +43,7 @@
  * de fibras M:N.  Una goroutine-como-fibra es a la vez CONCURRENTE (cede/bloquea)
  * y PARALELA (corre sobre N hilos del SO) -> un unico runtime cubre async y
  * multihilo.  Como corre como codigo NATIVO (no reentra al interprete), yield/
- * exit son funciones Vex NORMALES que leen thread_local; no necesitan el @Naked
+ * exit son funciones  NORMALES que leen thread_local; no necesitan el @Naked
  * que vx_async exige para poder cederse desde el modo interprete.
  */
 

@@ -1,11 +1,11 @@
 /**
  * @file vx_fiber.vx
- * @brief Primitivo de context-switch para fibras nativas stackful (F1), en Vex.
+ * @brief Primitivo de context-switch para fibras nativas stackful (F1), en .
  *
  * Green threads estilo goroutine: cada fibra tiene su PROPIA pila nativa; un
  * `fiber_switch` guarda el contexto actual y carga el de otra fibra sin tocar
  * el SO (solo swap de registros + RSP).  Es el MECANISMO puro (zero-runtime):
- * la POLITICA (scheduler / monitores / GC) sera una libreria Vex por tier en
+ * la POLITICA (scheduler / monitores / GC) sera una libreria  por tier en
  * fases posteriores (F3+).  Aqui NO hay scheduler, NO hay GC: solo el switch.
  *
  * @par Modelo del contexto (int-only, minimo)
@@ -150,7 +150,7 @@
 // A diferencia de `fiber_switch` (arriba), cuyo contexto es UN qword (RSP) y
 // exige `fiber_init` para preparar la pila, este switch usa el MISMO layout de
 // contexto que el opcode VM `swapctx` del interprete (FN.1), de modo que el
-// MISMO cuerpo Vex (test 235) inicializa el ctx igual en -m vm y -m aot:
+// MISMO cuerpo  (test 235) inicializa el ctx igual en -m vm y -m aot:
 //
 //   ctx = i64[19] (152 bytes).  Sub-layout que usa el nativo (offsets en bytes):
 //     [ 0] PC   (direccion de reanudacion; en el arranque = fiber_entry(body))

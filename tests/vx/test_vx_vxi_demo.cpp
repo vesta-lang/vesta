@@ -54,7 +54,7 @@ void hex_dump_annotated(const std::vector<uint8_t> &b) {
 int main() {
     std::cout
         << "================================================================\n";
-    std::cout << "Modulo Vex (lo que el usuario escribio):\n";
+    std::cout << "Modulo Vesta-lang (lo que el usuario escribio):\n";
     std::cout
         << "================================================================\n";
     std::cout << "// buffer.vx\n"

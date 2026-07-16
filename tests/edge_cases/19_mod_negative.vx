@@ -1,4 +1,4 @@
-// Edge: modulo con dividendo negativo.  Vex/x86 convencion: el signo del
+// Edge: modulo con dividendo negativo.  /x86 convencion: el signo del
 // resultado sigue el dividendo (-7 % 3 = -1).
 i32 main() {
     i32 a = -7;

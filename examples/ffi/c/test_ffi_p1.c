@@ -26,7 +26,7 @@
 
 #include "capi/vesta.h"
 
-/* Fuente Vex cuyo IR se obtiene y luego se reconvierte a .velb. */
+/* Fuente Vesta-lang cuyo IR se obtiene y luego se reconvierte a .velb. */
 static const char *SRC_7 = "i32 main() { return 7; }\n";
 
 int main(void) {

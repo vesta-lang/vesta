@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bateria de edge case tests para Vex JIT + INTERP.
+"""Bateria de edge case tests para  JIT + INTERP.
 
 Compila cada .vx del directorio actual y lo ejecuta en ambos modos.
 Reporta:

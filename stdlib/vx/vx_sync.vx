@@ -1,6 +1,6 @@
 /**
  * @file vx_sync.vx
- * @brief Runtime de monitores reentrantes nativo para Vex AOT (tiers
+ * @brief Runtime de monitores reentrantes nativo para  AOT (tiers
  *        bare/embed), SIN libc.
  *
  * Auto-bundle: el driver `-m aot` fusiona este modulo cuando el programa usa
@@ -178,7 +178,7 @@ i64 __vsync_self() {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Adquiere el monitor reentrante de @p obj (op MONENTER de Vex).
+ * @brief Adquiere el monitor reentrante de @p obj (op MONENTER de ).
  * @param obj host_ptr al ObjectHeader (lo que devuelve `new` en native_poo).
  *
  * La palabra de monitor vive en `obj + 16` (= `obj + 2` en aritmetica `i64*`).
@@ -228,7 +228,7 @@ void __vx_monenter(i64* obj) {
 }
 
 /**
- * @brief Libera el monitor reentrante de @p obj (op MONEXIT de Vex).
+ * @brief Libera el monitor reentrante de @p obj (op MONEXIT de ).
  * @param obj host_ptr al ObjectHeader.
  *
  * Si la profundidad es 1 (ultima salida) libera la palabra a 0 (release); si es

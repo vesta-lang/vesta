@@ -2,7 +2,7 @@
  * test_ffi.c -- ejemplo de consumo de libvesta desde C puro.
  *
  * Demuestra las tres rutas de la API:
- *   1. vesta_eval  : compila + ejecuta una fuente Vex en una llamada.
+ *   1. vesta_eval  : compila + ejecuta una fuente Vesta-lang en una llamada.
  *   2. vesta_compile + vesta_run : compila a bytecode .velb y luego lo ejecuta.
  *
  * Compilacion (Windows / MinGW):
@@ -22,13 +22,13 @@
 
 #include "capi/vesta.h"
 
-/* Programa Vex de prueba: main devuelve 42. */
+/* Programa Vesta-lang de prueba: main devuelve 42. */
 static const char *SRC_42 = "i32 main() { return 42; }\n";
 
-/* Programa Vex de prueba: main devuelve 6 * 7 = 42 con un println. */
+/* Programa Vesta-lang de prueba: main devuelve 6 * 7 = 42 con un println. */
 static const char *SRC_MUL =
     "i32 main() {\n"
-    "    println(\"hola desde Vex via FFI\");\n"
+    "    println(\"hola desde Vesta-lang via FFI\");\n"
     "    return 6 * 7;\n"
     "}\n";
 
@@ -84,7 +84,7 @@ int main(void) {
         }
     }
 
-    /* --- Caso 3: vesta_compile_to_vel (Vex -> texto .vel) --- */
+    /* --- Caso 3: vesta_compile_to_vel (Vesta-lang -> texto .vel) --- */
     {
         char *vel = NULL, *err = NULL;
         int rc = vesta_compile_to_vel(SRC_42, "c_vel", &vel, &err);
@@ -102,7 +102,7 @@ int main(void) {
         }
     }
 
-    /* --- Caso 4: vesta_compile_to_ir (Vex -> texto IR SSA) --- */
+    /* --- Caso 4: vesta_compile_to_ir (Vesta-lang -> texto IR SSA) --- */
     {
         char *ir = NULL, *err = NULL;
         int rc = vesta_compile_to_ir(SRC_MUL, "c_ir", &ir, &err);

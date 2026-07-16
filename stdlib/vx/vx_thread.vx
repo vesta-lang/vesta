@@ -1,6 +1,6 @@
 /**
  * @file vx_thread.vx
- * @brief Multihilo REAL del SO para Vex AOT (paralelismo verdadero).
+ * @brief Multihilo REAL del SO para  AOT (paralelismo verdadero).
  *
  * SEPARADO de vx_async: la ASINCRONIA (vx_async: spawn/future/await) es
  * cooperativa de UN SOLO hilo (event-loop / fibras); el MULTIHILO (este modulo)

@@ -1,4 +1,4 @@
-// vx_io.vx -- runtime de I/O nativo para Vex AOT (tiers bare/embed) SIN libc
+// vx_io.vx -- runtime de I/O nativo para  AOT (tiers bare/embed) SIN libc
 // de formato.  Auto-bundle: el driver -m aot lo fusiona cuando el modulo usa
 // print/println y no define las primitivas el mismo (mismo patron que
 // vx_exc.vx para excepciones).
@@ -7,7 +7,7 @@
 // bajo nivel basada en descriptor de fichero (fd 1 = stdout), que la IAT/GOT
 // del linker AOT resuelve contra msvcrt.dll (Windows) o libc.so.6 (POSIX).  Sin
 // `stdout` (FILE*) ni printf: solo write/_write.  Los formateadores numericos
-// estan en Vex puro sobre __vx_write -> portables a cualquier target.
+// estan en  puro sobre __vx_write -> portables a cualquier target.
 //
 // El usuario puede REDEFINIR cualquier `__vx_*` en su propio modulo (igual que
 // @AllocatorOverride): si lo define, el lowering llama a SU version y este
@@ -143,7 +143,7 @@ void __vx_panic_null() {
     __vio_sys_exit(134); // exit_group(134) ~ SIGABRT (128+6), sin libc
 }
 
-// --- Formateadores numericos (Vex puro sobre __vx_write) -------------------
+// --- Formateadores numericos ( puro sobre __vx_write) -------------------
 
 // Emite `v` en decimal sin signo.  Buffer de 20 digitos (u64 max = 20).
 void __vio_dec_u64(u64 v) {

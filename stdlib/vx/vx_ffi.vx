@@ -2,7 +2,7 @@
 //
 // Carga dinamica de LIBRERIAS NATIVAS en AOT (sin la VM): el AOT baja los
 // opcodes `dlopen`/`dlsym` (builtins ffi_open/ffi_sym) a CALL a estas funciones
-// Vex.  Asi NO se depende del runtime de la VM y, sobre todo, el USUARIO puede
+// .  Asi NO se depende del runtime de la VM y, sobre todo, el USUARIO puede
 // REDEFINIR `__vx_dlopen`/`__vx_dlsym` en su propio modulo para cambiar como
 // se cargan las librerias (igual que con __vx_malloc / __vx_write).
 //

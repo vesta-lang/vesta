@@ -1,5 +1,5 @@
 // Edge: closure capturando contador del loop por referencia.  Clasico bug
-// JS-style: cada iter crea closure, todas comparten el mismo i?  En Vex
+// JS-style: cada iter crea closure, todas comparten el mismo i?  En 
 // las captures by-value son snapshots; verificamos.
 i32 main() {
     fn() -> i32 first = () => 0;

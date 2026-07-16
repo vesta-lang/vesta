@@ -12,7 +12,7 @@
 
 /**
  * @file test_vx_parser.cpp
- * @brief Test automatico del parser Vex.
+ * @brief Test automatico del parser Vesta-lang.
  *
  * Cobertura:
  *   - Programa minimo (i32 main() { return 0; }).

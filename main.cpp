@@ -1562,8 +1562,15 @@ int main(int argc, char *argv[]) {
         copts.module_name = "main";
         copts.opt_level = 2;
         copts.emit_ir_preopt = true;
+        // Si el fuente tiene `import`, hay que ir por el compilador
+        // multi-modulo, igual que hacen las demas rutas.  ANTES esta llamaba
+        // siempre a `compile_vx_source` (un solo fichero), asi que analizar un
+        // programa que importa cualquier cosa -- la stdlib incluida -- moria en
+        // "funcion no declarada" en vez de darte el analisis.
         vx::CompileResult cr =
-            vx::compile_vx_source(vx_source, vx_path, copts);
+            vx::vx_source_has_imports(vx_source)
+                ? vx::compile_vx_project(vx_path, copts)
+                : vx::compile_vx_source(vx_source, vx_path, copts);
         // Volcar diagnosticos (errores/warnings) del frontend.
         for (const auto &d : cr.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);

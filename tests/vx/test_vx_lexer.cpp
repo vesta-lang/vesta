@@ -12,7 +12,7 @@
 
 /**
  * @file test_vx_lexer.cpp
- * @brief Test automatico del lexer Vex.
+ * @brief Test automatico del lexer Vesta-lang.
  *
  * Cobertura del subset A.1:
  *   - Identificadores ASCII y todas las palabras reservadas cerradas.

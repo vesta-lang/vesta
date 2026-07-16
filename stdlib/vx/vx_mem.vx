@@ -1,6 +1,6 @@
 /**
  * @file vx_mem.vx
- * @brief Arenas del SO + allocator slab + utilidades de memoria, en Vex puro.
+ * @brief Arenas del SO + allocator slab + utilidades de memoria, en  puro.
  *
  * Reemplaza el RawAllocator y las rutinas de memoria de C (`native`).  Tres
  * capas, todas sin libc de formato:

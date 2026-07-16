@@ -9,7 +9,7 @@
  * @file tests/jit/test_inline_asm.cpp
  * @brief Phase AS inc.5 (AS.10): test del codegen de inline-asm en el path
  *        vreg (VM_ABI).  Construye funciones IR con @c IrOp::INLINE_ASM +
- *        @c asm_reg_bindings (igual que el lowering de Vex), las compila por el
+ *        @c asm_reg_bindings (igual que el lowering de ), las compila por el
  *        pipeline vreg (selector -> intervalos -> linear-scan -> rewrite ->
  *        encoder) y las EJECUTA con un proxy del ProcessVM, verificando el
  *        resultado.
