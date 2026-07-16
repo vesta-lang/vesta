@@ -10931,8 +10931,12 @@ uint64_t Lowering::nested_sret_flat_size(const std::string &callee,
     // callee, o 0 si no lo es.  El fix nested-SRET copia el retbuf del productor
     // a un slot fresco; la NATURALEZA de ese slot (via @p out_is_host) debe
     // coincidir con como el CALLEE lee su parametro:
-    //   - ENUM: el callee lee el enum via acceso VM (`mov [t]`) -> fresh
-    //     VM-STACK (out_is_host=false).  Un slot host daria basura.
+    //   - ENUM/ADT: desde el modelo "agregados en memoria HOST" ([[proj_
+    //     aggregates_host]], commit a0ffa68) el callee marca su param enum como
+    //     is_host_ptr y lo lee via acceso HOST (`movh [t]`) -> fresh HOST
+    //     (out_is_host=true).  Un slot VM daria segfault (el callee leeria host
+    //     sobre una direccion VM).  ESTE sitio nested-SRET se le paso al fix
+    //     original -> `emit(classify(x))` inline crasheaba (MOVH sobre pila VM).
     //   - Optional/Result: el callee los lee via acceso HOST (isPresent/unwrap/
     //     value/error con is_host_ptr) -> fresh HOST (out_is_host=true).  Un
     //     slot VM daria segfault (leeria host en una direccion VM).
@@ -10943,8 +10947,10 @@ uint64_t Lowering::nested_sret_flat_size(const std::string &callee,
     if (it_er != fn_ret_enum_name_.end()) {
         const auto &elays = tc_.enum_layouts();
         auto it_e = elays.find(it_er->second);
-        if (it_e != elays.end())
+        if (it_e != elays.end()) {
+            if (out_is_host) *out_is_host = true; // enum agregado -> host
             return static_cast<uint64_t>(it_e->second.size_bytes);
+        }
         return 0;
     }
     auto it_kind = fn_ret_kind_.find(callee);
