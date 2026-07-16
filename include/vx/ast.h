@@ -2269,6 +2269,28 @@ struct ClassMethodDecl : Node {
     /// lowering lo resuelve via findclass/findmethod en __module_init.
     uint8_t advice_kind = 0;
     std::string advice_target;
+    /// @brief Contratos de huella declarados sobre el metodo, iguales a los de
+    ///        una funcion libre (ver @ref FunctionDecl):
+    ///
+    ///     @pure @nothrow @nopanic @alloc(N) @stack(N) @complexity(O(...))
+    ///
+    /// Un metodo hace lo mismo que una funcion libre con un argumento mas, asi
+    /// que no habia motivo para que no pudiera declarar lo mismo -- y sin esto,
+    /// un tipo cuya API son METODOS (`atomic<T>`, las colecciones, ...) no puede
+    /// declarar sus propiedades aunque el compilador sepa verificarlas.
+    bool contract_pure = false;    ///< @pure declarado.
+    bool contract_nothrow = false; ///< @nothrow declarado.
+    bool contract_nopanic = false; ///< @nopanic declarado.
+    int64_t contract_alloc = -1;   ///< @alloc(N): max allocs; -1 = no declarado.
+    int64_t contract_stack = -1;   ///< @stack(N): max bytes; -1 = no declarado.
+    /// @complexity(...) del metodo.  Mismos campos y semantica que en
+    /// @ref FunctionDecl: `complexity_expr` es azucar de `total_post`.
+    std::string complexity_expr;
+    std::vector<std::string> complexity_vars;
+    std::string complexity_partial_pre;
+    std::string complexity_partial_post;
+    std::string complexity_total_pre;
+    std::string complexity_total_post;
 
     /// @brief si !=0, el metodo es accesor de propiedad.
     /// 1 = getter (`public get name => expr;`).  Sin params, devuelve T.

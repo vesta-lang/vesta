@@ -276,19 +276,48 @@ std::vector<ContractCheck> verify_contracts(
         p = q.rfind('.');
         return (p == std::string::npos) ? q : q.substr(p + 1);
     };
-    // Indice por nombre simple para localizar la huella de cada funcion.
+    // Indice por nombre COMPLETO y por nombre simple.  Los contratos de un
+    // METODO se declaran como `Tipo__metodo` -- el nombre simple no vale como
+    // clave porque dos tipos pueden tener un metodo homonimo --, mientras que
+    // los de una funcion libre se declaran con el nombre simple aunque el IR la
+    // traiga mangled por namespace.  Indexando por los dos, una sola busqueda
+    // cubre ambos.  ANTES solo se indexaba el simple: `simple("S__mal")` da
+    // "mal", la clave del contrato es "S__mal", la busqueda fallaba y el
+    // `continue` se tragaba el contrato EN SILENCIO -- o sea que ningun
+    // @pure/@alloc/@stack/@nothrow/@nopanic sobre un metodo se verificaba nunca.
     std::unordered_map<std::string, const FunctionFingerprint *> byname;
-    byname.reserve(fps.size() * 2 + 1);
-    for (const auto &f : fps) byname.emplace(simple(f.function), &f);
+    byname.reserve(fps.size() * 4 + 1);
+    for (const auto &f : fps) {
+        byname.emplace(f.function, &f);
+        byname.emplace(simple(f.function), &f);
+    }
 
     using St = ContractCheck::Status;
     for (const auto &kv : contracts) {
         const std::string &name = kv.first;
         const FunctionContracts &c = kv.second;
         if (!c.any()) continue;
+        const FunctionFingerprint *fpp = nullptr;
         auto it = byname.find(name);
-        if (it == byname.end()) continue; // la funcion no llego al IR (inline/DCE).
-        const FunctionFingerprint &fp = *it->second;
+        if (it != byname.end()) {
+            fpp = it->second;
+        } else {
+            // Ni completo ni simple.  Queda el caso del metodo DENTRO de un
+            // namespace: la clave es `Tipo__metodo` pero el IR lo trae como
+            // `ns__Tipo__metodo`.  Buscamos por sufijo, y solo aceptamos si el
+            // resultado es unico (si no, seria adivinar).
+            const std::string suf = "__" + name;
+            for (const auto &f : fps) {
+                if (f.function.size() > suf.size() &&
+                    f.function.compare(f.function.size() - suf.size(),
+                                       suf.size(), suf) == 0) {
+                    if (fpp) { fpp = nullptr; break; } // ambiguo: no adivinar
+                    fpp = &f;
+                }
+            }
+        }
+        if (!fpp) continue; // la funcion no llego al IR (inline/DCE).
+        const FunctionFingerprint &fp = *fpp;
 
         auto add = [&](const char *cn, St st, std::string detail) {
             out.push_back({name, cn, st, std::move(detail)});

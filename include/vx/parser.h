@@ -521,6 +521,45 @@ class Parser {
     /// un pre-scanner (Phase B futura).
     std::unordered_map<std::string, std::vector<int>> macro_expr_params_;
 
+    /**
+     * @struct MemberContracts
+     * @brief Contratos de huella declarados sobre un metodo de struct/clase.
+     *
+     * Los mismos que admite una funcion libre.  Se recogen antes del miembro y
+     * se vuelcan sobre el @c ClassMethodDecl cuando resulta ser un metodo; si
+     * el miembro era un campo, se ignoran con un error claro (un campo no tiene
+     * huella que declarar).
+     */
+    struct MemberContracts {
+        bool pure = false;
+        bool nothrow_ = false;
+        bool nopanic = false;
+        int64_t alloc = -1;
+        int64_t stack = -1;
+        std::string complexity_expr;
+        std::vector<std::string> complexity_vars;
+        std::string partial_pre, partial_post, total_pre, total_post;
+        bool any = false; ///< true si se declaro alguno (para el diagnostico).
+    };
+
+    /// @brief Parsea los argumentos de `@complexity(...)`.
+    ///
+    /// Compartido entre las anotaciones top-level y las de un metodo: es el
+    /// mismo contrato sobre lo mismo.  Se entra con `complexity` ya consumido
+    /// (el siguiente token debe ser `(`) y se sale tras el `)` de cierre.
+    void parse_complexity_args_(std::string &expr, std::vector<std::string> &vars,
+                                std::string &partial_pre,
+                                std::string &partial_post, std::string &total_pre,
+                                std::string &total_post);
+
+    /// @brief Consume las anotaciones de contrato que preceden a un miembro.
+    /// @param out se rellena con lo declarado; @c out.any dice si habia alguna.
+    void parse_member_contracts_(MemberContracts &out);
+
+    /// @brief Vuelca @p mc sobre un metodo ya parseado.
+    void apply_member_contracts_(const MemberContracts &mc,
+                                 ast::ClassMethodDecl &m);
+
     /// @brief Suprime el postfijo `{}` (sobrecarga de `__braces__`) mientras se
     ///        parsea una expresion a la que SIGUE un bloque del lenguaje.
     ///

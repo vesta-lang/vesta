@@ -77,6 +77,32 @@ static void collect_contracts_(
             c.stack = fd->contract_stack;
             if (c.any()) out[fd->name] = c;
         }
+        // Metodos de struct/clase: el mismo contrato sobre lo mismo.  Un metodo
+        // baja a una IrFunction `Tipo__metodo`, asi que se registra con esa
+        // clave -- la que el analizador vera.  Sin esto, un tipo cuya API son
+        // METODOS podia DECLARAR sus contratos pero nadie los verificaba: peor
+        // que no tenerlos, porque parecerian comprobados.
+        auto tomar_metodos =
+            [&](const std::string &tipo,
+                const std::vector<std::unique_ptr<ast::ClassMethodDecl>> &ms) {
+                for (const auto &m : ms) {
+                    if (!m) continue;
+                    analyze::FunctionContracts c;
+                    c.pure = m->contract_pure;
+                    c.nothrow = m->contract_nothrow;
+                    c.nopanic = m->contract_nopanic;
+                    c.alloc = m->contract_alloc;
+                    c.stack = m->contract_stack;
+                    if (c.any()) out[tipo + "__" + m->name] = c;
+                }
+            };
+        if (d->kind == ast::NodeKind::StructDecl) {
+            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
+            tomar_metodos(sd->name, sd->methods);
+        } else if (d->kind == ast::NodeKind::ClassDecl) {
+            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
+            tomar_metodos(cd->name, cd->methods);
+        }
     }
 }
 

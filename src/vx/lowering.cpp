@@ -27920,6 +27920,15 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         std::string suffix = m->is_constructor ? std::string("ctor") : m->name;
         fn.name = cd->name + "__" + suffix;
 
+        // @complexity del metodo al IR, igual que en una funcion libre (ver
+        // lower_function): metadata pura que solo consume el analizador.
+        fn.complexity_expr = m->complexity_expr;
+        fn.complexity_vars = m->complexity_vars;
+        fn.complexity_partial_pre = m->complexity_partial_pre;
+        fn.complexity_partial_post = m->complexity_partial_post;
+        fn.complexity_total_pre = m->complexity_total_pre;
+        fn.complexity_total_post = m->complexity_total_post;
+
         // Tipo de retorno + detect SRET (Result/Optional).  Para class
         // methods retornando Result/Optional cross-module, el callee
         // necesita retbuf hidden como SEGUNDO param (this=r1, retbuf=r2,
@@ -28419,6 +28428,15 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const std::string suffix = m->is_destructor ? std::string("__dtor")
                                                      : m->name;
         fn.name = sd->name + "__" + suffix;
+
+        // @complexity del metodo al IR, igual que en una funcion libre (ver
+        // lower_function): metadata pura que solo consume el analizador.
+        fn.complexity_expr = m->complexity_expr;
+        fn.complexity_vars = m->complexity_vars;
+        fn.complexity_partial_pre = m->complexity_partial_pre;
+        fn.complexity_partial_post = m->complexity_partial_post;
+        fn.complexity_total_pre = m->complexity_total_pre;
+        fn.complexity_total_post = m->complexity_total_post;
 
         // Tipo de retorno + deteccion de SRET (Optional/Result).  El
         // retbuf hidden va tras 'this'.

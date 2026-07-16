@@ -891,6 +891,206 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
 //   [const]? <type> <ident>  ('=' expr)? ';'               -> GlobalVarDecl
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+//  Contratos de huella sobre un METODO de struct/clase.
+//
+//  Los mismos que admite una funcion libre -- un metodo hace lo mismo con un
+//  argumento mas.  Sin esto, un tipo cuya API son METODOS (`atomic<T>`, las
+//  colecciones, ...) no podia declarar sus propiedades aunque el compilador
+//  supiera verificarlas; y una libreria estandar que no usa los contratos que
+//  el lenguaje ofrece esta diciendo lo contrario de lo que hace.
+// ---------------------------------------------------------------------------
+void Parser::parse_member_contracts_(MemberContracts &out) {
+    while (current_.kind == TokenKind::AT) {
+        // Solo se consume si el nombre ES un contrato: cualquier otra anotacion
+        // (@Override, @Sync, ...) la maneja quien ya la manejaba.
+        const Token &nx = lex_.peek_at(0);
+        if (nx.kind != TokenKind::IDENTIFIER) return;
+        // COPIA, no referencia: los `consume()` de abajo invalidan el token
+        // peekeado, y las ramas que eligen por el nombre corren despues.
+        const std::string nm = nx.lexeme;
+        const bool es_flag =
+            (nm == "pure" || nm == "nothrow" || nm == "nopanic");
+        const bool es_num = (nm == "alloc" || nm == "stack");
+        const bool es_cx = (nm == "complexity");
+        if (!es_flag && !es_num && !es_cx) return;
+        (void)consume(); // '@'
+        (void)consume(); // el nombre
+        out.any = true;
+        if (nm == "pure") {
+            out.pure = true;
+        } else if (nm == "nothrow") {
+            out.nothrow_ = true;
+        } else if (nm == "nopanic") {
+            out.nopanic = true;
+        } else if (es_num) {
+            const std::string abre =
+                "se esperaba '(' tras @" + nm + " (usa @" + nm + "(N))";
+            (void)expect(TokenKind::LPAREN, abre.c_str());
+            if (current_.kind != TokenKind::INT_LIT) {
+                const std::string msg = "@" + nm + "(N) requiere un entero literal";
+                error_here(msg.c_str());
+            } else {
+                const int64_t v = static_cast<int64_t>(consume().int_val);
+                if (nm == "alloc")
+                    out.alloc = v;
+                else
+                    out.stack = v;
+            }
+            const std::string cierra = "se esperaba ')' al cerrar @" + nm + "(N)";
+            (void)expect(TokenKind::RPAREN, cierra.c_str());
+        } else {
+            parse_complexity_args_(out.complexity_expr, out.complexity_vars,
+                                   out.partial_pre, out.partial_post,
+                                   out.total_pre, out.total_post);
+        }
+    }
+}
+
+void Parser::apply_member_contracts_(const MemberContracts &mc,
+                                     ast::ClassMethodDecl &m) {
+    if (!mc.any) return;
+    m.contract_pure = mc.pure;
+    m.contract_nothrow = mc.nothrow_;
+    m.contract_nopanic = mc.nopanic;
+    m.contract_alloc = mc.alloc;
+    m.contract_stack = mc.stack;
+    m.complexity_expr = mc.complexity_expr;
+    m.complexity_vars = mc.complexity_vars;
+    m.complexity_partial_pre = mc.partial_pre;
+    m.complexity_partial_post = mc.partial_post;
+    m.complexity_total_pre = mc.total_pre;
+    m.complexity_total_post = mc.total_post;
+}
+
+// ---------------------------------------------------------------------------
+//  @complexity(...): parseo compartido.
+//
+//  Extraido del bucle de anotaciones top-level para que lo usen TAMBIEN los
+//  metodos de struct/clase: es el mismo contrato sobre lo mismo, y duplicar 100
+//  lineas de troceado de texto para decir eso seria pedir que se separen.
+//  Se entra con el token de `complexity` ya consumido (el siguiente debe ser
+//  '('), y se sale tras el ')' de cierre.
+// ---------------------------------------------------------------------------
+void Parser::parse_complexity_args_(std::string &top_complexity_expr,
+                                    std::vector<std::string> &top_complexity_vars,
+                                    std::string &top_complexity_partial_pre,
+                                    std::string &top_complexity_partial_post,
+                                    std::string &top_complexity_total_pre,
+                                    std::string &top_complexity_total_post) {
+                if (current_.kind != TokenKind::LPAREN) {
+                    error_here("@complexity requiere '(O(...))'");
+                } else {
+                    (void)consume(); // '('
+                    const std::string &csrc = lex_.source_buffer();
+                    const uint32_t cstart = current_.loc.offset;
+                    uint32_t cend = cstart;
+                    int pdepth = 1;
+                    while (current_.kind != TokenKind::END_OF_FILE) {
+                        if (current_.kind == TokenKind::LPAREN) {
+                            ++pdepth;
+                        } else if (current_.kind == TokenKind::RPAREN) {
+                            if (--pdepth == 0) {
+                                cend = current_.loc.offset;
+                                (void)consume(); // ')' de cierre
+                                break;
+                            }
+                        }
+                        (void)consume();
+                    }
+                    if (pdepth != 0) {
+                        error_here("se esperaba ')' al cerrar @complexity(...)");
+                    } else if (cstart <= csrc.size() && cend >= cstart &&
+                               cend <= csrc.size()) {
+                        std::string raw = csrc.substr(cstart, cend - cstart);
+                        auto trim = [](std::string s) {
+                            size_t a = s.find_first_not_of(" \t\r\n");
+                            size_t b = s.find_last_not_of(" \t\r\n");
+                            if (a == std::string::npos) return std::string();
+                            return s.substr(a, b - a + 1);
+                        };
+                        // Partir TODO el contenido por comas de NIVEL SUPERIOR
+                        // (las comas dentro de O(...) -- p.ej. O(n, m) -- no
+                        // cuentan).  Cada segmento es uno de:
+                        //   - "dimension: O(...)" -> contrato por dimension
+                        //     (partial_pre/partial_post/total_pre/total_post);
+                        //   - "var = <expr>"      -> binding de tamano de input;
+                        //   - "O(...)" posicional -> azucar de total_post (1ra).
+                        std::vector<std::string> segs;
+                        {
+                            int d = 0;
+                            size_t seg = 0;
+                            for (size_t k = 0; k <= raw.size(); ++k) {
+                                char c = (k < raw.size()) ? raw[k] : ',';
+                                if (c == '(')
+                                    ++d;
+                                else if (c == ')')
+                                    --d;
+                                else if (c == ',' && d == 0) {
+                                    std::string s = trim(raw.substr(seg, k - seg));
+                                    if (!s.empty()) segs.push_back(s);
+                                    seg = k + 1;
+                                }
+                            }
+                        }
+                        // Helper: localizar el ':' de nivel superior (separador
+                        // del nombre de dimension), ignorando los ':' que
+                        // pudieran aparecer dentro de O(...).
+                        auto top_colon = [](const std::string &s) -> size_t {
+                            int d = 0;
+                            for (size_t k = 0; k < s.size(); ++k) {
+                                char c = s[k];
+                                if (c == '(')
+                                    ++d;
+                                else if (c == ')')
+                                    --d;
+                                else if (c == ':' && d == 0)
+                                    return k;
+                            }
+                            return std::string::npos;
+                        };
+                        bool got_positional = false;
+                        for (const std::string &s : segs) {
+                            size_t col = top_colon(s);
+                            if (col != std::string::npos) {
+                                // Campo nombrado "dimension: O(...)".
+                                std::string key = trim(s.substr(0, col));
+                                std::string val = trim(s.substr(col + 1));
+                                if (key == "partial_pre")
+                                    top_complexity_partial_pre = val;
+                                else if (key == "partial_post")
+                                    top_complexity_partial_post = val;
+                                else if (key == "total_pre")
+                                    top_complexity_total_pre = val;
+                                else if (key == "total_post")
+                                    top_complexity_total_post = val;
+                                else
+                                    error_here(
+                                        ("@complexity: dimension desconocida "
+                                         "'" + key + "' (usar partial_pre, "
+                                         "partial_post, total_pre o "
+                                         "total_post)")
+                                            .c_str());
+                                continue;
+                            }
+                            // Sin ':' -> binding "var = ..." o expr posicional.
+                            if (s.find('=') != std::string::npos) {
+                                top_complexity_vars.push_back(s);
+                            } else if (!got_positional) {
+                                // Primera expr posicional = azucar de total_post.
+                                top_complexity_expr = s;
+                                got_positional = true;
+                            } else {
+                                error_here(
+                                    "@complexity: expresion posicional "
+                                    "duplicada (solo se admite una; usa los "
+                                    "campos nombrados para las 4 dimensiones)");
+                            }
+                        }
+                    }
+                }
+}
+
 std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // namespace foo { ... }  (Phase M.7.c, inline namespace estilo C++).
     if (current_.kind == TokenKind::KW_NAMESPACE) {
@@ -1133,117 +1333,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             // bindings `var = ...` despues).  Metadata pura: el codegen la
             // ignora.  Tolerante a errores: si falta '(' se omite sin abortar.
             if (is_complexity) {
-                if (current_.kind != TokenKind::LPAREN) {
-                    error_here("@complexity requiere '(O(...))'");
-                } else {
-                    (void)consume(); // '('
-                    const std::string &csrc = lex_.source_buffer();
-                    const uint32_t cstart = current_.loc.offset;
-                    uint32_t cend = cstart;
-                    int pdepth = 1;
-                    while (current_.kind != TokenKind::END_OF_FILE) {
-                        if (current_.kind == TokenKind::LPAREN) {
-                            ++pdepth;
-                        } else if (current_.kind == TokenKind::RPAREN) {
-                            if (--pdepth == 0) {
-                                cend = current_.loc.offset;
-                                (void)consume(); // ')' de cierre
-                                break;
-                            }
-                        }
-                        (void)consume();
-                    }
-                    if (pdepth != 0) {
-                        error_here("se esperaba ')' al cerrar @complexity(...)");
-                    } else if (cstart <= csrc.size() && cend >= cstart &&
-                               cend <= csrc.size()) {
-                        std::string raw = csrc.substr(cstart, cend - cstart);
-                        auto trim = [](std::string s) {
-                            size_t a = s.find_first_not_of(" \t\r\n");
-                            size_t b = s.find_last_not_of(" \t\r\n");
-                            if (a == std::string::npos) return std::string();
-                            return s.substr(a, b - a + 1);
-                        };
-                        // Partir TODO el contenido por comas de NIVEL SUPERIOR
-                        // (las comas dentro de O(...) -- p.ej. O(n, m) -- no
-                        // cuentan).  Cada segmento es uno de:
-                        //   - "dimension: O(...)" -> contrato por dimension
-                        //     (partial_pre/partial_post/total_pre/total_post);
-                        //   - "var = <expr>"      -> binding de tamano de input;
-                        //   - "O(...)" posicional -> azucar de total_post (1ra).
-                        std::vector<std::string> segs;
-                        {
-                            int d = 0;
-                            size_t seg = 0;
-                            for (size_t k = 0; k <= raw.size(); ++k) {
-                                char c = (k < raw.size()) ? raw[k] : ',';
-                                if (c == '(')
-                                    ++d;
-                                else if (c == ')')
-                                    --d;
-                                else if (c == ',' && d == 0) {
-                                    std::string s = trim(raw.substr(seg, k - seg));
-                                    if (!s.empty()) segs.push_back(s);
-                                    seg = k + 1;
-                                }
-                            }
-                        }
-                        // Helper: localizar el ':' de nivel superior (separador
-                        // del nombre de dimension), ignorando los ':' que
-                        // pudieran aparecer dentro de O(...).
-                        auto top_colon = [](const std::string &s) -> size_t {
-                            int d = 0;
-                            for (size_t k = 0; k < s.size(); ++k) {
-                                char c = s[k];
-                                if (c == '(')
-                                    ++d;
-                                else if (c == ')')
-                                    --d;
-                                else if (c == ':' && d == 0)
-                                    return k;
-                            }
-                            return std::string::npos;
-                        };
-                        bool got_positional = false;
-                        for (const std::string &s : segs) {
-                            size_t col = top_colon(s);
-                            if (col != std::string::npos) {
-                                // Campo nombrado "dimension: O(...)".
-                                std::string key = trim(s.substr(0, col));
-                                std::string val = trim(s.substr(col + 1));
-                                if (key == "partial_pre")
-                                    top_complexity_partial_pre = val;
-                                else if (key == "partial_post")
-                                    top_complexity_partial_post = val;
-                                else if (key == "total_pre")
-                                    top_complexity_total_pre = val;
-                                else if (key == "total_post")
-                                    top_complexity_total_post = val;
-                                else
-                                    error_here(
-                                        ("@complexity: dimension desconocida "
-                                         "'" + key + "' (usar partial_pre, "
-                                         "partial_post, total_pre o "
-                                         "total_post)")
-                                            .c_str());
-                                continue;
-                            }
-                            // Sin ':' -> binding "var = ..." o expr posicional.
-                            if (s.find('=') != std::string::npos) {
-                                top_complexity_vars.push_back(s);
-                            } else if (!got_positional) {
-                                // Primera expr posicional = azucar de total_post.
-                                top_complexity_expr = s;
-                                got_positional = true;
-                            } else {
-                                error_here(
-                                    "@complexity: expresion posicional "
-                                    "duplicada (solo se admite una; usa los "
-                                    "campos nombrados para las 4 dimensiones)");
-                            }
-                        }
-                    }
-                }
+                parse_complexity_args_(top_complexity_expr, top_complexity_vars,
+                                       top_complexity_partial_pre,
+                                       top_complexity_partial_post,
+                                       top_complexity_total_pre,
+                                       top_complexity_total_post);
                 continue;
             }
             if (is_hot) {
@@ -4474,6 +4568,18 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
 
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
+        // Contratos de huella declarados sobre el metodo, antes del acceso:
+        //
+        //     @pure @nothrow @nopanic @alloc(0) @stack(0) @complexity(O(1))
+        //     public i64 leer() { ... }
+        //
+        // Un metodo hace lo mismo que una funcion libre con un argumento mas.
+        // Sin esto, un tipo cuya API son METODOS no podia declarar sus
+        // propiedades aunque el compilador supiera verificarlas -- y una
+        // libreria estandar que no declara los contratos que el lenguaje ofrece
+        // esta diciendo lo contrario de lo que hace.
+        MemberContracts mc;
+        parse_member_contracts_(mc);
         // Modificadores de acceso opcionales en el miembro.  Los
         // structs son flat: aceptamos public/private (informativo;
         // sin enforcement por ahora) pero NO static/final/virtual.
@@ -4647,6 +4753,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             const auto temp_aliases = register_temp_type_aliases(all_tp);
             m->body = parse_method_body(/*is_void=*/false);
             unregister_temp_type_aliases(temp_aliases);
+            apply_member_contracts_(mc, *m);
             s->methods.push_back(std::move(m));
             continue;
         }
