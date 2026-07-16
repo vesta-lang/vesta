@@ -8485,6 +8485,61 @@ static bool numeric_const_fits_newtype(const Type &param, const Type &arg,
     }
 }
 
+/**
+ * @brief Mapea un operador binario a su metodo de sobrecarga canonico.
+ * @return cadena vacia si el operador no tiene metodo asociado.
+ *
+ * `==`/`!=` se manejan aparte (`__ne__` se deriva negando `__eq__`).
+ *
+ * `&&` y `||` NO tienen metodo propio a proposito: sobrecargarlos (como deja
+ * C++) mata el CORTOCIRCUITO -- `a && b` evaluaria `b` siempre.  Se sobrecarga
+ * `__bool__` y ellos lo usan, igual que `!x` y que `if (x)`: el cortocircuito
+ * se conserva y un solo metodo cubre los cuatro sitios.
+ */
+static const char *binop_dunder_name(ast::BinOp op) {
+    switch (op) {
+    case ast::BinOp::Add: return "__add__";
+    case ast::BinOp::Sub: return "__sub__";
+    case ast::BinOp::Mul: return "__mul__";
+    case ast::BinOp::Div: return "__div__";
+    case ast::BinOp::Mod: return "__mod__";
+    case ast::BinOp::Lt: return "__lt__";
+    case ast::BinOp::Gt: return "__gt__";
+    case ast::BinOp::Le: return "__le__";
+    case ast::BinOp::Ge: return "__ge__";
+    // Bitwise y shifts (nombres de Python).
+    case ast::BinOp::BitAnd: return "__and__";
+    case ast::BinOp::BitOr: return "__or__";
+    case ast::BinOp::BitXor: return "__xor__";
+    case ast::BinOp::Shl: return "__lshift__";
+    case ast::BinOp::Shr: return "__rshift__";
+    default: return "";
+    }
+}
+
+/**
+ * @brief Texto del operador tal y como se escribe, para los diagnosticos.
+ */
+static const char *binop_spelling(ast::BinOp op) {
+    switch (op) {
+    case ast::BinOp::Add: return "+";
+    case ast::BinOp::Sub: return "-";
+    case ast::BinOp::Mul: return "*";
+    case ast::BinOp::Div: return "/";
+    case ast::BinOp::Mod: return "%";
+    case ast::BinOp::Lt: return "<";
+    case ast::BinOp::Gt: return ">";
+    case ast::BinOp::Le: return "<=";
+    case ast::BinOp::Ge: return ">=";
+    case ast::BinOp::BitAnd: return "&";
+    case ast::BinOp::BitOr: return "|";
+    case ast::BinOp::BitXor: return "^";
+    case ast::BinOp::Shl: return "<<";
+    case ast::BinOp::Shr: return ">>";
+    default: return "?";
+    }
+}
+
 Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     const Type tl = check_expr(e->lhs.get());
     const Type tr = check_expr(e->rhs.get());
@@ -8524,35 +8579,7 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     // para tipos que no sobrecargan).  El dispatch del lowering es
     // generico: CALLVIRT para CLASS, CALL directo para STRUCT.
     {
-        // Mapea el operador binario a su nombre dunder canonico.  Cadena
-        // vacia = operador sin dunder asociado (logicos, bitwise, shifts).
-        auto binop_dunder = [](ast::BinOp op) -> const char * {
-            switch (op) {
-            case ast::BinOp::Add: return "__add__";
-            case ast::BinOp::Sub: return "__sub__";
-            case ast::BinOp::Mul: return "__mul__";
-            case ast::BinOp::Div: return "__div__";
-            case ast::BinOp::Mod: return "__mod__";
-            case ast::BinOp::Lt: return "__lt__";
-            case ast::BinOp::Gt: return "__gt__";
-            case ast::BinOp::Le: return "__le__";
-            case ast::BinOp::Ge: return "__ge__";
-            // Bitwise y shifts (nombres de Python).
-            case ast::BinOp::BitAnd: return "__and__";
-            case ast::BinOp::BitOr: return "__or__";
-            case ast::BinOp::BitXor: return "__xor__";
-            case ast::BinOp::Shl: return "__lshift__";
-            case ast::BinOp::Shr: return "__rshift__";
-            // `==`/`!=` se manejan aparte (derivacion __ne__ via __eq__).
-            //
-            // `&&` y `||` NO tienen dunder propio a proposito: sobrecargarlos
-            // (como deja C++) mata el CORTOCIRCUITO -- `a && b` evaluaria `b`
-            // siempre.  Se sobrecarga `__bool__` y ellos lo usan, igual que
-            // `!x` y que `if (x)`: el cortocircuito se conserva y un solo
-            // metodo cubre los cuatro sitios.
-            default: return "";
-            }
-        };
+        const auto &binop_dunder = binop_dunder_name;
         // Localiza un metodo dunder por nombre en una lista de metodos
         // (CLASS o STRUCT): no-constructor, no-static, unario (1 param)
         // cuya firma acepte @c tr.  Devuelve nullptr si no hay match.
@@ -8704,6 +8731,23 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
         // char_as_u8(), reusando promote_arith y la maquinaria entera.
         const bool lhs_char = (tl.kind == PrimitiveKind::CHAR);
         const bool rhs_char = (tr.kind == PrimitiveKind::CHAR);
+        // Si el operando es un tipo que PODRIA sobrecargar el operador pero no
+        // lo declara, decirlo nombrando el metodo que falta -- "operandos no
+        // numericos" no orienta a nadie.  Caso tipico: un tipo atomico declara
+        // `__iadd__` (un solo paso indivisible) y a proposito NO `__add__`, asi
+        // que `g = g + 1` -- que en C++ compila y es una carrera -- aqui no
+        // compila, y el mensaje dice por donde salir.
+        const char *dn = binop_dunder_name(e->op);
+        for (const Type *t : {&tl, &tr}) {
+            if (t->kind != PrimitiveKind::CLASS && t->kind != PrimitiveKind::STRUCT)
+                continue;
+            if (dn[0] == '\0') break;
+            diags_.error(e->loc,
+                         "el tipo '" + type_to_string(*t) +
+                             "' no declara el operador '" + binop_spelling(e->op) +
+                             "' (le falta el metodo '" + dn + "')");
+            return Type{};
+        }
         if (!is_char_or_integral(tl.kind) && !is_floating(tl.kind)) {
             diags_.error(e->loc,
                          "operandos no numericos en operacion aritmetica");
