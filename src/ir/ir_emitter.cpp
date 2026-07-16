@@ -156,6 +156,22 @@ struct EmitCtx {
         return vid != IR_NO_VALUE && alloc.reg_map.count(vid) > 0;
     }
 
+    /// @brief Carga un valor DERRAMADO en un registro concreto @p dst_reg.
+    ///
+    /// Como @ref load_src pero sin usar los scratch de siempre: hace falta
+    /// cuando una instruccion tiene mas operandos que scratch disponibles (el
+    /// CAS atomico tiene tres).  Usa r13 para calcular la direccion, asi que
+    /// debe llamarse ANTES que los `load_src` cuyo resultado viva en r13.
+    void emit_load_spilled_into(IrValueId vid, const std::string &dst_reg) {
+        auto it = alloc.spill_map.find(vid);
+        if (it == alloc.spill_map.end()) return; // no derramado: nada que hacer
+        out << "    mov r13, rbp\n";
+        out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
+        out << "    mov " << dst_reg << ", [r13]\n";
+        r13_cache = -1;
+        if (dst_reg == "r14") r14_cache = -1;
+    }
+
     // Numero de registro de un valor (SCRATCH_REG si derramado)
     int reg_num(IrValueId vid) const {
         auto it = alloc.reg_map.find(vid);
@@ -4555,32 +4571,62 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
 
     // --- atomics i64 (Phase Z) ---
+    //
+    // Los operandos se piden con `load_src`, NO con `reg_of`: `reg_of` devuelve
+    // el registro asignado, y si el valor esta DERRAMADO devuelve el scratch --
+    // sin cargarlo.  Emitia `atomiccas r0, r8, r14, r3` con r14 conteniendo lo
+    // que hubiera (aqui, una direccion de spill), asi que el CAS comparaba
+    // contra basura, fallaba y devolvia el valor viejo... y el llamante, que
+    // compara ese viejo con SU `expected`, concluia que habia triunfado.  Una
+    // escritura atomica perdida que ademas reportaba exito.  Solo se veia con
+    // suficiente presion de registros para que algo se derramara.
     case IrOp::ATOMIC_LD_I64:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
-            ctx.out << "    atomicld " << ctx.dst_of(ins.dst) << ", "
-                    << ctx.reg_of(ins.operands[0]) << "\n";
+            const std::string a = ctx.load_src(ins.operands[0], 0);
+            ctx.out << "    atomicld " << ctx.dst_of(ins.dst) << ", " << a
+                    << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;
     case IrOp::ATOMIC_ST_I64:
-        if (ins.operands.size() >= 2)
-            ctx.out << "    atomicst " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+        if (ins.operands.size() >= 2) {
+            const std::string a = ctx.load_src(ins.operands[0], 0);
+            const std::string v = ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    atomicst " << a << ", " << v << "\n";
+        }
         break;
     case IrOp::ATOMIC_CAS_I64:
         if (ins.dst != IR_NO_VALUE && ins.operands.size() >= 3) {
-            ctx.out << "    atomiccas " << ctx.dst_of(ins.dst) << ", "
-                    << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << ", "
-                    << ctx.reg_of(ins.operands[2]) << "\n";
+            // Tres operandos y solo dos scratch (r14/r13).  Se cargan los dos
+            // primeros con los scratch de siempre; el tercero, si hace falta,
+            // usa el registro del DST -- que aun no se ha escrito (la
+            // instruccion lo produce), asi que esta libre.  Si el dst tambien
+            // esta derramado, `dst_of` da el scratch y no habria tercer sitio:
+            // ese caso no lo cubre el mapeo de 2 scratch y se emite tal cual
+            // (el regalloc no lo produce hoy: el dst de un CAS es el resultado
+            // que se usa justo despues, asi que siempre tiene registro).
+            // El tercero PRIMERO: `emit_load_spilled_into` usa r13 para la
+            // direccion, y r13 es donde acaba el segundo `load_src`.
+            std::string d;
+            if (ctx.is_in_reg(ins.operands[2])) {
+                d = ctx.reg_of(ins.operands[2]);
+            } else {
+                d = ctx.dst_of(ins.dst);
+                ctx.emit_load_spilled_into(ins.operands[2], d);
+            }
+            const std::string a = ctx.load_src(ins.operands[0], 0);
+            const std::string e = ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    atomiccas " << ctx.dst_of(ins.dst) << ", " << a
+                    << ", " << e << ", " << d << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;
     case IrOp::ATOMIC_ADD_I64:
         if (ins.dst != IR_NO_VALUE && ins.operands.size() >= 2) {
-            ctx.out << "    atomicadd " << ctx.dst_of(ins.dst) << ", "
-                    << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            const std::string a = ctx.load_src(ins.operands[0], 0);
+            const std::string d = ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    atomicadd " << ctx.dst_of(ins.dst) << ", " << a
+                    << ", " << d << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;
