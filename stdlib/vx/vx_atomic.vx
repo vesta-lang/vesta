@@ -29,15 +29,23 @@
  *   vx_cpu_relax                            -- hint de spin (pause / yield)
  *
  * @par Contratos declarados (los verifica el compilador; `vm --analyze`)
- * Todas declaran `@nothrow @nopanic @alloc(0)`: no lanzan, no hacen panic y no
+ * Todas declaran `@nothrow @nopanic @alloc(partial: 0, total: 0)`: no lanzan, no hacen panic y no
  * alocan.  Son las propiedades que las hacen usables desde donde no hay heap ni
  * runtime (freestanding, un ISR, el interior de un allocator, un spinlock).
  *
- * El `@stack` difiere por ARQUITECTURA: en x86-64 son builtins puros (frame 0);
- * en arm64 los `register()` + el asm ldaxr/stlxr gastan pila, asi que declaran
- * su frame real con `@stack(N, when: arch:arm64)` (medido por --analyze).  Las
- * compuestas arch-independientes (sub/or/and/xor) tienen un solo cuerpo cuyo
- * frame difiere por lo que llaman, y lo declaran con `when:` en la misma fn.
+ * El `@stack` tiene DOS dimensiones: PARCIAL (marco propio de la funcion) y
+ * TOTAL (parcial + la cadena de llamadas mas honda).  Las TRES primitivas de
+ * asm (cas/add/swap) tienen DOS cuerpos por `@Target`: el de x86-64 son
+ * builtins puros (`@stack(partial: 0, total: 0)`), el de arm64 gasta pila por
+ * los `register()` + el asm ldaxr/stlxr (`@stack(partial: 24, total: 24)` /
+ * `@stack(partial: 32, total: 32)`) -- frame INCONDICIONAL (solo se compila el
+ * de su arch).  Las compuestas (sub/or/and/xor) y los metodos wrapper del
+ * struct tienen PARCIAL 0 (su cuerpo solo llama) pero TOTAL per-arch: en x86-64
+ * la primitiva no gasta pila (`total 0`), en arm64 heredan el marco de la
+ * primitiva de asm que alcanzan (`total 24` si llegan a add/swap64, `total 32`
+ * si a cas64).  Todo MEDIDO por --analyze: el parcial es el cuerpo propio (sin
+ * contar el inline) y el total lo compone el call-graph -- para una primitiva
+ * de asm (marco opaco al IR) usa su @stack declarado.
  *
  * NINGUNA declara `@pure`, y es a proposito: un atomico LEE o MUTA memoria
  * compartida, que es justo su razon de ser.  El verificador lo confirma
@@ -69,8 +77,8 @@
 @Target("arch:x86_64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
@@ -81,8 +89,8 @@ public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
 @Target("arch:x86_64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_add64(i64* addr, i64 delta) {
@@ -95,8 +103,8 @@ public i64 vx_atomic_add64(i64* addr, i64 delta) {
 @Target("arch:x86_64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public i64 vx_atomic_swap64(i64* addr, i64 v) {
@@ -111,8 +119,8 @@ public i64 vx_atomic_swap64(i64* addr, i64 v) {
 @Target("arch:x86_64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_load64(i64* addr) {
@@ -123,8 +131,8 @@ public i64 vx_atomic_load64(i64* addr) {
 @Target("arch:x86_64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_atomic_store64(i64* addr, i64 v) {
@@ -135,8 +143,8 @@ public void vx_atomic_store64(i64* addr, i64 v) {
 @Target("arch:x86_64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_atomic_fence() {
@@ -147,8 +155,8 @@ public void vx_atomic_fence() {
 @Target("arch:x86_64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_cpu_relax() {
@@ -167,10 +175,10 @@ public void vx_cpu_relax() {
 @Target("arch:arm64")
 @nothrow
 @nopanic
-@alloc(0)
+@alloc(partial: 0, total: 0)
 // Frame propio: los register("x0".."x3") + el asm ldaxr/stlxr gastan pila que
 // la variante x86-64 (builtins puros) no.  Medido por --analyze en arm64.
-@stack(32)
+@stack(partial: 32, total: 32)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
@@ -194,8 +202,8 @@ public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
 @Target("arch:arm64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(24) // los register + asm gastan frame que la variante x86-64 no
+@alloc(partial: 0, total: 0)
+@stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_add64(i64* addr, i64 delta) {
@@ -217,8 +225,8 @@ public i64 vx_atomic_add64(i64* addr, i64 delta) {
 @Target("arch:arm64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(24) // los register + asm gastan frame que la variante x86-64 no
+@alloc(partial: 0, total: 0)
+@stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_swap64(i64* addr, i64 v) {
@@ -237,8 +245,8 @@ public i64 vx_atomic_swap64(i64* addr, i64 v) {
 @Target("arch:arm64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_load64(i64* addr) {
@@ -247,8 +255,8 @@ public i64 vx_atomic_load64(i64* addr) {
 @Target("arch:arm64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_atomic_store64(i64* addr, i64 v) {
@@ -257,8 +265,8 @@ public void vx_atomic_store64(i64* addr, i64 v) {
 @Target("arch:arm64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_atomic_fence() {
@@ -267,8 +275,8 @@ public void vx_atomic_fence() {
 @Target("arch:arm64")
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_cpu_relax() {
@@ -284,9 +292,8 @@ public void vx_cpu_relax() {
 /// arm64: register+asm), asi que su frame propio tambien -> `when:`.
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0,  when: arch:x86_64)
-@stack(24, when: arch:arm64)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_atomic_sub64(i64* addr, i64 delta) {
@@ -297,9 +304,8 @@ public i64 vx_atomic_sub64(i64* addr, i64 delta) {
 /// REINTENTOS: sin contencion el CAS triunfa a la primera (O(1) amortizado).
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0,  when: arch:x86_64)
-@stack(32, when: arch:arm64) // el CAS arm64 (register+asm) gasta mas frame
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public i64 vx_atomic_or64(i64* addr, i64 mask) {
@@ -316,9 +322,8 @@ public i64 vx_atomic_or64(i64* addr, i64 mask) {
 /// REINTENTOS: sin contencion el CAS triunfa a la primera (O(1) amortizado).
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0,  when: arch:x86_64)
-@stack(32, when: arch:arm64) // el CAS arm64 (register+asm) gasta mas frame
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public i64 vx_atomic_and64(i64* addr, i64 mask) {
@@ -337,9 +342,8 @@ public i64 vx_atomic_and64(i64* addr, i64 mask) {
 /// contencion el CAS triunfa a la primera (O(1) amortizado).
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0,  when: arch:x86_64)
-@stack(32, when: arch:arm64) // el CAS arm64 (register+asm) gasta mas frame
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public i64 vx_atomic_xor64(i64* addr, i64 mask) {
@@ -362,8 +366,8 @@ public i64 vx_atomic_xor64(i64* addr, i64 mask) {
 /// entrada.  Sin competencia entra a la primera (O(1) amortizado).
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public void vx_spin_lock(i64* lock) {
@@ -375,8 +379,8 @@ public void vx_spin_lock(i64* lock) {
 /// Libera el spinlock (`*lock = 0`, release).
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_spin_unlock(i64* lock) {
@@ -386,8 +390,8 @@ public void vx_spin_unlock(i64* lock) {
 /// Intenta tomar el spinlock sin bloquear.  1 = tomado, 0 = estaba ocupado.
 @nothrow
 @nopanic
-@alloc(0)
-@stack(0)
+@alloc(partial: 0, total: 0)
+@stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_spin_trylock(i64* lock) {
@@ -494,8 +498,8 @@ struct atomic<T: AtomicBuiltin> {
     /// `*g` -- load atomico (acquire en x86-TSO).
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(partial: 0, total: 0)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T __deref__() {
@@ -506,8 +510,8 @@ struct atomic<T: AtomicBuiltin> {
     /// `g = v` -- store atomico (release en x86-TSO).
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(partial: 0, total: 0)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T __assign__(T v) {
@@ -540,10 +544,10 @@ struct atomic<T: AtomicBuiltin> {
     /// CAS) 32B -- se declara cada uno, no el maximo, para no perder el dato.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(24, when: arch:arm64 && is_integer<T>())
-    @stack(32, when: arch:arm64 && is_float<T>())
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+    @stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(n), partial_post: O(n),
@@ -568,10 +572,10 @@ struct atomic<T: AtomicBuiltin> {
     /// Resta @p d y devuelve el valor ANTERIOR.  Ver @ref fetch_add.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(24, when: arch:arm64 && is_integer<T>())
-    @stack(32, when: arch:arm64 && is_float<T>())
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+    @stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(n), partial_post: O(n),
@@ -601,8 +605,9 @@ struct atomic<T: AtomicBuiltin> {
     /// reintentos.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
     public T fetch_or(T mask) {
@@ -614,8 +619,9 @@ struct atomic<T: AtomicBuiltin> {
     /// `&= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n).
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
     public T fetch_and(T mask) {
@@ -628,8 +634,9 @@ struct atomic<T: AtomicBuiltin> {
     /// toggles.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
     public T fetch_xor(T mask) {
@@ -652,8 +659,10 @@ struct atomic<T: AtomicBuiltin> {
     /// llama).
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+    @stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
@@ -663,8 +672,10 @@ struct atomic<T: AtomicBuiltin> {
     /// `g -= d` / `g = g - d` / `g--`.  Devuelve el valor NUEVO.  Ver __iadd__.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+    @stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
@@ -675,8 +686,9 @@ struct atomic<T: AtomicBuiltin> {
     /// primitiva: cuerpo O(1) (una llamada), total O(n) (reintentos).
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
     public T __ior__(T m) {
@@ -686,8 +698,9 @@ struct atomic<T: AtomicBuiltin> {
     /// `g &= m` / `g = g & m`.  Devuelve el valor NUEVO.  Ver __ior__.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
     public T __iand__(T m) {
@@ -697,8 +710,9 @@ struct atomic<T: AtomicBuiltin> {
     /// `g ^= m` / `g = g ^ m`.  Devuelve el valor NUEVO.  Ver __ior__.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
     public T __ixor__(T m) {
@@ -715,9 +729,9 @@ struct atomic<T: AtomicBuiltin> {
     /// (multiplicar, saturar, maximo, ...): bucle hasta triunfar.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(32, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T compare_swap(T expected, T desired) {
@@ -734,9 +748,9 @@ struct atomic<T: AtomicBuiltin> {
     /// con el LL/SC nativo, que es una operacion y ya.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(24, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 24, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n), when: arch:x86_64)
     @complexity(partial_pre: O(1), partial_post: O(1),
@@ -751,9 +765,9 @@ struct atomic<T: AtomicBuiltin> {
     /// cada sitio.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(32, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public bool compare_exchange(T expected, T desired) {
@@ -774,8 +788,8 @@ struct atomic<T: AtomicBuiltin> {
     /// Load atomico.  Igual que `*g`.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(partial: 0, total: 0)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T load() { return this.__deref__(); }
@@ -783,8 +797,8 @@ struct atomic<T: AtomicBuiltin> {
     /// Store atomico.  Igual que `g = v`.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0)
+    @alloc(partial: 0, total: 0)
+    @stack(partial: 0, total: 0)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T store(T v) { return this.__assign__(v); }
@@ -795,9 +809,9 @@ struct atomic<T: AtomicBuiltin> {
     /// LL/SC O(1)).
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(24, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 24, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n), when: arch:x86_64)
     @complexity(partial_pre: O(1), partial_post: O(1),
@@ -813,9 +827,9 @@ struct atomic<T: AtomicBuiltin> {
     /// esta en el propio cuerpo -> O(n) tambien en la parte parcial.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(32, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n))
     public T fetch_max(T v) {
@@ -830,9 +844,9 @@ struct atomic<T: AtomicBuiltin> {
     /// Deja el minimo entre el valor actual y @p v; devuelve el ANTERIOR.
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(32, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n))
     public T fetch_min(T v) {
@@ -869,9 +883,9 @@ struct atomic<T: AtomicBuiltin> {
     ///     }
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(32, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n))
     public T fetch_update(fn(T) -> T f) {
@@ -891,9 +905,9 @@ struct atomic<T: AtomicBuiltin> {
     /// recalcularlo fuera.  Mismas condiciones sobre @p f (pura y barata).
     @nothrow
     @nopanic
-    @alloc(0)
-    @stack(0,  when: arch:x86_64)
-    @stack(32, when: arch:arm64)
+    @alloc(partial: 0, total: 0)
+    @stack(0, when: arch:x86_64)
+    @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n))
     public T update(fn(T) -> T f) {
