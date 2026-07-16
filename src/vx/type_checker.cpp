@@ -6226,9 +6226,12 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
     if (!vd->reg_binding.empty()) {
         const std::string canon = asm_canonical_reg(vd->reg_binding);
         if (canon.empty()) {
-            diags_.error(vd->loc, "register(\"" + vd->reg_binding + "\"): '" +
-                                      vd->reg_binding +
-                                      "' no es un registro x86-64 reconocido");
+            diags_.error(vd->loc,
+                         "register(\"" + vd->reg_binding + "\"): '" +
+                             vd->reg_binding +
+                             "' no es un registro reconocido (x86-64: rax..r15,"
+                             " xmm/ymm/zmm; AArch64: x0..x30, w0..w30, sp, lr,"
+                             " fp, xzr, v/b/h/s/d/q 0..31)");
         } else {
             const PrimitiveKind k = s.type.kind;
             const bool ok_prim = is_numeric(k) || k == PrimitiveKind::BOOL ||

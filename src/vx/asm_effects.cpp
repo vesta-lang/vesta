@@ -19,6 +19,7 @@
  */
 
 #include "vx/asm_effects.h"
+#include "vx/parser.h" // get_aot_condcomp_target: el arch del TARGET, no del host
 
 #include <algorithm>
 #include <cctype>
@@ -109,11 +110,26 @@ std::string asm_normalize_numbers(const std::string &body) {
     return out;
 }
 
-std::string asm_canonical_reg(const std::string &raw) {
-    std::string r;
-    r.reserve(raw.size());
-    for (char c : raw)
-        r.push_back((char)std::tolower((unsigned char)c));
+// ---------------------------------------------------------------------------
+//  Canonicalizacion de registros: UNA por arquitectura.
+//
+//  Cada arquitectura tiene sus nombres y sus reglas de alias, y no se parecen
+//  en nada: mezclarlas en una sola funcion hace que anadir la tercera sea un
+//  suplicio y que los nombres de una se cuelen en otra (`x0` no existe en x86,
+//  `rax` no existe en ARM, y aceptar el ajeno es un error que hay que dar, no
+//  tragarse).  Aqui cada una tiene su funcion, y @ref kArchRegs las asocia con
+//  el valor de `arch:` del target.  Anadir RISC-V es anadir su funcion y su
+//  fila; no se toca nada de lo demas.
+//
+//  El criterio comun -- lo unico que comparten -- es que los alias de ANCHO
+//  colapsan al registro FISICO: `eax`->`rax` y `w3`->`x3` son la misma idea.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Registros de x86-64.  Canonico: el nombre de 64 bits (`rax`, `r10`) y `vN`
+/// para el banco vectorial (xmm/ymm/zmm N son la misma pista).
+std::string canon_x86_64(const std::string &r) {
     // Registros de proposito general: cada entrada lista todos los alias
     // de ancho que mapean al mismo fisico de 64 bits.
     struct GpEntry {
@@ -166,6 +182,91 @@ std::string asm_canonical_reg(const std::string &raw) {
             }
         }
     }
+    return std::string();
+}
+
+/// Todos los digitos y no vacio.
+bool solo_digitos(const std::string &s) {
+    if (s.empty()) return false;
+    for (char c : s)
+        if (!std::isdigit((unsigned char)c)) return false;
+    return true;
+}
+
+/// Registros de AArch64.  Canonico: el nombre de 64 bits (`x3`) y `vN` para el
+/// banco SIMD/FP.  Nada que ver con los de x86: aqui `w3` es la mitad baja de
+/// `x3` (como `eax` de `rax`) y `b0`/`h0`/`s0`/`d0`/`q0`/`v0` son la misma
+/// pista SIMD vista con distinto ancho.
+std::string canon_arm64(const std::string &r) {
+    if (r == "xzr" || r == "wzr") return "xzr";              // registro cero
+    if (r == "sp" || r == "wsp") return "sp";                // stack pointer
+    if (r == "lr" || r == "x30" || r == "w30") return "x30"; // link register
+    if (r == "fp" || r == "x29" || r == "w29") return "x29"; // frame pointer
+
+    // x0..x30 / w0..w30 -> xN.
+    if (r.size() >= 2 && (r[0] == 'x' || r[0] == 'w')) {
+        const std::string num = r.substr(1);
+        if (solo_digitos(num)) {
+            const int n = std::atoi(num.c_str());
+            if (n >= 0 && n <= 30) return "x" + num;
+        }
+    }
+    // Banco SIMD/FP: b/h/s/d/q/v N (0..31) -> vN.  Se admite la forma con lane
+    // (`v0.4s`), que nombra al mismo fisico.
+    if (r.size() >= 2 && (r[0] == 'b' || r[0] == 'h' || r[0] == 's' ||
+                          r[0] == 'd' || r[0] == 'q' || r[0] == 'v')) {
+        std::string num = r.substr(1);
+        const size_t punto = num.find('.');
+        if (punto != std::string::npos) num = num.substr(0, punto);
+        if (solo_digitos(num)) {
+            const int n = std::atoi(num.c_str());
+            if (n >= 0 && n <= 31) return "v" + num;
+        }
+    }
+    return std::string();
+}
+
+/// Que canonicalizador usa cada valor de `arch:`.  Anadir una arquitectura es
+/// anadir su funcion y su fila aqui.
+struct ArchRegs {
+    const char *arch;
+    std::string (*canon)(const std::string &);
+};
+const ArchRegs kArchRegs[] = {
+    {"x86_64", &canon_x86_64},
+    {"x86", &canon_x86_64}, // mismo banco (los de 64 bits sobran, y el
+                            // ensamblador ya los rechaza por su cuenta)
+    {"arm64", &canon_arm64},
+};
+
+/// La arquitectura del host, para cuando no hay override de target.
+const char *arch_host() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#else
+    return "x86_64";
+#endif
+}
+
+} // namespace
+
+std::string asm_canonical_reg(const std::string &raw) {
+    std::string r;
+    r.reserve(raw.size());
+    for (char c : raw)
+        r.push_back((char)std::tolower((unsigned char)c));
+
+    // Se despacha por el TARGET, no por el host: una variante
+    // @Target("arch:arm64") se compila con los registros de ARM aunque el build
+    // corra en x86.  Sin esto, `register("x0")` era "registro no reconocido" y
+    // las variantes arm64 no habian compilado nunca.
+    std::string os, arch;
+    get_aot_condcomp_target(os, arch);
+    if (arch.empty()) arch = arch_host();
+    for (const auto &a : kArchRegs)
+        if (arch == a.arch) return a.canon(r);
     return std::string();
 }
 
