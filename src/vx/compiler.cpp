@@ -1020,8 +1020,23 @@ CompileResult compile_vx_source(const std::string &source,
          * lo emite el lowering) antes de tocar nada.  Captura la complejidad
          * algoritmica del fuente; el analyzer la contrasta con la POST-opt. */
         if (opts.emit_ir_preopt) {
+            // Plegar las ramas comptime-constantes (const fold + unreachable,
+            // SIN inline): `is_float<T>()` es una CONSTANTE para cada
+            // instanciacion, asi que la rama muerta del template no es parte
+            // del cuerpo de esa instanciacion.  Resolucion de la
+            // monomorphizacion, no optimizacion.  (Igual que la ruta de
+            // proyecto.)
+            ir::IrModule irmod_pre = irmod;
+            for (auto &fn : irmod_pre.functions) {
+                bool changed = true;
+                while (changed) {
+                    changed = false;
+                    if (ir::ir_pass_const_fold(fn)) changed = true;
+                    if (ir::ir_pass_unreachable(fn)) changed = true;
+                }
+            }
             res.ir_module_cache_bytes_preopt =
-                ir::emit_ir_module_cache(irmod);
+                ir::emit_ir_module_cache(irmod_pre);
         }
         // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack): recoger
         // del AST + guardarlos en el resultado (para --analyze) + VERIFICAR
@@ -1075,7 +1090,12 @@ CompileResult compile_vx_source(const std::string &source,
             }
         }
         ir::IrModule irmod_for_section = irmod;
-        ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level));
+        // En modo --analyze (emit_ir_preopt) se optimiza SIN inline: el coste
+        // PARCIAL es propiedad del cuerpo escrito, no del optimizador.  El
+        // coste TOTAL lo compone el analizador via el callgraph.  Fuera de
+        // --analyze, inline normal (no se genera .velb en --analyze).
+        ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
+                        /*allow_inline=*/!opts.emit_ir_preopt);
         res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);
         /* Phase AOT: modulo completo (functions + static_data + globals) para
          * que el driver -m aot materialice los literales en .rodata. */

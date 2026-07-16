@@ -2585,8 +2585,35 @@ CompileResult compile_vx_project(
         }
     }
 
-    // 5. Optimizar el IR mergeado.
-    ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level));
+    // Modo --analyze: capturar el IR PRE-optimizacion para que el analizador
+    // contraste la complejidad del FUENTE con la del codigo final.  Sin esto la
+    // ruta de proyecto (con imports) reportaba "PRE-opt: no disponible".
+    //
+    // Se pliegan las ramas comptime-constantes (const fold + unreachable, SIN
+    // inline): `is_float<T>()` es una CONSTANTE para cada instanciacion, asi
+    // que la rama muerta del template (el bucle CAS que solo toca el caso
+    // float) no es parte del cuerpo de `fetch_add<i64>` -- su algoritmo real es
+    // O(1).  Es resolucion de la monomorfizacion, no optimizacion.  NO se
+    // inlinea: el parcial es propiedad del cuerpo escrito.
+    if (opts.emit_ir_preopt) {
+        for (auto &fn : merged.functions) {
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                if (ir::ir_pass_const_fold(fn)) changed = true;
+                if (ir::ir_pass_unreachable(fn)) changed = true;
+            }
+        }
+        res.ir_module_cache_bytes_preopt = ir::emit_ir_module_cache(merged);
+    }
+
+    // 5. Optimizar el IR mergeado.  En modo --analyze SIN inline: el coste
+    //    PARCIAL es propiedad del cuerpo escrito -- si el inline lo alterase,
+    //    dependeria del optimizador (`return this.swap(v)` es parcial O(1), no
+    //    O(n) por el bucle de swap inyectado).  El coste TOTAL lo compone el
+    //    analizador via el callgraph.  Fuera de --analyze, inline normal.
+    ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
+                    /*allow_inline=*/!opts.emit_ir_preopt);
 
     // 6. Emitir .vel desde el IR mergeado.
     ir::EmitOptions emit_opts;

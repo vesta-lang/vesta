@@ -105,8 +105,15 @@ inline OptLevel opt_level_from_int(int n) {
  *
  * @param mod   Modulo IR a optimizar (modificado en su lugar).
  * @param level Nivel de optimizacion.
+ * @param allow_inline @c false para NO expandir llamadas (inline).  Lo usa el
+ *        modo --analyze: el coste PARCIAL es una propiedad del CUERPO ESCRITO
+ *        por el programador, estable entre compilaciones; si el inline lo
+ *        modificase, dependeria de decisiones del optimizador (-O0 vs -O3
+ *        darian partiales distintos).  El coste interprocedural (TOTAL) lo
+ *        compone el analizador via el callgraph, no via inline.  Default @c
+ *        true: JIT/AOT/interp inlinan normalmente.
  */
-void ir_optimize(IrModule &mod, OptLevel level);
+void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true);
 
 // =========================================================================
 //  Pases individuales (se pueden invocar directamente si se desea)

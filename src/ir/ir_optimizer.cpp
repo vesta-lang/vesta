@@ -9528,13 +9528,20 @@ bool ir_pass_inline_closures(IrModule &mod) {
 //  Punto de entrada principal
 // =========================================================================
 
-void ir_optimize(IrModule &mod, OptLevel level) {
+void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level == OptLevel::O0) return; // sin optimizacion
 
     /* Phase D.7.opt: inline a nivel modulo ANTES del fix-point loop.
      * Despues del inline, los passes per-function se re-aplican sobre
-     * el codigo expandido. */
-    if (level >= OptLevel::O1) {
+     * el codigo expandido.
+     *
+     * `allow_inline=false` lo usa el modo --analyze: el coste PARCIAL de una
+     * funcion es su cuerpo PROPIO, sin los callees ni el codigo que estos
+     * meterian al inlinear (`return this.swap(v)` es parcial O(1), no O(n) por
+     * el bucle de swap).  Post-inline no se puede distinguir el codigo propio
+     * del inyectado, asi que para analizar se optimiza sin inline; el coste
+     * interprocedural (TOTAL) lo compone el analizador via el callgraph. */
+    if (level >= OptLevel::O1 && allow_inline) {
         ir_pass_inline(mod);
         /* Tras inlinar las factorias, la closure se construye y se invoca
          * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
@@ -9695,7 +9702,7 @@ void ir_optimize(IrModule &mod, OptLevel level) {
                 }
             }
 
-            if (ir_pass_inline(mod)) any = true;
+            if (allow_inline && ir_pass_inline(mod)) any = true;
 
             /* Plegado de `a + b` cuando las dos son literales conocidos.  En el
              * fix-point y DESPUES del inline: asi ve tambien las cadenas que
@@ -9709,7 +9716,7 @@ void ir_optimize(IrModule &mod, OptLevel level) {
              * ramas (`if`, etc.) pequenos.  Junta mas codigo en la misma fn
              * (habilita const-fold/CSE/scalar-replace cross-call de funciones
              * con control de flujo).  Semantica-preservante. */
-            if (ir_pass_inline_multiblock(mod)) any = true;
+            if (allow_inline && ir_pass_inline_multiblock(mod)) any = true;
 
             /* Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
              * Corre DESPUES del inline (que junta el alloc + los field-access
