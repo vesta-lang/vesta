@@ -1718,6 +1718,26 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     error_here("@Target requiere un string literal");
                 }
                 (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @Target");
+                // `mode:jit` / `mode:vm` NO condicionan: el .velb es agnostico
+                // al modo de ejecucion (el mismo binario corre en JIT o
+                // interp, lo decide un flag de runtime).  Antes evaluaban a
+                // false SIEMPRE, con lo que la decl se BORRABA en silencio.
+                // Error explicito en vez del borrado invisible.
+                {
+                    std::vector<std::string> ats;
+                    cwhen::atoms(spec, ats);
+                    for (const auto &a : ats) {
+                        if (a == "mode:jit" || a == "mode:vm") {
+                            error_here(
+                                "@Target: 'mode:jit'/'mode:vm' no condiciona -- "
+                                "el .velb es agnostico al modo de ejecucion (el "
+                                "mismo binario corre en JIT o interp).  Usa "
+                                "'mode:auto' para codigo agnostico o "
+                                "'mode:jit-required' para EXIGIR JIT.");
+                            break;
+                        }
+                    }
+                }
                 if (!target_matches_(spec)) {
                     top_target_skip = true;
                 }
