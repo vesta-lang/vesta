@@ -67,6 +67,49 @@ def _expand_mnems(cell):
     return out, ref
 
 
+# Titulo de seccion SWOG -> categoria de coste.  Una forma solo recibe el coste
+# de una seccion COMPATIBLE con su extension (evita dar coste escalar a una forma
+# SVE, o coste entero a una ASIMD).
+_SECTION_CAT = [
+    (re.compile(r'crypto', re.I), 'CRYPTO'),
+    (re.compile(r'advanced\s*simd|asimd|\bsimd\b|neon', re.I), 'ASIMD'),
+    (re.compile(r'floating', re.I), 'FP'),
+    (re.compile(r'\bsve\b|scalable', re.I), 'SVE'),
+    (re.compile(r'branch', re.I), 'BRANCH'),
+    (re.compile(r'load|store|memory', re.I), 'LOADSTORE'),
+    (re.compile(r'system', re.I), 'SYSTEM'),
+    (re.compile(r'arithmetic|logical|move|shift|multiply|divide|bitfield|'
+                r'conditional|pointer\s*auth|pc-relative|crc|count|miscell|'
+                r'\bdata\b|integer|address', re.I), 'INT'),
+]
+# CATEGORY_MAP explicito: la extension de la forma -> UNICO bucket de coste
+# donde se busca su timing.  Nunca se cruza entre buckets (una forma SVE jamas
+# recibe coste GENERAL; una FLOAT jamas ASIMD).  El bucket GENERAL agrupa las
+# secciones escalares de la SWOG (arithmetic/branch/load-store/system), que son
+# el mismo dominio.  SVE/SVE2/SME/SME2 solo casan su propia seccion: en un core
+# sin SVE (A76/N1) quedan sin coste, como debe ser.
+_EXT_CATS = {
+    'GENERAL': ('INT', 'BRANCH', 'LOADSTORE', 'SYSTEM'),
+    # ADVSIMD y FLOAT comparten el dominio vector/FP: la SWOG de ARM las agrupa
+    # en una sola seccion "Advanced SIMD and Floating-Point" (mismas pipelines
+    # V0/V1).  NO es cruzar entero<->vector; es la realidad del hardware.
+    'ADVSIMD': ('ASIMD', 'FP', 'CRYPTO'),
+    'FLOAT': ('FP', 'ASIMD'),
+    'FPSIMD': ('FP', 'ASIMD'),
+    # SVE/SVE2/SME solo su propia seccion; en un core sin SVE quedan sin coste.
+    'SVE': ('SVE',), 'SVE2': ('SVE2', 'SVE'),
+    'SME': ('SME',), 'SME2': ('SME2', 'SME'),
+    'SYSTEM': ('SYSTEM',),
+}
+
+
+def _section_cat(title):
+    for rx, cat in _SECTION_CAT:
+        if rx.search(title or ''):
+            return cat
+    return 'INT'
+
+
 def _pipeline_legend(pdf):
     """{simbolo: nombre} de la tabla 'Pipeline name | Symbol'."""
     leg = {}
@@ -83,15 +126,27 @@ def _pipeline_legend(pdf):
     return leg
 
 
+# Encabezado de seccion: "3.4 Titulo" (Neoverse N1) o "3.4. Titulo" (Cortex-A76,
+# con punto final tras el numero) -> el punto es opcional.
+_HEADING = re.compile(r'^\s*\d+(?:\.\d+)+\.?\s+([A-Z][A-Za-z0-9 /,\-]{3,50})', re.M)
+
+
 def _parse_rows(pdf):
-    """list[(group, mnem_cell, latency, tp, pipes[])] de las tablas AArch64."""
+    """list[(cat, group, mnem_cell, latency, tp, pipes[])] de las tablas AArch64.
+
+    @c cat = categoria de la SECCION (INT/ASIMD/FP/SVE/...) para poder emparejar
+    cada forma solo con el coste de una seccion compatible con su extension."""
     rows = []
+    cat = 'INT'
     for page in pdf.pages:
+        heads = _HEADING.findall(page.extract_text() or '')
+        if heads:
+            cat = _section_cat(heads[-1])         # ultima seccion vista en la pagina
         for t in page.extract_tables():
             if not t or not t[0]:
                 continue
             hdr = " ".join((c or "") for c in t[0])
-            if 'AArch64' not in hdr or 'Latency' not in hdr and 'Exec' not in hdr:
+            if 'AArch64' not in hdr or ('Latency' not in hdr and 'Exec' not in hdr):
                 continue
             for row in t[1:]:
                 cells = [(c or "").strip() for c in row]
@@ -105,16 +160,16 @@ def _parse_rows(pdf):
                          if p.strip() and re.match(r'^[A-Z][A-Z0-9]?$', p.strip())]
                 if not group and not mnem_cell:
                     continue
-                rows.append((group, mnem_cell, lat, tp, pipes))
+                rows.append((cat, group, mnem_cell, lat, tp, pipes))
     return rows
 
 
 def build_cost_map(pdf):
-    """(mnemonico -> (latency, recip_tp, pipes[]), port_names[]) de la SWOG."""
+    """((mnemonico, categoria) -> (lat_edges, recip_tp, pslots), port_names[])."""
     rows = _parse_rows(pdf)
     # grupo -> instrucciones (para resolver '(same as X)')
     group_mnems = {}
-    for group, cell, lat, tp, pipes in rows:
+    for cat, group, cell, lat, tp, pipes in rows:
         mnems, _ = _expand_mnems(cell)
         if group:
             group_mnems.setdefault(group.lower(), []).extend(mnems)
@@ -128,7 +183,7 @@ def build_cost_map(pdf):
             port_names.append(sym)
         return port_index[sym]
 
-    for group, cell, lat, tp, pipes in rows:
+    for cat, group, cell, lat, tp, pipes in rows:
         if lat is None and tp is None:
             continue
         mnems, ref = _expand_mnems(cell)
@@ -139,7 +194,7 @@ def build_cost_map(pdf):
         lat_edges = ([ir.LatencyEdge(0, 0, float(lat), ir.LATENCY_RESULT)]
                      if lat is not None else [])
         for mn in mnems:
-            cost.setdefault(mn.upper(), (lat_edges, recip, pslots))
+            cost.setdefault((mn.upper(), cat), (lat_edges, recip, pslots))
     return cost, port_names
 
 
@@ -158,9 +213,26 @@ def main():
     class_key = {}
     form_class = [-1] * (max(forms) + 1)
     mapped = 0
+
+    def lookup(mn, ext):
+        """Coste de un mnemonico solo desde una seccion COMPATIBLE con su ext."""
+        for cat in _EXT_CATS.get(ext, ('INT',)):
+            c = cost.get((mn, cat))
+            if c is not None:
+                return c
+        return None
+
     for fid in sorted(forms):
-        mn = forms[fid]["iclass"].upper()
-        c = cost.get(mn)
+        fm = forms[fid]
+        ext = fm["ext"]
+        # forma -> categoria -> (resolver alias) -> timing. Un alias busca por su
+        # BASE (CINC -> CSINC); jamas cruza a otra categoria.
+        mn = fm["iclass"].upper()
+        if fm["category"].startswith("alias:"):
+            base = fm["category"][6:].split("_")[0].upper()
+            c = lookup(base, ext) or lookup(mn, ext)
+        else:
+            c = lookup(mn, ext)
         if c is None:
             continue
         lat_edges, recip, pslots = c
