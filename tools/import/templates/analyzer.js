@@ -183,13 +183,13 @@
                 }
             }
         }
-        const lastW = {}, finish = [], predOf = [];
+        const lastW = {}, finish = [], predOf = [], predRes = [];
         let critical = 0, endIdx = -1;
         items.forEach((it, i) => {
             if (!it.r) { finish[i] = 0; predOf[i] = -1; it.start = it.finish = 0; return; }
-            let ready = 0, pred = -1;
-            it.res.rd.forEach(s => { const w = lastW[s]; if (w != null && finish[w] >= ready) { ready = finish[w]; pred = w; } });
-            it.start = ready; finish[i] = ready + it.lat; predOf[i] = pred; it.finish = finish[i];
+            let ready = 0, pred = -1, pres = null;
+            it.res.rd.forEach(s => { const w = lastW[s]; if (w != null && finish[w] >= ready) { ready = finish[w]; pred = w; pres = s; } });
+            it.start = ready; finish[i] = ready + it.lat; predOf[i] = pred; predRes[i] = pres; it.finish = finish[i];
             it.res.wr.forEach(s => { lastW[s] = i; });
             if (finish[i] > critical) { critical = finish[i]; endIdx = i; }
         });
@@ -226,21 +226,10 @@
                 '<td class="n mono">' + (t ? (it.lat ? it.lat.toFixed(2) : '<span class="dim">0</span>') : '<span class="dim">sin dato</span>') + '</td>' +
                 '<td class="mono">' + (t ? portsInline(t[5]) : '<span class="dim">&mdash;</span>') + '</td></tr>';
         });
-        const total = Math.max(critical, 1);
-        let tl = '';
-        items.forEach((it, i) => {
-            if (!it.r) return;
-            const crit = critSet.has(i);
-            const left = (it.start / total) * 100, w = Math.max((it.lat / total) * 100, 1.2);
-            tl += '<div class="tl-row"><span class="tl-label mono">' + colorInstr(it.p.text) + '</span>' +
-                '<div class="tl-track"><div class="tl-bar' + (crit ? ' crit' : '') +
-                '" style="left:' + left.toFixed(2) + '%;width:' + w.toFixed(2) + '%" data-tip="ciclo ' +
-                it.start.toFixed(0) + ' &rarr; ' + it.finish.toFixed(0) + ' (latencia ' + it.lat.toFixed(2) + ')">' +
-                (it.lat ? it.lat.toFixed(0) : '') + '</div></div></div>';
-        });
-        const timeline = tl ? '<div class="tl"><div class="tl-cap">timeline por dependencias &mdash; ' +
-            'ancho de cada barra = su latencia; en rojo el camino critico (' + critical.toFixed(0) + ' ciclos)</div>' + tl +
-            '<div class="tl-axis"><span>0</span><span>' + critical.toFixed(0) + ' ciclos</span></div></div>' : '';
+        const timeline = renderTimeline(items, critSet, Math.max(critical, 1), null,
+            'timeline por dependencias &mdash; ancho = latencia; rojo = camino critico; iconos: µ microcodigo, L carga, S store, &#9889; rompe dependencia');
+        const chain = renderCritChain({ endIdx, predOf, linkReg: predRes, items });
+        const chainBlock = chain ? '<div class="cc-cap">camino critico (cadena de dependencias; pasa el cursor por una flecha para ver via que registro y cuantos ciclos):</div>' + chain : '';
         const html = rows ?
             '<div class="wrap"><table><thead><tr><th>instruccion</th><th>forma</th><th>iclass</th>' +
             '<th class="n">uops</th><th class="n">recip_tp</th><th class="n">latencia</th><th>puertos</th></tr></thead>' +
@@ -253,9 +242,61 @@
             '<tr' + (tpB ? ' class="est"' : '') + '><td>coste por <b>throughput</b> (puertos, &Sigma; recip_tp)</td><td class="n">' + tp.toFixed(2) + ' ciclos</td></tr>' +
             '<tr' + (ltB ? ' class="est"' : '') + '><td>coste por <b>latencia</b> (camino critico de dependencias)</td><td class="n">' + critical.toFixed(2) + ' ciclos</td></tr>' +
             '<tr class="est"><td>estimacion del bloque = max(front-end, throughput, latencia)</td><td class="n">' + est.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr><td>cuello de botella</td><td>' + bneck + '</td></tr></table></div>' + timeline
+            '<tr><td>cuello de botella</td><td>' + bneck + '</td></tr></table></div>' + timeline + chainBlock
             : '<p class="hint">Sin instrucciones que analizar.</p>';
-        return { html, est, uops: sumU, lat: critical, tp, fe: frontEnd, ok: nOk, miss: nMiss };
+        return {
+            html, est, uops: sumU, lat: critical, tp, fe: frontEnd, ok: nOk, miss: nMiss,
+            items, critSet, critical, predOf, endIdx, linkReg: predRes
+        };
+    }
+
+    // iconos de una instruccion en el timeline (microcodigo, carga, store, rompe dep).
+    function markers(it) {
+        if (!it.r) return '';
+        let m = '';
+        if (it.t && (it.t[2] & 1)) m += '<span class="mk mk-u" data-tip="microcodificada (muchas µops)">µ</span>';
+        if (it.res.rd.has('MEM')) m += '<span class="mk mk-l" data-tip="lee memoria (carga)">L</span>';
+        if (it.res.wr.has('MEM')) m += '<span class="mk mk-s" data-tip="escribe memoria (store)">S</span>';
+        if (it.lat === 0 && it.res.wr.size) m += '<span class="mk mk-b" data-tip="rompe la dependencia (0 ciclos: puesta a cero / eliminacion de movimiento)">&#9889;</span>';
+        return m ? '<span class="mks">' + m + '</span>' : '';
+    }
+    // timeline (barras start->finish a escala `total`); elim = Set de textos eliminados.
+    function renderTimeline(items, critSet, total, elim, cap) {
+        let tl = '';
+        items.forEach((it, i) => {
+            if (!it.r) return;
+            const crit = critSet.has(i), gone = elim && elim.has(it.p.text);
+            const left = (it.start / total) * 100, w = Math.max((it.lat / total) * 100, 1.2);
+            tl += '<div class="tl-row' + (gone ? ' elim' : '') + '">' +
+                '<span class="tl-label mono">' + markers(it) + colorInstr(it.p.text) + '</span>' +
+                '<div class="tl-track"><div class="tl-bar' + (crit ? ' crit' : '') +
+                '" style="left:' + left.toFixed(2) + '%;width:' + w.toFixed(2) + '%" data-tip="ciclo ' +
+                it.start.toFixed(0) + ' &rarr; ' + it.finish.toFixed(0) + ' (latencia ' + it.lat.toFixed(2) + ')">' +
+                (it.lat ? it.lat.toFixed(0) : '') + '</div></div></div>';
+        });
+        if (!tl) return '';
+        return '<div class="tl">' + (cap ? '<div class="tl-cap">' + cap + '</div>' : '') + tl +
+            '<div class="tl-axis"><span>0</span><span>' + total.toFixed(0) + ' ciclos</span></div></div>';
+    }
+    // camino critico como cadena de dependencias con flechas etiquetadas.
+    function renderCritChain(A) {
+        const chain = [];
+        for (let i = A.endIdx; i >= 0; i = A.predOf[i]) chain.unshift(i);
+        if (chain.length < 2) return '';
+        let h = '<div class="cchain">';
+        chain.forEach((i, idx) => {
+            const it = A.items[i];
+            if (idx > 0) {
+                const reg = A.linkReg[i] || '?', prod = A.items[A.predOf[i]];
+                h += '<div class="cc-arrow" data-tip="dependencia via ' + esc(reg) +
+                    ': espera el resultado de la instruccion anterior (' + prod.lat.toFixed(0) + ' ciclos)">' +
+                    '&#8595; <span class="cc-reg">' + esc(reg) + '</span></div>';
+            }
+            h += '<div class="cc-node' + (idx === chain.length - 1 ? ' sink' : '') + '">' +
+                '<span class="mono">' + colorInstr(it.p.text) + '</span>' +
+                '<span class="cc-lat" data-tip="latencia de esta instruccion">' + it.lat.toFixed(0) + ' ciclos</span></div>';
+        });
+        return h + '</div>';
     }
 
     // --- optimizador (peephole + eliminacion de codigo muerto), con liveness ---
@@ -407,6 +448,14 @@
                     (o.to ? ' &rarr; <span class="mono c-mn">' + esc(o.to) + '</span>' : ' &rarr; <span class="dim">(eliminada)</span>')) +
                 '<div class="why">' + esc(o.why) + '</div></li>').join('');
             const d = (x, y) => { const p = x ? ((x - y) / x * 100) : 0; return y < x ? '<span class="better">-' + p.toFixed(0) + '%</span>' : y > x ? '<span class="worse">+' + (-p).toFixed(0) + '%</span>' : '<span class="dim">=</span>'; };
+            // timelines antes/despues a la MISMA escala -> se ve donde se van los ciclos.
+            const total = Math.max(A0.critical, A1.critical, 1);
+            const elim = new Set(opt.log.filter(o => o.to === null && o.from).map(o => o.from));
+            const cmpTl = '<div class="tlcmp">' +
+                '<div class="tlcmp-col"><div class="tlcmp-h">ANTES &mdash; ' + A0.critical.toFixed(0) + ' ciclos <span class="dim">(tachadas = se eliminan)</span></div>' +
+                renderTimeline(A0.items, A0.critSet, total, elim, null) + '</div>' +
+                '<div class="tlcmp-col"><div class="tlcmp-h">DESPUES &mdash; ' + A1.critical.toFixed(0) + ' ciclos ' + d(A0.critical, A1.critical) + '</div>' +
+                renderTimeline(A1.items, A1.critSet, total, null, null) + '</div></div>';
             out += '<h3 class="opt-h">Codigo optimizado</h3>' +
                 '<pre class="codeblock">' + code + '</pre>' +
                 '<div class="opt-log"><b>Optimizaciones aplicadas (' + opt.log.length + ')</b><ul>' + optlist + '</ul></div>' +
@@ -414,6 +463,7 @@
                 '<tr><td>uops</td><td class="n">' + A0.uops + '</td><td class="n">' + A1.uops + '</td><td>' + d(A0.uops, A1.uops) + '</td></tr>' +
                 '<tr><td>latencia (camino critico)</td><td class="n">' + A0.lat.toFixed(2) + '</td><td class="n">' + A1.lat.toFixed(2) + '</td><td>' + d(A0.lat, A1.lat) + '</td></tr>' +
                 '<tr class="est"><td>estimacion del bloque</td><td class="n">' + A0.est.toFixed(2) + '</td><td class="n">' + A1.est.toFixed(2) + '</td><td>' + d(A0.est, A1.est) + '</td></tr></table>' +
+                '<h4 class="opt-h" style="font-size:13px">Antes / despues (misma escala)</h4>' + cmpTl +
                 A1.html;
         } else {
             out += '<div class="opt-log dim">Sin optimizaciones aplicables: el codigo ya es optimo para las reglas del analizador (puesta a cero, reduccion de fuerza, copia a si mismo, codigo muerto).</div>';
