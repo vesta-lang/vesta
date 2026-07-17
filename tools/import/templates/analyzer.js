@@ -160,14 +160,14 @@
         arSel.appendChild(o);
     });
 
-    function run() {
-        const a = +arSel.value || 0;
-        const items = [];
-        for (const line of $('src').value.split('\n')) {
-            const p = parseLine(line);
-            if (p) items.push({ p, r: match(p) });
-        }
-        // pase 1: coste + recursos + presion de puertos.
+    function parseAll(text) {
+        const out = [];
+        for (const line of text.split('\n')) { const p = parseLine(line); if (p) out.push({ p, r: match(p) }); }
+        return out;
+    }
+
+    // Analiza un bloque (lista de items) y devuelve su HTML + metricas.
+    function analyzeBlock(items, a, label) {
         let nOk = 0, nMiss = 0, sumU = 0, tp = 0;
         const portPress = new Map();
         for (const it of items) {
@@ -183,7 +183,6 @@
                 }
             }
         }
-        // pase 2: camino critico (grafo de dependencias reg/flags/memoria).
         const lastW = {}, finish = [], predOf = [];
         let critical = 0, endIdx = -1;
         items.forEach((it, i) => {
@@ -196,10 +195,8 @@
         });
         const critSet = new Set();
         for (let i = endIdx; i >= 0; i = predOf[i]) critSet.add(i);
-        // cotas: front-end (decodificacion/emision), throughput (puertos), latencia.
         const width = window.VESTA_ISSUE_WIDTH[AR[a].name] || 4;
-        const frontEnd = sumU / width;
-        const est = Math.max(frontEnd, tp, critical);
+        const frontEnd = sumU / width, est = Math.max(frontEnd, tp, critical);
         let topPort = '', topVal = 0;
         portPress.forEach((v, k) => { if (v > topVal) { topVal = v; topPort = k; } });
         const feB = est === frontEnd, tpB = est === tp && !feB, ltB = est === critical && !feB && !tpB;
@@ -208,7 +205,6 @@
             : tpB
                 ? 'throughput &mdash; limitan los puertos; grupo mas cargado: <b>' + esc(topPort) + '</b> (' + topVal.toFixed(2) + ' µops)'
                 : 'front-end &mdash; el decodificador/emision (<b>' + width + '</b> µops/ciclo) no da abasto para ' + sumU + ' µops';
-        // filas.
         let rows = '';
         items.forEach((it, i) => {
             const p = it.p, r = it.r;
@@ -230,28 +226,26 @@
                 '<td class="n mono">' + (t ? (it.lat ? it.lat.toFixed(2) : '<span class="dim">0</span>') : '<span class="dim">sin dato</span>') + '</td>' +
                 '<td class="mono">' + (t ? portsInline(t[5]) : '<span class="dim">&mdash;</span>') + '</td></tr>';
         });
-        // timeline: barras start->finish (planificacion por dependencias).
         const total = Math.max(critical, 1);
         let tl = '';
-        for (const it of items) {
-            if (!it.r) continue;
-            const crit = it.finish === it.start + it.lat && critSet.has(items.indexOf(it));
+        items.forEach((it, i) => {
+            if (!it.r) return;
+            const crit = critSet.has(i);
             const left = (it.start / total) * 100, w = Math.max((it.lat / total) * 100, 1.2);
             tl += '<div class="tl-row"><span class="tl-label mono">' + colorInstr(it.p.text) + '</span>' +
                 '<div class="tl-track"><div class="tl-bar' + (crit ? ' crit' : '') +
                 '" style="left:' + left.toFixed(2) + '%;width:' + w.toFixed(2) + '%" data-tip="ciclo ' +
                 it.start.toFixed(0) + ' &rarr; ' + it.finish.toFixed(0) + ' (latencia ' + it.lat.toFixed(2) + ')">' +
                 (it.lat ? it.lat.toFixed(0) : '') + '</div></div></div>';
-        }
+        });
         const timeline = tl ? '<div class="tl"><div class="tl-cap">timeline por dependencias &mdash; ' +
             'ancho de cada barra = su latencia; en rojo el camino critico (' + critical.toFixed(0) + ' ciclos)</div>' + tl +
             '<div class="tl-axis"><span>0</span><span>' + critical.toFixed(0) + ' ciclos</span></div></div>' : '';
-
-        $('res').innerHTML = rows ?
+        const html = rows ?
             '<div class="wrap"><table><thead><tr><th>instruccion</th><th>forma</th><th>iclass</th>' +
             '<th class="n">uops</th><th class="n">recip_tp</th><th class="n">latencia</th><th>puertos</th></tr></thead>' +
             '<tbody>' + rows + '</tbody></table></div>' +
-            '<div class="an-sum"><b>Analisis del bloque (' + esc(AR[a].name) + ')</b> &mdash; ' +
+            '<div class="an-sum"><b>' + (label || 'Analisis del bloque') + ' (' + esc(AR[a].name) + ')</b> &mdash; ' +
             nOk + ' emparejadas' + (nMiss ? ', ' + nMiss + ' sin forma' : '') + '.' +
             '<table class="sumt">' +
             '<tr><td>micro-operaciones (uops)</td><td class="n">' + sumU + '</td></tr>' +
@@ -261,7 +255,171 @@
             '<tr class="est"><td>estimacion del bloque = max(front-end, throughput, latencia)</td><td class="n">' + est.toFixed(2) + ' ciclos</td></tr>' +
             '<tr><td>cuello de botella</td><td>' + bneck + '</td></tr></table></div>' + timeline
             : '<p class="hint">Sin instrucciones que analizar.</p>';
-        $('summary').textContent = nOk + ' emparejadas' + (nMiss ? ' / ' + nMiss + ' sin forma' : '');
+        return { html, est, uops: sumU, lat: critical, tp, fe: frontEnd, ok: nOk, miss: nMiss };
+    }
+
+    // --- optimizador (peephole + eliminacion de codigo muerto), con liveness ---
+    function blockSem(it) {
+        const r = it.r; if (!r) return null;
+        const rmask = parseInt(r[6], 16) || 0, wmask = parseInt(r[7], 16) || 0, mf = r[8];
+        const rd = new Set(), wr = new Set(); let mw = false;
+        it.p.ops.forEach((o, i) => {
+            if (o.kind === 'reg') { if (rmask & (1 << i)) rd.add(canon(o.raw)); if (wmask & (1 << i)) wr.add(canon(o.raw)); }
+            else if (o.kind === 'mem') { (o.addr || []).forEach(x => rd.add(canon(x))); if (rmask & (1 << i)) rd.add('MEM'); if (wmask & (1 << i)) mw = true; }
+        });
+        return { rd, wr, mw, wf: !!(mf & 4), rf: !!(mf & 8), ctrl: /^(J|CALL|RET|LOOP|SYSCALL|INT|UD|HLT)/.test(it.p.mn) };
+    }
+    function regDeadAfter(list, i, R) {   // valor de R muerto tras i? (sobrescrito antes de leerse)
+        for (let j = i + 1; j < list.length; j++) {
+            if (!list[j].r) return false;             // instr desconocida -> conservador (vivo)
+            const s = blockSem(list[j]);
+            if (s.rd.has(R)) return false;            // se lee -> vivo
+            if (s.wr.has(R)) return true;             // se sobrescribe antes de leerse -> muerto
+        }
+        return false;                                 // salida del bloque -> vivo
+    }
+    function flagsDeadAfter(list, i) {
+        for (let j = i + 1; j < list.length; j++) {
+            if (!list[j].r) return false;
+            const s = blockSem(list[j]);
+            if (s.rf) return false;                   // alguien lee flags -> vivas
+            if (s.wf) return true;                    // se sobrescriben -> muertas
+        }
+        return true;                                  // flags muertas al final del bloque
+    }
+    function pow2Log(raw) { const v = Number(raw); return Number.isInteger(v) && v > 1 && (v & (v - 1)) === 0 ? Math.log2(v) : -1; }
+
+    // Dos instrucciones estan EN CONFLICTO (hay que preservar su orden) si
+    // comparten un recurso y al menos una lo escribe (RAW/WAR/WAW en registros,
+    // flags o memoria; memoria de forma conservadora: cualquier par toca-toca).
+    function conflict(a, b) {
+        for (const R of a.wr) if (b.wr.has(R) || b.rd.has(R)) return true;
+        for (const R of b.wr) if (a.rd.has(R)) return true;
+        if ((a.wf && (b.wf || b.rf)) || (b.wf && a.rf)) return true;
+        const am = a.mw || a.rd.has('MEM'), bm = b.mw || b.rd.has('MEM');
+        return am && bm;
+    }
+    // Planificacion (list scheduling) que respeta TODAS las dependencias: da un
+    // orden topologico valido priorizando el camino critico (altura por
+    // latencia).  No cambia la semantica ni las cotas; ayuda a la emision en
+    // orden / a que el decodificador vea trabajo independiente.
+    function listSchedule(seg, a) {
+        const n = seg.length, sem = seg.map(blockSem);
+        const lat = seg.map(it => { const t = cost(it.r, a); return t ? maxLat(t[4]) : 0; });
+        const succ = Array.from({ length: n }, () => []), inDeg = new Array(n).fill(0);
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++)
+            if (conflict(sem[i], sem[j])) { succ[i].push(j); inDeg[j]++; }
+        const height = new Array(n).fill(0);
+        for (let i = n - 1; i >= 0; i--) { let h = 0; for (const s of succ[i]) h = Math.max(h, height[s]); height[i] = lat[i] + h; }
+        const done = new Array(n).fill(false), rem = inDeg.slice(), order = [];
+        for (let k = 0; k < n; k++) {
+            const ready = [];
+            for (let i = 0; i < n; i++) if (!done[i] && rem[i] === 0) ready.push(i);
+            ready.sort((x, y) => height[y] - height[x] || x - y);
+            const pick = ready[0]; done[pick] = true; order.push(seg[pick]);
+            for (const s of succ[pick]) rem[s]--;
+        }
+        return order;
+    }
+    // Reordena por segmentos (los saltos/llamadas/desconocidas son barreras).
+    function scheduleReorder(items, a) {
+        const isBarrier = it => !it.r || blockSem(it).ctrl;
+        const result = []; let seg = [], moved = false;
+        const flush = () => {
+            if (seg.length > 1) { const s = listSchedule(seg, a); if (s.some((x, i) => x !== seg[i])) moved = true; result.push(...s); }
+            else result.push(...seg);
+            seg = [];
+        };
+        for (const it of items) { if (isBarrier(it)) { flush(); result.push(it); } else seg.push(it); }
+        flush();
+        return { order: result, moved };
+    }
+
+    function optimize(items, a, en) {
+        const log = [];
+        const lines = [];
+        items.forEach((it, i) => {
+            const p = it.p, r = it.r;
+            if (!r) { lines.push(p.text); return; }
+            // mov reg, mismo-reg -> no-op
+            if (en.selfcopy && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw)) {
+                log.push({ from: p.text, to: null, rule: 'copia a si mismo', why: 'mueve un registro a si mismo: no hace nada' }); return;
+            }
+            // mov reg, 0 -> xor reg, reg (idioma de puesta a cero)
+            if (en.zero && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'imm' && /^0(x0+)?$/i.test(p.ops[1].raw) && flagsDeadAfter(items, i)) {
+                const R = p.ops[0].raw, to = 'xor ' + R + ', ' + R;
+                log.push({ from: p.text, to, rule: 'idioma de puesta a cero', why: 'xor reg,reg pone a 0 con 0 ciclos de latencia (rompe la dependencia) y suele resolverse en el rename' });
+                lines.push(to); return;
+            }
+            // imul reg, [reg,] 2^k -> shl reg, k (reduccion de fuerza)
+            let k = -1, R = null;
+            if (p.mn === 'IMUL' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'imm') { k = pow2Log(p.ops[1].raw); R = p.ops[0].raw; }
+            else if (p.mn === 'IMUL' && p.ops.length === 3 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw) && p.ops[2].kind === 'imm') { k = pow2Log(p.ops[2].raw); R = p.ops[0].raw; }
+            if (en.strength && k >= 1 && R && flagsDeadAfter(items, i)) {
+                const to = 'shl ' + R + ', ' + k;
+                log.push({ from: p.text, to, rule: 'reduccion de fuerza', why: 'multiplicar por 2^' + k + ' es desplazar ' + k + ' bits: menos latencia y uops que imul' });
+                lines.push(to); return;
+            }
+            lines.push(p.text);
+        });
+        // eliminacion de codigo muerto (sobre el codigo ya reescrito).
+        const it2 = parseAll(lines.join('\n'));
+        const keep = it2.map(() => true);
+        if (en.dce) it2.forEach((it, i) => {
+            if (!it.r) return;
+            const s = blockSem(it);
+            if (s.mw || s.ctrl || s.wr.size === 0) return;   // stores/saltos/comparaciones: se conservan
+            let dead = true; s.wr.forEach(R => { if (!regDeadAfter(it2, i, R)) dead = false; });
+            if (dead && (!s.wf || flagsDeadAfter(it2, i))) {
+                keep[i] = false;
+                log.push({ from: it.p.text, to: null, rule: 'eliminacion de codigo muerto', why: 'su resultado se sobrescribe antes de volver a leerse (y sus flags no se usan)' });
+            }
+        });
+        // fase 3: reordenacion valida para favorecer la ejecucion paralela.
+        const kept = it2.filter((_, i) => keep[i]);
+        const { order, moved } = en.reorder ? scheduleReorder(kept, a) : { order: kept, moved: false };
+        if (moved) log.push({
+            from: null, to: null, rule: 'reordenacion (planificacion)',
+            why: 'se adelantan instrucciones independientes (respetando todas las dependencias reg/flags/memoria) para que el decodificador y la emision tengan trabajo paralelo mientras avanza una cadena de dependencias; no cambia el resultado'
+        });
+        return { items: order, log };
+    }
+
+    function run() {
+        const a = +arSel.value || 0;
+        const items = parseAll($('src').value);
+        if (!items.length) { $('res').innerHTML = '<p class="hint">Sin instrucciones que analizar.</p>'; $('summary').textContent = ''; return; }
+        const A0 = analyzeBlock(items, a, 'Analisis del bloque');
+        const en = {
+            zero: $('opt-zero').checked, strength: $('opt-strength').checked,
+            selfcopy: $('opt-selfcopy').checked, dce: $('opt-dce').checked,
+            reorder: $('opt-reorder').checked,
+        };
+        const opt = optimize(items, a, en);
+        let out = A0.html;
+        if (opt.log.length) {
+            const A1 = analyzeBlock(opt.items, a, 'Analisis del bloque optimizado');
+            const code = opt.items.map(x => hlLine(x.p.text)).join('\n');
+            const optlist = opt.log.map(o =>
+                '<li><span class="badge">' + esc(o.rule) + '</span> ' +
+                (o.from == null ? '' :
+                    '<span class="mono">' + esc(o.from) + '</span>' +
+                    (o.to ? ' &rarr; <span class="mono c-mn">' + esc(o.to) + '</span>' : ' &rarr; <span class="dim">(eliminada)</span>')) +
+                '<div class="why">' + esc(o.why) + '</div></li>').join('');
+            const d = (x, y) => { const p = x ? ((x - y) / x * 100) : 0; return y < x ? '<span class="better">-' + p.toFixed(0) + '%</span>' : y > x ? '<span class="worse">+' + (-p).toFixed(0) + '%</span>' : '<span class="dim">=</span>'; };
+            out += '<h3 class="opt-h">Codigo optimizado</h3>' +
+                '<pre class="codeblock">' + code + '</pre>' +
+                '<div class="opt-log"><b>Optimizaciones aplicadas (' + opt.log.length + ')</b><ul>' + optlist + '</ul></div>' +
+                '<table class="sumt cmp"><tr><th></th><th>original</th><th>optimizado</th><th></th></tr>' +
+                '<tr><td>uops</td><td class="n">' + A0.uops + '</td><td class="n">' + A1.uops + '</td><td>' + d(A0.uops, A1.uops) + '</td></tr>' +
+                '<tr><td>latencia (camino critico)</td><td class="n">' + A0.lat.toFixed(2) + '</td><td class="n">' + A1.lat.toFixed(2) + '</td><td>' + d(A0.lat, A1.lat) + '</td></tr>' +
+                '<tr class="est"><td>estimacion del bloque</td><td class="n">' + A0.est.toFixed(2) + '</td><td class="n">' + A1.est.toFixed(2) + '</td><td>' + d(A0.est, A1.est) + '</td></tr></table>' +
+                A1.html;
+        } else {
+            out += '<div class="opt-log dim">Sin optimizaciones aplicables: el codigo ya es optimo para las reglas del analizador (puesta a cero, reduccion de fuerza, copia a si mismo, codigo muerto).</div>';
+        }
+        $('res').innerHTML = out;
+        $('summary').textContent = A0.ok + ' emparejadas' + (A0.miss ? ' / ' + A0.miss + ' sin forma' : '');
     }
 
     // --- resaltado de sintaxis del editor (overlay <pre> tras el <textarea>) ---
@@ -294,6 +452,7 @@
 
     $('run').onclick = run;
     arSel.onchange = run;
+    document.querySelectorAll('.opts input[type=checkbox]').forEach(c => c.addEventListener('change', run));
     $('src').addEventListener('input', syncHl);
     $('src').addEventListener('scroll', syncScroll);
     $('src').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });

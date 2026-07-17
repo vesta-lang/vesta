@@ -618,3 +618,22 @@ details.skey>div {
 .tl-bar.crit { background: var(--wr) }
 .tl-axis { display: flex; justify-content: space-between; color: var(--mut); font-size: 11px; margin-top: 4px;
     padding-left: 210px }
+
+/* bloque de codigo optimizado */
+.opt-h { margin: 22px 0 8px; font-size: 15px; font-weight: 650 }
+.codeblock { margin: 0 0 12px; padding: 12px; background: var(--code); border: 1px solid var(--line);
+    border-radius: 9px; font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre; overflow: auto }
+.opt-log { margin: 8px 0 12px }
+.opt-log ul { margin: 8px 0; padding-left: 0; list-style: none }
+.opt-log li { padding: 7px 0; border-bottom: 1px solid var(--line) }
+.opt-log .why { color: var(--mut); font-size: 12.5px; margin-top: 3px }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 11.5px;
+    background: var(--chip); color: var(--chipf); margin-right: 6px; font-weight: 600 }
+.sumt.cmp th { background: var(--head); text-align: right; padding: 5px 12px; border: 1px solid var(--line) }
+.sumt.cmp th:first-child { text-align: left }
+.better { color: var(--rd); font-weight: 700 }
+.worse { color: var(--wr); font-weight: 700 }
+
+.an .row.opts { gap: 14px; font-size: 12.5px }
+.an .row.opts .opts-lbl { color: var(--mut) }
+.an .row.opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--fg) }

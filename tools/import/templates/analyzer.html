@@ -38,38 +38,56 @@
             <p>Del bloque completo se calculan las dos cotas que gobiernan el
                 tiempo de ejecucion en la microarquitectura elegida:</p>
             <dl>
+                <dt>front-end</dt>
+                <dd>&Sigma; uops &divide; el ancho de decodificacion/emision de la
+                    microarquitectura: los ciclos si limitara el reparto de µops
+                    al motor de ejecucion (superescalar).</dd>
                 <dt>throughput</dt>
                 <dd>&Sigma; del throughput reciproco de cada instruccion: los ciclos
-                    si el bloque estuviera limitado por los puertos de ejecucion
-                    (instrucciones independientes, encauzadas).</dd>
+                    si limitaran los puertos de ejecucion (instrucciones
+                    independientes, encauzadas en paralelo).</dd>
                 <dt>latencia (camino critico)</dt>
                 <dd>se construye el grafo de <b>dependencias</b> reales entre
                     instrucciones (registros &mdash; con sus alias de ancho &mdash;,
                     flags y memoria) y se recorre el camino mas largo: los ciclos si
-                    el bloque estuviera limitado por las cadenas de dependencia.</dd>
+                    limitaran las cadenas de dependencia.</dd>
             </dl>
-            <p>La <b>estimacion</b> del bloque es el mayor de los dos, y se indica
-                cual es el <b>cuello de botella</b>. La eliminacion de movimientos
-                (<span class="k">mov</span> registro-registro a 0 ciclos) y las
-                latencias por camino operando&rarr;operando se tienen en cuenta.</p>
+            <p>La <b>estimacion</b> del bloque es el mayor de las tres, y se indica
+                el <b>cuello de botella</b>. La eliminacion de movimientos
+                (<span class="k">mov</span> registro-registro a 0 ciclos) se tiene en
+                cuenta.</p>
+            <p>Debajo, el <b>codigo optimizado</b>: aplica peephole (puesta a cero
+                <span class="k">mov r,0</span>&rarr;<span class="k">xor r,r</span>,
+                reduccion de fuerza <span class="k">imul r,2^k</span>&rarr;<span
+                    class="k">shl r,k</span>, copia a si mismo), eliminacion de
+                codigo muerto y <b>reordenacion</b> valida (respeta todas las
+                dependencias) para favorecer la ejecucion paralela; muestra que
+                aplico, por que, y el mismo analisis para comparar.</p>
         </div>
     </details>
 
     <div class="an">
         <div class="editor">
             <pre id="hl" class="hl" aria-hidden="true"></pre>
-            <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off">mov rax, rbx
-add rax, 10
-imul rax, rcx
-xor eax, eax
-inc rdx
-cmp rax, rdx
-mov qword ptr [rax], rcx</textarea>
+            <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off">mov rax, 0
+imul rbx, rbx, 4
+mov rcx, rax
+mov rcx, rbx
+mov rdx, rdx
+add rax, rcx</textarea>
         </div>
         <div class="row">
             <button class="go" id="run">Analizar</button>
             <label>microarq. <select id="ar"></select></label>
             <span class="hint" id="summary"></span>
+        </div>
+        <div class="row opts">
+            <span class="opts-lbl">Optimizaciones:</span>
+            <label><input type="checkbox" id="opt-zero" checked> puesta a cero</label>
+            <label><input type="checkbox" id="opt-strength" checked> reduccion de fuerza</label>
+            <label><input type="checkbox" id="opt-selfcopy" checked> copia a si mismo</label>
+            <label><input type="checkbox" id="opt-dce" checked> codigo muerto</label>
+            <label><input type="checkbox" id="opt-reorder" checked> reordenacion</label>
         </div>
         <div class="res" id="res"></div>
     </div>
