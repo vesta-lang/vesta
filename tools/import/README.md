@@ -30,8 +30,9 @@ Cada modulo tiene una unica responsabilidad:
 | `optimize.py`                | **Transforma**: asigna el `FormID`, normaliza los puertos y deduplica el coste en clases de scheduling. |
 | `serialize.py`               | **Escribe**: emite los ficheros de la base de datos.  Fase pura, sin logica. |
 | `build_database.py`          | **Orquesta**: encadena importar -> optimizar -> serializar y valida el overlay. |
-| `database.py`                | Lector unico de `.vxisa`/`.vxarch` (usado por `dump_db.py`, tests y verificadores). |
-| `dump_db.py`                 | Inspeccion legible de la base de datos generada. |
+| `database.py`                | Lector unico de `.vxisa`/`.vxarch` (usado por `dump_db.py`, `dump_html.py`, tests y verificadores). |
+| `dump_db.py`                 | Inspeccion legible (texto) de la base de datos generada. |
+| `dump_html.py`               | Volcado visual: HTML autocontenido con tabla, busqueda, filtro y paginacion. |
 | `overlay_x86_semantics.def`  | Semantica manual que la fuente no codifica (serializante, barrera, atomica, ...). |
 
 Anadir una fuente nueva (guias de ARM, modelos de LLVM) es escribir otro
@@ -58,7 +59,8 @@ modulos de libreria que esos dos importan y **no se ejecutan sueltos**.
 | Fichero               | Ejecutable | Como se usa |
 | :-------------------- | :--------: | :---------- |
 | `build_database.py`   | **Si**     | Genera la base de datos (ver abajo). |
-| `dump_db.py`          | **Si**     | Inspecciona la base de datos ya generada. |
+| `dump_db.py`          | **Si**     | Inspecciona la base de datos (texto). |
+| `dump_html.py`        | **Si**     | Genera el volcado visual (HTML autocontenido). |
 | `ir.py`               | No         | Modulo de libreria (el IR).  Se importa. |
 | `uops_info.py`        | No         | Modulo de libreria (el importador). |
 | `optimize.py`         | No         | Modulo de libreria (la transformacion). |
