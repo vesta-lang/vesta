@@ -275,20 +275,29 @@ std::string asm_canonical_reg(const std::string &raw) {
 // registros van en forma canonica.  Construida una vez (lazy) en un
 // unordered_map; el lookup es compile-time (no hot path runtime).
 // -----------------------------------------------------------------------
-AsmEffects asm_effects_for(const std::string &mnemonic) {
-    static const std::unordered_map<std::string, AsmEffects> table = [] {
-        std::unordered_map<std::string, AsmEffects> t;
+namespace {
+
+/// Tipo de una tabla de efectos por-mnemonico (en forma canonica-minuscula).
+using EffTable = std::unordered_map<std::string, AsmEffects>;
+
+/// Tabla de efectos x86 (16/32/64 comparten mnemonicos; el efecto de @c add /
+/// @c mov / @c cmp no cambia con el ancho).  Lazy-init, se construye una vez.
+const EffTable &x86_effects_table() {
+    static const EffTable table = [] {
+        EffTable t;
         auto add = [&t](const char *m, AsmEffects e) {
             e.known = true;
             t[m] = std::move(e);
         };
-        // Helpers de construccion.
-        auto E = [](std::initializer_list<const char *> wr, bool wfo, bool mem,
-                    bool flags, bool call = false) {
+        // Helpers de construccion.  wmask = bitmask de operandos escritos
+        // (bit0=op1, bit1=op2, ...); un `true`/`false` viejo cuenta como 0x1/0x0
+        // (escribe/no el 1er operando).
+        auto E = [](std::initializer_list<const char *> wr, uint8_t wmask,
+                    bool mem, bool flags, bool call = false) {
             AsmEffects e;
             for (const char *w : wr)
                 e.implicit_write.emplace_back(w);
-            e.writes_first_operand = wfo;
+            e.operand_write_mask = wmask;
             e.touches_mem = mem;
             e.touches_flags = flags;
             e.is_call = call;
@@ -332,7 +341,6 @@ AsmEffects asm_effects_for(const std::string &mnemonic) {
         add("ror", E({}, true, false, true));
         add("rcl", E({}, true, false, true));
         add("rcr", E({}, true, false, true));
-        add("imul2", E({}, true, false, true)); // alias interno; no real
         add("popcnt", E({}, true, false, true));
         add("lzcnt", E({}, true, false, true));
         add("tzcnt", E({}, true, false, true));
@@ -345,12 +353,11 @@ AsmEffects asm_effects_for(const std::string &mnemonic) {
         add("movsx", E({}, true, false, false));
         add("movsxd", E({}, true, false, false));
         add("lea", E({}, true, false, false));
-        add("xchg",
-            E({}, true, false, false)); // escribe ambos (conservador: 1er op)
+        add("xchg", E({}, 0x3, false, false)); // escribe AMBOS operandos
         // --- Atomicas RMW x86 (siempre con prefijo lock salvo xchg): tocan
         //     memoria + flags; cmpxchg compara/escribe rax.  cmpxchg16b usa
         //     rdx:rax (esperado) y rcx:rbx (deseado) -> DWCAS lock-free real. ---
-        add("cmpxchg", E({"rax"}, false, true, true));  // rax = old si falla
+        add("cmpxchg", E({"rax"}, 0x1, true, true)); // dest(op1) + rax + mem
         add("cmpxchg8b", E({"rax", "rdx"}, false, true, true));
         add("cmpxchg16b", E({"rax", "rdx"}, false, true, true));
         add("xadd", E({}, true, true, true));           // 1er op + mem + flags
@@ -376,28 +383,160 @@ AsmEffects asm_effects_for(const std::string &mnemonic) {
         }
         return t;
     }();
+    return table;
+}
 
+/// Tabla de efectos AArch64 (arm64).  A diferencia de x86, la aritmetica base
+/// NO toca flags (solo las formas con sufijo @c s: @c adds/@c subs/@c ands);
+/// @c cmp/@c cmn/@c tst comparan sin escribir registro.  Las cargas/almacenes
+/// LL/SC (@c ldaxr/@c stlxr...) y las CAS/RMW atomicas (@c cas*/@c ldadd*/
+/// @c swp*) tocan memoria; el modulo de bloque las marca ademas como atomicas.
+const EffTable &arm64_effects_table() {
+    static const EffTable table = [] {
+        EffTable t;
+        auto add = [&t](const char *m, AsmEffects e) {
+            e.known = true;
+            t[m] = std::move(e);
+        };
+        // wr=implicit_write, wmask=bitmask de operandos escritos, mem, flags,
+        // call (un `true`/`false` viejo = 0x1/0x0, escribe/no el 1er operando).
+        auto E = [](std::initializer_list<const char *> wr, uint8_t wmask,
+                    bool mem, bool flags, bool call = false) {
+            AsmEffects e;
+            for (const char *w : wr)
+                e.implicit_write.emplace_back(w);
+            e.operand_write_mask = wmask;
+            e.touches_mem = mem;
+            e.touches_flags = flags;
+            e.is_call = call;
+            return e;
+        };
+        // --- Aritmetica/logica (escriben 1er operando; NO flags salvo `s`) ---
+        for (const char *m : {"add", "sub", "mul", "madd", "msub", "and", "orr",
+                              "eor", "bic", "orn", "eon", "lsl", "lsr", "asr",
+                              "ror", "neg", "mvn", "udiv", "sdiv", "smull",
+                              "umull", "sxtw", "uxtw", "sxth", "uxth", "sxtb",
+                              "uxtb"})
+            add(m, E({}, true, false, false));
+        // Formas que SI actualizan flags (sufijo `s`).
+        for (const char *m : {"adds", "subs", "ands", "bics", "negs"})
+            add(m, E({}, true, false, true));
+        // cmp/cmn/tst: comparan (solo flags, sin escribir registro).
+        add("cmp", E({}, false, false, true));
+        add("cmn", E({}, false, false, true));
+        add("tst", E({}, false, false, true));
+        // --- Movimientos / carga de inmediato / direccion ---
+        for (const char *m : {"mov", "movz", "movk", "movn", "adr", "adrp",
+                              "fmov"})
+            add(m, E({}, true, false, false));
+        // --- Seleccion condicional (leen flags, escriben 1er operando) ---
+        for (const char *m : {"csel", "cset", "csetm", "csinc", "csinv",
+                              "csneg", "cinc", "cinv", "cneg", "ccmp", "ccmn"})
+            add(m, E({}, true, false, false));
+        // --- Bit / rev / bitfield (escriben 1er operando) ---
+        for (const char *m : {"clz", "cls", "rbit", "rev", "rev16", "rev32",
+                              "ubfx", "sbfx", "ubfm", "sbfm", "bfi", "bfxil",
+                              "extr"})
+            add(m, E({}, true, false, false));
+        // --- Cargas: escriben 1er operando + memoria ---
+        for (const char *m : {"ldr", "ldrb", "ldrh", "ldrsw", "ldrsb", "ldrsh",
+                              "ldur", "ldp"})
+            add(m, E({}, true, true, false));
+        // --- Almacenes: no escriben registro, tocan memoria ---
+        for (const char *m : {"str", "strb", "strh", "stur", "stp"})
+            add(m, E({}, false, true, false));
+        // --- LL/SC atomicas: load-acquire escribe 1er op; store-cond escribe
+        //     el registro de estado (1er op) -- ambas tocan memoria. ---
+        for (const char *m : {"ldaxr", "ldxr", "ldar", "ldaxrb", "ldxrb",
+                              "ldarb", "ldaxrh", "ldxrh", "ldarh"})
+            add(m, E({}, 0x1, true, false));
+        // ldaxp/ldxp cargan un PAR -> escriben op1 Y op2.
+        for (const char *m : {"ldaxp", "ldxp"})
+            add(m, E({}, 0x3, true, false));
+        for (const char *m : {"stlxr", "stxr", "stlr", "stlxrb", "stxrb",
+                              "stlrb", "stlxrh", "stxrh", "stlrh", "stlxp",
+                              "stxp"})
+            add(m, E({}, 0x1, true, false)); // status en op1
+        // --- CAS / RMW atomicas (armv8.1): escriben el destino + memoria ---
+        for (const char *m : {"cas", "casa", "casl", "casal", "casb", "casab",
+                              "caslb", "casalb", "cash", "casah", "caslh",
+                              "casalh", "swp", "swpa", "swpl", "swpal", "ldadd",
+                              "ldadda", "ldaddl", "ldaddal", "ldset", "ldseta",
+                              "ldsetl", "ldsetal", "ldclr", "ldclra", "ldclrl",
+                              "ldclral", "ldeor", "ldeora", "ldeorl", "ldeoral"})
+            add(m, E({}, 0x1, true, false));
+        // casp* comparan/escriben un PAR de registros (op1 Y op2).
+        for (const char *m : {"casp", "caspa", "caspl", "caspal"})
+            add(m, E({}, 0x3, true, false));
+        // --- Barreras de memoria (efecto de orden; tocan memoria conserv.) ---
+        for (const char *m : {"dmb", "dsb", "isb"})
+            add(m, E({}, false, true, false));
+        // --- Control de flujo ---
+        add("ret", E({}, false, true, false));
+        add("br", E({}, false, false, false));
+        add("blr", E({}, false, true, true)); // llamada indirecta
+        add("bl", E({}, false, true, true));  // llamada directa
+        add("b", E({}, false, false, false));
+        for (const char *m : {"cbz", "cbnz", "tbz", "tbnz"})
+            add(m, E({}, false, false, false));
+        // b.CC (condicionales) -> las reconoce el postfijo de asm_effects_for.
+        // --- No-ops / hint ---
+        for (const char *m : {"nop", "yield", "wfe", "wfi", "sev", "sevl",
+                              "hint"})
+            add(m, E({}, false, false, false));
+        return t;
+    }();
+    return table;
+}
+
+/// @c true si @p arch es una variante x86 (16/32/64 comparten tabla).
+bool es_x86(const std::string &arch) {
+    return arch.rfind("x86", 0) == 0 || arch.empty();
+}
+
+} // namespace
+
+AsmEffects asm_effects_for(const std::string &mnemonic,
+                           const std::string &arch) {
     std::string m;
     m.reserve(mnemonic.size());
     for (char c : mnemonic)
         m.push_back((char)std::tolower((unsigned char)c));
+
+    const bool x86 = es_x86(arch);
+    const EffTable &table = x86 ? x86_effects_table() : arm64_effects_table();
     auto it = table.find(m);
     if (it != table.end()) return it->second;
-    // setcc (sete/setne/...) y cmovcc se reconocen por prefijo.
-    if (m.rfind("set", 0) == 0 && m.size() > 3) {
-        AsmEffects e;
-        e.writes_first_operand = true;
-        e.known = true;
-        return e;
-    }
-    if (m.rfind("cmov", 0) == 0 && m.size() > 4) {
-        AsmEffects e;
-        e.writes_first_operand = true;
-        e.known = true;
-        return e;
+
+    if (x86) {
+        // setcc (sete/setne/...) y cmovcc se reconocen por prefijo: escriben
+        // el 1er operando.
+        if (m.rfind("set", 0) == 0 && m.size() > 3) {
+            AsmEffects e;
+            e.operand_write_mask = 0x1;
+            e.known = true;
+            return e;
+        }
+        if (m.rfind("cmov", 0) == 0 && m.size() > 4) {
+            AsmEffects e;
+            e.operand_write_mask = 0x1;
+            e.known = true;
+            return e;
+        }
+    } else {
+        // arm64: b.CC (b.eq/b.ne/...) es una rama que solo lee flags.
+        if (m.rfind("b.", 0) == 0 && m.size() > 2) {
+            AsmEffects e;
+            e.known = true;
+            return e;
+        }
     }
     AsmEffects unknown; // known=false
     return unknown;
+}
+
+AsmEffects asm_effects_for(const std::string &mnemonic) {
+    return asm_effects_for(mnemonic, "x86_64");
 }
 
 namespace {
@@ -505,9 +644,15 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
         for (const auto &w : eff.implicit_write)
             clob.insert(w);
 
-        // Primer operando escrito (si es un registro).
-        if (eff.writes_first_operand && ti + 1 < toks.size()) {
-            const std::string canon = asm_canonical_reg(toks[ti + 1]);
+        // Operandos escritos segun el bitmask: bit i -> operando i+1 (los
+        // operandos son los tokens tras el mnemonico).  Si el operando es un
+        // registro, es un clobber.  Generaliza el "1er operando" a xchg (ambos),
+        // casp/ldxp (pares), etc.
+        for (int bit = 0; bit < 8; ++bit) {
+            if (!(eff.operand_write_mask & (1u << bit))) continue;
+            const size_t opi = ti + 1 + static_cast<size_t>(bit);
+            if (opi >= toks.size()) break;
+            const std::string canon = asm_canonical_reg(toks[opi]);
             if (!canon.empty()) clob.insert(canon);
         }
 

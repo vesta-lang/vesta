@@ -76,29 +76,59 @@ bool es_rama(const std::string &mnem) {
     return false;
 }
 
-/// Delta de pila EXPLICITO de una instruccion, si es de las que mueven rsp con
-/// un inmediato conocido.  Devuelve el cambio en bytes (positivo = mas marco) y
-/// pone @p ok=false si es una op de rsp con inmediato NO literal (conservador:
-/// el caller lo trata como desconocido para no mentir en el @stack).
-int64_t stack_delta(const std::vector<std::string> &toks, size_t mi, bool &ok) {
+/// @c true si @p mnem es una atomica de arm64 (LL/SC o CAS/RMW/swap): base para
+/// @c has_atomic.  Se reconoce por prefijo para cubrir todas las variantes de
+/// orden/ancho (ldaxr/ldaxrb/..., cas/casa/casal/..., ldadd*/ldset*/swp*).
+bool es_atomica_arm(const std::string &mnem) {
+    static const char *pref[] = {"ldaxr", "ldxr",  "ldar", "stlxr", "stxr",
+                                 "stlr",  "ldaxp", "ldxp", "stlxp", "stxp",
+                                 "cas",   "swp",   "ldadd", "ldset", "ldclr",
+                                 "ldeor"};
+    for (const char *p : pref)
+        if (mnem.rfind(p, 0) == 0) return true;
+    return false;
+}
+
+/// Ancho (bytes) del slot de pila de un @c push/@c pop segun el arch x86.
+int stack_word_x86(const std::string &arch) {
+    if (arch == "x86_16") return 2;
+    if (arch == "x86") return 4; // x86-32
+    return 8;                     // x86_64
+}
+
+/// Delta de pila EXPLICITO de una instruccion, en bytes (positivo = mas marco).
+/// x86: @c push/@c pop (ancho por arch) y @c sub/@c add sobre @c rsp/@c esp/
+/// @c sp; arm64: @c sub/@c add sobre @c sp.  Pone @p ok=false si mueve el
+/// puntero de pila con un inmediato NO literal (conservador: no acotable).
+int64_t stack_delta(const std::vector<std::string> &toks, size_t mi,
+                    const std::string &arch, bool &ok) {
     ok = true;
     const std::string m = lower(toks[mi]);
-    // push/pop: 8 bytes en x86-64.
-    if (m == "push") return 8;
-    if (m == "pop") return -8;
-    // sub/add rsp, <imm>  ->  reserva/libera marco.
+    const bool x86 = (arch.rfind("x86", 0) == 0 || arch.empty());
+    if (x86) {
+        const int w = stack_word_x86(arch);
+        if (m == "push") return w;
+        if (m == "pop") return -w;
+    }
+    // sub/add <sp>, <imm> (x86: rsp/esp/sp; arm64: `sub sp, sp, #imm`).
     if ((m == "sub" || m == "add") && mi + 2 < toks.size()) {
-        if (lower(toks[mi + 1]) == "rsp") {
-            const std::string &imm = toks[mi + 2];
-            // Aceptar solo inmediato literal (dec/hex).  Cualquier otra cosa
-            // (registro, expresion) -> no acotable aqui.
+        const std::string dst = lower(toks[mi + 1]);
+        const bool is_sp =
+            (dst == "rsp" || dst == "esp" || dst == "sp");
+        if (is_sp) {
+            // arm64: `sub sp, sp, #imm` -> el inmediato es el 3er operando y
+            // lleva '#'.  x86: `sub rsp, imm` -> 2o operando.
+            std::string imm = (!x86 && mi + 3 < toks.size())
+                                   ? toks[mi + 3]
+                                   : toks[mi + 2];
+            if (!imm.empty() && imm[0] == '#') imm = imm.substr(1);
             char *end = nullptr;
             const long v = std::strtol(imm.c_str(), &end, 0);
             if (end != imm.c_str() && *end == '\0') {
                 const int64_t d = static_cast<int64_t>(v);
                 return (m == "sub") ? d : -d;
             }
-            ok = false; // rsp += <no-literal>
+            ok = false; // sp movido con algo no literal.
             return 0;
         }
     }
@@ -108,7 +138,7 @@ int64_t stack_delta(const std::vector<std::string> &toks, size_t mi, bool &ok) {
 } // namespace
 
 AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
-                                  const std::string & /*arch*/) {
+                                  const std::string &arch) {
     AsmBlockEffects res;
     // Marco de pila: seguimos el maximo alcanzado (peor caso), no el neto: un
     // `sub rsp,32; ...; add rsp,32` reserva 32 aunque acabe en 0.
@@ -162,34 +192,28 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
         const std::string mnem = lower(toks[ti]);
 
         if (lock_prefix || line_has_mem) res.touches_mem = true;
-        // `lock` + una atomica LL/SC de arm64 = efecto atomico (barrera).
-        if (lock_prefix || mnem == "ldaxr" || mnem == "stlxr" ||
-            mnem == "ldxr" || mnem == "stxr" || mnem == "ldar" ||
-            mnem == "stlr" || mnem == "casp" || mnem == "cas")
-            res.has_atomic = true;
+        // Prefijo `lock` (x86) o una atomica de arm64 (LL/SC o CAS/RMW/swap) =
+        // efecto atomico (barrera).
+        if (lock_prefix || es_atomica_arm(mnem)) res.has_atomic = true;
         if (es_rama(mnem)) res.has_branch = true;
 
         // Marco de pila explicito.
         bool sd_ok = true;
-        const int64_t d = stack_delta(toks, ti, sd_ok);
+        const int64_t d = stack_delta(toks, ti, arch, sd_ok);
         if (!sd_ok) {
-            // rsp movido con algo no literal: no podemos acotar el marco.
-            res.unknown_mnemonics.push_back(mnem + " rsp,<no-literal>");
+            // El puntero de pila se movio con algo no literal: no acotable.
+            res.unknown_mnemonics.push_back(mnem + " sp,<no-literal>");
         } else if (d != 0) {
             cur_frame += d;
             if (cur_frame > max_frame) max_frame = cur_frame;
         }
 
-        // Efectos por-instruccion (tabla x86; arm64 caera como desconocido
-        // hasta que la tabla crezca -- disciplina "error claro siempre").
-        const AsmEffects eff = asm_effects_for(mnem);
+        // Efectos por-instruccion segun la tabla del arch.  Un mnemonico no
+        // tabulado -> a la lista de desconocidos para que el caller de un error
+        // claro (disciplina "crecer bajo demanda, error claro siempre").
+        const AsmEffects eff = asm_effects_for(mnem, arch);
         if (!eff.known) {
-            // Ni rama ni prefijo ya tratados, ni atomica LL/SC reconocida.
-            const bool arm_atomic =
-                (mnem == "ldaxr" || mnem == "stlxr" || mnem == "ldxr" ||
-                 mnem == "stxr" || mnem == "ldar" || mnem == "stlr");
-            if (!es_rama(mnem) && !arm_atomic)
-                res.unknown_mnemonics.push_back(mnem);
+            res.unknown_mnemonics.push_back(mnem);
             continue;
         }
         if (eff.touches_mem) res.touches_mem = true;

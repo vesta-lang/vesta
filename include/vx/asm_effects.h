@@ -12,11 +12,13 @@
 
 /**
  * @file asm_effects.h
- * @brief Phase AS inc.4: inferencia PROPIA de clobbers para inline asm.
+ * @brief Tabla plana por-arquitectura de efectos de instruccion + inferencia
+ *        PROPIA de clobbers para inline asm.
  *
- * Tabla plana @c mnemonic -> efectos (registros escritos implicitamente,
- * si escribe el primer operando, si toca memoria/flags) + @c asm_infer_clobbers
- * que tokeniza un cuerpo NASM Intel e infiere la lista de clobbers que GCC
+ * Tabla @c mnemonic -> efectos (registros escritos implicitamente, bitmask de
+ * operandos escritos, si toca memoria/flags/es call) por arquitectura (x86 y
+ * arm64) + @c asm_infer_clobbers que tokeniza un cuerpo NASM Intel e infiere la
+ * lista de clobbers que GCC
  * (port-C) o el JIT (inc.5) deben declarar.  Es 100% propia: NO usa Keystone
  * ni Capstone (la inferencia debe seguir funcionando sin esas libs).  El
  * ENSAMBLADO (texto->bytes) es un eje ortogonal que vive tras la interfaz
@@ -32,6 +34,7 @@
 #ifndef VX_ASM_EFFECTS_H
 #define VX_ASM_EFFECTS_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -68,26 +71,48 @@ std::string asm_canonical_reg(const std::string &raw);
 std::string asm_normalize_numbers(const std::string &body);
 
 /**
- * @brief Efectos de un mnemonico x86-64 sobre registros/memoria/flags.
+ * @brief Efectos de un mnemonico sobre registros/memoria/flags.
  *
- * Los registros van en forma CANONICA (rax..r15, vN).  @c known=false
- * indica que el mnemonico no esta en la tabla -> el analizador pide
- * clobbers explicitos (conservador).
+ * Los registros implicitos van en forma CANONICA (rax..r15, vN).
+ * @c known=false indica que el mnemonico no esta en la tabla -> el analizador
+ * pide clobbers explicitos (conservador).
  */
 struct AsmEffects {
-    std::vector<std::string>
-        implicit_write; ///< regs escritos sin aparecer en operandos
-    bool writes_first_operand =
-        false;                  ///< el 1er operando (si es reg) se escribe
+    /// Registros escritos que NO aparecen como operandos (p.ej. @c rdtsc
+    /// escribe rax:rdx, @c cmpxchg escribe rax implicito).  Canonicos.
+    std::vector<std::string> implicit_write;
+
+    /// Que OPERANDOS escribe la instruccion, como bitmask: bit0=1er operando,
+    /// bit1=2o, bit2=3o, ...  Un mask generaliza casos que un solo bool no
+    /// cubre: @c xchg escribe los dos (0b011), @c casp/@c ldxp escriben pares,
+    /// una CAS escribe el destino.  0 = no escribe ningun operando.
+    uint8_t operand_write_mask = 0;
+
     bool touches_mem = false;   ///< toca memoria implicitamente
-    bool touches_flags = false; ///< modifica RFLAGS
+    bool touches_flags = false; ///< modifica RFLAGS/condition codes
     bool is_call = false;       ///< call/syscall: clobber de caller-saved
     bool known = false;         ///< false si no esta en la tabla
 };
 
 /**
- * @brief Consulta la tabla de efectos para un mnemonico (cualquier case).
- * @return @c AsmEffects con @c known=false si el mnemonico no esta tabulado.
+ * @brief Consulta la tabla de efectos de un mnemonico para una arquitectura.
+ *
+ * @param mnemonic Nombre de la instruccion (cualquier case).
+ * @param arch     Arquitectura de destino.  @c "x86_64" / @c "x86" (32-bit) /
+ *                 @c "x86_16" comparten la MISMA tabla de efectos (el efecto de
+ *                 @c add / @c mov / @c cmp no cambia con el ancho; lo que cambia
+ *                 -- ancho de registro, tamano del slot de pila -- se resuelve
+ *                 fuera de aqui).  @c "arm64" tiene su propia tabla (LL/SC,
+ *                 branches, cset/csel, barreras...).  Un arch no reconocido cae
+ *                 a la tabla x86.
+ * @return @c AsmEffects con @c known=false si el mnemonico no esta tabulado
+ *         para ese arch.
+ */
+AsmEffects asm_effects_for(const std::string &mnemonic,
+                           const std::string &arch);
+
+/**
+ * @brief Atajo de @ref asm_effects_for para x86-64 (compat de llamadas viejas).
  */
 AsmEffects asm_effects_for(const std::string &mnemonic);
 
