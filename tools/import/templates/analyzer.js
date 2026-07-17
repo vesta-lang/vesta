@@ -15,9 +15,9 @@
     // codigo de ejemplo por ISA (ejercita coste + overlay: barrera y atomico).
     const EXAMPLES = {
         x86: 'mov rax, 0\nimul rbx, rbx, 4\nmov rcx, rax\nmov rcx, rbx\nmov rdx, rdx\nadd rax, rcx',
-        arm64: 'mov x0, #0\nadd x1, x1, x2\nmul x3, x3, x4\nldr x5, [x6]\ndmb ish\nldadd x7, x8, [x9]',
-        arm32: 'mov r0, #0\nadd r1, r1, r2\nmul r3, r3, r4\nldr r5, [r6]\ndmb ish\nldrex r7, [r8]',
-        riscv: 'addi a0, zero, 0\nadd a1, a2, a3\nmul a4, a5, a6\nlw a7, 0(t0)\nfence\namoadd.w t1, t2, (t3)',
+        arm64: 'mov x0, x0\nadd x1, x2, x3\nmov x4, x2\nmov x4, x3\nadd x5, x1, x4\nldr x6, [x5]\ndmb ish',
+        arm32: 'mov r0, r0\nadd r1, r2, r3\nmov r4, r2\nmov r4, r3\nadd r5, r1, r4\nldr r6, [r5]\ndmb ish',
+        riscv: 'add a0, a1, a2\naddi a3, a1, 8\naddi a3, a2, 16\nadd a4, a0, a3\nlw a5, 0(a4)\nfence',
     };
     const T = window.t || (k => k);   // traduccion (i18n.js); identidad si no esta
     const $ = id => document.getElementById(id);
@@ -33,9 +33,36 @@
         rsi: 'SI', esi: 'SI', si: 'SI', sil: 'SI', rdi: 'DI', edi: 'DI', di: 'DI', dil: 'DI',
         rbp: 'BP', ebp: 'BP', bp: 'BP', bpl: 'BP', rsp: 'SP', esp: 'SP', sp: 'SP', spl: 'SP'
     };
+    // RISC-V: nombre ABI -> registro fisico canonico (a0=x10, ra=x1, zero=x0...).
+    const RV_ABI = {
+        zero: 'X0', ra: 'X1', sp: 'X2', gp: 'X3', tp: 'X4', t0: 'X5', t1: 'X6', t2: 'X7',
+        s0: 'X8', fp: 'X8', s1: 'X9', a0: 'X10', a1: 'X11', a2: 'X12', a3: 'X13', a4: 'X14',
+        a5: 'X15', a6: 'X16', a7: 'X17', s2: 'X18', s3: 'X19', s4: 'X20', s5: 'X21', s6: 'X22',
+        s7: 'X23', s8: 'X24', s9: 'X25', s10: 'X26', s11: 'X27', t3: 'X28', t4: 'X29', t5: 'X30', t6: 'X31',
+        ft0: 'F0', ft1: 'F1', ft2: 'F2', ft3: 'F3', ft4: 'F4', ft5: 'F5', ft6: 'F6', ft7: 'F7',
+        fs0: 'F8', fs1: 'F9', fa0: 'F10', fa1: 'F11', fa2: 'F12', fa3: 'F13', fa4: 'F14', fa5: 'F15',
+        fa6: 'F16', fa7: 'F17', fs2: 'F18', fs3: 'F19', fs4: 'F20', fs5: 'F21', fs6: 'F22', fs7: 'F23',
+        fs8: 'F24', fs9: 'F25', fs10: 'F26', fs11: 'F27', ft8: 'F28', ft9: 'F29', ft10: 'F30', ft11: 'F31'
+    };
+    const ARM = ISA === 'arm64' || ISA === 'arm32';
     // registro fisico canonico (para rastrear dependencias entre anchos/alias).
     function canon(reg) {
         reg = reg.toLowerCase();
+        if (ARM) {
+            let m = reg.match(/^[xw](\d+)$/); if (m) return 'X' + m[1];
+            if (reg === 'sp' || reg === 'wsp') return 'SP';
+            if (reg === 'xzr' || reg === 'wzr') return 'ZERO';
+            if (reg === 'lr') return 'X30'; if (reg === 'pc') return 'PC';
+            m = reg.match(/^r(\d+)$/); if (m) return 'X' + m[1];             // A32
+            m = reg.match(/^[qvdshb](\d+)$/); if (m) return 'V' + m[1];      // SIMD/FP
+            return reg;
+        }
+        if (ISA === 'riscv') {
+            if (RV_ABI[reg]) return RV_ABI[reg];
+            let m = reg.match(/^x(\d+)$/); if (m) return 'X' + m[1];
+            m = reg.match(/^f(\d+)$/); if (m) return 'F' + m[1];
+            return reg;
+        }
         if (GP[reg]) return GP[reg];
         let m = reg.match(/^r(\d+)[dwb]?$/); if (m) return 'R' + m[1];
         m = reg.match(/^[xyz]mm(\d+)$/); if (m) return 'V' + m[1];
@@ -44,6 +71,20 @@
     }
     function regWidth(r) {
         r = r.toLowerCase();
+        if (ARM) {
+            if (/^x(\d|[12]\d|30)$/.test(r) || r === 'sp' || r === 'xzr' || r === 'lr') return 64;
+            if (/^w(\d|[12]\d|30)$/.test(r) || r === 'wsp' || r === 'wzr') return 32;
+            if (/^r(\d|1[0-5])$/.test(r) || r === 'pc') return 32;          // A32
+            if (/^[qv]\d+$/.test(r)) return 128;
+            if (/^d\d+$/.test(r)) return 64; if (/^s\d+$/.test(r)) return 32;
+            if (/^h\d+$/.test(r)) return 16; if (/^b\d+$/.test(r)) return 8;
+            return 0;
+        }
+        if (ISA === 'riscv') {
+            if (RV_ABI[r] || /^x(\d|[12]\d|3[01])$/.test(r)) return 64;
+            if (/^f(\d|[12]\d|3[01])$/.test(r)) return 64;
+            return 0;
+        }
         if (/^r(ax|bx|cx|dx|si|di|bp|sp|8|9|1[0-5])$/.test(r)) return 64;
         if (/^(e(ax|bx|cx|dx|si|di|bp|sp)|r(8|9|1[0-5])d)$/.test(r)) return 32;
         if (/^((ax|bx|cx|dx|si|di|bp|sp)|r(8|9|1[0-5])w)$/.test(r)) return 16;
@@ -56,13 +97,19 @@
     }
     function classify(tok) {
         tok = tok.trim();
-        if (/\[/.test(tok)) {
+        // RISC-V: memoria como desplazamiento(reg), p.ej. 0(t0), -4(sp).
+        if (ISA === 'riscv') {
+            const m = tok.match(/^(-?(?:0x[0-9a-f]+|\d+))?\(([a-z][a-z0-9]*)\)$/i);
+            if (m) return { kind: 'mem', width: 0, addr: regWidth(m[2]) ? [m[2]] : [], raw: tok };
+        }
+        if (/\[/.test(tok)) {                              // memoria x86/ARM
             const p = tok.match(/^(byte|word|dword|qword|xmmword|ymmword|zmmword)\s+ptr\b/i);
             const regs = [];
             const inner = (tok.match(/\[([^\]]*)\]/) || [, ''])[1];
             for (const m of inner.matchAll(/[a-z][a-z0-9]*/gi)) if (regWidth(m[0])) regs.push(m[0]);
             return { kind: 'mem', width: p ? PTRW[p[1].toLowerCase()] : 0, addr: regs, raw: tok };
         }
+        if (tok[0] === '#') tok = tok.slice(1);            // inmediato ARM (#0)
         if (/^[-+]?(0x[0-9a-f]+|0b[01]+|\d+)$/i.test(tok)) return { kind: 'imm', width: 0, raw: tok };
         const w = regWidth(tok);
         if (w) return { kind: 'reg', width: w, raw: tok };
@@ -117,8 +164,12 @@
             if (s > bestS) { bestS = s; best = r; }
         }
         // x86 desambigua por operandos (r64/m32...).  ARM/RISC-V tienen otro
-        // modelo de operandos: si el scoring no casa, vale el mnemonico.
-        if (bestS < 0 && ISA !== 'x86') return cands[0];
+        // modelo de operandos: si el scoring no casa, vale el mnemonico,
+        // prefiriendo un form de la MISMA aridad (mejor aproxima las mascaras r/w).
+        if (bestS < 0 && ISA !== 'x86') {
+            const same = cands.filter(r => formOps(r[10]).length === p.ops.length);
+            return same[0] || cands[0];
+        }
         return bestS < 0 ? null : best;
     }
     function maxLat(s) {
@@ -177,8 +228,13 @@
                 if (wmask & (1 << i)) wr.add('MEM');              // almacenamiento
             }
         });
-        if (mf & 8) rd.add('FLAGS');
-        if (mf & 4) wr.add('FLAGS');
+        // A32/T32: toda instruccion es predicada (lee NZCV) y la variante S los
+        // escribe.  Sin parsear los sufijos {<c>}/{S} eso serializaria TODO por
+        // flags (y bloquearia el codigo muerto) -> se ignoran para A32.
+        if (ISA !== 'arm32') {
+            if (mf & 8) rd.add('FLAGS');
+            if (mf & 4) wr.add('FLAGS');
+        }
         return { rd, wr };
     }
 
@@ -356,7 +412,7 @@
         const barrier = /\b(serializing|no_reorder|barrier|atomic|ll_sc|syscall|privileged|mem_acquire|mem_release|mem_seq_cst)\b/.test(ov);
         const memfence = /\b(barrier|mem_acquire|mem_release|mem_seq_cst)\b/.test(ov);
         return {
-            rd, wr, mw, wf: !!(mf & 4), rf: !!(mf & 8),
+            rd, wr, mw, wf: ISA !== 'arm32' && !!(mf & 4), rf: ISA !== 'arm32' && !!(mf & 8),
             ctrl: /^(J|CALL|RET|LOOP|SYSCALL|INT|UD|HLT)/.test(it.p.mn),
             barrier, memfence
         };
@@ -438,12 +494,12 @@
         items.forEach((it, i) => {
             const p = it.p, r = it.r;
             if (!r) { lines.push(p.text); return; }
-            // mov reg, mismo-reg -> no-op
-            if (en.selfcopy && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw)) {
+            // mov reg, mismo-reg -> no-op (x86/ARM: MOV; RISC-V: MV)
+            if (en.selfcopy && (p.mn === 'MOV' || p.mn === 'MV') && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw)) {
                 log.push({ from: p.text, to: null, rule: T('rule.selfcopy'), why: T('why.selfcopy') }); return;
             }
-            // mov reg, 0 -> xor reg, reg (idioma de puesta a cero)
-            if (en.zero && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'imm' && /^0(x0+)?$/i.test(p.ops[1].raw) && flagsDeadAfter(items, i)) {
+            // mov reg, 0 -> xor reg, reg (idioma de puesta a cero; solo x86)
+            if (en.zero && ISA === 'x86' && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'imm' && /^0(x0+)?$/i.test(p.ops[1].raw) && flagsDeadAfter(items, i)) {
                 const R = p.ops[0].raw, to = 'xor ' + R + ', ' + R;
                 log.push({ from: p.text, to, rule: T('rule.zero'), why: T('why.zero') });
                 lines.push(to); return;
