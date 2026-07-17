@@ -94,7 +94,8 @@ _SECTION_CAT = [
 # el mismo dominio.  SVE/SVE2/SME/SME2 solo casan su propia seccion: en un core
 # sin SVE (A76/N1) quedan sin coste, como debe ser.
 _EXT_CATS = {
-    'GENERAL': ('INT', 'BRANCH', 'LOADSTORE', 'SYSTEM'),
+    # CRYPTO en GENERAL por CRC32 (instr entera que el SWOG pone en cripto).
+    'GENERAL': ('INT', 'BRANCH', 'LOADSTORE', 'SYSTEM', 'CRYPTO'),
     # ADVSIMD y FLOAT comparten el dominio vector/FP: la SWOG de ARM las agrupa
     # en una sola seccion "Advanced SIMD and Floating-Point" (mismas pipelines
     # V0/V1).  NO es cruzar entero<->vector; es la realidad del hardware.
@@ -103,8 +104,8 @@ _EXT_CATS = {
     # que la deteccion de seccion metio en INT (VLDR, VDIV, VSQRT...).  Es SEGURO:
     # los mnemonicos vectoriales llevan prefijo V/F y no colisionan con enteros.
     'ADVSIMD': ('ASIMD', 'FP', 'CRYPTO', 'LOADSTORE', 'INT'),
-    'FLOAT': ('FP', 'ASIMD', 'LOADSTORE', 'INT'),
-    'FPSIMD': ('FP', 'ASIMD', 'LOADSTORE', 'INT'),
+    'FLOAT': ('FP', 'ASIMD', 'CRYPTO', 'LOADSTORE', 'INT'),
+    'FPSIMD': ('FP', 'ASIMD', 'CRYPTO', 'LOADSTORE', 'INT'),
     # SVE/SVE2/SME solo su propia seccion; en un core sin SVE quedan sin coste.
     'SVE': ('SVE',), 'SVE2': ('SVE2', 'SVE'),
     'SME': ('SME',), 'SME2': ('SME2', 'SME'),
@@ -230,12 +231,24 @@ def main():
     form_class = [-1] * (max(forms) + 1)
     mapped = 0
 
+    def _bases(mn):
+        """Nombres candidatos: el exacto + el base cuando el SWOG usa el generico
+        (CRC32B->CRC32, CRC32CW->CRC32C, PKHBT->PKH)."""
+        names = [mn]
+        m = re.match(r'^(CRC32C?)[BHWX]$', mn)
+        if m:
+            names.append(m.group(1))
+        if re.match(r'^PKH(BT|TB)$', mn):
+            names.append('PKH')
+        return names
+
     def lookup(mn, ext):
         """Coste de un mnemonico solo desde una seccion COMPATIBLE con su ext."""
-        for cat in _EXT_CATS.get(ext, ('INT',)):
-            c = cost.get((mn, cat))
-            if c is not None:
-                return c
+        for name in _bases(mn):
+            for cat in _EXT_CATS.get(ext, ('INT',)):
+                c = cost.get((name, cat))
+                if c is not None:
+                    return c
         return None
 
     for fid in sorted(forms):
