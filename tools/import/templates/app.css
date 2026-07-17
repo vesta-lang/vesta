@@ -603,3 +603,18 @@ details.skey>div {
     font-size: 10px;
     vertical-align: middle
 }
+
+.tipbox { white-space: pre-line }
+.rtok { cursor: help; font-weight: 600 }
+
+/* timeline del analizador */
+.tl { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel) }
+.tl-cap { font-size: 12px; color: var(--mut); margin-bottom: 8px }
+.tl-row { display: flex; align-items: center; gap: 10px; margin: 3px 0 }
+.tl-label { flex: 0 0 200px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.tl-track { position: relative; flex: 1; height: 18px; background: var(--code); border-radius: 5px }
+.tl-bar { position: absolute; top: 0; height: 18px; border-radius: 5px; background: var(--acc); color: #fff;
+    font-size: 10.5px; line-height: 18px; text-align: center; min-width: 12px; overflow: hidden }
+.tl-bar.crit { background: var(--wr) }
+.tl-axis { display: flex; justify-content: space-between; color: var(--mut); font-size: 11px; margin-top: 4px;
+    padding-left: 210px }

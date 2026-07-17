@@ -53,29 +53,7 @@
                 '<span class="dim">(' + KIND[m[4]] + (m[5] ? ', cota superior' : '') + ')</span>';
         }).join('<br>');
     }
-    // Que es cada puerto.  AMD nombra por FUNCION (traducible con exactitud);
-    // Intel agrupa puertos numerados "pNNNN" (una µop va a UNO del grupo).
-    const AMD_PORT = {
-        LD: 'carga (load)', ALU: 'ALU entera', AGU: 'generacion de direccion (AGU)',
-        STA: 'direccion de almacenamiento (store address)', STD: 'dato de almacenamiento (store data)',
-        JMP: 'salto / branch', BR: 'salto / branch', MUL: 'multiplicacion entera', DIV: 'division',
-        SHIFT: 'desplazamientos', SLOW: 'ruta lenta (operaciones complejas / microcodigo)',
-        INT_OTHER: 'otras operaciones enteras', UNKNOWN: 'puerto no identificado por la fuente',
-        FP0: 'unidad FP / vectorial 0', FP1: 'unidad FP / vectorial 1',
-        FP2: 'unidad FP / vectorial 2', FP3: 'unidad FP / vectorial 3',
-    };
-    function portDesc(name) {
-        const up = name.toUpperCase();
-        if (AMD_PORT[up]) return name + ': ' + AMD_PORT[up];
-        const m = name.match(/^p([0-9]+)([a-z]*)$/i);
-        if (m) {
-            const ports = m[1].split('').map(d => 'p' + d).join(', ');
-            const clus = m[2] ? ' (cluster ' + m[2].toUpperCase() + ')' : '';
-            return 'la µop se despacha a UNO de los puertos ' + ports + clus +
-                '. Mas puertos disponibles = mas paralelismo.';
-        }
-        return name + ': unidad de ejecucion';
-    }
+    const portDesc = window.VESTA_PORTDESC;
     // color estable por grupo de puertos (el cerebro identifica los dominantes).
     function portHue(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; }
     function portsHuman(s) {

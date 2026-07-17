@@ -109,23 +109,7 @@
     }
     function cost(r, a) { const cid = AR[a].map[r[0]]; return cid < 0 ? null : AR[a].classes[cid]; }
 
-    // Descripcion de un puerto (tooltip).  AMD por funcion; Intel por grupo.
-    const AMD_PORT = {
-        LD: 'carga (load)', ALU: 'ALU entera', AGU: 'generacion de direccion (AGU)',
-        STA: 'direccion de almacenamiento (store address)', STD: 'dato de almacenamiento (store data)',
-        JMP: 'salto / branch', BR: 'salto / branch', MUL: 'multiplicacion entera', DIV: 'division',
-        SHIFT: 'desplazamientos', SLOW: 'ruta lenta (operaciones complejas / microcodigo)',
-        INT_OTHER: 'otras operaciones enteras', UNKNOWN: 'puerto no identificado por la fuente',
-        FP0: 'unidad FP / vectorial 0', FP1: 'unidad FP / vectorial 1',
-        FP2: 'unidad FP / vectorial 2', FP3: 'unidad FP / vectorial 3',
-    };
-    function portDesc(name) {
-        if (AMD_PORT[name.toUpperCase()]) return name + ': ' + AMD_PORT[name.toUpperCase()];
-        const m = name.match(/^p([0-9]+)([a-z]*)$/i);
-        if (m) return 'la µop se despacha a UNO de los puertos ' +
-            m[1].split('').map(d => 'p' + d).join(', ') + (m[2] ? ' (cluster ' + m[2].toUpperCase() + ')' : '');
-        return name + ': unidad de ejecucion';
-    }
+    const portDesc = window.VESTA_PORTDESC;
     function portsInline(s) {
         if (!s) return '<span class="dim">&mdash;</span>';
         return s.split(' ').map(t => {
@@ -133,6 +117,20 @@
             if (!m) return esc(t);
             return m[1] + 'x<span class="pport" data-tip="' + esc(portDesc(m[2])) + '">' + esc(m[2]) + '</span>';
         }).join(' ');
+    }
+    // Color estable por registro fisico (mismo registro = mismo color -> se ven
+    // las dependencias); y coloreado de una linea de asm por operandos.
+    function regHue(c) { let h = 0; for (const ch of c) h = (h * 37 + ch.charCodeAt(0)) >>> 0; return h % 360; }
+    function colorInstr(text) {
+        return esc(text).replace(/\[[^\]]*\]|[A-Za-z_][A-Za-z0-9_]*/g, tok => {
+            if (tok[0] === '[') return tok.replace(/[A-Za-z_][A-Za-z0-9_]*/g, w =>
+                regWidth(w) ? regSpan(w) : w);
+            return regWidth(tok) ? regSpan(tok) : tok;
+        });
+    }
+    function regSpan(w) {
+        const c = canon(w), hue = regHue(c);
+        return '<span class="rtok" data-tip="registro ' + esc(c) + '" style="color:hsl(' + hue + ' 70% 42%)">' + esc(w) + '</span>';
     }
 
     // recursos que lee/escribe una instruccion (registros + FLAGS + MEM).
@@ -189,41 +187,66 @@
         const lastW = {}, finish = [], predOf = [];
         let critical = 0, endIdx = -1;
         items.forEach((it, i) => {
-            if (!it.r) { finish[i] = 0; predOf[i] = -1; return; }
+            if (!it.r) { finish[i] = 0; predOf[i] = -1; it.start = it.finish = 0; return; }
             let ready = 0, pred = -1;
             it.res.rd.forEach(s => { const w = lastW[s]; if (w != null && finish[w] >= ready) { ready = finish[w]; pred = w; } });
-            finish[i] = ready + it.lat; predOf[i] = pred;
+            it.start = ready; finish[i] = ready + it.lat; predOf[i] = pred; it.finish = finish[i];
             it.res.wr.forEach(s => { lastW[s] = i; });
             if (finish[i] > critical) { critical = finish[i]; endIdx = i; }
         });
         const critSet = new Set();
         for (let i = endIdx; i >= 0; i = predOf[i]) critSet.add(i);
-        // filas (marcando el camino critico).
+        // cotas: front-end (decodificacion/emision), throughput (puertos), latencia.
+        const width = window.VESTA_ISSUE_WIDTH[AR[a].name] || 4;
+        const frontEnd = sumU / width;
+        const est = Math.max(frontEnd, tp, critical);
+        let topPort = '', topVal = 0;
+        portPress.forEach((v, k) => { if (v > topVal) { topVal = v; topPort = k; } });
+        const feB = est === frontEnd, tpB = est === tp && !feB, ltB = est === critical && !feB && !tpB;
+        const bneck = ltB
+            ? 'latencia &mdash; el camino critico (filas <span class="critdot">&#9679;</span>) fija <b>' + critical.toFixed(2) + '</b> ciclos'
+            : tpB
+                ? 'throughput &mdash; limitan los puertos; grupo mas cargado: <b>' + esc(topPort) + '</b> (' + topVal.toFixed(2) + ' µops)'
+                : 'front-end &mdash; el decodificador/emision (<b>' + width + '</b> µops/ciclo) no da abasto para ' + sumU + ' µops';
+        // filas.
         let rows = '';
         items.forEach((it, i) => {
             const p = it.p, r = it.r;
             if (!r) {
-                rows += '<tr><td class="mono">' + esc(p.text) + '</td>' +
+                rows += '<tr><td class="mono">' + colorInstr(p.text) + '</td>' +
                     '<td class="miss" colspan="6">forma no encontrada' +
                     (byClass.has(p.mn) ? ' (operandos no encajan)' : ' (mnemonico desconocido)') + '</td></tr>';
                 return;
             }
             const t = it.t, crit = critSet.has(i);
+            const why = 'emparejada: iclass ' + r[2] + ' + operandos ' +
+                (p.ops.map(o => o.kind + (o.width ? o.width : '')).join(', ') || '(ninguno)');
             rows += '<tr' + (crit ? ' class="crit" data-tip="en el camino critico: esta cadena de dependencias fija el limite de latencia"' : '') + '>' +
-                '<td class="mono">' + (crit ? '<span class="critdot">&#9679;</span> ' : '') + esc(p.text) + '</td>' +
-                '<td class="mono">' + esc(r[1]) + (r[12] ? ' <span class="dim">' + esc(r[12]) + '</span>' : '') + '</td>' +
+                '<td class="mono">' + (crit ? '<span class="critdot">&#9679;</span> ' : '') + colorInstr(p.text) + '</td>' +
+                '<td class="mono" data-tip="' + esc(why) + '">' + esc(r[1]) + (r[12] ? ' <span class="dim">' + esc(r[12]) + '</span>' : '') + '</td>' +
                 '<td class="mono">' + esc(r[2]) + '</td>' +
                 '<td class="n">' + (t ? t[1] : '&middot;') + '</td>' +
                 '<td class="n mono">' + (t ? esc(t[0]) : '&middot;') + '</td>' +
                 '<td class="n mono">' + (t ? (it.lat ? it.lat.toFixed(2) : '<span class="dim">0</span>') : '<span class="dim">sin dato</span>') + '</td>' +
                 '<td class="mono">' + (t ? portsInline(t[5]) : '<span class="dim">&mdash;</span>') + '</td></tr>';
         });
-        const est = Math.max(tp, critical), latBound = critical >= tp;
-        let topPort = '', topVal = 0;
-        portPress.forEach((v, k) => { if (v > topVal) { topVal = v; topPort = k; } });
-        const bneck = latBound
-            ? 'latencia &mdash; el camino critico (filas <span class="critdot">&#9679;</span>) fija <b>' + critical.toFixed(2) + '</b> ciclos'
-            : 'throughput &mdash; limitan los puertos; grupo mas cargado: <b>' + esc(topPort) + '</b> (' + topVal.toFixed(2) + ' µops)';
+        // timeline: barras start->finish (planificacion por dependencias).
+        const total = Math.max(critical, 1);
+        let tl = '';
+        for (const it of items) {
+            if (!it.r) continue;
+            const crit = it.finish === it.start + it.lat && critSet.has(items.indexOf(it));
+            const left = (it.start / total) * 100, w = Math.max((it.lat / total) * 100, 1.2);
+            tl += '<div class="tl-row"><span class="tl-label mono">' + colorInstr(it.p.text) + '</span>' +
+                '<div class="tl-track"><div class="tl-bar' + (crit ? ' crit' : '') +
+                '" style="left:' + left.toFixed(2) + '%;width:' + w.toFixed(2) + '%" data-tip="ciclo ' +
+                it.start.toFixed(0) + ' &rarr; ' + it.finish.toFixed(0) + ' (latencia ' + it.lat.toFixed(2) + ')">' +
+                (it.lat ? it.lat.toFixed(0) : '') + '</div></div></div>';
+        }
+        const timeline = tl ? '<div class="tl"><div class="tl-cap">timeline por dependencias &mdash; ' +
+            'ancho de cada barra = su latencia; en rojo el camino critico (' + critical.toFixed(0) + ' ciclos)</div>' + tl +
+            '<div class="tl-axis"><span>0</span><span>' + critical.toFixed(0) + ' ciclos</span></div></div>' : '';
+
         $('res').innerHTML = rows ?
             '<div class="wrap"><table><thead><tr><th>instruccion</th><th>forma</th><th>iclass</th>' +
             '<th class="n">uops</th><th class="n">recip_tp</th><th class="n">latencia</th><th>puertos</th></tr></thead>' +
@@ -232,10 +255,11 @@
             nOk + ' emparejadas' + (nMiss ? ', ' + nMiss + ' sin forma' : '') + '.' +
             '<table class="sumt">' +
             '<tr><td>micro-operaciones (uops)</td><td class="n">' + sumU + '</td></tr>' +
-            '<tr' + (!latBound ? ' class="est"' : '') + '><td>coste por <b>throughput</b> (&Sigma; recip_tp)</td><td class="n">' + tp.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr' + (latBound ? ' class="est"' : '') + '><td>coste por <b>latencia</b> (camino critico)</td><td class="n">' + critical.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr class="est"><td>estimacion del bloque = max(throughput, latencia)</td><td class="n">' + est.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr><td>cuello de botella</td><td>' + bneck + '</td></tr></table></div>'
+            '<tr' + (feB ? ' class="est"' : '') + '><td>coste por <b>front-end</b> (decodificacion/emision, ' + width + ' µops/ciclo)</td><td class="n">' + frontEnd.toFixed(2) + ' ciclos</td></tr>' +
+            '<tr' + (tpB ? ' class="est"' : '') + '><td>coste por <b>throughput</b> (puertos, &Sigma; recip_tp)</td><td class="n">' + tp.toFixed(2) + ' ciclos</td></tr>' +
+            '<tr' + (ltB ? ' class="est"' : '') + '><td>coste por <b>latencia</b> (camino critico de dependencias)</td><td class="n">' + critical.toFixed(2) + ' ciclos</td></tr>' +
+            '<tr class="est"><td>estimacion del bloque = max(front-end, throughput, latencia)</td><td class="n">' + est.toFixed(2) + ' ciclos</td></tr>' +
+            '<tr><td>cuello de botella</td><td>' + bneck + '</td></tr></table></div>' + timeline
             : '<p class="hint">Sin instrucciones que analizar.</p>';
         $('summary').textContent = nOk + ' emparejadas' + (nMiss ? ' / ' + nMiss + ' sin forma' : '');
     }
