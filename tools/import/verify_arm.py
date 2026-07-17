@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import database  # noqa: E402
 
-_VALID_KINDS = {"reg", "mem", "imm", "relbr", "flags", "agen", "?"}
+_VALID_KINDS = {"reg", "mem", "imm", "relbr", "absbr", "flags", "agen", "?"}
 
 
 def truth_encodings(src):
