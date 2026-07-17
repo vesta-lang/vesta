@@ -50,3 +50,32 @@ def load_vxarch(path):
                 fid, cid = line.split("|")
                 form_class[int(fid)] = int(cid)
     return name, ports, classes, form_class
+
+
+def load_vxfeat(path):
+    """@return (meta, table:list[str], cpus:dict[cpu]->{sched,features:set[str]}).
+
+    La DB usa tabla+IDs (como las ISAs con FormID): `table[id]` da el nombre y
+    cada CPU referencia esos IDs, sin repetir strings."""
+    meta, table, cpus = {}, [], {}
+    with open(path, "r", encoding="ascii") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith("vxfeat"):
+                for tok in line.split():
+                    if "=" in tok:
+                        k, v = tok.split("=", 1)
+                        meta[k] = v
+            elif line.startswith("feats:"):
+                for tok in line[6:].split():
+                    if "=" in tok:
+                        i, nm = tok.split("=", 1)
+                        idx = int(i)
+                        while len(table) <= idx:
+                            table.append("")
+                        table[idx] = nm
+            elif line and not line.startswith("#") and "|" in line:
+                cpu, sched, ids = line.split("|", 2)
+                fset = {table[int(x)] for x in ids.split(",") if x != ""}
+                cpus[cpu] = {"sched": sched, "features": fset}
+    return meta, table, cpus

@@ -58,21 +58,32 @@ def main():
     class_key = {}
     form_class = {}
     for fid in sorted(all_fids):
+        # complementar: preferir la fuente (en orden de prioridad) que tenga
+        # coste CON puertos; si ninguna, la primera con coste sin puertos.
+        pick = None
         for ports, classes, fc in loaded:
             cid = fc.get(fid, -1)
             if cid < 0:
                 continue
             c = classes[cid]
-            pstr = remap_ports(c['ports'], ports)
-            key = (c['recip_tp'], c['uops'], c['microcoded'], c['macro_fusible'],
-                   c['div_cycles'], c['latencies'], pstr)
-            ncid = class_key.get(key)
-            if ncid is None:
-                ncid = len(fused_classes)
-                class_key[key] = ncid
-                fused_classes.append(key)
-            form_class[fid] = ncid
-            break
+            has_ports = c['ports'] not in ('', '-')
+            if pick is None:
+                pick = (ports, c)
+            if has_ports:
+                pick = (ports, c)
+                break
+        if pick is None:
+            continue
+        ports, c = pick
+        pstr = remap_ports(c['ports'], ports)
+        key = (c['recip_tp'], c['uops'], c['microcoded'], c['macro_fusible'],
+               c['div_cycles'], c['latencies'], pstr)
+        ncid = class_key.get(key)
+        if ncid is None:
+            ncid = len(fused_classes)
+            class_key[key] = ncid
+            fused_classes.append(key)
+        form_class[fid] = ncid
 
     with open(out, 'w', encoding='ascii', newline='\n') as f:
         f.write("vxarch %d name=%s family=arm isa=%s source=arm-swog+llvm "

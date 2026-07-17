@@ -296,6 +296,24 @@ Mapeo forma -> clase (una linea por forma con coste en esta microarquitectura):
 <form_id> | <class_id>
 ```
 
+### `<isa>.vxfeat` (features por CPU)
+
+DB de las **features/extensiones** que implementa cada CPU real, serializada con
+tabla+IDs (igual que las ISAs con `FormID`: los nombres se guardan UNA vez).
+Sirve para especializar codegen, filtrar coste (no dar AVX512 a un core sin
+AVX512) y como documentacion.
+
+```text
+vxfeat 1 isa=<x86|arm> nfeat=<N> ncpu=<M>
+feats: 0=<nombre> 1=<nombre> ...          (ordenados, id denso)
+# cpu|sched|featid,featid,...
+haswell|HaswellModel|2,3,10,...
+```
+
+- `feats:` : tabla de features canonicas (sin el prefijo `Feature` de LLVM).
+- una fila por CPU: `nombre | SchedModel | lista de IDs` a la tabla.
+- el conjunto es **transitivo** (expande los `Implies` de LLVM).
+
 ### `instr_form_ids.h`
 
 Cabecera C generada:
@@ -310,6 +328,85 @@ enum InstrFormID : uint32_t {
 
 constexpr uint32_t kInstrFormCount = 22252;
 constexpr uint64_t kInstrChecksum[kInstrFormCount] = { /* ... */ };
+```
+
+---
+
+## Multi-arquitectura: ARM, LLVM y features
+
+El pipeline (IR -> optimize -> serialize, lector `database.py`) es el mismo para
+todas las ISAs.  Solo cambian los **importadores** de cada fuente.  Toda
+extraccion desde LLVM es **una sola vez en la vida** (via `llvm-tblgen`): el
+runtime NO depende de LLVM.
+
+### ISA de ARM (sintaxis + semantica desde el XML oficial)
+
+Fuente: el **Machine Readable Architecture Specification** (MRAS) de ARM (XML por
+instruccion, con pseudocodigo ASL).  Tres etapas de responsabilidad unica:
+
+- `mras_a64.py` — importa la **sintaxis** A64: `regdiagram` (patron de 32 bits +
+  campos), `bitdiffs` (fija `sf==0` etc. para no colisionar formas), operandos
+  del `asmtemplate`, alias (`type="alias"`).  Emite `arm.vxisa`.
+- `mras_pseudocode.py` — analiza el **pseudocodigo ASL** (etapa autoritativa):
+  puente variable->campo del `Decode`, accesores `X()/V[]/Z[]/P[]/R()`, flags
+  `PSTATE.<..>`/`PSTATE.[..]`, `Mem/MemAtomic` (=RMW), barreras/exclusivos/ramas.
+  Devuelve read/write masks, wflags/rflags, memoria y el overlay semantico.
+- `mras_semantics.py` — une lo anterior en la forma IR (usa el pseudocodigo como
+  fuente y una heuristica de respaldo cuando falta).
+- `mras_aarch32.py` — lo mismo para **A32 + T32** (formas de 16/32 bits, tokens
+  `{<c>}`/`{<q>}`).  Emite `arm32.vxisa`.
+
+### Coste de ARM (guias oficiales de optimizacion)
+
+- `swog_arm.py` — importa las tablas de las **Software Optimization Guides** de
+  ARM (PDF, via `pdfplumber`): latencia, throughput (`recip_tp = 1/IPC`) y
+  pipelines por grupo de instrucciones.  Cobre Neoverse N1/N2/V2/V3, Cortex-A76,
+  Cortex-X4.  Es la fuente **autoritativa** (medida en hardware).
+
+### Coste y features desde LLVM (relleno + microarqs sin guia)
+
+`llvm-tblgen-19 --dump-json AArch64.td` / `X86.td` produce un JSON con los
+`SchedMachineModel`.  De ahi:
+
+- `llvm_sched.py` — resuelve el coste de cada instruccion (`SchedRW` por defecto o
+  `InstRW`; cada `SchedWrite` -> `SchedWriteRes`/`SchedAlias`/`WriteRes`/
+  `WriteSequence`) -> latencia, uops, puertos.  Normaliza nombres de puerto para
+  poder fusionar (`HWPort0156`->`p0156` en Intel; `Zn2FPU01`->`FP01`,
+  `Zn2ALU`->`ALU` en AMD; `N2UnitV0`->`V0` en ARM).  En x86 filtra por las
+  **features de la CPU concreta** (`processor_features`) para no dar coste a
+  formas AVX512 en cores sin AVX512 (varias CPU comparten `SchedModel`).
+- `gen_llvm.py` — driver generico (arm/x86): un `.vxarch` por `SchedMachineModel`,
+  con nombres que casan los de uops.info/SWOG para poder fusionar.
+- `gen_llvm_arm.py` — driver especifico ARM (~19 microarqs; cubre SVE/SVE2 que
+  las SWOG no cronometran).
+- `gen_features.py` — genera la **DB de features** `<isa>.vxfeat` (una fila por
+  CPU real, tabla+IDs).
+
+### Fusion: una version por core
+
+`fuse_vxarch.py` — combina varios `.vxarch` del MISMO core en UNO.  Se
+**complementan**, no se reemplazan: por forma toma la fuente con MAS informacion
+(la que aporta puertos), respetando la prioridad (SWOG medida > LLVM modelada).
+Los puertos se unifican por nombre.  Asi Neoverse N1/N2/V2 combinan la SWOG
+(medida) con LLVM (SVE/SVE2/sistema), y los cores x86 combinan uops.info (puertos
+FP en AMD) con LLVM (puertos enteros ALU/AGU que uops.info no traia).
+
+### Verificacion de completitud
+
+- `verify_arm.py` / `verify_x86.py` — comparan la DB contra la fuente: cobertura
+  (formas faltantes/sobrantes), invariantes (opcode de 16/32 bits, sin operando
+  sin r/w) y colisiones de clave.
+- `arm_cost_report.py` — cobertura UNION del coste sobre todos los cores y
+  clasifica lo no cubierto por su motivo (ausencia fisica de un core con SME vs
+  instruccion sin coste publicado).
+
+### Regenerar el JSON de LLVM (extraccion unica, en WSL)
+
+```bash
+llvm-tblgen-19 --dump-json -I <dir_td> -I /usr/include/llvm-19 \
+    <dir_td>/AArch64.td -o aarch64.json
+python tools/import/gen_llvm_arm.py aarch64.json arm/arm.vxisa <salida>
+python tools/import/gen_features.py aarch64.json arm arm/arm.vxfeat
 ```
 
 ---

@@ -40,6 +40,32 @@ def _dname(x):
     return x.get('def') if isinstance(x, dict) else x
 
 
+def _clean_port(pr):
+    """Normaliza el nombre de un ProcResource de LLVM al esquema de uops.info,
+    para que uops.info y LLVM se COMPLEMENTEN al fusionar (mismo puerto = mismo
+    nombre).  Intel: <uarch>Port0156 -> p0156.  AMD: <uarch>FPU01 -> FP01,
+    <uarch>ALU03 -> ALU03, <uarch>AGU -> AGU.  ARM: N2UnitV0 -> V0."""
+    m = re.match(r'^\w*?Port([0-9]+)$', pr)
+    if m:
+        return 'p' + m.group(1)                # Intel: HWPort06 -> p06
+    if re.search(r'FPDivider$', pr):
+        return 'pfpdiv'
+    if re.search(r'Divider$', pr):
+        return 'pdiv'
+    if re.search(r'Multiplier$', pr):
+        return 'pmul'
+    m = re.match(r'^\w*?FPU([0-9]*)$', pr)
+    if m:
+        return 'FP' + m.group(1)               # AMD: Zn2FPU01 -> FP01
+    m = re.match(r'^\w*?(ALU|AGU|IntMul|IntDiv|Load|Store)([0-9]*)$', pr)
+    if m:
+        return m.group(1) + m.group(2)         # AMD: Zn2ALU03 -> ALU03
+    m = re.match(r'^\w*?Unit(.+)$', pr)
+    if m:
+        return m.group(1)                      # ARM: N2UnitV0 -> V0
+    return pr
+
+
 def _superclasses(rec):
     return rec.get('!superclasses', [])
 
@@ -50,6 +76,36 @@ def _mnemonic(asm):
         return None
     m = re.match(r'^([A-Za-z][A-Za-z0-9]*)', asm)
     return m.group(1).upper() if m else None
+
+
+def _x86_cat(rec):
+    """Nivel de ISA de una instruccion x86 (por sus predicados): BASE/SSE/AVX/
+    AVX512/MMX.  Evita que una forma AVX512 reciba coste en un core sin AVX512:
+    (mnem, AVX512) solo existe si ese core modela AVX512."""
+    preds = ' '.join(_dname(p) or '' for p in rec.get('Predicates', []))
+    if 'AVX512' in preds or 'AVX10' in preds:
+        return 'AVX512'
+    if 'AVX' in preds:
+        return 'AVX'
+    if 'SSE' in preds:
+        return 'SSE'
+    if 'MMX' in preds or '3DNow' in preds:
+        return 'MMX'
+    return 'BASE'
+
+
+def x86_bucket(ext):
+    """Extension de NUESTRA forma x86 -> mismo bucket que _x86_cat."""
+    e = (ext or '').upper()
+    if 'AVX512' in e or 'EVEX' in e or 'AVX10' in e:
+        return 'AVX512'
+    if 'AVX' in e or 'FMA' in e:
+        return 'AVX'
+    if 'SSE' in e:
+        return 'SSE'
+    if 'MMX' in e or '3DNOW' in e:
+        return 'MMX'
+    return 'BASE'
 
 
 def _category(d, rec):
@@ -71,8 +127,74 @@ def _category(d, rec):
     return 'INT'
 
 
-def build_model(d, model):
-    """Devuelve (cost{(mnem,cat):(lat,uops,ports[])}, port_names[])."""
+def model_features(d, model):
+    """Conjunto (transitivo, expandiendo Implies) de features del procesador que
+    usa este SchedMachineModel.  Es la base de la DB de features por core y del
+    filtro de soporte de ISA."""
+    inst = d['!instanceof']
+    feats = set()
+    for cls in ('Processor', 'ProcessorModel'):
+        for n in inst.get(cls, []):
+            r = d[n]
+            if _dname(r.get('SchedModel')) == model:
+                for f in r.get('Features', []):
+                    nm = _dname(f)
+                    if nm:
+                        feats.add(nm)
+    return _expand_implies(d, feats)
+
+
+def _expand_implies(d, feats):
+    """Cierre transitivo de Implies sobre un conjunto de features."""
+    feats = set(feats)
+    changed = True
+    while changed:
+        changed = False
+        for f in list(feats):
+            r = d.get(f)
+            if r:
+                for imp in r.get('Implies', []):
+                    nm = _dname(imp)
+                    if nm and nm not in feats:
+                        feats.add(nm)
+                        changed = True
+    return feats
+
+
+def processor_features(d, cpu):
+    """Features (transitivas) del Processor cuyo Name es @c cpu.  Es lo correcto
+    cuando VARIAS CPU comparten SchedModel (p.ej. haswell y knl comparten
+    HaswellModel pero solo knl tiene AVX512): hay que usar la CPU concreta."""
+    inst = d['!instanceof']
+    for n in inst.get('Processor', []):
+        r = d[n]
+        if r.get('Name') == cpu:
+            return _expand_implies(d, (_dname(f) for f in r.get('Features', [])))
+    return set()
+
+
+def _x86_supported(cat, feats):
+    """El core (por sus features) soporta ese nivel de ISA?  Evita dar coste a
+    formas AVX512 en cores que no lo implementan (Haswell modela WriteFAdd
+    generico, del que heredarian coste las AVX512 sin este filtro)."""
+    if cat == 'AVX512':
+        return any('AVX512' in f for f in feats)
+    if cat == 'AVX':
+        return any(f in feats for f in ('FeatureAVX', 'FeatureAVX2'))
+    if cat == 'SSE':
+        return any('SSE' in f for f in feats)
+    if cat == 'MMX':
+        return 'FeatureMMX' in feats
+    return True
+
+
+def build_model(d, model, isa='arm', feats=None):
+    """Devuelve (cost{(mnem,cat):(lat,uops,ports[])}, port_names[]).
+
+    @c isa='arm' usa categorias INT/FP/VEC/SVE/SME; 'x86' agrupa por (mnem,nivel
+    de ISA: BASE/SSE/AVX/AVX512).  @c feats (features de la CPU concreta) filtra
+    las formas cuyo nivel de ISA no soporta el core; si None se toma el union del
+    modelo (menos preciso cuando varias CPU lo comparten)."""
     inst = d['!instanceof']
     # tablas del modelo
     alias = {}                                 # SchedWrite generico -> write del modelo
@@ -90,8 +212,7 @@ def build_model(d, model):
     port_names = []
 
     def port_id(pr):
-        # nombre limpio: quita el prefijo '<algo>Unit' (N2UnitV0 -> V0).
-        nm = re.sub(r'^.*Unit', '', pr) or pr
+        nm = _clean_port(pr)
         if nm not in port_index:
             port_index[nm] = len(port_names)
             port_names.append(nm)
@@ -165,15 +286,21 @@ def build_model(d, model):
         return [_dname(w) for w in rec.get('SchedRW', [])
                 if 'SchedWrite' in _superclasses(d.get(_dname(w), {}))]
 
+    want_ns = 'AArch64' if isa == 'arm' else 'X86'
+    if isa == 'x86' and feats is None:
+        feats = model_features(d, model)             # fallback (union del modelo)
     cost = {}
     for name in inst.get('Instruction', []):
         rec = d[name]
-        if rec.get('Namespace') != 'AArch64':
+        if rec.get('Namespace') != want_ns:
             continue
         asm = rec.get('AsmString', '')
         mn = _mnemonic(asm)
         if not mn or 'Pseudo' in _superclasses(rec):
             continue
+        cat = _category(d, rec) if isa == 'arm' else _x86_cat(rec)
+        if isa == 'x86' and not _x86_supported(cat, feats):
+            continue                                 # ISA no soportada por el core
         lat = uops = 0
         ports = []
         for w in writes_for(name, rec):
@@ -184,10 +311,15 @@ def build_model(d, model):
                 ports += c[2]
         if lat == 0 and not ports:
             continue
-        cat = _category(d, rec)
         key = (mn, cat)
-        if key not in cost:                    # primera instr representativa
-            cost[key] = (lat, max(uops, 1), [port_id(p) for p in ports])
+        cand = (lat, max(uops, 1), [port_id(p) for p in ports])
+        cur = cost.get(key)
+        # representativa: preferir la instancia CON puertos (mas informacion) y,
+        # dentro de esas, la de MENOR latencia (forma reg-reg tipica).  latencia
+        # y puertos vienen SIEMPRE de la misma instancia (no se mezclan).
+        if cur is None or (bool(cand[2]) > bool(cur[2])) \
+                or (bool(cand[2]) == bool(cur[2]) and cand[0] < cur[0]):
+            cost[key] = cand
     return cost, port_names
 
 
