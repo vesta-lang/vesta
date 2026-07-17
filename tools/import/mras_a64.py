@@ -69,6 +69,8 @@ class SynForm:
     has_mem: bool             # hay acceso a memoria [ ... ]
     is_alias: bool = False    # es un alias (MOV, CMP, NOP, RET...) de una base
     alias_of: str = ""        # iform de la instruccion base (si is_alias)
+    decode_ps: str = ""       # pseudocodigo Decode (mapea vars ASL a campos)
+    operation_ps: str = ""    # pseudocodigo Operation (efectos: X()/Mem/PSTATE)
     operands: list = dfield(default_factory=list)   # list[SynOperand]
 
 
@@ -178,6 +180,15 @@ def parse_syntactic(path):
     if is_alias:
         at = root.find('.//aliasto')
         alias_of = (at.get('iformid') if at is not None else '') or ''
+    # pseudocodigo por encoding: el name de cada <ps> acaba en el nombre del
+    # encoding; secttype=Operation es el efecto, el resto es Decode (var->campo).
+    ps_op, ps_dec = {}, {}
+    for ps in root.findall('.//ps'):
+        nm = (ps.get('name') or '').rsplit('.', 1)[-1]
+        if ps.get('secttype') == 'Operation':
+            ps_op[nm] = _txt(ps)
+        else:
+            ps_dec[nm] = ps_dec.get(nm, '') + '\n' + _txt(ps)
     brief = ''
     b = root.find('./desc/brief/para')
     if b is not None:
@@ -190,7 +201,8 @@ def parse_syntactic(path):
         if sym is None:
             continue
         fld = acc.get('encodedin') if acc is not None else ''
-        for en in (e.get('enclist') or '').split():
+        # enclist es separado por COMAS ("A, B, C"), no por espacios.
+        for en in (e.get('enclist') or '').replace(',', ' ').split():
             field_of[(en, sym.get('link'))] = fld or ''
 
     out = []
@@ -235,6 +247,8 @@ def parse_syntactic(path):
                 instr_class=instr_class, ext=ext, feature=feature, brief=brief,
                 datatype=edv.get('datatype', ''), psname=psname,
                 has_mem=has_mem, is_alias=is_alias, alias_of=alias_of,
+                decode_ps=ps_dec.get(ename, ''),
+                operation_ps=ps_op.get(ename, ''),
                 operands=ops))
     return out
 
@@ -255,7 +269,23 @@ def main():
         if got:
             ninstr += 1
             syns.extend(got)
-    # Etapa semantica (Fase 1): SynForm -> ir.InstrForm con lee/escribe/flags.
+    # Fase 2.5: un alias no trae su pseudocodigo propio -> HEREDA el de su base.
+    # El encoding del alias es "<ALIAS_MNEMONIC>_<encoding_base>" (p.ej.
+    # CMP_SUBS_32S_addsub_ext -> base SUBS_32S_addsub_ext); asi CMP toma la
+    # semantica REAL de SUBS (escribe NZCV) sin heuristica.
+    ps_by_enc = {s.encoding: (s.decode_ps, s.operation_ps)
+                 for s in syns if s.operation_ps}
+    inherited = 0
+    for s in syns:
+        if s.is_alias and not s.operation_ps:
+            pref = s.mnemonic + '_'
+            base_enc = s.encoding[len(pref):] if s.encoding.startswith(pref) else ''
+            got = ps_by_enc.get(base_enc)
+            if got:
+                s.decode_ps, s.operation_ps = got
+                inherited += 1
+    # Etapa semantica: SynForm -> ir.InstrForm (Fase 2 pseudocodigo; Fase 1
+    # heuristica solo como fallback).
     forms = [mras_semantics.to_irform(s) for s in syns]
     forms.sort(key=ir.form_key)                   # FormID = indice denso
     ver = os.path.basename(src.rstrip("/\\"))

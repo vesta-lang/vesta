@@ -26,7 +26,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ir  # noqa: E402
+import ir              # noqa: E402
+import mras_pseudocode  # noqa: E402
 
 # Mnemonicos que LEEN NZCV (condicionales + acarreo).  Heuristica Fase 1.
 _READS_NZCV = re.compile(
@@ -85,30 +86,47 @@ def annotate_rw(syn):
 
 
 def to_irform(syn):
-    """SynForm -> ir.InstrForm: aplica la semantica (Fase 1) y derive_effects."""
-    rw, wf_extra, rf_extra = annotate_rw(syn)
+    """SynForm -> ir.InstrForm.
+
+    Semantica: FASE 2 (pseudocodigo ARM) AUTORITATIVA; la heuristica FASE 1 solo
+    rellena lo que el pseudocodigo no resuelve (operando via helper indirecto).
+    """
+    rw_h, wf_h, rf_h = annotate_rw(syn)       # Fase 1 (fallback)
+    ps = mras_pseudocode.derive(syn.decode_ps, syn.operation_ps, syn.operands)
+    mem_rw = None
+    if ps is not None:
+        rw_ps, wf, rf, mem_rw, _fb = ps
+        rw = [rw_ps[i] if rw_ps[i] is not None else rw_h[i]
+              for i in range(len(syn.operands))]
+    else:
+        rw, wf, rf = rw_h, wf_h, rf_h
+
     ops = []
     for i, (o, (r, w)) in enumerate(zip(syn.operands, rw)):
         ops.append(ir.Operand(idx=i, kind=o.kind, width=o.width, read=r, write=w,
                               implicit=False, suppressed=False,
                               register_set=o.register_set))
-    # operando de memoria sintetico (para has_mem y las mascaras).
-    if syn.has_mem and not any(o.kind == 'mem' for o in ops):
-        mnem = syn.mnemonic.upper()
-        atomic = bool(_ATOMIC.match(mnem))
-        is_store = bool(_STOREISH.match(mnem)) and not atomic
+    # operando de memoria sintetico (r/w del pseudocodigo si esta; si no,
+    # convencion Fase 1 load/store/atomico).
+    if (syn.has_mem or mem_rw) and not any(o.kind == 'mem' for o in ops):
+        if mem_rw is not None:
+            mem_r, mem_w = mem_rw
+        else:
+            mnem = syn.mnemonic.upper()
+            atomic = bool(_ATOMIC.match(mnem))
+            is_store = bool(_STOREISH.match(mnem)) and not atomic
+            mem_r, mem_w = (atomic or not is_store, atomic or is_store)
         ops.append(ir.Operand(idx=len(ops), kind='mem', width=0,
-                              read=atomic or not is_store,
-                              write=atomic or is_store,
+                              read=mem_r, write=mem_w,
                               implicit=False, suppressed=False,
                               register_set='-'))
-    rm, wm, hm, hi, wf, rf = ir.derive_effects(ops)
+    rm, wm, hm, hi, dwf, drf = ir.derive_effects(ops)
     return ir.InstrForm(
         iform=syn.encoding, iclass=syn.mnemonic, mnemonic=syn.mnemonic,
         opcode=syn.opcode, extension=syn.ext,
         enc=ir.EncodingFeatures(isa_set=syn.feature or 'A64'),
         operands=ops, read_mask=rm, write_mask=wm, has_mem=hm, has_imm=hi,
-        writes_flags=wf or wf_extra, reads_flags=rf or rf_extra,
+        writes_flags=wf or dwf, reads_flags=rf or drf,
         category=("alias:" + syn.alias_of if syn.is_alias
                   else (syn.feature or syn.instr_class)),
         summary=syn.brief,
