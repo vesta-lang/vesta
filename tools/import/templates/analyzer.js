@@ -12,6 +12,13 @@
     const F = CUR.forms, AR = CUR.arches;
     const DEF_ARCH = { x86: 'intel-skylake', arm64: 'neoverse-n2',
                        arm32: 'cortex-a76-a32', riscv: 'sifive-p670' };
+    // codigo de ejemplo por ISA (ejercita coste + overlay: barrera y atomico).
+    const EXAMPLES = {
+        x86: 'mov rax, 0\nimul rbx, rbx, 4\nmov rcx, rax\nmov rcx, rbx\nmov rdx, rdx\nadd rax, rcx',
+        arm64: 'mov x0, #0\nadd x1, x1, x2\nmul x3, x3, x4\nldr x5, [x6]\ndmb ish\nldadd x7, x8, [x9]',
+        arm32: 'mov r0, #0\nadd r1, r1, r2\nmul r3, r3, r4\nldr r5, [r6]\ndmb ish\nldrex r7, [r8]',
+        riscv: 'addi a0, zero, 0\nadd a1, a2, a3\nmul a4, a5, a6\nlw a7, 0(t0)\nfence\namoadd.w t1, t2, (t3)',
+    };
     const T = window.t || (k => k);   // traduccion (i18n.js); identidad si no esta
     const $ = id => document.getElementById(id);
     const esc = s => (s + '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -109,6 +116,9 @@
             const s = score(p.ops, formOps(r[10]));
             if (s > bestS) { bestS = s; best = r; }
         }
+        // x86 desambigua por operandos (r64/m32...).  ARM/RISC-V tienen otro
+        // modelo de operandos: si el scoring no casa, vale el mnemonico.
+        if (bestS < 0 && ISA !== 'x86') return cands[0];
         return bestS < 0 ? null : best;
     }
     function maxLat(s) {
@@ -473,6 +483,12 @@
     }
 
     function run() {
+        try { run_(); }
+        catch (e) {
+            $('res').innerHTML = '<p class="hint">' + esc((T('an.error') || 'Error') + ': ' + e.message) + '</p>';
+        }
+    }
+    function run_() {
         const a = +arSel.value || 0;
         const items = parseAll($('src').value);
         if (!items.length) { $('res').innerHTML = '<p class="hint">' + T('an.empty') + '</p>'; $('summary').textContent = ''; return; }
@@ -553,6 +569,8 @@
     $('src').addEventListener('input', syncHl);
     $('src').addEventListener('scroll', syncScroll);
     $('src').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
+    // ejemplo propio de la ISA activa (al cambiar de ISA la pagina recarga).
+    if (EXAMPLES[ISA]) $('src').value = EXAMPLES[ISA];
     syncHl();
     run();
 })();

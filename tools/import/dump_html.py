@@ -111,7 +111,8 @@ def _build_isa(root, key, vxisa_rel, vxpat):
         amap = [-1] * nforms
         for fid, cid in form_class.items():
             amap[fid] = cid
-        arches.append({"name": name, "family": _family(name, key),
+        disp = name[:-5] if name.endswith("-llvm") else name   # nombre limpio
+        arches.append({"name": disp, "family": _family(name, key),
                        "classes": cls_list, "map": amap})
 
     forms = []
@@ -139,6 +140,9 @@ def _build_isa(root, key, vxisa_rel, vxpat):
                 meta["sha"] = tok[11:19] + "..."
             elif tok.startswith("schema="):
                 meta["schema"] = tok[7:]
+    for k in ("date", "sha"):                          # sin marcadores de herramienta
+        if "llvm" in meta[k].lower():
+            meta[k] = "?"
     return {"meta": meta, "arches": arches, "forms": forms}
 
 
@@ -177,7 +181,7 @@ def build_data(root):
     total_forms = sum(v["meta"]["forms"] for v in isas.values())
     total_arch = sum(v["meta"]["arches"] for v in isas.values())
     meta = {"forms": total_forms, "arches": total_arch,
-            "isas": len(isas), "date": "llvm-19", "sha": "-", "schema": "1"}
+            "isas": len(isas), "date": "?", "sha": "-", "schema": "1"}
     return {"isas": isas, "features": features, "order": order,
             "labels": labels, "meta": meta}
 

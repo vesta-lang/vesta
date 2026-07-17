@@ -14,26 +14,29 @@
         'bar.isa': { es: 'ISA', en: 'ISA', ja: 'ISA', zh: 'ISA', ru: 'ISA' },
         'feat.title': { es: 'Features por microarquitectura', en: 'Features by microarchitecture', ja: 'マイクロアーキ別の機能', zh: '按微架构的特性', ru: 'Функции по микроархитектуре' },
         'feat.sub': {
-            es: '{cpus} CPU &middot; {feats} features &middot; ISA {isa} &middot; fuente LLVM {date}',
-            en: '{cpus} CPUs &middot; {feats} features &middot; ISA {isa} &middot; source LLVM {date}',
-            ja: '{cpus} CPU &middot; {feats} 機能 &middot; ISA {isa} &middot; 出典 LLVM {date}',
-            zh: '{cpus} 个 CPU &middot; {feats} 个特性 &middot; ISA {isa} &middot; 来源 LLVM {date}',
-            ru: '{cpus} CPU &middot; {feats} функций &middot; ISA {isa} &middot; источник LLVM {date}'
+            es: '{cpus} CPU &middot; {feats} features &middot; ISA {isa}',
+            en: '{cpus} CPUs &middot; {feats} features &middot; ISA {isa}',
+            ja: '{cpus} CPU &middot; {feats} 機能 &middot; ISA {isa}',
+            zh: '{cpus} 个 CPU &middot; {feats} 个特性 &middot; ISA {isa}',
+            ru: '{cpus} CPU &middot; {feats} функций &middot; ISA {isa}'
         },
         'feat.help': { es: 'Que muestra esta tabla', en: 'What this table shows', ja: 'この表について', zh: '本表说明', ru: 'Что показывает таблица' },
         'help.feat': {
-            es: '<p>Cada fila es una CPU real; cada columna una <b>feature</b> (extension de ISA) que implementa, extraida de LLVM. Un check significa que la CPU la soporta. Sirve para especializar codegen: que instrucciones puede emitir cada core.</p>',
-            en: '<p>Each row is a real CPU; each column a <b>feature</b> (ISA extension) it implements, extracted from LLVM. A check means the CPU supports it. Useful to specialize codegen: which instructions each core can emit.</p>',
-            ja: '<p>各行は実在の CPU、各列は LLVM から抽出した実装 <b>機能</b>（ISA 拡張）です。チェックは対応を示します。</p>',
-            zh: '<p>每行是一个真实 CPU，每列是它实现的<b>特性</b>（ISA 扩展），提取自 LLVM。勾选表示支持。</p>',
-            ru: '<p>Каждая строка — реальный CPU; каждый столбец — <b>функция</b> (расширение ISA), извлечённая из LLVM. Галочка означает поддержку.</p>'
+            es: '<p>Cada CPU real con las <b>features</b> (extensiones de ISA) que implementa. Sirve para especializar codegen: que instrucciones puede emitir cada core. Cambia entre vista de <b>lista</b> (chips por CPU) y <b>matriz</b> (comparativa). Busca por CPU o por feature.</p>',
+            en: '<p>Each real CPU with the <b>features</b> (ISA extensions) it implements. Useful to specialize codegen: which instructions each core can emit. Switch between <b>list</b> (chips per CPU) and <b>matrix</b> (comparison) views. Search by CPU or feature.</p>',
+            ja: '<p>各実在 CPU と実装する <b>機能</b>（ISA 拡張）。コード生成の特殊化に役立ちます。<b>リスト</b>と<b>マトリクス</b>表示を切替可能。CPU / 機能 で検索できます。</p>',
+            zh: '<p>每个真实 CPU 及其实现的<b>特性</b>（ISA 扩展）。可用于特化代码生成。可在<b>列表</b>与<b>矩阵</b>视图间切换。按 CPU 或特性搜索。</p>',
+            ru: '<p>Каждый реальный CPU и <b>функции</b> (расширения ISA), которые он реализует. Полезно для специализации кодогенерации. Переключайте <b>список</b> и <b>матрицу</b>. Поиск по CPU или функции.</p>'
         },
         'feat.search': { es: 'Filtrar CPU o feature...', en: 'Filter CPU or feature...', ja: 'CPU / 機能 で絞り込み...', zh: '筛选 CPU 或特性...', ru: 'Фильтр CPU или функции...' },
+        'feat.view': { es: 'vista', en: 'view', ja: '表示', zh: '视图', ru: 'вид' },
+        'feat.view.list': { es: 'lista', en: 'list', ja: 'リスト', zh: '列表', ru: 'список' },
+        'feat.view.matrix': { es: 'matriz', en: 'matrix', ja: 'マトリクス', zh: '矩阵', ru: 'матрица' },
         'feat.cpu': { es: 'CPU', en: 'CPU', ja: 'CPU', zh: 'CPU', ru: 'CPU' },
         'feat.sched': { es: 'modelo', en: 'model', ja: 'モデル', zh: '模型', ru: 'модель' },
         'feat.count': { es: 'n features', en: 'n features', ja: '機能数', zh: '特性数', ru: 'кол-во' },
         'feat.none': { es: 'sin coincidencias', en: 'no matches', ja: '一致なし', zh: '无匹配', ru: 'нет совпадений' },
-        'foot.feat': { es: 'Features extraidas de los SubtargetFeature de LLVM (cierre transitivo de Implies). Una extraccion unica; el runtime no depende de LLVM.', en: 'Features extracted from LLVM SubtargetFeature (transitive Implies closure). One-time extraction; the runtime does not depend on LLVM.', ja: 'LLVM の SubtargetFeature から抽出（Implies の推移閉包）。一度きりの抽出で、ランタイムは LLVM に依存しません。', zh: '特性提取自 LLVM 的 SubtargetFeature（Implies 传递闭包）。一次性提取，运行时不依赖 LLVM。', ru: 'Функции извлечены из SubtargetFeature LLVM (транзитивное замыкание Implies). Разовое извлечение; среда выполнения не зависит от LLVM.' },
+        'foot.feat': { es: 'Features (extensiones de ISA) que implementa cada CPU, con cierre transitivo de las dependencias entre extensiones.', en: 'Features (ISA extensions) each CPU implements, with transitive closure of dependencies between extensions.', ja: '各 CPU が実装する機能（ISA 拡張）。拡張間の依存を推移的に展開。', zh: '各 CPU 实现的特性（ISA 扩展），并对扩展间依赖做传递闭包。', ru: 'Функции (расширения ISA), реализуемые каждым CPU, с транзитивным замыканием зависимостей между расширениями.' },
         'idx.title': { es: 'Base de datos de instrucciones', en: 'Instruction database', ja: '命令データベース', zh: '指令数据库', ru: 'База данных инструкций' },
         'idx.help': { es: 'Como leer esta tabla', en: 'How to read this table', ja: 'この表の読み方', zh: '如何阅读本表', ru: 'Как читать эту таблицу' },
         'idx.sub': {
@@ -141,6 +144,7 @@
         'an.badmn': { es: '(mnemonico desconocido)', en: '(unknown mnemonic)', ja: '（未知のニーモニック）', zh: '（未知助记符）', ru: '(неизвестная мнемоника)' },
         'an.nodata': { es: 'sin dato', en: 'no data', ja: 'データなし', zh: '无数据', ru: 'нет данных' },
         'an.empty': { es: 'Sin instrucciones que analizar.', en: 'Nothing to analyze.', ja: '解析する命令がありません。', zh: '没有可分析的指令。', ru: 'Нет инструкций для анализа.' },
+        'an.error': { es: 'Error al analizar', en: 'Analysis error', ja: '解析エラー', zh: '分析错误', ru: 'Ошибка анализа' },
         'an.block': { es: 'Analisis del bloque', en: 'Block analysis', ja: 'ブロック解析', zh: '基本块分析', ru: 'Анализ блока' },
         'an.blockopt': { es: 'Analisis del bloque optimizado', en: 'Optimized block analysis', ja: '最適化後ブロック解析', zh: '优化后基本块分析', ru: 'Анализ оптимизированного блока' },
         'an.uops': { es: 'micro-operaciones (uops)', en: 'micro-operations (uops)', ja: 'マイクロオペレーション (uops)', zh: '微操作 (uops)', ru: 'микрооперации (uops)' },

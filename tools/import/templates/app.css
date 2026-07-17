@@ -939,7 +939,68 @@ details.skey>div {
     margin-left: 4px
 }
 
-/* ---- matriz de features por microarquitectura (features.html) ---- */
+/* ---- features por microarquitectura (features.html) ---- */
+/* vista LISTA: una tarjeta por CPU con chips horizontales legibles */
+.fcard {
+    border-bottom: 1px solid var(--line);
+    padding: 10px 2px
+}
+
+.fcard-h {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 6px
+}
+
+.fcpu {
+    font-family: ui-monospace, Consolas, monospace;
+    font-weight: 700;
+    font-size: 14px
+}
+
+.fsched {
+    color: var(--mut);
+    font-size: 12px
+}
+
+.fcnt {
+    margin-left: auto;
+    color: var(--mut);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums
+}
+
+.fchips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px
+}
+
+.fchip {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 1px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+    background: hsl(var(--fh, 210) 55% 50% / .16);
+    color: hsl(var(--fh, 210) 60% 40%);
+    border: 1px solid hsl(var(--fh, 210) 55% 50% / .28)
+}
+
+.fchip.hl {
+    outline: 2px solid hsl(var(--fh, 210) 70% 50%);
+    font-weight: 700
+}
+
+@media (prefers-color-scheme: dark) {
+    .fchip {
+        color: hsl(var(--fh, 210) 70% 66%)
+    }
+}
+
+/* vista MATRIZ: comparativa CPU x feature */
 .feat-matrix {
     width: auto;
     font-size: 12px;
@@ -950,8 +1011,7 @@ details.skey>div {
 .feat-matrix th,
 .feat-matrix td {
     padding: 3px 6px;
-    border-bottom: 1px solid var(--line);
-    vertical-align: bottom
+    border-bottom: 1px solid var(--line)
 }
 
 .feat-matrix thead th {
@@ -959,19 +1019,25 @@ details.skey>div {
     top: 0;
     z-index: 3;
     background: var(--bg);
-    border-bottom: 2px solid var(--line)
+    border-bottom: 2px solid var(--line);
+    vertical-align: bottom
 }
 
-/* cabeceras de feature: verticales para columnas estrechas */
+/* cabecera de feature: texto HORIZONTAL (legible, ni pixelado ni torcido); la
+   tabla scrollea a lo ancho y la columna CPU queda fija */
 .feat-matrix th.fh {
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
+    padding: 6px 8px;
+    text-align: center;
     white-space: nowrap;
-    text-align: left;
+    font-family: ui-monospace, Consolas, monospace;
     font-weight: 600;
-    height: 120px;
-    padding: 6px 2px;
-    font-family: ui-monospace, Consolas, monospace
+    font-size: 12.5px
+}
+
+.feat-matrix th.fh[data-hl]>div span {
+    outline: 2px solid currentColor;
+    border-radius: 3px;
+    padding: 0 2px
 }
 
 .feat-matrix th.cpu-h,
@@ -1006,6 +1072,10 @@ details.skey>div {
     font-variant-numeric: tabular-nums
 }
 
+.feat-matrix td {
+    vertical-align: middle
+}
+
 .feat-matrix td.yes {
     text-align: center;
     color: var(--rd);
@@ -1013,7 +1083,7 @@ details.skey>div {
 }
 
 .feat-matrix tbody tr:hover td {
-    background: var(--hov, rgba(127, 127, 127, .08))
+    background: rgba(127, 127, 127, .08)
 }
 
 .feat-matrix tbody tr:hover td.cpu-c {

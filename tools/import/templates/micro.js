@@ -43,5 +43,13 @@
         'intel-alderlake-p': 6, 'intel-emeraldrapids': 6, 'intel-arrowlake-p': 8,
         'intel-alderlake-e': 5,
         'amd-zen2': 5, 'amd-zen3': 6, 'amd-zen4': 6, 'amd-zen5': 8,
+        // ARM (ancho de emision aproximado del core)
+        'neoverse-n1': 4, 'neoverse-n2': 5, 'neoverse-v1': 8, 'neoverse-v2': 8,
+        'neoverse-v3': 8, 'cortex-a76': 4, 'cortex-a76-a32': 4, 'cortex-x4': 10,
+        'cortex-a53': 2, 'cortex-a57': 3, 'a64fx': 4, 'neoverse-n1-a32': 4,
+        // RISC-V (IssueWidth del modelo de scheduling)
+        'rocket': 1, 'sifive-7-series': 2, 'sifive-p450': 3, 'sifive-p670': 4,
+        'syntacore-scr1': 1, 'syntacore-scr3-rv32': 1, 'syntacore-scr3-rv64': 1,
+        'xiangshan-nanhu': 6,
     };
 })();
