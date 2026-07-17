@@ -46,9 +46,21 @@ _X86_CPU = {
 }
 
 
+# RISC-V: SchedModel -> nombre de core canonico (LLVM es la unica fuente, no hay
+# fusion; se nombra por el core representativo).
+_RISCV_NAME = {
+    'RocketModel': 'rocket', 'SiFive7Model': 'sifive-7-series',
+    'SiFiveP400Model': 'sifive-p450', 'SiFiveP600Model': 'sifive-p670',
+    'SyntacoreSCR1Model': 'syntacore-scr1', 'SyntacoreSCR3RV32Model': 'syntacore-scr3-rv32',
+    'SyntacoreSCR3RV64Model': 'syntacore-scr3-rv64', 'XiangShanNanHuModel': 'xiangshan-nanhu',
+}
+
+
 def _core_name(model, isa):
     if isa == 'x86':
         return _X86_NAME.get(model, 'x86-' + re.sub(r'Model$', '', model).lower())
+    if isa == 'riscv':
+        return _RISCV_NAME.get(model, re.sub(r'Model$', '', model).lower())
     s = re.sub(r'Model$', '', model)
     s = re.sub(r'(?<=[a-z])(?=[A-Z])', '-', s)
     return s.lower() + '-llvm'
@@ -61,8 +73,12 @@ def main():
     os.makedirs(out, exist_ok=True)
     d = json.load(open(jsonp, encoding='utf-8'))
     forms = database.load_vxisa(vxisa)
-    cats_of = (lambda ext: llvm_sched._EXT_CATS.get(ext, ('INT',))) if isa == 'arm' \
-        else (lambda ext: (llvm_sched.x86_bucket(ext),))
+    if isa == 'arm':
+        cats_of = lambda ext: llvm_sched._EXT_CATS.get(ext, ('INT',))
+    elif isa == 'x86':
+        cats_of = lambda ext: (llvm_sched.x86_bucket(ext),)
+    else:
+        cats_of = lambda ext: (isa.upper(),)          # riscv: categoria unica
     models = [m for m in d['!instanceof'].get('SchedMachineModel', []) if m not in _SKIP]
     print("[gen_llvm] isa=%s, %d modelos" % (isa, len(models)))
     for model in models:
@@ -106,7 +122,12 @@ def main():
                     ports=[ir.PortSlot(group=g, uops=1.0) for g in pslots]))
             form_class[fid] = cid
             mapped += 1
-        fam = 'arm' if isa == 'arm' else ('amd' if core.startswith('amd') else 'intel')
+        if isa == 'arm':
+            fam = 'arm'
+        elif isa == 'riscv':
+            fam = 'riscv'
+        else:
+            fam = 'amd' if core.startswith('amd') else 'intel'
         sched = ir.ArchSchedule(
             spec=ir.MicroArchSpec(xml_name=model, canonical_name=core, family=fam),
             port_names=port_names, classes=classes, form_class=form_class)

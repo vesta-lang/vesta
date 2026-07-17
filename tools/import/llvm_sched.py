@@ -70,11 +70,14 @@ def _superclasses(rec):
     return rec.get('!superclasses', [])
 
 
-def _mnemonic(asm):
-    """Primer token del AsmString -> mnemonico en mayusculas ('add\\t..' -> ADD)."""
+def _mnemonic(asm, isa=''):
+    """Primer token del AsmString -> mnemonico en mayusculas ('add\\t..' -> ADD).
+    En RISC-V el sufijo con punto ES parte del mnemonico (amoadd.w, fadd.s,
+    c.addi) y NO se recorta."""
     if not asm:
         return None
-    m = re.match(r'^([A-Za-z][A-Za-z0-9]*)', asm)
+    pat = r'^([A-Za-z][A-Za-z0-9._]*)' if isa == 'riscv' else r'^([A-Za-z][A-Za-z0-9]*)'
+    m = re.match(pat, asm)
     return m.group(1).upper() if m else None
 
 
@@ -283,10 +286,10 @@ def build_model(d, model, isa='arm', feats=None):
         for rx, ws in regexes:
             if rx.search(name):
                 return ws
-        return [_dname(w) for w in rec.get('SchedRW', [])
+        return [_dname(w) for w in (rec.get('SchedRW') or [])
                 if 'SchedWrite' in _superclasses(d.get(_dname(w), {}))]
 
-    want_ns = 'AArch64' if isa == 'arm' else 'X86'
+    want_ns = {'arm': 'AArch64', 'x86': 'X86', 'riscv': 'RISCV'}.get(isa, 'X86')
     if isa == 'x86' and feats is None:
         feats = model_features(d, model)             # fallback (union del modelo)
     cost = {}
@@ -295,10 +298,15 @@ def build_model(d, model, isa='arm', feats=None):
         if rec.get('Namespace') != want_ns:
             continue
         asm = rec.get('AsmString', '')
-        mn = _mnemonic(asm)
+        mn = _mnemonic(asm, isa)
         if not mn or 'Pseudo' in _superclasses(rec):
             continue
-        cat = _category(d, rec) if isa == 'arm' else _x86_cat(rec)
+        if isa == 'arm':
+            cat = _category(d, rec)
+        elif isa == 'x86':
+            cat = _x86_cat(rec)
+        else:
+            cat = isa.upper()                        # riscv: mnemonico inequivoco
         if isa == 'x86' and not _x86_supported(cat, feats):
             continue                                 # ISA no soportada por el core
         lat = uops = 0

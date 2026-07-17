@@ -363,6 +363,22 @@ instruccion, con pseudocodigo ASL).  Tres etapas de responsabilidad unica:
   pipelines por grupo de instrucciones.  Cobre Neoverse N1/N2/V2/V3, Cortex-A76,
   Cortex-X4.  Es la fuente **autoritativa** (medida en hardware).
 
+### ISA sin fuente propia (RISC-V)
+
+Para ISAs sin una fuente de sintaxis aparte (ni uops.info ni MRAS), la sintaxis
+se extrae de los propios records `Instruction` de LLVM:
+
+- `llvm_isa.py` — construye el `.vxisa` de cualquier ISA (`Namespace` de LLVM):
+  mnemonico (`AsmString`), operandos y sus mascaras r/w (`In`/`OutOperandList`
+  con la `RegisterClass`), extension (`Predicates`: I/M/A/F/D/C/V, Zb*, Zfh,
+  vendor XCV*/XThead*...), opcode (bits fijos de `Inst`), memoria
+  (`mayLoad`/`mayStore`) y overlay (isCall/isReturn/isBranch, AMO*/LR/SC,
+  `.aq`/`.rl`, FENCE, ECALL).  Reutiliza el MISMO pipeline (FormID, overlay).
+
+El coste y las features salen de `gen_llvm.py`/`gen_features.py` igual que las
+demas ISAs (RISC-V tiene modelos de Rocket, SiFive 7/P400/P600, Syntacore,
+XiangShan; los cores in-order simples modelan latencia pero pocos puertos).
+
 ### Coste y features desde LLVM (relleno + microarqs sin guia)
 
 `llvm-tblgen-19 --dump-json AArch64.td` / `X86.td` produce un JSON con los
