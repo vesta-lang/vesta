@@ -147,7 +147,10 @@ def _parse_rows(pdf, isa_hdr='AArch64'):
             if not t or not t[0]:
                 continue
             hdr = " ".join((c or "") for c in t[0])
-            if isa_hdr not in hdr or ('Latency' not in hdr and 'Exec' not in hdr):
+            # la 2a columna es "AArch64"/"AArch32" o "SVE Instruction" (las
+            # tablas SVE no repiten AArch64: SVE es extension de A64).
+            ok_isa = isa_hdr in hdr or (isa_hdr == 'AArch64' and 'SVE' in hdr)
+            if not ok_isa or ('Latency' not in hdr and 'Exec' not in hdr):
                 continue
             for row in t[1:]:
                 cells = [(c or "").strip() for c in row]
