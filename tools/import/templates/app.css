@@ -444,16 +444,50 @@ details.skey>div {
     padding: 16px 22px
 }
 
-.an textarea {
-    width: 100%;
-    min-height: 150px;
-    font: 13px/1.5 ui-monospace, Consolas, monospace;
-    padding: 12px;
+/* editor con resaltado: <pre> coloreado detras de un <textarea> transparente */
+.an .editor {
+    position: relative;
     border: 1px solid var(--line);
     border-radius: 9px;
     background: var(--code);
+    overflow: hidden;
+}
+.an .editor .hl,
+.an .editor textarea {
+    margin: 0;
+    padding: 12px;
+    border: 0;
+    width: 100%;
+    min-height: 160px;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+    white-space: pre;
+    overflow: auto;
+    tab-size: 4;
+}
+.an .editor .hl {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
     color: var(--fg);
+    z-index: 0;
+}
+.an .editor textarea {
+    position: relative;
+    display: block;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--fg);
     resize: vertical;
+    z-index: 1;
+}
+.c-mn { color: #8250df }
+.c-reg { color: #1a7f8f }
+.c-num { color: #b26a00 }
+.c-kw { color: #6a737d; font-style: italic }
+.c-com { color: var(--mut); font-style: italic }
+@media (prefers-color-scheme: dark) {
+    .c-mn { color: #c39bff } .c-reg { color: #59c2d6 } .c-num { color: #e0a458 }
+    .c-kw { color: #9aa4ad }
 }
 
 .an .row {
@@ -539,4 +573,33 @@ details.skey>div {
 
 .pport {
     cursor: help
+}
+/* tooltip propio (assets/tip.js) */
+.tipbox {
+    position: absolute;
+    z-index: 100;
+    max-width: 340px;
+    background: var(--navbg);
+    color: var(--navfg);
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .28);
+    pointer-events: none;
+}
+
+/* camino critico en el analizador */
+.an .res tr.crit td {
+    background: var(--ovbg)
+}
+
+.an .res tr.crit td:first-child {
+    border-left: 3px solid var(--wr)
+}
+
+.critdot {
+    color: var(--wr);
+    font-size: 10px;
+    vertical-align: middle
 }

@@ -33,7 +33,8 @@
                 cada operando (registro y su ancho, memoria &mdash; el ancho se toma
                 del prefijo <span class="k">qword ptr [rax]</span> o del otro
                 operando &mdash;, inmediato) y se localiza su <b>forma</b> en la base
-                de datos.</p>
+                de datos.
+            </p>
             <p>Del bloque completo se calculan las dos cotas que gobiernan el
                 tiempo de ejecucion en la microarquitectura elegida:</p>
             <dl>
@@ -55,13 +56,16 @@
     </details>
 
     <div class="an">
-        <textarea id="src" spellcheck="false">mov rax, rbx
+        <div class="editor">
+            <pre id="hl" class="hl" aria-hidden="true"></pre>
+            <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off">mov rax, rbx
 add rax, 10
 imul rax, rcx
 xor eax, eax
 inc rdx
 cmp rax, rdx
 mov qword ptr [rax], rcx</textarea>
+        </div>
         <div class="row">
             <button class="go" id="run">Analizar</button>
             <label>microarq. <select id="ar"></select></label>
@@ -75,6 +79,7 @@ mov qword ptr [rax], rcx</textarea>
         heuristico best-effort.</div>
 
     <script src="assets/db.js"></script>
+    <script src="assets/tip.js"></script>
     <script src="assets/analyzer.js"></script>
 </body>
 

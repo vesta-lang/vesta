@@ -85,7 +85,7 @@
             if (!m) return esc(t);
             const n = parseFloat(m[1]), hue = portHue(m[2]);
             return '<b>' + m[1] + '</b> µop' + (n !== 1 ? 's' : '') + ' &rarr; ' +
-                '<span class="pport" title="' + esc(portDesc(m[2])) + '" style="background:hsl(' + hue + ' 60% 50% / .18);color:hsl(' + hue + ' 65% 42%)">' +
+                '<span class="pport" data-tip="' + esc(portDesc(m[2])) + '" style="background:hsl(' + hue + ' 60% 50% / .18);color:hsl(' + hue + ' 65% 42%)">' +
                 esc(m[2]) + '</span>';
         }).join('<br>');
     }

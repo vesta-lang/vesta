@@ -144,7 +144,7 @@ def main():
         f.write("window.VESTA_DB=")
         json.dump(data, f, separators=(",", ":"))
         f.write(";\n")
-    for a in ("app.css", "viewer.js", "analyzer.js"):
+    for a in ("app.css", "tip.js", "viewer.js", "analyzer.js"):
         shutil.copyfile(os.path.join(_TPL, a), os.path.join(assets, a))
     for page, tpl in (("index.html", "viewer.html"),
                       ("analyzer.html", "analyzer.html")):
