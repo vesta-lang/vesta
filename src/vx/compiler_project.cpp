@@ -2568,7 +2568,11 @@ CompileResult compile_vx_project(
             if (pm.ast) collect(pm.ast->decls);
 
         if (!res.contracts.empty()) {
-            auto fps = analyze::compute_module_fingerprints(merged);
+            // Arch del TARGET activo (@Target/AOT); vacio = host (x86_64).
+            std::string fp_os, fp_arch;
+            vx::get_aot_condcomp_target(fp_os, fp_arch);
+            if (fp_arch.empty()) fp_arch = "x86_64";
+            auto fps = analyze::compute_module_fingerprints(merged, fp_arch);
             analyze::compose_fingerprints(fps, &res.contracts);
             // En modo --analyze (`emit_ir_preopt`) una violacion NO se emite
             // como error ni aborta: analyze mide y ensena (el reporte muestra

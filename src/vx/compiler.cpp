@@ -1049,7 +1049,13 @@ CompileResult compile_vx_source(const std::string &source,
         // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
         collect_contracts_(mod->decls, res.contracts);
         if (!res.contracts.empty()) {
-            auto fps = analyze::compute_module_fingerprints(irmod);
+            // Arch del TARGET activo (@Target/AOT cross-compile); vacio = host
+            // de build (x86_64).  Selecciona la tabla de efectos con la que se
+            // analiza cada bloque `asm { }` (x86_64/x86/arm64).
+            std::string fp_os, fp_arch;
+            vx::get_aot_condcomp_target(fp_os, fp_arch);
+            if (fp_arch.empty()) fp_arch = "x86_64";
+            auto fps = analyze::compute_module_fingerprints(irmod, fp_arch);
             analyze::compose_fingerprints(fps, &res.contracts);
             // En --analyze (`emit_ir_preopt`) NO se emite el error ni se aborta
             // (ver la nota en compiler_project.cpp): analyze mide, el build real

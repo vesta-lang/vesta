@@ -184,6 +184,25 @@ int main() {
     CHECK(as && as->stack_bytes == 32,
           "asm_stack: marco explicito contado (sub rsp, 32)");
 
+    // --- inline asm ARM64: se analiza con la tabla del arch (no la de x86) ---
+    // add x0, x1, x2 (arm64 puro) -> pura local con arch arm64.
+    const auto ap64 = compute_fingerprint(
+        fn_with("arm_pure", {asm_block("add x0, x1, x2"), op(ir::IrOp::RET)}),
+        "arm64");
+    CHECK(ap64.pure_local, "arm64: add x0,x1,x2 puro (tabla arm64)");
+    // ldr x0, [x1] (carga arm64) -> toca memoria -> impura.
+    const auto am64 = compute_fingerprint(
+        fn_with("arm_mem", {asm_block("ldr x0, [x1]"), op(ir::IrOp::RET)}),
+        "arm64");
+    CHECK(!am64.pure_local, "arm64: ldr [x1] impura (toca memoria)");
+    // el arch IMPORTA: ldaxr (LL/SC arm64) analizado como x86_64 no se reconoce
+    // -> conservador (impuro), no un falso puro.
+    const auto llsc_x86 = compute_fingerprint(
+        fn_with("llsc", {asm_block("ldaxr x0, [x1]"), op(ir::IrOp::RET)}),
+        "x86_64");
+    CHECK(!llsc_x86.pure_local,
+          "ldaxr con arch x86_64: mnemonico desconocido -> conservador");
+
     if (g_fail == 0)
         std::printf("=== test_fingerprint: %d checks OK, 0 fallidos ===\n",
                     g_checks);
