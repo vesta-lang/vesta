@@ -51,20 +51,21 @@ def write_vxisa(path, forms, overlay, xml_date, xml_hash):
                 "xml_sha256=%s\n" % (DB_FORMAT_VERSION, ir.SEMANTIC_SCHEMA,
                                      xml_date, len(forms), xml_hash))
         f.write("# id|checksum|uid|iclass|ext|opcode|enc|rmask|wmask|mem|imm"
-                "|wflags|rflags|operands|overlay|category|summary|string\n")
+                "|wflags|rflags|operands|overlay|category|summary|string|url\n")
         f.write("# id = FormID denso (arrays); checksum = FNV1a64 de la clave "
-                "(verificacion); uid/iclass/category/summary/string = doc.  "
+                "(verificacion); uid/iclass/category/summary/string/url = doc.  "
                 "operands: idx,kind,width,flags,regset (flags=r|w<<1|impl<<2|supp<<3)\n")
         for i, fm in enumerate(forms):
             ov = ",".join(sorted(overlay.get(fm.iform, []))) or "-"
             enc = ",".join("%s=%s" % (k, v) for k, v in fm.enc.nonempty()) or "-"
-            f.write("%d|%016x|%s|%s|%s|%s|%s|0x%x|0x%x|%d|%d|%d|%d|%s|%s|%s|%s|%s\n"
+            f.write("%d|%016x|%s|%s|%s|%s|%s|0x%x|0x%x|%d|%d|%d|%d|%s|%s|%s|%s|%s|%s\n"
                     % (i, ir.checksum(fm), _uid(fm), fm.iclass or "-",
                        fm.extension or "-", fm.opcode or "-", enc,
                        fm.read_mask, fm.write_mask, int(fm.has_mem),
                        int(fm.has_imm), int(fm.writes_flags),
                        int(fm.reads_flags), _op_field(fm.operands), ov,
-                       _san(fm.category), _san(fm.summary), _san(fm.asm_string)))
+                       _san(fm.category), _san(fm.summary), _san(fm.asm_string),
+                       _san(fm.url)))
 
 
 def write_ids_header(path, forms):

@@ -29,9 +29,22 @@ import serialize     # noqa: E402
 import uops_info     # noqa: E402
 
 MICROARCHS = [
+    # Intel, nucleo grande (P-core)
+    ir.MicroArchSpec("HSW", "intel-haswell", "intel"),
     ir.MicroArchSpec("SKL", "intel-skylake", "intel"),
+    ir.MicroArchSpec("SKX", "intel-skylake-x", "intel"),      # servidor, AVX-512
+    ir.MicroArchSpec("ICL", "intel-icelake", "intel"),
+    ir.MicroArchSpec("RKL", "intel-rocketlake", "intel"),
     ir.MicroArchSpec("ADL-P", "intel-alderlake-p", "intel"),  # Golden Cove
+    ir.MicroArchSpec("EMR", "intel-emeraldrapids", "intel"),  # servidor reciente
+    ir.MicroArchSpec("ARL-P", "intel-arrowlake-p", "intel"),  # Lion Cove
+    # Intel, nucleo pequeno (E-core)
+    ir.MicroArchSpec("ADL-E", "intel-alderlake-e", "intel"),  # Gracemont
+    # AMD
+    ir.MicroArchSpec("ZEN2", "amd-zen2", "amd"),
+    ir.MicroArchSpec("ZEN3", "amd-zen3", "amd"),
     ir.MicroArchSpec("ZEN4", "amd-zen4", "amd"),
+    ir.MicroArchSpec("ZEN5", "amd-zen5", "amd"),
 ]
 
 VALID_OVERLAY_PROPS = {

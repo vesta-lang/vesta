@@ -133,6 +133,7 @@ class InstrForm:
     category: str = ""      # familia uops.info ("BINARY", "SSE", "AVX", ...)
     summary: str = ""       # descripcion ("Bit Test", "CPU Identification"...)
     asm_string: str = ""    # forma legible ("BT (M16, R16)")
+    url: str = ""           # pagina de uops.info de esta forma (ver original)
 
 
 def _pack_str(buf, s):

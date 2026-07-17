@@ -32,7 +32,7 @@ Cada modulo tiene una unica responsabilidad:
 | `build_database.py`          | **Orquesta**: encadena importar -> optimizar -> serializar y valida el overlay. |
 | `database.py`                | Lector unico de `.vxisa`/`.vxarch` (usado por `dump_db.py`, `dump_html.py`, tests y verificadores). |
 | `dump_db.py`                 | Inspeccion legible (texto) de la base de datos generada. |
-| `dump_html.py`               | Volcado visual: HTML autocontenido con tabla, busqueda, filtro y paginacion. |
+| `dump_html.py`               | Genera el sitio visual (multipagina) desde las plantillas de `templates/`: tabla de instrucciones + analizador de asm + assets. |
 | `overlay_x86_semantics.def`  | Semantica manual que la fuente no codifica (serializante, barrera, atomica, ...). |
 
 Anadir una fuente nueva (guias de ARM, modelos de LLVM) es escribir otro

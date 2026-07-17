@@ -14,7 +14,7 @@ def load_vxisa(path):
     imm,wflags,rflags,operands,overlay} }."""
     cols = ("checksum", "uid", "iclass", "ext", "opcode", "enc", "rmask",
             "wmask", "mem", "imm", "wflags", "rflags", "operands", "overlay",
-            "category", "summary", "string")
+            "category", "summary", "string", "url")
     forms = {}
     with open(path, "r", encoding="ascii") as f:
         for line in f:

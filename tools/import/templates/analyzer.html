@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vesta - Analizador de asm x86</title>
+    <link rel="stylesheet" href="assets/app.css">
+</head>
+
+<body>
+    <nav class="nav">
+        <span class="brand">Vesta <small>&middot; arch-data</small></span>
+        <a href="index.html">Instrucciones</a>
+        <a href="analyzer.html" class="active">Analizador</a>
+        <a class="ext" href="https://github.com/vesta-lang/arch-data">Repositorio &nearr;</a>
+    </nav>
+
+    <header>
+        <h1>Analizador de ensamblador x86</h1>
+        <div class="sub">Pega instrucciones (sintaxis Intel, una por linea). Para
+            cada una se busca su <b>forma</b> en la base de datos y se reporta lo que
+            hace y su coste en la microarquitectura elegida.</div>
+    </header>
+
+    <details class="help">
+        <summary>Como funciona el analisis</summary>
+        <div class="body">
+            <p>Para cada instruccion (sintaxis Intel, una por linea; se ignoran
+                etiquetas <span class="k">nombre:</span> y comentarios
+                <span class="k">;</span> <span class="k">#</span>
+                <span class="k">//</span>) se identifica el mnemonico, se clasifica
+                cada operando (registro y su ancho, memoria &mdash; el ancho se toma
+                del prefijo <span class="k">qword ptr [rax]</span> o del otro
+                operando &mdash;, inmediato) y se localiza su <b>forma</b> en la base
+                de datos.</p>
+            <p>Del bloque completo se calculan las dos cotas que gobiernan el
+                tiempo de ejecucion en la microarquitectura elegida:</p>
+            <dl>
+                <dt>throughput</dt>
+                <dd>&Sigma; del throughput reciproco de cada instruccion: los ciclos
+                    si el bloque estuviera limitado por los puertos de ejecucion
+                    (instrucciones independientes, encauzadas).</dd>
+                <dt>latencia (camino critico)</dt>
+                <dd>se construye el grafo de <b>dependencias</b> reales entre
+                    instrucciones (registros &mdash; con sus alias de ancho &mdash;,
+                    flags y memoria) y se recorre el camino mas largo: los ciclos si
+                    el bloque estuviera limitado por las cadenas de dependencia.</dd>
+            </dl>
+            <p>La <b>estimacion</b> del bloque es el mayor de los dos, y se indica
+                cual es el <b>cuello de botella</b>. La eliminacion de movimientos
+                (<span class="k">mov</span> registro-registro a 0 ciclos) y las
+                latencias por camino operando&rarr;operando se tienen en cuenta.</p>
+        </div>
+    </details>
+
+    <div class="an">
+        <textarea id="src" spellcheck="false">mov rax, rbx
+add rax, 10
+imul rax, rcx
+xor eax, eax
+inc rdx
+cmp rax, rdx
+mov qword ptr [rax], rcx</textarea>
+        <div class="row">
+            <button class="go" id="run">Analizar</button>
+            <label>microarq. <select id="ar"></select></label>
+            <span class="hint" id="summary"></span>
+        </div>
+        <div class="res" id="res"></div>
+    </div>
+
+    <div class="foot">Datos de <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>
+        (fuente <a href="https://uops.info/">uops.info</a>). Emparejamiento
+        heuristico best-effort.</div>
+
+    <script src="assets/db.js"></script>
+    <script src="assets/analyzer.js"></script>
+</body>
+
+</html>
