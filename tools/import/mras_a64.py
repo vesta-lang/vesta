@@ -288,12 +288,20 @@ def main():
     # heuristica solo como fallback).
     forms = [mras_semantics.to_irform(s) for s in syns]
     forms.sort(key=ir.form_key)                   # FormID = indice denso
+    # FASE 3: overlay (barrera/serializante/atomica/ll_sc/mem_acquire-release/
+    # branch/call/ret/syscall) DERIVADO del pseudocodigo, keyed por encoding.
+    import mras_pseudocode
+    overlay = {}
+    for s in syns:
+        props = mras_pseudocode.overlay_props(s.operation_ps)
+        if props:
+            overlay[s.encoding] = props
     ver = os.path.basename(src.rstrip("/\\"))
     m = re.search(r'(\d{4}-\d{2})', ver)
     date = m.group(1) if m else "?"
     h = hashlib.sha256(("mras-a64 %s %d %d" % (ver, ninstr, len(forms)))
                        .encode()).hexdigest()[:16]
-    serialize.write_vxisa(os.path.join(out, "arm.vxisa"), forms, {}, date, h,
+    serialize.write_vxisa(os.path.join(out, "arm.vxisa"), forms, overlay, date, h,
                           isa="arm", source="arm-mras-a64")
     serialize.write_ids_header(os.path.join(out, "instr_form_ids_arm.h"), forms)
     print("[mras_a64] %d instrucciones, %d formas (encodings) -> %s"

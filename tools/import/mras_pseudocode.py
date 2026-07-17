@@ -41,6 +41,37 @@ def _var_to_field(decode_ps):
     return m
 
 
+def overlay_props(operation_ps):
+    """Propiedades de overlay DERIVADAS del pseudocodigo (no de nombres): barrera,
+    serializante, atomica, ll/sc, orden de memoria, salto/llamada/retorno,
+    syscall.  Mismas etiquetas que el overlay de x86.  @return set[str]."""
+    op = operation_ps or ''
+    props = set()
+    if re.search(r'DataMemoryBarrier|DataSynchronizationBarrier|'
+                 r'SpeculativeStoreBypassBarrier', op):
+        props.add('barrier')
+    if 'InstructionSynchronizationBarrier' in op:
+        props.add('serializing')
+    if 'MemAtomic' in op:
+        props.add('atomic')
+    if re.search(r'ExclusiveMonitors', op):
+        props.add('ll_sc')
+    if re.search(r'CreateAccDescAcqRel\s*\(\s*MemOp_LOAD|CreateAccDescLDAcq', op):
+        props.add('mem_acquire')
+    if re.search(r'CreateAccDescAcqRel\s*\(\s*MemOp_STORE|CreateAccDescSTRel', op):
+        props.add('mem_release')
+    if 'AArch64_CallSupervisor' in op or 'SVC' in op:
+        props.add('syscall')
+    bts = set(re.findall(r'BranchType_(\w+)', op))
+    if any('CALL' in b for b in bts):
+        props.add('call')
+    elif any(b == 'RET' for b in bts):
+        props.add('ret')
+    elif bts or 'BranchTo' in op:
+        props.add('branch')
+    return props
+
+
 def derive(decode_ps, operation_ps, operands):
     """Devuelve (rw, wf, rf, mem_rw, flags_barrier) o None si no hay Operation.
 
