@@ -347,6 +347,13 @@ AsmEffects asm_effects_for(const std::string &mnemonic) {
         add("lea", E({}, true, false, false));
         add("xchg",
             E({}, true, false, false)); // escribe ambos (conservador: 1er op)
+        // --- Atomicas RMW x86 (siempre con prefijo lock salvo xchg): tocan
+        //     memoria + flags; cmpxchg compara/escribe rax.  cmpxchg16b usa
+        //     rdx:rax (esperado) y rcx:rbx (deseado) -> DWCAS lock-free real. ---
+        add("cmpxchg", E({"rax"}, false, true, true));  // rax = old si falla
+        add("cmpxchg8b", E({"rax", "rdx"}, false, true, true));
+        add("cmpxchg16b", E({"rax", "rdx"}, false, true, true));
+        add("xadd", E({}, true, true, true));           // 1er op + mem + flags
         add("cmov", E({}, true, false, false));
         add("not", E({}, true, false, false)); // not no toca flags
         add("set", E({}, true, false, false)); // setcc: escribe 1er op (byte)

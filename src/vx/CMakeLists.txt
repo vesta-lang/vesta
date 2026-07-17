@@ -75,6 +75,10 @@ add_library(vx_lib STATIC
     ast.cpp
     parser.cpp
     asm_effects.cpp
+    # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
+    # call/flags/rama/marco de pila explicito) sobre la tabla plana por
+    # instruccion de asm_effects; base del compilador consciente del asm.
+    asm_analyze.cpp
     asm_backend.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad

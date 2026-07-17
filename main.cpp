@@ -48,6 +48,7 @@
 #include "cli/runtime_api_commands.h"
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
+#include "vx/asm_analyze.h" // efectos de bloque de inline asm (LSP + --asm-effects)
 #include "vx/compiler.h"
 #include "vx/lexer.h"
 #include "vx/parser.h"
@@ -612,7 +613,18 @@ int main(int argc, char *argv[]) {
             "analizado (reemplaza las de contrato existentes de cada funcion/"
             "metodo definido ahi).  Re-verifica antes de guardar; si algo no "
             "cuadra, no toca el fichero.  Las funciones de imports no se tocan "
-            "(analiza ese fichero por separado).")
+            "(analiza ese fichero por separado).")(
+            "asm-effects",
+            "Analiza un fichero con un cuerpo de inline asm (NASM/ARM) y reporta "
+            "su modelo de efecto de bloque (memoria/atomica/call/flags/rama/marco "
+            "de pila explicito) + los mnemonicos desconocidos.  Usa --arch para "
+            "elegir la tabla (x86_64 por defecto), --asm-effects-json para salida "
+            "JSON.  Es la lectura que hace el compilador de un bloque de asm; la "
+            "consume tambien el servidor de lenguaje (LSP).",
+            cxxopts::value<std::string>())(
+            "asm-effects-json",
+            "Con --asm-effects: emite el modelo de efecto como JSON en vez de "
+            "texto legible.")
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1772,6 +1784,63 @@ int main(int argc, char *argv[]) {
     //     -> run_worker(.vel, skip_preprocessor=true)
     //     -> .velb
     //
+    // -----------------------------------------------------------------
+    // Lectura de efectos de un inline asm: vm --asm-effects <archivo>
+    //
+    // Lee un fichero con un cuerpo de inline asm (NASM/ARM verbatim) y reporta
+    // su modelo de efecto de bloque via @c vx::asm_analyze_block.  Lo consume el
+    // servidor de lenguaje (LSP) y sirve de superficie de prueba; NO compila
+    // nada.  Ver vx/asm_analyze.h.
+    // -----------------------------------------------------------------
+    if (result.count("asm-effects")) {
+        const std::string path = result["asm-effects"].as<std::string>();
+        const std::string arch =
+            result.count("arch") ? result["arch"].as<std::string>() : "x86_64";
+        const bool as_json = result.count("asm-effects-json") > 0;
+
+        std::ifstream ifs(path);
+        if (!ifs.is_open()) {
+            std::cerr << "[asm-effects] no se puede abrir: " << path << "\n";
+            return EXIT_FAILURE;
+        }
+        const std::string body((std::istreambuf_iterator<char>(ifs)),
+                               std::istreambuf_iterator<char>());
+        ifs.close();
+
+        const vx::AsmBlockEffects e = vx::asm_analyze_block(body, arch);
+        auto b = [](bool v) { return v ? "true" : "false"; };
+        if (as_json) {
+            std::cout << "{\"arch\":\"" << arch << "\",\"touches_mem\":"
+                      << b(e.touches_mem) << ",\"has_atomic\":" << b(e.has_atomic)
+                      << ",\"is_call\":" << b(e.is_call) << ",\"touches_flags\":"
+                      << b(e.touches_flags) << ",\"has_branch\":"
+                      << b(e.has_branch) << ",\"explicit_stack_bytes\":"
+                      << e.explicit_stack_bytes << ",\"known\":" << b(e.known())
+                      << ",\"unknown_mnemonics\":[";
+            for (size_t i = 0; i < e.unknown_mnemonics.size(); ++i)
+                std::cout << (i ? "," : "") << "\"" << e.unknown_mnemonics[i]
+                          << "\"";
+            std::cout << "]}\n";
+        } else {
+            std::cout << "Efectos del bloque asm (arch=" << arch << "):\n";
+            std::cout << "  touches_mem   : " << b(e.touches_mem) << "\n";
+            std::cout << "  has_atomic    : " << b(e.has_atomic) << "\n";
+            std::cout << "  is_call       : " << b(e.is_call) << "\n";
+            std::cout << "  touches_flags : " << b(e.touches_flags) << "\n";
+            std::cout << "  has_branch    : " << b(e.has_branch) << "\n";
+            std::cout << "  stack_explicit: " << e.explicit_stack_bytes
+                      << " B\n";
+            std::cout << "  known         : " << b(e.known()) << "\n";
+            if (!e.known()) {
+                std::cout << "  desconocidos  :";
+                for (const auto &u : e.unknown_mnemonics)
+                    std::cout << " " << u;
+                std::cout << "\n";
+            }
+        }
+        return e.known() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     // -----------------------------------------------------------------
     // Subsistema de coste (MODO ANALISIS): vm --analyze <archivo.vx>
     //
