@@ -131,8 +131,9 @@ def _pipeline_legend(pdf):
 _HEADING = re.compile(r'^\s*\d+(?:\.\d+)+\.?\s+([A-Z][A-Za-z0-9 /,\-]{3,50})', re.M)
 
 
-def _parse_rows(pdf):
-    """list[(cat, group, mnem_cell, latency, tp, pipes[])] de las tablas AArch64.
+def _parse_rows(pdf, isa_hdr='AArch64'):
+    """list[(cat, group, mnem_cell, latency, tp, pipes[])] de las tablas de la
+    ISA pedida (@c isa_hdr = 'AArch64' o 'AArch32').
 
     @c cat = categoria de la SECCION (INT/ASIMD/FP/SVE/...) para poder emparejar
     cada forma solo con el coste de una seccion compatible con su extension."""
@@ -146,7 +147,7 @@ def _parse_rows(pdf):
             if not t or not t[0]:
                 continue
             hdr = " ".join((c or "") for c in t[0])
-            if 'AArch64' not in hdr or ('Latency' not in hdr and 'Exec' not in hdr):
+            if isa_hdr not in hdr or ('Latency' not in hdr and 'Exec' not in hdr):
                 continue
             for row in t[1:]:
                 cells = [(c or "").strip() for c in row]
@@ -164,9 +165,9 @@ def _parse_rows(pdf):
     return rows
 
 
-def build_cost_map(pdf):
+def build_cost_map(pdf, isa_hdr='AArch64'):
     """((mnemonico, categoria) -> (lat_edges, recip_tp, pslots), port_names[])."""
-    rows = _parse_rows(pdf)
+    rows = _parse_rows(pdf, isa_hdr)
     # grupo -> instrucciones (para resolver '(same as X)')
     group_mnems = {}
     for cat, group, cell, lat, tp, pipes in rows:
@@ -203,9 +204,12 @@ def main():
         sys.exit("uso: python swog_arm.py <swog.pdf> <core> <family> "
                  "<arm.vxisa> <dir_salida>")
     pdf_path, core, family, vxisa, out = sys.argv[1:6]
+    # ISA opcional (aarch64 por defecto; aarch32 lee las tablas AArch32 del PDF).
+    isa = sys.argv[6].lower() if len(sys.argv) > 6 else 'aarch64'
+    isa_hdr = 'AArch32' if isa == 'aarch32' else 'AArch64'
     os.makedirs(out, exist_ok=True)
     with pdfplumber.open(pdf_path) as pdf:
-        cost, port_names = build_cost_map(pdf)
+        cost, port_names = build_cost_map(pdf, isa_hdr)
     forms = database.load_vxisa(vxisa)
 
     # deduplicar clases de coste; mapear forma->clase por mnemonico (iclass).
@@ -253,7 +257,9 @@ def main():
         spec=ir.MicroArchSpec(xml_name=core, canonical_name=core, family=family),
         port_names=port_names, classes=classes, form_class=form_class)
     path = os.path.join(out, core + ".vxarch")
-    serialize.write_vxarch(path, sched, "swog", "-", isa="arm", source="arm-swog")
+    serialize.write_vxarch(path, sched, "swog", "-",
+                           isa=("arm32" if isa == "aarch32" else "arm"),
+                           source="arm-swog")
     print("[swog_arm] %s: %d mnemonicos con coste, %d/%d formas mapeadas, "
           "%d clases, pipelines=%s"
           % (core, len(cost), mapped, len(forms), len(classes),
