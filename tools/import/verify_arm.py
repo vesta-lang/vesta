@@ -62,18 +62,27 @@ def main():
 
     ours = set()          # uid sin el sufijo de anchos = nombre del encoding
     key_seen = {}
-    dup_keys = []
+    dup_keys = []         # mismo key Y mismo nombre -> indistinguibles (fallo)
+    dup_docvar = []       # mismo bits, nombre distinto -> variante de doc (ok)
     bad_opcode = bad_kind = no_rw = 0
     for fid, fm in forms.items():
         enc = fm["uid"].split("/")[0]
         ours.add(enc)
-        # clave estructural aproximada (iclass+ext+opcode+operands) -> colisiones
-        k = (fm["iclass"], fm["ext"], fm["opcode"], fm["operands"])
+        # clave estructural (iclass+ext+opcode+enc+operands) -> colisiones. Incluye
+        # enc (en AArch32 lleva isa_set=A32/T32, que distingue encodings).
+        k = (fm["iclass"], fm["ext"], fm["opcode"], fm["enc"], fm["operands"])
         if k in key_seen:
-            dup_keys.append((fid, key_seen[k]))
+            prev = key_seen[k]
+            # nombres iguales = verdaderamente indistinguible; distintos = el MRAS
+            # lista dos nombres para los mismos bits (ADR vs ADD-a-PC): legitimo.
+            if forms[prev]["uid"].split("/")[0] == enc:
+                dup_keys.append((fid, prev))
+            else:
+                dup_docvar.append((fid, prev))
         else:
             key_seen[k] = fid
-        if not re.fullmatch(r"[01x]{32}", fm["opcode"]):
+        # opcode: A64/A32 = 32 bits; T32 = 16 o 32 (Thumb).
+        if not re.fullmatch(r"[01x]{16}|[01x]{32}", fm["opcode"]):
             bad_opcode += 1
         if fm["operands"] != "-":
             for op in fm["operands"].split(";"):
@@ -108,6 +117,9 @@ def main():
     print("  colisiones de clave (encodings indistinguibles): %d" % len(dup_keys))
     if dup_keys[:10]:
         print("    fids: " + ", ".join("%d~%d" % d for d in dup_keys[:10]))
+    if dup_docvar:
+        print("  mismos bits con nombre distinto (variantes MRAS, ok): %d"
+              % len(dup_docvar))
 
     ok = (not missing and not extra and not bad_opcode and not bad_kind
           and not no_rw and not dup_keys)

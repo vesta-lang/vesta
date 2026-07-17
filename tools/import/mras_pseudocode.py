@@ -24,8 +24,9 @@ import re
 # Decode: `let d : integer{} = UInt(Rd);`  ->  var 'd' == campo 'Rd'.
 _VAR_FIELD = re.compile(r'\b(?:let|constant|integer)\s+(\w+)\s*(?::[^=]*)?=\s*'
                         r'UInt\((\w+)\)')
-# Accesor de banco de registros: X{sz}(v) / V[v] / Z[v] / P[v] / Q[v] / D[v]...
-_ACCESS = re.compile(r'\b([XVZPQD])\s*(?:\{[^}]*\})?\s*[\(\[]\s*(\w+)\s*[\)\]]'
+# Accesor de banco de registros: A64 X{sz}(v)/V[v]/Z[v]/P[v]/Q[v]/D[v] y
+# AArch32 R(v)/R[v]/S[v]/D[v]/Q[v].
+_ACCESS = re.compile(r'\b([RXVZPQDS])\s*(?:\{[^}]*\})?\s*[\(\[]\s*(\w+)\s*[\)\]]'
                      r'(\s*=(?!=))?')
 # NZCV: cada aparicion de PSTATE.<flag>.  Es ESCRITURA si le sigue (tras un ')'
 # opcional, por el patron '(res, PSTATE.NZCV) = ...') un '='; si no, LECTURA.
@@ -60,7 +61,7 @@ def overlay_props(operation_ps):
         props.add('mem_acquire')
     if re.search(r'CreateAccDescAcqRel\s*\(\s*MemOp_STORE|CreateAccDescSTRel', op):
         props.add('mem_release')
-    if 'AArch64_CallSupervisor' in op or 'SVC' in op:
+    if re.search(r'CallSupervisor|CallHypervisor|CallSecureMonitor', op):
         props.add('syscall')
     bts = set(re.findall(r'BranchType_(\w+)', op))
     if any('CALL' in b for b in bts):
@@ -105,8 +106,9 @@ def derive(decode_ps, operation_ps, operands):
             wf = True
         else:
             rf = True
-    # helpers que LEEN NZCV sin nombrarlo (condicionales): ConditionHolds(cond).
-    if re.search(r'ConditionHolds|CurrentCond', op):
+    # helpers que LEEN NZCV sin nombrarlo: ConditionHolds (A64) /
+    # ConditionPassed (AArch32, instruccion condicional por <c>).
+    if re.search(r'ConditionHolds|ConditionPassed|CurrentCond', op):
         rf = True
 
     # memoria
