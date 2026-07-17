@@ -141,7 +141,7 @@
     }
     function regSpan(w) {
         const c = canon(w), hue = regHue(c);
-        return '<span class="rtok" data-tip="registro ' + esc(c) + '" style="color:hsl(' + hue + ' 70% 42%)">' + esc(w) + '</span>';
+        return '<span class="rtok" data-tip="' + T('tip.reg', { r: esc(c) }) + '" style="color:hsl(' + hue + ' 70% 42%)">' + esc(w) + '</span>';
     }
 
     // recursos que lee/escribe una instruccion (registros + FLAGS + MEM).
@@ -226,9 +226,10 @@
                 return;
             }
             const t = it.t, crit = critSet.has(i);
-            const why = 'emparejada: iclass ' + r[2] + ' + operandos ' +
-                (p.ops.map(o => o.kind + (o.width ? o.width : '')).join(', ') || '(ninguno)');
-            rows += '<tr' + (crit ? ' class="crit" data-tip="en el camino critico: esta cadena de dependencias fija el limite de latencia"' : '') + '>' +
+            const why = T('tip.matched', {
+                ic: r[2], ops: (p.ops.map(o => o.kind + (o.width ? o.width : '')).join(', ') || T('vw.none'))
+            });
+            rows += '<tr' + (crit ? ' class="crit" data-tip="' + T('tip.crit') + '"' : '') + '>' +
                 '<td class="mono">' + (crit ? '<span class="critdot">&#9679;</span> ' : '') + colorInstr(p.text) + '</td>' +
                 '<td class="mono" data-tip="' + esc(why) + '">' + esc(r[1]) + (r[12] ? ' <span class="dim">' + esc(r[12]) + '</span>' : '') + '</td>' +
                 '<td class="mono">' + esc(r[2]) + '</td>' +
@@ -237,8 +238,7 @@
                 '<td class="n mono">' + (t ? (it.lat ? it.lat.toFixed(2) : '<span class="dim">0</span>') : '<span class="dim">' + T('an.nodata') + '</span>') + '</td>' +
                 '<td class="mono">' + (t ? portsInline(t[5]) : '<span class="dim">&mdash;</span>') + '</td></tr>';
         });
-        const timeline = renderTimeline(items, critSet, Math.max(critical, 1), null,
-            'timeline por dependencias &mdash; ancho = latencia; rojo = camino critico; iconos: µ microcodigo, L carga, S store, &#9889; rompe dependencia');
+        const timeline = renderTimeline(items, critSet, Math.max(critical, 1), null, T('cap.timeline'));
         const chain = renderCritChain({ endIdx, predOf, linkReg: predRes, items });
         const chainBlock = chain ? '<div class="cc-cap">' + T('an.cccap') + '</div>' + chain : '';
         const cyc = ' ' + T('an.cycles');
@@ -266,12 +266,12 @@
     function markers(it) {
         if (!it.r) return '';
         let m = '';
-        if (it.t && (it.t[2] & 1)) m += '<span class="mk mk-u" data-tip="microcodificada (muchas µops)">µ</span>';
+        if (it.t && (it.t[2] & 1)) m += '<span class="mk mk-u" data-tip="' + T('mk.micro') + '">µ</span>';
         const sem = blockSem(it);
-        if (sem && sem.barrier) m += '<span class="mk mk-x" data-tip="barrera: serializante / fence / atomica &mdash; no se reordena ni elimina">&#9873;</span>';
-        if (it.res.rd.has('MEM')) m += '<span class="mk mk-l" data-tip="lee memoria (carga)">L</span>';
-        if (it.res.wr.has('MEM')) m += '<span class="mk mk-s" data-tip="escribe memoria (store)">S</span>';
-        if (it.lat === 0 && it.res.wr.size) m += '<span class="mk mk-b" data-tip="rompe la dependencia (0 ciclos: puesta a cero / eliminacion de movimiento)">&#9889;</span>';
+        if (sem && sem.barrier) m += '<span class="mk mk-x" data-tip="' + T('mk.barrier') + '">&#9873;</span>';
+        if (it.res.rd.has('MEM')) m += '<span class="mk mk-l" data-tip="' + T('mk.load') + '">L</span>';
+        if (it.res.wr.has('MEM')) m += '<span class="mk mk-s" data-tip="' + T('mk.store') + '">S</span>';
+        if (it.lat === 0 && it.res.wr.size) m += '<span class="mk mk-b" data-tip="' + T('mk.breakdep') + '">&#9889;</span>';
         return m ? '<span class="mks">' + m + '</span>' : '';
     }
     // timeline (barras start->finish a escala `total`); elim = Set de textos eliminados.
@@ -290,7 +290,7 @@
         });
         if (!tl) return '';
         return '<div class="tl">' + (cap ? '<div class="tl-cap">' + cap + '</div>' : '') + tl +
-            '<div class="tl-axis"><span>0</span><span>' + total.toFixed(0) + ' ciclos</span></div></div>';
+            '<div class="tl-axis"><span>0</span><span>' + total.toFixed(0) + ' ' + T('an.cycles') + '</span></div></div>';
     }
     // camino critico como cadena de dependencias con flechas etiquetadas.
     function renderCritChain(A) {
@@ -302,13 +302,12 @@
             const it = A.items[i];
             if (idx > 0) {
                 const reg = A.linkReg[i] || '?', prod = A.items[A.predOf[i]];
-                h += '<div class="cc-arrow" data-tip="dependencia via ' + esc(reg) +
-                    ': espera el resultado de la instruccion anterior (' + prod.lat.toFixed(0) + ' ciclos)">' +
+                h += '<div class="cc-arrow" data-tip="' + T('cc.dep', { r: esc(reg), n: prod.lat.toFixed(0) }) + '">' +
                     '&#8595; <span class="cc-reg">' + esc(reg) + '</span></div>';
             }
             h += '<div class="cc-node' + (idx === chain.length - 1 ? ' sink' : '') + '">' +
                 '<span class="mono">' + colorInstr(it.p.text) + '</span>' +
-                '<span class="cc-lat" data-tip="latencia de esta instruccion">' + it.lat.toFixed(0) + ' ciclos</span></div>';
+                '<span class="cc-lat" data-tip="' + T('cc.lat') + '">' + it.lat.toFixed(0) + ' ' + T('an.cycles') + '</span></div>';
         });
         return h + '</div>';
     }
@@ -413,12 +412,12 @@
             if (!r) { lines.push(p.text); return; }
             // mov reg, mismo-reg -> no-op
             if (en.selfcopy && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw)) {
-                log.push({ from: p.text, to: null, rule: T('rule.selfcopy'), why: 'mueve un registro a si mismo: no hace nada' }); return;
+                log.push({ from: p.text, to: null, rule: T('rule.selfcopy'), why: T('why.selfcopy') }); return;
             }
             // mov reg, 0 -> xor reg, reg (idioma de puesta a cero)
             if (en.zero && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'imm' && /^0(x0+)?$/i.test(p.ops[1].raw) && flagsDeadAfter(items, i)) {
                 const R = p.ops[0].raw, to = 'xor ' + R + ', ' + R;
-                log.push({ from: p.text, to, rule: T('rule.zero'), why: 'xor reg,reg pone a 0 con 0 ciclos de latencia (rompe la dependencia) y suele resolverse en el rename' });
+                log.push({ from: p.text, to, rule: T('rule.zero'), why: T('why.zero') });
                 lines.push(to); return;
             }
             // imul reg, [reg,] 2^k -> shl reg, k (reduccion de fuerza)
@@ -427,7 +426,7 @@
             else if (p.mn === 'IMUL' && p.ops.length === 3 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw) && p.ops[2].kind === 'imm') { k = pow2Log(p.ops[2].raw); R = p.ops[0].raw; }
             if (en.strength && k >= 1 && R && flagsDeadAfter(items, i)) {
                 const to = 'shl ' + R + ', ' + k;
-                log.push({ from: p.text, to, rule: T('rule.strength'), why: 'multiplicar por 2^' + k + ' es desplazar ' + k + ' bits: menos latencia y uops que imul' });
+                log.push({ from: p.text, to, rule: T('rule.strength'), why: T('why.strength', { k: k }) });
                 lines.push(to); return;
             }
             lines.push(p.text);
@@ -442,7 +441,7 @@
             let dead = true; s.wr.forEach(R => { if (!regDeadAfter(it2, i, R)) dead = false; });
             if (dead && (!s.wf || flagsDeadAfter(it2, i))) {
                 keep[i] = false;
-                log.push({ from: it.p.text, to: null, rule: T('rule.dce'), why: 'su resultado se sobrescribe antes de volver a leerse (y sus flags no se usan)' });
+                log.push({ from: it.p.text, to: null, rule: T('rule.dce'), why: T('why.dce') });
             }
         });
         // fase 3: reordenacion valida para favorecer la ejecucion paralela.
@@ -450,7 +449,7 @@
         const { order, moved } = en.reorder ? scheduleReorder(kept, a) : { order: kept, moved: false };
         if (moved) log.push({
             from: null, to: null, rule: T('rule.reorder'),
-            why: 'se adelantan instrucciones independientes para dar trabajo paralelo al decodificador/emision mientras avanza una cadena de dependencias. Respeta TODAS las dependencias (reg/flags/memoria), NO cruza barreras (serializantes, fences, atomicas, saltos) y es conservador con la memoria: como no se conoce el aliasing ni la alineacion, nunca reordena dos accesos a memoria. No cambia el resultado'
+            why: T('why.reorder')
         });
         return { items: order, log };
     }

@@ -25,45 +25,7 @@
 
     <details class="help">
         <summary data-i18n="an.help">Como funciona el analisis</summary>
-        <div class="body">
-            <p>Para cada instruccion (sintaxis Intel, una por linea; se ignoran
-                etiquetas <span class="k">nombre:</span> y comentarios
-                <span class="k">;</span> <span class="k">#</span>
-                <span class="k">//</span>) se identifica el mnemonico, se clasifica
-                cada operando (registro y su ancho, memoria &mdash; el ancho se toma
-                del prefijo <span class="k">qword ptr [rax]</span> o del otro
-                operando &mdash;, inmediato) y se localiza su <b>forma</b> en la base
-                de datos.
-            </p>
-            <p>Del bloque completo se calculan las dos cotas que gobiernan el
-                tiempo de ejecucion en la microarquitectura elegida:</p>
-            <dl>
-                <dt>front-end</dt>
-                <dd>&Sigma; uops &divide; el ancho de decodificacion/emision de la
-                    microarquitectura: los ciclos si limitara el reparto de µops
-                    al motor de ejecucion (superescalar).</dd>
-                <dt>throughput</dt>
-                <dd>&Sigma; del throughput reciproco de cada instruccion: los ciclos
-                    si limitaran los puertos de ejecucion (instrucciones
-                    independientes, encauzadas en paralelo).</dd>
-                <dt>latencia (camino critico)</dt>
-                <dd>se construye el grafo de <b>dependencias</b> reales entre
-                    instrucciones (registros &mdash; con sus alias de ancho &mdash;,
-                    flags y memoria) y se recorre el camino mas largo: los ciclos si
-                    limitaran las cadenas de dependencia.</dd>
-            </dl>
-            <p>La <b>estimacion</b> del bloque es el mayor de las tres, y se indica
-                el <b>cuello de botella</b>. La eliminacion de movimientos
-                (<span class="k">mov</span> registro-registro a 0 ciclos) se tiene en
-                cuenta.</p>
-            <p>Debajo, el <b>codigo optimizado</b>: aplica peephole (puesta a cero
-                <span class="k">mov r,0</span>&rarr;<span class="k">xor r,r</span>,
-                reduccion de fuerza <span class="k">imul r,2^k</span>&rarr;<span
-                    class="k">shl r,k</span>, copia a si mismo), eliminacion de
-                codigo muerto y <b>reordenacion</b> valida (respeta todas las
-                dependencias) para favorecer la ejecucion paralela; muestra que
-                aplico, por que, y el mismo analisis para comparar.</p>
-        </div>
+        <div class="body" data-i18n="help.an"></div>
     </details>
 
     <div class="an">
@@ -84,17 +46,18 @@ add rax, rcx</textarea>
         <div class="row opts">
             <span class="opts-lbl" data-i18n="an.opts">Optimizaciones:</span>
             <label><input type="checkbox" id="opt-zero" checked> <span data-i18n="opt.zero">puesta a cero</span></label>
-            <label><input type="checkbox" id="opt-strength" checked> <span data-i18n="opt.strength">reduccion de fuerza</span></label>
-            <label><input type="checkbox" id="opt-selfcopy" checked> <span data-i18n="opt.selfcopy">copia a si mismo</span></label>
+            <label><input type="checkbox" id="opt-strength" checked> <span data-i18n="opt.strength">reduccion de
+                    fuerza</span></label>
+            <label><input type="checkbox" id="opt-selfcopy" checked> <span data-i18n="opt.selfcopy">copia a si
+                    mismo</span></label>
             <label><input type="checkbox" id="opt-dce" checked> <span data-i18n="opt.dce">codigo muerto</span></label>
-            <label><input type="checkbox" id="opt-reorder" checked> <span data-i18n="opt.reorder">reordenacion</span></label>
+            <label><input type="checkbox" id="opt-reorder" checked> <span
+                    data-i18n="opt.reorder">reordenacion</span></label>
         </div>
         <div class="res" id="res"></div>
     </div>
 
-    <div class="foot">Datos de <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>
-        (fuente <a href="https://uops.info/">uops.info</a>). Emparejamiento
-        heuristico best-effort.</div>
+    <div class="foot" data-i18n="foot.an"></div>
 
     <script src="assets/db.js"></script>
     <script src="assets/micro.js"></script>

@@ -6,13 +6,22 @@
 (function () {
     const DB = window.VESTA_DB;
     const F = DB.forms, AR = DB.arches, PAGE = 100;
+    const T = window.t || (k => k);   // traduccion (i18n.js)
+    const LOC = window.LANG || 'es';
     let arch = 0, page = 0, sortK = 0, sortDir = 1, filt = F;
     const $ = id => document.getElementById(id);
     const esc = s => (s + '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+    // linea de cabecera (numeros + prosa traducible) desde window.VESTA_DB.meta.
+    const sub = $('subline');
+    if (sub && DB.meta) sub.innerHTML = T('idx.sub', {
+        forms: (+DB.meta.forms).toLocaleString(LOC), arches: DB.meta.arches,
+        date: DB.meta.date, sha: '<code>' + esc(DB.meta.sha) + '</code>', schema: DB.meta.schema
+    });
+
     function cost(r, a) { const cid = AR[a].map[r[0]]; return cid < 0 ? null : AR[a].classes[cid]; }
 
-    const KIND = { R: 'resultado', A: 'direccion', F: 'flags', M: 'memoria' };
+    const KIND = { R: T('kind.result'), A: T('kind.addr'), F: T('kind.flags'), M: T('kind.mem') };
     function chips(s, cls) {
         return s ? s.split(',').map(x => '<span class="chip' + (cls ? ' ' + cls : '') + '">' + esc(x) + '</span>').join('')
             : '<span class="dim">&mdash;</span>';
@@ -23,9 +32,9 @@
             const m = o.match(/^op(\d+) (\w+?)(\d+) ([rwis]*)$/);
             if (!m) return '<span class="chip">' + esc(o) + '</span>';
             let mk = ''; const rw = m[4];
-            if (rw.includes('r')) mk += '<span class="rd">lee</span> ';
-            if (rw.includes('w')) mk += '<span class="wr">escr</span> ';
-            if (rw.includes('i')) mk += '<span class="dim">impl</span> ';
+            if (rw.includes('r')) mk += '<span class="rd">' + T('vw.reads_s') + '</span> ';
+            if (rw.includes('w')) mk += '<span class="wr">' + T('vw.writes_s') + '</span> ';
+            if (rw.includes('i')) mk += '<span class="dim">' + T('vw.impl') + '</span> ';
             return '<span class="op"><b>' + m[2] + m[3] + '</b> ' + mk.trim() + '</span>';
         }).join(' ');
     }
@@ -49,8 +58,8 @@
         return s.split(', ').map(e => {
             const m = e.match(/^op(\d+)->op(\d+) ([0-9.]+)([RAFM])(\(ub\))?$/);
             if (!m) return esc(e);
-            return 'op' + m[1] + ' &rarr; op' + m[2] + ': <b>' + m[3] + '</b> ciclos ' +
-                '<span class="dim">(' + KIND[m[4]] + (m[5] ? ', cota superior' : '') + ')</span>';
+            return 'op' + m[1] + ' &rarr; op' + m[2] + ': <b>' + m[3] + '</b> ' + T('an.cycles') + ' ' +
+                '<span class="dim">(' + KIND[m[4]] + (m[5] ? ', ' + T('vw.ub') : '') + ')</span>';
         }).join('<br>');
     }
     const portDesc = window.VESTA_PORTDESC;
@@ -61,15 +70,15 @@
         return s.split(' ').map(t => {
             const m = t.match(/^([0-9.]+)x(.+)$/);
             if (!m) return esc(t);
-            const n = parseFloat(m[1]), hue = portHue(m[2]);
-            return '<b>' + m[1] + '</b> µop' + (n !== 1 ? 's' : '') + ' &rarr; ' +
+            const hue = portHue(m[2]);
+            return '<b>' + m[1] + '</b> µop &rarr; ' +
                 '<span class="pport" data-tip="' + esc(portDesc(m[2])) + '" style="background:hsl(' + hue + ' 60% 50% / .18);color:hsl(' + hue + ' 65% 42%)">' +
                 esc(m[2]) + '</span>';
         }).join('<br>');
     }
 
     const icSel = $('ic'), arSel = $('ar');
-    icSel.innerHTML = '<option value="">todos</option>' +
+    icSel.innerHTML = '<option value="">' + T('bar.all') + '</option>' +
         [...new Set(F.map(r => r[2]))].sort().map(c => '<option>' + esc(c) + '</option>').join('');
     AR.forEach((a, i) => {
         const o = document.createElement('option');
@@ -106,7 +115,7 @@
             tr.innerHTML =
                 '<td class="n">' + r[0] + '</td>' +
                 '<td class="forma mono"' + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + esc(r[1]) + '</td>' +
-                '<td class="nowrap iclink" title="ver todas las formas de ' + esc(r[2]) + '">' + esc(r[2]) + '</td>' +
+                '<td class="nowrap iclink" title="' + T('vw.seeall', { mn: esc(r[2]) }) + '">' + esc(r[2]) + '</td>' +
                 '<td class="nowrap mono">' + esc(r[4]) + '<span class="dim"> ' + esc(r[3]) + '</span></td>' +
                 '<td class="enc">' + chips(r[5]) + '</td>' +
                 '<td class="ops">' + opChips(r[10]) + '</td>' +
@@ -118,22 +127,21 @@
             tr.onclick = () => toggle(tr, r);
             tb.appendChild(tr);
         }
-        $('count').textContent = tot.toLocaleString('es') + ' formas' +
-            (tot !== F.length ? ' (de ' + F.length.toLocaleString('es') + ')' : '');
-        $('pgi').textContent = 'pagina ' + (page + 1) + ' / ' + pages;
+        $('count').textContent = tot.toLocaleString(LOC) + ' ' + T('vw.forms') +
+            (tot !== F.length ? ' ' + T('vw.of', { n: F.length.toLocaleString(LOC) }) : '');
+        $('pgi').textContent = T('vw.page', { n: page + 1, total: pages });
         $('first').disabled = $('prev').disabled = (page <= 0);
         $('last').disabled = $('next').disabled = (page >= pages - 1);
     }
 
     function structKey(r) {
-        let s = '<details class="skey"><summary>Identidad estructural (form_key)</summary><div class="mono">';
+        let s = '<details class="skey"><summary>' + T('vw.structkey') + '</summary><div class="mono">';
         s += 'iclass    = ' + esc(r[2]) + '<br>extension = ' + esc(r[3]) +
             '<br>opcode    = ' + esc(r[4]) + '<br><br>encoding:<br>';
-        s += r[5] ? r[5].split(',').map(x => '&nbsp;&nbsp;' + esc(x)).join('<br>') : '&nbsp;&nbsp;(ninguno)';
-        s += '<br><br>operandos:<br>';
-        s += r[10] ? r[10].split(', ').map(o => '&nbsp;&nbsp;' + esc(o)).join('<br>') : '&nbsp;&nbsp;(ninguno)';
-        s += '</div><div class="dim" style="margin-top:6px">Los conjuntos de registros permitidos ' +
-            'estan en <span class="mono">x86.vxisa</span> (se omiten aqui por tamano).</div></details>';
+        s += r[5] ? r[5].split(',').map(x => '&nbsp;&nbsp;' + esc(x)).join('<br>') : '&nbsp;&nbsp;' + T('vw.none');
+        s += '<br><br>' + T('th.operands') + ':<br>';
+        s += r[10] ? r[10].split(', ').map(o => '&nbsp;&nbsp;' + esc(o)).join('<br>') : '&nbsp;&nbsp;' + T('vw.none');
+        s += '</div><div class="dim" style="margin-top:6px">' + T('vw.regsets') + '</div></details>';
         return s;
     }
 
@@ -145,35 +153,35 @@
         let h = '<td colspan="10">';
         h += '<div class="idline mono">FormID <b>' + r[0] + '</b>' +
             ' &middot; checksum ' + esc(r[14]) +
-            (r[15] ? ' &middot; <a target="_blank" rel="noopener" href="' + esc(r[15]) + '">ver en uops.info &nearr;</a>' : '') +
+            (r[15] ? ' &middot; <a target="_blank" rel="noopener" href="' + esc(r[15]) + '">' + T('vw.seeuops') + ' &nearr;</a>' : '') +
             '</div>';
-        h += '<h4>que hace</h4><div>' +
-            (r[12] ? '<b>' + esc(r[12]) + '</b>' : '<span class="dim">(sin descripcion)</span>') +
+        h += '<h4>' + T('vw.what') + '</h4><div>' +
+            (r[12] ? '<b>' + esc(r[12]) + '</b>' : '<span class="dim">' + T('vw.nodesc') + '</span>') +
             (r[11] ? ' &middot; <span class="mono dim">' + esc(r[11]) + '</span>' : '') +
             (r[13] ? ' &middot; ' + chips(r[13]) : '') + '</div>';
-        h += '<h4>operandos</h4><div class="oplist">' + opChips(r[10]) + '</div>';
-        h += '<h4>efectos</h4><div>' +
-            '<span class="rd">lee</span> operandos: ' + opsFromMask(r[6]) +
+        h += '<h4>' + T('th.operands') + '</h4><div class="oplist">' + opChips(r[10]) + '</div>';
+        h += '<h4>' + T('vw.effects') + '</h4><div>' +
+            '<span class="rd">' + T('vw.reads') + '</span> ' + T('th.operands') + ': ' + opsFromMask(r[6]) +
             ' <span class="dim mono">(' + esc(r[6]) + ' = ' + maskBin(r[6]) + ')</span><br>' +
-            '<span class="wr">escribe</span> operandos: ' + opsFromMask(r[7]) +
+            '<span class="wr">' + T('vw.writes') + '</span> ' + T('th.operands') + ': ' + opsFromMask(r[7]) +
             ' <span class="dim mono">(' + esc(r[7]) + ' = ' + maskBin(r[7]) + ')</span><br>' +
-            ((r[8] & 4) ? '<span class="wr">escribe flags</span> ' : '') +
-            ((r[8] & 8) ? '<span class="rd">lee flags</span> ' : '') +
-            ((r[8] & 1) ? 'accede a memoria' : (!(r[8] & 12) ? '<span class="dim">no toca flags ni memoria</span>' : '')) +
+            ((r[8] & 4) ? '<span class="wr">' + T('vw.writeflags') + '</span> ' : '') +
+            ((r[8] & 8) ? '<span class="rd">' + T('vw.readflags') + '</span> ' : '') +
+            ((r[8] & 1) ? T('vw.memaccess') : (!(r[8] & 12) ? '<span class="dim">' + T('vw.noflagsmem') + '</span>' : '')) +
             '</div>';
         h += structKey(r);
-        h += '<h4>coste por microarquitectura</h4><table><thead><tr>' +
-            '<th>microarq.</th>' +
-            '<th title="throughput reciproco: ciclos por instruccion (menor = mas rapido)">recip_tp</th>' +
-            '<th title="micro-operaciones que genera">uops</th>' +
-            '<th title="microcoded = usa microcodigo; macro_fusible = fusionable con un salto">notas</th>' +
-            '<th title="latencia del divisor (DIV/IDIV)">div_cycles</th>' +
-            '<th title="latencia por cada camino operando-fuente a operando-destino">latencias</th>' +
-            '<th title="reparto de micro-ops entre los puertos de ejecucion">puertos</th>' +
+        h += '<h4>' + T('vw.costby') + '</h4><table><thead><tr>' +
+            '<th>' + T('bar.uarch') + '</th>' +
+            '<th title="' + T('th.reciptp.tip') + '">recip_tp</th>' +
+            '<th title="' + T('th.uops.tip') + '">uops</th>' +
+            '<th title="' + T('vw.notes.tip') + '">' + T('vw.notes') + '</th>' +
+            '<th title="' + T('vw.divcycles.tip') + '">div_cycles</th>' +
+            '<th title="' + T('vw.latencies.tip') + '">' + T('vw.latencies') + '</th>' +
+            '<th title="' + T('vw.ports.tip') + '">' + T('an.col.ports') + '</th>' +
             '</tr></thead><tbody>';
         AR.forEach((a, i) => {
             const em = '<span class="dim">&mdash;</span>', t = cost(r, i);
-            if (!t) { h += '<tr><td>' + esc(a.name) + '</td><td colspan="6" class="dim">sin dato en esta microarq.</td></tr>'; return; }
+            if (!t) { h += '<tr><td>' + esc(a.name) + '</td><td colspan="6" class="dim">' + T('vw.nodatauarch') + '</td></tr>'; return; }
             const notes = [];
             if (t[2] & 1) notes.push('microcoded');
             if (t[2] & 2) notes.push('macro_fusible');

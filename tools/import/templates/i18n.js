@@ -1,101 +1,233 @@
-// Soporte multi-idioma.  Catalogo es/en + aplicacion sobre [data-i18n] y helper
-// window.t(clave) para los textos generados por JS.  El selector recarga la
-// pagina (guarda el idioma en localStorage); asi el visor/analizador se
-// re-renderizan con el idioma nuevo sin logica de re-render.
+// Soporte multi-idioma (es / en / ja / zh / ru).  Catalogo key-first: cada
+// clave lleva juntas sus cinco traducciones para mantenerlas alineadas.  Se
+// aplica sobre [data-i18n] (innerHTML), [data-i18n-ph] (placeholder) y
+// [data-i18n-title] (title).  window.t(clave, vars) sirve a los textos que
+// genera el JS; {var} se sustituye por vars.var.  El selector recarga la
+// pagina (guarda el idioma en localStorage).
 (function () {
     const STR = {
-        es: {
-            'nav.instr': 'Instrucciones', 'nav.an': 'Analizador', 'nav.repo': 'Repositorio',
-            'idx.title': 'Base de datos de instrucciones x86',
-            'idx.help': 'Como leer esta tabla',
-            'bar.search': 'Buscar mnemonico, iclass, opcode o encoding...',
-            'bar.iclass': 'iclass', 'bar.uarch': 'microarq.', 'bar.all': 'todos',
-            'th.id': 'ID', 'th.form': 'Forma', 'th.iclass': 'iclass', 'th.opcode': 'opcode',
-            'th.encoding': 'encoding', 'th.operands': 'operandos', 'th.overlay': 'overlay',
-            'th.reciptp': 'recip_tp', 'th.uops': 'uops', 'th.latmax': 'lat. max',
-            'an.title': 'Analizador de ensamblador x86',
-            'an.desc': 'Pega instrucciones (sintaxis Intel, una por linea). Para cada una se busca su forma en la base de datos y se reporta lo que hace y su coste en la microarquitectura elegida.',
-            'an.help': 'Como funciona el analisis',
-            'an.run': 'Analizar', 'an.opts': 'Optimizaciones:',
-            'opt.zero': 'puesta a cero', 'opt.strength': 'reduccion de fuerza',
-            'opt.selfcopy': 'copia a si mismo', 'opt.dce': 'codigo muerto', 'opt.reorder': 'reordenacion',
-            'an.col.instr': 'instruccion', 'an.col.form': 'forma', 'an.col.ports': 'puertos',
-            'an.col.lat': 'latencia', 'an.matched': 'emparejadas', 'an.nomatch': 'sin forma',
-            'an.notfound': 'forma no encontrada', 'an.badops': '(operandos no encajan)',
-            'an.badmn': '(mnemonico desconocido)', 'an.nodata': 'sin dato', 'an.empty': 'Sin instrucciones que analizar.',
-            'an.block': 'Analisis del bloque', 'an.blockopt': 'Analisis del bloque optimizado',
-            'an.uops': 'micro-operaciones (uops)',
-            'an.fe': 'coste por <b>front-end</b> (decodificacion/emision, {w} µops/ciclo)',
-            'an.tp': 'coste por <b>throughput</b> (puertos, &Sigma; recip_tp)',
-            'an.lat': 'coste por <b>latencia</b> (camino critico de dependencias)',
-            'an.est': 'estimacion del bloque = max(front-end, throughput, latencia)',
-            'an.bneck': 'cuello de botella', 'an.cycles': 'ciclos',
-            'an.optcode': 'Codigo optimizado', 'an.optapplied': 'Optimizaciones aplicadas',
-            'an.noopt': 'Sin optimizaciones aplicables: el codigo ya es optimo para las reglas del analizador.',
-            'an.cmp.orig': 'original', 'an.cmp.opt': 'optimizado', 'an.cmp.ba': 'Antes / despues (misma escala)',
-            'an.before': 'ANTES', 'an.after': 'DESPUES', 'an.elimnote': '(tachadas = se eliminan)',
-            'an.eliminated': '(eliminada)', 'an.cccap': 'camino critico (cadena de dependencias; pasa el cursor por una flecha)',
-            'rule.zero': 'idioma de puesta a cero', 'rule.strength': 'reduccion de fuerza',
-            'rule.selfcopy': 'copia a si mismo', 'rule.dce': 'eliminacion de codigo muerto',
-            'rule.reorder': 'reordenacion (planificacion)',
+        // --- navegacion / cabeceras ---
+        'nav.instr': { es: 'Instrucciones', en: 'Instructions', ja: '命令一覧', zh: '指令', ru: 'Инструкции' },
+        'nav.an': { es: 'Analizador', en: 'Analyzer', ja: 'アナライザ', zh: '分析器', ru: 'Анализатор' },
+        'nav.repo': { es: 'Repositorio', en: 'Repository', ja: 'リポジトリ', zh: '仓库', ru: 'Репозиторий' },
+        'idx.title': { es: 'Base de datos de instrucciones x86', en: 'x86 instruction database', ja: 'x86 命令データベース', zh: 'x86 指令数据库', ru: 'База данных инструкций x86' },
+        'idx.help': { es: 'Como leer esta tabla', en: 'How to read this table', ja: 'この表の読み方', zh: '如何阅读本表', ru: 'Как читать эту таблицу' },
+        'idx.sub': {
+            es: '{forms} formas &middot; {arches} microarquitecturas &middot; fuente uops.info {date} &middot; xml {sha} &middot; esquema {schema}',
+            en: '{forms} forms &middot; {arches} microarchitectures &middot; source uops.info {date} &middot; xml {sha} &middot; schema {schema}',
+            ja: '{forms} 形式 &middot; {arches} マイクロアーキテクチャ &middot; 出典 uops.info {date} &middot; xml {sha} &middot; スキーマ {schema}',
+            zh: '{forms} 种形式 &middot; {arches} 个微架构 &middot; 来源 uops.info {date} &middot; xml {sha} &middot; 架构版本 {schema}',
+            ru: '{forms} форм &middot; {arches} микроархитектур &middot; источник uops.info {date} &middot; xml {sha} &middot; схема {schema}'
         },
-        en: {
-            'nav.instr': 'Instructions', 'nav.an': 'Analyzer', 'nav.repo': 'Repository',
-            'idx.title': 'x86 instruction database',
-            'idx.help': 'How to read this table',
-            'bar.search': 'Search mnemonic, iclass, opcode or encoding...',
-            'bar.iclass': 'iclass', 'bar.uarch': 'microarch.', 'bar.all': 'all',
-            'th.id': 'ID', 'th.form': 'Form', 'th.iclass': 'iclass', 'th.opcode': 'opcode',
-            'th.encoding': 'encoding', 'th.operands': 'operands', 'th.overlay': 'overlay',
-            'th.reciptp': 'recip_tp', 'th.uops': 'uops', 'th.latmax': 'max lat.',
-            'an.title': 'x86 assembly analyzer',
-            'an.desc': 'Paste instructions (Intel syntax, one per line). For each one its form is looked up in the database, reporting what it does and its cost on the selected microarchitecture.',
-            'an.help': 'How the analysis works',
-            'an.run': 'Analyze', 'an.opts': 'Optimizations:',
-            'opt.zero': 'zeroing', 'opt.strength': 'strength reduction',
-            'opt.selfcopy': 'self copy', 'opt.dce': 'dead code', 'opt.reorder': 'reordering',
-            'an.col.instr': 'instruction', 'an.col.form': 'form', 'an.col.ports': 'ports',
-            'an.col.lat': 'latency', 'an.matched': 'matched', 'an.nomatch': 'no form',
-            'an.notfound': 'form not found', 'an.badops': '(operands do not fit)',
-            'an.badmn': '(unknown mnemonic)', 'an.nodata': 'no data', 'an.empty': 'Nothing to analyze.',
-            'an.block': 'Block analysis', 'an.blockopt': 'Optimized block analysis',
-            'an.uops': 'micro-operations (uops)',
-            'an.fe': '<b>front-end</b> cost (decode/issue, {w} µops/cycle)',
-            'an.tp': '<b>throughput</b> cost (ports, &Sigma; recip_tp)',
-            'an.lat': '<b>latency</b> cost (dependency critical path)',
-            'an.est': 'block estimate = max(front-end, throughput, latency)',
-            'an.bneck': 'bottleneck', 'an.cycles': 'cycles',
-            'an.optcode': 'Optimized code', 'an.optapplied': 'Optimizations applied',
-            'an.noopt': 'No applicable optimizations: the code is already optimal for the analyzer rules.',
-            'an.cmp.orig': 'original', 'an.cmp.opt': 'optimized', 'an.cmp.ba': 'Before / after (same scale)',
-            'an.before': 'BEFORE', 'an.after': 'AFTER', 'an.elimnote': '(struck through = removed)',
-            'an.eliminated': '(removed)', 'an.cccap': 'critical path (dependency chain; hover an arrow)',
-            'rule.zero': 'zeroing idiom', 'rule.strength': 'strength reduction',
-            'rule.selfcopy': 'self copy', 'rule.dce': 'dead code elimination',
-            'rule.reorder': 'reordering (scheduling)',
+        // --- barra de busqueda / filtros ---
+        'bar.search': { es: 'Buscar mnemonico, iclass, opcode o encoding...', en: 'Search mnemonic, iclass, opcode or encoding...', ja: 'ニーモニック / iclass / opcode / encoding を検索...', zh: '搜索助记符、iclass、opcode 或 encoding...', ru: 'Поиск мнемоники, iclass, opcode или encoding...' },
+        'bar.iclass': { es: 'iclass', en: 'iclass', ja: 'iclass', zh: 'iclass', ru: 'iclass' },
+        'bar.uarch': { es: 'microarq.', en: 'microarch.', ja: 'マイクロアーキ', zh: '微架构', ru: 'микроарх.' },
+        'bar.all': { es: 'todos', en: 'all', ja: 'すべて', zh: '全部', ru: 'все' },
+        // --- cabeceras de la tabla ---
+        'th.id': { es: 'ID', en: 'ID', ja: 'ID', zh: 'ID', ru: 'ID' },
+        'th.form': { es: 'Forma', en: 'Form', ja: '形式', zh: '形式', ru: 'Форма' },
+        'th.iclass': { es: 'iclass', en: 'iclass', ja: 'iclass', zh: 'iclass', ru: 'iclass' },
+        'th.opcode': { es: 'opcode', en: 'opcode', ja: 'opcode', zh: 'opcode', ru: 'opcode' },
+        'th.encoding': { es: 'encoding', en: 'encoding', ja: 'encoding', zh: '编码', ru: 'encoding' },
+        'th.operands': { es: 'operandos', en: 'operands', ja: 'オペランド', zh: '操作数', ru: 'операнды' },
+        'th.overlay': { es: 'overlay', en: 'overlay', ja: 'overlay', zh: 'overlay', ru: 'overlay' },
+        'th.reciptp': { es: 'recip_tp', en: 'recip_tp', ja: 'recip_tp', zh: 'recip_tp', ru: 'recip_tp' },
+        'th.uops': { es: 'uops', en: 'uops', ja: 'uops', zh: 'uops', ru: 'uops' },
+        'th.latmax': { es: 'lat. max', en: 'max lat.', ja: '最大レイテンシ', zh: '最大延迟', ru: 'макс. задержка' },
+        'th.id.tip': { es: 'Identificador denso de la forma', en: 'Dense form identifier', ja: '形式の連番 ID', zh: '形式的稠密标识符', ru: 'Плотный идентификатор формы' },
+        'th.form.tip': { es: 'Nombre reconstruido (documentacion)', en: 'Reconstructed name (documentation)', ja: '再構成した名前（ドキュメント用）', zh: '重建的名称（文档用）', ru: 'Восстановленное имя (документация)' },
+        'th.iclass.tip': { es: 'Mnemonico canonico', en: 'Canonical mnemonic', ja: '正規ニーモニック', zh: '规范助记符', ru: 'Каноническая мнемоника' },
+        'th.opcode.tip': { es: 'Byte(s) de operacion y extension ISA', en: 'Operation byte(s) and ISA extension', ja: 'オペコードバイトと ISA 拡張', zh: '操作码字节与 ISA 扩展', ru: 'Байт(ы) операции и расширение ISA' },
+        'th.encoding.tip': { es: 'Caracteristicas de codificacion y semantica', en: 'Encoding and semantic features', ja: 'エンコーディングと意味的特徴', zh: '编码与语义特征', ru: 'Особенности кодирования и семантики' },
+        'th.operands.tip': { es: 'Operandos: tipo, ancho, lee/escribe', en: 'Operands: type, width, read/write', ja: 'オペランド: 種別・幅・読み書き', zh: '操作数：类型、宽度、读/写', ru: 'Операнды: тип, ширина, чтение/запись' },
+        'th.overlay.tip': { es: 'Propiedades semanticas manuales', en: 'Manual semantic properties', ja: '手動付与の意味属性', zh: '人工标注的语义属性', ru: 'Ручные семантические свойства' },
+        'th.reciptp.tip': { es: 'Throughput reciproco: ciclos/instr (menor = mas rapido)', en: 'Reciprocal throughput: cycles/instr (lower = faster)', ja: '逆スループット: 命令あたりサイクル（小さいほど速い）', zh: '倒数吞吐量：每指令周期（越小越快）', ru: 'Обратная пропускная способность: циклы/инстр. (меньше = быстрее)' },
+        'th.uops.tip': { es: 'Micro-operaciones', en: 'Micro-operations', ja: 'マイクロオペレーション', zh: '微操作', ru: 'Микрооперации' },
+        'th.latmax.tip': { es: 'Latencia maxima (ciclos) de la microarq. mostrada', en: 'Max latency (cycles) of the shown microarch.', ja: '表示中のマイクロアーキの最大レイテンシ（サイクル）', zh: '所示微架构的最大延迟（周期）', ru: 'Макс. задержка (циклы) показанной микроарх.' },
+        'vw.notes.tip': { es: 'microcoded = usa microcodigo; macro_fusible = fusionable con un salto', en: 'microcoded = uses microcode; macro_fusible = fusible with a branch', ja: 'microcoded = マイクロコード使用; macro_fusible = 分岐と融合可能', zh: 'microcoded = 使用微码；macro_fusible = 可与分支融合', ru: 'microcoded = использует микрокод; macro_fusible = сливается с переходом' },
+        'vw.divcycles.tip': { es: 'latencia del divisor (DIV/IDIV)', en: 'divider latency (DIV/IDIV)', ja: '除算器レイテンシ（DIV/IDIV）', zh: '除法器延迟（DIV/IDIV）', ru: 'задержка делителя (DIV/IDIV)' },
+        'vw.latencies.tip': { es: 'latencia por cada camino operando-fuente a operando-destino', en: 'latency for each source-operand to dest-operand path', ja: '各「入力→出力オペランド」経路のレイテンシ', zh: '每条“源操作数→目的操作数”路径的延迟', ru: 'задержка каждого пути от операнда-источника к операнду-приёмнику' },
+        'vw.ports.tip': { es: 'reparto de micro-ops entre los puertos de ejecucion', en: 'distribution of micro-ops across execution ports', ja: '実行ポートへのマイクロオペ配分', zh: '微操作在执行端口上的分配', ru: 'распределение микроопераций по портам исполнения' },
+        // --- pie de pagina ---
+        'foot.idx': {
+            es: 'Generado desde la base de datos serializada de <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>. Fuente de datos microarquitecturales: <a href="https://uops.info/">uops.info</a>.',
+            en: 'Generated from the serialized database at <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>. Microarchitectural data source: <a href="https://uops.info/">uops.info</a>.',
+            ja: '<a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a> のシリアライズ済みデータベースから生成。マイクロアーキデータ出典: <a href="https://uops.info/">uops.info</a>。',
+            zh: '由 <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a> 的序列化数据库生成。微架构数据来源：<a href="https://uops.info/">uops.info</a>。',
+            ru: 'Сгенерировано из сериализованной базы <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>. Источник микроархитектурных данных: <a href="https://uops.info/">uops.info</a>.'
+        },
+        'foot.an': {
+            es: 'Datos de <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a> (fuente <a href="https://uops.info/">uops.info</a>). Emparejamiento heuristico best-effort.',
+            en: 'Data from <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a> (source <a href="https://uops.info/">uops.info</a>). Best-effort heuristic matching.',
+            ja: 'データ: <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>（出典 <a href="https://uops.info/">uops.info</a>）。マッチングはヒューリスティックのベストエフォート。',
+            zh: '数据来自 <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>（来源 <a href="https://uops.info/">uops.info</a>）。启发式尽力匹配。',
+            ru: 'Данные из <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a> (источник <a href="https://uops.info/">uops.info</a>). Эвристическое сопоставление по мере возможности.'
+        },
+        // --- detalle del visor (viewer.js) ---
+        'kind.result': { es: 'resultado', en: 'result', ja: '結果', zh: '结果', ru: 'результат' },
+        'kind.addr': { es: 'direccion', en: 'address', ja: 'アドレス', zh: '地址', ru: 'адрес' },
+        'kind.flags': { es: 'flags', en: 'flags', ja: 'フラグ', zh: '标志位', ru: 'флаги' },
+        'kind.mem': { es: 'memoria', en: 'memory', ja: 'メモリ', zh: '内存', ru: 'память' },
+        'vw.reads_s': { es: 'lee', en: 'reads', ja: '読', zh: '读', ru: 'чит' },
+        'vw.writes_s': { es: 'escr', en: 'writes', ja: '書', zh: '写', ru: 'зап' },
+        'vw.impl': { es: 'impl', en: 'impl', ja: '暗黙', zh: '隐式', ru: 'неявн' },
+        'vw.ub': { es: 'cota superior', en: 'upper bound', ja: '上限', zh: '上界', ru: 'верхняя граница' },
+        'vw.seeall': { es: 'ver todas las formas de {mn}', en: 'see all forms of {mn}', ja: '{mn} の全形式を表示', zh: '查看 {mn} 的所有形式', ru: 'показать все формы {mn}' },
+        'vw.forms': { es: 'formas', en: 'forms', ja: '形式', zh: '种形式', ru: 'форм' },
+        'vw.of': { es: '(de {n})', en: '(of {n})', ja: '（{n} 中）', zh: '（共 {n}）', ru: '(из {n})' },
+        'vw.page': { es: 'pagina {n} / {total}', en: 'page {n} / {total}', ja: 'ページ {n} / {total}', zh: '第 {n} / {total} 页', ru: 'страница {n} / {total}' },
+        'vw.structkey': { es: 'Identidad estructural (form_key)', en: 'Structural identity (form_key)', ja: '構造的アイデンティティ (form_key)', zh: '结构标识 (form_key)', ru: 'Структурная идентичность (form_key)' },
+        'vw.none': { es: '(ninguno)', en: '(none)', ja: '（なし）', zh: '（无）', ru: '(нет)' },
+        'vw.regsets': { es: 'Los conjuntos de registros permitidos estan en <span class="mono">x86.vxisa</span> (se omiten aqui por tamano).', en: 'The allowed register sets are in <span class="mono">x86.vxisa</span> (omitted here for size).', ja: '許可されるレジスタ集合は <span class="mono">x86.vxisa</span> にあります（サイズの都合でここでは省略）。', zh: '允许的寄存器集合位于 <span class="mono">x86.vxisa</span>（因体积此处省略）。', ru: 'Допустимые наборы регистров находятся в <span class="mono">x86.vxisa</span> (здесь опущены из-за размера).' },
+        'vw.seeuops': { es: 'ver en uops.info', en: 'view on uops.info', ja: 'uops.info で見る', zh: '在 uops.info 查看', ru: 'открыть в uops.info' },
+        'vw.what': { es: 'que hace', en: 'what it does', ja: '動作', zh: '功能', ru: 'что делает' },
+        'vw.nodesc': { es: '(sin descripcion)', en: '(no description)', ja: '（説明なし）', zh: '（无描述）', ru: '(нет описания)' },
+        'vw.effects': { es: 'efectos', en: 'effects', ja: '作用', zh: '效果', ru: 'эффекты' },
+        'vw.reads': { es: 'lee', en: 'reads', ja: '読み込む', zh: '读取', ru: 'читает' },
+        'vw.writes': { es: 'escribe', en: 'writes', ja: '書き込む', zh: '写入', ru: 'пишет' },
+        'vw.readflags': { es: 'lee flags', en: 'reads flags', ja: 'フラグを読む', zh: '读取标志位', ru: 'читает флаги' },
+        'vw.writeflags': { es: 'escribe flags', en: 'writes flags', ja: 'フラグを書く', zh: '写入标志位', ru: 'пишет флаги' },
+        'vw.memaccess': { es: 'accede a memoria', en: 'accesses memory', ja: 'メモリにアクセス', zh: '访问内存', ru: 'обращается к памяти' },
+        'vw.noflagsmem': { es: 'no toca flags ni memoria', en: 'touches neither flags nor memory', ja: 'フラグもメモリも触れない', zh: '不涉及标志位或内存', ru: 'не трогает ни флаги, ни память' },
+        'vw.costby': { es: 'coste por microarquitectura', en: 'cost per microarchitecture', ja: 'マイクロアーキ別コスト', zh: '按微架构的开销', ru: 'стоимость по микроархитектуре' },
+        'vw.notes': { es: 'notas', en: 'notes', ja: '備考', zh: '备注', ru: 'примечания' },
+        'vw.latencies': { es: 'latencias', en: 'latencies', ja: 'レイテンシ', zh: '延迟', ru: 'задержки' },
+        'vw.nodatauarch': { es: 'sin dato en esta microarq.', en: 'no data on this microarch.', ja: 'このマイクロアーキにはデータなし', zh: '此微架构无数据', ru: 'нет данных для этой микроарх.' },
+        // --- analizador: chrome ---
+        'an.title': { es: 'Analizador de ensamblador x86', en: 'x86 assembly analyzer', ja: 'x86 アセンブリ アナライザ', zh: 'x86 汇编分析器', ru: 'Анализатор ассемблера x86' },
+        'an.desc': { es: 'Pega instrucciones (sintaxis Intel, una por linea). Para cada una se busca su forma en la base de datos y se reporta lo que hace y su coste en la microarquitectura elegida.', en: 'Paste instructions (Intel syntax, one per line). For each one its form is looked up in the database, reporting what it does and its cost on the selected microarchitecture.', ja: '命令を貼り付けてください（Intel 記法、1 行 1 命令）。各命令の形式をデータベースで検索し、動作と選択したマイクロアーキでのコストを表示します。', zh: '粘贴指令（Intel 语法，每行一条）。系统会在数据库中查找每条指令的形式，并报告其功能及在所选微架构上的开销。', ru: 'Вставьте инструкции (синтаксис Intel, по одной в строке). Для каждой из них ищется форма в базе, показываются её действие и стоимость на выбранной микроархитектуре.' },
+        'an.help': { es: 'Como funciona el analisis', en: 'How the analysis works', ja: '解析の仕組み', zh: '分析原理', ru: 'Как работает анализ' },
+        'an.run': { es: 'Analizar', en: 'Analyze', ja: '解析', zh: '分析', ru: 'Анализировать' },
+        'an.opts': { es: 'Optimizaciones:', en: 'Optimizations:', ja: '最適化:', zh: '优化：', ru: 'Оптимизации:' },
+        'opt.zero': { es: 'puesta a cero', en: 'zeroing', ja: 'ゼロ化', zh: '置零', ru: 'обнуление' },
+        'opt.strength': { es: 'reduccion de fuerza', en: 'strength reduction', ja: '強度低減', zh: '强度削减', ru: 'снижение стоимости' },
+        'opt.selfcopy': { es: 'copia a si mismo', en: 'self copy', ja: '自己コピー', zh: '自我复制', ru: 'копия в себя' },
+        'opt.dce': { es: 'codigo muerto', en: 'dead code', ja: 'デッドコード', zh: '死代码', ru: 'мёртвый код' },
+        'opt.reorder': { es: 'reordenacion', en: 'reordering', ja: '並べ替え', zh: '重排序', ru: 'переупорядочивание' },
+        // --- analizador: resultados dinamicos ---
+        'an.col.instr': { es: 'instruccion', en: 'instruction', ja: '命令', zh: '指令', ru: 'инструкция' },
+        'an.col.form': { es: 'forma', en: 'form', ja: '形式', zh: '形式', ru: 'форма' },
+        'an.col.lat': { es: 'latencia', en: 'latency', ja: 'レイテンシ', zh: '延迟', ru: 'задержка' },
+        'an.col.ports': { es: 'puertos', en: 'ports', ja: 'ポート', zh: '端口', ru: 'порты' },
+        'an.matched': { es: 'emparejadas', en: 'matched', ja: '一致', zh: '已匹配', ru: 'сопоставлено' },
+        'an.nomatch': { es: 'sin forma', en: 'no form', ja: '形式なし', zh: '无形式', ru: 'без формы' },
+        'an.notfound': { es: 'forma no encontrada', en: 'form not found', ja: '形式が見つかりません', zh: '未找到形式', ru: 'форма не найдена' },
+        'an.badops': { es: '(operandos no encajan)', en: '(operands do not fit)', ja: '（オペランドが合いません）', zh: '（操作数不匹配）', ru: '(операнды не подходят)' },
+        'an.badmn': { es: '(mnemonico desconocido)', en: '(unknown mnemonic)', ja: '（未知のニーモニック）', zh: '（未知助记符）', ru: '(неизвестная мнемоника)' },
+        'an.nodata': { es: 'sin dato', en: 'no data', ja: 'データなし', zh: '无数据', ru: 'нет данных' },
+        'an.empty': { es: 'Sin instrucciones que analizar.', en: 'Nothing to analyze.', ja: '解析する命令がありません。', zh: '没有可分析的指令。', ru: 'Нет инструкций для анализа.' },
+        'an.block': { es: 'Analisis del bloque', en: 'Block analysis', ja: 'ブロック解析', zh: '基本块分析', ru: 'Анализ блока' },
+        'an.blockopt': { es: 'Analisis del bloque optimizado', en: 'Optimized block analysis', ja: '最適化後ブロック解析', zh: '优化后基本块分析', ru: 'Анализ оптимизированного блока' },
+        'an.uops': { es: 'micro-operaciones (uops)', en: 'micro-operations (uops)', ja: 'マイクロオペレーション (uops)', zh: '微操作 (uops)', ru: 'микрооперации (uops)' },
+        'an.fe': { es: 'coste por <b>front-end</b> (decodificacion/emision, {w} µops/ciclo)', en: '<b>front-end</b> cost (decode/issue, {w} µops/cycle)', ja: '<b>フロントエンド</b>コスト（デコード/発行、{w} µops/サイクル）', zh: '<b>前端</b>开销（解码/发射，{w} µops/周期）', ru: 'стоимость по <b>front-end</b> (декодирование/выпуск, {w} µops/такт)' },
+        'an.tp': { es: 'coste por <b>throughput</b> (puertos, &Sigma; recip_tp)', en: '<b>throughput</b> cost (ports, &Sigma; recip_tp)', ja: '<b>スループット</b>コスト（ポート、&Sigma; recip_tp）', zh: '<b>吞吐量</b>开销（端口，&Sigma; recip_tp）', ru: 'стоимость по <b>throughput</b> (порты, &Sigma; recip_tp)' },
+        'an.lat': { es: 'coste por <b>latencia</b> (camino critico de dependencias)', en: '<b>latency</b> cost (dependency critical path)', ja: '<b>レイテンシ</b>コスト（依存クリティカルパス）', zh: '<b>延迟</b>开销（依赖关键路径）', ru: 'стоимость по <b>задержке</b> (критический путь зависимостей)' },
+        'an.est': { es: 'estimacion del bloque = max(front-end, throughput, latencia)', en: 'block estimate = max(front-end, throughput, latency)', ja: 'ブロック推定 = max(フロントエンド, スループット, レイテンシ)', zh: '基本块估计 = max(前端, 吞吐量, 延迟)', ru: 'оценка блока = max(front-end, throughput, задержка)' },
+        'an.bneck': { es: 'cuello de botella', en: 'bottleneck', ja: 'ボトルネック', zh: '瓶颈', ru: 'узкое место' },
+        'an.cycles': { es: 'ciclos', en: 'cycles', ja: 'サイクル', zh: '周期', ru: 'тактов' },
+        'an.optcode': { es: 'Codigo optimizado', en: 'Optimized code', ja: '最適化後のコード', zh: '优化后的代码', ru: 'Оптимизированный код' },
+        'an.optapplied': { es: 'Optimizaciones aplicadas', en: 'Optimizations applied', ja: '適用した最適化', zh: '已应用的优化', ru: 'Применённые оптимизации' },
+        'an.noopt': { es: 'Sin optimizaciones aplicables: el codigo ya es optimo para las reglas del analizador.', en: 'No applicable optimizations: the code is already optimal for the analyzer rules.', ja: '適用できる最適化はありません: このコードはアナライザの規則に対して既に最適です。', zh: '没有可应用的优化：对于分析器规则，代码已是最优。', ru: 'Применимых оптимизаций нет: код уже оптимален по правилам анализатора.' },
+        'an.cmp.orig': { es: 'original', en: 'original', ja: '元', zh: '原始', ru: 'исходный' },
+        'an.cmp.opt': { es: 'optimizado', en: 'optimized', ja: '最適化後', zh: '优化后', ru: 'оптимизир.' },
+        'an.cmp.ba': { es: 'Antes / despues (misma escala)', en: 'Before / after (same scale)', ja: '前 / 後（同一スケール）', zh: '前 / 后（同一比例）', ru: 'До / после (одинаковый масштаб)' },
+        'an.before': { es: 'ANTES', en: 'BEFORE', ja: '最適化前', zh: '优化前', ru: 'ДО' },
+        'an.after': { es: 'DESPUES', en: 'AFTER', ja: '最適化後', zh: '优化后', ru: 'ПОСЛЕ' },
+        'an.elimnote': { es: '(tachadas = se eliminan)', en: '(struck through = removed)', ja: '（打ち消し線 = 削除）', zh: '（划线 = 被删除）', ru: '(зачёркнутые = удалены)' },
+        'an.eliminated': { es: '(eliminada)', en: '(removed)', ja: '（削除）', zh: '（已删除）', ru: '(удалена)' },
+        'an.cccap': { es: 'camino critico (cadena de dependencias; pasa el cursor por una flecha para ver via que registro y cuantos ciclos)', en: 'critical path (dependency chain; hover an arrow to see via which register and how many cycles)', ja: 'クリティカルパス（依存チェーン。矢印にカーソルを合わせると経由レジスタとサイクル数が出ます）', zh: '关键路径（依赖链；将光标悬停在箭头上可查看经由哪个寄存器及多少周期）', ru: 'критический путь (цепочка зависимостей; наведите на стрелку, чтобы увидеть через какой регистр и сколько тактов)' },
+        // --- reglas del optimizador (etiqueta) ---
+        'rule.zero': { es: 'idioma de puesta a cero', en: 'zeroing idiom', ja: 'ゼロ化イディオム', zh: '置零惯用法', ru: 'идиома обнуления' },
+        'rule.strength': { es: 'reduccion de fuerza', en: 'strength reduction', ja: '強度低減', zh: '强度削减', ru: 'снижение стоимости' },
+        'rule.selfcopy': { es: 'copia a si mismo', en: 'self copy', ja: '自己コピー', zh: '自我复制', ru: 'копия в себя' },
+        'rule.dce': { es: 'eliminacion de codigo muerto', en: 'dead code elimination', ja: 'デッドコード削除', zh: '死代码消除', ru: 'устранение мёртвого кода' },
+        'rule.reorder': { es: 'reordenacion (planificacion)', en: 'reordering (scheduling)', ja: '並べ替え（スケジューリング）', zh: '重排序（调度）', ru: 'переупорядочивание (планирование)' },
+        // --- razones (why) del optimizador ---
+        'why.selfcopy': { es: 'mueve un registro a si mismo: no hace nada', en: 'moves a register onto itself: does nothing', ja: 'レジスタを自分自身に移動: 何もしません', zh: '把寄存器移到自身：没有任何作用', ru: 'копирует регистр в самого себя: ничего не делает' },
+        'why.zero': { es: 'xor reg,reg pone a 0 con 0 ciclos de latencia (rompe la dependencia) y suele resolverse en el rename', en: 'xor reg,reg zeroes with 0-cycle latency (breaks the dependency) and is usually resolved at rename', ja: 'xor reg,reg は 0 サイクルのレイテンシでゼロ化し（依存を切り）、多くはリネーム段で解決されます', zh: 'xor reg,reg 以 0 周期延迟置零（打断依赖），通常在重命名阶段完成', ru: 'xor reg,reg обнуляет с задержкой 0 тактов (разрывает зависимость) и обычно решается на этапе переименования' },
+        'why.strength': { es: 'multiplicar por 2^{k} es desplazar {k} bits: menos latencia y uops que imul', en: 'multiplying by 2^{k} is shifting {k} bits: less latency and uops than imul', ja: '2^{k} 倍は {k} ビットのシフト: imul よりレイテンシと uops が少ない', zh: '乘以 2^{k} 即左移 {k} 位：比 imul 延迟和 uops 更少', ru: 'умножение на 2^{k} — это сдвиг на {k} бит: меньше задержки и uops, чем imul' },
+        'why.dce': { es: 'su resultado se sobrescribe antes de volver a leerse (y sus flags no se usan)', en: 'its result is overwritten before being read again (and its flags are unused)', ja: 'その結果は再読み込みされる前に上書きされます（フラグも未使用）', zh: '其结果在再次被读取前就被覆盖（且其标志位未被使用）', ru: 'её результат перезаписывается до повторного чтения (и её флаги не используются)' },
+        'why.reorder': { es: 'se adelantan instrucciones independientes para dar trabajo paralelo al decodificador/emision mientras avanza una cadena de dependencias. Respeta TODAS las dependencias (reg/flags/memoria), NO cruza barreras (serializantes, fences, atomicas, saltos) y es conservador con la memoria: como no se conoce el aliasing ni la alineacion, nunca reordena dos accesos a memoria. No cambia el resultado', en: 'independent instructions are moved earlier to give the decoder/issue parallel work while a dependency chain advances. It respects ALL dependencies (reg/flags/memory), does NOT cross barriers (serializing, fences, atomics, branches) and is conservative with memory: since aliasing and alignment are unknown, it never reorders two memory accesses. It does not change the result', ja: '依存チェーンが進む間、デコーダ/発行に並列作業を与えるため独立命令を前倒しします。すべての依存（reg/flags/メモリ）を尊重し、バリア（シリアライズ命令・フェンス・アトミック・分岐）を越えず、メモリには保守的です: エイリアスもアラインメントも不明なため、メモリアクセス 2 つを並べ替えることはありません。結果は変わりません', zh: '在依赖链推进的同时，将独立指令提前，为解码/发射提供并行工作。它尊重所有依赖（寄存器/标志位/内存），不跨越屏障（序列化指令、fence、原子操作、分支），并对内存保持保守：由于别名和对齐未知，绝不重排两个内存访问。结果不变', ru: 'независимые инструкции переносятся раньше, чтобы дать декодеру/выпуску параллельную работу, пока продвигается цепочка зависимостей. Соблюдаются ВСЕ зависимости (регистры/флаги/память), барьеры (сериализующие, fence, атомарные, переходы) не пересекаются, и с памятью — консервативно: так как алиасинг и выравнивание неизвестны, два обращения к памяти никогда не переставляются. Результат не меняется' },
+        // --- tooltips del analizador ---
+        'tip.reg': { es: 'registro {r}', en: 'register {r}', ja: 'レジスタ {r}', zh: '寄存器 {r}', ru: 'регистр {r}' },
+        'tip.matched': { es: 'emparejada: iclass {ic} + operandos {ops}', en: 'matched: iclass {ic} + operands {ops}', ja: '一致: iclass {ic} + オペランド {ops}', zh: '匹配：iclass {ic} + 操作数 {ops}', ru: 'сопоставлено: iclass {ic} + операнды {ops}' },
+        'tip.crit': { es: 'en el camino critico: esta cadena de dependencias fija el limite de latencia', en: 'on the critical path: this dependency chain sets the latency bound', ja: 'クリティカルパス上: この依存チェーンがレイテンシ限界を決めます', zh: '在关键路径上：这条依赖链决定了延迟下限', ru: 'на критическом пути: эта цепочка зависимостей задаёт предел задержки' },
+        'cap.timeline': { es: 'timeline por dependencias &mdash; ancho = latencia; rojo = camino critico; iconos: µ microcodigo, L carga, S store, &#9873; barrera, &#9889; rompe dependencia', en: 'dependency timeline &mdash; width = latency; red = critical path; icons: µ microcode, L load, S store, &#9873; barrier, &#9889; breaks dependency', ja: '依存タイムライン &mdash; 幅 = レイテンシ; 赤 = クリティカルパス; アイコン: µ マイクロコード, L ロード, S ストア, &#9873; バリア, &#9889; 依存を切る', zh: '依赖时间线 &mdash; 宽度 = 延迟；红色 = 关键路径；图标：µ 微码，L 加载，S 存储，&#9873; 屏障，&#9889; 打断依赖', ru: 'таймлайн зависимостей &mdash; ширина = задержка; красный = критический путь; значки: µ микрокод, L загрузка, S запись, &#9873; барьер, &#9889; разрывает зависимость' },
+        'mk.micro': { es: 'microcodificada (muchas µops)', en: 'microcoded (many µops)', ja: 'マイクロコード化（多数の µops）', zh: '微码化（大量 µops）', ru: 'микрокодированная (много µops)' },
+        'mk.barrier': { es: 'barrera: serializante / fence / atomica &mdash; no se reordena ni elimina', en: 'barrier: serializing / fence / atomic &mdash; not reordered nor removed', ja: 'バリア: シリアライズ / フェンス / アトミック &mdash; 並べ替えも削除もしません', zh: '屏障：序列化 / fence / 原子 &mdash; 不重排也不删除', ru: 'барьер: сериализующая / fence / атомарная &mdash; не переставляется и не удаляется' },
+        'mk.load': { es: 'lee memoria (carga)', en: 'reads memory (load)', ja: 'メモリを読む（ロード）', zh: '读取内存（加载）', ru: 'читает память (загрузка)' },
+        'mk.store': { es: 'escribe memoria (store)', en: 'writes memory (store)', ja: 'メモリに書く（ストア）', zh: '写入内存（存储）', ru: 'пишет в память (запись)' },
+        'mk.breakdep': { es: 'rompe la dependencia (0 ciclos: puesta a cero / eliminacion de movimiento)', en: 'breaks the dependency (0 cycles: zeroing / move elimination)', ja: '依存を切る（0 サイクル: ゼロ化 / move elimination）', zh: '打断依赖（0 周期：置零 / move elimination）', ru: 'разрывает зависимость (0 тактов: обнуление / устранение move)' },
+        'cc.dep': { es: 'dependencia via {r}: espera el resultado de la instruccion anterior ({n} ciclos)', en: 'dependency via {r}: waits for the previous instruction result ({n} cycles)', ja: '{r} 経由の依存: 前の命令の結果を待ちます（{n} サイクル）', zh: '经由 {r} 的依赖：等待上一条指令的结果（{n} 周期）', ru: 'зависимость через {r}: ждёт результата предыдущей инструкции ({n} тактов)' },
+        'cc.lat': { es: 'latencia de esta instruccion', en: 'latency of this instruction', ja: 'この命令のレイテンシ', zh: '该指令的延迟', ru: 'задержка этой инструкции' },
+        // --- glosario de puertos (micro.js) ---
+        'port.amd.ld': { es: 'carga (load)', en: 'load', ja: 'ロード（load）', zh: '加载（load）', ru: 'загрузка (load)' },
+        'port.amd.alu': { es: 'ALU entera', en: 'integer ALU', ja: '整数 ALU', zh: '整数 ALU', ru: 'целочисленное ALU' },
+        'port.amd.agu': { es: 'generacion de direccion (AGU)', en: 'address generation (AGU)', ja: 'アドレス生成（AGU）', zh: '地址生成（AGU）', ru: 'генерация адреса (AGU)' },
+        'port.amd.sta': { es: 'direccion de almacenamiento (store-address)', en: 'store address', ja: 'ストアアドレス（store-address）', zh: '存储地址（store-address）', ru: 'адрес записи (store-address)' },
+        'port.amd.std': { es: 'dato de almacenamiento (store-data)', en: 'store data', ja: 'ストアデータ（store-data）', zh: '存储数据（store-data）', ru: 'данные записи (store-data)' },
+        'port.amd.jmp': { es: 'salto / branch', en: 'jump / branch', ja: 'ジャンプ / 分岐', zh: '跳转 / 分支', ru: 'переход / ветвление' },
+        'port.amd.mul': { es: 'multiplicacion entera', en: 'integer multiply', ja: '整数乗算', zh: '整数乘法', ru: 'целочисленное умножение' },
+        'port.amd.div': { es: 'division', en: 'division', ja: '除算', zh: '除法', ru: 'деление' },
+        'port.amd.shift': { es: 'desplazamientos', en: 'shifts', ja: 'シフト', zh: '移位', ru: 'сдвиги' },
+        'port.amd.slow': { es: 'ruta lenta (operaciones complejas / microcodigo)', en: 'slow path (complex operations / microcode)', ja: '低速経路（複雑な演算 / マイクロコード）', zh: '慢速路径（复杂操作 / 微码）', ru: 'медленный путь (сложные операции / микрокод)' },
+        'port.amd.int_other': { es: 'otras operaciones enteras', en: 'other integer operations', ja: 'その他の整数演算', zh: '其他整数操作', ru: 'прочие целочисленные операции' },
+        'port.amd.unknown': { es: 'puerto no identificado por la fuente', en: 'port not identified by the source', ja: '出典で特定されていないポート', zh: '来源未标识的端口', ru: 'порт не определён источником' },
+        'port.intel.0': { es: 'ALU, vector/FP, desplazamientos', en: 'ALU, vector/FP, shifts', ja: 'ALU, ベクトル/FP, シフト', zh: 'ALU、向量/FP、移位', ru: 'ALU, вектор/FP, сдвиги' },
+        'port.intel.1': { es: 'ALU, LEA, multiplicacion entera, vector/FP (FMA)', en: 'ALU, LEA, integer multiply, vector/FP (FMA)', ja: 'ALU, LEA, 整数乗算, ベクトル/FP（FMA）', zh: 'ALU、LEA、整数乘法、向量/FP（FMA）', ru: 'ALU, LEA, целочисл. умножение, вектор/FP (FMA)' },
+        'port.intel.2': { es: 'carga + calculo de direccion (AGU)', en: 'load + address calculation (AGU)', ja: 'ロード + アドレス計算（AGU）', zh: '加载 + 地址计算（AGU）', ru: 'загрузка + вычисление адреса (AGU)' },
+        'port.intel.3': { es: 'carga + calculo de direccion (AGU)', en: 'load + address calculation (AGU)', ja: 'ロード + アドレス計算（AGU）', zh: '加载 + 地址计算（AGU）', ru: 'загрузка + вычисление адреса (AGU)' },
+        'port.intel.4': { es: 'escritura del dato a memoria (store-data)', en: 'write data to memory (store-data)', ja: 'メモリへのデータ書き込み（store-data）', zh: '向内存写数据（store-data）', ru: 'запись данных в память (store-data)' },
+        'port.intel.5': { es: 'ALU, vector (shuffle, permutaciones)', en: 'ALU, vector (shuffle, permutations)', ja: 'ALU, ベクトル（shuffle・置換）', zh: 'ALU、向量（shuffle、置换）', ru: 'ALU, вектор (shuffle, перестановки)' },
+        'port.intel.6': { es: 'ALU, desplazamientos, ramas', en: 'ALU, shifts, branches', ja: 'ALU, シフト, 分岐', zh: 'ALU、移位、分支', ru: 'ALU, сдвиги, переходы' },
+        'port.intel.7': { es: 'calculo de la direccion de escritura (store-AGU)', en: 'store address calculation (store-AGU)', ja: 'ストアアドレス計算（store-AGU）', zh: '存储地址计算（store-AGU）', ru: 'вычисление адреса записи (store-AGU)' },
+        'port.intel.8': { es: 'carga / calculo de direccion', en: 'load / address calculation', ja: 'ロード / アドレス計算', zh: '加载 / 地址计算', ru: 'загрузка / вычисление адреса' },
+        'port.intel.9': { es: 'escritura a memoria (store)', en: 'write to memory (store)', ja: 'メモリへの書き込み（store）', zh: '写入内存（store）', ru: 'запись в память (store)' },
+        'port.fp.pre': { es: 'unidad(es) FP/vectorial', en: 'FP/vector unit(s)', ja: 'FP/ベクトル ユニット', zh: 'FP/向量单元', ru: 'FP/векторный блок(и)' },
+        'port.fp.post': { es: 'la µop va a una de ellas (suma/mul/shuffle/conversion FP y SIMD)', en: 'the µop goes to one of them (FP/SIMD add/mul/shuffle/convert)', ja: 'µop はいずれかへ（FP/SIMD の加算・乗算・shuffle・変換）', zh: 'µop 进入其中之一（FP/SIMD 的加/乘/shuffle/转换）', ru: 'µop идёт в один из них (сложение/умножение/shuffle/конверсия FP и SIMD)' },
+        'port.dispatch': { es: 'la µop se despacha a UNO de estos puertos', en: 'the µop is dispatched to ONE of these ports', ja: 'µop はこれらのポートの 1 つに発行されます', zh: 'µop 被派发到其中一个端口', ru: 'µop отправляется в ОДИН из этих портов' },
+        'port.cluster': { es: 'cluster', en: 'cluster', ja: 'クラスタ', zh: '簇', ru: 'кластер' },
+        'port.exec': { es: 'unidad de ejecucion', en: 'execution unit', ja: '実行ユニット', zh: '执行单元', ru: 'исполнительный блок' },
+        // --- paneles de ayuda (bloques HTML) ---
+        'help.idx': {
+            es: '<p>Cada fila es una <b>forma de instruccion</b> (un mnemonico con una combinacion concreta de operandos y codificacion). Haz clic en una fila para ver el detalle: descripcion, operandos, efectos y coste en <b>todas</b> las microarquitecturas. El selector de la barra elige cual se muestra en las columnas de coste; los encabezados se pueden pulsar para ordenar.</p><dl><dt>ID</dt><dd>Identificador denso de la forma (indice de tabla en el compilador).</dd><dt>Forma</dt><dd>Nombre reconstruido (mnemonico + operandos + ancho). Pasa el cursor por encima para ver la descripcion. Es documentacion; la identidad real es estructural.</dd><dt>iclass</dt><dd>Mnemonico canonico (ADD, DIV, CPUID...).</dd><dt>opcode</dt><dd>Byte(s) de operacion, con la extension ISA (BASE, AVX, AVX512EVEX...) en gris.</dd><dt>encoding</dt><dd>Caracteristicas de codificacion/semantica: <span class="k">eosz</span> tamano de operando, <span class="k">evex</span>/<span class="k">vex</span> prefijo, <span class="k">mask</span> enmascarado, <span class="k">bcast</span> broadcast, <span class="k">sae</span> supresion de excepciones, <span class="k">rep</span>/<span class="k">lock</span> prefijo.</dd><dt>operandos</dt><dd>Cada operando con tipo (reg/mem/imm/flags) y ancho, marcado <span class="rd">lee</span> / <span class="wr">escr</span> / <span class="dim">impl</span>(icito).</dd><dt>overlay</dt><dd>Propiedades semanticas manuales: serializante, barrera de memoria, atomica, salto, llamada...</dd><dt>recip_tp</dt><dd>Throughput reciproco: ciclos por instruccion en regimen (menor = mas rapido; <span class="k">0.25</span> = 4 por ciclo).</dd><dt>uops</dt><dd>Micro-operaciones que genera.</dd><dt>lat. max</dt><dd>Latencia maxima (ciclos) de la microarq. mostrada. El detalle desglosa cada camino <span class="k">operando&rarr;operando</span> con su tipo: <b>R</b>=resultado, <b>A</b>=direccion, <b>F</b>=flags, <b>M</b>=memoria; <span class="k">ub</span> = cota superior.</dd><dt>puertos</dt><dd>Cada microarquitectura tiene varios <b>puertos de ejecucion</b>; una µop se despacha a <b>uno</b> de los puertos de su grupo (el numero delante es cuantas µops). Intel los numera y agrupa (<span class="k">p0156</span> = puede ir al puerto 0, 1, 5 o 6; los sufijos A/B son clusters); AMD los nombra por funcion (<span class="k">ALU</span>, <span class="k">LD</span>, <span class="k">STA</span>...). <b>Pasa el cursor por un puerto</b> para ver que es. Cuantos mas puertos admita, mas paralelismo.</dd></dl><p class="dim">En el detalle, por microarquitectura: <b>microcoded</b> = usa microcodigo; <b>macro_fusible</b> = puede fusionarse con un salto; <b>div_cycles</b> = latencia del divisor.</p>',
+            en: '<p>Each row is an <b>instruction form</b> (a mnemonic with a concrete combination of operands and encoding). Click a row to see the detail: description, operands, effects and cost across <b>all</b> microarchitectures. The bar selector chooses which one is shown in the cost columns; the headers can be clicked to sort.</p><dl><dt>ID</dt><dd>Dense form identifier (table index in the compiler).</dd><dt>Form</dt><dd>Reconstructed name (mnemonic + operands + width). Hover to see the description. It is documentation; the real identity is structural.</dd><dt>iclass</dt><dd>Canonical mnemonic (ADD, DIV, CPUID...).</dd><dt>opcode</dt><dd>Operation byte(s), with the ISA extension (BASE, AVX, AVX512EVEX...) in gray.</dd><dt>encoding</dt><dd>Encoding/semantic features: <span class="k">eosz</span> operand size, <span class="k">evex</span>/<span class="k">vex</span> prefix, <span class="k">mask</span> masking, <span class="k">bcast</span> broadcast, <span class="k">sae</span> suppress-all-exceptions, <span class="k">rep</span>/<span class="k">lock</span> prefix.</dd><dt>operands</dt><dd>Each operand with type (reg/mem/imm/flags) and width, marked <span class="rd">reads</span> / <span class="wr">writes</span> / <span class="dim">impl</span>(icit).</dd><dt>overlay</dt><dd>Manual semantic properties: serializing, memory barrier, atomic, branch, call...</dd><dt>recip_tp</dt><dd>Reciprocal throughput: cycles per instruction at steady state (lower = faster; <span class="k">0.25</span> = 4 per cycle).</dd><dt>uops</dt><dd>Micro-operations it generates.</dd><dt>max lat.</dt><dd>Max latency (cycles) of the shown microarch. The detail breaks down each <span class="k">operand&rarr;operand</span> path with its type: <b>R</b>=result, <b>A</b>=address, <b>F</b>=flags, <b>M</b>=memory; <span class="k">ub</span> = upper bound.</dd><dt>ports</dt><dd>Each microarchitecture has several <b>execution ports</b>; a µop is dispatched to <b>one</b> of the ports in its group (the leading number is how many µops). Intel numbers and groups them (<span class="k">p0156</span> = can go to port 0, 1, 5 or 6; A/B suffixes are clusters); AMD names them by function (<span class="k">ALU</span>, <span class="k">LD</span>, <span class="k">STA</span>...). <b>Hover a port</b> to see what it is. The more ports allowed, the more parallelism.</dd></dl><p class="dim">In the detail, per microarch: <b>microcoded</b> = uses microcode; <b>macro_fusible</b> = can fuse with a branch; <b>div_cycles</b> = divider latency.</p>',
+            ja: '<p>各行は <b>命令形式</b>（ニーモニックと、具体的なオペランド・エンコーディングの組み合わせ）です。行をクリックすると詳細（説明・オペランド・作用・<b>全</b>マイクロアーキでのコスト）が開きます。バーのセレクタでコスト列に表示するマイクロアーキを選び、見出しをクリックすると並べ替えできます。</p><dl><dt>ID</dt><dd>形式の連番 ID（コンパイラ内のテーブル添字）。</dd><dt>形式</dt><dd>再構成した名前（ニーモニック + オペランド + 幅）。カーソルを合わせると説明が出ます。これは資料であり、実際の同一性は構造的です。</dd><dt>iclass</dt><dd>正規ニーモニック（ADD, DIV, CPUID...）。</dd><dt>opcode</dt><dd>オペコードバイト。ISA 拡張（BASE, AVX, AVX512EVEX...）は灰色。</dd><dt>encoding</dt><dd>エンコーディング/意味の特徴: <span class="k">eosz</span> オペランドサイズ, <span class="k">evex</span>/<span class="k">vex</span> プレフィクス, <span class="k">mask</span> マスク, <span class="k">bcast</span> ブロードキャスト, <span class="k">sae</span> 例外抑制, <span class="k">rep</span>/<span class="k">lock</span> プレフィクス。</dd><dt>オペランド</dt><dd>各オペランドの種別（reg/mem/imm/flags）と幅。<span class="rd">読</span> / <span class="wr">書</span> / <span class="dim">暗黙</span> を表示。</dd><dt>overlay</dt><dd>手動付与の意味属性: シリアライズ・メモリバリア・アトミック・分岐・呼び出しなど。</dd><dt>recip_tp</dt><dd>逆スループット: 定常状態での命令あたりサイクル（小さいほど速い。<span class="k">0.25</span> = 1 サイクルに 4 個）。</dd><dt>uops</dt><dd>生成するマイクロオペレーション数。</dd><dt>最大レイテンシ</dt><dd>表示中マイクロアーキの最大レイテンシ（サイクル）。詳細では各 <span class="k">オペランド&rarr;オペランド</span> 経路を種別付きで表示: <b>R</b>=結果, <b>A</b>=アドレス, <b>F</b>=フラグ, <b>M</b>=メモリ; <span class="k">ub</span> = 上限。</dd><dt>ポート</dt><dd>各マイクロアーキには複数の <b>実行ポート</b> があり、µop はグループ内の <b>1 つ</b> に発行されます（先頭の数字は µop 数）。Intel は番号で分類（<span class="k">p0156</span> = ポート 0/1/5/6 のいずれか。A/B はクラスタ）、AMD は機能名（<span class="k">ALU</span>, <span class="k">LD</span>, <span class="k">STA</span>...）。<b>ポートにカーソル</b>で説明が出ます。使えるポートが多いほど並列度が高い。</dd></dl><p class="dim">詳細のマイクロアーキ別表記: <b>microcoded</b> = マイクロコード使用; <b>macro_fusible</b> = 分岐と融合可能; <b>div_cycles</b> = 除算器レイテンシ。</p>',
+            zh: '<p>每一行是一个<b>指令形式</b>（一个助记符加上具体的操作数与编码组合）。点击某行查看详情：描述、操作数、效果，以及在<b>所有</b>微架构上的开销。工具栏选择器决定开销列显示哪个微架构；点击表头可排序。</p><dl><dt>ID</dt><dd>形式的稠密标识符（编译器中的表索引）。</dd><dt>形式</dt><dd>重建的名称（助记符 + 操作数 + 宽度）。悬停查看描述。它是文档；真正的标识是结构性的。</dd><dt>iclass</dt><dd>规范助记符（ADD、DIV、CPUID...）。</dd><dt>opcode</dt><dd>操作码字节，ISA 扩展（BASE、AVX、AVX512EVEX...）以灰色显示。</dd><dt>编码</dt><dd>编码/语义特征：<span class="k">eosz</span> 操作数大小、<span class="k">evex</span>/<span class="k">vex</span> 前缀、<span class="k">mask</span> 掩码、<span class="k">bcast</span> 广播、<span class="k">sae</span> 抑制异常、<span class="k">rep</span>/<span class="k">lock</span> 前缀。</dd><dt>操作数</dt><dd>每个操作数的类型（reg/mem/imm/flags）和宽度，标注 <span class="rd">读</span> / <span class="wr">写</span> / <span class="dim">隐式</span>。</dd><dt>overlay</dt><dd>人工标注的语义属性：序列化、内存屏障、原子、分支、调用……</dd><dt>recip_tp</dt><dd>倒数吞吐量：稳态下每指令周期（越小越快；<span class="k">0.25</span> = 每周期 4 条）。</dd><dt>uops</dt><dd>生成的微操作数。</dd><dt>最大延迟</dt><dd>所示微架构的最大延迟（周期）。详情按类型分解每条 <span class="k">操作数&rarr;操作数</span> 路径：<b>R</b>=结果、<b>A</b>=地址、<b>F</b>=标志位、<b>M</b>=内存；<span class="k">ub</span> = 上界。</dd><dt>端口</dt><dd>每个微架构有多个<b>执行端口</b>；一个 µop 派发到其组内的<b>某一个</b>端口（前面的数字是 µop 数）。Intel 用编号分组（<span class="k">p0156</span> = 可去端口 0、1、5 或 6；A/B 后缀是簇）；AMD 按功能命名（<span class="k">ALU</span>、<span class="k">LD</span>、<span class="k">STA</span>...）。<b>悬停端口</b>查看含义。可用端口越多，并行度越高。</dd></dl><p class="dim">详情中按微架构：<b>microcoded</b> = 使用微码；<b>macro_fusible</b> = 可与分支融合；<b>div_cycles</b> = 除法器延迟。</p>',
+            ru: '<p>Каждая строка — это <b>форма инструкции</b> (мнемоника с конкретной комбинацией операндов и кодирования). Щёлкните строку, чтобы увидеть детали: описание, операнды, эффекты и стоимость на <b>всех</b> микроархитектурах. Селектор на панели выбирает, какая показана в столбцах стоимости; заголовки можно нажать для сортировки.</p><dl><dt>ID</dt><dd>Плотный идентификатор формы (индекс таблицы в компиляторе).</dd><dt>Форма</dt><dd>Восстановленное имя (мнемоника + операнды + ширина). Наведите, чтобы увидеть описание. Это документация; настоящая идентичность — структурная.</dd><dt>iclass</dt><dd>Каноническая мнемоника (ADD, DIV, CPUID...).</dd><dt>opcode</dt><dd>Байт(ы) операции, расширение ISA (BASE, AVX, AVX512EVEX...) серым.</dd><dt>encoding</dt><dd>Особенности кодирования/семантики: <span class="k">eosz</span> размер операнда, <span class="k">evex</span>/<span class="k">vex</span> префикс, <span class="k">mask</span> маскирование, <span class="k">bcast</span> broadcast, <span class="k">sae</span> подавление исключений, <span class="k">rep</span>/<span class="k">lock</span> префикс.</dd><dt>операнды</dt><dd>Каждый операнд с типом (reg/mem/imm/flags) и шириной, помечен <span class="rd">чит</span> / <span class="wr">зап</span> / <span class="dim">неявн</span>.</dd><dt>overlay</dt><dd>Ручные семантические свойства: сериализующая, барьер памяти, атомарная, переход, вызов...</dd><dt>recip_tp</dt><dd>Обратная пропускная способность: тактов на инструкцию в установившемся режиме (меньше = быстрее; <span class="k">0.25</span> = 4 за такт).</dd><dt>uops</dt><dd>Порождаемые микрооперации.</dd><dt>макс. задержка</dt><dd>Макс. задержка (тактов) показанной микроарх. В деталях разложен каждый путь <span class="k">операнд&rarr;операнд</span> с типом: <b>R</b>=результат, <b>A</b>=адрес, <b>F</b>=флаги, <b>M</b>=память; <span class="k">ub</span> = верхняя граница.</dd><dt>порты</dt><dd>У каждой микроархитектуры несколько <b>портов исполнения</b>; µop отправляется в <b>один</b> из портов своей группы (число впереди — сколько µops). Intel нумерует и группирует их (<span class="k">p0156</span> = может пойти в порт 0, 1, 5 или 6; суффиксы A/B — кластеры); AMD называет их по функции (<span class="k">ALU</span>, <span class="k">LD</span>, <span class="k">STA</span>...). <b>Наведите на порт</b>, чтобы узнать, что это. Чем больше портов, тем больше параллелизма.</dd></dl><p class="dim">В деталях, по микроарх.: <b>microcoded</b> = использует микрокод; <b>macro_fusible</b> = может слиться с переходом; <b>div_cycles</b> = задержка делителя.</p>'
+        },
+        'help.an': {
+            es: '<p>Para cada instruccion (sintaxis Intel, una por linea; se ignoran etiquetas <span class="k">nombre:</span> y comentarios <span class="k">;</span> <span class="k">#</span> <span class="k">//</span>) se identifica el mnemonico, se clasifica cada operando (registro y su ancho, memoria &mdash; el ancho se toma del prefijo <span class="k">qword ptr [rax]</span> o del otro operando &mdash;, inmediato) y se localiza su <b>forma</b> en la base de datos.</p><p>Del bloque completo se calculan las tres cotas que gobiernan el tiempo de ejecucion en la microarquitectura elegida:</p><dl><dt>front-end</dt><dd>&Sigma; uops &divide; el ancho de decodificacion/emision de la microarquitectura: los ciclos si limitara el reparto de µops al motor de ejecucion (superescalar).</dd><dt>throughput</dt><dd>&Sigma; del throughput reciproco de cada instruccion: los ciclos si limitaran los puertos de ejecucion (instrucciones independientes, encauzadas en paralelo).</dd><dt>latencia (camino critico)</dt><dd>se construye el grafo de <b>dependencias</b> reales entre instrucciones (registros &mdash; con sus alias de ancho &mdash;, flags y memoria) y se recorre el camino mas largo: los ciclos si limitaran las cadenas de dependencia.</dd></dl><p>La <b>estimacion</b> del bloque es el mayor de las tres, y se indica el <b>cuello de botella</b>. La eliminacion de movimientos (<span class="k">mov</span> registro-registro a 0 ciclos) se tiene en cuenta.</p><p>Debajo, el <b>codigo optimizado</b>: aplica peephole (puesta a cero <span class="k">mov r,0</span>&rarr;<span class="k">xor r,r</span>, reduccion de fuerza <span class="k">imul r,2^k</span>&rarr;<span class="k">shl r,k</span>, copia a si mismo), eliminacion de codigo muerto y <b>reordenacion</b> valida (respeta todas las dependencias, no cruza barreras &mdash;serializantes, fences, atomicas&mdash; y es conservador con la memoria) para favorecer la ejecucion paralela; muestra que aplico, por que, y el mismo analisis para comparar.</p>',
+            en: '<p>For each instruction (Intel syntax, one per line; labels <span class="k">name:</span> and comments <span class="k">;</span> <span class="k">#</span> <span class="k">//</span> are ignored) the mnemonic is identified, each operand is classified (register and its width, memory &mdash; the width is taken from the <span class="k">qword ptr [rax]</span> prefix or from the other operand &mdash;, immediate) and its <b>form</b> is located in the database.</p><p>For the whole block, the three bounds that govern execution time on the chosen microarchitecture are computed:</p><dl><dt>front-end</dt><dd>&Sigma; uops &divide; the microarchitecture decode/issue width: the cycles if µop delivery to the execution engine were the limit (superscalar).</dd><dt>throughput</dt><dd>&Sigma; of each instruction reciprocal throughput: the cycles if the execution ports were the limit (independent instructions, pipelined in parallel).</dd><dt>latency (critical path)</dt><dd>the graph of real <b>dependencies</b> between instructions is built (registers &mdash; with their width aliases &mdash;, flags and memory) and the longest path is walked: the cycles if the dependency chains were the limit.</dd></dl><p>The block <b>estimate</b> is the largest of the three, and the <b>bottleneck</b> is indicated. Move elimination (register-to-register <span class="k">mov</span> at 0 cycles) is taken into account.</p><p>Below, the <b>optimized code</b>: applies peephole (zeroing <span class="k">mov r,0</span>&rarr;<span class="k">xor r,r</span>, strength reduction <span class="k">imul r,2^k</span>&rarr;<span class="k">shl r,k</span>, self copy), dead code elimination and valid <b>reordering</b> (respects all dependencies, does not cross barriers &mdash;serializing, fences, atomics&mdash; and is conservative with memory) to favor parallel execution; it shows what it applied, why, and the same analysis to compare.</p>',
+            ja: '<p>各命令（Intel 記法、1 行 1 命令。ラベル <span class="k">name:</span> とコメント <span class="k">;</span> <span class="k">#</span> <span class="k">//</span> は無視）についてニーモニックを判定し、各オペランドを分類（レジスタとその幅、メモリ &mdash; 幅は <span class="k">qword ptr [rax]</span> プレフィクスか他方のオペランドから取得 &mdash;、即値）し、その<b>形式</b>をデータベースで特定します。</p><p>ブロック全体について、選択したマイクロアーキでの実行時間を支配する 3 つの上限を計算します:</p><dl><dt>front-end</dt><dd>&Sigma; uops &divide; マイクロアーキのデコード/発行幅: µop の実行エンジンへの供給が律速となった場合のサイクル（スーパースカラ）。</dd><dt>throughput</dt><dd>各命令の逆スループットの &Sigma;: 実行ポートが律速となった場合のサイクル（独立命令が並列にパイプライン化）。</dd><dt>レイテンシ（クリティカルパス）</dt><dd>命令間の実際の<b>依存</b>グラフ（レジスタ &mdash; 幅のエイリアス込み &mdash;、フラグ、メモリ）を構築し、最長経路をたどる: 依存チェーンが律速となった場合のサイクル。</dd></dl><p>ブロックの<b>推定</b>は 3 つの最大値で、<b>ボトルネック</b>を示します。move elimination（レジスタ間 <span class="k">mov</span> が 0 サイクル）も考慮します。</p><p>下部の<b>最適化後コード</b>: peephole（ゼロ化 <span class="k">mov r,0</span>&rarr;<span class="k">xor r,r</span>、強度低減 <span class="k">imul r,2^k</span>&rarr;<span class="k">shl r,k</span>、自己コピー）、デッドコード削除、有効な<b>並べ替え</b>（すべての依存を尊重し、バリア &mdash;シリアライズ・フェンス・アトミック&mdash; を越えず、メモリに保守的）を適用して並列実行を促します。適用内容・理由・比較用の同一解析を表示します。</p>',
+            zh: '<p>对每条指令（Intel 语法，每行一条；忽略标签 <span class="k">name:</span> 和注释 <span class="k">;</span> <span class="k">#</span> <span class="k">//</span>），识别助记符，对每个操作数分类（寄存器及其宽度、内存 &mdash; 宽度取自 <span class="k">qword ptr [rax]</span> 前缀或另一个操作数 &mdash;、立即数），并在数据库中定位其<b>形式</b>。</p><p>对整个基本块，计算支配所选微架构执行时间的三条界限：</p><dl><dt>前端</dt><dd>&Sigma; uops &divide; 微架构的解码/发射宽度：若 µop 向执行引擎的投递成为瓶颈时的周期数（超标量）。</dd><dt>吞吐量</dt><dd>各指令倒数吞吐量之 &Sigma;：若执行端口成为瓶颈时的周期数（独立指令并行流水）。</dd><dt>延迟（关键路径）</dt><dd>构建指令间真实<b>依赖</b>图（寄存器 &mdash; 含其宽度别名 &mdash;、标志位、内存），并走最长路径：若依赖链成为瓶颈时的周期数。</dd></dl><p>基本块<b>估计</b>取三者最大值，并指出<b>瓶颈</b>。会计入 move elimination（寄存器到寄存器 <span class="k">mov</span> 为 0 周期）。</p><p>下方是<b>优化后的代码</b>：应用窥孔优化（置零 <span class="k">mov r,0</span>&rarr;<span class="k">xor r,r</span>、强度削减 <span class="k">imul r,2^k</span>&rarr;<span class="k">shl r,k</span>、自我复制）、死代码消除以及有效<b>重排序</b>（尊重所有依赖，不跨越屏障 &mdash;序列化、fence、原子&mdash;，并对内存保守）以促进并行执行；并显示应用了什么、为什么，以及同样的分析用于对比。</p>',
+            ru: '<p>Для каждой инструкции (синтаксис Intel, по одной в строке; метки <span class="k">name:</span> и комментарии <span class="k">;</span> <span class="k">#</span> <span class="k">//</span> игнорируются) определяется мнемоника, классифицируется каждый операнд (регистр и его ширина, память &mdash; ширина берётся из префикса <span class="k">qword ptr [rax]</span> или из другого операнда &mdash;, непосредственное значение) и в базе находится его <b>форма</b>.</p><p>Для всего блока вычисляются три границы, определяющие время выполнения на выбранной микроархитектуре:</p><dl><dt>front-end</dt><dd>&Sigma; uops &divide; ширина декодирования/выпуска микроархитектуры: такты, если бы ограничением была подача µops в движок исполнения (суперскаляр).</dd><dt>throughput</dt><dd>&Sigma; обратной пропускной способности каждой инструкции: такты, если бы ограничением были порты исполнения (независимые инструкции, конвейеризованные параллельно).</dd><dt>задержка (критический путь)</dt><dd>строится граф реальных <b>зависимостей</b> между инструкциями (регистры &mdash; с их псевдонимами по ширине &mdash;, флаги и память) и проходится самый длинный путь: такты, если бы ограничением были цепочки зависимостей.</dd></dl><p><b>Оценка</b> блока — наибольшая из трёх, и указывается <b>узкое место</b>. Учитывается устранение move (регистр-в-регистр <span class="k">mov</span> за 0 тактов).</p><p>Ниже — <b>оптимизированный код</b>: применяет peephole (обнуление <span class="k">mov r,0</span>&rarr;<span class="k">xor r,r</span>, снижение стоимости <span class="k">imul r,2^k</span>&rarr;<span class="k">shl r,k</span>, копия в себя), устранение мёртвого кода и корректное <b>переупорядочивание</b> (соблюдает все зависимости, не пересекает барьеры &mdash;сериализующие, fence, атомарные&mdash; и консервативно с памятью) для параллельного исполнения; показывает, что применено, почему, и тот же анализ для сравнения.</p>'
         },
     };
-    const lang = localStorage.getItem('vesta-lang') || (navigator.language || 'es').slice(0, 2);
-    const L = STR[lang] ? lang : 'es';
-    const D = STR[L];
+    const NATIVE = { es: 'ES', en: 'EN', ja: '日本語', zh: '中文', ru: 'Русский' };
+    const lang0 = localStorage.getItem('vesta-lang') || (navigator.language || 'es').slice(0, 2);
+    const L = NATIVE[lang0] ? lang0 : 'es';
     window.LANG = L;
     window.t = (k, vars) => {
-        let s = D[k] != null ? D[k] : k;
-        if (vars) for (const v in vars) s = s.replace('{' + v + '}', vars[v]);
+        const e = STR[k];
+        let s = e ? (e[L] != null ? e[L] : (e.es != null ? e.es : k)) : k;
+        if (vars) for (const v in vars) s = s.split('{' + v + '}').join(vars[v]);
         return s;
     };
     // aplicar sobre el DOM estatico (scripts al final del body -> DOM listo).
     document.querySelectorAll('[data-i18n]').forEach(el => { el.innerHTML = window.t(el.getAttribute('data-i18n')); });
     document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = window.t(el.getAttribute('data-i18n-ph')); });
+    document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = window.t(el.getAttribute('data-i18n-title')); });
     document.documentElement.lang = L;
-    // selector de idioma en la nav.
+    // selector de idioma en la nav (nombres nativos).
     const nav = document.querySelector('.nav');
     if (nav) {
         const sel = document.createElement('select');
         sel.className = 'langsel';
-        for (const code of Object.keys(STR)) {
+        for (const code of Object.keys(NATIVE)) {
             const o = document.createElement('option');
-            o.value = code; o.textContent = code.toUpperCase();
+            o.value = code; o.textContent = NATIVE[code];
             if (code === L) o.selected = true;
             sel.appendChild(o);
         }

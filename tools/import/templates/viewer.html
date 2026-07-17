@@ -18,76 +18,12 @@
 
     <header>
         <h1 data-i18n="idx.title">Base de datos de instrucciones x86</h1>
-        <div class="sub">{{FORMS}} formas &middot; {{ARCHES}} microarquitecturas
-            &middot; fuente uops.info {{DATE}} &middot; xml <code>{{SHA}}</code>
-            &middot; esquema {{SCHEMA}}</div>
+        <div class="sub" id="subline"></div>
     </header>
 
     <details class="help">
         <summary data-i18n="idx.help">Como leer esta tabla</summary>
-        <div class="body">
-            <p>Cada fila es una <b>forma de instruccion</b> (un mnemonico con una
-                combinacion concreta de operandos y codificacion). Haz clic en una fila
-                para ver el detalle: descripcion, operandos, efectos y coste en
-                <b>todas</b> las microarquitecturas. El selector de la barra elige cual
-                se muestra en las columnas de coste; los encabezados se pueden pulsar
-                para ordenar.
-            </p>
-            <dl>
-                <dt>ID</dt>
-                <dd>Identificador denso de la forma (indice de tabla en el compilador).</dd>
-                <dt>Forma</dt>
-                <dd>Nombre reconstruido (mnemonico + operandos + ancho). Pasa el cursor
-                    por encima para ver la descripcion. Es documentacion; la identidad
-                    real es estructural.</dd>
-                <dt>iclass</dt>
-                <dd>Mnemonico canonico (ADD, DIV, CPUID...).</dd>
-                <dt>opcode</dt>
-                <dd>Byte(s) de operacion, con la extension ISA (BASE, AVX,
-                    AVX512EVEX...) en gris.</dd>
-                <dt>encoding</dt>
-                <dd>Caracteristicas de codificacion/semantica: <span class="k">eosz</span>
-                    tamano de operando, <span class="k">evex</span>/<span class="k">vex</span>
-                    prefijo, <span class="k">mask</span> enmascarado,
-                    <span class="k">bcast</span> broadcast, <span class="k">sae</span>
-                    supresion de excepciones, <span class="k">rep</span>/<span class="k">lock</span>
-                    prefijo.
-                </dd>
-                <dt>operandos</dt>
-                <dd>Cada operando con tipo (reg/mem/imm/flags) y ancho, marcado
-                    <span class="rd">lee</span> / <span class="wr">escr</span> /
-                    <span class="dim">impl</span>(icito).
-                </dd>
-                <dt>overlay</dt>
-                <dd>Propiedades semanticas manuales: serializante, barrera de memoria,
-                    atomica, salto, llamada...</dd>
-                <dt>recip_tp</dt>
-                <dd>Throughput reciproco: ciclos por instruccion en regimen (menor = mas
-                    rapido; <span class="k">0.25</span> = 4 por ciclo).</dd>
-                <dt>uops</dt>
-                <dd>Micro-operaciones que genera.</dd>
-                <dt>lat. max</dt>
-                <dd>Latencia maxima (ciclos) de la microarq. mostrada. El detalle
-                    desglosa cada camino <span class="k">operando&rarr;operando</span> con
-                    su tipo: <b>R</b>=resultado, <b>A</b>=direccion, <b>F</b>=flags,
-                    <b>M</b>=memoria; <span class="k">ub</span> = cota superior.
-                </dd>
-                <dt>puertos</dt>
-                <dd>Cada microarquitectura tiene varios <b>puertos de ejecucion</b>; una
-                    µop se despacha a <b>uno</b> de los puertos de su grupo (el numero
-                    delante es cuantas µops). Intel los numera y agrupa
-                    (<span class="k">p0156</span> = puede ir al puerto 0, 1, 5 o 6; los
-                    sufijos A/B son clusters); AMD los nombra por funcion
-                    (<span class="k">ALU</span>, <span class="k">LD</span>,
-                    <span class="k">STA</span>...). <b>Pasa el cursor por un puerto</b>
-                    para ver que es. Cuantos mas puertos admita, mas paralelismo.
-                </dd>
-            </dl>
-            <p class="dim">En el detalle, por microarquitectura: <b>microcoded</b> =
-                usa microcodigo; <b>macro_fusible</b> = puede fusionarse con un salto;
-                <b>div_cycles</b> = latencia del divisor.
-            </p>
-        </div>
+        <div class="body" data-i18n="help.idx"></div>
     </details>
 
     <div class="bar">
@@ -101,16 +37,16 @@
         <table>
             <thead>
                 <tr>
-                    <th class="n" data-k="0" data-i18n="th.id" title="Identificador denso de la forma">ID</th>
-                    <th data-k="1" data-i18n="th.form" title="Nombre reconstruido (documentacion)">Forma</th>
-                    <th data-k="2" data-i18n="th.iclass" title="Mnemonico canonico">iclass</th>
-                    <th data-k="4" data-i18n="th.opcode" title="Byte(s) de operacion y extension ISA">opcode</th>
-                    <th data-i18n="th.encoding" title="Caracteristicas de codificacion y semantica">encoding</th>
-                    <th data-i18n="th.operands" title="Operandos: tipo, ancho, lee/escribe">operandos</th>
-                    <th data-i18n="th.overlay" title="Propiedades semanticas manuales">overlay</th>
-                    <th class="n" data-i18n="th.reciptp" title="Throughput reciproco: ciclos/instr (menor = mas rapido)">recip_tp</th>
-                    <th class="n" data-i18n="th.uops" title="Micro-operaciones">uops</th>
-                    <th class="n" data-i18n="th.latmax" title="Latencia maxima (ciclos) de la microarq. mostrada">lat. max</th>
+                    <th class="n" data-k="0" data-i18n="th.id" data-i18n-title="th.id.tip">ID</th>
+                    <th data-k="1" data-i18n="th.form" data-i18n-title="th.form.tip">Forma</th>
+                    <th data-k="2" data-i18n="th.iclass" data-i18n-title="th.iclass.tip">iclass</th>
+                    <th data-k="4" data-i18n="th.opcode" data-i18n-title="th.opcode.tip">opcode</th>
+                    <th data-i18n="th.encoding" data-i18n-title="th.encoding.tip">encoding</th>
+                    <th data-i18n="th.operands" data-i18n-title="th.operands.tip">operandos</th>
+                    <th data-i18n="th.overlay" data-i18n-title="th.overlay.tip">overlay</th>
+                    <th class="n" data-i18n="th.reciptp" data-i18n-title="th.reciptp.tip">recip_tp</th>
+                    <th class="n" data-i18n="th.uops" data-i18n-title="th.uops.tip">uops</th>
+                    <th class="n" data-i18n="th.latmax" data-i18n-title="th.latmax.tip">lat. max</th>
                 </tr>
             </thead>
             <tbody id="tb"></tbody>
@@ -123,10 +59,7 @@
         <button id="next">&rsaquo;</button><button id="last">&raquo;</button>
     </div>
 
-    <div class="foot">Generado desde la base de datos serializada de
-        <a href="https://github.com/vesta-lang/arch-data">vesta-lang/arch-data</a>.
-        Fuente de datos microarquitecturales: <a href="https://uops.info/">uops.info</a>.
-    </div>
+    <div class="foot" data-i18n="foot.idx"></div>
 
     <script src="assets/db.js"></script>
     <script src="assets/micro.js"></script>
