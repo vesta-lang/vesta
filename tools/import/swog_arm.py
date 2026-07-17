@@ -64,6 +64,11 @@ def _expand_mnems(cell):
             out.append(base + 'S')
         else:
             out.append(tok)
+        # AArch32 load/store-multiple: el SWOG usa el sufijo de direccionamiento
+        # (LDMIA/LDMDB...) pero nuestras formas usan el mnemonico base (LDM).
+        mm = re.match(r'^(V?LD|V?ST|SRS|RFE)(M?)(IA|IB|DA|DB|FD|FA|ED|EA)$', tok)
+        if mm:
+            out.append(mm.group(1) + mm.group(2))     # LDMIA -> LDM
     return out, ref
 
 
@@ -93,9 +98,13 @@ _EXT_CATS = {
     # ADVSIMD y FLOAT comparten el dominio vector/FP: la SWOG de ARM las agrupa
     # en una sola seccion "Advanced SIMD and Floating-Point" (mismas pipelines
     # V0/V1).  NO es cruzar entero<->vector; es la realidad del hardware.
-    'ADVSIMD': ('ASIMD', 'FP', 'CRYPTO'),
-    'FLOAT': ('FP', 'ASIMD'),
-    'FPSIMD': ('FP', 'ASIMD'),
+    # FP/ASIMD PRIMERO (categoria correcta); LOADSTORE/INT como ultimo recurso
+    # para instrucciones V*/F* que el SWOG lista en la seccion de load/store o
+    # que la deteccion de seccion metio en INT (VLDR, VDIV, VSQRT...).  Es SEGURO:
+    # los mnemonicos vectoriales llevan prefijo V/F y no colisionan con enteros.
+    'ADVSIMD': ('ASIMD', 'FP', 'CRYPTO', 'LOADSTORE', 'INT'),
+    'FLOAT': ('FP', 'ASIMD', 'LOADSTORE', 'INT'),
+    'FPSIMD': ('FP', 'ASIMD', 'LOADSTORE', 'INT'),
     # SVE/SVE2/SME solo su propia seccion; en un core sin SVE quedan sin coste.
     'SVE': ('SVE',), 'SVE2': ('SVE2', 'SVE'),
     'SME': ('SME',), 'SME2': ('SME2', 'SME'),
