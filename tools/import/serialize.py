@@ -45,11 +45,12 @@ def _op_field(operands):
     return ";".join(parts) or "-"
 
 
-def write_vxisa(path, forms, overlay, xml_date, xml_hash):
+def write_vxisa(path, forms, overlay, xml_date, xml_hash,
+                isa="x86", source="uops.info"):
     with open(path, "w", encoding="ascii", newline="\n") as f:
-        f.write("vxisa %d schema=%d isa=x86 source=uops.info date=%s forms=%d "
+        f.write("vxisa %d schema=%d isa=%s source=%s date=%s forms=%d "
                 "xml_sha256=%s\n" % (DB_FORMAT_VERSION, ir.SEMANTIC_SCHEMA,
-                                     xml_date, len(forms), xml_hash))
+                                     isa, source, xml_date, len(forms), xml_hash))
         f.write("# id|checksum|uid|iclass|ext|opcode|enc|rmask|wmask|mem|imm"
                 "|wflags|rflags|operands|overlay|category|summary|string|url\n")
         f.write("# id = FormID denso (arrays); checksum = FNV1a64 de la clave "
@@ -94,15 +95,15 @@ def write_ids_header(path, forms):
         f.write("#endif // VX_INSTR_FORM_IDS_H\n")
 
 
-def write_vxarch(path, sched, xml_date, xml_hash):
+def write_vxarch(path, sched, xml_date, xml_hash, isa="x86", source="uops.info"):
     spec = sched.spec
     mapped = sum(1 for c in sched.form_class if c >= 0)
     with open(path, "w", encoding="ascii", newline="\n") as f:
-        f.write("vxarch %d name=%s family=%s isa=x86 uops_arch=%s date=%s "
-                "xml_sha256=%s classes=%d mapped=%d\n"
-                % (DB_FORMAT_VERSION, spec.canonical_name, spec.family,
-                   spec.xml_name, xml_date, xml_hash, len(sched.classes),
-                   mapped))
+        f.write("vxarch %d name=%s family=%s isa=%s source=%s src_arch=%s "
+                "date=%s xml_sha256=%s classes=%d mapped=%d\n"
+                % (DB_FORMAT_VERSION, spec.canonical_name, spec.family, isa,
+                   source, spec.xml_name, xml_date, xml_hash,
+                   len(sched.classes), mapped))
         f.write("ports: " + " ".join("%d=%s" % (i, g)
                                      for i, g in enumerate(sched.port_names))
                 + "\n")

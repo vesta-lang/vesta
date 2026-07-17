@@ -269,7 +269,7 @@ id | checksum | uid | iclass | ext | opcode | enc | rmask | wmask | mem | imm | 
 Cabecera:
 
 ```text
-vxarch 1 name=<nombre> family=<intel|amd|arm> isa=x86 uops_arch=<fuente> date=<fecha> xml_sha256=<hash> classes=<C> mapped=<M>
+vxarch 1 name=<nombre> family=<intel|amd|arm> isa=<x86|arm> source=<fuente> src_arch=<nombre en la fuente> date=<fecha> xml_sha256=<hash> classes=<C> mapped=<M>
 ```
 
 Leyenda de puertos (indice -> nombre del grupo de puertos):
