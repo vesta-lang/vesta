@@ -26,7 +26,7 @@ def _load_vxisa(path):
                 continue
             c = line.rstrip("\n").split("|")
             forms[int(c[0])] = {
-                "sid": c[1], "uid": c[2], "iclass": c[3], "ext": c[4],
+                "checksum": c[1], "uid": c[2], "iclass": c[3], "ext": c[4],
                 "opcode": c[5], "enc": c[6], "rmask": c[7], "wmask": c[8],
                 "mem": c[9], "imm": c[10], "wflags": c[11], "rflags": c[12],
                 "operands": c[13], "overlay": c[14]}
@@ -81,7 +81,7 @@ def main():
         sys.exit("sin coincidencias para '%s'" % query)
     for fid, fm in hits[:20]:
         print("=" * 70)
-        print("iform: %s   (id=%d  semantic_id=%s)" % (fm["uid"], fid, fm["sid"]))
+        print("iform: %s   (id=%d  checksum=%s)" % (fm["uid"], fid, fm["checksum"]))
         print("  iclass=%s ext=%s opcode=%s enc=%s" %
               (fm["iclass"], fm["ext"], fm["opcode"], fm["enc"]))
         print("  efectos: rmask=%s wmask=%s mem=%s imm=%s wflags=%s rflags=%s "

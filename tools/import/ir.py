@@ -2,109 +2,126 @@
 """IR comun de la base de datos de instrucciones (neutral respecto a la fuente).
 
 Modelo INTERNO -- independiente de uops.info, Intel XED, LLVM o los guides de
-ARM.  Todo importador (`uops_info.py`, `arm_guides.py`, `llvm_sched.py`) produce
-EXACTAMENTE estas estructuras; la etapa @c optimize las deduplica; y
-`build_database.py` las serializa.  El compilador nunca ve el formato de la
-fuente.
+ARM.  Pipeline: Importer -> IR -> optimize -> serialize.  El compilador nunca ve
+el formato de la fuente.
 
-Cuatro capas separadas:
-  - SINTAXIS (por-ISA): @ref InstrForm + @ref Operand.
-  - IDENTIDAD: @ref semantic_id (hash de la firma estructural completa; NO el
-    nombre iform, que la fuente renombra entre versiones).
-  - COSTE (por-microarq): @ref SchedulerClass (dedup) + @ref ArchSchedule.
+Capas:
+  - SINTAXIS/FORMA (por-ISA): @ref InstrForm + @ref Operand + @ref EncodingFeatures.
+  - IDENTIDAD: @ref form_key (tupla estructural determinista) -> el FormID es el
+    INDICE denso del orden lexicografico de las claves (no un hash).  El
+    @ref checksum (FNV1a-64) es solo verificacion, no identidad.
+  - COSTE (por-microarq): @ref RawSchedule (medicion cruda) -> @ref SchedulerClass
+    (deduplicada) dentro de @ref ArchSchedule.
   - identidad de la microarq: @ref MicroArchSpec.
 """
-import hashlib
-from dataclasses import dataclass, field
+import struct
+from dataclasses import astuple, dataclass, field
+
+# Version del ESQUEMA de identidad: si cambia QUE entra en form_key (p.ej. si el
+# encoding deja de contar), subir esto -> los FormID viejos no se reutilizan.
+SEMANTIC_SCHEMA = 1
 
 
-@dataclass
+@dataclass(frozen=True)
 class Operand:
-    """Un operando de una forma de instruccion.
-
-    Los registros IMPLICITOS (rax:rdx de mul/div, RCX de rep, EAX de cpuid) son
-    tambien operandos -- con @c suppressed a True --, no una lista aparte: una
-    sola representacion, y entran en la identidad (rep MOVSB lleva RCX, MOVSB no).
-    """
+    """Un operando (los implicitos/suppressed son operandos normales, no una
+    lista aparte: rep MOVSB lleva RCX, MOVSB no).  Inmutable -> hashable y
+    directamente serializable en @ref form_key."""
     idx: int              # base 0
     kind: str             # "reg" | "mem" | "imm" | "flags" | "agen" | "relbr"
     width: int            # bits (0 si no aplica)
     read: bool
     write: bool
-    implicit: bool        # registro fijo (no lo elige el programador)
-    suppressed: bool      # no aparece en el texto del ensamblador
-    register_set: str     # conjunto de registros permitido (texto crudo), o ""
+    implicit: bool
+    suppressed: bool
+    register_set: str     # conjunto permitido (distingue AL de GPR8); entra en id
 
 
-# Tipo de camino de latencia (enum estable; se ALMACENA el entero, nunca la
-# cadena).  Los nombres son solo para depuracion.
-LATENCY_RESULT = 0   # dato reg->reg (result)
-LATENCY_ADDRESS = 1  # generacion de direccion (agen)
-LATENCY_FLAGS = 2    # a/desde el operando de flags
-LATENCY_MEMORY = 3   # load-use (a/desde memoria)
+@dataclass(frozen=True)
+class EncodingFeatures:
+    """Atributos de encoding que la fuente da y que afectan a la identidad.
+
+    TIPADO (no un dict): un atributo nuevo del XML NO se cuela silenciosamente en
+    la identidad -- el importador falla hasta anadirlo aqui conscientemente.  Se
+    guarda el valor crudo (cadena) por fidelidad."""
+    isa_set: str = ""
+    eosz: str = ""
+    evex: str = ""
+    vex: str = ""
+    mask: str = ""
+    bcast: str = ""
+    roundc: str = ""
+    sae: str = ""
+    nf: str = ""
+    zeroing: str = ""
+    incomplete_opcode: str = ""
+    rep: str = ""
+    locked: str = ""
+    high8: str = ""
+    agen: str = ""
+    immzero: str = ""
+    rm: str = ""
+    mxcsr: str = ""
+    no_reg_match: str = ""
+    no_src_dest_match: str = ""
+
+    def nonempty(self):
+        """(campo, valor) de los atributos presentes -- para el .vxisa."""
+        return [(f, v) for f, v in zip(
+            ("isa_set", "eosz", "evex", "vex", "mask", "bcast", "roundc", "sae",
+             "nf", "zeroing", "incomplete_opcode", "rep", "locked", "high8",
+             "agen", "immzero", "rm", "mxcsr", "no_reg_match",
+             "no_src_dest_match"), astuple(self)) if v]
+
+
+# Tipo de camino de latencia (enum estable; se ALMACENA el entero).
+LATENCY_RESULT = 0
+LATENCY_ADDRESS = 1
+LATENCY_FLAGS = 2
+LATENCY_MEMORY = 3
 LATENCY_UNKNOWN = 4
 LATENCY_KIND_ID = {"reg": LATENCY_RESULT, "addr": LATENCY_ADDRESS,
                    "addr_index": LATENCY_ADDRESS, "flags": LATENCY_FLAGS,
                    "mem": LATENCY_MEMORY, "unknown": LATENCY_UNKNOWN}
-LATENCY_KIND_NAME = {v: k for k, v in
-                     (("result", LATENCY_RESULT), ("address", LATENCY_ADDRESS),
-                      ("flags", LATENCY_FLAGS), ("memory", LATENCY_MEMORY),
-                      ("unknown", LATENCY_UNKNOWN))}
 
 
 @dataclass
 class LatencyEdge:
-    """Latencia de UN camino operando-fuente -> operando-destino.
-
-    El XML da varias por instruccion (op0->op1 = 1, op1->op0 = 3...).  NO se
-    colapsan: el consumidor decide (peor caso, media); el importador nunca
-    destruye el dato.  @c kind es un entero @c LATENCY_* (IR tipado)."""
-    start_operand: int    # base 0 (-1 = no especificado)
-    target_operand: int   # base 0 (-1 = no especificado)
+    """Latencia de UN camino operando-fuente -> operando-destino.  @c kind es un
+    entero @c LATENCY_* (IR tipado).  No se colapsan las aristas."""
+    start_operand: int
+    target_operand: int
     cycles: float
     kind: int = LATENCY_RESULT
-    upper_bound: bool = False  # el XML marco la cifra como cota superior
+    upper_bound: bool = False
 
 
 @dataclass
 class PortUse:
-    """Uso de un grupo de puertos: @c uops micro-ops a @c port_group.
-
-    En el IR de importacion @c port_group es el TOKEN de la fuente ("p0156");
-    la etapa @c optimize lo normaliza a un indice por-microarq (@ref PortSlot).
-    """
+    """Uso de puerto CRUDO: el token de la fuente ("p0156").  optimize lo
+    normaliza a @ref PortSlot."""
     port_group: str
     uops: float
 
 
 @dataclass
 class PortSlot:
-    """Uso de puerto ya NORMALIZADO a indice por-microarq (nunca cadena)."""
+    """Uso de puerto NORMALIZADO a indice por-microarq (nunca cadena)."""
     group: int
     uops: float
 
 
 @dataclass
 class InstrForm:
-    """La SINTAXIS de una forma de instruccion.
-
-    La IDENTIDAD (@ref semantic_id) NO sale del nombre @c iform (la fuente lo
-    renombra: ADD_GPRv_GPRv -> ADD_GPRv_GPRv_01) sino del hash de @ref
-    semantic_key, que compone TODOS los campos estructurales (iclass, opcode,
-    extension, atributos de encoding @c enc, y TODOS los operandos, ocultos
-    incluidos).  El @c iform / @c uid son SOLO documentacion / nombre del enum.
-    """
+    """La FORMA (encoding) de una instruccion.  La identidad es @ref form_key
+    (estructural), NO el nombre @c iform, que la fuente renombra: @c iform es
+    documentacion / nombre humano del enum."""
     iform: str            # documentacion (nombre de la fuente)
     iclass: str           # mnemonico canonico (ADD, DIV, REP_MOVSB, CPUID...)
     mnemonic: str
     opcode: str
     extension: str
-    # Atributos de ENCODING relevantes que la fuente da (isa_set, eosz, evex,
-    # vex, mask, bcast, roundc, sae, nf, zeroing...).  Dict para que anadir uno
-    # nuevo lo incluya en la identidad automaticamente.
-    enc: dict = field(default_factory=dict)
-    width_sig: tuple = ()                          # anchos explicitos (doc)
-    uid: str = ""                                  # iform + "/" + anchos (doc)
+    enc: EncodingFeatures = field(default_factory=EncodingFeatures)
     operands: list = field(default_factory=list)   # list[Operand]
     read_mask: int = 0
     write_mask: int = 0
@@ -114,31 +131,92 @@ class InstrForm:
     reads_flags: bool = False
 
 
-def semantic_key(form):
-    """Serializacion canonica y DETERMINISTA de la identidad estructural.
-
-    Compone iclass|extension|opcode|enc|operandos (todos, con idx/kind/width/
-    r/w/impl/supp).  Independiente del nombre iform; si la fuente anade un campo
-    de encoding o un operando oculto, la clave cambia (es OTRA forma)."""
-    ops = ";".join("%d:%s:%d:%d:%d:%d:%d" % (
-        o.idx, o.kind, o.width, int(o.read), int(o.write),
-        int(o.implicit), int(o.suppressed)) for o in form.operands)
-    enc = ",".join("%s=%s" % (k, form.enc[k]) for k in sorted(form.enc))
-    return "|".join([form.iclass, form.extension, form.opcode, enc, ops])
+def _pack_str(buf, s):
+    """Cadena length-prefixed (u32 LE + utf-8) -- serializacion propia, NO
+    depende de repr() ni del formato interno de Python."""
+    b = s.encode("utf-8")
+    buf += struct.pack("<I", len(b))
+    buf += b
 
 
-def semantic_id(form):
-    """SemanticID de 64 bits = primeros 64 bits de SHA256(@ref semantic_key).
+def form_key(form):
+    """Clave estructural DETERMINISTA (BYTES canonicos) = identidad de la forma.
 
-    Estable mientras la semantica sea identica; no depende del nombre.  Estilo
-    TableGen pero por hash de contenido en vez de indice secuencial."""
-    h = hashlib.sha256(semantic_key(form).encode("ascii")).hexdigest()
-    return int(h[:16], 16)
+    Serializa schema + iclass + extension + opcode + encoding + operandos (con
+    register_set) con codificacion propia length-prefixed.  Independiente del
+    nombre iform y de repr().  El opcode y el register_set SI entran: identifica
+    la FORMA ISA (encoding), no la semantica pura -- add 01/r y 03/r son formas
+    distintas (no se pierde encoding).  Al ser bytes, ordena de forma
+    determinista (el FormID = su indice denso) y sirve de clave de dedup."""
+    buf = bytearray()
+    buf += struct.pack("<I", SEMANTIC_SCHEMA)
+    for s in (form.iclass, form.extension, form.opcode):
+        _pack_str(buf, s)
+    for v in astuple(form.enc):        # 20 campos, orden fijo del dataclass
+        _pack_str(buf, v)
+    buf += struct.pack("<I", len(form.operands))
+    for o in form.operands:
+        buf += struct.pack("<I", o.idx)
+        _pack_str(buf, o.kind)
+        buf += struct.pack("<I", o.width)
+        buf += struct.pack("<B", int(o.read) | (int(o.write) << 1) |
+                           (int(o.implicit) << 2) | (int(o.suppressed) << 3))
+        _pack_str(buf, o.register_set)
+    return bytes(buf)
+
+
+def checksum(form):
+    """FNV1a-64 sobre @ref form_key -- SOLO verificacion / comparacion entre
+    versiones (no es el identificador; el FormID es el indice denso)."""
+    h = 0xcbf29ce484222325
+    for b in form_key(form):
+        h = ((h ^ b) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def derive_effects(operands):
+    """Campos DERIVADOS de la lista de operandos (mascaras + mem/imm/flags).
+
+    Vive en el IR para que cualquier importador (uops.info, ARM, LLVM) reuse la
+    MISMA logica en vez de duplicarla.  @return (read_mask, write_mask, has_mem,
+    has_imm, writes_flags, reads_flags)."""
+    rm = wm = 0
+    has_mem = has_imm = wr_flags = rd_flags = False
+    for o in operands:
+        if o.kind == "mem":
+            has_mem = True
+        elif o.kind == "imm":
+            has_imm = True
+        elif o.kind == "flags":
+            if o.write:
+                wr_flags = True
+            if o.read:
+                rd_flags = True
+        # Mascaras: solo operandos EXPLICITOS de registro/memoria.
+        if not o.implicit and not o.suppressed and o.kind in ("reg", "mem"):
+            bit = 1 << o.idx
+            if o.read:
+                rm |= bit
+            if o.write:
+                wm |= bit
+    return (rm, wm, has_mem, has_imm, wr_flags, rd_flags)
+
+
+@dataclass
+class RawSchedule:
+    """Medicion CRUDA por-instruccion de una microarq (antes de deduplicar)."""
+    latencies: list = field(default_factory=list)  # list[LatencyEdge]
+    recip_tp: float = -1.0
+    uops: int = 0
+    microcoded: bool = False
+    macro_fusible: bool = False
+    div_cycles: float = -1.0
+    ports: list = field(default_factory=list)       # list[PortUse]
 
 
 @dataclass
 class SchedulerClass:
-    """El COSTE de una forma en UNA microarq (ya deduplicado)."""
+    """Clase de coste COMPARTIDA (deduplicada) de una microarq."""
     latencies: list = field(default_factory=list)  # list[LatencyEdge]
     recip_tp: float = -1.0
     uops: int = 0
@@ -151,15 +229,18 @@ class SchedulerClass:
 @dataclass
 class MicroArchSpec:
     """Identidad de una microarquitectura: nombre en la fuente vs canonico."""
-    xml_name: str         # como la nombra la fuente (p.ej. "SKL", "ADL-P")
-    canonical_name: str   # nombre de Vesta (p.ej. "intel-skylake")
-    family: str = ""      # "intel" | "amd" | "arm" (para -mcpu=<familia>-generic)
+    xml_name: str
+    canonical_name: str
+    family: str = ""
 
 
 @dataclass
 class ArchSchedule:
-    """Modelo de scheduling de UNA microarq: clases + mapeo forma->clase."""
+    """Modelo de scheduling de UNA microarq: clases + mapeo forma->clase.
+
+    @c form_class es un array indexado por FormID (form_class[id] = class_id, o
+    -1 si no hay dato) -> acceso O(1), sin pares ni orden."""
     spec: MicroArchSpec = None
     port_names: list = field(default_factory=list)   # idx -> nombre de grupo
     classes: list = field(default_factory=list)      # list[SchedulerClass]
-    form_class: list = field(default_factory=list)   # list[(form_id, class_id)]
+    form_class: list = field(default_factory=list)   # form_class[FormID]=class_id
