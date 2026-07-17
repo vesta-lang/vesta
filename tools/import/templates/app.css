@@ -646,6 +646,10 @@ details.skey>div {
 .mk-l { background: #1a7f3722; color: #1a7f37 }
 .mk-s { background: #9a3f1422; color: #9a3f14 }
 .mk-b { background: #d9a40022; color: #b26a00 }
+.mk-x { background: #b3122822; color: #b31228 }
+.langsel { margin-left: auto; background: transparent; color: inherit;
+    border: 1px solid var(--bd, #ccc); border-radius: 6px; padding: 2px 6px;
+    font: inherit; cursor: pointer }
 .tl-row.elim .tl-label { text-decoration: line-through; opacity: .55 }
 .tl-row.elim .tl-bar { opacity: .35; background: var(--mut) }
 

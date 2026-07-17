@@ -3,6 +3,7 @@
 // dependencias (registros, flags, memoria) -- para la microarquitectura elegida.
 (function () {
     const DB = window.VESTA_DB, F = DB.forms, AR = DB.arches;
+    const T = window.t || (k => k);   // traduccion (i18n.js); identidad si no esta
     const $ = id => document.getElementById(id);
     const esc = s => (s + '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
@@ -107,6 +108,16 @@
         for (const m of s.matchAll(/([0-9.]+)[RAFM]/g)) { const v = parseFloat(m[1]); if (v > mx) mx = v; }
         return mx;
     }
+    // Latencia del nodo.  Si HAY aristas, su maximo (puede ser 0 = move-elim
+    // real).  Si NO hay aristas (CPUID, DIV, serializantes: su coste esta en
+    // throughput/uops, no en latencia), se usa como proxy el throughput
+    // reciproco / div_cycles -> asi una instruccion cara no aparece como 0.
+    function nodeLat(t) {
+        if (!t) return 0;
+        if (t[4]) return maxLat(t[4]);
+        const tp = parseFloat(t[0]) || 0, div = parseFloat(t[3]) || 0;
+        return Math.max(tp, div > 0 ? div : 0);
+    }
     function cost(r, a) { const cid = AR[a].map[r[0]]; return cid < 0 ? null : AR[a].classes[cid]; }
 
     const portDesc = window.VESTA_PORTDESC;
@@ -174,7 +185,7 @@
             if (!it.r) { nMiss++; continue; }
             nOk++;
             const t = cost(it.r, a);
-            it.t = t; it.lat = t ? maxLat(t[4]) : 0; it.res = resources(it.p, it.r);
+            it.t = t; it.lat = nodeLat(t); it.res = resources(it.p, it.r);
             if (t) {
                 sumU += t[1]; tp += parseFloat(t[0]) || 0;
                 if (t[5]) for (const tok of t[5].split(' ')) {
@@ -210,8 +221,8 @@
             const p = it.p, r = it.r;
             if (!r) {
                 rows += '<tr><td class="mono">' + colorInstr(p.text) + '</td>' +
-                    '<td class="miss" colspan="6">forma no encontrada' +
-                    (byClass.has(p.mn) ? ' (operandos no encajan)' : ' (mnemonico desconocido)') + '</td></tr>';
+                    '<td class="miss" colspan="6">' + T('an.notfound') +
+                    (byClass.has(p.mn) ? ' ' + T('an.badops') : ' ' + T('an.badmn')) + '</td></tr>';
                 return;
             }
             const t = it.t, crit = critSet.has(i);
@@ -223,27 +234,28 @@
                 '<td class="mono">' + esc(r[2]) + '</td>' +
                 '<td class="n">' + (t ? t[1] : '&middot;') + '</td>' +
                 '<td class="n mono">' + (t ? esc(t[0]) : '&middot;') + '</td>' +
-                '<td class="n mono">' + (t ? (it.lat ? it.lat.toFixed(2) : '<span class="dim">0</span>') : '<span class="dim">sin dato</span>') + '</td>' +
+                '<td class="n mono">' + (t ? (it.lat ? it.lat.toFixed(2) : '<span class="dim">0</span>') : '<span class="dim">' + T('an.nodata') + '</span>') + '</td>' +
                 '<td class="mono">' + (t ? portsInline(t[5]) : '<span class="dim">&mdash;</span>') + '</td></tr>';
         });
         const timeline = renderTimeline(items, critSet, Math.max(critical, 1), null,
             'timeline por dependencias &mdash; ancho = latencia; rojo = camino critico; iconos: µ microcodigo, L carga, S store, &#9889; rompe dependencia');
         const chain = renderCritChain({ endIdx, predOf, linkReg: predRes, items });
-        const chainBlock = chain ? '<div class="cc-cap">camino critico (cadena de dependencias; pasa el cursor por una flecha para ver via que registro y cuantos ciclos):</div>' + chain : '';
+        const chainBlock = chain ? '<div class="cc-cap">' + T('an.cccap') + '</div>' + chain : '';
+        const cyc = ' ' + T('an.cycles');
         const html = rows ?
-            '<div class="wrap"><table><thead><tr><th>instruccion</th><th>forma</th><th>iclass</th>' +
-            '<th class="n">uops</th><th class="n">recip_tp</th><th class="n">latencia</th><th>puertos</th></tr></thead>' +
+            '<div class="wrap"><table><thead><tr><th>' + T('an.col.instr') + '</th><th>' + T('an.col.form') + '</th><th>' + T('th.iclass') + '</th>' +
+            '<th class="n">' + T('th.uops') + '</th><th class="n">' + T('th.reciptp') + '</th><th class="n">' + T('an.col.lat') + '</th><th>' + T('an.col.ports') + '</th></tr></thead>' +
             '<tbody>' + rows + '</tbody></table></div>' +
-            '<div class="an-sum"><b>' + (label || 'Analisis del bloque') + ' (' + esc(AR[a].name) + ')</b> &mdash; ' +
-            nOk + ' emparejadas' + (nMiss ? ', ' + nMiss + ' sin forma' : '') + '.' +
+            '<div class="an-sum"><b>' + (label || T('an.block')) + ' (' + esc(AR[a].name) + ')</b> &mdash; ' +
+            nOk + ' ' + T('an.matched') + (nMiss ? ', ' + nMiss + ' ' + T('an.nomatch') : '') + '.' +
             '<table class="sumt">' +
-            '<tr><td>micro-operaciones (uops)</td><td class="n">' + sumU + '</td></tr>' +
-            '<tr' + (feB ? ' class="est"' : '') + '><td>coste por <b>front-end</b> (decodificacion/emision, ' + width + ' µops/ciclo)</td><td class="n">' + frontEnd.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr' + (tpB ? ' class="est"' : '') + '><td>coste por <b>throughput</b> (puertos, &Sigma; recip_tp)</td><td class="n">' + tp.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr' + (ltB ? ' class="est"' : '') + '><td>coste por <b>latencia</b> (camino critico de dependencias)</td><td class="n">' + critical.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr class="est"><td>estimacion del bloque = max(front-end, throughput, latencia)</td><td class="n">' + est.toFixed(2) + ' ciclos</td></tr>' +
-            '<tr><td>cuello de botella</td><td>' + bneck + '</td></tr></table></div>' + timeline + chainBlock
-            : '<p class="hint">Sin instrucciones que analizar.</p>';
+            '<tr><td>' + T('an.uops') + '</td><td class="n">' + sumU + '</td></tr>' +
+            '<tr' + (feB ? ' class="est"' : '') + '><td>' + T('an.fe', { w: width }) + '</td><td class="n">' + frontEnd.toFixed(2) + cyc + '</td></tr>' +
+            '<tr' + (tpB ? ' class="est"' : '') + '><td>' + T('an.tp') + '</td><td class="n">' + tp.toFixed(2) + cyc + '</td></tr>' +
+            '<tr' + (ltB ? ' class="est"' : '') + '><td>' + T('an.lat') + '</td><td class="n">' + critical.toFixed(2) + cyc + '</td></tr>' +
+            '<tr class="est"><td>' + T('an.est') + '</td><td class="n">' + est.toFixed(2) + cyc + '</td></tr>' +
+            '<tr><td>' + T('an.bneck') + '</td><td>' + bneck + '</td></tr></table></div>' + timeline + chainBlock
+            : '<p class="hint">' + T('an.empty') + '</p>';
         return {
             html, est, uops: sumU, lat: critical, tp, fe: frontEnd, ok: nOk, miss: nMiss,
             items, critSet, critical, predOf, endIdx, linkReg: predRes
@@ -255,6 +267,8 @@
         if (!it.r) return '';
         let m = '';
         if (it.t && (it.t[2] & 1)) m += '<span class="mk mk-u" data-tip="microcodificada (muchas µops)">µ</span>';
+        const sem = blockSem(it);
+        if (sem && sem.barrier) m += '<span class="mk mk-x" data-tip="barrera: serializante / fence / atomica &mdash; no se reordena ni elimina">&#9873;</span>';
         if (it.res.rd.has('MEM')) m += '<span class="mk mk-l" data-tip="lee memoria (carga)">L</span>';
         if (it.res.wr.has('MEM')) m += '<span class="mk mk-s" data-tip="escribe memoria (store)">S</span>';
         if (it.lat === 0 && it.res.wr.size) m += '<span class="mk mk-b" data-tip="rompe la dependencia (0 ciclos: puesta a cero / eliminacion de movimiento)">&#9889;</span>';
@@ -308,7 +322,17 @@
             if (o.kind === 'reg') { if (rmask & (1 << i)) rd.add(canon(o.raw)); if (wmask & (1 << i)) wr.add(canon(o.raw)); }
             else if (o.kind === 'mem') { (o.addr || []).forEach(x => rd.add(canon(x))); if (rmask & (1 << i)) rd.add('MEM'); if (wmask & (1 << i)) mw = true; }
         });
-        return { rd, wr, mw, wf: !!(mf & 4), rf: !!(mf & 8), ctrl: /^(J|CALL|RET|LOOP|SYSCALL|INT|UD|HLT)/.test(it.p.mn) };
+        // efectos semanticos manuales del overlay (r[9]): una instruccion
+        // serializante / barrera / atomica / con orden de memoria NO se puede
+        // reordenar ni eliminar aunque su resultado no se use.
+        const ov = r[9] || '';
+        const barrier = /\b(serializing|no_reorder|barrier|atomic|ll_sc|syscall|privileged|mem_acquire|mem_release|mem_seq_cst)\b/.test(ov);
+        const memfence = /\b(barrier|mem_acquire|mem_release|mem_seq_cst)\b/.test(ov);
+        return {
+            rd, wr, mw, wf: !!(mf & 4), rf: !!(mf & 8),
+            ctrl: /^(J|CALL|RET|LOOP|SYSCALL|INT|UD|HLT)/.test(it.p.mn),
+            barrier, memfence
+        };
     }
     function regDeadAfter(list, i, R) {   // valor de R muerto tras i? (sobrescrito antes de leerse)
         for (let j = i + 1; j < list.length; j++) {
@@ -346,7 +370,7 @@
     // orden / a que el decodificador vea trabajo independiente.
     function listSchedule(seg, a) {
         const n = seg.length, sem = seg.map(blockSem);
-        const lat = seg.map(it => { const t = cost(it.r, a); return t ? maxLat(t[4]) : 0; });
+        const lat = seg.map(it => nodeLat(cost(it.r, a)));
         const succ = Array.from({ length: n }, () => []), inDeg = new Array(n).fill(0);
         for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++)
             if (conflict(sem[i], sem[j])) { succ[i].push(j); inDeg[j]++; }
@@ -362,9 +386,14 @@
         }
         return order;
     }
-    // Reordena por segmentos (los saltos/llamadas/desconocidas son barreras).
+    // Reordena por segmentos.  Son barreras (nada las cruza): instrucciones no
+    // reconocidas, saltos/llamadas, y las que el overlay marca como
+    // serializantes / fences / atomicas (cpuid, mfence, lock ...).  Ademas la
+    // memoria se trata de forma CONSERVADORA: como no se sabe si dos accesos se
+    // solapan ni si estan alineados, cualquier par toca-memoria conserva su
+    // orden (ver conflict()).
     function scheduleReorder(items, a) {
-        const isBarrier = it => !it.r || blockSem(it).ctrl;
+        const isBarrier = it => { if (!it.r) return true; const s = blockSem(it); return s.ctrl || s.barrier; };
         const result = []; let seg = [], moved = false;
         const flush = () => {
             if (seg.length > 1) { const s = listSchedule(seg, a); if (s.some((x, i) => x !== seg[i])) moved = true; result.push(...s); }
@@ -384,12 +413,12 @@
             if (!r) { lines.push(p.text); return; }
             // mov reg, mismo-reg -> no-op
             if (en.selfcopy && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw)) {
-                log.push({ from: p.text, to: null, rule: 'copia a si mismo', why: 'mueve un registro a si mismo: no hace nada' }); return;
+                log.push({ from: p.text, to: null, rule: T('rule.selfcopy'), why: 'mueve un registro a si mismo: no hace nada' }); return;
             }
             // mov reg, 0 -> xor reg, reg (idioma de puesta a cero)
             if (en.zero && p.mn === 'MOV' && p.ops.length === 2 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'imm' && /^0(x0+)?$/i.test(p.ops[1].raw) && flagsDeadAfter(items, i)) {
                 const R = p.ops[0].raw, to = 'xor ' + R + ', ' + R;
-                log.push({ from: p.text, to, rule: 'idioma de puesta a cero', why: 'xor reg,reg pone a 0 con 0 ciclos de latencia (rompe la dependencia) y suele resolverse en el rename' });
+                log.push({ from: p.text, to, rule: T('rule.zero'), why: 'xor reg,reg pone a 0 con 0 ciclos de latencia (rompe la dependencia) y suele resolverse en el rename' });
                 lines.push(to); return;
             }
             // imul reg, [reg,] 2^k -> shl reg, k (reduccion de fuerza)
@@ -398,7 +427,7 @@
             else if (p.mn === 'IMUL' && p.ops.length === 3 && p.ops[0].kind === 'reg' && p.ops[1].kind === 'reg' && canon(p.ops[0].raw) === canon(p.ops[1].raw) && p.ops[2].kind === 'imm') { k = pow2Log(p.ops[2].raw); R = p.ops[0].raw; }
             if (en.strength && k >= 1 && R && flagsDeadAfter(items, i)) {
                 const to = 'shl ' + R + ', ' + k;
-                log.push({ from: p.text, to, rule: 'reduccion de fuerza', why: 'multiplicar por 2^' + k + ' es desplazar ' + k + ' bits: menos latencia y uops que imul' });
+                log.push({ from: p.text, to, rule: T('rule.strength'), why: 'multiplicar por 2^' + k + ' es desplazar ' + k + ' bits: menos latencia y uops que imul' });
                 lines.push(to); return;
             }
             lines.push(p.text);
@@ -409,19 +438,19 @@
         if (en.dce) it2.forEach((it, i) => {
             if (!it.r) return;
             const s = blockSem(it);
-            if (s.mw || s.ctrl || s.wr.size === 0) return;   // stores/saltos/comparaciones: se conservan
+            if (s.mw || s.ctrl || s.barrier || s.wr.size === 0) return;   // stores/saltos/barreras/comparaciones: se conservan
             let dead = true; s.wr.forEach(R => { if (!regDeadAfter(it2, i, R)) dead = false; });
             if (dead && (!s.wf || flagsDeadAfter(it2, i))) {
                 keep[i] = false;
-                log.push({ from: it.p.text, to: null, rule: 'eliminacion de codigo muerto', why: 'su resultado se sobrescribe antes de volver a leerse (y sus flags no se usan)' });
+                log.push({ from: it.p.text, to: null, rule: T('rule.dce'), why: 'su resultado se sobrescribe antes de volver a leerse (y sus flags no se usan)' });
             }
         });
         // fase 3: reordenacion valida para favorecer la ejecucion paralela.
         const kept = it2.filter((_, i) => keep[i]);
         const { order, moved } = en.reorder ? scheduleReorder(kept, a) : { order: kept, moved: false };
         if (moved) log.push({
-            from: null, to: null, rule: 'reordenacion (planificacion)',
-            why: 'se adelantan instrucciones independientes (respetando todas las dependencias reg/flags/memoria) para que el decodificador y la emision tengan trabajo paralelo mientras avanza una cadena de dependencias; no cambia el resultado'
+            from: null, to: null, rule: T('rule.reorder'),
+            why: 'se adelantan instrucciones independientes para dar trabajo paralelo al decodificador/emision mientras avanza una cadena de dependencias. Respeta TODAS las dependencias (reg/flags/memoria), NO cruza barreras (serializantes, fences, atomicas, saltos) y es conservador con la memoria: como no se conoce el aliasing ni la alineacion, nunca reordena dos accesos a memoria. No cambia el resultado'
         });
         return { items: order, log };
     }
@@ -429,8 +458,8 @@
     function run() {
         const a = +arSel.value || 0;
         const items = parseAll($('src').value);
-        if (!items.length) { $('res').innerHTML = '<p class="hint">Sin instrucciones que analizar.</p>'; $('summary').textContent = ''; return; }
-        const A0 = analyzeBlock(items, a, 'Analisis del bloque');
+        if (!items.length) { $('res').innerHTML = '<p class="hint">' + T('an.empty') + '</p>'; $('summary').textContent = ''; return; }
+        const A0 = analyzeBlock(items, a, T('an.block'));
         const en = {
             zero: $('opt-zero').checked, strength: $('opt-strength').checked,
             selfcopy: $('opt-selfcopy').checked, dce: $('opt-dce').checked,
@@ -439,37 +468,38 @@
         const opt = optimize(items, a, en);
         let out = A0.html;
         if (opt.log.length) {
-            const A1 = analyzeBlock(opt.items, a, 'Analisis del bloque optimizado');
+            const A1 = analyzeBlock(opt.items, a, T('an.blockopt'));
             const code = opt.items.map(x => hlLine(x.p.text)).join('\n');
             const optlist = opt.log.map(o =>
                 '<li><span class="badge">' + esc(o.rule) + '</span> ' +
                 (o.from == null ? '' :
                     '<span class="mono">' + esc(o.from) + '</span>' +
-                    (o.to ? ' &rarr; <span class="mono c-mn">' + esc(o.to) + '</span>' : ' &rarr; <span class="dim">(eliminada)</span>')) +
+                    (o.to ? ' &rarr; <span class="mono c-mn">' + esc(o.to) + '</span>' : ' &rarr; <span class="dim">' + T('an.eliminated') + '</span>')) +
                 '<div class="why">' + esc(o.why) + '</div></li>').join('');
             const d = (x, y) => { const p = x ? ((x - y) / x * 100) : 0; return y < x ? '<span class="better">-' + p.toFixed(0) + '%</span>' : y > x ? '<span class="worse">+' + (-p).toFixed(0) + '%</span>' : '<span class="dim">=</span>'; };
             // timelines antes/despues a la MISMA escala -> se ve donde se van los ciclos.
             const total = Math.max(A0.critical, A1.critical, 1);
             const elim = new Set(opt.log.filter(o => o.to === null && o.from).map(o => o.from));
+            const cyc = ' ' + T('an.cycles');
             const cmpTl = '<div class="tlcmp">' +
-                '<div class="tlcmp-col"><div class="tlcmp-h">ANTES &mdash; ' + A0.critical.toFixed(0) + ' ciclos <span class="dim">(tachadas = se eliminan)</span></div>' +
+                '<div class="tlcmp-col"><div class="tlcmp-h">' + T('an.before') + ' &mdash; ' + A0.critical.toFixed(0) + cyc + ' <span class="dim">' + T('an.elimnote') + '</span></div>' +
                 renderTimeline(A0.items, A0.critSet, total, elim, null) + '</div>' +
-                '<div class="tlcmp-col"><div class="tlcmp-h">DESPUES &mdash; ' + A1.critical.toFixed(0) + ' ciclos ' + d(A0.critical, A1.critical) + '</div>' +
+                '<div class="tlcmp-col"><div class="tlcmp-h">' + T('an.after') + ' &mdash; ' + A1.critical.toFixed(0) + cyc + ' ' + d(A0.critical, A1.critical) + '</div>' +
                 renderTimeline(A1.items, A1.critSet, total, null, null) + '</div></div>';
-            out += '<h3 class="opt-h">Codigo optimizado</h3>' +
+            out += '<h3 class="opt-h">' + T('an.optcode') + '</h3>' +
                 '<pre class="codeblock">' + code + '</pre>' +
-                '<div class="opt-log"><b>Optimizaciones aplicadas (' + opt.log.length + ')</b><ul>' + optlist + '</ul></div>' +
-                '<table class="sumt cmp"><tr><th></th><th>original</th><th>optimizado</th><th></th></tr>' +
-                '<tr><td>uops</td><td class="n">' + A0.uops + '</td><td class="n">' + A1.uops + '</td><td>' + d(A0.uops, A1.uops) + '</td></tr>' +
-                '<tr><td>latencia (camino critico)</td><td class="n">' + A0.lat.toFixed(2) + '</td><td class="n">' + A1.lat.toFixed(2) + '</td><td>' + d(A0.lat, A1.lat) + '</td></tr>' +
-                '<tr class="est"><td>estimacion del bloque</td><td class="n">' + A0.est.toFixed(2) + '</td><td class="n">' + A1.est.toFixed(2) + '</td><td>' + d(A0.est, A1.est) + '</td></tr></table>' +
-                '<h4 class="opt-h" style="font-size:13px">Antes / despues (misma escala)</h4>' + cmpTl +
+                '<div class="opt-log"><b>' + T('an.optapplied') + ' (' + opt.log.length + ')</b><ul>' + optlist + '</ul></div>' +
+                '<table class="sumt cmp"><tr><th></th><th>' + T('an.cmp.orig') + '</th><th>' + T('an.cmp.opt') + '</th><th></th></tr>' +
+                '<tr><td>' + T('th.uops') + '</td><td class="n">' + A0.uops + '</td><td class="n">' + A1.uops + '</td><td>' + d(A0.uops, A1.uops) + '</td></tr>' +
+                '<tr><td>' + T('an.col.lat') + '</td><td class="n">' + A0.lat.toFixed(2) + '</td><td class="n">' + A1.lat.toFixed(2) + '</td><td>' + d(A0.lat, A1.lat) + '</td></tr>' +
+                '<tr class="est"><td>' + T('an.est') + '</td><td class="n">' + A0.est.toFixed(2) + '</td><td class="n">' + A1.est.toFixed(2) + '</td><td>' + d(A0.est, A1.est) + '</td></tr></table>' +
+                '<h4 class="opt-h" style="font-size:13px">' + T('an.cmp.ba') + '</h4>' + cmpTl +
                 A1.html;
         } else {
-            out += '<div class="opt-log dim">Sin optimizaciones aplicables: el codigo ya es optimo para las reglas del analizador (puesta a cero, reduccion de fuerza, copia a si mismo, codigo muerto).</div>';
+            out += '<div class="opt-log dim">' + T('an.noopt') + '</div>';
         }
         $('res').innerHTML = out;
-        $('summary').textContent = A0.ok + ' emparejadas' + (A0.miss ? ' / ' + A0.miss + ' sin forma' : '');
+        $('summary').textContent = A0.ok + ' ' + T('an.matched') + (A0.miss ? ' / ' + A0.miss + ' ' + T('an.nomatch') : '');
     }
 
     // --- resaltado de sintaxis del editor (overlay <pre> tras el <textarea>) ---

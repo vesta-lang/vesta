@@ -11,20 +11,20 @@
 <body>
     <nav class="nav">
         <span class="brand">Vesta <small>&middot; arch-data</small></span>
-        <a href="index.html">Instrucciones</a>
-        <a href="analyzer.html" class="active">Analizador</a>
-        <a class="ext" href="https://github.com/vesta-lang/arch-data">Repositorio &nearr;</a>
+        <a href="index.html" data-i18n="nav.instr">Instrucciones</a>
+        <a href="analyzer.html" class="active" data-i18n="nav.an">Analizador</a>
+        <a class="ext" href="https://github.com/vesta-lang/arch-data" data-i18n="nav.repo">Repositorio &nearr;</a>
     </nav>
 
     <header>
-        <h1>Analizador de ensamblador x86</h1>
-        <div class="sub">Pega instrucciones (sintaxis Intel, una por linea). Para
+        <h1 data-i18n="an.title">Analizador de ensamblador x86</h1>
+        <div class="sub" data-i18n="an.desc">Pega instrucciones (sintaxis Intel, una por linea). Para
             cada una se busca su <b>forma</b> en la base de datos y se reporta lo que
             hace y su coste en la microarquitectura elegida.</div>
     </header>
 
     <details class="help">
-        <summary>Como funciona el analisis</summary>
+        <summary data-i18n="an.help">Como funciona el analisis</summary>
         <div class="body">
             <p>Para cada instruccion (sintaxis Intel, una por linea; se ignoran
                 etiquetas <span class="k">nombre:</span> y comentarios
@@ -77,17 +77,17 @@ mov rdx, rdx
 add rax, rcx</textarea>
         </div>
         <div class="row">
-            <button class="go" id="run">Analizar</button>
-            <label>microarq. <select id="ar"></select></label>
+            <button class="go" id="run" data-i18n="an.run">Analizar</button>
+            <label><span data-i18n="bar.uarch">microarq.</span> <select id="ar"></select></label>
             <span class="hint" id="summary"></span>
         </div>
         <div class="row opts">
-            <span class="opts-lbl">Optimizaciones:</span>
-            <label><input type="checkbox" id="opt-zero" checked> puesta a cero</label>
-            <label><input type="checkbox" id="opt-strength" checked> reduccion de fuerza</label>
-            <label><input type="checkbox" id="opt-selfcopy" checked> copia a si mismo</label>
-            <label><input type="checkbox" id="opt-dce" checked> codigo muerto</label>
-            <label><input type="checkbox" id="opt-reorder" checked> reordenacion</label>
+            <span class="opts-lbl" data-i18n="an.opts">Optimizaciones:</span>
+            <label><input type="checkbox" id="opt-zero" checked> <span data-i18n="opt.zero">puesta a cero</span></label>
+            <label><input type="checkbox" id="opt-strength" checked> <span data-i18n="opt.strength">reduccion de fuerza</span></label>
+            <label><input type="checkbox" id="opt-selfcopy" checked> <span data-i18n="opt.selfcopy">copia a si mismo</span></label>
+            <label><input type="checkbox" id="opt-dce" checked> <span data-i18n="opt.dce">codigo muerto</span></label>
+            <label><input type="checkbox" id="opt-reorder" checked> <span data-i18n="opt.reorder">reordenacion</span></label>
         </div>
         <div class="res" id="res"></div>
     </div>
@@ -99,6 +99,7 @@ add rax, rcx</textarea>
     <script src="assets/db.js"></script>
     <script src="assets/micro.js"></script>
     <script src="assets/tip.js"></script>
+    <script src="assets/i18n.js"></script>
     <script src="assets/analyzer.js"></script>
 </body>
 

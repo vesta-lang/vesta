@@ -11,20 +11,20 @@
 <body>
     <nav class="nav">
         <span class="brand">Vesta <small>&middot; arch-data</small></span>
-        <a href="index.html" class="active">Instrucciones</a>
-        <a href="analyzer.html">Analizador</a>
-        <a class="ext" href="https://github.com/vesta-lang/arch-data">Repositorio &nearr;</a>
+        <a href="index.html" class="active" data-i18n="nav.instr">Instrucciones</a>
+        <a href="analyzer.html" data-i18n="nav.an">Analizador</a>
+        <a class="ext" href="https://github.com/vesta-lang/arch-data" data-i18n="nav.repo">Repositorio</a>
     </nav>
 
     <header>
-        <h1>Base de datos de instrucciones x86</h1>
+        <h1 data-i18n="idx.title">Base de datos de instrucciones x86</h1>
         <div class="sub">{{FORMS}} formas &middot; {{ARCHES}} microarquitecturas
             &middot; fuente uops.info {{DATE}} &middot; xml <code>{{SHA}}</code>
             &middot; esquema {{SCHEMA}}</div>
     </header>
 
     <details class="help">
-        <summary>Como leer esta tabla</summary>
+        <summary data-i18n="idx.help">Como leer esta tabla</summary>
         <div class="body">
             <p>Cada fila es una <b>forma de instruccion</b> (un mnemonico con una
                 combinacion concreta de operandos y codificacion). Haz clic en una fila
@@ -91,9 +91,9 @@
     </details>
 
     <div class="bar">
-        <input id="q" type="search" placeholder="Buscar mnemonico, iclass, opcode o encoding...">
-        <label>iclass <select id="ic"></select></label>
-        <label>microarq. <select id="ar"></select></label>
+        <input id="q" type="search" data-i18n-ph="bar.search" placeholder="Buscar mnemonico, iclass, opcode o encoding...">
+        <label><span data-i18n="bar.iclass">iclass</span> <select id="ic"></select></label>
+        <label><span data-i18n="bar.uarch">microarq.</span> <select id="ar"></select></label>
         <span class="count" id="count"></span>
     </div>
 
@@ -101,16 +101,16 @@
         <table>
             <thead>
                 <tr>
-                    <th class="n" data-k="0" title="Identificador denso de la forma">ID</th>
-                    <th data-k="1" title="Nombre reconstruido (documentacion)">Forma</th>
-                    <th data-k="2" title="Mnemonico canonico">iclass</th>
-                    <th data-k="4" title="Byte(s) de operacion y extension ISA">opcode</th>
-                    <th title="Caracteristicas de codificacion y semantica">encoding</th>
-                    <th title="Operandos: tipo, ancho, lee/escribe">operandos</th>
-                    <th title="Propiedades semanticas manuales">overlay</th>
-                    <th class="n" title="Throughput reciproco: ciclos/instr (menor = mas rapido)">recip_tp</th>
-                    <th class="n" title="Micro-operaciones">uops</th>
-                    <th class="n" title="Latencia maxima (ciclos) de la microarq. mostrada">lat. max</th>
+                    <th class="n" data-k="0" data-i18n="th.id" title="Identificador denso de la forma">ID</th>
+                    <th data-k="1" data-i18n="th.form" title="Nombre reconstruido (documentacion)">Forma</th>
+                    <th data-k="2" data-i18n="th.iclass" title="Mnemonico canonico">iclass</th>
+                    <th data-k="4" data-i18n="th.opcode" title="Byte(s) de operacion y extension ISA">opcode</th>
+                    <th data-i18n="th.encoding" title="Caracteristicas de codificacion y semantica">encoding</th>
+                    <th data-i18n="th.operands" title="Operandos: tipo, ancho, lee/escribe">operandos</th>
+                    <th data-i18n="th.overlay" title="Propiedades semanticas manuales">overlay</th>
+                    <th class="n" data-i18n="th.reciptp" title="Throughput reciproco: ciclos/instr (menor = mas rapido)">recip_tp</th>
+                    <th class="n" data-i18n="th.uops" title="Micro-operaciones">uops</th>
+                    <th class="n" data-i18n="th.latmax" title="Latencia maxima (ciclos) de la microarq. mostrada">lat. max</th>
                 </tr>
             </thead>
             <tbody id="tb"></tbody>
@@ -131,6 +131,7 @@
     <script src="assets/db.js"></script>
     <script src="assets/micro.js"></script>
     <script src="assets/tip.js"></script>
+    <script src="assets/i18n.js"></script>
     <script src="assets/viewer.js"></script>
 </body>
 
