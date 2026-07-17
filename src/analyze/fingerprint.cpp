@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "ir/ssa_ir.h"
+#include "vx/asm_analyze.h"
 
 namespace analyze {
 
@@ -137,7 +138,8 @@ bool is_pure_op(ir::IrOp op) {
 
 } // namespace
 
-FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn) {
+FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
+                                        const std::string &arch) {
     FunctionFingerprint fp;
     fp.function = fn.name;
 
@@ -181,13 +183,31 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn) {
                 fp.has_dynamic_call = true;
                 fp.pure_local = false; // efecto opaco.
                 break;
-            case Op::INLINE_ASM:
-                // `asm { }` nativo: los register()+asm no son ALLOCAs, asi que
-                // el marco de pila real NO se ve en el IR.  Marca opaco: el
-                // TOTAL de sus callers usara el @stack DECLARADO de esta fn.
+            case Op::INLINE_ASM: {
+                // `asm { }` nativo: se ANALIZA el cuerpo (efectos exactos) en vez
+                // de tratarlo como caja negra total.  El cuerpo NASM viaja en
+                // @c func_name (lo pone el lowering de Phase AS).
+                const vx::AsmBlockEffects e =
+                    vx::asm_analyze_block(ins.func_name, arch);
+                // El marco EXPLICITO (push/pop/sub rsp con inmediato) SI se ve en
+                // el texto -> se cuenta en el parcial medido.
+                if (e.explicit_stack_bytes > 0)
+                    fp.stack_bytes +=
+                        static_cast<uint64_t>(e.explicit_stack_bytes);
+                // Pureza AFINADA: un asm que no toca memoria, no llama y no es
+                // atomico conserva la pureza local (p.ej. popcnt/aritmetica sobre
+                // registros).  Un mnemonico desconocido -> conservador (impuro).
+                if (e.touches_mem || e.is_call || e.has_atomic || !e.known())
+                    fp.pure_local = false;
+                // Un `call` externo dentro del asm hace el efecto no acotable.
+                if (e.is_call) fp.has_dynamic_call = true;
+                // El marco IMPLICITO de los enlaces register() (los spills y el
+                // guardado de callee-saved clobbered que decide el backend) NO es
+                // visible en el texto -> el TOTAL de los callers sigue usando el
+                // @stack DECLARADO.  Retirarlo requiere el reporte del backend.
                 fp.frame_opaque = true;
-                fp.pure_local = false; // efecto opaco.
                 break;
+            }
             default:
                 // Cualquier op no-pura y no-CALL rompe la pureza local.
                 if (!is_pure_op(ins.op)) fp.pure_local = false;
@@ -207,11 +227,11 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn) {
 }
 
 std::vector<FunctionFingerprint>
-compute_module_fingerprints(const ir::IrModule &mod) {
+compute_module_fingerprints(const ir::IrModule &mod, const std::string &arch) {
     std::vector<FunctionFingerprint> out;
     out.reserve(mod.functions.size());
     for (const auto &fn : mod.functions)
-        out.push_back(compute_fingerprint(fn));
+        out.push_back(compute_fingerprint(fn, arch));
     return out;
 }
 

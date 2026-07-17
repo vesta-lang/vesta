@@ -75,14 +75,21 @@ struct FunctionFingerprint {
 
 /**
  * @brief Computa la huella LOCAL de una funcion (sin componer).
+ *
+ * @param arch Arquitectura de destino del inline asm (@c "x86_64" por defecto).
+ *        Selecciona la tabla de efectos con la que se analiza cada bloque
+ *        @c asm { }: un mnemonico no reconocido para ese arch se trata de forma
+ *        conservadora (rompe la pureza local).
  */
-FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn);
+FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
+                                        const std::string &arch = "x86_64");
 
 /**
  * @brief Huellas locales de todas las funciones del modulo.
  */
 std::vector<FunctionFingerprint>
-compute_module_fingerprints(const ir::IrModule &mod);
+compute_module_fingerprints(const ir::IrModule &mod,
+                            const std::string &arch = "x86_64");
 
 struct FunctionContracts; // definido abajo.
 

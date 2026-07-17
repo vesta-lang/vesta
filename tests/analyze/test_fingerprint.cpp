@@ -58,6 +58,14 @@ static ir::IrInstr binop(ir::IrOp o) {
     return i;
 }
 
+// Bloque de inline asm: el cuerpo NASM viaja en func_name (Phase AS).
+static ir::IrInstr asm_block(const std::string &body) {
+    ir::IrInstr i{};
+    i.op = ir::IrOp::INLINE_ASM;
+    i.func_name = body;
+    return i;
+}
+
 static const FunctionFingerprint *find(const std::vector<FunctionFingerprint> &v,
                                        const std::string &n) {
     for (const auto &f : v)
@@ -94,9 +102,19 @@ int main() {
     // impure_caller: llama a writer -> impura por composicion.
     mod.functions.push_back(
         fn_with("impure_caller", {call("writer"), op(ir::IrOp::RET)}));
+    // asm_pure: asm sin memoria/call/atomica -> conserva la pureza local
+    // (antes CUALQUIER asm rompia la pureza; ahora se analiza el cuerpo).
+    mod.functions.push_back(fn_with(
+        "asm_pure", {asm_block("popcnt rax, rdi"), op(ir::IrOp::RET)}));
+    // asm_mem: asm que toca memoria -> impuro.
+    mod.functions.push_back(fn_with(
+        "asm_mem", {asm_block("mov [rax], rbx"), op(ir::IrOp::RET)}));
+    // asm_stack: marco EXPLICITO (sub rsp, 32) -> se cuenta en el parcial.
+    mod.functions.push_back(fn_with(
+        "asm_stack", {asm_block("sub rsp, 32"), op(ir::IrOp::RET)}));
 
     auto fps = compute_module_fingerprints(mod);
-    CHECK(fps.size() == 11, "11 huellas");
+    CHECK(fps.size() == 14, "14 huellas");
 
     // -- Locales -------------------------------------------------------------
     const auto *leaf = find(fps, "leaf");
@@ -155,6 +173,16 @@ int main() {
     const auto *allocs2 = find(fps, "allocs");
     CHECK(allocs2 && allocs2->pure,
           "allocs: allocar es puro (construye su retorno)");
+
+    // --- inline asm: efectos EXACTOS del cuerpo (no caja negra total) --------
+    const auto *ap = find(fps, "asm_pure");
+    CHECK(ap && ap->pure_local && ap->frame_opaque,
+          "asm_pure: pura local (asm sin mem/call) + marco opaco (implicito)");
+    const auto *am = find(fps, "asm_mem");
+    CHECK(am && !am->pure_local, "asm_mem: impura (el asm toca memoria)");
+    const auto *as = find(fps, "asm_stack");
+    CHECK(as && as->stack_bytes == 32,
+          "asm_stack: marco explicito contado (sub rsp, 32)");
 
     if (g_fail == 0)
         std::printf("=== test_fingerprint: %d checks OK, 0 fallidos ===\n",
