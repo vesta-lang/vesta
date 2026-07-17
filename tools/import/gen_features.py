@@ -54,6 +54,8 @@ def main():
         sched = _dname(r.get('SchedModel')) or '-'
         feats = {_short(f) for f in
                  _expand_implies(d, (_dname(f) for f in r.get('Features', []))) if f}
+        if not feats:
+            continue                                 # base abstracta sin features
         all_feats |= feats
         rows.append((cpu, sched, feats))
 
