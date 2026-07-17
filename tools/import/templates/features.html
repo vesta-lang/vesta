@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vesta - Features por microarquitectura</title>
+    <link rel="stylesheet" href="assets/app.css">
+</head>
+
+<body>
+    <nav class="nav">
+        <span class="brand">Vesta <small>&middot; arch-data</small></span>
+        <a href="index.html" data-i18n="nav.instr">Instrucciones</a>
+        <a href="analyzer.html" data-i18n="nav.an">Analizador</a>
+        <a href="features.html" class="active" data-i18n="nav.feat">Features</a>
+        <a class="ext" href="https://github.com/vesta-lang/arch-data" data-i18n="nav.repo">Repositorio</a>
+    </nav>
+
+    <header>
+        <h1 data-i18n="feat.title">Features por microarquitectura</h1>
+        <div class="sub" id="subline"></div>
+    </header>
+
+    <details class="help">
+        <summary data-i18n="feat.help">Que muestra esta tabla</summary>
+        <div class="body" data-i18n="help.feat"></div>
+    </details>
+
+    <div class="bar">
+        <input id="q" type="search" data-i18n-ph="feat.search" placeholder="Filtrar CPU o feature...">
+        <label><span data-i18n="bar.isa">ISA</span> <select id="isa"></select></label>
+        <span class="count" id="count"></span>
+    </div>
+
+    <div class="wrap" id="matrix-wrap"></div>
+
+    <div class="foot" data-i18n="foot.feat"></div>
+
+    <script src="assets/db.js"></script>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/features.js"></script>
+</body>
+
+</html>

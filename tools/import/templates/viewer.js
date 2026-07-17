@@ -5,18 +5,37 @@
 //             operandos,string,summary,category,checksum,url]
 (function () {
     const DB = window.VESTA_DB;
-    const F = DB.forms, AR = DB.arches, PAGE = 100;
+    // ISA activa por ?isa= (recarga al cambiarla; sitio estatico).  Multi-ISA.
+    const ORDER = DB.order || ['x86'];
+    const params = new URLSearchParams(location.search);
+    let ISA = params.get('isa');
+    if (!ISA || !DB.isas || !DB.isas[ISA]) ISA = ORDER[0];
+    const CUR = (DB.isas && DB.isas[ISA]) || DB;   // compat mono-ISA
+    const F = CUR.forms, AR = CUR.arches, PAGE = 100;
+    const DEF_ARCH = {
+        x86: 'intel-skylake', arm64: 'neoverse-n2',
+        arm32: 'cortex-a76-a32', riscv: 'sifive-p670'
+    };
     const T = window.t || (k => k);   // traduccion (i18n.js)
     const LOC = window.LANG || 'es';
     let arch = 0, page = 0, sortK = 0, sortDir = 1, filt = F;
     const $ = id => document.getElementById(id);
     const esc = s => (s + '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-    // linea de cabecera (numeros + prosa traducible) desde window.VESTA_DB.meta.
+    // selector de ISA (navega recargando con ?isa=).
+    const isaSel = $('isa');
+    if (isaSel) {
+        isaSel.innerHTML = ORDER.map(k =>
+            '<option value="' + k + '"' + (k === ISA ? ' selected' : '') + '>' +
+            esc((DB.labels && DB.labels[k]) || k) + '</option>').join('');
+        isaSel.onchange = () => { location.search = '?isa=' + isaSel.value; };
+    }
+
+    // linea de cabecera (numeros + prosa traducible) desde la meta de la ISA.
     const sub = $('subline');
-    if (sub && DB.meta) sub.innerHTML = T('idx.sub', {
-        forms: (+DB.meta.forms).toLocaleString(LOC), arches: DB.meta.arches,
-        date: DB.meta.date, sha: '<code>' + esc(DB.meta.sha) + '</code>', schema: DB.meta.schema
+    if (sub && CUR.meta) sub.innerHTML = T('idx.sub', {
+        forms: (+CUR.meta.forms).toLocaleString(LOC), arches: CUR.meta.arches,
+        date: CUR.meta.date, sha: '<code>' + esc(CUR.meta.sha) + '</code>', schema: CUR.meta.schema
     });
 
     function cost(r, a) { const cid = AR[a].map[r[0]]; return cid < 0 ? null : AR[a].classes[cid]; }
@@ -80,10 +99,11 @@
     const icSel = $('ic'), arSel = $('ar');
     icSel.innerHTML = '<option value="">' + T('bar.all') + '</option>' +
         [...new Set(F.map(r => r[2]))].sort().map(c => '<option>' + esc(c) + '</option>').join('');
+    const defArch = DEF_ARCH[ISA];
     AR.forEach((a, i) => {
         const o = document.createElement('option');
         o.value = i; o.textContent = a.name;
-        if (a.name === 'intel-skylake') o.selected = true;
+        if (a.name === defArch) o.selected = true;
         arSel.appendChild(o);
     });
     arch = arSel.selectedIndex < 0 ? 0 : arSel.selectedIndex;

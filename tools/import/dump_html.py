@@ -65,20 +65,41 @@ def _pretty_ports(ports, legend):
                     (t.split("*") for t in ports.split(",")))
 
 
-def _family(name):
-    return "intel" if name.startswith("intel") else \
-           "amd" if name.startswith("amd") else "arm" if name.startswith("arm") \
-           else ""
+def _family(name, isa):
+    if isa == "x86":
+        return "intel" if name.startswith("intel") else \
+               "amd" if name.startswith("amd") else ""
+    return isa                                     # arm64/arm32 -> arm; riscv
 
 
-def build_data(db_dir):
-    """Objeto para window.VESTA_DB en formato clase+mapeo."""
+# Definicion de las ISAs del sitio: (clave, etiqueta, vxisa, patron vxarch,
+# vxfeat, familia CSS).  El patron filtra los .vxarch de cada ISA (ARM comparte
+# carpeta entre A64 y A32/T32; se separan por el sufijo -a32).
+_ISAS = [
+    ("x86", "x86-64", "x86/x86.vxisa", ("x86", None, False), "x86/x86.vxfeat"),
+    ("arm64", "AArch64", "arm/arm.vxisa", ("arm", "-a32", False), "arm/arm.vxfeat"),
+    ("arm32", "AArch32 (A32/T32)", "arm/arm32.vxisa", ("arm", "-a32", True),
+     "arm/arm.vxfeat"),
+    ("riscv", "RISC-V", "riscv/riscv.vxisa", ("riscv", None, False),
+     "riscv/riscv.vxfeat"),
+]
+
+
+def _build_isa(root, key, vxisa_rel, vxpat):
+    """{meta, forms, arches} de una ISA (formato clase+mapeo)."""
     import glob
-    forms_raw = database.load_vxisa(os.path.join(db_dir, "x86.vxisa"))
-    nforms = len(forms_raw)
+    vxisa = os.path.join(root, vxisa_rel)
+    if not os.path.exists(vxisa):
+        return None
+    forms_raw = database.load_vxisa(vxisa)
+    nforms = (max(forms_raw) + 1) if forms_raw else 0
+    subdir, a32_suffix, want_a32 = vxpat
 
     arches = []
-    for p in sorted(glob.glob(os.path.join(db_dir, "*.vxarch"))):
+    for p in sorted(glob.glob(os.path.join(root, subdir, "*.vxarch"))):
+        is_a32 = a32_suffix is not None and os.path.basename(p).count(a32_suffix)
+        if bool(is_a32) != bool(want_a32):
+            continue                               # separa A64 de A32/T32
         name, legend, classes, form_class = database.load_vxarch(p)
         cls_list = []
         for cid in range(len(classes)):
@@ -90,7 +111,7 @@ def build_data(db_dir):
         amap = [-1] * nforms
         for fid, cid in form_class.items():
             amap[fid] = cid
-        arches.append({"name": name, "family": _family(name),
+        arches.append({"name": name, "family": _family(name, key),
                        "classes": cls_list, "map": amap})
 
     forms = []
@@ -108,9 +129,9 @@ def build_data(db_dir):
             _ops_compact(fm["operands"]), d("string"), d("summary"),
             d("category"), fm["checksum"], d("url")])
 
-    meta = {"forms": nforms, "arches": len(arches),
+    meta = {"forms": len(forms_raw), "arches": len(arches),
             "date": "?", "sha": "?", "schema": "?"}
-    with open(os.path.join(db_dir, "x86.vxisa"), "r", encoding="ascii") as f:
+    with open(vxisa, "r", encoding="ascii") as f:
         for tok in f.readline().split():
             if tok.startswith("date="):
                 meta["date"] = tok[5:]
@@ -121,12 +142,53 @@ def build_data(db_dir):
     return {"meta": meta, "arches": arches, "forms": forms}
 
 
+def _build_features(root, vxfeat_rel):
+    """{table:[nombre...], cpus:[[cpu,sched,[ids]]...]} de un .vxfeat."""
+    path = os.path.join(root, vxfeat_rel)
+    if not os.path.exists(path):
+        return None
+    meta, table, cpus = database.load_vxfeat(path)
+    idx = {n: i for i, n in enumerate(table)}
+    rows = []
+    for cpu in sorted(cpus):
+        ids = sorted((idx[f] for f in cpus[cpu]["features"]))
+        rows.append([cpu, cpus[cpu]["sched"], ids])
+    return {"table": table, "cpus": rows}
+
+
+def build_data(root):
+    """window.VESTA_DB multi-ISA: {isas:{clave:{meta,forms,arches}},
+    features:{clave:{table,cpus}}, order:[...], labels:{...}}."""
+    isas, features, order, labels = {}, {}, [], {}
+    feat_by_file = {}
+    for key, label, vxisa, vxpat, vxfeat in _ISAS:
+        got = _build_isa(root, key, vxisa, vxpat)
+        if not got:
+            continue
+        isas[key] = got
+        order.append(key)
+        labels[key] = label
+        if vxfeat not in feat_by_file:
+            fb = _build_features(root, vxfeat)
+            if fb:
+                feat_by_file[vxfeat] = fb
+        if vxfeat in feat_by_file:
+            features[key] = feat_by_file[vxfeat]
+    total_forms = sum(v["meta"]["forms"] for v in isas.values())
+    total_arch = sum(v["meta"]["arches"] for v in isas.values())
+    meta = {"forms": total_forms, "arches": total_arch,
+            "isas": len(isas), "date": "llvm-19", "sha": "-", "schema": "1"}
+    return {"isas": isas, "features": features, "order": order,
+            "labels": labels, "meta": meta}
+
+
 def _render(tpl_name, meta):
     with open(os.path.join(_TPL, tpl_name), "r", encoding="utf-8") as f:
         html = f.read()
     for k, v in (("{{FORMS}}", "{:,}".format(meta["forms"]).replace(",", ".")),
                  ("{{ARCHES}}", str(meta["arches"])), ("{{DATE}}", meta["date"]),
-                 ("{{SHA}}", meta["sha"]), ("{{SCHEMA}}", meta["schema"])):
+                 ("{{SHA}}", meta["sha"]), ("{{SCHEMA}}", meta["schema"]),
+                 ("{{ISAS}}", str(meta.get("isas", 1)))):
         html = html.replace(k, v)
     return html
 
@@ -145,17 +207,23 @@ def main():
         json.dump(data, f, separators=(",", ":"))
         f.write(";\n")
     for a in ("app.css", "micro.js", "tip.js", "i18n.js",
-              "viewer.js", "analyzer.js"):
-        shutil.copyfile(os.path.join(_TPL, a), os.path.join(assets, a))
+              "viewer.js", "analyzer.js", "features.js"):
+        src = os.path.join(_TPL, a)
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(assets, a))
     for page, tpl in (("index.html", "viewer.html"),
-                      ("analyzer.html", "analyzer.html")):
-        with open(os.path.join(out, page), "w", encoding="utf-8",
-                  newline="\n") as f:
-            f.write(_render(tpl, data["meta"]))
+                      ("analyzer.html", "analyzer.html"),
+                      ("features.html", "features.html")):
+        tp = os.path.join(_TPL, tpl)
+        if os.path.exists(tp):
+            with open(os.path.join(out, page), "w", encoding="utf-8",
+                      newline="\n") as f:
+                f.write(_render(tpl, data["meta"]))
 
     sz = os.path.getsize(os.path.join(assets, "db.js")) / 1e6
-    print("[dump_html] %d formas, %d microarq -> %s (db.js %.1f MB)"
-          % (data["meta"]["forms"], data["meta"]["arches"], out, sz))
+    print("[dump_html] %d ISAs, %d formas, %d microarq -> %s (db.js %.1f MB)"
+          % (data["meta"]["isas"], data["meta"]["forms"],
+             data["meta"]["arches"], out, sz))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,16 @@
 // un analisis del bloque -- uops, coste por throughput y camino critico de
 // dependencias (registros, flags, memoria) -- para la microarquitectura elegida.
 (function () {
-    const DB = window.VESTA_DB, F = DB.forms, AR = DB.arches;
+    const DB = window.VESTA_DB;
+    // ISA activa por ?isa= (recarga al cambiarla).  Multi-ISA + multi-core.
+    const ORDER = DB.order || ['x86'];
+    const _params = new URLSearchParams(location.search);
+    let ISA = _params.get('isa');
+    if (!ISA || !DB.isas || !DB.isas[ISA]) ISA = ORDER[0];
+    const CUR = (DB.isas && DB.isas[ISA]) || DB;
+    const F = CUR.forms, AR = CUR.arches;
+    const DEF_ARCH = { x86: 'intel-skylake', arm64: 'neoverse-n2',
+                       arm32: 'cortex-a76-a32', riscv: 'sifive-p670' };
     const T = window.t || (k => k);   // traduccion (i18n.js); identidad si no esta
     const $ = id => document.getElementById(id);
     const esc = s => (s + '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -163,11 +172,20 @@
         return { rd, wr };
     }
 
+    const isaSel = $('isa');
+    if (isaSel) {
+        isaSel.innerHTML = ORDER.map(k =>
+            '<option value="' + k + '"' + (k === ISA ? ' selected' : '') + '>' +
+            esc((DB.labels && DB.labels[k]) || k) + '</option>').join('');
+        isaSel.onchange = () => { location.search = '?isa=' + isaSel.value; };
+    }
+
     const arSel = $('ar');
+    const _defArch = DEF_ARCH[ISA];
     AR.forEach((a, i) => {
         const o = document.createElement('option');
         o.value = i; o.textContent = a.name;
-        if (a.name === 'intel-skylake') o.selected = true;
+        if (a.name === _defArch) o.selected = true;
         arSel.appendChild(o);
     });
 

@@ -10,14 +10,38 @@
         'nav.instr': { es: 'Instrucciones', en: 'Instructions', ja: '命令一覧', zh: '指令', ru: 'Инструкции' },
         'nav.an': { es: 'Analizador', en: 'Analyzer', ja: 'アナライザ', zh: '分析器', ru: 'Анализатор' },
         'nav.repo': { es: 'Repositorio', en: 'Repository', ja: 'リポジトリ', zh: '仓库', ru: 'Репозиторий' },
-        'idx.title': { es: 'Base de datos de instrucciones x86', en: 'x86 instruction database', ja: 'x86 命令データベース', zh: 'x86 指令数据库', ru: 'База данных инструкций x86' },
+        'nav.feat': { es: 'Features', en: 'Features', ja: '機能', zh: '特性', ru: 'Функции' },
+        'bar.isa': { es: 'ISA', en: 'ISA', ja: 'ISA', zh: 'ISA', ru: 'ISA' },
+        'feat.title': { es: 'Features por microarquitectura', en: 'Features by microarchitecture', ja: 'マイクロアーキ別の機能', zh: '按微架构的特性', ru: 'Функции по микроархитектуре' },
+        'feat.sub': {
+            es: '{cpus} CPU &middot; {feats} features &middot; ISA {isa} &middot; fuente LLVM {date}',
+            en: '{cpus} CPUs &middot; {feats} features &middot; ISA {isa} &middot; source LLVM {date}',
+            ja: '{cpus} CPU &middot; {feats} 機能 &middot; ISA {isa} &middot; 出典 LLVM {date}',
+            zh: '{cpus} 个 CPU &middot; {feats} 个特性 &middot; ISA {isa} &middot; 来源 LLVM {date}',
+            ru: '{cpus} CPU &middot; {feats} функций &middot; ISA {isa} &middot; источник LLVM {date}'
+        },
+        'feat.help': { es: 'Que muestra esta tabla', en: 'What this table shows', ja: 'この表について', zh: '本表说明', ru: 'Что показывает таблица' },
+        'help.feat': {
+            es: '<p>Cada fila es una CPU real; cada columna una <b>feature</b> (extension de ISA) que implementa, extraida de LLVM. Un check significa que la CPU la soporta. Sirve para especializar codegen: que instrucciones puede emitir cada core.</p>',
+            en: '<p>Each row is a real CPU; each column a <b>feature</b> (ISA extension) it implements, extracted from LLVM. A check means the CPU supports it. Useful to specialize codegen: which instructions each core can emit.</p>',
+            ja: '<p>各行は実在の CPU、各列は LLVM から抽出した実装 <b>機能</b>（ISA 拡張）です。チェックは対応を示します。</p>',
+            zh: '<p>每行是一个真实 CPU，每列是它实现的<b>特性</b>（ISA 扩展），提取自 LLVM。勾选表示支持。</p>',
+            ru: '<p>Каждая строка — реальный CPU; каждый столбец — <b>функция</b> (расширение ISA), извлечённая из LLVM. Галочка означает поддержку.</p>'
+        },
+        'feat.search': { es: 'Filtrar CPU o feature...', en: 'Filter CPU or feature...', ja: 'CPU / 機能 で絞り込み...', zh: '筛选 CPU 或特性...', ru: 'Фильтр CPU или функции...' },
+        'feat.cpu': { es: 'CPU', en: 'CPU', ja: 'CPU', zh: 'CPU', ru: 'CPU' },
+        'feat.sched': { es: 'modelo', en: 'model', ja: 'モデル', zh: '模型', ru: 'модель' },
+        'feat.count': { es: 'n features', en: 'n features', ja: '機能数', zh: '特性数', ru: 'кол-во' },
+        'feat.none': { es: 'sin coincidencias', en: 'no matches', ja: '一致なし', zh: '无匹配', ru: 'нет совпадений' },
+        'foot.feat': { es: 'Features extraidas de los SubtargetFeature de LLVM (cierre transitivo de Implies). Una extraccion unica; el runtime no depende de LLVM.', en: 'Features extracted from LLVM SubtargetFeature (transitive Implies closure). One-time extraction; the runtime does not depend on LLVM.', ja: 'LLVM の SubtargetFeature から抽出（Implies の推移閉包）。一度きりの抽出で、ランタイムは LLVM に依存しません。', zh: '特性提取自 LLVM 的 SubtargetFeature（Implies 传递闭包）。一次性提取，运行时不依赖 LLVM。', ru: 'Функции извлечены из SubtargetFeature LLVM (транзитивное замыкание Implies). Разовое извлечение; среда выполнения не зависит от LLVM.' },
+        'idx.title': { es: 'Base de datos de instrucciones', en: 'Instruction database', ja: '命令データベース', zh: '指令数据库', ru: 'База данных инструкций' },
         'idx.help': { es: 'Como leer esta tabla', en: 'How to read this table', ja: 'この表の読み方', zh: '如何阅读本表', ru: 'Как читать эту таблицу' },
         'idx.sub': {
-            es: '{forms} formas &middot; {arches} microarquitecturas &middot; fuente uops.info {date} &middot; xml {sha} &middot; esquema {schema}',
-            en: '{forms} forms &middot; {arches} microarchitectures &middot; source uops.info {date} &middot; xml {sha} &middot; schema {schema}',
-            ja: '{forms} 形式 &middot; {arches} マイクロアーキテクチャ &middot; 出典 uops.info {date} &middot; xml {sha} &middot; スキーマ {schema}',
-            zh: '{forms} 种形式 &middot; {arches} 个微架构 &middot; 来源 uops.info {date} &middot; xml {sha} &middot; 架构版本 {schema}',
-            ru: '{forms} форм &middot; {arches} микроархитектур &middot; источник uops.info {date} &middot; xml {sha} &middot; схема {schema}'
+            es: '{forms} formas &middot; {arches} microarquitecturas &middot; esquema {schema}',
+            en: '{forms} forms &middot; {arches} microarchitectures &middot; schema {schema}',
+            ja: '{forms} 形式 &middot; {arches} マイクロアーキテクチャ &middot; スキーマ {schema}',
+            zh: '{forms} 种形式 &middot; {arches} 个微架构 &middot; 架构版本 {schema}',
+            ru: '{forms} форм &middot; {arches} микроархитектур &middot; схема {schema}'
         },
         // --- barra de busqueda / filtros ---
         'bar.search': { es: 'Buscar mnemonico, iclass, opcode o encoding...', en: 'Search mnemonic, iclass, opcode or encoding...', ja: 'ニーモニック / iclass / opcode / encoding を検索...', zh: '搜索助记符、iclass、opcode 或 encoding...', ru: 'Поиск мнемоники, iclass, opcode или encoding...' },
@@ -95,7 +119,7 @@
         'vw.latencies': { es: 'latencias', en: 'latencies', ja: 'レイテンシ', zh: '延迟', ru: 'задержки' },
         'vw.nodatauarch': { es: 'sin dato en esta microarq.', en: 'no data on this microarch.', ja: 'このマイクロアーキにはデータなし', zh: '此微架构无数据', ru: 'нет данных для этой микроарх.' },
         // --- analizador: chrome ---
-        'an.title': { es: 'Analizador de ensamblador x86', en: 'x86 assembly analyzer', ja: 'x86 アセンブリ アナライザ', zh: 'x86 汇编分析器', ru: 'Анализатор ассемблера x86' },
+        'an.title': { es: 'Analizador de ensamblador', en: 'Assembly analyzer', ja: 'アセンブリ アナライザ', zh: '汇编分析器', ru: 'Анализатор ассемблера' },
         'an.desc': { es: 'Pega instrucciones (sintaxis Intel, una por linea). Para cada una se busca su forma en la base de datos y se reporta lo que hace y su coste en la microarquitectura elegida.', en: 'Paste instructions (Intel syntax, one per line). For each one its form is looked up in the database, reporting what it does and its cost on the selected microarchitecture.', ja: '命令を貼り付けてください（Intel 記法、1 行 1 命令）。各命令の形式をデータベースで検索し、動作と選択したマイクロアーキでのコストを表示します。', zh: '粘贴指令（Intel 语法，每行一条）。系统会在数据库中查找每条指令的形式，并报告其功能及在所选微架构上的开销。', ru: 'Вставьте инструкции (синтаксис Intel, по одной в строке). Для каждой из них ищется форма в базе, показываются её действие и стоимость на выбранной микроархитектуре.' },
         'an.help': { es: 'Como funciona el analisis', en: 'How the analysis works', ja: '解析の仕組み', zh: '分析原理', ru: 'Как работает анализ' },
         'an.run': { es: 'Analizar', en: 'Analyze', ja: '解析', zh: '分析', ru: 'Анализировать' },

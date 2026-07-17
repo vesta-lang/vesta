@@ -13,6 +13,7 @@
         <span class="brand">Vesta <small>&middot; arch-data</small></span>
         <a href="index.html" data-i18n="nav.instr">Instrucciones</a>
         <a href="analyzer.html" class="active" data-i18n="nav.an">Analizador</a>
+        <a href="features.html" data-i18n="nav.feat">Features</a>
         <a class="ext" href="https://github.com/vesta-lang/arch-data" data-i18n="nav.repo">Repositorio &nearr;</a>
     </nav>
 
@@ -40,6 +41,7 @@ add rax, rcx</textarea>
         </div>
         <div class="row">
             <button class="go" id="run" data-i18n="an.run">Analizar</button>
+            <label><span data-i18n="bar.isa">ISA</span> <select id="isa"></select></label>
             <label><span data-i18n="bar.uarch">microarq.</span> <select id="ar"></select></label>
             <span class="hint" id="summary"></span>
         </div>

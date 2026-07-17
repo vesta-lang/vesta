@@ -13,6 +13,7 @@
         <span class="brand">Vesta <small>&middot; arch-data</small></span>
         <a href="index.html" class="active" data-i18n="nav.instr">Instrucciones</a>
         <a href="analyzer.html" data-i18n="nav.an">Analizador</a>
+        <a href="features.html" data-i18n="nav.feat">Features</a>
         <a class="ext" href="https://github.com/vesta-lang/arch-data" data-i18n="nav.repo">Repositorio</a>
     </nav>
 
@@ -27,7 +28,9 @@
     </details>
 
     <div class="bar">
-        <input id="q" type="search" data-i18n-ph="bar.search" placeholder="Buscar mnemonico, iclass, opcode o encoding...">
+        <input id="q" type="search" data-i18n-ph="bar.search"
+            placeholder="Buscar mnemonico, iclass, opcode o encoding...">
+        <label><span data-i18n="bar.isa">ISA</span> <select id="isa"></select></label>
         <label><span data-i18n="bar.iclass">iclass</span> <select id="ic"></select></label>
         <label><span data-i18n="bar.uarch">microarq.</span> <select id="ar"></select></label>
         <span class="count" id="count"></span>
