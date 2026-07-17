@@ -67,6 +67,8 @@ class SynForm:
     datatype: str             # 32|64|... si el encoding lo declara
     psname: str               # A64.memory.* / A64.dpreg.* ... (senal estructural)
     has_mem: bool             # hay acceso a memoria [ ... ]
+    is_alias: bool = False    # es un alias (MOV, CMP, NOP, RET...) de una base
+    alias_of: str = ""        # iform de la instruccion base (si is_alias)
     operands: list = dfield(default_factory=list)   # list[SynOperand]
 
 
@@ -74,12 +76,17 @@ def _txt(el):
     return ''.join(el.itertext())
 
 
-def _bitpattern(rd):
-    """Patron de 32 bits (MSB..LSB): '0'/'1' fijos, 'x' variables = opcode."""
+def _regdiagram(rd):
+    """(bits[32], fields) del <regdiagram>: bits '0'/'1' fijos, 'x' variables;
+    fields = {nombre_campo: (hibit, width)} para poder aplicar los bitdiffs."""
     bits = ['x'] * 32
+    fields = {}
     for box in rd.findall('box'):
         hibit = int(box.get('hibit'))
         width = int(box.get('width', '1'))
+        name = box.get('name')
+        if name:
+            fields[name] = (hibit, width)
         vals = []
         for c in box.findall('c'):
             span = int(c.get('colspan', '1'))
@@ -91,7 +98,29 @@ def _bitpattern(rd):
             pos = hibit - i
             if 0 <= pos < 32:
                 bits[31 - pos] = vals[i]
-    return ''.join(bits)
+    return bits, fields
+
+
+_BITDIFF = re.compile(r'([A-Za-z_]\w*)\s*==\s*([01]+)')
+
+
+def _apply_bitdiffs(bits, fields, bitdiffs):
+    """Fija en el patron los bits que distinguen ESTE encoding (attr bitdiffs,
+    p.ej. 'sf == 0 && op == 1').  Solo igualdades con valor binario; ignora !=
+    y condiciones no pinables (quedan 'x')."""
+    out = list(bits)
+    if not bitdiffs:
+        return ''.join(out)
+    for name, val in _BITDIFF.findall(bitdiffs):
+        if name not in fields:
+            continue
+        hibit, width = fields[name]
+        v = val.zfill(width)[-width:] if len(val) <= width else val[-width:]
+        for i, ch in enumerate(v):
+            pos = hibit - i
+            if 0 <= pos < 32 and ch in '01':
+                out[31 - pos] = ch
+    return ''.join(out)
 
 
 def _classify(disp, field):
@@ -138,10 +167,17 @@ def parse_syntactic(path):
         root = ET.parse(path).getroot()
     except ET.ParseError:
         return []
-    if root.tag != 'instructionsection' or root.get('type') != 'instruction':
+    if root.tag != 'instructionsection' or root.get('type') not in ('instruction', 'alias'):
         return []
+    is_alias = root.get('type') == 'alias'
     top = {d.get('key'): d.get('value') for d in root.findall('./docvars/docvar')}
-    mnem = top.get('mnemonic') or root.get('id')
+    # en un alias el mnemonico visible es alias_mnemonic (MOV), no el base (MOVN).
+    mnem = (top.get('alias_mnemonic') if is_alias else None) \
+        or top.get('mnemonic') or root.get('id')
+    alias_of = ''
+    if is_alias:
+        at = root.find('.//aliasto')
+        alias_of = (at.get('iformid') if at is not None else '') or ''
     brief = ''
     b = root.find('./desc/brief/para')
     if b is not None:
@@ -163,12 +199,13 @@ def parse_syntactic(path):
         instr_class = dv.get('instr-class') or top.get('instr-class') or 'general'
         feature = dv.get('feature', '') or top.get('feature', '')
         rd = icl.find('regdiagram')
-        opcode = _bitpattern(rd) if rd is not None else 'x' * 32
+        base_bits, fields = _regdiagram(rd) if rd is not None else (['x'] * 32, {})
         psname = rd.get('psname', '') if rd is not None else ''
         ext = {'mortlach': 'SME', 'mortlach2': 'SME2'}.get(
             instr_class, instr_class).upper()
         for enc in icl.findall('encoding'):
             ename = enc.get('name')
+            opcode = _apply_bitdiffs(base_bits, fields, enc.get('bitdiffs'))
             edv = {d.get('key'): d.get('value')
                    for d in enc.findall('./docvars/docvar')}
             asm = enc.find('asmtemplate')
@@ -197,7 +234,8 @@ def parse_syntactic(path):
                 mnemonic=mnem, encoding=ename, opcode=opcode,
                 instr_class=instr_class, ext=ext, feature=feature, brief=brief,
                 datatype=edv.get('datatype', ''), psname=psname,
-                has_mem=has_mem, operands=ops))
+                has_mem=has_mem, is_alias=is_alias, alias_of=alias_of,
+                operands=ops))
     return out
 
 

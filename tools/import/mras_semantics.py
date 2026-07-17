@@ -109,6 +109,8 @@ def to_irform(syn):
         enc=ir.EncodingFeatures(isa_set=syn.feature or 'A64'),
         operands=ops, read_mask=rm, write_mask=wm, has_mem=hm, has_imm=hi,
         writes_flags=wf or wf_extra, reads_flags=rf or rf_extra,
-        category=(syn.feature or syn.instr_class), summary=syn.brief,
+        category=("alias:" + syn.alias_of if syn.is_alias
+                  else (syn.feature or syn.instr_class)),
+        summary=syn.brief,
         asm_string=(syn.mnemonic + (' ' + syn.datatype if syn.datatype else '')),
         url='')
