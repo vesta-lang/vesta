@@ -411,3 +411,9 @@ wsl-asan/
 *.til
 examples_codes_vx/reader_bmp/BUGS_LIMITACIONES.md
 examples_codes_vx/reader_bmp/*.bmp
+
+# Base de datos de instrucciones generada (regenerable desde el XML de uops.info)
+timings/x86/*.vxisa
+timings/x86/*.vxarch
+timings/x86/instr_form_ids.h
+tools/import/__pycache__/

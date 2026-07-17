@@ -1,0 +1,34 @@
+# overlay_x86_semantics.def -- semantica MANUAL de x86 que uops.info NO codifica.
+#
+# uops.info da sintaxis (operandos, flags) y coste (latencia, puertos), pero NO
+# si una instruccion serializa, es una barrera de memoria, es atomica, salta,
+# llama o falla.  Eso es conocimiento manual, pequeno y estable, que se fusiona
+# en AsmEffects sobre la forma correspondiente.
+#
+# Formato: la forma (uid = iform + "/" + anchos) en su propia linea; las
+# propiedades indentadas.  El importador VALIDA cada uid contra el XML y cada
+# propiedad contra el set permitido (un typo = error, no divergencia silenciosa).
+#
+# Propiedades validas: serializing barrier atomic ll_sc branch call ret syscall
+#   stack_push stack_pop mem_acquire mem_release mem_seq_cst may_fault
+#   privileged no_reorder
+
+CPUID
+    serializing
+    no_reorder
+
+MFENCE
+    barrier
+    mem_seq_cst
+
+LFENCE
+    barrier
+    mem_acquire
+
+SFENCE
+    barrier
+    mem_release
+
+SYSCALL
+    syscall
+    serializing
