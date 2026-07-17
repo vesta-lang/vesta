@@ -129,6 +129,10 @@ class InstrForm:
     has_imm: bool = False
     writes_flags: bool = False
     reads_flags: bool = False
+    # Documentacion humana (NO entra en la identidad; la usa el visor y el LSP).
+    category: str = ""      # familia uops.info ("BINARY", "SSE", "AVX", ...)
+    summary: str = ""       # descripcion ("Bit Test", "CPU Identification"...)
+    asm_string: str = ""    # forma legible ("BT (M16, R16)")
 
 
 def _pack_str(buf, s):

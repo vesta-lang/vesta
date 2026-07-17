@@ -65,7 +65,8 @@ def build_records(db_dir):
     """(arch_names, rows) en formato columnar para embeber en el HTML.
 
     row = [id, uid, iclass, ext, opcode, enc, rmask, wmask, memflags, overlay,
-           operandos, [ [tp,uops,notes,div,lat,ports] | null  por microarq ]]."""
+           operandos, [ [tp,uops,notes,div,lat,ports] | null por microarq ],
+           string, summary, category]."""
     import glob
     forms = database.load_vxisa(os.path.join(db_dir, "x86.vxisa"))
     arches = [database.load_vxarch(p)
@@ -94,7 +95,10 @@ def build_records(db_dir):
             "" if fm["enc"] == "-" else fm["enc"],
             fm["rmask"], fm["wmask"], memflags,
             "" if fm["overlay"] == "-" else fm["overlay"],
-            _ops_compact(fm["operands"]), timings])
+            _ops_compact(fm["operands"]), timings,
+            "" if fm.get("string", "-") == "-" else fm["string"],
+            "" if fm.get("summary", "-") == "-" else fm["summary"],
+            "" if fm.get("category", "-") == "-" else fm["category"]])
     return arch_names, rows
 
 

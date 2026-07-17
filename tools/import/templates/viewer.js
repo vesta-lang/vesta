@@ -55,6 +55,28 @@ function maxLat(s) {
     return mx ? mx.toFixed(2) : '';
 }
 
+const KIND = { R: 'resultado', A: 'direccion', F: 'flags', M: 'memoria' };
+// "op0->op2 6.00M(ub), ..." -> lineas legibles.
+function latHuman(s) {
+    if (!s) return '<span class="dim">&mdash;</span>';
+    return s.split(', ').map(e => {
+        const m = e.match(/^op(\d+)->op(\d+) ([0-9.]+)([RAFM])(\(ub\))?$/);
+        if (!m) return esc(e);
+        return 'op' + m[1] + ' &rarr; op' + m[2] + ': <b>' + m[3] + '</b> ciclos ' +
+            '<span class="dim">(' + KIND[m[4]] + (m[5] ? ', cota superior' : '') + ')</span>';
+    }).join('<br>');
+}
+// "2.00xp06 1.00xp1" -> "2 µops -> p06, 1 µop -> p1".
+function portsHuman(s) {
+    if (!s) return '<span class="dim">&mdash;</span>';
+    return s.split(' ').map(t => {
+        const m = t.match(/^([0-9.]+)x(.+)$/);
+        if (!m) return esc(t);
+        const n = parseFloat(m[1]);
+        return '<b>' + m[1] + '</b> µop' + (n !== 1 ? 's' : '') + ' &rarr; ' + esc(m[2]);
+    }).join('<br>');
+}
+
 function apply() {
     const q = $('q').value.trim().toLowerCase(), ic = $('ic').value;
     filt = R.filter(r => {
@@ -78,9 +100,10 @@ function render() {
     for (const r of filt.slice(page * PAGE, page * PAGE + PAGE)) {
         const t = r[11][arch], dot = '<span class="dim">&middot;</span>';
         const tr = document.createElement('tr'); tr.className = 'main';
+        const tip = (r[12] || '') + (r[13] ? ' — ' + r[13] : '');
         tr.innerHTML =
             '<td class="n">' + r[0] + '</td>' +
-            '<td class="forma mono">' + esc(r[1]) + '</td>' +
+            '<td class="forma mono"' + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + esc(r[1]) + '</td>' +
             '<td class="nowrap">' + esc(r[2]) + '</td>' +
             '<td class="nowrap mono">' + esc(r[4]) + '<span class="dim"> ' + esc(r[3]) + '</span></td>' +
             '<td class="enc">' + chips(r[5]) + '</td>' +
@@ -105,17 +128,27 @@ function toggle(tr, r) {
     }
     const d = document.createElement('tr'); d.className = 'detail';
     let h = '<td colspan="10">';
+    h += '<h4>que hace</h4><div>' +
+        (r[13] ? '<b>' + esc(r[13]) + '</b>' : '<span class="dim">(sin descripcion)</span>') +
+        (r[12] ? ' &middot; <span class="mono dim">' + esc(r[12]) + '</span>' : '') +
+        (r[14] ? ' &middot; ' + chips(r[14]) : '') + '</div>';
     h += '<h4>identidad</h4><div class="mono dim">iclass=' + esc(r[2]) + ' ext=' + esc(r[3]) +
         ' opcode=' + esc(r[4]) + ' &middot; encoding: ' + (r[5] ? esc(r[5]) : '(ninguno)') + '</div>';
     h += '<h4>operandos</h4><div class="oplist">' + opChips(r[10]) + '</div>';
-    h += '<h4>efectos</h4><div><span class="rd">lee</span>: ' + opsFromMask(r[6]) +
-        ' &middot; <span class="wr">escribe</span>: ' + opsFromMask(r[7]) + ' &middot; ' +
+    h += '<h4>efectos</h4><div><span class="rd">lee</span> operandos: ' + opsFromMask(r[6]) +
+        ' &middot; <span class="wr">escribe</span> operandos: ' + opsFromMask(r[7]) + ' &middot; ' +
         ((r[8] & 4) ? '<span class="wr">escribe flags</span> ' : '') +
         ((r[8] & 8) ? '<span class="rd">lee flags</span> ' : '') +
         ((r[8] & 1) ? 'accede a memoria' : '') + '</div>';
-    h += '<h4>coste por microarquitectura</h4><table><thead><tr><th>microarq.</th>' +
-        '<th>recip_tp</th><th>uops</th><th>notas</th><th>div_cycles</th>' +
-        '<th>latencias (op&rarr;op ciclos tipo)</th><th>puertos</th></tr></thead><tbody>';
+    h += '<h4>coste por microarquitectura</h4><table><thead><tr>' +
+        '<th>microarq.</th>' +
+        '<th title="throughput reciproco: ciclos por instruccion (menor = mas rapido)">recip_tp</th>' +
+        '<th title="micro-operaciones que genera">uops</th>' +
+        '<th title="microcoded = usa microcodigo; macro_fusible = fusionable con un salto">notas</th>' +
+        '<th title="latencia del divisor (DIV/IDIV)">div_cycles</th>' +
+        '<th title="latencia por cada camino operando-fuente a operando-destino">latencias</th>' +
+        '<th title="reparto de micro-ops entre los puertos de ejecucion">puertos</th>' +
+        '</tr></thead><tbody>';
     r[11].forEach((t, i) => {
         const em = '<span class="dim">&mdash;</span>';
         if (!t) { h += '<tr><td>' + esc(A[i]) + '</td><td colspan="6" class="dim">(sin dato)</td></tr>'; return; }
@@ -125,8 +158,8 @@ function toggle(tr, r) {
         h += '<tr><td>' + esc(A[i]) + '</td><td class="mono">' + esc(t[0]) + '</td><td>' + t[1] +
             '</td><td>' + (notes.join(', ') || em) +
             '</td><td>' + (t[3] !== '-1.00' ? esc(t[3]) : em) +
-            '</td><td class="mono">' + (t[4] ? esc(t[4]) : em) +
-            '</td><td class="mono">' + (t[5] ? esc(t[5]) : em) + '</td></tr>';
+            '</td><td>' + latHuman(t[4]) +
+            '</td><td>' + portsHuman(t[5]) + '</td></tr>';
     });
     h += '</tbody></table></td>';
     d.innerHTML = h; tr.after(d);

@@ -188,7 +188,9 @@ def parse(xml_path, specs, report=None):
             (rm, wm, mem, imm, wf, rf) = ir.derive_effects(ops)
             form = ir.InstrForm(iform, el.get("iclass", ""), el.get("asm", ""),
                                 el.get("opcode", ""), el.get("extension", ""),
-                                _encoding(el), ops, rm, wm, mem, imm, wf, rf)
+                                _encoding(el), ops, rm, wm, mem, imm, wf, rf,
+                                el.get("category", ""), el.get("summary", ""),
+                                el.get("string", ""))
             key = ir.form_key(form)
             if key not in known_forms:
                 known_forms[key] = form

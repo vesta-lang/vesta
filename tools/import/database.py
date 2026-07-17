@@ -13,7 +13,8 @@ def load_vxisa(path):
     """@return { form_id: {checksum,uid,iclass,ext,opcode,enc,rmask,wmask,mem,
     imm,wflags,rflags,operands,overlay} }."""
     cols = ("checksum", "uid", "iclass", "ext", "opcode", "enc", "rmask",
-            "wmask", "mem", "imm", "wflags", "rflags", "operands", "overlay")
+            "wmask", "mem", "imm", "wflags", "rflags", "operands", "overlay",
+            "category", "summary", "string")
     forms = {}
     with open(path, "r", encoding="ascii") as f:
         for line in f:
