@@ -1487,8 +1487,24 @@ struct AsmOperand {
     SourceLoc loc;                 ///< para diagnosticos.
 };
 
+/**
+ * @enum AsmLevel
+ * @brief Nivel de analisis de un bloque de inline asm (3 niveles):
+ *  - @c Analyzable (default, `asm { }`): el compilador lo entiende, saca
+ *    efectos/coste y PUEDE reoptimizarlo (reordenar por latencia/puertos).
+ *  - @c Volatile (`asm volatile { }`): se analiza para contratos, pero se
+ *    emite VERBATIM (no se reordena ni pliega alrededor).
+ *  - @c Raw (`asm raw { }`): caja negra, verbatim, cero analisis; el usuario
+ *    posee la correccion y declara sus contratos a mano.
+ */
+enum class AsmLevel { Analyzable, Volatile, Raw };
+
 struct AsmStmt : Stmt {
     std::string body; ///< Cuerpo NASM Intel verbatim (raw-slice del source).
+    /// Nivel de analisis (Analyzable por defecto).  Lo consume el futuro
+    /// reoptimizador de asm: solo @c Analyzable se reordena; @c Volatile/@c Raw
+    /// son verbatim.  @c q_volatile (abajo) es legado (bit informativo del IR).
+    AsmLevel level = AsmLevel::Analyzable;
     /// Phase AS inc.7: enlaces de operandos `( reg p = addr, rax a = exp, ... )`.
     /// Vacio = modelo clasico (register() en var-decls, sin sustitucion).
     std::vector<AsmOperand> operands;

@@ -7006,7 +7006,15 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
     while (current_.kind == TokenKind::IDENTIFIER) {
         const std::string &q = current_.lexeme;
         if (q == "volatile") {
+            // Nivel VOLATILE: se analiza para contratos pero se emite verbatim.
             s->q_volatile = true;
+            s->level = ast::AsmLevel::Volatile;
+        } else if (q == "raw") {
+            // Nivel RAW: caja negra, verbatim, CERO analisis -> tambien implica
+            // noinfer (el usuario declara sus clobbers a mano; nada se infiere).
+            s->q_volatile = true;
+            s->q_noinfer = true;
+            s->level = ast::AsmLevel::Raw;
         } else if (q == "nomem") {
             s->q_nomem = true;
         } else if (q == "preserves_flags") {
