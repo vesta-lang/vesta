@@ -237,29 +237,21 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
     return code;
 }
 
-std::vector<uint8_t>
-vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
-                    const VregEntries &ent, const CallResolver &resolve_native,
-                    const CallResolver &resolve_symbol,
-                    std::vector<NativeReloc> *relocs_out, bool pic,
-                    bool target_sysv, bool mode32, FloatIsa fisa,
-                    bool emit_line_map,
-                    std::vector<LineMapEntry> *line_map_out,
-                    std::vector<std::pair<uint32_t, std::string>>
-                        *asm_labels_out,
-                    std::vector<Stackmap> *stackmaps_out) {
+/*
+ * Orquestador AOT ARCH-NEUTRAL: pipeline completo (seleccion -> intervalos ->
+ * regalloc -> rewrite -> scheduler -> encode -> traduccion de relocs) a traves
+ * de un @c CodegenTarget cualquiera.  Lo comparten x86 y arm64.
+ */
+std::vector<uint8_t> vreg_compile_native_target(
+    const ir::IrFunction &fn, const CodegenTarget &target,
+    std::vector<NativeReloc> *relocs_out,
+    std::vector<LineMapEntry> *line_map_out,
+    std::vector<std::pair<uint32_t, std::string>> *asm_labels_out,
+    std::vector<Stackmap> *stackmaps_out) {
     if (relocs_out) relocs_out->clear();
     if (line_map_out) line_map_out->clear();
     if (asm_labels_out) asm_labels_out->clear();
     if (stackmaps_out) stackmaps_out->clear();
-    /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
-     *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
-     *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
-    /* Target de codegen para esta compilacion (x86 aqui).  A partir de la
-     * seleccion el pipeline es ARCH-NEUTRAL: llama a target.select / .rewrite /
-     * .encode sin conocer la ISA -> el mismo orquestador sirve para arm64. */
-    const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
-                           pic, target_sysv, mode32, fisa, emit_line_map);
 
     /* 1. SELECCION: IR (SSA) -> MachineIR de vregs (ABI HOST_LEAF). */
     MFunction mf;
@@ -331,6 +323,24 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                             bytes.size());
 
     return bytes;
+}
+
+std::vector<uint8_t>
+vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
+                    const VregEntries &ent, const CallResolver &resolve_native,
+                    const CallResolver &resolve_symbol,
+                    std::vector<NativeReloc> *relocs_out, bool pic,
+                    bool target_sysv, bool mode32, FloatIsa fisa,
+                    bool emit_line_map,
+                    std::vector<LineMapEntry> *line_map_out,
+                    std::vector<std::pair<uint32_t, std::string>>
+                        *asm_labels_out,
+                    std::vector<Stackmap> *stackmaps_out) {
+    /* Ruta AOT x86: construye el X86Target y delega en el orquestador comun. */
+    const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
+                           pic, target_sysv, mode32, fisa, emit_line_map);
+    return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
+                                      asm_labels_out, stackmaps_out);
 }
 
 uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,

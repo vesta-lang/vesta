@@ -179,6 +179,21 @@ std::vector<uint8_t> vreg_compile_native(
      * los serializa en la seccion .vxgc_smap para el scan preciso en runtime. */
     std::vector<Stackmap> *stackmaps_out = nullptr);
 
+class CodegenTarget; // include/jit/codegen_target.h
+
+/**
+ * @brief Orquestador AOT ARCH-NEUTRAL: pipeline completo a traves de un
+ *        @c CodegenTarget (x86 o arm64).  @c vreg_compile_native construye el
+ *        @c X86Target y delega aqui; el backend arm64 construye su @c Arm64Target
+ *        y llama a esta funcion con la MISMA orquestacion.
+ */
+std::vector<uint8_t> vreg_compile_native_target(
+    const ir::IrFunction &fn, const CodegenTarget &target,
+    std::vector<NativeReloc> *relocs_out = nullptr,
+    std::vector<LineMapEntry> *line_map_out = nullptr,
+    std::vector<std::pair<uint32_t, std::string>> *asm_labels_out = nullptr,
+    std::vector<Stackmap> *stackmaps_out = nullptr);
+
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo
  *        header es @p header_block (on-stack replacement, Phase D.8, 2c).
