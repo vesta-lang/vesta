@@ -88,6 +88,10 @@ add_library(vx_lib STATIC
     gen/instr_db_arm64_gen.cpp
     gen/instr_db_arm32_gen.cpp
     gen/instr_db_riscv_gen.cpp
+    gen/instr_db_x86_cost_gen.cpp
+    gen/instr_db_arm64_cost_gen.cpp
+    gen/instr_db_arm32_cost_gen.cpp
+    gen/instr_db_riscv_cost_gen.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs

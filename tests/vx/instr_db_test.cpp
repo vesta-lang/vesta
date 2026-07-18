@@ -85,6 +85,27 @@ int main() {
     // la misma DB no confunde ISAs: 'ldaxr' no existe en x86.
     CHECK(match(Isa::X86, "ldaxr", {}) < 0, "x86 no tiene ldaxr");
 
+    // --- capa de COSTE (latencia + puertos) ---
+    CHECK(microarch_count(Isa::X86) == 21, "x86: 21 microarq con coste");
+    int32_t skl = microarch_by_name(Isa::X86, "intel-skylake");
+    CHECK(skl >= 0, "x86: intel-skylake presente");
+    // add reg,reg en skylake: latencia 1, throughput alto, con puertos.
+    AsmCost ca = cost(Isa::X86, add, (uint32_t)skl);
+    CHECK(ca.found, "coste add en skylake encontrado");
+    CHECK(ca.latency >= 1.0f && ca.latency <= 1.5f, "add skylake latencia ~1");
+    CHECK(ca.ports_count > 0 && ca.port_names, "add skylake usa puertos (paralelo)");
+    // microarq inexistente / forma sin coste -> found=false.
+    CHECK(!cost(Isa::X86, add, 999).found, "microarq fuera de rango -> no found");
+    // arm64: coste en neoverse-n2.
+    int32_t n2 = microarch_by_name(Isa::ARM64, "neoverse-n2");
+    CHECK(n2 >= 0, "arm64: neoverse-n2 presente");
+    AsmCost cn = cost(Isa::ARM64, aadd, (uint32_t)n2);
+    CHECK(cn.found && cn.latency > 0.0f, "arm64: coste add en neoverse-n2");
+    // riscv: coste en sifive-p670.
+    int32_t p6 = microarch_by_name(Isa::RISCV, "sifive-p670");
+    CHECK(p6 >= 0 && cost(Isa::RISCV, amo, (uint32_t)p6).found,
+          "riscv: coste amoadd.w en sifive-p670");
+
     if (g_fail == 0)
         std::printf("=== instr_db_test: %d checks OK, 0 fallidos ===\n",
                     g_checks);

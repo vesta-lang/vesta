@@ -125,5 +125,61 @@ uint16_t overlay_of(Isa isa, int32_t form_id) {
 
 uint32_t form_count(Isa isa) { return tables_for(isa).form_count; }
 
+// -------------------------------------------------------------------------
+// Capa de coste: latencia + puertos por microarquitectura.
+// -------------------------------------------------------------------------
+
+namespace {
+CostData cost_for(Isa isa) {
+    switch (isa) {
+    case Isa::X86:
+        return cost_x86();
+    case Isa::ARM64:
+        return cost_arm64();
+    case Isa::ARM32:
+        return cost_arm32();
+    case Isa::RISCV:
+        return cost_riscv();
+    }
+    return {};
+}
+} // namespace
+
+uint32_t microarch_count(Isa isa) { return cost_for(isa).count; }
+
+const char *microarch_name(Isa isa, uint32_t ua_id) {
+    const CostData c = cost_for(isa);
+    return ua_id < c.count ? c.uarchs[ua_id].name : "";
+}
+
+int32_t microarch_by_name(Isa isa, const std::string &name) {
+    const CostData c = cost_for(isa);
+    for (uint32_t i = 0; i < c.count; ++i)
+        if (name == c.uarchs[i].name) return static_cast<int32_t>(i);
+    return -1;
+}
+
+AsmCost cost(Isa isa, int32_t form_id, uint32_t ua_id) {
+    AsmCost r;
+    const CostData c = cost_for(isa);
+    if (ua_id >= c.count || form_id < 0) return r;
+    const MicroarchData &m = c.uarchs[ua_id];
+    if (static_cast<uint32_t>(form_id) >= m.form_count) return r;
+    int16_t cid = m.form_class[form_id];
+    if (cid < 0) return r;                       // no cronometrada en esta uarch
+    const AsmClass &cl = m.classes[cid];
+    r.found = true;
+    r.recip_tp = cl.recip_tp;
+    r.latency = cl.latency;
+    r.div_cycles = cl.div_cycles;
+    r.uops = cl.uops;
+    r.microcoded = (cl.flags & 0x1) != 0;
+    r.macro_fusible = (cl.flags & 0x2) != 0;
+    r.ports = m.slots + cl.ports_off;
+    r.ports_count = cl.ports_count;
+    r.port_names = m.port_names;
+    return r;
+}
+
 } // namespace instr_db
 } // namespace vx

@@ -94,6 +94,77 @@ const IsaData &db_arm64();
 const IsaData &db_arm32();
 const IsaData &db_riscv();
 
+// ------------------------------------------------------------------------
+// Capa de COSTE por microarquitectura (latencia + puertos = ejecucion
+// paralela superescalar).  La consume el optimizer (scheduling) y el LSP
+// (hover: coste por microarq).  Tablas generadas en gen/instr_db_<isa>_cost_gen.cpp.
+// ------------------------------------------------------------------------
+
+/// Uso de un puerto de ejecucion por una clase (para el modelo superescalar):
+/// @c port indexa el legado de puertos de la microarquitectura.
+struct AsmPortSlot {
+    uint8_t port;  ///< indice al legado de puertos de la microarq.
+    float uops;    ///< uops repartidos a ese grupo de puertos.
+};
+
+/// Clase de scheduling deduplicada (formas con el mismo coste comparten clase).
+struct AsmClass {
+    float recip_tp;    ///< throughput reciproco (1/IPC).
+    float latency;     ///< latencia maxima (proxy del camino critico del nodo).
+    float div_cycles;  ///< ciclos de division (-1 si no aplica).
+    uint16_t uops;     ///< uops emitidas.
+    uint8_t flags;     ///< bit0 microcoded, bit1 macro_fusible.
+    uint16_t ports_off; ///< offset en el pool de AsmPortSlot de la microarq.
+    uint8_t ports_count;
+};
+
+/// Tablas de coste de UNA microarquitectura (las rellena el .cpp generado).
+struct MicroarchData {
+    const char *name;
+    const char *const *port_names; ///< legado: indice -> nombre de puerto.
+    uint16_t port_count;
+    const AsmClass *classes;
+    uint16_t class_count;
+    const AsmPortSlot *slots; ///< pool de puertos de todas las clases.
+    const int16_t *form_class; ///< FormID -> class_id (-1 = sin coste aqui).
+    uint32_t form_count;
+};
+
+/// Lista de microarquitecturas de una ISA (accesor del .cpp de coste generado).
+struct CostData {
+    const MicroarchData *uarchs = nullptr;
+    uint32_t count = 0;
+};
+const CostData &cost_x86();
+const CostData &cost_arm64();
+const CostData &cost_arm32();
+const CostData &cost_riscv();
+
+/// Coste resuelto de una forma en una microarquitectura (resultado publico).
+struct AsmCost {
+    bool found = false;         ///< false = la microarq no cronometra esta forma.
+    float recip_tp = 0.0f;      ///< throughput reciproco.
+    float latency = 0.0f;       ///< latencia (camino critico del nodo).
+    float div_cycles = -1.0f;
+    uint16_t uops = 0;
+    bool microcoded = false;
+    bool macro_fusible = false;
+    /// Puertos usados (para el modelo de ejecucion paralela).  Punteros a la
+    /// tabla de la microarq (sin copia); @c ports_count entradas.
+    const AsmPortSlot *ports = nullptr;
+    uint8_t ports_count = 0;
+    const char *const *port_names = nullptr; ///< resuelve port index -> nombre.
+};
+
+/// Numero de microarquitecturas con coste para la ISA.
+uint32_t microarch_count(Isa isa);
+/// Nombre de la microarquitectura @p ua_id (o "" si fuera de rango).
+const char *microarch_name(Isa isa, uint32_t ua_id);
+/// Indice de una microarquitectura por nombre (-1 si no existe).
+int32_t microarch_by_name(Isa isa, const std::string &name);
+/// Coste de la forma @p form_id en la microarquitectura @p ua_id.
+AsmCost cost(Isa isa, int32_t form_id, uint32_t ua_id);
+
 /**
  * @brief Resuelve el texto de una instruccion (mnemonico + operandos) a su
  *        FormID en la DB de la ISA dada.  Devuelve -1 si el mnemonico no existe.
