@@ -31,8 +31,8 @@
 #include "vx/ast.h"
 #include "ir/ssa_ir.h"
 
-#include "vx/html_diagrams.h"
-#include "vx/graphviz_diagrams.h"
+#include "vx/diagram/html_diagrams.h"
+#include "vx/diagram/graphviz_diagrams.h"
 
 #include <cctype>
 #include <cstdio>

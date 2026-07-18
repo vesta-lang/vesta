@@ -3,7 +3,7 @@
  * @brief Tests del emparejador texto->FormID sobre la DB de instrucciones
  *        embebida (ver vx/instr_db.h).
  */
-#include "vx/instr_db.h"
+#include "vx/asm/instr_db.h"
 
 #include <cstdio>
 

@@ -15,7 +15,7 @@
  * @brief Implementacion de la emision del IR tipado del lift de asm.
  */
 
-#include "vx/asm_lift_emit.h"
+#include "vx/asm/asm_lift_emit.h"
 
 namespace vx {
 

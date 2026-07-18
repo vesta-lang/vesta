@@ -18,7 +18,7 @@
  * tokenizador ligero del cuerpo NASM Intel.
  */
 
-#include "vx/asm_effects.h"
+#include "vx/asm/asm_effects.h"
 #include "vx/parser.h" // get_aot_condcomp_target: el arch del TARGET, no del host
 
 #include <algorithm>

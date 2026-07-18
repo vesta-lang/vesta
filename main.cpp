@@ -49,7 +49,7 @@
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
-#include "vx/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
+#include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
 #include "vx/parser.h"
 #include "vx/semantic_index.h"
@@ -59,7 +59,7 @@ namespace vx {
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 }
-#include "vx/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
+#include "vx/comptime/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
 #include "vx/project_cache.h"  /* Phase M5.B project-level cache */
 #include "vx/velb_signature.h" /* Phase M.L28: firmas digitales */
 #include "util/sqlite_singleton.h"

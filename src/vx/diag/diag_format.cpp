@@ -15,9 +15,9 @@
  * @brief Implementacion del renderizado de diagnosticos (texto/JSON/SARIF).
  */
 
-#include "vx/diag_format.h"
+#include "vx/diag/diag_format.h"
 
-#include "vx/diag_catalog.h"
+#include "vx/diag/diag_catalog.h"
 
 #include <set>
 

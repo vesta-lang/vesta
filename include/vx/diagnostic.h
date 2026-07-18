@@ -43,7 +43,7 @@
 #include <utility>
 #include <vector>
 
-#include "vx/diag_catalog.h" // catalogo multi-idioma (formateo por codigo)
+#include "vx/diag/diag_catalog.h" // catalogo multi-idioma (formateo por codigo)
 
 namespace vx {
 

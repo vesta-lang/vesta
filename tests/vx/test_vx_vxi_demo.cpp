@@ -7,7 +7,7 @@
 //   - El hex dump del binario.
 //   - El round-trip parse -> verificacion.
 
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 
 #include <cstdio>
 #include <fstream>

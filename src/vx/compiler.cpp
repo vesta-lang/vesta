@@ -26,14 +26,14 @@
 #include "ir/ssa_ir_serialize.h"
 #include "vx/lexer.h"
 #include "vx/lowering.h"
-#include "vx/mermaid_diagrams.h"
-#include "vx/graphviz_diagrams.h"
-#include "vx/html_diagrams.h"
-#include "vx/namespace_flatten.h"
+#include "vx/diagram/mermaid_diagrams.h"
+#include "vx/diagram/graphviz_diagrams.h"
+#include "vx/diagram/html_diagrams.h"
+#include "vx/module/namespace_flatten.h"
 #include "vx/parser.h"
 #include <iostream>
 
-#include "vx/comptime_collect.h"
+#include "vx/comptime/comptime_collect.h"
 #include "vx/type_checker.h"
 
 #include "port/transpiler_base.h"

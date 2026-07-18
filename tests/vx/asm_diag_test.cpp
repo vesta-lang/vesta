@@ -3,7 +3,7 @@
  * @brief Tests de los diagnosticos estructurales del asm sobre el CFG
  *        (ver vx/asm_diag.h): codigo muerto, salto no resuelto, bucle sin salida.
  */
-#include "vx/asm_diag.h"
+#include "vx/asm/asm_diag.h"
 
 #include <cstdio>
 #include <string>

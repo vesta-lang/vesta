@@ -3,8 +3,8 @@
  * @brief Tests del catalogo multi-idioma de diagnosticos (ver vx/diag_catalog.h):
  *        seleccion de idioma, sustitucion de placeholders, fallback.
  */
-#include "vx/diag_catalog.h"
-#include "vx/diag_format.h"
+#include "vx/diag/diag_catalog.h"
+#include "vx/diag/diag_format.h"
 #include "vx/diagnostic.h"
 
 #include <cstdio>

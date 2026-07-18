@@ -16,7 +16,7 @@
  *        de mensajes vive en el fichero generado diag_catalog_gen.cpp.
  */
 
-#include "vx/diag_catalog.h"
+#include "vx/diag/diag_catalog.h"
 
 #include <cctype>
 #include <cstdlib>

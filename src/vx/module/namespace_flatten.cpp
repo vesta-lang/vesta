@@ -21,7 +21,7 @@
  * compatibles con port-c y el linker actual del .velb.
  */
 
-#include "vx/namespace_flatten.h"
+#include "vx/module/namespace_flatten.h"
 
 #include <functional>
 #include <unordered_map>

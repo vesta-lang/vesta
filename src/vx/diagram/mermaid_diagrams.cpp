@@ -32,10 +32,10 @@
  *     texto.
  */
 
-#include "vx/mermaid_diagrams.h"
+#include "vx/diagram/mermaid_diagrams.h"
 
 #include "analyze/bigo.h"
-#include "vx/asm_diagram.h" // expansion del CFG de inline asm con coste
+#include "vx/asm/asm_diagram.h" // expansion del CFG de inline asm con coste
 #include "vx/ast.h"
 #include "ir/ssa_ir.h"
 #include "vx/types.h"

@@ -7,9 +7,9 @@
  * @c match espeja el emparejador del analizador: rango del iclass por busqueda
  * binaria + puntuacion por clase/ancho de operando.
  */
-#include "vx/instr_db.h"
+#include "vx/asm/instr_db.h"
 
-#include "vx/asm_effects.h" // asm_canonical_reg (colapsa alias de registro)
+#include "vx/asm/asm_effects.h" // asm_canonical_reg (colapsa alias de registro)
 
 #include <algorithm>
 #include <cctype>

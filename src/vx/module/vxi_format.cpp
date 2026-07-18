@@ -63,7 +63,7 @@
  * Despreciable comparado con el lex+parse del .vx original (~3-5 ms).
  */
 
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 
 #include <algorithm>
 #include <cstring>

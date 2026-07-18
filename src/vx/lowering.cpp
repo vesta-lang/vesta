@@ -18,15 +18,15 @@
 #include "vx/lowering.h"
 #include <algorithm> // UCRT64: no transitivo
 #include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
-#include "vx/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
-#include "vx/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
-#include "vx/asm_lift_emit.h" // lift de patrones atomicos a IR tipado (ASA.3)
-#include "vx/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
-#include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
+#include "vx/asm/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
+#include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
+#include "vx/asm/asm_lift_emit.h" // lift de patrones atomicos a IR tipado (ASA.3)
+#include "vx/asm/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
+#include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
-#include "vx/comptime_introspect.h"   // helpers compartidos rama A
-#include "vx/concepts.h"                  // conceptos como predicado -> CONST bool
-#include "vx/generic_clone.h"             // clone_expr (custom print to_string)
+#include "vx/comptime/comptime_introspect.h"   // helpers compartidos rama A
+#include "vx/generics/concepts.h"                  // conceptos como predicado -> CONST bool
+#include "vx/generics/generic_clone.h"             // clone_expr (custom print to_string)
 #include "vx/lexer.h"                 // parse de fragments para @Macro
 #include "vx/parser.h"                // parse_one_expr para @Macro
 #include "ir/ir_optimizer.h"           // register_pure_new_helper

@@ -13,7 +13,7 @@
  *   - Reserva anticipada de vectores (avoids realloc en hot paths).
  */
 
-#include "vx/module_resolver.h"
+#include "vx/module/module_resolver.h"
 
 #include "vx/lexer.h"
 #include "vx/token.h"

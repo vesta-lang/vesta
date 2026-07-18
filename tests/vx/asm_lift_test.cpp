@@ -3,7 +3,7 @@
  * @brief Tests del reconocedor de patrones de asm liftables a IR tipado
  *        (ver vx/asm_lift.h): lock cmpxchg -> ATOMIC_CAS, lock xadd -> ATOMIC_ADD.
  */
-#include "vx/asm_lift.h"
+#include "vx/asm/asm_lift.h"
 
 #include <cstdio>
 

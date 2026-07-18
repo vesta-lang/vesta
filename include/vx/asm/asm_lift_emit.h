@@ -31,7 +31,7 @@
 #include <unordered_map>
 
 #include "ir/ssa_ir.h"
-#include "vx/asm_lift.h"
+#include "vx/asm/asm_lift.h"
 
 namespace vx {
 

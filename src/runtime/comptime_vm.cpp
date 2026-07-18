@@ -18,7 +18,7 @@
  * .velb in-memory que contenga los `__macro_*` lowered).
  */
 
-#include "vx/comptime_vm.h"
+#include "vx/comptime/comptime_vm.h"
 
 /* Headers runtime full: estos pueden cascade-incluir openssl/capstone
  * pero solo se compilan en este TU (no se filtran al header publico

@@ -37,20 +37,20 @@
 #include "ir/ssa_ir_serialize.h"
 #include "vx/lexer.h"
 #include "vx/lowering.h"
-#include "vx/module_interop.h"
-#include "vx/module_resolver.h"
-#include "vx/namespace_flatten.h" // NS.2: flatten inline namespaces por modulo
+#include "vx/module/module_interop.h"
+#include "vx/module/module_resolver.h"
+#include "vx/module/namespace_flatten.h" // NS.2: flatten inline namespaces por modulo
 #include "vx/parser.h"
 // IMPORTANTE: incluir los headers de diagramas DESPUES de parser.h / lowering.h
 // para que la fwd decl @c namespace ast { struct ModuleNode; } del header
 // resuelva correctamente al tipo @c vx::ast::ModuleNode ya conocido en
 // este punto.  De otra forma el compilador interpreta @c ast::ModuleNode
 // como @c ::ast::ModuleNode (global), causando mismatch de tipos.
-#include "vx/graphviz_diagrams.h"
-#include "vx/html_diagrams.h"
-#include "vx/mermaid_diagrams.h"
+#include "vx/diagram/graphviz_diagrams.h"
+#include "vx/diagram/html_diagrams.h"
+#include "vx/diagram/mermaid_diagrams.h"
 #include "vx/type_checker.h"
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 #include "util/fs_utils.h"   // fs::get_executable_path()
 
 #include <atomic>

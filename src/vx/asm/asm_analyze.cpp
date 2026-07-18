@@ -15,12 +15,12 @@
  * @brief Implementacion del resumen de efectos de bloque de un inline asm
  *        (ver asm_analyze.h).
  */
-#include "vx/asm_analyze.h"
+#include "vx/asm/asm_analyze.h"
 
 #include <cctype>
 #include <cstdlib>
 
-#include "vx/asm_effects.h"
+#include "vx/asm/asm_effects.h"
 
 namespace vx {
 

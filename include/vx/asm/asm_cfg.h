@@ -39,7 +39,7 @@
 #include <string>
 #include <vector>
 
-#include "vx/instr_db.h" // vx::instr_db::Isa
+#include "vx/asm/instr_db.h" // vx::instr_db::Isa
 
 namespace vx {
 

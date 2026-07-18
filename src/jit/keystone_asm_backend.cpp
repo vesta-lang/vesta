@@ -22,7 +22,7 @@
  */
 
 #include "jit/keystone_asm_backend.h"
-#include "vx/asm_backend.h"
+#include "vx/asm/asm_backend.h"
 
 #include <capstone/capstone.h>
 #include <keystone/keystone.h>

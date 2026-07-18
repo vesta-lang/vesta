@@ -15,10 +15,10 @@
  * @brief Implementacion del reconocimiento de patrones de asm liftables a IR.
  */
 
-#include "vx/asm_lift.h"
+#include "vx/asm/asm_lift.h"
 
-#include "vx/asm_cfg.h"     // build_asm_cfg (estructura del bucle LL/SC arm64)
-#include "vx/asm_effects.h" // asm_canonical_reg
+#include "vx/asm/asm_cfg.h"     // build_asm_cfg (estructura del bucle LL/SC arm64)
+#include "vx/asm/asm_effects.h" // asm_canonical_reg
 
 #include <cctype>
 #include <string>

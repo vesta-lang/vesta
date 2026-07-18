@@ -122,7 +122,7 @@ def gen_cost(root, isa, out):
     with open(out, "w", encoding="ascii", newline="\n") as f:
         f.write("// GENERADO por tools/import/gen_cpp_db.py -- NO editar a mano.\n")
         f.write("// Coste por microarquitectura %s (latencia + puertos).\n" % isa)
-        f.write('#include "vx/instr_db.h"\n\n')
+        f.write('#include "vx/asm/instr_db.h"\n\n')
         f.write("namespace vx { namespace instr_db { namespace {\n\n")
         for i, (name, legend, cls_rows, slots, fc) in enumerate(uarchs):
             # legado de puertos (placeholder si vacio: C++ no admite array [0]).
@@ -181,7 +181,7 @@ def gen_feat(root, isa, out):
     with open(out, "w", encoding="ascii", newline="\n") as f:
         f.write("// GENERADO por tools/import/gen_cpp_db.py -- NO editar a mano.\n")
         f.write("// Features (extensiones de ISA) por CPU %s.\n" % isa)
-        f.write('#include "vx/instr_db.h"\n\n')
+        f.write('#include "vx/asm/instr_db.h"\n\n')
         f.write("namespace vx { namespace instr_db { namespace {\n\n")
         # pool de nombres de feature
         f.write("const char *const kFn[] = {")
@@ -278,7 +278,7 @@ def main():
         f.write("// GENERADO por tools/import/gen_cpp_db.py -- NO editar a mano.\n")
         f.write("// DB de instrucciones %s embebida (formas: sintaxis+overlay).\n"
                 % isa)
-        f.write('#include "vx/instr_db.h"\n\n')
+        f.write('#include "vx/asm/instr_db.h"\n\n')
         f.write("namespace vx { namespace instr_db { namespace {\n\n")
         # pool de strings
         f.write("const char *const kStr[] = {\n")

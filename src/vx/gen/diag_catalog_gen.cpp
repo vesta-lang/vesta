@@ -1,7 +1,7 @@
 /* GENERADO por tools/import/gen_diag_catalog.py -- NO EDITAR.
  * Fuente: catalog/diagnostics.toml.  Catalogo de diagnosticos
  * (codigo estable VXNNNN -> mensaje por idioma).  Ver vx/diag_catalog.h. */
-#include "vx/diag_catalog.h"
+#include "vx/diag/diag_catalog.h"
 
 #include <cstring>
 

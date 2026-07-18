@@ -28,9 +28,9 @@
  * extra que en Mermaid quedaria fuera del label.
  */
 
-#include "vx/graphviz_diagrams.h"
+#include "vx/diagram/graphviz_diagrams.h"
 
-#include "vx/asm_diagram.h" // expansion del CFG de inline asm con coste
+#include "vx/asm/asm_diagram.h" // expansion del CFG de inline asm con coste
 
 #include "analyze/bigo.h"
 #include "vx/ast.h"

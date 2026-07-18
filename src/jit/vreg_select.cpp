@@ -34,8 +34,8 @@
 #include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"        // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
 #include "gc/raw_allocator.h" // Phase D.7 perf: inline slab fast-path
-#include "vx/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
-#include "vx/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
+#include "vx/asm/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
+#include "vx/asm/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
 /* arena -> windows.h (Win32) define macros que chocan con nombres del enum
  * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST.
  */

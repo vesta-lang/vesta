@@ -16,7 +16,7 @@
  * No usamos framework (consistente con el resto del proyecto).
  */
 
-#include "vx/module_resolver.h"
+#include "vx/module/module_resolver.h"
 #include "vx/diagnostic.h"
 #include "vx/ast.h"
 

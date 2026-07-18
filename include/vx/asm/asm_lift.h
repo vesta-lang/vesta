@@ -36,7 +36,7 @@
 #include <cstdint>
 #include <string>
 
-#include "vx/instr_db.h"
+#include "vx/asm/instr_db.h"
 
 namespace vx {
 

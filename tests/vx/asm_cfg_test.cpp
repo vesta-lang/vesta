@@ -3,7 +3,7 @@
  * @brief Tests de la reconstruccion del CFG de bloques de inline asm
  *        (ver vx/asm_cfg.h): bloques basicos + aristas desde labels/saltos.
  */
-#include "vx/asm_cfg.h"
+#include "vx/asm/asm_cfg.h"
 
 #include <algorithm>
 #include <cstdio>

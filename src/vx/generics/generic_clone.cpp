@@ -22,7 +22,7 @@
  * funciones libres y metodos genericos.
  */
 
-#include "vx/generic_clone.h"
+#include "vx/generics/generic_clone.h"
 
 namespace vx {
 namespace vxgen {

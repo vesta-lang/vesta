@@ -47,7 +47,7 @@
 #include <memory>
 #include "vx/ast.h"
 #include "vx/borrow_checker.h"
-#include "vx/comptime_vm.h"
+#include "vx/comptime/comptime_vm.h"
 #include "vx/diagnostic.h"
 
 namespace vx {

@@ -1,6 +1,6 @@
 // GENERADO por tools/import/gen_cpp_db.py -- NO editar a mano.
 // Features (extensiones de ISA) por CPU x86.
-#include "vx/instr_db.h"
+#include "vx/asm/instr_db.h"
 
 namespace vx { namespace instr_db { namespace {
 

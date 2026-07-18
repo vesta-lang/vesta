@@ -12,7 +12,7 @@
  *   - Detecta truncacion (buffer corto).
  */
 
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 
 #include <cstdio>
 #include <iostream>

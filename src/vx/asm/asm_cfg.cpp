@@ -15,7 +15,7 @@
  * @brief Implementacion de la reconstruccion del CFG de un bloque de inline asm.
  */
 
-#include "vx/asm_cfg.h"
+#include "vx/asm/asm_cfg.h"
 
 #include <algorithm>
 #include <cctype>

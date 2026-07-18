@@ -15,11 +15,11 @@
  * @brief Implementacion de los diagramas del CFG de asm anotados con coste.
  */
 
-#include "vx/asm_diagram.h"
+#include "vx/asm/asm_diagram.h"
 
-#include "vx/asm_cfg.h"
-#include "vx/asm_diag.h"
-#include "vx/diag_catalog.h" // formatear el mensaje del diagnostico por idioma
+#include "vx/asm/asm_cfg.h"
+#include "vx/asm/asm_diag.h"
+#include "vx/diag/diag_catalog.h" // formatear el mensaje del diagnostico por idioma
 
 #include <cstdio>
 #include <sstream>

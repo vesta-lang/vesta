@@ -15,7 +15,7 @@
  * @brief Implementacion de los diagnosticos estructurales del CFG de asm.
  */
 
-#include "vx/asm_diag.h"
+#include "vx/asm/asm_diag.h"
 
 #include <deque>
 #include <set>

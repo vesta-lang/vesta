@@ -19,7 +19,7 @@
  * El compiler.cpp (en M2.e) las invoca explicitamente.
  */
 
-#include "vx/module_interop.h"
+#include "vx/module/module_interop.h"
 
 #include <algorithm>
 #include <cassert>
@@ -27,10 +27,10 @@
 
 #include "vx/type_checker.h"
 #include "vx/types.h"
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 #include "vx/diagnostic.h" // #cross-module-generics: re-parse de templates
 #include "vx/lexer.h"
-#include "vx/generic_clone.h" // rename_idents: helpers del modulo de la plantilla
+#include "vx/generics/generic_clone.h" // rename_idents: helpers del modulo de la plantilla
 #include "vx/parser.h"
 
 namespace vx {

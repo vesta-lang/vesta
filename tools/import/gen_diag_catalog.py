@@ -64,8 +64,8 @@ def main():
     lines = []
     lines.append("/* GENERADO por tools/import/gen_diag_catalog.py -- NO EDITAR.")
     lines.append(" * Fuente: catalog/diagnostics.toml.  Catalogo de diagnosticos")
-    lines.append(" * (codigo estable VXNNNN -> mensaje por idioma).  Ver vx/diag_catalog.h. */")
-    lines.append('#include "vx/diag_catalog.h"')
+    lines.append(" * (codigo estable VXNNNN -> mensaje por idioma).  Ver vx/diag/diag_catalog.h. */")
+    lines.append('#include "vx/diag/diag_catalog.h"')
     lines.append("")
     lines.append("#include <cstring>")
     lines.append("")

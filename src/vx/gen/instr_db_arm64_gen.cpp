@@ -1,6 +1,6 @@
 // GENERADO por tools/import/gen_cpp_db.py -- NO editar a mano.
 // DB de instrucciones arm64 embebida (formas: sintaxis+overlay).
-#include "vx/instr_db.h"
+#include "vx/asm/instr_db.h"
 
 namespace vx { namespace instr_db { namespace {
 

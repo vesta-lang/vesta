@@ -6,7 +6,7 @@
  *
  * Cubre las cuatro arquitecturas: x86_64, x86 (32-bit), x86_16 y arm64.
  */
-#include "vx/asm_analyze.h"
+#include "vx/asm/asm_analyze.h"
 
 #include <cstdio>
 #include <string>

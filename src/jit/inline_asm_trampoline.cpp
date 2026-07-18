@@ -14,7 +14,7 @@
 #include "jit/inline_asm_trampoline.h"
 
 #include "jit/code_cache.h"
-#include "vx/asm_backend.h"
+#include "vx/asm/asm_backend.h"
 #include "ffi/virtual_lib_registry.h" // inc.6: registrar el helper runner
 #include "runtime/proceso_runtime.h" // inc.6: acceso a ProcessVM::asm_ctx + vm_mem
 #include "ir/ssa_ir.h"               // inc.6: IrFunction/IrInstr/IrOp del batch

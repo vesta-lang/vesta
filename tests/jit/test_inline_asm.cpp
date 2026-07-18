@@ -32,7 +32,7 @@
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
 #include "vesta_rt/abi.h"
-#include "vx/asm_backend.h"
+#include "vx/asm/asm_backend.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -10,7 +10,7 @@
  */
 
 #include "vx/project_cache.h"
-#include "vx/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
+#include "vx/module/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
 
 #include <atomic>
 #include <cstdint>

@@ -21,12 +21,12 @@
  * check_type_bounds.  Todo es compile-time: cero codigo emitido.
  */
 
-#include "vx/concepts.h"
+#include "vx/generics/concepts.h"
 
-#include "vx/comptime_introspect.h"
+#include "vx/comptime/comptime_introspect.h"
 #include "vx/type_checker.h"
 
-#include "vx/generic_clone.h"
+#include "vx/generics/generic_clone.h"
 
 namespace vx {
 

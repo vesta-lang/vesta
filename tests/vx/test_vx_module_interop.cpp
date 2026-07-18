@@ -19,8 +19,8 @@
  * M2.e en el siguiente sprint).
  */
 
-#include "vx/module_interop.h"
-#include "vx/vxi_format.h"
+#include "vx/module/module_interop.h"
+#include "vx/module/vxi_format.h"
 #include "vx/type_checker.h"
 #include "vx/diagnostic.h"
 #include "vx/lexer.h"

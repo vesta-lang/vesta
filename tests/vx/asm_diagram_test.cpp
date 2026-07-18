@@ -4,7 +4,7 @@
  *        (ver vx/asm_diagram.h): mermaid + graphviz con latencia/cuellos/flags/
  *        diagnosticos.
  */
-#include "vx/asm_diagram.h"
+#include "vx/asm/asm_diagram.h"
 
 #include <cstdio>
 #include <string>

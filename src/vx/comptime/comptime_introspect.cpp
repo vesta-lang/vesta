@@ -13,11 +13,11 @@
  *        desde el lowering (emision de CONST IR).
  */
 
-#include "vx/comptime_introspect.h"
+#include "vx/comptime/comptime_introspect.h"
 #include <algorithm> // UCRT64: no transitivo
 #include "vx/lexer.h"
 #include "vx/parser.h"
-#include "vx/concepts.h" // #6: composicion de conceptos en predicados comptime
+#include "vx/generics/concepts.h" // #6: composicion de conceptos en predicados comptime
 #include "ffi/virtual_lib_registry.h" //   : virtual libs
 
 #include <cstdio>

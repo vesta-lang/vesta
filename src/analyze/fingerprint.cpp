@@ -10,7 +10,7 @@
 #include <unordered_set>
 
 #include "ir/ssa_ir.h"
-#include "vx/asm_analyze.h"
+#include "vx/asm/asm_analyze.h"
 
 namespace analyze {
 

@@ -14,7 +14,7 @@
 #include <unordered_set>
 
 #include "vx/diagnostic.h"
-#include "vx/module_resolver.h"
+#include "vx/module/module_resolver.h"
 
 namespace vx {
 

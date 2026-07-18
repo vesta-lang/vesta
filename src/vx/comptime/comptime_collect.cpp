@@ -14,7 +14,7 @@
  * artefacto comptime separado sea auto-suficiente.
  */
 
-#include "vx/comptime_collect.h"
+#include "vx/comptime/comptime_collect.h"
 
 #include <algorithm>
 #include <unordered_map>

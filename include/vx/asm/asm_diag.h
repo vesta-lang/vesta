@@ -35,8 +35,8 @@
 #include <string>
 #include <vector>
 
-#include "vx/asm_cfg.h"
-#include "vx/instr_db.h"
+#include "vx/asm/asm_cfg.h"
+#include "vx/asm/instr_db.h"
 
 namespace vx {
 

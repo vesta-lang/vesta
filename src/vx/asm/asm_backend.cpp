@@ -19,7 +19,7 @@
  * arranque.  Asi vx_lib NO depende de Keystone.
  */
 
-#include "vx/asm_backend.h"
+#include "vx/asm/asm_backend.h"
 
 #include "vx/parser.h" // get_aot_condcomp_target: el arch del TARGET, no del host
 
