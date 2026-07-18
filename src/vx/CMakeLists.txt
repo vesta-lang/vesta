@@ -80,6 +80,11 @@ add_library(vx_lib STATIC
     # instruccion de asm_effects; base del compilador consciente del asm.
     asm_analyze.cpp
     asm_backend.cpp
+    # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
+    # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
+    # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
+    instr_db.cpp
+    gen/instr_db_x86_gen.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs
