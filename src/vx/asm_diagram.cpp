@@ -19,6 +19,7 @@
 
 #include "vx/asm_cfg.h"
 #include "vx/asm_diag.h"
+#include "vx/diag_catalog.h" // formatear el mensaje del diagnostico por idioma
 
 #include <cstdio>
 #include <sstream>
@@ -197,7 +198,7 @@ std::string asm_cfg_mermaid(const std::string &body,
     if (!diags.empty()) {
         std::string dl = "diagnosticos:\n";
         for (const AsmDiag &d : diags)
-            dl += d.code + " " + d.message + "\n";
+            dl += d.code + " " + diag::format(d.code, d.args) + "\n";
         os << "    " << p << "_diag [\"" << esc_mermaid(dl) << "\"]\n";
         os << "    style " << p << "_diag fill:#fee,stroke:#c33\n";
     }
@@ -254,7 +255,7 @@ std::string asm_cfg_graphviz(const std::string &body,
     if (!diags.empty()) {
         std::string dl = "diagnosticos:\\n";
         for (const AsmDiag &d : diags)
-            dl += d.code + " " + d.message + "\\n";
+            dl += d.code + " " + diag::format(d.code, d.args) + "\\n";
         os << "    " << p << "_diag [label=\"" << esc_dot(dl)
            << "\", style=filled, fillcolor=\"#ffeeee\", color=\"#cc3333\"];\n";
     }

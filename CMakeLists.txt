@@ -758,6 +758,19 @@ else ()
     target_link_libraries(test_asm_lift PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Catalogo multi-idioma de diagnosticos.
+add_executable(test_diag_catalog tests/vx/diag_catalog_test.cpp)
+target_include_directories(test_diag_catalog PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_diag_catalog PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_diag_catalog PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_diag_catalog PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_diag_catalog PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone

@@ -1,0 +1,51 @@
+# Catalogo de diagnosticos del compilador Vesta.
+#
+# Cada entrada es un CODIGO estable (VXNNNN) + el mensaje por idioma.  El codigo
+# es lo PERMANENTE: la documentacion, las busquedas y las herramientas lo
+# referencian, no el texto.  Cambiar la redaccion NO cambia el codigo.
+#
+# Placeholders posicionales {0}, {1}, ...  se sustituyen por los ARGS (datos) que
+# pasa el emisor -- nunca se interpola texto crudo en el mensaje.
+#
+# ANADIR UN IDIOMA es trivial: se anade su codigo ISO a `languages` y su clave a
+# cada entrada, y se regenera con tools/import/gen_diag_catalog.py.  NO se traduce
+# NUNCA: keywords del lenguaje, atributos, nombres de tipos, identificadores del
+# usuario ni los propios codigos de diagnostico.
+#
+# Numeracion por componente: VX0xxx lexer | VX1xxx parser | VX2xxx type-checker |
+# VX3xxx lowering/IR | VX4xxx linker/modulos | VX5xxx codegen/AOT | VX6xxx VPP |
+# VXAxxx asm/ASA | VX9xxx CLI/driver.
+
+[meta]
+# El ORDEN fija el indice interno de idioma (0 = primero = fallback).
+languages = ["en", "es"]
+
+# --- asm / ASA (VXAxxx) ---
+
+[VXA001]
+en = "asm: dead code: unreachable instruction in the asm block"
+es = "asm: codigo muerto: instruccion inalcanzable en el bloque asm"
+
+[VXA002]
+en = "asm: jump to label '{0}' not defined in the asm block"
+es = "asm: salto a etiqueta '{0}' no definida en el bloque asm"
+
+[VXA003]
+en = "asm: infinite loop: control cannot leave the asm block"
+es = "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"
+
+[VXA004]
+en = "asm: register '{0}' read uninitialized in the asm block"
+es = "asm: registro '{0}' leido sin inicializar en el bloque asm"
+
+[VXA005]
+en = "asm: flags read without a prior comparison/operation in the asm block"
+es = "asm: flags leidas sin una comparacion/operacion previa en el bloque asm"
+
+[VXA006]
+en = "asm: register '{0}' modified but not declared in clobbers(...) with 'noinfer'"
+es = "asm: registro '{0}' modificado pero no declarado en clobbers(...) con 'noinfer'"
+
+[VXA007]
+en = "asm: flags are modified but clobbers(\"flags\") is not declared with 'noinfer'"
+es = "asm: las flags se modifican pero no se declara clobbers(\"flags\") con 'noinfer'"

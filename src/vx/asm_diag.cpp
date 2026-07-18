@@ -104,8 +104,7 @@ std::vector<AsmDiag> asm_diagnose_cfg(const AsmCfg &cfg) {
         AsmDiag d;
         d.severity = AsmDiagSeverity::Warning;
         d.line_no = in.line_no;
-        d.code = "VXA001";
-        d.message = "codigo muerto: instruccion inalcanzable en el bloque asm";
+        d.code = "VXA001"; // sin args.
         out.push_back(std::move(d));
     }
 
@@ -125,8 +124,7 @@ std::vector<AsmDiag> asm_diagnose_cfg(const AsmCfg &cfg) {
                 d.severity = AsmDiagSeverity::Warning;
                 d.line_no = in.line_no;
                 d.code = "VXA002";
-                d.message = "salto a etiqueta '" + in.target +
-                            "' no definida en el bloque asm";
+                d.args = {in.target}; // {0} = etiqueta destino.
                 out.push_back(std::move(d));
             }
         }
@@ -144,9 +142,7 @@ std::vector<AsmDiag> asm_diagnose_cfg(const AsmCfg &cfg) {
                 AsmDiag d;
                 d.severity = AsmDiagSeverity::Warning;
                 d.line_no = in.line_no;
-                d.code = "VXA003";
-                d.message =
-                    "bucle sin salida: el flujo no puede abandonar el bloque asm";
+                d.code = "VXA003"; // sin args.
                 out.push_back(std::move(d));
                 reported_loop = true;
             }
@@ -312,8 +308,7 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
                             d.severity = AsmDiagSeverity::Warning;
                             d.line_no = cfg.insns[i].line_no;
                             d.code = "VXA004";
-                            d.message = "registro '" + r +
-                                        "' leido sin inicializar en el bloque asm";
+                            d.args = {r}; // {0} = registro.
                             out.push_back(std::move(d));
                         }
                     }
@@ -328,9 +323,7 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
                     AsmDiag d;
                     d.severity = AsmDiagSeverity::Warning;
                     d.line_no = cfg.insns[i].line_no;
-                    d.code = "VXA005";
-                    d.message = "flags leidas sin una comparacion/operacion "
-                                "previa en el bloque asm";
+                    d.code = "VXA005"; // sin args.
                     out.push_back(std::move(d));
                 }
             }

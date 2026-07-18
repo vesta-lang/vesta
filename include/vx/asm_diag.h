@@ -43,12 +43,14 @@ namespace vx {
 /// Severidad de un diagnostico del asm.
 enum class AsmDiagSeverity : uint8_t { Info, Warning, Error };
 
-/// Un diagnostico estructural del bloque de asm.
+/// Un diagnostico estructural del bloque de asm.  Lleva el CODIGO estable + los
+/// ARGS (datos); el texto lo resuelve el catalogo multi-idioma al imprimir (ver
+/// vx/diag_catalog.h).  No lleva mensaje pre-formateado.
 struct AsmDiag {
     AsmDiagSeverity severity = AsmDiagSeverity::Warning;
     uint32_t line_no = 0;    ///< linea fisica dentro del bloque (1-based).
-    std::string code;        ///< codigo estable (p.ej. "VXA001").
-    std::string message;     ///< mensaje legible.
+    std::string code;        ///< codigo estable del catalogo (p.ej. "VXA001").
+    std::vector<std::string> args; ///< valores para los placeholders {0},{1},...
 };
 
 /**

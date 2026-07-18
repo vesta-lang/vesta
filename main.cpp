@@ -454,6 +454,9 @@ int main(int argc, char *argv[]) {
     asm_multi_process::run_and_capture("chcp 65001");
 #endif
     runtime_ensure_vx_callback_registered();
+    // i18n: seleccionar el idioma de los diagnosticos desde el entorno
+    // (VESTA_LANG > LC_ALL > LANG; fallback al primer idioma del catalogo).
+    vx::diag::set_language(vx::diag::language_from_env());
     // Phase AS inc.4b: registrar el backend de ensamblado Keystone para que el
     // frontend Vesta valide la sintaxis del inline asm en compile-time.
     jit::register_keystone_asm_backend();

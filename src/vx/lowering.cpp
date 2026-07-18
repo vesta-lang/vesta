@@ -13099,7 +13099,13 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                 SourceLoc dl = s->body_loc;
                 if (d.line_no > 0)
                     dl.line = s->body_loc.line + (d.line_no - 1);
-                diags_.warning(dl, "asm: " + d.message + " [" + d.code + "]");
+                // Diagnostico CATALOGADO: solo codigo + args; el texto (y su
+                // idioma) los resuelve el catalogo al imprimir.
+                const DiagLevel lvl =
+                    (d.severity == vx::AsmDiagSeverity::Error) ? DiagLevel::ERR
+                    : (d.severity == vx::AsmDiagSeverity::Info) ? DiagLevel::NOTE
+                                                               : DiagLevel::WARN;
+                diags_.diag(dl, lvl, d.code, d.args);
             }
         };
         vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, s->body);
@@ -13568,16 +13574,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     break;
                 }
             if (!declared)
-                diags_.warning(s->body_loc,
-                               "asm: registro '" + c +
-                                   "' modificado pero no declarado en "
-                                   "clobbers(...) con 'noinfer' [VXA006]");
+                diags_.diag(s->body_loc, DiagLevel::WARN, "VXA006", {c});
         }
         if (inf.clobber_flags && !s->clobbers_flags && !s->q_preserves_flags &&
             !s->q_pure)
-            diags_.warning(s->body_loc,
-                           "asm: las flags se modifican pero no se declara "
-                           "clobbers(\"flags\") con 'noinfer' [VXA006]");
+            diags_.diag(s->body_loc, DiagLevel::WARN, "VXA007", {});
     }
     // `nomem`/`preserves_flags`/`pure` afirman que NO se toca: override.
     if (s->q_nomem || s->q_pure) final_mem = false;

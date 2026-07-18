@@ -95,6 +95,11 @@ add_library(vx_lib STATIC
     # Emision del IR tipado del lift (separada del reconocimiento, para mantener
     # el lowering minimo).
     asm_lift_emit.cpp
+    # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
+    # idioma).  La tabla se genera desde catalog/diagnostics.toml con
+    # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.
+    diag_catalog.cpp
+    gen/diag_catalog_gen.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
