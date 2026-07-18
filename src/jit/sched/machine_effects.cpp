@@ -57,23 +57,43 @@ void add_mem_addr_reads(MEffects &e, const MOperand &o) {
     if (index != static_cast<uint8_t>(MReg::NONE)) add(e.reads, index);
 }
 
+/// Base del espacio de claves para registros que NO estan en MReg (mascaras K,
+/// MMX/x87, segmento, control/debug, MSR/MXCSR, zmm16-31...): se rastrean por su
+/// indice de register_set en el pool de strings -> misma cadena, misma clave.
+constexpr uint32_t SPECIAL_BASE = 1u << 21;
+
+/// Sufijo numerico de un nombre de registro tras un prefijo de N letras
+/// (p.ej. "XMM12" -> 12, "R8" -> 8).  -1 si no hay digitos validos.
+int suffix_num(const std::string &s, size_t pref) {
+    if (s.size() <= pref) return -1;
+    int n = 0;
+    for (size_t i = pref; i < s.size(); ++i) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        n = n * 10 + (s[i] - '0');
+    }
+    return n;
+}
+
 /**
- * @brief Decodifica un @c register_set de la DB (p.ej. "AX", "DX", "RCX", "R8")
- *        al id de @c MReg GP x86, si nombra un registro CONCRETO.  Devuelve -1
- *        si es una CLASE (contiene '/', "GPR64", ...) o no es GP -> ese operando
- *        no es un registro implicito fijo.
- *
- * La DB usa el nombre de la FAMILIA (A/C/D/B/SP/BP/SI/DI/R8..R15) con el ancho
- * como campo aparte; para las dependencias importa el registro completo.
+ * @brief Decodifica un @c register_set de la DB a una CLAVE de dependencia
+ *        uniforme, cubriendo TODAS las clases de registro x86:
+ *          - GP (A/C/D/B/SP/BP/SI/DI/R8..R15, cualquier ancho) -> id de MReg 0-15
+ *            (aliasa los operandos GP explicitos).
+ *          - vector XMM/YMM/ZMM 0-15 -> MReg XMM (16+n); YMMn/ZMMn aliasan XMMn.
+ *          - todo lo demas con NOMBRE fijo (mascaras K0-7, MMX MM0-7, x87 ST(n),
+ *            segmento ES/CS/SS/DS/FS/GS, control CRn, debug DRn, MSR, MXCSR,
+ *            ZMM16-31...) -> SPECIAL_BASE + @p regset_idx (clave estable por
+ *            nombre; no esta en MReg pero se rastrea igual).
+ * @return la clave, o UINT32_MAX si es una CLASE (varios regs, "GPR64", "-") o
+ *         vacio -> no es un registro implicito fijo.
  */
-int regset_to_mreg(const char *rs) {
-    if (rs == nullptr || rs[0] == '\0' || rs[0] == '-') return -1;
-    // Una clase (varios registros) lleva '/'.  No es un implicito fijo.
+uint32_t regset_to_key(const char *rs, uint16_t regset_idx) {
+    if (rs == nullptr || rs[0] == '\0' || rs[0] == '-') return UINT32_MAX;
     for (const char *p = rs; *p; ++p)
-        if (*p == '/') return -1;
+        if (*p == '/') return UINT32_MAX; // clase (lista de regs)
     const std::string s(rs);
-    // Prefijo de ancho opcional (R/E) + letra de familia.
-    // Familias de una letra: A C D B (acumulador/contador/datos/base).
+
+    // --- GP (familia de una letra o Rn, cualquier ancho) ---
     struct Fam { const char *k; int reg; };
     static const Fam fam[] = {
         {"AX", 0},  {"EAX", 0}, {"RAX", 0}, {"AL", 0},  {"AH", 0},
@@ -86,15 +106,27 @@ int regset_to_mreg(const char *rs) {
         {"DI", 7},  {"EDI", 7}, {"RDI", 7}, {"DIL", 7},
     };
     for (const Fam &f : fam)
-        if (s == f.k) return f.reg;
-    // R8..R15 (con sufijos D/W/B): "R8", "R8D", "R8W", "R8B", ... hasta R15.
-    if ((s[0] == 'R' || s[0] == 'r') && s.size() >= 2 && s[1] >= '8' &&
-        s[1] <= '9') {
+        if (s == f.k) return static_cast<uint32_t>(f.reg);
+    if ((s[0] == 'R') && s.size() >= 2 && s[1] >= '8' && s[1] <= '9') {
+        // R8..R15 con sufijos D/W/B opcionales.
         int n = s[1] - '0';
         if (s.size() >= 3 && s[2] >= '0' && s[2] <= '5') n = 10 + (s[2] - '0');
-        if (n >= 8 && n <= 15) return n;
+        if (n >= 8 && n <= 15) return static_cast<uint32_t>(n);
     }
-    return -1;
+
+    // --- vector XMM/YMM/ZMM (SSE/AVX/AVX512): 0-15 aliasan MReg XMM ---
+    if (s.size() >= 4 &&
+        (s.compare(0, 3, "XMM") == 0 || s.compare(0, 3, "YMM") == 0 ||
+         s.compare(0, 3, "ZMM") == 0)) {
+        const int n = suffix_num(s, 3);
+        if (n >= 0 && n <= 15)
+            return static_cast<uint32_t>(static_cast<int>(MReg::XMM0) + n);
+        // ZMM16..31 (AVX512): no estan en MReg -> clave especial por nombre.
+    }
+
+    // --- resto de clases con nombre fijo (K/MM/ST/seg/CR/DR/MSR/MXCSR/...) ---
+    // No estan en MReg; se rastrean por su indice de register_set (estable).
+    return SPECIAL_BASE + regset_idx;
 }
 
 /// El MInstr referencia N operandos explicitos (dst + src1 + src2 no-vacios).
@@ -177,10 +209,10 @@ bool db_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
         // una tabla a mano.  No consume un slot del MInstr.
         if (implicit) {
             if (o.kind == vx::instr_db::OP_REG && o.regset < db.str_count) {
-                const int r = regset_to_mreg(db.str[o.regset]);
-                if (r >= 0) {
-                    if (rd) add(e.reads, static_cast<uint32_t>(r));
-                    if (wr) add(e.writes, static_cast<uint32_t>(r));
+                const uint32_t k = regset_to_key(db.str[o.regset], o.regset);
+                if (k != UINT32_MAX) {
+                    if (rd) add(e.reads, k);
+                    if (wr) add(e.writes, k);
                 }
             } else if (o.kind == vx::instr_db::OP_MEM) {
                 if (rd) e.reads_mem = true;
