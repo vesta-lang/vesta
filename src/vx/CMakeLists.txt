@@ -85,6 +85,9 @@ add_library(vx_lib STATIC
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
     instr_db.cpp
     gen/instr_db_x86_gen.cpp
+    gen/instr_db_arm64_gen.cpp
+    gen/instr_db_arm32_gen.cpp
+    gen/instr_db_riscv_gen.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs

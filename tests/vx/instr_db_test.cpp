@@ -59,6 +59,32 @@ int main() {
     CHECK(match(Isa::X86, "frobnicate", {}) < 0,
           "mnemonico inexistente -> -1");
 
+    // --- ARM64 (AArch64) ---
+    CHECK(form_count(Isa::ARM64) == 4619, "arm64: 4619 formas embebidas");
+    int32_t aadd = match(Isa::ARM64, "add", {reg(0), reg(0), reg(0)});
+    CHECK(aadd >= 0 && std::string(iclass_name(Isa::ARM64, aadd)) == "ADD",
+          "arm64: match add x,x,x");
+    // ldaxr (LL/SC) -> overlay ll_sc; dmb -> barrera.
+    int32_t ldaxr = match(Isa::ARM64, "ldaxr", {reg(0), mem(0)});
+    CHECK(ldaxr >= 0 && (overlay_of(Isa::ARM64, ldaxr) & OVL_LL_SC),
+          "arm64: ldaxr overlay ll_sc");
+    int32_t dmb = match(Isa::ARM64, "dmb", {});
+    CHECK(dmb >= 0 && (overlay_of(Isa::ARM64, dmb) & OVL_BARRIER),
+          "arm64: dmb overlay barrera");
+
+    // --- RISC-V ---
+    CHECK(form_count(Isa::RISCV) == 1867, "riscv: 1867 formas embebidas");
+    // amoadd.w -> overlay atomic.
+    int32_t amo = match(Isa::RISCV, "amoadd.w", {reg(0), reg(0), reg(0), mem(0)});
+    CHECK(amo >= 0 && (overlay_of(Isa::RISCV, amo) & OVL_ATOMIC),
+          "riscv: amoadd.w overlay atomic");
+    // fence -> overlay barrera.
+    int32_t fen = match(Isa::RISCV, "fence", {ParsedOp{OP_IMM, 0}, ParsedOp{OP_IMM, 0}});
+    CHECK(fen >= 0 && (overlay_of(Isa::RISCV, fen) & OVL_BARRIER),
+          "riscv: fence overlay barrera");
+    // la misma DB no confunde ISAs: 'ldaxr' no existe en x86.
+    CHECK(match(Isa::X86, "ldaxr", {}) < 0, "x86 no tiene ldaxr");
+
     if (g_fail == 0)
         std::printf("=== instr_db_test: %d checks OK, 0 fallidos ===\n",
                     g_checks);

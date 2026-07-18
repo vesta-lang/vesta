@@ -71,8 +71,8 @@ struct ParsedOp {
     uint16_t width = 0; ///< 0 = desconocido (no restringe).
 };
 
-/// ISA soportadas por la DB embebida.
-enum class Isa { X86 };
+/// ISA soportadas por la DB embebida (ARM64 = AArch64, ARM32 = A32/T32).
+enum class Isa { X86, ARM64, ARM32, RISCV };
 
 /// Punteros a las tablas generadas de una ISA.  Lo rellena el @c .cpp generado
 /// (@c gen/instr_db_<isa>_gen.cpp) via su accesor @c db_<isa>(); el resto del
@@ -88,8 +88,11 @@ struct IsaData {
     unsigned iclass_count = 0;
 };
 
-/// Accesor de las tablas x86 (definido en @c gen/instr_db_x86_gen.cpp).
+/// Accesores de las tablas de cada ISA (definidos en @c gen/instr_db_*_gen.cpp).
 const IsaData &db_x86();
+const IsaData &db_arm64();
+const IsaData &db_arm32();
+const IsaData &db_riscv();
 
 /**
  * @brief Resuelve el texto de una instruccion (mnemonico + operandos) a su

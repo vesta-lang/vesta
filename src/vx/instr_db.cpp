@@ -23,6 +23,12 @@ IsaData tables_for(Isa isa) {
     switch (isa) {
     case Isa::X86:
         return db_x86();
+    case Isa::ARM64:
+        return db_arm64();
+    case Isa::ARM32:
+        return db_arm32();
+    case Isa::RISCV:
+        return db_riscv();
     }
     return {};
 }

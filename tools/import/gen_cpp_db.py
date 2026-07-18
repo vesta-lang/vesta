@@ -50,9 +50,14 @@ def _cesc(s):
 
 def main():
     if len(sys.argv) < 4:
-        sys.exit("uso: python gen_cpp_db.py <arch-data-dir> <isa> <salida.inc>")
+        sys.exit("uso: python gen_cpp_db.py <arch-data-dir> <isa> <salida.cpp>")
     root, isa, out = sys.argv[1:4]
-    forms = database.load_vxisa(os.path.join(root, isa, isa + ".vxisa"))
+    # clave de ISA -> ruta del .vxisa (ARM comparte carpeta: A64 y A32/T32).
+    vxisa_rel = {
+        "x86": "x86/x86.vxisa", "arm64": "arm/arm.vxisa",
+        "arm32": "arm/arm32.vxisa", "riscv": "riscv/riscv.vxisa",
+    }.get(isa, os.path.join(isa, isa + ".vxisa"))
+    forms = database.load_vxisa(os.path.join(root, vxisa_rel))
     nforms = (max(forms) + 1) if forms else 0
 
     strs = Interner()
