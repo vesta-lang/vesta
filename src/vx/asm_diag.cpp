@@ -183,10 +183,15 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
     std::set<std::string> universe;
     for (size_t i = 0; i < cfg.insns.size(); ++i) {
         sem[i] = instr_db::asm_insn_sem(isa, cfg.insns[i].text, ua_id);
+        // Un operando que no es un registro reconocido (una const comptime aun
+        // sin sustituir, una etiqueta, etc.) puede llegar con canonico vacio: no
+        // es un registro, se ignora.
         for (const std::string &r : sem[i].reads)
-            universe.insert(r);
+            if (!r.empty())
+                universe.insert(r);
         for (const std::string &r : sem[i].writes)
-            universe.insert(r);
+            if (!r.empty())
+                universe.insert(r);
         if (has_flags) {
             // Lee flags: una rama condicional (jCC / b.CC), o un consumidor de
             // flags que la DB modela (adc/sbb/cmovCC/setCC -> operando FLAGS).

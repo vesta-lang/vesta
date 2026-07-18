@@ -13105,20 +13105,34 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         // ESTRUCTURALES (codigo muerto, salto no resuelto, bucle sin salida):
         // solidos, sin dependencias.
         emit(vx::asm_diagnose_cfg(cfg));
-        // FLAGS leidas sin comparacion previa (VXA005): independiente de los
-        // register() bindings, asi que se puede emitir sin conocerlos.  Se
-        // filtra VXA004 (registro sin inicializar), que SI necesita los bindings
-        // (pendiente de extraerlos del scope).
+        // DATAFLOW.  defined_in = registros ligados por register() EN SCOPE (los
+        // que el `lookup` sigue resolviendo a su ALLOCA).  Solo lo computamos
+        // para el modelo CLASICO (sin operandos inc.7): el inc.7 usa placeholders
+        // %name en el body -> las lecturas/escrituras de registro no son fiables
+        // ahi, asi que en ese caso solo emitimos VXA005 (flags, basado en el
+        // mnemonico/rama, no en los operandos).  Tratar TODAS las bindings como
+        // definidas es un SUPERSET seguro: puede infra-avisar (output leido antes
+        // de escribirse) pero nunca da un falso positivo.
+        const bool classic_model = s->operands.empty();
+        std::vector<std::string> defined_in;
+        if (classic_model) {
+            for (const auto &b : fn_->asm_reg_bindings)
+                if (lookup(b.name) == b.alloca_value) {
+                    std::string c = vx::asm_canonical_reg(b.reg);
+                    if (!c.empty())
+                        defined_in.push_back(std::move(c));
+                }
+        }
         int32_t ua = vx::instr_db::microarch_by_name(vx::instr_db::Isa::X86,
                                                      "intel-skylake");
         std::vector<vx::AsmDiag> df = vx::asm_diagnose_uninit(
-            cfg, vx::instr_db::Isa::X86, {},
+            cfg, vx::instr_db::Isa::X86, defined_in,
             static_cast<uint32_t>(ua < 0 ? 0 : ua));
-        std::vector<vx::AsmDiag> flags_only;
+        std::vector<vx::AsmDiag> keep;
         for (auto &d : df)
-            if (d.code == "VXA005")
-                flags_only.push_back(std::move(d));
-        emit(flags_only);
+            if (classic_model || d.code == "VXA005") // VXA004 solo en clasico.
+                keep.push_back(std::move(d));
+        emit(keep);
     }
 
     ir::IrInstr ia{};
