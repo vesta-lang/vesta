@@ -100,6 +100,10 @@ typedef struct {
 #define AOT_RELOC_SECREL32                                                      \
     5 /* TLS PE (Windows): *(int32*)site = offset del target dentro de su       \
        * seccion (.tls), no la VA.  El emisor PE escribe target_off. */
+#define AOT_RELOC_ARM64_CALL26                                                  \
+    6 /* AArch64 BL/B (R_AARCH64_CALL26/JUMP26): parchea el campo imm26 de la    \
+       * instruccion de 32 bits en el sitio con ((target - site) >> 2).  Para   \
+       * el `bl main` del _start arm64 y llamadas cross-funcion arm64. */
 
 /**
  * @brief Una relocation a resolver tras el layout.
@@ -148,6 +152,11 @@ typedef struct {
      * IMAGE_TLS_DIRECTORY y registra este callback en AddressOfCallBacks. */
     int tls_callback_section;
     uint32_t tls_callback_off;
+    /* Arquitectura de destino (e_machine ELF / Machine PE): 0 => x86-64 por
+     * defecto.  EM_AARCH64 (183) para ARM 64-bit; el emisor lo propaga a
+     * LibPEparse (elf_builder_set_machine) en lugar de hardcodear x86-64.  Asi
+     * el MISMO emisor produce ELF/PE de x86-64 o AArch64 segun este campo. */
+    uint16_t machine;
 } AotLayoutCfg;
 
 /**

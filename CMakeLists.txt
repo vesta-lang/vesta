@@ -339,7 +339,15 @@ add_subdirectory(libs/SourceCode/LibPEparse)
 # uniones anonimas y macros ELF -- compilan sin friccion C/C++) y expone la ABI
 # plana de include/aot/aot_emit_shim.h.  Enlaza LibPEparse de forma PUBLIC, asi
 # que linkar aot_emit arrastra LibPEparse transitivamente.
-add_library(aot_emit STATIC ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/aot_emit_shim.c)
+# Desacople multi-arch de la emision: el shim se parte en aot/common/ (arch-
+# neutral) + aot/x86_64 + aot/x86_32 + aot/x86_16 + aot/arm64.  Los .c de
+# emision incluyen aot/common/aot_emit_internal.h RELATIVO a su fichero (no se
+# mete src/ en el include-path).
+add_library(aot_emit STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/common/aot_emit_common.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_64/aot_emit_x86_64.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_32/aot_emit_x86_32.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_16/aot_emit_x86_16.c)
 target_include_directories(aot_emit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(aot_emit PUBLIC LibPEparse)
 

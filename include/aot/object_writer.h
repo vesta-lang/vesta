@@ -116,6 +116,9 @@ struct LayoutConfig {
     /// @c AddressOfCallBacks del IMAGE_TLS_DIRECTORY.
     int tls_callback_section = -1;
     uint32_t tls_callback_off = 0;
+    /// Arquitectura de destino (e_machine ELF / Machine PE): 0 => x86-64.
+    /// EM_AARCH64 (183) para ARM 64-bit; el emisor lo propaga a LibPEparse.
+    uint16_t machine = 0;
 };
 
 /**
@@ -144,6 +147,9 @@ enum class RelocKind : uint8_t {
         5, ///< TLS PE (Windows): *(int32*)site = offset del target DENTRO de su
            ///< seccion (.tls), no la VA.  El acceso suma este offset a la base
            ///< del bloque TLS (cargada desde el TEB en runtime).
+    ARM64_CALL26 =
+        6, ///< AArch64 BL/B: parchea imm26 = (target - site) >> 2 en la
+           ///< instruccion de 32 bits del sitio (R_AARCH64_CALL26/JUMP26).
 };
 
 /**
@@ -240,6 +246,13 @@ class ObjectWriter {
 
     /// Fija el tipo de artefacto (EXEC por defecto, OBJECT relocatable).
     void set_output_kind(OutputKind k) { kind_ = k; }
+
+    /// Fija la arquitectura (e_machine ELF / Machine PE): 0 => x86-64,
+    /// 183 => AArch64.  El MISMO emisor produce x86-64 o ARM segun esto.
+    void set_machine(uint16_t machine) { cfg_.machine = machine; }
+
+    /// Fija la base de carga (image_base) del EXEC.  0 => default del formato.
+    void set_image_base(uint64_t base) { cfg_.image_base = base; }
 
     /// Activa la emision de simbolos de DEPURACION (--aot-debug=1): en un EXEC,
     /// los @c add_symbol registrados se embeben ademas como @c .symtab / COFF

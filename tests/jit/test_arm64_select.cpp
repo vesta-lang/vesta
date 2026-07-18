@@ -3,7 +3,7 @@
  * @brief Tests del selector IR -> AArch64 (ver jit/arm64/arm64_select.h): emite
  *        el texto ensamblador del subconjunto entero de linea recta.
  */
-#include "aot/arm64_elf.h"
+#include "aot/arm64/arm64_elf.h"
 #include "jit/arm64/arm64_select.h"
 
 #include <cstdint>

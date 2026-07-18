@@ -83,6 +83,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     ccfg.elf_stack_size = cfg_.elf_stack_size;
     ccfg.tls_callback_section = cfg_.tls_callback_section;
     ccfg.tls_callback_off = cfg_.tls_callback_off;
+    ccfg.machine = cfg_.machine;
 
     // TLS (thread_local): si hay una seccion TLS hace falta el cargador dinamico
     // (monta el bloque TLS + el thread pointer antes del entry) -> forzar la ruta

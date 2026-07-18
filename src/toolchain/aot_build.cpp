@@ -1045,21 +1045,24 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             // Arquitectura objetivo: x86-64 (default) o x86-32 (modo protegido,
             // kernels): 8 GP eax-edi, sin REX, operando 32-bit, regparm(3);
             // subset entero de 32-bit (i32/u32/ptr32).
-            bool aot_mode32 = false;
+            aot::AotArch arch = aot::AotArch::X86_64;
             {
                 const std::string a = opt.arch;
                 if (a == "x86-32" || a == "x86_32" || a == "i386")
-                    aot_mode32 = true;
+                    arch = aot::AotArch::X86_32;
                 else if (a == "x86-64" || a == "x86_64" || a == "amd64")
-                    aot_mode32 = false;
+                    arch = aot::AotArch::X86_64;
+                else if (a == "aarch64" || a == "arm64" || a == "arm-64")
+                    arch = aot::AotArch::ARM64;
                 else {
                     std::cerr << "[aot] --aot-arch desconocido: '" << a
-                              << "' (use x86-64 | x86-32).\n";
+                              << "' (use x86-64 | x86-32 | aarch64).\n";
                     return EXIT_FAILURE;
                 }
             }
-            const aot::AotArch arch =
-                aot_mode32 ? aot::AotArch::X86_32 : aot::AotArch::X86_64;
+            // aot_mode32 (bandera x86-32) se deriva de la arch; se usa aguas
+            // abajo (contenedor ELF32, mode32 del codegen, etc.).
+            const bool aot_mode32 = (arch == aot::AotArch::X86_32);
 
             // Backend de codegen nativo por arquitectura (Phase H.5): el driver
             // ya no llama al codegen x86 directamente, sino a traves de esta
@@ -1901,6 +1904,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
             w.set_mode32(aot_mode32); // x86-32 EXEC -> contenedor ELF32
+            // Arquitectura del contenedor: arm64 -> e_machine EM_AARCH64 (183)
+            // en el MISMO emisor (LibPEparse), sin writer hand-rolled aparte.
+            // Base de carga en la RAM de la machine `virt` de QEMU (0x40000000+;
+            // el _start bare fija sp en 0x40300000); el x86 usa su default.
+            if (arch == aot::AotArch::ARM64) {
+                w.set_machine(183 /*EM_AARCH64*/);
+                w.set_image_base(0x40200000ull);
+            }
             // TLS PE: si el modulo tiene __vx_tls_init (callback de plantilla),
             // pasar su ubicacion al emisor para registrarlo en el TLS directory.
             {
@@ -2009,12 +2020,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 w.set_flat_base(bin_base);
             } else {
                 w.set_entry(text_sec, 0); // _start en .text offset 0
-                // stub->main: rel32 a la VA real de main (resuelta por el
-                // writer).
+                // stub->main: reloc a la VA real de main (resuelta por el
+                // writer).  x86 usa REL32; arm64 usa el imm26 del BL (CALL26).
                 const FnLoc &ml = fn_loc["main"];
                 w.add_reloc(text_sec, stub.main_call_off,
                             aot::RelocTarget::addr(ml.sec, ml.off),
-                            aot::RelocKind::REL32);
+                            (arch == aot::AotArch::ARM64)
+                                ? aot::RelocKind::ARM64_CALL26
+                                : aot::RelocKind::REL32);
             }
 
             // --aot-debug=1: en un EJECUTABLE, registra TODAS las funciones como
