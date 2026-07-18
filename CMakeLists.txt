@@ -517,7 +517,8 @@ endif ()
 # ---------------------------------------------------------------------------
 add_library(vesta_toolchain STATIC
         src/toolchain/toolchain.cpp
-        src/toolchain/aot_build.cpp)
+        src/toolchain/aot_build.cpp
+        src/toolchain/native_backend.cpp)
 target_include_directories(vesta_toolchain PRIVATE ${VM_INCLUDES})
 target_compile_features(vesta_toolchain PUBLIC cxx_std_17)
 

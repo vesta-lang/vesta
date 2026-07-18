@@ -49,6 +49,7 @@
 #include "ir/ssa_ir_serialize.h"
 #include "jit/vec_isa.h"
 #include "jit/vreg_pipeline.h"
+#include "toolchain/native_backend.h" // backend de codegen nativo por arch (H.5)
 #include "util/fs_utils.h"
 #include "vx/compiler.h"
 
@@ -1060,6 +1061,17 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             const aot::AotArch arch =
                 aot_mode32 ? aot::AotArch::X86_32 : aot::AotArch::X86_64;
 
+            // Backend de codegen nativo por arquitectura (Phase H.5): el driver
+            // ya no llama al codegen x86 directamente, sino a traves de esta
+            // interfaz.  Anadir una arch = implementar NativeBackend.
+            std::unique_ptr<aot::NativeBackend> native_backend =
+                aot::make_native_backend(arch);
+            if (!native_backend) {
+                std::cerr << "[aot] no hay backend de codegen para la arch "
+                             "solicitada.\n";
+                return EXIT_FAILURE;
+            }
+
             // Backend de punto flotante (--float-isa).  Hoy el codegen float
             // (FP-regalloc en XMM, packing-ready) esta en construccion; el flag
             // queda cableado para que el selector elija el backend cuando llegue.
@@ -1445,12 +1457,18 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 af.section_perms = itf->second->section_perms;
                 af.section_at = itf->second->section_at;
                 af.section_order = itf->second->section_order;
-                af.bytes = jit::vreg_compile_native(
-                    *itf->second, {}, {}, {}, {}, &af.relocs, aot_pic,
-                    /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                    /*mode32=*/aot_mode32, /*fisa=*/aot_fisa,
-                    /*emit_line_map=*/false, /*line_map_out=*/nullptr,
-                    /*asm_labels_out=*/nullptr, /*stackmaps_out=*/&af.stackmaps);
+                {
+                    aot::NativeCompileOpts nopts;
+                    nopts.pic = aot_pic;
+                    nopts.target_sysv = (fmt == aot::ObjFormat::ELF);
+                    nopts.mode32 = aot_mode32;
+                    nopts.fisa = aot_fisa;
+                    aot::NativeCompileResult ncr =
+                        native_backend->compile_function(*itf->second, nopts);
+                    af.bytes = std::move(ncr.bytes);
+                    af.relocs = std::move(ncr.relocs);
+                    af.stackmaps = std::move(ncr.stackmaps);
+                }
                 if (af.bytes.empty()) {
                     std::cerr
                         << "[aot] el selector vreg no soporta la funcion '"
@@ -1475,10 +1493,18 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     for (const auto &v : variants) {
                         AotFn vf;
                         vf.name = nm + v.first;
-                        vf.bytes = jit::vreg_compile_native(
-                            *itf->second, {}, {}, {}, {}, &vf.relocs, aot_pic,
-                            /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                            /*mode32=*/aot_mode32, /*fisa=*/v.second);
+                        {
+                            aot::NativeCompileOpts vopts;
+                            vopts.pic = aot_pic;
+                            vopts.target_sysv = (fmt == aot::ObjFormat::ELF);
+                            vopts.mode32 = aot_mode32;
+                            vopts.fisa = v.second;
+                            aot::NativeCompileResult vcr =
+                                native_backend->compile_function(*itf->second,
+                                                                 vopts);
+                            vf.bytes = std::move(vcr.bytes);
+                            vf.relocs = std::move(vcr.relocs);
+                        }
                         if (vf.bytes.empty()) {
                             std::cerr << "[aot] variante " << vf.name
                                       << " no compilable.\n";
