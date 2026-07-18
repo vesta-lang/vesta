@@ -16,6 +16,7 @@
 #include "ir/ssa_ir.h"
 #include "jit/auto_jit.h"
 #include "jit/code_cache.h"
+#include "jit/codegen_target.h"
 #include "jit/interval.h"
 #include "jit/jit_registry.h"
 #include "jit/linear_scan.h"
@@ -26,6 +27,7 @@
 #include "jit/ssa_coalesce.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_select.h"
+#include "jit/x86_64/x86_target.h"
 #include "jit/x86_encoder.h"
 
 #include <cstdio>
@@ -42,7 +44,7 @@ namespace {
  *        (A/B).  Reordena por camino critico/latencia respetando el DAG completo
  *        de dependencias -> oculta latencias y expone ILP al core superescalar.
  */
-void maybe_schedule(MFunction &pf) {
+void maybe_schedule(MFunction &pf, sched::EffIsa isa) {
     // Default ON: e2e 649/649 con scheduling activo (efectos por rol de MOp +
     // implicitos de la DB -> reorden solo de lo independiente).  VESTA_SCHED=0
     // lo desactiva (A/B).
@@ -52,7 +54,7 @@ void maybe_schedule(MFunction &pf) {
     }();
     if (!on) return;
     static const sched::GenericCostModel cm;
-    sched::schedule_function(pf, cm, sched::EffIsa::X86);
+    sched::schedule_function(pf, cm, isa);
 }
 } // namespace
 
@@ -109,7 +111,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
     peephole_physical(pf);
-    maybe_schedule(pf);
+    maybe_schedule(pf, sched::EffIsa::X86);
 
     /* 3. Encode a bytes. */
     X86Encoder enc;
@@ -200,7 +202,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
     peephole_physical(pf);
-    maybe_schedule(pf);
+    maybe_schedule(pf, sched::EffIsa::X86);
 
     X86Encoder enc;
     std::vector<uint8_t> bytes;
@@ -253,45 +255,31 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
     /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
      *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
      *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
+    /* Target de codegen para esta compilacion (x86 aqui).  A partir de la
+     * seleccion el pipeline es ARCH-NEUTRAL: llama a target.select / .rewrite /
+     * .encode sin conocer la ISA -> el mismo orquestador sirve para arm64. */
+    const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
+                           pic, target_sysv, mode32, fisa, emit_line_map);
+
+    /* 1. SELECCION: IR (SSA) -> MachineIR de vregs (ABI HOST_LEAF). */
     MFunction mf;
-    if (!vreg_select(fn, mf, AbiKind::HOST_LEAF, resolve_call, ent,
-                     resolve_native, resolve_symbol, pic, target_sysv, mode32,
-                     fisa, emit_line_map))
-        return {};
+    if (!target.select(fn, mf)) return {};
+    const TargetRegInfo &tri = target.reg_info();
 
-    /* Descriptor del target.  x86-64: ABI del TARGET (no del host) -- SysV
-     * para ELF, Win64 para PE -> cross-target + boundary externo correcto;
-     * RBX reservado (conservador).  x86-32 (mode32): 8 GP eax-edi, regparm(3),
-     * pointer_size=4 -> el regalloc solo usa registros que existen en 32-bit.
-     */
-    const TargetRegInfo &tri =
-        mode32 ? target_x86_32() : target_x86_64_abi(target_sysv);
-
-    /* 2. Intervalos + P1 coalescing + 3. asignacion linear-scan.  El
-     *    coalescing es target-neutral: mismo pase que el JIT (VM_ABI). */
+    /* 2. Intervalos + P1 coalescing + 3. asignacion linear-scan (COMUN a todo
+     *    target: toman el TargetRegInfo). */
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
     RegAlloc ra = linear_scan(ivs, tri);
 
-    /* 4. Rewrite a fisico con prologue/epilogue HOST_LEAF + carga de params
-     *    desde los arg_regs (parallel-move).  Pasamos &ivs (el rewrite lo
-     *    usa para two-address legalization y, si hubiera CALLs, stackmaps);
-     *    en BARE no hay GC que consuma esos stackmaps, pero construirlos es
-     *    inocuo. */
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF, &ivs);
+    /* 4. REWRITE a fisico (prologo/epilogo + spills de la ABI del target). */
+    MFunction pf = target.rewrite(mf, ra, ivs);
+    target.peephole(pf);
+    maybe_schedule(pf, target.sched_isa());
 
-    /* 4b. P1 peephole: borrar self-moves dejados por el coalescing. */
-    peephole_physical(pf);
-    maybe_schedule(pf);
-
-    /* 5. Encode a bytes nativos.  mode32 -> x86-32 (sin REX, operando 32-bit).
-     */
-    X86Encoder enc;
-    enc.set_mode32(mode32);
-    // avx+: MOVES escalares float en VX (no mezclar con las ops VX).
-    enc.set_vx_scalar(fisa == FloatIsa::AVX || fisa == FloatIsa::AVX512F);
+    /* 5. ENCODE a bytes maquina del target. */
     std::vector<uint8_t> bytes;
-    if (enc.encode(pf, bytes) == 0 || bytes.empty()) return {};
+    if (target.encode(pf, bytes) == 0 || bytes.empty()) return {};
 
     /* Solo-LSP: el encoder ya poblo pf.line_map (si emit_line_map).  La
      * entregamos al caller para la vista correlada fuente <-> asm. */
@@ -380,7 +368,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     osr.header_block = static_cast<MBlockId>(header_block);
     osr.required_captures = required_captures; // red de seguridad live-in
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs, &osr);
-    maybe_schedule(pf);
+    maybe_schedule(pf, sched::EffIsa::X86);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 
     /* 5. Encode. */
