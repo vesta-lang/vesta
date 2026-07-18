@@ -156,6 +156,23 @@ int main() {
     CHECK(x280 >= 0 && cpu_has_feature(Isa::RISCV, (uint32_t)x280, "StdExtZve32x"),
           "riscv: sifive-x280 tiene Zve32x (vector)");
 
+    // --- coste de BLOQUE (modelo superescalar: latencia + puertos) ---
+    {
+        const char *blk = "mov rax, rbx\nadd rax, rcx\nimul rax, rax\n";
+        AsmBlockCost bc = analyze_asm_cost(Isa::X86, blk, (uint32_t)skl);
+        CHECK(bc.instr_count == 3 && bc.matched == 3, "bloque: 3 instr emparejadas");
+        CHECK(bc.costed == 3, "bloque: 3 con coste en skylake");
+        CHECK(bc.total_uops >= 3, "bloque: uops >= 3");
+        CHECK(bc.latency_sum > 0.0f, "bloque: latencia serie > 0");
+        CHECK(bc.throughput > 0.0f && !bc.port_pressure.empty(),
+              "bloque: throughput + presion de puertos (modelo paralelo)");
+        // una linea desconocida cuenta como instr no emparejada.
+        AsmBlockCost b2 =
+            analyze_asm_cost(Isa::X86, "add rax, rcx\nfrobnicate\n", (uint32_t)skl);
+        CHECK(b2.instr_count == 2 && b2.matched == 1,
+              "bloque: linea desconocida no empareja");
+    }
+
     if (g_fail == 0)
         std::printf("=== instr_db_test: %d checks OK, 0 fallidos ===\n",
                     g_checks);

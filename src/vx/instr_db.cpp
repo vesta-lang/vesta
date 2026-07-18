@@ -366,5 +366,65 @@ bool cpu_has_feature(Isa isa, uint32_t cpu_id, const std::string &feature) {
     return false;
 }
 
+AsmBlockCost analyze_asm_cost(Isa isa, const std::string &body,
+                              uint32_t ua_id) {
+    AsmBlockCost out;
+    // presion por puerto acumulada por NOMBRE (dos instrucciones distintas
+    // pueden compartir grupo de puertos).
+    std::vector<std::pair<std::string, float>> pressure;
+    auto add_port = [&](const std::string &name, float uops) {
+        for (auto &p : pressure)
+            if (p.first == name) {
+                p.second += uops;
+                return;
+            }
+        pressure.emplace_back(name, uops);
+    };
+    float tp_sum = 0.0f;
+
+    size_t i = 0;
+    while (i <= body.size()) {
+        size_t nl = body.find('\n', i);
+        std::string line =
+            body.substr(i, nl == std::string::npos ? std::string::npos : nl - i);
+        i = (nl == std::string::npos) ? body.size() + 1 : nl + 1;
+        int32_t fid = match_asm_line(isa, line);
+        if (fid < 0) {
+            // ¿linea con contenido pero mnemonico desconocido?  cuenta como
+            // instruccion no emparejada (para la completitud).
+            std::string t = line;
+            size_t c = t.find_first_of(";");
+            if (c != std::string::npos) t.resize(c);
+            size_t s2 = t.find("//");
+            if (s2 != std::string::npos) t.resize(s2);
+            while (!t.empty() && std::isspace((unsigned char)t.front()))
+                t.erase(0, 1);
+            while (!t.empty() && std::isspace((unsigned char)t.back()))
+                t.pop_back();
+            if (!t.empty() && t.back() != ':') ++out.instr_count;
+            continue;
+        }
+        ++out.instr_count;
+        ++out.matched;
+        AsmCost c = cost(isa, fid, ua_id);
+        if (!c.found) continue;
+        ++out.costed;
+        out.total_uops += c.uops;
+        out.latency_sum += c.latency;
+        tp_sum += c.recip_tp;
+        for (uint8_t k = 0; k < c.ports_count; ++k) {
+            const AsmPortSlot &ps = c.ports[k];
+            add_port(c.port_names[ps.port], ps.uops);
+        }
+    }
+    // throughput = max(puerto mas cargado, suma de recip_tp) -- cota inferior de
+    // ciclos del bloque bien planificado (ejecucion paralela por puertos).
+    float max_port = 0.0f;
+    for (const auto &p : pressure) max_port = std::max(max_port, p.second);
+    out.throughput = std::max(max_port, tp_sum);
+    out.port_pressure = std::move(pressure);
+    return out;
+}
+
 } // namespace instr_db
 } // namespace vx

@@ -199,6 +199,35 @@ int32_t cpu_by_name(Isa isa, const std::string &name);
 /// La CPU @p cpu_id implementa la feature @p feature (extension de ISA).
 bool cpu_has_feature(Isa isa, uint32_t cpu_id, const std::string &feature);
 
+// ------------------------------------------------------------------------
+// Coste de un BLOQUE de asm: modelo superescalar (latencia + presion de
+// puertos = ejecucion en paralelo).  Lo consumen el LSP (hover: coste del
+// bloque) y el optimizer (scheduling).
+// ------------------------------------------------------------------------
+
+/// Coste agregado de un bloque de asm en una microarquitectura.
+struct AsmBlockCost {
+    uint32_t instr_count = 0; ///< instrucciones (lineas no vacias/label).
+    uint32_t matched = 0;     ///< con forma reconocida en la DB.
+    uint32_t costed = 0;      ///< con coste en esta microarq.
+    uint32_t total_uops = 0;  ///< suma de uops.
+    /// Cota SUPERIOR de latencia (suma serie).  El camino critico EXACTO
+    /// necesita el grafo de dependencias entre registros (futuro, ASA.2).
+    float latency_sum = 0.0f;
+    /// Ciclos por el modelo SUPERESCALAR: max entre la presion del puerto mas
+    /// cargado (ejecucion paralela) y la suma de throughput reciproco.  Es la
+    /// cota INFERIOR de ciclos del bloque bien planificado.
+    float throughput = 0.0f;
+    /// Presion por puerto (uops acumuladas por grupo de puertos): muestra que
+    /// unidad de ejecucion es el cuello de botella.
+    std::vector<std::pair<std::string, float>> port_pressure;
+};
+
+/// Analiza el coste de @p body (cuerpo de un @c asm) en la microarq @p ua_id:
+/// empareja cada linea (@ref match_asm_line), acumula uops/latencia y reparte
+/// las uops por puerto (modelo de ejecucion paralela superescalar).
+AsmBlockCost analyze_asm_cost(Isa isa, const std::string &body, uint32_t ua_id);
+
 /**
  * @brief Clasifica un operando de asm (token) a su @c (kind, width) para el
  *        matcher.  Conoce los registros de la ISA (x86 rax/eax/xmm...; ARM
