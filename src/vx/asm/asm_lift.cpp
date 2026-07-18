@@ -132,14 +132,103 @@ std::string plain_mem_reg(const std::string &op) {
     return asm_canonical_reg(inner);
 }
 
-AsmLift lift_x86(const std::vector<std::string> &insns) {
+/// Normaliza un `lock cmpxchg [addr], des`: devuelve true + addr/des canonicos.
+bool parse_lock_cmpxchg(const std::string &insn, std::string &addr,
+                        std::string &des) {
+    std::string mnem;
+    std::vector<std::string> ops;
+    split_insn(insn, mnem, ops);
+    if (mnem == "lock") {
+        split_insn(trim(insn.substr(4)), mnem, ops);
+    } else {
+        return false; // sin lock -> no atomico cross-core
+    }
+    if (mnem != "cmpxchg" || ops.size() != 2) return false;
+    addr = plain_mem_reg(ops[0]);
+    if (addr.empty()) return false;
+    const instr_db::ParsedOp d =
+        instr_db::parse_operand(instr_db::Isa::X86, ops[1]);
+    if (d.kind != instr_db::OP_REG || d.width != 64) return false;
+    des = asm_canonical_reg(ops[1]);
+    return true;
+}
+
+/// ¿La instruccion @p insn ESCRIBE el registro canonico @p reg?  Consulta el
+/// modelo de efectos completo (implicitos + operandos escritos) -> asi el lift
+/// multi-instruccion verifica que nada intermedio pise el valor esperado.
+bool insn_writes_reg(const std::string &insn, const std::string &reg) {
+    std::string mnem;
+    std::vector<std::string> ops;
+    split_insn(insn, mnem, ops);
+    if (mnem == "lock" && !ops.empty()) split_insn(trim(insn.substr(4)), mnem, ops);
+    const AsmEffects eff = asm_effects_for(mnem, "x86_64");
+    for (const std::string &w : eff.implicit_write)
+        if (w == reg) return true;
+    for (size_t i = 0; i < ops.size(); ++i)
+        if ((eff.operand_write_mask >> i) & 1u)
+            if (asm_canonical_reg(ops[i]) == reg) return true;
+    return !eff.known; // desconocida -> conservador (puede escribir)
+}
+
+/// Lift multi-instruccion x86: `mov rax, <exp>` (setup del expected) seguido de
+/// `lock cmpxchg [addr], <des>`, con expected EXPLICITO.  Verifica (efectos)
+/// que ninguna instruccion intermedia escriba rax.
+AsmLift lift_x86_cas_multi(const std::vector<std::string> &insns) {
     AsmLift r;
-    // Incremento 1: forma de UNA instruccion (el setup de expected/desired lo
-    // aportan los register() bindings).
-    if (insns.size() != 1) {
-        r.note = "solo se lifta la forma de una instruccion (lock cmpxchg/xadd)";
+    // La ULTIMA instruccion debe ser el lock cmpxchg.
+    std::string addr, des;
+    const size_t last = insns.size() - 1;
+    if (!parse_lock_cmpxchg(insns[last], addr, des)) {
+        r.note = "multi: la ultima instruccion no es lock cmpxchg [reg],reg64";
         return r;
     }
+    // Buscar hacia atras el `mov rax, <exp>` que fija el esperado.
+    for (size_t i = last; i-- > 0;) {
+        std::string mnem;
+        std::vector<std::string> ops;
+        split_insn(insns[i], mnem, ops);
+        if (mnem == "mov" && ops.size() == 2 &&
+            asm_canonical_reg(ops[0]) == "rax") {
+            const instr_db::ParsedOp e =
+                instr_db::parse_operand(instr_db::Isa::X86, ops[1]);
+            if (e.kind != instr_db::OP_REG || e.width != 64) {
+                r.note = "multi: el expected (mov rax, X) debe ser un reg64";
+                return r;
+            }
+            // Verificar que nada ENTRE el mov y el cmpxchg pise rax.
+            for (size_t j = i + 1; j < last; ++j)
+                if (insn_writes_reg(insns[j], "rax")) {
+                    r.note = "multi: una instruccion intermedia pisa rax";
+                    return r;
+                }
+            r.op = AsmLiftOp::AtomicCas;
+            r.addr_reg = addr;
+            r.exp_reg = asm_canonical_reg(ops[1]); // EXPLICITO
+            r.des_reg = des;
+            r.result_reg = "rax"; // old value queda en rax
+            r.width = 64;
+            return r;
+        }
+        // Si una instruccion intermedia pisa rax ANTES de hallar el mov, no hay
+        // setup limpio del expected.
+        if (insn_writes_reg(insns[i], "rax")) {
+            r.note = "multi: rax se escribe sin un `mov rax, <exp>` claro";
+            return r;
+        }
+    }
+    r.note = "multi: no se hallo el setup `mov rax, <exp>` del expected";
+    return r;
+}
+
+AsmLift lift_x86(const std::vector<std::string> &insns) {
+    AsmLift r;
+    if (insns.empty()) {
+        r.note = "bloque vacio";
+        return r;
+    }
+    // Multi-instruccion: setup del expected + lock cmpxchg.
+    if (insns.size() != 1) return lift_x86_cas_multi(insns);
+
     std::string mnem;
     std::vector<std::string> ops;
     split_insn(insns[0], mnem, ops);

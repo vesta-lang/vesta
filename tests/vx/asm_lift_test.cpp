@@ -70,12 +70,34 @@ int main() {
         CHECK(l.op == AsmLiftOp::None, "cmpxchg [rdi+8] -> None (solo [reg])");
     }
 
-    // --- Multiples instrucciones: NO se lifta (forma de 1 instr en inc.1). ---
+    // --- Multi-instruccion: `mov rax, exp` + `lock cmpxchg` -> AtomicCas con
+    //     el expected EXPLICITO (no el rax implicito). ---
     {
         AsmLift l = asm_lift_detect(Isa::X86,
                                     "mov rax, rdx\n"
                                     "lock cmpxchg [rdi], rsi\n");
-        CHECK(l.op == AsmLiftOp::None, "multi-instr -> None (inc.1)");
+        CHECK(l.op == AsmLiftOp::AtomicCas, "multi mov+cmpxchg -> AtomicCas");
+        CHECK(l.addr_reg == "rdi", "multi: addr=rdi");
+        CHECK(l.exp_reg == "rdx", "multi: exp=rdx (EXPLICITO)");
+        CHECK(l.des_reg == "rsi", "multi: des=rsi");
+        CHECK(l.result_reg == "rax", "multi: old=rax");
+    }
+    // --- Instruccion intermedia que NO toca rax: sigue liftando. ---
+    {
+        AsmLift l = asm_lift_detect(Isa::X86,
+                                    "mov rax, rdx\n"
+                                    "add rbx, 1\n"
+                                    "lock cmpxchg [rdi], rsi\n");
+        CHECK(l.op == AsmLiftOp::AtomicCas, "multi con intermedia inocua");
+        CHECK(l.exp_reg == "rdx", "multi: exp=rdx pese a la intermedia");
+    }
+    // --- Instruccion intermedia que PISA rax: NO se lifta (efectos). ---
+    {
+        AsmLift l = asm_lift_detect(Isa::X86,
+                                    "mov rax, rdx\n"
+                                    "xor rax, rax\n"
+                                    "lock cmpxchg [rdi], rsi\n");
+        CHECK(l.op == AsmLiftOp::None, "multi: intermedia pisa rax -> None");
     }
 
     // --- Otro mnemonico: NO se lifta. ---
