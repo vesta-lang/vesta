@@ -74,6 +74,12 @@ thread_local SymState *g_sym_state = nullptr;
 
 bool vx_sym_resolver(const char *symbol, uint64_t *value) {
     if (g_sym_state == nullptr || symbol == nullptr) return false;
+    // Un SIMBOLO de asm es un identificador (empieza por letra, '_' o '.').  Un
+    // LITERAL numerico empieza por digito -> NO es simbolo: devolver false para
+    // que Keystone lo parsee el mismo.  Sin esto, en AArch64 (donde Keystone
+    // consulta el resolver para los inmediatos `#N`) un `#42` se interceptaria
+    // y corromperia el valor.  Cubre decimal, 0x..., 0b..., etc.
+    if (symbol[0] >= '0' && symbol[0] <= '9') return false;
     *value = g_sym_state->intern(symbol);
     return true;
 }
@@ -229,15 +235,28 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
             r.error = "ks_open fallo";
             return r;
         }
-        // El cuerpo es NASM Intel (copy-paste de docs Intel).
-        ks_option(ks, KS_OPT_SYNTAX, KS_OPT_SYNTAX_NASM);
-        // Resolver de simbolos propios: los identificadores no-locales (no
-        // etiquetas del bloque) se resuelven a un sentinela; tras ensamblar
-        // localizamos el campo y emitimos un SymRef (reloc).
+        // Sintaxis NASM Intel SOLO para x86 (copy-paste de docs Intel).  En
+        // AArch64/ARM esta opcion es incorrecta y hace que Keystone lea los
+        // inmediatos bare como HEX (p.ej. `#42` -> 0x42=66, `#16` -> 0x16=22),
+        // corrompiendo el codigo; alli se usa la sintaxis OFICIAL ESTANDAR de
+        // ARM (la que Keystone aplica por defecto para AArch64).
+        if (arch == vx::AsmArch::X86_64 || arch == vx::AsmArch::X86_32 ||
+            arch == vx::AsmArch::X86_16)
+            ks_option(ks, KS_OPT_SYNTAX, KS_OPT_SYNTAX_NASM);
+        // Resolver de simbolos propios (SOLO x86: la maquinaria de asm-inline).
+        // En AArch64 la mera presencia del resolver altera el parser de Keystone
+        // y corrompe los inmediatos; alli se usa Keystone plano (sintaxis oficial
+        // de ARM), como el ensamblador general.  Los simbolos cross-funcion arm64
+        // se resuelven por relocs (R_AARCH64_CALL26), no por este resolver.
+        const bool ks_is_x86 =
+            (arch == vx::AsmArch::X86_64 || arch == vx::AsmArch::X86_32 ||
+             arch == vx::AsmArch::X86_16);
         SymState sym_state;
-        g_sym_state = &sym_state;
-        ks_option(ks, KS_OPT_SYM_RESOLVER,
-                  reinterpret_cast<size_t>(&vx_sym_resolver));
+        if (ks_is_x86) {
+            g_sym_state = &sym_state;
+            ks_option(ks, KS_OPT_SYM_RESOLVER,
+                      reinterpret_cast<size_t>(&vx_sym_resolver));
+        }
 
         // x86-64: `DEFAULT REL` -> `[sym]` (operando de memoria a un simbolo,
         // sin registro base) se ensambla RIP-RELATIVO (ff 25 disp32) en vez de

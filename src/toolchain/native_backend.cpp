@@ -15,6 +15,8 @@
  * @brief Implementacion de los backends de codegen nativo (x86 y arm64).
  */
 
+#include <cstdio>
+#include <cstdlib>
 #include "toolchain/native_backend.h"
 
 #include "jit/arm64/arm64_select.h"
