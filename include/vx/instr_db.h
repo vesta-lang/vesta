@@ -228,6 +228,49 @@ struct AsmBlockCost {
 /// las uops por puerto (modelo de ejecucion paralela superescalar).
 AsmBlockCost analyze_asm_cost(Isa isa, const std::string &body, uint32_t ua_id);
 
+// ------------------------------------------------------------------------
+// Planificacion (scheduling) de un bloque de asm: analisis de dependencias
+// + reordenacion valida por latencia/puertos.  SEGURIDAD: toda reordenacion
+// respeta dependencias, barreras y memoria; lo no modelable es conservador.
+// Funcion PURA (no reescribe codegen todavia): se valida antes de cablear.
+// ------------------------------------------------------------------------
+
+/// Semantica de UNA instruccion de asm (para el grafo de dependencias).
+struct AsmInsnSem {
+    int32_t form_id = -1;
+    bool modeled = false;   ///< false = operandos implicitos / no emparejada ->
+                            ///< se trata CONSERVADOR (no se reordena alrededor).
+    bool barrier = false;   ///< overlay barrera/serializante/atomica/rama/call/
+                            ///< ret/syscall: nada la cruza.
+    std::vector<std::string> reads;  ///< registros canonicos leidos.
+    std::vector<std::string> writes; ///< registros canonicos escritos.
+    bool reads_mem = false, writes_mem = false;
+    bool reads_flags = false, writes_flags = false;
+    float latency = 0.0f;   ///< latencia en la microarq (prioridad del scheduler).
+    std::string text;       ///< linea original (para reemitir).
+};
+
+/// Semantica de una instruccion de asm (@p line) en la microarq @p ua_id.
+AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id);
+
+/// ¿Hay dependencia entre @p a (antes) y @p b (despues) que OBLIGA a conservar
+/// su orden?  True si RAW/WAR/WAW en registros, dependencia de flags, ambas
+/// tocan memoria (conservador: no se sabe si solapan), o alguna es barrera / no
+/// modelada.  Es la regla de SEGURIDAD del scheduler.
+bool asm_dep_conflict(const AsmInsnSem &a, const AsmInsnSem &b);
+
+/// Resultado de planificar un bloque de asm.
+struct AsmSchedule {
+    std::vector<uint32_t> order; ///< permutacion de indices (orden nuevo).
+    bool moved = false;          ///< true si el orden cambio.
+    bool valid = true;           ///< invariante: respeta TODAS las dependencias.
+};
+
+/// Planifica (list scheduling) las instrucciones de @p body por su altura de
+/// camino critico (latencia), respetando dependencias y barreras.  No cambia la
+/// semantica; devuelve una permutacion valida.  @p ua_id da las latencias.
+AsmSchedule schedule_asm_block(Isa isa, const std::string &body, uint32_t ua_id);
+
 /**
  * @brief Clasifica un operando de asm (token) a su @c (kind, width) para el
  *        matcher.  Conoce los registros de la ISA (x86 rax/eax/xmm...; ARM

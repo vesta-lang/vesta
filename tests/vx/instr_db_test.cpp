@@ -173,6 +173,50 @@ int main() {
               "bloque: linea desconocida no empareja");
     }
 
+    // --- scheduling: dependencias + reorden VALIDO (seguridad critica) ---
+    {
+        // semantica por instruccion.
+        AsmInsnSem si = asm_insn_sem(Isa::X86, "add rax, rcx", (uint32_t)skl);
+        CHECK(si.modeled && si.writes_flags && si.form_id >= 0,
+              "sem: 'add rax,rcx' modelada, escribe flags");
+        CHECK(si.reads.size() >= 2 && si.writes.size() == 1,
+              "sem: add lee 2 (rax,rcx), escribe 1 (rax)");
+        AsmInsnSem sm = asm_insn_sem(Isa::X86, "mov rax, [rbx]", (uint32_t)skl);
+        CHECK(sm.reads_mem, "sem: 'mov rax,[rbx]' lee memoria");
+        AsmInsnSem sb = asm_insn_sem(Isa::X86, "mfence", (uint32_t)skl);
+        CHECK(sb.barrier, "sem: mfence es barrera");
+        // instruccion con registro IMPLICITO (mul) -> conservador.
+        AsmInsnSem su = asm_insn_sem(Isa::X86, "mul rbx", (uint32_t)skl);
+        CHECK(!su.modeled, "sem: mul (rax/rdx implicitos) -> conservador");
+
+        // RAW: 'add' lee rax que escribe 'mov' -> orden conservado.
+        AsmSchedule s1 = schedule_asm_block(
+            Isa::X86, "mov rax, rbx\nadd rcx, rax\n", (uint32_t)skl);
+        CHECK(s1.valid, "sched: invariante de seguridad (RAW)");
+        CHECK(s1.order.size() == 2 && s1.order[0] == 0 && s1.order[1] == 1,
+              "sched: RAW conserva el orden");
+
+        // WAW: dos escrituras a rax -> orden conservado.
+        AsmSchedule s2 = schedule_asm_block(
+            Isa::X86, "mov rax, rbx\nmov rax, rcx\n", (uint32_t)skl);
+        CHECK(s2.valid && s2.order[0] == 0 && s2.order[1] == 1,
+              "sched: WAW conserva el orden");
+
+        // barrera: nada la cruza (mfence en el medio permanece).
+        AsmSchedule s3 = schedule_asm_block(
+            Isa::X86, "mov rax, rbx\nmfence\nmov rcx, rdx\n", (uint32_t)skl);
+        CHECK(s3.valid && s3.order.size() == 3 && s3.order[1] == 1,
+              "sched: la barrera no se cruza");
+
+        // bloque mayor: el invariante SIEMPRE se cumple.
+        AsmSchedule s4 = schedule_asm_block(
+            Isa::X86,
+            "mov rax, rbx\nadd rcx, rdx\nimul rax, rax\nadd rsi, rcx\n"
+            "mov rdi, rsi\n",
+            (uint32_t)skl);
+        CHECK(s4.valid, "sched: invariante en bloque mayor");
+    }
+
     if (g_fail == 0)
         std::printf("=== instr_db_test: %d checks OK, 0 fallidos ===\n",
                     g_checks);

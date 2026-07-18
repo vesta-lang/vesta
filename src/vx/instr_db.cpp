@@ -9,6 +9,8 @@
  */
 #include "vx/instr_db.h"
 
+#include "vx/asm_effects.h" // asm_canonical_reg (colapsa alias de registro)
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -187,30 +189,34 @@ ParsedOp parse_operand(Isa isa, const std::string &token) {
     return ParsedOp{OP_IMM, 0};
 }
 
-int32_t match_asm_line(Isa isa, const std::string &line) {
-    // quita comentarios (; // #) y espacios.
+namespace {
+
+/// trim in-place.
+void trim(std::string &s) {
+    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(0, 1);
+    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+}
+
+/// Parte una linea de asm en mnemonico + tokens de operando (respetando
+/// @c [...] y @c (...)).  Devuelve false si es vacia o label.
+bool split_asm_line(const std::string &line, std::string &mnem,
+                    std::vector<std::string> &toks) {
     std::string s = line;
-    size_t cm = s.find_first_of(";");
+    size_t cm = s.find(';');
     if (cm != std::string::npos) s.resize(cm);
     size_t sl = s.find("//");
     if (sl != std::string::npos) s.resize(sl);
-    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(0, 1);
-    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
-    if (s.empty() || s.back() == ':') return -1;   // vacia o label
-    // mnemonico = primer token.
+    trim(s);
+    if (s.empty() || s.back() == ':') return false;
     size_t sp = s.find_first_of(" \t");
-    std::string mnem = sp == std::string::npos ? s : s.substr(0, sp);
+    mnem = sp == std::string::npos ? s : s.substr(0, sp);
     std::string rest = sp == std::string::npos ? "" : s.substr(sp + 1);
-    // trocea operandos por comas respetando [...] y (...).
-    std::vector<ParsedOp> ops;
+    toks.clear();
     std::string cur;
     int depth = 0;
     auto flush = [&]() {
-        // trim.
-        std::string c = cur;
-        while (!c.empty() && std::isspace((unsigned char)c.front())) c.erase(0, 1);
-        while (!c.empty() && std::isspace((unsigned char)c.back())) c.pop_back();
-        if (!c.empty()) ops.push_back(parse_operand(isa, c));
+        trim(cur);
+        if (!cur.empty()) toks.push_back(cur);
         cur.clear();
     };
     for (char c : rest) {
@@ -224,6 +230,65 @@ int32_t match_asm_line(Isa isa, const std::string &line) {
             cur += c;
     }
     flush();
+    return true;
+}
+
+/// Registro canonico (colapsa alias de ancho) para el grafo de dependencias.
+std::string canon_reg(Isa isa, const std::string &tok) {
+    std::string low = tok;
+    for (char &c : low) c = static_cast<char>(std::tolower((unsigned char)c));
+    if (isa == Isa::RISCV) {
+        // nombres ABI -> registro fisico (a0=x10, ra=x1, ...).
+        static const std::pair<const char *, const char *> abi[] = {
+            {"zero", "x0"}, {"ra", "x1"}, {"sp", "x2"}, {"gp", "x3"},
+            {"tp", "x4"},   {"fp", "x8"}, {"t0", "x5"}, {"t1", "x6"},
+            {"t2", "x7"},   {"s0", "x8"}, {"s1", "x9"}, {"a0", "x10"},
+            {"a1", "x11"},  {"a2", "x12"}, {"a3", "x13"}, {"a4", "x14"},
+            {"a5", "x15"},  {"a6", "x16"}, {"a7", "x17"}, {"s2", "x18"},
+            {"s3", "x19"},  {"s4", "x20"}, {"s5", "x21"}, {"s6", "x22"},
+            {"s7", "x23"},  {"s8", "x24"}, {"s9", "x25"}, {"s10", "x26"},
+            {"s11", "x27"}, {"t3", "x28"}, {"t4", "x29"}, {"t5", "x30"},
+            {"t6", "x31"}};
+        for (const auto &p : abi)
+            if (low == p.first) return p.second;
+        return low;
+    }
+    // x86 y ARM64 (colapsa rax/eax, x0/w0...).  ARM32 sin alias de ancho.
+    return vx::asm_canonical_reg(low);
+}
+
+/// Registros que aparecen dentro de un operando de memoria (direccion).
+void addr_regs(Isa isa, const std::string &tok, std::vector<std::string> &out) {
+    // extrae subtokens alfanumericos y quedate con los que son registros.
+    std::string cur;
+    auto push = [&]() {
+        if (!cur.empty()) {
+            uint16_t w = 0;
+            (void)w;
+            // reusa parse_operand para saber si es registro.
+            ParsedOp p = parse_operand(isa, cur);
+            if (p.kind == OP_REG) out.push_back(canon_reg(isa, cur));
+            cur.clear();
+        }
+    };
+    for (char c : tok) {
+        if (std::isalnum((unsigned char)c) || c == '_' || c == '.')
+            cur += c;
+        else
+            push();
+    }
+    push();
+}
+
+} // namespace
+
+int32_t match_asm_line(Isa isa, const std::string &line) {
+    std::string mnem;
+    std::vector<std::string> toks;
+    if (!split_asm_line(line, mnem, toks)) return -1;
+    std::vector<ParsedOp> ops;
+    ops.reserve(toks.size());
+    for (const auto &t : toks) ops.push_back(parse_operand(isa, t));
     return match(isa, mnem, ops);
 }
 
@@ -423,6 +488,205 @@ AsmBlockCost analyze_asm_cost(Isa isa, const std::string &body,
     for (const auto &p : pressure) max_port = std::max(max_port, p.second);
     out.throughput = std::max(max_port, tp_sum);
     out.port_pressure = std::move(pressure);
+    return out;
+}
+
+// -------------------------------------------------------------------------
+// Scheduling: semantica por instruccion + hazards + list scheduling.
+// -------------------------------------------------------------------------
+
+namespace {
+bool contains(const std::vector<std::string> &v, const std::string &x) {
+    for (const auto &e : v)
+        if (e == x) return true;
+    return false;
+}
+
+/// Todo bit de overlay que impide reordenar (barrera dura).
+const uint16_t OVL_BARRIER_ANY =
+    OVL_BARRIER | OVL_SERIALIZING | OVL_ATOMIC | OVL_LL_SC | OVL_MEM_ACQUIRE |
+    OVL_MEM_RELEASE | OVL_MEM_SEQ_CST | OVL_NO_REORDER | OVL_BRANCH | OVL_CALL |
+    OVL_RET | OVL_SYSCALL;
+} // namespace
+
+AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
+    AsmInsnSem s;
+    s.text = line;
+    std::string mnem;
+    std::vector<std::string> toks;
+    if (!split_asm_line(line, mnem, toks)) {
+        s.form_id = -1;                          // label / vacia: no es instruccion
+        return s;
+    }
+    std::vector<ParsedOp> ops;
+    ops.reserve(toks.size());
+    for (const auto &t : toks) ops.push_back(parse_operand(isa, t));
+    int32_t fid = match(isa, mnem, ops);
+    s.form_id = fid;
+    if (fid < 0) {                               // mnemonico desconocido
+        s.barrier = true;                        // CONSERVADOR: no se reordena.
+        s.modeled = false;
+        return s;
+    }
+    const IsaData tb = tables_for(isa);
+    const DbForm &f = tb.forms[fid];
+    s.barrier = (f.overlay & OVL_BARRIER_ANY) != 0;
+    s.writes_flags = (f.memflags & 0x04) != 0;
+    s.reads_flags = (f.memflags & 0x08) != 0;
+    s.latency = cost(isa, fid, ua_id).latency;
+
+    // Operandos EXPLICITOS del form (no implicit/suppressed, no flags) alineados
+    // con los tokens de la linea.  Si hay registros IMPLICITOS, la aridad no casa
+    // o toca memoria no capturada -> CONSERVADOR (no modelada).
+    std::vector<int> expl;
+    bool implicit_reg = false;
+    bool mem_operand = false;
+    for (unsigned i = 0; i < f.ops_count; ++i) {
+        const DbOperand &o = tb.ops[f.ops_off + i];
+        if (o.kind == OP_FLAGS) continue;
+        bool impl = (o.flags & 0x0C) != 0;
+        if (impl) {
+            if (o.kind == OP_REG) implicit_reg = true;
+            continue;
+        }
+        if (o.kind == OP_MEM) mem_operand = true;
+        expl.push_back(static_cast<int>(i));
+    }
+    bool arity_ok = expl.size() == toks.size();
+    // memoria implicita (memflags bit0 sin operando mem, p.ej. push/pop) -> no
+    // modelada.
+    bool implicit_mem = (f.memflags & 0x01) != 0 && !mem_operand;
+    s.modeled = arity_ok && !implicit_reg && !implicit_mem;
+
+    if (arity_ok) {
+        for (size_t k = 0; k < expl.size(); ++k) {
+            int i = expl[k];
+            const DbOperand &o = tb.ops[f.ops_off + i];
+            bool rd = (f.rmask >> i) & 1;
+            bool wr = (f.wmask >> i) & 1;
+            if (o.kind == OP_REG) {
+                std::string cr = canon_reg(isa, toks[k]);
+                if (rd) s.reads.push_back(cr);
+                if (wr) s.writes.push_back(cr);
+            } else if (o.kind == OP_MEM) {
+                if (rd) s.reads_mem = true;
+                if (wr) s.writes_mem = true;
+                addr_regs(isa, toks[k], s.reads); // los regs de direccion se leen
+            }
+        }
+    }
+    if (implicit_mem) {                          // conservador: asume R/W memoria
+        s.reads_mem = true;
+        s.writes_mem = true;
+    }
+    return s;
+}
+
+bool asm_dep_conflict(const AsmInsnSem &a, const AsmInsnSem &b) {
+    // barrera o no-modelada -> siempre conflicto (no se reordena alrededor).
+    if (a.barrier || b.barrier || !a.modeled || !b.modeled) return true;
+    // memoria: si alguna ESCRIBE y la otra toca memoria (no se sabe si solapan).
+    bool amem = a.reads_mem || a.writes_mem;
+    bool bmem = b.reads_mem || b.writes_mem;
+    if ((a.writes_mem && bmem) || (b.writes_mem && amem)) return true;
+    // flags: WAW / WAR / RAW.
+    if ((a.writes_flags && (b.reads_flags || b.writes_flags)) ||
+        (b.writes_flags && a.reads_flags))
+        return true;
+    // registros: RAW (a escribe -> b lee), WAW (ambos escriben),
+    // WAR (a lee -> b escribe).
+    for (const auto &w : a.writes)
+        if (contains(b.reads, w) || contains(b.writes, w)) return true;
+    for (const auto &w : b.writes)
+        if (contains(a.reads, w)) return true;
+    return false;
+}
+
+AsmSchedule schedule_asm_block(Isa isa, const std::string &body,
+                               uint32_t ua_id) {
+    AsmSchedule out;
+    // parte en instrucciones (ignora labels/vacias).
+    std::vector<AsmInsnSem> sem;
+    size_t i = 0;
+    while (i <= body.size()) {
+        size_t nl = body.find('\n', i);
+        std::string line = body.substr(
+            i, nl == std::string::npos ? std::string::npos : nl - i);
+        i = (nl == std::string::npos) ? body.size() + 1 : nl + 1;
+        std::string mnem;
+        std::vector<std::string> toks;
+        if (!split_asm_line(line, mnem, toks)) continue; // label / vacia
+        sem.push_back(asm_insn_sem(isa, line, ua_id));
+    }
+    const uint32_t n = static_cast<uint32_t>(sem.size());
+    for (uint32_t k = 0; k < n; ++k) out.order.push_back(k);
+    if (n < 2) return out;
+
+    // planifica por SEGMENTOS: una barrera corta el bloque (nada la cruza).
+    std::vector<uint32_t> result;
+    uint32_t seg_start = 0;
+    auto sched_segment = [&](uint32_t lo, uint32_t hi) {
+        const uint32_t m = hi - lo;
+        if (m <= 1) {
+            for (uint32_t k = lo; k < hi; ++k) result.push_back(k);
+            return;
+        }
+        // aristas de dependencia i->j (i antes que j en el original y conflictan).
+        std::vector<std::vector<uint32_t>> succ(m);
+        std::vector<uint32_t> indeg(m, 0);
+        for (uint32_t x = 0; x < m; ++x)
+            for (uint32_t y = x + 1; y < m; ++y)
+                if (asm_dep_conflict(sem[lo + x], sem[lo + y])) {
+                    succ[x].push_back(y);
+                    ++indeg[y];
+                }
+        // altura = latencia + max altura de sucesores (camino critico).
+        std::vector<float> height(m, 0.0f);
+        for (int x = static_cast<int>(m) - 1; x >= 0; --x) {
+            float h = 0.0f;
+            for (uint32_t sIdx : succ[x]) h = std::max(h, height[sIdx]);
+            height[x] = sem[lo + x].latency + h;
+        }
+        // list scheduling: entre los listos, el de mayor altura (desempate:
+        // orden original -> estable).
+        std::vector<uint8_t> done(m, 0);
+        std::vector<uint32_t> rem = indeg;
+        for (uint32_t step = 0; step < m; ++step) {
+            int pick = -1;
+            for (uint32_t x = 0; x < m; ++x) {
+                if (done[x] || rem[x] != 0) continue;
+                if (pick < 0 || height[x] > height[pick] + 1e-6f)
+                    pick = static_cast<int>(x);
+            }
+            done[pick] = 1;
+            result.push_back(lo + static_cast<uint32_t>(pick));
+            for (uint32_t sIdx : succ[pick]) --rem[sIdx];
+        }
+    };
+    for (uint32_t k = 0; k < n; ++k) {
+        if (sem[k].barrier) {
+            sched_segment(seg_start, k);
+            result.push_back(k);                 // la barrera se queda en su sitio
+            seg_start = k + 1;
+        }
+    }
+    sched_segment(seg_start, n);
+
+    out.order = result;
+    for (uint32_t k = 0; k < n; ++k)
+        if (out.order[k] != k) {
+            out.moved = true;
+            break;
+        }
+    // INVARIANTE de seguridad: ningun par en conflicto queda invertido.
+    std::vector<uint32_t> pos(n);
+    for (uint32_t k = 0; k < n; ++k) pos[out.order[k]] = k;
+    for (uint32_t x = 0; x < n && out.valid; ++x)
+        for (uint32_t y = x + 1; y < n; ++y)
+            if (asm_dep_conflict(sem[x], sem[y]) && pos[x] > pos[y]) {
+                out.valid = false;
+                break;
+            }
     return out;
 }
 
