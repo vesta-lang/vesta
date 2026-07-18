@@ -22,6 +22,7 @@
 #include "jit/machine_ir.h"
 #include "jit/peephole.h"
 #include "jit/regalloc_rewrite.h"
+#include "jit/sched/machine_sched.h"
 #include "jit/ssa_coalesce.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_select.h"
@@ -33,6 +34,27 @@
 #include <vector>
 
 namespace jit {
+
+namespace {
+/**
+ * @brief Scheduler machine-level (C2.15) sobre el MFunction fisico, tras el
+ *        regalloc y antes de encodear.  Default ON; @c VESTA_SCHED=0 lo desactiva
+ *        (A/B).  Reordena por camino critico/latencia respetando el DAG completo
+ *        de dependencias -> oculta latencias y expone ILP al core superescalar.
+ */
+void maybe_schedule(MFunction &pf) {
+    // Default OFF hasta que el scheduler pase la e2e byte-a-byte de valor:
+    // reordenar expone bugs de dependencias que hay que cerrar antes de
+    // activarlo por defecto (correccion primero).  VESTA_SCHED=1 lo activa.
+    static const bool on = [] {
+        const char *v = std::getenv("VESTA_SCHED");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    if (!on) return;
+    static const sched::GenericCostModel cm;
+    sched::schedule_function(pf, cm, sched::EffIsa::X86);
+}
+} // namespace
 
 uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call, const VregEntries &ent,
@@ -87,6 +109,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
     peephole_physical(pf);
+    maybe_schedule(pf);
 
     /* 3. Encode a bytes. */
     X86Encoder enc;
@@ -177,6 +200,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
     peephole_physical(pf);
+    maybe_schedule(pf);
 
     X86Encoder enc;
     std::vector<uint8_t> bytes;
@@ -258,6 +282,7 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
 
     /* 4b. P1 peephole: borrar self-moves dejados por el coalescing. */
     peephole_physical(pf);
+    maybe_schedule(pf);
 
     /* 5. Encode a bytes nativos.  mode32 -> x86-32 (sin REX, operando 32-bit).
      */
@@ -355,6 +380,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     osr.header_block = static_cast<MBlockId>(header_block);
     osr.required_captures = required_captures; // red de seguridad live-in
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs, &osr);
+    maybe_schedule(pf);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 
     /* 5. Encode. */
