@@ -55,6 +55,101 @@ static std::string emit_add_fn(bool &uns) {
     return jit::arm64::arm64_emit_asm(fn, uns);
 }
 
+/// Construye `sum(n) = 1+2+...+n` (bucle con PHI + CMP + BR_COND) y devuelve su
+/// asm AArch64.
+static std::string emit_sum_fn(bool &uns) {
+    ir::IrFunction fn;
+    fn.name = "sum";
+    fn.ret_type = ir::IrType::I64;
+    const ir::IrValueId n = fn.new_value(ir::IrType::I64);
+    fn.params.push_back(n);
+    const ir::IrValueId s0 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId i0 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId s = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId i = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId cond = fn.new_value(ir::IrType::BOOL);
+    const ir::IrValueId s2 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId one = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId i2 = fn.new_value(ir::IrType::I64);
+
+    ir::IrBlock b0;
+    b0.id = 0;
+    b0.name = "entry";
+    ir::IrInstr c0 = mk(ir::IrOp::CONST, ir::IrType::I64, s0);
+    c0.imm = 0;
+    b0.instrs.push_back(c0);
+    ir::IrInstr c1 = mk(ir::IrOp::CONST, ir::IrType::I64, i0);
+    c1.imm = 1;
+    b0.instrs.push_back(c1);
+    ir::IrInstr br0 = mk(ir::IrOp::BR, ir::IrType::VOID, ir::IR_NO_VALUE);
+    br0.target_block = 1;
+    b0.instrs.push_back(br0);
+
+    ir::IrBlock b1;
+    b1.id = 1;
+    b1.name = "header";
+    ir::IrInstr ps = mk(ir::IrOp::PHI, ir::IrType::I64, s);
+    ps.phi_args = {{s0, 0}, {s2, 2}};
+    b1.instrs.push_back(ps);
+    ir::IrInstr pi = mk(ir::IrOp::PHI, ir::IrType::I64, i);
+    pi.phi_args = {{i0, 0}, {i2, 2}};
+    b1.instrs.push_back(pi);
+    ir::IrInstr cm = mk(ir::IrOp::CMP_ULE, ir::IrType::BOOL, cond);
+    cm.operands = {i, n};
+    b1.instrs.push_back(cm);
+    ir::IrInstr brc = mk(ir::IrOp::BR_COND, ir::IrType::VOID, ir::IR_NO_VALUE);
+    brc.operands = {cond};
+    brc.target_block = 2;
+    brc.false_block = 3;
+    b1.instrs.push_back(brc);
+
+    ir::IrBlock b2;
+    b2.id = 2;
+    b2.name = "body";
+    ir::IrInstr as = mk(ir::IrOp::ADD, ir::IrType::I64, s2);
+    as.operands = {s, i};
+    b2.instrs.push_back(as);
+    ir::IrInstr co = mk(ir::IrOp::CONST, ir::IrType::I64, one);
+    co.imm = 1;
+    b2.instrs.push_back(co);
+    ir::IrInstr ai = mk(ir::IrOp::ADD, ir::IrType::I64, i2);
+    ai.operands = {i, one};
+    b2.instrs.push_back(ai);
+    ir::IrInstr br1 = mk(ir::IrOp::BR, ir::IrType::VOID, ir::IR_NO_VALUE);
+    br1.target_block = 1;
+    b2.instrs.push_back(br1);
+
+    ir::IrBlock b3;
+    b3.id = 3;
+    b3.name = "exit";
+    ir::IrInstr r = mk(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+    r.operands.push_back(s);
+    b3.instrs.push_back(r);
+
+    fn.blocks = {b0, b1, b2, b3};
+    return jit::arm64::arm64_emit_asm(fn, uns);
+}
+
+/// Escribe un programa bare-metal que llama a `fn_body` (etiqueta @p entry) con
+/// UN argumento @p arg y sale por semihosting con el resultado como codigo.
+static void write_boot(std::ofstream &o, const std::string &fn_body, int arg) {
+    o << "movz x20, #0x4030, lsl #16\n";
+    o << "mov sp, x20\n";
+    o << "movz x0, #" << arg << "\n";
+    o << "bl fn_body\n";
+    o << "mov x21, x0\n";
+    o << "sub sp, sp, #16\n";
+    o << "movz x2, #0x26\n";
+    o << "movk x2, #0x2, lsl #16\n";
+    o << "str x2, [sp]\n";
+    o << "str x21, [sp, #8]\n";
+    o << "mov x1, sp\n";
+    o << "movz x0, #0x18\n";
+    o << "hlt #0xf000\n";
+    o << "fn_body:\n";
+    o << fn_body;
+}
+
 /// Modo `boot <out.s>`: escribe un programa AArch64 bare-metal que llama a la
 /// funcion `add` GENERADA por el selector con add(3,4) y sale por semihosting con
 /// el resultado (7) como codigo.  Lo consume tests/aot/qemu_arm64_codegen_test.py.
@@ -89,6 +184,17 @@ static int emit_boot(const char *path) {
 int main(int argc, char **argv) {
     if (argc >= 3 && std::string(argv[1]) == "boot")
         return emit_boot(argv[2]);
+    if (argc >= 3 && std::string(argv[1]) == "bootsum") {
+        bool uns = false;
+        const std::string body = emit_sum_fn(uns);
+        if (uns)
+            return 1;
+        std::ofstream o(argv[2]);
+        if (!o)
+            return 1;
+        write_boot(o, body, 4); // sum(4) = 10
+        return 0;
+    }
 
     std::printf("=== test_arm64_select ===\n");
 
@@ -150,26 +256,38 @@ int main(int argc, char **argv) {
         CHECK(has(asmtxt, "ret"), "add: ret");
     }
 
-    // --- Op no soportada aun (varios bloques / rama) -> out_unsupported. ---
+    // --- Bucle sum(n): multi-bloque + PHI + CMP + BR_COND. ---
+    {
+        bool uns = false;
+        std::string a = emit_sum_fn(uns);
+        CHECK(!uns, "sum: soportado (multi-bloque + ramas)");
+        CHECK(has(a, ".Lb1:"), "sum: etiqueta del header");
+        CHECK(has(a, "cmp x9, x10"), "sum: comparacion");
+        CHECK(has(a, "cset x9, ls"), "sum: cset con la condicion ULE (ls)");
+        CHECK(has(a, "cbnz x9"), "sum: rama condicional");
+        CHECK(has(a, "b .Lb1"), "sum: back-edge al header");
+        CHECK(has(a, "str x11,"), "sum: copias de PHI en los predecesores");
+    }
+
+    // --- Op no soportada aun (LOAD de memoria) -> out_unsupported. ---
     {
         ir::IrFunction fn;
-        fn.name = "branchy";
+        fn.name = "loady";
         fn.ret_type = ir::IrType::I64;
+        const ir::IrValueId p = fn.new_value(ir::IrType::I64);
+        fn.params.push_back(p);
+        const ir::IrValueId v = fn.new_value(ir::IrType::I64);
         ir::IrBlock e;
         e.id = 0;
         e.name = "entry";
-        ir::IrInstr br = mk(ir::IrOp::BR, ir::IrType::VOID, ir::IR_NO_VALUE);
-        br.target_block = 1;
-        e.instrs.push_back(br);
-        ir::IrBlock e2;
-        e2.id = 1;
-        e2.name = "b1";
+        ir::IrInstr ld = mk(ir::IrOp::LOAD, ir::IrType::I64, v);
+        ld.operands.push_back(p);
+        e.instrs.push_back(ld);
         fn.blocks.push_back(e);
-        fn.blocks.push_back(e2);
 
         bool uns = false;
         (void)jit::arm64::arm64_emit_asm(fn, uns);
-        CHECK(uns, "multi-bloque -> out_unsupported (H.2b)");
+        CHECK(uns, "LOAD -> out_unsupported (H.3+)");
     }
 
     std::printf("=== test_arm64_select: %d checks OK, %d fallidos ===\n",

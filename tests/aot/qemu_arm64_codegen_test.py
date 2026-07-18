@@ -36,37 +36,42 @@ if not os.path.isfile(emitter):
     t.fail("FALLO: test_arm64_select no compilado (build primero)")
     t.finish()
 
-asm_path = t.wpath("arm64_codegen.s")
-rc = subprocess.run([emitter, "boot", asm_path], capture_output=True,
-                    timeout=30).returncode
-if rc != 0 or not os.path.isfile(asm_path):
-    t.fail("FALLO: el selector no emitio el .s (op no soportada?)")
-    t.finish()
+def run_case(mode, want, desc):
+    """Emite el .s del selector (modo), lo ensambla y lo ejecuta en QEMU;
+    devuelve True si el exit == want."""
+    asm_path = t.wpath("arm64_%s.s" % mode)
+    if subprocess.run([emitter, mode, asm_path], capture_output=True,
+                      timeout=30).returncode != 0 or not os.path.isfile(asm_path):
+        print("FALLO: el selector no emitio el .s de %s" % mode)
+        return False
+    prefix = t.wpath("arm64_%s" % mode)
+    if subprocess.run(
+            [t.vm, "--asm-file", asm_path, "--arch", "AArch64", "-o", prefix,
+             "--save-output"], capture_output=True, timeout=60).returncode != 0:
+        print("FALLO: no se ensamblo %s (Keystone)" % mode)
+        return False
+    binf = prefix + "_assembled.bin"
+    if not os.path.isfile(binf):
+        print("FALLO: no se genero el .bin de %s" % mode)
+        return False
+    proc = subprocess.run(
+        ["qemu-system-aarch64", "-M", "virt", "-cpu", "max", "-m", "128",
+         "-nographic", "-semihosting",
+         "-device",
+         "loader,file=%s,addr=%s,force-raw=on" % (qpath(binf), LOAD_ADDR),
+         "-device", "loader,addr=%s,cpu-num=0" % LOAD_ADDR],
+        capture_output=True, timeout=40)
+    print("  %s: qemu_exit=%d (esperado %d) -- %s" %
+          (mode, proc.returncode, want, desc))
+    return proc.returncode == want
 
-# Ensamblar el .s con Keystone (vm --asm-file --arch AArch64).
-prefix = t.wpath("arm64_codegen")
-rc = subprocess.run(
-    [t.vm, "--asm-file", asm_path, "--arch", "AArch64", "-o", prefix,
-     "--save-output"],
-    capture_output=True, timeout=60).returncode
-binf = prefix + "_assembled.bin"
-if rc != 0 or not os.path.isfile(binf):
-    t.fail("FALLO: no se ensamblo el .s arm64 (Keystone)")
-    t.finish()
 
-# Ejecutar bare-metal en qemu-system-aarch64; el exit debe ser 7 (=3+4).
-proc = subprocess.run(
-    ["qemu-system-aarch64", "-M", "virt", "-cpu", "max", "-m", "128",
-     "-nographic", "-semihosting",
-     "-device", "loader,file=%s,addr=%s,force-raw=on" % (qpath(binf), LOAD_ADDR),
-     "-device", "loader,addr=%s,cpu-num=0" % LOAD_ADDR],
-    capture_output=True, timeout=40)
+ok_add = run_case("boot", 7, "add(3,4)=7 (linea recta)")
+ok_sum = run_case("bootsum", 10, "sum(4)=10 (bucle: PHI + CMP + BR_COND)")
 
-print("qemu_exit=%d  (esperado: 7 = add(3,4) del codigo generado por el selector)"
-      % proc.returncode)
-if proc.returncode == 7:
-    t.ok("OK: el selector IR->AArch64 genera codigo correcto -- add(3,4)=7 "
-         "ejecuta en qemu-system-aarch64")
+if ok_add and ok_sum:
+    t.ok("OK: el selector IR->AArch64 genera codigo CORRECTO -- add(3,4)=7 y "
+         "sum(4)=10 ejecutan en qemu-system-aarch64")
 else:
-    t.fail("FALLO: el codigo generado no dio el resultado esperado (7)")
+    t.fail("FALLO: el codigo generado no dio los resultados esperados")
 t.finish()

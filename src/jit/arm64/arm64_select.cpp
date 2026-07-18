@@ -63,13 +63,46 @@ const char *binop_mnem(ir::IrOp op) {
     }
 }
 
+/// Codigo de condicion AArch64 (cset/b.cc) de una op CMP, o nullptr si no lo es.
+const char *cmp_cc(ir::IrOp op) {
+    switch (op) {
+    case ir::IrOp::CMP_EQ: return "eq";
+    case ir::IrOp::CMP_NE: return "ne";
+    case ir::IrOp::CMP_LT: return "lt";
+    case ir::IrOp::CMP_GT: return "gt";
+    case ir::IrOp::CMP_LE: return "le";
+    case ir::IrOp::CMP_GE: return "ge";
+    case ir::IrOp::CMP_ULT: return "lo";
+    case ir::IrOp::CMP_UGT: return "hi";
+    case ir::IrOp::CMP_ULE: return "ls";
+    case ir::IrOp::CMP_UGE: return "hs";
+    default: return nullptr;
+    }
+}
+
+/// Emite las copias de los PHI del bloque @p to que llegan desde @p from: por
+/// cada @c phi cuyo arg venga de @p from, copia arg -> dst (via x11).  Asi el
+/// modelo slot-por-valor resuelve los PHI en los predecesores (como el x86).
+void emit_phi_copies(std::ostringstream &os, const ir::IrFunction &fn,
+                     ir::IrBlockId from, ir::IrBlockId to) {
+    if (to >= fn.blocks.size())
+        return;
+    for (const ir::IrInstr &in : fn.blocks[to].instrs) {
+        if (in.op != ir::IrOp::PHI)
+            continue;
+        for (const ir::IrPhiArg &pa : in.phi_args)
+            if (pa.block == from) {
+                emit_ld(os, "x11", pa.value);
+                emit_st(os, "x11", in.dst);
+            }
+    }
+}
+
 } // namespace
 
 std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported) {
     out_unsupported = false;
-
-    // Bootstrap H.2a: un solo bloque de linea recta.
-    if (fn.blocks.size() != 1) {
+    if (fn.blocks.empty()) {
         out_unsupported = true;
         return "";
     }
@@ -81,69 +114,115 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported) {
         frame = 16;
 
     std::ostringstream os;
-    // Prologo: reservar el marco.
+    // Prologo: reservar el marco + guardar los params (AAPCS64: x0..x7).  Cae al
+    // bloque 0 (los saltos van a las etiquetas .Lb<id>, siempre despues de aqui).
     os << "    sub sp, sp, #" << frame << "\n";
-    // Guardar los params (AAPCS64: x0..x7) en sus huecos.
     const char *arg_regs[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"};
     for (size_t i = 0; i < fn.params.size() && i < 8; ++i)
         emit_st(os, arg_regs[i], fn.params[i]);
 
-    const ir::IrBlock &bb = fn.blocks[0];
-    for (const ir::IrInstr &in : bb.instrs) {
-        switch (in.op) {
-        case ir::IrOp::CONST:
-            emit_imm(os, "x9", in.imm);
-            emit_st(os, "x9", in.dst);
-            break;
-        case ir::IrOp::MOV:
-            if (in.operands.size() != 1) {
+    int cond_lbl = 0; // contador de etiquetas locales de BR_COND.
+    for (const ir::IrBlock &bb : fn.blocks) {
+        os << ".Lb" << bb.id << ":\n";
+        for (const ir::IrInstr &in : bb.instrs) {
+            switch (in.op) {
+            case ir::IrOp::PHI:
+                break; // resuelto por copias en los predecesores.
+            case ir::IrOp::CONST:
+                emit_imm(os, "x9", in.imm);
+                emit_st(os, "x9", in.dst);
+                break;
+            case ir::IrOp::MOV:
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                emit_ld(os, "x9", in.operands[0]);
+                emit_st(os, "x9", in.dst);
+                break;
+            case ir::IrOp::NEG:
+            case ir::IrOp::NOT: {
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                emit_ld(os, "x9", in.operands[0]);
+                os << (in.op == ir::IrOp::NEG ? "    neg x9, x9\n"
+                                              : "    mvn x9, x9\n");
+                emit_st(os, "x9", in.dst);
+                break;
+            }
+            case ir::IrOp::ADD:
+            case ir::IrOp::SUB:
+            case ir::IrOp::MUL:
+            case ir::IrOp::AND:
+            case ir::IrOp::OR:
+            case ir::IrOp::XOR:
+            case ir::IrOp::SHL:
+            case ir::IrOp::SHR: {
+                if (in.operands.size() != 2) {
+                    out_unsupported = true;
+                    return "";
+                }
+                emit_ld(os, "x9", in.operands[0]);
+                emit_ld(os, "x10", in.operands[1]);
+                os << "    " << binop_mnem(in.op) << " x9, x9, x10\n";
+                emit_st(os, "x9", in.dst);
+                break;
+            }
+            case ir::IrOp::CMP_EQ:
+            case ir::IrOp::CMP_NE:
+            case ir::IrOp::CMP_LT:
+            case ir::IrOp::CMP_GT:
+            case ir::IrOp::CMP_LE:
+            case ir::IrOp::CMP_GE:
+            case ir::IrOp::CMP_ULT:
+            case ir::IrOp::CMP_UGT:
+            case ir::IrOp::CMP_ULE:
+            case ir::IrOp::CMP_UGE: {
+                if (in.operands.size() != 2) {
+                    out_unsupported = true;
+                    return "";
+                }
+                emit_ld(os, "x9", in.operands[0]);
+                emit_ld(os, "x10", in.operands[1]);
+                os << "    cmp x9, x10\n";
+                os << "    cset x9, " << cmp_cc(in.op) << "\n";
+                emit_st(os, "x9", in.dst);
+                break;
+            }
+            case ir::IrOp::BR:
+                // Copias de PHI del destino, luego el salto incondicional.
+                emit_phi_copies(os, fn, bb.id, in.target_block);
+                os << "    b .Lb" << in.target_block << "\n";
+                break;
+            case ir::IrOp::BR_COND: {
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                // cond != 0 -> rama true; cada arista lleva SUS copias de PHI.
+                const int n = cond_lbl++;
+                emit_ld(os, "x9", in.operands[0]);
+                os << "    cbnz x9, .Lt" << n << "\n";
+                emit_phi_copies(os, fn, bb.id, in.false_block);
+                os << "    b .Lb" << in.false_block << "\n";
+                os << ".Lt" << n << ":\n";
+                emit_phi_copies(os, fn, bb.id, in.target_block);
+                os << "    b .Lb" << in.target_block << "\n";
+                break;
+            }
+            case ir::IrOp::RET:
+                if (!in.operands.empty())
+                    emit_ld(os, "x0", in.operands[0]);
+                os << "    add sp, sp, #" << frame << "\n";
+                os << "    ret\n";
+                break;
+            default:
+                // Op no soportada aun (float, call, memoria): H.3+.
                 out_unsupported = true;
                 return "";
             }
-            emit_ld(os, "x9", in.operands[0]);
-            emit_st(os, "x9", in.dst);
-            break;
-        case ir::IrOp::NEG:
-        case ir::IrOp::NOT: {
-            if (in.operands.size() != 1) {
-                out_unsupported = true;
-                return "";
-            }
-            emit_ld(os, "x9", in.operands[0]);
-            os << (in.op == ir::IrOp::NEG ? "    neg x9, x9\n"
-                                          : "    mvn x9, x9\n");
-            emit_st(os, "x9", in.dst);
-            break;
-        }
-        case ir::IrOp::ADD:
-        case ir::IrOp::SUB:
-        case ir::IrOp::MUL:
-        case ir::IrOp::AND:
-        case ir::IrOp::OR:
-        case ir::IrOp::XOR:
-        case ir::IrOp::SHL:
-        case ir::IrOp::SHR: {
-            if (in.operands.size() != 2) {
-                out_unsupported = true;
-                return "";
-            }
-            const char *m = binop_mnem(in.op);
-            emit_ld(os, "x9", in.operands[0]);
-            emit_ld(os, "x10", in.operands[1]);
-            os << "    " << m << " x9, x9, x10\n";
-            emit_st(os, "x9", in.dst);
-            break;
-        }
-        case ir::IrOp::RET:
-            if (!in.operands.empty())
-                emit_ld(os, "x0", in.operands[0]);
-            os << "    add sp, sp, #" << frame << "\n";
-            os << "    ret\n";
-            break;
-        default:
-            // Op no soportada aun (rama, float, call, memoria): H.2b+.
-            out_unsupported = true;
-            return "";
         }
     }
     return os.str();
