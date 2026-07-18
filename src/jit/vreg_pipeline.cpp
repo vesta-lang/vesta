@@ -303,6 +303,9 @@ std::vector<uint8_t> vreg_compile_native_target(
             case MRelocKind::SECREL32:
                 nr.kind = NativeReloc::Kind::SECREL32;
                 break;
+            case MRelocKind::ARM64_CALL26:
+                nr.kind = NativeReloc::Kind::ARM64_CALL26;
+                break;
             }
             nr.offset = r.patch_at;
             nr.addend = r.addend;

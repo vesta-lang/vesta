@@ -1268,6 +1268,9 @@ enum class MRelocKind : uint8_t {
            ///< seccion (.tls), NO la VA.  El acceso suma este offset a la base
            ///< del bloque TLS del modulo (cargada desde el TEB).  El emisor PE
            ///< escribe target_off directamente.
+    ARM64_CALL26 =
+        5, ///< AArch64 bl/b a una FUNCION (R_AARCH64_CALL26): el campo imm26
+           ///< del bl = (sym - site) >> 2.  El driver lo encola como callee.
 };
 
 /**

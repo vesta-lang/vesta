@@ -20,7 +20,11 @@
 #include <capstone/capstone.h>
 
 #include "jit/arm64/arm64_select.h"
+#include "jit/arm64/arm64_target.h"
+#include "jit/vreg_pipeline.h"
 #include "vx/asm/asm_backend.h"
+
+#include <cstdlib>
 
 namespace aot {
 
@@ -61,6 +65,30 @@ class Arm64Backend : public NativeBackend {
                      const NativeCompileOpts &opts) override {
         (void)opts;
         NativeCompileResult r;
+
+        /* El codegen arm64 se activa SOLO aqui, cuando el TARGET es arm
+         * (make_native_backend(ARM64) construyo este backend).  Path por
+         * defecto: VREG (MachineIR + regalloc generico + scheduler) via el
+         * orquestador arch-neutral con Arm64Target; el template queda como
+         * fallback para las funciones fuera del subset vreg.  VESTA_ARM64_VREG=0
+         * fuerza el template (escape-hatch de depuracion). */
+        static const bool use_vreg = [] {
+            const char *v = std::getenv("VESTA_ARM64_VREG");
+            return !(v && v[0] == '0');
+        }();
+        if (use_vreg) {
+            jit::Arm64Target target;
+            std::vector<jit::NativeReloc> relocs;
+            std::vector<uint8_t> bytes =
+                jit::vreg_compile_native_target(fn, target, &relocs);
+            if (!bytes.empty()) {
+                r.bytes = std::move(bytes);
+                r.relocs = std::move(relocs);
+                return r;
+            }
+            // vacio -> fuera del subset; cae al template.
+        }
+
         bool unsupported = false;
         std::vector<std::string> call_targets;
         const std::string text = jit::arm64::arm64_emit_asm(
