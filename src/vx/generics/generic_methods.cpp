@@ -33,7 +33,7 @@
 
 #include "vx/type_checker.h"
 
-#include "generic_clone.h"
+#include "vx/generic_clone.h"
 
 namespace vx {
 using namespace vxgen;

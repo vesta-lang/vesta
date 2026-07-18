@@ -35,12 +35,12 @@
 #include "vx/type_classify.h"         // is_c_representable / is_managed (Fase 1)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime_introspect.h"   // comptime_field_type
-#include "concepts.h"                 // conceptos como predicado comptime
+#include "vx/concepts.h"                 // conceptos como predicado comptime
 #include "vx/lexer.h"  // parse de fragments en comptime_emit_expr
-#include "contract_when.h"
+#include "vx/contract_when.h"
 #include "vx/parser.h" // parse_one_expr para macros con splice
 #include "loader/oop_types.h" // para sizeof(loader::ObjectHeader) en el layout de clases
-#include "generic_clone.h" // GenSubst + clone_* + mangle_* (extraidos del monolito)
+#include "vx/generic_clone.h" // GenSubst + clone_* + mangle_* (extraidos del monolito)
 
 #include <algorithm>
 #include <utility>

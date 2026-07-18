@@ -74,38 +74,38 @@ add_library(vx_lib STATIC
     lexer.cpp
     ast.cpp
     parser.cpp
-    asm_effects.cpp
+    asm/asm_effects.cpp
     # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
     # call/flags/rama/marco de pila explicito) sobre la tabla plana por
     # instruccion de asm_effects; base del compilador consciente del asm.
-    asm_analyze.cpp
-    asm_backend.cpp
+    asm/asm_analyze.cpp
+    asm/asm_backend.cpp
     # CFG del asm inline (bloques basicos + aristas desde labels/saltos); base
     # del dataflow, los diagnosticos y los diagramas del asm.
-    asm_cfg.cpp
+    asm/asm_cfg.cpp
     # Diagnosticos estructurales del asm sobre el CFG (codigo muerto, salto no
     # resuelto, bucle sin salida).
-    asm_diag.cpp
+    asm/asm_diag.cpp
     # Diagramas del CFG del asm anotados con coste/latencia/cuellos de botella/
     # flags/diagnosticos (mermaid + graphviz), para embeber en los diagramas.
-    asm_diagram.cpp
+    asm/asm_diagram.cpp
     # Lift de patrones de asm a IR tipado (lock cmpxchg/xadd -> ATOMIC_CAS/ADD):
     # atomicos escritos en asm que bajan al mismo op optimizable que el opcode.
-    asm_lift.cpp
+    asm/asm_lift.cpp
     # Emision del IR tipado del lift (separada del reconocimiento, para mantener
     # el lowering minimo).
-    asm_lift_emit.cpp
+    asm/asm_lift_emit.cpp
     # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
     # idioma).  La tabla se genera desde catalog/diagnostics.toml con
     # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.
-    diag_catalog.cpp
+    diag/diag_catalog.cpp
     gen/diag_catalog_gen.cpp
     # Renderizado de diagnosticos en formato maquina (JSON/SARIF) para IDEs/CI.
-    diag_format.cpp
+    diag/diag_format.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
-    instr_db.cpp
+    asm/instr_db.cpp
     gen/instr_db_x86_gen.cpp
     gen/instr_db_arm64_gen.cpp
     gen/instr_db_arm32_gen.cpp
@@ -126,13 +126,13 @@ add_library(vx_lib STATIC
     contract_when.cpp
     # Utilidades de clonacion de AST con sustitucion de type-params,
     # extraidas de type_checker.cpp (monolito) para mantenerlo manejable.
-    generic_clone.cpp
+    generics/generic_clone.cpp
     # Monomorphizacion de metodos genericos `obj.metodo<U>()` (#4).
-    generic_methods.cpp
+    generics/generic_methods.cpp
     # Conceptos / constraints de genericos `<T: Concepto>` / where (#6).
-    concepts.cpp
+    generics/concepts.cpp
     # Especializacion total + parcial de structs genericos (#7).
-    specialization.cpp
+    generics/specialization.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).
@@ -145,9 +145,9 @@ add_library(vx_lib STATIC
     borrow_checker.cpp
     compiler.cpp
     compiler_project.cpp
-    mermaid_diagrams.cpp
-    graphviz_diagrams.cpp
-    html_diagrams.cpp
+    diagram/mermaid_diagrams.cpp
+    diagram/graphviz_diagrams.cpp
+    diagram/html_diagrams.cpp
     # Subsistema de coste Big-O (modo --analyze).  Solo depende de
     # ir::IrModule; vive aqui para que los renderers de diagramas puedan
     # anotar el coste por funcion (--diagram-cost).
@@ -155,20 +155,20 @@ add_library(vx_lib STATIC
     # Huella computacional por-declaracion (recursos + efectos): base del
     # modelo dirigido por resumenes y de las anotaciones comprobables.
     ${CMAKE_SOURCE_DIR}/src/analyze/fingerprint.cpp
-    comptime_introspect.cpp
+    comptime/comptime_introspect.cpp
     # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
     # separado que compilara/ejecutara todo el comptime en la ComptimeVM).
-    comptime_collect.cpp
+    comptime/comptime_collect.cpp
     # Sistema de modulos.
-    module_resolver.cpp
-    module_interop.cpp
-    namespace_flatten.cpp
+    module/module_resolver.cpp
+    module/module_interop.cpp
+    module/namespace_flatten.cpp
     # Indice semantico por-declaracion (hash de contenido + grafo de deps):
     # sustrato de la compilacion incremental granular y distribuida.
     semantic_index.cpp
     # Driver incremental granular: claves Merkle + CAS + plan_rebuild.
     incremental.cpp
-    vxi_format.cpp
+    module/vxi_format.cpp
     project_cache.cpp
     velb_signature.cpp
     # comptime_vm.cpp vive en src/runtime/ (depende del runtime VM).
@@ -191,7 +191,7 @@ target_include_directories(vx_lib PUBLIC
 # vxi_format.cpp).  Dependencia explicita para que CMake genere el header
 # antes de compilar ese TU y lo recompile cuando el header cambie.
 target_include_directories(vx_lib PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-set_source_files_properties(vxi_format.cpp PROPERTIES
+set_source_files_properties(module/vxi_format.cpp PROPERTIES
     OBJECT_DEPENDS ${VX_CODEGEN_VERSION_HDR})
 
 # C++17 minimo (consistente con el resto del proyecto).

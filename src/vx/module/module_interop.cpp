@@ -30,7 +30,7 @@
 #include "vx/vxi_format.h"
 #include "vx/diagnostic.h" // #cross-module-generics: re-parse de templates
 #include "vx/lexer.h"
-#include "generic_clone.h" // rename_idents: helpers del modulo de la plantilla
+#include "vx/generic_clone.h" // rename_idents: helpers del modulo de la plantilla
 #include "vx/parser.h"
 
 namespace vx {

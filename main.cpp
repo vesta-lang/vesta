@@ -28,7 +28,7 @@
 #include "cli/version_info.h" // Banner de `vesta --version` / `-v`
 #include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
 #include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
-#include "../src/vx/contract_when.h" // registro de arquitecturas conocidas
+#include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa

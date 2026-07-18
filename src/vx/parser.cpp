@@ -28,7 +28,7 @@
 
 #include "vx/parser.h"
 
-#include "contract_when.h"
+#include "vx/contract_when.h"
 
 #include <iostream>
 #include <string>

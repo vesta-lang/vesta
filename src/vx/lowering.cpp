@@ -25,8 +25,8 @@
 #include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime_introspect.h"   // helpers compartidos rama A
-#include "concepts.h"                  // conceptos como predicado -> CONST bool
-#include "generic_clone.h"             // clone_expr (custom print to_string)
+#include "vx/concepts.h"                  // conceptos como predicado -> CONST bool
+#include "vx/generic_clone.h"             // clone_expr (custom print to_string)
 #include "vx/lexer.h"                 // parse de fragments para @Macro
 #include "vx/parser.h"                // parse_one_expr para @Macro
 #include "ir/ir_optimizer.h"           // register_pure_new_helper

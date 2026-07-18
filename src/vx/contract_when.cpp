@@ -2,7 +2,7 @@
  * @file contract_when.cpp
  * @brief Implementacion del `when:` de un contrato (ver contract_when.h).
  */
-#include "contract_when.h"
+#include "vx/contract_when.h"
 
 #include <algorithm>
 #include <cctype>
