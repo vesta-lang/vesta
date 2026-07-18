@@ -271,6 +271,13 @@ struct AsmSchedule {
 /// semantica; devuelve una permutacion valida.  @p ua_id da las latencias.
 AsmSchedule schedule_asm_block(Isa isa, const std::string &body, uint32_t ua_id);
 
+/// Reordena las instrucciones de @p body (via @ref schedule_asm_block) y
+/// devuelve el cuerpo REORDENADO **solo si es seguro**: sin labels (un salto a
+/// una etiqueta rompe si algo la cruza), invariante @c valid, y el orden
+/// realmente cambio.  En CUALQUIER otro caso devuelve @p body SIN TOCAR.  Es la
+/// funcion que cablea el reoptimizador de asm de forma conservadora.
+std::string reschedule_asm(Isa isa, const std::string &body, uint32_t ua_id);
+
 /**
  * @brief Clasifica un operando de asm (token) a su @c (kind, width) para el
  *        matcher.  Conoce los registros de la ISA (x86 rax/eax/xmm...; ARM

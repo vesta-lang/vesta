@@ -673,6 +673,7 @@ AsmSchedule schedule_asm_block(Isa isa, const std::string &body,
     sched_segment(seg_start, n);
 
     out.order = result;
+    out.moved = false;
     for (uint32_t k = 0; k < n; ++k)
         if (out.order[k] != k) {
             out.moved = true;
@@ -687,6 +688,59 @@ AsmSchedule schedule_asm_block(Isa isa, const std::string &body,
                 out.valid = false;
                 break;
             }
+    return out;
+}
+
+namespace {
+/// ¿La linea es (o empieza por) una etiqueta `nombre:`?
+bool line_has_label(const std::string &line) {
+    std::string s = line;
+    size_t cm = s.find(';');
+    if (cm != std::string::npos) s.resize(cm);
+    size_t sl = s.find("//");
+    if (sl != std::string::npos) s.resize(sl);
+    trim(s);
+    if (s.empty()) return false;
+    size_t k = 0;
+    if (!(std::isalpha((unsigned char)s[0]) || s[0] == '_' || s[0] == '.'))
+        return false;
+    while (k < s.size() &&
+           (std::isalnum((unsigned char)s[k]) || s[k] == '_' || s[k] == '.'))
+        ++k;
+    while (k < s.size() && std::isspace((unsigned char)s[k])) ++k;
+    return k < s.size() && s[k] == ':';
+}
+} // namespace
+
+std::string reschedule_asm(Isa isa, const std::string &body, uint32_t ua_id) {
+    // Recolecta las lineas de INSTRUCCION (texto original) en el mismo orden que
+    // el scheduler; si aparece una etiqueta -> NO se reordena (conservador).
+    std::vector<std::string> insns;
+    size_t i = 0;
+    while (i <= body.size()) {
+        size_t nl = body.find('\n', i);
+        std::string line = body.substr(
+            i, nl == std::string::npos ? std::string::npos : nl - i);
+        i = (nl == std::string::npos) ? body.size() + 1 : nl + 1;
+        if (line_has_label(line)) return body; // label -> no tocar
+        std::string mnem;
+        std::vector<std::string> toks;
+        if (split_asm_line(line, mnem, toks)) insns.push_back(line);
+    }
+    if (insns.size() < 2) return body;
+
+    AsmSchedule sc = schedule_asm_block(isa, body, ua_id);
+    if (!sc.valid || !sc.moved || sc.order.size() != insns.size())
+        return body; // no seguro / no mejora -> original
+
+    std::string out;
+    for (size_t k = 0; k < sc.order.size(); ++k) {
+        // recorta espacios de cabecera para reindentar uniforme.
+        std::string t = insns[sc.order[k]];
+        trim(t);
+        out += t;
+        out += '\n';
+    }
     return out;
 }
 

@@ -789,13 +789,14 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
     case IrOp::VEC_BINOP_S:
-        // vec_binop.fN %dst_ptr, %a_ptr, %b_ptr   imm=(subop<<8)|ancho
-        o << " ";
-        print_val(o, fn, ins.operands[0]);
-        o << ", ";
-        print_val(o, fn, ins.operands[1]);
-        o << ", ";
-        print_val(o, fn, ins.operands[2]);
+        // vec_binop.fN %dst_ptr, %a_ptr[, %b_ptr]   imm=(subop<<8)|ancho.
+        // La aridad varia entre estos ops (VEC_ACC_ZERO/COMBINE/STORE tienen 1
+        // operando, VEC_ACC_ADD 2, VEC_ACC_FMA/VEC_BINOP 3): imprimimos solo los
+        // operandos que existen para no leer fuera de rango.
+        for (size_t k = 0; k < ins.operands.size(); ++k) {
+            o << (k == 0 ? " " : ", ");
+            print_val(o, fn, ins.operands[k]);
+        }
         o << ", imm=" << ins.imm;
         break;
 

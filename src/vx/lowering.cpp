@@ -19,6 +19,7 @@
 #include <algorithm> // UCRT64: no transitivo
 #include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
 #include "vx/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
+#include "vx/instr_db.h"    // reschedule_asm (reoptimizador de asm, ASA)
 #include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime_introspect.h"   // helpers compartidos rama A
@@ -13073,6 +13074,20 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
 // (port-C) decidira el transporte de la lista de registros.
 // ---------------------------------------------------------------------
 void Lowering::lower_asm(ast::AsmStmt *s) {
+    // ASA: reoptimizar (reordenar por latencia/puertos) los bloques ANALIZABLES
+    // no-volatile SIN operandos inc.7 (modelo register() clasico -> el body usa
+    // registros reales, el reordenador razona con precision).  reschedule_asm es
+    // CONSERVADOR: solo reordena si es SEGURO (sin labels, respeta todas las
+    // dependencias y barreras, invariante valido); si no, devuelve el body
+    // intacto.  Volatile/Raw se emiten verbatim (no entran aqui).
+    if (s->level == ast::AsmLevel::Analyzable && s->operands.empty()) {
+        int32_t ua = vx::instr_db::microarch_by_name(vx::instr_db::Isa::X86,
+                                                     "intel-skylake");
+        s->body = vx::instr_db::reschedule_asm(
+            vx::instr_db::Isa::X86, s->body,
+            static_cast<uint32_t>(ua < 0 ? 0 : ua));
+    }
+
     ir::IrInstr ia{};
     ia.op = ir::IrOp::INLINE_ASM;
     ia.type = ir::IrType::VOID;

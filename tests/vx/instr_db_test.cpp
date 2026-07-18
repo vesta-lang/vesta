@@ -215,6 +215,26 @@ int main() {
             "mov rdi, rsi\n",
             (uint32_t)skl);
         CHECK(s4.valid, "sched: invariante en bloque mayor");
+
+        // reschedule: con LABEL no se reordena (devuelve el original intacto).
+        std::string lbl = "loop:\nadd rax, rbx\nsub rcx, rdx\n";
+        CHECK(reschedule_asm(Isa::X86, lbl, (uint32_t)skl) == lbl,
+              "reschedule: label -> devuelve original");
+        // reschedule: el resultado (movido o no) SIEMPRE es un orden valido.
+        std::string blk =
+            "mov rax, rdi\nmov rcx, rsi\nimul rax, rax\nadd rax, rcx\n";
+        std::string rr = reschedule_asm(Isa::X86, blk, (uint32_t)skl);
+        CHECK(schedule_asm_block(Isa::X86, rr, (uint32_t)skl).valid,
+              "reschedule: el resultado sigue siendo valido");
+        // reschedule preserva el numero de instrucciones (permutacion).
+        auto count_nl = [](const std::string &s) {
+            int n = 0;
+            for (char c : s)
+                if (c == '\n') ++n;
+            return n;
+        };
+        CHECK(count_nl(rr) == 4 || rr == blk,
+              "reschedule: preserva las 4 instrucciones");
     }
 
     if (g_fail == 0)
