@@ -83,6 +83,9 @@ add_library(vx_lib STATIC
     # CFG del asm inline (bloques basicos + aristas desde labels/saltos); base
     # del dataflow, los diagnosticos y los diagramas del asm.
     asm_cfg.cpp
+    # Diagnosticos estructurales del asm sobre el CFG (codigo muerto, salto no
+    # resuelto, bucle sin salida).
+    asm_diag.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
