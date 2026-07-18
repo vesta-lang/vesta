@@ -54,7 +54,23 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa) {
     }();
     if (!on) return;
     static const sched::GenericCostModel cm;
-    sched::schedule_function(pf, cm, isa);
+    const int moved = sched::schedule_function(pf, cm, isa);
+    // Diagnostico opt-in (VESTA_SCHED_STATS=1): cuanto reordena de verdad.
+    static const bool stats = std::getenv("VESTA_SCHED_STATS") != nullptr;
+    if (stats) {
+        long instrs = 0;
+        for (const MBlock &b : pf.blocks) instrs += (long)b.instrs.size();
+        static long tot_moved = 0, tot_instr = 0, funcs = 0, touched = 0;
+        tot_moved += moved;
+        tot_instr += instrs;
+        ++funcs;
+        if (moved) ++touched;
+        std::fprintf(stderr,
+                     "[sched-stats] acum: funcs=%ld tocadas=%ld moved=%ld "
+                     "instr=%ld (%.1f%% movidas)\n",
+                     funcs, touched, tot_moved, tot_instr,
+                     tot_instr ? 100.0 * tot_moved / tot_instr : 0.0);
+    }
 }
 } // namespace
 
