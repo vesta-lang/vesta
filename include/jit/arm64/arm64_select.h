@@ -28,6 +28,7 @@
 #define VX_JIT_ARM64_SELECT_H
 
 #include <string>
+#include <vector>
 
 #include "ir/ssa_ir.h"
 
@@ -52,12 +53,18 @@ enum class Arm64Abi {
  * @param fn              Funcion IR (multi-bloque + ramas + llamadas).
  * @param out_unsupported Se pone a true si aparece una op aun no soportada.
  * @param abi             ABI de destino (ver @ref Arm64Abi).  Default AAPCS64.
+ * @param out_call_targets [out] Si != NULL, recibe EN ORDEN el nombre de la
+ *        funcion destino de cada @c CALL (cada uno emitido como un @c bl 0
+ *        placeholder).  Como el control de flujo local usa @c b/@c b.cond/@c cbnz
+ *        (nunca @c bl), TODO @c bl del cuerpo es una llamada: el backend empareja
+ *        el i-esimo @c bl con @c out_call_targets[i] y emite un reloc CALL26.
  * @return Texto ensamblador AArch64 (una instruccion por linea, sin etiqueta de
  *         funcion: el caller la envuelve).  Vacio si @c out_unsupported y no se
  *         pudo emitir nada util.
  */
 std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
-                           Arm64Abi abi = Arm64Abi::AAPCS64);
+                           Arm64Abi abi = Arm64Abi::AAPCS64,
+                           std::vector<std::string> *out_call_targets = nullptr);
 
 } // namespace arm64
 } // namespace jit

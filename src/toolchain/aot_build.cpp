@@ -1538,8 +1538,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 // (libc/runtime, resueltos por el linker): no se encolan, se
                 // emiten como relocs externas en PASS 2.
                 for (const jit::NativeReloc &r : compiled.back().relocs) {
-                    // CALL directo a un callee del modulo -> encolar.
-                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
+                    // CALL directo a un callee del modulo -> encolar (x86 rel32 o
+                    // AArch64 bl/CALL26).
+                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32 ||
+                        r.kind == jit::NativeReloc::Kind::ARM64_CALL26) {
                         if (queued.count(r.symbol)) continue;
                         if (!fn_by_name.count(r.symbol)) continue; // externo
                         queued[r.symbol] = true;
@@ -1847,7 +1849,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             };
             for (const AotFn &af : compiled) {
                 for (const jit::NativeReloc &r : af.relocs) {
-                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) continue;
+                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32 ||
+                        r.kind == jit::NativeReloc::Kind::ARM64_CALL26)
+                        continue; // llamada a funcion (pass 2), no un dato
                     if (r.symbol.rfind("secsym:", 0) == 0)
                         continue; // simbolo de seccion (pass 2)
                     if (r.symbol.rfind("fnsym:", 0) == 0)
@@ -2050,7 +2054,13 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 for (const jit::NativeReloc &r : af.relocs) {
                     const uint64_t site =
                         static_cast<uint64_t>(fl.off) + r.offset;
-                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
+                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32 ||
+                        r.kind == jit::NativeReloc::Kind::ARM64_CALL26) {
+                        // x86 usa REL32; AArch64 el imm26 del BL (CALL26).
+                        const aot::RelocKind callk =
+                            (r.kind == jit::NativeReloc::Kind::ARM64_CALL26)
+                                ? aot::RelocKind::ARM64_CALL26
+                                : aot::RelocKind::REL32;
                         auto it = fn_loc.find(r.symbol);
                         if (it == fn_loc.end()) {
                             // Simbolo EXTERNO (libc/runtime:
@@ -2078,12 +2088,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                             }
                             w.add_reloc(fl.sec, site,
                                         aot::RelocTarget::extern_sym(r.symbol),
-                                        aot::RelocKind::REL32);
+                                        callk);
                         } else {
                             w.add_reloc(fl.sec, site,
                                         aot::RelocTarget::addr(it->second.sec,
                                                                it->second.off),
-                                        aot::RelocKind::REL32);
+                                        callk);
                         }
                     } else if (r.symbol.rfind("secsym:", 0) == 0) {
                         // Simbolo de seccion "secsym:<k>:<name>" (dev OS):

@@ -15,9 +15,9 @@
  * @brief Implementacion de los backends de codegen nativo (x86 y arm64).
  */
 
-#include <cstdio>
-#include <cstdlib>
 #include "toolchain/native_backend.h"
+
+#include <capstone/capstone.h>
 
 #include "jit/arm64/arm64_select.h"
 #include "vx/asm/asm_backend.h"
@@ -62,7 +62,9 @@ class Arm64Backend : public NativeBackend {
         (void)opts;
         NativeCompileResult r;
         bool unsupported = false;
-        const std::string text = jit::arm64::arm64_emit_asm(fn, unsupported);
+        std::vector<std::string> call_targets;
+        const std::string text = jit::arm64::arm64_emit_asm(
+            fn, unsupported, jit::arm64::Arm64Abi::AAPCS64, &call_targets);
         if (unsupported || text.empty())
             return r; // no soportada.
         if (!vx::g_asm_backend)
@@ -72,8 +74,33 @@ class Arm64Backend : public NativeBackend {
         if (!asmres.ok)
             return r; // sintaxis no ensamblable -> tratar como no soportada.
         r.bytes = std::move(asmres.bytes);
-        // Relocs cross-funcion arm64 (R_AARCH64_CALL26) -> H.5b.  Por ahora el
-        // subconjunto sin CALL cross-modulo no genera relocs.
+        // Relocs cross-funcion (R_AARCH64_CALL26): cada CALL se emitio como un
+        // `bl 0` placeholder; como el control de flujo local usa b/b.cond/cbnz
+        // (nunca bl), TODO `bl` del cuerpo es una llamada.  Desensamblamos con
+        // Capstone, y el i-esimo `bl` recibe el i-esimo target -> el driver
+        // parchea su imm26 a la VA real (BFS del callee incluido).
+        if (!call_targets.empty() && !r.bytes.empty()) {
+            csh h;
+            if (cs_open(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN, &h) == CS_ERR_OK) {
+                cs_insn *insn = nullptr;
+                size_t n = cs_disasm(h, r.bytes.data(), r.bytes.size(),
+                                     /*addr=*/0, /*count=*/0, &insn);
+                size_t ci = 0;
+                for (size_t i = 0; i < n && ci < call_targets.size(); ++i) {
+                    if (insn[i].id != ARM64_INS_BL)
+                        continue;
+                    jit::NativeReloc rl;
+                    rl.kind = jit::NativeReloc::Kind::ARM64_CALL26;
+                    rl.offset =
+                        static_cast<uint32_t>(insn[i].address); // base 0
+                    rl.symbol = call_targets[ci++];
+                    r.relocs.push_back(std::move(rl));
+                }
+                if (insn)
+                    cs_free(insn, n);
+                cs_close(&h);
+            }
+        }
         return r;
     }
 };

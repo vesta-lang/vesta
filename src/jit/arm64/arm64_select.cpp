@@ -15,6 +15,8 @@
  * @brief Implementacion del selector IR -> AArch64 (template slot-por-valor).
  */
 
+#include <cstdio>
+#include <cstdlib>
 #include "jit/arm64/arm64_select.h"
 
 #include <cctype>
@@ -82,6 +84,31 @@ const char *cmp_cc(ir::IrOp op) {
     }
 }
 
+/// Bytes de un IrType entero/ptr (para SEXT/ZEXT/CAST/TRUNC).
+int a64_type_bytes(ir::IrType t) {
+    switch (t) {
+    case ir::IrType::I8:
+    case ir::IrType::U8:
+    case ir::IrType::BOOL: return 1;
+    case ir::IrType::I16:
+    case ir::IrType::U16: return 2;
+    case ir::IrType::I32:
+    case ir::IrType::U32:
+    case ir::IrType::F32:
+    case ir::IrType::HANDLE: return 4;
+    default: return 8; // I64/U64/PTR/F64
+    }
+}
+/// ¿Es un tipo entero CON signo? (para elegir sign- vs zero-extend).
+bool a64_type_signed(ir::IrType t) {
+    return t == ir::IrType::I8 || t == ir::IrType::I16 ||
+           t == ir::IrType::I32 || t == ir::IrType::I64;
+}
+/// ¿Es un tipo float? (las conversiones float son H.7).
+bool a64_type_float(ir::IrType t) {
+    return t == ir::IrType::F32 || t == ir::IrType::F64;
+}
+
 /// Emite las copias de los PHI del bloque @p to que llegan desde @p from: por
 /// cada @c phi cuyo arg venga de @p from, copia arg -> dst (via x11).  Asi el
 /// modelo slot-por-valor resuelve los PHI en los predecesores (como el x86).
@@ -103,7 +130,8 @@ void emit_phi_copies(std::ostringstream &os, const ir::IrFunction &fn,
 } // namespace
 
 std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
-                           Arm64Abi abi) {
+                           Arm64Abi abi,
+                           std::vector<std::string> *out_call_targets) {
     out_unsupported = false;
     (void)abi; // el subconjunto entero no variadico es comun a las 3 ABIs.
     if (fn.blocks.empty()) {
@@ -116,7 +144,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
     bool has_call = false;
     for (const ir::IrBlock &bb : fn.blocks)
         for (const ir::IrInstr &in : bb.instrs)
-            if (in.op == ir::IrOp::CALL)
+            if (in.op == ir::IrOp::CALL || in.op == ir::IrOp::TAILCALL)
                 has_call = true;
 
     // Marco: area de valores (8B por valor SSA, alineada a 16) + 16B para LR si
@@ -175,6 +203,51 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 emit_ld(os, "x9", in.operands[0]);
                 os << (in.op == ir::IrOp::NEG ? "    neg x9, x9\n"
                                               : "    mvn x9, x9\n");
+                emit_st(os, "x9", in.dst);
+                break;
+            }
+            case ir::IrOp::ZEXT:
+            case ir::IrOp::SEXT:
+            case ir::IrOp::CAST:
+            case ir::IrOp::TRUNC: {
+                // Conversiones enteras.  El modelo slot-por-valor guarda 64 bits;
+                // sxt{b,h,w} (con signo) / uxt{b,h}+mov w (sin signo) ajustan el
+                // valor.  Float: H.7.
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const ir::IrType st = fn.values[in.operands[0]].type;
+                const ir::IrType dt = in.type;
+                if (a64_type_float(st) || a64_type_float(dt)) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const int sb = a64_type_bytes(st), db = a64_type_bytes(dt);
+                emit_ld(os, "x9", in.operands[0]);
+                if (db == sb) {
+                    // Mismo ancho: copia de bits (x9 ya cargado).
+                } else if (db > sb) {
+                    // Extension: signo si SEXT (o CAST desde un tipo con signo).
+                    const bool sign = (in.op == ir::IrOp::SEXT) ||
+                                      (in.op == ir::IrOp::CAST &&
+                                       a64_type_signed(st));
+                    if (sb == 1)
+                        os << (sign ? "    sxtb x9, w9\n" : "    uxtb w9, w9\n");
+                    else if (sb == 2)
+                        os << (sign ? "    sxth x9, w9\n" : "    uxth w9, w9\n");
+                    else // sb == 4
+                        os << (sign ? "    sxtw x9, w9\n" : "    mov w9, w9\n");
+                } else {
+                    // Truncacion (db < sb): el signo lo da el tipo DESTINO.
+                    const bool sign = a64_type_signed(dt);
+                    if (db == 4)
+                        os << (sign ? "    sxtw x9, w9\n" : "    mov w9, w9\n");
+                    else if (db == 2)
+                        os << (sign ? "    sxth x9, w9\n" : "    uxth w9, w9\n");
+                    else // db == 1
+                        os << (sign ? "    sxtb x9, w9\n" : "    uxtb w9, w9\n");
+                }
                 emit_st(os, "x9", in.dst);
                 break;
             }
@@ -285,9 +358,35 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 }
                 for (size_t i = 0; i < in.operands.size(); ++i)
                     emit_ld(os, arg_regs[i], in.operands[i]);
-                os << "    bl " << in.func_name << "\n";
+                // El destino de la llamada NO se resuelve por texto (Keystone no
+                // lo conoce y KS_OPT_SYM_RESOLVER corromperia los inmediatos en
+                // AArch64): emitimos un `bl 0` placeholder y anotamos el nombre;
+                // el backend empareja este bl (por orden) con un reloc CALL26.
+                os << "    bl 0\n";
+                if (out_call_targets)
+                    out_call_targets->push_back(in.func_name);
                 if (in.dst != ir::IR_NO_VALUE)
                     emit_st(os, "x0", in.dst);
+                break;
+            }
+            case ir::IrOp::TAILCALL: {
+                // `return f(args)`.  Lo bajamos como CALL + epilogo + ret
+                // (semantica identica; la TCO real -- b al callee reusando el
+                // marco -- es un refinamiento).  El `bl 0` lo empareja el
+                // backend con un reloc CALL26 igual que un CALL normal.
+                if (in.operands.size() > 8) {
+                    out_unsupported = true;
+                    return "";
+                }
+                for (size_t i = 0; i < in.operands.size(); ++i)
+                    emit_ld(os, arg_regs[i], in.operands[i]);
+                os << "    bl 0\n"; // resultado en x0 = valor de retorno
+                if (out_call_targets)
+                    out_call_targets->push_back(in.func_name);
+                if (has_call)
+                    os << "    ldr x30, [sp, #" << lr_off << "]\n";
+                os << "    add sp, sp, #" << frame << "\n";
+                os << "    ret\n";
                 break;
             }
             case ir::IrOp::RET:
@@ -300,6 +399,10 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 break;
             default:
                 // Op no soportada aun (float, memoria, dispatch dinamico): H.3+.
+                if (std::getenv("VESTA_ARM64_DUMP"))
+                    std::fprintf(stderr,
+                                 "[arm64] op no soportada en '%s': %s\n",
+                                 fn.name.c_str(), ir::ir_op_name(in.op));
                 out_unsupported = true;
                 return "";
             }

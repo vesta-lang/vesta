@@ -61,6 +61,9 @@ struct NativeReloc {
         SECREL32 =
             4, ///< TLS PE (Windows): offset del simbolo DENTRO de su seccion
                ///< (.tls); el emisor escribe target_off (no la VA).
+        ARM64_CALL26 =
+            5, ///< AArch64 BL a una FUNCION: parchea imm26 = (target-site)>>2.
+               ///< Como CALL_REL32, el driver encola el callee (BFS).
     };
     Kind kind = Kind::CALL_REL32;
     uint32_t offset = 0; ///< byte offset dentro de los bytes de la funcion

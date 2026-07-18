@@ -14,9 +14,6 @@ import subprocess
 
 from aot_harness import AotTest
 
-RET = 42  # el valor que devuelve main() en el .vx de prueba.
-
-
 def qpath(p):
     return os.path.abspath(p).replace("\\", "/")
 
@@ -26,40 +23,57 @@ if not t.have("qemu-system-aarch64"):
     print("SKIP: qemu-system-aarch64 no instalado")
     t.finish()
 
-# 1) fuente .vx trivial.
-src = t.wpath("arm64_main.vx")
-with open(src, "w") as fh:
-    fh.write("i32 main() {\n    return %d;\n}\n" % RET)
 
-# 2) compilar a ELF64 AArch64 con el AOT (codegen arm64 + LibPEparse).
-elf = t.wpath("arm64_main.elf")
-r = subprocess.run(
-    [t.vm, "-m", "aot", "--vesta", src, "--aot-arch", "aarch64",
-     "--format", "elf", "--emit", "exe", "-o", elf],
-    capture_output=True, timeout=90)
-if r.returncode != 0 or not os.path.isfile(elf):
-    t.fail("FALLO: el AOT no emitio el ELF arm64\n" +
-           r.stderr.decode(errors="replace"))
-    t.finish()
+def build_and_run(name, source, expect):
+    """Compila un .vx a ELF arm64 (AOT) y lo ejecuta con qemu; comprueba el
+    exit-code y que el contenedor sea EM_AARCH64."""
+    src = t.wpath(name + ".vx")
+    with open(src, "w") as fh:
+        fh.write(source)
+    elf = t.wpath(name + ".elf")
+    r = subprocess.run(
+        [t.vm, "-m", "aot", "--vesta", src, "--aot-arch", "aarch64",
+         "--format", "elf", "--emit", "exe", "-o", elf],
+        capture_output=True, timeout=90)
+    if r.returncode != 0 or not os.path.isfile(elf):
+        t.fail("FALLO [%s]: el AOT no emitio el ELF arm64\n%s" %
+               (name, r.stderr.decode(errors="replace")))
+        return False
+    with open(elf, "rb") as fh:
+        hdr = fh.read(20)
+    mach = hdr[18] | (hdr[19] << 8)
+    if not (hdr[:4] == b"\x7fELF" and hdr[4] == 2 and hdr[5] == 1 and
+            mach == 183):
+        t.fail("FALLO [%s]: cabecera ELF inesperada (e_machine=%d)" %
+               (name, mach))
+        return False
+    proc = subprocess.run(
+        ["qemu-system-aarch64", "-M", "virt", "-cpu", "max", "-m", "2G",
+         "-nographic", "-semihosting", "-kernel", qpath(elf)],
+        capture_output=True, timeout=40)
+    print("[%s] e_machine=183  qemu_exit=%d (esperado %d)" %
+          (name, proc.returncode, expect))
+    return proc.returncode == expect
 
-# 3) validacion estructural: magic + clase 64 + LE + e_machine=EM_AARCH64 (183).
-with open(elf, "rb") as fh:
-    hdr = fh.read(20)
-mach = hdr[18] | (hdr[19] << 8)
-ok_hdr = (hdr[:4] == b"\x7fELF" and hdr[4] == 2 and hdr[5] == 1 and mach == 183)
-print("ELF: magic/clase/LE ok=%s  e_machine=%d (esperado 183=EM_AARCH64)" %
-      (ok_hdr, mach))
 
-# 4) ejecutar con qemu -kernel; exit esperado = RET (retorno de main).
-proc = subprocess.run(
-    ["qemu-system-aarch64", "-M", "virt", "-cpu", "max", "-m", "2G",
-     "-nographic", "-semihosting", "-kernel", qpath(elf)],
-    capture_output=True, timeout=40)
-print("qemu_exit=%d (esperado %d)" % (proc.returncode, RET))
+# 1) single-function: main devuelve una constante.
+ok1 = build_and_run("arm64_main", "i32 main() {\n    return 42;\n}\n", 42)
 
-if ok_hdr and proc.returncode == RET:
-    t.ok("OK: .vx compilado a ELF64 AArch64 (e_machine=EM_AARCH64, emision via "
-         "LibPEparse) ejecuta en qemu-system-aarch64 y devuelve %d" % RET)
+# 2) multi-funcion + recursion: ejercita las llamadas cross-funcion arm64 (bl +
+#    reloc R_AARCH64_CALL26).  main hace tail-call a suma; suma se llama a si
+#    misma.  suma(8) = 0+1+..+8 = 36.
+ok2 = build_and_run(
+    "arm64_rec",
+    "i32 suma(i32 n) {\n"
+    "    if (n <= 0) {\n        return 0;\n    }\n"
+    "    return n + suma(n - 1);\n}\n"
+    "i32 main() {\n    return suma(8);\n}\n",
+    36)
+
+if ok1 and ok2:
+    t.ok("OK: .vx compilado a ELF64 AArch64 (EM_AARCH64, emision via LibPEparse) "
+         "ejecuta en qemu-system-aarch64: single-fn=42 y recursion cross-fn "
+         "(CALL26)=36")
 else:
-    t.fail("FALLO: cabecera ELF inesperada o exit != %d" % RET)
+    t.fail("FALLO: algun caso arm64 no ejecuto con el exit esperado")
 t.finish()
