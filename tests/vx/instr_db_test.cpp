@@ -106,6 +106,25 @@ int main() {
     CHECK(p6 >= 0 && cost(Isa::RISCV, amo, (uint32_t)p6).found,
           "riscv: coste amoadd.w en sifive-p670");
 
+    // --- capa de FEATURES (que admite cada CPU) ---
+    CHECK(cpu_count(Isa::X86) == 128, "x86: 128 CPU con features");
+    int32_t hsw = cpu_by_name(Isa::X86, "haswell");
+    CHECK(hsw >= 0, "x86: haswell presente");
+    CHECK(cpu_has_feature(Isa::X86, (uint32_t)hsw, "AVX2"),
+          "haswell tiene AVX2");
+    CHECK(!cpu_has_feature(Isa::X86, (uint32_t)hsw, "AVX512F"),
+          "haswell NO tiene AVX512");
+    // arm64 y arm32 comparten features (misma tabla ARM).
+    int32_t n2c = cpu_by_name(Isa::ARM64, "neoverse-n2");
+    CHECK(n2c >= 0 && cpu_has_feature(Isa::ARM64, (uint32_t)n2c, "SVE2"),
+          "arm64: neoverse-n2 tiene SVE2");
+    CHECK(cpu_by_name(Isa::ARM32, "neoverse-n2") == n2c,
+          "arm32 comparte tabla de features con arm64");
+    // riscv: sifive-x280 tiene vector.
+    int32_t x280 = cpu_by_name(Isa::RISCV, "sifive-x280");
+    CHECK(x280 >= 0 && cpu_has_feature(Isa::RISCV, (uint32_t)x280, "StdExtZve32x"),
+          "riscv: sifive-x280 tiene Zve32x (vector)");
+
     if (g_fail == 0)
         std::printf("=== instr_db_test: %d checks OK, 0 fallidos ===\n",
                     g_checks);

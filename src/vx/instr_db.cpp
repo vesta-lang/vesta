@@ -181,5 +181,47 @@ AsmCost cost(Isa isa, int32_t form_id, uint32_t ua_id) {
     return r;
 }
 
+// -------------------------------------------------------------------------
+// Capa de features por CPU (que extensiones de ISA admite cada core).
+// -------------------------------------------------------------------------
+
+namespace {
+FeatData feat_for(Isa isa) {
+    switch (isa) {
+    case Isa::X86:
+        return feat_x86();
+    case Isa::ARM64:
+    case Isa::ARM32:
+        return feat_arm();          // A64 y A32/T32 comparten features.
+    case Isa::RISCV:
+        return feat_riscv();
+    }
+    return {};
+}
+} // namespace
+
+uint32_t cpu_count(Isa isa) { return feat_for(isa).cpu_count; }
+
+const char *cpu_name(Isa isa, uint32_t cpu_id) {
+    const FeatData f = feat_for(isa);
+    return cpu_id < f.cpu_count ? f.cpus[cpu_id].name : "";
+}
+
+int32_t cpu_by_name(Isa isa, const std::string &name) {
+    const FeatData f = feat_for(isa);
+    for (uint32_t i = 0; i < f.cpu_count; ++i)
+        if (name == f.cpus[i].name) return static_cast<int32_t>(i);
+    return -1;
+}
+
+bool cpu_has_feature(Isa isa, uint32_t cpu_id, const std::string &feature) {
+    const FeatData f = feat_for(isa);
+    if (cpu_id >= f.cpu_count) return false;
+    const CpuFeatures &c = f.cpus[cpu_id];
+    for (uint16_t i = 0; i < c.feat_count; ++i)
+        if (feature == f.feat_names[c.feats[i]]) return true;
+    return false;
+}
+
 } // namespace instr_db
 } // namespace vx

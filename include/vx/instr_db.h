@@ -165,6 +165,40 @@ int32_t microarch_by_name(Isa isa, const std::string &name);
 /// Coste de la forma @p form_id en la microarquitectura @p ua_id.
 AsmCost cost(Isa isa, int32_t form_id, uint32_t ua_id);
 
+// ------------------------------------------------------------------------
+// Capa de FEATURES por CPU: que extensiones de ISA implementa cada core
+// (para saber que instrucciones admite -- especializacion de codegen).
+// Tablas generadas en gen/instr_db_<isa>_feat_gen.cpp.
+// ------------------------------------------------------------------------
+
+/// Features (extensiones de ISA) que implementa una CPU real.
+struct CpuFeatures {
+    const char *name;      ///< nombre de la CPU.
+    const char *sched;     ///< modelo de scheduling asociado (documentacion).
+    const uint16_t *feats; ///< indices al pool de nombres de feature.
+    uint16_t feat_count;
+};
+
+/// Tabla de features de una ISA (accesor del .cpp de features generado).
+struct FeatData {
+    const char *const *feat_names = nullptr;
+    uint16_t feat_name_count = 0;
+    const CpuFeatures *cpus = nullptr;
+    uint16_t cpu_count = 0;
+};
+const FeatData &feat_x86();
+const FeatData &feat_arm(); ///< AArch64 y A32/T32 comparten features.
+const FeatData &feat_riscv();
+
+/// Numero de CPUs con features para la ISA.
+uint32_t cpu_count(Isa isa);
+/// Nombre de la CPU @p cpu_id (o "" si fuera de rango).
+const char *cpu_name(Isa isa, uint32_t cpu_id);
+/// Indice de una CPU por nombre (-1 si no existe).
+int32_t cpu_by_name(Isa isa, const std::string &name);
+/// La CPU @p cpu_id implementa la feature @p feature (extension de ISA).
+bool cpu_has_feature(Isa isa, uint32_t cpu_id, const std::string &feature);
+
 /**
  * @brief Resuelve el texto de una instruccion (mnemonico + operandos) a su
  *        FormID en la DB de la ISA dada.  Devuelve -1 si el mnemonico no existe.

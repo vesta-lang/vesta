@@ -165,14 +165,58 @@ def gen_cost(root, isa, out):
           % (isa, len(uarchs), tot_fc, out, os.path.getsize(out) / 1e6))
 
 
+def gen_feat(root, isa, out):
+    """Emite el .cpp de FEATURES por CPU (que extensiones admite cada core).
+    ARM64 y ARM32 comparten arm/arm.vxfeat -> se genera una vez con isa=arm."""
+    vxfeat_rel = {"x86": "x86/x86.vxfeat", "arm": "arm/arm.vxfeat",
+                  "riscv": "riscv/riscv.vxfeat"}[isa]
+    meta, table, cpus = database.load_vxfeat(os.path.join(root, vxfeat_rel))
+    fidx = {n: i for i, n in enumerate(table)}
+    rows = []
+    for cpu in sorted(cpus):
+        ids = sorted(fidx[f] for f in cpus[cpu]["features"])
+        rows.append((cpu, cpus[cpu]["sched"], ids))
+
+    low = isa.lower().replace("-", "_")
+    with open(out, "w", encoding="ascii", newline="\n") as f:
+        f.write("// GENERADO por tools/import/gen_cpp_db.py -- NO editar a mano.\n")
+        f.write("// Features (extensiones de ISA) por CPU %s.\n" % isa)
+        f.write('#include "vx/instr_db.h"\n\n')
+        f.write("namespace vx { namespace instr_db { namespace {\n\n")
+        # pool de nombres de feature
+        f.write("const char *const kFn[] = {")
+        f.write(",".join('"%s"' % _cesc(n) for n in table) if table else '""')
+        f.write("};\n")
+        # listas de ids por CPU
+        for i, (cpu, sched, ids) in enumerate(rows):
+            f.write("const uint16_t kCf%d[] = {%s};\n"
+                    % (i, ",".join(str(x) for x in ids) if ids else "0"))
+        # tabla de CPUs
+        f.write("const CpuFeatures kCpu[] = {\n")
+        for i, (cpu, sched, ids) in enumerate(rows):
+            f.write('  {"%s", "%s", kCf%d, %d},\n'
+                    % (_cesc(cpu), _cesc(sched), i, len(ids)))
+        f.write("};\n\n} // namespace anonimo\n\n")
+        f.write("const FeatData &feat_%s() {\n" % low)
+        f.write("  static const FeatData d = {kFn, %d, kCpu, %d};\n"
+                "  return d;\n}\n\n" % (len(table), len(rows)))
+        f.write("}} // namespace vx::instr_db\n")
+
+    print("[gen_cpp_db] %s FEATURES: %d CPU, %d features -> %s (%.1f MB)"
+          % (isa, len(rows), len(table), out, os.path.getsize(out) / 1e6))
+
+
 def main():
     if len(sys.argv) < 4:
         sys.exit("uso: python gen_cpp_db.py <arch-data-dir> <isa> <salida.cpp> "
-                 "[forms|cost]")
+                 "[forms|cost|feat]")
     root, isa, out = sys.argv[1:4]
     mode = sys.argv[4] if len(sys.argv) > 4 else "forms"
     if mode == "cost":
         gen_cost(root, isa, out)
+        return
+    if mode == "feat":
+        gen_feat(root, isa, out)
         return
     vxisa_rel = _ISA.get(isa, (os.path.join(isa, isa + ".vxisa"),))[0]
     forms = database.load_vxisa(os.path.join(root, vxisa_rel))
