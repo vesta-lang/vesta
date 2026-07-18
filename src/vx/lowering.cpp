@@ -19,6 +19,7 @@
 #include <algorithm> // UCRT64: no transitivo
 #include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
 #include "vx/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
+#include "vx/asm_diag.h"    // diagnosticos estructurales del asm (ASA.2)
 #include "vx/instr_db.h"    // reschedule_asm (reoptimizador de asm, ASA)
 #include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
@@ -13086,6 +13087,22 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         s->body = vx::instr_db::reschedule_asm(
             vx::instr_db::Isa::X86, s->body,
             static_cast<uint32_t>(ua < 0 ? 0 : ua));
+    }
+
+    // ASA.2: diagnosticos ESTRUCTURALES del bloque (codigo muerto, salto a
+    // etiqueta inexistente, bucle sin salida).  Solo para bloques que el
+    // compilador debe entender (Analyzable/Volatile; `raw` es cero-analisis por
+    // diseno).  Son SOLIDOS (solo alcanzabilidad, sin falsos positivos).  Se
+    // emiten como WARNINGS; la linea se mapea con body_loc.
+    if (s->level != ast::AsmLevel::Raw) {
+        std::vector<vx::AsmDiag> ds =
+            vx::asm_diagnose(vx::instr_db::Isa::X86, s->body);
+        for (const vx::AsmDiag &d : ds) {
+            SourceLoc dl = s->body_loc;
+            if (d.line_no > 0)
+                dl.line = s->body_loc.line + (d.line_no - 1);
+            diags_.warning(dl, "asm: " + d.message + " [" + d.code + "]");
+        }
     }
 
     ir::IrInstr ia{};
