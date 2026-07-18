@@ -80,6 +80,9 @@ add_library(vx_lib STATIC
     # instruccion de asm_effects; base del compilador consciente del asm.
     asm_analyze.cpp
     asm_backend.cpp
+    # CFG del asm inline (bloques basicos + aristas desde labels/saltos); base
+    # del dataflow, los diagnosticos y los diagramas del asm.
+    asm_cfg.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
