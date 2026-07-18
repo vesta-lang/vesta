@@ -86,6 +86,9 @@ add_library(vx_lib STATIC
     # Diagnosticos estructurales del asm sobre el CFG (codigo muerto, salto no
     # resuelto, bucle sin salida).
     asm_diag.cpp
+    # Diagramas del CFG del asm anotados con coste/latencia/cuellos de botella/
+    # flags/diagnosticos (mermaid + graphviz), para embeber en los diagramas.
+    asm_diagram.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.

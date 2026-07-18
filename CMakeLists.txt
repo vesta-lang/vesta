@@ -732,6 +732,19 @@ else ()
     target_link_libraries(test_asm_diag PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Diagramas del CFG del asm anotados con coste.
+add_executable(test_asm_diagram tests/vx/asm_diagram_test.cpp)
+target_include_directories(test_asm_diagram PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asm_diagram PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asm_diagram PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asm_diagram PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asm_diagram PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
