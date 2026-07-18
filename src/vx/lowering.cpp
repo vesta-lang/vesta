@@ -13089,20 +13089,36 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             static_cast<uint32_t>(ua < 0 ? 0 : ua));
     }
 
-    // ASA.2: diagnosticos ESTRUCTURALES del bloque (codigo muerto, salto a
-    // etiqueta inexistente, bucle sin salida).  Solo para bloques que el
-    // compilador debe entender (Analyzable/Volatile; `raw` es cero-analisis por
-    // diseno).  Son SOLIDOS (solo alcanzabilidad, sin falsos positivos).  Se
+    // ASA.2: diagnosticos del bloque.  Solo para bloques que el compilador debe
+    // entender (Analyzable/Volatile; `raw` es cero-analisis por diseno).  Se
     // emiten como WARNINGS; la linea se mapea con body_loc.
     if (s->level != ast::AsmLevel::Raw) {
-        std::vector<vx::AsmDiag> ds =
-            vx::asm_diagnose(vx::instr_db::Isa::X86, s->body);
-        for (const vx::AsmDiag &d : ds) {
-            SourceLoc dl = s->body_loc;
-            if (d.line_no > 0)
-                dl.line = s->body_loc.line + (d.line_no - 1);
-            diags_.warning(dl, "asm: " + d.message + " [" + d.code + "]");
-        }
+        auto emit = [&](const std::vector<vx::AsmDiag> &ds) {
+            for (const vx::AsmDiag &d : ds) {
+                SourceLoc dl = s->body_loc;
+                if (d.line_no > 0)
+                    dl.line = s->body_loc.line + (d.line_no - 1);
+                diags_.warning(dl, "asm: " + d.message + " [" + d.code + "]");
+            }
+        };
+        vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, s->body);
+        // ESTRUCTURALES (codigo muerto, salto no resuelto, bucle sin salida):
+        // solidos, sin dependencias.
+        emit(vx::asm_diagnose_cfg(cfg));
+        // FLAGS leidas sin comparacion previa (VXA005): independiente de los
+        // register() bindings, asi que se puede emitir sin conocerlos.  Se
+        // filtra VXA004 (registro sin inicializar), que SI necesita los bindings
+        // (pendiente de extraerlos del scope).
+        int32_t ua = vx::instr_db::microarch_by_name(vx::instr_db::Isa::X86,
+                                                     "intel-skylake");
+        std::vector<vx::AsmDiag> df = vx::asm_diagnose_uninit(
+            cfg, vx::instr_db::Isa::X86, {},
+            static_cast<uint32_t>(ua < 0 ? 0 : ua));
+        std::vector<vx::AsmDiag> flags_only;
+        for (auto &d : df)
+            if (d.code == "VXA005")
+                flags_only.push_back(std::move(d));
+        emit(flags_only);
     }
 
     ir::IrInstr ia{};

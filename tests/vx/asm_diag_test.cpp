@@ -199,6 +199,65 @@ int main() {
               "rax indefinido en todos los caminos: VXA004 en el merge");
     }
 
+    // === Dataflow de flags: lectura sin comparacion previa (VXA005). ===
+
+    // --- Rama condicional sin ningun escritor de flags antes -> VXA005. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "mov rax, 0\n"   // no toca flags
+                                 "jnz .end\n"     // lee flags indefinidas
+                                 "add rax, 1\n"
+                                 ".end:\n"
+                                 "ret\n");
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rax"}, skl);
+        CHECK(has_code(ds, "VXA005"), "jnz sin cmp previo -> VXA005");
+    }
+
+    // --- cmp antes de la rama -> sin VXA005. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "cmp rax, rbx\n" // escribe flags
+                                 "je .eq\n"        // lee flags (definidas)
+                                 "mov rax, 0\n"
+                                 ".eq:\n"
+                                 "ret\n");
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rax", "rbx"}, skl);
+        CHECK(!has_code(ds, "VXA005"), "cmp antes de je: sin VXA005");
+    }
+
+    // --- test antes de la rama -> sin VXA005. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "test rax, rax\n"
+                                 "jz .zero\n"
+                                 "mov rbx, 1\n"
+                                 ".zero:\n"
+                                 "ret\n");
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rax"}, skl);
+        CHECK(!has_code(ds, "VXA005"), "test antes de jz: sin VXA005");
+    }
+
+    // --- Cuerpo aritmetico sin ramas: ningun VXA005 (nadie lee flags). ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "mov rax, rdi\n"
+                                 "add rax, rsi\n"); // escribe flags, nadie las lee
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rdi", "rsi"}, skl);
+        CHECK(!has_code(ds, "VXA005"), "sin lectura de flags: sin VXA005");
+    }
+
+    // --- arm64: b.eq sin comparacion previa -> VXA005. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::ARM64,
+                                 "mov x0, #1\n"   // no toca NZCV
+                                 "b.eq .l\n"       // lee flags indefinidas
+                                 "mov x0, #2\n"
+                                 ".l:\n"
+                                 "ret\n");
+        auto ds = asm_diagnose_uninit(c, Isa::ARM64, {"x0"}, 0);
+        CHECK(has_code(ds, "VXA005"), "arm64 b.eq sin cmp previo -> VXA005");
+    }
+
     std::printf("=== asm_diag_test: %d checks OK, %d fallidos ===\n",
                 g_checks - g_fail, g_fail);
     return g_fail ? 1 : 0;

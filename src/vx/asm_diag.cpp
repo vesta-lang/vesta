@@ -168,8 +168,17 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
     if (nb == 0)
         return out;
 
+    // Token especial que modela el registro de flags (RFLAGS/NZCV) como un unico
+    // valor.  Solo tiene sentido en x86 y arm64 (RISC-V no tiene flags).
+    static const std::string FLAGS = "$flags";
+    const bool has_flags = (isa == instr_db::Isa::X86 ||
+                            isa == instr_db::Isa::ARM64);
+
     // Semantica (lecturas/escrituras/modelada) por instruccion, cacheada.
     std::vector<instr_db::AsmInsnSem> sem(cfg.insns.size());
+    // Lectura/escritura de flags por instruccion (x86/arm64).
+    std::vector<bool> flag_read(cfg.insns.size(), false);
+    std::vector<bool> flag_write(cfg.insns.size(), false);
     // Universo = registros canonicos que APARECEN (solo reportamos lecturas).
     std::set<std::string> universe;
     for (size_t i = 0; i < cfg.insns.size(); ++i) {
@@ -178,6 +187,17 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
             universe.insert(r);
         for (const std::string &r : sem[i].writes)
             universe.insert(r);
+        if (has_flags) {
+            // Lee flags: una rama condicional (jCC / b.CC), o un consumidor de
+            // flags que la DB modela (adc/sbb/cmovCC/setCC -> operando FLAGS).
+            flag_read[i] = (cfg.insns[i].term == AsmTerm::CondBranch) ||
+                           sem[i].reads_flags;
+            // Escribe flags: cmp/add/sub/test/... (la DB los modela con un
+            // operando FLAGS de escritura).
+            flag_write[i] = sem[i].writes_flags;
+            if (flag_read[i] || flag_write[i])
+                universe.insert(FLAGS);
+        }
     }
     if (universe.empty())
         return out;
@@ -214,12 +234,16 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
         default:
             break;
         }
-        if (!sem[i].modeled) {
+        if (!sem[i].modeled && !flag_write[i]) {
+            // No entendemos la instruccion y no consta que escriba flags -> pudo
+            // definir cualquier cosa: vacia (conservador).
             cur.clear();
             return;
         }
         for (const std::string &w : sem[i].writes)
             cur.erase(w);
+        if (flag_write[i])
+            cur.erase(FLAGS); // cmp/add/sub/... definen las flags.
     };
 
     // Transferencia de un bloque completo.
@@ -272,8 +296,8 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
     for (uint32_t b = 0; b < nb; ++b) {
         RegSet cur = undef_in[b];
         for (uint32_t i = cfg.blocks[b].first; i <= cfg.blocks[b].last; ++i) {
-            // Solo reportamos lecturas de una instruccion MODELADA (si no la
-            // entendemos, no afirmamos nada sobre sus operandos).
+            // Solo reportamos lecturas de registro de una instruccion MODELADA
+            // (si no la entendemos, no afirmamos nada sobre sus operandos).
             if (sem[i].modeled) {
                 for (const std::string &r : sem[i].reads) {
                     if (cur.count(r)) {
@@ -288,6 +312,21 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
                             out.push_back(std::move(d));
                         }
                     }
+                }
+            }
+            // Lectura de flags: se comprueba aunque la instruccion no este
+            // modelada (las ramas condicionales no lo estan) -> `jz` antes de
+            // cualquier `cmp`/`test` avisa.
+            if (flag_read[i] && cur.count(FLAGS)) {
+                auto key = std::make_pair(cfg.insns[i].line_no, FLAGS);
+                if (seen.insert(key).second) {
+                    AsmDiag d;
+                    d.severity = AsmDiagSeverity::Warning;
+                    d.line_no = cfg.insns[i].line_no;
+                    d.code = "VXA005";
+                    d.message = "flags leidas sin una comparacion/operacion "
+                                "previa en el bloque asm";
+                    out.push_back(std::move(d));
                 }
             }
             apply_defs(i, cur);

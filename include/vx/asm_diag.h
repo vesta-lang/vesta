@@ -81,7 +81,13 @@ std::vector<AsmDiag> asm_diagnose(instr_db::Isa isa, const std::string &body);
  *                   positivo, por eso es un parametro obligatorio.
  * @param ua_id      Microarq para la semantica (las lecturas/escrituras no
  *                   dependen de ella; solo se usa para resolver la forma).
- * @return Diagnosticos VXA004 (uno por (linea, registro)).
+ * @return Diagnosticos VXA004 (registro sin inicializar) y VXA005 (flags leidas
+ *         sin una comparacion/operacion previa: p.ej. `jz` antes de `cmp`), uno
+ *         por (linea, registro/flags).
+ *
+ * Las flags (RFLAGS / NZCV) se modelan como un unico valor: una rama condicional
+ * las LEE, y `cmp`/`add`/`sub`/`test`/... las ESCRIBEN.  Solo se analiza en x86 y
+ * arm64 (RISC-V no tiene registro de flags; sus ramas comparan registros).
  */
 std::vector<AsmDiag>
 asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
