@@ -55,9 +55,30 @@ std::string a64_name(uint8_t id, uint8_t w) {
     return "d" + std::to_string(n);
 }
 
-/// ¿El tipo IR es float?  (el subset entero bail-ea con floats.)
+/// ¿El tipo IR es float?
 bool ir_is_float(ir::IrType t) {
     return t == ir::IrType::F32 || t == ir::IrType::F64;
+}
+
+/// ¿El tipo IR entero es con signo? (I8..I64).
+bool ir_signed(ir::IrType t) {
+    return t >= ir::IrType::I8 && t <= ir::IrType::I64;
+}
+
+/// Ancho en bytes de un tipo IR entero/puntero.
+int ir_bytes(ir::IrType t) {
+    switch (t) {
+    case ir::IrType::I8:
+    case ir::IrType::U8:
+    case ir::IrType::BOOL: return 1;
+    case ir::IrType::I16:
+    case ir::IrType::U16: return 2;
+    case ir::IrType::I32:
+    case ir::IrType::U32:
+    case ir::IrType::F32:
+    case ir::IrType::HANDLE: return 4;
+    default: return 8; // I64/U64/PTR/F64
+    }
 }
 
 /// IrOp ALU entero -> MOp (3-operandos; el encoder arm64 lo traduce).
@@ -71,6 +92,7 @@ bool alu_mop(ir::IrOp op, MOp &out) {
     case ir::IrOp::XOR: out = MOp::XOR; return true; // -> eor
     case ir::IrOp::SHL: out = MOp::SHL; return true; // -> lsl
     case ir::IrOp::SHR: out = MOp::SHR; return true; // -> lsr
+    case ir::IrOp::SAR: out = MOp::SAR; return true; // -> asr
     default: return false;
     }
 }
@@ -146,6 +168,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
     out = MFunction();
     out.vreg_count = static_cast<uint32_t>(fn.values.size());
     out.blocks.resize(fn.blocks.size());
+    uint32_t syn_lbl = 0; // labels sinteticos de BR_COND (.Ls<n>)
 
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         const ir::IrBlock &bb = fn.blocks[bi];
@@ -195,13 +218,66 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             case ir::IrOp::OR:
             case ir::IrOp::XOR:
             case ir::IrOp::SHL:
-            case ir::IrOp::SHR: {
+            case ir::IrOp::SHR:
+            case ir::IrOp::SAR: {
                 MOp mop;
                 if (in.operands.size() != 2 || !alu_mop(in.op, mop))
                     return false;
                 O.push_back(MInstr::make_binary(mop, vr(in.dst),
                                                 vr(in.operands[0]),
                                                 vr(in.operands[1])));
+                break;
+            }
+            case ir::IrOp::DIV: {
+                if (in.operands.size() != 2) return false;
+                const MOp d =
+                    ir_signed(in.type) ? MOp::A64_SDIV : MOp::A64_UDIV;
+                O.push_back(MInstr::make_binary(d, vr(in.dst),
+                                                vr(in.operands[0]),
+                                                vr(in.operands[1])));
+                break;
+            }
+            case ir::IrOp::MOD: {
+                // mod = a - (a/b)*b (sin A64_MSUB, que necesitaria 4 operandos).
+                if (in.operands.size() != 2) return false;
+                const MOp d =
+                    ir_signed(in.type) ? MOp::A64_SDIV : MOp::A64_UDIV;
+                const uint32_t q = out.vreg_count++; // cociente
+                const uint32_t p = out.vreg_count++; // producto q*b
+                MOperand qv = MOperand::make_vreg(q, RegClass::GP, 8);
+                MOperand pv = MOperand::make_vreg(p, RegClass::GP, 8);
+                O.push_back(MInstr::make_binary(d, qv, vr(in.operands[0]),
+                                                vr(in.operands[1])));
+                O.push_back(MInstr::make_binary(MOp::IMUL, pv, qv,
+                                                vr(in.operands[1])));
+                O.push_back(MInstr::make_binary(MOp::SUB, vr(in.dst),
+                                                vr(in.operands[0]), pv));
+                break;
+            }
+            case ir::IrOp::SEXT:
+            case ir::IrOp::ZEXT:
+            case ir::IrOp::TRUNC:
+            case ir::IrOp::CAST: {
+                if (in.operands.size() != 1) return false;
+                const ir::IrType st = fn.values[in.operands[0]].type;
+                if (ir_is_float(st) || ir_is_float(in.type)) return false;
+                // Extension/truncacion entera -> MOVSX/MOVZX con anchos (el
+                // encoder emite sxt/uxt/mov segun src/dst).  El signo: SEXT o
+                // CAST desde un tipo con signo (extension); TRUNC toma el signo
+                // del tipo destino.
+                const int sb = ir_bytes(st), db = ir_bytes(in.type);
+                bool sign;
+                if (in.op == ir::IrOp::TRUNC || db < sb)
+                    sign = ir_signed(in.type);
+                else
+                    sign = (in.op == ir::IrOp::SEXT) ||
+                           (in.op == ir::IrOp::CAST && ir_signed(st));
+                MInstr m = MInstr::make_unary(
+                    sign ? MOp::MOVSX : MOp::MOVZX, vr(in.dst),
+                    vr(in.operands[0]));
+                m.dst.width = static_cast<uint8_t>(db);
+                m.src1.width = static_cast<uint8_t>(sb);
+                O.push_back(m);
                 break;
             }
             case ir::IrOp::CMP_EQ:
@@ -234,18 +310,23 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 break;
             case ir::IrOp::BR_COND: {
                 if (in.operands.size() != 1) return false;
-                // cbnz cond, true ; (false: phi + b)
-                MInstr cbnz = MInstr::make_unary(
-                    MOp::A64_CBNZ, MOperand::make_label(in.target_block),
-                    vr(in.operands[0]));
+                // Cada arista lleva SUS copias de PHI (correcto con o sin PHI):
+                //   cbnz cond, .Ls_true
+                //   <copias PHI del false> ; b false_block
+                // .Ls_true:
+                //   <copias PHI del true> ; b true_block
+                const uint32_t ls = syn_lbl++;
+                MInstr cbnz = MInstr::make_unary(MOp::A64_CBNZ,
+                                                 MOperand::make_label(ls),
+                                                 vr(in.operands[0]));
                 O.push_back(cbnz);
                 emit_phi_copies(O, fn, static_cast<ir::IrBlockId>(bi),
                                 in.false_block);
                 O.push_back(MInstr::make_jmp(in.false_block));
-                // La arista true necesita sus copias de PHI ANTES del salto;
-                // como el cbnz ya salto, se emiten en un bloque puente: aqui
-                // las ponemos tras un label sintetico via un segundo jmp.  Para
-                // el subset MVP (sin PHI en el target del true) basta el cbnz.
+                O.push_back(MInstr::make_label_def(ls));
+                emit_phi_copies(O, fn, static_cast<ir::IrBlockId>(bi),
+                                in.target_block);
+                O.push_back(MInstr::make_jmp(in.target_block));
                 break;
             }
             case ir::IrOp::RET: {
@@ -448,19 +529,23 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
             case MOp::OR:
             case MOp::XOR:
             case MOp::SHL:
-            case MOp::SHR: {
-                static const char *mn[] = {"add", "sub", "mul", "and",
-                                           "orr", "eor", "lsl", "lsr"};
-                int idx = mi.op == MOp::ADD    ? 0
-                          : mi.op == MOp::SUB  ? 1
-                          : mi.op == MOp::IMUL ? 2
-                          : mi.op == MOp::AND  ? 3
-                          : mi.op == MOp::OR   ? 4
-                          : mi.op == MOp::XOR  ? 5
-                          : mi.op == MOp::SHL  ? 6
-                                               : 7;
-                os << "    " << mn[idx] << " " << rn(mi.dst) << ", "
-                   << rn(mi.src1) << ", ";
+            case MOp::SHR:
+            case MOp::SAR:
+            case MOp::A64_UDIV:
+            case MOp::A64_SDIV: {
+                const char *mn = mi.op == MOp::ADD       ? "add"
+                                 : mi.op == MOp::SUB     ? "sub"
+                                 : mi.op == MOp::IMUL    ? "mul"
+                                 : mi.op == MOp::AND     ? "and"
+                                 : mi.op == MOp::OR      ? "orr"
+                                 : mi.op == MOp::XOR     ? "eor"
+                                 : mi.op == MOp::SHL     ? "lsl"
+                                 : mi.op == MOp::SHR     ? "lsr"
+                                 : mi.op == MOp::SAR     ? "asr"
+                                 : mi.op == MOp::A64_UDIV ? "udiv"
+                                                          : "sdiv";
+                os << "    " << mn << " " << rn(mi.dst) << ", " << rn(mi.src1)
+                   << ", ";
                 if (mi.src2.kind == MOperandKind::IMM32)
                     os << "#" << mi.src2.value << "\n";
                 else
@@ -473,6 +558,43 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
             case MOp::NOT:
                 os << "    mvn " << rn(mi.dst) << ", " << rn(mi.src1) << "\n";
                 break;
+            case MOp::MOVSX:
+            case MOp::MOVZX: {
+                // Extension entera: sxt/uxt segun signo + ancho de la fuente.
+                // El destino ancho es siempre x (64b); w para truncar a 32.
+                const bool sign = mi.op == MOp::MOVSX;
+                const int sb = mi.src1.width, db = mi.dst.width;
+                const std::string d = a64_name(mi.dst.reg, db <= 4 ? 4 : 8);
+                const std::string s = a64_name(mi.src1.reg, 4);
+                if (db < sb) {
+                    // Truncacion: quedarse con los db bytes bajos.
+                    if (db == 4)
+                        os << "    mov " << a64_name(mi.dst.reg, 4) << ", "
+                           << a64_name(mi.src1.reg, 4) << "\n";
+                    else if (db == 2)
+                        os << "    " << (sign ? "sxth " : "uxth ") << d << ", "
+                           << s << "\n";
+                    else
+                        os << "    " << (sign ? "sxtb " : "uxtb ") << d << ", "
+                           << s << "\n";
+                } else if (db > sb) {
+                    if (sb == 1)
+                        os << "    " << (sign ? "sxtb " : "uxtb ") << d << ", "
+                           << s << "\n";
+                    else if (sb == 2)
+                        os << "    " << (sign ? "sxth " : "uxth ") << d << ", "
+                           << s << "\n";
+                    else // sb == 4
+                        os << "    "
+                           << (sign ? "sxtw " + a64_name(mi.dst.reg, 8) + ", " + s
+                                    : "mov " + a64_name(mi.dst.reg, 4) + ", " + s)
+                           << "\n";
+                } else {
+                    os << "    mov " << rn(mi.dst) << ", " << rn(mi.src1)
+                       << "\n";
+                }
+                break;
+            }
             case MOp::CMP:
                 os << "    cmp " << rn(mi.src1) << ", " << rn(mi.src2) << "\n";
                 break;
@@ -481,17 +603,22 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                    << cc_by_index(static_cast<uint8_t>(mi.flags)) << "\n";
                 break;
             case MOp::A64_CBNZ:
-                os << "    cbnz " << rn(mi.src1) << ", .Lb" << mi.dst.value << "\n";
+                os << "    cbnz " << rn(mi.src1) << ", .Ls" << mi.dst.value
+                   << "\n";
                 break;
             case MOp::A64_CBZ:
-                os << "    cbz " << rn(mi.src1) << ", .Lb" << mi.dst.value << "\n";
+                os << "    cbz " << rn(mi.src1) << ", .Ls" << mi.dst.value
+                   << "\n";
+                break;
+            case MOp::LABEL_DEF:
+                os << ".Ls" << mi.src1.value << ":\n";
                 break;
             case MOp::JMP:
-                os << "    b .Lb" << mi.dst.value << "\n";
+                os << "    b .Lb" << mi.src1.value << "\n";
                 break;
             case MOp::JCC:
                 os << "    b." << cc_by_index(static_cast<uint8_t>(mi.variant))
-                   << " .Lb" << mi.dst.value << "\n";
+                   << " .Lb" << mi.src1.value << "\n";
                 break;
             case MOp::LOAD:
                 os << "    ldr " << rn(mi.dst) << ", [sp, #" << mi.src1.value
