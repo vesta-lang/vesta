@@ -87,28 +87,24 @@ int suffix_num(const std::string &s, size_t pref) {
  * @return la clave, o UINT32_MAX si es una CLASE (varios regs, "GPR64", "-") o
  *         vacio -> no es un registro implicito fijo.
  */
-/// Base del espacio de claves para registros ARM (X/W GP y V/Q/D/S FP): se
-/// numeran aparte de los x86 para que no colisionen si conviven claves de
-/// ambas ISAs.  Cada ISA solo genera claves de su propio espacio.
-constexpr uint32_t ARM_GP_BASE = 1u << 22;
-constexpr uint32_t ARM_FP_BASE = (1u << 22) + 64;
-
 /**
- * @brief Decodifica un register_set ARM (AArch64) a clave: X/W n -> GP n;
- *        V/Q/D/S/H/B n -> FP n; SP/XZR/WZR y sistema -> especial por nombre.
+ * @brief Decodifica un register_set ARM (AArch64) a la clave de dependencia,
+ *        USANDO LA MISMA NUMERACION que el target arm64 del pipeline vreg
+ *        (build_arm64_target): GP x/w n -> n (0-30); FP/SIMD v/q/d/s/h/b n ->
+ *        32+n (32-63).  Asi un implicito de la DB aliasa el operando explicito
+ *        con el mismo registro.  SP/XZR/WZR/sistema -> especial por nombre.
  */
 uint32_t regset_to_key_arm(const std::string &s, uint16_t regset_idx) {
     if (s == "SP" || s == "WSP" || s == "XZR" || s == "WZR" || s == "PC")
         return SPECIAL_BASE + regset_idx;
-    // X0..X30 / W0..W30 (GP).  V/Q/D/S/H/B 0..31 (FP/SIMD, aliasan por indice).
     const char c = s[0];
     const bool gp = (c == 'X' || c == 'W');
     const bool fp = (c == 'V' || c == 'Q' || c == 'D' || c == 'S' ||
                      c == 'H' || c == 'B');
     if (gp || fp) {
         const int n = suffix_num(s, 1);
-        if (gp && n >= 0 && n <= 30) return ARM_GP_BASE + n;
-        if (fp && n >= 0 && n <= 31) return ARM_FP_BASE + n;
+        if (gp && n >= 0 && n <= 30) return static_cast<uint32_t>(n);
+        if (fp && n >= 0 && n <= 31) return static_cast<uint32_t>(32 + n);
     }
     return SPECIAL_BASE + regset_idx; // NZCV/FPCR/FPSR/sistema/...
 }
