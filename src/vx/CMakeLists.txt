@@ -100,6 +100,8 @@ add_library(vx_lib STATIC
     # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.
     diag_catalog.cpp
     gen/diag_catalog_gen.cpp
+    # Renderizado de diagnosticos en formato maquina (JSON/SARIF) para IDEs/CI.
+    diag_format.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.

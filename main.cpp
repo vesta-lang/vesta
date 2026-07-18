@@ -49,6 +49,7 @@
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
 #include "vx/parser.h"
 #include "vx/semantic_index.h"
@@ -514,6 +515,10 @@ int main(int argc, char *argv[]) {
         "Modo de ejecucion/compilacion: vm (interprete) | jit (JIT en "
         "caliente) | aot (compilacion nativa standalone, requiere --vx)",
         cxxopts::value<std::string>()->default_value("vm"))(
+        "diag-format",
+        "Formato de los diagnosticos: text (legible, default) | json | sarif "
+        "(SARIF 2.1.0 para IDEs/CI). El idioma del texto se elige con VESTA_LANG.",
+        cxxopts::value<std::string>()->default_value("text"))(
         "list-arch", "Imprimir arquitecturas soportadas")(
         "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
         "disasm-file", "Archivo binario a desensamblar",
@@ -3317,9 +3322,9 @@ int main(int argc, char *argv[]) {
         }
 
         if (!cr.ok) {
-            for (const auto &d : cr.diagnostics.all()) {
-                vx::print_diagnostic(std::cerr, d);
-            }
+            vx::render_diagnostics(
+                std::cerr, cr.diagnostics,
+                vx::parse_diag_format(result["diag-format"].as<std::string>()));
             return EXIT_FAILURE;
         }
 
@@ -3637,11 +3642,11 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // Mostrar warnings (cr.ok no impide los warnings).
-        for (const auto &d : cr.diagnostics.all()) {
-            if (d.level != vx::DiagLevel::ERR)
-                vx::print_diagnostic(std::cerr, d);
-        }
+        // Mostrar warnings (cr.ok no impide los warnings).  En cr.ok no hay
+        // errores, asi que render (que emite todos) equivale a solo warnings.
+        vx::render_diagnostics(
+            std::cerr, cr.diagnostics,
+            vx::parse_diag_format(result["diag-format"].as<std::string>()));
 
         // si --vx-base fue especificado y es != 0, parchear el
         // texto .vel para reemplazar el @IniAddress(0x0000000000000000)

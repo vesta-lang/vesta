@@ -4,8 +4,11 @@
  *        seleccion de idioma, sustitucion de placeholders, fallback.
  */
 #include "vx/diag_catalog.h"
+#include "vx/diag_format.h"
+#include "vx/diagnostic.h"
 
 #include <cstdio>
+#include <sstream>
 #include <string>
 
 using namespace vx;
@@ -71,6 +74,46 @@ int main() {
     // set_language fuera de rango se ignora.
     diag::set_language(999);
     CHECK(diag::current_language() == en, "idx fuera de rango ignorado");
+
+    // === Salida maquina: render_diagnostics JSON / SARIF. ===
+    diag::set_language(en);
+    Diagnostics diags;
+    SourceLoc loc;
+    loc.file = "foo.vx";
+    loc.line = 9;
+    loc.column = 5;
+    diags.diag(loc, DiagLevel::WARN, "VXA002", {".fin"});
+
+    CHECK(parse_diag_format("json") == DiagFormat::Json, "parse json");
+    CHECK(parse_diag_format("sarif") == DiagFormat::Sarif, "parse sarif");
+    CHECK(parse_diag_format("text") == DiagFormat::Text, "parse text");
+    bool okf = true;
+    (void)parse_diag_format("xxx", &okf);
+    CHECK(!okf, "formato desconocido -> ok=false");
+
+    {
+        std::ostringstream os;
+        render_diagnostics(os, diags, DiagFormat::Json);
+        const std::string j = os.str();
+        CHECK(j.find("\"code\": \"VXA002\"") != std::string::npos,
+              "json lleva el codigo");
+        CHECK(j.find("\"severity\": \"warning\"") != std::string::npos,
+              "json lleva la severidad");
+        CHECK(j.find("\".fin\"") != std::string::npos, "json lleva el arg");
+        CHECK(j.find("jump to label '.fin'") != std::string::npos,
+              "json lleva el mensaje formateado (en)");
+    }
+    {
+        std::ostringstream os;
+        render_diagnostics(os, diags, DiagFormat::Sarif);
+        const std::string s = os.str();
+        CHECK(s.find("\"version\": \"2.1.0\"") != std::string::npos,
+              "sarif version 2.1.0");
+        CHECK(s.find("\"ruleId\": \"VXA002\"") != std::string::npos,
+              "sarif ruleId = codigo");
+        CHECK(s.find("\"startLine\": 9") != std::string::npos,
+              "sarif localizacion");
+    }
 
     std::printf("=== diag_catalog_test: %d checks OK, %d fallidos ===\n",
                 g_checks - g_fail, g_fail);
