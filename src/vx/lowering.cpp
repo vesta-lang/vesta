@@ -19,8 +19,9 @@
 #include <algorithm> // UCRT64: no transitivo
 #include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
 #include "vx/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
-#include "vx/asm_diag.h"    // diagnosticos estructurales del asm (ASA.2)
-#include "vx/instr_db.h"    // reschedule_asm (reoptimizador de asm, ASA)
+#include "vx/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
+#include "vx/asm_lift_emit.h" // lift de patrones atomicos a IR tipado (ASA.3)
+#include "vx/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
 #include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime_introspect.h"   // helpers compartidos rama A
@@ -13492,6 +13493,23 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             std::string c = asm_canonical_reg(b.reg);
             if (!c.empty()) bound_canon.push_back(std::move(c));
         }
+    }
+
+    // ASA.3: si el bloque ANALIZABLE encaja con un patron atomico conocido
+    // (lock cmpxchg -> ATOMIC_CAS, lock xadd -> ATOMIC_ADD), emitir el op TIPADO
+    // del IR en lugar de la caja opaca INLINE_ASM (ver vx/asm_lift_emit.h).  El
+    // mapa registro-canonico -> slot ALLOCA se construye aqui porque necesita el
+    // `lookup` de scope; el resto (deteccion + emision) vive en el modulo.
+    if (s->level == ast::AsmLevel::Analyzable) {
+        std::unordered_map<std::string, ir::IrValueId> slot_of;
+        for (const auto &b : fn_->asm_reg_bindings)
+            if (lookup(b.name) == b.alloca_value) {
+                std::string c = asm_canonical_reg(b.reg);
+                if (!c.empty()) slot_of[c] = b.alloca_value;
+            }
+        if (vx::asm_lift_emit(*fn_, current_block_, vx::instr_db::Isa::X86,
+                              ia.func_name, slot_of, s->loc.line))
+            return; // patron liftado -> NO se emite el INLINE_ASM.
     }
 
     // Phase AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo

@@ -92,6 +92,9 @@ add_library(vx_lib STATIC
     # Lift de patrones de asm a IR tipado (lock cmpxchg/xadd -> ATOMIC_CAS/ADD):
     # atomicos escritos en asm que bajan al mismo op optimizable que el opcode.
     asm_lift.cpp
+    # Emision del IR tipado del lift (separada del reconocimiento, para mantener
+    # el lowering minimo).
+    asm_lift_emit.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
