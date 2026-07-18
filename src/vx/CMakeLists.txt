@@ -95,6 +95,8 @@ add_library(vx_lib STATIC
     # Emision del IR tipado del lift (separada del reconocimiento, para mantener
     # el lowering minimo).
     asm/asm_lift_emit.cpp
+    # Lift de asm opaco sin operandos de registro a ASM_MICRO (barreras/nop/...).
+    asm/asm_lift_micro.cpp
     # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
     # idioma).  La tabla se genera desde catalog/diagnostics.toml con
     # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.

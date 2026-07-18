@@ -30,6 +30,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <cstdio>
 #include <mutex>
 
@@ -223,6 +224,18 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
         // Keystone/LLVM no es thread-safe: un unico assemble a la vez.
         static std::mutex ks_global_mtx;
         std::lock_guard<std::mutex> ks_lock(ks_global_mtx);
+        // Cache de ensamblado: (arch, nasm) es DETERMINISTA -> mismo texto =
+        // mismos bytes/sym_refs/insn_offsets.  Muchos bloques asm (y las
+        // instrucciones ASM_MICRO liftadas) repiten el mismo fragmento; sin
+        // cache re-invocariamos Keystone (abrir engine + ensamblar + Capstone)
+        // por cada ocurrencia.  Bajo el mismo mutex global -> thread-safe.
+        static std::unordered_map<std::string, vx::AsmAssembleResult> ks_cache;
+        std::string cache_key(1, static_cast<char>(arch));
+        cache_key += nasm;
+        {
+            auto it = ks_cache.find(cache_key);
+            if (it != ks_cache.end()) return it->second;
+        }
         vx::AsmAssembleResult r;
         ks_arch ka;
         ks_mode km;
@@ -440,6 +453,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                 }
             }
         }
+        ks_cache.emplace(std::move(cache_key), r);
         return r;
     }
 };

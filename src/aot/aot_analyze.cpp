@@ -180,6 +180,8 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::ATOMIC_ADD_I64:
     // -- ensamblador host incrustado (Phase AS) --
     case IrOp::INLINE_ASM:
+    // -- asm opaco liftado: emite bytes nativos (ensamblados de su plantilla) --
+    case IrOp::ASM_MICRO:
     // -- handle<->ptr en native (AOT.2 sin handle table): el GcHandle ES el
     //    host_ptr crudo (objetos = ptr de calloc/malloc) -> el selector
     //    HOST_LEAF los baja a un MOV (passthrough).  PURE_NATIVE. --

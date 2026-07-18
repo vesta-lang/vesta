@@ -5127,6 +5127,50 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
+    case IrOp::ASM_MICRO: {
+        // asm opaco liftado en el INTERPRETE.  Diseno UNIFICADO (la ventaja de
+        // ASM_MICRO sobre INLINE_ASM: lleva sus efectos de la DB):
+        //   - si hay ENSAMBLADOR para el host, el loader ensamblo la plantilla a
+        //     un trampoline nativo por hash -> se ejecuta la instruccion REAL;
+        //   - si NO hay ensamblador (u otra arch), se EMULA el efecto de forma
+        //     PORTABLE (barrera de memoria via los eff bits) -> el codigo SIGUE
+        //     funcionando en cualquier arch.
+        // El helper vrt:asm_micro_exec decide en runtime (busca el trampoline;
+        // si falta, emula).  El JIT/AOT (nativos) emiten la instruccion real
+        // directo en vreg_select.
+        //
+        // Este incremento cubre el caso SIN operandos de registro; el caso con
+        // operandos (marshalling/pinning) llega en un incremento posterior.
+        if (ins.imm >= ctx.fn.asm_micros.size()) {
+            ctx.comment("asm_micro: indice fuera de rango -> trap");
+            ctx.out << "    hlt\n";
+            break;
+        }
+        const AsmMicro &am = ctx.fn.asm_micros[ins.imm];
+        if (!am.ins.empty() || !am.outs.empty()) {
+            ctx.comment("asm_micro con operandos no soportado en interp v1 -> "
+                        "trap");
+            ctx.out << "    hlt\n";
+            break;
+        }
+        const uint64_t hash = jit::fnv1a64_asm(am.tmpl);
+        const uint32_t call_pos = lin_pos_of(ctx, bb.id, idx);
+        std::vector<int> regs_to_save =
+            live_regs_through_call(ctx, call_pos, IR_NO_VALUE);
+        emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
+        // r1=proc, r2=hash(plantilla), r3=eff (efectos DB para la emulacion).
+        ctx.out << "    getproc r1\n";
+        char hbuf[32];
+        std::snprintf(hbuf, sizeof(hbuf), "0x%016llx",
+                      static_cast<unsigned long long>(hash));
+        ctx.out << "    mov r2, " << hbuf << "\n";
+        ctx.out << "    mov r3, " << (unsigned)am.eff << "\n";
+        ctx.out << "    mov r15, 3\n";
+        ctx.out << "    calln @Method(\"vrt:asm_micro_exec\")\n";
+        emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
+        break;
+    }
+
     default:
         ctx.comment("instruccion no soportada: " +
                     std::string(ir_op_name(ins.op)));

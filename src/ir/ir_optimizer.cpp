@@ -253,7 +253,10 @@ static bool is_side_effecting(IrOp op) {
     case IrOp::GETARGC:
     case IrOp::GETARG:
     // ensamblador incrustado (nunca eliminar; semantica opaca)
-    case IrOp::RAW_ASM: return true;
+    case IrOp::RAW_ASM:
+    // asm opaco liftado: efecto conocido por la DB, pero conservador aqui
+    // (nunca eliminar).  Los eff bits permitiran DCE de las puras muertas.
+    case IrOp::ASM_MICRO: return true;
     default: return false;
     }
 }
@@ -6034,6 +6037,9 @@ bool ir_pass_dse(IrFunction &fn) {
             // forwarding cruza el bloque ni se eliminan STOREs previos
             // (el asm puede leerlos via los operandos register-bound).
             case IrOp::INLINE_ASM:
+            // asm opaco liftado: conservador como INLINE_ASM (barrera de
+            // memoria total); mas adelante los eff bits de la DB afinan.
+            case IrOp::ASM_MICRO:
             case IrOp::MEMCPY:
             case IrOp::VEC_UNOP:
             case IrOp::VEC_BINOP:
@@ -7156,6 +7162,27 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         ni.imm = (ni.imm & 0xFFull) |
                                  (static_cast<uint64_t>(new_id) << 8);
                         inlined_inline_asm = true;
+                    }
+                    /* ASM_MICRO: @c imm indexa el @c asm_micros del CALLEE.
+                     * Tras inlinar debe indexar el del CALLER -> apendamos la
+                     * entrada y reescribimos @c imm.  Los SSA de entrada/salida
+                     * de la side-table (si los hay) se remapean via vmap como
+                     * el resto de operandos. */
+                    if (ni.op == IrOp::ASM_MICRO) {
+                        const uint32_t old_id = static_cast<uint32_t>(ni.imm);
+                        const uint32_t new_id =
+                            static_cast<uint32_t>(caller.asm_micros.size());
+                        if (old_id < callee.asm_micros.size()) {
+                            ir::AsmMicro am = callee.asm_micros[old_id];
+                            for (auto &op : am.ins)
+                                op.value = remap_op(op.value);
+                            for (auto &ov : am.outs)
+                                ov = remap_op(ov);
+                            caller.asm_micros.push_back(std::move(am));
+                        } else {
+                            caller.asm_micros.emplace_back();
+                        }
+                        ni.imm = new_id;
                     }
                     new_instrs.push_back(std::move(ni));
                 }

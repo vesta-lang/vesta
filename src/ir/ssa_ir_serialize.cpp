@@ -425,6 +425,28 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
         for (const auto &s : lst)
             write_str(out, s);
     }
+    // ASA: instrucciones ASM_MICRO (asm opaco liftado).  El @c imm de cada
+    // IrInstr ASM_MICRO indexa esta tabla; necesaria para que JIT/AOT (que
+    // compilan desde el @ir del .velb/.vxir) reconstruyan la plantilla + los
+    // efectos.  Casi siempre vacio (4 bytes: un count a 0).
+    write_u32(out, static_cast<uint32_t>(fn.asm_micros.size()));
+    for (const auto &am : fn.asm_micros) {
+        write_u8(out, am.isa);
+        write_u32(out, am.form_id);
+        write_str(out, am.tmpl);
+        write_u8(out, am.eff);
+        write_u32(out, static_cast<uint32_t>(am.ins.size()));
+        for (const auto &op : am.ins) {
+            write_u8(out, op.role);
+            write_u8(out, op.regclass);
+            write_u32(out, static_cast<uint32_t>(
+                               static_cast<uint16_t>(op.fixed_phys)));
+            write_u32(out, static_cast<uint32_t>(op.value));
+        }
+        write_u32(out, static_cast<uint32_t>(am.outs.size()));
+        for (auto v : am.outs)
+            write_u32(out, static_cast<uint32_t>(v));
+    }
 
     // AOT 2b: seccion de salida del codigo + permisos (dev OS).
     write_str(out, fn.section);
@@ -543,6 +565,47 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
             lst.push_back(std::move(s));
         }
         out.asm_clobber_lists.push_back(std::move(lst));
+    }
+    // ASA: instrucciones ASM_MICRO (asm opaco liftado).
+    uint32_t n_micro = 0;
+    if (!read_u32(in, off, n_micro)) return false;
+    out.asm_micros.clear();
+    out.asm_micros.reserve(n_micro);
+    for (uint32_t k = 0; k < n_micro; ++k) {
+        AsmMicro am;
+        uint8_t isa_u = 0, eff_u = 0;
+        if (!read_u8(in, off, isa_u)) return false;
+        am.isa = isa_u;
+        if (!read_u32(in, off, am.form_id)) return false;
+        if (!read_str(in, off, am.tmpl)) return false;
+        if (!read_u8(in, off, eff_u)) return false;
+        am.eff = eff_u;
+        uint32_t n_in = 0;
+        if (!read_u32(in, off, n_in)) return false;
+        am.ins.reserve(n_in);
+        for (uint32_t j = 0; j < n_in; ++j) {
+            AsmMicroOperand op;
+            uint8_t role = 0, rc = 0;
+            uint32_t fx = 0, val = 0;
+            if (!read_u8(in, off, role)) return false;
+            if (!read_u8(in, off, rc)) return false;
+            if (!read_u32(in, off, fx)) return false;
+            if (!read_u32(in, off, val)) return false;
+            op.role = role;
+            op.regclass = rc;
+            op.fixed_phys = static_cast<int16_t>(static_cast<uint16_t>(fx));
+            op.value = static_cast<IrValueId>(val);
+            am.ins.push_back(op);
+        }
+        uint32_t n_out = 0;
+        if (!read_u32(in, off, n_out)) return false;
+        am.outs.reserve(n_out);
+        for (uint32_t j = 0; j < n_out; ++j) {
+            uint32_t v = 0;
+            if (!read_u32(in, off, v)) return false;
+            am.outs.push_back(static_cast<IrValueId>(v));
+        }
+        out.asm_micros.push_back(std::move(am));
     }
     // AOT 2b: seccion de salida del codigo + permisos.
     if (!read_str(in, off, out.section)) return false;

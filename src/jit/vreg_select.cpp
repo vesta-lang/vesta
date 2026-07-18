@@ -3523,6 +3523,48 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* ASM_MICRO: una instruccion asm OPACA liftada (ver AsmMicro).
+             * Su plantilla se ENSAMBLA (via g_asm_backend, con cache) y se
+             * emite como INLINE_ASM_RAW (el encoder la apendea verbatim); sus
+             * efectos (barrera de memoria / flags) los da la DB (campo eff).
+             *
+             * Este incremento cubre el caso SIN operandos de registro
+             * (mfence/pause/lfence/sfence/cpuid-sin-regs...): la plantilla ES
+             * el texto final, sin placeholders que rellenar.  El caso con
+             * operandos (substitucion de $N por el reg fisico + pinning en el
+             * regalloc) llega en un incremento posterior; el lifter hoy solo
+             * produce ASM_MICRO sin operandos, asi que ins/outs no-vacios ->
+             * fallback (no deberia ocurrir). */
+            case ir::IrOp::ASM_MICRO: {
+                flush_pending();
+                if (vx::g_asm_backend == nullptr) {
+                    vreg_dbg(fn.name.c_str(), "asm_micro(no-backend)");
+                    return false;
+                }
+                if (in.imm >= fn.asm_micros.size()) return false;
+                const ir::AsmMicro &am = fn.asm_micros[in.imm];
+                if (!am.ins.empty() || !am.outs.empty()) {
+                    vreg_dbg(fn.name.c_str(), "asm_micro(con-operandos)");
+                    return false;
+                }
+                vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(
+                    am.tmpl,
+                    mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
+                if (!ar.ok || ar.bytes.empty()) {
+                    vreg_dbg(fn.name.c_str(), "asm_micro(assemble-fail)");
+                    return false;
+                }
+                AsmBlob blob;
+                blob.bytes = std::move(ar.bytes);
+                // Efectos de la DB: bit0 mem, bit3 barrera -> clobber de
+                // memoria; bit2 escribe flags.
+                blob.clobbers_mem = (am.eff & 0x9) != 0;
+                blob.clobbers_flags = (am.eff & 0x4) != 0;
+                const uint32_t bidx = out.intern_asm_blob(std::move(blob));
+                O.push_back(MInstr::make_inline_asm_raw(bidx));
+                break;
+            }
+
             /* GC_DEREF_HOST: dst = deref(handle).  INLINE del lookup
              * (principio "JIT inline > runtime"): replica
              * @c GcHeap::deref leyendo la HandleTable directamente, en
