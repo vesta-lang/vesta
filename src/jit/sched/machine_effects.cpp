@@ -87,11 +87,39 @@ int suffix_num(const std::string &s, size_t pref) {
  * @return la clave, o UINT32_MAX si es una CLASE (varios regs, "GPR64", "-") o
  *         vacio -> no es un registro implicito fijo.
  */
-uint32_t regset_to_key(const char *rs, uint16_t regset_idx) {
+/// Base del espacio de claves para registros ARM (X/W GP y V/Q/D/S FP): se
+/// numeran aparte de los x86 para que no colisionen si conviven claves de
+/// ambas ISAs.  Cada ISA solo genera claves de su propio espacio.
+constexpr uint32_t ARM_GP_BASE = 1u << 22;
+constexpr uint32_t ARM_FP_BASE = (1u << 22) + 64;
+
+/**
+ * @brief Decodifica un register_set ARM (AArch64) a clave: X/W n -> GP n;
+ *        V/Q/D/S/H/B n -> FP n; SP/XZR/WZR y sistema -> especial por nombre.
+ */
+uint32_t regset_to_key_arm(const std::string &s, uint16_t regset_idx) {
+    if (s == "SP" || s == "WSP" || s == "XZR" || s == "WZR" || s == "PC")
+        return SPECIAL_BASE + regset_idx;
+    // X0..X30 / W0..W30 (GP).  V/Q/D/S/H/B 0..31 (FP/SIMD, aliasan por indice).
+    const char c = s[0];
+    const bool gp = (c == 'X' || c == 'W');
+    const bool fp = (c == 'V' || c == 'Q' || c == 'D' || c == 'S' ||
+                     c == 'H' || c == 'B');
+    if (gp || fp) {
+        const int n = suffix_num(s, 1);
+        if (gp && n >= 0 && n <= 30) return ARM_GP_BASE + n;
+        if (fp && n >= 0 && n <= 31) return ARM_FP_BASE + n;
+    }
+    return SPECIAL_BASE + regset_idx; // NZCV/FPCR/FPSR/sistema/...
+}
+
+uint32_t regset_to_key(const char *rs, uint16_t regset_idx, EffIsa isa) {
     if (rs == nullptr || rs[0] == '\0' || rs[0] == '-') return UINT32_MAX;
     for (const char *p = rs; *p; ++p)
         if (*p == '/') return UINT32_MAX; // clase (lista de regs)
     const std::string s(rs);
+
+    if (isa != EffIsa::X86) return regset_to_key_arm(s, regset_idx);
 
     // --- GP (familia de una letra o Rn, cualquier ancho) ---
     struct Fam { const char *k; int reg; };
@@ -209,7 +237,7 @@ bool db_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
         // una tabla a mano.  No consume un slot del MInstr.
         if (implicit) {
             if (o.kind == vx::instr_db::OP_REG && o.regset < db.str_count) {
-                const uint32_t k = regset_to_key(db.str[o.regset], o.regset);
+                const uint32_t k = regset_to_key(db.str[o.regset], o.regset, isa);
                 if (k != UINT32_MAX) {
                     if (rd) add(e.reads, k);
                     if (wr) add(e.writes, k);
@@ -243,12 +271,18 @@ bool db_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
  */
 void pseudo_effects(const MInstr &mi, MEffects &e) {
     switch (mi.op) {
-    /* Sin efecto de datos. */
+    /* Sin efecto de datos y movibles libremente. */
     case MOp::NOP:
-    case MOp::LABEL_DEF:
     case MOp::COMMENT:
+        break;
+
+    /* Posiciones FIJAS: un LABEL_DEF es destino de salto y las entradas de
+     * jump-table son datos inline referenciados por su offset -> barrera (nada
+     * se reordena a traves de ellas). */
+    case MOp::LABEL_DEF:
     case MOp::DATA_PTR_LABEL:
     case MOp::DATA_REL32_LABEL:
+        e.is_barrier = true;
         break;
 
     /* ARG: marca un argumento -> LEE su src1 (para no adelantar al productor). */
