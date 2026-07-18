@@ -30,6 +30,8 @@
 
 #include "vx/graphviz_diagrams.h"
 
+#include "vx/asm_diagram.h" // expansion del CFG de inline asm con coste
+
 #include "analyze/bigo.h"
 #include "vx/ast.h"
 #include "ir/ssa_ir.h"
@@ -1861,6 +1863,36 @@ std::string graphviz_from_ir_module(const ir::IrModule &mod,
         os << "    " << src_fn << "_b0 -> " << it->second << "_b0"
            << " [ltail=cluster_" << src_fn << ", lhead=cluster_" << it->second
            << ", style=dotted, color=\"#7e22ce\", label=\"call\"];\n";
+    }
+
+    // Expandir cada bloque de inline asm en su propio CFG (cluster) anotado con
+    // coste/latencia/cuello de botella/flags/diagnosticos.
+    {
+        int32_t ua =
+            instr_db::microarch_by_name(instr_db::Isa::X86, "intel-skylake");
+        const uint32_t skl = static_cast<uint32_t>(ua < 0 ? 0 : ua);
+        for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
+            const auto &fn = mod.functions[fi];
+            for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+                const auto &bb = fn.blocks[bi];
+                for (size_t ii = 0; ii < bb.instrs.size(); ++ii) {
+                    const auto &ins = bb.instrs[ii];
+                    if (ins.op != ir::IrOp::INLINE_ASM || ins.func_name.empty())
+                        continue;
+                    AsmDiagramOptions o;
+                    o.isa = instr_db::Isa::X86;
+                    o.ua_id = skl;
+                    o.microarch = "intel-skylake";
+                    o.id_prefix = "asmf" + std::to_string(fi) + "b" +
+                                  std::to_string(bi) + "i" + std::to_string(ii);
+                    o.title = "inline asm";
+                    os << asm_cfg_graphviz(ins.func_name, o);
+                    os << "    fn" << fi << "_b" << bi << " -> " << o.id_prefix
+                       << "_b0 [lhead=cluster_" << o.id_prefix
+                       << ", style=dotted, color=\"#3366aa\", label=\"asm\"];\n";
+                }
+            }
+        }
     }
 
     os << "}\n";

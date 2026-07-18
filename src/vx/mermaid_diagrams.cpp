@@ -35,6 +35,7 @@
 #include "vx/mermaid_diagrams.h"
 
 #include "analyze/bigo.h"
+#include "vx/asm_diagram.h" // expansion del CFG de inline asm con coste
 #include "vx/ast.h"
 #include "ir/ssa_ir.h"
 #include "vx/types.h"
@@ -1916,6 +1917,36 @@ std::string mermaid_from_ir_module(const ir::IrModule &mod,
             continue; // funcion externa, no la dibujamos
         // Edge punteado entre el subgraph fuente y el subgraph destino
         os << "    " << src_fn << " -.->|call| " << it->second << "\n";
+    }
+
+    // Expandir cada bloque de inline asm en su propio CFG anotado con coste
+    // (latencia, throughput superescalar, cuello de botella por puerto, flags y
+    // diagnosticos).  El microarq por defecto es el mismo que asume el lowering.
+    {
+        int32_t ua =
+            instr_db::microarch_by_name(instr_db::Isa::X86, "intel-skylake");
+        const uint32_t skl = static_cast<uint32_t>(ua < 0 ? 0 : ua);
+        for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
+            const auto &fn = mod.functions[fi];
+            for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+                const auto &bb = fn.blocks[bi];
+                for (size_t ii = 0; ii < bb.instrs.size(); ++ii) {
+                    const auto &ins = bb.instrs[ii];
+                    if (ins.op != ir::IrOp::INLINE_ASM || ins.func_name.empty())
+                        continue;
+                    AsmDiagramOptions o;
+                    o.isa = instr_db::Isa::X86;
+                    o.ua_id = skl;
+                    o.microarch = "intel-skylake";
+                    o.id_prefix = "asmf" + std::to_string(fi) + "b" +
+                                  std::to_string(bi) + "i" + std::to_string(ii);
+                    o.title = "inline asm";
+                    os << asm_cfg_mermaid(ins.func_name, o);
+                    os << "    fn" << fi << "_b" << bi << " -.->|asm| "
+                       << o.id_prefix << "_b0\n";
+                }
+            }
+        }
     }
 
     os << "```\n";
