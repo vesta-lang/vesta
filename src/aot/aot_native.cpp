@@ -163,7 +163,13 @@ StartStub start_arm64_elf() {
     s.bytes = {
         0x14, 0x06, 0xa8, 0xd2, // movz x20, #0x4030, lsl #16       (off 0)
         0x9f, 0x02, 0x00, 0x91, // mov sp, x20                      (off 4)
-        0xfe, 0xff, 0xff, 0x97, // bl main (imm26@CALL26)           (off 8)
+        // Habilitar FP/SIMD: CPACR_EL1.FPEN = 0b11 (sin trap).  Sin esto, la
+        // primera instruccion float (fmov/fadd/...) trapea al vector de
+        // excepcion en bare-metal.
+        0x00, 0x06, 0xa0, 0xd2, // movz x0, #0x30, lsl #16 (0x300000)(off 8)
+        0x40, 0x10, 0x18, 0xd5, // msr cpacr_el1, x0                (off 12)
+        0xdf, 0x3f, 0x03, 0xd5, // isb                             (off 16)
+        0xfe, 0xff, 0xff, 0x97, // bl main (imm26@CALL26)           (off 20)
         0xf5, 0x03, 0x00, 0xaa, // mov x21, x0                      (off 12)
         0xff, 0x43, 0x00, 0xd1, // sub sp, sp, #16                  (off 16)
         0xc2, 0x04, 0x80, 0xd2, // movz x2, #0x26                   (off 20)
@@ -174,7 +180,7 @@ StartStub start_arm64_elf() {
         0x00, 0x03, 0x80, 0xd2, // movz x0, #0x18 (SYS_EXIT)        (off 40)
         0x00, 0x00, 0x5e, 0xd4  // hlt #0xf000 (semihosting)        (off 44)
     };
-    s.main_call_off = 8; // el `bl` esta en offset 8 (tras el setup de sp)
+    s.main_call_off = 20; // el `bl` esta en offset 20 (tras sp + enable FP)
     s.has_import_call = false;
     s.ok = true;
     return s;

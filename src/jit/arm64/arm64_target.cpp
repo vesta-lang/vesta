@@ -131,14 +131,35 @@ uint8_t cc_index(ir::IrOp op) {
     }
 }
 const char *cc_by_index(uint8_t i) {
-    static const char *t[] = {"eq", "ne", "lt", "gt", "le",
-                              "ge", "lo", "hi", "ls", "hs"};
-    return i < 10 ? t[i] : "al";
+    // 0-9: enteros.  10-15: float (fcmp ordered): eq/ne/mi(lt)/gt/ls(le)/ge.
+    static const char *t[] = {"eq", "ne", "lt", "gt", "le", "ge",
+                              "lo", "hi", "ls", "hs", "eq", "ne",
+                              "mi", "gt", "ls", "ge"};
+    return i < 16 ? t[i] : "al";
 }
 
-/// vreg GP de un IrValueId.
-MOperand vr(ir::IrValueId v) {
-    return MOperand::make_vreg(static_cast<uint32_t>(v), RegClass::GP, 8);
+/// Indice de condicion float (fcmp ordered) para el cset (10..15).
+uint8_t fcc_index(ir::IrOp op) {
+    switch (op) {
+    case ir::IrOp::FCMP_EQ: return 10;
+    case ir::IrOp::FCMP_NE: return 11;
+    case ir::IrOp::FCMP_LT: return 12;
+    case ir::IrOp::FCMP_GT: return 13;
+    case ir::IrOp::FCMP_LE: return 14;
+    case ir::IrOp::FCMP_GE: return 15;
+    default: return 10;
+    }
+}
+
+/// vreg de un IrValueId con la clase (FP para floats) y ancho de su tipo.
+MOperand vr(const ir::IrFunction &fn, ir::IrValueId v) {
+    const bool isf =
+        v < fn.values.size() && ir_is_float(fn.values[v].type);
+    const uint8_t w =
+        v < fn.values.size() ? static_cast<uint8_t>(ir_bytes(fn.values[v].type))
+                             : 8;
+    return MOperand::make_vreg(static_cast<uint32_t>(v),
+                               isf ? RegClass::FP : RegClass::GP, w);
 }
 
 /// Copias de PHI en la arista bb -> target (una MOV por phi-arg).
@@ -149,8 +170,8 @@ void emit_phi_copies(std::vector<MInstr> &out, const ir::IrFunction &fn,
         if (in.op != ir::IrOp::PHI) continue;
         for (const ir::IrPhiArg &pa : in.phi_args)
             if (pa.block == from)
-                out.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                                 vr(pa.value)));
+                out.push_back(MInstr::make_unary(MOp::MOV, vr(fn, in.dst),
+                                                 vr(fn, pa.value)));
     }
 }
 
@@ -161,9 +182,6 @@ void emit_phi_copies(std::vector<MInstr> &out, const ir::IrFunction &fn,
 // ---------------------------------------------------------------------------
 bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
     if (fn.blocks.empty()) return false;
-    // El subset entero bail-ea si aparece cualquier valor float.
-    for (const ir::IrValue &v : fn.values)
-        if (ir_is_float(v.type)) return false;
 
     out = MFunction();
     out.vreg_count = static_cast<uint32_t>(fn.values.size());
@@ -178,7 +196,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
         if (bi == 0) {
             for (size_t i = 0; i < fn.params.size() && i < 8; ++i)
                 O.push_back(MInstr::make_unary(
-                    MOp::MOV, vr(fn.params[i]),
+                    MOp::MOV, vr(fn, fn.params[i]),
                     a64_reg(static_cast<uint8_t>(i))));
         }
 
@@ -193,23 +211,23 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 imm.kind = MOperandKind::IMM64_IDX;
                 imm.value = static_cast<int32_t>(out.imm64_pool.size());
                 out.imm64_pool.push_back(in.imm);
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst), imm));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(fn, in.dst), imm));
                 break;
             }
             case ir::IrOp::MOV:
                 if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
                 break;
             case ir::IrOp::NEG:
                 if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::NEG, vr(in.dst),
-                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(MOp::NEG, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
                 break;
             case ir::IrOp::NOT:
                 if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::NOT, vr(in.dst),
-                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(MOp::NOT, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
                 break;
             case ir::IrOp::ADD:
             case ir::IrOp::SUB:
@@ -223,18 +241,18 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 MOp mop;
                 if (in.operands.size() != 2 || !alu_mop(in.op, mop))
                     return false;
-                O.push_back(MInstr::make_binary(mop, vr(in.dst),
-                                                vr(in.operands[0]),
-                                                vr(in.operands[1])));
+                O.push_back(MInstr::make_binary(mop, vr(fn, in.dst),
+                                                vr(fn, in.operands[0]),
+                                                vr(fn, in.operands[1])));
                 break;
             }
             case ir::IrOp::DIV: {
                 if (in.operands.size() != 2) return false;
                 const MOp d =
                     ir_signed(in.type) ? MOp::A64_SDIV : MOp::A64_UDIV;
-                O.push_back(MInstr::make_binary(d, vr(in.dst),
-                                                vr(in.operands[0]),
-                                                vr(in.operands[1])));
+                O.push_back(MInstr::make_binary(d, vr(fn, in.dst),
+                                                vr(fn, in.operands[0]),
+                                                vr(fn, in.operands[1])));
                 break;
             }
             case ir::IrOp::MOD: {
@@ -246,12 +264,12 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 const uint32_t p = out.vreg_count++; // producto q*b
                 MOperand qv = MOperand::make_vreg(q, RegClass::GP, 8);
                 MOperand pv = MOperand::make_vreg(p, RegClass::GP, 8);
-                O.push_back(MInstr::make_binary(d, qv, vr(in.operands[0]),
-                                                vr(in.operands[1])));
+                O.push_back(MInstr::make_binary(d, qv, vr(fn, in.operands[0]),
+                                                vr(fn, in.operands[1])));
                 O.push_back(MInstr::make_binary(MOp::IMUL, pv, qv,
-                                                vr(in.operands[1])));
-                O.push_back(MInstr::make_binary(MOp::SUB, vr(in.dst),
-                                                vr(in.operands[0]), pv));
+                                                vr(fn, in.operands[1])));
+                O.push_back(MInstr::make_binary(MOp::SUB, vr(fn, in.dst),
+                                                vr(fn, in.operands[0]), pv));
                 break;
             }
             case ir::IrOp::SEXT:
@@ -273,8 +291,8 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                     sign = (in.op == ir::IrOp::SEXT) ||
                            (in.op == ir::IrOp::CAST && ir_signed(st));
                 MInstr m = MInstr::make_unary(
-                    sign ? MOp::MOVSX : MOp::MOVZX, vr(in.dst),
-                    vr(in.operands[0]));
+                    sign ? MOp::MOVSX : MOp::MOVZX, vr(fn, in.dst),
+                    vr(fn, in.operands[0]));
                 m.dst.width = static_cast<uint8_t>(db);
                 m.src1.width = static_cast<uint8_t>(sb);
                 O.push_back(m);
@@ -284,13 +302,13 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 // Reserva de espacio en el frame; dst = puntero (host).  El
                 // rewrite le asigna el offset y emite `add dst, sp, #off`.
                 O.push_back(MInstr::make_alloca(
-                    vr(in.dst), static_cast<uint32_t>(in.imm)));
+                    vr(fn, in.dst), static_cast<uint32_t>(in.imm)));
                 break;
             case ir::IrOp::LOAD: {
                 // %dst = load %addr  (memoria host; ancho segun el tipo).
                 if (in.operands.size() != 1) return false;
                 const uint8_t w = static_cast<uint8_t>(ir_bytes(in.type));
-                O.push_back(MInstr::make_load(vr(in.dst), vr(in.operands[0]), w,
+                O.push_back(MInstr::make_load(vr(fn, in.dst), vr(fn, in.operands[0]), w,
                                               ir_signed(in.type)));
                 break;
             }
@@ -299,10 +317,76 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 if (in.operands.size() != 2) return false;
                 const ir::IrType vt = fn.values[in.operands[0]].type;
                 const uint8_t w = static_cast<uint8_t>(ir_bytes(vt));
-                O.push_back(MInstr::make_store(vr(in.operands[1]),
-                                               vr(in.operands[0]), w));
+                O.push_back(MInstr::make_store(vr(fn, in.operands[1]),
+                                               vr(fn, in.operands[0]), w));
                 break;
             }
+            /* --- Float / SIMD escalar --- */
+            case ir::IrOp::FADD:
+            case ir::IrOp::FSUB:
+            case ir::IrOp::FMUL:
+            case ir::IrOp::FDIV: {
+                if (in.operands.size() != 2) return false;
+                const MOp m = in.op == ir::IrOp::FADD   ? MOp::A64_FADD
+                              : in.op == ir::IrOp::FSUB  ? MOp::A64_FSUB
+                              : in.op == ir::IrOp::FMUL  ? MOp::A64_FMUL
+                                                         : MOp::A64_FDIV;
+                O.push_back(MInstr::make_binary(m, vr(fn, in.dst),
+                                                vr(fn, in.operands[0]),
+                                                vr(fn, in.operands[1])));
+                break;
+            }
+            case ir::IrOp::FNEG:
+            case ir::IrOp::FABS:
+            case ir::IrOp::FSQRT: {
+                if (in.operands.size() != 1) return false;
+                const MOp m = in.op == ir::IrOp::FNEG   ? MOp::A64_FNEG
+                              : in.op == ir::IrOp::FABS  ? MOp::A64_FABS
+                                                         : MOp::A64_FSQRT;
+                O.push_back(
+                    MInstr::make_unary(m, vr(fn, in.dst), vr(fn, in.operands[0])));
+                break;
+            }
+            case ir::IrOp::FCMP_EQ:
+            case ir::IrOp::FCMP_NE:
+            case ir::IrOp::FCMP_LT:
+            case ir::IrOp::FCMP_GT:
+            case ir::IrOp::FCMP_LE:
+            case ir::IrOp::FCMP_GE: {
+                if (in.operands.size() != 2) return false;
+                O.push_back(MInstr::make_binary(MOp::A64_FCMP, MOperand::none(),
+                                                vr(fn, in.operands[0]),
+                                                vr(fn, in.operands[1])));
+                MInstr cset = MInstr::make_unary(MOp::A64_CSET, vr(fn, in.dst),
+                                                 MOperand::none());
+                cset.flags = fcc_index(in.op);
+                O.push_back(cset);
+                break;
+            }
+            case ir::IrOp::ITOF:
+            case ir::IrOp::UITOF: {
+                if (in.operands.size() != 1) return false;
+                const MOp m =
+                    in.op == ir::IrOp::ITOF ? MOp::A64_SCVTF : MOp::A64_UCVTF;
+                O.push_back(
+                    MInstr::make_unary(m, vr(fn, in.dst), vr(fn, in.operands[0])));
+                break;
+            }
+            case ir::IrOp::FTOI:
+            case ir::IrOp::FTOUI: {
+                if (in.operands.size() != 1) return false;
+                const MOp m = in.op == ir::IrOp::FTOI ? MOp::A64_FCVTZS
+                                                      : MOp::A64_FCVTZU;
+                O.push_back(
+                    MInstr::make_unary(m, vr(fn, in.dst), vr(fn, in.operands[0])));
+                break;
+            }
+            case ir::IrOp::F32TOF64:
+            case ir::IrOp::F64TOF32:
+                if (in.operands.size() != 1) return false;
+                O.push_back(MInstr::make_unary(MOp::A64_FCVT, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
+                break;
             case ir::IrOp::CMP_EQ:
             case ir::IrOp::CMP_NE:
             case ir::IrOp::CMP_LT:
@@ -316,11 +400,11 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 if (in.operands.size() != 2) return false;
                 // cmp a, b (sin dst) + cset dst, cc.
                 MInstr cmp = MInstr::make_binary(
-                    MOp::CMP, MOperand::none(), vr(in.operands[0]),
-                    vr(in.operands[1]));
+                    MOp::CMP, MOperand::none(), vr(fn, in.operands[0]),
+                    vr(fn, in.operands[1]));
                 O.push_back(cmp);
                 MInstr cset =
-                    MInstr::make_unary(MOp::A64_CSET, vr(in.dst),
+                    MInstr::make_unary(MOp::A64_CSET, vr(fn, in.dst),
                                        MOperand::none());
                 cset.flags = cc_index(in.op);
                 O.push_back(cset);
@@ -341,7 +425,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 const uint32_t ls = syn_lbl++;
                 MInstr cbnz = MInstr::make_unary(MOp::A64_CBNZ,
                                                  MOperand::make_label(ls),
-                                                 vr(in.operands[0]));
+                                                 vr(fn, in.operands[0]));
                 O.push_back(cbnz);
                 emit_phi_copies(O, fn, static_cast<ir::IrBlockId>(bi),
                                 in.false_block);
@@ -355,7 +439,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             case ir::IrOp::RET: {
                 if (!in.operands.empty())
                     O.push_back(MInstr::make_unary(MOp::MOV, a64_reg(0),
-                                                   vr(in.operands[0])));
+                                                   vr(fn, in.operands[0])));
                 O.push_back(MInstr::make_ret());
                 break;
             }
@@ -365,12 +449,12 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 for (size_t i = 0; i < in.operands.size(); ++i)
                     O.push_back(MInstr::make_unary(
                         MOp::MOV, a64_reg(static_cast<uint8_t>(i)),
-                        vr(in.operands[i])));
+                        vr(fn, in.operands[i])));
                 uint32_t sym = static_cast<uint32_t>(out.reloc_symbols.size());
                 out.reloc_symbols.push_back(in.func_name);
                 O.push_back(MInstr::make_call_sym(sym));
                 if (in.dst != ir::IR_NO_VALUE)
-                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(fn, in.dst),
                                                    a64_reg(0)));
                 break;
             }
@@ -382,6 +466,13 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             }
         }
     }
+    // Clase de cada vreg (FP para floats) -> el regalloc generico usa el pool
+    // correcto.  Los temporales (>= fn.values.size()) son GP.
+    out.vreg_class.assign(out.vreg_count, RegClass::GP);
+    for (size_t v = 0; v < fn.values.size() && v < out.vreg_class.size(); ++v)
+        if (ir_is_float(fn.values[v].type))
+            out.vreg_class[v] = RegClass::FP;
+
     // CFG de los MBlock (succ_a/succ_b): imprescindible para que el regalloc
     // generico calcule la liveness cross-block (loops).  MBlock index = IR
     // block id.
@@ -566,29 +657,79 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
         for (const MInstr &mi : pf.blocks[bi].instrs) {
             switch (mi.op) {
             case MOp::MOV: {
+                const bool dst_fp = mi.dst.reg >= 32 && mi.dst.reg <= 63;
                 if (mi.src1.kind == MOperandKind::IMM64_IDX) {
                     const uint64_t imm =
                         pf.imm64_pool[static_cast<size_t>(mi.src1.value)];
-                    const std::string d = rn(mi.dst);
-                    os << "    movz " << d << ", #" << (imm & 0xffff) << "\n";
+                    // Materializa los 64 bits en un GP; si el dst es FP, mueve
+                    // los bits al registro d/s con fmov.
+                    const std::string g = dst_fp ? a64_name(A64_X16, 8) : rn(mi.dst);
+                    os << "    movz " << g << ", #" << (imm & 0xffff) << "\n";
                     if ((imm >> 16) & 0xffff)
-                        os << "    movk " << d << ", #" << ((imm >> 16) & 0xffff)
+                        os << "    movk " << g << ", #" << ((imm >> 16) & 0xffff)
                            << ", lsl #16\n";
                     if ((imm >> 32) & 0xffff)
-                        os << "    movk " << d << ", #" << ((imm >> 32) & 0xffff)
+                        os << "    movk " << g << ", #" << ((imm >> 32) & 0xffff)
                            << ", lsl #32\n";
                     if ((imm >> 48) & 0xffff)
-                        os << "    movk " << d << ", #" << ((imm >> 48) & 0xffff)
+                        os << "    movk " << g << ", #" << ((imm >> 48) & 0xffff)
                            << ", lsl #48\n";
+                    if (dst_fp)
+                        os << "    fmov " << rn(mi.dst) << ", " << g << "\n";
                 } else if (mi.src1.kind == MOperandKind::IMM32) {
                     os << "    mov " << rn(mi.dst) << ", #" << mi.src1.value
                        << "\n";
                 } else {
-                    os << "    mov " << rn(mi.dst) << ", " << rn(mi.src1)
-                       << "\n";
+                    const bool src_fp =
+                        mi.src1.reg >= 32 && mi.src1.reg <= 63;
+                    os << "    " << ((dst_fp || src_fp) ? "fmov " : "mov ")
+                       << rn(mi.dst) << ", " << rn(mi.src1) << "\n";
                 }
                 break;
             }
+            case MOp::A64_FADD:
+            case MOp::A64_FSUB:
+            case MOp::A64_FMUL:
+            case MOp::A64_FDIV: {
+                const char *m = mi.op == MOp::A64_FADD   ? "fadd"
+                                : mi.op == MOp::A64_FSUB  ? "fsub"
+                                : mi.op == MOp::A64_FMUL  ? "fmul"
+                                                          : "fdiv";
+                os << "    " << m << " " << rn(mi.dst) << ", " << rn(mi.src1)
+                   << ", " << rn(mi.src2) << "\n";
+                break;
+            }
+            case MOp::A64_FNEG:
+            case MOp::A64_FABS:
+            case MOp::A64_FSQRT: {
+                const char *m = mi.op == MOp::A64_FNEG   ? "fneg"
+                                : mi.op == MOp::A64_FABS  ? "fabs"
+                                                          : "fsqrt";
+                os << "    " << m << " " << rn(mi.dst) << ", " << rn(mi.src1)
+                   << "\n";
+                break;
+            }
+            case MOp::A64_FCMP:
+                os << "    fcmp " << rn(mi.src1) << ", " << rn(mi.src2) << "\n";
+                break;
+            case MOp::A64_SCVTF:
+            case MOp::A64_UCVTF:
+                // int (GP) -> float (FP).  dst FP, src GP.
+                os << "    " << (mi.op == MOp::A64_SCVTF ? "scvtf" : "ucvtf")
+                   << " " << rn(mi.dst) << ", " << a64_name(mi.src1.reg, 8)
+                   << "\n";
+                break;
+            case MOp::A64_FCVTZS:
+            case MOp::A64_FCVTZU:
+                // float (FP) -> int (GP), truncando.  dst GP, src FP.
+                os << "    " << (mi.op == MOp::A64_FCVTZS ? "fcvtzs" : "fcvtzu")
+                   << " " << a64_name(mi.dst.reg, 8) << ", " << rn(mi.src1)
+                   << "\n";
+                break;
+            case MOp::A64_FCVT:
+                // Conversion de precision f32<->f64 (dst/src distinta anchura).
+                os << "    fcvt " << rn(mi.dst) << ", " << rn(mi.src1) << "\n";
+                break;
             case MOp::ADD:
             case MOp::SUB:
             case MOp::IMUL:
