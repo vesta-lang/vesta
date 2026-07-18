@@ -119,11 +119,6 @@ struct CompileOptions {
     /// Variante HTML del diagrama de tipos (ver dump_mermaid_types).
     bool dump_html_types = false;
 
-    /// --diagram-cost: anotar cada nodo-funcion de los diagramas IR (pre y
-    /// post) con su coste Big-O (parcial + total) calculado por
-    /// analyze::bigo.  Cero impacto si no hay diagramas IR habilitados.
-    bool annotate_cost = false;
-
     /// Lenguaje destino del transpiler IR -> codigo fuente.  Vacio = no
     /// transpilar (default).  Valores soportados: "c" (Phase 1).
     /// Futuros: "java", "js", "rust", etc.

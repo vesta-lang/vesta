@@ -1849,7 +1849,9 @@ nlohmann::json Inspector::diagram(const std::string &uri,
     // Activar SOLO el flag de la vista pedida (uno por kind x format).
     vx::CompileOptions opts;
     opts.module_name = "main";
-    opts.annotate_cost = cost;
+    // El coste Big-O se anota siempre en los diagramas IR (el parametro `cost`
+    // se conserva en la clave de cache por compatibilidad de la peticion LSP).
+    (void)cost;
     if (format == "mermaid") {
         if (kind == "ast") opts.dump_mermaid_ast = true;
         else if (kind == "ir-pre") opts.dump_mermaid_ir_pre = true;

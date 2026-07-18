@@ -717,10 +717,6 @@ int main(int argc, char *argv[]) {
             "mermaid). html produce paginas interactivas autocontenidas "
             "(.html); both=mermaid+graphviz; all=los tres.",
             cxxopts::value<std::string>()->default_value("mermaid"))(
-            "diagram-cost",
-            "Anotar cada nodo-funcion de los diagramas IR (pre y post) con su "
-            "coste Big-O (parcial + total) calculado por analyze::bigo. Aplica "
-            "a --diagram-ir / --diagram-ir-opt / --diagram-all.")(
             "gc-debug",
             "Activar trazas de debug del Garbage Collector a stderr (minor_gc, "
             "major_gc, sweep, release_handle, evacuate). Util para "
@@ -2838,8 +2834,6 @@ int main(int argc, char *argv[]) {
         copts.dump_html_ir_pre = emit_html && diag_ir_pre;
         copts.dump_html_ir_post = emit_html && diag_ir_post;
         copts.dump_html_vel = emit_html && diag_vel;
-        // --diagram-cost: anotar el coste Big-O en los diagramas IR.
-        copts.annotate_cost = result.count("diagram-cost") > 0;
 
         // Flag --port=<lang>: si presente, configurar el transpiler IR ->
         // codigo. El frontend Vesta llama al port::Transpiler tras la fase de

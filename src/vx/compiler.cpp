@@ -835,12 +835,12 @@ CompileResult compile_vx_source(const std::string &source,
     // del lowering (todos los PHIs, todos los CONSTs, blocks como
     // los emite el frontend, sin las transformaciones del optimizer).
     //
-    // --diagram-cost: si se pidio anotar el coste, calcular el analisis
-    // Big-O sobre el IR PRE-opt (complejidad algoritmica del fuente) una
-    // vez y reusarlo para los tres formatos de la vista pre.
+    // El coste Big-O (parcial + total) se anota SIEMPRE en los diagramas IR:
+    // se calcula sobre el IR PRE-opt (complejidad algoritmica del fuente) una
+    // vez y se reusa para los tres formatos de la vista pre.
     const bool want_cost_pre =
-        opts.annotate_cost && (opts.dump_mermaid_ir_pre ||
-                               opts.dump_graphviz_ir_pre || opts.dump_html_ir_pre);
+        (opts.dump_mermaid_ir_pre || opts.dump_graphviz_ir_pre ||
+         opts.dump_html_ir_pre);
     analyze::ModuleCost mc_pre;
     if (want_cost_pre) {
         mc_pre = analyze::analyze_module(irmod);
@@ -886,10 +886,9 @@ CompileResult compile_vx_source(const std::string &source,
         }
         const std::string title = "Diagrama IR post-optimizacion (opt_level=" +
                                   std::to_string(opts.opt_level) + ")";
-        // --diagram-cost: analisis Big-O sobre el IR POST-opt (complejidad
-        // efectiva del codigo final) calculado una vez para los tres formatos.
+        // Coste Big-O SIEMPRE sobre el IR POST-opt (complejidad efectiva del
+        // codigo final) calculado una vez para los tres formatos.
         const bool want_cost_post =
-            opts.annotate_cost &&
             (opts.dump_mermaid_ir_post || opts.dump_graphviz_ir_post ||
              opts.dump_html_ir_post);
         analyze::ModuleCost mc_post;
