@@ -43,6 +43,15 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::ROL:
     case MOp::ROR:
     case MOp::DIVMOD_V: /* dst = src1 / src2 (variant: 0 DIV, 1 MOD) */
+    /* arm64 3-op: division y select condicional (dst def, srcs use). */
+    case MOp::A64_UDIV:
+    case MOp::A64_SDIV:
+    case MOp::A64_CSEL:
+    /* arm64 float 3-op (dst def, srcs use). */
+    case MOp::A64_FADD:
+    case MOp::A64_FSUB:
+    case MOp::A64_FMUL:
+    case MOp::A64_FDIV:
         r.dst = R::DEF;
         r.src1 = R::USE;
         r.src2 = R::USE;
@@ -82,6 +91,32 @@ InstrRoles operand_roles(MOp op) noexcept {
 
     /* SETcc dst: solo def (lee flags, no regs). */
     case MOp::SETCC: r.dst = R::DEF; break;
+
+    /* arm64: CSET dst (lee flags); extensiones/mvn/fmov/fneg/... unarios;
+     * conversiones int<->float; CBNZ/CBZ leen el reg testeado (dst = label);
+     * FCMP setea flags (solo lee). */
+    case MOp::A64_CSET: r.dst = R::DEF; break;
+    case MOp::A64_MVN:
+    case MOp::A64_SXTB:
+    case MOp::A64_UXTB:
+    case MOp::A64_FMOV:
+    case MOp::A64_FNEG:
+    case MOp::A64_FABS:
+    case MOp::A64_FSQRT:
+    case MOp::A64_SCVTF:
+    case MOp::A64_UCVTF:
+    case MOp::A64_FCVTZS:
+    case MOp::A64_FCVTZU:
+    case MOp::A64_FCVT:
+        r.dst = R::DEF;
+        r.src1 = R::USE;
+        break;
+    case MOp::A64_CBNZ:
+    case MOp::A64_CBZ: r.src1 = R::USE; break;
+    case MOp::A64_FCMP:
+        r.src1 = R::USE;
+        r.src2 = R::USE;
+        break;
 
     /* CMOVcc dst, src: dst es use+def (condicional preserva), src use. */
     case MOp::CMOVCC:

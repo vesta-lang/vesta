@@ -280,6 +280,29 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 O.push_back(m);
                 break;
             }
+            case ir::IrOp::ALLOCA:
+                // Reserva de espacio en el frame; dst = puntero (host).  El
+                // rewrite le asigna el offset y emite `add dst, sp, #off`.
+                O.push_back(MInstr::make_alloca(
+                    vr(in.dst), static_cast<uint32_t>(in.imm)));
+                break;
+            case ir::IrOp::LOAD: {
+                // %dst = load %addr  (memoria host; ancho segun el tipo).
+                if (in.operands.size() != 1) return false;
+                const uint8_t w = static_cast<uint8_t>(ir_bytes(in.type));
+                O.push_back(MInstr::make_load(vr(in.dst), vr(in.operands[0]), w,
+                                              ir_signed(in.type)));
+                break;
+            }
+            case ir::IrOp::STORE: {
+                // store %val, %addr  (operands[0]=val, operands[1]=addr).
+                if (in.operands.size() != 2) return false;
+                const ir::IrType vt = fn.values[in.operands[0]].type;
+                const uint8_t w = static_cast<uint8_t>(ir_bytes(vt));
+                O.push_back(MInstr::make_store(vr(in.operands[1]),
+                                               vr(in.operands[0]), w));
+                break;
+            }
             case ir::IrOp::CMP_EQ:
             case ir::IrOp::CMP_NE:
             case ir::IrOp::CMP_LT:
@@ -352,10 +375,26 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 break;
             }
             default:
+                if (std::getenv("VESTA_ARM64_DUMP"))
+                    std::fprintf(stderr, "[arm64-vreg] op no soportado: %d\n",
+                                 static_cast<int>(in.op));
                 return false; // op fuera del subset entero -> fallback.
             }
         }
     }
+    // CFG de los MBlock (succ_a/succ_b): imprescindible para que el regalloc
+    // generico calcule la liveness cross-block (loops).  MBlock index = IR
+    // block id.
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        out.blocks[bi].label_id = static_cast<MLabelId>(bi);
+        const std::vector<ir::IrBlockId> &succs = fn.blocks[bi].succs;
+        if (succs.size() >= 1)
+            out.blocks[bi].succ_a = static_cast<MBlockId>(succs[0]);
+        if (succs.size() >= 2)
+            out.blocks[bi].succ_b = static_cast<MBlockId>(succs[1]);
+    }
+    if (std::getenv("VESTA_ARM64_DUMP"))
+        std::fprintf(stderr, "[arm64-vreg] select OK %s\n", fn.name.c_str());
     return true;
 }
 
@@ -402,9 +441,20 @@ MFunction Arm64Target::rewrite(const MFunction &vf, const RegAlloc &ra,
     std::vector<uint8_t> saved = ra.callee_saved_used;
     if (has_call) saved.push_back(30); // x30 = LR
     const int32_t saved_bytes = static_cast<int32_t>(saved.size()) * 8;
+    // Area de ALLOCAs: asigna a cada ALLOCA un offset (8-aligned) en el frame.
+    std::unordered_map<uint32_t, int32_t> alloca_off; // vreg dst -> offset
+    int32_t alloca_bytes = 0;
+    for (const MBlock &b : vf.blocks)
+        for (const MInstr &mi : b.instrs)
+            if (mi.op == MOp::ALLOCA && mi.dst.kind == MOperandKind::VREG) {
+                int32_t sz = mi.src1.value > 0 ? mi.src1.value : 8;
+                sz = (sz + 7) & ~7;
+                alloca_off[mi.dst.vreg_id()] = saved_bytes + alloca_bytes;
+                alloca_bytes += sz;
+            }
     const int32_t spill_bytes = static_cast<int32_t>(ra.num_spill_slots) * 8;
-    const int32_t spill_base = saved_bytes; // spills tras los callee-saved
-    int32_t frame = saved_bytes + spill_bytes;
+    const int32_t spill_base = saved_bytes + alloca_bytes; // spills al final
+    int32_t frame = saved_bytes + alloca_bytes + spill_bytes;
     frame = (frame + 15) & ~15; // alineado a 16
 
     // Prologo (bloque 0): sub sp + str de cada callee-saved/x30.
@@ -446,6 +496,23 @@ MFunction Arm64Target::rewrite(const MFunction &vf, const RegAlloc &ra,
             if (mi.op == MOp::RET) {
                 emit_frame_restore(O);
                 O.push_back(mi);
+                continue;
+            }
+            // ALLOCA -> add dst, sp, #off (dst = puntero al slot del frame).
+            if (mi.op == MOp::ALLOCA && mi.dst.kind == MOperandKind::VREG) {
+                bool sd0 = false;
+                uint32_t ds0 = 0;
+                const MOperand d = phys_of(mi.dst, ra, sd0, ds0);
+                const int32_t off = alloca_off[mi.dst.vreg_id()];
+                MOperand imm;
+                imm.kind = MOperandKind::IMM32;
+                imm.value = off;
+                MOperand dreg = sd0 ? a64_reg(A64_X16) : d;
+                O.push_back(MInstr::make_binary(MOp::ADD, dreg,
+                                                a64_reg(A64_SP_ID), imm));
+                if (sd0)
+                    O.push_back(MInstr::make_store(spill_mem(ds0, spill_base),
+                                                   a64_reg(A64_X16), 8));
                 continue;
             }
             MInstr m = mi;
@@ -620,14 +687,40 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                 os << "    b." << cc_by_index(static_cast<uint8_t>(mi.variant))
                    << " .Lb" << mi.src1.value << "\n";
                 break;
-            case MOp::LOAD:
-                os << "    ldr " << rn(mi.dst) << ", [sp, #" << mi.src1.value
-                   << "]\n";
+            case MOp::LOAD: {
+                // dst = [addr].  addr en MEM [base,#disp] (spill) o en un REG.
+                const int w = mi.flags >> 1; // (width<<1)|sgn
+                const char *ld = w == 1   ? "ldrb"
+                                 : w == 2 ? "ldrh"
+                                          : "ldr";
+                const std::string dst =
+                    a64_name(mi.dst.reg, w >= 8 ? 8 : 4);
+                if (mi.src1.kind == MOperandKind::MEM)
+                    os << "    " << ld << " " << dst << ", ["
+                       << a64_name(mi.src1.reg, 8) << ", #" << mi.src1.value
+                       << "]\n";
+                else
+                    os << "    " << ld << " " << dst << ", ["
+                       << a64_name(mi.src1.reg, 8) << "]\n";
                 break;
-            case MOp::STORE:
-                os << "    str " << rn(mi.src2) << ", [sp, #" << mi.dst.value
-                   << "]\n";
+            }
+            case MOp::STORE: {
+                // [addr] = val.  src1 = addr (MEM o REG), src2 = val.
+                const int w = mi.flags;
+                const char *st = w == 1   ? "strb"
+                                 : w == 2 ? "strh"
+                                          : "str";
+                const std::string val =
+                    a64_name(mi.src2.reg, w >= 8 ? 8 : 4);
+                if (mi.src1.kind == MOperandKind::MEM)
+                    os << "    " << st << " " << val << ", ["
+                       << a64_name(mi.src1.reg, 8) << ", #" << mi.src1.value
+                       << "]\n";
+                else
+                    os << "    " << st << " " << val << ", ["
+                       << a64_name(mi.src1.reg, 8) << "]\n";
                 break;
+            }
             case MOp::CALL_SYM:
                 call_syms.push_back(static_cast<uint32_t>(mi.src1.value));
                 os << "    bl 0\n";
@@ -636,12 +729,18 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                 os << "    ret\n";
                 break;
             default:
+                if (std::getenv("VESTA_ARM64_DUMP"))
+                    std::fprintf(stderr, "[arm64-vreg] ENCODE MOp no sop: %d\n",
+                                 static_cast<int>(mi.op));
                 return 0; // op no soportada por el encoder arm64
             }
         }
     }
 
     // Ensamblar el texto AArch64 con Keystone.
+    if (std::getenv("VESTA_ARM64_DUMP"))
+        std::fprintf(stderr, "---- asm arm64 ----\n%s-------------------\n",
+                     os.str().c_str());
     if (!vx::g_asm_backend) return 0;
     const vx::AsmAssembleResult ar =
         vx::g_asm_backend->assemble(os.str(), vx::AsmArch::ARM64);
