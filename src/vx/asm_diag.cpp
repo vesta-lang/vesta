@@ -18,6 +18,8 @@
 #include "vx/asm_diag.h"
 
 #include <deque>
+#include <set>
+#include <unordered_set>
 #include <vector>
 
 namespace vx {
@@ -156,6 +158,143 @@ std::vector<AsmDiag> asm_diagnose_cfg(const AsmCfg &cfg) {
 
 std::vector<AsmDiag> asm_diagnose(instr_db::Isa isa, const std::string &body) {
     return asm_diagnose_cfg(build_asm_cfg(isa, body));
+}
+
+std::vector<AsmDiag>
+asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
+                    const std::vector<std::string> &defined_in, uint32_t ua_id) {
+    std::vector<AsmDiag> out;
+    const uint32_t nb = static_cast<uint32_t>(cfg.blocks.size());
+    if (nb == 0)
+        return out;
+
+    // Semantica (lecturas/escrituras/modelada) por instruccion, cacheada.
+    std::vector<instr_db::AsmInsnSem> sem(cfg.insns.size());
+    // Universo = registros canonicos que APARECEN (solo reportamos lecturas).
+    std::set<std::string> universe;
+    for (size_t i = 0; i < cfg.insns.size(); ++i) {
+        sem[i] = instr_db::asm_insn_sem(isa, cfg.insns[i].text, ua_id);
+        for (const std::string &r : sem[i].reads)
+            universe.insert(r);
+        for (const std::string &r : sem[i].writes)
+            universe.insert(r);
+    }
+    if (universe.empty())
+        return out;
+
+    using RegSet = std::unordered_set<std::string>;
+    const RegSet full(universe.begin(), universe.end());
+    RegSet entry_undef = full; // a la entrada, todo lo no pre-definido esta indefinido.
+    for (const std::string &d : defined_in)
+        entry_undef.erase(d);
+
+    // undef_in/undef_out por bloque.  Meet = interseccion (must-undefined en TODOS
+    // los preds).  Inicializamos los no-entrada al TOP (full) para el punto fijo.
+    std::vector<RegSet> undef_in(nb), undef_out(nb, full);
+    for (uint32_t b = 0; b < nb; ++b)
+        undef_in[b] = full;
+    undef_in[0] = entry_undef;
+
+    // Aplica el efecto de la instruccion @p i sobre el conjunto "indefinido"
+    // @p cur.  Las ramas/saltos/ret NO definen registros GP (aunque no esten en
+    // la DB de coste) -> no tocan el conjunto.  Un @c call clobbera los
+    // caller-saved (conservador: vacia).  Una instruccion no-modelada que NO es
+    // control de flujo pudo definir cualquier cosa -> vacia.  Una modelada borra
+    // sus escrituras.
+    auto apply_defs = [&](uint32_t i, RegSet &cur) {
+        switch (cfg.insns[i].term) {
+        case AsmTerm::UncondJump:
+        case AsmTerm::CondBranch:
+        case AsmTerm::Ret:
+            return; // control de flujo puro: no define registros.
+        case AsmTerm::Call:
+        case AsmTerm::Indirect:
+            cur.clear(); // clobber / destino desconocido (conservador).
+            return;
+        default:
+            break;
+        }
+        if (!sem[i].modeled) {
+            cur.clear();
+            return;
+        }
+        for (const std::string &w : sem[i].writes)
+            cur.erase(w);
+    };
+
+    // Transferencia de un bloque completo.
+    auto transfer = [&](uint32_t b, const RegSet &in) -> RegSet {
+        RegSet cur = in;
+        for (uint32_t i = cfg.blocks[b].first; i <= cfg.blocks[b].last; ++i)
+            apply_defs(i, cur);
+        return cur;
+    };
+
+    // Punto fijo: undef_in(b) = interseccion de undef_out(preds); recomputa
+    // undef_out.  Converge (los conjuntos solo decrecen).
+    bool changed = true;
+    int guard = 0;
+    while (changed && guard++ < 10000) {
+        changed = false;
+        for (uint32_t b = 0; b < nb; ++b) {
+            if (b != 0 && !cfg.blocks[b].preds.empty()) {
+                // Interseccion de los undef_out de los predecesores.
+                RegSet meet;
+                bool first = true;
+                for (uint32_t p : cfg.blocks[b].preds) {
+                    if (first) {
+                        meet = undef_out[p];
+                        first = false;
+                    } else {
+                        RegSet inter;
+                        for (const std::string &r : meet)
+                            if (undef_out[p].count(r))
+                                inter.insert(r);
+                        meet.swap(inter);
+                    }
+                }
+                if (meet != undef_in[b]) {
+                    undef_in[b] = std::move(meet);
+                    changed = true;
+                }
+            }
+            RegSet no = transfer(b, undef_in[b]);
+            if (no != undef_out[b]) {
+                undef_out[b] = std::move(no);
+                changed = true;
+            }
+        }
+    }
+
+    // Reporte: recorre cada bloque con su undef_in y detecta lecturas de un
+    // registro aun indefinido.  Dedup por (linea, registro).
+    std::set<std::pair<uint32_t, std::string>> seen;
+    for (uint32_t b = 0; b < nb; ++b) {
+        RegSet cur = undef_in[b];
+        for (uint32_t i = cfg.blocks[b].first; i <= cfg.blocks[b].last; ++i) {
+            // Solo reportamos lecturas de una instruccion MODELADA (si no la
+            // entendemos, no afirmamos nada sobre sus operandos).
+            if (sem[i].modeled) {
+                for (const std::string &r : sem[i].reads) {
+                    if (cur.count(r)) {
+                        auto key = std::make_pair(cfg.insns[i].line_no, r);
+                        if (seen.insert(key).second) {
+                            AsmDiag d;
+                            d.severity = AsmDiagSeverity::Warning;
+                            d.line_no = cfg.insns[i].line_no;
+                            d.code = "VXA004";
+                            d.message = "registro '" + r +
+                                        "' leido sin inicializar en el bloque asm";
+                            out.push_back(std::move(d));
+                        }
+                    }
+                }
+            }
+            apply_defs(i, cur);
+        }
+    }
+
+    return out;
 }
 
 } // namespace vx

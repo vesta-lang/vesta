@@ -116,6 +116,89 @@ int main() {
               "salto indirecto: sin bucle falso (conservador)");
     }
 
+    // === Dataflow: lecturas de registro sin inicializar (VXA004). ===
+    int32_t ua = instr_db::microarch_by_name(Isa::X86, "intel-skylake");
+    uint32_t skl = static_cast<uint32_t>(ua < 0 ? 0 : ua);
+
+    // --- Lectura de un registro nunca escrito ni pre-definido -> VXA004. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86, "mov rax, rbx\n"); // lee rbx, escribe rax
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {}, skl);
+        CHECK(has_code(ds, "VXA004"), "rbx sin inicializar -> VXA004");
+    }
+
+    // --- El mismo caso con rbx pre-definido (binding) -> sin aviso. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86, "mov rax, rbx\n");
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rbx"}, skl);
+        CHECK(!has_code(ds, "VXA004"), "rbx pre-definido: sin VXA004");
+    }
+
+    // --- CERO FALSOS POSITIVOS en un cuerpo register() realista. ---
+    {
+        // mov rax,rdi ; imul rax,rax ; add rax,rcx  (entradas rdi,rcx via register())
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "mov rax, rdi\n"
+                                 "imul rax, rax\n"
+                                 "add rax, rcx\n");
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rdi", "rcx"}, skl);
+        CHECK(!has_code(ds, "VXA004"),
+              "cuerpo register() valido: cero falsos positivos");
+    }
+
+    // --- Escritura antes de la lectura suprime el aviso. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "mov rax, 5\n"    // define rax
+                                 "add rbx, rax\n"); // lee rax (definido) + rbx
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rbx"}, skl);
+        CHECK(!has_code(ds, "VXA004"), "rax definido antes de leerse: sin VXA004");
+    }
+
+    // --- Una instruccion NO MODELADA suprime el aviso (conservador). ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "frobnicate_xyz\n" // desconocida -> modelada=false
+                                 "mov rbx, rax\n");  // rax podria haberla escrito
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {}, skl);
+        CHECK(!has_code(ds, "VXA004"),
+              "instruccion no modelada suprime VXA004 (conservador)");
+    }
+
+    // --- Definido en una sola rama -> NO se avisa (MUST-undefined, conservador).
+    //     Hay un camino (via .set) donde rax SI esta definido, asi que no podemos
+    //     afirmar con certeza que sea un error -> cero falsos positivos. ---
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "cmp rcx, 0\n"     // B0
+                                 "je .set\n"
+                                 "jmp .use\n"       // B1: no define rax
+                                 ".set:\n"
+                                 "mov rax, 1\n"     // B2: define rax
+                                 ".use:\n"
+                                 "add rdx, rax\n"); // B3: lee rax
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rcx", "rdx"}, skl);
+        CHECK(!has_code(ds, "VXA004"),
+              "definido en una sola rama: sin VXA004 (MUST-undefined)");
+    }
+
+    // --- Indefinido en TODOS los caminos hasta la lectura -> SI avisa. ---
+    {
+        // Ninguna rama define rax; al leerlo en el merge esta indefinido siempre.
+        AsmCfg c = build_asm_cfg(Isa::X86,
+                                 "cmp rcx, 0\n"     // B0
+                                 "je .b\n"
+                                 "mov rdx, 1\n"     // B1
+                                 "jmp .use\n"
+                                 ".b:\n"
+                                 "mov rdx, 2\n"     // B2
+                                 ".use:\n"
+                                 "add rdx, rax\n"); // B3: lee rax, indefinido en ambas ramas
+        auto ds = asm_diagnose_uninit(c, Isa::X86, {"rcx"}, skl);
+        CHECK(has_code(ds, "VXA004"),
+              "rax indefinido en todos los caminos: VXA004 en el merge");
+    }
+
     std::printf("=== asm_diag_test: %d checks OK, %d fallidos ===\n",
                 g_checks - g_fail, g_fail);
     return g_fail ? 1 : 0;

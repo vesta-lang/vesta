@@ -63,6 +63,30 @@ std::vector<AsmDiag> asm_diagnose_cfg(const AsmCfg &cfg);
  */
 std::vector<AsmDiag> asm_diagnose(instr_db::Isa isa, const std::string &body);
 
+/**
+ * @brief Detecta LECTURAS DE REGISTRO SIN INICIALIZAR mediante un dataflow
+ *        MUST-undefined sobre el CFG.
+ *
+ * Un registro se marca sin inicializar (VXA004) solo si en TODOS los caminos
+ * desde la entrada hasta la lectura no fue escrito por ninguna instruccion
+ * MODELADA y no aparecio ninguna instruccion no-modelada (que podria haberlo
+ * escrito) -> es SoLIDO (cero falsos positivos; una instruccion desconocida
+ * suprime el aviso, conservador).
+ *
+ * @param cfg        CFG del bloque (de @ref build_asm_cfg).
+ * @param isa        ISA (para la semantica por instruccion).
+ * @param defined_in Registros CANoNICOS ya definidos a la entrada del bloque
+ *                   (los ligados por @c register() y las entradas ABI).  Sin
+ *                   este conjunto CUALQUIER primera lectura seria un falso
+ *                   positivo, por eso es un parametro obligatorio.
+ * @param ua_id      Microarq para la semantica (las lecturas/escrituras no
+ *                   dependen de ella; solo se usa para resolver la forma).
+ * @return Diagnosticos VXA004 (uno por (linea, registro)).
+ */
+std::vector<AsmDiag>
+asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
+                    const std::vector<std::string> &defined_in, uint32_t ua_id);
+
 } // namespace vx
 
 #endif // VX_ASM_DIAG_H
