@@ -737,6 +737,42 @@ enum class MOp : uint8_t {
                             ///< dispatch suma la base: lea RB,[rip+table];
                             ///< movsxd RI,[RB+idx*4]; add RB,RI; jmp RB.
 
+    /* ===== MOps especificos de AArch64 (arm64 vreg backend, opcion A) =====
+     * Los MOp ALU/mem/control ABSTRACTOS (MOV/ADD/SUB/IMUL/AND/OR/XOR/SHL/SHR/
+     * SAR/NEG/NOT/CMP/TEST/LOAD/STORE/RET/CALL/JMP/JCC/LABEL_DEF/SAFEPOINT) se
+     * REUSAN en arm64: como is_two_address=false, el selector emite forma
+     * 3-operandos y el encoder arm64 la traduce (add/sub/mul/and/... rd,rn,rm).
+     * Solo se anaden aqui las ops SIN equivalente abstracto.  El encoder x86 no
+     * las emite; el arm64 si. */
+    A64_UDIV = 210,   ///< udiv rd, rn, rm (division sin signo; sin CQO/rax:rdx)
+    A64_SDIV = 211,   ///< sdiv rd, rn, rm (division con signo)
+    A64_MADD = 212,   ///< madd rd, rn, rm, ra (rd = ra + rn*rm)
+    A64_MSUB = 213,   ///< msub rd, rn, rm, ra (rd = ra - rn*rm); modulo = a-(a/b)*b
+    A64_MOVZ = 214,   ///< movz rd, #imm16, lsl #s (materializar constante: base)
+    A64_MOVK = 215,   ///< movk rd, #imm16, lsl #s (rellenar 16 bits sin borrar)
+    A64_MVN = 216,    ///< mvn rd, rm (NOT bitwise = orn rd, xzr, rm)
+    A64_CSEL = 217,   ///< csel rd, rn, rm, cond (select condicional)
+    A64_CSET = 218,   ///< cset rd, cond (rd = cond ? 1 : 0; = SETcc)
+    A64_CBZ = 219,    ///< cbz rn, label (branch si rn == 0)
+    A64_CBNZ = 220,   ///< cbnz rn, label (branch si rn != 0)
+    /* Float/SIMD escalar AArch64 (3-operandos, banco v0-v31). */
+    A64_FMOV = 221,   ///< fmov (reg-reg, o gp<->fp, o imm)
+    A64_FADD = 222,   ///< fadd rd, rn, rm
+    A64_FSUB = 223,   ///< fsub rd, rn, rm
+    A64_FMUL = 224,   ///< fmul rd, rn, rm
+    A64_FDIV = 225,   ///< fdiv rd, rn, rm
+    A64_FCMP = 226,   ///< fcmp rn, rm (setea NZCV)
+    A64_FSQRT = 227,  ///< fsqrt rd, rn
+    A64_FNEG = 228,   ///< fneg rd, rn
+    A64_FABS = 229,   ///< fabs rd, rn
+    A64_SCVTF = 230,  ///< scvtf rd(fp), rn(gp) (int con signo -> float)
+    A64_UCVTF = 231,  ///< ucvtf rd(fp), rn(gp) (int sin signo -> float)
+    A64_FCVTZS = 232, ///< fcvtzs rd(gp), rn(fp) (float -> int con signo, trunc)
+    A64_FCVTZU = 233, ///< fcvtzu rd(gp), rn(fp) (float -> int sin signo, trunc)
+    A64_FCVT = 234,   ///< fcvt rd, rn (convierte precision f32<->f64)
+    A64_SXTB = 235,   ///< sxtb/sxth/sxtw rd, rn (sign-extend 8/16/32 -> 64)
+    A64_UXTB = 236,   ///< uxtb/uxth rd, rn (zero-extend 8/16 -> 64)
+
     COUNT = 114
 };
 
