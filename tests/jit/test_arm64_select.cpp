@@ -158,6 +158,52 @@ static std::string emit_sum_fn(bool &uns) {
     return jit::arm64::arm64_emit_asm(fn, uns);
 }
 
+/// Construye `do_atomics(p)`: sobre la celda en @c *p (inicializada a 10 por el
+/// harness) hace  a=fetch_add(p,5) (=10, celda->15);  b=cas(p,15,42) (=15,
+/// celda->42);  c=fetch_add(p,0) (=42);  return c.  Ejercita ATOMIC_ADD (fetch +
+/// store) y ATOMIC_CAS (match + store) y relee la celda -> el resultado 42 solo
+/// sale si TODA la cadena atomica es correcta.
+static std::string emit_atomics_fn(bool &uns) {
+    ir::IrFunction fn;
+    fn.name = "atomics";
+    fn.ret_type = ir::IrType::I64;
+    const ir::IrValueId p = fn.new_value(ir::IrType::I64);
+    fn.params.push_back(p);
+    const ir::IrValueId c5 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId c15 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId c42 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId c0 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId a = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId b = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId c = fn.new_value(ir::IrType::I64);
+    ir::IrBlock e;
+    e.id = 0;
+    e.name = "entry";
+    auto konst = [&](ir::IrValueId d, uint64_t v) {
+        ir::IrInstr k = mk(ir::IrOp::CONST, ir::IrType::I64, d);
+        k.imm = v;
+        e.instrs.push_back(k);
+    };
+    konst(c5, 5);
+    konst(c15, 15);
+    konst(c42, 42);
+    konst(c0, 0);
+    ir::IrInstr add1 = mk(ir::IrOp::ATOMIC_ADD_I64, ir::IrType::I64, a);
+    add1.operands = {p, c5};
+    e.instrs.push_back(add1);
+    ir::IrInstr cas = mk(ir::IrOp::ATOMIC_CAS_I64, ir::IrType::I64, b);
+    cas.operands = {p, c15, c42};
+    e.instrs.push_back(cas);
+    ir::IrInstr add0 = mk(ir::IrOp::ATOMIC_ADD_I64, ir::IrType::I64, c);
+    add0.operands = {p, c0};
+    e.instrs.push_back(add0);
+    ir::IrInstr ret = mk(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+    ret.operands.push_back(c);
+    e.instrs.push_back(ret);
+    fn.blocks.push_back(e);
+    return jit::arm64::arm64_emit_asm(fn, uns);
+}
+
 /// Escribe un programa bare-metal que llama a `fn_body` (etiqueta @p entry) con
 /// UN argumento @p arg y sale por semihosting con el resultado como codigo.
 static void write_boot(std::ofstream &o, const std::string &fn_body, int arg) {
@@ -221,6 +267,35 @@ int main(int argc, char **argv) {
         if (!o)
             return 1;
         write_boot(o, body, 4); // sum(4) = 10
+        return 0;
+    }
+    if (argc >= 3 && std::string(argv[1]) == "bootatomic") {
+        bool uns = false;
+        const std::string body = emit_atomics_fn(uns);
+        if (uns)
+            return 1;
+        std::ofstream o(argv[2]);
+        if (!o)
+            return 1;
+        // Harness: reserva una celda en la pila, la inicializa a 10, pasa su
+        // direccion en x0 y llama.  El resultado (42) sale por semihosting.
+        o << "movz x20, #0x4030, lsl #16\n";
+        o << "mov sp, x20\n";
+        o << "sub sp, sp, #16\n";
+        o << "movz x0, #10\n";
+        o << "str x0, [sp]\n";  // celda = 10
+        o << "mov x0, sp\n";    // x0 = &celda
+        o << "bl fn_body\n";
+        o << "mov x21, x0\n";
+        o << "sub sp, sp, #16\n";
+        o << "movz x2, #0x26\n";
+        o << "movk x2, #0x2, lsl #16\n";
+        o << "str x2, [sp]\n";
+        o << "str x21, [sp, #8]\n";
+        o << "mov x1, sp\n";
+        o << "movz x0, #0x18\n";
+        o << "hlt #0xf000\n";
+        o << "fn_body:\n" << body;
         return 0;
     }
     if (argc >= 3 && std::string(argv[1]) == "bootcall") {
@@ -338,6 +413,19 @@ int main(int argc, char **argv) {
         bool uns = false;
         std::string a = emit_add_fn(uns);
         CHECK(!has(a, "str x30,"), "add (leaf): no salva LR");
+    }
+
+    // --- Atomicos: ATOMIC_CAS / ATOMIC_ADD via bucle LL/SC (cierra ASA.3). ---
+    {
+        bool uns = false;
+        std::string a = emit_atomics_fn(uns);
+        CHECK(!uns, "atomics: soportado");
+        CHECK(has(a, "ldaxr x12, [x9]"), "atomics: ldaxr del CAS");
+        CHECK(has(a, "stlxr w13, x11, [x9]"), "atomics: stlxr del CAS");
+        CHECK(has(a, "b.ne .Latomics_acd"), "atomics: salida del CAS en mismatch");
+        CHECK(has(a, "ldaxr x11, [x9]"), "atomics: ldaxr del ADD");
+        CHECK(has(a, "add x12, x11, x10"), "atomics: suma del fetch-and-add");
+        CHECK(has(a, "cbnz w13, .Latomics_aar"), "atomics: reintento del ADD");
     }
 
     // --- Op no soportada aun (LOAD de memoria) -> out_unsupported. ---

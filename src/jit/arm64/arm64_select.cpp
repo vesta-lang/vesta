@@ -146,7 +146,8 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
     for (size_t i = 0; i < fn.params.size() && i < 8; ++i)
         emit_st(os, arg_regs[i], fn.params[i]);
 
-    int cond_lbl = 0; // contador de etiquetas locales de BR_COND.
+    int cond_lbl = 0;   // contador de etiquetas locales de BR_COND.
+    int atomic_lbl = 0; // contador de etiquetas de los bucles LL/SC atomicos.
     for (const ir::IrBlock &bb : fn.blocks) {
         os << lbl << "b" << bb.id << ":\n";
         for (const ir::IrInstr &in : bb.instrs) {
@@ -235,6 +236,45 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 os << lbl << "t" << n << ":\n";
                 emit_phi_copies(os, fn, bb.id, in.target_block);
                 os << "    b " << lbl << "b" << in.target_block << "\n";
+                break;
+            }
+            case ir::IrOp::ATOMIC_CAS_I64: {
+                // compare-and-swap via bucle load-linked/store-conditional.
+                // operands: addr, exp, des -> dst = valor viejo.
+                if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const int n = atomic_lbl++;
+                emit_ld(os, "x9", in.operands[0]);  // addr
+                emit_ld(os, "x10", in.operands[1]); // exp
+                emit_ld(os, "x11", in.operands[2]); // des
+                os << lbl << "acr" << n << ":\n";
+                os << "    ldaxr x12, [x9]\n";      // old (load-acquire)
+                os << "    cmp x12, x10\n";
+                os << "    b.ne " << lbl << "acd" << n << "\n"; // mismatch: no store
+                os << "    stlxr w13, x11, [x9]\n"; // store-release; w13=0 ok
+                os << "    cbnz w13, " << lbl << "acr" << n << "\n"; // reintenta
+                os << lbl << "acd" << n << ":\n";
+                emit_st(os, "x12", in.dst); // valor viejo (== o != exp)
+                break;
+            }
+            case ir::IrOp::ATOMIC_ADD_I64: {
+                // fetch-and-add via bucle LL/SC.  operands: addr, delta -> dst =
+                // valor viejo.
+                if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const int n = atomic_lbl++;
+                emit_ld(os, "x9", in.operands[0]);  // addr
+                emit_ld(os, "x10", in.operands[1]); // delta
+                os << lbl << "aar" << n << ":\n";
+                os << "    ldaxr x11, [x9]\n";       // old
+                os << "    add x12, x11, x10\n";     // new = old + delta
+                os << "    stlxr w13, x12, [x9]\n";  // store-release
+                os << "    cbnz w13, " << lbl << "aar" << n << "\n";
+                emit_st(os, "x11", in.dst); // valor viejo
                 break;
             }
             case ir::IrOp::CALL: {
