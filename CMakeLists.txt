@@ -745,6 +745,19 @@ else ()
     target_link_libraries(test_asm_diagram PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Lift de patrones de asm a IR tipado (atomicos).
+add_executable(test_asm_lift tests/vx/asm_lift_test.cpp)
+target_include_directories(test_asm_lift PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asm_lift PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asm_lift PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asm_lift PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asm_lift PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone

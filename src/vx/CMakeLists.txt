@@ -89,6 +89,9 @@ add_library(vx_lib STATIC
     # Diagramas del CFG del asm anotados con coste/latencia/cuellos de botella/
     # flags/diagnosticos (mermaid + graphviz), para embeber en los diagramas.
     asm_diagram.cpp
+    # Lift de patrones de asm a IR tipado (lock cmpxchg/xadd -> ATOMIC_CAS/ADD):
+    # atomicos escritos en asm que bajan al mismo op optimizable que el opcode.
+    asm_lift.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
     # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
     # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
