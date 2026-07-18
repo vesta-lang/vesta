@@ -13534,6 +13534,32 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     "); declara clobbers(...) explicitos "
                     "para precision o usa 'noinfer'");
         }
+    } else if (s->level != ast::AsmLevel::Raw) {
+        // ASA.2 (VXA006): con `noinfer`, la lista clobbers(...) es la que ve el
+        // regalloc EXACTAMENTE (no se infiere).  Si el asm MODIFICA un registro o
+        // las flags que no estan ni ligados por register() ni declarados, el
+        // backend los cree preservados -> miscompilacion.  Lo avisamos.  (`raw`
+        // es cero-analisis por diseno: no entra.)
+        vx::AsmInferResult inf = vx::asm_infer_clobbers(body_sub, bound_canon);
+        for (const auto &c : inf.clobber_regs) {
+            const std::string cc = vx::asm_canonical_reg(c);
+            bool declared = false;
+            for (const auto &d : s->clobbers)
+                if (vx::asm_canonical_reg(d) == cc) {
+                    declared = true;
+                    break;
+                }
+            if (!declared)
+                diags_.warning(s->body_loc,
+                               "asm: registro '" + c +
+                                   "' modificado pero no declarado en "
+                                   "clobbers(...) con 'noinfer' [VXA006]");
+        }
+        if (inf.clobber_flags && !s->clobbers_flags && !s->q_preserves_flags &&
+            !s->q_pure)
+            diags_.warning(s->body_loc,
+                           "asm: las flags se modifican pero no se declara "
+                           "clobbers(\"flags\") con 'noinfer' [VXA006]");
     }
     // `nomem`/`preserves_flags`/`pure` afirman que NO se toca: override.
     if (s->q_nomem || s->q_pure) final_mem = false;
