@@ -68,10 +68,11 @@ def run_case(mode, want, desc):
 
 ok_add = run_case("boot", 7, "add(3,4)=7 (linea recta)")
 ok_sum = run_case("bootsum", 10, "sum(4)=10 (bucle: PHI + CMP + BR_COND)")
+ok_call = run_case("bootcall", 7, "caller()=add(3,4)=7 (llamada bl + LR)")
 
-if ok_add and ok_sum:
-    t.ok("OK: el selector IR->AArch64 genera codigo CORRECTO -- add(3,4)=7 y "
-         "sum(4)=10 ejecutan en qemu-system-aarch64")
+if ok_add and ok_sum and ok_call:
+    t.ok("OK: el selector IR->AArch64 genera codigo CORRECTO -- add=7, sum=10 y "
+         "caller(llamada)=7 ejecutan en qemu-system-aarch64")
 else:
     t.fail("FALLO: el codigo generado no dio los resultados esperados")
 t.finish()

@@ -17,7 +17,9 @@
 
 #include "jit/arm64/arm64_select.h"
 
+#include <cctype>
 #include <sstream>
+#include <string>
 
 namespace jit {
 namespace arm64 {
@@ -100,30 +102,53 @@ void emit_phi_copies(std::ostringstream &os, const ir::IrFunction &fn,
 
 } // namespace
 
-std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported) {
+std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
+                           Arm64Abi abi) {
     out_unsupported = false;
+    (void)abi; // el subconjunto entero no variadico es comun a las 3 ABIs.
     if (fn.blocks.empty()) {
         out_unsupported = true;
         return "";
     }
 
-    // Marco de pila: 8 bytes por valor SSA, alineado a 16.
-    uint32_t frame = static_cast<uint32_t>(fn.values.size()) * 8u;
-    frame = (frame + 15u) & ~15u;
+    // ¿La funcion hace alguna llamada?  Si la hace, `bl` machaca LR (x30): hay
+    // que salvarlo en el prologo y restaurarlo antes de cada ret.
+    bool has_call = false;
+    for (const ir::IrBlock &bb : fn.blocks)
+        for (const ir::IrInstr &in : bb.instrs)
+            if (in.op == ir::IrOp::CALL)
+                has_call = true;
+
+    // Marco: area de valores (8B por valor SSA, alineada a 16) + 16B para LR si
+    // hay llamadas (usa 8, 8 de padding para mantener sp a 16).
+    uint32_t value_area = static_cast<uint32_t>(fn.values.size()) * 8u;
+    value_area = (value_area + 15u) & ~15u;
+    const uint32_t lr_off = value_area;
+    uint32_t frame = value_area + (has_call ? 16u : 0u);
     if (frame == 0)
         frame = 16;
 
+    // Prefijo de etiquetas locales por-funcion (saneado): evita colisiones
+    // cuando varias funciones se ensamblan en el mismo unit (p.ej. un caller y su
+    // callee).  Cada bloque -> <pfx>b<id>, cada rama -> <pfx>t<n>.
+    std::string lbl = ".L";
+    for (char c : fn.name)
+        lbl += (std::isalnum(static_cast<unsigned char>(c)) ? c : '_');
+    lbl += "_";
+
     std::ostringstream os;
-    // Prologo: reservar el marco + guardar los params (AAPCS64: x0..x7).  Cae al
-    // bloque 0 (los saltos van a las etiquetas .Lb<id>, siempre despues de aqui).
+    // Prologo: reservar el marco, salvar LR si hace falta, y guardar los params
+    // (AAPCS64: x0..x7).  Cae al bloque 0 (los saltos van a <pfx>b<id>, despues).
     os << "    sub sp, sp, #" << frame << "\n";
+    if (has_call)
+        os << "    str x30, [sp, #" << lr_off << "]\n";
     const char *arg_regs[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"};
     for (size_t i = 0; i < fn.params.size() && i < 8; ++i)
         emit_st(os, arg_regs[i], fn.params[i]);
 
     int cond_lbl = 0; // contador de etiquetas locales de BR_COND.
     for (const ir::IrBlock &bb : fn.blocks) {
-        os << ".Lb" << bb.id << ":\n";
+        os << lbl << "b" << bb.id << ":\n";
         for (const ir::IrInstr &in : bb.instrs) {
             switch (in.op) {
             case ir::IrOp::PHI:
@@ -194,7 +219,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported) {
             case ir::IrOp::BR:
                 // Copias de PHI del destino, luego el salto incondicional.
                 emit_phi_copies(os, fn, bb.id, in.target_block);
-                os << "    b .Lb" << in.target_block << "\n";
+                os << "    b " << lbl << "b" << in.target_block << "\n";
                 break;
             case ir::IrOp::BR_COND: {
                 if (in.operands.size() != 1) {
@@ -204,22 +229,37 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported) {
                 // cond != 0 -> rama true; cada arista lleva SUS copias de PHI.
                 const int n = cond_lbl++;
                 emit_ld(os, "x9", in.operands[0]);
-                os << "    cbnz x9, .Lt" << n << "\n";
+                os << "    cbnz x9, " << lbl << "t" << n << "\n";
                 emit_phi_copies(os, fn, bb.id, in.false_block);
-                os << "    b .Lb" << in.false_block << "\n";
-                os << ".Lt" << n << ":\n";
+                os << "    b " << lbl << "b" << in.false_block << "\n";
+                os << lbl << "t" << n << ":\n";
                 emit_phi_copies(os, fn, bb.id, in.target_block);
-                os << "    b .Lb" << in.target_block << "\n";
+                os << "    b " << lbl << "b" << in.target_block << "\n";
+                break;
+            }
+            case ir::IrOp::CALL: {
+                // Args a x0..x7 desde sus huecos; bl; resultado (x0) al hueco.
+                if (in.operands.size() > 8) {
+                    out_unsupported = true;
+                    return "";
+                }
+                for (size_t i = 0; i < in.operands.size(); ++i)
+                    emit_ld(os, arg_regs[i], in.operands[i]);
+                os << "    bl " << in.func_name << "\n";
+                if (in.dst != ir::IR_NO_VALUE)
+                    emit_st(os, "x0", in.dst);
                 break;
             }
             case ir::IrOp::RET:
                 if (!in.operands.empty())
                     emit_ld(os, "x0", in.operands[0]);
+                if (has_call)
+                    os << "    ldr x30, [sp, #" << lr_off << "]\n";
                 os << "    add sp, sp, #" << frame << "\n";
                 os << "    ret\n";
                 break;
             default:
-                // Op no soportada aun (float, call, memoria): H.3+.
+                // Op no soportada aun (float, memoria, dispatch dinamico): H.3+.
                 out_unsupported = true;
                 return "";
             }

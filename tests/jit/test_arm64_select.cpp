@@ -55,6 +55,34 @@ static std::string emit_add_fn(bool &uns) {
     return jit::arm64::arm64_emit_asm(fn, uns);
 }
 
+/// Construye `caller() = add(3, 4)` (una LLAMADA `bl add`) y devuelve su asm.
+static std::string emit_caller_fn(bool &uns) {
+    ir::IrFunction fn;
+    fn.name = "caller";
+    fn.ret_type = ir::IrType::I64;
+    const ir::IrValueId c3 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId c4 = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId r = fn.new_value(ir::IrType::I64);
+    ir::IrBlock e;
+    e.id = 0;
+    e.name = "entry";
+    ir::IrInstr k3 = mk(ir::IrOp::CONST, ir::IrType::I64, c3);
+    k3.imm = 3;
+    e.instrs.push_back(k3);
+    ir::IrInstr k4 = mk(ir::IrOp::CONST, ir::IrType::I64, c4);
+    k4.imm = 4;
+    e.instrs.push_back(k4);
+    ir::IrInstr call = mk(ir::IrOp::CALL, ir::IrType::I64, r);
+    call.func_name = "add";
+    call.operands = {c3, c4};
+    e.instrs.push_back(call);
+    ir::IrInstr ret = mk(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+    ret.operands.push_back(r);
+    e.instrs.push_back(ret);
+    fn.blocks.push_back(e);
+    return jit::arm64::arm64_emit_asm(fn, uns);
+}
+
 /// Construye `sum(n) = 1+2+...+n` (bucle con PHI + CMP + BR_COND) y devuelve su
 /// asm AArch64.
 static std::string emit_sum_fn(bool &uns) {
@@ -195,6 +223,31 @@ int main(int argc, char **argv) {
         write_boot(o, body, 4); // sum(4) = 10
         return 0;
     }
+    if (argc >= 3 && std::string(argv[1]) == "bootcall") {
+        bool u1 = false, u2 = false;
+        const std::string caller = emit_caller_fn(u1);
+        const std::string add = emit_add_fn(u2);
+        if (u1 || u2)
+            return 1;
+        std::ofstream o(argv[2]);
+        if (!o)
+            return 1;
+        // Harness: llama caller() (sin args), que a su vez hace `bl add`.
+        o << "movz x20, #0x4030, lsl #16\n";
+        o << "mov sp, x20\n";
+        o << "bl caller_fn\n";
+        o << "mov x21, x0\n";
+        o << "sub sp, sp, #16\n";
+        o << "movz x2, #0x26\n";
+        o << "movk x2, #0x2, lsl #16\n";
+        o << "str x2, [sp]\n";
+        o << "str x21, [sp, #8]\n";
+        o << "mov x1, sp\n";
+        o << "movz x0, #0x18\n";
+        o << "hlt #0xf000\n";
+        o << "caller_fn:\n" << caller << "add:\n" << add;
+        return 0;
+    }
 
     std::printf("=== test_arm64_select ===\n");
 
@@ -261,12 +314,30 @@ int main(int argc, char **argv) {
         bool uns = false;
         std::string a = emit_sum_fn(uns);
         CHECK(!uns, "sum: soportado (multi-bloque + ramas)");
-        CHECK(has(a, ".Lb1:"), "sum: etiqueta del header");
+        CHECK(has(a, ".Lsum_b1:"), "sum: etiqueta del header (prefijada)");
         CHECK(has(a, "cmp x9, x10"), "sum: comparacion");
         CHECK(has(a, "cset x9, ls"), "sum: cset con la condicion ULE (ls)");
         CHECK(has(a, "cbnz x9"), "sum: rama condicional");
-        CHECK(has(a, "b .Lb1"), "sum: back-edge al header");
+        CHECK(has(a, "b .Lsum_b1"), "sum: back-edge al header");
         CHECK(has(a, "str x11,"), "sum: copias de PHI en los predecesores");
+    }
+
+    // --- Llamada: caller() = add(3,4).  bl + salvar/restaurar LR. ---
+    {
+        bool uns = false;
+        std::string a = emit_caller_fn(uns);
+        CHECK(!uns, "caller: soportado (CALL)");
+        CHECK(has(a, "bl add"), "caller: bl a la funcion add");
+        CHECK(has(a, "str x30,"), "caller: salva LR (hay llamada)");
+        CHECK(has(a, "ldr x30,"), "caller: restaura LR antes del ret");
+        CHECK(has(a, "str x0,") && has(a, "ldr x0,"),
+              "caller: marshalling de args/resultado por x0");
+    }
+    // Una funcion LEAF (add) NO salva LR.
+    {
+        bool uns = false;
+        std::string a = emit_add_fn(uns);
+        CHECK(!has(a, "str x30,"), "add (leaf): no salva LR");
     }
 
     // --- Op no soportada aun (LOAD de memoria) -> out_unsupported. ---

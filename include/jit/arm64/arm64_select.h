@@ -35,14 +35,29 @@ namespace jit {
 namespace arm64 {
 
 /**
+ * @brief ABI de destino.  El ISA A64 y el codegen entero son comunes; la ABI
+ *        cambia por SO en variadicos, alineacion de pila y homing de args.  Para
+ *        el subconjunto entero NO variadico las tres coinciden (args x0-x7,
+ *        retorno x0, callee-saved x19-x28, LR=x30); el enum fija el seam para las
+ *        divergencias futuras (Windows __chkstk, Apple variadicos en pila...).
+ */
+enum class Arm64Abi {
+    AAPCS64,     ///< estandar ARM (Linux, bare-metal).
+    WinArm64,    ///< Windows on ARM.
+    AppleArm64,  ///< macOS/iOS Apple Silicon.
+};
+
+/**
  * @brief Emite el ensamblador AArch64 (texto) de @p fn.
- * @param fn              Funcion IR (por ahora: un solo bloque, linea recta).
+ * @param fn              Funcion IR (multi-bloque + ramas + llamadas).
  * @param out_unsupported Se pone a true si aparece una op aun no soportada.
+ * @param abi             ABI de destino (ver @ref Arm64Abi).  Default AAPCS64.
  * @return Texto ensamblador AArch64 (una instruccion por linea, sin etiqueta de
  *         funcion: el caller la envuelve).  Vacio si @c out_unsupported y no se
  *         pudo emitir nada util.
  */
-std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported);
+std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
+                           Arm64Abi abi = Arm64Abi::AAPCS64);
 
 } // namespace arm64
 } // namespace jit
