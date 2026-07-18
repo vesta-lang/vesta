@@ -42,6 +42,11 @@ struct DbOperand {
     uint8_t kind;    ///< DbOpKind.
     uint16_t width;  ///< bits (0 si no aplica).
     uint8_t flags;   ///< bit0=read, bit1=write, bit2=implicit, bit3=suppressed.
+    uint16_t regset; ///< indice a kStr del conjunto de registros permitido
+                     ///< (p.ej. "AX", "DX", "GPR64", "-").  Para operandos
+                     ///< IMPLICITOS de registro fijo nombra el registro
+                     ///< concreto (rax:rdx de div, rax de cmpxchg) sin
+                     ///< re-derivarlo a mano.
 };
 
 /// Una FORMA (encoding) indexada por FormID.  Los campos string son indices al

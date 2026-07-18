@@ -253,8 +253,11 @@ def main():
                 if not o:
                     continue
                 _idx, kind, width, flags, _rs = o.split(",", 4)
+                # register_set (identidad del reg permitido / implicito fijo):
+                # se interna en el pool de strings y su indice viaja en la
+                # DbOperand -> machine_effects lo lee sin re-derivar a mano.
                 ops_pool.append((_KIND.get(kind, 7), int(width) & 0xFFFF,
-                                 int(flags) & 0xFF))
+                                 int(flags) & 0xFF, strs.get(_rs)))
                 ops_cnt += 1
         memflags = (int(fm["mem"]) | (int(fm["imm"]) << 1) |
                     (int(fm["wflags"]) << 2) | (int(fm["rflags"]) << 3))
@@ -287,8 +290,8 @@ def main():
         f.write("};\n\n")
         # pool de operandos
         f.write("const DbOperand kOps[] = {\n")
-        for k, w, fl in ops_pool:
-            f.write("  {%d,%d,%d},\n" % (k, w, fl))
+        for k, w, fl, rs in ops_pool:
+            f.write("  {%d,%d,%d,%d},\n" % (k, w, fl, rs))
         f.write("};\n\n")
         # formas por FormID
         f.write("const DbForm kForms[] = {\n")

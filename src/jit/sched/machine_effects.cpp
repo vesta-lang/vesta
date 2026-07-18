@@ -13,14 +13,14 @@
  * @brief Efectos de una MInstr LEIDOS DE LAS DBs generadas (no re-derivados a
  *        mano).  Para una instruccion real de la ISA, la forma de @c instr_db
  *        (rmask/wmask/memflags + flags r/w de cada operando) es la fuente de
- *        verdad; los registros implicitos con nombre salen de @c asm_effects.
+ *        verdad; los registros implicitos (rax:rdx de div...) salen del regset de la DB.
  *        Solo los PSEUDOS propios de VestaVM (que no existen en ninguna ISA) se
  *        modelan aqui explicitamente.
  */
 
 #include "jit/sched/machine_effects.h"
 
-#include "vx/asm/asm_effects.h"
+
 
 #include <string>
 
@@ -57,13 +57,43 @@ void add_mem_addr_reads(MEffects &e, const MOperand &o) {
     if (index != static_cast<uint8_t>(MReg::NONE)) add(e.reads, index);
 }
 
-/// Nombre canonico de registro GP x86 (asm_effects) -> id de MReg (o -1).
-int canon_gp_to_mreg(const std::string &n) {
-    static const char *k[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp",
-                                "rsi", "rdi", "r8",  "r9",  "r10", "r11",
-                                "r12", "r13", "r14", "r15"};
-    for (int i = 0; i < 16; ++i)
-        if (n == k[i]) return i;
+/**
+ * @brief Decodifica un @c register_set de la DB (p.ej. "AX", "DX", "RCX", "R8")
+ *        al id de @c MReg GP x86, si nombra un registro CONCRETO.  Devuelve -1
+ *        si es una CLASE (contiene '/', "GPR64", ...) o no es GP -> ese operando
+ *        no es un registro implicito fijo.
+ *
+ * La DB usa el nombre de la FAMILIA (A/C/D/B/SP/BP/SI/DI/R8..R15) con el ancho
+ * como campo aparte; para las dependencias importa el registro completo.
+ */
+int regset_to_mreg(const char *rs) {
+    if (rs == nullptr || rs[0] == '\0' || rs[0] == '-') return -1;
+    // Una clase (varios registros) lleva '/'.  No es un implicito fijo.
+    for (const char *p = rs; *p; ++p)
+        if (*p == '/') return -1;
+    const std::string s(rs);
+    // Prefijo de ancho opcional (R/E) + letra de familia.
+    // Familias de una letra: A C D B (acumulador/contador/datos/base).
+    struct Fam { const char *k; int reg; };
+    static const Fam fam[] = {
+        {"AX", 0},  {"EAX", 0}, {"RAX", 0}, {"AL", 0},  {"AH", 0},
+        {"CX", 1},  {"ECX", 1}, {"RCX", 1}, {"CL", 1},  {"CH", 1},
+        {"DX", 2},  {"EDX", 2}, {"RDX", 2}, {"DL", 2},  {"DH", 2},
+        {"BX", 3},  {"EBX", 3}, {"RBX", 3}, {"BL", 3},  {"BH", 3},
+        {"SP", 4},  {"ESP", 4}, {"RSP", 4}, {"SPL", 4},
+        {"BP", 5},  {"EBP", 5}, {"RBP", 5}, {"BPL", 5},
+        {"SI", 6},  {"ESI", 6}, {"RSI", 6}, {"SIL", 6},
+        {"DI", 7},  {"EDI", 7}, {"RDI", 7}, {"DIL", 7},
+    };
+    for (const Fam &f : fam)
+        if (s == f.k) return f.reg;
+    // R8..R15 (con sufijos D/W/B): "R8", "R8D", "R8W", "R8B", ... hasta R15.
+    if ((s[0] == 'R' || s[0] == 'r') && s.size() >= 2 && s[1] >= '8' &&
+        s[1] <= '9') {
+        int n = s[1] - '0';
+        if (s.size() >= 3 && s[2] >= '0' && s[2] <= '5') n = 10 + (s[2] - '0');
+        if (n >= 8 && n <= 15) return n;
+    }
     return -1;
 }
 
@@ -112,8 +142,7 @@ int explicit_operand_count(const MInstr &mi) {
  * @brief Efectos de una instruccion REAL leidos de la DB.  Devuelve false si el
  *        mnemonico no esta en la DB (el llamador cae al modelo pseudo/barrera).
  */
-bool db_effects(const MInstr &mi, const char *mnem, Isa isa, EffIsa arch_for_asm,
-                MEffects &e) {
+bool db_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
     // Operandos del MInstr -> ParsedOp para el matcher.
     std::vector<ParsedOp> ops;
     const int nexp = explicit_operand_count(mi);
@@ -142,7 +171,23 @@ bool db_effects(const MInstr &mi, const char *mnem, Isa isa, EffIsa arch_for_asm
         const bool wr = (o.flags & 0x2) != 0;
         const bool implicit = (o.flags & 0x4) != 0;
         if (o.kind == vx::instr_db::OP_FLAGS) continue; // ya cubierto por memflags
-        if (implicit) continue; // reg implicito con nombre -> asm_effects (abajo)
+
+        // Operando IMPLICITO de registro fijo (rax:rdx de div, rax de cmpxchg,
+        // rsi/rdi/rcx de movs...): su identidad viene de la DB (regset), no de
+        // una tabla a mano.  No consume un slot del MInstr.
+        if (implicit) {
+            if (o.kind == vx::instr_db::OP_REG && o.regset < db.str_count) {
+                const int r = regset_to_mreg(db.str[o.regset]);
+                if (r >= 0) {
+                    if (rd) add(e.reads, static_cast<uint32_t>(r));
+                    if (wr) add(e.writes, static_cast<uint32_t>(r));
+                }
+            } else if (o.kind == vx::instr_db::OP_MEM) {
+                if (rd) e.reads_mem = true;
+                if (wr) e.writes_mem = true;
+            }
+            continue;
+        }
 
         if (slot >= 3) { ++slot; continue; }
         const MOperand &mo = minstr_slot(mi, slot);
@@ -157,23 +202,6 @@ bool db_effects(const MInstr &mi, const char *mnem, Isa isa, EffIsa arch_for_asm
         }
     }
 
-    // Registros IMPLICITOS con NOMBRE (rax:rdx de div, rax de cmpxchg, ...).
-    const std::string arch = (arch_for_asm == EffIsa::X86) ? "x86_64" : "aarch64";
-    const vx::AsmEffects ae = vx::asm_effects_for(mnem, arch);
-    if (ae.known) {
-        for (const std::string &w : ae.implicit_write) {
-            const int r = canon_gp_to_mreg(w);
-            if (r >= 0) add(e.writes, static_cast<uint32_t>(r));
-        }
-        if (ae.touches_mem) {
-            // La DB de coste no distingue r/w del acceso implicito -> conservar
-            // ambos (p.ej. cmpxchg lee y escribe [mem]).
-            e.reads_mem = true;
-            e.writes_mem = true;
-        }
-        if (ae.touches_flags) e.writes_flags = true;
-        if (ae.is_call) e.is_barrier = true;
-    }
     return true;
 }
 
@@ -458,7 +486,7 @@ MEffects machine_effects(const MInstr &mi, EffIsa isa) {
     MEffects e;
     const Isa db_isa = (isa == EffIsa::X86) ? Isa::X86 : Isa::ARM64;
     if (const char *mnem = mop_mnemonic(mi.op, isa)) {
-        if (db_effects(mi, mnem, db_isa, isa, e)) return e;
+        if (db_effects(mi, mnem, db_isa, e)) return e;
         // Mnemonico conocido pero sin forma en la DB: barrera segura.
         e.is_barrier = true;
         e.writes_flags = e.reads_flags = e.reads_mem = e.writes_mem = true;
