@@ -84,6 +84,90 @@ int main() {
         CHECK(l.op == AsmLiftOp::None, "add -> None");
     }
 
+    // === arm64: bucle load-linked / store-conditional -> ATOMIC_CAS. ===
+
+    // --- Bucle CAS canonico ldaxr/cmp/b.ne/stlxr/cbnz. ---
+    {
+        AsmLift l = asm_lift_detect(Isa::ARM64,
+                                    ".retry:\n"
+                                    "  ldaxr x0, [x1]\n"
+                                    "  cmp x0, x2\n"
+                                    "  b.ne .done\n"
+                                    "  stlxr w3, x4, [x1]\n"
+                                    "  cbnz w3, .retry\n"
+                                    ".done:\n"
+                                    "  ret\n");
+        // Nota: el .done + ret hacen 7 instrucciones; el bucle son 5 hasta cbnz.
+        // El reconocedor exige EXACTAMENTE el bucle de 5, asi que este caso con
+        // cola NO encaja -> None (conservador).
+        CHECK(l.op == AsmLiftOp::None, "arm64 con cola tras cbnz -> None (inc.3)");
+    }
+
+    // --- Bucle CAS exacto (5 instrucciones, .done al final sin cuerpo). ---
+    {
+        AsmLift l = asm_lift_detect(Isa::ARM64,
+                                    ".retry:\n"
+                                    "  ldaxr x0, [x1]\n"
+                                    "  cmp x0, x2\n"
+                                    "  b.ne .done\n"
+                                    "  stlxr w3, x4, [x1]\n"
+                                    "  cbnz w3, .retry\n");
+        CHECK(l.op == AsmLiftOp::AtomicCas, "arm64 LL/SC -> AtomicCas");
+        CHECK(l.addr_reg == "x1", "arm64: addr=x1");
+        CHECK(l.exp_reg == "x2", "arm64: exp=x2");
+        CHECK(l.des_reg == "x4", "arm64: des=x4");
+        CHECK(l.result_reg == "x0", "arm64: old=x0");
+    }
+
+    // --- Variante relajada ldxr/stxr: tambien se reconoce. ---
+    {
+        AsmLift l = asm_lift_detect(Isa::ARM64,
+                                    ".r:\n"
+                                    "  ldxr x5, [x6]\n"
+                                    "  cmp x5, x7\n"
+                                    "  b.ne .e\n"
+                                    "  stxr w8, x9, [x6]\n"
+                                    "  cbnz w8, .r\n");
+        CHECK(l.op == AsmLiftOp::AtomicCas, "arm64 ldxr/stxr -> AtomicCas");
+        CHECK(l.addr_reg == "x6" && l.result_reg == "x5", "arm64: addr=x6 old=x5");
+    }
+
+    // --- Direccion inconsistente entre ldaxr y stlxr: NO se lifta. ---
+    {
+        AsmLift l = asm_lift_detect(Isa::ARM64,
+                                    ".r:\n"
+                                    "  ldaxr x0, [x1]\n"
+                                    "  cmp x0, x2\n"
+                                    "  b.ne .e\n"
+                                    "  stlxr w3, x4, [x9]\n" // [x9] != [x1]
+                                    "  cbnz w3, .r\n");
+        CHECK(l.op == AsmLiftOp::None, "arm64: direccion inconsistente -> None");
+    }
+
+    // --- El cbnz no vuelve al ldaxr: NO es el bucle. ---
+    {
+        AsmLift l = asm_lift_detect(Isa::ARM64,
+                                    ".r:\n"
+                                    "  ldaxr x0, [x1]\n"
+                                    "  cmp x0, x2\n"
+                                    "  b.ne .e\n"
+                                    "  stlxr w3, x4, [x1]\n"
+                                    "  cbnz w3, .otro\n"); // no vuelve a .r
+        CHECK(l.op == AsmLiftOp::None, "arm64: cbnz no vuelve al ldaxr -> None");
+    }
+
+    // --- 32 bits (registros w): NO se lifta (solo i64). ---
+    {
+        AsmLift l = asm_lift_detect(Isa::ARM64,
+                                    ".r:\n"
+                                    "  ldaxr w0, [x1]\n"
+                                    "  cmp w0, w2\n"
+                                    "  b.ne .e\n"
+                                    "  stlxr w3, w4, [x1]\n"
+                                    "  cbnz w3, .r\n");
+        CHECK(l.op == AsmLiftOp::None, "arm64 32-bit -> None (solo i64)");
+    }
+
     std::printf("=== asm_lift_test: %d checks OK, %d fallidos ===\n",
                 g_checks - g_fail, g_fail);
     return g_fail ? 1 : 0;
