@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <initializer_list>
 
 namespace vx {
 namespace instr_db {
@@ -83,6 +84,148 @@ const DbIclassRange *find_iclass(const IsaData &t, const std::string &up) {
 }
 
 } // namespace
+
+namespace {
+
+/// Ancho (bits) de un registro segun la ISA (0 = desconocido/no restringe).
+/// Espeja @c regWidth del analizador (x86 exacto; ARM/RISC-V el ancho real,
+/// pero las formas ARM/RISC-V llevan width 0 = "cualquiera", asi que el score
+/// no lo restringe).
+uint16_t reg_width(Isa isa, const std::string &r) {
+    auto pref = [&](const char *p) {
+        size_t n = std::strlen(p);
+        return r.size() > n && r.compare(0, n, p) == 0 &&
+               std::isdigit((unsigned char)r[n]);
+    };
+    if (isa == Isa::ARM64 || isa == Isa::ARM32) {
+        if (r == "sp" || r == "xzr" || r == "lr") return 64;
+        if (r == "wzr" || r == "wsp" || r == "pc") return 32;
+        if (!r.empty() && (r[0] == 'x') && std::isdigit((unsigned char)r[1]))
+            return 64;
+        if (!r.empty() && (r[0] == 'w') && std::isdigit((unsigned char)r[1]))
+            return 32;
+        if (!r.empty() && (r[0] == 'r') && std::isdigit((unsigned char)r[1]))
+            return 32; // A32
+        if (pref("q") || pref("v")) return 128;
+        if (pref("d")) return 64;
+        if (pref("s")) return 32;
+        if (pref("h")) return 16;
+        if (pref("b")) return 8;
+        return 0;
+    }
+    if (isa == Isa::RISCV) {
+        static const char *abi[] = {
+            "zero", "ra", "sp", "gp", "tp", "fp", "t0", "t1", "t2", "t3", "t4",
+            "t5", "t6", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8",
+            "s9", "s10", "s11", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
+        for (const char *a : abi)
+            if (r == a) return 64;
+        if ((r[0] == 'x' || r[0] == 'f') && r.size() > 1 &&
+            std::isdigit((unsigned char)r[1]))
+            return 64;
+        if (r.size() >= 2 && (r.compare(0, 2, "ft") == 0 ||
+                              r.compare(0, 2, "fs") == 0 ||
+                              r.compare(0, 2, "fa") == 0))
+            return 64;
+        return 0;
+    }
+    // x86: anchos exactos.
+    auto is = [&](std::initializer_list<const char *> l) {
+        for (auto s : l)
+            if (r == s) return true;
+        return false;
+    };
+    if (is({"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp"}) ||
+        (pref("r") && (r.back() != 'd' && r.back() != 'w' && r.back() != 'b')))
+        return 64;
+    if (is({"eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"}) ||
+        (pref("r") && r.back() == 'd'))
+        return 32;
+    if (is({"ax", "bx", "cx", "dx", "si", "di", "bp", "sp"}) ||
+        (pref("r") && r.back() == 'w'))
+        return 16;
+    if (is({"al", "ah", "bl", "bh", "cl", "ch", "dl", "dh", "sil", "dil",
+            "bpl", "spl"}) ||
+        (pref("r") && r.back() == 'b'))
+        return 8;
+    if (pref("xmm")) return 128;
+    if (pref("ymm")) return 256;
+    if (pref("zmm")) return 512;
+    if (pref("k")) return 64;
+    return 0;
+}
+
+} // namespace
+
+ParsedOp parse_operand(Isa isa, const std::string &token) {
+    std::string t = token;
+    // trim.
+    while (!t.empty() && std::isspace((unsigned char)t.front())) t.erase(0, 1);
+    while (!t.empty() && std::isspace((unsigned char)t.back())) t.pop_back();
+    std::string low = t;
+    for (char &c : low) c = static_cast<char>(std::tolower((unsigned char)c));
+
+    // RISC-V: memoria como desplazamiento(reg): 0(a0), -4(sp).
+    if (isa == Isa::RISCV) {
+        size_t op = low.find('(');
+        if (op != std::string::npos && low.back() == ')')
+            return ParsedOp{OP_MEM, 0};
+    }
+    // x86/ARM: memoria [...].
+    if (low.find('[') != std::string::npos) return ParsedOp{OP_MEM, 0};
+    // inmediato ARM (#imm) o numero.
+    std::string num = low;
+    if (!num.empty() && num[0] == '#') num.erase(0, 1);
+    if (!num.empty() &&
+        (std::isdigit((unsigned char)num[0]) ||
+         ((num[0] == '-' || num[0] == '+') && num.size() > 1)))
+        return ParsedOp{OP_IMM, 0};
+    // registro.
+    uint16_t w = reg_width(isa, low);
+    if (w || (!low.empty() && std::isalpha((unsigned char)low[0])))
+        return ParsedOp{OP_REG, w};
+    return ParsedOp{OP_IMM, 0};
+}
+
+int32_t match_asm_line(Isa isa, const std::string &line) {
+    // quita comentarios (; // #) y espacios.
+    std::string s = line;
+    size_t cm = s.find_first_of(";");
+    if (cm != std::string::npos) s.resize(cm);
+    size_t sl = s.find("//");
+    if (sl != std::string::npos) s.resize(sl);
+    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(0, 1);
+    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+    if (s.empty() || s.back() == ':') return -1;   // vacia o label
+    // mnemonico = primer token.
+    size_t sp = s.find_first_of(" \t");
+    std::string mnem = sp == std::string::npos ? s : s.substr(0, sp);
+    std::string rest = sp == std::string::npos ? "" : s.substr(sp + 1);
+    // trocea operandos por comas respetando [...] y (...).
+    std::vector<ParsedOp> ops;
+    std::string cur;
+    int depth = 0;
+    auto flush = [&]() {
+        // trim.
+        std::string c = cur;
+        while (!c.empty() && std::isspace((unsigned char)c.front())) c.erase(0, 1);
+        while (!c.empty() && std::isspace((unsigned char)c.back())) c.pop_back();
+        if (!c.empty()) ops.push_back(parse_operand(isa, c));
+        cur.clear();
+    };
+    for (char c : rest) {
+        if (c == '[' || c == '(')
+            ++depth;
+        else if (c == ']' || c == ')')
+            --depth;
+        if (c == ',' && depth == 0)
+            flush();
+        else
+            cur += c;
+    }
+    flush();
+    return match(isa, mnem, ops);
+}
 
 int32_t match(Isa isa, const std::string &mnemonic,
               const std::vector<ParsedOp> &ops) {

@@ -200,6 +200,23 @@ int32_t cpu_by_name(Isa isa, const std::string &name);
 bool cpu_has_feature(Isa isa, uint32_t cpu_id, const std::string &feature);
 
 /**
+ * @brief Clasifica un operando de asm (token) a su @c (kind, width) para el
+ *        matcher.  Conoce los registros de la ISA (x86 rax/eax/xmm...; ARM
+ *        x/w/v...; RISC-V x0-31/ABI/f), la memoria (x86/ARM @c [...], RISC-V
+ *        @c disp(reg)) y los inmediatos (numero, @c #imm de ARM).
+ */
+ParsedOp parse_operand(Isa isa, const std::string &token);
+
+/**
+ * @brief Empareja una LINEA de asm completa (mnemonico + operandos, sintaxis
+ *        del ensamblador) a su FormID.  Parte el mnemonico, trocea los
+ *        operandos (respetando @c [...]/@c (...)), los clasifica con
+ *        @ref parse_operand y llama a @ref match.  Devuelve -1 si la linea no
+ *        tiene mnemonico (label/vacia) o el mnemonico no existe.
+ */
+int32_t match_asm_line(Isa isa, const std::string &line);
+
+/**
  * @brief Resuelve el texto de una instruccion (mnemonico + operandos) a su
  *        FormID en la DB de la ISA dada.  Devuelve -1 si el mnemonico no existe.
  *

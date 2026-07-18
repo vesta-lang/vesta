@@ -106,6 +106,37 @@ int main() {
     CHECK(p6 >= 0 && cost(Isa::RISCV, amo, (uint32_t)p6).found,
           "riscv: coste amoadd.w en sifive-p670");
 
+    // --- pipeline completo: LINEA de asm -> FormID (parse + match) ---
+    CHECK(match_asm_line(Isa::X86, "add rax, rcx") == add,
+          "asm line: 'add rax, rcx' == match add reg64,reg64");
+    int32_t ml_mov = match_asm_line(Isa::X86, "mov eax, [rbx]");
+    CHECK(ml_mov >= 0 && std::string(iclass_name(Isa::X86, ml_mov)) == "MOV",
+          "asm line: 'mov eax, [rbx]' -> MOV");
+    // comentarios y labels se ignoran.
+    CHECK(match_asm_line(Isa::X86, "mfence  ; barrera") == mf,
+          "asm line: comentario ignorado");
+    CHECK(match_asm_line(Isa::X86, "loop_top:") < 0, "asm line: label -> -1");
+    // ARM: linea con 3 registros (el ancho real x=64 descarta las formas
+    // ADD vectoriales) y con memoria.
+    int32_t ml_aadd = match_asm_line(Isa::ARM64, "add x0, x1, x2");
+    CHECK(ml_aadd >= 0 && std::string(iclass_name(Isa::ARM64, ml_aadd)) == "ADD",
+          "asm line arm64: add x,x,x -> ADD");
+    int32_t ml_ldaxr = match_asm_line(Isa::ARM64, "ldaxr x0, [x1]");
+    CHECK(ml_ldaxr >= 0 && (overlay_of(Isa::ARM64, ml_ldaxr) & OVL_LL_SC),
+          "asm line arm64: ldaxr -> ll_sc");
+    // RISC-V: memoria disp(reg).
+    int32_t ml_amo = match_asm_line(Isa::RISCV, "amoadd.w a0, a1, (a2)");
+    CHECK(ml_amo >= 0 && (overlay_of(Isa::RISCV, ml_amo) & OVL_ATOMIC),
+          "asm line riscv: amoadd.w a0,a1,(a2) -> atomic");
+    // parse_operand: clasificacion basica.
+    CHECK(parse_operand(Isa::X86, "rax").kind == OP_REG &&
+              parse_operand(Isa::X86, "rax").width == 64,
+          "parse_operand x86 rax -> reg64");
+    CHECK(parse_operand(Isa::X86, "[rbx]").kind == OP_MEM,
+          "parse_operand x86 [rbx] -> mem");
+    CHECK(parse_operand(Isa::ARM64, "#0").kind == OP_IMM,
+          "parse_operand arm64 #0 -> imm");
+
     // --- capa de FEATURES (que admite cada CPU) ---
     CHECK(cpu_count(Isa::X86) == 128, "x86: 128 CPU con features");
     int32_t hsw = cpu_by_name(Isa::X86, "haswell");
