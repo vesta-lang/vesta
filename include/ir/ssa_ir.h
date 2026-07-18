@@ -677,6 +677,13 @@ enum class IrOp : uint16_t {
     PANIC = 0xFD, ///< panic %msg_addr, %msg_len      (FatalError USER_ABORT)
 
     // ---- codigo ensamblador incrustado ----
+    ASM_MICRO =
+        0xEF, ///< una instruccion asm OPACA liftada (ver @ref AsmMicro):
+              ///<   imm=indice en IrFunction::asm_micros.  Lleva su identidad en
+              ///<   la DB (isa+form_id) de donde se consultan TODOS sus efectos.
+              ///<   operands=SSA de entrada (espejo, para que liveness los vea);
+              ///<   dst=primera salida.  Multi-arch; JIT/AOT la re-emiten
+              ///<   verbatim, el interp NO la soporta (como INLINE_ASM).
     INLINE_ASM =
         0xFE, ///< inline_asm host (Phase AS): func_name=cuerpo NASM Intel,
               ///<   imm=bitfield de calificadores (bit0 volatile, bit1 nomem,
@@ -1019,6 +1026,49 @@ struct AsmRegBinding {
 };
 
 /**
+ * @brief Un operando de una instruccion @c ASM_MICRO (asm opaca liftada).
+ *
+ * @c regclass es ARCH-NEUTRA (misma para x86, arm64, riscv): el ancho y la
+ * sintaxis concreta los da la forma de la base de datos (@ref AsmMicro::form_id).
+ * @c fixed_phys fija el operando a un registro fisico REQUERIDO por la
+ * instruccion (p.ej. @c cpuid escribe eax/ebx/ecx/edx); -1 = libre, lo elige
+ * el asignador de registros.
+ */
+struct AsmMicroOperand {
+    uint8_t role = 0;      ///< 0=lee, 1=escribe, 2=lee-escribe
+    uint8_t regclass = 0;  ///< arch-neutra: 0=GP 1=FP 2=VEC 3=PRED 4=FLAGS 5=MEM
+    int16_t fixed_phys = -1; ///< reg fisico fijo requerido (-1 = libre)
+    IrValueId value = 0;   ///< SSA leido (lee/lee-escribe/base/index); IR_NO_VALUE si no
+};
+
+/**
+ * @brief Una instruccion de asm OPACA liftada a IR (@ref IrOp::ASM_MICRO).
+ *
+ * El lifter general convierte el subconjunto COMPUTACIONAL del asm a ops IR
+ * tipadas (ADD, LOAD...); todo lo demas (SIMD, cpuid, mfence, syscall...) se
+ * modela como una @c ASM_MICRO: una unica instruccion asm que LLEVA su
+ * identidad en la base de datos (@c isa + @c form_id) de donde se CONSULTAN
+ * todos los efectos (lee/escribe/flags/mem/barrera/latencia/puertos) sin
+ * duplicarlos.  El bloque asm entero pasa a ser IR: el optimizador reordena/
+ * elimina/programa alrededor con precision, y el backend (JIT/AOT) la re-emite
+ * verbatim rellenando la plantilla con los registros que asigno el regalloc.
+ *
+ * Es MULTI-ARCH: @c isa identifica la ISA (misma codificacion que
+ * @c instr_db::Isa) y @c form_id es el indice de la forma en la base de datos
+ * de ESA ISA.  El interprete NO ejecuta @c ASM_MICRO (no se emula cpuid): solo
+ * lo materializan JIT/AOT (nativos); lo liftado a ops tipadas SI corre en interp.
+ */
+struct AsmMicro {
+    uint8_t isa = 0;    ///< ISA (== instr_db::Isa: 0=x86_64,1=x86,2=x86_16,3=arm64,...)
+    uint32_t form_id = 0; ///< indice de la forma en la DB de @c isa (efectos/timing)
+    std::string tmpl;   ///< plantilla NASM con placeholders $0,$1,... por operando
+    std::vector<AsmMicroOperand> ins; ///< operandos de ENTRADA (+ base/index de mem)
+    std::vector<IrValueId> outs;      ///< SSA producidos (un valor por cada escrito + flags)
+    uint8_t eff = 0;    ///< cache: bit0 mem, bit1 flags_r, bit2 flags_w, bit3 barrera,
+                        ///<   bit4 call (la DB es la verdad; esto es solo un atajo)
+};
+
+/**
  * @brief Funcion completa en forma SSA.
  *
  * Contiene el grafo de bloques basicos y el pool de valores.
@@ -1134,6 +1184,17 @@ struct IrFunction {
      * la clobber-list de GCC.
      */
     std::vector<std::vector<std::string>> asm_clobber_lists;
+
+    /**
+     * @brief Instrucciones @c ASM_MICRO de esta funcion (asm opaco liftado).
+     *
+     * Indexadas por el @c imm de cada @c IrInstr con @c op==ASM_MICRO.  Tabla
+     * lateral (en vez de engordar @c IrInstr) porque solo las funciones con asm
+     * inline no-liftable a ops tipadas tienen entradas.  Ver @ref AsmMicro.
+     * Efimera del pipeline de codegen: hoy NO se serializa en la seccion @c @ir
+     * (el asm inline vive en el .vx, no viaja en el .velb como IR liftado).
+     */
+    std::vector<AsmMicro> asm_micros;
 
     /**
      * @brief Phase AOT.3 2b: seccion de salida del CODIGO de esta funcion
