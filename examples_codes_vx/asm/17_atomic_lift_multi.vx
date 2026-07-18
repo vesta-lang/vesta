@@ -1,0 +1,30 @@
+// ASA: LIFT MULTI-INSTRUCCION de un atomico escrito en asm.  El bloque
+// `mov rax, <exp> ; lock cmpxchg [addr], <des>` (setup del esperado + CAS) se
+// reconoce como un compare-and-swap con el EXPECTED EXPLICITO y baja al op
+// tipado ATOMIC_CAS_I64 -- no una caja opaca.  El compilador verifica con el
+// modelo de efectos completo que ninguna instruccion intermedia pise rax antes
+// del cmpxchg.  Interp como opcode (sin trampolin), JIT/AOT con la instruccion
+// atomica nativa, analizador transparente.
+//
+//     vm --vx 17_atomic_lift_multi.vx -o m
+//     vm --run m.velb            # interp
+//     vm --run m.velb -m jit     # JIT (mismo resultado)
+//
+// @expect 42
+namespace ejemplos.asmlift_multi;
+i64 g = 100;
+i64 main() {
+    // compare-and-swap con el esperado en un registro DISTINTO de rax: el asm
+    // lo mueve a rax justo antes del cmpxchg (patron habitual del codigo real).
+    register("rdi") u64* p = (u64*)&g;
+    register("rsi") u64 des = 200;
+    register("rdx") u64 exp = 100; // expected (explicito, via mov rax, rdx)
+    register("rax") u64 old = 0;    // out: old value
+    asm {
+        mov rax, rdx
+        lock cmpxchg [rdi], rsi
+    } clobbers("flags");
+
+    if (old == 100 && g == 200) { return 42; }
+    return old;
+}
