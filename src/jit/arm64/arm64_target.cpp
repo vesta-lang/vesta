@@ -260,10 +260,14 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 if (in.operands.size() != 2) return false;
                 const MOp d =
                     ir_signed(in.type) ? MOp::A64_SDIV : MOp::A64_UDIV;
+                // Ancho de los temporales = ancho de la operacion (AArch64
+                // exige que todos los operandos de sdiv/mul/sub sean w o x, no
+                // mezclados).
+                const uint8_t mw = static_cast<uint8_t>(ir_bytes(in.type));
                 const uint32_t q = out.vreg_count++; // cociente
                 const uint32_t p = out.vreg_count++; // producto q*b
-                MOperand qv = MOperand::make_vreg(q, RegClass::GP, 8);
-                MOperand pv = MOperand::make_vreg(p, RegClass::GP, 8);
+                MOperand qv = MOperand::make_vreg(q, RegClass::GP, mw);
+                MOperand pv = MOperand::make_vreg(p, RegClass::GP, mw);
                 O.push_back(MInstr::make_binary(d, qv, vr(fn, in.operands[0]),
                                                 vr(fn, in.operands[1])));
                 O.push_back(MInstr::make_binary(MOp::IMUL, pv, qv,
