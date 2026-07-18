@@ -43,12 +43,12 @@ namespace {
  *        de dependencias -> oculta latencias y expone ILP al core superescalar.
  */
 void maybe_schedule(MFunction &pf) {
-    // Default OFF hasta que el scheduler pase la e2e byte-a-byte de valor:
-    // reordenar expone bugs de dependencias que hay que cerrar antes de
-    // activarlo por defecto (correccion primero).  VESTA_SCHED=1 lo activa.
+    // Default ON: e2e 649/649 con scheduling activo (efectos por rol de MOp +
+    // implicitos de la DB -> reorden solo de lo independiente).  VESTA_SCHED=0
+    // lo desactiva (A/B).
     static const bool on = [] {
         const char *v = std::getenv("VESTA_SCHED");
-        return v && v[0] != '\0' && v[0] != '0';
+        return !(v && v[0] == '0');
     }();
     if (!on) return;
     static const sched::GenericCostModel cm;
