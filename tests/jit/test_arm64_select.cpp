@@ -3,11 +3,16 @@
  * @brief Tests del selector IR -> AArch64 (ver jit/arm64/arm64_select.h): emite
  *        el texto ensamblador del subconjunto entero de linea recta.
  */
+#include "aot/arm64_elf.h"
 #include "jit/arm64/arm64_select.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <vector>
 
 static int g_checks = 0, g_fail = 0;
 #define CHECK(cond, msg)                                                        \
@@ -256,6 +261,21 @@ static int emit_boot(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    // Modo `elf <bin_in> <elf_out> <base_hex>`: envuelve unos bytes arm64 ya
+    // ensamblados en un ejecutable ELF64 AArch64 (cargable por qemu -kernel).
+    if (argc >= 5 && std::string(argv[1]) == "elf") {
+        std::ifstream in(argv[2], std::ios::binary);
+        if (!in)
+            return 1;
+        std::vector<char> bytes((std::istreambuf_iterator<char>(in)),
+                                std::istreambuf_iterator<char>());
+        const uint64_t base = std::strtoull(argv[4], nullptr, 16);
+        return aot::write_elf64_aarch64_exec(
+                   argv[3], reinterpret_cast<const uint8_t *>(bytes.data()),
+                   bytes.size(), base)
+                   ? 0
+                   : 1;
+    }
     if (argc >= 3 && std::string(argv[1]) == "boot")
         return emit_boot(argv[2]);
     if (argc >= 3 && std::string(argv[1]) == "bootsum") {
