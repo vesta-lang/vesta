@@ -373,7 +373,8 @@ bool lift_x86(
     auto preserves_flags = [](const std::string &m) -> bool {
         if (m == "mov" || m == "movq" || m == "lea" || m == "movzx" ||
             m == "movsx" || m == "movsxd" || m == "nop" || m == "bswap" ||
-            m == "cqo" || m == "cqto" || m == "cdq" || m == "cdqe")
+            m == "xchg" || m == "cqo" || m == "cqto" || m == "cdq" ||
+            m == "cdqe")
             return true;
         return (m.size() >= 3 && m.compare(0, 3, "set") == 0) ||
                (m.size() >= 4 && m.compare(0, 4, "cmov") == 0);
@@ -778,6 +779,38 @@ bool lift_x86(
             if (!ok) return false;
             write_reg("rdx", 64, false, r, ok);
             if (!ok) return false;
+        } else if (m == "imul" && ops.size() == 3) {
+            // imul rd, rs, imm/reg (3-op, single-def): rd = rs * op3.  La parte
+            // baja del producto es identica con/sin signo (complemento a dos).
+            std::string rc;
+            bool rh = false;
+            const int rw = reg_info(ops[0], rc, rh);
+            if (rw == 0) return false;
+            const ir::IrValueId s1 = read_op(ops[1], rw, false, ok);
+            if (!ok) return false;
+            const ir::IrValueId s2 = read_op(ops[2], rw, false, ok);
+            if (!ok) return false;
+            write_reg(rc, rw, rh, BIN(ir::IrOp::MUL, s1, s2), ok);
+            if (!ok) return false;
+        } else if (m == "xchg" && ops.size() == 2 && !is_mem(ops[0]) &&
+                   !is_mem(ops[1])) {
+            // xchg r1, r2 (registro-registro, sin LOCK ni memoria): intercambio
+            // de valores.  En el register-file es un simple SWAP de los valores
+            // SSA actuales (cero IR: puro renombrado); el flush escribe cada slot
+            // con el valor cruzado.  Solo 64-bit (mapeo exacto sin sub-registros).
+            std::string c1, c2;
+            bool h1 = false, h2 = false;
+            const int w1 = reg_info(ops[0], c1, h1);
+            const int w2 = reg_info(ops[1], c2, h2);
+            if (w1 != 64 || w2 != 64) return false;
+            const ir::IrValueId v1 = get_full(c1, ok);
+            if (!ok) return false;
+            const ir::IrValueId v2 = get_full(c2, ok);
+            if (!ok) return false;
+            cur[c1] = v2;
+            mark_write(c1);
+            cur[c2] = v1;
+            mark_write(c2);
         } else if ((m == "mul" || m == "imul") && ops.size() == 1) {
             // Multiplicacion 64x64->128: rax = parte BAJA (= mul, igual con/sin
             // signo en complemento a dos), rdx = parte ALTA (umulhi/smulhi).  El
