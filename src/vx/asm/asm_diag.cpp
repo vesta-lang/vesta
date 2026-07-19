@@ -208,6 +208,11 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
     RegSet entry_undef = full; // a la entrada, todo lo no pre-definido esta indefinido.
     for (const std::string &d : defined_in)
         entry_undef.erase(d);
+    // rsp/rbp (puntero de pila / marco) estan SIEMPRE vivos por el ABI: leerlos
+    // NO es "sin inicializar" (VXA004 falso positivo).  Manipular la pila desde
+    // el asm es valido (mov rax,rsp / push / sub rsp) -> rsp/rbp pre-definidos.
+    entry_undef.erase("rsp");
+    entry_undef.erase("rbp");
 
     // undef_in/undef_out por bloque.  Meet = interseccion (must-undefined en TODOS
     // los preds).  Inicializamos los no-entrada al TOP (full) para el punto fijo.

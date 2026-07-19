@@ -13523,11 +13523,14 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             ia.operands.push_back(b.alloca_value);
             std::string c = asm_canonical_reg(b.reg);
             if (!c.empty()) bound_canon.push_back(c);
-            // inc2b.3: validar el PIN.  rsp/rbp son la pila -> pinear un valor
-            // ahi corrompe el marco en CUALQUIER backend (error).  rbx esta
-            // reservado por el runtime en modo VM -> el JIT no puede compilar
-            // el bloque (cae al interprete; solo warning, no rompe).  Los `reg`
-            // auto (b.reg_auto) NO se validan: el RA elige un fisico usable.
+            // inc2b.3: validar el PIN.  Manipular la pila desde el asm SI esta
+            // permitido -- pero en el CUERPO (push/pop, sub rsp, mov rax,rsp;
+            // todo eso funciona y el compilador lo entiende), NO pineando un
+            // valor Vesta a rsp/rbp (no puede vivir en el puntero de pila sin
+            // romper la pila; el marshalling no lo soporta) -> ERROR que GUiA a
+            // la forma correcta.  rbx esta reservado por el runtime en modo VM
+            // -> el JIT no compila el bloque (cae al interprete) -> WARNING.
+            // Los `reg` auto (b.reg_auto) NO se validan: el RA elige usable.
             if (!b.reg_auto) {
                 if (c == "rsp" || c == "rbp")
                     diags_.diag(s->body_loc, DiagLevel::ERR, "VXA008",
