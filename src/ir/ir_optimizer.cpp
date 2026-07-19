@@ -7174,10 +7174,8 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                             static_cast<uint32_t>(caller.asm_micros.size());
                         if (old_id < callee.asm_micros.size()) {
                             ir::AsmMicro am = callee.asm_micros[old_id];
-                            for (auto &op : am.ins)
+                            for (auto &op : am.operands)
                                 op.value = remap_op(op.value);
-                            for (auto &ov : am.outs)
-                                ov = remap_op(ov);
                             caller.asm_micros.push_back(std::move(am));
                         } else {
                             caller.asm_micros.emplace_back();

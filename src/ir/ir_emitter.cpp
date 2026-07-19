@@ -42,6 +42,7 @@
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_effects.h"           // inc.6: asm_canonical_reg
+#include "vx/asm/asm_phys_reg.h"          // inc2b.1: sustitucion $N -> reg fisico
 #include "jit/inline_asm_trampoline.h" // inc.6: fnv1a64_asm (clave del trampoline)
 #include "loader/interp_stackmap.h"    // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
 #include <sstream>
@@ -5147,13 +5148,17 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
         const AsmMicro &am = ctx.fn.asm_micros[ins.imm];
-        if (!am.ins.empty() || !am.outs.empty()) {
-            ctx.comment("asm_micro con operandos no soportado en interp v1 -> "
-                        "trap");
+        // inc2b.1: sustituir $0,$1,... por el registro FiSICO FIJO de cada
+        // operando; sin operandos la plantilla queda verbatim.  El hash es el
+        // del TEXTO FINAL (== el que registra el trampolin).  Un operando no
+        // fisico (SSA/RA) o clase no soportada -> trap (inc2b.2/.3).
+        std::string nasm = am.tmpl;
+        if (!am.operands.empty() && !vx::asm_micro_subst_phys(am, nasm)) {
+            ctx.comment("asm_micro con operando no fisico -> trap (inc2b.2)");
             ctx.out << "    hlt\n";
             break;
         }
-        const uint64_t hash = jit::fnv1a64_asm(am.tmpl);
+        const uint64_t hash = jit::fnv1a64_asm(nasm);
         const uint32_t call_pos = lin_pos_of(ctx, bb.id, idx);
         std::vector<int> regs_to_save =
             live_regs_through_call(ctx, call_pos, IR_NO_VALUE);

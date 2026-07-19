@@ -435,17 +435,18 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
         write_u32(out, am.form_id);
         write_str(out, am.tmpl);
         write_u8(out, am.eff);
-        write_u32(out, static_cast<uint32_t>(am.ins.size()));
-        for (const auto &op : am.ins) {
-            write_u8(out, op.role);
+        // Lista PLANA de operandos (orden textual; roles en flags).
+        write_u32(out, static_cast<uint32_t>(am.operands.size()));
+        for (const auto &op : am.operands) {
+            write_u8(out, static_cast<uint8_t>(op.kind));
+            write_u8(out, op.flags);
             write_u8(out, op.regclass);
+            write_u32(out, static_cast<uint32_t>(op.width));
             write_u32(out, static_cast<uint32_t>(
                                static_cast<uint16_t>(op.fixed_phys)));
             write_u32(out, static_cast<uint32_t>(op.value));
+            write_u64(out, static_cast<uint64_t>(op.imm));
         }
-        write_u32(out, static_cast<uint32_t>(am.outs.size()));
-        for (auto v : am.outs)
-            write_u32(out, static_cast<uint32_t>(v));
     }
 
     // AOT 2b: seccion de salida del codigo + permisos (dev OS).
@@ -580,30 +581,29 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         if (!read_str(in, off, am.tmpl)) return false;
         if (!read_u8(in, off, eff_u)) return false;
         am.eff = eff_u;
-        uint32_t n_in = 0;
-        if (!read_u32(in, off, n_in)) return false;
-        am.ins.reserve(n_in);
-        for (uint32_t j = 0; j < n_in; ++j) {
+        uint32_t n_ops = 0;
+        if (!read_u32(in, off, n_ops)) return false;
+        am.operands.reserve(n_ops);
+        for (uint32_t j = 0; j < n_ops; ++j) {
             AsmMicroOperand op;
-            uint8_t role = 0, rc = 0;
-            uint32_t fx = 0, val = 0;
-            if (!read_u8(in, off, role)) return false;
+            uint8_t kind = 0, flags = 0, rc = 0;
+            uint32_t wid = 0, fx = 0, val = 0;
+            uint64_t imm = 0;
+            if (!read_u8(in, off, kind)) return false;
+            if (!read_u8(in, off, flags)) return false;
             if (!read_u8(in, off, rc)) return false;
+            if (!read_u32(in, off, wid)) return false;
             if (!read_u32(in, off, fx)) return false;
             if (!read_u32(in, off, val)) return false;
-            op.role = role;
+            if (!read_u64(in, off, imm)) return false;
+            op.kind = static_cast<AsmOperandKind>(kind);
+            op.flags = flags;
             op.regclass = rc;
+            op.width = static_cast<uint16_t>(wid);
             op.fixed_phys = static_cast<int16_t>(static_cast<uint16_t>(fx));
             op.value = static_cast<IrValueId>(val);
-            am.ins.push_back(op);
-        }
-        uint32_t n_out = 0;
-        if (!read_u32(in, off, n_out)) return false;
-        am.outs.reserve(n_out);
-        for (uint32_t j = 0; j < n_out; ++j) {
-            uint32_t v = 0;
-            if (!read_u32(in, off, v)) return false;
-            am.outs.push_back(static_cast<IrValueId>(v));
+            op.imm = static_cast<int64_t>(imm);
+            am.operands.push_back(op);
         }
         out.asm_micros.push_back(std::move(am));
     }

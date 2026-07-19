@@ -17,6 +17,7 @@
 #include "vx/asm/asm_lift_micro.h"
 
 #include "ir/ssa_ir.h"
+#include "vx/asm/asm_phys_reg.h"
 
 #include <cctype>
 #include <string>
@@ -68,10 +69,92 @@ uint8_t pack_eff(const instr_db::AsmInsnSem &sem) {
     return e;
 }
 
+/// Minusculas de @p s.
+std::string lower(const std::string &s) {
+    std::string o;
+    o.reserve(s.size());
+    for (char c : s) o += (char)std::tolower((unsigned char)c);
+    return o;
+}
+
+/// ¿Contiene @p v (canonico, minusculas) el nombre @p name?
+bool has_reg(const std::vector<std::string> &v, const std::string &name) {
+    for (const std::string &r : v)
+        if (lower(r) == name) return true;
+    return false;
+}
+
+/// Trocea @p insn en (mnemonico, operandos por coma).  Los operandos van con
+/// espacios recortados.  No maneja @c [...] (inc2b.1 = solo registros GP).
+void split_insn(const std::string &insn, std::string &mnem,
+                std::vector<std::string> &ops) {
+    ops.clear();
+    size_t sp = insn.find_first_of(" \t");
+    if (sp == std::string::npos) { // sin operandos
+        mnem = insn;
+        return;
+    }
+    mnem = insn.substr(0, sp);
+    std::string rest = trim(insn.substr(sp + 1));
+    size_t pos = 0;
+    while (pos <= rest.size()) {
+        size_t comma = rest.find(',', pos);
+        std::string tok = rest.substr(
+            pos, comma == std::string::npos ? std::string::npos : comma - pos);
+        tok = trim(tok);
+        if (!tok.empty()) ops.push_back(tok);
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+}
+
+/// inc2b.1: construye la lista PLANA de operandos de FiSICO FIJO (solo GP) y la
+/// plantilla con @c $N a partir de la linea + la semantica de la DB.  Devuelve
+/// @c false si algun operando NO es un registro GP nombrable (MEM/IMM/FP/VEC ->
+/// inc2b.3) -> el llamador emite @c INLINE_ASM.
+bool build_operands(const std::string &insn, const instr_db::AsmInsnSem &sem,
+                    const std::vector<std::string> &bound_canon,
+                    std::vector<ir::AsmMicroOperand> &operands,
+                    std::string &tmpl) {
+    operands.clear();
+    std::string mnem;
+    std::vector<std::string> toks;
+    split_insn(insn, mnem, toks);
+    if (toks.empty()) return false; // sin operandos textuales -> path sin-ops
+
+    tmpl = mnem;
+    for (size_t k = 0; k < toks.size(); ++k) {
+        uint16_t w = 0;
+        const int phys = vx::asm_x86_gp_index(toks[k], &w);
+        if (phys < 0) return false; // no es GP (MEM/IMM/FP/VEC) -> inc2b.3
+        // Operando LIGADO a una variable Vesta (register()): necesita SSA/RA
+        // -> no es fisico fijo -> lo maneja el INLINE_ASM (inc2b.2).
+        for (const std::string &bc : bound_canon)
+            if (lower(bc) == lower(toks[k])) return false;
+        ir::AsmMicroOperand op;
+        op.kind = ir::AsmOperandKind::REG;
+        op.regclass = vx::ASM_RC_GP;
+        op.width = w;
+        op.fixed_phys = (int16_t)phys;
+        op.value = ir::IR_NO_VALUE; // SSA/RA -> inc2b.2
+        // Rol del operando = presencia de su reg canonico en reads/writes DB.
+        const std::string cn = lower(toks[k]);
+        uint8_t fl = 0;
+        if (has_reg(sem.reads, cn)) fl |= ir::ASM_OP_READ;
+        if (has_reg(sem.writes, cn)) fl |= ir::ASM_OP_WRITE;
+        if (fl == 0) return false; // operando sin rol conocido -> conservador
+        op.flags = fl;
+        operands.push_back(op);
+        tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
+    }
+    return true;
+}
+
 } // namespace
 
 bool asm_lift_micro(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
-                    const std::string &body, uint32_t line) {
+                    const std::string &body, uint32_t line,
+                    const std::vector<std::string> &bound_canon) {
     const std::vector<std::string> insns = instructions(body);
     if (insns.empty()) return false;
 
@@ -82,19 +165,32 @@ bool asm_lift_micro(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     if (ua < 0) ua = 0;
 
     // Fase 1 (validacion transaccional): TODAS las instrucciones deben ser
-    // formas conocidas por la DB y SIN operandos de registro (reads/writes de
-    // registro vacios).  Cualquier fallo -> el bloque no es del subset ASM_MICRO
-    // sin operandos -> false (el llamador emite INLINE_ASM).
+    // formas conocidas por la DB, y O BIEN sin operandos de registro (mfence,
+    // cpuid, ...), O BIEN con operandos de FiSICO FIJO GP (inc2b.1: popcnt/tzcnt/
+    // bswap rax,...).  Cualquier otra cosa (MEM/IMM/FP/VEC/implicitos, inc2b.3)
+    // -> false y el llamador emite INLINE_ASM.
     std::vector<instr_db::AsmInsnSem> sems;
+    std::vector<std::vector<ir::AsmMicroOperand>> ops_per;
+    std::vector<std::string> tmpl_per;
     sems.reserve(insns.size());
+    ops_per.reserve(insns.size());
+    tmpl_per.reserve(insns.size());
     for (const std::string &insn : insns) {
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, insn, (uint32_t)ua);
         if (sem.form_id < 0)          // desconocida por la DB
             return false;
-        if (!sem.reads.empty() || !sem.writes.empty())
-            return false;             // tiene operandos de registro (otro inc.)
+        std::vector<ir::AsmMicroOperand> operands;
+        std::string tmpl;
+        if (sem.reads.empty() && sem.writes.empty()) {
+            // Sin operandos de registro: plantilla verbatim (mfence/lfence/...).
+            tmpl = insn;
+        } else if (!build_operands(insn, sem, bound_canon, operands, tmpl)) {
+            return false;             // operandos no soportados en inc2b.1
+        }
         sems.push_back(std::move(sem));
+        ops_per.push_back(std::move(operands));
+        tmpl_per.push_back(std::move(tmpl));
     }
 
     // Fase 2 (emision): una ASM_MICRO por instruccion.
@@ -102,9 +198,9 @@ bool asm_lift_micro(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
         ir::AsmMicro am;
         am.isa = (uint8_t)isa;
         am.form_id = (uint32_t)sems[i].form_id;
-        am.tmpl = insns[i];
+        am.tmpl = std::move(tmpl_per[i]);
+        am.operands = std::move(ops_per[i]);
         am.eff = pack_eff(sems[i]);
-        // ins/outs vacios: sin operandos de registro que enhebrar.
 
         ir::IrInstr in{};
         in.op = ir::IrOp::ASM_MICRO;

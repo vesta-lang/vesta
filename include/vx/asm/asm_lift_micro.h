@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ir {
 struct IrFunction;
@@ -43,16 +44,25 @@ namespace vx {
 /**
  * @brief Lifta el bloque @p body (asm de la ISA @p isa) a una secuencia de
  *        @c IrOp::ASM_MICRO en @p block, UNA por instruccion, SI y solo si TODAS
- *        sus instrucciones son formas conocidas por la DB y SIN operandos de
- *        registro (barreras / nop / pause...).  Es transaccional: valida el
+ *        sus instrucciones son formas conocidas por la DB y sus operandos son
+ *        O BIEN inexistentes (barreras / nop / pause), O BIEN registros de
+ *        FiSICO FIJO (inc2b.1: popcnt rax, rbx).  Es transaccional: valida el
  *        bloque entero antes de emitir nada.
  *
+ * @param bound_canon registros CANoNICOS ligados a variables Vesta via
+ *        @c register() en el scope actual.  Un operando que usa uno de estos
+ *        NO es fisico fijo: necesita threading SSA + asignador (inc2b.2), asi
+ *        que el lift lo RECHAZA y el bloque cae al @c INLINE_ASM (que hoy
+ *        resuelve los bindings).
+ *
  * @return true si el bloque se lifto por completo (0 INLINE_ASM); false si
- *         aparece una instruccion desconocida o con operandos -> el llamador
- *         emite @c INLINE_ASM.
+ *         aparece una instruccion desconocida, un operando ligado, o un operando
+ *         no soportado (MEM/IMM/FP/VEC/implicito) -> el llamador emite
+ *         @c INLINE_ASM.
  */
 bool asm_lift_micro(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
-                    const std::string &body, uint32_t line);
+                    const std::string &body, uint32_t line,
+                    const std::vector<std::string> &bound_canon = {});
 
 } // namespace vx
 

@@ -1026,19 +1026,56 @@ struct AsmRegBinding {
 };
 
 /**
+ * @brief Flags de ROL de un operando @c ASM_MICRO (bitmask, NO exclusivos).
+ *
+ * Reflejan EXACTAMENTE los flags de la base de datos (@c DbOperand.flags:
+ * bit0 read, bit1 write, bit2 implicit, bit3 suppressed) mas @c CLOBBER para la
+ * destruccion sin valor observable.  Un operando @c RW es @c READ|WRITE (p.ej.
+ * @c EAX de @c cpuid); un implicito @c RW es @c READ|WRITE|IMPLICIT (p.ej.
+ * @c RAX de @c mul).
+ */
+enum AsmOperandFlag : uint8_t {
+    ASM_OP_READ = 1u << 0,       ///< el operando se LEE
+    ASM_OP_WRITE = 1u << 1,      ///< el operando se ESCRIBE
+    ASM_OP_IMPLICIT = 1u << 2,   ///< implicito (no aparece en la sintaxis textual)
+    ASM_OP_SUPPRESSED = 1u << 3, ///< leido/escrito pero fuera del encoding
+    ASM_OP_CLOBBER = 1u << 4,    ///< destruido sin valor observable
+};
+
+/**
+ * @brief TIPO de un operando @c ASM_MICRO.  La memoria NO es una clase de
+ *        registro: es un tipo de operando propio con su base/index.
+ */
+enum class AsmOperandKind : uint8_t {
+    REG = 0, ///< registro (clase en @c regclass, fisico en @c fixed_phys)
+    MEM = 1, ///< memoria (base/index en @c value; @c regclass del registro base)
+    IMM = 2, ///< inmediato (valor en @c imm)
+};
+
+/**
  * @brief Un operando de una instruccion @c ASM_MICRO (asm opaca liftada).
+ *
+ * Modelo de LISTA PLANA en ORDEN TEXTUAL (como LLVM MC / GCC RTL / uops.info):
+ * la instruccion tiene UNA lista de operandos, y cada uno lleva su rol como
+ * @c flags (no dos listas ins/outs).  @c $0,$1,... de @c AsmMicro::tmpl
+ * referencian esta lista por indice.
  *
  * @c regclass es ARCH-NEUTRA (misma para x86, arm64, riscv): el ancho y la
  * sintaxis concreta los da la forma de la base de datos (@ref AsmMicro::form_id).
- * @c fixed_phys fija el operando a un registro fisico REQUERIDO por la
- * instruccion (p.ej. @c cpuid escribe eax/ebx/ecx/edx); -1 = libre, lo elige
- * el asignador de registros.
+ * @c fixed_phys fija el operando a un registro fisico REQUERIDO (p.ej. @c cpuid
+ * escribe eax/ebx/ecx/edx); -1 = libre, lo elige el asignador de registros.
  */
 struct AsmMicroOperand {
-    uint8_t role = 0;      ///< 0=lee, 1=escribe, 2=lee-escribe
-    uint8_t regclass = 0;  ///< arch-neutra: 0=GP 1=FP 2=VEC 3=PRED 4=FLAGS 5=MEM
-    int16_t fixed_phys = -1; ///< reg fisico fijo requerido (-1 = libre)
-    IrValueId value = 0;   ///< SSA leido (lee/lee-escribe/base/index); IR_NO_VALUE si no
+    AsmOperandKind kind = AsmOperandKind::REG; ///< REG / MEM / IMM
+    uint8_t flags = 0;       ///< @ref AsmOperandFlag (READ|WRITE|IMPLICIT|...)
+    uint8_t regclass = 0;    ///< clase del REG / base de MEM: 0=GP 1=FP 2=VEC 3=PRED 4=FLAGS
+    uint16_t width = 0;      ///< ancho en BITS del operando (de la forma DB); nombra el reg
+    int16_t fixed_phys = -1; ///< reg fisico fijo (-1 = libre, lo asigna el RA)
+    IrValueId value = 0;     ///< SSA leido/definido (REG/MEM base); IR_NO_VALUE si no
+    int64_t imm = 0;         ///< inmediato (solo @c kind==IMM)
+
+    bool reads() const { return (flags & ASM_OP_READ) != 0; }
+    bool writes() const { return (flags & ASM_OP_WRITE) != 0; }
 };
 
 /**
@@ -1062,8 +1099,7 @@ struct AsmMicro {
     uint8_t isa = 0;    ///< ISA (== instr_db::Isa: 0=x86_64,1=x86,2=x86_16,3=arm64,...)
     uint32_t form_id = 0; ///< indice de la forma en la DB de @c isa (efectos/timing)
     std::string tmpl;   ///< plantilla NASM con placeholders $0,$1,... por operando
-    std::vector<AsmMicroOperand> ins; ///< operandos de ENTRADA (+ base/index de mem)
-    std::vector<IrValueId> outs;      ///< SSA producidos (un valor por cada escrito + flags)
+    std::vector<AsmMicroOperand> operands; ///< lista PLANA en ORDEN TEXTUAL (roles en flags)
     uint8_t eff = 0;    ///< cache: bit0 mem, bit1 flags_r, bit2 flags_w, bit3 barrera,
                         ///<   bit4 call (la DB es la verdad; esto es solo un atajo)
 };

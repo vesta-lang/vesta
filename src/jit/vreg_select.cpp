@@ -36,6 +36,7 @@
 #include "gc/raw_allocator.h" // Phase D.7 perf: inline slab fast-path
 #include "vx/asm/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
 #include "vx/asm/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
+#include "vx/asm/asm_phys_reg.h" // inc2b.1: sustitucion $N -> reg fisico
 /* arena -> windows.h (Win32) define macros que chocan con nombres del enum
  * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST.
  */
@@ -3543,13 +3544,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 if (in.imm >= fn.asm_micros.size()) return false;
                 const ir::AsmMicro &am = fn.asm_micros[in.imm];
-                if (!am.ins.empty() || !am.outs.empty()) {
-                    vreg_dbg(fn.name.c_str(), "asm_micro(con-operandos)");
+                // inc2b.1: sustituir $0,$1,... por el nombre del registro FiSICO
+                // FIJO de cada operando ANTES de ensamblar.  Sin operandos, la
+                // plantilla no tiene $N y queda verbatim (caso mfence/etc).
+                std::string nasm = am.tmpl;
+                if (!am.operands.empty() &&
+                    !vx::asm_micro_subst_phys(am, nasm)) {
+                    // Operando no fisico (SSA/RA) o clase no soportada -> inc2b.2/.3.
+                    vreg_dbg(fn.name.c_str(), "asm_micro(operando-no-fisico)");
                     return false;
                 }
                 vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(
-                    am.tmpl,
-                    mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
+                    nasm, mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
                 if (!ar.ok || ar.bytes.empty()) {
                     vreg_dbg(fn.name.c_str(), "asm_micro(assemble-fail)");
                     return false;

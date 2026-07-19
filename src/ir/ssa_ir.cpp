@@ -921,12 +921,24 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
                 }
                 o << "]";
             }
-            if (!am.outs.empty()) {
-                o << " outs=[";
-                for (size_t i = 0; i < am.outs.size(); ++i) {
+            if (!am.operands.empty()) {
+                o << " ops=[";
+                for (size_t i = 0; i < am.operands.size(); ++i) {
                     if (i)
                         o << ", ";
-                    print_val(o, fn, am.outs[i]);
+                    const auto &op = am.operands[i];
+                    o << "$" << i << ":";
+                    // rol como flags legibles.
+                    if (op.flags & ir::ASM_OP_READ) o << "R";
+                    if (op.flags & ir::ASM_OP_WRITE) o << "W";
+                    if (op.flags & ir::ASM_OP_IMPLICIT) o << "i";
+                    if (op.flags & ir::ASM_OP_SUPPRESSED) o << "s";
+                    if (op.flags & ir::ASM_OP_CLOBBER) o << "c";
+                    if (op.fixed_phys >= 0) o << "#" << op.fixed_phys;
+                    if (op.value != ir::IR_NO_VALUE) {
+                        o << " ";
+                        print_val(o, fn, op.value);
+                    }
                 }
                 o << "]";
             }

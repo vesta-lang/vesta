@@ -20,6 +20,7 @@
 
 #include <atomic> // emulacion portable del efecto (barrera) sin ensamblador
 #include "ir/ssa_ir.h"               // inc.6: IrFunction/IrInstr/IrOp del batch
+#include "vx/asm/asm_phys_reg.h"     // inc2b.1: sustitucion $N -> reg fisico
 
 #include <cstdio>
 #include <cstdlib>
@@ -163,13 +164,18 @@ void build_and_register_inline_asm_trampolines(
                 // ejecuta ambos via el trampoline SOLO si hay ensamblador; si no,
                 // no se registra y vrt_inline_asm_exec hace no-op (sigue corriendo).
                 const std::string *body = nullptr;
+                std::string subst; // vive hasta el registro (inc2b.1: $N -> reg)
                 if (ins.op == ir::IrOp::INLINE_ASM) {
                     body = &ins.func_name;
                 } else if (ins.op == ir::IrOp::ASM_MICRO &&
-                           ins.imm < fn.asm_micros.size() &&
-                           fn.asm_micros[ins.imm].ins.empty() &&
-                           fn.asm_micros[ins.imm].outs.empty()) {
-                    body = &fn.asm_micros[ins.imm].tmpl;
+                           ins.imm < fn.asm_micros.size()) {
+                    const ir::AsmMicro &am = fn.asm_micros[ins.imm];
+                    if (am.operands.empty()) {
+                        body = &am.tmpl; // sin operandos: verbatim
+                    } else if (vx::asm_micro_subst_phys(am, subst)) {
+                        body = &subst;   // inc2b.1: fisico fijo sustituido
+                    }
+                    // operando no fisico (SSA/RA) -> no se trampolinea (inc2b.2)
                 }
                 if (body == nullptr) continue;
                 const uint64_t hash = fnv1a64_asm(*body);
