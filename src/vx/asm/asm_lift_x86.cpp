@@ -443,6 +443,38 @@ bool lift_x86(
         return BIN(cop, av, bv);
     };
 
+    // Condicion (SSA 0/1) de un SUFIJO de cc (setcc/cmov/jCC) leyendo las flags.
+    // Centraliza a los 3 consumidores.  Cubre e/ne/z/nz + l/g/le/ge/b/a/be/ae/
+    // c/nc (via flags_cond) y s/ns (SF): el signo solo es sound desde una ALU
+    // (result<0) o un test (a&b<0), NO desde un cmp/sub (SF depende de OF ahi).
+    auto cc_cond = [&](const std::string &cc) -> ir::IrValueId {
+        if (cc == "s" || cc == "ns") {
+            if (!flags.valid) return ir::IR_NO_VALUE;
+            ir::IrValueId t;
+            if (flags.from_result) {
+                ir::IrValueId x = flags.a_high ? BIN(ir::IrOp::SHR, flags.a, K(8))
+                                               : flags.a;
+                t = (flags.width >= 64) ? x : sext_low(x, flags.width);
+            } else if (flags.is_test) {
+                auto e = [&](ir::IrValueId v, bool hi) -> ir::IrValueId {
+                    ir::IrValueId x = hi ? BIN(ir::IrOp::SHR, v, K(8)) : v;
+                    return (flags.width >= 64) ? x : and_mask(x, flags.width);
+                };
+                ir::IrValueId tt = BIN(ir::IrOp::AND, e(flags.a, flags.a_high),
+                                       e(flags.b, flags.b_high));
+                t = (flags.width >= 64) ? tt : sext_low(tt, flags.width);
+            } else {
+                return ir::IR_NO_VALUE; // cmp/sub: SF ambiguo sin OF
+            }
+            const ir::IrValueId neg = BIN(ir::IrOp::CMP_LT, t, K(0));
+            return (cc == "s") ? neg : BIN(ir::IrOp::XOR, neg, K(1));
+        }
+        ir::IrOp cop;
+        bool sgn = false;
+        if (!setcc_to_cmp(cc, cop, sgn)) return ir::IR_NO_VALUE;
+        return flags_cond(cop, sgn);
+    };
+
     // HOOK x86: lifta las instrucciones insns[from, to) en c.block.  Cualquier
     // forma no soportada -> false.  El look-ahead ya no hace falta: las flags
     // fluyen por el pseudo-registro (arriba).
@@ -488,10 +520,7 @@ bool lift_x86(
         } else if (m.size() >= 4 && m.compare(0, 3, "set") == 0 &&
                    ops.size() == 1) {
             // setcc rd: LEE las flags -> byte 0/1; resto del registro preservado.
-            ir::IrOp cop;
-            bool csigned = false;
-            if (!setcc_to_cmp(m.substr(3), cop, csigned)) return false;
-            const ir::IrValueId cond = flags_cond(cop, csigned);
+            const ir::IrValueId cond = cc_cond(m.substr(3));
             if (cond == ir::IR_NO_VALUE) return false;
             std::string dc;
             bool dh = false;
@@ -504,10 +533,7 @@ bool lift_x86(
             // SELECT branchless (mask = -(cond); rd = rd_old ^ ((rd_old ^ taken)
             // & mask)).  Respeta la asimetria (taken 32b zero-extiende; not-taken
             // preserva TODO).
-            ir::IrOp cop;
-            bool csigned = false;
-            if (!setcc_to_cmp(m.substr(4), cop, csigned)) return false;
-            const ir::IrValueId cond = flags_cond(cop, csigned);
+            const ir::IrValueId cond = cc_cond(m.substr(4));
             if (cond == ir::IR_NO_VALUE) return false;
             if (is_mem(ops[1])) return false;
             std::string dc, sc;
@@ -989,10 +1015,7 @@ bool lift_x86(
         std::vector<std::string> jops;
         split_insn(insns[bb.last], jm, jops);
         if (jm.size() < 2 || jm[0] != 'j') return ir::IR_NO_VALUE;
-        ir::IrOp cop;
-        bool csigned = false;
-        if (!setcc_to_cmp(jm.substr(1), cop, csigned)) return ir::IR_NO_VALUE;
-        return flags_cond(cop, csigned); // lee las flags dejadas por el cuerpo
+        return cc_cond(jm.substr(1)); // lee las flags dejadas por el cuerpo
     };
     uint32_t exit_blk = block;
     if (!lift_cfg_neutral(ctx, cfg, hooks, exit_blk)) return false;
