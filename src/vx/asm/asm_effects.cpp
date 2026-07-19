@@ -42,6 +42,18 @@ std::string asm_normalize_numbers(const std::string &body) {
     size_t i = 0;
     while (i < n) {
         const char c = body[i];
+        /* Placeholder $N (inc2b.2: operando `reg` auto, rellenado por el
+         * backend post-regalloc) o referencia a la direccion actual ($): el
+         * numero que sigue a '$' NO es un literal a normalizar -> copiar '$' +
+         * sus digitos verbatim. */
+        if (c == '$') {
+            out.push_back('$');
+            size_t j = i + 1;
+            while (j < n && body[j] >= '0' && body[j] <= '9')
+                out.push_back(body[j++]);
+            i = j;
+            continue;
+        }
         /* Identificador (incl. registros r8/r15/xmm0): copiar el token
          * entero -> sus digitos NO son un literal numerico. */
         if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {

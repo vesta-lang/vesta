@@ -20,6 +20,9 @@
 #include <vector>
 
 #include "vesta_rt/abi.h" // VESTA_PROC_OSR_BUFFER_OFFSET / VESTA_OSR_BUFFER_N
+#include "vx/asm/asm_backend.h"  // inc2b.2: ensamblar el asm DIFERIDO post-RA
+#include "vx/asm/asm_phys_reg.h" // inc2b.2: nombre del reg fisico ($N -> reg)
+#include <cctype>
 
 namespace jit {
 
@@ -2010,6 +2013,51 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
      * (@c vreg_fixed NO se copia: lo consume @c build_intervals, que corre
      * sobre @c vf ANTES del rewrite.) */
     pf.asm_blobs = vf.asm_blobs;
+    /* inc2b.2: ENSAMBLADO DIFERIDO.  Los blobs de un `asm ( reg x )` con
+     * operandos AUTO llegan sin bytes: su plantilla lleva $N y el fisico de
+     * cada operando lo acaba de elegir el asignador.  Sustituimos $N por el
+     * registro real (@c ra.reg_of del vreg, o el pin @c fixed_phys) y llamamos
+     * al ensamblador.  Asi el operando `reg` se integra con el regalloc de la
+     * funcion (registro OPTIMO) en vez del pick greedy compile-time. */
+    if (vx::g_asm_backend != nullptr) {
+        for (AsmBlob &b : pf.asm_blobs) {
+            if (!b.deferred) continue;
+            std::string nasm;
+            bool ok = true;
+            const std::string &t = b.deferred_tmpl;
+            for (size_t i = 0; i < t.size();) {
+                if (t[i] != '$') { nasm += t[i++]; continue; }
+                size_t j = i + 1;
+                uint32_t idx = 0;
+                bool any = false;
+                while (j < t.size() &&
+                       std::isdigit(static_cast<unsigned char>(t[j]))) {
+                    idx = idx * 10 + static_cast<uint32_t>(t[j] - '0');
+                    ++j;
+                    any = true;
+                }
+                if (!any || idx >= b.deferred_ops.size()) {
+                    nasm += t[i++]; // '$' literal / fuera de rango -> verbatim
+                    continue;
+                }
+                const AsmBlob::DeferredOp &d = b.deferred_ops[idx];
+                int phys = d.fixed_phys >= 0
+                               ? d.fixed_phys
+                               : static_cast<int>(ra.reg_of(d.vreg));
+                std::string nm = vx::asm_phys_reg_name(b.deferred_isa,
+                                                       d.regclass, phys, d.width);
+                if (nm.empty()) { ok = false; break; }
+                nasm += nm;
+                i = j;
+            }
+            if (ok) {
+                vx::AsmAssembleResult ar =
+                    vx::g_asm_backend->assemble(nasm, vx::AsmArch::X86_64);
+                if (ar.ok && !ar.bytes.empty()) b.bytes = std::move(ar.bytes);
+            }
+            b.deferred = false; // ensamblado (o fallo -> bytes vacio, no emite)
+        }
+    }
     pf.blocks.resize(vf.blocks.size());
 
     /* OSR 1a: deteccion PRECISA de loop back-edges via DFS (clasico:

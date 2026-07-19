@@ -139,6 +139,42 @@ inline bool asm_micro_subst_phys(const ir::AsmMicro &am, std::string &out) {
     return true;
 }
 
+/**
+ * @brief Sustituye @c $0,$1,... por el registro GREEDY (por defecto) del binding
+ *        @c reg_auto con ese @c ph_index.  Para el INTERP, que no tiene RA: usa
+ *        el pick greedy guardado en @c AsmRegBinding::reg (nombre de 64 bits).
+ *        Los @c $N sin binding correspondiente quedan verbatim.
+ *
+ * El JIT/AOT NO usan esto: rellenan @c $N con el registro OPTIMO del asignador
+ * via el ensamblado diferido (@c AsmBlob::deferred).  Este helper mantiene el
+ * interp correcto (aunque no optimo) con el MISMO cuerpo $N.
+ */
+inline std::string asm_body_subst_greedy(
+    const std::string &body, const std::vector<ir::AsmRegBinding> &binds) {
+    std::string out;
+    out.reserve(body.size() + 16);
+    for (size_t i = 0; i < body.size();) {
+        if (body[i] != '$') { out += body[i++]; continue; }
+        size_t j = i + 1;
+        int idx = 0;
+        bool any = false;
+        while (j < body.size() &&
+               std::isdigit((unsigned char)body[j])) {
+            idx = idx * 10 + (body[j] - '0');
+            ++j;
+            any = true;
+        }
+        if (!any) { out += body[i++]; continue; }
+        std::string reg;
+        for (const ir::AsmRegBinding &b : binds)
+            if (b.reg_auto && b.ph_index == idx) { reg = b.reg; break; }
+        if (reg.empty()) { out += body[i]; ++i; continue; } // $N sin binding
+        out += reg;
+        i = j;
+    }
+    return out;
+}
+
 } // namespace vx
 
 #endif // VX_ASM_PHYS_REG_H

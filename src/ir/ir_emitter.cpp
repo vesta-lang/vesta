@@ -5086,7 +5086,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
 
-        const uint64_t hash = jit::fnv1a64_asm(ins.func_name);
+        // inc2b.2: el cuerpo puede llevar $N (operandos `reg` auto).  El interp
+        // no tiene RA -> sustituye $N por el pick GREEDY del binding.  El hash
+        // debe ser del cuerpo SUSTITUIDO (el trampolin registra el mismo).
+        const std::string ibody =
+            vx::asm_body_subst_greedy(ins.func_name, ctx.fn.asm_reg_bindings);
+        const uint64_t hash = jit::fnv1a64_asm(ibody);
         uint64_t desc = 0;
         for (size_t i = 0; i < binds.size(); ++i)
             desc |= (uint64_t)(binds[i].phys & 0xF) << (i * 4);

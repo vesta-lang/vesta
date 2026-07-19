@@ -166,7 +166,11 @@ void build_and_register_inline_asm_trampolines(
                 const std::string *body = nullptr;
                 std::string subst; // vive hasta el registro (inc2b.1: $N -> reg)
                 if (ins.op == ir::IrOp::INLINE_ASM) {
-                    body = &ins.func_name;
+                    // inc2b.2: sustituir $N por el pick GREEDY del binding (el
+                    // interp no tiene RA).  Mismo cuerpo que hashea ir_emitter.
+                    subst = vx::asm_body_subst_greedy(ins.func_name,
+                                                      fn.asm_reg_bindings);
+                    body = &subst;
                 } else if (ins.op == ir::IrOp::ASM_MICRO &&
                            ins.imm < fn.asm_micros.size()) {
                     const ir::AsmMicro &am = fn.asm_micros[ins.imm];

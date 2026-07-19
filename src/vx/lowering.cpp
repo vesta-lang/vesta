@@ -21,7 +21,8 @@
 #include "vx/asm/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
 #include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
 #include "vx/asm/asm_lift_emit.h"  // lift de patrones atomicos a IR tipado (ASA.3)
-#include "vx/asm/asm_lift_micro.h" // lift de asm opaco sin operandos -> ASM_MICRO
+#include "vx/asm/asm_lift_micro.h"
+#include "vx/asm/asm_phys_reg.h" // inc2b.2: asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
 #include "vx/asm/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
 #include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
@@ -13176,10 +13177,20 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     static const char *kRegPref[] = {"r10", "r11", "r8",  "r9",  "rcx", "rdx",
                                      "rsi", "rdi", "rax", "rbx", "r12", "r13",
                                      "r14", "r15"};
+    int reg_auto_count = 0; // inc2b.2: indice $N de cada operando `reg` (auto)
     for (auto &op : s->operands) {
         std::string reg;
+        bool reg_auto = false;
+        int ph_index = -1;
         if (op.reg_class == "reg") {
-            // El COMPILADOR elige un registro GP libre (auto-seleccion).
+            // inc2b.2: operando `reg` AUTO.  El cuerpo lo referencia por el
+            // placeholder $N; el JIT/AOT lo rellenan POST-regalloc con el
+            // registro OPTIMO que elige el RA (constraint register-required,
+            // ensamblado diferido).  Se conserva un pick GREEDY (kRegPref) en
+            // @c binding.reg como asignacion por defecto para el INTERP (que no
+            // tiene RA): ahi el $N se sustituye por este registro.
+            reg_auto = true;
+            ph_index = reg_auto_count++;
             for (const char *cand : kRegPref) {
                 if (used_regs.count(cand) == 0) {
                     reg = cand;
@@ -13219,8 +13230,10 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         address_taken_locals_.insert(op.name);
         const bool is_vec = reg.rfind("xmm", 0) == 0 ||
                             reg.rfind("ymm", 0) == 0 || reg.rfind("zmm", 0) == 0;
-        fn_->asm_reg_bindings.push_back(
-            ir::AsmRegBinding{addr, reg, vt, is_vec, op.name});
+        ir::AsmRegBinding b{addr, reg, vt, is_vec, op.name};
+        b.reg_auto = reg_auto;
+        b.ph_index = ph_index;
+        fn_->asm_reg_bindings.push_back(std::move(b));
         if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, s->loc.line);
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -13229,7 +13242,10 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         st.operands = {v0, addr};
         st.source_line = s->loc.line;
         fn_->append(current_block_, std::move(st));
-        ph_subst.emplace_back(op.name, reg); // placeholder -> registro
+        // Placeholder en el cuerpo: reg concreto -> su nombre; reg AUTO -> $N
+        // (lo rellena el backend post-regalloc con el fisico que elija el RA).
+        ph_subst.emplace_back(op.name,
+                              reg_auto ? ("$" + std::to_string(ph_index)) : reg);
     }
 
     // Phase AS inc.5g (metaprogramacion): sustituir las `comptime` consts
@@ -13400,8 +13416,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         // Arch del TARGET (no del host): ARM si @Target lo pide, o 32/16 en x86
         // segun @bits / --aot-arch.
         const vx::AsmArch asm_arch = vx::asm_arch_for_target(asm_target_bits_);
+        // inc2b.2: el cuerpo puede llevar placeholders $N (operandos `reg`
+        // auto).  Para VALIDAR la sintaxis con Keystone hay que darle un cuerpo
+        // concreto -> sustituimos $N por el pick greedy del binding (el
+        // ensamblado real usa el registro OPTIMO del RA post-regalloc en el
+        // JIT/AOT, o este mismo greedy en el interp).
+        const std::string vbody =
+            vx::asm_body_subst_greedy(body_sub, fn_->asm_reg_bindings);
         vx::AsmAssembleResult ar =
-            vx::g_asm_backend->assemble(body_sub, asm_arch);
+            vx::g_asm_backend->assemble(vbody, asm_arch);
         if (!ar.ok) {
             // Traducir el codigo de Keystone a un mensaje claro en espanol.
             auto human_asm_error = [](const std::string &e) -> std::string {
@@ -13449,7 +13472,8 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                                 body_sub[e2 - 1] == '\t' ||
                                 body_sub[e2 - 1] == '\r'))
                             --e2;
-                        std::string ln = body_sub.substr(a, e2 - a);
+                        std::string ln = vx::asm_body_subst_greedy(
+                            body_sub.substr(a, e2 - a), fn_->asm_reg_bindings);
                         const bool is_comment =
                             ln.empty() || ln[0] == ';' ||
                             (ln.size() >= 2 && ln[0] == '/' && ln[1] == '/');

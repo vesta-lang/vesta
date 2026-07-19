@@ -646,6 +646,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 vreg_dbg(fn.name.c_str(), "inline-asm(vector-bind)");
                 return false;
             }
+            if (b.reg_auto) {
+                // inc2b.2: operando `reg` AUTO -> register-required (el RA elige
+                // el fisico OPTIMO, no lo derrama).  El fisico se conoce
+                // post-regalloc; marcamos binding_phys con un sentinel >=0 para
+                // que la clasificacion in/out lo incluya (su intervalo cubre el
+                // asm).  El $N se rellena en el rewrite con ra.reg_of.
+                binding_phys[b.alloca_value] = 0; // sentinel "es binding" (no pin)
+                out.set_vreg_reg_required(
+                    static_cast<uint32_t>(b.alloca_value));
+                continue;
+            }
             const std::string canon = vx::asm_canonical_reg(b.reg);
             const int phys = canon_gp_to_mreg(canon);
             if (phys < 0) { /* reservado (rbx/rsp/rbp) o no GP -> fallback */
@@ -3351,15 +3362,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
                     return false;
                 }
+                // inc2b.2: si hay operandos `reg` AUTO, el cuerpo lleva $N y el
+                // fisico de cada uno lo elige el RA -> DIFERIR el ensamblado a
+                // post-regalloc (regalloc_rewrite).  @c ar queda vacio (los
+                // sym_refs/labels/bytes se rellenan al ensamblar en el rewrite).
+                bool asm_has_auto = false;
+                for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
+                    if (b.reg_auto) { asm_has_auto = true; break; }
                 // El inline-asm de @Naked/asm{} se ensambla en el modo del
                 // TARGET (no del host): x86-32 -> KS_MODE_32 (si no, `jmp ecx`
                 // y demas codificaciones de 32 bits fallan en KS_MODE_64).
-                vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(
-                    in.func_name,
-                    mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
-                if (!ar.ok || ar.bytes.empty()) {
-                    vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
-                    return false;
+                vx::AsmAssembleResult ar;
+                if (!asm_has_auto) {
+                    ar = vx::g_asm_backend->assemble(
+                        in.func_name,
+                        mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
+                    if (!ar.ok || ar.bytes.empty()) {
+                        vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
+                        return false;
+                    }
                 }
                 AsmBlob blob;
                 // Phase AS inc.6: simbolos PROPIOS referenciados desde el asm
@@ -3491,6 +3512,29 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                 return false;
                             }
                         }
+                    }
+                }
+                // inc2b.2: blob DIFERIDO -> plantilla ($N) + descriptor por
+                // operando `reg` auto (su alloca vreg; el rewrite pone
+                // ra.reg_of(vreg) en $ph_index).  Los operandos concretos ya
+                // quedaron horneados en la plantilla por el ph_subst del lowering.
+                if (asm_has_auto) {
+                    blob.deferred = true;
+                    blob.deferred_isa = 0; // instr_db::Isa::X86
+                    blob.deferred_tmpl = in.func_name;
+                    int maxph = -1;
+                    for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
+                        if (b.reg_auto && b.ph_index > maxph) maxph = b.ph_index;
+                    blob.deferred_ops.resize(maxph + 1);
+                    for (const ir::AsmRegBinding &b : fn.asm_reg_bindings) {
+                        if (!b.reg_auto || b.ph_index < 0) continue;
+                        AsmBlob::DeferredOp &d =
+                            blob.deferred_ops[b.ph_index];
+                        d.vreg = static_cast<uint32_t>(b.alloca_value);
+                        d.fixed_phys = -1; // lo elige el RA
+                        d.width = static_cast<uint16_t>(
+                            ir_type_bytes(b.type) * 8);
+                        d.regclass = 0; // GP
                     }
                 }
                 const uint32_t bidx = out.intern_asm_blob(std::move(blob));

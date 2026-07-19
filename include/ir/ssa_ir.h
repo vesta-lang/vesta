@@ -1018,11 +1018,18 @@ struct DevirtCandidate {
  */
 struct AsmRegBinding {
     IrValueId alloca_value; ///< dst del ALLOCA del var register-bound
-    std::string reg;        ///< nombre del registro RAW (eax/rax/xmm0...)
+    std::string reg;        ///< nombre del registro RAW (eax/rax/xmm0...); vacio
+                            ///< si @c reg_auto (el fisico lo elige el RA post-regalloc)
     IrType type;            ///< tipo escalar del var (para el ctype en C)
     bool is_vector;         ///< true si reg es xmm/ymm/zmm (constraint "x")
     std::string name;       ///< nombre Vesta de la variable (para filtrar
                             ///< por scope activo en lower_asm)
+    /// inc2b.2: operando `reg` (AUTO) de un @c asm ( ... ): el RA ELIGE el
+    /// registro (constraint register-required, no un pin) y el ensamblado se
+    /// aplaza a post-regalloc.  El cuerpo lo referencia por el placeholder
+    /// @c $ph_index.  false = pin fijo clasico (register("rax") / `rax a`).
+    bool reg_auto = false;
+    int ph_index = -1;      ///< indice $N del placeholder en el cuerpo (reg_auto)
 };
 
 /**
