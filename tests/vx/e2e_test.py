@@ -2145,6 +2145,7 @@ modes3_case("asmcmpset", "asm lift fusiona cmp+setcc en comparacion tipada (sign
 modes3_case("asmcmpcmov", "asm lift fusiona cmp+cmovcc en select branchless en interp/jit/aot", "asm_cmp_cmov.vx", 42, line=3654)
 modes3_case("asmbranch", "asm lift trocea ramas (jmp/jCC) en IR-CFG (max via branch) en interp/jit/aot", "asm_branch.vx", 42, line=3654)
 modes3_case("asmloop", "asm lift baja un bucle asm (back-edge) a IR-CFG (suma via loop) en interp/jit/aot", "asm_loop.vx", 42, line=3654)
+modes3_case("asmrotate", "asm lift de rol/ror a ROTL/ROTR (const + variable por CL) en interp/jit/aot", "asm_rotate.vx", 42, line=3654)
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)

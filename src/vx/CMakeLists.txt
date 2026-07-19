@@ -97,9 +97,11 @@ add_library(vx_lib STATIC
     asm/asm_lift_emit.cpp
     # Lift de asm opaco sin operandos de registro a ASM_MICRO (barreras/nop/...).
     asm/asm_lift_micro.cpp
-    # Lift GENERAL instruccion-a-instruccion de asm entero straight-line a IR SSA
-    # real (enhebra el valor de cada registro; el asm entra al optimizador).
+    # Lift GENERAL de asm inline a IR: dispatcher NEUTRO por ISA + frontend x86.
+    # El core neutro (register-file + CFG driver + emisores) vive en el header
+    # asm_lift_core.h; cada ISA aporta su lift_<isa> sin tocar el core.
     asm/asm_lift_general.cpp
+    asm/asm_lift_x86.cpp
     # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
     # idioma).  La tabla se genera desde catalog/diagnostics.toml con
     # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.

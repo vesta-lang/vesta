@@ -1306,7 +1306,9 @@ struct Lowerer {
             out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), v));
             const MOp mop = (in.variant == 0u)   ? MOp::SHL
                             : (in.variant == 1u) ? MOp::SHR
-                                                 : MOp::SAR;
+                            : (in.variant == 2u) ? MOp::SAR
+                            : (in.variant == 3u) ? MOp::ROL
+                                                 : MOp::ROR;
             MInstr sh{};
             sh.op = mop;
             sh.dst = reg(scr1);     // r11 = valor de trabajo

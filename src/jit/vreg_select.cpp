@@ -1889,21 +1889,35 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             case ir::IrOp::ROTL:
             case ir::IrOp::ROTR: {
-                /* count CONSTANTE -> rol/ror dst, imm.  Variable -> CL
-                 * (no soportado en vregs) -> fallback. */
+                /* count CONSTANTE -> rol/ror dst, imm.  Variable (en registro)
+                 * -> pseudo SHIFT_V (variant 3=ROL, 4=ROR): cuenta a CL via un
+                 * tmp pineado a RCX, expandido con R11 en el rewrite.  NUNCA cae
+                 * al interprete. */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 2)
                     return false;
                 const ir::IrValueId cnt = in.operands[1];
-                if (cnt >= v_is_const.size() || !v_is_const[cnt]) {
-                    vreg_dbg(fn.name.c_str(), "rot-var");
-                    return false;
+                if (cnt < v_is_const.size() && v_is_const[cnt]) {
+                    const int32_t amt = static_cast<int32_t>(v_const[cnt] & 63);
+                    const MOp rop =
+                        (in.op == ir::IrOp::ROTL) ? MOp::ROL : MOp::ROR;
+                    O.push_back(MInstr::make_binary(rop, vr(in.dst),
+                                                    vr(in.operands[0]),
+                                                    MOperand::make_imm32(amt)));
+                    break;
                 }
-                const int32_t amt = static_cast<int32_t>(v_const[cnt] & 63);
-                const MOp rop = (in.op == ir::IrOp::ROTL) ? MOp::ROL : MOp::ROR;
-                O.push_back(MInstr::make_binary(rop, vr(in.dst),
-                                                vr(in.operands[0]),
-                                                MOperand::make_imm32(amt)));
+                const ir::IrValueId rc = new_tmp();
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(rc),
+                                               vr(in.operands[1])));
+                out.set_vreg_fixed(static_cast<uint32_t>(rc),
+                                   static_cast<uint8_t>(MReg::RCX));
+                MInstr rv{};
+                rv.op = MOp::SHIFT_V;
+                rv.dst = vr(in.dst);
+                rv.src1 = vr(in.operands[0]);
+                rv.src2 = vr(rc);
+                rv.variant = (in.op == ir::IrOp::ROTL) ? 3u : 4u;
+                O.push_back(rv);
                 break;
             }
 

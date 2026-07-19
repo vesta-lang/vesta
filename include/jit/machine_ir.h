@@ -506,7 +506,8 @@ enum class MOp : uint8_t {
      *   mov  r11, value        ; value != RCX (interfiere con la cuenta)
      *   shift r11, cl          ; CL = RCX (la cuenta pineada)
      *   mov  dst, r11
-     * variant: 0 = SHL, 1 = SHR (logico), 2 = SAR (aritmetico). */
+     * variant: 0 = SHL, 1 = SHR (logico), 2 = SAR (aritmetico), 3 = ROL,
+     * 4 = ROR (rotaciones por CL, misma expansion via el reg de trabajo). */
     SHIFT_V = 207,
 
     /* Pseudo (callback-ABI 2026-06-06): carga el @c ProcessVM* del
