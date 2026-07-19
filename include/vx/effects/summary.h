@@ -69,9 +69,19 @@ struct ModuleSummary {
 // nombre + predicado sobre el FunctionSummary completo.  Anadir un contrato =
 // registrar una regla; NO se toca el motor.
 // ===========================================================================
+/// PERFIL de contratos: la MISMA base de hechos/efectos, distintas OPINIONES.
+/// Separar hechos (objetivos) de opiniones (juicios con politica) permite tener
+/// varias definiciones de `pure`/`nothrow`/... sin tocar el IR ni los efectos.
+enum class ContractProfile {
+    Default,  ///< definiciones estandar.
+    Strict,   ///< exige mas (p.ej. pure => tambien determinista, sin tags).
+    Relaxed,  ///< tolera mas (p.ej. pure aunque pueda atrapar -- traps 'no pasan').
+    Embedded  ///< orientado a Bare/freestanding (sin I/O, sin heap, sin runtime).
+};
+
 struct ContractRule {
     const char *name;
-    bool (*predicate)(const FunctionSummary &);
+    bool (*predicate)(const FunctionSummary &, ContractProfile);
 };
 
 /// Registro global de reglas (definidas en contracts.cpp).  Devuelve el vector
@@ -84,8 +94,10 @@ struct EvaluatedContract {
     bool        holds;
 };
 
-/// Proyeccion pura: aplica TODAS las reglas al summary.
-std::vector<EvaluatedContract> derive_contracts(const FunctionSummary &s);
+/// Proyeccion pura: aplica TODAS las reglas al summary bajo el @p profile.
+std::vector<EvaluatedContract>
+derive_contracts(const FunctionSummary &s,
+                 ContractProfile profile = ContractProfile::Default);
 
 } // namespace fx
 } // namespace vx

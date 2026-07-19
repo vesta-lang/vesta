@@ -471,7 +471,28 @@ int main() {
               "IRFacts: invalidado del manager");
     }
 
-    std::printf("=== effects+facts: %d checks, %d fallos ===\n", g_checks,
-                g_fails);
+    // =====================================================================
+    // Perfiles de contratos: mismos hechos, distinta opinion.
+    // =====================================================================
+    {
+        // Funcion sin escrituras/throw/alloc/io PERO no-determinista (lee reloj).
+        FunctionSummary s;
+        s.completeness = AnalysisCompleteness::Complete;
+        s.semantic.closure.determinism.add(DeterminismTag::ReadsClock);
+        auto pure_of = [&](ContractProfile p) {
+            for (const auto &c : derive_contracts(s, p))
+                if (std::string(c.name) == "pure") return c.holds;
+            return false;
+        };
+        check(pure_of(ContractProfile::Default),
+              "perfil Default: no-determinista sigue siendo pure");
+        check(!pure_of(ContractProfile::Strict),
+              "perfil Strict: no-determinista NO es pure");
+        check(pure_of(ContractProfile::Relaxed),
+              "perfil Relaxed: no-determinista es pure");
+    }
+
+    std::printf("=== effects+facts+perfiles: %d checks, %d fallos ===\n",
+                g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }
