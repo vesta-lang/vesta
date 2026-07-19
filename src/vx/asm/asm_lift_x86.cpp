@@ -397,12 +397,17 @@ bool lift_x86(
             return sgn ? sext_low(x, flags.width) : and_mask(x, flags.width);
         };
         if (flags.from_result) {
-            // ALU: solo ZF (result==0).  eq/ne derivan sound; magnitud/signo/
-            // carry necesitan OF/CF que no modelamos -> bail (conservador).
-            if (cop != ir::IrOp::CMP_EQ && cop != ir::IrOp::CMP_NE)
-                return ir::IR_NO_VALUE;
-            const ir::IrValueId t = ext(flags.a, flags.a_high, false);
-            return BIN(cop, t, K(0));
+            // ALU: ZF (result==0) via eq/ne siempre; jc/jnc (CF) si lo modelamos
+            // (add/adc dejan flags.cf).  El resto (signo/magnitud, OF) -> bail.
+            if (cop == ir::IrOp::CMP_EQ || cop == ir::IrOp::CMP_NE) {
+                const ir::IrValueId t = ext(flags.a, flags.a_high, false);
+                return BIN(cop, t, K(0));
+            }
+            if (flags.has_cf && cop == ir::IrOp::CMP_ULT) // jc/jb = CF
+                return flags.cf;
+            if (flags.has_cf && cop == ir::IrOp::CMP_UGE) // jnc/jae = !CF
+                return BIN(ir::IrOp::XOR, flags.cf, K(1));
+            return ir::IR_NO_VALUE;
         }
         if (flags.is_test) {
             // test: flags de (a & b).  CF=OF=0 -> las cc sin signo no aplican;
