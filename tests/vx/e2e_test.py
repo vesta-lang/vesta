@@ -2157,6 +2157,41 @@ modes3_case("asmadcsbb", "asm flags-as-SSA con CF: adc/sbb (aritmetica 128b bign
 modes3_case("asmjc", "asm flags-as-SSA con CF: jc/jnc (deteccion de overflow por carry tras add) en interp/jit/aot", "asm_jc.vx", 42, line=3654)
 modes3_case("asmmemdisp", "asm lift de memoria completa [base+idx*scale+disp] (mov load/store + movzx/movsx desde memoria) en interp/jit/aot", "asm_mem_disp.vx", 42, line=3654)
 modes3_case("asmjs", "asm flags-as-SSA con SF: js/jns/sets (bit de signo del resultado de una ALU) en interp/jit/aot", "asm_js.vx", 42, line=3654)
+
+
+@case("effects_report")
+def _(ctx):
+    """Modelo unico de efectos: --analyze --effects deriva contratos + reporte
+    de lagunas.  factorial es puro/determinista sin lagunas; un programa con
+    reflexion/FFI reporta opacidad fundamental (ffi-nativo)."""
+    # (1) factorial: puro, sin lagunas.
+    code, log = ctx.run([VM_EXE, "--analyze", ctx.src("01_factorial.vx"),
+                         "--effects"])
+    if code != 0:
+        ctx.fail("--effects salio con codigo %d" % code, log)
+        return
+    if "Contratos : pure" not in log:
+        ctx.fail("factorial deberia derivar el contrato 'pure'", log)
+        return
+    if "ninguna: todos los efectos" not in log:
+        ctx.fail("factorial no deberia tener lagunas de precision", log)
+        return
+    ctx.ok("factorial: pure + sin lagunas")
+    # (2) reflexion/FFI: opacidad fundamental reportada.
+    code, log = ctx.run([VM_EXE, "--analyze",
+                         ctx.src("100_reflection_full.vx"), "--effects"])
+    if code != 0:
+        ctx.fail("--effects (reflexion) salio con codigo %d" % code, log)
+        return
+    if "ffi-nativo" not in log or "opacidad fundamental" not in log:
+        ctx.fail("el programa con FFI deberia reportar opacidad fundamental", log)
+        return
+    # No debe quedar ninguna laguna de COBERTURA (op-sin-modelar) en el corpus.
+    if "op-sin-modelar" in log:
+        ctx.fail("hay IrOps sin modelar en el motor de efectos (cerrar cobertura)",
+                 log)
+        return
+    ctx.ok("reflexion/FFI: opacidad fundamental reportada, sin lagunas de cobertura")
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)

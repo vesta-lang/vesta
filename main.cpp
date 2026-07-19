@@ -28,6 +28,7 @@
 #include "cli/version_info.h" // Banner de `vesta --version` / `-v`
 #include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
 #include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
+#include "vx/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
 #include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
@@ -626,7 +627,14 @@ int main(int argc, char *argv[]) {
             "analizado (reemplaza las de contrato existentes de cada funcion/"
             "metodo definido ahi).  Re-verifica antes de guardar; si algo no "
             "cuadra, no toca el fichero.  Las funciones de imports no se tocan "
-            "(analiza ese fichero por separado).")
+            "(analiza ese fichero por separado).")(
+            "effects",
+            "Con --analyze: imprime, por funcion, los EFECTOS inferidos (memoria/"
+            "control/alloc/throw/block/io/determinismo/tags) y los CONTRATOS "
+            "derivados automaticamente (pure/readonly/leaf/nothrow/deterministic/"
+            "heap_free/...), mas un reporte de LAGUNAS de precision (que ops "
+            "faltan por modelar, donde la opacidad es fundamental).  Modelo unico "
+            "de efectos; cero impacto en codegen.")
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1861,6 +1869,15 @@ int main(int argc, char *argv[]) {
         // Pasar los contratos: las fn de marco opaco (`asm { }`) aportan su
         // @stack DECLARADO al total de sus callers (su frame real no se ve).
         analyze::compose_fingerprints(fps_post, &cr.contracts);
+
+        // Modelo UNICO de efectos (--effects): corre EffectAnalysis sobre el IR
+        // POST-opt y proyecta contratos + efectos + reporte de lagunas.  Es la
+        // validacion del modelo contra programas reales y la exposicion al
+        // usuario.  Aditivo: solo con el flag, no altera el resto del --analyze.
+        if (result.count("effects")) {
+            vx::print_effects_report(std::cout, amod_post);
+            return EXIT_SUCCESS;
+        }
         auto find_fp = [&](const std::string &name)
             -> const analyze::FunctionFingerprint * {
             for (const auto &f : fps_post)

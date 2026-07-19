@@ -162,6 +162,11 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     case IrOp::BITCAST: case IrOp::PHI: case IrOp::ALLOCA: case IrOp::GEP:
     case IrOp::STR_LIT_ADDR: case IrOp::LABEL_ADDR: case IrOp::SECTION_REF:
     case IrOp::ISNULL: case IrOp::INSTANCEOF:
+    // Conversiones de puntero/handle: solo calculan una direccion (el load/store
+    // real es una op aparte); sin efecto observable propio.
+    case IrOp::GCDEREF_IR: case IrOp::GC_DEREF_HOST: case IrOp::GC_HANDLE_FOR_PTR:
+    // Metadata de depuracion: no afecta la semantica de datos del programa.
+    case IrOp::SETMETHDBG:
         break; // efecto neutro
 
     // ---- Division: puede atrapar (div-by-zero) ----

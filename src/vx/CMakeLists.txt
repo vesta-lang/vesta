@@ -83,6 +83,7 @@ add_library(vx_lib STATIC
     effects/contracts.cpp
     effects/ir_effects.cpp
     effects/effect_analysis.cpp
+    effects/effects_report.cpp
     asm/asm_effects.cpp
     # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
     # call/flags/rama/marco de pila explicito) sobre la tabla plana por
