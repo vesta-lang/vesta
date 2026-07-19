@@ -304,12 +304,32 @@ bool lift_x86(
     // -- sin patrones especificos.  Bloque-local (se resetean por bloque).
     struct FlagsInfo {
         bool valid = false;
-        bool is_test = false;
+        bool is_test = false;    // flags de un `test` (a&b vs 0)
+        bool from_result = false; // flags de una ALU: solo ZF (result==0)
         ir::IrValueId a = 0, b = 0; // valores FULL 64b capturados en el cmp/test
         int width = 64;
         bool a_high = false, b_high = false;
     };
     FlagsInfo flags;
+
+    // ALU (no-shift) que definen ZF=result==0 de forma incondicional -> un
+    // jz/jnz/setz posterior las lee.  (add/sub/and/or/xor/inc/dec/neg; las
+    // magnitudes/carry no las modelamos -> flags_cond hace bail en esos cc.)
+    auto sets_result_flags = [](const std::string &m) -> bool {
+        return m == "add" || m == "sub" || m == "and" || m == "or" ||
+               m == "xor" || m == "inc" || m == "dec" || m == "neg";
+    };
+    // Siembra las flags "ZF de @p res al ancho @p w" (result==0) tras una ALU.
+    auto flag_from_result = [&](ir::IrValueId res, int w) {
+        flags.valid = true;
+        flags.is_test = false;
+        flags.from_result = true;
+        flags.a = res;
+        flags.b = 0;
+        flags.width = w;
+        flags.a_high = false;
+        flags.b_high = false;
+    };
 
     // ¿el mnemonico PRESERVA las flags? (no las escribe).  cmp/test las definen
     // aparte; setcc/cmov las leen pero no escriben; el resto de la ALU las pisa.
@@ -331,6 +351,14 @@ bool lift_x86(
             if (flags.width >= 64) return x;
             return sgn ? sext_low(x, flags.width) : and_mask(x, flags.width);
         };
+        if (flags.from_result) {
+            // ALU: solo ZF (result==0).  eq/ne derivan sound; magnitud/signo/
+            // carry necesitan OF/CF que no modelamos -> bail (conservador).
+            if (cop != ir::IrOp::CMP_EQ && cop != ir::IrOp::CMP_NE)
+                return ir::IR_NO_VALUE;
+            const ir::IrValueId t = ext(flags.a, flags.a_high, false);
+            return BIN(cop, t, K(0));
+        }
         if (flags.is_test) {
             // test: flags de (a & b).  CF=OF=0 -> las cc sin signo no aplican;
             // eq/ne/l/g/le/ge -> (a&b) al ancho, con signo, comparado con 0.
@@ -383,6 +411,7 @@ bool lift_x86(
             }
             flags.valid = true;
             flags.is_test = (m == "test");
+            flags.from_result = false;
             flags.a = a_full;
             flags.b = b_full;
             flags.width = aw;
@@ -546,6 +575,8 @@ bool lift_x86(
             const ir::IrValueId res = BIN(bop, a, b);
             write_reg(rc, rw, rh, res, ok);
             if (!ok) return false;
+            // add/sub/and/or/xor definen ZF; los shift no los modelamos (flags).
+            if (!is_shift) flag_from_result(res, rw);
         } else if ((m == "neg" || m == "not") && ops.size() == 1) {
             std::string rc;
             bool rh = false;
@@ -557,6 +588,8 @@ bool lift_x86(
                 fn, block, m == "neg" ? ir::IrOp::NEG : ir::IrOp::NOT, a, line);
             write_reg(rc, rw, rh, res, ok);
             if (!ok) return false;
+            // neg define ZF; not NO toca flags (x86) -> no las siembra.
+            if (m == "neg") flag_from_result(res, rw);
         } else if ((m == "inc" || m == "dec") && ops.size() == 1) {
             std::string rc;
             bool rh = false;
@@ -568,6 +601,7 @@ bool lift_x86(
                 BIN(m == "inc" ? ir::IrOp::ADD : ir::IrOp::SUB, a, K(1));
             write_reg(rc, rw, rh, res, ok);
             if (!ok) return false;
+            flag_from_result(res, rw); // inc/dec definen ZF (jnz posterior)
         } else if ((m == "popcnt" || m == "lzcnt" || m == "tzcnt") &&
                    ops.size() == 2) {
             /* popcnt/lzcnt/tzcnt rd, rs -> POPCNT/CLZ/CTZ.  Solo 64 bits (donde
@@ -681,11 +715,14 @@ bool lift_x86(
         } else {
             return false; // instruccion fuera del subset -> INLINE_ASM
         }
-        // Register-file de flags: toda instruccion que las PISE invalida el
-        // pseudo-registro (cmp/test lo definen; setcc/cmov/flag-neutral lo
-        // preservan).  Asi un consumidor no-adyacente sigue viendo el cmp
-        // mientras no haya un flag-writer entre medias.
-        if (m != "cmp" && m != "test" && !preserves_flags(m))
+        // Register-file de flags: toda instruccion que las PISE sin dejarlas en
+        // un estado modelable invalida el pseudo-registro.  cmp/test lo definen;
+        // las ALU con result-flags (add/sub/.../inc/dec/neg) tambien lo definen
+        // (ZF); setcc/cmov/flag-neutral lo preservan.  Asi un consumidor no-
+        // adyacente sigue viendo la definicion mientras no haya un flag-writer
+        // no-modelado (shift, mul, ...) entre medias.
+        if (m != "cmp" && m != "test" && !preserves_flags(m) &&
+            !sets_result_flags(m))
             flags.valid = false;
     }
     return true;

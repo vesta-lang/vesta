@@ -2148,6 +2148,7 @@ modes3_case("asmloop", "asm lift baja un bucle asm (back-edge) a IR-CFG (suma vi
 modes3_case("asmrotate", "asm lift de rol/ror a ROTL/ROTR (const + variable por CL) en interp/jit/aot", "asm_rotate.vx", 42, line=3654)
 modes3_case("asmdivmod", "asm lift de div/idiv 64/64 (xor rdx/cqo + div) -> DIV+MOD en interp/jit/aot", "asm_divmod.vx", 42, line=3654)
 modes3_case("asmnonadj", "asm flags-as-SSA: setcc no-adyacente al cmp (mov/lea intermedios) + lea base+index + register(rbx) lifteado, en interp/jit/aot", "asm_cmp_nonadj.vx", 42, line=3654)
+modes3_case("asmloopdec", "asm flags-as-SSA: bucle contador dec rcx; jnz (ZF de una ALU, sin cmp) -> IR-CFG, en interp/jit/aot", "asm_loop_dec.vx", 42, line=3654)
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)
