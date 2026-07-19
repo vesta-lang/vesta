@@ -189,10 +189,9 @@ bool lift_x86(
     // lista de instrucciones (mismo troceo que instructions()) para indexar los
     // bloques de forma consistente.  Anadimos un `nop` centinela al final: una
     // etiqueta de SALIDA colocada al final (idioma comun `... jCC end; ...;
-    // end:`) queda sin instruccion a la que adjuntarse -> el nop la ancla y el
-    // salto se resuelve a ese bloque (que cae a la continuacion).
-    const std::string body_cfg = body + "\nnop";
-    const vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, body_cfg);
+    // end:`) la ancla `build_asm_cfg` a un `nop` sintetico (bloque real que cae a
+    // la continuacion) -> el salto a esa etiqueta resuelve.
+    const vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, body);
     std::vector<std::string> insns;
     insns.reserve(cfg.insns.size());
     for (const auto &in : cfg.insns) insns.push_back(in.text);
@@ -553,6 +552,25 @@ bool lift_x86(
             const ir::IrValueId a =
                 read_reg(rc, rw, rh, bop == ir::IrOp::SAR, ok);
             if (!ok) return false;
+            // `sub` fija TODAS las flags como `cmp a,b` (x86: sub == cmp en flags)
+            // -> soporta CUALQUIER cc posterior (jl/jg/jb/ja, no solo jz/jnz).
+            // Capturamos los operandos FULL AQUi (antes de pisar el dst).
+            const bool is_sub = (bop == ir::IrOp::SUB);
+            ir::IrValueId sub_a = 0, sub_b = 0;
+            bool sub_bh = false;
+            if (is_sub) {
+                sub_a = get_full(rc, ok);
+                if (!ok) return false;
+                int64_t si = 0;
+                if (parse_imm(ops[1], si)) {
+                    sub_b = K(si);
+                } else {
+                    std::string sbc;
+                    if (reg_info(ops[1], sbc, sub_bh) == 0) return false;
+                    sub_b = get_full(sbc, ok);
+                    if (!ok) return false;
+                }
+            }
             ir::IrValueId b;
             if (is_shift) {
                 // La cuenta se enmascara por el ancho (x86: & 0x1F para <=32
@@ -575,8 +593,20 @@ bool lift_x86(
             const ir::IrValueId res = BIN(bop, a, b);
             write_reg(rc, rw, rh, res, ok);
             if (!ok) return false;
-            // add/sub/and/or/xor definen ZF; los shift no los modelamos (flags).
-            if (!is_shift) flag_from_result(res, rw);
+            // sub -> flags de comparacion completa (cualquier cc); el resto de
+            // ALU no-shift (add/and/or/xor) solo ZF; los shift no se modelan.
+            if (is_sub) {
+                flags.valid = true;
+                flags.is_test = false;
+                flags.from_result = false;
+                flags.a = sub_a;
+                flags.b = sub_b;
+                flags.width = rw;
+                flags.a_high = rh;
+                flags.b_high = sub_bh;
+            } else if (!is_shift) {
+                flag_from_result(res, rw);
+            }
         } else if ((m == "neg" || m == "not") && ops.size() == 1) {
             std::string rc;
             bool rh = false;

@@ -352,6 +352,31 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
         cfg.insns.push_back(std::move(in));
     }
 
+    // Nodo de SALIDA sintetico (`nop`).  El bloque asm sale implicitamente al
+    // FINAL: por fall-through de la ultima instruccion, por la rama NO-tomada de
+    // un jCC final, o via una etiqueta de salida al final sin instruccion detras
+    // (idioma `... jCC .end; ...; .end:`).  Sin un bloque real que represente ese
+    // punto, (a) la rama no-tomada de un jCC final se queda SIN sucesor de
+    // fall-through -> el lift ve succs!=2 y falla; (b) las etiquetas finales se
+    // pierden -> saltos sin resolver (falsos VXA002/VXA003).  Lo anclamos aqui
+    // (uniforme para lift/diagnosticos/diagramas/efectos).  NO se anade tras un
+    // terminador incondicional (jmp/ret) sin etiqueta final: ahi no hay salida
+    // por fall-through (un `jmp .top` final ES un bucle infinito -> VXA003 real).
+    bool need_exit = !pending_labels.empty();
+    if (!need_exit && !cfg.insns.empty()) {
+        const AsmTerm t = cfg.insns.back().term;
+        need_exit = (t == AsmTerm::Fallthrough || t == AsmTerm::CondBranch);
+    }
+    if (need_exit) {
+        AsmInsn in;
+        in.text = "nop";
+        in.labels = pending_labels;
+        in.line_no = line_no;
+        in.term = asm_classify_term(isa, in.text, in.target);
+        pending_labels.clear();
+        cfg.insns.push_back(std::move(in));
+    }
+
     if (cfg.insns.empty())
         return cfg;
 

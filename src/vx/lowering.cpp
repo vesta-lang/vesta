@@ -13504,6 +13504,76 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         }
     }
 
+    // ASA.3: intentar el LIFT del bloque ANALIZABLE a IR ANTES de los warnings y
+    // del INLINE_ASM.  Si liftea, hace return: los diagnosticos de abajo (VXA009
+    // rbx-reservado, VXA010 rsp-reasignado) NO deben dispararse porque solo
+    // aplican al bloque que se queda OPACO (INLINE_ASM); un bloque lifteado SI
+    // compila nativo aunque use rbx.  El mapa registro-canonico -> slot ALLOCA se
+    // construye aqui porque necesita el `lookup` de scope; la deteccion/emision
+    // vive en el modulo.
+    if (s->level == ast::AsmLevel::Analyzable) {
+        std::unordered_map<std::string, ir::IrValueId> slot_of;
+        for (const auto &b : fn_->asm_reg_bindings)
+            if (lookup(b.name) == b.alloca_value) {
+                std::string c = asm_canonical_reg(b.reg);
+                if (!c.empty()) slot_of[c] = b.alloca_value;
+            }
+        if (vx::asm_lift_emit(*fn_, current_block_, vx::instr_db::Isa::X86,
+                              ia.func_name, slot_of, s->loc.line))
+            return; // patron liftado -> NO se emite el INLINE_ASM.
+
+        // Lift GENERAL instruccion-a-instruccion: el asm entero straight-line
+        // (mov/lea/ALU/neg-not/inc-dec, [reg]) pasa a IR SSA real (ADD, LOAD,
+        // STORE...) que participa del optimizador -> del asm del usuario sale
+        // codigo mas eficiente.  Los registros ligados por register() se cargan
+        // de su slot (al ancho de su tipo) y se escriben de vuelta.  Cualquier
+        // forma fuera del subset -> false y cae al ASM_MICRO / INLINE_ASM.
+        {
+            std::unordered_map<std::string, vx::AsmBoundReg> bound;
+            for (const auto &b : fn_->asm_reg_bindings)
+                if (lookup(b.name) == b.alloca_value) {
+                    const std::string c = asm_canonical_reg(b.reg);
+                    if (c.empty()) continue;
+                    int wbits = 64;
+                    switch (b.type) {
+                    case ir::IrType::I8:
+                    case ir::IrType::U8:
+                    case ir::IrType::BOOL: wbits = 8; break;
+                    case ir::IrType::I16:
+                    case ir::IrType::U16: wbits = 16; break;
+                    case ir::IrType::I32:
+                    case ir::IrType::U32:
+                    case ir::IrType::F32: wbits = 32; break;
+                    default: wbits = 64; break; // I64/U64/PTR/HANDLE/F64
+                    }
+                    bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
+                }
+            uint32_t asm_exit = current_block_;
+            if (vx::asm_lift_general(*fn_, current_block_, vx::instr_db::Isa::X86,
+                                     ia.func_name, bound, s->loc.line,
+                                     &asm_exit)) {
+                // Si el asm tenia ramas, el lift creo un CFG y devuelve el bloque
+                // de CONTINUACION: el codigo siguiente se baja ahi.
+                current_block_ = asm_exit;
+                return; // bloque liftado a IR real -> NO se emite el INLINE_ASM.
+            }
+        }
+
+        // Si no encaja un patron tipado, intentar el lift GENERAL a ASM_MICRO:
+        // instrucciones opacas SIN operandos de registro (mfence/pause/...)
+        // pasan a ser IR (una ASM_MICRO por instruccion) que lleva sus efectos
+        // de la DB, en vez de la caja opaca INLINE_ASM.  Solo si TODO el bloque
+        // encaja (transaccional); si no, cae al INLINE_ASM de abajo.
+        if (vx::asm_lift_micro(*fn_, current_block_, vx::instr_db::Isa::X86,
+                               ia.func_name, s->loc.line, slot_of)) {
+            // El interp ejecuta la ASM_MICRO via vrt:asm_micro_exec (trampoline
+            // nativo si hay ensamblador, o emulacion portable del efecto).
+            // Registrar el import para que el linker lo resuelva.  Idempotente.
+            out_mod_->register_native_import("vrt", "asm_micro_exec");
+            return; // bloque liftado a ASM_MICRO -> NO se emite el INLINE_ASM.
+        }
+    }
+
     // Phase AS inc.3: listar como operandos los slots ALLOCA de las
     // variables register-bound EN SCOPE en este punto.  Esto (a) impide
     // que el optimizer las elimine (INLINE_ASM es op no-safe -> sus
@@ -13613,77 +13683,10 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             diags_.diag(s->body_loc, DiagLevel::WARN, "VXA010", {sp_reassigned});
     }
 
-    // ASA.3: si el bloque ANALIZABLE encaja con un patron atomico conocido
-    // (lock cmpxchg -> ATOMIC_CAS, lock xadd -> ATOMIC_ADD), emitir el op TIPADO
-    // del IR en lugar de la caja opaca INLINE_ASM (ver vx/asm_lift_emit.h).  El
-    // mapa registro-canonico -> slot ALLOCA se construye aqui porque necesita el
-    // `lookup` de scope; el resto (deteccion + emision) vive en el modulo.
-    if (s->level == ast::AsmLevel::Analyzable) {
-        std::unordered_map<std::string, ir::IrValueId> slot_of;
-        for (const auto &b : fn_->asm_reg_bindings)
-            if (lookup(b.name) == b.alloca_value) {
-                std::string c = asm_canonical_reg(b.reg);
-                if (!c.empty()) slot_of[c] = b.alloca_value;
-            }
-        if (vx::asm_lift_emit(*fn_, current_block_, vx::instr_db::Isa::X86,
-                              ia.func_name, slot_of, s->loc.line))
-            return; // patron liftado -> NO se emite el INLINE_ASM.
-
-        // Lift GENERAL instruccion-a-instruccion: el asm entero straight-line
-        // (mov/lea/ALU/neg-not/inc-dec, [reg]) pasa a IR SSA real (ADD, LOAD,
-        // STORE...) que participa del optimizador -> del asm del usuario sale
-        // codigo mas eficiente.  Los registros ligados por register() se cargan
-        // de su slot (al ancho de su tipo) y se escriben de vuelta.  Cualquier
-        // forma fuera del subset -> false y cae al ASM_MICRO / INLINE_ASM.
-        {
-            std::unordered_map<std::string, vx::AsmBoundReg> bound;
-            for (const auto &b : fn_->asm_reg_bindings)
-                if (lookup(b.name) == b.alloca_value) {
-                    const std::string c = asm_canonical_reg(b.reg);
-                    if (c.empty()) continue;
-                    int wbits = 64;
-                    switch (b.type) {
-                    case ir::IrType::I8:
-                    case ir::IrType::U8:
-                    case ir::IrType::BOOL: wbits = 8; break;
-                    case ir::IrType::I16:
-                    case ir::IrType::U16: wbits = 16; break;
-                    case ir::IrType::I32:
-                    case ir::IrType::U32:
-                    case ir::IrType::F32: wbits = 32; break;
-                    default: wbits = 64; break; // I64/U64/PTR/HANDLE/F64
-                    }
-                    bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
-                }
-            uint32_t asm_exit = current_block_;
-            if (vx::asm_lift_general(*fn_, current_block_, vx::instr_db::Isa::X86,
-                                     ia.func_name, bound, s->loc.line,
-                                     &asm_exit)) {
-                // Si el asm tenia ramas, el lift creo un CFG y devuelve el bloque
-                // de CONTINUACION: el codigo siguiente se baja ahi.
-                current_block_ = asm_exit;
-                return; // bloque liftado a IR real -> NO se emite el INLINE_ASM.
-            }
-        }
-
-        // Si no encaja un patron tipado, intentar el lift GENERAL a ASM_MICRO:
-        // instrucciones opacas SIN operandos de registro (mfence/pause/...)
-        // pasan a ser IR (una ASM_MICRO por instruccion) que lleva sus efectos
-        // de la DB, en vez de la caja opaca INLINE_ASM.  Solo si TODO el bloque
-        // encaja (transaccional); si no, cae al INLINE_ASM de abajo.
-        if (vx::asm_lift_micro(*fn_, current_block_, vx::instr_db::Isa::X86,
-                               ia.func_name, s->loc.line, slot_of)) {
-            // El interp ejecuta la ASM_MICRO via vrt:asm_micro_exec (trampoline
-            // nativo si hay ensamblador, o emulacion portable del efecto).
-            // Registrar el import para que el linker lo resuelva.  Idempotente.
-            out_mod_->register_native_import("vrt", "asm_micro_exec");
-            return; // bloque liftado a ASM_MICRO -> NO se emite el INLINE_ASM.
-        }
-    }
-
-    // El bloque NO lifto (cualquier lift habria hecho return) -> se emite como
-    // INLINE_ASM OPACO.  El scheduler machine-level del backend reordena todo el
-    // codigo generado, pero NO ve dentro de un INLINE_ASM opaco; para que este
+    // El bloque NO lifto (cualquier lift habria hecho return arriba) -> se emite
+    // como INLINE_ASM OPACO.  El scheduler machine-level del backend reordena
+    // todo el codigo generado, pero NO ve dentro de un INLINE_ASM opaco; para que
+    // este
     // tampoco se quede sin reordenar, se le aplica aqui el reschedule a nivel de
     // TEXTO asm (mismo modelo de latencias/puertos).  Conservador: reschedule_asm
     // solo reordena si es seguro (sin labels, deps + barreras respetadas,
