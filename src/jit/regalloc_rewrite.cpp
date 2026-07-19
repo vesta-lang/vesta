@@ -770,11 +770,26 @@ struct Lowerer {
          * enruta al MOVSD/MOVSS.  Ambos pueden estar en XMM o en un slot de
          * pila (spilled).  x86 no tiene mov mem,mem -> si AMBOS son MEM se
          * pasa por el scratch XMM. */
-        if (op == MOp::MOV && (is_fp_operand(in.dst) || is_fp_operand(in.src1))) {
+        MOperand d_res = (op == MOp::MOV) ? resolve(in.dst) : MOperand::none();
+        MOperand s_res = (op == MOp::MOV) ? resolve(in.src1) : MOperand::none();
+        // La clase se decide por (a) la clase declarada del vreg operando, o
+        // (b) el REGISTRO FiSICO ASIGNADO por el linear-scan.  Ambos deben
+        // coincidir, pero si por cualquier razon divergen (un vreg cuya clase
+        // declarada quedo GP pero recibio un XMM), el fisico manda: un MOV a/de
+        // un XMM ES un movimiento FP y DEBE emitirse como MOVSD/MOVSS.  Sin
+        // esto el encoder enmascararia el XMM al GP homonimo (`mov rax`), lo que
+        // (1) corromperia un f64 vivo y (2) haria que el modelo de efectos del
+        // scheduler viera W[xmm] cuando el hardware escribe W[rax] -> perderia
+        // el hazard WAW y reordenaria a valores incorrectos.
+        const bool fp_phys =
+            (d_res.is_reg() && is_xmm(static_cast<MReg>(d_res.reg))) ||
+            (s_res.is_reg() && is_xmm(static_cast<MReg>(s_res.reg)));
+        if (op == MOp::MOV &&
+            (is_fp_operand(in.dst) || is_fp_operand(in.src1) || fp_phys)) {
             const MOp mv =
                 fp_mov_for_width(in.dst.width ? in.dst.width : in.src1.width);
-            MOperand d = resolve(in.dst);
-            MOperand s = resolve(in.src1);
+            MOperand d = d_res;
+            MOperand s = s_res;
             if (d.kind == MOperandKind::MEM && s.kind == MOperandKind::MEM) {
                 out.push_back(MInstr::make_unary(mv, xmm(fscr0), s));
                 out.push_back(MInstr::make_unary(mv, d, xmm(fscr0)));

@@ -44,17 +44,57 @@ namespace {
  *        (A/B).  Reordena por camino critico/latencia respetando el DAG completo
  *        de dependencias -> oculta latencias y expone ILP al core superescalar.
  */
-void maybe_schedule(MFunction &pf, sched::EffIsa isa) {
-    // Default ON: e2e 649/649 con scheduling activo (efectos por rol de MOp +
-    // implicitos de la DB -> reorden solo de lo independiente).  VESTA_SCHED=0
+void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
+    // Default ON: reordena por camino critico + RECURSOS (latencia + puertos +
+    // issue-width + throughput reciproco) del modelo de coste.  VESTA_SCHED=0
     // lo desactiva (A/B).
     static const bool on = [] {
         const char *v = std::getenv("VESTA_SCHED");
         return !(v && v[0] == '0');
     }();
     if (!on) return;
-    static const sched::GenericCostModel cm;
-    const int moved = sched::schedule_function(pf, cm, isa);
+    // Modelo de coste segun el modo: JIT auto-detecta la microarquitectura del
+    // host (cpuid/MIDR) y usa los datos EXACTOS de la DB; AOT usa el generico
+    // salvo --cpu explicito.  Construir es barato (cpuid una vez); sin estado
+    // mutable compartido -> seguro con el compile paralelo (M8).
+    const sched::SchedIsa sisa = (isa == sched::EffIsa::ARM64)
+                                     ? sched::SchedIsa::ARM64
+                                     : sched::SchedIsa::X86_64;
+    std::unique_ptr<sched::SchedCostModel> cm =
+        sched::make_cost_model(sisa, sched::sched_cpu(), mode);
+    const int moved = sched::schedule_function(pf, *cm, isa);
+    // Diagnostico opt-in (VESTA_SCHED_EFF=1): volcado del modelo de efectos por
+    // instruccion (post-schedule) para cotejar 1:1 con Capstone.
+    static const bool dump_eff = std::getenv("VESTA_SCHED_EFF") != nullptr;
+    if (dump_eff) {
+        auto rk = [](uint32_t k) -> std::string {
+            if (k == UINT32_MAX) return "-";
+            static const char *gp[16] = {"rax","rcx","rdx","rbx","rsp","rbp",
+                "rsi","rdi","r8","r9","r10","r11","r12","r13","r14","r15"};
+            if (k < 16) return gp[k];
+            if (k < 32) return "xmm" + std::to_string(k - 16);
+            return "k" + std::to_string(k);
+        };
+        std::fprintf(stderr, "[eff] === %s ===\n", pf.name.c_str());
+        for (const MBlock &b : pf.blocks)
+            for (const MInstr &mi : b.instrs) {
+                sched::MEffects e = sched::machine_effects(mi, isa);
+                const char *mn = sched::mop_mnemonic(mi.op, isa);
+                std::string s = mn ? mn : ("op#" + std::to_string(
+                                              static_cast<int>(mi.op)));
+                s += " R[";
+                for (uint32_t r : e.reads) s += rk(r) + " ";
+                s += "] W[";
+                for (uint32_t r : e.writes) s += rk(r) + " ";
+                s += "]";
+                if (e.reads_flags) s += " rF";
+                if (e.writes_flags) s += " wF";
+                if (e.reads_mem) s += " rMem";
+                if (e.writes_mem) s += " wMem";
+                if (e.is_barrier) s += " BARRIER";
+                std::fprintf(stderr, "[eff] %s\n", s.c_str());
+            }
+    }
     // Diagnostico opt-in (VESTA_SCHED_STATS=1): cuanto reordena de verdad.
     static const bool stats = std::getenv("VESTA_SCHED_STATS") != nullptr;
     if (stats) {
@@ -66,9 +106,10 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa) {
         ++funcs;
         if (moved) ++touched;
         std::fprintf(stderr,
-                     "[sched-stats] acum: funcs=%ld tocadas=%ld moved=%ld "
-                     "instr=%ld (%.1f%% movidas)\n",
-                     funcs, touched, tot_moved, tot_instr,
+                     "[sched-stats] modelo=%s puertos=%d issue=%d | acum: "
+                     "funcs=%ld tocadas=%ld moved=%ld instr=%ld (%.1f%% mov)\n",
+                     cm->name(), cm->port_count(), cm->issue_width(), funcs,
+                     touched, tot_moved, tot_instr,
                      tot_instr ? 100.0 * tot_moved / tot_instr : 0.0);
     }
 }
@@ -127,7 +168,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
     peephole_physical(pf);
-    maybe_schedule(pf, sched::EffIsa::X86);
+    maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
 
     /* 3. Encode a bytes. */
     X86Encoder enc;
@@ -218,7 +259,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
     peephole_physical(pf);
-    maybe_schedule(pf, sched::EffIsa::X86);
+    maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
 
     X86Encoder enc;
     std::vector<uint8_t> bytes;
@@ -283,7 +324,7 @@ std::vector<uint8_t> vreg_compile_native_target(
     /* 4. REWRITE a fisico (prologo/epilogo + spills de la ABI del target). */
     MFunction pf = target.rewrite(mf, ra, ivs);
     target.peephole(pf);
-    maybe_schedule(pf, target.sched_isa());
+    maybe_schedule(pf, target.sched_isa(), sched::SchedMode::AOT_GENERIC);
 
     /* 5. ENCODE a bytes maquina del target. */
     std::vector<uint8_t> bytes;
@@ -397,7 +438,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     osr.header_block = static_cast<MBlockId>(header_block);
     osr.required_captures = required_captures; // red de seguridad live-in
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs, &osr);
-    maybe_schedule(pf, sched::EffIsa::X86);
+    maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 
     /* 5. Encode. */

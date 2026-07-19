@@ -1516,15 +1516,32 @@ void debug_dump_jit_code(const std::string &name, const uint8_t *code,
         std::fprintf(stderr, "[jit disasm] cs_open fallo\n");
         return;
     }
-    cs_option(handle, CS_OPT_DETAIL, CS_OPT_OFF);
+    // VESTA_JIT_DISASM_REGS=1: detalle de acceso a registros (implicitos
+    // incluidos) para verificar el modelo de efectos del scheduler.
+    const bool regs = std::getenv("VESTA_JIT_DISASM_REGS") != nullptr;
+    cs_option(handle, CS_OPT_DETAIL, regs ? CS_OPT_ON : CS_OPT_OFF);
     cs_insn *insn = nullptr;
     const size_t count = cs_disasm(handle, code, code_size,
                                    reinterpret_cast<uint64_t>(code), 0, &insn);
     if (count > 0) {
         for (size_t i = 0; i < count; ++i) {
-            std::fprintf(stderr, "  %p: %-12s %s\n",
+            std::fprintf(stderr, "  %p: %-10s %-24s",
                          reinterpret_cast<void *>(insn[i].address),
                          insn[i].mnemonic, insn[i].op_str);
+            if (regs && insn[i].detail) {
+                cs_regs rd, wr;
+                uint8_t nrd = 0, nwr = 0;
+                if (cs_regs_access(handle, &insn[i], rd, &nrd, wr, &nwr) == 0) {
+                    std::fprintf(stderr, " R[");
+                    for (uint8_t k = 0; k < nrd; ++k)
+                        std::fprintf(stderr, "%s ", cs_reg_name(handle, rd[k]));
+                    std::fprintf(stderr, "] W[");
+                    for (uint8_t k = 0; k < nwr; ++k)
+                        std::fprintf(stderr, "%s ", cs_reg_name(handle, wr[k]));
+                    std::fprintf(stderr, "]");
+                }
+            }
+            std::fprintf(stderr, "\n");
         }
         cs_free(insn, count);
     } else {

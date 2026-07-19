@@ -402,6 +402,17 @@ void add_div_implicit_from_db(const MInstr &mi, const char *mnem, Isa isa,
  *        + flags + los implicitos con nombre de la DB (familia div).
  */
 void real_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
+    // CQO/CDQ: sign-extienden RAX en RDX:RAX (semantica FIJA, sin operandos):
+    // LEEN RAX y ESCRIBEN RDX, SIN tocar flags.  Es IMPRESCINDIBLE modelar el
+    // RDX escrito -- si no, un `mov rdx, imm` puede colarse entre el CQO y el
+    // IDIV/DIV que lee RDX:RAX como dividendo, corrompiendo la division (#DE o
+    // resultado erroneo).  La familia div de la DB no siempre expone este RDX
+    // implicito para CQO, asi que se modela aqui explicito (semantica exacta).
+    if (mi.op == MOp::CQO) {
+        add(e.reads, static_cast<uint8_t>(MReg::RAX));
+        add(e.writes, static_cast<uint8_t>(MReg::RDX));
+        return;
+    }
     const OpRoles r = mop_roles(mi.op);
     e.writes_flags = r.writes_flags;
     e.reads_flags = r.reads_flags;
@@ -424,8 +435,22 @@ void real_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
             add(e.reads, reg_key(*s));
         }
     }
-    // Implicitos con nombre (rax:rdx) de la familia div, desde la DB.
-    if (r.div_family) add_div_implicit_from_db(mi, mnem, isa, e);
+    // Familia div (IDIV/DIV): el dividendo es RDX:RAX -- LEE ambos -- y deja el
+    // cociente en RAX y el resto en RDX -- ESCRIBE ambos.  Es semantica FIJA de
+    // x86 (no depende de la microarq), asi que se modela EXPLICITO: la
+    // extraccion de implicitos de la DB no siempre expone el RDX LEIDO, y sin
+    // el, un `mov rdx, imm` puede colarse ANTES del div (WAR idiv/mov-rdx
+    // perdida) y corromper el dividendo -> #DE o resultado erroneo.
+    if (r.div_family) {
+        if (isa == Isa::X86) {
+            add(e.reads, static_cast<uint8_t>(MReg::RAX));
+            add(e.reads, static_cast<uint8_t>(MReg::RDX));
+            add(e.writes, static_cast<uint8_t>(MReg::RAX));
+            add(e.writes, static_cast<uint8_t>(MReg::RDX));
+        } else {
+            add_div_implicit_from_db(mi, mnem, isa, e);
+        }
+    }
 }
 
 /**
@@ -616,7 +641,54 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
 } // namespace
 
 const char *mop_mnemonic(MOp op, EffIsa isa) {
-    if (isa != EffIsa::X86) return nullptr; // arm64 entra con el pipeline vreg arm
+    // arm64: los MOp enteros genericos se comparten; los A64_* son propios.  Los
+    // saltos/llamadas (b/bl/ret/cbz) NO se mapean -> pseudo (barrera), igual que
+    // en x86.  Se usa para los efectos DB (machine_effects) y el coste DB.
+    if (isa == EffIsa::ARM64) {
+        switch (op) {
+        case MOp::MOV: return "mov";
+        case MOp::ADD: return "add";
+        case MOp::SUB: return "sub";
+        case MOp::AND: return "and";
+        case MOp::OR: return "orr";
+        case MOp::XOR: return "eor";
+        case MOp::SHL: return "lsl";
+        case MOp::SHR: return "lsr";
+        case MOp::SAR: return "asr";
+        case MOp::NEG: return "neg";
+        case MOp::NOT: return "mvn";
+        case MOp::CMP: return "cmp";
+        case MOp::LOAD: return "ldr";
+        case MOp::STORE: return "str";
+        case MOp::A64_UDIV: return "udiv";
+        case MOp::A64_SDIV: return "sdiv";
+        case MOp::A64_MADD: return "madd";
+        case MOp::A64_MSUB: return "msub";
+        case MOp::A64_CSEL: return "csel";
+        case MOp::A64_CSET: return "cset";
+        case MOp::A64_MVN: return "mvn";
+        case MOp::A64_MOVZ: return "movz";
+        case MOp::A64_MOVK: return "movk";
+        case MOp::A64_SXTB: return "sxtb";
+        case MOp::A64_UXTB: return "uxtb";
+        case MOp::A64_FADD: return "fadd";
+        case MOp::A64_FSUB: return "fsub";
+        case MOp::A64_FMUL: return "fmul";
+        case MOp::A64_FDIV: return "fdiv";
+        case MOp::A64_FCMP: return "fcmp";
+        case MOp::A64_FMOV: return "fmov";
+        case MOp::A64_FNEG: return "fneg";
+        case MOp::A64_FABS: return "fabs";
+        case MOp::A64_FSQRT: return "fsqrt";
+        case MOp::A64_SCVTF: return "scvtf";
+        case MOp::A64_UCVTF: return "ucvtf";
+        case MOp::A64_FCVTZS: return "fcvtzs";
+        case MOp::A64_FCVTZU: return "fcvtzu";
+        case MOp::A64_FCVT: return "fcvt";
+        default: return nullptr; // pseudo / salto / no mapeado aun
+        }
+    }
+    if (isa != EffIsa::X86) return nullptr; // arm32/riscv: sin mapeo aun
 
     switch (op) {
     /* Movimiento / ALU entera. */

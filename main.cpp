@@ -39,6 +39,7 @@
 #include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/auto_jit.h"
+#include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
 #include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
 #include "jit/naked_native.h" // Bug 198: dispatcher naked (asm con simbolos propios)
@@ -546,7 +547,12 @@ int main(int argc, char *argv[]) {
             "jit-stats", "Imprimir snapshot final de counters del JIT: "
                          "compiled/unsupported/no_ir + threshold")(
             "jit-disasm", "Volcar hex bytes + disasm (Capstone) de cada "
-                          "funcion JIT-compilada a stderr")
+                          "funcion JIT-compilada a stderr")(
+            "cpu",
+            "Microarquitectura objetivo para el scheduler (p.ej. intel-skylake, "
+            "amd-zen3, intel-icelake).  Usa los datos EXACTOS de latencia/puertos "
+            "de la DB.  Sin --cpu: JIT auto-detecta el host; AOT usa el generico.",
+            cxxopts::value<std::string>())
         // ---- opciones de profiling (D.6 PGO) ----
         ("profile",
          "Generar @c .vprof con branch/type/alloc counters al exit (PGO para "
@@ -990,6 +996,10 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
     }
+
+    // --cpu: microarquitectura objetivo del scheduler (datos exactos de la DB).
+    if (result.count("cpu"))
+        jit::sched::set_sched_cpu(result["cpu"].as<std::string>());
 
     if (result.count("jit-threshold")) {
         jit::set_jit_threshold(result["jit-threshold"].as<uint32_t>());

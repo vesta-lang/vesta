@@ -62,16 +62,36 @@ enum class ExecKind : uint8_t {
     COUNT
 };
 
+/// Numero maximo de grupos de puertos que una instruccion puede usar.
+constexpr int kMaxSchedPorts = 8;
+
+/// Uso de UN grupo de puertos por una instruccion (para el modelo de recursos).
+/// @c port indexa el legado de puertos de la microarquitectura (0..port_count-1);
+/// @c uops = uops que la instruccion despacha a ese grupo.
+struct SchedPortUse {
+    uint8_t port = 0;
+    float uops = 1.0f;
+};
+
 /**
- * @brief Coste de una instruccion para el scheduler.
+ * @brief Coste de una instruccion para el scheduler (latencia + throughput +
+ *        PUERTOS de ejecucion).
  */
 struct InstrCost {
     float latency = 1.0f;   ///< ciclos desde emision hasta que el resultado
                             ///< esta disponible para un dependiente.
     float recip_tp = 1.0f;  ///< throughput reciproco (ciclos entre dos emisiones
                             ///< back-to-back de la misma clase; 1/IPC).
-    ExecKind kind = ExecKind::ALU; ///< familia de ejecucion (puertos).
+    ExecKind kind = ExecKind::ALU; ///< familia de ejecucion (grupo de puertos).
     bool is_barrier = false; ///< CALL/RET/SAFEPOINT: no se reordena a traves.
+    float uops = 1.0f;       ///< uops totales (limite de emision del core).
+    /// Grupos de puertos que la instruccion ocupa (del modelo de la microarq o
+    /// sintetizados de @c kind).  El scheduler lleva ocupacion por grupo y evita
+    /// programar en el mismo ciclo dos instrucciones que compiten por el mismo
+    /// puerto -> modela la contencion superescalar real.  @c nports==0 = derivar
+    /// de @c kind (el modelo generico siempre rellena esto).
+    SchedPortUse ports[kMaxSchedPorts];
+    uint8_t nports = 0;
 };
 
 /**
@@ -84,6 +104,15 @@ class SchedCostModel {
     virtual InstrCost cost(const MInstr &mi) const = 0;
     /// Ancho de emision del core (uops/ciclo) -- limite superescalar.
     virtual int issue_width() const = 0;
+    /// Numero de grupos de puertos de ejecucion del core (dimensiona la tabla de
+    /// ocupacion del scheduler).
+    virtual int port_count() const = 0;
+    /// Capacidad (uops/ciclo) del grupo de puertos @p group: cuantos puertos
+    /// fisicos contiene (p.ej. "p0156" = 4, "p23" = 2, "p0" = 1).  El scheduler
+    /// no programa en el mismo ciclo mas uops de los que caben en cada grupo.
+    virtual int port_capacity(int group) const = 0;
+    /// Nombre del grupo de puertos @p group (para diagnostico).
+    virtual const char *port_name(int group) const = 0;
     /// Nombre legible del modelo (para diagnostico / --cpu).
     virtual const char *name() const = 0;
 };
@@ -101,6 +130,9 @@ class GenericCostModel final : public SchedCostModel {
   public:
     InstrCost cost(const MInstr &mi) const override;
     int issue_width() const override { return 4; }
+    int port_count() const override;
+    int port_capacity(int group) const override;
+    const char *port_name(int group) const override;
     const char *name() const override { return "generic"; }
 };
 
@@ -108,15 +140,32 @@ class GenericCostModel final : public SchedCostModel {
 enum class SchedIsa : uint8_t { X86_64, X86_32, ARM64 };
 
 /**
- * @brief Crea el modelo de coste para @p isa y la CPU @p cpu.
+ * @brief Contexto de compilacion para elegir el modelo de coste por defecto.
+ *  - @c JIT_AUTO : el JIT compila para el HOST -> auto-detectar su
+ *    microarquitectura (cpuid/MIDR) y usar los datos EXACTOS de la DB.
+ *  - @c AOT_GENERIC : el AOT puede compilar para un target CRUZADO -> sin
+ *    @c --cpu se usa el modelo GENERICO portable (nunca auto-detecta el host).
+ */
+enum class SchedMode : uint8_t { JIT_AUTO, AOT_GENERIC };
+
+/**
+ * @brief Crea el modelo de coste para @p isa, la CPU @p cpu y el modo @p mode.
  *
  * @param isa  ISA del MachineIR que se va a schedular.
- * @param cpu  nombre de microarquitectura (@c --cpu, p.ej. "cortex-a76",
- *             "skylake").  Vacio o desconocido -> @c GenericCostModel (default).
+ * @param cpu  nombre de microarquitectura (@c --cpu, p.ej. "intel-skylake",
+ *             "amd-zen3").  Vacio -> auto (JIT) o generico (AOT).
+ * @param mode JIT (auto-detecta el host) o AOT (generico sin @c --cpu).
  * @return Un modelo de coste (nunca null; cae al generico si la uarch no existe).
  */
 std::unique_ptr<SchedCostModel> make_cost_model(SchedIsa isa,
-                                                const std::string &cpu);
+                                                const std::string &cpu,
+                                                SchedMode mode);
+
+/// Microarquitectura objetivo global (@c --cpu).  La fija @c main.cpp al
+/// arrancar; el scheduler la lee para el modelo de coste.  Vacio = auto (JIT) /
+/// generico (AOT).
+void set_sched_cpu(const std::string &cpu);
+const std::string &sched_cpu();
 
 /**
  * @brief Clasifica un @c MOp en su familia de ejecucion + coste generico.
