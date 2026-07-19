@@ -2155,6 +2155,7 @@ modes3_case("asmimul3xchg", "asm lift de imul rd,rs,imm (3-op) + xchg r,r (swap 
 modes3_case("asmcdqe", "asm lift de cdqe/cwde/cbw (sign-extend del acumulador, NO no-op) en interp/jit/aot", "asm_cdqe.vx", 42, line=3654)
 modes3_case("asmadcsbb", "asm flags-as-SSA con CF: adc/sbb (aritmetica 128b bignum) en interp/jit/aot", "asm_adc_sbb.vx", 42, line=3654)
 modes3_case("asmjc", "asm flags-as-SSA con CF: jc/jnc (deteccion de overflow por carry tras add) en interp/jit/aot", "asm_jc.vx", 42, line=3654)
+modes3_case("asmmemdisp", "asm lift de memoria completa [base+idx*scale+disp] (mov load/store + movzx/movsx desde memoria) en interp/jit/aot", "asm_mem_disp.vx", 42, line=3654)
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)

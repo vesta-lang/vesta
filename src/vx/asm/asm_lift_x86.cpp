@@ -87,15 +87,6 @@ bool is_mem(const std::string &op) {
     return op.find('[') != std::string::npos && trim(op).back() == ']';
 }
 
-/// Memoria @c [reg] PLANA (sin index/disp) -> registro canonico; "" si no lo es.
-/// Reusa @ref parse_mem (el modo de direccionamiento completo) restringiendo al
-/// caso base puro.
-std::string plain_mem(const std::string &op) {
-    MemAddr a = parse_mem(op);
-    if (!a.ok || a.base.empty() || !a.index.empty() || a.disp != 0) return "";
-    return a.base;
-}
-
 /// Ancho en bits de un size-hint de memoria (@c byte/word/dword/qword @c ptr).
 /// 0 si no hay hint explicito (el ancho lo aporta el registro del otro
 /// operando).
@@ -293,6 +284,32 @@ bool lift_x86(
         }
         cur[canon] = nv;
         mark_write(canon);
+    };
+
+    // Direccion (SSA) de un operando de memoria [base + index*scale + disp].  El
+    // asm SIEMPRE usa memoria HOST; el consumidor (lea/mov/movzx/movsx) emite el
+    // load/store HOST con esta direccion.  @p okr=false si algun termino no es GP.
+    auto mem_addr_of = [&](const MemAddr &ma, bool &okr) -> ir::IrValueId {
+        okr = true;
+        ir::IrValueId acc = 0;
+        bool have = false;
+        if (!ma.base.empty()) {
+            acc = get_full(ma.base, okr);
+            if (!okr) return 0;
+            have = true;
+        }
+        if (!ma.index.empty()) {
+            ir::IrValueId idx = get_full(ma.index, okr);
+            if (!okr) return 0;
+            if (ma.scale != 1) idx = BIN(ir::IrOp::MUL, idx, K(ma.scale));
+            acc = have ? BIN(ir::IrOp::ADD, acc, idx) : idx;
+            have = true;
+        }
+        if (ma.disp != 0 || !have) {
+            const ir::IrValueId d = K(ma.disp);
+            acc = have ? BIN(ir::IrOp::ADD, acc, d) : d;
+        }
+        return acc;
     };
 
     // === FLAGS como pseudo-registro SSA ===
@@ -518,33 +535,33 @@ bool lift_x86(
                           BIN(ir::IrOp::AND, diff, mask));
             mark_write(dc);
         } else if (m == "mov" && ops.size() == 2) {
-            const std::string dmem = plain_mem(ops[0]);
-            const std::string smem = plain_mem(ops[1]);
-            // Memoria con modo de direccionamiento no-plano ([base+idx*sc+disp])
-            // aun no soportada -> fallback.
-            if ((is_mem(ops[0]) && dmem.empty()) ||
-                (is_mem(ops[1]) && smem.empty()))
-                return false;
-            if (!dmem.empty()) { // mov [rd], src  (memoria HOST)
+            const bool dstm = is_mem(ops[0]);
+            const bool srcm = is_mem(ops[1]);
+            if (dstm && srcm) return false; // mov mem,mem no existe en x86
+            if (dstm) { // mov [base+idx*sc+disp], src  (memoria HOST)
+                const MemAddr ma = parse_mem(ops[0]);
+                if (!ma.ok) return false;
                 std::string sc;
                 bool sh = false;
                 const int srw = reg_info(ops[1], sc, sh);
                 int w = mem_hint_width(ops[0]);
                 if (w == 0) w = srw;      // ancho del store = registro fuente
                 if (w == 0) return false; // `mov [r], imm` sin size-hint: ambiguo
-                const ir::IrValueId a = get_full(dmem, ok);
+                const ir::IrValueId a = mem_addr_of(ma, ok);
                 if (!ok) return false;
                 const ir::IrValueId v = read_op(ops[1], w, false, ok);
                 if (!ok) return false;
                 emit_store(fn, block, v, a, w, /*host=*/true, line);
-            } else if (!smem.empty()) { // mov rd, [rs]  (memoria HOST)
+            } else if (srcm) { // mov rd, [base+idx*sc+disp]  (memoria HOST)
+                const MemAddr ma = parse_mem(ops[1]);
+                if (!ma.ok) return false;
                 std::string rc;
                 bool rh = false;
                 const int rw = reg_info(ops[0], rc, rh);
                 if (rw == 0) return false;
                 int w = mem_hint_width(ops[1]);
                 if (w == 0) w = rw;       // ancho del load = registro destino
-                const ir::IrValueId a = get_full(smem, ok);
+                const ir::IrValueId a = mem_addr_of(ma, ok);
                 if (!ok) return false;
                 const ir::IrValueId ld =
                     emit_load(fn, block, a, w, /*host=*/true, line);
@@ -570,25 +587,31 @@ bool lift_x86(
             if (rw == 0) return false;
             const MemAddr ma = parse_mem(ops[1]);
             if (!ma.ok) return false;
-            ir::IrValueId acc = 0;
-            bool have = false;
-            if (!ma.base.empty()) {
-                acc = get_full(ma.base, ok);
-                if (!ok) return false;
-                have = true;
-            }
-            if (!ma.index.empty()) {
-                ir::IrValueId idx = get_full(ma.index, ok);
-                if (!ok) return false;
-                if (ma.scale != 1) idx = BIN(ir::IrOp::MUL, idx, K(ma.scale));
-                acc = have ? BIN(ir::IrOp::ADD, acc, idx) : idx;
-                have = true;
-            }
-            if (ma.disp != 0 || !have) {
-                const ir::IrValueId d = K(ma.disp);
-                acc = have ? BIN(ir::IrOp::ADD, acc, d) : d;
-            }
+            const ir::IrValueId acc = mem_addr_of(ma, ok);
+            if (!ok) return false;
             write_reg(rc, rw, rh, acc, ok);
+            if (!ok) return false;
+        } else if ((m == "movzx" || m == "movsx" || m == "movsxd") &&
+                   ops.size() == 2 && is_mem(ops[1])) {
+            // movzx/movsx/movsxd rd, [mem]: carga de src_w bytes de memoria HOST +
+            // extension (zero para movzx, signo para movsx/movsxd) al ancho de rd.
+            // El size-hint del operando de memoria da src_w (movsxd -> dword).
+            std::string rc;
+            bool rh = false;
+            const int rw = reg_info(ops[0], rc, rh);
+            if (rw == 0) return false;
+            int sw = mem_hint_width(ops[1]);
+            if (sw == 0 && m == "movsxd") sw = 32; // movsxd implica dword
+            if (sw == 0) return false;             // sin size-hint: ambiguo
+            const MemAddr ma = parse_mem(ops[1]);
+            if (!ma.ok) return false;
+            const ir::IrValueId a = mem_addr_of(ma, ok);
+            if (!ok) return false;
+            const ir::IrValueId ld =
+                emit_load(fn, block, a, sw, /*host=*/true, line);
+            // El load HOST zero-extiende los sw bytes; movsx/movsxd sign-extienden.
+            const ir::IrValueId v = (m == "movzx") ? ld : sext_low(ld, sw);
+            write_reg(rc, rw, rh, v, ok);
             if (!ok) return false;
         } else if (binop_of(m, bop) && ops.size() == 2) {
             std::string rc;
