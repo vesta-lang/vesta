@@ -1,0 +1,15 @@
+// mul/imul de 1 operando: producto 64x64 -> 128 bits en RDX:RAX (RAX = parte
+// BAJA, RDX = parte ALTA).  El lift lo baja SIN op de IR nueva: RAX = mul, RDX =
+// descomposicion 64x64->128 (umulhi sin signo / smulhi con signo).  El DCE elimina
+// la parte alta si RDX no se usa.  interp/JIT/AOT.
+//
+//     vm --vx asm_mul.vx -o c && vm --run c.velb
+// @expect 42
+u64 main() {
+    // Parte ALTA sin signo: (42 * 2^32) * 2^32 = 42 * 2^64 -> RDX = 42, RAX = 0.
+    register("rax") u64 a = 0x2A00000000;   // 42 << 32
+    register("rbx") u64 b = 0x100000000;    // 1  << 32
+    register("rdx") u64 hi = 0;
+    asm { mul rbx };
+    return hi;   // parte alta = 42
+}

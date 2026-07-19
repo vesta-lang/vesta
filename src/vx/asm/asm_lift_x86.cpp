@@ -318,6 +318,44 @@ bool lift_x86(
         return m == "add" || m == "sub" || m == "and" || m == "or" ||
                m == "xor" || m == "inc" || m == "dec" || m == "neg";
     };
+    // Parte ALTA de un producto 64x64->128 SIN SIGNO, via descomposicion en
+    // mitades de 32 bits (multiplicacion escolar).  Solo ops existentes (MUL/AND/
+    // SHR/ADD) -> sin op de IR nueva; el DCE la elimina si el resultado (rdx) no
+    // se usa.  hi = a*b >> 64.
+    auto umulhi = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        const ir::IrValueId M = K(0xFFFFFFFFll);
+        const ir::IrValueId alo = BIN(ir::IrOp::AND, a, M);
+        const ir::IrValueId ahi = BIN(ir::IrOp::SHR, a, K(32));
+        const ir::IrValueId blo = BIN(ir::IrOp::AND, b, M);
+        const ir::IrValueId bhi = BIN(ir::IrOp::SHR, b, K(32));
+        const ir::IrValueId ll = BIN(ir::IrOp::MUL, alo, blo);
+        const ir::IrValueId lh = BIN(ir::IrOp::MUL, alo, bhi);
+        const ir::IrValueId hl = BIN(ir::IrOp::MUL, ahi, blo);
+        const ir::IrValueId hh = BIN(ir::IrOp::MUL, ahi, bhi);
+        // mid = (ll>>32) + (lh & 0xFFFFFFFF) + (hl & 0xFFFFFFFF).
+        const ir::IrValueId mid =
+            BIN(ir::IrOp::ADD,
+                BIN(ir::IrOp::ADD, BIN(ir::IrOp::SHR, ll, K(32)),
+                    BIN(ir::IrOp::AND, lh, M)),
+                BIN(ir::IrOp::AND, hl, M));
+        // hi = hh + (lh>>32) + (hl>>32) + (mid>>32).
+        return BIN(ir::IrOp::ADD,
+                   BIN(ir::IrOp::ADD,
+                       BIN(ir::IrOp::ADD, hh, BIN(ir::IrOp::SHR, lh, K(32))),
+                       BIN(ir::IrOp::SHR, hl, K(32))),
+                   BIN(ir::IrOp::SHR, mid, K(32)));
+    };
+    // Parte ALTA de un producto 64x64->128 CON SIGNO: umulhi con la correccion
+    // de Karatsuba/Warren  hi_s = hi_u - (a<0 ? b : 0) - (b<0 ? a : 0).
+    auto smulhi = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        const ir::IrValueId uh = umulhi(a, b);
+        const ir::IrValueId ta = BIN(ir::IrOp::SAR, a, K(63)); // 0 o -1
+        const ir::IrValueId tb = BIN(ir::IrOp::SAR, b, K(63));
+        const ir::IrValueId corr = BIN(ir::IrOp::ADD, BIN(ir::IrOp::AND, ta, b),
+                                       BIN(ir::IrOp::AND, tb, a));
+        return BIN(ir::IrOp::SUB, uh, corr);
+    };
+
     // Siembra las flags "ZF de @p res al ancho @p w" (result==0) tras una ALU.
     auto flag_from_result = [&](ir::IrValueId res, int w) {
         flags.valid = true;
@@ -739,6 +777,29 @@ bool lift_x86(
             write_reg("rax", 64, false, q, ok);
             if (!ok) return false;
             write_reg("rdx", 64, false, r, ok);
+            if (!ok) return false;
+        } else if ((m == "mul" || m == "imul") && ops.size() == 1) {
+            // Multiplicacion 64x64->128: rax = parte BAJA (= mul, igual con/sin
+            // signo en complemento a dos), rdx = parte ALTA (umulhi/smulhi).  El
+            // operando es el multiplicador; rax es el multiplicando implicito.
+            // Solo 64 bits (donde el mapeo a rdx:rax es exacto).  Si rdx no se
+            // usa, el DCE elimina la descomposicion de la parte alta.
+            if (is_mem(ops[0])) return false;
+            std::string mc;
+            bool mh = false;
+            const int mw = reg_info(ops[0], mc, mh);
+            if (mw != 64) return false;
+            const bool is_signed = (m == "imul");
+            const ir::IrValueId mplr = read_reg(mc, 64, mh, false, ok);
+            if (!ok) return false;
+            const ir::IrValueId mpld = read_reg("rax", 64, false, false, ok);
+            if (!ok) return false;
+            const ir::IrValueId lo = BIN(ir::IrOp::MUL, mpld, mplr);
+            const ir::IrValueId hi =
+                is_signed ? smulhi(mpld, mplr) : umulhi(mpld, mplr);
+            write_reg("rax", 64, false, lo, ok);
+            if (!ok) return false;
+            write_reg("rdx", 64, false, hi, ok);
             if (!ok) return false;
         } else if (m == "nop") {
             // no-op (incluido el centinela de etiqueta final): no emite IR.
