@@ -84,6 +84,9 @@ add_library(vx_lib STATIC
     effects/ir_effects.cpp
     effects/effect_analysis.cpp
     effects/effects_report.cpp
+    # Hechos IR objetivos (def-use, call-sites, estructura) para la infra de
+    # analisis: base compartida que consumen los analisis sin re-recorrer el IR.
+    ${CMAKE_SOURCE_DIR}/src/analysis/facts/ir_facts.cpp
     asm/asm_effects.cpp
     # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
     # call/flags/rama/marco de pila explicito) sobre la tabla plana por

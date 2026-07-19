@@ -26,11 +26,11 @@ EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
     const void *key = static_cast<const void *>(&ins);
     auto it = local_cache_.find(key);
     if (it != local_cache_.end()) return it->second;
-    // El mapa def-use es por-funcion; en Fase 1 se reconstruye por llamada
-    // (barato).  El agregado por-funcion usa function_local_effects, que lo
-    // construye una vez.  Fase 2 cachea el def-map por funcion.
-    IrDefMap defs = build_def_map(fn);
-    EffectAnalysisResult r = effects_of_instr(fn, defs, ins);
+    // Los HECHOS (def-use) son por-funcion; aqui se construyen por llamada
+    // (barato).  Cuando EffectAnalysis se registre en el AnalysisManager, los
+    // IrFacts se cachean como analisis fundacional y se consumen sin reconstruir.
+    analysis::IrFacts facts = analysis::build_ir_facts(fn);
+    EffectAnalysisResult r = effects_of_instr(fn, facts, ins);
     local_cache_.emplace(key, r);
     return r;
 }

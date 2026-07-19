@@ -26,30 +26,14 @@ using ir::IrOp;
 // --------------------------------------------------------------------------
 // Mapa def-use + clasificacion de punteros a AbstractLoc
 // --------------------------------------------------------------------------
-IrDefMap build_def_map(const ir::IrFunction &fn) {
-    IrDefMap m;
-    m.def_of.assign(fn.values.size(), nullptr);
-    m.param_of.assign(fn.values.size(), -1);
-    for (size_t i = 0; i < fn.params.size(); ++i) {
-        const ir::IrValueId p = fn.params[i];
-        if (p < m.param_of.size()) m.param_of[p] = static_cast<int32_t>(i);
-    }
-    for (const ir::IrBlock &b : fn.blocks)
-        for (const ir::IrInstr &in : b.instrs)
-            if (in.dst != ir::IR_NO_VALUE && in.dst < m.def_of.size())
-                m.def_of[in.dst] = &in;
-    m.built = true;
-    return m;
-}
-
-static AbstractLoc classify_rec(const ir::IrFunction &fn, const IrDefMap &defs,
+static AbstractLoc classify_rec(const ir::IrFunction &fn, const analysis::IrFacts &facts,
                                 ir::IrValueId ptr, int depth) {
     using K = AbstractLoc::Kind;
-    if (ptr == ir::IR_NO_VALUE || ptr >= defs.def_of.size())
+    if (ptr == ir::IR_NO_VALUE || ptr >= facts.def_of.size())
         return {K::Unknown, 0};
-    if (defs.param_of[ptr] >= 0)
-        return {K::ArgDerived, static_cast<uint32_t>(defs.param_of[ptr])};
-    const ir::IrInstr *d = defs.def_of[ptr];
+    if (facts.param_of[ptr] >= 0)
+        return {K::ArgDerived, static_cast<uint32_t>(facts.param_of[ptr])};
+    const ir::IrInstr *d = facts.def_of[ptr];
     if (!d || depth <= 0) return {K::Unknown, 0};
     switch (d->op) {
     case IrOp::ALLOCA:
@@ -77,16 +61,16 @@ static AbstractLoc classify_rec(const ir::IrFunction &fn, const IrDefMap &defs,
     case IrOp::GC_HANDLE_FOR_PTR:
     case IrOp::UNWRAP:
         if (!d->operands.empty())
-            return classify_rec(fn, defs, d->operands[0], depth - 1);
+            return classify_rec(fn, facts, d->operands[0], depth - 1);
         return {K::Unknown, 0};
     default:
         return {K::Unknown, 0}; // cargado de memoria, PHI, const-address, ...
     }
 }
 
-AbstractLoc classify_ptr(const ir::IrFunction &fn, const IrDefMap &defs,
+AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &facts,
                          ir::IrValueId ptr) {
-    return classify_rec(fn, defs, ptr, 8);
+    return classify_rec(fn, facts, ptr, 8);
 }
 
 // --------------------------------------------------------------------------
@@ -133,7 +117,7 @@ static void add_write(SemanticEffects &e, const AbstractLoc &l) {
 }
 
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
-                                      const IrDefMap &defs,
+                                      const analysis::IrFacts &facts,
                                       const ir::IrInstr &ins) {
     EffectAnalysisResult r; // neutro Complete por defecto
     SemanticEffects &e = r.effects;
@@ -176,23 +160,23 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 
     // ---- Memoria ----
     case IrOp::LOAD:
-        if (!ops.empty()) add_read(e, classify_ptr(fn, defs, ops[0]));
+        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
         break;
     case IrOp::STORE:
-        if (ops.size() >= 2) add_write(e, classify_ptr(fn, defs, ops[1]));
+        if (ops.size() >= 2) add_write(e, classify_ptr(fn, facts, ops[1]));
         break;
     case IrOp::ARRAY_LOAD:
-        if (!ops.empty()) add_read(e, classify_ptr(fn, defs, ops[0]));
+        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
         break;
     case IrOp::ARRAY_STORE:
-        if (!ops.empty()) add_write(e, classify_ptr(fn, defs, ops[0]));
+        if (!ops.empty()) add_write(e, classify_ptr(fn, facts, ops[0]));
         break;
     case IrOp::GETFIELD:
-        if (!ops.empty()) add_read(e, classify_ptr(fn, defs, ops[0]));
+        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
         break;
     case IrOp::SETFIELD:
     case IrOp::GCWB_IR:
-        if (!ops.empty()) add_write(e, classify_ptr(fn, defs, ops[0]));
+        if (!ops.empty()) add_write(e, classify_ptr(fn, facts, ops[0]));
         break;
     case IrOp::GETSTATIC:
         add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
@@ -203,7 +187,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     case IrOp::ARRAY_LEN: case IrOp::STRLEN: case IrOp::STRGETBYTES:
     case IrOp::STRHASH:
         // leen la cabecera del objeto (heap).
-        if (!ops.empty()) add_read(e, classify_ptr(fn, defs, ops[0]));
+        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
         break;
     case IrOp::MEMCPY:
         add_read(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
@@ -333,7 +317,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 // --------------------------------------------------------------------------
 EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
                                             EffectGaps *gaps) {
-    IrDefMap defs = build_def_map(fn);
+    analysis::IrFacts facts = analysis::build_ir_facts(fn);
     EffectAnalysisResult acc;
     bool first_block = true;
     AnalysisCompleteness worst = AnalysisCompleteness::Complete;
@@ -342,7 +326,7 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
         SemanticEffects blk = SemanticEffects::none();
         bool first_instr = true;
         for (const ir::IrInstr &in : b.instrs) {
-            EffectAnalysisResult r = effects_of_instr(fn, defs, in);
+            EffectAnalysisResult r = effects_of_instr(fn, facts, in);
             if (uint8_t(r.completeness) > uint8_t(worst)) worst = r.completeness;
             // Registrar la laguna (si la hubo) para el reporte de cobertura.
             if (gaps && r.completeness != AnalysisCompleteness::Complete &&

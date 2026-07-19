@@ -17,6 +17,7 @@
 #ifndef VX_EFFECTS_IR_EFFECTS_H
 #define VX_EFFECTS_IR_EFFECTS_H
 
+#include "analysis/facts/ir_facts.h"
 #include "vx/effects/effects.h"
 
 #include <cstdint>
@@ -32,21 +33,11 @@ using IrValueId = uint32_t; // igual que la definicion en ssa_ir.h
 namespace vx {
 namespace fx {
 
-/// Mapa def-use de una funcion, para clasificar punteros a AbstractLoc.  Se
-/// construye una vez por funcion y se reusa (barato: O(instrucciones)).
-struct IrDefMap {
-    std::vector<const ir::IrInstr *> def_of;    ///< value id -> instr que lo define.
-    std::vector<int32_t>             param_of;  ///< value id -> indice de parametro, -1 si no.
-    bool built = false;
-};
-
-/// Construye el mapa def-use de @p fn.
-IrDefMap build_def_map(const ir::IrFunction &fn);
-
-/// Clasifica el puntero @p ptr (value id) a una localizacion abstracta,
-/// trazando su definicion (ALLOCA->Stack, alloc->Heap, static->Global,
-/// parametro->ArgDerived, GEP/cast->recurse).  Unknown si no se puede.
-AbstractLoc classify_ptr(const ir::IrFunction &fn, const IrDefMap &defs,
+/// Clasifica el puntero @p ptr (value id) a una localizacion abstracta a partir
+/// de los HECHOS (def-use) de la funcion: ALLOCA->Stack, alloc->Heap,
+/// static->Global, parametro->ArgDerived, GEP/cast->recurse.  Unknown si no se
+/// puede.  Consume @c analysis::IrFacts (NO reconstruye el def-use).
+AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &facts,
                          ir::IrValueId ptr);
 
 /// Registro de LAGUNAS de precision: hace VISIBLE donde el motor tuvo que subir
@@ -71,7 +62,7 @@ struct EffectGaps {
 /// lifteado no es especial: llega como ADD/LOAD/STORE/... normales.  INLINE_ASM/
 /// ASM_MICRO (residuo opaco) se analizan aparte con tags.
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
-                                      const IrDefMap &defs,
+                                      const analysis::IrFacts &facts,
                                       const ir::IrInstr &ins);
 
 /// Efecto LOCAL agregado de una funcion completa (fold de sus bloques).  Es el

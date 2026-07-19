@@ -12,6 +12,8 @@
  *        combinadores seq/join (leyes: neutro, absorbente, conmutatividad de
  *        join, gen/kill de memoria y registros), y contratos declarativos.
  */
+#include "analysis/facts/ir_facts.h"
+#include "analysis/manager/analysis_manager.h"
 #include "vx/effects/effect_analysis.h"
 #include "vx/effects/effects.h"
 #include "vx/effects/ir_effects.h"
@@ -251,7 +253,7 @@ int main() {
         add_instr(fn, b0, ir::IrOp::ALLOCA, slot, {});
         add_instr(fn, b0, ir::IrOp::CONST, v, {});
         add_instr(fn, b0, ir::IrOp::STORE, ir::IR_NO_VALUE, {v, slot});
-        IrDefMap defs = build_def_map(fn);
+        analysis::IrFacts defs = analysis::build_ir_facts(fn);
         // efecto de la STORE aislada.
         SemanticEffects st =
             effects_of_instr(fn, defs, fn.blocks[b0].instrs.back()).effects;
@@ -297,7 +299,7 @@ int main() {
         ir::IrValueId s2 = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::ALLOCA, s1, {});
         add_instr(fn, b0, ir::IrOp::ALLOCA, s2, {});
-        IrDefMap defs = build_def_map(fn);
+        analysis::IrFacts defs = analysis::build_ir_facts(fn);
         AbstractLoc l1 = classify_ptr(fn, defs, s1);
         AbstractLoc l2 = classify_ptr(fn, defs, s2);
         check(l1.kind == AbstractLoc::Kind::Stack &&
@@ -313,7 +315,7 @@ int main() {
         uint32_t b0 = fn.new_block("entry");
         ir::IrValueId v = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::LOAD, v, {p});
-        IrDefMap defs = build_def_map(fn);
+        analysis::IrFacts defs = analysis::build_ir_facts(fn);
         AbstractLoc lp = classify_ptr(fn, defs, p);
         check(lp.kind == AbstractLoc::Kind::ArgDerived && lp.id == 0,
               "IR: parametro puntero -> ArgDerived(0)");
@@ -423,7 +425,53 @@ int main() {
               "gaps: FFI es fundamental, UnmodeledOp es cobertura");
     }
 
-    std::printf("=== effects Fase 0+1+2: %d checks, %d fallos ===\n", g_checks,
+    // =====================================================================
+    // IRFacts: hechos objetivos + integracion con el AnalysisManager.
+    // =====================================================================
+    {
+        ir::IrFunction fn;
+        fn.name = "facts_fn";
+        ir::IrValueId p = fn.new_value(ir::IrType::I64);
+        fn.params.push_back(p);
+        uint32_t b0 = fn.new_block("entry");
+        ir::IrValueId v = fn.new_value(ir::IrType::I64);
+        add_instr(fn, b0, ir::IrOp::LOAD, v, {p});
+        ir::IrInstr call{};
+        call.op = ir::IrOp::CALL;
+        call.func_name = "otra";
+        call.dst = ir::IR_NO_VALUE;
+        fn.append(b0, std::move(call));
+        add_instr(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {v});
+
+        analysis::IrFacts f = analysis::build_ir_facts(fn);
+        check(f.param_index(p) == 0, "IRFacts: param 0");
+        check(f.def(v) != nullptr && f.def(v)->op == ir::IrOp::LOAD,
+              "IRFacts: def-use del LOAD");
+        check(f.static_callees.size() == 1 && f.static_callees[0] == "otra",
+              "IRFacts: call-site estatico");
+        check(!f.has_dynamic_call, "IRFacts: sin llamada dinamica");
+        check(f.block_count == 1, "IRFacts: 1 bloque");
+
+        // Integracion con el manager: IRFacts como analisis registrado.
+        analysis::AnalysisManager am;
+        int builds = 0;
+        auto factory = [&]() {
+            ++builds;
+            return analysis::build_ir_facts(fn);
+        };
+        const analysis::IrFacts &f1 =
+            am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
+                fn.name, factory);
+        am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(fn.name,
+                                                                        factory);
+        check(builds == 1 && f1.block_count == 1,
+              "IRFacts: manager computa una vez (lazy + cache)");
+        am.invalidate<analysis::IRFactsAnalysis>(fn.name);
+        check(!am.cached<analysis::IRFactsAnalysis>(fn.name),
+              "IRFacts: invalidado del manager");
+    }
+
+    std::printf("=== effects+facts: %d checks, %d fallos ===\n", g_checks,
                 g_fails);
     return g_fails == 0 ? 0 : 1;
 }
