@@ -3507,9 +3507,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             } else if (c == "rbp") {
                                 save_rbp = true;
                             } else if (c == "rsp") {
-                                vreg_dbg(fn.name.c_str(),
-                                         "inline-asm(clobber-rsp)");
-                                return false;
+                                // inc2b.3: un asm que reasigna rsp (stack switch,
+                                // corrutinas) SOLO es seguro en una funcion
+                                // @Naked -- sin prologo/epilogo/spills que un
+                                // rsp corrupto rompa; el usuario es dueno de la
+                                // pila.  En una funcion NORMAL el epilogue usa
+                                // rsp -> fallback al interp (seguridad).
+                                if (!fn.is_naked) {
+                                    vreg_dbg(fn.name.c_str(),
+                                             "inline-asm(clobber-rsp)");
+                                    return false;
+                                }
+                                // @Naked: emitir el asm verbatim (el rsp lo
+                                // maneja el propio asm).  No se registra el
+                                // clobber (rsp no es asignable por el RA).
                             }
                         }
                     }

@@ -2116,6 +2116,7 @@ r0_case("sc208", "composicion de structs con RAII recursivo + acceso campo struc
 fails_case("scs209", "struct con closure capturador almacenado en campo (escape no soportado)", "209_struct_closure_store_err.vx", "se almacena en un campo que le sobrevive", line=3654)
 fails_case("asmpin", "asm inc2b.3: pin de VALOR a rsp/rbp rechazado (guia al cuerpo)", "asm_pin_rsp_err.vx", "VXA008", line=3654)
 r0_case("asmstk", "asm inc2b.3: manipular la pila desde el asm (mov rsp/push/pop)", "asm_stack_manip.vx", 42, line=3654)
+r0_case("asmnss", "asm inc2b.3: stack switch @Naked compilado nativo por el JIT", "asm_naked_stack_switch.vx", 42, line=3654)
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)

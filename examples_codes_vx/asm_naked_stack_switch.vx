@@ -1,0 +1,28 @@
+// ASA inc2b.3: STACK SWITCH real desde asm en una funcion @Naked, compilado
+// NATIVO por el JIT (ya no cae al interprete).
+//
+// Una funcion @Naked no tiene prologo/epilogo/spills, asi que el usuario es
+// dueno de la pila: el asm puede REASIGNAR rsp (guardar la pila real, cambiar a
+// otra, restaurar) -- el primitivo de las corrutinas/fibras escritas en asm.
+// Antes, un `mov rsp, X` con la inferencia activa hacia que el JIT cayera al
+// interprete "por seguridad del marco"; ahora, al ser @Naked (sin marco), el
+// JIT lo emite verbatim.  En una funcion NORMAL sigue cayendo al interp (ahi el
+// epilogue SI usa rsp -> corromperlo seria un bug).
+//
+//     vm --vx asm_naked_stack_switch.vx -o s && vm --run s.velb
+// @expect 42
+@Naked u64 scratch_stack() {
+    asm volatile {
+        mov rax, rsp         // guardar la pila real (rax = caller-saved)
+        sub rsp, 64          // reservar area scratch (bajar rsp)
+        mov qword [rsp], 42  // usar la pila conmutada
+        mov rcx, [rsp]       // rcx = 42
+        mov rsp, rax         // RESTAURAR rsp (stack switch de vuelta)
+        mov rax, rcx         // valor de retorno
+        ret
+    }
+}
+
+u64 main() {
+    return scratch_stack();   // 42
+}
