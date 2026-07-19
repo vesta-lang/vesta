@@ -45,6 +45,7 @@ struct StructuralSummary {
 struct InterprocSummary {
     int64_t alloc_total = -1;      ///< sitios de alloc alcanzables (-1 = desconocido).
     int64_t stack_peak_total = -1; ///< profundidad de pila peor caso.
+    bool    has_calls = false;          ///< hace alguna llamada (estatica o dinamica).
     bool    reaches_dynamic_call = false;
 };
 

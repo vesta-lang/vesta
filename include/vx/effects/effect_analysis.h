@@ -30,6 +30,7 @@
 #define VX_EFFECTS_EFFECT_ANALYSIS_H
 
 #include "vx/effects/effects.h"
+#include "vx/effects/ir_effects.h"
 #include "vx/effects/summary.h"
 
 #include <cstdint>
@@ -66,6 +67,10 @@ public:
     /// Resumen del modulo entero (mapa symbol -> summary).
     const ModuleSummary &module_summary(const ir::IrModule &mod);
 
+    /// Lagunas de precision acumuladas (que ops faltan por modelar, donde la
+    /// opacidad es fundamental).  Se puebla al construir los summaries.
+    const EffectGaps &gaps() const { return gaps_; }
+
     // ---- Invalidacion ----
     /// Un nodo muto: borra su cache local + marca su funcion sucia.
     void invalidate_node(const ir::IrFunction &fn, const ir::IrInstr &ins);
@@ -82,6 +87,7 @@ private:
     std::unordered_map<std::string, FunctionSummary>       summary_cache_;
     std::unordered_map<std::string, bool>                  dirty_; // fn -> sucio
     ModuleSummary                                          module_cache_;
+    EffectGaps                                             gaps_;
     bool module_dirty_ = true;
 
     FunctionSummary compute_summary(const ir::IrModule &mod,

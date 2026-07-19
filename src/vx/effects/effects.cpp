@@ -28,9 +28,9 @@ bool may_alias(const AbstractLoc &a, const AbstractLoc &b) {
     if (a.kind == K::Unknown || b.kind == K::Unknown) return true;
     // Clases distintas son disjuntas (stack != heap != global != arg).
     if (a.kind != b.kind) return false;
-    // Misma clase: mismo id = alias.  id==0 = "generico/desconocido" -> aliasa
-    // cualquier otro de la clase (conservador).
-    if (a.id == 0 || b.id == 0) return true;
+    // Misma clase: el id GENERICO aliasa cualquier sitio de la clase; si no,
+    // dos sitios concretos aliasan solo si son el mismo.
+    if (a.id == LOC_GENERIC || b.id == LOC_GENERIC) return true;
     return a.id == b.id;
 }
 
@@ -140,6 +140,34 @@ bool SemanticEffects::operator==(const SemanticEffects &o) const {
 }
 
 SemanticEffects SemanticEffects::none() { return SemanticEffects{}; }
+
+SemanticEffects SemanticEffects::top() {
+    SemanticEffects e;
+    // Memoria: puede leer y escribir cualquier cosa.
+    e.mem.reads.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
+    e.mem.writes.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
+    // Control: transferencia desconocida (una llamada opaca).
+    e.control.kind = ControlKind::Call;
+    e.control.callee_ref = -1;
+    // Barrera de memoria maxima (puede sincronizar de cualquier forma).
+    e.atomic.order = MemOrder::SeqCst;
+    e.atomic.is_fence = true;
+    // TODOS los efectos posibles (cubrir cada campo -- robusto).
+    e.may_trap = true;
+    e.may_throw = true;
+    e.may_allocate = true;
+    e.may_block = true;
+    e.may_io = true;
+    // No-determinismo total.
+    e.determinism.add(DeterminismTag::ReadsClock);
+    e.determinism.add(DeterminismTag::ReadsRandom);
+    e.determinism.add(DeterminismTag::ReadsPID);
+    e.determinism.add(DeterminismTag::ReadsEnvironment);
+    e.determinism.add(DeterminismTag::ExternalObservable);
+    // Cualquier capacidad de maquina.
+    e.tags.add(CapabilityTag::MachineState);
+    return e;
+}
 
 bool MachineEffects::operator==(const MachineEffects &o) const {
     return regs_read == o.regs_read && regs_written == o.regs_written &&

@@ -81,6 +81,7 @@ add_library(vx_lib STATIC
     # optimizer, scheduler, --analyze, diagramas y LSP.
     effects/effects.cpp
     effects/contracts.cpp
+    effects/ir_effects.cpp
     effects/effect_analysis.cpp
     asm/asm_effects.cpp
     # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/

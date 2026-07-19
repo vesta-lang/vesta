@@ -39,17 +39,21 @@ namespace fx {
 // BOTTOM explicitos: Bottom <= {Stack,Heap,Global,ArgDerived}
 // <= Unknown.  Bottom = neutro del join; Unknown = absorbente.
 // ===========================================================================
+/// Id que representa "toda la clase" (generico): aliasa cualquier id de su
+/// clase.  Reservado para poder usar el id 0 como un sitio concreto legitimo.
+static constexpr uint32_t LOC_GENERIC = 0xFFFFFFFFu;
+
 struct AbstractLoc {
     enum class Kind : uint8_t {
         None,       ///< BOTTOM: no localizacion (neutro del join).
         Stack,      ///< marco de pila local (slots ALLOCA).
-        Heap,       ///< heap; @c id = alloc-site (0 = heap generico).
+        Heap,       ///< heap; @c id = alloc-site (LOC_GENERIC = heap generico).
         Global,     ///< dato estatico/global; @c id = symbol/slot id.
         ArgDerived, ///< memoria alcanzable desde el parametro @c id (points-to grueso).
         Unknown     ///< TOP: puede aliasar cualquier cosa.
     };
     Kind     kind = Kind::None;
-    uint32_t id = 0;
+    uint32_t id = 0; ///< sitio concreto dentro de la clase; LOC_GENERIC = toda la clase.
 
     bool operator==(const AbstractLoc &o) const {
         return kind == o.kind && id == o.id;
@@ -210,6 +214,12 @@ struct SemanticEffects {
     bool operator==(const SemanticEffects &o) const;
     /// El efecto NEUTRO (bottom): no hace nada observable.
     static SemanticEffects none();
+    /// El efecto MAXIMO (top): puede hacer CUALQUIER cosa.  Es la respuesta
+    /// ROBUSTA y COMPLETA ante lo desconocido (callee dinamico/externo/opaco):
+    /// enciende TODOS los efectos posibles, asi ningun consumidor puede asumir
+    /// de menos.  Nunca causa una optimizacion incorrecta (solo puede impedir
+    /// una valida).  Debe cubrir CADA campo -- olvidar uno seria un error latente.
+    static SemanticEffects top();
 };
 
 // ===========================================================================
@@ -242,10 +252,32 @@ enum class AnalysisCompleteness : uint8_t {
     Conservative, ///< sobre-aproximado pero acotado.
     Unknown       ///< no se pudo inferir (caja negra).
 };
+/// Por que el analisis no es Complete.  Distingue imprecision FUNDAMENTAL (no se
+/// puede saber mas: FFI, dispatch dinamico, indirecto) de LAGUNA DEL MOTOR
+/// (@c UnmodeledOp/@c UnknownMnemonic: deberiamos modelarlo para ganar precision).
+/// Esta distincion es lo que permite reportar "que falta por modelar" (cobertura)
+/// vs "donde perdemos optimizacion por opacidad real".
 enum class UnknownReason : uint8_t {
-    None, UnknownMnemonic, UnknownIntrinsic, UnknownEncoding, UserBarrier,
-    UnknownCall, UnknownRuntime, UnknownFFI, Indirect
+    None,
+    UnmodeledOp,      ///< LAGUNA: IrOp que el motor aun no clasifica (mejorable).
+    UnknownMnemonic,  ///< LAGUNA: mnemonico de asm opaco no tabulado (mejorable).
+    UnknownIntrinsic, ///< LAGUNA: intrinsic no modelado (mejorable).
+    UnknownEncoding,  ///< LAGUNA: forma no reconocida (mejorable).
+    UserBarrier,      ///< FUNDAMENTAL: barrera declarada por el usuario.
+    DynamicDispatch,  ///< FUNDAMENTAL: CALLVIRT/CALLM/CALLITF/CALLCLOSURE.
+    Indirect,         ///< FUNDAMENTAL: llamada/salto indirecto.
+    UnknownFFI,       ///< FUNDAMENTAL: CALLN a nativo (caja negra).
+    ExternalCallee,   ///< FUNDAMENTAL: callee fuera del modulo analizado.
+    UnknownRuntime    ///< FUNDAMENTAL: helper de runtime opaco.
 };
+
+/// ¿El motivo es una LAGUNA del motor (mejorable modelandolo) o imprecision
+/// FUNDAMENTAL?  Lo usa el reporte de cobertura para separar ambos.
+inline bool reason_is_gap(UnknownReason r) {
+    return r == UnknownReason::UnmodeledOp || r == UnknownReason::UnknownMnemonic ||
+           r == UnknownReason::UnknownIntrinsic ||
+           r == UnknownReason::UnknownEncoding;
+}
 
 struct EffectAnalysisResult {
     SemanticEffects      effects;

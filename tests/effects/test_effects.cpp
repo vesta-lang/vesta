@@ -12,10 +12,15 @@
  *        combinadores seq/join (leyes: neutro, absorbente, conmutatividad de
  *        join, gen/kill de memoria y registros), y contratos declarativos.
  */
+#include "vx/effects/effect_analysis.h"
 #include "vx/effects/effects.h"
+#include "vx/effects/ir_effects.h"
 #include "vx/effects/summary.h"
 
+#include "ir/ssa_ir.h"
+
 #include <cstdio>
+#include <string>
 
 using namespace vx::fx;
 
@@ -42,7 +47,8 @@ int main() {
     check(!may_alias(L(K::Stack), L(K::Heap, 1)), "clases distintas disjuntas");
     check(may_alias(L(K::Heap, 3), L(K::Heap, 3)), "mismo heap id aliasa");
     check(!may_alias(L(K::Heap, 3), L(K::Heap, 4)), "heap ids distintos no aliasan");
-    check(may_alias(L(K::Heap, 0), L(K::Heap, 4)), "heap id 0 (generico) aliasa");
+    check(!may_alias(L(K::Heap, 0), L(K::Heap, 4)), "heap id 0 es sitio concreto (no aliasa 4)");
+    check(may_alias(L(K::Heap, LOC_GENERIC), L(K::Heap, 4)), "heap generico aliasa cualquiera");
     check(may_alias(L(K::Global, 9), L(K::Global, 9)), "mismo global aliasa");
 
     // ---- LocSet: union, absorbente, gen/kill ----
@@ -204,6 +210,220 @@ int main() {
         check(!any, "completeness Unknown -> no pure");
     }
 
-    std::printf("=== effects Fase 0: %d checks, %d fallos ===\n", g_checks, g_fails);
+    // =====================================================================
+    // Fase 1: motor IR -> SemanticEffects (construimos IrFunctions a mano).
+    // =====================================================================
+    auto add_instr = [](ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+                        ir::IrValueId dst, std::vector<ir::IrValueId> ops)
+        -> ir::IrInstr & {
+        ir::IrInstr in{};
+        in.op = op;
+        in.dst = dst;
+        in.operands = std::move(ops);
+        fn.append(blk, std::move(in));
+        return fn.blocks[blk].instrs.back();
+    };
+
+    {
+        // Funcion PURA: const + add + ret.
+        ir::IrFunction fn;
+        fn.name = "puro";
+        uint32_t b0 = fn.new_block("entry");
+        ir::IrValueId a = fn.new_value(ir::IrType::I64);
+        ir::IrValueId c = fn.new_value(ir::IrType::I64);
+        add_instr(fn, b0, ir::IrOp::CONST, a, {});
+        add_instr(fn, b0, ir::IrOp::ADD, c, {a, a});
+        add_instr(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {c});
+        EffectAnalysisResult r = function_local_effects(fn);
+        check(!r.effects.mem.writes_memory() && !r.effects.may_throw &&
+                  !r.effects.may_allocate &&
+                  r.completeness == AnalysisCompleteness::Complete,
+              "IR: const+add+ret es puro");
+        check(r.effects.control.kind == ControlKind::Return, "IR: control Return");
+    }
+    {
+        // STORE a un ALLOCA -> escribe Stack.
+        ir::IrFunction fn;
+        fn.name = "st";
+        uint32_t b0 = fn.new_block("entry");
+        ir::IrValueId slot = fn.new_value(ir::IrType::I64);
+        ir::IrValueId v = fn.new_value(ir::IrType::I64);
+        add_instr(fn, b0, ir::IrOp::ALLOCA, slot, {});
+        add_instr(fn, b0, ir::IrOp::CONST, v, {});
+        add_instr(fn, b0, ir::IrOp::STORE, ir::IR_NO_VALUE, {v, slot});
+        IrDefMap defs = build_def_map(fn);
+        // efecto de la STORE aislada.
+        SemanticEffects st =
+            effects_of_instr(fn, defs, fn.blocks[b0].instrs.back()).effects;
+        check(st.mem.writes.locs.size() == 1 &&
+                  st.mem.writes.locs[0].kind == AbstractLoc::Kind::Stack,
+              "IR: STORE a ALLOCA escribe Stack");
+        // La funcion NO escribe memoria OBSERVABLE fuera del marco: el Stack es
+        // local, pero el modelo lo reporta como write de Stack (correcto: el
+        // filtrado 'stack local no escapa' es tarea de un contrato/opt superior).
+    }
+    {
+        // GC_ALLOC -> may_allocate; THROW -> may_throw; CALLN -> conservative.
+        ir::IrFunction fn;
+        fn.name = "alloc";
+        uint32_t b0 = fn.new_block("entry");
+        ir::IrValueId o = fn.new_value(ir::IrType::I64);
+        add_instr(fn, b0, ir::IrOp::GC_ALLOC, o, {});
+        EffectAnalysisResult r = function_local_effects(fn);
+        check(r.effects.may_allocate, "IR: GC_ALLOC -> may_allocate");
+
+        ir::IrFunction ft;
+        ft.name = "thr";
+        uint32_t bt = ft.new_block("entry");
+        add_instr(ft, bt, ir::IrOp::THROW, ir::IR_NO_VALUE, {});
+        check(function_local_effects(ft).effects.may_throw,
+              "IR: THROW -> may_throw");
+
+        ir::IrFunction fc;
+        fc.name = "ffi";
+        uint32_t bc = fc.new_block("entry");
+        add_instr(fc, bc, ir::IrOp::CALLN, ir::IR_NO_VALUE, {});
+        EffectAnalysisResult rc = function_local_effects(fc);
+        check(rc.effects.may_io &&
+                  rc.completeness == AnalysisCompleteness::Conservative,
+              "IR: CALLN -> may_io + Conservative");
+    }
+    {
+        // Dos ALLOCAs distintos NO aliasan (sites distintos).
+        ir::IrFunction fn;
+        fn.name = "twoslots";
+        uint32_t b0 = fn.new_block("entry");
+        ir::IrValueId s1 = fn.new_value(ir::IrType::I64);
+        ir::IrValueId s2 = fn.new_value(ir::IrType::I64);
+        add_instr(fn, b0, ir::IrOp::ALLOCA, s1, {});
+        add_instr(fn, b0, ir::IrOp::ALLOCA, s2, {});
+        IrDefMap defs = build_def_map(fn);
+        AbstractLoc l1 = classify_ptr(fn, defs, s1);
+        AbstractLoc l2 = classify_ptr(fn, defs, s2);
+        check(l1.kind == AbstractLoc::Kind::Stack &&
+                  l2.kind == AbstractLoc::Kind::Stack && !may_alias(l1, l2),
+              "IR: dos ALLOCA distintos no aliasan");
+    }
+    {
+        // Parametro puntero -> ArgDerived.
+        ir::IrFunction fn;
+        fn.name = "argptr";
+        ir::IrValueId p = fn.new_value(ir::IrType::I64);
+        fn.params.push_back(p);
+        uint32_t b0 = fn.new_block("entry");
+        ir::IrValueId v = fn.new_value(ir::IrType::I64);
+        add_instr(fn, b0, ir::IrOp::LOAD, v, {p});
+        IrDefMap defs = build_def_map(fn);
+        AbstractLoc lp = classify_ptr(fn, defs, p);
+        check(lp.kind == AbstractLoc::Kind::ArgDerived && lp.id == 0,
+              "IR: parametro puntero -> ArgDerived(0)");
+    }
+
+    // =====================================================================
+    // Fase 2: punto-fijo del callgraph (cierre interprocedural) + contratos.
+    // =====================================================================
+    {
+        // callee aloca; caller llama a callee -> el cierre de caller may_allocate.
+        ir::IrModule mod;
+        {
+            ir::IrFunction callee;
+            callee.name = "callee";
+            uint32_t b = callee.new_block("entry");
+            ir::IrValueId o = callee.new_value(ir::IrType::I64);
+            add_instr(callee, b, ir::IrOp::GC_ALLOC, o, {});
+            add_instr(callee, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
+            mod.functions.push_back(std::move(callee));
+        }
+        {
+            ir::IrFunction caller;
+            caller.name = "caller";
+            uint32_t b = caller.new_block("entry");
+            ir::IrInstr call{};
+            call.op = ir::IrOp::CALL;
+            call.func_name = "callee";
+            call.dst = ir::IR_NO_VALUE;
+            caller.append(b, std::move(call));
+            add_instr(caller, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
+            mod.functions.push_back(std::move(caller));
+        }
+        EffectAnalysis ea;
+        const ModuleSummary &ms = ea.module_summary(mod);
+        const FunctionSummary &caller = ms.fns.at("caller");
+        const FunctionSummary &callee = ms.fns.at("callee");
+        check(callee.semantic.local.may_allocate, "fixpoint: callee local aloca");
+        check(!caller.semantic.local.may_allocate,
+              "fixpoint: caller local NO aloca");
+        check(caller.semantic.closure.may_allocate,
+              "fixpoint: caller closure aloca (via callee)");
+        // Contratos derivados del cierre.
+        auto cc = derive_contracts(caller);
+        bool heapfree = true, leaf = false;
+        for (const auto &c : cc) {
+            if (std::string(c.name) == "heap_free") heapfree = c.holds;
+            if (std::string(c.name) == "leaf") leaf = c.holds;
+        }
+        check(!heapfree, "fixpoint: caller NO es heap_free (aloca transitivo)");
+        check(!leaf, "fixpoint: caller NO es leaf (llama)");
+        // callee es leaf (no llama).
+        bool callee_leaf = false;
+        for (const auto &c : derive_contracts(callee))
+            if (std::string(c.name) == "leaf") callee_leaf = c.holds;
+        check(callee_leaf, "fixpoint: callee es leaf");
+    }
+    {
+        // Cadena A->B->C con C que lanza -> A closure may_throw.
+        ir::IrModule mod;
+        const char *names[3] = {"A", "B", "C"};
+        for (int i = 0; i < 3; ++i) {
+            ir::IrFunction f;
+            f.name = names[i];
+            uint32_t b = f.new_block("entry");
+            if (i < 2) {
+                ir::IrInstr call{};
+                call.op = ir::IrOp::CALL;
+                call.func_name = names[i + 1];
+                call.dst = ir::IR_NO_VALUE;
+                f.append(b, std::move(call));
+            } else {
+                add_instr(f, b, ir::IrOp::THROW, ir::IR_NO_VALUE, {});
+            }
+            add_instr(f, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
+            mod.functions.push_back(std::move(f));
+        }
+        EffectAnalysis ea;
+        const ModuleSummary &ms = ea.module_summary(mod);
+        check(ms.fns.at("A").semantic.closure.may_throw,
+              "fixpoint transitivo: A->B->C(throw) -> A closure may_throw");
+        bool a_nothrow = true;
+        for (const auto &c : derive_contracts(ms.fns.at("A")))
+            if (std::string(c.name) == "nothrow") a_nothrow = c.holds;
+        check(!a_nothrow, "fixpoint: A NO es nothrow (throw transitivo)");
+    }
+
+    {
+        // Observabilidad de lagunas: un CALLN registra una laguna FUNDAMENTAL
+        // (FFI), no una de cobertura.
+        ir::IrModule mod;
+        ir::IrFunction f;
+        f.name = "ffi_caller";
+        uint32_t b = f.new_block("entry");
+        add_instr(f, b, ir::IrOp::CALLN, ir::IR_NO_VALUE, {});
+        add_instr(f, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
+        mod.functions.push_back(std::move(f));
+        EffectAnalysis ea;
+        ea.module_summary(mod);
+        const EffectGaps &g = ea.gaps();
+        check(!g.empty(), "gaps: CALLN genera una laguna");
+        check(g.by_reason.count(UnknownReason::UnknownFFI) == 1,
+              "gaps: la laguna del CALLN es UnknownFFI (fundamental)");
+        check(g.unmodeled_ops.empty(),
+              "gaps: FFI NO es laguna de cobertura (no unmodeled_op)");
+        check(!reason_is_gap(UnknownReason::UnknownFFI) &&
+                  reason_is_gap(UnknownReason::UnmodeledOp),
+              "gaps: FFI es fundamental, UnmodeledOp es cobertura");
+    }
+
+    std::printf("=== effects Fase 0+1+2: %d checks, %d fallos ===\n", g_checks,
+                g_fails);
     return g_fails == 0 ? 0 : 1;
 }

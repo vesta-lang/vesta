@@ -38,10 +38,9 @@ static bool p_readonly(const FunctionSummary &s) {
            !s.semantic.closure.mem.writes_memory();
 }
 
-/// leaf: no llama a nadie (control local sin Call).
+/// leaf: no llama a nadie (ni estatica ni dinamicamente).
 static bool p_leaf(const FunctionSummary &s) {
-    return s.semantic.local.control.kind != ControlKind::Call &&
-           !s.interproc.reaches_dynamic_call;
+    return !s.interproc.has_calls;
 }
 
 /// nothrow: no lanza en el cierre.
