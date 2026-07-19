@@ -308,6 +308,11 @@ bool lift_x86(
         ir::IrValueId a = 0, b = 0; // valores FULL 64b capturados en el cmp/test
         int width = 64;
         bool a_high = false, b_high = false;
+        // Carry-flag (CF) modelado APARTE, para adc/sbb (aritmetica multi-palabra
+        // 64-bit).  has_cf=true si @c cf (SSA 0/1) es el CF que dejo un add/sub/
+        // adc/sbb de 64 bits inmediatamente antes en la cadena.
+        bool has_cf = false;
+        ir::IrValueId cf = 0;
     };
     FlagsInfo flags;
 
@@ -316,7 +321,8 @@ bool lift_x86(
     // magnitudes/carry no las modelamos -> flags_cond hace bail en esos cc.)
     auto sets_result_flags = [](const std::string &m) -> bool {
         return m == "add" || m == "sub" || m == "and" || m == "or" ||
-               m == "xor" || m == "inc" || m == "dec" || m == "neg";
+               m == "xor" || m == "inc" || m == "dec" || m == "neg" ||
+               m == "adc" || m == "sbb";
     };
     // Parte ALTA de un producto 64x64->128 SIN SIGNO, via descomposicion en
     // mitades de 32 bits (multiplicacion escolar).  Solo ops existentes (MUL/AND/
@@ -366,6 +372,7 @@ bool lift_x86(
         flags.width = w;
         flags.a_high = false;
         flags.b_high = false;
+        flags.has_cf = false; // el CF lo fija el emisor (add/sub) si aplica
     };
 
     // ¿el mnemonico PRESERVA las flags? (no las escribe).  cmp/test las definen
@@ -643,9 +650,57 @@ bool lift_x86(
                 flags.width = rw;
                 flags.a_high = rh;
                 flags.b_high = sub_bh;
+                flags.has_cf = false;
+                // CF (borrow) de un sub 64-bit -> sbb posterior: cf = (a <u b).
+                if (rw == 64) {
+                    flags.has_cf = true;
+                    flags.cf = BIN(ir::IrOp::CMP_ULT, sub_a, sub_b);
+                }
             } else if (!is_shift) {
                 flag_from_result(res, rw);
+                // CF (carry-out) de un add 64-bit -> adc posterior: hubo carry si
+                // el resultado (envuelto) es menor que un sumando (unsigned).
+                if (bop == ir::IrOp::ADD && rw == 64) {
+                    flags.has_cf = true;
+                    flags.cf = BIN(ir::IrOp::CMP_ULT, res, a);
+                }
             }
+        } else if ((m == "adc" || m == "sbb") && ops.size() == 2) {
+            // Aritmetica multi-palabra 64-bit: adc rd,rs = rd + rs + CF;
+            // sbb rd,rs = rd - rs - CF.  Consume el CF que dejo el add/sub/adc/sbb
+            // anterior (flags.cf) y produce el CF nuevo (cadena de dos pasos).
+            // Solo 64-bit (donde CF es exactamente el acarreo del bit 63).
+            if (!flags.valid || !flags.has_cf) return false; // sin CF modelado
+            std::string rc;
+            bool rh = false;
+            const int rw = reg_info(ops[0], rc, rh);
+            if (rw != 64) return false;
+            const ir::IrValueId a = read_reg(rc, 64, rh, false, ok);
+            if (!ok) return false;
+            const ir::IrValueId b = read_op(ops[1], 64, false, ok);
+            if (!ok) return false;
+            const ir::IrValueId cin = flags.cf;
+            ir::IrValueId res, cout;
+            if (m == "adc") {
+                const ir::IrValueId t1 = BIN(ir::IrOp::ADD, a, b);
+                const ir::IrValueId c1 = BIN(ir::IrOp::CMP_ULT, t1, a);
+                const ir::IrValueId t2 = BIN(ir::IrOp::ADD, t1, cin);
+                const ir::IrValueId c2 = BIN(ir::IrOp::CMP_ULT, t2, t1);
+                res = t2;
+                cout = BIN(ir::IrOp::OR, c1, c2);
+            } else { // sbb
+                const ir::IrValueId t1 = BIN(ir::IrOp::SUB, a, b);
+                const ir::IrValueId b1 = BIN(ir::IrOp::CMP_ULT, a, b);
+                const ir::IrValueId t2 = BIN(ir::IrOp::SUB, t1, cin);
+                const ir::IrValueId b2 = BIN(ir::IrOp::CMP_ULT, t1, cin);
+                res = t2;
+                cout = BIN(ir::IrOp::OR, b1, b2);
+            }
+            write_reg(rc, 64, rh, res, ok);
+            if (!ok) return false;
+            flag_from_result(res, 64); // ZF del resultado
+            flags.has_cf = true;       // + CF nuevo para el siguiente adc/sbb
+            flags.cf = cout;
         } else if ((m == "neg" || m == "not") && ops.size() == 1) {
             std::string rc;
             bool rh = false;

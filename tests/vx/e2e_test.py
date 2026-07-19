@@ -2153,6 +2153,7 @@ modes3_case("asmsubjcc", "asm flags-as-SSA: sub fija flags como cmp -> jl/jb tra
 modes3_case("asmmul", "asm lift de mul/imul 1-op (RDX:RAX 128b): RAX=mul, RDX=umulhi/smulhi (sin op IR nueva) en interp/jit/aot", "asm_mul.vx", 42, line=3654)
 modes3_case("asmimul3xchg", "asm lift de imul rd,rs,imm (3-op) + xchg r,r (swap del register-file) en interp/jit/aot", "asm_imul3_xchg.vx", 42, line=3654)
 modes3_case("asmcdqe", "asm lift de cdqe/cwde/cbw (sign-extend del acumulador, NO no-op) en interp/jit/aot", "asm_cdqe.vx", 42, line=3654)
+modes3_case("asmadcsbb", "asm flags-as-SSA con CF: adc/sbb (aritmetica 128b bignum) en interp/jit/aot", "asm_adc_sbb.vx", 42, line=3654)
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)
