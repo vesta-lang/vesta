@@ -374,7 +374,7 @@ bool lift_x86(
         if (m == "mov" || m == "movq" || m == "lea" || m == "movzx" ||
             m == "movsx" || m == "movsxd" || m == "nop" || m == "bswap" ||
             m == "xchg" || m == "cqo" || m == "cqto" || m == "cdq" ||
-            m == "cdqe")
+            m == "cdqe" || m == "cwde" || m == "cbw")
             return true;
         return (m.size() >= 3 && m.compare(0, 3, "set") == 0) ||
                (m.size() >= 4 && m.compare(0, 4, "cmov") == 0);
@@ -734,10 +734,24 @@ bool lift_x86(
                 BIN(m == "rol" ? ir::IrOp::ROTL : ir::IrOp::ROTR, a, cnt);
             write_reg(rc, 64, rh, res, ok);
             if (!ok) return false;
-        } else if (m == "cqo" || m == "cqto" || m == "cdq" || m == "cdqe") {
-            // Extension del dividendo a rdx:rax (sign/zero) previa a idiv/div.
-            // El patron div/idiv de abajo la ABSORBE (la division 64/64 modela
-            // el dividendo alto): aqui es un no-op.
+        } else if (m == "cqo" || m == "cqto" || m == "cdq") {
+            // Extension del DIVIDENDO a rdx:rax (edx:eax) previa a idiv/div.  El
+            // patron div/idiv de abajo la ABSORBE (la division 64/64 modela el
+            // dividendo alto): aqui es un no-op.  OJO: cdqe/cwde/cbw NO van aqui
+            // -- esos EXTIENDEN EL ACUMULADOR (eax->rax, ax->eax, al->ax), no
+            // preparan rdx; tienen su propio caso abajo.
+        } else if (m == "cdqe" || m == "cwde" || m == "cbw") {
+            // Extension con signo del ACUMULADOR a su ancho mayor: cdqe eax->rax,
+            // cwde ax->eax, cbw al->ax.  rax = sext(rax_low_src, src_bits).
+            const int src_bits = (m == "cdqe") ? 32 : (m == "cwde") ? 16 : 8;
+            const int dst_bits = (m == "cdqe") ? 64 : (m == "cwde") ? 32 : 16;
+            const ir::IrValueId cur_rax = get_full("rax", ok);
+            if (!ok) return false;
+            const ir::IrValueId ext = sext_low(cur_rax, src_bits);
+            // Escribir al ancho destino (write_reg enmascara/zero-extiende los
+            // bits altos de rax por encima de dst_bits segun las reglas x86).
+            write_reg("rax", dst_bits, false, ext, ok);
+            if (!ok) return false;
         } else if ((m == "div" || m == "idiv") && ops.size() == 1) {
             // Division 64/64: rax = cociente, rdx = resto.  Exige el setup del
             // dividendo alto INMEDIATAMENTE antes -- `xor rdx,rdx` (div, sin
