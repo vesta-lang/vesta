@@ -238,7 +238,14 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 }
             }
 
-            if (victim_idx < 0 || next_use(vid) >= victim_nu) {
+            /* inc2b.2: un intervalo REGISTER-REQUIRED (operando `reg` de un asm
+             * que lo referencia por $N durante todo el bloque) NO puede
+             * derramarse: si hay una victima robable, se roba SIEMPRE su reg
+             * (aunque el propio next-use sea mas lejano); solo si NO hay victima
+             * cae al self-spill (rarisimo; el rewrite lo detecta y hace fallback
+             * al pick greedy). */
+            const bool must_reg = iv.reg_required && victim_idx >= 0;
+            if (!must_reg && (victim_idx < 0 || next_use(vid) >= victim_nu)) {
                 /* Spillear el PROPIO intervalo (su fin es el mas lejano,
                  * o no hay activo robable). */
                 out.assign[vid].loc = RegAlloc::Loc::SPILL;

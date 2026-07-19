@@ -13524,7 +13524,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         // de la DB, en vez de la caja opaca INLINE_ASM.  Solo si TODO el bloque
         // encaja (transaccional); si no, cae al INLINE_ASM de abajo.
         if (vx::asm_lift_micro(*fn_, current_block_, vx::instr_db::Isa::X86,
-                               ia.func_name, s->loc.line, bound_canon)) {
+                               ia.func_name, s->loc.line, slot_of)) {
             // El interp ejecuta la ASM_MICRO via vrt:asm_micro_exec (trampoline
             // nativo si hay ensamblador, o emulacion portable del efecto).
             // Registrar el import para que el linker lo resuelva.  Idempotente.

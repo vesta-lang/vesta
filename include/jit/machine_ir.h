@@ -1440,6 +1440,29 @@ struct AsmBlob {
         std::string symbol;
     };
     std::vector<AsmSymRef> sym_refs;
+
+    /**
+     * @brief Ensamblado DIFERIDO post-regalloc (inc2b.2): la plantilla lleva
+     *        placeholders @c $N por operando; el registro FiSICO de cada uno no
+     *        se conoce hasta que el asignador corre, asi que el ensamblado se
+     *        aplaza al @c regalloc_rewrite (que resuelve @c vreg -> fisico).
+     *
+     * Cuando @c deferred es true, @c bytes esta VACiO al salir del selector; el
+     * rewrite sustituye @c $N por el nombre del registro (fisico fijo si
+     * @c fixed_phys>=0, o @c ra.reg_of(vreg) si el asignador lo eligio) y llama
+     * al ensamblador.  Asi el operando @c reg LIBRE se integra con el regalloc
+     * de la funcion (en vez del pick greedy compile-time).
+     */
+    struct DeferredOp {
+        uint32_t vreg = UINT32_MAX; ///< vreg cuyo fisico rellena $idx (o -1)
+        int16_t fixed_phys = -1;    ///< fisico fijo (>=0) o -1 = del RA
+        uint16_t width = 64;        ///< ancho en bits (nombra el registro)
+        uint8_t regclass = 0;       ///< 0=GP (inc2b.2 solo GP)
+    };
+    bool deferred = false;              ///< true -> ensamblar en el rewrite
+    uint8_t deferred_isa = 0;           ///< ISA (== instr_db::Isa) para el backend
+    std::string deferred_tmpl;          ///< plantilla NASM con $0,$1,... por operando
+    std::vector<DeferredOp> deferred_ops; ///< por indice de placeholder ($idx)
 };
 
 /**
@@ -1562,6 +1585,15 @@ struct MFunction {
     /// un inline-asm.  @c build_intervals lo copia a @c LiveInterval::fixed_reg
     /// (con bounds-check: @c vid < vreg_fixed.size() ? vreg_fixed[vid] : -1).
     std::vector<int8_t> vreg_fixed;
+
+    /// inc2b.2: vregs REGISTER-REQUIRED (nivel intermedio entre @c vreg_fixed y
+    /// libre).  El asignador DEBE darle un registro fisico (lo ELIGE el, a
+    /// diferencia del pin) y NO puede derramarlo -- lo necesita un operando
+    /// @c reg de un @c asm cuya plantilla lo referencia por @c $N durante todo
+    /// el bloque.  SPARSE (como @c vreg_fixed).  @c build_intervals lo copia a
+    /// @c LiveInterval::reg_required; el linear-scan desaloja una victima en
+    /// vez de derramar el propio intervalo.
+    std::vector<uint8_t> vreg_reg_required;
     /// Phase AS inc.5: bloques de inline-asm.  Indexados por el IMM32 de la
     /// MInstr @c INLINE_ASM_RAW (@c src1.value).
     std::vector<AsmBlob> asm_blobs;
@@ -1583,6 +1615,17 @@ struct MFunction {
     /** @brief Registro fisico forzado de @p vid, o -1 si libre. */
     int fixed_of(uint32_t vid) const noexcept {
         return vid < vreg_fixed.size() ? vreg_fixed[vid] : -1;
+    }
+    /** @brief Marca @p vid como REGISTER-REQUIRED (inc2b.2): el RA le da un
+     *  registro que ELIGE el y no lo derrama. */
+    void set_vreg_reg_required(uint32_t vid) {
+        if (vreg_reg_required.size() <= vid)
+            vreg_reg_required.resize(vid + 1, 0u);
+        vreg_reg_required[vid] = 1u;
+    }
+    /** @brief ¿Es @p vid register-required? */
+    bool reg_required_of(uint32_t vid) const noexcept {
+        return vid < vreg_reg_required.size() && vreg_reg_required[vid] != 0u;
     }
     /** @brief añade un @c AsmBlob al pool y devuelve su indice. */
     uint32_t intern_asm_blob(AsmBlob b) {

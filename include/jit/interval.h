@@ -88,6 +88,13 @@ struct LiveInterval {
     /// porque el inline-asm lo necesita en ese registro concreto).
     int fixed_reg = -1;
 
+    /// inc2b.2: register-required (nivel intermedio).  El linear-scan DEBE darle
+    /// un registro (que elige el) y NO lo derrama -- desaloja una victima si
+    /// hace falta.  Lo poblea @c build_intervals desde
+    /// @c MFunction::vreg_reg_required.  Ignorado si @c fixed_reg >= 0 (el pin
+    /// ya garantiza el registro).
+    bool reg_required = false;
+
     bool is_gc() const noexcept { return gc_kind != 0; }
     bool empty() const noexcept { return ranges.empty(); }
 

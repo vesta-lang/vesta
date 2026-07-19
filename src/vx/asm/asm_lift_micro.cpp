@@ -112,10 +112,10 @@ void split_insn(const std::string &insn, std::string &mnem,
 /// plantilla con @c $N a partir de la linea + la semantica de la DB.  Devuelve
 /// @c false si algun operando NO es un registro GP nombrable (MEM/IMM/FP/VEC ->
 /// inc2b.3) -> el llamador emite @c INLINE_ASM.
-bool build_operands(const std::string &insn, const instr_db::AsmInsnSem &sem,
-                    const std::vector<std::string> &bound_canon,
-                    std::vector<ir::AsmMicroOperand> &operands,
-                    std::string &tmpl) {
+bool build_operands(
+    const std::string &insn, const instr_db::AsmInsnSem &sem,
+    const std::unordered_map<std::string, ir::IrValueId> &slot_of,
+    std::vector<ir::AsmMicroOperand> &operands, std::string &tmpl) {
     operands.clear();
     std::string mnem;
     std::vector<std::string> toks;
@@ -127,16 +127,17 @@ bool build_operands(const std::string &insn, const instr_db::AsmInsnSem &sem,
         uint16_t w = 0;
         const int phys = vx::asm_x86_gp_index(toks[k], &w);
         if (phys < 0) return false; // no es GP (MEM/IMM/FP/VEC) -> inc2b.3
-        // Operando LIGADO a una variable Vesta (register()): necesita SSA/RA
-        // -> no es fisico fijo -> lo maneja el INLINE_ASM (inc2b.2).
-        for (const std::string &bc : bound_canon)
-            if (lower(bc) == lower(toks[k])) return false;
         ir::AsmMicroOperand op;
         op.kind = ir::AsmOperandKind::REG;
         op.regclass = vx::ASM_RC_GP;
         op.width = w;
-        op.fixed_phys = (int16_t)phys;
-        op.value = ir::IR_NO_VALUE; // SSA/RA -> inc2b.2
+        op.fixed_phys = (int16_t)phys; // fisico fijo del texto (constraint RA)
+        // Un registro LIGADO a una variable Vesta (register()) necesita
+        // threading SSA + el asignador (constraint en el RA + marshalling en
+        // los backends) -> inc2b.2.  Hoy (inc2b.1) esos bloques caen al
+        // INLINE_ASM, que ya resuelve los bindings en interp/JIT/AOT.
+        if (slot_of.find(lower(toks[k])) != slot_of.end()) return false;
+        op.value = ir::IR_NO_VALUE; // fisico opaco (sin SSA)
         // Rol del operando = presencia de su reg canonico en reads/writes DB.
         const std::string cn = lower(toks[k]);
         uint8_t fl = 0;
@@ -152,9 +153,10 @@ bool build_operands(const std::string &insn, const instr_db::AsmInsnSem &sem,
 
 } // namespace
 
-bool asm_lift_micro(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
-                    const std::string &body, uint32_t line,
-                    const std::vector<std::string> &bound_canon) {
+bool asm_lift_micro(
+    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+    const std::string &body, uint32_t line,
+    const std::unordered_map<std::string, ir::IrValueId> &slot_of) {
     const std::vector<std::string> insns = instructions(body);
     if (insns.empty()) return false;
 
@@ -185,7 +187,7 @@ bool asm_lift_micro(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
         if (sem.reads.empty() && sem.writes.empty()) {
             // Sin operandos de registro: plantilla verbatim (mfence/lfence/...).
             tmpl = insn;
-        } else if (!build_operands(insn, sem, bound_canon, operands, tmpl)) {
+        } else if (!build_operands(insn, sem, slot_of, operands, tmpl)) {
             return false;             // operandos no soportados en inc2b.1
         }
         sems.push_back(std::move(sem));
