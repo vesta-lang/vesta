@@ -1,0 +1,275 @@
+/*
+ * VestaVM -- Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+/**
+ * @file vx/effects/effects.h
+ * @brief Modelo UNICO de efectos de Vesta.  Un solo tipo de efecto para TODO el
+ *        compilador (IR, asm lifteado, asm opaco, builtins, intrinsics, FFI,
+ *        syscalls, runtime).  ASM nunca es un caso especial: cuando liftea, se
+ *        DISUELVE en IR y hereda este mismo modelo; solo el residuo opaco lo
+ *        produce directamente.  Fuente de verdad del diseno: memoria del agente
+ *        `proj_effects_system` (secciones 2 y 10b).
+ *
+ * Capas:
+ *   - @c SemanticEffects : efecto SEMANTICO puro, independiente de maquina (lo
+ *     que importa para legalidad de optimizacion y contratos).  NO contiene
+ *     `unknown` (eso es estado del analisis, ver @c EffectAnalysisResult).
+ *   - @c MachineEffects  : footprint fisico (regs/flags/stack/latencia), SOLO lo
+ *     rellenan MachineIR (post-seleccion) y el asm OPACO (clobbers).  Los nodos
+ *     IR lo dejan vacio.
+ *   - Combinadores @c seq / @c join / @c callsite : el RETICULO (agregar
+ *     instr->bloque->funcion NO es OR campo-a-campo).
+ */
+#ifndef VX_EFFECTS_EFFECTS_H
+#define VX_EFFECTS_EFFECTS_H
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace vx {
+namespace fx {
+
+// ===========================================================================
+// AbstractLoc -- dominio de localizaciones de memoria.  Reticulo con TOP y
+// BOTTOM explicitos: Bottom <= {Stack,Heap,Global,ArgDerived}
+// <= Unknown.  Bottom = neutro del join; Unknown = absorbente.
+// ===========================================================================
+struct AbstractLoc {
+    enum class Kind : uint8_t {
+        None,       ///< BOTTOM: no localizacion (neutro del join).
+        Stack,      ///< marco de pila local (slots ALLOCA).
+        Heap,       ///< heap; @c id = alloc-site (0 = heap generico).
+        Global,     ///< dato estatico/global; @c id = symbol/slot id.
+        ArgDerived, ///< memoria alcanzable desde el parametro @c id (points-to grueso).
+        Unknown     ///< TOP: puede aliasar cualquier cosa.
+    };
+    Kind     kind = Kind::None;
+    uint32_t id = 0;
+
+    bool operator==(const AbstractLoc &o) const {
+        return kind == o.kind && id == o.id;
+    }
+};
+
+/// ¿Pueden @p a y @p b referirse a la MISMA memoria?  Unknown aliasa todo;
+/// None (bottom) no aliasa nada; clases distintas son disjuntas; dentro de una
+/// clase, mismo id = alias, distinto id = no-alias (conservador si id==0).
+bool may_alias(const AbstractLoc &a, const AbstractLoc &b);
+
+// ===========================================================================
+// LocSet -- conjunto de AbstractLoc con TOP absorbente (is_top).  Cuando entra
+// Unknown, colapsa a top y vacia el vector (comparaciones O(1)).
+// ===========================================================================
+struct LocSet {
+    bool                     is_top = false;
+    std::vector<AbstractLoc> locs; ///< vacio si is_top; sin duplicados; sin None.
+
+    bool empty() const { return !is_top && locs.empty(); }
+    void clear() { is_top = false; locs.clear(); }
+
+    /// Anade @p l.  Unknown -> top; None -> no-op; resto -> insertar sin dup.
+    void add(const AbstractLoc &l);
+    /// Union en sitio (this |= other).
+    void unite(const LocSet &other);
+    /// ¿algun elemento puede aliasar @p l?
+    bool may_alias_any(const AbstractLoc &l) const;
+    /// this \ other, quitando SOLO locs concretos de other (sound gen/kill: si
+    /// other es top NO mata nada -- no sabemos que escribio exactamente).
+    void subtract_concrete(const LocSet &other);
+    bool operator==(const LocSet &o) const;
+};
+
+/// Efecto de memoria: read-set + write-set sobre localizaciones abstractas.
+struct MemEffect {
+    LocSet reads;
+    LocSet writes;
+    bool reads_memory() const { return !reads.empty(); }   ///< DERIVADO
+    bool writes_memory() const { return !writes.empty(); } ///< DERIVADO
+    bool operator==(const MemEffect &o) const {
+        return reads == o.reads && writes == o.writes;
+    }
+};
+
+// ===========================================================================
+// ControlEffect -- tipo de transferencia de control (prepara
+// Suspend/Resume para await/yield/coroutines/fibers).  Los TARGETS de
+// Branch/Throw son aristas del CFG, NO se aplanan aqui.
+// ===========================================================================
+enum class ControlKind : uint8_t {
+    FallThrough, ///< sigue a la siguiente instr.
+    Return,      ///< ret.
+    Branch,      ///< salto cond/incond (targets en el CFG).
+    Call,        ///< llamada (callee ref o desconocido).
+    Throw,       ///< lanza (aristas a handlers en el CFG).
+    Suspend,     ///< await/yield: cede control (semantica futura).
+    Resume,      ///< reanuda una suspension (semantica futura).
+    Indirect,    ///< salto/llamada indirecta.
+    NoReturn     ///< no retorna (panic/exit/loop infinito).
+};
+
+struct ControlEffect {
+    ControlKind kind = ControlKind::FallThrough;
+    int32_t     callee_ref = -1; ///< symbol/summary id si Call conocido; -1 = desconocido.
+    bool operator==(const ControlEffect &o) const {
+        return kind == o.kind && callee_ref == o.callee_ref;
+    }
+};
+
+/// ¿Este control TERMINA el flujo lineal (nada despues se ejecuta en secuencia)?
+bool control_is_terminator(ControlKind k);
+
+// ===========================================================================
+// Atomicity -- orden de memoria de una operacion atomica / barrera.
+// ===========================================================================
+enum class MemOrder : uint8_t { None, Relaxed, Acquire, Release, AcqRel, SeqCst };
+struct Atomicity {
+    MemOrder order = MemOrder::None;
+    bool     is_fence = false;
+    bool operator==(const Atomicity &o) const {
+        return order == o.order && is_fence == o.is_fence;
+    }
+};
+
+// ===========================================================================
+// CapabilityTag -- escotilla EXTENSIBLE para efectos fuera del set cerrado
+// (estado de maquina, I/O privilegiado, seguridad...).  Enum, no strings
+// (type-safe + eficiente).  Cada tag tiene una CLASE de efecto.
+// ===========================================================================
+enum class CapabilityTag : uint16_t {
+    MachineState,    ///< toca estado global de la maquina (no modelable como mem).
+    InterruptState,  ///< cli/sti (interrupt flag).
+    PortIO,          ///< in/out.
+    MSR,             ///< rdmsr/wrmsr.
+    CPUID,           ///< cpuid (serializante + lee estado CPU).
+    Privileged,      ///< ring-0 / instr privilegiada.
+    SecretDependent, ///< control/acceso dependiente de dato secreto (constant-time).
+    SelfModifying,   ///< codigo automodificante.
+    UserBarrier,     ///< barrera declarada por el usuario (asm volatile).
+    TLBFlush,        ///< invlpg / mov cr3.
+    SegmentChange,   ///< cambio de registro de segmento.
+    COUNT_           ///< centinela (numero de tags).
+};
+
+/// Clase de un tag: unos afectan LEGALIDAD de optimizacion, otros son solo info.
+enum class CapabilityClass : uint8_t {
+    Observable,      ///< efecto observable (I/O) -> limita reordenacion.
+    Synchronization, ///< barrera/sync.
+    Machine,         ///< estado de maquina (CPUID, MSR...).
+    Security,        ///< seguridad (SecretDependent).
+    Runtime          ///< runtime/misc.
+};
+CapabilityClass class_of(CapabilityTag t);
+
+/// Conjunto de tags como bitset (COUNT_ <= 64).
+struct TagSet {
+    uint64_t bits = 0;
+    void add(CapabilityTag t) { bits |= (uint64_t(1) << uint16_t(t)); }
+    bool has(CapabilityTag t) const { return bits & (uint64_t(1) << uint16_t(t)); }
+    bool empty() const { return bits == 0; }
+    void unite(const TagSet &o) { bits |= o.bits; }
+    bool operator==(const TagSet &o) const { return bits == o.bits; }
+};
+
+// ===========================================================================
+// DeterminismSet -- determinismo como EFECTO (no un bool).
+// Vacio = PureDeterministic.  El contrato `deterministic` sale de empty().
+// ===========================================================================
+enum class DeterminismTag : uint8_t {
+    ReadsClock, ReadsRandom, ReadsPID, ReadsEnvironment, ExternalObservable, COUNT_
+};
+struct DeterminismSet {
+    uint8_t bits = 0;
+    void add(DeterminismTag t) { bits |= (uint8_t(1) << uint8_t(t)); }
+    bool has(DeterminismTag t) const { return bits & (uint8_t(1) << uint8_t(t)); }
+    bool empty() const { return bits == 0; }
+    void unite(const DeterminismSet &o) { bits |= o.bits; }
+    bool operator==(const DeterminismSet &o) const { return bits == o.bits; }
+};
+
+// ===========================================================================
+// SemanticEffects -- el modelo UNIVERSAL, independiente de maquina.  SIN
+// `unknown` (eso es estado del analisis, no un efecto): ver EffectAnalysisResult.
+// ===========================================================================
+struct SemanticEffects {
+    MemEffect      mem;
+    ControlEffect  control;
+    Atomicity      atomic;
+    bool           may_trap = false;     ///< fallo hw (div0, deref invalido).
+    bool           may_throw = false;    ///< lanza excepcion Vesta.
+    bool           may_allocate = false; ///< aloca heap (GC/raw/newobj/closure-GC).
+    bool           may_block = false;    ///< puede bloquear (await/monenter/msgrecv).
+    bool           may_io = false;       ///< I/O observable.
+    DeterminismSet determinism;          ///< vacio = puro-determinista.
+    TagSet         tags;                 ///< capabilities.
+
+    bool operator==(const SemanticEffects &o) const;
+    /// El efecto NEUTRO (bottom): no hace nada observable.
+    static SemanticEffects none();
+};
+
+// ===========================================================================
+// MachineEffects -- footprint fisico.  SOLO MachineIR y asm OPACO.  Incluye
+// latencia/throughput (asi el modelo del scheduler es uno solo).
+// ===========================================================================
+using RegMask = uint64_t; ///< bit por registro fisico (GP 0..15, XMM 16..31, ...).
+
+struct MachineEffects {
+    RegMask regs_read = 0;
+    RegMask regs_written = 0;
+    uint8_t flags_read = 0;    ///< bits CF/ZF/SF/OF/PF/AF/DF.
+    uint8_t flags_written = 0;
+    int64_t stack_net = 0;     ///< delta neto de pila (bytes).
+    int64_t stack_peak = 0;    ///< profundidad maxima alcanzada (bytes).
+    uint16_t latency = 0;                ///< ciclos (prioridad del scheduler).
+    uint16_t reciprocal_throughput = 0;  ///< 1/throughput * 100 (culo de botella).
+    bool    serializing = false;         ///< barrera de ejecucion (cpuid/mfence/...).
+
+    bool operator==(const MachineEffects &o) const;
+};
+
+// ===========================================================================
+// AnalysisCompleteness -- estado del ANALISIS, separado del
+// efecto.  El motor devuelve EffectAnalysisResult; el SemanticEffects viaja
+// limpio por el resto del sistema.
+// ===========================================================================
+enum class AnalysisCompleteness : uint8_t {
+    Complete,     ///< el efecto es exacto.
+    Conservative, ///< sobre-aproximado pero acotado.
+    Unknown       ///< no se pudo inferir (caja negra).
+};
+enum class UnknownReason : uint8_t {
+    None, UnknownMnemonic, UnknownIntrinsic, UnknownEncoding, UserBarrier,
+    UnknownCall, UnknownRuntime, UnknownFFI, Indirect
+};
+
+struct EffectAnalysisResult {
+    SemanticEffects      effects;
+    AnalysisCompleteness completeness = AnalysisCompleteness::Complete;
+    UnknownReason        unknown_reason = UnknownReason::None;
+};
+
+// ===========================================================================
+// Combinadores (el RETICULO).  Agregar NO es OR campo-a-campo.
+// ===========================================================================
+/// Composicion SECUENCIAL a-luego-b (dentro de un bloque, linea a linea).
+/// mem: union con gen/kill (loc escrito por 'a' y leido por 'b' es interno);
+/// stack: net += , peak = max(a.peak, a.net + b.peak); control: el de 'a' si
+/// 'a' termina el flujo, si no el de 'b'; may_*/tags/determinism: union;
+/// atomic: el orden mas fuerte.
+SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b);
+MachineEffects  seq(const MachineEffects &a, const MachineEffects &b);
+
+/// JOIN de control (merge de dos ramas).  may-effects: UNION.  stack peak: max.
+/// Es el meet del reticulo para las propiedades may-.
+SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b);
+MachineEffects  join(const MachineEffects &a, const MachineEffects &b);
+
+} // namespace fx
+} // namespace vx
+
+#endif // VX_EFFECTS_EFFECTS_H

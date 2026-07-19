@@ -702,6 +702,20 @@ else ()
     target_link_libraries(test_analyze_fingerprint PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Sistema unico de efectos: reticulo AbstractLoc, combinadores seq/join,
+# contratos declarativos.
+add_executable(test_effects tests/effects/test_effects.cpp)
+target_include_directories(test_effects PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_effects PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_effects PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_effects PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_effects PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # DB de instrucciones embebida: matcher texto->FormID.
 add_executable(test_instr_db tests/vx/instr_db_test.cpp)
 target_include_directories(test_instr_db PRIVATE ${VM_INCLUDES})

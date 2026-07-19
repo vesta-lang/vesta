@@ -74,6 +74,14 @@ add_library(vx_lib STATIC
     lexer.cpp
     ast.cpp
     parser.cpp
+    # Sistema UNICO de efectos del compilador: modelo (SemanticEffects/
+    # MachineEffects/reticulo AbstractLoc + combinadores seq/join), summaries por
+    # funcion/modulo, contratos DECLARATIVOS por reglas, y el gestor de analisis
+    # de dos niveles (local por nodo + summary por funcion).  Fuente unica para
+    # optimizer, scheduler, --analyze, diagramas y LSP.
+    effects/effects.cpp
+    effects/contracts.cpp
+    effects/effect_analysis.cpp
     asm/asm_effects.cpp
     # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
     # call/flags/rama/marco de pila explicito) sobre la tabla plana por
