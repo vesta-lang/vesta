@@ -13,24 +13,28 @@
  *        (summary) en Fase 2.  Aqui devolvemos valores NEUTROS Complete para no
  *        alterar comportamiento (Fase 0: cero regresion).
  */
-#include "vx/effects/effect_analysis.h"
+#include "analysis/effects/effect_analysis.h"
 
 #include "ir/ssa_ir.h"
-#include "vx/effects/ir_effects.h"
+#include "analysis/effects/ir_effects.h"
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
+
+const IrFacts &EffectAnalysis::facts_of(const ir::IrFunction &fn) {
+    // Hechos fundacionales cacheados por el AnalysisManager: se computan una vez
+    // por funcion y se reusan (antes se reconstruian en cada consulta local ->
+    // O(n^2) por funcion; ahora O(n)).
+    return facts_mgr_.get_or_compute<IRFactsAnalysis, IrFacts>(
+        fn.name, [&]() { return build_ir_facts(fn); });
+}
 
 EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
                                            const ir::IrInstr &ins) {
     const void *key = static_cast<const void *>(&ins);
     auto it = local_cache_.find(key);
     if (it != local_cache_.end()) return it->second;
-    // Los HECHOS (def-use) son por-funcion; aqui se construyen por llamada
-    // (barato).  Cuando EffectAnalysis se registre en el AnalysisManager, los
-    // IrFacts se cachean como analisis fundacional y se consumen sin reconstruir.
-    analysis::IrFacts facts = analysis::build_ir_facts(fn);
-    EffectAnalysisResult r = effects_of_instr(fn, facts, ins);
+    EffectAnalysisResult r = effects_of_instr(fn, facts_of(fn), ins);
     local_cache_.emplace(key, r);
     return r;
 }
@@ -211,7 +215,11 @@ void EffectAnalysis::invalidate_node(const ir::IrFunction &fn,
 void EffectAnalysis::invalidate_function(const std::string &fn_name) {
     dirty_[fn_name] = true;
     module_dirty_ = true;
-    // TODO Fase 2: propagar a los callers transitivos por el callgraph (SCC).
+    // Los hechos (def-use/CFG) de la funcion cambiaron -> invalidar en el manager
+    // para que se recomputen la proxima vez que se pidan.
+    facts_mgr_.invalidate<IRFactsAnalysis>(fn_name);
+    // TODO: propagar a los callers transitivos por el callgraph (SCC) cuando el
+    // cierre interprocedural se cachee por-funcion (hoy module_summary lo rehace).
 }
 
 void EffectAnalysis::clear() {
@@ -219,8 +227,9 @@ void EffectAnalysis::clear() {
     summary_cache_.clear();
     dirty_.clear();
     module_cache_.fns.clear();
+    facts_mgr_.clear(); // invalida los hechos cacheados
     module_dirty_ = true;
 }
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis

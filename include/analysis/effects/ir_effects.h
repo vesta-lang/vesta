@@ -6,7 +6,7 @@
  */
 
 /**
- * @file vx/effects/ir_effects.h
+ * @file analysis/effects/ir_effects.h
  * @brief Motor IR -> SemanticEffects.  Es el UNICO motor de efectos del caso
  *        principal: el asm lifteado ya es IR normal y pasa por aqui como
  *        cualquier otra instruccion.  Da (a) el efecto local de una instruccion
@@ -14,11 +14,11 @@
  *        los def-use de la funcion), y (b) el agregado local de una funcion
  *        (fold seq dentro de bloque, join entre bloques).
  */
-#ifndef VX_EFFECTS_IR_EFFECTS_H
-#define VX_EFFECTS_IR_EFFECTS_H
+#ifndef ANALYSIS_EFFECTS_IR_EFFECTS_H
+#define ANALYSIS_EFFECTS_IR_EFFECTS_H
 
 #include "analysis/facts/ir_facts.h"
-#include "vx/effects/effects.h"
+#include "analysis/effects/effects.h"
 
 #include <cstdint>
 #include <map>
@@ -30,8 +30,8 @@ struct IrInstr;
 using IrValueId = uint32_t; // igual que la definicion en ssa_ir.h
 } // namespace ir
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
 
 /// Clasifica el puntero @p ptr (value id) a una localizacion abstracta a partir
 /// de los HECHOS (def-use) de la funcion: ALLOCA->Stack, alloc->Heap,
@@ -71,7 +71,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
                                             EffectGaps *gaps = nullptr);
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis
 
-#endif // VX_EFFECTS_IR_EFFECTS_H
+#endif // ANALYSIS_EFFECTS_IR_EFFECTS_H

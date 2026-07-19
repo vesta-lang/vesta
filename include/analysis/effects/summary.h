@@ -6,24 +6,24 @@
  */
 
 /**
- * @file vx/effects/summary.h
+ * @file analysis/effects/summary.h
  * @brief Resumenes por-funcion y por-modulo del sistema de efectos, y la
  *        generacion DECLARATIVA de contratos.  El @c FunctionSummary es la capa
  *        de analisis compartida (efectos + estructura + interproc) computada UNA
  *        vez, de la que TODO producto (contratos, complejidad, autodoc,
  *        diagramas, API, optimizer) es proyeccion pura.
  */
-#ifndef VX_EFFECTS_SUMMARY_H
-#define VX_EFFECTS_SUMMARY_H
+#ifndef ANALYSIS_EFFECTS_SUMMARY_H
+#define ANALYSIS_EFFECTS_SUMMARY_H
 
-#include "vx/effects/effects.h"
+#include "analysis/effects/effects.h"
 
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
 
 /// Faceta SEMANTICA de una funcion: efecto local + efecto transitivo (cierre).
 struct SemanticSummary {
@@ -99,7 +99,7 @@ std::vector<EvaluatedContract>
 derive_contracts(const FunctionSummary &s,
                  ContractProfile profile = ContractProfile::Default);
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis
 
-#endif // VX_EFFECTS_SUMMARY_H
+#endif // ANALYSIS_EFFECTS_SUMMARY_H

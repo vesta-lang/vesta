@@ -14,17 +14,17 @@
  */
 #include "analysis/facts/ir_facts.h"
 #include "analysis/manager/analysis_manager.h"
-#include "vx/effects/effect_analysis.h"
-#include "vx/effects/effects.h"
-#include "vx/effects/ir_effects.h"
-#include "vx/effects/summary.h"
+#include "analysis/effects/effect_analysis.h"
+#include "analysis/effects/effects.h"
+#include "analysis/effects/ir_effects.h"
+#include "analysis/effects/summary.h"
 
 #include "ir/ssa_ir.h"
 
 #include <cstdio>
 #include <string>
 
-using namespace vx::fx;
+using namespace analysis::effects;
 
 static int g_checks = 0;
 static int g_fails = 0;

@@ -79,11 +79,11 @@ add_library(vx_lib STATIC
     # funcion/modulo, contratos DECLARATIVOS por reglas, y el gestor de analisis
     # de dos niveles (local por nodo + summary por funcion).  Fuente unica para
     # optimizer, scheduler, --analyze, diagramas y LSP.
-    effects/effects.cpp
-    effects/contracts.cpp
-    effects/ir_effects.cpp
-    effects/effect_analysis.cpp
-    effects/effects_report.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/effects.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/contracts.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/ir_effects.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/effect_analysis.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/effects_report.cpp
     # Hechos IR objetivos (def-use, call-sites, estructura) para la infra de
     # analisis: base compartida que consumen los analisis sin re-recorrer el IR.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/ir_facts.cpp

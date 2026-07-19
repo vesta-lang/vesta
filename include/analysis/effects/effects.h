@@ -6,7 +6,7 @@
  */
 
 /**
- * @file vx/effects/effects.h
+ * @file analysis/effects/effects.h
  * @brief Modelo UNICO de efectos de Vesta.  Un solo tipo de efecto para TODO el
  *        compilador (IR, asm lifteado, asm opaco, builtins, intrinsics, FFI,
  *        syscalls, runtime).  ASM nunca es un caso especial: cuando liftea, se
@@ -24,15 +24,15 @@
  *   - Combinadores @c seq / @c join / @c callsite : el RETICULO (agregar
  *     instr->bloque->funcion NO es OR campo-a-campo).
  */
-#ifndef VX_EFFECTS_EFFECTS_H
-#define VX_EFFECTS_EFFECTS_H
+#ifndef ANALYSIS_EFFECTS_EFFECTS_H
+#define ANALYSIS_EFFECTS_EFFECTS_H
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
 
 // ===========================================================================
 // AbstractLoc -- dominio de localizaciones de memoria.  Reticulo con TOP y
@@ -301,7 +301,7 @@ MachineEffects  seq(const MachineEffects &a, const MachineEffects &b);
 SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b);
 MachineEffects  join(const MachineEffects &a, const MachineEffects &b);
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis
 
-#endif // VX_EFFECTS_EFFECTS_H
+#endif // ANALYSIS_EFFECTS_EFFECTS_H

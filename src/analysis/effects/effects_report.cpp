@@ -11,16 +11,17 @@
  *        contratos derivados + lagunas de precision, por proyeccion del
  *        SemanticSummary (misma fuente que consume el compilador).
  */
-#include "vx/effects/effects_report.h"
+#include "analysis/effects/effects_report.h"
 
 #include "ir/ssa_ir.h"
-#include "vx/effects/effect_analysis.h"
+#include "analysis/effects/effect_analysis.h"
 
 #include <string>
 
-namespace vx {
+namespace analysis {
+namespace effects {
 
-using namespace vx::fx;
+
 
 static const char *loc_kind_name(AbstractLoc::Kind k) {
     switch (k) {
@@ -179,4 +180,5 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod) {
     }
 }
 
-} // namespace vx
+} // namespace effects
+} // namespace analysis

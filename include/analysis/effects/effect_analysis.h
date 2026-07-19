@@ -6,7 +6,7 @@
  */
 
 /**
- * @file vx/effects/effect_analysis.h
+ * @file analysis/effects/effect_analysis.h
  * @brief Gestor de analisis de efectos: DOS niveles.  (a) efecto LOCAL por nodo
  *        IR, barato y CACHEADO, invalidado cuando el nodo muta; (b) resumen por
  *        FUNCION, resultado de un pase de punto-fijo sobre el callgraph.  Los
@@ -26,12 +26,14 @@
  * `local(node)` (mapa IrOp -> SemanticEffects) entra en Fase 1; el punto-fijo de
  * `summary(fn)` en Fase 2.
  */
-#ifndef VX_EFFECTS_EFFECT_ANALYSIS_H
-#define VX_EFFECTS_EFFECT_ANALYSIS_H
+#ifndef ANALYSIS_EFFECTS_EFFECT_ANALYSIS_H
+#define ANALYSIS_EFFECTS_EFFECT_ANALYSIS_H
 
-#include "vx/effects/effects.h"
-#include "vx/effects/ir_effects.h"
-#include "vx/effects/summary.h"
+#include "analysis/effects/effects.h"
+#include "analysis/effects/ir_effects.h"
+#include "analysis/effects/summary.h"
+#include "analysis/facts/ir_facts.h"
+#include "analysis/manager/analysis_manager.h"
 
 #include <cstdint>
 #include <string>
@@ -43,8 +45,8 @@ struct IrFunction;
 struct IrInstr;
 } // namespace ir
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
 
 /**
  * @brief Gestor de analisis de efectos de un modulo IR.  Mantiene el cache
@@ -90,11 +92,17 @@ private:
     EffectGaps                                             gaps_;
     bool module_dirty_ = true;
 
+    /// Gestor de analisis: cachea los IrFacts (hechos fundacionales) por funcion
+    /// para no reconstruir el def-use en cada consulta.  EffectAnalysis es el
+    /// primer consumidor del AnalysisManager.
+    AnalysisManager facts_mgr_;
+    const IrFacts &facts_of(const ir::IrFunction &fn);
+
     FunctionSummary compute_summary(const ir::IrModule &mod,
                                     const ir::IrFunction &fn);
 };
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis
 
-#endif // VX_EFFECTS_EFFECT_ANALYSIS_H
+#endif // ANALYSIS_EFFECTS_EFFECT_ANALYSIS_H

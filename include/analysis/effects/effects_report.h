@@ -6,14 +6,14 @@
  */
 
 /**
- * @file vx/effects/effects_report.h
+ * @file analysis/effects/effects_report.h
  * @brief Proyeccion del modelo de efectos a texto legible (--analyze).
  *        Muestra, por funcion, los EFECTOS inferidos y los CONTRATOS derivados,
  *        mas un reporte de LAGUNAS de precision.  Es una PROYECCION del mismo
  *        SemanticSummary que consume el compilador (invariante: no re-lee el IR).
  */
-#ifndef VX_EFFECTS_EFFECTS_REPORT_H
-#define VX_EFFECTS_EFFECTS_REPORT_H
+#ifndef ANALYSIS_EFFECTS_EFFECTS_REPORT_H
+#define ANALYSIS_EFFECTS_EFFECTS_REPORT_H
 
 #include <ostream>
 
@@ -21,11 +21,13 @@ namespace ir {
 struct IrModule;
 }
 
-namespace vx {
+namespace analysis {
+namespace effects {
 
 /// Imprime el reporte de efectos + contratos + lagunas del modulo @p mod.
 void print_effects_report(std::ostream &os, const ir::IrModule &mod);
 
-} // namespace vx
+} // namespace effects
+} // namespace analysis
 
-#endif // VX_EFFECTS_EFFECTS_REPORT_H
+#endif // ANALYSIS_EFFECTS_EFFECTS_REPORT_H

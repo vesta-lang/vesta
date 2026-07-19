@@ -28,7 +28,7 @@
 #include "cli/version_info.h" // Banner de `vesta --version` / `-v`
 #include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
 #include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
-#include "vx/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
+#include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
 #include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
@@ -1867,7 +1867,7 @@ int main(int argc, char *argv[]) {
         // proyecta contratos + efectos + reporte de lagunas como parte de
         // --analyze (seccion propia, solo en modo texto; el JSON no la incluye
         // todavia).  Es la exposicion del modelo de efectos al usuario.
-        if (!want_json) vx::print_effects_report(std::cout, amod_post);
+        if (!want_json) analysis::effects::print_effects_report(std::cout, amod_post);
         auto find_fp = [&](const std::string &name)
             -> const analyze::FunctionFingerprint * {
             for (const auto &f : fps_post)

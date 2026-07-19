@@ -11,15 +11,15 @@
  *        como ADD/LOAD/STORE/... normales.  Solo el residuo opaco (INLINE_ASM/
  *        ASM_MICRO) se analiza aparte, conservador y con tags.
  */
-#include "vx/effects/ir_effects.h"
+#include "analysis/effects/ir_effects.h"
 
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h"
 
 #include <algorithm>
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
 
 using ir::IrOp;
 
@@ -78,8 +78,9 @@ AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &fact
 // --------------------------------------------------------------------------
 static EffectAnalysisResult opaque_asm_effects(const ir::IrInstr &ins) {
     EffectAnalysisResult r;
-    // func_name lleva el cuerpo NASM (lo pone el lowering de asm).
-    const AsmBlockEffects e = asm_analyze_block(ins.func_name, "x86_64");
+    // func_name lleva el cuerpo NASM (lo pone el lowering de asm).  El analisis
+    // de bloque del asm opaco vive en el modulo asm (namespace vx).
+    const vx::AsmBlockEffects e = vx::asm_analyze_block(ins.func_name, "x86_64");
     if (e.touches_mem) {
         r.effects.mem.reads.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
         r.effects.mem.writes.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
@@ -342,5 +343,5 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
     return acc;
 }
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis

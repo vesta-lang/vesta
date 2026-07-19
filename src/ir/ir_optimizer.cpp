@@ -12,7 +12,7 @@
 
 #include "ir/ir_optimizer.h"
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
-#include "vx/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
+#include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include <unordered_map>
 #include <map>
 #include <set>
@@ -5366,14 +5366,14 @@ static bool g_dce_effects = [] {
 
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
                             const IrInstr &ins) {
-    const vx::fx::EffectAnalysisResult r =
-        vx::fx::effects_of_instr(fn, facts, ins);
-    if (r.completeness != vx::fx::AnalysisCompleteness::Complete) return false;
-    const vx::fx::SemanticEffects &e = r.effects;
+    const analysis::effects::EffectAnalysisResult r =
+        analysis::effects::effects_of_instr(fn, facts, ins);
+    if (r.completeness != analysis::effects::AnalysisCompleteness::Complete) return false;
+    const analysis::effects::SemanticEffects &e = r.effects;
     return !e.mem.writes_memory() && !e.may_trap && !e.may_throw &&
            !e.may_allocate && !e.may_block && !e.may_io && e.tags.empty() &&
-           e.atomic.order == vx::fx::MemOrder::None && !e.atomic.is_fence &&
-           e.control.kind == vx::fx::ControlKind::FallThrough;
+           e.atomic.order == analysis::effects::MemOrder::None && !e.atomic.is_fence &&
+           e.control.kind == analysis::effects::ControlKind::FallThrough;
 }
 
 bool ir_pass_dce(IrFunction &fn) {

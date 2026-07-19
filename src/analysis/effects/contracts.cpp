@@ -14,10 +14,10 @@
  *        local/closure + estructura + interproc), asi los contratos que
  *        necesitan analisis interprocedural o estructural tambien encajan.
  */
-#include "vx/effects/summary.h"
+#include "analysis/effects/summary.h"
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
 
 // --------------------------------------------------------------------------
 // Predicados.  Cada uno decide UN contrato desde el summary.  Son funciones
@@ -117,5 +117,5 @@ std::vector<EvaluatedContract> derive_contracts(const FunctionSummary &s,
     return out;
 }
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis

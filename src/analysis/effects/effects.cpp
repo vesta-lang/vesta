@@ -10,12 +10,12 @@
  * @brief Implementacion del modelo de efectos: reticulo de AbstractLoc/LocSet,
  *        may_alias, y los combinadores seq/join a nivel semantico y de maquina.
  */
-#include "vx/effects/effects.h"
+#include "analysis/effects/effects.h"
 
 #include <algorithm>
 
-namespace vx {
-namespace fx {
+namespace analysis {
+namespace effects {
 
 // --------------------------------------------------------------------------
 // AbstractLoc / may_alias
@@ -269,5 +269,5 @@ MachineEffects join(const MachineEffects &a, const MachineEffects &b) {
     return r;
 }
 
-} // namespace fx
-} // namespace vx
+} // namespace effects
+} // namespace analysis
