@@ -574,6 +574,23 @@ bool lift_x86(
                 emit_un(fn, block, ir::IrOp::BYTESWAP, a, line);
             write_reg(rc, 64, rh, res, ok);
             if (!ok) return false;
+        } else if ((m == "movzx" || m == "movsx" || m == "movsxd") &&
+                   ops.size() == 2) {
+            /* Extension de ancho: lee rs a SU ancho (zero-extend en movzx,
+             * sign-extend en movsx/movsxd) y lo escribe en rd.  El modelo de
+             * anchos ya cubre exactamente la semantica x86.  Solo reg-reg
+             * (memoria -> host, camino opaco). */
+            if (is_mem(ops[1])) return false;
+            std::string rc, sc;
+            bool rh = false, sh = false;
+            const int rw = reg_info(ops[0], rc, rh);
+            const int sw = reg_info(ops[1], sc, sh);
+            if (rw == 0 || sw == 0) return false;
+            const bool sgn = (m != "movzx");
+            const ir::IrValueId v = read_reg(sc, sw, sh, sgn, ok);
+            if (!ok) return false;
+            write_reg(rc, rw, rh, v, ok);
+            if (!ok) return false;
         } else {
             return false; // instruccion fuera del subset -> INLINE_ASM
         }

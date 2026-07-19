@@ -2140,6 +2140,7 @@ modes3_case("asmwidth", "asm: lift general modela anchos x86 (8/16/32/64) en int
 modes3_case("shvar", "shift por cantidad variable (SHL/SHR/SAR via CL) en interp/jit/aot", "shift_variable.vx", 42, line=3654)
 modes3_case("fpround", "float floor/ceil/round/trunc/fmin/fmax (f64+f32) en interp/jit/aot", "fp_rounding.vx", 42, line=3654)
 modes3_case("asmbits", "asm lift de bits (popcnt/lzcnt/tzcnt/bswap -> IrOp neutro) en interp/jit/aot", "asm_bitops.vx", 42, line=3654)
+modes3_case("asmmovext", "asm lift de movzx/movsx (extension de ancho) en interp/jit/aot", "asm_movext.vx", 42, line=3654)
 r0_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 r0_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)

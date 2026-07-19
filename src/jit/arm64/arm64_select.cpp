@@ -350,6 +350,142 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 emit_st(os, "x11", in.dst); // valor viejo
                 break;
             }
+            case ir::IrOp::FADD:
+            case ir::IrOp::FSUB:
+            case ir::IrOp::FMUL:
+            case ir::IrOp::FDIV: {
+                // Aritmetica flotante en el banco FP (s=f32, d=f64).  El slot
+                // guarda los bits; ldr/str al reg FP + f{add,sub,mul,div}.
+                if (in.operands.size() != 2) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const char *R = (in.type == ir::IrType::F32) ? "s" : "d";
+                const char *op = in.op == ir::IrOp::FADD   ? "fadd"
+                                 : in.op == ir::IrOp::FSUB ? "fsub"
+                                 : in.op == ir::IrOp::FMUL ? "fmul"
+                                                           : "fdiv";
+                os << "    ldr " << R << "0, [sp, #"
+                   << slot_off(in.operands[0]) << "]\n";
+                os << "    ldr " << R << "1, [sp, #"
+                   << slot_off(in.operands[1]) << "]\n";
+                os << "    " << op << " " << R << "0, " << R << "0, " << R
+                   << "1\n";
+                os << "    str " << R << "0, [sp, #" << slot_off(in.dst)
+                   << "]\n";
+                break;
+            }
+            case ir::IrOp::FNEG:
+            case ir::IrOp::FABS:
+            case ir::IrOp::FSQRT: {
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const char *R = (in.type == ir::IrType::F32) ? "s" : "d";
+                const char *op = in.op == ir::IrOp::FNEG   ? "fneg"
+                                 : in.op == ir::IrOp::FABS ? "fabs"
+                                                           : "fsqrt";
+                os << "    ldr " << R << "0, [sp, #"
+                   << slot_off(in.operands[0]) << "]\n";
+                os << "    " << op << " " << R << "0, " << R << "0\n";
+                os << "    str " << R << "0, [sp, #" << slot_off(in.dst)
+                   << "]\n";
+                break;
+            }
+            case ir::IrOp::FCMP_EQ:
+            case ir::IrOp::FCMP_NE:
+            case ir::IrOp::FCMP_LT:
+            case ir::IrOp::FCMP_GT:
+            case ir::IrOp::FCMP_LE:
+            case ir::IrOp::FCMP_GE: {
+                // fcmp + cset.  Para comparaciones ORDENADAS (sin NaN) V=0, asi
+                // que los codigos de condicion con signo valen igual que enteros.
+                if (in.operands.size() != 2) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const ir::IrType ot = fn.values[in.operands[0]].type;
+                const char *R = (ot == ir::IrType::F32) ? "s" : "d";
+                const char *cc = in.op == ir::IrOp::FCMP_EQ   ? "eq"
+                                 : in.op == ir::IrOp::FCMP_NE ? "ne"
+                                 : in.op == ir::IrOp::FCMP_LT ? "lt"
+                                 : in.op == ir::IrOp::FCMP_GT ? "gt"
+                                 : in.op == ir::IrOp::FCMP_LE ? "le"
+                                                              : "ge";
+                os << "    ldr " << R << "0, [sp, #"
+                   << slot_off(in.operands[0]) << "]\n";
+                os << "    ldr " << R << "1, [sp, #"
+                   << slot_off(in.operands[1]) << "]\n";
+                os << "    fcmp " << R << "0, " << R << "1\n";
+                os << "    cset x9, " << cc << "\n";
+                emit_st(os, "x9", in.dst);
+                break;
+            }
+            case ir::IrOp::ITOF:
+            case ir::IrOp::UITOF: {
+                // entero (x9) -> flotante (scvtf con signo / ucvtf sin signo).
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const char *R = (in.type == ir::IrType::F32) ? "s" : "d";
+                const char *cvt =
+                    (in.op == ir::IrOp::ITOF) ? "scvtf" : "ucvtf";
+                emit_ld(os, "x9", in.operands[0]);
+                os << "    " << cvt << " " << R << "0, x9\n";
+                os << "    str " << R << "0, [sp, #" << slot_off(in.dst)
+                   << "]\n";
+                break;
+            }
+            case ir::IrOp::FTOI:
+            case ir::IrOp::FTOUI: {
+                // flotante -> entero truncando hacia cero (fcvtzs/fcvtzu).
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                const ir::IrType st = fn.values[in.operands[0]].type;
+                const char *R = (st == ir::IrType::F32) ? "s" : "d";
+                const char *cvt =
+                    (in.op == ir::IrOp::FTOI) ? "fcvtzs" : "fcvtzu";
+                os << "    ldr " << R << "0, [sp, #"
+                   << slot_off(in.operands[0]) << "]\n";
+                os << "    " << cvt << " x9, " << R << "0\n";
+                emit_st(os, "x9", in.dst);
+                break;
+            }
+            case ir::IrOp::F32TOF64: {
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                os << "    ldr s0, [sp, #" << slot_off(in.operands[0]) << "]\n";
+                os << "    fcvt d0, s0\n";
+                os << "    str d0, [sp, #" << slot_off(in.dst) << "]\n";
+                break;
+            }
+            case ir::IrOp::F64TOF32: {
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                os << "    ldr d0, [sp, #" << slot_off(in.operands[0]) << "]\n";
+                os << "    fcvt s0, d0\n";
+                os << "    str s0, [sp, #" << slot_off(in.dst) << "]\n";
+                break;
+            }
+            case ir::IrOp::BITCAST: {
+                // Reinterpret de bits (mismo ancho, p.ej. i64<->f64): copia el
+                // hueco (x9 = 64 bits) tal cual.
+                if (in.operands.size() != 1) {
+                    out_unsupported = true;
+                    return "";
+                }
+                emit_ld(os, "x9", in.operands[0]);
+                emit_st(os, "x9", in.dst);
+                break;
+            }
             case ir::IrOp::CALL: {
                 // Args a x0..x7 desde sus huecos; bl; resultado (x0) al hueco.
                 if (in.operands.size() > 8) {
