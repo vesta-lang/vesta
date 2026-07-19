@@ -123,6 +123,22 @@ inline ir::IrValueId emit_bin(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
     return d;
 }
 
+/** @brief Como @ref emit_bin pero con TIPO explicito (para DIV/MOD, donde el
+ *  tipo -- I64 vs U64 -- decide con signo / sin signo). */
+inline ir::IrValueId emit_bin_ty(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+                                 ir::IrValueId a, ir::IrValueId b,
+                                 ir::IrType ty, uint32_t line) {
+    const ir::IrValueId d = fn.new_value(ty);
+    ir::IrInstr in{};
+    in.op = op;
+    in.type = ty;
+    in.dst = d;
+    in.operands = {a, b};
+    in.source_line = line;
+    fn.append(blk, std::move(in));
+    return d;
+}
+
 inline ir::IrValueId emit_un(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
                       ir::IrValueId a, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);

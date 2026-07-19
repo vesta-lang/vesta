@@ -566,6 +566,51 @@ bool lift_x86(
                 BIN(m == "rol" ? ir::IrOp::ROTL : ir::IrOp::ROTR, a, cnt);
             write_reg(rc, 64, rh, res, ok);
             if (!ok) return false;
+        } else if (m == "cqo" || m == "cqto" || m == "cdq" || m == "cdqe") {
+            // Extension del dividendo a rdx:rax (sign/zero) previa a idiv/div.
+            // El patron div/idiv de abajo la ABSORBE (la division 64/64 modela
+            // el dividendo alto): aqui es un no-op.
+        } else if ((m == "div" || m == "idiv") && ops.size() == 1) {
+            // Division 64/64: rax = cociente, rdx = resto.  Exige el setup del
+            // dividendo alto INMEDIATAMENTE antes -- `xor rdx,rdx` (div, sin
+            // signo) o `cqo/cdq` (idiv, con signo) -- para garantizar que el
+            // dividendo es rax de 64 bits (no rdx:rax de 128).  El divisor debe
+            // ser un registro de 64 bits.
+            if (is_mem(ops[0])) return false;
+            std::string dc;
+            bool dh = false;
+            const int dw = reg_info(ops[0], dc, dh);
+            if (dw != 64) return false;
+            if (ii <= from) return false; // sin instruccion previa en el bloque
+            std::string pm;
+            std::vector<std::string> pops;
+            split_insn(insns[ii - 1], pm, pops);
+            const bool is_signed = (m == "idiv");
+            bool setup_ok = false;
+            if (is_signed) {
+                setup_ok = (pm == "cqo" || pm == "cqto" || pm == "cdq");
+            } else if (pm == "xor" && pops.size() == 2) {
+                // xor rdx,rdx | xor edx,edx (rdx = 0).
+                const std::string p0 = asm_canonical_reg(pops[0]);
+                const std::string p1 = asm_canonical_reg(pops[1]);
+                setup_ok = (p0 == "rdx" && p1 == "rdx");
+            }
+            if (!setup_ok) return false; // dividendo alto desconocido -> opaco
+            const ir::IrValueId dvd = read_reg("rax", 64, false, false, ok);
+            if (!ok) return false;
+            const ir::IrValueId dsr = read_reg(dc, 64, dh, false, ok);
+            if (!ok) return false;
+            const ir::IrType ty = is_signed ? ir::IrType::I64 : ir::IrType::U64;
+            // Leer el dividendo UNA vez y sacar cociente + resto de el (antes de
+            // pisar rax).
+            const ir::IrValueId q =
+                emit_bin_ty(fn, block, ir::IrOp::DIV, dvd, dsr, ty, line);
+            const ir::IrValueId r =
+                emit_bin_ty(fn, block, ir::IrOp::MOD, dvd, dsr, ty, line);
+            write_reg("rax", 64, false, q, ok);
+            if (!ok) return false;
+            write_reg("rdx", 64, false, r, ok);
+            if (!ok) return false;
         } else if (m == "nop") {
             // no-op (incluido el centinela de etiqueta final): no emite IR.
         } else {
