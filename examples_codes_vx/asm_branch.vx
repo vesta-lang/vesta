@@ -1,0 +1,27 @@
+// El lift general trocea el asm con RAMAS (jmp/jCC) en bloques basicos y los
+// baja a IR-CFG: cada bloque es IR real, las ramas son BR/BR_COND, y el
+// optimizador (mem2reg) reconstruye los PHIs en los merges.  Las ramas del asm
+// del usuario se optimizan como cualquier control de flujo.  Nativo en JIT/AOT.
+//
+//     vm --vx asm_branch.vx -o b && vm --run b.velb
+// @expect 42
+u64 max2(u64 x, u64 y) {
+    register("rax") u64 r = 0;
+    register("rsi") u64 a = x;
+    register("rdi") u64 b = y;
+    asm {
+        mov rax, rsi
+        cmp rsi, rdi
+        jge done
+        mov rax, rdi
+    done:
+    };
+    return r;
+}
+u64 main() {
+    u64 ok = 1;
+    if (max2(5, 10) != 10) ok = 0;
+    if (max2(20, 3) != 20) ok = 0;
+    if (max2(7, 7) != 7) ok = 0;
+    return (ok == 1) ? 42 : 0;
+}

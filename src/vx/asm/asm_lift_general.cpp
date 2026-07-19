@@ -17,12 +17,16 @@
 #include "vx/asm/asm_lift_general.h"
 
 #include "ir/ssa_ir.h"
+#include "vx/asm/asm_cfg.h"       // build_asm_cfg (CFG del asm -> IR-CFG)
 #include "vx/asm/asm_effects.h"   // asm_canonical_reg
 #include "vx/asm/asm_phys_reg.h"  // asm_x86_gp_index (ancho del operando)
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vx {
@@ -333,6 +337,132 @@ int reg_info(const std::string &tok, std::string &canon, bool &is_high) {
 }
 
 /* ===================================================================== */
+/* CFG del asm -> IR-CFG.  Toda esta capa es NEUTRA (independiente del ISA):*/
+/* el "register-file" (cada registro LIGADO vive en su slot; flush en la    */
+/* frontera de cada bloque; el SSA + PHIs los reconstruye el mem2reg del    */
+/* optimizador), la creacion de bloques IR, los terminadores (BR/BR_COND) y */
+/* el bloque de continuacion.  Lo POR-ISA entra por hooks (@ref CfgHooks):  */
+/* liftar las instrucciones de un rango + calcular la condicion de rama.    */
+/* Anadir un ISA = aportar sus hooks + @c build_asm_cfg(su_isa); este driver */
+/* NO cambia (el objetivo: agregar arquitecturas sin refactorizar).         */
+/* ===================================================================== */
+
+/** @brief Estado NEUTRO del register-file durante el lift.  @c cur mapea el
+ *  registro canonico a su valor SSA ACTUAL en el bloque; se vacia en cada
+ *  frontera de bloque.  @c wrote son los registros LIGADOS escritos en el
+ *  bloque actual (para volcarlos a su slot).  @c block es el bloque IR actual
+ *  (mutable: cambia por bloque basico). */
+struct LiftCtx {
+    ir::IrFunction &fn;
+    uint32_t &block; ///< alias al bloque IR actual del lifter (mutable)
+    uint32_t line;
+    const std::unordered_map<std::string, AsmBoundReg> &bound;
+    std::unordered_map<std::string, ir::IrValueId> &cur;
+    std::vector<std::string> &wrote;
+};
+
+/** @brief NEUTRO.  Vuelca a su slot cada registro LIGADO escrito en el bloque
+ *  actual (flush del register-file en la frontera).  mem2reg lo promueve a
+ *  SSA + PHI en los merges. */
+inline void cfg_flush_block(LiftCtx &c) {
+    for (const std::string &r : c.wrote) {
+        auto b = c.bound.find(r);
+        auto v = c.cur.find(r);
+        if (b != c.bound.end() && v != c.cur.end()) {
+            const bool host = c.fn.values[b->second.slot].is_host_ptr;
+            emit_store(c.fn, c.block, v->second, b->second.slot,
+                       b->second.width_bits, host, c.line);
+        }
+    }
+}
+
+/** @brief NEUTRO.  BR incondicional a @p target. */
+inline void cfg_emit_br(LiftCtx &c, uint32_t target) {
+    ir::IrInstr br{};
+    br.op = ir::IrOp::BR;
+    br.target_block = target;
+    br.source_line = c.line;
+    c.fn.append(c.block, std::move(br));
+}
+
+/** @brief NEUTRO.  BR_COND(@p cond) -> @p taken (cond!=0) / @p fallthrough. */
+inline void cfg_emit_br_cond(LiftCtx &c, ir::IrValueId cond, uint32_t taken,
+                             uint32_t fallthrough) {
+    ir::IrInstr br{};
+    br.op = ir::IrOp::BR_COND;
+    br.operands = {cond};
+    br.target_block = taken;
+    br.false_block = fallthrough;
+    br.source_line = c.line;
+    c.fn.append(c.block, std::move(br));
+}
+
+/** @brief Hooks POR-ISA que el driver neutro del CFG invoca. */
+struct CfgHooks {
+    /// Lifta las instrucciones [from, to) (sin el terminador) en @c c.block.
+    /// false = alguna no encaja -> se aborta el lift del bloque entero.
+    std::function<bool(size_t from, size_t to)> lift_range;
+    /// Para un bloque @c CondBranch: calcula la SSA de la condicion (0/1) a
+    /// partir de su comparador + el sufijo del salto.  @c IR_NO_VALUE = bail.
+    std::function<ir::IrValueId(const vx::AsmBasicBlock &)> branch_cond;
+    /// indice de la primera instruccion del TERMINADOR del bloque (lo que NO
+    /// se lifta como cuerpo).  Ej x86: CondBranch -> el cmp; Uncond -> el jmp;
+    /// Fallthrough -> last+1 (no hay terminador, se lifta todo).
+    std::function<uint32_t(const vx::AsmBasicBlock &)> term_start;
+};
+
+/** @brief NEUTRO.  Baja el CFG del asm a IR-CFG: un bloque IR por bloque basico,
+ *  register-file en slots (flush por bloque -> mem2reg hace el SSA+PHI), y los
+ *  terminadores como BR/BR_COND.  @p out_exit = bloque de continuacion (donde
+ *  sigue el codigo tras el asm).  @return false si algun bloque no lifta. */
+bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg, const CfgHooks &hooks,
+                      uint32_t &out_exit) {
+    const size_t nb = cfg.blocks.size();
+    if (nb == 0) return false;
+    // Un bloque IR NUEVO por bloque basico.  El bloque de entrada actual NO se
+    // reusa como BB0: si el asm tiene un back-edge al inicio (loop), reusar la
+    // entrada re-ejecutaria el codigo previo (p.ej. la init de las variables) en
+    // cada iteracion -> bucle infinito.  La entrada solo SALTA al primer BB.
+    std::vector<uint32_t> irb(nb);
+    for (size_t i = 0; i < nb; ++i)
+        irb[i] = c.fn.new_block("asmbb" + std::to_string(i));
+    const uint32_t cont = c.fn.new_block("asmcont");
+    cfg_emit_br(c, irb[0]); // c.block (entrada) -> primer BB del asm
+
+    for (size_t i = 0; i < nb; ++i) {
+        const vx::AsmBasicBlock &bb = cfg.blocks[i];
+        c.block = irb[i];
+        c.cur.clear();  // register-file por bloque: cada uno recarga de su slot
+        c.wrote.clear();
+        if (!hooks.lift_range(bb.first, hooks.term_start(bb))) return false;
+        switch (bb.term) {
+        case vx::AsmTerm::Fallthrough:
+            cfg_flush_block(c);
+            cfg_emit_br(c, (i + 1 < nb) ? irb[i + 1] : cont);
+            break;
+        case vx::AsmTerm::UncondJump:
+            if (bb.succs.size() != 1) return false;
+            cfg_flush_block(c);
+            cfg_emit_br(c, irb[bb.succs[0]]);
+            break;
+        case vx::AsmTerm::CondBranch: {
+            if (bb.succs.size() != 2) return false; // succs[0]=tomado, [1]=ft
+            const ir::IrValueId cond = hooks.branch_cond(bb);
+            if (cond == ir::IR_NO_VALUE) return false;
+            cfg_flush_block(c); // tras calcular cond (usa cur) y antes de ramar
+            cfg_emit_br_cond(c, cond, irb[bb.succs[0]], irb[bb.succs[1]]);
+            break;
+        }
+        default:
+            return false; // Ret/Call/Indirect/Unknown -> aun no liftable
+        }
+    }
+    c.block = cont;
+    out_exit = cont;
+    return true;
+}
+
+/* ===================================================================== */
 /* Lifter por ISA.  El CORE de emision (emit_*, width_mask, mem_ty) y el   */
 /* enhebrado SSA son NEUTROS: producen IrOps genericos (ADD, LOAD,         */
 /* POPCNT...).  Lo que es POR-ISA -- reconocimiento de mnemonicos, nombres */
@@ -342,17 +472,35 @@ int reg_info(const std::string &tok, std::string &canon, bool &is_high) {
 /* lift_<isa> reusando el core; el IR resultante es el mismo para todas.   */
 /* ===================================================================== */
 
-/** @brief Lifter x86/x86-64: reconoce el subset entero straight-line y lo baja
- *  a IR neutro.  reg_info/binop_of/parse_mem/mem_hint_width son la parte x86. */
+/** @brief Lifter x86/x86-64: reconoce el subset entero y lo baja a IR neutro.
+ *  Straight-line (1 bloque) o con RAMAS: construye el CFG del asm y lo baja a
+ *  IR-CFG via el driver NEUTRO (@ref lift_cfg_neutral), aportando los hooks x86
+ *  (lift de instrucciones + condicion de rama).  reg_info/binop_of/parse_mem/
+ *  mem_hint_width/setcc_to_cmp son la parte x86.  @p out_exit (si != null) queda
+ *  con el bloque de continuacion (donde sigue el codigo tras el asm). */
 bool lift_x86(
     ir::IrFunction &fn, uint32_t block, const std::string &body,
-    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line) {
-    const std::vector<std::string> insns = instructions(body);
+    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line,
+    uint32_t *out_exit) {
+    // El CFG (por-ISA) trocea el body en bloques basicos + aristas.  Usamos su
+    // lista de instrucciones (mismo troceo que instructions()) para indexar los
+    // bloques de forma consistente.  Anadimos un `nop` centinela al final: una
+    // etiqueta de SALIDA colocada al final (idioma comun `... jCC end; ...;
+    // end:`) queda sin instruccion a la que adjuntarse -> el nop la ancla y el
+    // salto se resuelve a ese bloque (que cae a la continuacion).
+    const std::string body_cfg = body + "\nnop";
+    const vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, body_cfg);
+    std::vector<std::string> insns;
+    insns.reserve(cfg.insns.size());
+    for (const auto &in : cfg.insns) insns.push_back(in.text);
     if (insns.empty()) return false;
+    // Ramas no resueltas / terminadores desconocidos -> no liftamos (opaco).
+    if (cfg.has_unresolved_target || !cfg.unknown_terminators.empty())
+        return false;
 
     // Estado SSA por registro: cur[canon] = valor ARQUITECToNICO COMPLETO de
     // 64 bits del registro fisico (rax), con los bits altos correctos segun las
-    // reglas de x86.  wrote = registros LIGADOS escritos (para el write-back).
+    // reglas de x86.  wrote = registros LIGADOS escritos (para el flush).
     std::unordered_map<std::string, ir::IrValueId> cur;
     std::vector<std::string> wrote;
     auto mark_write = [&](const std::string &r) {
@@ -445,10 +593,12 @@ bool lift_x86(
         mark_write(canon);
     };
 
-    // Lift instruccion a instruccion.  Cualquier forma no soportada -> false.
-    // Indexado para poder mirar la SIGUIENTE instruccion (patrones fusionados
-    // de 2 instrucciones que dependen de las flags: cmp + setcc).
-    for (size_t ii = 0; ii < insns.size(); ++ii) {
+    // HOOK x86: lifta las instrucciones insns[from, to).  Indexado para mirar la
+    // SIGUIENTE instruccion (patrones fusionados de 2 instr que dependen de las
+    // flags: cmp+setcc / cmp+cmovcc).  El look-ahead NO cruza `to` (frontera de
+    // bloque en el camino CFG).  Cualquier forma no soportada -> false.
+    auto lift_range = [&](size_t from, size_t to) -> bool {
+    for (size_t ii = from; ii < to; ++ii) {
         const std::string &insn = insns[ii];
         std::string m;
         std::vector<std::string> ops;
@@ -462,7 +612,7 @@ bool lift_x86(
         // consumidor de flags modelado detras -> el par no encaja -> false (no
         // modelamos flags sueltas en straight-line).
         if ((m == "cmp" || m == "test") && ops.size() == 2 &&
-            ii + 1 < insns.size()) {
+            ii + 1 < to) {
             std::string m2;
             std::vector<std::string> ops2;
             split_insn(insns[ii + 1], m2, ops2);
@@ -698,22 +848,84 @@ bool lift_x86(
             if (!ok) return false;
             write_reg(rc, rw, rh, v, ok);
             if (!ok) return false;
+        } else if (m == "nop") {
+            // no-op (incluido el centinela de etiqueta final): no emite IR.
         } else {
             return false; // instruccion fuera del subset -> INLINE_ASM
         }
     }
+    return true;
+    }; // fin del hook lift_range
 
-    // Escribir de vuelta cada registro LIGADO escrito, al ancho de su var (el
-    // valor arquitectonico completo de 64 bits truncado al slot).
-    for (const std::string &r : wrote) {
-        auto b = bound.find(r);
-        auto v = cur.find(r);
-        if (b != bound.end() && v != cur.end()) {
-            const bool slot_host = fn.values[b->second.slot].is_host_ptr;
-            emit_store(fn, block, v->second, b->second.slot, b->second.width_bits,
-                       slot_host, line);
+    // --- 1 bloque (straight-line, sin ramas): liftar todo + flush final. ---
+    if (cfg.blocks.size() <= 1) {
+        if (!lift_range(0, insns.size())) return false;
+        for (const std::string &r : wrote) {
+            auto b = bound.find(r);
+            auto v = cur.find(r);
+            if (b != bound.end() && v != cur.end()) {
+                const bool slot_host = fn.values[b->second.slot].is_host_ptr;
+                emit_store(fn, block, v->second, b->second.slot,
+                           b->second.width_bits, slot_host, line);
+            }
         }
+        if (out_exit) *out_exit = block;
+        return true;
     }
+
+    // --- Con RAMAS: CFG del asm -> IR-CFG via el driver NEUTRO + hooks x86. ---
+    LiftCtx ctx{fn, block, line, bound, cur, wrote};
+    CfgHooks hooks;
+    hooks.lift_range = [&](size_t from, size_t to) {
+        return lift_range(from, to);
+    };
+    hooks.term_start = [&](const vx::AsmBasicBlock &bb) -> uint32_t {
+        // x86: CondBranch -> el cmp (last-1, lo maneja branch_cond); UncondJump
+        // -> el jmp (last, no es cuerpo); resto -> last+1 (todo es cuerpo).
+        if (bb.term == vx::AsmTerm::CondBranch)
+            return (bb.last > bb.first) ? bb.last - 1u : bb.first;
+        if (bb.term == vx::AsmTerm::UncondJump) return bb.last;
+        return bb.last + 1u;
+    };
+    hooks.branch_cond = [&](const vx::AsmBasicBlock &bb) -> ir::IrValueId {
+        // Terminador esperado: `cmp/test a,b` (last-1) + `jCC target` (last).
+        if (bb.last < 1u) return ir::IR_NO_VALUE;
+        const size_t ci = bb.last - 1u;
+        if (ci < bb.first) return ir::IR_NO_VALUE;
+        std::string cm;
+        std::vector<std::string> cops;
+        split_insn(insns[ci], cm, cops);
+        if ((cm != "cmp" && cm != "test") || cops.size() != 2)
+            return ir::IR_NO_VALUE;
+        std::string jm;
+        std::vector<std::string> jops;
+        split_insn(insns[bb.last], jm, jops);
+        if (jm.size() < 2 || jm[0] != 'j') return ir::IR_NO_VALUE;
+        ir::IrOp cop;
+        bool csigned = false;
+        if (!setcc_to_cmp(jm.substr(1), cop, csigned)) return ir::IR_NO_VALUE;
+        bool ok = true;
+        std::string ac;
+        bool ah = false;
+        const int aw = reg_info(cops[0], ac, ah);
+        if (aw == 0) return ir::IR_NO_VALUE;
+        ir::IrValueId av, bv;
+        if (cm == "test") {
+            if (cops[0] != cops[1]) return ir::IR_NO_VALUE;
+            av = read_reg(ac, aw, ah, csigned, ok);
+            if (!ok) return ir::IR_NO_VALUE;
+            bv = K(0);
+        } else {
+            av = read_reg(ac, aw, ah, csigned, ok);
+            if (!ok) return ir::IR_NO_VALUE;
+            bv = read_op(cops[1], aw, csigned, ok);
+            if (!ok) return ir::IR_NO_VALUE;
+        }
+        return BIN(cop, av, bv);
+    };
+    uint32_t exit_blk = block;
+    if (!lift_cfg_neutral(ctx, cfg, hooks, exit_blk)) return false;
+    if (out_exit) *out_exit = exit_blk;
     return true;
 }
 
@@ -722,12 +934,14 @@ bool lift_x86(
 bool asm_lift_general(
     ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     const std::string &body,
-    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line) {
+    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line,
+    uint32_t *out_exit) {
     /* Dispatch por ISA.  Cada arquitectura aporta su frontend (mnemonicos +
      * parsing + semantica de registro parcial) y baja al MISMO IR neutro.
      * arm64/arm32/riscv: anadir su lift_<isa> reusando el core de emision. */
     switch (isa) {
-    case instr_db::Isa::X86: return lift_x86(fn, block, body, bound, line);
+    case instr_db::Isa::X86:
+        return lift_x86(fn, block, body, bound, line, out_exit);
     default: return false; // ISA sin lifter aun -> el llamador cae a ASM_MICRO
     }
 }

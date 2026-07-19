@@ -67,7 +67,8 @@ struct AsmBoundReg {
 bool asm_lift_general(
     ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     const std::string &body,
-    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line);
+    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line,
+    uint32_t *out_exit = nullptr);
 
 } // namespace vx
 

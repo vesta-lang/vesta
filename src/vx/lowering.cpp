@@ -13655,9 +13655,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     }
                     bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
                 }
+            uint32_t asm_exit = current_block_;
             if (vx::asm_lift_general(*fn_, current_block_, vx::instr_db::Isa::X86,
-                                     ia.func_name, bound, s->loc.line))
+                                     ia.func_name, bound, s->loc.line,
+                                     &asm_exit)) {
+                // Si el asm tenia ramas, el lift creo un CFG y devuelve el bloque
+                // de CONTINUACION: el codigo siguiente se baja ahi.
+                current_block_ = asm_exit;
                 return; // bloque liftado a IR real -> NO se emite el INLINE_ASM.
+            }
         }
 
         // Si no encaja un patron tipado, intentar el lift GENERAL a ASM_MICRO:
