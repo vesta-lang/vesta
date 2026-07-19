@@ -2165,7 +2165,7 @@ def _(ctx):
     de lagunas.  factorial es puro/determinista sin lagunas; un programa con
     reflexion/FFI reporta opacidad fundamental (ffi-nativo)."""
     # (1) factorial: puro, sin lagunas.  --effects es flag de primera clase.
-    code, log = ctx.run([VM_EXE, "--effects", ctx.src("01_factorial.vx")])
+    code, log = ctx.run([VM_EXE, "--analyze", ctx.src("01_factorial.vx")])
     if code != 0:
         ctx.fail("--effects salio con codigo %d" % code, log)
         return
@@ -2177,7 +2177,7 @@ def _(ctx):
         return
     ctx.ok("factorial: pure + sin lagunas")
     # (2) reflexion/FFI: opacidad fundamental reportada.
-    code, log = ctx.run([VM_EXE, "--effects",
+    code, log = ctx.run([VM_EXE, "--analyze",
                          ctx.src("100_reflection_full.vx")])
     if code != 0:
         ctx.fail("--effects (reflexion) salio con codigo %d" % code, log)

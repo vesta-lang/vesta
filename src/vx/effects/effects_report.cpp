@@ -7,7 +7,7 @@
 
 /**
  * @file effects_report.cpp
- * @brief Reporte legible del modelo de efectos (--analyze --effects): efectos +
+ * @brief Reporte legible del modelo de efectos (--analyze): efectos +
  *        contratos derivados + lagunas de precision, por proyeccion del
  *        SemanticSummary (misma fuente que consume el compilador).
  */

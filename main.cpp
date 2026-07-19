@@ -627,15 +627,7 @@ int main(int argc, char *argv[]) {
             "analizado (reemplaza las de contrato existentes de cada funcion/"
             "metodo definido ahi).  Re-verifica antes de guardar; si algo no "
             "cuadra, no toca el fichero.  Las funciones de imports no se tocan "
-            "(analiza ese fichero por separado).")(
-            "effects",
-            "Analiza un .vx e imprime, por funcion, los EFECTOS inferidos "
-            "(memoria/control/alloc/throw/block/io/determinismo/tags) y los "
-            "CONTRATOS derivados automaticamente (pure/readonly/leaf/nothrow/"
-            "deterministic/heap_free/...), mas un reporte de LAGUNAS de precision "
-            "(que ops faltan por modelar, donde la opacidad es fundamental).  "
-            "Modelo unico de efectos; cero impacto en codegen.",
-            cxxopts::value<std::string>())
+            "(analiza ese fichero por separado).")
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1808,13 +1800,8 @@ int main(int argc, char *argv[]) {
     //   vm --analyze prog.vx            -> salida legible
     //   vm --analyze prog.vx --analyze-json -> JSON (para diagramas)
     // -----------------------------------------------------------------
-    if (result.count("analyze") || result.count("effects")) {
-        // --effects es un flag de PRIMERA CLASE: toma su propio path y corre el
-        // reporte de efectos de forma autonoma (no necesita --analyze).  Con
-        // --analyze presente, el path sale de ahi y --effects actua ademas.
-        const std::string &vx_path = result.count("analyze")
-                                         ? result["analyze"].as<std::string>()
-                                         : result["effects"].as<std::string>();
+    if (result.count("analyze")) {
+        const std::string &vx_path = result["analyze"].as<std::string>();
         const bool want_json = result.count("analyze-json") > 0;
 
         std::ifstream ifs(vx_path);
@@ -1876,14 +1863,11 @@ int main(int argc, char *argv[]) {
         // @stack DECLARADO al total de sus callers (su frame real no se ve).
         analyze::compose_fingerprints(fps_post, &cr.contracts);
 
-        // Modelo UNICO de efectos (--effects): corre EffectAnalysis sobre el IR
-        // POST-opt y proyecta contratos + efectos + reporte de lagunas.  Es la
-        // validacion del modelo contra programas reales y la exposicion al
-        // usuario.  Aditivo: solo con el flag, no altera el resto del --analyze.
-        if (result.count("effects")) {
-            vx::print_effects_report(std::cout, amod_post);
-            return EXIT_SUCCESS;
-        }
+        // Modelo UNICO de efectos: corre EffectAnalysis sobre el IR POST-opt y
+        // proyecta contratos + efectos + reporte de lagunas como parte de
+        // --analyze (seccion propia, solo en modo texto; el JSON no la incluye
+        // todavia).  Es la exposicion del modelo de efectos al usuario.
+        if (!want_json) vx::print_effects_report(std::cout, amod_post);
         auto find_fp = [&](const std::string &name)
             -> const analyze::FunctionFingerprint * {
             for (const auto &f : fps_post)
