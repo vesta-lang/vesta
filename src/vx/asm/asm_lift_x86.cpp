@@ -296,11 +296,63 @@ bool lift_x86(
         mark_write(canon);
     };
 
-    // HOOK x86: lifta las instrucciones insns[from, to).  Indexado para mirar la
-    // SIGUIENTE instruccion (patrones fusionados de 2 instr que dependen de las
-    // flags: cmp+setcc / cmp+cmovcc).  El look-ahead NO cruza `to` (frontera de
-    // bloque en el camino CFG).  Cualquier forma no soportada -> false.
+    // === FLAGS como pseudo-registro SSA ===
+    // Modelamos EFLAGS como estado del register-file: cmp/test las DEFINEN
+    // (capturan sus operandos); setcc/cmovcc/jCC las LEEN.  Asi el consumidor no
+    // tiene que ir ADYACENTE al cmp (las instrucciones flag-neutral entre medias
+    // no las tocan) y el MISMO modelo sirve para setcc, cmov y las ramas del CFG
+    // -- sin patrones especificos.  Bloque-local (se resetean por bloque).
+    struct FlagsInfo {
+        bool valid = false;
+        bool is_test = false;
+        ir::IrValueId a = 0, b = 0; // valores FULL 64b capturados en el cmp/test
+        int width = 64;
+        bool a_high = false, b_high = false;
+    };
+    FlagsInfo flags;
+
+    // ¿el mnemonico PRESERVA las flags? (no las escribe).  cmp/test las definen
+    // aparte; setcc/cmov las leen pero no escriben; el resto de la ALU las pisa.
+    auto preserves_flags = [](const std::string &m) -> bool {
+        if (m == "mov" || m == "movq" || m == "lea" || m == "movzx" ||
+            m == "movsx" || m == "movsxd" || m == "nop" || m == "bswap" ||
+            m == "cqo" || m == "cqto" || m == "cdq" || m == "cdqe")
+            return true;
+        return (m.size() >= 3 && m.compare(0, 3, "set") == 0) ||
+               (m.size() >= 4 && m.compare(0, 4, "cmov") == 0);
+    };
+
+    // Calcula la SSA (0/1) de la condicion @p cop (signo @p csigned) a partir de
+    // las flags pendientes; @c IR_NO_VALUE si no hay flags usables.
+    auto flags_cond = [&](ir::IrOp cop, bool csigned) -> ir::IrValueId {
+        if (!flags.valid) return ir::IR_NO_VALUE;
+        auto ext = [&](ir::IrValueId v, bool high, bool sgn) -> ir::IrValueId {
+            ir::IrValueId x = high ? BIN(ir::IrOp::SHR, v, K(8)) : v;
+            if (flags.width >= 64) return x;
+            return sgn ? sext_low(x, flags.width) : and_mask(x, flags.width);
+        };
+        if (flags.is_test) {
+            // test: flags de (a & b).  CF=OF=0 -> las cc sin signo no aplican;
+            // eq/ne/l/g/le/ge -> (a&b) al ancho, con signo, comparado con 0.
+            if (cop == ir::IrOp::CMP_ULT || cop == ir::IrOp::CMP_UGT ||
+                cop == ir::IrOp::CMP_ULE || cop == ir::IrOp::CMP_UGE)
+                return ir::IR_NO_VALUE;
+            const ir::IrValueId ta = ext(flags.a, flags.a_high, false);
+            const ir::IrValueId tb = ext(flags.b, flags.b_high, false);
+            ir::IrValueId t = BIN(ir::IrOp::AND, ta, tb);
+            if (flags.width < 64) t = sext_low(t, flags.width);
+            return BIN(cop, t, K(0));
+        }
+        const ir::IrValueId av = ext(flags.a, flags.a_high, csigned);
+        const ir::IrValueId bv = ext(flags.b, flags.b_high, csigned);
+        return BIN(cop, av, bv);
+    };
+
+    // HOOK x86: lifta las instrucciones insns[from, to) en c.block.  Cualquier
+    // forma no soportada -> false.  El look-ahead ya no hace falta: las flags
+    // fluyen por el pseudo-registro (arriba).
     auto lift_range = [&](size_t from, size_t to) -> bool {
+    flags.valid = false; // register-file de flags: bloque-local
     for (size_t ii = from; ii < to; ++ii) {
         const std::string &insn = insns[ii];
         std::string m;
@@ -309,91 +361,84 @@ bool lift_x86(
         ir::IrOp bop;
         bool ok = true;
 
-        // cmp/test a,b + (setcc rd | cmovcc rd,rs): patron fusionado que
-        // consume las flags EN EL PAR -> comparacion tipada (setcc) o select
-        // branchless (cmov).  Las flags no cruzan el par.  cmp/test sin un
-        // consumidor de flags modelado detras -> el par no encaja -> false (no
-        // modelamos flags sueltas en straight-line).
-        if ((m == "cmp" || m == "test") && ops.size() == 2 &&
-            ii + 1 < to) {
-            std::string m2;
-            std::vector<std::string> ops2;
-            split_insn(insns[ii + 1], m2, ops2);
-            ir::IrOp cop;
-            bool csigned = false;
-            bool is_set = false, is_cmov = false;
-            if (m2.size() >= 4 && m2.compare(0, 3, "set") == 0 &&
-                ops2.size() == 1)
-                is_set = setcc_to_cmp(m2.substr(3), cop, csigned);
-            if (!is_set && m2.size() > 4 && m2.compare(0, 4, "cmov") == 0 &&
-                ops2.size() == 2)
-                is_cmov = setcc_to_cmp(m2.substr(4), cop, csigned);
-            if (!is_set && !is_cmov) return false;
-
-            // cond = (a <cc> b), leyendo a/b al ancho del cmp con el signo del cc.
+        // cmp/test a,b: DEFINEN las flags (capturan sus operandos FULL); no
+        // emiten nada todavia.  El consumidor (setcc/cmov/jCC) las leera.
+        if ((m == "cmp" || m == "test") && ops.size() == 2) {
             std::string ac;
             bool ah = false;
             const int aw = reg_info(ops[0], ac, ah);
-            if (aw == 0) return false;
-            ir::IrValueId av, bv;
-            if (m == "test") {
-                // test r,r == cmp r,0 (solo el mismo registro).
-                if (ops[0] != ops[1]) return false;
-                av = read_reg(ac, aw, ah, csigned, ok);
-                if (!ok) return false;
-                bv = K(0);
+            if (aw == 0) return false; // 1er operando debe ser registro
+            const ir::IrValueId a_full = get_full(ac, ok);
+            if (!ok) return false;
+            ir::IrValueId b_full;
+            bool bh = false;
+            int64_t imm = 0;
+            if (parse_imm(ops[1], imm)) {
+                b_full = K(imm);
             } else {
-                av = read_reg(ac, aw, ah, csigned, ok);
-                if (!ok) return false;
-                bv = read_op(ops[1], aw, csigned, ok);
+                std::string bc;
+                if (reg_info(ops[1], bc, bh) == 0) return false; // solo reg/imm
+                b_full = get_full(bc, ok);
                 if (!ok) return false;
             }
-            const ir::IrValueId cond = BIN(cop, av, bv); // 0/1
-
-            if (is_set) {
-                // setcc rd: byte 0/1; resto del registro preservado.
-                std::string dc;
-                bool dh = false;
-                if (reg_info(ops2[0], dc, dh) == 0) return false;
-                write_reg(dc, 8, dh, cond, ok);
-                if (!ok) return false;
+            flags.valid = true;
+            flags.is_test = (m == "test");
+            flags.a = a_full;
+            flags.b = b_full;
+            flags.width = aw;
+            flags.a_high = ah;
+            flags.b_high = bh;
+            // (no invalidar abajo: cmp/test SoLO definen)
+        } else if (m.size() >= 4 && m.compare(0, 3, "set") == 0 &&
+                   ops.size() == 1) {
+            // setcc rd: LEE las flags -> byte 0/1; resto del registro preservado.
+            ir::IrOp cop;
+            bool csigned = false;
+            if (!setcc_to_cmp(m.substr(3), cop, csigned)) return false;
+            const ir::IrValueId cond = flags_cond(cop, csigned);
+            if (cond == ir::IR_NO_VALUE) return false;
+            std::string dc;
+            bool dh = false;
+            if (reg_info(ops[0], dc, dh) == 0) return false;
+            write_reg(dc, 8, dh, cond, ok);
+            if (!ok) return false;
+        } else if (m.size() > 4 && m.compare(0, 4, "cmov") == 0 &&
+                   ops.size() == 2) {
+            // cmovcc rd, rs: LEE las flags.  rd = cond ? (rs al ancho) : rd via
+            // SELECT branchless (mask = -(cond); rd = rd_old ^ ((rd_old ^ taken)
+            // & mask)).  Respeta la asimetria (taken 32b zero-extiende; not-taken
+            // preserva TODO).
+            ir::IrOp cop;
+            bool csigned = false;
+            if (!setcc_to_cmp(m.substr(4), cop, csigned)) return false;
+            const ir::IrValueId cond = flags_cond(cop, csigned);
+            if (cond == ir::IR_NO_VALUE) return false;
+            if (is_mem(ops[1])) return false;
+            std::string dc, sc;
+            bool dh = false, sh = false;
+            const int dw = reg_info(ops[0], dc, dh);
+            const int sw = reg_info(ops[1], sc, sh);
+            if (dw == 0 || sw == 0 || dw != sw) return false;
+            const ir::IrValueId rd_old = get_full(dc, ok);
+            if (!ok) return false;
+            const ir::IrValueId rs = read_reg(sc, dw, sh, false, ok);
+            if (!ok) return false;
+            ir::IrValueId taken;
+            if (dw >= 32) {
+                taken = rs;
             } else {
-                // cmovcc rd, rs: rd = cond ? (rs escrito al ancho) : rd.  Select
-                // BRANCHLESS (el lifter no emite ramas): mask = -(cond) (0 o -1);
-                // rd = rd_old ^ ((rd_old ^ taken) & mask).  Respeta la asimetria
-                // de cmov: taken de 32 bits zero-extiende; not-taken preserva TODO.
-                if (is_mem(ops2[1])) return false; // solo reg
-                std::string dc, sc;
-                bool dh = false, sh = false;
-                const int dw = reg_info(ops2[0], dc, dh);
-                const int sw = reg_info(ops2[1], sc, sh);
-                if (dw == 0 || sw == 0 || dw != sw) return false;
-                const ir::IrValueId rd_old = get_full(dc, ok);
-                if (!ok) return false;
-                const ir::IrValueId rs = read_reg(sc, dw, sh, false, ok);
-                if (!ok) return false;
-                // taken = rs escrito en rd al ancho de cmov.
-                ir::IrValueId taken;
-                if (dw >= 32) {
-                    taken = rs; // low-dw zero-extendido = escritura de 32/64
-                } else {
-                    taken = BIN(ir::IrOp::OR,
-                                BIN(ir::IrOp::AND, rd_old,
-                                    K((int64_t)~width_mask(dw))),
-                                rs);
-                }
-                const ir::IrValueId mask =
-                    emit_un(fn, block, ir::IrOp::NEG, cond, line);
-                const ir::IrValueId diff = BIN(ir::IrOp::XOR, rd_old, taken);
-                cur[dc] = BIN(ir::IrOp::XOR, rd_old,
-                              BIN(ir::IrOp::AND, diff, mask));
-                mark_write(dc);
+                taken = BIN(ir::IrOp::OR,
+                            BIN(ir::IrOp::AND, rd_old,
+                                K((int64_t)~width_mask(dw))),
+                            rs);
             }
-            ++ii; // consumir el setcc/cmov
-            continue;
-        }
-
-        if (m == "mov" && ops.size() == 2) {
+            const ir::IrValueId mask =
+                emit_un(fn, block, ir::IrOp::NEG, cond, line);
+            const ir::IrValueId diff = BIN(ir::IrOp::XOR, rd_old, taken);
+            cur[dc] = BIN(ir::IrOp::XOR, rd_old,
+                          BIN(ir::IrOp::AND, diff, mask));
+            mark_write(dc);
+        } else if (m == "mov" && ops.size() == 2) {
             const std::string dmem = plain_mem(ops[0]);
             const std::string smem = plain_mem(ops[1]);
             // Memoria con modo de direccionamiento no-plano ([base+idx*sc+disp])
@@ -437,14 +482,34 @@ bool lift_x86(
                 if (!ok) return false;
             }
         } else if (m == "lea" && ops.size() == 2) {
+            // lea rd, [base + index*scale + disp]: NO desreferencia -- calcula la
+            // DIRECCION (aritmetica de 64 bits) y la deja en rd.  Idioma clasico
+            // de aritmetica rapida (rd = base + index*scale + disp en 1 instr).
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            const std::string src = plain_mem(ops[1]);
-            if (rw == 0 || src.empty()) return false; // solo lea rd,[reg]
-            const ir::IrValueId a = get_full(src, ok);
-            if (!ok) return false;
-            write_reg(rc, rw, rh, a, ok);
+            if (rw == 0) return false;
+            const MemAddr ma = parse_mem(ops[1]);
+            if (!ma.ok) return false;
+            ir::IrValueId acc = 0;
+            bool have = false;
+            if (!ma.base.empty()) {
+                acc = get_full(ma.base, ok);
+                if (!ok) return false;
+                have = true;
+            }
+            if (!ma.index.empty()) {
+                ir::IrValueId idx = get_full(ma.index, ok);
+                if (!ok) return false;
+                if (ma.scale != 1) idx = BIN(ir::IrOp::MUL, idx, K(ma.scale));
+                acc = have ? BIN(ir::IrOp::ADD, acc, idx) : idx;
+                have = true;
+            }
+            if (ma.disp != 0 || !have) {
+                const ir::IrValueId d = K(ma.disp);
+                acc = have ? BIN(ir::IrOp::ADD, acc, d) : d;
+            }
+            write_reg(rc, rw, rh, acc, ok);
             if (!ok) return false;
         } else if (binop_of(m, bop) && ops.size() == 2) {
             std::string rc;
@@ -616,6 +681,12 @@ bool lift_x86(
         } else {
             return false; // instruccion fuera del subset -> INLINE_ASM
         }
+        // Register-file de flags: toda instruccion que las PISE invalida el
+        // pseudo-registro (cmp/test lo definen; setcc/cmov/flag-neutral lo
+        // preservan).  Asi un consumidor no-adyacente sigue viendo el cmp
+        // mientras no haya un flag-writer entre medias.
+        if (m != "cmp" && m != "test" && !preserves_flags(m))
+            flags.valid = false;
     }
     return true;
     }; // fin del hook lift_range
@@ -643,23 +714,19 @@ bool lift_x86(
         return lift_range(from, to);
     };
     hooks.term_start = [&](const vx::AsmBasicBlock &bb) -> uint32_t {
-        // x86: CondBranch -> el cmp (last-1, lo maneja branch_cond); UncondJump
-        // -> el jmp (last, no es cuerpo); resto -> last+1 (todo es cuerpo).
-        if (bb.term == vx::AsmTerm::CondBranch)
-            return (bb.last > bb.first) ? bb.last - 1u : bb.first;
-        if (bb.term == vx::AsmTerm::UncondJump) return bb.last;
+        // x86: CondBranch/UncondJump -> solo el jCC/jmp (last) es terminador; el
+        // cmp que define las flags queda en el CUERPO (lift_range lo procesa y
+        // deja las flags pendientes que branch_cond lee).  Resto -> todo cuerpo.
+        if (bb.term == vx::AsmTerm::CondBranch ||
+            bb.term == vx::AsmTerm::UncondJump)
+            return bb.last;
         return bb.last + 1u;
     };
     hooks.branch_cond = [&](const vx::AsmBasicBlock &bb) -> ir::IrValueId {
-        // Terminador esperado: `cmp/test a,b` (last-1) + `jCC target` (last).
-        if (bb.last < 1u) return ir::IR_NO_VALUE;
-        const size_t ci = bb.last - 1u;
-        if (ci < bb.first) return ir::IR_NO_VALUE;
-        std::string cm;
-        std::vector<std::string> cops;
-        split_insn(insns[ci], cm, cops);
-        if ((cm != "cmp" && cm != "test") || cops.size() != 2)
-            return ir::IR_NO_VALUE;
+        // El cuerpo del bloque (ya liftado por lift_range) dejo las flags
+        // pendientes en el pseudo-registro; aqui solo leemos la cc del jCC.  No
+        // exige adyacencia cmp/jCC: cualquier instruccion flag-neutral entre
+        // medias esta permitida (test asm_branch/asm_loop con calculo intermedio).
         std::string jm;
         std::vector<std::string> jops;
         split_insn(insns[bb.last], jm, jops);
@@ -667,24 +734,7 @@ bool lift_x86(
         ir::IrOp cop;
         bool csigned = false;
         if (!setcc_to_cmp(jm.substr(1), cop, csigned)) return ir::IR_NO_VALUE;
-        bool ok = true;
-        std::string ac;
-        bool ah = false;
-        const int aw = reg_info(cops[0], ac, ah);
-        if (aw == 0) return ir::IR_NO_VALUE;
-        ir::IrValueId av, bv;
-        if (cm == "test") {
-            if (cops[0] != cops[1]) return ir::IR_NO_VALUE;
-            av = read_reg(ac, aw, ah, csigned, ok);
-            if (!ok) return ir::IR_NO_VALUE;
-            bv = K(0);
-        } else {
-            av = read_reg(ac, aw, ah, csigned, ok);
-            if (!ok) return ir::IR_NO_VALUE;
-            bv = read_op(cops[1], aw, csigned, ok);
-            if (!ok) return ir::IR_NO_VALUE;
-        }
-        return BIN(cop, av, bv);
+        return flags_cond(cop, csigned); // lee las flags dejadas por el cuerpo
     };
     uint32_t exit_blk = block;
     if (!lift_cfg_neutral(ctx, cfg, hooks, exit_blk)) return false;

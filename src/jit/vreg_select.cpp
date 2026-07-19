@@ -631,6 +631,21 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     std::vector<uint8_t> binding_is_in(fn.values.size(), 0);
     std::vector<uint8_t> binding_is_out(fn.values.size(), 0);
     const bool has_inline_asm = !fn.asm_reg_bindings.empty();
+    /* Allocas que un bloque INLINE_ASM REAL (no lifteado) referencia como
+     * operando.  Un `register("reg")` cuyo(s) bloque(s) asm TODOS lifteron a IR
+     * normal ya no aparece en ningun INLINE_ASM: su var es una var corriente en
+     * su slot (el lift la modela leyendo/escribiendo el slot), asi que NO hay
+     * que fijarla a su registro fisico.  Esto es lo que permite `register("rbx")`
+     * (o rsp/rbp, reservados por el backend) cuando el asm se liftea: la
+     * restriccion del registro reservado desaparece con el pin. */
+    std::vector<uint8_t> alloca_in_real_asm(fn.values.size(), 0);
+    if (has_inline_asm)
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins2 : blk.instrs)
+                if (ins2.op == ir::IrOp::INLINE_ASM)
+                    for (const ir::IrValueId opv : ins2.operands)
+                        if (opv < alloca_in_real_asm.size())
+                            alloca_in_real_asm[opv] = 1u;
     if (has_inline_asm) {
         /* El ensamblado requiere un backend activo (lo registra main.cpp). */
         if (vx::g_asm_backend == nullptr) {
@@ -642,6 +657,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 vreg_dbg(fn.name.c_str(), "inline-asm(binding-oob)");
                 return false;
             }
+            /* Binding cuyo asm TODO lifto -> var normal, sin pin (deja el alloca
+             * como host-slot corriente; el lift ya emitio sus LOAD/STORE). */
+            if (!alloca_in_real_asm[b.alloca_value])
+                continue;
             if (b.is_vector) { /* banco FP no asignable en regalloc v1 */
                 vreg_dbg(fn.name.c_str(), "inline-asm(vector-bind)");
                 return false;
