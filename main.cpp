@@ -629,12 +629,13 @@ int main(int argc, char *argv[]) {
             "cuadra, no toca el fichero.  Las funciones de imports no se tocan "
             "(analiza ese fichero por separado).")(
             "effects",
-            "Con --analyze: imprime, por funcion, los EFECTOS inferidos (memoria/"
-            "control/alloc/throw/block/io/determinismo/tags) y los CONTRATOS "
-            "derivados automaticamente (pure/readonly/leaf/nothrow/deterministic/"
-            "heap_free/...), mas un reporte de LAGUNAS de precision (que ops "
-            "faltan por modelar, donde la opacidad es fundamental).  Modelo unico "
-            "de efectos; cero impacto en codegen.")
+            "Analiza un .vx e imprime, por funcion, los EFECTOS inferidos "
+            "(memoria/control/alloc/throw/block/io/determinismo/tags) y los "
+            "CONTRATOS derivados automaticamente (pure/readonly/leaf/nothrow/"
+            "deterministic/heap_free/...), mas un reporte de LAGUNAS de precision "
+            "(que ops faltan por modelar, donde la opacidad es fundamental).  "
+            "Modelo unico de efectos; cero impacto en codegen.",
+            cxxopts::value<std::string>())
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1807,8 +1808,13 @@ int main(int argc, char *argv[]) {
     //   vm --analyze prog.vx            -> salida legible
     //   vm --analyze prog.vx --analyze-json -> JSON (para diagramas)
     // -----------------------------------------------------------------
-    if (result.count("analyze")) {
-        const std::string &vx_path = result["analyze"].as<std::string>();
+    if (result.count("analyze") || result.count("effects")) {
+        // --effects es un flag de PRIMERA CLASE: toma su propio path y corre el
+        // reporte de efectos de forma autonoma (no necesita --analyze).  Con
+        // --analyze presente, el path sale de ahi y --effects actua ademas.
+        const std::string &vx_path = result.count("analyze")
+                                         ? result["analyze"].as<std::string>()
+                                         : result["effects"].as<std::string>();
         const bool want_json = result.count("analyze-json") > 0;
 
         std::ifstream ifs(vx_path);
