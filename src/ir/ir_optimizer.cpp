@@ -11,6 +11,8 @@
  */
 
 #include "ir/ir_optimizer.h"
+#include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
+#include "vx/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include <unordered_map>
 #include <map>
 #include <set>
@@ -20,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <cstdlib>
 #include <cmath>
 #include <limits>
@@ -5349,7 +5352,35 @@ bool ir_pass_elide_unwrap(IrFunction &fn) {
     return changed;
 }
 
+// Consumidor A/B del MODELO UNICO de efectos: ¿la instruccion @p ins no tiene
+// NINGUN efecto observable (segun el modelo) -> se puede eliminar si su dst esta
+// muerto?  Es la version del modelo de @c is_side_effecting, pero instruccion-
+// aware.  SOUND-conservador: exige analisis Complete + ningun may_* + sin
+// escritura de memoria + control local (FallThrough).  Se activa con
+// VESTA_DCE_EFFECTS=1 para validar (A/B) que coincide con is_side_effecting antes
+// de hacerlo el default.  Default OFF -> cero cambio de comportamiento.
+static bool g_dce_effects = [] {
+    const char *e = std::getenv("VESTA_DCE_EFFECTS");
+    return e && e[0] == '1';
+}();
+
+static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
+                            const IrInstr &ins) {
+    const vx::fx::EffectAnalysisResult r =
+        vx::fx::effects_of_instr(fn, facts, ins);
+    if (r.completeness != vx::fx::AnalysisCompleteness::Complete) return false;
+    const vx::fx::SemanticEffects &e = r.effects;
+    return !e.mem.writes_memory() && !e.may_trap && !e.may_throw &&
+           !e.may_allocate && !e.may_block && !e.may_io && e.tags.empty() &&
+           e.atomic.order == vx::fx::MemOrder::None && !e.atomic.is_fence &&
+           e.control.kind == vx::fx::ControlKind::FallThrough;
+}
+
 bool ir_pass_dce(IrFunction &fn) {
+    // Modelo de efectos (A/B): hechos por-funcion para el consumidor del DCE.
+    analysis::IrFacts fx_facts;
+    if (g_dce_effects) fx_facts = analysis::build_ir_facts(fn);
+
     // Construir conjunto de valores que son usados en algun operando
     std::unordered_set<IrValueId> used;
     for (const auto &bb : fn.blocks) {
@@ -5384,8 +5415,16 @@ bool ir_pass_dce(IrFunction &fn) {
             // Una instruccion con resultado no usado y sin efectos laterales se
             // elimina, EXCEPTO si lleva el flag @c preserve (barreras del
             // codegen).
-            if (ins.dst != IR_NO_VALUE && !used.count(ins.dst) &&
-                (!is_side_effecting(ins.op) || alloc_only_string_op(ins.op)) &&
+            // Sin efectos: por defecto la tabla is_side_effecting (op-only);
+            // con VESTA_DCE_EFFECTS, el MODELO unico (instruccion-aware).  El
+            // caso alloc-only-string se mantiene en ambos (el modelo lo veria
+            // como may_allocate y no lo quitaria; se conserva la optimizacion).
+            const bool no_effect =
+                g_dce_effects
+                    ? (model_removable(fn, fx_facts, ins) ||
+                       alloc_only_string_op(ins.op))
+                    : (!is_side_effecting(ins.op) || alloc_only_string_op(ins.op));
+            if (ins.dst != IR_NO_VALUE && !used.count(ins.dst) && no_effect &&
                 !ins.preserve) {
                 keep = false;
                 changed = true;
