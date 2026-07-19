@@ -36,7 +36,7 @@
 #include "gc/raw_allocator.h" // Phase D.7 perf: inline slab fast-path
 #include "vx/asm/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
 #include "vx/asm/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
-#include "vx/asm/asm_phys_reg.h" // inc2b.1: sustitucion $N -> reg fisico
+#include "vx/asm/asm_phys_reg.h" // sustitucion $N -> reg fisico
 /* arena -> windows.h (Win32) define macros que chocan con nombres del enum
  * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST.
  */
@@ -647,7 +647,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 return false;
             }
             if (b.reg_auto) {
-                // inc2b.2: operando `reg` AUTO -> register-required (el RA elige
+                // operando `reg` AUTO -> register-required (el RA elige
                 // el fisico OPTIMO, no lo derrama).  El fisico se conoce
                 // post-regalloc; marcamos binding_phys con un sentinel >=0 para
                 // que la clasificacion in/out lo incluya (su intervalo cubre el
@@ -3362,7 +3362,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
                     return false;
                 }
-                // inc2b.2: si hay operandos `reg` AUTO, el cuerpo lleva $N y el
+                // si hay operandos `reg` AUTO, el cuerpo lleva $N y el
                 // fisico de cada uno lo elige el RA -> DIFERIR el ensamblado a
                 // post-regalloc (regalloc_rewrite).  @c ar queda vacio (los
                 // sym_refs/labels/bytes se rellenan al ensamblar en el rewrite).
@@ -3507,25 +3507,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             } else if (c == "rbp") {
                                 save_rbp = true;
                             } else if (c == "rsp") {
-                                // inc2b.3: un asm que reasigna rsp (stack switch,
-                                // corrutinas) SOLO es seguro en una funcion
-                                // @Naked -- sin prologo/epilogo/spills que un
-                                // rsp corrupto rompa; el usuario es dueno de la
-                                // pila.  En una funcion NORMAL el epilogue usa
-                                // rsp -> fallback al interp (seguridad).
-                                if (!fn.is_naked) {
-                                    vreg_dbg(fn.name.c_str(),
-                                             "inline-asm(clobber-rsp)");
-                                    return false;
-                                }
-                                // @Naked: emitir el asm verbatim (el rsp lo
-                                // maneja el propio asm).  No se registra el
-                                // clobber (rsp no es asignable por el RA).
+                                // Un asm que reasigna rsp (stack switch para
+                                // corrutinas/fibras) se compila nativamente en
+                                // ambos casos: NO cae al interp.  En @Naked el
+                                // usuario es dueno de la pila.  En una funcion
+                                // NORMAL su epilogue gestiona rsp; el frontend ya
+                                // avisa (warning) de que un cambio de pila
+                                // persistente exige @Naked.  rsp no se registra
+                                // como clobber (no es asignable por el RA); el
+                                // asm lo maneja verbatim.
                             }
                         }
                     }
                 }
-                // inc2b.2: blob DIFERIDO -> plantilla ($N) + descriptor por
+                // blob DIFERIDO -> plantilla ($N) + descriptor por
                 // operando `reg` auto (su alloca vreg; el rewrite pone
                 // ra.reg_of(vreg) en $ph_index).  Los operandos concretos ya
                 // quedaron horneados en la plantilla por el ph_subst del lowering.
@@ -3599,13 +3594,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 if (in.imm >= fn.asm_micros.size()) return false;
                 const ir::AsmMicro &am = fn.asm_micros[in.imm];
-                // inc2b.1: sustituir $0,$1,... por el nombre del registro FiSICO
+                // sustituir $0,$1,... por el nombre del registro FiSICO
                 // FIJO de cada operando ANTES de ensamblar.  Sin operandos, la
                 // plantilla no tiene $N y queda verbatim (caso mfence/etc).
                 std::string nasm = am.tmpl;
                 if (!am.operands.empty() &&
                     !vx::asm_micro_subst_phys(am, nasm)) {
-                    // Operando no fisico (SSA/RA) o clase no soportada -> inc2b.2/.3.
+                    // Operando no fisico (SSA/RA) o clase no soportada.
                     vreg_dbg(fn.name.c_str(), "asm_micro(operando-no-fisico)");
                     return false;
                 }

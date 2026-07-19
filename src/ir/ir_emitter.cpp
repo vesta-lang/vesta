@@ -42,7 +42,7 @@
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_effects.h"           // inc.6: asm_canonical_reg
-#include "vx/asm/asm_phys_reg.h"          // inc2b.1: sustitucion $N -> reg fisico
+#include "vx/asm/asm_phys_reg.h"          // sustitucion $N -> reg fisico
 #include "jit/inline_asm_trampoline.h" // inc.6: fnv1a64_asm (clave del trampoline)
 #include "loader/interp_stackmap.h"    // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
 #include <sstream>
@@ -5086,7 +5086,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
 
-        // inc2b.2: el cuerpo puede llevar $N (operandos `reg` auto).  El interp
+        // el cuerpo puede llevar $N (operandos `reg` auto).  El interp
         // no tiene RA -> sustituye $N por el pick GREEDY del binding.  El hash
         // debe ser del cuerpo SUSTITUIDO (el trampolin registra el mismo).
         const std::string ibody =
@@ -5153,13 +5153,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
         const AsmMicro &am = ctx.fn.asm_micros[ins.imm];
-        // inc2b.1: sustituir $0,$1,... por el registro FiSICO FIJO de cada
+        // sustituir $0,$1,... por el registro FiSICO FIJO de cada
         // operando; sin operandos la plantilla queda verbatim.  El hash es el
         // del TEXTO FINAL (== el que registra el trampolin).  Un operando no
-        // fisico (SSA/RA) o clase no soportada -> trap (inc2b.2/.3).
+        // fisico (SSA/RA) o clase no soportada -> trap.
         std::string nasm = am.tmpl;
         if (!am.operands.empty() && !vx::asm_micro_subst_phys(am, nasm)) {
-            ctx.comment("asm_micro con operando no fisico -> trap (inc2b.2)");
+            ctx.comment("asm_micro con operando no fisico -> trap");
             ctx.out << "    hlt\n";
             break;
         }

@@ -29,8 +29,9 @@ const CatEntry kEntries[] = {
     {"VXA007", {"asm: flags are modified but clobbers(\"flags\") is not declared with 'noinfer'", "asm: las flags se modifican pero no se declara clobbers(\"flags\") con 'noinfer'"}},
     {"VXA008", {"asm: cannot pin operand '{0}' to '{1}' (the stack/frame pointer): a Vesta value cannot live there without breaking the stack. Manipulate the stack directly in the asm body instead (push/pop, sub rsp, mov rax rsp), or use @Naked for a stack switch", "asm: no se puede pinear el operando '{0}' a '{1}' (el puntero de pila/marco): un valor Vesta no puede vivir ahi sin romper la pila. Manipula la pila directamente en el cuerpo del asm (push/pop, sub rsp, mov rax rsp), o usa @Naked para un cambio de pila"}},
     {"VXA009", {"asm: operand '{0}' pinned to '{1}' -- that register is reserved by the runtime in VM mode; this asm block cannot be JIT-compiled (runs in the interpreter)", "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el runtime en modo VM; este bloque asm no se puede compilar en JIT (corre en el interprete)"}},
+    {"VXA010", {"asm: reassigns the stack pointer ('{0}') in a normal function; its epilogue manages the stack, so a persistent stack switch (coroutines/fibers) will not survive the return -- mark the function @Naked to own the stack, or balance the change (restore '{0}') before the block ends", "asm: reasigna el puntero de pila ('{0}') en una funcion normal; su epilogue gestiona la pila, asi que un cambio de pila persistente (corrutinas/fibras) no sobrevivira al retorno -- marca la funcion @Naked para ser dueno de la pila, o equilibra el cambio (restaura '{0}') antes de cerrar el bloque"}},
 };
-const int kEntryCount = 9;
+const int kEntryCount = 10;
 
 } // namespace
 

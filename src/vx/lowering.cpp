@@ -22,7 +22,7 @@
 #include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
 #include "vx/asm/asm_lift_emit.h"  // lift de patrones atomicos a IR tipado (ASA.3)
 #include "vx/asm/asm_lift_micro.h"
-#include "vx/asm/asm_phys_reg.h" // inc2b.2: asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
+#include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
 #include "vx/asm/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
 #include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
@@ -13177,13 +13177,13 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     static const char *kRegPref[] = {"r10", "r11", "r8",  "r9",  "rcx", "rdx",
                                      "rsi", "rdi", "rax", "rbx", "r12", "r13",
                                      "r14", "r15"};
-    int reg_auto_count = 0; // inc2b.2: indice $N de cada operando `reg` (auto)
+    int reg_auto_count = 0; // indice $N de cada operando `reg` (auto)
     for (auto &op : s->operands) {
         std::string reg;
         bool reg_auto = false;
         int ph_index = -1;
         if (op.reg_class == "reg") {
-            // inc2b.2: operando `reg` AUTO.  El cuerpo lo referencia por el
+            // operando `reg` AUTO.  El cuerpo lo referencia por el
             // placeholder $N; el JIT/AOT lo rellenan POST-regalloc con el
             // registro OPTIMO que elige el RA (constraint register-required,
             // ensamblado diferido).  Se conserva un pick GREEDY (kRegPref) en
@@ -13416,7 +13416,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         // Arch del TARGET (no del host): ARM si @Target lo pide, o 32/16 en x86
         // segun @bits / --aot-arch.
         const vx::AsmArch asm_arch = vx::asm_arch_for_target(asm_target_bits_);
-        // inc2b.2: el cuerpo puede llevar placeholders $N (operandos `reg`
+        // el cuerpo puede llevar placeholders $N (operandos `reg`
         // auto).  Para VALIDAR la sintaxis con Keystone hay que darle un cuerpo
         // concreto -> sustituimos $N por el pick greedy del binding (el
         // ensamblado real usa el registro OPTIMO del RA post-regalloc en el
@@ -13523,7 +13523,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             ia.operands.push_back(b.alloca_value);
             std::string c = asm_canonical_reg(b.reg);
             if (!c.empty()) bound_canon.push_back(c);
-            // inc2b.3: validar el PIN.  Manipular la pila desde el asm SI esta
+            // validar el PIN.  Manipular la pila desde el asm SI esta
             // permitido -- pero en el CUERPO (push/pop, sub rsp, mov rax,rsp;
             // todo eso funciona y el compilador lo entiende), NO pineando un
             // valor Vesta a rsp/rbp (no puede vivir en el puntero de pila sin
@@ -13540,6 +13540,78 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                                 {b.name, c});
             }
         }
+    }
+
+    // Reasignacion de rsp en una funcion NORMAL: el JIT lo compila (no cae al
+    // interprete), pero el epilogue de la funcion gestiona la pila, asi
+    // que un cambio de pila PERSISTENTE (corrutinas/fibras) no sobrevive al
+    // retorno.  Avisamos (no auto-corregimos): el usuario decide entre marcar
+    // la funcion @Naked (dueno de la pila) o equilibrar el cambio antes de
+    // cerrar el bloque.  Solo cuenta la REASIGNACION (mov/xchg/lea/pop de
+    // rsp/esp), no el ajuste balanceado (sub/add rsp, push/pop de datos), que
+    // es uso local legitimo del marco.
+    if (!fn_->is_naked) {
+        std::string sp_reassigned;
+        size_t p = 0;
+        while (p < body_sub.size()) {
+            size_t nl = body_sub.find('\n', p);
+            std::string ln =
+                body_sub.substr(p, nl == std::string::npos ? std::string::npos
+                                                           : nl - p);
+            p = (nl == std::string::npos) ? body_sub.size() : nl + 1;
+            // Trocear mnemonico + primer operando (minusculas).
+            size_t i = 0;
+            while (i < ln.size() && std::isspace((unsigned char)ln[i])) ++i;
+            size_t ms = i;
+            while (i < ln.size() && !std::isspace((unsigned char)ln[i])) ++i;
+            std::string mnem = ln.substr(ms, i - ms);
+            for (char &ch : mnem) ch = (char)std::tolower((unsigned char)ch);
+            const bool dest_op = (mnem == "mov" || mnem == "movq" ||
+                                  mnem == "lea" || mnem == "pop");
+            const bool xchg_op = (mnem == "xchg");
+            if (!dest_op && !xchg_op) continue;
+            // Operandos tras el mnemonico (sintaxis Intel: DEST primero).  Cortar
+            // en un comentario `//` o `;` para no mirar el texto de la nota.
+            std::string rest = ln.substr(i);
+            size_t cm = rest.find("//");
+            if (cm != std::string::npos) rest.resize(cm);
+            cm = rest.find(';');
+            if (cm != std::string::npos) rest.resize(cm);
+            for (char &ch : rest) ch = (char)std::tolower((unsigned char)ch);
+            // Devuelve el operando #n (0=DEST) recortado de espacios.
+            auto operand = [&](int n) {
+                size_t a = 0;
+                for (int k = 0; k < n; ++k) {
+                    a = rest.find(',', a);
+                    if (a == std::string::npos) return std::string();
+                    ++a;
+                }
+                size_t b = rest.find(',', a);
+                std::string t = rest.substr(a, b == std::string::npos
+                                                   ? std::string::npos
+                                                   : b - a);
+                size_t s0 = t.find_first_not_of(" \t");
+                size_t s1 = t.find_last_not_of(" \t");
+                return (s0 == std::string::npos) ? std::string()
+                                                 : t.substr(s0, s1 - s0 + 1);
+            };
+            // reasignacion: rsp/esp es el DESTINO (mov/lea/pop) o CUALQUIER
+            // operando de un xchg.  `mov rcx, rsp` (leer rsp) NO cuenta.
+            auto is_sp = [](const std::string &o, const char *r) {
+                return o == r;
+            };
+            std::string d0 = operand(0), d1 = operand(1);
+            if (is_sp(d0, "rsp") || (xchg_op && is_sp(d1, "rsp"))) {
+                sp_reassigned = "rsp";
+                break;
+            }
+            if (is_sp(d0, "esp") || (xchg_op && is_sp(d1, "esp"))) {
+                sp_reassigned = "esp";
+                break;
+            }
+        }
+        if (!sp_reassigned.empty())
+            diags_.diag(s->body_loc, DiagLevel::WARN, "VXA010", {sp_reassigned});
     }
 
     // ASA.3: si el bloque ANALIZABLE encaja con un patron atomico conocido

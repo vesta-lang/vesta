@@ -48,7 +48,7 @@ namespace vx {
  *        @c IrOp::ASM_MICRO en @p block, UNA por instruccion, SI y solo si TODAS
  *        sus instrucciones son formas conocidas por la DB y sus operandos son
  *        O BIEN inexistentes (barreras / nop / pause), O BIEN registros de
- *        FiSICO FIJO (inc2b.1: popcnt rax, rbx).  Es transaccional: valida el
+ *        FiSICO FIJO (: popcnt rax, rbx).  Es transaccional: valida el
  *        bloque entero antes de emitir nada.
  *
  * @param slot_of mapa REGISTRO-CANoNICO -> slot ALLOCA (SSA) de las variables
@@ -57,7 +57,7 @@ namespace vx {
  *        su registro fisico fijo (@c fixed_phys), de modo que el asignador de
  *        registros respeta el PIN (constraint en el RA, no en el ensamblador)
  *        y su intervalo cubre el asm.  El resto (no ligados) son fisico fijo
- *        SIN valor SSA (inc2b.1).
+ *        SIN valor SSA.
  *
  * @return true si el bloque se lifto por completo (0 INLINE_ASM); false si
  *         aparece una instruccion desconocida o un operando no soportado

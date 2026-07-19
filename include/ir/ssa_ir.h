@@ -1024,7 +1024,7 @@ struct AsmRegBinding {
     bool is_vector;         ///< true si reg es xmm/ymm/zmm (constraint "x")
     std::string name;       ///< nombre Vesta de la variable (para filtrar
                             ///< por scope activo en lower_asm)
-    /// inc2b.2: operando `reg` (AUTO) de un @c asm ( ... ): el RA ELIGE el
+    /// operando `reg` (AUTO) de un @c asm ( ... ): el RA ELIGE el
     /// registro (constraint register-required, no un pin) y el ensamblado se
     /// aplaza a post-regalloc.  El cuerpo lo referencia por el placeholder
     /// @c $ph_index.  false = pin fijo clasico (register("rax") / `rax a`).

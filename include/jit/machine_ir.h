@@ -1442,7 +1442,7 @@ struct AsmBlob {
     std::vector<AsmSymRef> sym_refs;
 
     /**
-     * @brief Ensamblado DIFERIDO post-regalloc (inc2b.2): la plantilla lleva
+     * @brief Ensamblado DIFERIDO post-regalloc: la plantilla lleva
      *        placeholders @c $N por operando; el registro FiSICO de cada uno no
      *        se conoce hasta que el asignador corre, asi que el ensamblado se
      *        aplaza al @c regalloc_rewrite (que resuelve @c vreg -> fisico).
@@ -1457,7 +1457,7 @@ struct AsmBlob {
         uint32_t vreg = UINT32_MAX; ///< vreg cuyo fisico rellena $idx (o -1)
         int16_t fixed_phys = -1;    ///< fisico fijo (>=0) o -1 = del RA
         uint16_t width = 64;        ///< ancho en bits (nombra el registro)
-        uint8_t regclass = 0;       ///< 0=GP (inc2b.2 solo GP)
+        uint8_t regclass = 0;       ///< 0=GP (solo GP)
     };
     bool deferred = false;              ///< true -> ensamblar en el rewrite
     uint8_t deferred_isa = 0;           ///< ISA (== instr_db::Isa) para el backend
@@ -1586,7 +1586,7 @@ struct MFunction {
     /// (con bounds-check: @c vid < vreg_fixed.size() ? vreg_fixed[vid] : -1).
     std::vector<int8_t> vreg_fixed;
 
-    /// inc2b.2: vregs REGISTER-REQUIRED (nivel intermedio entre @c vreg_fixed y
+    /// vregs REGISTER-REQUIRED (nivel intermedio entre @c vreg_fixed y
     /// libre).  El asignador DEBE darle un registro fisico (lo ELIGE el, a
     /// diferencia del pin) y NO puede derramarlo -- lo necesita un operando
     /// @c reg de un @c asm cuya plantilla lo referencia por @c $N durante todo
@@ -1616,7 +1616,7 @@ struct MFunction {
     int fixed_of(uint32_t vid) const noexcept {
         return vid < vreg_fixed.size() ? vreg_fixed[vid] : -1;
     }
-    /** @brief Marca @p vid como REGISTER-REQUIRED (inc2b.2): el RA le da un
+    /** @brief Marca @p vid como REGISTER-REQUIRED: el RA le da un
      *  registro que ELIGE el y no lo derrama. */
     void set_vreg_reg_required(uint32_t vid) {
         if (vreg_reg_required.size() <= vid)

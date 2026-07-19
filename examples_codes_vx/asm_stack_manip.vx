@@ -1,4 +1,4 @@
-// ASA inc2b.3: MANIPULAR LA PILA desde el asm esta PERMITIDO.
+// MANIPULAR LA PILA desde el asm esta PERMITIDO.
 //
 // Ahora que el asm no es una caja negra, el compilador ENTIENDE las
 // operaciones de pila y no las prohibe: leer rsp, guardar/restaurar con

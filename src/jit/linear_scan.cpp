@@ -238,7 +238,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 }
             }
 
-            /* inc2b.2: un intervalo REGISTER-REQUIRED (operando `reg` de un asm
+            /* un intervalo REGISTER-REQUIRED (operando `reg` de un asm
              * que lo referencia por $N durante todo el bloque) NO puede
              * derramarse: si hay una victima robable, se roba SIEMPRE su reg
              * (aunque el propio next-use sea mas lejano); solo si NO hay victima

@@ -11,13 +11,13 @@
 /**
  * @file vx/asm/asm_phys_reg.h
  * @brief Nombres de registro FiSICO por (clase, indice, ancho) + sustitucion de
- *        placeholders @c $N de una @c ASM_MICRO (inc2b.1).
+ *        placeholders @c $N de una @c ASM_MICRO.
  *
  * Header-only: lo comparten el LIFTER (vx_lib: nombre -> indice fisico) y el
  * BACKEND JIT/AOT (vm/vesta_ffi: indice fisico -> nombre, sustituye @c $N en la
- * plantilla NASM) sin dependencia de enlace entre libs.  inc2b.1 cubre x86 GP
+ * plantilla NASM) sin dependencia de enlace entre libs.  Cubre x86 GP
  * (rax..r15 en ORDEN DE ENCODING, igual que @c MReg y el encoder); las demas
- * clases (FP/VEC) y arch (arm64) llegan en inc2b.3.
+ * clases (FP/VEC) y arch (arm64) llegan despues.
  */
 #ifndef VX_ASM_PHYS_REG_H
 #define VX_ASM_PHYS_REG_H
@@ -86,11 +86,11 @@ inline int asm_x86_gp_index(const std::string &tok, uint16_t *out_width) {
 
 /**
  * @brief Nombre de un operando REG por su (clase, indice fisico, ancho).  @c ""
- *        si la clase no esta soportada en inc2b.1 o el operando no es fisico.
+ *        si la clase no esta soportada o el operando no es fisico.
  */
 inline std::string asm_phys_reg_name(uint8_t isa, uint8_t regclass, int phys,
                                      uint16_t width_bits) {
-    // inc2b.1: x86 (isa 0/1/2) GP.  FP/VEC/arm64 -> inc2b.3.
+    // x86 (isa 0/1/2) GP.  FP/VEC/arm64 pendientes.
     if (regclass == ASM_RC_GP && isa <= 2) {
         const char *n = asm_x86_gp_name(phys, width_bits);
         return n ? std::string(n) : std::string();
@@ -104,8 +104,8 @@ inline std::string asm_phys_reg_name(uint8_t isa, uint8_t regclass, int phys,
  *        si algun @c $N referenciado no es nombrable (operando no fisico o clase
  *        no soportada) -> el llamador hace fallback.
  *
- * inc2b.1: todos los operandos son de FiSICO FIJO (@c fixed_phys >= 0).  El
- * threading SSA + asignador (@c fixed_phys == -1) llega en inc2b.2.
+ * todos los operandos son de FiSICO FIJO (@c fixed_phys >= 0).  El
+ * threading SSA + asignador (@c fixed_phys == -1) llega despues.
  */
 inline bool asm_micro_subst_phys(const ir::AsmMicro &am, std::string &out) {
     out.clear();
@@ -129,7 +129,7 @@ inline bool asm_micro_subst_phys(const ir::AsmMicro &am, std::string &out) {
         if (!any || idx >= am.operands.size()) return false; // $ suelto / fuera
         const ir::AsmMicroOperand &op = am.operands[idx];
         if (op.kind != ir::AsmOperandKind::REG || op.fixed_phys < 0)
-            return false; // MEM/IMM o no fisico -> inc2b.2/.3
+            return false; // MEM/IMM o no fisico
         std::string name =
             asm_phys_reg_name(am.isa, op.regclass, op.fixed_phys, op.width);
         if (name.empty()) return false;

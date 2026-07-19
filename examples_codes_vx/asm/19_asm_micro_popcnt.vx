@@ -1,7 +1,8 @@
-// ASA inc2b.1: lift de asm con operandos de REGISTRO FiSICO FIJO a ASM_MICRO.
+// Lift de asm con operandos de REGISTRO FiSICO FIJO a ASM_MICRO.
 //
-// A diferencia del inc2 (mfence/lfence: sin operandos), aqui las instrucciones
-// LLEVAN operandos de registro (popcnt rax, rbx).  El lifter construye una
+// A diferencia de las barreras (mfence/lfence: sin operandos), aqui las
+// instrucciones LLEVAN operandos de registro (popcnt rax, rbx).  El lifter
+// construye una
 // LISTA PLANA de operandos en orden textual, cada uno con su ROL como flags
 // (READ/WRITE/RW) tomados de la base de datos, y reescribe la plantilla con
 // placeholders $0,$1,...  El backend (interp via ensamblador, JIT y AOT)
@@ -10,8 +11,8 @@
 //     "popcnt $0, $1"  con  $0:W#rax  $1:R#rbx   ->   popcnt rax, rbx
 //
 // Valida el mecanismo de sustitucion post-asignacion (enfoque B) con registros
-// de FiSICO FIJO, sin todavia la complejidad del asignador (inc2b.2) ni los
-// casos implicitos/SIMD (inc2b.3).  El resultado del popcnt no se observa (no
+// de FiSICO FIJO, sin todavia la complejidad del asignador ni los casos
+// implicitos/SIMD.  El resultado del popcnt no se observa (no
 // hay threading SSA aun): el test comprueba que compila, ensambla y ejecuta.
 //
 //     vm --vx 19_asm_micro_popcnt.vx -o popcnt

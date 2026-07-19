@@ -418,7 +418,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
         write_u8(out, static_cast<uint8_t>(b.type));
         write_u8(out, b.is_vector ? 1u : 0u);
         write_str(out, b.name);
-        // inc2b.2: operando `reg` auto (RA elige el fisico) + su placeholder $N.
+        // operando `reg` auto (RA elige el fisico) + su placeholder $N.
         write_u8(out, b.reg_auto ? 1u : 0u);
         write_u32(out, static_cast<uint32_t>(b.ph_index));
     }
@@ -552,7 +552,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         if (!read_u8(in, off, vec)) return false;
         b.is_vector = (vec != 0);
         if (!read_str(in, off, b.name)) return false;
-        // inc2b.2: reg_auto + ph_index.
+        // reg_auto + ph_index.
         uint8_t ra_auto = 0;
         uint32_t phi = 0;
         if (!read_u8(in, off, ra_auto)) return false;

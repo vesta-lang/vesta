@@ -50,13 +50,15 @@
  *          direccion VM que el codigo nativo malinterpretaria como host_ptr).
  *
  * @note El swap de RSP (@c mov @c rsp,[to]) se compila NATIVO tanto en AOT como
- *       en el JIT: al ser @c \@Naked (sin prologo/epilogo/spills que un rsp
- *       corrupto rompa), el compilador RESPETA la reasignacion de pila -- la
- *       entiende, no la trata como caja negra.  En una funcion NORMAL un asm que
- *       reasigna rsp cae al interprete por seguridad del marco (ahi el epilogue
- *       usa rsp), pero @c fiber_switch es @c \@Naked -> el JIT lo emite verbatim.
- *       Por eso las corrutinas/fibras escritas en asm ya no estan limitadas al
- *       AOT: corren igual bajo el JIT.
+ *       en el JIT: el compilador ENTIENDE la reasignacion de pila y la respeta
+ *       (no la trata como caja negra).  Al ser @c fiber_switch @c \@Naked (sin
+ *       prologo/epilogo/spills que un rsp reasignado rompa), el usuario es dueno
+ *       de la pila y el JIT emite el swap verbatim.  En una funcion NORMAL la
+ *       reasignacion de rsp tambien se compila en el JIT, pero el compilador
+ *       avisa (@c VXA010): su epilogue gestiona la pila, asi que un cambio
+ *       persistente no sobrevive al retorno -> para eso esta @c \@Naked.  Por
+ *       eso las corrutinas/fibras escritas en asm corren igual bajo el JIT y el
+ *       AOT.
  *
  */
 

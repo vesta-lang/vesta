@@ -1,4 +1,4 @@
-// ASA inc2b.3 (test NEGATIVO): pinear un operando a rsp/rbp corrompe la pila.
+// Test NEGATIVO: pinear un operando a rsp/rbp corrompe la pila.
 //
 // Un `register("rsp")` (o rbp) fija un valor Vesta al puntero de pila.  El asm
 // operaria sobre el marco -> corrupcion en CUALQUIER backend (interp/JIT/AOT).

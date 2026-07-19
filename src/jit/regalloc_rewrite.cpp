@@ -20,8 +20,8 @@
 #include <vector>
 
 #include "vesta_rt/abi.h" // VESTA_PROC_OSR_BUFFER_OFFSET / VESTA_OSR_BUFFER_N
-#include "vx/asm/asm_backend.h"  // inc2b.2: ensamblar el asm DIFERIDO post-RA
-#include "vx/asm/asm_phys_reg.h" // inc2b.2: nombre del reg fisico ($N -> reg)
+#include "vx/asm/asm_backend.h"  // ensamblar el asm DIFERIDO post-RA
+#include "vx/asm/asm_phys_reg.h" // nombre del reg fisico ($N -> reg)
 #include <cctype>
 
 namespace jit {
@@ -2013,7 +2013,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
      * (@c vreg_fixed NO se copia: lo consume @c build_intervals, que corre
      * sobre @c vf ANTES del rewrite.) */
     pf.asm_blobs = vf.asm_blobs;
-    /* inc2b.2: ENSAMBLADO DIFERIDO.  Los blobs de un `asm ( reg x )` con
+    /* ENSAMBLADO DIFERIDO.  Los blobs de un `asm ( reg x )` con
      * operandos AUTO llegan sin bytes: su plantilla lleva $N y el fisico de
      * cada operando lo acaba de elegir el asignador.  Sustituimos $N por el
      * registro real (@c ra.reg_of del vreg, o el pin @c fixed_phys) y llamamos

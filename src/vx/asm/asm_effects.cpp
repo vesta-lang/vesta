@@ -42,7 +42,7 @@ std::string asm_normalize_numbers(const std::string &body) {
     size_t i = 0;
     while (i < n) {
         const char c = body[i];
-        /* Placeholder $N (inc2b.2: operando `reg` auto, rellenado por el
+        /* Placeholder $N (: operando `reg` auto, rellenado por el
          * backend post-regalloc) o referencia a la direccion actual ($): el
          * numero que sigue a '$' NO es un literal a normalizar -> copiar '$' +
          * sus digitos verbatim. */

@@ -382,7 +382,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         /* Phase AS inc.5: propagar el precoloreo (register-bound de un
          * inline-asm).  -1 si el vreg no esta pineado. */
         out.intervals[v].fixed_reg = mf.fixed_of(v);
-        /* inc2b.2: propagar el nivel intermedio register-required (el RA elige
+        /* propagar el nivel intermedio register-required (el RA elige
          * el fisico pero no lo derrama).  Solo relevante si NO esta pineado. */
         out.intervals[v].reg_required = mf.reg_required_of(v);
     }

@@ -85,7 +85,7 @@ bool has_reg(const std::vector<std::string> &v, const std::string &name) {
 }
 
 /// Trocea @p insn en (mnemonico, operandos por coma).  Los operandos van con
-/// espacios recortados.  No maneja @c [...] (inc2b.1 = solo registros GP).
+/// espacios recortados.  No maneja @c [...] (= solo registros GP).
 void split_insn(const std::string &insn, std::string &mnem,
                 std::vector<std::string> &ops) {
     ops.clear();
@@ -108,10 +108,10 @@ void split_insn(const std::string &insn, std::string &mnem,
     }
 }
 
-/// inc2b.1: construye la lista PLANA de operandos de FiSICO FIJO (solo GP) y la
+/// construye la lista PLANA de operandos de FiSICO FIJO (solo GP) y la
 /// plantilla con @c $N a partir de la linea + la semantica de la DB.  Devuelve
 /// @c false si algun operando NO es un registro GP nombrable (MEM/IMM/FP/VEC ->
-/// inc2b.3) -> el llamador emite @c INLINE_ASM.
+///) -> el llamador emite @c INLINE_ASM.
 bool build_operands(
     const std::string &insn, const instr_db::AsmInsnSem &sem,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
@@ -126,7 +126,7 @@ bool build_operands(
     for (size_t k = 0; k < toks.size(); ++k) {
         uint16_t w = 0;
         const int phys = vx::asm_x86_gp_index(toks[k], &w);
-        if (phys < 0) return false; // no es GP (MEM/IMM/FP/VEC) -> inc2b.3
+        if (phys < 0) return false; // no es GP (MEM/IMM/FP/VEC)
         ir::AsmMicroOperand op;
         op.kind = ir::AsmOperandKind::REG;
         op.regclass = vx::ASM_RC_GP;
@@ -134,7 +134,7 @@ bool build_operands(
         op.fixed_phys = (int16_t)phys; // fisico fijo del texto (constraint RA)
         // Un registro LIGADO a una variable Vesta (register()) necesita
         // threading SSA + el asignador (constraint en el RA + marshalling en
-        // los backends) -> inc2b.2.  Hoy (inc2b.1) esos bloques caen al
+        // los backends).  Hoy esos bloques caen al
         // INLINE_ASM, que ya resuelve los bindings en interp/JIT/AOT.
         if (slot_of.find(lower(toks[k])) != slot_of.end()) return false;
         op.value = ir::IR_NO_VALUE; // fisico opaco (sin SSA)
@@ -168,8 +168,8 @@ bool asm_lift_micro(
 
     // Fase 1 (validacion transaccional): TODAS las instrucciones deben ser
     // formas conocidas por la DB, y O BIEN sin operandos de registro (mfence,
-    // cpuid, ...), O BIEN con operandos de FiSICO FIJO GP (inc2b.1: popcnt/tzcnt/
-    // bswap rax,...).  Cualquier otra cosa (MEM/IMM/FP/VEC/implicitos, inc2b.3)
+    // cpuid, ...), O BIEN con operandos de FiSICO FIJO GP (: popcnt/tzcnt/
+    // bswap rax,...).  Cualquier otra cosa (MEM/IMM/FP/VEC/implicitos,)
     // -> false y el llamador emite INLINE_ASM.
     std::vector<instr_db::AsmInsnSem> sems;
     std::vector<std::vector<ir::AsmMicroOperand>> ops_per;
@@ -188,7 +188,7 @@ bool asm_lift_micro(
             // Sin operandos de registro: plantilla verbatim (mfence/lfence/...).
             tmpl = insn;
         } else if (!build_operands(insn, sem, slot_of, operands, tmpl)) {
-            return false;             // operandos no soportados en inc2b.1
+            return false;             // operandos no soportados
         }
         sems.push_back(std::move(sem));
         ops_per.push_back(std::move(operands));
