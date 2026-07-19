@@ -49,3 +49,11 @@ es = "asm: registro '{0}' modificado pero no declarado en clobbers(...) con 'noi
 [VXA007]
 en = "asm: flags are modified but clobbers(\"flags\") is not declared with 'noinfer'"
 es = "asm: las flags se modifican pero no se declara clobbers(\"flags\") con 'noinfer'"
+
+[VXA008]
+en = "asm: cannot pin operand '{0}' to '{1}': that register is reserved for the stack (rsp/rbp) and pinning a value there corrupts the frame"
+es = "asm: no se puede pinear el operando '{0}' a '{1}': ese registro esta reservado para la pila (rsp/rbp) y pinear un valor ahi corrompe el marco"
+
+[VXA009]
+en = "asm: operand '{0}' pinned to '{1}' -- that register is reserved by the runtime in VM mode; this asm block cannot be JIT-compiled (runs in the interpreter)"
+es = "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el runtime en modo VM; este bloque asm no se puede compilar en JIT (corre en el interprete)"

@@ -13522,7 +13522,20 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         if (lookup(b.name) == b.alloca_value) {
             ia.operands.push_back(b.alloca_value);
             std::string c = asm_canonical_reg(b.reg);
-            if (!c.empty()) bound_canon.push_back(std::move(c));
+            if (!c.empty()) bound_canon.push_back(c);
+            // inc2b.3: validar el PIN.  rsp/rbp son la pila -> pinear un valor
+            // ahi corrompe el marco en CUALQUIER backend (error).  rbx esta
+            // reservado por el runtime en modo VM -> el JIT no puede compilar
+            // el bloque (cae al interprete; solo warning, no rompe).  Los `reg`
+            // auto (b.reg_auto) NO se validan: el RA elige un fisico usable.
+            if (!b.reg_auto) {
+                if (c == "rsp" || c == "rbp")
+                    diags_.diag(s->body_loc, DiagLevel::ERR, "VXA008",
+                                {b.name, c});
+                else if (c == "rbx")
+                    diags_.diag(s->body_loc, DiagLevel::WARN, "VXA009",
+                                {b.name, c});
+            }
         }
     }
 

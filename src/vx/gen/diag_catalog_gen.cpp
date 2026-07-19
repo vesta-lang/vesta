@@ -1,6 +1,6 @@
 /* GENERADO por tools/import/gen_diag_catalog.py -- NO EDITAR.
  * Fuente: catalog/diagnostics.toml.  Catalogo de diagnosticos
- * (codigo estable VXNNNN -> mensaje por idioma).  Ver vx/diag_catalog.h. */
+ * (codigo estable VXNNNN -> mensaje por idioma).  Ver vx/diag/diag_catalog.h. */
 #include "vx/diag/diag_catalog.h"
 
 #include <cstring>
@@ -27,8 +27,10 @@ const CatEntry kEntries[] = {
     {"VXA005", {"asm: flags read without a prior comparison/operation in the asm block", "asm: flags leidas sin una comparacion/operacion previa en el bloque asm"}},
     {"VXA006", {"asm: register '{0}' modified but not declared in clobbers(...) with 'noinfer'", "asm: registro '{0}' modificado pero no declarado en clobbers(...) con 'noinfer'"}},
     {"VXA007", {"asm: flags are modified but clobbers(\"flags\") is not declared with 'noinfer'", "asm: las flags se modifican pero no se declara clobbers(\"flags\") con 'noinfer'"}},
+    {"VXA008", {"asm: cannot pin operand '{0}' to '{1}': that register is reserved for the stack (rsp/rbp) and pinning a value there corrupts the frame", "asm: no se puede pinear el operando '{0}' a '{1}': ese registro esta reservado para la pila (rsp/rbp) y pinear un valor ahi corrompe el marco"}},
+    {"VXA009", {"asm: operand '{0}' pinned to '{1}' -- that register is reserved by the runtime in VM mode; this asm block cannot be JIT-compiled (runs in the interpreter)", "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el runtime en modo VM; este bloque asm no se puede compilar en JIT (corre en el interprete)"}},
 };
-const int kEntryCount = 7;
+const int kEntryCount = 9;
 
 } // namespace
 
