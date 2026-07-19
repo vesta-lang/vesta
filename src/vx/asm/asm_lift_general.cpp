@@ -456,10 +456,10 @@ bool lift_x86(
         ir::IrOp bop;
         bool ok = true;
 
-        // cmp/test a,b + setcc rd -> IrOp de comparacion (0/1).  El asm que
-        // produce un booleano via flags se vuelve una comparacion tipada; las
-        // flags no cruzan el par (patron cerrado).  cmp/test NO seguido de un
-        // consumidor de flags modelado -> el par no encaja -> false (no
+        // cmp/test a,b + (setcc rd | cmovcc rd,rs): patron fusionado que
+        // consume las flags EN EL PAR -> comparacion tipada (setcc) o select
+        // branchless (cmov).  Las flags no cruzan el par.  cmp/test sin un
+        // consumidor de flags modelado detras -> el par no encaja -> false (no
         // modelamos flags sueltas en straight-line).
         if ((m == "cmp" || m == "test") && ops.size() == 2 &&
             ii + 1 < insns.size()) {
@@ -468,39 +468,76 @@ bool lift_x86(
             split_insn(insns[ii + 1], m2, ops2);
             ir::IrOp cop;
             bool csigned = false;
+            bool is_set = false, is_cmov = false;
             if (m2.size() >= 4 && m2.compare(0, 3, "set") == 0 &&
-                ops2.size() == 1 &&
-                setcc_to_cmp(m2.substr(3), cop, csigned)) {
-                // Ancho de la comparacion = ancho del primer operando del cmp.
-                std::string ac, bc, dc;
-                bool ah = false, bh = false, dh = false;
-                const int aw = reg_info(ops[0], ac, ah);
-                const int dw = reg_info(ops2[0], dc, dh); // setcc: r/m8
-                if (aw == 0 || dw == 0) return false; // solo reg-reg/imm
-                // Para `test a,b` el x86 hace AND; aqui solo soportamos
-                // `test r,r` con el MISMO registro (test r,r == cmp r,0).
-                ir::IrValueId av, bv;
-                if (m == "test") {
-                    if (ops[0] != ops[1]) return false; // test r,r mismo reg
-                    av = read_reg(ac, aw, ah, csigned, ok);
-                    if (!ok) return false;
-                    bv = K(0);
-                } else {
-                    av = read_reg(ac, aw, ah, csigned, ok);
-                    if (!ok) return false;
-                    bv = read_op(ops[1], aw, csigned, ok);
-                    if (!ok) return false;
-                }
-                const ir::IrValueId res = BIN(cop, av, bv);
-                // setcc escribe un byte (0/1); el resto del registro se
-                // preserva -> write_reg a 8 bits.
-                write_reg(dc, 8, dh, res, ok);
+                ops2.size() == 1)
+                is_set = setcc_to_cmp(m2.substr(3), cop, csigned);
+            if (!is_set && m2.size() > 4 && m2.compare(0, 4, "cmov") == 0 &&
+                ops2.size() == 2)
+                is_cmov = setcc_to_cmp(m2.substr(4), cop, csigned);
+            if (!is_set && !is_cmov) return false;
+
+            // cond = (a <cc> b), leyendo a/b al ancho del cmp con el signo del cc.
+            std::string ac;
+            bool ah = false;
+            const int aw = reg_info(ops[0], ac, ah);
+            if (aw == 0) return false;
+            ir::IrValueId av, bv;
+            if (m == "test") {
+                // test r,r == cmp r,0 (solo el mismo registro).
+                if (ops[0] != ops[1]) return false;
+                av = read_reg(ac, aw, ah, csigned, ok);
                 if (!ok) return false;
-                ++ii; // consumir el setcc
-                continue;
+                bv = K(0);
+            } else {
+                av = read_reg(ac, aw, ah, csigned, ok);
+                if (!ok) return false;
+                bv = read_op(ops[1], aw, csigned, ok);
+                if (!ok) return false;
             }
-            // cmp/test sin setcc detras -> flags no modelables aqui.
-            return false;
+            const ir::IrValueId cond = BIN(cop, av, bv); // 0/1
+
+            if (is_set) {
+                // setcc rd: byte 0/1; resto del registro preservado.
+                std::string dc;
+                bool dh = false;
+                if (reg_info(ops2[0], dc, dh) == 0) return false;
+                write_reg(dc, 8, dh, cond, ok);
+                if (!ok) return false;
+            } else {
+                // cmovcc rd, rs: rd = cond ? (rs escrito al ancho) : rd.  Select
+                // BRANCHLESS (el lifter no emite ramas): mask = -(cond) (0 o -1);
+                // rd = rd_old ^ ((rd_old ^ taken) & mask).  Respeta la asimetria
+                // de cmov: taken de 32 bits zero-extiende; not-taken preserva TODO.
+                if (is_mem(ops2[1])) return false; // solo reg
+                std::string dc, sc;
+                bool dh = false, sh = false;
+                const int dw = reg_info(ops2[0], dc, dh);
+                const int sw = reg_info(ops2[1], sc, sh);
+                if (dw == 0 || sw == 0 || dw != sw) return false;
+                const ir::IrValueId rd_old = get_full(dc, ok);
+                if (!ok) return false;
+                const ir::IrValueId rs = read_reg(sc, dw, sh, false, ok);
+                if (!ok) return false;
+                // taken = rs escrito en rd al ancho de cmov.
+                ir::IrValueId taken;
+                if (dw >= 32) {
+                    taken = rs; // low-dw zero-extendido = escritura de 32/64
+                } else {
+                    taken = BIN(ir::IrOp::OR,
+                                BIN(ir::IrOp::AND, rd_old,
+                                    K((int64_t)~width_mask(dw))),
+                                rs);
+                }
+                const ir::IrValueId mask =
+                    emit_un(fn, block, ir::IrOp::NEG, cond, line);
+                const ir::IrValueId diff = BIN(ir::IrOp::XOR, rd_old, taken);
+                cur[dc] = BIN(ir::IrOp::XOR, rd_old,
+                              BIN(ir::IrOp::AND, diff, mask));
+                mark_write(dc);
+            }
+            ++ii; // consumir el setcc/cmov
+            continue;
         }
 
         if (m == "mov" && ops.size() == 2) {

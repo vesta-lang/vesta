@@ -13079,19 +13079,17 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
 // (port-C) decidira el transporte de la lista de registros.
 // ---------------------------------------------------------------------
 void Lowering::lower_asm(ast::AsmStmt *s) {
-    // ASA: reoptimizar (reordenar por latencia/puertos) los bloques ANALIZABLES
-    // no-volatile SIN operandos inc.7 (modelo register() clasico -> el body usa
-    // registros reales, el reordenador razona con precision).  reschedule_asm es
-    // CONSERVADOR: solo reordena si es SEGURO (sin labels, respeta todas las
-    // dependencias y barreras, invariante valido); si no, devuelve el body
-    // intacto.  Volatile/Raw se emiten verbatim (no entran aqui).
-    if (s->level == ast::AsmLevel::Analyzable && s->operands.empty()) {
-        int32_t ua = vx::instr_db::microarch_by_name(vx::instr_db::Isa::X86,
-                                                     "intel-skylake");
-        s->body = vx::instr_db::reschedule_asm(
-            vx::instr_db::Isa::X86, s->body,
-            static_cast<uint32_t>(ua < 0 ? 0 : ua));
-    }
+    // Orden de la pipeline (importante): NO se reordena el TEXTO del asm todavia.
+    // El reordenamiento por latencia/puertos/ILP se aplica a TODO el codigo
+    // generado -- asm liftado Y codigo normal del lenguaje -- en el backend de
+    // JIT/AOT, via el scheduler machine-level (arch-data).  Por eso primero se
+    // intenta LIFTAR el bloque a IR (mas abajo): una vez es IR, se reordena como
+    // cualquier otra instruccion, junto con el resto del codigo.  El unico caso
+    // que el scheduler machine-level NO puede reordenar es el INLINE_ASM OPACO
+    // (no ve dentro): para que ese tampoco se quede sin reordenar, se le aplica
+    // un reschedule a nivel de TEXTO asm justo antes de emitirlo (mas abajo).
+    // Reordenar aqui, antes del lift, rompia patrones liftables de varias
+    // instrucciones (p.ej. cmp+cmov: colaba una mov entre el cmp y el cmov).
 
     // ASA.2: diagnosticos del bloque.  Solo para bloques que el compilador debe
     // entender (Analyzable/Volatile; `raw` es cero-analisis por diseno).  Se
@@ -13675,6 +13673,23 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             out_mod_->register_native_import("vrt", "asm_micro_exec");
             return; // bloque liftado a ASM_MICRO -> NO se emite el INLINE_ASM.
         }
+    }
+
+    // El bloque NO lifto (cualquier lift habria hecho return) -> se emite como
+    // INLINE_ASM OPACO.  El scheduler machine-level del backend reordena todo el
+    // codigo generado, pero NO ve dentro de un INLINE_ASM opaco; para que este
+    // tampoco se quede sin reordenar, se le aplica aqui el reschedule a nivel de
+    // TEXTO asm (mismo modelo de latencias/puertos).  Conservador: reschedule_asm
+    // solo reordena si es seguro (sin labels, deps + barreras respetadas,
+    // invariante valido); si no, devuelve el body intacto.  Solo modelo
+    // register() clasico (sin operandos inc.7 con placeholders $N).
+    if (s->level == ast::AsmLevel::Analyzable && s->operands.empty()) {
+        const int32_t ua = vx::instr_db::microarch_by_name(
+            vx::instr_db::Isa::X86, "intel-skylake");
+        body_sub = vx::instr_db::reschedule_asm(
+            vx::instr_db::Isa::X86, body_sub,
+            static_cast<uint32_t>(ua < 0 ? 0 : ua));
+        ia.func_name = body_sub; // el INLINE_ASM emitido usa el body reordenado
     }
 
     // Phase AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
