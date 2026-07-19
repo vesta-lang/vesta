@@ -191,6 +191,26 @@ int mem_hint_width(const std::string &op) {
     return 0;
 }
 
+/// Mapea el sufijo de un @c setCC (lo que sigue a "set") al IrOp de comparacion
+/// y su signedness (para leer los operandos del cmp con signo/sin signo).  Para
+/// eq/ne el signo es irrelevante (se usa sin signo).  @c false si no se conoce.
+bool setcc_to_cmp(const std::string &cc, ir::IrOp &op, bool &sgn) {
+    sgn = false;
+    if (cc == "e" || cc == "z") { op = ir::IrOp::CMP_EQ; return true; }
+    if (cc == "ne" || cc == "nz") { op = ir::IrOp::CMP_NE; return true; }
+    sgn = true;
+    if (cc == "l" || cc == "nge") { op = ir::IrOp::CMP_LT; return true; }
+    if (cc == "g" || cc == "nle") { op = ir::IrOp::CMP_GT; return true; }
+    if (cc == "le" || cc == "ng") { op = ir::IrOp::CMP_LE; return true; }
+    if (cc == "ge" || cc == "nl") { op = ir::IrOp::CMP_GE; return true; }
+    sgn = false;
+    if (cc == "b" || cc == "c" || cc == "nae") { op = ir::IrOp::CMP_ULT; return true; }
+    if (cc == "a" || cc == "nbe") { op = ir::IrOp::CMP_UGT; return true; }
+    if (cc == "be" || cc == "na") { op = ir::IrOp::CMP_ULE; return true; }
+    if (cc == "ae" || cc == "nb" || cc == "nc") { op = ir::IrOp::CMP_UGE; return true; }
+    return false; // cc no soportado (o/no/s/ns/p/np...) -> el par no encaja
+}
+
 /// IrOp binario (2-address: dst = dst OP src) para un mnemonico ALU x86.
 bool binop_of(const std::string &m, ir::IrOp &op) {
     if (m == "add") { op = ir::IrOp::ADD; return true; }
@@ -426,12 +446,62 @@ bool lift_x86(
     };
 
     // Lift instruccion a instruccion.  Cualquier forma no soportada -> false.
-    for (const std::string &insn : insns) {
+    // Indexado para poder mirar la SIGUIENTE instruccion (patrones fusionados
+    // de 2 instrucciones que dependen de las flags: cmp + setcc).
+    for (size_t ii = 0; ii < insns.size(); ++ii) {
+        const std::string &insn = insns[ii];
         std::string m;
         std::vector<std::string> ops;
         split_insn(insn, m, ops);
         ir::IrOp bop;
         bool ok = true;
+
+        // cmp/test a,b + setcc rd -> IrOp de comparacion (0/1).  El asm que
+        // produce un booleano via flags se vuelve una comparacion tipada; las
+        // flags no cruzan el par (patron cerrado).  cmp/test NO seguido de un
+        // consumidor de flags modelado -> el par no encaja -> false (no
+        // modelamos flags sueltas en straight-line).
+        if ((m == "cmp" || m == "test") && ops.size() == 2 &&
+            ii + 1 < insns.size()) {
+            std::string m2;
+            std::vector<std::string> ops2;
+            split_insn(insns[ii + 1], m2, ops2);
+            ir::IrOp cop;
+            bool csigned = false;
+            if (m2.size() >= 4 && m2.compare(0, 3, "set") == 0 &&
+                ops2.size() == 1 &&
+                setcc_to_cmp(m2.substr(3), cop, csigned)) {
+                // Ancho de la comparacion = ancho del primer operando del cmp.
+                std::string ac, bc, dc;
+                bool ah = false, bh = false, dh = false;
+                const int aw = reg_info(ops[0], ac, ah);
+                const int dw = reg_info(ops2[0], dc, dh); // setcc: r/m8
+                if (aw == 0 || dw == 0) return false; // solo reg-reg/imm
+                // Para `test a,b` el x86 hace AND; aqui solo soportamos
+                // `test r,r` con el MISMO registro (test r,r == cmp r,0).
+                ir::IrValueId av, bv;
+                if (m == "test") {
+                    if (ops[0] != ops[1]) return false; // test r,r mismo reg
+                    av = read_reg(ac, aw, ah, csigned, ok);
+                    if (!ok) return false;
+                    bv = K(0);
+                } else {
+                    av = read_reg(ac, aw, ah, csigned, ok);
+                    if (!ok) return false;
+                    bv = read_op(ops[1], aw, csigned, ok);
+                    if (!ok) return false;
+                }
+                const ir::IrValueId res = BIN(cop, av, bv);
+                // setcc escribe un byte (0/1); el resto del registro se
+                // preserva -> write_reg a 8 bits.
+                write_reg(dc, 8, dh, res, ok);
+                if (!ok) return false;
+                ++ii; // consumir el setcc
+                continue;
+            }
+            // cmp/test sin setcc detras -> flags no modelables aqui.
+            return false;
+        }
 
         if (m == "mov" && ops.size() == 2) {
             const std::string dmem = plain_mem(ops[0]);
