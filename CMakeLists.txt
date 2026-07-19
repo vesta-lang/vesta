@@ -702,6 +702,10 @@ else ()
     target_link_libraries(test_analyze_fingerprint PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Infra de analisis: AnalysisManager (type-erasure + dependencias + invalidacion).
+add_executable(test_analysis_manager tests/analysis/test_manager.cpp)
+target_include_directories(test_analysis_manager PRIVATE ${VM_INCLUDES})
+
 # Sistema unico de efectos: reticulo AbstractLoc, combinadores seq/join,
 # contratos declarativos.
 add_executable(test_effects tests/effects/test_effects.cpp)
