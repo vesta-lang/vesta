@@ -312,14 +312,21 @@ int reg_info(const std::string &tok, std::string &canon, bool &is_high) {
     return 0; // canon no vacio pero ancho desconocido -> conservador
 }
 
-} // namespace
+/* ===================================================================== */
+/* Lifter por ISA.  El CORE de emision (emit_*, width_mask, mem_ty) y el   */
+/* enhebrado SSA son NEUTROS: producen IrOps genericos (ADD, LOAD,         */
+/* POPCNT...).  Lo que es POR-ISA -- reconocimiento de mnemonicos, nombres */
+/* y anchos de registro, modos de direccionamiento, semantica de registro */
+/* parcial (x86 zero-extend a 32 / preserva 8-16; arm64 zero-extend a w) --*/
+/* vive en el lifter de cada arquitectura.  Anadir un ISA = anadir su      */
+/* lift_<isa> reusando el core; el IR resultante es el mismo para todas.   */
+/* ===================================================================== */
 
-bool asm_lift_general(
-    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
-    const std::string &body,
+/** @brief Lifter x86/x86-64: reconoce el subset entero straight-line y lo baja
+ *  a IR neutro.  reg_info/binop_of/parse_mem/mem_hint_width son la parte x86. */
+bool lift_x86(
+    ir::IrFunction &fn, uint32_t block, const std::string &body,
     const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line) {
-    if (isa != instr_db::Isa::X86) return false; // primer incremento: x86
-
     const std::vector<std::string> insns = instructions(body);
     if (insns.empty()) return false;
 
@@ -536,6 +543,37 @@ bool asm_lift_general(
                 BIN(m == "inc" ? ir::IrOp::ADD : ir::IrOp::SUB, a, K(1));
             write_reg(rc, rw, rh, res, ok);
             if (!ok) return false;
+        } else if ((m == "popcnt" || m == "lzcnt" || m == "tzcnt") &&
+                   ops.size() == 2) {
+            /* popcnt/lzcnt/tzcnt rd, rs -> POPCNT/CLZ/CTZ.  Solo 64 bits (donde
+             * el mapeo es EXACTO; a 32/16 el resultado depende del ancho ->
+             * incremento posterior, hoy cae a ASM_MICRO). */
+            std::string rc, sc;
+            bool rh = false, sh = false;
+            const int rw = reg_info(ops[0], rc, rh);
+            const int sw = reg_info(ops[1], sc, sh);
+            if (rw != 64 || sw != 64) return false;
+            const ir::IrValueId a = read_reg(sc, 64, sh, false, ok);
+            if (!ok) return false;
+            const ir::IrOp uop = (m == "popcnt")  ? ir::IrOp::POPCNT
+                                 : (m == "lzcnt") ? ir::IrOp::CLZ
+                                                  : ir::IrOp::CTZ;
+            const ir::IrValueId res = emit_un(fn, block, uop, a, line);
+            write_reg(rc, 64, rh, res, ok);
+            if (!ok) return false;
+        } else if (m == "bswap" && ops.size() == 1) {
+            /* bswap rd -> BYTESWAP (in-place).  Solo 64 bits (bswap de 32 bits
+             * invertiria 4 bytes, distinto ancho). */
+            std::string rc;
+            bool rh = false;
+            const int rw = reg_info(ops[0], rc, rh);
+            if (rw != 64) return false;
+            const ir::IrValueId a = read_reg(rc, 64, rh, false, ok);
+            if (!ok) return false;
+            const ir::IrValueId res =
+                emit_un(fn, block, ir::IrOp::BYTESWAP, a, line);
+            write_reg(rc, 64, rh, res, ok);
+            if (!ok) return false;
         } else {
             return false; // instruccion fuera del subset -> INLINE_ASM
         }
@@ -553,6 +591,21 @@ bool asm_lift_general(
         }
     }
     return true;
+}
+
+} // namespace
+
+bool asm_lift_general(
+    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+    const std::string &body,
+    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line) {
+    /* Dispatch por ISA.  Cada arquitectura aporta su frontend (mnemonicos +
+     * parsing + semantica de registro parcial) y baja al MISMO IR neutro.
+     * arm64/arm32/riscv: anadir su lift_<isa> reusando el core de emision. */
+    switch (isa) {
+    case instr_db::Isa::X86: return lift_x86(fn, block, body, bound, line);
+    default: return false; // ISA sin lifter aun -> el llamador cae a ASM_MICRO
+    }
 }
 
 } // namespace vx
