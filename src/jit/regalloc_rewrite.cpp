@@ -842,9 +842,11 @@ struct Lowerer {
         if (op == MOp::ADDSD || op == MOp::SUBSD || op == MOp::MULSD ||
             op == MOp::DIVSD || op == MOp::ADDSS || op == MOp::SUBSS ||
             op == MOp::MULSS || op == MOp::DIVSS || op == MOp::XORPS ||
-            op == MOp::ANDPS) {
+            op == MOp::ANDPS || op == MOp::MINSD || op == MOp::MAXSD ||
+            op == MOp::MINSS || op == MOp::MAXSS) {
             const bool is_ss = (op == MOp::ADDSS || op == MOp::SUBSS ||
-                                op == MOp::MULSS || op == MOp::DIVSS);
+                                op == MOp::MULSS || op == MOp::DIVSS ||
+                                op == MOp::MINSS || op == MOp::MAXSS);
             const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;
             const bool commutative =
                 (op == MOp::ADDSD || op == MOp::MULSD || op == MOp::ADDSS ||
@@ -900,10 +902,15 @@ struct Lowerer {
             return;
         }
 
-        /* FP unaria con dst XMM (SQRTSD/SQRTSS): dst = sqrt(src).  src puede
-         * estar spilled -> materializar a fscr1; dst spilled -> fscr0. */
-        if (op == MOp::SQRTSD || op == MOp::SQRTSS) {
-            const MOp mv = (op == MOp::SQRTSS) ? MOp::MOVSS : MOp::MOVSD;
+        /* FP unaria con dst XMM (SQRTSD/SQRTSS + ROUNDSD): dst = f(src).  src
+         * puede estar spilled -> materializar a fscr1; dst spilled -> fscr0.
+         * ROUNDSD lleva el modo de redondeo en @c variant (floor/ceil/round/
+         * trunc) -> se propaga al MInstr emitido. */
+        if (op == MOp::SQRTSD || op == MOp::SQRTSS || op == MOp::ROUNDSD ||
+            op == MOp::ROUNDSS) {
+            const MOp mv = (op == MOp::SQRTSS || op == MOp::ROUNDSS)
+                               ? MOp::MOVSS
+                               : MOp::MOVSD;
             const bool dst_spilled =
                 in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
             const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
@@ -913,7 +920,8 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
-            out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
+            out.back().flags = in.flags;     // propagar MI_FLAG_VX_SCALAR
+            out.back().variant = in.variant; // ROUNDSD: modo de redondeo
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -1277,6 +1285,35 @@ struct Lowerer {
             const MReg res = (in.variant & 1u) ? MReg::RDX : MReg::RAX;
             out.push_back(
                 MInstr::make_unary(MOp::MOV, resolve(in.dst), reg(res)));
+            return;
+        }
+
+        if (op == MOp::SHIFT_V) {
+            /* dst = src1 <shift> src2 (cuenta variable).  x86 exige la cuenta en
+             * CL: el selector la pineo a RCX (tmp de vida corta).  Usamos R11
+             * (scr1, reservado) como reg de trabajo -> nunca clobbea un vivo:
+             *   mov  r11, value    ; value != RCX (interfiere con la cuenta)
+             *   shift r11, cl      ; CL = RCX (la cuenta)
+             *   mov  dst, r11
+             * variant: 0=SHL, 1=SHR, 2=SAR. */
+            const MOperand v = resolve(in.src1); // value (!= RCX)
+            const MOperand c = resolve(in.src2); // cuenta (pineada a RCX)
+            /* Defensivo: garantizar la cuenta en RCX (no-op si el pin la dejo
+             * ya ahi; cubre un eventual spill del tmp). */
+            if (!(c.kind == MOperandKind::REG &&
+                  c.reg == static_cast<uint8_t>(MReg::RCX)))
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RCX), c));
+            out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), v));
+            const MOp mop = (in.variant == 0u)   ? MOp::SHL
+                            : (in.variant == 1u) ? MOp::SHR
+                                                 : MOp::SAR;
+            MInstr sh{};
+            sh.op = mop;
+            sh.dst = reg(scr1);     // r11 = valor de trabajo
+            sh.src1 = reg(MReg::RCX); // CL -> el encoder emite la forma 0xD3
+            out.push_back(sh);
+            out.push_back(MInstr::make_unary(MOp::MOV, resolve(in.dst),
+                                             reg(scr1)));
             return;
         }
 

@@ -1507,6 +1507,56 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* FMIN / FMAX: MINSD/MAXSD (f64) o MINSS/MAXSS (f32).  Forma 3-op
+             * pre-legalization (dst = op(src1, src2)); el rewrite la legaliza a
+             * 2-address preservando el ORDEN (NaN de x86 no es conmutativo). */
+            case ir::IrOp::FMIN:
+            case ir::IrOp::FMAX: {
+                flush_pending();
+                if (!fp_ok) {
+                    vreg_dbg(fn.name.c_str(), ir::ir_op_name(in.op));
+                    return false;
+                }
+                if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const bool is_f32 = (in.type == ir::IrType::F32);
+                const MOp fop = (in.op == ir::IrOp::FMIN)
+                                    ? (is_f32 ? MOp::MINSS : MOp::MINSD)
+                                    : (is_f32 ? MOp::MAXSS : MOp::MAXSD);
+                O.push_back(MInstr::make_binary(fop, vrt(in.dst),
+                                                vrt(in.operands[0]),
+                                                vrt(in.operands[1])));
+                break;
+            }
+
+            /* FFLOOR / FCEIL / FROUND / FTRUNC: ROUNDSD (f64) o ROUNDSS (f32)
+             * con el modo de redondeo en @c variant (0=nearest, 1=floor,
+             * 2=ceil, 3=trunc).  Unario no-destructivo (dst = round(src)). */
+            case ir::IrOp::FFLOOR:
+            case ir::IrOp::FCEIL:
+            case ir::IrOp::FROUND:
+            case ir::IrOp::FTRUNC: {
+                flush_pending();
+                if (!fp_ok) {
+                    vreg_dbg(fn.name.c_str(), ir::ir_op_name(in.op));
+                    return false;
+                }
+                if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const bool is_f32 = (in.type == ir::IrType::F32);
+                const uint8_t mode = (in.op == ir::IrOp::FROUND)  ? 0u
+                                     : (in.op == ir::IrOp::FFLOOR) ? 1u
+                                     : (in.op == ir::IrOp::FCEIL)  ? 2u
+                                                                   : 3u;
+                MInstr r{};
+                r.op = is_f32 ? MOp::ROUNDSS : MOp::ROUNDSD;
+                r.variant = mode;
+                r.dst = vrt(in.dst);
+                r.src1 = vrt(in.operands[0]);
+                O.push_back(r);
+                break;
+            }
+
             /* FNEG / FABS: manipulan el bit de signo via una mascara en XMM.
              * La mascara se construye en un GP temp y se mueve a un XMM temp
              * (MOVQ_GP_XMM); luego XORPS (neg = flip bit signo, mascara =
@@ -1722,17 +1772,36 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 if (in.operands.size() != 2) return false;
                 const ir::IrValueId amt_v = in.operands[1];
-                if (amt_v >= v_is_const.size() || !v_is_const[amt_v]) {
-                    vreg_dbg(fn.name.c_str(), "shift-var");
-                    return false;
+                if (amt_v < v_is_const.size() && v_is_const[amt_v]) {
+                    /* Cuenta INMEDIATA (caso comun): shift dst, imm8. */
+                    const int32_t amt = static_cast<int32_t>(v_const[amt_v] & 63);
+                    const MOp mop = (in.op == ir::IrOp::SHL)   ? MOp::SHL
+                                    : (in.op == ir::IrOp::SHR) ? MOp::SHR
+                                                               : MOp::SAR;
+                    O.push_back(MInstr::make_binary(mop, vr(in.dst),
+                                                    vr(in.operands[0]),
+                                                    MOperand::make_imm32(amt)));
+                    break;
                 }
-                const int32_t amt = static_cast<int32_t>(v_const[amt_v] & 63);
-                const MOp mop = (in.op == ir::IrOp::SHL)   ? MOp::SHL
-                                : (in.op == ir::IrOp::SHR) ? MOp::SHR
-                                                           : MOp::SAR;
-                O.push_back(MInstr::make_binary(mop, vr(in.dst),
-                                                vr(in.operands[0]),
-                                                MOperand::make_imm32(amt)));
+                /* Cuenta VARIABLE (en registro).  x86 exige CL: metemos la
+                 * cuenta en un tmp de vida corta pineado a RCX y emitimos el
+                 * pseudo SHIFT_V (el rewrite lo expande con R11 como reg de
+                 * trabajo -> sin clobbear vivos).  NUNCA cae al interprete. */
+                if (in.dst == ir::IR_NO_VALUE) return false;
+                const ir::IrValueId cnt = new_tmp();
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(cnt),
+                                               vr(in.operands[1])));
+                out.set_vreg_fixed(static_cast<uint32_t>(cnt),
+                                   static_cast<uint8_t>(MReg::RCX));
+                MInstr sv{};
+                sv.op = MOp::SHIFT_V;
+                sv.dst = vr(in.dst);
+                sv.src1 = vr(in.operands[0]); // valor a desplazar
+                sv.src2 = vr(cnt);            // cuenta (pineada a RCX)
+                sv.variant = (in.op == ir::IrOp::SHL)   ? 0u
+                             : (in.op == ir::IrOp::SHR) ? 1u
+                                                        : 2u;
+                O.push_back(sv);
                 break;
             }
 

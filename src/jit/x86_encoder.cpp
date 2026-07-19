@@ -263,10 +263,13 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     }
     case MOp::SQRTSD:
     case MOp::MINSD:
-    case MOp::MAXSD: {
-        /* SQRTSD/MINSD/MAXSD xmm_dst, xmm_src:
-         *   F2 + (REX si hay xmm>=8) + 0F + <op> + ModR/M(11, dst&7, src&7).
-         *   SQRTSD opcode = 0x51, MINSD = 0x5D, MAXSD = 0x5F. */
+    case MOp::MAXSD:
+    case MOp::MINSS:
+    case MOp::MAXSS: {
+        /* SQRTSD/MINSD/MAXSD (F2, f64) + MINSS/MAXSS (F3, f32) xmm_dst, xmm_src:
+         *   pref + (REX si hay xmm>=8) + 0F + <op> + ModR/M(11, dst&7, src&7).
+         *   MIN opcode = 0x5D, MAX = 0x5F, SQRTSD = 0x51.  El prefijo distingue
+         *   f64 (F2) de f32 (F3). */
         if (mi.dst.kind != MOperandKind::REG ||
             mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
@@ -274,18 +277,21 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-        const uint8_t opcode = (mi.op == MOp::SQRTSD)  ? 0x51
-                               : (mi.op == MOp::MINSD) ? 0x5D
-                                                       : 0x5F;
+        const bool is_ss = (mi.op == MOp::MINSS || mi.op == MOp::MAXSS);
+        const uint8_t opcode = (mi.op == MOp::SQRTSD) ? 0x51
+                               : (mi.op == MOp::MINSD || mi.op == MOp::MINSS)
+                                   ? 0x5D
+                                   : 0x5F;
+        const uint8_t pp = is_ss ? 2u : 3u; // VX pp: F3=2, F2=3
         if (mi.flags & MI_FLAG_VX_SCALAR) {
-            /* VSQRTSD/VMINSD/VMAXSD xmm, xmm(vvvv=dst), xmm: VX.LIG.F2.0F op. */
+            /* V{MIN,MAX}S{S,D}/VSQRTSD xmm, xmm(vvvv=dst), xmm: VX.LIG.<pp>.0F. */
             emit_vx3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
-                      /*map=*/1, /*pp=*/3);
+                      /*map=*/1, /*pp=*/pp);
             put8(out, opcode);
             put8(out, modrm(3, xd & 7, xs & 7));
             return true;
         }
-        put8(out, 0xF2);
+        put8(out, is_ss ? 0xF3 : 0xF2);
         /* REX solo si alguno >= 8.  REX.W no necesario para SSE. */
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
         const uint8_t rex_B = (xs >= 8) ? 1 : 0;
@@ -297,11 +303,13 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
-    case MOp::ROUNDSD: {
-        /* ROUNDSD xmm_dst, xmm_src, imm8:
-         *   66 + (REX) + 0F 3A 0B + ModR/M + imm8(mode)
+    case MOp::ROUNDSD:
+    case MOp::ROUNDSS: {
+        /* ROUNDSD (f64) / ROUNDSS (f32) xmm_dst, xmm_src, imm8:
+         *   66 + (REX) + 0F 3A <0B|0A> + ModR/M + imm8(mode)
          *   variant tiene el rounding mode (0=nearest, 1=floor, 2=ceil,
-         * 3=trunc). SSE4.1 required (todo x86-64 moderno lo tiene). */
+         * 3=trunc). SSE4.1 required (todo x86-64 moderno lo tiene).
+         * ROUNDSD = 0x0B, ROUNDSS = 0x0A. */
         if (mi.dst.kind != MOperandKind::REG ||
             mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
@@ -318,7 +326,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         put8(out, 0x0F);
         put8(out, 0x3A);
-        put8(out, 0x0B);
+        put8(out, mi.op == MOp::ROUNDSS ? 0x0A : 0x0B);
         put8(out, modrm(3, xd & 7, xs & 7));
         put8(out, mode);
         return true;

@@ -21,6 +21,7 @@
 #include "vx/asm/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
 #include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
 #include "vx/asm/asm_lift_emit.h"  // lift de patrones atomicos a IR tipado (ASA.3)
+#include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
 #include "vx/asm/asm_lift_micro.h"
 #include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
 #include "vx/asm/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
@@ -13629,6 +13630,37 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         if (vx::asm_lift_emit(*fn_, current_block_, vx::instr_db::Isa::X86,
                               ia.func_name, slot_of, s->loc.line))
             return; // patron liftado -> NO se emite el INLINE_ASM.
+
+        // Lift GENERAL instruccion-a-instruccion: el asm entero straight-line
+        // (mov/lea/ALU/neg-not/inc-dec, [reg]) pasa a IR SSA real (ADD, LOAD,
+        // STORE...) que participa del optimizador -> del asm del usuario sale
+        // codigo mas eficiente.  Los registros ligados por register() se cargan
+        // de su slot (al ancho de su tipo) y se escriben de vuelta.  Cualquier
+        // forma fuera del subset -> false y cae al ASM_MICRO / INLINE_ASM.
+        {
+            std::unordered_map<std::string, vx::AsmBoundReg> bound;
+            for (const auto &b : fn_->asm_reg_bindings)
+                if (lookup(b.name) == b.alloca_value) {
+                    const std::string c = asm_canonical_reg(b.reg);
+                    if (c.empty()) continue;
+                    int wbits = 64;
+                    switch (b.type) {
+                    case ir::IrType::I8:
+                    case ir::IrType::U8:
+                    case ir::IrType::BOOL: wbits = 8; break;
+                    case ir::IrType::I16:
+                    case ir::IrType::U16: wbits = 16; break;
+                    case ir::IrType::I32:
+                    case ir::IrType::U32:
+                    case ir::IrType::F32: wbits = 32; break;
+                    default: wbits = 64; break; // I64/U64/PTR/HANDLE/F64
+                    }
+                    bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
+                }
+            if (vx::asm_lift_general(*fn_, current_block_, vx::instr_db::Isa::X86,
+                                     ia.func_name, bound, s->loc.line))
+                return; // bloque liftado a IR real -> NO se emite el INLINE_ASM.
+        }
 
         // Si no encaja un patron tipado, intentar el lift GENERAL a ASM_MICRO:
         // instrucciones opacas SIN operandos de registro (mfence/pause/...)

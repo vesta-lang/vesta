@@ -43,6 +43,7 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::ROL:
     case MOp::ROR:
     case MOp::DIVMOD_V: /* dst = src1 / src2 (variant: 0 DIV, 1 MOD) */
+    case MOp::SHIFT_V:  /* dst = src1 <shift> src2 (cuenta variable en RCX) */
     /* arm64 3-op: division y select condicional (dst def, srcs use). */
     case MOp::A64_UDIV:
     case MOp::A64_SDIV:
@@ -191,6 +192,8 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::DIVSD:
     case MOp::MINSD:
     case MOp::MAXSD:
+    case MOp::MINSS:
+    case MOp::MAXSS:
     case MOp::ADDSS:
     case MOp::SUBSS:
     case MOp::MULSS:
@@ -217,6 +220,7 @@ InstrRoles operand_roles(MOp op) noexcept {
      * (movimiento de datos, incluido el spill/load FP). */
     case MOp::SQRTSD:
     case MOp::ROUNDSD:
+    case MOp::ROUNDSS:
     case MOp::CVTSI2SD:
     case MOp::CVTTSD2SI:
     case MOp::CVTSS2SD:

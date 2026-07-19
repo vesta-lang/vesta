@@ -451,6 +451,9 @@ enum class MOp : uint8_t {
     MINSD = 66, ///< MINSD  xmm_dst, xmm_src (F2 0F 5D /r) -- NaN: returns src2
     MAXSD = 67, ///< MAXSD  xmm_dst, xmm_src (F2 0F 5F /r)
     ROUNDSD = 68, ///< ROUNDSD xmm_dst, xmm_src, imm8 (66 0F 3A 0B /r ib)
+    MINSS = 208,  ///< MINSS  xmm_dst, xmm_src (F3 0F 5D /r) -- variante f32
+    MAXSS = 209,  ///< MAXSS  xmm_dst, xmm_src (F3 0F 5F /r) -- variante f32
+    ROUNDSS = 237, ///< ROUNDSS xmm_dst, xmm_src, imm8 (66 0F 3A 0A /r ib) -- f32
                   ///<   imm8 modes: 0=round-to-nearest, 1=floor, 2=ceil,
                   ///<   3=trunc. variant field carga el mode.  Requiere SSE4.1
                   ///<   (universal x86-64).
@@ -494,6 +497,17 @@ enum class MOp : uint8_t {
      *   LOCK_XADD:    dst=mem [addr], src1=reg (valor).    F0 REX.W 0F C1 /r. */
     LOCK_CMPXCHG = 205,
     LOCK_XADD = 206,
+
+    /* Pseudo (shift por cantidad VARIABLE): dst = src1 <shift> src2, donde la
+     * cuenta (src2) esta en un registro, no es inmediata.  x86 exige la cuenta
+     * en CL, asi que el selector fija src2 a RCX (via un tmp de vida corta
+     * pineado) y el rewrite expande usando R11 (scratch reservado) como reg de
+     * trabajo -> nunca clobbea un vivo:
+     *   mov  r11, value        ; value != RCX (interfiere con la cuenta)
+     *   shift r11, cl          ; CL = RCX (la cuenta pineada)
+     *   mov  dst, r11
+     * variant: 0 = SHL, 1 = SHR (logico), 2 = SAR (aritmetico). */
+    SHIFT_V = 207,
 
     /* Pseudo (callback-ABI 2026-06-06): carga el @c ProcessVM* del
      * proceso actual en @c dst.reg (siempre RBX).  Encapsula la
