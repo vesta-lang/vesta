@@ -5352,16 +5352,19 @@ bool ir_pass_elide_unwrap(IrFunction &fn) {
     return changed;
 }
 
-// Consumidor A/B del MODELO UNICO de efectos: ¿la instruccion @p ins no tiene
-// NINGUN efecto observable (segun el modelo) -> se puede eliminar si su dst esta
-// muerto?  Es la version del modelo de @c is_side_effecting, pero instruccion-
-// aware.  SOUND-conservador: exige analisis Complete + ningun may_* + sin
-// escritura de memoria + control local (FallThrough).  Se activa con
-// VESTA_DCE_EFFECTS=1 para validar (A/B) que coincide con is_side_effecting antes
-// de hacerlo el default.  Default OFF -> cero cambio de comportamiento.
+// Consumidor del MODELO UNICO de efectos: ¿la instruccion @p ins no tiene NINGUN
+// efecto observable (segun el modelo) -> se puede eliminar si su dst esta muerto?
+// Es la version del modelo de @c is_side_effecting, pero instruccion-aware.
+// SOUND-conservador: exige analisis Complete + ningun may_* + sin escritura de
+// memoria + control local (FallThrough).
+//
+// Es el DEFAULT (el compilador consume el modelo unico): se valido A/B contra
+// is_side_effecting (salida .velb BYTE-IDeNTICA en el corpus + e2e 724/0 en
+// interp/jit/aot).  VESTA_DCE_EFFECTS=0 revierte a la tabla is_side_effecting
+// (escape-hatch para diagnostico/comparacion).
 static bool g_dce_effects = [] {
     const char *e = std::getenv("VESTA_DCE_EFFECTS");
-    return e && e[0] == '1';
+    return !(e && e[0] == '0'); // default ON; solo "0" lo desactiva
 }();
 
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
