@@ -507,6 +507,9 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"atomicld", {"atomicld", OpArity::TWO}},     // dst, addr
         {"atomicst", {"atomicst", OpArity::TWO}},     // addr, val
         {"atomiccas", {"atomiccas", OpArity::FOUR}},  // dst, addr, exp, des
+        {"csel", {"csel", OpArity::FOUR}}, // dst, cond, a, b: dst = cond?a:b
+        {"mld", {"mld", OpArity::FOUR}},   // dst, index, ctrlword, disp16
+        {"mst", {"mst", OpArity::FOUR}},   // src, index, ctrlword, disp16
         {"atomicadd", {"atomicadd", OpArity::THREE}}, // dst, addr, delta
         {"sharedstat", {"sharedstat", OpArity::TWO}},
 

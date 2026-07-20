@@ -676,6 +676,15 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         {"atomiccas",
          {{0x00, 0xAB, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_four_reg}}},
+        {"csel", // dst=cond?a:b (super-instruccion del IrOp::SELECT, interp)
+         {{0x00, 0x8F, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_four_reg}}},
+        {"mld", // load universal: dst = [base +/- index*scale +/- disp]
+         {{0x00, 0x90, InstrSizeMode::FIXED_8, AddressingMode::REG,
+           emit_instr_mem_full}}},
+        {"mst", // store universal: [base +/- index*scale +/- disp] = src
+         {{0x00, 0x91, InstrSizeMode::FIXED_8, AddressingMode::REG,
+           emit_instr_mem_full}}},
         {"atomicadd",
          {{0x00, 0xAC, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_three_reg}}},

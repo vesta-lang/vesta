@@ -59,6 +59,35 @@
 namespace ir {
 
 // =========================================================================
+//  Acceso a slot de derrame (spill) en 1 instruccion via mld/mst.
+//
+//  El slot vive en rbp - (slot+1)*8 (offset NEGATIVO, area del frame local).
+//  rbp NO es una base SIB valida (no esta en r0-r15), asi que antes cada acceso
+//  eran 3 instrucciones (mov r13,rbp; subu r13,off; mov reg/[r13]).  mld/mst
+//  codifican rbp como base -> 1 instruccion.  ctrlword=784 (base=rbp(16),
+//  width=8B).  Fallback a la secuencia de 3 si off excede int16 (+/-32KB).
+//  Libre (no toca caches del EmitCtx; el llamante los invalida si procede).
+// =========================================================================
+static inline void emit_spill_access(std::ostringstream &out,
+                                     const std::string &reg, long long slot,
+                                     bool is_load) {
+    const long long off = (slot + 1) * 8;
+    if (off <= 32768) {
+        const uint16_t disp = static_cast<uint16_t>(static_cast<int16_t>(-off));
+        out << "    " << (is_load ? "mld" : "mst") << " " << reg << ", r0, 784, "
+            << static_cast<unsigned>(disp) << "\n";
+        return;
+    }
+    // Fallback (offset > 32KB, funcion enorme): secuencia de 3 instrucciones.
+    out << "    mov r13, rbp\n";
+    out << "    subu r13, " << off << "\n";
+    if (is_load)
+        out << "    mov " << reg << ", [r13]\n";
+    else
+        out << "    mov [r13], " << reg << "\n";
+}
+
+// =========================================================================
 //  Contexto interno de emision por funcion
 // =========================================================================
 
@@ -164,14 +193,33 @@ struct EmitCtx {
     /// cuando una instruccion tiene mas operandos que scratch disponibles (el
     /// CAS atomico tiene tres).  Usa r13 para calcular la direccion, asi que
     /// debe llamarse ANTES que los `load_src` cuyo resultado viva en r13.
+    // ctrlword de un slot de derrame para mld/mst: base=rbp(16), width=8B
+    // (wcode=3), sin index/host/sign/bank/scale -> 16 | (3<<8) = 784.
+    static constexpr unsigned kSpillCtrlWord = 784u;
+
+    // Emite la carga de un slot de derrame en 1 instruccion (mld) -- resuelve
+    // la codificacion [rbp - off] que el SIB no admite (rbp no es base GP), asi
+    // que antes eran 3 instrucciones (mov r13,rbp; subu; mov [r13]).  NO clobbea
+    // r13.  Fallback a la secuencia de 3 si el offset excede int16 (+/-32KB).
+    void emit_spill_load(const std::string &dst_reg, int slot) {
+        const bool fallback = ((long long)(slot + 1) * 8) > 32768;
+        emit_spill_access(out, dst_reg, slot, /*is_load=*/true);
+        // El mld NO clobbea r13/r14 (a diferencia del fallback); solo invalidar
+        // el cache si escribimos ese scratch o si el fallback usa r13.
+        if (fallback || dst_reg == "r13") r13_cache = -1;
+        if (dst_reg == "r14") r14_cache = -1;
+    }
+
+    void emit_spill_store(const std::string &src_reg, int slot) {
+        const bool fallback = ((long long)(slot + 1) * 8) > 32768;
+        emit_spill_access(out, src_reg, slot, /*is_load=*/false);
+        if (fallback) r13_cache = -1; // el fallback usa r13 como temp
+    }
+
     void emit_load_spilled_into(IrValueId vid, const std::string &dst_reg) {
         auto it = alloc.spill_map.find(vid);
         if (it == alloc.spill_map.end()) return; // no derramado: nada que hacer
-        out << "    mov r13, rbp\n";
-        out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
-        out << "    mov " << dst_reg << ", [r13]\n";
-        r13_cache = -1;
-        if (dst_reg == "r14") r14_cache = -1;
+        emit_spill_load(dst_reg, it->second);
     }
 
     // Numero de registro de un valor (SCRATCH_REG si derramado)
@@ -232,11 +280,7 @@ struct EmitCtx {
                 // rsp, frame_size), que es local al frame y nadie mas
                 // toca.  Combinado con el fix de enter (allocacion en
                 // bytes = spill_count*8), los locals viven seguros.
-                out << "    mov r13, rbp\n";
-                out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
-                out << "    mov " << reg_name(sr) << ", [r13]\n";
-                r13_cache = -1; // r13 fue clobreado
-                if (sr == 14) r14_cache = -1;
+                emit_spill_load(reg_name(sr), it->second);
                 if (is_gc_value(vid)) {
                     // El slot contiene el GcHandle.  Convertir a host_ptr
                     // fresco (gcderef indexa la HandleTable, que el GC
@@ -278,11 +322,8 @@ struct EmitCtx {
             src_reg = reg_name(SCRATCH_REG);
             r14_cache = -1;
         }
-        // Mismo fix que load_src: spill slots en offsets NEGATIVOS desde rbp.
-        out << "    mov r13, rbp\n";
-        out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
-        out << "    mov [r13], " << src_reg << "\n";
-        r13_cache = -1;
+        // Slot en offset NEGATIVO desde rbp; 1 instruccion (mst) con fallback.
+        emit_spill_store(src_reg, it->second);
     }
 
     // Emite un comentario si los comentarios estan activados
@@ -1269,28 +1310,43 @@ static void emit_unop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
 // @c gcderef.
 static void emit_select(EmitCtx &ctx, IrValueId dst, IrValueId cond,
                         IrValueId a, IrValueId b) {
-    // Carga @p v en @p reg: copia directa si esta en registro, o lectura del
-    // slot de derrame en caso contrario.
-    auto load_into = [&](IrValueId v, const char *reg) {
+    // Backend del INTERPRETE: SELECT -> super-instruccion `csel dst,cond,a,b`
+    // (1 despacho: dst = cond ? a : b), NO la mascara branchless (~8 ops) que
+    // penalizaba branch_unpredict 2.3x.  El SELECT del IR es una primitiva
+    // SEMANTICA: el JIT/AOT lo bajan a cmov; el interp a esta op.
+    //
+    // CLAVE (trafico de registros): NO forzamos los operandos a scratches fijos
+    // (eso anadia un mov por operando).  Usamos el registro YA ASIGNADO por el
+    // regalloc a cada valor (reg_of); solo los DERRAMADOS se cargan a un scratch
+    // (r14/r13/r15, que el regalloc nunca asigna a un SSA value).  csel lee los
+    // 4 operandos y luego escribe dst -> el aliasing dst==cond (ambos derramados
+    // a r14) es correcto (lee antes de escribir).  Caso comun (todo en registro):
+    // 0 movs, un solo csel.
+    // emit_load_spilled_into usa r13 como temp de direccion (lo clobbea en cada
+    // carga).  Por eso a los operandos DERRAMADOS les asignamos scratches en
+    // orden r15 -> r14 -> r13, con r13 el ULTIMO: asi ninguna carga posterior
+    // destruye un valor ya cargado (r13 solo se usa como HOLDER cuando es el
+    // ultimo derramado, y su carga es la ultima).  Los operandos en registro
+    // usan su reg asignado (0 movs).
+    const char *spill_scratch[3] = {"r15", "r14", "r13"};
+    int nspill = 0;
+    auto op_reg = [&](IrValueId v) -> std::string {
         auto it = ctx.alloc.reg_map.find(v);
-        if (it != ctx.alloc.reg_map.end()) {
-            const std::string src = reg_name(it->second);
-            if (src != reg) ctx.out << "    mov " << reg << ", " << src << "\n";
-        } else {
-            ctx.emit_load_spilled_into(v, reg);
-        }
+        if (it != ctx.alloc.reg_map.end())
+            return reg_name(it->second); // reg asignado: sin mov
+        const char *s = spill_scratch[nspill < 2 ? nspill : 2];
+        ++nspill;
+        ctx.emit_load_spilled_into(v, s); // derramado: 1 carga
+        return s;
     };
-    load_into(a, "r15");    // r15 = a  (preservado hasta el xor final)
-    load_into(cond, "r14"); // r14 = cond
-    load_into(b, "r13");    // r13 = b  (ultimo: r13 es el temp de direccion)
-    ctx.out << "    subu r14, 1\n"; // r14 = cond - 1 = invmask
-    ctx.out << "    xor r13, r15\n"; // r13 = b ^ a = a ^ b
-    ctx.out << "    and r13, r14\n"; // r13 = (a ^ b) & invmask
-    ctx.out << "    xor r15, r13\n"; // r15 = a ^ ((a ^ b) & invmask) = resultado
+    const std::string rc = op_reg(cond);
+    const std::string ra = op_reg(a);
+    const std::string rb = op_reg(b);
+    const std::string rd = ctx.dst_of(dst); // reg asignado o r14 (si derramado)
+    ctx.out << "    csel " << rd << ", " << rc << ", " << ra << ", " << rb
+            << "\n";
     ctx.r13_cache = -1;
     ctx.r14_cache = -1;
-    const std::string rd = ctx.dst_of(dst);
-    emit_mov_if_needed(ctx, rd, "r15");
     ctx.store_spilled(dst);
 }
 
@@ -1734,11 +1790,7 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
         if (it == ctx.alloc.spill_map.end()) continue;
         int d_reg = ctx.alloc.reg_map.at(c.dst);
         std::string rd = reg_name(d_reg);
-        ctx.out << "    mov r13, rbp\n";
-        ctx.out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
-        ctx.out << "    mov " << rd << ", [r13]\n";
-        ctx.r13_cache = -1;
-        if (d_reg == 14) ctx.r14_cache = -1;
+        ctx.emit_spill_load(rd, it->second);
         if (ctx.is_gc_value(c.src)) {
             ctx.out << "    gcderef cur0, " << rd << "\n";
             ctx.out << "    xchg cur0, " << rd << "\n";
@@ -5437,13 +5489,10 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                            fn.values[pid].is_gc_object;
         if (is_gc) {
             out << "    gchandle r14, " << reg_name(preg) << "\n";
-            out << "    mov r13, rbp\n";
-            out << "    subu r13, " << ((it_sp->second + 1) * 8) << "\n";
-            out << "    mov [r13], r14\n";
+            emit_spill_access(out, "r14", it_sp->second, /*is_load=*/false);
         } else {
-            out << "    mov r13, rbp\n";
-            out << "    subu r13, " << ((it_sp->second + 1) * 8) << "\n";
-            out << "    mov [r13], " << reg_name(preg) << "\n";
+            emit_spill_access(out, reg_name(preg), it_sp->second,
+                              /*is_load=*/false);
         }
     }
 

@@ -962,6 +962,42 @@ void decode_instr_static_offset(ProcessVM *vm, DecodedInstr &instr) {
 }
 
 /**
+ * @brief Descodificador de @c mld / @c mst (load/store universal, FIXED_8).
+ *
+ * Layout desde @c rip+2: @c [ctrl][basef][regs][disp16 LE][pad].
+ *   ctrl : [7]=host [6:4]=width_code(->1/2/4/8/16/32/64B) [3]=has_index [2:0]=scale
+ *   basef: [7]=bank(GP/FP) [6]=idx_sub [5]=sign_ext [4:0]=base(0-17)
+ *   regs : [7:4]=dst/src [3:0]=index
+ * Pre-decodifica todo a @c mem_full para que el exec sea minimo (el decode se
+ * cachea; el coste real es de ejecucion).
+ */
+void decode_instr_mem_full(ProcessVM *vm, DecodedInstr &instr) {
+    instr.flags_info.size_instr = 8; // FIXED_8
+    // Una sola lectura de 8 bytes (la instruccion entera) en vez de 5 accesos
+    // byte a byte -> 1 lookup TLB/pagina.  Layout de raw (LE):
+    //   b0=0x00 b1=op2 b2=ctrl b3=basef b4=regs b5=disp_lo b6=disp_hi b7=pad
+    const uint64_t raw = vm->vm_mem.read_u64(vm->registers.rip.raw());
+    const uint8_t ctrl = static_cast<uint8_t>(raw >> 16);
+    const uint8_t basef = static_cast<uint8_t>(raw >> 24);
+    const uint8_t regs = static_cast<uint8_t>(raw >> 32);
+    const int16_t disp = static_cast<int16_t>(raw >> 40);
+    auto &m = instr.data_instruction.mem_full;
+    m.width = static_cast<uint8_t>(1u << ((ctrl >> 4) & 0x07)); // 1..64 bytes
+    m.scale = ctrl & 0x07;                                      // shift 0..6
+    m.base = basef & 0x1F;                                      // 0..17
+    m.index = regs & 0x0F;
+    m.reg = (regs >> 4) & 0x0F;
+    m.disp = disp;
+    uint8_t f = 0;
+    if (ctrl & 0x80) f |= 0x01;  // host
+    if (ctrl & 0x08) f |= 0x02;  // has_index
+    if (basef & 0x40) f |= 0x04; // idx_sub
+    if (basef & 0x20) f |= 0x08; // sign_ext
+    if (basef & 0x80) f |= 0x10; // bank (FP/ZMM)
+    m.flags = f;
+}
+
+/**
  * @brief Decoder compartido para @c dlopen (3 regs) y @c dlsym (4 regs).
  *
  * Lee 2 bytes desde @c rip+2 y los desempaqueta en 4 nibbles que se

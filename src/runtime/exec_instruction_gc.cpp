@@ -875,6 +875,20 @@ void exec_instr_atomicst(ProcessVM *vm, const DecodedInstr &instr) {
 }
 
 // ATOMICADD r_dst, r_addr, r_delta : r_dst = atomic_fetch_add_i64.
+// CSEL r_dst, r_cond, r_a, r_b : dst = (cond != 0) ? a : b  (1 despacho).
+// Super-instruccion del IrOp::SELECT para el interp dispatch-bound; evita la
+// mascara branchless (~8 ops).  El JIT/AOT bajan el mismo SELECT a cmov.
+void exec_instr_csel(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t rdst = instr.data_instruction.mem_data.reg_base;
+    const uint8_t rcond = instr.data_instruction.mem_data.reg_index;
+    const uint8_t ra = instr.data_instruction.mem_data.reg_final;
+    const uint8_t rb = instr.data_instruction.mem_data.scale;
+    const uint64_t v = (vm->registers.regs[rcond].qword() != 0)
+                           ? vm->registers.regs[ra].qword()
+                           : vm->registers.regs[rb].qword();
+    vm->registers.regs[rdst].qword(v);
+}
+
 void exec_instr_atomicadd(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t rdst = instr.data_instruction.mem_data.reg_base;
     const uint8_t raddr = instr.data_instruction.mem_data.reg_index;

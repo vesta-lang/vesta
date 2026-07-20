@@ -463,6 +463,10 @@ void decode_instr_four_reg(ProcessVM *vm, DecodedInstr &instr);
  */
 void decode_instr_static_offset(ProcessVM *vm, DecodedInstr &instr);
 
+/// @brief Decoder de mld/mst (load/store universal, FIXED_8).  Lee la instr en
+///        1 read_u64 y pre-decodifica a mem_full.  Ver exec_instr_mld/mst.
+void decode_instr_mem_full(ProcessVM *vm, DecodedInstr &instr);
+
 /**
  * @brief Descodificador de @c dlopen / @c dlsym (FFI runtime, FIXED_4).
  *

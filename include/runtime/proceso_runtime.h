@@ -199,6 +199,23 @@ typedef struct DecodedInstr {
         } mem_data;
 
         /**
+         * @brief Operandos de mld / mst (load/store universal, opcodes extended
+         *        0x90 / 0x91).  Direccionamiento completo en 1 despacho:
+         *        @c addr = base +/- (index << scale) +/- disp.  Ver
+         *        @c exec_instr_mld / @c exec_instr_mst.  Encoding FIXED_8:
+         *        @c [0x00][op2][ctrl][basef][regs][disp16][pad].
+         */
+        struct {
+            uint8_t reg;   ///< dst (mld) o src (mst); banco segun bit bank
+            uint8_t base;  ///< base: 0-15=rN, 16=rbp, 17=rsp
+            uint8_t index; ///< registro indice (0-15); valido si has_index
+            uint8_t scale; ///< shift 0..6 (x1/2/4/8/16/32/64)
+            uint8_t width; ///< bytes de acceso: 1/2/4/8/16/32/64
+            uint8_t flags; ///< b0=host b1=has_index b2=idx_sub b3=sign_ext b4=bank(FP)
+            int16_t disp;  ///< desplazamiento con signo (+/- 32KB)
+        } mem_full;
+
+        /**
          * @brief Operandos para instrucciones de acceso a static fields
          *        (getstatic / setstatic, opcodes extended 0x60 / 0x61).
          *

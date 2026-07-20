@@ -10304,7 +10304,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // If-conversion: diamante/if-anidado/ternario -> SELECT (solo
                 // legalidad; la rentabilidad la decide el pase de coste cercano
                 // al backend).  Debe preceder a `unreachable` para que este
-                // limpie los bloques de rama que quedan vacios.
+                // limpie los bloques de rama que quedan vacios.  El SELECT es
+                // una primitiva SEMANTICA: el JIT/AOT lo bajan a cmov, y el
+                // INTERPRETE a la super-instruccion `csel` (1 despacho).
                 any |= (ir_pass_if_conversion(fn) > 0);
                 // Canonicalizacion algebraica de los SELECT recien creados
                 // (select(c,x,x)->x, ->imin/imax, anidados, ...) antes de que

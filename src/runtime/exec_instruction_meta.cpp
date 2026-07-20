@@ -514,6 +514,91 @@ void exec_instr_setstatic(ProcessVM *vm, const DecodedInstr &instr) {
     std::memcpy(cls->static_data + offset, &val, sizeof(uint64_t));
 }
 
+// ==========================================================================
+// mld / mst : load/store UNIVERSAL del interprete (1 despacho).
+//   addr = base +/- (index << scale) +/- disp
+//   base in {r0-r15, rbp(16), rsp(17)}; index*scale (x1..64); disp int16;
+//   ancho 1/2/4/8 (GP) o 16/32/64 (vector, banco FP -- pendiente); host/vm.
+// Resuelve la codificacion que faltaba (rbp/rsp como base, que el SIB no
+// admite) -> el spill pasa de 3 instrucciones a 1.  Banco GP en v1 (el spill
+// del interp es siempre GP de 8B: el regalloc es GP-only y los floats se
+// derraman como su patron de bits i64).  El banco FP se anade despues.
+// ==========================================================================
+
+/// @brief Calcula la direccion efectiva de un mld/mst
+///        (base +/- idx<<scale +/- disp).  base<16=rN, 16=rbp, 17=rsp.
+static inline uint64_t mem_full_addr(ProcessVM *vm, uint8_t base, int16_t disp,
+                                     uint8_t flags, uint8_t index,
+                                     uint8_t scale) {
+    uint64_t addr = base < 16 ? vm->registers.regs[base].qword()
+                    : (base == 16 ? vm->registers.base_pointer.raw()
+                                  : vm->registers.stack_pointer.raw());
+    addr += static_cast<uint64_t>(static_cast<int64_t>(disp));
+    if (flags & 0x02) { // has_index
+        const uint64_t idx = vm->registers.regs[index].qword() << scale;
+        if (flags & 0x04)
+            addr -= idx; // idx_sub
+        else
+            addr += idx;
+    }
+    return addr;
+}
+
+void exec_instr_mld(ProcessVM *vm, const DecodedInstr &instr) {
+    const auto &m = instr.data_instruction.mem_full;
+    const uint64_t addr =
+        mem_full_addr(vm, m.base, m.disp, m.flags, m.index, m.scale);
+    const bool host = (m.flags & 0x01) != 0;
+    uint64_t val = 0;
+    if (host) {
+        std::memcpy(&val, reinterpret_cast<const void *>(addr),
+                    m.width <= 8 ? m.width : 8);
+    } else {
+        switch (m.width) {
+        case 1: val = vm->vm_mem.read_u8(addr); break;
+        case 2: val = vm->vm_mem.read_u16(addr); break;
+        case 4: val = vm->vm_mem.read_u32(addr); break;
+        default: val = vm->vm_mem.read_u64(addr); break;
+        }
+    }
+    if (m.flags & 0x08) { // sign_extend para anchos < 8
+        switch (m.width) {
+        case 1:
+            val = static_cast<uint64_t>(
+                static_cast<int64_t>(static_cast<int8_t>(val)));
+            break;
+        case 2:
+            val = static_cast<uint64_t>(
+                static_cast<int64_t>(static_cast<int16_t>(val)));
+            break;
+        case 4:
+            val = static_cast<uint64_t>(
+                static_cast<int64_t>(static_cast<int32_t>(val)));
+            break;
+        default: break;
+        }
+    }
+    vm->registers.regs[m.reg].qword(val);
+}
+
+void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr) {
+    const auto &m = instr.data_instruction.mem_full;
+    const uint64_t addr =
+        mem_full_addr(vm, m.base, m.disp, m.flags, m.index, m.scale);
+    const uint64_t val = vm->registers.regs[m.reg].qword();
+    if (m.flags & 0x01) { // host
+        std::memcpy(reinterpret_cast<void *>(addr), &val,
+                    m.width <= 8 ? m.width : 8);
+    } else {
+        switch (m.width) {
+        case 1: vm->vm_mem.write_u8(addr, static_cast<uint8_t>(val)); break;
+        case 2: vm->vm_mem.write_u16(addr, static_cast<uint16_t>(val)); break;
+        case 4: vm->vm_mem.write_u32(addr, static_cast<uint32_t>(val)); break;
+        default: vm->vm_mem.write_u64(addr, val); break;
+        }
+    }
+}
+
 // -------------------------------------------------------------------------
 // FFI runtime dinamico: dlopen (0x62), dlsym (0x63), callni (0x64).
 //
