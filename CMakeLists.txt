@@ -720,6 +720,20 @@ else ()
     target_link_libraries(test_effects PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Modelo de memoria UNICO: alias por rangos (may/must/no) + resolvedor
+# points-to compartido (raiz + offset const).
+add_executable(test_mem_loc tests/analysis/test_mem_loc.cpp)
+target_include_directories(test_mem_loc PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_mem_loc PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_mem_loc PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_mem_loc PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_mem_loc PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # DB de instrucciones embebida: matcher texto->FormID.
 add_executable(test_instr_db tests/vx/instr_db_test.cpp)
 target_include_directories(test_instr_db PRIVATE ${VM_INCLUDES})

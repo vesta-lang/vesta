@@ -28,11 +28,28 @@ bool may_alias(const AbstractLoc &a, const AbstractLoc &b) {
     if (a.kind == K::Unknown || b.kind == K::Unknown) return true;
     // Clases distintas son disjuntas (stack != heap != global != arg).
     if (a.kind != b.kind) return false;
-    // Misma clase: el id GENERICO aliasa cualquier sitio de la clase; si no,
-    // dos sitios concretos aliasan solo si son el mismo.
+    // Misma clase: el id GENERICO aliasa cualquier sitio de la clase.
     if (a.id == LOC_GENERIC || b.id == LOC_GENERIC) return true;
-    return a.id == b.id;
+    // Raices concretas distintas -> disjuntas (dos ALLOCAs, dos alloc-sites...).
+    if (a.id != b.id) return false;
+    // MISMA raiz concreta: aliasan solo si sus rangos de bytes se SOLAPAN.  Con
+    // width==0 (ancho desconocido = objeto entero) no se puede probar disyuncion
+    // -> conservador (solapan).  Refinamiento sobre el modelo base-only.
+    if (a.width <= 0 || b.width <= 0) return true;
+    // Solapamiento de [off, off+width): a.off < b.off+b.width && b.off < a.off+a.width.
+    return a.off < b.off + b.width && b.off < a.off + a.width;
 }
+
+bool must_alias(const AbstractLoc &a, const AbstractLoc &b) {
+    // Mismos bytes EXACTOS: ambas raices concretas iguales, mismo off, mismo
+    // width > 0.  (width==0 = objeto entero -> no se puede afirmar "exactamente
+    // los mismos bytes").
+    if (!a.concrete() || !b.concrete()) return false;
+    return a.kind == b.kind && a.id == b.id && a.off == b.off &&
+           a.width > 0 && a.width == b.width;
+}
+
+bool no_alias(const AbstractLoc &a, const AbstractLoc &b) { return !may_alias(a, b); }
 
 // --------------------------------------------------------------------------
 // LocSet

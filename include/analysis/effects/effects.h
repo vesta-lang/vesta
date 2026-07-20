@@ -43,6 +43,18 @@ namespace effects {
 /// clase.  Reservado para poder usar el id 0 como un sitio concreto legitimo.
 static constexpr uint32_t LOC_GENERIC = 0xFFFFFFFFu;
 
+// ===========================================================================
+// AbstractLoc -- localizacion abstracta de memoria UNICA para todo el
+// compilador y el tooling (efectos, DSE/alias, diagramas).  Es PRECISA:
+// clase (kind) + sitio concreto (id = raiz: ALLOCA/alloc-site/global/param) +
+// OFFSET constante desde la raiz + ANCHO en bytes del acceso.  El alias es por
+// RANGO de bytes: dos accesos al mismo sitio con rangos disjuntos NO aliasan.
+//
+// width == 0 significa "ancho desconocido / objeto entero": no permite probar
+// disyuncion -> se comporta como el modelo base-only (conservador).  Asi el
+// upgrade es un REFINAMIENTO: con off/width por defecto (0) el comportamiento
+// es identico al anterior; poblarlos afina la precision sin regresar nada.
+// ===========================================================================
 struct AbstractLoc {
     enum class Kind : uint8_t {
         None,       ///< BOTTOM: no localizacion (neutro del join).
@@ -53,17 +65,31 @@ struct AbstractLoc {
         Unknown     ///< TOP: puede aliasar cualquier cosa.
     };
     Kind     kind = Kind::None;
-    uint32_t id = 0; ///< sitio concreto dentro de la clase; LOC_GENERIC = toda la clase.
+    uint32_t id = 0;      ///< raiz concreta dentro de la clase; LOC_GENERIC = toda la clase.
+    int64_t  off = 0;     ///< offset const desde la raiz (solo si id concreto).
+    int32_t  width = 0;   ///< bytes accedidos; 0 = desconocido/objeto entero.
 
     bool operator==(const AbstractLoc &o) const {
-        return kind == o.kind && id == o.id;
+        return kind == o.kind && id == o.id && off == o.off && width == o.width;
+    }
+    /// ¿Es un sitio CONCRETO (raiz conocida, no la clase generica ni TOP)?
+    bool concrete() const {
+        return kind != Kind::None && kind != Kind::Unknown && id != LOC_GENERIC;
     }
 };
 
 /// ¿Pueden @p a y @p b referirse a la MISMA memoria?  Unknown aliasa todo;
-/// None (bottom) no aliasa nada; clases distintas son disjuntas; dentro de una
-/// clase, mismo id = alias, distinto id = no-alias (conservador si id==0).
+/// None (bottom) no aliasa nada; clases distintas son disjuntas; misma clase +
+/// misma raiz: solo aliasan si sus rangos de bytes [off,off+width) se solapan
+/// (con width==0 = objeto entero = siempre puede solapar -> conservador).
 bool may_alias(const AbstractLoc &a, const AbstractLoc &b);
+
+/// ¿Se refieren SIEMPRE a EXACTAMENTE los mismos bytes?  (misma raiz concreta,
+/// mismo off, mismo width > 0).  Requerido por el DSE para "sobreescritura".
+bool must_alias(const AbstractLoc &a, const AbstractLoc &b);
+
+/// ¿Se refieren SIEMPRE a memoria DISJUNTA?  (== !may_alias, pero explicito).
+bool no_alias(const AbstractLoc &a, const AbstractLoc &b);
 
 // ===========================================================================
 // LocSet -- conjunto de AbstractLoc con TOP absorbente (is_top).  Cuando entra
