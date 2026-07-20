@@ -28,6 +28,7 @@ Uso:
 """
 from __future__ import annotations
 import argparse
+import concurrent.futures as cf
 import json
 import os
 import re
@@ -131,6 +132,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--no-benchmarks", action="store_true")
     ap.add_argument("--out", default="diff_baseline.json")
+    ap.add_argument("--jobs", "-j", type=int, default=0,
+                    help="programas en paralelo (0 = auto = cpu_count)")
     args = ap.parse_args()
 
     vm = find_vm(args.vm_path, root)
@@ -154,63 +157,73 @@ def main() -> int:
     detail = []
     t0 = time.time()
 
-    for i, (name, path) in enumerate(corpus, 1):
-        sys.stdout.write(f"\r{C.DIM}[{i}/{len(corpus)}] {name[:40]:40s}{C.R}")
-        sys.stdout.flush()
+    # Procesa UN programa (compile + 3 modos + clasificacion).  Independiente
+    # por programa (velb unico), asi que es paralelizable con hilos: los
+    # subprocess sueltan el GIL.  Devuelve un `rec` con su `cat`.
+    def process_one(name: str, path: Path) -> dict:
         if name in SKIP:
-            cats["SKIP"].append(name); continue
-
-        # Compilar una vez.
+            return {"name": name, "cat": "SKIP"}
         velb = tmp / (name + ".velb")
         try:
             cr = subprocess.run([str(vm), "--vx", str(path), "-o", str(tmp / name)],
                                 capture_output=True, text=True, timeout=120, check=False)
         except subprocess.TimeoutExpired:
-            cats["NOCOMPILA"].append(name); detail.append({"name": name, "cat": "NOCOMPILA",
-                "note": "compile timeout"}); continue
+            return {"name": name, "cat": "NOCOMPILA", "note": "compile timeout"}
         if cr.returncode != 0 or not velb.is_file():
-            cats["NOCOMPILA"].append(name)
-            detail.append({"name": name, "cat": "NOCOMPILA"})
-            continue
+            return {"name": name, "cat": "NOCOMPILA"}
 
-        # 3 modos.
         res = {}
         for mode in ("interp", "jit-vreg", "jit-slots"):
             res[mode] = run_mode(vm, velb, mode, args.timeout, tmp)
-
         st = {m: res[m][0] for m in res}
         r0 = {m: res[m][1] for m in res}
         rec = {"name": name, "interp": res["interp"], "jit-vreg": res["jit-vreg"],
                "jit-slots": res["jit-slots"]}
 
-        # Clasificar (interp = oraculo).  ORDEN IMPORTANTE: separar un HANG del
-        # path de PRODUCCION (jit-vreg cuelga mientras el interp SI termina) de
-        # un programa lento de por si.  Un jit-vreg timeout con interp OK ES un
-        # BUG DE JIT (miscompilacion que rompe la terminacion; p.ej. el
-        # coalescing que corrompe el contador del loop de state_machine).  Esta
-        # clase escapaba al veredicto viejo porque TIMEOUT era categoria benigna.
+        # Clasificar (interp = oraculo).  interp!=ok -> sin oraculo; vreg
+        # timeout/crash/diverge = BUG de produccion; slots = legacy.
         if st["interp"] != "ok":
-            # El ORACULO no da un R0 valido (crash/timeout/norun) -> no hay con
-            # que comparar el JIT -> NO es bug del JIT (p.ej. un programa que
-            # crashea en los 3 modos por diseno, o que es lento de por si).
             cat = "NO_ORACLE"
         elif st["jit-vreg"] == "timeout":
-            cat = "VREG_HANG"   # interp termina, vreg cuelga -> BUG DE PRODUCCION
+            cat = "VREG_HANG"
         elif st["jit-vreg"] == "crash":
-            cat = "CRASH"       # crash del path de produccion -> BUG
+            cat = "CRASH"
         elif r0["jit-vreg"] != r0["interp"]:
-            cat = "DIVERGE"     # resultado vreg != oraculo -> BUG
+            cat = "DIVERGE"
         elif st["jit-slots"] in ("timeout", "crash") or \
                 r0["jit-slots"] != r0["interp"]:
-            cat = "SLOTS_BUG"   # ruta legacy (backlog conocido: no falla el gate)
+            cat = "SLOTS_BUG"
         else:
             cat = "OK"
-        # NODET: R0 legitimamente no-determinista (punteros host) -> no es bug.
         if name in NODET and cat in ("DIVERGE", "CRASH", "VREG_HANG"):
             cat = "NODET"
         rec["cat"] = cat
-        cats[cat].append(name)
-        if cat not in ("OK",):
+        return rec
+
+    njobs = args.jobs if args.jobs > 0 else (os.cpu_count() or 4)
+    njobs = max(1, njobs)
+    print(f"{C.CYN}[info]{C.R} paralelismo: {njobs} jobs")
+    done = 0
+    total = len(corpus)
+    if njobs == 1:
+        recs = [process_one(n, p) for (n, p) in corpus]
+    else:
+        recs = [None] * total
+        with cf.ThreadPoolExecutor(max_workers=njobs) as ex:
+            futs = {ex.submit(process_one, n, p): i
+                    for i, (n, p) in enumerate(corpus)}
+            for fut in cf.as_completed(futs):
+                i = futs[fut]
+                recs[i] = fut.result()
+                done += 1
+                sys.stdout.write(f"\r{C.DIM}[{done}/{total}]{C.R}   ")
+                sys.stdout.flush()
+
+    # Agregar resultados en orden de corpus.
+    for rec in recs:
+        cat = rec["cat"]
+        cats[cat].append(rec["name"])
+        if cat not in ("OK", "SKIP"):
             detail.append(rec)
 
     sys.stdout.write("\r" + " " * 60 + "\r")
