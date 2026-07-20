@@ -27,6 +27,13 @@ namespace effects {
 /// Imprime el reporte de efectos + contratos + lagunas del modulo @p mod.
 void print_effects_report(std::ostream &os, const ir::IrModule &mod);
 
+/// Emite el MISMO modelo (efectos local/cierre + contratos derivados +
+/// estructura + lagunas) como un objeto JSON autocontenido para los diagramas
+/// / LSP: `{"functions":[...],"gaps":{...}}`.  Es la proyeccion JSON del
+/// SemanticSummary -- misma fuente que --analyze y que consume el compilador,
+/// para que diagramas, --analyze y codegen no puedan divergir.
+void effects_json(std::ostream &os, const ir::IrModule &mod);
+
 } // namespace effects
 } // namespace analysis
 

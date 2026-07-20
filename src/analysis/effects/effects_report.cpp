@@ -180,5 +180,125 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod) {
     }
 }
 
+// ---- Proyeccion JSON (misma fuente que el reporte legible) ----
+
+static std::string json_escape(const std::string &s) {
+    std::string o;
+    o.reserve(s.size());
+    for (char c : s) {
+        if (c == '"' || c == '\\') o.push_back('\\');
+        o.push_back(c);
+    }
+    return o;
+}
+
+// Emite un array JSON de banderas may_* activas.
+static void may_json(std::ostream &os, const SemanticEffects &e) {
+    const char *sep = "";
+    os << "[";
+    auto add = [&](bool b, const char *n) {
+        if (b) { os << sep << "\"" << n << "\""; sep = ","; }
+    };
+    add(e.may_trap, "trap");
+    add(e.may_throw, "throw");
+    add(e.may_allocate, "allocate");
+    add(e.may_block, "block");
+    add(e.may_io, "io");
+    os << "]";
+}
+
+static void nondeterm_json(std::ostream &os, const SemanticEffects &e) {
+    const char *sep = "";
+    os << "[";
+    auto add = [&](DeterminismTag t, const char *n) {
+        if (e.determinism.has(t)) { os << sep << "\"" << n << "\""; sep = ","; }
+    };
+    add(DeterminismTag::ReadsClock, "clock");
+    add(DeterminismTag::ReadsRandom, "random");
+    add(DeterminismTag::ReadsPID, "pid");
+    add(DeterminismTag::ReadsEnvironment, "env");
+    add(DeterminismTag::ExternalObservable, "external");
+    os << "]";
+}
+
+static void tags_json(std::ostream &os, const SemanticEffects &e) {
+    const char *sep = "";
+    os << "[";
+    auto add = [&](CapabilityTag t, const char *n) {
+        if (e.tags.has(t)) { os << sep << "\"" << n << "\""; sep = ","; }
+    };
+    add(CapabilityTag::MachineState, "machine");
+    add(CapabilityTag::InterruptState, "irq");
+    add(CapabilityTag::PortIO, "portio");
+    add(CapabilityTag::MSR, "msr");
+    add(CapabilityTag::CPUID, "cpuid");
+    add(CapabilityTag::Privileged, "priv");
+    add(CapabilityTag::UserBarrier, "barrier");
+    os << "]";
+}
+
+// Serializa un SemanticEffects como objeto JSON (mismos campos que print_effects).
+static void effects_obj_json(std::ostream &os, const SemanticEffects &e) {
+    os << "{\"reads\":\"" << json_escape(loc_set_str(e.mem.reads)) << "\""
+       << ",\"writes\":\"" << json_escape(loc_set_str(e.mem.writes)) << "\""
+       << ",\"control\":\"" << control_name(e.control.kind) << "\"";
+    os << ",\"may\":"; may_json(os, e);
+    os << ",\"nondeterm\":"; nondeterm_json(os, e);
+    os << ",\"tags\":"; tags_json(os, e);
+    os << "}";
+}
+
+void effects_json(std::ostream &os, const ir::IrModule &mod) {
+    EffectAnalysis ea;
+    const ModuleSummary &ms = ea.module_summary(mod);
+
+    os << "{\"functions\":[";
+    bool first = true;
+    for (const ir::IrFunction &fn : mod.functions) {
+        auto it = ms.fns.find(fn.name);
+        if (it == ms.fns.end()) continue;
+        const FunctionSummary &s = it->second;
+        if (!first) os << ",";
+        first = false;
+
+        os << "{\"function\":\"" << json_escape(fn.name) << "\""
+           << ",\"completeness\":\"" << completeness_name(s.completeness) << "\"";
+        // Contratos derivados que se cumplen.
+        os << ",\"contracts\":[";
+        const char *csep = "";
+        for (const EvaluatedContract &c : derive_contracts(s))
+            if (c.holds) { os << csep << "\"" << json_escape(c.name) << "\""; csep = ","; }
+        os << "]";
+        os << ",\"local\":"; effects_obj_json(os, s.semantic.local);
+        os << ",\"closure\":"; effects_obj_json(os, s.semantic.closure);
+        os << ",\"structure\":{\"blocks\":" << s.structural.block_count
+           << ",\"loops\":" << s.structural.loop_count
+           << ",\"recursive\":" << (s.structural.recursive ? "true" : "false")
+           << "}}";
+    }
+    os << "]";
+
+    // Lagunas de precision (cobertura + opacidad fundamental) para los diagramas.
+    const EffectGaps &g = ea.gaps();
+    os << ",\"gaps\":{\"total_top\":" << g.total_top << ",\"by_reason\":[";
+    bool rfirst = true;
+    for (const auto &kv : g.by_reason) {
+        if (!rfirst) os << ",";
+        rfirst = false;
+        os << "{\"reason\":\"" << reason_name(kv.first) << "\""
+           << ",\"kind\":\"" << (reason_is_gap(kv.first) ? "gap" : "fundamental") << "\""
+           << ",\"count\":" << kv.second << "}";
+    }
+    os << "],\"unmodeled_ops\":[";
+    bool ofirst = true;
+    for (const auto &kv : g.unmodeled_ops) {
+        if (!ofirst) os << ",";
+        ofirst = false;
+        os << "{\"op\":\"" << ir::ir_op_name(static_cast<ir::IrOp>(kv.first))
+           << "\",\"count\":" << kv.second << "}";
+    }
+    os << "]}}";
+}
+
 } // namespace effects
 } // namespace analysis

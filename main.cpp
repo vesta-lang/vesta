@@ -2004,7 +2004,12 @@ int main(int argc, char *argv[]) {
                    << jstr(ck.contract) << "\",\"status\":\"" << st
                    << "\",\"detail\":\"" << jstr(ck.detail) << "\"}";
             }
-            js << "]}";
+            js << "]";
+            // Modelo unico de efectos (mismo que --analyze legible + DCE): los
+            // diagramas consumen exactamente lo que ve el compilador.
+            js << ",\"effects\":";
+            analysis::effects::effects_json(js, amod_post);
+            js << "}";
             std::cout << js.str() << "\n";
             return EXIT_SUCCESS;
         }
