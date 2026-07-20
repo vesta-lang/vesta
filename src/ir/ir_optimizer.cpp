@@ -9076,27 +9076,26 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
            : (g_sched_alias ? (sched_local_pt = analysis::compute_points_to(
                                    fn, analysis::build_ir_facts(fn)))
                             : sched_local_pt);
-    // Ancho de acceso por tipo (para el alias por rango de LOAD/STORE).
-    auto sched_access_bytes = [](IrType t) -> int32_t {
-        return analysis::memory_access_size(t); // UNICA verdad compartida
+    // La MEMORIA de cada acceso la da el vocabulario UNICO memory_access (Regla
+    // 1: no se reimplementa el switch).  memcpy y VEC se modelan con PRECISION
+    // (no opacos) -- opaco seria EVITAR la optimizacion.
+    //
+    // Deps de REGISTRO FISICO de los VEC de broadcast (lo que memory_access NO
+    // modela, porque no es memoria): VEC_BCAST ESCRIBE XMM13-((imm>>8)&7);
+    // VEC_BINOP_S hoisted (bit 16) LEE XMM13-((imm>>17)&7).  Se MODELAN con un
+    // tracker de 8 registros (abajo) -> el scheduler reordena la memoria
+    // libremente y SOLO ordena el par BCAST->BINOP_S por su registro; el codigo
+    // viejo los trataba OPACOS (evitaba toda reordenacion = perdia ILP).
+    auto vec_reg_write = [](const IrInstr &ins) -> int {
+        return ins.op == IrOp::VEC_BCAST
+                   ? int((static_cast<uint64_t>(ins.imm) >> 8) & 0x7)
+                   : -1;
     };
-    // Localizacion de un acceso de memoria: LOAD/STORE con offset+ancho precisos;
-    // field/array/len con la raiz (whole-object); MEMCPY/VEC -> Unknown (top).
-    auto sched_mem_loc =
-        [&](const IrInstr &ins) -> analysis::effects::AbstractLoc {
-        using K = analysis::effects::AbstractLoc::Kind;
-        if (ins.op == IrOp::LOAD && !ins.operands.empty())
-            return analysis::loc_of(sched_pt, ins.operands[0],
-                                    sched_access_bytes(ins.type));
-        if (ins.op == IrOp::STORE && ins.operands.size() >= 2)
-            return analysis::loc_of(sched_pt, ins.operands[1],
-                                    sched_access_bytes(ins.type));
-        if ((ins.op == IrOp::GETFIELD || ins.op == IrOp::ARRAY_LOAD ||
-             ins.op == IrOp::ARRAY_LEN || ins.op == IrOp::SETFIELD ||
-             ins.op == IrOp::ARRAY_STORE) &&
-            !ins.operands.empty())
-            return analysis::loc_of(sched_pt, ins.operands[0], 0);
-        return {K::Unknown, analysis::effects::LOC_GENERIC, 0, 0}; // MEMCPY/VEC/...
+    auto vec_reg_read = [](const IrInstr &ins) -> int {
+        if (ins.op == IrOp::VEC_BINOP_S &&
+            ((static_cast<uint64_t>(ins.imm) >> 16) & 1))
+            return int((static_cast<uint64_t>(ins.imm) >> 17) & 0x7);
+        return -1;
     };
 
     for (auto &bb : fn.blocks) {
@@ -9156,8 +9155,13 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
         // con su localizacion; solo se anade arista si may_alias.  Se limpian en
         // cada barrera (la arista a la barrera subsume lo anterior).
         struct MemAcc { size_t idx; analysis::effects::AbstractLoc loc; };
-        std::vector<MemAcc> prior_stores;
-        std::vector<MemAcc> prior_loads;
+        std::vector<MemAcc> prior_stores; // escrituras vivas (idx + loc)
+        std::vector<MemAcc> prior_loads;  // lecturas vivas
+        // Tracker de deps de REGISTRO FISICO de los VEC de broadcast (XMM13-0..7):
+        // ultimo VEC_BCAST que escribio cada registro + lectores desde entonces.
+        long reg_writer[8];
+        std::vector<size_t> reg_readers[8];
+        for (int r = 0; r < 8; ++r) reg_writer[r] = -1;
 
         auto add_edge = [&](size_t from, size_t to) {
             /* Evitar duplicados.  Sanity: from != to. */
@@ -9213,24 +9217,62 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
                 loads_after_last_store.clear();
                 prior_stores.clear();
                 prior_loads.clear();
+                for (int r = 0; r < 8; ++r) {
+                    reg_writer[r] = -1;
+                    reg_readers[r].clear();
+                }
             } else if (use_alias && (is_st || is_ld)) {
-                /* ALIAS-AWARE: solo se ordena contra accesos previos que
-                 * PUEDEN aliasar (may_alias del modelo UNICO).  Accesos a
-                 * raices disjuntas quedan libres para reordenar -> mas ILP.
+                /* ALIAS-AWARE (modelo UNICO memory_access): se ordena SOLO
+                 * contra accesos previos que PUEDEN aliasar; raices disjuntas
+                 * quedan libres para reordenar -> mas ILP.  memcpy y VEC se
+                 * modelan con PRECISION (reads/writes multi-loc), no opacos.
                  * Sound: may_alias solo dice "no" cuando es DEMOSTRABLE. */
-                const analysis::effects::AbstractLoc L = sched_mem_loc(ins);
+                const analysis::MemoryAccess ma =
+                    analysis::memory_access(ins, sched_pt);
                 if (last_barrier >= 0)
                     add_edge(static_cast<size_t>(last_barrier), i);
-                // Hazard contra STOREs previos (WAW si es store, RAW si es load).
-                for (const MemAcc &s : prior_stores)
-                    if (analysis::effects::may_alias(L, s.loc)) add_edge(s.idx, i);
-                if (is_st) {
-                    // WAR: un STORE no puede adelantar LOADs previos aliasados.
-                    for (const MemAcc &l : prior_loads)
-                        if (analysis::effects::may_alias(L, l.loc)) add_edge(l.idx, i);
-                    prior_stores.push_back({i, L});
+                if (ma.opaque) {
+                    // Memoria NO localizable: ordena contra TODO lo previo vivo
+                    // y los futuros ordenan contra ella (mini-barrera de mem).
+                    for (const MemAcc &s : prior_stores) add_edge(s.idx, i);
+                    for (const MemAcc &l : prior_loads) add_edge(l.idx, i);
+                    const analysis::effects::AbstractLoc U{
+                        analysis::effects::AbstractLoc::Kind::Unknown,
+                        analysis::effects::LOC_GENERIC, 0, 0};
+                    prior_stores.push_back({i, U});
+                    prior_loads.push_back({i, U});
                 } else {
-                    prior_loads.push_back({i, L});
+                    // WRITES: WAW vs writes previos, WAR vs reads previos.
+                    for (const auto &w : ma.writes) {
+                        for (const MemAcc &s : prior_stores)
+                            if (analysis::effects::may_alias(w, s.loc))
+                                add_edge(s.idx, i);
+                        for (const MemAcc &l : prior_loads)
+                            if (analysis::effects::may_alias(w, l.loc))
+                                add_edge(l.idx, i);
+                    }
+                    // READS: RAW vs writes previos.
+                    for (const auto &r : ma.reads)
+                        for (const MemAcc &s : prior_stores)
+                            if (analysis::effects::may_alias(r, s.loc))
+                                add_edge(s.idx, i);
+                    for (const auto &w : ma.writes) prior_stores.push_back({i, w});
+                    for (const auto &r : ma.reads) prior_loads.push_back({i, r});
+                }
+                // Deps de REGISTRO FISICO (VEC_BCAST escribe / VEC_BINOP_S lee).
+                const int rw = vec_reg_write(ins);
+                const int rr = vec_reg_read(ins);
+                if (rr >= 0) { // lectura de registro: RAW vs el ultimo BCAST
+                    if (reg_writer[rr] >= 0)
+                        add_edge(static_cast<size_t>(reg_writer[rr]), i);
+                    reg_readers[rr].push_back(i);
+                }
+                if (rw >= 0) { // escritura de registro: WAW + WAR
+                    if (reg_writer[rw] >= 0)
+                        add_edge(static_cast<size_t>(reg_writer[rw]), i);
+                    for (size_t rd : reg_readers[rw]) add_edge(rd, i);
+                    reg_writer[rw] = static_cast<long>(i);
+                    reg_readers[rw].clear();
                 }
             } else if (is_st) {
                 /* STORE depende de la ultima barrera, del ultimo store, y de
