@@ -41,6 +41,7 @@
 #include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/auto_jit.h"
+#include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
 #include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
@@ -1084,6 +1085,7 @@ int main(int argc, char *argv[]) {
         const bool jit_on = (jit::g_jit_threshold != UINT32_MAX);
         if (jit_on && !(no_pgo && no_pgo[0] == '1')) {
             runtime::profile::lite_profile_set_active(true);
+            jit::g_jit_tier2_on = true; // guard barato del tier-2 en CALLVIRT
         }
     }
     const bool jit_stats_requested = result.count("jit-stats") > 0;

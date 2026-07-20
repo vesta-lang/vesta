@@ -1,4 +1,5 @@
 /*
+#include <cstdlib>
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
@@ -36,6 +37,8 @@
 
 /* hook JIT en CALLVIRT fast path. */
 #include "jit/interp_jit_bridge.h"
+#include "jit/auto_jit.h"        // auto-PGO tier-2: maybe_tier2_method + threshold
+#include "jit/jit_branch_prof.h" // jit_branch_prof_emit_enabled
 
 /* Sprint D.6 (2026-06-03): profile counters runtime. */
 #include "runtime/profile.h"
@@ -476,6 +479,18 @@ void exec_instr_callvirt(ProcessVM *vm, const DecodedInstr &instr) {
         // pero hoy no se consulta).  El hook es no-op cuando
         // jit_code != null, asi que skip es seguro.
         if (__builtin_expect(method->jit_code != nullptr, 1)) {
+            /* Auto-PGO tier-2: cuando el auto-PGO esta activo, seguir contando
+             * invocaciones tras tier-1; al cruzar el delta DINAMICO
+             * (g_jit_threshold + jit_tier2_delta()) recompilar con el perfil
+             * medido por el codigo nativo (g_jit_line_ctrs).  Sentinela
+             * UINT32_MAX = tier-2 hecho -> deja de contar (coste ~2 ops). */
+            /* Auto-PGO tier-2: guard barato inline (2 loads); la logica de
+             * conteo + recompilacion vive en jit::tier2_tick (TU separada). */
+            if (__builtin_expect(jit::g_jit_tier2_on &&
+                                     method->invocation_count != UINT32_MAX,
+                                 0)) {
+                jit::tier2_tick(vm, method);
+            }
             jit::JitFn fn = reinterpret_cast<jit::JitFn>(method->jit_code);
             // Salvar rip antes de entrar al JIT para detectar throw
             // cross-boundary: si do_throw modifico proc->rip (a catch

@@ -1001,6 +1001,7 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/code_cache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/runtime_entries.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/x86_encoder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/jit_branch_prof.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/jit_registry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/stack_scan.cpp
 

@@ -186,6 +186,24 @@ std::string get_jit_stats_summary();
 void maybe_compile_method(runtime::ProcessVM *vm,
                           loader::MethodInfo *method) noexcept;
 
+/**
+ * @brief Auto-PGO tier-2: recompila un metodo ya JIT-eado (tier-1) usando el
+ *        perfil de branches MEDIDO en runtime por el propio codigo nativo
+ *        (contadores por source_line en @c g_jit_line_ctrs).  Re-decide la
+ *        if-conversion con datos reales y hace swap de @c jit_code.  Idempotente
+ *        (una vez por metodo).  Seguro: ambas versiones son correctas, el swap
+ *        solo cambia el layout de branches; las llamadas en curso terminan en el
+ *        codigo viejo.
+ */
+void maybe_tier2_method(runtime::ProcessVM *vm,
+                        loader::MethodInfo *method) noexcept;
+
+/// @brief Tick del auto-PGO tier-2: cuenta la invocacion de un metodo ya
+///        JIT-eado y dispara @c maybe_tier2_method al cruzar el delta.  Vive en
+///        su propia TU (no inline en exec_instr_callvirt: hacerlo alli hace caer
+///        el linker del DLL por el tamano de esa funcion).
+void tier2_tick(runtime::ProcessVM *vm, loader::MethodInfo *method) noexcept;
+
 /* Forward decl de CompileResult (definido en jit_compiler.h). */
 struct CompileResult;
 

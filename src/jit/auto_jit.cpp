@@ -30,6 +30,7 @@
 #include "ir/passes/if_conversion.h"  // auto-PGO del JIT: re-if-conversion
 #include "ir/passes/select_simplify.h"
 #include "ir/passes/select_policy.h"
+#include "jit/jit_branch_prof.h"
 #include "runtime/profile.h"           // bridge runtime->IR del perfil medido
 #include "debug/debug_info.h"          // PC -> linea fuente
 #include "runtime/proceso_runtime.h"
@@ -214,6 +215,33 @@ bool osr_opt_enabled() {
         return !(v && v[0] == '0'); // default ON; solo "0" lo apaga
     }();
     return on;
+}
+
+/** @brief Metodos ya recompilados a tier-2 (auto-PGO) -> no repetir. */
+std::unordered_set<const void *> g_tier2_done;
+std::mutex g_tier2_mtx;
+/** @brief Bandera: recompilacion tier-2 en curso.  Cuando esta activa, el bloque
+ *  PGO de maybe_compile_method NO re-vuelca el perfil (ya lo poblo maybe_tier2
+ *  desde g_jit_line_ctrs por linea), solo aplica la if-conversion.  Global plano
+ *  (no thread_local: MinGW/DLL + emutls da problemas de link); la recompilacion
+ *  va serializada por g_tier2_mtx, asi que no hay concurrencia real. */
+bool g_tier2_recompiling = false;
+
+/** @brief Delta (invocaciones tras tier-1) para disparar tier-2.  DINAMICO: no
+ *  un numero fijo, sino proporcional al umbral de tier-1 (mas caliente = mas
+ *  datos antes de re-optimizar), con un minimo razonable y override por env
+ *  VESTA_JIT_TIER2_DELTA.  Asi escala con la config de hotness del run. */
+uint32_t jit_tier2_delta() {
+    static const uint32_t env_override = [] {
+        const char *v = std::getenv("VESTA_JIT_TIER2_DELTA");
+        return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+    }();
+    if (env_override) return env_override;
+    const uint32_t t = g_jit_threshold;
+    if (t == UINT32_MAX) return UINT32_MAX; // JIT off
+    uint32_t d = t;         // 1x el umbral de tier-1 (proporcional a hotness)
+    if (d < 2000) d = 2000; // suelo: suficientes muestras para P estable
+    return d;
 }
 
 /** @brief Handler de OSR instalado via set_osr_handler.  Lookup del
@@ -949,9 +977,21 @@ void maybe_compile_method(runtime::ProcessVM *vm,
      * PC->linea con el debug_info (aqui, en el glue que si tiene la VM). */
     ir::IrFunction pgo_clone;
     const ir::IrFunction *compile_ir = ir_fn;
-    if (runtime::profile::lite_profile_active()) {
-        /* Bridge runtime->IR: vuelca los contadores por PC al almacen por-linea
-         * que consume la if-conversion.  pc_to_line via debug_info. */
+    if (g_tier2_recompiling) {
+        /* Tier-2: g_branch_profile ya lo poblo maybe_tier2 desde los contadores
+         * NATIVOS por linea (g_jit_line_ctrs).  Solo re-if-convertimos. */
+        pgo_clone = *ir_fn;
+        bool any = ir::ir_pass_if_conversion(pgo_clone);
+        any = ir::ir_pass_select_simplify(pgo_clone) || any;
+        if (any) compile_ir = &pgo_clone;
+        if (g_jit_warn_unsupported)
+            std::fprintf(stderr,
+                         "[jit-pgo] tier-2 '%s': re-if-conversion %s (perfil "
+                         "nativo medido)\n",
+                         key.c_str(), any ? "cambio el IR" : "sin cambio");
+    } else if (runtime::profile::lite_profile_active()) {
+        /* Tier-1: bridge del profiler ligero del interp (PC->linea via
+         * debug_info).  Util cuando el metodo corrio en interp (tier-0). */
         const int applied =
             runtime::profile::profile_apply_branch_lines([&](uint64_t pc)
                                                              -> uint32_t {
@@ -963,8 +1003,6 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                 }
                 return 0;
             });
-        /* Re-optimizacion VM-free sobre un clon: if-conversion (con predict_
-         * profile ahora dominante) + canonicalizacion de SELECT. */
         pgo_clone = *ir_fn;
         bool any = ir::ir_pass_if_conversion(pgo_clone);
         any = ir::ir_pass_select_simplify(pgo_clone) || any;
@@ -1060,6 +1098,105 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         }
         method->invocation_count = UINT32_MAX;
     }
+}
+
+void tier2_tick(runtime::ProcessVM *vm,
+                loader::MethodInfo *method) noexcept {
+    /* Se llama desde el fast-path de CALLVIRT (metodo ya JIT-eado) SOLO cuando
+     * el guard barato de alli paso.  Cuenta invocaciones tras tier-1 y dispara
+     * la recompilacion tier-2 al cruzar el delta dinamico.  Vive aqui (TU
+     * separada) para no engordar exec_instr_callvirt (hacerlo inline alli hacia
+     * caer el linker del DLL). */
+    if (!jit::jit_branch_prof_emit_enabled()) return;
+    if (method->invocation_count == UINT32_MAX) return;
+    if (++method->invocation_count >=
+        static_cast<uint64_t>(g_jit_threshold) + jit_tier2_delta()) {
+        maybe_tier2_method(vm, method);
+    }
+}
+
+void maybe_tier2_method(runtime::ProcessVM *vm,
+                        loader::MethodInfo *method) noexcept {
+    if (method == nullptr || method->jit_code == nullptr) return;
+    if (!jit::jit_branch_prof_emit_enabled()) return;
+    {
+        std::lock_guard<std::mutex> lk(g_tier2_mtx);
+        if (g_tier2_done.count(method)) return;
+        g_tier2_done.insert(method);
+    }
+
+    /* Localizar el IR del metodo (mismo mangling que maybe_compile_method). */
+    auto sx = [](const loader::stringx &s) -> std::string {
+        if (!s.data || s.size == 0) return {};
+        return std::string(reinterpret_cast<const char *>(s.data), s.size);
+    };
+    std::string key;
+    if (method->owner_class) {
+        const std::string cls = sx(method->owner_class->name);
+        if (!cls.empty()) key += cls + "__";
+    }
+    key += sx(method->name);
+    std::vector<std::string> keys{key};
+    if (method->owner_class) {
+        const std::string cls = sx(method->owner_class->name);
+        if (!cls.empty() && cls == sx(method->name)) keys.push_back(cls + "__ctor");
+    }
+    runtime::VM &owning_vm = vm->scheduler.vm_reference;
+    const ir::IrFunction *ir_fn = nullptr;
+    for (const auto &exe : owning_vm.loader_public.executables) {
+        for (const auto &k : keys) {
+            auto it = exe->ir_lookup.find(k);
+            if (it != exe->ir_lookup.end() && it->second < exe->ir_functions.size()) {
+                ir_fn = &exe->ir_functions[it->second];
+                break;
+            }
+        }
+        if (ir_fn) break;
+    }
+    if (!ir_fn) return; // sin IR -> no se puede re-optimizar
+
+    /* Poblar g_branch_profile desde los contadores NATIVOS por linea: para cada
+     * BR_COND del IR, leer g_jit_line_ctrs[line & mask] (que el codigo tier-1
+     * incremento en runtime) y fijar P(mispredict) = min/total.  VM-independiente
+     * (clave = source_line del IR, sin PC ni debug_info). */
+    uint64_t total_samples = 0;
+    for (const auto &blk : ir_fn->blocks) {
+        if (blk.instrs.empty()) continue;
+        const ir::IrInstr &term = blk.instrs.back();
+        if (term.op != ir::IrOp::BR_COND || term.source_line == 0) continue;
+        const uint32_t idx = term.source_line & jit::kJitLineMask;
+        const uint32_t tk = jit::g_jit_line_ctrs[idx].taken;
+        const uint32_t nt = jit::g_jit_line_ctrs[idx].not_taken;
+        const uint64_t tot = static_cast<uint64_t>(tk) + nt;
+        if (tot == 0) continue;
+        total_samples += tot;
+        const uint32_t minor = tk < nt ? tk : nt;
+        const double p = static_cast<double>(minor) / static_cast<double>(tot);
+        ir::set_branch_profile_entry(term.source_line, p);
+    }
+    if (total_samples == 0) return; // sin datos medidos -> nada que re-decidir
+
+    /* Recompilar con el perfil nativo: forzar jit_code=null, activar la bandera
+     * tier-2 (el bloque PGO de maybe_compile_method solo re-if-convierte, sin
+     * re-volcar), y re-compilar.  Si falla, restaurar el codigo tier-1. */
+    void *old_code = method->jit_code;
+    const uint32_t old_ic = method->invocation_count;
+    method->jit_code = nullptr;
+    method->invocation_count = g_jit_threshold; // permite el path de compile
+    g_tier2_recompiling = true;
+    maybe_compile_method(vm, method);
+    g_tier2_recompiling = false;
+    if (method->jit_code == nullptr) {
+        /* Recompile tier-2 fallo (no deberia: tier-1 compilo) -> conservar el
+         * codigo tier-1 valido. */
+        method->jit_code = old_code;
+        method->invocation_count = old_ic;
+    } else {
+        /* Tier-2 listo: sentinela UINT32_MAX corta el conteo del fast-path del
+         * interp (no mas re-triggers para este metodo). */
+        method->invocation_count = UINT32_MAX;
+    }
+    (void)old_ic;
 }
 
 /* ===================================================================== */

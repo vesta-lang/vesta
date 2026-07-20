@@ -1158,8 +1158,21 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     case MOp::NEG: emit_unary_alu(fn, mi, out, 3); return true;
     case MOp::NOT: emit_unary_alu(fn, mi, out, 2); return true;
     case MOp::INC: {
-        /* INC r64: REX.W + 0xFF /0.  3 bytes total. */
         const MOperand &dst = mi.dst;
+        if (dst.kind == MOperandKind::MEM) {
+            /* INC dword [mem]: 0xFF /0 (32-bit, sin REX.W).  Lo usa el auto-PGO
+             * para incrementar un contador de branch (uint32) en memoria.  REX
+             * solo si base/index es r8-r15. */
+            const uint8_t base = dst.reg;
+            const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+            const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
+            if (rex) put8(out, rex);
+            put8(out, 0xFF);
+            emit_modrm_mem(dst, 0, out); // campo reg = 0 (/0)
+            return true;
+        }
+        /* INC r64: REX.W + 0xFF /0.  3 bytes total. */
         if (dst.kind != MOperandKind::REG) {
             put8(out, 0xCC);
             return true;

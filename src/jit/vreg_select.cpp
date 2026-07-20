@@ -23,6 +23,7 @@
  */
 
 #include "jit/vreg_select.h"
+#include "jit/jit_branch_prof.h" // auto-PGO: contadores de branch por linea
 
 #include <unordered_map>
 #include <unordered_set>
@@ -901,11 +902,73 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         }
     }
 
+    /* ===== Auto-PGO: contadores de branch por linea =====
+     * Para cada BR_COND cuyo destino (taken/false) tiene UN SOLO predecesor
+     * (patron diamante -- exactamente los candidatos de la if-conversion),
+     * anotamos ese bloque destino para que al ENTRAR emita
+     * `inc [g_jit_line_ctrs[line].taken|not_taken]`.  Al entry del bloque los
+     * flags estan muertos (se llego por un salto) -> el `inc [mem]` no crea
+     * hazard con ningun `jcc`.  El incremento usa RAX salvado/restaurado por
+     * push/pop, asi que no depende de la asignacion de registros del vreg.
+     * VM-independiente: la clave es source_line (del IR), sin PC ni debug_info.
+     * Solo cuando el auto-PGO esta activo (jit_branch_prof_emit_enabled). */
+    struct BlockCtr {
+        uint32_t line = 0;
+        bool taken = false;
+        bool valid = false;
+    };
+    std::vector<BlockCtr> block_ctr;
+    /* SOLO para el JIT in-process (VM_ABI): g_jit_line_ctrs es un global de la
+     * VM; un binario AOT standalone (HOST_LEAF) no puede referenciarlo -> nunca
+     * emitir contadores en AOT (rompe el binario).  vm == (abi == VM). */
+    const bool emit_branch_ctrs = vm && jit::jit_branch_prof_emit_enabled();
+    if (emit_branch_ctrs) {
+        block_ctr.assign(NB, BlockCtr{});
+        for (size_t b = 0; b < NB && b < fn.blocks.size(); ++b) {
+            const ir::IrBlock &blk = fn.blocks[b];
+            if (blk.instrs.empty()) continue;
+            const ir::IrInstr &term = blk.instrs.back();
+            if (term.op != ir::IrOp::BR_COND) continue;
+            if (term.source_line == 0) continue;
+            const ir::IrBlockId tt = term.target_block;
+            const ir::IrBlockId tf = term.false_block;
+            if (tt == tf) continue; // no es un 2-vias real
+            auto mark = [&](ir::IrBlockId tgt, bool taken) {
+                if (tgt >= NB || tgt >= fn.blocks.size()) return;
+                if (fn.blocks[tgt].preds.size() != 1) return; // pred unico
+                if (block_ctr[tgt].valid) return; // ya anotado (no pisar)
+                block_ctr[tgt] = BlockCtr{term.source_line, taken, true};
+            };
+            mark(tt, true);
+            mark(tf, false);
+        }
+    }
+
     for (size_t b = 0; b < NB; ++b) {
         const ir::IrBlock &ib = fn.blocks[b];
         MBlock mb;
         mb.label_id = blbl[b];
         auto &O = mb.instrs;
+
+        /* Auto-PGO: si este bloque es el destino single-pred de un BR_COND,
+         * emitir el incremento del contador de su linea al ENTRY (flags
+         * muertos). */
+        if (emit_branch_ctrs && b < block_ctr.size() && block_ctr[b].valid) {
+            const uint64_t addr = jit::jit_line_ctr_addr(block_ctr[b].line,
+                                                         block_ctr[b].taken);
+            const uint32_t aidx = out.intern_imm64(static_cast<int64_t>(addr));
+            O.push_back(MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                           MOperand::make_reg(MReg::RAX, 8)));
+            O.push_back(MInstr::make_unary(MOp::MOV,
+                                           MOperand::make_reg(MReg::RAX, 8),
+                                           MOperand::make_imm64_idx(aidx)));
+            O.push_back(MInstr::make_unary(MOp::INC,
+                                           MOperand::make_mem(MReg::RAX, 0),
+                                           MOperand::none()));
+            O.push_back(MInstr::make_unary(MOp::POP,
+                                           MOperand::make_reg(MReg::RAX, 8),
+                                           MOperand::none()));
+        }
 
         /* ===== callback-ABI (jubilacion de slots): prologo nativo =====
          * Un callback llega por la convencion C del host (args en arg_regs), NO
