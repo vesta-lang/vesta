@@ -14,6 +14,7 @@
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h"  // cierre interproc: callees puros (DSE Fase 4)
+#include "analysis/memory/memory_access.h"     // vocabulario UNICO de acceso a memoria
 #include <unordered_map>
 #include <map>
 #include <set>
@@ -5401,6 +5402,16 @@ static bool g_sched_alias = [] {
     return e && e[0] == '1';
 }();
 
+// LICM alias-aware (consumidor del modelo de memoria UNICO): hoistear un LOAD
+// invariante aunque el loop tenga escrituras, si NINGUN store del loop puede
+// aliasar su localizacion Y toda call del loop es pura.  Hoy LICM bloquea TODOS
+// los loads si hay CUALQUIER escritura/call ("sin alias analysis").  A/B via
+// VESTA_LICM_ALIAS=1; default OFF hasta validar e2e 3 modos.
+static bool g_licm_alias = [] {
+    const char *e = std::getenv("VESTA_LICM_ALIAS");
+    return e && e[0] == '1';
+}();
+
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
                             const analysis::PointsTo &pt, const IrInstr &ins) {
     const analysis::effects::EffectAnalysisResult r =
@@ -7394,10 +7405,23 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
 // v1 conservativo: solo loops simples con UN solo back-edge y UN pre-
 // header (case clasico while/for).
 
-bool ir_pass_licm(IrFunction &fn) {
+bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
+                  const std::unordered_set<std::string> *pure_callees) {
     if (fn.blocks.size() < 3)
         return false; /* necesita pre-header + body + header */
     const size_t N = fn.blocks.size();
+
+    // Modelo de memoria UNICO (alias-aware LICM, gated): LICM NO construye la
+    // tabla points-to -- la RECIBE (Regla 1: base de hechos compartida).  Usa el
+    // vocabulario compartido analysis::memory_access (misma verdad que DSE/
+    // scheduler/EffectAnalysis) para decidir si un store del loop puede aliasar
+    // un load candidato a hoist.
+    const bool licm_alias = g_licm_alias && pt && pure_callees;
+    auto licm_is_pure_call = [&](const IrInstr &ins) -> bool {
+        if (!pure_callees) return false;
+        if (ins.op != IrOp::CALL && ins.op != IrOp::TAILCALL) return false;
+        return !ins.func_name.empty() && pure_callees->count(ins.func_name) > 0;
+    };
 
     /* Construir CFG: para cada bloque, sus sucesores y predecesores. */
     std::vector<std::vector<IrBlockId>> preds(N);
@@ -7568,9 +7592,16 @@ bool ir_pass_licm(IrFunction &fn) {
         /* Detectar si hay STORE/MEMCPY/SETFIELD/ARRAY_STORE/RAW_ASM/CALL
          * dentro del loop.  Si los hay, los LOADs no son hoistables sin
          * alias analysis (la memoria pudo cambiar entre iteraciones). */
-        bool loop_has_memory_writes = false;
+        bool loop_has_memory_writes = false; // modo clasico (crudo)
+        // Modo alias-aware: en vez de un unico bool, colecciona las
+        // localizaciones ESCRITAS por stores precisos del loop + una bandera de
+        // escritura OPACA (call no-pura, memcpy, vec, raw_asm...).  Un load se
+        // podra hoistar si ninguna store-loc lo aliasa y no hay escritura opaca.
+        bool loop_opaque_write = false;
+        std::vector<analysis::effects::AbstractLoc> loop_store_locs;
         for (IrBlockId b : loop_set) {
             for (const auto &ins : fn.blocks[b].instrs) {
+                bool is_write = false;
                 switch (ins.op) {
                 case IrOp::STORE:
                 case IrOp::MEMCPY:
@@ -7595,12 +7626,32 @@ bool ir_pass_licm(IrFunction &fn) {
                 case IrOp::CALLM:
                 case IrOp::CALLITF:
                 case IrOp::CALLCLOSURE:
-                case IrOp::TAILCALL: loop_has_memory_writes = true; break;
+                case IrOp::TAILCALL: is_write = true; break;
                 default: break;
                 }
-                if (loop_has_memory_writes) break;
+                if (!is_write) continue;
+                loop_has_memory_writes = true;
+                if (licm_alias) {
+                    // Vocabulario compartido: STORE/SETFIELD/ARRAY_STORE/MEMCPY
+                    // dan una write_loc localizable (memcpy NO es opaco); las
+                    // demas (vec/str/raw_asm/call no-pura) son escritura opaca.
+                    const analysis::MemoryAccess ma =
+                        analysis::memory_access(ins, *pt);
+                    if (ma.is_store && !ma.opaque &&
+                        ma.write_loc.kind !=
+                            analysis::effects::AbstractLoc::Kind::Unknown)
+                        loop_store_locs.push_back(ma.write_loc);
+                    else if (licm_is_pure_call(ins)) {
+                        /* call PURA: no escribe memoria -> no aporta */
+                    } else
+                        loop_opaque_write = true; // escritura opaca
+                }
+                // Modo clasico: con una escritura basta.  Modo alias: seguir
+                // acumulando (salvo que ya haya escritura opaca -> nada que refinar).
+                if (!licm_alias || loop_opaque_write) break;
             }
-            if (loop_has_memory_writes) break;
+            if ((!licm_alias && loop_has_memory_writes) || loop_opaque_write)
+                break;
         }
 
         /* Helper: instr es candidato para mover? */
@@ -7630,7 +7681,17 @@ bool ir_pass_licm(IrFunction &fn) {
             case IrOp::ARRAY_LOAD:
             case IrOp::GETFIELD:
             case IrOp::ARRAY_LEN:
-                if (loop_has_memory_writes) return false;
+                if (licm_alias) {
+                    // Alias-aware: hoistable si NINGUN store del loop puede
+                    // aliasar este load y no hay escritura opaca.
+                    if (loop_opaque_write) return false;
+                    const analysis::effects::AbstractLoc lloc =
+                        analysis::memory_access(ins, *pt).read_loc;
+                    for (const auto &sloc : loop_store_locs)
+                        if (analysis::effects::may_alias(lloc, sloc)) return false;
+                } else {
+                    if (loop_has_memory_writes) return false;
+                }
                 break;
             default: break;
             }
@@ -9857,7 +9918,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     // (la pureza total se PRESERVA bajo optimizacion -> sound usar el pre-opt).
     // Conocimiento que el DSE por si solo no puede tener; se lo da EffectAnalysis.
     std::unordered_set<std::string> pure_callees;
-    if (g_dse_pure_calls || g_sched_alias) {
+    if (g_dse_pure_calls || g_sched_alias || g_licm_alias) {
         analysis::effects::EffectAnalysis ea;
         const analysis::effects::ModuleSummary &ms = ea.module_summary(mod);
         for (const auto &kv : ms.fns) {
@@ -9886,7 +9947,16 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             any |= ir_pass_strength_reduction(
                 fn);                    /* mul/div/mod power-of-2 -> shifts */
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
-            any |= ir_pass_licm(fn);    /* LICM con dominators reales */
+            // LICM RECIBE la tabla points-to (no la construye): ir_optimize la
+            // provee fresca (Regla 1).  Solo se construye si el LICM alias-aware
+            // esta activo (coste 0 en el default).
+            if (g_licm_alias) {
+                analysis::PointsTo licm_pt =
+                    analysis::compute_points_to(fn, analysis::build_ir_facts(fn));
+                any |= ir_pass_licm(fn, &licm_pt, &pure_callees);
+            } else {
+                any |= ir_pass_licm(fn); /* LICM con dominators reales */
+            }
             any |= ir_pass_dead_alloc_elim(fn);
             any |= ir_pass_dce(fn);
 

@@ -88,6 +88,7 @@ add_library(vx_lib STATIC
     # analisis: base compartida que consumen los analisis sin re-recorrer el IR.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/ir_facts.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/memory/points_to.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/memory/memory_access.cpp
     asm/asm_effects.cpp
     # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
     # call/flags/rama/marco de pila explicito) sobre la tabla plana por

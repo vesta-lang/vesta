@@ -70,6 +70,10 @@
 #include <string>
 #include <unordered_set>
 
+namespace analysis {
+struct PointsTo; // resolvedor points-to compartido (analysis/memory/points_to.h)
+} // namespace analysis
+
 namespace ir {
 
 /**
@@ -468,7 +472,8 @@ bool ir_pass_inline_closures(IrModule &mod);
  *
  * @return true si movio al menos una instr.
  */
-bool ir_pass_licm(IrFunction &fn);
+bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+                  const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Devirtualizacion monomorfica de CALLVIRT a CALL directo.
