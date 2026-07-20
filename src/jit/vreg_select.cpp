@@ -1146,8 +1146,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         // copia debe ir por MOVSD/MOVSS (el rewrite la enruta
                         // por is_fp_operand); vr() la haria con MOV entero ->
                         // acumulador float loop-carried roto.
-                        O.push_back(MInstr::make_unary(MOp::MOV, vrt(p.dst),
-                                                       vrt(a.value)));
+                        //
+                        // MARCA variant=PHI_COPY_MARK (0xFD): estas copias de
+                        // una MISMA arista son un PARALLEL MOVE (todos los args
+                        // se leen "a la vez" en la arista).  El regalloc_rewrite
+                        // las agrupa y resuelve con emit_parallel_moves (rompe
+                        // ciclos con scratch).  Emitidas secuencialmente
+                        // corrompen cuando el regalloc (p.ej. tras ssa_coalesce)
+                        // asigna phi_dst_i y arg_j al MISMO fisico -> ciclo de
+                        // permutacion que la copia secuencial pisa.
+                        MInstr mv = MInstr::make_unary(MOp::MOV, vrt(p.dst),
+                                                       vrt(a.value));
+                        mv.variant = 0xFD; // PHI_COPY_MARK
+                        O.push_back(mv);
                         break;
                     }
                 }

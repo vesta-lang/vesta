@@ -652,6 +652,47 @@ struct Lowerer {
         }
     }
 
+    /** @brief Resuelve un batch de copias de PHI de una MISMA arista como un
+     *  PARALLEL MOVE.  Todas las copias phi_dst_i <- arg_i se leen "a la vez"
+     *  en la arista; emitidas SECUENCIALMENTE corrompen si el regalloc asigno
+     *  phi_dst_i y arg_j al MISMO fisico (ciclo de permutacion) -- ocurre tras
+     *  ssa_coalesce, que aprieta la asignacion.  GP via emit_parallel_moves
+     *  (scr1 rompe ciclos con un scratch reservado), FP via _fp (fscr1).  Los
+     *  dst spilled se escriben primero (leen su src pristino antes de que un
+     *  reg-move lo pise). */
+    void lower_phi_parallel(const std::vector<const MInstr *> &phis,
+                            std::vector<MInstr> &out) {
+        std::vector<std::pair<MReg, MOperand>> reg_moves, freg_moves;
+        for (const MInstr *p : phis) {
+            const bool fp = is_fp_operand(p->dst) || is_fp_operand(p->src1);
+            const MOperand dst = resolve(p->dst);
+            const MOperand src = resolve(p->src1);
+            if (dst.is_reg()) {
+                if (fp)
+                    freg_moves.emplace_back(static_cast<MReg>(dst.reg), src);
+                else
+                    reg_moves.emplace_back(static_cast<MReg>(dst.reg), src);
+            } else {
+                /* dst spilled: store ahora (src pristino).  mem->mem via
+                 * scratch reservado. */
+                const MReg sc = fp ? fscr1 : scr1;
+                const MOp mop = fp ? MOp::MOVSD : MOp::MOV;
+                if (src.kind == MOperandKind::MEM) {
+                    out.push_back(MInstr::make_unary(
+                        mop, fp ? xmm(sc) : reg(sc), src));
+                    out.push_back(MInstr::make_unary(
+                        mop, dst, fp ? xmm(sc) : reg(sc)));
+                } else {
+                    out.push_back(MInstr::make_unary(mop, dst, src));
+                }
+            }
+        }
+        if (!reg_moves.empty())
+            emit_parallel_moves(std::move(reg_moves), scr1, out);
+        if (!freg_moves.empty())
+            emit_parallel_moves_fp(std::move(freg_moves), fscr1, out);
+    }
+
     /** @brief Marshala @c pending_args a los arg_regs del ABI host: los
      *  enteros (GP) con un parallel-move via MOV (scr1 rompe ciclos), los
      *  floats (FP) con un parallel-move via MOVSD a los XMM arg_regs (fscr1).
@@ -2173,6 +2214,17 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
                                                            vf.param_vregs, outv)
                                 : 0;
         size_t ii = 0;
+        /* Batch de copias de PHI (variant==0xFD): una MISMA arista es un
+         * PARALLEL MOVE.  Se acumulan y se resuelven juntas con
+         * lower_phi_parallel (rompe ciclos con scratch); si se bajaran una a
+         * una via lw.lower(), la emision secuencial corromperia un ciclo de
+         * permutacion creado por el regalloc (post ssa_coalesce). */
+        std::vector<const MInstr *> pending_phi;
+        auto flush_phi = [&]() {
+            if (pending_phi.empty()) return;
+            lw.lower_phi_parallel(pending_phi, outv);
+            pending_phi.clear();
+        };
         for (const MInstr &in : vf.blocks[b].instrs) {
             if (ii < param_skip) {
                 ++ii;
@@ -2180,6 +2232,12 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
                 continue;
             }
             ++ii;
+            if (in.op == MOp::MOV && in.variant == 0xFD) {
+                pending_phi.push_back(&in); // acumular; resolver en batch
+                ++gi;
+                continue;
+            }
+            flush_phi(); // resolver las copias de PHI antes del terminador
             lw.cur_call_pos = 2u * gi;
             /* Solo-LSP: las MInstr fisicas que emite lower() se construyen
              * frescas (make_unary/...), perdiendo el source_pc de @c in.
@@ -2197,6 +2255,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
             }
             ++gi;
         }
+        flush_phi(); // por si el bloque termina en copias de PHI
         /* OSR 1a: instrumentar el back-edge (BR incondicional a un bloque
          * anterior).  El counter va ANTES del JMP terminal; el `add` toca
          * flags pero el JMP no las lee.  push/pop rax preserva el estado.
