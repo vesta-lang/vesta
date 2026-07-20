@@ -281,6 +281,16 @@ std::string CBackend::build_inline_expr(EmitContext &ctx,
         return "(" + lhs + " " + binop_symbol_for(ins.op) + " " + rhs + ")";
     }
 
+    case IrOp::FMA: {
+        // round(a*b+c) con UN redondeo -> fma()/fmaf() de C99 (mismo std::fma
+        // que el interp).  Consistente con los demas backends.
+        std::string a = value_expr(ctx, ins.operands[0]);
+        std::string b = value_expr(ctx, ins.operands[1]);
+        std::string c = value_expr(ctx, ins.operands[2]);
+        const char *fn = (ins.type == ir::IrType::F32) ? "fmaf" : "fma";
+        return std::string(fn) + "(" + a + ", " + b + ", " + c + ")";
+    }
+
     case IrOp::SHR: {
         // logical shift -> cast a unsigned
         std::string utype;
@@ -1931,6 +1941,10 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
     for (const auto &fn : mod.functions) {
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
+                if (ins.op == ir::IrOp::FMA) {
+                    uses_math = true; // fma()/fmaf() de <math.h>
+                    continue;
+                }
                 if (ins.op != ir::IrOp::CALLN && ins.op != ir::IrOp::CALL)
                     continue;
                 auto colon = ins.func_name.find(':');
@@ -2709,6 +2723,17 @@ void CBackend::emit_binop(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
     }
     ctx.out << value_expr(ctx, lhs) << " " << binop_symbol_for(op) << " "
             << value_expr(ctx, rhs) << ";\n";
+}
+
+void CBackend::emit_fma(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId a,
+                        ir::IrValueId b, ir::IrValueId c, ir::IrType t) {
+    if (ctx.tx && ctx.tx->is_inline_candidate(dst)) return;
+    emit_assign_lhs(ctx, dst);
+    // round(a*b+c) con 1 redondeo -> fma()/fmaf() de C99 (mismo std::fma que el
+    // interp).  El consumidor gcc usa la misma semantica de contraccion.
+    const char *fn = (t == ir::IrType::F32) ? "fmaf" : "fma";
+    ctx.out << fn << "(" << value_expr(ctx, a) << ", " << value_expr(ctx, b)
+            << ", " << value_expr(ctx, c) << ");\n";
 }
 
 void CBackend::emit_unop(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,

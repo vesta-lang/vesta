@@ -289,6 +289,11 @@ enum class IrOp : uint16_t {
     F64TOF32 = 0x59, ///< %dst = f64tof32  %src  (narrowing: f64 -> f32)
     BITCAST =
         0x5A, ///< %dst = bitcast.T %src  (reinterpretar bits sin conversion)
+    FMA = 0x5B, ///< %dst = fma.fN  %a, %b, %c   (multiply-add CONTRAIDO: UN
+                ///< SOLO redondeo, round(a*b+c) -- NO es fmul+fadd).  Intencion
+                ///< matematica (como IMIN/IMAX): interp usa std::fma; JIT/AOT
+                ///< VFMADD231 si caps.fma, si no CALL a std::fma.  Lo emite el
+                ///< pase fuse_fma solo en funciones @fp(fast).
 
     // ---- flujo de control (0x60-0x6F) ----
     BR = 0x60,          ///< br  label                    (salto incondicional)
@@ -1189,6 +1194,15 @@ struct IrFunction {
      * @c false para todas las IrFunctions regulares.
      */
     bool is_macro_compiled = false;
+
+    /**
+     * @brief Politica de coma flotante de la funcion (@c \@fp).  Si true
+     * (default = fast), el pase @c fuse_fma puede contraer @c fmul+fadd en un
+     * @c FMA (round(a*b+c), 1 redondeo).  @c \@fp(strict) lo pone false ->
+     * semantica IEEE estricta (2 redondeos, sin contraccion).  Selectivo por
+     * funcion; el global @c -ffp-contract=off lo fuerza a false en todas.
+     */
+    bool fp_contract = true;
 
     /**
      * @brief TAREA 2 (C2): sitios de devirtualizacion especulativa.

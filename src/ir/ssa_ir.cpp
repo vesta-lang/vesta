@@ -108,6 +108,7 @@ static const OpEntry OP_TABLE[] = {
     {"fadd", IrOp::FADD},
     {"fsub", IrOp::FSUB},
     {"fmul", IrOp::FMUL},
+    {"fma", IrOp::FMA},
     {"fdiv", IrOp::FDIV},
     {"fneg", IrOp::FNEG},
     {"fabs", IrOp::FABS},

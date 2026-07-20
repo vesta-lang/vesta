@@ -1024,6 +1024,11 @@ int main(int argc, char *argv[]) {
             // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
             aot_mode = true;
             jit::set_jit_threshold(UINT32_MAX);
+            // FMA: el codegen AOT (vreg) aun no emite VFMADD escalar -> no crear
+            // nodos IrOp::FMA para AOT (el pase fuse_fma queda desactivado).  El
+            // interp/JIT (velb) si los crean (interp = std::fma; JIT cae a interp
+            // en funciones con FMA hasta que el vreg emita VFMADD).
+            ir::ir_set_fma_contract_allowed(false);
             // @Target target-aware: los atomos os:/arch: de @Target se evaluan
             // contra el TARGET del binario AOT (cross-compile), no el host de
             // build, para que las variantes por plataforma del runtime/usuario

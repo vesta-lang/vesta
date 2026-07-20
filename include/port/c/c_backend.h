@@ -142,6 +142,8 @@ class CBackend : public IPortBackend {
     void emit_binop(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
                     ir::IrValueId lhs, ir::IrValueId rhs,
                     ir::IrType t) override;
+    void emit_fma(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId a,
+                  ir::IrValueId b, ir::IrValueId c, ir::IrType t) override;
     void emit_unop(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
                    ir::IrValueId src, ir::IrType t) override;
     void emit_cmp(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,

@@ -787,6 +787,27 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
+    case MOp::VFMADD231SD:
+    case MOp::VFMADD231SS: {
+        /* FMA ESCALAR: dst = src1*src2 + dst (1 redondeo).  66 0F38 B9; W1=SD,
+         * W0=SS.  VEX.LIG -> L=0 (128b, opera sobre la lane baja).  src2 = REG.
+         * Requiere FMA3 (el vreg lo comprueba con caps.fma antes de emitirlo). */
+        const bool ss = (mi.op == MOp::VFMADD231SS);
+        const uint8_t wbit = ss ? 0 : 1;
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.src2.kind == MOperandKind::REG) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
+            emit_vx3(xd, xs, xv, wbit, /*l256=*/false, 0, false, out, /*map=*/2,
+                     /*pp=*/1);
+            put8(out, 0xB9);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else {
+            put8(out, 0xCC); // solo REG
+        }
+        return true;
+    }
+
     case MOp::VBROADCASTSD: {
         /* VBROADCASTSD ymm/zmm, xmm: difunde el f64 bajo a todos los lanes.
          * VX.256.66.0F38.W0 19 /r ; EVEX.512.66.0F38.W1 19 /r.  Op de 2

@@ -34,6 +34,7 @@
 #include "vesta_rt/abi.h"
 #include "jit/target_reginfo.h" //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"        // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
+#include "jit/backend_caps.h"   // caps.fma para emitir VFMADD231 escalar
 #include "gc/raw_allocator.h" //  D.7 perf: inline slab fast-path
 #include "vx/asm/asm_backend.h"  //  AS inc.5: ensamblar inline-asm -> bytes
 #include "vx/asm/asm_effects.h"  //  AS inc.5: asm_canonical_reg
@@ -55,6 +56,17 @@
 #include <vector>  // critical-edge splitting (pred_count, working copy)
 
 namespace jit {
+
+// Gate del emit VFMADD231 escalar.  -1 = no fijado por el driver -> usa las
+// caps del HOST (JIT).  El AOT lo fija a target.caps.fma.
+static int g_vreg_fma = -1;
+void set_vreg_fma(bool ok) { g_vreg_fma = ok ? 1 : 0; }
+static bool vreg_fma_ok() {
+    if (g_vreg_fma >= 0)
+        return g_vreg_fma != 0;
+    static const bool host = backend_caps_host().fma;
+    return host;
+}
 
 /** @brief Diagnostico opt-in (VESTA_JIT_VREGS_DEBUG=1) de por que una
  *  funcion no es seleccionable por el path vreg. */
@@ -1626,6 +1638,28 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(MInstr::make_binary(fop, vrt(in.dst),
                                                 vrt(in.operands[0]),
                                                 vrt(in.operands[1])));
+                break;
+            }
+
+            /* FMA escalar: dst = round(a*b+c) (1 redondeo).  Baja a
+             * MOVSD dst,c + VFMADD231SD dst,a,b (dst = a*b + dst).  El dst es
+             * USEDEF (acumulador).  Solo con FMA3 (caps.fma); si no, fallback a
+             * interp (que usa std::fma, mismo redondeo -> sin divergencia). */
+            case ir::IrOp::FMA: {
+                flush_pending();
+                if (!fp_ok || !vreg_fma_ok()) {
+                    vreg_dbg(fn.name.c_str(), "fma");
+                    return false;
+                }
+                if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const bool is_f32 = (in.type == ir::IrType::F32);
+                O.push_back(MInstr::make_unary(is_f32 ? MOp::MOVSS : MOp::MOVSD,
+                                               vrt(in.dst),
+                                               vrt(in.operands[2]))); // dst = c
+                O.push_back(MInstr::make_binary(
+                    is_f32 ? MOp::VFMADD231SS : MOp::VFMADD231SD, vrt(in.dst),
+                    vrt(in.operands[0]), vrt(in.operands[1]))); // dst = a*b+dst
                 break;
             }
 

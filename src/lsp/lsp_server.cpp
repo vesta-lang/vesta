@@ -1449,7 +1449,7 @@ bool LspServer::handle_vesta_request(const std::string &method,
             const std::string fn = params.value("function", std::string());
             result = inspector_.bytecode(uri, fn, itarget);
         } else if (method == "vesta/ir") {
-            const std::string  = params.value("phase", std::string("post"));
+            const std::string phase = params.value("phase", std::string("post"));
             result = inspector_.ir(uri, phase, itarget);
         } else if (method == "vesta/irDiff") {
             const std::string fn = params.value("function", std::string());

@@ -697,6 +697,13 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         }
         return;
 
+    case IrOp::FMA:
+        if (ins.operands.size() >= 3) {
+            backend_.emit_fma(ctx, ins.dst, ins.operands[0], ins.operands[1],
+                              ins.operands[2], ins.type);
+        }
+        return;
+
     // Aritmetica unaria (entera y float).
     case IrOp::NEG:
     case IrOp::NOT:

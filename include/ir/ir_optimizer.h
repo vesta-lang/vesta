@@ -360,6 +360,20 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
 bool ir_pass_simplify(IrFunction &fn);
 
 /**
+ * @brief Contrae @c fmul+fadd single-use en un @c FMA (round(a*b+c), 1
+ * redondeo).  Solo en funciones @c \@fp(fast) (fn.fp_contract).  Corre DESPUES
+ * de @c ir_pass_simplify.  Ver la nota en el .cpp.
+ */
+bool ir_pass_fuse_fma(IrFunction &fn);
+
+/**
+ * @brief Gate global del driver para @c ir_pass_fuse_fma.  velb = true; el AOT
+ * lo pone a @c target.caps.fma (no crear FMA si el target no lo soporta).
+ */
+void ir_set_fma_contract_allowed(bool v);
+bool ir_fma_contract_allowed();
+
+/**
  * @brief Pase Strength Reduction.
  *
  * Reemplaza MUL/DIV/MOD por constantes potencia-de-2 con SHL/SHR/AND

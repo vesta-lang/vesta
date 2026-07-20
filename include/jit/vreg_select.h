@@ -188,6 +188,10 @@ struct VregCallbackOpts {
     int32_t tls_gs_disp = -1;
 };
 
+/** @brief Fija si el vreg puede emitir VFMADD231 escalar (FMA3).  El AOT lo
+ *  pone a target.caps.fma; sin fijar, el JIT usa las caps del host. */
+void set_vreg_fma(bool ok);
+
 bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                  AbiKind abi = AbiKind::HOST_LEAF,
                  const CallResolver &resolve_call = {},

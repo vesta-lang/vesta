@@ -1181,7 +1181,7 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
     InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
 
-    if ( == "pre") {
+    if ( phase == "pre") {
         // El IR pre-opt NO esta en el CompileResult cacheado por defecto:
         // exige recompilar con emit_ir_preopt.  Cachear por (uri, hash).
         const uint64_t h = fnv1a_hash(text);

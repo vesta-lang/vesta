@@ -736,6 +736,11 @@ enum class MOp : uint8_t {
      * (66 0F38 W0 B8) -> f32.  Solo AVX/AVX512 (no hay FMA en SSE2 base). */
     VFMADD231PD = 141,  ///< VFMADD231PD dst, src1, src2/mem (f64)
     VFMADD231PS = 142,  ///< VFMADD231PS dst, src1, src2/mem (f32)
+    /* FMA ESCALAR (round(a*b+c), 1 redondeo): dst = src1*src2 + dst.  Baja el
+     * IrOp::FMA.  VFMADD231SD (66 0F38 W1 B9) -> f64; VFMADD231SS (66 0F38 W0
+     * B9) -> f32.  Requiere FMA3 (caps.fma); si no, el vreg cae a interp. */
+    VFMADD231SD = 238, ///< VFMADD231SD dst, src1, src2 (f64 escalar)
+    VFMADD231SS = 239, ///< VFMADD231SS dst, src1, src2 (f32 escalar)
 
     DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup

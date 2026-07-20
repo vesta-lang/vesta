@@ -216,6 +216,15 @@ InstrRoles operand_roles(MOp op) noexcept {
         r.src1 = R::USE;
         r.src2 = R::USE;
         break;
+    /* FMA escalar: dst = src1*src2 + dst.  El dst es ACUMULADOR (lee el sumando
+     * c y escribe el resultado) -> USEDEF, como XADD.  El vreg copia c->dst
+     * antes (MOVSD) y NO legaliza a 2-address (dst != src1). */
+    case MOp::VFMADD231SD:
+    case MOp::VFMADD231SS:
+        r.dst = R::USEDEF;
+        r.src1 = R::USE;
+        r.src2 = R::USE;
+        break;
     /* Unarios FP (dst def, src1 use): conversiones, sqrt, MOVSD/MOVSS
      * (movimiento de datos, incluido el spill/load FP). */
     case MOp::SQRTSD:

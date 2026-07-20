@@ -1549,6 +1549,52 @@ static void emit_float_unop(EmitCtx &ctx, const std::string &mnemonic,
     ctx.last_f0 = IR_NO_VALUE;
 }
 
+// Emite `%d = fma %a, %b, %c` = round(a*b+c) con UN SOLO redondeo via la
+// instruccion `fmadd fd, fa, fb` (fd = fa*fb + fd), que en el interp usa
+// std::fma -> bit-exacto con VFMADD231 del JIT.  ZMM-aware: operandos en su
+// registro del banco o cargados a scratch f0/f1 desde GP; el acumulador (que
+// arranca con c) es el reg del dst, o f2 si aliasea a/b (fmadd lee ra,rb,fd y
+// luego escribe fd, asi que fd no puede ser ra ni rb).
+static void emit_float_fma(EmitCtx &ctx, IrType type, IrValueId dst,
+                           IrValueId a, IrValueId b, IrValueId c) {
+    const std::string suffix = (type == IrType::F32) ? ".ps" : "";
+    const int za = ctx.zmm_of(a), zb = ctx.zmm_of(b), zc = ctx.zmm_of(c);
+    const int zd = ctx.zmm_of(dst);
+    std::string ra, rb;
+    if (za >= 0) {
+        ra = "f" + std::to_string(za);
+    } else {
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(a, 0), "f0");
+        ra = "f0";
+    }
+    if (zb >= 0) {
+        rb = "f" + std::to_string(zb);
+    } else {
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(b, 1), "f1");
+        rb = "f1";
+    }
+    const std::string rd = (zd >= 0) ? ("f" + std::to_string(zd)) : "f2";
+    // El acumulador NO puede aliasar ra/rb (fmadd corromperia el operando).
+    const std::string acc = (rd == ra || rd == rb) ? "f2" : rd;
+    // Cargar c en el acumulador.
+    if (zc >= 0) {
+        const std::string rc = "f" + std::to_string(zc);
+        if (acc != rc)
+            ctx.out << "    fmov " << acc << ", " << rc << "\n";
+    } else {
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(c, 2), acc);
+    }
+    ctx.out << "    fmadd" << suffix << " " << acc << ", " << ra << ", " << rb
+            << "\n";
+    if (acc != rd)
+        ctx.out << "    fmov " << rd << ", " << acc << "\n";
+    if (zd < 0) {
+        emit_zmm_to_gp_bits(ctx, rd, ctx.dst_of(dst));
+        ctx.store_spilled(dst);
+    }
+    ctx.last_f0 = IR_NO_VALUE;
+}
+
 // Componentes de direccionamiento de un LOAD/STORE para el banco ancho
 // (mld/mst): usa la fusion Fase 1/2 si existe (base + index<<scale + disp), o el
 // registro del puntero (base, disp 0).  addr_op = indice del operando direccion
@@ -2334,6 +2380,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() >= 2)
             emit_float_binop(ctx, arith_mnemonic(ins.op, ins.type), ins.type,
                              ins.dst, ins.operands[0], ins.operands[1]);
+        break;
+
+    case IrOp::FMA:
+        if (ins.operands.size() >= 3)
+            emit_float_fma(ctx, ins.type, ins.dst, ins.operands[0],
+                           ins.operands[1], ins.operands[2]);
         break;
 
     // --- Aritmetica entera unaria ---
@@ -5666,6 +5718,7 @@ static inline bool zmm_producer_op(IrOp op) {
     case IrOp::FCEIL:
     case IrOp::FROUND:
     case IrOp::FTRUNC:
+    case IrOp::FMA:   // produce un float
     case IrOp::LOAD:  // carga float
     case IrOp::CONST: // const float via fmowi
     // Fronteras que PRODUCEN un float en el banco:
@@ -5693,6 +5746,7 @@ static inline bool zmm_consumer_op(IrOp op) {
     case IrOp::FCEIL:
     case IrOp::FROUND:
     case IrOp::FTRUNC:
+    case IrOp::FMA:   // consume a, b, c (floats)
     case IrOp::STORE:
     // Fronteras que CONSUMEN un float del banco:
     case IrOp::FTOI:     // float -> int (GP)
@@ -5848,6 +5902,12 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
                 if (in.dst != IR_NO_VALUE && !in.operands.empty() &&
                     in.operands[0] != IR_NO_VALUE)
                     prefer[in.dst] = in.operands[0];
+                break;
+            case IrOp::FMA:
+                // fmadd acumula en fd = fc -> el dst prefiere el reg de c.
+                if (in.dst != IR_NO_VALUE && in.operands.size() >= 3 &&
+                    in.operands[2] != IR_NO_VALUE)
+                    prefer[in.dst] = in.operands[2];
                 break;
             default:
                 break;

@@ -4417,6 +4417,80 @@ void rewrite_as_const_with_value(IrFunction &fn, IrInstr &ins, uint64_t imm) {
 
 } // namespace
 
+// ==========================================================================
+//  Pase ir_pass_fuse_fma -- contraccion fmul+fadd -> FMA (round(a*b+c))
+// ==========================================================================
+//
+// Solo en funciones @fp(fast) (fn.fp_contract).  Semantica: FMA = 1 SOLO
+// redondeo (distinto de fmul+fadd = 2).  Es una transformacion fast-math, por
+// eso va gated por la politica FP.  Se decide UNA vez aqui (IR compartido) para
+// que interp/JIT/AOT queden consistentes (todos 1 redondeo).
+//
+// Patron: `%t = fmul a,b` (SINGLE-USE, mismo tipo float) + `%d = fadd %t,c`
+// (o conmutado `fadd c,%t`) -> `%d = fma a,b,c`.  El fmul queda muerto -> DCE.
+// Single-use garantiza que el valor intermedio redondeado no se observa en
+// ningun otro sitio (correcto contraer).  Coordinado con ir_pass_simplify: este
+// pase corre DESPUES de simplify (que ya elimino a*0/a*1/+0), asi opera sobre
+// los fmul+fadd genuinos.
+// Gate global del driver: el pase solo contrae si el TARGET puede materializar
+// el FMA sin divergencia.  velb (interp+JIT) = true (el JIT emite VFMADD si el
+// host tiene FMA, o cae a interp/std::fma).  AOT lo pone = target.caps.fma (si
+// el target no tiene FMA, no se crean nodos FMA -> AOT nunca ve lo que no puede
+// emitir).  Default true.
+static bool g_fma_contract_allowed = true;
+void ir_set_fma_contract_allowed(bool v) { g_fma_contract_allowed = v; }
+bool ir_fma_contract_allowed() { return g_fma_contract_allowed; }
+
+bool ir_pass_fuse_fma(IrFunction &fn) {
+    if (!fn.fp_contract || !g_fma_contract_allowed || fn.is_native)
+        return false;
+    const size_t nv = fn.values.size();
+    if (nv == 0)
+        return false;
+    std::vector<int> uc(nv, 0);
+    std::vector<IrInstr *> def_fmul(nv, nullptr);
+    for (auto &bb : fn.blocks) {
+        for (auto &in : bb.instrs) {
+            for (IrValueId op : in.operands)
+                if (op != IR_NO_VALUE && static_cast<size_t>(op) < nv)
+                    uc[op]++;
+            for (auto &pa : in.phi_args)
+                if (pa.value != IR_NO_VALUE &&
+                    static_cast<size_t>(pa.value) < nv)
+                    uc[pa.value]++;
+            if (in.op == IrOp::FMUL && in.dst != IR_NO_VALUE &&
+                static_cast<size_t>(in.dst) < nv && in.operands.size() >= 2)
+                def_fmul[in.dst] = &in;
+        }
+    }
+    bool changed = false;
+    for (auto &bb : fn.blocks) {
+        for (auto &in : bb.instrs) {
+            if (in.op != IrOp::FADD || in.operands.size() < 2)
+                continue;
+            for (int k = 0; k < 2; ++k) {
+                const IrValueId t = in.operands[k];
+                const IrValueId cval = in.operands[1 - k];
+                if (t == IR_NO_VALUE || static_cast<size_t>(t) >= nv)
+                    continue;
+                if (uc[t] != 1) // %t solo lo usa este fadd
+                    continue;
+                IrInstr *mul = def_fmul[t];
+                if (mul == nullptr || mul->type != in.type)
+                    continue;
+                const IrValueId a = mul->operands[0];
+                const IrValueId b = mul->operands[1];
+                in.op = IrOp::FMA;
+                in.operands.assign({a, b, cval});
+                // El fmul queda muerto (t sin usos) -> lo elimina el DCE.
+                changed = true;
+                break;
+            }
+        }
+    }
+    return changed;
+}
+
 bool ir_pass_simplify(IrFunction &fn) {
     bool changed = false;
 
@@ -10283,6 +10357,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
             any |= ir_pass_copy_prop(fn);
             any |= ir_pass_simplify(fn); /* algebraic + cast fold + phi simp */
+            // Contraccion FMA (fmul+fadd -> fma) DESPUES de simplify, que ya
+            // quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).  Decision
+            // unica en el IR -> interp/JIT/AOT consistentes (1 redondeo).
+            any |= ir_pass_fuse_fma(fn);
             any |= ir_pass_strength_reduction(
                 fn);                    /* mul/div/mod power-of-2 -> shifts */
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
