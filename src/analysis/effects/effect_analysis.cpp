@@ -17,6 +17,7 @@
 
 #include "ir/ssa_ir.h"
 #include "analysis/effects/ir_effects.h"
+#include "analysis/escape/escape.h"
 
 #include <deque>
 #include <unordered_set>
@@ -147,6 +148,29 @@ CallInfo callees_of(const ir::IrFunction &fn) {
 void merge_callee(SemanticEffects &caller, const SemanticEffects &callee) {
     caller = join(caller, callee);
 }
+
+// Filtra de un LocSet las Stack locs cuya raiz NO escapa (scratch LOCAL, no
+// observable por el caller).  El resto (Stack escapante, Heap, Global,
+// ArgDerived, Unknown/top) se conserva.
+LocSet filter_local_stack(const LocSet &s, const analysis::EscapeInfo &esc) {
+    if (s.is_top) return s;
+    LocSet out;
+    for (const AbstractLoc &l : s.locs) {
+        if (l.kind == AbstractLoc::Kind::Stack && l.id != LOC_GENERIC &&
+            !esc.stack_escapes(l.id))
+            continue; // scratch local -> no observable
+        out.add(l);
+    }
+    return out;
+}
+// Aplica el filtro a reads + writes de un SemanticEffects (el efecto OBSERVABLE
+// por el caller).  may_*/control/tags/determinism se conservan.
+SemanticEffects observable_effect(SemanticEffects e,
+                                  const analysis::EscapeInfo &esc) {
+    e.mem.reads = filter_local_stack(e.mem.reads, esc);
+    e.mem.writes = filter_local_stack(e.mem.writes, esc);
+    return e;
+}
 } // namespace
 
 ModuleSummary EffectAnalysis::build_summary(
@@ -160,6 +184,26 @@ ModuleSummary EffectAnalysis::build_summary(
                 for (const ir::IrFunction &fn : m->functions) f(fn);
     };
 
+    // 0) EscapeAnalysis del programa: que Stack roots locales escapan (sus
+    //    escrituras SI son observables por el caller).  Provee la base de hechos
+    //    via el manager (facts_of/points_to_of), no la construye aqui.  Para
+    //    varios modulos se computa por-modulo (un callee de otro modulo se trata
+    //    como externo = captura, sound).
+    std::unordered_map<std::string, analysis::EscapeInfo> escape_all;
+    {
+        auto facts_fn = [this](const ir::IrFunction &fn) -> const IrFacts & {
+            return facts_of(fn);
+        };
+        auto pt_fn = [this](const ir::IrFunction &fn) -> const analysis::PointsTo & {
+            return points_to_of(fn);
+        };
+        for (const ir::IrModule *m : mods) {
+            if (!m) continue;
+            auto em = analysis::compute_escape_module(*m, facts_fn, pt_fn);
+            for (auto &kv : em) escape_all[kv.first] = std::move(kv.second);
+        }
+    }
+
     // 1) Summary LOCAL de cada funcion (efecto propio, estructura) + lagunas.
     gaps_ = EffectGaps{};
     std::unordered_map<std::string, CallInfo> calls;
@@ -171,15 +215,19 @@ ModuleSummary EffectAnalysis::build_summary(
         EffectAnalysisResult loc = function_local_effects(fn, &gaps_);
         FunctionSummary s;
         s.symbol = fn.name;
-        s.semantic.local = loc.effects;
-        s.semantic.closure = loc.effects; // arranca = local; el fixpoint lo expande
+        s.semantic.local = loc.effects; // CRUDO (lo muestra --analyze "local")
+        // El cierre parte del efecto OBSERVABLE: sin las escrituras/lecturas a
+        // Stack scratch LOCAL (no las ve el caller) -> una reduccion que escribe
+        // solo Stack#acc_slot pasa a readonly.
+        SemanticEffects obs = observable_effect(loc.effects, escape_all[fn.name]);
+        s.semantic.closure = obs;
         s.structural = structural_of(fn);
         s.completeness = loc.completeness;
         calls[fn.name] = callees_of(fn);
         s.interproc.reaches_dynamic_call = calls[fn.name].dynamic;
         s.interproc.has_calls =
             calls[fn.name].dynamic || !calls[fn.name].static_callees.empty();
-        local_eff[fn.name] = loc.effects;
+        local_eff[fn.name] = obs; // OBSERVABLE (sin scratch local) = semilla del cierre
         local_comp[fn.name] = loc.completeness;
         out.fns.emplace(fn.name, std::move(s));
     });

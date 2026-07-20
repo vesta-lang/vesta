@@ -164,6 +164,11 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         break;
     case IrOp::ARRAY_LEN: case IrOp::STRLEN: case IrOp::STRGETBYTES:
     case IrOp::STRHASH:
+    // STRRAW: devuelve un host_ptr al buffer de datos del StringObject -> LEE el
+    // objeto (cabecera+datos) para calcular el puntero; no escribe/aloca/lanza.
+    // Una escritura POSTERIOR via el puntero devuelto es un STORE aparte
+    // (modelado).  Sin esto, strraw subia a top() (laguna modelable).
+    case IrOp::STRRAW:
         // leen la cabecera del objeto (ancho desconocido = objeto entero).
         if (!ops.empty()) add_read(e, loc(ops[0], 0));
         break;
