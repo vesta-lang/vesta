@@ -5367,6 +5367,18 @@ static bool g_dce_effects = [] {
     return !(e && e[0] == '0'); // default ON; solo "0" lo desactiva
 }();
 
+// Unificacion del modelo de memoria (Fase 3): cuando esta activo, el DSE
+// construye su resolucion de direcciones (addr_of/root_kind) desde el
+// RESOLVEDOR COMPARTIDO (analysis::compute_points_to) en lugar de su fixpoint
+// privado -- misma fuente que el modelo de efectos.  Toda la logica downstream
+// (cobertura, barreras, forwarding, heap/stack) queda IGUAL.  A/B via
+// VESTA_DSE_UNIFIED=1; default OFF hasta validar e2e 3 modos + patrones de
+// regresion (copy-alias, STRMAKE, mvtake, buffer meta-OOP).
+static bool g_dse_unified = [] {
+    const char *e = std::getenv("VESTA_DSE_UNIFIED");
+    return e && e[0] == '1';
+}();
+
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
                             const analysis::PointsTo &pt, const IrInstr &ins) {
     const analysis::effects::EffectAnalysisResult r =
@@ -5798,20 +5810,40 @@ bool ir_pass_dse(IrFunction &fn) {
     std::unordered_map<IrValueId, AddrInfo> addr_of; // solo direcciones conocidas
     std::unordered_map<IrValueId, RootKind> root_kind;
 
-    for (auto &bb : fn.blocks)
-        for (auto &ins : bb.instrs) {
-            if (ins.dst == IR_NO_VALUE) continue;
+    if (g_dse_unified) {
+        // Fase 3: resolucion desde el RESOLVEDOR COMPARTIDO.  Solo las raices
+        // que el DSE razona con precision (Stack=ALLOCA, Heap=alloc-site) con
+        // OFFSET EXACTO entran en addr_of; el resto (Global/ArgDerived/Unknown/
+        // offset inexacto) no tiene entrada -> el DSE los trata como barrera,
+        // igual que con su fixpoint privado.  Downstream sin cambios.
+        analysis::IrFacts facts = analysis::build_ir_facts(fn);
+        analysis::PointsTo pt = analysis::compute_points_to(fn, facts);
+        using MK = analysis::effects::AbstractLoc::Kind;
+        for (IrValueId v = 0;
+             v < static_cast<IrValueId>(pt.loc.size()); ++v) {
+            const analysis::PointsToEntry &e = pt.loc[v];
+            if (!e.off_exact) continue; // whole-root/inexact -> barrera
             RootKind k = RootKind::NONE;
-            if (ins.op == IrOp::ALLOCA)
-                k = RootKind::STACK;
-            else if (ins.op == IrOp::RAW_ALLOC || ins.op == IrOp::GC_ALLOC ||
-                     ins.op == IrOp::NEWOBJ || ins.op == IrOp::NEWOBJS)
-                k = RootKind::HEAP;
-            if (k == RootKind::NONE) continue;
-            addr_of[ins.dst] = AddrInfo{ins.dst, 0};
-            root_kind[ins.dst] = k;
+            if (e.kind == MK::Stack) k = RootKind::STACK;
+            else if (e.kind == MK::Heap) k = RootKind::HEAP;
+            else continue; // Global/ArgDerived/Unknown -> barrera (sin entrada)
+            addr_of[v] = AddrInfo{e.root, e.off};
+            root_kind[e.root] = k; // la raiz misma se resuelve a off 0 exacto
         }
-    {
+    } else {
+        for (auto &bb : fn.blocks)
+            for (auto &ins : bb.instrs) {
+                if (ins.dst == IR_NO_VALUE) continue;
+                RootKind k = RootKind::NONE;
+                if (ins.op == IrOp::ALLOCA)
+                    k = RootKind::STACK;
+                else if (ins.op == IrOp::RAW_ALLOC || ins.op == IrOp::GC_ALLOC ||
+                         ins.op == IrOp::NEWOBJ || ins.op == IrOp::NEWOBJS)
+                    k = RootKind::HEAP;
+                if (k == RootKind::NONE) continue;
+                addr_of[ins.dst] = AddrInfo{ins.dst, 0};
+                root_kind[ins.dst] = k;
+            }
         // Fix-point: propagar (raiz, offset) por las cadenas derivadas.
         // Cota dura de 16 iteraciones para garantizar convergencia.
         bool grew = true;
