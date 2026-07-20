@@ -667,6 +667,14 @@ struct Lowerer {
             const bool fp = is_fp_operand(p->dst) || is_fp_operand(p->src1);
             const MOperand dst = resolve(p->dst);
             const MOperand src = resolve(p->src1);
+            /* Self-copy (dst==src, mismo fisico): NO-OP en el parallel move.
+             * Incluirlo mete un self-loop en el grafo de dependencias que
+             * confunde la deteccion de ciclos de emit_parallel_moves.  Aparece
+             * con la coalescencia de phi auto-referenciales (`v = phi[.., v]`
+             * -> copia `mov v, v`).  Se salta. */
+            if (dst.is_reg() && src.kind == MOperandKind::REG &&
+                dst.reg == src.reg)
+                continue;
             if (dst.is_reg()) {
                 if (fp)
                     freg_moves.emplace_back(static_cast<MReg>(dst.reg), src);

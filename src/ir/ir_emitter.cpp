@@ -44,6 +44,7 @@
 #include "vx/asm/asm_effects.h"           // inc.6: asm_canonical_reg
 #include "vx/asm/asm_phys_reg.h"          // sustitucion $N -> reg fisico
 #include "jit/inline_asm_trampoline.h" // inc.6: fnv1a64_asm (clave del trampoline)
+#include "jit/ssa_coalesce.h"          // ssa_phi_coalesce_remap (congruencia SSA)
 #include "loader/interp_stackmap.h"    // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
 #include <sstream>
 #include <cstdio>
@@ -488,6 +489,21 @@ static uint32_t lin_pos_of(const EmitCtx &ctx, IrBlockId bid, size_t idx) {
 // Devuelve los registros ordenados ascendentemente y deduplicados.
 static std::vector<int>
 live_regs_through_call(const EmitCtx &ctx, uint32_t call_pos, IrValueId dst) {
+    // Registro fisico del dst.  El resultado del call se captura con
+    // `mov dst, r0`, sobreescribiendo reg(dst).  Cualquier OTRO valor que
+    // comparta ese mismo registro fisico tiene su valor pre-call igualmente
+    // sobreescrito -> su valor viejo es dead -> NO debe guardarse/restaurarse
+    // (si lo restaurase el fastpop pisaria el resultado del call).  Esto cubre
+    // el caso de coalescencia de congruencias: un valor loop-carried (p.ej. un
+    // acumulador via phi) coalescido con el dst del call comparte reg(dst); su
+    // valor previo se descarta al escribir el retorno.  Sin coalescencia el
+    // linear-scan nunca da el mismo reg a dst y a otro valor vivo simultaneo
+    // (interfieren), asi que esta exclusion es no-op en ese caso.
+    int dst_reg = -1;
+    if (dst != IR_NO_VALUE) {
+        auto dit = ctx.alloc.reg_map.find(dst);
+        if (dit != ctx.alloc.reg_map.end()) dst_reg = dit->second;
+    }
     std::vector<int> regs;
     regs.reserve(8);
     for (const auto &iv : ctx.liveness.intervals) {
@@ -507,6 +523,7 @@ live_regs_through_call(const EmitCtx &ctx, uint32_t call_pos, IrValueId dst) {
             if (it == ctx.alloc.reg_map.end())
                 continue; // valor spilled, no en registro
             const int r = it->second;
+            if (r == dst_reg) continue; // comparte reg con dst -> pre-call dead
             if (r >= 0 && r <= 12) regs.push_back(r);
         }
     }
@@ -5197,9 +5214,40 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                                  std::ostringstream &out,
                                  bool is_entry_point = false,
                                  const IrModule *mod = nullptr) {
-    // Liveness + asignacion de registros
+    // Liveness + asignacion de registros.
+    //
+    // Coalescencia de congruencias de PHI: se computa la MISMA decision de
+    // congruencia que usa el JIT/AOT (jit::ssa_phi_coalesce_remap, funcion pura
+    // del IR) y se CONSUME en el allocator sin tocar el SSA -> los valores
+    // congruentes comparten registro VM, las copias PHI intra-clase quedan
+    // no-op, el bytecode emitido tiene menos MOVs.  Se fuerza que cada param sea
+    // el root de su clase para que la pre-asignacion de params encaje con los
+    // valores canonicos.  Escape: VESTA_NO_IR_COALESCE=1 lo desactiva.
     LivenessResult liveness = compute_liveness(fn);
-    AllocResult alloc = allocate_regs(fn, liveness);
+    std::vector<uint32_t> coal_remap;
+    {
+        static const bool coal_off = [] {
+            const char *e = std::getenv("VESTA_NO_IR_COALESCE");
+            return e && e[0] != '\0' && e[0] != '0';
+        }();
+        if (!coal_off && !fn.is_native) {
+            coal_remap = jit::ssa_phi_coalesce_remap(fn);
+            if (!coal_remap.empty()) {
+                // Forzar que cada parametro sea el root de su propia clase:
+                // el allocator pre-asigna params por su IrValueId, asi que un
+                // param no puede ser un miembro no-root.
+                for (IrValueId pid : fn.params) {
+                    if (pid == IR_NO_VALUE || pid >= coal_remap.size()) continue;
+                    IrValueId old_root = coal_remap[pid];
+                    if (old_root == pid) continue;
+                    for (IrValueId v = 0; v < coal_remap.size(); ++v)
+                        if (coal_remap[v] == old_root) coal_remap[v] = pid;
+                }
+            }
+        }
+    }
+    AllocResult alloc = allocate_regs(
+        fn, liveness, coal_remap.empty() ? nullptr : &coal_remap);
 
     // fix14: solo emitir enter/leave si hay slots de spill O si la funcion
     // contiene ALLOCA (que genera subsp rsp, N sin un addsp correspondiente

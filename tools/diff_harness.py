@@ -51,6 +51,13 @@ NODET = {
     # devuelve 0 -> "sin PEB" -> 1.  No es un bug del codegen JIT (el JIT acierta);
     # es una limitacion del trampolin interp para asm inlineado con segmento gs:.
     "282_overlay_peb",
+    # asm_stack_manip: el asm hace `mov rcx, rsp` y retorna (sp>0x1000)?42:0.
+    # El JIT/default/AOT lo compilan a nativo -> rsp real del host (>0x1000) -> 42.
+    # El oraculo interp PURO usa el trampolin vrt:inline_asm_exec y el rsp que
+    # lee no se propaga de vuelta al register("rcx") de salida -> sp=0 -> 0.  El
+    # codegen JIT acierta; es la misma limitacion del trampolin interp que 282
+    # (asm que inspecciona estado real de pila/segmento).  Ortogonal a coalescing.
+    "asm_stack_manip",
 }
 
 # Programas que necesitan setup externo (loadmodule de un .velb concreto,

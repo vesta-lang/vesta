@@ -31,6 +31,8 @@
 #include "ir/liveness.h"
 #include <unordered_map>
 #include <string>
+#include <vector>
+#include <cstdint>
 
 namespace ir {
 
@@ -70,11 +72,22 @@ struct AllocResult {
  * Pre-asigna parametros a r1-r12 siguiendo la convencion de llamada.
  * Derrama valores cuando se agotan los ALLOC_REGS registros disponibles.
  *
- * @param fn        Funcion SSA con sus valores y bloques.
- * @param liveness  Resultado del analisis de vivacidad.
+ * Coalescencia de congruencias de PHI (consumo del remap, sin tocar el SSA):
+ * si @p coalesce_remap no es nulo ni vacio, los valores de la misma clase de
+ * congruencia (remap[v] == root) comparten un registro VM.  El allocator opera
+ * sobre valores CANONICOS (el root de cada clase, con los intervalos unidos) y
+ * luego expande @c reg_map / @c spill_map a todos los miembros.  Asi las copias
+ * PHI intra-clase quedan como no-op (mismo reg origen y destino) SIN reescribir
+ * el IR a multi-def.  @p coalesce_remap debe garantizar que cada parametro sea
+ * el root de su propia clase (el caller lo fuerza).
+ *
+ * @param fn             Funcion SSA con sus valores y bloques.
+ * @param liveness       Resultado del analisis de vivacidad.
+ * @param coalesce_remap Remap de congruencia (indexado por IrValueId) o nullptr.
  * @return Resultado con la asignacion de registros y slots de pila.
  */
-AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness);
+AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
+                          const std::vector<uint32_t> *coalesce_remap = nullptr);
 
 /**
  * @brief Obtiene el nombre de texto de un registro VM (p.ej. "r0", "r14").

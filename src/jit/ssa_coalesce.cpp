@@ -440,15 +440,73 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                     def_operands[in.dst].push_back(u);
         }
 
+    /* Back-edges (DFS): una arista u->v es back-edge si v esta GRIS (en la pila
+     * del DFS) al visitar u->v.  v es entonces una cabecera de loop.  Sirve para
+     * distinguir, en un phi de cabecera `%d = phi[preheader:%init, back:%carry]`,
+     * el arg de ENTRADA (init, arista forward que domina) del loop-carried
+     * (arista de retorno).  Coalescer el arg de entrada haria el phi trivial
+     * (`%d = phi[%d,%d]`) y perderia/pisaria la inicializacion. */
+    std::unordered_set<uint64_t> back_edges;
+    std::vector<uint8_t> is_loop_header(NB, 0);
+    {
+        std::vector<uint8_t> color(NB, 0); // 0=white 1=gray 2=black
+        std::vector<uint32_t> stk;
+        std::vector<size_t> it(NB, 0);
+        for (uint32_t root = 0; root < NB; ++root) {
+            if (color[root] != 0) continue;
+            stk.push_back(root);
+            color[root] = 1;
+            while (!stk.empty()) {
+                const uint32_t u = stk.back();
+                if (it[u] < fn.blocks[u].succs.size()) {
+                    const ir::IrBlockId v = fn.blocks[u].succs[it[u]++];
+                    if (v >= NB) continue;
+                    if (color[v] == 1) { // gris -> back-edge u->v
+                        back_edges.insert(((uint64_t)u << 32) | (uint64_t)v);
+                        is_loop_header[v] = 1;
+                    } else if (color[v] == 0) {
+                        color[v] = 1;
+                        stk.push_back(v);
+                    }
+                } else {
+                    color[u] = 2;
+                    stk.pop_back();
+                }
+            }
+        }
+    }
+
     bool any = false;
     for (uint32_t b = 0; b < NB; ++b) {
         for (const ir::IrInstr &in : fn.blocks[b].instrs) {
             if (in.op != ir::IrOp::PHI || in.dst == ir::IR_NO_VALUE) continue;
             for (const ir::IrPhiArg &a : in.phi_args) {
                 const ir::IrValueId d = in.dst, s = a.value;
+                /* En una cabecera de loop, solo coalescer el arg de la ARISTA DE
+                 * RETORNO (loop-carried).  El arg de entrada (init, arista
+                 * forward) NO: coalescerlo hace el phi trivial (`%d=phi[%d,%d]`)
+                 * y al consumir el remap se perderia la inicializacion (el reg
+                 * del init y del phi serian el mismo y la copia de entrada seria
+                 * no-op).  Aplica a AMBOS consumidores del remap (interp
+                 * allocate_regs + machine apply_ssa_coalesce).  Los phis de
+                 * if/else (bloque no-header) no se afectan. */
+                if (is_loop_header[b] &&
+                    a.block < NB &&
+                    !back_edges.count(((uint64_t)a.block << 32) | (uint64_t)b))
+                    continue;
                 if (d >= NV || s >= NV || d == s) continue;
                 if (iv[d].empty() || iv[s].empty()) continue;
                 if (is_phi_dst[s]) continue; // no cadenas de phis (cross-merge)
+                /* NO coalescer con un arg CONSTANTE ni con un phi cuyo dst sea
+                 * const: una const tiene valor FIJO (rematerializable), no
+                 * loop-carried.  Si el phi cae en la clase de la const, el
+                 * vreg_select del JIT rematerializa el valor como la constante K
+                 * en cada uso (p.ej. `mul rng(=7), LCG` -> `imul r, r, 7`),
+                 * perdiendo el valor loop-carried.  Se excluye de la DECISION de
+                 * congruencia, comun a los dos consumidores del remap. */
+                if ((d < fn.values.size() && fn.values[d].is_const) ||
+                    (s < fn.values.size() && fn.values[s].is_const))
+                    continue;
                 /* CONGRUENCIA (no interferencia): rechazar el arg `s` si su
                  * definicion USA otro ARG `o` del MISMO phi (hermano).  Es el
                  * diamante del acumulador condicional `%d=phi[%s=%o+c, %o]`:

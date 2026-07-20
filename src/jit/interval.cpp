@@ -543,7 +543,6 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         }
     }
 
-
     /* ---- 3b) force_spill: vregs live-in a un sucesor EXTRA/abnormal ----
      * Deben ser memory-resident para sobrevivir al edge anormal (el throw
      * llega al handler por runtime, no por un branch; clobberea regs pero no

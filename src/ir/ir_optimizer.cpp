@@ -10472,6 +10472,27 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             }
         }
     }
+
+    /* NOTA DE ARQUITECTURA (coalescencia de PHI): NO se reescribe el SSA aqui.
+     *
+     * El approach de "IR-rewrite" (fusionar valores congruentes en un vreg
+     * multi-def a nivel IR) es FRAGIL: crea multi-def y expone bugs latentes en
+     * el out-of-SSA de cada backend (rematerializacion de const en vreg_select,
+     * arg de entrada de un phi de loop, merges transitivos).  Cada uno era un
+     * parche a un sintoma de la MISMA causa: reescribir el SSA cuando no se debe.
+     *
+     * Modelo ROBUSTO: la DECISION de congruencia se computa una sola vez sobre
+     * el IR (jit::ssa_phi_coalesce_remap, funcion pura del IR) y cada backend la
+     * CONSUME en su out-of-SSA/regalloc SIN tocar el SSA:
+     *   - interp: allocate_regs opera sobre valores canonicos (root de cada
+     *     clase, intervalos unidos) y expande reg_map a los miembros -> valores
+     *     congruentes comparten registro VM, las copias phi intra-clase quedan
+     *     no-op.  (Ver src/ir/ir_emitter.cpp + src/ir/regalloc.cpp.)
+     *   - JIT/AOT: apply_ssa_coalesce remapea los vregs de la MachineIR tras el
+     *     lowering, manteniendo el IR en SSA (sound, default-on).
+     * Sin multi-def -> sin ninguno de los edge cases.  El copy coalescing
+     * especifico de maquina (2-address `mov dst,src1`) lo hace ademas el
+     * coalesce_hint del linear-scan (otro nivel, copias que el IR no ve). */
 }
 
 // Set global de helpers @c __new_<X> marcados como puros por el frontend.
