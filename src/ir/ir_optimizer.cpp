@@ -11,7 +11,8 @@
  */
 
 #include "ir/ir_optimizer.h"
-#include "ir/passes/if_conversion.h" // diamante/if-anidado -> SELECT (Capa 1)
+#include "ir/passes/if_conversion.h"     // diamante/if-anidado -> SELECT (Capa 1)
+#include "ir/passes/select_simplify.h"   // canonicalizacion algebraica de SELECT
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h"  // cierre interproc: callees puros (DSE Fase 4)
@@ -10305,6 +10306,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // al backend).  Debe preceder a `unreachable` para que este
                 // limpie los bloques de rama que quedan vacios.
                 any |= (ir_pass_if_conversion(fn) > 0);
+                // Canonicalizacion algebraica de los SELECT recien creados
+                // (select(c,x,x)->x, ->imin/imax, anidados, ...) antes de que
+                // el resto de pases (DCE/CSE) los vean.
+                any |= (ir_pass_select_simplify(fn) > 0);
                 any |= ir_pass_unreachable(fn);
                 any |= ir_pass_tailcall(fn);
                 // Inline de header trivial de loop -> habilita decjnz fusion.
