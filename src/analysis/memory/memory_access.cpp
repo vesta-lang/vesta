@@ -49,6 +49,16 @@ namespace {
 AbstractLoc unknown_loc() {
     return {AbstractLoc::Kind::Unknown, effects::LOC_GENERIC, 0, 0};
 }
+// Localizacion de @p ptr con ancho @p width MAS un offset EXTRA constante (para
+// accesos base+disp: acumuladores VEC_ACC en acc_slot+aidx*width, datos a+disp).
+// Solo se suma el offset si la loc base es PRECISA (width>0); si es whole-root o
+// Unknown, el offset no es representable -> se deja como esta (conservador).
+AbstractLoc loc_at(const PointsTo &pt, ir::IrValueId ptr, int32_t width,
+                   int64_t extra_off) {
+    AbstractLoc l = loc_of(pt, ptr, width);
+    if (l.width > 0) l.off += extra_off;
+    return l;
+}
 } // namespace
 
 MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
@@ -144,16 +154,55 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
     case Op::VEC_BCAST:
         return a; // touches = false
 
-    // --- VEC_ACC_* (acumuladores de reduccion): acc_slot es una region host
-    //     accedida a offsets complejos (acc_imm); modelarla con precision es
-    //     intrincado -> OPACA (sound: aliasa conservador).  Menos comun
-    //     (loops de reduccion).  Follow-up: modelar el offset del acumulador. ---
-    case Op::VEC_ACC_ZERO:
-    case Op::VEC_ACC_ADD:
-    case Op::VEC_ACC_FMA:
-    case Op::VEC_ACC_STORE:
-    case Op::VEC_ACC_COMBINE:
-        a.touches = a.opaque = a.is_load = a.is_store = true;
+    // --- VEC_ACC_* (acumuladores de reduccion): acc_slot (ops[0]) es un ALLOCA
+    //     de U*width bytes; imm = ancho(0-7)|acc_idx(8-11)|src_idx(12-15)|
+    //     disp(16-31).  acc[k] esta en acc_slot + k*width; los datos se leen a
+    //     ptr+disp.  Modelado PRECISO -> las escrituras van al scratch LOCAL
+    //     (Stack#acc_slot), disjunto de la memoria del caller. ---
+    case Op::VEC_ACC_ZERO: // {acc_slot}: zero acc[aidx]
+        if (!ops.empty()) {
+            const uint64_t im = static_cast<uint64_t>(ins.imm);
+            const int32_t aw = memory_access_size_bytes(int32_t(im & 0xFF));
+            const int64_t aidx = int64_t((im >> 8) & 0xF);
+            a.touches = a.is_store = true;
+            a.writes.push_back(loc_at(pt, ops[0], aw, aidx * aw));
+        }
+        return a;
+    case Op::VEC_ACC_ADD:  // {acc_slot, a}: acc[aidx] += a[disp]
+    case Op::VEC_ACC_FMA:  // {acc_slot, a, b}: acc[aidx] += a[disp]*b[disp]
+        if (!ops.empty()) {
+            const uint64_t im = static_cast<uint64_t>(ins.imm);
+            const int32_t aw = memory_access_size_bytes(int32_t(im & 0xFF));
+            const int64_t aidx = int64_t((im >> 8) & 0xF);
+            const int64_t disp = int64_t((im >> 16) & 0xFFFF);
+            a.touches = a.is_load = a.is_store = true;
+            const AbstractLoc accl = loc_at(pt, ops[0], aw, aidx * aw);
+            a.reads.push_back(accl);  // acc read-modify
+            a.writes.push_back(accl); // acc write
+            if (ops.size() >= 2) a.reads.push_back(loc_at(pt, ops[1], aw, disp));
+            if (ins.op == Op::VEC_ACC_FMA && ops.size() >= 3)
+                a.reads.push_back(loc_at(pt, ops[2], aw, disp));
+        }
+        return a;
+    case Op::VEC_ACC_COMBINE: // {acc_slot}: acc[0] += acc[src_idx]
+        if (!ops.empty()) {
+            const uint64_t im = static_cast<uint64_t>(ins.imm);
+            const int32_t aw = memory_access_size_bytes(int32_t(im & 0xFF));
+            const int64_t sidx = int64_t((im >> 12) & 0xF);
+            a.touches = a.is_load = a.is_store = true;
+            a.reads.push_back(loc_at(pt, ops[0], aw, sidx * aw)); // fuente
+            const AbstractLoc dst0 = loc_at(pt, ops[0], aw, 0);   // acc[0]
+            a.reads.push_back(dst0);
+            a.writes.push_back(dst0);
+        }
+        return a;
+    case Op::VEC_ACC_STORE: // {acc_slot}: vuelca el acc register-resident a acc[0]
+        if (!ops.empty()) {
+            const uint64_t im = static_cast<uint64_t>(ins.imm);
+            const int32_t aw = memory_access_size_bytes(int32_t(im & 0xFF));
+            a.touches = a.is_store = true;
+            a.writes.push_back(loc_at(pt, ops[0], aw, 0));
+        }
         return a;
 
     default:
