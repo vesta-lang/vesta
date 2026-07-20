@@ -66,6 +66,16 @@ using CallResolver = std::function<uint64_t(const std::string &)>;
  *        a fallback).  Se construye desde @c RuntimeEntries en @c auto_jit.
  */
 struct VregEntries {
+    /// Auto-PGO tier-2: entry-point que el prologo del metodo llama al cruzar el
+    /// umbral de invocaciones (proc, method_ptr).  0 = no emitir el contador.
+    uint64_t tier2_request = 0;
+    /// Direccion de method->invocation_count del metodo en compilacion (para el
+    /// contador del prologo).  0 = no emitir (compilacion sin MethodInfo o AOT).
+    uint64_t tier2_ctr_addr = 0;
+    /// MethodInfo* (arg del entry-point tier2_request).
+    uint64_t tier2_method_ptr = 0;
+    /// Umbral absoluto (invocation_count) al que disparar tier-2.
+    uint32_t tier2_threshold = 0;
     uint64_t callvirt = 0;  ///< vrt_callvirt(proc, obj, vtbl_idx)
     uint64_t callm = 0;     ///< vrt_callm(proc, obj, method_ptr)
     uint64_t callitf = 0;   ///< vrt_callitf(proc, obj, params, method_idx)

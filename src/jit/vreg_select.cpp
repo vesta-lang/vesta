@@ -1106,6 +1106,52 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
          * register que ademas pisaba otro param (p.ej. el puntero p en RAX) ->
          * direccion basura en el loop -> SEGFAULT. */
         if (vm && b == 0) {
+            /* Auto-PGO tier-2: contador de invocaciones en el PROLOGO (corre sea
+             * cual sea el llamante: interp, vrt_callvirt o dispatch inline
+             * nativo).  Al cruzar el umbral llama al entry-point tier2_request
+             * (proc, method) que dispara la recompilacion con el perfil medido.
+             * RBX (=proc) es callee-saved -> la llamada C lo preserva; ningun
+             * vreg esta vivo aun (los params se cargan despues) -> rax/rcx son
+             * scratch libres.  Solo en tier-1 (no en la recompilacion tier-2:
+             * ent.tier2_request=0 alli). */
+            if (ent.tier2_request && ent.tier2_ctr_addr && ent.tier2_threshold) {
+                const uint32_t skipL = out.new_label();
+                const uint32_t ci = out.intern_imm64(
+                    static_cast<int64_t>(ent.tier2_ctr_addr));
+                // rax = &invocation_count
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
+                    MOperand::make_imm64_idx(ci)));
+                // inc dword [rax]  (32-bit)
+                O.push_back(MInstr::make_unary(
+                    MOp::INC, MOperand::make_mem(MReg::RAX, 0),
+                    MOperand::none()));
+                // ecx = [rax]  (32-bit load para el cmp)
+                O.push_back(MInstr::make_load(MOperand::make_reg(MReg::RCX, 4),
+                                              MOperand::make_reg(MReg::RAX, 8),
+                                              4, false));
+                // cmp ecx, threshold
+                O.push_back(MInstr::make_binary(
+                    MOp::CMP, MOperand::none(), MOperand::make_reg(MReg::RCX, 4),
+                    MOperand::make_imm32(
+                        static_cast<int32_t>(ent.tier2_threshold))));
+                // jb skip  (count < threshold -> no disparar)
+                O.push_back(MInstr::make_jcc(MCond::B, skipL));
+                // trigger: arg0 = proc (RBX), arg1 = method_ptr
+                const MReg a0 = target_sysv ? MReg::RDI : MReg::RCX;
+                const MReg a1 = target_sysv ? MReg::RSI : MReg::RDX;
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(a0, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                const uint32_t mi_ = out.intern_imm64(
+                    static_cast<int64_t>(ent.tier2_method_ptr));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(a1, 8),
+                                               MOperand::make_imm64_idx(mi_)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(
+                    static_cast<int64_t>(ent.tier2_request))));
+                O.push_back(MInstr::make_label_def(skipL));
+            }
             for (size_t i = 0; i < fn.params.size(); ++i)
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vrt(fn.params[i]),

@@ -1020,9 +1020,30 @@ void maybe_compile_method(runtime::ProcessVM *vm,
      * resuelven/compilan por vreg en vez de bailar a slots.  Si la funcion no
      * es del subset vreg, cae al compile_with_opts (slots) de abajo. */
     if (g_jit_use_vregs) {
-        uint8_t *vcode = vreg_compile(
-            *compile_ir, *g_code_cache, mc_opts.resolve_user_fn, make_vreg_entries(),
-            mc_opts.resolve_native_fn, mc_sym_res);
+        /* Exponer el MethodInfo al vreg para que su prologo emita el contador
+         * tier-2 (inc [&method->invocation_count] + call tier2_request).  Se
+         * limpia tras compilar.  En tier-2 (g_tier2_recompiling) el vreg NO
+         * emite el contador (el codigo optimizado final no re-cuenta). */
+        g_vreg_compiling_method = method;
+        VregEntries vent = make_vreg_entries();
+        if (!g_tier2_recompiling && jit::jit_branch_prof_emit_enabled()) {
+            /* Emitir el contador tier-2 en el prologo: cuenta invocaciones (sea
+             * cual sea el llamante: interp, vrt_callvirt, o dispatch inline
+             * nativo) y dispara la recompilacion al cruzar el umbral. */
+            const uint64_t d = jit_tier2_delta();
+            uint64_t thr = static_cast<uint64_t>(g_jit_threshold) + d;
+            if (thr >= UINT32_MAX) thr = UINT32_MAX - 1;
+            vent.tier2_request =
+                reinterpret_cast<uint64_t>(&jit_tier2_request_entry);
+            vent.tier2_ctr_addr =
+                reinterpret_cast<uint64_t>(&method->invocation_count);
+            vent.tier2_method_ptr = reinterpret_cast<uint64_t>(method);
+            vent.tier2_threshold = static_cast<uint32_t>(thr);
+        }
+        uint8_t *vcode =
+            vreg_compile(*compile_ir, *g_code_cache, mc_opts.resolve_user_fn,
+                         vent, mc_opts.resolve_native_fn, mc_sym_res);
+        g_vreg_compiling_method = nullptr;
         if (vcode != nullptr) {
             method->jit_code = reinterpret_cast<void *>(vcode);
             if (method->code_vaddr != 0)
@@ -1098,6 +1119,20 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         }
         method->invocation_count = UINT32_MAX;
     }
+}
+
+/** @brief Metodo que se esta compilando por maybe_compile_method AHORA mismo
+ *  (para que el prologo del vreg pueda emitir el contador tier-2 con la
+ *  direccion de su invocation_count).  nullptr fuera de maybe_compile_method o
+ *  para compilaciones sin MethodInfo (eager por-nombre, callbacks). */
+loader::MethodInfo *g_vreg_compiling_method = nullptr;
+
+/** @brief Entry-point del prologo tier-2 (lo llama el codigo JIT-eado).  Recibe
+ *  (proc, method_ptr) en la convencion C nativa; dispara la recompilacion. */
+extern "C" void jit_tier2_request_entry(void *proc, uint64_t method_ptr) noexcept {
+    auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
+    auto *method = reinterpret_cast<loader::MethodInfo *>(method_ptr);
+    if (vm && method) maybe_tier2_method(vm, method);
 }
 
 void tier2_tick(runtime::ProcessVM *vm,
