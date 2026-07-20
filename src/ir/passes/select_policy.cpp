@@ -197,6 +197,43 @@ PredictorResult predict_profile(uint32_t source_line) {
     return r;
 }
 
+/**
+ * @brief Predictor de NULL-CHECK: reconoce @c ptr ==/!= null (comparacion de un
+ *        valor PTR/HANDLE contra 0).  En hot paths los punteros rara vez son
+ *        null -> el branch es muy predecible (P baja).  If-convertir un
+ *        null-check suele ser mala idea (el salto es barato y bien predicho, y
+ *        la rama que deref-ea ni siquiera es especulable).
+ */
+PredictorResult predict_pointer_nullcheck(const IrFunction &fn,
+                                          IrValueId cond) {
+    PredictorResult r;
+    const IrInstr *cmp = find_def(fn, cond);
+    if (!cmp) return r;
+    if (cmp->op != IrOp::CMP_EQ && cmp->op != IrOp::CMP_NE) return r;
+    if (cmp->operands.size() != 2) return r;
+
+    // Un operando debe ser la constante 0; el otro, un valor PTR/HANDLE.
+    uint64_t cv = 0;
+    IrValueId ptr_side = IR_NO_VALUE;
+    if (as_const(fn, cmp->operands[1], cv) && cv == 0)
+        ptr_side = cmp->operands[0];
+    else if (as_const(fn, cmp->operands[0], cv) && cv == 0)
+        ptr_side = cmp->operands[1];
+    else
+        return r;
+    if (ptr_side == IR_NO_VALUE ||
+        static_cast<size_t>(ptr_side) >= fn.values.size())
+        return r;
+    const IrType t = fn.values[ptr_side].type;
+    if (t != IrType::PTR && t != IrType::HANDLE) return r;
+
+    r.known = true;
+    r.p_mispredict = 0.03; // punteros casi nunca null en el camino caliente
+    r.confidence = 0.6;    // por encima de const_compare, por debajo del perfil
+    r.cls = BranchClass::AlmostNeverTaken;
+    return r;
+}
+
 } // namespace
 
 double estimate_p_mispredict(const IrFunction &fn, IrValueId cond,
@@ -207,6 +244,7 @@ double estimate_p_mispredict(const IrFunction &fn, IrValueId cond,
     // cuando hay dato medido.
     const PredictorResult preds[] = {
         predict_profile(source_line),
+        predict_pointer_nullcheck(fn, cond),
         predict_data_bittest(fn, cond),
         predict_const_compare(fn, cond),
     };

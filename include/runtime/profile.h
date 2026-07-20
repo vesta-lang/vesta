@@ -65,6 +65,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -196,6 +197,22 @@ void profile_init(const std::string &output_path);
  * para tests o dumps intermedios.
  */
 void profile_dump();
+
+/**
+ * @brief Escribe un perfil de branches indexado por LINEA FUENTE (para PGO de
+ *        la if-conversion, consumido por @c ir::load_branch_profile).
+ *
+ * Recorre @c g_profile.branches (contadores por PC), mapea cada PC a su linea
+ * fuente con @p pc_to_line (0 = sin linea; se descarta), agrega taken/not_taken
+ * por linea y escribe el formato de texto @c "<line> <taken> <nt>".  Se llama
+ * tras la ejecucion, con la VM viva (el @c debug_info sigue accesible).
+ *
+ * @param path       Ruta del perfil de texto a escribir.
+ * @param pc_to_line Callback PC (VM) -> linea fuente (0 si desconocida).
+ * @return numero de lineas escritas.
+ */
+int profile_write_branch_lines(const std::string &path,
+                               const std::function<uint32_t(uint64_t)> &pc_to_line);
 
 /**
  * @brief Registra el resultado de un branch condicional.

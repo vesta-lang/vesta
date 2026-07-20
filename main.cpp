@@ -31,6 +31,7 @@
 #include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
 #include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
+#include "ir/passes/select_policy.h" // PGO: load_branch_profile (if-conversion)
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa
 #include "aot/aot_lower.h" // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
@@ -556,8 +557,10 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())
         // ---- opciones de profiling (D.6 PGO) ----
         ("profile",
-         "Generar @c .vprof con branch/type/alloc counters al exit (PGO para "
-         "C2). Path opcional; default: 'program.vprof'.",
+         "PGO.  Al EJECUTAR (--run): genera '<path>.vprof' (branch/type/alloc "
+         "counters) y '<path>.lines' (perfil de branches por linea fuente, "
+         "requiere compilar con --vex-debug).  Al COMPILAR (--vx): carga "
+         "'<path>.lines' para las decisiones de if-conversion (PGO).",
          cxxopts::value<std::string>()->implicit_value("program.vprof"))
         // ---- opciones de runtime distribuido ----
         ("dist-port",
@@ -2674,6 +2677,19 @@ int main(int argc, char *argv[]) {
         bool emit_only = result.count("vx-emit-only") > 0;
         bool emit_ir = result.count("vx-emit-ir") > 0;
 
+        // PGO consumer: si se paso --profile <path>, cargar '<path>.lines' (el
+        // perfil de branches por linea producido por un run previo) para que la
+        // if-conversion decida con datos medidos.  VESTA_BRANCH_PROFILE sigue
+        // funcionando como alternativa.
+        if (result.count("profile")) {
+            const std::string lines =
+                result["profile"].as<std::string>() + ".lines";
+            const int nload = ir::load_branch_profile(lines.c_str());
+            if (nload > 0)
+                vesta::scout() << "[pgo] perfil de branches cargado: " << lines
+                               << " (" << nload << " lineas)\n";
+        }
+
         // Flags de diagramas (Mermaid y/o Graphviz).  --diagram-all activa
         // los 4 diagramas; --diagram-format elige el formato de salida.
         const bool diag_all = result.count("diagram-all") > 0;
@@ -2848,7 +2864,13 @@ int main(int argc, char *argv[]) {
         // --vx-debug: emite `// @line N` en el .vel y genera la
         // seccion debug en el .velb final.  Por defecto OFF: el ejecutable
         // queda mas pequeno y la compilacion mas rapida.
-        copts.emit_debug = (result.count("vx-debug") > 0);
+        //
+        // --profile lo auto-activa (hidden): el perfil de branches por linea
+        // que produce un run instrumentado necesita la seccion debug (PC ->
+        // linea).  Asi el usuario no tiene que acordarse de --vx-debug para el
+        // ciclo PGO; basta con --profile.
+        copts.emit_debug =
+            (result.count("vx-debug") > 0) || (result.count("profile") > 0);
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por
         // --diagram-format.  Se escriben a archivos al final del bloque.
@@ -4257,6 +4279,25 @@ int main(int argc, char *argv[]) {
             vm->stop();
             const long long ns_stop = t_stop.ns();
             const long long ns_total_run = t_total_run.ns();
+
+            // PGO producer: junto al '.vprof', escribir '<path>.lines' (perfil
+            // de branches por linea, consumido al recompilar).  La VM sigue viva
+            // aqui -> el debug_info (seccion DVBG, requiere --vex-debug) mapea
+            // cada PC a su linea fuente.
+            if (result.count("profile")) {
+                const std::string bp =
+                    result["profile"].as<std::string>() + ".lines";
+                runtime::profile::profile_write_branch_lines(
+                    bp, [&](uint64_t pc) -> uint32_t {
+                        for (const auto &exe : mgr.loader.executables) {
+                            if (!exe || !exe->debug_info) continue;
+                            auto info = exe->debug_info->lookup_line(
+                                static_cast<uint32_t>(pc));
+                            if (info.found && info.line > 0) return info.line;
+                        }
+                        return 0;
+                    });
+            }
 
             if (result.count("stats")) {
                 long long elapsed_ms = elapsed_ns / 1'000'000;

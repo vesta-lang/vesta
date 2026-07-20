@@ -20,6 +20,9 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <functional>
+#include <unordered_map>
+#include <utility>
 
 namespace runtime {
 namespace profile {
@@ -179,6 +182,41 @@ void write_u64(std::ofstream &out, uint64_t v) {
 // en TypeObservation::class_name al momento de la observacion
 // porque al dump (atexit) el ClassRegistry ya esta destruido.
 } // namespace
+
+int profile_write_branch_lines(
+    const std::string &path,
+    const std::function<uint32_t(uint64_t)> &pc_to_line) {
+    if (path.empty()) return 0;
+    // Agregar taken/not_taken por linea fuente.
+    std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> by_line;
+    {
+        std::lock_guard<std::mutex> lk(g_profile.collector_mtx);
+        for (const auto &kv : g_profile.branches) {
+            const uint32_t line = pc_to_line(kv.first);
+            if (line == 0) continue; // sin linea -> se descarta
+            auto &e = by_line[line];
+            e.first += kv.second.taken.load(std::memory_order_relaxed);
+            e.second += kv.second.not_taken.load(std::memory_order_relaxed);
+        }
+    }
+    std::ofstream out(path);
+    if (!out) {
+        std::fprintf(stderr,
+                     "[profile] error: no se pudo abrir '%s' para el perfil de "
+                     "branches\n",
+                     path.c_str());
+        return 0;
+    }
+    int n = 0;
+    for (const auto &kv : by_line) {
+        out << kv.first << ' ' << kv.second.first << ' ' << kv.second.second
+            << '\n';
+        ++n;
+    }
+    std::fprintf(stderr, "[profile] perfil de branches por linea: %s (%d lineas)\n",
+                 path.c_str(), n);
+    return n;
+}
 
 void profile_dump() {
     if (g_profile.output_path.empty()) return;
