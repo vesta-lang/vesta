@@ -7604,7 +7604,8 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
                 case IrOp::VEC_ACC_STORE:
                 case IrOp::VEC_ACC_COMBINE:
                 case IrOp::VEC_BINOP_S:
-                case IrOp::VEC_BCAST:
+                // VEC_BCAST NO escribe memoria (broadcast escalar->registro) ->
+                // fuera de la lista de escrituras.
                 case IrOp::SETFIELD:
                 case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE:
@@ -7622,19 +7623,28 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
                 if (!is_write) continue;
                 loop_has_memory_writes = true;
                 if (licm_alias) {
-                    // Vocabulario compartido: STORE/SETFIELD/ARRAY_STORE/MEMCPY
-                    // dan una write_loc localizable (memcpy NO es opaco); las
-                    // demas (vec/str/raw_asm/call no-pura) son escritura opaca.
+                    // Vocabulario compartido memory_access: STORE/SETFIELD/
+                    // ARRAY_STORE/MEMCPY + VEC data-ops dan write-locs
+                    // localizables (16/32/64 en los vectoriales); VEC_ACC_*
+                    // son opacas; los calls no son accesos de memory_access
+                    // (su efecto lo da EffectAnalysis) -> pura=skip, else opaca.
                     const analysis::MemoryAccess ma =
                         analysis::memory_access(ins, *pt);
-                    if (ma.is_store && !ma.opaque &&
-                        ma.write_loc.kind !=
-                            analysis::effects::AbstractLoc::Kind::Unknown)
-                        loop_store_locs.push_back(ma.write_loc);
-                    else if (licm_is_pure_call(ins)) {
+                    if (ma.touches) {
+                        if (ma.opaque)
+                            loop_opaque_write = true;
+                        else
+                            for (const auto &wloc : ma.writes) {
+                                if (wloc.kind ==
+                                    analysis::effects::AbstractLoc::Kind::Unknown)
+                                    loop_opaque_write = true;
+                                else
+                                    loop_store_locs.push_back(wloc);
+                            }
+                    } else if (licm_is_pure_call(ins)) {
                         /* call PURA: no escribe memoria -> no aporta */
                     } else
-                        loop_opaque_write = true; // escritura opaca
+                        loop_opaque_write = true; // call no-pura / raw_asm / str
                 }
                 // Modo clasico: con una escritura basta.  Modo alias: seguir
                 // acumulando (salvo que ya haya escritura opaca -> nada que refinar).
@@ -7675,10 +7685,12 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
                     // Alias-aware: hoistable si NINGUN store del loop puede
                     // aliasar este load y no hay escritura opaca.
                     if (loop_opaque_write) return false;
-                    const analysis::effects::AbstractLoc lloc =
-                        analysis::memory_access(ins, *pt).read_loc;
-                    for (const auto &sloc : loop_store_locs)
-                        if (analysis::effects::may_alias(lloc, sloc)) return false;
+                    const analysis::MemoryAccess ma =
+                        analysis::memory_access(ins, *pt);
+                    for (const auto &rloc : ma.reads)
+                        for (const auto &sloc : loop_store_locs)
+                            if (analysis::effects::may_alias(rloc, sloc))
+                                return false;
                 } else {
                     if (loop_has_memory_writes) return false;
                 }

@@ -22,6 +22,7 @@
 #include "analysis/memory/points_to.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace ir {
 struct IrInstr;
@@ -44,22 +45,27 @@ int32_t memory_access_size(ir::IrType t);
 /// Es la verdad de bytes compartida con el nivel maquina (mem_size_bytes).
 int32_t memory_access_size_bytes(int32_t raw);
 
-/// Acceso a memoria de UNA instruccion: que lee, que escribe, y donde.
-/// - LOAD/GETFIELD/ARRAY_LOAD/ARRAY_LEN -> is_load, read_loc.
-/// - STORE/SETFIELD/ARRAY_STORE         -> is_store, write_loc.
-/// - MEMCPY                             -> is_load+is_store, read_loc=src,
-///                                          write_loc=dst (NO es opaco: su
-///                                          footprint se conoce).
-/// - Ops que tocan memoria de forma NO localizable (str-ops alloc-side, gc,
-///   atomicos, raw_asm, calls) -> opaque=true (el consumidor decide: barrera).
-/// - El resto (aritmetica pura, control, ...) -> touches=false.
+/// Acceso a memoria de UNA instruccion: que lee, que escribe, y donde.  Un
+/// acceso puede tener VARIAS lecturas/escrituras (una op vectorial VEC_BINOP
+/// lee 2 punteros y escribe 1; VEC_FMA lee 3), por eso @c reads / @c writes son
+/// LISTAS de localizaciones -- ninguna se sub-representa.
+/// - LOAD/GETFIELD/ARRAY_LOAD/ARRAY_LEN -> is_load, reads=[loc].
+/// - STORE/SETFIELD/ARRAY_STORE         -> is_store, writes=[loc].
+/// - MEMCPY   -> reads=[src], writes=[dst] (NO opaco: footprint conocido).
+/// - VEC_UNOP/BINOP/BINOP_S/FMA (data)  -> reads/writes de sus punteros con el
+///   ancho VECTORIAL real (16/32/64 de imm&0xFF).  VEC_BCAST -> touches=false
+///   (broadcast escalar->registro, no toca memoria).
+/// - Ops que tocan memoria de forma NO localizable (VEC_ACC_* con offsets de
+///   acumulador, str-ops alloc-side, gc, atomicos, raw_asm) -> opaque=true.
+/// - Calls y el resto -> touches=false (no es un acceso a memoria localizable;
+///   el efecto de un call lo da EffectAnalysis, no este vocabulario).
 struct MemoryAccess {
     bool touches = false;  ///< accede a memoria (localizable u opaca)
     bool is_load = false;
     bool is_store = false;
     bool opaque = false;   ///< toca memoria pero NO se puede localizar (top)
-    effects::AbstractLoc read_loc;  ///< localizacion leida (si is_load y !opaque)
-    effects::AbstractLoc write_loc; ///< localizacion escrita (si is_store y !opaque)
+    std::vector<effects::AbstractLoc> reads;  ///< localizaciones leidas
+    std::vector<effects::AbstractLoc> writes; ///< localizaciones escritas
 };
 
 /// Calcula el @c MemoryAccess de @p ins usando la tabla points-to @p pt.  El

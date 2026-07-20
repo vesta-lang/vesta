@@ -56,13 +56,15 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
     MemoryAccess a;
     const auto &ops = ins.operands;
     const int32_t w = memory_access_size(ins.type);
+    // Ancho VECTORIAL (16/32/64) para los ops VEC_*: vive en imm&0xFF (bytes).
+    const int32_t vw = memory_access_size_bytes(static_cast<int32_t>(ins.imm & 0xFF));
 
     switch (ins.op) {
     // --- Lecturas con direccion precisa (offset+ancho) ---
     case Op::LOAD:
         if (!ops.empty()) {
             a.touches = a.is_load = true;
-            a.read_loc = loc_of(pt, ops[0], w);
+            a.reads.push_back(loc_of(pt, ops[0], w));
         }
         return a;
     // --- Lecturas de cabecera de objeto (whole-object) ---
@@ -71,14 +73,14 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
     case Op::ARRAY_LEN:
         if (!ops.empty()) {
             a.touches = a.is_load = true;
-            a.read_loc = loc_of(pt, ops[0], 0);
+            a.reads.push_back(loc_of(pt, ops[0], 0));
         }
         return a;
     // --- Escrituras con direccion precisa ---
     case Op::STORE:
         if (ops.size() >= 2) {
             a.touches = a.is_store = true;
-            a.write_loc = loc_of(pt, ops[1], w);
+            a.writes.push_back(loc_of(pt, ops[1], w));
         }
         return a;
     // --- Escrituras a campo/elemento (whole-object) ---
@@ -87,44 +89,73 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
     case Op::GCWB_IR:
         if (!ops.empty()) {
             a.touches = a.is_store = true;
-            a.write_loc = loc_of(pt, ops[0], 0);
+            a.writes.push_back(loc_of(pt, ops[0], 0));
         }
         return a;
-    // --- MEMCPY: NO es opaco.  dst=ops[0], src=ops[1], len=ops[2] (const si
-    //     cabe en 64 B, whole-root si no).  Lee src, escribe dst. ---
+    // --- MEMCPY: NO es opaco.  dst=ops[0] (write), src=ops[1] (read).  El
+    //     offset exacto no se conoce -> whole-root (disjuncion por RAiZ). ---
     case Op::MEMCPY:
         if (ops.size() >= 3) {
-            // dst/src whole-root (width 0): el footprint se conoce (no opaco),
-            // pero el offset exacto dentro del objeto no; disjuncion por RAiZ.
-            a.touches = true;
-            a.is_load = a.is_store = true;
-            a.read_loc = loc_of(pt, ops[1], 0);  // src (whole-root)
-            a.write_loc = loc_of(pt, ops[0], 0); // dst (whole-root)
+            a.touches = a.is_load = a.is_store = true;
+            a.reads.push_back(loc_of(pt, ops[1], 0));  // src
+            a.writes.push_back(loc_of(pt, ops[0], 0)); // dst
         } else {
             a.touches = a.opaque = a.is_store = true;
-            a.write_loc = unknown_loc();
+            a.writes.push_back(unknown_loc());
         }
         return a;
-    // --- Ops VECTORIALES (SIMD 16/32/64 B): TOCAN memoria (dst/acc + src).
-    //     Se marcan como memoria-que-toca OPACA -- el bug seria dejarlas caer a
-    //     touches=false (un VEC_STORE si escribe memoria).  El ancho vive en
-    //     ins.imm (imm=(subop<<8)|ancho); modelar la loc PRECISA (16/32/64 via
-    //     memory_access_size_bytes) queda como follow-up: por ahora opaco =
-    //     sound (aliasa conservador, nunca sub-estima el rango vectorial). ---
-    case Op::VEC_UNOP:
-    case Op::VEC_BINOP:
-    case Op::VEC_FMA:
-    case Op::VEC_BINOP_S:
+
+    // --- Ops VECTORIALES sobre PUNTEROS (SIMD 16/32/64 B): footprint PRECISO.
+    //     El ancho (vw) es 16/32/64 de imm&0xFF; los operandos son punteros a
+    //     memoria (base+i*esz).  NUNCA sub-estimar el rango vectorial. ---
+    case Op::VEC_UNOP: // {dst, src}: escribe dst, lee src
+        if (ops.size() >= 2) {
+            a.touches = a.is_load = a.is_store = true;
+            a.writes.push_back(loc_of(pt, ops[0], vw));
+            a.reads.push_back(loc_of(pt, ops[1], vw));
+        }
+        return a;
+    case Op::VEC_BINOP: // {dst, a, b}: escribe dst, lee a y b
+        if (ops.size() >= 3) {
+            a.touches = a.is_load = a.is_store = true;
+            a.writes.push_back(loc_of(pt, ops[0], vw));
+            a.reads.push_back(loc_of(pt, ops[1], vw));
+            a.reads.push_back(loc_of(pt, ops[2], vw));
+        }
+        return a;
+    case Op::VEC_BINOP_S: // {dst, a, ESCALAR}: escribe dst, lee a (op2 = escalar)
+        if (ops.size() >= 2) {
+            a.touches = a.is_load = a.is_store = true;
+            a.writes.push_back(loc_of(pt, ops[0], vw));
+            a.reads.push_back(loc_of(pt, ops[1], vw));
+        }
+        return a;
+    case Op::VEC_FMA: // {c, d, a, b}: c = a*b + d -> escribe c, lee d/a/b
+        if (ops.size() >= 4) {
+            a.touches = a.is_load = a.is_store = true;
+            a.writes.push_back(loc_of(pt, ops[0], vw));
+            a.reads.push_back(loc_of(pt, ops[1], vw));
+            a.reads.push_back(loc_of(pt, ops[2], vw));
+            a.reads.push_back(loc_of(pt, ops[3], vw));
+        }
+        return a;
+    // --- VEC_BCAST: broadcast de un ESCALAR a un registro vectorial -> NO toca
+    //     memoria (el operando es un valor escalar, el destino es un reg). ---
     case Op::VEC_BCAST:
+        return a; // touches = false
+
+    // --- VEC_ACC_* (acumuladores de reduccion): acc_slot es una region host
+    //     accedida a offsets complejos (acc_imm); modelarla con precision es
+    //     intrincado -> OPACA (sound: aliasa conservador).  Menos comun
+    //     (loops de reduccion).  Follow-up: modelar el offset del acumulador. ---
     case Op::VEC_ACC_ZERO:
     case Op::VEC_ACC_ADD:
     case Op::VEC_ACC_FMA:
     case Op::VEC_ACC_STORE:
     case Op::VEC_ACC_COMBINE:
-        a.touches = a.opaque = true;
-        a.is_load = a.is_store = true; // conservador: leen src y escriben dst/acc
-        a.read_loc = a.write_loc = unknown_loc();
+        a.touches = a.opaque = a.is_load = a.is_store = true;
         return a;
+
     default:
         return a; // no es un acceso a memoria localizable
     }
