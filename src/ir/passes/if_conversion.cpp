@@ -24,10 +24,12 @@
  */
 
 #include "ir/passes/if_conversion.h"
+#include "ir/passes/select_policy.h"
 #include "ir/ssa_ir.h"
 
 #include <cstdlib>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -229,6 +231,56 @@ IrValueId phi_arg_from(const IrInstr &phi, IrBlockId from) {
     return IR_NO_VALUE;
 }
 
+/// @brief Mapa valor -> instruccion que lo define (para reachability rapido).
+using DefIndex = std::unordered_map<IrValueId, const IrInstr *>;
+
+DefIndex build_def_index(const IrFunction &fn) {
+    DefIndex di;
+    for (const auto &b : fn.blocks)
+        for (const auto &ins : b.instrs)
+            if (ins.dst != IR_NO_VALUE) di[ins.dst] = &ins;
+    return di;
+}
+
+/// @brief true si @p start depende (backward, transitivamente) de @p target;
+///        es decir, el valor @p target se usa para calcular @p start.  Cota de
+///        presupuesto para no recorrer todo el grafo en funciones grandes.
+bool value_reaches(const DefIndex &di, IrValueId start, IrValueId target) {
+    if (start == IR_NO_VALUE || target == IR_NO_VALUE) return false;
+    std::vector<IrValueId> stack{start};
+    std::unordered_set<IrValueId> seen;
+    int budget = 512;
+    while (!stack.empty() && budget-- > 0) {
+        const IrValueId v = stack.back();
+        stack.pop_back();
+        if (v == target) return true;
+        if (!seen.insert(v).second) continue;
+        auto it = di.find(v);
+        if (it == di.end()) continue;
+        const IrInstr *d = it->second;
+        for (IrValueId op : d->operands) stack.push_back(op);
+        for (const auto &pa : d->phi_args) stack.push_back(pa.value);
+    }
+    return false;
+}
+
+/// @brief true si algun phi del merge es RECURSIVO: uno de sus args (el valor
+///        del lado true o false) depende del propio dst del phi, lo que indica
+///        que el resultado realimenta una recurrencia de loop (el cmov quedaria
+///        en el camino critico cada iteracion).
+bool merge_phi_loop_carried(const IrFunction &fn, const IrBlock &M,
+                            IrBlockId truePred, IrBlockId falsePred) {
+    const DefIndex di = build_def_index(fn);
+    for (const auto &ins : M.instrs) {
+        if (ins.op != IrOp::PHI) continue;
+        const IrValueId a = phi_arg_from(ins, truePred);
+        const IrValueId b = phi_arg_from(ins, falsePred);
+        if (value_reaches(di, a, ins.dst) || value_reaches(di, b, ins.dst))
+            return true;
+    }
+    return false;
+}
+
 /**
  * @brief Intenta convertir el diamante/triangulo/anidado que arranca en el
  *        bloque @p ci (indice en @c fn.blocks) si termina en BR_COND.
@@ -285,6 +337,23 @@ bool try_convert(IrFunction &fn, const BlockIndex &idx, size_t ci) {
         if (phi_arg_from(ins, truePred) == IR_NO_VALUE ||
             phi_arg_from(ins, falsePred) == IR_NO_VALUE)
             return false;
+    }
+
+    // --- Politica de rentabilidad (modelo mixto) ---------------------------
+    // La LEGALIDAD ya esta comprobada; ahora se decide si CONVIENE la forma
+    // SELECT o mantener el branch.  El coste de cada rama es su numero de
+    // instrucciones especulables (proxy); loop-carried = el resultado
+    // realimenta una recurrencia (cmov en el camino critico).  El escape
+    // VESTA_IF_CONVERSION_ALL=1 fuerza convertir siempre (A/B testing).
+    static const bool force_all = [] {
+        const char *e = std::getenv("VESTA_IF_CONVERSION_ALL");
+        return e && e[0] != '\0' && e[0] != '0';
+    }();
+    if (!force_all) {
+        const bool loop_carried =
+            merge_phi_loop_carried(fn, *M, truePred, falsePred);
+        if (!prefer_select(fn, cond, tc.ninstr, fc.ninstr, loop_carried))
+            return false; // el modelo prefiere el branch -> no convertir
     }
 
     // --- Reescritura -------------------------------------------------------
