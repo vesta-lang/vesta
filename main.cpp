@@ -810,6 +810,12 @@ int main(int argc, char *argv[]) {
             "frontend NO genera datos extra.  Con el flag, el cliente del "
             "debugger puede setear breakpoints por linea Vesta (`b file.vx:42`) "
             "en lugar de solo por addr.")(
+            "no-debug-info",
+            "Desactivar la emision del mapa PC -> linea (seccion DVBG) en el "
+            ".velb.  Por defecto el mapa SE EMITE (barato en tamano, no cambia "
+            "el codigo) para habilitar el auto-PGO del JIT (mapear los "
+            "contadores de branches medidos a su linea fuente) y mejores stack "
+            "traces.  Usa este flag para .velb minimos sin info de debug.")(
             "port",
             "Transpilar el IR a codigo fuente del lenguaje destino y escribir "
             "a <output>.<ext> (e.g. .c).  Valores actuales: 'c'.  Futuro: "
@@ -1065,12 +1071,19 @@ int main(int argc, char *argv[]) {
         }
         if (!profile_path.empty()) {
             runtime::profile::profile_init(profile_path);
-        } else if (const char *pgo = std::getenv("VESTA_JIT_PGO");
-                   pgo && pgo[0] == '1') {
-            /* Auto-PGO del JIT: activa el profiler (sin path -> sin dump) desde
-             * el arranque para que tier-0 recolecte branches ANTES de que el
-             * JIT recompile las funciones calientes con el perfil medido. */
-            runtime::profile::profile_init("");
+        }
+    }
+    /* Auto-PGO del JIT (default-ON): si el JIT esta habilitado (threshold !=
+     * MAX), activar el profiler LIGERO (lock-free, tabla fija) desde el arranque
+     * para que tier-0 recolecte branches y el JIT re-decida la if-conversion con
+     * el perfil medido -- sin que el usuario pida nada.  Escape VESTA_NO_JIT_PGO
+     * =1.  El profiler ligero tiene coste ~1 ciclo por branch, apto para
+     * always-on.  El pesado D.6 (--profile) es aparte. */
+    {
+        const char *no_pgo = std::getenv("VESTA_NO_JIT_PGO");
+        const bool jit_on = (jit::g_jit_threshold != UINT32_MAX);
+        if (jit_on && !(no_pgo && no_pgo[0] == '1')) {
+            runtime::profile::lite_profile_set_active(true);
         }
     }
     const bool jit_stats_requested = result.count("jit-stats") > 0;
@@ -2871,11 +2884,14 @@ int main(int argc, char *argv[]) {
         // seccion debug en el .velb final.  Por defecto OFF: el ejecutable
         // queda mas pequeno y la compilacion mas rapida.
         //
-        // --profile lo auto-activa (hidden): el perfil de branches por linea
-        // que produce un run instrumentado necesita la seccion debug (PC ->
-        // linea).  Asi el usuario no tiene que acordarse de --vx-debug para el
-        // ciclo PGO; basta con --profile.
+        // El mapa PC -> linea (seccion DVBG) se emite POR DEFECTO: es barato en
+        // tamano, no cambia el codigo ejecutable, y habilita (a) el auto-PGO del
+        // JIT (mapear los contadores de branches medidos a su linea fuente para
+        // re-decidir la if-conversion) y (b) mejores stack traces.  --no-debug-
+        // info lo desactiva (para .velb minimos).  --vx-debug/--profile lo
+        // fuerzan aunque se pase --no-debug-info por error.
         copts.emit_debug =
+            (result.count("no-debug-info") == 0) ||
             (result.count("vx-debug") > 0) || (result.count("profile") > 0);
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por

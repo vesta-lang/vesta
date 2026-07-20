@@ -564,10 +564,15 @@ void exec_instr_jmp(ProcessVM *vm, const DecodedInstr &instr) {
     // Sprint D.6 (2026-06-03): branch frequency counter para PGO.
     // Solo registramos branches CONDICIONALES (cond < 0x0E); los
     // incondicionales (0x0F+) no aportan info al C2.
-    if (cond < 0x0E &&
-        __builtin_expect(
-            profile::g_profile.active.load(std::memory_order_relaxed), 0)) {
-        profile::profile_branch(vm->registers.rip.raw(), taken);
+    if (cond < 0x0E) {
+        const uint64_t bpc = vm->registers.rip.raw();
+        // Profiler ligero (auto-PGO del JIT): self-guarded, ~1 ciclo cuando OFF.
+        profile::lite_profile_branch(bpc, taken);
+        // Profiler pesado D.6 (--profile): solo cuando activo.
+        if (__builtin_expect(
+                profile::g_profile.active.load(std::memory_order_relaxed), 0)) {
+            profile::profile_branch(bpc, taken);
+        }
     }
 
     if (taken) write_rip(vm, addr); // actualizar RIP al destino del salto

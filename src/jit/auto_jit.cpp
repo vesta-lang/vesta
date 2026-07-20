@@ -216,25 +216,6 @@ bool osr_opt_enabled() {
     return on;
 }
 
-/** @brief Gate del auto-PGO del JIT (opt-in VESTA_JIT_PGO=1, default OFF).
- *
- *  Cuando esta activo, el JIT re-decide la if-conversion de cada funcion
- *  caliente con el perfil de branches MEDIDO en tiempo de ejecucion (contadores
- *  del profiler D.6 mapeados a linea fuente).  El JIT permanece
- *  VM-INDEPENDIENTE: la re-optimizacion (if_conversion/select_simplify) solo lee
- *  @c ir::g_branch_profile (datos planos); el UNICO acceso a la VM es el bridge
- *  @c profile_apply_branch_lines, invocado desde el glue (que si tiene la VM).
- *
- *  Es opt-in porque activar el profiler D.6 (mutex por branch) en tier-0 tiene
- *  coste; el default lo deja apagado (cero overhead/riesgo).  Cacheado. */
-bool jit_pgo_enabled() {
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_JIT_PGO");
-        return v && v[0] == '1';
-    }();
-    return on;
-}
-
 /** @brief Handler de OSR instalado via set_osr_handler.  Lookup del
  *  OSR-entry precompilado para @p loop_id (0 si no hay variante). */
 uint64_t osr_lookup_handler(uint64_t loop_id) {
@@ -968,31 +949,32 @@ void maybe_compile_method(runtime::ProcessVM *vm,
      * PC->linea con el debug_info (aqui, en el glue que si tiene la VM). */
     ir::IrFunction pgo_clone;
     const ir::IrFunction *compile_ir = ir_fn;
-    if (jit_pgo_enabled() &&
-        runtime::profile::g_profile.active.load(std::memory_order_relaxed)) {
+    if (runtime::profile::lite_profile_active()) {
         /* Bridge runtime->IR: vuelca los contadores por PC al almacen por-linea
          * que consume la if-conversion.  pc_to_line via debug_info. */
-        runtime::profile::profile_apply_branch_lines([&](uint64_t pc) -> uint32_t {
-            for (const auto &exe : owning_vm.loader_public.executables) {
-                if (!exe || !exe->debug_info) continue;
-                auto info =
-                    exe->debug_info->lookup_line(static_cast<uint32_t>(pc));
-                if (info.found && info.line > 0) return info.line;
-            }
-            return 0;
-        });
+        const int applied =
+            runtime::profile::profile_apply_branch_lines([&](uint64_t pc)
+                                                             -> uint32_t {
+                for (const auto &exe : owning_vm.loader_public.executables) {
+                    if (!exe || !exe->debug_info) continue;
+                    auto info =
+                        exe->debug_info->lookup_line(static_cast<uint32_t>(pc));
+                    if (info.found && info.line > 0) return info.line;
+                }
+                return 0;
+            });
         /* Re-optimizacion VM-free sobre un clon: if-conversion (con predict_
          * profile ahora dominante) + canonicalizacion de SELECT. */
         pgo_clone = *ir_fn;
         bool any = ir::ir_pass_if_conversion(pgo_clone);
         any = ir::ir_pass_select_simplify(pgo_clone) || any;
-        if (any) {
-            compile_ir = &pgo_clone;
-            if (g_jit_warn_unsupported)
-                std::fprintf(stderr,
-                             "[jit-pgo] '%s' re-if-convertida con perfil medido\n",
-                             key.c_str());
-        }
+        if (any) compile_ir = &pgo_clone;
+        if (g_jit_warn_unsupported && applied > 0)
+            std::fprintf(stderr,
+                         "[jit-pgo] '%s': %d lineas de perfil medido, "
+                         "re-if-conversion %s\n",
+                         key.c_str(), applied,
+                         any ? "cambio el IR" : "sin cambio");
     }
 
     /* Phase D.7 (opt-in): intento vreg con el resolver recursivo + native

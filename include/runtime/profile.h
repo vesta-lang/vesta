@@ -175,6 +175,78 @@ struct ProfileCollector {
 /// proceso.  Inicializado lazy en @c profile_init().
 extern ProfileCollector g_profile;
 
+// ===========================================================================
+// Profiler LIGERO de branches (lock-free) para el auto-PGO del JIT (default-ON)
+// ===========================================================================
+//
+// El profiler D.6 (arriba) usa mutex + unordered_map por PC: correcto para el
+// dump completo del `.vprof`, pero demasiado pesado para dejarlo SIEMPRE activo
+// en tier-0 (el interp).  El auto-PGO del JIT necesita datos de branches
+// recolectados durante tier-0 SIN penalizar; para eso este profiler ligero:
+//
+//   - Tabla de tamano FIJO (potencia de 2) indexada por hash del PC.  Cero
+//     asignacion dinamica, cero mutex.
+//   - Cada entrada: {pc, taken, not_taken} atomicos (relaxed).  Insercion via
+//     un CAS del slot vacio; colision con otro PC -> se DESCARTA la muestra
+//     (perfil aproximado, aceptable para una heuristica de rentabilidad).
+//   - Fast path OFF: 1 load relaxed + branch predicho -> ~1 ciclo.  Se puede
+//     dejar activo siempre que el JIT este habilitado sin coste apreciable.
+//
+// Es un perfil APROXIMADO por diseno (colisiones se pierden); para el PGO de la
+// if-conversion basta el orden de magnitud de P(mispredict) por linea.
+
+/// @brief Entrada del profiler ligero (una ranura de la tabla fija).
+struct LiteBranchSlot {
+    std::atomic<uint64_t> pc{0}; ///< PC del branch; 0 = ranura vacia.
+    std::atomic<uint32_t> taken{0};
+    std::atomic<uint32_t> not_taken{0};
+};
+
+/// Numero de ranuras (potencia de 2).  16384 * 16B = 256 KB estaticos.
+constexpr size_t kLiteBranchSlots = 1u << 14;
+constexpr uint64_t kLiteBranchMask = kLiteBranchSlots - 1;
+
+/// Tabla estatica del profiler ligero + flag de actividad.
+extern LiteBranchSlot g_lite_branches[kLiteBranchSlots];
+extern std::atomic<bool> g_lite_active;
+
+/// @brief Activa/desactiva el profiler ligero (lo hace @c main al habilitar el
+///        JIT).  Idempotente.
+void lite_profile_set_active(bool on);
+
+/// @brief True si el profiler ligero esta recolectando.
+inline bool lite_profile_active() {
+    return g_lite_active.load(std::memory_order_relaxed);
+}
+
+/**
+ * @brief Registra un branch en el profiler ligero (lock-free).  Fast path OFF
+ *        = 1 load + branch.  ON = hash + 1-2 atomicas relaxed.  Colision con
+ *        otro PC -> muestra descartada (perfil aproximado por diseno).
+ * @param pc    PC del branch (VM address).
+ * @param taken True si la condicion fue verdadera.
+ */
+inline void lite_profile_branch(uint64_t pc, bool taken) {
+    if (!g_lite_active.load(std::memory_order_relaxed)) return; // fast path OFF
+    // Hash de Fibonacci (multiplicativo) -> buena dispersion de PCs.
+    const uint64_t h = (pc * 0x9E3779B97F4A7C15ull) >> (64 - 14);
+    LiteBranchSlot &slot = g_lite_branches[h & kLiteBranchMask];
+    uint64_t cur = slot.pc.load(std::memory_order_relaxed);
+    if (cur != pc) {
+        if (cur != 0) return; // ranura ocupada por otro PC: descartar muestra
+        uint64_t expected = 0; // reclamar la ranura vacia
+        if (!slot.pc.compare_exchange_strong(expected, pc,
+                                              std::memory_order_relaxed) &&
+            expected != pc) {
+            return; // otro thread la reclamo con un PC distinto: descartar
+        }
+    }
+    if (taken)
+        slot.taken.fetch_add(1, std::memory_order_relaxed);
+    else
+        slot.not_taken.fetch_add(1, std::memory_order_relaxed);
+}
+
 /**
  * @brief Inicializa el profiler con un path de salida.
  *

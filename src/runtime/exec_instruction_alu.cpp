@@ -1587,10 +1587,14 @@ void exec_instr_cmpjmp(ProcessVM *vm, const DecodedInstr &instr) {
     const bool taken =
         eval_jmp_cond(static_cast<uint8_t>(sd._pad), vm->registers.flags.bits);
     // Sprint D.6: profile counter para branches fusionados.
-    if (__builtin_expect(
-            runtime::profile::g_profile.active.load(std::memory_order_relaxed),
-            0)) {
-        runtime::profile::profile_branch(vm->registers.rip.raw(), taken);
+    {
+        const uint64_t bpc = vm->registers.rip.raw();
+        runtime::profile::lite_profile_branch(bpc, taken);
+        if (__builtin_expect(runtime::profile::g_profile.active.load(
+                                 std::memory_order_relaxed),
+                             0)) {
+            runtime::profile::profile_branch(bpc, taken);
+        }
     }
     if (taken) {
         write_rip(vm, static_cast<uint64_t>(sd.offset)); // salto absoluto u32
@@ -1611,10 +1615,14 @@ void exec_instr_cmpjmpu(ProcessVM *vm, const DecodedInstr &instr) {
     const bool taken =
         eval_jmp_cond(static_cast<uint8_t>(sd._pad), vm->registers.flags.bits);
     // Sprint D.6: profile counter para branches fusionados unsigned.
-    if (__builtin_expect(
-            runtime::profile::g_profile.active.load(std::memory_order_relaxed),
-            0)) {
-        runtime::profile::profile_branch(vm->registers.rip.raw(), taken);
+    {
+        const uint64_t bpc = vm->registers.rip.raw();
+        runtime::profile::lite_profile_branch(bpc, taken);
+        if (__builtin_expect(runtime::profile::g_profile.active.load(
+                                 std::memory_order_relaxed),
+                             0)) {
+            runtime::profile::profile_branch(bpc, taken);
+        }
     }
     if (taken) {
         write_rip(vm, static_cast<uint64_t>(sd.offset));
@@ -1642,10 +1650,14 @@ void exec_instr_decjnz(ProcessVM *vm, const DecodedInstr &instr) {
     // Saltar si new_val != 0 (equivale a jmp.jne post-subs).
     const bool taken = (new_val != 0ULL);
     // Sprint D.6: profile counter para decjnz (loop counter).
-    if (__builtin_expect(
-            runtime::profile::g_profile.active.load(std::memory_order_relaxed),
-            0)) {
-        runtime::profile::profile_branch(vm->registers.rip.raw(), taken);
+    {
+        const uint64_t bpc = vm->registers.rip.raw();
+        runtime::profile::lite_profile_branch(bpc, taken);
+        if (__builtin_expect(runtime::profile::g_profile.active.load(
+                                 std::memory_order_relaxed),
+                             0)) {
+            runtime::profile::profile_branch(bpc, taken);
+        }
     }
     if (taken) {
         write_rip(vm, static_cast<uint64_t>(sd.offset));

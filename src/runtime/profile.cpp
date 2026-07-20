@@ -33,6 +33,14 @@ namespace profile {
 /// los hooks no paga overhead.
 ProfileCollector g_profile;
 
+// Tabla estatica del profiler ligero (lock-free) + flag de actividad.
+LiteBranchSlot g_lite_branches[kLiteBranchSlots];
+std::atomic<bool> g_lite_active{false};
+
+void lite_profile_set_active(bool on) {
+    g_lite_active.store(on, std::memory_order_release);
+}
+
 namespace {
 std::once_flag g_atexit_once;
 
@@ -221,9 +229,22 @@ int profile_write_branch_lines(
 
 int profile_apply_branch_lines(
     const std::function<uint32_t(uint64_t)> &pc_to_line) {
-    // Agregar taken/not_taken por linea fuente (igual que la variante a
-    // archivo, pero alimentando directo el almacen de la if-conversion).
+    // Agregar taken/not_taken por linea fuente.  Se leen AMBAS fuentes: el
+    // profiler ligero (auto-PGO del JIT, always-on con el JIT) y el pesado D.6
+    // (--profile).  La linea comun se suma; asi el bridge funciona con
+    // cualquiera de los dos activo.
     std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> by_line;
+    // Fuente 1: profiler ligero (tabla fija lock-free).
+    for (size_t i = 0; i < kLiteBranchSlots; ++i) {
+        const uint64_t pc = g_lite_branches[i].pc.load(std::memory_order_relaxed);
+        if (pc == 0) continue;
+        const uint32_t line = pc_to_line(pc);
+        if (line == 0) continue;
+        auto &e = by_line[line];
+        e.first += g_lite_branches[i].taken.load(std::memory_order_relaxed);
+        e.second += g_lite_branches[i].not_taken.load(std::memory_order_relaxed);
+    }
+    // Fuente 2: profiler pesado D.6 (si estaba activo con --profile).
     {
         std::lock_guard<std::mutex> lk(g_profile.collector_mtx);
         for (const auto &kv : g_profile.branches) {
