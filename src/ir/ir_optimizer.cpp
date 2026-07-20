@@ -8980,8 +8980,25 @@ static bool is_sched_terminator(IrOp op) {
            op == IrOp::THROW;
 }
 
-bool ir_pass_schedule(IrFunction &fn) {
+bool ir_pass_schedule(IrFunction &fn,
+                      const std::unordered_set<std::string> *pure_callees) {
     bool changed = false;
+
+    // Pure-call advance (SCHEDULER SEMANTICO): una CALL/TAILCALL a un callee
+    // TOTALMENTE PURO deja de ser BARRERA de scheduling -> el scheduler puede
+    // mover instrucciones a traves de ella (mas ILP expuesto).  La pureza NO
+    // existe NATURALMENTE a nivel maquina: un scheduler maquina trata toda
+    // llamada como barrera porque no la conoce.  En IR, en cambio, la pureza la
+    // da EffectAnalysis de forma NATURAL y BARATA (la maquinaria -- ASA que
+    // liftea asm->IR + EffectAnalysis + base de hechos -- ya esta construida).
+    // Por la regla "cada opt en el nivel donde la info esta disponible de forma
+    // natural y con menor coste de obtencion", vive AQUI.  Ademas es
+    // ISA-INDEPENDIENTE (una vez, todos los targets).
+    auto is_pure_sched_call = [&](const IrInstr &ins) -> bool {
+        if (!pure_callees) return false;
+        if (ins.op != IrOp::CALL && ins.op != IrOp::TAILCALL) return false;
+        return !ins.func_name.empty() && pure_callees->count(ins.func_name) > 0;
+    };
 
     // Modelo de memoria UNICO para las hazards del DAG (alias-aware, gated).
     analysis::PointsTo sched_pt;
@@ -9112,7 +9129,10 @@ bool ir_pass_schedule(IrFunction &fn) {
             }
 
             /* Memory/side-effect deps. */
-            const bool is_barr = is_sched_barrier(ins.op);
+            // Una pure-call NO es barrera (movimiento semantico unico); gated
+            // bajo el scheduler semantico y con el guard de asm (use_alias).
+            const bool is_barr =
+                is_sched_barrier(ins.op) && !(use_alias && is_pure_sched_call(ins));
             const bool is_st = is_store_like(ins.op);
             const bool is_ld = is_load_like(ins.op);
 
@@ -9837,7 +9857,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     // (la pureza total se PRESERVA bajo optimizacion -> sound usar el pre-opt).
     // Conocimiento que el DSE por si solo no puede tener; se lo da EffectAnalysis.
     std::unordered_set<std::string> pure_callees;
-    if (g_dse_pure_calls) {
+    if (g_dse_pure_calls || g_sched_alias) {
         analysis::effects::EffectAnalysis ea;
         const analysis::effects::ModuleSummary &ms = ea.module_summary(mod);
         for (const auto &kv : ms.fns) {
@@ -10022,7 +10042,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level >= OptLevel::O2) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            ir_pass_schedule(fn);
+            ir_pass_schedule(fn, &pure_callees);
         }
     }
 }

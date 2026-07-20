@@ -723,7 +723,8 @@ bool ir_pass_load_narrow(IrFunction &fn);
  *
  * @return true si reordeno al menos un basic block.
  */
-bool ir_pass_schedule(IrFunction &fn);
+bool ir_pass_schedule(IrFunction &fn,
+                      const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Registra un helper @c __new_<X> como "puro" (sin side effects
