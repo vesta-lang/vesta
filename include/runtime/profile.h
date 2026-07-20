@@ -215,6 +215,22 @@ int profile_write_branch_lines(const std::string &path,
                                const std::function<uint32_t(uint64_t)> &pc_to_line);
 
 /**
+ * @brief Bridge desacoplado runtime -> IR: vuelca el perfil de branches medido
+ *        (contadores por PC) al almacen por-linea que consume la if-conversion
+ *        (@c ir::set_branch_profile_entry), SIN pasar por un archivo.
+ *
+ * Es la pieza que mantiene al JIT VM-INDEPENDIENTE: el JIT (if-conversion +
+ * politica de SELECT) solo lee @c ir::g_branch_profile (datos planos, sin tipos
+ * de la VM); este bridge, del lado runtime, es el UNICO que toca @c debug_info
+ * (via @p pc_to_line) para alimentarlo.  Asi el auto-PGO no acopla el JIT a la
+ * VM.  P(mispredict) = min(taken,nt)/(taken+nt) por linea agregada.
+ *
+ * @param pc_to_line Callback PC (VM) -> linea fuente (0 si desconocida).
+ * @return numero de lineas volcadas al almacen de la if-conversion.
+ */
+int profile_apply_branch_lines(const std::function<uint32_t(uint64_t)> &pc_to_line);
+
+/**
  * @brief Registra el resultado de un branch condicional.
  *
  * Llamado desde @c exec_instr_jmp (cuando cond != 0x0F que es

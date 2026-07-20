@@ -11,6 +11,7 @@
 
 #include "runtime/profile.h"
 
+#include "ir/passes/select_policy.h"
 #include "loader/oop_types.h"
 
 #include <atomic>
@@ -215,6 +216,36 @@ int profile_write_branch_lines(
     }
     std::fprintf(stderr, "[profile] perfil de branches por linea: %s (%d lineas)\n",
                  path.c_str(), n);
+    return n;
+}
+
+int profile_apply_branch_lines(
+    const std::function<uint32_t(uint64_t)> &pc_to_line) {
+    // Agregar taken/not_taken por linea fuente (igual que la variante a
+    // archivo, pero alimentando directo el almacen de la if-conversion).
+    std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> by_line;
+    {
+        std::lock_guard<std::mutex> lk(g_profile.collector_mtx);
+        for (const auto &kv : g_profile.branches) {
+            const uint32_t line = pc_to_line(kv.first);
+            if (line == 0) continue; // sin linea -> se descarta
+            auto &e = by_line[line];
+            e.first += kv.second.taken.load(std::memory_order_relaxed);
+            e.second += kv.second.not_taken.load(std::memory_order_relaxed);
+        }
+    }
+    int n = 0;
+    for (const auto &kv : by_line) {
+        const uint64_t taken = kv.second.first;
+        const uint64_t nt = kv.second.second;
+        const uint64_t total = taken + nt;
+        if (total == 0) continue;
+        // P(mispredict) = fraccion de la rama minoritaria.
+        const uint64_t minor = taken < nt ? taken : nt;
+        const double p = static_cast<double>(minor) / static_cast<double>(total);
+        ir::set_branch_profile_entry(kv.first, p);
+        ++n;
+    }
     return n;
 }
 

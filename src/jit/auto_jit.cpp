@@ -27,6 +27,11 @@
 #include "loader/loader.h"
 #include "loader/oop_types.h"
 #include "ir/ir_optimizer.h" // C2.4: devirt especulativa + inline
+#include "ir/passes/if_conversion.h"  // auto-PGO del JIT: re-if-conversion
+#include "ir/passes/select_simplify.h"
+#include "ir/passes/select_policy.h"
+#include "runtime/profile.h"           // bridge runtime->IR del perfil medido
+#include "debug/debug_info.h"          // PC -> linea fuente
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/scheduler.h"
@@ -207,6 +212,25 @@ bool osr_opt_enabled() {
     static const bool on = [] {
         const char *v = std::getenv("VESTA_OSR_OPT");
         return !(v && v[0] == '0'); // default ON; solo "0" lo apaga
+    }();
+    return on;
+}
+
+/** @brief Gate del auto-PGO del JIT (opt-in VESTA_JIT_PGO=1, default OFF).
+ *
+ *  Cuando esta activo, el JIT re-decide la if-conversion de cada funcion
+ *  caliente con el perfil de branches MEDIDO en tiempo de ejecucion (contadores
+ *  del profiler D.6 mapeados a linea fuente).  El JIT permanece
+ *  VM-INDEPENDIENTE: la re-optimizacion (if_conversion/select_simplify) solo lee
+ *  @c ir::g_branch_profile (datos planos); el UNICO acceso a la VM es el bridge
+ *  @c profile_apply_branch_lines, invocado desde el glue (que si tiene la VM).
+ *
+ *  Es opt-in porque activar el profiler D.6 (mutex por branch) en tier-0 tiene
+ *  coste; el default lo deja apagado (cero overhead/riesgo).  Cacheado. */
+bool jit_pgo_enabled() {
+    static const bool on = [] {
+        const char *v = std::getenv("VESTA_JIT_PGO");
+        return v && v[0] == '1';
     }();
     return on;
 }
@@ -937,13 +961,47 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         };
     }
 
+    /* Auto-PGO del JIT (opt-in VESTA_JIT_PGO): re-decide la if-conversion de
+     * esta funcion caliente con el perfil de branches MEDIDO en runtime.  El
+     * JIT sigue VM-independiente: la re-optimizacion solo lee ir::g_branch_
+     * profile (datos planos); el UNICO acceso a la VM es el bridge que mapea
+     * PC->linea con el debug_info (aqui, en el glue que si tiene la VM). */
+    ir::IrFunction pgo_clone;
+    const ir::IrFunction *compile_ir = ir_fn;
+    if (jit_pgo_enabled() &&
+        runtime::profile::g_profile.active.load(std::memory_order_relaxed)) {
+        /* Bridge runtime->IR: vuelca los contadores por PC al almacen por-linea
+         * que consume la if-conversion.  pc_to_line via debug_info. */
+        runtime::profile::profile_apply_branch_lines([&](uint64_t pc) -> uint32_t {
+            for (const auto &exe : owning_vm.loader_public.executables) {
+                if (!exe || !exe->debug_info) continue;
+                auto info =
+                    exe->debug_info->lookup_line(static_cast<uint32_t>(pc));
+                if (info.found && info.line > 0) return info.line;
+            }
+            return 0;
+        });
+        /* Re-optimizacion VM-free sobre un clon: if-conversion (con predict_
+         * profile ahora dominante) + canonicalizacion de SELECT. */
+        pgo_clone = *ir_fn;
+        bool any = ir::ir_pass_if_conversion(pgo_clone);
+        any = ir::ir_pass_select_simplify(pgo_clone) || any;
+        if (any) {
+            compile_ir = &pgo_clone;
+            if (g_jit_warn_unsupported)
+                std::fprintf(stderr,
+                             "[jit-pgo] '%s' re-if-convertida con perfil medido\n",
+                             key.c_str());
+        }
+    }
+
     /* Phase D.7 (opt-in): intento vreg con el resolver recursivo + native
      * resolver ya construidos (mc_opts) -> los CALL a otras funciones Vesta se
      * resuelven/compilan por vreg en vez de bailar a slots.  Si la funcion no
      * es del subset vreg, cae al compile_with_opts (slots) de abajo. */
     if (g_jit_use_vregs) {
         uint8_t *vcode = vreg_compile(
-            *ir_fn, *g_code_cache, mc_opts.resolve_user_fn, make_vreg_entries(),
+            *compile_ir, *g_code_cache, mc_opts.resolve_user_fn, make_vreg_entries(),
             mc_opts.resolve_native_fn, mc_sym_res);
         if (vcode != nullptr) {
             method->jit_code = reinterpret_cast<void *>(vcode);

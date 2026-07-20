@@ -412,6 +412,13 @@ void set_target_cost_model(double cmov_latency, double mispredict_penalty) {
     if (mispredict_penalty > 0.0) g_mispredict_penalty = mispredict_penalty;
 }
 
+void set_branch_profile_entry(uint32_t source_line, double p_mispredict) {
+    if (source_line == 0) return;
+    if (p_mispredict < 0.0) p_mispredict = 0.0;
+    if (p_mispredict > 1.0) p_mispredict = 1.0;
+    g_branch_profile[source_line] = p_mispredict;
+}
+
 int load_branch_profile(const char *path) {
     if (!path) return 0;
     std::FILE *f = std::fopen(path, "r");

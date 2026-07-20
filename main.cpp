@@ -1065,6 +1065,12 @@ int main(int argc, char *argv[]) {
         }
         if (!profile_path.empty()) {
             runtime::profile::profile_init(profile_path);
+        } else if (const char *pgo = std::getenv("VESTA_JIT_PGO");
+                   pgo && pgo[0] == '1') {
+            /* Auto-PGO del JIT: activa el profiler (sin path -> sin dump) desde
+             * el arranque para que tier-0 recolecte branches ANTES de que el
+             * JIT recompile las funciones calientes con el perfil medido. */
+            runtime::profile::profile_init("");
         }
     }
     const bool jit_stats_requested = result.count("jit-stats") > 0;

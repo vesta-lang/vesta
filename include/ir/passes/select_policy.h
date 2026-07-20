@@ -119,6 +119,15 @@ void set_target_cost_model(double cmov_latency, double mispredict_penalty);
  */
 int load_branch_profile(const char *path);
 
+/**
+ * @brief Inserta/actualiza una entrada del perfil de branches por linea (mismo
+ *        almacen que @c load_branch_profile / @c predict_profile).  Lo usa el
+ *        auto-PGO del JIT: al recompilar una funcion caliente, vuelca el perfil
+ *        de runtime (contadores del profiler mapeados a linea via debug_info) a
+ *        este almacen para que la if-conversion re-decida con datos medidos.
+ */
+void set_branch_profile_entry(uint32_t source_line, double p_mispredict);
+
 } // namespace ir
 
 #endif // IR_PASSES_SELECT_POLICY_H

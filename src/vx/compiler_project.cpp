@@ -33,6 +33,7 @@
 
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
+#include "ir/passes/select_policy.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "vx/lexer.h"
@@ -2635,6 +2636,22 @@ CompileResult compile_vx_project(
     //    dependeria del optimizador (`return this.swap(v)` es parcial O(1), no
     //    O(n) por el bucle de swap inyectado).  El coste TOTAL lo compone el
     //    analizador via el callgraph.  Fuera de --analyze, inline normal.
+    // Multi-ISA: la rentabilidad de la if-conversion (SELECT vs branch) depende
+    // de la microarquitectura destino (cmov ~2c x86, csel ~1c ARM64, sin cmov
+    // nativo en RISC-V).  Ajustamos el modelo de coste al arch del TARGET activo
+    // antes de optimizar; asi la decision horneada en el IR corresponde a la ISA
+    // para la que se compila (host x86_64 por defecto).
+    {
+        std::string tisa_os, tisa_arch;
+        vx::get_aot_condcomp_target(tisa_os, tisa_arch);
+        if (tisa_arch == "arm64" || tisa_arch == "aarch64")
+            ir::set_target_isa(ir::TargetIsa::ARM64);
+        else if (tisa_arch == "riscv" || tisa_arch == "riscv64")
+            ir::set_target_isa(ir::TargetIsa::RISCV);
+        else
+            ir::set_target_isa(ir::TargetIsa::X86_64);
+    }
+
     ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
                     /*allow_inline=*/!opts.emit_ir_preopt);
 
