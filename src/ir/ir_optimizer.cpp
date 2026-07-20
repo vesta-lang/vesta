@@ -5402,6 +5402,17 @@ static bool g_sched_alias = [] {
     return e && e[0] == '1';
 }();
 
+// Load-to-load CSE (nuevo consumidor del alias): el DSE ya forwardea store->load
+// (last_store_val); con esto un LOAD que NO forwardea registra su valor como
+// disponible para su direccion -> un LOAD POSTERIOR de la MISMA direccion
+// (must-alias, sin store aliasante entre medias) reusa el primero (LOAD -> MOV).
+// Reusa la invalidacion probada del DSE (stores/barreras limpian last_store_val).
+// A/B via VESTA_LOAD_CSE=1; default OFF hasta validar e2e 3 modos.
+static bool g_load_cse = [] {
+    const char *e = std::getenv("VESTA_LOAD_CSE");
+    return e && e[0] == '1';
+}();
+
 // LICM alias-aware (consumidor del modelo de memoria UNICO): hoistear un LOAD
 // invariante aunque el loop tenga escrituras, si NINGUN store del loop puede
 // aliasar su localizacion Y toda call del loop es pura.  Hoy LICM bloquea TODOS
@@ -5959,6 +5970,12 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         // MISMO tipo, podemos reemplazar el LOAD por MOV del valor
         // almacenado (ahorra la lectura de memoria + cualquier conversion).
         std::map<AddrKey, std::pair<IrValueId, IrType>> last_store_val;
+        // Load-to-load CSE (g_load_cse): claves cuyo valor lo registro un LOAD
+        // (no un STORE).  Un valor cargado solo vale mientras NADIE escriba
+        // memoria -- un STORE puede aliasar via roots imprecisos (reborrow) que
+        // la invalidacion por-clave del DSE no cubre.  Por eso se invalidan en
+        // CUALQUIER store (conservador y sound; el store->load exacto no se toca).
+        std::set<AddrKey> load_recorded;
         // Set de indices marcados como dead
         std::vector<bool> dead(bb.instrs.size(), false);
 
@@ -6048,6 +6065,13 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                     last_store_val.clear();
                     break;
                 }
+                // Load-to-load CSE: un store (heap O stack) puede aliasar una
+                // entrada registrada por LOAD via roots imprecisos (reborrow)
+                // -> invalidar TODAS las load-recorded (conservador, sound).
+                if (g_load_cse && !load_recorded.empty()) {
+                    for (const AddrKey &k : load_recorded) last_store_val.erase(k);
+                    load_recorded.clear();
+                }
                 if (root_kind[ai->second.root] == RootKind::HEAP) {
                     // Puntero de HEAP: no aliasa ningun slot de STACK, y las
                     // direcciones de heap no se trackean -> ni invalida ni
@@ -6126,6 +6150,17 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                 }
                 // note_read ya retiro los stores leidos de 'pending'
                 // (no son dead: acabamos de demostrar que ESTE LOAD los lee).
+                //
+                // LOAD-TO-LOAD CSE: si este LOAD no forwardeo (sigue siendo
+                // LOAD), su valor queda DISPONIBLE en su direccion -> un LOAD
+                // posterior de la misma direccion (must-alias) lo reusara.  La
+                // invalidacion (kill_val_overlapping en stores, clear en
+                // barreras) ya la hace el DSE -> sound.  Gated.
+                if (g_load_cse && ins.op == IrOp::LOAD &&
+                    ins.dst != IR_NO_VALUE) {
+                    last_store_val[lkey] = {ins.dst, ins.type};
+                    load_recorded.insert(lkey);
+                }
                 break;
             }
             case IrOp::ARRAY_LOAD:
