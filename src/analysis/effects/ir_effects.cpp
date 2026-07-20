@@ -110,7 +110,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     case IrOp::FADD: case IrOp::FSUB: case IrOp::FMUL: case IrOp::FDIV:
     case IrOp::FNEG: case IrOp::FABS: case IrOp::FSQRT: case IrOp::FMIN:
     case IrOp::FMAX: case IrOp::FFLOOR: case IrOp::FCEIL: case IrOp::FROUND:
-    case IrOp::FTRUNC: case IrOp::VEC_UNOP: case IrOp::VEC_BINOP: case IrOp::VEC_FMA:
+    case IrOp::FTRUNC:
     case IrOp::AND: case IrOp::OR: case IrOp::XOR: case IrOp::NOT:
     case IrOp::SHL: case IrOp::SHR: case IrOp::SAR: case IrOp::CLZ: case IrOp::CTZ:
     case IrOp::POPCNT: case IrOp::BYTESWAP: case IrOp::ROTL: case IrOp::ROTR:
@@ -167,10 +167,28 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         // leen la cabecera del objeto (ancho desconocido = objeto entero).
         if (!ops.empty()) add_read(e, loc(ops[0], 0));
         break;
+    // MEMCPY + ops VECTORIALES: delegan en el vocabulario UNICO memory_access
+    // (memcpy NO es opaco; los VEC ESCRIBEN memoria -- antes VEC_UNOP/BINOP/FMA
+    // estaban mal clasificados como PUROS, lo que podia clasificar una funcion
+    // que solo hace stores vectoriales como "pura" -> unsound en las
+    // relajaciones pure-call).  opaco -> top; VEC_BCAST no toca memoria.
     case IrOp::MEMCPY:
-        add_read(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
-        add_write(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
+    case IrOp::VEC_UNOP: case IrOp::VEC_BINOP: case IrOp::VEC_BINOP_S:
+    case IrOp::VEC_FMA: case IrOp::VEC_BCAST:
+    case IrOp::VEC_ACC_ZERO: case IrOp::VEC_ACC_ADD: case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE: case IrOp::VEC_ACC_COMBINE: {
+        const analysis::MemoryAccess ma = analysis::memory_access(ins, pt);
+        if (ma.touches) {
+            if (ma.opaque) {
+                if (ma.is_load) add_read(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
+                if (ma.is_store) add_write(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
+            } else {
+                for (const auto &r : ma.reads) add_read(e, r);
+                for (const auto &w : ma.writes) add_write(e, w);
+            }
+        }
         break;
+    }
 
     // ---- Asignacion de memoria (aloca heap) ----
     case IrOp::RAW_ALLOC: case IrOp::GC_ALLOC: case IrOp::GC_ALLOCP:
