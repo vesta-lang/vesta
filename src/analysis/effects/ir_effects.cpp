@@ -24,53 +24,33 @@ namespace effects {
 using ir::IrOp;
 
 // --------------------------------------------------------------------------
-// Mapa def-use + clasificacion de punteros a AbstractLoc
+// Clasificacion de punteros a AbstractLoc -- delega en el RESOLVEDOR COMPARTIDO
+// (analysis/memory/points_to), que es la unica fuente de "a que memoria apunta
+// este puntero" para efectos Y para el DSE.  Antes habia aqui un classify_rec
+// duplicado; se elimino para tener un solo modelo.
 // --------------------------------------------------------------------------
-static AbstractLoc classify_rec(const ir::IrFunction &fn, const analysis::IrFacts &facts,
-                                ir::IrValueId ptr, int depth) {
-    using K = AbstractLoc::Kind;
-    if (ptr == ir::IR_NO_VALUE || ptr >= facts.def_of.size())
-        return {K::Unknown, 0};
-    if (facts.param_of[ptr] >= 0)
-        return {K::ArgDerived, static_cast<uint32_t>(facts.param_of[ptr])};
-    const ir::IrInstr *d = facts.def_of[ptr];
-    if (!d || depth <= 0) return {K::Unknown, 0};
-    switch (d->op) {
-    case IrOp::ALLOCA:
-        return {K::Stack, ptr}; // cada ALLOCA es un slot distinto
-    case IrOp::RAW_ALLOC:
-    case IrOp::GC_ALLOC:
-    case IrOp::GC_ALLOCP:
-    case IrOp::NEWOBJ:
-    case IrOp::ARRAY_ALLOC:
-    case IrOp::STRMAKE:
-    case IrOp::STRRESERVE:
-        return {K::Heap, ptr}; // cada alloc-site es distinto (id = value id)
-    case IrOp::GETSTATIC:
-    case IrOp::STR_LIT_ADDR:
-    case IrOp::LABEL_ADDR:
-    case IrOp::SECTION_REF:
-        return {K::Global, ptr};
-    // Derivaciones: el loc es el de la BASE (operands[0]).
-    case IrOp::GEP:
-    case IrOp::BITCAST:
-    case IrOp::CAST:
-    case IrOp::MVTAKE_IR:
-    case IrOp::GCDEREF_IR:
-    case IrOp::GC_DEREF_HOST:
-    case IrOp::GC_HANDLE_FOR_PTR:
-    case IrOp::UNWRAP:
-        if (!d->operands.empty())
-            return classify_rec(fn, facts, d->operands[0], depth - 1);
-        return {K::Unknown, 0};
-    default:
-        return {K::Unknown, 0}; // cargado de memoria, PHI, const-address, ...
-    }
-}
-
 AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &facts,
                          ir::IrValueId ptr) {
-    return classify_rec(fn, facts, ptr, 8);
+    // Conveniencia (tests / llamadas sueltas): construye una tabla local.  El
+    // camino caliente (por-instr) usa la tabla cacheada via effects_of_instr.
+    analysis::PointsTo pt = analysis::compute_points_to(fn, facts);
+    return analysis::loc_of(pt, ptr, 0 /*ancho desconocido = objeto entero*/);
+}
+
+// Bytes accedidos por un LOAD/STORE segun su IrType (para el alias por rango).
+static int32_t access_bytes(ir::IrType t) {
+    switch (t) {
+    case ir::IrType::I8:
+    case ir::IrType::U8:
+    case ir::IrType::BOOL: return 1;
+    case ir::IrType::I16:
+    case ir::IrType::U16: return 2;
+    case ir::IrType::I32:
+    case ir::IrType::U32:
+    case ir::IrType::F32:
+    case ir::IrType::HANDLE: return 4;
+    default: return 8; // I64/U64/F64/PTR/VOID: conservador
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -119,10 +99,17 @@ static void add_write(SemanticEffects &e, const AbstractLoc &l) {
 
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::IrFacts &facts,
+                                      const analysis::PointsTo &pt,
                                       const ir::IrInstr &ins) {
+    (void)facts; // el points-to (pt) ya se construyo con los hechos.
     EffectAnalysisResult r; // neutro Complete por defecto
     SemanticEffects &e = r.effects;
     const auto &ops = ins.operands;
+    // Localizacion de un puntero-operando con el ancho del acceso actual.
+    const int32_t w = access_bytes(ins.type);
+    auto loc = [&](ir::IrValueId p, int32_t width) {
+        return analysis::loc_of(pt, p, width);
+    };
 
     switch (ins.op) {
     // ---- Computacion pura (sin efectos observables) ----
@@ -159,25 +146,25 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         e.may_trap = true;
         break;
 
-    // ---- Memoria ----
+    // ---- Memoria (localizacion precisa: raiz + offset + ancho del acceso) ----
     case IrOp::LOAD:
-        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
+        if (!ops.empty()) add_read(e, loc(ops[0], w));
         break;
     case IrOp::STORE:
-        if (ops.size() >= 2) add_write(e, classify_ptr(fn, facts, ops[1]));
+        if (ops.size() >= 2) add_write(e, loc(ops[1], w));
         break;
     case IrOp::ARRAY_LOAD:
-        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
+        if (!ops.empty()) add_read(e, loc(ops[0], w));
         break;
     case IrOp::ARRAY_STORE:
-        if (!ops.empty()) add_write(e, classify_ptr(fn, facts, ops[0]));
+        if (!ops.empty()) add_write(e, loc(ops[0], w));
         break;
     case IrOp::GETFIELD:
-        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
+        if (!ops.empty()) add_read(e, loc(ops[0], w));
         break;
     case IrOp::SETFIELD:
     case IrOp::GCWB_IR:
-        if (!ops.empty()) add_write(e, classify_ptr(fn, facts, ops[0]));
+        if (!ops.empty()) add_write(e, loc(ops[0], w));
         break;
     case IrOp::GETSTATIC:
         add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
@@ -187,8 +174,8 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         break;
     case IrOp::ARRAY_LEN: case IrOp::STRLEN: case IrOp::STRGETBYTES:
     case IrOp::STRHASH:
-        // leen la cabecera del objeto (heap).
-        if (!ops.empty()) add_read(e, classify_ptr(fn, facts, ops[0]));
+        // leen la cabecera del objeto (ancho desconocido = objeto entero).
+        if (!ops.empty()) add_read(e, loc(ops[0], 0));
         break;
     case IrOp::MEMCPY:
         add_read(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
@@ -319,6 +306,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
                                             EffectGaps *gaps) {
     analysis::IrFacts facts = analysis::build_ir_facts(fn);
+    analysis::PointsTo pt = analysis::compute_points_to(fn, facts);
     EffectAnalysisResult acc;
     bool first_block = true;
     AnalysisCompleteness worst = AnalysisCompleteness::Complete;
@@ -327,7 +315,7 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
         SemanticEffects blk = SemanticEffects::none();
         bool first_instr = true;
         for (const ir::IrInstr &in : b.instrs) {
-            EffectAnalysisResult r = effects_of_instr(fn, facts, in);
+            EffectAnalysisResult r = effects_of_instr(fn, facts, pt, in);
             if (uint8_t(r.completeness) > uint8_t(worst)) worst = r.completeness;
             // Registrar la laguna (si la hubo) para el reporte de cobertura.
             if (gaps && r.completeness != AnalysisCompleteness::Complete &&

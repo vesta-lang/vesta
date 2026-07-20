@@ -41,9 +41,13 @@ static std::string loc_set_str(const LocSet &s) {
     std::string out;
     for (size_t i = 0; i < s.locs.size(); ++i) {
         if (i) out += ",";
-        out += loc_kind_name(s.locs[i].kind);
-        if (s.locs[i].id != LOC_GENERIC)
-            out += "#" + std::to_string(s.locs[i].id);
+        const AbstractLoc &l = s.locs[i];
+        out += loc_kind_name(l.kind);
+        if (l.id != LOC_GENERIC) out += "#" + std::to_string(l.id);
+        // Offset/ancho concretos (modelo preciso): "+off/w".  width 0 = objeto
+        // entero -> se omite.
+        if (l.width > 0)
+            out += "+" + std::to_string(l.off) + "/" + std::to_string(l.width);
     }
     return out;
 }

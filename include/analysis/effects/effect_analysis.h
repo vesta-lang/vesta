@@ -97,6 +97,9 @@ private:
     /// primer consumidor del AnalysisManager.
     AnalysisManager facts_mgr_;
     const IrFacts &facts_of(const ir::IrFunction &fn);
+    /// Tabla points-to cacheada por funcion (depende de IRFacts; el manager
+    /// invalida en cascada cuando la funcion muta).
+    const PointsTo &points_to_of(const ir::IrFunction &fn);
 
     FunctionSummary compute_summary(const ir::IrModule &mod,
                                     const ir::IrFunction &fn);

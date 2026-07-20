@@ -29,12 +29,20 @@ const IrFacts &EffectAnalysis::facts_of(const ir::IrFunction &fn) {
         fn.name, [&]() { return build_ir_facts(fn); });
 }
 
+const PointsTo &EffectAnalysis::points_to_of(const ir::IrFunction &fn) {
+    // Tabla points-to cacheada; su factory consume facts_of (via el manager),
+    // registrando la dependencia PointsTo -> IRFacts para la invalidacion.
+    return facts_mgr_.get_or_compute<PointsToAnalysis, PointsTo>(
+        fn.name, [&]() { return compute_points_to(fn, facts_of(fn)); });
+}
+
 EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
                                            const ir::IrInstr &ins) {
     const void *key = static_cast<const void *>(&ins);
     auto it = local_cache_.find(key);
     if (it != local_cache_.end()) return it->second;
-    EffectAnalysisResult r = effects_of_instr(fn, facts_of(fn), ins);
+    EffectAnalysisResult r =
+        effects_of_instr(fn, facts_of(fn), points_to_of(fn), ins);
     local_cache_.emplace(key, r);
     return r;
 }

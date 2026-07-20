@@ -254,9 +254,10 @@ int main() {
         add_instr(fn, b0, ir::IrOp::CONST, v, {});
         add_instr(fn, b0, ir::IrOp::STORE, ir::IR_NO_VALUE, {v, slot});
         analysis::IrFacts defs = analysis::build_ir_facts(fn);
+        analysis::PointsTo defs_pt = analysis::compute_points_to(fn, defs);
         // efecto de la STORE aislada.
         SemanticEffects st =
-            effects_of_instr(fn, defs, fn.blocks[b0].instrs.back()).effects;
+            effects_of_instr(fn, defs, defs_pt, fn.blocks[b0].instrs.back()).effects;
         check(st.mem.writes.locs.size() == 1 &&
                   st.mem.writes.locs[0].kind == AbstractLoc::Kind::Stack,
               "IR: STORE a ALLOCA escribe Stack");

@@ -19,6 +19,8 @@
 
 namespace analysis {
 
+char PointsToAnalysis::ID = 0;
+
 using effects::AbstractLoc;
 using K = effects::AbstractLoc::Kind;
 

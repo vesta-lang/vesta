@@ -5368,9 +5368,9 @@ static bool g_dce_effects = [] {
 }();
 
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
-                            const IrInstr &ins) {
+                            const analysis::PointsTo &pt, const IrInstr &ins) {
     const analysis::effects::EffectAnalysisResult r =
-        analysis::effects::effects_of_instr(fn, facts, ins);
+        analysis::effects::effects_of_instr(fn, facts, pt, ins);
     if (r.completeness != analysis::effects::AnalysisCompleteness::Complete) return false;
     const analysis::effects::SemanticEffects &e = r.effects;
     return !e.mem.writes_memory() && !e.may_trap && !e.may_throw &&
@@ -5380,9 +5380,14 @@ static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts
 }
 
 bool ir_pass_dce(IrFunction &fn) {
-    // Modelo de efectos (A/B): hechos por-funcion para el consumidor del DCE.
+    // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
+    // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
-    if (g_dce_effects) fx_facts = analysis::build_ir_facts(fn);
+    analysis::PointsTo fx_pt;
+    if (g_dce_effects) {
+        fx_facts = analysis::build_ir_facts(fn);
+        fx_pt = analysis::compute_points_to(fn, fx_facts);
+    }
 
     // Construir conjunto de valores que son usados en algun operando
     std::unordered_set<IrValueId> used;
@@ -5424,7 +5429,7 @@ bool ir_pass_dce(IrFunction &fn) {
             // como may_allocate y no lo quitaria; se conserva la optimizacion).
             const bool no_effect =
                 g_dce_effects
-                    ? (model_removable(fn, fx_facts, ins) ||
+                    ? (model_removable(fn, fx_facts, fx_pt, ins) ||
                        alloc_only_string_op(ins.op))
                     : (!is_side_effecting(ins.op) || alloc_only_string_op(ins.op));
             if (ins.dst != IR_NO_VALUE && !used.count(ins.dst) && no_effect &&

@@ -19,6 +19,7 @@
 
 #include "analysis/facts/ir_facts.h"
 #include "analysis/effects/effects.h"
+#include "analysis/memory/points_to.h"
 
 #include <cstdint>
 #include <map>
@@ -60,9 +61,12 @@ struct EffectGaps {
 
 /// Efecto LOCAL de UNA instruccion IR (con completeness + motivo).  El asm
 /// lifteado no es especial: llega como ADD/LOAD/STORE/... normales.  INLINE_ASM/
-/// ASM_MICRO (residuo opaco) se analizan aparte con tags.
+/// ASM_MICRO (residuo opaco) se analizan aparte con tags.  @p pt es la tabla
+/// points-to COMPARTIDA de la funcion (resuelve punteros a su localizacion);
+/// el llamador la construye UNA vez (compute_points_to) y la reusa por instr.
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::IrFacts &facts,
+                                      const analysis::PointsTo &pt,
                                       const ir::IrInstr &ins);
 
 /// Efecto LOCAL agregado de una funcion completa (fold de sus bloques).  Es el

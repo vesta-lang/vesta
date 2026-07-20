@@ -57,6 +57,14 @@ struct PointsTo {
 /// param-of).  Resolucion recursiva con memoizacion y guardia de ciclos (PHI).
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts);
 
+/// Marcador de analisis para el AnalysisManager (cachea la tabla points-to por
+/// funcion).  Depende de IRFactsAnalysis.  El resultado (PointsTo) se invalida
+/// cuando la funcion muta (la resolucion raiz+offset cambia con el IR).
+struct PointsToAnalysis {
+    using Result = PointsTo;
+    static char ID;
+};
+
 /// Proyecta el valor SSA @p ptr a un @c AbstractLoc con el ancho de acceso
 /// @p width (bytes; 0 = desconocido).  Si el offset no es exacto, degrada a
 /// whole-root (width 0) para no afirmar bytes concretos que no se probaron.
