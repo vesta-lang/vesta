@@ -5919,19 +5919,9 @@ bool ir_pass_dse(IrFunction &fn,
     /* Tamano en bytes accedido por un LOAD/STORE segun su IrType.  Se usa
      * para decidir SOLAPAMIENTO entre dos accesos al mismo root con offsets
      * constantes distintos. */
+    // Bytes accedidos: delega en la UNICA verdad compartida.
     auto access_bytes = [](IrType t) -> int64_t {
-        switch (t) {
-        case IrType::I8:
-        case IrType::U8:
-        case IrType::BOOL: return 1;
-        case IrType::I16:
-        case IrType::U16: return 2;
-        case IrType::I32:
-        case IrType::U32:
-        case IrType::F32:
-        case IrType::HANDLE: return 4;
-        default: return 8; /* I64/U64/F64/PTR/VOID: conservador */
-        }
+        return analysis::memory_access_size(t);
     };
 
     /* Clave canonica de direccion: (raiz, offset const).  Dos punteros con
@@ -9067,13 +9057,7 @@ bool ir_pass_schedule(IrFunction &fn,
         sched_pt = analysis::compute_points_to(fn, analysis::build_ir_facts(fn));
     // Ancho de acceso por tipo (para el alias por rango de LOAD/STORE).
     auto sched_access_bytes = [](IrType t) -> int32_t {
-        switch (t) {
-        case IrType::I8: case IrType::U8: case IrType::BOOL: return 1;
-        case IrType::I16: case IrType::U16: return 2;
-        case IrType::I32: case IrType::U32: case IrType::F32:
-        case IrType::HANDLE: return 4;
-        default: return 8;
-        }
+        return analysis::memory_access_size(t); // UNICA verdad compartida
     };
     // Localizacion de un acceso de memoria: LOAD/STORE con offset+ancho precisos;
     // field/array/len con la raiz (whole-object); MEMCPY/VEC -> Unknown (top).

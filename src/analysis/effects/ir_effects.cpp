@@ -12,6 +12,7 @@
  *        ASM_MICRO) se analiza aparte, conservador y con tags.
  */
 #include "analysis/effects/ir_effects.h"
+#include "analysis/memory/memory_access.h"
 
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h"
@@ -37,20 +38,9 @@ AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &fact
     return analysis::loc_of(pt, ptr, 0 /*ancho desconocido = objeto entero*/);
 }
 
-// Bytes accedidos por un LOAD/STORE segun su IrType (para el alias por rango).
+// Bytes accedidos por un LOAD/STORE: delega en la UNICA verdad compartida.
 static int32_t access_bytes(ir::IrType t) {
-    switch (t) {
-    case ir::IrType::I8:
-    case ir::IrType::U8:
-    case ir::IrType::BOOL: return 1;
-    case ir::IrType::I16:
-    case ir::IrType::U16: return 2;
-    case ir::IrType::I32:
-    case ir::IrType::U32:
-    case ir::IrType::F32:
-    case ir::IrType::HANDLE: return 4;
-    default: return 8; // I64/U64/F64/PTR/VOID: conservador
-    }
+    return analysis::memory_access_size(t);
 }
 
 // --------------------------------------------------------------------------

@@ -30,10 +30,19 @@ enum class IrType : uint8_t; // fwd; el valor real viene de ssa_ir.h
 
 namespace analysis {
 
-/// Bytes accedidos por un LOAD/STORE segun su IrType (1/2/4/8).  UNA sola
-/// definicion para todo el compilador (antes duplicada en DSE/LICM/effects/
-/// scheduler).  0 nunca: el default conservador es 8.
+/// Bytes accedidos por un acceso ESCALAR segun su IrType (1/2/4/8; F32=4,
+/// F64/PTR/HANDLE... default 8).  UNA sola definicion para todo el compilador
+/// (antes duplicada en DSE/LICM/effects/scheduler).  Los tipos IR son escalares
+/// (max 8 B); los anchos VECTORIALES (16/32/64) NO vienen del IrType sino del
+/// `imm` de los ops VEC_* -> usar @c memory_access_size_bytes para validarlos.
 int32_t memory_access_size(ir::IrType t);
+
+/// Valida un ancho de acceso en BYTES CRUDOS y lo devuelve si es un tamano de
+/// acceso legitimo -- ESCALAR (1/2/4/8) o VECTORIAL (16/32/64: XMM/YMM/ZMM).
+/// 0 si el ancho es desconocido/invalido -> el consumidor lo trata como rango
+/// NO exacto (aliasa conservador; NUNCA sub-estimar un vector de 32 B como 8).
+/// Es la verdad de bytes compartida con el nivel maquina (mem_size_bytes).
+int32_t memory_access_size_bytes(int32_t raw);
 
 /// Acceso a memoria de UNA instruccion: que lee, que escribe, y donde.
 /// - LOAD/GETFIELD/ARRAY_LOAD/ARRAY_LEN -> is_load, read_loc.

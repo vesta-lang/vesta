@@ -34,6 +34,17 @@ int32_t memory_access_size(ir::IrType t) {
     }
 }
 
+int32_t memory_access_size_bytes(int32_t raw) {
+    // Escalar (1/2/4/8) o vectorial (16/32/64: XMM/YMM/ZMM).  Otro -> 0 (rango
+    // no exacto): NUNCA sub-estimar (un vector de 32 B como 8 perderia el
+    // solapamiento con offsets 8..31 -> dependencia de memoria perdida).
+    switch (raw) {
+    case 1: case 2: case 4: case 8:
+    case 16: case 32: case 64: return raw;
+    default: return 0;
+    }
+}
+
 namespace {
 AbstractLoc unknown_loc() {
     return {AbstractLoc::Kind::Unknown, effects::LOC_GENERIC, 0, 0};
@@ -93,6 +104,26 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
             a.touches = a.opaque = a.is_store = true;
             a.write_loc = unknown_loc();
         }
+        return a;
+    // --- Ops VECTORIALES (SIMD 16/32/64 B): TOCAN memoria (dst/acc + src).
+    //     Se marcan como memoria-que-toca OPACA -- el bug seria dejarlas caer a
+    //     touches=false (un VEC_STORE si escribe memoria).  El ancho vive en
+    //     ins.imm (imm=(subop<<8)|ancho); modelar la loc PRECISA (16/32/64 via
+    //     memory_access_size_bytes) queda como follow-up: por ahora opaco =
+    //     sound (aliasa conservador, nunca sub-estima el rango vectorial). ---
+    case Op::VEC_UNOP:
+    case Op::VEC_BINOP:
+    case Op::VEC_FMA:
+    case Op::VEC_BINOP_S:
+    case Op::VEC_BCAST:
+    case Op::VEC_ACC_ZERO:
+    case Op::VEC_ACC_ADD:
+    case Op::VEC_ACC_FMA:
+    case Op::VEC_ACC_STORE:
+    case Op::VEC_ACC_COMBINE:
+        a.touches = a.opaque = true;
+        a.is_load = a.is_store = true; // conservador: leen src y escriben dst/acc
+        a.read_loc = a.write_loc = unknown_loc();
         return a;
     default:
         return a; // no es un acceso a memoria localizable
