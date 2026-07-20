@@ -660,7 +660,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
-    /* ---- FP-regalloc (Phase AOT C1 float): MOVSD/MOVSS con memoria ---- */
+    /* ---- FP-regalloc ( AOT C1 float): MOVSD/MOVSS con memoria ---- */
     case MOp::MOVSD:
     case MOp::MOVSS: {
         /* MOVSD/MOVSS mueve un escalar f64/f32 entre XMM<->XMM o XMM<->mem.
@@ -1206,7 +1206,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
          * CALL_REL32 que el driver parchea tras el layout de .text.
          * patch_at se deja en offset ABSOLUTO de @c out; encode() le
          * resta @c base para dejarlo relativo a la funcion. */
-        /* Phase AOT-GC (Inc 1): si el call lleva stackmap (gc<T>), fijar su
+        /*  AOT-GC (Inc 1): si el call lleva stackmap (gc<T>), fijar su
          * pc_offset al inicio del call (mismo criterio que MOp::CALL) para que
          * el GC walker lo localice por la direccion de retorno. */
         if (mi.flags != UINT16_MAX && mi.flags < fn.stackmaps.size()) {
@@ -1461,7 +1461,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         /* skip en release */
         return true;
     case MOp::INLINE_ASM_RAW: {
-        /* Phase AS inc.5: apendea los bytes del bloque inline-asm ya
+        /*  AS inc.5: apendea los bytes del bloque inline-asm ya
          * ensamblado (via vx::g_asm_backend) verbatim al code cache.
          * El indice del blob viaja como IMM32 en src1.  Los inputs/
          * outputs register-bound ya estan en sus registros fisicos
@@ -1472,7 +1472,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
                 const AsmBlob &ab = fn.asm_blobs[idx];
                 const uint32_t blob_base = static_cast<uint32_t>(out.size());
                 out.insert(out.end(), ab.bytes.begin(), ab.bytes.end());
-                // Phase AS inc.6: emitir un MReloc por cada simbolo propio
+                //  AS inc.6: emitir un MReloc por cada simbolo propio
                 // referenciado en el asm.  rip-relativo (`jmp [sym]`, `lea
                 // reg,[rip+sym]`) -> DATA_REL32; imm absoluto (`mov rax,sym`)
                 // -> ABS64.  @c patch_at absoluto en @c out; encode() lo

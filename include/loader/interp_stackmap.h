@@ -7,7 +7,7 @@
 
 /**
  * @file loader/interp_stackmap.h
- * @brief Stackmaps PRECISOS para frames del INTERPRETE (Phase E.1 + E.2).
+ * @brief Stackmaps PRECISOS para frames del INTERPRETE ( E.1 + E.2).
  *
  * = Motivacion =
  *
@@ -17,7 +17,7 @@
  * de la cuenta (falsos positivos por host_ptrs residuales en registros
  * de callees ya retornados) -> colecta no-determinista.
  *
- * Phase E introduce stackmaps PRECISOS: por cada SAFEPOINT del bytecode
+ *  E introduce stackmaps PRECISOS: por cada SAFEPOINT del bytecode
  * (PC donde el GC puede correr -- sitios de alocacion), una lista de las
  * ubicaciones (registros / slots de pila) que contienen raices GC vivas
  * en ese punto.  El GC del interprete consulta el stackmap del PC de
@@ -26,7 +26,7 @@
  *
  * = Modelo espejo del JIT =
  *
- * El JIT ya es preciso (Phase D.2): @c jit::StackmapSlot / @c Stackmap /
+ * El JIT ya es preciso ( D.2): @c jit::StackmapSlot / @c Stackmap /
  * @c scan_jit_frames.  El interprete replica el mismo diseno, con dos
  * diferencias:
  *   - Los stackmaps del interprete son DATOS (PC -> ubicaciones); el

@@ -241,7 +241,7 @@ typedef struct VestaPluginAPI {
      * `ArrayList<string>` que hace push de un StringObject) DEBE llamar
      * a esta funcion al adquirir la referencia, y a @c gc_release al
      * liberarla.  Mientras el refcount sea >0, el GC tratara el handle
-     * como root vivo durante el mark phase y NO recolectara el objeto
+     * como root vivo durante el mark  y NO recolectara el objeto
      * aunque ningun root normal (HandleTable bytecode) lo referencie.
      *
      * Coste: O(1) amortizado (1 lookup + increment en un hashmap del

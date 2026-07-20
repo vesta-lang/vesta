@@ -7,7 +7,7 @@
 
 /**
  * @file jit/regalloc_rewrite.cpp
- * @brief Implementacion del rewrite vreg -> fisico (Phase D.7, commit 4a).
+ * @brief Implementacion del rewrite vreg -> fisico ( D.7, commit 4a).
  *        Ver regalloc_rewrite.h y doc/REGALLOC.md.
  */
 
@@ -193,7 +193,7 @@ struct Lowerer {
     const TargetRegInfo &tri;
     bool vm_abi = false;      ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
     bool no_frame = false;    ///< hoja frameless: sin push/mov rbp ni sub rsp
-    bool naked = false;       ///< Phase NR @Naked: sin prologo/epilogo/ret
+    bool naked = false;       ///<  NR @Naked: sin prologo/epilogo/ret
     uint32_t k = 0;           ///< numero de callee-saved asignados
     uint32_t total_saved = 0; ///< callee-saved + (vm_abi ? 1 (rbx) : 0)
     int32_t spill_bytes = 0;  ///< tamano del area de spills (alineado)
@@ -225,7 +225,7 @@ struct Lowerer {
     int32_t cb_save_base_off = 0;
     MReg scr0 = MReg::R10;
     MReg scr1 = MReg::R11;
-    /// FP-regalloc (Phase AOT C1 float): scratch XMM del rewrite
+    /// FP-regalloc ( AOT C1 float): scratch XMM del rewrite
     /// (materializar spills FP + two-address legalization de ADDSD/etc),
     /// analogo a scr0/scr1 GP.  Por defecto XMM14/XMM15 (ver
     /// @c target_x86_64_target); se sobreescriben desde @c tri.scratch[FP].
@@ -275,7 +275,7 @@ struct Lowerer {
         alloca_base = SZ * total_saved + SZ * ra.num_spill_slots;
         spill_bytes =
             static_cast<int32_t>(SZ * ra.num_spill_slots + alloca_total);
-        /* Fase 2: reservar un qword para el VM-RSP salvado, debajo del
+        /*   reservar un qword para el VM-RSP salvado, debajo del
          * area de allocas host y por encima del shadow space.  El
          * offset es fijo desde RBP (independiente del shadow/align que
          * se añade despues, que solo crece el frame hacia abajo). */
@@ -344,7 +344,7 @@ struct Lowerer {
     };
     std::vector<PendingArg> pending_args;
 
-    /// Phase D.7 commit 6: intervalos (para stackmaps en CALLs) +
+    ///  D.7 commit 6: intervalos (para stackmaps en CALLs) +
     /// posicion lineal del CALL actual + stackmaps acumulados.
     const IntervalResult *ivs = nullptr;
     uint32_t cur_call_pos = 0;
@@ -473,7 +473,7 @@ struct Lowerer {
     }
 
     void emit_prologue(std::vector<MInstr> &out) const {
-        /* Phase NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
+        /*  NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
         if (naked) return;
         if (!no_frame) {
             out.push_back(push(MReg::RBP));
@@ -492,7 +492,7 @@ struct Lowerer {
         if (spill_bytes > 0)
             out.push_back(MInstr::make_unary(
                 MOp::SUB, reg(MReg::RSP), MOperand::make_imm32(spill_bytes)));
-        /* Fase 2: salvar el VM-RSP original al slot del frame.  Los
+        /*   salvar el VM-RSP original al slot del frame.  Los
          * ALLOCA_VM mas adelante decrementan proc->stack_pointer; el
          * epilogue lo restaura desde aqui (si no, el VM stack hace
          * leak/overflow entre llamadas).  scr0 (R10) es caller-saved y
@@ -509,7 +509,7 @@ struct Lowerer {
     }
 
     void emit_epilogue(std::vector<MInstr> &out) const {
-        /* Phase NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
+        /*  NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
         if (naked) return;
         if (no_frame) {
             /* Frameless: rsp ya apunta justo encima de los registros
@@ -521,7 +521,7 @@ struct Lowerer {
             if (vm_abi) out.push_back(pop(MReg::RBX));
             return;
         }
-        /* Fase 2: restaurar el VM-RSP original ANTES de desmontar el
+        /*   restaurar el VM-RSP original ANTES de desmontar el
          * frame (RBP/RBX aun validos).  Sin esto los ALLOCA_VM dejarian
          * proc->stack_pointer decrementado tras el RET -> leak/overflow
          * del VM stack global.  scr0 (R10) es caller-saved (libre). */
@@ -814,7 +814,7 @@ struct Lowerer {
             return;
         }
 
-        /* ===== FP-regalloc (Phase AOT C1 float) ===== */
+        /* ===== FP-regalloc ( AOT C1 float) ===== */
 
         /* FP MOV (dst/src de clase float): movimiento de un escalar f64/f32.
          * El selector emite @c MOp::MOV para copias FP, el param-init
@@ -1132,7 +1132,7 @@ struct Lowerer {
             MInstr call;
             call.op = MOp::CALL_SYM;
             call.src1 = in.src1;
-            /* Phase AOT-GC (Inc 1): describir los GC roots vivos a traves de
+            /*  AOT-GC (Inc 1): describir los GC roots vivos a traves de
              * este call (gc<T>).  El linear_scan los forzo a slots; el GC los
              * lee via el stackmap.  Antes se omitia ("BARE sin GC"); ahora el
              * gc<T> opt-in los necesita.  Vacio (0 slots) si no hay valores GC
@@ -1287,7 +1287,7 @@ struct Lowerer {
         }
 
         if (op == MOp::RET) {
-            /* Phase NR @Naked: NO emitir el ret implicito; el cuerpo (asm)
+            /*  NR @Naked: NO emitir el ret implicito; el cuerpo (asm)
              * provee la salida real (ret/iretq).  Un ret aqui seria, en el
              * mejor caso, codigo muerto tras un iretq; en el peor, pisaria
              * la convencion de interrupcion. */
@@ -2015,7 +2015,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
     /* Detectar si la funcion tiene CALLs (para reservar shadow space). */
     bool has_calls = false;
     uint32_t alloca_total = 0;  // commit 8: bytes de allocas en el frame
-    bool has_vm_alloca = false; // Fase 2: reserva en el VM stack del proceso
+    bool has_vm_alloca = false; //   reserva en el VM stack del proceso
     for (const auto &b : vf.blocks) {
         for (const auto &in : b.instrs) {
             if (in.op == MOp::CALL || in.op == MOp::CALL_ABS) has_calls = true;
@@ -2080,7 +2080,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
         tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca,
                max_stack_args, has_stack_params, vf.cb_save_regs);
-    lw.naked = vf.naked; // Phase NR @Naked: sin prologo/epilogo/ret
+    lw.naked = vf.naked; //  NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;
     lw.pf = &pf; // labels intra-expansion (LOAD_VM/STORE_VM page-cache)
@@ -2096,7 +2096,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
      * vreg al fisico; el encoder (que corre sobre @c pf) appendea las
      * @c MReloc referenciando estos indices. */
     pf.reloc_symbols = vf.reloc_symbols;
-    /* Phase AS inc.5: los bytes del inline-asm los consume el ENCODER, que
+    /*  AS inc.5: los bytes del inline-asm los consume el ENCODER, que
      * corre sobre @c pf (la funcion reescrita) -> hay que arrastrarlos.
      * (@c vreg_fixed NO se copia: lo consume @c build_intervals, que corre
      * sobre @c vf ANTES del rewrite.) */
@@ -2595,7 +2595,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
 }
 
 /* ===================================================================== */
-/* OSR runtime glue (Phase D.8, 2c) -- definiciones publicas              */
+/* OSR runtime glue ( D.8, 2c) -- definiciones publicas              */
 /* ===================================================================== */
 
 void set_osr_handler(uint64_t (*handler)(uint64_t)) {

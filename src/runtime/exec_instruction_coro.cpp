@@ -366,7 +366,7 @@ void exec_instr_swapctx(ProcessVM *vm, const DecodedInstr &instr) {
     uint64_t *const src_ctx = reinterpret_cast<uint64_t *>(src_addr);
     uint64_t *const dst_ctx = reinterpret_cast<uint64_t *>(dst_addr);
 
-    // ---- fase 1: guardar contexto actual en src_addr ----
+    // ----   guardar contexto actual en src_addr ----
 
     // PC guardado = PC de la instruccion siguiente (instr.pc + size_instr)
     const uint64_t next_pc = instr.pc + instr.flags_info.size_instr;
@@ -378,7 +378,7 @@ void exec_instr_swapctx(ProcessVM *vm, const DecodedInstr &instr) {
     for (int i = 0; i < 16; ++i)
         src_ctx[3 + i] = vm->registers.regs[i].qword();
 
-    // ---- fase 2: cargar contexto desde dst_addr ----
+    // ----   cargar contexto desde dst_addr ----
 
     const uint64_t new_pc = dst_ctx[0]; // PC del destino
     const uint64_t new_sp = dst_ctx[1]; // SP del destino

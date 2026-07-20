@@ -79,9 +79,9 @@ enum class NodeKind : uint8_t {
                   ///< payload).
     ExternFnDecl, ///< @c extern "lib.dll" fn name(params) -> ret; (FFI
                   ///< declarativo, 0 overhead).
-    ImportDecl, ///< @c import "path" [as alias] [only A, B];  (Phase M sistema
+    ImportDecl, ///< @c import "path" [as alias] [only A, B];  ( M sistema
                 ///< de modulos).
-    NamespaceDecl, ///< @c namespace foo { decls }  (Phase M.7.c, inline
+    NamespaceDecl, ///< @c namespace foo { decls }  ( M.7.c, inline
                    ///< namespace estilo C++).
     BytesDecl,     ///< @c bytes name { db/dw/dd/dq/times ... }  (datos crudos
                    ///< estilo NASM, AOT).
@@ -113,7 +113,7 @@ enum class NodeKind : uint8_t {
     ComptimeBlockStmt, ///< A.39: comptime { ... } scope para comptime const +
                        ///< for + asserts
     ComptimeForStmt, ///< A.39: comptime for (i in lo..hi) { body } -- unrolled
-    AsmStmt, ///< Phase AS: asm [quals] { ...NASM... } clobbers(...)  (inline
+    AsmStmt, ///<  AS: asm [quals] { ...NASM... } clobbers(...)  (inline
              ///< asm nativo)
 
     // ----- Expressions -----
@@ -620,11 +620,11 @@ struct FieldAccessExpr : Expr {
     /// getfield directo.  1 = getter (`obj.prop`), 2 = setter (lhs
     /// de un AssignExpr; @ref AssignExpr::is_property_set se marca
     /// en el padre).  3 = static field de clase (Counter.count).
-    /// 4 = simbolo de namespace importado (Phase M.7, `lib_a.valor_a`).
+    /// 4 = simbolo de namespace importado ( M.7, `lib_a.valor_a`).
     /// El metodo se llama `get_<field_name>` o
     /// `set_<field_name>` segun el caso.
     uint8_t property_kind = 0;
-    /// Phase M.7: cuando @c property_kind == 4 este campo guarda
+    ///  M.7: cuando @c property_kind == 4 este campo guarda
     /// el indice del namespace en @c TypeChecker::imported_namespaces_
     /// para que el lowering pueda resolver el mangled_label sin
     /// depender de la pila de scopes (que ya esta vacia al lower).
@@ -950,7 +950,7 @@ struct BlockStmt : Stmt {
  *
  * No hay captura lexica en MVP: el body solo accede a su propio
  * estado y al pasado via mailbox (@c msgsend / @c msgrecv).  Closures
- * con captura llegan en Phase B.
+ * con captura llegan en  B.
  */
 struct SpawnExpr : Expr {
     /// @brief politica de placement del proceso hijo.
@@ -1235,7 +1235,7 @@ struct VarDeclStmt : Stmt {
     /// resultante tiene bit 31 (SHARED_HANDLE_BIT) set.  Stdlib clases
     /// son agnosticas; solo el var-decl decide.
     bool is_shared = false;
-    /// Phase AS inc.2: storage-class `register("reg") T name;` -- la
+    ///  AS inc.2: storage-class `register("reg") T name;` -- la
     /// variable vive en el registro fisico nombrado (NASM).  En el
     /// cuerpo @c asm el programador usa el registro directamente, no el
     /// nombre Vesta.  Vacio = sin storage register (var-decl normal).  Lo
@@ -1456,7 +1456,7 @@ struct SynchronizedStmt : Stmt {
 /**
  * @struct AsmStmt
  * @brief @c asm [quals] @c { @c ...NASM... } @c clobbers(...) -- ensamblador
- *        en linea nativo (Phase AS), distinto del @c @Asm whole-function
+ *        en linea nativo ( AS), distinto del @c @Asm whole-function
  *        (que es bytecode .vel de la VM).
  *
  * El cuerpo es texto NASM Intel verbatim, capturado por raw-slicing del
@@ -1473,7 +1473,7 @@ struct SynchronizedStmt : Stmt {
  */
 /**
  * @struct AsmOperand
- * @brief Phase AS inc.7: un enlace de la lista `( ... )` de un @c asm.  Modelo
+ * @brief  AS inc.7: un enlace de la lista `( ... )` de un @c asm.  Modelo
  *        moderno "read-back": la CLASE de registro es el tipo del enlace
  *        (@c reg = el compilador elige; @c rax/rcx/... = fijo por ISA;
  *        @c xmm/ymm = vector; @c mem = memoria).  La DIRECCION se infiere del
@@ -1505,7 +1505,7 @@ struct AsmStmt : Stmt {
     /// reoptimizador de asm: solo @c Analyzable se reordena; @c Volatile/@c Raw
     /// son verbatim.  @c q_volatile (abajo) es legado (bit informativo del IR).
     AsmLevel level = AsmLevel::Analyzable;
-    /// Phase AS inc.7: enlaces de operandos `( reg p = addr, rax a = exp, ... )`.
+    ///  AS inc.7: enlaces de operandos `( reg p = addr, rax a = exp, ... )`.
     /// Vacio = modelo clasico (register() en var-decls, sin sustitucion).
     std::vector<AsmOperand> operands;
     SourceLoc body_loc; ///< loc del primer token del cuerpo (para mapear el
@@ -1594,13 +1594,13 @@ struct FunctionDecl : Node {
     /// son los type-args del patron y @c type_params los params frescos.
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
-    /// Phase M6.a L.3: visibilidad cross-module.  @c true (default) =
+    ///  M6.a L.3: visibilidad cross-module.  @c true (default) =
     /// publica, exportada al `.vxi` y accesible desde otros modulos.
     /// @c false = privada al modulo (no se exporta).  El parser setea
     /// segun keyword `public`/`private` precedente; sin keyword = true
     /// (default permisivo para compat con codigo existente).
     bool is_public = true;
-    /// Phase NS.3: @c "internal" -- visible en TODO el paquete (mismo
+    ///  NS.3: @c "internal" -- visible en TODO el paquete (mismo
     /// PackageId) pero NO exportado a paquetes distintos.  Se exporta al .vxi
     /// con flag; el consumidor de OTRO paquete lo filtra.
     bool is_internal = false;
@@ -1649,7 +1649,7 @@ struct FunctionDecl : Node {
     /// registra la firma sin requerir body; otra FunctionDecl con el
     /// mismo nombre debe aparecer despues con body, o error.
     bool is_forward_decl = false;
-    /// Phase AOT.3 2b (dev OS): `@section(".name"[,"perms"])` -- seccion de
+    ///  AOT.3 2b (dev OS): `@section(".name"[,"perms"])` -- seccion de
     /// salida del codigo de la funcion en AOT.  Vacio => default `.text`.
     /// @c attr_section_perms = subconjunto de "rwx" (vacio => convencion del
     /// nombre).  Solo lo consume el codegen AOT.
@@ -1660,7 +1660,7 @@ struct FunctionDecl : Node {
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
     bool is_alloc_override = false; ///< @AllocatorOverride (AOT freestanding)
     bool is_panic_handler = false;  ///< @PanicHandler (AOT freestanding)
-    /// Phase NR: `@Naked` -- funcion sin prologo/epilogo NI ret implicito.
+    ///  NR: `@Naked` -- funcion sin prologo/epilogo NI ret implicito.
     /// El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
     /// programador provee la salida (`ret`/`iretq`/`iret`).  Para ISRs,
     /// stubs de entry y cambio de modo en dev OS.  Semantica de
@@ -1869,9 +1869,9 @@ struct GlobalVarDecl : Node {
     std::string name;
     std::unique_ptr<Expr> init;
     bool is_const = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
-    /// Phase NS.3: @c "internal" -- package-scoped (ver FunctionDecl::is_internal).
+    ///  NS.3: @c "internal" -- package-scoped (ver FunctionDecl::is_internal).
     bool is_internal = false;
     ///  marca `comptime const`.  El init debe ser comptime-
     /// evaluable; el type checker guarda el valor en
@@ -1948,7 +1948,7 @@ struct TypeAliasDecl : Node {
     std::string name;
     std::unique_ptr<TypeNode> aliased;
     bool is_using_form = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// Si @c true, el alias es un NEWTYPE: comparte la representacion
     /// del tipo subyacente pero es nominalmente DISTINTO en el type
@@ -1983,7 +1983,7 @@ struct TypeAliasDecl : Node {
  * @struct ImportDecl
  * @brief Declaracion de @c import "path" [as alias] [only A, B];
  *
- * Phase M (sistema de modulos).  El @c path es siempre un string
+ *  M (sistema de modulos).  El @c path es siempre un string
  * literal por consistencia con @c extern "lib.dll", @c loadmodule(),
  * @c @Method("lib:fn"), etc.  Se resuelve a un fichero @c .vx en
  * el filesystem por el module resolver del compilador.
@@ -2003,7 +2003,7 @@ struct ImportDecl : Node {
     /// E.g. @c "editor/buffer" o @c "std/io".  Cuando @c by_namespace es
     /// true, contiene el path punteado del namespace (e.g. @c "std.collections").
     std::string path;
-    /// Phase NS.2-full: true si el import vino de la forma por-NAMESPACE
+    ///  NS.2-full: true si el import vino de la forma por-NAMESPACE
     /// @c "import a.b.c;" (identificadores punteados) en lugar de la forma
     /// por-PATH @c "import \"a/b/c\";" (literal string).  En ese caso @c path
     /// contiene el namespace punteado y el resolver lo mapea a fichero via el
@@ -2050,12 +2050,12 @@ struct ImportDecl : Node {
 struct NamespaceDecl : Node {
     std::string name; ///< "ui", "audio", "std.collections" (path punteado)
     std::vector<std::unique_ptr<Node>> decls; ///< contenidos top-level
-    /// Phase NS.1: true si vino de la forma STATEMENT `namespace a.b.c;` (agrupa
+    ///  NS.1: true si vino de la forma STATEMENT `namespace a.b.c;` (agrupa
     /// el resto del fichero) en lugar de la forma BLOQUE `namespace a.b.c {...}`.
     /// Semanticamente equivalentes (ambas manglan sus @c decls con el path); el
     /// flag es informativo para diagnosticos.
     bool is_statement_form = false;
-    /// Phase NS.3: override opcional del PackageId via @c "namespace X @id(\"..\");".
+    ///  NS.3: override opcional del PackageId via @c "namespace X @id(\"..\");".
     /// Vacio = usar el PackageId derivado del vx.toml.  Permite renombrar el
     /// namespace manteniendo la identidad ABI (el .vxi del modulo lo estampa).
     std::string package_id_override;
@@ -2151,7 +2151,7 @@ struct StructDecl : Node {
     /// es la direccion (PTR) del buffer del struct.  El dispatch es
     /// siempre CALL directo (sin CALLVIRT).
     std::vector<std::unique_ptr<ClassMethodDecl>> methods;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// marca `@Introspect` -- el compilador
     /// emite IntrospectInfo POD en static_data y registra el tipo en
@@ -2269,7 +2269,7 @@ struct EnumDecl : Node {
     std::vector<EnumVariantDecl> variants;
     /// marca `@Introspect`.  Ver `StructDecl`.
     bool is_introspect = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// L2.3: parametros de tipo opcionales `enum Maybe<T> { None, Some(T) }`.
     /// Si no esta vacio, el enum es un template y se monomorphiza on demand
@@ -2428,7 +2428,7 @@ struct ClassDecl : Node {
     std::vector<ClassFieldDecl> fields;
     std::vector<std::unique_ptr<ClassMethodDecl>> methods;
     bool is_final = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// Parametros de tipo (templates).  `class Box<T>` produce
     /// type_params = ["T"].  Vacio para clases no genericas.  El

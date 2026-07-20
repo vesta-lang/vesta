@@ -1,4 +1,4 @@
-// Demo: muestra como se ve un fichero .vxi (Phase M.2).
+// Demo: muestra como se ve un fichero .vxi ( M.2).
 //
 // Construye a mano un VxiModule pequeno y representativo (typedef new,
 // struct, function) y vuelca:

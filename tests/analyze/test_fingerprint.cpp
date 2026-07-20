@@ -58,7 +58,7 @@ static ir::IrInstr binop(ir::IrOp o) {
     return i;
 }
 
-// Bloque de inline asm: el cuerpo NASM viaja en func_name (Phase AS).
+// Bloque de inline asm: el cuerpo NASM viaja en func_name ( AS).
 static ir::IrInstr asm_block(const std::string &body) {
     ir::IrInstr i{};
     i.op = ir::IrOp::INLINE_ASM;

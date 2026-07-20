@@ -529,7 +529,7 @@ enum class IrOp : uint16_t {
     ///<   FATAL_ILLEGAL_INSTRUCTION.  Reemplaza el viejo
     ///<   RAW_ASM "rethrow\n" usado en synchronized cleanup.
     SHARED_STAT =
-        0xC7, ///< %dst = shared_stat.T %op_code    (Phase Z introspect)
+        0xC7, ///< %dst = shared_stat.T %op_code    ( Z introspect)
               ///<   op_code (i32 imm): 0=live_count (-> u32), 1=bytes (-> u64),
               ///<                       2=gc_collect (-> void).
               ///<   Reemplaza RAW_ASM "sharedstat ..." con un IR op tipado;
@@ -588,7 +588,7 @@ enum class IrOp : uint16_t {
     ///<   labels unicos.  Marcado side-effecting (siempre invoca un
     ///<   destructor o free).
 
-    // ---- Meta-OOP / reflexion / Phase Z extras (0x71-0x7C) ----
+    // ---- Meta-OOP / reflexion /  Z extras (0x71-0x7C) ----
     // Movido fuera del 0xA0-0xAF (OOP/GC) y 0x80-0x8F (llamadas) que
     // estaban llenos.  Estos ops bajan a opcodes bytecode extended ya
     // existentes en la VM.
@@ -617,7 +617,7 @@ enum class IrOp : uint16_t {
     SETMETHDBG = 0x7D, ///< setmethdbg %method, %params     (registra debug info
                        ///< file:line de un MethodInfo*)
     NEWOBJS = 0x7E,    ///< %dst = newobjs %class_ptr        (allojar objeto en
-                       ///< SharedHeap, Phase Z.6)
+                       ///< SharedHeap,  Z.6)
 
     // ---- distribucion (0xD0-0xDF) ----
     MSGSEND = 0xD0, ///< %dst = msgsend %pid, %buf_addr, %len -> bool (1=ok)
@@ -696,7 +696,7 @@ enum class IrOp : uint16_t {
               ///<   dst=primera salida.  Multi-arch; JIT/AOT la re-emiten
               ///<   verbatim, el interp NO la soporta (como INLINE_ASM).
     INLINE_ASM =
-        0xFE, ///< inline_asm host (Phase AS): func_name=cuerpo NASM Intel,
+        0xFE, ///< inline_asm host ( AS): func_name=cuerpo NASM Intel,
               ///<   imm=bitfield de calificadores (bit0 volatile, bit1 nomem,
               ///<   bit2 preserves_flags, bit3 pure, bit4 clobbers_memory,
               ///<   bit5 clobbers_flags).  Distinto de RAW_ASM (asm de la VM):
@@ -938,7 +938,7 @@ struct IrInstr {
     /// invalidados cuando la callee corre.
     bool is_call_site = false;
 
-    /// Phase D.jit-mem-model AUTO-PROMOTE: si true en un IrOp::ALLOCA,
+    ///  D.jit-mem-model AUTO-PROMOTE: si true en un IrOp::ALLOCA,
     /// el JIT emite ese ALLOCA en host stack (en lugar de VM-stack).
     /// El ptr resultante es directamente dereferenciable por code C
     /// nativo (e.g. para `&local` pasado a Win API).  Lo marca el IR
@@ -1016,7 +1016,7 @@ struct DevirtCandidate {
 };
 
 /**
- * @brief Phase AS inc.3: variable Vesta con storage-class register("reg").
+ * @brief  AS inc.3: variable Vesta con storage-class register("reg").
  *
  * El lowering fuerza estas variables a un slot ALLOCA estable (para que
  * sobrevivan al optimizer y tengan identidad) y registra aqui la
@@ -1164,8 +1164,8 @@ struct IrFunction {
      *     template para decisiones de inlining cross-instantiation.
      *
      * Para funciones que NO son instanciaciones, ambos campos
-     * quedan vacios.  En Phase A esto es metadata pura (no afecta
-     * compilacion); en Phase D+ los pases del JIT/AOT lo consumen.
+     * quedan vacios.  En  A esto es metadata pura (no afecta
+     * compilacion); en  D+ los pases del JIT/AOT lo consumen.
      *
      * El printer del IR emite @c "@template_of <Name>" y
      * @c "@type_args [t1, t2, ...]" como anotaciones de la
@@ -1176,10 +1176,10 @@ struct IrFunction {
         generic_type_args; ///< concretos sustituidos (paralelo a type_params)
 
     /**
-     * @brief Phase MC.1: marca esta IrFunction como derivada del
+     * @brief  MC.1: marca esta IrFunction como derivada del
      * body de un `@Macro`.  El nombre suele ser `__macro_<original>`.
      * El TypeChecker mantiene un mapa name -> IrFunction* para
-     * recuperarla al ejecutar el macro via la ComptimeVM (Phase MC.2+).
+     * recuperarla al ejecutar el macro via la ComptimeVM ( MC.2+).
      *
      * NO afecta el codegen ni la ejecucion runtime: estas funciones
      * NO son linkeadas desde call sites de codigo runtime; solo
@@ -1210,7 +1210,7 @@ struct IrFunction {
         spec_devirt_sites;
 
     /**
-     * @brief Phase AS inc.2: storage-class @c register("reg") de
+     * @brief  AS inc.2: storage-class @c register("reg") de
      *        var-decls dentro de esta funcion.
      *
      * Mapea el nombre de la variable Vesta -> nombre del registro fisico
@@ -1226,7 +1226,7 @@ struct IrFunction {
     std::vector<AsmRegBinding> asm_reg_bindings;
 
     /**
-     * @brief Phase AS inc.3: listas de clobbers EXPLICITOS por bloque
+     * @brief  AS inc.3: listas de clobbers EXPLICITOS por bloque
      *        @c INLINE_ASM de esta funcion.
      *
      * Indexadas por el "asm-id" que el @c INLINE_ASM lleva empaquetado en
@@ -1251,7 +1251,7 @@ struct IrFunction {
     std::vector<AsmMicro> asm_micros;
 
     /**
-     * @brief Phase AOT.3 2b: seccion de salida del CODIGO de esta funcion
+     * @brief  AOT.3 2b: seccion de salida del CODIGO de esta funcion
      *        (dev OS: `@section(".name")`).  Vacio => default `.text`.
      *
      * @c section_perms son los permisos explicitos del usuario
@@ -1263,7 +1263,7 @@ struct IrFunction {
     std::string section;
     std::string section_perms;
     /**
-     * @brief Phase NR: `@Naked` -- funcion sin prologo/epilogo NI ret
+     * @brief  NR: `@Naked` -- funcion sin prologo/epilogo NI ret
      *        implicito (dev OS: ISRs, stubs de entry/cambio de modo).
      *
      * El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
@@ -1519,7 +1519,7 @@ struct IrModule {
             uint8_t is_rel = 0;  ///< 1 = PC-relativo; 0 = absoluto.
         };
         std::vector<SymRef> sym_refs; ///< vacio = sin refs (caso comun).
-        /// Phase NR / dev-OS: nombre EXPORTADO de este bloque de datos para
+        ///  NR / dev-OS: nombre EXPORTADO de este bloque de datos para
         /// que OTROS bloques lo referencien por simbolo (cross-block).  Lo
         /// fija el lowering para bloques `asm name {}` y `bytes name {}`: su
         /// `name` se vuelve un simbolo resoluble por el emisor AOT (un `dd

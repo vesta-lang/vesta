@@ -10,7 +10,7 @@
 
 /**
  * @file aot/object_writer.cpp
- * @brief Phase AOT.4 -- fachada C++ del emisor de ejecutables (sobre el shim
+ * @brief  AOT.4 -- fachada C++ del emisor de ejecutables (sobre el shim
  * C).
  *
  * Convierte las estructuras C++ (@c WriterSection, @c LayoutConfig,

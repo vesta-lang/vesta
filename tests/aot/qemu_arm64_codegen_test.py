@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Valida el SELECTOR IR->AArch64 (Phase H.2) ejecutando su salida en QEMU.
+"""Valida el SELECTOR IR->AArch64 ( H.2) ejecutando su salida en QEMU.
 
 Cadena completa: el selector (jit/arm64/arm64_select) baja una IrFunction
 `add(a,b)=a+b` a texto AArch64; se envuelve en un harness bare-metal que llama

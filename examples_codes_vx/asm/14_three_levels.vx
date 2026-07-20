@@ -1,4 +1,4 @@
-// Phase AS + ASA: los TRES niveles de inline asm.
+//  AS + ASA: los TRES niveles de inline asm.
 //   asm { }          analizable (default): el compilador lo entiende y puede
 //                    reoptimizarlo; los clobbers se infieren.
 //   asm volatile { } analizable para contratos, pero emision VERBATIM.

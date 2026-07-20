@@ -1,6 +1,6 @@
 /**
  * @file compiler_project.cpp
- * @brief Compilador multi-modulo (Phase M.2.e).
+ * @brief Compilador multi-modulo ( M.2.e).
  *
  * Detecta @c import declaraciones en el fichero raiz, construye el dep
  * graph via @c ModuleGraph, ordena topologicamente, compila cada modulo
@@ -68,7 +68,7 @@
 #include <unordered_map>
 #include <utility>
 
-// Phase M5.A: cabeceras para PID + atomic rename portable.
+//  M5.A: cabeceras para PID + atomic rename portable.
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -125,7 +125,7 @@ bool write_file_(const std::string &path, const std::vector<uint8_t> &bytes) {
     return f.good();
 }
 
-/// Phase M5.A L.17: escritura atomica de fichero.  Escribe a un .tmp
+///  M5.A L.17: escritura atomica de fichero.  Escribe a un .tmp
 /// unico (PID + tid + counter para evitar colisiones de procesos
 /// concurrentes) y hace rename al destino.  En la mayoria de sistemas
 /// (Windows NTFS, Linux ext4/btrfs, macOS APFS) el rename es atomic:
@@ -275,7 +275,7 @@ bool cas_unpack_module_(const std::vector<uint8_t> &blob,
 /// source es la ruta mas predecible (vs un .cache/ global): facilita
 /// distribucion (publicar la libreria = copiar .vx + .vxi + .ir
 /// juntos) y limpieza (borrar la carpeta del modulo lo limpia todo).
-/// Phase M.L16: cache global opt-in via @c VX_CACHE_DIR .  Si la env
+///  M.L16: cache global opt-in via @c VX_CACHE_DIR .  Si la env
 /// var esta definida, los caches (@c .vxi / @c .vxir / @c .vel ) se
 /// redirigen a @c "$VX_CACHE_DIR/<hash_64>_<basename><ext>" donde
 /// @c hash_64 es FNV-1a 64 del path canonico completo.  Esto permite
@@ -329,7 +329,7 @@ std::string vxir_path_for_(const std::string &source_path,
     return source_path.substr(0, dot) + tgt_suffix + ".vxir";
 }
 
-/// Phase M5.C: path del @c .vel cacheado per-dep (output secundario
+///  M5.C: path del @c .vel cacheado per-dep (output secundario
 /// junto al @c .vxi para distribucion de libs precompiladas).
 std::string dep_vel_path_for_(const std::string &source_path) {
     if (!global_cache_dir_().empty()) {
@@ -364,7 +364,7 @@ struct ProjectModuleWork {
     ir::IrModule ir;
     VxiModule vxi;
     bool ok = false;
-    /// Phase M.L20-full: Diagnostics local del modulo.  Cuando se
+    ///  M.L20-full: Diagnostics local del modulo.  Cuando se
     /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,
     /// evitando race conditions.  Post-join se mergean al global.
@@ -386,14 +386,14 @@ struct ImportRequest {
     SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
 };
 
-/// Phase NS.2-full: mapa namespace punteado -> module_name (filename) del
+///  NS.2-full: mapa namespace punteado -> module_name (filename) del
 /// modulo que lo declara.  Se construye desde los AST de todos los modulos
 /// del proyecto y traduce los imports por-namespace (`import a.b.c;`) al
 /// module_name del dep resuelto, para reusar toda la maquinaria de imports
 /// por-path (que ya soporta acceso cualificado multi-segmento via ns_path).
 using NsToModname = std::unordered_map<std::string, std::string>;
 
-/// Phase M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
+///  M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
 /// modulo con un prefijo `<modname>__`.  Esto evita colisiones de
 /// nombres cuando dos modulos definen una funcion con el mismo nombre
 /// (e.g. ambos `lib_a` y `lib_b` declaran `i32 init();`).
@@ -711,7 +711,7 @@ collect_imports_(const ast::ModuleNode &mod,
     return out;
 }
 
-/// Phase NS.2-full: construye el mapa namespace -> module_name recorriendo
+///  NS.2-full: construye el mapa namespace -> module_name recorriendo
 /// los AST de todos los modulos del proyecto.  Cada @c NamespaceDecl top-level
 /// (formas statement y bloque) mapea su path punteado al module_name del
 /// modulo que lo contiene.  Namespaces parciales (varios modulos, mismo ns):
@@ -753,7 +753,7 @@ build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
     return out;
 }
 
-/// Phase NS.3: deriva el PackageId del proyecto.  Camina hacia arriba desde el
+///  NS.3: deriva el PackageId del proyecto.  Camina hacia arriba desde el
 /// directorio del fichero raiz buscando @c "vx.toml" (o @c "vx.json"); lee el
 /// @c [package] con un scan minimo (sin dependencia de @c src/pkg).  El id es:
 ///   - el valor explicito de @c id / @c "id" si esta presente, o
@@ -838,7 +838,7 @@ std::string derive_package_id_(const std::string &root_path) {
 
 } // namespace
 
-/// Phase M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
+///  M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
 /// sin imports.  Nivel N = 1 + max(niveles de sus deps).  Modulos del
 /// MISMO nivel son independientes entre si (sus interfaces solo
 /// dependen de niveles menores), por lo que pueden compilarse en
@@ -950,17 +950,17 @@ CompileResult compile_vx_project(
         by_name.emplace(rm_mut->module_name, i);
     }
 
-    // Phase NS.2-full: mapa namespace -> module_name para traducir los
+    //  NS.2-full: mapa namespace -> module_name para traducir los
     // imports por-namespace (`import a.b.c;`) al module_name del dep.
     const NsToModname ns_to_modname = build_ns_to_modname_(work);
     // Namespace parcial: todos los module_name por namespace (para registrar
     // los simbolos de TODOS los ficheros de un `namespace X;` compartido).
     const NsToAllModnames ns_to_all_modnames = build_ns_to_all_modnames_(work);
 
-    // Phase NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
+    //  NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
     // Compartido por todos los modulos del proyecto salvo override @id.
     const std::string project_package_id = derive_package_id_(root_path);
-    // Phase NS.3: override @id por-modulo, capturado AQUI (antes de que el
+    //  NS.3: override @id por-modulo, capturado AQUI (antes de que el
     // flatten elimine el NamespaceDecl del AST durante compile_one_module).
     std::vector<std::string> module_pkgid_override(work.size());
     for (size_t i = 0; i < work.size(); ++i) {
@@ -988,7 +988,7 @@ CompileResult compile_vx_project(
     //   - Cache desactivable via env VX_NO_CACHE=1.
     const bool cache_enabled = !vxi_cache_disabled_();
     const bool verbose_cache = std::getenv("VX_VERBOSE_CACHE") != nullptr;
-    // Phase M.L21: progreso/feedback al usuario durante compile de
+    //  M.L21: progreso/feedback al usuario durante compile de
     // proyectos grandes.  Activado via @c VX_VERBOSE_COMPILE=1 .
     // Emit @c [i/N] compiling <name>... al iniciar cada modulo +
     // @c (hit/wrote) al cerrar.  Util para identificar cuellos de
@@ -997,7 +997,7 @@ CompileResult compile_vx_project(
         const char *v = std::getenv("VX_VERBOSE_COMPILE");
         return v && v[0] == '1';
     }();
-    // Phase M.L20: computar niveles topologicos para reporting.  Modulos
+    //  M.L20: computar niveles topologicos para reporting.  Modulos
     // del MISMO nivel son independientes (pueden paralelizarse).  Esto
     // detecta el potencial paralelismo del proyecto; la ejecucion
     // paralela queda como infraestructura para M8 (ThreadPool dedicado
@@ -1127,7 +1127,7 @@ CompileResult compile_vx_project(
         }
     }
 
-    // Phase M8: refactor del loop body a lambda para enable dispatch paralelo
+    //  M8: refactor del loop body a lambda para enable dispatch paralelo
     // por nivel topo.  La lambda captura todo el entorno por referencia.
     // Cada thread tiene su propio @c pm = work[i] por diseno (slots distintos
     // del vector, no overlap).  Lectura cross-thread de @c work[dep_idx] es
@@ -1198,7 +1198,7 @@ CompileResult compile_vx_project(
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
                            (source_hash << 6) + (source_hash >> 2);
         }
-        // Phase AOT (fix): el IR de un dep depende del MODO de POO con que se
+        //  AOT (fix): el IR de un dep depende del MODO de POO con que se
         // baja.  En modo Full/VM las clases usan GC (newobj + gc_deref); en
         // modo AOT (`native_poo`) usan stack/heap nativo (calloc + dtor RAII).
         // Son IR DISTINTOS para el mismo source.  Si no mezclamos native_poo
@@ -1290,7 +1290,7 @@ CompileResult compile_vx_project(
             if (read_file_bytes_(vp, vbytes)) {
                 auto pr = vxi_parse(vbytes.data(), vbytes.size());
                 if (pr.ok && pr.module_.source_hash == source_hash) {
-                    // Phase M4.ext L.13: cache transitivo.  El source_hash
+                    //  M4.ext L.13: cache transitivo.  El source_hash
                     // del modulo coincide, pero alguno de sus deps directos
                     // podria haber cambiado.  Verificar que cada DepRecord
                     // del .vxi cacheado matchea el abi_hash actual del dep
@@ -1390,7 +1390,7 @@ CompileResult compile_vx_project(
         }
 
         // ---- Compile path (cache miss o root) ----
-        // Phase M.5: si es DEP (no root), mangle top-level fns y globals
+        //  M.5: si es DEP (no root), mangle top-level fns y globals
         // con prefijo `<module>__` para evitar colisiones cross-module.
         // El root NO se mangla (mantiene `main` y demas nombres tal cual).
         if (!is_root) {
@@ -1432,7 +1432,7 @@ CompileResult compile_vx_project(
         // Dos modos:
         //   - `import "x" only A, B;`   -> inyecta A, B directos en scope.
         //   - `import "x" [as alias];`  -> registra namespace para `x.A` o
-        //                                   `alias.A` (Phase M.7).
+        //                                   `alias.A` ( M.7).
         auto imports = collect_imports_(*pm.ast, &ns_to_modname);
 
         // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
@@ -1705,7 +1705,7 @@ CompileResult compile_vx_project(
                     pm.ok = false;
                     return;
                 }
-                // Phase M.L23: marcar cada simbolo importado como
+                //  M.L23: marcar cada simbolo importado como
                 // (imported, is_reexport).  El export del .vxi del
                 // modulo actual filtra los importados NO marcados como
                 // public.
@@ -1750,7 +1750,7 @@ CompileResult compile_vx_project(
             return;
         }
 
-        // Phase M.L26: warning de imports sin usar.  Tras el check, el
+        //  M.L26: warning de imports sin usar.  Tras el check, el
         // TypeChecker tiene un set de nombres referenciados.  Cada
         // `import "lib" only A, B, C;` declara nombres en el scope
         // global; si alguno no aparece en @c referenced_names() , el
@@ -1796,7 +1796,7 @@ CompileResult compile_vx_project(
         }
 
         Lowering lo(*pm.ast, *pm.tc, pm.diags);
-        // Phase AOT multi-modulo: propagar POO/strings nativos a TODOS los
+        //  AOT multi-modulo: propagar POO/strings nativos a TODOS los
         // modulos del proyecto (no solo al single-file).  Sin esto los deps
         // se bajaban en modo Full (GC) y el IR mergeado no era AOT-compatible.
         lo.set_native_poo(opts.native_poo);
@@ -1826,7 +1826,7 @@ CompileResult compile_vx_project(
             return;
         }
 
-        // Phase M.5: export con strip_prefix = `<module>__` para que el
+        //  M.5: export con strip_prefix = `<module>__` para que el
         // .vxi exponga nombres publicos sin el mangle.  El consumidor
         // importa "sumar" pero la FunctionSig lleva mangled_label="lib__sumar".
         const std::string strip_prefix =
@@ -1834,7 +1834,7 @@ CompileResult compile_vx_project(
                     : (pm.module_name + "__");
         export_typechecker_to_vxi(*pm.tc, source_hash, pm.vxi, strip_prefix);
 
-        // Phase NS.3: estampar el PackageId en el .vxi del modulo.  Por defecto
+        //  NS.3: estampar el PackageId en el .vxi del modulo.  Por defecto
         // el del proyecto (vx.toml); si el modulo declaro `namespace X @id(..)`,
         // ese override gana (identidad ABI por-namespace).  El override se
         // capturo antes del flatten (que borra el NamespaceDecl del AST).
@@ -1843,7 +1843,7 @@ CompileResult compile_vx_project(
                                 ? module_pkgid_override[i]
                                 : project_package_id;
 
-        // Phase M4.ext L.13: poblar dep table con los (name, abi_hash) de
+        //  M4.ext L.13: poblar dep table con los (name, abi_hash) de
         // los deps directos del modulo.  El loader del cache verifica
         // estos hashes al cache hit para invalidacion transitiva: si
         // cualquier dep cambio su .vxi (distinto abi_hash), este modulo
@@ -1866,7 +1866,7 @@ CompileResult compile_vx_project(
             const std::string ip =
                 vxir_path_for_(pm.canonical_path, cache_tgt_suffix);
             auto vbytes = vxi_emit(pm.vxi);
-            // Phase M4.ext L.13: capturar el abi_hash recien calculado
+            //  M4.ext L.13: capturar el abi_hash recien calculado
             // por vxi_emit (lo escribio en offset 8 del header) para
             // que los modulos sucesores en topo order que importen este
             // puedan apuntarlo en su dep table.
@@ -1877,7 +1877,7 @@ CompileResult compile_vx_project(
                 }
                 pm.vxi.abi_hash = h;
             }
-            // Phase M5.A L.17: escritura atomica (rename temp file).
+            //  M5.A L.17: escritura atomica (rename temp file).
             (void)write_file_atomic_(vp, vbytes);
             // BugFix M.vxir-sd: persistir el modulo COMPLETO (functions +
             // static_data + globals) para que un dep cache-hit aporte sus
@@ -1891,7 +1891,7 @@ CompileResult compile_vx_project(
             // recompilar, sin importar en que ruta viva.
             if (cas && cas_key_ok)
                 (void)cas->put(cas_key, cas_pack_module_(vbytes, ibytes));
-            // Phase M5.C L.18: ademas del .vxi (interfaz) + .vxir (IR
+            //  M5.C L.18: ademas del .vxi (interfaz) + .vxir (IR
             // serializado), emitir el .vel del dep solo (sin merge) para
             // que la libreria sea distribuible standalone.  El
             // consumidor puede tomar lib.vx + lib.vxi + lib.vel y
@@ -1922,7 +1922,7 @@ CompileResult compile_vx_project(
         pm.ok = true;
     }; // end of compile_one_module lambda
 
-    // Phase M8: dispatch.  Por defecto secuencial (preserve cache hit
+    //  M8: dispatch.  Por defecto secuencial (preserve cache hit
     // determinism y el orden de @c verbose_compile output).  Activado via
     // env @c VX_PARALLEL_COMPILE=N (N >= 1).  N=1 fuerza secuencial (util
     // para diagnostico).  N >= 2 corre hasta N modulos del MISMO nivel
@@ -1941,7 +1941,7 @@ CompileResult compile_vx_project(
         }
         if (parallel_threads < 0) parallel_threads = 0;
     }
-    // Phase M8 AUTO (2026-06-05): sin env var (o =0) el compile usa
+    //  M8 AUTO (2026-06-05): sin env var (o =0) el compile usa
     // hardware_concurrency() limitado a max 8 threads (cap para evitar
     // oversubscription: >8 da diminishing returns por contention en cache
     // writes + mutex verbose).  VX_PARALLEL_COMPILE=1 fuerza SECUENCIAL
@@ -2008,7 +2008,7 @@ CompileResult compile_vx_project(
         }
     }
 
-    // Phase M.L20-full: mergear @c pm.diags al res.diagnostics + abortar
+    //  M.L20-full: mergear @c pm.diags al res.diagnostics + abortar
     // si algun modulo fallo.  Hacemos esto post-loop para que las
     // versiones paralelas no compitan por el @c res.diagnostics global.
     // NOTA: @c res.ok default es @c false ; setear early-abort solo si
@@ -2039,7 +2039,7 @@ CompileResult compile_vx_project(
     }
     ir::IrModule &merged = work.back().ir;
 
-    // Phase M.L25: tree-shaking opt-in via VX_TREE_SHAKE=1 .  Si el root
+    //  M.L25: tree-shaking opt-in via VX_TREE_SHAKE=1 .  Si el root
     // hace `import "lib" only X, Y` y NINGUNO de X, Y aparece en
     // referenced_names() del root, el dep NO se mergea al .velb final.
     // Reduce el tamano de programas con muchos deps opcionales.
@@ -2688,7 +2688,7 @@ CompileResult compile_vx_project(
     }
     res.vel_text = std::move(eres.vel_text);
     res.ir_section_bytes = ir::emit_ir_section(merged.functions);
-    // Phase AOT multi-modulo: exponer el IR mergeado (functions + static_data
+    //  AOT multi-modulo: exponer el IR mergeado (functions + static_data
     // + globals) como module_cache para que el path -m aot lo consuma.  El
     // single-file lo rellena en compile_vx_source; aqui lo rellenamos desde
     // el modulo mergeado de todos los .vx del proyecto.
@@ -2725,11 +2725,11 @@ CompileResult compile_vx_project(
                 res.aot_free_sym = fd->name;
         }
     }
-    /* has_lowerable_macros: gate del two-phase compile.  El single-file
+    /* has_lowerable_macros: gate del two- compile.  El single-file
      * (compile_vx_source) lo setea escaneando su irmod; en el path multi-modulo
      * hay que escanear el MODULO MERGEADO -- si cualquier funcion (root o dep)
      * es `is_macro_compiled` (un @Macro o una comptime fn ruteada a la
-     * ComptimeVM, `__macro_<X>`), el proyecto necesita el two-phase para que
+     * ComptimeVM, `__macro_<X>`), el proyecto necesita el two- para que
      * esos call sites se evaluen en la VM (si no, quedan deferidos -> codigo
      * vacio).  Sin esto, un proyecto CON imports que use comptime fns nunca
      * disparaba el segundo pase. */
@@ -2790,7 +2790,7 @@ CompileResult compile_vx_project(
         res.html_vel = html_from_vel_text(res.vel_text);
     }
 
-    // Phase M5.B: poblar dep_paths con los paths canonicos de TODOS los
+    //  M5.B: poblar dep_paths con los paths canonicos de TODOS los
     // modulos compilados (incluido root).  main.cpp persistira el project
     // cache asociando (paths, hashes, .velb final).
     res.dep_paths.reserve(work.size());

@@ -1,7 +1,7 @@
 /**
  * @file test_vx_module_interop.cpp
  * @brief Round-trip TypeChecker -> VxiModule -> serialized -> parsed
- *        -> TypeChecker (Phase M.2.d).
+ *        -> TypeChecker ( M.2.d).
  *
  * Verifica el ciclo completo de compartir simbolos cross-module:
  *
@@ -239,7 +239,7 @@ void test_empty_only_no_inject() {
 } // namespace
 
 int main() {
-    std::cout << "=== test_vx_module_interop: Phase M.2.d ===\n";
+    std::cout << "=== test_vx_module_interop:  M.2.d ===\n";
     test_typedef_roundtrip();
     test_struct_roundtrip();
     test_only_rename();

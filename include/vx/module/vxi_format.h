@@ -1,6 +1,6 @@
 /**
  * @file vxi_format.h
- * @brief Formato binario del fichero de interfaz `.vxi` (Phase M.2).
+ * @brief Formato binario del fichero de interfaz `.vxi` ( M.2).
  *
  * El `.vxi` es la interfaz publica de un modulo Vesta.  Contiene SOLO los
  * simbolos exportados (marcados `public`) + sus firmas, sin
@@ -41,7 +41,7 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 
 /// Version del formato.  Incrementar al cambiar el layout binario.  El
 /// loader rechaza versiones distintas (no se intenta forward-compat).
-/// v2 (Phase M5.b): añade `extern_lib_len` explicito en el payload
+/// v2 ( M5.b): añade `extern_lib_len` explicito en el payload
 /// FUNCTION (cierra L.5).
 /// v3 (M4.ext): dep_table para invalidacion transitiva del cache.
 /// v4 (.vxi-v4): **blob_pool** -- buffer contiguo para valores no
@@ -120,14 +120,14 @@ struct VxiHeader {
     uint16_t _reserved = 0;
     uint64_t abi_hash = 0;
     uint64_t source_hash = 0;
-    /// Phase M5.b L.27: hash de la version del compilador.  Si el .vxi
+    ///  M5.b L.27: hash de la version del compilador.  Si el .vxi
     /// fue generado por una version anterior cuyas reglas de mangling
     /// o layout difieren, el loader debe rechazar el cache y regenerar.
     /// El valor lo provee el compilador via @c vxi_compiler_version_hash().
     uint64_t compiler_version_hash = 0;
     uint32_t symbol_count = 0;
     uint32_t string_pool_offset = 0;
-    /// Phase M4.ext L.13: cache transitivo.  El .vxi guarda los
+    ///  M4.ext L.13: cache transitivo.  El .vxi guarda los
     /// (module_name, abi_hash) de cada dep directo del modulo.  Al
     /// cache hit, el loader verifica que TODOS los deps siguen con el
     /// mismo abi_hash que cuando se compilo este modulo; si alguno
@@ -205,7 +205,7 @@ struct VxiSymbol {
     /// El que se persiste aqui es el ABI hash (FNV-1a del nombre).
     uint64_t nominal_abi = 0;
 
-    /// Phase M.L8: bloque @c {explicit from/to T;} del typedef new.
+    ///  M.L8: bloque @c {explicit from/to T;} del typedef new.
     /// Cada entry es @c (typename_canonico, is_public).  El consumidor
     /// solo puede usar conversiones marcadas @c is_public.
     struct ExplicitConvEntry {
@@ -229,7 +229,7 @@ struct VxiSymbol {
     std::string super_class;
     /// (CLASS) Interfaces implementadas (nombres).
     std::vector<std::string> interfaces;
-    /// (CLASS) Phase M6.b: firmas de metodos publicos para que el
+    /// (CLASS)  M6.b: firmas de metodos publicos para que el
     /// consumidor pueda emitir CALLVIRT correctamente cross-module.
     /// Cierra L.6.
     struct MethodInfo {
@@ -270,7 +270,7 @@ struct VxiSymbol {
     std::vector<std::string> param_names; ///< paralelo a param_types
     bool is_extern = false;               ///< extern "lib.dll"
     std::string extern_lib;               ///< si is_extern
-    /// Phase M.5: label internal usado en el .vel del modulo origen.
+    ///  M.5: label internal usado en el .vel del modulo origen.
     /// Vacio = mismo que @c name.  Si distinto, el consumidor emite
     /// @c CALLVM al @c mangled_label en lugar de @c name (resuelve
     /// colisiones de nombres cross-module).  E.g. funcion "sumar" del
@@ -283,7 +283,7 @@ struct VxiSymbol {
     /// @c FunctionSig::is_naked para enrutar la llamada cross-modulo al
     /// dispatcher @c vrt:naked_dispatch en interp/JIT.
     bool is_naked = false;
-    /// Phase NS.3: @c "internal" (package-scoped).  Bit 0x10 del byte de flags.
+    ///  NS.3: @c "internal" (package-scoped).  Bit 0x10 del byte de flags.
     /// El simbolo se exporta pero el consumidor de OTRO package_id lo filtra.
     bool is_internal = false;
 };
@@ -297,7 +297,7 @@ struct VxiModule {
     uint64_t source_hash = 0;
     uint64_t compiler_version_hash = 0; ///< M5.b L.27
     std::vector<VxiSymbol> symbols;
-    /// Phase M4.ext L.13: cache transitivo.  Cada DepRecord guarda el
+    ///  M4.ext L.13: cache transitivo.  Cada DepRecord guarda el
     /// nombre del modulo dep + su abi_hash en el momento de compilar
     /// este .vxi.  El loader verifica los deps al cache hit.
     struct DepRecord {
@@ -335,7 +335,7 @@ struct VxiModule {
         bool target_is_class = false;
     };
     std::vector<ExtMethod> ext_methods;
-    /// Phase NS.3 (v10): identidad del PAQUETE que produjo este .vxi.
+    ///  NS.3 (v10): identidad del PAQUETE que produjo este .vxi.
     /// Derivado de @c "vx.toml" ([package] name@version) o de @c "@id(...)"
     /// opt-in; vacio = paquete anonimo.  Usado para: (a) desambiguar
     /// namespaces homonimos de paquetes distintos, (b) frontera de la

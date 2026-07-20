@@ -81,7 +81,7 @@ static constexpr uint32_t SHARED_SIZE_CLASS_COUNT = 12;
  * - 512 B-2 KB: strings largos, arrays medianos
  * - 4-32 KB: arrays grandes, buffers
  *
- * Objetos > 32 KB se rechazan (return nullptr).  Phase Z+: caso
+ * Objetos > 32 KB se rechazan (return nullptr).   Z+: caso
  * general via @c VirtualAlloc directo + tabla auxiliar.
  */
 static constexpr uint32_t SHARED_SIZE_CLASSES[SHARED_SIZE_CLASS_COUNT] = {

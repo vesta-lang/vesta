@@ -976,7 +976,7 @@ void exec_instr_getmgr(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
- * @brief Ejecuta NEWOBJS (Phase Z): aloca instancia en SharedHeap.
+ * @brief Ejecuta NEWOBJS ( Z): aloca instancia en SharedHeap.
  *
  * Variante shared de NEWOBJ.  Aloca en vm.shared_heap, registra el
  * host_ptr en shared_handle_table, e inicializa ObjectHeader con
@@ -1024,7 +1024,7 @@ void exec_instr_gcwb(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_gcalloc(ProcessVM *vm, const DecodedInstr &instr);
 
 // =========================================================================
-//  Ejecutores: atomics i64 (Phase Z, opcodes 0x00 0xA9 .. 0xAD)
+//  Ejecutores: atomics i64 ( Z, opcodes 0x00 0xA9 .. 0xAD)
 // =========================================================================
 void exec_instr_atomicld(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_atomicst(ProcessVM *vm, const DecodedInstr &instr);

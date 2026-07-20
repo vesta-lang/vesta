@@ -1,6 +1,6 @@
 /**
  * @file module_interop.cpp
- * @brief Interop entre TypeChecker y formato @c .vxi (Phase M.2.d).
+ * @brief Interop entre TypeChecker y formato @c .vxi ( M.2.d).
  *
  * Funciones libres en namespace @c vx que conectan el estado del
  * @c TypeChecker con un @c VxiModule:
@@ -236,7 +236,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         return Type::make_ptr(std::move(pt));
     }
 
-    // Phase M5.b L.10: ARRAY con tamano explicito `T[N]` o decay `T[]`.
+    //  M5.b L.10: ARRAY con tamano explicito `T[N]` o decay `T[]`.
     if (type_str.size() >= 2 && type_str.back() == ']') {
         size_t lb = type_str.find_last_of('[');
         if (lb != std::string::npos) {
@@ -256,7 +256,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         }
     }
 
-    // Phase M5.b L.10: VirtualPtr<T> (PTR is_virtual=true).
+    //  M5.b L.10: VirtualPtr<T> (PTR is_virtual=true).
     {
         const std::string prefix = "VirtualPtr<";
         if (type_str.size() > prefix.size() &&
@@ -269,7 +269,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         }
     }
 
-    // Phase M5.b L.10: Optional<T>.
+    //  M5.b L.10: Optional<T>.
     {
         const std::string prefix = "Optional<";
         if (type_str.size() > prefix.size() &&
@@ -282,7 +282,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         }
     }
 
-    // Phase M5.b L.10: Result<V, E>.
+    //  M5.b L.10: Result<V, E>.
     {
         const std::string prefix = "Result<";
         if (type_str.size() > prefix.size() &&
@@ -299,7 +299,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         }
     }
 
-    // Phase M5.b L.10: Future<T>.
+    //  M5.b L.10: Future<T>.
     {
         const std::string prefix = "Future<";
         if (type_str.size() > prefix.size() &&
@@ -312,7 +312,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         }
     }
 
-    // Phase M5.b L.10: smart pointers `unique<T>` y `shared<T>`.
+    //  M5.b L.10: smart pointers `unique<T>` y `shared<T>`.
     {
         const std::string p_uniq = "unique<";
         if (type_str.size() > p_uniq.size() &&
@@ -332,7 +332,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         }
     }
 
-    // Phase M5.b L.10: function types `fn(T1, T2) -> R`.
+    //  M5.b L.10: function types `fn(T1, T2) -> R`.
     // El typename canonico de type_to_string para FUNCTION es
     // `fn(p1, p2) -> ret`.  Detectamos el patron y parseamos.
     {
@@ -455,7 +455,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
     return Type{};
 }
 
-// Phase M.7: registrar un namespace importado.  Devuelve el indice
+//  M.7: registrar un namespace importado.  Devuelve el indice
 // asignado.  El namespace se declara como Symbol::Namespace al inicio
 // de run() (via la cola pending_imported_ns_names_).
 void TypeChecker::inject_imported_ext_method(
@@ -550,7 +550,7 @@ void TypeChecker::register_namespace_symbol(uint32_t ns_index,
     ns.by_name.emplace(public_name, sym_idx);
 }
 
-// Phase NS.1b: resuelve `a.b.c.Symbol` probando el prefijo de namespace mas
+//  NS.1b: resuelve `a.b.c.Symbol` probando el prefijo de namespace mas
 // LARGO.  Itera desde el ultimo punto hacia el primero: el namespace es el
 // prefijo mas largo registrado (por su nombre punteado completo) que contiene
 // el simbolo restante.  Cubre single-segment (`ui.Button`) y multi-segment
@@ -618,9 +618,9 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
 
     // --- Type aliases + newtypes ---
     for (const auto &kv : tc.type_aliases()) {
-        // Phase M6.a L.3: solo exportar si es publico.
+        //  M6.a L.3: solo exportar si es publico.
         if (!tc.is_typedef_public(kv.first)) continue;
-        // Phase M.L23: filtrar imports NO re-exportados.  Solo lo que
+        //  M.L23: filtrar imports NO re-exportados.  Solo lo que
         // venga de otro .vxi vive en imported_names_; los locales no.
         if (tc.is_imported(kv.first) && !tc.is_reexported(kv.first)) continue;
         VxiSymbol s;
@@ -659,7 +659,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                 tmp.nominal_name.clear();
                 s.underlying_type = canonical_typename_of(tmp);
             }
-            // Phase M.L8: serializar bloque {explicit from/to T;}.
+            //  M.L8: serializar bloque {explicit from/to T;}.
             // Solo se exportan las conversiones marcadas @c is_public ;
             // las privadas (module-scope del fichero origen) NO viajan
             // cross-module porque su semantica solo aplica intra-modulo.
@@ -691,9 +691,9 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &kv : tc.struct_layouts()) {
         const auto &name = kv.first;
         const auto &layout = kv.second;
-        // Phase M6.a L.3: solo exportar publicos.
+        //  M6.a L.3: solo exportar publicos.
         if (!layout.is_public) continue;
-        // Phase M.L23: filtrar imports NO re-exportados.
+        //  M.L23: filtrar imports NO re-exportados.
         if (tc.is_imported(name) && !tc.is_reexported(name)) continue;
         VxiSymbol s;
         s.kind = VxiSymbolKind::STRUCT;
@@ -730,11 +730,11 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &kv : tc.class_layouts()) {
         const auto &name = kv.first;
         const auto &layout = kv.second;
-        // Phase M6.a L.3: solo exportar publicos.  Tambien skipear las
+        //  M6.a L.3: solo exportar publicos.  Tambien skipear las
         // clases runtime-predefined (FatalError etc.) que vienen con la
         // VM y no son parte del modulo del usuario.
         if (!layout.is_public) continue;
-        // Phase M.L23: filtrar imports NO re-exportados.
+        //  M.L23: filtrar imports NO re-exportados.
         if (tc.is_imported(name) && !tc.is_reexported(name)) continue;
         if (layout.is_runtime_predefined) continue;
         VxiSymbol s;
@@ -764,7 +764,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             fi.bit_width = f.bit_width;
             s.fields.push_back(std::move(fi));
         }
-        // Phase M6.b L.6: emitir methods con firmas + vtable_index +
+        //  M6.b L.6: emitir methods con firmas + vtable_index +
         // mangled_label para que el consumer pueda emitir CALLVIRT
         // correcto cross-module.
         s.methods.reserve(layout.methods.size());
@@ -797,9 +797,9 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &kv : tc.enum_layouts()) {
         const auto &name = kv.first;
         const auto &layout = kv.second;
-        // Phase M6.a L.3: solo exportar publicos.
+        //  M6.a L.3: solo exportar publicos.
         if (!layout.is_public) continue;
-        // Phase M.L23: filtrar imports NO re-exportados.
+        //  M.L23: filtrar imports NO re-exportados.
         if (tc.is_imported(name) && !tc.is_reexported(name)) continue;
         VxiSymbol s;
         s.kind = VxiSymbolKind::ENUM;
@@ -887,7 +887,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             public_name = fname;
             // mangled_label = "" (mismo que name).
         }
-        // Phase M6.a L.3: filtrar privadas.  La fn esta registrada con su
+        //  M6.a L.3: filtrar privadas.  La fn esta registrada con su
         // nombre mangled (post pre-pase de mangling cross-module).  Si el
         // mapa la marca explicitamente como privada, omitir; en cualquier
         // otro caso (entrada con true o no registrada) se exporta.  Esto
@@ -901,7 +901,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         if (template_names.count(public_name) || template_names.count(fname)) {
             continue;
         }
-        // Phase M.L23: filtrar imports NO re-exportados.  El check
+        //  M.L23: filtrar imports NO re-exportados.  El check
         // contra public_name (no mangled) porque los imports se
         // registran con su nombre publico al consumer.
         if (tc.is_imported(public_name) && !tc.is_reexported(public_name)) {
@@ -928,7 +928,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         out.symbols.push_back(std::move(s));
     }
 
-    // --- Globals (Phase M.L7) ---
+    // --- Globals ( M.L7) ---
     // Iteramos el AST del modulo en busca de GlobalVarDecl publicas (las
     // privadas + `static_assert` sinteticas se filtran).  El TypeChecker
     // ya valido el tipo y la visibilidad; aqui solo lo serializamos.
@@ -1125,7 +1125,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         out.symbols.push_back(std::move(s));
     }
 
-    // Phase M.L23: re-export de globals const importadas.  Los globals
+    //  M.L23: re-export de globals const importadas.  Los globals
     // importados via `public import "lib" only X;` NO viven en el AST
     // del modulo actual (estan en @c imported_global_consts_ del
     // TypeChecker).  Iteramos ese mapa y exportamos los que esten
@@ -1480,7 +1480,7 @@ void inject_generic_templates_from_vxi(
 // ---------------------------------------------------------------------------
 // import: VxiModule -> TypeChecker (inyeccion selectiva via only_symbols).
 //
-// Phase M.2 MVP: solo procesamos los simbolos LISTADOS en only_symbols.
+//  M.2 MVP: solo procesamos los simbolos LISTADOS en only_symbols.
 // Para cada uno, buscamos el VxiSymbol con ese nombre en el modulo y
 // lo inyectamos en la tabla del TypeChecker que corresponda a su kind.
 //
@@ -1565,7 +1565,7 @@ void import_vxi_into_typechecker(
                 clean.is_opaque = false;
                 clean.align_override = 0;
                 tc.register_imported_newtype(local_name, clean);
-                // Phase M.L8: registrar el bloque {explicit from/to T;}
+                //  M.L8: registrar el bloque {explicit from/to T;}
                 // si el .vxi lo trae.  Las entries no-public ya fueron
                 // filtradas por el lado emit.  Las que llegan aqui son
                 // siempre is_public=true.
@@ -1638,7 +1638,7 @@ void import_vxi_into_typechecker(
                 L.fields.push_back(std::move(cfi));
             }
             L.interface_names = s.interfaces;
-            // Phase M6.b L.6: inyectar methods con sus firmas.  El
+            //  M6.b L.6: inyectar methods con sus firmas.  El
             // lowering de `obj.method(args)` en el consumidor podra
             // usar `vtable_index` para emitir CALLVIRT correcto.
             L.methods.reserve(s.methods.size());
@@ -1690,7 +1690,7 @@ void import_vxi_into_typechecker(
                 sig.param_types.push_back(tc.resolve_type_string(pt));
             }
             sig.extern_lib = s.is_extern ? s.extern_lib : std::string();
-            // Phase M.5: si el .vxi declara un mangled_label, el
+            //  M.5: si el .vxi declara un mangled_label, el
             // lowering del consumidor emitira @c CALLVM a ese label
             // en lugar del nombre publico.  Cierra L.4.
             sig.mangled_label = s.mangled_label;
@@ -1700,7 +1700,7 @@ void import_vxi_into_typechecker(
             break;
         }
         case VxiSymbolKind::GLOBAL_VAR: {
-            // Phase M.L7: registrar global importada.  El TypeChecker
+            //  M.L7: registrar global importada.  El TypeChecker
             // la declarara como Symbol::Variable en el scope global
             // tras el push_scope inicial de run().  Si trae
             // has_init_value, ademas se inline-a en el lowering como
@@ -1743,7 +1743,7 @@ void import_vxi_into_typechecker(
 // =========================================================================
 // Variante que devuelve la lista de simbolos solicitados pero NO encontrados
 // (o no publicos) en el .vxi.  El caller (compile_vx_project) la usa para
-// emitir diagnosticos cross-module precisos (Phase M6.a L.3).
+// emitir diagnosticos cross-module precisos ( M6.a L.3).
 //
 // Tras llamar a esta funcion, el TypeChecker queda con las inyecciones de
 // los simbolos que SI existian (igual que la variante simple); los faltantes
@@ -1781,7 +1781,7 @@ std::vector<std::string> import_vxi_into_typechecker_with_missing(
 }
 
 // =========================================================================
-// Phase M.7: namespace qualified imports.
+//  M.7: namespace qualified imports.
 //
 // Cuando `import "lib_a";` (sin `only`) o `import "lib_a" as foo;` se
 // procesa, el compiler_project llama @c register_namespace_for_import
@@ -1798,7 +1798,7 @@ void register_namespace_for_import(TypeChecker &tc,
                                    const VxiModule &mod) {
     const uint32_t ns_idx =
         tc.register_imported_namespace(local_name, module_name);
-    // Phase M7.b: para que `lib.MyClass` funcione como tipo qualified
+    //  M7.b: para que `lib.MyClass` funcione como tipo qualified
     // (clase, struct, enum o typedef), necesitamos:
     //   1. Inyectar el layout en class_layouts_ / struct_layouts_ /
     //      enum_layouts_ / type_aliases_ del consumer, pero usando
@@ -1923,7 +1923,7 @@ void register_namespace_for_import(TypeChecker &tc,
             for (const auto &fi : s.fields) {
                 StructFieldInfo sfi;
                 sfi.name = fi.name;
-                // Phase M.fix-classfield: fallback al mangled del dep
+                //  M.fix-classfield: fallback al mangled del dep
                 // para campos con tipo CLASS/STRUCT/ENUM del mismo
                 // modulo dep.  El .vxi guarda type_str unmangled
                 // ("EditorTab") pero el consumer registra mangled

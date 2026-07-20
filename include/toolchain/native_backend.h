@@ -12,7 +12,7 @@
 
 /**
  * @file native_backend.h
- * @brief Abstraccion de BACKEND DE CODEGEN NATIVO por arquitectura (Phase H.5).
+ * @brief Abstraccion de BACKEND DE CODEGEN NATIVO por arquitectura ( H.5).
  *
  * Desacopla el driver AOT del codegen concreto: en vez de llamar directamente a
  * @c jit::vreg_compile_native (x86-only), el driver obtiene un @ref NativeBackend

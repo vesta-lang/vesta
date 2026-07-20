@@ -1,4 +1,4 @@
-// Phase AS (inline-asm nativo ejecutado por el JIT de VestaVM).
+//  AS (inline-asm nativo ejecutado por el JIT de VestaVM).
 //
 // Demuestra que el register allocator respeta los clobbers de registros
 // CALLEE-SAVED (r12-r15) INFERIDOS por el compilador: la variable `keep`

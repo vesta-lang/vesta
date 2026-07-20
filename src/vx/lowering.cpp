@@ -18,7 +18,7 @@
 #include "vx/lowering.h"
 #include <algorithm> // UCRT64: no transitivo
 #include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
-#include "vx/asm/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
+#include "vx/asm/asm_effects.h" // inferencia de clobbers ( AS inc.4)
 #include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
 #include "vx/asm/asm_lift_emit.h"  // lift de patrones atomicos a IR tipado (ASA.3)
 #include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
@@ -72,7 +72,7 @@ inline uint64_t ir_type_size(::ir::IrType t) noexcept {
 namespace vx {
 
 // =====================================================================
-//  Mini-ensamblador de bloques `asm` (Phase AOT 16/32-bit).
+//  Mini-ensamblador de bloques `asm` ( AOT 16/32-bit).
 //
 //  Keystone (KS_OPT_SYNTAX_NASM) ensambla instrucciones + labels intra-
 //  bloque + `db`, PERO no soporta `$`/`$$`/`times`.  Para permitir mezclar
@@ -1804,7 +1804,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     generate_extern_cfn_thunks(out_module);
     // Helper runtime __vx_free_uniq para el reassign-free de campos unique<T>.
     generate_free_uniq_helper(out_module);
-    // Phase AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
+    //  AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
     // __module_init (las clases son layout estatico compile-time).
     if (!native_poo_) generate_module_init_function(out_module);
 
@@ -1861,7 +1861,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             m.section_at = bd->attr_at;
             m.section_order = bd->attr_order;
             m.sym_refs = std::move(asm_syms); // call/jmp -> funcion Vesta
-            // Phase NR / dev-OS: exportar el nombre del bloque como simbolo
+            //  NR / dev-OS: exportar el nombre del bloque como simbolo
             // resoluble por otros bloques (cross-block jmp/call/dd).
             m.symbol_name = bd->name;
             m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
@@ -1958,7 +1958,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         m.section_perms = bd->attr_section_perms;
         m.section_at = bd->attr_at;
         m.section_order = bd->attr_order;
-        // Phase NR / dev-OS: exportar el nombre del bloque bytes como simbolo
+        //  NR / dev-OS: exportar el nombre del bloque bytes como simbolo
         // resoluble cross-block (p.ej. `lgdt [gdtr]` / `dd gdt` desde otro).
         m.symbol_name = bd->name;
         m.flags |=
@@ -2380,7 +2380,7 @@ void Lowering::emit_introspect_info_chunks() {
 // ---------------------------------------------------------------------
 
 /**
- * @brief Phase MC.1 -- detecta si el body de un @Macro contiene
+ * @brief  MC.1 -- detecta si el body de un @Macro contiene
  * caracteristicas que el IR runtime NO soporta todavia.
  *
  * Devuelve la primera razon encontrada (string descriptivo) o cadena
@@ -2419,7 +2419,7 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
     if (!e) return "";
     switch (e->kind) {
     case ast::NodeKind::IdentExpr: {
-        /* Phase MC.17.2: refs a `comptime const` (INMUTABLES)
+        /*  MC.17.2: refs a `comptime const` (INMUTABLES)
          * globales de tipo int SE ACEPTAN -- se materializan
          * como slot @c static_data de 8 bytes, leidos via
          * LOAD i64.  El valor es fijo, no hay divergencia
@@ -2465,7 +2465,7 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
         if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
             const auto *id =
                 static_cast<const ast::IdentExpr *>(ce->callee.get());
-            /* Phase MC.15B+C: los builtins que YA estan aliasados a
+            /*  MC.15B+C: los builtins que YA estan aliasados a
              * sus equivalentes runtime str_* en @c lower_call NO
              * deben rechazarse aqui -- el lowering los soporta.
              * Los demas siguen siendo comptime-only.
@@ -2524,7 +2524,7 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                   ce->args[0]->kind == ast::NodeKind::StringLitExpr)) {
                 return "virtual comptime fn '" + id->name + "'";
             }
-            /* Phase MC.17.3: calls a @Macros user-defined SE ACEPTAN
+            /*  MC.17.3: calls a @Macros user-defined SE ACEPTAN
              * (la callee tambien se baja a IR con nombre
              * `__macro_<callee>`, asi que emitimos CALLVM regular
              * a esa label).  Calls a comptime fns NO-@Macro
@@ -3002,7 +3002,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * se evalua en compile-time cuando es invocada desde un contexto
      * comptime.
      *
-     * Phase MC.1 (A.43.22): @Macro bodies SI se lowean al IR (con
+     *  MC.1 (A.43.22): @Macro bodies SI se lowean al IR (con
      * nombre `__macro_<original>`) cuando el body es lowerable.
      * Esto valida que la pipeline IR -> bytecode soporta el codigo
      * del macro; futuros sprints MC.2+ ejecutan ese bytecode via
@@ -3011,7 +3011,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * site del macro sigue usando el evaluator AST. */
     /* F1: una `comptime fn` (no-macro) con inline asm se baja a IR y se
      * ejecuta en el ComptimeVM (JIT + interp fallback).  Funciona en .velb
-     * (interp/JIT) y en AOT: ambos hacen el two-phase que compila el codigo
+     * (interp/JIT) y en AOT: ambos hacen el two- que compila el codigo
      * comptime a un `.velb` cacheado y lo carga, asi que los call sites
      * comptime invocan la VM y el valor se pliega a constante. */
     const bool is_vm_comptime_fn =
@@ -3097,7 +3097,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
         /* Continuar al lowering normal con nombre prefijado. */
     }
-    /* Phase MC.17.1: setear flag para que lower_var_decl trate
+    /*  MC.17.1: setear flag para que lower_var_decl trate
      * `comptime var/const` LOCALES como vars runtime regulares.
      * Reset al salir de la funcion. */
     const bool prev_is_macro = current_fn_is_macro_;
@@ -3110,7 +3110,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     } macro_flag_guard{&current_fn_is_macro_, prev_is_macro};
 
     ir::IrFunction fn;
-    /* Phase MC.1: nombre prefijado para macros lowered al IR.
+    /*  MC.1: nombre prefijado para macros lowered al IR.
      * Asi no colisionan con funciones runtime y son identificables
      * por el TypeChecker para invocacion desde ComptimeVM (MC.2). */
     if ((fd->is_macro && fd->is_comptime) || is_vm_comptime_fn) {
@@ -3120,7 +3120,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         fn.name = "__macro_" + fd->name;
         fn.is_macro_compiled = true;
         ++macro_lowered_count_;
-        /* Phase MC.2: registrar en el ComptimeRuntime para que el
+        /*  MC.2: registrar en el ComptimeRuntime para que el
          * TypeChecker pueda intentar invocar via VM en futuras
          * iteraciones de la compilacion.  En MC.2 el entry_pc es
          * 0 (placeholder) -- MC.3 lo populara con la direccion
@@ -3137,7 +3137,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.section_perms = fd->attr_section_perms;
     fn.section_at = fd->attr_at;
     fn.section_order = fd->attr_order;
-    // Phase NR: @Naked -- el codegen suprime prologo/epilogo/ret.
+    //  NR: @Naked -- el codegen suprime prologo/epilogo/ret.
     fn.is_naked = fd->is_naked;
 
     // Subsistema de coste (modo --analyze): propagar el contrato
@@ -3495,7 +3495,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 break;
             }
         }
-        // Phase M6.b L.6: el root puede no declarar clases pero importar
+        //  M6.b L.6: el root puede no declarar clases pero importar
         // alguna de un dep via `import "lib" only Counter;`.  En ese
         // caso, class_layouts() del TypeChecker contiene la clase
         // importada y necesitamos llamar a __module_init (que el merge
@@ -3523,7 +3523,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
         // L2.2: tambien llamar __module_init si hay globals runtime
         // que requieren inicializacion (string="lit" etc.).
-        // Phase AOT.2.b: en POO nativa NO hay ClassRegistry -> main no
+        //  AOT.2.b: en POO nativa NO hay ClassRegistry -> main no
         // llama a __module_init (las clases son layout estatico).
         bool need_init = any_class || !runtime_global_slots_.empty();
         if (need_init && !native_poo_) {
@@ -3707,7 +3707,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
          * type checker solo evalua una vez con el valor inicial.
          * Asi `comptime const SQ = j * j;` se actualiza por iter. */
         auto *vd = static_cast<ast::VarDeclStmt *>(s);
-        /* Phase MC.17.1: cuando estamos dentro de un @Macro body
+        /*  MC.17.1: cuando estamos dentro de un @Macro body
          * que se baja a IR, las VarDeclStmt marcadas
          * @c is_comptime se tratan como vars runtime regulares.
          * El macro corre en VM y los locales se computan en
@@ -4168,7 +4168,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         }
     }
 
-    // Phase Z.6: propagar el modificador @c shared del var-decl al
+    //  Z.6: propagar el modificador @c shared del var-decl al
     // @c NewExpr del init.  Si el init es `new T(...)` y el var-decl
     // tiene `shared`, el `new` debe alocar en el SharedHeap en lugar
     // del gc_heap local.  El @c lower_new_expr detecta la marca y
@@ -4183,7 +4183,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         }
     }
 
-    // Phase Z.9: si el var-decl tiene `shared`, registrar el nombre en
+    //  Z.9: si el var-decl tiene `shared`, registrar el nombre en
     // @c shared_locals_ para que el escape analyzer en spawn capture
     // no genere warning (es shared explicitamente).
     if (vd->is_shared) {
@@ -4203,7 +4203,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             classes_used_gc_.insert(ne->class_name);
     }
 
-    // Phase AS inc.3: si el var-decl tiene storage-class register("reg"),
+    //  AS inc.3: si el var-decl tiene storage-class register("reg"),
     // forzar el camino ALLOCA (slot estable) marcando el nombre como
     // address-taken.  Sin esto, un primitivo register-bound se baja a un
     // SSA value efimero que el optimizer pliega/elimina (el body asm es
@@ -5160,7 +5160,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         fn_->append(current_block_, std::move(ai));
         bind(vd->name, addr);
 
-        // Phase AS inc.3: registrar el binding register("reg") -> slot.
+        //  AS inc.3: registrar el binding register("reg") -> slot.
         // El backend port-C materializa este ALLOCA como una variable C
         // con register-pin de GCC y traduce sus LOAD/STORE a accesos
         // directos a la variable.
@@ -5513,7 +5513,7 @@ bind_and_cleanup:
                     break;
                 }
             }
-            // Phase AOT.2.b/c/d: POO nativa -> al exit del scope, para una
+            //  AOT.2.b/c/d: POO nativa -> al exit del scope, para una
             // instancia HEAP (`= new`): invocar `~T()` (si existe) y luego
             // liberar la memoria (RAW_FREE).  RAII determinista, sin GC, sin
             // leak.  Una instancia STACK (`Rect r;` -> alloca) NO se libera
@@ -8596,7 +8596,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             break;
         }
         case CleanupAction::Kind::NATIVE_FREE: {
-            // Phase AOT.2.d: invocar `~T()` (CALL directo al dtor del
+            //  AOT.2.d: invocar `~T()` (CALL directo al dtor del
             // tipo estatico) ANTES de liberar -> el dtor libera sus
             // recursos propios (RAII).  Luego RAW_FREE de la instancia
             // (host_ptr de calloc) -> aot_lower lo baja a call<free>.
@@ -10038,7 +10038,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
         spawn_captured_ssa_values_.push_back(v);
     }
 
-    // Phase Z.9: escape analysis cross-process.  Para cada captura que
+    //  Z.9: escape analysis cross-process.  Para cada captura que
     // es un objeto GC (is_gc_object=true en su SSA value) Y NO fue
     // declarada con @c shared, emitir warning con sugerencia clara.
     // Esto detecta el bug clasico (t13): pasar un objeto local al
@@ -11062,7 +11062,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
 
     // marker: MAKE_VARIANT identifica la construccion completa de
     // un valor ADT.  Emitido ANTES de la secuencia ALLOCA + STOREs para
-    // que el C2 JIT (Phase D.8) pueda reconocer el patron y aplicar
+    // que el C2 JIT ( D.8) pueda reconocer el patron y aplicar
     // escape analysis (promocion del slot a regs si no escapa) +
     // case-splitting eficiente del match downstream.  No produce SSA
     // value; el emitter actual lo trata como no-op.
@@ -13061,7 +13061,7 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
 }
 
 // ---------------------------------------------------------------------
-// Phase AS: inline asm nativo -> IrOp::INLINE_ASM (marker host).
+//  AS: inline asm nativo -> IrOp::INLINE_ASM (marker host).
 //
 // Incremento 1 (aditivo): el cuerpo NASM viaja verbatim en func_name y
 // los calificadores + efectos (memory/flags) en un bitfield en imm.  El
@@ -13149,7 +13149,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     ia.dst = ir::IR_NO_VALUE;
     ia.source_line = s->loc.line;
 
-    // Phase AS inc.7: crear las variables register-bound de la lista de
+    //  AS inc.7: crear las variables register-bound de la lista de
     // operandos `( <clase> <nombre> [= init] )` ANTES de tokenizar el body
     // (para sustituir los placeholders por el registro).  Clase concreta ->
     // el registro se conoce aqui: se crea el mismo AsmRegBinding que inc.5 y
@@ -13247,7 +13247,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                               reg_auto ? ("$" + std::to_string(ph_index)) : reg);
     }
 
-    // Phase AS inc.5g (metaprogramacion): sustituir las `comptime` consts
+    //  AS inc.5g (metaprogramacion): sustituir las `comptime` consts
     // ENTERAS por su literal en el cuerpo del asm ANTES de ensamblar, igual
     // que una macro textual (evita hardcodear el valor + mantiene el asm
     // legible).  Tokenizamos por identificadores [A-Za-z_][A-Za-z0-9_]*; un
@@ -13319,7 +13319,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     break;
             }
             const std::string tok = b.substr(i, j - i);
-            // Phase AS inc.7: si el token es el NOMBRE de un operando de la
+            //  AS inc.7: si el token es el NOMBRE de un operando de la
             // lista `( ... )`, sustituirlo por su REGISTRO (los concretos ya
             // conocen el registro; los `reg` allocator se haran POST-regalloc
             // en el backend).  Tiene prioridad sobre comptime/decoracion.
@@ -13396,14 +13396,14 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             i = j;
         }
     }
-    // Phase AS inc.5g: normalizar los literales numericos del body a hex
+    //  AS inc.5g: normalizar los literales numericos del body a hex
     // explicito detectando su base (0x/0b/0o/decimal).  Keystone interpreta
     // los enteros BARE como HEX, asi que sin esto `shl rdx, 32` seria un
     // shift de 0x32=50.  Tras esto, los 4 bases se soportan correctamente.
     body_sub = vx::asm_normalize_numbers(body_sub);
     ia.func_name = body_sub; // cuerpo NASM (consts + bases ya normalizadas)
 
-    // Phase AS inc.4b: validacion de sintaxis en compile-time via el
+    //  AS inc.4b: validacion de sintaxis en compile-time via el
     // backend de ensamblado (Keystone).  Si esta registrado y rechaza el
     // body, emitimos un error con la linea Vesta (mejor que esperar a que
     // GCC falle al compilar el .c).  Si no hay backend (tests sin main),
@@ -13574,7 +13574,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         }
     }
 
-    // Phase AS inc.3: listar como operandos los slots ALLOCA de las
+    //  AS inc.3: listar como operandos los slots ALLOCA de las
     // variables register-bound EN SCOPE en este punto.  Esto (a) impide
     // que el optimizer las elimine (INLINE_ASM es op no-safe -> sus
     // operandos "escapan"), y (b) le dice al backend que vars poner en la
@@ -13701,7 +13701,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         ia.func_name = body_sub; // el INLINE_ASM emitido usa el body reordenado
     }
 
-    // Phase AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
+    //  AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
     // `noinfer`, analizamos el cuerpo y unimos los clobbers inferidos con
     // los explicitos.  `nomem`/`preserves_flags`/`pure` QUITAN memory/flags
     // del set; `clobbers(...)` añaDE.  Resultado final -> asm_clobber_lists
@@ -13775,7 +13775,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     if (s->q_pure) q |= 1ull << 3;
     if (final_mem) q |= 1ull << 4;
     if (final_flags) q |= 1ull << 5;
-    // Phase AS inc.3/4: empaquetar el "asm-id" (indice en asm_clobber_lists)
+    //  AS inc.3/4: empaquetar el "asm-id" (indice en asm_clobber_lists)
     // en los bits altos de imm (8..31).  El backend port-C lo lee para
     // recuperar la lista de clobbers (explicitos + inferidos) de ESTE bloque.
     const uint64_t asm_id = (uint64_t)fn_->asm_clobber_lists.size();
@@ -13788,7 +13788,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     ia.preserve = true;
     fn_->append(current_block_, std::move(ia));
 
-    // Phase AS inc.6: registrar el import nativo del helper runner para que
+    //  AS inc.6: registrar el import nativo del helper runner para que
     // el linker resuelva el `calln @Method("vrt:inline_asm_exec")` que
     // ir_emitter emite en el backend bytecode (interp puro, sin JIT).
     // Idempotente (register_native_import dedup).
@@ -14940,7 +14940,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                           e->loc.line);
     }
 
-    // Phase M.L7: globals const IMPORTADAS de otro modulo via .vxi.
+    //  M.L7: globals const IMPORTADAS de otro modulo via .vxi.
     // El TypeChecker las registro con su valor literal embedded en
     // @c imported_global_consts_; emitimos CONST inline igual que
     // las locales (cero overhead).
@@ -18066,14 +18066,14 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         return dst;
     }
 
-    // Phase M.7: llamada a funcion de namespace importado, ej.
+    //  M.7: llamada a funcion de namespace importado, ej.
     // `lib_a.valor_a(args)`.  El TypeChecker marca el FieldAccessExpr
     // callee con property_kind=4 y resuelve la firma del simbolo en
     // imported_namespaces_.  Aqui obtenemos el mangled_label y
     // emitimos CALL como si fuera una llamada normal.
     if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        // Phase NS.1b: la base puede ser un IdentExpr (single-segment `ui`) o
+        //  NS.1b: la base puede ser un IdentExpr (single-segment `ui`) o
         // una cadena de field-access (multi-segment `ui.widgets`).  La
         // resolucion usa @c fa->ns_index (autoritativo); @c idb solo se usa en
         // el fallback de static-method (ns_index no resuelto), que no aplica a
@@ -18371,7 +18371,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         const auto &cfns = tc_.comptime_fns();
         auto cit = cfns.find(cid->name);
         if (cit != cfns.end()) {
-            /* Phase MC.17.3: si estamos dentro de un @Macro body
+            /*  MC.17.3: si estamos dentro de un @Macro body
              * lowereado a IR Y el callee es OTRO @Macro, NO
              * intentamos comptime-eval; en su lugar caemos al
              * lowering normal mas abajo que emitira CALLVM regular
@@ -18394,7 +18394,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 goto skip_comptime_eval_for_macro_to_macro;
             }
             /* F1: comptime fn con asm -> ejecutar en el ComptimeVM (JIT +
-             * interp fallback).  Con el two-phase (.velb y AOT), pass 2
+             * interp fallback).  Con el two- (.velb y AOT), pass 2
              * (bytecode comptime cargado via prebuilt) da el valor real; el
              * pass 1 (sin bytecode) emite placeholder 0 -- inocuo, porque el
              * cr del pass 1 se descarta y el pass 2 recompila.  La fn ya se
@@ -19299,7 +19299,7 @@ skip_comptime_eval_for_macro_to_macro:
             callee_name = "__macro_" + id->name;
         }
     }
-    /* Phase M.5: si la funcion fue importada cross-module con
+    /*  M.5: si la funcion fue importada cross-module con
      * mangling, el label emitido en el .vel es el mangled
      * (`lib__foo`) aunque el nombre visible del usuario es `foo`.
      * Consultamos function_sig_by_name para detectar el caso. */
@@ -20917,7 +20917,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         }
     }
 
-    /* Phase MC.17.2: si estamos dentro de un @Macro Y el target es
+    /*  MC.17.2: si estamos dentro de un @Macro Y el target es
      * un comptime global int, emit STORE al slot @c static_data
      * correspondiente.  Soporta `=` directo y compound `+=`/`-=`
      * (el caller computa cur op rhs en `rhs` antes de llegar aqui). */
@@ -21552,7 +21552,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         name == "comptime_strlen") {
         const ComptimeEvalResult r = comptime_eval_expr(tc_, e);
         if (!r.ok) {
-            /* Phase MC.24: si el comptime eval falla (e.g. arg es
+            /*  MC.24: si el comptime eval falla (e.g. arg es
              * un comptime var que solo se resuelve en call-site
              * del macro padre), NO erroreamos.  En su lugar, dejamos
              * que el path runtime (str_concat/str_equals/str_length
@@ -22275,7 +22275,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // aqui devolvemos false para que lower_call siga con la ruta
     // generica (CALL a una funcion del usuario).
     const bool is_print = (name == "print");
-    /* Phase MC.18: `comptime_print` / `ct_print` se aliasan a
+    /*  MC.18: `comptime_print` / `ct_print` se aliasan a
      * `println` -- en el path VM-lowered es exactamente eso (print
      * a stderr).  El macro corre en compile time (porque la
      * ComptimeRuntime ejecuta el body al type-checkear el call
@@ -22477,7 +22477,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_z10_gc_collect = (name == "shared_gc_collect");
     // Builtins de string: cada uno baja a una sola instruccion bytecode
     // dedicada (STRLEN, STRGETBYTES, STRRAW, etc.) sin pasar por CALLN.
-    /* Phase MC.15B: alias comptime_* a sus equivalentes runtime str_*
+    /*  MC.15B: alias comptime_* a sus equivalentes runtime str_*
      * cuando aparecen en cuerpos de @Macro lowereados a IR.  El
      * type_checker ya valido el call con el comptime evaluator; aqui
      * solo emitimos el bytecode que la VM ejecutara al invocar el
@@ -22495,7 +22495,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         (name == "str_equals" || name == "comptime_streq");
     const bool is_str_make = (name == "str_make");
     const bool is_str_convert = (name == "str_convert");
-    /* Phase MC.15C: aliases comptime adicionales que lowerean a
+    /*  MC.15C: aliases comptime adicionales que lowerean a
      * codigo runtime (eliminando rejection en macro pre-validation). */
     const bool is_to_str = (name == "to_str" || name == "comptime_to_str");
     const bool is_chr_b = (name == "chr" || name == "comptime_chr");
@@ -24484,7 +24484,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return true;
     }
 
-    /* Phase MC.15C: builtins comptime aliasados a codigo runtime.
+    /*  MC.15C: builtins comptime aliasados a codigo runtime.
      * Cuando aparecen en cuerpos de @Macro lowereados a IR, se
      * compilan a una secuencia de bytecode equivalente al AST eval. */
 
@@ -24612,7 +24612,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     if (is_static_assert_b) {
-        /* Phase MC.20: `static_assert(cond, msg)` se baja a CALLN
+        /*  MC.20: `static_assert(cond, msg)` se baja a CALLN
          * a la virtual lib `vesta_comptime:static_assert`.  El fn
          * recibe (cond_i64, msg_cstr) y emite diagnostic error si
          * cond es 0.  Cuando el macro corre via VM en compile time,
@@ -24699,7 +24699,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     if (is_repeat_b || is_replace_b || is_contains_b) {
-        /* Phase MC.15D: builtins de string que requieren acceso a
+        /*  MC.15D: builtins de string que requieren acceso a
          * los bytes RAW de StringObjects (via STRRAW) y un buffer
          * destino en vm_mem.  Layout comun:
          *   1. Resolver SSA values de cada arg (string -> handle).
@@ -29873,7 +29873,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             effective_ctor ? effective_ctor->vtable_index : 0;
 
         // -------------------------------------------------------------
-        // Phase AOT.2.b -- POO NATIVA: __new_<Class>(args) sin runtime.
+        //  AOT.2.b -- POO NATIVA: __new_<Class>(args) sin runtime.
         //   %obj = call calloc(1, size_bytes)   ; heap zero-init, host_ptr
         //   [si hay ctor efectivo:] call <Class>__ctor(%obj, args...)
         //   ret %obj
@@ -30316,7 +30316,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
         (void)name_idx;
         (void)name_len; // ya no se usa findclass aqui
 
-        // Phase Z.6: emitir TANTO el helper local (__new_<Class>) como,
+        //  Z.6: emitir TANTO el helper local (__new_<Class>) como,
         // si la clase se uso con `shared` en algun var-decl, su variante
         // shared (__new_<Class>_shared).  El cuerpo es identico salvo
         // que la instruccion `newobj r1` se reemplaza por `newobjs r1`
@@ -31256,7 +31256,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     // Emit IrInstr::CALL a __new_<ClassName>(args).  La funcion auxiliar
     // se genera al final de run() via generate_new_helpers.
     //
-    // Phase Z.6: si @c e->is_shared, despachamos al helper
+    //  Z.6: si @c e->is_shared, despachamos al helper
     // @c __new_<ClassName>_shared (emite @c newobjs en lugar de @c newobj
     // -> aloca en el SharedHeap).  El frontend marca @c is_shared cuando
     // el var-decl padre tiene modificador @c shared.
@@ -32706,7 +32706,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         return visible_dst;
     }
 
-    // Phase AOT.2.c: POO nativa -- DEVIRT MONOMORFICA.  Si la clase
+    //  AOT.2.c: POO nativa -- DEVIRT MONOMORFICA.  Si la clase
     // receptora estatica es HOJA (ninguna otra clase la extiende), el tipo
     // dinamico == el estatico, por lo que la llamada NO puede resolver a un
     // override de subclase -> emitimos un CALL DIRECTO a <owner>__<metodo>
@@ -38175,7 +38175,7 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
     fn_->append(current_block_, std::move(ins));
 }
 
-// ---- Sprint 2: Phase Z + reflexion + static + AOP ----
+// ---- Sprint 2:  Z + reflexion + static + AOP ----
 
 ir::IrValueId Lowering::emit_findmethod(ir::IrValueId v_params, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
@@ -38544,7 +38544,7 @@ ir::IrValueId Lowering::emit_getproc(uint32_t source_line) {
 }
 
 /**
- * @brief Phase MC.17.2 -- obtiene (o aloca) el slot de @c static_data
+ * @brief  MC.17.2 -- obtiene (o aloca) el slot de @c static_data
  * para un comptime global.
  *
  * Lookup en @c comptime_global_slots_; si no esta, lee el valor

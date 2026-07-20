@@ -288,7 +288,7 @@ def main():
     # heuristica solo como fallback).
     forms = [mras_semantics.to_irform(s) for s in syns]
     forms.sort(key=ir.form_key)                   # FormID = indice denso
-    # FASE 3: overlay (barrera/serializante/atomica/ll_sc/mem_acquire-release/
+    #   overlay (barrera/serializante/atomica/ll_sc/mem_acquire-release/
     # branch/call/ret/syscall) DERIVADO del pseudocodigo, keyed por encoding.
     import mras_pseudocode
     overlay = {}

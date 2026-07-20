@@ -7,7 +7,7 @@
 
 /**
  * @file jit/linear_scan.cpp
- * @brief Implementacion del register allocator linear-scan (Phase D.7).
+ * @brief Implementacion del register allocator linear-scan ( D.7).
  *        Ver linear_scan.h y doc/REGALLOC.md.
  */
 
@@ -35,7 +35,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
         return false;
     };
 
-    /* Phase AS inc.5e: @p r esta CLOBBERED para @p iv si el intervalo cubre
+    /*  AS inc.5e: @p r esta CLOBBERED para @p iv si el intervalo cubre
      * la posicion de algun INLINE_ASM_RAW cuya lista de clobbers incluye
      * @p r.  Cubre los clobbers de callee-saved (r12-r15) que el
      * call-position no protege (este solo empuja los caller-saved
@@ -93,7 +93,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 active.resize(k);
             }
 
-            /* ---- Phase AS inc.5: intervalo PRECOLOREADO (register-bound
+            /* ----  AS inc.5: intervalo PRECOLOREADO (register-bound
              * de un inline-asm) ----
              * Toma su @c fixed_reg de forma INCONDICIONAL (override del
              * cross-call y del GC-spill: el inline-asm necesita el valor en
@@ -141,7 +141,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
             }
 
             /* ---- GC root vivo a traves de un call: SPILL forzado ----
-             * (Phase D.7 commit 6, enfoque A).  Un valor GC en un registro
+             * ( D.7 commit 6, enfoque A).  Un valor GC en un registro
              * a traves de un call seria invisible al GC (que escanea el
              * stack).  Lo ponemos en un slot SIEMPRE; el stackmap del call
              * lo describe ahi.  Los GC roots que NO cruzan calls siguen en

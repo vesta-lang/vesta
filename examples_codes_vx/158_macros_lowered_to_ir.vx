@@ -3,7 +3,7 @@ namespace ejemplos.macros_lowered_to_ir;
 // validacion de que @Macro bodies se lowerean a IR como
 // IrFunction `__macro_<name>`.  Este test confirma que el pipeline
 // IR -> bytecode soporta codigo simple de macros (foundation para
-// la futura ComptimeVM execution -- ver Phase MC.2+).
+// la futura ComptimeVM execution -- ver  MC.2+).
 //
 // El test no ejerce la ComptimeVM: solo valida que la compilacion
 // produce un .velb correcto y que los macros simples evaluan a su

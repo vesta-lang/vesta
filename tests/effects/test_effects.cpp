@@ -213,7 +213,7 @@ int main() {
     }
 
     // =====================================================================
-    // Fase 1: motor IR -> SemanticEffects (construimos IrFunctions a mano).
+    //   motor IR -> SemanticEffects (construimos IrFunctions a mano).
     // =====================================================================
     auto add_instr = [](ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
                         ir::IrValueId dst, std::vector<ir::IrValueId> ops)
@@ -323,7 +323,7 @@ int main() {
     }
 
     // =====================================================================
-    // Fase 2: punto-fijo del callgraph (cierre interprocedural) + contratos.
+    //   punto-fijo del callgraph (cierre interprocedural) + contratos.
     // =====================================================================
     {
         // callee aloca; caller llama a callee -> el cierre de caller may_allocate.

@@ -669,7 +669,7 @@ void draw_full(tabs.Workspace ws, Sidebar sb, screen.Screen sc, i32 view_rows,
     // anterior abre un bloque /*..*/ que se cierra abajo, hacemos un
     // pre-scan rapido desde linea 0 hasta row_top para inicializar el
     // estado correctamente.  Esto es O(N) por keystroke pero acceptable
-    // para archivos <= 10k lineas (Phase A).
+    // para archivos <= 10k lineas ( A).
     hl.reset_state();
     i32 pre = 0;
     while (pre < row_top && pre < b.line_count()) {

@@ -12,7 +12,7 @@
  *        del SO) pero son callable via el mecanismo FFI estandar
  *        (`extern "lib.dll" fn name(...)`).
  *
- * Phase MC.20 (Camino A.cont): habilita exponer servicios compile-time
+ *  MC.20 (Camino A.cont): habilita exponer servicios compile-time
  * de @c vx_lib (static_assert, comptime_compile, comptime_type, etc.)
  * a las macros sin necesidad de DLL externa.  El macro escribe:
  *

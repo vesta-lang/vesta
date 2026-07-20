@@ -51,7 +51,7 @@ namespace jit {
 
 namespace {
 
-/* ----- Helpers para el mini-parser de raw_asm (Phase D.3-G) ----- */
+/* ----- Helpers para el mini-parser de raw_asm ( D.3-G) ----- */
 
 /** @brief Replica de @c EmitCtx::sanitize del ir_emitter: convierte
  *  cualquier caracter no-alfanumerico/no-underscore en '_'.  Usado
@@ -536,7 +536,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
      * cero efecto en el codegen de produccion. */
     mf.emit_line_map = opts_.emit_line_map;
 
-    /* Phase D.7-exc (2026-06-04): exception handling.  El modelo v1 del
+    /*  D.7-exc (2026-06-04): exception handling.  El modelo v1 del
      * throw (do_throw modifica proc->rip + epilogue + el scheduler reanuda
      * el handler en INTERP) SOLO funciona si el catch esta en bytecode
      * separado.  Cuando el metodo se JIT-compila ENTERO, el handler vive en
@@ -620,7 +620,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
      * @c push rbp.
      *
      * Si @c regalloc.empty(), nada cambia respecto al path original. */
-    /* Phase D.jit-mem-model PARTIAL: safety check + dataflow.
+    /*  D.jit-mem-model PARTIAL: safety check + dataflow.
      *
      * Cubrimos el problema mas comun (ALLOCA en JIT produce host
      * pero IR lo marca como VM-addr) via dataflow forward; el
@@ -712,7 +712,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
      * interp (que pasa VM-addrs) o JIT (que pasa host_ptrs).  Sin
      * tag runtime no podemos decidir.  Asumimos VM-addr conservativo;
      * el LOAD/STORE de esos params triggerea el bypass abajo y la
-     * funcion cae a interp.  Sprint Phase D.jit-mem-model VM-STACK
+     * funcion cae a interp.  Sprint  D.jit-mem-model VM-STACK
      * dedicado lo resolveria cambiando ALLOCA del JIT a VM-stack
      * (uniforme con interp), eliminando el mixing por completo. */
     for (const auto &blk : ir_fn.blocks) {
@@ -856,7 +856,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
         if (!changed) break;
     }
 
-    /* Phase D.jit-mem-model VM-STACK: el bypass que abortaba JIT
+    /*  D.jit-mem-model VM-STACK: el bypass que abortaba JIT
      * para LOAD/STORE !host_in_jit ya NO es necesario.  El modelo
      * unificado: ALLOCAs en VM-stack, host_ptrs en is_host_ptr=true.
      * El LOAD/STORE path emite:
@@ -975,7 +975,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
     uint32_t slot_bytes = static_cast<uint32_t>(num_values * 8);
     if (slot_bytes & 15) slot_bytes = (slot_bytes + 15) & ~15u;
 
-    /* Phase D.jit-mem-model VM-STACK: reservamos 16 bytes extras al
+    /*  D.jit-mem-model VM-STACK: reservamos 16 bytes extras al
      * tope del frame (justo bajo los slots SSA) para:
      *   - saved_vm_rsp: VM-RSP original al entry, restaurado al RET.
      *   - hoisted_base:  VM-RSP post-hoist, base de las ALLOCAs hoisted.
@@ -1059,7 +1059,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
         safepoint_pool_idx_ = UINT32_MAX;
     }
 
-    /* Fase 1: tracker de GC slots vivos.
+    /*   tracker de GC slots vivos.
      *
      * Para correctness, la regla es:
      *   - Un slot se marca como GC cuando se ESCRIBE un SSA value
@@ -1284,7 +1284,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
             MReg::RBX, opts_.callback_tls_gs_disp, getproc_idx));
     }
 
-    /* Phase D.jit-mem-model VM-STACK: ALLOCAs ahora viven en VM-stack
+    /*  D.jit-mem-model VM-STACK: ALLOCAs ahora viven en VM-stack
      * (consistente con interp), no en host stack.  Eso permite:
      *   - Mixing JIT/interp seguro (mismo modelo de memoria).
      *   - Sin host stack overflow (i32[100000] etc. funcionan).
@@ -1585,7 +1585,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
             switch (ins.op) {
             /* --------- Mov / Const --------- */
             case IrOp::NOP: break;
-            /* Markers semanticos para C2 (Phase D.8): no producen
+            /* Markers semanticos para C2 ( D.8): no producen
              * codigo, solo metadata.  La construccion real (ALLOCA
              * + STOREs) la emite el lowering DESPUES del marker. */
             case IrOp::MAKE_CLOSURE: break;
@@ -2051,7 +2051,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 break;
             }
 
-            /* --------- ALLOCA (Phase D.jit-mem-model VM-STACK) ---
+            /* --------- ALLOCA ( D.jit-mem-model VM-STACK) ---
              *
              * Las ALLOCAs viven en VM-stack (mismo modelo que
              * interp).  Asi:
@@ -2084,7 +2084,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                     break;
                 }
 
-                /* Phase D.jit-mem-model AUTO-PROMOTE: si el ALLOCA
+                /*  D.jit-mem-model AUTO-PROMOTE: si el ALLOCA
                  * esta marcado `host_alloca=true` (por el IR pass
                  * ir_pass_promote_callned_allocas), emit host stack
                  * (sub rsp, N) -- el ptr resultante es directamente
@@ -2258,7 +2258,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
 
                 if (!ptr_is_host && opts_.mode == SelectorMode::VM_ABI &&
                     opts_.runtime != nullptr) {
-                    /* Phase D.jit-mem-model INLINE-CACHE.
+                    /*  D.jit-mem-model INLINE-CACHE.
                      *
                      * Para VM-addr (is_host_ptr=false en IR),
                      * primero intentamos inline page cache hit:
@@ -2311,7 +2311,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                         return mf;
                     }
 
-                    /* Phase D.jit-mem-model INLINE-CACHE activado.
+                    /*  D.jit-mem-model INLINE-CACHE activado.
                      *
                      * Inline page cache hit: si la pagina del vaddr
                      * coincide con cached_page_vaddr y no cruza
@@ -2497,7 +2497,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                     (ptr_vid < host_in_jit.size() && host_in_jit[ptr_vid]);
                 const uint64_t sbytes = ir_type_size_bytes(ins.type);
 
-                /* Phase D.jit-mem-model INLINE-CACHE.  Mismo
+                /*  D.jit-mem-model INLINE-CACHE.  Mismo
                  * patron que LOAD: hit en page cache -> native
                  * mov; miss/cross-page -> call al runtime. */
                 if (!ptr_is_host && opts_.mode == SelectorMode::VM_ABI &&
@@ -2530,7 +2530,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                         return mf;
                     }
 
-                    /* Phase D.jit-mem-model INLINE-CACHE STORE.
+                    /*  D.jit-mem-model INLINE-CACHE STORE.
                      * Mismo patron que LOAD pero escribiendo. */
                     const bool inline_cache_ok =
                         vesta_rt::kProcVmMemOffset != 0 &&
@@ -2878,7 +2878,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                     break;
                 }
 
-                /* Phase D.jit-mem-model VM-STACK: el abort por
+                /*  D.jit-mem-model VM-STACK: el abort por
                  * host_ptr-en-trampoline-arg YA NO es necesario:
                  *   - ALLOCAs en JIT producen VM-addrs (consistente
                  *     con interp), pasar al interp callee funciona.
@@ -3689,7 +3689,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
              * Si la callee aun no tiene jit_code, vrt_callvirt intenta
              * compilarla on-the-fly.  Si falla, lanza FatalError
              * capturable.  Sin fallback automatico a interp en v1
-             * (necesita un trampoline jit_to_interp completo, Phase D.3-E).
+             * (necesita un trampoline jit_to_interp completo,  D.3-E).
              */
             case IrOp::CALLVIRT: {
                 if (ins.operands.empty()) break;
@@ -4105,7 +4105,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                     MOp::MOV, MOperand::make_mem(MReg::RBX, regs_base + 15 * 8),
                     MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
 
-                /* INLINE CALLM DISPATCH (Phase D.8): el metodo ya esta
+                /* INLINE CALLM DISPATCH ( D.8): el metodo ya esta
                  * RESUELTO en operands[1] (por un FINDMETHOD previo) ->
                  * no hay vtable walk como en CALLVIRT.  En vez de llamar
                  * a vrt_callm (que re-setea regs[1] + on-demand-compile +
@@ -4775,7 +4775,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                         MOperand::make_mem(MReg::RBX,
                                            VESTA_PROC_REGISTERS_OFFSET),
                         MOperand::make_reg(MReg::RAX)));
-                    /* Phase D.jit-mem-model VM-STACK: restaurar
+                    /*  D.jit-mem-model VM-STACK: restaurar
                      * VM-RSP original si la fn modifico vm_stack
                      * via ALLOCAs.  Usa SCRATCH_B (rcx) para no
                      * clobbear RAX (return value). */
@@ -4909,7 +4909,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
             case ir::IrOp::DLSYM: {
                 /* raw_asm-elim wave 2+3: 4 ops nuevos no soportados
                  * en JIT v1.  Caen a unsupported -> el bytecode interp
-                 * los maneja correctamente.  Phase D.13 (native
+                 * los maneja correctamente.   D.13 (native
                  * unwinding) cubrira RETHROW; SHARED_STAT, SMARTPTR_FREE
                  * y RSPAWN_RETURN son de baja frecuencia y aparecen
                  * en cleanups (no en hot path). */
@@ -7701,7 +7701,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
              * forzar la funcion a interp -- donde el unwind via
              * setjmp/longjmp es robusto -- no cuesta performance y
              * elimina el crash.  El unwind nativo de frames JIT-eados
-             * es trabajo de Phase G (.pdata/.eh_frame); hasta entonces
+             * es trabajo de  G (.pdata/.eh_frame); hasta entonces
              * las funciones que lanzan se quedan en interp. */
             case ir::IrOp::PANIC: {
                 warn_unsupported(
@@ -8460,7 +8460,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                         /* Pattern 3: algun OTRO reg ya tiene este slot? ->
                          * convertir LOAD a mov reg, otro_reg.
                          *
-                         * EXCEPCION (Phase D.7): si el slot corresponde a
+                         * EXCEPCION ( D.7): si el slot corresponde a
                          * un VID pinned por regalloc, NO convertir.  La
                          * razon: tras el rewrite el slot se convierte en
                          * un acceso a reg, asi que la "memory access
@@ -8863,7 +8863,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
         }
     } /* end scope peephole+DSE */
 
-    /* Phase D.7: rewrite slot->reg + destructive in-place peephole.
+    /*  D.7: rewrite slot->reg + destructive in-place peephole.
      *
      * Orden FINAL determinado empiricamente (16ms wall en bench):
      *   1. (arriba) Selector emite slot-based.
@@ -9007,7 +9007,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                     invalidate_reg(regX_id);
                     invalidate_reg(m0.dst.reg);
                     out.push_back(collapsed);
-                    /* Phase D.jit-mem-model fix: refresh m0.dst tras el
+                    /*  D.jit-mem-model fix: refresh m0.dst tras el
                      * collapse.  El slot-based peephole anterior
                      * elimino loads subsecuentes `mov m0.dst, [slot]`
                      * confiando en que m0.dst contenia el valor del

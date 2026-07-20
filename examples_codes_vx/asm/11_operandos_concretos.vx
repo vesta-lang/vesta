@@ -1,4 +1,4 @@
-// Phase AS inc.7: operandos con registro CONCRETO (fijado por la ISA) +
+//  AS inc.7: operandos con registro CONCRETO (fijado por la ISA) +
 // read-back.  La clase es el nombre del registro (rax, rcx, ...).  Util cuando
 // una instruccion exige un registro concreto (p.ej. cmpxchg -> rax).  Sin
 // clobbers: las flags de `add` se infieren.

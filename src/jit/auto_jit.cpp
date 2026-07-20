@@ -88,7 +88,7 @@ uint32_t g_jit_threshold = 1500;
  */
 bool g_jit_warn_unsupported = false;
 bool g_jit_disasm = false;
-/* Phase D.7: path de registros virtuales (opt-in via VESTA_JIT_VREGS).
+/*  D.7: path de registros virtuales (opt-in via VESTA_JIT_VREGS).
  * Default OFF -> el JIT usa el path de slots de siempre (cero cambio).
  * Con el flag, las funciones del subset soportado por el selector vreg
  * (aritmetica / control de flujo / loops, sin GC) se compilan por el
@@ -160,7 +160,7 @@ void init_threshold_from_env() {
     if (stats && stats[0] != '\0' && stats[0] != '0') {
         g_jit_emit_instr_counter = true;
     }
-    /* Phase D.7: el path de REGISTROS VIRTUALES es el UNICO path del JIT.
+    /*  D.7: el path de REGISTROS VIRTUALES es el UNICO path del JIT.
      * El selector-slots legacy (src/jit/selector.cpp, backlog B-JIT-1) esta
      * JUBILADO: una op fuera del subset vreg cae al INTERPRETE (siempre
      * correcto), no a slots.  Por eso `g_jit_use_vregs` es siempre true; el
@@ -197,7 +197,7 @@ RuntimeEntries *g_runtime_entries = nullptr;
 JitCompiler *g_compiler = nullptr;
 std::mutex g_compile_mtx;
 
-/* OSR (Phase D.8, 2c): tabla loop_id -> direccion del OSR-entry del C2
+/* OSR ( D.8, 2c): tabla loop_id -> direccion del OSR-entry del C2
  * precompilado.  Se rellena en eager_compile_function tras compilar el
  * C1 de cada funcion (un C2-con-OSR-entry por loop detectado).  El
  * handler instalado en regalloc_rewrite la consulta cuando un loop
@@ -720,7 +720,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         };
     }
 
-    /* Phase D.7: el intento vreg se MOVIO mas abajo (tras construir el
+    /*  D.7: el intento vreg se MOVIO mas abajo (tras construir el
      * resolver recursivo de user-fns + native_resolver) para que un metodo
      * que llama a otra funcion Vesta resuelva la callee por vreg en vez de
      * caer a slots por "call(no-resolver)". */
@@ -898,7 +898,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             child_opts.exc_frame_stack_offset = exc_off_mc;
             child_opts.exc_free_list_offset = exc_free_off_mc;
             child_opts.jit_instr_counter_addr = jit_counter_mc;
-            /* Phase D.7 (opt-in): callee por el path de registros
+            /*  D.7 (opt-in): callee por el path de registros
              * virtuales si esta soportada; si no, slots. */
             if (g_jit_use_vregs) {
                 uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {},
@@ -1015,7 +1015,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                          any ? "cambio el IR" : "sin cambio");
     }
 
-    /* Phase D.7 (opt-in): intento vreg con el resolver recursivo + native
+    /*  D.7 (opt-in): intento vreg con el resolver recursivo + native
      * resolver ya construidos (mc_opts) -> los CALL a otras funciones Vesta se
      * resuelven/compilan por vreg en vez de bailar a slots.  Si la funcion no
      * es del subset vreg, cae al compile_with_opts (slots) de abajo. */
@@ -1285,7 +1285,7 @@ CompileResult eager_compile_function(
         }
     }
 
-    /* Phase D.7 perf-gaps (2026-06-06): el intento vreg top-level se
+    /*  D.7 perf-gaps (2026-06-06): el intento vreg top-level se
      * MOVIO mas abajo (tras construir el resolver recursivo de user-fns),
      * para que `main` y cualquier funcion que llame a otras funciones Vesta
      * compile por el path de registros virtuales en vez de caer a slots.
@@ -1302,7 +1302,7 @@ CompileResult eager_compile_function(
      * si una funcion B en compilacion llama a A que tambien esta en
      * compilacion (mutua recursion), el inner resolve devuelve 0 y
      * B queda unsupported -- los ciclos en lenguajes user requieren
-     * indirect-call-tables (Phase D.5+). */
+     * indirect-call-tables ( D.5+). */
     /* Phase: resolver de simbolos via symbol_table del Loader.
      * Resuelve `@Absolute("code.s_K")` strings dentro de raw_asm a su
      * direccion VM absoluta.  Nullptr-safe: si no hay symbol_table,
@@ -1363,17 +1363,17 @@ CompileResult eager_compile_function(
             opts.safepoint_handler_addr = reinterpret_cast<uint64_t>(
                 g_runtime_entries->safepoint_handler);
             opts.resolve_user_fn = *resolver_holder; /* SAME resolver */
-            opts.resolve_symbol = sym_resolver;      /* propagar Phase D.3-H */
+            opts.resolve_symbol = sym_resolver;      /* propagar  D.3-H */
             opts.resolve_native_fn =
                 resolve_native_fn;              /* propagar CALLN resolver */
             opts.reserve_ic_slot = ic_reserver; /* IC slots */
-            opts.read_vmem_u64 = read_vmem_u64; /* Phase D.7.opt inline */
+            opts.read_vmem_u64 = read_vmem_u64; /*  D.7.opt inline */
             opts.exc_frame_stack_offset =
                 exc_frame_stack_offset; /* inline tryleave */
             opts.exc_free_list_offset = exc_free_list_offset; /* no leak */
             opts.jit_instr_counter_addr =
                 jit_instr_counter_addr; /* MIPS counter */
-            /* Phase D.7 (opt-in): callee por el path de registros virtuales.
+            /*  D.7 (opt-in): callee por el path de registros virtuales.
              * Pasamos el PROPIO resolver (recursivo) para que los CALLs
              * del callee se resuelvan a sus direcciones. */
             if (g_jit_use_vregs) {
@@ -1483,7 +1483,7 @@ CompileResult eager_compile_function(
         g_eager_cache[ir_fn.name] = EAGER_IN_PROGRESS;
     }
 
-    /* Phase D.7 perf-gaps (2026-06-06): intento vreg top-level CON el
+    /*  D.7 perf-gaps (2026-06-06): intento vreg top-level CON el
      * resolver recursivo de user-fns ya construido.  Ahora `main` (y
      * cualquier funcion con `IrOp::CALL` a otra funcion Vesta) compila por
      * el path de registros virtuales en vez de bailar a slots al primer
@@ -1832,7 +1832,7 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
  *     Falso por defecto = cero overhead cuando JIT esta off.
  *   - El mapa @c g_pc_to_jit_code esta protegido por @c g_pc_jit_mtx
  *     porque la compilacion puede correr en paralelo a la ejecucion
- *     en Phase D.8 (multi-thread compile).  Hoy single-thread compile,
+ *     en  D.8 (multi-thread compile).  Hoy single-thread compile,
  *     pero el mutex no hace daño y prepara la transicion.
  *   - El flag NUNCA se resetea (incluso si limpiamos el mapa para
  *     tests).  El coste es 1 hashmap lookup extra por callvm tras un

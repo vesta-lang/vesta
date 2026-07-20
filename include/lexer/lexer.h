@@ -299,7 +299,7 @@ class Lexer {
     std::string last_src_file;
 
     /**
-     * @brief Stackmap PRECISO (Phase E.1) para la siguiente instruccion,
+     * @brief Stackmap PRECISO ( E.1) para la siguiente instruccion,
      *        capturado del comentario `// @sm <hex>` visto por el lexer.
      *
      * El IR emitter emite este marcador antes de cada instruccion de

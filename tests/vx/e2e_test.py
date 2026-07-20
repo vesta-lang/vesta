@@ -1126,7 +1126,7 @@ def _(ctx):
 # ===========================================================================
 
 def _bug_dir(name):
-    """Directorio de un test de tests/bugs/ (los usa la bateria de Phase M)."""
+    """Directorio de un test de tests/bugs/ (los usa la bateria de  M)."""
     return os.path.join(ROOT, "tests", "bugs", name)
 
 
@@ -1311,7 +1311,7 @@ def _(ctx):
     ctx.ok("A.31 rechaza asignacion ilegal de Resource a field con error claro")
 
 
-# --- Phase M: bateria sobre tests/bugs/*.  Todos comparten directorios FIJOS
+# ---  M: bateria sobre tests/bugs/*.  Todos comparten directorios FIJOS
 #     del repo, por lo que van SERIAL (el .sh los corria en secuencia y varios
 #     reutilizan el mismo directorio, p.ej. m6_test lo usan M6, M5.B y M5.C).
 
@@ -1859,7 +1859,7 @@ def _(ctx):
 
 
 def _simple_bug_r0(ctx, dirname, tag, ok_msg, fail_msg, entry="main.vx"):
-    """Patron comun de la bateria Phase M: limpiar, compilar en el dir, R0=42."""
+    """Patron comun de la bateria  M: limpiar, compilar en el dir, R0=42."""
     d = _bug_dir(dirname)
     if not os.path.exists(os.path.join(d, entry)):
         return
@@ -2088,12 +2088,12 @@ r0_case("a43_o", "A.43.19: string concat O(N) en loops comptime", "155_concat_lo
 r0_case("arnes_ct", "Arnes comptime: fn/block/buffer/println/introspeccion/tipos no-comptime", "293_comptime_arnes.vx", 23, line=2298)
 r0_case("a43_p", "A.43.20: @Pure memoizacion + move semantics", "156_macros_pure_memoization.vx", 42, line=2305)
 r0_case("a43_q", "A.43.21: multi-chunk concat O(N) (s = s + X + Y + ...)", "157_concat_multichunk.vx", 42, line=2312)
-r0_case("mc_a", "Phase MC.1: @Macro bodies lowered to IR (__macro_*)", "158_macros_lowered_to_ir.vx", 42, line=2318)
+r0_case("mc_a", " MC.1: @Macro bodies lowered to IR (__macro_*)", "158_macros_lowered_to_ir.vx", 42, line=2318)
 r0_case("p2_q", "P2: operador ? postfix para Result (early-return)", "163_try_operator.vx", 42, line=2324)
 r0_case("shape_f64", "Bug fix: enum payload f64 (Shape areas)", "164_enum_f64_payload.vx", 42, line=2331)
 r0_case("unique_dtor", "Bug fix: unique<T> destructor via cleanup automatico", "165_unique_dtor.vx", 42, line=2339)
-r0_case("z_shared", "Phase Z: shared memory cross-process (synchronized + atomics + introspect)", "166_z_shared_memory.vx", 42, line=2347)
-r0_case("z_gc", "Phase Z.10 ext: shared GC mark+sweep STW (single-thread)", "167_z_gc_sweep.vx", 42, line=2357)
+r0_case("z_shared", " Z: shared memory cross-process (synchronized + atomics + introspect)", "166_z_shared_memory.vx", 42, line=2347)
+r0_case("z_gc", " Z.10 ext: shared GC mark+sweep STW (single-thread)", "167_z_gc_sweep.vx", 42, line=2357)
 r0_case("newtypes", "Newtype + @opaque + introspeccion (typedef T name new)", "168_newtypes.vx", 42, line=2367)
 r0_case("newtype_adv", "@align + explicit from/to + module-privacy", "169_newtype_advanced.vx", 42, line=2377)
 r0_case("loc_calln", "u8[N] = literal + char literals + CALLN nativo", "170_local_to_calln_native.vx", 42, line=2383)
@@ -2272,7 +2272,7 @@ modes3_case("gc250", "gc: compactacion mark-compact del OldGen (sliding in-place
 modes3_case("gc252", "gc: campo-referencia gc<Clase> tras major_gc (read encadenado seguro)", "252_gc_ref_field.vx", 42, line=4097)
 
 
-# --- Phase AS: inline asm ---------------------------------------------------
+# ---  AS: inline asm ---------------------------------------------------
 
 def _write_vx(ctx, name, body):
     p = ctx.path(name)
@@ -2304,19 +2304,19 @@ AS_INC1 = """u64 main() {
 
 @case("as_inc1", line=3258)
 def _(ctx):
-    """Phase AS inc.1: asm { } a bytecode, sin flags -> 42."""
+    """ AS inc.1: asm { } a bytecode, sin flags -> 42."""
     vx = _write_vx(ctx, "as_inc1.vx", AS_INC1)
     rc, log = ctx.run([VM_EXE, "--vesta", vx, "-o", ctx.path("as_inc1")])
     if rc != 0:
-        ctx.fail("Phase AS: asm{} a bytecode (sin flag) debio compilar", log)
+        ctx.fail(" AS: asm{} a bytecode (sin flag) debio compilar", log)
     if not os.path.exists(ctx.path("as_inc1.velb")):
-        ctx.fail("Phase AS: asm{} a bytecode no produjo .velb")
+        ctx.fail(" AS: asm{} a bytecode no produjo .velb")
     _, log = ctx.run_velb("as_inc1", schedulers=1)
     got = get_r00(log)
     if got != 42:
-        ctx.fail("Phase AS inc.1: inc rax (41) debio dar 42, dio %s"
+        ctx.fail(" AS inc.1: inc rax (41) debio dar 42, dio %s"
                  % get_r00_hex(log), log)
-    ctx.ok("Phase AS asm { } a bytecode compila + ejecuta via JIT (sin flags) -> 42")
+    ctx.ok(" AS asm { } a bytecode compila + ejecuta via JIT (sin flags) -> 42")
 
 
 AS_PORTC_CASES = [
@@ -2329,7 +2329,7 @@ AS_PORTC_CASES = [
     } clobbers("cc");
     return a;
 }
-""", 42, "Phase AS inc.3 port-C ejecuta 'add rax, rcx' (30+12) -> 42"),
+""", 42, " AS inc.3 port-C ejecuta 'add rax, rcx' (30+12) -> 42"),
     ("as_inc3_pc", 3324, """u64 main() {
     register("rdi") u64 inv = 0xFF;
     register("rax") u64 outv;
@@ -2338,7 +2338,7 @@ AS_PORTC_CASES = [
     } clobbers("cc");
     return outv;
 }
-""", 8, "Phase AS inc.3 port-C ejecuta 'popcnt rax, rdi' (output-only) -> 8"),
+""", 8, " AS inc.3 port-C ejecuta 'popcnt rax, rdi' (output-only) -> 8"),
     ("as_inc3_sib", 3349, """u64 main() {
     u64 acc = 0;
     {
@@ -2355,7 +2355,7 @@ AS_PORTC_CASES = [
     }
     return acc;
 }
-""", 52, "Phase AS inc.3 scopes hermanos con mismo registro fisico -> 52 (sin colision)"),
+""", 52, " AS inc.3 scopes hermanos con mismo registro fisico -> 52 (sin colision)"),
 ]
 
 
@@ -2364,22 +2364,22 @@ def _as_portc_case(tag, source, want, ok_msg):
     def fn(ctx):
         gcc = _find_gcc()
         if not gcc:
-            ctx.fail("Phase AS inc.3: no se encontro gcc para compilar el .c "
+            ctx.fail(" AS inc.3: no se encontro gcc para compilar el .c "
                      "de --port c")
         vx = _write_vx(ctx, tag + ".vx", source)
         rc, log = ctx.run([VM_EXE, "--vesta", vx, "--port", "c",
                            "-o", ctx.path(tag)])
         if rc != 0:
-            ctx.fail("Phase AS inc.3: --port c fallo para %s" % tag, log)
+            ctx.fail(" AS inc.3: --port c fallo para %s" % tag, log)
         exe = ctx.path(tag + ".exe")
         rc, log = ctx.run([gcc, "-O2", "-std=c11", ctx.path(tag + ".c"),
                            "-o", exe])
         if rc != 0:
-            ctx.fail("Phase AS inc.3: gcc fallo al compilar %s.c" % tag, log)
+            ctx.fail(" AS inc.3: gcc fallo al compilar %s.c" % tag, log)
         rc, _ = ctx.run([exe])
         rc = exit_code(rc)
         if rc != want:
-            ctx.fail("Phase AS inc.3: %s debio dar %d, dio %d" % (tag, want, rc))
+            ctx.fail(" AS inc.3: %s debio dar %d, dio %d" % (tag, want, rc))
         ctx.ok(ok_msg)
     fn.__name__ = "case_" + tag
     return fn
@@ -2400,16 +2400,16 @@ AS_NEG_CASES = [
     return a;
 }
 """, "conflicto de register",
-     "Phase AS inc.3 conflicto same-reg en scopes anidados rechazado",
-     "Phase AS inc.3: conflicto same-reg anidado debio fallar"),
+     " AS inc.3 conflicto same-reg en scopes anidados rechazado",
+     " AS inc.3: conflicto same-reg anidado debio fallar"),
     ("as_inc3_addr", 3406, """u64 main() {
     register("rax") u64 a = 5;
     u64* p = &a;
     return a;
 }
 """, "no se puede tomar la direccion",
-     "Phase AS inc.3 '&' sobre variable register() rechazado",
-     "Phase AS inc.3: &reg_var debio fallar"),
+     " AS inc.3 '&' sobre variable register() rechazado",
+     " AS inc.3: &reg_var debio fallar"),
     ("as_inc4b_bad", 3499, """u64 main() {
     register("rax") u64 a = 5;
     asm volatile noinfer {
@@ -2418,8 +2418,8 @@ AS_NEG_CASES = [
     return a;
 }
 """, "inline asm",
-     "Phase AS inc.4b validacion de sintaxis (Keystone) rechaza mnemonico invalido",
-     "Phase AS inc.4b: asm con mnemonico invalido debio fallar el compile"),
+     " AS inc.4b validacion de sintaxis (Keystone) rechaza mnemonico invalido",
+     " AS inc.4b: asm con mnemonico invalido debio fallar el compile"),
 ]
 
 
@@ -2431,7 +2431,7 @@ def _as_neg_case(tag, source, pattern, ok_msg, fail_msg):
         if rc == 0:
             ctx.fail(fail_msg, log)
         if pattern not in log:
-            ctx.fail("Phase AS: no se reporto el error esperado ('%s')" % pattern,
+            ctx.fail(" AS: no se reporto el error esperado ('%s')" % pattern,
                      log)
         ctx.ok(ok_msg)
     fn.__name__ = "case_" + tag
@@ -2455,27 +2455,27 @@ AS_INC4_INF = """u64 main() {
 
 @case("as_inc4_inf", line=3423)
 def _(ctx):
-    """Phase AS inc.4 (f): inferencia de clobbers añade 'cc' -> 42."""
+    """ AS inc.4 (f): inferencia de clobbers añade 'cc' -> 42."""
     gcc = _find_gcc()
     if not gcc:
-        ctx.fail("Phase AS inc.4: no se encontro gcc")
+        ctx.fail(" AS inc.4: no se encontro gcc")
     vx = _write_vx(ctx, "as_inc4_inf.vx", AS_INC4_INF)
     rc, log = ctx.run([VM_EXE, "--vesta", vx, "--port", "c",
                        "-o", ctx.path("as_inc4_inf")])
     if rc != 0:
-        ctx.fail("Phase AS inc.4: --port c fallo para as_inc4_inf", log)
+        ctx.fail(" AS inc.4: --port c fallo para as_inc4_inf", log)
     if '"cc"' not in read_text(ctx.path("as_inc4_inf.c")):
-        ctx.fail("Phase AS inc.4: la inferencia no añadio 'cc' a la clobber-list")
+        ctx.fail(" AS inc.4: la inferencia no añadio 'cc' a la clobber-list")
     rc, log = ctx.run([gcc, "-O2", "-std=c11", ctx.path("as_inc4_inf.c"),
                        "-o", ctx.path("as_inc4_inf.exe")])
     if rc != 0:
-        ctx.fail("Phase AS inc.4: gcc fallo al compilar as_inc4_inf.c", log)
+        ctx.fail(" AS inc.4: gcc fallo al compilar as_inc4_inf.c", log)
     rc, _ = ctx.run([ctx.path("as_inc4_inf.exe")])
     rc = exit_code(rc)
     if rc != 42:
-        ctx.fail("Phase AS inc.4: add con clobbers inferidos debio dar 42, dio %d"
+        ctx.fail(" AS inc.4: add con clobbers inferidos debio dar 42, dio %d"
                  % rc)
-    ctx.ok("Phase AS inc.4 inferencia de clobbers ('cc' auto) -> 42")
+    ctx.ok(" AS inc.4 inferencia de clobbers ('cc' auto) -> 42")
 
 
 AS_INC4_MOV = """u64 main() {
@@ -2491,26 +2491,26 @@ AS_INC4_MOV = """u64 main() {
 
 @case("as_inc4_mov", line=3454)
 def _(ctx):
-    """Phase AS inc.4 (g): la inferencia detecta el clobber de rcx -> 10."""
+    """ AS inc.4 (g): la inferencia detecta el clobber de rcx -> 10."""
     gcc = _find_gcc()
     if not gcc:
-        ctx.fail("Phase AS inc.4: no se encontro gcc")
+        ctx.fail(" AS inc.4: no se encontro gcc")
     vx = _write_vx(ctx, "as_inc4_mov.vx", AS_INC4_MOV)
     rc, log = ctx.run([VM_EXE, "--vesta", vx, "--port", "c",
                        "-o", ctx.path("as_inc4_mov")])
     if rc != 0:
-        ctx.fail("Phase AS inc.4: --port c fallo para as_inc4_mov", log)
+        ctx.fail(" AS inc.4: --port c fallo para as_inc4_mov", log)
     if '"rcx"' not in read_text(ctx.path("as_inc4_mov.c")):
-        ctx.fail("Phase AS inc.4: la inferencia no detecto el clobber 'rcx'")
+        ctx.fail(" AS inc.4: la inferencia no detecto el clobber 'rcx'")
     # El .sh no comprobaba el resultado del gcc en este caso.
     ctx.run([gcc, "-O2", "-std=c11", ctx.path("as_inc4_mov.c"),
              "-o", ctx.path("as_inc4_mov.exe")])
     rc, _ = ctx.run([ctx.path("as_inc4_mov.exe")])
     rc = exit_code(rc)
     if rc != 10:
-        ctx.fail("Phase AS inc.4: mov+add con rcx inferido debio dar 10, dio %d"
+        ctx.fail(" AS inc.4: mov+add con rcx inferido debio dar 10, dio %d"
                  % rc)
-    ctx.ok("Phase AS inc.4 inferencia detecta clobber de registro no-ligado (rcx) "
+    ctx.ok(" AS inc.4 inferencia detecta clobber de registro no-ligado (rcx) "
            "-> 10")
 
 
@@ -2527,15 +2527,15 @@ AS_INC4_NI = """u64 main() {
 
 @case("as_inc4_ni", line=3479)
 def _(ctx):
-    """Phase AS inc.4 (h): `noinfer` desactiva la inferencia (sin 'cc')."""
+    """ AS inc.4 (h): `noinfer` desactiva la inferencia (sin 'cc')."""
     vx = _write_vx(ctx, "as_inc4_ni.vx", AS_INC4_NI)
     rc, log = ctx.run([VM_EXE, "--vesta", vx, "--port", "c",
                        "-o", ctx.path("as_inc4_ni")])
     if rc != 0:
-        ctx.fail("Phase AS inc.4: --port c fallo para as_inc4_ni", log)
+        ctx.fail(" AS inc.4: --port c fallo para as_inc4_ni", log)
     if '"cc"' in read_text(ctx.path("as_inc4_ni.c")):
-        ctx.fail("Phase AS inc.4: noinfer no debio inferir 'cc'")
-    ctx.ok("Phase AS inc.4 'noinfer' desactiva la inferencia de clobbers")
+        ctx.fail(" AS inc.4: noinfer no debio inferir 'cc'")
+    ctx.ok(" AS inc.4 'noinfer' desactiva la inferencia de clobbers")
 
 
 AS_INC5_PC = """u64 main() {
@@ -2564,32 +2564,32 @@ u64 main() {
 
 @case("as_inc5_pc", line=3520)
 def _(ctx):
-    """Phase AS inc.5 (a): inline-asm sin flags, main-only -> 8."""
+    """ AS inc.5 (a): inline-asm sin flags, main-only -> 8."""
     vx = _write_vx(ctx, "as_inc5_pc.vx", AS_INC5_PC)
     rc, log = ctx.run([VM_EXE, "--vesta", vx, "-o", ctx.path("as_inc5_pc")])
     if rc != 0:
-        ctx.fail("Phase AS inc.5: compile fallo para as_inc5_pc", log)
+        ctx.fail(" AS inc.5: compile fallo para as_inc5_pc", log)
     if not os.path.exists(ctx.path("as_inc5_pc.velb")):
-        ctx.fail("Phase AS inc.5: no produjo .velb")
+        ctx.fail(" AS inc.5: no produjo .velb")
     _, log = ctx.run_velb("as_inc5_pc", schedulers=1)
     got = get_r00(log)
     if got != 8:
-        ctx.fail("Phase AS inc.5: popcnt(0xFF) debio dar 8, dio %s" % got, log)
-    ctx.ok("Phase AS inc.5 inline-asm sin flags 'popcnt rax, rdi' -> 8")
+        ctx.fail(" AS inc.5: popcnt(0xFF) debio dar 8, dio %s" % got, log)
+    ctx.ok(" AS inc.5 inline-asm sin flags 'popcnt rax, rdi' -> 8")
 
 
 @case("as_inc5_xfn", line=3550)
 def _(ctx):
-    """Phase AS inc.5 (b): cross-fn (helper con inline-asm no inlineado) -> 12."""
+    """ AS inc.5 (b): cross-fn (helper con inline-asm no inlineado) -> 12."""
     vx = _write_vx(ctx, "as_inc5_xfn.vx", AS_INC5_XFN)
     rc, log = ctx.run([VM_EXE, "--vesta", vx, "-o", ctx.path("as_inc5_xfn")])
     if rc != 0:
-        ctx.fail("Phase AS inc.5: compile fallo para as_inc5_xfn", log)
+        ctx.fail(" AS inc.5: compile fallo para as_inc5_xfn", log)
     _, log = ctx.run_velb("as_inc5_xfn", schedulers=1)
     got = get_r00(log)
     if got != 12:
-        ctx.fail("Phase AS inc.5: cross-fn bitcount debio dar 12, dio %s" % got, log)
-    ctx.ok("Phase AS inc.5 cross-fn (helper inline-asm no inlineado) -> 12")
+        ctx.fail(" AS inc.5: cross-fn bitcount debio dar 12, dio %s" % got, log)
+    ctx.ok(" AS inc.5 cross-fn (helper inline-asm no inlineado) -> 12")
 
 
 @case("asm_examples", line=3576)
@@ -2604,15 +2604,15 @@ def _(ctx):
         rc, log = ctx.run([VM_EXE, "--vesta", exf,
                            "-o", ctx.path("asmex_" + bn)])
         if rc != 0:
-            ctx.fail("Phase AS ejemplo %s no compilo" % bn, log)
+            ctx.fail(" AS ejemplo %s no compilo" % bn, log)
         _, log = ctx.run_velb("asmex_" + bn, schedulers=1)
         rhex = get_r00_hex(log)
         src = read_text(exf)
         if "@expect-run" in src:
             # No determinista: basta con que ejecute y produzca R00.
             if rhex is None:
-                ctx.fail("Phase AS ejemplo %s no ejecuto" % bn, log)
-            ctx.ok("Phase AS ejemplo asm/%s ejecuta (no determinista)" % bn)
+                ctx.fail(" AS ejemplo %s no ejecuto" % bn, log)
+            ctx.ok(" AS ejemplo asm/%s ejecuta (no determinista)" % bn)
             continue
         m = re.search(r"@expect[ \t]+(0x[0-9a-fA-F]+|[0-9]+)", src)
         want_txt = m.group(1) if m else None
@@ -2621,14 +2621,14 @@ def _(ctx):
         want = bash_arith(want_txt)
         got = get_r00(log)
         if rhex is None or got != want:
-            ctx.fail("Phase AS ejemplo %s dio %s, esperado %s"
+            ctx.fail(" AS ejemplo %s dio %s, esperado %s"
                      % (bn, rhex if rhex else "<nada>", want_txt), log)
-        ctx.ok("Phase AS ejemplo asm/%s -> %s" % (bn, want_txt))
+        ctx.ok(" AS ejemplo asm/%s -> %s" % (bn, want_txt))
 
 
 @case("asmsym198", line=3608)
 def _(ctx):
-    """Phase AS: inline-asm referenciando simbolos propios (AOT PE) -> 42."""
+    """ AS: inline-asm referenciando simbolos propios (AOT PE) -> 42."""
     src = ctx.src("198_inline_asm_symbols.vx")
     if not os.path.exists(src):
         return
@@ -2637,12 +2637,12 @@ def _(ctx):
     rc, log = ctx.run([VM_EXE, "-m", "aot", "--vesta", src, "--format", "pe",
                        "--emit", "exe", "-o", exe])
     if rc != 0:
-        ctx.fail("Phase AS asm-simbolos: compile AOT fallo", log)
+        ctx.fail(" AS asm-simbolos: compile AOT fallo", log)
     rc, _ = ctx.run([exe])
     rc = exit_code(rc)
     if rc != 42:
-        ctx.fail("Phase AS asm-simbolos: PE dio exit=%d, esperado 42" % rc)
-    ctx.ok("Phase AS asm-simbolos propios (call/mov-imm64/lea/[global]) -> 42")
+        ctx.fail(" AS asm-simbolos: PE dio exit=%d, esperado 42" % rc)
+    ctx.ok(" AS asm-simbolos propios (call/mov-imm64/lea/[global]) -> 42")
 
 
 @case("ci205", line=3649)

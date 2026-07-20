@@ -1,6 +1,6 @@
 // -----------------------------------------------------------------------------
 // `static_assert` DENTRO de un `comptime {}` block sobre un valor computado por
-// inline asm en compile-time.  El two-phase difiere el assert en el pass 1 (sin
+// inline asm en compile-time.  El two- difiere el assert en el pass 1 (sin
 // bytecode comptime aun) y lo valida en el pass 2 con el valor real.
 // interp = JIT = AOT.
 // -----------------------------------------------------------------------------

@@ -195,7 +195,7 @@ void Loader::parse_velb_header(Executable &exe, ByteReader &reader) {
     exe.header.offset_ir_section = reader.read64();
     exe.header.size_ir_section = reader.read32();
 
-    /* Phase E.1 (VERSION_VELB 0x4): offset_stackmap_section +
+    /*  E.1 (VERSION_VELB 0x4): offset_stackmap_section +
      * size_stackmap_section.  Contienen la seccion VSMP con los stackmaps
      * precisos del interprete.  0 = sin stackmaps (GC preciso no-op). */
     exe.header.offset_stackmap_section = reader.read64();
@@ -545,7 +545,7 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
         }
     }
 
-    // Phase E.1: cargar la seccion VSMP (stackmaps precisos del interprete)
+    //  E.1: cargar la seccion VSMP (stackmaps precisos del interprete)
     // si esta presente.  Formato: magic "VSMP" + version + count + entries.
     // Si el magic/version es invalido, dejamos la tabla vacia (GC preciso
     // no-op, fallback al conservador -- backward compatible).
@@ -646,7 +646,7 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
             for (size_t i = 0; i < exe->ir_functions.size(); ++i) {
                 exe->ir_lookup[exe->ir_functions[i].name] = i;
             }
-            /* Phase AS inc.6: ensamblar + registrar el trampoline de cada
+            /*  AS inc.6: ensamblar + registrar el trampoline de cada
              * bloque inline-asm (indexado por hash del NASM).  Permite que
              * el interprete (modo -m vm, SIN JIT) ejecute inline-asm via el
              * helper vrt:inline_asm_exec.  Usa solo el ENSAMBLADOR
@@ -868,7 +868,7 @@ Loader::load_executable(runtime::VM &vm,
          * salta a handler_pc en bytecode VM address, lo cual NO funciona
          * desde dentro del host frame del JIT main.  Workaround v1: si
          * main tiene tryenter, skip eager-compile (su interp dispatch
-         * maneja el throw correctamente).  Phase D.13 (native unwinding)
+         * maneja el throw correctamente).   D.13 (native unwinding)
          * eliminara esta restriccion. */
         /* Sprint JIT-cross-fn 2026-06-01: relajamos la restriccion de
          * closures.  Antes desactivabamos TODO el JIT (set_jit_threshold
@@ -1328,7 +1328,7 @@ uint64_t Loader::load_module_dynamic(runtime::VM &vm,
             if (conflict) break;
         }
 
-        // Phase M.dyn fix (2026-06-05): ademas del overlap contra las
+        //  M.dyn fix (2026-06-05): ademas del overlap contra las
         // secciones de modulos ya cargados, forzar rebase si el orig_base
         // cae en la region RESERVADA [0, next_dyn_base).  Esa region baja
         // contiene el codigo (VA 0), el stack (stack_base = 0x10000000 +

@@ -9,7 +9,7 @@
  * @file tests/jit/test_jit_compiler.cpp
  * @brief Tests del @c JitCompiler + PHI elimination + benchmark JIT vs C.
  *
- * Cubre Phase D.3-A:
+ * Cubre  D.3-A:
  *   1. JitCompiler basico: IR trivial -> codigo nativo ejecutable.
  *   2. PHI elimination en BR (back-edge de loop simple).
  *   3. PHI elimination en BR_COND (if-merge con valores distintos).

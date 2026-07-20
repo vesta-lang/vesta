@@ -40,7 +40,7 @@ public const string SX_ANNOT    = "\x1b[38;2;255;184;108m";  // Dracula orange (
 // identificador encontrado.  Para un editor con N <= 5000 lineas y ~100
 // identificadores por linea, son ~500k lookups por render.  Con ~80
 // keywords cada uno se compara en promedio 40 veces -> 20M strcmp por
-// render.  Aceptable para Phase A; mejorar a HashMap perfecto si se
+// render.  Aceptable para  A; mejorar a HashMap perfecto si se
 // observa lag.
 
 // Devuelve 1 si la palabra es keyword del lenguaje.

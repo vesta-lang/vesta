@@ -22,7 +22,7 @@
  *        aguas arriba tambien quedan sucios)
  *   El recomputo es perezoso: summary(fn) recomputa si esta sucio.
  *
- * Fase 0: esqueleto (interfaz + cache local + invalidacion).  La logica de
+ *   esqueleto (interfaz + cache local + invalidacion).  La logica de
  * `local(node)` (mapa IrOp -> SemanticEffects) entra en Fase 1; el punto-fijo de
  * `summary(fn)` en Fase 2.
  */

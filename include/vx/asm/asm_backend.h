@@ -12,7 +12,7 @@
 
 /**
  * @file asm_backend.h
- * @brief Phase AS inc.4b: interfaz @c AsmBackend para ENSAMBLAR inline asm.
+ * @brief  AS inc.4b: interfaz @c AsmBackend para ENSAMBLAR inline asm.
  *
  * EJE ORTOGONAL a la inferencia de clobbers (asm_effects.h).  @c AsmBackend
  * cubre SOLO el ensamblado texto->bytes (lo "pesado").  La inferencia es

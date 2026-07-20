@@ -32,19 +32,19 @@
 #include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
 #include "ir/passes/select_policy.h" // PGO: load_branch_profile (if-conversion)
-#include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
-#include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa
-#include "aot/aot_lower.h" // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
-#include "aot/object_writer.h" // Phase AOT.4: emisor PE/ELF (ObjectWriter)
-#include "aot/aot_native.h"    // Phase AOT.3 Paso 2: _start arch-portable
-#include "aot/linker.h"        // Phase AOT.5: linker propio (enlaza .o)
-#include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
+#include "ir/ssa_ir_serialize.h" //  AOT: parse_ir_section (round-trip del @ir)
+#include "aot/aot_analyze.h" //  AOT.1: analisis de compatibilidad nativa
+#include "aot/aot_lower.h" //  AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
+#include "aot/object_writer.h" //  AOT.4: emisor PE/ELF (ObjectWriter)
+#include "aot/aot_native.h"    //  AOT.3 Paso 2: _start arch-portable
+#include "aot/linker.h"        //  AOT.5: linker propio (enlaza .o)
+#include "jit/vreg_pipeline.h" //  AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/auto_jit.h"
 #include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
-#include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
-#include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
+#include "jit/keystone_asm_backend.h" //  AS inc.4b: registrar backend asm
+#include "jit/inline_asm_trampoline.h" //  AS inc.6: helper runner inline-asm
 #include "jit/naked_native.h" // Bug 198: dispatcher naked (asm con simbolos propios)
 #include "runtime/profile.h"           // Sprint D.6 (2026-06-03)
 #include "pkg/cli.h"
@@ -63,9 +63,9 @@ namespace vx {
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 }
-#include "vx/comptime/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
-#include "vx/project_cache.h"  /* Phase M5.B project-level cache */
-#include "vx/velb_signature.h" /* Phase M.L28: firmas digitales */
+#include "vx/comptime/comptime_vm.h"    /*  MC.4 probe del ComptimeRuntime */
+#include "vx/project_cache.h"  /*  M5.B project-level cache */
+#include "vx/velb_signature.h" /*  M.L28: firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/fs_utils.h"
 #include "runtime/manager_runtime.h"
@@ -79,10 +79,10 @@ void set_aot_condcomp_target(const std::string &os,
 #include "debug/auth.h"
 
 #include <filesystem>
-#include <map>           // Phase MC.16: per-macro manifest map
-#include <unordered_map> // Phase AOT.3 2b-ii: layout name->offset
-#include <set>           // Phase MC.16: manifest diff seen-set
-#include <cctype>        // Phase MC.16: isalnum en find_macro_ranges_with_names
+#include <map>           //  MC.16: per-macro manifest map
+#include <unordered_map> //  AOT.3 2b-ii: layout name->offset
+#include <set>           //  MC.16: manifest diff seen-set
+#include <cctype>        //  MC.16: isalnum en find_macro_ranges_with_names
 #include <openssl/rand.h>
 
 #ifdef VESTA_HAS_PREPROCESSOR
@@ -462,10 +462,10 @@ int main(int argc, char *argv[]) {
     // i18n: seleccionar el idioma de los diagnosticos desde el entorno
     // (VESTA_LANG > LC_ALL > LANG; fallback al primer idioma del catalogo).
     vx::diag::set_language(vx::diag::language_from_env());
-    // Phase AS inc.4b: registrar el backend de ensamblado Keystone para que el
+    //  AS inc.4b: registrar el backend de ensamblado Keystone para que el
     // frontend Vesta valide la sintaxis del inline asm en compile-time.
     jit::register_keystone_asm_backend();
-    // Phase AS inc.6: registrar el helper nativo vrt:inline_asm_exec que el
+    //  AS inc.6: registrar el helper nativo vrt:inline_asm_exec que el
     // interprete (modo -m vm, sin JIT) invoca por cada bloque inline-asm.
     jit::register_inline_asm_runner();
     // Bug/feature 198: registrar el dispatcher vrt:naked_dispatch que
@@ -632,7 +632,7 @@ int main(int argc, char *argv[]) {
             "metodo definido ahi).  Re-verifica antes de guardar; si algo no "
             "cuadra, no toca el fichero.  Las funciones de imports no se tocan "
             "(analiza ese fichero por separado).")
-        // Phase AOT: con -m aot, target de compilacion nativa.
+        //  AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
          "bare).",
@@ -696,13 +696,13 @@ int main(int argc, char *argv[]) {
             "plugins cargados via loadmodule, evita solapamiento con el caller "
             "(default 0x0).",
             cxxopts::value<std::string>()->default_value("0x0"))
-        // Phase M.sandbox: restringe las capabilities del modulo
+        //  M.sandbox: restringe las capabilities del modulo
         // principal al subset listado.  Default vacio = ALL granted
         // (zero overhead, backward compat).  Sintaxis: 'fs:read,net,
         // ffi:call=kernel32.dll;user32.dll' etc.  Ver include/loader/
         // sandbox.h para tabla completa de caps + sintaxis.
         ("vx-caps",
-         "Phase M.sandbox: restringe caps del modulo principal. Sintaxis: "
+         " M.sandbox: restringe caps del modulo principal. Sintaxis: "
          "'fs:read,net,ffi:call=kernel32.dll;user32.dll'. Vacio = ALL granted "
          "(default). 'none' = sandbox total.",
          cxxopts::value<std::string>()->default_value(""))
@@ -805,7 +805,7 @@ int main(int argc, char *argv[]) {
             "vx-debug",
             "Emitir comentarios `// @line N` en el .vel intermedio del "
             "compilador Vesta y, cuando se integre la pipeline completa de debug "
-            "section (Phase 2), embeber la tabla bytecode_offset -> (file, "
+            "section ( 2), embeber la tabla bytecode_offset -> (file, "
             "line) en el .velb final.  Sin este flag, el .vel/.velb no "
             "contienen info de debug -> el ejecutable es mas pequeno y el "
             "frontend NO genera datos extra.  Con el flag, el cliente del "
@@ -884,7 +884,7 @@ int main(int argc, char *argv[]) {
                     "emit-map", "Generar archivo .velb-map con info de "
                                 "simbolos y secciones (debug). Off por "
                                 "defecto: cuesta ~60% del tiempo del linker")
-        // Phase M.L28: firmas digitales del .velb.
+        //  M.L28: firmas digitales del .velb.
         ("sign-velb",
          "Firmar un .velb con clave privada PEM. Uso: --sign-velb input.velb "
          "--sign-key priv.pem -o output.signed.velb",
@@ -897,17 +897,17 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())(
             "verify-key", "Path al PEM con la clave publica para --verify-velb",
             cxxopts::value<std::string>())
-        // Phase AOT.5: linker propio (enlaza .o sin ld/gcc).
+        //  AOT.5: linker propio (enlaza .o sin ld/gcc).
         ("link",
-         "Phase AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
+         " AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
          "auto-detectados; los de --emit obj o de gcc/MSVC) en un ejecutable "
          "nativo SIN ld/gcc. Uso: vm --link a.o b.o [lib.a] [lib.dll] -o prog "
          "[--format elf|pe] [--entry sym] [--link-base 0xADDR]. Con --entry usa "
          "ese simbolo como entrada SIN stub (kernel/bootloader); sin el, "
          "sintetiza _start->main (ejecutable hosted).")
-        // Phase AOT.5: archivador propio (crea .a sin el ar del sistema).
+        //  AOT.5: archivador propio (crea .a sin el ar del sistema).
         ("ar",
-         "Phase AOT.5: crea una libreria estatica .a (formato ar GNU, con "
+         " AOT.5: crea una libreria estatica .a (formato ar GNU, con "
          "indice de simbolos) a partir de objetos, SIN el ar del sistema. Uso: "
          "vm --ar libfoo.a a.o b.o ...  El .a lo consume nuestro linker (--link) "
          "y tambien ar/ld/gcc.")(
@@ -985,7 +985,7 @@ int main(int argc, char *argv[]) {
      * eager-compile pass se dispare con el threshold correcto.  Sin esto
      * el threshold se inicializa lazy en el primer maybe_compile_*, ya
      * tarde para eager compile. */
-    // Phase AOT: modo de compilacion nativa standalone (-m aot).  Se resuelve
+    //  AOT: modo de compilacion nativa standalone (-m aot).  Se resuelve
     // aqui (junto al resto de modos) y se consume en el bloque --vx mas abajo.
     bool aot_mode = false;
     aot::Tier aot_tier = aot::Tier::BARE;
@@ -1172,7 +1172,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Phase M.L28: firmas digitales del .velb (independientes del flujo
+    //  M.L28: firmas digitales del .velb (independientes del flujo
     // de compile / run / etc.).  Ambos comandos retornan al usuario al
     // terminar; no continuan al resto del flow.
     if (result.count("sign-velb")) {
@@ -1243,7 +1243,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Phase AOT.5: linker propio -- enlaza objetos .o en un ejecutable nativo
+    //  AOT.5: linker propio -- enlaza objetos .o en un ejecutable nativo
     // sin depender de ld/gcc.  Uso: vm --link a.o b.o -o prog [--format elf]
     // [--entry sym] [--link-base 0xADDR].
     if (result.count("ar")) {
@@ -2841,7 +2841,7 @@ int main(int argc, char *argv[]) {
                               ? result["ir-opt"].as<int>()
                               : 2;
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
-        copts.native_poo = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
+        copts.native_poo = aot_mode; //  AOT.2.b: clases nativas en -m aot
         copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
         // Bits del target para el inline-asm @Naked (validacion compile-time):
         // --aot-arch x86-32 -> 32 (si no, `jmp ecx` y demas fallan en mode64).
@@ -2963,7 +2963,7 @@ int main(int argc, char *argv[]) {
             copts.port_options.source_path = vx_path;
         }
 
-        /* === Phase MC.12: cache persistente para @Macros ===
+        /* ===  MC.12: cache persistente para @Macros ===
          *
          * Cache dir: `./.cache/vx/` (cwd-relative).  Key = FNV-1a 64
          * sobre (cache_format_version + vx_path + vx_source).  File =
@@ -2987,7 +2987,7 @@ int main(int argc, char *argv[]) {
         const uint8_t cache_format_version =
             2; /* Bump por MC.14 macro-scoped key */
 
-        /* Phase MC.14: macro-scoped cache key.  Hashea SOLO los rangos
+        /*  MC.14: macro-scoped cache key.  Hashea SOLO los rangos
          * source que contienen declaraciones `@Macro` (incluyendo
          * anotaciones precedentes como @Pure/@Inline).  Cambios en
          * codigo NO-macro (main, helpers no marcados, comentarios
@@ -3115,7 +3115,7 @@ int main(int argc, char *argv[]) {
             return ranges;
         };
 
-        /* Phase MC.16: per-macro manifest diagnostico.  Computa hash
+        /*  MC.16: per-macro manifest diagnostico.  Computa hash
          * por macro y guarda un manifest junto al .velb cacheado.  En
          * un cache miss, compara con el manifest anterior (si existe)
          * para reportar QUE macros cambiaron.
@@ -3271,7 +3271,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // Phase M5.B: PROJECT CACHE LOOKUP.  Si el source tiene imports,
+        //  M5.B: PROJECT CACHE LOOKUP.  Si el source tiene imports,
         // intentar cache hit a nivel @c .velb final.  Si todos los hashes
         // de root + deps recursivos coinciden con los cacheados, copiar
         // el @c .velb cacheado al output y SALTAR todo el compile +
@@ -3315,7 +3315,7 @@ int main(int argc, char *argv[]) {
             diag_vx || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
             !copts.port_target.empty();
 
-        // Phase AOT multi-modulo (fix): el project-cache SOLO almacena un
+        //  AOT multi-modulo (fix): el project-cache SOLO almacena un
         // `.velb` (bytecode VM).  En modo `-m aot` el output es un binario
         // NATIVO (PE/ELF), no un `.velb`.  Si dejaramos que el cache hit
         // sirviera el `.velb` cacheado de un build previo (la ProjectCacheKey
@@ -3360,7 +3360,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // Phase M.2.e: si el source tiene `import`, dispatch al
+        //  M.2.e: si el source tiene `import`, dispatch al
         // compilador multi-modulo.  Este construye el dep graph,
         // compila cada dep en topo order, inyecta .vxi, y mergea
         // todas las funciones en un solo .vel.
@@ -3368,7 +3368,7 @@ int main(int argc, char *argv[]) {
             has_imports ? vx::compile_vx_project(vx_path, copts)
                         : vx::compile_vx_source(vx_source, vx_path, copts);
 
-        /* Phase MC.16+: diagnostico de macros que el lowering rechazo
+        /*  MC.16+: diagnostico de macros que el lowering rechazo
          * por usar builtins comptime-only no aliasables (comptime_compile,
          * static_assert, etc.) o comptime globals.  Estos macros caen al
          * AST evaluator y NO se benefician del cache/VM/memo.  Imprimir
@@ -3397,11 +3397,11 @@ int main(int argc, char *argv[]) {
         }
 
         // ------------------------------------------------------------------
-        // Comptime two-phase para AOT.  El emit nativo (bloque `if (aot_mode)`
-        // de abajo) usa `cr` y RETORNA antes del two-phase del path .velb (que
+        // Comptime two- para AOT.  El emit nativo (bloque `if (aot_mode)`
+        // de abajo) usa `cr` y RETORNA antes del two- del path .velb (que
         // vive tras el emit AOT), asi que el codigo comptime que se ejecuta en
         // el ComptimeVM (p.ej. inline asm en una comptime fn) no se resolveria
-        // en AOT -> daria placeholder.  Aqui hacemos el mismo two-phase ANTES
+        // en AOT -> daria placeholder.  Aqui hacemos el mismo two- ANTES
         // del emit: compilar el pass-1 a un `.velb` cacheado (contiene el
         // bytecode comptime `__macro_*`), cargarlo via VESTA_MC_PREBUILT, y
         // recompilar (pass 2) para que los call sites comptime invoquen la VM.
@@ -3461,7 +3461,7 @@ int main(int argc, char *argv[]) {
                  * incorrectos, ocultando el fallo. */
                 cr = std::move(cr2);
                 if (verbose_mc) {
-                    std::cerr << "[mc-cache] aot two-phase populated: "
+                    std::cerr << "[mc-cache] aot two- populated: "
                               << cache_path << "\n";
                 }
                 std::remove(tmp_vel_path.c_str());
@@ -3476,7 +3476,7 @@ int main(int argc, char *argv[]) {
         }
 
         // ------------------------------------------------------------------
-        // Phase AOT (Paso 1): modo -m aot.  Analiza la compatibilidad nativa
+        //  AOT (Paso 1): modo -m aot.  Analiza la compatibilidad nativa
         // del modulo (sin emitir binario aun -- eso es el Paso 2: codegen
         // HOST_LEAF -> ObjectWriter).  El IR optimizado viaja en
         // cr.ir_section_bytes (mismo @ir que consume el JIT); se deserializa
@@ -3509,14 +3509,14 @@ int main(int argc, char *argv[]) {
             return vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
         }
 
-        /* CACHE MISS + @Macros presentes: hacer two-phase y persistir
+        /* CACHE MISS + @Macros presentes: hacer two- y persistir
          * el resultado a `.cache/vx/<key>.velb` para futuras corridas. */
         if (!cache_hit && cr.has_lowerable_macros &&
             !user_already_set_prebuilt) {
             std::error_code ec;
             std::filesystem::create_directories(cache_dir, ec);
 
-            /* Phase MC.16: per-macro manifest diagnostico.  Computamos
+            /*  MC.16: per-macro manifest diagnostico.  Computamos
              * hash por macro del fuente actual y comparamos con manifest
              * anterior (si existe).  Reportamos via VESTA_MC_VERBOSE que
              * macros cambiaron -- foundation para futuro per-macro relink. */
@@ -3605,7 +3605,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            /* Phase MC.14: cache sweeper TTL-based.  Antes de poblar el
+            /*  MC.14: cache sweeper TTL-based.  Antes de poblar el
              * nuevo cache file, escanea @c .cache/vx/ y borra archivos
              * cuyo mtime sea anterior a @c TTL dias (default 30, override
              * via env var @c VESTA_MC_CACHE_TTL_DAYS).  Solo corre en el
@@ -3675,7 +3675,7 @@ int main(int argc, char *argv[]) {
 #else
                 setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
 #endif
-                // Phase M.2.e: same dispatch en el path two-phase del macro
+                //  M.2.e: same dispatch en el path two- del macro
                 // cache.  Si el source tiene imports, usar compile_vx_project.
                 vx::CompileResult cr2 =
                     vx::vx_source_has_imports(vx_source)
@@ -3935,7 +3935,7 @@ int main(int argc, char *argv[]) {
             /*ir_section_bytes=*/&cr.ir_section_bytes,
             /*emit_map=*/(result.count("emit-map") > 0));
 
-        // Phase M5.B: persistir el .velb final al project cache si
+        //  M5.B: persistir el .velb final al project cache si
         // (a) el compile usa imports (compile_vx_project tiene
         // dep_paths populated), (b) el link fue exitoso, y (c) el cache
         // esta enabled.
@@ -3984,7 +3984,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* Phase MC.4: probe del ComptimeRuntime (activable via env var
+        /*  MC.4: probe del ComptimeRuntime (activable via env var
          * VESTA_COMPTIME_PROBE=1).  Tras producir el .velb, lo carga
          * en una @c ComptimeRuntime para validar que el pipeline
          * bytecode-in-memory -> Loader -> symbol_table -> macro_entry_pc
@@ -4016,7 +4016,7 @@ int main(int argc, char *argv[]) {
                         std::cerr << "[mc-probe]   " << p.first << " @ 0x"
                                   << std::hex << p.second << std::dec << "\n";
                     }
-                    /* Phase MC.5: intentar invocar el PRIMER macro a
+                    /*  MC.5: intentar invocar el PRIMER macro a
                      * nivel funcion (filtrar sufijos internos del
                      * lowering: `_entry_`, `_if_`, `_ret`, `_while_`,
                      * `_for_`, `_then_`, `_else_`, `_merge_`). */
@@ -4057,7 +4057,7 @@ int main(int argc, char *argv[]) {
                                   << ctr.call_count() << "\n";
                     }
 
-                    /* Phase MC.8: shadow_validate -- replay las
+                    /*  MC.8: shadow_validate -- replay las
                      * expectaciones que el TypeChecker capturo durante
                      * la evaluacion AST de cada @Macro, invocando via
                      * VM, y comparando los strings.  Cualquier mismatch
@@ -4182,7 +4182,7 @@ int main(int argc, char *argv[]) {
                             result.count("dist-node-id") > 0;
             if (has_dist) apply_dist_config(vm, result);
 
-            // Phase M.sandbox (orden critico): pre-activar `sandbox_active`
+            //  M.sandbox (orden critico): pre-activar `sandbox_active`
             // ANTES de load_executable si las caps seran restringidas.
             // load_executable hace el eager-compile de main, cuyo guard de
             // seguridad consulta sandbox_active; si el flag se seteara solo
@@ -4203,7 +4203,7 @@ int main(int argc, char *argv[]) {
                 std::cerr << "Error: no se pudo cargar el ejecutable\n";
                 return EXIT_FAILURE;
             }
-            // Phase M.sandbox: aplicar @c --vx-caps al modulo cargado.
+            //  M.sandbox: aplicar @c --vx-caps al modulo cargado.
             // El primer Executable del pool es el que acabamos de cargar.
             if (result.count("vx-caps") && !mgr.loader.executables.empty()) {
                 const std::string caps_str =

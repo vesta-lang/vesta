@@ -1,6 +1,6 @@
 /**
  * @file module_interop.h
- * @brief Interop entre TypeChecker y formato @c .vxi (Phase M.2.d).
+ * @brief Interop entre TypeChecker y formato @c .vxi ( M.2.d).
  *
  * Funciones libres que conectan el estado del @c TypeChecker con un
  * @c VxiModule.  Viven fuera del TypeChecker para no forzar
@@ -57,14 +57,14 @@ void import_vxi_into_typechecker(
  * @brief Variante que devuelve la lista de simbolos solicitados pero
  * NO encontrados (o privados) en el `.vxi`.  Util para que el caller
  * (compile_vx_project) emita diagnosticos cross-module precisos
- * (Phase M6.a L.3).
+ * ( M6.a L.3).
  */
 std::vector<std::string> import_vxi_into_typechecker_with_missing(
     TypeChecker &tc, const VxiModule &mod,
     const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols);
 
 /**
- * @brief Phase M.7: registra un namespace para un @c "import \"lib\";"
+ * @brief  M.7: registra un namespace para un @c "import \"lib\";"
  * o @c "import \"lib\" as alias;" plain (sin @c only).
  *
  * @param tc          TypeChecker del consumidor.

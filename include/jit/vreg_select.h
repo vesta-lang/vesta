@@ -8,7 +8,7 @@
 /**
  * @file jit/vreg_select.h
  * @brief Instruction selection IR -> MachineIR en forma de registros
- *        VIRTUALES (Phase D.7, commit 4b).  Ver doc/REGALLOC.md.
+ *        VIRTUALES ( D.7, commit 4b).  Ver doc/REGALLOC.md.
  *
  * A diferencia del selector v1 (slot-per-value, template load/op/store), este
  * emite operandos VREG directos en forma de TRES operandos
@@ -156,7 +156,7 @@ struct VregEntries {
  * @param fn   Funcion IR (subset soportado: ver arriba).
  * @param out  MFunction destino (se sobrescribe).
  * @param ent  Direcciones de runtime entries (callvirt/gc/raw_alloc/calln).
- * @param resolve_symbol  Resolver de simbolos del linker (Phase D.3-H):
+ * @param resolve_symbol  Resolver de simbolos del linker ( D.3-H):
  *             dado @c "code.s_<N>" / @c "code.<fn>" devuelve la direccion
  *             VM absoluta.  Lo usan @c STR_LIT_ADDR / @c LABEL_ADDR.  Si es
  *             nullptr o retorna 0, esos ops caen a fallback (igual que el

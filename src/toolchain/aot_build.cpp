@@ -814,7 +814,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 return EXIT_FAILURE;
             }
 
-            // Phase AOT.2: re-bajar las ops sintetizadas (RAW_ALLOC/RAW_FREE/
+            //  AOT.2: re-bajar las ops sintetizadas (RAW_ALLOC/RAW_FREE/
             // PANIC) a CALL a simbolos externos (convencion libc; los resuelve
             // el linker -> el .o NO depende de libc).  Tras esto el selector ve
             // solo CALL.  Se ejecuta DESPUES del gate de analyze para que el
@@ -1064,7 +1064,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             // abajo (contenedor ELF32, mode32 del codegen, etc.).
             const bool aot_mode32 = (arch == aot::AotArch::X86_32);
 
-            // Backend de codegen nativo por arquitectura (Phase H.5): el driver
+            // Backend de codegen nativo por arquitectura ( H.5): el driver
             // ya no llama al codegen x86 directamente, sino a traves de esta
             // interfaz.  Anadir una arch = implementar NativeBackend.
             std::unique_ptr<aot::NativeBackend> native_backend =
@@ -1349,7 +1349,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 std::string section_perms; // "rwx" explicito ("" = convencion)
                 int64_t section_at = -1;   // @at(N)
                 int32_t section_order = 0x7fffffff; // @order(N)
-                // Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint
+                //  AOT-GC (Inc 1): stackmaps de raices GC por safepoint
                 // (pc_offset relativo a esta funcion).  Vacios salvo gc<T>.
                 std::vector<jit::Stackmap> stackmaps;
             };
@@ -1375,7 +1375,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 // para que un linker las pueda usar).  Con main, OBJECT mantiene
                 // el BFS desde main (no regresa programas con funciones
                 // inalcanzables no-compilables).  @section siempre se siembra.
-                // Phase NR @Naked: un ISR/stub se referencia desde la IDT/GDT
+                //  NR @Naked: un ISR/stub se referencia desde la IDT/GDT
                 // o por asm externo, NUNCA por un CALL visible -> sembrarlo
                 // siempre para que no lo elimine el dead-strip del BFS.
                 if ((emit_shared || (emit_obj && !main_fn) ||
@@ -1891,7 +1891,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     place_data(N);
             }
 
-            // Phase NR / dev-OS: nombre de bloque (asm/bytes) -> su ubicacion.
+            //  NR / dev-OS: nombre de bloque (asm/bytes) -> su ubicacion.
             // Permite que OTROS bloques lo referencien por simbolo (un `jmp
             // other_block` o un `dd gdt` cross-block).  Los bloques con
             // symbol_name son FORCE_EMIT -> ya estan colocados (loop de

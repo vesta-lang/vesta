@@ -1,6 +1,6 @@
 /**
  * @file test_vx_module_resolver.cpp
- * @brief Tests del resolver de modulos + dep graph + topo sort (Phase M.1).
+ * @brief Tests del resolver de modulos + dep graph + topo sort ( M.1).
  *
  * Construye fixtures con ficheros temporales en disco que se importan
  * entre si, verifica:
@@ -296,7 +296,7 @@ void test_import_alias_and_only() {
 } // namespace
 
 int main() {
-    std::cout << "=== test_vx_module_resolver: Phase M.1 ===\n";
+    std::cout << "=== test_vx_module_resolver:  M.1 ===\n";
 
     test_simple_chain();
     test_diamond();

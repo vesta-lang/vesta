@@ -20,7 +20,7 @@
  * (resolve_native_symbol, resolve_all).
  */
 #include "ffi/native_ffi.h"
-#include "ffi/virtual_lib_registry.h" // Phase MC.20: lookup_virtual_fn
+#include "ffi/virtual_lib_registry.h" //  MC.20: lookup_virtual_fn
 
 #ifdef _WIN32
 #include "windows.h"

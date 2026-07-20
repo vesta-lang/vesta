@@ -8,7 +8,7 @@
 /**
  * @file jit/target_reginfo.h
  * @brief Descriptor de registros por arquitectura para el register allocator
- *        (Phase D.7).  Capa 2 del diseno (ver doc/REGALLOC.md).
+ *        ( D.7).  Capa 2 del diseno (ver doc/REGALLOC.md).
  *
  * Esta es la UNICA pieza que cambia por arquitectura desde el punto de vista
  * del allocator.  El allocator CORE es generico: lee de aqui que registros
@@ -155,7 +155,7 @@ inline TargetRegInfo build_x86_64_target(bool sysv) {
                              t.callee_saved[GP].end());
     t.ret_reg[GP] = id(MReg::RAX);
 
-    /* FP-regalloc (Phase AOT C1 float): XMM14/XMM15 RESERVADOS como scratch
+    /* FP-regalloc ( AOT C1 float): XMM14/XMM15 RESERVADOS como scratch
      * del rewrite (materializar spills FP + two-address legalization de
      * ADDSD/etc), analogo a R10/R11 en GP.  Asignables: XMM0..XMM13.
      * En SysV todos los XMM son caller-saved (volatiles).  En Win64 XMM6-15

@@ -375,7 +375,7 @@ bool is_builtin_name(const std::string &name) {
         "unique_box", "shared_box", "unique_with", "shared_with", "move",
         "ptr_of", "use_count", "lend", "lend_mut", "read_borrow",
         "write_borrow",
-        // --- Memoria compartida (Phase Z) ---
+        // --- Memoria compartida ( Z) ---
         "share", "unshare", "is_shared", "shared_malloc", "shared_free",
         "atomic_load_i64", "atomic_store_i64", "atomic_cas_i64",
         "atomic_add_i64",

@@ -377,7 +377,7 @@ class ProcessVM; // fwd: el provider guarda un ProcessVM* (def mas abajo).
  * @brief Implementacion de @c gc::GcRootProvider sobre un @c ProcessVM.
  *
  * Da al GcHeap acceso al stack/regs del proceso (scan conservativo) y a las
- * tablas shared (Phase Z, cross-proceso) sin que @c gc_heap.cpp dependa de la
+ * tablas shared ( Z, cross-proceso) sin que @c gc_heap.cpp dependa de la
  * VM.  Los cuerpos viven en @c proceso_runtime.cpp (donde @c runtime.h aporta
  * la def completa de la VM); aqui solo las declaraciones.
  */
@@ -488,7 +488,7 @@ class ProcessVM {
     /**
      * @brief Puntero cacheado a la @c HandleTable del @c gc_heap, para el JIT.
      *
-     * Phase D.7 (principio "JIT inline > runtime"): el codigo JIT-eado
+     *  D.7 (principio "JIT inline > runtime"): el codigo JIT-eado
      * inline-a @c GcHeap::deref leyendo @c data_/@c count_ de esta tabla
      * (offsets 0/8) en vez de hacer un CALL a @c vrt_gc_deref (~6x: 30ns
      * -> 5ns).  Se inicializa UNA sola vez en el constructor a
@@ -503,7 +503,7 @@ class ProcessVM {
     void *jit_handle_table = nullptr;
 
     /**
-     * @brief Buffer del state-transfer del OSR (Phase D.8), indexado por IR
+     * @brief Buffer del state-transfer del OSR ( D.8), indexado por IR
      * VID.
      *
      * Cuando un loop caliente en codigo C1 cruza el umbral de iteraciones
@@ -592,7 +592,7 @@ class ProcessVM {
     vm::VirtualMemory
         vm_mem; ///< Interfaz de memoria virtual (combina TLB + ArenaManager)
 
-    // --- Scratch para inline-asm en el interprete (Phase AS inc.6) ---
+    // --- Scratch para inline-asm en el interprete ( AS inc.6) ---
     // Buffer host de 16 qwords que el helper @c vrt_inline_asm_exec usa
     // como @c ctx[16] del trampolin (marshalling GP host <-> valores VM).
     // Vive en el ProcessVM (host), no en vm_mem, porque el trampolin

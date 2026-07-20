@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_vreg_native.cpp
- * @brief Phase AOT.3 Paso 2 -- valida @c vreg_compile_native (ABI HOST_LEAF).
+ * @brief  AOT.3 Paso 2 -- valida @c vreg_compile_native (ABI HOST_LEAF).
  *
  * Construye funciones IR triviales, las compila con @c vreg_compile_native
  * (que produce BYTES nativos en ABI HOST_LEAF: args en arg_regs, retorno en
@@ -245,7 +245,7 @@ void test_param_combine4() {
 
 /* ===================================================================== */
 /* Helper layout AOT: concatena funciones, mapea nombre->offset y parchea *
- * las relocations CALL_REL32 (Phase AOT.3 Paso 2b-ii).                    */
+ * las relocations CALL_REL32 ( AOT.3 Paso 2b-ii).                    */
 /* ===================================================================== */
 struct LaidOut {
     std::vector<uint8_t> text;
@@ -424,7 +424,7 @@ void test_tailcall_reloc() {
 } // namespace
 
 int main() {
-    std::printf("=== test_vreg_native (Phase AOT.3 Paso 2) ===\n");
+    std::printf("=== test_vreg_native ( AOT.3 Paso 2) ===\n");
     test_ret42();
     test_add();
     test_param_add2();

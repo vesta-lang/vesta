@@ -10,7 +10,7 @@
 
 /**
  * @file aot/aot_emit_shim.h
- * @brief Phase AOT.4 -- ABI C plana para emitir ejecutables PE/ELF.
+ * @brief  AOT.4 -- ABI C plana para emitir ejecutables PE/ELF.
  *
  * Frontera limpia entre el compilador AOT (C++) y LibPEparse (C).  Este header
  * NO expone ningun tipo de LibPEparse: solo @c structs C planos y funciones.

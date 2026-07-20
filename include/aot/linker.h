@@ -10,7 +10,7 @@
 
 /**
  * @file aot/linker.h
- * @brief Phase AOT.5 -- linker propio (enlazado de objetos .o sin ld/gcc).
+ * @brief  AOT.5 -- linker propio (enlazado de objetos .o sin ld/gcc).
  *
  * Enlaza uno o mas objetos relocatables (ELF64 @c ET_REL, los que emite
  * @c --emit obj o un .o de gcc) en un ejecutable nativo, resolviendo los

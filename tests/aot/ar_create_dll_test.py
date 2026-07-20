@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Phase AOT.5 -- archivador propio (vm --ar) + enlace contra nuestras propias
+ AOT.5 -- archivador propio (vm --ar) + enlace contra nuestras propias
 librerias (.a creadas por nosotros y .dll emitidas por nosotros), sin ar/ld/gcc
 para crear/usar la libreria.
 

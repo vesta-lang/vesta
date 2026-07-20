@@ -524,7 +524,7 @@ void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr) {
     // point del scheduler (tras avanzar el PC), no aqui.
 }
 
-// B4.3: NEWOBJS r_cls -> aloca en SharedHeap (Phase Z.6).
+// B4.3: NEWOBJS r_cls -> aloca en SharedHeap ( Z.6).
 //
 // Variante shared del NEWOBJ: instead of vm->gc_heap, aloca via
 // vm_reference.shared_heap (cross-process).  Registra el host_ptr
@@ -739,7 +739,7 @@ void exec_instr_raw_realloc(ProcessVM *vm, const DecodedInstr &instr) {
 }
 
 // =========================================================================
-//  Phase Z - gcpromote / gcdemote: deep-copy local <-> SharedHeap.
+//   Z - gcpromote / gcdemote: deep-copy local <-> SharedHeap.
 // =========================================================================
 //
 // El host_ptr en el registro apunta al payload (ObjectHeader + fields).
@@ -841,7 +841,7 @@ void exec_instr_gcdemote(ProcessVM *vm, const DecodedInstr &instr) {
 }
 
 // =========================================================================
-//  Phase Z - Atomics i64 reales sobre host memory.
+//   Z - Atomics i64 reales sobre host memory.
 // =========================================================================
 //
 // Implementacion sobre memoria HOST (raw pointers).  Los registros llevan

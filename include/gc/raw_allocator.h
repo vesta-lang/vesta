@@ -299,7 +299,7 @@ class RawAllocator {
     const RawStats &stats() const { return stats_; }
 
     // ---------------------------------------------------------------------
-    // Soporte para el inline-alloc del JIT (Phase D.7 perf, 2026-06-06).
+    // Soporte para el inline-alloc del JIT ( D.7 perf, 2026-06-06).
     //
     // El JIT inline-a el fast-path del slab (pop del free list por size
     // class) sin CALL al runtime.  Necesita los offsets de los miembros

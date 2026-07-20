@@ -12,7 +12,7 @@
 
 /**
  * @file asm_backend.cpp
- * @brief Phase AS inc.4b: definicion del puntero global @c g_asm_backend.
+ * @brief  AS inc.4b: definicion del puntero global @c g_asm_backend.
  *
  * El frontend Vesta (vx_lib) define el puntero a @c nullptr.  El ejecutable
  * que enlaza Keystone (target @c vm) registra una @c KeystoneAsmBackend en el

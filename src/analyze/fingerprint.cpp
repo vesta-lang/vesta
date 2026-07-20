@@ -186,7 +186,7 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
             case Op::INLINE_ASM: {
                 // `asm { }` nativo: se ANALIZA el cuerpo (efectos exactos) en vez
                 // de tratarlo como caja negra total.  El cuerpo NASM viaja en
-                // @c func_name (lo pone el lowering de Phase AS).
+                // @c func_name (lo pone el lowering de  AS).
                 const vx::AsmBlockEffects e =
                     vx::asm_analyze_block(ins.func_name, arch);
                 // El marco EXPLICITO (push/pop/sub rsp con inmediato) SI se ve en

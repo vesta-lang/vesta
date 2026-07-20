@@ -116,7 +116,7 @@ void Lexer::skip_whitespace() {
                 }
                 continue;
             }
-            // Detectar `@sm <hex>` (Phase E.1): stackmap preciso para la
+            // Detectar `@sm <hex>` ( E.1): stackmap preciso para la
             // siguiente instruccion.  El hex son digitos [0-9a-fA-F]
             // capturados hasta fin de linea; se almacena verbatim en
             // last_src_stackmap para que el parser lo copie al Instruction.

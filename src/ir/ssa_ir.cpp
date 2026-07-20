@@ -302,7 +302,7 @@ static const OpEntry OP_TABLE[] = {
     // async fusion + string extra
     {"fulfill_hlt", IrOp::FULFILL_HLT},
     {"strgetbytes", IrOp::STRGETBYTES},
-    // meta-OOP / reflexion / Phase Z extras
+    // meta-OOP / reflexion /  Z extras
     {"gc_handle_for_ptr", IrOp::GC_HANDLE_FOR_PTR},
     {"gc_promote", IrOp::GC_PROMOTE},
     {"gc_demote", IrOp::GC_DEMOTE},

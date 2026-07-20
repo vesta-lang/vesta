@@ -126,7 +126,7 @@ class Inspector {
     /**
      * @brief @c vesta/ir: SSA IR del modulo.
      * @param uri   URI del documento.
-     * @param phase "pre" (antes de optimizar) o "post" (default, optimizado).
+     * @param  "pre" (antes de optimizar) o "post" (default, optimizado).
      * @return @c { "text": "<IR legible>" } o @c { "error": "..." }.
      */
     nlohmann::json ir(const std::string &uri, const std::string &phase,

@@ -287,7 +287,7 @@ Scheduler::~Scheduler() {
 void Scheduler::run_loop() {
     // continuar mientras no se solicite parada y la VM siga activa
     while (!should_kill && vm_reference.vm_running) {
-        // Phase Z.10 ext: STW poll para shared GC.  Si shared_gc_active
+        //  Z.10 ext: STW poll para shared GC.  Si shared_gc_active
         // esta set, ACK + dormir hasta que el GC termine.  Esto es un
         // safe point: estamos entre batches, sin instr en flight, regs
         // y stack del proceso anterior ya commiteados a memoria.

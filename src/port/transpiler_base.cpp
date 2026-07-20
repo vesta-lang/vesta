@@ -890,7 +890,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         return;
     }
 
-    // Markers semanticos (Phase B): no-op para transpiler.
+    // Markers semanticos ( B): no-op para transpiler.
     case IrOp::MAKE_VARIANT:
     case IrOp::MATCH_VARIANT:
     case IrOp::MAKE_CLOSURE:
@@ -962,7 +962,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
                               ins.type);
         return;
 
-    // Phase AS inc.3: inline asm nativo de la CPU host.  El backend
+    //  AS inc.3: inline asm nativo de la CPU host.  El backend
     // que lo soporte (port-C) emite @c __asm__ __volatile__; el resto
     // cae a emit_unsupported via el default del hook.
     case IrOp::INLINE_ASM: backend_.emit_inline_asm(ctx, ins); return;

@@ -7,7 +7,7 @@
 
 /**
  * @file jit/inline_asm_trampoline.h
- * @brief Phase AS inc.6: trampoline nativo para ejecutar inline-asm desde el
+ * @brief  AS inc.6: trampoline nativo para ejecutar inline-asm desde el
  *        INTERPRETE (modo `-m vm`), SIN el compilador JIT.
  *
  * El interprete no puede materializar asm de la CPU host; pero SI puede LLAMAR

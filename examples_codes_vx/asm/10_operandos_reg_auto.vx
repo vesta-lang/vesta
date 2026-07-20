@@ -1,4 +1,4 @@
-// Phase AS inc.7: operandos con registro ELEGIDO POR EL COMPILADOR (`reg`).
+//  AS inc.7: operandos con registro ELEGIDO POR EL COMPILADOR (`reg`).
 //
 // En vez de fijar el registro (register("rax")), la lista `( ... )` antes del
 // `{}` declara operandos cuya CLASE es `reg` = "el compilador elige el mejor

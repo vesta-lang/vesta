@@ -8,7 +8,7 @@
 /**
  * @file jit/inline_asm_trampoline.cpp
  * @brief Implementacion del trampoline de inline-asm para el interprete
- *        (Phase AS inc.6).  Ver inline_asm_trampoline.h.
+ *        ( AS inc.6).  Ver inline_asm_trampoline.h.
  */
 
 #include "jit/inline_asm_trampoline.h"
@@ -31,7 +31,7 @@
 namespace jit {
 
 // =====================================================================
-//  Phase AS inc.6: registro global hash(NASM) -> trampoline + helper
+//   AS inc.6: registro global hash(NASM) -> trampoline + helper
 //  nativo que el interprete invoca por cada bloque inline-asm.
 // =====================================================================
 

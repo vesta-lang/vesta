@@ -10,7 +10,7 @@
 
 /**
  * @file aot/link_script.h
- * @brief Phase AOT.5 -- script de enlace ESCRITO EN VESTA (configurable).
+ * @brief  AOT.5 -- script de enlace ESCRITO EN VESTA (configurable).
  *
  * El usuario configura el linker con un @c .vx normal (sin sintaxis nueva):
  * define una funcion @c link() que llama a builtins de configuracion.  El

@@ -31,7 +31,7 @@
  */
 
 #include "vx/type_checker.h"
-#include "vx/asm/asm_effects.h"           // asm_canonical_reg (Phase AS inc.4)
+#include "vx/asm/asm_effects.h"           // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"         // is_c_representable / is_managed (Fase 1)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
 #include "vx/comptime/comptime_introspect.h"   // comptime_field_type
@@ -44,7 +44,7 @@
 
 #include <algorithm>
 #include <utility>
-#include <cctype>   // tolower/isdigit para canonical_x86_reg (Phase AS)
+#include <cctype>   // tolower/isdigit para canonical_x86_reg ( AS)
 #include <cstdlib>  // getenv para VESTA_MC_VMONLY/PREBUILT
 #include <cstring>  // memcpy para bitcast f64 -> u64
 #include <fstream>  // cargar prebuilt .velb desde disco
@@ -62,7 +62,7 @@ extern "C" uint64_t vx_get_native_thunk(uint64_t fn_pc, uint64_t argc);
 
 namespace vx {
 
-// Phase AS inc.4: la canonicalizacion de registros x86-64 vive ahora en
+//  AS inc.4: la canonicalizacion de registros x86-64 vive ahora en
 // @c asm_effects.{h,cpp} (compartida con la inferencia de clobbers).  El
 // type checker la usa via @c asm_canonical_reg.
 
@@ -117,7 +117,7 @@ extern "C" const char *vx_comptime_compile(const char *src) {
 }
 
 /**
- * @brief Phase MC.23: helpers virtual fn para queries de tipos por
+ * @brief  MC.23: helpers virtual fn para queries de tipos por
  * NOMBRE (string).  Mucho mas simple que la version con hash: el
  * macro pasa "i32"/"u64"/"f32"/"<class_name>" y obtiene la metadata.
  *
@@ -245,7 +245,7 @@ TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
 }
 
 TypeChecker::~TypeChecker() {
-    /* Phase MC.20: limpiar el pointer thread_local SOLO si es esta
+    /*  MC.20: limpiar el pointer thread_local SOLO si es esta
      * instancia (defensive: otro TypeChecker pudo haberse construido
      * y sobreescrito el slot). */
     if (g_active_typechecker == this) {
@@ -1489,7 +1489,7 @@ bool TypeChecker::run() {
     initial_errors_ = diags_.error_count();
     push_scope(); // global
 
-    // Phase M.2.e: drenar la cola de funciones importadas via .vxi.
+    //  M.2.e: drenar la cola de funciones importadas via .vxi.
     // Cada entrada se declara en el scope global como Symbol::Function
     // con su sig_index ya asignado, igual que los builtins.
     for (const auto &pf : pending_imported_fn_names_) {
@@ -1500,7 +1500,7 @@ bool TypeChecker::run() {
     }
     pending_imported_fn_names_.clear();
 
-    // Phase M.L7: drenar la cola de globals importadas.  Cada entry
+    //  M.L7: drenar la cola de globals importadas.  Cada entry
     // se declara en el scope global como Symbol::Variable con su
     // tipo resuelto + flag is_const propagado del .vxi.  Si la
     // global es const + trae init_value, ademas se guarda en la
@@ -1543,7 +1543,7 @@ bool TypeChecker::run() {
     }
     pending_imported_globals_.clear();
 
-    // Phase M.7: drenar la cola de namespaces.  Cada `import "x";`
+    //  M.7: drenar la cola de namespaces.  Cada `import "x";`
     // o `import "x" as alias;` registro un namespace; aqui los
     // declaramos como Symbol::Namespace en el scope global para
     // que `lib_a.simbolo` se resuelva via check_field_access.
@@ -1560,7 +1560,7 @@ bool TypeChecker::run() {
     }
     pending_imported_ns_names_.clear();
 
-    // Phase M6.a L.3: pre-pase de visibilidad para fns/globals/typedefs.
+    //  M6.a L.3: pre-pase de visibilidad para fns/globals/typedefs.
     // Las layouts struct/class/enum se setean en su procesado main
     // (que sobreescribe la entry pre-registrada con un layout fresco).
     for (const auto &decl : mod_.decls) {
@@ -2017,7 +2017,7 @@ const Symbol *TypeChecker::lookup_with_depth(const std::string &name,
         auto found = scopes_[i].find(name);
         if (found != scopes_[i].end()) {
             if (depth_out) *depth_out = i;
-            // Phase M.L26: registrar el name como referenciado.  Solo
+            //  M.L26: registrar el name como referenciado.  Solo
             // los lookups exitosos cuentan (los misses son errores y
             // no significan "uso valido").  El @c compile_vx_project
             // consulta este set tras run() para detectar imports sin
@@ -2093,13 +2093,13 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
     }
     if (tn->kind == ast::NodeKind::NamedTypeNode) {
         const auto *nt = static_cast<const ast::NamedTypeNode *>(tn);
-        // Phase M.7.c: namespace qualified type (`ui.Button`).
+        //  M.7.c: namespace qualified type (`ui.Button`).
         // El parser concatena los segmentos con `.`; lo separamos
         // y resolvemos buscando primero el namespace local, luego
         // el simbolo dentro.  Si encaja, traducimos a Type del
         // tipo apuntado (con el mangled label correspondiente).
         {
-            // Phase NS.1b: resolver por el prefijo de namespace mas largo
+            //  NS.1b: resolver por el prefijo de namespace mas largo
             // (multi-segmento `ui.widgets.Button`).
             uint32_t ns_idx_resolved = UINT32_MAX;
             std::string sym_name;
@@ -3353,7 +3353,7 @@ void TypeChecker::collect_globals() {
              * la entrada con un layout local fresco, hay que re-copiar
              * el flag desde el StructDecl. */
             layout.is_introspect = s->is_introspect;
-            // Phase M6.a L.3.
+            //  M6.a L.3.
             layout.is_public = s->is_public;
 
             // Registrar metodos del struct (value-type, dispatch
@@ -3624,7 +3624,7 @@ void TypeChecker::collect_globals() {
             elay.size_bytes = 8 + 8 * max_pl;
             /* preservar marca @Introspect del AST. */
             elay.is_introspect = en->is_introspect;
-            // Phase M6.a L.3.
+            //  M6.a L.3.
             elay.is_public = en->is_public;
             // Sobrescribir entrada vacia pre-registrada.
             enum_layouts_[en->name] = std::move(elay);
@@ -3658,7 +3658,7 @@ void TypeChecker::collect_globals() {
             /* preservar la marca @Introspect del AST. */
             layout.is_introspect = c->is_introspect;
             layout.is_aspect = c->is_aspect;
-            // Phase M6.a L.3: visibilidad cross-module.
+            //  M6.a L.3: visibilidad cross-module.
             layout.is_public = c->is_public;
 
             // Herencia: si hay super_name resuelto, copiamos sus fields
@@ -3669,7 +3669,7 @@ void TypeChecker::collect_globals() {
             // abajo cuando procesamos los metodos propios.
             const ClassLayout *super_layout = nullptr;
             if (!c->super_name.empty()) {
-                // Phase M.L30: detector de ciclos de herencia.
+                //  M.L30: detector de ciclos de herencia.
                 // Recorrer la cadena super_name -> super_name de la
                 // clase candidata.  Si llegamos al name de la clase
                 // que estamos procesando, hay un ciclo (e.g. A:B y
@@ -4820,7 +4820,7 @@ void TypeChecker::check_functions() {
         //     `i32 r = await compute(10, 20);` tipo-checkea correctamente.
         //
         // Tipos > 8 bytes (struct, array, optional, result) requeririan
-        // serializacion en buffer auxiliar.  Deferido a Phase B.
+        // serializacion en buffer auxiliar.  Deferido a  B.
         if (fn->is_async) {
             auto fits_in_qword = [](const Type &t) -> bool {
                 if (t.kind == PrimitiveKind::COUNT)
@@ -5691,7 +5691,7 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
         check_var_decl(static_cast<ast::VarDeclStmt *>(s));
         return;
     case ast::NodeKind::AsmStmt: {
-        // Phase AS inc.7: cada operando de la lista `( <clase> <nombre> [=
+        //  AS inc.7: cada operando de la lista `( <clase> <nombre> [=
         // init] )` declara una variable register-bound en el scope actual
         // (modelo read-back: legible tras el bloque = su valor de salida).
         auto *as = static_cast<ast::AsmStmt *>(s);
@@ -6310,7 +6310,7 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
                                       "0) o init con `new T[N]`");
         }
     }
-    // Phase AS inc.2: validacion del storage-class register("reg").
+    //  AS inc.2: validacion del storage-class register("reg").
     //  (a) el nombre debe ser un registro x86-64 reconocido;
     //  (b) el tipo debe ser primitivo (int/float/bool/char/ptr);
     //  (c) no puede haber otra variable viva en el MISMO scope ligada
@@ -7530,13 +7530,13 @@ Type TypeChecker::check_this(ast::ThisExpr *e) {
 }
 
 Type TypeChecker::check_new(ast::NewExpr *e) {
-    // Phase M.7.c: namespace qualified `new ui.Button(...)`.
+    //  M.7.c: namespace qualified `new ui.Button(...)`.
     // Si class_name contiene `.`, lo traducimos al mangled label
     // ANTES de que el resto del check_new procese.  Asi el resto
     // del codigo (lookup en class_layouts_, llamada al ctor, etc.)
     // ve el nombre interno (`ui__Button`) sin necesidad de cambios.
     {
-        // Phase NS.1b: resolver por el prefijo de namespace mas largo
+        //  NS.1b: resolver por el prefijo de namespace mas largo
         // (multi-segmento `new ui.widgets.Button(...)`).
         uint32_t ns_idx = UINT32_MAX;
         std::string sym_name;
@@ -8362,7 +8362,7 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
     return s->type;
 }
 
-// Phase NS.1b: colapsa una cadena de field-access de identificadores en un path
+//  NS.1b: colapsa una cadena de field-access de identificadores en un path
 // punteado (ui.widgets.button -> "ui.widgets.button").  Devuelve false si algun
 // eslabon no es IdentExpr/FieldAccessExpr simple.
 static bool collect_dotted_path(const ast::Expr *e, std::string &out) {
@@ -8382,7 +8382,7 @@ static bool collect_dotted_path(const ast::Expr *e, std::string &out) {
 }
 
 Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
-    // Phase NS.1b: acceso qualified MULTI-segmento a namespace
+    //  NS.1b: acceso qualified MULTI-segmento a namespace
     // (`ui.widgets.button`): la base es una CADENA de field-access de
     // identificadores.  Colapsamos la base en un path punteado, la resolvemos
     // como namespace (por su nombre completo registrado) y buscamos
@@ -8445,7 +8445,7 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
     // sugiriendo invocar con argumentos.
     if (e->base && e->base->kind == ast::NodeKind::IdentExpr) {
         auto *base_id = static_cast<ast::IdentExpr *>(e->base.get());
-        // Phase M.7: namespace qualified access (`lib_a.valor_a`).
+        //  M.7: namespace qualified access (`lib_a.valor_a`).
         // Si el IdentExpr base resuelve a un Symbol::Namespace, el
         // field_name es un simbolo del namespace; devolvemos su tipo
         // (return type para FUNCTION, var_type para Variable).
@@ -9737,7 +9737,7 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                          "'&' requiere un lvalue (variable, campo, p[i] o *p)");
             return Type{};
         }
-        // Phase AS inc.3: no se puede tomar la direccion de una
+        //  AS inc.3: no se puede tomar la direccion de una
         // variable register("reg") -- vive en un registro fisico, no
         // tiene direccion estable (en C es un error de compilacion
         // `&register`).  Rechazar en compile-time con mensaje claro.
@@ -11290,7 +11290,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // IdentExpr que nombra un enum.
     if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        // Phase NS.1b: namespace MULTI-segmento `ui.widgets.button(args)` -- la
+        //  NS.1b: namespace MULTI-segmento `ui.widgets.button(args)` -- la
         // base es una cadena de field-access (`ui.widgets`).  Colapsar en path
         // punteado y resolver el namespace ANTES de check_expr(base) (que
         // trataria `ui` como variable indefinida).  El caso single-segment
@@ -11340,7 +11340,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
             }
         }
-        // Phase M.7: namespace.function(args) -- el base resuelve a
+        //  M.7: namespace.function(args) -- el base resuelve a
         // Symbol::Namespace y el field es una funcion del namespace.
         // Detectar ANTES de check_expr(base) para que no se trate
         // como variable indefinida.
@@ -11380,7 +11380,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         return Type{};
                     }
                     const auto &sym = ns.symbols[its->second];
-                    // Phase M.7.c: si la sig esta vacia (namespace
+                    //  M.7.c: si la sig esta vacia (namespace
                     // inline; las firmas se rellenan en check_function),
                     // buscamos la sig real via function_sig_by_name
                     // usando el mangled_label.  Para namespaces
@@ -14452,13 +14452,13 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     return e->result_type;
                 }
             }
-            /* Phase MC.9/MC.10: VM eval es el camino DEFAULT cuando
+            /*  MC.9/MC.10: VM eval es el camino DEFAULT cuando
              * el bytecode esta disponible.  Sin flags ni opt-in: si
              * @c comptime_runtime_ tiene el macro registrado y los
              * args son codificables como uint64, invocamos via VM.
              * Fallback transparente al AST evaluator si la VM falla
              * o si los args no son encodables.  El bytecode se
-             * popula automaticamente via two-phase compile (main.cpp
+             * popula automaticamente via two- compile (main.cpp
              * orquestador) sin intervencion del usuario. */
             ComptimeEvalResult r;
             bool used_vm = false;

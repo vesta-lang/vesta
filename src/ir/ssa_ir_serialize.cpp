@@ -17,7 +17,7 @@
  *     podria trabajar con codigo compilado in-process durante una
  *     ejecucion (perdiendo el speedup post-warmup en runs cortos).
  *
- *   - **AOT futuro (Phase D.10+)**: el optimizer del JIT puede operar
+ *   - **AOT futuro ( D.10+)**: el optimizer del JIT puede operar
  *     ANTES de la ejecucion sobre el IR del .velb y persistir codigo
  *     nativo en un .velao adicional.
  *
@@ -73,7 +73,7 @@ constexpr uint8_t INSTR_FLAG_PRESERVE =
 constexpr uint8_t INSTR_FLAG_IS_CALL_SITE =
     1 << 1; ///< Marca instruccion como call site (para stackmaps)
 constexpr uint8_t INSTR_FLAG_HOST_ALLOCA =
-    1 << 2; ///< ALLOCA auto-promovida a host stack (Phase D.jit-mem-model)
+    1 << 2; ///< ALLOCA auto-promovida a host stack ( D.jit-mem-model)
 constexpr uint8_t INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE =
     1 << 3; ///< Sprint mem-loop-fix: RAW_FREE preservado para liberar in-loop
 
@@ -83,7 +83,7 @@ constexpr uint8_t FN_FLAG_NATIVE =
 constexpr uint8_t FN_FLAG_VARIADIC =
     1 << 1; ///< Acepta nargs variable (R15 contiene el count)
 constexpr uint8_t FN_FLAG_NAKED =
-    1 << 2; ///< Phase NR @Naked: sin prologo/epilogo/ret (ISRs/stubs)
+    1 << 2; ///<  NR @Naked: sin prologo/epilogo/ret (ISRs/stubs)
 
 /**
  * @brief Serializa un @c IrValue al stream binario.
@@ -407,7 +407,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     for (const auto &s : fn.generic_type_args)
         write_str(out, s);
 
-    // Phase AS inc.5: bindings register() + clobber-lists del inline-asm.
+    //  AS inc.5: bindings register() + clobber-lists del inline-asm.
     // Necesarios para que el JIT (que compila desde el @ir del .velb)
     // reconstruya el pin de registros del INLINE_ASM.  La mayoria de
     // funciones tienen ambos vacios (8 bytes: dos counts a 0).
@@ -535,7 +535,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         out.generic_type_args.push_back(std::move(s));
     }
 
-    /* Phase AS inc.5: bindings register() + clobber-lists del inline-asm. */
+    /*  AS inc.5: bindings register() + clobber-lists del inline-asm. */
     uint32_t n_bind = 0;
     if (!read_u32(in, off, n_bind)) return false;
     out.asm_reg_bindings.clear();
@@ -807,7 +807,7 @@ void serialize_static_data(const IrModule::StaticDataStore &sd,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         write_str(out, e.meta.shared_key);
-        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        //  NR / dev-OS: nombre exportado del bloque (cross-block symref).
         write_str(out, e.meta.symbol_name);
     }
 }
@@ -857,7 +857,7 @@ bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         if (!read_str(in, off, e.meta.shared_key)) return false;
-        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        //  NR / dev-OS: nombre exportado del bloque (cross-block symref).
         if (!read_str(in, off, e.meta.symbol_name)) return false;
         // Validar que el rango cae dentro del pool.
         if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())

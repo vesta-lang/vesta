@@ -10,7 +10,7 @@
 
 /**
  * @file aot/aot_analyze.h
- * @brief Phase AOT.1 -- analisis de compatibilidad nativa (is_pure_native).
+ * @brief  AOT.1 -- analisis de compatibilidad nativa (is_pure_native).
  *
  * Clasifica cada @c ir::IrOp en una de tres categorias segun lo que
  * necesita para ejecutarse:
@@ -32,7 +32,7 @@
  *                         excepciones, classregistry).
  *
  * = Independencia total (kernels / bootloaders) =
- *   El objetivo de Phase AOT es permitir binarios TOTALMENTE independientes
+ *   El objetivo de  AOT es permitir binarios TOTALMENTE independientes
  *   del runtime y de cualquier libreria.  La memoria de pila (ALLOCA) nunca
  *   pasa por un allocator -- es @c sub rsp puro.  Un programa que solo usa
  *   PURE_NATIVE compila a un .o/.elf/.exe freestanding sin un solo simbolo

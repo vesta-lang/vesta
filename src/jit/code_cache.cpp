@@ -29,7 +29,7 @@
  *     (cuando la VM termina) o via @c invalidate para deopt.
  *
  *   - **Modo RWX simple** en v1: cada pagina es escribible y ejecutable
- *     simultaneamente.  Phase E migrara a W^X (write-XOR-exec) para
+ *     simultaneamente.   E migrara a W^X (write-XOR-exec) para
  *     hardening: durante emit las paginas son RW, durante exec son RX,
  *     transicion via @c mprotect / @c VirtualProtect.  Sin esto, en
  *     macOS moderno + Apple Silicon directamente no funciona (hardware
@@ -49,7 +49,7 @@
  * pagina   | VirtualFree(p, 0, MEM_RELEASE)               | munmap(p, n) | |
  * Flush icache     | FlushInstructionCache(GetCurrentProcess(),..)|
  * __builtin___clear_cache           | | Transicion perms | VirtualProtect
- * (Phase E, futuro)             | mprotect (Phase E, futuro)        |
+ * ( E, futuro)             | mprotect ( E, futuro)        |
  */
 
 #include "jit/code_cache.h"
@@ -261,7 +261,7 @@ uint8_t *CodeCache::alloc(size_t size, size_t align) {
  * Llamado por el JIT tras escribir todos los bytes maquina y
  * resolver las relocations.  Hace dos cosas:
  *   1. Transicion de permisos (no-op en modo RWX; lo prepara para
- *      Phase E cuando vayamos a W^X).
+ *       E cuando vayamos a W^X).
  *   2. Flush de la icache para que el CPU descarte cualquier copia
  *      cacheada de los bytes anteriores en ese rango.  Esencial en
  *      ARM/AArch64; no-op en x86-64 (modelo de memoria coherente
@@ -269,7 +269,7 @@ uint8_t *CodeCache::alloc(size_t size, size_t align) {
  */
 void CodeCache::commit(const uint8_t *ptr, size_t size) {
     if (!ptr || size == 0) return;
-    // En modo RWX la transicion es no-op.  Cuando llegue Phase E,
+    // En modo RWX la transicion es no-op.  Cuando llegue  E,
     // esta funcion hara @c mprotect(ptr, size, PROT_READ|PROT_EXEC)
     // para hacer la region read-only ejecutable.
     transition_to_executable(const_cast<uint8_t *>(ptr), size);
@@ -333,7 +333,7 @@ bool CodeCache::contains(const uint8_t *ptr) const noexcept {
  * @brief Hook reservado para futura transicion RW -> RX (W^X).
  *
  * En modo RWX simple (v1) es no-op porque la region ya tiene los
- * tres permisos.  Cuando llegue Phase E, esta funcion hara
+ * tres permisos.  Cuando llegue  E, esta funcion hara
  * @c VirtualProtect / @c mprotect para retirar el bit de escritura
  * antes de ejecutar.  Asi un buffer overflow en el JIT compiler
  * no puede inyectar codigo en regiones ya commit-eadas.

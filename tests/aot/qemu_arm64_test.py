@@ -2,7 +2,7 @@
 """Validacion del path arm64 arrancando un binario bare-metal en QEMU.
 Requiere qemu-system-aarch64.
 
-De-risk del backend arm64 (Phase H): confirma que la cadena
+De-risk del backend arm64 ( H): confirma que la cadena
   Keystone (ensamblador arm64) -> raw .bin -> qemu-system-aarch64 (machine virt,
   bare-metal via -device loader, semihosting)
 funciona end-to-end en este host x86, ANTES de tener el emisor IR->arm64.

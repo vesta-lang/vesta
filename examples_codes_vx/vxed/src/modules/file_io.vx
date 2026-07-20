@@ -9,7 +9,7 @@
 // El manejo de errores usa `Result<i64, i32>` con `Ok(...)` / `Err(...)`
 // + `isOk(r) / value(r) / error(r)` para consumirlo.
 //
-// Tras Phase M.x_sret_fix (2026-05-26), class methods cross-module
+// Tras  M.x_sret_fix (2026-05-26), class methods cross-module
 // retornando Result/Optional usan SRET ABI correcto.  Por eso este
 // modulo expone tanto el `class FileReader` (OO) como free fns.
 

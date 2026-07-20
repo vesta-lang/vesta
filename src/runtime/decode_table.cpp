@@ -2376,7 +2376,7 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_two_op_reg},
 
     /* 0xA6 */
-    {// NEWOBJS reg_cls -> aloca en SharedHeap (Phase Z.6).  Registra
+    {// NEWOBJS reg_cls -> aloca en SharedHeap ( Z.6).  Registra
      // el host_ptr en shared_handle_table y guarda el shared handle
      // en ObjectHeader.hash_code para reverse lookup O(1).
      "newobjs", Assembly::Bytecode::AddressingMode::REG,

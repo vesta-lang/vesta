@@ -11,7 +11,7 @@
  *        nodo + summaries por funcion + invalidacion.  El mapeo real IrOp ->
  *        SemanticEffects (local) llega en Fase 1; el punto-fijo del callgraph
  *        (summary) en Fase 2.  Aqui devolvemos valores NEUTROS Complete para no
- *        alterar comportamiento (Fase 0: cero regresion).
+ *        alterar comportamiento (  cero regresion).
  */
 #include "analysis/effects/effect_analysis.h"
 

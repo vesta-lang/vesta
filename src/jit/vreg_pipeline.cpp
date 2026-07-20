@@ -7,7 +7,7 @@
 
 /**
  * @file jit/vreg_pipeline.cpp
- * @brief Implementacion del orquestador vreg (Phase D.7, commit 5c).
+ * @brief Implementacion del orquestador vreg ( D.7, commit 5c).
  *        Ver vreg_pipeline.h y doc/REGALLOC.md.
  */
 
@@ -334,7 +334,7 @@ std::vector<uint8_t> vreg_compile_native_target(
      * entregamos al caller para la vista correlada fuente <-> asm. */
     if (line_map_out) *line_map_out = std::move(pf.line_map);
     if (asm_labels_out) *asm_labels_out = std::move(pf.asm_labels);
-    /* Phase AOT-GC (Inc 1): stackmaps de raices GC (pc_offset relativo a la
+    /*  AOT-GC (Inc 1): stackmaps de raices GC (pc_offset relativo a la
      * funcion + slots GcHandle), poblados por rewrite_to_physical en cada
      * safepoint/CALL.  El encoder ya fijo pc_offset al byte real del call. */
     if (stackmaps_out) *stackmaps_out = std::move(pf.stackmaps);

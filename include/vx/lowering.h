@@ -113,7 +113,7 @@ class Lowering {
         instrument_mode_ = mode;
     }
 
-    /// Phase AOT.2.b: activa el modo POO NATIVA (sin runtime VM).  Cuando
+    ///  AOT.2.b: activa el modo POO NATIVA (sin runtime VM).  Cuando
     /// esta activo, el lowering de clases baja a layout C-struct +
     /// new->malloc/alloca + ctor directo, SIN __module_init/registry/GC.
     void set_native_poo(bool on) { native_poo_ = on; }
@@ -230,7 +230,7 @@ class Lowering {
                                                  uint32_t source_line);
 
     /**
-     * @brief Phase MC.17.2 -- obtiene (o aloca) el slot @c static_data
+     * @brief  MC.17.2 -- obtiene (o aloca) el slot @c static_data
      * que materializa un comptime global como memoria runtime para
      * macros lowereados.  Ver @c comptime_global_slots_.
      *
@@ -430,7 +430,7 @@ class Lowering {
     void lower_foreach(ast::ForEachStmt *s);
     void lower_synchronized(ast::SynchronizedStmt *s);
     void lower_asm(
-        ast::AsmStmt *s); ///< Phase AS: baja a IrOp::INLINE_ASM (marker host).
+        ast::AsmStmt *s); ///<  AS: baja a IrOp::INLINE_ASM (marker host).
 
     ir::IrValueId lower_expr(ast::Expr *e);
     ir::IrValueId lower_binary(ast::BinaryExpr *e);
@@ -1352,7 +1352,7 @@ class Lowering {
     /// leen/escriben via @c STR_LIT_ADDR + LOAD/STORE i64.  El AST
     /// evaluator mantiene su propia copia en
     /// @c TypeChecker::comptime_const_values_ -- son dos espacios
-    /// de memoria distintos pero cada pase del two-phase compile
+    /// de memoria distintos pero cada pase del two- compile
     /// se mantiene consistente internamente.
     std::unordered_map<std::string, uint64_t> comptime_global_slots_;
     /// L2.2: slots para globales runtime no-const (string/int/etc.)
@@ -1911,7 +1911,7 @@ class Lowering {
                                          ir::IrValueId pb, ir::IrValueId lb,
                                          uint32_t source_line);
 
-    // --- Reflexion / meta-OOP / Phase Z extras ---
+    // --- Reflexion / meta-OOP /  Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findfield(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findclass(ir::IrValueId v_params, uint32_t line);
@@ -1923,7 +1923,7 @@ class Lowering {
     void emit_addadvice(ir::IrValueId v_target, ir::IrValueId v_advice,
                         uint64_t kind, uint32_t line);
 
-    // --- GC primitives / Phase Z atomics ---
+    // --- GC primitives /  Z atomics ---
     ir::IrValueId emit_gc_allocp(ir::IrValueId v_size, uint32_t line);
     ir::IrValueId emit_gc_promote(ir::IrValueId v_src, uint32_t line);
     ir::IrValueId emit_gc_demote(ir::IrValueId v_src, uint32_t line);
@@ -1984,7 +1984,7 @@ class Lowering {
     /// no es "none", el lowering envuelve cada funcion usuario con
     /// CALLs a @c vx_trace:enter y @c vx_trace:exit (o equivalente).
     std::string instrument_mode_ = "none";
-    /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
+    ///  AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
     /// Multihilo AOT: true si esta funcion (o el modulo) uso `spawn { }` que bajo
     /// a un hilo real (__vx_thread_run).  Al lowerar `main` con este flag, se
@@ -2113,7 +2113,7 @@ class Lowering {
             SHAREDPTR_REL, ///< Decrementar refcount de @c shared<T>.
             SYNC_EXIT, ///< Exit de @c synchronized {} : TRYLEAVE + MONEXIT como
                        ///< IR ops.
-            NATIVE_FREE, ///< Phase AOT.2.b: RAW_FREE(obj) de una instancia de
+            NATIVE_FREE, ///<  AOT.2.b: RAW_FREE(obj) de una instancia de
                         ///< clase NATIVA (calloc) al exit del scope (RAII; sin
                         ///< GC). aot_lower lo convierte en call<free>.  Sin
                         ///< dangling.

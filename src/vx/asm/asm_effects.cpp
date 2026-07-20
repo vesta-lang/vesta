@@ -12,7 +12,7 @@
 
 /**
  * @file asm_effects.cpp
- * @brief Phase AS inc.4: implementacion de la inferencia PROPIA de clobbers.
+ * @brief  AS inc.4: implementacion de la inferencia PROPIA de clobbers.
  *
  * Sin dependencias de Keystone/Capstone.  Tabla plana mnemonic->efectos +
  * tokenizador ligero del cuerpo NASM Intel.

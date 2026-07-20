@@ -1,4 +1,4 @@
-# Ejemplos AOT (Phase AOT.3 Paso 2b-ii)
+# Ejemplos AOT ( AOT.3 Paso 2b-ii)
 
 Programas Vex que compilan a ejecutable nativo standalone (sin runtime VM)
 con CALL intra-modulo + tail-call con TCO genuino.
@@ -132,7 +132,7 @@ Validado (PE Windows + ELF WSL): "hello" con e-acento = 5 code-points, 6 bytes,
 `wstr()[1]` == 0xE9; clef de sol (U+1D11E) = 1 code-point, 4 bytes, par suplente
 0xD834 0xDD1E.  Ejemplo 59 -> exit 42.
 
-## Linker propio (Phase AOT.5) -- enlazar .o sin ld/gcc
+## Linker propio ( AOT.5) -- enlazar .o sin ld/gcc
 
 `vm --link a.o [b.o ...] -o prog [--format elf] [--entry sym] [--link-base 0xADDR]`
 fusiona uno o mas objetos relocatables (ELF64 `ET_REL` -- los que emite
@@ -310,7 +310,7 @@ cada seccion -- configurable y potente, en el propio lenguaje.
 
 ### @Naked: funciones sin prologo/epilogo (ISRs, stubs, cambio de modo)
 
-`@Naked` (Phase NR -- "Vesta sin runtime") marca una funcion cuyo cuerpo se
+`@Naked` ( NR -- "Vesta sin runtime") marca una funcion cuyo cuerpo se
 emite VERBATIM: el codegen NO inserta prologo (`push rbp`/`sub rsp`), NI
 epilogo, NI el `ret` implicito.  El programador provee la salida real
 (`ret`/`iretq`/`iret`).  Misma semantica que `__attribute__((naked))` de GCC.

@@ -120,7 +120,7 @@ struct CompileOptions {
     bool dump_html_types = false;
 
     /// Lenguaje destino del transpiler IR -> codigo fuente.  Vacio = no
-    /// transpilar (default).  Valores soportados: "c" (Phase 1).
+    /// transpilar (default).  Valores soportados: "c" ( 1).
     /// Futuros: "java", "js", "rust", etc.
     std::string port_target;
 
@@ -146,7 +146,7 @@ struct CompileOptions {
     ///                      estadisticas al exit del programa.
     std::string instrument_mode;
 
-    /// Phase AOT.2.b: modo POO NATIVA (sin runtime VM).  Cuando true, el
+    ///  AOT.2.b: modo POO NATIVA (sin runtime VM).  Cuando true, el
     /// lowering de clases baja a layout estilo C-struct (offsets estaticos)
     /// + new->malloc(size)/alloca + ctor directo, SIN __module_init/
     /// ClassRegistry/GcHeap (no se emiten defclass/newobj/findclass/
@@ -289,7 +289,7 @@ struct CompileResult {
     std::vector<uint8_t> ir_section_bytes;
 
     /**
-     * @brief Phase AOT: IR del modulo COMPLETO serializado (functions +
+     * @brief  AOT: IR del modulo COMPLETO serializado (functions +
      * static_data + globals) via @c ir::emit_ir_module_cache (magic VXMC).
      *
      * A diferencia de @c ir_section_bytes (solo functions, lo consume el
@@ -394,7 +394,7 @@ struct CompileResult {
     std::vector<std::pair<std::string, std::string>> macro_skip_reasons;
 
     /**
-     * @brief Phase M5.B: rutas canonicas (absolutas + normalizadas) de
+     * @brief  M5.B: rutas canonicas (absolutas + normalizadas) de
      * TODOS los modulos que participaron en el compile (root + deps
      * recursivos).  El main.cpp las usa para persistir el project
      * cache: tras un compile exitoso guarda
@@ -456,7 +456,7 @@ CompileResult compile_vx_source(const std::string &source,
                                  const CompileOptions &opts = {});
 
 /**
- * @brief Compila un proyecto multi-modulo (Phase M.2.e).
+ * @brief Compila un proyecto multi-modulo ( M.2.e).
  *
  * Resuelve los @c import del fichero raiz via @c ModuleGraph,
  * compila cada modulo en orden topologico (deps primero), inyecta

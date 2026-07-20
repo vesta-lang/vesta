@@ -27,7 +27,7 @@
  * (kernel32, unica dependencia en Windows), Linux via syscall `gettid` (186)
  * RAW sin libc.  La aritmetica de la palabra y el `lock cmpxchg` son comunes.
  *
- * @note Phase 4 (hilos reales del SO): el spin con PAUSE se sustituye por un
+ * @note  4 (hilos reales del SO): el spin con PAUSE se sustituye por un
  *       bloqueo via `WaitOnAddress` (Windows) / `futex` (Linux) sobre la misma
  *       palabra, y el cache de TID pasa a ser thread-local.
  */

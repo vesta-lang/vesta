@@ -1,6 +1,6 @@
 /**
  * @file namespace_flatten.h
- * @brief Pre-pass que aplana @c NamespaceDecl inline (Phase M.7.c).
+ * @brief Pre-pass que aplana @c NamespaceDecl inline ( M.7.c).
  *
  * Tras parsear el `.vx`, el AST contiene @c NamespaceDecl nodes
  * envolviendo grupos de declaraciones.  Este pre-pass:

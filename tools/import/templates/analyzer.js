@@ -528,7 +528,7 @@
                 log.push({ from: it.p.text, to: null, rule: T('rule.dce'), why: T('why.dce') });
             }
         });
-        // fase 3: reordenacion valida para favorecer la ejecucion paralela.
+        //   reordenacion valida para favorecer la ejecucion paralela.
         const kept = it2.filter((_, i) => keep[i]);
         const { order, moved } = en.reorder ? scheduleReorder(kept, a) : { order: kept, moved: false };
         if (moved) log.push({

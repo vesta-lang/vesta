@@ -218,17 +218,17 @@ class ModuleGraph {
     /// Emite errores en @c diags_ si los hubiera.
     void process_dependencies_(ResolvedModule &mod);
 
-    /// Phase NS.2-full: construye (lazy) el indice namespace -> fichero(s)
+    ///  NS.2-full: construye (lazy) el indice namespace -> fichero(s)
     /// escaneando las cabeceras `namespace` de todos los .vx bajo las source
     /// roots (dir del root, search paths, stdlib).  Se hace una sola vez.
     void build_namespace_index_();
 
-    /// Phase NS.2-full: resuelve un import por-namespace (@c "import a.b.c;")
+    ///  NS.2-full: resuelve un import por-namespace (@c "import a.b.c;")
     /// consultando el indice.  Devuelve el modulo cargado o el error.
     ResolveResult resolve_namespace_(const std::string &ns,
                                      const std::string &importer_file);
 
-    /// Phase NS.2-full: extrae los namespaces declarados (formas statement y
+    ///  NS.2-full: extrae los namespaces declarados (formas statement y
     /// bloque, path punteado) de un source .vx via un lex ligero.  No parsea.
     static void extract_namespaces_(const std::string &source,
                                     std::vector<std::string> &out);
@@ -263,10 +263,10 @@ class ModuleGraph {
     std::unordered_map<std::string, std::string> source_overlay_;
     bool cycle_detected_ = false;
 
-    /// Phase NS.2-full: directorio del fichero raiz (arbol del proyecto).
+    ///  NS.2-full: directorio del fichero raiz (arbol del proyecto).
     /// Se escanea recursivamente al construir el indice de namespaces.
     std::string root_dir_;
-    /// Phase NS.2-full: indice namespace punteado -> fichero(s) que lo
+    ///  NS.2-full: indice namespace punteado -> fichero(s) que lo
     /// declaran.  Varios ficheros pueden contribuir al mismo namespace
     /// (namespaces parciales).  Lazy: se construye en el primer import
     /// por-namespace.

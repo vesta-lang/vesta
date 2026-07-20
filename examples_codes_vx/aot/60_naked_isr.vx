@@ -1,5 +1,5 @@
 // ===========================================================================
-// Phase NR -- @Naked: funciones sin prologo/epilogo NI ret implicito.
+//  NR -- @Naked: funciones sin prologo/epilogo NI ret implicito.
 //
 // Es el primitivo fundacional de "Vesta sin runtime" para dev OS: con @Naked
 // + inline asm el programador escribe ISRs, stubs de entry y rutinas de

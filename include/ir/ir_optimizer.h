@@ -171,7 +171,7 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn);
 /**
  * @brief Promueve ALLOCAs cuyo ptr fluye a CALLN a host stack.
  *
- * Phase D.jit-mem-model AUTO-PROMOTE: detecta `&local` que llega a
+ *  D.jit-mem-model AUTO-PROMOTE: detecta `&local` que llega a
  * funciones nativas (CALLN).  Marca el dst del ALLOCA como
  * `is_host_ptr=true`, lo que hace que el JIT lo emita en host stack
  * (en lugar de VM-stack) -- el ptr resultante es genuino dereferenciable
@@ -305,7 +305,7 @@ bool ir_pass_own_closure_envs(IrModule &mod);
 bool ir_pass_fold_strcat(IrModule &mod);
 
 /**
- * @brief Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.
+ * @brief  C2.13: DETECCION (log-only) de objetos GC no-escapantes.
  *
  * Analiza los `call @__new_X(...)` de @p fn y determina cuales NO escapan
  * del frame (su host_ptr solo se usa para leer/escribir campos locales).
@@ -319,7 +319,7 @@ bool ir_pass_fold_strcat(IrModule &mod);
 bool ir_pass_escape_detect_gc(IrFunction &fn);
 
 /**
- * @brief Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
+ * @brief  C2.13: Scalar Replacement de objetos GC no-escapantes.
  *
  * Para cada `new X()` (call @__new_X) que no escapa del frame y cuyo ctor es
  * un inicializador trivial de campos, elimina el alloc GC y reemplaza los
@@ -711,7 +711,7 @@ bool ir_pass_load_narrow(IrFunction &fn);
  *   1. **Interpreter**: el host CPU (out-of-order) ve mas independencia
  *      entre VM ops consecutivos => mas paralelismo via reorder buffer.
  *      Gana ~5-15% en bench ALU pesado.
- *   2. **JIT (Phase D+)**: el host superscalar puede ejecutar 2-4 host
+ *   2. **JIT ( D+)**: el host superscalar puede ejecutar 2-4 host
  *      ops por ciclo si tienen deps disjuntas.  Sin scheduling, una
  *      cadena de adds dependientes (a+=1; a+=1; a+=1) ejecuta 1/ciclo;
  *      con scheduling interleaving (a+=1; b+=1; a+=1; b+=1), 2/ciclo.

@@ -1,4 +1,4 @@
-// Phase AS (inline-asm nativo ejecutado por el JIT de VestaVM).
+//  AS (inline-asm nativo ejecutado por el JIT de VestaVM).
 //
 // Invierte el orden de bytes de un u64 con la instruccion x86 BSWAP.
 // Demuestra un binding INOUT: la misma variable register("rax") es

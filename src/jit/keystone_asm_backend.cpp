@@ -12,9 +12,9 @@
 
 /**
  * @file keystone_asm_backend.cpp
- * @brief Phase AS inc.4b: impl de @c vx::AsmBackend con Keystone.
+ * @brief  AS inc.4b: impl de @c vx::AsmBackend con Keystone.
  *
- * UNICO fichero del proyecto que incluye @c keystone.h para Phase AS (la
+ * UNICO fichero del proyecto que incluye @c keystone.h para  AS (la
  * decision de diseno exige aislar la dependencia tras la interfaz pura
  * @c vx::AsmBackend).  Ensambla texto NASM Intel a bytes; usado hoy para
  * validar la sintaxis del body en compile-time (inc.4b) y, en inc.5, para

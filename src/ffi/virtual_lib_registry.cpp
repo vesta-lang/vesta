@@ -8,7 +8,7 @@
 /**
  * @file virtual_lib_registry.cpp
  * @brief Implementacion del registry global de virtual libraries
- *        (Phase MC.20).  Mapa singleton @c (lib, name) -> @c fn_ptr
+ *        ( MC.20).  Mapa singleton @c (lib, name) -> @c fn_ptr
  *        protegido por mutex.
  */
 

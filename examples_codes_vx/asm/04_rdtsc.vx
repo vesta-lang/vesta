@@ -1,4 +1,4 @@
-// Phase AS (inline-asm nativo ejecutado por el JIT de VestaVM).
+//  AS (inline-asm nativo ejecutado por el JIT de VestaVM).
 //
 // Lee el Time-Stamp Counter del CPU con la instruccion x86 RDTSC, que
 // devuelve el contador de 64 bits en el par edx:eax.  Lo recombinamos en

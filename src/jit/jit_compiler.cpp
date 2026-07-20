@@ -104,7 +104,7 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     CompileResult result{};
 
     // ---------------------------------------------------------------
-    // Fase 1: Selector (IR SSA -> MachineIR target-specific).
+    //   Selector (IR SSA -> MachineIR target-specific).
     // ---------------------------------------------------------------
     // El selector puede marcar @c unsupported si encuentra un IrOp
     // que aun no maneja (e.g. operaciones float especificas, ciertos
@@ -119,7 +119,7 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     }
 
     // ---------------------------------------------------------------
-    // Fase 2: Encoder (MachineIR -> bytes).
+    //   Encoder (MachineIR -> bytes).
     // ---------------------------------------------------------------
     // El encoder consume MFunction y produce un vector<uint8_t> con
     // los bytes x86-64 ya con todos los fixups resueltos (branches
@@ -145,7 +145,7 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     }
 
     // ---------------------------------------------------------------
-    // Fase 3: Code cache (publicacion en memoria ejecutable).
+    //   Code cache (publicacion en memoria ejecutable).
     // ---------------------------------------------------------------
     // alineamiento a 16 bytes: estandar x86-64 para garantizar que
     // ciertos opcodes (saltos cortos, NOPs alineados) funcionen y
@@ -178,7 +178,7 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     }
 
     // Commit hace la transicion final RW -> RX (cuando soportemos W^X
-    // en Phase E) y el flush de icache para que el CPU vea los
+    // en  E) y el flush de icache para que el CPU vea los
     // bytes nuevos en arquitecturas con icache no-coherente (ARM).
     cache_.commit(code, bytes.size());
 
@@ -192,7 +192,7 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     result.fn = reinterpret_cast<JitFn>(code);
 
     // ---------------------------------------------------------------
-    // Fase 4: Registro en JitRegistry.
+    //   Registro en JitRegistry.
     // ---------------------------------------------------------------
     // El registry recibe la copia movida (std::move) de los stackmaps:
     // ya no necesitamos la MFunction tras esto.  Si la copia se omitiera,

@@ -714,7 +714,7 @@ typedef struct Context {
     };
     std::vector<DebugLineRec> debug_lines;
 
-    // === Tabla de stackmaps precisos (Phase E.1, modulo-local) ===
+    // === Tabla de stackmaps precisos ( E.1, modulo-local) ===
     // Por cada instruccion de safepoint (con marcador `// @sm <hex>`),
     // el Assembler registra el offset del INICIO de la instruccion dentro
     // del bytecode del modulo + la lista de ubicaciones GC vivas (registro

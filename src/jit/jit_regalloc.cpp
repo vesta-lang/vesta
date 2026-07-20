@@ -11,7 +11,7 @@
  *
  * = Algoritmo MVP =
  *
- * Phase v1 es deliberadamente conservadora.  Para cada VID:
+ *  v1 es deliberadamente conservadora.  Para cada VID:
  *   1. Recolectar use_count + live_range_start + live_range_end via
  *      linealizacion de las instrucciones IR.
  *   2. Detectar si el live range cruza algun @c IrOp::CALL.
@@ -22,7 +22,7 @@
  *   5. Asignar top-K (K=4) al pool R12, R13, R14, R15 sin que dos VIDs
  *      con live ranges solapados compartan reg.
  *
- * El v2 (Phase D.8) implementara linear scan completo con spill,
+ * El v2 ( D.8) implementara linear scan completo con spill,
  * split, coalescing, etc.
  */
 

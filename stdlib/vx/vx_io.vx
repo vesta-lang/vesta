@@ -23,7 +23,7 @@
 // WriteConsoleW (rinde Unicode en consolas legacy); pipe/redir: WriteFile de
 // bytes directo.  panic via ExitProcess.  Sin printf/fwrite/stdio/CRT.
 // Linux: `write` de libc (thin syscall stub; el raw `syscall` necesitaria
-// inline-asm AOT, Phase AS).
+// inline-asm AOT,  AS).
 extern "kernel32.dll" {
     fn GetStdHandle(u32 nStdHandle) -> u64;
     fn GetConsoleMode(u64 hConsole, u32* lpMode) -> i32;

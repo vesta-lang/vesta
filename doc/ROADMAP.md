@@ -12,18 +12,18 @@ standalone.
 - [Roadmap de VestaVM](#roadmap-de-vestavm)
   - [Indice](#indice)
   - [1. Vision general de fases](#1-vision-general-de-fases)
-  - [2. Phase A: Frontend Vesta (completa)](#2-phase-a-frontend-vx-completa)
-  - [3. Phase B: IR cleanups (completa)](#3-phase-b-ir-cleanups-completa)
-  - [4. Phase C: libvesta\_rt extraction (parcial)](#4-phase-c-libvesta_rt-extraction-parcial)
-  - [5. Phase D: JIT C1+C2 (en progreso)](#5-phase-d-jit-c1c2-en-progreso)
+  - [2.  A: Frontend Vesta (completa)](#2-phase-a-frontend-vx-completa)
+  - [3.  B: IR cleanups (completa)](#3-phase-b-ir-cleanups-completa)
+  - [4.  C: libvesta\_rt extraction (parcial)](#4-phase-c-libvesta_rt-extraction-parcial)
+  - [5.  D: JIT C1+C2 (en progreso)](#5-phase-d-jit-c1c2-en-progreso)
     - [Sub-hitos completados](#sub-hitos-completados)
     - [Sub-hitos pendientes](#sub-hitos-pendientes)
     - [Camino acelerado (solo JIT funcional, sin AOT/PGO completo)](#camino-acelerado-solo-jit-funcional-sin-aotpgo-completo)
     - [Camino completo (C1+C2+AOT+PGO + nativo standalone)](#camino-completo-c1c2aotpgo--nativo-standalone)
-  - [6. Phase E: GC + safepoints + JIT integration (parcial)](#6-phase-e-gc--safepoints--jit-integration-parcial)
-  - [7. Phase F: AOT + object emitter (pendiente)](#7-phase-f-aot--object-emitter-pendiente)
-  - [8. Phase G: Native exception unwinding + debug (pendiente)](#8-phase-g-native-exception-unwinding--debug-pendiente)
-  - [9. Phase H: ARM/AArch64 + Linux target (pendiente)](#9-phase-h-armaarch64--linux-target-pendiente)
+  - [6.  E: GC + safepoints + JIT integration (parcial)](#6-phase-e-gc--safepoints--jit-integration-parcial)
+  - [7.  F: AOT + object emitter (pendiente)](#7-phase-f-aot--object-emitter-pendiente)
+  - [8.  G: Native exception unwinding + debug (pendiente)](#8-phase-g-native-exception-unwinding--debug-pendiente)
+  - [9.  H: ARM/AArch64 + Linux target (pendiente)](#9-phase-h-armaarch64--linux-target-pendiente)
   - [10. Vision a largo plazo](#10-vision-a-largo-plazo)
   - [Prioridades a corto plazo (proximos 3 meses)](#prioridades-a-corto-plazo-proximos-3-meses)
   - [Como contribuir al roadmap](#como-contribuir-al-roadmap)
@@ -33,15 +33,15 @@ standalone.
 ## 1. Vision general de fases
 
 ```text
-Phase A  -->  Frontend Vesta completo                          [COMPLETO]
-Phase B  -->  IR cleanups + monomorphization contract        [COMPLETO]
-Phase C  -->  Extraer libvesta_rt como libreria standalone   [PARCIAL]
-Phase D  -->  JIT C1+C2 (template + optimizing)              [PARCIAL: D.0-D.3-I]
-Phase E  -->  Stackmaps + safepoints + GC integration        [PARCIAL: D.2 Fase 1+2]
-Phase F  -->  AOT: object emitter (COFF/ELF) + linker propio [PENDIENTE]
-Phase G  -->  Native exception unwinding + debug info        [PENDIENTE]
-Phase H  -->  ELF backend + Linux/macOS native               [PENDIENTE]
-Phase Z  -->  Memoria compartida cross-process (Erlang-style) [COMPLETO]
+ A  -->  Frontend Vesta completo                          [COMPLETO]
+ B  -->  IR cleanups + monomorphization contract        [COMPLETO]
+ C  -->  Extraer libvesta_rt como libreria standalone   [PARCIAL]
+ D  -->  JIT C1+C2 (template + optimizing)              [PARCIAL: D.0-D.3-I]
+ E  -->  Stackmaps + safepoints + GC integration        [PARCIAL: D.2 Fase 1+2]
+ F  -->  AOT: object emitter (COFF/ELF) + linker propio [PENDIENTE]
+ G  -->  Native exception unwinding + debug info        [PENDIENTE]
+ H  -->  ELF backend + Linux/macOS native               [PENDIENTE]
+ Z  -->  Memoria compartida cross-process (Erlang-style) [COMPLETO]
 ```
 
 Tiempo estimado total para llegar al ejecutable nativo standalone: ~18 meses
@@ -52,7 +52,7 @@ correspondientes.
 
 ---
 
-## 2. Phase A: Frontend Vesta (completa)
+## 2.  A: Frontend Vesta (completa)
 
 **Status**: 200/200 e2e PASS. Cubre TODAS las features del lenguaje listadas
 en [doc/LANGUAGE.md](./LANGUAGE.md).
@@ -97,11 +97,11 @@ Hitos cerrados (de mas significativo a menos):
   con 4 reglas R1-R4 + 4 fases F1-F4 (NLL, OwnerKind, reborrow con suspend
   stack, lifetime elision).
 
-**Performance del intérprete tras Phase A**: ~340 MIPS promedio.
+**Performance del intérprete tras  A**: ~340 MIPS promedio.
 
 ---
 
-## 3. Phase B: IR cleanups (completa)
+## 3.  B: IR cleanups (completa)
 
 **Status**: 100% completo, 2026-05-12. Total ~500 LOC reales (vs ~900 estimados).
 
@@ -113,12 +113,12 @@ Hitos cerrados (de mas significativo a menos):
   `IrFunction::generic_template_name` + `generic_type_args` (provenance
   metadata para deduplicar especializaciones cross-module en AOT futuro).
 
-Phase B desbloqueo D.2 (stackmaps + safepoints) y D.8 (C2 JIT con escape
+ B desbloqueo D.2 (stackmaps + safepoints) y D.8 (C2 JIT con escape
 analysis).
 
 ---
 
-## 4. Phase C: libvesta_rt extraction (parcial)
+## 4.  C: libvesta_rt extraction (parcial)
 
 **Status**: C.1+C.2 completos (2026-05-13); C.3 deferido.
 
@@ -132,11 +132,11 @@ analysis).
   `abi_checks.cpp` previene drift silencioso entre runtime y JIT/AOT.
 - **C.3 (PENDIENTE)**: romper dependencias circulares `loader.h <-> runtime.h`
   para que `vesta_rt.lib` sea linkable contra consumers externos sin pull-in
-  del frontend. Deferido hasta que AOT standalone lo necesite (Phase F).
+  del frontend. Deferido hasta que AOT standalone lo necesite ( F).
 
 ---
 
-## 5. Phase D: JIT C1+C2 (en progreso)
+## 5.  D: JIT C1+C2 (en progreso)
 
 **Status**: D.0-D.3-I implementados, ~52% coverage de metodos reales. D.4-D.10
 pendientes.
@@ -206,7 +206,7 @@ hasta 20× en hot loops aritmeticos.
 
 ---
 
-## 6. Phase E: GC + safepoints + JIT integration (parcial)
+## 6.  E: GC + safepoints + JIT integration (parcial)
 
 **Status**: D.2 Fase 1+2 implementados (additive con conservativo).
 
@@ -220,7 +220,7 @@ Pendiente:
 
 ---
 
-## 7. Phase F: AOT + object emitter (pendiente)
+## 7.  F: AOT + object emitter (pendiente)
 
 **Status**: pendiente. Activos vendored: **LibPEparse** (~5934 LOC C) en
 `libs/SourceCode/LibPEparse/` cubre parse + emit de PE/COFF/ELF. Examples
@@ -241,7 +241,7 @@ un ejecutable nativo standalone sin necesidad de `vm.exe`.
 
 ---
 
-## 8. Phase G: Native exception unwinding + debug (pendiente)
+## 8.  G: Native exception unwinding + debug (pendiente)
 
 **Status**: pendiente.
 
@@ -258,7 +258,7 @@ un ejecutable nativo standalone sin necesidad de `vm.exe`.
 
 ---
 
-## 9. Phase H: ARM/AArch64 + Linux target (pendiente)
+## 9.  H: ARM/AArch64 + Linux target (pendiente)
 
 **Status**: pendiente.
 
@@ -277,14 +277,14 @@ el plan para macOS comparte gran parte de la infraestructura ELF + DWARF.
 
 ## 10. Vision a largo plazo
 
-Mas alla de Phase H, items que se han considerado pero no priorizado:
+Mas alla de  H, items que se han considerado pero no priorizado:
 
 - **WASM backend**: emitir WebAssembly desde el SSA IR, ejecutar Vesta en el
   browser. Requeriria portar `libvesta_rt` a WASM (GC stub via reference
   types).
 - **GPU compute**: bytecode VM que ejecuta en GPU para workloads paralelos
   masivos. Requeriria SIMT abstraction sobre los procesos ligeros.
-- **Lenguaje 2.0**: Vesta post-Phase H podria incorporar features que hoy
+- **Lenguaje 2.0**: Vesta post- H podria incorporar features que hoy
   faltan: type classes / traits, effect system, dependent types.
 - **Multi-lenguaje sobre IR**: el SSA IR + libvesta_rt podrian ser target
   de OTROS lenguajes (frontend Python-like, frontend Lisp, etc.). El proyecto
@@ -318,7 +318,7 @@ Si quieres trabajar en una fase pendiente:
    [doc/ARCHITECTURE.md](./ARCHITECTURE.md), [doc/VMdoc/IR/SSA.md](./VMdoc/IR/SSA.md),
    y los headers `include/jit/*.h` / `include/vesta_rt/*.h` (cada uno tiene
    Doxygen con la API y comentarios inline explicando decisiones de diseno).
-2. Abre un issue en GitHub proponiendo el sub-hito (`Phase X.Y: ...`).
+2. Abre un issue en GitHub proponiendo el sub-hito (` X.Y: ...`).
 3. Coordina con el mainline para evitar duplicacion.
 4. Ship con tests + docs actualizados.
 
@@ -326,9 +326,9 @@ Ver [CONTRIBUTING.md](./CONTRIBUTING.md) para el proceso completo.
 
 ---
 
-## Phase Z: Memoria compartida cross-process (COMPLETA, 2026-05-23)
+##  Z: Memoria compartida cross-process (COMPLETA, 2026-05-23)
 
-Phase Z se desarrollo en paralelo a Phases A-D para resolver la limitacion
+ Z se desarrollo en paralelo a Phases A-D para resolver la limitacion
 arquitectural historica de t13: cada `ProcessVM` tenia su propio `gc::GcHeap`
 privado, impidiendo `synchronized`/`notify`/`wait` cross-process.
 

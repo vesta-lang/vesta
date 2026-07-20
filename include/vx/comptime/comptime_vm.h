@@ -12,12 +12,12 @@
 
 /**
  * @file vx/comptime_vm.h
- * @brief Phase MC.2 -- ComptimeRuntime: VM dedicada que ejecuta el
+ * @brief  MC.2 -- ComptimeRuntime: VM dedicada que ejecuta el
  *        bytecode de @Macros lowered durante compile-time.
  *
  * Reemplaza progresivamente el evaluator AST tree-walking del
  * TypeChecker.  Aprovecha la infraestructura runtime (VM + bytecode
- * + GC + futura Phase D JIT) -- speedup esperado 10-1000x para
+ * + GC + futura  D JIT) -- speedup esperado 10-1000x para
  * macros pesados.
  *
  * Diseno:
@@ -29,10 +29,10 @@
  *     @Macro calls reutilizan la misma instancia.
  *   - Shutdown limpio: destructor del TypeChecker libera la VM.
  *
- * Phase MC.2 (este sprint): scaffolding -- la clase existe, gestiona
+ *  MC.2 (este sprint): scaffolding -- la clase existe, gestiona
  * lifecycle, pero NO ejecuta nada todavia (placeholder hasta MC.3+).
  *
- * Phase MC.3+: marshalling args + ejecucion + read return + cache.
+ *  MC.3+: marshalling args + ejecucion + read return + cache.
  */
 
 #ifndef VX_COMPTIME_VM_H

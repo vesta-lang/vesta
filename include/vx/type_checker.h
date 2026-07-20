@@ -97,7 +97,7 @@ enum class SymbolKind : uint8_t {
                ///<       (ANSI codes RED/GREEN/BOLD/RESET/etc.).
                ///<       El lowering los convierte en STR_LIT_ADDR
                ///<       de un literal predefinido.
-    Namespace, ///< Phase M.7: namespace de un modulo importado.
+    Namespace, ///<  M.7: namespace de un modulo importado.
                ///< Sintaxis: @c "import \"lib_a\";" registra @c lib_a
                ///< como Symbol::Namespace.  El campo @c ns_index del
                ///< Symbol apunta al @c imported_namespaces_ del
@@ -119,7 +119,7 @@ struct FunctionSig {
     /// registrando el import via @c register_native_import.  Sin entry
     /// para extern_lib se trata como funcion Vesta normal (CALLVM).
     std::string extern_lib;
-    /// Phase M.5: nombre real del label generado para esta funcion.
+    ///  M.5: nombre real del label generado para esta funcion.
     /// Vacio = el nombre visible coincide con el label (caso normal).
     /// No vacio = la funcion fue importada de otro modulo con
     /// mangling automatico (`lib__foo`); el lowering emite @c CALLVM
@@ -332,7 +332,7 @@ struct StructLayout {
     /// IntrospectInfo POD en static_data para que `find_type("Name")`
     /// runtime lo encuentre.
     bool is_introspect = false;
-    /// Phase M6.a L.3: visibilidad cross-module.  Solo se exporta a
+    ///  M6.a L.3: visibilidad cross-module.  Solo se exporta a
     /// `.vxi` si es @c true.  Sin keyword `public`/`private` en el
     /// source: @c true (default permisivo).  Sin esto en false, otros
     /// modulos podrian importar el struct via @c only.
@@ -390,7 +390,7 @@ struct EnumLayout {
     uint32_t max_payload_fields = 0; ///< 0 si todas son sin payload.
     /// marca `@Introspect`.
     bool is_introspect = false;
-    /// Phase M6.a L.3: visibilidad cross-module.
+    ///  M6.a L.3: visibilidad cross-module.
     bool is_public = true;
     /// Pseudo-enum sintetico para @c match sobre @c Optional<T> / @c
     /// Result<V,E>.  Cuando es true: (a) los payloads se guardan/leen con
@@ -477,7 +477,7 @@ struct ClassLayout {
     std::vector<StructFieldInfo> static_fields;
     std::vector<ClassMethodInfo> methods;
     uint32_t size_bytes = 0;
-    /// Para clases importadas cross-module via Phase M:
+    /// Para clases importadas cross-module via  M:
     ///   - @c name lleva el nombre mangled (e.g. "buffer__Buffer")
     ///     usado para identidad de tipo dentro del consumer.
     ///   - @c imported_helper_suffix lleva el nombre LOCAL en el modulo
@@ -541,7 +541,7 @@ struct ClassLayout {
     /// metodo.  El @c findclass(name) en runtime ya la encuentra.
     /// Acceso a campos via @c getfield con offsets fijos del ABI.
     bool is_runtime_predefined = false;
-    /// Phase M6.a L.3: visibilidad cross-module.
+    ///  M6.a L.3: visibilidad cross-module.
     bool is_public = true;
 };
 
@@ -566,11 +566,11 @@ struct Symbol {
     /// el usuario escriba la builtin standalone.  Vacio para variables
     /// normales.
     std::string reflection_alias;
-    /// Phase M.7: indice en @c TypeChecker::imported_namespaces_
+    ///  M.7: indice en @c TypeChecker::imported_namespaces_
     /// cuando @c kind == SymbolKind::Namespace.  Sin uso para los
     /// demas kinds.
     uint32_t ns_index = 0;
-    /// Phase AS inc.2: registro fisico canonico (rax/r8/v0...) si la
+    ///  AS inc.2: registro fisico canonico (rax/r8/v0...) si la
     /// variable se declaro con storage-class @c register("reg").  Vacio
     /// para variables normales.  Usado para detectar conflicto same-reg
     /// dentro del mismo scope.
@@ -663,7 +663,7 @@ class TypeChecker {
     }
 
     /**
-     * @brief Acceso de solo lectura al ModuleNode AST.  Phase M.L7
+     * @brief Acceso de solo lectura al ModuleNode AST.   M.L7
      * lo usa @c export_typechecker_to_vxi para iterar
      * @c GlobalVarDecl y extraer sus tipos sin tener que mantener
      * un mapa paralelo en el TypeChecker.
@@ -1247,7 +1247,7 @@ class TypeChecker {
 
   public:
     /**
-     * @brief Phase M.L26: acceso de solo lectura al set de nombres que
+     * @brief  M.L26: acceso de solo lectura al set de nombres que
      * @c lookup_with_depth ha resuelto exitosamente durante el check.
      * El @c compile_vx_project lo usa para detectar imports
      * declarados pero no usados y emitir warnings.
@@ -1256,7 +1256,7 @@ class TypeChecker {
         return referenced_names_;
     }
 
-    /// Phase M.L23: marca un nombre como importado de otro modulo.
+    ///  M.L23: marca un nombre como importado de otro modulo.
     /// El export del @c .vxi del modulo actual lo filtra por
     /// defecto (no se re-exporta).  Si @c is_reexport es @c true ,
     /// se anyade tambien al set de re-exportados y SE EXPORTA al
@@ -1580,7 +1580,7 @@ private:
         return comptime_runtime_;
     }
 
-    /// Phase MC.9: snapshot publico de los contadores VM-only para
+    ///  MC.9: snapshot publico de los contadores VM-only para
     /// diagnostico desde main.cpp (cuando VESTA_MC_VERBOSE esta on).
     uint32_t macro_vmonly_hits() const noexcept { return macro_vmonly_hits_; }
     uint32_t macro_vmonly_misses() const noexcept {
@@ -1613,7 +1613,7 @@ private:
     /// importadas.  Ver @ref mark_template_only_fn.
     std::unordered_set<std::string> template_only_fns_;
 
-    /// Phase M.2.e: simbolos de funcion importados via .vxi que
+    ///  M.2.e: simbolos de funcion importados via .vxi que
     /// deben declararse en el scope global al inicio de run().  El
     /// constructor del TypeChecker NO ha pusheado scope todavia,
     /// asi que las llamadas a register_imported_function durante
@@ -1621,7 +1621,7 @@ private:
     /// Esta cola se drena al inicio de run() tras push_scope().
     std::vector<std::pair<std::string, uint32_t>> pending_imported_fn_names_;
 
-    /// Phase M.L7: cola paralela para variables globales importadas.
+    ///  M.L7: cola paralela para variables globales importadas.
     struct PendingGlobal {
         std::string name;
         Type type;
@@ -1640,7 +1640,7 @@ private:
         std::string mangled_label;
     };
     std::vector<PendingGlobal> pending_imported_globals_;
-    /// Phase M.L7: declaracion adelantada del struct + map.  El
+    ///  M.L7: declaracion adelantada del struct + map.  El
     /// accesor publico @c imported_global_consts() en la seccion
     /// public devuelve este miembro.
   public:
@@ -1673,38 +1673,38 @@ private:
     std::unordered_map<std::string, ImportedGlobalStorage>
         imported_global_storage_;
 
-    /// Phase M6.a L.3: visibilidad por simbolo top-level.
+    ///  M6.a L.3: visibilidad por simbolo top-level.
     /// El TypeChecker rellena estos sets al procesar cada decl segun
     /// @c FunctionDecl::is_public, @c GlobalVarDecl::is_public, etc.
     /// El emitter de .vxi consulta para filtrar simbolos privados.
     std::unordered_map<std::string, bool> function_is_public_;
     std::unordered_map<std::string, bool> global_is_public_;
     std::unordered_map<std::string, bool> typedef_is_public_;
-    /// Phase NS.3: nombres marcados @c "internal" (package-scoped).  El emitter
+    ///  NS.3: nombres marcados @c "internal" (package-scoped).  El emitter
     /// de .vxi los exporta con flag; el consumidor de OTRO paquete los filtra.
     std::unordered_set<std::string> function_is_internal_;
     std::unordered_set<std::string> global_is_internal_;
 
   public:
-    /// @brief Phase NS.3: @c true si la funcion @p name es @c internal.
+    /// @brief  NS.3: @c true si la funcion @p name es @c internal.
     bool function_is_internal(const std::string &name) const {
         return function_is_internal_.count(name) != 0;
     }
-    /// @brief Phase NS.3: @c true si el global @p name es @c internal.
+    /// @brief  NS.3: @c true si el global @p name es @c internal.
     bool global_is_internal(const std::string &name) const {
         return global_is_internal_.count(name) != 0;
     }
 
   private:
 
-    /// Phase M.L26: set de nombres que @c lookup_with_depth resolvio
+    ///  M.L26: set de nombres que @c lookup_with_depth resolvio
     /// exitosamente.  Mutable porque el lookup es @c const pero el
     /// tracking es metadata observacional, no afecta la semantica.
     /// Util para detectar imports declarados pero nunca usados +
     /// emitir warnings.
     mutable std::unordered_set<std::string> referenced_names_;
 
-    /// Phase M.L23: set de nombres importados desde @c .vxi de otros
+    ///  M.L23: set de nombres importados desde @c .vxi de otros
     /// modulos.  El export del @c .vxi del modulo actual los filtra
     /// por DEFAULT (no se re-exportan) salvo que esten tambien en
     /// @c reexported_imported_names_ (marcados con @c public import).
@@ -1753,7 +1753,7 @@ private:
 
   private:
   public:
-    /// Phase M.7: namespace de un modulo importado.  Cada entry
+    ///  M.7: namespace de un modulo importado.  Cada entry
     /// contiene los simbolos publicos del @c .vxi indexados por
     /// nombre.  Cuando el TypeChecker ve @c "buf.Buffer" o
     /// @c "lib_a.valor_a", busca @c "buf"/@c "lib_a" en la pila de
@@ -1811,7 +1811,7 @@ private:
                                    const std::string &public_name,
                                    ImportedNamespace::Sym sym);
 
-    /// @brief Phase NS.2-full: apunta un nombre local (alias del import) a un
+    /// @brief  NS.2-full: apunta un nombre local (alias del import) a un
     /// namespace ya registrado.  Usado para que @c "import a.b.c as x;" haga
     /// que @c x.Sym resuelva igual que @c a.b.c.Sym cuando el namespace
     /// declarado difiere del nombre del fichero/alias.
@@ -1836,7 +1836,7 @@ private:
     }
 
   private:
-    /// Phase NS.1b: resuelve un nombre qualified punteado `a.b.c.Symbol` a su
+    ///  NS.1b: resuelve un nombre qualified punteado `a.b.c.Symbol` a su
     /// namespace + simbolo, probando el PREFIJO de namespace mas LARGO (para
     /// paths multi-segmento: `ui.widgets.Button` -> ns=`ui.widgets`,
     /// sym=`Button`).  Cubre tambien el caso single-segment (`ui.Button`).
@@ -2065,7 +2065,7 @@ private:
         return (it == monomorph_info_.end()) ? nullptr : &it->second;
     }
 
-    // ---- Phase M.2: interop con .vxi (interfaces compiladas) ----
+    // ----  M.2: interop con .vxi (interfaces compiladas) ----
     //
     // El TypeChecker puede exportar sus simbolos publicos a un
     // descriptor @c vx::VxiModule para que el emitter del .vxi
@@ -2117,7 +2117,7 @@ private:
     void register_imported_newtype(const std::string &name, Type underlying) {
         newtype_underlying_.emplace(name, std::move(underlying));
     }
-    /// Phase M.L8: registra el bloque @c {explicit from/to T;} de un
+    ///  M.L8: registra el bloque @c {explicit from/to T;} de un
     /// newtype importado.  Las conversiones se almacenan en
     /// @c newtype_info_ y participan en @c check_cast como
     /// allow-list para casts cross-module.
@@ -2126,7 +2126,7 @@ private:
         newtype_info_.emplace(name, std::move(ni));
     }
     void register_imported_struct(const std::string &name, StructLayout L) {
-        // Phase M.fix-classfield: overwrite (no emplace) para soportar
+        //  M.fix-classfield: overwrite (no emplace) para soportar
         // pre-registro de skeleton seguido de fill cross-type within
         // mismo dep modulo.
         struct_layouts_[name] = std::move(L);
@@ -2159,7 +2159,7 @@ private:
         // `lookup_with_depth` no encuentra la funcion importada.
         pending_imported_fn_names_.push_back({name, idx});
     }
-    /// Phase M.L7: registra una variable global importada de otro
+    ///  M.L7: registra una variable global importada de otro
     /// modulo via @c .vxi.  Igual que las funciones, se encola para
     /// que @c run() la declare en el scope global tras el
     /// @c push_scope inicial.  Si @c has_init_value es @c true y la
@@ -2193,7 +2193,7 @@ private:
         pending_imported_globals_.push_back(std::move(pg));
     }
 
-    /// Phase M.L7: tabla de globals const importadas con valor
+    ///  M.L7: tabla de globals const importadas con valor
     /// literal embedded.  El lowering la consulta en @c lower_ident
     /// para inline-ar `CONST <value>` directamente cuando el ident
     /// resuelve a uno de estos nombres.  Poblada al final de run()
@@ -2212,7 +2212,7 @@ private:
         return imported_global_storage_;
     }
 
-    /// Phase M6.a L.3: setea visibilidad de un simbolo top-level.
+    ///  M6.a L.3: setea visibilidad de un simbolo top-level.
     /// El TypeChecker llama esto al procesar cada decl.
     void set_function_visibility(const std::string &name, bool is_pub) {
         function_is_public_[name] = is_pub;

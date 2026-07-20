@@ -1,6 +1,6 @@
 /**
  * @file vxi_format.cpp
- * @brief Implementacion del formato `.vxi` (Phase M.2).
+ * @brief Implementacion del formato `.vxi` ( M.2).
  *
  * Layout binario detallado:
  *
@@ -219,7 +219,7 @@ static void emit_payload_for_typedef(std::vector<uint8_t> &payload,
                                      StringPoolBuilder &pool,
                                      const VxiSymbol &sym) {
     emit_typedef_base(payload, pool, sym);
-    // Phase M.L8: bloque {explicit from/to T;}.  Para TYPEDEF_ALIAS el
+    //  M.L8: bloque {explicit from/to T;}.  Para TYPEDEF_ALIAS el
     // bloque siempre esta vacio (cuenta 0); para TYPEDEF_NEW puede llevar
     // N entries.  Layout: u32 from_count + u32 to_count + entries en
     // orden (cada entry: type_off u32 + type_len u32 + is_public u8 + 3 pad).
@@ -293,12 +293,12 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
     write_u32(payload, static_cast<uint32_t>(sym.param_types.size()));
     const uint32_t lib_off = sym.is_extern ? pool.intern(sym.extern_lib) : 0;
     write_u32(payload, lib_off);
-    // Phase M5.b L.5: lib_len explicito (sustituye el hack de truncar al
+    //  M5.b L.5: lib_len explicito (sustituye el hack de truncar al
     // primer NUL o a 256 bytes en versiones previas).
     write_u32(payload, sym.is_extern
                            ? static_cast<uint32_t>(sym.extern_lib.size())
                            : 0u);
-    // Phase M.5: mangled_label (8 bytes: off + len; vacio = mismo que name).
+    //  M.5: mangled_label (8 bytes: off + len; vacio = mismo que name).
     const uint32_t ml_off = pool.intern(sym.mangled_label);
     write_u32(payload, ml_off);
     write_u32(payload, static_cast<uint32_t>(sym.mangled_label.size()));
@@ -337,7 +337,7 @@ static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
     write_u32(payload, sym.overlay_extent);
     write_u32(payload, static_cast<uint32_t>(sym.fields.size()));
     write_u32(payload, static_cast<uint32_t>(sym.interfaces.size()));
-    // Phase M6.b L.6: method_count antes de las entries.
+    //  M6.b L.6: method_count antes de las entries.
     write_u32(payload, static_cast<uint32_t>(sym.methods.size()));
     // FieldSlot: name_off+len + type_off+len + offset + size + bit_offset +
     // bit_width + pad. 24 bytes c/u alineados.
@@ -462,7 +462,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
             emit_payload_for_enum(payloads, pool, sym);
             break;
         case VxiSymbolKind::GLOBAL_VAR:
-            // Phase M.L7: extiende typedef payload con init_value
+            //  M.L7: extiende typedef payload con init_value
             // para que el lowering pueda inline-ar const numericas.
             emit_payload_for_global(payloads, pool, sym);
             break;
@@ -568,7 +568,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     const uint32_t payloads_start = static_cast<uint32_t>(out.size());
     out.insert(out.end(), payloads.begin(), payloads.end());
 
-    // Phase M4.ext L.13: dep table tras los payloads, antes del blob_pool.
+    //  M4.ext L.13: dep table tras los payloads, antes del blob_pool.
     const uint32_t deps_start = static_cast<uint32_t>(out.size());
     for (size_t i = 0; i < mod.deps.size(); ++i) {
         write_u32(out, dep_name_offs[i].first);  // name_off (rel al pool)
@@ -651,7 +651,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         vxi_fnv1a(out.data() + HEADER_BYTES, out.size() - HEADER_BYTES);
     patch_u64(8, abi_hash);
     patch_u64(16, mod.source_hash);
-    // Phase M5.b L.27: compiler_version_hash en offset 24.  Si el caller
+    //  M5.b L.27: compiler_version_hash en offset 24.  Si el caller
     // ya lo seteo en mod (testing), respetamos su valor; si no, usamos
     // el del compilador actual.
     const uint64_t cvh = (mod.compiler_version_hash != 0)
@@ -662,7 +662,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // symbol_count + string_pool_offset (relativo al inicio del fichero).
     patch_u32(32, static_cast<uint32_t>(mod.symbols.size()));
     patch_u32(36, pool_start);
-    // Phase M4.ext L.13: dep_count + dep_table_offset (offset al inicio
+    //  M4.ext L.13: dep_count + dep_table_offset (offset al inicio
     // del bloque de DepEntry, 16 bytes c/u en formato u32+u32+u64).
     patch_u32(40, static_cast<uint32_t>(mod.deps.size()));
     patch_u32(44, deps_start);
@@ -740,7 +740,7 @@ static bool parse_payload_typedef(const uint8_t *data, size_t size,
                    out.underlying_type)) {
         return false;
     }
-    // Phase M.L8: bloque {from/to} conversions.  Si payload no incluye
+    //  M.L8: bloque {from/to} conversions.  Si payload no incluye
     // estos campos (compat con .vxi v2 viejos), retornar OK con listas
     // vacias.  El offset actual debe caber dentro de payload_off+payload_len.
     if (off + 8 > payload_off + payload_len) {
@@ -772,7 +772,7 @@ static bool parse_payload_typedef(const uint8_t *data, size_t size,
     return true;
 }
 
-// Phase M.L7: parse del payload extendido para GLOBAL_VAR.  Layout:
+//  M.L7: parse del payload extendido para GLOBAL_VAR.  Layout:
 //   bytes 0-15  : nominal_abi (u64) + und_off (u32) + und_len (u32)
 //   bytes 16-31 : has_init_value (u8) + 7 pad + init_value (u64)
 static bool parse_payload_global(const uint8_t *data, size_t size,
@@ -843,7 +843,7 @@ static bool parse_payload_global(const uint8_t *data, size_t size,
 static bool parse_payload_function(const uint8_t *data, size_t size,
                                    uint32_t payload_off, uint32_t payload_len,
                                    uint32_t pool_start, VxiSymbol &out) {
-    // Phase M5.b L.5: format v2 añade lib_len explicito.  NS.2 (v7) añade
+    //  M5.b L.5: format v2 añade lib_len explicito.  NS.2 (v7) añade
     // ns_path (off+len).  Total fixed bytes en payload = 36:
     // ret_off+ret_len+pc+lib_off+lib_len+ml_off+ml_len+nsp_off+nsp_len =
     // 9 u32 = 36 bytes.
@@ -872,7 +872,7 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
     if (!read_name(data, size, ret_off, ret_len, pool_start, out.return_type))
         return false;
     if (out.is_extern && lib_off > 0 && lib_len > 0) {
-        // Phase M5.b L.5: lib_len explicito (format v2).  Cero ambiguedad
+        //  M5.b L.5: lib_len explicito (format v2).  Cero ambiguedad
         // sobre donde termina el nombre, sin hack de cap 256 bytes.
         if (!read_name(data, size, lib_off, lib_len, pool_start,
                        out.extern_lib))
@@ -954,7 +954,7 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
         if (!read_name(data, size, n_off, n_len, pool_start, nm)) return false;
         out.interfaces.push_back(std::move(nm));
     }
-    // Phase M6.b L.6: methods.
+    //  M6.b L.6: methods.
     out.methods.reserve(mc);
     for (uint32_t i = 0; i < mc; ++i) {
         VxiSymbol::MethodInfo m{};
@@ -1106,7 +1106,7 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
         r.error_message = os.str();
         return r;
     }
-    // Phase M5.b L.27: chequeo del compiler_version_hash.  Si difiere del
+    //  M5.b L.27: chequeo del compiler_version_hash.  Si difiere del
     // compilador actual, el .vxi puede haber sido generado por una
     // version distinta con reglas de mangling/ABI diferentes.  Rechazar
     // y forzar regeneracion en el siguiente compile.
@@ -1237,7 +1237,7 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
         r.module_.symbols.push_back(std::move(s));
     }
 
-    // Phase M4.ext L.13: parsear dep table.
+    //  M4.ext L.13: parsear dep table.
     r.module_.deps.reserve(dep_count);
     for (uint32_t i = 0; i < dep_count; ++i) {
         size_t dep_off = dep_table_offset + i * DEP_ENTRY_BYTES;
@@ -1374,7 +1374,7 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     return r;
 }
 
-// Phase M5.b L.27: hash de la version del compilador.
+//  M5.b L.27: hash de la version del compilador.
 //
 // Combina:
 //   - El @c VXI_FORMAT_VERSION (cambios en el layout del .vxi).

@@ -43,7 +43,7 @@
 #include "runtime/vm_address_space.h"
 #include "loader/oop_types.h"
 #include "loader/sandbox.h" // loader::Caps + parse_caps + caps_to_string
-#include "loader/interp_stackmap.h" // loader::InterpStackmapTable (Phase E.1)
+#include "loader/interp_stackmap.h" // loader::InterpStackmapTable ( E.1)
 #include "debug/debug_info.h"
 #include "ir/ssa_ir.h"
 
@@ -281,7 +281,7 @@ typedef struct Executable {
      *        @c header.offset_ir_section != 0; vacio para `.velb` v2
      *        o si la seccion no se pudo parsear.
      *
-     * Habilitan auto-JIT (Phase D.3-C+ del roadmap): cuando una
+     * Habilitan auto-JIT ( D.3-C+ del roadmap): cuando una
      * funcion del bytecode se invoca repetidamente (counter >=
      * threshold), el runtime busca su @c IrFunction aqui via nombre
      * (la entrada del map @c ir_lookup) y la pasa a @c JitCompiler.
@@ -315,7 +315,7 @@ typedef struct Executable {
     std::unordered_map<std::string, uint64_t> symbol_table;
 
     /**
-     * @brief Phase E.1: tabla de stackmaps PRECISOS del interprete,
+     * @brief  E.1: tabla de stackmaps PRECISOS del interprete,
      *        deserializada de la seccion @c VSMP del @c .velb.
      *
      * Vacia si el @c .velb no lleva stackmaps (build sin
@@ -406,7 +406,7 @@ class Loader {
     uint64_t next_dyn_base = 0x80000000ULL;
 
     /**
-     * @brief Phase M.sandbox: flag global "hay algun modulo sandboxed".
+     * @brief  M.sandbox: flag global "hay algun modulo sandboxed".
      *
      * Default @c false (sin sandbox).  Se pone a @c true cuando se aplica
      * un conjunto de caps restringido a algun Executable (via --vx-caps
@@ -555,7 +555,7 @@ class Loader {
                                  std::vector<uint8_t> raw_bytecode_file);
 
     /**
-     * @brief Phase M.sandbox: comprueba si el codigo en @p pc tiene
+     * @brief  M.sandbox: comprueba si el codigo en @p pc tiene
      *        concedida la capability @p required.
      *
      * Localiza el @c Executable cuya seccion de codigo contiene @p pc y

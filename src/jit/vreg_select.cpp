@@ -7,7 +7,7 @@
 
 /**
  * @file jit/vreg_select.cpp
- * @brief Implementacion del selector vreg (Phase D.7, commits 4b/4c).
+ * @brief Implementacion del selector vreg ( D.7, commits 4b/4c).
  *        Ver vreg_select.h y doc/REGALLOC.md.
  *
  * Commit 4b: CONST + ALU + RET (1 bloque).
@@ -32,11 +32,11 @@
 
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
-#include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
+#include "jit/target_reginfo.h" //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"        // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
-#include "gc/raw_allocator.h" // Phase D.7 perf: inline slab fast-path
-#include "vx/asm/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
-#include "vx/asm/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
+#include "gc/raw_allocator.h" //  D.7 perf: inline slab fast-path
+#include "vx/asm/asm_backend.h"  //  AS inc.5: ensamblar inline-asm -> bytes
+#include "vx/asm/asm_effects.h"  //  AS inc.5: asm_canonical_reg
 #include "vx/asm/asm_phys_reg.h" // sustitucion $N -> reg fisico
 /* arena -> windows.h (Win32) define macros que chocan con nombres del enum
  * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST.
@@ -268,7 +268,7 @@ inline bool block_has_phi(const ir::IrBlock &b) {
 inline bool split_critical_edges(ir::IrFunction &fn) {
     const size_t NB0 = fn.blocks.size();
 
-    /* Fase 1: detectar las aristas a partir y crear los puentes con IDs
+    /*   detectar las aristas a partir y crear los puentes con IDs
      * TEMPORALES (>= NB0).  Redirigir terminadores + PHI args + preds/succs
      * en el espacio de IDs original + temporal.  @c bridge_after[pred]
      * lista los puentes que deben ir tras ese predecesor en el layout. */
@@ -332,7 +332,7 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
     }
     if (bridges.empty()) return false;
 
-    /* Fase 2: construir el nuevo layout (cada puente justo tras su pred) y
+    /*   construir el nuevo layout (cada puente justo tras su pred) y
      * el remap old_id -> new_id.  @c temp_id de un puente = NB0 + indice en
      * @c bridges. */
     std::vector<ir::IrBlock> laid;
@@ -348,7 +348,7 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
         }
     }
 
-    /* Fase 3: aplicar el remap a todas las referencias de block-id. */
+    /*   aplicar el remap a todas las referencias de block-id. */
     auto rm = [&](ir::IrBlockId id) -> ir::IrBlockId {
         return (id < remap.size() && remap[id] != ir::IR_NO_BLOCK) ? remap[id]
                                                                    : id;
@@ -398,7 +398,7 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
 }
 
 /**
- * @brief Phase AS inc.5: mapea un nombre de registro CANONICO de 64
+ * @brief  AS inc.5: mapea un nombre de registro CANONICO de 64
  *        bits (de @c vx::asm_canonical_reg) al id de @c MReg GP (0..15),
  *        o -1 si no es un GP usable como pin de inline-asm.
  *
@@ -485,7 +485,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     out = MFunction{};
     out.name = fn.name;
-    /* Phase NR @Naked: propagar para suprimir prologo/epilogo/ret en el
+    /*  NR @Naked: propagar para suprimir prologo/epilogo/ret en el
      * rewrite-to-physical.  El cuerpo (asm) provee su propia salida. */
     out.naked = fn.is_naked;
     /* Callback save-set: propagar tras el reset de out (arriba lo borra un
@@ -500,7 +500,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     out.vreg_class.assign(fn.values.size(), RegClass::GP);
     const bool vm = (abi == AbiKind::VM);
 
-    /* FP-regalloc (Phase AOT C1 float): el codegen float SSE2 (FP residente
+    /* FP-regalloc ( AOT C1 float): el codegen float SSE2 (FP residente
      * en XMM) solo se activa en HOST_LEAF + SSE2 + 64-bit.  En cualquier otro
      * caso (VM_ABI del JIT en proceso, x86-32, o FloatIsa != SSE2) las ops
      * float caen al fallback (false) -> el path de slots / el interp se
@@ -549,13 +549,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             if (ir_type_is_float(fn.values[i].type))
                 out.vreg_class[i] = RegClass::FP;
 
-    /* Phase D.7 commit 5f: marcar los vregs GC.  El pipeline hace el
+    /*  D.7 commit 5f: marcar los vregs GC.  El pipeline hace el
      * check FINO (sin stackmaps todavia): rechaza la funcion solo si un
      * valor GC esta VIVO a traves de un call (su intervalo cubre un
      * call_position) -- ese seria invisible al GC en un registro.  Los
      * receptores/args de un call van a proc->registers (que el GC SI
      * escanea) y mueren antes del call, asi que no disparan el rechazo. */
-    /* Phase AOT.3 2b: exponer los vregs de los parametros al rewrite (los
+    /*  AOT.3 2b: exponer los vregs de los parametros al rewrite (los
      * usa en HOST_LEAF para el parallel-move de los arg_regs en el prologo;
      * en VM_ABI se ignora -- el selector carga los params desde memoria). */
     out.param_vregs.assign(fn.params.begin(), fn.params.end());
@@ -616,7 +616,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 ins2.dst < v_is_host_alloca.size())
                 v_is_host_alloca[ins2.dst] = 1u;
 
-    /* ---- Phase AS inc.5: inline-asm (register-bound vars) ----
+    /* ----  AS inc.5: inline-asm (register-bound vars) ----
      * Una funcion con @c asm_reg_bindings tiene >=1 bloque INLINE_ASM.  Las
      * vars @c register("reg") viven en un ALLOCA estable (inc.3); aqui las
      * COLAPSAMOS a un vreg PRECOLOREADO a su registro fisico:
@@ -1491,7 +1491,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     v_is_const[in.dst] = 1;
                     v_const[in.dst] = static_cast<int64_t>(in.imm);
                 }
-                /* Float CONST (Phase AOT C1 float): @c in.imm son los bits
+                /* Float CONST ( AOT C1 float): @c in.imm son los bits
                  * IEEE (f64 los 64 bits; f32 los 32 bajos).  Se cargan a un
                  * GP temporal (imm32/imm64) y se bitcastean al XMM dst via
                  * MOVQ_GP_XMM.  El rewrite resuelve el GP temp y el XMM dst
@@ -1573,7 +1573,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* FP arith binaria (Phase AOT C1 float).  El tipo del dst decide
+            /* FP arith binaria ( AOT C1 float).  El tipo del dst decide
              * f32 (SS) vs f64 (SD).  Forma 3-op (dst, a, b); el rewrite la
              * legaliza a 2-address (mov dst,a + OP dst,b).  fp_ok requerido
              * (en otro caso -> fallback). */
@@ -1737,7 +1737,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* Conversiones int <-> float (Phase AOT C1 float).  CVTSI2SD/SS
+            /* Conversiones int <-> float ( AOT C1 float).  CVTSI2SD/SS
              * (entero signed -> float) / CVTTSD2SI/SS (float -> entero
              * truncado).  UITOF/FTOUI (unsigned) reusan la misma instr en v1
              * (correcto para valores que caben en i63; el caso > 2^63 se
@@ -1802,7 +1802,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* FCMP_* (Phase AOT C1 float): UCOMISD/UCOMISS + SETcc.  El bool
+            /* FCMP_* ( AOT C1 float): UCOMISD/UCOMISS + SETcc.  El bool
              * resultante (0/1 en GP) lo consume un BR_COND (TEST + Jcc).
              * UCOMISD setea CF/ZF/PF: para ordenadas (no-NaN) el mapeo es:
              *   EQ -> setz (ZF=1 y PF=0; NaN da PF=1 -> tratamos como != )
@@ -2188,7 +2188,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * [dst] = [src]; [src] = 0.  Inline puro (3 ops de memoria host)
              * cuando ambas direcciones son host_ptr (slots de unique/shared
              * en el frame host).  VM-addr -> fallback (raro). */
-            /* Atomicas del lenguaje (Phase Z / FN.4): a instrucciones x86
+            /* Atomicas del lenguaje ( Z / FN.4): a instrucciones x86
              * atomicas nativas.  Buen uso de registros: CAS solo fija RAX
              * (obligado por la ISA de cmpxchg) via precoloreo de un temp;
              * addr/desired quedan LIBRES para el allocator.  ADD (xadd) no
@@ -2718,7 +2718,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const ir::IrValueId rv = in.operands[0];
                     const bool rv_fp = fp_ok && rv < fn.values.size() &&
                                        ir_type_is_float(fn.values[rv].type);
-                    /* Float return HOST_LEAF (Phase AOT C1): el valor va a XMM0
+                    /* Float return HOST_LEAF ( AOT C1): el valor va a XMM0
                      * (ret_reg[FP]).  El MOV XMM0 <- vreg_fp lo enruta el rewrite
                      * a MOVSD (is_fp_operand). */
                     if (!vm && rv_fp) {
@@ -2786,7 +2786,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* Fase 2: GETSTATIC/SETSTATIC = acceso directo (sin runtime
+            /*   GETSTATIC/SETSTATIC = acceso directo (sin runtime
              * call) a `cls->static_data + offset`.  cls->static_data es
              * un host_ptr (offset 96 en ClassInfo); el valor vive en ese
              * bloque host.  Dos loads/un store encadenados (el MEM con
@@ -2837,7 +2837,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * prologue/epilogue salva/restaura el VM-RSP). */
             case ir::IrOp::ALLOCA: {
                 flush_pending();
-                /* Phase AS inc.5: ALLOCA de un binding register() ->
+                /*  AS inc.5: ALLOCA de un binding register() ->
                  * NO emite host-slot; el vreg ya esta precoloreado a su
                  * registro fisico (set_vreg_fixed) y representa el VALOR
                  * directamente.  Los STORE/LOAD a su alloca se colapsan a
@@ -2867,7 +2867,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::LOAD: {
                 flush_pending();
                 if (in.operands.size() != 1) return false;
-                /* Phase AS inc.5: LOAD desde el alloca de un binding ->
+                /*  AS inc.5: LOAD desde el alloca de un binding ->
                  * leer el output del inline-asm: MOV dst <- vbind. */
                 if (in.dst != ir::IR_NO_VALUE &&
                     in.operands[0] < binding_phys.size() &&
@@ -2936,7 +2936,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::STORE: {
                 flush_pending();
                 if (in.operands.size() != 2) return false; // [0]=val [1]=ptr
-                /* Phase AS inc.5: STORE al alloca de un binding ->
+                /*  AS inc.5: STORE al alloca de un binding ->
                  * cargar el input del inline-asm: MOV vbind <- val. */
                 if (in.operands[1] < binding_phys.size() &&
                     binding_phys[in.operands[1]] >= 0) {
@@ -3587,7 +3587,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* Phase AS inc.5: bloque de inline-asm nativo.  El cuerpo
+            /*  AS inc.5: bloque de inline-asm nativo.  El cuerpo
              * (NASM Intel, ya con comptime-consts sustituidas por el
              * frontend) se ENSAMBLA a bytes via g_asm_backend; se emite
              * como INLINE_ASM_RAW (el encoder lo apendea verbatim).  Los
@@ -3596,7 +3596,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * in/out alimenta la liveness del AsmBlob. */
             case ir::IrOp::INLINE_ASM: {
                 flush_pending();
-                /* Phase NR @Naked: un asm{} SIN register() bindings (cuerpo
+                /*  NR @Naked: un asm{} SIN register() bindings (cuerpo
                  * de un ISR/stub) tiene @c asm_reg_bindings vacio -> antes
                  * caia por @c !has_inline_asm.  El unico requisito real es el
                  * backend de ensamblado; sin bindings, @c in.operands esta
@@ -3626,7 +3626,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                 }
                 AsmBlob blob;
-                // Phase AS inc.6: simbolos PROPIOS referenciados desde el asm
+                //  AS inc.6: simbolos PROPIOS referenciados desde el asm
                 // (`jmp [global]`, `mov rax, fn`).  El backend ya localizo el
                 // campo (offset relativo al blob) + tipo; el encoder los reubica
                 // y emite los MReloc.  Cero coste si el asm no usa simbolos.
@@ -3721,14 +3721,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 blob.clobbers_mem = ((in.imm >> 4) & 1u) != 0;
                 blob.clobbers_flags = ((in.imm >> 5) & 1u) != 0;
-                // Phase AS inc.5e: registros fisicos clobbered (explicitos
+                //  AS inc.5e: registros fisicos clobbered (explicitos
                 // del usuario + inferidos; asm_clobber_lists YA excluye los
                 // regs ligados por register()).  El regalloc los excluye
                 // para vregs NO-binding vivos a traves del asm -- cubre los
                 // clobbers de callee-saved (r12-r15) que el call-position
                 // (solo caller-saved) no protege.  asm_id en imm bits 8..31.
                 //
-                // Phase AS inc.5f: clobbers de registros RESERVADOS por el
+                //  AS inc.5f: clobbers de registros RESERVADOS por el
                 // wrapper (rbx = ProcessVM*, rbp = frame).  canon_gp_to_mreg
                 // los rechaza (no son asignables), pero el asm SI los pisa
                 // (p.ej. cpuid escribe ebx) -> hay que SALVARLOS y
@@ -4072,7 +4072,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::GC_ALLOC:
             case ir::IrOp::GC_ALLOCP:
             case ir::IrOp::NEWOBJ:
-            /* Fase 2: class registry de 1 arg (proc, params_vaddr).
+            /*   class registry de 1 arg (proc, params_vaddr).
              * Mismo marshalling que gc_handle/newobj.  FINDCLASS/
              * FINDMETHOD/FINDFIELD/DEFCLASS dejan el resultado en dst. */
             case ir::IrOp::FINDCLASS:
@@ -4100,7 +4100,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                        vr(in.operands[0])));
                     break;
                 }
-                /* === Inline slab fast-path (Phase D.7 perf, 2026-06-06) ===
+                /* === Inline slab fast-path ( D.7 perf, 2026-06-06) ===
                  * Para RAW_ALLOC con size CONSTANTE que cae en una size
                  * class pequena del slab, inline-amos el pop del free
                  * list (sin CALL al runtime), con fallback CALL @c alloc
@@ -5609,7 +5609,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * por @c in.imm en el bloque "code.s_<imm>" del .velb.
                  * Equivalente al `mov rDst, @Absolute("code.s_<imm>")`
                  * que emite el frontend; lo resolvemos en compile-time
-                 * via @c resolve_symbol (Phase D.3-H, igual que el
+                 * via @c resolve_symbol ( D.3-H, igual que el
                  * selector de slots).
                  *
                  * IMPORTANTE: el resultado es un VM-addr (offset a
@@ -5686,7 +5686,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * el frontend (B.1 as_native_callback, paso de fn por
                  * valor, trampolines, registro de handlers).  Lo
                  * resolvemos via @c resolve_symbol igual que el
-                 * selector de slots (Phase D.3-H).
+                 * selector de slots ( D.3-H).
                  *
                  * Es un PC virtual (code addr), NO un host_ptr: mismo
                  * tratamiento que STR_LIT_ADDR -- solo emitimos el
@@ -5717,7 +5717,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     label_fn[in.dst] = in.func_name;
                     break;
                 }
-                /* VM/JIT: resolvemos via resolve_symbol (Phase D.3-H). */
+                /* VM/JIT: resolvemos via resolve_symbol ( D.3-H). */
                 uint64_t addr = 0;
                 if (resolve_symbol)
                     addr = resolve_symbol("code." + in.func_name);

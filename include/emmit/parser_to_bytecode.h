@@ -652,9 +652,9 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         {"gcfinall",
          {{0x00, 0x8E, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
-        /* --- Phase Z: memoria compartida cross-process (0xA6-0xAD) ---
+        /* ---  Z: memoria compartida cross-process (0xA6-0xAD) ---
          *  Stubs registrados para que el assembler acepte estos mnemonicos
-         *  emitidos por el lowering Phase Z.  El runtime ejecuta versiones
+         *  emitidos por el lowering  Z.  El runtime ejecuta versiones
          *  simplificadas (no thread-safe cross-process aun) hasta que el
          *  mark/sweep del SharedHeap aterrice.
          */

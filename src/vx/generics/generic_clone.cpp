@@ -467,7 +467,7 @@ std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s,
         x->loc = src->loc;
         x->name = src->name;
         x->is_const = src->is_const;
-        x->reg_binding = src->reg_binding; // Phase AS inc.2
+        x->reg_binding = src->reg_binding; //  AS inc.2
         x->type = clone_type_with_subst(src->type.get(), g);
         if (src->init) x->init = clone_expr(src->init.get(), g);
         return x;

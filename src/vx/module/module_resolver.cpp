@@ -1,6 +1,6 @@
 /**
  * @file module_resolver.cpp
- * @brief Implementacion del resolver de paths + dep graph (Phase M).
+ * @brief Implementacion del resolver de paths + dep graph ( M).
  *
  * Optimizaciones aplicadas:
  *   - Cache de resolucion por path-hash (FNV-1a 64): segunda resolucion
@@ -411,7 +411,7 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     size_t dot = base.find_last_of('.');
     mod->module_name = (dot == std::string::npos) ? base : base.substr(0, dot);
 
-    // Phase M.L22: paquete-dir.  Si el filename es `mod.vx`, el modulo
+    //  M.L22: paquete-dir.  Si el filename es `mod.vx`, el modulo
     // logico es el directorio parent.  Asi `pkg_lib/mod.vx` se llama
     // `pkg_lib` (no `mod`), coincidiendo con el nombre que el consumer
     // usa al hacer `import "pkg_lib"`.
@@ -520,7 +520,7 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
     std::vector<std::string> candidates;
     candidates.reserve(4 + search_paths_.size());
 
-    // Phase M.L22: paquete-dir.  Para cada base_dir, intentamos primero
+    //  M.L22: paquete-dir.  Para cada base_dir, intentamos primero
     // `base_dir/raw_path.vx` (modulo single-file) y luego
     // `base_dir/raw_path/mod.vx` (paquete-dir).  El segundo convenio
     // permite agrupar varios .vx bajo `std/io/` con un entry point.
@@ -580,7 +580,7 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
 // topological_order via DFS coloreado (no aqui).
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// Phase NS.2-full: extraccion ligera de los namespaces declarados en un
+//  NS.2-full: extraccion ligera de los namespaces declarados en un
 // source .vx.  Lexemos (sin parsear) y buscamos el patron:
 //   KW_NAMESPACE IDENT (DOT IDENT)* (SEMICOLON | LBRACE)
 // Cubre la forma statement `namespace a.b.c;` y la forma bloque
@@ -622,7 +622,7 @@ void ModuleGraph::extract_namespaces_(const std::string &source,
 }
 
 // ---------------------------------------------------------------------------
-// Phase NS.2-full: construye el indice namespace -> fichero(s) escaneando
+//  NS.2-full: construye el indice namespace -> fichero(s) escaneando
 // recursivamente los .vx bajo las source roots (dir del root, search paths,
 // stdlib).  Lazy + idempotente.
 // ---------------------------------------------------------------------------
@@ -673,7 +673,7 @@ void ModuleGraph::build_namespace_index_() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase NS.2-full: resuelve `import a.b.c;` consultando el indice.  Si el
+//  NS.2-full: resuelve `import a.b.c;` consultando el indice.  Si el
 // namespace lo declaran varios ficheros (namespace parcial), devuelve el
 // PRIMERO (el resto se cargan como deps adicionales por process_dependencies_
 // via un segundo lookup).  MVP: un fichero por namespace es el caso comun.
@@ -783,7 +783,7 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
         diags_.error(l, "el fichero raiz no existe: '" + root_file + "'");
         return UINT32_MAX;
     }
-    // Phase NS.2-full: recordar el directorio del root para el indice de
+    //  NS.2-full: recordar el directorio del root para el indice de
     // namespaces (escaneo recursivo del arbol del proyecto).
     {
         size_t slash = canonical.find_last_of('/');

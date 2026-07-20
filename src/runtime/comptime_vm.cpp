@@ -7,7 +7,7 @@
 
 /**
  * @file comptime_vm.cpp
- * @brief Implementacion del scaffolding de @c ComptimeRuntime (Phase  ).
+ * @brief Implementacion del scaffolding de @c ComptimeRuntime (  ).
  *
  * En este sprint la clase es funcional pero la ejecucion via VM esta
  * stub-eada -- el @c try_invoke siempre retorna @c false (caller

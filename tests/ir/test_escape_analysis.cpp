@@ -1,5 +1,5 @@
 /*
- * Test: Escape Analysis + Scalar Replacement de objetos GC (Phase C2.13).
+ * Test: Escape Analysis + Scalar Replacement de objetos GC ( C2.13).
  *
  * Verifica el comportamiento de @c ir_pass_scalar_replace_gc construyendo
  * modulos IR a mano (sin pasar por el frontend ):
@@ -219,7 +219,7 @@ int main() {
 #else
     setenv("VESTA_NO_ESCAPE_MEM2REG", "0", 1);
 #endif
-    std::printf("=== test_escape_analysis (Phase C2.13) ===\n");
+    std::printf("=== test_escape_analysis ( C2.13) ===\n");
 
     /* (1) read-only -> se transforma. */
     {

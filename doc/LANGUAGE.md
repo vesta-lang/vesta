@@ -401,7 +401,7 @@ i32 main() {
 Modelo actor (mailboxes + procesos ligeros) tipo Erlang. Scheduler cooperativo
 con cuotas de instrucciones; opcional multi-thread real con `--schedulers N`.
 
-**Memoria compartida cross-process** (Phase Z): el modificador `shared` en
+**Memoria compartida cross-process** ( Z): el modificador `shared` en
 var-decl pone el objeto en el `SharedHeap` global del VM, visible a todos los
 procesos hijos via spawn.  Los monitores funcionan transparente cross-scheduler
 (exclusion mutua correcta) gracias al `monitor_word` con encoded_pid 48-bit

@@ -29,7 +29,7 @@
 #include "jit/regalloc_rewrite.h"
 #include "jit/stack_scan.h"
 #include "jit/target_reginfo.h"
-#include "jit/vreg_pipeline.h" // Phase AOT-GC Inc 1: vreg_compile_native + stackmaps_out
+#include "jit/vreg_pipeline.h" //  AOT-GC Inc 1: vreg_compile_native + stackmaps_out
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
 
@@ -195,7 +195,7 @@ static void test_gc_root_found_by_scan() {
 }
 
 /* ===================================================================== */
-/* Phase AOT-GC Inc 1: el path HOST_LEAF (AOT) tambien emite stackmaps de  */
+/*  AOT-GC Inc 1: el path HOST_LEAF (AOT) tambien emite stackmaps de  */
 /* GC roots, expuestos via el out-param stackmaps_out de vreg_compile_native.*/
 /* ===================================================================== */
 static void test_aot_host_leaf_stackmap() {
@@ -252,7 +252,7 @@ static void test_aot_host_leaf_stackmap() {
 int main() {
     std::setbuf(stdout, nullptr);
     std::printf(
-        "=== test_vreg_gc_scan (Phase D.7 commit 6: stackmap <-> GC) ===\n");
+        "=== test_vreg_gc_scan ( D.7 commit 6: stackmap <-> GC) ===\n");
     test_gc_root_found_by_scan();
     test_aot_host_leaf_stackmap();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);

@@ -256,7 +256,7 @@ CompileResult compile_vx_source(const std::string &source,
         return res;
     }
 
-    // 1.5. Phase M.7.c: aplanar namespaces inline (`namespace ui { ... }`).
+    // 1.5.  M.7.c: aplanar namespaces inline (`namespace ui { ... }`).
     //      Tras este pre-pass, el AST no tiene NamespaceDecl wrappers;
     //      los simbolos internos llevan prefix `<ns>__` (cero overhead
     //      runtime; compatible con port-c).  Cada namespace encontrado
@@ -498,7 +498,7 @@ CompileResult compile_vx_source(const std::string &source,
     if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
         lo.set_instrument_mode(opts.instrument_mode);
     }
-    lo.set_native_poo(opts.native_poo); // Phase AOT.2.b: POO nativa (-m aot)
+    lo.set_native_poo(opts.native_poo); //  AOT.2.b: POO nativa (-m aot)
     lo.set_asm_target_bits(opts.asm_target_bits); // arch del inline-asm @Naked
     lo.set_aot_vec_width(opts.aot_vec_width); // ancho SIMD del target (--float-isa)
     lo.set_aot_auto_vec(opts.aot_auto_vec);   // --float-isa auto: chunk dual
@@ -802,7 +802,7 @@ CompileResult compile_vx_source(const std::string &source,
     /* : set @c has_lowerable_macros si el lowering emitio
      * al menos una IrFunction marcada @c is_macro_compiled.  Esto
      * es un gate mas robusto que @c macro_expectations.empty() para
-     * disparar el two-phase compile, porque incluye casos con args
+     * disparar el two- compile, porque incluye casos con args
      * no codificables (string, struct, array) que no aparecerian
      * como expectations pero si pueden beneficiarse del VM path. */
     for (const auto &fn : irmod.functions) {
@@ -956,13 +956,13 @@ CompileResult compile_vx_source(const std::string &source,
         }
     }
 
-    // Phase AS (AS.7): el backend bytecode/interp NO puede materializar
+    //  AS (AS.7): el backend bytecode/interp NO puede materializar
     // inline asm de la CPU host (no existe opcode VM para rdtsc/cpuid/
     // syscall/etc.).  Si el target es bytecode (port_target vacio) y el
     // IR contiene algun IrOp::INLINE_ASM, abortamos con un error claro
     // ANTES de emitir el .vel.  Los backends nativos (port-C hoy; JIT/AOT
     // en el futuro) interceptan INLINE_ASM antes de llegar aqui.
-    // Phase AS inc.5: el inline-asm (IrOp::INLINE_ASM) ya NO se rechaza al
+    //  AS inc.5: el inline-asm (IrOp::INLINE_ASM) ya NO se rechaza al
     // emitir bytecode.  El .velb se emite con las funciones inline-asm (su
     // cuerpo bytecode es un trap que el ir_emitter emite, ver mas abajo) y
     // su IR completo (con asm_reg_bindings) viaja en la seccion @ir.  El
@@ -970,7 +970,7 @@ CompileResult compile_vx_source(const std::string &source,
     // threshold 1500); el cuerpo bytecode-trap NUNCA se ejecuta bajo JIT.
     // Sin flags: `vm --vx prog.vx -o prog && vm --run prog.velb`.
     //
-    // Phase AS inc.5g: PERO si el inline-asm liga un registro VECTORIAL
+    //  AS inc.5g: PERO si el inline-asm liga un registro VECTORIAL
     // (register("xmm0"/"ymm0"/"zmm0")), el JIT v1 no lo soporta (el regalloc
     // solo asigna el banco GP) -> en lugar de fallar SILENCIOSAMENTE en
     // runtime (el wrapper no compila -> trap hlt), abortamos AQUI con un
@@ -1111,7 +1111,7 @@ CompileResult compile_vx_source(const std::string &source,
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt);
         res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);
-        /* Phase AOT: modulo completo (functions + static_data + globals) para
+        /*  AOT: modulo completo (functions + static_data + globals) para
          * que el driver -m aot materialice los literales en .rodata. */
         res.ir_module_cache_bytes = ir::emit_ir_module_cache(irmod_for_section);
     }

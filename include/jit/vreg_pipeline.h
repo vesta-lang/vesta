@@ -7,7 +7,7 @@
 
 /**
  * @file jit/vreg_pipeline.h
- * @brief Orquestador del path de registros virtuales (Phase D.7, commit 5c).
+ * @brief Orquestador del path de registros virtuales ( D.7, commit 5c).
  *
  * Encadena selector vreg -> intervalos -> linear-scan -> rewrite (VM_ABI) ->
  * encoder -> code cache -> registro en el JitRegistry.  Es el punto de entrada
@@ -36,7 +36,7 @@ class CodeCache;
 /**
  * @struct NativeReloc
  * @brief Relocation sin resolver del codigo nativo de UNA funcion AOT
- *        (Phase AOT.3 Paso 2b-ii).
+ *        ( AOT.3 Paso 2b-ii).
  *
  * @c vreg_compile_native compila cada funcion de forma aislada; las
  * referencias a otras funciones del modulo (CALL) o a datos de @c .rodata
@@ -114,7 +114,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
 /**
  * @brief Compila @p fn por el path vreg en ABI HOST_LEAF y devuelve los
- *        BYTES nativos (Phase AOT.3 Paso 2).
+ *        BYTES nativos ( AOT.3 Paso 2).
  *
  * A diferencia de @c vreg_compile (VM_ABI: @c ProcessVM* en RBX + runtime
  * entries + escritura del retorno en @c proc->registers.regs[0]), esta
@@ -173,7 +173,7 @@ std::vector<uint8_t> vreg_compile_native(
     /* Solo-LSP: etiquetas internas de bloques inline-asm (byte_offset ->
      * nombre).  Se rellena si emit_line_map y este puntero != nullptr. */
     std::vector<std::pair<uint32_t, std::string>> *asm_labels_out = nullptr,
-    /* Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint (pc_offset
+    /*  AOT-GC (Inc 1): stackmaps de raices GC por safepoint (pc_offset
      * relativo a la funcion + slots con GcHandle).  Se rellena si != nullptr.
      * Vacios salvo que el codigo tenga valores GC (gc<T>, Inc 3).  El driver
      * los serializa en la seccion .vxgc_smap para el scan preciso en runtime. */
@@ -196,7 +196,7 @@ std::vector<uint8_t> vreg_compile_native_target(
 
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo
- *        header es @p header_block (on-stack replacement, Phase D.8, 2c).
+ *        header es @p header_block (on-stack replacement,  D.8, 2c).
  *
  * Identico a @c vreg_compile pero (a) NO emite el contador/trigger C1
  * (suprimido en modo OSR) y (b) APPENDEA un bloque OSR-entry que carga el

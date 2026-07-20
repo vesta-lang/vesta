@@ -1987,7 +1987,7 @@ def main() -> int:
             warn(f"compile fail {bname}/{ln}: {err}")
 
     # -------------------------------------------------------------------
-    # Fase 2: EJECUCIONES (secuencial; mediciones no contaminadas).
+    #   EJECUCIONES (secuencial; mediciones no contaminadas).
     # -------------------------------------------------------------------
     print()
     rows: list[dict] = []

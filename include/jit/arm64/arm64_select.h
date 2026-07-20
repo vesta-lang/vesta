@@ -12,7 +12,7 @@
 
 /**
  * @file arm64_select.h
- * @brief Selector de instrucciones IR -> AArch64 (Phase H.2, bootstrap).
+ * @brief Selector de instrucciones IR -> AArch64 ( H.2, bootstrap).
  *
  * Baja una @c ir::IrFunction a TEXTO ensamblador AArch64 que Keystone ensambla a
  * bytes.  Es el primer paso del backend arm64: un template slot-por-valor (cada

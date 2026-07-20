@@ -1176,7 +1176,7 @@ std::vector<uint8_t> Linker::build_executable() {
     const size_t header_pos_size_ir = result->offset;
     result->emit32(final_header.size_ir_section); // 0 por ahora
 
-    /* Phase E.1: placeholder para offset_stackmap_section +
+    /*  E.1: placeholder para offset_stackmap_section +
      * size_stackmap_section.  Los patcheamos al final via
      * write64_at/write32_at tras conocer la posicion de la seccion VSMP. */
     const size_t header_pos_offset_stackmap = result->offset;
@@ -1518,7 +1518,7 @@ std::vector<uint8_t> Linker::build_executable() {
         final_header.size_ir_section = total_size;
     }
 
-    /* Phase E.1: emitir seccion @c VSMP con los stackmaps precisos del
+    /*  E.1: emitir seccion @c VSMP con los stackmaps precisos del
      * interprete.  Recolectamos los recs de cada modulo, sumando el offset
      * del code section (mismo esquema que la seccion debug DVBG) para
      * producir offsets absolutos, ordenamos por pc_offset y serializamos.

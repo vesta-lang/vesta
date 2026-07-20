@@ -96,7 +96,7 @@ Parser::Parser(Lexer &lex, Diagnostics &diags)
     // de aqui consume() avanza siempre.
 }
 
-// Phase M.L24: skip una decl top-level cuando @Target no matchea.
+//  M.L24: skip una decl top-level cuando @Target no matchea.
 // Consume tokens hasta el final natural de la decl: para decls con
 // cuerpo `{ ... }`, hasta cerrar el `}` matching; para decls simples
 // (typedef, using, global var), hasta el siguiente `;` top-level.
@@ -123,7 +123,7 @@ void Parser::skip_target_skipped_decl() {
     }
 }
 
-// Phase M.condcomp: evaluador completo de @Target.  Soporta una
+//  M.condcomp: evaluador completo de @Target.  Soporta una
 // expresion booleana sobre atomos de build:
 //   - os:windows / os:linux / os:macos / os:posix
 //   - arch:x86_64 / arch:arm64 / arch:x86
@@ -398,7 +398,7 @@ bool target_expr_matches(const std::string &spec) noexcept {
     return target_matches_(spec);
 }
 
-// Phase M6.a L.3: aplica @c pending_visibility_ al nodo si soporta
+//  M6.a L.3: aplica @c pending_visibility_ al nodo si soporta
 // @c is_public.  Limpia el flag al final para que sub-decls nested
 // no hereden la visibilidad del top-level que los envuelve.
 void Parser::apply_pending_visibility(ast::Node *n) noexcept {
@@ -1291,11 +1291,11 @@ void Parser::parse_complexity_args_(std::string &top_complexity_expr,
 }
 
 std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
-    // namespace foo { ... }  (Phase M.7.c, inline namespace estilo C++).
+    // namespace foo { ... }  ( M.7.c, inline namespace estilo C++).
     if (current_.kind == TokenKind::KW_NAMESPACE) {
         return parse_namespace_decl();
     }
-    // import "path" [as alias] [only A, B];  (Phase M sistema de modulos).
+    // import "path" [as alias] [only A, B];  ( M sistema de modulos).
     if (current_.kind == TokenKind::KW_IMPORT) {
         return parse_import_decl(/*is_public_reexport=*/false);
     }
@@ -1305,7 +1305,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         (void)consume(); // 'public'
         return parse_import_decl(/*is_public_reexport=*/true);
     }
-    // Phase M6.a L.3: visibilidad de top-level decl.  Capturamos
+    //  M6.a L.3: visibilidad de top-level decl.  Capturamos
     // `public`/`private` y guardamos en pending_visibility_; cada
     // sub-parser que produzca un decl top-level consulta el flag al
     // final (helper @c apply_pending_visibility_) y lo limpia.  Sin
@@ -1320,7 +1320,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         pending_visibility_ = 2; // 2 = private explicito
     } else if (current_.kind == TokenKind::IDENTIFIER &&
                current_.lexeme == "internal") {
-        // Phase NS.3: `internal` (keyword contextual) -- package-scoped.
+        //  NS.3: `internal` (keyword contextual) -- package-scoped.
         (void)consume();
         pending_visibility_ = 3; // 3 = internal explicito
     }
@@ -1381,14 +1381,14 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     //   @Async:      funcion async, transformada a wrapper future + spawn
     //   @Introspect: clase/struct/enum runtime-introspectable (Sprint 4
     //   A.37.s4)
-    //   @Target("os:linux"): Phase M.L24 - compilacion condicional;
+    //   @Target("os:linux"):  M.L24 - compilacion condicional;
     //                la decl se descarta si no matchea el target actual.
     //   Otras se aceptan y se ignoran silenciosamente.
     bool top_is_aspect = false;
     bool top_is_async = false;
     bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
-    bool top_is_naked = false;          /* Phase NR: @Naked (ISRs/stubs) */
+    bool top_is_naked = false;          /*  NR: @Naked (ISRs/stubs) */
     bool top_is_noexcept = false;       /* @NoExcept: fn sin excepciones */
     bool top_is_string_concat = false;  /* C-3: @StringConcat */
     bool top_is_string_eq = false;      /* C-3: @StringEq */
@@ -1797,7 +1797,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             break;
         }
     }
-    // Phase M.L24: si @Target no matcheo, descartar la decl completa
+    //  M.L24: si @Target no matcheo, descartar la decl completa
     // SIN parsearla.  Esto evita diagnosticos espurios por simbolos
     // que solo existen en el otro target.  La pending_visibility se
     // limpia automaticamente via VisGuard al salir.
@@ -1810,7 +1810,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         return nullptr;
     }
     last_decl_was_target_skip_ = false;
-    // Phase M.condcomp: @Target sobre un `import`.  El path normal
+    //  M.condcomp: @Target sobre un `import`.  El path normal
     // maneja import ANTES del loop de annotations, pero cuando hay
     // `@Target("...") import "..."` el @Target ya se consumio aqui;
     // si la condicion matcheo (top_target_skip == false), parseamos
@@ -2793,7 +2793,7 @@ bool Parser::starts_type(bool allow_reserved_name) const noexcept {
 
     Lexer &mut_lex = const_cast<Lexer &>(lex_);
     size_t off = 0;
-    // Phase M.7.c: namespace qualified type `ui.Button name`.
+    //  M.7.c: namespace qualified type `ui.Button name`.
     // Saltar pares `DOT IDENT` antes del check de generics.
     while (mut_lex.peek_at(off).kind == TokenKind::DOT &&
            mut_lex.peek_at(off + 1).kind == TokenKind::IDENTIFIER) {
@@ -3015,7 +3015,7 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         auto nt = std::make_unique<ast::NamedTypeNode>();
         nt->loc = current_.loc;
         nt->name = consume().lexeme;
-        // Phase M.7.c: namespace qualified type (`ui.Button`).
+        //  M.7.c: namespace qualified type (`ui.Button`).
         // Si seguidos vienen `.IDENT`, concatenamos al nombre con
         // separador `.` que el type checker traduce a mangled
         // `ui__Button` al resolver via imported_namespaces_.
@@ -3858,7 +3858,7 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_using_decl() {
 }
 
 // -----------------------------------------------------------------
-// import: declaracion de importacion de modulo (Phase M).
+// import: declaracion de importacion de modulo ( M).
 //
 // Sintaxis aceptada:
 //   import "path";
@@ -3883,7 +3883,7 @@ Parser::parse_import_decl(bool is_public_reexport) {
 
     (void)consume(); // 'import'
 
-    // Phase NS.2-full: dos formas de import.
+    //  NS.2-full: dos formas de import.
     //   (a) por-PATH:      import "editor/buffer";   (literal string)
     //   (b) por-NAMESPACE: import a.b.c;             (identificadores punteados)
     // La forma (b) resuelve el namespace a fichero via el indice de
@@ -4006,7 +4006,7 @@ Parser::parse_import_decl(bool is_public_reexport) {
 }
 
 // -----------------------------------------------------------------
-// namespace: agrupacion inline estilo C++ (Phase M.7.c).
+// namespace: agrupacion inline estilo C++ ( M.7.c).
 //
 //   namespace foo {
 //       class Button { ... }
@@ -4026,7 +4026,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     ns->loc = current_.loc;
     (void)consume(); // 'namespace'
 
-    // Phase NS.1: nombre con PATH punteado (a.b.c).  Se almacena como texto
+    //  NS.1: nombre con PATH punteado (a.b.c).  Se almacena como texto
     // punteado en @c name; el mangling posterior lo parte por '.' y une con
     // '__' (std.collections -> std__collections).
     if (current_.kind != TokenKind::IDENTIFIER) {
@@ -4046,7 +4046,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     }
     ns->name = path;
 
-    // Phase NS.3: override opcional de PackageId: `namespace X @id("...")`.
+    //  NS.3: override opcional de PackageId: `namespace X @id("...")`.
     // Permite renombrar el namespace manteniendo la identidad ABI.
     if (current_.kind == TokenKind::AT &&
         lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
@@ -4064,7 +4064,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
         (void)expect(TokenKind::RPAREN, "se esperaba ')' tras el id de '@id'");
     }
 
-    // Phase NS.1: forma STATEMENT `namespace a.b.c;` -- aplica al RESTO del
+    //  NS.1: forma STATEMENT `namespace a.b.c;` -- aplica al RESTO del
     // fichero (recoge las decls top-level siguientes hasta el proximo
     // `namespace` statement o EOF).  La forma BLOQUE `namespace a.b.c { ... }`
     // acota las decls con llaves (permite varios namespaces por fichero y
@@ -4144,7 +4144,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
 }
 
 // -----------------------------------------------------------------
-// bytes: bloque de datos crudos estilo NASM (Phase AOT).
+// bytes: bloque de datos crudos estilo NASM ( AOT).
 //
 //   bytes name {
 //       db 0x55, 'A', "texto"     ; 1 byte por operando (string -> bytes)
@@ -4379,7 +4379,7 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_bytes_decl() {
 }
 
 // -----------------------------------------------------------------
-// asm: bloque de codigo NASM ensamblado por Keystone (Phase AOT 16/32-bit).
+// asm: bloque de codigo NASM ensamblado por Keystone ( AOT 16/32-bit).
 //
 //   @bits(16) @section(".boot","rx")
 //   asm boot {
@@ -6570,7 +6570,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
         return es;
     }
     default:
-        // Phase AS inc.2: `register("reg") T name;` es un var-decl con
+        //  AS inc.2: `register("reg") T name;` es un var-decl con
         // storage-class; se enruta a parse_var_decl_stmt aunque
         // `register` sea un IDENTIFIER (no keyword) y starts_type() lo
         // ignore.
@@ -6585,7 +6585,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const,
     auto vd = std::make_unique<ast::VarDeclStmt>();
     vd->loc = current_.loc;
     vd->is_const = is_const;
-    /* Phase AS inc.2: storage-class `register("reg")` antes del tipo.
+    /*  AS inc.2: storage-class `register("reg")` antes del tipo.
      * El patron ya fue validado por looks_like_register_storage() en el
      * router, pero KW_CONST / for-init tambien llaman aqui; reconsumimos
      * de forma defensiva solo cuando el patron `register ( "reg" )`
@@ -6981,7 +6981,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_synchronized_stmt() {
 }
 
 // ---------------------------------------------------------------------
-// Phase AS: inline asm nativo.
+//  AS: inline asm nativo.
 //
 //   asm [volatile|nomem|preserves_flags|pure] {
 //       <NASM Intel verbatim>
@@ -7031,7 +7031,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
         (void)consume();
     }
 
-    // Phase AS inc.7: lista opcional de operandos `( <clase> <nombre> [= expr],
+    //  AS inc.7: lista opcional de operandos `( <clase> <nombre> [= expr],
     // ... )` ANTES del '{'.  El '{' queda como asm 100% real.  Cada enlace es
     // `<clase-de-registro> <nombre> [= <expr-de-entrada>]`; la clase es el
     // "tipo" (reg = el compilador elige; rax/... = fijo; xmm/ymm = vector;
@@ -8267,7 +8267,7 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         // primitive_kind_from_token (i32, i64, string, bool, f32...).
         if (current_.kind == TokenKind::IDENTIFIER) {
             e->class_name = consume().lexeme;
-            // Phase M.7.c: namespace qualified `new ui.Button(...)`.
+            //  M.7.c: namespace qualified `new ui.Button(...)`.
             // Concatenamos con `.` igual que en parse_type_node;
             // el TypeChecker traduce a mangled label.
             while (current_.kind == TokenKind::DOT &&

@@ -197,7 +197,7 @@ static bool is_side_effecting(IrOp op) {
     case IrOp::PANIC:
     // asignacion
     case IrOp::ALLOCA:
-    // recuperados fase B: lecturas/escrituras que consultan estado
+    // recuperados   lecturas/escrituras que consultan estado
     // global del runtime y NO pueden reordenarse contra los STOREs
     // que arman sus structs de parametros.  Tratarlos como llamadas.
     case IrOp::MVTAKE_IR:
@@ -210,7 +210,7 @@ static bool is_side_effecting(IrOp op) {
     // GC_DEREF_HOST: handle -> host_ptr.  Conservative: marked side-effecting
     // porque el host_ptr puede cambiar tras un major_gc (moving GC) y CSE
     // erroneamente fusionaria dos derefs separados por un CALL.  Cuando
-    // llegue Phase D.8 con CSE block-aware con clobber model, se puede
+    // llegue  D.8 con CSE block-aware con clobber model, se puede
     // relajar a "pure within block until next CALL/alloc".
     case IrOp::GC_DEREF_HOST:
     case IrOp::ATOMIC_LD_I64:
@@ -467,7 +467,7 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn) {
 // =========================================================================
 //  Pase ir_pass_promote_callned_allocas
 //
-//  Phase D.jit-mem-model AUTO-PROMOTE: detecta `&local` (ALLOCAs) que
+//   D.jit-mem-model AUTO-PROMOTE: detecta `&local` (ALLOCAs) que
 //  fluyen a CALLN (funciones nativas).  Esos ALLOCAs SE PROMUEVEN a host
 //  stack via marca `is_host_ptr=true` en el dst del ALLOCA.  El JIT
 //  selector consulta esa marca y emite host stack en lugar de VM-stack.
@@ -2152,7 +2152,7 @@ bool ir_pass_own_closure_envs(IrModule &mod) {
 }
 
 //==============================================================================
-//  Phase C2.13: Escape Analysis + Scalar Replacement de objetos GC
+//   C2.13: Escape Analysis + Scalar Replacement de objetos GC
 //
 //  Detecta objetos `new X(...)` (emitidos como `call @__new_X(args)`) que NO
 //  ESCAPAN del frame en el que se crean: su host_ptr solo se usa para leer/
@@ -2483,7 +2483,7 @@ bool ir_pass_escape_detect_gc(IrFunction &fn) {
 }
 
 //==============================================================================
-//  Phase C2.13: Scalar Replacement (transformacion)
+//   C2.13: Scalar Replacement (transformacion)
 //
 //  Para un `%obj = call @__new_X(args)` NO-ESCAPANTE cuyo constructor es un
 //  "inicializador trivial de campos", elimina el alloc GC y reemplaza cada
@@ -3571,7 +3571,7 @@ done_call:;
 } // namespace
 
 /**
- * @brief Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
+ * @brief  C2.13: Scalar Replacement de objetos GC no-escapantes.
  *
  * Elimina los `new X()` que no escapan y cuyo ctor es un inicializador
  * trivial de campos, reemplazando los field-reads por los valores de
@@ -5059,7 +5059,7 @@ bool ir_pass_simplify(IrFunction &fn) {
 }
 
 // =========================================================================
-//  Pase ir_pass_strength_reduction (Phase D.7.opt)
+//  Pase ir_pass_strength_reduction ( D.7.opt)
 // =========================================================================
 //
 // Reemplaza operaciones MUL/DIV/MOD por constante potencia-de-2 con
@@ -6077,7 +6077,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
     std::unordered_map<IrValueId, RootKind> root_kind;
 
     if (g_dse_unified) {
-        // Fase 3: resolucion desde el RESOLVEDOR COMPARTIDO.  El DSE NO
+        //   resolucion desde el RESOLVEDOR COMPARTIDO.  El DSE NO
         // construye la tabla points-to: la RECIBE del AnalysisManager (Regla 1);
         // si no se la dan (llamada suelta), la construye localmente como
         // fallback.  Solo las raices que el DSE razona con precision (Stack=
@@ -6176,7 +6176,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
     for (auto &bb : fn.blocks) {
         // STOREs vivos del bloque, pendientes de veredicto de DSE.
         std::vector<PendingStore> pending;
-        // Phase D.7.opt: STORE-TO-LOAD FORWARDING.
+        //  D.7.opt: STORE-TO-LOAD FORWARDING.
         // Mapa paralelo: addr_key -> (stored_value_vid, store_type) del
         // ultimo STORE.  Cuando un LOAD lee de esa misma direccion CON EL
         // MISMO tipo, podemos reemplazar el LOAD por MOV del valor
@@ -6401,7 +6401,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             case IrOp::CALLITF:
             case IrOp::CALLCLOSURE:
             case IrOp::RAW_ASM:
-            // Phase AS inc.3: INLINE_ASM (host asm) es opaco y puede
+            //  AS inc.3: INLINE_ASM (host asm) es opaco y puede
             // leer/escribir cualquier memoria + los registros que el
             // usuario ligo con register().  Barrera total: ni store-to-load
             // forwarding cruza el bloque ni se eliminan STOREs previos
@@ -6853,7 +6853,7 @@ bool ir_pass_cse(IrFunction &fn) {
             // y posiblemente otros.  Incluirlo en la clave evita dedupe falso
             // (e.g., dos str_lit_addr con strings distintos parecian iguales).
             //
-            // Bug fix fase B: @c func_name es CRITICO para LABEL_ADDR y los
+            // Bug fix   @c func_name es CRITICO para LABEL_ADDR y los
             // CALL-like ops (CALL, CALLN, etc).  Sin esto, dos LABEL_ADDR con
             // labels distintos se deduplican incorrectamente (handler_pc del
             // tryenter se mezcla con el name_addr del findclass, p.ej.).
@@ -7314,7 +7314,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * ahi: trampoline de boot, handler en .text.isr, etc.).  Inlinearla
          * borraria su presencia en la seccion -> NO inlinear. */
         if (!fn.section.empty()) return false;
-        /* Phase C2.13 fix (2026-06-16): NO inlinear los helpers __new_X cuando
+        /*  C2.13 fix (2026-06-16): NO inlinear los helpers __new_X cuando
          * el scalar-replacement de objetos GC esta activo.  El pase siembra en
          * `call __new_X` (is_new_helper_name); si el inliner lo expande antes a
          * `newobj` + `callvirt ctor`, el seed desaparece y el objeto ademas
@@ -7363,7 +7363,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* No inlinear funciones que tengan @c RAW_ASM en su body cuando
          * el RAW_ASM podria depender del calling convention especifico
          * de la callee.  Conservadoramente: skip si hay raw_asm.
-         * Phase AS inc.5: idem INLINE_ASM -- sus @c asm_reg_bindings viven
+         *  AS inc.5: idem INLINE_ASM -- sus @c asm_reg_bindings viven
          * en @c IrFunction::asm_reg_bindings (per-funcion); el inliner copia
          * el op pero NO los bindings, dejando el INLINE_ASM sin pin de
          * registros en el caller -> el JIT no podria compilarlo.  Mantener la
@@ -8002,7 +8002,7 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
 }
 
 // =========================================================================
-//  Pase ir_pass_devirt_monomorphic (Phase D.7.opt)
+//  Pase ir_pass_devirt_monomorphic ( D.7.opt)
 // =========================================================================
 
 /**
@@ -9170,7 +9170,7 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::TAILCALL:
     case IrOp::CALLSUPER:
     case IrOp::RAW_ASM:
-    // Phase AS inc.3: INLINE_ASM lee/escribe los registros register() y
+    //  AS inc.3: INLINE_ASM lee/escribe los registros register() y
     // posiblemente memoria.  Barrera de scheduling para que el scheduler
     // NO mueva LOADs/STOREs de las vars register-bound a traves del asm
     // (un LOAD post-asm debe leer lo que el asm escribio, no el init).
@@ -9222,7 +9222,7 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::FULFILL_HLT:
     case IrOp::MSGSEND:
     case IrOp::MSGRECV:
-    // Recuperados fase B: instrucciones que LEEN structs de params
+    // Recuperados   instrucciones que LEEN structs de params
     // construidos por STOREs previos.  Sin barrera, el scheduler puede
     // moverlas antes de los STOREs y leer basura.  Cubre tambien las
     // operaciones GC/atomic/static que mutan estado global.
@@ -10124,7 +10124,7 @@ bool ir_pass_inline_closures(IrModule &mod) {
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level == OptLevel::O0) return; // sin optimizacion
 
-    /* Phase D.7.opt: inline a nivel modulo ANTES del fix-point loop.
+    /*  D.7.opt: inline a nivel modulo ANTES del fix-point loop.
      * Despues del inline, los passes per-function se re-aplican sobre
      * el codigo expandido.
      *
@@ -10143,7 +10143,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         ir_pass_inline_closures(mod);
     }
 
-    /* Phase D.jit-mem-model AUTO-PROMOTE: marca ALLOCAs que fluyen a
+    /*  D.jit-mem-model AUTO-PROMOTE: marca ALLOCAs que fluyen a
      * CALLN como is_host_ptr=true.  El JIT selector las emite en host
      * stack; el ptr resultante es directamente dereferenciable por
      * funciones nativas (Win API, libc, etc.).  Sin esto, `&local`
@@ -10207,7 +10207,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         }
     }
 
-    // Fase 4: conjunto de callees TOTALMENTE PUROS (cierre interproc del modelo
+    //   conjunto de callees TOTALMENTE PUROS (cierre interproc del modelo
     // de efectos) para relajar la barrera de CALL en el DSE.  Se computa UNA vez
     // (la pureza total se PRESERVA bajo optimizacion -> sound usar el pre-opt).
     // Conocimiento que el DSE por si solo no puede tener; se lo da EffectAnalysis.
@@ -10403,7 +10403,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
              * con control de flujo).  Semantica-preservante. */
             if (allow_inline && ir_pass_inline_multiblock(mod)) any = true;
 
-            /* Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
+            /*  C2.13: Scalar Replacement de objetos GC no-escapantes.
              * Corre DESPUES del inline (que junta el alloc + los field-access
              * en la misma fn).  Sus reescrituras (loads -> trunc/mov/const)
              * las limpia el const_fold/dce de la siguiente iteracion del
@@ -10457,7 +10457,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         }
     }
 
-    /* Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.  Corre
+    /*  C2.13: DETECCION (log-only) de objetos GC no-escapantes.  Corre
      * tras el fix-point (con el IR ya inlineado + optimizado, que es donde el
      * escape es visible: el alloc + los field-access estan en la misma fn).
      * No transforma el IR; solo loguea bajo VESTA_ESCAPE_DEBUG. */

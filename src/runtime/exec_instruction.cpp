@@ -25,7 +25,7 @@
 #include <cstdio>
 #include "runtime/host_alloca_tracker.h" // Sprint MMM-ext leak-fix
 #include "loader/oop_types.h"
-#include "loader/loader.h"         // Phase M.sandbox: check_cap_at_pc + Caps
+#include "loader/loader.h"         //  M.sandbox: check_cap_at_pc + Caps
 #include "jit/auto_jit.h"          // D.5-callvm-hook: lookup_jit_code_at_pc
 #include "jit/interp_jit_bridge.h" // D.5-callvm-hook: enter_jit
 #include "jit/naked_native.h"      // Bug 198: fp nativo (naked) via callvmr
@@ -404,7 +404,7 @@ void exec_instr_pop(ProcessVM *vm, const DecodedInstr &instr) {
  * exception catching (no captura segfault crudo).
  */
 void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr) {
-    // Phase M.sandbox: comprobar la capability FFI_CALL del modulo
+    //  M.sandbox: comprobar la capability FFI_CALL del modulo
     // propietario del PC actual.  En modo default (sin --vx-caps) el
     // check es un fast path (todos los modulos unrestricted) y permite
     // siempre.  Si el sandbox del modulo NO concede ffi:call, abortar

@@ -9,7 +9,7 @@
  * @file shared_handle_table.h
  * @brief Tabla global lock-free de handles para objetos del SharedHeap.
  *
- * Diseno (Phase Z.5)
+ * Diseno ( Z.5)
  * ==================
  *
  * - **Indice global por VM**: una sola tabla compartida por todos los
@@ -174,7 +174,7 @@ class SharedHandleTable {
     uint32_t chunk_count() const noexcept;
 
     // ----------------------------------------------------------------
-    // Phase Z.10 ext: mark/sweep STW del SharedHeap.
+    //  Z.10 ext: mark/sweep STW del SharedHeap.
     //
     // El bitmap @c mark_bits_ es paralelo al array de slots; tiene 1
     // bit por slot.  Cero overhead durante operacion normal (solo se

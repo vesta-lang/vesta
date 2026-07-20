@@ -109,7 +109,7 @@ static bool eval_builtin_concept(const TypeChecker &tc, const std::string &name,
         return k == PrimitiveKind::ARRAY || k == PrimitiveKind::STRING ||
                comptime_has_method(tc, t, "iter") ||
                comptime_has_method(tc, t, "next");
-    // Shareable (Phase Z): objetos GC + value-types compartibles.
+    // Shareable ( Z): objetos GC + value-types compartibles.
     if (name == "Shareable")
         return comptime_is_class(t) || comptime_is_struct(tc, t) || is_prim;
 

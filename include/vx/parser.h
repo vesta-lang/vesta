@@ -99,7 +99,7 @@ class Parser {
     Parser(Lexer &lex, Diagnostics &diags);
 
     /**
-     * @brief Phase M.L8: registra un alias de tipo conocido (typedef
+     * @brief  M.L8: registra un alias de tipo conocido (typedef
      * importado de otro modulo via @c .vxi) ANTES de parsear.  El
      * @c looks_like_cast lo usa para reconocer @c (Name)expr como un
      * cast.  Idempotente: insertar el mismo nombre dos veces es no-op.
@@ -276,7 +276,7 @@ class Parser {
     /// @brief Parsea @c import "path" [as alias] [only A, B];
     /// @param is_public_reexport @c true si vino precedido de @c public.
     std::unique_ptr<ast::ImportDecl> parse_import_decl(bool is_public_reexport);
-    /// @brief Parsea @c "namespace foo { decls }" (Phase M.7.c).
+    /// @brief Parsea @c "namespace foo { decls }" ( M.7.c).
     std::unique_ptr<ast::NamespaceDecl> parse_namespace_decl();
     /// #cross-module-generics: captura el texto fuente de una plantilla/concepto
     /// (top-level o dentro de un namespace) en @c generic_template_exports.
@@ -416,7 +416,7 @@ class Parser {
     std::unique_ptr<ast::Stmt> parse_throw_stmt();
     std::unique_ptr<ast::Stmt> parse_synchronized_stmt();
     std::unique_ptr<ast::Stmt>
-    parse_asm_stmt(); ///< Phase AS: asm [quals] { ... } clobbers(...)
+    parse_asm_stmt(); ///<  AS: asm [quals] { ... } clobbers(...)
     std::unique_ptr<ast::Stmt> parse_expr_stmt();
 
     // -----------------------------------------------------------------
@@ -481,7 +481,7 @@ class Parser {
         const noexcept;
 
     /**
-     * @brief Phase AS inc.2: decide si el statement actual es un var-decl
+     * @brief  AS inc.2: decide si el statement actual es un var-decl
      *        con storage-class @c register("reg").
      *
      * Reconoce el patron EXACTO @c register @c ( @c "reg" @c ) seguido de
@@ -526,9 +526,9 @@ class Parser {
     /// en @c parse_postfix al construir un @c CallExpr para hacer
     /// raw-text capture en las posiciones marcadas.
     ///
-    /// Limitacion Phase A: el @Macro debe estar declarado ANTES de su
+    /// Limitacion  A: el @Macro debe estar declarado ANTES de su
     /// llamada en el archivo (single-pass parser). Forward refs requieren
-    /// un pre-scanner (Phase B futura).
+    /// un pre-scanner ( B futura).
     std::unordered_map<std::string, std::vector<int>> macro_expr_params_;
 
     /**
@@ -692,7 +692,7 @@ class Parser {
     /// un struct conocido.
     std::unordered_set<std::string> declared_structs_;
 
-    /// Phase M.L24: flag indicando si la ultima invocacion de
+    ///  M.L24: flag indicando si la ultima invocacion de
     /// @c parse_top_level_decl skipeo la decl por @c @Target no
     /// matcheado.  @c parse_program lo consulta para evitar
     /// llamar a @c synchronize() (que descartaria tokens validos
@@ -703,7 +703,7 @@ class Parser {
     /// ModuleNode::no_exceptions -> todas las funciones lo heredan.
     bool module_no_exceptions_ = false;
 
-    /// Phase M6.a L.3: visibilidad pendiente capturada en
+    ///  M6.a L.3: visibilidad pendiente capturada en
     /// @c parse_top_level_decl.  Los sub-parsers que produzcan un
     /// nodo top-level llaman @c apply_pending_visibility_ al final
     /// antes de devolver el nodo.  Valores: 0 = sin keyword (mantener
@@ -719,7 +719,7 @@ class Parser {
     /// No-op si @c pending_visibility_ == 0.
     void apply_pending_visibility(ast::Node *n) noexcept;
 
-    /// Phase M.L24: descarta una decl top-level cuya @Target no matcheo.
+    ///  M.L24: descarta una decl top-level cuya @Target no matcheo.
     /// Consume tokens hasta el final natural de la decl ({ ... } o ;).
     void skip_target_skipped_decl();
 };

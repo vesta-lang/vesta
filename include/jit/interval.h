@@ -8,7 +8,7 @@
 /**
  * @file jit/interval.h
  * @brief Construccion de live intervals sobre MachineIR para el register
- *        allocator (Phase D.7, commit 2).  Ver doc/REGALLOC.md.
+ *        allocator ( D.7, commit 2).  Ver doc/REGALLOC.md.
  *
  * Un *live interval* describe, para cada registro virtual, EN QUE POSICIONES
  * lineales del codigo esta vivo (puede tener "holes": muere y revive).  Es la
@@ -76,12 +76,12 @@ struct LiveInterval {
     RegClass cls = RegClass::GP;   ///< clase (GP/FP)
     std::vector<LiveRange> ranges; ///< rangos vivos, ordenados/disjuntos
     std::vector<uint32_t> uses;    ///< posiciones de uso (ascendente)
-    /// Phase D.7 commit 6: categoria GC.  0 = no GC; 1+ = StackmapGcKind+1
+    ///  D.7 commit 6: categoria GC.  0 = no GC; 1+ = StackmapGcKind+1
     /// (1=HANDLE, 2=HOSTPTR, 3=STRING).  Si != 0 y el intervalo cruza un
     /// call, el allocator lo FUERZA a un slot (enfoque A) para que el GC
     /// lo describa via stackmap y lo escanee del stack.
     uint8_t gc_kind = 0;
-    /// Phase AS inc.5: registro fisico FORZADO (precoloreo), o -1 si libre.
+    ///  AS inc.5: registro fisico FORZADO (precoloreo), o -1 si libre.
     /// Lo poblea @c build_intervals desde @c MFunction::vreg_fixed.  El
     /// @c linear_scan asigna este fisico exacto al intervalo de forma
     /// INCONDICIONAL (override del cross-call: el pin puede ser caller-saved
@@ -160,7 +160,7 @@ struct IntervalResult {
     std::vector<uint32_t> call_positions;
     /// Posicion lineal maxima + 1 (tamano del espacio de posiciones).
     uint32_t max_pos = 0;
-    /// Phase AS inc.5e: clobbers de registros fisicos por posicion de un
+    ///  AS inc.5e: clobbers de registros fisicos por posicion de un
     /// INLINE_ASM_RAW.  El @c linear_scan excluye estos fisicos para los
     /// vregs NO-precoloreados cuyo intervalo cubre @c pos -- protege los
     /// clobbers de callee-saved (r12-r15) que el call-position (que solo

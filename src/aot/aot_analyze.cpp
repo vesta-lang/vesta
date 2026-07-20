@@ -10,7 +10,7 @@
 
 /**
  * @file aot/aot_analyze.cpp
- * @brief Implementacion de Phase AOT.1 -- analisis is_pure_native.
+ * @brief Implementacion de  AOT.1 -- analisis is_pure_native.
  *
  * La clasificacion vive en un @c switch sobre @c ir::IrOp.  No es un hot path
  * (corre una vez por compilacion AOT, no por instruccion ejecutada), por lo
@@ -180,7 +180,7 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::ATOMIC_ST_I64:
     case IrOp::ATOMIC_CAS_I64:
     case IrOp::ATOMIC_ADD_I64:
-    // -- ensamblador host incrustado (Phase AS) --
+    // -- ensamblador host incrustado ( AS) --
     case IrOp::INLINE_ASM:
     // -- asm opaco liftado: emite bytes nativos (ensamblados de su plantilla) --
     case IrOp::ASM_MICRO:
@@ -245,7 +245,7 @@ static const char *aot_runtime_subsystem(IrOp op) noexcept {
     // baja a un MOV.  PURE_NATIVE (no caen aqui).
     case IrOp::GC_PROMOTE:
     case IrOp::GC_DEMOTE:
-    case IrOp::SHARED_STAT: return "memoria compartida (Phase Z runtime)";
+    case IrOp::SHARED_STAT: return "memoria compartida ( Z runtime)";
     case IrOp::GETSTATIC:
     case IrOp::SETSTATIC:
         return "campos estaticos de clase (ClassInfo runtime)";
@@ -405,9 +405,9 @@ bool aot_op_allowed(IrOp op, const AotTarget &target) noexcept {
     // RAW_ASM es ensamblador de la VM (texto .vel): no tiene equivalente
     // nativo en NINGUN tier (ni siquiera FULL, que enlaza el runtime pero
     // igual compila el codigo a maquina).  El IR moderno no deberia
-    // emitirlo (Phase 2c lo elimino); defensa por si reaparece.
+    // emitirlo ( 2c lo elimino); defensa por si reaparece.
     if (op == IrOp::RAW_ASM) return false;
-    // Excepciones auto-hospedadas (Phase AOT, vx_exc.vx): el THROW baja a
+    // Excepciones auto-hospedadas ( AOT, vx_exc.vx): el THROW baja a
     // un CALL a __vx_throw (setjmp/longjmp, sin VM runtime) -> es un simbolo
     // del linker, valido en CUALQUIER tier (Bare/Embed/Full) cuando las
     // excepciones estan habilitadas.  El try/catch lowering ya no emite

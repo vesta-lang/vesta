@@ -1,4 +1,4 @@
-// Phase AS (inline-asm nativo ejecutado por el JIT de VestaVM).
+//  AS (inline-asm nativo ejecutado por el JIT de VestaVM).
 //
 // Cuenta los bits a 1 de un valor usando la instruccion x86 POPCNT,
 // escrita como inline-asm NASM Intel + storage-class register("reg").

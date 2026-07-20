@@ -672,9 +672,9 @@ perf report
 
 ## Roadmap de performance
 
-Phase D+ (JIT C2 con regalloc, AOT, PGO):
+ D+ (JIT C2 con regalloc, AOT, PGO):
 
-| Phase | Esperado                                  |
+|  | Esperado                                  |
 | :---: | :---------------------------------------- |
 | D.5   | Tiered dispatch + OSR (warm-up agresivo)  |
 | D.7-8 | C2 con regalloc real + escape analysis    |

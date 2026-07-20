@@ -54,10 +54,10 @@
  *
  * = Phases =
  *
- * Phase D.1.a (este header): tipos + lifetime.  NO emite bytes aun.
- * Phase D.1.b: instruction selector @c ssa_ir::IrFunction -> @c MFunction.
- * Phase D.1.c: encoder @c MFunction -> @c std::vector<uint8_t>.
- * Phase D.1.d: label resolution + relocations.
+ *  D.1.a (este header): tipos + lifetime.  NO emite bytes aun.
+ *  D.1.b: instruction selector @c ssa_ir::IrFunction -> @c MFunction.
+ *  D.1.c: encoder @c MFunction -> @c std::vector<uint8_t>.
+ *  D.1.d: label resolution + relocations.
  */
 
 #ifndef VESTA_JIT_MACHINE_IR_H
@@ -97,7 +97,7 @@ namespace jit {
  */
 /**
  * @enum RegClass
- * @brief Clase de un registro (virtual o fisico).  Phase D.7.
+ * @brief Clase de un registro (virtual o fisico).   D.7.
  *
  * El register allocator asigna cada clase de forma INDEPENDIENTE: un
  * vreg GP solo puede ir a un fisico GP, un vreg FP solo a un fisico FP.
@@ -116,7 +116,7 @@ enum class RegClass : uint8_t {
 /**
  * @enum AbiKind
  * @brief Convencion con la que se genera el prologue/epilogue y el paso de
- *        argumentos de una funcion JIT (Phase D.7).
+ *        argumentos de una funcion JIT ( D.7).
  */
 enum class AbiKind : uint8_t {
     HOST_LEAF = 0, ///< funcion hoja host: args en arg_regs, return en RAX
@@ -227,7 +227,7 @@ enum class MOperandKind : uint8_t {
     LABEL = 5,     ///< label_id (para JMP/JCC/CALL relativos)
     REL_RT = 6,    ///< runtime entry slot (puntero resuelto en link)
     VREG =
-        7 ///< registro VIRTUAL (Phase D.7): id en @c value, clase en @c flags
+        7 ///< registro VIRTUAL ( D.7): id en @c value, clase en @c flags
 };
 
 /**
@@ -312,7 +312,7 @@ struct MOperand {
     }
 
     /**
-     * @brief Construye un operando de registro VIRTUAL (Phase D.7).
+     * @brief Construye un operando de registro VIRTUAL ( D.7).
      *
      * El id del vreg vive en @c value (no en @c reg, que es u8 y se
      * reserva para fisicos 0..63).  La clase (GP/FP) se guarda en el
@@ -540,7 +540,7 @@ enum class MOp : uint8_t {
     STORE_VM = 83,  ///< vm_mem[addr] = val (page-cache inline + fallback).
                     ///< src1 = addr_vreg, src2 = val_vreg,
                     ///< dst = imm64_idx(&vm_write_u<w>); flags = width.
-    ALLOCA_VM = 84, ///< Fase 2: dst = vaddr a `size` bytes reservados en
+    ALLOCA_VM = 84, ///<   dst = vaddr a `size` bytes reservados en
                     ///< el VM stack del proceso (proc->stack_pointer).
                     ///< dst = dst_vreg, src1 = imm32(size).  El
                     ///< prologue salva el VM-RSP y el epilogue lo
@@ -558,7 +558,7 @@ enum class MOp : uint8_t {
      * self-tail-call; src1 = imm64_idx(addr) para tail-call cross-fn. */
     TAILCALL = 85,
 
-    /* Pseudo (Phase AS inc.5): bloque de inline-asm nativo.  src1 =
+    /* Pseudo ( AS inc.5): bloque de inline-asm nativo.  src1 =
      * IMM32(blob_idx) -> indice en @c MFunction::asm_blobs.  El encoder
      * apendea los bytes ya ensamblados (via @c vx::g_asm_backend) verbatim
      * al code cache.  No tiene operandos vreg propios: los inputs/outputs
@@ -569,7 +569,7 @@ enum class MOp : uint8_t {
      * posicion (ver 5c). */
     INLINE_ASM_RAW = 86,
 
-    /* Pseudo AOT (Phase AOT.3 Paso 2b-ii): referencias a simbolos que el
+    /* Pseudo AOT ( AOT.3 Paso 2b-ii): referencias a simbolos que el
      * encoder emite con un placeholder + una @c MReloc, y que el driver
      * parchea tras el layout de @c .text/.rodata.  Solo se generan en el
      * codegen AOT (HOST_LEAF standalone); el JIT en proceso resuelve las
@@ -612,7 +612,7 @@ enum class MOp : uint8_t {
              ///< + `mov r10,[r10+r11*8]` + `lea dst,[r10+var@secrel]`
              ///< (SECREL32).  Usa r10/r11 (scratch reservados) -> dst libre.
 
-    /* FP-regalloc (Phase AOT C1 float, 2026-06-17): movimiento de datos
+    /* FP-regalloc ( AOT C1 float, 2026-06-17): movimiento de datos
      * f64/f32 entre XMM regs y entre XMM y memoria (spills, param-load/store,
      * float CONST).  A diferencia de ADDSD/etc (reg-reg only), MOVSD/MOVSS
      * aceptan un operando de memoria -> el rewrite los usa para materializar
@@ -1048,7 +1048,7 @@ struct MInstr {
         return i;
     }
 
-    /** @brief INLINE_ASM_RAW: bloque de inline-asm nativo (Phase AS inc.5).
+    /** @brief INLINE_ASM_RAW: bloque de inline-asm nativo ( AS inc.5).
      *  @p blob_idx = indice en @c MFunction::asm_blobs con los bytes ya
      *  ensamblados + la info de liveness/clobbers.  El idx viaja como IMM32
      *  en @c src1 (no es un vreg). */
@@ -1253,7 +1253,7 @@ struct MFixup {
 /**
  * @enum MRelocKind
  * @brief Tipo de relocation que el codegen AOT deja sin resolver en una
- *        funcion compilada de forma aislada (Phase AOT.3 Paso 2b-ii).
+ *        funcion compilada de forma aislada ( AOT.3 Paso 2b-ii).
  *
  * A diferencia de @c MFixup (intra-funcion: el encoder lo resuelve solo,
  * conoce el destino), una @c MReloc referencia un SIMBOLO cuya direccion
@@ -1395,7 +1395,7 @@ struct Stackmap {
 
 /**
  * @struct AsmBlob
- * @brief Bloque de inline-asm nativo ya ensamblado (Phase AS inc.5).
+ * @brief Bloque de inline-asm nativo ya ensamblado ( AS inc.5).
  *
  * Lo referencia un @c MInstr de op @c INLINE_ASM_RAW via el indice en
  * @c MFunction::asm_blobs.  @c bytes es la salida de @c vx::g_asm_backend
@@ -1429,7 +1429,7 @@ struct AsmBlob {
     /// Solo-inspeccion: offset relativo -> linea .vx de cada instruccion del
     /// asm (para atribuir cada instr a su linea real, no al `asm {` global).
     std::vector<std::pair<uint32_t, uint32_t>> insn_lines;
-    /// Phase AS inc.6: simbolos PROPIOS referenciados desde el asm (`jmp
+    ///  AS inc.6: simbolos PROPIOS referenciados desde el asm (`jmp
     /// [global]`, `mov rax, fn`, ...).  @c offset es RELATIVO al inicio del
     /// blob; el encoder lo reubica al offset de la funcion y emite un MReloc
     /// (DATA_REL32 si @c rip_relative, ABS64 si imm).  @c symbol es el nombre
@@ -1495,11 +1495,11 @@ struct MFunction {
     std::vector<MBlock> blocks;
     std::vector<uint64_t> imm64_pool;
     std::vector<MFixup> fixups;
-    /// Phase AOT.3 Paso 2b-ii: tabla de simbolos referenciados por las
+    ///  AOT.3 Paso 2b-ii: tabla de simbolos referenciados por las
     /// @c MReloc de esta funcion (nombres de funciones del modulo y de
     /// datos de .rodata).  Indexada por @c MReloc::sym_idx.
     std::vector<std::string> reloc_symbols;
-    /// Phase AOT.3 Paso 2b-ii: relocations sin resolver que el encoder
+    ///  AOT.3 Paso 2b-ii: relocations sin resolver que el encoder
     /// emite (CALL cross-funcion, refs a .rodata).  @c patch_at es relativo
     /// al inicio del codigo de ESTA funcion; el driver lo reubica al
     /// concatenar las funciones en @c .text.
@@ -1538,7 +1538,7 @@ struct MFunction {
     /// (auto_jit, runtime, AOT normal) NO paga nada: el encoder ni mira la
     /// tabla y los bytes emitidos son identicos.
     bool emit_line_map = false;
-    /// Phase NR: `@Naked` -- suprime prologo/epilogo Y ret implicito en el
+    ///  NR: `@Naked` -- suprime prologo/epilogo Y ret implicito en el
     /// rewrite-to-physical.  El cuerpo (asm) provee su propia salida
     /// (ret/iretq).  Propagado desde @c IrFunction::is_naked por vreg-select.
     bool naked = false;
@@ -1569,12 +1569,12 @@ struct MFunction {
     /// el encoder.
     std::vector<size_t> self_ref_byte_offsets;
 
-    /// Phase D.7 (regalloc por vregs): numero de registros virtuales
+    ///  D.7 (regalloc por vregs): numero de registros virtuales
     /// reservados en esta funcion.  Los ids son densos 0..vreg_count-1.
     /// Solo se usa en el path VREG (flag @c VESTA_JIT_VREGS); el path de
     /// slots lo deja en 0.
     uint32_t vreg_count = 0;
-    /// OSR (Phase D.8): numero de valores IR originales (== fn.values.size()
+    /// OSR ( D.8): numero de valores IR originales (== fn.values.size()
     /// al compilar).  Los vregs [0, ir_value_count) corresponden 1:1 a IR
     /// value ids (mapeo identidad en @c vr()); los vregs >= ir_value_count
     /// son temporales internos del selector (intra-instruccion, nunca vivos
@@ -1583,18 +1583,18 @@ struct MFunction {
     /// C2 (el clon C2 preserva los IR VIDs), garantizando que C1 escribe y
     /// C2 lee la misma celda del buffer para el mismo valor logico.
     uint32_t ir_value_count = 0;
-    /// Phase D.7: clase (GP/FP) de cada registro virtual, indexado por
+    ///  D.7: clase (GP/FP) de cada registro virtual, indexado por
     /// vreg id.  @c vreg_class.size() == @c vreg_count.  El register
     /// allocator la consulta para asignar del pool fisico correcto.
     std::vector<RegClass> vreg_class;
-    /// Phase D.7 commit 5f: 1 si el vreg contiene un valor GESTIONADO por
+    ///  D.7 commit 5f: 1 si el vreg contiene un valor GESTIONADO por
     /// el GC (handle/host_ptr a objeto GC).  Lo poblea el selector desde
     /// @c IrValue::is_gc_object.  El pipeline lo usa para rechazar (sin
     /// stackmaps todavia) funciones donde un valor GC esta VIVO a traves
     /// de un call -> el GC no veria esa raiz si esta en un registro.
     /// @c vreg_is_gc.size() == @c vreg_count cuando esta poblado.
     std::vector<uint8_t> vreg_is_gc;
-    /// Phase AS inc.5: registro fisico FORZADO (precoloreo) de un vreg, o
+    ///  AS inc.5: registro fisico FORZADO (precoloreo) de un vreg, o
     /// -1 si libre.  SPARSE: no se mantiene paralelo a @c vreg_count; el
     /// selector solo lo redimensiona/poblea para los vregs register-bound de
     /// un inline-asm.  @c build_intervals lo copia a @c LiveInterval::fixed_reg
@@ -1609,11 +1609,11 @@ struct MFunction {
     /// @c LiveInterval::reg_required; el linear-scan desaloja una victima en
     /// vez de derramar el propio intervalo.
     std::vector<uint8_t> vreg_reg_required;
-    /// Phase AS inc.5: bloques de inline-asm.  Indexados por el IMM32 de la
+    ///  AS inc.5: bloques de inline-asm.  Indexados por el IMM32 de la
     /// MInstr @c INLINE_ASM_RAW (@c src1.value).
     std::vector<AsmBlob> asm_blobs;
 
-    /// Phase AOT.3 Paso 2b: vreg ids de los parametros de la funcion, en
+    ///  AOT.3 Paso 2b: vreg ids de los parametros de la funcion, en
     /// orden de la convencion de llamada.  Solo lo usa el rewrite en ABI
     /// HOST_LEAF: los params llegan en los @c arg_regs del ABI host y se
     /// copian a su ubicacion fisica con un parallel-move en el prologo (en
@@ -1622,7 +1622,7 @@ struct MFunction {
     std::vector<uint32_t> param_vregs;
 
     /** @brief Marca el vreg @p vid como precoloreado al fisico @p phys
-     *  (Phase AS inc.5).  Redimensiona @c vreg_fixed perezosamente. */
+     *  ( AS inc.5).  Redimensiona @c vreg_fixed perezosamente. */
     void set_vreg_fixed(uint32_t vid, uint8_t phys) {
         if (vreg_fixed.size() <= vid) vreg_fixed.resize(vid + 1, -1);
         vreg_fixed[vid] = static_cast<int8_t>(phys);

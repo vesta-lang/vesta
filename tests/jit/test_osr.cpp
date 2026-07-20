@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_osr.cpp
- * @brief Test de aislamiento del OSR-entry (on-stack replacement, Phase D.8,
+ * @brief Test de aislamiento del OSR-entry (on-stack replacement,  D.8,
  * 2b).
  *
  * Construye un loop `sum(n) = 0+1+...+(n-1)` en SSA IR, lo compila por el path
@@ -189,7 +189,7 @@ static LoopVids build_sum_loop(ir::IrFunction &fn) {
 }
 
 int main() {
-    std::printf("=== test_osr (Phase D.8 2b: OSR-entry en aislamiento) ===\n");
+    std::printf("=== test_osr ( D.8 2b: OSR-entry en aislamiento) ===\n");
 
     ir::IrFunction fn;
     const LoopVids v = build_sum_loop(fn);

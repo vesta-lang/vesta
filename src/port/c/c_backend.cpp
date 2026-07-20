@@ -2547,7 +2547,7 @@ const ir::AsmRegBinding *CBackend::reg_binding_for(const EmitContext &ctx,
 
 void CBackend::emit_local_decl(EmitContext &ctx, ir::IrValueId id,
                                const ir::IrValue &value) {
-    // Phase AS inc.3: si este value es el slot ALLOCA de una variable
+    //  AS inc.3: si este value es el slot ALLOCA de una variable
     // register("reg"), declararlo como variable C ESCALAR con el
     // register-pin de GCC (no como void* a un slot de memoria).  Sus
     // LOAD/STORE se traducen a accesos directos (emit_load/emit_store) y
@@ -2832,7 +2832,7 @@ void CBackend::emit_convert(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
 
 void CBackend::emit_alloca(EmitContext &ctx, ir::IrValueId dst,
                            uint64_t size_bytes) {
-    // Phase AS inc.3: un ALLOCA register-bound NO reserva storage; su
+    //  AS inc.3: un ALLOCA register-bound NO reserva storage; su
     // variable C ya se declaro con register-pin en emit_local_decl.
     if (reg_binding_for(ctx, dst)) {
         return;
@@ -2925,7 +2925,7 @@ void CBackend::emit_load(EmitContext &ctx, ir::IrValueId dst,
                          ir::IrValueId addr, ir::IrType t, bool is_host_ptr) {
     (void)is_host_ptr;
     emit_assign_lhs(ctx, dst);
-    // Phase AS inc.3: LOAD desde un slot register-bound = leer la variable
+    //  AS inc.3: LOAD desde un slot register-bound = leer la variable
     // C register directamente (no deref de un puntero).
     if (reg_binding_for(ctx, addr)) {
         ctx.out << "v" << addr << ";\n";
@@ -2947,7 +2947,7 @@ void CBackend::emit_store(EmitContext &ctx, ir::IrValueId val,
                           ir::IrValueId addr, ir::IrType t, bool is_host_ptr) {
     (void)is_host_ptr;
     ctx.indent();
-    // Phase AS inc.3: STORE a un slot register-bound = asignar la variable
+    //  AS inc.3: STORE a un slot register-bound = asignar la variable
     // C register directamente.
     if (reg_binding_for(ctx, addr)) {
         ctx.out << "v" << addr << " = " << cast_for(t, false)
@@ -2965,7 +2965,7 @@ void CBackend::emit_store(EmitContext &ctx, ir::IrValueId val,
 }
 
 void CBackend::emit_inline_asm(EmitContext &ctx, const ir::IrInstr &ins) {
-    // Phase AS inc.3: materializar IrOp::INLINE_ASM como GCC extended asm.
+    //  AS inc.3: materializar IrOp::INLINE_ASM como GCC extended asm.
     //   imm bits 0..5 = quals/efectos (volatile/nomem/preserves_flags/
     //   pure/clobbers_memory/clobbers_flags); bits 8..31 = asm-id (indice
     //   en fn->asm_clobber_lists).  func_name = cuerpo NASM Intel verbatim.

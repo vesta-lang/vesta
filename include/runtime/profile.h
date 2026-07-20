@@ -8,7 +8,7 @@
  *
  * Sistema de instrumentacion runtime que recolecta tres tipos de
  * informacion del programa en ejecucion, necesaria para que el C2 JIT
- * (Phase D.8) tome decisiones especulativas seguras:
+ * ( D.8) tome decisiones especulativas seguras:
  *
  *   1. Branch frequency (taken / not_taken counts en BR_COND/jcc).
  *      Permite layout de codigo + branch hints en codegen.
@@ -46,7 +46,7 @@
  *              (class_name string + count u64) x n_types]
  *   Allocs:    [pc u64][count u64]
  *
- * Phase D.10 PGO persistence carga el `.vprof` al startup para
+ *  D.10 PGO persistence carga el `.vprof` al startup para
  * warm-start del C2 (compile preemptive de fns hot del run anterior).
  *
  * = Concurrencia =
@@ -334,7 +334,7 @@ void profile_callvirt(uint64_t pc, loader::ClassInfo *class_ptr);
  *
  * Llamado desde @c exec_instr_newobj y @c exec_instr_gcalloc.
  * Util para identificar hot allocs candidatos a stack allocation
- * por escape analysis en C2 (Phase D.8.b).
+ * por escape analysis en C2 ( D.8.b).
  *
  * @param pc  PC del NEWOBJ/GC_ALLOC.
  */

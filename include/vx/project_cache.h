@@ -1,6 +1,6 @@
 /**
  * @file project_cache.h
- * @brief Phase M5.B - cache del @c .velb final del proyecto.
+ * @brief  M5.B - cache del @c .velb final del proyecto.
  *
  * Cache a nivel de bytecode-final: si nada cambio en el root + deps
  * recursivos + opciones de compile, el siguiente @c vm @c --vx es un
@@ -36,7 +36,7 @@
 
 namespace vx {
 
-/// Phase M5.B: opciones que afectan el output del compile.  Cualquier
+///  M5.B: opciones que afectan el output del compile.  Cualquier
 /// cambio en estos campos invalida el cache (se incluye en opts_hash).
 struct ProjectCacheKey {
     int opt_level = 1;
@@ -46,7 +46,7 @@ struct ProjectCacheKey {
     std::string port_target;     ///< "" si no es port; "c", "java", etc.
 };
 
-/// Phase M5.B: entrada por modulo en el cache file.  Tras un compile
+///  M5.B: entrada por modulo en el cache file.  Tras un compile
 /// exitoso, el caller persiste @c path + @c source_hash de cada modulo
 /// participante (root + deps recursivos).
 struct ProjectCacheDep {
@@ -54,7 +54,7 @@ struct ProjectCacheDep {
     uint64_t source_hash; ///< FNV-1a 64 del source crudo.
 };
 
-/// Phase M5.B: API publica.
+///  M5.B: API publica.
 ///
 /// @brief Computa el path donde se cachearia el .velb del proyecto.
 /// @param root_path  Path canonico del root.

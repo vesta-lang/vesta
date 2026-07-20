@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Phase AOT.5 / gc<T> -- enlace standalone de un programa con GC opt-in usando
+ AOT.5 / gc<T> -- enlace standalone de un programa con GC opt-in usando
 NUESTRO linker (vm --link), sin g++/ld externos.
 
 Escenario (PE, nativo Windows):

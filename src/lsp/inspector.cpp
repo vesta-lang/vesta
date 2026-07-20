@@ -1181,7 +1181,7 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
     InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
 
-    if (phase == "pre") {
+    if ( == "pre") {
         // El IR pre-opt NO esta en el CompileResult cacheado por defecto:
         // exige recompilar con emit_ir_preopt.  Cachear por (uri, hash).
         const uint64_t h = fnv1a_hash(text);
@@ -1207,7 +1207,7 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
         return {{"text", std::move(rendered)}};
     }
 
-    // phase "post" (o cualquier otra): con target activo recompilar fresco
+    //  "post" (o cualquier otra): con target activo recompilar fresco
     // (el cache del motor es host); si no, reutilizar el cache del motor.
     ir::IrModule mod;
     bool got = false;

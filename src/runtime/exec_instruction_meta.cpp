@@ -561,6 +561,23 @@ void exec_instr_mld(ProcessVM *vm, const DecodedInstr &instr) {
         default: val = vm->vm_mem.read_u64(addr); break;
         }
     }
+    // Banco FP (bit 4): el valor cargado va DIRECTO al banco ZMM como float,
+    // sin pasar por GP + bitcast.  Los bits leidos SON la representacion IEEE;
+    // se reinterpretan (no se convierten) al escribir en el ZMM.  El sign_ext
+    // no aplica a floats.
+    if (m.flags & 0x10) {
+        ZmmRegister &z = vm->registers.zmm[m.reg];
+        if (m.width == 4) {
+            float f;
+            std::memcpy(&f, &val, 4);
+            z.write_f32(f);
+        } else {
+            double d;
+            std::memcpy(&d, &val, 8);
+            z.write_f64(d);
+        }
+        return;
+    }
     if (m.flags & 0x08) { // sign_extend para anchos < 8
         switch (m.width) {
         case 1:
@@ -585,7 +602,23 @@ void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr) {
     const auto &m = instr.data_instruction.mem_full;
     const uint64_t addr =
         mem_full_addr(vm, m.base, m.disp, m.flags, m.index, m.scale);
-    const uint64_t val = vm->registers.regs[m.reg].qword();
+    // Banco FP (bit 4): el valor a escribir se lee DIRECTO del banco ZMM como
+    // float, sin bitcast a GP.  Se reinterpretan los bits IEEE (no se convierte).
+    uint64_t val;
+    if (m.flags & 0x10) {
+        const ZmmRegister &z = vm->registers.zmm[m.reg];
+        if (m.width == 4) {
+            const float f = z.read_f32();
+            uint32_t u;
+            std::memcpy(&u, &f, 4);
+            val = u;
+        } else {
+            const double d = z.read_f64();
+            std::memcpy(&val, &d, 8);
+        }
+    } else {
+        val = vm->registers.regs[m.reg].qword();
+    }
     if (m.flags & 0x01) { // host
         std::memcpy(reinterpret_cast<void *>(addr), &val,
                     m.width <= 8 ? m.width : 8);

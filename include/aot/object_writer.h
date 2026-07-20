@@ -10,7 +10,7 @@
 
 /**
  * @file aot/object_writer.h
- * @brief Phase AOT.4 -- emisor de ejecutables nativos (fachada C++ del shim).
+ * @brief  AOT.4 -- emisor de ejecutables nativos (fachada C++ del shim).
  *
  * @c ObjectWriter es una fachada C++ CONFIGURABLE sobre la ABI C
  * @c aot_emit_shim.h (que a su vez usa LibPEparse).  El usuario define sus

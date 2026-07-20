@@ -1,6 +1,6 @@
 /**
  * @file namespace_flatten.cpp
- * @brief Pre-pass que aplana @c NamespaceDecl inline (Phase M.7.c).
+ * @brief Pre-pass que aplana @c NamespaceDecl inline ( M.7.c).
  *
  * Transforma el AST tras parsear y antes del TypeChecker:
  *   1. Encuentra todos los @c NamespaceDecl top-level (y anidados).
@@ -32,7 +32,7 @@ namespace vx {
 
 namespace {
 
-/// Phase NS.1: convierte un path de namespace PUNTEADO (`std.collections`) a su
+///  NS.1: convierte un path de namespace PUNTEADO (`std.collections`) a su
 /// forma MANGLED con separador `__` (`std__collections`).  Los nombres de un
 /// solo segmento (M.7.c) quedan intactos.  Se usa SOLO al construir el prefijo
 /// fisico de mangling; el nombre HUMANO (para resolucion / acceso qualified)
