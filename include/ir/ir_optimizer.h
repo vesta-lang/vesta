@@ -643,7 +643,7 @@ bool ir_pass_cse(IrFunction &fn);
  *        tiene; se lo aporta EffectAnalysis.  nullptr = comportamiento clasico
  *        (toda CALL es barrera).
  */
-bool ir_pass_dse(IrFunction &fn,
+bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
                  const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
@@ -728,7 +728,7 @@ bool ir_pass_load_narrow(IrFunction &fn);
  *
  * @return true si reordeno al menos un basic block.
  */
-bool ir_pass_schedule(IrFunction &fn,
+bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
                       const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**

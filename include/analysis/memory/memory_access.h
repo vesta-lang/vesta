@@ -14,6 +14,12 @@
  *        EffectAnalysis, ...): ninguno reimplementa el switch LOAD/STORE/
  *        GETFIELD/ARRAY_x/MEMCPY ni su propio access_bytes.  Asi todos hablan
  *        el mismo idioma y una op nueva se modela en UN sitio.
+ *
+ * REGLA 1 del framework (base de hechos compartida): un pase CONSUME este
+ * vocabulario + la tabla points-to (que RECIBE), nunca reimplementa el switch
+ * ni reconstruye la base de hechos.  Un analisis nuevo aporta conocimiento
+ * DISTINTO sobre la MISMA base; no reemplaza a un especializado.  Ver el bloque
+ * de REGLAS RECTORAS en src/ir/ir_optimizer.cpp (ir_optimize).
  */
 #ifndef ANALYSIS_MEMORY_MEMORY_ACCESS_H
 #define ANALYSIS_MEMORY_MEMORY_ACCESS_H

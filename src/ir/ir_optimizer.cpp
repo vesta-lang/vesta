@@ -5805,7 +5805,7 @@ bool ir_pass_const_fold(IrFunction &fn) {
 //
 // Ahorro: en codigo generado por frontend Vesta se ven STOREs de zero seguidos
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
-bool ir_pass_dse(IrFunction &fn,
+bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                  const std::unordered_set<std::string> *pure_callees) {
     bool changed = false;
 
@@ -5854,17 +5854,21 @@ bool ir_pass_dse(IrFunction &fn,
     std::unordered_map<IrValueId, RootKind> root_kind;
 
     if (g_dse_unified) {
-        // Fase 3: resolucion desde el RESOLVEDOR COMPARTIDO.  Solo las raices
-        // que el DSE razona con precision (Stack=ALLOCA, Heap=alloc-site) con
-        // OFFSET EXACTO entran en addr_of; el resto (Global/ArgDerived/Unknown/
-        // offset inexacto) no tiene entrada -> el DSE los trata como barrera,
-        // igual que con su fixpoint privado.  Downstream sin cambios.
-        analysis::IrFacts facts = analysis::build_ir_facts(fn);
-        analysis::PointsTo pt = analysis::compute_points_to(fn, facts);
+        // Fase 3: resolucion desde el RESOLVEDOR COMPARTIDO.  El DSE NO
+        // construye la tabla points-to: la RECIBE del AnalysisManager (Regla 1);
+        // si no se la dan (llamada suelta), la construye localmente como
+        // fallback.  Solo las raices que el DSE razona con precision (Stack=
+        // ALLOCA, Heap=alloc-site) con OFFSET EXACTO entran en addr_of; el resto
+        // (Global/ArgDerived/Unknown/inexacto) no tiene entrada -> barrera.
+        analysis::PointsTo local_pt;
+        const analysis::PointsTo &upt =
+            pt ? *pt
+               : (local_pt = analysis::compute_points_to(
+                      fn, analysis::build_ir_facts(fn)));
         using MK = analysis::effects::AbstractLoc::Kind;
         for (IrValueId v = 0;
-             v < static_cast<IrValueId>(pt.loc.size()); ++v) {
-            const analysis::PointsToEntry &e = pt.loc[v];
+             v < static_cast<IrValueId>(upt.loc.size()); ++v) {
+            const analysis::PointsToEntry &e = upt.loc[v];
             if (!e.off_exact) continue; // whole-root/inexact -> barrera
             RootKind k = RootKind::NONE;
             if (e.kind == MK::Stack) k = RootKind::STACK;
@@ -9043,7 +9047,7 @@ static bool is_sched_terminator(IrOp op) {
            op == IrOp::THROW;
 }
 
-bool ir_pass_schedule(IrFunction &fn,
+bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
                       const std::unordered_set<std::string> *pure_callees) {
     bool changed = false;
 
@@ -9063,10 +9067,15 @@ bool ir_pass_schedule(IrFunction &fn,
         return !ins.func_name.empty() && pure_callees->count(ins.func_name) > 0;
     };
 
-    // Modelo de memoria UNICO para las hazards del DAG (alias-aware, gated).
-    analysis::PointsTo sched_pt;
-    if (g_sched_alias)
-        sched_pt = analysis::compute_points_to(fn, analysis::build_ir_facts(fn));
+    // Modelo de memoria UNICO para las hazards del DAG (alias-aware, gated).  El
+    // scheduler NO construye la tabla points-to: la RECIBE del AnalysisManager
+    // (Regla 1); fallback local si es una llamada suelta.
+    analysis::PointsTo sched_local_pt;
+    const analysis::PointsTo &sched_pt =
+        pt ? *pt
+           : (g_sched_alias ? (sched_local_pt = analysis::compute_points_to(
+                                   fn, analysis::build_ir_facts(fn)))
+                            : sched_local_pt);
     // Ancho de acceso por tipo (para el alias por rango de LOAD/STORE).
     auto sched_access_bytes = [](IrType t) -> int32_t {
         return analysis::memory_access_size(t); // UNICA verdad compartida
@@ -9930,6 +9939,51 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         }
     }
 
+    // =====================================================================
+    // REGLAS RECTORAS del framework de analisis/optimizacion (cerradas 2026-07-20).  Condicionan todo el codigo de aqui en adelante:
+    //
+    // REGLA 1 (base de hechos compartida): "un solo modelo" NO es "un solo
+    //   analisis".  Es UNA infraestructura donde cada analisis aporta
+    //   conocimiento DISTINTO (Effect: que efectos; Alias/PointsTo: pueden
+    //   aliasar; Escape: escapa; Range: que valores) y TODOS comparten la misma
+    //   BASE DE HECHOS (IRFacts, PointsTo).  Un analisis nuevo debe APORTAR algo
+    //   que ninguno existente pueda conocer; NUNCA reemplazar a un especializado
+    //   (el DSE consume la alias compartida pero conserva su cobertura/
+    //   forwarding).  Corolario: un pase CONSUME la base de hechos, no la
+    //   CONSTRUYE (por eso el AnalysisManager la provee aqui, en UN sitio).
+    //
+    // REGLA 2 (nivel de la optimizacion): cada optimizacion se hace en el NIVEL
+    //   donde la informacion esta disponible de forma NATURAL y con MENOR COSTE
+    //   de obtencion.  IR = semantico, ISA-INDEPENDIENTE (pureza, alias, DSE,
+    //   LICM, GVN, escape: la info existe aqui de forma natural y barata --
+    //   incluso la ASA liftea asm->IR a la misma base de hechos).  MachineIR =
+    //   microarquitectural, POR-target (latencias, puertos, register pressure,
+    //   renaming, spill).  Los DOS schedulers -- semantico (IR, definitivo para
+    //   el interprete) y microarquitectural (machine_sched) -- COOPERAN: el
+    //   semantico expone ILP que el de maquina no puede reconstruir; el de
+    //   maquina lo explota segun la microarquitectura.  No compiten.
+    // =====================================================================
+    //
+    // AnalysisManager: PROVEE la tabla points-to (base de hechos compartida)
+    // cacheada por funcion.  Ningun consumidor (LICM/DSE/scheduler) la
+    // construye -- la RECIBEN de aqui (Regla 1).  pt_invalidate se llama antes
+    // de cada consumidor porque los pases previos mutaron el IR (los hechos
+    // caducan); asi cada uno recibe una tabla FRESCA.  El manager cachea la
+    // construccion en UN sitio y prepara la incrementalidad futura.
+    analysis::AnalysisManager am;
+    auto pt_of = [&](IrFunction &fn) -> const analysis::PointsTo & {
+        return am.get_or_compute<analysis::PointsToAnalysis, analysis::PointsTo>(
+            fn.name, [&]() {
+                const analysis::IrFacts &f =
+                    am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
+                        fn.name, [&]() { return analysis::build_ir_facts(fn); });
+                return analysis::compute_points_to(fn, f);
+            });
+    };
+    auto pt_invalidate = [&](IrFunction &fn) {
+        am.invalidate<analysis::IRFactsAnalysis>(fn.name); // cascada a PointsTo
+    };
+
     // Iterar hasta punto fijo o maximo 8 pasadas
     for (int pass = 0; pass < 8; ++pass) {
         bool any = false;
@@ -9943,13 +9997,12 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             any |= ir_pass_strength_reduction(
                 fn);                    /* mul/div/mod power-of-2 -> shifts */
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
-            // LICM RECIBE la tabla points-to (no la construye): ir_optimize la
-            // provee fresca (Regla 1).  Solo se construye si el LICM alias-aware
-            // esta activo (coste 0 en el default).
+            // LICM RECIBE la tabla points-to del AnalysisManager (no la
+            // construye).  Solo se pide si el LICM alias-aware esta activo
+            // (coste 0 en el default: el manager no computa nada).
             if (g_licm_alias) {
-                analysis::PointsTo licm_pt =
-                    analysis::compute_points_to(fn, analysis::build_ir_facts(fn));
-                any |= ir_pass_licm(fn, &licm_pt, &pure_callees);
+                pt_invalidate(fn); // fresca: los pases previos mutaron
+                any |= ir_pass_licm(fn, &pt_of(fn), &pure_callees);
             } else {
                 any |= ir_pass_licm(fn); /* LICM con dominators reales */
             }
@@ -9965,7 +10018,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 any |= ir_pass_inline_loop_header(fn);
                 // Dead store elimination: limpia STOREs muertos consecutivos.
                 // Con Fase 4, las CALL a callees puros no cortan el forwarding.
-                any |= ir_pass_dse(fn, &pure_callees);
+                // Recibe la tabla points-to del manager (no la construye).
+                if (g_dse_unified) {
+                    pt_invalidate(fn); // fresca: los pases previos mutaron
+                    any |= ir_pass_dse(fn, &pt_of(fn), &pure_callees);
+                } else {
+                    any |= ir_pass_dse(fn, nullptr, &pure_callees);
+                }
                 // Global const CSE solamente (safer than full CSE).
                 // El full CSE local tiene bugs sutiles con LOAD/STORE alias
                 // que necesitan alias analysis (deferido a O3+).
@@ -10108,7 +10167,14 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level >= OptLevel::O2) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            ir_pass_schedule(fn, &pure_callees);
+            // El scheduler RECIBE la tabla points-to del manager (no la
+            // construye).  Solo se pide si el scheduler alias-aware esta activo.
+            if (g_sched_alias) {
+                pt_invalidate(fn); // fresca: el fix-point muto el IR
+                ir_pass_schedule(fn, &pt_of(fn), &pure_callees);
+            } else {
+                ir_pass_schedule(fn, nullptr, &pure_callees);
+            }
         }
     }
 }
