@@ -220,6 +220,31 @@ uint32_t peephole_physical(MFunction &pf) {
                     changed = true;
                     continue; // el `L:` siguiente lo hace redundante
                 }
+                /* intra-bloque: `jcc X ; jmp Y ; X:` -> `j!cc Y ; X:`.  El
+                 * `je X; jmp Y` que emiten los null/bool-checks con X contiguo:
+                 * invertir la condicion (XOR 1 sobre el codigo x86) + soltar el
+                 * jmp.  Semantica identica; seguro (no toca registros). */
+                uint32_t jmp_tgt = 0;
+                if (i + 2 < b.instrs.size() && b.instrs[i].op == MOp::JCC &&
+                    b.instrs[i].src1.kind == MOperandKind::LABEL &&
+                    b.instrs[i].variant != static_cast<uint8_t>(MCond::NONE) &&
+                    is_label_jmp(b.instrs[i + 1], jmp_tgt) &&
+                    b.instrs[i + 2].op == MOp::LABEL_DEF) {
+                    const uint32_t jcc_tgt =
+                        static_cast<uint32_t>(b.instrs[i].src1.value);
+                    const uint32_t lbl =
+                        static_cast<uint32_t>(b.instrs[i + 2].src1.value);
+                    if (jcc_tgt == lbl && jmp_tgt != lbl) {
+                        MInstr inv = b.instrs[i];
+                        inv.variant ^= 1u;
+                        inv.src1 = MOperand::make_label(jmp_tgt);
+                        kept.push_back(inv); // j!cc Y
+                        ++removed;
+                        changed = true;
+                        ++i; // saltar el jmp (i+1); el X: (i+2) se procesa normal
+                        continue;
+                    }
+                }
                 kept.push_back(b.instrs[i]);
             }
             if (changed) b.instrs = std::move(kept);
@@ -233,6 +258,34 @@ uint32_t peephole_physical(MFunction &pf) {
                 next_lbl == tgt) {
                 b.instrs.pop_back();
                 ++removed;
+                continue;
+            }
+
+            /* (3) `jcc X ; jmp Y` con X = entrada del bloque SIGUIENTE
+             * (fallthrough) -> `j!cc Y` (cae natural a X, elimina el jmp).
+             * El selector emite BR_COND como `jcc taken; jmp not-taken`; cuando
+             * el bloque taken queda contiguo, la mitad es redundante.  Aparece
+             * en CADA null-check / bool-test / comparacion-a-branch.  Invertir
+             * la condicion es XOR 1 sobre el codigo x86 (E<->NE, L<->GE, ...).
+             * Semantica identica: `if cc goto X(fallthrough) else goto Y`  ==
+             * `if !cc goto Y else fall-through a X`.  Seguro (no toca regs). */
+            if (b.instrs.size() >= 2) {
+                MInstr &last = b.instrs.back();
+                MInstr &prev = b.instrs[b.instrs.size() - 2];
+                uint32_t jmp_tgt = 0, nl = 0;
+                if (is_label_jmp(last, jmp_tgt) && prev.op == MOp::JCC &&
+                    prev.src1.kind == MOperandKind::LABEL &&
+                    prev.variant != static_cast<uint8_t>(MCond::NONE) &&
+                    block_entry_label(pf.blocks[bi + 1], nl)) {
+                    const uint32_t jcc_tgt =
+                        static_cast<uint32_t>(prev.src1.value);
+                    if (jcc_tgt == nl && jmp_tgt != nl) {
+                        prev.variant ^= 1u; /* invertir condicion x86 */
+                        prev.src1 = MOperand::make_label(jmp_tgt);
+                        b.instrs.pop_back();
+                        ++removed;
+                    }
+                }
             }
         }
     }

@@ -2,80 +2,124 @@
 // SSA IR pre-optimizacion (frontend output)
 // ============================================
 // SSA IR - VestaVM
-@module bench_struct_field
+@module bench_branch_unpredict
 
 @format velb
 
 @function main() -> i32 {
 entry_0:
-    %v = alloca.i8 12
-    %1 = const.i64 0
-    store %1, %v
-    %2 = const.i64 8
-    %3 = add.i64 %v, %2
-    %4 = const.i32 0
-    store %4, %3
-    %5 = const.i64 1
-    %6 = trunc.i32 %5
-    store %6, %v
-    %7 = const.i64 2
-    %8 = trunc.i32 %7
-    %9 = const.i64 4
-    %10 = add.i64 %v, %9
-    store %8, %10
-    %11 = const.i64 3
-    %12 = trunc.i32 %11
-    %13 = const.i64 8
-    %14 = add.i64 %v, %13
-    store %12, %14
-    %15 = const.i64 0
-    %sum = trunc.i32 %15
-    %17 = const.i64 0
-    %i = trunc.i32 %17
+    %0 = const.i64 1
+    %rng = bitcast.u64 %0
+    %a = const.i64 0
+    %b = const.i64 0
+    %c = const.i64 0
+    %d = const.i64 0
+    %6 = const.i64 0
+    %i = trunc.i32 %6
     br while_header_1
 while_header_1:
-    %19 = phi.i32 [%i, entry_0] [%52, while_body_2]
-    %20 = phi.i32 [%sum, entry_0] [%50, while_body_2]
-    %21 = const.i64 30000000
-    %22 = sext.i64 %19
-    %23 = cmp.lt.bool %22, %21
-    br.cond %23, while_body_2, while_exit_3
+    %8 = phi.i64 [%a, entry_0] [%39, if_merge_15]
+    %9 = phi.i64 [%b, entry_0] [%50, if_merge_15]
+    %10 = phi.i64 [%c, entry_0] [%61, if_merge_15]
+    %11 = phi.i64 [%d, entry_0] [%72, if_merge_15]
+    %12 = phi.i32 [%i, entry_0] [%74, if_merge_15]
+    %13 = phi.u64 [%rng, entry_0] [%28, if_merge_15]
+    %14 = const.i64 10000000
+    %15 = sext.i64 %12
+    %16 = cmp.lt.bool %15, %14
+    br.cond %16, while_body_2, while_exit_3
 while_body_2:
-    %24 = load.i32 %v
-    %25 = const.i32 1
-    %26 = add.i32 %24, %25
-    store %26, %v
-    %27 = const.i64 4
-    %28 = add.ptr %v, %27
-    %29 = const.i64 4
-    %30 = add.ptr %v, %29
-    %31 = load.i32 %30
-    %32 = const.i32 2
-    %33 = add.i32 %31, %32
-    store %33, %28
-    %34 = const.i64 8
-    %35 = add.ptr %v, %34
-    %36 = const.i64 8
-    %37 = add.ptr %v, %36
-    %38 = load.i32 %37
-    %39 = const.i32 3
-    %40 = add.i32 %38, %39
-    store %40, %35
-    %41 = load.i32 %v
-    %42 = add.i32 %20, %41
-    %43 = const.i64 4
-    %44 = add.ptr %v, %43
-    %45 = load.i32 %44
-    %46 = add.i32 %42, %45
-    %47 = const.i64 8
-    %48 = add.ptr %v, %47
-    %49 = load.i32 %48
-    %50 = add.i32 %46, %49
-    %51 = const.i32 1
-    %52 = add.i32 %19, %51
-    br while_header_1
+    %17 = const.i64 13
+    %18 = bitcast.u64 %17
+    %19 = shl.u64 %13, %18
+    %20 = xor.u64 %13, %19
+    %21 = const.i64 7
+    %22 = bitcast.u64 %21
+    %23 = shr.u64 %20, %22
+    %24 = xor.u64 %20, %23
+    %25 = const.i64 17
+    %26 = bitcast.u64 %25
+    %27 = shl.u64 %24, %26
+    %28 = xor.u64 %24, %27
+    %29 = const.i64 1
+    %30 = bitcast.u64 %29
+    %31 = and.u64 %28, %30
+    %32 = const.i64 0
+    %33 = bitcast.u64 %32
+    %34 = cmp.ne.bool %31, %33
+    br.cond %34, if_then_4, if_else_5
 while_exit_3:
-    ret.i32 %20
+    %75 = add.i64 %8, %9
+    %76 = add.i64 %75, %10
+    %77 = add.i64 %76, %11
+    %78 = const.i64 255
+    %79 = and.i64 %77, %78
+    %80 = trunc.i32 %79
+    ret.i32 %80
+if_then_4:
+    %35 = const.i64 1
+    %36 = add.i64 %8, %35
+    br if_merge_6
+if_else_5:
+    %37 = const.i64 1
+    %38 = sub.i64 %8, %37
+    br if_merge_6
+if_merge_6:
+    %39 = phi.i64 [%36, if_then_4] [%38, if_else_5]
+    %40 = const.i64 2
+    %41 = bitcast.u64 %40
+    %42 = and.u64 %28, %41
+    %43 = const.i64 0
+    %44 = bitcast.u64 %43
+    %45 = cmp.ne.bool %42, %44
+    br.cond %45, if_then_7, if_else_8
+if_then_7:
+    %46 = const.i64 1
+    %47 = add.i64 %9, %46
+    br if_merge_9
+if_else_8:
+    %48 = const.i64 1
+    %49 = sub.i64 %9, %48
+    br if_merge_9
+if_merge_9:
+    %50 = phi.i64 [%47, if_then_7] [%49, if_else_8]
+    %51 = const.i64 4
+    %52 = bitcast.u64 %51
+    %53 = and.u64 %28, %52
+    %54 = const.i64 0
+    %55 = bitcast.u64 %54
+    %56 = cmp.ne.bool %53, %55
+    br.cond %56, if_then_10, if_else_11
+if_then_10:
+    %57 = const.i64 1
+    %58 = add.i64 %10, %57
+    br if_merge_12
+if_else_11:
+    %59 = const.i64 1
+    %60 = sub.i64 %10, %59
+    br if_merge_12
+if_merge_12:
+    %61 = phi.i64 [%58, if_then_10] [%60, if_else_11]
+    %62 = const.i64 8
+    %63 = bitcast.u64 %62
+    %64 = and.u64 %28, %63
+    %65 = const.i64 0
+    %66 = bitcast.u64 %65
+    %67 = cmp.ne.bool %64, %66
+    br.cond %67, if_then_13, if_else_14
+if_then_13:
+    %68 = const.i64 1
+    %69 = add.i64 %11, %68
+    br if_merge_15
+if_else_14:
+    %70 = const.i64 1
+    %71 = sub.i64 %11, %70
+    br if_merge_15
+if_merge_15:
+    %72 = phi.i64 [%69, if_then_13] [%71, if_else_14]
+    %73 = const.i32 1
+    %74 = add.i32 %12, %73
+    br while_header_1
 }
 
 
@@ -83,52 +127,96 @@ while_exit_3:
 // SSA IR post-optimizacion (opt_level=2)
 // ============================================
 // SSA IR - VestaVM
-@module bench_struct_field
+@module bench_branch_unpredict
 
 @format velb
 
 @function main() -> i32 {
 entry_0:
-    %6 = const.i32 1
-    %9 = const.i64 4
-    %v = alloca.i8 12
-    store %6, %v
-    %8 = const.i32 2
-    %10 = add.i64 %v, %9
-    %13 = const.i64 8
-    store %8, %10
-    %12 = const.i32 3
-    %14 = add.i64 %v, %13
-    store %12, %14
-    %sum = const.i32 0
-    %28 = add.ptr %v, %9
-    %35 = add.ptr %v, %13
-    %21 = const.i64 30000000
+    %rng = const.u64 1
+    %a = const.i64 0
+    %i = const.i32 0
+    %18 = const.u64 13
+    %22 = const.u64 7
+    %26 = const.u64 17
+    %33 = const.u64 0
+    %14 = const.i64 10000000
+    %70 = const.i64 1
+    %73 = const.i32 1
+    %63 = const.u64 8
+    %52 = const.u64 4
+    %41 = const.u64 2
     br while_header_1
 while_header_1:
-    %19 = phi.i32 [%sum, entry_0] [%52, while_body_2]
-    %20 = phi.i32 [%sum, entry_0] [%50, while_body_2]
-    %22 = sext.i64 %19
-    %23 = cmp.lt.bool %22, %21
-    br.cond %23, while_body_2, while_exit_3
+    %8 = phi.i64 [%a, entry_0] [%39, if_merge_15]
+    %9 = phi.i64 [%a, entry_0] [%50, if_merge_15]
+    %10 = phi.i64 [%a, entry_0] [%61, if_merge_15]
+    %11 = phi.i64 [%a, entry_0] [%72, if_merge_15]
+    %12 = phi.i32 [%i, entry_0] [%74, if_merge_15]
+    %13 = phi.u64 [%rng, entry_0] [%28, if_merge_15]
+    %15 = sext.i64 %12
+    %16 = cmp.lt.bool %15, %14
+    br.cond %16, while_body_2, while_exit_3
 while_body_2:
-    %24 = load.i32 %v
-    %26 = add.i32 %24, %6
-    store %26, %v
-    %31 = load.i32 %28
-    %33 = add.i32 %31, %8
-    store %33, %28
-    %38 = load.i32 %35
-    %40 = add.i32 %38, %12
-    store %40, %35
-    %41 = load.i32 %v
-    %42 = add.i32 %20, %41
-    %45 = load.i32 %28
-    %46 = add.i32 %42, %45
-    %50 = add.i32 %46, %40
-    %52 = add.i32 %19, %6
-    br while_header_1
+    %19 = shl.u64 %13, %18
+    %20 = xor.u64 %13, %19
+    %23 = shr.u64 %20, %22
+    %24 = xor.u64 %20, %23
+    %27 = shl.u64 %24, %26
+    %28 = xor.u64 %24, %27
+    %31 = and.u64 %28, %rng
+    %34 = cmp.ne.bool %31, %33
+    br.cond %34, if_then_4, if_else_5
 while_exit_3:
-    ret.i32 %20
+    %75 = add.i64 %8, %9
+    %76 = add.i64 %75, %10
+    %77 = add.i64 %76, %11
+    %78 = const.i64 255
+    %79 = and.i64 %77, %78
+    %80 = trunc.i32 %79
+    ret.i32 %80
+if_then_4:
+    %36 = add.i64 %8, %70
+    br if_merge_6
+if_else_5:
+    %38 = sub.i64 %8, %70
+    br if_merge_6
+if_merge_6:
+    %39 = phi.i64 [%36, if_then_4] [%38, if_else_5]
+    %42 = and.u64 %28, %41
+    %45 = cmp.ne.bool %42, %33
+    br.cond %45, if_then_7, if_else_8
+if_then_7:
+    %47 = add.i64 %9, %70
+    br if_merge_9
+if_else_8:
+    %49 = sub.i64 %9, %70
+    br if_merge_9
+if_merge_9:
+    %50 = phi.i64 [%47, if_then_7] [%49, if_else_8]
+    %53 = and.u64 %28, %52
+    %56 = cmp.ne.bool %53, %33
+    br.cond %56, if_then_10, if_else_11
+if_then_10:
+    %58 = add.i64 %10, %70
+    br if_merge_12
+if_else_11:
+    %60 = sub.i64 %10, %70
+    br if_merge_12
+if_merge_12:
+    %61 = phi.i64 [%58, if_then_10] [%60, if_else_11]
+    %64 = and.u64 %28, %63
+    %67 = cmp.ne.bool %64, %33
+    br.cond %67, if_then_13, if_else_14
+if_then_13:
+    %69 = add.i64 %11, %70
+    br if_merge_15
+if_else_14:
+    %71 = sub.i64 %11, %70
+    br if_merge_15
+if_merge_15:
+    %72 = phi.i64 [%69, if_then_13] [%71, if_else_14]
+    %74 = add.i32 %12, %73
+    br while_header_1
 }
 
