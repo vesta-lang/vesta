@@ -42,9 +42,13 @@ void ensure_profile_loaded() {
     if (p && p[0] != '\0') load_branch_profile(p);
 }
 
-// --- Parametros del modelo de coste (target-neutrales por ahora) -----------
-constexpr double kMispredictPenalty = 15.0; ///< ciclos perdidos por fallo
-constexpr double kCmovLatency = 2.0;        ///< latencia del cmov (camino critico)
+// --- Parametros del modelo de coste (ajustables por microarquitectura) -----
+// El rol "TargetPredictor": distintas uarch tienen distinto penalty de fallo de
+// prediccion y latencia del cmov (p.ej. cmov de 1 ciclo en Zen vs 2 en algunas
+// Intel; penalty ~15-20 segun profundidad del pipeline).  set_target_cost_model
+// los ajusta; los defaults son un x86-64 generico.
+double g_mispredict_penalty = 15.0; ///< ciclos perdidos por fallo de prediccion
+double g_cmov_latency = 2.0;        ///< latencia del cmov (camino critico)
 constexpr double kDefaultPMispredict = 0.25; ///< sin predictor -> incertidumbre
 
 /// @brief Localiza la instruccion que define @p vid, o nullptr.
@@ -177,6 +181,106 @@ PredictorResult predict_const_compare(const IrFunction &fn, IrValueId cond) {
     return r;
 }
 
+/// @brief true si @p op es una comparacion relacional (< <= > >=, con/sin signo).
+bool is_relational(IrOp op) {
+    switch (op) {
+    case IrOp::CMP_LT:
+    case IrOp::CMP_LE:
+    case IrOp::CMP_GT:
+    case IrOp::CMP_GE:
+    case IrOp::CMP_ULT:
+    case IrOp::CMP_UGT:
+    case IrOp::CMP_ULE:
+    case IrOp::CMP_UGE: return true;
+    default: return false;
+    }
+}
+
+/// @brief true si @p start depende (backward) de @p target (bounded).
+bool value_reaches(const IrFunction &fn, IrValueId start, IrValueId target) {
+    if (start == IR_NO_VALUE || target == IR_NO_VALUE) return false;
+    IrValueId stack[64];
+    int sp = 0;
+    stack[sp++] = start;
+    int budget = 256;
+    while (sp > 0 && budget-- > 0) {
+        const IrValueId v = stack[--sp];
+        if (v == target) return true;
+        const IrInstr *d = find_def(fn, v);
+        if (!d) continue;
+        for (IrValueId op : d->operands)
+            if (sp < 64) stack[sp++] = op;
+    }
+    return false;
+}
+
+/**
+ * @brief Predictor de VARIABLE DE INDUCCION (loop): reconoce una comparacion
+ *        relacional @c cmp(x, y) donde @p x es un contador de loop -- definido
+ *        por @c ADD/SUB que se realimenta a si mismo (recurrencia).  La
+ *        condicion de un loop se toma N-1 veces y se falla 1 -> muy predecible.
+ */
+PredictorResult predict_loop_induction(const IrFunction &fn, IrValueId cond) {
+    PredictorResult r;
+    const IrInstr *cmp = find_def(fn, cond);
+    if (!cmp || !is_relational(cmp->op) || cmp->operands.size() != 2) return r;
+    for (int i = 0; i < 2; ++i) {
+        const IrValueId x = cmp->operands[i];
+        const IrInstr *dx = find_def(fn, x);
+        if (!dx || (dx->op != IrOp::ADD && dx->op != IrOp::SUB)) continue;
+        // x = op(a, b); si a o b vuelve a x, x es un contador que se realimenta.
+        bool recurrent = false;
+        for (IrValueId o : dx->operands)
+            if (value_reaches(fn, o, x)) { recurrent = true; break; }
+        if (recurrent) {
+            r.known = true;
+            r.p_mispredict = 0.02; // condicion de loop
+            r.confidence = 0.7;
+            r.cls = BranchClass::LoopExit;
+            return r;
+        }
+    }
+    return r;
+}
+
+/**
+ * @brief Predictor de CADENA SWITCH: @c cmp.eq(x, const) donde el MISMO @p x se
+ *        compara por igualdad contra OTRAS constantes en la funcion (cadena
+ *        if-else de un switch).  Cada @c == individual es casi siempre falso
+ *        (solo un caso matchea) -> predecible.
+ */
+PredictorResult predict_switch_chain(const IrFunction &fn, IrValueId cond) {
+    PredictorResult r;
+    const IrInstr *cmp = find_def(fn, cond);
+    if (!cmp || cmp->op != IrOp::CMP_EQ || cmp->operands.size() != 2) return r;
+    // Identificar (x, const) del cmp.
+    uint64_t cv = 0;
+    IrValueId x = IR_NO_VALUE;
+    if (as_const(fn, cmp->operands[1], cv))
+        x = cmp->operands[0];
+    else if (as_const(fn, cmp->operands[0], cv))
+        x = cmp->operands[1];
+    else
+        return r;
+    if (x == IR_NO_VALUE) return r;
+    // Contar cuantos CMP_EQ(x, otra_const) hay en la funcion.
+    int eq_count = 0;
+    for (const auto &b : fn.blocks)
+        for (const auto &ins : b.instrs) {
+            if (ins.op != IrOp::CMP_EQ || ins.operands.size() != 2) continue;
+            uint64_t k = 0;
+            if ((ins.operands[0] == x && as_const(fn, ins.operands[1], k)) ||
+                (ins.operands[1] == x && as_const(fn, ins.operands[0], k)))
+                ++eq_count;
+        }
+    if (eq_count < 2) return r; // no es una cadena
+    r.known = true;
+    r.p_mispredict = 0.06; // un caso de N matchea; el resto no-tomado
+    r.confidence = 0.55;
+    r.cls = BranchClass::AlmostNeverTaken;
+    return r;
+}
+
 /**
  * @brief Predictor de PERFIL (PGO): P(mispredict) real observado en un run,
  *        indexado por la linea fuente del branch.  Confianza muy alta: cuando
@@ -245,6 +349,8 @@ double estimate_p_mispredict(const IrFunction &fn, IrValueId cond,
     const PredictorResult preds[] = {
         predict_profile(source_line),
         predict_pointer_nullcheck(fn, cond),
+        predict_loop_induction(fn, cond),
+        predict_switch_chain(fn, cond),
         predict_data_bittest(fn, cond),
         predict_const_compare(fn, cond),
     };
@@ -265,16 +371,45 @@ bool prefer_select(const IrFunction &fn, IrValueId cond, uint32_t source_line,
         // El cmov queda en la recurrencia de loop CADA iteracion (camino
         // critico); el branch paga el stall de misprediction cada iteracion.
         // Para ramas triviales esto es CMOV_LAT vs P*penalty (cruce ~0.13).
-        score_select = kCmovLatency + 0.25 * (cost_true + cost_false);
-        score_branch = p_mis * kMispredictPenalty;
+        score_select = g_cmov_latency + 0.25 * (cost_true + cost_false);
+        score_branch = p_mis * g_mispredict_penalty;
     } else {
         // Sin recurrencia: el select especula AMBAS ramas; el branch ejecuta
         // solo la tomada y paga el fallo de prediccion.
-        score_select = cost_true + cost_false + kCmovLatency;
+        score_select = cost_true + cost_false + g_cmov_latency;
         const double avg_body = 0.5 * (cost_true + cost_false);
-        score_branch = p_mis * kMispredictPenalty + avg_body;
+        score_branch = p_mis * g_mispredict_penalty + avg_body;
     }
     return score_select < score_branch;
+}
+
+void set_target_isa(TargetIsa isa) {
+    // Presets por ISA (ciclos aproximados).  El SELECT se lowerea distinto en
+    // cada backend, con distinto coste relativo al salto:
+    switch (isa) {
+    case TargetIsa::ARM64:
+        // csel: 1 ciclo, sin dependencia de flags -> select mas atractivo.
+        g_cmov_latency = 1.0;
+        g_mispredict_penalty = 12.0;
+        break;
+    case TargetIsa::RISCV:
+        // sin cmov nativo -> secuencia branchless de varias ops -> mas caro,
+        // el branch gana mas a menudo.
+        g_cmov_latency = 4.0;
+        g_mispredict_penalty = 10.0;
+        break;
+    case TargetIsa::X86_64:
+    case TargetIsa::Generic:
+    default:
+        g_cmov_latency = 2.0;
+        g_mispredict_penalty = 15.0;
+        break;
+    }
+}
+
+void set_target_cost_model(double cmov_latency, double mispredict_penalty) {
+    if (cmov_latency > 0.0) g_cmov_latency = cmov_latency;
+    if (mispredict_penalty > 0.0) g_mispredict_penalty = mispredict_penalty;
 }
 
 int load_branch_profile(const char *path) {

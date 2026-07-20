@@ -85,6 +85,29 @@ double estimate_p_mispredict(const IrFunction &fn, IrValueId cond,
 bool prefer_select(const IrFunction &fn, IrValueId cond, uint32_t source_line,
                    int cost_true, int cost_false, bool result_loop_carried);
 
+/// @brief ISA destino, para parametrizar el coste del SELECT (rol
+///        TargetPredictor).  El SELECT es una primitiva SEMANTICA: cada backend
+///        lo baja distinto (x86 @c cmov, ARM64 @c csel, RISC-V secuencia sin
+///        salto), y su coste relativo al branch varia por ISA.
+enum class TargetIsa {
+    Generic, ///< x86-64 generico (default)
+    X86_64,  ///< cmov ~2c, con dependencia de flags
+    ARM64,   ///< csel ~1c, sin flag-hazard -> select mas favorable
+    RISCV    ///< sin cmov nativo -> secuencia mas cara -> select menos favorable
+};
+
+/**
+ * @brief Ajusta el modelo de coste (latencia del cmov/csel + penalty de fallo)
+ *        segun la ISA destino.  Multi-ISA: el mismo IR de SELECT se evalua con
+ *        el coste de la microarquitectura para la que se compila.
+ */
+void set_target_isa(TargetIsa isa);
+
+/**
+ * @brief Override fino del modelo de coste (ciclos).  0 = no cambiar ese campo.
+ */
+void set_target_cost_model(double cmov_latency, double mispredict_penalty);
+
 /**
  * @brief Carga un perfil de branches (PGO) indexado por linea fuente.
  *
