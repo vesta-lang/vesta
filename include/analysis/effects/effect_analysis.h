@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace ir {
 struct IrModule;
@@ -69,6 +70,16 @@ public:
     /// Resumen del modulo entero (mapa symbol -> summary).
     const ModuleSummary &module_summary(const ir::IrModule &mod);
 
+    /// Resumen interprocedural de TODO UN PROGRAMA (varios modulos): el cierre
+    /// del callgraph CRUZA fronteras de modulo -- un CALL a una funcion de otro
+    /// modulo se resuelve contra el mapa COMBINADO (no como externa -> top).  Es
+    /// el analisis interprocedural A NIVEL DE MoDULOS; module_summary(mod) es el
+    /// caso particular de un solo modulo.  Necesario para la compilacion
+    /// SEPARADA (cuando el IR no viene ya fusionado): el consumidor pasa todos
+    /// los modulos del programa (o sus summaries) y obtiene el cierre global.
+    const ModuleSummary &
+    program_summary(const std::vector<const ir::IrModule *> &mods);
+
     /// Lagunas de precision acumuladas (que ops faltan por modelar, donde la
     /// opacidad es fundamental).  Se puebla al construir los summaries.
     const EffectGaps &gaps() const { return gaps_; }
@@ -89,8 +100,14 @@ private:
     std::unordered_map<std::string, FunctionSummary>       summary_cache_;
     std::unordered_map<std::string, bool>                  dirty_; // fn -> sucio
     ModuleSummary                                          module_cache_;
+    ModuleSummary                                          program_cache_;
     EffectGaps                                             gaps_;
     bool module_dirty_ = true;
+
+    /// Nucleo interprocedural COMPARTIDO: computa el summary (local + cierre por
+    /// punto-fijo del callgraph) sobre las funciones de TODOS los @p mods.  Un
+    /// solo modulo -> module_summary; varios -> program_summary (cross-modulo).
+    ModuleSummary build_summary(const std::vector<const ir::IrModule *> &mods);
 
     /// Gestor de analisis: cachea los IrFacts (hechos fundacionales) por funcion
     /// para no reconstruir el def-use en cada consulta.  EffectAnalysis es el

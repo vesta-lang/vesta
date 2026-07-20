@@ -18,6 +18,10 @@
 #include "ir/ssa_ir.h"
 #include "analysis/effects/ir_effects.h"
 
+#include <deque>
+#include <unordered_set>
+#include <utility>
+
 namespace analysis {
 namespace effects {
 
@@ -145,14 +149,25 @@ void merge_callee(SemanticEffects &caller, const SemanticEffects &callee) {
 }
 } // namespace
 
-const ModuleSummary &EffectAnalysis::module_summary(const ir::IrModule &mod) {
-    if (!module_dirty_) return module_cache_;
-    module_cache_.fns.clear();
+ModuleSummary EffectAnalysis::build_summary(
+    const std::vector<const ir::IrModule *> &mods) {
+    ModuleSummary out;
+
+    // Recorre TODAS las funciones de TODOS los modulos (interproc cross-modulo).
+    auto for_each_fn = [&](auto &&f) {
+        for (const ir::IrModule *m : mods)
+            if (m)
+                for (const ir::IrFunction &fn : m->functions) f(fn);
+    };
 
     // 1) Summary LOCAL de cada funcion (efecto propio, estructura) + lagunas.
     gaps_ = EffectGaps{};
     std::unordered_map<std::string, CallInfo> calls;
-    for (const ir::IrFunction &fn : mod.functions) {
+    // El efecto/completeness LOCAL se preserva aparte: el cierre (paso 2) se
+    // recomputa SIEMPRE desde el local + callees (idempotente para el worklist).
+    std::unordered_map<std::string, SemanticEffects>      local_eff;
+    std::unordered_map<std::string, AnalysisCompleteness> local_comp;
+    for_each_fn([&](const ir::IrFunction &fn) {
         EffectAnalysisResult loc = function_local_effects(fn, &gaps_);
         FunctionSummary s;
         s.symbol = fn.name;
@@ -164,54 +179,89 @@ const ModuleSummary &EffectAnalysis::module_summary(const ir::IrModule &mod) {
         s.interproc.reaches_dynamic_call = calls[fn.name].dynamic;
         s.interproc.has_calls =
             calls[fn.name].dynamic || !calls[fn.name].static_callees.empty();
-        module_cache_.fns.emplace(fn.name, std::move(s));
-    }
+        local_eff[fn.name] = loc.effects;
+        local_comp[fn.name] = loc.completeness;
+        out.fns.emplace(fn.name, std::move(s));
+    });
 
-    // 2) Punto-fijo: closure(fn) = local(fn) U closure(callee) para cada callee.
-    //    Una llamada dinamica/nativa o a una funcion externa (no en el modulo)
-    //    hace el cierre CONSERVADOR (puede tocar mem, lanzar, alocar, I/O).
-    bool changed = true;
-    int guard = 0;
-    const int max_iters = static_cast<int>(mod.functions.size()) + 4;
-    while (changed && guard++ < max_iters * 2 + 8) {
-        changed = false;
-        for (const ir::IrFunction &fn : mod.functions) {
-            FunctionSummary &s = module_cache_.fns[fn.name];
-            SemanticEffects nc = s.semantic.local;
-            AnalysisCompleteness comp = s.completeness;
-            const CallInfo &ci = calls[fn.name];
-            // Una llamada dinamica/nativa (CALLVIRT/CALLN/...) no se puede acotar:
-            // el cierre toma el efecto TOP robusto (el local ya lo incluye via
-            // effects_of_instr, pero lo reforzamos aqui por si el local no lo
-            // subio del todo).
-            if (ci.dynamic) {
+    // 2) Punto-fijo EFICIENTE por WORKLIST (dataflow interprocedural clasico):
+    //    closure(fn) = local(fn) U closure(callee) para cada callee.  Solo se
+    //    re-procesa una funcion cuando el cierre de ALGUN callee suyo cambia
+    //    -> O(aristas del callgraph x altura del reticulo), NO O(n^2).  Un
+    //    callee ausente del mapa (externo al PROGRAMA / dinamico / nativo) hace
+    //    el cierre CONSERVADOR (TOP robusto).  Con varios modulos, un callee de
+    //    otro modulo SI esta en el mapa -> se resuelve (interproc cross-modulo).
+    // Reverse-callgraph: callee -> callers (para re-encolar dependientes).
+    std::unordered_map<std::string, std::vector<std::string>> callers;
+    for (const auto &kv : calls)
+        for (const std::string &callee : kv.second.static_callees)
+            callers[callee].push_back(kv.first);
+
+    // Recomputa el cierre de una funcion desde su local + los cierres de callees.
+    // Devuelve true si cambio (para propagar a sus callers).
+    auto recompute = [&](const std::string &name) -> bool {
+        FunctionSummary &s = out.fns[name];
+        SemanticEffects nc = local_eff[name];
+        AnalysisCompleteness comp = local_comp[name];
+        const CallInfo &ci = calls[name];
+        auto raise = [&] {
+            if (comp == AnalysisCompleteness::Complete)
+                comp = AnalysisCompleteness::Conservative;
+        };
+        if (ci.dynamic) { nc = join(nc, SemanticEffects::top()); raise(); }
+        for (const std::string &callee : ci.static_callees) {
+            auto it = out.fns.find(callee);
+            if (it == out.fns.end()) { // externo al programa -> TOP robusto
                 nc = join(nc, SemanticEffects::top());
-                if (comp == AnalysisCompleteness::Complete)
-                    comp = AnalysisCompleteness::Conservative;
+                raise();
+                continue;
             }
-            for (const std::string &callee : ci.static_callees) {
-                auto it = module_cache_.fns.find(callee);
-                if (it == module_cache_.fns.end()) {
-                    // Callee EXTERNO al modulo -> efecto TOP robusto (fundamental).
-                    nc = join(nc, SemanticEffects::top());
-                    if (comp == AnalysisCompleteness::Complete)
-                        comp = AnalysisCompleteness::Conservative;
-                    continue;
-                }
-                merge_callee(nc, it->second.semantic.closure);
-                if (uint8_t(it->second.completeness) > uint8_t(comp))
-                    comp = it->second.completeness;
-            }
-            if (!(nc == s.semantic.closure) || comp != s.completeness) {
-                s.semantic.closure = nc;
-                s.completeness = comp;
-                changed = true;
-            }
+            merge_callee(nc, it->second.semantic.closure);
+            if (uint8_t(it->second.completeness) > uint8_t(comp))
+                comp = it->second.completeness;
+        }
+        if (!(nc == s.semantic.closure) || comp != s.completeness) {
+            s.semantic.closure = nc;
+            s.completeness = comp;
+            return true;
+        }
+        return false;
+    };
+
+    std::deque<std::string>         work;
+    std::unordered_set<std::string> in_work;
+    for (const auto &kv : out.fns) {
+        work.push_back(kv.first);
+        in_work.insert(kv.first);
+    }
+    while (!work.empty()) {
+        std::string name = std::move(work.front());
+        work.pop_front();
+        in_work.erase(name);
+        if (recompute(name)) {
+            // El cierre de 'name' cambio -> sus callers pueden cambiar.
+            auto cit = callers.find(name);
+            if (cit != callers.end())
+                for (const std::string &caller : cit->second)
+                    if (in_work.insert(caller).second) work.push_back(caller);
         }
     }
+    return out;
+}
 
+const ModuleSummary &EffectAnalysis::module_summary(const ir::IrModule &mod) {
+    if (!module_dirty_) return module_cache_;
+    module_cache_ = build_summary({&mod});
     module_dirty_ = false;
     return module_cache_;
+}
+
+const ModuleSummary &EffectAnalysis::program_summary(
+    const std::vector<const ir::IrModule *> &mods) {
+    // Interprocedural a nivel de PROGRAMA (varios modulos).  No se cachea por
+    // dirty (se recomputa: se invoca puntualmente para el analisis whole-program).
+    program_cache_ = build_summary(mods);
+    return program_cache_;
 }
 
 void EffectAnalysis::invalidate_node(const ir::IrFunction &fn,

@@ -67,6 +67,9 @@
 
 #include "ir/ssa_ir.h"
 
+#include <string>
+#include <unordered_set>
+
 namespace ir {
 
 /**
@@ -625,8 +628,18 @@ bool ir_pass_cse(IrFunction &fn);
  * en patrones de init list, alloca-zero, etc.
  *
  * @return true si elimino al menos un STORE.
+ *
+ * @param pure_callees (opcional) conjunto de nombres de funciones cuyo efecto
+ *        transitivo es TOTALMENTE PURO (sin lecturas/escrituras de memoria, sin
+ *        may_trap/throw/allocate/block/io ni tags, Complete), segun el modelo de
+ *        efectos.  Una CALL a una de
+ *        ellas NO es barrera de memoria (el DSE puede eliminar/forwardear a
+ *        traves).  Es conocimiento INTERPROCEDURAL que el DSE por si solo no
+ *        tiene; se lo aporta EffectAnalysis.  nullptr = comportamiento clasico
+ *        (toda CALL es barrera).
  */
-bool ir_pass_dse(IrFunction &fn);
+bool ir_pass_dse(IrFunction &fn,
+                 const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Pase Const CSE Entry: deduplicacion global de constantes.

@@ -13,6 +13,7 @@
 #include "ir/ir_optimizer.h"
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
+#include "analysis/effects/effect_analysis.h"  // cierre interproc: callees puros (DSE Fase 4)
 #include <unordered_map>
 #include <map>
 #include <set>
@@ -5379,6 +5380,16 @@ static bool g_dse_unified = [] {
     return e && e[0] == '1';
 }();
 
+// Fase 4 (valor INTERPROCEDURAL del modelo de efectos): cuando esta activo, una
+// CALL a un callee TOTALMENTE PURO (segun EffectAnalysis: sin mem, sin may_*,
+// sin tags, Complete) deja de ser barrera de memoria en el DSE.  Es informacion
+// que el DSE por si solo NO puede tener (requiere el cierre interprocedural).
+// A/B via VESTA_DSE_PURE_CALLS=1; default OFF hasta validar e2e 3 modos.
+static bool g_dse_pure_calls = [] {
+    const char *e = std::getenv("VESTA_DSE_PURE_CALLS");
+    return e && e[0] == '1';
+}();
+
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
                             const analysis::PointsTo &pt, const IrInstr &ins) {
     const analysis::effects::EffectAnalysisResult r =
@@ -5772,8 +5783,18 @@ bool ir_pass_const_fold(IrFunction &fn) {
 //
 // Ahorro: en codigo generado por frontend Vesta se ven STOREs de zero seguidos
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
-bool ir_pass_dse(IrFunction &fn) {
+bool ir_pass_dse(IrFunction &fn,
+                 const std::unordered_set<std::string> *pure_callees) {
     bool changed = false;
+
+    // ¿Es esta CALL/TAILCALL a un callee TOTALMENTE PURO?  Entonces NO es
+    // barrera de memoria (conocimiento INTERPROCEDURAL del modelo de efectos:
+    // el DSE por si solo no puede saber que hace el callee).
+    auto is_pure_call = [&](const IrInstr &ins) -> bool {
+        if (!g_dse_pure_calls || !pure_callees) return false;
+        if (ins.op != IrOp::CALL && ins.op != IrOp::TAILCALL) return false;
+        return !ins.func_name.empty() && pure_callees->count(ins.func_name) > 0;
+    };
 
     // Alias-safety del store-to-load forwarding.
     //
@@ -6100,15 +6121,22 @@ bool ir_pass_dse(IrFunction &fn) {
                 pending.clear();
                 last_store_val.clear();
                 break;
-            // Side-effects/calls: limpiar (memoria puede cambiar dentro).
+            // CALL/TAILCALL a callee TOTALMENTE PURO: NO es barrera (el modelo
+            // de efectos prueba que no toca memoria ni observa nada).  Cualquier
+            // otra CALL cae al grupo de barrera de abajo.
             case IrOp::CALL:
+            case IrOp::TAILCALL:
+                if (is_pure_call(ins)) break; // no barrera
+                pending.clear();
+                last_store_val.clear();
+                break;
+            // Side-effects/calls: limpiar (memoria puede cambiar dentro).
             case IrOp::CALLN:
             case IrOp::CALLVIRT:
             case IrOp::CALLIND:
             case IrOp::CALLM:
             case IrOp::CALLITF:
             case IrOp::CALLCLOSURE:
-            case IrOp::TAILCALL:
             case IrOp::RAW_ASM:
             // Phase AS inc.3: INLINE_ASM (host asm) es opaco y puede
             // leer/escribir cualquier memoria + los registros que el
@@ -9718,6 +9746,27 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         }
     }
 
+    // Fase 4: conjunto de callees TOTALMENTE PUROS (cierre interproc del modelo
+    // de efectos) para relajar la barrera de CALL en el DSE.  Se computa UNA vez
+    // (la pureza total se PRESERVA bajo optimizacion -> sound usar el pre-opt).
+    // Conocimiento que el DSE por si solo no puede tener; se lo da EffectAnalysis.
+    std::unordered_set<std::string> pure_callees;
+    if (g_dse_pure_calls) {
+        analysis::effects::EffectAnalysis ea;
+        const analysis::effects::ModuleSummary &ms = ea.module_summary(mod);
+        for (const auto &kv : ms.fns) {
+            const analysis::effects::FunctionSummary &s = kv.second;
+            const analysis::effects::SemanticEffects &c = s.semantic.closure;
+            if (s.completeness == analysis::effects::AnalysisCompleteness::Complete &&
+                c.mem.reads.empty() && c.mem.writes.empty() && !c.may_trap &&
+                !c.may_throw && !c.may_allocate && !c.may_block && !c.may_io &&
+                c.tags.empty() &&
+                c.atomic.order == analysis::effects::MemOrder::None &&
+                !c.atomic.is_fence)
+                pure_callees.insert(kv.first);
+        }
+    }
+
     // Iterar hasta punto fijo o maximo 8 pasadas
     for (int pass = 0; pass < 8; ++pass) {
         bool any = false;
@@ -9743,7 +9792,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // Inline de header trivial de loop -> habilita decjnz fusion.
                 any |= ir_pass_inline_loop_header(fn);
                 // Dead store elimination: limpia STOREs muertos consecutivos.
-                any |= ir_pass_dse(fn);
+                // Con Fase 4, las CALL a callees puros no cortan el forwarding.
+                any |= ir_pass_dse(fn, &pure_callees);
                 // Global const CSE solamente (safer than full CSE).
                 // El full CSE local tiene bugs sutiles con LOAD/STORE alias
                 // que necesitan alias analysis (deferido a O3+).

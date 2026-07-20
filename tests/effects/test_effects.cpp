@@ -426,6 +426,56 @@ int main() {
               "gaps: FFI es fundamental, UnmodeledOp es cobertura");
     }
 
+    {
+        // Interprocedural A NIVEL DE MoDULOS (program_summary): modulo A define
+        // 'allocA' (aloca); modulo B define 'callB' que llama a 'allocA'.  Con
+        // module_summary(B) solo, 'allocA' es EXTERNA -> callB closure = top
+        // (may_throw/io/... conservador).  Con program_summary({A,B}) el callee
+        // cruza el modulo y se resuelve -> callB closure aloca pero NO es top.
+        ir::IrModule modA;
+        {
+            ir::IrFunction f;
+            f.name = "allocA";
+            uint32_t b = f.new_block("entry");
+            ir::IrValueId o = f.new_value(ir::IrType::I64);
+            add_instr(f, b, ir::IrOp::GC_ALLOC, o, {});
+            add_instr(f, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
+            modA.functions.push_back(std::move(f));
+        }
+        ir::IrModule modB;
+        {
+            ir::IrFunction f;
+            f.name = "callB";
+            uint32_t b = f.new_block("entry");
+            ir::IrInstr call{};
+            call.op = ir::IrOp::CALL;
+            call.func_name = "allocA";
+            call.dst = ir::IR_NO_VALUE;
+            f.append(b, std::move(call));
+            add_instr(f, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
+            modB.functions.push_back(std::move(f));
+        }
+        // Solo B: allocA es externa -> callB closure conservador (top: may_io).
+        {
+            EffectAnalysis ea;
+            const ModuleSummary &ms = ea.module_summary(modB);
+            check(ms.fns.at("callB").semantic.closure.may_io,
+                  "cross-mod: solo B, allocA externa -> callB closure top (may_io)");
+        }
+        // A+B: el callgraph cruza el modulo -> allocA resuelto.
+        {
+            EffectAnalysis ea;
+            const ModuleSummary &ps = ea.program_summary({&modA, &modB});
+            const FunctionSummary &cb = ps.fns.at("callB");
+            check(ps.fns.count("allocA") == 1,
+                  "cross-mod: program_summary ve allocA de otro modulo");
+            check(cb.semantic.closure.may_allocate,
+                  "cross-mod: callB closure aloca (via allocA de otro modulo)");
+            check(!cb.semantic.closure.may_io,
+                  "cross-mod: callB closure NO es top (allocA resuelto, no externa)");
+        }
+    }
+
     // =====================================================================
     // IRFacts: hechos objetivos + integracion con el AnalysisManager.
     // =====================================================================
