@@ -3025,11 +3025,18 @@ SrDom sr_compute_dom(const IrFunction &fn) {
 //  o los tipos no son consistentes -> bail (no muta nada).
 //==============================================================================
 
+//  @p stack_mode: cuando true, el "alloc" es un ALLOCA de PILA (struct
+//  value-type), NO un objeto GC.  Diferencias: (1) @p model puede ser nullptr
+//  (no hay ctor -- los STORE del init-list siembran los defs); (2) el alloc NO
+//  provee valor inicial de ningun campo -> una lectura de un campo antes de que
+//  un store lo domine hace bail ("load sin def alcanzante"), que es CORRECTO
+//  (la pila no se zero-inicializa); (3) el paso final NOPea el ALLOCA en vez de
+//  un CALL de helper.  El GC-mode (stack_mode=false) queda byte-identico.
 bool sr_mem2reg_object(
-    IrFunction &fn, const SrCtorModel &model, size_t call_bi, size_t call_ii,
+    IrFunction &fn, const SrCtorModel *model, size_t call_bi, size_t call_ii,
     IrValueId obj, const std::vector<IrValueId> &args,
     const std::unordered_map<IrValueId, uint32_t> &fieldaddr_off,
-    std::string &reason) {
+    std::string &reason, bool stack_mode = false) {
     const size_t N = fn.blocks.size();
     if (N == 0) {
         reason = "fn vacia";
@@ -3110,9 +3117,12 @@ bool sr_mem2reg_object(
 
     /* Cada offset accedido o bien lo inicializa el ctor (tipo debe coincidir) o
      * bien NO -> default-0 (el objeto GC se zero-inicializa al alocar; el init
-     * sera un CONST 0 materializado abajo). */
+     * sera un CONST 0 materializado abajo).  En stack_mode NO hay ctor: los
+     * defs vienen de los STORE explicitos (init-list); si un campo se lee antes
+     * de escribirse, el renaming hace bail (pila no zero-inicializada). */
     for (uint32_t off : offsets) {
-        const SrFieldInit *fi = model.find(off);
+        if (stack_mode) continue; /* sin modelo: los stores siembran los defs */
+        const SrFieldInit *fi = model->find(off);
         if (!fi) {
             /* Campo de usuario no inicializado -> default-0 (init = CONST 0,
              * materializado abajo).  Pero un read de la CABECERA (offset < 24:
@@ -3146,7 +3156,8 @@ bool sr_mem2reg_object(
     std::unordered_map<uint32_t, IrValueId> init_val; /* offset -> SSA value */
     std::vector<IrInstr> init_instrs; /* a insertar antes del call */
     for (uint32_t off : offsets) {
-        const SrFieldInit *fi = model.find(off);
+        if (stack_mode) break; /* pila: sin init; los stores siembran los defs */
+        const SrFieldInit *fi = model->find(off);
         const IrType T = field_type[off];
         if (!fi) {
             /* default-0: campo no inicializado por el ctor -> init = CONST 0.
@@ -3273,8 +3284,12 @@ bool sr_mem2reg_object(
     for (uint32_t off : offsets) {
         std::vector<IrBlockId> worklist;
         std::unordered_set<IrBlockId> on_work, has_phi;
-        worklist.push_back((IrBlockId)call_bi);
-        on_work.insert((IrBlockId)call_bi);
+        /* En GC-mode el alloc inicializa TODOS los campos -> es def-block.  En
+         * stack_mode el alloc no define nada (los stores del init-list si). */
+        if (!stack_mode) {
+            worklist.push_back((IrBlockId)call_bi);
+            on_work.insert((IrBlockId)call_bi);
+        }
         for (IrBlockId b : store_blocks[off]) {
             if (!on_work.count(b)) {
                 worklist.push_back(b);
@@ -3362,12 +3377,15 @@ bool sr_mem2reg_object(
         /* (b) instrucciones en orden. */
         for (size_t ii = 0; ii < fn.blocks[b].instrs.size(); ++ii) {
             const IrInstr &in = fn.blocks[b].instrs[ii];
-            /* El alloc: define todos los campos = init_val. */
+            /* El alloc: en GC-mode define todos los campos = init_val.  En
+             * stack_mode no define nada (el ALLOCA no es un load/store de campo
+             * -> classify lo ignora, y aqui no empujamos ningun def). */
             if (b == call_bi && ii == call_ii) {
-                for (uint32_t off : offsets) {
-                    stack[off].push_back(init_val[off]);
-                    pushed.push_back(off);
-                }
+                if (!stack_mode)
+                    for (uint32_t off : offsets) {
+                        stack[off].push_back(init_val[off]);
+                        pushed.push_back(off);
+                    }
                 continue;
             }
             uint32_t off;
@@ -3484,8 +3502,21 @@ bool sr_mem2reg_object(
         }
     }
 
-    /* (d) Insertar las init_instrs antes del call + NOPear el call +
-     * field-addrs. El call sigue identificable por dst==obj. */
+    /* (d) GC-mode: insertar init_instrs antes del call + NOPear el call.
+     *     stack_mode: NOPear el ALLOCA (dst==obj), sin init_instrs. */
+    if (stack_mode) {
+        for (auto &bb : fn.blocks) {
+            for (auto &in : bb.instrs) {
+                if (in.op == IrOp::ALLOCA && in.dst == obj) {
+                    in.op = IrOp::NOP;
+                    in.operands.clear();
+                    in.dst = IR_NO_VALUE;
+                    in.func_name.clear();
+                    goto done_call;
+                }
+            }
+        }
+    } else
     for (auto &bb : fn.blocks) {
         for (size_t ii = 0; ii < bb.instrs.size(); ++ii) {
             IrInstr &in = bb.instrs[ii];
@@ -3883,7 +3914,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                 env_flag_on("VESTA_NO_ESCAPE_MEM2REG");
             if (!mem2reg_off) {
                 std::string mr;
-                if (sr_mem2reg_object(fn, *model, site.block_idx, site.ins_idx,
+                if (sr_mem2reg_object(fn, model, site.block_idx, site.ins_idx,
                                       obj, args, fieldaddr_off, mr)) {
                     changed = true;
                     continue;
@@ -4078,6 +4109,185 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
         }
     }
 
+    return changed;
+}
+
+// =========================================================================
+//  Pase ir_pass_sroa_stack_structs -- SROA/mem2reg de structs value-type en
+//  PILA (ALLOCA), analogo a ir_pass_scalar_replace_gc pero sembrado en un
+//  ALLOCA en vez de un `new`.
+//
+//  Motivacion (bench struct_field 8.88x vs C): `Vec3 v = {..}; while(..) {
+//  v.x = v.x+1; ... }` mantiene los campos en MEMORIA (load/add/store por
+//  iteracion) mientras C los promueve a registros.  Este pase escalariza cada
+//  campo (offset) del ALLOCA no-capturado a forma SSA (PHIs en la frontera de
+//  dominancia + renaming Cytron), eliminando todos los load/store del loop.
+//
+//  Precondicion (whitelist estricto, MAS fuerte que "no escapa"): TODOS los
+//  usos del ALLOCA son field-access con offset CONSTANTE (`load base`,
+//  `store _, base`, o `add base, Kconst` seguido de load/store).  Cualquier
+//  otro uso (CALL, MEMCPY, PHI, func_ptr, comparacion, store-como-valor,
+//  index no-const) -> bail para ese ALLOCA.  El whitelist garantiza que
+//  vemos y podemos reemplazar TODOS los accesos a esa memoria.
+//
+//  Coste natural: nivel IR (la info -- offsets constantes + no-captura -- solo
+//  existe aqui; el codegen maquina ya no sabe que el struct no escapa).
+//  Reusa toda la maquina de sr_mem2reg_object (stack_mode=true).
+// =========================================================================
+bool ir_pass_sroa_stack_structs(IrFunction &fn) {
+    if (fn.is_native || fn.values.empty()) return false;
+    if (env_flag_on("VESTA_NO_SROA_STACK")) return false;
+
+    // GUARD SOUND: si la funcion tiene control de excepcion LOCAL
+    // (TRYENTER/LANDINGPAD -> catch handler), el CFG de sr_compute_dom NO
+    // modela la arista implicita `try-region -> handler`.  Un campo escrito
+    // antes de un punto que puede lanzar y leido en el catch parece tener def
+    // alcanzante por el edge normal, pero en el path de excepcion NO lo tiene
+    // -> mem2reg produciria un valor equivocado en el handler.  Bail la fn
+    // entera (los hot loops de perf no tienen try/catch; la ganancia se
+    // preserva).  Cuando el CFG modele aristas de excepcion, se puede afinar.
+    for (const auto &b : fn.blocks)
+        for (const auto &in : b.instrs)
+            if (in.op == IrOp::TRYENTER || in.op == IrOp::LANDINGPAD ||
+                in.op == IrOp::RETHROW)
+                return false;
+
+    const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
+    bool changed = false;
+
+    // Recolectar ALLOCAs candidatos (dst valido, no ya host_alloca -- esos van
+    // a host-stack por pasar a CALLN y el whitelist los descartaria igual).
+    struct AllocSite {
+        size_t bi, ii;
+        IrValueId base;
+    };
+    std::vector<AllocSite> sites;
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        const auto &b = fn.blocks[bi];
+        for (size_t ii = 0; ii < b.instrs.size(); ++ii) {
+            const auto &in = b.instrs[ii];
+            // NO filtramos host_alloca: en AOT el auto-promote marca las ALLOCAs
+            // locales como host-stack, y son justamente las que queremos
+            // escalarizar.  Si el ALLOCA escapa de verdad (p.ej. a CALLN), el
+            // whitelist de usos baila mas abajo.
+            if (in.op == IrOp::ALLOCA && in.dst != IR_NO_VALUE)
+                sites.push_back({bi, ii, in.dst});
+        }
+    }
+    if (sites.empty()) return false;
+
+    // Helper: lee el offset const de `add base, K` (o `add K, base`).
+    auto const_value_of = [&](IrValueId v, uint64_t &out_k) -> bool {
+        if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
+        if (fn.values[v].is_const) {
+            out_k = fn.values[v].const_val;
+            return true;
+        }
+        for (const auto &b : fn.blocks)
+            for (const auto &in : b.instrs)
+                if (in.dst == v && in.op == IrOp::CONST) {
+                    out_k = in.imm;
+                    return true;
+                }
+        return false;
+    };
+
+    for (const auto &site : sites) {
+        const IrValueId base = site.base;
+
+        // --- Whitelist de usos (identico en espiritu al de scalar_replace_gc):
+        // field-addr (`add base, Kconst`) o load/store directo (offset 0);
+        // cada field-addr solo en load/store-addr.  Cualquier otro uso -> bail.
+        std::unordered_map<IrValueId, uint32_t> fieldaddr_off;
+        bool ok = true, has_writes = false;
+        const char *why = "uso no soportado";
+
+        // Pasada A: field-addrs + load/store directos sobre `base`.
+        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
+            const auto &b = fn.blocks[bi];
+            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
+                const auto &in = b.instrs[ii];
+                // base en phi_args / func_ptr -> captura no modelable.
+                for (const auto &pa : in.phi_args)
+                    if (pa.value == base) { ok = false; why = "base en PHI"; }
+                if (in.func_ptr == base) { ok = false; why = "base en func_ptr"; }
+                if (!ok) break;
+                bool uses_base = false;
+                for (auto v : in.operands)
+                    if (v == base) { uses_base = true; break; }
+                if (!uses_base) continue;
+                if (in.op == IrOp::ADD && in.operands.size() == 2 &&
+                    in.dst != IR_NO_VALUE && in.operands[0] != in.operands[1]) {
+                    IrValueId other = (in.operands[0] == base) ? in.operands[1]
+                                                               : in.operands[0];
+                    uint64_t k;
+                    if (!const_value_of(other, k)) {
+                        ok = false; why = "field-addr offset no-const"; break;
+                    }
+                    fieldaddr_off[in.dst] = (uint32_t)k;
+                } else if (in.op == IrOp::LOAD && !in.operands.empty() &&
+                           in.operands[0] == base) {
+                    // load directo (offset 0) -- ok.
+                } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
+                           in.operands[1] == base && in.operands[0] != base) {
+                    has_writes = true; // store directo (offset 0)
+                } else {
+                    ok = false;
+                    why = "base fuera de field-access (CALL/CMP/store-val/...)";
+                    break;
+                }
+            }
+        }
+        // Pasada B: cada field-addr solo en LOAD o STORE-addr.
+        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
+            const auto &b = fn.blocks[bi];
+            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
+                const auto &in = b.instrs[ii];
+                for (const auto &pa : in.phi_args)
+                    if (fieldaddr_off.count(pa.value)) { ok = false; }
+                if (in.func_ptr != IR_NO_VALUE &&
+                    fieldaddr_off.count(in.func_ptr))
+                    ok = false;
+                if (!ok) { why = "field-addr en PHI/func_ptr"; break; }
+                IrValueId fav = IR_NO_VALUE;
+                for (auto v : in.operands)
+                    if (fieldaddr_off.count(v)) { fav = v; break; }
+                if (fav == IR_NO_VALUE) continue;
+                if (in.op == IrOp::LOAD && !in.operands.empty() &&
+                    in.operands[0] == fav) {
+                    // ok
+                } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
+                           in.operands[1] == fav && in.operands[0] != fav) {
+                    has_writes = true;
+                } else {
+                    ok = false;
+                    why = "field-addr en op no-LOAD/STORE (o como valor)";
+                }
+            }
+        }
+        if (!ok) {
+            if (dbg)
+                std::fprintf(stderr,
+                             "[sroa-stack] fn '%s': ALLOCA %%%u NO: %s\n",
+                             fn.name.c_str(), (unsigned)base, why);
+            continue;
+        }
+        // Sin escrituras => struct de pila leido sin inicializar (undef) O
+        // escalar que promote_local_allocas ya cubre -> nada que ganar.
+        if (!has_writes) continue;
+
+        std::string mr;
+        // args vacio (stack_mode ignora el modelo/args); model = nullptr.
+        if (sr_mem2reg_object(fn, /*model=*/nullptr, site.bi, site.ii, base,
+                              /*args=*/{}, fieldaddr_off, mr,
+                              /*stack_mode=*/true)) {
+            changed = true;
+        } else if (dbg) {
+            std::fprintf(stderr,
+                         "[sroa-stack] fn '%s': ALLOCA %%%u mem2reg: %s\n",
+                         fn.name.c_str(), (unsigned)base, mr.c_str());
+        }
+    }
     return changed;
 }
 
@@ -10195,6 +10405,14 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                         if (ir_pass_scalar_replace_gc(fn, mod)) any = true;
                     }
                 }
+            }
+
+            /* SROA/mem2reg de structs value-type en PILA (ALLOCA).  GC-free:
+             * escalariza campos a registros, quita load/store del hot loop.
+             * Beneficia AOT (sin GC) y JIT por igual.  Kill: VESTA_NO_SROA_STACK. */
+            for (auto &fn : mod.functions) {
+                if (fn.is_native) continue;
+                if (ir_pass_sroa_stack_structs(fn)) any = true;
             }
         }
 
