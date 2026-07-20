@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <unordered_set>
 #include <vector>
 
 namespace jit {
@@ -279,8 +280,56 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                 if (find(f) == other) return true;
         return false;
     };
+    /* ---- Grafo de interferencia PRECISO (live-at-def, Chaitin/Hack) ----
+     * El overlap de rangos LINEALES (first_overlap_from) es impreciso en dos
+     * clases: (a) hermanos de un if/else -- el diamante `%d=phi[%s,%o]` con
+     * `%s=%o+c`: la numeracion lineal no ve que %o esta vivo tras el def de %s;
+     * (b) el back-edge del loop, que no se modela como copia paralela.  El test
+     * CORRECTO: `a` interfiere `b` sii `a` esta vivo justo tras un DEF de `b`
+     * (o viceversa).  La liveness (arriba) ya es phi-aware, asi que distingue
+     * el loop (%i muerto tras `%i+1` -> coalesce OK) del diamante (%o vivo tras
+     * `%s=%o+c` -> NO coalesce).  Construccion: walk BACKWARD por bloque desde
+     * live_out; en cada def, aristas dst<->{vivos-tras-el-def}.  Los phi dsts
+     * (def en la entrada, en paralelo) NO interfieren entre si ni con sus args
+     * (each_use excluye los phi args) -> se preservan como candidatos a
+     * coalescer.  Gated con VESTA_SSA_COALESCE (el flag maestro). */
+    std::vector<std::unordered_set<uint32_t>> adj(NV);
+    {
+        std::vector<char> liveset(NV, 0);
+        for (uint32_t b = 0; b < NB; ++b) {
+            for (uint32_t v = 0; v < NV; ++v) liveset[v] = live_out[idx(b, v)];
+            const auto &ins = fn.blocks[b].instrs;
+            for (size_t j = ins.size(); j-- > 0;) {
+                const ir::IrInstr &in = ins[j];
+                if (in.dst != ir::IR_NO_VALUE && in.dst < NV) {
+                    const uint32_t d = in.dst;
+                    for (uint32_t a = 0; a < NV; ++a)
+                        if (liveset[a] && a != d) {
+                            adj[d].insert(a);
+                            adj[a].insert(d);
+                        }
+                    liveset[d] = 0; // el def mata d hacia atras
+                }
+                each_use(in, [&](ir::IrValueId u) {
+                    if (u < NV) liveset[u] = 1; // uso -> vivo antes del def
+                });
+            }
+        }
+    }
+    /* Interferencia de CLUSTERS: dos representantes interfieren sii algun par de
+     * miembros (uno de cada) tiene una arista.  Static adj sobre vregs
+     * originales; correcto porque si dos originales interfieren, sus clusters no
+     * pueden fusionarse.  Itera el cluster menor. */
     auto interfere = [&](uint32_t ra, uint32_t rb) -> bool {
-        return merged[ra].first_overlap_from(merged[rb], 0) != UINT32_MAX;
+        const uint32_t small =
+            members[ra].size() <= members[rb].size() ? ra : rb;
+        const uint32_t other = (small == ra) ? rb : ra;
+        for (uint32_t ma : members[small]) {
+            if (ma >= NV) continue;
+            for (uint32_t nb : adj[ma])
+                if (find(nb) == other) return true;
+        }
+        return false;
     };
 
     /* Posiciones de CALL en el IR (use_pos).  Un valor coalescido que cruza
@@ -380,6 +429,17 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
         return v && v[0] != '\0' && v[0] != '0';
     }();
 
+    /* Operandos del def (no-phi) de cada valor -- para la regla del diamante. */
+    std::vector<std::vector<ir::IrValueId>> def_operands(NV);
+    for (uint32_t b = 0; b < NB; ++b)
+        for (const ir::IrInstr &in : fn.blocks[b].instrs) {
+            if (in.op == ir::IrOp::PHI) continue;
+            if (in.dst == ir::IR_NO_VALUE || in.dst >= NV) continue;
+            for (ir::IrValueId u : in.operands)
+                if (u != ir::IR_NO_VALUE && u < NV)
+                    def_operands[in.dst].push_back(u);
+        }
+
     bool any = false;
     for (uint32_t b = 0; b < NB; ++b) {
         for (const ir::IrInstr &in : fn.blocks[b].instrs) {
@@ -389,6 +449,32 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                 if (d >= NV || s >= NV || d == s) continue;
                 if (iv[d].empty() || iv[s].empty()) continue;
                 if (is_phi_dst[s]) continue; // no cadenas de phis (cross-merge)
+                /* CONGRUENCIA (no interferencia): rechazar el arg `s` si su
+                 * definicion USA otro ARG `o` del MISMO phi (hermano).  Es el
+                 * diamante del acumulador condicional `%d=phi[%s=%o+c, %o]`:
+                 * %s y %o NO interfieren (ramas distintas) pero NO son el mismo
+                 * valor SSA -- unirlos en la clase de %d hace que el reg que
+                 * contiene `%o+c` deje de ser distinguible del que contiene %o
+                 * -> semantica rota.  Distincion con el loop `%i_next=%i+1`: ahi
+                 * %i_next depende del DST %i (loop-carry legitimo), NO de un
+                 * hermano arg -> ese SI coalesce.  Solo miramos dependencia de
+                 * HERMANOS (otros args del phi), no del dst. */
+                {
+                    bool sibling_dep = false;
+                    for (ir::IrValueId u : def_operands[s]) {
+                        if (u == d) continue; // dependencia del DST = loop-carry OK
+                        for (const ir::IrPhiArg &sib : in.phi_args)
+                            if (sib.value == u && u != s) { sibling_dep = true; break; }
+                        if (sibling_dep) break;
+                    }
+                    if (sibling_dep) {
+                        if (dbg)
+                            std::fprintf(stderr,
+                                "[ssa-coal] %s phi v%u<-v%u SIBLINGDEP\n",
+                                fn.name.c_str(), d, s);
+                        continue;
+                    }
+                }
                 if (non_phi_used[s]) { // arg vive fuera del phi -> puede interferir
                     if (dbg)
                         std::fprintf(stderr,
@@ -405,11 +491,23 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                                      fn.name.c_str(), d, s);
                     continue;
                 }
-                if (interfere(rd, rs) || has_forbidden(rd, rs)) {
-                    if (dbg)
-                        std::fprintf(stderr,
-                                     "[ssa-coal] %s phi v%u<-v%u REJECT\n",
-                                     fn.name.c_str(), d, s);
+                const bool itf = interfere(rd, rs);
+                const bool fbd = itf ? false : has_forbidden(rd, rs);
+                if (itf || fbd) {
+                    if (dbg) {
+                        /* Localizar la razon: INTERFERE (overlap de rangos
+                         * lineales -- el clasico falso-conflicto del back-edge
+                         * de loop no modelado como copia paralela) vs FORBIDDEN
+                         * (2-address dst<->operands[1]).  Imprimir los rangos
+                         * para ver si el overlap es solo la arista de retorno. */
+                        std::fprintf(
+                            stderr,
+                            "[ssa-coal] %s phi v%u<-v%u REJECT:%s "
+                            "rd[%u,%u) rs[%u,%u)\n",
+                            fn.name.c_str(), d, s, itf ? "INTERFERE" : "FORBIDDEN",
+                            merged[rd].start(), merged[rd].end(),
+                            merged[rs].start(), merged[rs].end());
+                    }
                     continue;
                 }
                 if (dbg)
@@ -432,27 +530,24 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
 }
 
 bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn) {
-    /* Gate: OPT-IN (default OFF).  El coalescing sobre liveness de RANGOS
-     * LINEALES casera es UNSOUND en dos clases distintas ya observadas en
-     * state_machine (-m jit):
-     *   1) phi de `rng` coalescido con `rng_next` (que vive fuera del phi) ->
-     *      corrompe el valor -> BUCLE INFINITO.  Lo ataja la regla "el phi_arg
-     *      solo se usa en phis" (seccion 4b).
-     *   2) diamante `%d = phi[%s, %o]` con `%s = %o + c` (un arg DERIVADO del
-     *      otro arg del MISMO phi): coalescer %d<-%s mientras %o vive rompe la
-     *      copia del else -> RESULTADO INCORRECTO (counts 0x967e vs 0xb7d4).
-     *      La regla single-use NO lo ataja (%s solo se usa en el phi).
-     * La numeracion lineal no modela la interferencia de hermanos en el if/else
-     * ni el back-edge del loop.  FIX REAL: construir un GRAFO DE INTERFERENCIA
-     * de verdad sobre el SSA (o reusar build_intervals de interval.cpp) en vez
-     * de la aproximacion de rangos.  Hasta entonces queda OFF (cero miscompile).
-     * Activar (medir/desarrollar el fix) con VESTA_SSA_COALESCE=1; el
-     * diff_harness caza VREG_HANG y DIVERGE, asi que el fix esta protegido. */
-    static const bool on = [] {
-        const char *en = std::getenv("VESTA_SSA_COALESCE");
+    /* DEFAULT-ON (kill: VESTA_NO_SSA_COALESCE=1).  Coalesce las congruencias de
+     * PHI (reduce el trafico de copias de reg en TODO loop con contador/
+     * acumulador + if/else/cadenas) usando un GRAFO DE INTERFERENCIA sound
+     * (live-at-def, Chaitin/Hack) construido sobre la liveness phi-aware del
+     * pase + una regla de CONGRUENCIA (no absorber un arg cuya def usa OTRO arg
+     * del mismo phi -- el diamante `%d=phi[%s=%o+c,%o]`).  Las dos clases de
+     * miscompile antiguas (el hang del phi de `rng` y el diamante del
+     * acumulador de state_machine) estan cerradas por la interferencia real +
+     * la regla de congruencia.  Prerequisitos: las copias de PHI se resuelven
+     * como PARALLEL MOVE (regalloc_rewrite) y el gen/kill de build_intervals
+     * procesa usos-antes-de-defs (sin esto, `add v,v,1` tras coalescing perdia
+     * el uso -> rango fragmentado -> corrupcion).  diff_harness: 388 OK / 0
+     * VREG_HANG/DIVERGE/CRASH (solo el asm_stack_manip inherente interp-vs-jit). */
+    static const bool off = [] {
+        const char *en = std::getenv("VESTA_NO_SSA_COALESCE");
         return en && en[0] != '\0' && en[0] != '0';
     }();
-    if (!on) return false;
+    if (off) return false;
     const std::vector<uint32_t> remap = ssa_phi_coalesce_remap(fn);
     if (remap.empty()) return false;
     const uint32_t NVAL = static_cast<uint32_t>(remap.size());

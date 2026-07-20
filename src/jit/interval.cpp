@@ -444,14 +444,26 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             if (in.op == MOp::CALL || in.op == MOp::CALL_ABS) {
                 /* posiciones de call: relleno mas abajo (necesito gi). */
             }
+            /* USOS antes que DEFS: un uso es upward-exposed (gen) si NO lo mato
+             * una instruccion PREVIA del bloque -- NUNCA el def de la MISMA
+             * instruccion (semanticamente el op lee sus srcs y LUEGO escribe el
+             * dst).  each_vreg entrega el dst (DEF) antes que los src (USE), asi
+             * que un solo pase pondria kill[v] antes de chequear el gen del uso
+             * -> para `op v, v, ..` (dst==src1, tipico TRAS ssa_coalesce que
+             * coalescio el phi loop-carried con su `v+1`) el gen del uso se
+             * suprimiria y el vreg perderia su liveness backward (rango
+             * fragmentado -> otro valor reusa su reg -> corrupcion).  DOS pases:
+             * primero todos los USOS (contra el kill de instrs previas), luego
+             * todos los DEFS. */
             each_vreg(in, [&](uint32_t v, OperandRole role) {
-                const bool is_use =
-                    (role == OperandRole::USE || role == OperandRole::USEDEF);
-                const bool is_def =
-                    (role == OperandRole::DEF || role == OperandRole::USEDEF);
-                /* gen = uso ANTES de def en el bloque (upward-exposed). */
-                if (is_use && !kill[b].test(v)) gen[b].set(v);
-                if (is_def) kill[b].set(v);
+                if ((role == OperandRole::USE ||
+                     role == OperandRole::USEDEF) &&
+                    !kill[b].test(v))
+                    gen[b].set(v);
+            });
+            each_vreg(in, [&](uint32_t v, OperandRole role) {
+                if (role == OperandRole::DEF || role == OperandRole::USEDEF)
+                    kill[b].set(v);
             });
         }
     }
@@ -530,6 +542,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             }
         }
     }
+
 
     /* ---- 3b) force_spill: vregs live-in a un sucesor EXTRA/abnormal ----
      * Deben ser memory-resident para sobrevivir al edge anormal (el throw
