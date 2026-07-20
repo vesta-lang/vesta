@@ -352,7 +352,16 @@ bool try_convert(IrFunction &fn, const BlockIndex &idx, size_t ci) {
     if (!force_all) {
         const bool loop_carried =
             merge_phi_loop_carried(fn, *M, truePred, falsePred);
-        if (!prefer_select(fn, cond, tc.ninstr, fc.ninstr, loop_carried))
+        // Linea fuente del branch (para el predictor de perfil/PGO): la del
+        // BR_COND, o la de la definicion del cond si aquel no la lleva.
+        uint32_t src_line = term->source_line;
+        if (src_line == 0) {
+            for (const auto &bb : fn.blocks)
+                for (const auto &ii : bb.instrs)
+                    if (ii.dst == cond) { src_line = ii.source_line; break; }
+        }
+        if (!prefer_select(fn, cond, src_line, tc.ninstr, fc.ninstr,
+                           loop_carried))
             return false; // el modelo prefiere el branch -> no convertir
     }
 

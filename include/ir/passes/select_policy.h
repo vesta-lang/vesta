@@ -35,6 +35,8 @@
 
 #include "ir/ssa_ir.h"
 
+#include <cstdint>
+
 namespace ir {
 
 /// @brief Clase de comportamiento de un branch (la produce un predictor).
@@ -59,25 +61,40 @@ struct PredictorResult {
 /**
  * @brief Estima P(mispredict) para la condicion @p cond ejecutando todos los
  *        predictores especializados y quedandose con el mas confiado.
- * @param fn   Funcion SSA (para rastrear la definicion de @p cond).
- * @param cond Valor booleano del branch.
+ * @param fn          Funcion SSA (para rastrear la definicion de @p cond).
+ * @param cond        Valor booleano del branch.
+ * @param source_line Linea fuente del branch (para el predictor de perfil/PGO);
+ *                    0 si no se conoce.
  * @return P(mispredict) en [0,1]; 0.25 si ningun predictor reconoce el patron.
  */
-double estimate_p_mispredict(const IrFunction &fn, IrValueId cond);
+double estimate_p_mispredict(const IrFunction &fn, IrValueId cond,
+                             uint32_t source_line);
 
 /**
  * @brief Decide si conviene la forma SELECT frente al BRANCH (modelo de coste).
  *
  * @param fn                  Funcion SSA.
  * @param cond                Valor booleano del branch.
+ * @param source_line         Linea fuente del branch (predictor de perfil).
  * @param cost_true           Coste (aprox. latencia) de la rama true.
  * @param cost_false          Coste de la rama false.
  * @param result_loop_carried true si el valor resultante realimenta una
  *                            recurrencia de loop (cmov en el camino critico).
  * @return true si el modelo prefiere SELECT; false si prefiere el branch.
  */
-bool prefer_select(const IrFunction &fn, IrValueId cond, int cost_true,
-                   int cost_false, bool result_loop_carried);
+bool prefer_select(const IrFunction &fn, IrValueId cond, uint32_t source_line,
+                   int cost_true, int cost_false, bool result_loop_carried);
+
+/**
+ * @brief Carga un perfil de branches (PGO) indexado por linea fuente.
+ *
+ * Formato de texto, una entrada por linea: @c "<source_line> <taken> <nt>".
+ * P(mispredict) = min(taken,nt)/(taken+nt).  Alimenta @c predict_profile, que
+ * DOMINA a los predictores estructurales cuando hay dato para esa linea.  Se
+ * puede cargar tambien via la variable de entorno @c VESTA_BRANCH_PROFILE.
+ * @return numero de entradas cargadas (0 si el archivo no existe/vacio).
+ */
+int load_branch_profile(const char *path);
 
 } // namespace ir
 

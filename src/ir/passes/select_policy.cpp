@@ -21,9 +21,26 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <unordered_map>
 
 namespace ir {
 namespace {
+
+// --- Perfil de branches (PGO) indexado por linea fuente --------------------
+// P(mispredict) real observado en un run instrumentado.  Cuando hay dato para
+// la linea de un branch, DOMINA a los predictores estructurales.
+std::unordered_map<uint32_t, double> g_branch_profile;
+
+/// @brief Carga perezosa desde @c VESTA_BRANCH_PROFILE la primera vez.
+void ensure_profile_loaded() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    const char *p = std::getenv("VESTA_BRANCH_PROFILE");
+    if (p && p[0] != '\0') load_branch_profile(p);
+}
 
 // --- Parametros del modelo de coste (target-neutrales por ahora) -----------
 constexpr double kMispredictPenalty = 15.0; ///< ciclos perdidos por fallo
@@ -160,12 +177,36 @@ PredictorResult predict_const_compare(const IrFunction &fn, IrValueId cond) {
     return r;
 }
 
+/**
+ * @brief Predictor de PERFIL (PGO): P(mispredict) real observado en un run,
+ *        indexado por la linea fuente del branch.  Confianza muy alta: cuando
+ *        hay dato medido, DOMINA a los predictores estructurales.
+ */
+PredictorResult predict_profile(uint32_t source_line) {
+    PredictorResult r;
+    ensure_profile_loaded();
+    if (source_line == 0 || g_branch_profile.empty()) return r;
+    auto it = g_branch_profile.find(source_line);
+    if (it == g_branch_profile.end()) return r;
+    r.known = true;
+    r.p_mispredict = it->second;
+    r.confidence = 0.95; // el dato medido manda sobre lo estructural
+    r.cls = it->second > 0.35 ? BranchClass::DataDependent
+            : it->second < 0.05 ? BranchClass::AlmostNeverTaken
+                                 : BranchClass::Unknown;
+    return r;
+}
+
 } // namespace
 
-double estimate_p_mispredict(const IrFunction &fn, IrValueId cond) {
+double estimate_p_mispredict(const IrFunction &fn, IrValueId cond,
+                             uint32_t source_line) {
     // Ejecutar todos los predictores; quedarse con el mas confiado.  Anadir un
-    // predictor nuevo (Loop/Pointer/Switch/Profile/Target) es solo sumarlo aqui.
+    // predictor nuevo (Loop/Pointer/Switch/Target) es solo sumarlo aqui; el que
+    // no reconoce el patron devuelve Unknown y no aporta.  El de PERFIL domina
+    // cuando hay dato medido.
     const PredictorResult preds[] = {
+        predict_profile(source_line),
         predict_data_bittest(fn, cond),
         predict_const_compare(fn, cond),
     };
@@ -177,9 +218,9 @@ double estimate_p_mispredict(const IrFunction &fn, IrValueId cond) {
     return best ? best->p_mispredict : kDefaultPMispredict;
 }
 
-bool prefer_select(const IrFunction &fn, IrValueId cond, int cost_true,
-                   int cost_false, bool result_loop_carried) {
-    const double p_mis = estimate_p_mispredict(fn, cond);
+bool prefer_select(const IrFunction &fn, IrValueId cond, uint32_t source_line,
+                   int cost_true, int cost_false, bool result_loop_carried) {
+    const double p_mis = estimate_p_mispredict(fn, cond, source_line);
 
     double score_branch, score_select;
     if (result_loop_carried) {
@@ -196,6 +237,24 @@ bool prefer_select(const IrFunction &fn, IrValueId cond, int cost_true,
         score_branch = p_mis * kMispredictPenalty + avg_body;
     }
     return score_select < score_branch;
+}
+
+int load_branch_profile(const char *path) {
+    if (!path) return 0;
+    std::FILE *f = std::fopen(path, "r");
+    if (!f) return 0;
+    int n = 0;
+    unsigned line = 0;
+    unsigned long long taken = 0, nt = 0;
+    while (std::fscanf(f, "%u %llu %llu", &line, &taken, &nt) == 3) {
+        const unsigned long long total = taken + nt;
+        if (line == 0 || total == 0) continue;
+        const double mn = static_cast<double>(std::min(taken, nt));
+        g_branch_profile[line] = mn / static_cast<double>(total);
+        ++n;
+    }
+    std::fclose(f);
+    return n;
 }
 
 } // namespace ir
