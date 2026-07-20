@@ -5390,6 +5390,17 @@ static bool g_dse_pure_calls = [] {
     return e && e[0] == '1';
 }();
 
+// Scheduling alias-aware (consumidor del modelo de memoria UNICO): el DAG de
+// dependencias del list-scheduler modela las hazards de memoria por may_alias
+// (dos accesos a raices DISJUNTAS no se ordenan entre si -> mas ILP) en lugar
+// del orden total conservador.  El scheduler CONSERVA su DAG/critical-path;
+// solo AFINA las aristas de memoria con la alias compartida.  A/B via
+// VESTA_SCHED_ALIAS=1; default OFF hasta validar e2e 3 modos + bench.
+static bool g_sched_alias = [] {
+    const char *e = std::getenv("VESTA_SCHED_ALIAS");
+    return e && e[0] == '1';
+}();
+
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
                             const analysis::PointsTo &pt, const IrInstr &ins) {
     const analysis::effects::EffectAnalysisResult r =
@@ -8972,9 +8983,57 @@ static bool is_sched_terminator(IrOp op) {
 bool ir_pass_schedule(IrFunction &fn) {
     bool changed = false;
 
+    // Modelo de memoria UNICO para las hazards del DAG (alias-aware, gated).
+    analysis::PointsTo sched_pt;
+    if (g_sched_alias)
+        sched_pt = analysis::compute_points_to(fn, analysis::build_ir_facts(fn));
+    // Ancho de acceso por tipo (para el alias por rango de LOAD/STORE).
+    auto sched_access_bytes = [](IrType t) -> int32_t {
+        switch (t) {
+        case IrType::I8: case IrType::U8: case IrType::BOOL: return 1;
+        case IrType::I16: case IrType::U16: return 2;
+        case IrType::I32: case IrType::U32: case IrType::F32:
+        case IrType::HANDLE: return 4;
+        default: return 8;
+        }
+    };
+    // Localizacion de un acceso de memoria: LOAD/STORE con offset+ancho precisos;
+    // field/array/len con la raiz (whole-object); MEMCPY/VEC -> Unknown (top).
+    auto sched_mem_loc =
+        [&](const IrInstr &ins) -> analysis::effects::AbstractLoc {
+        using K = analysis::effects::AbstractLoc::Kind;
+        if (ins.op == IrOp::LOAD && !ins.operands.empty())
+            return analysis::loc_of(sched_pt, ins.operands[0],
+                                    sched_access_bytes(ins.type));
+        if (ins.op == IrOp::STORE && ins.operands.size() >= 2)
+            return analysis::loc_of(sched_pt, ins.operands[1],
+                                    sched_access_bytes(ins.type));
+        if ((ins.op == IrOp::GETFIELD || ins.op == IrOp::ARRAY_LOAD ||
+             ins.op == IrOp::ARRAY_LEN || ins.op == IrOp::SETFIELD ||
+             ins.op == IrOp::ARRAY_STORE) &&
+            !ins.operands.empty())
+            return analysis::loc_of(sched_pt, ins.operands[0], 0);
+        return {K::Unknown, analysis::effects::LOC_GENERIC, 0, 0}; // MEMCPY/VEC/...
+    };
+
     for (auto &bb : fn.blocks) {
         const size_t N = bb.instrs.size();
         if (N <= 2) continue; // nada que reordenar
+
+        // Guard de SOUNDNESS del alias-aware: un bloque con asm (INLINE_ASM/
+        // ASM_MICRO/RAW_ASM) tiene ops de memoria LIGADAS A REGISTROS FISICOS
+        // (register(...)) cuyo orden es una dependencia de REGISTRO, no de alias
+        // -> el modelo de memoria no la ve.  En esos bloques se usa el orden
+        // total conservador (asm es raro; el win alias-aware es para bloques
+        // de memoria normales).
+        bool blk_has_asm = false;
+        for (const auto &ins : bb.instrs)
+            if (ins.op == IrOp::INLINE_ASM || ins.op == IrOp::ASM_MICRO ||
+                ins.op == IrOp::RAW_ASM) {
+                blk_has_asm = true;
+                break;
+            }
+        const bool use_alias = g_sched_alias && !blk_has_asm;
 
         /* Identificar prefijo de PHIs (fijo al inicio) y terminador. */
         size_t first_movable = 0;
@@ -9010,6 +9069,12 @@ bool ir_pass_schedule(IrFunction &fn) {
         long last_store = -1;
         std::vector<size_t>
             loads_after_last_store; // LOADs posteriores al ultimo store
+        // Alias-aware (gated): accesos de memoria vivos desde la ultima barrera,
+        // con su localizacion; solo se anade arista si may_alias.  Se limpian en
+        // cada barrera (la arista a la barrera subsume lo anterior).
+        struct MemAcc { size_t idx; analysis::effects::AbstractLoc loc; };
+        std::vector<MemAcc> prior_stores;
+        std::vector<MemAcc> prior_loads;
 
         auto add_edge = [&](size_t from, size_t to) {
             /* Evitar duplicados.  Sanity: from != to. */
@@ -9060,6 +9125,27 @@ bool ir_pass_schedule(IrFunction &fn) {
                 last_barrier = static_cast<long>(i);
                 last_store = static_cast<long>(i);
                 loads_after_last_store.clear();
+                prior_stores.clear();
+                prior_loads.clear();
+            } else if (use_alias && (is_st || is_ld)) {
+                /* ALIAS-AWARE: solo se ordena contra accesos previos que
+                 * PUEDEN aliasar (may_alias del modelo UNICO).  Accesos a
+                 * raices disjuntas quedan libres para reordenar -> mas ILP.
+                 * Sound: may_alias solo dice "no" cuando es DEMOSTRABLE. */
+                const analysis::effects::AbstractLoc L = sched_mem_loc(ins);
+                if (last_barrier >= 0)
+                    add_edge(static_cast<size_t>(last_barrier), i);
+                // Hazard contra STOREs previos (WAW si es store, RAW si es load).
+                for (const MemAcc &s : prior_stores)
+                    if (analysis::effects::may_alias(L, s.loc)) add_edge(s.idx, i);
+                if (is_st) {
+                    // WAR: un STORE no puede adelantar LOADs previos aliasados.
+                    for (const MemAcc &l : prior_loads)
+                        if (analysis::effects::may_alias(L, l.loc)) add_edge(l.idx, i);
+                    prior_stores.push_back({i, L});
+                } else {
+                    prior_loads.push_back({i, L});
+                }
             } else if (is_st) {
                 /* STORE depende de la ultima barrera, del ultimo store, y de
                  * todos los LOADs posteriores al ultimo store (orden
