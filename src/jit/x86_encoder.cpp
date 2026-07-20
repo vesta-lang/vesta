@@ -2052,6 +2052,21 @@ void X86Encoder::emit_setcc(MFunction & /*fn*/, const MInstr &mi,
                             std::vector<uint8_t> &out) {
     const MOperand &dst = mi.dst;
     const MCond cc = static_cast<MCond>(mi.variant);
+    /* SETcc m8 (destino en memoria: el bool vive en un slot de derrame).
+     * 0x0F 0x90+cc /0.  Sin REX.W (byte).  REX solo si base/index es r8-r15.
+     * Escribe SOLO el byte bajo del slot; el caller (regalloc_rewrite) zerifica
+     * el slot antes para que el valor de 8 bytes sea un 0/1 limpio. */
+    if (dst.kind == MOperandKind::MEM) {
+        const uint8_t base = dst.reg;
+        const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, 0x90 + static_cast<uint8_t>(cc));
+        emit_modrm_mem(dst, 0, out); // campo reg = 0 (/0)
+        return;
+    }
     if (dst.kind != MOperandKind::REG) {
         put8(out, 0xCC);
         return;

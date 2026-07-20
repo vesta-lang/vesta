@@ -11,6 +11,7 @@
  */
 
 #include "ir/ir_optimizer.h"
+#include "ir/passes/if_conversion.h" // diamante/if-anidado -> SELECT (Capa 1)
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h"  // cierre interproc: callees puros (DSE Fase 4)
@@ -10299,6 +10300,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             if (level >= OptLevel::O2) {
                 // O2: plegado de constantes + bloques inalcanzables + TCO.
                 any |= ir_pass_const_fold(fn);
+                // If-conversion: diamante/if-anidado/ternario -> SELECT (solo
+                // legalidad; la rentabilidad la decide el pase de coste cercano
+                // al backend).  Debe preceder a `unreachable` para que este
+                // limpie los bloques de rama que quedan vacios.
+                any |= (ir_pass_if_conversion(fn) > 0);
                 any |= ir_pass_unreachable(fn);
                 any |= ir_pass_tailcall(fn);
                 // Inline de header trivial de loop -> habilita decjnz fusion.

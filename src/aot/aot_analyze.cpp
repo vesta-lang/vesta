@@ -129,6 +129,8 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::F32TOF64:
     case IrOp::F64TOF32:
     case IrOp::BITCAST:
+    // -- seleccion sin salto (baja a cmov/csel en nativo) --
+    case IrOp::SELECT:
     // -- flujo de control / SSA --
     case IrOp::BR:
     case IrOp::BR_COND:

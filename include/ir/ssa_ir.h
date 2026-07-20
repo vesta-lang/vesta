@@ -184,6 +184,17 @@ enum class IrOp : uint16_t {
               ///<   Equivale a @c (63 - clz(a)) para u64.  Util en allocators,
               ///<   capacity calculations, hashing.  x86: @c bsr (3c) o
               ///<   @c (63 ^ lzcnt) ; ARM: @c clz + sub; RISC-V: @c clz.
+    // SELECT: primitiva semantica de seleccion sin salto.  operands = [%cond,
+    // %a, %b]; %dst = %cond ? %a : %b.  %cond es un valor booleano (0/1, como
+    // el que producen los CMP_*).  Es la forma canonica de un diamante
+    // if-convertido (el pase ir_pass_if_conversion la emite) y de min/max/abs.
+    // Lowering por backend (NO una instruccion nueva de la VM): x86 @c cmovcc,
+    // ARM @c csel, interp secuencia branchless (setcc/mascara xor-and-xor),
+    // AVX @c vblendv (vectorizado).  Tipado por @c IrInstr::type (i32/i64/f32/
+    // f64/ptr).  Habilita peepholes: select(c,x,x)->x, const-fold del cond,
+    // select(c,0,1)->zext(c), select(a<b,a,b)->IMIN, y bool->aritmetica cuando
+    // el resultado alimenta una suma (acc+select(c,1,0) -> acc+zext(c)).
+    SELECT = 0x1C, ///< %dst = select.T %cond, %a, %b   (%cond ? %a : %b)
 
     // ---- aritmetica flotante (0x20-0x2F) ----
     FADD = 0x20,   ///< %dst = fadd.fN  %a, %b

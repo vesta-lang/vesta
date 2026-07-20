@@ -136,6 +136,7 @@ static const OpEntry OP_TABLE[] = {
     {"iminu", IrOp::IMINU},
     {"imaxu", IrOp::IMAXU},
     {"ilog2", IrOp::ILOG2},
+    {"select", IrOp::SELECT},
     // logica y desplazamientos
     {"and", IrOp::AND},
     {"or", IrOp::OR},

@@ -1250,6 +1250,50 @@ static void emit_unop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
     ctx.store_spilled(dst);
 }
 
+// Emite un SELECT sin salto en el interprete: %dst = %cond ? %a : %b.
+//
+// El interprete esta limitado por el despacho, no por la prediccion de saltos,
+// asi que la forma sin salto (aritmetica de mascara) evita reconstruir el CFG
+// y mantiene el codigo lineal.  @c %cond es booleano (0/1, como el que producen
+// los CMP_*).  Formula:
+//   invmask = cond - 1            ; 0 si cond=1, 0xFFFF...F si cond=0
+//   dst     = a ^ ((a ^ b) & invmask)
+// Comprobacion: cond=1 -> invmask=0 -> dst = a; cond=0 -> invmask=-1 ->
+// dst = a ^ (a ^ b) = b.
+//
+// Usa r15/r14/r13 como temporales (libres entre instrucciones del IR).  Los
+// operandos derramados se cargan PRIMERO (b el ultimo, porque
+// @c emit_load_spilled_into reusa r13 para la direccion; cargar b en r13 al
+// final es un self-overwrite seguro).  El pase de if-conversion excluye los
+// phi de objetos GC, por lo que los operandos nunca son handles que requieran
+// @c gcderef.
+static void emit_select(EmitCtx &ctx, IrValueId dst, IrValueId cond,
+                        IrValueId a, IrValueId b) {
+    // Carga @p v en @p reg: copia directa si esta en registro, o lectura del
+    // slot de derrame en caso contrario.
+    auto load_into = [&](IrValueId v, const char *reg) {
+        auto it = ctx.alloc.reg_map.find(v);
+        if (it != ctx.alloc.reg_map.end()) {
+            const std::string src = reg_name(it->second);
+            if (src != reg) ctx.out << "    mov " << reg << ", " << src << "\n";
+        } else {
+            ctx.emit_load_spilled_into(v, reg);
+        }
+    };
+    load_into(a, "r15");    // r15 = a  (preservado hasta el xor final)
+    load_into(cond, "r14"); // r14 = cond
+    load_into(b, "r13");    // r13 = b  (ultimo: r13 es el temp de direccion)
+    ctx.out << "    subu r14, 1\n"; // r14 = cond - 1 = invmask
+    ctx.out << "    xor r13, r15\n"; // r13 = b ^ a = a ^ b
+    ctx.out << "    and r13, r14\n"; // r13 = (a ^ b) & invmask
+    ctx.out << "    xor r15, r13\n"; // r15 = a ^ ((a ^ b) & invmask) = resultado
+    ctx.r13_cache = -1;
+    ctx.r14_cache = -1;
+    const std::string rd = ctx.dst_of(dst);
+    emit_mov_if_needed(ctx, rd, "r15");
+    ctx.store_spilled(dst);
+}
+
 // =========================================================================
 // Helpers float: bitcast GP <-> ZMM via stack memory roundtrip.
 //
@@ -2028,6 +2072,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() >= 2)
             emit_binop(ctx, arith_mnemonic(ins.op, ins.type), ins.dst,
                        ins.operands[0], ins.operands[1]);
+        break;
+    // --- Seleccion sin salto (cond ? a : b) ---
+    case IrOp::SELECT:
+        if (ins.operands.size() == 3 && ins.dst != IR_NO_VALUE)
+            emit_select(ctx, ins.dst, ins.operands[0], ins.operands[1],
+                        ins.operands[2]);
         break;
     // --- Aritmetica flotante binaria (requiere registros ZMM) ---
     case IrOp::FADD:

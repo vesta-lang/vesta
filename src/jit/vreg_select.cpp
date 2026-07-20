@@ -1880,6 +1880,27 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(cm);
                 break;
             }
+            case ir::IrOp::SELECT: {
+                /* dst = cond ? a : b.  Sin salto, via CMOV:
+                 *   mov  dst, b        ; valor si cond es falso
+                 *   test cond, cond    ; ZF = (cond == 0)
+                 *   cmovne dst, a      ; si cond != 0 -> dst = a
+                 * cond es booleano 0/1 (lo producen los CMP_*). */
+                flush_pending();
+                if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 3)
+                    return false;
+                const ir::IrValueId cond = in.operands[0];
+                const ir::IrValueId a = in.operands[1], b = in.operands[2];
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst), vr(b)));
+                O.push_back(mk_test(cond, cond));
+                MInstr cm;
+                cm.op = MOp::CMOVCC;
+                cm.variant = static_cast<uint8_t>(MCond::NE);
+                cm.dst = vr(in.dst);
+                cm.src1 = vr(a);
+                O.push_back(cm);
+                break;
+            }
             case ir::IrOp::ILOG2: { /* 63 - lzcnt(a); a==0 es UB (igual que
                                        slot) */
                 flush_pending();

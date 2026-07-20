@@ -1744,6 +1744,38 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
             }
 
             /* --------- ALU binarias --------- */
+            case IrOp::SELECT: {
+                /* dst = cond ? a : b, sin salto (selector de slots legacy):
+                 *   mov  SCRATCH_A, b        ; valor si cond es falso
+                 *   test SCRATCH_C(cond)     ; ZF = (cond == 0)
+                 *   cmovne SCRATCH_A, a      ; si cond != 0 -> a
+                 * cond es booleano 0/1 (lo producen los CMP_*). */
+                if (ins.dst == ir::IR_NO_VALUE || ins.operands.size() != 3) {
+                    unsupported = true;
+                    mf.blocks.back().instrs.push_back(
+                        {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                    break;
+                }
+                load_op_rematerializable(mf, ir_fn, ins.operands[2],
+                                         SCRATCH_A); // b
+                load_op_rematerializable(mf, ir_fn, ins.operands[1],
+                                         SCRATCH_B); // a
+                load_op_rematerializable(mf, ir_fn, ins.operands[0],
+                                         SCRATCH_C); // cond
+                mf.blocks.back().instrs.push_back(MInstr::make_unary(
+                    MOp::TEST, MOperand::make_reg(SCRATCH_C),
+                    MOperand::make_reg(SCRATCH_C)));
+                {
+                    MInstr i;
+                    i.op = MOp::CMOVCC;
+                    i.variant = static_cast<uint8_t>(MCond::NE);
+                    i.dst = MOperand::make_reg(SCRATCH_A);
+                    i.src1 = MOperand::make_reg(SCRATCH_B);
+                    mf.blocks.back().instrs.push_back(i);
+                }
+                store_op(mf, ins.dst, SCRATCH_A);
+                break;
+            }
             case IrOp::ADD:
             case IrOp::SUB:
             case IrOp::AND:
