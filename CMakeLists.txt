@@ -882,6 +882,20 @@ else ()
     target_link_libraries(test_rbank_objective PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# OptimizationContext + DecisionPolicy (banco ancho, Fase 0 cuspide): firma
+# estable + seleccion determinista (Predictor hook), con explicacion como DATO.
+add_executable(test_rbank_decision tests/jit/test_rbank_decision.cpp)
+target_include_directories(test_rbank_decision PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_decision PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_decision PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_decision PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_decision PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone

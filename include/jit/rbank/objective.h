@@ -64,7 +64,7 @@ namespace rbank {
  */
 struct ObjectiveWeights {
     double latency           = 1.0;  ///< coste de latencia (ciclos ruta critica).
-    double throughput        = 1.0;  ///< coste de throughput (puertos/uops).
+    double throughput        = 1.0;  ///< coste de throughput (uops/ciclo).
     double code_size         = 0.5;  ///< bytes de codigo emitidos.
     double energy            = 0.0;  ///< energia (off por defecto).
     double cache_pressure    = 0.5;  ///< presion de cache de datos (spills en pila).
@@ -72,6 +72,10 @@ struct ObjectiveWeights {
     double spill             = 4.0;  ///< un spill (load/store extra por uso).
     double move              = 1.0;  ///< un mov (tie de two-address roto).
     double callsave          = 2.0;  ///< salvar/restaurar alrededor de un CALL.
+    // Dimensiones del scheduler (arch-data las afinara; comparten Objective):
+    double dependency        = 1.0;  ///< stalls por cadena de dependencias.
+    double port_pressure     = 0.5;  ///< contencion de puertos de ejecucion.
+    double scheduler         = 0.0;  ///< dificultad de scheduling (meta; off).
 };
 
 /**
@@ -89,6 +93,9 @@ struct ObjectiveTerms {
     double spill             = 0.0;
     double move              = 0.0;
     double callsave          = 0.0;
+    double dependency        = 0.0;  ///< stalls por dependencias (scheduler).
+    double port_pressure     = 0.0;  ///< contencion de puertos (scheduler).
+    double scheduler         = 0.0;  ///< dificultad de scheduling (meta).
 
     /** @brief Suma componente a componente (agregar candidatos parciales). */
     ObjectiveTerms &operator+=(const ObjectiveTerms &o) noexcept {
@@ -97,6 +104,8 @@ struct ObjectiveTerms {
         cache_pressure += o.cache_pressure;
         register_pressure += o.register_pressure;
         spill += o.spill;           move += o.move;   callsave += o.callsave;
+        dependency += o.dependency; port_pressure += o.port_pressure;
+        scheduler += o.scheduler;
         return *this;
     }
 };
@@ -110,7 +119,9 @@ inline double objective_score(const ObjectiveTerms &t,
            w.code_size * t.code_size + w.energy * t.energy +
            w.cache_pressure * t.cache_pressure +
            w.register_pressure * t.register_pressure +
-           w.spill * t.spill + w.move * t.move + w.callsave * t.callsave;
+           w.spill * t.spill + w.move * t.move + w.callsave * t.callsave +
+           w.dependency * t.dependency + w.port_pressure * t.port_pressure +
+           w.scheduler * t.scheduler;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,23 +129,36 @@ inline double objective_score(const ObjectiveTerms &t,
 //  hasta que arch-data afine los terminos de latencia/throughput en Fase 0.25.
 // ---------------------------------------------------------------------------
 
-/** @brief Frecuencia de ejecucion aproximada de una profundidad de loop (10^d). */
-inline double loop_frequency(uint16_t loop_depth) noexcept {
-    // Cada nivel de loop ~x10; cota en depth 9 (10^9) para no desbordar.
-    const uint16_t d = loop_depth > 9 ? 9 : loop_depth;
+/**
+ * @brief Peso de ejecucion ESTATICO (fallback) de una profundidad de loop.
+ *
+ * Es solo una HEURISTICA por defecto (cada nivel de loop ~x10).  El peso REAL
+ * debe SUMINISTRARLO el @c OptimizationContext: con perfil da una frecuencia
+ * medida (p.ej. 125.3), con PGO otra (4890); atar el modelo a @c 10^depth seria
+ * un error.  Por eso los estimadores reciben el peso como PARAMETRO y esta
+ * funcion es solo el valor por defecto cuando no hay perfil.
+ */
+inline double static_execution_weight(uint16_t loop_depth) noexcept {
+    const uint16_t d = loop_depth > 9 ? 9 : loop_depth; // cota 10^9.
     double f = 1.0;
     for (uint16_t i = 0; i < d; ++i) f *= 10.0;
     return f;
 }
 
 /**
- * @brief Coste estimado de DERRAMAR un valor a memoria (por uso), escalado por
- *        hotness y abaratado si es rematerializable.
+ * @brief Coste estimado de DERRAMAR un valor a memoria (por uso).
+ * @param exec_weight  peso de ejecucion (lo suministra el contexto: perfil/PGO,
+ *        o @c static_execution_weight(r.loop_depth) como fallback).
+ *
+ * Hoy @c base * @c exec_weight con @c base menor si es rematerializable.  El
+ * framework ya admite la formula completa (@c load_latency + @c store_latency +
+ * @c cache_pressure + @c frequency + @c remat): esos terminos se suman via
+ * @c ObjectiveTerms cuando arch-data los aporte (Fase 0.25).
  */
-inline double spill_cost_of(const ValueRequirements &r) noexcept {
-    // Rematerializar (recomputar una const/lea) es mas barato que un load.
-    const double base = r.rematerializable ? 1.0 : 3.0;
-    return base * loop_frequency(r.loop_depth);
+inline double spill_cost_of(const ValueRequirements &r,
+                            double exec_weight) noexcept {
+    const double base = r.rematerializable ? 1.0 : 3.0; // remat < load.
+    return base * exec_weight;
 }
 
 /**
@@ -168,17 +192,22 @@ inline ObjectiveTerms lane_choice_terms(const ValueRequirements &r,
                                         const Lane &lane,
                                         uint32_t n_calls) noexcept {
     ObjectiveTerms t;
-    t.register_pressure = 1.0; // ocupa una lane.
+    // Ocupa una lane.  NOTA: hoy 1.0 uniforme; en el futuro la presion sera
+    // POR-CLASE (GP/FP/MASK/PRED tienen escasez distinta) -> el peso lo dara la
+    // presion relativa de la clase en el banco.  El framework ya lo permite.
+    t.register_pressure = 1.0;
     t.callsave = callsave_cost_of(r, lane.preservation_of(r.width), n_calls);
     return t;
 }
 
 /**
  * @brief Terminos de objetivo de DERRAMAR el valor @p r (no ocupa lane).
+ * @param exec_weight  peso de ejecucion suministrado por el contexto.
  */
-inline ObjectiveTerms spill_terms(const ValueRequirements &r) noexcept {
+inline ObjectiveTerms spill_terms(const ValueRequirements &r,
+                                  double exec_weight) noexcept {
     ObjectiveTerms t;
-    t.spill = spill_cost_of(r);
+    t.spill = spill_cost_of(r, exec_weight);
     t.cache_pressure = 1.0; // un slot de pila mas.
     return t;
 }

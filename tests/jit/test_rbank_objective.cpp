@@ -51,23 +51,26 @@ int main() {
         CHECK(acc.spill == 7.0, "operator+= no agrega");
     }
 
-    // --- loop_frequency ---
-    std::printf("\n[frecuencia por loop_depth]\n");
-    CHECK(loop_frequency(0) == 1.0, "depth 0 != 1");
-    CHECK(loop_frequency(1) == 10.0, "depth 1 != 10");
-    CHECK(loop_frequency(2) == 100.0, "depth 2 != 100");
-    CHECK(loop_frequency(20) == loop_frequency(9), "depth no capado en 9");
+    // --- static_execution_weight (fallback; el contexto suministra el real) ---
+    std::printf("\n[peso de ejecucion estatico por loop_depth]\n");
+    CHECK(static_execution_weight(0) == 1.0, "depth 0 != 1");
+    CHECK(static_execution_weight(1) == 10.0, "depth 1 != 10");
+    CHECK(static_execution_weight(2) == 100.0, "depth 2 != 100");
+    CHECK(static_execution_weight(20) == static_execution_weight(9), "depth no capado en 9");
 
-    // --- spill cost: hotness + rematerializable ---
+    // --- spill cost: peso de ejecucion (suministrado) + rematerializable ---
     std::printf("\n[coste de spill]\n");
     {
         ValueRequirements cold; cold.loop_depth = 0;
         ValueRequirements hot;  hot.loop_depth = 2;
-        CHECK(spill_cost_of(hot) > spill_cost_of(cold),
+        const double w_cold = static_execution_weight(cold.loop_depth);
+        const double w_hot  = static_execution_weight(hot.loop_depth);
+        CHECK(spill_cost_of(hot, w_hot) > spill_cost_of(cold, w_cold),
               "spill de valor caliente no cuesta mas");
         ValueRequirements remat; remat.loop_depth = 2; remat.rematerializable = true;
         ValueRequirements plain; plain.loop_depth = 2;
-        CHECK(spill_cost_of(remat) < spill_cost_of(plain),
+        const double w = static_execution_weight(2);
+        CHECK(spill_cost_of(remat, w) < spill_cost_of(plain, w),
               "rematerializable no abarata el spill");
     }
 
@@ -111,7 +114,7 @@ int main() {
         ValueRequirements r; r.cls = ResourceClass::FP_VECTOR; r.width = ViewWidth::W8;
         r.loop_depth = 3; // muy caliente
         const ObjectiveTerms keep = lane_choice_terms(r, *xmm0, 0);
-        const ObjectiveTerms spill = spill_terms(r);
+        const ObjectiveTerms spill = spill_terms(r, static_execution_weight(r.loop_depth));
         CHECK(objective_score(spill, W) > objective_score(keep, W),
               "para un valor caliente, spill deberia costar mas que registro");
     }
