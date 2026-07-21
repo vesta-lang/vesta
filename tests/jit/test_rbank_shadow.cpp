@@ -145,6 +145,36 @@ int main() {
         CHECK(sr.pinned_values == 1, "pinned_values != 1");
     }
 
+    // --- ShadowReport (veredicto por funcion) + ShadowAggregate (corpus) ---
+    std::printf("\n[ShadowReport + ShadowAggregate: panel de calidad]\n");
+    {
+        ShadowStats lin1; lin1.spills = 5; lin1.spill_cost = 10.0; // rbank mejora
+        ShadowStats rb1;  rb1.spills = 3;  rb1.spill_cost = 6.0;
+        ShadowReport r1 = make_shadow_report(lin1, rb1);
+        CHECK(r1.improved && !r1.equivalent, "r1 deberia MEJORAR");
+
+        ShadowStats lin2; lin2.spills = 2; lin2.spill_cost = 4.0; // equivalente
+        ShadowStats rb2;  rb2.spills = 2;  rb2.spill_cost = 4.0;
+        ShadowReport r2 = make_shadow_report(lin2, rb2);
+        CHECK(r2.equivalent && !r2.improved, "r2 deberia ser EQUIVALENTE");
+
+        ShadowStats lin3; lin3.spills = 1; lin3.spill_cost = 2.0; // rbank empeora
+        ShadowStats rb3;  rb3.spills = 3;  rb3.spill_cost = 6.0;
+        ShadowReport r3 = make_shadow_report(lin3, rb3);
+        CHECK(!r3.improved && !r3.equivalent, "r3 deberia EMPEORAR");
+
+        ShadowAggregate agg;
+        agg.add(r1); agg.add(r2); agg.add(r3);
+        CHECK(agg.functions == 3, "agg.functions != 3");
+        CHECK(agg.improved == 1 && agg.equal == 1 && agg.worsened == 1,
+              "agg veredictos mal");
+        CHECK(agg.linear_spills == 8 && agg.rbank_spills == 8, "agg spills totales mal");
+        std::printf("  funcs=%u iguales=%u mejoran=%u empeoran=%u | spills lin=%llu rbank=%llu\n",
+                    agg.functions, agg.equal, agg.improved, agg.worsened,
+                    (unsigned long long)agg.linear_spills,
+                    (unsigned long long)agg.rbank_spills);
+    }
+
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

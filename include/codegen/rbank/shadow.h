@@ -192,6 +192,10 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
     s.values = static_cast<uint32_t>(co.problem.values.size());
     s.spills = spill_count(co.problem, la);
     s.spill_cost = total_spill_cost(co.problem, la, ctx);
+    // allocated cuenta LANES FISICAS ASIGNABLES.  Hoy "lane != spilled" <=> registro
+    // fisico (el unico recurso no-memoria del banco), pero el dia que existan scratch
+    // / stack-cache / pseudo-lanes / memoria persistente como recursos, "no spilled"
+    // dejara de implicar "en registro" -> habra que distinguir por tipo de lane.
     for (const AbstractValue &v : co.problem.values) {
         if (v.req.fixed_reg >= 0) ++s.pinned_values;
         if (la.lane_of(v.value_id) == kSpilled) continue;
@@ -199,6 +203,69 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
     }
     return s;
 }
+
+/**
+ * @struct ShadowReport
+ * @brief Veredicto de UNA funcion: las dos stats + el diff + si rbank es equivalente
+ *        o mejora.  El agregador (ShadowAggregate) los suma sobre el corpus.
+ *
+ * Criterio (calidad del allocator, no bit-igualdad del codigo): la metrica que
+ * importa es spills y su coste.  @c improved = rbank mejora en spills, o iguala
+ * spills con menos coste, SIN empeorar.  @c equivalent = ni mejora ni empeora.
+ * "Empeora" = ni equivalent ni improved.
+ */
+struct ShadowReport {
+    ShadowStats linear;
+    ShadowStats rbank;
+    ShadowDiff  diff;
+    bool        equivalent = false;
+    bool        improved   = false;
+};
+
+/** @brief Compara dos stats -> ShadowReport (diff + veredicto equivalente/mejora). */
+inline ShadowReport make_shadow_report(const ShadowStats &lin, const ShadowStats &rb) {
+    ShadowReport r;
+    r.linear = lin;
+    r.rbank = rb;
+    r.diff = shadow_diff(lin, rb);
+    const double EPS = 1e-6;
+    const bool worse = rb.spills > lin.spills ||
+                       (rb.spills == lin.spills && rb.spill_cost > lin.spill_cost + EPS);
+    const bool better = rb.spills < lin.spills ||
+                        (rb.spills == lin.spills && rb.spill_cost < lin.spill_cost - EPS);
+    r.improved = better && !worse;
+    r.equivalent = !better && !worse;
+    return r;
+}
+
+/**
+ * @struct ShadowAggregate
+ * @brief Panel de calidad del allocator sobre TODO un corpus: cuantas funciones
+ *        igualan / mejoran / empeoran + totales de spills y coste.  Es la salida que
+ *        el paso 2 (shadow en vreg_pipeline sobre cada funcion) acumula.
+ */
+struct ShadowAggregate {
+    uint32_t functions        = 0;
+    uint32_t equal            = 0;
+    uint32_t improved         = 0;
+    uint32_t worsened         = 0;
+    uint64_t linear_spills    = 0;
+    uint64_t rbank_spills     = 0;
+    double   linear_spill_cost = 0.0;
+    double   rbank_spill_cost  = 0.0;
+
+    /** @brief Acumula el veredicto de una funcion. */
+    void add(const ShadowReport &r) {
+        ++functions;
+        if (r.improved) ++improved;
+        else if (r.equivalent) ++equal;
+        else ++worsened;
+        linear_spills += r.linear.spills;
+        rbank_spills += r.rbank.spills;
+        linear_spill_cost += r.linear.spill_cost;
+        rbank_spill_cost += r.rbank.spill_cost;
+    }
+};
 
 } // namespace rbank
 } // namespace codegen
