@@ -212,6 +212,59 @@ inline ObjectiveTerms spill_terms(const ValueRequirements &r,
     return t;
 }
 
+// ---------------------------------------------------------------------------
+//  Coste del HARDWARE, ISA-neutral (Fase 0.25: cablear arch-data al Objective).
+//
+//  El coste real de un reload/spill/move lo aporta el Target (MachineCostFacts,
+//  producido por el backend desde el SchedCostModel).  Para NO acoplar el
+//  Objective a la ISA, el CostAdapter (codegen/rbank/adapters/cost_adapter.h)
+//  traduce esos InstrCost a esta tarjeta de NUMEROS; los estimadores de abajo la
+//  consumen.  Las sobrecargas CON card son ADITIVAS: las de arriba (sin card)
+//  siguen dando la heuristica generica identica -> cero cambio de conducta hasta
+//  que un consumidor pase una card.
+//
+//      Decision -> spill_terms(card) -> SpillCostCard -> MachineCostFacts ->
+//                                                        SchedCostModel
+//  (la cadena queda trazable hacia atras -- ANAMNESIS).
+// ---------------------------------------------------------------------------
+
+/**
+ * @struct SpillCostCard
+ * @brief Parametros de coste del hardware que el allocator necesita, ya
+ *        traducidos a ciclos ISA-neutrales.  Default = heuristica del modelo
+ *        generico (por si se usa sin card).
+ */
+struct SpillCostCard {
+    double reload_latency = 4.0;  ///< recargar un valor derramado (load).
+    double store_latency  = 1.0;  ///< derramar un valor a la pila (store).
+    double move_latency   = 1.0;  ///< copia registro-registro (coalescing).
+    bool   from_hw        = false;///< true = de MachineCostFacts; false = fallback.
+};
+
+/**
+ * @brief Coste de derramar @p r por uso, usando el coste de reload REAL del HW.
+ *        Rematerializable -> recomputar (~1 ciclo ALU) < recargar de memoria.
+ */
+inline double spill_cost_of(const ValueRequirements &r, double exec_weight,
+                            const SpillCostCard &hw) noexcept {
+    const double per_use = r.rematerializable ? 1.0 : hw.reload_latency;
+    return per_use * exec_weight;
+}
+
+/**
+ * @brief Terminos de derrame con coste de HW real.  @c spill = reloads por uso;
+ *        @c latency = el store del spill (una vez en el def); @c cache_pressure =
+ *        un slot de pila.
+ */
+inline ObjectiveTerms spill_terms(const ValueRequirements &r, double exec_weight,
+                                  const SpillCostCard &hw) noexcept {
+    ObjectiveTerms t;
+    t.spill          = spill_cost_of(r, exec_weight, hw);
+    t.latency        = hw.store_latency;
+    t.cache_pressure = 1.0;
+    return t;
+}
+
 } // namespace rbank
 } // namespace jit
 

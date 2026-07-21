@@ -96,6 +96,15 @@ project(VMProject
         DESCRIPTION "VestaVM: register-based VM + Vex frontend"
         LANGUAGES C CXX)
 
+# Nivel minimo de API de Windows.  Algunas funciones que usa el runtime
+# (p.ej. GetCurrentThreadStackLimits, Win8+) exigen _WIN32_WINNT>=0x0602.
+# msys/ucrt64 lo trae alto por defecto; TDM-GCC (mingw-w64 mas antiguo) lo
+# deja bajo y oculta el simbolo -> se define aqui a Win10 (0x0A00) para que
+# el proyecto compile con AMBOS toolchains. 
+if (WIN32 AND NOT DEFINED VESTA_WIN32_WINNT)
+    add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
+endif ()
+
 # versiones del compilador y la VM expuestas al @Target.
 # Permite que usuarios escriban @Target("compiler>=1.0") y obtengan
 # resolucion en compile-time sin hardcodear los numeros en C++.  Se
@@ -1015,6 +1024,18 @@ if (WIN32)
     target_link_libraries(test_rbank_snapshot PRIVATE vesta_openssl ws2_32 synchronization)
 else ()
     target_link_libraries(test_rbank_snapshot PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_machine_cost_facts tests/jit/test_machine_cost_facts.cpp)
+target_include_directories(test_machine_cost_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_machine_cost_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_machine_cost_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_machine_cost_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_machine_cost_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 # ---------------------------------------------------------------------------
