@@ -53,7 +53,7 @@
 
 #include <cstdint>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -266,6 +266,6 @@ inline ObjectiveTerms spill_terms(const ValueRequirements &r, double exec_weight
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_OBJECTIVE_H

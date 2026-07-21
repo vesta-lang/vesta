@@ -88,8 +88,20 @@
 #include <string>
 #include <vector>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
+
+// Tipos + factorias de las FUENTES (modulo jit) que el banco CONSUME para
+// construirse.  El banco es de codegen (3 modos); sus insumos (caps/reginfo/ISA)
+// son de jit.  target_traits_from_reginfo es del PROPIO rbank (adaptador, mas
+// abajo), no de jit -> no se importa.
+using jit::BackendCaps;
+using jit::RegClass;
+using jit::MReg;
+using jit::TargetRegInfo;
+using jit::target_x86_64_abi;
+using jit::target_x86_32;
+using jit::build_arm64_target;
 
 // ===========================================================================
 //  Clases de recurso.
@@ -700,6 +712,6 @@ inline RoundTripReport physical_bank_roundtrip_check(
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_PHYSICAL_BANK_H

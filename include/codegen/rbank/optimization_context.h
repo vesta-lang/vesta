@@ -55,7 +55,7 @@
 
 #include <cstdint>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -194,6 +194,6 @@ inline OptimizationContext make_context(const PhysicalRegisterBank &bank,
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_OPTIMIZATION_CONTEXT_H

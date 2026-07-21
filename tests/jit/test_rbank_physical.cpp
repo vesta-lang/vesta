@@ -22,7 +22,7 @@
 #include <cstdio>
 
 using namespace jit;
-using namespace jit::rbank;
+using namespace codegen::rbank;
 
 static int g_checks = 0;
 static int g_fail = 0;

@@ -52,7 +52,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 // @c Fact vive en function_snapshot.h (es de la interfaz del snapshot).
@@ -120,6 +120,6 @@ inline FunctionSnapshot build_snapshot(
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_SNAPSHOT_BUILDER_H

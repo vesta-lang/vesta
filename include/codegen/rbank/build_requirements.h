@@ -73,7 +73,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -183,6 +183,6 @@ inline std::vector<RequirementIssue> audit_requirements(
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_BUILD_REQUIREMENTS_H

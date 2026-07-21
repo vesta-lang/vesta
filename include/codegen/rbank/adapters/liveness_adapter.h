@@ -42,7 +42,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -109,6 +109,6 @@ inline void populate_liveness_requirements(
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_ADAPTERS_LIVENESS_ADAPTER_H

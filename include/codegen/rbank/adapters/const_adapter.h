@@ -32,7 +32,7 @@
 #include "ir/ssa_ir.h"
 #include "codegen/rbank/value_requirements.h"
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -47,6 +47,6 @@ inline void populate_const_requirements(ValueRequirements &r,
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_ADAPTERS_CONST_ADAPTER_H

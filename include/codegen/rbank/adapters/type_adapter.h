@@ -38,7 +38,7 @@
 #include "ir/ssa_ir.h"
 #include "codegen/rbank/value_requirements.h"
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /** @brief True si el tipo produce un valor asignable (VOID no). */
@@ -89,6 +89,6 @@ inline void populate_type_requirements(ValueRequirements &r, ir::IrType t) noexc
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_ADAPTERS_TYPE_ADAPTER_H

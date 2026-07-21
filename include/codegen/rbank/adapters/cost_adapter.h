@@ -32,7 +32,7 @@
 #include "analysis/hw/machine_cost_facts.h"
 #include "codegen/rbank/objective.h"
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -49,6 +49,6 @@ inline SpillCostCard spill_card_from(const analysis::MachineCostFacts &hw) noexc
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_ADAPTERS_COST_ADAPTER_H

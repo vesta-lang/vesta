@@ -25,7 +25,7 @@
 #include "ir/ssa_ir.h"
 #include "codegen/rbank/value_requirements.h"
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -39,6 +39,6 @@ inline void populate_profile_requirements(ValueRequirements &r,
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_ADAPTERS_PROFILE_ADAPTER_H

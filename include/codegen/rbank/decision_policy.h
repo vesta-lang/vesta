@@ -52,7 +52,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -263,6 +263,6 @@ struct WeightedObjectivePolicy : DecisionEngine {
 };
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_DECISION_POLICY_H

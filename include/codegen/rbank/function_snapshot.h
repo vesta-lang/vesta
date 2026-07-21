@@ -90,7 +90,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -203,6 +203,6 @@ struct FunctionSnapshot {
 };
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_FUNCTION_SNAPSHOT_H

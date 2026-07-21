@@ -53,7 +53,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /** @brief Lane sentinel: el valor esta en memoria (spilled), no ocupa lane. */
@@ -233,6 +233,6 @@ inline ConstraintViolation validate_assignment(
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_CONSTRAINTS_H

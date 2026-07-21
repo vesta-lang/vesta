@@ -48,7 +48,7 @@
 
 #include <cstdint>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -212,6 +212,6 @@ inline SatisfiabilityReport requirements_satisfiable(
 }
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_VALUE_REQUIREMENTS_H

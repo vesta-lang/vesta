@@ -21,7 +21,7 @@
 #include <cstdio>
 
 using namespace jit;
-using namespace jit::rbank;
+using namespace codegen::rbank;
 using ir::IrBlock;
 using ir::IrBlockId;
 using ir::IrInstr;

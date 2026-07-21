@@ -49,7 +49,7 @@
 
 #include <utility>
 
-namespace jit {
+namespace codegen {
 namespace rbank {
 
 /**
@@ -116,6 +116,6 @@ private:
 };
 
 } // namespace rbank
-} // namespace jit
+} // namespace codegen
 
 #endif // VESTA_CODEGEN_RBANK_LAZY_FACT_H
