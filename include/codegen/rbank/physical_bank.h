@@ -78,6 +78,7 @@
 #ifndef VESTA_CODEGEN_RBANK_PHYSICAL_BANK_H
 #define VESTA_CODEGEN_RBANK_PHYSICAL_BANK_H
 
+#include "codegen/rbank/fnv.h"
 #include "jit/backend_caps.h"
 #include "jit/machine_ir.h"
 #include "jit/target_reginfo.h"
@@ -326,6 +327,16 @@ struct Lane {
 };
 
 /**
+ * @struct BankFingerprint
+ * @brief Identidad observable de un banco (tipo FUERTE, no un @c uint64 crudo:
+ *        no se mezcla accidentalmente con la huella del problema o de una policy).
+ */
+struct BankFingerprint {
+    uint64_t value = 0;
+    bool operator==(const BankFingerprint &o) const noexcept { return value == o.value; }
+};
+
+/**
  * @struct PhysicalRegisterBank
  * @brief Banco fisico de un backend/target (nivel 3).  ABI-especifico y de
  *        SOLO LECTURA tras construirse (invariante I5).  Usar las CONSULTAS,
@@ -416,6 +427,24 @@ struct PhysicalRegisterBank {
     Reservation reservation_of(uint8_t id) const noexcept {
         const Lane *l = by_id(id);
         return l ? l->reserve : Reservation{};
+    }
+
+    /**
+     * @brief IDENTIDAD OBSERVABLE del banco para un algoritmo de asignacion: dos
+     *        bancos que colorearian distinto dan huellas distintas.  Es una
+     *        pregunta sobre el BANCO (por eso vive aqui), que la cache de
+     *        soluciones consume para su key.  Incluye el nombre (ABI) + las lanes
+     *        asignables por clase relevante (que cambian con @p vec_active por los
+     *        VEC_ACC demand-driven).
+     */
+    BankFingerprint fingerprint(bool vec_active) const {
+        uint64_t h = kFnvOffset;
+        for (char c : name) h = fnv_mix(h, static_cast<uint64_t>(c));
+        for (ResourceClass cls : {ResourceClass::GP, ResourceClass::FP_VECTOR,
+                                  ResourceClass::MASK, ResourceClass::PREDICATE})
+            h = fnv_mix(h, allocatable_count(cls, vec_active));
+        h = fnv_mix(h, vec_active ? 1u : 0u);
+        return BankFingerprint{h};
     }
 };
 

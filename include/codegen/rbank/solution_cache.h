@@ -41,6 +41,7 @@
 
 #include "codegen/rbank/canonical_problem.h"
 #include "codegen/rbank/coloring.h"
+#include "codegen/rbank/fnv.h"
 #include "codegen/rbank/physical_bank.h"
 
 #include <cstdint>
@@ -50,25 +51,12 @@ namespace codegen {
 namespace rbank {
 
 /**
- * @brief Huella del banco (capabilities) para la cache key: dos bancos que
- *        colorearian distinto deben dar huellas distintas.  Incluye el nombre
- *        (ABI) + las lanes asignables por clase relevante.
- */
-inline uint64_t bank_fingerprint(const PhysicalRegisterBank &bank,
-                                 bool vec_active) {
-    uint64_t h = kFnvOffset;
-    for (char c : bank.name) h = fnv_mix(h, static_cast<uint64_t>(c));
-    for (ResourceClass cls : {ResourceClass::GP, ResourceClass::FP_VECTOR,
-                              ResourceClass::MASK, ResourceClass::PREDICATE})
-        h = fnv_mix(h, bank.allocatable_count(cls, vec_active));
-    h = fnv_mix(h, vec_active ? 1u : 0u);
-    return h;
-}
-
-/**
  * @struct SolutionCache
- * @brief Cache de coloreados por (canonical_hash x bank_fingerprint).  Guarda la
- *        solucion en ids CANONICOS; @c solve la traduce a los ids del problema.
+ * @brief Cache de coloreados por (ProblemFingerprint x BankFingerprint).  Guarda
+ *        la solucion en ids CANONICOS; @c solve la traduce a los ids del problema.
+ *        La huella del PROBLEMA la da @c canonicalize; la del BANCO,
+ *        @c bank.fingerprint() (la identidad es una pregunta del banco, no de la
+ *        cache).  La cache solo las COMBINA en su key interna.
  */
 struct SolutionCache {
     std::unordered_map<uint64_t, LaneAssignment> by_key; ///< key -> sol canonica.
@@ -84,7 +72,9 @@ struct SolutionCache {
     LaneAssignment solve(const AbstractProblem &p, const PhysicalRegisterBank &bank,
                          bool vec_active) {
         const CanonicalProblem cp = canonicalize(p);
-        const uint64_t key = fnv_mix(cp.hash, bank_fingerprint(bank, vec_active));
+        // Combinar las DOS huellas fuertes (problema x banco) en la key interna.
+        const uint64_t key =
+            fnv_mix(cp.fingerprint.value, bank.fingerprint(vec_active).value);
 
         auto it = by_key.find(key);
         LaneAssignment canon_sol;

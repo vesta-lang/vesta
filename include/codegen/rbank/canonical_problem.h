@@ -37,6 +37,7 @@
 #define VESTA_CODEGEN_RBANK_CANONICAL_PROBLEM_H
 
 #include "codegen/rbank/abstract_problem.h"
+#include "codegen/rbank/fnv.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -46,33 +47,31 @@
 namespace codegen {
 namespace rbank {
 
-/** @brief Semilla y primo FNV-1a de 64 bits. */
-static constexpr uint64_t kFnvOffset = 1469598103934665603ull;
-static constexpr uint64_t kFnvPrime  = 1099511628211ull;
-
-/** @brief Mezcla un entero de 64 bits en un acumulador FNV-1a. */
-inline uint64_t fnv_mix(uint64_t h, uint64_t v) noexcept {
-    for (int i = 0; i < 8; ++i) {
-        h ^= (v & 0xff);
-        h *= kFnvPrime;
-        v >>= 8;
-    }
-    return h;
-}
+/**
+ * @struct ProblemFingerprint
+ * @brief IDENTIDAD ESTRUCTURAL de un problema de asignacion (tipo FUERTE, no un
+ *        @c uint64 crudo).  Representa "estos dos problemas son EL MISMO"; el tipo
+ *        evita mezclarlo accidentalmente con otras huellas (banco, policy).
+ */
+struct ProblemFingerprint {
+    uint64_t value = 0;
+    bool operator==(const ProblemFingerprint &o) const noexcept { return value == o.value; }
+    bool operator!=(const ProblemFingerprint &o) const noexcept { return value != o.value; }
+};
 
 /**
  * @struct CanonicalProblem
- * @brief Forma canonica de un @c AbstractProblem + hash + mapeos de traduccion.
+ * @brief Forma canonica de un @c AbstractProblem + huella + mapeos de traduccion.
  *
  * Es un OBJETO CON SEMANTICA PROPIA (no un helper): representacion normalizada
- * (@c canon) + identidad (@c hash) + traduccion de ida (@c orig_to_canon) y de
- * vuelta (@c canon_to_orig).  @c canon tiene los value_ids renombrados a 0..n-1
- * (por orden de clave) y las posiciones comprimidas.  Los mapeos permiten llevar
- * una solucion expresada en ids CANONICOS de vuelta a los ids del problema real.
+ * (@c canon) + identidad (@c fingerprint) + traduccion de ida (@c orig_to_canon)
+ * y de vuelta (@c canon_to_orig).  @c canon tiene los value_ids renombrados a
+ * 0..n-1 (por orden de clave) y las posiciones comprimidas.  Los mapeos permiten
+ * llevar una solucion expresada en ids CANONICOS de vuelta a los ids reales.
  */
 struct CanonicalProblem {
     AbstractProblem                        canon;
-    uint64_t                               hash = 0;
+    ProblemFingerprint                     fingerprint;
     std::vector<uint32_t>                  canon_to_orig; ///< canonical_id -> orig.
     std::unordered_map<uint32_t, uint32_t> orig_to_canon;
 };
@@ -141,13 +140,13 @@ inline CanonicalProblem canonicalize(const AbstractProblem &p) {
         h = fnv_mix(h, static_cast<uint64_t>(k.req.width));
         h = fnv_mix(h, static_cast<uint64_t>(static_cast<int64_t>(k.req.fixed_reg)));
     }
-    cp.hash = h;
+    cp.fingerprint = ProblemFingerprint{h};
     return cp;
 }
 
-/** @brief Hash canonico de @p p (conveniencia; = canonicalize(p).hash). */
-inline uint64_t canonical_hash(const AbstractProblem &p) {
-    return canonicalize(p).hash;
+/** @brief Huella canonica de @p p (conveniencia; = canonicalize(p).fingerprint). */
+inline ProblemFingerprint canonical_hash(const AbstractProblem &p) {
+    return canonicalize(p).fingerprint;
 }
 
 } // namespace rbank
