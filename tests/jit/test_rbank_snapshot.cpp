@@ -12,8 +12,8 @@
  *        compilador auditandose a si mismo.
  */
 
-#include "codegen/rbank/function_snapshot.h"
 #include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/snapshot_builder.h"
 #include "ir/ssa_ir.h"
 
 #include <cstdio>
@@ -127,6 +127,26 @@ int main() {
         for (const RequirementIssue &i : rep.value_issues)
             if (i.reason == UnsatReason::FIXED_REG_WRONG_CLASS) caught = true;
         CHECK(!rep.ok() && caught, "no cazo el valor imposible");
+    }
+
+    std::printf("\n[SnapshotBuilder: subconjunto de Facts]\n");
+    {
+        // Solo Loops -> ni liveness ni values.
+        FunctionSnapshot only_loops = SnapshotBuilder().enable(Fact::Loops).build(fn);
+        CHECK(only_loops.loops.loop_count == 1, "builder solo-Loops sin bucles");
+        CHECK(only_loops.live.intervals.empty(), "builder solo-Loops computo liveness");
+        CHECK(only_loops.values.empty(), "builder solo-Loops computo values");
+    }
+
+    std::printf("\n[SnapshotBuilder: resuelve dependencias]\n");
+    {
+        // Pedir Values debe activar Liveness + Loops por dependencia.
+        FunctionSnapshot s = SnapshotBuilder().enable(Fact::Values).build(fn);
+        CHECK(!s.values.empty(), "builder Values sin valores");
+        CHECK(!s.live.intervals.empty(),
+              "builder Values no resolvio la dependencia Liveness");
+        CHECK(s.loops.loop_count == 1,
+              "builder Values no resolvio la dependencia Loops");
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);

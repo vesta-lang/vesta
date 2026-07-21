@@ -118,25 +118,15 @@ struct FunctionSnapshot {
     }
 };
 
-/**
- * @brief Construye la fotografia completa de @p fn: Facts + ValueRequirements.
- * @param prof  perfil de branches (opcional).
- */
-inline FunctionSnapshot build_snapshot(
-    const ir::IrFunction &fn,
-    const analysis::BranchProfile *prof = nullptr) {
-
-    FunctionSnapshot s;
-    s.fn    = &fn;
-    s.live  = ir::compute_liveness(fn);
-    s.loops = analysis::compute_loop_facts(fn);
-    if (prof && !prof->empty())
-        s.profile = analysis::compute_profile_facts(fn, s.loops, *prof);
-
-    std::vector<uint32_t> calls = collect_call_positions(fn, s.live);
-    s.values = assemble_value_requirements(fn, s.live, calls, s.loops, s.profile);
-    return s;
-}
+// NOTA: la CONSTRUCCION de un snapshot (el algoritmo) vive en snapshot_builder.h
+// (@c SnapshotBuilder + @c build_snapshot).  Aqui solo el DATO + su contrato de
+// autocertificacion -- dato != algoritmo.
+//
+// SERIALIZACION (capacidad futura, cuando haya consumidor): al ser DATOS puros,
+// el snapshot es serializable -> IR -> Snapshot -> cache/fichero.  Es casi un
+// "core dump" del conocimiento del compilador: reproducir bugs exactamente,
+// comparar snapshots entre versiones, tests de regresion sobre los analisis,
+// herramientas externas.
 
 } // namespace rbank
 } // namespace jit
