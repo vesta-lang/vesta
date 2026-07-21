@@ -53,7 +53,16 @@
 namespace codegen {
 namespace rbank {
 
-/** @brief Mapea la clase del backend (jit::RegClass) a la del modelo. */
+/**
+ * @brief Mapea la clase del backend (jit::RegClass) a la del modelo.
+ *
+ * HERENCIA HISTORICA (a vigilar, no cambiar ahora): @c RegClass::FP se mapea a
+ * @c FP_VECTOR porque el backend SSE usa XMM para TODO (escalar y vectorial), asi
+ * que hoy coinciden FISICAMENTE.  Pero conceptualmente FP-escalar != FP-vectorial;
+ * el dia que el banco los distinga (o un target los separe) esto debera devolver un
+ * @c ResourceClass::FP escalar propio aunque comparta banco.  Es un sitio donde se
+ * nota que el modelo aun hereda la union XMM del backend.
+ */
 inline ResourceClass resource_class_from_reg(jit::RegClass c) {
     return c == jit::RegClass::FP ? ResourceClass::FP_VECTOR : ResourceClass::GP;
 }
@@ -102,8 +111,39 @@ struct ShadowStats {
     uint32_t copies_removed  = 0; ///< afinidades realizadas (coalescing; 0 en linear).
     uint32_t max_pressure_gp = 0; ///< pico de solapamiento GP.
     uint32_t max_pressure_fp = 0; ///< pico de solapamiento FP.
+    uint32_t allocated_gp    = 0; ///< valores GP en registro (no spilled).
+    uint32_t allocated_fp    = 0; ///< valores FP en registro (no spilled).
+    uint32_t pinned_values   = 0; ///< valores con pin (fixed_reg >= 0).
     double   spill_cost      = 0.0; ///< coste total de spill (via Objective).
 };
+
+/**
+ * @struct ShadowDiff
+ * @brief Diferencia rbank - linear (negativo = rbank MEJOR).  Hace interpretable el
+ *        shadow sobre miles de funciones: "-3 spills, -4.5 coste, +2 copies".
+ */
+struct ShadowDiff {
+    int    spills_delta       = 0;
+    double spill_cost_delta   = 0.0;
+    int    copies_delta       = 0; ///< copies_removed (rbank suele > linear).
+    int    pressure_gp_delta  = 0;
+    int    pressure_fp_delta  = 0;
+    int    allocated_gp_delta = 0;
+    int    allocated_fp_delta = 0;
+};
+
+/** @brief Diff rbank - linear (negativo en spills/coste = rbank mejora). */
+inline ShadowDiff shadow_diff(const ShadowStats &lin, const ShadowStats &rb) {
+    ShadowDiff d;
+    d.spills_delta       = static_cast<int>(rb.spills) - static_cast<int>(lin.spills);
+    d.spill_cost_delta   = rb.spill_cost - lin.spill_cost;
+    d.copies_delta       = static_cast<int>(rb.copies_removed) - static_cast<int>(lin.copies_removed);
+    d.pressure_gp_delta  = static_cast<int>(rb.max_pressure_gp) - static_cast<int>(lin.max_pressure_gp);
+    d.pressure_fp_delta  = static_cast<int>(rb.max_pressure_fp) - static_cast<int>(lin.max_pressure_fp);
+    d.allocated_gp_delta = static_cast<int>(rb.allocated_gp) - static_cast<int>(lin.allocated_gp);
+    d.allocated_fp_delta = static_cast<int>(rb.allocated_fp) - static_cast<int>(lin.allocated_fp);
+    return d;
+}
 
 /** @brief Presion maxima (max_overlap) por clase de un problema. */
 inline void fill_pressure(const AbstractProblem &p, ShadowStats &s) {
@@ -122,10 +162,15 @@ inline ShadowStats shadow_stats_linear(const jit::RegAlloc &ra,
     s.values = static_cast<uint32_t>(p.values.size());
     fill_pressure(p, s);
     for (const AbstractValue &v : p.values) {
+        if (v.req.fixed_reg >= 0) ++s.pinned_values;
+        const bool is_gp = v.req.cls == ResourceClass::GP;
         if (v.value_id < ra.assign.size() &&
             ra.assign[v.value_id].loc == jit::RegAlloc::Loc::SPILL) {
             ++s.spills;
             s.spill_cost += spill_cost_via_objective(v.req, ctx);
+        } else if (v.value_id < ra.assign.size() &&
+                   ra.assign[v.value_id].loc == jit::RegAlloc::Loc::REG) {
+            if (is_gp) ++s.allocated_gp; else ++s.allocated_fp;
         }
     }
     // linear_scan no hace coalescing por si mismo (lo hace ssa_coalesce antes) -> 0.
@@ -147,6 +192,11 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
     s.values = static_cast<uint32_t>(co.problem.values.size());
     s.spills = spill_count(co.problem, la);
     s.spill_cost = total_spill_cost(co.problem, la, ctx);
+    for (const AbstractValue &v : co.problem.values) {
+        if (v.req.fixed_reg >= 0) ++s.pinned_values;
+        if (la.lane_of(v.value_id) == kSpilled) continue;
+        if (v.req.cls == ResourceClass::GP) ++s.allocated_gp; else ++s.allocated_fp;
+    }
     return s;
 }
 

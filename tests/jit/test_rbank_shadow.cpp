@@ -121,8 +121,28 @@ int main() {
         // Banco amplio (>=14 GP): rbank NO derrama -> mejor o igual que el linear.
         CHECK(sr.spills == 0, "rbank derramo con banco amplio");
         CHECK(sr.spills <= sl.spills, "rbank PEOR que linear en spills");
-        std::printf("  linear: spills=%u pressure_gp=%u | rbank: spills=%u copies=%u\n",
-                    sl.spills, sl.max_pressure_gp, sr.spills, sr.copies_removed);
+        // allocated: linear 2 en reg + 1 spilled; rbank 3 en reg.
+        CHECK(sl.allocated_gp == 2, "linear allocated_gp != 2");
+        CHECK(sr.allocated_gp == 3, "rbank allocated_gp != 3");
+        // ShadowDiff (rbank - linear): -1 spill, +1 registro usado.
+        ShadowDiff d = shadow_diff(sl, sr);
+        CHECK(d.spills_delta == -1, "diff spills != -1 (rbank mejora)");
+        CHECK(d.allocated_gp_delta == 1, "diff allocated_gp != +1");
+        std::printf("  linear: spills=%u alloc_gp=%u | rbank: spills=%u alloc_gp=%u copies=%u"
+                    " | DIFF spills=%+d cost=%+.1f\n",
+                    sl.spills, sl.allocated_gp, sr.spills, sr.allocated_gp,
+                    sr.copies_removed, d.spills_delta, d.spill_cost_delta);
+    }
+
+    // --- pinned_values en las stats ---
+    std::printf("\n[pinned_values contado en stats]\n");
+    {
+        jit::IntervalResult ivs;
+        ivs.intervals.push_back(mkiv(0, jit::RegClass::GP, 0, 5, /*fixed=*/2));
+        ivs.intervals.push_back(mkiv(1, jit::RegClass::GP, 6, 10));
+        AbstractProblem p = intervals_to_problem(ivs);
+        ShadowStats sr = shadow_stats_rbank(p, ctx, false);
+        CHECK(sr.pinned_values == 1, "pinned_values != 1");
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
