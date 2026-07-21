@@ -96,4 +96,15 @@ ProfileFacts compute_profile_facts(const IrFunction &fn, const LoopFacts &loops,
     return pf;
 }
 
+std::vector<FactIssue> validate(const ProfileFacts &f) {
+    std::vector<FactIssue> issues;
+    for (size_t b = 0; b < f.block_weight.size(); ++b)
+        if (f.block_weight[b] < 0.0)
+            issues.push_back({FactCheck::PROFILE_NEGATIVE_WEIGHT, b, 0});
+    for (size_t L = 0; L < f.trip_count.size(); ++L)
+        if (f.trip_count[L] < 0.0)
+            issues.push_back({FactCheck::PROFILE_NEGATIVE_TRIP, L, 0});
+    return issues;
+}
+
 } // namespace analysis

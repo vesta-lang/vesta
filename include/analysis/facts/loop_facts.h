@@ -37,6 +37,7 @@
 #ifndef VESTA_ANALYSIS_FACTS_LOOP_FACTS_H
 #define VESTA_ANALYSIS_FACTS_LOOP_FACTS_H
 
+#include "analysis/fact_validation.h"
 #include "ir/ssa_ir.h"
 
 #include <cstdint>
@@ -95,6 +96,16 @@ struct LoopFacts {
  * @return    hechos por bloque; vectores dimensionados a @c fn.blocks.size().
  */
 LoopFacts compute_loop_facts(const ir::IrFunction &fn);
+
+/**
+ * @brief AUTOCERTIFICACION: comprueba los invariantes internos de @p f.
+ * @return lista de violaciones (vacia = LoopFacts consistente).
+ *
+ * Invariantes: un header esta in_loop; @c loop_depth>0 <=> @c in_loop; los
+ * @c loop_id/@c parent_loop/@c header_block estan en rango; ningun bucle es su
+ * propio padre.
+ */
+std::vector<FactIssue> validate(const LoopFacts &f);
 
 } // namespace analysis
 

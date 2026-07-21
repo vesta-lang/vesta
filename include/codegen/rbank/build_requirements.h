@@ -77,23 +77,19 @@ namespace jit {
 namespace rbank {
 
 /**
- * @brief Ensambla el snapshot de @c ValueRequirements de una funcion real.
- * @param fn    funcion SSA.
- * @param prof  perfil de branches (opcional); si es @c nullptr o vacio, el
- *              @c execution_weight queda 0 -> el contexto usa el estatico.
- * @return      un @c ValueRequirements por cada valor SSA con def/param/interval.
+ * @brief Ensambla los @c ValueRequirements corriendo los adaptadores sobre unos
+ *        Facts YA COMPUTADOS (no los recomputa).  Lo usan @c build_value_requirements
+ *        y @c build_snapshot para no duplicar el trabajo de Facts.
+ * @param fn     funcion SSA.
+ * @param live   liveness ya computada.
+ * @param calls  posiciones de call (de @c collect_call_positions).
+ * @param loops  LoopFacts ya computados.
+ * @param pf     ProfileFacts (vacios si no hay perfil).
  */
-inline std::vector<ValueRequirements> build_value_requirements(
-    const ir::IrFunction &fn,
-    const analysis::BranchProfile *prof = nullptr) {
-
-    // Facts (una vez).
-    ir::LivenessResult live = ir::compute_liveness(fn);
-    std::vector<uint32_t> calls = collect_call_positions(fn, live);
-    analysis::LoopFacts loops = analysis::compute_loop_facts(fn);
-    analysis::ProfileFacts pf;
-    if (prof && !prof->empty())
-        pf = analysis::compute_profile_facts(fn, loops, *prof);
+inline std::vector<ValueRequirements> assemble_value_requirements(
+    const ir::IrFunction &fn, const ir::LivenessResult &live,
+    const std::vector<uint32_t> &calls, const analysis::LoopFacts &loops,
+    const analysis::ProfileFacts &pf) {
 
     // value_id -> bloque de definicion (params se definen en la entrada).
     std::unordered_map<ir::IrValueId, ir::IrBlockId> def_block;
@@ -135,6 +131,25 @@ inline std::vector<ValueRequirements> build_value_requirements(
         out.push_back(r);
     }
     return out;
+}
+
+/**
+ * @brief Ensambla el snapshot de @c ValueRequirements de una funcion real
+ *        (computa los Facts y delega en @c assemble_value_requirements).
+ * @param fn    funcion SSA.
+ * @param prof  perfil de branches (opcional); si es @c nullptr o vacio, el
+ *              @c execution_weight queda 0 -> el contexto usa el estatico.
+ */
+inline std::vector<ValueRequirements> build_value_requirements(
+    const ir::IrFunction &fn,
+    const analysis::BranchProfile *prof = nullptr) {
+    ir::LivenessResult live = ir::compute_liveness(fn);
+    std::vector<uint32_t> calls = collect_call_positions(fn, live);
+    analysis::LoopFacts loops = analysis::compute_loop_facts(fn);
+    analysis::ProfileFacts pf;
+    if (prof && !prof->empty())
+        pf = analysis::compute_profile_facts(fn, loops, *prof);
+    return assemble_value_requirements(fn, live, calls, loops, pf);
 }
 
 /**

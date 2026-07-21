@@ -1003,6 +1003,20 @@ else ()
     target_link_libraries(test_rbank_build PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# FunctionSnapshot (codegen/rbank): fotografia del conocimiento del compilador
+# sobre una funcion (Facts + ValueRequirements) + autocertificacion agregada.
+add_executable(test_rbank_snapshot tests/jit/test_rbank_snapshot.cpp)
+target_include_directories(test_rbank_snapshot PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_snapshot PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_snapshot PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_snapshot PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_snapshot PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone

@@ -49,6 +49,7 @@
 #ifndef VESTA_ANALYSIS_DERIVED_PROFILE_FACTS_H
 #define VESTA_ANALYSIS_DERIVED_PROFILE_FACTS_H
 
+#include "analysis/fact_validation.h"
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
 
@@ -111,6 +112,12 @@ struct ProfileFacts {
 ProfileFacts compute_profile_facts(const ir::IrFunction &fn,
                                    const LoopFacts &loops,
                                    const BranchProfile &prof);
+
+/**
+ * @brief AUTOCERTIFICACION: invariantes de @p f (pesos y trip-counts >= 0).
+ * @return lista de violaciones (vacia = ProfileFacts consistente).
+ */
+std::vector<FactIssue> validate(const ProfileFacts &f);
 
 } // namespace analysis
 

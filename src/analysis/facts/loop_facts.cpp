@@ -227,4 +227,32 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     return f;
 }
 
+std::vector<FactIssue> validate(const LoopFacts &f) {
+    std::vector<FactIssue> issues;
+    const size_t N = f.loop_depth.size();
+    for (size_t b = 0; b < N; ++b) {
+        const bool in = f.in_loop[b] != 0;
+        const bool depth_pos = f.loop_depth[b] > 0;
+        // depth>0 <=> in_loop.
+        if (in != depth_pos)
+            issues.push_back({FactCheck::LOOP_DEPTH_INLOOP_MISMATCH, b, 0});
+        // Un header debe estar in_loop.
+        if (f.is_loop_header[b] && !in)
+            issues.push_back({FactCheck::LOOP_HEADER_NOT_IN_LOOP, b, 0});
+        // loop_id en rango.
+        if (f.loop_id[b] != LoopFacts::NO_LOOP && f.loop_id[b] >= f.loop_count)
+            issues.push_back({FactCheck::LOOP_ID_OUT_OF_RANGE, b, f.loop_id[b]});
+    }
+    for (uint32_t L = 0; L < f.loop_count; ++L) {
+        const uint32_t p = f.parent_of(L);
+        if (p != LoopFacts::NO_LOOP && p >= f.loop_count)
+            issues.push_back({FactCheck::LOOP_PARENT_OUT_OF_RANGE, L, p});
+        if (p == L)
+            issues.push_back({FactCheck::LOOP_PARENT_SELF, L, 0});
+        if (L < f.loop_header.size() && f.loop_header[L] >= N)
+            issues.push_back({FactCheck::LOOP_HEADER_BLOCK_OOR, L, f.loop_header[L]});
+    }
+    return issues;
+}
+
 } // namespace analysis
