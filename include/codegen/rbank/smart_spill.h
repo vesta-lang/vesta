@@ -22,16 +22,34 @@
  * Objective.  Asi el Objective no se convierte en el vertedero de toda la
  * inteligencia (spill/move/affinity/sched/remat).
  *
- * ESTRATEGIA (Belady ponderado por coste): cuando no cabe un valor, la victima es la
- * que MAXIMIZA  tiempo_de_lane_liberado / coste_de_spill.  Dos factores ortogonales:
- *   - tiempo_liberado = end - punto_actual  (ESTRUCTURA del problema, el LiveRange).
- *   - coste_de_spill  = @c Objective (weight/remat).
- * Preferir derramar lo que libera la lane MUCHO tiempo y cuesta POCO.  El coste lo
- * pone el Objective; la COMBINACION (Belady + coste) es del algoritmo.
+ * ESTRATEGIA (heuristica COST-AWARE de DURACION RESTANTE -- NO es Belady).  Cuando
+ * no cabe un valor, la victima MAXIMIZA  duracion_restante / coste_de_spill.  Dos
+ * factores ortogonales:
+ *   - duracion_restante = end - punto_actual  (ESTRUCTURA, el LiveRange).
+ *   - coste_de_spill    = @c Objective (weight/remat).
+ * Preferir derramar lo que ocupa la lane MUCHO tiempo y cuesta POCO.  El coste lo
+ * pone el Objective; la COMBINACION es del algoritmo.
+ *
+ * POR QUE NO ES BELADY (importante).  Belady elige por NEXT-USE DISTANCE (el uso mas
+ * lejano en el FUTURO); esto usa la DURACION RESTANTE (@c end - @c now), que NO es lo
+ * mismo: un valor que vive hasta @c end=200 pero se USA en 100,101,102 es MALA
+ * victima para Belady (se reusa enseguida) aunque su duracion sea larga.  El Belady
+ * REAL necesita @c next_use(v), que hoy NO existe -- llegara con @c UseDefFacts (la
+ * evolucion natural: F5 -> UseDefFacts -> next-use -> Belady real).  Hasta entonces
+ * la duracion restante es una APROXIMACION razonable.
+ *
+ * LIMITES (honestos):
+ *   - GREEDY: al derramar una victima no reconsidera decisiones anteriores -> optimo
+ *     LOCAL, no global (el optimo global es el solver de Pareto de F5 avanzado).
+ *   - Es una DecisionPolicy EMBRIONARIA: @c spill_score ES @c choose_spill_victim.
+ *     Manana seran @c CostPolicy / @c BeladyPolicy / @c ParetoPolicy intercambiables
+ *     sin tocar el resto del allocator (P8/P16).
+ *   - CONTEXTO como FACHADA (vigilar): el @c OptimizationContext no debe volverse un
+ *     God Context; a medida que lleguen next_use/loop-profile/alias, mejor que sea
+ *     una fachada a Facts (ctx.usedef()/profile()/hw()/objective()) que un almacen.
  *
  * i18n: produce DATOS.  Fase 5 (nucleo): ADITIVO, sin consumidores de produccion
- * (solo el prototipo/test).  El solver de Pareto + layout de slots cache-aware es la
- * version avanzada (mismo Objective, mas candidatos).
+ * (solo el prototipo/test).
  */
 
 #ifndef VESTA_CODEGEN_RBANK_SMART_SPILL_H
@@ -60,8 +78,9 @@ inline double spill_cost_via_objective(const ValueRequirements &r,
 }
 
 /**
- * @brief Colorea el problema con SPILL INTELIGENTE (Belady ponderado por coste).
- *        El coste de cada candidato lo da el Objective (via @p ctx); la eleccion de
+ * @brief Colorea el problema con SPILL INTELIGENTE (heuristica cost-aware de
+ *        duracion restante; NO Belady -- ese necesita next-use/UseDefFacts).  El
+ *        coste de cada candidato lo da el Objective (via @p ctx); la eleccion de
  *        victima es la estrategia de este algoritmo.
  */
 inline LaneAssignment color_smart_spill(const AbstractProblem &p,

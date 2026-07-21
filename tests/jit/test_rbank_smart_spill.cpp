@@ -8,8 +8,9 @@
 /**
  * @file tests/jit/test_rbank_smart_spill.cpp
  * @brief Fase 5 (nucleo): spill INTELIGENTE (victima por coste) vs spill NAIVE.
- *        El coste lo describe el Objective; la estrategia (Belady ponderado) es del
- *        algoritmo -- separacion dato/mecanismo.  Property: smart NUNCA peor que
+ *        El coste lo describe el Objective; la estrategia (cost-aware de duracion
+ *        restante, NO Belady) es del algoritmo -- separacion dato/mecanismo.  El
+ *        Belady real llega con UseDefFacts->next-use.  Property: smart NUNCA peor que
  *        naive + coloreo propio + los valores CALIENTES sobreviven.
  */
 
