@@ -83,6 +83,13 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
         if (iv.ranges.empty()) continue; // vreg muerto: el allocator lo ignora.
         AbstractValue av;
         av.value_id = iv.vreg;
+        // TODO(RangeSet): el modelo PIERDE LOS HUECOS aqui -- toma el envolvente
+        // [first.from, last.to) porque AbstractValue es de un solo segmento.  Casi
+        // todos los problemas futuros CONVERGEN en este punto: el coalescing (check
+        // de max_overlap por el envolvente), el next-use y el Belady real (necesitan
+        // los usos intermedios) y la presion exacta.  Todos desaparecen cuando
+        // AbstractValue soporte MULTIPLES SEGMENTOS (Opcion B).  Hasta entonces, el
+        // envolvente es la aproximacion conservadora.
         av.start = iv.ranges.front().from;
         av.end = iv.ranges.back().to > 0 ? iv.ranges.back().to - 1 : 0; // ) -> ]
         av.req.value_id = iv.vreg;
@@ -115,7 +122,28 @@ struct ShadowStats {
     uint32_t allocated_fp    = 0; ///< valores FP en registro (no spilled).
     uint32_t pinned_values   = 0; ///< valores con pin (fixed_reg >= 0).
     double   spill_cost      = 0.0; ///< coste total de spill (via Objective).
+    // --- Instrumentacion de correctitud cross-call (donde cae cada valor vivo a
+    // traves de un CALL).  linear_scan de PRODUCCION fuerza callee-saved/spill; el
+    // modelo aun NO consume crosses_call -> aqui se ven caer en caller-saved.  Un
+    // xcall_caller > 0 = asignacion INCORRECTA (el CALL clobbea la lane volatil).
+    uint32_t xcall_values    = 0; ///< valores con crosses_call.
+    uint32_t xcall_caller    = 0; ///< de esos, en lane VOLATILE (caller-saved) = PELIGRO.
+    uint32_t xcall_callee    = 0; ///< de esos, en lane PRESERVED (callee-saved) = seguro.
+    uint32_t xcall_spilled   = 0; ///< de esos, spilled (seguro).
 };
+
+/**
+ * @brief Clasifica un valor cross-call por el SavePolicy de su lane fisica.
+ *        @p lane_id = MReg id (o @c kSpilled).  Suma en las cuentas xcall_*.
+ */
+inline void classify_xcall(ShadowStats &s, const OptimizationContext &ctx,
+                           int lane_id, ViewWidth w) {
+    ++s.xcall_values;
+    if (lane_id == kSpilled) { ++s.xcall_spilled; return; }
+    const SavePolicy sp = ctx.get_bank().preservation(static_cast<uint8_t>(lane_id), w);
+    if (sp == SavePolicy::PRESERVED) ++s.xcall_callee;
+    else                             ++s.xcall_caller; // VOLATILE (o RESERVED anomalo).
+}
 
 /**
  * @struct ShadowDiff
@@ -164,14 +192,18 @@ inline ShadowStats shadow_stats_linear(const jit::RegAlloc &ra,
     for (const AbstractValue &v : p.values) {
         if (v.req.fixed_reg >= 0) ++s.pinned_values;
         const bool is_gp = v.req.cls == ResourceClass::GP;
-        if (v.value_id < ra.assign.size() &&
-            ra.assign[v.value_id].loc == jit::RegAlloc::Loc::SPILL) {
+        const bool has = v.value_id < ra.assign.size();
+        const bool spilled = has && ra.assign[v.value_id].loc == jit::RegAlloc::Loc::SPILL;
+        const bool inreg   = has && ra.assign[v.value_id].loc == jit::RegAlloc::Loc::REG;
+        if (spilled) {
             ++s.spills;
             s.spill_cost += spill_cost_via_objective(v.req, ctx);
-        } else if (v.value_id < ra.assign.size() &&
-                   ra.assign[v.value_id].loc == jit::RegAlloc::Loc::REG) {
+        } else if (inreg) {
             if (is_gp) ++s.allocated_gp; else ++s.allocated_fp;
         }
+        if (v.req.crosses_call && ctx.has_bank())
+            classify_xcall(s, ctx, spilled ? kSpilled : (inreg ? (int)ra.assign[v.value_id].reg : kSpilled),
+                           v.req.width);
     }
     // linear_scan no hace coalescing por si mismo (lo hace ssa_coalesce antes) -> 0.
     return s;
@@ -198,7 +230,10 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
     // dejara de implicar "en registro" -> habra que distinguir por tipo de lane.
     for (const AbstractValue &v : co.problem.values) {
         if (v.req.fixed_reg >= 0) ++s.pinned_values;
-        if (la.lane_of(v.value_id) == kSpilled) continue;
+        const int lane = la.lane_of(v.value_id);
+        if (v.req.crosses_call && ctx.has_bank())
+            classify_xcall(s, ctx, lane, v.req.width);
+        if (lane == kSpilled) continue;
         if (v.req.cls == ResourceClass::GP) ++s.allocated_gp; else ++s.allocated_fp;
     }
     return s;
@@ -253,6 +288,13 @@ struct ShadowAggregate {
     uint64_t rbank_spills     = 0;
     double   linear_spill_cost = 0.0;
     double   rbank_spill_cost  = 0.0;
+    // Instrumentacion cross-call agregada (correctitud): cuantos valores vivos a
+    // traves de un CALL caen en caller-saved (PELIGRO) con cada allocator.
+    uint64_t xcall_values       = 0;
+    uint64_t linear_xcall_caller = 0;
+    uint64_t rbank_xcall_caller  = 0;
+    uint64_t linear_xcall_callee = 0;
+    uint64_t rbank_xcall_callee  = 0;
 
     /** @brief Acumula el veredicto de una funcion. */
     void add(const ShadowReport &r) {
@@ -264,6 +306,11 @@ struct ShadowAggregate {
         rbank_spills += r.rbank.spills;
         linear_spill_cost += r.linear.spill_cost;
         rbank_spill_cost += r.rbank.spill_cost;
+        xcall_values += r.linear.xcall_values; // mismo problema -> mismo conteo.
+        linear_xcall_caller += r.linear.xcall_caller;
+        rbank_xcall_caller += r.rbank.xcall_caller;
+        linear_xcall_callee += r.linear.xcall_callee;
+        rbank_xcall_callee += r.rbank.xcall_callee;
     }
 };
 

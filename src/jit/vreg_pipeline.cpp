@@ -30,9 +30,13 @@
 #include "jit/x86_64/x86_target.h"
 #include "jit/x86_encoder.h"
 
+#include "codegen/rbank/shadow.h"
+#include "jit/backend_caps.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace jit {
@@ -73,6 +77,84 @@ bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
                 break;
             }
     return false;
+}
+
+/**
+ * @brief SHADOW MODE (rbank vs linear_scan): corre el modelo de banco ancho EN
+ *        PARALELO al allocator de produccion sobre CADA funcion, acumula un panel de
+ *        calidad y lo imprime al terminar.  SIN usar la asignacion de rbank (cero
+ *        cambio de comportamiento).  Activar con VESTA_RBANK_SHADOW=1
+ *        (+ VESTA_RBANK_SHADOW_VERBOSE=1 para el diff por funcion).  Es la primera
+ *        validacion EXTERNA del modelo (¿describe programas reales?).
+ */
+bool shadow_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_RBANK_SHADOW");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
+codegen::rbank::ShadowAggregate g_shadow_agg;
+std::mutex g_shadow_mtx;
+
+void print_shadow_summary() {
+    std::lock_guard<std::mutex> lk(g_shadow_mtx);
+    const codegen::rbank::ShadowAggregate &a = g_shadow_agg;
+    if (a.functions == 0) return;
+    std::fprintf(stderr,
+                 "\n=== [shadow] rbank vs linear_scan (%u funciones) ===\n"
+                 "  iguales=%u  mejoran=%u  empeoran=%u\n"
+                 "  spills:      linear=%llu  rbank=%llu\n"
+                 "  coste spill: linear=%.1f  rbank=%.1f\n"
+                 "  cross-call:  vivos=%llu | caller-saved(PELIGRO) linear=%llu rbank=%llu"
+                 " | callee-saved linear=%llu rbank=%llu\n",
+                 a.functions, a.equal, a.improved, a.worsened,
+                 (unsigned long long)a.linear_spills, (unsigned long long)a.rbank_spills,
+                 a.linear_spill_cost, a.rbank_spill_cost,
+                 (unsigned long long)a.xcall_values,
+                 (unsigned long long)a.linear_xcall_caller,
+                 (unsigned long long)a.rbank_xcall_caller,
+                 (unsigned long long)a.linear_xcall_callee,
+                 (unsigned long long)a.rbank_xcall_callee);
+}
+
+/** @brief Corre rbank sobre el mismo problema que linear_scan y acumula el panel. */
+void run_shadow(const IntervalResult &ivs, const RegAlloc &ra,
+                const ir::IrFunction &fn) {
+    if (!shadow_enabled()) return;
+    using namespace codegen::rbank;
+    static std::once_flag atexit_once;
+    std::call_once(atexit_once, [] { std::atexit(print_shadow_summary); });
+
+#if defined(_WIN32)
+    const bool sysv = false;
+#else
+    const bool sysv = true;
+#endif
+    PhysicalRegisterBank bank = physical_bank_x86_64(sysv, backend_caps_host());
+    ConstraintSet cs;
+    OptimizationContext ctx = make_context(bank, cs);
+    const AbstractProblem p = intervals_to_problem(ivs);
+    const bool vec = fn_needs_vec_reserve(fn);
+    const ShadowStats sl = shadow_stats_linear(ra, p, ctx);
+    const ShadowStats sr = shadow_stats_rbank(p, ctx, vec);
+    const ShadowReport rep = make_shadow_report(sl, sr);
+    {
+        std::lock_guard<std::mutex> lk(g_shadow_mtx);
+        g_shadow_agg.add(rep);
+    }
+    static const bool verbose = [] {
+        const char *e = std::getenv("VESTA_RBANK_SHADOW_VERBOSE");
+        return e && e[0] && e[0] != '0';
+    }();
+    if (verbose)
+        std::fprintf(stderr,
+                     "[shadow] %-28s lin(sp=%u c=%.1f) rbank(sp=%u c=%.1f cp=%u) "
+                     "DIFF sp=%+d c=%+.1f | xcall=%u caller[lin=%u rb=%u] callee[lin=%u rb=%u]\n",
+                     fn.name.c_str(), sl.spills, sl.spill_cost, sr.spills, sr.spill_cost,
+                     sr.copies_removed, rep.diff.spills_delta, rep.diff.spill_cost_delta,
+                     sl.xcall_values, sl.xcall_caller, sr.xcall_caller,
+                     sl.xcall_callee, sr.xcall_callee);
 }
 
 /**
@@ -175,6 +257,9 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
     RegAlloc ra = linear_scan(ivs, tri);
+
+    /* SHADOW: corre rbank en paralelo (gated; NO usa su resultado). */
+    run_shadow(ivs, ra, fn);
 
     /* 3b. Verificador adversarial (commit 6): TODO GC root vivo a traves
      *     de un call DEBE estar en un slot, para que su stackmap lo
