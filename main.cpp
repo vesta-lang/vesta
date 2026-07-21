@@ -26,26 +26,35 @@
 #include "cli/cli.h"
 #include "cli/vsh.h"
 #include "cli/version_info.h" // Banner de `vesta --version` / `-v`
-#include "analyze/bigo.h" // Subsistema de coste: modo --analyze (Big-O)
+#include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
+#include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
+#include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
+#include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
-#include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
-#include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa
-#include "aot/aot_lower.h" // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
-#include "aot/object_writer.h" // Phase AOT.4: emisor PE/ELF (ObjectWriter)
-#include "aot/aot_native.h"    // Phase AOT.3 Paso 2: _start arch-portable
-#include "aot/linker.h"        // Phase AOT.5: linker propio (enlaza .o)
-#include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
+#include "ir/passes/select_policy.h" // PGO: load_branch_profile (if-conversion)
+#include "ir/ssa_ir_serialize.h" //  AOT: parse_ir_section (round-trip del @ir)
+#include "aot/aot_analyze.h" //  AOT.1: analisis de compatibilidad nativa
+#include "aot/aot_lower.h" //  AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
+#include "aot/object_writer.h" //  AOT.4: emisor PE/ELF (ObjectWriter)
+#include "aot/aot_native.h"    //  AOT.3 Paso 2: _start arch-portable
+#include "aot/linker.h"        //  AOT.5: linker propio (enlaza .o)
+#include "jit/vreg_pipeline.h" //  AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
+#include "jit/backend_caps.h" // caps del target para el gate FMA (AOT)
 #include "jit/auto_jit.h"
-#include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
-#include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
+#include "jit/jit_branch_prof.h"
+#include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
+#include "jit/keystone_asm_backend.h" //  AS inc.4b: registrar backend asm
+#include "jit/inline_asm_trampoline.h" //  AS inc.6: helper runner inline-asm
 #include "jit/naked_native.h" // Bug 198: dispatcher naked (asm con simbolos propios)
 #include "runtime/profile.h"           // Sprint D.6 (2026-06-03)
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
 #include "cli/runtime_api_commands.h"
+#include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
 #include "vx/parser.h"
 #include "vx/semantic_index.h"
@@ -55,9 +64,9 @@ namespace vx {
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 }
-#include "vx/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
-#include "vx/project_cache.h"  /* Phase M5.B project-level cache */
-#include "vx/velb_signature.h" /* Phase M.L28: firmas digitales */
+#include "vx/comptime/comptime_vm.h"    /*  MC.4 probe del ComptimeRuntime */
+#include "vx/project_cache.h"  /*  M5.B project-level cache */
+#include "vx/velb_signature.h" /*  M.L28: firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/fs_utils.h"
 #include "runtime/manager_runtime.h"
@@ -69,13 +78,12 @@ void set_aot_condcomp_target(const std::string &os,
 #include "distrib/node_registry.h"
 #include "debug/debugger.h"
 #include "debug/auth.h"
-#include "install/install.h"
 
 #include <filesystem>
-#include <map>           // Phase MC.16: per-macro manifest map
-#include <unordered_map> // Phase AOT.3 2b-ii: layout name->offset
-#include <set>           // Phase MC.16: manifest diff seen-set
-#include <cctype>        // Phase MC.16: isalnum en find_macro_ranges_with_names
+#include <map>           //  MC.16: per-macro manifest map
+#include <unordered_map> //  AOT.3 2b-ii: layout name->offset
+#include <set>           //  MC.16: manifest diff seen-set
+#include <cctype>        //  MC.16: isalnum en find_macro_ranges_with_names
 #include <openssl/rand.h>
 
 #ifdef VESTA_HAS_PREPROCESSOR
@@ -209,16 +217,256 @@ static void apply_dist_config(runtime::VM *vm,
 /* forzar registro de virtual fns runtime (callbacks Vesta->C). */
 extern "C" void runtime_ensure_vx_callback_registered(void);
 
+// ---------------------------------------------------------------------------
+//  --analyze-write: escribir las anotaciones sugeridas al fichero analizado.
+//
+//  Parseo textual (el IR no lleva la posicion de la declaracion): recorre el
+//  fichero rastreando el nivel de llaves y el struct/class actual, y por cada
+//  declaracion de funcion o metodo cuya clave este en @p anot_por_clave,
+//  reemplaza las lineas de contrato que la preceden por las nuevas.  Preserva
+//  @Target/@Override/comentarios ///.  Solo toca lo DEFINIDO en este fichero
+//  (las funciones de imports no aparecen aqui).
+//
+//  Clave: funcion libre -> su nombre; metodo -> `Struct::metodo` (Struct sin
+//  los type-params, para casar con la clave `plantilla::metodo` del analisis).
+// ---------------------------------------------------------------------------
+static bool
+annotate_write_source(const std::string &path,
+                      const std::vector<std::string> &orden,
+                      const std::map<std::string, std::string> &display,
+                      const std::map<std::string, std::vector<std::string>>
+                          &anot_por_clave) {
+    (void)orden;
+    (void)display;
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        std::cerr << "[analyze-write] no se puede abrir: " << path << "\n";
+        return false;
+    }
+    std::vector<std::string> lin;
+    {
+        std::string l;
+        while (std::getline(in, l)) {
+            if (!l.empty() && l.back() == '\r') l.pop_back(); // CRLF
+            lin.push_back(std::move(l));
+        }
+    }
+    in.close();
+
+    auto trim = [](const std::string &s) {
+        size_t a = s.find_first_not_of(" \t");
+        if (a == std::string::npos) return std::string();
+        size_t b = s.find_last_not_of(" \t");
+        return s.substr(a, b - a + 1);
+    };
+    auto indent_de = [](const std::string &s) {
+        size_t a = s.find_first_not_of(" \t");
+        return (a == std::string::npos) ? std::string() : s.substr(0, a);
+    };
+    // Una linea de CONTRATO existente (a reemplazar): empieza por una de las
+    // anotaciones de huella/coste, o es continuacion multilinea de una de
+    // ellas (partial_/total_/when: sueltos).  @Target/@Override/// NO cuentan.
+    auto es_contrato = [&](const std::string &s) {
+        const std::string t = trim(s);
+        static const char *pref[] = {"@pure",  "@nothrow",    "@nopanic",
+                                     "@alloc", "@stack",      "@complexity",
+                                     "partial_pre:", "partial_post:",
+                                     "total_pre:",   "total_post:", "when:"};
+        for (const char *p : pref)
+            if (t.rfind(p, 0) == 0) return true;
+        return false;
+    };
+    // Nombre de un tipo-de-retorno plausible (primer token de una decl).  No
+    // hace falta ser exhaustivo: basta descartar palabras clave de sentencia.
+    auto es_palabra_sentencia = [](const std::string &w) {
+        static const std::set<std::string> kw = {
+            "return", "if", "while", "for", "do", "else", "match", "struct",
+            "class", "enum", "import", "namespace", "static_assert", "asm",
+            "break", "continue", "switch", "case", "concept", "using",
+            "typedef", "extern", "comptime"};
+        return kw.count(w) > 0;
+    };
+
+    // Detecta si `s` declara una funcion o metodo y devuelve su nombre; "" si
+    // no.  Heuristica: tiene `(`, el token justo antes del `(` es un
+    // identificador, hay al menos un token de tipo antes, y NO empieza por una
+    // palabra de sentencia.  El cuerpo (`{`) o el `=>` confirman la decl.
+    auto nombre_decl = [&](const std::string &s) -> std::string {
+        const std::string t = trim(s);
+        if (t.empty() || t[0] == '/' || t[0] == '@' || t[0] == '#') return "";
+        const size_t par = t.find('(');
+        if (par == std::string::npos) return "";
+        // El nombre es el identificador inmediatamente antes del '('.
+        size_t e = par;
+        while (e > 0 && (std::isspace((unsigned char)t[e - 1]))) --e;
+        size_t b = e;
+        while (b > 0 && (std::isalnum((unsigned char)t[b - 1]) ||
+                         t[b - 1] == '_'))
+            --b;
+        if (b == e) return "";
+        const std::string nombre = t.substr(b, e - b);
+        if (nombre.empty() ||
+            (!std::isalpha((unsigned char)nombre[0]) && nombre[0] != '_'))
+            return "";
+        // Debe haber algo ANTES del nombre (el tipo de retorno / modificadores)
+        // -> descarta llamadas `foo(...)`.  Y el primer token no puede ser una
+        // palabra de sentencia (`return foo(...)`, `if (...)`).
+        const std::string antes = trim(t.substr(0, b));
+        if (antes.empty()) return "";
+        std::string primero = antes;
+        size_t sp = primero.find_first_of(" \t");
+        if (sp != std::string::npos) primero = primero.substr(0, sp);
+        if (es_palabra_sentencia(primero)) return "";
+        // Confirma que parece una definicion: la linea acaba en `{`, `=>`, `;`
+        // (decl sin cuerpo) o el `(` abre parametros de una decl (heuristica:
+        // hay un `)` con `{`/`=>` cerca -- aceptamos si acaba en `{` o `=>` o
+        // contiene `) {` / `) =>`).
+        if (t.find("{") != std::string::npos ||
+            t.find("=>") != std::string::npos)
+            return nombre;
+        return ""; // p.ej. una llamada multilinea; conservador
+    };
+
+    // Una pasada del reescritor: recorre `src` rastreando llaves + la pila de
+    // struct/class, y sustituye los contratos que preceden a cada decl casada.
+    // Devuelve las lineas resultantes y cuantas decl se anotaron.
+    struct Ctx {
+        std::string nombre;
+        int nivel;
+    };
+    auto apply_once =
+        [&](const std::vector<std::string> &src)
+        -> std::pair<std::vector<std::string>, size_t> {
+        std::vector<Ctx> pila;
+        int nivel = 0;
+        std::string struct_pendiente; // visto `struct X` esperando su `{`
+        std::vector<std::string> out;
+        size_t reemplazos = 0;
+
+        for (const auto &l : src) {
+            const std::string t = trim(l);
+
+            // Apertura de struct/class: recordar el nombre hasta ver su `{`.
+            {
+                std::string kw;
+                if (t.rfind("struct ", 0) == 0) kw = t.substr(7);
+                else if (t.rfind("class ", 0) == 0) kw = t.substr(6);
+                else if (t.rfind("public struct ", 0) == 0) kw = t.substr(14);
+                else if (t.rfind("public class ", 0) == 0) kw = t.substr(13);
+                if (!kw.empty()) {
+                    size_t e = 0;
+                    while (e < kw.size() && (std::isalnum((unsigned char)kw[e]) ||
+                                             kw[e] == '_'))
+                        ++e;
+                    struct_pendiente = kw.substr(0, e);
+                }
+            }
+
+            // Declaracion de funcion/metodo?
+            const std::string nom = nombre_decl(l);
+            if (!nom.empty()) {
+                // Clave: metodo generico -> `Plantilla::metodo`; no generico ->
+                // mangled `Struct__metodo`.  Se prueban ambas formas.
+                auto it = anot_por_clave.end();
+                if (!pila.empty()) {
+                    const std::string &st = pila.back().nombre;
+                    it = anot_por_clave.find(st + "::" + nom);
+                    if (it == anot_por_clave.end())
+                        it = anot_por_clave.find(st + "__" + nom);
+                } else {
+                    it = anot_por_clave.find(nom);
+                }
+                // Fallback funcion libre: sufijo (namespace -> `ns__nom`).
+                if (it == anot_por_clave.end() && pila.empty()) {
+                    for (auto k = anot_por_clave.begin();
+                         k != anot_por_clave.end(); ++k) {
+                        const std::string &c = k->first;
+                        if (c.size() > nom.size() + 2 &&
+                            c.compare(c.size() - nom.size() - 2, nom.size() + 2,
+                                      "__" + nom) == 0) {
+                            it = k;
+                            break;
+                        }
+                    }
+                }
+                if (it != anot_por_clave.end()) {
+                    // Quitar los contratos ya emitidos (contiguos arriba).
+                    while (!out.empty() && es_contrato(out.back()))
+                        out.pop_back();
+                    const std::string ind = indent_de(l);
+                    for (const auto &a : it->second) out.push_back(ind + a);
+                    ++reemplazos;
+                }
+            }
+
+            out.push_back(l);
+
+            for (char c : l) {
+                if (c == '{') {
+                    if (!struct_pendiente.empty()) {
+                        pila.push_back({struct_pendiente, nivel});
+                        struct_pendiente.clear();
+                    }
+                    ++nivel;
+                } else if (c == '}') {
+                    --nivel;
+                    if (!pila.empty() && pila.back().nivel == nivel)
+                        pila.pop_back();
+                }
+            }
+        }
+        return {std::move(out), reemplazos};
+    };
+
+    auto pr = apply_once(lin);
+    const std::vector<std::string> &out = pr.first;
+    const size_t reemplazos = pr.second;
+
+    if (reemplazos == 0) {
+        std::cout << "[analyze-write] " << path
+                  << ": ninguna funcion/metodo de este fichero tenia contrato "
+                     "que actualizar (las de imports se anotan analizando su "
+                     "propio fichero).\n";
+        return true;
+    }
+
+    // Salvaguarda: aplicar el reescritor sobre su propia salida.  Si una 2a
+    // pasada la cambiaria, el mapeo texto->decl no es estable -> NO tocar el
+    // fichero (mejor abortar que corromperlo).
+    auto pr2 = apply_once(out);
+    if (pr2.first != out) {
+        std::cerr << "[analyze-write] " << path
+                  << ": el reescritor no es estable sobre su salida (posible "
+                     "decl ambigua); no se toca el fichero.\n";
+        return false;
+    }
+
+    std::ofstream ofs(path, std::ios::binary);
+    if (!ofs.is_open()) {
+        std::cerr << "[analyze-write] no se puede escribir: " << path << "\n";
+        return false;
+    }
+    for (const auto &l : out) ofs << l << "\n";
+    ofs.close();
+    std::cout << "[analyze-write] " << path << ": " << reemplazos
+              << " funcion(es)/metodo(s) anotados.  Re-ejecuta --analyze para "
+                 "verificar (0 discrepancias).\n";
+    return true;
+}
+
 int main(int argc, char *argv[]) {
 #if defined(WIN32) || defined(_WIN32) ||                                       \
     defined(__WIN32) && !defined(__CYGWIN__)
     asm_multi_process::run_and_capture("chcp 65001");
 #endif
     runtime_ensure_vx_callback_registered();
-    // Phase AS inc.4b: registrar el backend de ensamblado Keystone para que el
+    // i18n: seleccionar el idioma de los diagnosticos desde el entorno
+    // (VESTA_LANG > LC_ALL > LANG; fallback al primer idioma del catalogo).
+    vx::diag::set_language(vx::diag::language_from_env());
+    //  AS inc.4b: registrar el backend de ensamblado Keystone para que el
     // frontend Vesta valide la sintaxis del inline asm en compile-time.
     jit::register_keystone_asm_backend();
-    // Phase AS inc.6: registrar el helper nativo vrt:inline_asm_exec que el
+    //  AS inc.6: registrar el helper nativo vrt:inline_asm_exec que el
     // interprete (modo -m vm, sin JIT) invoca por cada bloque inline-asm.
     jit::register_inline_asm_runner();
     // Bug/feature 198: registrar el dispatcher vrt:naked_dispatch que
@@ -272,6 +520,10 @@ int main(int argc, char *argv[]) {
         "Modo de ejecucion/compilacion: vm (interprete) | jit (JIT en "
         "caliente) | aot (compilacion nativa standalone, requiere --vx)",
         cxxopts::value<std::string>()->default_value("vm"))(
+        "diag-format",
+        "Formato de los diagnosticos: text (legible, default) | json | sarif "
+        "(SARIF 2.1.0 para IDEs/CI). El idioma del texto se elige con VESTA_LANG.",
+        cxxopts::value<std::string>()->default_value("text"))(
         "list-arch", "Imprimir arquitecturas soportadas")(
         "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
         "disasm-file", "Archivo binario a desensamblar",
@@ -287,16 +539,6 @@ int main(int argc, char *argv[]) {
                                        cxxopts::value<std::string>())(
         "schedulers", "Número de schedulers para el comando run",
         cxxopts::value<size_t>()->default_value("1"))(
-        "install",
-        "Ejecutar el instalador interactivo (o con flags adicionales)")(
-        "uninstall", "Desinstalar Vesta usando el manifest")(
-        "repair", "Reparar la instalacion existente")(
-        "silent", "Modo silencioso para install/uninstall")(
-        "per-user", "Forzar instalacion per-user")(
-        "system-wide", "Forzar instalacion system-wide")(
-        "prefix", "Directorio destino", cxxopts::value<std::string>())(
-        "manifest", "Ruta a install_manifest.json",
-        cxxopts::value<std::string>())(
         "stats",
         "Mostrar estadísticas de ejecución al finalizar (tiempo, MIPS)")
         // ---- opciones de JIT ----
@@ -309,11 +551,18 @@ int main(int argc, char *argv[]) {
             "jit-stats", "Imprimir snapshot final de counters del JIT: "
                          "compiled/unsupported/no_ir + threshold")(
             "jit-disasm", "Volcar hex bytes + disasm (Capstone) de cada "
-                          "funcion JIT-compilada a stderr")
+                          "funcion JIT-compilada a stderr")(
+            "cpu",
+            "Microarquitectura objetivo para el scheduler (p.ej. intel-skylake, "
+            "amd-zen3, intel-icelake).  Usa los datos EXACTOS de latencia/puertos "
+            "de la DB.  Sin --cpu: JIT auto-detecta el host; AOT usa el generico.",
+            cxxopts::value<std::string>())
         // ---- opciones de profiling (D.6 PGO) ----
         ("profile",
-         "Generar @c .vprof con branch/type/alloc counters al exit (PGO para "
-         "C2). Path opcional; default: 'program.vprof'.",
+         "PGO.  Al EJECUTAR (--run): genera '<path>.vprof' (branch/type/alloc "
+         "counters) y '<path>.lines' (perfil de branches por linea fuente, "
+         "requiere compilar con --vex-debug).  Al COMPILAR (--vx): carga "
+         "'<path>.lines' para las decisiones de if-conversion (PGO).",
          cxxopts::value<std::string>()->implicit_value("program.vprof"))
         // ---- opciones de runtime distribuido ----
         ("dist-port",
@@ -377,8 +626,14 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())(
             "analyze-json",
             "Con --analyze: emite el coste por funcion como JSON (para "
-            "consumir desde un renderer de diagramas) en vez de texto legible.")
-        // Phase AOT: con -m aot, target de compilacion nativa.
+            "consumir desde un renderer de diagramas) en vez de texto legible.")(
+            "analyze-write",
+            "Con --analyze: ESCRIBE las anotaciones sugeridas al fichero "
+            "analizado (reemplaza las de contrato existentes de cada funcion/"
+            "metodo definido ahi).  Re-verifica antes de guardar; si algo no "
+            "cuadra, no toca el fichero.  Las funciones de imports no se tocan "
+            "(analiza ese fichero por separado).")
+        //  AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
          "bare).",
@@ -421,6 +676,13 @@ int main(int argc, char *argv[]) {
             "protegido, kernels: 8 GP eax-edi, regparm(3), subset entero de "
             "32-bit).",
             cxxopts::value<std::string>()->default_value("x86-64"))(
+            "debug-info",
+            "Nivel de info de depuracion (flag UNIVERSAL, todos los targets): "
+            "0=ninguna (default, cero coste) | 1=simbolos de funcion (AOT: "
+            ".symtab/COFF en ELF/PE/.o/.so/.dll -> backtraces con nombres en "
+            "gdb/WinDbg/lldb/valgrind) | 2=+lineas (futuro) | 3=+variables "
+            "(futuro).",
+            cxxopts::value<int>()->default_value("0"))(
             "float-isa",
             "AOT: backend de punto flotante / ancho SIMD del vectorizador: "
             "sse2 (default, 128b, corre en CUALQUIER x86-64) | x87 (legacy) | "
@@ -430,18 +692,24 @@ int main(int argc, char *argv[]) {
             "binario). Nota: un binario avx/avx512f FIJO da SIGILL en una CPU "
             "sin ese soporte; usa auto para portabilidad.",
             cxxopts::value<std::string>()->default_value("sse2"))(
+            "ffp-contract",
+            "Politica de contraccion de coma flotante: fast (default -- contrae "
+            "a*b+c en FMA, 1 redondeo, como gcc/clang) | off (IEEE estricto, 2 "
+            "redondeos, sin FMA).  Global; @fp(strict|fast) lo override por "
+            "funcion.",
+            cxxopts::value<std::string>()->default_value("fast"))(
             "vx-base",
             "VA base address para el modulo (hex, e.g. 0x10000000). Usado para "
             "plugins cargados via loadmodule, evita solapamiento con el caller "
             "(default 0x0).",
             cxxopts::value<std::string>()->default_value("0x0"))
-        // Phase M.sandbox: restringe las capabilities del modulo
+        //  M.sandbox: restringe las capabilities del modulo
         // principal al subset listado.  Default vacio = ALL granted
         // (zero overhead, backward compat).  Sintaxis: 'fs:read,net,
         // ffi:call=kernel32.dll;user32.dll' etc.  Ver include/loader/
         // sandbox.h para tabla completa de caps + sintaxis.
         ("vx-caps",
-         "Phase M.sandbox: restringe caps del modulo principal. Sintaxis: "
+         " M.sandbox: restringe caps del modulo principal. Sintaxis: "
          "'fs:read,net,ffi:call=kernel32.dll;user32.dll'. Vacio = ALL granted "
          "(default). 'none' = sandbox total.",
          cxxopts::value<std::string>()->default_value(""))
@@ -475,10 +743,6 @@ int main(int argc, char *argv[]) {
             "mermaid). html produce paginas interactivas autocontenidas "
             "(.html); both=mermaid+graphviz; all=los tres.",
             cxxopts::value<std::string>()->default_value("mermaid"))(
-            "diagram-cost",
-            "Anotar cada nodo-funcion de los diagramas IR (pre y post) con su "
-            "coste Big-O (parcial + total) calculado por analyze::bigo. Aplica "
-            "a --diagram-ir / --diagram-ir-opt / --diagram-all.")(
             "gc-debug",
             "Activar trazas de debug del Garbage Collector a stderr (minor_gc, "
             "major_gc, sweep, release_handle, evacuate). Util para "
@@ -548,12 +812,18 @@ int main(int argc, char *argv[]) {
             "vx-debug",
             "Emitir comentarios `// @line N` en el .vel intermedio del "
             "compilador Vesta y, cuando se integre la pipeline completa de debug "
-            "section (Phase 2), embeber la tabla bytecode_offset -> (file, "
+            "section ( 2), embeber la tabla bytecode_offset -> (file, "
             "line) en el .velb final.  Sin este flag, el .vel/.velb no "
             "contienen info de debug -> el ejecutable es mas pequeno y el "
             "frontend NO genera datos extra.  Con el flag, el cliente del "
             "debugger puede setear breakpoints por linea Vesta (`b file.vx:42`) "
             "en lugar de solo por addr.")(
+            "no-debug-info",
+            "Desactivar la emision del mapa PC -> linea (seccion DVBG) en el "
+            ".velb.  Por defecto el mapa SE EMITE (barato en tamano, no cambia "
+            "el codigo) para habilitar el auto-PGO del JIT (mapear los "
+            "contadores de branches medidos a su linea fuente) y mejores stack "
+            "traces.  Usa este flag para .velb minimos sin info de debug.")(
             "port",
             "Transpilar el IR a codigo fuente del lenguaje destino y escribir "
             "a <output>.<ext> (e.g. .c).  Valores actuales: 'c'.  Futuro: "
@@ -621,7 +891,7 @@ int main(int argc, char *argv[]) {
                     "emit-map", "Generar archivo .velb-map con info de "
                                 "simbolos y secciones (debug). Off por "
                                 "defecto: cuesta ~60% del tiempo del linker")
-        // Phase M.L28: firmas digitales del .velb.
+        //  M.L28: firmas digitales del .velb.
         ("sign-velb",
          "Firmar un .velb con clave privada PEM. Uso: --sign-velb input.velb "
          "--sign-key priv.pem -o output.signed.velb",
@@ -634,17 +904,17 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())(
             "verify-key", "Path al PEM con la clave publica para --verify-velb",
             cxxopts::value<std::string>())
-        // Phase AOT.5: linker propio (enlaza .o sin ld/gcc).
+        //  AOT.5: linker propio (enlaza .o sin ld/gcc).
         ("link",
-         "Phase AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
+         " AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
          "auto-detectados; los de --emit obj o de gcc/MSVC) en un ejecutable "
          "nativo SIN ld/gcc. Uso: vm --link a.o b.o [lib.a] [lib.dll] -o prog "
          "[--format elf|pe] [--entry sym] [--link-base 0xADDR]. Con --entry usa "
          "ese simbolo como entrada SIN stub (kernel/bootloader); sin el, "
          "sintetiza _start->main (ejecutable hosted).")
-        // Phase AOT.5: archivador propio (crea .a sin el ar del sistema).
+        //  AOT.5: archivador propio (crea .a sin el ar del sistema).
         ("ar",
-         "Phase AOT.5: crea una libreria estatica .a (formato ar GNU, con "
+         " AOT.5: crea una libreria estatica .a (formato ar GNU, con "
          "indice de simbolos) a partir de objetos, SIN el ar del sistema. Uso: "
          "vm --ar libfoo.a a.o b.o ...  El .a lo consume nuestro linker (--link) "
          "y tambien ar/ld/gcc.")(
@@ -722,7 +992,7 @@ int main(int argc, char *argv[]) {
      * eager-compile pass se dispare con el threshold correcto.  Sin esto
      * el threshold se inicializa lazy en el primer maybe_compile_*, ya
      * tarde para eager compile. */
-    // Phase AOT: modo de compilacion nativa standalone (-m aot).  Se resuelve
+    //  AOT: modo de compilacion nativa standalone (-m aot).  Se resuelve
     // aqui (junto al resto de modos) y se consume en el bloque --vx mas abajo.
     bool aot_mode = false;
     aot::Tier aot_tier = aot::Tier::BARE;
@@ -745,6 +1015,16 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // --cpu: microarquitectura objetivo del scheduler (datos exactos de la DB).
+    if (result.count("cpu"))
+        jit::sched::set_sched_cpu(result["cpu"].as<std::string>());
+
+    // -ffp-contract=off: IEEE estricto (sin contraccion FMA).  Global; el AOT y
+    // @fp(strict) lo pueden refinar despues.
+    if (result.count("ffp-contract") &&
+        result["ffp-contract"].as<std::string>() == "off")
+        ir::ir_set_fma_contract_allowed(false);
+
     if (result.count("jit-threshold")) {
         jit::set_jit_threshold(result["jit-threshold"].as<uint32_t>());
     } else if (result.count("mode")) {
@@ -757,6 +1037,26 @@ int main(int argc, char *argv[]) {
             // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
             aot_mode = true;
             jit::set_jit_threshold(UINT32_MAX);
+            // FMA en AOT: la contraccion escalar es ORTOGONAL a --float-isa (que
+            // controla el ancho SIMD).  Default = ON (la mayoria de CPUs tienen
+            // FMA3; VFMADD231SD no depende del ancho vectorial).  Solo se
+            // desactiva con -ffp-contract=off, o si --cpu apunta a una microarq
+            // SIN FMA (la DB lo sabe -> evita SIGILL en ese target concreto).
+            {
+                const bool ffp_off =
+                    result.count("ffp-contract") &&
+                    result["ffp-contract"].as<std::string>() == "off";
+                bool fma_ok = !ffp_off;
+                if (result.count("cpu")) {
+                    const std::string cpu_s =
+                        result["cpu"].as<std::string>();
+                    if (!cpu_s.empty() && cpu_s != "generic")
+                        fma_ok =
+                            fma_ok && jit::backend_caps_from_cpu(cpu_s).fma;
+                }
+                ir::ir_set_fma_contract_allowed(fma_ok);
+                jit::set_vreg_fma(fma_ok);
+            }
             // @Target target-aware: los atomos os:/arch: de @Target se evaluan
             // contra el TARGET del binario AOT (cross-compile), no el host de
             // build, para que las variantes por plataforma del runtime/usuario
@@ -805,6 +1105,20 @@ int main(int argc, char *argv[]) {
         }
         if (!profile_path.empty()) {
             runtime::profile::profile_init(profile_path);
+        }
+    }
+    /* Auto-PGO del JIT (default-ON): si el JIT esta habilitado (threshold !=
+     * MAX), activar el profiler LIGERO (lock-free, tabla fija) desde el arranque
+     * para que tier-0 recolecte branches y el JIT re-decida la if-conversion con
+     * el perfil medido -- sin que el usuario pida nada.  Escape VESTA_NO_JIT_PGO
+     * =1.  El profiler ligero tiene coste ~1 ciclo por branch, apto para
+     * always-on.  El pesado D.6 (--profile) es aparte. */
+    {
+        const char *no_pgo = std::getenv("VESTA_NO_JIT_PGO");
+        const bool jit_on = (jit::g_jit_threshold != UINT32_MAX);
+        if (jit_on && !(no_pgo && no_pgo[0] == '1')) {
+            runtime::profile::lite_profile_set_active(true);
+            jit::g_jit_tier2_on = true; // guard barato del tier-2 en CALLVIRT
         }
     }
     const bool jit_stats_requested = result.count("jit-stats") > 0;
@@ -891,7 +1205,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Phase M.L28: firmas digitales del .velb (independientes del flujo
+    //  M.L28: firmas digitales del .velb (independientes del flujo
     // de compile / run / etc.).  Ambos comandos retornan al usuario al
     // terminar; no continuan al resto del flow.
     if (result.count("sign-velb")) {
@@ -962,7 +1276,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Phase AOT.5: linker propio -- enlaza objetos .o en un ejecutable nativo
+    //  AOT.5: linker propio -- enlaza objetos .o en un ejecutable nativo
     // sin depender de ld/gcc.  Uso: vm --link a.o b.o -o prog [--format elf]
     // [--entry sym] [--link-base 0xADDR].
     if (result.count("ar")) {
@@ -1073,6 +1387,14 @@ int main(int argc, char *argv[]) {
         pp.options().import_paths.push_back(exe_dir +
                                             "/preprocessor/include_lib");
         pp.options().import_paths.push_back(exe_dir + "/include_lib");
+        {
+            std::string _plib =
+                std::filesystem::path(exe_dir).parent_path().string();
+            if (!_plib.empty()) {
+                pp.options().import_paths.push_back(_plib + "/include_lib");
+                pp.options().import_paths.push_back(_plib + "/preprocessor/include_lib");
+            }
+        }
         pp.options().import_paths.push_back(source_dir);
 #ifdef _WIN32
         pp.options().predefines.push_back("__VPP_WINDOWS__");
@@ -1415,33 +1737,6 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
-    if (result.count("install") || result.count("uninstall") ||
-        result.count("repair")) {
-        // Reconstruir argv "limpio" para el parser interno del instalador
-        std::vector<std::string> args;
-        if (result.count("uninstall"))
-            args.push_back("uninstall");
-        else if (result.count("repair"))
-            args.push_back("repair");
-        else
-            args.push_back("install");
-
-        if (result.count("silent")) args.push_back("--silent");
-        if (result.count("per-user")) args.push_back("--per-user");
-        if (result.count("system-wide")) args.push_back("--system-wide");
-        if (result.count("prefix"))
-            args.push_back("--prefix=" + result["prefix"].as<std::string>());
-        if (result.count("manifest"))
-            args.push_back("--manifest=" +
-                           result["manifest"].as<std::string>());
-
-        std::vector<char *> argv2;
-        argv2.push_back(argv[0]);
-        for (auto &s : args)
-            argv2.push_back(s.data());
-        return install::run_install_cli((int)argv2.size(), argv2.data());
-    }
-
     // Compilar un archivo como worker
     // vm.exe --worker src/main.vel -o main.velb
     if (result.count("worker")) {
@@ -1583,8 +1878,19 @@ int main(int argc, char *argv[]) {
         copts.module_name = "main";
         copts.opt_level = 2;
         copts.emit_ir_preopt = true;
+        // --analyze respeta -ffp-contract=off (el coste/IR reflejado debe
+        // coincidir con el binario que se generara).
+        copts.fp_contract = !(result.count("ffp-contract") &&
+                              result["ffp-contract"].as<std::string>() == "off");
+        // Si el fuente tiene `import`, hay que ir por el compilador
+        // multi-modulo, igual que hacen las demas rutas.  ANTES esta llamaba
+        // siempre a `compile_vx_source` (un solo fichero), asi que analizar un
+        // programa que importa cualquier cosa -- la stdlib incluida -- moria en
+        // "funcion no declarada" en vez de darte el analisis.
         vx::CompileResult cr =
-            vx::compile_vx_source(vx_source, vx_path, copts);
+            vx::vx_source_has_imports(vx_source)
+                ? vx::compile_vx_project(vx_path, copts)
+                : vx::compile_vx_source(vx_source, vx_path, copts);
         // Volcar diagnosticos (errores/warnings) del frontend.
         for (const auto &d : cr.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);
@@ -1608,6 +1914,72 @@ int main(int argc, char *argv[]) {
         }
         analyze::ModuleCost mc_post = analyze::analyze_module(amod_post);
         analyze::compose_interproc(mc_post);
+
+        // Huella computacional (recursos + efectos) sobre el modulo POST-opt +
+        // composicion interprocedural.  Complementa el coste Big-O con
+        // propiedades EXACTAS/sound: allocs, stack, pure, throws, panics,
+        // recursion.  Es tambien el resumen del codegen dirigido por resumenes.
+        auto fps_post = analyze::compute_module_fingerprints(amod_post);
+        // Pasar los contratos: las fn de marco opaco (`asm { }`) aportan su
+        // @stack DECLARADO al total de sus callers (su frame real no se ve).
+        analyze::compose_fingerprints(fps_post, &cr.contracts);
+
+        // Modelo UNICO de efectos: corre EffectAnalysis sobre el IR POST-opt y
+        // proyecta contratos + efectos + reporte de lagunas como parte de
+        // --analyze (seccion propia, solo en modo texto; el JSON no la incluye
+        // todavia).  Es la exposicion del modelo de efectos al usuario.
+        if (!want_json) analysis::effects::print_effects_report(std::cout, amod_post);
+        auto find_fp = [&](const std::string &name)
+            -> const analyze::FunctionFingerprint * {
+            for (const auto &f : fps_post)
+                if (f.function == name) return &f;
+            return nullptr;
+        };
+
+        // Procedencia generica (contrato B.3): que instanciaciones vienen del
+        // mismo template.  `atomic_i64__fetch_add` y `atomic_f64__fetch_add`
+        // son funciones distintas del IR, pero las dos salen de
+        // `atomic<T>::fetch_add`; agruparlas es lo que permite reportar (y
+        // sugerir) el coste POR TIPO -- "O(1) si is_integer<T>, O(n) si
+        // is_float<T>" -- en vez de dos lineas sueltas.
+        struct GenOrigen {
+            std::string plantilla;             // "atomic"
+            std::vector<std::string> type_args; // {"i64"}
+            std::string metodo;                 // "fetch_add"
+        };
+        std::map<std::string, GenOrigen> origen; // nombre mangled -> origen
+        for (const auto &f : amod_post.functions) {
+            if (f.generic_template_name.empty()) continue;
+            GenOrigen g;
+            g.plantilla = f.generic_template_name;
+            g.type_args = f.generic_type_args;
+            // El metodo es lo que queda al quitar el prefijo
+            // `<plantilla>_<join(type_args,"_")>__`.  Asi `atomic_i64____deref__`
+            // (prefijo `atomic_i64__`) deja `__deref__`.
+            std::string pref = f.generic_template_name;
+            for (const auto &t : f.generic_type_args) pref += "_" + t;
+            pref += "__";
+            if (f.name.size() > pref.size() &&
+                f.name.compare(0, pref.size(), pref) == 0)
+                g.metodo = f.name.substr(pref.size());
+            else
+                g.metodo = f.name; // fallback: no casa el mangle esperado
+            origen[f.name] = std::move(g);
+        }
+        // La clase de un type-arg, para elegir el predicado del `when:`.
+        auto clase_tipo = [](const std::string &t) -> std::string {
+            if (t.size() >= 2 && (t[0] == 'i' || t[0] == 'u') &&
+                std::isdigit(static_cast<unsigned char>(t[1])))
+                return "integer";
+            if (t == "f32" || t == "f64") return "float";
+            if (!t.empty() && (t.back() == '*' ||
+                               t.find("ptr") != std::string::npos))
+                return "pointer";
+            return "otro";
+        };
+        // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
+        // por el usuario, verificados contra la huella inferida.
+        auto contract_checks = analyze::verify_contracts(fps_post, cr.contracts);
 
         // Deserializar el modulo PRE-opt (complejidad algoritmica del fuente
         // tal como se escribio).  Si por alguna razon no esta disponible,
@@ -1651,13 +2023,54 @@ int main(int argc, char *argv[]) {
         };
 
         if (want_json) {
-            // JSON con dos arrays: "pre" y "post".  Cada CostResult expone
-            // ya su "partial" (big_o) y "total" + calls[] para diagramas.
+            // JSON: coste (pre/post) + huella (recursos/efectos) + contratos.
+            auto jstr = [](const std::string &s) {
+                std::string o;
+                for (char c : s) {
+                    if (c == '"' || c == '\\') o.push_back('\\');
+                    o.push_back(c);
+                }
+                return o;
+            };
             std::ostringstream js;
             js << "{\"pre\":"
                << (have_pre ? analyze::module_cost_to_json(mc_pre)
                             : std::string("[]"))
-               << ",\"post\":" << analyze::module_cost_to_json(mc_post) << "}";
+               << ",\"post\":" << analyze::module_cost_to_json(mc_post);
+            // Huella por funcion.
+            js << ",\"fingerprint\":[";
+            for (size_t i = 0; i < fps_post.size(); ++i) {
+                const auto &f = fps_post[i];
+                if (i) js << ",";
+                js << "{\"function\":\"" << jstr(f.function) << "\",\"allocs\":"
+                   << f.alloc_sites_total << ",\"stack\":" << f.stack_bytes
+                   << ",\"pure\":" << (f.pure ? "true" : "false")
+                   << ",\"throws\":" << (f.throws_total ? "true" : "false")
+                   << ",\"panics\":" << (f.panics_total ? "true" : "false")
+                   << ",\"recursion\":" << (f.recursive ? "true" : "false")
+                   << ",\"effects_known\":" << (f.effects_known ? "true" : "false")
+                   << "}";
+            }
+            js << "]";
+            // Contratos verificados.
+            js << ",\"contracts\":[";
+            for (size_t i = 0; i < contract_checks.size(); ++i) {
+                const auto &ck = contract_checks[i];
+                if (i) js << ",";
+                const char *st =
+                    ck.status == analyze::ContractCheck::OK          ? "ok"
+                    : ck.status == analyze::ContractCheck::VIOLATED  ? "violated"
+                                                                     : "unverifiable";
+                js << "{\"function\":\"" << jstr(ck.function) << "\",\"contract\":\""
+                   << jstr(ck.contract) << "\",\"status\":\"" << st
+                   << "\",\"detail\":\"" << jstr(ck.detail) << "\"}";
+            }
+            js << "]";
+            // Modelo unico de efectos (mismo que --analyze legible + DCE): los
+            // diagramas consumen exactamente lo que ve el compilador.
+            js << ",\"effects\":";
+            analysis::effects::effects_json(js, amod_post);
+            js << "}";
             std::cout << js.str() << "\n";
             return EXIT_SUCCESS;
         }
@@ -1711,6 +2124,39 @@ int main(int argc, char *argv[]) {
                 std::cout << "      >> callees elevan el coste: parcial "
                           << analyze::cost_class_str(rp.big_o) << " -> total "
                           << analyze::cost_class_str(rp.total_class) << "\n";
+            }
+
+            // Huella computacional (propiedades EXACTAS/sound).  allocs y stack
+            // se muestran parcial/total (propio / cierre o pila peor caso).
+            if (const auto *fp = find_fp(rp.function)) {
+                const std::string st_tot =
+                    fp->stack_bytes_total == analyze::STACK_UNBOUNDED
+                        ? std::string("inf")
+                        : std::to_string(fp->stack_bytes_total);
+                std::cout << "      Huella  : allocs=" << fp->alloc_sites << "/"
+                          << fp->alloc_sites_total
+                          << " stack=" << fp->stack_bytes << "/" << st_tot << "B"
+                          << " (parcial/total)"
+                          << " pure=" << (fp->pure ? "si" : "no")
+                          << " throws=" << (fp->throws_total ? "si" : "no")
+                          << " panics=" << (fp->panics_total ? "si" : "no")
+                          << " recursion=" << (fp->recursive ? "si" : "no");
+                if (!fp->effects_known)
+                    std::cout << "  (efectos parcialmente desconocidos: "
+                                 "llamada dinamica/externa)";
+                std::cout << "\n";
+            }
+
+            // Contratos de huella declarados por el usuario para esta funcion.
+            for (const auto &ck : contract_checks) {
+                if (ck.function != rp.function) continue;
+                const char *mark =
+                    ck.status == analyze::ContractCheck::OK          ? "OK  "
+                    : ck.status == analyze::ContractCheck::VIOLATED  ? "FALLA"
+                                                                     : "?   ";
+                std::cout << "      " << mark << " " << ck.contract << " -> "
+                          << ck.detail << "\n";
+                if (ck.status == analyze::ContractCheck::VIOLATED) ++mismatches;
             }
 
             // Contrato @complexity: validar CADA dimension declarada contra
@@ -1767,6 +2213,486 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
+        // Huella + contratos de TIPO (structs/clases/enums).  El layout de todo
+        // struct es C-compatible por invariante del lenguaje; @pod indica ademas
+        // que es trivialmente copiable (sin dtor ni campos gestionados).
+        if (!cr.type_fingerprints.empty()) {
+            auto type_checks = analyze::verify_type_contracts(
+                cr.type_fingerprints, cr.type_contracts);
+            std::cout << "\n--- Tipos ---\n";
+            for (const auto &tf : cr.type_fingerprints) {
+                const char *kind =
+                    tf.kind == analyze::TypeFingerprint::STRUCT ? "struct"
+                    : tf.kind == analyze::TypeFingerprint::CLASS ? "class"
+                                                                 : "enum";
+                std::cout << "  " << kind << " " << tf.type_name
+                          << " : size=" << tf.size_bytes << "B"
+                          << " align=" << tf.align_bytes
+                          << " fields=" << tf.field_count
+                          << (tf.is_pod ? " [pod]" : "")
+                          << (tf.no_heap ? " [no_heap]" : "")
+                          << (tf.has_destructor ? " [~dtor]" : "")
+                          << (tf.is_reference ? " [ref]" : "") << "\n";
+                for (const auto &ck : type_checks) {
+                    if (ck.function != tf.type_name) continue;
+                    const char *st =
+                        ck.status == analyze::ContractCheck::OK ? "OK  "
+                        : ck.status == analyze::ContractCheck::VIOLATED
+                            ? "FALLA"
+                            : "????";
+                    std::cout << "      " << st << " " << ck.contract << " -> "
+                              << ck.detail << "\n";
+                    if (ck.status == analyze::ContractCheck::VIOLATED)
+                        ++mismatches;
+                }
+            }
+        }
+        // ------------------------------------------------------------------
+        //  El coste POR ARQUITECTURA.
+        //
+        //  Todo lo de arriba es para el target del HOST.  Pero el coste TOTAL
+        //  cambia con la arquitectura cuando algun callee tiene variantes
+        //  @Target de cuerpos distintos -- `vx_atomic_swap64` es un bucle CAS
+        //  en x86-64 (no hay instruccion de exchange) y el LL/SC nativo en
+        //  arm64 --, asi que reportar solo el host enseña media foto.
+        //
+        //  Se recorre el registro CERRADO de arquitecturas, recompilando para
+        //  cada una (@Target se evalua contra el target, no contra el host: es
+        //  lo mismo que hace el driver AOT cross-target).  Solo se imprime lo
+        //  que DIFIERE: si una funcion cuesta igual en todas -- el caso comun,
+        //  y todo el fichero si no usa @Target -- no se dice nada y la salida
+        //  queda como estaba.
+        // ------------------------------------------------------------------
+        {
+            std::string host_os, host_arch;
+            vx::get_aot_condcomp_target(host_os, host_arch);
+
+            // arch -> (funcion -> resumen), o el motivo de no compilar.  El
+            // resumen junta el coste Y la huella: las dos varian con la
+            // arquitectura -- el coste cuando un callee tiene cuerpos por-arch
+            // distintos, y la huella cuando el cuerpo si (los `register()` de
+            // una variante @Target("arch:arm64") gastan frame que su gemela
+            // x86-64 no), asi que las dos hay que reportarlas por arch.
+            // Datos CRUDOS de una funcion en una arquitectura (no solo el string
+            // resumen): --annotate los necesita desglosados para generar cada
+            // anotacion y decidir si difiere entre arch.
+            struct FnData {
+                bool present = false;
+                std::string partial_pre, partial_post, total_pre, total_post;
+                // @alloc y @stack en DOS dimensiones: parcial (propio) y total
+                // (cierre / pila peor caso).  stack_total = STACK_UNBOUNDED si
+                // no acotable (recursion/externo).
+                uint64_t alloc_partial = 0, alloc_total = 0;
+                uint64_t stack_partial = 0, stack_total = 0;
+                bool pure = false, throws = false, panics = false;
+            };
+            struct PorArch {
+                std::string arch;
+                std::map<std::string, std::string> resumen;
+                std::map<std::string, FnData> datos;
+                std::string fallo;
+            };
+            std::vector<PorArch> tabla;
+            for (const auto &arch : vx::cwhen::known_archs()) {
+                PorArch pa;
+                pa.arch = arch;
+                vx::set_aot_condcomp_target(host_os, arch);
+                vx::CompileOptions o2;
+                o2.module_name = "main";
+                o2.opt_level = 2;
+                // IGUAL que el analisis principal: pedir tambien el IR PRE-opt.
+                // Sin esto, el POST se optimiza CON inline y el `partial` cuenta
+                // el cuerpo inlineado -> mide distinto que verify (que si usa el
+                // no-inline) y la sugerencia contradice la verificacion.
+                o2.emit_ir_preopt = true;
+                vx::CompileResult r2 =
+                    vx::vx_source_has_imports(vx_source)
+                        ? vx::compile_vx_project(vx_path, o2)
+                        : vx::compile_vx_source(vx_source, vx_path, o2);
+                if (!r2.ok || r2.ir_module_cache_bytes.empty()) {
+                    // Que el fuente no compile para una arquitectura NO es un
+                    // error del analisis: es justo lo que hay que decir (p.ej.
+                    // los atomicos de 64 bits no tienen variante en x86-32).
+                    pa.fallo = "no compila para esta arquitectura";
+                    for (const auto &d : r2.diagnostics.all()) {
+                        if (d.level == vx::DiagLevel::ERR) {
+                            pa.fallo = d.message;
+                            break;
+                        }
+                    }
+                    tabla.push_back(std::move(pa));
+                    continue;
+                }
+                // POST-opt (sin inline, gracias a emit_ir_preopt): el `partial`
+                // es el cuerpo propio; el `total` lo compone el call-graph.
+                ir::IrModule m2;
+                if (!ir::parse_ir_module_cache(r2.ir_module_cache_bytes, m2)) {
+                    pa.fallo = "no se pudo deserializar el IR";
+                    tabla.push_back(std::move(pa));
+                    continue;
+                }
+                analyze::ModuleCost c2 = analyze::analyze_module(m2);
+                analyze::compose_interproc(c2);
+                // PRE-opt (complejidad algoritmica del fuente).  Si falta, el
+                // pre cae al post (mejor mostrar algo que fallar).
+                ir::IrModule m2_pre;
+                analyze::ModuleCost c2_pre;
+                bool tiene_pre =
+                    !r2.ir_module_cache_bytes_preopt.empty() &&
+                    ir::parse_ir_module_cache(r2.ir_module_cache_bytes_preopt,
+                                              m2_pre);
+                if (tiene_pre) {
+                    c2_pre = analyze::analyze_module(m2_pre);
+                    analyze::compose_interproc(c2_pre);
+                }
+                auto find_c2 = [](const analyze::ModuleCost &m,
+                                  const std::string &nm)
+                    -> const analyze::CostResult * {
+                    for (const auto &f : m.functions)
+                        if (f.function == nm) return &f;
+                    return nullptr;
+                };
+                auto fp2 = analyze::compute_module_fingerprints(m2);
+                analyze::compose_fingerprints(fp2, &r2.contracts);
+                std::map<std::string, const analyze::FunctionFingerprint *> fpx;
+                for (const auto &f : fp2) fpx[f.function] = &f;
+                for (const auto &f : c2.functions) {
+                    // Las 4 dimensiones, IGUAL que el analisis principal:
+                    //   partial_pre  = cuerpo propio, PRE-opt
+                    //   partial_post = cuerpo propio, POST-opt (sin inline)
+                    //   total_pre    = interproc, PRE-opt
+                    //   total_post   = interproc, POST-opt
+                    const analyze::CostResult *pre =
+                        tiene_pre ? find_c2(c2_pre, f.function) : nullptr;
+                    FnData fd;
+                    fd.present = true;
+                    fd.partial_pre = analyze::cost_class_str(
+                        pre ? pre->big_o : f.big_o);
+                    fd.partial_post = analyze::cost_class_str(f.big_o);
+                    fd.total_pre = analyze::cost_class_str(
+                        pre ? pre->total_class : f.total_class);
+                    fd.total_post = analyze::cost_class_str(f.total_class);
+                    std::string s = fd.partial_post + " / " + fd.total_post;
+                    auto it = fpx.find(f.function);
+                    if (it != fpx.end()) {
+                        const auto *h = it->second;
+                        fd.alloc_partial = h->alloc_sites;
+                        fd.alloc_total = h->alloc_sites_total;
+                        fd.stack_partial = h->stack_bytes;
+                        fd.stack_total = h->stack_bytes_total;
+                        fd.pure = h->pure;
+                        fd.throws = h->throws_total;
+                        fd.panics = h->panics_total;
+                        const std::string st_tot =
+                            h->stack_bytes_total == analyze::STACK_UNBOUNDED
+                                ? std::string("inf")
+                                : std::to_string(h->stack_bytes_total);
+                        s += "  allocs=" + std::to_string(h->alloc_sites) + "/" +
+                             std::to_string(h->alloc_sites_total) +
+                             " stack=" + std::to_string(h->stack_bytes) + "/" +
+                             st_tot + "B" +
+                             " pure=" + (h->pure ? "si" : "no") +
+                             " throws=" + (h->throws_total ? "si" : "no") +
+                             " panics=" + (h->panics_total ? "si" : "no");
+                    }
+                    pa.resumen[f.function] = std::move(s);
+                    pa.datos[f.function] = std::move(fd);
+                }
+                tabla.push_back(std::move(pa));
+            }
+            vx::set_aot_condcomp_target(host_os, host_arch); // dejarlo como estaba
+
+            // Las funciones cuyo coste o huella NO son iguales en todas.
+            std::set<std::string> difieren;
+            for (const auto &f : mc_post.functions) {
+                const std::string *ref = nullptr;
+                for (const auto &pa : tabla) {
+                    if (!pa.fallo.empty()) continue;
+                    auto it = pa.resumen.find(f.function);
+                    if (it == pa.resumen.end()) continue;
+                    if (!ref)
+                        ref = &it->second;
+                    else if (*ref != it->second)
+                        difieren.insert(f.function);
+                }
+            }
+            std::vector<std::string> no_compilan;
+            for (const auto &pa : tabla)
+                if (!pa.fallo.empty())
+                    no_compilan.push_back(pa.arch + ": " + pa.fallo);
+
+            if (!difieren.empty() || !no_compilan.empty()) {
+                std::cout << "\nCoste y huella por arquitectura (parcial / total"
+                             " POST-opt + allocs/stack/pure/throws/panics).  "
+                             "Solo lo que difiere.\n";
+                std::cout
+                    << "=================================================="
+                       "===========\n";
+                for (const auto &fn : difieren) {
+                    std::cout << "  " << fn << "\n";
+                    for (const auto &pa : tabla) {
+                        if (!pa.fallo.empty()) continue;
+                        auto it = pa.resumen.find(fn);
+                        if (it == pa.resumen.end()) continue;
+                        std::cout << "      " << pa.arch;
+                        for (size_t k = pa.arch.size(); k < 8; ++k)
+                            std::cout << ' ';
+                        std::cout << " " << it->second << "\n";
+                    }
+                }
+                for (const auto &s : no_compilan)
+                    std::cout << "  [aviso] " << s << "\n";
+            }
+
+            // --annotate: las anotaciones que cada funcion deberia llevar,
+            // segun lo medido, con `when: arch:X` donde difieren.  Es lo que
+            // el programador tendria que escribir a mano; aqui lo genera el
+            // analizador (el valor ES lo que mide, no una suposicion).
+            // Anotaciones sugeridas -- SIEMPRE con --analyze (no hay flag
+            // aparte: analizar y decir que contrato deberia llevar cada funcion
+            // es lo mismo).  Se emiten los contratos medidos, con el `when:`
+            // MiNIMO que describe donde vale cada valor: por arquitectura,
+            // por tipo (las instanciaciones de un generico se AGRUPAN bajo su
+            // plantilla), o los dos ejes a la vez -- solapando donde el valor
+            // coincide, sin perder informacion.
+            {
+                auto archs_ok = [&]() {
+                    std::vector<const PorArch *> v;
+                    for (const auto &pa : tabla)
+                        if (pa.fallo.empty()) v.push_back(&pa);
+                    return v;
+                }();
+
+                // Agrupar las funciones por su origen: las instanciaciones de
+                // un mismo `plantilla::metodo` van juntas; las no genericas,
+                // solas.
+                std::vector<std::string> orden_grupos;
+                std::map<std::string, std::vector<std::string>> instancias;
+                std::map<std::string, std::string> display;
+                for (const auto &f : mc_post.functions) {
+                    std::string clave, disp;
+                    auto it = origen.find(f.function);
+                    if (it != origen.end()) {
+                        clave = it->second.plantilla + "::" + it->second.metodo;
+                        disp = it->second.plantilla + "<T>::" + it->second.metodo;
+                    } else {
+                        clave = f.function;
+                        disp = f.function;
+                    }
+                    if (!instancias.count(clave)) orden_grupos.push_back(clave);
+                    instancias[clave].push_back(f.function);
+                    display[clave] = disp;
+                }
+
+                // Una combinacion (arquitectura, clase-de-tipo) y su FnData.
+                struct Combo {
+                    std::string arch;
+                    std::string tc; // "" si el grupo no es generico
+                    const FnData *d;
+                };
+
+                // `when:` MiNIMO para el conjunto de combos que comparten un
+                // valor, dado el universo de combos del grupo.  Casos, de mas
+                // general a mas especifico:
+                //   - cubre TODAS las combos           -> sin when;
+                //   - todas las arch, un subconjunto de tipos -> solo is_X<T>();
+                //   - un subconjunto de arch, todos los tipos -> solo arch:X;
+                //   - resto -> OR de `arch:X && is_Y<T>()` por combo, factorizando
+                //     por arch cuando ese arch tiene todos sus tipos.
+                auto pred_tipo = [](const std::string &tc) {
+                    return "is_" + tc + "<T>()";
+                };
+                auto when_de =
+                    [&](const std::vector<const Combo *> &sel,
+                        const std::set<std::string> &all_archs,
+                        const std::set<std::string> &all_tcs) -> std::string {
+                    const bool generico = !(all_tcs.size() == 1 &&
+                                            all_tcs.count(""));
+                    if (sel.size() == all_archs.size() * all_tcs.size())
+                        return std::string(); // cubre todo
+                    // Agrupar la seleccion por arch -> tipos.
+                    std::map<std::string, std::set<std::string>> por_arch;
+                    for (const auto *c : sel) por_arch[c->arch].insert(c->tc);
+                    // Todas las arch presentes con el MISMO subconjunto de tipos
+                    // -> el eje arch no distingue; factorizar por tipo.
+                    if (generico && por_arch.size() == all_archs.size()) {
+                        bool iguales = true;
+                        const auto &ref = por_arch.begin()->second;
+                        for (const auto &kv : por_arch)
+                            if (kv.second != ref) { iguales = false; break; }
+                        if (iguales) {
+                            std::string w;
+                            bool first = true;
+                            for (const auto &tc : ref) {
+                                if (!first) w += " || ";
+                                w += pred_tipo(tc);
+                                first = false;
+                            }
+                            return ", when: " + w;
+                        }
+                    }
+                    // OR de terminos, uno por arch (factorizando el tipo si ese
+                    // arch tiene TODOS los tipos).
+                    std::string w;
+                    bool first = true;
+                    for (const auto &kv : por_arch) {
+                        const bool todos_tc =
+                            !generico || kv.second.size() == all_tcs.size();
+                        if (todos_tc) {
+                            if (!first) w += " || ";
+                            w += "arch:" + kv.first;
+                            first = false;
+                        } else {
+                            for (const auto &tc : kv.second) {
+                                if (!first) w += " || ";
+                                w += "arch:" + kv.first + " && " + pred_tipo(tc);
+                                first = false;
+                            }
+                        }
+                    }
+                    return ", when: " + w;
+                };
+
+                // Para cada grupo, las lineas de anotacion (sin indentacion ni
+                // el comentario `//`), en un vector reutilizable: se imprimen a
+                // stdout Y, con --analyze-write, se insertan en el fichero.
+                std::map<std::string, std::vector<std::string>> anot_por_clave;
+                for (const auto &clave : orden_grupos) {
+                    std::vector<Combo> combos;
+                    std::set<std::string> all_archs, all_tcs;
+                    for (const auto &inst : instancias[clave]) {
+                        std::string tc;
+                        auto ito = origen.find(inst);
+                        if (ito != origen.end() && !ito->second.type_args.empty())
+                            tc = clase_tipo(ito->second.type_args[0]);
+                        all_tcs.insert(tc);
+                        for (const auto *pa : archs_ok) {
+                            auto it = pa->datos.find(inst);
+                            if (it == pa->datos.end() || !it->second.present)
+                                continue;
+                            combos.push_back({pa->arch, tc, &it->second});
+                            all_archs.insert(pa->arch);
+                        }
+                    }
+                    if (combos.empty()) continue;
+
+                    std::vector<std::string> lineas; // "@nothrow", "@stack(...)"...
+
+                    auto emitir =
+                        [&](const std::function<std::string(const FnData &)> &get,
+                            const std::function<std::string(const std::string &,
+                                                            const std::string &)>
+                                &render) {
+                            std::map<std::string, std::vector<const Combo *>> porv;
+                            for (const auto &c : combos)
+                                porv[get(*c.d)].push_back(&c);
+                            for (const auto &kv : porv)
+                                lineas.push_back(render(
+                                    kv.first,
+                                    when_de(kv.second, all_archs, all_tcs)));
+                        };
+
+                    // Flags (@pure/@nothrow/@nopanic): donde la prop se CUMPLE.
+                    auto flag = [&](const char *nombre,
+                                    const std::function<bool(const FnData &)> &p) {
+                        std::vector<const Combo *> sel;
+                        for (const auto &c : combos)
+                            if (p(*c.d)) sel.push_back(&c);
+                        if (sel.empty()) return;
+                        std::string w = when_de(sel, all_archs, all_tcs);
+                        if (w.empty())
+                            lineas.push_back(std::string("@") + nombre);
+                        else // el flag no lleva N: `, when:` -> `(when:`
+                            lineas.push_back(std::string("@") + nombre + "(" +
+                                             w.substr(2) + ")");
+                    };
+                    flag("pure", [](const FnData &d) { return d.pure; });
+                    flag("nothrow", [](const FnData &d) { return !d.throws; });
+                    flag("nopanic", [](const FnData &d) { return !d.panics; });
+
+                    // @alloc/@stack en dos dimensiones: agrupa por el par
+                    // (parcial,total) y emite forma corta `@X(N)` cuando
+                    // parcial==total (N=total, el peor caso), o nombrada
+                    // `@X(partial: P, total: T)` cuando difieren.  Un total no
+                    // acotable (pila con recursion) se emite solo con parcial.
+                    auto num = [&](const char *nombre,
+                                   const std::function<uint64_t(const FnData &)> &gp,
+                                   const std::function<uint64_t(const FnData &)> &gt) {
+                        emitir(
+                            [&](const FnData &d) {
+                                return std::to_string(gp(d)) + "|" +
+                                       std::to_string(gt(d));
+                            },
+                            [&](const std::string &v, const std::string &w) {
+                                const size_t bar = v.find('|');
+                                const std::string ps = v.substr(0, bar);
+                                const std::string ts = v.substr(bar + 1);
+                                const uint64_t p = std::stoull(ps);
+                                const uint64_t t = std::stoull(ts);
+                                std::string dims;
+                                if (t == analyze::STACK_UNBOUNDED)
+                                    dims = "partial: " + ps; // total no acotable
+                                else if (p == t)
+                                    dims = ts; // forma corta = total
+                                else
+                                    dims = "partial: " + ps + ", total: " + ts;
+                                return std::string("@") + nombre + "(" + dims + w +
+                                       ")";
+                            });
+                    };
+                    num("alloc", [](const FnData &d) { return d.alloc_partial; },
+                        [](const FnData &d) { return d.alloc_total; });
+                    num("stack", [](const FnData &d) { return d.stack_partial; },
+                        [](const FnData &d) { return d.stack_total; });
+
+                    emitir(
+                        [](const FnData &d) {
+                            return d.partial_pre + "|" + d.partial_post + "|" +
+                                   d.total_pre + "|" + d.total_post;
+                        },
+                        [&](const std::string &v, const std::string &w) {
+                            std::vector<std::string> dim;
+                            size_t p = 0, q;
+                            std::string t = v;
+                            while ((q = t.find('|', p)) != std::string::npos) {
+                                dim.push_back(t.substr(p, q - p));
+                                p = q + 1;
+                            }
+                            dim.push_back(t.substr(p));
+                            if (dim.size() != 4) return std::string();
+                            return "@complexity(partial_pre: " + dim[0] +
+                                   ", partial_post: " + dim[1] +
+                                   ", total_pre: " + dim[2] +
+                                   ", total_post: " + dim[3] + w + ")";
+                        });
+
+                    anot_por_clave[clave] = std::move(lineas);
+                }
+
+                // --analyze-write: reescribir el fichero analizado.  Si no,
+                // imprimir las anotaciones para copiar/pegar o inspeccionar.
+                if (result.count("analyze-write")) {
+                    if (!annotate_write_source(vx_path, orden_grupos, display,
+                                               anot_por_clave))
+                        return EXIT_FAILURE;
+                } else {
+                    std::cout << "\nAnotaciones sugeridas.  Los contratos medidos"
+                                 " que cada funcion deberia llevar; copialos "
+                                 "delante de la definicion.\n";
+                    std::cout << "==========================================="
+                                 "==================\n";
+                    for (const auto &clave : orden_grupos) {
+                        auto it = anot_por_clave.find(clave);
+                        if (it == anot_por_clave.end()) continue;
+                        std::cout << "  // " << display[clave] << "\n";
+                        for (const auto &l : it->second)
+                            std::cout << "  " << l << "\n";
+                        std::cout << "\n";
+                    }
+                }
+            }
+        }
+
         std::cout
             << "=================================================="
                "===========\n";
@@ -1808,6 +2734,19 @@ int main(int argc, char *argv[]) {
                                         : result["vx"].as<std::string>();
         bool emit_only = result.count("vx-emit-only") > 0;
         bool emit_ir = result.count("vx-emit-ir") > 0;
+
+        // PGO consumer: si se paso --profile <path>, cargar '<path>.lines' (el
+        // perfil de branches por linea producido por un run previo) para que la
+        // if-conversion decida con datos medidos.  VESTA_BRANCH_PROFILE sigue
+        // funcionando como alternativa.
+        if (result.count("profile")) {
+            const std::string lines =
+                result["profile"].as<std::string>() + ".lines";
+            const int nload = ir::load_branch_profile(lines.c_str());
+            if (nload > 0)
+                vesta::scout() << "[pgo] perfil de branches cargado: " << lines
+                               << " (" << nload << " lineas)\n";
+        }
 
         // Flags de diagramas (Mermaid y/o Graphviz).  --diagram-all activa
         // los 4 diagramas; --diagram-format elige el formato de salida.
@@ -1880,6 +2819,14 @@ int main(int argc, char *argv[]) {
             pp.options().import_paths.push_back(exe_dir +
                                                 "/preprocessor/include_lib");
             pp.options().import_paths.push_back(exe_dir + "/include_lib");
+            {
+                std::string _plib =
+                    std::filesystem::path(exe_dir).parent_path().string();
+                if (!_plib.empty()) {
+                    pp.options().import_paths.push_back(_plib + "/include_lib");
+                    pp.options().import_paths.push_back(_plib + "/preprocessor/include_lib");
+                }
+            }
             pp.options().import_paths.push_back(source_dir);
 #ifdef _WIN32
             pp.options().predefines.push_back("__VPP_WINDOWS__");
@@ -1923,10 +2870,21 @@ int main(int argc, char *argv[]) {
 
         vx::CompileOptions copts;
         copts.module_name = mod_name;
-        copts.opt_level = 2;
+        // Nivel de opt UNIVERSAL via --ir-opt (mismo flag que VM/JIT/emit-ir).
+        // Si el usuario NO lo pasa, AOT mantiene su default O2 (muy testeado);
+        // con --ir-opt 0 se compila sin inlining (util para depurar con gdb:
+        // las funciones no se funden y los breakpoints enganchan).
+        copts.opt_level = (result.count("ir-opt") > 0)
+                              ? result["ir-opt"].as<int>()
+                              : 2;
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
-        copts.native_poo = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
+        copts.native_poo = aot_mode; //  AOT.2.b: clases nativas en -m aot
         copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
+        // -ffp-contract=off: IEEE estricto (sin contraccion FMA) a nivel de
+        // modulo.  Se propaga a IrFunction::fp_contract en el lowering (fiable
+        // cross-TU, a diferencia del global mutable).
+        copts.fp_contract = !(result.count("ffp-contract") &&
+                              result["ffp-contract"].as<std::string>() == "off");
         // Bits del target para el inline-asm @Naked (validacion compile-time):
         // --aot-arch x86-32 -> 32 (si no, `jmp ecx` y demas fallan en mode64).
         if (aot_mode) {
@@ -1969,7 +2927,16 @@ int main(int argc, char *argv[]) {
         // --vx-debug: emite `// @line N` en el .vel y genera la
         // seccion debug en el .velb final.  Por defecto OFF: el ejecutable
         // queda mas pequeno y la compilacion mas rapida.
-        copts.emit_debug = (result.count("vx-debug") > 0);
+        //
+        // El mapa PC -> linea (seccion DVBG) se emite POR DEFECTO: es barato en
+        // tamano, no cambia el codigo ejecutable, y habilita (a) el auto-PGO del
+        // JIT (mapear los contadores de branches medidos a su linea fuente para
+        // re-decidir la if-conversion) y (b) mejores stack traces.  --no-debug-
+        // info lo desactiva (para .velb minimos).  --vx-debug/--profile lo
+        // fuerzan aunque se pase --no-debug-info por error.
+        copts.emit_debug =
+            (result.count("no-debug-info") == 0) ||
+            (result.count("vx-debug") > 0) || (result.count("profile") > 0);
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por
         // --diagram-format.  Se escriben a archivos al final del bloque.
@@ -1985,8 +2952,6 @@ int main(int argc, char *argv[]) {
         copts.dump_html_ir_pre = emit_html && diag_ir_pre;
         copts.dump_html_ir_post = emit_html && diag_ir_post;
         copts.dump_html_vel = emit_html && diag_vel;
-        // --diagram-cost: anotar el coste Big-O en los diagramas IR.
-        copts.annotate_cost = result.count("diagram-cost") > 0;
 
         // Flag --port=<lang>: si presente, configurar el transpiler IR ->
         // codigo. El frontend Vesta llama al port::Transpiler tras la fase de
@@ -2040,7 +3005,7 @@ int main(int argc, char *argv[]) {
             copts.port_options.source_path = vx_path;
         }
 
-        /* === Phase MC.12: cache persistente para @Macros ===
+        /* ===  MC.12: cache persistente para @Macros ===
          *
          * Cache dir: `./.cache/vx/` (cwd-relative).  Key = FNV-1a 64
          * sobre (cache_format_version + vx_path + vx_source).  File =
@@ -2064,7 +3029,7 @@ int main(int argc, char *argv[]) {
         const uint8_t cache_format_version =
             2; /* Bump por MC.14 macro-scoped key */
 
-        /* Phase MC.14: macro-scoped cache key.  Hashea SOLO los rangos
+        /*  MC.14: macro-scoped cache key.  Hashea SOLO los rangos
          * source que contienen declaraciones `@Macro` (incluyendo
          * anotaciones precedentes como @Pure/@Inline).  Cambios en
          * codigo NO-macro (main, helpers no marcados, comentarios
@@ -2079,38 +3044,19 @@ int main(int argc, char *argv[]) {
          *
          * Si NO hay @Macros en el fuente, fallback a hash full-source
          * (el cache no se usa en ese caso de todos modos). */
+        /* #4: escanea los rangos de TODO el codigo comptime relevante para el
+         * cache -- no solo @Macro, tambien `comptime` (fn/const/block) y los
+         * helpers asm (@Naked/@Asm) que una comptime fn puede invocar.  Sin
+         * esto, cambiar el body de una comptime fn (p.ej. su inline asm) no
+         * invalidaba el cache scoped -> valor STALE.  Para cada trigger captura
+         * desde el inicio de linea (+ anotaciones precedentes) hasta el fin de
+         * la declaracion: body balanceado `{}` o, para consts, hasta `;`. */
         const auto find_macro_ranges = [](const std::string &src)
             -> std::vector<std::pair<size_t, size_t>> {
             std::vector<std::pair<size_t, size_t>> ranges;
-            size_t pos = 0;
-            while ((pos = src.find("@Macro", pos)) != std::string::npos) {
-                /* Skip si @Macro aparece dentro de un literal o comentario.
-                 * Heuristica simple: si los 2 chars previos son "//" o "/ *",
-                 * salta.  Mejorable; v1 acepta falsos positivos. */
-                /* Scan back al inicio de linea + lineas de anotacion. */
-                size_t line_start = pos;
-                while (line_start > 0 && src[line_start - 1] != '\n')
-                    --line_start;
-                /* Incluir anotaciones precedentes (@Pure, @Inline, etc.) */
-                while (line_start > 0) {
-                    size_t prev_end = line_start - 1;
-                    if (prev_end == 0 || src[prev_end] != '\n') break;
-                    size_t prev_start = prev_end;
-                    while (prev_start > 0 && src[prev_start - 1] != '\n')
-                        --prev_start;
-                    size_t k = prev_start;
-                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t'))
-                        ++k;
-                    if (k < prev_end && src[k] == '@') {
-                        line_start = prev_start;
-                    } else {
-                        break;
-                    }
-                }
-                /* Avanzar hasta llave de apertura del body. */
-                size_t bs = src.find('{', pos + 6);
-                if (bs == std::string::npos) break;
-                /* Scan balanced close, skipping strings/line-comments. */
+            /* Fin del body balanceado desde la `{` en @p bs (salta strings y
+             * comentarios de linea).  Devuelve el indice tras la `}`. */
+            auto scan_body = [&src](size_t bs) -> size_t {
                 int depth = 1;
                 size_t i = bs + 1;
                 while (i < src.size() && depth > 0) {
@@ -2135,13 +3081,83 @@ int main(int argc, char *argv[]) {
                         --depth;
                     ++i;
                 }
-                ranges.emplace_back(line_start, i);
-                pos = i;
+                return i;
+            };
+            /* Inicio de la declaracion desde @p pos: retrocede al inicio de
+             * linea + anotaciones @X precedentes. */
+            auto decl_start = [&src](size_t pos) -> size_t {
+                size_t line_start = pos;
+                while (line_start > 0 && src[line_start - 1] != '\n')
+                    --line_start;
+                while (line_start > 0) {
+                    size_t prev_end = line_start - 1;
+                    if (prev_end == 0 || src[prev_end] != '\n') break;
+                    size_t prev_start = prev_end;
+                    while (prev_start > 0 && src[prev_start - 1] != '\n')
+                        --prev_start;
+                    size_t k = prev_start;
+                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t'))
+                        ++k;
+                    if (k < prev_end && src[k] == '@')
+                        line_start = prev_start;
+                    else
+                        break;
+                }
+                return line_start;
+            };
+            auto is_word = [](char c) {
+                return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                       (c >= '0' && c <= '9') || c == '_';
+            };
+            /* Triggers: @-anotaciones (siempre body) + `comptime` (body o `;`).
+             * `require_word_bound` = true para `comptime` (excluir
+             * `comptime_concat` etc. y evitar match en medio de un identifier). */
+            struct Trig {
+                const char *kw;
+                bool require_word_bound;
+            };
+            const Trig triggers[] = {{"@Macro", false},
+                                     {"@Naked", false},
+                                     {"@Asm", false},
+                                     {"comptime", true}};
+            for (const auto &t : triggers) {
+                const std::string kw = t.kw;
+                size_t pos = 0;
+                while ((pos = src.find(kw, pos)) != std::string::npos) {
+                    const size_t after = pos + kw.size();
+                    /* Word-boundary para keywords alfanumericos. */
+                    if (t.require_word_bound) {
+                        const bool lead_ok =
+                            (pos == 0) || !is_word(src[pos - 1]);
+                        const bool trail_ok =
+                            (after >= src.size()) || !is_word(src[after]);
+                        if (!lead_ok || !trail_ok) {
+                            pos = after;
+                            continue;
+                        }
+                    }
+                    const size_t ls = decl_start(pos);
+                    /* Fin de la declaracion: primer `{` vs primer `;` tras la
+                     * keyword.  `{` antes -> body; si no -> const/var hasta `;`. */
+                    size_t bs = src.find('{', after);
+                    size_t sc = src.find(';', after);
+                    size_t end;
+                    if (bs != std::string::npos &&
+                        (sc == std::string::npos || bs < sc)) {
+                        end = scan_body(bs);
+                    } else if (sc != std::string::npos) {
+                        end = sc + 1; /* incluir el `;` */
+                    } else {
+                        end = src.size();
+                    }
+                    ranges.emplace_back(ls, end);
+                    pos = (end > after) ? end : after;
+                }
             }
             return ranges;
         };
 
-        /* Phase MC.16: per-macro manifest diagnostico.  Computa hash
+        /*  MC.16: per-macro manifest diagnostico.  Computa hash
          * por macro y guarda un manifest junto al .velb cacheado.  En
          * un cache miss, compara con el manifest anterior (si existe)
          * para reportar QUE macros cambiaron.
@@ -2297,7 +3313,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // Phase M5.B: PROJECT CACHE LOOKUP.  Si el source tiene imports,
+        //  M5.B: PROJECT CACHE LOOKUP.  Si el source tiene imports,
         // intentar cache hit a nivel @c .velb final.  Si todos los hashes
         // de root + deps recursivos coinciden con los cacheados, copiar
         // el @c .velb cacheado al output y SALTAR todo el compile +
@@ -2341,7 +3357,7 @@ int main(int argc, char *argv[]) {
             diag_vx || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
             !copts.port_target.empty();
 
-        // Phase AOT multi-modulo (fix): el project-cache SOLO almacena un
+        //  AOT multi-modulo (fix): el project-cache SOLO almacena un
         // `.velb` (bytecode VM).  En modo `-m aot` el output es un binario
         // NATIVO (PE/ELF), no un `.velb`.  Si dejaramos que el cache hit
         // sirviera el `.velb` cacheado de un build previo (la ProjectCacheKey
@@ -2386,7 +3402,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // Phase M.2.e: si el source tiene `import`, dispatch al
+        //  M.2.e: si el source tiene `import`, dispatch al
         // compilador multi-modulo.  Este construye el dep graph,
         // compila cada dep en topo order, inyecta .vxi, y mergea
         // todas las funciones en un solo .vel.
@@ -2394,7 +3410,7 @@ int main(int argc, char *argv[]) {
             has_imports ? vx::compile_vx_project(vx_path, copts)
                         : vx::compile_vx_source(vx_source, vx_path, copts);
 
-        /* Phase MC.16+: diagnostico de macros que el lowering rechazo
+        /*  MC.16+: diagnostico de macros que el lowering rechazo
          * por usar builtins comptime-only no aliasables (comptime_compile,
          * static_assert, etc.) o comptime globals.  Estos macros caen al
          * AST evaluator y NO se benefician del cache/VM/memo.  Imprimir
@@ -2416,2139 +3432,133 @@ int main(int argc, char *argv[]) {
         }
 
         if (!cr.ok) {
-            for (const auto &d : cr.diagnostics.all()) {
-                vx::print_diagnostic(std::cerr, d);
-            }
+            vx::render_diagnostics(
+                std::cerr, cr.diagnostics,
+                vx::parse_diag_format(result["diag-format"].as<std::string>()));
             return EXIT_FAILURE;
         }
 
         // ------------------------------------------------------------------
-        // Phase AOT (Paso 1): modo -m aot.  Analiza la compatibilidad nativa
+        // Comptime two- para AOT.  El emit nativo (bloque `if (aot_mode)`
+        // de abajo) usa `cr` y RETORNA antes del two- del path .velb (que
+        // vive tras el emit AOT), asi que el codigo comptime que se ejecuta en
+        // el ComptimeVM (p.ej. inline asm en una comptime fn) no se resolveria
+        // en AOT -> daria placeholder.  Aqui hacemos el mismo two- ANTES
+        // del emit: compilar el pass-1 a un `.velb` cacheado (contiene el
+        // bytecode comptime `__macro_*`), cargarlo via VESTA_MC_PREBUILT, y
+        // recompilar (pass 2) para que los call sites comptime invoquen la VM.
+        // Solo en cache-miss (en hit el prebuilt ya se seteo antes del pass 1).
+        // ------------------------------------------------------------------
+        if (aot_mode && !cache_hit && cr.has_lowerable_macros &&
+            !user_already_set_prebuilt) {
+            std::error_code aec;
+            std::filesystem::create_directories(cache_dir, aec);
+            /* CRITICO: el prebuilt lo carga y EJECUTA el ComptimeVM, que corre
+             * BYTECODE VM -- no codigo nativo.  Con native_poo el `cr` de arriba
+             * bajo las clases/@Naked a lowering NATIVO, que el ComptimeVM no
+             * ejecuta (el CALLN a vrt:naked_dispatch, p.ej., no se materializa
+             * igual) -> las comptime fn con asm daban 0.  Por eso compilamos una
+             * version VM-lowered (native_poo=false) SOLO para el prebuilt del
+             * ComptimeVM; el binario final AOT lo produce el pass-2 con
+             * native_poo. */
+            vx::CompileOptions copts_vm = copts;
+            copts_vm.native_poo = false;
+            vx::CompileResult cr_vm =
+                vx::vx_source_has_imports(vx_source)
+                    ? vx::compile_vx_project(vx_path, copts_vm)
+                    : vx::compile_vx_source(vx_source, vx_path, copts_vm);
+            const std::string tmp_vel_path = cache_prefix + ".vel.tmp";
+            {
+                std::ofstream tmp(tmp_vel_path, std::ios::binary);
+                if (tmp) {
+                    if (copts.emit_debug) tmp << "// @file " << vx_path << "\n";
+                    tmp << cr_vm.vel_text;
+                }
+            }
+            const int tmp_rc = asm_multi_process::run_worker(
+                tmp_vel_path, cache_prefix,
+                /*skip_preprocessor=*/true, /*keep_labels=*/false,
+                /*ir_section_bytes=*/&cr_vm.ir_section_bytes, /*emit_map=*/false);
+            if (tmp_rc == EXIT_SUCCESS) {
+#if defined(_WIN32)
+                _putenv_s("VESTA_MC_PREBUILT", cache_path.c_str());
+#else
+                setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
+#endif
+                vx::CompileResult cr2 =
+                    vx::vx_source_has_imports(vx_source)
+                        ? vx::compile_vx_project(vx_path, copts)
+                        : vx::compile_vx_source(vx_source, vx_path, copts);
+#if defined(_WIN32)
+                _putenv_s("VESTA_MC_PREBUILT", "");
+#else
+                unsetenv("VESTA_MC_PREBUILT");
+#endif
+                /* pass-2 es AUTORITATIVO: se compilo con el bytecode comptime
+                 * cargado, asi que sus valores (y sus static_assert) son los
+                 * reales.  Adoptamos su cr SIEMPRE -- incluso si tiene errores
+                 * (p.ej. un static_assert que resolvio a false con el valor
+                 * real).  Si nos quedaramos con pass-1 (que tenia los asserts
+                 * diferidos SALTADOS) el compile "tendria exito" con valores
+                 * incorrectos, ocultando el fallo. */
+                cr = std::move(cr2);
+                if (verbose_mc) {
+                    std::cerr << "[mc-cache] aot two- populated: "
+                              << cache_path << "\n";
+                }
+                std::remove(tmp_vel_path.c_str());
+                std::remove((cache_path + "-map").c_str());
+                /* Si pass-2 fallo (assert real / error), propagar y abortar. */
+                if (!cr.ok) {
+                    for (const auto &d : cr.diagnostics.all())
+                        vx::print_diagnostic(std::cerr, d);
+                    return EXIT_FAILURE;
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        //  AOT (Paso 1): modo -m aot.  Analiza la compatibilidad nativa
         // del modulo (sin emitir binario aun -- eso es el Paso 2: codegen
         // HOST_LEAF -> ObjectWriter).  El IR optimizado viaja en
         // cr.ir_section_bytes (mismo @ir que consume el JIT); se deserializa
         // y se pasa al analizador AOT.1.
         // ------------------------------------------------------------------
         if (aot_mode) {
-            aot::AotTarget tgt;
-            tgt.tier = aot_tier;
-            tgt.freestanding = aot_freestanding;
-            // AOT.2.d: roles cubiertos por @AllocatorOverride / @PanicHandler
-            // -> admiten su LIBC_MAPPED tambien en --freestanding.
-            tgt.alloc_provided = !cr.aot_alloc_sym.empty();
-            tgt.free_provided = !cr.aot_free_sym.empty();
-            tgt.panic_provided = !cr.aot_panic_sym.empty();
-            tgt.exceptions_enabled = !aot_no_exceptions; // C3: configurable
-
-            const char *tier_name = (aot_tier == aot::Tier::BARE)    ? "bare"
-                                    : (aot_tier == aot::Tier::EMBED) ? "embed"
-                                                                     : "full";
-
-            if (cr.ir_module_cache_bytes.empty()) {
-                std::cerr
-                    << "[aot] el modulo no produjo IR; nada que compilar a "
-                       "nativo.\n";
-                return EXIT_FAILURE;
-            }
-
-            // Modulo COMPLETO (functions + static_data + globals): el codegen
-            // AOT necesita el static_data para materializar los literales en
-            // .rodata.
-            ir::IrModule aot_mod;
-            if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, aot_mod)) {
-                std::cerr
-                    << "[aot] no se pudo deserializar el IR del modulo.\n";
-                return EXIT_FAILURE;
-            }
-
-            // ----------------------------------------------------------------
-            // Auto-bundle del runtime de excepciones (stdlib/vx/vx_exc.vx).
-            // Si el modulo usa try/catch/throw (THROW o CALL __vx_setjmp en el
-            // IR) y no define el runtime el mismo, lo compilamos inline (mismo
-            // native_poo + el @Target ya seleccionado para el target AOT) y
-            // FUSIONAMOS sus funciones + la seccion .vxexc en aot_mod -> el .o
-            // queda autocontenido (no hay que enlazar vx_exc.o a mano).  El
-            // dead-elim posterior conserva solo las __vx_* realmente usadas.
-            // Removible con --no-exceptions (exceptions_enabled=false).
-            // ----------------------------------------------------------------
-            if (!aot_no_exceptions) {
-                bool uses_exc = false, defines_exc = false;
-                for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vx_setjmp") defines_exc = true;
-                    for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs)
-                            if (ins.op == ir::IrOp::THROW ||
-                                (ins.op == ir::IrOp::CALL &&
-                                 ins.func_name == "__vx_setjmp"))
-                                uses_exc = true;
-                }
-                if (uses_exc && !defines_exc) {
-                    // Localizar vx_exc.vx: junto al exe (instalacion) o en el
-                    // repo (dev: build_dir/../stdlib/vx) o cwd.
-                    const std::string exe_dir =
-                        std::filesystem::path(fs::get_executable_path())
-                            .parent_path()
-                            .string();
-                    const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vx/vx_exc.vx",
-                        exe_dir + "/../stdlib/vx/vx_exc.vx",
-                        "stdlib/vx/vx_exc.vx"};
-                    std::string ve_path;
-                    for (const auto &c : cands)
-                        if (std::filesystem::exists(c)) {
-                            ve_path = c;
-                            break;
-                        }
-                    if (ve_path.empty()) {
-                        std::cerr << "[aot] usa excepciones pero no encuentro "
-                                     "stdlib/vx/vx_exc.vx (enlazalo a mano o "
-                                     "compila con --no-exceptions).\n";
-                        return EXIT_FAILURE;
-                    }
-                    std::ifstream vef(ve_path);
-                    std::string ve_src((std::istreambuf_iterator<char>(vef)),
-                                       std::istreambuf_iterator<char>());
-                    vx::CompileOptions ve_opts;
-                    ve_opts.module_name = "vx_exc";
-                    ve_opts.opt_level = 2;
-                    ve_opts.native_poo = true;
-                    ve_opts.exceptions_enabled = true;
-                    // Mismo target bits que el modulo principal (el @Naked
-                    // setjmp/longjmp x86-32 debe ensamblarse en mode32).
-                    ve_opts.asm_target_bits = copts.asm_target_bits;
-                    vx::CompileResult ve_cr =
-                        vx::compile_vx_source(ve_src, ve_path, ve_opts);
-                    ir::IrModule ve_mod;
-                    if (!ve_cr.ok || ve_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(ve_cr.ir_module_cache_bytes,
-                                                   ve_mod)) {
-                        std::cerr << "[aot] no pude compilar el runtime de "
-                                     "excepciones vx_exc.vx.\n";
-                        return EXIT_FAILURE;
-                    }
-                    // Merge (mismo patron que compiler_project): remap de
-                    // STR_LIT_ADDR/code.s_N por el offset del static_data, luego
-                    // append de funciones (las que no existan ya) + static_data
-                    // + globals + native_imports.  vx_exc no tiene literales,
-                    // pero el remap es correcto en general (defensa).
-                    const uint64_t sd_off =
-                        static_cast<uint64_t>(aot_mod.static_data.size());
-                    std::unordered_set<std::string> have;
-                    for (const auto &af : aot_mod.functions)
-                        have.insert(af.name);
-                    for (auto &fn : ve_mod.functions) {
-                        if (sd_off != 0)
-                            for (auto &bb : fn.blocks)
-                                for (auto &ins : bb.instrs)
-                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
-                                        ins.imm += sd_off;
-                        if (!have.count(fn.name))
-                            aot_mod.functions.push_back(std::move(fn));
-                    }
-                    aot_mod.static_data.append_raw_entries(
-                        std::move(ve_mod.static_data));
-                    for (auto &gv : ve_mod.globals)
-                        aot_mod.globals.emplace(gv.first, gv.second);
-                    for (auto &ni : ve_mod.native_imports)
-                        aot_mod.register_native_import(ni.lib, ni.name);
-                    std::cout << "[aot] runtime de excepciones "
-                                 "(stdlib/vx/vx_exc.vx) incluido en el "
-                                 "objeto.\n";
-                }
-            }
-
-            // ----------------------------------------------------------------
-            // Auto-bundle del runtime de monitores (stdlib/vx/vx_sync.vx).
-            // Si el modulo usa `synchronized`/`monitor`, el lowering native_poo
-            // emite CALL __vx_monenter/__vx_monexit (monitor reentrante inline
-            // en el objeto, palabra en obj+16) en vez de las IR ops MONENTER/
-            // MONEXIT.  Fusionamos vx_sync.vx (atomic CAS + tid nativos) ->
-            // el .o queda autocontenido.  El dead-elim conserva solo lo usado.
-            // ----------------------------------------------------------------
-            {
-                bool uses_sync = false, defines_sync = false;
-                for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vx_monenter") defines_sync = true;
-                    for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs)
-                            if (ins.op == ir::IrOp::CALL &&
-                                (ins.func_name == "__vx_monenter" ||
-                                 ins.func_name == "__vx_monexit"))
-                                uses_sync = true;
-                }
-                if (uses_sync && !defines_sync) {
-                    const std::string exe_dir =
-                        std::filesystem::path(fs::get_executable_path())
-                            .parent_path()
-                            .string();
-                    const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vx/vx_sync.vx",
-                        exe_dir + "/../stdlib/vx/vx_sync.vx",
-                        "stdlib/vx/vx_sync.vx"};
-                    std::string vs_path;
-                    for (const auto &c : cands)
-                        if (std::filesystem::exists(c)) {
-                            vs_path = c;
-                            break;
-                        }
-                    if (vs_path.empty()) {
-                        std::cerr << "[aot] usa synchronized pero no encuentro "
-                                     "stdlib/vx/vx_sync.vx (enlazalo a mano).\n";
-                        return EXIT_FAILURE;
-                    }
-                    std::ifstream vsf(vs_path);
-                    std::string vs_src((std::istreambuf_iterator<char>(vsf)),
-                                       std::istreambuf_iterator<char>());
-                    vx::CompileOptions vs_opts;
-                    vs_opts.module_name = "vx_sync";
-                    vs_opts.opt_level = 2;
-                    vs_opts.native_poo = true;
-                    vs_opts.asm_target_bits = copts.asm_target_bits;
-                    vx::CompileResult vs_cr =
-                        vx::compile_vx_source(vs_src, vs_path, vs_opts);
-                    ir::IrModule vs_mod;
-                    if (!vs_cr.ok || vs_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
-                                                   vs_mod)) {
-                        std::cerr << "[aot] no pude compilar el runtime de "
-                                     "monitores vx_sync.vx.\n";
-                        return EXIT_FAILURE;
-                    }
-                    const uint64_t sd_off =
-                        static_cast<uint64_t>(aot_mod.static_data.size());
-                    std::unordered_set<std::string> have;
-                    for (const auto &af : aot_mod.functions)
-                        have.insert(af.name);
-                    for (auto &fn : vs_mod.functions) {
-                        if (sd_off != 0)
-                            for (auto &bb : fn.blocks)
-                                for (auto &ins : bb.instrs)
-                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
-                                        ins.imm += sd_off;
-                        if (!have.count(fn.name))
-                            aot_mod.functions.push_back(std::move(fn));
-                    }
-                    aot_mod.static_data.append_raw_entries(
-                        std::move(vs_mod.static_data));
-                    for (auto &gv : vs_mod.globals)
-                        aot_mod.globals.emplace(gv.first, gv.second);
-                    for (auto &ni : vs_mod.native_imports)
-                        aot_mod.register_native_import(ni.lib, ni.name);
-                    std::cout << "[aot] runtime de monitores "
-                                 "(stdlib/vx/vx_sync.vx) incluido en el "
-                                 "objeto.\n";
-                }
-            }
-
-            // ----------------------------------------------------------------
-            // Auto-bundle del runtime de asincronia (stdlib/vx/vx_async.vx).
-            // Si el modulo usa spawn/future/await/fulfill, el lowering
-            // native_poo emite CALL __vx_spawn/__vx_future_new/__vx_await/
-            // __vx_fulfill (scheduler cooperativo, no hilos del SO).
-            // Fusionamos vx_async.vx -> .o autocontenido.
-            // ----------------------------------------------------------------
-            {
-                bool uses_async = false, defines_async = false;
-                for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vx_spawn") defines_async = true;
-                    for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs)
-                            if (ins.op == ir::IrOp::CALL &&
-                                (ins.func_name == "__vx_spawn" ||
-                                 ins.func_name == "__vx_future_new" ||
-                                 ins.func_name == "__vx_await" ||
-                                 ins.func_name == "__vx_fulfill" ||
-                                 ins.func_name == "__vx_msgsend" ||
-                                 ins.func_name == "__vx_msgrecv" ||
-                                 ins.func_name == "__vx_pid"))
-                                uses_async = true;
-                }
-                if (uses_async && !defines_async) {
-                    const std::string exe_dir =
-                        std::filesystem::path(fs::get_executable_path())
-                            .parent_path()
-                            .string();
-                    const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vx/vx_async.vx",
-                        exe_dir + "/../stdlib/vx/vx_async.vx",
-                        "stdlib/vx/vx_async.vx"};
-                    std::string va_path;
-                    for (const auto &c : cands)
-                        if (std::filesystem::exists(c)) {
-                            va_path = c;
-                            break;
-                        }
-                    if (va_path.empty()) {
-                        std::cerr << "[aot] usa spawn/async pero no encuentro "
-                                     "stdlib/vx/vx_async.vx (enlazalo a mano).\n";
-                        return EXIT_FAILURE;
-                    }
-                    std::ifstream vaf(va_path);
-                    std::string va_src((std::istreambuf_iterator<char>(vaf)),
-                                       std::istreambuf_iterator<char>());
-                    vx::CompileOptions va_opts;
-                    va_opts.module_name = "vx_async";
-                    va_opts.opt_level = 2;
-                    va_opts.native_poo = true;
-                    va_opts.asm_target_bits = copts.asm_target_bits;
-                    vx::CompileResult va_cr =
-                        vx::compile_vx_source(va_src, va_path, va_opts);
-                    ir::IrModule va_mod;
-                    if (!va_cr.ok || va_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(va_cr.ir_module_cache_bytes,
-                                                   va_mod)) {
-                        std::cerr << "[aot] no pude compilar el runtime de "
-                                     "asincronia vx_async.vx.\n";
-                        return EXIT_FAILURE;
-                    }
-                    const uint64_t sd_off =
-                        static_cast<uint64_t>(aot_mod.static_data.size());
-                    std::unordered_set<std::string> have;
-                    for (const auto &af : aot_mod.functions)
-                        have.insert(af.name);
-                    for (auto &fn : va_mod.functions) {
-                        if (sd_off != 0)
-                            for (auto &bb : fn.blocks)
-                                for (auto &ins : bb.instrs)
-                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
-                                        ins.imm += sd_off;
-                        if (!have.count(fn.name))
-                            aot_mod.functions.push_back(std::move(fn));
-                    }
-                    aot_mod.static_data.append_raw_entries(
-                        std::move(va_mod.static_data));
-                    for (auto &gv : va_mod.globals)
-                        aot_mod.globals.emplace(gv.first, gv.second);
-                    for (auto &ni : va_mod.native_imports)
-                        aot_mod.register_native_import(ni.lib, ni.name);
-                    std::cout << "[aot] runtime de asincronia "
-                                 "(stdlib/vx/vx_async.vx) incluido en el "
-                                 "objeto.\n";
-                }
-            }
-
-            // ----------------------------------------------------------------
-            // Auto-bundle del primitivo de fibras (stdlib/vx/vx_fiber.vx).
-            // Si el modulo usa el builtin `fiber_swapctx`, el lowering
-            // native_poo (FN.2) emite CALL __vx_swapctx (context-switch nativo
-            // @Naked, host-stack).  Fusionamos vx_fiber.vx -> .o autocontenido,
-            // salvo que el modulo YA lo defina (import explicito).  Mismo patron
-            // que vx_async: el context-switch es puro Vesta (inline-asm), sin
-            // runtime.
-            // ----------------------------------------------------------------
-            {
-                bool uses_fiber = false, defines_fiber = false;
-                for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vx_swapctx") defines_fiber = true;
-                    for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs)
-                            if (ins.op == ir::IrOp::CALL &&
-                                ins.func_name == "__vx_swapctx")
-                                uses_fiber = true;
-                }
-                if (uses_fiber && !defines_fiber) {
-                    const std::string exe_dir =
-                        std::filesystem::path(fs::get_executable_path())
-                            .parent_path()
-                            .string();
-                    const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vx/vx_fiber.vx",
-                        exe_dir + "/../stdlib/vx/vx_fiber.vx",
-                        "stdlib/vx/vx_fiber.vx"};
-                    std::string vf_path;
-                    for (const auto &c : cands)
-                        if (std::filesystem::exists(c)) {
-                            vf_path = c;
-                            break;
-                        }
-                    if (vf_path.empty()) {
-                        std::cerr << "[aot] usa fiber_swapctx pero no encuentro "
-                                     "stdlib/vx/vx_fiber.vx (enlazalo a mano).\n";
-                        return EXIT_FAILURE;
-                    }
-                    std::ifstream vff(vf_path);
-                    std::string vf_src((std::istreambuf_iterator<char>(vff)),
-                                       std::istreambuf_iterator<char>());
-                    vx::CompileOptions vf_opts;
-                    vf_opts.module_name = "vx_fiber";
-                    vf_opts.opt_level = 2;
-                    vf_opts.native_poo = true;
-                    vf_opts.asm_target_bits = copts.asm_target_bits;
-                    vx::CompileResult vf_cr =
-                        vx::compile_vx_source(vf_src, vf_path, vf_opts);
-                    ir::IrModule vf_mod;
-                    if (!vf_cr.ok || vf_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
-                                                   vf_mod)) {
-                        std::cerr << "[aot] no pude compilar el primitivo de "
-                                     "fibras vx_fiber.vx.\n";
-                        return EXIT_FAILURE;
-                    }
-                    const uint64_t sd_off =
-                        static_cast<uint64_t>(aot_mod.static_data.size());
-                    std::unordered_set<std::string> have;
-                    for (const auto &af : aot_mod.functions)
-                        have.insert(af.name);
-                    for (auto &fn : vf_mod.functions) {
-                        if (sd_off != 0)
-                            for (auto &bb : fn.blocks)
-                                for (auto &ins : bb.instrs)
-                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
-                                        ins.imm += sd_off;
-                        if (!have.count(fn.name))
-                            aot_mod.functions.push_back(std::move(fn));
-                    }
-                    aot_mod.static_data.append_raw_entries(
-                        std::move(vf_mod.static_data));
-                    for (auto &gv : vf_mod.globals)
-                        aot_mod.globals.emplace(gv.first, gv.second);
-                    for (auto &ni : vf_mod.native_imports)
-                        aot_mod.register_native_import(ni.lib, ni.name);
-                    std::cout << "[aot] primitivo de fibras "
-                                 "(stdlib/vx/vx_fiber.vx) incluido en el "
-                                 "objeto.\n";
-                }
-            }
-
-            // ----------------------------------------------------------------
-            // Auto-bundle del runtime de I/O (stdlib/vx/vx_io.vx).
-            // Si el modulo usa print/println, el lowering native_poo emite
-            // CALLN `vx_bare_io:__vx_*` (write + formateadores).  En vez de
-            // exigir enlazar vesta_io_bare.o (libc/printf), fusionamos un
-            // runtime Vesta puro que escribe via FFI a write/_write (fd 1, sin
-            // printf -> mas rapido) y formatea los numeros en Vesta.  Tras el
-            // merge reescribimos esas CALLN a CALL plano (__vx_*) -> resuelven
-            // a las funciones bundle-adas (no quedan como import externo).  El
-            // usuario puede REDEFINIR cualquier __vx_* en su modulo: si lo
-            // hace, el lowering ya emitio CALL a la suya y no detectamos la
-            // CALLN -> no se bundle-a.  Removible con --freestanding (el
-            // usuario aporta los __vx_*) o --no-io.
-            // ----------------------------------------------------------------
-            if (!aot_no_io && !aot_freestanding) {
-                const std::string io_pfx = "vx_bare_io:";
-                bool uses_io = false, defines_io = false;
-                for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vx_write") defines_io = true;
-                    for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs)
-                            if (ins.op == ir::IrOp::CALLN &&
-                                ins.func_name.rfind(io_pfx, 0) == 0)
-                                uses_io = true;
-                }
-                if (uses_io && !defines_io) {
-                    const std::string exe_dir =
-                        std::filesystem::path(fs::get_executable_path())
-                            .parent_path()
-                            .string();
-                    const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vx/vx_io.vx",
-                        exe_dir + "/../stdlib/vx/vx_io.vx",
-                        "stdlib/vx/vx_io.vx"};
-                    std::string io_path;
-                    for (const auto &c : cands)
-                        if (std::filesystem::exists(c)) {
-                            io_path = c;
-                            break;
-                        }
-                    if (io_path.empty()) {
-                        std::cerr << "[aot] usa print/println pero no encuentro "
-                                     "stdlib/vx/vx_io.vx (enlazalo a mano o "
-                                     "compila con --freestanding y aporta "
-                                     "__vx_write).\n";
-                        return EXIT_FAILURE;
-                    }
-                    std::ifstream iof(io_path);
-                    std::string io_src((std::istreambuf_iterator<char>(iof)),
-                                       std::istreambuf_iterator<char>());
-                    vx::CompileOptions io_opts;
-                    io_opts.module_name = "vx_io";
-                    io_opts.opt_level = 2;
-                    io_opts.native_poo = true;
-                    io_opts.asm_target_bits = copts.asm_target_bits;
-                    vx::CompileResult io_cr =
-                        vx::compile_vx_source(io_src, io_path, io_opts);
-                    ir::IrModule io_mod;
-                    if (!io_cr.ok || io_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
-                                                   io_mod)) {
-                        std::cerr << "[aot] no pude compilar el runtime de I/O "
-                                     "vx_io.vx.\n";
-                        return EXIT_FAILURE;
-                    }
-                    // Merge (mismo patron que vx_exc): remap de STR_LIT_ADDR por
-                    // el offset del static_data + append de funciones nuevas +
-                    // static_data + globals + native_imports (write/_write/abort).
-                    const uint64_t sd_off =
-                        static_cast<uint64_t>(aot_mod.static_data.size());
-                    std::unordered_set<std::string> have;
-                    for (const auto &af : aot_mod.functions)
-                        have.insert(af.name);
-                    for (auto &fn : io_mod.functions) {
-                        if (sd_off != 0)
-                            for (auto &bb : fn.blocks)
-                                for (auto &ins : bb.instrs)
-                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
-                                        ins.imm += sd_off;
-                        if (!have.count(fn.name))
-                            aot_mod.functions.push_back(std::move(fn));
-                    }
-                    aot_mod.static_data.append_raw_entries(
-                        std::move(io_mod.static_data));
-                    for (auto &gv : io_mod.globals)
-                        aot_mod.globals.emplace(gv.first, gv.second);
-                    for (auto &ni : io_mod.native_imports)
-                        aot_mod.register_native_import(ni.lib, ni.name);
-                    // Reescribir CALLN `vx_bare_io:__vx_*` -> CALL `__vx_*`
-                    // (las funciones ahora viven en el modulo; resolucion
-                    // intra-imagen, sin import externo).
-                    for (auto &af : aot_mod.functions)
-                        for (auto &b : af.blocks)
-                            for (auto &ins : b.instrs)
-                                if (ins.op == ir::IrOp::CALLN &&
-                                    ins.func_name.rfind(io_pfx, 0) == 0) {
-                                    ins.op = ir::IrOp::CALL;
-                                    ins.func_name =
-                                        ins.func_name.substr(io_pfx.size());
-                                }
-                    // El I/O es block-buffered: inyectar CALL __vx_flush antes
-                    // de cada RET de main para volcar al salir (el _start nativo
-                    // no corre atexit).  Asi nada se pierde y el buffering vale
-                    // (1 syscall por 4 KiB en vez de 1 por write).
-                    for (auto &af : aot_mod.functions) {
-                        if (af.name != "main") continue;
-                        for (auto &b : af.blocks) {
-                            std::vector<ir::IrInstr> ni;
-                            ni.reserve(b.instrs.size() + 1);
-                            for (auto &ins : b.instrs) {
-                                if (ins.op == ir::IrOp::RET) {
-                                    ir::IrInstr fl{};
-                                    fl.op = ir::IrOp::CALL;
-                                    // type por defecto = VOID (0); evitamos la
-                                    // macro VOID de windef.h (restaurada tras
-                                    // incluir ssa_ir.h).
-                                    fl.dst = ir::IR_NO_VALUE;
-                                    fl.func_name = "__vx_flush";
-                                    fl.source_line = ins.source_line;
-                                    ni.push_back(std::move(fl));
-                                }
-                                ni.push_back(std::move(ins));
-                            }
-                            b.instrs = std::move(ni);
-                        }
-                    }
-                    std::cout << "[aot] runtime de I/O (stdlib/vx/vx_io.vx) "
-                                 "incluido en el objeto.\n";
-                }
-            }
-
-            // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
-            // analizar/compilar.  Sin esto, una factoria-de-closure inlineada
-            // en su caller queda como copia standalone no usada y su GC_ALLOC
-            // bloquearia la compilacion bare.  Cierre transitivo desde main +
-            // funciones @section, siguiendo CALL/TAILCALL/LABEL_ADDR y los
-            // sym_refs de las vtablas (static_data).  Conservador: ante la duda
-            // se conserva (un drop erroneo daria un error de enlace ruidoso,
-            // nunca corrupcion).
-            {
-                std::unordered_set<std::string> live;
-                std::vector<std::string> work;
-                auto add_live = [&](const std::string &n) {
-                    if (!n.empty() && live.insert(n).second) work.push_back(n);
-                };
-                std::unordered_map<std::string, const ir::IrFunction *> by_name;
-                for (auto &f : aot_mod.functions) by_name[f.name] = &f;
-                // Modo LIBRERIA: un modulo sin `main` es una libreria (.o/.so);
-                // TODAS sus funciones son raices (son la API publica; no se sabe
-                // quien las llamara desde fuera).  El linker final hace el
-                // dead-strip del ejecutable (--gc-sections), asi que esto NO
-                // infla el .exe: con `main`, la poda desde main mantiene el exe
-                // lean (una funcion no alcanzable se elimina).  Sin esto, una
-                // libreria Vesta compilaba a 0 funciones.
-                const bool is_library = (by_name.count("main") == 0);
-                add_live("main");
-                add_live("__module_init");
-                // AUTO multiversion (--float-isa auto): el dispatch (auto_init)
-                // referencia las VARIANTES por nombre derivado (NAME$sse2/...),
-                // no la funcion base NAME -> la poda no la veria.  Mantener viva
-                // toda funcion con ops VEC (la base de la que el driver deriva
-                // las 3 variantes); su recorrido arrastra sus callees (p.ej.
-                // sum_f64).  Espejo de la siembra del BFS de codegen.
-                const bool auto_keep_vec =
-                    (result.count("float-isa") &&
-                     result["float-isa"].as<std::string>() == "auto");
-                auto has_vec = [](const ir::IrFunction &f) -> bool {
-                    for (const auto &b : f.blocks)
-                        for (const auto &in : b.instrs) {
-                            const auto op = in.op;
-                            if (op == ir::IrOp::VEC_BINOP ||
-                                op == ir::IrOp::VEC_UNOP ||
-                                op == ir::IrOp::VEC_FMA ||
-                                op == ir::IrOp::VEC_BINOP_S ||
-                                op == ir::IrOp::VEC_BCAST ||
-                                op == ir::IrOp::VEC_ACC_ZERO ||
-                                op == ir::IrOp::VEC_ACC_ADD ||
-                                op == ir::IrOp::VEC_ACC_FMA ||
-                                op == ir::IrOp::VEC_ACC_STORE ||
-                                op == ir::IrOp::VEC_ACC_COMBINE)
-                                return true;
-                        }
-                    return false;
-                };
-                for (auto &f : aot_mod.functions) {
-                    if (!f.section.empty() || f.is_naked || is_library ||
-                        (auto_keep_vec && has_vec(f)))
-                        add_live(f.name);
-                }
-                // Raices por vtablas/datos: nombres referenciados en sym_refs.
-                for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
-                    for (const auto &sr : aot_mod.static_data.meta_at(si).sym_refs)
-                        add_live(sr.sym);
-                while (!work.empty()) {
-                    const std::string cur = work.back();
-                    work.pop_back();
-                    auto it = by_name.find(cur);
-                    if (it == by_name.end()) continue;
-                    for (const auto &b : it->second->blocks)
-                        for (const auto &ins : b.instrs) {
-                            if ((ins.op == ir::IrOp::CALL ||
-                                 ins.op == ir::IrOp::TAILCALL ||
-                                 ins.op == ir::IrOp::LABEL_ADDR) &&
-                                !ins.func_name.empty())
-                                add_live(ins.func_name);
-                            // THROW baja a CALL __vx_throw en el backend
-                            // (no es un CALL en el IR) -> referencia implicita
-                            // al runtime de excepciones auto-hospedado.
-                            if (ins.op == ir::IrOp::THROW)
-                                add_live("__vx_throw");
-                            // INLINE_ASM: el cuerpo (func_name) puede referenciar
-                            // funciones del modulo via tokens `__vxf_<label>` que
-                            // el lowering inserto (inline-asm accede simbolos
-                            // propios).  La poda NO ve estas refs porque el asm es
-                            // texto opaco -> escanearlas explicitamente para que la
-                            // funcion referenciada sobreviva y se compile.  Los
-                            // `__vxg_<slot>` son globales (rodata), no funciones.
-                            if (ins.op == ir::IrOp::INLINE_ASM &&
-                                !ins.func_name.empty()) {
-                                const std::string &body = ins.func_name;
-                                const std::string tag = "__vxf_";
-                                size_t p = 0;
-                                while ((p = body.find(tag, p)) !=
-                                       std::string::npos) {
-                                    size_t s = p + tag.size();
-                                    size_t e = s;
-                                    while (e < body.size() &&
-                                           (std::isalnum((unsigned char)body[e]) ||
-                                            body[e] == '_' || body[e] == '$'))
-                                        ++e;
-                                    if (e > s)
-                                        add_live(body.substr(s, e - s));
-                                    p = e;
-                                }
-                            }
-                        }
-                }
-                std::vector<ir::IrFunction> kept;
-                kept.reserve(aot_mod.functions.size());
-                for (auto &f : aot_mod.functions)
-                    if (live.count(f.name)) kept.push_back(std::move(f));
-                aot_mod.functions = std::move(kept);
-            }
-
-            // AOT: promover envs de closure de heap a stack cuando no escapan
-            // (closure-aware escape analysis).  Tras esto, los que no se
-            // pudieron promover quedan GC_ALLOC -> aot_analyze los rechaza
-            // limpio (nunca heap sin liberar).  Corre solo en el path AOT.
-            for (auto &afn : aot_mod.functions)
-                (void)ir::ir_pass_promote_closure_env(afn);
-
-            // AOT opcion 1: las closures que escapan CROSS-FUNCTION (env creado
-            // en una factoria y retornado; no inlinable -> promote no lo pudo
-            // poner en stack) se liberan con RAW_FREE determinista en el dueno
-            // terminal.  Lo que no tenga dueno limpio se revierte a GC_ALLOC
-            // (aot_analyze lo rechaza -> nunca leak).  Corre tras promote.
-            (void)ir::ir_pass_own_closure_envs(aot_mod);
-
-            if (std::getenv("VESTA_AOT_DUMP_IR")) {
-                std::cerr << "===== AOT native_poo IR =====\n";
-                ir::ir_print(aot_mod, std::cerr);
-                std::cerr << "=============================\n";
-            }
-            aot::AotCompatReport rep = aot::aot_analyze_module(aot_mod, tgt);
-            std::cout << "[aot] target=" << tier_name
-                      << (aot_freestanding ? " --freestanding" : "") << ": "
-                      << aot_mod.functions.size() << " funcion(es), "
-                      << rep.ok_functions.size()
-                      << " compilable(s) a nativo.\n";
-
-
-            if (!rep.compatible) {
-                std::cerr << rep.render();
-                std::cerr
-                    << "[aot] modulo NO compilable a nativo en este target "
-                       "(ver incompatibilidades arriba).\n";
-                return EXIT_FAILURE;
-            }
-
-            // Phase AOT.2: re-bajar las ops sintetizadas (RAW_ALLOC/RAW_FREE/
-            // PANIC) a CALL a simbolos externos (convencion libc; los resuelve
-            // el linker -> el .o NO depende de libc).  Tras esto el selector ve
-            // solo CALL.  Se ejecuta DESPUES del gate de analyze para que el
-            // chequeo freestanding sobre RAW_ALLOC siga aplicando.
-            // AOT.2.d: nombres de simbolo segun
-            // @AllocatorOverride/@PanicHandler (vacio = convencion C
-            // malloc/free/abort).
-            aot::AotLowerConfig lcfg;
-            // Detectar si el modulo usa el allocator (RAW_ALLOC/RAW_FREE o el
-            // calloc del `new`) para decidir el auto-bundle del slab Vesta.
-            bool aot_uses_alloc = false;
-            for (const auto &af : aot_mod.functions)
-                for (const auto &b : af.blocks)
-                    for (const auto &in : b.instrs)
-                        if (in.op == ir::IrOp::RAW_ALLOC ||
-                            in.op == ir::IrOp::RAW_FREE ||
-                            ((in.op == ir::IrOp::CALL ||
-                              in.op == ir::IrOp::TAILCALL) &&
-                             in.func_name == "calloc"))
-                            aot_uses_alloc = true;
-            bool bundle_mem = false;
-            ir::IrModule mem_mod; // poblado si bundle_mem (merge tras aot_lower)
-            if (!cr.aot_alloc_sym.empty()) {
-                // @AllocatorOverride del usuario: respetarlo (no bundle).
-                lcfg.alloc_sym = cr.aot_alloc_sym;
-                lcfg.has_alloc_override =
-                    true; // __new calloc -> alloc_sym(size)
-            } else if (aot_uses_alloc && !aot_no_mem && !aot_freestanding) {
-                // Sin @AllocatorOverride del usuario -> el slab Vesta
-                // (stdlib/vx/vx_mem.vx) es el allocator por DEFECTO, via el
-                // MISMO mecanismo @AllocatorOverride (reciclamos la sintaxis):
-                // compilamos vx_mem y leemos sus simbolos override
-                // (__vx_malloc / __vx_free) genericamente, no hardcoded.  Sin
-                // libc malloc/free.  El usuario sustituye con su propio
-                // @AllocatorOverride, o lo desactiva con --no-mem.
-                const std::string exe_dir =
-                    std::filesystem::path(fs::get_executable_path())
-                        .parent_path()
-                        .string();
-                const std::vector<std::string> cands = {
-                    exe_dir + "/stdlib/vx/vx_mem.vx",
-                    exe_dir + "/../stdlib/vx/vx_mem.vx",
-                    "stdlib/vx/vx_mem.vx"};
-                std::string mem_path;
-                for (const auto &c : cands)
-                    if (std::filesystem::exists(c)) {
-                        mem_path = c;
-                        break;
-                    }
-                if (mem_path.empty()) {
-                    std::cerr << "[aot] usa el allocator pero no encuentro "
-                                 "stdlib/vx/vx_mem.vx (enlazalo a mano, usa "
-                                 "@AllocatorOverride o compila con --no-mem).\n";
-                    return EXIT_FAILURE;
-                }
-                std::ifstream mf(mem_path);
-                std::string mem_src((std::istreambuf_iterator<char>(mf)),
-                                    std::istreambuf_iterator<char>());
-                vx::CompileOptions mem_opts;
-                mem_opts.module_name = "vx_mem";
-                mem_opts.opt_level = 2;
-                mem_opts.native_poo = true;
-                mem_opts.asm_target_bits = copts.asm_target_bits;
-                vx::CompileResult mem_cr =
-                    vx::compile_vx_source(mem_src, mem_path, mem_opts);
-                if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
-                    !ir::parse_ir_module_cache(mem_cr.ir_module_cache_bytes,
-                                               mem_mod) ||
-                    mem_cr.aot_alloc_sym.empty() ||
-                    mem_cr.aot_free_sym.empty()) {
-                    std::cerr << "[aot] no pude compilar el slab allocator "
-                                 "vx_mem.vx (o no expone @AllocatorOverride).\n";
-                    return EXIT_FAILURE;
-                }
-                // Override por defecto = los simbolos que vx_mem declaro con
-                // @AllocatorOverride (mismo trato que un override del usuario).
-                lcfg.alloc_sym = mem_cr.aot_alloc_sym;
-                lcfg.free_sym = mem_cr.aot_free_sym;
-                lcfg.has_alloc_override = true; // __new calloc -> alloc_sym(size)
-                bundle_mem = true;
-            }
-            if (!cr.aot_free_sym.empty()) lcfg.free_sym = cr.aot_free_sym;
-            if (!cr.aot_panic_sym.empty()) {
-                lcfg.panic_sym = cr.aot_panic_sym;
-                lcfg.panic_takes_msg = true; // @PanicHandler(msg_addr, len)
-            }
-
-            // FFI dinamico (ffi_open/ffi_sym -> DLOPEN/DLSYM): bundle
-            // stdlib/vx/vx_ffi.vx que define __vx_dlopen/__vx_dlsym
-            // (LoadLibraryA/dlopen via @Target, Vesta puro).  Igual que vx_mem:
-            // el usuario puede REDEFINIR esas funciones en su modulo (el merge
-            // respeta las suyas).  Se detecta ANTES de aot_lower (que convierte
-            // DLOPEN/DLSYM en CALL __vx_dlopen/__vx_dlsym).
-            bool bundle_ffi = false;
-            ir::IrModule ffi_mod;
-            {
-                bool aot_uses_ffi = false;
-                for (const auto &af : aot_mod.functions)
-                    for (const auto &b : af.blocks)
-                        for (const auto &in : b.instrs)
-                            if (in.op == ir::IrOp::DLOPEN ||
-                                in.op == ir::IrOp::DLSYM)
-                                aot_uses_ffi = true;
-                if (aot_uses_ffi && !aot_freestanding) {
-                    const std::string exe_dir =
-                        std::filesystem::path(fs::get_executable_path())
-                            .parent_path()
-                            .string();
-                    const std::vector<std::string> cands = {
-                        exe_dir + "/stdlib/vx/vx_ffi.vx",
-                        exe_dir + "/../stdlib/vx/vx_ffi.vx",
-                        "stdlib/vx/vx_ffi.vx"};
-                    std::string ffi_path;
-                    for (const auto &c : cands)
-                        if (std::filesystem::exists(c)) {
-                            ffi_path = c;
-                            break;
-                        }
-                    if (ffi_path.empty()) {
-                        std::cerr << "[aot] usa ffi_open/ffi_sym pero no "
-                                     "encuentro stdlib/vx/vx_ffi.vx.\n";
-                        return EXIT_FAILURE;
-                    }
-                    std::ifstream ff(ffi_path);
-                    std::string ffi_src(
-                        (std::istreambuf_iterator<char>(ff)),
-                        std::istreambuf_iterator<char>());
-                    vx::CompileOptions ffi_opts;
-                    ffi_opts.module_name = "vx_ffi";
-                    ffi_opts.opt_level = 2;
-                    ffi_opts.native_poo = true;
-                    ffi_opts.asm_target_bits = copts.asm_target_bits;
-                    vx::CompileResult ffi_cr =
-                        vx::compile_vx_source(ffi_src, ffi_path, ffi_opts);
-                    if (!ffi_cr.ok || ffi_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(
-                            ffi_cr.ir_module_cache_bytes, ffi_mod)) {
-                        std::cerr << "[aot] no pude compilar el FFI dinamico "
-                                     "vx_ffi.vx.\n";
-                        return EXIT_FAILURE;
-                    }
-                    bundle_ffi = true;
-                }
-            }
-
-            aot::aot_lower_runtime(aot_mod, lcfg);
-
-            // Merge del slab (stdlib/vx/vx_mem.vx, ya compilado en mem_mod)
-            // DESPUES de aot_lower: ahora RAW_ALLOC/calloc/RAW_FREE ya son CALL
-            // __vx_malloc/__vx_free, asi que el codegen BFS los alcanza desde
-            // main.  Mismo patron de merge que vx_io/vx_exc.
-            if (bundle_mem) {
-                const uint64_t sd_off =
-                    static_cast<uint64_t>(aot_mod.static_data.size());
-                std::unordered_set<std::string> have;
-                for (const auto &af : aot_mod.functions)
-                    have.insert(af.name);
-                for (auto &fn : mem_mod.functions) {
-                    if (sd_off != 0)
-                        for (auto &bb : fn.blocks)
-                            for (auto &ins : bb.instrs)
-                                if (ins.op == ir::IrOp::STR_LIT_ADDR)
-                                    ins.imm += sd_off;
-                    if (!have.count(fn.name))
-                        aot_mod.functions.push_back(std::move(fn));
-                }
-                aot_mod.static_data.append_raw_entries(
-                    std::move(mem_mod.static_data));
-                for (auto &gv : mem_mod.globals)
-                    aot_mod.globals.emplace(gv.first, gv.second);
-                for (auto &ni : mem_mod.native_imports)
-                    aot_mod.register_native_import(ni.lib, ni.name);
-                std::cout << "[aot] slab allocator (stdlib/vx/vx_mem.vx) "
-                             "incluido en el objeto.\n";
-            }
-
-            // Merge del FFI dinamico (vx_ffi.vx) DESPUES de aot_lower: ahora
-            // DLOPEN/DLSYM ya son CALL __vx_dlopen/__vx_dlsym y el BFS los
-            // alcanza.  Mismo patron que vx_mem.  Si el usuario definio sus
-            // propias __vx_dlopen/__vx_dlsym, el dedup (have) las respeta.
-            if (bundle_ffi) {
-                const uint64_t sd_off =
-                    static_cast<uint64_t>(aot_mod.static_data.size());
-                std::unordered_set<std::string> have;
-                for (const auto &af : aot_mod.functions)
-                    have.insert(af.name);
-                for (auto &fn : ffi_mod.functions) {
-                    if (sd_off != 0)
-                        for (auto &bb : fn.blocks)
-                            for (auto &ins : bb.instrs)
-                                if (ins.op == ir::IrOp::STR_LIT_ADDR)
-                                    ins.imm += sd_off;
-                    if (!have.count(fn.name))
-                        aot_mod.functions.push_back(std::move(fn));
-                }
-                aot_mod.static_data.append_raw_entries(
-                    std::move(ffi_mod.static_data));
-                for (auto &gv : ffi_mod.globals)
-                    aot_mod.globals.emplace(gv.first, gv.second);
-                for (auto &ni : ffi_mod.native_imports)
-                    aot_mod.register_native_import(ni.lib, ni.name);
-                std::cout << "[aot] FFI dinamico (stdlib/vx/vx_ffi.vx) "
-                             "incluido en el objeto.\n";
-            }
-
-            // Bare AOT: NO hay VM stack (rbx no es un ProcessVM*).  Forzar
-            // TODAS las ALLOCAs a la pila nativa (host_alloca), incluso las
-            // que "escapan" a un CALL -- en nativo el host stack ES
-            // addressable cross-call.  Sin esto, un local cuya direccion se
-            // pasa a una funcion (p.ej. un buffer para itoa) se aloca con
-            // ALLOCA_VM ([rbx+0x40]) -> direccion basura -> SIGSEGV.
-            for (auto &afn : aot_mod.functions)
-                ir::ir_pass_promote_local_allocas(afn, /*force_all=*/true);
-
-            // ------------------------------------------------------------------
-            // Paso 2: codegen nativo (HOST_LEAF) + emision del ejecutable.
-            //
-            // Hito minimo: compila SOLO `main` (sin CALL ni datos -> bytes
-            // position-independent, sin relocations) y sintetiza un _start
-            // arch+formato-especifico que llama a main y termina el proceso con
-            // su codigo de retorno.  Todo el codegen pasa por el path vreg
-            // (TargetRegInfo + selector + encoder), portable a otras arch.
-            // ------------------------------------------------------------------
-
-            // Arquitectura objetivo: x86-64 (default) o x86-32 (modo protegido,
-            // kernels): 8 GP eax-edi, sin REX, operando 32-bit, regparm(3);
-            // subset entero de 32-bit (i32/u32/ptr32).
-            bool aot_mode32 = false;
-            {
-                const std::string a = result["aot-arch"].as<std::string>();
-                if (a == "x86-32" || a == "x86_32" || a == "i386")
-                    aot_mode32 = true;
-                else if (a == "x86-64" || a == "x86_64" || a == "amd64")
-                    aot_mode32 = false;
-                else {
-                    std::cerr << "[aot] --aot-arch desconocido: '" << a
-                              << "' (use x86-64 | x86-32).\n";
-                    return EXIT_FAILURE;
-                }
-            }
-            const aot::AotArch arch =
-                aot_mode32 ? aot::AotArch::X86_32 : aot::AotArch::X86_64;
-
-            // Backend de punto flotante (--float-isa).  Hoy el codegen float
-            // (FP-regalloc en XMM, packing-ready) esta en construccion; el flag
-            // queda cableado para que el selector elija el backend cuando llegue.
-            jit::FloatIsa aot_fisa = jit::FloatIsa::SSE2;
-            {
-                const std::string f = result["float-isa"].as<std::string>();
-                if (f == "sse2" || f == "sse")
-                    aot_fisa = jit::FloatIsa::SSE2;
-                else if (f == "x87" || f == "fpu")
-                    aot_fisa = jit::FloatIsa::X87;
-                else if (f == "avx")
-                    aot_fisa = jit::FloatIsa::AVX;
-                else if (f == "avx512f" || f == "avx512")
-                    aot_fisa = jit::FloatIsa::AVX512F;
-                else if (f == "auto")
-                    aot_fisa = jit::FloatIsa::AUTO;
-                else {
-                    std::cerr << "[aot] --float-isa desconocido: '" << f
-                              << "' (use sse2 | x87 | avx | avx512f | auto).\n";
-                    return EXIT_FAILURE;
-                }
-            }
-
-            // Formato de salida: --format pe|elf, o default por host.
-            aot::ObjFormat fmt =
-#if defined(_WIN32)
-                aot::ObjFormat::PE;
-#else
-                aot::ObjFormat::ELF;
-#endif
-            if (result.count("format")) {
-                const std::string f = result["format"].as<std::string>();
-                if (f == "pe" || f == "PE")
-                    fmt = aot::ObjFormat::PE;
-                else if (f == "elf" || f == "ELF")
-                    fmt = aot::ObjFormat::ELF;
-                else {
-                    std::cerr << "[aot] --format desconocido: '" << f
-                              << "' (use pe|elf).\n";
-                    return EXIT_FAILURE;
-                }
-            }
-
-            // Referencias a datos: PIC (RIP-relativo, default) vs absoluto
-            // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
-            const bool aot_pic = (result.count("no-pie") == 0);
-
-            // --emit exe|obj|shared.
-            //   EXEC   : ejecutable standalone con _start (requiere main).
-            //   OBJECT : .o/.obj relocatable (sin _start; main global; relocs
-            //   como
-            //            registros; linkable con ld/gcc/link).
-            //   SHARED : .so/.dll (sin _start; exporta TODAS las funciones;
-            //   PIC).
-            bool emit_obj = false, emit_shared = false, emit_bin = false;
-            if (result.count("emit")) {
-                const std::string em = result["emit"].as<std::string>();
-                if (em == "exe" || em == "exec") {
-                } else if (em == "obj" || em == "o")
-                    emit_obj = true;
-                else if (em == "shared" || em == "dll" || em == "so")
-                    emit_shared = true;
-                else if (em == "bin" || em == "flat")
-                    emit_bin = true;
-                else {
-                    std::cerr << "[aot] --emit desconocido: '" << em
-                              << "' (use exe|obj|shared|bin).\n";
-                    return EXIT_FAILURE;
-                }
-            }
-            // Increment 3: auto-link de libvesta_gc.a si el modulo usa gc<T>.
-            // El frontend emite __vxgc_init cuando hay gc<T>; ese codigo llama
-            // a vx_gc_* (definidos en libvesta_gc.a).  Para --emit exe se emite
-            // un .obj temporal y se enlaza con la lib (vm --link interno),
-            // porque la ruta inline mandaria vx_gc_* a imports de DLL (rotos).
-            // Solo PE por ahora (la lib se distribuye como COFF .a).
-            // Auto-link de librerias ESTATICAS de la stdlib (.a) cuando el
-            // programa las usa: gc<T> (libvesta_gc.a), colecciones
-            // (libvesta_collections.a), math (libvesta_math.a).  Asi el .exe es
-            // STANDALONE (sin DLLs).  Se emite un .obj temporal y se enlaza con
-            // las .a (vm --link interno).  Las .a son de NUESTRO lenguaje ->
-            // siempre estaticas; solo se anaden si el programa las usa de verdad.
-            bool need_temp_link = false;
-            std::string link_real_out, link_tmp_obj;
-            std::vector<std::string> autolink_libs;
-            {
-                bool uses_gc = false, uses_col = false, uses_math = false;
-                for (const auto &fn : aot_mod.functions)
-                    for (const auto &b : fn.blocks)
-                        for (const auto &ins : b.instrs) {
-                            const std::string &f = ins.func_name;
-                            if (f.rfind("vx_gc_", 0) == 0) uses_gc = true;
-                            if (f.find("vcol_") != std::string::npos)
-                                uses_col = true;
-                            if (f.find("vmath_") != std::string::npos)
-                                uses_math = true;
-                        }
-                const bool want_exec = !emit_obj && !emit_shared && !emit_bin;
-                namespace fs = std::filesystem;
-                auto find_a = [&](const char *libfile) -> std::string {
-                    std::vector<fs::path> cands;
-                    const fs::path self(argv[0]);
-                    if (self.has_parent_path())
-                        cands.push_back(self.parent_path() / libfile);
-                    cands.emplace_back(libfile);
-                    cands.push_back(fs::path("cmake-build-release") / libfile);
-                    cands.push_back(fs::path("cmake-build-debug") / libfile);
-                    for (const auto &c : cands) {
-                        std::error_code ec;
-                        if (fs::exists(c, ec)) return c.string();
-                    }
-                    return "";
-                };
-                if (want_exec) {
-                    if (uses_gc) {
-                        const std::string p = find_a("libvesta_gc.a");
-                        if (p.empty()) {
-                            std::cerr << "[aot] gc<T>: no se encontro "
-                                         "libvesta_gc.a (junto a vm o cwd).\n";
-                            return EXIT_FAILURE;
-                        }
-                        autolink_libs.push_back(p);
-                    }
-                    // Colecciones / math: preferir la .a estatica (standalone);
-                    // si no esta, se deja para el import IAT de la DLL (fallback,
-                    // la DLL acompana al exe).
-                    if (uses_col) {
-                        const std::string p =
-                            find_a("libvesta_collections.a");
-                        if (!p.empty()) autolink_libs.push_back(p);
-                    }
-                    if (uses_math) {
-                        const std::string p = find_a("libvesta_math.a");
-                        if (!p.empty()) autolink_libs.push_back(p);
-                    }
-                }
-                if (!autolink_libs.empty()) {
-                    need_temp_link = true;
-                    emit_obj = true;          // emitir .obj temporal...
-                    link_real_out = out_prefix; // ...y enlazarlo al .exe final
-                    link_tmp_obj = out_prefix + ".aotlink.tmp.obj";
-                    out_prefix = link_tmp_obj;
-                }
-            }
-
-            // --emit shared: ELF (.so) y PE (.dll).
-            if (emit_shared && !aot_pic) {
-                std::cerr << "[aot] --emit shared requiere PIC; --no-pie no es "
-                             "compatible con .so.\n";
-                return EXIT_FAILURE;
-            }
-            // base de carga del binario plano (.bin) -- solo afecta refs
-            // absolutas.
-            uint64_t bin_base = 0;
-            if (result.count("bin-base")) {
-                bin_base = std::strtoull(
-                    result["bin-base"].as<std::string>().c_str(), nullptr, 0);
-            }
-            // OBJECT/SHARED/BIN no llevan _start (lo aporta el
-            // crt/host/loader).
-            const bool no_stub = emit_obj || emit_shared || emit_bin;
-
-            // x86-32: soporta --emit bin (flat), --emit exe (ELF32/PE32) y
-            // --emit obj (.o ELF32 -- COFF32 .obj es follow-up).  .so/.dll de
-            // 32-bit pendientes.  El objeto conserva la extension .o (linkable
-            // con gcc -m32 / ld).
-            if (aot_mode32) {
-                // --emit obj: .o ELF32 (--format elf) o .obj COFF i386
-                // (--format pe), ambos conservando la extension para linkers
-                // externos (gcc -m32 / ld / link.exe).
-                const bool ok32 = emit_bin || emit_obj ||
-                                  (!no_stub /* EXEC: ELF32 o PE32 */);
-                if (!ok32) {
-                    std::cerr
-                        << "[aot] --aot-arch x86-32: soporta --emit bin, "
-                           "--emit exe (ELF32 / PE32) o --emit obj (.o ELF32 / "
-                           ".obj COFF i386); .so/.dll de 32-bit son "
-                           "follow-ups.\n";
-                    return EXIT_FAILURE;
-                }
-            }
-
-            // main: requerido para EXEC y OBJECT; OPCIONAL para SHARED
-            // (libreria).
-            const ir::IrFunction *main_fn = nullptr;
-            for (const auto &fn : aot_mod.functions)
-                if (fn.name == "main") {
-                    main_fn = &fn;
-                    break;
-                }
-            if (!main_fn && !emit_shared && !emit_bin && !emit_obj) {
-                std::cerr
-                    << "[aot] no se encontro la funcion 'main' en el modulo.\n";
-                return EXIT_FAILURE;
-            }
-
-            // _start (arch+formato): solo para EXEC.  OBJECT/SHARED/BIN no
-            // llevan _start (lo aporta el crt del linker / el host / el loader
-            // externo).
-            aot::StartStub stub{};
-            if (!no_stub) stub = aot::aot_make_start_stub(arch, fmt);
-            if (!no_stub && !stub.ok) {
-                std::cerr << "[aot] " << stub.err << "\n";
-                return EXIT_FAILURE;
-            }
-
-            // TLS: derivar in-memory el flag is_tls de cada STR_LIT_ADDR cuya
-            // entrada static_data lleve SD_FLAG_TLS (la TLS-ness no se
-            // serializa por-instruccion; se reconstruye aqui desde el flag de
-            // la entrada, que SI round-trippea).  El codegen vreg lo consume
-            // para emitir el acceso por thread pointer (fs/gs + TPOFF).
-            bool module_has_tls = false;
-            {
-                const auto &sd_tls = aot_mod.static_data;
-                for (size_t i = 0; i < sd_tls.size(); ++i)
-                    if (sd_tls.entries[i].meta.flags &
-                        ir::IrModule::SD_FLAG_TLS) {
-                        module_has_tls = true;
-                        break;
-                    }
-                for (auto &f : aot_mod.functions)
-                    for (auto &blk : f.blocks)
-                        for (auto &in : blk.instrs)
-                            if (in.op == ir::IrOp::STR_LIT_ADDR &&
-                                in.imm < sd_tls.size() &&
-                                (sd_tls.entries[in.imm].meta.flags &
-                                 ir::IrModule::SD_FLAG_TLS))
-                                in.is_tls = true;
-            }
-            // thread_local en libreria/binario:
-            //   - PE shared (.dll): VALIDO -- el TLS directory de Windows lo
-            //     procesa el cargador tambien para DLLs (Vista+, incl.
-            //     LoadLibrary); el emisor lo sintetiza igual que en el .exe.
-            //   - ELF shared (.so): NO -- el modelo local-exec es incorrecto en
-            //     una lib cargada con dlopen (el offset TLS se asigna en
-            //     runtime; requiere initial-exec/general-dynamic, que nuestro
-            //     codegen aun no emite).
-            //   - bin (binario plano): NO -- no hay cargador que monte el bloque.
-            const bool tls_is_pe = (fmt == aot::ObjFormat::PE);
-            if (module_has_tls &&
-                (emit_bin || (emit_shared && !tls_is_pe))) {
-                std::cerr
-                    << "[aot] thread_local no soportado en --emit "
-                    << (emit_bin ? "bin" : "shared (ELF)")
-                    << " todavia: "
-                    << (emit_bin
-                            ? "un binario plano no tiene cargador que monte el "
-                              "bloque TLS"
-                            : "una .so con dlopen necesita initial-exec/"
-                              "general-dynamic, no local-exec")
-                    << ".  Usa --emit exe/obj (o --format pe --emit shared para "
-                       "una .dll).\n";
-                return EXIT_FAILURE;
-            }
-            // PE shared (.dll) con TLS: el emisor sintetiza el TLS directory
-            // (isolation por-hilo) y, ademas, fija el AddressOfEntryPoint a
-            // __vx_tls_init (un DllMain minimo).  ntdll lo invoca en cada
-            // DLL_PROCESS_ATTACH / DLL_THREAD_ATTACH, aplicando la plantilla
-            // (valores iniciales no-cero) a la copia por-hilo -- funciona con
-            // cualquier consumidor (con o sin CRT).  Sin nota necesaria.
-
-            // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
-            std::unordered_map<std::string, const ir::IrFunction *> fn_by_name;
-            for (const auto &f : aot_mod.functions)
-                fn_by_name[f.name] = &f;
-
-            // Codigo compilado de cada funcion + sus relocations + su seccion.
-            struct AotFn {
-                std::string name;
-                std::vector<uint8_t> bytes;
-                std::vector<jit::NativeReloc> relocs;
-                std::string section;       // @section ("" = .text)
-                std::string section_perms; // "rwx" explicito ("" = convencion)
-                int64_t section_at = -1;   // @at(N)
-                int32_t section_order = 0x7fffffff; // @order(N)
-                // Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint
-                // (pc_offset relativo a esta funcion).  Vacios salvo gc<T>.
-                std::vector<jit::Stackmap> stackmaps;
-            };
-            std::vector<AotFn> compiled;
-            std::unordered_map<std::string, size_t>
-                compiled_idx; // name -> compiled[]
-
-            // BFS desde main: compila cada funcion alcanzada por un CALL.
-            // Ademas se SIEMBRAN las funciones con @section explicito (el
-            // usuario las coloco a proposito; pueden referenciarse SOLO via
-            // section_start/end o asm, sin CALL directo -> no dead-strip).  En
-            // SHARED (.so) se siembran TODAS las funciones: la libreria las
-            // EXPORTA todas.
-            std::vector<std::string> work;
-            std::unordered_map<std::string, bool> queued;
-            if (main_fn) {
-                work.push_back("main");
-                queued["main"] = true;
-            }
-            for (const auto &fn : aot_mod.functions) {
-                // SHARED siembra todo (exporta todo).  OBJECT sin main es una
-                // libreria -> tambien siembra todo (compila todas sus funciones
-                // para que un linker las pueda usar).  Con main, OBJECT mantiene
-                // el BFS desde main (no regresa programas con funciones
-                // inalcanzables no-compilables).  @section siempre se siembra.
-                // Phase NR @Naked: un ISR/stub se referencia desde la IDT/GDT
-                // o por asm externo, NUNCA por un CALL visible -> sembrarlo
-                // siempre para que no lo elimine el dead-strip del BFS.
-                if ((emit_shared || (emit_obj && !main_fn) ||
-                     !fn.section.empty() || fn.is_naked) &&
-                    !queued.count(fn.name)) {
-                    queued[fn.name] = true;
-                    work.push_back(fn.name);
-                }
-            }
-            // __vx_tls_init (TLS callback): lo llama el cargador de Windows (no
-            // un CALL visible) -> sembrarlo siempre para que se compile.
-            if (!queued.count("__vx_tls_init"))
-                for (const auto &fn : aot_mod.functions)
-                    if (fn.name == "__vx_tls_init") {
-                        queued["__vx_tls_init"] = true;
-                        work.push_back("__vx_tls_init");
-                        break;
-                    }
-
-            // Sembrar las funciones referenciadas por bloques `bytes` (`dq
-            // foo`) para que se compilen aunque main no las alcance por CALL.
-            for (const auto &e : aot_mod.static_data.entries) {
-                for (const auto &sr : e.meta.sym_refs) {
-                    if (fn_by_name.count(sr.sym) && !queued.count(sr.sym)) {
-                        queued[sr.sym] = true;
-                        work.push_back(sr.sym);
-                    }
-                }
-            }
-            bool aot_codegen_ok = true;
-            // AUTO (--float-isa auto): multiversion por cpuid.  Las funciones
-            // con ops VEC_* (vectorizadas) se compilan 3x (sse2/avx2/avx512); el
-            // IR es UNO (chunk dual: element-wise 64, reduccion 16 -> cada
-            // variante decompone a su ancho).  El dispatch (fp+init+trampolin) va
-            // despues; aqui solo emitimos las variantes fn$sse2/avx2/avx512.
-            const bool aot_auto = (aot_fisa == jit::FloatIsa::AUTO);
-            auto fn_has_vec_ops = [](const ir::IrFunction &f) -> bool {
-                for (const auto &b : f.blocks)
-                    for (const auto &in : b.instrs) {
-                        const auto op = in.op;
-                        if (op == ir::IrOp::VEC_BINOP || op == ir::IrOp::VEC_UNOP ||
-                            op == ir::IrOp::VEC_FMA || op == ir::IrOp::VEC_BINOP_S ||
-                            op == ir::IrOp::VEC_BCAST ||
-                            op == ir::IrOp::VEC_ACC_ZERO ||
-                            op == ir::IrOp::VEC_ACC_ADD ||
-                            op == ir::IrOp::VEC_ACC_FMA ||
-                            op == ir::IrOp::VEC_ACC_STORE ||
-                            op == ir::IrOp::VEC_ACC_COMBINE)
-                            return true;
-                    }
-                return false;
-            };
-            // Nombres de las variantes multiversionadas (los consume el dispatch).
-            std::vector<std::string> mv_funcs; // funciones multiversionadas
-            // AUTO: sembrar toda funcion con ops VEC.  __vx_main_body (el main
-            // del usuario renombrado por la lowering) NO se alcanza por CALL
-            // directo (el main sintetico hace CALLIND via fp), asi que hay que
-            // encolarlo explicitamente para que se dequeue -> compile sus 3
-            // variantes.  __vx_auto_init si se alcanza (main lo CALL-prepende).
-            if (aot_auto) {
-                for (const auto &fn : aot_mod.functions) {
-                    if (fn_has_vec_ops(fn) && !queued.count(fn.name)) {
-                        queued[fn.name] = true;
-                        work.push_back(fn.name);
-                    }
-                }
-            }
-            while (!work.empty()) {
-                const std::string nm = work.back();
-                work.pop_back();
-                auto itf = fn_by_name.find(nm);
-                if (itf == fn_by_name.end()) {
-                    std::cerr << "[aot] simbolo no resuelto: la funcion '" << nm
-                              << "' (referenciada por un CALL) no existe en el "
-                                 "modulo.\n";
-                    aot_codegen_ok = false;
-                    break;
-                }
-                AotFn af;
-                af.name = nm;
-                af.section = itf->second->section;
-                af.section_perms = itf->second->section_perms;
-                af.section_at = itf->second->section_at;
-                af.section_order = itf->second->section_order;
-                af.bytes = jit::vreg_compile_native(
-                    *itf->second, {}, {}, {}, {}, &af.relocs, aot_pic,
-                    /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                    /*mode32=*/aot_mode32, /*fisa=*/aot_fisa,
-                    /*emit_line_map=*/false, /*line_map_out=*/nullptr,
-                    /*asm_labels_out=*/nullptr, /*stackmaps_out=*/&af.stackmaps);
-                if (af.bytes.empty()) {
-                    std::cerr
-                        << "[aot] el selector vreg no soporta la funcion '"
-                        << nm << "' todavia (op fuera del subset nativo).\n";
-                    aot_codegen_ok = false;
-                    break;
-                }
-                compiled_idx[nm] = compiled.size();
-                compiled.push_back(std::move(af));
-
-                // AUTO: si la funcion tiene ops VEC, emitir las 3 variantes de
-                // ancho compilando el MISMO IR con fisa sse2/avx2/avx512.  El
-                // dispatch (mas abajo) las cablea via fp+init+trampolin.  La
-                // copia `nm` (compilada arriba con AUTO=host) sirve de baseline
-                // hasta que el trampolin la reemplace.
-                if (aot_auto && fn_has_vec_ops(*itf->second)) {
-                    const std::pair<const char *, jit::FloatIsa> variants[] = {
-                        {"$sse2", jit::FloatIsa::SSE2},
-                        {"$avx2", jit::FloatIsa::AVX},
-                        {"$avx512", jit::FloatIsa::AVX512F}};
-                    bool ok = true;
-                    for (const auto &v : variants) {
-                        AotFn vf;
-                        vf.name = nm + v.first;
-                        vf.bytes = jit::vreg_compile_native(
-                            *itf->second, {}, {}, {}, {}, &vf.relocs, aot_pic,
-                            /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                            /*mode32=*/aot_mode32, /*fisa=*/v.second);
-                        if (vf.bytes.empty()) {
-                            std::cerr << "[aot] variante " << vf.name
-                                      << " no compilable.\n";
-                            ok = false;
-                            break;
-                        }
-                        // Las CALL de la variante encolan callees igual que el
-                        // baseline (se hace abajo en el loop de relocs comun? no:
-                        // las variantes no pasan por ese loop -> encolar aqui).
-                        for (const jit::NativeReloc &r : vf.relocs)
-                            if (r.kind == jit::NativeReloc::Kind::CALL_REL32 &&
-                                fn_by_name.count(r.symbol) &&
-                                !queued.count(r.symbol)) {
-                                queued[r.symbol] = true;
-                                work.push_back(r.symbol);
-                            }
-                        compiled_idx[vf.name] = compiled.size();
-                        compiled.push_back(std::move(vf));
-                    }
-                    if (!ok) {
-                        aot_codegen_ok = false;
-                        break;
-                    }
-                    mv_funcs.push_back(nm);
-                }
-                // Encolar los callees (relocs CALL_REL32 a nombres de funcion).
-                // Los simbolos que NO son funciones del modulo son EXTERNOS
-                // (libc/runtime, resueltos por el linker): no se encolan, se
-                // emiten como relocs externas en PASS 2.
-                for (const jit::NativeReloc &r : compiled.back().relocs) {
-                    // CALL directo a un callee del modulo -> encolar.
-                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
-                        if (queued.count(r.symbol)) continue;
-                        if (!fn_by_name.count(r.symbol)) continue; // externo
-                        queued[r.symbol] = true;
-                        work.push_back(r.symbol);
-                        continue;
-                    }
-                    // Referencia a la DIRECCION de una funcion ("fnsym:<name>",
-                    // de LABEL_ADDR: puntero de funcion para CALLIND, p.ej. el
-                    // despacho de helpers multi-versionados o as_native_callback)
-                    // -> encolar el target tambien (no llega por CALL directo).
-                    if (r.symbol.rfind("fnsym:", 0) == 0) {
-                        const std::string tgt = r.symbol.substr(6);
-                        if (queued.count(tgt)) continue;
-                        if (!fn_by_name.count(tgt)) continue; // externo
-                        queued[tgt] = true;
-                        work.push_back(tgt);
-                    }
-                }
-            }
-            if (!aot_codegen_ok) return EXIT_FAILURE;
-
-            // ------------------------------------------------------------------
-            // Layout MULTI-SECCION (2b, dev OS): el usuario decide en que
-            // seccion vive cada funcion (@section) / dato.  Construimos un
-            // buffer por seccion; .text (indice 0) es la de entrada (el _start
-            // stub va en su offset 0).  TODAS las refs (stub->main, llamadas,
-            // datos) se declaran al ObjectWriter, que las resuelve tras el
-            // layout (unica entidad que conoce la VA de cada seccion) ->
-            // CALL/JMP cross-seccion "just work".
-            // ------------------------------------------------------------------
-            struct SecAccum {
-                std::string name;
-                bool is_code = true;
-                std::string perms; // "" = por convencion del nombre
-                std::vector<uint8_t> bytes;
-                int64_t at = -1;            // @at(N) (.bin)
-                int32_t order = 0x7fffffff; // @order(N) (.bin)
-            };
-            std::vector<SecAccum> secs;
-            std::unordered_map<std::string, int> sec_index;
-            // Recoge perms/at/order de cualquier fn/dato que toque la seccion.
-            // El primer @at no-default gana; el menor @order gana.  Conflictos
-            // de @at distintos en la misma seccion se reportan.
-            auto get_sec = [&](const std::string &name, bool is_code,
-                               const std::string &perms, int64_t at = -1,
-                               int32_t order = 0x7fffffff) -> int {
-                auto it = sec_index.find(name);
-                if (it != sec_index.end()) {
-                    SecAccum &s = secs[it->second];
-                    if (!perms.empty() && s.perms.empty()) s.perms = perms;
-                    if (at >= 0) {
-                        if (s.at >= 0 && s.at != at)
-                            std::cerr
-                                << "[aot] @at en conflicto para la seccion '"
-                                << name << "' (" << s.at << " vs " << at
-                                << ").\n";
-                        else
-                            s.at = at;
-                    }
-                    if (order < s.order) s.order = order;
-                    return it->second;
-                }
-                const int idx = static_cast<int>(secs.size());
-                SecAccum s;
-                s.name = name;
-                s.is_code = is_code;
-                s.perms = perms;
-                s.at = at;
-                s.order = order;
-                secs.push_back(std::move(s));
-                sec_index[name] = idx;
-                return idx;
-            };
-            // .text es SIEMPRE la seccion 0 (entry); el stub arranca en su off
-            // 0.
-            const int text_sec = get_sec(".text", true, "");
-            secs[text_sec].bytes = stub.bytes;
-
-            // Colocar cada funcion en su seccion (default .text).  main primero
-            // dentro de su seccion (determinismo).
-            struct FnLoc {
-                int sec;
-                uint32_t off;
-            };
-            std::unordered_map<std::string, FnLoc> fn_loc;
-            auto place_fn = [&](size_t ci) {
-                AotFn &af = compiled[ci];
-                const std::string &fsec =
-                    af.section.empty() ? ".text" : af.section;
-                const int si = get_sec(fsec, /*is_code=*/true, af.section_perms,
-                                       af.section_at, af.section_order);
-                const uint32_t off =
-                    static_cast<uint32_t>(secs[si].bytes.size());
-                fn_loc[af.name] = {si, off};
-                secs[si].bytes.insert(secs[si].bytes.end(), af.bytes.begin(),
-                                      af.bytes.end());
-            };
-            // main primero (si existe; en SHARED puede no haber).
-            if (main_fn) place_fn(compiled_idx["main"]);
-            for (size_t ci = 0; ci < compiled.size(); ++ci)
-                if (!main_fn || compiled[ci].name != "main") place_fn(ci);
-
-            // gc<T> (Inc 4b): emitir la seccion .vxgc_smap con los stackmaps de
-            // cada funcion que retiene GC roots, para que __vxgc_init la
-            // registre en el GC al arranque (scan_jit_roots_precise sobre frames
-            // nativos).  func_addr va como placeholder + reloc ABS64 a la fn
-            // (resuelto tras el layout).  Solo si hay stackmaps no vacios.
-            std::vector<std::pair<uint32_t, std::string>> smap_func_relocs;
-            int smap_si = -1;
-            {
-                std::vector<size_t> gc_fns;
-                for (size_t ci = 0; ci < compiled.size(); ++ci) {
-                    // Registrar TODA funcion con al menos un safepoint (call),
-                    // aunque NO retenga roots GC: el WALK POR TAMANO DE FRAME
-                    // debe poder ATRAVESARLA (leer su frame_size) para llegar a
-                    // los frames superiores que si retienen roots.  Si solo
-                    // registraramos las que tienen slots no vacios, el walk se
-                    // cortaria en una funcion intermedia sin roots y perderia
-                    // los roots de sus llamadores -> colectaria vivos.  Las
-                    // hojas frameless (sin calls) no tienen stackmaps y nunca
-                    // aparecen a mitad de pila durante un GC -> se omiten (cero
-                    // coste).
-                    if (!compiled[ci].stackmaps.empty()) gc_fns.push_back(ci);
-                }
-                // Emitir la seccion siempre que ALGUNA funcion referencie
-                // .vxgc_smap (via section_start/size de __vxgc_init, posible-
-                // mente INLINEADO en main) -- aunque no haya stackmaps no vacios
-                // -- porque la reloc secsym exige que la seccion exista.
-                bool gc_smap_ref = false;
-                for (const auto &af : compiled) {
-                    for (const auto &r : af.relocs)
-                        if (r.symbol.find(".vxgc_smap") != std::string::npos) {
-                            gc_smap_ref = true;
-                            break;
-                        }
-                    if (gc_smap_ref) break;
-                }
-                if (gc_smap_ref) {
-                    std::vector<uint8_t> b;
-                    auto put32 = [&b](uint32_t v) {
-                        for (int i = 0; i < 4; ++i)
-                            b.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
-                    };
-                    auto put64 = [&b](uint64_t v) {
-                        for (int i = 0; i < 8; ++i)
-                            b.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
-                    };
-                    put32(0x4D475856u);                            // 'VXGM'
-                    put32(2u);                                     // version
-                    put32(static_cast<uint32_t>(gc_fns.size()));   // n_fn
-                    put32(0u);  // total_size (parcheado al final, offset 12)
-                    for (size_t ci : gc_fns) {
-                        const AotFn &af = compiled[ci];
-                        smap_func_relocs.push_back(
-                            {static_cast<uint32_t>(b.size()), af.name});
-                        put64(0); // func_addr placeholder (ABS64 reloc)
-                        put32(static_cast<uint32_t>(af.bytes.size())); // code_size
-                        // frame_size (v2): RBP - RSP en un safepoint call.  Igual
-                        // en todos los stackmaps de la fn; el WALK POR TAMANO DE
-                        // FRAME lo usa para reconstruir RBP sin cadena RBP.
-                        put32(af.stackmaps.empty()
-                                  ? 0u
-                                  : af.stackmaps.front().frame_size);
-                        put32(static_cast<uint32_t>(
-                            af.stackmaps.size())); // n_safepoints (todos)
-                        for (const auto &sm : af.stackmaps) {
-                            put32(sm.pc_offset);
-                            put32(static_cast<uint32_t>(sm.slots.size()));
-                            for (const auto &slot : sm.slots) {
-                                const int16_t off = slot.rbp_offset;
-                                b.push_back(static_cast<uint8_t>(off & 0xFF));
-                                b.push_back(
-                                    static_cast<uint8_t>((off >> 8) & 0xFF));
-                                b.push_back(
-                                    static_cast<uint8_t>(slot.gc_kind));
-                                b.push_back(0); // _pad
-                            }
-                        }
-                    }
-                    // Parchear total_size (offset 12) con el tamanño final.
-                    const uint32_t total = static_cast<uint32_t>(b.size());
-                    for (int i = 0; i < 4; ++i)
-                        b[12 + i] = static_cast<uint8_t>((total >> (i * 8)) & 0xFF);
-                    smap_si = get_sec(".vxgc_smap", /*is_code=*/false, "r");
-                    secs[smap_si].bytes = std::move(b);
-                }
-            }
-
-            // ------------------------------------------------------------------
-            // AOT.2.exec (PE-IAT): EXEC/SHARED standalone que llaman a simbolos
-            // EXTERNOS (libc malloc/free/calloc/abort, o un FFI extern).  El
-            // codigo emitio `call <sym>` (E8 rel32 directo) pero el simbolo NO
-            // esta en la imagen -> hay que pasar por la IAT.  Como un `call
-            // [rip+IAT]` (FF 15) mide 6 bytes y el E8 ya emitido mide 5, NO se
-            // puede parchear in-situ.  Solucion estandar (como un linker): un
-            // THUNK de import por simbolo en .text -- `FF 25 disp32` (jmp
-            // [rip+IAT], 6 bytes) -- y el `call <sym>` apunta al thunk (REL32
-            // normal intra-.text).  El `FF 25` del thunk se parchea via el
-            // mecanismo de imports (mismo que ExitProcess del _start).  El
-            // loader rellena la IAT con la direccion real -> el thunk salta
-            // ahi. Solo PE EXEC por ahora (ELF EXEC = PLT-GOT, slice 2;
-            // SHARED/.dll = follow-up; .o sigue emitiendo relocs externas que
-            // resuelve gcc/ld).
-            struct PeThunkImport {
-                std::string dll, func;
-                uint64_t off;
-            };
-            std::vector<PeThunkImport> pe_thunk_imports;
-            // EXEC (PE o ELF) que llama a externos -> thunks de import.  PE los
-            // resuelve por IAT (slice 1); ELF por eager-GOT como PIE dinamico
-            // (slice 2).  El mismo thunk FF 25 sirve a ambos; difiere solo la
-            // metadata (idata vs dynamic) que pone el emisor.
-            const bool exec_native = !no_stub;
-            if (exec_native) {
-                // Recolectar externos (CALL_REL32 a un nombre que NO es funcion
-                // del modulo), en orden estable y deduplicado.
-                std::vector<std::string> ext_syms;
-                std::unordered_set<std::string> ext_seen;
-                for (const AotFn &af : compiled)
-                    for (const jit::NativeReloc &r : af.relocs)
-                        if (r.kind == jit::NativeReloc::Kind::CALL_REL32 &&
-                            !fn_by_name.count(r.symbol) &&
-                            !ext_seen.count(r.symbol)) {
-                            ext_seen.insert(r.symbol);
-                            ext_syms.push_back(r.symbol);
-                        }
-                // Mapa simbolo -> DLL.  PE: libc (MinGW/Windows) = msvcrt.dll;
-                // los FFI extern de DLL del usuario llegan como "sym" (el lib
-                // se perdio en el selector) -> default msvcrt.dll (follow-up:
-                // cablear el DLL real desde el CompileResult).  ELF: el campo
-                // se ignora (todo va a libc.so.6 via DT_NEEDED).
-                const bool is_pe = (fmt == aot::ObjFormat::PE);
-                // DLL real de cada simbolo externo via el mecanismo FFI del
-                // lenguaje: `extern "kernel32.dll" { fn WriteFile(...); }`
-                // registra ("kernel32.dll", "WriteFile") en native_imports (ver
-                // lower_call FFI declarativo).  Construimos symbol -> DLL desde
-                // ahi, en vez de una tabla hardcodeada en el compilador.  PE: si
-                // un simbolo no esta declarado en ningun extern (libc implicito:
-                // malloc/free/abort de msvcrt) -> msvcrt.dll.  ELF: todo va a
-                // libc.so.6 via DT_NEEDED (el SONAME no se usa para resolver).
-                std::unordered_map<std::string, std::string> sym2dll;
-                for (const auto &ni : aot_mod.native_imports) {
-                    // (a) FFI extern a sistema: lib ya es un nombre de DLL real
-                    //     (`extern "kernel32.dll"`).
-                    if (ni.lib.size() >= 4 &&
-                        (ni.lib.rfind(".dll") == ni.lib.size() - 4 ||
-                         ni.lib.rfind(".DLL") == ni.lib.size() - 4)) {
-                        sym2dll[ni.name] = ni.lib;
-                        continue;
-                    }
-                    // (b) Plugin de la stdlib (ruta tipo
-                    //     "stdlib/native/collections/vesta_collections"): el
-                    //     plugin se distribuye como una DLL con el basename de la
-                    //     ruta (vesta_collections.dll).  Lo importamos por IAT
-                    //     -> las colecciones (ArrayList/HashMap/...) funcionan en
-                    //     AOT sin la VM (sus funciones vcol_* toman uint64, no
-                    //     proc_ptr).  La DLL debe acompanar al .exe.
-                    const auto slash = ni.lib.find_last_of("/\\");
-                    const std::string base = (slash == std::string::npos)
-                                                 ? ni.lib
-                                                 : ni.lib.substr(slash + 1);
-                    if (!base.empty()) sym2dll[ni.name] = base + ".dll";
-                }
-                auto dll_for = [is_pe, &sym2dll](const std::string &sym)
-                    -> std::string {
-                    if (!is_pe) return "libc.so.6";
-                    auto it = sym2dll.find(sym);
-                    if (it != sym2dll.end()) return it->second;
-                    return "msvcrt.dll";
-                };
-                for (const std::string &sym : ext_syms) {
-                    const uint32_t toff =
-                        static_cast<uint32_t>(secs[text_sec].bytes.size());
-                    // FF 25 00 00 00 00 -> jmp [rip+disp32]; disp32 a parchear.
-                    const uint8_t thunk[6] = {0xFF, 0x25, 0x00,
-                                              0x00, 0x00, 0x00};
-                    secs[text_sec].bytes.insert(secs[text_sec].bytes.end(),
-                                                thunk, thunk + 6);
-                    fn_loc[sym] = {text_sec, toff}; // el call <sym> -> el thunk
-                    pe_thunk_imports.push_back({dll_for(sym), sym, toff});
-                }
-            }
-
-            // PASADA 1: colocar (lazy, una vez por entry) los datos
-            // referenciados en su seccion (default .rodata) -> completa `secs`
-            // ANTES de crearlas en el writer.  Devuelve (sec, off) del entry N.
-            const auto &sd = aot_mod.static_data;
-            std::unordered_map<uint32_t, std::pair<int, uint64_t>> data_loc;
-            auto place_data = [&](uint32_t N) -> std::pair<int, uint64_t> {
-                auto it = data_loc.find(N);
-                if (it != data_loc.end()) return it->second;
-                const auto &e = sd.entries[N];
-                const std::string dsec = e.meta.section_name.empty()
-                                             ? ".rodata"
-                                             : e.meta.section_name;
-                const int si =
-                    get_sec(dsec, /*is_code=*/false, e.meta.section_perms,
-                            e.meta.section_at, e.meta.section_order);
-                const uint64_t off = secs[si].bytes.size();
-                const uint8_t *p = sd.bytes.data() + e.byte_offset;
-                secs[si].bytes.insert(secs[si].bytes.end(), p, p + e.byte_len);
-                std::pair<int, uint64_t> loc{si, off};
-                data_loc[N] = loc;
-                return loc;
-            };
-            for (const AotFn &af : compiled) {
-                for (const jit::NativeReloc &r : af.relocs) {
-                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) continue;
-                    if (r.symbol.rfind("secsym:", 0) == 0)
-                        continue; // simbolo de seccion (pass 2)
-                    if (r.symbol.rfind("fnsym:", 0) == 0)
-                        continue; // direccion de funcion (pass 2, sin dato)
-                    if (r.symbol.rfind("tdata.", 0) == 0) {
-                        // thread_local (TLS): colocar la plantilla en su seccion
-                        // (.tdata, via section_name).  El reloc se emite en
-                        // pass 2 como TPOFF32 (ELF) o SECREL32 (PE).
-                        place_data(static_cast<uint32_t>(
-                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10)));
-                        continue;
-                    }
-                    if (r.symbol == "__vx_tls_index")
-                        continue; // TLS PE: simbolo del emisor (pass 2, sin dato)
-                    if (r.symbol.rfind("rodata.", 0) != 0) {
-                        std::cerr
-                            << "[aot] reloc de dato con simbolo inesperado: '"
-                            << r.symbol << "'.\n";
-                        return EXIT_FAILURE;
-                    }
-                    const uint32_t N = static_cast<uint32_t>(
-                        std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
-                    if (N >= sd.size()) {
-                        std::cerr
-                            << "[aot] reloc a static_data fuera de rango: N="
-                            << N << ".\n";
-                        return EXIT_FAILURE;
-                    }
-                    place_data(N);
-                }
-            }
-            // FORCE_EMIT: bloques `bytes` y datos en @section que deben
-            // emitirse aunque ningun reloc los referencie (firmas, tablas,
-            // boot sectors).  Se colocan en orden de aparicion.
-            for (uint32_t N = 0; N < sd.size(); ++N) {
-                if (sd.entries[N].meta.flags & ir::IrModule::SD_FLAG_FORCE_EMIT)
-                    place_data(N);
-            }
-
-            // Phase NR / dev-OS: nombre de bloque (asm/bytes) -> su ubicacion.
-            // Permite que OTROS bloques lo referencien por simbolo (un `jmp
-            // other_block` o un `dd gdt` cross-block).  Los bloques con
-            // symbol_name son FORCE_EMIT -> ya estan colocados (loop de
-            // arriba); ademas place_data() es idempotente.
-            std::unordered_map<std::string, std::pair<int, uint64_t>>
-                data_sym_loc;
-            for (uint32_t N = 0; N < sd.size(); ++N) {
-                const std::string &snm = sd.entries[N].meta.symbol_name;
-                if (snm.empty()) continue;
-                data_sym_loc[snm] = place_data(N);
-            }
-
-            // Crear el writer + TODAS las secciones (writer idx == secs idx,
-            // mismo orden; `secs` ya esta completa tras la pasada 1).
-            aot::ObjectWriter w(fmt);
-            w.set_mode32(aot_mode32); // x86-32 EXEC -> contenedor ELF32
-            // TLS PE: si el modulo tiene __vx_tls_init (callback de plantilla),
-            // pasar su ubicacion al emisor para registrarlo en el TLS directory.
-            {
-                auto tcb = fn_loc.find("__vx_tls_init");
-                if (tcb != fn_loc.end())
-                    w.set_tls_callback(tcb->second.sec,
-                                       static_cast<uint32_t>(tcb->second.off));
-            }
-            for (const SecAccum &s : secs) {
-                // Permisos: explicitos (@section(".x","rwx")), o por convencion
-                // del nombre (.text*->rx, .rodata*->r, .data*/.bss*->rw).
-                std::string p = s.perms;
-                // .tdata/.tbss: plantilla thread_local (TLS).  rw + SHF_TLS.
-                const bool is_tls_sec = (s.name.rfind(".tdata", 0) == 0 ||
-                                         s.name.rfind(".tbss", 0) == 0);
-                if (p.empty()) {
-                    if (s.name.rfind(".text", 0) == 0)
-                        p = "rx";
-                    else if (is_tls_sec)
-                        p = "rw";
-                    else if (s.name.rfind(".rodata", 0) == 0)
-                        p = "r";
-                    else if (s.name.rfind(".data", 0) == 0)
-                        p = "rw";
-                    else if (s.name.rfind(".bss", 0) == 0)
-                        p = "rw";
-                    else
-                        p = s.is_code ? "rx" : "r";
-                }
-                uint32_t flags = 0;
-                if (p.find('r') != std::string::npos)
-                    flags |= aot::SecFlag::READ;
-                if (p.find('w') != std::string::npos)
-                    flags |= aot::SecFlag::WRITE;
-                const bool exec = (p.find('x') != std::string::npos);
-                if (exec)
-                    flags |= aot::SecFlag::EXEC | aot::SecFlag::CODE;
-                else
-                    flags |= aot::SecFlag::DATA;
-                if (is_tls_sec)
-                    flags |= aot::SecFlag::TLS;
-                aot::WriterSection ws;
-                ws.name = s.name;
-                ws.flags = flags;
-                ws.data = s.bytes;
-                ws.at = s.at;
-                ws.order = s.order; // ubicacion/orden (.bin)
-                w.add_section(std::move(ws));
-            }
-            // gc<T> (Inc 4b): relocs ABS64 de los func_addr de .vxgc_smap a la
-            // VA real de cada funcion (resuelta tras el layout).
-            if (smap_si >= 0) {
-                for (const auto &fr : smap_func_relocs) {
-                    auto it = fn_loc.find(fr.second);
-                    if (it != fn_loc.end())
-                        w.add_reloc(smap_si, fr.first,
-                                    aot::RelocTarget::addr(it->second.sec,
-                                                           it->second.off),
-                                    aot::RelocKind::ABS64);
-                }
-            }
-            if (emit_shared) {
-                // Libreria compartida: exporta TODAS las funciones como
-                // simbolos globales (dlsym).  Sin _start ni entry.
-                w.set_output_kind(aot::OutputKind::SHARED);
-                for (const AotFn &af : compiled) {
-                    const FnLoc &fl = fn_loc[af.name];
-                    w.add_symbol(af.name, fl.sec, fl.off, /*is_func=*/true);
-                }
-            } else if (emit_obj) {
-                // Objeto relocatable: main es un simbolo GLOBAL (lo invoca el
-                // crt del linker externo); sin _start ni entry.
-                w.set_output_kind(aot::OutputKind::OBJECT);
-                // Exporta como GLOBAL todas las funciones de USUARIO (no
-                // empiezan por "__").  Los helpers internos (__vx_*/__new_*/
-                // __module_init/...) quedan LOCALES -> no colisionan al enlazar
-                // varios .o Vesta (cada .o lleva su propia copia, referenciada via
-                // relocs de seccion).  Asi una libreria .o (sin main) expone sus
-                // funciones y otro .o las resuelve cross-file con el linker.
-                for (const AotFn &af : compiled) {
-                    // Los inits de programa del CPU-dispatch (cpu/memcpy/strdisp)
-                    // se EXPORTAN como globales aunque empiecen por "__": el
-                    // linker los recolecta de CADA .o y los ejecuta antes de main
-                    // (cada .o tiene sus propios slots fp; basta correr su init).
-                    const bool is_init = (af.name == "__vx_cpu_init" ||
-                                          af.name == "__vx_memcpy_init" ||
-                                          af.name == "__vx_strdisp_init");
-                    // En un EJECUTABLE (hay main) los helpers __-prefijados
-                    // quedan LOCALES (program-internos; evita colisiones al
-                    // enlazar varios .o).  En una LIBRERIA (sin main) son la
-                    // API publica -> se exportan globales (p.ej. el runtime
-                    // __vx_setjmp/__vx_throw/... que otro .o resuelve).
-                    if (main_fn && af.name.rfind("__", 0) == 0 && !is_init)
-                        continue; // helper interno del ejecutable -> local
-                    const FnLoc &fl2 = fn_loc[af.name];
-                    w.add_symbol(af.name, fl2.sec, fl2.off, /*is_func=*/true);
-                }
-            } else if (emit_bin) {
-                // Binario plano: sin cabecera ni _start; entry = offset 0 (la
-                // primera seccion .text, donde va main si existe).  Las refs
-                // absolutas se resuelven contra --bin-base.
-                w.set_output_kind(aot::OutputKind::FLAT_BIN);
-                w.set_flat_base(bin_base);
-            } else {
-                w.set_entry(text_sec, 0); // _start en .text offset 0
-                // stub->main: rel32 a la VA real de main (resuelta por el
-                // writer).
-                const FnLoc &ml = fn_loc["main"];
-                w.add_reloc(text_sec, stub.main_call_off,
-                            aot::RelocTarget::addr(ml.sec, ml.off),
-                            aot::RelocKind::REL32);
-            }
-
-            // PASADA 2: declarar las relocs de cada funcion (llamadas + datos +
-            // simbolos de seccion).  El writer las resuelve (EXEC) o las emite
-            // como registros (OBJECT) tras el layout.
-            for (const AotFn &af : compiled) {
-                const FnLoc &fl = fn_loc[af.name];
-                for (const jit::NativeReloc &r : af.relocs) {
-                    const uint64_t site =
-                        static_cast<uint64_t>(fl.off) + r.offset;
-                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
-                        auto it = fn_loc.find(r.symbol);
-                        if (it == fn_loc.end()) {
-                            // Simbolo EXTERNO (libc/runtime:
-                            // malloc/free/abort...). Solo en OBJECT (.o/.obj):
-                            // el linker del sistema lo resuelve.
-                            // EXEC/SHARED/BIN necesitarian IAT/PLT-GOT
-                            // (AOT.2.exec, futuro).
-                            if (!emit_obj) {
-                                // PE EXEC ya resolvio sus externos via thunks
-                                // de IAT (el simbolo ESTA en fn_loc -> no llega
-                                // aqui). Quedan: ELF EXEC/SHARED (PLT-GOT,
-                                // slice 2), PE SHARED (.dll, follow-up) y .bin.
-                                std::cerr
-                                    << "[aot] llamada a simbolo externo '"
-                                    << r.symbol
-                                    << "' aun no soportada para este target ("
-                                    << (fmt == aot::ObjFormat::ELF
-                                            ? "ELF EXEC/shared: "
-                                              "PLT-GOT pendiente"
-                                            : "PE shared/.bin")
-                                    << "); usa --emit obj (enlazar con gcc/ld) "
-                                       "o, en "
-                                       "Windows, --emit exe (PE-IAT).\n";
-                                return EXIT_FAILURE;
-                            }
-                            w.add_reloc(fl.sec, site,
-                                        aot::RelocTarget::extern_sym(r.symbol),
-                                        aot::RelocKind::REL32);
-                        } else {
-                            w.add_reloc(fl.sec, site,
-                                        aot::RelocTarget::addr(it->second.sec,
-                                                               it->second.off),
-                                        aot::RelocKind::REL32);
-                        }
-                    } else if (r.symbol.rfind("secsym:", 0) == 0) {
-                        // Simbolo de seccion "secsym:<k>:<name>" (dev OS):
-                        // s=start (base), e=end (base+size), z=size (tamano).
-                        const char kc = r.symbol.size() > 7 ? r.symbol[7] : 's';
-                        const std::string sname = r.symbol.substr(9);
-                        auto si = sec_index.find(sname);
-                        if (si == sec_index.end()) {
-                            std::cerr << "[aot] section_"
-                                      << (kc == 'z'   ? "size"
-                                          : kc == 'e' ? "end"
-                                                      : "start")
-                                      << "(\"" << sname
-                                      << "\"): la seccion no existe "
-                                         "(ningun codigo/dato la usa).\n";
-                            return EXIT_FAILURE;
-                        }
-                        const int tsi = si->second;
-                        // REL32 si la ref fue RIP-relativa (DATA_REL32), ABS64
-                        // si absoluta (--no-pie).  SIZE es siempre un inmediato
-                        // (IMM64).
-                        const bool rel =
-                            (r.kind == jit::NativeReloc::Kind::DATA_REL32);
-                        if (kc == 'z') {
-                            w.add_reloc(fl.sec, site,
-                                        aot::RelocTarget::size(tsi),
-                                        aot::RelocKind::IMM64);
-                        } else if (kc == 'e') {
-                            w.add_reloc(fl.sec, site,
-                                        aot::RelocTarget::end(tsi),
-                                        rel ? aot::RelocKind::REL32
-                                            : aot::RelocKind::ABS64,
-                                        r.addend);
-                        } else {
-                            w.add_reloc(fl.sec, site,
-                                        aot::RelocTarget::addr(tsi, 0),
-                                        rel ? aot::RelocKind::REL32
-                                            : aot::RelocKind::ABS64,
-                                        r.addend);
-                        }
-                    } else if (r.symbol.rfind("fnsym:", 0) == 0) {
-                        // Direccion de una FUNCION del modulo ("fnsym:<name>",
-                        // de LABEL_ADDR): puntero de funcion para CALLIND.  Se
-                        // resuelve contra el offset de la funcion en su seccion
-                        // (REL32 si RIP-rel, ABS64 si --no-pie).
-                        const std::string tgt = r.symbol.substr(6);
-                        auto fit = fn_loc.find(tgt);
-                        if (fit == fn_loc.end()) {
-                            std::cerr
-                                << "[aot] direccion de funcion no resuelta: '"
-                                << tgt << "' (referenciada como puntero).\n";
-                            return EXIT_FAILURE;
-                        }
-                        const aot::RelocKind k =
-                            (r.kind == jit::NativeReloc::Kind::DATA_REL32)
-                                ? aot::RelocKind::REL32
-                                : aot::RelocKind::ABS64;
-                        w.add_reloc(fl.sec, site,
-                                    aot::RelocTarget::addr(fit->second.sec,
-                                                           fit->second.off),
-                                    k, r.addend);
-                    } else if (r.kind == jit::NativeReloc::Kind::TPOFF32) {
-                        // thread_local (TLS local-exec): simbolo "tdata.<N>".
-                        // Colocar la plantilla en .tdata y emitir un reloc
-                        // TPOFF32 contra (sec=.tdata, off); el object_writer lo
-                        // materializa como R_X86_64_TPOFF32 + STT_TLS y el
-                        // --link calcula el offset TP-relativo.
-                        const uint32_t N = static_cast<uint32_t>(
-                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10));
-                        const std::pair<int, uint64_t> loc = place_data(N);
-                        w.add_reloc(
-                            fl.sec, site,
-                            aot::RelocTarget::addr(loc.first, loc.second),
-                            aot::RelocKind::TPOFF32);
-                    } else if (r.kind == jit::NativeReloc::Kind::SECREL32) {
-                        // thread_local (TLS PE): simbolo "tdata.<N>".  Colocar la
-                        // plantilla en .tdata (=.tls) y emitir SECREL32 contra
-                        // (sec, off); el emisor PE escribe el offset del var
-                        // dentro de la seccion (el acceso lo suma a la base del
-                        // bloque TLS cargada del TEB).
-                        const uint32_t N = static_cast<uint32_t>(
-                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10));
-                        const std::pair<int, uint64_t> loc = place_data(N);
-                        w.add_reloc(
-                            fl.sec, site,
-                            aot::RelocTarget::addr(loc.first, loc.second),
-                            aot::RelocKind::SECREL32);
-                    } else if (r.symbol == "__vx_tls_index") {
-                        // TLS PE: ref RIP-relativa al _tls_index sintetizado por
-                        // el emisor; se pasa como simbolo externo que el emisor
-                        // resuelve a la VA del slot.
-                        w.add_reloc(
-                            fl.sec, site,
-                            aot::RelocTarget::extern_sym("__vx_tls_index"),
-                            aot::RelocKind::REL32);
-                    } else {
-                        const uint32_t N = static_cast<uint32_t>(
-                            std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
-                        const std::pair<int, uint64_t> loc = place_data(N);
-                        const aot::RelocKind k =
-                            (r.kind == jit::NativeReloc::Kind::DATA_REL32)
-                                ? aot::RelocKind::REL32
-                                : aot::RelocKind::ABS64;
-                        w.add_reloc(
-                            fl.sec, site,
-                            aot::RelocTarget::addr(loc.first, loc.second), k,
-                            r.addend);
-                    }
-                }
-            }
-
-            // Relocs de los bloques `bytes` con referencias a simbolos
-            // (`dq main`): el campo (placeholder 0) se parchea con la direccion
-            // del simbolo.  Solo se resuelven contra FUNCIONES (fn_loc); una
-            // ref a otro dato/seccion es trabajo futuro.
-            for (uint32_t N = 0; N < sd.size(); ++N) {
-                const auto &meta = sd.entries[N].meta;
-                if (meta.sym_refs.empty()) continue;
-                auto dit = data_loc.find(N);
-                if (dit == data_loc.end()) continue; // no colocada (no deberia)
-                const int dsec = dit->second.first;
-                const uint64_t doff = dit->second.second;
-                for (const auto &sr : meta.sym_refs) {
-                    // Resolver contra una FUNCION (fn_loc) o, si no, contra
-                    // otro BLOQUE asm/bytes nombrado (data_sym_loc): un dev-OS
-                    // hace `jmp pm32` / `dd gdt` cross-block.
-                    int tsec;
-                    uint64_t toff;
-                    auto fit = fn_loc.find(sr.sym);
-                    if (fit != fn_loc.end()) {
-                        tsec = fit->second.sec;
-                        toff = fit->second.off;
-                    } else {
-                        auto dsit = data_sym_loc.find(sr.sym);
-                        if (dsit == data_sym_loc.end()) {
-                            std::cerr << "[aot] referencia a simbolo no "
-                                         "resuelto '"
-                                      << sr.sym
-                                      << "' (ni funcion ni bloque asm/bytes).\n";
-                            return EXIT_FAILURE;
-                        }
-                        tsec = dsit->second.first;
-                        toff = dsit->second.second;
-                    }
-                    // Kind segun is_rel + ancho: REL32 (jmp/call near), IMM32
-                    // (dd -> VA absoluta de 32 bits) o ABS64 (dq -> 64 bits).
-                    const aot::RelocKind k =
-                        sr.is_rel ? aot::RelocKind::REL32
-                                  : (sr.width == 4 ? aot::RelocKind::IMM32
-                                                   : aot::RelocKind::ABS64);
-                    w.add_reloc(dsec, doff + sr.offset,
-                                aot::RelocTarget::addr(tsec, toff), k);
-                }
-            }
-
-            if (!no_stub && stub.has_import_call) {
-                w.add_import_call(aot::ImportCall{stub.import_dll,
-                                                  stub.import_func, text_sec,
-                                                  stub.import_call_off});
-            }
-            // AOT.2.exec: registrar el import de cada thunk (FF 25 -> IAT).  Se
-            // agrupan por DLL junto al ExitProcess (kernel32) en el emisor PE.
-            for (const PeThunkImport &ti : pe_thunk_imports) {
-                w.add_import_call(
-                    aot::ImportCall{ti.dll, ti.func, text_sec, ti.off});
-            }
-
-            std::string werr;
-            if (!w.write(out_prefix, werr)) {
-                std::cerr << "[aot] error al escribir '" << out_prefix
-                          << "': " << werr << "\n";
-                return EXIT_FAILURE;
-            }
-
-            // Auto-link: enlazar el .obj temporal con las .a estaticas de la
-            // stdlib que el programa usa (gc / colecciones / math) -> .exe
-            // STANDALONE (vm --link interno, sin g++ ni DLLs).
-            if (need_temp_link) {
-                namespace fs = std::filesystem;
-                aot::LinkOptions lopts;
-                lopts.fmt = fmt; // PE o ELF, segun el destino
-                lopts.sysroot =
-                    result.count("sysroot")
-                        ? result["sysroot"].as<std::string>()
-                        : std::string();
-                std::vector<std::string> inputs;
-                inputs.push_back(link_tmp_obj);
-                for (const auto &l : autolink_libs) inputs.push_back(l);
-                std::string lerr;
-                const bool ok =
-                    aot::aot_link(inputs, link_real_out, lopts, lerr);
-                std::error_code ec;
-                fs::remove(link_tmp_obj, ec); // limpiar el .obj temporal
-                if (!ok) {
-                    std::cerr << "[aot] auto-link error: " << lerr << "\n";
-                    return EXIT_FAILURE;
-                }
-                std::cout << "[aot] ejecutable nativo "
-                          << (fmt == aot::ObjFormat::PE ? "PE" : "ELF")
-                          << " STANDALONE escrito en '" << link_real_out << "' ("
-                          << autolink_libs.size()
-                          << " lib(s) estatica(s) de la stdlib auto-enlazada(s), "
-                             "sin DLLs ni g++).\n";
-                return EXIT_SUCCESS;
-            }
-
-            const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
-            if (emit_shared)
-                std::cout << "[aot] libreria compartida " << fmt_name
-                          << (fmt == aot::ObjFormat::PE ? " (.dll)" : " (.so)")
-                          << " escrita en '" << out_prefix << "' ("
-                          << compiled.size() << " simbolo(s) exportado(s); "
-                          << (fmt == aot::ObjFormat::PE
-                                  ? "LoadLibrary/GetProcAddress"
-                                  : "dlopen/dlsym")
-                          << ").\n";
-            else if (emit_obj)
-                std::cout << "[aot] objeto relocatable " << fmt_name
-                          << (fmt == aot::ObjFormat::PE ? " (.obj)" : " (.o)")
-                          << " escrito en '" << out_prefix
-                          << "' (main GLOBAL; linkable con "
-                          << (fmt == aot::ObjFormat::PE ? "link.exe/gcc-mingw"
-                                                        : "ld/gcc")
-                          << ").\n";
-            else if (emit_bin)
-                std::cout
-                    << "[aot] binario plano (.bin) escrito en '" << out_prefix
-                    << "' (sin cabecera; entry en offset 0; base de carga 0x"
-                    << std::hex << bin_base << std::dec << ").\n";
-            else
-                std::cout << "[aot] ejecutable nativo " << fmt_name
-                          << " escrito en '" << out_prefix
-                          << "' (entry _start -> main -> exit, return "
-                             "de main como exit-code).\n";
-            return EXIT_SUCCESS;
+            // Emision AOT nativa: delegada a vesta::tc::compile_aot
+            // (src/toolchain/aot_build.cpp) para no monolitizar main.cpp.  Los
+            // flags de la CLI se mapean a una struct de opciones desacoplada de
+            // cxxopts (asi el LSP tambien puede emitir AOT embebido).
+            vesta::tc::AotOptions aopt;
+            aopt.tier = aot_tier;
+            aopt.freestanding = aot_freestanding;
+            aopt.no_exceptions = aot_no_exceptions;
+            aopt.no_io = aot_no_io;
+            aopt.no_mem = aot_no_mem;
+            aopt.arch = result["aot-arch"].as<std::string>();
+            aopt.float_isa = result["float-isa"].as<std::string>();
+            aopt.debug_level = result["debug-info"].as<int>();
+            if (result.count("format"))
+                aopt.format = result["format"].as<std::string>();
+            if (result.count("emit"))
+                aopt.emit = result["emit"].as<std::string>();
+            aopt.no_pie = result.count("no-pie") > 0;
+            if (result.count("bin-base"))
+                aopt.bin_base = result["bin-base"].as<std::string>();
+            if (result.count("sysroot"))
+                aopt.sysroot = result["sysroot"].as<std::string>();
+            aopt.argv0 = argv[0];
+            return vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
         }
 
-        /* CACHE MISS + @Macros presentes: hacer two-phase y persistir
+        /* CACHE MISS + @Macros presentes: hacer two- y persistir
          * el resultado a `.cache/vx/<key>.velb` para futuras corridas. */
         if (!cache_hit && cr.has_lowerable_macros &&
             !user_already_set_prebuilt) {
             std::error_code ec;
             std::filesystem::create_directories(cache_dir, ec);
 
-            /* Phase MC.16: per-macro manifest diagnostico.  Computamos
+            /*  MC.16: per-macro manifest diagnostico.  Computamos
              * hash por macro del fuente actual y comparamos con manifest
              * anterior (si existe).  Reportamos via VESTA_MC_VERBOSE que
              * macros cambiaron -- foundation para futuro per-macro relink. */
@@ -4637,7 +3647,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            /* Phase MC.14: cache sweeper TTL-based.  Antes de poblar el
+            /*  MC.14: cache sweeper TTL-based.  Antes de poblar el
              * nuevo cache file, escanea @c .cache/vx/ y borra archivos
              * cuyo mtime sea anterior a @c TTL dias (default 30, override
              * via env var @c VESTA_MC_CACHE_TTL_DAYS).  Solo corre en el
@@ -4707,7 +3717,7 @@ int main(int argc, char *argv[]) {
 #else
                 setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
 #endif
-                // Phase M.2.e: same dispatch en el path two-phase del macro
+                //  M.2.e: same dispatch en el path two- del macro
                 // cache.  Si el source tiene imports, usar compile_vx_project.
                 vx::CompileResult cr2 =
                     vx::vx_source_has_imports(vx_source)
@@ -4718,9 +3728,12 @@ int main(int argc, char *argv[]) {
 #else
                 unsetenv("VESTA_MC_PREBUILT");
 #endif
-                if (cr2.ok) {
-                    cr = std::move(cr2);
-                }
+                /* pass-2 es AUTORITATIVO (compilado con el bytecode comptime
+                 * cargado): adoptamos su cr SIEMPRE, incluso con errores (p.ej.
+                 * un static_assert que resolvio a false con el valor real).
+                 * Quedarnos con pass-1 (asserts diferidos SALTADOS) ocultaria
+                 * el fallo -> compile con valores incorrectos. */
+                cr = std::move(cr2);
                 if (verbose_mc) {
                     std::cerr << "[mc-cache] miss + populated: " << cache_path
                               << "\n";
@@ -4730,14 +3743,20 @@ int main(int argc, char *argv[]) {
                 std::remove(tmp_vel_path.c_str());
                 const std::string cache_velb_map = cache_path + "-map";
                 std::remove(cache_velb_map.c_str());
+                /* Si pass-2 fallo (assert real / error), propagar y abortar. */
+                if (!cr.ok) {
+                    for (const auto &d : cr.diagnostics.all())
+                        vx::print_diagnostic(std::cerr, d);
+                    return EXIT_FAILURE;
+                }
             }
         }
 
-        // Mostrar warnings (cr.ok no impide los warnings).
-        for (const auto &d : cr.diagnostics.all()) {
-            if (d.level != vx::DiagLevel::ERR)
-                vx::print_diagnostic(std::cerr, d);
-        }
+        // Mostrar warnings (cr.ok no impide los warnings).  En cr.ok no hay
+        // errores, asi que render (que emite todos) equivale a solo warnings.
+        vx::render_diagnostics(
+            std::cerr, cr.diagnostics,
+            vx::parse_diag_format(result["diag-format"].as<std::string>()));
 
         // si --vx-base fue especificado y es != 0, parchear el
         // texto .vel para reemplazar el @IniAddress(0x0000000000000000)
@@ -4958,7 +3977,7 @@ int main(int argc, char *argv[]) {
             /*ir_section_bytes=*/&cr.ir_section_bytes,
             /*emit_map=*/(result.count("emit-map") > 0));
 
-        // Phase M5.B: persistir el .velb final al project cache si
+        //  M5.B: persistir el .velb final al project cache si
         // (a) el compile usa imports (compile_vx_project tiene
         // dep_paths populated), (b) el link fue exitoso, y (c) el cache
         // esta enabled.
@@ -5007,7 +4026,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* Phase MC.4: probe del ComptimeRuntime (activable via env var
+        /*  MC.4: probe del ComptimeRuntime (activable via env var
          * VESTA_COMPTIME_PROBE=1).  Tras producir el .velb, lo carga
          * en una @c ComptimeRuntime para validar que el pipeline
          * bytecode-in-memory -> Loader -> symbol_table -> macro_entry_pc
@@ -5039,7 +4058,7 @@ int main(int argc, char *argv[]) {
                         std::cerr << "[mc-probe]   " << p.first << " @ 0x"
                                   << std::hex << p.second << std::dec << "\n";
                     }
-                    /* Phase MC.5: intentar invocar el PRIMER macro a
+                    /*  MC.5: intentar invocar el PRIMER macro a
                      * nivel funcion (filtrar sufijos internos del
                      * lowering: `_entry_`, `_if_`, `_ret`, `_while_`,
                      * `_for_`, `_then_`, `_else_`, `_merge_`). */
@@ -5080,7 +4099,7 @@ int main(int argc, char *argv[]) {
                                   << ctr.call_count() << "\n";
                     }
 
-                    /* Phase MC.8: shadow_validate -- replay las
+                    /*  MC.8: shadow_validate -- replay las
                      * expectaciones que el TypeChecker capturo durante
                      * la evaluacion AST de cada @Macro, invocando via
                      * VM, y comparando los strings.  Cualquier mismatch
@@ -5205,7 +4224,7 @@ int main(int argc, char *argv[]) {
                             result.count("dist-node-id") > 0;
             if (has_dist) apply_dist_config(vm, result);
 
-            // Phase M.sandbox (orden critico): pre-activar `sandbox_active`
+            //  M.sandbox (orden critico): pre-activar `sandbox_active`
             // ANTES de load_executable si las caps seran restringidas.
             // load_executable hace el eager-compile de main, cuyo guard de
             // seguridad consulta sandbox_active; si el flag se seteara solo
@@ -5226,7 +4245,7 @@ int main(int argc, char *argv[]) {
                 std::cerr << "Error: no se pudo cargar el ejecutable\n";
                 return EXIT_FAILURE;
             }
-            // Phase M.sandbox: aplicar @c --vx-caps al modulo cargado.
+            //  M.sandbox: aplicar @c --vx-caps al modulo cargado.
             // El primer Executable del pool es el que acabamos de cargar.
             if (result.count("vx-caps") && !mgr.loader.executables.empty()) {
                 const std::string caps_str =
@@ -5326,6 +4345,25 @@ int main(int argc, char *argv[]) {
             vm->stop();
             const long long ns_stop = t_stop.ns();
             const long long ns_total_run = t_total_run.ns();
+
+            // PGO producer: junto al '.vprof', escribir '<path>.lines' (perfil
+            // de branches por linea, consumido al recompilar).  La VM sigue viva
+            // aqui -> el debug_info (seccion DVBG, requiere --vex-debug) mapea
+            // cada PC a su linea fuente.
+            if (result.count("profile")) {
+                const std::string bp =
+                    result["profile"].as<std::string>() + ".lines";
+                runtime::profile::profile_write_branch_lines(
+                    bp, [&](uint64_t pc) -> uint32_t {
+                        for (const auto &exe : mgr.loader.executables) {
+                            if (!exe || !exe->debug_info) continue;
+                            auto info = exe->debug_info->lookup_line(
+                                static_cast<uint32_t>(pc));
+                            if (info.found && info.line > 0) return info.line;
+                        }
+                        return 0;
+                    });
+            }
 
             if (result.count("stats")) {
                 long long elapsed_ms = elapsed_ns / 1'000'000;

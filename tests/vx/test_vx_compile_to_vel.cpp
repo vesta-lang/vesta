@@ -12,7 +12,7 @@
 
 /**
  * @file test_vx_compile_to_vel.cpp
- * @brief Test del pipeline completo Vex -> texto .vel (sin tocar la VM).
+ * @brief Test del pipeline completo Vesta-lang -> texto .vel (sin tocar la VM).
  *
  * Valida la cadena facade:
  *

@@ -6,7 +6,7 @@ namespace ejemplos.unwrap_null;
 //
 // Verifica que la integracion entre la instruccion VM `unwrap` (0x26)
 // y el manejador de excepciones (`tryenter`/`do_throw`) funciona end
-// to end desde codigo Vex.
+// to end desde codigo Vesta-lang.
 //
 // Resultado esperado: 999 (handler activado).
 

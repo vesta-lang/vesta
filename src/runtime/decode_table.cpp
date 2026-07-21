@@ -2249,20 +2249,22 @@ InstrFormat decode_table_extended[0X100] = {
      Assembly::Bytecode::InstrSizeMode::FIXED_2, exec_instr_gcfinall,
      decode_instr_simple},
 
-    /* 0x8F */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x8F  csel r_dst, r_cond, r_a, r_b (FIXED_4): dst = cond ? a : b.
+       Super-instruccion del IrOp::SELECT para el interp.  Ver exec_instr_csel. */
+    {"csel", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_csel,
+     decode_instr_four_reg},
 
-    /* 0x90 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x90  mld r_dst, [base +/- index*scale +/- disp] (FIXED_8): load universal.
+       base in {r0-r15, rbp, rsp}.  Ver exec_instr_mld. */
+    {"mld", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_mld,
+     decode_instr_mem_full},
 
-    /* 0x91 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x91  mst [base +/- index*scale +/- disp], r_src (FIXED_8): store universal. */
+    {"mst", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_mst,
+     decode_instr_mem_full},
 
     /* 0x92 */
     {//
@@ -2374,7 +2376,7 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_two_op_reg},
 
     /* 0xA6 */
-    {// NEWOBJS reg_cls -> aloca en SharedHeap (Phase Z.6).  Registra
+    {// NEWOBJS reg_cls -> aloca en SharedHeap ( Z.6).  Registra
      // el host_ptr en shared_handle_table y guarda el shared handle
      // en ObjectHeader.hash_code para reverse lookup O(1).
      "newobjs", Assembly::Bytecode::AddressingMode::REG,

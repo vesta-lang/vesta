@@ -1,0 +1,41 @@
+// examples_codes_vx/302_c_enum_valued.vx
+//
+// Enums C-style: `typedef enum { ... } Name;` y `enum Name { ... }` (bare) con
+// valores enteros explicitos + auto-incremento, backing INFERIDO del rango
+// (i32/u32) o backing STRING inferido, mas backing explicito `: u8`.  Imita la
+// semantica de C: un enum sin `: tipo` es un conjunto de constantes enteras (no
+// una tagged union).
+//
+// Resultado esperado: R0 == 42.
+
+// typedef enum sin tipo base: backing i32 inferido, auto-incremento.
+typedef enum _E1 {
+    A = 1,
+    B,          // 2
+    C = 18,
+    D           // 19
+} E1;
+
+// bare enum con valores: mismo tratamiento C-style.
+enum Color { Red = 0, Green, Blue }   // Blue = 2
+
+// Valor 0xFFFFFFFF no cabe en i32 -> backing u32 inferido.
+typedef enum { LOW = 0x1, BIG = 0xFFFFFFFF } Flags;
+
+// Backing explicito u8: Q = 41.
+typedef enum : u8 { P = 40, Q } Small;
+
+// Backing string inferido (todas las variantes con valor string).
+typedef enum { OK = "ok", ERR = "err" } Names;
+
+i32 main() {
+    // 19 + 41 - 18 = 42
+    i32 r = (i32)E1.D + (u8)Small.Q - (i32)E1.C;
+
+    // Validaciones que NO alteran r (confirman los otros backings).
+    if ((i32)Color.Blue != 2)          { r = 0; }   // auto-incremento bare enum
+    if ((u32)Flags.BIG != 0xFFFFFFFF)  { r = 0; }   // backing u32 inferido
+    if (!str_equals(Names.OK, "ok"))   { r = 0; }   // backing string inferido
+
+    return r;   // 42
+}

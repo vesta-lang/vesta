@@ -3,7 +3,7 @@ namespace ejemplos.macros_lowered_to_ir;
 // validacion de que @Macro bodies se lowerean a IR como
 // IrFunction `__macro_<name>`.  Este test confirma que el pipeline
 // IR -> bytecode soporta codigo simple de macros (foundation para
-// la futura ComptimeVM execution -- ver Phase MC.2+).
+// la futura ComptimeVM execution -- ver  MC.2+).
 //
 // El test no ejerce la ComptimeVM: solo valida que la compilacion
 // produce un .velb correcto y que los macros simples evaluan a su
@@ -11,7 +11,7 @@ namespace ejemplos.macros_lowered_to_ir;
 
 i32 doblar(i32 x) { return x + x; }
 
-// Macro simple: retorna codigo Vex como string.  El nombre lowereado
+// Macro simple: retorna codigo mo string.  El nombre lowereado
 // internamente seria `__macro_macro_doblar` si MC.1 esta activo;
 // MC.2+ ejecutaria este body via la ComptimeVM en lugar del AST eval.
 @Macro

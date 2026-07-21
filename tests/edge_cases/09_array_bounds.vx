@@ -1,4 +1,4 @@
-// Edge: array bounds.  Vex no garantiza bounds check; arr[i] con i out of range
+// Edge: array bounds.   no garantiza bounds check; arr[i] con i out of range
 // es UB, pero NO debe crashear silenciosamente con basura random.
 i32 main() {
     i32[10] arr;

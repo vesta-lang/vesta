@@ -7,7 +7,7 @@
 
 /**
  * @file comptime_vm.cpp
- * @brief Implementacion del scaffolding de @c ComptimeRuntime (Phase  ).
+ * @brief Implementacion del scaffolding de @c ComptimeRuntime (  ).
  *
  * En este sprint la clase es funcional pero la ejecucion via VM esta
  * stub-eada -- el @c try_invoke siempre retorna @c false (caller
@@ -18,7 +18,7 @@
  * .velb in-memory que contenga los `__macro_*` lowered).
  */
 
-#include "vx/comptime_vm.h"
+#include "vx/comptime/comptime_vm.h"
 
 /* Headers runtime full: estos pueden cascade-incluir openssl/capstone
  * pero solo se compilan en este TU (no se filtran al header publico
@@ -29,6 +29,7 @@
 #include "loader/loader.h"
 #include "distrib/dist_runtime.h" /* dtor de VM destruye DistRuntime via unique_ptr */
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
+#include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
 #include "jit/jit_compiler.h" /* CompileResult */
 
 #include <chrono>
@@ -134,7 +135,7 @@ struct ComptimeVmImpl {
      * ~98%.  El peak memory queda bounded a ~64 * 128 B = 8 KB lo
      * cual es perfectamente aceptable.
      *
-     * Override via env var @c VESTA_ GC_INTERVAL.  Valor 0 = GC
+     * Override via env var @c VESTA_MC_GC_INTERVAL.  Valor 0 = GC
      * cada call (modo original); valor grande = menos GCs pero
      * mayor peak memory.
      */
@@ -156,7 +157,7 @@ struct ComptimeVmImpl {
           vm(mgr, /*id_vm=*/0xC03171EULL, /*num_schedulers=*/1) {
         /*   : configurar GC interval desde env var.
          * Default = 64 (good tradeoff entre peak memory y overhead). */
-        if (const char *env = std::getenv("VESTA_ GC_INTERVAL")) {
+        if (const char *env = std::getenv("VESTA_MC_GC_INTERVAL")) {
             char *end = nullptr;
             const unsigned long v = std::strtoul(env, &end, 10);
             if (end != env) gc_interval = v;
@@ -258,6 +259,15 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
         auto jit_it = impl_->jit_code_by_pc.find(entry_pc);
         if (jit_it != impl_->jit_code_by_pc.end() && jit_it->second) {
             proc->jit_entry_fn = jit_it->second;
+        } else {
+            /* BUG FIX: si ESTE macro no tiene codigo JIT eager, hay que LIMPIAR
+             * jit_entry_fn -- si no, un valor STALE de un macro anterior (o de
+             * otra fn eager-compilada) haria que el scheduler salte a codigo
+             * nativo AJENO (JIT-ENTRY path), ejecutando la fn equivocada y
+             * devolviendo basura (p.ej. un macro string que devolvia el entero
+             * 40+2=42 en vez del handle).  Con jit_entry_fn=null el proceso
+             * ejecuta ESTE macro por interp, que es correcto. */
+            proc->jit_entry_fn = nullptr;
         }
         impl_->vm.make_ready(impl_->proc_pid);
         impl_->vm.start();
@@ -365,7 +375,7 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     /*   : capturamos old_used pre-call solo si trace activo. */
     size_t old_used_before = 0;
     const bool gc_trace_active = []() {
-        const char *t = std::getenv("VESTA_ GC_TRACE");
+        const char *t = std::getenv("VESTA_MC_GC_TRACE");
         return t && t[0] == '1';
     }();
     if (gc_trace_active && impl_ && impl_->proc) {
@@ -379,7 +389,14 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     try {
         /* Deref handle -> payload host_ptr.  El payload es el
          * StringObject completo (sin GcHeader). */
-        const auto handle = static_cast<gc::GcHandle>(r0);
+        /* El macro pudo devolver un StringObject ROPE (STRCAT) o SLICE
+         * (STRSLICE): sus bytes NO estan contiguos en data[40], sino en una
+         * estructura de arbol/vista.  Leerlo como FLAT daria basura (incl. NUL
+         * bytes -> "caracter inesperado" al parsear el codigo generado).
+         * Materializar a FLAT primero. */
+        gc::GcHandle handle =
+            runtime::flatten_string_public(impl_->proc,
+                                           static_cast<gc::GcHandle>(r0));
         uint8_t *payload = impl_->proc->gc_heap.deref(handle);
         if (!payload) return false;
 
@@ -409,7 +426,7 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
          *
          * Peak memory queda bounded a ~gc_interval * 128 B (~8KB
          * con default 64), aceptable.  Override via
-         * @c VESTA_ GC_INTERVAL.
+         * @c VESTA_MC_GC_INTERVAL.
          *
          * Limpiar R0..R15 SIEMPRE (no en batch) -- esos handles
          * deben morir inmediatamente para que el siguiente call
@@ -545,20 +562,19 @@ bool ComptimeRuntime::load_macros_from_bytes(
             macro_entry_pc_[clean] = kv.second;
         }
 
-        /*   : eager-compile cada macro via JIT.  OPT-IN via
-         * @c VESTA_ JIT=1.  Razon: eager_compile_function tarda
-         * ~5-15ms por macro (segun size del IR + Keystone encode).
-         * Para macros pequenos invocados pocas veces, el costo del
-         * compile excede el ahorro en runtime.  Para builds con
-         * macros pesados o invocaciones repetidas (e.g. metaprog
-         * heavy), el JIT da 10-50x speedup en la ejecucion de la
-         * macro.  El user decide con el env var.
+        /* Eager-compile cada macro/fn comptime via JIT: es lo que acelera
+         * TODO el proceso comptime.  JIT-FIRST por defecto; el interprete
+         * queda como fallback automatico (si @c eager_compile_function no
+         * puede compilar una fn -- op IR no soportada -- @c res.fn es null y
+         * @c jit_code_by_pc no se setea, asi que el scheduler la ejecuta por
+         * interp).  Opt-out completo via @c VESTA_MC_NO_JIT=1 (fuerza interp
+         * puro, util para diagnostico o A/B).
          *
-         * TODO   futuro: lazy compile (contador de invocaciones)
-         * para que el JIT solo dispare cuando el macro se justifique.
-         * Eso elimina la decision manual y da lo mejor de ambos. */
-        const char *mc_jit_env = std::getenv("VESTA_ JIT");
-        const bool mc_jit_on = (mc_jit_env && mc_jit_env[0] == '1');
+         * El coste del compile (~5-15ms por fn) se amortiza con el cache del
+         * codigo comptime (compilado aparte, cacheado aparte): el comptime
+         * casi nunca cambia y se reusa mucho, asi que se paga una vez. */
+        const char *mc_nojit_env = std::getenv("VESTA_MC_NO_JIT");
+        const bool mc_jit_on = !(mc_nojit_env && mc_nojit_env[0] == '1');
         if (mc_jit_on) {
             const uint32_t saved_threshold = jit::g_jit_threshold;
             if (saved_threshold == UINT32_MAX) {
@@ -574,9 +590,24 @@ bool ComptimeRuntime::load_macros_from_bytes(
                     const ir::IrFunction &ir_fn =
                         exe->ir_functions[fnit->second];
                     try {
+                        /* #3: resolver de FFI nativo para que el JIT del
+                         * ComptimeVM pueda compilar CALLNs a virtual fns
+                         * `vrt:*` (p.ej. `vrt:naked_dispatch` cuando una
+                         * comptime fn llama a un helper @Naked).  Sin esto el
+                         * CALLN caia a "no-resolver" -> bail a interp (que no
+                         * ejecuta bien el inline-asm/naked en el ComptimeVM)
+                         * -> valor 0 silencioso. */
+                        auto native_resolver =
+                            [](const std::string &name) -> uint64_t {
+                            size_t colon = name.find(':');
+                            if (colon == std::string::npos) return 0;
+                            void *vfn = ffi::lookup_virtual_fn(
+                                name.substr(0, colon), name.substr(colon + 1));
+                            return reinterpret_cast<uint64_t>(vfn);
+                        };
                         jit::CompileResult res = jit::eager_compile_function(
                             ir_fn, &exe->ir_lookup, &exe->ir_functions,
-                            &exe->symbol_table);
+                            &exe->symbol_table, native_resolver);
                         if (res.fn) {
                             impl_->jit_code_by_pc[entry_pc] =
                                 reinterpret_cast<void *>(res.fn);

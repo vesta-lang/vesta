@@ -1,0 +1,14 @@
+// Test NEGATIVO: pinear un operando a rsp/rbp corrompe la pila.
+//
+// Un `register("rsp")` (o rbp) fija un valor Vesta al puntero de pila.  El asm
+// operaria sobre el marco -> corrupcion en CUALQUIER backend (interp/JIT/AOT).
+// El compilador lo RECHAZA en compile-time con VXA008 (no espera al crash).
+//
+// Debe FALLAR al compilar con el codigo VXA008.
+u64 main() {
+    register("rsp") u64 x = 5;   // <- pin invalido: rsp es la pila
+    asm volatile {
+        nop
+    };
+    return x;
+}

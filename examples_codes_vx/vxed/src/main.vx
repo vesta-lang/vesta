@@ -1,5 +1,5 @@
 // =============================================================================
-// vxed - editor TUI fullscreen en Vex
+// vxed - editor TUI fullscreen en 
 // =============================================================================
 //
 // Editor visual estilo nano/pico.  La pantalla se redibuja entera tras
@@ -41,9 +41,9 @@ import "modules/autocomplete";
 // Pulsar Enter sobre un fichero lo abre en una pestana nueva.
 // =============================================================================
 
-comptime i32 SB_MAX_ENTRIES = 1024;
-comptime i32 SB_NAME_MAX    = 260;
-comptime i32 FINDDATA_BYTES = 320;
+const i32 SB_MAX_ENTRIES = 1024;
+const i32 SB_NAME_MAX    = 260;
+const i32 FINDDATA_BYTES = 320;
 
 // Volcado opcional de diagnostico a `vxed_diag.log` (linea por evento).
 // Util para depurar regresiones; se mantiene a 0 en builds normales para
@@ -55,7 +55,7 @@ comptime i32 FINDDATA_BYTES = 320;
 // Activar a 1 + rebuild para recopilar trazas en `vxed_diag.log`
 // (append).  Util para diagnosticar bugs en entornos donde no hay
 // debugger interactivo conectado.
-comptime i32 DEBUG_LOG = 0;
+const i32 DEBUG_LOG = 0;
 
 // F8: Configuracion del editor (toggleable en runtime).
 //   show_line_numbers -> Ctrl-E
@@ -421,7 +421,7 @@ class Sidebar {
 // Usamos solo el ultimo mensaje.
 
 // Renderiza la barra superior con las pestanas (orden de creacion,
-// activa resaltada con INVERT).  Como Vex no soporta `class == class`
+// activa resaltada con INVERT).  Como  no soporta `class == class`
 // hoy, identificamos la activa por `id`.
 void render_tab_bar(tabs.Workspace ws, screen.Screen sc) {
     diag_log("RTB:0 enter");
@@ -662,14 +662,14 @@ void draw_full(tabs.Workspace ws, Sidebar sb, screen.Screen sc, i32 view_rows,
     diag_log("DF:3 post-sidebar");
 
     // 3. Cuerpo del editor (filas 2..sc.rows-1, cols editor_left..cols).
-    // Sintaxis Vex se aplica al render de TODAS las lineas visibles.
+    // Sintaxis  se aplica al render de TODAS las lineas visibles.
     // El highlighter mantiene estado multi-linea (block comments / triple
     // strings); reset al inicio del frame y luego scan desde la primera
     // linea visible.  Para evitar bugs en archivos donde una linea
     // anterior abre un bloque /*..*/ que se cierra abajo, hacemos un
     // pre-scan rapido desde linea 0 hasta row_top para inicializar el
     // estado correctamente.  Esto es O(N) por keystroke pero acceptable
-    // para archivos <= 10k lineas (Phase A).
+    // para archivos <= 10k lineas ( A).
     hl.reset_state();
     i32 pre = 0;
     while (pre < row_top && pre < b.line_count()) {
@@ -1536,7 +1536,7 @@ i32 main() {
             if (indent_end > b.cursor) indent_end = b.cursor;
             i32 indent_n = indent_end - ls;
             // Smart-indent: si el ultimo char no-blanco de la linea anterior
-            // es `{`, añade 4 spaces extra.  Soporta estilo C/Java/Rust/Vex.
+            // es `{`, añade 4 spaces extra.  Soporta estilo C/Java/Rust/.
             i32 extra_indent = 0;
             i32 cur_cursor = b.cursor;
             i32 j = cur_cursor - 1;

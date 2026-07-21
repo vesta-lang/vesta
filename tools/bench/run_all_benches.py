@@ -12,9 +12,9 @@ Sprint bench-multilang (2026-06-02):
 - Reporta tabla agrupada por bench con todos los lenguajes lado a lado.
 - Genera grafica matplotlib comparativa + JSON con todos los datos.
 - Tambien soporta el layout legacy @c benchmark/*.vx (un fichero
-  Vex sin carpeta) ejecutando solo en Vex interp + JIT.
+  Vesta-lang sin carpeta) ejecutando solo en Vesta-lang interp + JIT.
 
-Modos de ejecucion del Vex:
+Modos de ejecucion del Vesta-lang:
 - @b interp: VESTA_JIT_THRESHOLD=UINT32_MAX (forzado; el default del vm es 1500), 100% interp.
 - @b jit: VESTA_JIT_THRESHOLD=1, fuerza JIT en el primer call.
 - @b aot: compila el .vx a un .exe nativo standalone (-m aot --emit exe) y
@@ -110,7 +110,7 @@ VX_AOT_MODES: dict[str, str] = {
     "vx_aot_avx":  "avx",
     "vx_aot_auto": "auto",
 }
-# Todos los lenguajes "Vex" (comparten la variante .vx; difieren en como se
+# Todos los lenguajes "Vesta-lang" (comparten la variante .vx; difieren en como se
 # compila/ejecuta).  Usado en los dispatch de compile + run.
 VX_LANGS = ("vx_interp", "vx_jit", *VX_AOT_MODES.keys())
 
@@ -332,16 +332,16 @@ def capture_system_info(vm_bin: Path, tc: dict) -> dict:
 
     # ---- Toolchains ----
     tooling: dict = {}
-    # Vex
+    # Vesta-lang
     if vm_bin.is_file():
         vx_ver = get_tool_version([str(vm_bin), "--version"])
-        tooling["Vex VM"] = {
+        tooling["Vesta-lang VM"] = {
             "available": True,
             "version": vx_ver,
             "path": str(vm_bin),
         }
     else:
-        tooling["Vex VM"] = {"available": False}
+        tooling["Vesta-lang VM"] = {"available": False}
     # gcc
     if tc.get("c") and tc["c"].available:
         tooling["C (gcc)"] = {
@@ -563,12 +563,12 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
     tc: dict[str, Toolchain] = {}
 
     tc["vx_interp"] = Toolchain(
-        "vx_interp", "Vex interp", C.YELLOW,
+        "vx_interp", "Vesta-lang interp", C.YELLOW,
         available=vm_bin.is_file(),
         why_unavailable="" if vm_bin.is_file() else "vm binary missing"
     )
     tc["vx_jit"] = Toolchain(
-        "vx_jit", "Vex JIT", C.GREEN,
+        "vx_jit", "Vesta-lang JIT", C.GREEN,
         available=vm_bin.is_file(),
         why_unavailable="" if vm_bin.is_file() else "vm binary missing"
     )
@@ -582,9 +582,9 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
     # (--float-isa) para ver el efecto del ancho vectorial lado a lado:
     #   sse2 (128b baseline), avx (AVX2 256b), auto (multiversion cpuid).
     _aot_labels = {
-        "vx_aot_sse2": "Vex AOT sse2",
-        "vx_aot_avx":  "Vex AOT avx2",
-        "vx_aot_auto": "Vex AOT auto",
+        "vx_aot_sse2": "Vesta-lang AOT sse2",
+        "vx_aot_avx":  "Vesta-lang AOT avx2",
+        "vx_aot_auto": "Vesta-lang AOT auto",
     }
     # Colores distintos de los 6 base (interp=amarillo, jit=verde, c=azul,
     # cpp=magenta, python=cian, java=rojo) para que el trio AOT se diferencie.
@@ -688,7 +688,7 @@ def discover_benches(bench_dir: Path) -> list[Bench]:
         if b.variants:
             benches.append(b)
             multilang_names.add(d.name)
-    # 2. Single-file legacy (.vx) -- solo Vex.
+    # 2. Single-file legacy (.vx) -- solo Vesta-lang.
     # Sprint string-perf-6 (2026-06-02): skip de duplicados.  Si el .vx
     # legacy tiene contrapartida multi-lenguaje (e.g. bench_array_sum.vx
     # vs carpeta array_sum/), saltar el legacy para evitar filas dobles
@@ -765,7 +765,7 @@ def run_timed(cmd: list[str], env: dict | None = None,
 
     Para C/C++/Python/Java el overhead del fork+startup es bajo (<5ms en
     binarios optimizados; Python ~30ms; Java ~50-80ms por JVM init).  Para
-    Vex la VM tiene ~28ms de overhead de boot que distorsiona benches
+    Vesta-lang la VM tiene ~28ms de overhead de boot que distorsiona benches
     cortos -- usar @c run_timed_vx en su lugar."""
     t0 = time.perf_counter()
     try:
@@ -788,8 +788,8 @@ def run_timed_vx(cmd: list[str], env: dict | None,
                    timeout: float, cwd: Optional[Path]) -> float:
     """Wall time INTERNO del scheduler (excluye VM init overhead).
 
-    Ejecuta el binario Vex con @c --stats, captura stdout, y extrae la
-    linea "Wall time: N ns".  Si no se encuentra (Vex < esta version),
+    Ejecuta el binario Vesta-lang con @c --stats, captura stdout, y extrae la
+    linea "Wall time: N ns".  Si no se encuentra (Vesta-lang < esta version),
     fallback a wall externo via @c run_timed.
 
     Cualquier @c --stats / @c --jit-stats que el usuario ya tenga en
@@ -837,7 +837,7 @@ def all_runs(cmd: list[str], env: dict | None, runs: int,
     (longitud == @c runs).  Devuelve lista vacia si cualquier run falla.
 
     @param use_vx_walltime  Si true, ejecuta con @c --stats y extrae el
-    Wall time interno (sin VM init overhead).  Solo para langs Vex.
+    Wall time interno (sin VM init overhead).  Solo para langs Vesta-lang.
 
     Resiliencia contra flakes ambientales:
     - @c MAX_ATTEMPTS=5 reintentos por run individual antes de fallar.
@@ -1200,9 +1200,9 @@ def print_ascii_charts(rows: list[dict], active_langs: list[str],
             label = LANG_LABELS_PLAIN.get(ln, ln)
             print(f"    {label:<16} {bar} {v:>9.1f} ms  ({ratio:>5.2f}x) {mark}")
 
-    # Chart 2: speedup Vex JIT vs Vex interp por bench.
+    # Chart 2: speedup Vesta-lang JIT vs Vesta-lang interp por bench.
     print()
-    print(f"{C.BOLD}(2) Speedup Vex JIT vs Vex interp{C.RESET}")
+    print(f"{C.BOLD}(2) Speedup Vesta-lang JIT vs Vesta-lang interp{C.RESET}")
     vx_data = []
     for r in rows:
         ti = r.get("vx_interp")
@@ -1251,11 +1251,11 @@ def print_ascii_charts(rows: list[dict], active_langs: list[str],
 
 # Labels sin codigos ANSI para padding consistente.
 LANG_LABELS_PLAIN = {
-    "vx_interp":   "Vex interp",
-    "vx_jit":      "Vex JIT",
-    "vx_aot_sse2": "Vex AOT sse2",
-    "vx_aot_avx":  "Vex AOT avx2",
-    "vx_aot_auto": "Vex AOT auto",
+    "vx_interp":   "Vesta-lang interp",
+    "vx_jit":      "Vesta-lang JIT",
+    "vx_aot_sse2": "Vesta-lang AOT sse2",
+    "vx_aot_avx":  "Vesta-lang AOT avx2",
+    "vx_aot_auto": "Vesta-lang AOT auto",
     "c":            "C (gcc -O3)",
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
@@ -1687,11 +1687,11 @@ def rerender_from_json(json_path: Path, project_root: Path,
             self.name = name; self.label = label; self.color = color
             self.available = True
     LABELS = {
-        "vx_interp":   ("Vex interp",   C.YELLOW),
-        "vx_jit":      ("Vex JIT",      C.GREEN),
-        "vx_aot_sse2": ("Vex AOT sse2", C.ORANGE),
-        "vx_aot_avx":  ("Vex AOT avx2", C.VIOLET),
-        "vx_aot_auto": ("Vex AOT auto", C.PINK),
+        "vx_interp":   ("Vesta-lang interp",   C.YELLOW),
+        "vx_jit":      ("Vesta-lang JIT",      C.GREEN),
+        "vx_aot_sse2": ("Vesta-lang AOT sse2", C.ORANGE),
+        "vx_aot_avx":  ("Vesta-lang AOT avx2", C.VIOLET),
+        "vx_aot_auto": ("Vesta-lang-lang AOT auto", C.PINK),
         "c":            ("C (gcc -O3)",  C.BLUE),
         "cpp":          ("C++ (g++ -O3)", C.MAGENTA),
         "python":       ("Python (CPython)", C.CYAN),
@@ -1785,7 +1785,7 @@ def main() -> int:
                               "las mediciones de tiempo."))
     parser.add_argument("--warmup", type=int, default=1,
                         help=("Runs de warmup descartados antes de medir (default 1).  "
-                              "Cubre JIT-compile fresco de Vex/Java/Python.  "
+                              "Cubre JIT-compile fresco de Vesta-lang/Java/Python.  "
                               "Total runs ejecutados por bench: warmup + runs."))
     parser.add_argument("--baseline", type=str, default="",
                         help=("Path a un bench_results.json previo para comparar.  "
@@ -1809,14 +1809,14 @@ def main() -> int:
                         help=("FAIR MODE (default): mide wall externo para "
                               "TODOS los lenguajes (incluye fork + runtime "
                               "init).  Es la metrica honesta -- 'cuanto tarda "
-                              "el usuario al invocar el programa'.  Vex paga "
+                              "el usuario al invocar el programa'.  Vesta-lang paga "
                               "sus ~30ms de VM init igual que Python/Java pagan "
                               "su startup.  Benches cortos quedan dominados "
                               "por init y se ve realmente el coste."))
     parser.add_argument("--unfair", dest="fair", action="store_false",
                         help=("UNFAIR MODE (legacy): mide wall externo para "
                               "C/C++/Python/Java pero wall INTERNO (--stats) "
-                              "para Vex.  Sobreestima Vex en benches cortos "
+                              "para Vesta-lang.  Sobreestima Vesta-lang en benches cortos "
                               "porque excluye sus ~30ms de VM init.  Util "
                               "solo para diagnostico del scheduler interno."))
     args = parser.parse_args()
@@ -1826,11 +1826,11 @@ def main() -> int:
     if args.fair:
         info(f"measurement: {C.BOLD}{C.CYAN}FAIR{C.RESET} (wall externo "
              f"para TODOS los lenguajes; incluye fork + runtime init).  "
-             f"Vex paga sus ~30ms de VM init igual que Python ~15ms / Java ~80ms.")
+             f"Vesta-lang paga sus ~30ms de VM init igual que Python ~15ms / Java ~80ms.")
     else:
         info(f"measurement: {C.BOLD}{C.YELLOW}UNFAIR (legacy){C.RESET} "
-             f"-- Vex usa Wall time interno --stats (sin VM init); otros "
-             f"langs usan wall externo.  Sobreestima Vex en benches cortos.")
+             f"-- Vesta-lang usa Wall time interno --stats (sin VM init); otros "
+             f"langs usan wall externo.  Sobreestima Vesta-lang en benches cortos.")
 
     # Sprint bench-from-json: short-circuit del flujo normal cuando el
     # usuario solo quiere re-renderizar reportes desde un JSON previo.
@@ -1987,7 +1987,7 @@ def main() -> int:
             warn(f"compile fail {bname}/{ln}: {err}")
 
     # -------------------------------------------------------------------
-    # Fase 2: EJECUCIONES (secuencial; mediciones no contaminadas).
+    #   EJECUCIONES (secuencial; mediciones no contaminadas).
     # -------------------------------------------------------------------
     print()
     rows: list[dict] = []
@@ -2034,7 +2034,7 @@ def main() -> int:
             # Sprint bench-fair (2026-06-03): por default mode FAIR usa
             # wall externo para TODOS los lenguajes (incluye fork + runtime
             # init).  Mode --unfair restaura el comportamiento legacy
-            # (Vex usa --stats interno, otros wall externo).
+            # (Vesta-lang usa --stats interno, otros wall externo).
             use_vx_wt = (not args.fair) and ln in ("vx_interp", "vx_jit")
             with Spinner(label_run, color=tc[ln].color):
                 runs_ms = all_runs(cmd, env=env, runs=args.runs,

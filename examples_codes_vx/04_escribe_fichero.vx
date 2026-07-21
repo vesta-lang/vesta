@@ -15,15 +15,15 @@ namespace ejemplos.escribe_fichero;
 //   vm --run escribir.velb
 //
 // Salida esperada (stdout):
-//   == Escritura de fichero Vex ==
+//   == Escritura de fichero Vesta-lang ==
 //   bytes escritos:
 //   == Hecho ==
 //
 // Efecto secundario: crea el fichero "salida_vx.txt" con el contenido
-//   "Hola desde Vex! Este fichero fue escrito por la VM."
+//   "Hola desde Vesta-lang! Este fichero fue escrito por la VM."
 
 i32 main() {
-    println("== Escritura de fichero Vex ==");
+    println("== Escritura de fichero Vesta-lang ==");
 
     i64 fp = fopen("salida_vx.txt", "w");
     if (fp == 0) {
@@ -31,7 +31,7 @@ i32 main() {
         return 1;
     }
 
-    i64 bytes_written = fwrite(fp, "Hola desde Vex! Este fichero fue escrito por la VM.\n");
+    i64 bytes_written = fwrite(fp, "Hola desde Vesta-lang! Este fichero fue escrito por la VM.\n");
     println("bytes escritos:");
     print_int(bytes_written);
 

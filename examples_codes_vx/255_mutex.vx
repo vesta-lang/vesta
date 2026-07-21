@@ -1,0 +1,35 @@
+// Mutex cooperativo de fibras: N fibras incrementan un contador compartido M
+// veces cada una dentro de la seccion critica.  El incremento es un
+// read-modify-write NO atomico sobre un global; sin el mutex, las fibras (sobre
+// varios hilos del SO) se pisan y el total sale menor.  Con el mutex, el total
+// es EXACTO (N*M) -> prueba la exclusion mutua cross-hilo.
+import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
+import "vx_mutex" only Mutex, vx_mutex_new, vx_mutex_lock, vx_mutex_unlock,
+                     vx_mutex_free;
+
+Mutex g_mtx;              // handle tipado (overlay) como global
+i64 g_counter = 0;
+const i64 NF = 4;         // fibras
+const i64 M = 20000;      // incrementos por fibra
+
+void worker(i64 a) {
+    for (i64 i = 0; i < M; i++) {
+        vx_mutex_lock(g_mtx);
+        g_counter += 1;    // seccion critica (RMW no atomico)
+        vx_mutex_unlock(g_mtx);
+    }
+}
+i32 main() {
+    g_mtx = vx_mutex_new();
+    vx_pool_start(4);
+    for (i64 i = 0; i < NF; i++) {
+        vx_pool_submit((i64)(cfn(i64) -> void) worker, 0);
+    }
+    vx_pool_join();
+    vx_mutex_free(g_mtx);
+    // total esperado = NF * M = 80000.
+    if (g_counter == NF * M) {
+        return 42;
+    }
+    return 1;
+}

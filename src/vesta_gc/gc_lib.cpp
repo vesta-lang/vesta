@@ -11,7 +11,7 @@
  * NOTA de enlazado (Inc 0b pendiente): `gc_heap.cpp` aun arrastra
  * `proceso_runtime.h` por los caminos guardados por `owner_proc_ != nullptr`
  * (shared-heap, scan conservativo).  Para un `.o` freestanding linkable sin la
- * VM hay que desacoplar esos sitios via una interfaz RootProvider (Phase C.3).
+ * VM hay que desacoplar esos sitios via una interfaz RootProvider ( C.3).
  * Hasta entonces esta TU se compila dentro del proyecto (linka la VM) y valida
  * el motor del GC operando ProcessVM-less.
  */

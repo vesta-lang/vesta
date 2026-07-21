@@ -9,7 +9,7 @@ namespace ejemplos.copy_hook_en_campo;
 // correctamente almacenado en clases y structs: cada copia incrementa, cada
 // destruccion (del contenedor o del original) decrementa, y el recurso se libera
 // cuando cae a cero.  El destructor del contenedor invoca el destructor del
-// campo automaticamente.  Ver doc/VMdoc/Vex/SmartPointers.md.
+// campo automaticamente.  Ver doc/VMdoc//SmartPointers.md.
 
 class Counter { public static i64 vivos; }
 

@@ -8,7 +8,7 @@
 /**
  * @file jit/code_cache.h
  * @brief Code cache para alojar bytes de codigo nativo generados en
- *        runtime por el JIT (Phase D).
+ *        runtime por el JIT ( D).
  *
  * = Diseno =
  *
@@ -39,7 +39,7 @@
  * En v1 el cache es SINGLE-WRITER: solo el thread compilador del JIT
  * hace @c alloc + @c commit.  Multiples threads pueden
  * leer/ejecutar codigo concurrentemente sin sincronizacion (es read-
- * only post-commit).  En Phase D.8 (C2 con multi-thread compile) se
+ * only post-commit).  En  D.8 (C2 con multi-thread compile) se
  * añadira un mutex interno o se shardara el cache por compile worker.
  *
  * = Cleanup =

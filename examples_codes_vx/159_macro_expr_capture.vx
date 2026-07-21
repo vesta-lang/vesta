@@ -3,8 +3,8 @@ namespace ejemplos.macro_expr_capture;
 // Demo de @Macro con parametro `expr`: captura raw del texto del call site.
 // El macro recibe la cadena verbatim y puede procesarla con builtins de strings.
 
-// Macro 1: identity - solo devuelve el texto capturado como string literal Vex.
-// El resultado parseado como expresion Vex es ese mismo string literal.
+// Macro 1: identity - solo devuelve el texto capturado como string literal .
+// El resultado parseado como expresion  es ese mismo string literal.
 @Macro
 comptime string M_identity(expr code) {
     // Devolvemos la captura envuelta en comillas para que parsee como
@@ -34,7 +34,7 @@ comptime string M_walk(expr code) {
 
 i32 main() {
     // Test 1: capture identity.  El usuario escribe sintaxis arbitraria;
-    // el macro la devuelve como string Vex valido.
+    // el macro la devuelve como string  valido.
     string captured = M_identity(ptr -> 0x90 -> 0x10 -> 0x20);
 
     // Test 2: longitud del codigo capturado (incluyendo espacios).

@@ -7,7 +7,7 @@
 
 /**
  * @file jit/interval.cpp
- * @brief Implementacion del constructor de live intervals (Phase D.7).
+ * @brief Implementacion del constructor de live intervals ( D.7).
  *
  * Ver interval.h y doc/REGALLOC.md.  Algoritmo: gen/kill por bloque ->
  * liveness por dataflow iterativo a punto fijo -> construccion de rangos en
@@ -43,9 +43,29 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::ROL:
     case MOp::ROR:
     case MOp::DIVMOD_V: /* dst = src1 / src2 (variant: 0 DIV, 1 MOD) */
+    case MOp::SHIFT_V:  /* dst = src1 <shift> src2 (cuenta variable en RCX) */
+    /* arm64 3-op: division y select condicional (dst def, srcs use). */
+    case MOp::A64_UDIV:
+    case MOp::A64_SDIV:
+    case MOp::A64_CSEL:
+    /* arm64 float 3-op (dst def, srcs use). */
+    case MOp::A64_FADD:
+    case MOp::A64_FSUB:
+    case MOp::A64_FMUL:
+    case MOp::A64_FDIV:
         r.dst = R::DEF;
         r.src1 = R::USE;
         r.src2 = R::USE;
+        break;
+    /* Atomicas: CAS dst es IN/OUT (expected -> old); ADD dst solo salida. */
+    case MOp::ATOMICCAS_V:
+        r.dst = R::USEDEF; /* entra expected, sale old */
+        r.src1 = R::USE;   /* addr */
+        r.src2 = R::USE;   /* desired */
+        break;
+    case MOp::ATOMICADD_V:
+        r.dst = R::USEDEF; /* entra delta, sale old (xadd 2-address) */
+        r.src1 = R::USE;   /* addr */
         break;
 
     /* Unarios: dst def, src1 use. */
@@ -72,6 +92,32 @@ InstrRoles operand_roles(MOp op) noexcept {
 
     /* SETcc dst: solo def (lee flags, no regs). */
     case MOp::SETCC: r.dst = R::DEF; break;
+
+    /* arm64: CSET dst (lee flags); extensiones/mvn/fmov/fneg/... unarios;
+     * conversiones int<->float; CBNZ/CBZ leen el reg testeado (dst = label);
+     * FCMP setea flags (solo lee). */
+    case MOp::A64_CSET: r.dst = R::DEF; break;
+    case MOp::A64_MVN:
+    case MOp::A64_SXTB:
+    case MOp::A64_UXTB:
+    case MOp::A64_FMOV:
+    case MOp::A64_FNEG:
+    case MOp::A64_FABS:
+    case MOp::A64_FSQRT:
+    case MOp::A64_SCVTF:
+    case MOp::A64_UCVTF:
+    case MOp::A64_FCVTZS:
+    case MOp::A64_FCVTZU:
+    case MOp::A64_FCVT:
+        r.dst = R::DEF;
+        r.src1 = R::USE;
+        break;
+    case MOp::A64_CBNZ:
+    case MOp::A64_CBZ: r.src1 = R::USE; break;
+    case MOp::A64_FCMP:
+        r.src1 = R::USE;
+        r.src2 = R::USE;
+        break;
 
     /* CMOVcc dst, src: dst es use+def (condicional preserva), src use. */
     case MOp::CMOVCC:
@@ -146,6 +192,8 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::DIVSD:
     case MOp::MINSD:
     case MOp::MAXSD:
+    case MOp::MINSS:
+    case MOp::MAXSS:
     case MOp::ADDSS:
     case MOp::SUBSS:
     case MOp::MULSS:
@@ -168,10 +216,20 @@ InstrRoles operand_roles(MOp op) noexcept {
         r.src1 = R::USE;
         r.src2 = R::USE;
         break;
+    /* FMA escalar: dst = src1*src2 + dst.  El dst es ACUMULADOR (lee el sumando
+     * c y escribe el resultado) -> USEDEF, como XADD.  El vreg copia c->dst
+     * antes (MOVSD) y NO legaliza a 2-address (dst != src1). */
+    case MOp::VFMADD231SD:
+    case MOp::VFMADD231SS:
+        r.dst = R::USEDEF;
+        r.src1 = R::USE;
+        r.src2 = R::USE;
+        break;
     /* Unarios FP (dst def, src1 use): conversiones, sqrt, MOVSD/MOVSS
      * (movimiento de datos, incluido el spill/load FP). */
     case MOp::SQRTSD:
     case MOp::ROUNDSD:
+    case MOp::ROUNDSS:
     case MOp::CVTSI2SD:
     case MOp::CVTTSD2SI:
     case MOp::CVTSS2SD:
@@ -331,12 +389,15 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         out.intervals[v].vreg = v;
         out.intervals[v].cls =
             (v < mf.vreg_class.size()) ? mf.vreg_class[v] : RegClass::GP;
-        /* Phase D.7 commit 6: propagar la categoria GC (kind+1). */
+        /*  D.7 commit 6: propagar la categoria GC (kind+1). */
         out.intervals[v].gc_kind =
             (v < mf.vreg_is_gc.size()) ? mf.vreg_is_gc[v] : 0;
-        /* Phase AS inc.5: propagar el precoloreo (register-bound de un
+        /*  AS inc.5: propagar el precoloreo (register-bound de un
          * inline-asm).  -1 si el vreg no esta pineado. */
         out.intervals[v].fixed_reg = mf.fixed_of(v);
+        /* propagar el nivel intermedio register-required (el RA elige
+         * el fisico pero no lo derrama).  Solo relevante si NO esta pineado. */
+        out.intervals[v].reg_required = mf.reg_required_of(v);
     }
     if (NV == 0 || NB == 0) return out;
 
@@ -359,7 +420,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
     /* Helper: invoca @p fn(vreg_id, role) por cada operando VREG de la
      * instr, segun los roles del opcode. */
     auto each_vreg = [&mf](const MInstr &in, auto &&fn) {
-        /* Phase AS inc.5: INLINE_ASM_RAW no usa los slots dst/src1/src2 para
+        /*  AS inc.5: INLINE_ASM_RAW no usa los slots dst/src1/src2 para
          * vregs (src1 es el IMM32 del indice del blob).  Sus inputs/outputs
          * register-bound viven en el AsmBlob: in_vregs son USE, out_vregs
          * son DEF en esta posicion (asi sus intervalos cubren el asm y el
@@ -392,14 +453,26 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             if (in.op == MOp::CALL || in.op == MOp::CALL_ABS) {
                 /* posiciones de call: relleno mas abajo (necesito gi). */
             }
+            /* USOS antes que DEFS: un uso es upward-exposed (gen) si NO lo mato
+             * una instruccion PREVIA del bloque -- NUNCA el def de la MISMA
+             * instruccion (semanticamente el op lee sus srcs y LUEGO escribe el
+             * dst).  each_vreg entrega el dst (DEF) antes que los src (USE), asi
+             * que un solo pase pondria kill[v] antes de chequear el gen del uso
+             * -> para `op v, v, ..` (dst==src1, tipico TRAS ssa_coalesce que
+             * coalescio el phi loop-carried con su `v+1`) el gen del uso se
+             * suprimiria y el vreg perderia su liveness backward (rango
+             * fragmentado -> otro valor reusa su reg -> corrupcion).  DOS pases:
+             * primero todos los USOS (contra el kill de instrs previas), luego
+             * todos los DEFS. */
             each_vreg(in, [&](uint32_t v, OperandRole role) {
-                const bool is_use =
-                    (role == OperandRole::USE || role == OperandRole::USEDEF);
-                const bool is_def =
-                    (role == OperandRole::DEF || role == OperandRole::USEDEF);
-                /* gen = uso ANTES de def en el bloque (upward-exposed). */
-                if (is_use && !kill[b].test(v)) gen[b].set(v);
-                if (is_def) kill[b].set(v);
+                if ((role == OperandRole::USE ||
+                     role == OperandRole::USEDEF) &&
+                    !kill[b].test(v))
+                    gen[b].set(v);
+            });
+            each_vreg(in, [&](uint32_t v, OperandRole role) {
+                if (role == OperandRole::DEF || role == OperandRole::USEDEF)
+                    kill[b].set(v);
             });
         }
     }
@@ -416,13 +489,16 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 in.op == MOp::CALL_SYM /* AOT: clobbea caller-saved */
                 || in.op == MOp::DIVMOD_V || in.op == MOp::LOAD_VM ||
                 in.op == MOp::STORE_VM
-                /* Phase AS inc.5: el inline-asm clobbea caller-saved (en v1
+                /* Atomicas: el rewrite usa RAX + scratch fijo -> call-position
+                 * para que los vregs vivos vayan a callee-saved. */
+                || in.op == MOp::ATOMICCAS_V || in.op == MOp::ATOMICADD_V
+                /*  AS inc.5: el inline-asm clobbea caller-saved (en v1
                  * conservador: cualquiera) -> los vregs vivos a traves van a
                  * callee-saved/spill.  Los binding precoloreados son EXENTOS:
                  * el linear_scan les asigna su fixed_reg incondicionalmente. */
                 || in.op == MOp::INLINE_ASM_RAW)
                 out.call_positions.push_back(2u * gi);
-            /* Phase AS inc.5e: registrar los clobbers EXPLICITOS del asm
+            /*  AS inc.5e: registrar los clobbers EXPLICITOS del asm
              * (callee-saved que el call-position no cubre) por posicion. */
             if (in.op == MOp::INLINE_ASM_RAW) {
                 const uint32_t idx = static_cast<uint32_t>(in.src1.value);

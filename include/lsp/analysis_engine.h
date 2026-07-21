@@ -43,6 +43,7 @@
 
 #include "analyze/bigo.h"
 #include "vx/compiler.h"
+#include "vx/semantic_index.h"
 
 namespace lsp {
 
@@ -65,6 +66,9 @@ struct DocAnalysis {
     std::unordered_set<std::string> struct_names;
     /// Nombres de enums declarados top-level (clasificados como @c enum).
     std::unordered_set<std::string> enum_names;
+    /// Nombres de conceptos declarados top-level (clasificados como
+    /// @c interface, igual que los conceptos integrados: bound o predicado).
+    std::unordered_set<std::string> concept_names;
     /// Nombres de alias de tipo (typedef/using) declarados (clasificados
     /// como @c type).
     std::unordered_set<std::string> type_names;
@@ -84,6 +88,19 @@ struct DocAnalysis {
     /// Lo consume el hover para mostrar la complejidad Big-O de una funcion.
     /// Vacio si el fuente no produjo IR (errores de compilacion).
     analyze::ModuleCost cost;
+
+    /// Indice semantico por-declaracion (NS.4): nombres CUALIFICADOS por
+    /// namespace + hash + deps.  Se construye del AST RAW (pre-flatten) para
+    /// que el LSP pueda ofrecer completado de miembro de namespace
+    /// (`ns.simbolo`), resolver acceso cualificado, etc.  Vacio si el parse
+    /// fallo.
+    vx::SemanticIndex sem_index;
+
+    /// Indices semanticos de los modulos IMPORTADOS por este documento (cada
+    /// uno con su fuente y uri), para completado / navegacion CROSS-MODULE:
+    /// `import "lib"; lib.<TAB>` ofrece los simbolos publicos de @c lib aunque
+    /// vivan en otro fichero.  Vacio si el documento no importa nada.
+    std::vector<vx::ImportedModuleSemIndex> imported_sem_indexes;
 };
 
 /**

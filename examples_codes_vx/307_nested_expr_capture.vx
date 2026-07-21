@@ -1,0 +1,29 @@
+// examples_codes_vx/307_nested_expr_capture.vx
+//
+// Forwarding de `expr`-capture ANIDADO: una `comptime fn` con un parametro `expr`
+// (captura el texto crudo del argumento) puede pasar ese parametro a OTRA fn
+// expr-capture, y el texto capturado se forwardea correctamente -- no se
+// re-captura el identificador.
+//
+// Antes: `outer(a + b)` -> `src(code)` capturaba el literal "code" (el nombre del
+// parametro) en vez del texto que `code` contiene.  Ahora se forwardea "a + b".
+//
+// Resultado esperado: R0 == 42.
+
+comptime string src(expr code) { return code; }
+
+// forwardea su param expr a otra fn expr-capture (bare-return, sin concat):
+comptime string outer(expr code) { return src(code); }
+
+// tambien via concat:
+comptime string wrapped(expr code) { return "[" + src(code) + "]"; }
+
+i32 main() {
+    string s1 = outer(hola + mundo);        // "hola + mundo"
+    string s2 = wrapped(x * 2);              // "[x * 2]"
+
+    i32 r = 0;
+    if (str_equals(s1, "hola + mundo")) { r = r + 21; }
+    if (str_equals(s2, "[x * 2]"))      { r = r + 21; }
+    return r;   // 42
+}

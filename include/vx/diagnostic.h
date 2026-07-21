@@ -43,6 +43,8 @@
 #include <utility>
 #include <vector>
 
+#include "vx/diag/diag_catalog.h" // catalogo multi-idioma (formateo por codigo)
+
 namespace vx {
 
 /**
@@ -92,8 +94,14 @@ struct SourceLoc {
 struct Diagnostic {
     DiagLevel level = DiagLevel::ERR; ///< Severidad.
     SourceLoc loc;                    ///< Posicion en el fuente.
-    std::string message;              ///< Texto descriptivo del problema.
-    std::string code;                 ///< Codigo opcional (p.ej. "VX0042").
+    std::string message;              ///< Texto crudo (ruta LEGADA sin catalogo).
+    std::string code;                 ///< Codigo estable (p.ej. "VXA001").
+    /// ARGS (datos) para los placeholders {0},{1},... del mensaje del catalogo.
+    /// El texto se formatea al IMPRIMIR, en el idioma activo -> el mismo
+    /// diagnostico se reformatea en cualquier idioma o se vuelca a JSON/SARIF.
+    /// Solo se usa cuando @c code esta en el catalogo; si no, se imprime
+    /// @c message crudo (compatibilidad con los diagnosticos aun no migrados).
+    std::vector<std::string> args;
 };
 
 /**
@@ -117,10 +125,24 @@ class Diagnostics {
      * @param d Diagnostico a añadir.
      */
     void emit(Diagnostic d) {
+        // Supresion: durante el type-check "solo-anotacion" del cuerpo de un
+        // @Macro, queremos que check_expr rellene los result_type SIN emitir
+        // diagnosticos (los patrones comptime -- macro-a-macro, comptime
+        // globals, introspect -- no son errores reales; se manejan en el
+        // lowering / AST-eval).  Con suppress_ activo emit() es no-op.
+        if (suppress_) return;
         // Actualizar el contador de errores antes de mover el diagnostico.
         if (d.level == DiagLevel::ERR) ++error_count_;
         // Mover al vector evita una copia de message/code/file.
         entries_.push_back(std::move(d));
+    }
+
+    /// Activa/desactiva la supresion de diagnosticos.  Devuelve el estado
+    /// anterior (para restaurar con RAII/guard).
+    bool set_suppressed(bool on) {
+        bool prev = suppress_;
+        suppress_ = on;
+        return prev;
     }
 
     /**
@@ -148,6 +170,26 @@ class Diagnostics {
         d.level = DiagLevel::WARN;
         d.loc = std::move(loc);
         d.message = std::move(message);
+        emit(std::move(d));
+    }
+
+    /**
+     * @brief Emite un diagnostico CATALOGADO: solo el codigo estable + los args
+     *        (datos).  El texto se resuelve del catalogo, en el idioma activo, al
+     *        imprimir.  Es la ruta preferida para todo diagnostico nuevo (deja el
+     *        texto fuera del compilador -> multi-idioma + salida maquina).
+     * @param loc   Posicion en el fuente.
+     * @param level Severidad.
+     * @param code  Codigo del catalogo (p.ej. "VXA001").
+     * @param args  Valores para los placeholders {0},{1},...
+     */
+    void diag(SourceLoc loc, DiagLevel level, std::string code,
+              std::vector<std::string> args = {}) {
+        Diagnostic d;
+        d.level = level;
+        d.loc = std::move(loc);
+        d.code = std::move(code);
+        d.args = std::move(args);
         emit(std::move(d));
     }
 
@@ -205,6 +247,7 @@ class Diagnostics {
   private:
     std::vector<Diagnostic> entries_; ///< Almacenamiento contiguo.
     size_t error_count_ = 0;          ///< Cache O(1) para has_errors().
+    bool suppress_ = false;           ///< No-op emit() mientras este activo.
 };
 
 /**
@@ -225,7 +268,12 @@ inline void print_diagnostic(std::ostream &os, const Diagnostic &d) {
     case DiagLevel::WARN: os << "warning: "; break;
     case DiagLevel::NOTE: os << "note: "; break;
     }
-    os << d.message;
+    // Mensaje: del CATALOGO (idioma activo) si el codigo esta catalogado; si no,
+    // el @c message crudo (diagnosticos aun no migrados).
+    if (!d.code.empty() && diag::has_code(d.code))
+        os << diag::format(d.code, d.args);
+    else
+        os << d.message;
     // Si hay codigo de error estable, incluirlo entre corchetes al final.
     if (!d.code.empty()) os << " [" << d.code << "]";
     os << "\n";

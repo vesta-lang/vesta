@@ -12,7 +12,7 @@
 
 /**
  * @file keystone_asm_backend.h
- * @brief Phase AS inc.4b: registro del backend de ensamblado Keystone.
+ * @brief  AS inc.4b: registro del backend de ensamblado Keystone.
  *
  * Declara @c register_keystone_asm_backend, llamado UNA vez por el ejecutable
  * (target @c vm, que enlaza Keystone) para instalar la impl de

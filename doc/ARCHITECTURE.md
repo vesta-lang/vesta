@@ -373,7 +373,7 @@ Detalles: [doc/CLI_DIST.md](./CLI_DIST.md).
 
 ## 9. JIT C1 baseline
 
-**Phase D.3 implementado** (cobertura ~52% de metodos reales en programas Vesta).
+** D.3 implementado** (cobertura ~52% de metodos reales en programas Vesta).
 
 ### Cuando se dispara
 
@@ -589,7 +589,7 @@ VM/
 │   ├── parser/            # AST nodes
 │   ├── runtime/           # ProcessVM, scheduler, exec, decode_table
 │   ├── util/              # ThreadPool, sqlite_singleton
-│   ├── vesta_rt/          # public.h API (Phase C)
+│   ├── vesta_rt/          # public.h API ( C)
 │   └── vx/               # frontend Vesta (lexer, parser, type checker, lowering)
 │
 ├── src/                   # implementaciones (mirror de include/)

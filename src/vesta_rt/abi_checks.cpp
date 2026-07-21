@@ -38,7 +38,7 @@
 
 #include <cstddef>
 
-/* Phase D.jit-mem-model INLINE-CACHE: exponer offsets de vm_mem y de
+/*  D.jit-mem-model INLINE-CACHE: exponer offsets de vm_mem y de
  * cached_page_vaddr/host dentro de VirtualMemory.  Resueltos en runtime
  * (los layouts dependen del compilador y miembros non-POD anteriores
  * impiden #define hardcoded).  El JIT los lee al inicializar el
@@ -58,7 +58,7 @@ extern const int32_t kVmMemCachedPageVaddrOffset =
 extern const int32_t kVmMemCachedPageHostOffset =
     static_cast<int32_t>(offsetof(vm::VirtualMemory, cached_page_host));
 
-/* Phase D.7 perf inline-alloc: offset de @c raw_alloc en @c ProcessVM. */
+/*  D.7 perf inline-alloc: offset de @c raw_alloc en @c ProcessVM. */
 extern const int32_t kProcRawAllocOffset =
     static_cast<int32_t>(offsetof(runtime::ProcessVM, raw_alloc));
 } // namespace vesta_rt
@@ -175,7 +175,7 @@ static_assert(offsetof(runtime::ProcessVM, registers) +
                   VESTA_PROC_REGISTERS_OFFSET,
               "ABI drift: regs[0] no esta en VESTA_PROC_REGISTERS_OFFSET");
 
-/* Validacion stack_pointer + base_pointer offsets (Phase D.jit-mem-model
+/* Validacion stack_pointer + base_pointer offsets ( D.jit-mem-model
  * VM-STACK).  El JIT los lee/escribe via disp32 inline. */
 static_assert(
     offsetof(runtime::ProcessVM, registers) +
@@ -188,7 +188,7 @@ static_assert(
         VESTA_PROC_BASE_POINTER_OFFSET,
     "ABI drift: base_pointer no esta en VESTA_PROC_BASE_POINTER_OFFSET");
 
-/* Validacion del puntero cacheado a la HandleTable (Phase D.7).  El JIT
+/* Validacion del puntero cacheado a la HandleTable ( D.7).  El JIT
  * inline-a @c deref con @c mov base, [rbx +
  * VESTA_PROC_JIT_HANDLE_TABLE_OFFSET]. Si el layout de ProcessVM cambia, leer
  * el nuevo offset con @c offsetof y actualizar la constante en @c abi.h. */
@@ -197,7 +197,7 @@ static_assert(offsetof(runtime::ProcessVM, jit_handle_table) ==
               "ABI drift: jit_handle_table no esta en "
               "VESTA_PROC_JIT_HANDLE_TABLE_OFFSET");
 
-/* OSR (Phase D.8): el JIT escribe/lee el buffer del state-transfer con
+/* OSR ( D.8): el JIT escribe/lee el buffer del state-transfer con
  * @c mov rax, [rbx + VESTA_PROC_OSR_BUFFER_OFFSET].  Si el layout de
  * ProcessVM cambia, leer el nuevo offset con @c offsetof y actualizar la
  * constante en @c abi.h. */

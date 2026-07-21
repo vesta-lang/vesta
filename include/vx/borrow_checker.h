@@ -76,7 +76,7 @@ enum class BorrowKind : uint8_t {
     /// El owner ha sido reborrowed (otro borrow_mut deriva de el).
     /// El owner NO puede ser usado mientras el reborrow este vivo;
     /// cuando el reborrow dropea, vuelve a Mutable.  Estado intermedio
-    /// usado para soportar "two-phase borrows" estilo Rust.
+    /// usado para soportar "two- borrows" estilo Rust.
     SuspendedByReborrow,
 };
 

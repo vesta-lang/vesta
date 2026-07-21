@@ -10,7 +10,7 @@
 #include <string.h>
 #include <stdint.h>
 
-/* FNV-1a hash 64-bit -- equivalente al que usa el runtime de Vex. */
+/* FNV-1a hash 64-bit -- equivalente al que usa el runtime de . */
 static uint64_t fnv1a(const char *s, size_t n) {
     uint64_t h = 1469598103934665603ULL;
     for (size_t i = 0; i < n; ++i) {

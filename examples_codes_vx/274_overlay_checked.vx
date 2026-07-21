@@ -1,0 +1,68 @@
+// -----------------------------------------------------------------------------
+// Overlays COMPROBADOS: el usuario compone su propia validacion, en el lenguaje
+// -----------------------------------------------------------------------------
+// Un overlay es una VISTA tipada sobre memoria ajena; leer un campo cuyo offset
+// (dinamico + stride) cae fuera del buffer devolveria basura silenciosa.  El
+// lenguaje NO impone ninguna maquinaria (ni 0-por-defecto, ni abort, ni
+// excepcion): expone dos azucares LEGIBLES para que TU decidas donde compruebas,
+// que coste asumes y que devuelves (Optional/Result/sentinela/panic/...):
+//
+//   offsetof(v.campo)       -> u64   offset RESUELTO del campo dentro de la vista
+//                                     (resuelve @offset(expr) dinamico + arr[i]*stride)
+//   in_bounds(v.campo, len) -> bool  offsetof(v.campo) + sizeof(campo) <= len
+//
+// No son keywords ni maquinaria oculta: son azucar sobre `&`, resta y `sizeof`.
+// interp = JIT = AOT.
+
+@overlay struct Sec {
+    u32 va @0x00;
+    u32 sz @0x04;
+}
+@overlay struct Hdr {
+    u32 magic @0x00;
+    u16 count @0x04;
+    Sec secs[count] @offset(0x08) stride(8);
+}
+
+// POLITICA DEL USUARIO (una entre muchas): devolver el tamano de la seccion i,
+// o -1 si el indice o el campo se salen del buffer real de `len` bytes.  Otro
+// programador podria devolver un Optional, un Result, o hacer panic -- es su
+// eleccion, no la del lenguaje.
+i64 sec_size_checked(Hdr h, i32 i, u64 len) {
+    if ((u32)i >= (u32)h.count) { return -1; }         // indice fuera de count
+    if (!in_bounds(h.secs[i].sz, len)) { return -1; }  // campo fuera del buffer
+    return (i64) h.secs[i].sz;                           // solo aqui, ya probado
+}
+
+i32 main() {
+    u8* buf = (u8*) malloc(64);
+    *(u32*)(buf + 0) = 0xCAFE;  *(u16*)(buf + 4) = 2;
+    *(u32*)(buf + 8) = 100; *(u32*)(buf + 12) = 111;
+    *(u32*)(buf + 16) = 200; *(u32*)(buf + 20) = 222;
+
+    Hdr h = Hdr(buf);
+
+    // offset resuelto de un campo de elemento de array (dinamico + stride)
+    println("OFF_S1_SZ=${offsetof(h.secs[1].sz)}");        // 20
+
+    // buffer REAL de 64 bytes: todo cabe
+    println("SZ0_64=${sec_size_checked(h, 0, 64)}");        // 111
+    println("SZ1_64=${sec_size_checked(h, 1, 64)}");        // 222
+
+    // buffer REAL de solo 20 bytes: Sec[1].sz (off 20, +4=24) se sale -> -1
+    println("SZ1_20=${sec_size_checked(h, 1, 20)}");        // -1
+
+    // indice fuera de count -> -1 (sin tocar memoria)
+    println("SZ9_64=${sec_size_checked(h, 9, 64)}");        // -1
+
+    // suma verificable para el harness: 20 + 111 + 222 + (-1) + (-1) = 351
+    i64 acc = (i64)offsetof(h.secs[1].sz)
+            + sec_size_checked(h, 0, 64)
+            + sec_size_checked(h, 1, 64)
+            + sec_size_checked(h, 1, 20)
+            + sec_size_checked(h, 9, 64);
+    println("ACC=${acc}");                                   // 351
+
+    free(buf);
+    return (i32) acc;                                        // 351 & 0xFF = 95
+}

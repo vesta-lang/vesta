@@ -1,0 +1,48 @@
+namespace app;
+
+// =============================================================================
+// Globals de otro modulo.
+//
+// Un modulo puede leer y escribir los globals `public` de sus deps.  Hay dos
+// comportamientos segun lo que el global sea, y no se eligen: se deducen.
+//
+//   - `const` con valor de compile time (entero o literal de cadena) -> el
+//     consumidor lo INLINEA en cada uso.  No hay storage ni indireccion; es
+//     exactamente lo mismo que hace el modulo que lo declara.
+//   - global MUTABLE -> tiene STORAGE, y es UNO solo en todo el programa: el
+//     modulo que lo declara y los que lo usan leen y escriben la misma
+//     variable.  Lo inicializa el `__module_init` de su modulo antes de `main`.
+//
+// Las dos formas de nombrarlo valen igual: cualificado (`config.usos`, por el
+// `import`) o desnudo (`LIMITE`, por el `only`).
+//
+// Compilar y ejecutar:
+//   vm --vesta examples_codes_vx/313_globals_cross_module/main.vx -o g
+//   vm --run g.velb --stats
+//
+// Resultado esperado: R00 == 42
+// =============================================================================
+
+import "config";
+import "config" only LIMITE;
+
+i32 main() {
+    // 1. Const string de otro modulo: se materializa desde su literal.
+    print(config.ETIQUETA);
+    print("\n");
+
+    // 2. Const entero, nombrado sin cualificar gracias al `only`: se inlinea.
+    i64 total = LIMITE;                 // 30
+
+    // 3. Global mutable: el valor lo puso el `__module_init` de `config`.
+    total = total + config.usos;        // 30 + 2 = 32
+
+    // 4. El dep escribe SU global...
+    total = total + config.registrar_uso(); // usos = 3 -> 32 + 3 = 35
+
+    // 5. ...y aqui se ve ese mismo storage, no una copia.
+    config.usos = config.usos + 4;      // 3 + 4 = 7
+    total = total + config.usos;        // 35 + 7 = 42
+
+    return (i32) total;
+}

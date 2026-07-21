@@ -652,9 +652,9 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         {"gcfinall",
          {{0x00, 0x8E, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
-        /* --- Phase Z: memoria compartida cross-process (0xA6-0xAD) ---
+        /* ---  Z: memoria compartida cross-process (0xA6-0xAD) ---
          *  Stubs registrados para que el assembler acepte estos mnemonicos
-         *  emitidos por el lowering Phase Z.  El runtime ejecuta versiones
+         *  emitidos por el lowering  Z.  El runtime ejecuta versiones
          *  simplificadas (no thread-safe cross-process aun) hasta que el
          *  mark/sweep del SharedHeap aterrice.
          */
@@ -676,6 +676,15 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         {"atomiccas",
          {{0x00, 0xAB, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_four_reg}}},
+        {"csel", // dst=cond?a:b (super-instruccion del IrOp::SELECT, interp)
+         {{0x00, 0x8F, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_four_reg}}},
+        {"mld", // load universal: dst = [base +/- index*scale +/- disp]
+         {{0x00, 0x90, InstrSizeMode::FIXED_8, AddressingMode::REG,
+           emit_instr_mem_full}}},
+        {"mst", // store universal: [base +/- index*scale +/- disp] = src
+         {{0x00, 0x91, InstrSizeMode::FIXED_8, AddressingMode::REG,
+           emit_instr_mem_full}}},
         {"atomicadd",
          {{0x00, 0xAC, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_three_reg}}},
@@ -1634,6 +1643,30 @@ class Assembler {
      * @param offset Offset acumulado (se actualiza en cada llamada recursiva).
      */
     void first_pass(const vm::ASTNode *node, uint64_t &offset);
+
+    /**
+     * @brief Cierra el tramo de flujo de la seccion activa (primera pasada).
+     *
+     * Fija @c size_real de @c current_section como el numero de bytes emitidos
+     * mientras esa seccion estuvo activa.  Debe llamarse ANTES de alinear el
+     * flujo para la siguiente seccion, de modo que el relleno de alineacion no
+     * se contabilice como contenido de la seccion que termina.
+     *
+     * @param offset Offset actual dentro del flujo de bytecode del modulo.
+     */
+    void close_section_layout(uint64_t offset);
+
+    /**
+     * @brief Abre el tramo de flujo de la seccion activa (primera pasada).
+     *
+     * Alinea @p offset a la alineacion de @c current_section y registra ahi su
+     * @c stream_offset.  El relleno introducido debe reproducirlo despues
+     * @c emit_pass como bytes reales, ya que la imagen .velb es plana y el
+     * offset del flujo es la direccion virtual de la seccion.
+     *
+     * @param offset Offset dentro del flujo; se avanza hasta quedar alineado.
+     */
+    void begin_section_layout(uint64_t &offset);
 
     /**
      * @brief Aplica una anotacion del AST al contexto del ensamblador.

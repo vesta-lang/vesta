@@ -31,8 +31,9 @@ i32 main() {
     buf.c = 3;
     buf.d = 0;
     // p apunta a buf.a (offset 0).  El subscript p[3] equivale a buf.d.
-    // El struct local vive en stack VM, asi que &buf.a es VirtualPtr.
-    VirtualPtr<i32> p = &buf.a;
+    // Al tomar la direccion de un campo del struct local, este se reserva en
+    // memoria host -> `&buf.a` es `i32*`.
+    i32* p = &buf.a;
     p[3] = 6;
     return p[0] + p[1] + p[2] + *(p + 3);
 }

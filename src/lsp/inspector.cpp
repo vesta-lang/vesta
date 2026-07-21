@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <exception>
 #include <map>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -1180,7 +1181,7 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
     InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
 
-    if (phase == "pre") {
+    if ( phase == "pre") {
         // El IR pre-opt NO esta en el CompileResult cacheado por defecto:
         // exige recompilar con emit_ir_preopt.  Cachear por (uri, hash).
         const uint64_t h = fnv1a_hash(text);
@@ -1206,7 +1207,7 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
         return {{"text", std::move(rendered)}};
     }
 
-    // phase "post" (o cualquier otra): con target activo recompilar fresco
+    //  "post" (o cualquier otra): con target activo recompilar fresco
     // (el cache del motor es host); si no, reutilizar el cache del motor.
     ir::IrModule mod;
     bool got = false;
@@ -1443,10 +1444,285 @@ nlohmann::json Inspector::complexity(const std::string &uri) {
     return out;
 }
 
+namespace {
+
+/// @brief Una instruccion desensamblada con su rol en el flujo de control.
+struct AsmInsn {
+    uint64_t off = 0;     ///< offset relativo al inicio del codigo.
+    std::string text;     ///< "mnemonico operandos".
+    bool is_cond_jmp = false;  ///< salto condicional (je, jne, jl, ...).
+    bool is_uncond_jmp = false;///< salto incondicional (jmp).
+    bool is_ret = false;       ///< retorno (ret / iret).
+    bool has_target = false;   ///< el salto tiene destino inmediato resuelto.
+    uint64_t target = 0;       ///< offset destino del salto (si has_target).
+};
+
+/// @brief Escapa un texto para un nodo mermaid entre comillas (["..."]).
+std::string mermaid_escape(const std::string &s) {
+    std::string o;
+    o.reserve(s.size());
+    for (char c : s) {
+        if (c == '"')
+            o += '\'';
+        else if (c == '<')
+            o += "&lt;";
+        else if (c == '>')
+            o += "&gt;";
+        else
+            o += c;
+    }
+    return o;
+}
+
+/// @brief Escapa un texto para una etiqueta graphviz entre comillas.
+std::string graphviz_escape(const std::string &s) {
+    std::string o;
+    o.reserve(s.size());
+    for (char c : s) {
+        if (c == '"' || c == '\\')
+            o += '\\';
+        o += c;
+    }
+    return o;
+}
+
+/**
+ * @brief Desensambla los bytes nativos anotando el rol de control de cada
+ *        instruccion (salto cond/incond, ret, destino inmediato).
+ *
+ * Usa Capstone con detalle activo: para los saltos directos el destino es el
+ * operando inmediato (absoluto con base 0 = offset relativo).  @return la
+ * lista de instrucciones, vacia si Capstone no pudo abrir/decodificar.
+ */
+std::vector<AsmInsn> disasm_for_cfg(const uint8_t *code, size_t code_size,
+                                    bool mode32) {
+    std::vector<AsmInsn> out;
+    if (!code || code_size == 0)
+        return out;
+    csh handle;
+    if (cs_open(CS_ARCH_X86, mode32 ? CS_MODE_32 : CS_MODE_64, &handle) !=
+        CS_ERR_OK)
+        return out;
+    cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
+    cs_insn *insn = nullptr;
+    const size_t count = cs_disasm(handle, code, code_size, 0, 0, &insn);
+    for (size_t i = 0; i < count; ++i) {
+        AsmInsn a;
+        a.off = insn[i].address;
+        a.text = insn[i].mnemonic;
+        if (insn[i].op_str[0] != '\0') {
+            a.text += ' ';
+            a.text += insn[i].op_str;
+        }
+        const cs_detail *d = insn[i].detail;
+        bool is_jump = false, is_ret = false;
+        if (d) {
+            for (uint8_t g = 0; g < d->groups_count; ++g) {
+                if (d->groups[g] == CS_GRP_JUMP)
+                    is_jump = true;
+                else if (d->groups[g] == CS_GRP_RET ||
+                         d->groups[g] == CS_GRP_IRET)
+                    is_ret = true;
+            }
+        }
+        a.is_ret = is_ret;
+        if (is_jump) {
+            // 'jmp' es incondicional; el resto (je/jne/jl/...) condicionales.
+            const std::string m = insn[i].mnemonic;
+            a.is_uncond_jmp = (m == "jmp");
+            a.is_cond_jmp = !a.is_uncond_jmp;
+            // Destino inmediato directo (base 0 -> offset relativo).
+            if (d && d->x86.op_count >= 1 &&
+                d->x86.operands[0].type == X86_OP_IMM) {
+                a.has_target = true;
+                a.target = static_cast<uint64_t>(d->x86.operands[0].imm);
+            }
+        }
+        out.push_back(std::move(a));
+    }
+    if (count > 0)
+        cs_free(insn, count);
+    cs_close(&handle);
+    return out;
+}
+
+/**
+ * @brief Construye un CFG del codigo maquina (bloques basicos) en mermaid o
+ *        graphviz.
+ *
+ * Los lideres de bloque son: el offset 0, las etiquetas emitidas por el
+ * backend (@p labels), los destinos de salto y la instruccion siguiente a
+ * cada salto/ret.  Las aristas salen del terminador de cada bloque: salto
+ * incondicional -> destino; condicional -> destino (T) + caida (F); ret ->
+ * sin aristas; resto -> caida al siguiente bloque.
+ */
+std::string native_cfg_diagram(
+    const std::vector<AsmInsn> &ins,
+    const std::vector<std::pair<uint32_t, std::string>> &labels,
+    const std::string &fn_name, const std::string &format) {
+    if (ins.empty())
+        return std::string();
+
+    // Mapa offset -> etiqueta del backend (nombre de bloque IR).
+    std::map<uint64_t, std::string> lbl;
+    for (const auto &p : labels)
+        lbl[p.first] = p.second;
+
+    // Fin del codigo = offset de la ultima instruccion + su hueco al siguiente.
+    // Para delimitar el ultimo bloque usamos un centinela > al ultimo offset.
+    const uint64_t code_end = ins.back().off + 1;
+
+    // 1) Recolectar lideres.
+    std::set<uint64_t> leaders;
+    leaders.insert(ins.front().off);
+    for (const auto &p : labels)
+        leaders.insert(p.first);
+    for (size_t i = 0; i < ins.size(); ++i) {
+        const AsmInsn &a = ins[i];
+        if ((a.is_cond_jmp || a.is_uncond_jmp) && a.has_target &&
+            a.target < code_end)
+            leaders.insert(a.target);
+        if (a.is_cond_jmp || a.is_uncond_jmp || a.is_ret) {
+            if (i + 1 < ins.size())
+                leaders.insert(ins[i + 1].off);
+        }
+    }
+
+    // 2) Indexar instrucciones por offset para localizar el rango de cada
+    //    bloque [leader, siguiente_leader).
+    std::vector<uint64_t> ord(leaders.begin(), leaders.end());
+    auto block_id = [&](uint64_t off) -> int {
+        // Bloque cuyo leader es el mayor <= off.
+        int id = -1;
+        for (size_t i = 0; i < ord.size(); ++i) {
+            if (ord[i] <= off)
+                id = static_cast<int>(i);
+            else
+                break;
+        }
+        return id;
+    };
+
+    // 3) Para cada bloque, sus instrucciones + su terminador.
+    struct Block {
+        uint64_t start = 0;
+        std::vector<const AsmInsn *> body;
+    };
+    std::vector<Block> blocks(ord.size());
+    for (size_t i = 0; i < ord.size(); ++i)
+        blocks[i].start = ord[i];
+    for (const AsmInsn &a : ins) {
+        int id = block_id(a.off);
+        if (id >= 0)
+            blocks[id].body.push_back(&a);
+    }
+
+    auto node_name = [&](size_t i) {
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), "B%zu", i);
+        return std::string(buf);
+    };
+    auto block_label = [&](const Block &b) {
+        auto it = lbl.find(b.start);
+        char hx[16];
+        std::snprintf(hx, sizeof(hx), "0x%llx",
+                      static_cast<unsigned long long>(b.start));
+        return it != lbl.end() ? it->second : std::string(hx);
+    };
+
+    std::ostringstream out;
+    if (format == "graphviz") {
+        out << "digraph cfg_asm {\n";
+        out << "  label=\"CFG nativo: " << graphviz_escape(fn_name) << "\";\n";
+        out << "  labelloc=t;\n";
+        out << "  node [shape=box, fontname=\"monospace\", fontsize=10];\n";
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            std::string body = block_label(blocks[i]) + ":\\l";
+            for (const AsmInsn *a : blocks[i].body)
+                body += graphviz_escape(a->text) + "\\l";
+            out << "  " << node_name(i) << " [label=\"" << body << "\"];\n";
+        }
+        // Aristas.
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            if (blocks[i].body.empty())
+                continue;
+            const AsmInsn *term = blocks[i].body.back();
+            auto edge = [&](uint64_t tgt, const char *lab) {
+                // Destino fuera del codigo de la funcion (tail-call / salto
+                // externo resuelto por reloc): no es una arista del CFG local.
+                if (tgt >= code_end)
+                    return;
+                int id = block_id(tgt);
+                if (id < 0)
+                    return;
+                out << "  " << node_name(i) << " -> " << node_name(id);
+                if (lab && lab[0])
+                    out << " [label=\"" << lab << "\"]";
+                out << ";\n";
+            };
+            if (term->is_ret) {
+                // sin aristas.
+            } else if (term->is_uncond_jmp && term->has_target) {
+                edge(term->target, "");
+            } else if (term->is_cond_jmp && term->has_target) {
+                edge(term->target, "T");
+                if (i + 1 < blocks.size())
+                    edge(blocks[i + 1].start, "F");
+            } else if (i + 1 < blocks.size()) {
+                edge(blocks[i + 1].start, "");
+            }
+        }
+        out << "}\n";
+        return out.str();
+    }
+
+    // mermaid (por defecto).
+    out << "flowchart TD\n";
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        std::string body = block_label(blocks[i]) + ":";
+        for (const AsmInsn *a : blocks[i].body)
+            body += "<br/>" + mermaid_escape(a->text);
+        out << "  " << node_name(i) << "[\"" << body << "\"]\n";
+    }
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        if (blocks[i].body.empty())
+            continue;
+        const AsmInsn *term = blocks[i].body.back();
+        auto edge = [&](uint64_t tgt, const char *lab) {
+            // Destino fuera del codigo de la funcion (tail-call / salto externo
+            // resuelto por reloc): no es una arista del CFG local.
+            if (tgt >= code_end)
+                return;
+            int id = block_id(tgt);
+            if (id < 0)
+                return;
+            out << "  " << node_name(i) << " -->";
+            if (lab && lab[0])
+                out << "|" << lab << "|";
+            out << ' ' << node_name(id) << "\n";
+        };
+        if (term->is_ret) {
+            // sin aristas.
+        } else if (term->is_uncond_jmp && term->has_target) {
+            edge(term->target, "");
+        } else if (term->is_cond_jmp && term->has_target) {
+            edge(term->target, "T");
+            if (i + 1 < blocks.size())
+                edge(blocks[i + 1].start, "F");
+        } else if (i + 1 < blocks.size()) {
+            edge(blocks[i + 1].start, "");
+        }
+    }
+    return out.str();
+}
+
+} // namespace
+
 nlohmann::json Inspector::diagram(const std::string &uri,
                                   const std::string &kind,
                                   const std::string &format, bool cost,
-                                  const InspectTarget &target) {
+                                  const InspectTarget &target,
+                                  const std::string &function) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};
     // El @c target->os selecciona las ramas @Target en las fases IR/vel del
@@ -1456,13 +1732,109 @@ nlohmann::json Inspector::diagram(const std::string &uri,
 
     // Validar kind y format antes de recompilar.
     const bool kind_ok = (kind == "ast" || kind == "ir-pre" ||
-                          kind == "ir-post" || kind == "vel");
+                          kind == "ir-post" || kind == "vel" || kind == "asm" ||
+                          kind == "types");
     if (!kind_ok)
-        return {{"error", "kind invalido (use ast|ir-pre|ir-post|vel)"}};
+        return {{"error",
+                 "kind invalido (use ast|ir-pre|ir-post|vel|asm|types)"}};
     const bool fmt_ok =
         (format == "mermaid" || format == "graphviz" || format == "html");
     if (!fmt_ok)
         return {{"error", "format invalido (use mermaid|graphviz|html)"}};
+
+    // ---- CFG del codigo maquina nativo (kind == "asm") ---------------------
+    // No pasa por los flags dump_* del frontend: compila la funcion elegida al
+    // backend vreg (el de produccion) y construye el grafo de bloques basicos
+    // desde el desensamblado de Capstone.
+    if (kind == "asm") {
+        const std::string akey = uri + "|" + std::to_string(fnv1a_hash(text)) +
+                                 "|diagasm:" + format + ":" + function +
+                                 target.cache_key();
+        auto ait = view_cache_.find(akey);
+        if (ait != view_cache_.end())
+            return {{"text", ait->second}};
+
+        ir::IrModule mod;
+        bool got_ir = false;
+        if (target.active()) {
+            vx::CompileOptions co;
+            co.module_name = "main";
+            vx::CompileResult cr = vx::compile_vx_source(text, uri, co);
+            got_ir = parse_post_opt_module(cr, mod);
+        } else {
+            const DocAnalysis &an = engine_.analyze_document(uri, text);
+            got_ir = parse_post_opt_module(an.result, mod);
+        }
+        if (!got_ir)
+            return {{"error",
+                     "el modulo no produjo IR (revisa los diagnosticos)"}};
+
+        const ir::IrFunction *fn = pick_function(mod, function);
+        if (!fn && !function.empty()) {
+            // La funcion puede ser comptime (elidida del IR normal): recompilar
+            // incluyendola.
+            vx::CompileOptions co;
+            co.module_name = "main";
+            co.emit_comptime_fns = true;
+            vx::CompileResult cr2 = vx::compile_vx_source(text, uri, co);
+            ir::IrModule m2;
+            if (parse_post_opt_module(cr2, m2)) {
+                mod = std::move(m2);
+                fn = pick_function(mod, function);
+            }
+        }
+        if (!fn)
+            return {{"error", function.empty()
+                                  ? "el modulo no tiene funciones compilables"
+                                  : "'" + function + "' no esta en el IR"}};
+
+        std::vector<jit::NativeReloc> relocs;
+        std::vector<std::pair<uint32_t, std::string>> asm_labels;
+        std::vector<uint8_t> bytes;
+        try {
+            bytes = jit::vreg_compile_native(
+                *fn, /*resolve_call=*/{}, /*ent=*/{}, /*resolve_native=*/{},
+                /*resolve_symbol=*/{}, &relocs, /*pic=*/true,
+                /*target_sysv=*/target_is_sysv(target),
+                /*mode32=*/false, jit::FloatIsa::SSE2,
+                /*emit_line_map=*/false, nullptr, &asm_labels);
+        } catch (...) {
+            return {{"error",
+                     "el codegen vreg lanzo una excepcion para '" + fn->name +
+                         "'"}};
+        }
+        if (bytes.empty())
+            return {{"unsupported", true},
+                    {"reason", "la funcion '" + fn->name +
+                                   "' usa operaciones IR aun no soportadas por "
+                                   "el backend vreg"}};
+
+        std::vector<AsmInsn> ins =
+            disasm_for_cfg(bytes.data(), bytes.size(), /*mode32=*/false);
+        if (ins.empty())
+            return {{"error", "Capstone no pudo desensamblar el codigo"}};
+        std::string body =
+            native_cfg_diagram(ins, asm_labels, fn->name,
+                               format == "graphviz" ? "graphviz" : "mermaid");
+        if (body.empty())
+            return {{"error", "el CFG nativo salio vacio"}};
+        // Para HTML envolvemos el mermaid en una pagina minima con el runtime.
+        std::string out_text;
+        if (format == "html") {
+            out_text =
+                "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+                "<script "
+                "src=\"https://cdn.jsdelivr.net/npm/mermaid/dist/"
+                "mermaid.min.js\"></script>"
+                "<script>mermaid.initialize({startOnLoad:true});</script>"
+                "</head><body><pre class=\"mermaid\">\n" +
+                body + "\n</pre></body></html>\n";
+        } else {
+            out_text = std::move(body);
+        }
+        view_cache_[akey] = out_text;
+        return {{"text", out_text}};
+    }
 
     // Cache por (uri, hash, kind, format, cost): la generacion de diagramas
     // recompila con flags concretos -> no repetir peticiones identicas.
@@ -1477,21 +1849,26 @@ nlohmann::json Inspector::diagram(const std::string &uri,
     // Activar SOLO el flag de la vista pedida (uno por kind x format).
     vx::CompileOptions opts;
     opts.module_name = "main";
-    opts.annotate_cost = cost;
+    // El coste Big-O se anota siempre en los diagramas IR (el parametro `cost`
+    // se conserva en la clave de cache por compatibilidad de la peticion LSP).
+    (void)cost;
     if (format == "mermaid") {
         if (kind == "ast") opts.dump_mermaid_ast = true;
         else if (kind == "ir-pre") opts.dump_mermaid_ir_pre = true;
         else if (kind == "ir-post") opts.dump_mermaid_ir_post = true;
+        else if (kind == "types") opts.dump_mermaid_types = true;
         else opts.dump_mermaid_vel = true;
     } else if (format == "graphviz") {
         if (kind == "ast") opts.dump_graphviz_ast = true;
         else if (kind == "ir-pre") opts.dump_graphviz_ir_pre = true;
         else if (kind == "ir-post") opts.dump_graphviz_ir_post = true;
+        else if (kind == "types") opts.dump_graphviz_types = true;
         else opts.dump_graphviz_vel = true;
     } else { // html
         if (kind == "ast") opts.dump_html_ast = true;
         else if (kind == "ir-pre") opts.dump_html_ir_pre = true;
         else if (kind == "ir-post") opts.dump_html_ir_post = true;
+        else if (kind == "types") opts.dump_html_types = true;
         else opts.dump_html_vel = true;
     }
 
@@ -1502,16 +1879,19 @@ nlohmann::json Inspector::diagram(const std::string &uri,
         if (kind == "ast") out_text = res.mermaid_ast;
         else if (kind == "ir-pre") out_text = res.mermaid_ir_pre;
         else if (kind == "ir-post") out_text = res.mermaid_ir_post;
+        else if (kind == "types") out_text = res.mermaid_types;
         else out_text = res.mermaid_vel;
     } else if (format == "graphviz") {
         if (kind == "ast") out_text = res.graphviz_ast;
         else if (kind == "ir-pre") out_text = res.graphviz_ir_pre;
         else if (kind == "ir-post") out_text = res.graphviz_ir_post;
+        else if (kind == "types") out_text = res.graphviz_types;
         else out_text = res.graphviz_vel;
     } else {
         if (kind == "ast") out_text = res.html_ast;
         else if (kind == "ir-pre") out_text = res.html_ir_pre;
         else if (kind == "ir-post") out_text = res.html_ir_post;
+        else if (kind == "types") out_text = res.html_types;
         else out_text = res.html_vel;
     }
 
@@ -1840,6 +2220,136 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     out["ir_listing"] = ir_listing(*fn);
     out["asm_labels"] = asm_labels_json(asm_labels);
     out["args"] = std::move(args);
+    return out;
+}
+
+namespace {
+
+/// @brief Cuenta errores y warnings de un CompileResult (para el reporte de
+///        modos).  @return {errores, warnings}.
+std::pair<size_t, size_t> count_diags(const vx::CompileResult &res) {
+    size_t err = 0, warn = 0;
+    for (const auto &d : res.diagnostics.all()) {
+        if (d.level == vx::DiagLevel::ERR)
+            ++err;
+        else if (d.level == vx::DiagLevel::WARN)
+            ++warn;
+    }
+    return {err, warn};
+}
+
+} // namespace
+
+nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
+                                const std::string &tier) {
+    if (!docs_.has(uri))
+        return {{"error", "documento no abierto"}};
+    const std::string &text = docs_.text(uri);
+    const bool all = mode.empty();
+    nlohmann::json arr = nlohmann::json::array();
+
+    // ---- interprete / VM (analisis siempre-activo) ----
+    if (all || mode == "interp") {
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        auto [err, warn] = count_diags(an.result);
+        nlohmann::json m;
+        m["mode"] = "interp";
+        m["ok"] = !an.result.diagnostics.has_errors();
+        m["errors"] = static_cast<uint64_t>(err);
+        m["warnings"] = static_cast<uint64_t>(warn);
+        m["note"] = "semantica de interprete/VM (runtime completo)";
+        arr.push_back(std::move(m));
+    }
+
+    // ---- JIT (mismo IR que el interprete; compilabilidad por funcion) ----
+    if (all || mode == "jit") {
+        nlohmann::json m;
+        m["mode"] = "jit";
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        ir::IrModule mod;
+        if (!parse_post_opt_module(an.result, mod)) {
+            m["ok"] = false;
+            m["note"] = "el modulo no produjo IR (revisa los diagnosticos)";
+        } else {
+            nlohmann::json compilable = nlohmann::json::array();
+            nlohmann::json fallback = nlohmann::json::array();
+            for (const auto &fn : mod.functions) {
+                std::vector<uint8_t> bytes;
+                try {
+                    bytes = jit::vreg_compile_native(
+                        fn, /*resolve_call=*/{}, /*ent=*/{},
+                        /*resolve_native=*/{}, /*resolve_symbol=*/{},
+                        /*relocs=*/nullptr, /*pic=*/true,
+                        /*target_sysv=*/false, /*mode32=*/false,
+                        jit::FloatIsa::SSE2, /*emit_line_map=*/false,
+                        /*line_map=*/nullptr, /*asm_labels=*/nullptr);
+                } catch (...) {
+                    bytes.clear();
+                }
+                if (bytes.empty())
+                    fallback.push_back(fn.name);
+                else
+                    compilable.push_back(fn.name);
+            }
+            m["ok"] = true;
+            m["compilable_functions"] = std::move(compilable);
+            m["fallback_functions"] = std::move(fallback);
+            m["note"] =
+                "JIT vreg; las funciones no compilables caen al interprete";
+        }
+        arr.push_back(std::move(m));
+    }
+
+    // ---- AOT nativo (recompila con POO nativa + compat al tier) ----
+    if (all || mode == "aot") {
+        nlohmann::json m;
+        m["mode"] = "aot";
+        const std::string t = tier.empty() ? std::string("bare") : tier;
+        m["tier"] = t;
+        // Recompilar con la semantica AOT para no reportar los constructos
+        // AOT-only como errores del modo interprete.
+        vx::CompileOptions co;
+        co.module_name = "main";
+        co.native_poo = true;
+        vx::CompileResult res = vx::compile_vx_source(text, uri, co);
+        auto [err, warn] = count_diags(res);
+        m["errors"] = static_cast<uint64_t>(err);
+        m["warnings"] = static_cast<uint64_t>(warn);
+        ir::IrModule mod;
+        if (!parse_post_opt_module(res, mod)) {
+            m["ok"] = false;
+            m["compatible"] = false;
+            m["note"] = "el modulo no produjo IR en modo AOT";
+        } else {
+            aot::AotTarget atgt;
+            atgt.tier = tier_from_str(t);
+            aot::AotCompatReport report = aot::aot_analyze_module(mod, atgt);
+            nlohmann::json issues = nlohmann::json::array();
+            for (const auto &iss : report.issues) {
+                nlohmann::json ji;
+                ji["fn_name"] = iss.fn_name;
+                ji["source_line"] = iss.source_line;
+                ji["op"] = ir::ir_op_name(iss.op);
+                ji["reason"] = iss.reason;
+                issues.push_back(std::move(ji));
+            }
+            nlohmann::json okfns = nlohmann::json::array();
+            for (const auto &name : report.ok_functions)
+                okfns.push_back(name);
+            m["ok"] = !res.diagnostics.has_errors();
+            m["compatible"] = report.compatible;
+            m["issues"] = std::move(issues);
+            m["ok_functions"] = std::move(okfns);
+            m["note"] = "compilacion nativa standalone (POO nativa, tier " + t +
+                        ")";
+        }
+        arr.push_back(std::move(m));
+    }
+
+    if (arr.empty())
+        return {{"error", "modo invalido (use interp|jit|aot o vacio)"}};
+    nlohmann::json out;
+    out["modes"] = std::move(arr);
     return out;
 }
 

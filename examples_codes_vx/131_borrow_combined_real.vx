@@ -51,14 +51,14 @@ i32 main() {
     unique<i64> b = unique_box(20);
     unique<i64> c = unique_box(30);
 
-    // Fase 1: aplicar pipeline a uno de los uniques (mut).
+    //   aplicar pipeline a uno de los uniques (mut).
     {
         borrow_mut<i64> bm = lend_mut(a);
         pipeline(bm);   // 10 + 22 = 32
         // bm dropea (NLL)
     }
 
-    // Fase 2: lectura concurrente con shared borrows.  count_in_range
+    //   lectura concurrente con shared borrows.  count_in_range
     // recibe 3 borrows shared simultaneos (R2).
     borrow<i64> sa = lend(a);
     borrow<i64> sb = lend(b);

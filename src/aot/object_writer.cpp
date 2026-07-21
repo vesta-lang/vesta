@@ -10,7 +10,7 @@
 
 /**
  * @file aot/object_writer.cpp
- * @brief Phase AOT.4 -- fachada C++ del emisor de ejecutables (sobre el shim
+ * @brief  AOT.4 -- fachada C++ del emisor de ejecutables (sobre el shim
  * C).
  *
  * Convierte las estructuras C++ (@c WriterSection, @c LayoutConfig,
@@ -83,6 +83,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     ccfg.elf_stack_size = cfg_.elf_stack_size;
     ccfg.tls_callback_section = cfg_.tls_callback_section;
     ccfg.tls_callback_off = cfg_.tls_callback_off;
+    ccfg.machine = cfg_.machine;
 
     // TLS (thread_local): si hay una seccion TLS hace falta el cargador dinamico
     // (monta el bloque TLS + el thread pointer antes del entry) -> forzar la ruta
@@ -118,6 +119,32 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
 
     char errbuf[256] = {0};
     int ok = 0;
+
+    // --aot-debug=1: fija los simbolos de funcion (nombre->VA) para que el emisor
+    // de EXEC (ELF/PE) y de SHARED (.dll) embeban un .symtab ELF / symtab COFF.
+    // Se declara aqui (scope de la funcion) para sobrevivir a TODOS los caminos
+    // de emit (incluidos los early-return de SHARED/OBJECT/FLAT_BIN).  Se llama
+    // SIEMPRE (con nullptr si no aplica) para no arrastrar estado de un emit
+    // anterior.  OBJECT ya lleva symtab por diseno -> no se le fija aqui.
+    std::vector<AotSym> dbg_csyms;
+    std::vector<std::string> dbg_hold;
+    if (debug_ &&
+        (kind_ == OutputKind::EXEC || kind_ == OutputKind::SHARED) &&
+        !symbols_.empty()) {
+        dbg_csyms.resize(symbols_.size());
+        dbg_hold.resize(symbols_.size());
+        for (size_t i = 0; i < symbols_.size(); ++i) {
+            dbg_hold[i] = symbols_[i].name;
+            dbg_csyms[i].name = dbg_hold[i].c_str();
+            dbg_csyms[i].section = symbols_[i].section;
+            dbg_csyms[i].offset = symbols_[i].offset;
+            dbg_csyms[i].is_func = symbols_[i].is_func ? 1 : 0;
+        }
+        aot_set_debug_symbols(dbg_csyms.data(),
+                              static_cast<int>(dbg_csyms.size()));
+    } else {
+        aot_set_debug_symbols(nullptr, 0);
+    }
 
     // OBJECT relocatable: sin _start, sin imports; relocs como REGISTROS +
     // symtab.  v1: solo ELF (.o).  COFF (.obj) pendiente.
@@ -271,6 +298,9 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                           static_cast<int>(csecs.size()), entry_sec_,
                           entry_off_, crel_ptr, crel_n, errbuf, sizeof(errbuf));
     }
+
+    // Reset del estado global de simbolos de debug (el emit ya termino).
+    aot_set_debug_symbols(nullptr, 0);
 
     if (!ok) {
         err = errbuf[0] ? errbuf : "ObjectWriter: error desconocido";

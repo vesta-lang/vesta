@@ -524,7 +524,7 @@ void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr) {
     // point del scheduler (tras avanzar el PC), no aqui.
 }
 
-// B4.3: NEWOBJS r_cls -> aloca en SharedHeap (Phase Z.6).
+// B4.3: NEWOBJS r_cls -> aloca en SharedHeap ( Z.6).
 //
 // Variante shared del NEWOBJ: instead of vm->gc_heap, aloca via
 // vm_reference.shared_heap (cross-process).  Registra el host_ptr
@@ -739,7 +739,7 @@ void exec_instr_raw_realloc(ProcessVM *vm, const DecodedInstr &instr) {
 }
 
 // =========================================================================
-//  Phase Z - gcpromote / gcdemote: deep-copy local <-> SharedHeap.
+//   Z - gcpromote / gcdemote: deep-copy local <-> SharedHeap.
 // =========================================================================
 //
 // El host_ptr en el registro apunta al payload (ObjectHeader + fields).
@@ -841,7 +841,7 @@ void exec_instr_gcdemote(ProcessVM *vm, const DecodedInstr &instr) {
 }
 
 // =========================================================================
-//  Phase Z - Atomics i64 reales sobre host memory.
+//   Z - Atomics i64 reales sobre host memory.
 // =========================================================================
 //
 // Implementacion sobre memoria HOST (raw pointers).  Los registros llevan
@@ -875,6 +875,20 @@ void exec_instr_atomicst(ProcessVM *vm, const DecodedInstr &instr) {
 }
 
 // ATOMICADD r_dst, r_addr, r_delta : r_dst = atomic_fetch_add_i64.
+// CSEL r_dst, r_cond, r_a, r_b : dst = (cond != 0) ? a : b  (1 despacho).
+// Super-instruccion del IrOp::SELECT para el interp dispatch-bound; evita la
+// mascara branchless (~8 ops).  El JIT/AOT bajan el mismo SELECT a cmov.
+void exec_instr_csel(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t rdst = instr.data_instruction.mem_data.reg_base;
+    const uint8_t rcond = instr.data_instruction.mem_data.reg_index;
+    const uint8_t ra = instr.data_instruction.mem_data.reg_final;
+    const uint8_t rb = instr.data_instruction.mem_data.scale;
+    const uint64_t v = (vm->registers.regs[rcond].qword() != 0)
+                           ? vm->registers.regs[ra].qword()
+                           : vm->registers.regs[rb].qword();
+    vm->registers.regs[rdst].qword(v);
+}
+
 void exec_instr_atomicadd(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t rdst = instr.data_instruction.mem_data.reg_base;
     const uint8_t raddr = instr.data_instruction.mem_data.reg_index;

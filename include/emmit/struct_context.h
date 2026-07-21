@@ -251,6 +251,31 @@ typedef struct Section {
         0; ///< Alineacion de la seccion en bytes (p.ej. 4096)
 
     /**
+     * @brief Offset del primer byte de la seccion dentro del flujo de bytecode
+     * del modulo.
+     *
+     * La imagen .velb es PLANA: el loader deriva el offset de fichero de una
+     * seccion a partir de su direccion virtual con
+     * @c file_offset = space->file_offset + (address_init - space->range.address_init).
+     * Por tanto el flujo de bytes y el espacio virtual son el mismo eje y
+     * se cumple @c address_init == space_base + stream_offset.
+     *
+     * Lo fija el ensamblador la primera vez que entra en la seccion (tras
+     * alinear el flujo a @c size_align_section) y lo consume
+     * @c Space::compute_sections_ranges para materializar el rango virtual.
+     */
+    uint64_t stream_offset = 0;
+
+    /**
+     * @brief Indica si el ensamblador llego a entrar en la seccion.
+     *
+     * Una seccion declarada pero nunca usada (p.ej. la seccion auxiliar
+     * "strings" que anade el propio ensamblador) conserva el rango [0, 0) y
+     * queda fuera del reparto del flujo de bytecode.
+     */
+    bool layout_started = false;
+
+    /**
      * @brief Tabla de etiquetas de la seccion (nombre -> Label).
      */
     std::unordered_map<std::string, Label> table_label;
@@ -289,29 +314,6 @@ typedef struct Section {
         auto it = table_label.find(name);
         if (it == table_label.end()) return nullptr;
         return &it->second;
-    }
-
-    /**
-     * @brief Calcula el rango de memoria virtual de la seccion.
-     *
-     * Toma el @p base_address como inicio, anade size_real y aplica la
-     * alineacion @p bytes_aligned para calcular el fin de la seccion.
-     *
-     * @param base_address Direccion base a partir de la que inicia esta
-     * seccion.
-     * @param bytes_aligned Numero de bytes para la alineacion (p.ej. 4096).
-     */
-    void compute_range(uint64_t base_address, uint64_t bytes_aligned) {
-        uint64_t start = base_address;
-        uint64_t end_real = base_address + size_real;
-
-        uint64_t aligned_init = align_down(start, bytes_aligned);
-        if (aligned_init < base_address) aligned_init = base_address;
-
-        uint64_t aligned_end = align_up(end_real, size_align_section);
-
-        memory.address_init = aligned_init;
-        memory.address_final = aligned_end;
     }
 
     /**
@@ -398,44 +400,64 @@ typedef struct Space {
     void clear() { table_section.clear(); }
 
     /**
-     * @brief Calcula el rango de memoria de cada seccion del espacio de forma
-     * contigua.
+     * @brief Materializa el rango de memoria virtual de cada seccion del
+     * espacio.
      *
-     * Ordena las secciones por direccion de inicio y llama a compute_range()
-     * sobre cada una usando la direccion final de la anterior como base.
+     * El reparto del flujo de bytecode ya lo decidio el ensamblador: cada
+     * seccion sabe en que offset del flujo empieza (@c stream_offset, fijado al
+     * entrar en ella por primera vez y ya alineado a @c size_align_section) y
+     * cuantos bytes ocupa (@c size_real).  Aqui solo se traslada ese reparto al
+     * espacio virtual sumando la base del espacio, lo que mantiene el invariante
+     * de imagen plana que asume el loader:
      *
-     * @param bytes_aligned Alineacion en bytes para cada seccion (p.ej. 4096).
+     *     address_init == range.address_init + stream_offset
+     *
+     * Las secciones nunca usadas (@c layout_started == false) conservan su rango
+     * inicial y no participan del reparto.
      */
-    void compute_sections_ranges(uint64_t bytes_aligned) {
-        // ordenar secciones por direccion de inicio para computar en orden
-        std::sort(ordered_sections.begin(), ordered_sections.end(),
-                  [](const Section *a, const Section *b) {
-                      return a->memory.address_init < b->memory.address_init;
-                  });
-
-        uint64_t start = range.address_init; // base del espacio de direcciones
+    void compute_sections_ranges() {
         for (Section *sec : ordered_sections) {
-            sec->compute_range(start, bytes_aligned);
-            start += sec->size_real; // la siguiente seccion empieza tras el
-                                     // final real
+            if (!sec->layout_started) continue; // declarada pero nunca usada
+
+            uint64_t init = range.address_init + sec->stream_offset;
+            sec->set_range(init, init + sec->size_real);
         }
     }
 } Space;
 
 /**
- * @brief Calcula el tamano real total de un espacio de direcciones.
+ * @brief Calcula el tamano que ocupa un espacio de direcciones en el fichero.
  *
- * Suma los tamanos reales de todas sus secciones.
+ * Es la EXTENSION del espacio (desde su base hasta el final de su ultima
+ * seccion), no la suma de los tamanos de sus secciones: entre dos secciones hay
+ * relleno de alineacion, y ese relleno ocupa bytes en el fichero porque la
+ * imagen es PLANA -- el loader deriva el offset de fichero de la VA
+ * (`file_offset = space.file_offset + (sec.VA - space.base)`).
+ *
+ * Sumar `size_real` dejaba fuera el relleno, y todo lo que va detras del
+ * bytecode (tabla de importacion, seccion @c \@ir, simbolos) se escribia en un
+ * offset corrido.  El sintoma tipico era el loader leyendo el magic del propio
+ * fichero como nombre de libreria: "No se pudo cargar la libreria 'VELB'".
+ *
+ * Las secciones sin usar (la auxiliar @c strings del @c MetaSpace) se quedan en
+ * @c [0,0) y no cuentan.
  *
  * @param s Espacio de direcciones a medir.
- * @return Tamano real total en bytes.
+ * @return Bytes que ocupa el espacio en el fichero, relleno incluido.
  */
 static uint64_t compute_space_size(const Space &s) {
-    uint64_t total = 0;
+    uint64_t end = s.range.address_init;
+    bool any = false;
     for (auto &[name, sec] : s.table_section) {
-        total += sec.size_real; // acumular tamano de cada seccion
+        // Seccion sin materializar (nadie emitio en ella): no ocupa.
+        if (sec.memory.address_final == sec.memory.address_init) continue;
+        if (!any || sec.memory.address_final > end) {
+            end = sec.memory.address_final;
+            any = true;
+        }
     }
-    return total;
+    if (!any) return 0;
+    return end - s.range.address_init;
 }
 
 /**
@@ -669,12 +691,13 @@ typedef struct Context {
      * @brief Calcula los rangos de memoria de todas las secciones en todos los
      * espacios.
      *
-     * Llama a Space::compute_sections_ranges() para cada espacio usando
-     * bytes_aligned.
+     * Llama a Space::compute_sections_ranges() para cada espacio.  Debe
+     * invocarse cuando el ensamblador ya ha repartido el flujo de bytecode
+     * entre las secciones (es decir, al final de @c Assembler::assemble).
      */
     void compute_all_ranges() {
         for (auto &[name, sp] : space_address) {
-            sp.compute_sections_ranges(bytes_aligned);
+            sp.compute_sections_ranges();
         }
     }
 
@@ -691,7 +714,7 @@ typedef struct Context {
     };
     std::vector<DebugLineRec> debug_lines;
 
-    // === Tabla de stackmaps precisos (Phase E.1, modulo-local) ===
+    // === Tabla de stackmaps precisos ( E.1, modulo-local) ===
     // Por cada instruccion de safepoint (con marcador `// @sm <hex>`),
     // el Assembler registra el offset del INICIO de la instruccion dentro
     // del bytecode del modulo + la lista de ubicaciones GC vivas (registro

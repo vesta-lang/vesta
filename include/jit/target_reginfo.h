@@ -8,7 +8,7 @@
 /**
  * @file jit/target_reginfo.h
  * @brief Descriptor de registros por arquitectura para el register allocator
- *        (Phase D.7).  Capa 2 del diseno (ver doc/REGALLOC.md).
+ *        ( D.7).  Capa 2 del diseno (ver doc/REGALLOC.md).
  *
  * Esta es la UNICA pieza que cambia por arquitectura desde el punto de vista
  * del allocator.  El allocator CORE es generico: lee de aqui que registros
@@ -155,7 +155,7 @@ inline TargetRegInfo build_x86_64_target(bool sysv) {
                              t.callee_saved[GP].end());
     t.ret_reg[GP] = id(MReg::RAX);
 
-    /* FP-regalloc (Phase AOT C1 float): XMM14/XMM15 RESERVADOS como scratch
+    /* FP-regalloc ( AOT C1 float): XMM14/XMM15 RESERVADOS como scratch
      * del rewrite (materializar spills FP + two-address legalization de
      * ADDSD/etc), analogo a R10/R11 en GP.  Asignables: XMM0..XMM13.
      * En SysV todos los XMM son caller-saved (volatiles).  En Win64 XMM6-15
@@ -256,6 +256,74 @@ inline const TargetRegInfo &target_x86_64_vm_abi() {
 #else
     return target_x86_64_abi(/*sysv=*/true);
 #endif
+}
+
+/*
+ * Numeracion de registros arm64 (AArch64) para el pipeline vreg.  El allocator
+ * los trata como @c uint8_t opacos (no son @c MReg, que es x86); el encoder
+ * arm64 los traduce a "x0".."x30" / "v0".."v31".  GP x_n = n (0-30); el banco
+ * FP/SIMD v_n = 32 + n (32-63).  sp/x29/x30 no son registros-valor asignables.
+ */
+enum : uint8_t {
+    A64_X0 = 0, A64_X8 = 8, A64_X15 = 15, A64_X16 = 16, A64_X17 = 17,
+    A64_X18 = 18, A64_X19 = 19, A64_X28 = 28, A64_X29_FP = 29, A64_X30_LR = 30,
+    A64_SP = 31,
+    A64_V0 = 32, A64_V7 = 39, A64_V8 = 40, A64_V15 = 47, A64_V16 = 48,
+    A64_V29 = 61, A64_V30 = 62, A64_V31 = 63,
+};
+
+/**
+ * @brief Construye el @c TargetRegInfo AArch64 (AAPCS64), 3-operandos.
+ *
+ * GP x0-x30: x0-x7 args (x0 = retorno); x8 (XR) + x9-x15 caller-saved;
+ * x16/x17 (IP0/IP1) SCRATCH del rewrite; x18 (plataforma) reservado por
+ * portabilidad (Win/Darwin lo usan); x19-x28 callee-saved; x29(FP)/x30(LR)/sp
+ * reservados.  FP/SIMD v0-v31: v0-v7 args (v0 = retorno); v8-v15 callee-saved;
+ * v16-v29 caller-saved; v30/v31 SCRATCH del rewrite.
+ */
+inline TargetRegInfo build_arm64_target() {
+    TargetRegInfo t;
+    t.pointer_size = 8;
+    t.is_two_address = false; // AArch64 es de 3 operandos: rd = rn OP rm.
+
+    const size_t GP = static_cast<size_t>(RegClass::GP);
+    const size_t FP = static_cast<size_t>(RegClass::FP);
+
+    /* --- GP --- */
+    t.scratch[GP] = {A64_X16, A64_X17}; // IP0/IP1: temporales del rewrite.
+    /* Caller-saved asignables: x0..x15 (args + temporales). */
+    for (uint8_t r = A64_X0; r <= A64_X15; ++r) t.caller_saved[GP].push_back(r);
+    /* Callee-saved asignables: x19..x28. */
+    for (uint8_t r = A64_X19; r <= A64_X28; ++r) t.callee_saved[GP].push_back(r);
+    t.allocatable[GP] = t.caller_saved[GP];
+    t.allocatable[GP].insert(t.allocatable[GP].end(),
+                             t.callee_saved[GP].begin(),
+                             t.callee_saved[GP].end());
+    t.ret_reg[GP] = A64_X0;
+    for (uint8_t r = A64_X0; r <= 7; ++r) t.arg_regs[GP].push_back(r); // x0-x7
+    t.reserved = {A64_X18, A64_X29_FP, A64_X30_LR, A64_SP};
+
+    /* --- FP/SIMD --- */
+    t.scratch[FP] = {A64_V30, A64_V31};
+    /* Caller-saved: v0..v7 (args) + v16..v29. */
+    for (uint8_t r = A64_V0; r <= A64_V7; ++r) t.caller_saved[FP].push_back(r);
+    for (uint8_t r = A64_V16; r <= A64_V29; ++r) t.caller_saved[FP].push_back(r);
+    /* Callee-saved: v8..v15. */
+    for (uint8_t r = A64_V8; r <= A64_V15; ++r) t.callee_saved[FP].push_back(r);
+    t.allocatable[FP] = t.caller_saved[FP];
+    t.allocatable[FP].insert(t.allocatable[FP].end(),
+                             t.callee_saved[FP].begin(),
+                             t.callee_saved[FP].end());
+    t.ret_reg[FP] = A64_V0;
+    for (uint8_t r = A64_V0; r <= A64_V7; ++r) t.arg_regs[FP].push_back(r);
+
+    return t;
+}
+
+/** @brief @c TargetRegInfo AArch64 (cacheado). */
+inline const TargetRegInfo &target_arm64() {
+    static const TargetRegInfo info = build_arm64_target();
+    return info;
 }
 
 } // namespace jit

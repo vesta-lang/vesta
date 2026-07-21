@@ -215,6 +215,16 @@ void extract_declared_names(const std::string &text, const std::string &uri,
                 out.type_names.insert(d->name);
             break;
         }
+        case vx::ast::NodeKind::ConceptDecl: {
+            auto *d = static_cast<const vx::ast::ConceptDecl *>(node.get());
+            if (!d->name.empty())
+                out.concept_names.insert(d->name);
+            // Parametros de plantilla del concepto (concept N<T>).
+            for (const auto &tp : d->type_params)
+                if (!tp.empty())
+                    out.type_params.insert(tp);
+            break;
+        }
         case vx::ast::NodeKind::FunctionDecl: {
             auto *d = static_cast<const vx::ast::FunctionDecl *>(node.get());
             if (!d->name.empty())
@@ -270,9 +280,14 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // para cualquier simbolo de un modulo importado (serial/fb/... de un
         // programa multi-fichero).  El fs_path se deriva del uri file://.
         const std::string fs_path = uri_to_fs_path(uri);
-        const bool has_imports =
-            (text.find("import \"") != std::string::npos ||
-             text.find("import\t\"") != std::string::npos);
+        // Usar el MISMO detector que el compilador (@c vx_source_has_imports):
+        // reconoce imports con puntos (`import std.comptime only source;`) igual
+        // que los de string (`import "modules/foo";`), ignorando strings y
+        // comentarios.  El check anterior solo miraba `import "` -> un fichero
+        // con imports DOTTED caia al path single-file, que no resuelve el modulo
+        // ni siembra los params `expr` importados (source/inject) -> el parser
+        // reportaba errores FALSOS en `source(...)` (raw-capture no reconocido).
+        const bool has_imports = vx::vx_source_has_imports(text);
         const bool file_on_disk =
             !fs_path.empty() && std::ifstream(fs_path).good();
         if (has_imports && file_on_disk) {
@@ -302,6 +317,16 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
             }
             analysis->result =
                 vx::compile_vx_project(fs_path, opts, &overlay, &anc);
+            // Cross-module: indexar los modulos importados para el completado
+            // `lib.<TAB>` y la navegacion cualificada.  Best-effort (misma
+            // resolucion de paths que el compile de arriba); un fallo aqui no
+            // afecta a los diagnosticos.
+            try {
+                analysis->imported_sem_indexes =
+                    vx::build_imported_sem_indexes(fs_path, text, anc);
+            } catch (...) {
+                // sin indices importados; el resto del analisis sigue valido.
+            }
         } else {
             analysis->result = vx::compile_vx_source(text, uri, opts);
         }
@@ -312,6 +337,21 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // Best-effort: un fallo del parse extra no debe afectar a los
         // diagnosticos (el catch externo cubre cualquier excepcion).
         extract_declared_names(text, uri, *analysis);
+        // NS.4: indice semantico del AST RAW (pre-flatten) -- nombres
+        // CUALIFICADOS por namespace, para completado de miembro `ns.simbolo`
+        // y resolucion de acceso cualificado.  Parse independiente del compile
+        // (que aplana los namespaces); best-effort (sin indice si el parse peta).
+        try {
+            vx::Diagnostics sidiag;
+            vx::Lexer slx(text, uri, sidiag);
+            vx::Parser sp(slx, sidiag);
+            auto smod = sp.parse_program();
+            if (smod)
+                analysis->sem_index =
+                    vx::build_semantic_index(*smod, text, uri);
+        } catch (...) {
+            // sin indice; el resto del analisis sigue valido.
+        }
     } catch (const std::exception &e) {
         // Un fallo del frontend NO debe tumbar el servidor: convertirlo en un
         // diagnostico de error interno en 0:0 para que el cliente lo vea.

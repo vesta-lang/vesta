@@ -1,0 +1,74 @@
+// `typedef T X new` sobre tipos de USUARIO: struct, clase y enum.
+//
+// Un newtype comparte la representacion del tipo de debajo -- sus campos, sus
+// metodos, sus variantes, su tamano y su coste -- pero es NOMINALMENTE distinto.
+// No cuesta nada en runtime: no hay envoltorio, es el mismo valor con otra
+// identidad para el compilador.
+//
+// Sirve para que el tipo diga QUE es, no solo como esta hecho.  Dos cosas con
+// la misma forma pero distinto significado (metros y pies, un id de sesion y un
+// id de cuenta) dejan de poder confundirse, y el error sale en compilacion.
+//
+// Ver [[TiposDatos]] (newtypes sobre primitivos, `@opaque`).
+namespace newtype_usuario;
+
+// ---- Sobre un STRUCT ------------------------------------------------------
+struct Punto {
+    i64 x;
+    i64 y;
+    public i64 suma() { return this.x + this.y; }
+}
+
+// Dos tipos distintos con la misma representacion.  Un Pixel no es un Coord
+// aunque los dos sean, por dentro, un Punto.
+typedef Punto Coord new;
+typedef Punto Pixel new;
+
+i64 distancia_manhattan(Coord c) { return c.suma(); }   // solo acepta Coord
+
+// ---- Sobre una CLASE ------------------------------------------------------
+class Caja {
+    public i64 v = 0;
+    public i64 leer() { return this.v; }
+}
+
+typedef Caja Sesion new;
+
+// ---- Sobre un ENUM --------------------------------------------------------
+enum Color { Rojo, Verde, Azul }
+
+typedef Color Tinta new;
+
+i32 main() {
+    // El newtype conserva los campos y los metodos del struct.
+    Coord c;
+    c.x = 20;
+    c.y = 20;
+    i64 d = distancia_manhattan(c);             // 40
+    println("coord.suma() = ${d}");
+
+    Pixel p;
+    p.x = 1;
+    p.y = 1;
+    // distancia_manhattan(p);   // error: Pixel no es Coord, aunque ambos sean
+    //                           // un Punto por dentro.  Eso es lo que se busca.
+
+    // Sobre una clase: `new Sesion()` construye la Caja de debajo, con sus
+    // metodos.
+    Sesion s = new Sesion();
+    s.v = 1;
+    i64 sv = s.leer();                          // 1
+    println("sesion.leer() = ${sv}");
+
+    // Sobre un enum: las variantes son las del enum de debajo.
+    Tinta t = Tinta.Verde;
+    i64 extra = 0;
+    match t {
+        case Verde => extra = 1;
+        case _     => extra = 0;
+    }
+    println("tinta verde -> ${extra}");
+
+    // 40 + 1 + 1 = 42
+    return (i32)(d + sv + extra);
+}

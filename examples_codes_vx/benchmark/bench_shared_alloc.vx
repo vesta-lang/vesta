@@ -30,13 +30,13 @@ i32 helper_shared() {
 i32 main() {
     i32 acc = 0;
     i32 N = 1000000;
-    // FASE 1: 1M iter LOCAL.
+    //   1M iter LOCAL.
     i32 i = 0;
     while (i < N) {
         acc = acc + helper_local();
         i = i + 1;
     }
-    // FASE 2: 1M iter SHARED.  El SharedHeap crece dinamicamente
+    //   1M iter SHARED.  El SharedHeap crece dinamicamente
     // alocando hasta 256 chunks por size-class.  Tras 1M shared allocs
     // sin liberacion explicita, se invoca shared_gc_collect una sola
     // vez al final para reciclar todos los slots sin roots.

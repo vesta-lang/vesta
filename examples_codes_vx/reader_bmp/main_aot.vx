@@ -4,9 +4,8 @@
 // LIMITACION VIGENTE (LIM-5): args_count()/args_get() bajan a getargc/getarg,
 // que en el target AOT nativo fallan con "op getarg requiere scheduler/procesos".
 // Por eso esta variante fija el path en el codigo, para generar un ejecutable
-// nativo standalone (PE/ELF).  El resto (lectura via stdlib vx_fileio, volcado
-// truecolor via builtin bg_rgb) es identico a main.vx, de modo que el volcado
-// de pixeles es BYTE-EXACTO respecto a interp/JIT sobre el mismo fichero.
+// nativo standalone (PE/ELF).  Usa el modelo de overlays + funciones libres de
+// bmp.vx: el "objeto BMP" es un u8* (buffer del fichero) parseado via overlays.
 //
 // El path se puede cambiar aqui para volcar otra imagen.
 // =============================================================================
@@ -16,14 +15,26 @@ import "bmp";
 i32 main() {
     string path = "Ejemplo60x3.bmp";
 
-    bmp.BMP_Image img = new bmp.BMP_Image();
-    if (img.load(path) == 0) {
+    // Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host del
+    // puntero; ver LIM-10): medir + reservar + leer.
+    i64 size = bmp.bmp_file_size(path);
+    if (size <= 0) {
         println("El archivo ${path} no pudo encontrarse o no existe.");
         return 1;
     }
+    u8* buf = malloc(size + 1);
+    if (bmp.bmp_read_into(path, buf, size) != size) {
+        println("El archivo ${path} no pudo leerse.");
+        free(buf);
+        return 1;
+    }
+    buf[size] = 0;
 
-    img.printBMPAttributes();
+    // Parsear + volcar via los overlays y las funciones libres.
+    bmp.bmp_print_attributes(buf);
     println("");
-    img.dumpTerminal();
+    bmp.bmp_dump_terminal(buf);
+
+    free(buf);
     return 0;
 }

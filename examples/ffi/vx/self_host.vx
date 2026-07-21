@@ -1,8 +1,8 @@
 // examples/ffi/vx/self_host.vx
 //
-// Self-hosting: un programa Vex que, via la C-API de libvesta (el propio
+// Self-hosting: un programa Vesta-lang que, via la C-API de libvesta (el propio
 // compilador + VM empaquetados como DLL/.so), COMPILA y EJECUTA otro
-// snippet Vex y usa su resultado.  Es decir: Vex ejecuta Vex a traves de
+// snippet Vesta-lang y usa su resultado.  Es decir: Vesta-lang ejecuta Vesta-lang a traves de
 // la DLL del lenguaje.
 //
 // Mecanismo (FFI runtime dinamico, A.24):
@@ -29,10 +29,10 @@
 //                                   abajo para mayor robustez)
 //
 // Resultado esperado: R00 == 42 (el resultado del programa COMPILADO+EJECUTADO
-// por la DLL desde dentro de este programa Vex).
+// por la DLL desde dentro de este programa Vesta-lang).
 
 i32 main() {
-    // Snippet Vex a compilar+ejecutar via la DLL.  Devuelve 6 * 7 = 42.
+    // Snippet Vesta-lang a compilar+ejecutar via la DLL.  Devuelve 6 * 7 = 42.
     string snippet = "i32 main() { return 6 * 7; }";
 
     // Buffer host de 4 bytes para recibir el out_exit (int) por puntero.

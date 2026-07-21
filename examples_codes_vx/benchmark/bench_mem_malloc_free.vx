@@ -4,7 +4,7 @@
 // un bloque de 32 bytes en HOST heap (via VirtualAlloc/mmap del proceso),
 // hace un write minimal para evitar dead-code-elimination, y libera.
 //
-// Es el path mas "manual" de memoria en Vex: cero borrow checker, cero
+// Es el path mas "manual" de memoria en : cero borrow checker, cero
 // GC tracking, cero RAII automatico.  Equivalente conceptual a `malloc`/
 // `free` de C.
 //

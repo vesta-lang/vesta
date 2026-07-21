@@ -142,6 +142,8 @@ class CBackend : public IPortBackend {
     void emit_binop(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
                     ir::IrValueId lhs, ir::IrValueId rhs,
                     ir::IrType t) override;
+    void emit_fma(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId a,
+                  ir::IrValueId b, ir::IrValueId c, ir::IrType t) override;
     void emit_unop(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
                    ir::IrValueId src, ir::IrType t) override;
     void emit_cmp(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
@@ -212,12 +214,12 @@ class CBackend : public IPortBackend {
                       const std::vector<ir::IrValueId> &operands,
                       ir::IrType t) override;
 
-    /// Phase AS inc.3: inline asm nativo (IrOp::INLINE_ASM) -> bloque
+    ///  AS inc.3: inline asm nativo (IrOp::INLINE_ASM) -> bloque
     /// @c __asm__ __volatile__(".intel_syntax noprefix\n ...") con las
     /// variables register() como operandos GCC y los clobbers.
     void emit_inline_asm(EmitContext &ctx, const ir::IrInstr &instr) override;
 
-    /// Phase AS inc.3: devuelve el binding register("reg") asociado al
+    ///  AS inc.3: devuelve el binding register("reg") asociado al
     /// ALLOCA @p id en la funcion actual, o nullptr si @p id no es un
     /// slot register-bound.  Consultado por emit_local_decl/alloca/
     /// load/store para materializar la variable C con register-pin.

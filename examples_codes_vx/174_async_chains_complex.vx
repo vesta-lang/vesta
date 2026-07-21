@@ -70,7 +70,7 @@ i32 format_decoration() {
 }
 
 i32 main() {
-    // FASE 1: fan-out de 4 workers.  Cada @Async devuelve un Future<T>
+    //   fan-out de 4 workers.  Cada @Async devuelve un Future<T>
     // que el scheduler administra en otro proceso VM.
     Future<i64> f0 = compute_chunk(0, 10);
     Future<i64> f1 = compute_chunk(10, 20);
@@ -81,7 +81,7 @@ i32 main() {
     // maximizar paralelismo: corre concurrentemente con los 4 chunks.
     Future<i32> f_deco = format_decoration();
 
-    // FASE 2: fan-in.  await bloquea hasta que el worker resuelve.
+    //   fan-in.  await bloquea hasta que el worker resuelve.
     // Los 4 awaits pueden completarse en cualquier orden segun el
     // scheduler; el TOTAL es deterministico.
     i64 r0 = await f0;
@@ -91,11 +91,11 @@ i32 main() {
     i64 total = r0 + r1 + r2 + r3;
     // total = (0..9)+(10..19)+(20..29)+(30..39) = 45+145+245+345 = 780.
 
-    // FASE 3: encadenamiento.  Lanzar validator que depende del total.
+    //   encadenamiento.  Lanzar validator que depende del total.
     Future<bool> f_ok = validate(total);
     bool ok = await f_ok;
 
-    // FASE 4: combinar con el worker decorativo.
+    //   combinar con el worker decorativo.
     i32 deco = await f_deco;
     // deco = -739.
 

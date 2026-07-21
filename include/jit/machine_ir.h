@@ -54,10 +54,10 @@
  *
  * = Phases =
  *
- * Phase D.1.a (este header): tipos + lifetime.  NO emite bytes aun.
- * Phase D.1.b: instruction selector @c ssa_ir::IrFunction -> @c MFunction.
- * Phase D.1.c: encoder @c MFunction -> @c std::vector<uint8_t>.
- * Phase D.1.d: label resolution + relocations.
+ *  D.1.a (este header): tipos + lifetime.  NO emite bytes aun.
+ *  D.1.b: instruction selector @c ssa_ir::IrFunction -> @c MFunction.
+ *  D.1.c: encoder @c MFunction -> @c std::vector<uint8_t>.
+ *  D.1.d: label resolution + relocations.
  */
 
 #ifndef VESTA_JIT_MACHINE_IR_H
@@ -97,7 +97,7 @@ namespace jit {
  */
 /**
  * @enum RegClass
- * @brief Clase de un registro (virtual o fisico).  Phase D.7.
+ * @brief Clase de un registro (virtual o fisico).   D.7.
  *
  * El register allocator asigna cada clase de forma INDEPENDIENTE: un
  * vreg GP solo puede ir a un fisico GP, un vreg FP solo a un fisico FP.
@@ -116,7 +116,7 @@ enum class RegClass : uint8_t {
 /**
  * @enum AbiKind
  * @brief Convencion con la que se genera el prologue/epilogue y el paso de
- *        argumentos de una funcion JIT (Phase D.7).
+ *        argumentos de una funcion JIT ( D.7).
  */
 enum class AbiKind : uint8_t {
     HOST_LEAF = 0, ///< funcion hoja host: args en arg_regs, return en RAX
@@ -227,7 +227,7 @@ enum class MOperandKind : uint8_t {
     LABEL = 5,     ///< label_id (para JMP/JCC/CALL relativos)
     REL_RT = 6,    ///< runtime entry slot (puntero resuelto en link)
     VREG =
-        7 ///< registro VIRTUAL (Phase D.7): id en @c value, clase en @c flags
+        7 ///< registro VIRTUAL ( D.7): id en @c value, clase en @c flags
 };
 
 /**
@@ -312,7 +312,7 @@ struct MOperand {
     }
 
     /**
-     * @brief Construye un operando de registro VIRTUAL (Phase D.7).
+     * @brief Construye un operando de registro VIRTUAL ( D.7).
      *
      * El id del vreg vive en @c value (no en @c reg, que es u8 y se
      * reserva para fisicos 0..63).  La clase (GP/FP) se guarda en el
@@ -388,8 +388,9 @@ enum class MOp : uint8_t {
     SAR = 18,
     NEG = 19,
     NOT = 20,
-    IDIV = 21,  ///< IDIV src (RDX:RAX / src -> RAX, RDX = rem)
+    IDIV = 21,  ///< IDIV src (RDX:RAX / src -> RAX, RDX = rem) -- SIGNED
     CQO = 22,   ///< sign-extend RAX into RDX:RAX (CDQ for 32-bit)
+    DIV_U = 202, ///< DIV src (RDX:RAX / src -> RAX, RDX = rem) -- UNSIGNED (F7 /6)
     MOVZX = 23, ///< MOVZX dst, src (zero-extend u8/u16 -> u64)
     MOVSX = 24, ///< MOVSX dst, src (sign-extend i8/i16/i32 -> i64)
     INC = 25,   ///< INC dst (++dst, mas compacto que ADD dst, 1)
@@ -450,6 +451,9 @@ enum class MOp : uint8_t {
     MINSD = 66, ///< MINSD  xmm_dst, xmm_src (F2 0F 5D /r) -- NaN: returns src2
     MAXSD = 67, ///< MAXSD  xmm_dst, xmm_src (F2 0F 5F /r)
     ROUNDSD = 68, ///< ROUNDSD xmm_dst, xmm_src, imm8 (66 0F 3A 0B /r ib)
+    MINSS = 208,  ///< MINSS  xmm_dst, xmm_src (F3 0F 5D /r) -- variante f32
+    MAXSS = 209,  ///< MAXSS  xmm_dst, xmm_src (F3 0F 5F /r) -- variante f32
+    ROUNDSS = 237, ///< ROUNDSS xmm_dst, xmm_src, imm8 (66 0F 3A 0A /r ib) -- f32
                   ///<   imm8 modes: 0=round-to-nearest, 1=floor, 2=ceil,
                   ///<   3=trunc. variant field carga el mode.  Requiere SSE4.1
                   ///<   (universal x86-64).
@@ -476,6 +480,35 @@ enum class MOp : uint8_t {
      * sin necesitar fixed intervals en el regalloc.  Se marca como
      * call-position (clobber RAX/RDX -> live-across van a callee-saved). */
     DIVMOD_V = 79,
+
+    /* Pseudos atomicos (FN.4 2026-07-14): bajan los IR ops ATOMIC_*_I64 del
+     * lenguaje a instrucciones x86 atomicas nativas, sin inline-asm.  El
+     * rewrite (post-regalloc) los expande usando R11 (scratch reservado) para
+     * la @b direccion y RAX para el valor viejo/esperado; se marcan
+     * call-position (clobber caller-saved -> vregs vivos van a callee-saved).
+     *   ATOMICCAS_V: dst es IN/OUT (entra=expected, sale=old); src1=addr,
+     *                src2=desired.  -> mov rax,dst; lock cmpxchg [addr],desired;
+     *                mov dst,rax.
+     *   ATOMICADD_V: dst=old; src1=addr, src2=delta. -> lock xadd. */
+    ATOMICCAS_V = 203,
+    ATOMICADD_V = 204,
+    /* Instrucciones x86 atomicas que emite el rewrite (operandos fisicos):
+     *   LOCK_CMPXCHG: dst=mem [addr], src1=reg (desired).  F0 REX.W 0F B1 /r.
+     *   LOCK_XADD:    dst=mem [addr], src1=reg (valor).    F0 REX.W 0F C1 /r. */
+    LOCK_CMPXCHG = 205,
+    LOCK_XADD = 206,
+
+    /* Pseudo (shift por cantidad VARIABLE): dst = src1 <shift> src2, donde la
+     * cuenta (src2) esta en un registro, no es inmediata.  x86 exige la cuenta
+     * en CL, asi que el selector fija src2 a RCX (via un tmp de vida corta
+     * pineado) y el rewrite expande usando R11 (scratch reservado) como reg de
+     * trabajo -> nunca clobbea un vivo:
+     *   mov  r11, value        ; value != RCX (interfiere con la cuenta)
+     *   shift r11, cl          ; CL = RCX (la cuenta pineada)
+     *   mov  dst, r11
+     * variant: 0 = SHL, 1 = SHR (logico), 2 = SAR (aritmetico), 3 = ROL,
+     * 4 = ROR (rotaciones por CL, misma expansion via el reg de trabajo). */
+    SHIFT_V = 207,
 
     /* Pseudo (callback-ABI 2026-06-06): carga el @c ProcessVM* del
      * proceso actual en @c dst.reg (siempre RBX).  Encapsula la
@@ -507,7 +540,7 @@ enum class MOp : uint8_t {
     STORE_VM = 83,  ///< vm_mem[addr] = val (page-cache inline + fallback).
                     ///< src1 = addr_vreg, src2 = val_vreg,
                     ///< dst = imm64_idx(&vm_write_u<w>); flags = width.
-    ALLOCA_VM = 84, ///< Fase 2: dst = vaddr a `size` bytes reservados en
+    ALLOCA_VM = 84, ///<   dst = vaddr a `size` bytes reservados en
                     ///< el VM stack del proceso (proc->stack_pointer).
                     ///< dst = dst_vreg, src1 = imm32(size).  El
                     ///< prologue salva el VM-RSP y el epilogue lo
@@ -525,7 +558,7 @@ enum class MOp : uint8_t {
      * self-tail-call; src1 = imm64_idx(addr) para tail-call cross-fn. */
     TAILCALL = 85,
 
-    /* Pseudo (Phase AS inc.5): bloque de inline-asm nativo.  src1 =
+    /* Pseudo ( AS inc.5): bloque de inline-asm nativo.  src1 =
      * IMM32(blob_idx) -> indice en @c MFunction::asm_blobs.  El encoder
      * apendea los bytes ya ensamblados (via @c vx::g_asm_backend) verbatim
      * al code cache.  No tiene operandos vreg propios: los inputs/outputs
@@ -536,7 +569,7 @@ enum class MOp : uint8_t {
      * posicion (ver 5c). */
     INLINE_ASM_RAW = 86,
 
-    /* Pseudo AOT (Phase AOT.3 Paso 2b-ii): referencias a simbolos que el
+    /* Pseudo AOT ( AOT.3 Paso 2b-ii): referencias a simbolos que el
      * encoder emite con un placeholder + una @c MReloc, y que el driver
      * parchea tras el layout de @c .text/.rodata.  Solo se generan en el
      * codegen AOT (HOST_LEAF standalone); el JIT en proceso resuelve las
@@ -579,7 +612,7 @@ enum class MOp : uint8_t {
              ///< + `mov r10,[r10+r11*8]` + `lea dst,[r10+var@secrel]`
              ///< (SECREL32).  Usa r10/r11 (scratch reservados) -> dst libre.
 
-    /* FP-regalloc (Phase AOT C1 float, 2026-06-17): movimiento de datos
+    /* FP-regalloc ( AOT C1 float, 2026-06-17): movimiento de datos
      * f64/f32 entre XMM regs y entre XMM y memoria (spills, param-load/store,
      * float CONST).  A diferencia de ADDSD/etc (reg-reg only), MOVSD/MOVSS
      * aceptan un operando de memoria -> el rewrite los usa para materializar
@@ -666,6 +699,16 @@ enum class MOp : uint8_t {
     VXORPS = 157, ///< VXORPS dst,src1,src2 (VX.LIG.NP.0F 57) -- fneg
     VANDPS = 158, ///< VANDPS dst,src1,src2 (VX.LIG.NP.0F 54) -- fabs
 
+    /* Pseudo (callback-ABI save-set, jubilacion de slots): un callback NO
+     * hoja-puro puede ser invocado desde un contexto con proc->registers vivo
+     * (el interp, o una re-entrada nativa).  El cuerpo, al hacer un CALL VM_ABI,
+     * pisaria proc->registers[1..N] del caller.  CB_SAVE_REGS salva regs[0..15]
+     * a una work-area de 128B del frame (reservada por el rewrite si
+     * MFunction::cb_save_regs); CB_RESTORE_REGS los restaura antes del RET.  El
+     * rewrite los expande con R11 (scratch) sabiendo el offset RBP del area. */
+    CB_SAVE_REGS = 200,    ///< salva proc->regs[0..15] a la work-area del frame
+    CB_RESTORE_REGS = 201, ///< restaura proc->regs[0..15] desde la work-area
+
     /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
      * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y
      * UNPCKLPD (difunde el lane bajo a ambos -> construye la mascara de signo
@@ -693,6 +736,11 @@ enum class MOp : uint8_t {
      * (66 0F38 W0 B8) -> f32.  Solo AVX/AVX512 (no hay FMA en SSE2 base). */
     VFMADD231PD = 141,  ///< VFMADD231PD dst, src1, src2/mem (f64)
     VFMADD231PS = 142,  ///< VFMADD231PS dst, src1, src2/mem (f32)
+    /* FMA ESCALAR (round(a*b+c), 1 redondeo): dst = src1*src2 + dst.  Baja el
+     * IrOp::FMA.  VFMADD231SD (66 0F38 W1 B9) -> f64; VFMADD231SS (66 0F38 W0
+     * B9) -> f32.  Requiere FMA3 (caps.fma); si no, el vreg cae a interp. */
+    VFMADD231SD = 238, ///< VFMADD231SD dst, src1, src2 (f64 escalar)
+    VFMADD231SS = 239, ///< VFMADD231SS dst, src1, src2 (f32 escalar)
 
     DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup
@@ -708,6 +756,42 @@ enum class MOp : uint8_t {
                             ///< escribe offset[block]-offset[table].  El
                             ///< dispatch suma la base: lea RB,[rip+table];
                             ///< movsxd RI,[RB+idx*4]; add RB,RI; jmp RB.
+
+    /* ===== MOps especificos de AArch64 (arm64 vreg backend, opcion A) =====
+     * Los MOp ALU/mem/control ABSTRACTOS (MOV/ADD/SUB/IMUL/AND/OR/XOR/SHL/SHR/
+     * SAR/NEG/NOT/CMP/TEST/LOAD/STORE/RET/CALL/JMP/JCC/LABEL_DEF/SAFEPOINT) se
+     * REUSAN en arm64: como is_two_address=false, el selector emite forma
+     * 3-operandos y el encoder arm64 la traduce (add/sub/mul/and/... rd,rn,rm).
+     * Solo se anaden aqui las ops SIN equivalente abstracto.  El encoder x86 no
+     * las emite; el arm64 si. */
+    A64_UDIV = 210,   ///< udiv rd, rn, rm (division sin signo; sin CQO/rax:rdx)
+    A64_SDIV = 211,   ///< sdiv rd, rn, rm (division con signo)
+    A64_MADD = 212,   ///< madd rd, rn, rm, ra (rd = ra + rn*rm)
+    A64_MSUB = 213,   ///< msub rd, rn, rm, ra (rd = ra - rn*rm); modulo = a-(a/b)*b
+    A64_MOVZ = 214,   ///< movz rd, #imm16, lsl #s (materializar constante: base)
+    A64_MOVK = 215,   ///< movk rd, #imm16, lsl #s (rellenar 16 bits sin borrar)
+    A64_MVN = 216,    ///< mvn rd, rm (NOT bitwise = orn rd, xzr, rm)
+    A64_CSEL = 217,   ///< csel rd, rn, rm, cond (select condicional)
+    A64_CSET = 218,   ///< cset rd, cond (rd = cond ? 1 : 0; = SETcc)
+    A64_CBZ = 219,    ///< cbz rn, label (branch si rn == 0)
+    A64_CBNZ = 220,   ///< cbnz rn, label (branch si rn != 0)
+    /* Float/SIMD escalar AArch64 (3-operandos, banco v0-v31). */
+    A64_FMOV = 221,   ///< fmov (reg-reg, o gp<->fp, o imm)
+    A64_FADD = 222,   ///< fadd rd, rn, rm
+    A64_FSUB = 223,   ///< fsub rd, rn, rm
+    A64_FMUL = 224,   ///< fmul rd, rn, rm
+    A64_FDIV = 225,   ///< fdiv rd, rn, rm
+    A64_FCMP = 226,   ///< fcmp rn, rm (setea NZCV)
+    A64_FSQRT = 227,  ///< fsqrt rd, rn
+    A64_FNEG = 228,   ///< fneg rd, rn
+    A64_FABS = 229,   ///< fabs rd, rn
+    A64_SCVTF = 230,  ///< scvtf rd(fp), rn(gp) (int con signo -> float)
+    A64_UCVTF = 231,  ///< ucvtf rd(fp), rn(gp) (int sin signo -> float)
+    A64_FCVTZS = 232, ///< fcvtzs rd(gp), rn(fp) (float -> int con signo, trunc)
+    A64_FCVTZU = 233, ///< fcvtzu rd(gp), rn(fp) (float -> int sin signo, trunc)
+    A64_FCVT = 234,   ///< fcvt rd, rn (convierte precision f32<->f64)
+    A64_SXTB = 235,   ///< sxtb/sxth/sxtw rd, rn (sign-extend 8/16/32 -> 64)
+    A64_UXTB = 236,   ///< uxtb/uxth rd, rn (zero-extend 8/16 -> 64)
 
     COUNT = 114
 };
@@ -866,6 +950,22 @@ struct MInstr {
         return i;
     }
 
+    /** @brief Pseudo CB_SAVE_REGS: salva proc->registers[0..15] a la work-area
+     *  del frame (callback-ABI save-set).  Requiere RBX = ProcessVM*.  El
+     *  rewrite lo expande sabiendo el offset RBP del area (R11 scratch). */
+    static MInstr make_cb_save() noexcept {
+        MInstr i;
+        i.op = MOp::CB_SAVE_REGS;
+        return i;
+    }
+    /** @brief Pseudo CB_RESTORE_REGS: restaura proc->registers[0..15] desde la
+     *  work-area del frame.  Emitido antes del RET del callback. */
+    static MInstr make_cb_restore() noexcept {
+        MInstr i;
+        i.op = MOp::CB_RESTORE_REGS;
+        return i;
+    }
+
     /** @brief LOAD: @p dst = [@p addr] (host memory, disp 0).  @p width =
      *  1/2/4/8 bytes; @p sgn = sign-extend (i*) vs zero-extend (u*). */
     static MInstr make_load(MOperand dst, MOperand addr, uint8_t width,
@@ -953,7 +1053,7 @@ struct MInstr {
         return i;
     }
 
-    /** @brief INLINE_ASM_RAW: bloque de inline-asm nativo (Phase AS inc.5).
+    /** @brief INLINE_ASM_RAW: bloque de inline-asm nativo ( AS inc.5).
      *  @p blob_idx = indice en @c MFunction::asm_blobs con los bytes ya
      *  ensamblados + la info de liveness/clobbers.  El idx viaja como IMM32
      *  en @c src1 (no es un vreg). */
@@ -1158,7 +1258,7 @@ struct MFixup {
 /**
  * @enum MRelocKind
  * @brief Tipo de relocation que el codegen AOT deja sin resolver en una
- *        funcion compilada de forma aislada (Phase AOT.3 Paso 2b-ii).
+ *        funcion compilada de forma aislada ( AOT.3 Paso 2b-ii).
  *
  * A diferencia de @c MFixup (intra-funcion: el encoder lo resuelve solo,
  * conoce el destino), una @c MReloc referencia un SIMBOLO cuya direccion
@@ -1188,6 +1288,9 @@ enum class MRelocKind : uint8_t {
            ///< seccion (.tls), NO la VA.  El acceso suma este offset a la base
            ///< del bloque TLS del modulo (cargada desde el TEB).  El emisor PE
            ///< escribe target_off directamente.
+    ARM64_CALL26 =
+        5, ///< AArch64 bl/b a una FUNCION (R_AARCH64_CALL26): el campo imm26
+           ///< del bl = (sym - site) >> 2.  El driver lo encola como callee.
 };
 
 /**
@@ -1297,7 +1400,7 @@ struct Stackmap {
 
 /**
  * @struct AsmBlob
- * @brief Bloque de inline-asm nativo ya ensamblado (Phase AS inc.5).
+ * @brief Bloque de inline-asm nativo ya ensamblado ( AS inc.5).
  *
  * Lo referencia un @c MInstr de op @c INLINE_ASM_RAW via el indice en
  * @c MFunction::asm_blobs.  @c bytes es la salida de @c vx::g_asm_backend
@@ -1331,7 +1434,7 @@ struct AsmBlob {
     /// Solo-inspeccion: offset relativo -> linea .vx de cada instruccion del
     /// asm (para atribuir cada instr a su linea real, no al `asm {` global).
     std::vector<std::pair<uint32_t, uint32_t>> insn_lines;
-    /// Phase AS inc.6: simbolos PROPIOS referenciados desde el asm (`jmp
+    ///  AS inc.6: simbolos PROPIOS referenciados desde el asm (`jmp
     /// [global]`, `mov rax, fn`, ...).  @c offset es RELATIVO al inicio del
     /// blob; el encoder lo reubica al offset de la funcion y emite un MReloc
     /// (DATA_REL32 si @c rip_relative, ABS64 si imm).  @c symbol es el nombre
@@ -1357,6 +1460,29 @@ struct AsmBlob {
         std::string symbol;
     };
     std::vector<AsmSymRef> sym_refs;
+
+    /**
+     * @brief Ensamblado DIFERIDO post-regalloc: la plantilla lleva
+     *        placeholders @c $N por operando; el registro FiSICO de cada uno no
+     *        se conoce hasta que el asignador corre, asi que el ensamblado se
+     *        aplaza al @c regalloc_rewrite (que resuelve @c vreg -> fisico).
+     *
+     * Cuando @c deferred es true, @c bytes esta VACiO al salir del selector; el
+     * rewrite sustituye @c $N por el nombre del registro (fisico fijo si
+     * @c fixed_phys>=0, o @c ra.reg_of(vreg) si el asignador lo eligio) y llama
+     * al ensamblador.  Asi el operando @c reg LIBRE se integra con el regalloc
+     * de la funcion (en vez del pick greedy compile-time).
+     */
+    struct DeferredOp {
+        uint32_t vreg = UINT32_MAX; ///< vreg cuyo fisico rellena $idx (o -1)
+        int16_t fixed_phys = -1;    ///< fisico fijo (>=0) o -1 = del RA
+        uint16_t width = 64;        ///< ancho en bits (nombra el registro)
+        uint8_t regclass = 0;       ///< 0=GP (solo GP)
+    };
+    bool deferred = false;              ///< true -> ensamblar en el rewrite
+    uint8_t deferred_isa = 0;           ///< ISA (== instr_db::Isa) para el backend
+    std::string deferred_tmpl;          ///< plantilla NASM con $0,$1,... por operando
+    std::vector<DeferredOp> deferred_ops; ///< por indice de placeholder ($idx)
 };
 
 /**
@@ -1374,11 +1500,11 @@ struct MFunction {
     std::vector<MBlock> blocks;
     std::vector<uint64_t> imm64_pool;
     std::vector<MFixup> fixups;
-    /// Phase AOT.3 Paso 2b-ii: tabla de simbolos referenciados por las
+    ///  AOT.3 Paso 2b-ii: tabla de simbolos referenciados por las
     /// @c MReloc de esta funcion (nombres de funciones del modulo y de
     /// datos de .rodata).  Indexada por @c MReloc::sym_idx.
     std::vector<std::string> reloc_symbols;
-    /// Phase AOT.3 Paso 2b-ii: relocations sin resolver que el encoder
+    ///  AOT.3 Paso 2b-ii: relocations sin resolver que el encoder
     /// emite (CALL cross-funcion, refs a .rodata).  @c patch_at es relativo
     /// al inicio del codigo de ESTA funcion; el driver lo reubica al
     /// concatenar las funciones en @c .text.
@@ -1417,10 +1543,16 @@ struct MFunction {
     /// (auto_jit, runtime, AOT normal) NO paga nada: el encoder ni mira la
     /// tabla y los bytes emitidos son identicos.
     bool emit_line_map = false;
-    /// Phase NR: `@Naked` -- suprime prologo/epilogo Y ret implicito en el
+    ///  NR: `@Naked` -- suprime prologo/epilogo Y ret implicito en el
     /// rewrite-to-physical.  El cuerpo (asm) provee su propia salida
     /// (ret/iretq).  Propagado desde @c IrFunction::is_naked por vreg-select.
     bool naked = false;
+    /// Callback-ABI (jubilacion de slots): si true, el rewrite reserva 128B
+    /// en el frame (save-area de proc->registers[0..15]) para que las
+    /// pseudo-ops @c CB_SAVE_REGS / @c CB_RESTORE_REGS del prologo/epilogo del
+    /// callback preserven el banco de registros del caller VM (re-entrancia).
+    /// Lo activa vreg-select cuando el cuerpo del callback NO es hoja-pura.
+    bool cb_save_regs = false;
     /// Solo-LSP: correlacion byte_offset -> source_line.  Vacia salvo que
     /// @c emit_line_map este activo.  Ver @c LineMapEntry.
     std::vector<LineMapEntry> line_map;
@@ -1442,12 +1574,12 @@ struct MFunction {
     /// el encoder.
     std::vector<size_t> self_ref_byte_offsets;
 
-    /// Phase D.7 (regalloc por vregs): numero de registros virtuales
+    ///  D.7 (regalloc por vregs): numero de registros virtuales
     /// reservados en esta funcion.  Los ids son densos 0..vreg_count-1.
     /// Solo se usa en el path VREG (flag @c VESTA_JIT_VREGS); el path de
     /// slots lo deja en 0.
     uint32_t vreg_count = 0;
-    /// OSR (Phase D.8): numero de valores IR originales (== fn.values.size()
+    /// OSR ( D.8): numero de valores IR originales (== fn.values.size()
     /// al compilar).  Los vregs [0, ir_value_count) corresponden 1:1 a IR
     /// value ids (mapeo identidad en @c vr()); los vregs >= ir_value_count
     /// son temporales internos del selector (intra-instruccion, nunca vivos
@@ -1456,28 +1588,37 @@ struct MFunction {
     /// C2 (el clon C2 preserva los IR VIDs), garantizando que C1 escribe y
     /// C2 lee la misma celda del buffer para el mismo valor logico.
     uint32_t ir_value_count = 0;
-    /// Phase D.7: clase (GP/FP) de cada registro virtual, indexado por
+    ///  D.7: clase (GP/FP) de cada registro virtual, indexado por
     /// vreg id.  @c vreg_class.size() == @c vreg_count.  El register
     /// allocator la consulta para asignar del pool fisico correcto.
     std::vector<RegClass> vreg_class;
-    /// Phase D.7 commit 5f: 1 si el vreg contiene un valor GESTIONADO por
+    ///  D.7 commit 5f: 1 si el vreg contiene un valor GESTIONADO por
     /// el GC (handle/host_ptr a objeto GC).  Lo poblea el selector desde
     /// @c IrValue::is_gc_object.  El pipeline lo usa para rechazar (sin
     /// stackmaps todavia) funciones donde un valor GC esta VIVO a traves
     /// de un call -> el GC no veria esa raiz si esta en un registro.
     /// @c vreg_is_gc.size() == @c vreg_count cuando esta poblado.
     std::vector<uint8_t> vreg_is_gc;
-    /// Phase AS inc.5: registro fisico FORZADO (precoloreo) de un vreg, o
+    ///  AS inc.5: registro fisico FORZADO (precoloreo) de un vreg, o
     /// -1 si libre.  SPARSE: no se mantiene paralelo a @c vreg_count; el
     /// selector solo lo redimensiona/poblea para los vregs register-bound de
     /// un inline-asm.  @c build_intervals lo copia a @c LiveInterval::fixed_reg
     /// (con bounds-check: @c vid < vreg_fixed.size() ? vreg_fixed[vid] : -1).
     std::vector<int8_t> vreg_fixed;
-    /// Phase AS inc.5: bloques de inline-asm.  Indexados por el IMM32 de la
+
+    /// vregs REGISTER-REQUIRED (nivel intermedio entre @c vreg_fixed y
+    /// libre).  El asignador DEBE darle un registro fisico (lo ELIGE el, a
+    /// diferencia del pin) y NO puede derramarlo -- lo necesita un operando
+    /// @c reg de un @c asm cuya plantilla lo referencia por @c $N durante todo
+    /// el bloque.  SPARSE (como @c vreg_fixed).  @c build_intervals lo copia a
+    /// @c LiveInterval::reg_required; el linear-scan desaloja una victima en
+    /// vez de derramar el propio intervalo.
+    std::vector<uint8_t> vreg_reg_required;
+    ///  AS inc.5: bloques de inline-asm.  Indexados por el IMM32 de la
     /// MInstr @c INLINE_ASM_RAW (@c src1.value).
     std::vector<AsmBlob> asm_blobs;
 
-    /// Phase AOT.3 Paso 2b: vreg ids de los parametros de la funcion, en
+    ///  AOT.3 Paso 2b: vreg ids de los parametros de la funcion, en
     /// orden de la convencion de llamada.  Solo lo usa el rewrite en ABI
     /// HOST_LEAF: los params llegan en los @c arg_regs del ABI host y se
     /// copian a su ubicacion fisica con un parallel-move en el prologo (en
@@ -1486,7 +1627,7 @@ struct MFunction {
     std::vector<uint32_t> param_vregs;
 
     /** @brief Marca el vreg @p vid como precoloreado al fisico @p phys
-     *  (Phase AS inc.5).  Redimensiona @c vreg_fixed perezosamente. */
+     *  ( AS inc.5).  Redimensiona @c vreg_fixed perezosamente. */
     void set_vreg_fixed(uint32_t vid, uint8_t phys) {
         if (vreg_fixed.size() <= vid) vreg_fixed.resize(vid + 1, -1);
         vreg_fixed[vid] = static_cast<int8_t>(phys);
@@ -1494,6 +1635,17 @@ struct MFunction {
     /** @brief Registro fisico forzado de @p vid, o -1 si libre. */
     int fixed_of(uint32_t vid) const noexcept {
         return vid < vreg_fixed.size() ? vreg_fixed[vid] : -1;
+    }
+    /** @brief Marca @p vid como REGISTER-REQUIRED: el RA le da un
+     *  registro que ELIGE el y no lo derrama. */
+    void set_vreg_reg_required(uint32_t vid) {
+        if (vreg_reg_required.size() <= vid)
+            vreg_reg_required.resize(vid + 1, 0u);
+        vreg_reg_required[vid] = 1u;
+    }
+    /** @brief ¿Es @p vid register-required? */
+    bool reg_required_of(uint32_t vid) const noexcept {
+        return vid < vreg_reg_required.size() && vreg_reg_required[vid] != 0u;
     }
     /** @brief añade un @c AsmBlob al pool y devuelve su indice. */
     uint32_t intern_asm_blob(AsmBlob b) {

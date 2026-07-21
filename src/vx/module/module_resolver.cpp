@@ -1,0 +1,879 @@
+/**
+ * @file module_resolver.cpp
+ * @brief Implementacion del resolver de paths + dep graph ( M).
+ *
+ * Optimizaciones aplicadas:
+ *   - Cache de resolucion por path-hash (FNV-1a 64): segunda resolucion
+ *     del mismo modulo es O(1) sin tocar el filesystem.
+ *   - Single-pass normalization: la version canonica del path se computa
+ *     UNA vez por modulo y se reusa.
+ *   - DFS coloreado WHITE/GRAY/BLACK: O(V+E) para ciclos + topo en una
+ *     sola pasada.
+ *   - Lectura de fichero binary-safe (no asume \0 terminator interno).
+ *   - Reserva anticipada de vectores (avoids realloc en hot paths).
+ */
+
+#include "vx/module/module_resolver.h"
+
+#include "vx/lexer.h"
+#include "vx/token.h"
+
+#include <algorithm>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <functional>
+#include <fstream>
+#include <sstream>
+
+#if defined(_WIN32)
+#include <direct.h>
+#include <io.h>
+#define VX_PATH_SEP_ENV ';'
+#define VX_F_OK 0
+// _access en Windows.
+static inline bool vx_file_access_ok(const char *p) {
+    return _access(p, 0) == 0;
+}
+#else
+#include <unistd.h>
+#define VX_PATH_SEP_ENV ':'
+static inline bool vx_file_access_ok(const char *p) {
+    return access(p, F_OK) == 0;
+}
+#endif
+
+#include "vx/ast.h"
+#include "vx/lexer.h"
+#include "vx/parser.h"
+#include "util/fs_utils.h"
+
+namespace vx {
+
+// Autodetecta el directorio de la stdlib Vesta.  Misma logica que usaba
+// compiler_project.cpp inline; factorizada aqui para que el LSP (indices de
+// modulos importados) la reuse sin duplicar la sonda.
+std::string detect_stdlib_vx_dir() {
+    std::string sd;
+    if (const char *env = std::getenv("VX_STDLIB_DIR")) sd = env;
+    if (!sd.empty()) return sd;
+    // (2) Candidatos relativos al cwd.
+    static const char *cands[] = {"stdlib/vx", "../stdlib/vx", "../../stdlib/vx"};
+    for (const char *c : cands) {
+        std::ifstream test(std::string(c) + "/simd_string.vx");
+        if (test.good()) return c;
+    }
+    // (3) Candidatos relativos al ejecutable (instalacion + build-tree).
+    std::string exe = fs::get_executable_path();
+    if (!exe.empty()) {
+        std::filesystem::path ed = std::filesystem::path(exe).parent_path();
+        const std::filesystem::path exe_cands[] = {
+            ed / "stdlib" / "vx", ed.parent_path() / "stdlib" / "vx"};
+        for (const auto &c : exe_cands) {
+            std::ifstream test((c / "simd_string.vx").string());
+            if (test.good()) return c.string();
+        }
+    }
+    return {};
+}
+
+// ---------------------------------------------------------------------------
+// FNV-1a 64-bit.  Constante recomendada por Eric Niebler / FNV reference.
+// Coste hot path: ~1ns por byte en CPUs modernos.  No usamos xxhash/wyhash
+// para no añadir dep externa; FNV-1a es suficiente para path hashing
+// (sin colisiones esperadas en proyectos de <1M modulos).
+// ---------------------------------------------------------------------------
+uint64_t ModuleGraph::fnv1a_(const std::string &s) noexcept {
+    constexpr uint64_t OFFSET = 0xCBF29CE484222325ULL;
+    constexpr uint64_t PRIME = 0x100000001B3ULL;
+    uint64_t h = OFFSET;
+    for (unsigned char c : s) {
+        h ^= static_cast<uint64_t>(c);
+        h *= PRIME;
+    }
+    return h;
+}
+
+// ---------------------------------------------------------------------------
+// Detection de path absoluto: cross-platform.
+//   POSIX: empieza con '/'
+//   Windows: empieza con '/' o '\\' o tiene drive letter "X:" en pos 1.
+// ---------------------------------------------------------------------------
+bool ModuleGraph::is_absolute_(const std::string &path) noexcept {
+    if (path.empty()) return false;
+    if (path[0] == '/' || path[0] == '\\') return true;
+#if defined(_WIN32)
+    if (path.size() >= 2 &&
+        ((path[0] >= 'A' && path[0] <= 'Z') ||
+         (path[0] >= 'a' && path[0] <= 'z')) &&
+        path[1] == ':') {
+        return true;
+    }
+#endif
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Lectura de fichero a string.  Lee binary-safe.  Devuelve false en error.
+// ---------------------------------------------------------------------------
+void ModuleGraph::set_source_overlay(const std::string &path,
+                                     const std::string &text) {
+    // Normalizar igual que los paths canonicos (build_from_root usa
+    // normalize_path_(root_file, "")), asi la clave del overlay coincide con
+    // el @c canonical_path que llega a read_file_.
+    source_overlay_[normalize_path_(path, "")] = text;
+}
+
+bool ModuleGraph::read_file_(const std::string &path, std::string &out) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return false;
+    const std::streamsize sz = f.tellg();
+    if (sz < 0) return false;
+    f.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(sz));
+    if (sz > 0) {
+        f.read(out.data(), sz);
+        if (!f) return false;
+    }
+    return true;
+}
+
+bool ModuleGraph::file_exists_(const std::string &path) noexcept {
+    return vx_file_access_ok(path.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Normalizacion de paths.  Pasos:
+//   1. Si no es absoluto, prefijar con base_dir + "/".
+//   2. Reemplazar '\\' por '/'.
+//   3. Colapsar '//' a '/'.
+//   4. Resolver "./" (eliminarlos).
+//   5. Resolver "../" subiendo un nivel.  Si excede la raiz, error
+//      silente (deja el path tal cual; el filesystem lo rechazara).
+// ---------------------------------------------------------------------------
+std::string ModuleGraph::normalize_path_(const std::string &raw,
+                                         const std::string &base_dir) const {
+    std::string p;
+    p.reserve(raw.size() + base_dir.size() + 8);
+
+    // Paso 1: combinar con base_dir si raw es relativo.
+    if (is_absolute_(raw)) {
+        p = raw;
+    } else {
+        if (!base_dir.empty()) {
+            p = base_dir;
+            if (p.back() != '/' && p.back() != '\\') {
+                p += '/';
+            }
+        }
+        p += raw;
+    }
+    // Paso 2: normalizar separadores.
+    for (char &c : p) {
+        if (c == '\\') c = '/';
+    }
+    // Paso 3 + 4 + 5: tokenizar por '/' y reconstruir.
+    std::vector<std::string> parts;
+    parts.reserve(16);
+    std::string cur;
+#if defined(_WIN32)
+    // Preservar drive letter "X:" como primer token (no procesarlo).
+    std::string drive;
+    if (p.size() >= 2 && p[1] == ':') {
+        drive = p.substr(0, 2);
+        p.erase(0, 2);
+    }
+#endif
+    const bool root_abs = !p.empty() && p[0] == '/';
+
+    for (size_t i = 0; i <= p.size(); ++i) {
+        if (i == p.size() || p[i] == '/') {
+            if (!cur.empty()) {
+                if (cur == ".") {
+                    // skip
+                } else if (cur == "..") {
+                    if (!parts.empty() && parts.back() != "..") {
+                        parts.pop_back();
+                    } else if (!root_abs) {
+                        parts.push_back(cur);
+                    }
+                    // Si root_abs y stack vacio, descartamos ".." (no se
+                    // puede subir mas alla de '/').
+                } else {
+                    parts.push_back(std::move(cur));
+                }
+                cur.clear();
+            }
+        } else {
+            cur += p[i];
+        }
+    }
+
+    // Reconstruir.
+    std::string out;
+    out.reserve(p.size());
+#if defined(_WIN32)
+    out += drive;
+#endif
+    if (root_abs) out += '/';
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i > 0) out += '/';
+        out += parts[i];
+    }
+    if (out.empty()) out = ".";
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// ModuleGraph: ctor + config de search paths.
+// ---------------------------------------------------------------------------
+ModuleGraph::ModuleGraph(Diagnostics &diags) : diags_(diags) {
+    modules_.reserve(32); // pre-reservar para evitar reallocs tempranas
+    search_paths_.reserve(8);
+}
+
+void ModuleGraph::add_search_path(const std::string &dir) {
+    if (dir.empty()) return;
+    search_paths_.push_back(normalize_path_(dir, ""));
+}
+
+void ModuleGraph::add_vx_path_env() {
+#if defined(_WIN32)
+    // Windows: getenv puede devolver NULL si no esta seteado.
+    const char *raw = std::getenv("VX_PATH");
+#else
+    const char *raw = std::getenv("VX_PATH");
+#endif
+    if (raw == nullptr || *raw == 0) return;
+    std::string s(raw);
+    // Tokenizar por VX_PATH_SEP_ENV.
+    std::string cur;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i == s.size() || s[i] == VX_PATH_SEP_ENV) {
+            if (!cur.empty()) {
+                add_search_path(cur);
+                cur.clear();
+            }
+        } else {
+            cur += s[i];
+        }
+    }
+}
+
+void ModuleGraph::set_stdlib_dir(const std::string &dir) {
+    stdlib_dir_ = normalize_path_(dir, "");
+}
+
+// ---------------------------------------------------------------------------
+// collect_expr_param_fns_: recorre las decls de un modulo (recursivo dentro de
+// NamespaceDecl) y anota, por cada FunctionDecl con params @c expr, el mapa
+// `nombre -> [posiciones]`.  Usado para sembrar el parser de los modulos que
+// importan estas funciones (cross-module expr-capture).  Reusa el AST YA
+// parseado del dep; no re-parsea nada.
+// ---------------------------------------------------------------------------
+static void
+collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
+                        std::unordered_map<std::string, std::vector<int>> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::FunctionDecl) {
+            auto *fd = static_cast<ast::FunctionDecl *>(d.get());
+            std::vector<int> pos;
+            for (size_t i = 0; i < fd->params.size(); ++i) {
+                if (fd->params[i] && fd->params[i]->is_expr_capture)
+                    pos.push_back(static_cast<int>(i));
+            }
+            if (!pos.empty()) out[fd->name] = std::move(pos);
+        } else if (d->kind == ast::NodeKind::NamespaceDecl) {
+            collect_expr_param_fns_(
+                static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
+        }
+    }
+}
+
+// gather_public_reexports_: recolecta (path, by_namespace) de las sentencias
+// `public import` (re-export) de un modulo ya parseado (recursivo dentro de
+// NamespaceDecl).  Sirve para seguir la CADENA de re-exports al sembrar los
+// params @c expr: una fn `source(expr)` re-exportada por std.comptime desde
+// std.comptime.basics debe seguir siendo capturada como texto crudo en el
+// modulo que importa std.comptime.
+static void gather_public_reexports_(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::vector<std::pair<std::string, bool>> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::ImportDecl) {
+            auto *im = static_cast<ast::ImportDecl *>(d.get());
+            if (im->is_public_reexport && !im->path.empty())
+                out.emplace_back(im->path, im->by_namespace);
+        } else if (d->kind == ast::NodeKind::NamespaceDecl) {
+            gather_public_reexports_(
+                static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// scan_import_paths_: escaneo BARATO (solo lex, sin parse) de las sentencias
+// `import` de un fichero.  Devuelve (path, by_namespace) por cada import.
+// Permite resolver los deps ANTES de parsear el cuerpo del modulo, para
+// sembrar los params @c expr de las fns importadas.  Cubre `import a.b.c;`,
+// `import "path";`, `public import ...;` y la forma selectiva `a.b.{...}`.
+// ---------------------------------------------------------------------------
+static std::vector<std::pair<std::string, bool>>
+scan_import_paths_(const std::string &source) {
+    std::vector<std::pair<std::string, bool>> out;
+    Diagnostics tmp; // sumidero desechable: no reportamos errores de lex aqui
+    Lexer lex(source, "<import-scan>", tmp);
+    Token t = lex.next();
+    while (t.kind != TokenKind::END_OF_FILE) {
+        if (t.kind == TokenKind::KW_IMPORT) {
+            Token nxt = lex.next();
+            if (nxt.kind == TokenKind::STRING_LIT ||
+                nxt.kind == TokenKind::RAW_STRING_LIT) {
+                out.emplace_back(nxt.str_val, /*by_namespace=*/false);
+                t = lex.next();
+                continue;
+            }
+            if (nxt.kind == TokenKind::IDENTIFIER) {
+                std::string ns = nxt.lexeme;
+                t = lex.next();
+                // path punteado a.b.c; parar en `.{` (lista selectiva).
+                while (t.kind == TokenKind::DOT) {
+                    Token after = lex.next();
+                    if (after.kind != TokenKind::IDENTIFIER) {
+                        t = after; // `.{...}` o error: cerrar el path
+                        break;
+                    }
+                    ns += ".";
+                    ns += after.lexeme;
+                    t = lex.next();
+                }
+                out.emplace_back(std::move(ns), /*by_namespace=*/true);
+                continue;
+            }
+            t = nxt;
+            continue;
+        }
+        t = lex.next();
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Carga + parse de un modulo.  Crea ResolvedModule, computa hashes,
+// invoca lex + parse.  No procesa las deps todavia (eso lo hace
+// process_dependencies_ tras añadir el modulo al graph).
+// ---------------------------------------------------------------------------
+uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
+    const uint64_t path_hash = fnv1a_(canonical_path);
+
+    // Hit del cache: ya cargado antes (cada modulo se parsea una sola vez).
+    auto it = by_path_hash_.find(path_hash);
+    if (it != by_path_hash_.end()) {
+        return it->second;
+    }
+
+    // Leer fichero.  Overlay LSP: si hay texto inyectado en memoria para este
+    // path (buffer del editor con ediciones sin guardar), usarlo en vez del
+    // disco.  read_file_ es static, asi que el overlay se resuelve aqui.
+    std::string source;
+    bool got_source = false;
+    if (!source_overlay_.empty()) {
+        auto ov = source_overlay_.find(canonical_path);
+        if (ov != source_overlay_.end()) {
+            source = ov->second;
+            got_source = true;
+        }
+    }
+    if (!got_source && !read_file_(canonical_path, source)) {
+        SourceLoc l;
+        l.file = canonical_path;
+        diags_.error(l, "no se pudo leer el modulo: '" + canonical_path + "'");
+        return UINT32_MAX;
+    }
+
+    // Crear entrada.  Reservar id ANTES de parsear para que un import
+    // del propio fichero (auto-import) detecte el ciclo correctamente.
+    auto mod = std::make_unique<ResolvedModule>();
+    mod->module_id = static_cast<uint32_t>(modules_.size());
+    mod->canonical_path = canonical_path;
+    mod->path_hash = path_hash;
+    mod->source_hash = fnv1a_(source);
+
+    // Extraer module_name = ultimo segmento sin extension.
+    size_t slash = canonical_path.find_last_of('/');
+    std::string base = (slash == std::string::npos)
+                           ? canonical_path
+                           : canonical_path.substr(slash + 1);
+    size_t dot = base.find_last_of('.');
+    mod->module_name = (dot == std::string::npos) ? base : base.substr(0, dot);
+
+    //  M.L22: paquete-dir.  Si el filename es `mod.vx`, el modulo
+    // logico es el directorio parent.  Asi `pkg_lib/mod.vx` se llama
+    // `pkg_lib` (no `mod`), coincidiendo con el nombre que el consumer
+    // usa al hacer `import "pkg_lib"`.
+    if (mod->module_name == "mod" && slash != std::string::npos) {
+        const std::string parent = canonical_path.substr(0, slash);
+        const size_t parent_slash = parent.find_last_of('/');
+        const std::string parent_name = (parent_slash == std::string::npos)
+                                            ? parent
+                                            : parent.substr(parent_slash + 1);
+        if (!parent_name.empty()) {
+            mod->module_name = parent_name;
+        }
+    }
+
+    const uint32_t id = mod->module_id;
+    by_path_hash_.emplace(path_hash, id);
+    modules_.push_back(std::move(mod));
+
+    // Cross-module expr-capture: ANTES de parsear el cuerpo, resolver los
+    // imports (barato: solo lex) y cargar los deps para conocer sus fns con
+    // param @c expr.  El parser las necesita para capturar el texto crudo del
+    // argumento en vez de parsearlo como expresion (un `source(asm ...)`
+    // importado no parsearia).  load_and_parse_ DEDUPLICA (by_path_hash_) ->
+    // cada modulo se parsea UNA sola vez: reusa la cache de parseo, no
+    // re-parsea.  Coste en el caso comun (imports sin fns expr) = un lookup
+    // por dep.  La entrada de ESTE modulo ya esta reservada (id arriba), asi
+    // que un ciclo de imports se corta por el dedup.
+    std::unordered_map<std::string, std::vector<int>> imported_expr_params;
+    {
+        // Worklist de module_ids a inspeccionar: los imports directos + la
+        // cadena de `public import` (re-exports) transitiva.  Asi una fn `expr`
+        // re-exportada (std.comptime -> std.comptime.basics::source) tambien se
+        // siembra en el importador de std.comptime.
+        std::unordered_set<uint32_t> visited_dep;
+        std::vector<uint32_t> worklist;
+        auto resolve_to_id = [&](const std::string &p,
+                                 bool by_ns,
+                                 const std::string &importer) -> uint32_t {
+            ResolveResult r = by_ns ? resolve_namespace_(p, importer)
+                                    : resolve(p, importer);
+            if (r.status != ResolveResult::Status::OK) return UINT32_MAX;
+            if (r.module_id >= modules_.size()) return UINT32_MAX;
+            return r.module_id;
+        };
+        for (const auto &ip : scan_import_paths_(source)) {
+            uint32_t did = resolve_to_id(ip.first, ip.second, canonical_path);
+            if (did != UINT32_MAX) worklist.push_back(did);
+        }
+        while (!worklist.empty()) {
+            const uint32_t dep_id = worklist.back();
+            worklist.pop_back();
+            if (!visited_dep.insert(dep_id).second) continue;
+            ResolvedModule *dep = modules_[dep_id].get();
+            if (!dep || !dep->parsed_ast) continue;
+            collect_expr_param_fns_(dep->parsed_ast->decls,
+                                    imported_expr_params);
+            // Seguir los `public import` del dep (re-export transitivo).
+            std::vector<std::pair<std::string, bool>> reexp;
+            gather_public_reexports_(dep->parsed_ast->decls, reexp);
+            for (const auto &rp : reexp) {
+                uint32_t rid =
+                    resolve_to_id(rp.first, rp.second, dep->canonical_path);
+                if (rid != UINT32_MAX) worklist.push_back(rid);
+            }
+        }
+    }
+
+    // Lex + parse.  Cada modulo reusa el mismo Diagnostics del graph para
+    // que los errores aparezcan agregados al final del build.
+    Lexer lexer(source, canonical_path, diags_);
+    Parser parser(lexer, diags_);
+    if (!imported_expr_params.empty())
+        parser.seed_imported_expr_params(imported_expr_params);
+    auto ast = parser.parse_program();
+    if (!ast) {
+        SourceLoc l;
+        l.file = canonical_path;
+        diags_.error(l, "error al parsear el modulo: '" + canonical_path + "'");
+        return UINT32_MAX;
+    }
+    modules_[id]->parsed_ast = std::move(ast);
+    return id;
+}
+
+// ---------------------------------------------------------------------------
+// resolve(): aplica las reglas de busqueda en orden y devuelve el primer
+// candidato existente, o NOT_FOUND con la lista de paths intentados.
+// ---------------------------------------------------------------------------
+ResolveResult ModuleGraph::resolve(const std::string &raw_path,
+                                   const std::string &importer_file) {
+    ResolveResult res;
+
+    // Derivar el directorio del importador.
+    std::string importer_dir;
+    if (!importer_file.empty()) {
+        std::string norm = importer_file;
+        for (char &c : norm)
+            if (c == '\\') c = '/';
+        size_t slash = norm.find_last_of('/');
+        if (slash != std::string::npos) {
+            importer_dir = norm.substr(0, slash);
+        }
+    }
+
+    // Construir lista ordenada de candidatos.
+    std::vector<std::string> candidates;
+    candidates.reserve(4 + search_paths_.size());
+
+    //  M.L22: paquete-dir.  Para cada base_dir, intentamos primero
+    // `base_dir/raw_path.vx` (modulo single-file) y luego
+    // `base_dir/raw_path/mod.vx` (paquete-dir).  El segundo convenio
+    // permite agrupar varios .vx bajo `std/io/` con un entry point.
+    // El nombre del modulo importado sigue siendo `raw_path` (e.g.
+    // `std/io`) -- no cambia la semantica del consumer.
+    auto add_candidate = [&](const std::string &base_dir) {
+        // (a) modulo single-file.  La extension del lenguaje Vesta es `.vx`.
+        candidates.push_back(normalize_path_(raw_path + ".vx", base_dir));
+        // (b) paquete-dir: base_dir/raw_path/mod.vx (entry point del paquete).
+        candidates.push_back(normalize_path_(raw_path + "/mod.vx", base_dir));
+    };
+
+    // 1. Carpeta del importador.
+    add_candidate(importer_dir);
+    // 2. Search paths añadidos (VX_PATH + adds explicitos).
+    for (const auto &sp : search_paths_) {
+        add_candidate(sp);
+    }
+    // 3. Stdlib (solo si raw_path empieza con "std/" o si se busca el resto).
+    if (!stdlib_dir_.empty()) {
+        add_candidate(stdlib_dir_);
+    }
+
+    // Probar cada candidato.
+    for (const auto &c : candidates) {
+        res.tried_paths.push_back(c);
+        if (file_exists_(c)) {
+            const uint32_t id = load_and_parse_(c);
+            if (id == UINT32_MAX) {
+                res.status = ResolveResult::Status::PARSE_ERROR;
+                res.error_message = "fallo al cargar/parsear: " + c;
+                return res;
+            }
+            res.status = ResolveResult::Status::OK;
+            res.module_id = id;
+            return res;
+        }
+    }
+
+    // NOT_FOUND con lista de paths intentados.
+    res.status = ResolveResult::Status::NOT_FOUND;
+    std::string msg =
+        "modulo '" + raw_path + "' no encontrado. Paths probados:";
+    for (const auto &c : res.tried_paths) {
+        msg += "\n  - " + c;
+    }
+    res.error_message = std::move(msg);
+    return res;
+}
+
+// ---------------------------------------------------------------------------
+// process_dependencies_: recorre el AST buscando ImportDecls, los resuelve,
+// y popula mod.dependencies con los module_ids correspondientes.
+//
+// Recursivo: cada modulo importado se parsea (via load_and_parse_) y luego
+// se procesan sus deps tambien.  La proteccion contra ciclos vive en
+// topological_order via DFS coloreado (no aqui).
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  NS.2-full: extraccion ligera de los namespaces declarados en un
+// source .vx.  Lexemos (sin parsear) y buscamos el patron:
+//   KW_NAMESPACE IDENT (DOT IDENT)* (SEMICOLON | LBRACE)
+// Cubre la forma statement `namespace a.b.c;` y la forma bloque
+// `namespace a.b.c { ... }`.  Un mismo fichero puede declarar varios.
+// ---------------------------------------------------------------------------
+void ModuleGraph::extract_namespaces_(const std::string &source,
+                                      std::vector<std::string> &out) {
+    // Diagnostics throwaway: el lex no debe emitir errores relevantes aqui;
+    // si los hay, los ignoramos (el parse real reportara).
+    Diagnostics scratch;
+    Lexer lex(source, "<ns-scan>", scratch);
+    Token t = lex.next();
+    while (t.kind != TokenKind::END_OF_FILE) {
+        if (t.kind == TokenKind::KW_NAMESPACE) {
+            Token id = lex.next();
+            if (id.kind != TokenKind::IDENTIFIER) {
+                t = id;
+                continue;
+            }
+            std::string ns = id.lexeme;
+            Token nxt = lex.next();
+            while (nxt.kind == TokenKind::DOT) {
+                Token seg = lex.next();
+                if (seg.kind != TokenKind::IDENTIFIER) break;
+                ns += ".";
+                ns += seg.lexeme;
+                nxt = lex.next();
+            }
+            // nxt deberia ser SEMICOLON o LBRACE; en cualquier caso el ns ya
+            // esta completo.  Registramos si no esta duplicado.
+            if (std::find(out.begin(), out.end(), ns) == out.end()) {
+                out.push_back(ns);
+            }
+            t = nxt;
+            continue;
+        }
+        t = lex.next();
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  NS.2-full: construye el indice namespace -> fichero(s) escaneando
+// recursivamente los .vx bajo las source roots (dir del root, search paths,
+// stdlib).  Lazy + idempotente.
+// ---------------------------------------------------------------------------
+void ModuleGraph::build_namespace_index_() {
+    if (ns_index_built_) return;
+    ns_index_built_ = true;
+
+    namespace fs = std::filesystem;
+
+    // Recolectar las raices a escanear (sin duplicados).
+    std::vector<std::string> roots;
+    auto add_root = [&](const std::string &d) {
+        if (d.empty()) return;
+        if (std::find(roots.begin(), roots.end(), d) == roots.end()) {
+            roots.push_back(d);
+        }
+    };
+    add_root(root_dir_);
+    for (const auto &sp : search_paths_) add_root(sp);
+    add_root(stdlib_dir_);
+
+    for (const auto &root : roots) {
+        std::error_code ec;
+        if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) continue;
+        fs::recursive_directory_iterator it(
+            root, fs::directory_options::skip_permission_denied, ec);
+        fs::recursive_directory_iterator end;
+        for (; it != end; it.increment(ec)) {
+            if (ec) { ec.clear(); continue; }
+            const fs::directory_entry &de = *it;
+            if (!de.is_regular_file(ec)) continue;
+            const fs::path &p = de.path();
+            if (p.extension() != ".vx") continue;
+            std::string canonical = normalize_path_(p.string(), "");
+            std::string source;
+            if (!read_file_(canonical, source)) continue;
+            std::vector<std::string> namespaces;
+            extract_namespaces_(source, namespaces);
+            for (const auto &ns : namespaces) {
+                auto &files = ns_index_[ns];
+                if (std::find(files.begin(), files.end(), canonical) ==
+                    files.end()) {
+                    files.push_back(canonical);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  NS.2-full: resuelve `import a.b.c;` consultando el indice.  Si el
+// namespace lo declaran varios ficheros (namespace parcial), devuelve el
+// PRIMERO (el resto se cargan como deps adicionales por process_dependencies_
+// via un segundo lookup).  MVP: un fichero por namespace es el caso comun.
+// ---------------------------------------------------------------------------
+ResolveResult
+ModuleGraph::resolve_namespace_(const std::string &ns,
+                                const std::string & /*importer_file*/) {
+    ResolveResult res;
+    build_namespace_index_();
+    auto it = ns_index_.find(ns);
+    if (it == ns_index_.end() || it->second.empty()) {
+        res.status = ResolveResult::Status::NOT_FOUND;
+        res.error_message =
+            "namespace '" + ns +
+            "' no encontrado. Ningun .vx bajo las source roots lo declara.";
+        return res;
+    }
+    const std::string &file = it->second.front();
+    const uint32_t id = load_and_parse_(file);
+    if (id == UINT32_MAX) {
+        res.status = ResolveResult::Status::PARSE_ERROR;
+        res.error_message = "fallo al cargar/parsear: " + file;
+        return res;
+    }
+    res.status = ResolveResult::Status::OK;
+    res.module_id = id;
+    return res;
+}
+
+void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
+    if (!mod.parsed_ast) return;
+
+    // NS.1 fix: los imports pueden estar ANIDADOS dentro de un NamespaceDecl
+    // (forma statement `namespace a.b.c;` que envuelve el resto del fichero,
+    // imports incluidos).  Recolectarlos recursivamente; si no, el grafo de
+    // modulos no ve el import -> el dep no se compila -> "funcion no declarada".
+    std::vector<ast::ImportDecl *> imports;
+    std::function<void(std::vector<std::unique_ptr<ast::Node>> &)> gather =
+        [&](std::vector<std::unique_ptr<ast::Node>> &decls) {
+            for (auto &decl : decls) {
+                if (!decl) continue;
+                if (decl->kind == ast::NodeKind::ImportDecl) {
+                    imports.push_back(
+                        static_cast<ast::ImportDecl *>(decl.get()));
+                } else if (decl->kind == ast::NodeKind::NamespaceDecl) {
+                    gather(static_cast<ast::NamespaceDecl *>(decl.get())->decls);
+                }
+            }
+        };
+    gather(mod.parsed_ast->decls);
+
+    for (auto *imp : imports) {
+        ResolveResult r = imp->by_namespace
+                              ? resolve_namespace_(imp->path, mod.canonical_path)
+                              : resolve(imp->path, mod.canonical_path);
+        if (r.status == ResolveResult::Status::NOT_FOUND) {
+            diags_.error(imp->loc, r.error_message);
+            continue;
+        }
+        if (r.status == ResolveResult::Status::PARSE_ERROR ||
+            r.status == ResolveResult::Status::IO_ERROR) {
+            diags_.error(imp->loc, r.error_message);
+            continue;
+        }
+        // Helper: registra un module_id como dependencia (dedup + recursion).
+        auto add_dep = [&](uint32_t mid) {
+            if (mid == UINT32_MAX || mid == mod.module_id) return;
+            for (uint32_t d : mod.dependencies)
+                if (d == mid) return; // dup
+            mod.dependencies.push_back(mid);
+            ResolvedModule *child = modules_[mid].get();
+            if (child && child->dependencies.empty() && child->parsed_ast)
+                process_dependencies_(*child);
+        };
+        add_dep(r.module_id);
+        // Namespace PARCIAL: un mismo `namespace X;` puede estar declarado por
+        // VARIOS ficheros (p.ej. std.types + std/types/x86_64.vx).
+        // resolve_namespace_ devuelve solo el PRIMERO; aqui cargamos el RESTO
+        // para que sus simbolos (tipos/fns) tambien se fusionen en el namespace
+        // que ve el importador.  Sin esto, `import std.types` solo veia el
+        // primer fichero y `sizeof<std.types.uintptr>` (definido en el arch
+        // file) daba "tipo no reconocido".
+        if (imp->by_namespace) {
+            build_namespace_index_();
+            auto itns = ns_index_.find(imp->path);
+            if (itns != ns_index_.end()) {
+                for (const auto &file : itns->second) {
+                    const uint32_t mid = load_and_parse_(file);
+                    add_dep(mid);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// build_from_root: punto de entrada.  Carga el modulo raiz y procesa
+// recursivamente todas las dependencias.  Devuelve el module_id del root
+// o UINT32_MAX si error fatal.
+// ---------------------------------------------------------------------------
+uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
+    // Resolver el path absoluto del root.
+    std::string canonical = normalize_path_(root_file, "");
+    if (!file_exists_(canonical)) {
+        SourceLoc l;
+        l.file = root_file;
+        diags_.error(l, "el fichero raiz no existe: '" + root_file + "'");
+        return UINT32_MAX;
+    }
+    //  NS.2-full: recordar el directorio del root para el indice de
+    // namespaces (escaneo recursivo del arbol del proyecto).
+    {
+        size_t slash = canonical.find_last_of('/');
+        if (slash != std::string::npos) {
+            root_dir_ = canonical.substr(0, slash);
+        }
+    }
+    const uint32_t id = load_and_parse_(canonical);
+    if (id == UINT32_MAX) return UINT32_MAX;
+    process_dependencies_(*modules_[id]);
+    return id;
+}
+
+// ---------------------------------------------------------------------------
+// topological_order: DFS coloreado.  WHITE = no visitado, GRAY = en pila
+// DFS actual (si encontramos otro GRAY -> ciclo), BLACK = procesado.
+// El output queda en orden: las deps salen ANTES de sus dependents.
+// ---------------------------------------------------------------------------
+std::vector<uint32_t> ModuleGraph::topological_order() const {
+    std::vector<uint32_t> order;
+    order.reserve(modules_.size());
+    if (modules_.empty()) return order;
+
+    // Reset colors.  Modificamos los modulos (color es mutable conceptual,
+    // pero const_cast aqui es seguro porque este metodo no es thread-safe
+    // y el caller no ejecuta multiples topological_order concurrentes).
+    auto *self = const_cast<ModuleGraph *>(this);
+    for (auto &m : self->modules_)
+        m->color = ResolveColor::WHITE;
+    self->cycle_detected_ = false;
+
+    // DFS iterativa con stack explicita para evitar stack overflow en
+    // proyectos profundos (mas de ~1000 niveles raros pero defensivo).
+    struct Frame {
+        uint32_t mod_id;
+        size_t dep_idx;
+    };
+    std::vector<Frame> stack;
+    stack.reserve(128);
+
+    for (uint32_t root = 0; root < modules_.size(); ++root) {
+        if (self->modules_[root]->color != ResolveColor::WHITE) continue;
+
+        stack.push_back({root, 0});
+        self->modules_[root]->color = ResolveColor::GRAY;
+
+        while (!stack.empty()) {
+            Frame &top = stack.back();
+            ResolvedModule *m = self->modules_[top.mod_id].get();
+
+            if (top.dep_idx < m->dependencies.size()) {
+                const uint32_t next = m->dependencies[top.dep_idx++];
+                ResolvedModule *child = self->modules_[next].get();
+
+                if (child->color == ResolveColor::WHITE) {
+                    child->color = ResolveColor::GRAY;
+                    stack.push_back({next, 0});
+                } else if (child->color == ResolveColor::GRAY) {
+                    // Ciclo: child esta en la pila DFS actual.
+                    self->cycle_detected_ = true;
+                    // Construir mensaje del ciclo recorriendo la pila.
+                    std::string cycle_msg = "ciclo de imports detectado: ";
+                    bool found_start = false;
+                    for (const auto &f : stack) {
+                        if (!found_start && f.mod_id == next)
+                            found_start = true;
+                        if (found_start) {
+                            cycle_msg +=
+                                self->modules_[f.mod_id]->module_name + " -> ";
+                        }
+                    }
+                    cycle_msg += child->module_name;
+                    SourceLoc l;
+                    l.file = m->canonical_path;
+                    self->diags_.error(l, cycle_msg);
+                    // No re-entramos: marcamos el child como BLACK temporal
+                    // para que el resto del topo no vuelva a quejarse.
+                    child->color = ResolveColor::BLACK;
+                }
+                // Si BLACK: ya procesado, skip.
+            } else {
+                // Todas las deps procesadas: emitir m y pop.
+                m->color = ResolveColor::BLACK;
+                order.push_back(top.mod_id);
+                stack.pop_back();
+            }
+        }
+    }
+
+    return order;
+}
+
+} // namespace vx

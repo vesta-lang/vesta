@@ -17,7 +17,7 @@
  *     podria trabajar con codigo compilado in-process durante una
  *     ejecucion (perdiendo el speedup post-warmup en runs cortos).
  *
- *   - **AOT futuro (Phase D.10+)**: el optimizer del JIT puede operar
+ *   - **AOT futuro ( D.10+)**: el optimizer del JIT puede operar
  *     ANTES de la ejecucion sobre el IR del .velb y persistir codigo
  *     nativo en un .velao adicional.
  *
@@ -73,7 +73,7 @@ constexpr uint8_t INSTR_FLAG_PRESERVE =
 constexpr uint8_t INSTR_FLAG_IS_CALL_SITE =
     1 << 1; ///< Marca instruccion como call site (para stackmaps)
 constexpr uint8_t INSTR_FLAG_HOST_ALLOCA =
-    1 << 2; ///< ALLOCA auto-promovida a host stack (Phase D.jit-mem-model)
+    1 << 2; ///< ALLOCA auto-promovida a host stack ( D.jit-mem-model)
 constexpr uint8_t INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE =
     1 << 3; ///< Sprint mem-loop-fix: RAW_FREE preservado para liberar in-loop
 
@@ -83,7 +83,10 @@ constexpr uint8_t FN_FLAG_NATIVE =
 constexpr uint8_t FN_FLAG_VARIADIC =
     1 << 1; ///< Acepta nargs variable (R15 contiene el count)
 constexpr uint8_t FN_FLAG_NAKED =
-    1 << 2; ///< Phase NR @Naked: sin prologo/epilogo/ret (ISRs/stubs)
+    1 << 2; ///<  NR @Naked: sin prologo/epilogo/ret (ISRs/stubs)
+constexpr uint8_t FN_FLAG_NO_FP_CONTRACT =
+    1 << 3; ///< @fp(strict)/-ffp-contract=off: fp_contract=false.  Bit NEGATIVO
+            ///< (se pone cuando es false) -> caches viejas sin el bit -> true.
 
 /**
  * @brief Serializa un @c IrValue al stream binario.
@@ -377,6 +380,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     if (fn.is_native) fn_flags |= FN_FLAG_NATIVE;
     if (fn.is_variadic) fn_flags |= FN_FLAG_VARIADIC;
     if (fn.is_naked) fn_flags |= FN_FLAG_NAKED;
+    if (!fn.fp_contract) fn_flags |= FN_FLAG_NO_FP_CONTRACT;
     write_u8(out, fn_flags);
 
     // Params: lista de IrValueId que apuntan a entries en values[]
@@ -407,7 +411,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     for (const auto &s : fn.generic_type_args)
         write_str(out, s);
 
-    // Phase AS inc.5: bindings register() + clobber-lists del inline-asm.
+    //  AS inc.5: bindings register() + clobber-lists del inline-asm.
     // Necesarios para que el JIT (que compila desde el @ir del .velb)
     // reconstruya el pin de registros del INLINE_ASM.  La mayoria de
     // funciones tienen ambos vacios (8 bytes: dos counts a 0).
@@ -418,12 +422,38 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
         write_u8(out, static_cast<uint8_t>(b.type));
         write_u8(out, b.is_vector ? 1u : 0u);
         write_str(out, b.name);
+        // operando `reg` auto (RA elige el fisico) + su placeholder $N.
+        write_u8(out, b.reg_auto ? 1u : 0u);
+        write_u32(out, static_cast<uint32_t>(b.ph_index));
     }
     write_u32(out, static_cast<uint32_t>(fn.asm_clobber_lists.size()));
     for (const auto &lst : fn.asm_clobber_lists) {
         write_u32(out, static_cast<uint32_t>(lst.size()));
         for (const auto &s : lst)
             write_str(out, s);
+    }
+    // ASA: instrucciones ASM_MICRO (asm opaco liftado).  El @c imm de cada
+    // IrInstr ASM_MICRO indexa esta tabla; necesaria para que JIT/AOT (que
+    // compilan desde el @ir del .velb/.vxir) reconstruyan la plantilla + los
+    // efectos.  Casi siempre vacio (4 bytes: un count a 0).
+    write_u32(out, static_cast<uint32_t>(fn.asm_micros.size()));
+    for (const auto &am : fn.asm_micros) {
+        write_u8(out, am.isa);
+        write_u32(out, am.form_id);
+        write_str(out, am.tmpl);
+        write_u8(out, am.eff);
+        // Lista PLANA de operandos (orden textual; roles en flags).
+        write_u32(out, static_cast<uint32_t>(am.operands.size()));
+        for (const auto &op : am.operands) {
+            write_u8(out, static_cast<uint8_t>(op.kind));
+            write_u8(out, op.flags);
+            write_u8(out, op.regclass);
+            write_u32(out, static_cast<uint32_t>(op.width));
+            write_u32(out, static_cast<uint32_t>(
+                               static_cast<uint16_t>(op.fixed_phys)));
+            write_u32(out, static_cast<uint32_t>(op.value));
+            write_u64(out, static_cast<uint64_t>(op.imm));
+        }
     }
 
     // AOT 2b: seccion de salida del codigo + permisos (dev OS).
@@ -461,6 +491,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     out.is_native = (fn_flags & FN_FLAG_NATIVE) != 0;
     out.is_variadic = (fn_flags & FN_FLAG_VARIADIC) != 0;
     out.is_naked = (fn_flags & FN_FLAG_NAKED) != 0;
+    out.fp_contract = (fn_flags & FN_FLAG_NO_FP_CONTRACT) == 0;
 
     /* params */
     uint32_t n_params = 0;
@@ -509,7 +540,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         out.generic_type_args.push_back(std::move(s));
     }
 
-    /* Phase AS inc.5: bindings register() + clobber-lists del inline-asm. */
+    /*  AS inc.5: bindings register() + clobber-lists del inline-asm. */
     uint32_t n_bind = 0;
     if (!read_u32(in, off, n_bind)) return false;
     out.asm_reg_bindings.clear();
@@ -526,6 +557,13 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         if (!read_u8(in, off, vec)) return false;
         b.is_vector = (vec != 0);
         if (!read_str(in, off, b.name)) return false;
+        // reg_auto + ph_index.
+        uint8_t ra_auto = 0;
+        uint32_t phi = 0;
+        if (!read_u8(in, off, ra_auto)) return false;
+        if (!read_u32(in, off, phi)) return false;
+        b.reg_auto = (ra_auto != 0);
+        b.ph_index = static_cast<int>(static_cast<int32_t>(phi));
         out.asm_reg_bindings.push_back(std::move(b));
     }
     uint32_t n_clob = 0;
@@ -543,6 +581,46 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
             lst.push_back(std::move(s));
         }
         out.asm_clobber_lists.push_back(std::move(lst));
+    }
+    // ASA: instrucciones ASM_MICRO (asm opaco liftado).
+    uint32_t n_micro = 0;
+    if (!read_u32(in, off, n_micro)) return false;
+    out.asm_micros.clear();
+    out.asm_micros.reserve(n_micro);
+    for (uint32_t k = 0; k < n_micro; ++k) {
+        AsmMicro am;
+        uint8_t isa_u = 0, eff_u = 0;
+        if (!read_u8(in, off, isa_u)) return false;
+        am.isa = isa_u;
+        if (!read_u32(in, off, am.form_id)) return false;
+        if (!read_str(in, off, am.tmpl)) return false;
+        if (!read_u8(in, off, eff_u)) return false;
+        am.eff = eff_u;
+        uint32_t n_ops = 0;
+        if (!read_u32(in, off, n_ops)) return false;
+        am.operands.reserve(n_ops);
+        for (uint32_t j = 0; j < n_ops; ++j) {
+            AsmMicroOperand op;
+            uint8_t kind = 0, flags = 0, rc = 0;
+            uint32_t wid = 0, fx = 0, val = 0;
+            uint64_t imm = 0;
+            if (!read_u8(in, off, kind)) return false;
+            if (!read_u8(in, off, flags)) return false;
+            if (!read_u8(in, off, rc)) return false;
+            if (!read_u32(in, off, wid)) return false;
+            if (!read_u32(in, off, fx)) return false;
+            if (!read_u32(in, off, val)) return false;
+            if (!read_u64(in, off, imm)) return false;
+            op.kind = static_cast<AsmOperandKind>(kind);
+            op.flags = flags;
+            op.regclass = rc;
+            op.width = static_cast<uint16_t>(wid);
+            op.fixed_phys = static_cast<int16_t>(static_cast<uint16_t>(fx));
+            op.value = static_cast<IrValueId>(val);
+            op.imm = static_cast<int64_t>(imm);
+            am.operands.push_back(op);
+        }
+        out.asm_micros.push_back(std::move(am));
     }
     // AOT 2b: seccion de salida del codigo + permisos.
     if (!read_str(in, off, out.section)) return false;
@@ -705,8 +783,8 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
  * para que la reconstruccion sea byte-exacta (el merge cross-module
  * depende de offsets estables dentro del pool del dep).
  */
-static void serialize_static_data(const IrModule::StaticDataStore &sd,
-                                  std::vector<uint8_t> &out) {
+void serialize_static_data(const IrModule::StaticDataStore &sd,
+                           std::vector<uint8_t> &out) {
     write_u8(out, sd.alignment_default);
     // Pool de bytes contiguo.
     write_u32(out, static_cast<uint32_t>(sd.bytes.size()));
@@ -734,13 +812,13 @@ static void serialize_static_data(const IrModule::StaticDataStore &sd,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         write_str(out, e.meta.shared_key);
-        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        //  NR / dev-OS: nombre exportado del bloque (cross-block symref).
         write_str(out, e.meta.symbol_name);
     }
 }
 
-static bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
-                                    IrModule::StaticDataStore &sd) {
+bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
+                             IrModule::StaticDataStore &sd) {
     sd.clear();
     if (!read_u8(in, off, sd.alignment_default)) return false;
     uint32_t pool_len = 0;
@@ -784,7 +862,7 @@ static bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         if (!read_str(in, off, e.meta.shared_key)) return false;
-        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        //  NR / dev-OS: nombre exportado del bloque (cross-block symref).
         if (!read_str(in, off, e.meta.symbol_name)) return false;
         // Validar que el rango cae dentro del pool.
         if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())

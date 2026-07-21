@@ -336,9 +336,17 @@ void exec_instr_spawnargs(ProcessVM *vm, const DecodedInstr &instr) {
  *   Offset 16: BP   (8 bytes, uint64)
  *   Offset 24: R0   (8 bytes, uint64) ... R15 (offset 24 + 15*8 = 144)
  *
+ * Los dos buffers son punteros HOST, igual que en @c atomicld / @c atomicst /
+ * @c atomiccas / @c atomicadd (0xA9-0xAC).  Antes exigian direccion VM, lo que
+ * ataba las fibras a la memoria de la VM: sus pilas y contextos son variables
+ * globales, y el storage de un global vive en memoria host (seccion `gdata`).
+ * Con host_ptr el mismo codigo Vesta vale en interprete, JIT y AOT -- en AOT el
+ * context switch ya era nativo sobre memoria host.  De paso es mas rapido: 19
+ * accesos directos por conmutacion en vez de 19 traducciones por el TLB.
+ *
  * @param vm    Proceso virtual que ejecuta SWAPCTX.
- * @param instr reg1 = direccion VM del contexto destino (a cargar),
- *              reg2 = direccion VM del contexto origen (a guardar).
+ * @param instr reg1 = host_ptr del contexto destino (a cargar),
+ *              reg2 = host_ptr del contexto origen (a guardar).
  */
 void exec_instr_swapctx(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst =
@@ -346,42 +354,43 @@ void exec_instr_swapctx(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_src =
         instr.data_instruction.reg_data.reg2; // reg con addr del ctx origen
     const uint64_t dst_addr =
-        vm->registers.regs[r_dst].qword(); // direccion VM del ctx destino
+        vm->registers.regs[r_dst].qword(); // host_ptr del ctx destino
     const uint64_t src_addr =
-        vm->registers.regs[r_src].qword(); // direccion VM del ctx origen
+        vm->registers.regs[r_src].qword(); // host_ptr del ctx origen
+    // Un contexto nulo no es recuperable: sin PC destino no hay a donde saltar.
+    if (dst_addr == 0 || src_addr == 0) {
+        throw_fatal(vm, FatalKind::FATAL_NULL_POINTER,
+                    "swapctx: contexto nulo (dst o src)");
+        return;
+    }
+    uint64_t *const src_ctx = reinterpret_cast<uint64_t *>(src_addr);
+    uint64_t *const dst_ctx = reinterpret_cast<uint64_t *>(dst_addr);
 
-    // ---- fase 1: guardar contexto actual en src_addr ----
+    // ----   guardar contexto actual en src_addr ----
 
     // PC guardado = PC de la instruccion siguiente (instr.pc + size_instr)
     const uint64_t next_pc = instr.pc + instr.flags_info.size_instr;
-    vm->vm_mem.write_u64(src_addr + 0, next_pc); // PC
-    vm->vm_mem.write_u64(src_addr + 8,
-                         vm->registers.stack_pointer.qword()); // SP
-    vm->vm_mem.write_u64(src_addr + 16,
-                         vm->registers.base_pointer.qword()); // BP
+    src_ctx[0] = next_pc;                                 // PC
+    src_ctx[1] = vm->registers.stack_pointer.qword();     // SP
+    src_ctx[2] = vm->registers.base_pointer.qword();      // BP
 
-    // guardar R0..R15 en offsets 24..151
-    for (int i = 0; i < 16; ++i) {
-        vm->vm_mem.write_u64(src_addr + 24 + static_cast<uint64_t>(i) * 8,
-                             vm->registers.regs[i].qword());
-    }
+    // guardar R0..R15 en offsets 24..151 (indices 3..18 del qword array)
+    for (int i = 0; i < 16; ++i)
+        src_ctx[3 + i] = vm->registers.regs[i].qword();
 
-    // ---- fase 2: cargar contexto desde dst_addr ----
+    // ----   cargar contexto desde dst_addr ----
 
-    const uint64_t new_pc = vm->vm_mem.read_u64(dst_addr + 0); // PC del destino
-    const uint64_t new_sp = vm->vm_mem.read_u64(dst_addr + 8); // SP del destino
-    const uint64_t new_bp =
-        vm->vm_mem.read_u64(dst_addr + 16); // BP del destino
+    const uint64_t new_pc = dst_ctx[0]; // PC del destino
+    const uint64_t new_sp = dst_ctx[1]; // SP del destino
+    const uint64_t new_bp = dst_ctx[2]; // BP del destino
 
     vm->registers.rip.qword(new_pc);
     vm->registers.stack_pointer.qword(new_sp);
     vm->registers.base_pointer.qword(new_bp);
 
     // restaurar R0..R15
-    for (int i = 0; i < 16; ++i) {
-        vm->registers.regs[i].qword(
-            vm->vm_mem.read_u64(dst_addr + 24 + static_cast<uint64_t>(i) * 8));
-    }
+    for (int i = 0; i < 16; ++i)
+        vm->registers.regs[i].qword(dst_ctx[3 + i]);
 
     // marcar que el PC ya fue actualizado manualmente para que el scheduler
     // no lo incremente automaticamente al final del ciclo EXECUTE

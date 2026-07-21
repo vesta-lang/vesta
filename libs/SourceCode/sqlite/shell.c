@@ -11709,8 +11709,8 @@ struct completion_cursor {
   int szRow;                 /* Length of the zCurrentRow string */
   sqlite3_stmt *pStmt;       /* Current statement */
   sqlite3_int64 iRowid;      /* The rowid */
-  int ePhase;                /* Current phase */
-  int j;                     /* inter-phase counter */
+  int ePhase;                /* Current  */
+  int j;                     /* inter- counter */
 };
 
 /* Values for ePhase:
@@ -11768,7 +11768,7 @@ static int completionConnect(
       "  candidate TEXT,"
       "  prefix TEXT HIDDEN,"
       "  wholeline TEXT HIDDEN,"
-      "  phase INT HIDDEN"        /* Used for debugging only */
+      "   INT HIDDEN"        /* Used for debugging only */
       ")");
   if( rc==SQLITE_OK ){
     pNew = sqlite3_malloc( sizeof(*pNew) );
@@ -11836,7 +11836,7 @@ static int completionClose(sqlite3_vtab_cursor *cur){
 */
 static int completionNext(sqlite3_vtab_cursor *cur){
   completion_cursor *pCur = (completion_cursor*)cur;
-  int eNextPhase = 0;  /* Next phase to try if current phase reaches end */
+  int eNextPhase = 0;  /* Next  to try if current  reaches end */
   int iCol = -1;       /* If >=0, step pCur->pStmt and use the i-th column */
   pCur->iRowid++;
   while( pCur->ePhase!=COMPLETION_EOF ){
@@ -11912,7 +11912,7 @@ static int completionNext(sqlite3_vtab_cursor *cur){
       }
     }
     if( iCol<0 ){
-      /* This case is when the phase presets zCurrentRow */
+      /* This case is when the  presets zCurrentRow */
       if( pCur->zCurrentRow==0 ) continue;
     }else{
       if( sqlite3_step(pCur->pStmt)==SQLITE_ROW ){
@@ -11920,7 +11920,7 @@ static int completionNext(sqlite3_vtab_cursor *cur){
         pCur->zCurrentRow = (const char*)sqlite3_column_text(pCur->pStmt, iCol);
         pCur->szRow = sqlite3_column_bytes(pCur->pStmt, iCol);
       }else{
-        /* When all rows are finished, advance to the next phase */
+        /* When all rows are finished, advance to the next  */
         sqlite3_finalize(pCur->pStmt);
         pCur->pStmt = 0;
         pCur->ePhase = eNextPhase;

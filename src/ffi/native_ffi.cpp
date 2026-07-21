@@ -20,7 +20,7 @@
  * (resolve_native_symbol, resolve_all).
  */
 #include "ffi/native_ffi.h"
-#include "ffi/virtual_lib_registry.h" // Phase MC.20: lookup_virtual_fn
+#include "ffi/virtual_lib_registry.h" //  MC.20: lookup_virtual_fn
 
 #ifdef _WIN32
 #include "windows.h"
@@ -95,21 +95,48 @@ void *FFI::load_native_module(const std::string &name) {
 
     /* Intentar varios paths candidatos en orden:
      *   1. name tal cual (compatibilidad: usuario puede pasar path completo)
-     *   2. <vm_exe_dir>/<name>(.dll/.so)
-     *   3. <cwd>/<name>(.dll/.so)
+     *   2. <vm_exe_dir>/<name>
      *
      * Para programas Vesta tipicos, las DLLs nativas viven en
      * @c <vm_exe_dir>/stdlib/native/<subdir>/lib.dll mientras que el
      * usuario puede ejecutar @c vesta --run desde cualquier dir.
      * El @c name viene ya con el subdir (e.g. @c "stdlib/native/io/vesta_io")
-     * asi que basta con prefixar @c vm_exe_dir/ . */
-    std::vector<std::string> candidates;
-    candidates.push_back(name);
+     * asi que basta con prefixar @c vm_exe_dir/ .
+     *
+     * De cada base se derivan las formas con extension de la plataforma:
+     * @c LoadLibraryA anñade @c .dll solo, pero @c dlopen NO anñade nada, asi
+     * que en POSIX hay que construir @c <base>.so explicitamente (y la forma
+     * con prefijo @c lib, que es la que producen los builds por defecto). */
+    std::vector<std::string> bases;
+    bases.push_back(name);
     {
         std::string dir = vm_exe_dir();
         if (!dir.empty()) {
-            candidates.push_back(dir + "/" + name);
+            bases.push_back(dir + "/" + name);
         }
+    }
+
+    std::vector<std::string> candidates;
+    for (const auto &base : bases) {
+        candidates.push_back(base);
+#ifndef _WIN32
+        /* Separar el directorio del nombre del modulo para poder anñadir el
+         * prefijo @c lib sin romper el path (e.g. @c a/b/x -> @c a/b/libx.so). */
+        const size_t slash = base.find_last_of('/');
+        const std::string dir_part =
+            (slash == std::string::npos) ? std::string() : base.substr(0, slash + 1);
+        const std::string leaf =
+            (slash == std::string::npos) ? base : base.substr(slash + 1);
+#ifdef __APPLE__
+        static const char *const kExts[] = {".dylib", ".so"};
+#else
+        static const char *const kExts[] = {".so"};
+#endif
+        for (const char *ext : kExts) {
+            candidates.push_back(base + ext);
+            candidates.push_back(dir_part + "lib" + leaf + ext);
+        }
+#endif
     }
     std::string last_err;
 
@@ -132,9 +159,14 @@ void *FFI::load_native_module(const std::string &name) {
         last_err = std::string("dlopen('") + cand + "') " + (e ? e : "");
 #endif
     }
+    /* Ningun candidato cargo.  Listarlos todos: con el ultimo error a secas
+     * el usuario no ve que se probo (y el ultimo suele ser la variante menos
+     * probable), lo que hace el fallo mucho mas dificil de diagnosticar. */
+    std::string probados;
+    for (const auto &cand : candidates) probados += "\n    " + cand;
     throw FFIError("FFI: No se pudo cargar la libreria '" + name +
-                   "' tras intentar " + std::to_string(candidates.size()) +
-                   " paths. Ultimo error: " + last_err);
+                   "'.  Paths probados:" + probados +
+                   "\n  Ultimo error: " + last_err);
 }
 
 void *FFI::resolve_native_symbol(void *module, const std::string &func) {

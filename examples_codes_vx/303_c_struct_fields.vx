@@ -1,0 +1,53 @@
+// examples_codes_vx/303_c_struct_fields.vx
+//
+// Dos idiomas C de structs:
+//   (1) Multi-declarador de campo: `T a, b, c;` en el cuerpo de un struct
+//       (struct plano, typedef struct y agregado anonimo inline).
+//   (2) Struct C-tagless a nivel top-level: `struct { ... } Name, *PName;`
+//       (el nombre va DESPUES del cuerpo, sin `typedef`, con alias de puntero).
+//
+// Resultado esperado: R0 == 42.
+
+// (1) struct plano con multi-declarador de campo.
+struct Rect {
+    i32 x0, y0;
+    i32 x1, y1;
+}
+
+// (1) typedef struct con multi-declarador + agregado anonimo inline con
+//     multi-declarador dentro de un union anidado.
+typedef struct _CAPS {
+    u16 lo, hi;
+    union {
+        struct { i32 a, b; } r;
+        i64 packed;
+    };
+} CAPS;
+
+// (2) struct C-tagless top-level con nombre al final + alias de puntero, y
+//     multi-declarador de campo.
+struct {
+    u8 request_type;
+    u16 value, index, length;
+} SETUP, *PSETUP;
+
+i32 main() {
+    Rect rc;
+    rc.x0 = 1; rc.y0 = 2; rc.x1 = 3; rc.y1 = 4;   // suma 10
+
+    CAPS c;
+    c.lo = 5; c.hi = 6;                            // suma 11
+    c.r.a = 7; c.r.b = 8;                          // suma 15 (solapa con packed)
+
+    SETUP s;
+    s.request_type = 0x80; s.value = 100; s.index = 0; s.length = 0;
+    PSETUP ps = &s;
+    (*ps).length = 6;                              // via alias de puntero
+
+    // 10 + 11 + 15 + 6 = 42
+    i32 sum = rc.x0 + rc.y0 + rc.x1 + rc.y1
+            + (i32)c.lo + (i32)c.hi
+            + c.r.a + c.r.b
+            + (i32)(*ps).length;
+    return sum;
+}

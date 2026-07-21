@@ -14,11 +14,11 @@ static_assert(comptime_streq(FIELDS[3], "w"),    "f3");
 static_assert(comptime_strlen(FIELDS[0]) == 1,   "len 1");
 
 // (3) Strings dinamicos: chr/ord/substr/repeat/to_str.
-comptime string LETTER_A = comptime_chr(65);         // "A"
-comptime u64    ORD_A    = comptime_ord("A");        // 65
-comptime string TAIL     = comptime_substr("HelloWorld", 5, 5);  // "World"
-comptime string BARS     = comptime_repeat("|", 8);  // "||||||||"
-comptime string NUM_S    = comptime_to_str(2024);    // "2024"
+const string LETTER_A = comptime_chr(65);         // "A"
+const u64    ORD_A    = comptime_ord("A");        // 65
+const string TAIL     = comptime_substr("HelloWorld", 5, 5);  // "World"
+const string BARS     = comptime_repeat("|", 8);  // "||||||||"
+const string NUM_S    = comptime_to_str(2024);    // "2024"
 
 static_assert(comptime_streq(LETTER_A, "A"),         "chr 65");
 static_assert(ORD_A == 65,                           "ord A");
@@ -32,13 +32,13 @@ comptime <T> string mk_setter_name() {
 }
 
 struct Vec3 { f64 x; f64 y; f64 z; }
-comptime string SETTER_V3 = mk_setter_name<Vec3>();
+const string SETTER_V3 = mk_setter_name<Vec3>();
 static_assert(comptime_streq(SETTER_V3, "set_Vec3"), "setter Vec3");
 
 // (4) Comptime fn iterativa que construye string de A..N.
 comptime string alphabet_up_to(i64 n) {
-    comptime var string buf = "";
-    comptime var i64 c = 65;
+    string buf = "";
+    i64 c = 65;
     while (c <= n) {
         buf = comptime_concat(buf, comptime_chr(c));
         c = c + 1;
@@ -46,12 +46,12 @@ comptime string alphabet_up_to(i64 n) {
     return buf;
 }
 
-comptime string ABCDEF = alphabet_up_to(70);
+const string ABCDEF = alphabet_up_to(70);
 static_assert(comptime_streq(ABCDEF, "ABCDEF"), "alphabet A..F");
 static_assert(comptime_strlen(ABCDEF) == 6,     "len 6");
 
 // (4) Build CSV-style separator string en compile-time.
-comptime string CSV_HEADER =
+const string CSV_HEADER =
     comptime_concat(
         comptime_concat(FIELDS[0],
             comptime_concat(",", FIELDS[1])),

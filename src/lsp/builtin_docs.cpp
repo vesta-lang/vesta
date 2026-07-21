@@ -17,6 +17,7 @@
 
 #include "lsp/builtin_docs.h"
 
+#include <algorithm>
 #include <unordered_map>
 
 namespace lsp {
@@ -83,6 +84,118 @@ const std::unordered_map<std::string, BuiltinDoc> &table() {
         add({"static_assert", "static_assert(cond: bool, msg: string) -> void",
              "Falla la compilacion con @p msg si @p cond es falsa (comptime).",
              {"cond", "msg"}});
+        add({"type_id", "type_id<T>() -> u32",
+             "ID estable (FNV-1a del nombre canonico) del tipo T (comptime).  "
+             "Igual ID = mismo tipo logico; util para comparar tipos con 1 cmp.",
+             {}});
+        add({"kind", "kind<T>() -> i32",
+             "Categoria del tipo T (comptime): Primitive/Class/Struct/Enum/"
+             "Optional/Result/Array/Ptr/Function/String/Borrow/Future/Unique/"
+             "Shared/Collection (ver ComptimeKind).",
+             {}});
+        // ---- Predicados de tipo (comptime, -> bool) ----
+        add({"is_class", "is_class<T>() -> bool",
+             "true si T es un tipo CLASS (reference type, GcHandle).", {}});
+        add({"is_struct", "is_struct<T>() -> bool",
+             "true si T es un STRUCT value-type (no enum ni class).", {}});
+        add({"is_enum", "is_enum<T>() -> bool",
+             "true si T es un enum (ADT tagged-union o C-style con valor de "
+             "backing entero/float/string).  Los backing struct/clase son su "
+             "tipo base -> false.",
+             {}});
+        add({"is_primitive", "is_primitive<T>() -> bool",
+             "true si T es un primitivo escalar (i8..u64, f32/f64, bool, char, "
+             "void).",
+             {}});
+        add({"is_newtype", "is_newtype<T>() -> bool",
+             "true si T es un newtype (typedef T name new).", {}});
+        add({"is_opaque", "is_opaque<T>() -> bool",
+             "true si T es un tipo opaco (@opaque).", {}});
+        add({"is_shared", "is_shared<T>() -> bool",
+             "true si T es un tipo shared<T> (memoria compartida cross-process).",
+             {}});
+        add({"is_same", "is_same<A, B>() -> bool",
+             "true si A y B son el mismo tipo logico (mismo nombre canonico).",
+             {}});
+        add({"is_subtype", "is_subtype<A, B>() -> bool",
+             "true si A es subtipo de B (herencia de clases / interfaces).", {}});
+        add({"underlying_of", "underlying_of<T>() -> string",
+             "Nombre del tipo subyacente de un typedef/newtype (comptime).", {}});
+        // ---- Introspeccion de campos y metodos (comptime) ----
+        add({"field_count", "field_count<T>() -> u32",
+             "Numero de campos de T (struct/class, incluye heredados; enum = "
+             "numero de variantes).",
+             {}});
+        add({"method_count", "method_count<T>() -> u32",
+             "Numero de metodos de T (solo CLASS; incluye heredados).", {}});
+        add({"offsetof", "offsetof<T>(field: string) -> u64",
+             "Offset en bytes del campo @p field dentro de T (struct/class; "
+             "tambien overlay).",
+             {"field"}});
+        add({"has_field", "has_field<T>(name: string) -> bool",
+             "true si T tiene un campo llamado @p name.", {"name"}});
+        add({"has_method", "has_method<T>(name: string) -> bool",
+             "true si T tiene un metodo llamado @p name (solo CLASS).",
+             {"name"}});
+        add({"field_name", "field_name<T>(idx: int) -> string",
+             "Nombre del campo idx-esimo de T (orden de declaracion).", {"idx"}});
+        add({"field_type", "field_type<T>(field: string) -> string",
+             "Nombre canonico del tipo del campo @p field de T.", {"field"}});
+        add({"field_type_at", "field_type_at<T>(idx: int) -> Type",
+             "Tipo del campo idx-esimo de T como valor de primera clase "
+             "(comptime).",
+             {"idx"}});
+        add({"method_name", "method_name<T>(idx: int) -> string",
+             "Nombre del metodo idx-esimo de T (solo CLASS).", {"idx"}});
+        add({"method_return_type", "method_return_type<T>(idx: int) -> Type",
+             "Tipo de retorno del metodo idx-esimo de T (comptime).", {"idx"}});
+        // ---- Overlay structs (vistas tipadas sobre memoria) ----
+        add({"in_bounds", "in_bounds(field_addr, buf_size: u64) -> bool",
+             "true si el campo de un overlay cae dentro de @p buf_size bytes "
+             "del buffer base (chequeo de limites de un formato binario).",
+             {"field_addr", "buf_size"}});
+        add({"extent", "extent<T>() -> u64",
+             "Tamano total (en bytes) que un overlay T cubre desde su base, "
+             "incluyendo campos con @offset dinamico y arrays con stride.",
+             {}});
+        // ---- Conceptos built-in (bound <T: C> o predicado C<T>() -> bool) ----
+        // Se usan como restriccion de generico (<T: Numeric>) o como predicado
+        // comptime directo (if (Numeric<T>()) { ... }).  Cero runtime.
+        auto concept_doc = [&](const char *name, const char *desc) {
+            add({name, std::string(name) + "<T>()  |  <T: " + name + ">",
+                 std::string("Concepto (comptime): ") + desc +
+                     "  Usable como bound `<T: " + name +
+                     ">` o como predicado `" + name + "<T>() -> bool`.",
+                 {}});
+        };
+        concept_doc("Numeric", "T es un numero (entero o float).");
+        concept_doc("Number", "alias de Numeric.");
+        concept_doc("Integer", "T es un entero (i8..u64).");
+        concept_doc("Int", "alias de Integer.");
+        concept_doc("Float", "T es float (f32/f64).");
+        concept_doc("Signed", "T es un entero con signo (i8..i64).");
+        concept_doc("Unsigned", "T es un entero sin signo (u8..u64).");
+        concept_doc("Bool", "T es bool.");
+        concept_doc("Char", "T es char.");
+        concept_doc("Pointer", "T es un puntero (T*).");
+        concept_doc("String", "T es string.");
+        concept_doc("Comparable", "T soporta orden (< >): numericos, char, bool.");
+        concept_doc("Ordered", "alias de Comparable.");
+        concept_doc("Eq", "T soporta == : primitivos, string, punteros.");
+        concept_doc("Sized", "T tiene tamano conocido > 0 (todo salvo void).");
+        concept_doc("Copyable", "T es copiable por valor (primitivos, structs, ptr).");
+        concept_doc("Hashable", "T tiene hash canonico (primitivos + string).");
+        concept_doc("Stringable", "T es string/primitivo o tiene toString().");
+        concept_doc("Default", "T tiene valor por defecto (primitivos + punteros).");
+        concept_doc("Primitive", "T es un primitivo escalar.");
+        concept_doc("Class", "T es una clase (reference type).");
+        concept_doc("Struct", "T es un struct value-type.");
+        concept_doc("Callable", "T es invocable (fn(...) -> R).");
+        concept_doc("Destructible", "T puede tener destructor (~T()): clases/structs.");
+        concept_doc("Iterable", "T es iterable (array/string o tiene iter()/next()).");
+        concept_doc("Shareable", "T es compartible cross-process (GC + value-types).");
+        concept_doc("Enum", "T es un enum (ADT o C-style con valor).");
+        concept_doc("ValuedEnum", "T es un enum C-style con valor (no ADT).");
 
         // ---- Strings ----
         add({"str_length", "str_length(s: string) -> u64",
@@ -292,6 +405,21 @@ const BuiltinDoc *lookup_builtin(const std::string &name) {
     const auto &T = table();
     auto it = T.find(name);
     return it == T.end() ? nullptr : &it->second;
+}
+
+const std::vector<std::string> &all_builtin_names() {
+    // Se construye una sola vez a partir de las claves de la tabla, ordenadas
+    // para que el completado del LSP tenga un orden estable.
+    static const std::vector<std::string> names = [] {
+        const auto &T = table();
+        std::vector<std::string> v;
+        v.reserve(T.size());
+        for (const auto &kv : T)
+            v.push_back(kv.first);
+        std::sort(v.begin(), v.end());
+        return v;
+    }();
+    return names;
 }
 
 } // namespace lsp

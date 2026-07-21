@@ -17,6 +17,10 @@
 #include <openssl/pem.h>
 #include <openssl/bio.h>
 
+#ifndef _WIN32
+#include <sys/stat.h> // chmod (restringir permisos de la clave privada en POSIX)
+#endif
+
 namespace pkg::signing {
 
 namespace {

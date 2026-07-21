@@ -501,7 +501,7 @@ vcol_tset_to_list(uint64_t handle); /* alist en orden */
  * Convencion: las variantes gc-aware reciben @c proc_ptr como PRIMER
  * argumento adicional (handle al ProcessVM activo) para que el plugin
  * pueda invocar las callbacks gc_addref/gc_release del API.  El frontend
- * Vex emite @c getproc para obtener el proc_ptr antes del CALLN.
+ *  emite @c getproc para obtener el proc_ptr antes del CALLN.
  *
  * Cero overhead vs variante no-gc cuando los elementos son i64 puros: el
  * frontend solo dispatcha a las gc_* cuando el tipo de elemento es GC
@@ -578,10 +578,10 @@ VESTA_PLUGIN_EXPORT void vcol_tset_free_gc(uint64_t proc, uint64_t handle);
 /* =========================================================================
  * String ops nativas
  *
- * Operan sobre buffers crudos (host_ptr + byte_len) que el frontend Vex
+ * Operan sobre buffers crudos (host_ptr + byte_len) que el frontend 
  * obtiene via STRRAW / STRGETBYTES de un StringObject.  No alocan
  * StringObjects nuevos -- devuelven escalares (indices, longitudes, bools)
- * o modifican in-place; el frontend Vex se encarga de envolver / dividir
+ * o modifican in-place; el frontend  se encarga de envolver / dividir
  * con STRMAKE segun necesite.
  *
  * Internamente usan memmem / memchr / memcmp (en glibc / msvcrt usan SIMD
@@ -631,7 +631,7 @@ VESTA_PLUGIN_EXPORT uint64_t vstr_trim_end_strip(uint64_t ptr, uint64_t len);
  *        donde offset es la posicion en haystack donde empieza la
  *        substring y len es su longitud en bytes (sin contar el delim).
  *
- * El caller en Vex itera el alist, descodifica cada elemento y hace
+ * El caller en  itera el alist, descodifica cada elemento y hace
  * STRMAKE de la substring usando (haystack_ptr + offset, len) como
  * (raw_ptr, byte_len).  No incluye substrings vacios entre delims
  * consecutivos (skip).
@@ -650,7 +650,7 @@ VESTA_PLUGIN_EXPORT uint64_t vstr_split_offsets(uint64_t haystack_ptr,
 /* =========================================================================
  * Array ops nativas
  *
- * Operan sobre arrays crudos (host_ptr) de uint64_t.  El frontend Vex pasa
+ * Operan sobre arrays crudos (host_ptr) de uint64_t.  El frontend  pasa
  * el host_ptr de un array nativo (T*) o de un alist (data ptr).
  * ========================================================================= */
 

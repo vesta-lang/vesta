@@ -7,7 +7,7 @@
 
 /**
  * @file shared_handle_table.cpp
- * @brief Implementacion del SharedHandleTable lock-free (Phase Z.5).
+ * @brief Implementacion del SharedHandleTable lock-free ( Z.5).
  *
  * Ver @c include/gc/shared_handle_table.h para el contrato y el disenyo.
  *
@@ -67,7 +67,7 @@ SharedHandleTable::SharedHandleTable() noexcept
     // Zero-init de los punteros a chunks
     for (uint32_t i = 0; i < MAX_CHUNKS; ++i) {
         chunks_[i].store(nullptr, std::memory_order_relaxed);
-        // Phase Z.10 ext: mark bitmaps lazy.  nullptr = "no marcas
+        //  Z.10 ext: mark bitmaps lazy.  nullptr = "no marcas
         // poblados" (interpretado como todos unmarked).
         mark_chunks_[i].store(nullptr, std::memory_order_relaxed);
     }
@@ -95,7 +95,7 @@ SharedHandleTable::~SharedHandleTable() noexcept {
 }
 
 // ------------------------------------------------------------------
-// Phase Z.10 ext: mark/sweep bitmap helpers.
+//  Z.10 ext: mark/sweep bitmap helpers.
 // ------------------------------------------------------------------
 
 void SharedHandleTable::clear_marks() noexcept {

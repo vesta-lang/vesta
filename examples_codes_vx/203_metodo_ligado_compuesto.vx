@@ -6,7 +6,7 @@ namespace ejemplos.metodo_ligado_compuesto;
 // El compilador materializa un temporal oculto para el receptor.  Cubre
 // receptor de CLASE (capturado por referencia) y de STRUCT (copia por valor),
 // y el almacenamiento en un campo (env owned, liberado por el destructor).
-// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+// Ver doc/VMdoc//ClosuresEnCampos.md.
 
 class Contador {
     i64 n;

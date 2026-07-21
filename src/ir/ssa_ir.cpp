@@ -108,6 +108,7 @@ static const OpEntry OP_TABLE[] = {
     {"fadd", IrOp::FADD},
     {"fsub", IrOp::FSUB},
     {"fmul", IrOp::FMUL},
+    {"fma", IrOp::FMA},
     {"fdiv", IrOp::FDIV},
     {"fneg", IrOp::FNEG},
     {"fabs", IrOp::FABS},
@@ -136,6 +137,7 @@ static const OpEntry OP_TABLE[] = {
     {"iminu", IrOp::IMINU},
     {"imaxu", IrOp::IMAXU},
     {"ilog2", IrOp::ILOG2},
+    {"select", IrOp::SELECT},
     // logica y desplazamientos
     {"and", IrOp::AND},
     {"or", IrOp::OR},
@@ -301,7 +303,7 @@ static const OpEntry OP_TABLE[] = {
     // async fusion + string extra
     {"fulfill_hlt", IrOp::FULFILL_HLT},
     {"strgetbytes", IrOp::STRGETBYTES},
-    // meta-OOP / reflexion / Phase Z extras
+    // meta-OOP / reflexion /  Z extras
     {"gc_handle_for_ptr", IrOp::GC_HANDLE_FOR_PTR},
     {"gc_promote", IrOp::GC_PROMOTE},
     {"gc_demote", IrOp::GC_DEMOTE},
@@ -317,18 +319,32 @@ static const OpEntry OP_TABLE[] = {
     {"callsuper", IrOp::CALLSUPER},
     {"proceed", IrOp::PROCEED},
     // ensamblador incrustado
+    {"asm_micro", IrOp::ASM_MICRO},
     {"inline_asm", IrOp::INLINE_ASM},
     {"raw_asm", IrOp::RAW_ASM},
     {nullptr, IrOp::NOP},
 };
 
+namespace {
+/// Array PLANO nombre-por-opcode (IrOp cabe en un byte 0x00..0xFF): lookup O(1)
+/// por indice en vez de recorrer @c OP_TABLE.  Se construye una sola vez desde
+/// @c OP_TABLE; el constructor del static local es thread-safe (C++11).
+struct OpNameTable {
+    const char *name[256] = {nullptr};
+    OpNameTable() {
+        for (const OpEntry *e = OP_TABLE; e->name; ++e)
+            name[(unsigned char)e->op] = e->name;
+    }
+};
+} // namespace
+
 /**
- * @brief Devuelve el nombre de texto de un IrOp.
+ * @brief Devuelve el nombre de texto de un IrOp (O(1), array indexado por opcode).
  */
 const char *ir_op_name(IrOp op) {
-    for (const OpEntry *e = OP_TABLE; e->name; ++e)
-        if (e->op == op) return e->name;
-    return "?";
+    static const OpNameTable t;
+    const char *n = t.name[(unsigned char)op];
+    return n ? n : "?";
 }
 
 /**
@@ -789,13 +805,14 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
     case IrOp::VEC_BINOP_S:
-        // vec_binop.fN %dst_ptr, %a_ptr, %b_ptr   imm=(subop<<8)|ancho
-        o << " ";
-        print_val(o, fn, ins.operands[0]);
-        o << ", ";
-        print_val(o, fn, ins.operands[1]);
-        o << ", ";
-        print_val(o, fn, ins.operands[2]);
+        // vec_binop.fN %dst_ptr, %a_ptr[, %b_ptr]   imm=(subop<<8)|ancho.
+        // La aridad varia entre estos ops (VEC_ACC_ZERO/COMBINE/STORE tienen 1
+        // operando, VEC_ACC_ADD 2, VEC_ACC_FMA/VEC_BINOP 3): imprimimos solo los
+        // operandos que existen para no leer fuera de rango.
+        for (size_t k = 0; k < ins.operands.size(); ++k) {
+            o << (k == 0 ? " " : ", ");
+            print_val(o, fn, ins.operands[k]);
+        }
         o << ", imm=" << ins.imm;
         break;
 
@@ -888,6 +905,58 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         // raw_asm "texto de ensamblador verbatim"
         o << " \"" << ins.func_name << "\"";
         break;
+
+    case IrOp::ASM_MICRO: {
+        // asm_micro #<idx> isa=<n> form=<n> ins=[...] outs=[...] "<plantilla>".
+        // Solo para dumps legibles; los detalles viven en fn.asm_micros[imm].
+        o << " #" << ins.imm;
+        if (ins.imm < fn.asm_micros.size()) {
+            const AsmMicro &am = fn.asm_micros[ins.imm];
+            o << " isa=" << (unsigned)am.isa << " form=" << am.form_id
+              << " eff=" << (unsigned)am.eff;
+            if (!ins.operands.empty()) {
+                o << " ins=[";
+                for (size_t i = 0; i < ins.operands.size(); ++i) {
+                    if (i)
+                        o << ", ";
+                    print_val(o, fn, ins.operands[i]);
+                }
+                o << "]";
+            }
+            if (!am.operands.empty()) {
+                o << " ops=[";
+                for (size_t i = 0; i < am.operands.size(); ++i) {
+                    if (i)
+                        o << ", ";
+                    const auto &op = am.operands[i];
+                    o << "$" << i << ":";
+                    // rol como flags legibles.
+                    if (op.flags & ir::ASM_OP_READ) o << "R";
+                    if (op.flags & ir::ASM_OP_WRITE) o << "W";
+                    if (op.flags & ir::ASM_OP_IMPLICIT) o << "i";
+                    if (op.flags & ir::ASM_OP_SUPPRESSED) o << "s";
+                    if (op.flags & ir::ASM_OP_CLOBBER) o << "c";
+                    if (op.fixed_phys >= 0) o << "#" << op.fixed_phys;
+                    if (op.value != ir::IR_NO_VALUE) {
+                        o << " ";
+                        print_val(o, fn, op.value);
+                    }
+                }
+                o << "]";
+            }
+            o << " \"";
+            for (char c : am.tmpl) {
+                if (c == '\n')
+                    o << "\\n";
+                else if (c == '"')
+                    o << "\\\"";
+                else
+                    o << c;
+            }
+            o << "\"";
+        }
+        break;
+    }
 
     case IrOp::INLINE_ASM: {
         // inline_asm imm=<quals> "<cuerpo NASM con \n escapados>".

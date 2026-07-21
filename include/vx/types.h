@@ -278,6 +278,12 @@ struct Type {
     /// slot se marca @c is_gc_object para los stackmaps precisos del GC.  El
     /// resto (acceso a campos/metodos) es identico a una ref de clase normal.
     bool gc_managed = false;
+    /// @c true si este tipo es un enum con VALOR entero (C-style,
+    /// `enum Op : u8 { ... }`).  @c kind es el tipo base (U8/U16/...)
+    /// y @c struct_name el nombre del enum, para resolver variantes y
+    /// distinguirlo de un entero plano.  El lowering lo trata como su
+    /// entero base en todos los sitios.
+    bool is_valued_enum = false;
     /// Tipo apuntado cuando @c kind == PTR o tipo de elemento cuando
     /// @c kind == ARRAY; nulo para todo lo demas.  Se usa @c shared_ptr
     /// porque @c Type debe ser copiable (el AST Type vive como valor en
@@ -309,6 +315,17 @@ struct Type {
     /// La aritmetica preserva el flag.  Mezclar host con virtual en
     /// asignacion / comparacion es error de tipo.
     bool is_virtual = false;
+
+    /// const-correctness C-style, POR NIVEL.  @c is_const marca que ESTE nivel
+    /// del tipo es inmutable: para un escalar/struct, el valor no se puede
+    /// escribir; para un PTR, el PUNTERO no se puede reasignar (la const del
+    /// APUNTADO vive en @c pointee->is_const).  Asi `const char *` =
+    /// PTR{is_const=false, pointee=char{is_const=true}} y `char *const` =
+    /// PTR{is_const=true, pointee=char{is_const=false}}.  El enforcement es
+    /// uniforme: escribir a un lvalue es error si @c lvalue.result_type.is_const.
+    /// Ortogonal a @c is_virtual y a la forma del tipo (NO entra en la igualdad
+    /// estructural).
+    bool is_const = false;
 
     /// Tipos de los parametros cuando @c kind == FUNCTION.  Vacio para
     /// los demas kinds.  La lista se materializa solo cuando se crea un
@@ -728,6 +745,14 @@ constexpr size_t primitive_size_bytes(PrimitiveKind k) noexcept {
  * @return std::string nuevo con la representacion textual.
  */
 inline std::string type_to_string(const Type &t) {
+    // const-correctness: mostrar el qualifier en los mensajes de error para
+    // que un discard de const (`i32* = const i32*`) sea legible ("const i32*
+    // incompatible con i32*") en vez de "i32* incompatible con i32*".
+    if (t.is_const) {
+        Type nc = t;
+        nc.is_const = false;
+        return "const " + type_to_string(nc);
+    }
     // Newtype: mostrar el nombre nominal (e.g. "fd" en vez de "u64").
     // Asi los mensajes de error son legibles ("incompatible con fd"
     // en lugar de "incompatible con u64").
@@ -900,7 +925,32 @@ inline const char *primitive_name(PrimitiveKind k) noexcept {
  * diagnostico claro indicando ambos tipos.
  */
 inline bool types_assignable(const Type &target, const Type &value) noexcept {
+    // const-correctness A: no DESCARTAR const al asignar punteros.  Se recorren
+    // las cadenas de pointee en paralelo; si en algun nivel el VALUE es const y
+    // el TARGET no, la asignacion "lavaria" el const (aliasing a traves de un
+    // puntero mutable) -> se rechaza.  Al reves (target const, value no) SI se
+    // permite (anadir const es seguro).  Va ANTES del `==` porque este ignora
+    // @c is_const.  Para no-punteros el bucle no corre (no hay laundering: copiar
+    // un valor const a uno mutable es una COPIA, no un alias).
+    {
+        const Type *tt = &target, *vv = &value;
+        while (tt->kind == PrimitiveKind::PTR &&
+               vv->kind == PrimitiveKind::PTR && tt->pointee && vv->pointee) {
+            tt = tt->pointee.get();
+            vv = vv->pointee.get();
+            if (vv->is_const && !tt->is_const) return false; // discard const
+        }
+    }
     if (target == value) return true;
+    // Valued enum (`enum Op : u8 {..}`, `enum M : string {..}`): ES su tipo
+    // base.  El @c struct_name solo distingue el enum para resolver variantes,
+    // no para asignabilidad.  Assignable a/desde su tipo base y a otro valued
+    // enum del mismo backing cuando el @c kind coincide (int<->int de distinto
+    // ancho lo cubre @c is_numeric mas abajo).
+    if ((target.is_valued_enum || value.is_valued_enum) &&
+        target.kind == value.kind) {
+        return true;
+    }
     // Newtype barrier: si target O value es un newtype (nominal_id > 0)
     // y NO son el mismo newtype (operator== ya lo cubrio), el tipo
     // es nominalmente distinto y requiere cast explicito `(T)x`.
@@ -931,14 +981,26 @@ inline bool types_assignable(const Type &target, const Type &value) noexcept {
         const bool v_void =
             !value.pointee || value.pointee->kind == PrimitiveKind::VOID;
         if (t_void || v_void) return true;
-        // Phase D.jit-mem-model AUTO-PROMOTE: VirtualPtr<T> -> T* y
-        // T* -> VirtualPtr<T> con mismo pointee se coercen
-        // implicitamente.  El runtime (interp/JIT) decide la
-        // naturaleza host vs VM segun el ALLOCA origen + analisis
-        // host_alloca.  Para el user, ambos kinds son "pointer a T"
-        // (estilo C clasico).
+        // `T*` y `VirtualPtr<T>` son tipos DISTINTOS: no se coercen.
+        //
+        // Nombran espacios de direcciones distintos.  `T*` es siempre HOST;
+        // `VirtualPtr<T>` es la memoria VM, que es paginada (4 KiB, mapeo
+        // perezoso) y per-proceso.  Una direccion VM usada como host
+        // segfaltea; una host leida como VM devuelve basura de vm_mem sin
+        // avisar.  Lo que hace irreducible la distincion es que en el sitio
+        // del DEREF el unico contrato disponible es el del tipo: en cuanto el
+        // puntero pasa por memoria (un campo, un parametro), no queda rastro
+        // de su origen que el compilador pueda seguir.
+        //
+        // (Hubo una regla de auto-promocion entre ambos, apoyada en deducir
+        // la naturaleza del ALLOCA de origen.  Deja de funcionar justo cuando
+        // el puntero viaja por memoria, y convertia el error en un SIGSEGV
+        // silencioso.)
+        //
+        // Para mezclarlos a proposito, cast explicito.
         if (target.pointee && value.pointee &&
-            *target.pointee == *value.pointee) {
+            *target.pointee == *value.pointee &&
+            target.is_virtual == value.is_virtual) {
             return true;
         }
     }

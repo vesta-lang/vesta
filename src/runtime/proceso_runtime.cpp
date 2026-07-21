@@ -38,7 +38,7 @@
 #include "runtime/exec_instruction.h" // install_gc_finalizer_runner
 #include "runtime/rflags.h"
 // Inc 0b: los cuerpos de ProcessVMRootProvider necesitan la def completa de la
-// VM (scheduler.vm_reference.shared_*) + las tablas shared (Phase Z).
+// VM (scheduler.vm_reference.shared_*) + las tablas shared ( Z).
 #include "gc/shared_handle_table.h"
 #include "gc/shared_heap.h"
 #include "loader/loader.h" // Loader completo (executables + interp_stackmaps)
@@ -94,10 +94,10 @@ ProcessVM::ProcessVM(Scheduler &scheduler, GlobalPID pid)
     // customizable de objetos GC con recurso interno que escapan su scope.
     // Reentra al interprete (bytecode portable) en el safe point post-collect.
     install_gc_finalizer_runner(this);
-    // Phase D.7: cachear la direccion estable de la HandleTable para que
+    //  D.7: cachear la direccion estable de la HandleTable para que
     // el JIT inline-e deref (handle -> host_ptr) sin CALL al runtime.
     jit_handle_table = gc_heap.jit_handle_table_ptr();
-    // OSR (Phase D.8): alocar el buffer del state-transfer SOLO cuando
+    // OSR ( D.8): alocar el buffer del state-transfer SOLO cuando
     // VESTA_OSR_COUNT esta activo (off por defecto -> osr_buffer = nullptr,
     // cero coste).  El check del env se cachea (1 getenv por proceso solo
     // cuando se construye el primero).  El JIT lee este buffer via RBX al

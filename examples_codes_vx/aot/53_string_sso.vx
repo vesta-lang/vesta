@@ -1,4 +1,4 @@
-// Vex Embed String Inc 5 (SSO): cadenas cortas viven INLINE en los 24
+//  Embed String Inc 5 (SSO): cadenas cortas viven INLINE en los 24
 // bytes del value-string (CERO malloc); las largas en heap como antes.
 //
 // Layout union de 24 bytes con flag en el bit alto (0x80) del byte [23]:

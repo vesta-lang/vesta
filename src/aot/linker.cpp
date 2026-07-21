@@ -10,7 +10,7 @@
 
 /**
  * @file aot/linker.cpp
- * @brief Phase AOT.5 -- linker propio: fusiona objetos ELF64 .o en un EXEC.
+ * @brief  AOT.5 -- linker propio: fusiona objetos ELF64 .o en un EXEC.
  *
  * Parsea cada ELF64 @c ET_REL a mano (lectores little-endian propios -- NO
  * incluye LibPEparse para respetar la frontera C/C++ del proyecto; el shim .c
@@ -23,8 +23,8 @@
 #include "aot/linker.h"
 
 #include "aot/aot_native.h"  // aot_make_start_stub, AotArch
-#include "aot/ar_archive.h"  // Phase AOT.5: lector de archivos estaticos .a
-#include "aot/link_script.h" // Phase AOT.5: link-script Vesta (configurable)
+#include "aot/ar_archive.h"  //  AOT.5: lector de archivos estaticos .a
+#include "aot/link_script.h" //  AOT.5: link-script Vesta (configurable)
 
 #include <cstdint>
 #include <cstdio>  // std::snprintf (cabeceras ar)

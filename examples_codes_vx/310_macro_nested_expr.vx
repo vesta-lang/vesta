@@ -1,0 +1,30 @@
+// examples_codes_vx/310_macro_nested_expr.vx
+//
+// Un @Macro que INYECTA codigo puede llamar a otra fn `expr`-capture pasandole
+// su propio parametro `expr` (forwarding anidado).  El texto capturado se
+// propaga: `twice(a + b)` inyecta el codigo `(a + b) + (a + b)`.
+//
+// Antes, `source(e)` dentro del macro (con `e` = param `expr`) se evaluaba por el
+// path VM (`__macro_source`), que no maneja el texto forwardeado -> devolvia
+// vacio y el macro generaba codigo invalido `() + ()`.  Ahora una llamada a una
+// fn expr-capture con un argumento forwardeado (no un literal crudo) se resuelve
+// por tree-walk, propagando el texto.
+//
+// Resultado esperado: R0 == 42.
+
+// Helper expr-capture: devuelve el texto crudo de su argumento.
+comptime string source(expr code) { return code; }
+
+// @Macro que genera codigo, forwardeando su `expr` param al helper anidado:
+@Macro comptime string twice(expr e) {
+    return "(" + source(e) + ") + (" + source(e) + ")";
+}
+
+i32 main() {
+    i32 a = 20;
+    i32 b = 1;
+    // twice(a + b) se expande al codigo:  (a + b) + (a + b)  ->  21 + 21 = 42
+    i32 r = twice(a + b);
+    println("r=${r}");
+    return r;
+}

@@ -366,6 +366,94 @@ VESTA_API int vesta_json_format(const char *json_text, int indent,
 VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
                                 char **out_json, char **out_err);
 
+/* =========================================================================
+ * Compilacion incremental / cache direccionado por contenido (CAS).
+ *
+ * Expone a otros lenguajes/sistemas (C/C++/Python/Rust/...) los mecanismos
+ * del driver incremental de Vesta: fingerprint de configuracion de build,
+ * store direccionado por contenido, e indice semantico + claves Merkle por
+ * simbolo (para invalidacion granular).  Todo es content-addressed -> apto
+ * para cache compartido / distribuido entre maquinas.
+ * ========================================================================= */
+
+/**
+ * @brief Configuracion de build que afecta a un artefacto compilado.
+ *
+ * Mirror C del @c vx::BuildConfig .  Los campos de "IR pre-optimize" afectan
+ * al fingerprint del IR; el resto solo al del artefacto final.  Rellenar con
+ * @c 0 / defaults lo no usado.
+ */
+typedef struct VestaBuildConfig {
+    unsigned char asm_target_bits;   /**< 64/32/16: lowering de inline-asm. */
+    int native_poo;                  /**< clases AOT (calloc/dtor) vs VM (GC). */
+    int exceptions_enabled;          /**< lowering de try/catch en AOT. */
+    const char *instrument_mode;     /**< "none"/"trace"/"profile" (NULL = ""). */
+    const char *tgt_os;              /**< @Target OS (NULL = ""). */
+    const char *tgt_arch;            /**< @Target arch (NULL = ""). */
+    int opt_level;                   /**< 0..3 (solo artefacto final). */
+    int emit_debug;                  /**< info de debug (solo artefacto final). */
+    unsigned char aot_vec_width;     /**< 16/32/64 SSE2/AVX/AVX512 (post-opt). */
+    const char *profile_id;          /**< PGO / perfil (NULL = ""). */
+} VestaBuildConfig;
+
+/**
+ * @brief Calcula los fingerprints de una configuracion de build.
+ *
+ * @param cfg          Configuracion (no NULL).
+ * @param out_ir_fp    [salida] fingerprint de las dims del IR pre-optimize.
+ * @param out_full_fp  [salida] fingerprint COMPLETO (artefacto final).
+ * @return 0 si exito; !=0 si @p cfg o algun out es NULL.
+ */
+VESTA_API int vesta_build_fingerprint(const VestaBuildConfig *cfg,
+                                      unsigned long long *out_ir_fp,
+                                      unsigned long long *out_full_fp);
+
+/** @brief Handle opaco a un store direccionado por contenido (CAS). */
+typedef struct VestaCas VestaCas;
+
+/**
+ * @brief Abre (creando si falta) un CAS en @p dir.  Si @p dir es NULL, usa el
+ *        store global por defecto ($VX_CAS_DIR / $VX_HOME/cas / ~/.vesta/cas).
+ * @return Handle no-NULL en exito; NULL si no se pudo crear.  Liberar con
+ *         @c vesta_cas_close .
+ */
+VESTA_API VestaCas *vesta_cas_open(const char *dir);
+
+/** @brief Cierra un CAS.  Aceptar NULL es seguro. */
+VESTA_API void vesta_cas_close(VestaCas *cas);
+
+/** @brief @c 1 si existe un artefacto para @p key; @c 0 si no. */
+VESTA_API int vesta_cas_has(VestaCas *cas, unsigned long long key);
+
+/**
+ * @brief Lee el artefacto de @p key.  @param out_data [salida] buffer en heap
+ *        (liberar con @c vesta_free); @param out_len [salida] su longitud.
+ * @return 0 si existe y se leyo; !=0 si no existe o error.
+ */
+VESTA_API int vesta_cas_get(VestaCas *cas, unsigned long long key,
+                            unsigned char **out_data, size_t *out_len);
+
+/**
+ * @brief Escribe (atomico, idempotente) el artefacto de @p key.
+ * @return 0 si exito; !=0 en error de I/O.
+ */
+VESTA_API int vesta_cas_put(VestaCas *cas, unsigned long long key,
+                            const unsigned char *data, size_t len);
+
+/**
+ * @brief Indice semantico por-simbolo + claves Merkle de un fuente Vesta, en
+ *        JSON.  Cada simbolo lleva su nombre cualificado, kind, hash de
+ *        contenido, dependencias, visibilidad y su CLAVE MERKLE (que resume su
+ *        contenido + el de sus dependencias -> apta como clave de cache).
+ *
+ * @param src        Fuente .vx (NUL-terminado).
+ * @param unit_name  Nombre logico (NULL -> "main").
+ * @param out_json   [salida] JSON en heap (liberar con @c vesta_free).
+ * @return 0 si exito; !=0 si el parse fallo (out_json queda NULL).
+ */
+VESTA_API int vesta_merkle_keys_json(const char *src, const char *unit_name,
+                                     char **out_json);
+
 /**
  * @brief Libera memoria devuelta por la API (@c out_velb, @c out_err).
  *

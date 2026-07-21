@@ -2,40 +2,50 @@ namespace ejemplos.punteros;
 
 // examples_codes_vx/07_punteros.vx
 //
-// Demuestra punteros VIRTUALES (al stack VM) en Vex:
-//   - Tipo `VirtualPtr<T>` (direccion en memoria virtual de la VM).
-//   - `&x` toma direccion de una variable local; el lowering la
-//     promueve a ALLOCA automaticamente y el resultado es VirtualPtr.
-//   - `*p` desreferencia un puntero (LOAD).
-//   - `*p = v` escribe a traves del puntero (STORE).
-//   - Pasar puntero a una funcion como "out parameter".
+// Punteros en Vesta:
+//   - `&x` toma la direccion de una variable local.
+//   - `*p` desreferencia (LOAD) y `*p = v` escribe a traves (STORE).
+//   - Pasar un puntero a una funcion como "out parameter".
 //
-// Para punteros HOST (resultado de malloc, str_cstr, FFI a C, fields de
-// objetos GC) se usa el tipo `T*` sin el prefijo VirtualPtr<>.  La
-// aritmetica preserva la naturaleza del puntero base.
+// El tipo del puntero dice EN QUE MEMORIA vive lo apuntado, y son dos
+// espacios distintos que no se mezclan:
+//
+//   T*              memoria HOST.  Es lo que produce `&x` -- lo mismo da que
+//                   `x` sea un local (uno cuya direccion se toma se reserva en
+//                   host) o un global (su storage vive en host) -- y tambien
+//                   `malloc`, `str_cstr`, la FFI a C y los campos de objetos GC.
+//   VirtualPtr<T>   memoria de la VM, la que la VM pagina y traduce en cada
+//                   acceso.  Ningun `&` la produce: es un tipo de interop, para
+//                   nombrar una direccion VM que ya tienes (via cast explicito).
+//                   No existe en AOT, donde no hay memoria VM.
+//
+// No se coercen entre si: una direccion VM usada como host segfaltea y una
+// host leida como VM devuelve basura, y en el sitio del deref el unico dato
+// disponible es el tipo.  Mezclarlas es un error de compilacion; para hacerlo
+// a proposito, cast explicito.  La aritmetica preserva la naturaleza de la
+// base.
 //
 // Compilar y ejecutar:
-//   vm --vx examples_codes_vx/07_punteros.vx -o ptrs
+//   vm --vesta examples_codes_vx/07_punteros.vx -o ptrs
 //   vm --run ptrs.velb --stats
 //
 // Resultado esperado: R00 == 142  (100 + 42)
 
-void set_to(VirtualPtr<i32> out, i32 v) {
+void set_to(i32* out, i32 v) {
     *out = v;
 }
 
-i32 read_ptr(VirtualPtr<i32> p) {
+i32 read_ptr(i32* p) {
     return *p;
 }
 
 i32 main() {
     i32 a = 0;
     i32 b = 0;
-    // Pasamos punteros virtuales (a stack VM) a funciones que escriben
-    // a traves de ellos.
+    // `&a` es `i32*`: al tomar su direccion, el local se reserva en host.
     set_to(&a, 100);
     set_to(&b, 42);
     // Lectura via puntero local.
-    VirtualPtr<i32> pa = &a;
+    i32* pa = &a;
     return read_ptr(pa) + read_ptr(&b);
 }

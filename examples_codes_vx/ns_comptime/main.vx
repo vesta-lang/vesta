@@ -3,8 +3,8 @@
 // (el codigo runtime solo ve constantes / la expansion del macro).
 namespace mat;
 
-comptime i64 BASE = 40;                 // comptime const
-comptime i64 DOBLE = BASE * 2;          // comptime const derivada (compile-time)
+const i64 BASE = 40;                 // comptime const
+const i64 DOBLE = BASE * 2;          // comptime const derivada (compile-time)
 
 comptime i64 cuadrado(i64 n) {          // funcion comptime -> se pliega
     return n * n;

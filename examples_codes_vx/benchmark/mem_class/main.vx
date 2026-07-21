@@ -5,7 +5,7 @@
 // `helper()`; el GC lo colecta automaticamente en un minor_gc futuro
 // cuando el nursery se llena.
 //
-// Este es el path "managed" de Vex: cero free manual, GC se encarga.
+// Este es el path "managed" de : cero free manual, GC se encarga.
 // Equivalente conceptual a `new MyClass()` en Java/C#.
 //
 // Comparable contra `bench_mem_malloc_free.vx` (raw malloc/free) para

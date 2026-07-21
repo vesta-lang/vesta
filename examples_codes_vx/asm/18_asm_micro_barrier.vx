@@ -1,0 +1,25 @@
+// ASA: lift de asm OPACO sin operandos de registro a ASM_MICRO.
+//
+// Una barrera de memoria (mfence) no tiene una op IR tipada equivalente, pero
+// tampoco es una caja negra: el compilador la LIFTA a ASM_MICRO, que lleva sus
+// efectos de la base de datos (barrera).  El bloque asm deja de ser INLINE_ASM
+// opaco y pasa a ser IR real.  El JIT/AOT emiten la instruccion nativa; el
+// interprete la ejecuta via su ensamblador (si existe) o emula su efecto
+// (barrera) de forma portable.
+//
+//     vm --vx 18_asm_micro_barrier.vx -o barrier
+//     vm --run barrier.velb
+//
+// @expect 42
+u64 barrier_then_answer() {
+    asm {
+        mfence
+        lfence
+        sfence
+    };
+    return 42;
+}
+
+u64 main() {
+    return barrier_then_answer();
+}

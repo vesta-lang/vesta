@@ -1,0 +1,24 @@
+// Redondeo y min/max en punto flotante, f64 y f32, compilados nativos por el
+// JIT y el AOT (ROUNDSD/ROUNDSS con modo + MINSD/MAXSD/MINSS/MAXSS) -- sin caer
+// al interprete.
+//
+//     vm --vx fp_rounding.vx -o r && vm --run r.velb
+// @expect 42
+u64 main() {
+    u64 ok = 1;
+    f64 a = 3.7; f64 b = -2.3;
+    if ((i64) floor(a) != 3) ok = 0;
+    if ((i64) ceil(a) != 4) ok = 0;
+    if ((i64) round(a) != 4) ok = 0;
+    if ((i64) trunc(b) != -2) ok = 0;
+    if ((i64) floor(b) != -3) ok = 0;
+    if (fmin(a, b) != b) ok = 0;
+    if (fmax(a, b) != a) ok = 0;
+    f32 c = 3.7; f32 d = -2.3;
+    if ((i64) floor(c) != 3) ok = 0;
+    if ((i64) ceil(c) != 4) ok = 0;
+    if ((i64) trunc(d) != -2) ok = 0;
+    if (fmin(c, d) != d) ok = 0;
+    if (fmax(c, d) != c) ok = 0;
+    return (ok == 1) ? 42 : 0;
+}

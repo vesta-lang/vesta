@@ -1,0 +1,30 @@
+// examples_codes_vx/309_opaque_struct_ptr.vx
+//
+// Struct OPACO (forward-decl sin cuerpo): `typedef struct Tag *P, *LP;`.  Idioma
+// C de handle opaco.  Registra `Tag` como un tipo INCOMPLETO usable via puntero
+// (8 bytes); una definicion posterior `struct Tag { ... }` lo COMPLETA (permite
+// derefenciarlo).  Los alias de puntero (P, LP) se crean apuntando a `Tag`.
+//
+// Resultado esperado: R0 == 42.
+
+// (1) forward-decl opaco + alias de puntero (aun sin cuerpo).
+typedef struct _CTX *PCTX, *LPCTX;
+
+// (2) uso como HANDLE opaco (nunca derefenciado; solo se pasa).
+i64 as_handle(PCTX c) { return (i64)c; }
+
+// (3) COMPLETACION: definir el struct despues -> ahora es derefenciable.
+struct _CTX { i32 a; i32 b; }
+
+i32 main() {
+    _CTX ctx;
+    ctx.a = 40;
+    ctx.b = 2;
+    PCTX p = &ctx;              // puntero al struct (ahora completo)
+    LPCTX q = p;                // segundo alias del mismo tipo puntero
+    i32 sum = (*q).a + (*q).b;  // deref del completo: 40 + 2 = 42
+
+    // handle opaco: (PCTX)0 -> 0
+    i64 h = as_handle((PCTX)0);
+    return sum + (i32)h;        // 42 + 0 = 42
+}

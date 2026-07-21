@@ -2,7 +2,7 @@ namespace ejemplos.wndproc_win32;
 
 // examples_codes_vx/173_wndproc_win32.vx
 //
-// Test e2e de WndProc Win32 real con callback Vex.
+// Test e2e de WndProc Win32 real con callback .
 //
 // Demuestra el patron canonico de cualquier app GUI Win32:
 //   1. Registrar la clase de ventana con WNDCLASSEXW.lpfnWndProc =
@@ -10,7 +10,7 @@ namespace ejemplos.wndproc_win32;
 //   2. Crear la ventana (hidden, sin SW_SHOW; no necesita display).
 //   3. Postear mensajes simulados via PostMessageW.
 //   4. Bombear el message queue con GetMessageW/DispatchMessageW.
-//   5. El WndProc Vex es invocado por user32 internamente (via thunk
+//   5. El WndProc  es invocado por user32 internamente (via thunk
 //      x86-64) con los args nativos (hwnd, msg, wParam, lParam).
 //
 // Este test demuestra que el callback NO requiere ventana visible:
@@ -92,7 +92,7 @@ i32 main() {
     u32* p_cbsize = (u32*)(&wc[0]);
     *p_cbsize = 80;
 
-    // wc.lpfnWndProc = thunk del WndProc Vex.
+    // wc.lpfnWndProc = thunk del WndProc .
     i64 thunk = as_native_callback(my_wnd_proc);
     i64* p_wndproc = (i64*)(&wc[8]);
     *p_wndproc = thunk;

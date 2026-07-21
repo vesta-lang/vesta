@@ -1,6 +1,6 @@
 namespace ejemplos.z_shared_memory;
 
-// Phase Z (1-10) integrado: shared memory cross-process Erlang/Java style.
+//  Z (1-10) integrado: shared memory cross-process Erlang/Java style.
 // Cubre: shared modifier, share/unshare/is_shared, synchronized+wait+notify
 // cross-process, atomic primitives, shared_malloc, introspect.
 class Counter {

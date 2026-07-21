@@ -3037,7 +3037,7 @@ class Game {
             }
         }
         if self.boss != null and not self.boss.alive {
-            // Boss fase 2: al morir, spawn mini-pajaros como explosion final
+            // Boss   al morir, spawn mini-pajaros como explosion final
             if not self.boss_phase2_started {
                 self.boss_phase2_started = true
                 let i = 0
@@ -3138,8 +3138,8 @@ class Game {
         let draw_player_now = true
         if self.invuln_ms > 0 {
             // Parpadeo cada 80ms
-            let phase = self.invuln_ms / 80
-            if phase % 2 == 0 { draw_player_now = false }
+            let  = self.invuln_ms / 80
+            if  % 2 == 0 { draw_player_now = false }
         }
         if self.state == STATE_DYING {
             self._draw_dying_player()

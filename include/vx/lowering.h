@@ -113,7 +113,7 @@ class Lowering {
         instrument_mode_ = mode;
     }
 
-    /// Phase AOT.2.b: activa el modo POO NATIVA (sin runtime VM).  Cuando
+    ///  AOT.2.b: activa el modo POO NATIVA (sin runtime VM).  Cuando
     /// esta activo, el lowering de clases baja a layout C-struct +
     /// new->malloc/alloca + ctor directo, SIN __module_init/registry/GC.
     void set_native_poo(bool on) { native_poo_ = on; }
@@ -230,7 +230,7 @@ class Lowering {
                                                  uint32_t source_line);
 
     /**
-     * @brief Phase MC.17.2 -- obtiene (o aloca) el slot @c static_data
+     * @brief  MC.17.2 -- obtiene (o aloca) el slot @c static_data
      * que materializa un comptime global como memoria runtime para
      * macros lowereados.  Ver @c comptime_global_slots_.
      *
@@ -249,6 +249,45 @@ class Lowering {
      */
     uint64_t get_or_create_runtime_global_slot(const std::string &name,
                                                uint64_t bytes = 8);
+
+    /**
+     * @brief Slot del storage de un global IMPORTADO de otro modulo.
+     *
+     * El consumidor no ve el AST del dep, asi que crea su propio slot con el
+     * nombre del dep (`lib__counter`) como clave: el slot lleva ese nombre en
+     * @c StaticDataMeta::shared_key y el merge cross-module unifica todas las
+     * entries con la misma clave en UNO -- el modulo que define el global y los
+     * que lo usan comparten storage.
+     *
+     * Solo aplica a los globals que NO se inlinean (mutables, y const cuyo
+     * valor no se conoce en compile time como un `const string`).
+     *
+     * @param mangled_label nombre del slot en el modulo que lo define.
+     * @param t             tipo declarado (fija el tamano del slot).
+     * @return indice del slot en @c static_data.
+     */
+    uint64_t shared_global_slot_for(const std::string &mangled_label,
+                                    const Type &t);
+
+    /**
+     * @brief Si @p name es un global importado con storage, garantiza que
+     *        @c runtime_global_slots_ lo mapea a su slot compartido.
+     *
+     * Con el alias registrado, las rutas de lectura/escritura/`&` del ident
+     * tratan al global importado igual que a uno propio.  Idempotente.
+     *
+     * @return true si @p name es (o ya era) un global con slot.
+     */
+    bool ensure_imported_global_slot(const std::string &name);
+
+    /**
+     * @brief Si @p e es `ns.G` sobre un global importado CON storage, devuelve
+     *        true y deja en @p out_slot su slot compartido.
+     *
+     * Falso para el resto (campo de struct/clase, constante inlineable, metodo
+     * estatico): esos siguen su ruta normal.
+     */
+    bool imported_global_slot_of(ast::FieldAccessExpr *e, uint64_t &out_slot);
 
     /**
      * @brief Reserva el slot de la PLANTILLA de un `thread_local` (TLS).
@@ -391,7 +430,7 @@ class Lowering {
     void lower_foreach(ast::ForEachStmt *s);
     void lower_synchronized(ast::SynchronizedStmt *s);
     void lower_asm(
-        ast::AsmStmt *s); ///< Phase AS: baja a IrOp::INLINE_ASM (marker host).
+        ast::AsmStmt *s); ///<  AS: baja a IrOp::INLINE_ASM (marker host).
 
     ir::IrValueId lower_expr(ast::Expr *e);
     ir::IrValueId lower_binary(ast::BinaryExpr *e);
@@ -430,6 +469,19 @@ class Lowering {
      */
     std::string generate_spawn_helper(ast::BlockStmt *body,
                                       const SourceLoc &loc);
+
+    /**
+     * @brief Baja `c++` / `c--` sobre un tipo que SOBRECARGA la suma.
+     *
+     * `c++` es `c += 1`: fabrica ese compound y deja que el type checker lo
+     * resuelva (`__iadd__` in-place, o desazucarado a `c = c + 1`).  Va antes
+     * que las rutas enteras porque el valor SSA de un struct es su DIRECCION:
+     * la ruta entera le sumaba 1 a la direccion del objeto.
+     *
+     * @param is_inc `++` (true) o `--`; @param is_pre prefijo (true) o postfijo.
+     */
+    ir::IrValueId lower_overloaded_step(ast::UnaryExpr *e, bool is_inc,
+                                        bool is_pre);
 
     /**
      * @brief lowering de @c rspawn(node) { body }.
@@ -538,6 +590,70 @@ class Lowering {
     std::string generate_lambda_helper(ast::LambdaExpr *e);
 
     /**
+     * @brief Overlay F3: sintetiza (una vez) la funcion resolvedora del offset
+     *        de bloque de un campo -- `__ovl_resolve_<Struct>_<campo>(self)`.
+     *
+     * El body es el `@offset { ... }` del campo, lowered con `base` (= @c self)
+     * y los campos hermanos ligados como locales; `return <dir>` se vuelve el
+     * RET de la funcion.  Reusa TODO el control de flujo (if/else, multiples
+     * return) sin ALLOCA-en-bucle; el optimizer puede inlinearla.  Devuelve el
+     * nombre; @c generated_overlay_resolvers_ evita duplicados.
+     */
+    std::string generate_overlay_resolver(const StructLayout &lay,
+                                          const StructFieldInfo &fi,
+                                          bool is_element = false);
+    /// Nombres de resolvedores de overlay ya sintetizados (dedup).
+    std::unordered_set<std::string> generated_overlay_resolvers_;
+    /**
+     * @brief `extent(v)`: sintetiza `__ovl_extent_<S>(self) -> u64` que computa el
+     *        SPAN total del layout de la vista con los datos de la instancia
+     *        (max(fin de campo) - base).  Cubre escalares (offset const/expr/
+     *        block) + arrays de stride CON count; salta arrays sin count y
+     *        @element (variable) y resolvers que usan parent<T>().  Devuelve el
+     *        nombre de la funcion (dedup via @c generated_overlay_resolvers_).
+     */
+    std::string generate_overlay_extent(const StructLayout &lay);
+    /**
+     * @brief F4: baja el puntero de la vista RAIZ de una cadena de accesos
+     *        overlay.  Camina @c e por sus bases (FieldAccess/Index) hasta la
+     *        expresion que ya no es un acceso a campo/elemento (la vista raiz,
+     *        p.ej. `pe` en `pe.Imports[i].name`) y la baja con @c lower_expr.
+     *        Es el `root` que se enhebra a un resolver que usa `parent<T>()`.
+     */
+    ir::IrValueId lower_overlay_root(ast::Expr *e);
+    /**
+     * @brief Merge SSA N-vias tras un `match` (Braun): inserta PHIs en @c merge_bb
+     *        para cada variable del scope enclosing que quedo con SSA values
+     *        DISTINTOS entre los arms que alcanzan el merge, y rebindea el nombre
+     *        al PHI.  Sin esto, una variable ASIGNADA (no `return`) dentro de un
+     *        arm se quedaba con el valor del ULTIMO arm bajado.  @c arm_scopes /
+     *        @c arm_preds / @c arm_reaches son paralelos (uno por arm; solo cuentan
+     *        los que @c arm_reaches[i]==true).  Deja @c scopes_ listo en el merge.
+     */
+    void emit_match_arm_phis(
+        const std::vector<std::unordered_map<std::string, ir::IrValueId>>
+            &entry_scopes,
+        const std::vector<
+            std::vector<std::unordered_map<std::string, ir::IrValueId>>>
+            &arm_scopes,
+        const std::vector<ir::IrBlockId> &arm_preds,
+        const std::vector<char> &arm_reaches, ir::IrBlockId merge_bb,
+        uint32_t line);
+    /**
+     * @brief F5: aplica el swap de endianness `@endian(expr)` a @c value (un
+     *        entero de 2/4/8 bytes recien leido/por escribir).  Evalua la expr
+     *        de endianness del campo @c fi (con los campos hermanos de @c lay
+     *        ligados desde la base de la vista @c base_expr) -> `big`; devuelve
+     *        `big ? bswap(value) : value` (select sin ramas; comptime se pliega).
+     *        Simetrico: sirve para read y para write.
+     */
+    ir::IrValueId emit_overlay_endian_swap(ast::Expr *base_expr,
+                                           const StructLayout &lay,
+                                           const StructFieldInfo &fi,
+                                           ir::IrValueId value,
+                                           uint32_t line);
+
+    /**
      * @brief ADTs: lowering de un constructor de variante de
      *        enum (`Color.Green(42)` o `Color.Red`).
      *
@@ -597,6 +713,17 @@ class Lowering {
      * @return @c IR_NO_VALUE (match es statement-like en MVP).
      */
     ir::IrValueId lower_match_expr(ast::MatchExpr *e);
+    /// match sobre ESCALARES (enteros/chars), estilo switch.  Dispatch
+    /// eficiente: SWITCH_DENSE (O(1)) si los casos son densos, BST balanceado
+    /// (O(log N)) si dispersos, cadena lineal si pocos o con guards.
+    /// Statement-like (VOID); el valor se produce con `return` en cada arm.
+    ir::IrValueId lower_match_scalar(ast::MatchExpr *e);
+    /// match sobre STRINGS.  Hiper-eficiente: computa el hash del scrutinee
+    /// (STRHASH) una vez, despacha por los hashes de los literales (calculados
+    /// en compile-time, mismo FNV-1a 32-bit que el runtime) via dispatch entero
+    /// (BST O(log N) / lineal), y en el candidato hace UN STRCMP de verificacion
+    /// (colisiones).  Tipico: 1 hash + 1 strcmp, no N comparaciones.
+    ir::IrValueId lower_match_string(ast::MatchExpr *e);
 
     /**
      * @brief Lower @c CastExpr `(T) operand`.
@@ -723,6 +850,47 @@ class Lowering {
     /// (struct/array) -- e.g. inicializar un campo struct en un init-list.
     void emit_memberwise_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
                               uint64_t size_bytes, uint32_t line);
+    /// Rellena con CEROS @p size_bytes a partir de @p addr (STORE 0 en trozos
+    /// de 8/4/2/1 bytes, sin desbordar).  Garantiza que todo struct/array en
+    /// pila queda zero-inicializado por defecto (seguridad: nada de basura de
+    /// la pila en campos no listados en el init).  @p addr es una direccion VM
+    /// (ALLOCA); hereda su naturaleza para el STORE.
+    void emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes, uint32_t line);
+    /// Copia @p size_bytes (redondeado a qword) de un valor ENUM desde
+    /// @p src_addr (naturaleza @p src_is_host) al slot @p dst_addr.  Modelo
+    /// value-type (mismo que un struct): la variable enum tiene un SLOT
+    /// ESTABLE y la construccion/asignacion COPIA sus bytes, en lugar de
+    /// repuntar el puntero (que rompia con asignaciones condicionales +
+    /// `match` -- PHI de punteros de naturaleza mixta).
+    void emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
+                        bool src_is_host, uint64_t size_bytes, uint32_t line);
+    /// Tamano del buffer SRET de BUFFER PLANO (enum / Optional / Result) que
+    /// devuelve la fn @p callee, o 0 si no devuelve un SRET copiable.  Usado por
+    /// el fix nested-SRET de @c lower_call para copiar el retbuf de una llamada
+    /// anidada a un slot fresco (y no depender del slot fragil del productor
+    /// cuando la presion de registros clobbea su registro).  @p out_is_host (si
+    /// no es null) recibe la naturaleza que debe tener el slot fresco: false
+    /// (VM-stack) para enum, true (host) para Optional/Result -- debe coincidir
+    /// con como el callee lee su parametro.
+    uint64_t nested_sret_flat_size(const std::string &callee,
+                                   bool *out_is_host = nullptr) const;
+    /// Emite los valores por defecto de los campos de @p lay (los `u8 a = 0x10`)
+    /// sobre el struct ya alocado y zero-inicializado en @p base_addr.  Recurre
+    /// en campos struct anidados que tengan defaults propios.  Se llama tras el
+    /// zero-fill y ANTES del init-list explicito (que sobrescribe lo que toque).
+    void emit_struct_field_defaults(ir::IrValueId base_addr,
+                                    const StructLayout &lay, uint32_t line);
+    /// Rellena los campos de un struct YA alocado en @p base_addr desde el
+    /// init-list @p il segun el layout @p lay.  RECURSIVO: un campo de tipo
+    /// struct inicializado con un init-list ANIDADO (`{.min = {.x=..,.y=..}}`)
+    /// se rellena in-place en la direccion del campo (lower_expr no baja un
+    /// InitListExpr como valor).  Un campo struct/array inicializado con una
+    /// EXPRESION (otra variable, llamada, ...) usa copia memberwise; un campo
+    /// escalar usa STORE.  Comparte la logica del init-list de struct de
+    /// @c lower_var_decl para que ambos caminos (top-level y anidado) coincidan.
+    void emit_struct_init_fields(ir::IrValueId base_addr,
+                                 const StructLayout &lay, ast::InitListExpr *il,
+                                 uint32_t line);
     /// Ruta B (H1 paso por valor): copia un struct con copy-hook para pasarlo
     /// por valor a una funcion.  Aloca una copia, memcpy del origen, invoca
     /// `copia.__clone__()` y devuelve la direccion de la copia.  El caller debe
@@ -832,6 +1000,20 @@ class Lowering {
     size_t size_of_type(const Type &t) const;
 
     /**
+     * @brief ¿@p t es un `@overlay struct` (una VISTA sobre memoria ajena)?
+     *
+     * Un overlay comparte @c PrimitiveKind::STRUCT con los structs value-type,
+     * pero su semantica de valor es la OPUESTA: el valor de un overlay ES el
+     * puntero (8 bytes) al bloque host; no hay payload inline que copiar.  Todo
+     * sitio que trate un STRUCT como "buffer inline" (memcpy de @c size_bytes,
+     * o "el valor de un elemento es su direccion") debe excluir los overlays y
+     * tratarlos como un PTR normal.
+     *
+     * @return true si @p t es un STRUCT cuyo layout tiene @c is_overlay.
+     */
+    bool type_is_overlay(const Type &t) const;
+
+    /**
      * @brief Calcula el IrValueId del puntero al campo @c e->field_name.
      *
      * Helper compartido por @c lower_field_access (lectura) y por la
@@ -919,6 +1101,24 @@ class Lowering {
     void scan_address_taken(ast::Stmt *s);
 
     /**
+     * @brief Detecta si el body de un `spawn { }` usa primitivas de asincronia
+     *        COOPERATIVA (msgrecv/msgsend/fulfill/future_alloc/await).
+     *
+     * En AOT, `spawn { }` baja por defecto a un HILO REAL del SO
+     * (__vx_thread_run).  Pero si el cuerpo usa las primitivas cooperativas
+     * (mailbox/future), el spawn es una TAREA COOPERATIVA del scheduler de
+     * vx_async (un solo hilo, run-to-completion), no un hilo paralelo: en ese
+     * caso se baja a __vx_spawn/__vx_spawn_argv (que devuelven un pid que
+     * msgsend/await usan).  Esta distincion refleja el modelo del lenguaje:
+     * `spawn { compute }` = paralelismo real; `spawn { msgrecv/fulfill }` =
+     * tarea async cooperativa (identico a la semantica del interprete/JIT).
+     *
+     * @param s Cuerpo del spawn (BlockStmt).
+     * @return true si aparece alguna primitiva cooperativa.
+     */
+    bool spawn_body_uses_coop(ast::Stmt *s);
+
+    /**
      * @brief Lectura de una variable local respetando promocion address-taken.
      *
      * Si @p name esta marcada como address-taken (@c address_taken_locals_),
@@ -964,6 +1164,14 @@ class Lowering {
     // todavia no soportadas (introspect, comptime var, etc.).
     uint32_t macro_lowered_count_ = 0;
     uint32_t macro_skipped_count_ = 0;
+
+    /// Force-lower de comptime helpers: nombres (mangled) de las comptime fns
+    /// no-macro que un @Macro lowereable referencia (transitivamente) y que por
+    /// tanto DEBEN bajarse a runtime (`code.<helper>`) para que el `__macro_<X>`
+    /// que las llama resuelva.  Poblado por un pre-pase en @c run() antes del
+    /// lowering; consumido por @c lower_function (baja la comptime fn como fn
+    /// runtime normal en vez de elidirla).
+    std::unordered_set<std::string> comptime_fns_to_force_lower_;
 
     /// por cada @Macro que el lowering rechazo (usa
     /// builtins comptime-only no aliasables, comptime globals, etc.),
@@ -1031,6 +1239,13 @@ class Lowering {
     /// alocar el retbuf con @c enum_layouts_[name].size_bytes y en
     /// lower_function para configurar @c sret_active_/@c sret_buf_size_.
     std::unordered_map<std::string, std::string> fn_ret_enum_name_;
+
+    /// Nombre del STRUCT que la funcion devuelve por valor (vacio si no
+    /// devuelve uno).  Igual que @c fn_ret_enum_name_: el caller lo usa para
+    /// alocar el retbuf con @c struct_layouts_[name].size_bytes.  Un struct
+    /// devuelto por valor es SRET porque su buffer vive en el frame del callee
+    /// y muere al RET.
+    std::unordered_map<std::string, std::string> fn_ret_struct_name_;
 
     /// (gap O cerrado): conjunto de funciones que retornan un
     /// valor de tipo FUNCTION (function value).  Se trata como SRET
@@ -1137,11 +1352,16 @@ class Lowering {
     /// leen/escriben via @c STR_LIT_ADDR + LOAD/STORE i64.  El AST
     /// evaluator mantiene su propia copia en
     /// @c TypeChecker::comptime_const_values_ -- son dos espacios
-    /// de memoria distintos pero cada pase del two-phase compile
+    /// de memoria distintos pero cada pase del two- compile
     /// se mantiene consistente internamente.
     std::unordered_map<std::string, uint64_t> comptime_global_slots_;
     /// L2.2: slots para globales runtime no-const (string/int/etc.)
     std::unordered_map<std::string, uint64_t> runtime_global_slots_;
+    /// Nombres (ya mangled) de los globals declarados en ESTE modulo.  Sirve
+    /// para no confundir un simbolo de un namespace propio con uno importado:
+    /// el storage de los locales lo decide el pre-pase con el tipo delante, y
+    /// hay tipos que no llevan slot (p.ej. un global de tipo funcion).
+    std::unordered_set<std::string> local_global_names_;
 
     /// thread_local con init != 0: (slot static_data, valor inicial 8B LE).  El
     /// lowering sintetiza __vx_tls_init (TLS callback del PE) que escribe estos
@@ -1158,6 +1378,29 @@ class Lowering {
     /// callee usa @c fn_return_types_ y el resultado del CALL es el
     /// valor devuelto directamente).
     std::unordered_map<std::string, PrimitiveKind> fn_ret_kind_;
+
+    /**
+     * @brief Registra la info de retorno de una funcion top-level (tipo IR,
+     *        kind semantico y pertenencia a los conjuntos SRET).
+     *
+     * Unico punto donde se decide si una funcion usa la convencion SRET
+     * (retbuf hidden como primer parametro).  Lo usan TANTO el registro de
+     * las funciones LOCALES (a partir del AST) como el de las IMPORTADAS de
+     * otro modulo (a partir de la @c FunctionSig del .vxi).  Compartir el
+     * criterio es lo que garantiza que caller y callee coincidan: si cada
+     * lado dedujera el SRET por su cuenta, una divergencia haria que el
+     * callee escribiese en un retbuf que el caller nunca paso.
+     *
+     * @param name             Nombre por el que el caller invoca la funcion.
+     * @param kind             Kind semantico del tipo de retorno.
+     * @param enum_struct_name Nombre del tipo cuando @p kind es STRUCT (para
+     *                         distinguir un enum de usuario de un struct).
+     * @param is_async         La fn es @Async: el bytecode devuelve el handle
+     *                         i64 del Future, no el tipo logico T.
+     */
+    void register_fn_ret_info(const std::string &name, PrimitiveKind kind,
+                              const std::string &enum_struct_name,
+                              bool is_async);
 
     /// Variables locales cuya direccion se ha tomado con '&' en alguna
     /// parte de la funcion actual.  Se rellena con scan_address_taken al
@@ -1668,7 +1911,7 @@ class Lowering {
                                          ir::IrValueId pb, ir::IrValueId lb,
                                          uint32_t source_line);
 
-    // --- Reflexion / meta-OOP / Phase Z extras ---
+    // --- Reflexion / meta-OOP /  Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findfield(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findclass(ir::IrValueId v_params, uint32_t line);
@@ -1680,7 +1923,7 @@ class Lowering {
     void emit_addadvice(ir::IrValueId v_target, ir::IrValueId v_advice,
                         uint64_t kind, uint32_t line);
 
-    // --- GC primitives / Phase Z atomics ---
+    // --- GC primitives /  Z atomics ---
     ir::IrValueId emit_gc_allocp(ir::IrValueId v_size, uint32_t line);
     ir::IrValueId emit_gc_promote(ir::IrValueId v_src, uint32_t line);
     ir::IrValueId emit_gc_demote(ir::IrValueId v_src, uint32_t line);
@@ -1741,8 +1984,12 @@ class Lowering {
     /// no es "none", el lowering envuelve cada funcion usuario con
     /// CALLs a @c vx_trace:enter y @c vx_trace:exit (o equivalente).
     std::string instrument_mode_ = "none";
-    /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
+    ///  AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
+    /// Multihilo AOT: true si esta funcion (o el modulo) uso `spawn { }` que bajo
+    /// a un hilo real (__vx_thread_run).  Al lowerar `main` con este flag, se
+    /// inyecta CALL __vx_thread_join_all() antes de su RET (join-all implicito).
+    bool vx_thread_used_ = false;
     /// Bits del target para validar el inline-asm (@Naked/asm{}); 64 por defecto.
     uint8_t asm_target_bits_ = 64;
     /// Ancho del chunk SIMD del vectorizador en AOT (16/32/64 bytes); 16 default.
@@ -1866,7 +2113,7 @@ class Lowering {
             SHAREDPTR_REL, ///< Decrementar refcount de @c shared<T>.
             SYNC_EXIT, ///< Exit de @c synchronized {} : TRYLEAVE + MONEXIT como
                        ///< IR ops.
-            NATIVE_FREE, ///< Phase AOT.2.b: RAW_FREE(obj) de una instancia de
+            NATIVE_FREE, ///<  AOT.2.b: RAW_FREE(obj) de una instancia de
                         ///< clase NATIVA (calloc) al exit del scope (RAII; sin
                         ///< GC). aot_lower lo convierte en call<free>.  Sin
                         ///< dangling.

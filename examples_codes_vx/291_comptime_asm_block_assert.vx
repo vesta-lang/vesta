@@ -1,0 +1,26 @@
+// -----------------------------------------------------------------------------
+// `static_assert` DENTRO de un `comptime {}` block sobre un valor computado por
+// inline asm en compile-time.  El two- difiere el assert en el pass 1 (sin
+// bytecode comptime aun) y lo valida en el pass 2 con el valor real.
+// interp = JIT = AOT.
+// -----------------------------------------------------------------------------
+
+comptime i64 asm_mul3(i64 a) {
+    register("rdi") i64 x = a;
+    register("rax") i64 out;
+    asm volatile {
+        mov rax, rdi
+        imul rax, rax, 3
+    }
+    return out;
+}
+
+const i64 R = asm_mul3(14);   // 42, computado por asm
+
+i32 main() {
+    // static_assert dentro de un comptime block (se resuelve en el ComptimeVM).
+    comptime {
+        static_assert(R == 42, "asm_mul3(14) debe ser 42");
+    }
+    return (i32) R;   // 42
+}

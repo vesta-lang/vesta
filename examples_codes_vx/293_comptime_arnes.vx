@@ -1,0 +1,122 @@
+namespace ejemplos.comptime_arnes;
+
+// ============================================================================
+// ARNES de comptime: ejercita TODO el modelo comptime/const de Vesta.
+//   (1) const y comptime globales: runtime-inmutables, mutables en comptime.
+//   (2) comptime fn imperativa (loop + mutacion, locales pelados).
+//   (3) comptime block con introspeccion de tipos NO-comptime (sin cualificar
+//       -> resuelve via namespace).
+//   (4) @Macro que muta un global comptime (id counter) y devuelve codigo.
+//   (5) auto (inferencia de tipo) en comptime y en runtime.
+//   (6) tipos NO-comptime usados tanto en comptime como en runtime:
+//       struct value-type, class + metodo, overlay (vista tipada), fn normal.
+// Verificado igual en interprete, JIT y AOT.
+// ============================================================================
+
+// ---- tipos NO-comptime -----------------------------------------------------
+struct Punto { i32 x; i32 y; }
+
+class Contador {
+    i32 n;
+    i32 inc() { this.n = this.n + 1; return this.n; }
+}
+
+@overlay struct Cabecera {
+    u32 magic @0x00;
+    u16 ver   @0x08;
+}
+
+// funcion NO-comptime (runtime normal)
+i32 doblar(i32 v) { return v * 2; }
+
+// ---- (1) const y comptime globales ----------------------------------------
+const   i64 BASE  = 10;          // runtime-inmutable, legible en comptime
+comptime i64 g_id = 0;           // mutable EN comptime (id counter), congelado al final
+
+// ---- (2) comptime fn imperativa (loop + mutacion + locales pelados) --------
+comptime i64 suma_hasta(i64 n) {
+    i64 acc = 0;                 // local pelado: mutable, comptime
+    for (i64 i = 1; i <= n; i++) { 
+        acc = acc + i; 
+    }
+    return acc;
+}
+const i64 SUMA10 = suma_hasta(10);            // 55, horneado
+static_assert(SUMA10 == 55, "comptime fn imperativa");
+
+// const que consume otro const + introspeccion en su init (comptime fn)
+comptime i64 layout() {
+    i64 sz = sizeof<Punto>();                 // struct no-comptime -> 8
+    i64 off = offsetof<Punto>("y");           // 4
+    i64 nf = field_count<Contador>();         // clase no-comptime -> 1
+    return sz + off + nf + BASE;              // 8 + 4 + 1 + 10 = 23
+}
+const i64 LAYOUT = layout();
+static_assert(LAYOUT == 23, "introspeccion en comptime fn + const chain");
+
+// ---- (3) comptime block con introspeccion SIN cualificar -------------------
+comptime {
+    i64 pf = field_count<Punto>();            // 2  (resuelve Punto via namespace)
+    i64 cf = field_count<Cabecera>();         // 2  (overlay)
+    i64 cs = sizeof<Cabecera>();              // huella de la vista
+    static_assert(pf == 2, "field_count struct en comptime block");
+    static_assert(cf == 2, "field_count overlay en comptime block");
+    static_assert(cs >= 10, "sizeof overlay en comptime block");
+}
+
+// ---- (4) @Macro que muta un global comptime y emite codigo -----------------
+@Macro
+comptime string next_id() {
+    g_id = g_id + 1;                          // mutacion EN comptime
+    return to_str(g_id);
+}
+
+// ---- (5) auto (inferencia) en comptime ------------------------------------
+comptime auto DOSPI = suma_hasta(4);          // 10, tipo inferido i64
+static_assert(DOSPI == 10, "comptime auto inferido");
+
+// ---- (7) comptime fn PURA con BUFFER + println EN compile-time -------------
+// Corre en la ComptimeVM (motor real, JIT/interp), NO en el tree-walker:
+// reserva un buffer, escribe con indexado, e IMPRIME su contenido durante la
+// compilacion.  Devuelve el checksum, validado con static_assert.
+comptime i64 dump_buf() {
+    u8[4] buf = {0, 0, 0, 0};                 // reservar buffer
+    for (i64 i = 0; i < 4; i++) { 
+        buf[i] = (u8)(i + 1); 
+    }   // 1,2,3,4
+    // imprimir el contenido EN compile-time
+    println("[comptime] buf = ${buf[0]},${buf[1]},${buf[2]},${buf[3]}");
+    i64 chk = 0;
+    for (i64 i = 0; i < 4; i++) { 
+        chk = chk + (i64)buf[i]; 
+    } // = 10
+    return chk;
+}
+const i64 CHK = dump_buf();
+static_assert(CHK == 10, "buffer + println en comptime puro");
+
+// ---- runtime: usa las mismas clases/metodos/overlays/fns -------------------
+i32 main() {
+    Punto p = {.x = 3, .y = 4};
+
+    // clase + metodo
+    Contador c = new Contador();
+    c.n = 0;
+    i32 dos = c.inc() + c.inc();               // 1 + 2 = 3
+
+    // overlay sobre un buffer
+    u8* buf = (u8*) malloc(16);
+    *(u32*)(buf + 0x00) = 0xCAFE;
+    Cabecera h = Cabecera(buf);
+    i32 ov = (h.magic == 0xCAFE) ? 1 : 0;      // 1
+
+    // (4) macros: se expanden a literales 1, 2, 3 en compile-time
+    i32 a = next_id();                          // 1
+    i32 b = next_id();                          // 2
+    i32 sum_ids = a + b;                        // 3
+
+    // (5) auto en runtime (inferencia de tipo) + fn no-comptime
+    auto d = doblar(p.x);                        // i32 inferido = 6
+    i32 r = d + dos + ov + sum_ids + (i32) BASE; // 6+3+1+3+10 = 23
+    return r;                                    // 23
+}

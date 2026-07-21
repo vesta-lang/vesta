@@ -7,7 +7,7 @@
 
 /**
  * @file wait_table.cpp
- * @brief Implementacion del WaitTable lock-free per-bucket (Phase Z.4).
+ * @brief Implementacion del WaitTable lock-free per-bucket ( Z.4).
  *
  * Ver @c include/gc/wait_table.h para el contrato y el disenyo.
  *
@@ -16,7 +16,7 @@
  * - **Allocacion de Entries**: usamos @c new/@c delete C++ estandar.
  *   El coste de @c new (~30-50 ns en glibc / Windows) es despreciable
  *   comparado con el coste de bloqueo bytecode + scheduler que viene
- *   inmediatamente despues.  Phase Z+ puede migrar a un pool dedicado
+ *   inmediatamente despues.   Z+ puede migrar a un pool dedicado
  *   con free list lock-free si profile lo demanda.
  *
  * - **Memory ordering del spinlock**: test_and_set con acquire publica

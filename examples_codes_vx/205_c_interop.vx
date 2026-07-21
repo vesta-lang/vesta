@@ -1,4 +1,4 @@
-// Interop C (Fase 4): este modulo Vex se usa DESDE C sin friccion.
+// Interop C (Fase 4): este modulo  usa DESDE C sin friccion.
 //
 // Compilado con `vx --port c --emit-header` produce:
 //   - 205_c_interop.c : las DEFINICIONES (codigo C portado del IR).
@@ -10,7 +10,7 @@
 // Es un MODULO LIBRERIA: sin `main` (no es ejecutable, es importable).  Solo
 // expone tipos del carril C-representable (POD, cfn, structs C-compat); los
 // tipos gestionados (string/clase/fn capturador) NO cruzan la frontera C.
-// Ver doc/VMdoc/Vex/InteropC.md.
+// Ver doc/VMdoc/teropC.md.
 
 // Struct C-compat (layout C: orden de declaracion + alineacion de plataforma).
 // El header lo emite como `typedef struct { double x, y; } Vec2;`.

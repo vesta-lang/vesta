@@ -67,6 +67,7 @@ enum class SymbolKind : uint8_t {
     Method,      ///< metodo de clase/struct.
     Field,       ///< campo de clase/struct.
     EnumVariant, ///< variante de un enum.
+    Concept,     ///< concepto (predicado comptime; bound o predicado).
 };
 
 /// @brief Nombre legible de un @c SymbolKind (e.g. "funcion", "clase").

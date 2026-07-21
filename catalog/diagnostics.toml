@@ -1,0 +1,63 @@
+# Catalogo de diagnosticos del compilador Vesta.
+#
+# Cada entrada es un CODIGO estable (VXNNNN) + el mensaje por idioma.  El codigo
+# es lo PERMANENTE: la documentacion, las busquedas y las herramientas lo
+# referencian, no el texto.  Cambiar la redaccion NO cambia el codigo.
+#
+# Placeholders posicionales {0}, {1}, ...  se sustituyen por los ARGS (datos) que
+# pasa el emisor -- nunca se interpola texto crudo en el mensaje.
+#
+# ANADIR UN IDIOMA es trivial: se anade su codigo ISO a `languages` y su clave a
+# cada entrada, y se regenera con tools/import/gen_diag_catalog.py.  NO se traduce
+# NUNCA: keywords del lenguaje, atributos, nombres de tipos, identificadores del
+# usuario ni los propios codigos de diagnostico.
+#
+# Numeracion por componente: VX0xxx lexer | VX1xxx parser | VX2xxx type-checker |
+# VX3xxx lowering/IR | VX4xxx linker/modulos | VX5xxx codegen/AOT | VX6xxx VPP |
+# VXAxxx asm/ASA | VX9xxx CLI/driver.
+
+[meta]
+# El ORDEN fija el indice interno de idioma (0 = primero = fallback).
+languages = ["en", "es"]
+
+# --- asm / ASA (VXAxxx) ---
+
+[VXA001]
+en = "asm: dead code: unreachable instruction in the asm block"
+es = "asm: codigo muerto: instruccion inalcanzable en el bloque asm"
+
+[VXA002]
+en = "asm: jump to label '{0}' not defined in the asm block"
+es = "asm: salto a etiqueta '{0}' no definida en el bloque asm"
+
+[VXA003]
+en = "asm: infinite loop: control cannot leave the asm block"
+es = "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"
+
+[VXA004]
+en = "asm: register '{0}' read uninitialized in the asm block"
+es = "asm: registro '{0}' leido sin inicializar en el bloque asm"
+
+[VXA005]
+en = "asm: flags read without a prior comparison/operation in the asm block"
+es = "asm: flags leidas sin una comparacion/operacion previa en el bloque asm"
+
+[VXA006]
+en = "asm: register '{0}' modified but not declared in clobbers(...) with 'noinfer'"
+es = "asm: registro '{0}' modificado pero no declarado en clobbers(...) con 'noinfer'"
+
+[VXA007]
+en = "asm: flags are modified but clobbers(\"flags\") is not declared with 'noinfer'"
+es = "asm: las flags se modifican pero no se declara clobbers(\"flags\") con 'noinfer'"
+
+[VXA008]
+en = "asm: cannot pin operand '{0}' to '{1}' (the stack/frame pointer): a Vesta value cannot live there without breaking the stack. Manipulate the stack directly in the asm body instead (push/pop, sub rsp, mov rax rsp), or use @Naked for a stack switch"
+es = "asm: no se puede pinear el operando '{0}' a '{1}' (el puntero de pila/marco): un valor Vesta no puede vivir ahi sin romper la pila. Manipula la pila directamente en el cuerpo del asm (push/pop, sub rsp, mov rax rsp), o usa @Naked para un cambio de pila"
+
+[VXA009]
+en = "asm: operand '{0}' pinned to '{1}' -- that register is reserved by the runtime in VM mode; this asm block cannot be JIT-compiled (runs in the interpreter)"
+es = "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el runtime en modo VM; este bloque asm no se puede compilar en JIT (corre en el interprete)"
+
+[VXA010]
+en = "asm: reassigns the stack pointer ('{0}') in a normal function; its epilogue manages the stack, so a persistent stack switch (coroutines/fibers) will not survive the return -- mark the function @Naked to own the stack, or balance the change (restore '{0}') before the block ends"
+es = "asm: reasigna el puntero de pila ('{0}') en una funcion normal; su epilogue gestiona la pila, asi que un cambio de pila persistente (corrutinas/fibras) no sobrevivira al retorno -- marca la funcion @Naked para ser dueno de la pila, o equilibra el cambio (restaura '{0}') antes de cerrar el bloque"

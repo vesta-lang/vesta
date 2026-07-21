@@ -26,6 +26,7 @@
 #include <windows.h>
 #else
 #include <signal.h>
+#include <csignal> // std::signal / std::raise
 #endif
 
 namespace runtime {

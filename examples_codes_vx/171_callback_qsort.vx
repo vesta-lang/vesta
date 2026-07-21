@@ -2,14 +2,14 @@ namespace ejemplos.callback_qsort;
 
 // examples_codes_vx/171_callback_qsort.vx
 //
-// Callback nativo Vex->C real: msvcrt:qsort invoca un comparator escrito
-// en Vex via `as_native_callback`.  Ordena un array i32[16] y verifica
+// Callback nativo ->C real: msvcrt:qsort invoca un comparator escrito
+// en  via `as_native_callback`.  Ordena un array i32[16] y verifica
 // que quede ascendente.
 //
 // Demuestra:
 //   - `as_native_callback(fn) -> i64` genera un thunk x86-64 que cumple
 //     la calling convention C nativa (3+ args probados).
-//   - Comparator Vex recibe `i64,i64` (punteros host crudos a i32), los
+//   - Comparator  recibe `i64,i64` (punteros host crudos a i32), los
 //     deref-erea, retorna i32 (negativo/cero/positivo).
 //   - El thunk preserva callee-saved regs Win64/SysV.
 //

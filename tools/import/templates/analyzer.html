@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vesta - Analizador de asm x86</title>
+    <link rel="stylesheet" href="assets/app.css">
+</head>
+
+<body>
+    <nav class="nav">
+        <span class="brand">Vesta <small>&middot; arch-data</small></span>
+        <a href="index.html" data-i18n="nav.instr">Instrucciones</a>
+        <a href="analyzer.html" class="active" data-i18n="nav.an">Analizador</a>
+        <a href="features.html" data-i18n="nav.feat">Features</a>
+        <a class="ext" href="https://github.com/vesta-lang/arch-data" data-i18n="nav.repo">Repositorio &nearr;</a>
+    </nav>
+
+    <header>
+        <h1 data-i18n="an.title">Analizador de ensamblador x86</h1>
+        <div class="sub" data-i18n="an.desc">Pega instrucciones (sintaxis Intel, una por linea). Para
+            cada una se busca su <b>forma</b> en la base de datos y se reporta lo que
+            hace y su coste en la microarquitectura elegida.</div>
+    </header>
+
+    <details class="help">
+        <summary data-i18n="an.help">Como funciona el analisis</summary>
+        <div class="body" data-i18n="help.an"></div>
+    </details>
+
+    <div class="an">
+        <div class="editor">
+            <pre id="hl" class="hl" aria-hidden="true"></pre>
+            <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off">mov rax, 0
+imul rbx, rbx, 4
+mov rcx, rax
+mov rcx, rbx
+mov rdx, rdx
+add rax, rcx</textarea>
+        </div>
+        <div class="row">
+            <button class="go" id="run" data-i18n="an.run">Analizar</button>
+            <label><span data-i18n="bar.isa">ISA</span> <select id="isa"></select></label>
+            <label><span data-i18n="bar.uarch">microarq.</span> <select id="ar"></select></label>
+            <span class="hint" id="summary"></span>
+        </div>
+        <div class="row opts">
+            <span class="opts-lbl" data-i18n="an.opts">Optimizaciones:</span>
+            <label><input type="checkbox" id="opt-zero" checked> <span data-i18n="opt.zero">puesta a cero</span></label>
+            <label><input type="checkbox" id="opt-strength" checked> <span data-i18n="opt.strength">reduccion de
+                    fuerza</span></label>
+            <label><input type="checkbox" id="opt-selfcopy" checked> <span data-i18n="opt.selfcopy">copia a si
+                    mismo</span></label>
+            <label><input type="checkbox" id="opt-dce" checked> <span data-i18n="opt.dce">codigo muerto</span></label>
+            <label><input type="checkbox" id="opt-reorder" checked> <span
+                    data-i18n="opt.reorder">reordenacion</span></label>
+        </div>
+        <div class="res" id="res"></div>
+    </div>
+
+    <div class="foot" data-i18n="foot.an"></div>
+
+    <script src="assets/db.js"></script>
+    <script src="assets/micro.js"></script>
+    <script src="assets/tip.js"></script>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/analyzer.js"></script>
+</body>
+
+</html>

@@ -831,6 +831,12 @@ void emit_instr_static(const vm::Instruction *instruction_parser,
                        ByteWriter &code_final, const InstrInfo *now_instr,
                        Assembler *assembly_ctx);
 
+/// @brief Emite mld/mst (load/store universal, FIXED_8): (reg, reg_index,
+///        ctrlword imm16, disp16).  Ver la impl para el empaquetado.
+void emit_instr_mem_full(const vm::Instruction *instruction_parser,
+                         ByteWriter &code_final, const InstrInfo *now_instr,
+                         Assembler *assembly_ctx);
+
 /**
  * @brief Emite los operandos de @c dlopen (FIXED_4, 3 regs).
  *

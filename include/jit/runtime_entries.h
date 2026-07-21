@@ -121,7 +121,7 @@ struct RuntimeEntries {
      * proc->registers.regs[1..N], retorno en R0. */
     uint64_t (*call_bc_function)(vrt_proc *, uint64_t) = nullptr;
 
-    /* ----- VM memory access (Phase D.3-G) ----- */
+    /* ----- VM memory access ( D.3-G) ----- */
     uint64_t (*vm_read_u64)(vrt_proc *, uint64_t) = nullptr;
     void (*vm_write_u64)(vrt_proc *, uint64_t, uint64_t) = nullptr;
     /* Variantes por tamano (LOAD/STORE de i8/i16/i32 desde VM-ptr). */
@@ -131,10 +131,10 @@ struct RuntimeEntries {
     void (*vm_write_u32)(vrt_proc *, uint64_t, uint32_t) = nullptr;
     void (*vm_write_u16)(vrt_proc *, uint64_t, uint16_t) = nullptr;
     void (*vm_write_u8)(vrt_proc *, uint64_t, uint8_t) = nullptr;
-    /* Phase D.jit-mem-model FULL: translate VM-addr/host_ptr -> host_ptr. */
+    /*  D.jit-mem-model FULL: translate VM-addr/host_ptr -> host_ptr. */
     uint8_t *(*vm_translate)(vrt_proc *, uint64_t) = nullptr;
 
-    /* ----- Class registry (Phase D.3-G: findclass/newobj/defclass/...) -----
+    /* ----- Class registry ( D.3-G: findclass/newobj/defclass/...) -----
      */
     vrt_class *(*findclass)(vrt_proc *, uint64_t) = nullptr;
     uint8_t *(*newobj)(vrt_proc *, vrt_class *) = nullptr;

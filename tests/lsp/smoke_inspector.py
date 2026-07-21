@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VestaVM - smoke test del inspector del LSP de Vex (portable Linux/Windows).
+"""VestaVM - smoke test del inspector del LSP de  (portable Linux/Windows).
 
 Reemplaza al antiguo smoke_inspector.sh (bash, no portable a Windows).  Envia
 por stdin una secuencia JSON-RPC (initialize + initialized + didOpen de un .vx
@@ -29,7 +29,7 @@ import os
 import subprocess
 import sys
 
-# Fuente Vex: (a) suma aritmetica pura JIT-compilable, (b) loop para la
+# Fuente : (a) suma aritmetica pura JIT-compilable, (b) loop para la
 # complejidad lineal, (c) una clase con un metodo.
 SRC = (
     "i64 suma(i64 a, i64 b) { return a + b; }\n"
@@ -81,6 +81,24 @@ def build_input():
         {"jsonrpc": "2.0", "id": 21, "method": "vesta/aotAsm",
          "params": {"uri": URI, "function": "suma",
                     "os": "linux", "arch": "x86-32"}},
+        # CFG del codigo nativo (kind=asm): mermaid con >=1 bloque para
+        # 'acumular' (tiene un while -> varios bloques y un back-edge).
+        {"jsonrpc": "2.0", "id": 22, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "asm", "format": "mermaid",
+                    "function": "acumular"}},
+        {"jsonrpc": "2.0", "id": 23, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "asm", "format": "graphviz",
+                    "function": "acumular"}},
+        # Diagrama de tipos: la clase Punto debe aparecer en el classDiagram.
+        {"jsonrpc": "2.0", "id": 24, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "types", "format": "mermaid"}},
+        {"jsonrpc": "2.0", "id": 25, "method": "vesta/diagram",
+         "params": {"uri": URI, "kind": "types", "format": "graphviz"}},
+        # Reporte multi-modo: los tres (interp/jit/aot) + filtrado por uno.
+        {"jsonrpc": "2.0", "id": 26, "method": "vesta/modes",
+         "params": {"uri": URI}},
+        {"jsonrpc": "2.0", "id": 27, "method": "vesta/modes",
+         "params": {"uri": URI, "mode": "aot"}},
         {"jsonrpc": "2.0", "id": 99, "method": "shutdown", "params": None},
         {"jsonrpc": "2.0", "method": "exit", "params": None},
     ]
@@ -173,6 +191,33 @@ def main():
           "vesta/aotAsm windows/x86-64 sin error")
     check(21, lambda r: isinstance(r, dict) and not r.get("error"),
           "vesta/aotAsm linux/x86-32 sin error")
+    # CFG nativo: mermaid empieza por 'flowchart' y tiene >=2 bloques + una
+    # arista (el while genera bloques con back-edge).
+    check(22, lambda r: isinstance(r, dict) and has_text(r)
+          and r["text"].lstrip().startswith("flowchart")
+          and r["text"].count("[\"") >= 2 and "-->" in r["text"],
+          "vesta/diagram kind=asm (mermaid) devuelve CFG con bloques + aristas")
+    check(23, lambda r: isinstance(r, dict) and has_text(r)
+          and r["text"].lstrip().startswith("digraph")
+          and "->" in r["text"],
+          "vesta/diagram kind=asm (graphviz) devuelve digraph con aristas")
+    # Diagrama de tipos: classDiagram con la clase Punto.
+    check(24, lambda r: isinstance(r, dict) and has_text(r)
+          and "classDiagram" in r["text"] and "class Punto" in r["text"],
+          "vesta/diagram kind=types (mermaid) incluye la clase Punto")
+    check(25, lambda r: isinstance(r, dict) and has_text(r)
+          and r["text"].lstrip().startswith("digraph")
+          and "Punto" in r["text"],
+          "vesta/diagram kind=types (graphviz) incluye la clase Punto")
+
+    def modes_of(r):
+        return {m.get("mode") for m in r.get("modes", [])} \
+            if isinstance(r, dict) else set()
+    check(26, lambda r: modes_of(r) == {"interp", "jit", "aot"},
+          "vesta/modes (sin filtro) reporta interp+jit+aot")
+    check(27, lambda r: modes_of(r) == {"aot"}
+          and any("compatible" in m for m in r.get("modes", [])),
+          "vesta/modes mode=aot devuelve solo el modo aot con compat")
 
     if fails == 0:
         print("smoke_inspector: TODO OK")

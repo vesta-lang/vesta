@@ -1,0 +1,59 @@
+// -----------------------------------------------------------------------------
+// match sobre ENTEROS y CHARS (el switch de Vesta), con dispatch eficiente
+// -----------------------------------------------------------------------------
+// `match` no es solo para ADTs: tambien despacha por un valor ENTERO o CHAR,
+// como un `switch` de C.  Sintaxis con patrones de valor + `case _` (default,
+// obligatorio porque no se puede enumerar todo el rango):
+//
+//   match (n) {
+//       case 0 => ...;
+//       case 1 => ...;
+//       case _ => ...;   // default
+//   }
+//
+// El lowering elige la estrategia segun los casos, para EVITAR O(N):
+//   * casos densos (0,1,2,3...)  -> tabla de saltos  O(1)
+//   * casos dispersos, muchos    -> busqueda binaria  O(log N)
+//   * pocos casos / con guards   -> cadena de comparaciones
+//
+// Es statement-like: cada arm produce su efecto (aqui, un `return`).  Funciona
+// en interprete, JIT y AOT, y dentro de un resolver de overlay.
+
+// Codigo HTTP -> categoria.  Casos densos (200-204) y dispersos (301,404,500).
+i32 categoria(i32 code) {
+    match (code) {
+        case 200 => return 2;   // OK
+        case 201 => return 2;
+        case 204 => return 2;
+        case 301 => return 3;   // redirect
+        case 404 => return 4;   // client error
+        case 500 => return 5;   // server error
+        case _   => return 0;   // desconocido
+    }
+    return -1;   // inalcanzable (el match cubre todo via `case _`)
+}
+
+// Clasifica un caracter ASCII.  match sobre `char`.
+i32 clase_char(char c) {
+    match (c) {
+        case '0' => return 1;   // digito (solo el '0' para el ejemplo)
+        case 'A' => return 2;   // mayuscula
+        case ' ' => return 3;   // espacio
+        case _   => return 9;   // otro
+    }
+    return -1;
+}
+
+i32 main() {
+    // 2 + 2 + 4 + 5 + 0 = 13
+    i32 sum = categoria(200) + categoria(201) + categoria(404)
+            + categoria(500) + categoria(999);
+    println("categorias suman ${sum}");            // 13
+
+    // 1 + 20 + 300 + 9000 = 9321
+    i32 ch = clase_char('0') + clase_char('A')*10
+           + clase_char(' ')*100 + clase_char('x')*1000;
+    println("clases char ${ch}");                   // 9321
+
+    return sum + ch;   // 13 + 9321 = 9334
+}

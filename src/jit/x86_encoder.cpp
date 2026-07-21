@@ -263,10 +263,13 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     }
     case MOp::SQRTSD:
     case MOp::MINSD:
-    case MOp::MAXSD: {
-        /* SQRTSD/MINSD/MAXSD xmm_dst, xmm_src:
-         *   F2 + (REX si hay xmm>=8) + 0F + <op> + ModR/M(11, dst&7, src&7).
-         *   SQRTSD opcode = 0x51, MINSD = 0x5D, MAXSD = 0x5F. */
+    case MOp::MAXSD:
+    case MOp::MINSS:
+    case MOp::MAXSS: {
+        /* SQRTSD/MINSD/MAXSD (F2, f64) + MINSS/MAXSS (F3, f32) xmm_dst, xmm_src:
+         *   pref + (REX si hay xmm>=8) + 0F + <op> + ModR/M(11, dst&7, src&7).
+         *   MIN opcode = 0x5D, MAX = 0x5F, SQRTSD = 0x51.  El prefijo distingue
+         *   f64 (F2) de f32 (F3). */
         if (mi.dst.kind != MOperandKind::REG ||
             mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
@@ -274,18 +277,21 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-        const uint8_t opcode = (mi.op == MOp::SQRTSD)  ? 0x51
-                               : (mi.op == MOp::MINSD) ? 0x5D
-                                                       : 0x5F;
+        const bool is_ss = (mi.op == MOp::MINSS || mi.op == MOp::MAXSS);
+        const uint8_t opcode = (mi.op == MOp::SQRTSD) ? 0x51
+                               : (mi.op == MOp::MINSD || mi.op == MOp::MINSS)
+                                   ? 0x5D
+                                   : 0x5F;
+        const uint8_t pp = is_ss ? 2u : 3u; // VX pp: F3=2, F2=3
         if (mi.flags & MI_FLAG_VX_SCALAR) {
-            /* VSQRTSD/VMINSD/VMAXSD xmm, xmm(vvvv=dst), xmm: VX.LIG.F2.0F op. */
+            /* V{MIN,MAX}S{S,D}/VSQRTSD xmm, xmm(vvvv=dst), xmm: VX.LIG.<pp>.0F. */
             emit_vx3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
-                      /*map=*/1, /*pp=*/3);
+                      /*map=*/1, /*pp=*/pp);
             put8(out, opcode);
             put8(out, modrm(3, xd & 7, xs & 7));
             return true;
         }
-        put8(out, 0xF2);
+        put8(out, is_ss ? 0xF3 : 0xF2);
         /* REX solo si alguno >= 8.  REX.W no necesario para SSE. */
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
         const uint8_t rex_B = (xs >= 8) ? 1 : 0;
@@ -297,11 +303,13 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
-    case MOp::ROUNDSD: {
-        /* ROUNDSD xmm_dst, xmm_src, imm8:
-         *   66 + (REX) + 0F 3A 0B + ModR/M + imm8(mode)
+    case MOp::ROUNDSD:
+    case MOp::ROUNDSS: {
+        /* ROUNDSD (f64) / ROUNDSS (f32) xmm_dst, xmm_src, imm8:
+         *   66 + (REX) + 0F 3A <0B|0A> + ModR/M + imm8(mode)
          *   variant tiene el rounding mode (0=nearest, 1=floor, 2=ceil,
-         * 3=trunc). SSE4.1 required (todo x86-64 moderno lo tiene). */
+         * 3=trunc). SSE4.1 required (todo x86-64 moderno lo tiene).
+         * ROUNDSD = 0x0B, ROUNDSS = 0x0A. */
         if (mi.dst.kind != MOperandKind::REG ||
             mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
@@ -318,7 +326,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         put8(out, 0x0F);
         put8(out, 0x3A);
-        put8(out, 0x0B);
+        put8(out, mi.op == MOp::ROUNDSS ? 0x0A : 0x0B);
         put8(out, modrm(3, xd & 7, xs & 7));
         put8(out, mode);
         return true;
@@ -652,7 +660,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
-    /* ---- FP-regalloc (Phase AOT C1 float): MOVSD/MOVSS con memoria ---- */
+    /* ---- FP-regalloc ( AOT C1 float): MOVSD/MOVSS con memoria ---- */
     case MOp::MOVSD:
     case MOp::MOVSS: {
         /* MOVSD/MOVSS mueve un escalar f64/f32 entre XMM<->XMM o XMM<->mem.
@@ -775,6 +783,27 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             emit_modrm_mem(mi.src2, xd & 7, out);
         } else {
             put8(out, 0xCC);
+        }
+        return true;
+    }
+
+    case MOp::VFMADD231SD:
+    case MOp::VFMADD231SS: {
+        /* FMA ESCALAR: dst = src1*src2 + dst (1 redondeo).  66 0F38 B9; W1=SD,
+         * W0=SS.  VEX.LIG -> L=0 (128b, opera sobre la lane baja).  src2 = REG.
+         * Requiere FMA3 (el vreg lo comprueba con caps.fma antes de emitirlo). */
+        const bool ss = (mi.op == MOp::VFMADD231SS);
+        const uint8_t wbit = ss ? 0 : 1;
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.src2.kind == MOperandKind::REG) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
+            emit_vx3(xd, xs, xv, wbit, /*l256=*/false, 0, false, out, /*map=*/2,
+                     /*pp=*/1);
+            put8(out, 0xB9);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else {
+            put8(out, 0xCC); // solo REG
         }
         return true;
     }
@@ -1029,22 +1058,46 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
-    case MOp::IDIV: {
-        /* IDIV r/m64: REX.W + F7 /7 con divisor en src1.reg. */
+    case MOp::IDIV:
+    case MOp::DIV_U: {
+        /* IDIV r/m64 (signed): REX.W + F7 /7.  DIV r/m64 (unsigned): F7 /6.
+         * Divisor en src1.reg. */
         if (mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
             return true;
         }
+        const uint8_t ext = (mi.op == MOp::IDIV) ? 7 : 6;
         const uint8_t rex = rex_byte(true, 0, mi.src1.reg);
         if (rex) put8(out, rex);
         put8(out, 0xF7);
-        put8(out, modrm(3, 7, mi.src1.reg & 7));
+        put8(out, modrm(3, ext, mi.src1.reg & 7));
         return true;
     }
     case MOp::CQO: {
         /* CQO: REX.W + 99 -- sign-extend RAX -> RDX:RAX. */
         put8(out, 0x48);
         put8(out, 0x99);
+        return true;
+    }
+    case MOp::LOCK_CMPXCHG:
+    case MOp::LOCK_XADD: {
+        /* lock cmpxchg/xadd [mem], reg.  dst = mem [addr], src1 = reg fuente.
+         *   F0 (LOCK) + REX.W + 0F B1/C1 /r.  ModRM.reg = src1, r/m = mem. */
+        if (mi.dst.kind != MOperandKind::MEM ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        put8(out, 0xF0); /* prefijo LOCK */
+        const uint8_t srcreg = static_cast<uint8_t>(mi.src1.reg);
+        const MReg idx = mi.dst.mem_index();
+        const uint8_t rex =
+            rex_byte(true, srcreg, mi.dst.reg,
+                     idx == MReg::NONE ? 0 : static_cast<uint8_t>(idx));
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, mi.op == MOp::LOCK_CMPXCHG ? 0xB1 : 0xC1);
+        emit_modrm_mem(mi.dst, srcreg & 7, out);
         return true;
     }
     case MOp::MOVZX:
@@ -1126,8 +1179,21 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     case MOp::NEG: emit_unary_alu(fn, mi, out, 3); return true;
     case MOp::NOT: emit_unary_alu(fn, mi, out, 2); return true;
     case MOp::INC: {
-        /* INC r64: REX.W + 0xFF /0.  3 bytes total. */
         const MOperand &dst = mi.dst;
+        if (dst.kind == MOperandKind::MEM) {
+            /* INC dword [mem]: 0xFF /0 (32-bit, sin REX.W).  Lo usa el auto-PGO
+             * para incrementar un contador de branch (uint32) en memoria.  REX
+             * solo si base/index es r8-r15. */
+            const uint8_t base = dst.reg;
+            const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+            const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
+            if (rex) put8(out, rex);
+            put8(out, 0xFF);
+            emit_modrm_mem(dst, 0, out); // campo reg = 0 (/0)
+            return true;
+        }
+        /* INC r64: REX.W + 0xFF /0.  3 bytes total. */
         if (dst.kind != MOperandKind::REG) {
             put8(out, 0xCC);
             return true;
@@ -1161,7 +1227,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
          * CALL_REL32 que el driver parchea tras el layout de .text.
          * patch_at se deja en offset ABSOLUTO de @c out; encode() le
          * resta @c base para dejarlo relativo a la funcion. */
-        /* Phase AOT-GC (Inc 1): si el call lleva stackmap (gc<T>), fijar su
+        /*  AOT-GC (Inc 1): si el call lleva stackmap (gc<T>), fijar su
          * pc_offset al inicio del call (mismo criterio que MOp::CALL) para que
          * el GC walker lo localice por la direccion de retorno. */
         if (mi.flags != UINT16_MAX && mi.flags < fn.stackmaps.size()) {
@@ -1416,7 +1482,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         /* skip en release */
         return true;
     case MOp::INLINE_ASM_RAW: {
-        /* Phase AS inc.5: apendea los bytes del bloque inline-asm ya
+        /*  AS inc.5: apendea los bytes del bloque inline-asm ya
          * ensamblado (via vx::g_asm_backend) verbatim al code cache.
          * El indice del blob viaja como IMM32 en src1.  Los inputs/
          * outputs register-bound ya estan en sus registros fisicos
@@ -1427,7 +1493,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
                 const AsmBlob &ab = fn.asm_blobs[idx];
                 const uint32_t blob_base = static_cast<uint32_t>(out.size());
                 out.insert(out.end(), ab.bytes.begin(), ab.bytes.end());
-                // Phase AS inc.6: emitir un MReloc por cada simbolo propio
+                //  AS inc.6: emitir un MReloc por cada simbolo propio
                 // referenciado en el asm.  rip-relativo (`jmp [sym]`, `lea
                 // reg,[rip+sym]`) -> DATA_REL32; imm absoluto (`mov rax,sym`)
                 // -> ABS64.  @c patch_at absoluto en @c out; encode() lo
@@ -2020,6 +2086,21 @@ void X86Encoder::emit_setcc(MFunction & /*fn*/, const MInstr &mi,
                             std::vector<uint8_t> &out) {
     const MOperand &dst = mi.dst;
     const MCond cc = static_cast<MCond>(mi.variant);
+    /* SETcc m8 (destino en memoria: el bool vive en un slot de derrame).
+     * 0x0F 0x90+cc /0.  Sin REX.W (byte).  REX solo si base/index es r8-r15.
+     * Escribe SOLO el byte bajo del slot; el caller (regalloc_rewrite) zerifica
+     * el slot antes para que el valor de 8 bytes sea un 0/1 limpio. */
+    if (dst.kind == MOperandKind::MEM) {
+        const uint8_t base = dst.reg;
+        const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, 0x90 + static_cast<uint8_t>(cc));
+        emit_modrm_mem(dst, 0, out); // campo reg = 0 (/0)
+        return;
+    }
     if (dst.kind != MOperandKind::REG) {
         put8(out, 0xCC);
         return;

@@ -3,7 +3,7 @@
 """
 TLS (thread_local) nativo en AOT: PE (Windows) y ELF (Linux).
 
-Valida que `thread_local` de Vex se emite a TLS NATIVO por nuestro codegen, sin
+Valida que `thread_local` de  se emite a TLS NATIVO por nuestro codegen, sin
 emutls ni runtime C.  Los PROGRAMAS viven como ejemplos en
 examples_codes_vx/aot/ (64-68); este script SOLO los compila y verifica el exit
 (no hardcodea la fuente).
@@ -16,7 +16,7 @@ PE (corre nativo en Windows, sin WSL):
     host C (gcc) verifica plantilla + aislamiento por-hilo.
 
 ELF (compila/ejecuta via WSL):
-  - F/G: Vex-nativo (reusan los ejemplos 65/66) -- seccion SHF_TLS + PT_TLS,
+  - F/G: -nativo (reusan los ejemplos 65/66) -- seccion SHF_TLS + PT_TLS,
     acceso fs:0 + lea@tpoff (TPOFF32) que --emit exe / --link resuelven.
   - A-E: INTEROP del linker propio (vm --link) con objetos TLS de gcc -- cubren
     los 4 modelos ELF: local-exec, initial-exec (GOTTPOFF), general-dynamic
@@ -49,7 +49,7 @@ def main():
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     rc_pe = 0
 
-    # --- PE: thread_local Vex-nativo (TLS directory de Windows).  Corre nativo
+    # --- PE: thread_local -nativo (TLS directory de Windows).  Corre nativo
     # (sin WSL).  El emisor PE sintetiza _tls_index + callbacks +
     # IMAGE_TLS_DIRECTORY; el acceso usa gs:[0x58] -> [_tls_index] -> bloque.
     # Los programas viven como EJEMPLOS en examples_codes_vx/aot/ (no
@@ -259,7 +259,7 @@ def main():
         else:
             print("TLS-E (x86-32): multilib/libc32 no disponible, omitido")
 
-        # --- F) Vex-NATIVO (--emit obj + --link): thread_local emitido por
+        # --- F) -NATIVO (--emit obj + --link): thread_local emitido por
         # nuestro codegen (sin C).  Reusa el EJEMPLO 65 (multi-var): seccion
         # SHF_TLS (.tdata) + acceso fs:0 + lea@tpoff + reloc R_X86_64_TPOFF32 que
         # el --link resuelve.  Sin emutls, sin runtime C, todo del lenguaje. ---
@@ -270,12 +270,12 @@ def main():
              os.path.join(work, "vtl"), "--format", "elf"])
         rf = wsl(f"cd {wm} && chmod +x vtl && ./vtl").returncode
         if rf == 112:
-            print("TLS-F (ELF Vex-nativo --emit obj + --link): exit=112 OK")
+            print("TLS-F (ELF -nativo --emit obj + --link): exit=112 OK")
         else:
             print(f"TLS-F: EXIT MISMATCH got={rf} exp=112")
             rc = 1
 
-        # --- G) Vex-nativo por --emit exe DIRECTO (sin --link): el emisor de
+        # --- G) -nativo por --emit exe DIRECTO (sin --link): el emisor de
         # ejecutable ELF resuelve el TPOFF inline + monta PT_TLS.  Reusa el
         # EJEMPLO 66 (TLS en funcion no-main + loop, persistencia por-hilo). ---
         ex66 = os.path.join(aot_ex, "66_thread_local_fn_loop.vx")
@@ -283,7 +283,7 @@ def main():
              "-o", os.path.join(work, "vtg")])
         rg = wsl(f"cd {wm} && chmod +x vtg && ./vtg").returncode
         if rg == 10:
-            print("TLS-G (ELF Vex-nativo --emit exe + fn/loop): exit=10 OK")
+            print("TLS-G (ELF -nativo --emit exe + fn/loop): exit=10 OK")
         else:
             print(f"TLS-G: EXIT MISMATCH got={rg} exp=10")
             rc = 1

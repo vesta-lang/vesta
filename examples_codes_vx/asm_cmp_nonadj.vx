@@ -1,0 +1,32 @@
+// flags-as-SSA: el consumidor de flags (setcc/cmov/jCC) NO tiene que ir
+// ADYACENTE al cmp.  Modelamos EFLAGS como pseudo-registro: cmp lo DEFINE,
+// setcc lo LEE; las instrucciones flag-neutral entre medias (mov/lea/movzx)
+// no lo tocan.  Antes esto caia a INLINE_ASM (patron cmp+setcc adyacente);
+// ahora se lifta a IR tipado en interp/JIT/AOT.
+//
+//     vm --vx asm_cmp_nonadj.vx -o c && vm --run c.velb
+// @expect 42
+u64 main() {
+    u64 ok = 1;
+    register("rax") u64 r = 0;
+    register("rsi") u64 s = 5;
+    register("rdi") u64 d = 10;
+    register("rbx") u64 t = 0;
+
+    // cmp seguido de un mov (flag-neutral) ANTES del setcc: no-adyacente.
+    asm { cmp rsi, rdi
+          mov rbx, 99
+          setl al };            // 5 < 10 con signo -> 1 (el mov no toca flags)
+    if ((r & 0xFF) != 1) ok = 0;
+    if (t != 99) ok = 0;        // el mov intermedio se ejecuto
+
+    // Dos flag-neutral (lea + mov) entre el cmp y el setcc.
+    asm { cmp rsi, rdi
+          lea rbx, [rsi + rdi]
+          mov rax, 0
+          setg al };            // 5 > 10 -> 0
+    if ((r & 0xFF) != 0) ok = 0;
+    if (t != 15) ok = 0;        // lea rbx = 5 + 10
+
+    return (ok == 1) ? 42 : 0;
+}

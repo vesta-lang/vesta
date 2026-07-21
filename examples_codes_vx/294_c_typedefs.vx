@@ -1,0 +1,60 @@
+// examples_codes_vx/294_c_typedefs.vx
+//
+// Compat C-style para portar headers: sufijos de literal, std.ctypes, typedef
+// multi-declarador con aliases de puntero, `union`, arrays C multidimensionales,
+// structs/uniones ANONIMOS (patron LARGE_INTEGER de Win32) y el especificador
+// de tipo elaborado `struct Tag`.
+//
+// Resultado esperado: R0 == 42.
+
+import std.ctypes only int, short_int, long_int, unsigned_int;
+
+// Alias basico + multi-declarador con punteros (`typedef LONG *PLONG, *LPLONG;`).
+typedef i32 LONG;
+typedef LONG *PLONG, *LPLONG;
+
+// union C-style: todos los campos en offset 0.
+union U { i32 a; f64 b; i16 c; }
+
+// typedef struct con tag + alias de puntero.
+typedef struct _POINT { i32 x; i32 y; } POINT, *PPOINT;
+
+// union + struct ANONIMOS aplanados (LARGE_INTEGER de Win32).
+typedef struct _LARGE {
+    union {
+        struct { u32 Low; i32 High; };
+        i64 Quad;
+    };
+} LARGE, *PLARGE;
+
+// Array C-style multidimensional como campo.
+struct Mat { u32 grid[2][2]; }
+
+// ctypes: `int` (u32) y `short_int` (i16) usados como tipos normales.
+typedef int DWORD_LIKE;
+
+i32 main() {
+    // Sufijos de literal C.
+    u64 hexv  = 0x10UL;   // 16
+    u32 uns   = 5U;       // 5
+    long_int lv = 4L;     // 4  (long_int en Windows = i32, LP64 = i64)
+
+    // union: escribir un campo, leer otro.
+    U u; u.a = 7;
+
+    // struct + acceso a campos via alias/typedef.
+    POINT p; p.x = 3; p.y = 0;
+
+    // anonimo aplanado: escribir Quad, leer Low/High (solapan).
+    LARGE li; li.Quad = 0x0000000100000002;   // Low=2, High=1
+
+    // array multidimensional.
+    Mat m; m.grid[0][0] = 4; m.grid[1][1] = 0;
+
+    DWORD_LIKE dw = 0;
+
+    // 16 + 5 + 4 + 7 + 3 + 2 + 1 + 4 = 42
+    i32 sum = (i32)hexv + (i32)uns + (i32)lv + u.a + p.x
+            + (i32)li.Low + (i32)li.High + (i32)m.grid[0][0] + (i32)dw;
+    return sum;
+}

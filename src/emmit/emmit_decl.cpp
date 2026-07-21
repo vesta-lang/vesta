@@ -2103,6 +2103,64 @@ void emit_instr_static(const vm::Instruction *instruction_parser,
 }
 
 /**
+ * @brief Emite mld / mst (load/store universal, FIXED_8).
+ *
+ * Operandos (.vel, forma explicita que emite el ir_emitter):
+ *   op0 = reg (dst para mld / src para mst)
+ *   op1 = reg index (r0 si no se usa)
+ *   op2 = ctrlword (imm16) que empaqueta:
+ *     bits[4:0]=base(0-17)  bits[7:5]=scale(0-6)  bits[10:8]=width_code(0-6)
+ *     bit[11]=host  bit[12]=has_index  bit[13]=idx_sub  bit[14]=sign_ext  bit[15]=bank
+ *   op3 = disp16 (imm, ya en complemento a 2 de 16 bits)
+ * Emite los 6 bytes de payload: [ctrl][basef][regs][disp16 LE][pad].
+ */
+void emit_instr_mem_full(const vm::Instruction *instruction_parser,
+                         ByteWriter &code_final, const InstrInfo * /*now_instr*/,
+                         Assembler * /*assembly_ctx*/) {
+    if (instruction_parser->operands.size() < 4)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": requires (reg, reg_index, ctrlword, disp16)");
+    auto *op_dst = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto *op_idx = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[1].get());
+    auto *op_ctrl = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[2].get());
+    auto *op_disp = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[3].get());
+    if (!op_dst || !op_idx || !op_ctrl || !op_disp)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": operands must be (reg, reg, imm16, imm16)");
+
+    const uint8_t dst = encode_reg_general(op_dst->name.c_str()) & 0x0F;
+    const uint8_t index = encode_reg_general(op_idx->name.c_str()) & 0x0F;
+    const uint32_t cw =
+        static_cast<uint32_t>(vm::parse_number_safe(op_ctrl->value).value_or(0) &
+                              0xFFFFULL);
+    const uint16_t disp = static_cast<uint16_t>(
+        vm::parse_number_safe(op_disp->value).value_or(0) & 0xFFFFULL);
+
+    const uint8_t base = cw & 0x1F;
+    const uint8_t scale = (cw >> 5) & 0x07;
+    const uint8_t wcode = (cw >> 8) & 0x07;
+    const uint8_t host = (cw >> 11) & 1;
+    const uint8_t has_index = (cw >> 12) & 1;
+    const uint8_t idx_sub = (cw >> 13) & 1;
+    const uint8_t sign_ext = (cw >> 14) & 1;
+    const uint8_t bank = (cw >> 15) & 1;
+
+    const uint8_t ctrl = (host << 7) | (wcode << 4) | (has_index << 3) | scale;
+    const uint8_t basef = (bank << 7) | (idx_sub << 6) | (sign_ext << 5) | base;
+    const uint8_t regs = (dst << 4) | index;
+
+    code_final.emit8(ctrl);  // byte 2
+    code_final.emit8(basef); // byte 3
+    code_final.emit8(regs);  // byte 4
+    code_final.emit16(disp); // bytes 5-6 (LE)
+    code_final.emit8(0);     // byte 7 = pad
+}
+
+/**
  * @brief Emite los operandos de @c dlopen (0x62, FIXED_4, 3 regs).
  */
 void emit_instr_dlopen(const vm::Instruction *instruction_parser,

@@ -7,7 +7,7 @@
 
 /**
  * @file jit/linear_scan.h
- * @brief Register allocator linear-scan para el JIT (Phase D.7, commit 3).
+ * @brief Register allocator linear-scan para el JIT ( D.7, commit 3).
  *        Ver doc/REGALLOC.md.
  *
  * Asigna a cada registro virtual un registro fisico O un spill slot de stack,

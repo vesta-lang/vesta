@@ -1,7 +1,7 @@
 """Bench: copia secuencial byte-a-byte (1 MB x 100 iter = 100 MB).
 
 CPython es brutalmente lento en loops sobre bytearray, por eso este
-bench es donde Vex JIT puede competir con Python pero NO con C/C++.
+bench es donde  JIT puede competir con Python pero NO con C/C++.
 Para no tardar horas, reducimos a 10 iter en la version Python.
 """
 import sys

@@ -1,0 +1,42 @@
+// js/jns/sets (sign flag): con flags-as-SSA, el bit de signo (SF) del resultado
+// de una ALU (and/or/xor/add/sub) o un test lo leen js/jns (salto) y sets/setns
+// (byte).  Sound solo desde una ALU/test (SF = result<0); un cmp/sub NO (SF ahi
+// depende de OF).  interp/JIT/AOT.
+//
+//     vm --vx asm_js.vx -o c && vm --run c.velb
+// @expect 42
+u64 main() {
+    u64 acc = 0;
+
+    // and que deja el bit 63 encendido -> SF=1 -> js tomado -> +40.
+    {
+        register("rax") u64 a = 0xFF00000000000000;
+        register("rbx") u64 mask = 0x8000000000000000;
+        register("rcx") u64 r = 0;
+        asm { and rax, rbx
+              js .neg
+              mov rcx, 0
+              jmp .e
+            .neg:
+              mov rcx, 40
+            .e: };
+        acc = acc + r;   // +40
+    }
+
+    // and con bit 63 apagado -> SF=0 -> jns tomado -> +2.
+    {
+        register("rax") u64 a = 0x0F00000000000000;
+        register("rbx") u64 mask = 0x8000000000000000;
+        register("rcx") u64 r = 0;
+        asm { and rax, rbx
+              jns .pos
+              mov rcx, 0
+              jmp .e2
+            .pos:
+              mov rcx, 2
+            .e2: };
+        acc = acc + r;   // +2
+    }
+
+    return acc;          // 40 + 2 = 42
+}

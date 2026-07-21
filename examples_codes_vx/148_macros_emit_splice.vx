@@ -5,7 +5,7 @@ namespace ejemplos.macros_emit_splice;
 // Diferencia con comptime_compile 
 //   comptime_compile("expr") -> evalua y devuelve un VALOR comptime.
 //                                 El codigo desaparece tras eval.
-//   comptime_emit_expr("code") -> parsea el string como AST Vex, lo
+//   comptime_emit_expr("code") -> parsea el string como AST , lo
 //                                  type-checa en el contexto actual y
 //                                  emite codigo RUNTIME real.  Equivale
 //                                  al `unquote`/`splice` de Lisp/Scheme.

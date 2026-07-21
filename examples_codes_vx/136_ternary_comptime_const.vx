@@ -17,15 +17,15 @@ namespace ejemplos.ternary_comptime_const;
 struct Token { i32 kind; u64 payload; }
 
 // comptime con introspeccion.
-comptime u64 TOKEN_SZ      = sizeof<Token>();          // 16 (4+pad+8)
-comptime u64 TOKEN_K_OFF   = offsetof<Token>("kind");  // 0
-comptime u64 TOKEN_P_OFF   = offsetof<Token>("payload"); // 8
+const u64 TOKEN_SZ      = sizeof<Token>();          // 16 (4+pad+8)
+const u64 TOKEN_K_OFF   = offsetof<Token>("kind");  // 0
+const u64 TOKEN_P_OFF   = offsetof<Token>("payload"); // 8
 
 // comptime compuestas (usan otras comptime).
-comptime u64 BUFFER_CAP    = 256;
-comptime u64 BUFFER_BYTES  = TOKEN_SZ * BUFFER_CAP;     // 4096
-comptime i32 MAX_DEPTH     = 32;
-comptime i32 HALF_DEPTH    = MAX_DEPTH / 2;             // 16
+const u64 BUFFER_CAP    = 256;
+const u64 BUFFER_BYTES  = TOKEN_SZ * BUFFER_CAP;     // 4096
+const i32 MAX_DEPTH     = 32;
+const i32 HALF_DEPTH    = MAX_DEPTH / 2;             // 16
 
 // Static asserts: invariantes verificadas al compilar.  Si alguno
 // fallara, el .velb no se generaria.

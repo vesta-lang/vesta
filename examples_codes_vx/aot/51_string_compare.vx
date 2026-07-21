@@ -1,4 +1,4 @@
-// Vex Embed Inc 4: comparacion lexicografica de strings value-type
+//  Embed Inc 4: comparacion lexicografica de strings value-type
 // (native_poo_, AOT, sin GC).  Sugar syntax via operadores < > <= >= == !=.
 // La ordenacion es byte-a-byte: el primer byte distinto decide (unsigned
 // 0-255); si un prefijo coincide, el string mas CORTO es menor.

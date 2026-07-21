@@ -2,7 +2,7 @@
 
 `libvesta` es una libreria compartida (`vesta.dll` en Windows, `libvesta.so`
 en POSIX) con una interfaz C estable (C-ABI) que permite compilar y ejecutar
-codigo Vex desde cualquier lenguaje con FFI: C, Python, Rust, C#, etc.
+codigo Vesta-lang desde cualquier lenguaje con FFI: C, Python, Rust, C#, etc.
 
 La cabecera publica es `include/capi/vesta.h`.
 
@@ -98,14 +98,14 @@ void vesta_free(void *p);
 | Funcion | Que hace |
 | :------ | :------- |
 | `vesta_version` | Cadena de version (estatica, NO liberar). |
-| `vesta_compile` | Fuente Vex -> bytes `.velb` (con seccion `@ir` v3). |
+| `vesta_compile` | Fuente Vesta-lang -> bytes `.velb` (con seccion `@ir` v3). |
 | `vesta_run` | Ejecuta bytes `.velb`; `out_exit` = R0 de `main`. |
 | `vesta_eval` | Compila + ejecuta en una llamada. |
-| `vesta_compile_to_vel` | Fuente Vex -> texto `.vel` (bytecode textual). |
-| `vesta_compile_to_ir` | Fuente Vex -> texto del IR SSA. |
+| `vesta_compile_to_vel` | Fuente Vesta-lang -> texto `.vel` (bytecode textual). |
+| `vesta_compile_to_ir` | Fuente Vesta-lang -> texto del IR SSA. |
 | `vesta_assemble` | Texto `.vel` -> bytes `.velb`. |
 | `vesta_disasm` | Buffer de bytes nativos -> listado (Capstone); `arch` = `"X86-32"`/`"X86-64"`/`"ARM"`/`"AArch64"` (NULL => `"X86-64"`). |
-| `vesta_diagram` | Fuente Vex -> diagrama; `kind` = `"ast"`/`"ir-pre"`/`"ir-post"`/`"vel"`, `format` = `"mermaid"`/`"graphviz"`/`"html"`. |
+| `vesta_diagram` | Fuente Vesta-lang -> diagrama; `kind` = `"ast"`/`"ir-pre"`/`"ir-post"`/`"vel"`, `format` = `"mermaid"`/`"graphviz"`/`"html"`. |
 | `vesta_compile_full` | Devuelve a la vez `.vel`, IR y `.velb` (cada salida opcional con NULL). |
 | `vesta_vsh_eval` | Ejecuta un script VestaShellScript desde una cadena. |
 | `vesta_ir_to_velb` | Texto IR SSA -> bytes `.velb`. Cierra el ciclo `vesta_compile_to_ir` -> (editar IR) -> `vesta_ir_to_velb` -> `vesta_run`. |
@@ -119,7 +119,7 @@ Convenciones:
   = error.  Si `out_err` no es `NULL` y hay error, recibe un mensaje en heap
   que **debes** liberar con `vesta_free`.
 - Los buffers devueltos (`out_velb`, `out_err`) se liberan con `vesta_free`.
-- El valor de retorno del programa Vex (`return` de `main`) se entrega en
+- El valor de retorno del programa Vesta-lang (`return` de `main`) se entrega en
   `out_exit` (registro R0 del proceso principal).
 
 ## Ejemplo en C
@@ -210,7 +210,7 @@ PATH="../../../cmake-build-release:$PATH" python test_ffi_p1.py
 ## Ejemplo en Python (ctypes)
 
 `python/test_ffi.py` carga el DLL con `ctypes`, declara las firmas y evalua
-snippets Vex:
+snippets Vesta-lang:
 
 ```python
 import ctypes
@@ -249,12 +249,12 @@ g++ -std=c++17 test_ffi.cpp -I../../../include -L../../../cmake-build-release \
 PATH="../../../cmake-build-release:$PATH" ./test_ffi.exe
 ```
 
-## Ejemplo en Vex (self-hosting)
+## Ejemplo en Vesta-lang (self-hosting)
 
-`vx/self_host.vx` es un programa Vex que, via el FFI runtime dinamico
+`vx/self_host.vx` es un programa Vesta-lang que, via el FFI runtime dinamico
 (`ffi_open` / `ffi_sym` / `ffi_call`), carga `libvesta` y llama a
-`vesta_eval` para **compilar y ejecutar otro snippet Vex desde dentro de
-Vex**.  Es decir: el lenguaje se ejecuta a si mismo a traves de su propia
+`vesta_eval` para **compilar y ejecutar otro snippet Vesta-lang desde dentro de
+Vesta-lang**.  Es decir: el lenguaje se ejecuta a si mismo a traves de su propia
 DLL.
 
 ```vx
@@ -308,13 +308,13 @@ fn main() {
 
 ## Notas y limitaciones (MVP)
 
-- La salida del programa Vex (`println`, etc.) va al `stdout`/`stderr` del
+- La salida del programa Vesta-lang (`println`, etc.) va al `stdout`/`stderr` del
   proceso host.  No se captura por la API en esta version.
 - La VM usa estado global (registries, caches): las llamadas a la API **no**
   son thread-safe entre si.  Serializa el acceso desde el lado del llamante
   si compartes la libreria entre hilos.
 - El preprocesador VPP no se aplica a la fuente (se compila directamente con
-  el frontend Vex).
+  el frontend Vesta-lang).
 - `vesta_compile` / `vesta_assemble` / `vesta_compile_full` usan ficheros
   temporales para el paso de ensamblado/linkado interno; se borran solos.
 - `vesta_diagram` con `format="html"` produce una pagina HTML autocontenida

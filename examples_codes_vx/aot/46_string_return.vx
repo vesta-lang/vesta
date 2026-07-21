@@ -1,4 +1,4 @@
-// Vex Embed (native_poo_ / AOT): retorno de `string` POR VALOR.
+//  Embed (native_poo_ / AOT): retorno de `string` POR VALOR.
 //
 // En native el `string` es un VALUE-TYPE de 24 bytes {ptr,len,cap} en
 // stack (HEAP-ALWAYS, RAII).  Una funcion que RETORNA un string por

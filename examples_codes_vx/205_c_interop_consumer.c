@@ -1,7 +1,7 @@
 /*
- * Consumidor C del modulo Vex 205_c_interop.vx (Fase 4 interop C).
+ * Consumidor C del modulo  205_c_interop.vx (Fase 4 interop C).
  *
- * Demuestra que codigo C llama a funciones Vex sin friccion: incluye el
+ * Demuestra que codigo C llama a funciones  sin friccion: incluye el
  * header generado por `vx --emit-header` y enlaza el .c del port-C.
  *
  * Build (lo hace el e2e automaticamente):
@@ -15,16 +15,16 @@
 #include <stdio.h>
 #include VX_IFACE_HEADER /* el .h generado por vx --emit-header */
 
-/* Una funcion C cualquiera, pasada como callback cfn a Vex. */
+/* Una funcion C cualquiera, pasada como callback cfn a . */
 static int64_t doble(int64_t x) { return x * 2; }
 
 int main(void) {
-    /* Struct Vec2 construido en C, pasado a Vex por puntero (ABI agregados). */
+    /* Struct Vec2 construido en C, pasado a  por puntero (ABI agregados). */
     Vec2 a = {1.0, 2.0};
     Vec2 b = {3.0, 4.0};
     double dot = vec2_dot(&a, &b); /* 1*3 + 2*4 = 11 */
 
-    /* Callback: Vex invoca nuestra funcion C `doble`. */
+    /* Callback:  invoca nuestra funcion C `doble`. */
     int64_t r = apply(doble, 21); /* doble(21) = 42 */
 
     /* Funcion escalar. */

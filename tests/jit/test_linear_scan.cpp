@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_linear_scan.cpp
- * @brief Tests del register allocator linear-scan (Phase D.7, commit 3).
+ * @brief Tests del register allocator linear-scan ( D.7, commit 3).
  *
  * Construye MFunctions de juguete, computa intervals y valida la asignacion:
  * baja presion (todos en regs, preferencia caller-saved), valor cross-call
@@ -181,7 +181,7 @@ static void test_reuse() {
 }
 
 int main() {
-    std::printf("=== test_linear_scan (Phase D.7 commit 3) ===\n");
+    std::printf("=== test_linear_scan ( D.7 commit 3) ===\n");
     test_low_pressure();
     test_cross_call();
     test_spill();

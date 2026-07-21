@@ -11,9 +11,9 @@ namespace ejemplos.coop_yield;
 // cada id en base 10 -> 123123 (= 0x1e0f3).  R0 = 123123, IDENTICO en los tres
 // modos (-m vm / -m jit / -m aot; en aot el exit-code es 123123 mod 256 = 243).
 //
-// POR QUE EL CUERPO DE TAREA ES @Naked (no una fn Vex normal):  una tarea con
+// POR QUE EL CUERPO DE TAREA ES @Naked (no una fn  normal):  una tarea con
 // fibra corre sobre SU PROPIA pila NATIVA (la que aloca vasync_spawn_fiber).  En
-// -m vm/-m jit una fn Vex normal asume un frame VM; ejecutandola sobre una pila
+// -m vm/-m jit una fn  normal asume un frame VM; ejecutandola sobre una pila
 // host cruda romperia esa suposicion (crash comprobado).  Por eso el cuerpo es
 // asm puro (@Naked): lee/escribe solo el estado host que le pasamos por r13, y
 // cede llamando a `vasync_yield`/`vasync_task_done` (que TAMBIEN son @Naked, por

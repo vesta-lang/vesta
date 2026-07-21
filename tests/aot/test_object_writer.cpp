@@ -10,7 +10,7 @@
 
 /**
  * @file tests/aot/test_object_writer.cpp
- * @brief Phase AOT.4 -- valida el emisor de ejecutables (Pe/ElfWriter).
+ * @brief  AOT.4 -- valida el emisor de ejecutables (Pe/ElfWriter).
  *
  * Emite un programa "exit(42)" escrito a mano en PE y en ELF y verifica la
  * estructura del fichero producido (cabeceras, maquina, entrada).  Los
@@ -162,7 +162,7 @@ static void test_elf_exit42() {
 
 // =========================================================================
 //  Reloc REL32 cross-seccion: leer un byte de .rodata via lea RIP-relativo
-//  (Phase AOT.3 2a).  El exit-code = ese byte (42).  Valida add_reloc.
+//  ( AOT.3 2a).  El exit-code = ese byte (42).  Valida add_reloc.
 // =========================================================================
 
 static void test_pe_rodata_reloc() {
@@ -235,7 +235,7 @@ static void test_elf_rodata_reloc() {
 
 // =========================================================================
 //  Reloc REL32 cross-SECCION de codigo: .text llama a una funcion en .boot
-//  (Phase AOT.3 2b, dev OS).  El exit-code = lo que .boot devuelve (42).
+//  ( AOT.3 2b, dev OS).  El exit-code = lo que .boot devuelve (42).
 // =========================================================================
 
 static void test_pe_cross_section_call() {
@@ -286,7 +286,7 @@ static void test_pe_cross_section_call() {
 
 // =========================================================================
 //  OBJECT relocatable ELF (.o, ET_REL): main global + .text->.rodata reloc.
-//  (Phase AOT.4-ext)  Linkable con ld/gcc.
+//  ( AOT.4-ext)  Linkable con ld/gcc.
 // =========================================================================
 
 static void test_elf_obj() {
@@ -334,7 +334,7 @@ static void test_elf_obj() {
 
 // =========================================================================
 //  OBJECT relocatable COFF (.obj): main external + .text->.rodata reloc.
-//  (Phase AOT.4-ext)  Linkable con link.exe / gcc-mingw.
+//  ( AOT.4-ext)  Linkable con link.exe / gcc-mingw.
 // =========================================================================
 
 static void test_coff_obj() {
@@ -414,7 +414,7 @@ static void test_pe_dll() {
 
 // =========================================================================
 //  FLAT_BIN (.bin): binario plano sin cabecera; entry@0; relocs contra base.
-//  (Phase AOT Inc 2)
+//  ( AOT Inc 2)
 // =========================================================================
 
 static void test_flat_bin() {
@@ -471,7 +471,7 @@ static void test_flat_bin() {
 }
 
 int main() {
-    std::printf("=== test_object_writer (Phase AOT.4) ===\n");
+    std::printf("=== test_object_writer ( AOT.4) ===\n");
     test_pe_exit42();
     test_elf_exit42();
     test_pe_rodata_reloc();

@@ -1,4 +1,4 @@
-// Vex Embed Inc 1: concatenacion de value-strings nativos (AOT).
+//  Embed Inc 1: concatenacion de value-strings nativos (AOT).
 // `a + b` y str_concat producen un NUEVO buffer owned (malloc + copia
 // de ambos contenidos + nul), liberado por RAII al exit del scope.
 // Sin GC, sin StringObject.  Validado por ejecucion (PE/ELF) + valgrind.

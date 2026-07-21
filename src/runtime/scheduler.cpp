@@ -287,7 +287,7 @@ Scheduler::~Scheduler() {
 void Scheduler::run_loop() {
     // continuar mientras no se solicite parada y la VM siga activa
     while (!should_kill && vm_reference.vm_running) {
-        // Phase Z.10 ext: STW poll para shared GC.  Si shared_gc_active
+        //  Z.10 ext: STW poll para shared GC.  Si shared_gc_active
         // esta set, ACK + dormir hasta que el GC termine.  Esto es un
         // safe point: estamos entre batches, sin instr en flight, regs
         // y stack del proceso anterior ya commiteados a memoria.
@@ -777,11 +777,14 @@ void Scheduler::run_loop() {
                 default: taken = true; break;
                 }
                 // Sprint D.6: profile counter (fast path threaded).
-                if (__builtin_expect(runtime::profile::g_profile.active.load(
-                                         std::memory_order_relaxed),
-                                     0)) {
-                    runtime::profile::profile_branch(
-                        instance->registers.rip.raw(), taken);
+                {
+                    const uint64_t bpc = instance->registers.rip.raw();
+                    runtime::profile::lite_profile_branch(bpc, taken);
+                    if (__builtin_expect(runtime::profile::g_profile.active.load(
+                                             std::memory_order_relaxed),
+                                         0)) {
+                        runtime::profile::profile_branch(bpc, taken);
+                    }
                 }
                 if (taken) {
                     instance->registers.rip.qword(
@@ -818,12 +821,14 @@ void Scheduler::run_loop() {
                 }
                 // Sprint D.6: profile counter (fast path threaded JCC).
                 // Solo branches condicionales (cond < 0x0E).
-                if (cond < 0x0E &&
-                    __builtin_expect(runtime::profile::g_profile.active.load(
-                                         std::memory_order_relaxed),
-                                     0)) {
-                    runtime::profile::profile_branch(
-                        instance->registers.rip.raw(), taken);
+                if (cond < 0x0E) {
+                    const uint64_t bpc = instance->registers.rip.raw();
+                    runtime::profile::lite_profile_branch(bpc, taken);
+                    if (__builtin_expect(runtime::profile::g_profile.active.load(
+                                             std::memory_order_relaxed),
+                                         0)) {
+                        runtime::profile::profile_branch(bpc, taken);
+                    }
                 }
                 if (taken) {
                     instance->registers.rip.qword(addr);
@@ -1262,12 +1267,15 @@ void Scheduler::run_loop() {
                     }
                     // Sprint D.6: profile counter (fast path non-threaded
                     // cmpjmp).
-                    if (__builtin_expect(
-                            runtime::profile::g_profile.active.load(
-                                std::memory_order_relaxed),
-                            0)) {
-                        runtime::profile::profile_branch(
-                            instance->registers.rip.raw(), taken);
+                    {
+                        const uint64_t bpc = instance->registers.rip.raw();
+                        runtime::profile::lite_profile_branch(bpc, taken);
+                        if (__builtin_expect(
+                                runtime::profile::g_profile.active.load(
+                                    std::memory_order_relaxed),
+                                0)) {
+                            runtime::profile::profile_branch(bpc, taken);
+                        }
                     }
                     if (taken) {
                         instance->registers.rip.qword(
@@ -1310,13 +1318,15 @@ void Scheduler::run_loop() {
                     }
                     // Sprint D.6: profile counter (fast path non-threaded jcc).
                     // Solo branches condicionales (cond < 0x0E).
-                    if (cond < 0x0E &&
-                        __builtin_expect(
-                            runtime::profile::g_profile.active.load(
-                                std::memory_order_relaxed),
-                            0)) {
-                        runtime::profile::profile_branch(
-                            instance->registers.rip.raw(), taken);
+                    if (cond < 0x0E) {
+                        const uint64_t bpc = instance->registers.rip.raw();
+                        runtime::profile::lite_profile_branch(bpc, taken);
+                        if (__builtin_expect(
+                                runtime::profile::g_profile.active.load(
+                                    std::memory_order_relaxed),
+                                0)) {
+                            runtime::profile::profile_branch(bpc, taken);
+                        }
                     }
                     if (taken) {
                         instance->registers.rip.qword(addr);

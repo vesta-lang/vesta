@@ -858,7 +858,7 @@ struct HandleEntry {
     bool live;     /**< true si el handle referencia un objeto valido. */
 };
 
-/* El JIT (Phase D.7) inline-a @c deref leyendo @c HandleEntry con offsets
+/* El JIT ( D.7) inline-a @c deref leyendo @c HandleEntry con offsets
  * LITERALES (addr en 0, live en 8, stride 16).  Si el layout cambiase,
  * el codegen leeria basura -> corrupcion del heap.  Estos static_assert
  * fijan el contrato: cualquier cambio rompe el build en vez de corromper.
@@ -874,7 +874,7 @@ static_assert(offsetof(HandleEntry, live) == 8,
 /**
  * @brief Tabla de handles propia (POD), reemplaza @c std::vector<HandleEntry>.
  *
- * Motivacion (Phase D.7, principio "JIT inline > runtime"): el JIT necesita
+ * Motivacion ( D.7, principio "JIT inline > runtime"): el JIT necesita
  * leer @c data_ y @c count_ con offsets ESTABLES y controlados para inline-ar
  * @c deref (handle -> host_ptr) sin un CALL al runtime.  Con @c std::vector
  * habria que leer sus internals (@c _M_start/@c _M_finish), fragiles al
@@ -1090,7 +1090,7 @@ struct GcStats {
 /**
  * @brief Interfaz que abstrae lo que el GcHeap necesita de su "owner" para el
  *        scan conservativo (stack/regs del VM) y la sincronizacion shared
- *        (Phase Z, cross-proceso).
+ *        ( Z, cross-proceso).
  *
  * Desacopla @c gc_heap.cpp de @c ProcessVM: el runtime aporta una impl que lee
  * el ProcessVM (vive en una TU del runtime, donde la VM esta definida); el GC
@@ -1165,7 +1165,7 @@ class GcRootProvider {
      */
     virtual bool all_interp_frames_have_stackmaps() { return false; }
 
-    // --- Phase Z (shared / cross-proceso).  En AOT: false/nullptr. ---
+    // ---  Z (shared / cross-proceso).  En AOT: false/nullptr. ---
     virtual bool shared_contains(const uint8_t *ptr) = 0;
     virtual uint8_t *shared_lookup(GcHandle h) = 0;
     virtual WaitTable *shared_wait_table() = 0;
@@ -1594,7 +1594,7 @@ class GcHeap {
     /**
      * @brief Direccion estable de la @c HandleTable interna, para el JIT.
      *
-     * Phase D.7 (principio "JIT inline > runtime"): el codigo JIT-eado
+     *  D.7 (principio "JIT inline > runtime"): el codigo JIT-eado
      * inline-a @c deref leyendo @c data_/@c count_ de esta tabla en vez
      * de hacer un CALL a @c vrt_gc_deref.  La struct @c HandleTable vive
      * embebida en el GcHeap (no se mueve durante la vida del proceso),
@@ -1683,7 +1683,7 @@ class GcHeap {
      * Llamado por estructuras de datos NATIVAS que retienen un GcHandle
      * (ej. el plugin @c vesta_collections cuando hace push de un string
      * en un @c ArrayList<string>).  Mientras el refcount sea >0, el GC
-     * trata el handle como root vivo durante el mark phase del
+     * trata el handle como root vivo durante el mark  del
      * major_gc, evitando que sea colectado aunque ningun root normal
      * (HandleTable bytecode) lo referencie.
      *
@@ -1850,7 +1850,7 @@ class GcHeap {
     std::vector<uint64_t> monitor_pop_all_waiters(GcHandle h);
 
     // -----------------------------------------------------------------
-    // Wait queues con dispatch local-vs-shared (Phase Z).
+    // Wait queues con dispatch local-vs-shared ( Z).
     // -----------------------------------------------------------------
     // Cuando un handle tiene el @c SHARED_HANDLE_BIT, las wait queues
     // (monitor + condvar) se enrutan a @c vm.shared_wait_table en lugar
@@ -2069,7 +2069,7 @@ class GcHeap {
     const GcStats &stats() const { return stats_; }
 
     /**
-     * @brief Phase D.7.opt: wrapper publico de @c new_handle para que
+     * @brief  D.7.opt: wrapper publico de @c new_handle para que
      *        @c vrt_register_alloc lo invoque tras inlinear bump-pointer.
      *
      * Solo debe usarse cuando el caller YA hizo bump-pointer + init de
@@ -2080,7 +2080,7 @@ class GcHeap {
   public:
     // --- Nursery (publicos para inline bump-pointer en JIT) ---
     //
-    // Phase D.7.opt: el JIT inlinea el fast path de alloc emitiendo
+    //  D.7.opt: el JIT inlinea el fast path de alloc emitiendo
     // accesos directos a @c nursery_bump_ y @c nursery_end_ via
     // offset compile-time desde @c ProcessVM* (rbx en VM_ABI).
     // Esto elimina la llamada a @c vrt_newobj para el caso comun
@@ -2112,7 +2112,7 @@ class GcHeap {
     size_t old_used_ = 0;      ///< Bytes vivos contabilizados en OldGen.
     size_t old_threshold_ = 0; ///< Umbral para major GC automatico.
 
-    /// proveedor de raices (stack/regs conservativos + shared Phase Z).
+    /// proveedor de raices (stack/regs conservativos + shared  Z).
     /// Set via set_root_provider() en el ctor del ProcessVM.  Si es nullptr
     /// (AOT standalone), el GC omite scan conservativo + shared y usa solo
     /// stackmaps precisos.
@@ -2194,7 +2194,7 @@ class GcHeap {
     ///   - release_handle() => erase
     ///   - do_evacuate()   => erase old + insert new tras mover el objeto
     /// El payload pointer es estable mientras el objeto no se evacue.
-    /* Phase D.7.opt: reemplazado @c std::unordered_map por un flat
+    /*  D.7.opt: reemplazado @c std::unordered_map por un flat
      * hash map open-addressing para el hot path del GC (new_handle/
      * release_handle ~20-30 ns -> ~5 ns por op). */
     PtrHandleMap ptr_to_handle_;

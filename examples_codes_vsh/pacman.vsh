@@ -1190,8 +1190,8 @@ class Renderer {
             col = self.col_frighten
             // Parpadeo: en los ultimos FRIGHT_BLINK_FRAMES, alternar cada 8 frames
             if frighten_timer > 0 and frighten_timer < FRIGHT_BLINK_FRAMES {
-                let phase = (frighten_timer / 8) % 2
-                if phase == 0 { col = ansi_rgb(255, 255, 255) }
+                let  = (frighten_timer / 8) % 2
+                if  == 0 { col = ansi_rgb(255, 255, 255) }
             }
         }
 
@@ -1418,7 +1418,7 @@ class Game {
     // -------------------------------------------------------------------------
 
     fn _update_phase(self) {
-        let phase = self.sc_phases[self.phase_idx]
+        let  = self.sc_phases[self.phase_idx]
         let frames = phase["frames"]
         if frames == -1 { return }
         self.phase_timer = self.phase_timer + 1
@@ -1713,8 +1713,8 @@ class Game {
         // LEVEL_DONE: laberinto parpadea
         if self.state == STATE_LEVEL_DONE {
             // Cada 8 frames cambia color del laberinto
-            let phase = (self.level_done_anim / 8) % 2
-            if phase == 0 {
+            let  = (self.level_done_anim / 8) % 2
+            if  == 0 {
                 r.col_wall = ansi_rgb(255, 255, 255)
             } else {
                 r.col_wall = ansi_rgb(33, 33, 222)

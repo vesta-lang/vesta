@@ -10,7 +10,7 @@
 
 /**
  * @file aot/link_script.cpp
- * @brief Phase AOT.5 -- runner del script de enlace Vesta.
+ * @brief  AOT.5 -- runner del script de enlace Vesta.
  *
  * Construye un programa Vesta completo a partir del script del usuario (que solo
  * define @c fn link()): le antepone los @c extern "vxlink" de los builtins +

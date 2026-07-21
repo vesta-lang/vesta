@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_regalloc_e2e.cpp
- * @brief Test END-TO-END del path vreg (Phase D.7, commit 4a).
+ * @brief Test END-TO-END del path vreg ( D.7, commit 4a).
  *
  * Construye una funcion en MachineIR de registros virtuales, computa
  * intervals, asigna con linear-scan, reescribe a fisicos (rewrite_to_physical)
@@ -154,7 +154,7 @@ static void test_with_spill() {
 }
 
 int main() {
-    std::printf("=== test_regalloc_e2e (Phase D.7 commit 4a) ===\n");
+    std::printf("=== test_regalloc_e2e ( D.7 commit 4a) ===\n");
     test_no_spill();
     test_with_spill();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);

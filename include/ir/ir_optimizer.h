@@ -67,6 +67,13 @@
 
 #include "ir/ssa_ir.h"
 
+#include <string>
+#include <unordered_set>
+
+namespace analysis {
+struct PointsTo; // resolvedor points-to compartido (analysis/memory/points_to.h)
+} // namespace analysis
+
 namespace ir {
 
 /**
@@ -105,8 +112,15 @@ inline OptLevel opt_level_from_int(int n) {
  *
  * @param mod   Modulo IR a optimizar (modificado en su lugar).
  * @param level Nivel de optimizacion.
+ * @param allow_inline @c false para NO expandir llamadas (inline).  Lo usa el
+ *        modo --analyze: el coste PARCIAL es una propiedad del CUERPO ESCRITO
+ *        por el programador, estable entre compilaciones; si el inline lo
+ *        modificase, dependeria de decisiones del optimizador (-O0 vs -O3
+ *        darian partiales distintos).  El coste interprocedural (TOTAL) lo
+ *        compone el analizador via el callgraph, no via inline.  Default @c
+ *        true: JIT/AOT/interp inlinan normalmente.
  */
-void ir_optimize(IrModule &mod, OptLevel level);
+void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true);
 
 // =========================================================================
 //  Pases individuales (se pueden invocar directamente si se desea)
@@ -157,7 +171,7 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn);
 /**
  * @brief Promueve ALLOCAs cuyo ptr fluye a CALLN a host stack.
  *
- * Phase D.jit-mem-model AUTO-PROMOTE: detecta `&local` que llega a
+ *  D.jit-mem-model AUTO-PROMOTE: detecta `&local` que llega a
  * funciones nativas (CALLN).  Marca el dst del ALLOCA como
  * `is_host_ptr=true`, lo que hace que el JIT lo emita en host stack
  * (en lugar de VM-stack) -- el ptr resultante es genuino dereferenciable
@@ -189,6 +203,23 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn);
 // asi que un ALLOCA_VM ([rbx+off]) corrompe.  Cualquier local debe vivir en
 // la pila nativa.  Default (false): solo promueve las que no escapan (JIT/VM).
 bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
+
+/**
+ * @brief Propaga @c is_host_ptr por las cadenas de aritmetica de punteros.
+ *
+ * Recorre ADD/SUB/casts/PHI marcando el destino como host cuando alguno de sus
+ * operandos ya lo es, hasta punto fijo.  Complementa a
+ * @c ir_pass_promote_local_allocas, cuya propagacion interna solo cubre las
+ * ALLOCAs que ese mismo pase promueve: las que marca el lowering (locales
+ * address-taken) necesitan esta.  Sin ella, `&p.campo` con offset != 0 pierde
+ * la naturaleza host y emite `mov` (VM) en lugar de `movh`.
+ *
+ * Solo añade el flag (nunca lo quita), asi que es idempotente.
+ *
+ * @param fn Funcion IR a procesar (se ignora si es nativa).
+ * @return true si marco algun value nuevo.
+ */
+bool ir_pass_propagate_host_ptr(IrFunction &fn);
 
 /**
  * @brief Promociona patrones `malloc(N) + ... + free(p)` locales sin
@@ -247,7 +278,34 @@ bool ir_pass_promote_closure_env(IrFunction &fn);
 bool ir_pass_own_closure_envs(IrModule &mod);
 
 /**
- * @brief Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.
+ * @brief Pliega los @c STRCAT cuyas dos partes se conocen al compilar.
+ *
+ * `"aaa" + "bbb"` en la MISMA expresion ya lo pliega el frontend.  Este pase
+ * cubre lo que aquel no puede ver -- que las partes lleguen por VARIABLES:
+ *
+ *     string a = "aaa";
+ *     string b = "bbb";
+ *     string c = a + b;      // -> c = "aaabbb", sin STRCAT
+ *
+ * Aqui ya es facil: tras promover los allocas, `%a` y `%b` son valores SSA, asi
+ * que basta mirar si los dos son un @c STRMAKE sobre un literal de tamano
+ * constante.  Si lo son, se interna la concatenacion y el @c STRCAT pasa a ser
+ * un @c STRMAKE sobre ella: cero trabajo en runtime y una alocacion menos.
+ *
+ * Encadena solo (el resultado plegado es otro STRMAKE de literal, asi que
+ * `a + b + c` se pliega en dos vueltas del punto fijo).
+ *
+ * Los STRMAKE de las partes NO se tocan: si nadie mas las usa, quedan muertos y
+ * los quita el DCE; si se usan en otro sitio, siguen ahi.  Va a nivel de IR, asi
+ * que lo heredan el interprete, el JIT y el AOT.
+ *
+ * @param mod Modulo a transformar in-place (necesita internar la cadena nueva).
+ * @return true si plego algun STRCAT.
+ */
+bool ir_pass_fold_strcat(IrModule &mod);
+
+/**
+ * @brief  C2.13: DETECCION (log-only) de objetos GC no-escapantes.
  *
  * Analiza los `call @__new_X(...)` de @p fn y determina cuales NO escapan
  * del frame (su host_ptr solo se usa para leer/escribir campos locales).
@@ -261,7 +319,7 @@ bool ir_pass_own_closure_envs(IrModule &mod);
 bool ir_pass_escape_detect_gc(IrFunction &fn);
 
 /**
- * @brief Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
+ * @brief  C2.13: Scalar Replacement de objetos GC no-escapantes.
  *
  * Para cada `new X()` (call @__new_X) que no escapa del frame y cuyo ctor es
  * un inicializador trivial de campos, elimina el alloc GC y reemplaza los
@@ -300,6 +358,28 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
  * @return true si se realizo al menos una transformacion.
  */
 bool ir_pass_simplify(IrFunction &fn);
+
+/**
+ * @brief Estrecha comparaciones extendidas: @c cmp(sext/zext(x), const) ->
+ * @c cmp(x, const_estrecho) cuando el const cabe en el ancho de @c x, y
+ * @c cmp(ext(x), ext(y)) -> @c cmp(x, y).  Elimina el SEXT/ZEXT y el const.i64
+ * (los mata el DCE).  El backend compara al ancho de los operandos.
+ */
+bool ir_pass_narrow_cmp(IrFunction &fn);
+
+/**
+ * @brief Contrae @c fmul+fadd single-use en un @c FMA (round(a*b+c), 1
+ * redondeo).  Solo en funciones @c \@fp(fast) (fn.fp_contract).  Corre DESPUES
+ * de @c ir_pass_simplify.  Ver la nota en el .cpp.
+ */
+bool ir_pass_fuse_fma(IrFunction &fn);
+
+/**
+ * @brief Gate global del driver para @c ir_pass_fuse_fma.  velb = true; el AOT
+ * lo pone a @c target.caps.fma (no crear FMA si el target no lo soporta).
+ */
+void ir_set_fma_contract_allowed(bool v);
+bool ir_fma_contract_allowed();
 
 /**
  * @brief Pase Strength Reduction.
@@ -414,7 +494,8 @@ bool ir_pass_inline_closures(IrModule &mod);
  *
  * @return true si movio al menos una instr.
  */
-bool ir_pass_licm(IrFunction &fn);
+bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+                  const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Devirtualizacion monomorfica de CALLVIRT a CALL directo.
@@ -574,8 +655,18 @@ bool ir_pass_cse(IrFunction &fn);
  * en patrones de init list, alloca-zero, etc.
  *
  * @return true si elimino al menos un STORE.
+ *
+ * @param pure_callees (opcional) conjunto de nombres de funciones cuyo efecto
+ *        transitivo es TOTALMENTE PURO (sin lecturas/escrituras de memoria, sin
+ *        may_trap/throw/allocate/block/io ni tags, Complete), segun el modelo de
+ *        efectos.  Una CALL a una de
+ *        ellas NO es barrera de memoria (el DSE puede eliminar/forwardear a
+ *        traves).  Es conocimiento INTERPROCEDURAL que el DSE por si solo no
+ *        tiene; se lo aporta EffectAnalysis.  nullptr = comportamiento clasico
+ *        (toda CALL es barrera).
  */
-bool ir_pass_dse(IrFunction &fn);
+bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+                 const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Pase Const CSE Entry: deduplicacion global de constantes.
@@ -642,7 +733,7 @@ bool ir_pass_load_narrow(IrFunction &fn);
  *   1. **Interpreter**: el host CPU (out-of-order) ve mas independencia
  *      entre VM ops consecutivos => mas paralelismo via reorder buffer.
  *      Gana ~5-15% en bench ALU pesado.
- *   2. **JIT (Phase D+)**: el host superscalar puede ejecutar 2-4 host
+ *   2. **JIT ( D+)**: el host superscalar puede ejecutar 2-4 host
  *      ops por ciclo si tienen deps disjuntas.  Sin scheduling, una
  *      cadena de adds dependientes (a+=1; a+=1; a+=1) ejecuta 1/ciclo;
  *      con scheduling interleaving (a+=1; b+=1; a+=1; b+=1), 2/ciclo.
@@ -659,7 +750,8 @@ bool ir_pass_load_narrow(IrFunction &fn);
  *
  * @return true si reordeno al menos un basic block.
  */
-bool ir_pass_schedule(IrFunction &fn);
+bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+                      const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Registra un helper @c __new_<X> como "puro" (sin side effects

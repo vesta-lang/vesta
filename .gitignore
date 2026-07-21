@@ -22,7 +22,7 @@ cmake-build-debug
 cmake-build-release
 cmake-build-*
 cmake-*
-build*
+build*/
 build-windows
 build-linux
 
@@ -401,3 +401,20 @@ tests/bugs/naked_call_xmod/lim5real/racelib.vex
 tests/bugs/naked_xmodule_test/main.vex
 tests/bugs/naked_xmodule_test/naked_mod.vex
 salida_vex.txt
+wsl-asan/
+
+
+*.id1
+*.id0
+*.nam
+*.id2
+*.til
+examples_codes_vx/reader_bmp/BUGS_LIMITACIONES.md
+examples_codes_vx/reader_bmp/*.bmp
+
+# Base de datos de instrucciones generada (regenerable desde el XML de uops.info)
+timings/x86/*.vxisa
+timings/x86/*.vxarch
+timings/x86/instr_form_ids.h
+tools/import/__pycache__/
+ANAMNESIS.txt

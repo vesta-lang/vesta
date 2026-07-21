@@ -12,7 +12,7 @@ namespace ejemplos.macros_compose_recurse_global;
 //   (2) RECURSION: una @Macro puede llamarse a si misma.  El evaluador
 //       comptime tiene cota dura de 256 niveles (defensa anti-loop).
 //
-//   (3) GLOBALES MUTABLES: `comptime var X = ...` a nivel modulo.  Las
+//   (3) GLOBALES MUTABLES: `comptime X = ...` a nivel modulo.  Las
 //       @Macros pueden leer + escribir.  Util para id counters, tablas
 //       de simbolos acumuladas, cache de codigo, etc.
 

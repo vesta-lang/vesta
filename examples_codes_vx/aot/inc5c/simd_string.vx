@@ -1,4 +1,4 @@
-// CPU dispatch (Inc 5c): LIBRERIA stdlib de string SIMD (Vex + asm puro).
+// CPU dispatch (Inc 5c): LIBRERIA stdlib de string SIMD ( + asm puro).
 //
 // Esta es la pieza que materializa la vision: el dispatch SIMD vive en una
 // LIBRERIA APARTE, legible y modificable, sin codigo magico.  Cualquier

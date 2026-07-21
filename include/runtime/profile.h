@@ -8,7 +8,7 @@
  *
  * Sistema de instrumentacion runtime que recolecta tres tipos de
  * informacion del programa en ejecucion, necesaria para que el C2 JIT
- * (Phase D.8) tome decisiones especulativas seguras:
+ * ( D.8) tome decisiones especulativas seguras:
  *
  *   1. Branch frequency (taken / not_taken counts en BR_COND/jcc).
  *      Permite layout de codigo + branch hints en codegen.
@@ -46,7 +46,7 @@
  *              (class_name string + count u64) x n_types]
  *   Allocs:    [pc u64][count u64]
  *
- * Phase D.10 PGO persistence carga el `.vprof` al startup para
+ *  D.10 PGO persistence carga el `.vprof` al startup para
  * warm-start del C2 (compile preemptive de fns hot del run anterior).
  *
  * = Concurrencia =
@@ -65,6 +65,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -174,6 +175,78 @@ struct ProfileCollector {
 /// proceso.  Inicializado lazy en @c profile_init().
 extern ProfileCollector g_profile;
 
+// ===========================================================================
+// Profiler LIGERO de branches (lock-free) para el auto-PGO del JIT (default-ON)
+// ===========================================================================
+//
+// El profiler D.6 (arriba) usa mutex + unordered_map por PC: correcto para el
+// dump completo del `.vprof`, pero demasiado pesado para dejarlo SIEMPRE activo
+// en tier-0 (el interp).  El auto-PGO del JIT necesita datos de branches
+// recolectados durante tier-0 SIN penalizar; para eso este profiler ligero:
+//
+//   - Tabla de tamano FIJO (potencia de 2) indexada por hash del PC.  Cero
+//     asignacion dinamica, cero mutex.
+//   - Cada entrada: {pc, taken, not_taken} atomicos (relaxed).  Insercion via
+//     un CAS del slot vacio; colision con otro PC -> se DESCARTA la muestra
+//     (perfil aproximado, aceptable para una heuristica de rentabilidad).
+//   - Fast path OFF: 1 load relaxed + branch predicho -> ~1 ciclo.  Se puede
+//     dejar activo siempre que el JIT este habilitado sin coste apreciable.
+//
+// Es un perfil APROXIMADO por diseno (colisiones se pierden); para el PGO de la
+// if-conversion basta el orden de magnitud de P(mispredict) por linea.
+
+/// @brief Entrada del profiler ligero (una ranura de la tabla fija).
+struct LiteBranchSlot {
+    std::atomic<uint64_t> pc{0}; ///< PC del branch; 0 = ranura vacia.
+    std::atomic<uint32_t> taken{0};
+    std::atomic<uint32_t> not_taken{0};
+};
+
+/// Numero de ranuras (potencia de 2).  16384 * 16B = 256 KB estaticos.
+constexpr size_t kLiteBranchSlots = 1u << 14;
+constexpr uint64_t kLiteBranchMask = kLiteBranchSlots - 1;
+
+/// Tabla estatica del profiler ligero + flag de actividad.
+extern LiteBranchSlot g_lite_branches[kLiteBranchSlots];
+extern std::atomic<bool> g_lite_active;
+
+/// @brief Activa/desactiva el profiler ligero (lo hace @c main al habilitar el
+///        JIT).  Idempotente.
+void lite_profile_set_active(bool on);
+
+/// @brief True si el profiler ligero esta recolectando.
+inline bool lite_profile_active() {
+    return g_lite_active.load(std::memory_order_relaxed);
+}
+
+/**
+ * @brief Registra un branch en el profiler ligero (lock-free).  Fast path OFF
+ *        = 1 load + branch.  ON = hash + 1-2 atomicas relaxed.  Colision con
+ *        otro PC -> muestra descartada (perfil aproximado por diseno).
+ * @param pc    PC del branch (VM address).
+ * @param taken True si la condicion fue verdadera.
+ */
+inline void lite_profile_branch(uint64_t pc, bool taken) {
+    if (!g_lite_active.load(std::memory_order_relaxed)) return; // fast path OFF
+    // Hash de Fibonacci (multiplicativo) -> buena dispersion de PCs.
+    const uint64_t h = (pc * 0x9E3779B97F4A7C15ull) >> (64 - 14);
+    LiteBranchSlot &slot = g_lite_branches[h & kLiteBranchMask];
+    uint64_t cur = slot.pc.load(std::memory_order_relaxed);
+    if (cur != pc) {
+        if (cur != 0) return; // ranura ocupada por otro PC: descartar muestra
+        uint64_t expected = 0; // reclamar la ranura vacia
+        if (!slot.pc.compare_exchange_strong(expected, pc,
+                                              std::memory_order_relaxed) &&
+            expected != pc) {
+            return; // otro thread la reclamo con un PC distinto: descartar
+        }
+    }
+    if (taken)
+        slot.taken.fetch_add(1, std::memory_order_relaxed);
+    else
+        slot.not_taken.fetch_add(1, std::memory_order_relaxed);
+}
+
 /**
  * @brief Inicializa el profiler con un path de salida.
  *
@@ -196,6 +269,38 @@ void profile_init(const std::string &output_path);
  * para tests o dumps intermedios.
  */
 void profile_dump();
+
+/**
+ * @brief Escribe un perfil de branches indexado por LINEA FUENTE (para PGO de
+ *        la if-conversion, consumido por @c ir::load_branch_profile).
+ *
+ * Recorre @c g_profile.branches (contadores por PC), mapea cada PC a su linea
+ * fuente con @p pc_to_line (0 = sin linea; se descarta), agrega taken/not_taken
+ * por linea y escribe el formato de texto @c "<line> <taken> <nt>".  Se llama
+ * tras la ejecucion, con la VM viva (el @c debug_info sigue accesible).
+ *
+ * @param path       Ruta del perfil de texto a escribir.
+ * @param pc_to_line Callback PC (VM) -> linea fuente (0 si desconocida).
+ * @return numero de lineas escritas.
+ */
+int profile_write_branch_lines(const std::string &path,
+                               const std::function<uint32_t(uint64_t)> &pc_to_line);
+
+/**
+ * @brief Bridge desacoplado runtime -> IR: vuelca el perfil de branches medido
+ *        (contadores por PC) al almacen por-linea que consume la if-conversion
+ *        (@c ir::set_branch_profile_entry), SIN pasar por un archivo.
+ *
+ * Es la pieza que mantiene al JIT VM-INDEPENDIENTE: el JIT (if-conversion +
+ * politica de SELECT) solo lee @c ir::g_branch_profile (datos planos, sin tipos
+ * de la VM); este bridge, del lado runtime, es el UNICO que toca @c debug_info
+ * (via @p pc_to_line) para alimentarlo.  Asi el auto-PGO no acopla el JIT a la
+ * VM.  P(mispredict) = min(taken,nt)/(taken+nt) por linea agregada.
+ *
+ * @param pc_to_line Callback PC (VM) -> linea fuente (0 si desconocida).
+ * @return numero de lineas volcadas al almacen de la if-conversion.
+ */
+int profile_apply_branch_lines(const std::function<uint32_t(uint64_t)> &pc_to_line);
 
 /**
  * @brief Registra el resultado de un branch condicional.
@@ -229,7 +334,7 @@ void profile_callvirt(uint64_t pc, loader::ClassInfo *class_ptr);
  *
  * Llamado desde @c exec_instr_newobj y @c exec_instr_gcalloc.
  * Util para identificar hot allocs candidatos a stack allocation
- * por escape analysis en C2 (Phase D.8.b).
+ * por escape analysis en C2 ( D.8.b).
  *
  * @param pc  PC del NEWOBJ/GC_ALLOC.
  */

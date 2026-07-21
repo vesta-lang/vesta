@@ -10,7 +10,7 @@
 
 /**
  * @file aot/aot_native.h
- * @brief Phase AOT.3 Paso 2 -- sintesis del @c _start nativo (arch-portable).
+ * @brief  AOT.3 Paso 2 -- sintesis del @c _start nativo (arch-portable).
  *
  * El cuerpo de cada funcion lo genera el back-end de produccion (path vreg ->
  * @c TargetRegInfo + selector + encoder), que YA es portable por arquitectura:

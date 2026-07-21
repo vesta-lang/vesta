@@ -7,7 +7,7 @@
 
 /**
  * @file jit/regalloc_rewrite.h
- * @brief Rewrite de MachineIR vreg -> MachineIR fisica (Phase D.7, commit 4a).
+ * @brief Rewrite de MachineIR vreg -> MachineIR fisica ( D.7, commit 4a).
  *        Ver doc/REGALLOC.md.
  *
  * Toma una @c MFunction en forma de registros virtuales (3-operandos,
@@ -51,7 +51,7 @@ namespace jit {
 
 /**
  * @brief Peticion de emision del OSR-entry para @c rewrite_to_physical
- *        (on-stack replacement, Phase D.8).
+ *        (on-stack replacement,  D.8).
  *
  * El path por defecto (osr == nullptr en rewrite) conserva el
  * comportamiento actual: si @c VESTA_OSR_COUNT esta activo, instrumenta los
@@ -75,7 +75,7 @@ struct OsrEmit {
     Mode mode = C2_ENTRY;
     MBlockId header_block = MBLOCK_INVALID; ///< loop header a reanudar
     /**
-     * @brief RED DE SEGURIDAD (Phase D.8, paso 4): conjunto de IR VIDs que
+     * @brief RED DE SEGURIDAD ( D.8, paso 4): conjunto de IR VIDs que
      * el C1 capturo al buffer (ordenado).  Si != nullptr, el OSR-entry
      * VERIFICA que cada vid de su live-in (covers(header)) este en este
      * conjunto; si alguno NO esta (el C2 optimizado necesita un valor que el
@@ -101,10 +101,10 @@ struct OsrEmit {
  *             salva/establece RBX = @c ProcessVM* (push rbx + mov rbx,arg0).
  * @param ivs  Intervalos (opcional).  Si != nullptr, el rewrite construye
  *             un @c Stackmap en cada CALL describiendo los slots de los GC
- *             roots vivos a traves (Phase D.7 commit 6).  El resultado va
+ *             roots vivos a traves ( D.7 commit 6).  El resultado va
  *             en @c MFunction::stackmaps y se asocia al CALL via su
  *             @c flags (idx); el encoder rellena el @c pc_offset.
- * @param osr  Peticion de OSR-entry (Phase D.8, opcional).  Si != nullptr,
+ * @param osr  Peticion de OSR-entry ( D.8, opcional).  Si != nullptr,
  *             SUPRIME el trigger C1 y APPENDEA el bloque OSR-entry para el
  *             @c header_block indicado (necesita @c ivs != nullptr para el
  *             live-in).  Rellena @c osr->osr_entry_label / @c osr_entry_valid.
@@ -117,7 +117,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
                               OsrEmit *osr = nullptr);
 
 /* ===================================================================== */
-/* OSR runtime glue (Phase D.8, 2c)                                       */
+/* OSR runtime glue ( D.8, 2c)                                       */
 /* ===================================================================== */
 
 /**

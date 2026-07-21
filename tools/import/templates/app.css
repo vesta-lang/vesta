@@ -1,0 +1,1091 @@
+:root {
+    --bg: #fff;
+    --fg: #1b1f24;
+    --mut: #5b6570;
+    --line: #e3e7eb;
+    --acc: #2a6fdb;
+    --code: #f4f6f8;
+    --head: #eef2f6;
+    --hover: #f5f9fe;
+    --chip: #eaf1fc;
+    --chipf: #274b8f;
+    --rd: #1a7f37;
+    --wr: #9a3f14;
+    --ov: #8a5a00;
+    --ovbg: #fbf1dc;
+    --panel: #f8fafc;
+    --navbg: #12203a;
+    --navfg: #dfe8f5;
+    --navac: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0f1419;
+        --fg: #d7dde3;
+        --mut: #8b96a2;
+        --line: #232a31;
+        --acc: #5b9bff;
+        --code: #161b22;
+        --head: #161c23;
+        --hover: #141b23;
+        --chip: #16243b;
+        --chipf: #9cc2ff;
+        --rd: #5fd08a;
+        --wr: #e0a072;
+        --ov: #e0b055;
+        --ovbg: #2a2312;
+        --panel: #131922;
+        --navbg: #0a1526;
+        --navfg: #b9c6da;
+        --navac: #ffffff;
+    }
+}
+
+* {
+    box-sizing: border-box
+}
+
+body {
+    margin: 0;
+    font: 14px/1.55 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+}
+
+code,
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace
+}
+
+/* --- nav bar --- */
+.nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    background: var(--navbg);
+    color: var(--navfg);
+    padding: 0 18px;
+}
+
+.nav .brand {
+    font-weight: 700;
+    margin-right: 18px;
+    padding: 12px 0;
+    letter-spacing: .2px
+}
+
+.nav .brand small {
+    font-weight: 400;
+    opacity: .7
+}
+
+.nav a {
+    color: var(--navfg);
+    text-decoration: none;
+    padding: 13px 14px;
+    font-size: 14px;
+    border-bottom: 2px solid transparent;
+}
+
+.nav a:hover {
+    color: var(--navac)
+}
+
+.nav a.active {
+    color: var(--navac);
+    border-bottom-color: var(--acc);
+    font-weight: 600
+}
+
+.nav a.ext {
+    margin-left: auto;
+    opacity: .85
+}
+
+header {
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid var(--line)
+}
+
+h1 {
+    margin: 0 0 4px;
+    font-size: 19px;
+    font-weight: 650
+}
+
+.sub {
+    color: var(--mut);
+    font-size: 12.5px
+}
+
+.sub code {
+    background: var(--code);
+    padding: 1px 5px;
+    border-radius: 4px
+}
+
+details.help {
+    margin: 12px 22px 0;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--panel);
+}
+
+details.help>summary {
+    cursor: pointer;
+    padding: 10px 14px;
+    font-weight: 600;
+    list-style: none
+}
+
+details.help>summary::before {
+    content: "\25B8  ";
+    color: var(--acc)
+}
+
+details.help[open]>summary::before {
+    content: "\25BE  "
+}
+
+.help .body {
+    padding: 2px 16px 14px
+}
+
+.help dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 5px 16px;
+    margin: 8px 0
+}
+
+.help dt {
+    font-weight: 600;
+    color: var(--acc);
+    white-space: nowrap
+}
+
+.help dd {
+    margin: 0
+}
+
+.help .k {
+    font-family: ui-monospace, Consolas, monospace;
+    background: var(--code);
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 12.5px;
+}
+
+.bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    padding: 12px 22px;
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
+}
+
+.bar input,
+.bar select {
+    font: inherit;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--fg);
+}
+
+.bar input[type=search] {
+    min-width: 300px;
+    flex: 1
+}
+
+.bar label {
+    font-size: 12px;
+    color: var(--mut)
+}
+
+.count {
+    color: var(--mut);
+    font-size: 12.5px;
+    margin-left: auto
+}
+
+.wrap {
+    overflow-x: auto
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px
+}
+
+th,
+td {
+    text-align: left;
+    padding: 8px 11px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top
+}
+
+th {
+    position: sticky;
+    top: 0;
+    background: var(--head);
+    cursor: pointer;
+    font-weight: 600;
+    user-select: none;
+    white-space: nowrap;
+}
+
+th[title] {
+    text-decoration: underline dotted var(--mut);
+    text-underline-offset: 3px
+}
+
+th.n,
+td.n {
+    text-align: right;
+    font-variant-numeric: tabular-nums
+}
+
+td.forma,
+td.enc,
+td.ops {
+    white-space: normal;
+    min-width: 150px;
+    max-width: 340px
+}
+
+td.nowrap {
+    white-space: nowrap
+}
+
+tbody tr.main:hover {
+    background: var(--hover)
+}
+
+tr.main {
+    cursor: pointer
+}
+
+tr.main td:first-child {
+    color: var(--mut)
+}
+
+.chip {
+    display: inline-block;
+    background: var(--chip);
+    color: var(--chipf);
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11.5px;
+    margin: 1px 3px 1px 0;
+    white-space: nowrap;
+}
+
+.chip.ov {
+    background: var(--ovbg);
+    color: var(--ov)
+}
+
+.rd {
+    color: var(--rd)
+}
+
+.wr {
+    color: var(--wr)
+}
+
+.dim {
+    color: var(--mut)
+}
+
+.detail>td {
+    background: var(--panel);
+    white-space: normal;
+    padding: 4px 22px 14px
+}
+
+.detail h4 {
+    margin: 12px 0 4px;
+    font-size: 11.5px;
+    color: var(--mut);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}
+
+.detail table {
+    width: auto;
+    font-size: 12.5px;
+    margin: 2px 0
+}
+
+.detail th,
+.detail td {
+    border: 1px solid var(--line);
+    white-space: nowrap;
+    padding: 5px 9px
+}
+
+.detail th {
+    position: static
+}
+
+.oplist {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px
+}
+
+.op {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 4px 9px;
+    background: var(--bg);
+    font-size: 12.5px
+}
+
+.op b {
+    font-family: ui-monospace, Consolas, monospace
+}
+
+.pg {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    color: var(--mut)
+}
+
+.pg button {
+    font: inherit;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--fg);
+    cursor: pointer;
+}
+
+.pg button:disabled {
+    opacity: .4;
+    cursor: default
+}
+
+.foot {
+    padding: 16px 22px;
+    color: var(--mut);
+    font-size: 12px;
+    border-top: 1px solid var(--line)
+}
+
+.foot a {
+    color: var(--acc)
+}
+
+td.iclink {
+    color: var(--acc);
+    cursor: pointer;
+    text-decoration: underline dotted transparent
+}
+
+td.iclink:hover {
+    text-decoration-color: var(--acc)
+}
+
+.idline {
+    margin: 8px 0 2px;
+    color: var(--mut);
+    font-size: 12.5px
+}
+
+.idline a {
+    color: var(--acc)
+}
+
+.pport {
+    padding: 0 6px;
+    border-radius: 6px;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11.5px
+}
+
+details.skey {
+    margin: 10px 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg)
+}
+
+details.skey>summary {
+    cursor: pointer;
+    padding: 7px 11px;
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--acc)
+}
+
+details.skey>div {
+    padding: 4px 14px 12px;
+    font-size: 12.5px
+}
+
+/* --- analizador --- */
+.an {
+    padding: 16px 22px
+}
+
+/* editor con resaltado: <pre> coloreado detras de un <textarea> transparente */
+.an .editor {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--code);
+    overflow: hidden;
+}
+
+.an .editor .hl,
+.an .editor textarea {
+    margin: 0;
+    padding: 12px;
+    border: 0;
+    width: 100%;
+    min-height: 160px;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+    white-space: pre;
+    overflow: auto;
+    tab-size: 4;
+}
+
+.an .editor .hl {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    color: var(--fg);
+    z-index: 0;
+}
+
+.an .editor textarea {
+    position: relative;
+    display: block;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--fg);
+    resize: vertical;
+    z-index: 1;
+}
+
+.c-mn {
+    color: #8250df
+}
+
+.c-reg {
+    color: #1a7f8f
+}
+
+.c-num {
+    color: #b26a00
+}
+
+.c-kw {
+    color: #6a737d;
+    font-style: italic
+}
+
+.c-com {
+    color: var(--mut);
+    font-style: italic
+}
+
+@media (prefers-color-scheme: dark) {
+    .c-mn {
+        color: #c39bff
+    }
+
+    .c-reg {
+        color: #59c2d6
+    }
+
+    .c-num {
+        color: #e0a458
+    }
+
+    .c-kw {
+        color: #9aa4ad
+    }
+}
+
+.an .row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin: 10px 0;
+    flex-wrap: wrap
+}
+
+.an button.go {
+    font: inherit;
+    font-weight: 600;
+    padding: 8px 16px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--acc);
+    color: #fff;
+    cursor: pointer;
+}
+
+.an .hint {
+    color: var(--mut);
+    font-size: 12px
+}
+
+.an .res {
+    margin-top: 8px
+}
+
+.an .res table {
+    width: 100%;
+    font-size: 13px
+}
+
+.an .res td.miss {
+    color: var(--wr)
+}
+
+.an .res tfoot td {
+    font-weight: 700;
+    border-top: 2px solid var(--line);
+    background: var(--panel)
+}
+
+.an .badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    background: var(--code)
+}
+
+.an-sum {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--panel)
+}
+
+.an-sum .sumt {
+    width: auto;
+    margin-top: 8px;
+    border-collapse: collapse
+}
+
+.an-sum .sumt td {
+    border: 1px solid var(--line);
+    padding: 5px 12px
+}
+
+.an-sum .sumt td.n {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    min-width: 120px
+}
+
+.an-sum .sumt tr.est td {
+    font-weight: 700;
+    background: var(--code)
+}
+
+.pport {
+    cursor: help
+}
+
+/* tooltip propio (assets/tip.js) */
+.tipbox {
+    position: absolute;
+    z-index: 100;
+    max-width: 340px;
+    background: var(--navbg);
+    color: var(--navfg);
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .28);
+    pointer-events: none;
+}
+
+/* camino critico en el analizador */
+.an .res tr.crit td {
+    background: var(--ovbg)
+}
+
+.an .res tr.crit td:first-child {
+    border-left: 3px solid var(--wr)
+}
+
+.critdot {
+    color: var(--wr);
+    font-size: 10px;
+    vertical-align: middle
+}
+
+.tipbox {
+    white-space: pre-line
+}
+
+.rtok {
+    cursor: help;
+    font-weight: 600
+}
+
+/* timeline del analizador */
+.tl {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--panel)
+}
+
+.tl-cap {
+    font-size: 12px;
+    color: var(--mut);
+    margin-bottom: 8px
+}
+
+.tl-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 3px 0
+}
+
+.tl-label {
+    flex: 0 0 200px;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis
+}
+
+.tl-track {
+    position: relative;
+    flex: 1;
+    height: 18px;
+    background: var(--code);
+    border-radius: 5px
+}
+
+.tl-bar {
+    position: absolute;
+    top: 0;
+    height: 18px;
+    border-radius: 5px;
+    background: var(--acc);
+    color: #fff;
+    font-size: 10.5px;
+    line-height: 18px;
+    text-align: center;
+    min-width: 12px;
+    overflow: hidden
+}
+
+.tl-bar.crit {
+    background: var(--wr)
+}
+
+.tl-axis {
+    display: flex;
+    justify-content: space-between;
+    color: var(--mut);
+    font-size: 11px;
+    margin-top: 4px;
+    padding-left: 210px
+}
+
+/* bloque de codigo optimizado */
+.opt-h {
+    margin: 22px 0 8px;
+    font-size: 15px;
+    font-weight: 650
+}
+
+.codeblock {
+    margin: 0 0 12px;
+    padding: 12px;
+    background: var(--code);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    font: 13px/1.5 ui-monospace, Consolas, monospace;
+    white-space: pre;
+    overflow: auto
+}
+
+.opt-log {
+    margin: 8px 0 12px
+}
+
+.opt-log ul {
+    margin: 8px 0;
+    padding-left: 0;
+    list-style: none
+}
+
+.opt-log li {
+    padding: 7px 0;
+    border-bottom: 1px solid var(--line)
+}
+
+.opt-log .why {
+    color: var(--mut);
+    font-size: 12.5px;
+    margin-top: 3px
+}
+
+.badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    background: var(--chip);
+    color: var(--chipf);
+    margin-right: 6px;
+    font-weight: 600
+}
+
+.sumt.cmp th {
+    background: var(--head);
+    text-align: right;
+    padding: 5px 12px;
+    border: 1px solid var(--line)
+}
+
+.sumt.cmp th:first-child {
+    text-align: left
+}
+
+.better {
+    color: var(--rd);
+    font-weight: 700
+}
+
+.worse {
+    color: var(--wr);
+    font-weight: 700
+}
+
+.an .row.opts {
+    gap: 14px;
+    font-size: 12.5px
+}
+
+.an .row.opts .opts-lbl {
+    color: var(--mut)
+}
+
+.an .row.opts label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    color: var(--fg)
+}
+
+/* iconos del timeline */
+.mks {
+    margin-right: 6px
+}
+
+.mk {
+    display: inline-block;
+    width: 15px;
+    text-align: center;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-right: 2px;
+    cursor: help
+}
+
+.mk-u {
+    background: #6f42c122;
+    color: #8250df
+}
+
+.mk-l {
+    background: #1a7f3722;
+    color: #1a7f37
+}
+
+.mk-s {
+    background: #9a3f1422;
+    color: #9a3f14
+}
+
+.mk-b {
+    background: #d9a40022;
+    color: #b26a00
+}
+
+.mk-x {
+    background: #b3122822;
+    color: #b31228
+}
+
+.langsel {
+    margin-left: auto;
+    background: transparent;
+    color: inherit;
+    border: 1px solid var(--bd, #ccc);
+    border-radius: 6px;
+    padding: 2px 6px;
+    font: inherit;
+    cursor: pointer
+}
+
+.tl-row.elim .tl-label {
+    text-decoration: line-through;
+    opacity: .55
+}
+
+.tl-row.elim .tl-bar {
+    opacity: .35;
+    background: var(--mut)
+}
+
+/* timelines antes/despues */
+.tlcmp {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px
+}
+
+@media (min-width: 900px) {
+    .tlcmp {
+        grid-template-columns: 1fr 1fr
+    }
+}
+
+.tlcmp-h {
+    font-size: 12.5px;
+    font-weight: 600;
+    margin-bottom: 4px
+}
+
+/* cadena del camino critico */
+.cc-cap {
+    font-size: 12px;
+    color: var(--mut);
+    margin: 12px 0 4px
+}
+
+.cchain {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 10px 14px;
+    background: var(--panel)
+}
+
+.cc-node {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--bg)
+}
+
+.cc-node.sink {
+    border-color: var(--wr)
+}
+
+.cc-lat {
+    font-size: 11.5px;
+    color: var(--mut);
+    white-space: nowrap
+}
+
+.cc-arrow {
+    text-align: center;
+    color: var(--wr);
+    font-weight: 700;
+    padding: 2px 0;
+    cursor: help
+}
+
+.cc-reg {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    background: var(--wr);
+    color: #fff;
+    padding: 0 6px;
+    border-radius: 10px;
+    margin-left: 4px
+}
+
+/* ---- features por microarquitectura (features.html) ---- */
+/* vista LISTA: una tarjeta por CPU con chips horizontales legibles */
+.fcard {
+    border-bottom: 1px solid var(--line);
+    padding: 10px 2px
+}
+
+.fcard-h {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 6px
+}
+
+.fcpu {
+    font-family: ui-monospace, Consolas, monospace;
+    font-weight: 700;
+    font-size: 14px
+}
+
+.fsched {
+    color: var(--mut);
+    font-size: 12px
+}
+
+.fcnt {
+    margin-left: auto;
+    color: var(--mut);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums
+}
+
+.fchips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px
+}
+
+.fchip {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 1px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+    background: hsl(var(--fh, 210) 55% 50% / .16);
+    color: hsl(var(--fh, 210) 60% 40%);
+    border: 1px solid hsl(var(--fh, 210) 55% 50% / .28)
+}
+
+.fchip.hl {
+    outline: 2px solid hsl(var(--fh, 210) 70% 50%);
+    font-weight: 700
+}
+
+@media (prefers-color-scheme: dark) {
+    .fchip {
+        color: hsl(var(--fh, 210) 70% 66%)
+    }
+}
+
+/* vista MATRIZ: comparativa CPU x feature */
+.feat-matrix {
+    width: auto;
+    font-size: 12px;
+    border-collapse: separate;
+    border-spacing: 0
+}
+
+.feat-matrix th,
+.feat-matrix td {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--line)
+}
+
+.feat-matrix thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--bg);
+    border-bottom: 2px solid var(--line);
+    vertical-align: bottom
+}
+
+/* cabecera de feature: texto HORIZONTAL (legible, ni pixelado ni torcido); la
+   tabla scrollea a lo ancho y la columna CPU queda fija */
+.feat-matrix th.fh {
+    padding: 6px 8px;
+    text-align: center;
+    white-space: nowrap;
+    font-family: ui-monospace, Consolas, monospace;
+    font-weight: 600;
+    font-size: 12.5px
+}
+
+.feat-matrix th.fh[data-hl]>div span {
+    outline: 2px solid currentColor;
+    border-radius: 3px;
+    padding: 0 2px
+}
+
+.feat-matrix th.cpu-h,
+.feat-matrix td.cpu-c {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--bg);
+    min-width: 150px;
+    font-family: ui-monospace, Consolas, monospace;
+    vertical-align: middle;
+    white-space: nowrap
+}
+
+.feat-matrix th.cpu-h {
+    z-index: 4
+}
+
+.feat-matrix th.sch-h,
+.feat-matrix td.sch-c {
+    color: var(--mut);
+    vertical-align: middle;
+    white-space: nowrap;
+    font-size: 11px
+}
+
+.feat-matrix th.cnt-h,
+.feat-matrix td.cnt-c {
+    text-align: right;
+    color: var(--mut);
+    vertical-align: middle;
+    font-variant-numeric: tabular-nums
+}
+
+.feat-matrix td {
+    vertical-align: middle
+}
+
+.feat-matrix td.yes {
+    text-align: center;
+    color: var(--rd);
+    font-weight: 700
+}
+
+.feat-matrix tbody tr:hover td {
+    background: rgba(127, 127, 127, .08)
+}
+
+.feat-matrix tbody tr:hover td.cpu-c {
+    background: var(--bg)
+}

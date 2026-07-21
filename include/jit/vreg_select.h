@@ -8,7 +8,7 @@
 /**
  * @file jit/vreg_select.h
  * @brief Instruction selection IR -> MachineIR en forma de registros
- *        VIRTUALES (Phase D.7, commit 4b).  Ver doc/REGALLOC.md.
+ *        VIRTUALES ( D.7, commit 4b).  Ver doc/REGALLOC.md.
  *
  * A diferencia del selector v1 (slot-per-value, template load/op/store), este
  * emite operandos VREG directos en forma de TRES operandos
@@ -66,6 +66,16 @@ using CallResolver = std::function<uint64_t(const std::string &)>;
  *        a fallback).  Se construye desde @c RuntimeEntries en @c auto_jit.
  */
 struct VregEntries {
+    /// Auto-PGO tier-2: entry-point que el prologo del metodo llama al cruzar el
+    /// umbral de invocaciones (proc, method_ptr).  0 = no emitir el contador.
+    uint64_t tier2_request = 0;
+    /// Direccion de method->invocation_count del metodo en compilacion (para el
+    /// contador del prologo).  0 = no emitir (compilacion sin MethodInfo o AOT).
+    uint64_t tier2_ctr_addr = 0;
+    /// MethodInfo* (arg del entry-point tier2_request).
+    uint64_t tier2_method_ptr = 0;
+    /// Umbral absoluto (invocation_count) al que disparar tier-2.
+    uint32_t tier2_threshold = 0;
     uint64_t callvirt = 0;  ///< vrt_callvirt(proc, obj, vtbl_idx)
     uint64_t callm = 0;     ///< vrt_callm(proc, obj, method_ptr)
     uint64_t callitf = 0;   ///< vrt_callitf(proc, obj, params, method_idx)
@@ -146,7 +156,7 @@ struct VregEntries {
  * @param fn   Funcion IR (subset soportado: ver arriba).
  * @param out  MFunction destino (se sobrescribe).
  * @param ent  Direcciones de runtime entries (callvirt/gc/raw_alloc/calln).
- * @param resolve_symbol  Resolver de simbolos del linker (Phase D.3-H):
+ * @param resolve_symbol  Resolver de simbolos del linker ( D.3-H):
  *             dado @c "code.s_<N>" / @c "code.<fn>" devuelve la direccion
  *             VM absoluta.  Lo usan @c STR_LIT_ADDR / @c LABEL_ADDR.  Si es
  *             nullptr o retorna 0, esos ops caen a fallback (igual que el
@@ -155,6 +165,33 @@ struct VregEntries {
  *             valido; @c false si encuentra un op fuera del subset (en
  *             ese caso @p out queda indefinido y el caller hace fallback).
  */
+/**
+ * @brief Opciones del callback-ABI para el path vreg (jubilacion de slots).
+ *
+ * Cuando @c callback_entry es true y el @c AbiKind es @c VM, la funcion se
+ * compila como un ENTRY de ABI C nativo: los argumentos llegan por la
+ * convencion del host (arg_regs), no en @c proc->registers; el prologo carga el
+ * @c ProcessVM* en RBX (TLS-direct @c gs:[disp] o el call de fallback),
+ * marshalea los args nativos a @c proc->registers.regs[1..N] (+ argc en R15) y,
+ * en modo SAFE (cuerpo no hoja-puro), salva/restaura @c proc->registers[0..15]
+ * para re-entrancia; el RET escribe el retorno tanto en @c regs[0] como en RAX
+ * (retorno nativo).  Replica el @c callback_entry del selector-slots que se esta
+ * jubilando, para que los callbacks (qsort, WndProc, ...) los compile vreg.
+ */
+struct VregCallbackOpts {
+    bool callback_entry = false;
+    /// Direccion de @c runtime::get_current_executing_process (fallback del
+    /// LOAD_PROC cuando no hay TLS-direct).
+    uint64_t get_proc_addr = 0;
+    /// Desplazamiento @c gs:[disp] para leer @c ProcessVM* en TLS-direct
+    /// (Win64).  -1 = usar el fallback por call.
+    int32_t tls_gs_disp = -1;
+};
+
+/** @brief Fija si el vreg puede emitir VFMADD231 escalar (FMA3).  El AOT lo
+ *  pone a target.caps.fma; sin fijar, el JIT usa las caps del host. */
+void set_vreg_fma(bool ok);
+
 bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                  AbiKind abi = AbiKind::HOST_LEAF,
                  const CallResolver &resolve_call = {},
@@ -169,7 +206,8 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
 #endif
                  ,
                  bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2,
-                 bool emit_line_map = false);
+                 bool emit_line_map = false,
+                 const VregCallbackOpts &cb = {});
 
 } // namespace jit
 

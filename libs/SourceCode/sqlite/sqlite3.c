@@ -76876,7 +76876,7 @@ static int autoVacuumCommit(Btree *p){
 #endif
 
 /*
-** This routine does the first phase of a two-phase commit.  This routine
+** This routine does the first  of a two- commit.  This routine
 ** causes a rollback journal to be created (if it does not already exist)
 ** and populated with enough information so that if a power loss occurs
 ** the database can be restored to its original state by playing back
@@ -76885,7 +76885,7 @@ static int autoVacuumCommit(Btree *p){
 ** database are written into the database file and flushed to oxide.
 ** At the end of this call, the rollback journal still exists on the
 ** disk and we are still holding all locks, so the transaction has not
-** committed.  See sqlite3BtreeCommitPhaseTwo() for the second phase of the
+** committed.  See sqlite3BtreeCommitPhaseTwo() for the second  of the
 ** commit process.
 **
 ** This call is a no-op if no write-transaction is currently active on pBt.
@@ -76967,8 +76967,8 @@ static void btreeEndTransaction(Btree *p){
 /*
 ** Commit the transaction currently in progress.
 **
-** This routine implements the second phase of a 2-phase commit.  The
-** sqlite3BtreeCommitPhaseOne() routine does the first phase and should
+** This routine implements the second  of a 2- commit.  The
+** sqlite3BtreeCommitPhaseOne() routine does the first  and should
 ** be invoked prior to calling this routine.  The sqlite3BtreeCommitPhaseOne()
 ** routine did all the work of writing information out to disk and flushing the
 ** contents so that they are written onto the disk platter.  All this
@@ -90064,7 +90064,7 @@ SQLITE_PRIVATE int sqlite3VdbeSetColName(
 static int vdbeCommit(sqlite3 *db, Vdbe *p){
   int i;
   int nTrans = 0;  /* Number of databases with an active write-transaction
-                   ** that are candidates for a two-phase commit using a
+                   ** that are candidates for a two- commit using a
                    ** super-journal */
   int rc = SQLITE_OK;
   int needXcommit = 0;
@@ -90152,7 +90152,7 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
       }
     }
 
-    /* Do the commit only if all databases successfully complete phase 1.
+    /* Do the commit only if all databases successfully complete  1.
     ** If one of the BtreeCommitPhaseOne() calls fails, this indicates an
     ** IO error while deleting or truncating a journal file. It is unlikely,
     ** but could happen. In this case abandon processing and return the error.
@@ -125220,7 +125220,7 @@ SQLITE_PRIVATE int sqlite3FixTriggerStep(
 ** Set or clear the access authorization function.
 **
 ** The access authorization function is be called during the compilation
-** phase to verify that the user has read and/or write access permission on
+**  to verify that the user has read and/or write access permission on
 ** various fields of the database.  The first argument to the auth function
 ** is a copy of the 3rd argument to this routine.  The second argument
 ** to the auth function is one of these constants:
@@ -258299,8 +258299,8 @@ typedef struct Fts5TokenizerModule Fts5TokenizerModule;
 ** opened and closed by the user:
 **
 **     xBegin():    Start of a new transaction.
-**     xSync():     Initial part of two-phase commit.
-**     xCommit():   Final part of two-phase commit.
+**     xSync():     Initial part of two- commit.
+**     xCommit():   Final part of two- commit.
 **     xRollback(): Rollback the transaction.
 **
 ** Anything that is required as part of a commit that may fail is performed

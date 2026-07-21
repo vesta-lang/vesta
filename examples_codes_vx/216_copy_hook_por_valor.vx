@@ -9,7 +9,7 @@ namespace ejemplos.copy_hook_por_valor;
 // que cualquier struct por valor en Vesta).  Asi un tipo de conteo de
 // referencias se comporta correctamente: cada paso por valor incrementa y
 // decrementa el contador, y el recurso se libera una sola vez cuando cae a cero.
-// Ver doc/VMdoc/Vex/SmartPointers.md.
+// Ver doc/VMdoc//SmartPointers.md.
 
 class Counter { public static i64 vivos; }
 

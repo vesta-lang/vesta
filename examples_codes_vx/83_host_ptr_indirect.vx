@@ -22,12 +22,12 @@ i32 main() {
     // p apunta a heap host (4 i32).
     i32* p = malloc(16);
 
-    // pp apunta al slot VM donde vive p (toma direccion = trigger
-    // de address-taken sobre p).  El bit pointee_is_host_ptr del
-    // slot se propaga a pp via lookup() en lower_unary AddrOf.
-    // Tipo: VirtualPtr<i32*> = direccion VM al slot que contiene un
-    // puntero host (resultado de malloc).
-    VirtualPtr<i32*> pp = &p;
+    // pp apunta al slot donde vive p: tomar su direccion reserva el local
+    // en memoria host.  Tipo: `i32**` = puntero host al slot que contiene un
+    // puntero host (el de malloc).  El bit pointee_is_host_ptr del slot se
+    // propaga a pp via lookup() en lower_unary AddrOf, asi que la doble
+    // indireccion de abajo sabe que lo apuntado tambien es host.
+    i32** pp = &p;
 
     // Acceder a memoria host VIA pp (doble indireccion).
     // *pp = LOAD desde pp -> recupera p original con is_host_ptr=true.

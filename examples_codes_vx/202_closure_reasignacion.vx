@@ -5,7 +5,7 @@ namespace ejemplos.closure_reasignacion;
 // (y el slot {fn_addr, env} de 16 bytes) viven en heap, propiedad del objeto
 // contenedor; el dtor y la reasignacion los liberan de forma determinista.
 // Verificado cero leak con valgrind sobre el ELF AOT.
-// Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+// Ver doc/VMdoc//ClosuresEnCampos.md.
 
 class Contador {
     i64 n;

@@ -36,7 +36,7 @@ i32 main() {
 
     // 3. Compound sobre puntero deref
     i32 x = 7;
-    VirtualPtr<i32> p = &x;
+    i32* p = &x;
     *p += 3;           // x = 10
     *p *= 2;           // x = 20
     *p -= 5;           // x = 15

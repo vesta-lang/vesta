@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_vreg_call.cpp
- * @brief Test de CALL con argumentos en el path vreg (Phase D.7, commit 5b).
+ * @brief Test de CALL con argumentos en el path vreg ( D.7, commit 5b).
  *
  * Construye MachineIR vreg con ARG + CALL_ABS a una funcion nativa de prueba,
  * pasa por el pipeline (intervals -> linear-scan -> rewrite con shadow space +
@@ -136,7 +136,7 @@ static void test_call_three() {
 
 int main() {
     std::setbuf(stdout, nullptr);
-    std::printf("=== test_vreg_call (Phase D.7 commit 5b, CALL) ===\n");
+    std::printf("=== test_vreg_call ( D.7 commit 5b, CALL) ===\n");
     test_call_two();
     test_call_three();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);

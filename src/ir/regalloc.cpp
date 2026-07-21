@@ -87,8 +87,64 @@ const char *reg_name(int reg) {
 //  Algoritmo de barrido lineal
 // =========================================================================
 
-AllocResult allocate_regs(const IrFunction &fn,
-                          const LivenessResult &liveness) {
+AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
+                          const std::vector<uint32_t> *coalesce_remap) {
+    // -------------------------------------------------------------------
+    //  Consumo del remap de congruencia (sin reescribir el SSA).
+    //  Modelo robusto: la decision de congruencia se computa una sola vez
+    //  sobre el IR (jit::ssa_phi_coalesce_remap) y aqui la CONSUMIMOS.  El
+    //  allocator opera sobre valores CANONICOS (root de cada clase, con los
+    //  intervalos unidos) y luego expande reg_map/spill_map a los miembros.
+    //  Asi los valores congruentes comparten registro VM y las copias PHI
+    //  intra-clase quedan no-op, SIN crear multi-def en el IR.
+    // -------------------------------------------------------------------
+    if (coalesce_remap && !coalesce_remap->empty()) {
+        const std::vector<uint32_t> &remap = *coalesce_remap;
+        auto root = [&](IrValueId v) -> IrValueId {
+            return (v != IR_NO_VALUE && v < remap.size()) ? remap[v] : v;
+        };
+        // Unir intervalos por root: def = min, end = max de la clase.
+        std::unordered_map<IrValueId, LiveInterval> merged;
+        for (const auto &li : liveness.intervals) {
+            IrValueId r = root(li.id);
+            auto it = merged.find(r);
+            if (it == merged.end()) {
+                LiveInterval ni = li;
+                ni.id = r;
+                merged.emplace(r, ni);
+            } else {
+                it->second.def = std::min(it->second.def, li.def);
+                it->second.end = std::max(it->second.end, li.end);
+            }
+        }
+        // Liveness canonico ordenado por def (luego id), como el original.
+        LivenessResult canon;
+        canon.intervals.reserve(merged.size());
+        for (auto &kv : merged) canon.intervals.push_back(kv.second);
+        std::sort(canon.intervals.begin(), canon.intervals.end(),
+                  [](const LiveInterval &a, const LiveInterval &b) {
+                      return a.def < b.def || (a.def == b.def && a.id < b.id);
+                  });
+        // Correr el scan normal sobre los valores canonicos.  El caller
+        // garantiza que cada parametro es el root de su clase, asi que la
+        // pre-asignacion de params (por fn.params) encaja con canon.
+        AllocResult r = allocate_regs(fn, canon, nullptr);
+        // Expandir la asignacion del root a todos los miembros de la clase.
+        const IrValueId NV = static_cast<IrValueId>(fn.values.size());
+        for (IrValueId v = 0; v < NV; ++v) {
+            IrValueId rt = root(v);
+            if (rt == v) continue;
+            auto rit = r.reg_map.find(rt);
+            if (rit != r.reg_map.end()) {
+                r.reg_map[v] = rit->second;
+                continue;
+            }
+            auto sit = r.spill_map.find(rt);
+            if (sit != r.spill_map.end()) r.spill_map[v] = sit->second;
+        }
+        return r;
+    }
+
     AllocResult result;
     result.spill_count = 0;
     result.ok = true;

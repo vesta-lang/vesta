@@ -12,7 +12,7 @@
  * @file aot/ar_archive.h
  * @brief Lector portable del formato de archivo estatico Unix @c ar(1) (.a).
  *
- * Phase AOT.5: permite que el linker propio enlace CUALQUIER libreria estatica
+ *  AOT.5: permite que el linker propio enlace CUALQUIER libreria estatica
  * (.a) -- p.ej. @c libvesta_gc.a (el GC opt-in) o libc.a -- extrayendo sus
  * miembros (objetos ELF/COFF) en memoria, sin g++/ar externos.
  *
