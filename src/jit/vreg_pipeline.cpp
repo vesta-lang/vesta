@@ -109,7 +109,9 @@ void print_shadow_summary() {
                  "  coste spill: linear=%.1f  rbank=%.1f\n"
                  "  cross-call:  vivos=%llu | caller-saved(PELIGRO) linear=%llu rbank=%llu"
                  " | callee-saved linear=%llu rbank=%llu\n"
-                 "  correctitud: rbank INVALIDOS=%u  linear INVALIDOS=%u (modelo; 0 = OK)\n",
+                 "  correctitud: rbank INVALIDOS=%u  linear INVALIDOS=%u (modelo; 0 = OK)\n"
+                 "  rbank errores por categoria: overlap=%u crosscall=%u width=%u"
+                 " class=%u reserved=%u fixed=%u\n",
                  a.functions, a.equal, a.improved, a.worsened,
                  (unsigned long long)a.linear_spills, (unsigned long long)a.rbank_spills,
                  a.linear_spill_cost, a.rbank_spill_cost,
@@ -118,7 +120,10 @@ void print_shadow_summary() {
                  (unsigned long long)a.rbank_xcall_caller,
                  (unsigned long long)a.linear_xcall_callee,
                  (unsigned long long)a.rbank_xcall_callee,
-                 a.rbank_invalid, a.linear_invalid);
+                 a.rbank_invalid, a.linear_invalid,
+                 a.rbank_errors.overlap_errors, a.rbank_errors.crosscall_errors,
+                 a.rbank_errors.width_errors, a.rbank_errors.class_errors,
+                 a.rbank_errors.reserved_errors, a.rbank_errors.fixed_errors);
 }
 
 /** @brief Corre rbank sobre el mismo problema que linear_scan y acumula el panel. */
@@ -183,10 +188,11 @@ void run_shadow(const IntervalResult &ivs, const RegAlloc &ra,
     AbstractProblem rb_co;
     const ShadowStats sl = shadow_stats_linear(ra, p, ctx);
     const ShadowStats sr = shadow_stats_rbank(p, ctx, vec, &rb_la, &rb_co);
-    // Correctitud (plano separado, senyal TEMPRANA -- el oraculo final es el backend):
-    // ¿rbank produce un coloreo propio del modelo?  ¿linear tambien lo es (control)?
-    const bool valid_rbank = is_proper_coloring(rb_co, rb_la, bank, vec);
-    const bool valid_linear = is_proper_coloring(p, regalloc_to_lanes(ra, p), bank, vec);
+    // Correctitud (plano separado, DESGLOSADA -- senyal TEMPRANA; el oraculo final es
+    // el backend): que categoria falla, no solo si falla.
+    const ColoringValidation valid_rbank = validate_coloring(rb_co, rb_la, bank, vec);
+    const ColoringValidation valid_linear =
+        validate_coloring(p, regalloc_to_lanes(ra, p), bank, vec);
     const ShadowReport rep = make_shadow_report(sl, sr, valid_linear, valid_rbank);
     {
         std::lock_guard<std::mutex> lk(g_shadow_mtx);

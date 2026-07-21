@@ -133,23 +133,77 @@ inline LaneAssignment color_linear_scan(const AbstractProblem &p,
  *        RE-ABSTRAIDA de los LiveRanges -> lo que se valida es identico a lo que
  *        validaria el allocator real.
  */
+/**
+ * @struct ColoringValidation
+ * @brief Veredicto de correctitud DESGLOSADO por categoria (no un bool).  Cuando el
+ *        shadow falla sobre un corpus grande, esto dice QUE parte del modelo esta
+ *        incompleta (reserved=1 vs crosscall=3 vs overlap=0...) en vez de solo
+ *        "invalid".  Convierte el shadow en un oraculo de regresiones.  DATOS puros.
+ */
+struct ColoringValidation {
+    uint32_t overlap_errors   = 0; ///< dos valores que interfieren en lanes que aliasan.
+    uint32_t crosscall_errors = 0; ///< valor cross-call en lane VOLATILE (caller-saved).
+    uint32_t width_errors     = 0; ///< lane no soporta el ancho del valor.
+    uint32_t class_errors     = 0; ///< lane de clase de recurso incorrecta.
+    uint32_t reserved_errors  = 0; ///< lane no asignable (scratch/reservada/inexistente).
+    uint32_t fixed_errors     = 0; ///< valor pinado no esta en su fixed_reg.
+
+    uint32_t total() const noexcept {
+        return overlap_errors + crosscall_errors + width_errors + class_errors +
+               reserved_errors + fixed_errors;
+    }
+    bool ok() const noexcept { return total() == 0; }
+    /** @brief Acumula (para el agregado del corpus). */
+    void add(const ColoringValidation &o) noexcept {
+        overlap_errors += o.overlap_errors;   crosscall_errors += o.crosscall_errors;
+        width_errors += o.width_errors;       class_errors += o.class_errors;
+        reserved_errors += o.reserved_errors; fixed_errors += o.fixed_errors;
+    }
+};
+
+/**
+ * @brief Valida un coloreo DESGLOSANDO cada tipo de violacion (no corta al primer
+ *        error como @c validate_assignment).  Recorre requisitos por-valor (clase,
+ *        ancho, asignabilidad, pin, cross-call) + interferencia (aristas cuyas lanes
+ *        aliasan).  Un valor PINADO: el ABI manda -> solo se comprueba que este en su
+ *        lane; las demas reglas no se le aplican (el pin es de nivel superior).
+ */
+inline ColoringValidation validate_coloring(const AbstractProblem &p,
+                                            const LaneAssignment &a,
+                                            const PhysicalRegisterBank &bank,
+                                            bool vec_active) {
+    ColoringValidation v;
+    for (const AbstractValue &val : p.values) {
+        const int lane = a.lane_of(val.value_id);
+        if (lane == kSpilled) continue; // en memoria: no ocupa lane.
+        const Lane *l = bank.by_id(static_cast<uint8_t>(lane));
+        if (!l) { ++v.reserved_errors; continue; }
+        if (val.req.fixed_reg >= 0) {
+            if (lane != val.req.fixed_reg) ++v.fixed_errors; // pin: solo su lane.
+            continue;
+        }
+        if (l->cls != val.req.cls) ++v.class_errors;
+        if (!l->allocatable(vec_active)) ++v.reserved_errors;
+        if (!l->supports(val.req.width)) ++v.width_errors;
+        if (val.req.crosses_call &&
+            l->preservation_of(val.req.width) != SavePolicy::PRESERVED)
+            ++v.crosscall_errors;
+    }
+    const ConstraintSet inter = build_interference(p); // re-abstraccion de LiveRanges.
+    for (const Constraint &c : inter.items) {
+        if (c.kind != ConstraintKind::INTERFERE) continue;
+        const int la = a.lane_of(c.a), lb = a.lane_of(c.b);
+        if (la == kSpilled || lb == kSpilled) continue;
+        const AliasSet *aa = bank.aliases_of(static_cast<uint8_t>(la));
+        const AliasSet *ab = bank.aliases_of(static_cast<uint8_t>(lb));
+        if (aa && ab && aa->overlaps(*ab)) ++v.overlap_errors;
+    }
+    return v;
+}
+
 inline bool is_proper_coloring(const AbstractProblem &p, const LaneAssignment &a,
                                const PhysicalRegisterBank &bank, bool vec_active) {
-    const ConstraintSet inter = build_interference(p); // re-abstraccion.
-    const std::vector<ValueRequirements> reqs = collect_requirements(p);
-    if (!validate_assignment(inter, a, reqs, bank, vec_active).ok) return false;
-    // Constraint DURA adicional (correctitud ABI): la lane asignada debe ser
-    // ADMISIBLE -- en particular, un valor cross-call no puede estar en caller-saved.
-    // Un valor PINADO esta forzado por el ABI (mas duro, gana) y ya lo valido la
-    // espina dorsal -> no se le aplica la regla general.  Asi "shadow verde" implica
-    // que ningun cross-call quedo en una lane volatil.
-    for (const AbstractValue &v : p.values) {
-        const int lane = a.lane_of(v.value_id);
-        if (lane == kSpilled || v.req.fixed_reg >= 0) continue;
-        if (!lane_admissible(v.req, static_cast<uint8_t>(lane), bank, vec_active))
-            return false;
-    }
-    return true;
+    return validate_coloring(p, a, bank, vec_active).ok();
 }
 
 /** @brief Numero de valores DERRAMADOS en la asignacion. */

@@ -285,19 +285,21 @@ struct ShadowReport {
     ShadowStats linear;
     ShadowStats rbank;
     ShadowDiff  diff;
-    bool        equivalent   = false; ///< calidad: ni mejora ni empeora.
-    bool        improved     = false; ///< calidad: mejora sin empeorar.
-    bool        valid_linear = true;  ///< correctitud: linear es coloreo propio (control).
-    bool        valid_rbank  = true;  ///< correctitud: rbank es coloreo propio (senyal).
+    bool        equivalent = false; ///< calidad: ni mejora ni empeora.
+    bool        improved   = false; ///< calidad: mejora sin empeorar.
+    // Correctitud DESGLOSADA (otro plano): por que falla, no solo si falla.
+    ColoringValidation valid_linear; ///< control: linear como coloreo del modelo.
+    ColoringValidation valid_rbank;  ///< senyal: rbank como coloreo del modelo.
 };
 
 /**
- * @brief Compara dos stats -> ShadowReport (calidad).  Las valideces (correctitud) se
- *        pasan aparte porque son otro plano; por defecto true (compat con tests).
+ * @brief Compara dos stats -> ShadowReport (calidad).  Las valideces (correctitud,
+ *        desglosadas por categoria) se pasan aparte porque son otro plano; por
+ *        defecto vacias (ok) para compat con tests.
  */
 inline ShadowReport make_shadow_report(const ShadowStats &lin, const ShadowStats &rb,
-                                       bool valid_linear = true,
-                                       bool valid_rbank = true) {
+                                       ColoringValidation valid_linear = {},
+                                       ColoringValidation valid_rbank = {}) {
     ShadowReport r;
     r.linear = lin;
     r.rbank = rb;
@@ -338,12 +340,16 @@ struct ShadowAggregate {
     uint64_t rbank_xcall_callee  = 0;
     uint32_t rbank_invalid       = 0; ///< funciones donde rbank NO fue coloreo propio (modelo).
     uint32_t linear_invalid      = 0; ///< control: linear no fue propio SEGUN el modelo.
+    ColoringValidation rbank_errors;  ///< errores rbank por CATEGORIA (que falla).
+    ColoringValidation linear_errors; ///< errores linear por CATEGORIA (control).
 
     /** @brief Acumula el veredicto de una funcion. */
     void add(const ShadowReport &r) {
         ++functions;
-        if (!r.valid_rbank) ++rbank_invalid;
-        if (!r.valid_linear) ++linear_invalid;
+        if (!r.valid_rbank.ok()) ++rbank_invalid;
+        if (!r.valid_linear.ok()) ++linear_invalid;
+        rbank_errors.add(r.valid_rbank);
+        linear_errors.add(r.valid_linear);
         if (r.improved) ++improved;
         else if (r.equivalent) ++equal;
         else ++worsened;
