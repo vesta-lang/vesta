@@ -30,14 +30,11 @@
 #include "jit/x86_64/x86_target.h"
 #include "jit/x86_encoder.h"
 
-#include "codegen/rbank/shadow.h"
-#include "jit/backend_caps.h"
+#include "codegen/rbank/allocate.h"           // rbank_allocate (allocator UNICO)
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
-#include <set>
 #include <vector>
 
 namespace jit {
@@ -80,177 +77,11 @@ bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
     return false;
 }
 
-/**
- * @brief SHADOW MODE (rbank vs linear_scan): corre el modelo de banco ancho EN
- *        PARALELO al allocator de produccion sobre CADA funcion, acumula un panel de
- *        calidad y lo imprime al terminar.  SIN usar la asignacion de rbank (cero
- *        cambio de comportamiento).  Activar con VESTA_RBANK_SHADOW=1
- *        (+ VESTA_RBANK_SHADOW_VERBOSE=1 para el diff por funcion).  Es la primera
- *        validacion EXTERNA del modelo (¿describe programas reales?).
- */
-bool shadow_enabled() {
-    static const bool on = [] {
-        const char *e = std::getenv("VESTA_RBANK_SHADOW");
-        return e && e[0] && e[0] != '0';
-    }();
-    return on;
-}
-codegen::rbank::ShadowAggregate g_shadow_agg;
-std::mutex g_shadow_mtx;
+// El SHADOW MODE (comparar rbank vs linear_scan en paralelo) fue el andamio que
+// valido el switch a rbank; cumplido su proposito, su infraestructura (ShadowStats/
+// ShadowReport/validate_coloring) vive en codegen/rbank/shadow.h para los TESTS.  En
+// produccion rbank es el allocator UNICO -- no hay con que comparar en el hot path.
 
-void print_shadow_summary() {
-    std::lock_guard<std::mutex> lk(g_shadow_mtx);
-    const codegen::rbank::ShadowAggregate &a = g_shadow_agg;
-    if (a.functions == 0) return;
-    std::fprintf(stderr,
-                 "\n=== [shadow] rbank vs linear_scan (%u funciones) ===\n"
-                 "  iguales=%u  mejoran=%u  empeoran=%u\n"
-                 "  spills:      linear=%llu  rbank=%llu\n"
-                 "  coste spill: linear=%.1f  rbank=%.1f\n"
-                 "  cross-call:  vivos=%llu | caller-saved(PELIGRO) linear=%llu rbank=%llu"
-                 " | callee-saved linear=%llu rbank=%llu\n"
-                 "  correctitud: rbank INVALIDOS=%u  linear INVALIDOS=%u (modelo; 0 = OK)\n",
-                 a.functions, a.equal, a.improved, a.worsened,
-                 (unsigned long long)a.linear_spills, (unsigned long long)a.rbank_spills,
-                 a.linear_spill_cost, a.rbank_spill_cost,
-                 (unsigned long long)a.xcall_values,
-                 (unsigned long long)a.linear_xcall_caller,
-                 (unsigned long long)a.rbank_xcall_caller,
-                 (unsigned long long)a.linear_xcall_callee,
-                 (unsigned long long)a.rbank_xcall_callee,
-                 a.rbank_invalid, a.linear_invalid);
-    // Desglose por LaneHazard (restricciones del VALOR) + overlap (COLOREADO, aparte).
-    // Iterar el enum -> nuevos hazards aparecen SOLOS sin tocar este print.
-    std::fprintf(stderr, "  rbank hazards:");
-    bool any = false;
-    for (size_t i = 1; i < codegen::rbank::kLaneHazardCount; ++i) {
-        const uint32_t n = a.rbank_errors.by_hazard[i];
-        if (!n) continue;
-        std::fprintf(stderr, " %s=%u",
-                     codegen::rbank::lane_hazard_name(static_cast<codegen::rbank::LaneHazard>(i)), n);
-        any = true;
-    }
-    if (a.rbank_errors.overlap) { std::fprintf(stderr, " overlap=%u", a.rbank_errors.overlap); any = true; }
-    std::fprintf(stderr, "%s\n", any ? "" : " (ninguno)");
-}
-
-/** @brief Corre rbank sobre el mismo problema que linear_scan y acumula el panel. */
-void run_shadow(const IntervalResult &ivs, const RegAlloc &ra,
-                const ir::IrFunction &fn) {
-    if (!shadow_enabled()) return;
-    using namespace codegen::rbank;
-    static std::once_flag atexit_once;
-    std::call_once(atexit_once, [] { std::atexit(print_shadow_summary); });
-
-#if defined(_WIN32)
-    const bool sysv = false;
-#else
-    const bool sysv = true;
-#endif
-    PhysicalRegisterBank bank = physical_bank_x86_64(sysv, backend_caps_host());
-    ConstraintSet cs;
-    OptimizationContext ctx = make_context(bank, cs);
-    const AbstractProblem p = intervals_to_problem(ivs);
-    const bool vec = fn_needs_vec_reserve(fn);
-
-    // Diagnostico (comprobacion #1 con DATOS, no razonamiento): el banco del shadow
-    // debe describir EL MISMO problema que linear_scan.  Lista el GP allocatable de
-    // ambos y su diferencia simetrica.  Si difieren, se corrige el BANCO, no el
-    // allocator (el shadow debe comparar exactamente lo mismo).
-    static const bool dump_banks = [] {
-        const char *e = std::getenv("VESTA_RBANK_SHADOW_BANKS");
-        return e && e[0] && e[0] != '0';
-    }();
-    if (dump_banks) {
-        static std::once_flag banks_once;
-        std::call_once(banks_once, [&] {
-            const TargetRegInfo &tri = target_x86_64_vm_abi(vec);
-            const size_t GP = static_cast<size_t>(RegClass::GP);
-            std::set<int> bset, tset;
-            std::fprintf(stderr, "\n[shadow-bank] GP allocatable (vec=%d)  (ce=callee-saved, cr=caller-saved)\n", (int)vec);
-            std::fprintf(stderr, "  banco physical: ");
-            for (const codegen::rbank::Lane &l : bank.lanes)
-                if (l.cls == codegen::rbank::ResourceClass::GP && l.allocatable(vec)) {
-                    bset.insert(l.id);
-                    std::fprintf(stderr, "%d%s ", l.id,
-                        l.preservation_of(codegen::rbank::ViewWidth::W8) ==
-                            codegen::rbank::SavePolicy::PRESERVED ? "ce" : "cr");
-                }
-            std::fprintf(stderr, "\n  tri VM_ABI:     ");
-            for (uint8_t id : tri.allocatable[GP]) {
-                tset.insert(id);
-                bool callee = false;
-                for (uint8_t c : tri.callee_saved[GP]) if (c == id) callee = true;
-                std::fprintf(stderr, "%d%s ", (int)id, callee ? "ce" : "cr");
-            }
-            std::fprintf(stderr, "\n  solo en banco:  ");
-            for (int id : bset) if (!tset.count(id)) std::fprintf(stderr, "%d ", id);
-            std::fprintf(stderr, "\n  solo en tri:    ");
-            for (int id : tset) if (!bset.count(id)) std::fprintf(stderr, "%d ", id);
-            std::fprintf(stderr, "\n  -> %s\n\n",
-                         bset == tset ? "IDENTICOS (misma comparacion)"
-                                      : "DIFERENTES (corregir el BANCO del shadow)");
-        });
-    }
-    LaneAssignment rb_la;
-    AbstractProblem rb_co;
-    const ShadowStats sl = shadow_stats_linear(ra, p, ctx);
-    const ShadowStats sr = shadow_stats_rbank(p, ctx, vec, &rb_la, &rb_co);
-    // Correctitud (plano separado, DESGLOSADA -- senyal TEMPRANA; el oraculo final es
-    // el backend): que categoria falla, no solo si falla.
-    const ColoringValidation valid_rbank = validate_coloring(rb_co, rb_la, bank, vec);
-    const ColoringValidation valid_linear =
-        validate_coloring(p, regalloc_to_lanes(ra, p), bank, vec);
-    const ShadowReport rep = make_shadow_report(sl, sr, valid_linear, valid_rbank);
-    {
-        std::lock_guard<std::mutex> lk(g_shadow_mtx);
-        g_shadow_agg.add(rep);
-    }
-    static const bool verbose = [] {
-        const char *e = std::getenv("VESTA_RBANK_SHADOW_VERBOSE");
-        return e && e[0] && e[0] != '0';
-    }();
-    if (verbose)
-        std::fprintf(stderr,
-                     "[shadow] %-28s lin(sp=%u c=%.1f) rbank(sp=%u c=%.1f cp=%u) "
-                     "DIFF sp=%+d c=%+.1f | xcall=%u caller[lin=%u rb=%u] callee[lin=%u rb=%u]\n",
-                     fn.name.c_str(), sl.spills, sl.spill_cost, sr.spills, sr.spill_cost,
-                     sr.copies_removed, rep.diff.spills_delta, rep.diff.spill_cost_delta,
-                     sl.xcall_values, sl.xcall_caller, sr.xcall_caller,
-                     sl.xcall_callee, sr.xcall_callee);
-}
-
-/** @brief ¿Usar rbank como allocator de PRODUCCION? (F5.b, gate VESTA_RBANK_PROD). */
-bool rbank_prod_enabled() {
-    static const bool on = [] {
-        const char *e = std::getenv("VESTA_RBANK_PROD");
-        return e && e[0] && e[0] != '0';
-    }();
-    return on;
-}
-
-/**
- * @brief Allocator de PRODUCCION via rbank: colorea el problema (smart_spill sobre
- *        el envolvente) y lo traduce a jit::RegAlloc con el puente mecanico.  El
- *        ssa_coalesce del backend ya elimino las copias antes -> el modelo NO
- *        re-coalesce (cada vreg tiene su asignacion).  @p vreg_count = mf.vreg_count
- *        (denso).  El oraculo de su correctitud es el backend (diff_harness/e2e).
- */
-RegAlloc rbank_allocate(const IntervalResult &ivs, const ir::IrFunction &fn,
-                        uint32_t vreg_count) {
-    using namespace codegen::rbank;
-#if defined(_WIN32)
-    const bool sysv = false;
-#else
-    const bool sysv = true;
-#endif
-    PhysicalRegisterBank bank = physical_bank_x86_64(sysv, backend_caps_host());
-    ConstraintSet cs;
-    OptimizationContext ctx = make_context(bank, cs);
-    const AbstractProblem p = intervals_to_problem(ivs);
-    const LaneAssignment la = color_smart_spill(p, ctx, fn_needs_vec_reserve(fn));
-    return regalloc_from_lanes(la, p, bank, vreg_count);
-}
 
 /**
  * @brief Scheduler machine-level (C2.15) sobre el MFunction fisico, tras el
@@ -352,15 +183,10 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
 
-    /* F5.b: allocator de PRODUCCION.  Gate VESTA_RBANK_PROD -> rbank; si no,
-     * linear_scan (default).  El verificador adversarial de GC roots de abajo +
-     * diff_harness/e2e son el oraculo de correctitud del rbank. */
-    RegAlloc ra = rbank_prod_enabled() ? rbank_allocate(ivs, fn, mf.vreg_count)
-                                       : linear_scan(ivs, tri);
-
-    /* SHADOW: corre rbank en paralelo (gated; NO usa su resultado).  Con
-     * VESTA_RBANK_PROD activo 'ra' YA es rbank -> el shadow no aporta; se omite. */
-    if (!rbank_prod_enabled()) run_shadow(ivs, ra, fn);
+    /* Allocator UNICO: rbank (linear_scan jubilado).  El verificador adversarial de
+     * GC roots de abajo + diff_harness (0 bugs) + e2e (724/0) son su oraculo. */
+    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+                                             fn_needs_vec_reserve(fn));
 
     /* 3b. Verificador adversarial (commit 6): TODO GC root vivo a traves
      *     de un call DEBE estar en un slot, para que su stackmap lo
@@ -469,7 +295,8 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+                                             fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
 
     /* Verificador adversarial de GC roots (igual que vreg_compile). */
     if (!ivs.call_positions.empty()) {
@@ -544,7 +371,8 @@ std::vector<uint8_t> vreg_compile_native_target(
      *    target: toman el TargetRegInfo). */
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+                                             fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
 
     /* 4. REWRITE a fisico (prologo/epilogo + spills de la ABI del target). */
     MFunction pf = target.rewrite(mf, ra, ivs);
@@ -647,7 +475,8 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
         return nullptr;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+                                             fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
     if (!ivs.call_positions.empty()) {
         for (uint32_t vv = 0; vv < mf.vreg_count; ++vv) {
             const LiveInterval &lv = ivs.intervals[vv];

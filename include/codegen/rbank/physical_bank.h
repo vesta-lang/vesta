@@ -678,9 +678,32 @@ inline TargetDescriptor descriptor_interp() {
     return d;
 }
 
+/**
+ * @brief Descriptor x86-64 desde un @c TargetRegInfo YA construido (el del PATH real:
+ *        @c target_x86_64_vm_abi del JIT, @c target.reg_info() del AOT...).  El
+ *        ClassSpec x86-64 es fijo (GP 0-15, XMM 16-31 con VEC_ACC 26-29); solo las
+ *        traits (allocatable / reservas / preservation) vienen del @p tri -> el banco
+ *        describe EXACTAMENTE el mismo problema que ve el backend (rewrite) de ese path.
+ */
+inline TargetDescriptor descriptor_x86_64_from_reginfo(const TargetRegInfo &tri,
+                                                       const BackendCaps &caps) {
+    TargetDescriptor d;
+    d.name    = "x86-64";
+    d.traits  = target_traits_from_reginfo(tri);
+    d.classes = make_class_specs(
+        ClassSpec{0, 15, gp_widths(8), {}},
+        ClassSpec{16, 31, x86_fp_widths(caps), {26, 27, 28, 29}}); // XMM10-13.
+    return d;
+}
+
 // --- Wrappers de conveniencia (descriptor + banco) ---
 inline PhysicalRegisterBank physical_bank_x86_64(bool sysv, const BackendCaps &caps) {
     return build_physical_bank(descriptor_x86_64(sysv, caps));
+}
+/** @brief Banco x86-64 desde el @c TargetRegInfo del path real (JIT VM_ABI o AOT). */
+inline PhysicalRegisterBank physical_bank_x86_64_from_reginfo(const TargetRegInfo &tri,
+                                                              const BackendCaps &caps) {
+    return build_physical_bank(descriptor_x86_64_from_reginfo(tri, caps));
 }
 inline PhysicalRegisterBank physical_bank_x86_32() {
     return build_physical_bank(descriptor_x86_32());

@@ -37,6 +37,8 @@
 #include "codegen/rbank/abstract_problem.h"
 #include "codegen/rbank/constraints.h"
 #include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
+#include "jit/interval.h"
 #include "jit/linear_scan.h"
 
 #include <algorithm>
@@ -45,6 +47,74 @@
 
 namespace codegen {
 namespace rbank {
+
+/**
+ * @brief Mapea la clase del backend (jit::RegClass) a la del modelo.
+ *
+ * HERENCIA HISTORICA (a vigilar): @c RegClass::FP -> @c FP_VECTOR porque el backend
+ * SSE usa XMM para TODO (escalar y vectorial), asi que hoy coinciden FISICAMENTE.  El
+ * dia que el banco separe FP-escalar de FP-vectorial, esto devolvera la clase escalar.
+ */
+inline ResourceClass resource_class_from_reg(jit::RegClass c) {
+    return c == jit::RegClass::FP ? ResourceClass::FP_VECTOR : ResourceClass::GP;
+}
+
+/**
+ * @brief ADAPTADOR BACKEND -> MODELO: extrae un @c AbstractProblem de los intervalos
+ *        reales.  Solo EXTRAE Facts (traduce los hazards que el backend conoce a
+ *        restricciones del valor); no decide nada.  Es la PUERTA DE ENTRADA unica de
+ *        restricciones del backend al modelo -- parte del bridge de PRODUCCION.
+ *
+ * Por cada @c LiveInterval no vacio: value_id=vreg, [start,end]=envolvente, clase, pin,
+ * y los HAZARDS traducidos:
+ *   - cross-call (call_positions),
+ *   - debe-memoria (residency=MEMORY): GC root cross-call + force_spill (live-in a un
+ *     handler abnormal); UN solo mecanismo, varios origenes,
+ *   - lanes prohibidas (forbidden_lanes): asm_clobbers que el valor atraviesa.
+ */
+inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
+    AbstractProblem p;
+    p.values.reserve(ivs.intervals.size());
+    for (const jit::LiveInterval &iv : ivs.intervals) {
+        if (iv.ranges.empty()) continue; // vreg muerto: el allocator lo ignora.
+        AbstractValue av;
+        av.value_id = iv.vreg;
+        // TODO(RangeSet): el modelo PIERDE LOS HUECOS aqui -- toma el envolvente
+        // [first.from, last.to) porque AbstractValue es de un solo segmento.  Casi
+        // todos los problemas futuros CONVERGEN aqui (coalescing, next-use/Belady,
+        // presion exacta); desaparecen cuando AbstractValue sea MULTI-SEGMENTO.
+        av.start = iv.ranges.front().from;
+        av.end = iv.ranges.back().to > 0 ? iv.ranges.back().to - 1 : 0; // ) -> ]
+        av.req.value_id = iv.vreg;
+        av.req.cls = resource_class_from_reg(iv.cls);
+        av.req.width = iv.cls == jit::RegClass::FP ? ViewWidth::W16 : ViewWidth::W8;
+        av.req.fixed_reg = static_cast<int16_t>(iv.fixed_reg); // -1 o el pin.
+        av.req.is_gc = iv.gc_kind != 0;
+        for (uint32_t cp : ivs.call_positions) {
+            for (const jit::LiveRange &r : iv.ranges)
+                if (cp >= r.from && cp < r.to) { av.req.crosses_call = true; break; }
+            if (av.req.crosses_call) break;
+        }
+        // HAZARD "debe-memoria" (residency=MEMORY): UN mecanismo, dos origenes -- GC
+        // root cross-call (stackmap) + force_spill (live-in a handler abnormal; el
+        // throw clobbea TODOS los regs, solo la memoria sobrevive).
+        if ((av.req.crosses_call && av.req.is_gc) ||
+            (iv.vreg < ivs.force_spill.size() && ivs.force_spill[iv.vreg]))
+            av.req.residency = Residency::MEMORY;
+        // HAZARD "lanes muertas" (forbidden_lanes): las lanes que un INLINE_ASM destruye
+        // en un punto que el valor atraviesa (incluye callee-saved que el CALL no protege).
+        for (const jit::IntervalResult::AsmClobberSite &site : ivs.asm_clobbers) {
+            bool covers = false;
+            for (const jit::LiveRange &r : iv.ranges)
+                if (site.pos >= r.from && site.pos < r.to) { covers = true; break; }
+            if (!covers) continue;
+            for (uint8_t cr : site.regs)
+                if (cr < 64) av.req.forbidden_lanes |= (1ull << cr);
+        }
+        p.values.push_back(av);
+    }
+    return p;
+}
 
 /**
  * @brief @c jit::RegAlloc -> @c LaneAssignment (para validar la asignacion de

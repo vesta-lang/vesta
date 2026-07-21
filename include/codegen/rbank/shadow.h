@@ -54,79 +54,8 @@
 namespace codegen {
 namespace rbank {
 
-/**
- * @brief Mapea la clase del backend (jit::RegClass) a la del modelo.
- *
- * HERENCIA HISTORICA (a vigilar, no cambiar ahora): @c RegClass::FP se mapea a
- * @c FP_VECTOR porque el backend SSE usa XMM para TODO (escalar y vectorial), asi
- * que hoy coinciden FISICAMENTE.  Pero conceptualmente FP-escalar != FP-vectorial;
- * el dia que el banco los distinga (o un target los separe) esto debera devolver un
- * @c ResourceClass::FP escalar propio aunque comparta banco.  Es un sitio donde se
- * nota que el modelo aun hereda la union XMM del backend.
- */
-inline ResourceClass resource_class_from_reg(jit::RegClass c) {
-    return c == jit::RegClass::FP ? ResourceClass::FP_VECTOR : ResourceClass::GP;
-}
-
-/**
- * @brief ADAPTADOR FINO: extrae un @c AbstractProblem de los intervalos reales.
- *        Solo EXTRAE Facts; no decide nada.
- *
- * Por cada @c LiveInterval no vacio: value_id=vreg, [start,end]=envolvente de los
- * ranges (semi-abierto [from,to) -> cerrado), clase, pin (fixed_reg), is_gc, y
- * crosses_call si algun rango cubre una call_position.  El copy-graph (afinidad)
- * se deja VACIO -- vendra del ssa_coalesce cuando se cablee.
- */
-inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
-    AbstractProblem p;
-    p.values.reserve(ivs.intervals.size());
-    for (const jit::LiveInterval &iv : ivs.intervals) {
-        if (iv.ranges.empty()) continue; // vreg muerto: el allocator lo ignora.
-        AbstractValue av;
-        av.value_id = iv.vreg;
-        // TODO(RangeSet): el modelo PIERDE LOS HUECOS aqui -- toma el envolvente
-        // [first.from, last.to) porque AbstractValue es de un solo segmento.  Casi
-        // todos los problemas futuros CONVERGEN en este punto: el coalescing (check
-        // de max_overlap por el envolvente), el next-use y el Belady real (necesitan
-        // los usos intermedios) y la presion exacta.  Todos desaparecen cuando
-        // AbstractValue soporte MULTIPLES SEGMENTOS (Opcion B).  Hasta entonces, el
-        // envolvente es la aproximacion conservadora.
-        av.start = iv.ranges.front().from;
-        av.end = iv.ranges.back().to > 0 ? iv.ranges.back().to - 1 : 0; // ) -> ]
-        av.req.value_id = iv.vreg;
-        av.req.cls = resource_class_from_reg(iv.cls);
-        av.req.width = iv.cls == jit::RegClass::FP ? ViewWidth::W16 : ViewWidth::W8;
-        av.req.fixed_reg = static_cast<int16_t>(iv.fixed_reg); // -1 o el pin.
-        av.req.is_gc = iv.gc_kind != 0;
-        for (uint32_t cp : ivs.call_positions) {
-            for (const jit::LiveRange &r : iv.ranges)
-                if (cp >= r.from && cp < r.to) { av.req.crosses_call = true; break; }
-            if (av.req.crosses_call) break;
-        }
-        // HAZARD "debe-memoria" -- UN solo mecanismo (residency=MEMORY), varios origenes:
-        //  (a) GC root cross-call: el stackmap lo describe en el slot (si quedara en
-        //      registro el GC no lo veria).  Antes era una regla GC aparte; ahora es el
-        //      mismo "debe-memoria" que (b).
-        //  (b) force_spill: valor live-in a un sucesor abnormal (handler); el throw
-        //      clobbea TODOS los regs, solo la memoria sobrevive.
-        if ((av.req.crosses_call && av.req.is_gc) ||
-            (iv.vreg < ivs.force_spill.size() && ivs.force_spill[iv.vreg]))
-            av.req.residency = Residency::MEMORY;
-        // HAZARD "lanes muertas" (asm_clobbers): las lanes que un INLINE_ASM destruye
-        // en un punto que este valor atraviesa (incluye callee-saved que el CALL no
-        // protege).  Semilla del ClobberPoint: se PRE-COMPUTA la union por valor.
-        for (const jit::IntervalResult::AsmClobberSite &site : ivs.asm_clobbers) {
-            bool covers = false;
-            for (const jit::LiveRange &r : iv.ranges)
-                if (site.pos >= r.from && site.pos < r.to) { covers = true; break; }
-            if (!covers) continue;
-            for (uint8_t cr : site.regs)
-                if (cr < 64) av.req.forbidden_lanes |= (1ull << cr);
-        }
-        p.values.push_back(av);
-    }
-    return p;
-}
+// resource_class_from_reg / intervals_to_problem viven en backend_bridge.h (el
+// adaptador backend -> modelo es del BRIDGE de produccion, no del shadow).
 
 /**
  * @struct ShadowStats
