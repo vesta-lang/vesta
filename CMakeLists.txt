@@ -825,6 +825,21 @@ else ()
     target_link_libraries(test_arm64_select PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Banco de registros fisico unico (allocator de banco ancho, Fase 0):
+# consolidacion de TargetRegInfo + BackendCaps en un modelo comun (Lane/View/
+# SavePolicy/AliasSet/Reserve).  Test de round-trip contra los targets.
+add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
+target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_physical PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_physical PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_physical PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_physical PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
