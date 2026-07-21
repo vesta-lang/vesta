@@ -56,6 +56,7 @@
 #define VESTA_CODEGEN_RBANK_SMART_SPILL_H
 
 #include "codegen/rbank/abstract_problem.h"
+#include "codegen/rbank/allowed_lanes.h"
 #include "codegen/rbank/constraints.h"
 #include "codegen/rbank/objective.h"
 #include "codegen/rbank/optimization_context.h"
@@ -122,9 +123,7 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             return kSpilled;
         }
         for (const Lane &l : bank.lanes) {
-            if (l.cls != r.cls) continue;
-            if (!bank.is_allocatable(l.id, vec_active)) continue;
-            if (!bank.supports(l.id, r.width)) continue;
+            if (!lane_admissible(r, l, vec_active)) continue; // correctitud dura (cero by_id).
             if (!lane_free(l.id)) continue;
             return l.id;
         }
@@ -157,10 +156,16 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         const AbstractValue *victim = v;
         double best = spill_score(v, v->start);
         for (const Active &a : active) {
-            if (a.v->req.cls != v->req.cls) continue;
-            const Lane *al = bank.by_id(static_cast<uint8_t>(a.lane));
-            if (!al || !bank.supports(a.lane, v->req.width)) continue;
-            if (v->req.fixed_reg >= 0 && a.lane != v->req.fixed_reg) continue;
+            // La lane que robariamos a la victima debe ser ADMISIBLE para v: misma
+            // clase, soporta el ancho y -- si v cruza un CALL -- ser callee-saved.
+            // Asi un cross-call nunca roba una lane volatil.  Si v esta PINADO, el pin
+            // (restriccion de nivel superior: ABI/asm) manda: solo su lane sirve.
+            if (v->req.fixed_reg >= 0) {
+                if (a.lane != v->req.fixed_reg) continue;
+            } else if (!lane_admissible(v->req, static_cast<uint8_t>(a.lane), bank,
+                                        vec_active)) {
+                continue;
+            }
             const double sc = spill_score(a.v, v->start);
             if (sc > best) { best = sc; victim = a.v; }
         }

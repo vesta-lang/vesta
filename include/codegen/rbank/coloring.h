@@ -37,6 +37,7 @@
 #define VESTA_CODEGEN_RBANK_COLORING_H
 
 #include "codegen/rbank/abstract_problem.h"
+#include "codegen/rbank/allowed_lanes.h"
 #include "codegen/rbank/constraints.h"
 #include "codegen/rbank/physical_bank.h"
 #include "codegen/rbank/value_requirements.h"
@@ -106,11 +107,10 @@ inline LaneAssignment color_linear_scan(const AbstractProblem &p,
                 bank.supports(fid, r.width) && lane_free(fid))
                 chosen = fid;
         } else {
-            // Primera lane de la clase, asignable, que soporte el ancho y libre.
+            // Primera lane ADMISIBLE (correctitud dura, via AllowedLaneSet) y libre.
+            // El coloreo no interpreta crosses_call: solo pregunta lane_admissible.
             for (const Lane &l : bank.lanes) {
-                if (l.cls != r.cls) continue;
-                if (!bank.is_allocatable(l.id, vec_active)) continue;
-                if (!bank.supports(l.id, r.width)) continue;
+                if (!lane_admissible(r, l, vec_active)) continue; // version pura (cero by_id).
                 if (!lane_free(l.id)) continue;
                 chosen = l.id;
                 break;
@@ -137,7 +137,19 @@ inline bool is_proper_coloring(const AbstractProblem &p, const LaneAssignment &a
                                const PhysicalRegisterBank &bank, bool vec_active) {
     const ConstraintSet inter = build_interference(p); // re-abstraccion.
     const std::vector<ValueRequirements> reqs = collect_requirements(p);
-    return validate_assignment(inter, a, reqs, bank, vec_active).ok;
+    if (!validate_assignment(inter, a, reqs, bank, vec_active).ok) return false;
+    // Constraint DURA adicional (correctitud ABI): la lane asignada debe ser
+    // ADMISIBLE -- en particular, un valor cross-call no puede estar en caller-saved.
+    // Un valor PINADO esta forzado por el ABI (mas duro, gana) y ya lo valido la
+    // espina dorsal -> no se le aplica la regla general.  Asi "shadow verde" implica
+    // que ningun cross-call quedo en una lane volatil.
+    for (const AbstractValue &v : p.values) {
+        const int lane = a.lane_of(v.value_id);
+        if (lane == kSpilled || v.req.fixed_reg >= 0) continue;
+        if (!lane_admissible(v.req, static_cast<uint8_t>(lane), bank, vec_active))
+            return false;
+    }
+    return true;
 }
 
 /** @brief Numero de valores DERRAMADOS en la asignacion. */

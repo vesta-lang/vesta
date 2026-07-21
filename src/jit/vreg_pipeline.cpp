@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <vector>
 
 namespace jit {
@@ -107,7 +108,8 @@ void print_shadow_summary() {
                  "  spills:      linear=%llu  rbank=%llu\n"
                  "  coste spill: linear=%.1f  rbank=%.1f\n"
                  "  cross-call:  vivos=%llu | caller-saved(PELIGRO) linear=%llu rbank=%llu"
-                 " | callee-saved linear=%llu rbank=%llu\n",
+                 " | callee-saved linear=%llu rbank=%llu\n"
+                 "  correctitud: rbank INVALIDOS=%u  linear INVALIDOS=%u (modelo; 0 = OK)\n",
                  a.functions, a.equal, a.improved, a.worsened,
                  (unsigned long long)a.linear_spills, (unsigned long long)a.rbank_spills,
                  a.linear_spill_cost, a.rbank_spill_cost,
@@ -115,7 +117,8 @@ void print_shadow_summary() {
                  (unsigned long long)a.linear_xcall_caller,
                  (unsigned long long)a.rbank_xcall_caller,
                  (unsigned long long)a.linear_xcall_callee,
-                 (unsigned long long)a.rbank_xcall_callee);
+                 (unsigned long long)a.rbank_xcall_callee,
+                 a.rbank_invalid, a.linear_invalid);
 }
 
 /** @brief Corre rbank sobre el mismo problema que linear_scan y acumula el panel. */
@@ -136,9 +139,55 @@ void run_shadow(const IntervalResult &ivs, const RegAlloc &ra,
     OptimizationContext ctx = make_context(bank, cs);
     const AbstractProblem p = intervals_to_problem(ivs);
     const bool vec = fn_needs_vec_reserve(fn);
+
+    // Diagnostico (comprobacion #1 con DATOS, no razonamiento): el banco del shadow
+    // debe describir EL MISMO problema que linear_scan.  Lista el GP allocatable de
+    // ambos y su diferencia simetrica.  Si difieren, se corrige el BANCO, no el
+    // allocator (el shadow debe comparar exactamente lo mismo).
+    static const bool dump_banks = [] {
+        const char *e = std::getenv("VESTA_RBANK_SHADOW_BANKS");
+        return e && e[0] && e[0] != '0';
+    }();
+    if (dump_banks) {
+        static std::once_flag banks_once;
+        std::call_once(banks_once, [&] {
+            const TargetRegInfo &tri = target_x86_64_vm_abi(vec);
+            const size_t GP = static_cast<size_t>(RegClass::GP);
+            std::set<int> bset, tset;
+            std::fprintf(stderr, "\n[shadow-bank] GP allocatable (vec=%d)  (ce=callee-saved, cr=caller-saved)\n", (int)vec);
+            std::fprintf(stderr, "  banco physical: ");
+            for (const codegen::rbank::Lane &l : bank.lanes)
+                if (l.cls == codegen::rbank::ResourceClass::GP && l.allocatable(vec)) {
+                    bset.insert(l.id);
+                    std::fprintf(stderr, "%d%s ", l.id,
+                        l.preservation_of(codegen::rbank::ViewWidth::W8) ==
+                            codegen::rbank::SavePolicy::PRESERVED ? "ce" : "cr");
+                }
+            std::fprintf(stderr, "\n  tri VM_ABI:     ");
+            for (uint8_t id : tri.allocatable[GP]) {
+                tset.insert(id);
+                bool callee = false;
+                for (uint8_t c : tri.callee_saved[GP]) if (c == id) callee = true;
+                std::fprintf(stderr, "%d%s ", (int)id, callee ? "ce" : "cr");
+            }
+            std::fprintf(stderr, "\n  solo en banco:  ");
+            for (int id : bset) if (!tset.count(id)) std::fprintf(stderr, "%d ", id);
+            std::fprintf(stderr, "\n  solo en tri:    ");
+            for (int id : tset) if (!bset.count(id)) std::fprintf(stderr, "%d ", id);
+            std::fprintf(stderr, "\n  -> %s\n\n",
+                         bset == tset ? "IDENTICOS (misma comparacion)"
+                                      : "DIFERENTES (corregir el BANCO del shadow)");
+        });
+    }
+    LaneAssignment rb_la;
+    AbstractProblem rb_co;
     const ShadowStats sl = shadow_stats_linear(ra, p, ctx);
-    const ShadowStats sr = shadow_stats_rbank(p, ctx, vec);
-    const ShadowReport rep = make_shadow_report(sl, sr);
+    const ShadowStats sr = shadow_stats_rbank(p, ctx, vec, &rb_la, &rb_co);
+    // Correctitud (plano separado, senyal TEMPRANA -- el oraculo final es el backend):
+    // ¿rbank produce un coloreo propio del modelo?  ¿linear tambien lo es (control)?
+    const bool valid_rbank = is_proper_coloring(rb_co, rb_la, bank, vec);
+    const bool valid_linear = is_proper_coloring(p, regalloc_to_lanes(ra, p), bank, vec);
+    const ShadowReport rep = make_shadow_report(sl, sr, valid_linear, valid_rbank);
     {
         std::lock_guard<std::mutex> lk(g_shadow_mtx);
         g_shadow_agg.add(rep);

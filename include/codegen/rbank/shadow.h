@@ -130,6 +130,9 @@ struct ShadowStats {
     uint32_t xcall_caller    = 0; ///< de esos, en lane VOLATILE (caller-saved) = PELIGRO.
     uint32_t xcall_callee    = 0; ///< de esos, en lane PRESERVED (callee-saved) = seguro.
     uint32_t xcall_spilled   = 0; ///< de esos, spilled (seguro).
+    // NOTA: la CORRECTITUD (¿es un coloreo propio?) NO vive aqui -- ShadowStats son
+    // METRICAS DE CALIDAD (spills/coste/presion).  El veredicto de correctitud es otro
+    // plano y vive en ShadowReport (valid_linear/valid_rbank).
 };
 
 /**
@@ -215,7 +218,9 @@ inline ShadowStats shadow_stats_linear(const jit::RegAlloc &ra,
  */
 inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
                                       const OptimizationContext &ctx,
-                                      bool vec_active) {
+                                      bool vec_active,
+                                      LaneAssignment *out_assign = nullptr,
+                                      AbstractProblem *out_coalesced = nullptr) {
     ShadowStats s;
     fill_pressure(p, s);
     const CoalesceResult co = coalesce_conservative(p);
@@ -224,6 +229,11 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
     s.values = static_cast<uint32_t>(co.problem.values.size());
     s.spills = spill_count(co.problem, la);
     s.spill_cost = total_spill_cost(co.problem, la, ctx);
+    // Expone la asignacion + el problema coalescido para que el llamante valide la
+    // CORRECTITUD (is_proper_coloring) sin re-correr el pipeline -- la correctitud es
+    // otro plano (ShadowReport), no una metrica.
+    if (out_assign) *out_assign = la;
+    if (out_coalesced) *out_coalesced = co.problem;
     // allocated cuenta LANES FISICAS ASIGNABLES.  Hoy "lane != spilled" <=> registro
     // fisico (el unico recurso no-memoria del banco), pero el dia que existan scratch
     // / stack-cache / pseudo-lanes / memoria persistente como recursos, "no spilled"
@@ -240,29 +250,60 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
 }
 
 /**
+ * @brief Convierte un @c RegAlloc de PRODUCCION a un @c LaneAssignment del modelo,
+ *        para poder pasar la asignacion de linear_scan por @c is_proper_coloring
+ *        (control: ¿el modelo considera propio lo que el backend YA acepta?).
+ */
+inline LaneAssignment regalloc_to_lanes(const jit::RegAlloc &ra,
+                                        const AbstractProblem &p) {
+    LaneAssignment la;
+    for (const AbstractValue &v : p.values) {
+        if (v.value_id < ra.assign.size() &&
+            ra.assign[v.value_id].loc == jit::RegAlloc::Loc::REG)
+            la.assign(v.value_id, ra.assign[v.value_id].reg);
+        else
+            la.spill(v.value_id);
+    }
+    return la;
+}
+
+/**
  * @struct ShadowReport
- * @brief Veredicto de UNA funcion: las dos stats + el diff + si rbank es equivalente
- *        o mejora.  El agregador (ShadowAggregate) los suma sobre el corpus.
+ * @brief Veredicto de UNA funcion.  Dos PLANOS separados:
+ *          - CALIDAD: @c linear / @c rbank stats + @c diff + @c equivalent / @c improved.
+ *          - CORRECTITUD: @c valid_linear / @c valid_rbank (¿coloreo propio del modelo?).
+ *        No se mezclan: una asignacion puede ser mejor en spills y a la vez invalida.
  *
- * Criterio (calidad del allocator, no bit-igualdad del codigo): la metrica que
- * importa es spills y su coste.  @c improved = rbank mejora en spills, o iguala
- * spills con menos coste, SIN empeorar.  @c equivalent = ni mejora ni empeora.
- * "Empeora" = ni equivalent ni improved.
+ * IMPORTANTE (oraculo): @c valid_rbank valida el MODELO (is_proper_coloring sobre el
+ * problema abstracto), NO el backend.  El backend tiene informacion que el modelo aun
+ * no representa (huecos del LiveRange, GC maps, uses, kill positions).  Por eso el
+ * switch NO se decide solo con @c valid_rbank: exige ademas convertir la asignacion a
+ * RegAlloc y pasarla por TODO el backend (rewrite -> encode -> diff_harness -> e2e).
+ * @c valid_rbank es la senyal TEMPRANA de correctitud, no la prueba final.
  */
 struct ShadowReport {
     ShadowStats linear;
     ShadowStats rbank;
     ShadowDiff  diff;
-    bool        equivalent = false;
-    bool        improved   = false;
+    bool        equivalent   = false; ///< calidad: ni mejora ni empeora.
+    bool        improved     = false; ///< calidad: mejora sin empeorar.
+    bool        valid_linear = true;  ///< correctitud: linear es coloreo propio (control).
+    bool        valid_rbank  = true;  ///< correctitud: rbank es coloreo propio (senyal).
 };
 
-/** @brief Compara dos stats -> ShadowReport (diff + veredicto equivalente/mejora). */
-inline ShadowReport make_shadow_report(const ShadowStats &lin, const ShadowStats &rb) {
+/**
+ * @brief Compara dos stats -> ShadowReport (calidad).  Las valideces (correctitud) se
+ *        pasan aparte porque son otro plano; por defecto true (compat con tests).
+ */
+inline ShadowReport make_shadow_report(const ShadowStats &lin, const ShadowStats &rb,
+                                       bool valid_linear = true,
+                                       bool valid_rbank = true) {
     ShadowReport r;
     r.linear = lin;
     r.rbank = rb;
     r.diff = shadow_diff(lin, rb);
+    r.valid_linear = valid_linear;
+    r.valid_rbank = valid_rbank;
     const double EPS = 1e-6;
     const bool worse = rb.spills > lin.spills ||
                        (rb.spills == lin.spills && rb.spill_cost > lin.spill_cost + EPS);
@@ -295,10 +336,14 @@ struct ShadowAggregate {
     uint64_t rbank_xcall_caller  = 0;
     uint64_t linear_xcall_callee = 0;
     uint64_t rbank_xcall_callee  = 0;
+    uint32_t rbank_invalid       = 0; ///< funciones donde rbank NO fue coloreo propio (modelo).
+    uint32_t linear_invalid      = 0; ///< control: linear no fue propio SEGUN el modelo.
 
     /** @brief Acumula el veredicto de una funcion. */
     void add(const ShadowReport &r) {
         ++functions;
+        if (!r.valid_rbank) ++rbank_invalid;
+        if (!r.valid_linear) ++linear_invalid;
         if (r.improved) ++improved;
         else if (r.equivalent) ++equal;
         else ++worsened;
