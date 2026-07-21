@@ -41,6 +41,7 @@
 #define VESTA_CODEGEN_RBANK_SHADOW_H
 
 #include "codegen/rbank/abstract_problem.h"
+#include "codegen/rbank/backend_bridge.h"
 #include "codegen/rbank/coalesce.h"
 #include "codegen/rbank/coloring.h"
 #include "codegen/rbank/optimization_context.h"
@@ -249,23 +250,8 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
     return s;
 }
 
-/**
- * @brief Convierte un @c RegAlloc de PRODUCCION a un @c LaneAssignment del modelo,
- *        para poder pasar la asignacion de linear_scan por @c is_proper_coloring
- *        (control: ¿el modelo considera propio lo que el backend YA acepta?).
- */
-inline LaneAssignment regalloc_to_lanes(const jit::RegAlloc &ra,
-                                        const AbstractProblem &p) {
-    LaneAssignment la;
-    for (const AbstractValue &v : p.values) {
-        if (v.value_id < ra.assign.size() &&
-            ra.assign[v.value_id].loc == jit::RegAlloc::Loc::REG)
-            la.assign(v.value_id, ra.assign[v.value_id].reg);
-        else
-            la.spill(v.value_id);
-    }
-    return la;
-}
+// regalloc_to_lanes / regalloc_from_lanes viven en backend_bridge.h (el puente
+// RegAlloc <-> modelo, compartido por el shadow y la futura ruta de produccion).
 
 /**
  * @struct ShadowReport
