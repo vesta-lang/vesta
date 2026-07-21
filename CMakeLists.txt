@@ -854,6 +854,20 @@ else ()
     target_link_libraries(test_rbank_value_req PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Constraints (banco ancho, Fase 0 nivel 2): feasibilidad DURA + verificador de
+# soluciones (validate_assignment), con violaciones como DATO i18n-ready.
+add_executable(test_rbank_constraints tests/jit/test_rbank_constraints.cpp)
+target_include_directories(test_rbank_constraints PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_constraints PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_constraints PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_constraints PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_constraints PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
