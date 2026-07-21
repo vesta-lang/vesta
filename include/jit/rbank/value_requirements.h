@@ -104,7 +104,15 @@ constexpr ResourceClass resource_class_for(bool is_fp_or_vector) noexcept {
     return is_fp_or_vector ? ResourceClass::FP_VECTOR : ResourceClass::GP;
 }
 
-/** @brief Ancho de vista que ocupa un valor de @p bytes (redondea a potencia de 2). */
+/**
+ * @brief Ancho de vista que ocupa un valor de @p bytes.
+ *
+ * CONTRATO (total, sin fallos): redondea SIEMPRE HACIA ARRIBA a la potencia de 2
+ * mas cercana >= @p bytes, acotado a [W1, W64].  Nunca asserta ni devuelve error.
+ * Casos:  0 -> W1;  3 -> W4 (un valor de 3 B ocupa un slot de 4 B);  5..8 -> W8;
+ * >64 -> W64 (saturado).  Redondear ARRIBA es lo seguro: nunca sub-dimensiona el
+ * registro/slot que aloja el valor.
+ */
 constexpr ViewWidth view_width_for_bytes(uint32_t bytes) noexcept {
     if (bytes <= 1)  return ViewWidth::W1;
     if (bytes <= 2)  return ViewWidth::W2;

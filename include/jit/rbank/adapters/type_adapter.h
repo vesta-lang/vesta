@@ -51,11 +51,20 @@ inline bool type_has_value(ir::IrType t) noexcept {
  *
  * F32/F64 -> banco float/vector; todo lo demas (enteros con/sin signo, puntero
  * host, GcHandle, bool) -> banco entero de proposito general.
+ *
+ * Se escribe como @c switch aunque hoy haya dos casos: es el PUNTO DE EXTENSION
+ * natural para cuando entren tipos vector<N> / SIMD (-> FP_VECTOR), mascara
+ * (-> MASK) o predicado (-> PREDICATE).  El sitio ya esta preparado.
  */
 inline ResourceClass type_adapter_class(ir::IrType t) noexcept {
-    return (t == ir::IrType::F32 || t == ir::IrType::F64)
-               ? ResourceClass::FP_VECTOR
-               : ResourceClass::GP;
+    switch (t) {
+    case ir::IrType::F32:
+    case ir::IrType::F64:
+        return ResourceClass::FP_VECTOR;
+    // Futuro: vector<N>/SIMD -> FP_VECTOR; mascara -> MASK; predicado -> PREDICATE.
+    default:
+        return ResourceClass::GP;
+    }
 }
 
 /**
@@ -71,9 +80,10 @@ inline ViewWidth type_adapter_width(ir::IrType t) noexcept {
  * @brief Rellena EXCLUSIVAMENTE @c cls y @c width de @p r desde el tipo @p t.
  *
  * No toca ningun otro campo (residency, crosses_call, is_gc, loop_depth,
- * rematerializable, fixed_reg) -- eso es de otros adaptadores.
+ * rematerializable, fixed_reg) -- eso es de otros adaptadores.  El nombre
+ * @c populate_* es el verbo comun de todos los adaptadores de Fase 0.25.
  */
-inline void type_adapter_apply(ValueRequirements &r, ir::IrType t) noexcept {
+inline void populate_type_requirements(ValueRequirements &r, ir::IrType t) noexcept {
     r.cls   = type_adapter_class(t);
     r.width = type_adapter_width(t);
 }

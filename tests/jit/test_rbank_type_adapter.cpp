@@ -37,7 +37,7 @@ static int g_fail = 0;
 
 static void expect(IrType t, ResourceClass cls, ViewWidth w, const char *name) {
     ValueRequirements r;
-    type_adapter_apply(r, t);
+    populate_type_requirements(r, t);
     if (r.cls != cls || r.width != w) {
         ++g_fail;
         std::printf("  [FAIL] %s: cls/width inesperados\n", name);
@@ -71,6 +71,13 @@ int main() {
     expect(IrType::F32,    ResourceClass::FP_VECTOR, ViewWidth::W4, "f32");
     expect(IrType::F64,    ResourceClass::FP_VECTOR, ViewWidth::W8, "f64");
 
+    std::printf("\n[contrato view_width_for_bytes: redondea ARRIBA, sin fallos]\n");
+    CHECK(view_width_for_bytes(0) == ViewWidth::W1, "0B != W1");
+    CHECK(view_width_for_bytes(3) == ViewWidth::W4, "3B no redondea a W4");
+    CHECK(view_width_for_bytes(5) == ViewWidth::W8, "5B no redondea a W8");
+    CHECK(view_width_for_bytes(9) == ViewWidth::W16, "9B no redondea a W16");
+    CHECK(view_width_for_bytes(1000) == ViewWidth::W64, ">64B no satura a W64");
+
     std::printf("\n[type_has_value: VOID no produce valor]\n");
     CHECK(!type_has_value(IrType::VOID), "VOID produce valor");
     CHECK(type_has_value(IrType::I64) && type_has_value(IrType::F64),
@@ -87,7 +94,7 @@ int main() {
         r.loop_depth     = 5;
         r.fixed_reg      = 7;
         r.residency      = Residency::MEMORY;
-        type_adapter_apply(r, IrType::F64);
+        populate_type_requirements(r, IrType::F64);
         // cls/width actualizados...
         CHECK(r.cls == ResourceClass::FP_VECTOR && r.width == ViewWidth::W8,
               "no actualizo cls/width");
