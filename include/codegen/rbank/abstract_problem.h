@@ -33,6 +33,7 @@
 #ifndef VESTA_CODEGEN_RBANK_ABSTRACT_PROBLEM_H
 #define VESTA_CODEGEN_RBANK_ABSTRACT_PROBLEM_H
 
+#include "analysis/facts/affinity_graph_facts.h"
 #include "codegen/rbank/constraints.h"
 #include "codegen/rbank/value_requirements.h"
 
@@ -60,10 +61,15 @@ struct AbstractValue {
 
 /**
  * @struct AbstractProblem
- * @brief Conjunto de valores del SSA sintetico (los LiveRanges de una "funcion").
+ * @brief Conjunto de valores del SSA sintetico (los LiveRanges de una "funcion") +
+ *        el grafo de AFINIDAD (@c CopyGraphFacts, Fact de primer nivel que el
+ *        coalescing consume).  En aislamiento el grafo es un input sintetico; en
+ *        produccion sera @c snapshot.query<AffinityGraphFacts>() (alimentado por
+ *        ssa_coalesce).  El problema TIRA del Fact -- no lo inventa.
  */
 struct AbstractProblem {
     std::vector<AbstractValue> values;
+    analysis::AffinityGraphFacts affinity; ///< afinidades (Fact; lo consume F3).
 };
 
 /**
