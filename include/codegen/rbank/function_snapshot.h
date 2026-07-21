@@ -41,7 +41,17 @@
  * interese (p.ej. para serializar).
  *
  * CRECE sin tocar consumidores: cada Fact nuevo (DomFacts/AliasFacts/Escape/
- * Memory/...) es un campo-cache + un accessor + un bit en @c Fact.
+ * Memory/...) es una celda @c LazyFact + un accessor.
+ *
+ * SEPARACION DATO / MECANISMO (direccion a largo plazo): el snapshot es DATO;
+ * NO deberia conocer los ALGORITMOS.  Hoy los accessors aun invocan
+ * @c compute_loop_facts / @c compute_profile_facts / @c assemble_value_requirements
+ * dentro de sus lambdas productores -- esos lambdas son la COSTURA.  Cuando el
+ * numero de Facts crezca, el UNICO responsable de "como se construye un Fact"
+ * sera el @c SnapshotBuilder / un futuro @c QueryEngine, y el snapshot solo
+ * almacenara (@c LazyFact) y devolvera resultados: bastara con inyectar un
+ * productor y que los lambdas deleguen en el.  La celda @c LazyFact ya aisla el
+ * ALMACENAMIENTO; falta aislar la PRODUCCION cuando duela.
  *
  * SERIALIZACION (futura, cuando haya consumidor): al ser DATOS, el snapshot es
  * serializable -> IR -> Snapshot -> cache.  Casi un "core dump" del conocimiento:
@@ -71,6 +81,7 @@
 #include "analysis/fact_validation.h"
 #include "analysis/facts/loop_facts.h"
 #include "codegen/rbank/build_requirements.h"
+#include "codegen/rbank/lazy_fact.h"
 #include "codegen/rbank/physical_bank.h"
 #include "codegen/rbank/value_requirements.h"
 #include "ir/liveness.h"
@@ -109,54 +120,53 @@ struct FunctionSnapshot {
     const ir::IrFunction          *fn   = nullptr; ///< funcion de la que es foto.
     const analysis::BranchProfile *prof = nullptr; ///< perfil (debe sobrevivir al snapshot si Profile es lazy).
 
-    // --- Campos-cache (publicos para serializacion/inspeccion; preferir accessors) ---
-    mutable ir::LivenessResult             live;    ///< Tipo A.
-    mutable analysis::LoopFacts            loops;   ///< Tipo A.
-    mutable analysis::ProfileFacts         profile; ///< Tipo B (vacio si no hay perfil).
-    mutable std::vector<ValueRequirements> values;  ///< requisitos por valor.
-    mutable uint32_t                       computed = 0; ///< mascara de @c Fact ya computados.
-    // Futuro: mutable analysis::DomFacts dom;  mutable analysis::AliasFacts alias; ...
+    // --- Celdas LazyFact (encapsulan almacenamiento + cache; el mutable vive
+    //     DENTRO de LazyFact, no aqui).  Publicas para serializacion/inspeccion
+    //     (via peek()/ready()); la interfaz recomendada es la de accessors. ---
+    LazyFact<ir::LivenessResult>             live;    ///< Tipo A.
+    LazyFact<analysis::LoopFacts>            loops;   ///< Tipo A.
+    LazyFact<analysis::ProfileFacts>         profile; ///< Tipo B (vacio si no hay perfil).
+    LazyFact<std::vector<ValueRequirements>> values;  ///< requisitos por valor.
+    // Futuro: LazyFact<analysis::DomFacts> dom;  LazyFact<analysis::AliasFacts> alias; ...
 
+    /** @brief True si el hecho @p f ya esta materializado en su celda. */
     bool is_computed(Fact f) const noexcept {
-        return (computed & static_cast<uint32_t>(f)) != 0;
+        switch (f) {
+        case Fact::Liveness: return live.ready();
+        case Fact::Loops:    return loops.ready();
+        case Fact::Profile:  return profile.ready();
+        case Fact::Values:   return values.ready();
+        default:             return false;
+        }
     }
 
-    // --- QUERY SYSTEM (lazy + cache; resuelve dependencias al llamarse entre si) ---
+    // --- QUERY SYSTEM (lazy + cache; los lambdas productores son la COSTURA que
+    //     migrara al QueryEngine cuando el snapshot deje de conocer algoritmos).
+    //     Las dependencias se resuelven SOLAS: los accessors se llaman entre si. ---
 
     /** @brief Intervalos de vida (compute-si-falta + cache). */
     const ir::LivenessResult &liveness() const {
-        if (!is_computed(Fact::Liveness)) {
-            live = ir::compute_liveness(*fn);
-            computed |= static_cast<uint32_t>(Fact::Liveness);
-        }
-        return live;
+        return live.get([&] { return ir::compute_liveness(*fn); });
     }
     /** @brief LoopFacts (compute-si-falta + cache). */
     const analysis::LoopFacts &loop_facts() const {
-        if (!is_computed(Fact::Loops)) {
-            loops = analysis::compute_loop_facts(*fn);
-            computed |= static_cast<uint32_t>(Fact::Loops);
-        }
-        return loops;
+        return loops.get([&] { return analysis::compute_loop_facts(*fn); });
     }
     /** @brief ProfileFacts (compute-si-falta + cache; vacio si no hay perfil). */
     const analysis::ProfileFacts &profile_facts() const {
-        if (!is_computed(Fact::Profile)) {
+        return profile.get([&]() -> analysis::ProfileFacts {
             if (prof && !prof->empty())
-                profile = analysis::compute_profile_facts(*fn, loop_facts(), *prof);
-            computed |= static_cast<uint32_t>(Fact::Profile); // marca aunque quede vacio
-        }
-        return profile;
+                return analysis::compute_profile_facts(*fn, loop_facts(), *prof);
+            return analysis::ProfileFacts{};
+        });
     }
     /** @brief ValueRequirements (arrastra liveness + loops + profile). */
     const std::vector<ValueRequirements> &value_reqs() const {
-        if (!is_computed(Fact::Values)) {
+        return values.get([&] {
             std::vector<uint32_t> calls = collect_call_positions(*fn, liveness());
-            values = assemble_value_requirements(*fn, liveness(), calls,
-                                                 loop_facts(), profile_facts());
-            computed |= static_cast<uint32_t>(Fact::Values);
-        }
-        return values;
+            return assemble_value_requirements(*fn, liveness(), calls,
+                                               loop_facts(), profile_facts());
+        });
     }
 
     /**

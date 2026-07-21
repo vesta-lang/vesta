@@ -120,7 +120,7 @@ int main() {
     {
         FunctionSnapshot bad = build_snapshot(fn);
         // Corrompemos LoopFacts: header (block1) in_loop pero depth 0.
-        bad.loops.loop_depth[1] = 0; // mientras in_loop[1] sigue 1 -> mismatch
+        bad.loops.unsafe_mutable_ref().loop_depth[1] = 0; // in_loop[1] sigue 1 -> mismatch
         FunctionSnapshot::ValidationReport rep = bad.validate(bank);
         bool caught = false;
         for (const analysis::FactIssue &i : rep.fact_issues)
@@ -132,7 +132,7 @@ int main() {
     {
         FunctionSnapshot bad = build_snapshot(fn);
         // Pin de un valor FP a un registro GP (RAX).
-        for (ValueRequirements &r : bad.values)
+        for (ValueRequirements &r : bad.values.unsafe_mutable_ref())
             if (r.cls == ResourceClass::FP_VECTOR) { r.fixed_reg = 0; break; }
         FunctionSnapshot::ValidationReport rep = bad.validate(bank);
         bool caught = false;
@@ -145,19 +145,19 @@ int main() {
     {
         // Solo Loops -> ni liveness ni values.
         FunctionSnapshot only_loops = SnapshotBuilder().enable(Fact::Loops).build(fn);
-        CHECK(only_loops.loops.loop_count == 1, "builder solo-Loops sin bucles");
-        CHECK(only_loops.live.intervals.empty(), "builder solo-Loops computo liveness");
-        CHECK(only_loops.values.empty(), "builder solo-Loops computo values");
+        CHECK(only_loops.loop_facts().loop_count == 1, "builder solo-Loops sin bucles");
+        CHECK(!only_loops.is_computed(Fact::Liveness), "builder solo-Loops computo liveness");
+        CHECK(!only_loops.is_computed(Fact::Values), "builder solo-Loops computo values");
     }
 
     std::printf("\n[SnapshotBuilder: resuelve dependencias]\n");
     {
         // Pedir Values debe activar Liveness + Loops por dependencia.
         FunctionSnapshot s = SnapshotBuilder().enable(Fact::Values).build(fn);
-        CHECK(!s.values.empty(), "builder Values sin valores");
-        CHECK(!s.live.intervals.empty(),
+        CHECK(!s.value_reqs().empty(), "builder Values sin valores");
+        CHECK(s.is_computed(Fact::Liveness),
               "builder Values no resolvio la dependencia Liveness");
-        CHECK(s.loops.loop_count == 1,
+        CHECK(s.loop_facts().loop_count == 1,
               "builder Values no resolvio la dependencia Loops");
     }
 
