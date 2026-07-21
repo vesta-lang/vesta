@@ -84,14 +84,26 @@ int main() {
 
     std::printf("\n[la fotografia contiene los Facts + valores]\n");
     CHECK(snap.fn == &fn, "snapshot no apunta a la funcion");
-    CHECK(snap.loops.loop_count == 1, "no detecto el bucle");
-    CHECK(!snap.live.intervals.empty(), "sin intervalos de liveness");
-    CHECK(!snap.values.empty(), "sin ValueRequirements");
+    CHECK(snap.loop_facts().loop_count == 1, "no detecto el bucle");
+    CHECK(!snap.liveness().intervals.empty(), "sin intervalos de liveness");
+    CHECK(!snap.value_reqs().empty(), "sin ValueRequirements");
     // El acumulador v2 (f64, en el loop) esta en la foto con sus hechos.
     const ValueRequirements *v2 = nullptr;
-    for (const ValueRequirements &r : snap.values) if (r.value_id == 2) v2 = &r;
+    for (const ValueRequirements &r : snap.value_reqs()) if (r.value_id == 2) v2 = &r;
     CHECK(v2 && v2->cls == ResourceClass::FP_VECTOR && v2->loop_depth == 1,
           "v2 (f64 en loop) mal en la foto");
+
+    std::printf("\n[query system LAZY: computa on-demand + cachea + arrastra deps]\n");
+    {
+        FunctionSnapshot lazy; lazy.fn = &fn; // nada computado aun
+        CHECK(!lazy.is_computed(Fact::Loops), "recien creado ya tiene Loops");
+        CHECK(lazy.loop_facts().loop_count == 1, "lazy loop_facts no computo");
+        CHECK(lazy.is_computed(Fact::Loops), "lazy no cacheo Loops");
+        // value_reqs arrastra liveness + loops por dependencia.
+        CHECK(!lazy.value_reqs().empty(), "lazy value_reqs vacio");
+        CHECK(lazy.is_computed(Fact::Liveness) && lazy.is_computed(Fact::Values),
+              "lazy value_reqs no arrastro las dependencias");
+    }
 
     PhysicalRegisterBank bank = physical_bank_x86_64(
         true, [] { BackendCaps c{}; c.sse2 = true; return c; }());

@@ -7,48 +7,61 @@
 
 /**
  * @file codegen/rbank/function_snapshot.h
- * @brief FunctionSnapshot: el ESTADO DE CONOCIMIENTO del compilador sobre una
- *        funcion.  Objeto de PRIMER NIVEL que consumen los 3 modos (interp/JIT/
- *        AOT) y todo motor de decision.
+ * @brief FunctionSnapshot: el REPOSITORIO DE CONOCIMIENTO del compilador sobre
+ *        una funcion, con QUERY SYSTEM lazy (demand-driven, estilo rustc).
  *
- * Deja de ser "info del allocator": es LITERALMENTE la fotografia del programa.
- * En vez de "¿como calculo los loops?" preguntas @c snapshot.loops; en vez de
- * "¿es hot?" preguntas @c snapshot.profile.weight_of(...).  Cada consumidor
- * (scheduler, allocator, vectorizer, LICM, SROA, inlining) lee la MISMA foto ->
- * cero duplicacion.
+ * Vesta deja de ser una cadena de passes.  Tiene DOS representaciones del
+ * programa: el IR y el CONOCIMIENTO (Programa -> Hechos -> Decisiones).  El
+ * @c FunctionSnapshot es ese conocimiento: un objeto de PRIMER NIVEL que
+ * consultan los 3 modos (interp/JIT/AOT) y todo motor de decision.
  *
- * Arquitectura (el snapshot como repositorio de conocimiento; escala anadiendo
- * Facts SIN tocar consumidores):
+ *      IR
+ *       |
+ *       v
+ *   Repositorio de conocimiento (FunctionSnapshot)   <-- este objeto
+ *       |
+ *       +--> interp / JIT / AOT / scheduler / allocator / vectorizer / ...
+ *       |
+ *       v
+ *   Autovalidacion (cada Fact se autocertifica; el snapshot se AUDITA)
  *
- *                          IrFunction (codigo real)
- *                                   |
- *                           build_snapshot(fn)
- *                                   |
- *        +----------------+---------+---------+----------------+
- *        v                v                   v                v
- *   LivenessResult   LoopFacts          ProfileFacts     ValueRequirements[]
- *    (Tipo A)        (Tipo A)           (Tipo B)          (adaptadores)
- *        |                |                   |                |
- *        +----------------+--------+----------+----------------+
- *                                  |
- *                          FunctionSnapshot   <-- objeto de 1er nivel
- *                                  |
- *        +----------------+--------+---------+-----------------+
- *        v                v                  v                 v
- *     interp           JIT               AOT            scheduler/allocator/
- *     (los 3 modos leen la MISMA foto)                  vectorizer/LICM/...
+ * QUERY SYSTEM (lazy + cache): no se construye todo de golpe.  Cada hecho se
+ * COMPUTA LA PRIMERA VEZ que se pide, se CACHEA y se devuelve.  Las dependencias
+ * se resuelven SOLAS porque los accessors se llaman entre si:
  *
- * FUTURO (crece sin cambiar consumidores; cada Fact entra cuando tenga un
- * consumidor real): DomFacts, AliasFacts, EscapeFacts, OwnershipFacts,
- * ExceptionFacts, VectorFacts, LifetimeFacts, ConcurrencyFacts, GCFacts.
+ *      value_reqs()  --calls-->  liveness(), loop_facts(), profile_facts()
+ *      profile_facts() --calls--> loop_facts()
  *
- * AUTOCERTIFICACION: cada Fact se valida a SI MISMO (@c analysis::validate) y el
- * auditor comprueba que ningun valor es imposible.  @c FunctionSnapshot::validate
- * agrega todo -> el compilador se AUDITA antes de usar el conocimiento:
+ *      snapshot.loop_facts()      // si no existe -> compute_loop_facts -> cache
+ *      snapshot.value_reqs()      // arrastra liveness + loops + profile
  *
- *      validate(loops) + validate(profile) + liveness_check + audit_requirements
- *                                   |
- *                            ValidationReport   (ok() = conocimiento sano)
+ * Los campos-cache son publicos (para serializacion / warm-load / inspeccion);
+ * la interfaz RECOMENDADA es la de accessors (demand-driven).  Se construye
+ * eager un subconjunto con @c SnapshotBuilder (snapshot_builder.h) cuando
+ * interese (p.ej. para serializar).
+ *
+ * CRECE sin tocar consumidores: cada Fact nuevo (DomFacts/AliasFacts/Escape/
+ * Memory/...) es un campo-cache + un accessor + un bit en @c Fact.
+ *
+ * SERIALIZACION (futura, cuando haya consumidor): al ser DATOS, el snapshot es
+ * serializable -> IR -> Snapshot -> cache.  Casi un "core dump" del conocimiento:
+ * reproducir bugs, comparar snapshots entre versiones, regresion de analisis,
+ * herramientas externas.
+ *
+ * ESCALADO (mismo modelo mental, sin cambiarlo; cada nivel cuando tenga
+ * consumidor real -- NO por prevision):
+ *
+ *      ValueRequirements   (valor)
+ *            ^
+ *      FunctionSnapshot    (funcion)   <-- HOY
+ *            ^
+ *      ModuleSnapshot      (modulo: Functions + Globals + CallGraph + alias/
+ *            ^              escape/ownership GLOBALES + PGO + Inlining)
+ *      ProgramSnapshot     (programa: LTO)
+ *
+ * Que el mismo objeto escale de valor -> funcion -> modulo -> programa sin
+ * cambiar el modelo (Facts lazy + autocertificacion + query) es senal de que la
+ * arquitectura es correcta.
  */
 
 #ifndef VESTA_CODEGEN_RBANK_FUNCTION_SNAPSHOT_H
@@ -63,29 +76,92 @@
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace jit {
 namespace rbank {
 
 /**
+ * @enum Fact
+ * @brief Que hechos puede contener/computar el snapshot (mascara de bits).
+ *        Crece anadiendo entradas (Dom/Alias/Escape/Memory...) sin tocar el
+ *        punto de entrada ni los consumidores.
+ */
+enum class Fact : uint32_t {
+    None     = 0,
+    Liveness = 1u << 0, ///< intervalos de vida (Tipo A).
+    Loops    = 1u << 1, ///< LoopFacts (Tipo A).
+    Profile  = 1u << 2, ///< ProfileFacts (Tipo B; depende de Loops + perfil).
+    Values   = 1u << 3, ///< ValueRequirements (adaptadores; dep. Liveness+Loops).
+    // Futuro: Dom = 1u<<4, Alias = 1u<<5, Escape = 1u<<6, Memory = 1u<<7, ...
+    All      = Liveness | Loops | Profile | Values,
+};
+
+/**
  * @struct FunctionSnapshot
- * @brief Fotografia del conocimiento del compilador sobre una funcion.
+ * @brief Repositorio de conocimiento de una funcion con query system lazy.
  *
- * Los Facts son de SOLO LECTURA tras construirse (una fotografia congelada).
- * Crece anadiendo campos (DomFacts, AliasFacts, ...) sin cambiar consumidores.
+ * Los campos-cache son @c mutable: los accessors @c const los rellenan la
+ * primera vez (demand-driven).  @c computed marca que hechos ya estan.
  */
 struct FunctionSnapshot {
-    const ir::IrFunction  *fn = nullptr; ///< funcion de la que es foto.
-    ir::LivenessResult     live;         ///< Tipo A: intervalos de vida.
-    analysis::LoopFacts    loops;        ///< Tipo A: bucles.
-    analysis::ProfileFacts profile;      ///< Tipo B: perfil (vacio si no hay).
-    std::vector<ValueRequirements> values; ///< requisitos por valor (adaptadores).
-    // Futuro: analysis::DomFacts dom;  analysis::AliasFacts alias;  ...
+    const ir::IrFunction          *fn   = nullptr; ///< funcion de la que es foto.
+    const analysis::BranchProfile *prof = nullptr; ///< perfil (debe sobrevivir al snapshot si Profile es lazy).
+
+    // --- Campos-cache (publicos para serializacion/inspeccion; preferir accessors) ---
+    mutable ir::LivenessResult             live;    ///< Tipo A.
+    mutable analysis::LoopFacts            loops;   ///< Tipo A.
+    mutable analysis::ProfileFacts         profile; ///< Tipo B (vacio si no hay perfil).
+    mutable std::vector<ValueRequirements> values;  ///< requisitos por valor.
+    mutable uint32_t                       computed = 0; ///< mascara de @c Fact ya computados.
+    // Futuro: mutable analysis::DomFacts dom;  mutable analysis::AliasFacts alias; ...
+
+    bool is_computed(Fact f) const noexcept {
+        return (computed & static_cast<uint32_t>(f)) != 0;
+    }
+
+    // --- QUERY SYSTEM (lazy + cache; resuelve dependencias al llamarse entre si) ---
+
+    /** @brief Intervalos de vida (compute-si-falta + cache). */
+    const ir::LivenessResult &liveness() const {
+        if (!is_computed(Fact::Liveness)) {
+            live = ir::compute_liveness(*fn);
+            computed |= static_cast<uint32_t>(Fact::Liveness);
+        }
+        return live;
+    }
+    /** @brief LoopFacts (compute-si-falta + cache). */
+    const analysis::LoopFacts &loop_facts() const {
+        if (!is_computed(Fact::Loops)) {
+            loops = analysis::compute_loop_facts(*fn);
+            computed |= static_cast<uint32_t>(Fact::Loops);
+        }
+        return loops;
+    }
+    /** @brief ProfileFacts (compute-si-falta + cache; vacio si no hay perfil). */
+    const analysis::ProfileFacts &profile_facts() const {
+        if (!is_computed(Fact::Profile)) {
+            if (prof && !prof->empty())
+                profile = analysis::compute_profile_facts(*fn, loop_facts(), *prof);
+            computed |= static_cast<uint32_t>(Fact::Profile); // marca aunque quede vacio
+        }
+        return profile;
+    }
+    /** @brief ValueRequirements (arrastra liveness + loops + profile). */
+    const std::vector<ValueRequirements> &value_reqs() const {
+        if (!is_computed(Fact::Values)) {
+            std::vector<uint32_t> calls = collect_call_positions(*fn, liveness());
+            values = assemble_value_requirements(*fn, liveness(), calls,
+                                                 loop_facts(), profile_facts());
+            computed |= static_cast<uint32_t>(Fact::Values);
+        }
+        return values;
+    }
 
     /**
      * @struct ValidationReport
-     * @brief Resultado de la autocertificacion agregada del snapshot (DATOS).
+     * @brief Resultado de la autocertificacion agregada (DATOS).
      */
     struct ValidationReport {
         std::vector<analysis::FactIssue> fact_issues;  ///< de Loop/Profile/Liveness.
@@ -97,36 +173,24 @@ struct FunctionSnapshot {
 
     /**
      * @brief AUDITA el snapshot: autocertifica cada Fact + comprueba que ningun
-     *        valor es imposible en @p bank.  El compilador auditandose.
+     *        valor es imposible en @p bank.  El compilador auditandose (fuerza
+     *        el computo de los hechos que audita).
      */
     ValidationReport validate(const PhysicalRegisterBank &bank,
                               bool vec_reduction_active = false) const {
         ValidationReport rep;
-        // Autocertificacion de cada Fact.
-        for (const analysis::FactIssue &i : analysis::validate(loops))
+        for (const analysis::FactIssue &i : analysis::validate(loop_facts()))
             rep.fact_issues.push_back(i);
-        for (const analysis::FactIssue &i : analysis::validate(profile))
+        for (const analysis::FactIssue &i : analysis::validate(profile_facts()))
             rep.fact_issues.push_back(i);
-        // Liveness: def <= end en todo intervalo.
-        for (const ir::LiveInterval &iv : live.intervals)
+        for (const ir::LiveInterval &iv : liveness().intervals)
             if (iv.def > iv.end)
                 rep.fact_issues.push_back(
                     {analysis::FactCheck::LIVE_DEF_AFTER_END, iv.id, 0});
-        // Auditor de valores imposibles.
-        rep.value_issues = audit_requirements(values, bank, vec_reduction_active);
+        rep.value_issues = audit_requirements(value_reqs(), bank, vec_reduction_active);
         return rep;
     }
 };
-
-// NOTA: la CONSTRUCCION de un snapshot (el algoritmo) vive en snapshot_builder.h
-// (@c SnapshotBuilder + @c build_snapshot).  Aqui solo el DATO + su contrato de
-// autocertificacion -- dato != algoritmo.
-//
-// SERIALIZACION (capacidad futura, cuando haya consumidor): al ser DATOS puros,
-// el snapshot es serializable -> IR -> Snapshot -> cache/fichero.  Es casi un
-// "core dump" del conocimiento del compilador: reproducir bugs exactamente,
-// comparar snapshots entre versiones, tests de regresion sobre los analisis,
-// herramientas externas.
 
 } // namespace rbank
 } // namespace jit

@@ -55,24 +55,15 @@
 namespace jit {
 namespace rbank {
 
-/**
- * @enum Fact
- * @brief Que hechos incluir en el snapshot (mascara de bits).  Crece anadiendo
- *        entradas (Dom/Alias/Escape/Memory...) sin tocar el punto de entrada.
- */
-enum class Fact : uint32_t {
-    None     = 0,
-    Liveness = 1u << 0, ///< intervalos de vida (Tipo A).
-    Loops    = 1u << 1, ///< LoopFacts (Tipo A).
-    Profile  = 1u << 2, ///< ProfileFacts (Tipo B; necesita Loops + perfil).
-    Values   = 1u << 3, ///< ValueRequirements (adaptadores; necesita Liveness+Loops).
-    // Futuro: Dom = 1u<<4, Alias = 1u<<5, Escape = 1u<<6, Memory = 1u<<7, ...
-    All      = Liveness | Loops | Profile | Values,
-};
+// @c Fact vive en function_snapshot.h (es de la interfaz del snapshot).
 
 /**
  * @struct SnapshotBuilder
- * @brief Construye una @c FunctionSnapshot con los Facts pedidos (+ dependencias).
+ * @brief Construccion EAGER de una @c FunctionSnapshot con los Facts pedidos
+ *        (+ dependencias).  Fuerza el query system lazy del snapshot para los
+ *        hechos seleccionados -- util para precomputar un subconjunto (p.ej.
+ *        para serializar o "calentar" la foto).  Sin builder, el snapshot ya es
+ *        lazy: pedir @c snapshot.value_reqs() arrastra sus dependencias solo.
  */
 struct SnapshotBuilder {
     uint32_t                       enabled = 0;       ///< mascara de Facts pedidos.
@@ -86,7 +77,7 @@ struct SnapshotBuilder {
         prof = &p;
         return enable(Fact::Profile);
     }
-    bool has(uint32_t e, Fact f) const noexcept {
+    static bool has(uint32_t e, Fact f) noexcept {
         return (e & static_cast<uint32_t>(f)) != 0;
     }
 
@@ -100,20 +91,17 @@ struct SnapshotBuilder {
         return e;
     }
 
-    /** @brief Construye la fotografia con los Facts resueltos. */
+    /** @brief Construye la foto forzando (eager) los Facts resueltos. */
     FunctionSnapshot build(const ir::IrFunction &fn) const {
         const uint32_t e = resolve(enabled);
         FunctionSnapshot s;
-        s.fn = &fn;
-        if (has(e, Fact::Liveness)) s.live = ir::compute_liveness(fn);
-        if (has(e, Fact::Loops))    s.loops = analysis::compute_loop_facts(fn);
-        if (has(e, Fact::Profile) && prof && !prof->empty())
-            s.profile = analysis::compute_profile_facts(fn, s.loops, *prof);
-        if (has(e, Fact::Values)) {
-            std::vector<uint32_t> calls = collect_call_positions(fn, s.live);
-            s.values =
-                assemble_value_requirements(fn, s.live, calls, s.loops, s.profile);
-        }
+        s.fn   = &fn;
+        s.prof = prof;
+        // Forzar via los accessors lazy (computan + cachean + resuelven deps).
+        if (has(e, Fact::Liveness)) (void)s.liveness();
+        if (has(e, Fact::Loops))    (void)s.loop_facts();
+        if (has(e, Fact::Profile))  (void)s.profile_facts();
+        if (has(e, Fact::Values))   (void)s.value_reqs();
         return s;
     }
 };
