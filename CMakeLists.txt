@@ -924,6 +924,19 @@ else ()
     target_link_libraries(test_rbank_liveness_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# ConstAdapter (Fase 0.25): is_const -> rematerializable.
+add_executable(test_rbank_const_adapter tests/jit/test_rbank_const_adapter.cpp)
+target_include_directories(test_rbank_const_adapter PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_const_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_const_adapter PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_const_adapter PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_const_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
