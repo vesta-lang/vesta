@@ -105,6 +105,21 @@ int main() {
               "lazy value_reqs no arrastro las dependencias");
     }
 
+    std::printf("\n[query<T>() generico: registro por tipo (QueryProducer)]\n");
+    {
+        FunctionSnapshot q; q.fn = &fn;
+        // El snapshot NO conoce el algoritmo: query<T>() lo pide al QueryProducer<T>.
+        CHECK(q.query<analysis::LoopFacts>().loop_count == 1, "query<LoopFacts> mal");
+        CHECK(!q.query<ir::LivenessResult>().intervals.empty(), "query<LivenessResult> vacio");
+        // Dependencias resueltas SOLAS por el productor (produce llama a query<U>()).
+        CHECK(!q.query<std::vector<ValueRequirements>>().empty(), "query<vector<VR>> vacio");
+        CHECK(q.is_computed(Fact::Liveness) && q.is_computed(Fact::Loops),
+              "query<Values> no arrastro sus dependencias via productor");
+        // El accessor nombrado es AZUCAR: MISMA celda cacheada que query<T>().
+        CHECK(&q.loop_facts() == &q.query<analysis::LoopFacts>(),
+              "el accessor no es la misma celda que query<T>()");
+    }
+
     PhysicalRegisterBank bank = physical_bank_x86_64(
         true, [] { BackendCaps c{}; c.sse2 = true; return c; }());
 

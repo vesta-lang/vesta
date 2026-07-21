@@ -41,17 +41,34 @@
  * interese (p.ej. para serializar).
  *
  * CRECE sin tocar consumidores: cada Fact nuevo (DomFacts/AliasFacts/Escape/
- * Memory/...) es una celda @c LazyFact + un accessor.
+ * Memory/MachineCostFacts/...) es una celda @c LazyFact + un @c QueryProducer<T>;
+ * @c query<T>() NO cambia.  El @c FunctionSnapshot practicamente no se toca.
  *
- * SEPARACION DATO / MECANISMO (direccion a largo plazo): el snapshot es DATO;
- * NO deberia conocer los ALGORITMOS.  Hoy los accessors aun invocan
- * @c compute_loop_facts / @c compute_profile_facts / @c assemble_value_requirements
- * dentro de sus lambdas productores -- esos lambdas son la COSTURA.  Cuando el
- * numero de Facts crezca, el UNICO responsable de "como se construye un Fact"
- * sera el @c SnapshotBuilder / un futuro @c QueryEngine, y el snapshot solo
- * almacenara (@c LazyFact) y devolvera resultados: bastara con inyectar un
- * productor y que los lambdas deleguen en el.  La celda @c LazyFact ya aisla el
- * ALMACENAMIENTO; falta aislar la PRODUCCION cuando duela.
+ * DIRECCION (no ahora): hoy cada Fact necesita DOS especializaciones -- @c cell<T>
+ * (donde se almacena) y @c QueryProducer<T> (como se produce).  Con 4-20 Facts es
+ * llevadero; con 50 empieza a pesar.  La evolucion natural es que un Fact sea una
+ * ENTIDAD completa (un Tag) que lleva ambas cosas:
+ *   @code struct LoopFactsTag { using value_type = analysis::LoopFacts;
+ *                               static value_type produce(const FunctionSnapshot&); }; @endcode
+ * y entonces @c query<LoopFactsTag>() ya sabe DONDE almacenarse (p.ej. un mapa
+ * type_index -> celda generico) y COMO producirse, sin mantener dos
+ * especializaciones separadas.  El mecanismo @c query<T>() se queda igual.
+ *
+ * CONTINUIDAD DE ESCALA: el mismo mecanismo @c query<T>() sirve a cualquier
+ * AMBITO sin cambiar -- @c ModuleSnapshot.query<CallGraphFacts>() /
+ * @c query<FunctionSnapshot>(), @c ProgramSnapshot.query<GlobalAliasFacts>().
+ * Solo cambia el alcance del conocimiento, no la forma de consultarlo (senal de
+ * que la abstraccion soporta crecer).
+ *
+ * SEPARACION DATO / MECANISMO (HECHO -- query system): el snapshot es DATO y ya
+ * NO conoce los ALGORITMOS.  @c query<T>() es generico: pide el Fact a su celda
+ * @c LazyFact<T> y, si falta, al productor REGISTRADO @c QueryProducer<T> (donde
+ * viven @c compute_loop_facts / @c assemble_value_requirements / ...).  El
+ * snapshot solo ALMACENA (celdas) y CONSULTA; la PRODUCCION esta aislada por
+ * tipo.  Anadir un Fact = registrar su @c QueryProducer + su celda, SIN tocar el
+ * mecanismo.  (Estilo query system de rustc: @c snapshot.query<LoopFacts>() sin
+ * saber quien lo calcula.)  Los accessors nombrados (@c loop_facts()...) quedan
+ * como azucar sobre @c query<T>().
  *
  * SERIALIZACION (futura, cuando haya consumidor): al ser DATOS, el snapshot es
  * serializable -> IR -> Snapshot -> cache.  Casi un "core dump" del conocimiento:
@@ -110,11 +127,33 @@ enum class Fact : uint32_t {
 };
 
 /**
+ * @struct QueryProducer
+ * @brief REGISTRO por tipo de COMO se produce un Fact (query system estilo rustc).
+ *
+ * Cada Fact @c T especializa @c QueryProducer<T> con
+ * @c "static T produce(const FunctionSnapshot&)".  AQUI vive el CONOCIMIENTO del
+ * algoritmo (compute_loop_facts / assemble_value_requirements / ...), NO en el
+ * snapshot.  El snapshot solo PIDE @c query<T>(); no sabe quien calcula.
+ *
+ *      snapshot.query<LoopFacts>()
+ *              |
+ *        cell<LoopFacts>() (celda LazyFact)  --miss-->  QueryProducer<LoopFacts>
+ *              |                                              ::produce(snapshot)
+ *          cache hit                                     (compute_loop_facts)
+ *
+ * Anadir un Fact = registrar su @c QueryProducer + su celda, SIN tocar el
+ * mecanismo @c query<T>().  El primario NO tiene definicion: pedir un Fact no
+ * registrado es un error de compilacion (no un fallo silencioso).
+ */
+template <typename T> struct QueryProducer;
+
+/**
  * @struct FunctionSnapshot
  * @brief Repositorio de conocimiento de una funcion con query system lazy.
  *
- * Los campos-cache son @c mutable: los accessors @c const los rellenan la
- * primera vez (demand-driven).  @c computed marca que hechos ya estan.
+ * DATO desacoplado de MECANISMO: el snapshot ALMACENA (celdas @c LazyFact) y
+ * CONSULTA (@c query<T>()); la PRODUCCION vive en @c QueryProducer<T>.  El
+ * snapshot no menciona ningun algoritmo.
  */
 struct FunctionSnapshot {
     const ir::IrFunction          *fn   = nullptr; ///< funcion de la que es foto.
@@ -140,33 +179,36 @@ struct FunctionSnapshot {
         }
     }
 
-    // --- QUERY SYSTEM (lazy + cache; los lambdas productores son la COSTURA que
-    //     migrara al QueryEngine cuando el snapshot deje de conocer algoritmos).
-    //     Las dependencias se resuelven SOLAS: los accessors se llaman entre si. ---
+    // --- QUERY SYSTEM (lazy + cache).  El snapshot NO conoce los algoritmos: el
+    //     query<T>() generico pide el Fact a su celda LazyFact<T> y, si falta, al
+    //     productor REGISTRADO QueryProducer<T> (donde vive compute_*/assemble_*).
+    //     Las dependencias se resuelven SOLAS: produce() llama a otros query<U>(). ---
 
-    /** @brief Intervalos de vida (compute-si-falta + cache). */
-    const ir::LivenessResult &liveness() const {
-        return live.get([&] { return ir::compute_liveness(*fn); });
+    /** @brief Celda @c LazyFact<T> de este snapshot (mapeo tipo -> almacenamiento).
+     *         Especializada fuera de la clase por cada Fact registrado. */
+    template <typename T> const LazyFact<T> &cell() const;
+
+    /**
+     * @brief Consulta un Fact @c T: cache-hit en su celda, o lo PRODUCE via el
+     *        @c QueryProducer<T> registrado (demand-driven).  El snapshot no
+     *        menciona ningun algoritmo -> DATO desacoplado de MECANISMO.
+     */
+    template <typename T> const T &query() const {
+        return cell<T>().get([&] { return QueryProducer<T>::produce(*this); });
     }
-    /** @brief LoopFacts (compute-si-falta + cache). */
-    const analysis::LoopFacts &loop_facts() const {
-        return loops.get([&] { return analysis::compute_loop_facts(*fn); });
-    }
-    /** @brief ProfileFacts (compute-si-falta + cache; vacio si no hay perfil). */
+
+    // --- Accessors de conveniencia (azucar sobre query<T>(); nombres estables). ---
+    /** @brief Intervalos de vida. */
+    const ir::LivenessResult &liveness() const { return query<ir::LivenessResult>(); }
+    /** @brief LoopFacts. */
+    const analysis::LoopFacts &loop_facts() const { return query<analysis::LoopFacts>(); }
+    /** @brief ProfileFacts (vacio si no hay perfil). */
     const analysis::ProfileFacts &profile_facts() const {
-        return profile.get([&]() -> analysis::ProfileFacts {
-            if (prof && !prof->empty())
-                return analysis::compute_profile_facts(*fn, loop_facts(), *prof);
-            return analysis::ProfileFacts{};
-        });
+        return query<analysis::ProfileFacts>();
     }
     /** @brief ValueRequirements (arrastra liveness + loops + profile). */
     const std::vector<ValueRequirements> &value_reqs() const {
-        return values.get([&] {
-            std::vector<uint32_t> calls = collect_call_positions(*fn, liveness());
-            return assemble_value_requirements(*fn, liveness(), calls,
-                                               loop_facts(), profile_facts());
-        });
+        return query<std::vector<ValueRequirements>>();
     }
 
     /**
@@ -199,6 +241,52 @@ struct FunctionSnapshot {
                     {analysis::FactCheck::LIVE_DEF_AFTER_END, iv.id, 0});
         rep.value_issues = audit_requirements(value_reqs(), bank, vec_reduction_active);
         return rep;
+    }
+};
+
+// ---------------------------------------------------------------------------
+//  Mapeo tipo -> celda (cell<T>): parte del ALMACENAMIENTO del snapshot.  Es la
+//  unica pieza que conoce que miembro guarda cada Fact; el resto es generico.
+// ---------------------------------------------------------------------------
+template <> inline const LazyFact<ir::LivenessResult> &
+FunctionSnapshot::cell<ir::LivenessResult>() const { return live; }
+template <> inline const LazyFact<analysis::LoopFacts> &
+FunctionSnapshot::cell<analysis::LoopFacts>() const { return loops; }
+template <> inline const LazyFact<analysis::ProfileFacts> &
+FunctionSnapshot::cell<analysis::ProfileFacts>() const { return profile; }
+template <> inline const LazyFact<std::vector<ValueRequirements>> &
+FunctionSnapshot::cell<std::vector<ValueRequirements>>() const { return values; }
+
+// ---------------------------------------------------------------------------
+//  Productores registrados por tipo (QueryProducer<T>): AQUI vive el ALGORITMO.
+//  El snapshot no los conoce; solo llama query<T>() -> QueryProducer<T>::produce.
+//  Las dependencias se resuelven SOLAS (produce llama a s.query<U>()).
+// ---------------------------------------------------------------------------
+template <> struct QueryProducer<ir::LivenessResult> {
+    static ir::LivenessResult produce(const FunctionSnapshot &s) {
+        return ir::compute_liveness(*s.fn);
+    }
+};
+template <> struct QueryProducer<analysis::LoopFacts> {
+    static analysis::LoopFacts produce(const FunctionSnapshot &s) {
+        return analysis::compute_loop_facts(*s.fn);
+    }
+};
+template <> struct QueryProducer<analysis::ProfileFacts> {
+    static analysis::ProfileFacts produce(const FunctionSnapshot &s) {
+        if (s.prof && !s.prof->empty())
+            return analysis::compute_profile_facts(
+                *s.fn, s.query<analysis::LoopFacts>(), *s.prof);
+        return analysis::ProfileFacts{};
+    }
+};
+template <> struct QueryProducer<std::vector<ValueRequirements>> {
+    static std::vector<ValueRequirements> produce(const FunctionSnapshot &s) {
+        std::vector<uint32_t> calls =
+            collect_call_positions(*s.fn, s.query<ir::LivenessResult>());
+        return assemble_value_requirements(*s.fn, s.query<ir::LivenessResult>(), calls,
+                                           s.query<analysis::LoopFacts>(),
+                                           s.query<analysis::ProfileFacts>());
     }
 };
 
