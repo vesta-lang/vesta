@@ -81,7 +81,10 @@ struct ValueRequirements {
     bool     is_gc            = false; ///< handle/puntero GC (visible en stackmap).
     bool     address_taken    = false; ///< se toma su direccion -> implica MEMORY.
     bool     rematerializable = false; ///< recomputable en vez de spillear (const/lea).
-    uint16_t loop_depth       = 0;     ///< profundidad de loop de su def (hotness).
+    uint16_t loop_depth       = 0;     ///< profundidad de loop de su def (hotness estatica).
+    /// Peso de ejecucion MEDIDO (de ProfileFacts).  0 = sin perfil -> el contexto
+    /// usa el estimador estatico @c static_execution_weight(loop_depth).
+    double   execution_weight = 0.0;
 
     /// Pin DURO a un registro fisico (inline asm / arg/ret del ABI): id o -1.
     int16_t fixed_reg = -1;

@@ -125,8 +125,10 @@ struct OptimizationContext {
      * atado a la heuristica @c 10^depth.
      */
     double execution_weight(const ValueRequirements &r) const noexcept {
-        // TODO Fase 0.25: si hay Profile cableado, usar su frecuencia medida.
-        return static_execution_weight(r.loop_depth);
+        // Preferir la frecuencia MEDIDA (ProfileFacts) si esta presente; si no
+        // (0 = sin perfil), caer al estimador estatico por profundidad de loop.
+        return r.execution_weight > 0.0 ? r.execution_weight
+                                        : static_execution_weight(r.loop_depth);
     }
 };
 

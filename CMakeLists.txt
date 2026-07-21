@@ -963,6 +963,32 @@ else ()
     target_link_libraries(test_rbank_loop_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# ProfileFacts (analysis/derived, fact Tipo B) + ProfileAdapter (banco ancho):
+# perfil centralizado -> trip-count/peso por bloque + adaptador execution_weight.
+add_executable(test_profile_facts tests/analysis/test_profile_facts.cpp)
+target_include_directories(test_profile_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_profile_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_profile_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_profile_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_profile_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_profile_adapter tests/jit/test_rbank_profile_adapter.cpp)
+target_include_directories(test_rbank_profile_adapter PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_profile_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_profile_adapter PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_profile_adapter PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_profile_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
