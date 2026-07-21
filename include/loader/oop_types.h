@@ -416,7 +416,7 @@ struct GenericParam {
 //    [ObjectHeader (24B)] <- inicio del payload; aqui apunta GcHeap::deref()
 //    [campos del objeto]
 //
-//  Cambio de ABI v3.1 (Phase Z.11 ext - 2026-05-23):
+//  Cambio de ABI v3.1 ( Z.11 ext - 2026-05-23):
 //    El owner del monitor es ahora el @c encoded_pid (48 bits) que
 //    combina @c scheduler_id (16 bits) + @c local_pid (32 bits).  El
 //    local_pid NO es unico cross-scheduler -- en --schedulers N>1, dos

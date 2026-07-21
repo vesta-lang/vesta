@@ -15,7 +15,7 @@
  *   - El GC durante un major collection: para cada frame JIT-eated en el
  *     stack del proceso, lookup_stackmap(rip) le dice que slots del frame
  *     contienen GcHandles y deben marcarse como roots.
- *   - El AV recovery handler (cuando llega Phase D.15): para mapear RIP a
+ *   - El AV recovery handler (cuando llega  D.15): para mapear RIP a
  *     funcion y emitir mensajes diagnosticos del estilo
  *     "crash en my_method offset 0x42".
  *   - Tools de debugging y profiling para resolver direcciones a nombres.

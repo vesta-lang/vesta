@@ -1,6 +1,6 @@
 /**
  * @file test_vx_vxi_format.cpp
- * @brief Round-trip emit/parse del formato .vxi (Phase M.2).
+ * @brief Round-trip emit/parse del formato .vxi ( M.2).
  *
  * Construye un VxiModule con simbolos de cada kind, lo serializa,
  * lo parsea y verifica que el resultado es semanticamente identico
@@ -12,7 +12,7 @@
  *   - Detecta truncacion (buffer corto).
  */
 
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 
 #include <cstdio>
 #include <iostream>
@@ -268,7 +268,7 @@ void test_modulo_vacio() {
     vx::VxiModule m;
     m.source_hash = 0xABCDEF;
     auto b = vx::vxi_emit(m);
-    // Phase M4.ext L.13: header crece de 40 a 48 bytes (dep_count +
+    //  M4.ext L.13: header crece de 40 a 48 bytes (dep_count +
     // dep_table_offset).
     CHECK(b.size() == 48, "modulo vacio = solo header (48 bytes en v3)");
     auto r = vx::vxi_parse(b.data(), b.size());
@@ -277,7 +277,7 @@ void test_modulo_vacio() {
     CHECK(r.module_.source_hash == 0xABCDEF, "source_hash preservado");
 }
 
-// Phase M4.ext L.13: dep table roundtrip.
+//  M4.ext L.13: dep table roundtrip.
 void test_dep_table_roundtrip() {
     std::cout << "\n[Test] dep table roundtrip (M4.ext L.13)\n";
     vx::VxiModule m;
@@ -301,7 +301,7 @@ void test_dep_table_roundtrip() {
           "dep[2].abi_hash");
 }
 
-// Phase M.L7: GLOBAL_VAR con valor literal inicial roundtrip.
+//  M.L7: GLOBAL_VAR con valor literal inicial roundtrip.
 void test_global_var_init_value() {
     std::cout << "\n[Test] GLOBAL_VAR con init_value (M.L7)\n";
     vx::VxiModule m;
@@ -333,7 +333,7 @@ void test_global_var_init_value() {
     CHECK(!r.module_.symbols[1].has_init_value, "has_init_value[1] == false");
 }
 
-// Phase M.L8: TYPEDEF_NEW con bloque explicit from/to roundtrip.
+//  M.L8: TYPEDEF_NEW con bloque explicit from/to roundtrip.
 void test_typedef_new_explicit_conversions() {
     std::cout << "\n[Test] TYPEDEF_NEW con explicit from/to (M.L8)\n";
     vx::VxiModule m;
@@ -371,7 +371,7 @@ void test_typedef_new_explicit_conversions() {
 } // namespace
 
 int main() {
-    std::cout << "=== test_vx_vxi_format: Phase M.2 ===\n";
+    std::cout << "=== test_vx_vxi_format:  M.2 ===\n";
 
     test_roundtrip();
     test_abi_hash_determinism();

@@ -1,6 +1,6 @@
 /**
  * @file velb_signature.cpp
- * @brief Implementacion de firmas digitales (Phase M.L28).
+ * @brief Implementacion de firmas digitales ( M.L28).
  *
  * Usa OpenSSL EVP_DigestSign / EVP_DigestVerify con SHA-256.  RSA y
  * ECDSA soportados; el algoritmo se detecta del tipo de la clave.

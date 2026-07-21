@@ -2,7 +2,7 @@
  * @file manifest.h
  * @brief Parser dual TOML/JSON del manifest de paquete (vx.toml / vx.json).
  *
- * Phase PM.1: estructura unica @c Manifest con accesores tipados.  Soporta
+ *  PM.1: estructura unica @c Manifest con accesores tipados.  Soporta
  * dos serializaciones equivalentes:
  *   - vx.toml (humano-friendly, canonico)
  *   - vx.json (machine-friendly, otros lenguajes pueden leer)

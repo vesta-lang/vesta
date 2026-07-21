@@ -128,7 +128,7 @@ extern "C" {
  * de la libstdc++ del compilador y no son estables cross-build sin
  * verificacion al inicio.
  *
- * Para Phase D.0 NO exponemos sus offsets aqui.  El JIT en Phase D.1
+ * Para  D.0 NO exponemos sus offsets aqui.  El JIT en  D.1
  * los obtendra via un descriptor inicializado en startup
  * (@c vrt_class_layout / @c vrt_method_layout) que el runtime calcula
  * con @c offsetof y publica como const globals.  Asi codigo AOT
@@ -192,7 +192,7 @@ extern "C" {
 /// dentro de ProcessVM.  Por tanto stack_pointer = registers_off + 0.
 /// Verificado en compile-time por @c abi_checks.cpp.
 ///
-/// Usado por Phase D.jit-mem-model VM-STACK: el JIT modifica el VM-RSP
+/// Usado por  D.jit-mem-model VM-STACK: el JIT modifica el VM-RSP
 /// al ejecutar ALLOCAs vx (consistente con interp `subsp`), salvando
 /// y restaurando el valor en prologue/epilogue.
 #define VESTA_PROC_STACK_POINTER_OFFSET 64
@@ -200,7 +200,7 @@ extern "C" {
 /// Offset de @c proc->registers.base_pointer (similar al anterior).
 #define VESTA_PROC_BASE_POINTER_OFFSET 72
 
-/// Offset del puntero @c jit_handle_table dentro de ProcessVM (Phase D.7).
+/// Offset del puntero @c jit_handle_table dentro de ProcessVM ( D.7).
 /// Es un campo POD (void*) colocado antes de los miembros no-POD (atomics,
 /// vectores, GcHeap), por lo que su offset es estable dentro de un mismo
 /// build del toolchain.  El JIT inline-a @c deref leyendo la HandleTable
@@ -209,7 +209,7 @@ extern "C" {
 /// aborta hasta actualizar este valor.
 #define VESTA_PROC_JIT_HANDLE_TABLE_OFFSET 1304
 
-/// Offset del puntero @c osr_buffer dentro de ProcessVM (OSR, Phase D.8).
+/// Offset del puntero @c osr_buffer dentro de ProcessVM (OSR,  D.8).
 /// Buffer-por-VID del state-transfer C1->C2: un array de uint64 (1 celda por
 /// IR VID) en el que el codigo C1, al disparar el tier-up por back-edge,
 /// escribe los valores vivos del loop header (buffer[vid]); el OSR-entry de C2
@@ -234,13 +234,13 @@ extern "C" {
 
 #ifdef __cplusplus
 namespace vesta_rt {
-/* Phase D.jit-mem-model INLINE-CACHE: offsets resueltos en runtime
+/*  D.jit-mem-model INLINE-CACHE: offsets resueltos en runtime
  * via offsetof.  Defined en abi_checks.cpp. */
 extern const int32_t kProcVmMemOffset;
 extern const int32_t kVmMemCachedPageVaddrOffset;
 extern const int32_t kVmMemCachedPageHostOffset;
 
-/* Phase D.7 perf inline-alloc (2026-06-06): offset del miembro
+/*  D.7 perf inline-alloc (2026-06-06): offset del miembro
  * @c raw_alloc (gc::RawAllocator) dentro de @c runtime::ProcessVM.
  * El JIT inline-a el fast-path del slab leyendo @c raw_alloc.slab_free_list_
  * y @c total_bytes_ (sus offsets internos via gc::RawAllocator::jit_*).
@@ -250,7 +250,7 @@ extern const int32_t kProcRawAllocOffset;
 #endif
 
 /* ----------------------------------------------------------------------- */
-/* VirtualMemory page cache offsets (Phase D.jit-mem-model INLINE-CACHE)  */
+/* VirtualMemory page cache offsets ( D.jit-mem-model INLINE-CACHE)  */
 /* ----------------------------------------------------------------------- */
 /* El JIT emite inline el page cache hit para LOAD/STORE sobre VM-addrs:
  *   page = vaddr & ~0xFFF

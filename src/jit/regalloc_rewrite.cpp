@@ -7,7 +7,7 @@
 
 /**
  * @file jit/regalloc_rewrite.cpp
- * @brief Implementacion del rewrite vreg -> fisico (Phase D.7, commit 4a).
+ * @brief Implementacion del rewrite vreg -> fisico ( D.7, commit 4a).
  *        Ver regalloc_rewrite.h y doc/REGALLOC.md.
  */
 
@@ -20,6 +20,9 @@
 #include <vector>
 
 #include "vesta_rt/abi.h" // VESTA_PROC_OSR_BUFFER_OFFSET / VESTA_OSR_BUFFER_N
+#include "vx/asm/asm_backend.h"  // ensamblar el asm DIFERIDO post-RA
+#include "vx/asm/asm_phys_reg.h" // nombre del reg fisico ($N -> reg)
+#include <cctype>
 
 namespace jit {
 
@@ -190,7 +193,7 @@ struct Lowerer {
     const TargetRegInfo &tri;
     bool vm_abi = false;      ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
     bool no_frame = false;    ///< hoja frameless: sin push/mov rbp ni sub rsp
-    bool naked = false;       ///< Phase NR @Naked: sin prologo/epilogo/ret
+    bool naked = false;       ///<  NR @Naked: sin prologo/epilogo/ret
     uint32_t k = 0;           ///< numero de callee-saved asignados
     uint32_t total_saved = 0; ///< callee-saved + (vm_abi ? 1 (rbx) : 0)
     int32_t spill_bytes = 0;  ///< tamano del area de spills (alineado)
@@ -213,9 +216,16 @@ struct Lowerer {
     /// de allocas host, por encima del shadow space Win64).
     bool has_vm_alloca = false;
     int32_t vm_rsp_save_off = 0;
+    /// Callback-ABI save-set (jubilacion de slots): si @c cb_save_regs, el
+    /// frame reserva 128B (16 qwords) donde @c CB_SAVE_REGS salva
+    /// proc->registers[0..15] del caller VM.  @c cb_save_base_off es el offset
+    /// (negativo desde RBP) del slot del reg 0; el reg r vive en
+    /// @c cb_save_base_off - r*8.
+    bool cb_save_regs = false;
+    int32_t cb_save_base_off = 0;
     MReg scr0 = MReg::R10;
     MReg scr1 = MReg::R11;
-    /// FP-regalloc (Phase AOT C1 float): scratch XMM del rewrite
+    /// FP-regalloc ( AOT C1 float): scratch XMM del rewrite
     /// (materializar spills FP + two-address legalization de ADDSD/etc),
     /// analogo a scr0/scr1 GP.  Por defecto XMM14/XMM15 (ver
     /// @c target_x86_64_target); se sobreescriben desde @c tri.scratch[FP].
@@ -233,9 +243,11 @@ struct Lowerer {
 
     Lowerer(const RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
             bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in,
-            uint32_t out_stack_args_in = 0, bool has_stack_params_in = false)
+            uint32_t out_stack_args_in = 0, bool has_stack_params_in = false,
+            bool cb_save_regs_in = false)
         : ra(r), tri(t), vm_abi(abi == AbiKind::VM),
-          has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in) {
+          has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in),
+          cb_save_regs(cb_save_regs_in) {
         SZ = t.pointer_size ? t.pointer_size : 8u;
         k = static_cast<uint32_t>(ra.callee_saved_used.size());
         total_saved = k + (vm_abi ? 1u : 0u); // +1 por el push rbx
@@ -253,6 +265,9 @@ struct Lowerer {
                    alloca_total == 0u && !has_vm_alloca &&
                    !has_stack_params_in && /* params en pila -> [rbp+off]
                   necesita el frame pointer estable (push rbp; mov rbp,rsp). */
+                   !cb_save_regs_in && /* save-set del callback: la work-area de
+                  128B vive en el frame ([rbp-...]) -> necesita frame estable +
+                  su reserva en spill_bytes (sub rsp). */
                    !jit_no_frameless() &&
                    !jit_osr_count(); /* el trigger (1b) añade un
                   call -> necesita frame con rsp 16-alineado. */
@@ -260,7 +275,7 @@ struct Lowerer {
         alloca_base = SZ * total_saved + SZ * ra.num_spill_slots;
         spill_bytes =
             static_cast<int32_t>(SZ * ra.num_spill_slots + alloca_total);
-        /* Fase 2: reservar un qword para el VM-RSP salvado, debajo del
+        /*   reservar un qword para el VM-RSP salvado, debajo del
          * area de allocas host y por encima del shadow space.  El
          * offset es fijo desde RBP (independiente del shadow/align que
          * se añade despues, que solo crece el frame hacia abajo). */
@@ -268,6 +283,15 @@ struct Lowerer {
             vm_rsp_save_off = -static_cast<int32_t>(
                 8u * total_saved + 8u * ra.num_spill_slots + alloca_total + 8u);
             spill_bytes += 8;
+        }
+        /* Callback save-set: reservar 128B (16 qwords) debajo de todo lo
+         * anterior (spills + allocas + vm_rsp) para salvar regs[0..15] del
+         * caller VM.  cb_save_base_off = offset del slot del reg 0 (los demas
+         * hacia abajo, -r*8).  no_frame es false (cuerpo no-hoja -> has_calls). */
+        if (cb_save_regs) {
+            cb_save_base_off =
+                -(static_cast<int32_t>(8u * total_saved) + spill_bytes + 8);
+            spill_bytes += 128;
         }
         if (!no_frame) {
             /* stack_arg_base = offset RSP del primer arg por pila.  Win64
@@ -320,7 +344,7 @@ struct Lowerer {
     };
     std::vector<PendingArg> pending_args;
 
-    /// Phase D.7 commit 6: intervalos (para stackmaps en CALLs) +
+    ///  D.7 commit 6: intervalos (para stackmaps en CALLs) +
     /// posicion lineal del CALL actual + stackmaps acumulados.
     const IntervalResult *ivs = nullptr;
     uint32_t cur_call_pos = 0;
@@ -449,7 +473,7 @@ struct Lowerer {
     }
 
     void emit_prologue(std::vector<MInstr> &out) const {
-        /* Phase NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
+        /*  NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
         if (naked) return;
         if (!no_frame) {
             out.push_back(push(MReg::RBP));
@@ -468,7 +492,7 @@ struct Lowerer {
         if (spill_bytes > 0)
             out.push_back(MInstr::make_unary(
                 MOp::SUB, reg(MReg::RSP), MOperand::make_imm32(spill_bytes)));
-        /* Fase 2: salvar el VM-RSP original al slot del frame.  Los
+        /*   salvar el VM-RSP original al slot del frame.  Los
          * ALLOCA_VM mas adelante decrementan proc->stack_pointer; el
          * epilogue lo restaura desde aqui (si no, el VM stack hace
          * leak/overflow entre llamadas).  scr0 (R10) es caller-saved y
@@ -485,7 +509,7 @@ struct Lowerer {
     }
 
     void emit_epilogue(std::vector<MInstr> &out) const {
-        /* Phase NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
+        /*  NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
         if (naked) return;
         if (no_frame) {
             /* Frameless: rsp ya apunta justo encima de los registros
@@ -497,7 +521,7 @@ struct Lowerer {
             if (vm_abi) out.push_back(pop(MReg::RBX));
             return;
         }
-        /* Fase 2: restaurar el VM-RSP original ANTES de desmontar el
+        /*   restaurar el VM-RSP original ANTES de desmontar el
          * frame (RBP/RBX aun validos).  Sin esto los ALLOCA_VM dejarian
          * proc->stack_pointer decrementado tras el RET -> leak/overflow
          * del VM stack global.  scr0 (R10) es caller-saved (libre). */
@@ -628,6 +652,55 @@ struct Lowerer {
         }
     }
 
+    /** @brief Resuelve un batch de copias de PHI de una MISMA arista como un
+     *  PARALLEL MOVE.  Todas las copias phi_dst_i <- arg_i se leen "a la vez"
+     *  en la arista; emitidas SECUENCIALMENTE corrompen si el regalloc asigno
+     *  phi_dst_i y arg_j al MISMO fisico (ciclo de permutacion) -- ocurre tras
+     *  ssa_coalesce, que aprieta la asignacion.  GP via emit_parallel_moves
+     *  (scr1 rompe ciclos con un scratch reservado), FP via _fp (fscr1).  Los
+     *  dst spilled se escriben primero (leen su src pristino antes de que un
+     *  reg-move lo pise). */
+    void lower_phi_parallel(const std::vector<const MInstr *> &phis,
+                            std::vector<MInstr> &out) {
+        std::vector<std::pair<MReg, MOperand>> reg_moves, freg_moves;
+        for (const MInstr *p : phis) {
+            const bool fp = is_fp_operand(p->dst) || is_fp_operand(p->src1);
+            const MOperand dst = resolve(p->dst);
+            const MOperand src = resolve(p->src1);
+            /* Self-copy (dst==src, mismo fisico): NO-OP en el parallel move.
+             * Incluirlo mete un self-loop en el grafo de dependencias que
+             * confunde la deteccion de ciclos de emit_parallel_moves.  Aparece
+             * con la coalescencia de phi auto-referenciales (`v = phi[.., v]`
+             * -> copia `mov v, v`).  Se salta. */
+            if (dst.is_reg() && src.kind == MOperandKind::REG &&
+                dst.reg == src.reg)
+                continue;
+            if (dst.is_reg()) {
+                if (fp)
+                    freg_moves.emplace_back(static_cast<MReg>(dst.reg), src);
+                else
+                    reg_moves.emplace_back(static_cast<MReg>(dst.reg), src);
+            } else {
+                /* dst spilled: store ahora (src pristino).  mem->mem via
+                 * scratch reservado. */
+                const MReg sc = fp ? fscr1 : scr1;
+                const MOp mop = fp ? MOp::MOVSD : MOp::MOV;
+                if (src.kind == MOperandKind::MEM) {
+                    out.push_back(MInstr::make_unary(
+                        mop, fp ? xmm(sc) : reg(sc), src));
+                    out.push_back(MInstr::make_unary(
+                        mop, dst, fp ? xmm(sc) : reg(sc)));
+                } else {
+                    out.push_back(MInstr::make_unary(mop, dst, src));
+                }
+            }
+        }
+        if (!reg_moves.empty())
+            emit_parallel_moves(std::move(reg_moves), scr1, out);
+        if (!freg_moves.empty())
+            emit_parallel_moves_fp(std::move(freg_moves), fscr1, out);
+    }
+
     /** @brief Marshala @c pending_args a los arg_regs del ABI host: los
      *  enteros (GP) con un parallel-move via MOV (scr1 rompe ciclos), los
      *  floats (FP) con un parallel-move via MOVSD a los XMM arg_regs (fscr1).
@@ -717,7 +790,31 @@ struct Lowerer {
             return;
         }
 
-        /* ===== FP-regalloc (Phase AOT C1 float) ===== */
+        /* ===== Callback save-set (jubilacion de slots) ===== */
+        if (op == MOp::CB_SAVE_REGS || op == MOp::CB_RESTORE_REGS) {
+            /* Expandir con R11 (scratch): copiar los 16 qwords entre
+             * proc->registers[r] ([rbx + REGISTERS_OFFSET + r*8]) y la
+             * work-area del frame ([rbp + cb_save_base_off - r*8]).  RBX =
+             * ProcessVM* (VM_ABI), cargado por LOAD_PROC antes del SAVE. */
+            const bool save = (op == MOp::CB_SAVE_REGS);
+            for (uint32_t r = 0; r < 16u; ++r) {
+                const MOperand vmreg = MOperand::make_mem(
+                    MReg::RBX, VESTA_PROC_REGISTERS_OFFSET +
+                                   static_cast<int32_t>(r) * VESTA_REGISTER_SIZE);
+                const MOperand frame = MOperand::make_mem(
+                    MReg::RBP, cb_save_base_off - static_cast<int32_t>(r) * 8);
+                if (save) {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), vmreg));
+                    out.push_back(MInstr::make_unary(MOp::MOV, frame, reg(scr1)));
+                } else {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), frame));
+                    out.push_back(MInstr::make_unary(MOp::MOV, vmreg, reg(scr1)));
+                }
+            }
+            return;
+        }
+
+        /* ===== FP-regalloc ( AOT C1 float) ===== */
 
         /* FP MOV (dst/src de clase float): movimiento de un escalar f64/f32.
          * El selector emite @c MOp::MOV para copias FP, el param-init
@@ -725,11 +822,26 @@ struct Lowerer {
          * enruta al MOVSD/MOVSS.  Ambos pueden estar en XMM o en un slot de
          * pila (spilled).  x86 no tiene mov mem,mem -> si AMBOS son MEM se
          * pasa por el scratch XMM. */
-        if (op == MOp::MOV && (is_fp_operand(in.dst) || is_fp_operand(in.src1))) {
+        MOperand d_res = (op == MOp::MOV) ? resolve(in.dst) : MOperand::none();
+        MOperand s_res = (op == MOp::MOV) ? resolve(in.src1) : MOperand::none();
+        // La clase se decide por (a) la clase declarada del vreg operando, o
+        // (b) el REGISTRO FiSICO ASIGNADO por el linear-scan.  Ambos deben
+        // coincidir, pero si por cualquier razon divergen (un vreg cuya clase
+        // declarada quedo GP pero recibio un XMM), el fisico manda: un MOV a/de
+        // un XMM ES un movimiento FP y DEBE emitirse como MOVSD/MOVSS.  Sin
+        // esto el encoder enmascararia el XMM al GP homonimo (`mov rax`), lo que
+        // (1) corromperia un f64 vivo y (2) haria que el modelo de efectos del
+        // scheduler viera W[xmm] cuando el hardware escribe W[rax] -> perderia
+        // el hazard WAW y reordenaria a valores incorrectos.
+        const bool fp_phys =
+            (d_res.is_reg() && is_xmm(static_cast<MReg>(d_res.reg))) ||
+            (s_res.is_reg() && is_xmm(static_cast<MReg>(s_res.reg)));
+        if (op == MOp::MOV &&
+            (is_fp_operand(in.dst) || is_fp_operand(in.src1) || fp_phys)) {
             const MOp mv =
                 fp_mov_for_width(in.dst.width ? in.dst.width : in.src1.width);
-            MOperand d = resolve(in.dst);
-            MOperand s = resolve(in.src1);
+            MOperand d = d_res;
+            MOperand s = s_res;
             if (d.kind == MOperandKind::MEM && s.kind == MOperandKind::MEM) {
                 out.push_back(MInstr::make_unary(mv, xmm(fscr0), s));
                 out.push_back(MInstr::make_unary(mv, d, xmm(fscr0)));
@@ -779,9 +891,11 @@ struct Lowerer {
         if (op == MOp::ADDSD || op == MOp::SUBSD || op == MOp::MULSD ||
             op == MOp::DIVSD || op == MOp::ADDSS || op == MOp::SUBSS ||
             op == MOp::MULSS || op == MOp::DIVSS || op == MOp::XORPS ||
-            op == MOp::ANDPS) {
+            op == MOp::ANDPS || op == MOp::MINSD || op == MOp::MAXSD ||
+            op == MOp::MINSS || op == MOp::MAXSS) {
             const bool is_ss = (op == MOp::ADDSS || op == MOp::SUBSS ||
-                                op == MOp::MULSS || op == MOp::DIVSS);
+                                op == MOp::MULSS || op == MOp::DIVSS ||
+                                op == MOp::MINSS || op == MOp::MAXSS);
             const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;
             const bool commutative =
                 (op == MOp::ADDSD || op == MOp::MULSD || op == MOp::ADDSS ||
@@ -837,10 +951,15 @@ struct Lowerer {
             return;
         }
 
-        /* FP unaria con dst XMM (SQRTSD/SQRTSS): dst = sqrt(src).  src puede
-         * estar spilled -> materializar a fscr1; dst spilled -> fscr0. */
-        if (op == MOp::SQRTSD || op == MOp::SQRTSS) {
-            const MOp mv = (op == MOp::SQRTSS) ? MOp::MOVSS : MOp::MOVSD;
+        /* FP unaria con dst XMM (SQRTSD/SQRTSS + ROUNDSD): dst = f(src).  src
+         * puede estar spilled -> materializar a fscr1; dst spilled -> fscr0.
+         * ROUNDSD lleva el modo de redondeo en @c variant (floor/ceil/round/
+         * trunc) -> se propaga al MInstr emitido. */
+        if (op == MOp::SQRTSD || op == MOp::SQRTSS || op == MOp::ROUNDSD ||
+            op == MOp::ROUNDSS) {
+            const MOp mv = (op == MOp::SQRTSS || op == MOp::ROUNDSS)
+                               ? MOp::MOVSS
+                               : MOp::MOVSD;
             const bool dst_spilled =
                 in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
             const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
@@ -850,7 +969,8 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
-            out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
+            out.back().flags = in.flags;     // propagar MI_FLAG_VX_SCALAR
+            out.back().variant = in.variant; // ROUNDSD: modo de redondeo
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -1012,7 +1132,7 @@ struct Lowerer {
             MInstr call;
             call.op = MOp::CALL_SYM;
             call.src1 = in.src1;
-            /* Phase AOT-GC (Inc 1): describir los GC roots vivos a traves de
+            /*  AOT-GC (Inc 1): describir los GC roots vivos a traves de
              * este call (gc<T>).  El linear_scan los forzo a slots; el GC los
              * lee via el stackmap.  Antes se omitia ("BARE sin GC"); ahora el
              * gc<T> opt-in los necesita.  Vacio (0 slots) si no hay valores GC
@@ -1167,7 +1287,7 @@ struct Lowerer {
         }
 
         if (op == MOp::RET) {
-            /* Phase NR @Naked: NO emitir el ret implicito; el cuerpo (asm)
+            /*  NR @Naked: NO emitir el ret implicito; el cuerpo (asm)
              * provee la salida real (ret/iretq).  Un ret aqui seria, en el
              * mejor caso, codigo muerto tras un iretq; en el peor, pisaria
              * la convencion de interrupcion. */
@@ -1192,17 +1312,125 @@ struct Lowerer {
              * en RAX/RDX (van a callee-saved), asi el clobber es seguro. */
             const MOperand a = resolve(in.src1); // dividendo
             const MOperand b = resolve(in.src2); // divisor
+            const bool uns = (in.variant & 2u) != 0u; // bit1 = unsigned
             out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), b));
             out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RAX), a));
-            {
+            if (uns) {
+                /* unsigned: RDX = 0 (xor rdx,rdx) + DIV (F7 /6).  Sin cqo:
+                 * el dividendo es u64, RDX:RAX = 0:dividendo. */
+                out.push_back(MInstr::make_binary(MOp::XOR, reg(MReg::RDX),
+                                                  reg(MReg::RDX),
+                                                  reg(MReg::RDX)));
+                out.push_back(
+                    MInstr::make_unary(MOp::DIV_U, MOperand{}, reg(scr1)));
+            } else {
+                /* signed: CQO (sign-extend RAX -> RDX:RAX) + IDIV (F7 /7). */
                 MInstr c;
                 c.op = MOp::CQO;
                 out.push_back(c);
+                out.push_back(
+                    MInstr::make_unary(MOp::IDIV, MOperand{}, reg(scr1)));
             }
-            out.push_back(MInstr::make_unary(MOp::IDIV, MOperand{}, reg(scr1)));
-            const MReg res = (in.variant == 1u) ? MReg::RDX : MReg::RAX;
+            const MReg res = (in.variant & 1u) ? MReg::RDX : MReg::RAX;
             out.push_back(
                 MInstr::make_unary(MOp::MOV, resolve(in.dst), reg(res)));
+            return;
+        }
+
+        if (op == MOp::SHIFT_V) {
+            /* dst = src1 <shift> src2 (cuenta variable).  x86 exige la cuenta en
+             * CL: el selector la pineo a RCX (tmp de vida corta).  Usamos R11
+             * (scr1, reservado) como reg de trabajo -> nunca clobbea un vivo:
+             *   mov  r11, value    ; value != RCX (interfiere con la cuenta)
+             *   shift r11, cl      ; CL = RCX (la cuenta)
+             *   mov  dst, r11
+             * variant: 0=SHL, 1=SHR, 2=SAR. */
+            const MOperand v = resolve(in.src1); // value (!= RCX)
+            const MOperand c = resolve(in.src2); // cuenta (pineada a RCX)
+            /* Defensivo: garantizar la cuenta en RCX (no-op si el pin la dejo
+             * ya ahi; cubre un eventual spill del tmp). */
+            if (!(c.kind == MOperandKind::REG &&
+                  c.reg == static_cast<uint8_t>(MReg::RCX)))
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RCX), c));
+            out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), v));
+            const MOp mop = (in.variant == 0u)   ? MOp::SHL
+                            : (in.variant == 1u) ? MOp::SHR
+                            : (in.variant == 2u) ? MOp::SAR
+                            : (in.variant == 3u) ? MOp::ROL
+                                                 : MOp::ROR;
+            MInstr sh{};
+            sh.op = mop;
+            sh.dst = reg(scr1);     // r11 = valor de trabajo
+            sh.src1 = reg(MReg::RCX); // CL -> el encoder emite la forma 0xD3
+            out.push_back(sh);
+            out.push_back(MInstr::make_unary(MOp::MOV, resolve(in.dst),
+                                             reg(scr1)));
+            return;
+        }
+
+        if (op == MOp::ATOMICADD_V) {
+            /* lock xadd [addr], val.  dst (in/out) trae delta y sale con el
+             * valor viejo; src1 = addr.  SIN registro fijo: dst y addr los
+             * asigno el allocator.  Spills -> scr1 (r11) para addr y un
+             * caller-saved libre (r10/r9) para el valor.  call-position ->
+             * los caller-saved no tienen vregs vivos aparte de estos operandos. */
+            const MOperand d = resolve(in.dst);  // delta in / old out
+            const MOperand a = resolve(in.src1); // addr
+            MReg base;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                base = scr1;
+            } else {
+                base = static_cast<MReg>(a.reg);
+            }
+            MReg valreg;
+            const bool val_spilled = (d.kind == MOperandKind::MEM);
+            if (val_spilled) {
+                valreg = (base != MReg::R10) ? MReg::R10 : MReg::R9;
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(valreg), d));
+            } else {
+                valreg = static_cast<MReg>(d.reg);
+            }
+            MInstr xa{};
+            xa.op = MOp::LOCK_XADD;
+            xa.dst = MOperand::make_mem(base, 0); // [addr]
+            xa.src1 = reg(valreg);                // valor (in/out)
+            out.push_back(xa);
+            if (val_spilled) {
+                out.push_back(MInstr::make_unary(MOp::MOV, d, reg(valreg)));
+            }
+            return;
+        }
+
+        if (op == MOp::ATOMICCAS_V) {
+            /* lock cmpxchg [addr], desired.  dst (in/out) esta PRECOLOREADO a
+             * RAX (obligado por la ISA de cmpxchg): entra expected, sale old.
+             * addr y desired son LIBRES (el precoloreo garantiza que no caen en
+             * RAX).  Spills -> scr1 (r11) para addr, caller-saved libre para
+             * desired.  call-position: los caller-saved estan libres. */
+            const MOperand a = resolve(in.src1);   // addr (!= RAX)
+            const MOperand des = resolve(in.src2); // desired (!= RAX)
+            MReg base;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                base = scr1;
+            } else {
+                base = static_cast<MReg>(a.reg);
+            }
+            MReg srcreg;
+            if (des.kind == MOperandKind::MEM) {
+                srcreg = (base != MReg::R10) ? MReg::R10 : MReg::R9;
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(srcreg), des));
+            } else {
+                srcreg = static_cast<MReg>(des.reg);
+            }
+            MInstr cx{};
+            cx.op = MOp::LOCK_CMPXCHG;
+            cx.dst = MOperand::make_mem(base, 0); // [addr]
+            cx.src1 = reg(srcreg);                // desired
+            out.push_back(cx);
+            /* El viejo queda en RAX = resolve(in.dst) (precoloreado); el selector
+             * ya emitio el MOV final dst_ir <- rax_v.  Nada mas que hacer. */
             return;
         }
 
@@ -1217,7 +1445,14 @@ struct Lowerer {
             } else {
                 addr_reg = static_cast<MReg>(a.reg);
             }
-            const MOperand mem = MOperand::make_mem(addr_reg, 0);
+            /* P2 SIB: si src2 es IMM32, es el disp fusionado (`[base+disp]`),
+             * igual que en la ruta GP de abajo.  Ignorarlo (disp 0) hacia que
+             * TODOS los campos float de un struct se leyeran del offset 0: un
+             * `struct Rect { Punto min; Punto max; }` con f64 devolvia
+             * min.x para max.x, etc. -- silencioso y con valores plausibles. */
+            const int32_t fld_disp =
+                (in.src2.kind == MOperandKind::IMM32) ? in.src2.value : 0;
+            const MOperand mem = MOperand::make_mem(addr_reg, fld_disp);
             const MOp mv = fp_mov_for_width(width ? width : 8);
             const bool dst_spilled =
                 in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
@@ -1780,7 +2015,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
     /* Detectar si la funcion tiene CALLs (para reservar shadow space). */
     bool has_calls = false;
     uint32_t alloca_total = 0;  // commit 8: bytes de allocas en el frame
-    bool has_vm_alloca = false; // Fase 2: reserva en el VM stack del proceso
+    bool has_vm_alloca = false; //   reserva en el VM stack del proceso
     for (const auto &b : vf.blocks) {
         for (const auto &in : b.instrs) {
             if (in.op == MOp::CALL || in.op == MOp::CALL_ABS) has_calls = true;
@@ -1844,8 +2079,8 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
         vf.param_vregs.size() >
         tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca,
-               max_stack_args, has_stack_params);
-    lw.naked = vf.naked; // Phase NR @Naked: sin prologo/epilogo/ret
+               max_stack_args, has_stack_params, vf.cb_save_regs);
+    lw.naked = vf.naked; //  NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;
     lw.pf = &pf; // labels intra-expansion (LOAD_VM/STORE_VM page-cache)
@@ -1861,11 +2096,56 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
      * vreg al fisico; el encoder (que corre sobre @c pf) appendea las
      * @c MReloc referenciando estos indices. */
     pf.reloc_symbols = vf.reloc_symbols;
-    /* Phase AS inc.5: los bytes del inline-asm los consume el ENCODER, que
+    /*  AS inc.5: los bytes del inline-asm los consume el ENCODER, que
      * corre sobre @c pf (la funcion reescrita) -> hay que arrastrarlos.
      * (@c vreg_fixed NO se copia: lo consume @c build_intervals, que corre
      * sobre @c vf ANTES del rewrite.) */
     pf.asm_blobs = vf.asm_blobs;
+    /* ENSAMBLADO DIFERIDO.  Los blobs de un `asm ( reg x )` con
+     * operandos AUTO llegan sin bytes: su plantilla lleva $N y el fisico de
+     * cada operando lo acaba de elegir el asignador.  Sustituimos $N por el
+     * registro real (@c ra.reg_of del vreg, o el pin @c fixed_phys) y llamamos
+     * al ensamblador.  Asi el operando `reg` se integra con el regalloc de la
+     * funcion (registro OPTIMO) en vez del pick greedy compile-time. */
+    if (vx::g_asm_backend != nullptr) {
+        for (AsmBlob &b : pf.asm_blobs) {
+            if (!b.deferred) continue;
+            std::string nasm;
+            bool ok = true;
+            const std::string &t = b.deferred_tmpl;
+            for (size_t i = 0; i < t.size();) {
+                if (t[i] != '$') { nasm += t[i++]; continue; }
+                size_t j = i + 1;
+                uint32_t idx = 0;
+                bool any = false;
+                while (j < t.size() &&
+                       std::isdigit(static_cast<unsigned char>(t[j]))) {
+                    idx = idx * 10 + static_cast<uint32_t>(t[j] - '0');
+                    ++j;
+                    any = true;
+                }
+                if (!any || idx >= b.deferred_ops.size()) {
+                    nasm += t[i++]; // '$' literal / fuera de rango -> verbatim
+                    continue;
+                }
+                const AsmBlob::DeferredOp &d = b.deferred_ops[idx];
+                int phys = d.fixed_phys >= 0
+                               ? d.fixed_phys
+                               : static_cast<int>(ra.reg_of(d.vreg));
+                std::string nm = vx::asm_phys_reg_name(b.deferred_isa,
+                                                       d.regclass, phys, d.width);
+                if (nm.empty()) { ok = false; break; }
+                nasm += nm;
+                i = j;
+            }
+            if (ok) {
+                vx::AsmAssembleResult ar =
+                    vx::g_asm_backend->assemble(nasm, vx::AsmArch::X86_64);
+                if (ar.ok && !ar.bytes.empty()) b.bytes = std::move(ar.bytes);
+            }
+            b.deferred = false; // ensamblado (o fallo -> bytes vacio, no emite)
+        }
+    }
     pf.blocks.resize(vf.blocks.size());
 
     /* OSR 1a: deteccion PRECISA de loop back-edges via DFS (clasico:
@@ -1942,6 +2222,17 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
                                                            vf.param_vregs, outv)
                                 : 0;
         size_t ii = 0;
+        /* Batch de copias de PHI (variant==0xFD): una MISMA arista es un
+         * PARALLEL MOVE.  Se acumulan y se resuelven juntas con
+         * lower_phi_parallel (rompe ciclos con scratch); si se bajaran una a
+         * una via lw.lower(), la emision secuencial corromperia un ciclo de
+         * permutacion creado por el regalloc (post ssa_coalesce). */
+        std::vector<const MInstr *> pending_phi;
+        auto flush_phi = [&]() {
+            if (pending_phi.empty()) return;
+            lw.lower_phi_parallel(pending_phi, outv);
+            pending_phi.clear();
+        };
         for (const MInstr &in : vf.blocks[b].instrs) {
             if (ii < param_skip) {
                 ++ii;
@@ -1949,6 +2240,12 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
                 continue;
             }
             ++ii;
+            if (in.op == MOp::MOV && in.variant == 0xFD) {
+                pending_phi.push_back(&in); // acumular; resolver en batch
+                ++gi;
+                continue;
+            }
+            flush_phi(); // resolver las copias de PHI antes del terminador
             lw.cur_call_pos = 2u * gi;
             /* Solo-LSP: las MInstr fisicas que emite lower() se construyen
              * frescas (make_unary/...), perdiendo el source_pc de @c in.
@@ -1966,6 +2263,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
             }
             ++gi;
         }
+        flush_phi(); // por si el bloque termina en copias de PHI
         /* OSR 1a: instrumentar el back-edge (BR incondicional a un bloque
          * anterior).  El counter va ANTES del JMP terminal; el `add` toca
          * flags pero el JMP no las lee.  push/pop rax preserva el estado.
@@ -2297,7 +2595,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
 }
 
 /* ===================================================================== */
-/* OSR runtime glue (Phase D.8, 2c) -- definiciones publicas              */
+/* OSR runtime glue ( D.8, 2c) -- definiciones publicas              */
 /* ===================================================================== */
 
 void set_osr_handler(uint64_t (*handler)(uint64_t)) {

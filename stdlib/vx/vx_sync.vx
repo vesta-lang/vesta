@@ -1,6 +1,6 @@
 /**
  * @file vx_sync.vx
- * @brief Runtime de monitores reentrantes nativo para Vex AOT (tiers
+ * @brief Runtime de monitores reentrantes nativo para  AOT (tiers
  *        bare/embed), SIN libc.
  *
  * Auto-bundle: el driver `-m aot` fusiona este modulo cuando el programa usa
@@ -27,10 +27,18 @@
  * (kernel32, unica dependencia en Windows), Linux via syscall `gettid` (186)
  * RAW sin libc.  La aritmetica de la palabra y el `lock cmpxchg` son comunes.
  *
- * @note Phase 4 (hilos reales del SO): el spin con PAUSE se sustituye por un
+ * @note  4 (hilos reales del SO): el spin con PAUSE se sustituye por un
  *       bloqueo via `WaitOnAddress` (Windows) / `futex` (Linux) sobre la misma
  *       palabra, y el cache de TID pasa a ser thread-local.
  */
+
+// FN.4 (LIM-5): el runtime de asincronia expone el fiber-id de la tarea en
+// ejecucion (0 = main / sin fibra) y el yield cooperativo.  El monitor usa el
+// fiber-id como duenño (las fibras comparten TID -> el TID no distingue) y CEDE
+// en contencion en vez de spin (que deadlockearia en el modelo cooperativo
+// single-thread: el duenño nunca correria).  Cross-modulo via el auto-bundle
+// multi-modulo (compile_vx_project).
+import "vx_async" only vasync_yield, vasync_cur_fiber;
 
 // ---------------------------------------------------------------------------
 // FFI minima: identificador del hilo actual.
@@ -62,23 +70,18 @@ i64 __vsync_tid_raw() {
     return rax_t;
 }
 
-/// Cache del TID (0 = sin inicializar).  Valido en el modelo cooperativo
-/// single-thread; con hilos reales (Phase 4) debe pasar a thread-local.
-i64 __vsync_tid_cache = 0;
-
 /**
- * @brief TID del hilo actual, cacheado para evitar un syscall por adquisicion.
+ * @brief TID del hilo actual.
  * @return Id de hilo (>0).
- * @note El TID nunca es 0 (ni en Windows ni en Linux), por eso 0 sirve de
- *       centinela de "sin inicializar".
+ * @note NO se cachea: con MULTIHILO real un cache en un global compartido daria
+ *       el mismo TID a todos los hilos (el 2o hilo leeria el del 1o) -> se
+ *       creerian mutuamente reentrantes y el monitor NO daria exclusion.  En
+ *       Windows @c GetCurrentThreadId lee el TEB (barato); en Linux @c gettid es
+ *       un syscall (correcto).  Una optimizacion futura seria un cache
+ *       thread-local (thread_local emite TLS nativo en AOT).
  */
 i64 __vsync_tid() {
-    i64 t = __vsync_tid_cache;
-    if (t == 0) {
-        t = __vsync_tid_raw();
-        __vsync_tid_cache = t;
-    }
-    return t;
+    return __vsync_tid_raw();
 }
 
 // ---------------------------------------------------------------------------
@@ -153,12 +156,29 @@ i64 __vsync_depth(i64 word) {
     return word & 0xFFFF;
 }
 
+/**
+ * @brief Identidad del "duenño" del monitor: COMPUESTO (tid, fiber-id).
+ * @return `(tid << 16) | fiber_id` -> distingue tanto HILOS REALES del SO (tids
+ *         distintos) como FIBRAS cooperativas del mismo hilo (fiber_id distinto).
+ * @note El owner ocupa los bits 63..16 de la palabra de monitor (48 bits): tid
+ *       (32b, GetCurrentThreadId/gettid) en 47..16 y fiber_id (16b) en 15..0 del
+ *       owner.  Nunca 0 (tid nunca es 0) -> compatible con el centinela "libre".
+ *       Cubre a la vez el modelo COOPERATIVO (single-thread, fibras) y el
+ *       MULTIHILO real (spawn = hilo del SO): un hilo real tiene fiber_id 0 y su
+ *       tid lo identifica; dos fibras del mismo hilo comparten tid pero difieren
+ *       en fiber_id.  La contienda cede (fibra) o spinea (hilo real) segun el
+ *       caso en __vx_monenter.
+ */
+i64 __vsync_self() {
+    return (__vsync_tid() << 16) | vasync_cur_fiber();
+}
+
 // ---------------------------------------------------------------------------
 // API publica: monenter / monexit.
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Adquiere el monitor reentrante de @p obj (op MONENTER de Vex).
+ * @brief Adquiere el monitor reentrante de @p obj (op MONENTER de ).
  * @param obj host_ptr al ObjectHeader (lo que devuelve `new` en native_poo).
  *
  * La palabra de monitor vive en `obj + 16` (= `obj + 2` en aritmetica `i64*`).
@@ -171,8 +191,8 @@ i64 __vsync_depth(i64 word) {
  */
 void __vx_monenter(i64* obj) {
     i64* word_addr = obj + 2; // obj + 16 bytes
-    i64 tid = __vsync_tid();
-    i64 want1 = __vsync_make(tid, 1);
+    i64 self = __vsync_self(); // fiber-id+1 (owner en el modelo cooperativo)
+    i64 want1 = __vsync_make(self, 1);
     // Fast path optimista: monitor libre -> tomarlo con una unica CAS.
     if (__vsync_cas64(word_addr, 0, want1) == 0) {
         return; // adquirido sin contienda
@@ -186,21 +206,29 @@ void __vx_monenter(i64* obj) {
             if (__vsync_cas64(word_addr, 0, want1) == 0) {
                 return;
             }
-        } else if (__vsync_owner(cur) == tid) {
-            // Reentrante: incrementar la profundidad (CAS para no pisar un
-            // wake concurrente; en single-thread siempre triunfa).
-            i64 want = __vsync_make(tid, depth + 1);
+        } else if (__vsync_owner(cur) == self) {
+            // Reentrante (misma fibra): incrementar la profundidad.
+            i64 want = __vsync_make(self, depth + 1);
             if (__vsync_cas64(word_addr, cur, want) == cur) {
                 return;
             }
+        } else {
+            // Contienda REAL: otra fibra posee el monitor.  En el scheduler
+            // cooperativo hay que CEDER (no spin): la fibra duenña solo puede
+            // liberar si el scheduler la corre.  Si estamos en una fibra
+            // (__vasync_current_fiber != 0) cedemos al scheduler; si no (main
+            // sin scheduler) no hay contienda posible -> pause defensivo.
+            if (vasync_cur_fiber() != 0) {
+                vasync_yield();
+            } else {
+                __vsync_pause();
+            }
         }
-        // Ocupado por otro hilo: ceder y reintentar.
-        __vsync_pause();
     }
 }
 
 /**
- * @brief Libera el monitor reentrante de @p obj (op MONEXIT de Vex).
+ * @brief Libera el monitor reentrante de @p obj (op MONEXIT de ).
  * @param obj host_ptr al ObjectHeader.
  *
  * Si la profundidad es 1 (ultima salida) libera la palabra a 0 (release); si es
@@ -216,4 +244,27 @@ void __vx_monexit(i64* obj) {
         // Todavia reentrante: decrementar manteniendo el duenño.
         *word_addr = __vsync_make(__vsync_owner(cur), depth - 1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// API publica exportable (monitor sobre un host_ptr crudo al objeto).
+// `synchronized` baja a __vx_monenter/__vx_monexit via el bundle; estos wrappers
+// (sin prefijo `__`, exportables al .vxi) permiten a OTROS modulos (p.ej.
+// vx_thread + codigo multihilo) tomar/soltar el monitor de un objeto por puntero.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Adquiere el monitor reentrante del objeto en @p obj (host_ptr).
+ * @param obj host_ptr al ObjectHeader (palabra de monitor en obj+16).
+ */
+public void vx_lock(i64* obj) {
+    __vx_monenter(obj);
+}
+
+/**
+ * @brief Libera el monitor reentrante del objeto en @p obj (host_ptr).
+ * @param obj host_ptr al ObjectHeader.
+ */
+public void vx_unlock(i64* obj) {
+    __vx_monexit(obj);
 }

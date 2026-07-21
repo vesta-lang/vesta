@@ -20,11 +20,21 @@
 #
 # vxi_compiler_version_hash() usa VXI_COMPILER_BUILD_ID si esta definido.
 # Aqui generamos ese identificador como un hash de las fuentes que afectan la
-# SALIDA del compilador (frontend Vesta + IR + emisores de bytecode + AOT/JIT).
-# El header solo se reescribe cuando ese hash cambia, de modo que:
-#   - cambiar lowering/IR/emisores -> nuevo hash -> caches invalidados.
-#   - recompilar sin tocar codegen  -> mismo hash -> caches conservados.
+# SALIDA del compilador.  El header solo se reescribe cuando ese hash cambia:
+#   - cambiar lowering/IR/emisores/linker -> nuevo hash -> caches invalidados.
+#   - recompilar sin tocar codegen        -> mismo hash -> caches conservados.
 # Esto evita el bug de "edite el compilador pero el .vxir viejo se reuso".
+#
+# El criterio es TODO lo que decide los bytes del artefacto, no solo el
+# frontend.  El `.vpc` cachea el `.velb` FINAL, asi que la cadena entera cuenta:
+#
+#   .vx --[preprocesador]--> .vx --[frontend vx]--> IR --[ir_emitter]--> .vel
+#       --[lexer + parser + emmit + linker]--> .velb        (o AOT/JIT/port)
+#
+# Faltaban los cuatro ultimos: un cambio del LINKER (layout de secciones,
+# relocs, @sym) no invalidaba nada y el `.vpc` seguia sirviendo un `.velb`
+# emitido por el linker viejo.  Ante la duda, sobre-invalidar: reemitir es
+# barato y estas fuentes cambian poco; servir un artefacto stale no lo es.
 file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/vx/*.cpp     ${CMAKE_SOURCE_DIR}/src/vx/*.h
     ${CMAKE_SOURCE_DIR}/include/vx/*.h
@@ -36,6 +46,16 @@ file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/port/transpiler_base.cpp
     ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/port/snippet_loader.cpp
+    # --- .vel -> .velb: lo que ensambla y enlaza el bytecode final ---
+    ${CMAKE_SOURCE_DIR}/src/lexer/*.cpp   ${CMAKE_SOURCE_DIR}/include/lexer/*.h
+    ${CMAKE_SOURCE_DIR}/src/parser/*.cpp  ${CMAKE_SOURCE_DIR}/include/parser/*.h
+    ${CMAKE_SOURCE_DIR}/src/linker/*.cpp  ${CMAKE_SOURCE_DIR}/include/linker/*.h
+    ${CMAKE_SOURCE_DIR}/src/util/assembler_multiprocess.cpp
+    ${CMAKE_SOURCE_DIR}/include/util/assembler_multiprocess.h
+    # --- preprocesador: corre como primera etapa sobre cada .vx ---
+    ${CMAKE_SOURCE_DIR}/preprocessor/src/*.c
+    ${CMAKE_SOURCE_DIR}/preprocessor/src/*.cpp
+    ${CMAKE_SOURCE_DIR}/preprocessor/include/*.h
 )
 set(VX_CODEGEN_VERSION_HDR ${CMAKE_CURRENT_BINARY_DIR}/vx_codegen_version.h)
 add_custom_command(
@@ -54,18 +74,88 @@ add_library(vx_lib STATIC
     lexer.cpp
     ast.cpp
     parser.cpp
-    asm_effects.cpp
-    asm_backend.cpp
+    # Sistema UNICO de efectos del compilador: modelo (SemanticEffects/
+    # MachineEffects/reticulo AbstractLoc + combinadores seq/join), summaries por
+    # funcion/modulo, contratos DECLARATIVOS por reglas, y el gestor de analisis
+    # de dos niveles (local por nodo + summary por funcion).  Fuente unica para
+    # optimizer, scheduler, --analyze, diagramas y LSP.
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/effects.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/contracts.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/ir_effects.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/effect_analysis.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/effects_report.cpp
+    # Hechos IR objetivos (def-use, call-sites, estructura) para la infra de
+    # analisis: base compartida que consumen los analisis sin re-recorrer el IR.
+    ${CMAKE_SOURCE_DIR}/src/analysis/facts/ir_facts.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/memory/points_to.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/memory/memory_access.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/escape/escape.cpp
+    asm/asm_effects.cpp
+    # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
+    # call/flags/rama/marco de pila explicito) sobre la tabla plana por
+    # instruccion de asm_effects; base del compilador consciente del asm.
+    asm/asm_analyze.cpp
+    asm/asm_backend.cpp
+    # CFG del asm inline (bloques basicos + aristas desde labels/saltos); base
+    # del dataflow, los diagnosticos y los diagramas del asm.
+    asm/asm_cfg.cpp
+    # Diagnosticos estructurales del asm sobre el CFG (codigo muerto, salto no
+    # resuelto, bucle sin salida).
+    asm/asm_diag.cpp
+    # Diagramas del CFG del asm anotados con coste/latencia/cuellos de botella/
+    # flags/diagnosticos (mermaid + graphviz), para embeber en los diagramas.
+    asm/asm_diagram.cpp
+    # Lift de patrones de asm a IR tipado (lock cmpxchg/xadd -> ATOMIC_CAS/ADD):
+    # atomicos escritos en asm que bajan al mismo op optimizable que el opcode.
+    asm/asm_lift.cpp
+    # Emision del IR tipado del lift (separada del reconocimiento, para mantener
+    # el lowering minimo).
+    asm/asm_lift_emit.cpp
+    # Lift de asm opaco sin operandos de registro a ASM_MICRO (barreras/nop/...).
+    asm/asm_lift_micro.cpp
+    # Lift GENERAL de asm inline a IR: dispatcher NEUTRO por ISA + frontend x86.
+    # El core neutro (register-file + CFG driver + emisores) vive en el header
+    # asm_lift_core.h; cada ISA aporta su lift_<isa> sin tocar el core.
+    asm/asm_lift_general.cpp
+    asm/asm_lift_x86.cpp
+    # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
+    # idioma).  La tabla se genera desde catalog/diagnostics.toml con
+    # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.
+    diag/diag_catalog.cpp
+    gen/diag_catalog_gen.cpp
+    # Renderizado de diagnosticos en formato maquina (JSON/SARIF) para IDEs/CI.
+    diag/diag_format.cpp
+    # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
+    # por tools/import/gen_cpp_db.py (autocontenido, sin archivos externos).
+    # La consumen ASA (asm-aware), el LSP y el optimizer JIT/AOT.
+    asm/instr_db.cpp
+    gen/instr_db_x86_gen.cpp
+    gen/instr_db_arm64_gen.cpp
+    gen/instr_db_arm32_gen.cpp
+    gen/instr_db_riscv_gen.cpp
+    gen/instr_db_x86_cost_gen.cpp
+    gen/instr_db_arm64_cost_gen.cpp
+    gen/instr_db_arm32_cost_gen.cpp
+    gen/instr_db_riscv_cost_gen.cpp
+    gen/instr_db_x86_feat_gen.cpp
+    gen/instr_db_arm_feat_gen.cpp
+    gen/instr_db_riscv_feat_gen.cpp
     type_checker.cpp
+    # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
+    # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs
+    # (parser.cpp resuelve los atomos de target, type_checker.cpp los que
+    # hablan del parametro de tipo) y tener dos copias del clasificador era
+    # justo lo que hacia falta evitar.
+    contract_when.cpp
     # Utilidades de clonacion de AST con sustitucion de type-params,
     # extraidas de type_checker.cpp (monolito) para mantenerlo manejable.
-    generic_clone.cpp
+    generics/generic_clone.cpp
     # Monomorphizacion de metodos genericos `obj.metodo<U>()` (#4).
-    generic_methods.cpp
+    generics/generic_methods.cpp
     # Conceptos / constraints de genericos `<T: Concepto>` / where (#6).
-    concepts.cpp
+    generics/concepts.cpp
     # Especializacion total + parcial de structs genericos (#7).
-    specialization.cpp
+    generics/specialization.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).
@@ -78,22 +168,30 @@ add_library(vx_lib STATIC
     borrow_checker.cpp
     compiler.cpp
     compiler_project.cpp
-    mermaid_diagrams.cpp
-    graphviz_diagrams.cpp
-    html_diagrams.cpp
+    diagram/mermaid_diagrams.cpp
+    diagram/graphviz_diagrams.cpp
+    diagram/html_diagrams.cpp
     # Subsistema de coste Big-O (modo --analyze).  Solo depende de
     # ir::IrModule; vive aqui para que los renderers de diagramas puedan
     # anotar el coste por funcion (--diagram-cost).
     ${CMAKE_SOURCE_DIR}/src/analyze/bigo.cpp
-    comptime_introspect.cpp
+    # Huella computacional por-declaracion (recursos + efectos): base del
+    # modelo dirigido por resumenes y de las anotaciones comprobables.
+    ${CMAKE_SOURCE_DIR}/src/analyze/fingerprint.cpp
+    comptime/comptime_introspect.cpp
+    # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
+    # separado que compilara/ejecutara todo el comptime en la ComptimeVM).
+    comptime/comptime_collect.cpp
     # Sistema de modulos.
-    module_resolver.cpp
-    module_interop.cpp
-    namespace_flatten.cpp
+    module/module_resolver.cpp
+    module/module_interop.cpp
+    module/namespace_flatten.cpp
     # Indice semantico por-declaracion (hash de contenido + grafo de deps):
     # sustrato de la compilacion incremental granular y distribuida.
     semantic_index.cpp
-    vxi_format.cpp
+    # Driver incremental granular: claves Merkle + CAS + plan_rebuild.
+    incremental.cpp
+    module/vxi_format.cpp
     project_cache.cpp
     velb_signature.cpp
     # comptime_vm.cpp vive en src/runtime/ (depende del runtime VM).
@@ -116,11 +214,14 @@ target_include_directories(vx_lib PUBLIC
 # vxi_format.cpp).  Dependencia explicita para que CMake genere el header
 # antes de compilar ese TU y lo recompile cuando el header cambie.
 target_include_directories(vx_lib PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-set_source_files_properties(vxi_format.cpp PROPERTIES
+set_source_files_properties(module/vxi_format.cpp PROPERTIES
     OBJECT_DEPENDS ${VX_CODEGEN_VERSION_HDR})
 
 # C++17 minimo (consistente con el resto del proyecto).
 target_compile_features(vx_lib PUBLIC cxx_std_17)
+# PIC se activa globalmente en el CMakeLists raiz (CMAKE_POSITION_INDEPENDENT_
+# CODE ON) para que vx_lib enlace tambien en la libreria compartida embebible
+# vesta_ffi (libvesta.so).  No hace falta fijarlo aqui.
 
 # velb_signature.cpp usa OpenSSL EVP_DigestSign / EVP_DigestVerify.
 # Enlace centralizado en `vesta_openssl` (estatico/standalone o FireDaemon).

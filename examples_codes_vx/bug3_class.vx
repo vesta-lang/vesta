@@ -1,6 +1,6 @@
 namespace ejemplos.bug3_class;
 
-// Test: class Vex con borrow checker.  Las clases ya viven en GC heap
+// Test: class  con borrow checker.  Las clases ya viven en GC heap
 // (host_ptr automatico), asi que se aceptan directamente como owners.
 
 class Punto {

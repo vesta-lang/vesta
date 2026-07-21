@@ -255,7 +255,7 @@ void exec_instr_fulfillhlt(ProcessVM *vm, const DecodedInstr &instr) {
     const uint64_t h = vm->registers.regs[r_fut].qword();
     const uint64_t val = vm->registers.regs[r_val].qword();
 
-    // Fase 1: misma logica que exec_instr_fulfill (resolver future +
+    //   misma logica que exec_instr_fulfill (resolver future +
     // capturar waiter bajo lock).
     runtime::VM &vm_ref = vm->scheduler.vm_reference;
     uint64_t waiter = UINT64_MAX;
@@ -277,7 +277,7 @@ void exec_instr_fulfillhlt(ProcessVM *vm, const DecodedInstr &instr) {
         vm_ref.make_ready(target);
     }
 
-    // Fase 2: misma logica que exec_instr_hlt.  Notificar HALT al
+    //   misma logica que exec_instr_hlt.  Notificar HALT al
     // scheduler ANTES de marcar blocking, mismo orden que hlt regular.
     vm->scheduler.on_event(EVT_HALT);
     vm->decoded_ptr->flags_info.blocking = true;

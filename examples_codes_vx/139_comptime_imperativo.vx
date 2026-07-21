@@ -1,15 +1,17 @@
 namespace ejemplos.comptime_imperativo;
 
-// metaprogramacion imperativa completa.
-// (1) `comptime var T NAME = expr;` -- variable comptime mutable
-// (2) Asignacion + compound assign a comptime vars en contexto comptime
-// (3) while/for/do-while loops dentro de `comptime fn` y `comptime { }`
-// (4) break/continue en loops comptime
+// Metaprogramacion imperativa en compile-time.
+//   - Dentro de `comptime fn` / `comptime { }` los locales son mutables por
+//     defecto: se declaran tipo-primero (`i64 acc = 0;`), SIN prefijo -- el
+//     contexto ya es comptime, no hace falta marcar la mutabilidad.
+//   - while/for/do-while, break y continue funcionan igual que en runtime,
+//     pero el compilador los ejecuta al compilar.
+//   - El resultado se guarda en una constante `const` (valor compile-time).
 
-// comptime fn con loop while + var mutable (sin recursion).
+// comptime fn con loop while + acumulador (sin recursion).
 comptime i64 sum_iter(i64 n) {
-    comptime var i64 acc = 0;
-    comptime var i64 i = 1;
+    i64 acc = 0;
+    i64 i = 1;
     while (i <= n) {
         acc = acc + i;
         i = i + 1;
@@ -17,9 +19,9 @@ comptime i64 sum_iter(i64 n) {
     return acc;
 }
 
-// comptime fn con if + break (return temprano).
+// comptime fn con if + return temprano.
 comptime i64 find_div(i64 start, i64 d) {
-    comptime var i64 k = start;
+    i64 k = start;
     while (k < 1000000) {
         if (k % d == 0) return k;
         k = k + 1;
@@ -29,8 +31,8 @@ comptime i64 find_div(i64 start, i64 d) {
 
 // comptime fn con continue.
 comptime i64 sum_odd(i64 n) {
-    comptime var i64 acc = 0;
-    comptime var i64 i = 0;
+    i64 acc = 0;
+    i64 i = 0;
     while (i <= n) {
         if (i % 2 == 0) {
             i = i + 1;
@@ -42,10 +44,10 @@ comptime i64 sum_odd(i64 n) {
     return acc;
 }
 
-// comptime fn con while iterativo.
+// comptime fn con while iterativo (factorial).
 comptime i64 prod(i64 n) {
-    comptime var i64 p = 1;
-    comptime var i64 i = 1;
+    i64 p = 1;
+    i64 i = 1;
     while (i <= n) {
         p = p * i;
         i = i + 1;
@@ -53,22 +55,22 @@ comptime i64 prod(i64 n) {
     return p;
 }
 
-// Constantes computadas en compile-time.
-comptime i64 S100  = sum_iter(100);      // 5050
-comptime i64 D100  = find_div(100, 7);   // 105 (105 = 15*7)
-comptime i64 ODD9  = sum_odd(9);          // 1+3+5+7+9 = 25
-comptime i64 P6    = prod(6);             // 720
+// Constantes computadas en compile-time (const, no comptime).
+const i64 S100 = sum_iter(100);      // 5050
+const i64 D100 = find_div(100, 7);   // 105 (105 = 15*7)
+const i64 ODD9 = sum_odd(9);         // 1+3+5+7+9 = 25
+const i64 P6   = prod(6);            // 720
 
-static_assert(S100 == 5050,  "sum_iter(100)");
-static_assert(D100 == 105,   "find_div(100, 7)");
-static_assert(ODD9 == 25,    "sum_odd(9)");
-static_assert(P6 == 720,     "prod(6) = fact(6)");
+static_assert(S100 == 5050, "sum_iter(100)");
+static_assert(D100 == 105,  "find_div(100, 7)");
+static_assert(ODD9 == 25,   "sum_odd(9)");
+static_assert(P6 == 720,    "prod(6) = fact(6)");
 
 i32 main() {
-    // comptime block con var mutable + while.
+    // comptime block con locales mutables + while.
     comptime {
-        comptime var u64 power = 1;
-        comptime var u64 e = 0;
+        u64 power = 1;
+        u64 e = 0;
         while (e < 10) {
             power = power * 2;
             e = e + 1;
@@ -78,7 +80,7 @@ i32 main() {
 
     // comptime block con compound assignments.
     comptime {
-        comptime var i64 x = 100;
+        i64 x = 100;
         x += 23;          // 123
         x *= 2;           // 246
         x -= 5;           // 241
@@ -94,8 +96,8 @@ i32 main() {
 
     // comptime block con break en while.
     comptime {
-        comptime var i64 i = 0;
-        comptime var i64 stop_at = 0;
+        i64 i = 0;
+        i64 stop_at = 0;
         while (i < 1000) {
             if (i * i > 100) {
                 stop_at = i;

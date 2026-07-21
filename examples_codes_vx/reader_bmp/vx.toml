@@ -6,9 +6,9 @@ license     = "MIT"
 edition     = 1
 
 [capabilities]
-# Lee el fichero BMP via vx_fileio (kernel32 en Windows, libc en POSIX)
-# y parsea el flag -r WxH via el plugin nativo vesta_io.  Sin escritura ni red.
-declared = ["fs:read", "ffi:call=kernel32.dll", "ffi:call=libc.so.6"]
+# Lee y ESCRIBE el fichero BMP via vx_fileio (kernel32 en Windows, libc en
+# POSIX) y parsea el flag -r WxH via el plugin nativo vesta_io.  Sin red.
+declared = ["fs:read", "fs:write", "ffi:call=kernel32.dll", "ffi:call=libc.so.6"]
 
 # Sin dependencias externas: usa la stdlib (vx_fileio) y builtins del lenguaje.
 [dependencies]
@@ -37,3 +37,12 @@ jit   = "vesta --run reader_bmp.velb -m jit -- Ejemplo60x3.bmp"
 # cerrado); la variante MODULAR completa aun necesita `args_get` en AOT (LIM-5)
 # para leer el nombre del fichero -- ver BUGS_LIMITACIONES.md.
 aot   = "vesta -m aot --vx reader_bmp.vx -o reader_bmp_native --emit exe"
+
+# --- Escritura de BMP (overlays + funciones libres, sin clases) ---
+# Crea una imagen 8x8 24bpp con un gradiente, la escribe a disco, la relee y
+# verifica el round-trip.  main devuelve 42 en exito.
+write        = "vesta --vx writer_bmp.vx -o writer_bmp"
+write-run    = "vesta --run writer_bmp.velb -m vm"
+write-jit    = "vesta --run writer_bmp.velb -m jit"
+# AOT nativo del writer (PE).  El ejecutable devuelve 42 como exit-code.
+write-aot    = "vesta -m aot --vx writer_bmp.vx -o writer_bmp_native --emit exe"

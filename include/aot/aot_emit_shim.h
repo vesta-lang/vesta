@@ -10,7 +10,7 @@
 
 /**
  * @file aot/aot_emit_shim.h
- * @brief Phase AOT.4 -- ABI C plana para emitir ejecutables PE/ELF.
+ * @brief  AOT.4 -- ABI C plana para emitir ejecutables PE/ELF.
  *
  * Frontera limpia entre el compilador AOT (C++) y LibPEparse (C).  Este header
  * NO expone ningun tipo de LibPEparse: solo @c structs C planos y funciones.
@@ -100,6 +100,10 @@ typedef struct {
 #define AOT_RELOC_SECREL32                                                      \
     5 /* TLS PE (Windows): *(int32*)site = offset del target dentro de su       \
        * seccion (.tls), no la VA.  El emisor PE escribe target_off. */
+#define AOT_RELOC_ARM64_CALL26                                                  \
+    6 /* AArch64 BL/B (R_AARCH64_CALL26/JUMP26): parchea el campo imm26 de la    \
+       * instruccion de 32 bits en el sitio con ((target - site) >> 2).  Para   \
+       * el `bl main` del _start arm64 y llamadas cross-funcion arm64. */
 
 /**
  * @brief Una relocation a resolver tras el layout.
@@ -148,6 +152,11 @@ typedef struct {
      * IMAGE_TLS_DIRECTORY y registra este callback en AddressOfCallBacks. */
     int tls_callback_section;
     uint32_t tls_callback_off;
+    /* Arquitectura de destino (e_machine ELF / Machine PE): 0 => x86-64 por
+     * defecto.  EM_AARCH64 (183) para ARM 64-bit; el emisor lo propaga a
+     * LibPEparse (elf_builder_set_machine) en lugar de hardcodear x86-64.  Asi
+     * el MISMO emisor produce ELF/PE de x86-64 o AArch64 segun este campo. */
+    uint16_t machine;
 } AotLayoutCfg;
 
 /**
@@ -268,6 +277,19 @@ typedef struct {
     uint64_t offset;  /* offset dentro de la seccion */
     int is_func;      /* 1 = STT_FUNC, 0 = STT_OBJECT */
 } AotSym;
+
+/**
+ * @brief Fija los simbolos de DEPURACION (nivel 1) para los EJECUTABLES.
+ *
+ * Los emisores de EXEC (aot_emit_elf / aot_emit_elf_dynexec / PE) consultan esta
+ * lista global y, si no es vacia, embeben un @c .symtab (ELF) / symtab COFF (PE)
+ * con los simbolos de funcion -> gdb/WinDbg/lldb muestran nombres en backtraces.
+ * Estado global (el emit es single-thread por llamada); el driver lo fija antes
+ * de emitir y lo resetea (n=0) despues.  n=0 -> sin simbolos (cero coste, binario
+ * identico al modo release).  Los @c section/@c offset son los mismos que en un
+ * @c AotSym de export; @c st_value se calcula con la VA final de cada seccion.
+ */
+void aot_set_debug_symbols(const AotSym *syms, int n);
 
 /**
  * @brief Emite un objeto RELOCATABLE ELF64 (ET_REL, .o) a disco.

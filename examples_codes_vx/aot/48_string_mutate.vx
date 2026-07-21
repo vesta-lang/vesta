@@ -1,4 +1,4 @@
-// Vex Embed Inc 2: mutacion `+=` de value-strings nativos (AOT).
+//  Embed Inc 2: mutacion `+=` de value-strings nativos (AOT).
 // `s += t` (string) y `s += c` (char) appendean in-place al buffer de
 // `s`, creciendo el buffer (realloc) cuando la capacidad no alcanza.
 // Sin GC, sin StringObject.  RAII libera el buffer final; los buffers

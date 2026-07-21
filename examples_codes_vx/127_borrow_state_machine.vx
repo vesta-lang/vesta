@@ -32,7 +32,7 @@ bool is_in_range(borrow<i32> total, i32 lo, i32 hi) {
 i32 main() {
     unique<i32> total = unique_box(0);
 
-    // Fase 1: aplicar 4 operaciones via mut borrow.
+    //   aplicar 4 operaciones via mut borrow.
     {
         borrow_mut<i32> bm = lend_mut(total);
         apply_op(bm, 1, 10);   // 0 + 10  = 10
@@ -42,7 +42,7 @@ i32 main() {
         // NLL: bm dropea al ultimo uso aqui.
     }
 
-    // Fase 2: validar con shared borrows (R2 permite multiples shared).
+    //   validar con shared borrows (R2 permite multiples shared).
     borrow<i32> s1 = lend(total);
     borrow<i32> s2 = lend(total);
     bool ok1 = is_in_range(s1, 40, 50);

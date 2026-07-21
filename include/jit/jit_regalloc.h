@@ -7,7 +7,7 @@
 
 /**
  * @file jit/jit_regalloc.h
- * @brief Linear scan register allocation para el JIT (Phase D.7).
+ * @brief Linear scan register allocation para el JIT ( D.7).
  *
  * = Diseno =
  *
@@ -17,7 +17,7 @@
  * pero subOPTIMO para hot loops: cada IR op accede memoria stack en
  * lugar de regs.
  *
- * Phase D.7 introduce un asignador de registros que mantiene los SSA
+ *  D.7 introduce un asignador de registros que mantiene los SSA
  * values mas usados en registros callee-saved durante la vida de la
  * funcion, evitando el round-trip a stack.
  *
@@ -57,7 +57,7 @@
  *
  * VIDs @c is_gc_object EXCLUIDOS del pinning en v1 -> los stackmaps
  * existentes siguen siendo correctos (solo describen slots).  En v2
- * (Phase D.8), extender los stackmaps con register-resident GC values.
+ * ( D.8), extender los stackmaps con register-resident GC values.
  */
 
 #ifndef VESTA_JIT_JIT_REGALLOC_H

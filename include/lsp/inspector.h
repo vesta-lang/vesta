@@ -126,7 +126,7 @@ class Inspector {
     /**
      * @brief @c vesta/ir: SSA IR del modulo.
      * @param uri   URI del documento.
-     * @param phase "pre" (antes de optimizar) o "post" (default, optimizado).
+     * @param  "pre" (antes de optimizar) o "post" (default, optimizado).
      * @return @c { "text": "<IR legible>" } o @c { "error": "..." }.
      */
     nlohmann::json ir(const std::string &uri, const std::string &phase,
@@ -156,14 +156,18 @@ class Inspector {
     /**
      * @brief @c vesta/diagram: diagrama de una fase en un formato.
      * @param uri    URI del documento.
-     * @param kind   "ast" | "ir-pre" | "ir-post" | "vel".
+     * @param kind   "ast" | "ir-pre" | "ir-post" | "vel" | "asm".
      * @param format "mermaid" | "graphviz" | "html".
      * @param cost   Si true, anota los nodos-funcion con su coste Big-O.
+     * @param target OS/arch para las ramas @Target y la ABI.
+     * @param function Para @c kind="asm": funcion a diagramar (vacio = la
+     *                 primera compilable / @c main).  Ignorado para el resto.
      * @return @c { "text": "<diagrama>" } o @c { "error": "..." }.
      */
     nlohmann::json diagram(const std::string &uri, const std::string &kind,
                            const std::string &format, bool cost,
-                           const InspectTarget &target = {});
+                           const InspectTarget &target = {},
+                           const std::string &function = std::string());
 
     /**
      * @brief @c vesta/functions: lista de funciones del modulo.
@@ -208,6 +212,30 @@ class Inspector {
      */
     nlohmann::json aot_asm(const std::string &uri, const std::string &function,
                            const InspectTarget &target = {});
+
+    /**
+     * @brief @c vesta/modes: reporte del modulo en los tres modos de ejecucion.
+     *
+     * El LSP no conoce (ni asume) el modo de ejecucion del programa: reporta
+     * los TRES -- interprete/VM, JIT y AOT nativo -- para que el cliente los
+     * muestre en paralelo.  Si se pide un @p mode concreto, devuelve solo ese.
+     *
+     * - @c interp: diagnosticos del frontend con semantica de VM (runtime
+     *   completo).  Es el analisis siempre-activo (mismo que publishDiagnostics).
+     * - @c jit: reusa el IR del interprete y clasifica cada funcion en
+     *   compilable por el backend vreg vs con fallback al interprete.
+     * - @c aot: recompila con POO nativa (native_poo) y ejecuta el analisis de
+     *   compatibilidad AOT al @p tier pedido, mas los diagnosticos propios de
+     *   ese modo (asi los constructos AOT-only no aparecen como errores).
+     *
+     * @param uri  URI del documento.
+     * @param mode "interp"|"jit"|"aot" para uno solo; vacio = los tres.
+     * @param tier Tier AOT (bare|embed|full); solo afecta al modo aot.
+     * @return @c { "modes": [ { "mode": ..., ... por modo }, ... ] } o
+     *         @c { "error": "..." }.
+     */
+    nlohmann::json modes(const std::string &uri, const std::string &mode,
+                         const std::string &tier);
 
     /**
      * @brief @c vesta/macroExpand: codigo que generan los @Macro del modulo.

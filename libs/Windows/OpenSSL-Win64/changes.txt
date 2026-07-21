@@ -17888,7 +17888,7 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
 
    *Steve Henson*
 
- * Phase 2 verify code reorganisation. The certificate
+ *  2 verify code reorganisation. The certificate
    verify code now looks up an issuer certificate by a
    number of criteria: subject name, authority key id
    and key usage. It also verifies self signed certificates
@@ -21817,7 +21817,7 @@ ndif
 
    *Eric A. Young*
 
- * Now Fortezza is denied in the authentication phase because
+ * Now Fortezza is denied in the authentication  because
    this is key exchange mechanism is not supported by SSLeay at all.
 
    *Eric A. Young*

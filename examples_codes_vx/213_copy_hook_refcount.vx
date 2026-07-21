@@ -1,7 +1,7 @@
 namespace ejemplos.copy_hook_refcount;
 
 class Counter { public static i64 vivos; }
-// Tipo refcount definido por el USUARIO en Vex (sin magia del compilador):
+// Tipo refcount definido por el USUARIO en  (sin magia del compilador):
 // el copy-hook __clone__ incrementa; el destructor decrementa y libera al llegar a 0.
 struct Rc {
     i64* ctrl;

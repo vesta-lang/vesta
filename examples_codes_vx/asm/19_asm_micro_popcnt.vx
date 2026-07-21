@@ -1,0 +1,33 @@
+// Lift de asm con operandos de REGISTRO FiSICO FIJO a ASM_MICRO.
+//
+// A diferencia de las barreras (mfence/lfence: sin operandos), aqui las
+// instrucciones LLEVAN operandos de registro (popcnt rax, rbx).  El lifter
+// construye una
+// LISTA PLANA de operandos en orden textual, cada uno con su ROL como flags
+// (READ/WRITE/RW) tomados de la base de datos, y reescribe la plantilla con
+// placeholders $0,$1,...  El backend (interp via ensamblador, JIT y AOT)
+// sustituye cada $N por el nombre del registro fisico ANTES de ensamblar:
+//
+//     "popcnt $0, $1"  con  $0:W#rax  $1:R#rbx   ->   popcnt rax, rbx
+//
+// Valida el mecanismo de sustitucion post-asignacion (enfoque B) con registros
+// de FiSICO FIJO, sin todavia la complejidad del asignador ni los casos
+// implicitos/SIMD.  El resultado del popcnt no se observa (no
+// hay threading SSA aun): el test comprueba que compila, ensambla y ejecuta.
+//
+//     vm --vx 19_asm_micro_popcnt.vx -o popcnt
+//     vm --run popcnt.velb
+//
+// @expect 42
+u64 bitops_then_answer() {
+    asm {
+        popcnt rax, rbx
+        tzcnt  rcx, rdx
+        bswap  rsi
+    };
+    return 42;
+}
+
+u64 main() {
+    return bitops_then_answer();
+}

@@ -13,7 +13,7 @@
  *
  * Util para componentes que necesitan alocar strings en el GcHeap sin
  * pasar por dispatch de bytecode -- por ejemplo el @c ComptimeRuntime
- * de Phase MC, que marshala args @c string del compile-time al VM
+ * de  MC, que marshala args @c string del compile-time al VM
  * antes de invocar un @c @Macro lowered.
  *
  * La implementacion vive en @c src/runtime/exec_instruction_string.cpp

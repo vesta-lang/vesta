@@ -7,7 +7,7 @@
 
 /**
  * @file wait_table.h
- * @brief Tabla de wait queues lock-free per-bucket (Phase Z.4).
+ * @brief Tabla de wait queues lock-free per-bucket ( Z.4).
  *
  * Diseno
  * ======

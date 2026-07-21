@@ -24,9 +24,9 @@ namespace ejemplos.fiber_lifecycle;
 // compartido) vive en memoria HOST (malloc), NO en el stack VM (en interp
 // `&local` seria un vaddr VM que el codigo nativo malinterpretaria).
 //
-// POR QUE EL CUERPO DE LA FIBRA ES @Naked (no una fn Vex normal):  la fibra
+// POR QUE EL CUERPO DE LA FIBRA ES @Naked (no una fn  normal):  la fibra
 // corre sobre SU PROPIA pila nativa (la que reserva fiber_stack_alloc).  Una fn
-// Vex normal, en interp, asume un frame VM y direcciones VM; ejecutandola sobre
+//  normal, en interp, asume un frame VM y direcciones VM; ejecutandola sobre
 // una pila host cruda romperia esa suposicion.  El cuerpo @Naked es asm puro:
 // no asume runtime, solo lee/escribe el estado host que le pasamos por r13.
 // Es el mismo enfoque que 230, y vale en los 3 modos via naked_native.
@@ -49,7 +49,7 @@ import "vx_fiber" only fiber_switch, fiber_init, fiber_stack_alloc, fiber_stack_
 @Naked void fiber_body() {
     asm volatile noinfer {
         mov r13, rdi
-        // --- fase 1: incrementar (counter -> 1) ---
+        // ---   incrementar (counter -> 1) ---
         mov rax, [r13 + 0]
         add rax, 1
         mov [r13 + 0], rax
@@ -72,7 +72,7 @@ import "vx_fiber" only fiber_switch, fiber_init, fiber_stack_alloc, fiber_stack_
 @Naked void fiber_body() {
     asm volatile noinfer {
         mov r13, rcx
-        // --- fase 1: incrementar (counter -> 1) ---
+        // ---   incrementar (counter -> 1) ---
         mov rax, [r13 + 0]
         add rax, 1
         mov [r13 + 0], rax

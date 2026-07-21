@@ -22,10 +22,10 @@
 #include "jit/jit_registry.h"
 #include "jit/stack_scan.h"
 // Inc 0b: gc_heap.cpp YA NO depende de ProcessVM/runtime.  El acceso al
-// stack/regs del owner + la sincronizacion shared (Phase Z) se hacen via la
+// stack/regs del owner + la sincronizacion shared ( Z) se hacen via la
 // interfaz GcRootProvider (gc_heap.h); el runtime aporta la impl.  Esto permite
 // compilar el GC como .o freestanding (libvesta_gc) sin arrastrar la VM.
-#include "gc/shared_handle_table.h" // Phase Z: SHARED_HANDLE_BIT
+#include "gc/shared_handle_table.h" //  Z: SHARED_HANDLE_BIT
 #include "loader/oop_types.h"
 
 #include <cstring>
@@ -442,7 +442,7 @@ GcHeap::handle_for_ptr(const uint8_t *host_payload_ptr) const noexcept {
             }
         }
     }
-    // Phase Z (fix 2026-06-05): un objeto del @c SharedHeap (cross-process)
+    //  Z (fix 2026-06-05): un objeto del @c SharedHeap (cross-process)
     // tiene su host_ptr en los chunks del SharedHeap, NO en el heap local
     // (nursery/old_blocks).  Si @c contains() confirma que el ptr cae en el
     // SharedHeap, permitir el deref + resolucion del handle shared abajo.
@@ -460,7 +460,7 @@ GcHeap::handle_for_ptr(const uint8_t *host_payload_ptr) const noexcept {
     }
     if (!in_gc) return GC_NULL_HANDLE;
 
-    // Phase Z.6: si no esta en el mapa local pero SI esta en un
+    //  Z.6: si no esta en el mapa local pero SI esta en un
     // bloque GC (local o SharedHeap), puede ser un objeto del
     // @c SharedHeap cuyo @c ObjectHeader.hash_code lleva bit 31 set.
     // Ahora es seguro hacer el deref porque sabemos que el ptr es
@@ -1467,7 +1467,7 @@ GcHandle GcHeap::alloc_pinned(size_t size) {
 // -------------------------------------------------------------------------
 
 uint8_t *GcHeap::deref(GcHandle h) {
-    // Phase Z.5/Z.6: bit 31 = SHARED_HANDLE_BIT.  Si esta set, el
+    //  Z.5/Z.6: bit 31 = SHARED_HANDLE_BIT.  Si esta set, el
     // handle apunta a un objeto del @c SharedHeap (cross-process,
     // accesible por todos los procesos de la misma VM); resolvemos
     // via la tabla global @c shared_handle_table.
@@ -1636,7 +1636,7 @@ void GcHeap::gc_release(GcHandle h) {
         *rc -= 1;
     } else {
         // Al llegar a 0 eliminamos la entrada para que el bucket se libere
-        // y el mark phase no malgaste tiempo iterando handles ya liberados.
+        // y el mark  no malgaste tiempo iterando handles ya liberados.
         external_refs_.erase(h);
     }
 }
@@ -2554,7 +2554,7 @@ bool GcHeap::compact_old_gen() {
 
     size_t live_bytes = 0, dead_bytes = 0;
 
-    // ---- Fase A: PLAN (sin mutar memoria) ----
+    // ----   PLAN (sin mutar memoria) ----
     for (size_t bi = 0; bi < old_blocks_.size(); ++bi) {
         auto &block = old_blocks_[bi];
         old_bump[bi] = block.bump_offset;
@@ -2619,7 +2619,7 @@ bool GcHeap::compact_old_gen() {
     if (!compact_always && !any_physical_move && collected.empty())
         return false;
 
-    // ---- Fase B: FINALIZADORES de los colectados (box aun intacto) ----
+    // ----   FINALIZADORES de los colectados (box aun intacto) ----
     for (const auto &c : collected) {
         if (c.has_fin) {
             auto *hdr = reinterpret_cast<GcHeader *>(c.hdr);
@@ -2627,7 +2627,7 @@ bool GcHeap::compact_old_gen() {
         }
     }
 
-    // ---- Fase C: MOVER (memmove sliding) ----
+    // ----   MOVER (memmove sliding) ----
     // Orden creciente de old_hdr por bloque -> new_hdr <= old_hdr siempre y las
     // regiones destino nunca pisan una fuente aun no procesada.  memmove maneja
     // el solape del propio objeto.
@@ -2637,7 +2637,7 @@ bool GcHeap::compact_old_gen() {
         // blanqueara.  gen/size/finalizer se copian con el memmove.
     }
 
-    // ---- Fase D: FIX MAPS ----
+    // ----   FIX MAPS ----
     // 1. Erase de las claves viejas de los movidos + update handles_ (antes de
     //    insertar las nuevas para no colisionar claves).
     for (const auto &m : moved) {
@@ -2667,14 +2667,14 @@ bool GcHeap::compact_old_gen() {
     for (const auto &m : moved)
         ptr_to_handle_.insert_or_assign(m.new_hdr + sizeof(GcHeader), m.h);
 
-    // ---- Fase E: RECUENTO + free-lists ----
+    // ----   RECUENTO + free-lists ----
     freelist_clear();
     stats_.old_freelist_bytes = 0;
     for (size_t bi = 0; bi < old_blocks_.size(); ++bi)
         old_blocks_[bi].bump_offset = new_bump[bi];
     old_used_ = live_bytes;
 
-    // ---- Fase F: REESCRITURA DE RAICES (pila + regs del VM) ----
+    // ----   REESCRITURA DE RAICES (pila + regs del VM) ----
     // Construimos rangos [old_start, old_end) con su delta (new-old).  Un
     // host_ptr en pila/regs que caiga en un rango movido se remapea +delta
     // (cubre el inicio del payload y punteros interiores tipo STRRAW).  Las
@@ -2745,7 +2745,7 @@ bool GcHeap::compact_old_gen() {
         }
     }
 
-    // ---- Fase G: VERIFICADOR DE MOVING (VESTA_GC_VERIFY_MOVE=1, DEV-ONLY) ----
+    // ----   VERIFICADOR DE MOVING (VESTA_GC_VERIFY_MOVE=1, DEV-ONLY) ----
     // Comprueba que NINGUNA raiz (pila+regs) ni campo-puntero de ningun objeto
     // vivo apunta a la region HUECO liberada [ptr+new_bump, ptr+old_bump) de
     // cada bloque -> 0 punteros colgantes/stale.  Un puntero real no-reescrito
@@ -3011,7 +3011,7 @@ bool GcHeap::compact_old_gen_aot() {
     std::vector<size_t> old_bump(old_blocks_.size(), 0);
     size_t live_bytes = 0, dead_bytes = 0;
 
-    // ---- Fase A: PLAN (sin mutar) ----
+    // ----   PLAN (sin mutar) ----
     for (size_t bi = 0; bi < old_blocks_.size(); ++bi) {
         auto &block = old_blocks_[bi];
         old_bump[bi] = block.bump_offset;
@@ -3062,14 +3062,14 @@ bool GcHeap::compact_old_gen_aot() {
     if (!compact_always && !any_physical_move && collected.empty())
         return false;
 
-    // ---- Fase B: FINALIZADORES de colectados ----
+    // ----   FINALIZADORES de colectados ----
     for (const auto &c : collected)
         if (c.has_fin) {
             auto *hdr = reinterpret_cast<GcHeader *>(c.hdr);
             stage_finalizer(hdr, c.hdr + sizeof(GcHeader));
         }
 
-    // ---- Fase C: MOVER (memmove sliding) ----
+    // ----   MOVER (memmove sliding) ----
     for (const auto &m : moved)
         if (m.new_hdr != m.old_hdr)
             std::memmove(m.new_hdr, m.old_hdr, m.total);
@@ -3090,7 +3090,7 @@ bool GcHeap::compact_old_gen_aot() {
                   return a.old_start < b.old_start;
               });
 
-    // ---- Fase D: FIX MAPS (ptr_to_handle_ + handles_) ----
+    // ----   FIX MAPS (ptr_to_handle_ + handles_) ----
     for (const auto &m : moved) {
         ptr_to_handle_.erase(m.old_hdr + sizeof(GcHeader));
         handles_[m.h].addr = m.new_hdr;
@@ -3112,7 +3112,7 @@ bool GcHeap::compact_old_gen_aot() {
     for (const auto &m : moved)
         ptr_to_handle_.insert_or_assign(m.new_hdr + sizeof(GcHeader), m.h);
 
-    // ---- Fase E: RECUENTO + free-lists ----
+    // ----   RECUENTO + free-lists ----
     freelist_clear();
     stats_.old_freelist_bytes = 0;
     for (size_t bi = 0; bi < old_blocks_.size(); ++bi)
@@ -3158,7 +3158,7 @@ bool GcHeap::compact_old_gen_aot() {
         jit::scan_aot_frames(&aot_root_rewrite_cb, &rctx, bpc, bsp);
     }
 
-    // ---- Fase G: VERIFICADOR (VESTA_GC_VERIFY_MOVE=1) ----
+    // ----   VERIFICADOR (VESTA_GC_VERIFY_MOVE=1) ----
     if (verify_move) {
         std::vector<AotRange> holes;
         for (size_t bi = 0; bi < old_blocks_.size(); ++bi) {
@@ -3560,7 +3560,7 @@ uint64_t GcHeap::monitor_release(GcHandle h, uint64_t owner_encoded) {
 }
 
 // ----------------------------------------------------------------------
-// Wait queues (Phase Z.4 + Z.6): delegacion a WaitTable lock-free
+// Wait queues ( Z.4 + Z.6): delegacion a WaitTable lock-free
 //
 // Antes (v1): @c std::unordered_map<GcHandle, std::vector<uint64_t>>
 // separados (monitor_waiters_ + condvar_waiters_).  NO thread-safe,

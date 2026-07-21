@@ -19,11 +19,11 @@ import "modules/screen";
 import "modules/keys";
 import "modules/input";
 
-public comptime i32 FP_MAX_ENTRIES = 2048;
-public comptime i32 FP_NAME_MAX    = 260;
-public comptime i32 FP_FINDDATA    = 320;
-public comptime i32 FP_MAX_DEPTH   = 2;
-public comptime i32 FP_QUERY_MAX   = 128;
+public const i32 FP_MAX_ENTRIES = 2048;
+public const i32 FP_NAME_MAX    = 260;
+public const i32 FP_FINDDATA    = 320;
+public const i32 FP_MAX_DEPTH   = 2;
+public const i32 FP_QUERY_MAX   = 128;
 
 public class FilePicker {
     public u8*   names;        // buffer concatenado de path-relativos

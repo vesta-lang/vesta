@@ -121,6 +121,17 @@ include_directories(BEFORE "${CMAKE_BINARY_DIR}/generated/include")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Codigo posicion-independiente (PIC) en TODOS los objetos.  El proyecto
+# produce ademas de los ejecutables una libreria COMPARTIDA embebible
+# (vesta_ffi -> libvesta.so/.dll) que enlaza las libs estaticas del proyecto y
+# las vendored (vx_lib, capstone, keystone, sqlite3, ...).  En ELF, enlazar un
+# objeto NO-PIC dentro de un .so falla (relocaciones R_X86_64_PC32 /
+# R_X86_64_TPOFF32 "recompile with -fPIC"), p.ej. el TLS `thread_local` de
+# vx_lib o simbolos de capstone.  Con PIC global el shared object enlaza en
+# Linux; en x86-64 el coste de PIC es despreciable y en Windows/MinGW el flag
+# es inocuo para los .a.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
@@ -276,6 +287,10 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/capi/")
 # main(); excluirlo del ejecutable `vm` y de vmcore para no duplicar main ni
 # arrastrar el dispatcher LSP donde no se usa.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/lsp/")
+# El driver de compilacion reutilizable (src/toolchain/) es su propia libreria
+# estatica (vesta_toolchain): pega el frontend (vx_lib) con el back-end de
+# ensamblado (vmcore) sin meterlo en vmcore (que no debe depender de vx_lib).
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/toolchain/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
@@ -324,7 +339,15 @@ add_subdirectory(libs/SourceCode/LibPEparse)
 # uniones anonimas y macros ELF -- compilan sin friccion C/C++) y expone la ABI
 # plana de include/aot/aot_emit_shim.h.  Enlaza LibPEparse de forma PUBLIC, asi
 # que linkar aot_emit arrastra LibPEparse transitivamente.
-add_library(aot_emit STATIC ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/aot_emit_shim.c)
+# Desacople multi-arch de la emision: el shim se parte en aot/common/ (arch-
+# neutral) + aot/x86_64 + aot/x86_32 + aot/x86_16 + aot/arm64.  Los .c de
+# emision incluyen aot/common/aot_emit_internal.h RELATIVO a su fichero (no se
+# mete src/ en el include-path).
+add_library(aot_emit STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/common/aot_emit_common.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_64/aot_emit_x86_64.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_32/aot_emit_x86_32.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_16/aot_emit_x86_16.c)
 target_include_directories(aot_emit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(aot_emit PUBLIC LibPEparse)
 
@@ -364,6 +387,7 @@ target_link_libraries(vm
         PRIVATE capstone
         PRIVATE keystone
         PRIVATE vx_lib
+        PRIVATE vesta_toolchain
         PRIVATE aot_emit
 )
 if(VESTA_BUILD_PREPROCESSOR)
@@ -436,24 +460,6 @@ target_link_options(vm PRIVATE
         >
 )
 
-add_library(vesta_install STATIC
-        src/install/install.cpp
-        src/install/install_options.cpp
-        src/install/manifest.cpp
-)
-
-if(WIN32)
-    target_sources(vesta_install PRIVATE src/install/platform_win.cpp)
-    target_link_libraries(vesta_install PRIVATE Shell32 Advapi32 Ole32 User32 Shlwapi)
-else()
-    target_sources(vesta_install PRIVATE src/install/platform_linux.cpp)
-endif()
-
-target_include_directories(vesta_install PUBLIC include)
-
-# Linkar al binario principal:
-target_link_libraries(vm PRIVATE vesta_install)
-
 # Enlace estático solo en Windows + Release
 target_link_options(vm PRIVATE
         $<$<AND:$<CONFIG:Release>,$<BOOL:${WIN32}>>:
@@ -506,6 +512,25 @@ else ()
 endif ()
 
 # ---------------------------------------------------------------------------
+# vesta_toolchain: driver de compilacion reutilizable (.vx -> .velb).
+#
+# Pega el frontend (vx_lib: compile_vx_source/_project) con el back-end de
+# ensamblado/linkado (vmcore: run_worker) en una funcion unica que comparten el
+# ejecutable `vm`, el servidor `vesta_lsp` (metodos vesta/compile*) y, via el
+# LSP, la libreria cliente Python.  Es una libreria aparte porque vx_lib es
+# standalone (no puede depender de vmcore) y vmcore no debe depender de vx_lib.
+# Como libreria estatica solo necesita los headers para compilar; los simbolos
+# de vx_lib/vmcore se resuelven al enlazar el ejecutable final (que ya enlaza
+# ambos).
+# ---------------------------------------------------------------------------
+add_library(vesta_toolchain STATIC
+        src/toolchain/toolchain.cpp
+        src/toolchain/aot_build.cpp
+        src/toolchain/native_backend.cpp)
+target_include_directories(vesta_toolchain PRIVATE ${VM_INCLUDES})
+target_compile_features(vesta_toolchain PUBLIC cxx_std_17)
+
+# ---------------------------------------------------------------------------
 # vesta_lsp: servidor Language Server Protocol para Vex (Fase 1).
 #
 # Binario independiente que habla LSP por stdio (JSON-RPC enmarcado por
@@ -534,6 +559,7 @@ add_executable(vesta_lsp
 target_include_directories(vesta_lsp PRIVATE ${VM_INCLUDES})
 target_link_libraries(vesta_lsp
         PRIVATE vx_lib
+        PRIVATE vesta_toolchain
         PRIVATE vmcore
         PRIVATE sqlite3
         PRIVATE capstone
@@ -648,6 +674,157 @@ else ()
     target_link_libraries(test_gc_lib PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Driver incremental granular (claves Merkle + CAS + plan_rebuild + fragmentos
+# de IR).  vx_lib aporta el indice + el driver; vmcore aporta ir:: (IrModule,
+# serializacion).  vx_lib va PRIMERO: referencia simbolos ir:: de vmcore.
+add_executable(test_vx_incremental tests/vx/test_incremental.cpp)
+target_include_directories(test_vx_incremental PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_vx_incremental PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_vx_incremental PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_vx_incremental PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_vx_incremental PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Huella computacional por-funcion (recursos + efectos + composicion).
+add_executable(test_analyze_fingerprint tests/analyze/test_fingerprint.cpp)
+target_include_directories(test_analyze_fingerprint PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_analyze_fingerprint PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_analyze_fingerprint PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_analyze_fingerprint PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_analyze_fingerprint PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Infra de analisis: AnalysisManager (type-erasure + dependencias + invalidacion).
+add_executable(test_analysis_manager tests/analysis/test_manager.cpp)
+target_include_directories(test_analysis_manager PRIVATE ${VM_INCLUDES})
+
+# Sistema unico de efectos: reticulo AbstractLoc, combinadores seq/join,
+# contratos declarativos.
+add_executable(test_effects tests/effects/test_effects.cpp)
+target_include_directories(test_effects PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_effects PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_effects PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_effects PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_effects PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Modelo de memoria UNICO: alias por rangos (may/must/no) + resolvedor
+# points-to compartido (raiz + offset const).
+add_executable(test_mem_loc tests/analysis/test_mem_loc.cpp)
+target_include_directories(test_mem_loc PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_mem_loc PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_mem_loc PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_mem_loc PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_mem_loc PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# DB de instrucciones embebida: matcher texto->FormID.
+add_executable(test_instr_db tests/vx/instr_db_test.cpp)
+target_include_directories(test_instr_db PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_instr_db PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_instr_db PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_instr_db PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_instr_db PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# CFG del asm inline (bloques basicos + aristas).
+add_executable(test_asm_cfg tests/vx/asm_cfg_test.cpp)
+target_include_directories(test_asm_cfg PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asm_cfg PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asm_cfg PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asm_cfg PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asm_cfg PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Diagnosticos estructurales del asm sobre el CFG.
+add_executable(test_asm_diag tests/vx/asm_diag_test.cpp)
+target_include_directories(test_asm_diag PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asm_diag PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asm_diag PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asm_diag PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asm_diag PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Diagramas del CFG del asm anotados con coste.
+add_executable(test_asm_diagram tests/vx/asm_diagram_test.cpp)
+target_include_directories(test_asm_diagram PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asm_diagram PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asm_diagram PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asm_diagram PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asm_diagram PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Lift de patrones de asm a IR tipado (atomicos).
+add_executable(test_asm_lift tests/vx/asm_lift_test.cpp)
+target_include_directories(test_asm_lift PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asm_lift PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asm_lift PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asm_lift PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asm_lift PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Catalogo multi-idioma de diagnosticos.
+add_executable(test_diag_catalog tests/vx/diag_catalog_test.cpp)
+target_include_directories(test_diag_catalog PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_diag_catalog PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_diag_catalog PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_diag_catalog PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_diag_catalog PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Selector IR -> AArch64 (backend arm64, Phase H.2).
+add_executable(test_arm64_select tests/jit/test_arm64_select.cpp)
+target_include_directories(test_arm64_select PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_arm64_select PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_arm64_select PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_arm64_select PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_arm64_select PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
@@ -691,7 +868,6 @@ if (VESTA_BUILD_FFI)
             PRIVATE keystone
             PRIVATE vx_lib
             PRIVATE aot_emit
-            PRIVATE vesta_install
     )
     if (VESTA_BUILD_PREPROCESSOR)
         target_link_libraries(vesta_ffi PRIVATE vpp_lib)
@@ -701,11 +877,15 @@ if (VESTA_BUILD_FFI)
     if (WIN32)
         target_link_libraries(vesta_ffi PRIVATE
                 vesta_openssl ws2_32 synchronization)
-        # DLL autocontenido: enlazar estaticamente libgcc/libstdc++ (y OpenSSL,
-        # via vesta_openssl) para que el consumidor de vesta.dll no necesite
-        # ningun runtime DLL adicional de MinGW ni de OpenSSL.
+        # DLL autocontenido: enlazar TODO estaticamente (libgcc, libstdc++ y
+        # libwinpthread via -static, mas OpenSSL via vesta_openssl) para que el
+        # consumidor de vesta.dll no necesite NINGUN runtime DLL adicional de
+        # MinGW ni de OpenSSL.  Sin -static (solo -static-libgcc/-libstdc++),
+        # libwinpthread-1.dll quedaba como dependencia dinamica -> el consumidor
+        # fallaba con "no se encuentra el punto de entrada clock_gettime64" en un
+        # sistema con un libwinpthread distinto.
         target_link_options(vesta_ffi PRIVATE
-                -static-libgcc -static-libstdc++)
+                -static -static-libgcc -static-libstdc++)
     else ()
         target_link_libraries(vesta_ffi PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
     endif ()
@@ -821,6 +1001,7 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/code_cache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/runtime_entries.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/x86_encoder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/jit_branch_prof.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/jit_registry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/jit/stack_scan.cpp
 

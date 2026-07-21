@@ -28,15 +28,15 @@ comptime i64 pow_int(i64 base, i64 e) {
 }
 
 // --- (1) comptime global con builtins comptime.
-comptime string TYPE_NAME = typename<Vec3>();
-comptime u64    TYPE_SZ   = sizeof<Vec3>();
-comptime u64    F10       = fact(10);          // 3628800
-comptime u64    F15       = fib(15);           // 610
+const string TYPE_NAME = typename<Vec3>();
+const u64    TYPE_SZ   = sizeof<Vec3>();
+const u64    F10       = fact(10);          // 3628800
+const u64    F15       = fib(15);           // 610
 
 // --- (4) Operadores string.
-comptime string PREFIX = "vec_";
-comptime string COMBINED = comptime_concat(PREFIX, TYPE_NAME);   // "vec_Vec3"
-comptime u64 COMBINED_LEN = comptime_strlen(COMBINED);            // 8
+const string PREFIX = "vec_";
+const string COMBINED = comptime_concat(PREFIX, TYPE_NAME);   // "vec_Vec3"
+const u64 COMBINED_LEN = comptime_strlen(COMBINED);            // 8
 
 // --- static_assert sobre todos los anteriores.
 static_assert(F10 == 3628800,          "fact(10)");

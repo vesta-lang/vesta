@@ -495,7 +495,7 @@ static const std::unordered_map<std::string, InstructionPattern>
         /* --- gcfinall: finaliza todo objeto GC vivo con recurso interno --- */
         {"gcfinall", {"gcfinall", OpArity::ZERO}},
 
-        /* --- Phase Z: memoria compartida cross-process ---
+        /* ---  Z: memoria compartida cross-process ---
          *  Todos arity TWO (reg, reg).  El lowering los emite cuando un
          *  objeto tiene SHARED_HANDLE_BIT puesto.  Stubs registrados aqui
          *  para que el .vel emitido parsee; runtime los ejecuta como mov
@@ -507,6 +507,9 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"atomicld", {"atomicld", OpArity::TWO}},     // dst, addr
         {"atomicst", {"atomicst", OpArity::TWO}},     // addr, val
         {"atomiccas", {"atomiccas", OpArity::FOUR}},  // dst, addr, exp, des
+        {"csel", {"csel", OpArity::FOUR}}, // dst, cond, a, b: dst = cond?a:b
+        {"mld", {"mld", OpArity::FOUR}},   // dst, index, ctrlword, disp16
+        {"mst", {"mst", OpArity::FOUR}},   // src, index, ctrlword, disp16
         {"atomicadd", {"atomicadd", OpArity::THREE}}, // dst, addr, delta
         {"sharedstat", {"sharedstat", OpArity::TWO}},
 
@@ -997,7 +1000,7 @@ exit_error:
     // se usa luego por el bytecode emitter para registrar el par
     // (byte_offset, source_line) en la tabla debug del linker.
     instr->source_line = lexer.last_src_line;
-    // Captura el stackmap preciso (Phase E.1) del marcador `// @sm <hex>`
+    // Captura el stackmap preciso ( E.1) del marcador `// @sm <hex>`
     // mas reciente.  A diferencia de @line (que persiste hasta el proximo
     // marcador), el stackmap aplica SOLO a la instruccion inmediatamente
     // siguiente: lo consumimos y limpiamos para que no se arrastre a una

@@ -2,7 +2,7 @@ namespace ejemplos.naked_call_from_normal;
 
 // 231_naked_call_from_normal.vx
 //
-// LIM-B: una funcion Vex NORMAL (no @Naked) llama a una funcion @Naked del
+// LIM-B: una funcion  NORMAL (no @Naked) llama a una funcion @Naked del
 // MISMO fichero, en los tres modos (-m vm / -m jit / -m aot).  El primitivo
 // @Naked es asm nativo puro; el routing a naked_dispatch (interp/JIT) o la
 // llamada nativa directa (AOT) debe dar el MISMO resultado.
@@ -32,7 +32,7 @@ namespace ejemplos.naked_call_from_normal;
     }
 }
 
-// Funcion Vex NORMAL (con prologo/epilogo del compilador) que llama al @Naked.
+// Funcion  NORMAL (con prologo/epilogo del compilador) que llama al @Naked.
 u64 compute(u64 x, u64 y) {
     u64 r = add_asm(x, y);
     return r;

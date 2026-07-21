@@ -697,6 +697,13 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         }
         return;
 
+    case IrOp::FMA:
+        if (ins.operands.size() >= 3) {
+            backend_.emit_fma(ctx, ins.dst, ins.operands[0], ins.operands[1],
+                              ins.operands[2], ins.type);
+        }
+        return;
+
     // Aritmetica unaria (entera y float).
     case IrOp::NEG:
     case IrOp::NOT:
@@ -890,7 +897,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         return;
     }
 
-    // Markers semanticos (Phase B): no-op para transpiler.
+    // Markers semanticos ( B): no-op para transpiler.
     case IrOp::MAKE_VARIANT:
     case IrOp::MATCH_VARIANT:
     case IrOp::MAKE_CLOSURE:
@@ -962,7 +969,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
                               ins.type);
         return;
 
-    // Phase AS inc.3: inline asm nativo de la CPU host.  El backend
+    //  AS inc.3: inline asm nativo de la CPU host.  El backend
     // que lo soporte (port-C) emite @c __asm__ __volatile__; el resto
     // cae a emit_unsupported via el default del hook.
     case IrOp::INLINE_ASM: backend_.emit_inline_asm(ctx, ins); return;

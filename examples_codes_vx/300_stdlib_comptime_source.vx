@@ -1,0 +1,20 @@
+// -----------------------------------------------------------------------------
+// `source(expr)` de la stdlib (std.comptime, re-exportado desde
+// std.comptime.basics).  Ejercita:
+//   - re-export de una comptime fn via `public import` (aparece en el .vxi).
+//   - siembra TRANSITIVA del param `expr` a traves de la cadena de re-export.
+//   - evaluacion de la comptime fn importada.
+// `source(X)` devuelve el TEXTO CRUDO del argumento (sin comillas): source(a * b)
+// -> "a * b".  Asi el resultado puede spliceearse como codigo Vesta real y el
+// IDE resalta el argumento como codigo (no un string opaco).
+// -----------------------------------------------------------------------------
+import std.comptime only source;
+
+i32 main() {
+    i32 a = 7;
+    i32 b = 6;
+    string s = source(a * b);          // -> "a * b"  (texto crudo, sin comillas)
+    println("s=[${s}]");               // s=[a * b]
+    if (s == "a * b") { return 42; }
+    return 0;
+}

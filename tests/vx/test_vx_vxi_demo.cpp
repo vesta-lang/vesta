@@ -1,4 +1,4 @@
-// Demo: muestra como se ve un fichero .vxi (Phase M.2).
+// Demo: muestra como se ve un fichero .vxi ( M.2).
 //
 // Construye a mano un VxiModule pequeno y representativo (typedef new,
 // struct, function) y vuelca:
@@ -7,7 +7,7 @@
 //   - El hex dump del binario.
 //   - El round-trip parse -> verificacion.
 
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 
 #include <cstdio>
 #include <fstream>
@@ -54,7 +54,7 @@ void hex_dump_annotated(const std::vector<uint8_t> &b) {
 int main() {
     std::cout
         << "================================================================\n";
-    std::cout << "Modulo Vex (lo que el usuario escribio):\n";
+    std::cout << "Modulo Vesta-lang (lo que el usuario escribio):\n";
     std::cout
         << "================================================================\n";
     std::cout << "// buffer.vx\n"

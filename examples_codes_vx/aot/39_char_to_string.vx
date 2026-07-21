@@ -1,4 +1,4 @@
-// Cast char -> string (Vex Embed, native_poo_ / AOT): `(string)<char>`
+// Cast char -> string (bed, native_poo_ / AOT): `(string)<char>`
 // construye un value-string {ptr,len,cap} de UN caracter (buffer de 2
 // bytes en heap: el char + nul; len=1, cap=2).  RAII libera el buffer
 // al exit del scope.

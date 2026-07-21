@@ -190,6 +190,21 @@ class LspServer {
      */
     void send_result(const nlohmann::json &id, const nlohmann::json &result);
 
+    /**
+     * @brief Atiende @c vesta/compile y @c vesta/compileProject.
+     *
+     * Compila el documento @p uri a @c .velb usando el compilador embebido
+     * (@c vesta::tc::compile).  Si el documento esta abierto usa su buffer como
+     * overlay; si no, lee del disco.  NO ejecuta el programa.
+     * @param method @c "vesta/compile" (fichero) o @c "vesta/compileProject".
+     * @param uri    URI del fichero raiz a compilar.
+     * @param params Parametros de la peticion (output, mode, debug, ...).
+     * @return JSON con @c {ok, output, diagnostics, frontend_us, message}.
+     */
+    nlohmann::json compile_request(const std::string &method,
+                                   const std::string &uri,
+                                   const nlohmann::json &params);
+
     JsonRpcTransport transport_; ///< Transporte de mensajes.
     DocumentStore docs_;         ///< Documentos abiertos.
     AnalysisEngine engine_;      ///< Motor de analisis reutilizable.

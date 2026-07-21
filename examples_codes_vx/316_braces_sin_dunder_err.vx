@@ -1,0 +1,19 @@
+// NEGATIVO: `a{...}` NO es sintaxis valida sobre un tipo que no declara
+// `__braces__`.  El operador solo existe si el tipo lo define.
+//
+// No confundir con `Punto a = {2, 3}`, que es la lista de inicializacion de los
+// campos y sigue siendo valida para cualquier struct (la de abajo compila; lo
+// que el compilador rechaza es el postfijo `a{...}` sobre el valor ya
+// construido).
+namespace neg_braces;
+
+struct Punto {
+    i64 x;
+    i64 y;
+}
+
+i32 main() {
+    Punto a = {2, 3};       // init-list: correcto
+    i64 q = a{3, 4, 5};     // error: Punto no declara __braces__
+    return (i32) q;
+}

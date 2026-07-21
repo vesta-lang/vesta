@@ -227,13 +227,13 @@ void vrt_gc_write_barrier(vrt_proc *proc, vrt_handle old_handle) {
  * scheduler (vm.make_ready).  En v1 los wrappers solo implementan el
  * fast path (lock disponible o reentrante).  El slow path (cola de
  * espera + wake) seguira pasando por el bytecode interpretado hasta
- * Phase E (D.2).
+ *  E (D.2).
  */
 
 int32_t vrt_monitor_enter(vrt_proc *proc, vrt_handle obj) {
     if (!proc || obj == VRT_NULL_HANDLE) return 0;
     runtime::ProcessVM *p = as_proc(proc);
-    // Phase Z.11 ext: usamos el PID encoded (sched<<32|local) de 48 bits para
+    //  Z.11 ext: usamos el PID encoded (sched<<32|local) de 48 bits para
     // evitar la colision local_pid cross-scheduler.
     const uint64_t pid = (static_cast<uint64_t>(p->pid.scheduler_id) << 32) |
                          static_cast<uint64_t>(p->pid.local_pid);
@@ -246,7 +246,7 @@ void vrt_monitor_exit(vrt_proc *proc, vrt_handle obj) {
     const uint64_t pid = (static_cast<uint64_t>(p->pid.scheduler_id) << 32) |
                          static_cast<uint64_t>(p->pid.local_pid);
     (void)p->gc_heap.monitor_release(obj, pid);
-    /* TODO Phase E (D.2): si monitor_release devuelve un waiter,
+    /* TODO  E (D.2): si monitor_release devuelve un waiter,
      * llamar vm.make_ready(next).  Por ahora el bytecode handler
      * en exec_instruction_sync.cpp se encarga. */
 }
@@ -254,7 +254,7 @@ void vrt_monitor_exit(vrt_proc *proc, vrt_handle obj) {
 void vrt_monitor_wait(vrt_proc *proc, vrt_handle obj) {
     /* Slow path: queda como stub.  El JIT en v1 cae al interprete
      * via el trampoline @c jit_to_interp para llamar al bytecode
-     * MONWAIT.  En Phase E expondremos un wait completo aqui. */
+     * MONWAIT.  En  E expondremos un wait completo aqui. */
     (void)proc;
     (void)obj;
 }
@@ -1053,7 +1053,7 @@ uint64_t vrt_call_bc_function(vrt_proc *proc, uint64_t bc_entry_va) {
 uint64_t vrt_calln(vrt_proc *proc, const char *lib_name, const char *fn_name) {
     /* CALLN desde JIT: stub que lanza fatal.  La resolucion de
      * (lib, fn) -> fn_ptr requiere acceso al Loader y al cache de
-     * native_imports.  Phase D.3-G+ implementara esto plenamente.
+     * native_imports.   D.3-G+ implementara esto plenamente.
      * Por ahora cualquier funcion con CALLN no se compila (el selector
      * marca unsupported antes de llegar aqui via warn).
      *
@@ -1065,7 +1065,7 @@ uint64_t vrt_calln(vrt_proc *proc, const char *lib_name, const char *fn_name) {
     if (proc) {
         runtime::throw_fatal(
             as_proc(proc), VESTA_FATAL_ILLEGAL_INSTRUCTION,
-            "calln desde JIT no implementado en v1 (Phase D.3-G+)");
+            "calln desde JIT no implementado en v1 ( D.3-G+)");
     }
     return 0;
 }
@@ -1129,7 +1129,7 @@ uint64_t vrt_proc_pid(vrt_proc *proc) {
 }
 
 /* ----------------------------------------------------------------------- */
-/* Acceso a memoria VM (Phase D.3-G)                                       */
+/* Acceso a memoria VM ( D.3-G)                                       */
 /* ----------------------------------------------------------------------- */
 
 uint64_t vrt_vm_read_u64(vrt_proc *proc, uint64_t vaddr) {
@@ -1175,7 +1175,7 @@ void vrt_vm_write_u8(vrt_proc *proc, uint64_t vaddr, uint8_t value) {
 }
 
 uint8_t *vrt_vm_translate(vrt_proc *proc, uint64_t vaddr) {
-    /* Phase D.jit-mem-model FULL: traduccion VM-addr -> host_ptr.
+    /*  D.jit-mem-model FULL: traduccion VM-addr -> host_ptr.
      *
      * Diseno portable: confiamos en que el frontend marca
      * is_host_ptr correctamente en el IR.  El JIT emite la llamada
@@ -1197,7 +1197,7 @@ uint8_t *vrt_vm_translate(vrt_proc *proc, uint64_t vaddr) {
 }
 
 /* ----------------------------------------------------------------------- */
-/* Class registry runtime entries (Phase D.3-G)                            */
+/* Class registry runtime entries ( D.3-G)                            */
 /* ----------------------------------------------------------------------- */
 
 vrt_class *vrt_findclass(vrt_proc *proc, uint64_t params_vaddr) {
@@ -1521,7 +1521,7 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
     read_params_unified(p, params_vaddr, &pr, sizeof(pr));
     if (!pr.class_ptr || pr.name_len == 0 || pr.name_len > 4096) return nullptr;
 
-    /* CACHE (Phase D.8): el dispatch de interfaz (shape.area()) llama a este
+    /* CACHE ( D.8): el dispatch de interfaz (shape.area()) llama a este
      * findmethod POR ITERACION, y resolverlo cuesta 2 lecturas de vm_mem
      * (params
      * + nombre) + copia del nombre + hash lookup -- pero (class_ptr, name_addr)

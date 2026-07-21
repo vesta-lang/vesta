@@ -1,0 +1,39 @@
+// examples_codes_vx/308_naked_raw_variadic.vx
+//
+// Variadico CRUDO `...` (pelado, sin tipo ni nombre) en una funcion @Naked:
+// recibe N args de cualquier tipo, CRUDOS en los registros de argumento del ABI
+// (no se empaquetan; no hay `vacount()` ni array).  El cuerpo asm los lee de los
+// registros directamente.  Es el equivalente a una `F(a, ...)` de C.
+//
+// Aqui un @Naked suma su primer arg FIJO + el primer arg VARIADICO crudo.  El
+// registro donde aterriza cada arg depende del ABI, asi que se selecciona con
+// @Target:
+//   Win64: arg0 -> rcx, arg1 -> rdx
+//   SysV : arg0 -> rdi, arg1 -> rsi
+//
+// Resultado esperado: R0 == 42.
+
+@Target("os:windows")
+@Naked
+u64 add_raw(u64 a, ...) {
+    asm {
+        mov rax, rcx      // arg fijo a
+        add rax, rdx      // primer arg variadico crudo
+        ret
+    }
+}
+
+@Target("!os:windows")
+@Naked
+u64 add_raw(u64 a, ...) {
+    asm {
+        mov rax, rdi      // arg fijo a
+        add rax, rsi      // primer arg variadico crudo
+        ret
+    }
+}
+
+i32 main() {
+    u64 r = add_raw(40, 2);   // 40 + 2 = 42
+    return (i32)r;
+}

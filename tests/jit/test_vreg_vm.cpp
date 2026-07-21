@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_vreg_vm.cpp
- * @brief Test del path vreg en modo VM_ABI (Phase D.7, commit 5a).
+ * @brief Test del path vreg en modo VM_ABI ( D.7, commit 5a).
  *
  * Compila funciones IR con la convencion VM_ABI (args en
  * @c proc->registers.regs[1..N], return en @c regs[0], @c ProcessVM* en RBX)
@@ -1440,7 +1440,7 @@ static void test_vm_abs() {
 }
 
 /* ---- Test: inline de GC_DEREF_HOST contra una HandleTable falsa ------- *
- * Phase D.7 (principio "JIT inline > runtime"): verifica que el codegen
+ *  D.7 (principio "JIT inline > runtime"): verifica que el codegen
  * inline de GC_DEREF_HOST computa EXACTAMENTE lo que @c GcHeap::deref:
  *   - handle local vivo            -> data_[h].addr + sizeof(GcHeader)=8
  *   - handle fuera de rango        -> 0
@@ -2150,7 +2150,7 @@ int main() {
 #else
     setenv("VESTA_JIT_VREG_IDIV", "1", 1);
 #endif
-    std::printf("=== test_vreg_vm (Phase D.7 commit 5a, VM_ABI) ===\n");
+    std::printf("=== test_vreg_vm ( D.7 commit 5a, VM_ABI) ===\n");
     test_vm_divmod();
     test_vm_divmod_loop();
     test_vm_add();

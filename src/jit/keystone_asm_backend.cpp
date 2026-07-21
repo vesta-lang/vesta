@@ -12,9 +12,9 @@
 
 /**
  * @file keystone_asm_backend.cpp
- * @brief Phase AS inc.4b: impl de @c vx::AsmBackend con Keystone.
+ * @brief  AS inc.4b: impl de @c vx::AsmBackend con Keystone.
  *
- * UNICO fichero del proyecto que incluye @c keystone.h para Phase AS (la
+ * UNICO fichero del proyecto que incluye @c keystone.h para  AS (la
  * decision de diseno exige aislar la dependencia tras la interfaz pura
  * @c vx::AsmBackend).  Ensambla texto NASM Intel a bytes; usado hoy para
  * validar la sintaxis del body en compile-time (inc.4b) y, en inc.5, para
@@ -22,7 +22,7 @@
  */
 
 #include "jit/keystone_asm_backend.h"
-#include "vx/asm_backend.h"
+#include "vx/asm/asm_backend.h"
 
 #include <capstone/capstone.h>
 #include <keystone/keystone.h>
@@ -30,6 +30,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <cstdio>
 #include <mutex>
 
@@ -74,6 +75,12 @@ thread_local SymState *g_sym_state = nullptr;
 
 bool vx_sym_resolver(const char *symbol, uint64_t *value) {
     if (g_sym_state == nullptr || symbol == nullptr) return false;
+    // Un SIMBOLO de asm es un identificador (empieza por letra, '_' o '.').  Un
+    // LITERAL numerico empieza por digito -> NO es simbolo: devolver false para
+    // que Keystone lo parsee el mismo.  Sin esto, en AArch64 (donde Keystone
+    // consulta el resolver para los inmediatos `#N`) un `#42` se interceptaria
+    // y corromperia el valor.  Cubre decimal, 0x..., 0b..., etc.
+    if (symbol[0] >= '0' && symbol[0] <= '9') return false;
     *value = g_sym_state->intern(symbol);
     return true;
 }
@@ -204,12 +211,31 @@ bool arch_to_ks(vx::AsmArch a, ks_arch &arch, ks_mode &mode) {
     return false;
 }
 
-/// Impl concreta: abre Keystone por cada @c assemble (stateless y
-/// thread-safe; el coste de @c ks_open es despreciable frente al
-/// compile-time global).
+/// Impl concreta: abre un @c ks_engine por cada @c assemble.  El engine es
+/// LOCAL a la llamada, pero Keystone/LLVM mantiene ESTADO GLOBAL mutable (registro
+/// de targets + capa MC) que NO es thread-safe: dos @c ks_asm concurrentes (p.ej.
+/// dos modulos con inline-asm compilados en paralelo por M8) corren sobre ese
+/// estado -> corrupcion/crash.  Serializamos toda la operacion con un mutex
+/// global.  Ensamblar es un camino RARO (un bloque `asm { }` puntual), asi que la
+/// serializacion tiene coste despreciable frente al resto del compile paralelo.
 struct KeystoneAsmBackend final : vx::AsmBackend {
     vx::AsmAssembleResult assemble(const std::string &nasm,
                                     vx::AsmArch arch) override {
+        // Keystone/LLVM no es thread-safe: un unico assemble a la vez.
+        static std::mutex ks_global_mtx;
+        std::lock_guard<std::mutex> ks_lock(ks_global_mtx);
+        // Cache de ensamblado: (arch, nasm) es DETERMINISTA -> mismo texto =
+        // mismos bytes/sym_refs/insn_offsets.  Muchos bloques asm (y las
+        // instrucciones ASM_MICRO liftadas) repiten el mismo fragmento; sin
+        // cache re-invocariamos Keystone (abrir engine + ensamblar + Capstone)
+        // por cada ocurrencia.  Bajo el mismo mutex global -> thread-safe.
+        static std::unordered_map<std::string, vx::AsmAssembleResult> ks_cache;
+        std::string cache_key(1, static_cast<char>(arch));
+        cache_key += nasm;
+        {
+            auto it = ks_cache.find(cache_key);
+            if (it != ks_cache.end()) return it->second;
+        }
         vx::AsmAssembleResult r;
         ks_arch ka;
         ks_mode km;
@@ -222,15 +248,28 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
             r.error = "ks_open fallo";
             return r;
         }
-        // El cuerpo es NASM Intel (copy-paste de docs Intel).
-        ks_option(ks, KS_OPT_SYNTAX, KS_OPT_SYNTAX_NASM);
-        // Resolver de simbolos propios: los identificadores no-locales (no
-        // etiquetas del bloque) se resuelven a un sentinela; tras ensamblar
-        // localizamos el campo y emitimos un SymRef (reloc).
+        // Sintaxis NASM Intel SOLO para x86 (copy-paste de docs Intel).  En
+        // AArch64/ARM esta opcion es incorrecta y hace que Keystone lea los
+        // inmediatos bare como HEX (p.ej. `#42` -> 0x42=66, `#16` -> 0x16=22),
+        // corrompiendo el codigo; alli se usa la sintaxis OFICIAL ESTANDAR de
+        // ARM (la que Keystone aplica por defecto para AArch64).
+        if (arch == vx::AsmArch::X86_64 || arch == vx::AsmArch::X86_32 ||
+            arch == vx::AsmArch::X86_16)
+            ks_option(ks, KS_OPT_SYNTAX, KS_OPT_SYNTAX_NASM);
+        // Resolver de simbolos propios (SOLO x86: la maquinaria de asm-inline).
+        // En AArch64 la mera presencia del resolver altera el parser de Keystone
+        // y corrompe los inmediatos; alli se usa Keystone plano (sintaxis oficial
+        // de ARM), como el ensamblador general.  Los simbolos cross-funcion arm64
+        // se resuelven por relocs (R_AARCH64_CALL26), no por este resolver.
+        const bool ks_is_x86 =
+            (arch == vx::AsmArch::X86_64 || arch == vx::AsmArch::X86_32 ||
+             arch == vx::AsmArch::X86_16);
         SymState sym_state;
-        g_sym_state = &sym_state;
-        ks_option(ks, KS_OPT_SYM_RESOLVER,
-                  reinterpret_cast<size_t>(&vx_sym_resolver));
+        if (ks_is_x86) {
+            g_sym_state = &sym_state;
+            ks_option(ks, KS_OPT_SYM_RESOLVER,
+                      reinterpret_cast<size_t>(&vx_sym_resolver));
+        }
 
         // x86-64: `DEFAULT REL` -> `[sym]` (operando de memoria a un simbolo,
         // sin registro base) se ensambla RIP-RELATIVO (ff 25 disp32) en vez de
@@ -414,6 +453,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                 }
             }
         }
+        ks_cache.emplace(std::move(cache_key), r);
         return r;
     }
 };

@@ -79,9 +79,9 @@ enum class NodeKind : uint8_t {
                   ///< payload).
     ExternFnDecl, ///< @c extern "lib.dll" fn name(params) -> ret; (FFI
                   ///< declarativo, 0 overhead).
-    ImportDecl, ///< @c import "path" [as alias] [only A, B];  (Phase M sistema
+    ImportDecl, ///< @c import "path" [as alias] [only A, B];  ( M sistema
                 ///< de modulos).
-    NamespaceDecl, ///< @c namespace foo { decls }  (Phase M.7.c, inline
+    NamespaceDecl, ///< @c namespace foo { decls }  ( M.7.c, inline
                    ///< namespace estilo C++).
     BytesDecl,     ///< @c bytes name { db/dw/dd/dq/times ... }  (datos crudos
                    ///< estilo NASM, AOT).
@@ -113,7 +113,7 @@ enum class NodeKind : uint8_t {
     ComptimeBlockStmt, ///< A.39: comptime { ... } scope para comptime const +
                        ///< for + asserts
     ComptimeForStmt, ///< A.39: comptime for (i in lo..hi) { body } -- unrolled
-    AsmStmt, ///< Phase AS: asm [quals] { ...NASM... } clobbers(...)  (inline
+    AsmStmt, ///<  AS: asm [quals] { ...NASM... } clobbers(...)  (inline
              ///< asm nativo)
 
     // ----- Expressions -----
@@ -272,6 +272,56 @@ struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de definir
 struct BlockStmt; ///< Necesaria para LambdaExpr antes de su definicion.
 
 /**
+ * @struct PendingComplexity
+ * @brief Un @c @complexity cuyo @c when: habla del PARAMETRO DE TIPO y por
+ *        tanto no se puede resolver al parsear.
+ *
+ * Los atomos de target (`arch:x86_64`) los resuelve el parser -- el target se
+ * conoce al compilar --, pero un predicado como `is_float<T>()` solo tiene
+ * respuesta cuando T es concreto, o sea al MONOMORPHIZAR.  El coste de un
+ * metodo generico depende de T de verdad: `atomic<i64>::fetch_add` es un
+ * `lock xadd` (O(1)) y `atomic<f64>::fetch_add` un bucle CAS (O(n)), porque el
+ * `if (is_float<T>())` lo decide en comptime.
+ *
+ * El parser guarda aqui esas declaraciones tal cual; el clon de la
+ * monomorphizacion evalua cada @c when con T ligado y vuelca la que casa a los
+ * campos normales de la instanciacion.
+ */
+struct PendingComplexity {
+    std::string when;  ///< expresion del `when:` (con al menos un atomo sobre T).
+    std::string expr;  ///< azucar posicional (= total_post).
+    std::vector<std::string> vars;
+    std::string partial_pre;
+    std::string partial_post;
+    std::string total_pre;
+    std::string total_post;
+};
+
+/**
+ * @struct PendingFootprint
+ * @brief Un contrato de HUELLA (@pure/@nothrow/@nopanic/@alloc/@stack) con un
+ *        `when:`, sin resolver.
+ *
+ * La huella tambien varia con la arquitectura: una variante
+ * @Target("arch:arm64") con `register()` gasta frame y toca memoria que su
+ * gemela x86-64 no, asi que su `@stack`/`@pure` no son los mismos.  Como el
+ * @complexity, un contrato de huella puede condicionarse con `when:` y resolver
+ * por especificidad; los que hablan de un type param solo se resuelven al
+ * monomorphizar.  Cada entrada escribe UN campo (la anotacion que lo declaro).
+ * Los tri-estado son -1 = no declarado, 0/1 = valor.
+ */
+struct PendingFootprint {
+    std::string when; ///< expresion del `when:` (vacia = siempre).
+    int8_t pure = -1;
+    int8_t nothrow_ = -1;
+    int8_t nopanic = -1;
+    int64_t alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+    int64_t stack_partial = -1; ///< @stack(partial: N).
+};
+
+/**
  * @brief @c true si k representa una expresion.
  */
 constexpr bool is_expr_kind(NodeKind k) noexcept {
@@ -305,6 +355,11 @@ constexpr bool is_stmt_kind(NodeKind k) noexcept {
  */
 struct TypeNode : Node {
     bool is_nonnull = false;
+    /// const-correctness C-style POR NIVEL: `const T` marca el nodo del tipo
+    /// base; `T *const` marca el PointerTypeNode de ese nivel.  Se propaga a
+    /// @c Type::is_const en type_from_node.  (volatile se parsea pero se ignora:
+    /// Vesta no tiene semantica volatile.)
+    bool is_const = false;
     explicit TypeNode(NodeKind k) : Node(k) {}
 };
 
@@ -565,11 +620,11 @@ struct FieldAccessExpr : Expr {
     /// getfield directo.  1 = getter (`obj.prop`), 2 = setter (lhs
     /// de un AssignExpr; @ref AssignExpr::is_property_set se marca
     /// en el padre).  3 = static field de clase (Counter.count).
-    /// 4 = simbolo de namespace importado (Phase M.7, `lib_a.valor_a`).
+    /// 4 = simbolo de namespace importado ( M.7, `lib_a.valor_a`).
     /// El metodo se llama `get_<field_name>` o
     /// `set_<field_name>` segun el caso.
     uint8_t property_kind = 0;
-    /// Phase M.7: cuando @c property_kind == 4 este campo guarda
+    ///  M.7: cuando @c property_kind == 4 este campo guarda
     /// el indice del namespace en @c TypeChecker::imported_namespaces_
     /// para que el lowering pueda resolver el mangled_label sin
     /// depender de la pila de scopes (que ya esta vacia al lower).
@@ -686,6 +741,19 @@ struct AssignExpr : Expr {
     std::unique_ptr<Expr>
         target; // lvalue: IdentExpr, FieldAccess, IndexExpr o UnaryExpr Deref
     std::unique_ptr<Expr> value;
+    /// Operator overloading del COMPOUND ASSIGN via dunder propio
+    /// (@c __iadd__ para `+=`, @c __isub__ para `-=`, ...).  Cuando el type
+    /// checker ve que @c target es de tipo CLASS o STRUCT que declara el dunder
+    /// cuya firma acepta @c value, deja aqui su nombre; el lowering emite UNA
+    /// llamada a `target.__iop__(value)` en vez del clasico load-op-store.
+    ///
+    /// Tiene dunder PROPIO y no se desugara a `target = target OP value`
+    /// (@c __add__ + store) por una razon de fondo: eso son DOS operaciones.
+    /// Para un tipo que promete atomicidad (@c atomic<T>) la diferencia no es
+    /// de rendimiento sino de correccion -- `g += 1` tiene que ser UNA
+    /// instruccion indivisible, no leer-sumar-escribir.  Cadena vacia = sin
+    /// sobrecarga; comportamiento clasico.
+    std::string overload_method;
     AssignExpr() : Expr(NodeKind::AssignExpr) {}
 };
 
@@ -712,6 +780,12 @@ struct CallExpr : Expr {
     /// directa por nombre.  El lowering baja a CALLIND (llamada indirecta a
     /// traves del puntero que resulta de evaluar @c callee).
     bool is_indirect_call = false;
+    /// Sobrecarga de `{}`: el postfijo @c `a{3,4,5}` produce un CallExpr con
+    /// este flag, que el type checker resuelve a @c `a.__braces__(3,4,5)` en
+    /// lugar de a @c __call__.  Son operadores DISTINTOS: un tipo puede
+    /// definir uno, el otro o los dos.  No confundir con @c `T a = {2,3,3}`
+    /// (init-list de campos), que es un InitListExpr y no pasa por aqui.
+    bool is_braces_call = false;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 
@@ -839,6 +913,10 @@ struct IndexExpr : Expr {
     bool is_range = false;            ///< true para `s[a..b]` / `s[a..=b]`.
     bool range_inclusive = false;     ///< true para `..=` (incluye b).
     std::unique_ptr<Expr> range_hi;   ///< limite superior @c b del rango.
+    /// Overlay F3b: true si @c base es `v.arr` (campo array de un overlay).
+    /// El lowering computa `base_overlay + pos + index*stride` (escala por el
+    /// STRIDE del overlay, no por sizeof).  @c result_type = tipo del elemento.
+    bool is_overlay_array = false;
     IndexExpr() : Expr(NodeKind::IndexExpr) {}
 };
 
@@ -872,7 +950,7 @@ struct BlockStmt : Stmt {
  *
  * No hay captura lexica en MVP: el body solo accede a su propio
  * estado y al pasado via mailbox (@c msgsend / @c msgrecv).  Closures
- * con captura llegan en Phase B.
+ * con captura llegan en  B.
  */
 struct SpawnExpr : Expr {
     /// @brief politica de placement del proceso hijo.
@@ -893,6 +971,7 @@ struct SpawnExpr : Expr {
     /// valor de retorno (Future<T> vs PID).
     enum class Policy : uint8_t { Auto = 0, Here = 1, Pinned = 2 };
     Policy policy = Policy::Auto;
+
     std::unique_ptr<Expr> sched_idx; ///< Solo @c Pinned: indice del scheduler.
     std::unique_ptr<BlockStmt> body;
     SpawnExpr() : Expr(NodeKind::SpawnExpr) {}
@@ -978,6 +1057,19 @@ struct MatchArm {
     std::string variant_name; ///< "Red", "Green", "_" (default), etc.
     std::vector<std::string>
         bindings; ///< Nombres locales para los payload fields.
+    /// Patron de VALOR para `match` sobre escalares (enteros/chars): `case 1 =>`,
+    /// `case 'a' =>`.  no-owning-al-cuerpo IntLitExpr/CharLitExpr.  null en las
+    /// arms de variante ADT y en el default `_`.  El type checker exige que el
+    /// scrutinee sea entero/char y todos los patrones literales de ese tipo.
+    /// Tambien es el literal de un match sobre string (StringLitExpr).
+    std::unique_ptr<Expr> value_pattern;
+    /// Fin (alto) de un patron de RANGO `case a..b =>` (exclusivo) o
+    /// `case a..=b =>` (inclusivo), donde @c value_pattern es el inicio (bajo).
+    /// null = patron de valor unico.  Solo para enteros/chars.
+    std::unique_ptr<Expr> value_pattern_hi;
+    /// true si el rango es inclusivo (`..=`): `a <= v <= b`.  false si es
+    /// exclusivo (`..`): `a <= v < b`.  Solo relevante si value_pattern_hi.
+    bool range_inclusive = false;
     std::unique_ptr<Stmt> body;
     /// Bug fix 2026-05-23: guard opcional `case Pat if expr =>`.  Si
     /// presente, el lowering evalua la expr DESPUES del tag match;
@@ -1143,7 +1235,7 @@ struct VarDeclStmt : Stmt {
     /// resultante tiene bit 31 (SHARED_HANDLE_BIT) set.  Stdlib clases
     /// son agnosticas; solo el var-decl decide.
     bool is_shared = false;
-    /// Phase AS inc.2: storage-class `register("reg") T name;` -- la
+    ///  AS inc.2: storage-class `register("reg") T name;` -- la
     /// variable vive en el registro fisico nombrado (NASM).  En el
     /// cuerpo @c asm el programador usa el registro directamente, no el
     /// nombre Vesta.  Vacio = sin storage register (var-decl normal).  Lo
@@ -1364,7 +1456,7 @@ struct SynchronizedStmt : Stmt {
 /**
  * @struct AsmStmt
  * @brief @c asm [quals] @c { @c ...NASM... } @c clobbers(...) -- ensamblador
- *        en linea nativo (Phase AS), distinto del @c @Asm whole-function
+ *        en linea nativo ( AS), distinto del @c @Asm whole-function
  *        (que es bytecode .vel de la VM).
  *
  * El cuerpo es texto NASM Intel verbatim, capturado por raw-slicing del
@@ -1379,8 +1471,43 @@ struct SynchronizedStmt : Stmt {
  * que es asm de la VM).  Backends que lo materializan: port-C, JIT, AOT.
  * El backend bytecode/interp NO lo soporta y reporta error claro.
  */
+/**
+ * @struct AsmOperand
+ * @brief  AS inc.7: un enlace de la lista `( ... )` de un @c asm.  Modelo
+ *        moderno "read-back": la CLASE de registro es el tipo del enlace
+ *        (@c reg = el compilador elige; @c rax/rcx/... = fijo por ISA;
+ *        @c xmm/ymm = vector; @c mem = memoria).  La DIRECCION se infiere del
+ *        uso: con inicializador = entrada; el nombre leido tras el bloque =
+ *        salida; sin inicializador ni lectura posterior = scratch.
+ */
+struct AsmOperand {
+    std::string reg_class;         ///< "reg" | "rax".."r15" | "xmm"/"ymm"/... | "mem".
+    std::string name;              ///< placeholder usado en el cuerpo NASM.
+    std::unique_ptr<Expr> init;    ///< valor de entrada (nullptr = scratch/out-only).
+    SourceLoc loc;                 ///< para diagnosticos.
+};
+
+/**
+ * @enum AsmLevel
+ * @brief Nivel de analisis de un bloque de inline asm (3 niveles):
+ *  - @c Analyzable (default, `asm { }`): el compilador lo entiende, saca
+ *    efectos/coste y PUEDE reoptimizarlo (reordenar por latencia/puertos).
+ *  - @c Volatile (`asm volatile { }`): se analiza para contratos, pero se
+ *    emite VERBATIM (no se reordena ni pliega alrededor).
+ *  - @c Raw (`asm raw { }`): caja negra, verbatim, cero analisis; el usuario
+ *    posee la correccion y declara sus contratos a mano.
+ */
+enum class AsmLevel { Analyzable, Volatile, Raw };
+
 struct AsmStmt : Stmt {
     std::string body; ///< Cuerpo NASM Intel verbatim (raw-slice del source).
+    /// Nivel de analisis (Analyzable por defecto).  Lo consume el futuro
+    /// reoptimizador de asm: solo @c Analyzable se reordena; @c Volatile/@c Raw
+    /// son verbatim.  @c q_volatile (abajo) es legado (bit informativo del IR).
+    AsmLevel level = AsmLevel::Analyzable;
+    ///  AS inc.7: enlaces de operandos `( reg p = addr, rax a = exp, ... )`.
+    /// Vacio = modelo clasico (register() en var-decls, sin sustitucion).
+    std::vector<AsmOperand> operands;
     SourceLoc body_loc; ///< loc del primer token del cuerpo (para mapear el
                         ///< error de ensamblado a la linea/columna exactas).
     bool q_volatile =
@@ -1421,6 +1548,13 @@ struct ParamDecl : Node {
      * caller; el numero de args variadicos se lee con el builtin @c vacount().
      * El @c type guarda el tipo del ELEMENTO (T), no el del puntero. */
     bool is_variadic = false;
+    /** @c true si el parametro es un VARIADICO CRUDO: un `...` pelado (sin tipo
+     * ni nombre), estilo C.  Acepta N args de CUALQUIER tipo; cada uno se coloca
+     * segun su propia regla de ABI en el call site (enteros/punteros -> arg-regs
+     * GP, float -> arg-regs XMM).  El callee NO los empaqueta ni ofrece
+     * @c vacount()/array: es para funciones @c @Naked, donde el cuerpo asm lee
+     * los registros ABI directamente.  Implica @c is_variadic. */
+    bool is_raw_variadic = false;
     ParamDecl() : Node(NodeKind::ParamDecl) {}
 };
 
@@ -1460,13 +1594,13 @@ struct FunctionDecl : Node {
     /// son los type-args del patron y @c type_params los params frescos.
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
-    /// Phase M6.a L.3: visibilidad cross-module.  @c true (default) =
+    ///  M6.a L.3: visibilidad cross-module.  @c true (default) =
     /// publica, exportada al `.vxi` y accesible desde otros modulos.
     /// @c false = privada al modulo (no se exporta).  El parser setea
     /// segun keyword `public`/`private` precedente; sin keyword = true
     /// (default permisivo para compat con codigo existente).
     bool is_public = true;
-    /// Phase NS.3: @c "internal" -- visible en TODO el paquete (mismo
+    ///  NS.3: @c "internal" -- visible en TODO el paquete (mismo
     /// PackageId) pero NO exportado a paquetes distintos.  Se exporta al .vxi
     /// con flag; el consumidor de OTRO paquete lo filtra.
     bool is_internal = false;
@@ -1501,12 +1635,27 @@ struct FunctionDecl : Node {
     /// marca @Pure una fn impura, el resultado es indefinido --
     /// la memoizacion no detecta el cheating.
     bool is_pure = false;
+    /// Cross-module comptime/macro: esta fn fue RE-PARSEADA e inyectada por el
+    /// importer desde el texto fuente exportado del dep (generic_template_
+    /// exports).  El importer la registra para AST-evaluarla, pero NO debe
+    /// re-bajarla a IR: su cuerpo re-parseado referencia helpers del dep por su
+    /// nombre SIMPLE (`helper`), invisible/incoherente en el importer -> el
+    /// lowering emitiria un `callvm code.helper` colgante.  El dep ya baja el
+    /// `__macro_<X>` + sus helpers force-lowered, y el importer MERGEA ese IR;
+    /// re-bajar en el importer es redundante Y rompe el mangling.
+    bool is_imported_comptime = false;
     /// Bug fix 2026-05-23: forward declaration `T fn(args);` sin body.
     /// El parser lo setea cuando ve `;` post-`)`.  El type checker
     /// registra la firma sin requerir body; otra FunctionDecl con el
     /// mismo nombre debe aparecer despues con body, o error.
     bool is_forward_decl = false;
-    /// Phase AOT.3 2b (dev OS): `@section(".name"[,"perms"])` -- seccion de
+    /// @fp(strict|fast): politica de contraccion de coma flotante de ESTA
+    /// funcion.  true (default) = fast (se permite contraer a*b+c en FMA, 1
+    /// redondeo).  false = strict (IEEE, 2 redondeos, sin FMA).  Se propaga a
+    /// @c IrFunction::fp_contract en el lowering.  El CLI -ffp-contract=off lo
+    /// AND-ea a false para todo el modulo.
+    bool fp_contract = true;
+    ///  AOT.3 2b (dev OS): `@section(".name"[,"perms"])` -- seccion de
     /// salida del codigo de la funcion en AOT.  Vacio => default `.text`.
     /// @c attr_section_perms = subconjunto de "rwx" (vacio => convencion del
     /// nombre).  Solo lo consume el codegen AOT.
@@ -1517,7 +1666,7 @@ struct FunctionDecl : Node {
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
     bool is_alloc_override = false; ///< @AllocatorOverride (AOT freestanding)
     bool is_panic_handler = false;  ///< @PanicHandler (AOT freestanding)
-    /// Phase NR: `@Naked` -- funcion sin prologo/epilogo NI ret implicito.
+    ///  NR: `@Naked` -- funcion sin prologo/epilogo NI ret implicito.
     /// El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
     /// programador provee la salida (`ret`/`iretq`/`iret`).  Para ISRs,
     /// stubs de entry y cambio de modo en dev OS.  Semantica de
@@ -1582,6 +1731,26 @@ struct FunctionDecl : Node {
     std::string complexity_partial_post;
     std::string complexity_total_pre;
     std::string complexity_total_post;
+    /// @complexity con un `when:` que habla del parametro de tipo: no se puede
+    /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
+    /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
+    std::vector<PendingComplexity> complexity_pending;
+    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref PendingFootprint.
+    std::vector<PendingFootprint> footprint_pending;
+    /// Contratos comprobables de recurso/efecto (huella computacional).  El
+    /// compilador los VERIFICA contra la huella inferida del IR (sound: solo
+    /// error cuando la violacion es demostrable).  Ausente = no declarado.
+    ///   @pure @nothrow @nopanic  (flags)
+    ///   @alloc(N) @stack(N)       (N = maximo permitido)
+    bool contract_pure = false;      ///< @pure declarado.
+    bool contract_nothrow = false;   ///< @nothrow declarado.
+    bool contract_nopanic = false;   ///< @nopanic declarado.
+    // @alloc/@stack con DOS dimensiones (parcial=propio, total=cierre/pila peor
+    // caso).  La forma corta `@alloc(N)`/`@stack(N)` fija el TOTAL.  -1 = no decl.
+    int64_t contract_alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t contract_alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t contract_stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+    int64_t contract_stack_partial = -1; ///< @stack(partial: N).
     FunctionDecl() : Node(NodeKind::FunctionDecl) {}
 };
 
@@ -1706,9 +1875,9 @@ struct GlobalVarDecl : Node {
     std::string name;
     std::unique_ptr<Expr> init;
     bool is_const = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
-    /// Phase NS.3: @c "internal" -- package-scoped (ver FunctionDecl::is_internal).
+    ///  NS.3: @c "internal" -- package-scoped (ver FunctionDecl::is_internal).
     bool is_internal = false;
     ///  marca `comptime const`.  El init debe ser comptime-
     /// evaluable; el type checker guarda el valor en
@@ -1785,7 +1954,7 @@ struct TypeAliasDecl : Node {
     std::string name;
     std::unique_ptr<TypeNode> aliased;
     bool is_using_form = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// Si @c true, el alias es un NEWTYPE: comparte la representacion
     /// del tipo subyacente pero es nominalmente DISTINTO en el type
@@ -1820,7 +1989,7 @@ struct TypeAliasDecl : Node {
  * @struct ImportDecl
  * @brief Declaracion de @c import "path" [as alias] [only A, B];
  *
- * Phase M (sistema de modulos).  El @c path es siempre un string
+ *  M (sistema de modulos).  El @c path es siempre un string
  * literal por consistencia con @c extern "lib.dll", @c loadmodule(),
  * @c @Method("lib:fn"), etc.  Se resuelve a un fichero @c .vx en
  * el filesystem por el module resolver del compilador.
@@ -1840,7 +2009,7 @@ struct ImportDecl : Node {
     /// E.g. @c "editor/buffer" o @c "std/io".  Cuando @c by_namespace es
     /// true, contiene el path punteado del namespace (e.g. @c "std.collections").
     std::string path;
-    /// Phase NS.2-full: true si el import vino de la forma por-NAMESPACE
+    ///  NS.2-full: true si el import vino de la forma por-NAMESPACE
     /// @c "import a.b.c;" (identificadores punteados) en lugar de la forma
     /// por-PATH @c "import \"a/b/c\";" (literal string).  En ese caso @c path
     /// contiene el namespace punteado y el resolver lo mapea a fichero via el
@@ -1887,12 +2056,12 @@ struct ImportDecl : Node {
 struct NamespaceDecl : Node {
     std::string name; ///< "ui", "audio", "std.collections" (path punteado)
     std::vector<std::unique_ptr<Node>> decls; ///< contenidos top-level
-    /// Phase NS.1: true si vino de la forma STATEMENT `namespace a.b.c;` (agrupa
+    ///  NS.1: true si vino de la forma STATEMENT `namespace a.b.c;` (agrupa
     /// el resto del fichero) en lugar de la forma BLOQUE `namespace a.b.c {...}`.
     /// Semanticamente equivalentes (ambas manglan sus @c decls con el path); el
     /// flag es informativo para diagnosticos.
     bool is_statement_form = false;
-    /// Phase NS.3: override opcional del PackageId via @c "namespace X @id(\"..\");".
+    ///  NS.3: override opcional del PackageId via @c "namespace X @id(\"..\");".
     /// Vacio = usar el PackageId derivado del vx.toml.  Permite renombrar el
     /// namespace manteniendo la identidad ABI (el .vxi del modulo lo estampa).
     std::string package_id_override;
@@ -1911,11 +2080,62 @@ struct StructFieldDecl {
     std::unique_ptr<TypeNode> type;
     std::string name;
     SourceLoc loc;
+    /// Miembro ANONIMO C11: `struct { ... };` / `union { ... };` sin nombre de
+    /// campo.  Sus campos se APLANAN en el struct contenedor (se accede a
+    /// `parent.inner_field` directamente).  @c type apunta al agregado sintetico
+    /// y @c name es un placeholder sintetico (no usado para acceso).
+    bool is_anonymous = false;
     /// Bit field width.  0 = campo normal (byte-aligned).
     /// >0 = bit field con esta cantidad de bits.  El type checker
     /// calcula bit_offset y los empaqueta en storage words del tipo
     /// declarado (i32 -> 32 bits por word, etc.).  Estilo C/C++.
     uint8_t bit_width = 0;
+    /// Overlay (F1): offset EXPLICITO CONSTANTE del campo dentro de la vista
+    /// (`ptr X @offset(0x30);` o `@0x30`).  -1 = sin offset constante (campo
+    /// normal, o offset dado por @c offset_expr).  Fast-path del caso constante.
+    int64_t explicit_offset = -1;
+    /// Overlay (F2): offset del campo dado por una EXPRESION que puede
+    /// referenciar campos hermanos (`@offset(prev_off + 0x10)`).  null = usa
+    /// @c explicit_offset (constante).  Se evalua en tiempo de acceso; el caso
+    /// puramente constante se pliega a @c explicit_offset en el parser.
+    std::unique_ptr<Expr> offset_expr;
+    /// Overlay (F3): resolver de la DIRECCION del campo -- `@offset { ...;
+    /// return <direccion>; }`.  A diferencia de un offset (F1/F2), el bloque
+    /// DEVUELVE la DIRECCION absoluta donde vive el campo; puede tener control
+    /// de flujo (if/else, bucles), `let` locales y referenciar los campos
+    /// hermanos + el puntero `base` de la vista.  null = usa expr/offset const.
+    std::unique_ptr<BlockStmt> offset_block;
+    /// Overlay (F3b) ARRAY: `T Name[count] @offset(pos) stride(s)`.  count = num
+    /// de elementos (expr, para bounds), stride = bytes entre elementos (expr).
+    /// El tipo del campo (@c type) es el tipo del ELEMENTO.  `v.Name[i]` resuelve
+    /// a `base + pos + i*stride`.  null = campo escalar (no array).
+    std::unique_ptr<Expr> array_count;
+    std::unique_ptr<Expr> array_stride;
+    /// Overlay array POR-ELEMENTO (`T Name[count] @element { ... }`): resolver que
+    /// devuelve la DIRECCION del elemento `index` (con `index` en scope), para
+    /// stride VARIABLE / records de longitud variable / TLV.  Puede acceder al
+    /// elemento anterior (`self.Name[index-1]`).  null = array de stride fijo.
+    std::unique_ptr<BlockStmt> element_block;
+    /// Overlay array marcado con `[` (aunque el count este vacio: `T Name[]`).
+    /// Distingue un array NO acotado (el usuario gestiona la terminacion) de un
+    /// campo escalar.  true = es un array (con o sin @c array_count).
+    bool is_array = false;
+    /// Overlay ENDIANNESS del campo (F5): 0 = nativo/host (sin swap), 1 = big-
+    /// endian (`@be`), 2 = little-endian explicito (`@le`).  Un campo `@be` en un
+    /// host little-endian (x86-64) emite BYTESWAP en cada read/write.  Para
+    /// formatos de endianness fija (red = BE, ELF lo declara en e_ident).
+    uint8_t endian = 0;
+    /// Overlay endianness DINAMICA (F5): `@endian(expr)` -- la expr (bool/int:
+    /// nonzero = big-endian) decide el orden EN TIEMPO DE ACCESO.  Puede
+    /// referenciar campos hermanos (`@endian(ei_data == 2)`, ELF) o un comptime
+    /// const (se pliega).  null = usa @c endian estatico.  El swap es condicional
+    /// (branchless select) cuando la expr es runtime.
+    std::unique_ptr<Expr> endian_expr;
+    /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
+    /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
+    /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`
+    /// sintetizado.  Debe ser una expresion comptime-constante.
+    std::unique_ptr<Expr> default_init;
 };
 
 /**
@@ -1937,7 +2157,7 @@ struct StructDecl : Node {
     /// es la direccion (PTR) del buffer del struct.  El dispatch es
     /// siempre CALL directo (sin CALLVIRT).
     std::vector<std::unique_ptr<ClassMethodDecl>> methods;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// marca `@Introspect` -- el compilador
     /// emite IntrospectInfo POD en static_data y registra el tipo en
@@ -1945,6 +2165,16 @@ struct StructDecl : Node {
     /// runtime lo encuentre.  Sin esta marca, el tipo solo es
     /// introspectable via builtins comptime (sin overhead).
     bool is_introspect = false;
+    /// marca `@overlay` -- el struct es una VISTA tipada sobre un puntero base
+    /// ajeno (PEB, cabeceras PE/ELF, ...), no un value-type que se posee.  Un
+    /// valor overlay ES un puntero (8 bytes): no aloca, no zero-init, no copia;
+    /// `v.campo` se baja a `*(T*)(base + offset)`.  Los campos usan @c
+    /// explicit_offset (`@offset(N)`).
+    bool is_overlay = false;
+    /// union C-style: todos los campos comparten el offset 0; el tamano es el
+    /// del campo mayor y el alineamiento el maximo.  Reusa toda la maquinaria
+    /// de struct salvo el calculo de layout (offsets/size).
+    bool is_union = false;
     /// Parametros de tipo opcionales (templates).  `struct Box<T> { T v; }`
     /// produce type_params = ["T"].  Vacio para structs no genericos.  Si no
     /// esta vacio, el struct es una plantilla: NO se procesa como concreto;
@@ -1963,6 +2193,20 @@ struct StructDecl : Node {
     /// que matchee (exacto > patron > primario).  Compile-time puro.
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
+    /// Contratos de layout/recurso comprobables (modo --analyze): @pod,
+    /// @no_heap, @size(N).  Metadata compile-time; el codegen los ignora.
+    /// -1 en @c contract_size = no declarado.
+    bool contract_pod = false;
+    bool contract_no_heap = false;
+    int64_t contract_size = -1;
+    /// `@align(N)` a nivel de struct: fuerza la alineacion del layout a N (max
+    /// con la natural) y padea el tamano a un multiplo de N.  0 = sin override.
+    /// Equivalente a C `__declspec(align(N))` / `_Alignas(N)`.
+    uint16_t attr_align = 0;
+    /// Struct INCOMPLETO (forward-decl opaco `typedef struct Tag *P;` sin cuerpo).
+    /// Se registra el tipo (usable via puntero, 8 bytes) pero sin campos; una
+    /// definicion posterior `struct Tag { ... }` lo completa (sobrescribe).
+    bool is_incomplete = false;
     StructDecl() : Node(NodeKind::StructDecl) {}
 };
 
@@ -1982,6 +2226,9 @@ struct StructDecl : Node {
  */
 struct EnumVariantDecl {
     std::string name;
+    /// Valor entero explicito para enums con tipo base (C-style,
+    /// `A = 0x01`).  Nulo -> auto-incremento (prev+1, primero 0).
+    std::unique_ptr<Expr> value_expr;
     std::vector<std::unique_ptr<TypeNode>>
         field_types; ///< Vacio para variantes sin payload.
     SourceLoc loc;
@@ -2016,10 +2263,19 @@ struct EnumVariantDecl {
  */
 struct EnumDecl : Node {
     std::string name;
+    /// Tipo base para enums con VALOR entero (C-style):
+    /// `enum Op : u8 { ... }`.  Vacio -> enum ADT (tagged union).
+    std::string backing_type;
+    /// C-style `typedef enum { ... } Name;` sin `: tipo` explicito.  El enum
+    /// es un conjunto de constantes enteras (NO una tagged union), pero el
+    /// ancho del backing se INFIERE del rango de valores en el type checker
+    /// (i32 si todos caben en int, si no se ensancha a u32/i64/u64), imitando
+    /// las reglas de C.  No confundir con `backing_type` fijo.
+    bool c_style_auto_backing = false;
     std::vector<EnumVariantDecl> variants;
     /// marca `@Introspect`.  Ver `StructDecl`.
     bool is_introspect = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// L2.3: parametros de tipo opcionales `enum Maybe<T> { None, Some(T) }`.
     /// Si no esta vacio, el enum es un template y se monomorphiza on demand
@@ -2027,6 +2283,11 @@ struct EnumDecl : Node {
     std::vector<std::string> type_params;
     /// #6: constraints de los type-params (`enum E<T: Concepto>`).
     std::vector<TypeBound> type_bounds;
+    /// Contratos de layout comprobables (modo --analyze): @size(N) (@pod/@no_heap
+    /// aplican tambien, aunque un enum sin payload es trivialmente @pod).
+    bool contract_pod = false;
+    bool contract_no_heap = false;
+    int64_t contract_size = -1;
     EnumDecl() : Node(NodeKind::EnumDecl) {}
 };
 
@@ -2090,6 +2351,36 @@ struct ClassMethodDecl : Node {
     /// lowering lo resuelve via findclass/findmethod en __module_init.
     uint8_t advice_kind = 0;
     std::string advice_target;
+    /// @brief Contratos de huella declarados sobre el metodo, iguales a los de
+    ///        una funcion libre (ver @ref FunctionDecl):
+    ///
+    ///     @pure @nothrow @nopanic @alloc(N) @stack(N) @complexity(O(...))
+    ///
+    /// Un metodo hace lo mismo que una funcion libre con un argumento mas, asi
+    /// que no habia motivo para que no pudiera declarar lo mismo -- y sin esto,
+    /// un tipo cuya API son METODOS (`atomic<T>`, las colecciones, ...) no puede
+    /// declarar sus propiedades aunque el compilador sepa verificarlas.
+    bool contract_pure = false;    ///< @pure declarado.
+    bool contract_nothrow = false; ///< @nothrow declarado.
+    bool contract_nopanic = false; ///< @nopanic declarado.
+    int64_t contract_alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+    int64_t contract_alloc_partial = -1; ///< @alloc(partial: N).
+    int64_t contract_stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+    int64_t contract_stack_partial = -1; ///< @stack(partial: N).
+    /// @complexity(...) del metodo.  Mismos campos y semantica que en
+    /// @ref FunctionDecl: `complexity_expr` es azucar de `total_post`.
+    std::string complexity_expr;
+    std::vector<std::string> complexity_vars;
+    std::string complexity_partial_pre;
+    std::string complexity_partial_post;
+    std::string complexity_total_pre;
+    std::string complexity_total_post;
+    /// @complexity con un `when:` que habla del parametro de tipo: no se puede
+    /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
+    /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
+    std::vector<PendingComplexity> complexity_pending;
+    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref PendingFootprint.
+    std::vector<PendingFootprint> footprint_pending;
 
     /// @brief si !=0, el metodo es accesor de propiedad.
     /// 1 = getter (`public get name => expr;`).  Sin params, devuelve T.
@@ -2143,7 +2434,7 @@ struct ClassDecl : Node {
     std::vector<ClassFieldDecl> fields;
     std::vector<std::unique_ptr<ClassMethodDecl>> methods;
     bool is_final = false;
-    /// Phase M6.a L.3: visibilidad cross-module (default true).
+    ///  M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// Parametros de tipo (templates).  `class Box<T>` produce
     /// type_params = ["T"].  Vacio para clases no genericas.  El
@@ -2176,6 +2467,13 @@ struct ClassDecl : Node {
     bool is_interface = false;
     /// marca `@Introspect`.  Ver `StructDecl`.
     bool is_introspect = false;
+    /// Contratos de layout/recurso comprobables (modo --analyze): @pod,
+    /// @no_heap, @size(N).  Una clase es un tipo por REFERENCIA (vive en el
+    /// heap), asi que @pod/@no_heap sobre una clase siempre resultan VIOLATED;
+    /// @size(N) verifica el tamano de la instancia.  Metadata compile-time.
+    bool contract_pod = false;
+    bool contract_no_heap = false;
+    int64_t contract_size = -1;
     // Sprint lombok (2026-06-03): anotaciones tipo Lombok a nivel de
     // clase.  El pre-pase de TypeChecker genera metodos sinteticos +
     // expanding combos como @Data / @Value antes de check_classes.

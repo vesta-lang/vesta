@@ -44,10 +44,16 @@ endif()
 # ---------------------------------------------------------------------------
 
 # === core (OBLIGATORIO): el lenguaje en si =================================
+# El RUNTIME (vesta.exe + todo lo que el ejecutable resuelve relativo a su
+# propia ubicacion: include_lib/, stdlib/, libvesta_gc.a, DLLs) se instala en
+# <prefix>/bin.  Asi el acceso directo del Menu Inicio y el PATH del sistema
+# (ambos gestionados por CPack, que asume `bin/`) apuntan correctamente a
+# <prefix>/bin/vesta.exe y `vesta` funciona desde cualquier shell.
 # Ejecutable principal instalado como vesta.exe (no vm.exe).
 install(PROGRAMS "$<TARGET_FILE:vm>"
-        DESTINATION . RENAME vesta.exe COMPONENT core)
-# stdlib del preprocesador VPP: #import <vesta/...> se resuelve aqui.
+        DESTINATION bin RENAME vesta.exe COMPONENT core)
+# stdlib del preprocesador VPP (fuente, NO binario): va en la RAIZ; el
+# ejecutable en bin/ la resuelve relativo a su padre (exe_dir/../include_lib).
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/preprocessor/include_lib"
         DESTINATION . COMPONENT core)
 # Documentacion (LICENSE en texto plano para que el asistente lo muestre bien).
@@ -61,23 +67,28 @@ if (NOT VESTA_OPENSSL_STATIC)
     install(FILES
             "$<TARGET_FILE_DIR:vm>/libssl-3-x64.dll"
             "$<TARGET_FILE_DIR:vm>/libcrypto-3-x64.dll"
-            DESTINATION . COMPONENT core)
+            DESTINATION bin COMPONENT core)
 endif()
 # GC estatico para AOT: al compilar un programa con `gc<T>` en modo AOT, el
 # enlazador interno busca libvesta_gc.a JUNTO a vesta.exe.  Sin esto, gc<T> en
 # AOT falla con "no se encontro libvesta_gc.a".
 if (TARGET vesta_gc)
-    install(FILES "$<TARGET_FILE:vesta_gc>" DESTINATION . COMPONENT core)
+    install(FILES "$<TARGET_FILE:vesta_gc>" DESTINATION bin COMPONENT core)
+endif()
+# Icono del lenguaje (para las asociaciones de ficheros .vx / .vsh).
+if (EXISTS "${CMAKE_SOURCE_DIR}/icono.ico")
+    install(FILES "${CMAKE_SOURCE_DIR}/icono.ico"
+            DESTINATION bin RENAME vesta.ico COMPONENT core)
 endif()
 # Variantes ESTATICAS de los plugins de stdlib (colecciones / math): el AOT las
 # auto-enlaza JUNTO a vesta.exe cuando el programa las usa -> .exe standalone sin
 # DLLs.  Se instalan en core (parte del toolchain AOT).
 if (TARGET vesta_collections_a)
     install(FILES "$<TARGET_FILE:vesta_collections_a>"
-            DESTINATION . COMPONENT core)
+            DESTINATION bin COMPONENT core)
 endif()
 if (TARGET vesta_math_a)
-    install(FILES "$<TARGET_FILE:vesta_math_a>" DESTINATION . COMPONENT core)
+    install(FILES "$<TARGET_FILE:vesta_math_a>" DESTINATION bin COMPONENT core)
 endif()
 
 # === stdlib (opcional): biblioteca estandar del lenguaje ===================
@@ -93,7 +104,7 @@ install(DIRECTORY
 
 # === lsp (opcional): servidor de lenguaje para editores ====================
 if (TARGET vesta_lsp)
-    install(PROGRAMS "$<TARGET_FILE:vesta_lsp>" DESTINATION . COMPONENT lsp)
+    install(PROGRAMS "$<TARGET_FILE:vesta_lsp>" DESTINATION bin COMPONENT lsp)
 endif()
 
 # === examples (opcional): programas de ejemplo de AMBOS lenguajes ==========
@@ -125,8 +136,11 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/tools/"
 # libvesta.dll (FFI, OpenSSL + libstdc++ estaticos -> autocontenida) + header
 # C + helper CMake.
 if (TARGET vesta_ffi)
+    # El DLL embebible (libvesta.dll) va en CORE, junto a vesta.exe y el LSP en
+    # <prefix>/bin -- se instala siempre (no solo con el componente SDK).  La
+    # import-lib (libvesta.dll.a, para enlazar) queda en el componente SDK.
     install(TARGETS vesta_ffi
-            RUNTIME DESTINATION .    COMPONENT sdk
+            RUNTIME DESTINATION bin  COMPONENT core
             ARCHIVE DESTINATION lib  COMPONENT sdk)
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/include/ffi/vesta_plugin.h"
@@ -238,7 +252,7 @@ set(CPACK_NSIS_MODIFY_PATH         ON)
 # desinstalador (auto-reparable), sin depender de un Uninstall.exe que pudo
 # borrarse.  CPack no expone un hook en .onInit para hacerlo tolerante.
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL OFF)
-set(CPACK_NSIS_INSTALLED_ICON_NAME "vesta.exe")
+set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\vesta.exe")
 set(CPACK_NSIS_BRANDING_TEXT       "VestaVM ${PROJECT_VERSION}")
 if (EXISTS "${_vesta_icon}")
     set(CPACK_NSIS_MUI_ICON   "${_vesta_icon}")  # icono del instalador
@@ -255,6 +269,50 @@ endif()
 # Enlace en el Menu Inicio al README (se abre con el editor por defecto).
 set(CPACK_NSIS_MENU_LINKS
         "README.md" "VestaVM - Leeme")
+
+# Asociaciones de ficheros .vx (fuente Vesta) y .vsh (script VestaShell) con el
+# icono del lenguaje y el binario vesta.  SHCTX = HKLM si la instalacion es para
+# todos (admin) o HKCU si es solo para el usuario (no-admin) -- coherente con el
+# modo de instalacion elegido (RequestExecutionLevel highest en la plantilla).
+# .vsh se abre ejecutando el script (--script); .vx se compila (--vesta).
+set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [==[
+  ; Limpiar CUALQUIER asociacion previa (incluida una instalacion defectuosa)
+  ; en AMBOS hives antes de reescribir, para un overwrite limpio: una instalacion
+  ; anterior como admin pudo dejarla en HKLM y la nueva per-user escribe en HKCU.
+  DeleteRegKey HKLM "Software\Classes\Vesta.vx"
+  DeleteRegKey HKLM "Software\Classes\Vesta.vsh"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vx"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vsh"
+  ; Windows guarda la eleccion del usuario en UserChoice (protegido); borrarlo
+  ; fuerza a Explorer a reevaluar la asociacion con el ProgID nuevo.  Si esta
+  ; bloqueado, el DeleteRegKey es un no-op inofensivo.
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vx\UserChoice"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vsh\UserChoice"
+  WriteRegStr SHCTX "Software\Classes\.vx" "" "Vesta.vx"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vx" "" "Codigo fuente Vesta"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vx\DefaultIcon" "" "$INSTDIR\bin\vesta.ico"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vx\shell\open\command" "" '$\"$INSTDIR\bin\vesta.exe$\" --vesta $\"%1$\"'
+  WriteRegStr SHCTX "Software\Classes\.vsh" "" "Vesta.vsh"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vsh" "" "Script VestaShell"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vsh\DefaultIcon" "" "$INSTDIR\bin\vesta.ico"
+  WriteRegStr SHCTX "Software\Classes\Vesta.vsh\shell\open\command" "" '$\"$INSTDIR\bin\vesta.exe$\" --script $\"%1$\"'
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+]==])
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [==[
+  ; Limpiar la asociacion en AMBOS hives (una instalacion pudo dejarla en
+  ; cualquiera de los dos segun fuese admin o per-user).
+  DeleteRegKey HKLM "Software\Classes\Vesta.vx"
+  DeleteRegKey HKLM "Software\Classes\Vesta.vsh"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vx"
+  DeleteRegKey HKCU "Software\Classes\Vesta.vsh"
+  DeleteRegValue HKLM "Software\Classes\.vx" ""
+  DeleteRegValue HKLM "Software\Classes\.vsh" ""
+  DeleteRegValue HKCU "Software\Classes\.vx" ""
+  DeleteRegValue HKCU "Software\Classes\.vsh" ""
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vx\UserChoice"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.vsh\UserChoice"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+]==])
 
 # ---------------------------------------------------------------------------
 # WiX  -- instalador .msi (despliegue corporativo / GPO / Intune)
@@ -273,6 +331,13 @@ endif()
 if (NOT CPACK_GENERATOR)
     set(CPACK_GENERATOR "ZIP")
 endif()
+
+# Plantilla NSIS PROPIA (override de la de CPack) para habilitar instalacion
+# SIN admin (per-user): cambia `RequestExecutionLevel admin` -> `highest` y el
+# dir "solo yo" a %LOCALAPPDATA%\Programs.  CPack busca `NSIS.template.in` en
+# CPACK_MODULE_PATH (que por defecto es CMAKE_MODULE_PATH); prependemos el dir
+# con nuestra plantilla para que gane a la interna.
+set(CPACK_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/nsis" ${CMAKE_MODULE_PATH})
 
 include(CPack)
 

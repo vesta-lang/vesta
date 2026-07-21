@@ -2,10 +2,10 @@ namespace ejemplos.hola_mundo;
 
 // examples_codes_vx/02_hola_mundo.vx
 //
-// Hola Mundo en Vex
+// Hola Mundo en Vesta-lang
 //
 // Demuestra:
-//   - Literal de string Vex.
+//   - Literal de string Vesta-lang.
 //   - Builtin println traducido a llamada FFI vesta_io.vio_println.
 //   - El emisor IR genera bloque @Import + seccion de datos automaticamente.
 //
@@ -14,9 +14,9 @@ namespace ejemplos.hola_mundo;
 //   vm --run hola.velb
 //
 // Salida esperada:
-//   Hola Mundo desde Vex!
+//   Hola Mundo desde Vesta-lang!
 
 i32 main() {
-    println("Hola Mundo desde Vex!");
+    println("Hola Mundo desde Vesta-lang!");
     return 0;
 }

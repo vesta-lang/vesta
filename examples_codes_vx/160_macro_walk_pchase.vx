@@ -1,7 +1,7 @@
 namespace ejemplos.macro_walk_pchase;
 
 // Demo de metaprogramacion real: macro `walk` que parsea un DSL
-// arbitrario tipo `base -> 0x90 -> 0x10 -> 0x20` y emite codigo Vex
+// arbitrario tipo `base -> 0x90 -> 0x10 -> 0x20` y emite codigo 
 // valido de pointer chase anidado.
 //
 // El call site escribe sintaxis natural:
@@ -20,7 +20,7 @@ namespace ejemplos.macro_walk_pchase;
 // Notas:
 // - El cuerpo de un `@Macro` ya se evalua integramente en compile-time,
 //   asi que las vars locales son implicitamente comptime y NO requieren
-//   prefijo `comptime var`.
+//   prefijo (los locales en comptime son mutables por defecto).
 // - Operadores nativos sobre strings: `+` (concat) y `==`/`!=` (equals).
 // - Builtins cortos: `length(s)`, `substr(s, start, len)`.  Las versiones
 //   con prefijo `comptime_` son aliases legacy del mismo lowering.

@@ -186,6 +186,23 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod);
  */
 bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out);
 
+/**
+ * @brief Serializa una @c StaticDataStore verbatim (pool + entries + meta).
+ *
+ * Expuesto para el driver incremental (fragmentos de IR por-simbolo): los
+ * blobs de static_data que referencia una funcion forman un mini-store que
+ * viaja con su fragmento.  Round-trip byte-exacto con @c deserialize_static_data.
+ */
+void serialize_static_data(const IrModule::StaticDataStore &sd,
+                           std::vector<uint8_t> &out);
+
+/**
+ * @brief Reconstruye una @c StaticDataStore desde @p in empezando en @p off.
+ * @return @c false si el buffer esta truncado o un rango cae fuera del pool.
+ */
+bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
+                             IrModule::StaticDataStore &sd);
+
 /* Helpers expuestos para tests / linker (escritura en buffer). */
 inline void write_u8(std::vector<uint8_t> &o, uint8_t v) {
     o.push_back(v);

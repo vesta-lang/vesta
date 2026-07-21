@@ -1,6 +1,6 @@
 namespace ejemplos.ecs_basico;
 
-// ECS basico (Entity Component System) sobre Vex.
+// ECS basico (Entity Component System) sobre Vesta-lang.
 //
 // Ejemplo minimal de un patron ECS Struct-of-Arrays (SoA).  Cada componente
 // (Position, Velocity) es un par de arrays paralelos; un "sistema" es una

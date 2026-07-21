@@ -33,7 +33,7 @@ i32 apply(i32 op_kind, i32 a, i32 b) {
 }
 
 // Evalua una secuencia de tokens (puntero a array de Token + count).
-// Como Vex no soporta pasar Token[] directamente todavia, simulamos
+// Como  no soporta pasar Token[] directamente todavia, simulamos
 // pasando dos arrays paralelos: kind[] y payload[] (kind=0 -> Num).
 i32 eval_rpn(i32[] kinds, i32[] payloads, i32 n) {
     i32[16] stack;

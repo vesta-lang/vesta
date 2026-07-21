@@ -5,7 +5,7 @@
 // propiedad de `a` a `b` (no copia), y `a` queda invalidado para evitar un
 // doble-free de su recurso.  Usar `a` despues del move es un error de compilacion
 // con un mensaje claro.  Para permitir copias, define `void __clone__()`; para
-// reusar `a`, reasignale un valor nuevo.  Ver doc/VMdoc/Vex/SmartPointers.md.
+// reusar `a`, reasignale un valor nuevo.  Ver doc/VMdoc//SmartPointers.md.
 
 struct S {
     i64* p;

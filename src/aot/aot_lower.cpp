@@ -10,7 +10,7 @@
 
 /**
  * @file aot/aot_lower.cpp
- * @brief Phase AOT.2 -- impl del pase de re-bajada LIBC_MAPPED -> CALL libc.
+ * @brief  AOT.2 -- impl del pase de re-bajada LIBC_MAPPED -> CALL libc.
  */
 
 #include "aot/aot_lower.h"

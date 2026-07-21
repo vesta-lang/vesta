@@ -186,6 +186,20 @@ void apply_section(const vm::AnnotationNode *node, Assembler &assembler) {
             section_name + "'");
     }
 
+    // La imagen .velb es plana: los bytes de una seccion son un tramo
+    // CONTIGUO del flujo de bytecode (el loader deriva el offset de fichero
+    // restando la base del espacio a la direccion virtual).  Re-entrar en una
+    // seccion ya declarada partiria sus bytes en dos tramos no contiguos, que
+    // el formato no puede representar.  Ademas add_section sobrescribe la
+    // entrada de la tabla, con lo que se perderian sus labels en silencio.
+    if (assembler.ctx.get_section(section_name) != nullptr) {
+        throw std::runtime_error(
+            "La seccion '" + section_name +
+            "' ya fue declarada: no se puede re-entrar en una seccion. "
+            "Los bytes de cada seccion deben ser contiguos en el flujo de "
+            "bytecode; emite todo el contenido de la seccion de una vez.");
+    }
+
     // Crear la seccion
     Section sec;
     sec.name = section_name;
@@ -197,6 +211,18 @@ void apply_section(const vm::AnnotationNode *node, Assembler &assembler) {
         sec.size_align_section = assembler.ctx.bytes_aligned;
     } else
         sec.size_align_section = vm::parse_number(alignNode->value);
+
+    // la alineacion se usa con align_up, que exige una potencia de 2 (opera con
+    // una mascara).  Con 0 el resultado seria indefinido, asi que se valida
+    // aqui en lugar de propagar un layout corrupto.
+    if (sec.size_align_section == 0)
+        sec.size_align_section = 1; // sin alineacion
+    else if ((sec.size_align_section & (sec.size_align_section - 1)) != 0) {
+        throw std::runtime_error(
+            "La alineacion de la seccion '" + section_name +
+            "' debe ser una potencia de 2, pero se indico: " +
+            std::to_string(sec.size_align_section));
+    }
 
     sec.memory.address_final = 0;
     sec.memory.address_init = 0;

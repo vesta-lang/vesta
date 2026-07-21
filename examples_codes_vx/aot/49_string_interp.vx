@@ -1,4 +1,4 @@
-// Vex Embed Inc 2: interpolacion `"${...}"` en value-strings nativos (AOT).
+//  Embed Inc 2: interpolacion `"${...}"` en value-strings nativos (AOT).
 // Construye UN value-string concatenando las partes literales con cada
 // `${expr}` appendado in-place al buffer (grow/realloc).  Sin GC, sin
 // StringObject, sin helper nativo del runtime.  RAII libera el resultado y
@@ -25,8 +25,8 @@ i64 compute() {
 }
 
 i32 main() {
-    // (1) string + char: "hola Vex mundo!" -> 15, p[14]='!'(33).
-    string name = "Vex";
+    // (1) string + char: "hola  mundo!" -> 15, p[14]='!'(33).
+    string name = "";
     char excl = '!';
     string m1 = "hola ${name} mundo${excl}";
     char* p1 = m1.cstr();

@@ -64,7 +64,7 @@
 #include "runtime/runtime.h" // para acceder a vm->scheduler.vm_reference.script_args
 #include "runtime/scheduler.h"
 #include "runtime/string_intern.h"
-#include "runtime/string_runtime.h" // Phase MC.13: API publica make_string_flat
+#include "runtime/string_runtime.h" //  MC.13: API publica make_string_flat
 #include "gc/gc_heap.h"
 #include "loader/oop_types.h"
 #include "loader/string_object.h"
@@ -1649,7 +1649,7 @@ void exec_instr_getarg(ProcessVM *vm, const DecodedInstr &instr) {
 }
 
 /* =========================================================================
- * Phase MC.13: API publica `make_string_flat` -- reusa el mismo path
+ *  MC.13: API publica `make_string_flat` -- reusa el mismo path
  * que las instrucciones STRMAKE/STRCAT/STRCONV de la VM para construir
  * un StringObject FLAT desde C++.  Sin reimplementar nada: delega al
  * helper `alloc_flat` interno (alloc_pinned + populacion de header +

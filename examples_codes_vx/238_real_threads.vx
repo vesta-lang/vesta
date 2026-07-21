@@ -1,0 +1,55 @@
+namespace ejemplos.real_threads;
+
+// 238_real_threads.vx
+//
+// MULTIHILO REAL en AOT: dos HILOS del SO (no fibras cooperativas) incrementan un
+// contador compartido bajo el monitor de vx_sync.  El monitor (owner compuesto
+// tid+fiber) da exclusion mutua REAL entre hilos paralelos: sin ella habria
+// updates perdidos (counter < 2N); con ella counter == 2N exacto.
+//
+// N=50000 por hilo, 2 hilos -> 100000.  main devuelve 42 si el contador quedo
+// EXACTO (exclusion mutua correcta), o counter % 1000 si hubo carrera.
+//
+// AOT (native_poo): vx_thread_spawn/join = CreateThread (Win) / pthread (Linux);
+// vx_lock/vx_unlock = monitor de vx_sync sobre el objeto (palabra en obj+16).
+//   vm -m aot --vx 238_real_threads.vx --format pe -o p.exe && ./p.exe   (exit 42)
+
+import std.types only uintptr;
+import "vx_thread" only vx_thread_spawn, vx_thread_join;
+import "vx_sync" only vx_lock, vx_unlock;
+
+// Objeto de lock compartido (host_ptr, reservado en main; palabra de monitor en
+// obj+16, zero-inicializada = libre) y contador compartido.
+i64 g_lock = 0;
+i64 g_counter = 0;
+
+// Cuerpo del hilo (fn nativa normal): incrementa el contador N veces bajo el
+// monitor.  Recibe su arg en el 1er registro del ABI (lo ignora aqui).
+i64 worker(i64 arg) {
+    i64 i = 0;
+    while (i < 50000) {
+        vx_lock((i64*)g_lock);
+        g_counter = g_counter + 1;
+        vx_unlock((i64*)g_lock);
+        i = i + 1;
+    }
+    return 0;
+}
+
+i32 main() {
+    // Objeto de lock: 4 qwords (>= obj+16), palabra a 0 (libre).
+    g_lock = (i64)malloc(4 * 8);
+    i64* lo = (i64*)g_lock; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
+    g_counter = 0;
+
+    uintptr t1 = vx_thread_spawn((uintptr)(cfn(i64) -> i64) worker, 0);
+    uintptr t2 = vx_thread_spawn((uintptr)(cfn(i64) -> i64) worker, 0);
+    vx_thread_join(t1);
+    vx_thread_join(t2);
+
+    free((i64*)g_lock);
+    if (g_counter == 100000) {
+        return 42;                    // exclusion mutua correcta
+    }
+    return (i32)(g_counter % 1000);   // hubo carrera (updates perdidos)
+}

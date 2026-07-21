@@ -1,6 +1,6 @@
 /**
  * @file project_cache.cpp
- * @brief Implementacion del cache de proyecto a nivel @c .velb (Phase M5.B).
+ * @brief Implementacion del cache de proyecto a nivel @c .velb ( M5.B).
  *
  * Cache file con magic VPCK + lista de (path, source_hash) de cada modulo
  * participante en el compile + el @c .velb final.  Lookup rapido:
@@ -10,7 +10,7 @@
  */
 
 #include "vx/project_cache.h"
-#include "vx/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
+#include "vx/module/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
 
 #include <atomic>
 #include <cstdint>
@@ -206,7 +206,7 @@ bool project_cache_load(const std::string &cache_path, uint32_t &out_opts_hash,
     if (!read_u16_le(buf.data(), buf.size(), off, version)) return false;
     if (!read_u16_le(buf.data(), buf.size(), off, reserved)) return false;
     if (!read_u32_le(buf.data(), buf.size(), off, out_opts_hash)) return false;
-    // Phase M.L15: compiler_version_hash.  Si el binario del compilador
+    //  M.L15: compiler_version_hash.  Si el binario del compilador
     // cambio (build distinto, version distinta), invalidar el cache.
     uint64_t cached_cvh = 0;
     if (!read_u64_le(buf.data(), buf.size(), off, cached_cvh)) return false;
@@ -253,7 +253,7 @@ bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
     write_u16_le(buf, VPC_FORMAT_VERSION);
     write_u16_le(buf, 0); // reserved
     write_u32_le(buf, opts_hash);
-    // Phase M.L15: compiler_version_hash u64.  Si el compiler cambia
+    //  M.L15: compiler_version_hash u64.  Si el compiler cambia
     // (cambio de version, reglas de mangling, ABI invariantes), el
     // cache se invalida automaticamente.  Reusa el mismo hash que
     // vxi_format.h usa para verificacion del .vxi (M5.b).

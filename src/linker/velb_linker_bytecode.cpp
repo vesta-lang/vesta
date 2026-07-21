@@ -835,8 +835,18 @@ void Linker::build_header() {
      * posteriores para la direccion virtual final y los ultimos 8 bytes para el
      * offset a la tabla de strings.
      */
+    // La tabla de SECCIONES tiene una entrada por SECCION, no por espacio de
+    // direcciones.  Multiplicar por n_spaces acertaba solo mientras hubiera
+    // tantos espacios como secciones (el caso historico: 1 espacio real +
+    // MetaSpace, y 2 secciones: `code` + la auxiliar `strings`).  En cuanto
+    // aparece una tercera seccion el bytecode se situa 24 bytes antes de donde
+    // esta -> todo lo de detras (imports, @ir, simbolos) queda corrido y el
+    // loader acaba leyendo el magic del propio fichero como nombre de libreria.
+    // El loader ya usaba el conteo correcto (`exe.sections.size()`), asi que
+    // ambos solo coincidian por accidente.
     uint64_t init_bytecode =
-        final_header.table_offset + (8 * 3) * final_header.n_spaces;
+        final_header.table_offset +
+        sizeof(section_range_memory) * final_header.count;
     // inicio del bytecode, es el offset dentro del archivo final donde se
     // encuentra todo el bytecode.
 
@@ -957,16 +967,23 @@ uint64_t Linker::compute_sections_base_offset() const {
 }
 
 void Linker::compute_symbol_file_offsets() {
+    // @c SymbolInfo::file_offset es el offset del simbolo dentro de
+    // @c final_bytecode (asi lo consume write_map_file para volcar sus bytes).
+    //
+    // La imagen es plana: dentro de un espacio de direcciones, la distancia de
+    // una direccion virtual a la base del espacio es su offset en el flujo de
+    // bytecode.  Es el mismo invariante que aplica el loader al derivar el
+    // offset de fichero de cada seccion
+    // (file_offset = space->file_offset + (address_init - space->range.address_init)).
     for (auto &[name, info] : symbol_info) {
-        for (const auto &sec : final_sections) {
-            if (info.absolute >= sec.memory.address.address_init &&
-                info.absolute < sec.memory.address.address_final) {
-                uint64_t delta =
-                    info.absolute - sec.memory.address.address_init;
-                info.file_offset = sec.memory.offset_string + delta;
-                break;
-            }
-        }
+        auto it_space = spaces_address.find(info.space);
+        if (it_space == spaces_address.end()) continue;
+
+        const uint64_t space_base = it_space->second.range.address_init;
+        if (info.absolute < space_base) continue; // fuera del espacio
+
+        info.file_offset = it_space->second.file_offset +
+                           (info.absolute - space_base);
     }
 }
 
@@ -1159,7 +1176,7 @@ std::vector<uint8_t> Linker::build_executable() {
     const size_t header_pos_size_ir = result->offset;
     result->emit32(final_header.size_ir_section); // 0 por ahora
 
-    /* Phase E.1: placeholder para offset_stackmap_section +
+    /*  E.1: placeholder para offset_stackmap_section +
      * size_stackmap_section.  Los patcheamos al final via
      * write64_at/write32_at tras conocer la posicion de la seccion VSMP. */
     const size_t header_pos_offset_stackmap = result->offset;
@@ -1470,8 +1487,12 @@ std::vector<uint8_t> Linker::build_executable() {
                     put16(static_cast<uint16_t>(qname.size()));
                     for (char c : qname)
                         sym_bytes.push_back(static_cast<uint8_t>(c));
-                    /* Address absoluto post-link. */
-                    put64(lab.address);
+                    /* Address ABSOLUTO post-link: `lab.address` es relativo a
+                     * su seccion, asi que hay que sumarle la base de esta.  Con
+                     * una sola seccion (que empezaba en 0) ambos coincidian;
+                     * con varias, un simbolo de la segunda seccion se emitia
+                     * con su offset dentro de ella y el JIT no lo resolvia. */
+                    put64(sec.memory.address_init + lab.address);
                     ++count;
                 }
             }
@@ -1497,7 +1518,7 @@ std::vector<uint8_t> Linker::build_executable() {
         final_header.size_ir_section = total_size;
     }
 
-    /* Phase E.1: emitir seccion @c VSMP con los stackmaps precisos del
+    /*  E.1: emitir seccion @c VSMP con los stackmaps precisos del
      * interprete.  Recolectamos los recs de cada modulo, sumando el offset
      * del code section (mismo esquema que la seccion debug DVBG) para
      * producir offsets absolutos, ordenamos por pc_offset y serializamos.

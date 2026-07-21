@@ -11,7 +11,7 @@ int main(void) {
     }
     volatile int32_t bound = 100;
     for (int32_t it = 0; it < bound; ++it) {
-        /* loop manual byte-a-byte para comparar con Vex (que no tiene
+        /* loop manual byte-a-byte para comparar con  (que no tiene
          * intrinsic memcpy vectorizado).  Sin restrict/builtin para
          * forzar el loop trivial. */
         for (size_t j = 0; j < N; ++j) {

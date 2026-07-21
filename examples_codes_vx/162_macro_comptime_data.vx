@@ -2,13 +2,13 @@ namespace ejemplos.macro_comptime_data;
 
 // Demo: estructuras de datos en COMPILE-TIME via @Macro.
 //
-// Vex soporta arrays nativos `T[N]`, structs, strings y aritmetica
+//  soporta arrays nativos `T[N]`, structs, strings y aritmetica
 // dentro del AST evaluator de macros (A.41 + A.42).  Esto permite:
 //   - Construir tablas en compile time y emitir su contenido como
 //     literales en el .velb final.
 //   - "Diccionarios" compile-time via arrays paralelos (keys[], vals[])
 //     con busqueda lineal -- O(N) durante compile, cero coste runtime.
-//   - Iteracion sobre las estructuras para generar expresiones Vex.
+//   - Iteracion sobre las estructuras para generar expresiones .
 //
 // Limitacion: las colecciones runtime del plugin (ArrayList, HashMap,
 // HashSet, Queue, Deque, TreeMap, TreeSet) NO funcionan en compile-time
@@ -56,7 +56,7 @@ comptime string lookup(i64 key) {
     return "-1";  // not found
 }
 
-// Macro 4: genera una expresion suma de cuadrados como literal Vex.
+// Macro 4: genera una expresion suma de cuadrados como literal .
 // El call site recibe "0 + 1 + 4 + 9 + 16" -- el constant folder
 // del IR optimizer lo pliega a 30.
 @Macro
@@ -97,9 +97,9 @@ comptime string http_status(string code) {
 
 // Macro 7: itera un array comptime para generar el codigo de un switch
 // case por case.  Demuestra meta-programacion: la estructura comptime
-// produce codigo Vex en tiempo de compilacion.
+// produce codigo  en tiempo de compilacion.
 //
-// Resultado emitido (texto literal Vex que se re-parsea):
+// Resultado emitido (texto literal  que se re-parsea):
 //   ((x == 1) ? 10 : ((x == 2) ? 20 : ((x == 3) ? 30 : 0)))
 @Macro
 comptime string switch_gen(i64 x_unused) {
@@ -152,7 +152,7 @@ i32 main() {
     if (status_nf != 404) return 81;
 
     // El switch_gen emite un ternario anidado en compile time.
-    // En el call site se parsea como expresion Vex y se evalua a runtime
+    // En el call site se parsea como expresion  y se evalua a runtime
     // sobre la variable `x`.  El optimizer puede plegar segun el valor.
     i64 x = 2;
     i64 sw = switch_gen(0);  // arg unused -- la estructura interna decide

@@ -8,7 +8,7 @@ namespace ejemplos.struct_closure_escape_err;
 // aloca su env en el heap, mueve el struct al caller (SRET) y transfiere el
 // ownership del env: el productor no lo libera (move) y el consumidor
 // (`Caja c = crear(...)`) lo libera al salir de su scope.  Un unico free, sin
-// GC.  Ver doc/VMdoc/Vex/ClosuresEnCampos.md.
+// GC.  Ver doc/VMdoc//ClosuresEnCampos.md.
 
 struct Caja {
     fn() -> i64 leer;

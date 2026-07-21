@@ -5,7 +5,7 @@ namespace ejemplos.spawn_here_observable;
 // en el PID devuelto por spawn.
 //
 // PID encoded = (scheduler_id << 32) | local_pid.  Para extraer
-// scheduler_id sin operadores de bit (Vex no tiene `>>`), dividimos
+// scheduler_id sin operadores de bit (Vesta-lang no tiene `>>`), dividimos
 // por 2^32 = 4294967296.
 //
 // Esperado:

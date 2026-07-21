@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Phase AOT.5 -- validacion del "pull" perezoso de archivos estaticos .a por el
+ AOT.5 -- validacion del "pull" perezoso de archivos estaticos .a por el
 linker propio (vm --link), sin ld/gcc para el enlace final.
 
 Escenario (PE, corre nativo en Windows):

@@ -7,7 +7,7 @@
 
 /**
  * @file jit/vreg_select.cpp
- * @brief Implementacion del selector vreg (Phase D.7, commits 4b/4c).
+ * @brief Implementacion del selector vreg ( D.7, commits 4b/4c).
  *        Ver vreg_select.h y doc/REGALLOC.md.
  *
  * Commit 4b: CONST + ALU + RET (1 bloque).
@@ -23,6 +23,7 @@
  */
 
 #include "jit/vreg_select.h"
+#include "jit/jit_branch_prof.h" // auto-PGO: contadores de branch por linea
 
 #include <unordered_map>
 #include <unordered_set>
@@ -31,11 +32,13 @@
 
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
-#include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
+#include "jit/target_reginfo.h" //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"        // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
-#include "gc/raw_allocator.h" // Phase D.7 perf: inline slab fast-path
-#include "vx/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
-#include "vx/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
+#include "jit/backend_caps.h"   // caps.fma para emitir VFMADD231 escalar
+#include "gc/raw_allocator.h" //  D.7 perf: inline slab fast-path
+#include "vx/asm/asm_backend.h"  //  AS inc.5: ensamblar inline-asm -> bytes
+#include "vx/asm/asm_effects.h"  //  AS inc.5: asm_canonical_reg
+#include "vx/asm/asm_phys_reg.h" // sustitucion $N -> reg fisico
 /* arena -> windows.h (Win32) define macros que chocan con nombres del enum
  * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST.
  */
@@ -53,6 +56,17 @@
 #include <vector>  // critical-edge splitting (pred_count, working copy)
 
 namespace jit {
+
+// Gate del emit VFMADD231 escalar.  -1 = no fijado por el driver -> usa las
+// caps del HOST (JIT).  El AOT lo fija a target.caps.fma.
+static int g_vreg_fma = -1;
+void set_vreg_fma(bool ok) { g_vreg_fma = ok ? 1 : 0; }
+static bool vreg_fma_ok() {
+    if (g_vreg_fma >= 0)
+        return g_vreg_fma != 0;
+    static const bool host = backend_caps_host().fma;
+    return host;
+}
 
 /** @brief Diagnostico opt-in (VESTA_JIT_VREGS_DEBUG=1) de por que una
  *  funcion no es seleccionable por el path vreg. */
@@ -266,7 +280,7 @@ inline bool block_has_phi(const ir::IrBlock &b) {
 inline bool split_critical_edges(ir::IrFunction &fn) {
     const size_t NB0 = fn.blocks.size();
 
-    /* Fase 1: detectar las aristas a partir y crear los puentes con IDs
+    /*   detectar las aristas a partir y crear los puentes con IDs
      * TEMPORALES (>= NB0).  Redirigir terminadores + PHI args + preds/succs
      * en el espacio de IDs original + temporal.  @c bridge_after[pred]
      * lista los puentes que deben ir tras ese predecesor en el layout. */
@@ -330,7 +344,7 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
     }
     if (bridges.empty()) return false;
 
-    /* Fase 2: construir el nuevo layout (cada puente justo tras su pred) y
+    /*   construir el nuevo layout (cada puente justo tras su pred) y
      * el remap old_id -> new_id.  @c temp_id de un puente = NB0 + indice en
      * @c bridges. */
     std::vector<ir::IrBlock> laid;
@@ -346,7 +360,7 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
         }
     }
 
-    /* Fase 3: aplicar el remap a todas las referencias de block-id. */
+    /*   aplicar el remap a todas las referencias de block-id. */
     auto rm = [&](ir::IrBlockId id) -> ir::IrBlockId {
         return (id < remap.size() && remap[id] != ir::IR_NO_BLOCK) ? remap[id]
                                                                    : id;
@@ -396,7 +410,7 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
 }
 
 /**
- * @brief Phase AS inc.5: mapea un nombre de registro CANONICO de 64
+ * @brief  AS inc.5: mapea un nombre de registro CANONICO de 64
  *        bits (de @c vx::asm_canonical_reg) al id de @c MReg GP (0..15),
  *        o -1 si no es un GP usable como pin de inline-asm.
  *
@@ -426,7 +440,23 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  const CallResolver &resolve_call, const VregEntries &ent,
                  const CallResolver &resolve_native,
                  const CallResolver &resolve_symbol, bool pic, bool target_sysv,
-                 bool mode32, FloatIsa fisa, bool emit_line_map) {
+                 bool mode32, FloatIsa fisa, bool emit_line_map,
+                 const VregCallbackOpts &cb) {
+    /* Callback-ABI (jubilacion de slots): un callback nativo se compila en
+     * VM_ABI pero con un prologo que carga proc y marshalea los args nativos a
+     * proc->registers antes de que el prologo normal (mas abajo) los relea.  El
+     * cuerpo y el RET consultan @c cb_entry.  Solo aplica en AbiKind::VM. */
+    const bool cb_entry = cb.callback_entry && abi == AbiKind::VM;
+    /* Callback save-set: SIEMPRE para callbacks.  El marshalling del prologo
+     * escribe proc->registers[1..N] (+ argc) y el RET escribe regs[0]; si el
+     * callback se invoca desde un contexto donde proc->registers es el banco de
+     * registros VIVO del caller (el INTERPRETE, o una re-entrada), eso lo
+     * corromperia.  No podemos saber el contexto del caller en compile-time, asi
+     * que salvamos/restauramos regs[0..15] incondicionalmente (CB_SAVE_REGS en
+     * el prologo, CB_RESTORE_REGS en cada RET; el rewrite reserva 128B).  En
+     * codigo JIT-eado el caller no usa proc->registers a traves del call, pero
+     * el coste (32 mem-ops) es la garantia de correctness pedida. */
+    const bool cb_save_set = cb_entry;
     /* CRITICAL-EDGE SPLITTING (out-of-SSA): si hay >=1 arista critica que
      * entra a un bloque con PHIs, trabajamos sobre una COPIA de la funcion
      * con los puentes insertados (zero-cost para el caso comun sin aristas
@@ -467,9 +497,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     out = MFunction{};
     out.name = fn.name;
-    /* Phase NR @Naked: propagar para suprimir prologo/epilogo/ret en el
+    /*  NR @Naked: propagar para suprimir prologo/epilogo/ret en el
      * rewrite-to-physical.  El cuerpo (asm) provee su propia salida. */
     out.naked = fn.is_naked;
+    /* Callback save-set: propagar tras el reset de out (arriba lo borra un
+     * MFunction{}); el rewrite reserva 128B para CB_SAVE_REGS/CB_RESTORE_REGS. */
+    out.cb_save_regs = cb_save_set;
     /* Solo-LSP (vista "Godbolt"): activar la captura de source_line en el
      * codegen vreg (AOT).  OFF por defecto -> sin efecto en produccion. */
     out.emit_line_map = emit_line_map;
@@ -479,7 +512,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     out.vreg_class.assign(fn.values.size(), RegClass::GP);
     const bool vm = (abi == AbiKind::VM);
 
-    /* FP-regalloc (Phase AOT C1 float): el codegen float SSE2 (FP residente
+    /* FP-regalloc ( AOT C1 float): el codegen float SSE2 (FP residente
      * en XMM) solo se activa en HOST_LEAF + SSE2 + 64-bit.  En cualquier otro
      * caso (VM_ABI del JIT en proceso, x86-32, o FloatIsa != SSE2) las ops
      * float caen al fallback (false) -> el path de slots / el interp se
@@ -528,13 +561,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             if (ir_type_is_float(fn.values[i].type))
                 out.vreg_class[i] = RegClass::FP;
 
-    /* Phase D.7 commit 5f: marcar los vregs GC.  El pipeline hace el
+    /*  D.7 commit 5f: marcar los vregs GC.  El pipeline hace el
      * check FINO (sin stackmaps todavia): rechaza la funcion solo si un
      * valor GC esta VIVO a traves de un call (su intervalo cubre un
      * call_position) -- ese seria invisible al GC en un registro.  Los
      * receptores/args de un call van a proc->registers (que el GC SI
      * escanea) y mueren antes del call, asi que no disparan el rechazo. */
-    /* Phase AOT.3 2b: exponer los vregs de los parametros al rewrite (los
+    /*  AOT.3 2b: exponer los vregs de los parametros al rewrite (los
      * usa en HOST_LEAF para el parallel-move de los arg_regs en el prologo;
      * en VM_ABI se ignora -- el selector carga los params desde memoria). */
     out.param_vregs.assign(fn.params.begin(), fn.params.end());
@@ -595,7 +628,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 ins2.dst < v_is_host_alloca.size())
                 v_is_host_alloca[ins2.dst] = 1u;
 
-    /* ---- Phase AS inc.5: inline-asm (register-bound vars) ----
+    /* ----  AS inc.5: inline-asm (register-bound vars) ----
      * Una funcion con @c asm_reg_bindings tiene >=1 bloque INLINE_ASM.  Las
      * vars @c register("reg") viven en un ALLOCA estable (inc.3); aqui las
      * COLAPSAMOS a un vreg PRECOLOREADO a su registro fisico:
@@ -611,6 +644,21 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     std::vector<uint8_t> binding_is_in(fn.values.size(), 0);
     std::vector<uint8_t> binding_is_out(fn.values.size(), 0);
     const bool has_inline_asm = !fn.asm_reg_bindings.empty();
+    /* Allocas que un bloque INLINE_ASM REAL (no lifteado) referencia como
+     * operando.  Un `register("reg")` cuyo(s) bloque(s) asm TODOS lifteron a IR
+     * normal ya no aparece en ningun INLINE_ASM: su var es una var corriente en
+     * su slot (el lift la modela leyendo/escribiendo el slot), asi que NO hay
+     * que fijarla a su registro fisico.  Esto es lo que permite `register("rbx")`
+     * (o rsp/rbp, reservados por el backend) cuando el asm se liftea: la
+     * restriccion del registro reservado desaparece con el pin. */
+    std::vector<uint8_t> alloca_in_real_asm(fn.values.size(), 0);
+    if (has_inline_asm)
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins2 : blk.instrs)
+                if (ins2.op == ir::IrOp::INLINE_ASM)
+                    for (const ir::IrValueId opv : ins2.operands)
+                        if (opv < alloca_in_real_asm.size())
+                            alloca_in_real_asm[opv] = 1u;
     if (has_inline_asm) {
         /* El ensamblado requiere un backend activo (lo registra main.cpp). */
         if (vx::g_asm_backend == nullptr) {
@@ -622,9 +670,24 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 vreg_dbg(fn.name.c_str(), "inline-asm(binding-oob)");
                 return false;
             }
+            /* Binding cuyo asm TODO lifto -> var normal, sin pin (deja el alloca
+             * como host-slot corriente; el lift ya emitio sus LOAD/STORE). */
+            if (!alloca_in_real_asm[b.alloca_value])
+                continue;
             if (b.is_vector) { /* banco FP no asignable en regalloc v1 */
                 vreg_dbg(fn.name.c_str(), "inline-asm(vector-bind)");
                 return false;
+            }
+            if (b.reg_auto) {
+                // operando `reg` AUTO -> register-required (el RA elige
+                // el fisico OPTIMO, no lo derrama).  El fisico se conoce
+                // post-regalloc; marcamos binding_phys con un sentinel >=0 para
+                // que la clasificacion in/out lo incluya (su intervalo cubre el
+                // asm).  El $N se rellena en el rewrite con ra.reg_of.
+                binding_phys[b.alloca_value] = 0; // sentinel "es binding" (no pin)
+                out.set_vreg_reg_required(
+                    static_cast<uint32_t>(b.alloca_value));
+                continue;
             }
             const std::string canon = vx::asm_canonical_reg(b.reg);
             const int phys = canon_gp_to_mreg(canon);
@@ -851,11 +914,200 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         }
     }
 
+    /* ===== Auto-PGO: contadores de branch por linea =====
+     * Para cada BR_COND cuyo destino (taken/false) tiene UN SOLO predecesor
+     * (patron diamante -- exactamente los candidatos de la if-conversion),
+     * anotamos ese bloque destino para que al ENTRAR emita
+     * `inc [g_jit_line_ctrs[line].taken|not_taken]`.  Al entry del bloque los
+     * flags estan muertos (se llego por un salto) -> el `inc [mem]` no crea
+     * hazard con ningun `jcc`.  El incremento usa RAX salvado/restaurado por
+     * push/pop, asi que no depende de la asignacion de registros del vreg.
+     * VM-independiente: la clave es source_line (del IR), sin PC ni debug_info.
+     * Solo cuando el auto-PGO esta activo (jit_branch_prof_emit_enabled). */
+    struct BlockCtr {
+        uint32_t line = 0;
+        bool taken = false;
+        bool valid = false;
+    };
+    std::vector<BlockCtr> block_ctr;
+    /* SOLO para el JIT in-process (VM_ABI): g_jit_line_ctrs es un global de la
+     * VM; un binario AOT standalone (HOST_LEAF) no puede referenciarlo -> nunca
+     * emitir contadores en AOT (rompe el binario).  vm == (abi == VM). */
+    const bool emit_branch_ctrs = vm && jit::jit_branch_prof_emit_enabled();
+    if (emit_branch_ctrs) {
+        block_ctr.assign(NB, BlockCtr{});
+        for (size_t b = 0; b < NB && b < fn.blocks.size(); ++b) {
+            const ir::IrBlock &blk = fn.blocks[b];
+            if (blk.instrs.empty()) continue;
+            const ir::IrInstr &term = blk.instrs.back();
+            if (term.op != ir::IrOp::BR_COND) continue;
+            if (term.source_line == 0) continue;
+            const ir::IrBlockId tt = term.target_block;
+            const ir::IrBlockId tf = term.false_block;
+            if (tt == tf) continue; // no es un 2-vias real
+            auto mark = [&](ir::IrBlockId tgt, bool taken) {
+                if (tgt >= NB || tgt >= fn.blocks.size()) return;
+                if (fn.blocks[tgt].preds.size() != 1) return; // pred unico
+                if (block_ctr[tgt].valid) return; // ya anotado (no pisar)
+                block_ctr[tgt] = BlockCtr{term.source_line, taken, true};
+            };
+            mark(tt, true);
+            mark(tf, false);
+        }
+    }
+
     for (size_t b = 0; b < NB; ++b) {
         const ir::IrBlock &ib = fn.blocks[b];
         MBlock mb;
         mb.label_id = blbl[b];
         auto &O = mb.instrs;
+
+        /* Auto-PGO: si este bloque es el destino single-pred de un BR_COND,
+         * emitir el incremento del contador de su linea al ENTRY (flags
+         * muertos). */
+        if (emit_branch_ctrs && b < block_ctr.size() && block_ctr[b].valid) {
+            const uint64_t addr = jit::jit_line_ctr_addr(block_ctr[b].line,
+                                                         block_ctr[b].taken);
+            const uint32_t aidx = out.intern_imm64(static_cast<int64_t>(addr));
+            O.push_back(MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                           MOperand::make_reg(MReg::RAX, 8)));
+            O.push_back(MInstr::make_unary(MOp::MOV,
+                                           MOperand::make_reg(MReg::RAX, 8),
+                                           MOperand::make_imm64_idx(aidx)));
+            O.push_back(MInstr::make_unary(MOp::INC,
+                                           MOperand::make_mem(MReg::RAX, 0),
+                                           MOperand::none()));
+            O.push_back(MInstr::make_unary(MOp::POP,
+                                           MOperand::make_reg(MReg::RAX, 8),
+                                           MOperand::none()));
+        }
+
+        /* ===== callback-ABI (jubilacion de slots): prologo nativo =====
+         * Un callback llega por la convencion C del host (args en arg_regs), NO
+         * en proc->registers.  Cargamos proc en RBX (TLS-direct gs:[disp]) y
+         * marshaleamos los args nativos a proc->registers.regs[1..N] (+ argc en
+         * R15) ANTES de que el prologo VM_ABI normal (abajo) los relea de ahi.
+         * Modo SAFE (cuerpo no hoja-puro): salvamos proc->registers[0..15] a la
+         * work-area del frame para re-entrancia, y los restauramos en cada RET.
+         * v1: solo register-args + TLS-direct; call-fallback o stack-args (o
+         * params float, cuya marshalizacion nativa->XMM aun no esta) -> bail a
+         * slots (seguro).  El RET escribe el retorno en regs[0] Y en RAX. */
+        if (cb_entry && b == 0) {
+            const size_t np = fn.params.size();
+            /* Call-fallback (tls_gs_disp == -1, p.ej. Linux/ELF donde el proc no
+             * es gs-direct): LOAD_PROC carga proc via un CALL al stub que
+             * PRESERVA los arg-regs (get_proc_addr = cb_preserving_get_proc).
+             * Ya soportado -> no baila.  El marshalling (abajo) lee los args
+             * intactos tras el LOAD_PROC. */
+            /* Native arg regs por ABI.  GP (enteros/punteros) + XMM (floats).
+             * Win64: la POSICION ordinal del arg es compartida entre bancos
+             * (arg i -> GP_i O XMM_i, 4 slots; args 4+ en pila).  SysV: bancos
+             * SEPARADOS (6 GP / 8 XMM); overflow de cualquier banco en pila. */
+            static const MReg CB_WIN[] = {MReg::RCX, MReg::RDX, MReg::R8,
+                                          MReg::R9};
+            static const MReg CB_SYSV[] = {MReg::RDI, MReg::RSI, MReg::RDX,
+                                           MReg::RCX, MReg::R8,  MReg::R9};
+            static const MReg CB_XMM[] = {MReg::XMM0, MReg::XMM1, MReg::XMM2,
+                                          MReg::XMM3, MReg::XMM4, MReg::XMM5,
+                                          MReg::XMM6, MReg::XMM7};
+            const MReg *cbr = target_sysv ? CB_SYSV : CB_WIN;
+            /* Bail: (a) la convencion VM cabe en regs[1..12] + argc en regs[15]
+             * (regs[13]/[14] reservados) -> >12 params no representable; (b)
+             * tipos que no caben en un slot regs[] de 64-bit (SIMD >8 bytes,
+             * hoy tratados como GP -> bail defensivo por tamano).  f32/f64 y
+             * args por PILA SI se marshalean.  f32: el nativo lo pasa en XMM
+             * low-32; MOVQ copia los 8 bytes (low-32 = bits f32) y el load
+             * VM_ABI del param usa MOVSS (width=4 via vrt) -> lee solo esos 32
+             * bits correctos (sin promocion CVTSS2SD). */
+            if (np > 12) {
+                vreg_dbg(fn.name.c_str(), "callback(argc>12)");
+                return false;
+            }
+            for (size_t i = 0; i < np; ++i) {
+                const ir::IrType pt = (fn.params[i] < fn.values.size())
+                                          ? fn.values[fn.params[i]].type
+                                          : ir::IrType::I64;
+                if (ir_type_bytes(pt) > 8) {
+                    vreg_dbg(fn.name.c_str(), "callback(wide-arg>8)");
+                    return false;
+                }
+            }
+            /* Cargar proc -> RBX via TLS-direct (gs:[disp]); no toca arg-regs. */
+            const uint32_t proc_pool_idx = out.intern_imm64(cb.get_proc_addr);
+            O.push_back(MInstr::make_load_proc(MReg::RBX, cb.tls_gs_disp,
+                                               proc_pool_idx));
+            /* Save-set (cuerpo no-hoja): salvar proc->registers[0..15] del
+             * caller VM a la work-area del frame ANTES de marshalear (que pisa
+             * regs[1..N]).  RBX ya = proc.  El rewrite reserva los 128B. */
+            if (cb_save_set)
+                O.push_back(MInstr::make_cb_save());
+            /* Marshalear args nativos -> proc->regs[1..N].  Cada arg viene en un
+             * reg (GP/XMM) o en la PILA del caller segun el ABI:
+             *   Win64: posicion ordinal compartida; args 0..3 en reg, 4+ en
+             *          [rbp + 48 + 8*(i-4)]  (rbp+8=retaddr, rbp+16..47=shadow).
+             *   SysV : bancos separados (6 GP / 8 XMM); el overflow de cualquier
+             *          banco va a [rbp + 16 + 8*j]  (j = orden de aparicion en
+             *          pila; rbp+8=retaddr, sin shadow).
+             * Float (f64): reg -> MOVQ (XMM->RAX); pila -> load 8 bytes.  En
+             * ambos casos el valor termina en regs[i+1] como bit-pattern i64
+             * (la VM_ABI lo relee via MOVSD).  RAX es scratch (no arg-reg).
+             * RBP estable: has_stack_params (>arg_regs) fuerza el frame. */
+            {
+                size_t gpn = 0, fpn = 0, stk = 0;
+                for (size_t i = 0; i < np; ++i) {
+                    const ir::IrType pt = (fn.params[i] < fn.values.size())
+                                              ? fn.values[fn.params[i]].type
+                                              : ir::IrType::I64;
+                    const bool isf = ir_type_is_float(pt); /* f32 o f64 */
+                    bool on_stack = false;
+                    int32_t stk_off = 0;
+                    MReg srcreg = MReg::RAX;
+                    if (!target_sysv) {
+                        if (i < 4)
+                            srcreg = isf ? CB_XMM[i] : CB_WIN[i];
+                        else {
+                            on_stack = true;
+                            stk_off = 48 + 8 * static_cast<int32_t>(i - 4);
+                        }
+                    } else if (isf) {
+                        if (fpn < 8)
+                            srcreg = CB_XMM[fpn++];
+                        else {
+                            on_stack = true;
+                            stk_off = 16 + 8 * static_cast<int32_t>(stk++);
+                        }
+                    } else {
+                        if (gpn < 6)
+                            srcreg = cbr[gpn++];
+                        else {
+                            on_stack = true;
+                            stk_off = 16 + 8 * static_cast<int32_t>(stk++);
+                        }
+                    }
+                    const MOperand dst = vm_reg_mem(static_cast<int>(i) + 1);
+                    if (on_stack) {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
+                            MOperand::make_mem(MReg::RBP, stk_off)));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, dst, MOperand::make_reg(MReg::RAX, 8)));
+                    } else if (isf) {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVQ_XMM_GP, MOperand::make_reg(MReg::RAX, 8),
+                            MOperand::make_reg(srcreg, 8)));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, dst, MOperand::make_reg(MReg::RAX, 8)));
+                    } else {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, dst, MOperand::make_reg(srcreg, 8)));
+                    }
+                }
+            }
+            /* argc -> regs[15]. */
+            O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(15),
+                                           MOperand::make_imm32(
+                                               static_cast<int32_t>(np))));
+        }
 
         /* VM_ABI: al entrar, cargar cada parametro desde
          * proc->registers.regs[i+1] (regs[0] reservado al retorno).
@@ -866,6 +1118,52 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
          * register que ademas pisaba otro param (p.ej. el puntero p en RAX) ->
          * direccion basura en el loop -> SEGFAULT. */
         if (vm && b == 0) {
+            /* Auto-PGO tier-2: contador de invocaciones en el PROLOGO (corre sea
+             * cual sea el llamante: interp, vrt_callvirt o dispatch inline
+             * nativo).  Al cruzar el umbral llama al entry-point tier2_request
+             * (proc, method) que dispara la recompilacion con el perfil medido.
+             * RBX (=proc) es callee-saved -> la llamada C lo preserva; ningun
+             * vreg esta vivo aun (los params se cargan despues) -> rax/rcx son
+             * scratch libres.  Solo en tier-1 (no en la recompilacion tier-2:
+             * ent.tier2_request=0 alli). */
+            if (ent.tier2_request && ent.tier2_ctr_addr && ent.tier2_threshold) {
+                const uint32_t skipL = out.new_label();
+                const uint32_t ci = out.intern_imm64(
+                    static_cast<int64_t>(ent.tier2_ctr_addr));
+                // rax = &invocation_count
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
+                    MOperand::make_imm64_idx(ci)));
+                // inc dword [rax]  (32-bit)
+                O.push_back(MInstr::make_unary(
+                    MOp::INC, MOperand::make_mem(MReg::RAX, 0),
+                    MOperand::none()));
+                // ecx = [rax]  (32-bit load para el cmp)
+                O.push_back(MInstr::make_load(MOperand::make_reg(MReg::RCX, 4),
+                                              MOperand::make_reg(MReg::RAX, 8),
+                                              4, false));
+                // cmp ecx, threshold
+                O.push_back(MInstr::make_binary(
+                    MOp::CMP, MOperand::none(), MOperand::make_reg(MReg::RCX, 4),
+                    MOperand::make_imm32(
+                        static_cast<int32_t>(ent.tier2_threshold))));
+                // jb skip  (count < threshold -> no disparar)
+                O.push_back(MInstr::make_jcc(MCond::B, skipL));
+                // trigger: arg0 = proc (RBX), arg1 = method_ptr
+                const MReg a0 = target_sysv ? MReg::RDI : MReg::RCX;
+                const MReg a1 = target_sysv ? MReg::RSI : MReg::RDX;
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(a0, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                const uint32_t mi_ = out.intern_imm64(
+                    static_cast<int64_t>(ent.tier2_method_ptr));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(a1, 8),
+                                               MOperand::make_imm64_idx(mi_)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(
+                    static_cast<int64_t>(ent.tier2_request))));
+                O.push_back(MInstr::make_label_def(skipL));
+            }
             for (size_t i = 0; i < fn.params.size(); ++i)
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vrt(fn.params[i]),
@@ -969,8 +1267,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         // copia debe ir por MOVSD/MOVSS (el rewrite la enruta
                         // por is_fp_operand); vr() la haria con MOV entero ->
                         // acumulador float loop-carried roto.
-                        O.push_back(MInstr::make_unary(MOp::MOV, vrt(p.dst),
-                                                       vrt(a.value)));
+                        //
+                        // MARCA variant=PHI_COPY_MARK (0xFD): estas copias de
+                        // una MISMA arista son un PARALLEL MOVE (todos los args
+                        // se leen "a la vez" en la arista).  El regalloc_rewrite
+                        // las agrupa y resuelve con emit_parallel_moves (rompe
+                        // ciclos con scratch).  Emitidas secuencialmente
+                        // corrompen cuando el regalloc (p.ej. tras ssa_coalesce)
+                        // asigna phi_dst_i y arg_j al MISMO fisico -> ciclo de
+                        // permutacion que la copia secuencial pisa.
+                        MInstr mv = MInstr::make_unary(MOp::MOV, vrt(p.dst),
+                                                       vrt(a.value));
+                        mv.variant = 0xFD; // PHI_COPY_MARK
+                        O.push_back(mv);
                         break;
                     }
                 }
@@ -1194,7 +1503,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     v_is_const[in.dst] = 1;
                     v_const[in.dst] = static_cast<int64_t>(in.imm);
                 }
-                /* Float CONST (Phase AOT C1 float): @c in.imm son los bits
+                /* Float CONST ( AOT C1 float): @c in.imm son los bits
                  * IEEE (f64 los 64 bits; f32 los 32 bajos).  Se cargan a un
                  * GP temporal (imm32/imm64) y se bitcastean al XMM dst via
                  * MOVQ_GP_XMM.  El rewrite resuelve el GP temp y el XMM dst
@@ -1276,7 +1585,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* FP arith binaria (Phase AOT C1 float).  El tipo del dst decide
+            /* FP arith binaria ( AOT C1 float).  El tipo del dst decide
              * f32 (SS) vs f64 (SD).  Forma 3-op (dst, a, b); el rewrite la
              * legaliza a 2-address (mov dst,a + OP dst,b).  fp_ok requerido
              * (en otro caso -> fallback). */
@@ -1332,6 +1641,28 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* FMA escalar: dst = round(a*b+c) (1 redondeo).  Baja a
+             * MOVSD dst,c + VFMADD231SD dst,a,b (dst = a*b + dst).  El dst es
+             * USEDEF (acumulador).  Solo con FMA3 (caps.fma); si no, fallback a
+             * interp (que usa std::fma, mismo redondeo -> sin divergencia). */
+            case ir::IrOp::FMA: {
+                flush_pending();
+                if (!fp_ok || !vreg_fma_ok()) {
+                    vreg_dbg(fn.name.c_str(), "fma");
+                    return false;
+                }
+                if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const bool is_f32 = (in.type == ir::IrType::F32);
+                O.push_back(MInstr::make_unary(is_f32 ? MOp::MOVSS : MOp::MOVSD,
+                                               vrt(in.dst),
+                                               vrt(in.operands[2]))); // dst = c
+                O.push_back(MInstr::make_binary(
+                    is_f32 ? MOp::VFMADD231SS : MOp::VFMADD231SD, vrt(in.dst),
+                    vrt(in.operands[0]), vrt(in.operands[1]))); // dst = a*b+dst
+                break;
+            }
+
             /* FSQRT: dst = sqrt(src) (SD/SS). */
             case ir::IrOp::FSQRT: {
                 flush_pending();
@@ -1346,6 +1677,56 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(MInstr::make_unary(fop, vrt(in.dst),
                                                vrt(in.operands[0])));
                 if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
+                break;
+            }
+
+            /* FMIN / FMAX: MINSD/MAXSD (f64) o MINSS/MAXSS (f32).  Forma 3-op
+             * pre-legalization (dst = op(src1, src2)); el rewrite la legaliza a
+             * 2-address preservando el ORDEN (NaN de x86 no es conmutativo). */
+            case ir::IrOp::FMIN:
+            case ir::IrOp::FMAX: {
+                flush_pending();
+                if (!fp_ok) {
+                    vreg_dbg(fn.name.c_str(), ir::ir_op_name(in.op));
+                    return false;
+                }
+                if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const bool is_f32 = (in.type == ir::IrType::F32);
+                const MOp fop = (in.op == ir::IrOp::FMIN)
+                                    ? (is_f32 ? MOp::MINSS : MOp::MINSD)
+                                    : (is_f32 ? MOp::MAXSS : MOp::MAXSD);
+                O.push_back(MInstr::make_binary(fop, vrt(in.dst),
+                                                vrt(in.operands[0]),
+                                                vrt(in.operands[1])));
+                break;
+            }
+
+            /* FFLOOR / FCEIL / FROUND / FTRUNC: ROUNDSD (f64) o ROUNDSS (f32)
+             * con el modo de redondeo en @c variant (0=nearest, 1=floor,
+             * 2=ceil, 3=trunc).  Unario no-destructivo (dst = round(src)). */
+            case ir::IrOp::FFLOOR:
+            case ir::IrOp::FCEIL:
+            case ir::IrOp::FROUND:
+            case ir::IrOp::FTRUNC: {
+                flush_pending();
+                if (!fp_ok) {
+                    vreg_dbg(fn.name.c_str(), ir::ir_op_name(in.op));
+                    return false;
+                }
+                if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const bool is_f32 = (in.type == ir::IrType::F32);
+                const uint8_t mode = (in.op == ir::IrOp::FROUND)  ? 0u
+                                     : (in.op == ir::IrOp::FFLOOR) ? 1u
+                                     : (in.op == ir::IrOp::FCEIL)  ? 2u
+                                                                   : 3u;
+                MInstr r{};
+                r.op = is_f32 ? MOp::ROUNDSS : MOp::ROUNDSD;
+                r.variant = mode;
+                r.dst = vrt(in.dst);
+                r.src1 = vrt(in.operands[0]);
+                O.push_back(r);
                 break;
             }
 
@@ -1390,7 +1771,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* Conversiones int <-> float (Phase AOT C1 float).  CVTSI2SD/SS
+            /* Conversiones int <-> float ( AOT C1 float).  CVTSI2SD/SS
              * (entero signed -> float) / CVTTSD2SI/SS (float -> entero
              * truncado).  UITOF/FTOUI (unsigned) reusan la misma instr en v1
              * (correcto para valores que caben en i63; el caso > 2^63 se
@@ -1455,7 +1836,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* FCMP_* (Phase AOT C1 float): UCOMISD/UCOMISS + SETcc.  El bool
+            /* FCMP_* ( AOT C1 float): UCOMISD/UCOMISS + SETcc.  El bool
              * resultante (0/1 en GP) lo consume un BR_COND (TEST + Jcc).
              * UCOMISD setea CF/ZF/PF: para ordenadas (no-NaN) el mapeo es:
              *   EQ -> setz (ZF=1 y PF=0; NaN da PF=1 -> tratamos como != )
@@ -1529,22 +1910,29 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 dm.dst = vr(in.dst);
                 dm.src1 = vr(in.operands[0]); // dividendo
                 dm.src2 = vr(in.operands[1]); // divisor
+                /* variant: bit0 = MOD(1)/DIV(0), bit1 = UNSIGNED(2).  El tipo
+                 * del IR decide signed vs unsigned (idiv/cqo vs div/xor). */
                 dm.variant = (in.op == ir::IrOp::MOD) ? 1u : 0u;
+                if (!ir_type_signed(in.type)) dm.variant |= 2u;
                 O.push_back(dm);
                 break;
             }
-            case ir::IrOp::NEG: {
-                flush_pending();
-                if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::NEG, vr(in.dst),
-                                               vr(in.operands[0])));
-                break;
-            }
+            /* NEG / NOT: x86 los tiene IN-PLACE (`neg rax` es rax = -rax), asi
+             * que su forma maquina es de UN operando -- el encoder ni mira
+             * src1.  Emitirlos como `NEG dst, src` con dst != src negaba lo que
+             * hubiera en dst y tiraba el operando: `r.x = -this.x` dentro de un
+             * metodo daba basura en JIT mientras el interprete daba lo correcto
+             * (`0 - this.x`, que baja a SUB, si funcionaba).  Se copia primero
+             * y se niega en sitio, como ya hacian ILOG2 y CTZ mas abajo. */
+            case ir::IrOp::NEG:
             case ir::IrOp::NOT: {
                 flush_pending();
-                if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::NOT, vr(in.dst),
+                if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                const MOp mop = (in.op == ir::IrOp::NEG) ? MOp::NEG : MOp::NOT;
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(mop, vr(in.dst), vr(in.dst)));
                 break;
             }
 
@@ -1557,17 +1945,36 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 if (in.operands.size() != 2) return false;
                 const ir::IrValueId amt_v = in.operands[1];
-                if (amt_v >= v_is_const.size() || !v_is_const[amt_v]) {
-                    vreg_dbg(fn.name.c_str(), "shift-var");
-                    return false;
+                if (amt_v < v_is_const.size() && v_is_const[amt_v]) {
+                    /* Cuenta INMEDIATA (caso comun): shift dst, imm8. */
+                    const int32_t amt = static_cast<int32_t>(v_const[amt_v] & 63);
+                    const MOp mop = (in.op == ir::IrOp::SHL)   ? MOp::SHL
+                                    : (in.op == ir::IrOp::SHR) ? MOp::SHR
+                                                               : MOp::SAR;
+                    O.push_back(MInstr::make_binary(mop, vr(in.dst),
+                                                    vr(in.operands[0]),
+                                                    MOperand::make_imm32(amt)));
+                    break;
                 }
-                const int32_t amt = static_cast<int32_t>(v_const[amt_v] & 63);
-                const MOp mop = (in.op == ir::IrOp::SHL)   ? MOp::SHL
-                                : (in.op == ir::IrOp::SHR) ? MOp::SHR
-                                                           : MOp::SAR;
-                O.push_back(MInstr::make_binary(mop, vr(in.dst),
-                                                vr(in.operands[0]),
-                                                MOperand::make_imm32(amt)));
+                /* Cuenta VARIABLE (en registro).  x86 exige CL: metemos la
+                 * cuenta en un tmp de vida corta pineado a RCX y emitimos el
+                 * pseudo SHIFT_V (el rewrite lo expande con R11 como reg de
+                 * trabajo -> sin clobbear vivos).  NUNCA cae al interprete. */
+                if (in.dst == ir::IR_NO_VALUE) return false;
+                const ir::IrValueId cnt = new_tmp();
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(cnt),
+                                               vr(in.operands[1])));
+                out.set_vreg_fixed(static_cast<uint32_t>(cnt),
+                                   static_cast<uint8_t>(MReg::RCX));
+                MInstr sv{};
+                sv.op = MOp::SHIFT_V;
+                sv.dst = vr(in.dst);
+                sv.src1 = vr(in.operands[0]); // valor a desplazar
+                sv.src2 = vr(cnt);            // cuenta (pineada a RCX)
+                sv.variant = (in.op == ir::IrOp::SHL)   ? 0u
+                             : (in.op == ir::IrOp::SHR) ? 1u
+                                                        : 2u;
+                O.push_back(sv);
                 break;
             }
 
@@ -1616,6 +2023,27 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(cm);
                 break;
             }
+            case ir::IrOp::SELECT: {
+                /* dst = cond ? a : b.  Sin salto, via CMOV:
+                 *   mov  dst, b        ; valor si cond es falso
+                 *   test cond, cond    ; ZF = (cond == 0)
+                 *   cmovne dst, a      ; si cond != 0 -> dst = a
+                 * cond es booleano 0/1 (lo producen los CMP_*). */
+                flush_pending();
+                if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 3)
+                    return false;
+                const ir::IrValueId cond = in.operands[0];
+                const ir::IrValueId a = in.operands[1], b = in.operands[2];
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst), vr(b)));
+                O.push_back(mk_test(cond, cond));
+                MInstr cm;
+                cm.op = MOp::CMOVCC;
+                cm.variant = static_cast<uint8_t>(MCond::NE);
+                cm.dst = vr(in.dst);
+                cm.src1 = vr(a);
+                O.push_back(cm);
+                break;
+            }
             case ir::IrOp::ILOG2: { /* 63 - lzcnt(a); a==0 es UB (igual que
                                        slot) */
                 flush_pending();
@@ -1655,21 +2083,35 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             case ir::IrOp::ROTL:
             case ir::IrOp::ROTR: {
-                /* count CONSTANTE -> rol/ror dst, imm.  Variable -> CL
-                 * (no soportado en vregs) -> fallback. */
+                /* count CONSTANTE -> rol/ror dst, imm.  Variable (en registro)
+                 * -> pseudo SHIFT_V (variant 3=ROL, 4=ROR): cuenta a CL via un
+                 * tmp pineado a RCX, expandido con R11 en el rewrite.  NUNCA cae
+                 * al interprete. */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 2)
                     return false;
                 const ir::IrValueId cnt = in.operands[1];
-                if (cnt >= v_is_const.size() || !v_is_const[cnt]) {
-                    vreg_dbg(fn.name.c_str(), "rot-var");
-                    return false;
+                if (cnt < v_is_const.size() && v_is_const[cnt]) {
+                    const int32_t amt = static_cast<int32_t>(v_const[cnt] & 63);
+                    const MOp rop =
+                        (in.op == ir::IrOp::ROTL) ? MOp::ROL : MOp::ROR;
+                    O.push_back(MInstr::make_binary(rop, vr(in.dst),
+                                                    vr(in.operands[0]),
+                                                    MOperand::make_imm32(amt)));
+                    break;
                 }
-                const int32_t amt = static_cast<int32_t>(v_const[cnt] & 63);
-                const MOp rop = (in.op == ir::IrOp::ROTL) ? MOp::ROL : MOp::ROR;
-                O.push_back(MInstr::make_binary(rop, vr(in.dst),
-                                                vr(in.operands[0]),
-                                                MOperand::make_imm32(amt)));
+                const ir::IrValueId rc = new_tmp();
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(rc),
+                                               vr(in.operands[1])));
+                out.set_vreg_fixed(static_cast<uint32_t>(rc),
+                                   static_cast<uint8_t>(MReg::RCX));
+                MInstr rv{};
+                rv.op = MOp::SHIFT_V;
+                rv.dst = vr(in.dst);
+                rv.src1 = vr(in.operands[0]);
+                rv.src2 = vr(rc);
+                rv.variant = (in.op == ir::IrOp::ROTL) ? 3u : 4u;
+                O.push_back(rv);
                 break;
             }
 
@@ -1780,6 +2222,63 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * [dst] = [src]; [src] = 0.  Inline puro (3 ops de memoria host)
              * cuando ambas direcciones son host_ptr (slots de unique/shared
              * en el frame host).  VM-addr -> fallback (raro). */
+            /* Atomicas del lenguaje ( Z / FN.4): a instrucciones x86
+             * atomicas nativas.  Buen uso de registros: CAS solo fija RAX
+             * (obligado por la ISA de cmpxchg) via precoloreo de un temp;
+             * addr/desired quedan LIBRES para el allocator.  ADD (xadd) no
+             * fija ningun registro (dst in/out estilo 2-address). */
+            case ir::IrOp::ATOMIC_LD_I64: {
+                flush_pending();
+                if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                /* mov dst, [addr] (load 64-bit alineado = atomico en x86). */
+                O.push_back(
+                    MInstr::make_load(vr(in.dst), vr(in.operands[0]), 8, false));
+                break;
+            }
+            case ir::IrOp::ATOMIC_ST_I64: {
+                flush_pending();
+                if (in.operands.size() != 2) return false;
+                /* mov [addr], val (store alineado; release en x86-TSO). */
+                O.push_back(MInstr::make_store(vr(in.operands[0]),
+                                               vr(in.operands[1]), 8));
+                break;
+            }
+            case ir::IrOp::ATOMIC_ADD_I64: {
+                flush_pending();
+                if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                /* dst = delta; lock xadd [addr], dst (dst = valor viejo). */
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               vr(in.operands[1])));
+                MInstr xa{};
+                xa.op = MOp::ATOMICADD_V;
+                xa.dst = vr(in.dst);          /* in/out: delta -> old */
+                xa.src1 = vr(in.operands[0]); /* addr */
+                O.push_back(xa);
+                break;
+            }
+            case ir::IrOp::ATOMIC_CAS_I64: {
+                flush_pending();
+                if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE)
+                    return false;
+                /* rax_v = expected (precoloreado a RAX, obligado por cmpxchg);
+                 * lock cmpxchg [addr], desired; dst = rax_v (viejo). */
+                const ir::IrValueId rax_v = new_tmp();
+                out.set_vreg_fixed(static_cast<uint32_t>(rax_v),
+                                   static_cast<uint8_t>(MReg::RAX));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(rax_v),
+                                               vr(in.operands[1])));
+                MInstr cx{};
+                cx.op = MOp::ATOMICCAS_V;
+                cx.dst = vr(rax_v);           /* in/out: expected -> old (RAX) */
+                cx.src1 = vr(in.operands[0]); /* addr */
+                cx.src2 = vr(in.operands[2]); /* desired */
+                O.push_back(cx);
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               vr(rax_v)));
+                break;
+            }
             case ir::IrOp::MVTAKE_IR: {
                 flush_pending();
                 if (in.operands.size() < 2) {
@@ -2195,7 +2694,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 const ir::IrBlockId t = in.target_block;
                 emit_phi_copies(t); // pred 1-succ: seguro
-                O.push_back(MInstr::make_jmp(blbl[t]));
+                // Fall-through: los bloques se emiten en orden 0..NB, asi que un
+                // BR al bloque SIGUIENTE (b+1) es un `jmp` a la instruccion que
+                // le sigue -> redundante.  Se omite (cae por fall-through).
+                if (t != b + 1) {
+                    O.push_back(MInstr::make_jmp(blbl[t]));
+                }
                 mb.succ_a = static_cast<MBlockId>(t);
                 break;
             }
@@ -2215,6 +2719,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 const ir::IrValueId cond = in.operands[0];
 
+                // La rama FALSE cae por fall-through si su target es el bloque
+                // siguiente (b+1) -> se omite el `jmp` redundante.
+                const bool false_fallthrough = (tf == b + 1);
                 if (has_pend && pend_dst == cond &&
                     vreg_count_uses(fn, pend_dst) == 1) {
                     /* FUSION: CMP a,b + Jcc(cc) true + JMP false.  Solo si el
@@ -2222,13 +2729,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * hay que materializarlo via SETcc para el otro uso). */
                     O.push_back(mk_cmp(pend_a, pend_b));
                     O.push_back(MInstr::make_jcc(pend_cc, blbl[tt]));
-                    O.push_back(MInstr::make_jmp(blbl[tf]));
+                    if (!false_fallthrough) {
+                        O.push_back(MInstr::make_jmp(blbl[tf]));
+                    }
                     has_pend = false;
                 } else {
                     flush_pending();
                     O.push_back(mk_test(cond, cond));
                     O.push_back(MInstr::make_jcc(MCond::NE, blbl[tt]));
-                    O.push_back(MInstr::make_jmp(blbl[tf]));
+                    if (!false_fallthrough) {
+                        O.push_back(MInstr::make_jmp(blbl[tf]));
+                    }
                 }
                 mb.succ_a = static_cast<MBlockId>(tt);
                 mb.succ_b = static_cast<MBlockId>(tf);
@@ -2241,7 +2752,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const ir::IrValueId rv = in.operands[0];
                     const bool rv_fp = fp_ok && rv < fn.values.size() &&
                                        ir_type_is_float(fn.values[rv].type);
-                    /* Float return HOST_LEAF (Phase AOT C1): el valor va a XMM0
+                    /* Float return HOST_LEAF ( AOT C1): el valor va a XMM0
                      * (ret_reg[FP]).  El MOV XMM0 <- vreg_fp lo enruta el rewrite
                      * a MOVSD (is_fp_operand). */
                     if (!vm && rv_fp) {
@@ -2263,6 +2774,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                        vr(gpb), vrt(rv)));
                         O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(0),
                                                        vr(gpb)));
+                        /* Callback: el retorno nativo float va en XMM0. */
+                        if (cb_entry)
+                            O.push_back(MInstr::make_unary(
+                                MOp::MOV, MOperand::make_reg(MReg::XMM0, 8),
+                                vrt(rv)));
+                        /* Save-set: restaurar regs[0..15] del caller (no toca
+                         * RAX/XMM0 -> el retorno nativo sobrevive). */
+                        if (cb_save_set) O.push_back(MInstr::make_cb_restore());
                         O.push_back(MInstr::make_ret());
                         break;
                     }
@@ -2271,6 +2790,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vm ? vm_reg_mem(0) : MOperand::make_reg(MReg::RAX, 8);
                     O.push_back(
                         MInstr::make_unary(MOp::MOV, dst, vr(in.operands[0])));
+                    /* Callback: el retorno nativo (entero/ptr) va en RAX ademas
+                     * de regs[0] (que lee el interp). */
+                    if (cb_entry && vm)
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
+                            vr(in.operands[0])));
                 } else if (vm) {
                     /* RET void en VM_ABI: regs[0] es el "exit code"
                      * observable de main.  Sin esto quedaria con basura
@@ -2287,11 +2812,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(
                         MInstr::make_unary(MOp::MOV, vm_reg_mem(0), vr(zero)));
                 }
+                /* Save-set: restaurar regs[0..15] del caller antes del ret.
+                 * RAX (retorno nativo del callback) ya esta escrito y el
+                 * restore usa R11 -> no lo pisa. */
+                if (cb_save_set) O.push_back(MInstr::make_cb_restore());
                 O.push_back(MInstr::make_ret());
                 break;
             }
 
-            /* Fase 2: GETSTATIC/SETSTATIC = acceso directo (sin runtime
+            /*   GETSTATIC/SETSTATIC = acceso directo (sin runtime
              * call) a `cls->static_data + offset`.  cls->static_data es
              * un host_ptr (offset 96 en ClassInfo); el valor vive en ese
              * bloque host.  Dos loads/un store encadenados (el MEM con
@@ -2342,7 +2871,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * prologue/epilogue salva/restaura el VM-RSP). */
             case ir::IrOp::ALLOCA: {
                 flush_pending();
-                /* Phase AS inc.5: ALLOCA de un binding register() ->
+                /*  AS inc.5: ALLOCA de un binding register() ->
                  * NO emite host-slot; el vreg ya esta precoloreado a su
                  * registro fisico (set_vreg_fixed) y representa el VALOR
                  * directamente.  Los STORE/LOAD a su alloca se colapsan a
@@ -2372,7 +2901,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::LOAD: {
                 flush_pending();
                 if (in.operands.size() != 1) return false;
-                /* Phase AS inc.5: LOAD desde el alloca de un binding ->
+                /*  AS inc.5: LOAD desde el alloca de un binding ->
                  * leer el output del inline-asm: MOV dst <- vbind. */
                 if (in.dst != ir::IR_NO_VALUE &&
                     in.operands[0] < binding_phys.size() &&
@@ -2441,7 +2970,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::STORE: {
                 flush_pending();
                 if (in.operands.size() != 2) return false; // [0]=val [1]=ptr
-                /* Phase AS inc.5: STORE al alloca de un binding ->
+                /*  AS inc.5: STORE al alloca de un binding ->
                  * cargar el input del inline-asm: MOV vbind <- val. */
                 if (in.operands[1] < binding_phys.size() &&
                     binding_phys[in.operands[1]] >= 0) {
@@ -3092,7 +3621,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* Phase AS inc.5: bloque de inline-asm nativo.  El cuerpo
+            /*  AS inc.5: bloque de inline-asm nativo.  El cuerpo
              * (NASM Intel, ya con comptime-consts sustituidas por el
              * frontend) se ENSAMBLA a bytes via g_asm_backend; se emite
              * como INLINE_ASM_RAW (el encoder lo apendea verbatim).  Los
@@ -3101,7 +3630,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * in/out alimenta la liveness del AsmBlob. */
             case ir::IrOp::INLINE_ASM: {
                 flush_pending();
-                /* Phase NR @Naked: un asm{} SIN register() bindings (cuerpo
+                /*  NR @Naked: un asm{} SIN register() bindings (cuerpo
                  * de un ISR/stub) tiene @c asm_reg_bindings vacio -> antes
                  * caia por @c !has_inline_asm.  El unico requisito real es el
                  * backend de ensamblado; sin bindings, @c in.operands esta
@@ -3110,18 +3639,28 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
                     return false;
                 }
+                // si hay operandos `reg` AUTO, el cuerpo lleva $N y el
+                // fisico de cada uno lo elige el RA -> DIFERIR el ensamblado a
+                // post-regalloc (regalloc_rewrite).  @c ar queda vacio (los
+                // sym_refs/labels/bytes se rellenan al ensamblar en el rewrite).
+                bool asm_has_auto = false;
+                for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
+                    if (b.reg_auto) { asm_has_auto = true; break; }
                 // El inline-asm de @Naked/asm{} se ensambla en el modo del
                 // TARGET (no del host): x86-32 -> KS_MODE_32 (si no, `jmp ecx`
                 // y demas codificaciones de 32 bits fallan en KS_MODE_64).
-                vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(
-                    in.func_name,
-                    mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
-                if (!ar.ok || ar.bytes.empty()) {
-                    vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
-                    return false;
+                vx::AsmAssembleResult ar;
+                if (!asm_has_auto) {
+                    ar = vx::g_asm_backend->assemble(
+                        in.func_name,
+                        mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
+                    if (!ar.ok || ar.bytes.empty()) {
+                        vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
+                        return false;
+                    }
                 }
                 AsmBlob blob;
-                // Phase AS inc.6: simbolos PROPIOS referenciados desde el asm
+                //  AS inc.6: simbolos PROPIOS referenciados desde el asm
                 // (`jmp [global]`, `mov rax, fn`).  El backend ya localizo el
                 // campo (offset relativo al blob) + tipo; el encoder los reubica
                 // y emite los MReloc.  Cero coste si el asm no usa simbolos.
@@ -3216,14 +3755,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 blob.clobbers_mem = ((in.imm >> 4) & 1u) != 0;
                 blob.clobbers_flags = ((in.imm >> 5) & 1u) != 0;
-                // Phase AS inc.5e: registros fisicos clobbered (explicitos
+                //  AS inc.5e: registros fisicos clobbered (explicitos
                 // del usuario + inferidos; asm_clobber_lists YA excluye los
                 // regs ligados por register()).  El regalloc los excluye
                 // para vregs NO-binding vivos a traves del asm -- cubre los
                 // clobbers de callee-saved (r12-r15) que el call-position
                 // (solo caller-saved) no protege.  asm_id en imm bits 8..31.
                 //
-                // Phase AS inc.5f: clobbers de registros RESERVADOS por el
+                //  AS inc.5f: clobbers de registros RESERVADOS por el
                 // wrapper (rbx = ProcessVM*, rbp = frame).  canon_gp_to_mreg
                 // los rechaza (no son asignables), pero el asm SI los pisa
                 // (p.ej. cpuid escribe ebx) -> hay que SALVARLOS y
@@ -3245,11 +3784,40 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             } else if (c == "rbp") {
                                 save_rbp = true;
                             } else if (c == "rsp") {
-                                vreg_dbg(fn.name.c_str(),
-                                         "inline-asm(clobber-rsp)");
-                                return false;
+                                // Un asm que reasigna rsp (stack switch para
+                                // corrutinas/fibras) se compila nativamente en
+                                // ambos casos: NO cae al interp.  En @Naked el
+                                // usuario es dueno de la pila.  En una funcion
+                                // NORMAL su epilogue gestiona rsp; el frontend ya
+                                // avisa (warning) de que un cambio de pila
+                                // persistente exige @Naked.  rsp no se registra
+                                // como clobber (no es asignable por el RA); el
+                                // asm lo maneja verbatim.
                             }
                         }
+                    }
+                }
+                // blob DIFERIDO -> plantilla ($N) + descriptor por
+                // operando `reg` auto (su alloca vreg; el rewrite pone
+                // ra.reg_of(vreg) en $ph_index).  Los operandos concretos ya
+                // quedaron horneados en la plantilla por el ph_subst del lowering.
+                if (asm_has_auto) {
+                    blob.deferred = true;
+                    blob.deferred_isa = 0; // instr_db::Isa::X86
+                    blob.deferred_tmpl = in.func_name;
+                    int maxph = -1;
+                    for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
+                        if (b.reg_auto && b.ph_index > maxph) maxph = b.ph_index;
+                    blob.deferred_ops.resize(maxph + 1);
+                    for (const ir::AsmRegBinding &b : fn.asm_reg_bindings) {
+                        if (!b.reg_auto || b.ph_index < 0) continue;
+                        AsmBlob::DeferredOp &d =
+                            blob.deferred_ops[b.ph_index];
+                        d.vreg = static_cast<uint32_t>(b.alloca_value);
+                        d.fixed_phys = -1; // lo elige el RA
+                        d.width = static_cast<uint16_t>(
+                            ir_type_bytes(b.type) * 8);
+                        d.regclass = 0; // GP
                     }
                 }
                 const uint32_t bidx = out.intern_asm_blob(std::move(blob));
@@ -3280,6 +3848,53 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     p.dst = MOperand::make_reg(MReg::RBX, 8);
                     O.push_back(p);
                 }
+                break;
+            }
+
+            /* ASM_MICRO: una instruccion asm OPACA liftada (ver AsmMicro).
+             * Su plantilla se ENSAMBLA (via g_asm_backend, con cache) y se
+             * emite como INLINE_ASM_RAW (el encoder la apendea verbatim); sus
+             * efectos (barrera de memoria / flags) los da la DB (campo eff).
+             *
+             * Este incremento cubre el caso SIN operandos de registro
+             * (mfence/pause/lfence/sfence/cpuid-sin-regs...): la plantilla ES
+             * el texto final, sin placeholders que rellenar.  El caso con
+             * operandos (substitucion de $N por el reg fisico + pinning en el
+             * regalloc) llega en un incremento posterior; el lifter hoy solo
+             * produce ASM_MICRO sin operandos, asi que ins/outs no-vacios ->
+             * fallback (no deberia ocurrir). */
+            case ir::IrOp::ASM_MICRO: {
+                flush_pending();
+                if (vx::g_asm_backend == nullptr) {
+                    vreg_dbg(fn.name.c_str(), "asm_micro(no-backend)");
+                    return false;
+                }
+                if (in.imm >= fn.asm_micros.size()) return false;
+                const ir::AsmMicro &am = fn.asm_micros[in.imm];
+                // sustituir $0,$1,... por el nombre del registro FiSICO
+                // FIJO de cada operando ANTES de ensamblar.  Sin operandos, la
+                // plantilla no tiene $N y queda verbatim (caso mfence/etc).
+                std::string nasm = am.tmpl;
+                if (!am.operands.empty() &&
+                    !vx::asm_micro_subst_phys(am, nasm)) {
+                    // Operando no fisico (SSA/RA) o clase no soportada.
+                    vreg_dbg(fn.name.c_str(), "asm_micro(operando-no-fisico)");
+                    return false;
+                }
+                vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(
+                    nasm, mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
+                if (!ar.ok || ar.bytes.empty()) {
+                    vreg_dbg(fn.name.c_str(), "asm_micro(assemble-fail)");
+                    return false;
+                }
+                AsmBlob blob;
+                blob.bytes = std::move(ar.bytes);
+                // Efectos de la DB: bit0 mem, bit3 barrera -> clobber de
+                // memoria; bit2 escribe flags.
+                blob.clobbers_mem = (am.eff & 0x9) != 0;
+                blob.clobbers_flags = (am.eff & 0x4) != 0;
+                const uint32_t bidx = out.intern_asm_blob(std::move(blob));
+                O.push_back(MInstr::make_inline_asm_raw(bidx));
                 break;
             }
 
@@ -3491,7 +4106,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::GC_ALLOC:
             case ir::IrOp::GC_ALLOCP:
             case ir::IrOp::NEWOBJ:
-            /* Fase 2: class registry de 1 arg (proc, params_vaddr).
+            /*   class registry de 1 arg (proc, params_vaddr).
              * Mismo marshalling que gc_handle/newobj.  FINDCLASS/
              * FINDMETHOD/FINDFIELD/DEFCLASS dejan el resultado en dst. */
             case ir::IrOp::FINDCLASS:
@@ -3519,7 +4134,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                        vr(in.operands[0])));
                     break;
                 }
-                /* === Inline slab fast-path (Phase D.7 perf, 2026-06-06) ===
+                /* === Inline slab fast-path ( D.7 perf, 2026-06-06) ===
                  * Para RAW_ALLOC con size CONSTANTE que cae en una size
                  * class pequena del slab, inline-amos el pop del free
                  * list (sin CALL al runtime), con fallback CALL @c alloc
@@ -5028,7 +5643,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * por @c in.imm en el bloque "code.s_<imm>" del .velb.
                  * Equivalente al `mov rDst, @Absolute("code.s_<imm>")`
                  * que emite el frontend; lo resolvemos en compile-time
-                 * via @c resolve_symbol (Phase D.3-H, igual que el
+                 * via @c resolve_symbol ( D.3-H, igual que el
                  * selector de slots).
                  *
                  * IMPORTANTE: el resultado es un VM-addr (offset a
@@ -5076,8 +5691,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     break;
                 }
                 uint64_t addr = 0;
-                if (resolve_symbol)
-                    addr = resolve_symbol("code.s_" + std::to_string(in.imm));
+                if (resolve_symbol) {
+                    /* Un slot vive en `code` (literales de STRMAKE, params de
+                     * los opcodes meta: memoria VM, que es la que esos
+                     * consumidores exigen) o en `gdata` (storage de variable
+                     * global: memoria host).  El IR embebido no lleva el pool
+                     * de static_data, asi que aqui no se sabe cual es: se
+                     * prueban los dos nombres -- cada slot existe en una sola
+                     * seccion, asi que no hay ambiguedad. */
+                    const std::string sfx = ".s_" + std::to_string(in.imm);
+                    addr = resolve_symbol("code" + sfx);
+                    if (addr == 0) addr = resolve_symbol("gdata" + sfx);
+                }
                 if (addr == 0) {
                     vreg_dbg(fn.name.c_str(), "str_lit_addr(no-symbol)");
                     return false; // sin resolver -> fallback a slots
@@ -5095,7 +5720,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * el frontend (B.1 as_native_callback, paso de fn por
                  * valor, trampolines, registro de handlers).  Lo
                  * resolvemos via @c resolve_symbol igual que el
-                 * selector de slots (Phase D.3-H).
+                 * selector de slots ( D.3-H).
                  *
                  * Es un PC virtual (code addr), NO un host_ptr: mismo
                  * tratamiento que STR_LIT_ADDR -- solo emitimos el
@@ -5126,7 +5751,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     label_fn[in.dst] = in.func_name;
                     break;
                 }
-                /* VM/JIT: resolvemos via resolve_symbol (Phase D.3-H). */
+                /* VM/JIT: resolvemos via resolve_symbol ( D.3-H). */
                 uint64_t addr = 0;
                 if (resolve_symbol)
                     addr = resolve_symbol("code." + in.func_name);

@@ -1,0 +1,56 @@
+// -----------------------------------------------------------------------------
+// @endian(expr): endianness segun el CONTEXTO (formatos bi-endian, tipo ELF)
+// -----------------------------------------------------------------------------
+// Muchos formatos NO tienen un orden de bytes fijo: el propio fichero declara si
+// es little o big endian (ELF en `e_ident[EI_DATA]`, TIFF en su firma, ...).  Con
+// `@endian(expr)` el orden lo decide una EXPRESION en tiempo de acceso -- puede
+// leer un campo hermano (`this.ei_data == 2`) o un comptime const.  Si la expr es
+// runtime el swap es un select SIN ramas; si es comptime, se pliega (cero coste).
+// Una sola forma cubre fijo Y dinamico.  interp = JIT = AOT.
+
+// Mini-cabecera bi-endian: ei_data (1=LE, 2=BE) manda sobre el resto.
+@overlay struct BiHdr {
+    u32 magic   @0x00;
+    u8  ei_data @0x04;                          // 1 = little, 2 = big
+    u16 version @endian(ei_data == 2) @0x06;    // orden segun ei_data
+    u32 entry   @endian(ei_data == 2) @0x08;    // idem
+}
+
+// Rellena una cabecera en el orden pedido (be=true -> big-endian) y devuelve la
+// suma de version+entry releidos (deben coincidir sea cual sea el orden).
+i64 build_and_read(u8* buf, bool be) {
+    BiHdr h = BiHdr(buf);
+    *(u32*)(buf + 0) = 0x7F454C46;   // "\x7FELF"
+    h.ei_data = be ? 2 : 1;
+    h.version = 0x0102;              // se escribe en el orden que dicte ei_data
+    h.entry   = 0x0A0B0C0D;
+    // releer via la misma vista -> mismo valor logico en ambos ordenes
+    return (i64) h.version + (i64) h.entry;
+}
+
+i32 main() {
+    u8* be_buf = (u8*) malloc(32);
+    u8* le_buf = (u8*) malloc(32);
+
+    i64 be_sum = build_and_read(be_buf, true);    // formato big-endian
+    i64 le_sum = build_and_read(le_buf, false);   // formato little-endian
+
+    // los BYTES en memoria difieren segun el orden:
+    //   big:    version @0x06 -> 01 02
+    //   little: version @0x06 -> 02 01
+    println("be_ver_bytes=${*(u8*)(be_buf+6):hex} ${*(u8*)(be_buf+7):hex}"); // 1 2
+    println("le_ver_bytes=${*(u8*)(le_buf+6):hex} ${*(u8*)(le_buf+7):hex}"); // 2 1
+
+    // ...pero el VALOR logico releido es el mismo en ambos:
+    BiHdr be = BiHdr(be_buf);
+    BiHdr le = BiHdr(le_buf);
+    println("be: ver=${be.version:hex} entry=${be.entry:hex}");   // 102 a0b0c0d
+    println("le: ver=${le.version:hex} entry=${le.entry:hex}");   // 102 a0b0c0d
+    println("be_sum=${be_sum} le_sum=${le_sum}");                  // iguales
+
+    // suma verificable: be_sum == le_sum == 0x0102 + 0x0A0B0C0D = 258 + 168496141
+    i64 total = be_sum + le_sum;   // 2 * 168496399 = 336992798
+    println("total=${total}");
+    free(be_buf); free(le_buf);
+    return (i32) total;   // 336992798 & 0xFFFFFFFF -> truncado i32
+}

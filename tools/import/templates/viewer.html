@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vesta - Instrucciones x86</title>
+    <link rel="stylesheet" href="assets/app.css">
+</head>
+
+<body>
+    <nav class="nav">
+        <span class="brand">Vesta <small>&middot; arch-data</small></span>
+        <a href="index.html" class="active" data-i18n="nav.instr">Instrucciones</a>
+        <a href="analyzer.html" data-i18n="nav.an">Analizador</a>
+        <a href="features.html" data-i18n="nav.feat">Features</a>
+        <a class="ext" href="https://github.com/vesta-lang/arch-data" data-i18n="nav.repo">Repositorio</a>
+    </nav>
+
+    <header>
+        <h1 data-i18n="idx.title">Base de datos de instrucciones x86</h1>
+        <div class="sub" id="subline"></div>
+    </header>
+
+    <details class="help">
+        <summary data-i18n="idx.help">Como leer esta tabla</summary>
+        <div class="body" data-i18n="help.idx"></div>
+    </details>
+
+    <div class="bar">
+        <input id="q" type="search" data-i18n-ph="bar.search"
+            placeholder="Buscar mnemonico, iclass, opcode o encoding...">
+        <label><span data-i18n="bar.isa">ISA</span> <select id="isa"></select></label>
+        <label><span data-i18n="bar.iclass">iclass</span> <select id="ic"></select></label>
+        <label><span data-i18n="bar.uarch">microarq.</span> <select id="ar"></select></label>
+        <span class="count" id="count"></span>
+    </div>
+
+    <div class="wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th class="n" data-k="0" data-i18n="th.id" data-i18n-title="th.id.tip">ID</th>
+                    <th data-k="1" data-i18n="th.form" data-i18n-title="th.form.tip">Forma</th>
+                    <th data-k="2" data-i18n="th.iclass" data-i18n-title="th.iclass.tip">iclass</th>
+                    <th data-k="4" data-i18n="th.opcode" data-i18n-title="th.opcode.tip">opcode</th>
+                    <th data-i18n="th.encoding" data-i18n-title="th.encoding.tip">encoding</th>
+                    <th data-i18n="th.operands" data-i18n-title="th.operands.tip">operandos</th>
+                    <th data-i18n="th.overlay" data-i18n-title="th.overlay.tip">overlay</th>
+                    <th class="n" data-i18n="th.reciptp" data-i18n-title="th.reciptp.tip">recip_tp</th>
+                    <th class="n" data-i18n="th.uops" data-i18n-title="th.uops.tip">uops</th>
+                    <th class="n" data-i18n="th.latmax" data-i18n-title="th.latmax.tip">lat. max</th>
+                </tr>
+            </thead>
+            <tbody id="tb"></tbody>
+        </table>
+    </div>
+
+    <div class="pg">
+        <button id="first">&laquo;</button><button id="prev">&lsaquo;</button>
+        <span id="pgi"></span>
+        <button id="next">&rsaquo;</button><button id="last">&raquo;</button>
+    </div>
+
+    <div class="foot" data-i18n="foot.idx"></div>
+
+    <script src="assets/db.js"></script>
+    <script src="assets/micro.js"></script>
+    <script src="assets/tip.js"></script>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/viewer.js"></script>
+</body>
+
+</html>

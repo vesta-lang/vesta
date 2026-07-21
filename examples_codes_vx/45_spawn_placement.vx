@@ -1,6 +1,6 @@
 namespace ejemplos.spawn_placement;
 
-// control de placement de spawn desde Vex.
+// control de placement de spawn desde Vesta-lang.
 //
 // Tres formas de invocar spawn:
 //   spawn { body }            -> Auto: round-robin entre schedulers (default)

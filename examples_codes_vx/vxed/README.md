@@ -1,6 +1,6 @@
 # vxed
 
-`vxed` es un editor de texto fullscreen para terminal escrito en Vex.
+`vxed` es un editor de texto fullscreen para terminal escrito en .
 Funciona en estilo TUI (al modo `nano` / `pico`): la pantalla se
 redibuja entera tras cada tecla, el cursor se mueve con flechas y el
 texto se inserta directamente donde apunta.
@@ -95,7 +95,7 @@ vm pkg install
 vm pkg run build
 ```
 
-El script `build` invoca al compilador Vex sobre `src/main.vx` y
+El script `build` invoca al compilador  sobre `src/main.vx` y
 produce `vxed.velb`.
 
 ### 3. Preparar un archivo opcional

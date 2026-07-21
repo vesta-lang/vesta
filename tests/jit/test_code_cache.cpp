@@ -10,7 +10,7 @@
  * @brief Tests del @c jit::CodeCache: alocacion, ejecucion de codigo
  *        nativo escrito a mano, commit + flush icache, invalidacion.
  *
- * Cubre el contrato basico que necesita Phase D (JIT):
+ * Cubre el contrato basico que necesita  D (JIT):
  *
  *   1. @c alloc devuelve memoria escribible.
  *   2. Tras @c commit la memoria es ejecutable.

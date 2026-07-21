@@ -1,6 +1,6 @@
 /**
  * @file velb_signature.h
- * @brief Phase M.L28 - firmas digitales del @c .velb.
+ * @brief  M.L28 - firmas digitales del @c .velb.
  *
  * Footer @c VSIG (16 bytes header + variable-len signature) appended al
  * final del @c .velb tras un build con @c --sign.  El loader / herramientas

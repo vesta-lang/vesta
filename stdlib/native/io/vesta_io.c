@@ -35,7 +35,7 @@
  *                                 quien quiera salto de linea usa println.
  *
  * Esto rompe ligeramente el comportamiento previo de @c vio_print_int que
- * imprimia con '\n' al final.  La razon es que @c print(x) en Vex no debe
+ * imprimia con '\n' al final.  La razon es que @c print(x) en  no debe
  * meter saltos de linea por su cuenta; @c println(x) si lo hace.  Los tests
  * nativos que llamen directamente a @c vio_print_int deben actualizarse.
  */
@@ -659,11 +659,11 @@ VESTA_PLUGIN_EXPORT uint64_t vio_gchandle_to_vmbuf(uint64_t proc_ptr,
 }
 
 /* -------------------------------------------------------------------------
- * counter monotonico para `gensym()` builtin de Vex.
+ * counter monotonico para `gensym()` builtin de .
  *
  * Cada llamada incrementa y retorna un valor unico.  El counter es
  * @c static (vive en el plugin) y resetea cuando el plugin se descarga.
- * Para Vex esto significa que cada compile fresh empieza desde 0.
+ * Para  esto significa que cada compile fresh empieza desde 0.
  *
  * Suficiente para generar identificadores unicos dentro de un compile.
  * El TypeChecker tiene su propio @c gensym_counter_ para el AST
@@ -1236,7 +1236,7 @@ static size_t vx_utf8_cols(const char *p, size_t n) {
  * @brief Imprime un valor con formato y alineacion.
  *
  * Combina kind + width + fill + align en un solo native helper para
- * que el frontend Vex pueda mapear `${expr:hex:>10}` a un solo CALLN
+ * que el frontend  pueda mapear `${expr:hex:>10}` a un solo CALLN
  * sin tener que medir ancho del valor desde IR.
  *
  * @param value   El valor entero (o bits IEEE para FLOAT_KIND).
@@ -1534,7 +1534,7 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_newline(void) {
 /**
  * @brief Imprime una cstring (host pointer, terminada en NUL).
  *
- * Util para imprimir desde Vex valores tipo @c FatalError.message o
+ * Util para imprimir desde  valores tipo @c FatalError.message o
  * @c FatalError.stack_trace que son punteros host a buffers C.
  * Limita a 64 KB de lectura (los stack traces no exceden este tamano).
  * Si el puntero es NULL, no emite nada.

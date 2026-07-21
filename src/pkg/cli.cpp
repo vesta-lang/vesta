@@ -13,7 +13,7 @@
 #include "pkg/sha256.h"
 #include "pkg/auditor.h"
 
-#include "vx/vxi_format.h"
+#include "vx/module/vxi_format.h"
 #include <cstdio>
 #include <cstdlib>
 

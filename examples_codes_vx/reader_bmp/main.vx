@@ -1,15 +1,16 @@
 // =============================================================================
-// main.vx - Punto de entrada de ReaderBMP migrado a Vex (interp / JIT).
+// main.vx - Punto de entrada de ReaderBMP migrado a  (interp / JIT).
 //
 // Uso:  vm --run main.velb -m vm -- <archivo.bmp> [-r WxH]
 //   (el separador `--` es necesario para pasar flags con guion al programa;
 //    ver LIM-4 en BUGS_LIMITACIONES.md).
 //
-// MODERNIZADO (2026-07): usa la clase BMP_Image (que lee via stdlib
-// vx_fileio y vuelca con el builtin bg_rgb).  El flag opcional -r WxH se
-// parsea con vio_parse_int de la stdlib nativa (cierra LIM-8); el redimensionado
-// en si sigue fuera de alcance (LIM-9: depende de codecs AWT), asi que -r solo
-// reporta las dimensiones parseadas.
+// MODERNIZADO (2026-07): el BMP se modela con VISTAS TIPADAS (@overlay struct)
+// y FUNCIONES LIBRES en bmp.vx -- sin clases.  El "objeto BMP" es un u8* con el
+// fichero, parseado via overlays; lee via stdlib vx_fileio y vuelca con el
+// builtin bg_rgb.  El flag opcional -r WxH se parsea con vio_parse_int de la
+// stdlib nativa (cierra LIM-8); el redimensionado en si sigue fuera de alcance
+// (LIM-9: depende de codecs AWT), asi que -r solo reporta las dimensiones.
 //
 // NOTA: args_count/args_get NO compilan a AOT nativo (LIM-5).  Para el binario
 // AOT standalone se usa main_aot.vx (path fijo).
@@ -100,14 +101,26 @@ i32 main(string[] args) {
         }
     }
 
-    bmp.BMP_Image img = new bmp.BMP_Image();
-    if (img.load(path) == 0) {
+    // Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host del
+    // puntero; ver LIM-10): medir + reservar + leer.  El "objeto BMP" es un u8*
+    // parseado via los overlays y funciones libres de bmp.vx.
+    i64 size = bmp.bmp_file_size(path);
+    if (size <= 0) {
         println("El archivo ${path} no pudo encontrarse o no existe.");
         return 1;
     }
+    u8* buf = malloc(size + 1);
+    if (bmp.bmp_read_into(path, buf, size) != size) {
+        println("El archivo ${path} no pudo leerse.");
+        free(buf);
+        return 1;
+    }
+    buf[size] = 0;
 
-    img.printBMPAttributes();
+    bmp.bmp_print_attributes(buf);
     println("");
-    img.dumpTerminal();
+    bmp.bmp_dump_terminal(buf);
+
+    free(buf);
     return 0;
 }

@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_asm_trampoline.cpp
- * @brief Phase AS inc.6: test del trampoline de inline-asm para el interprete.
+ * @brief  AS inc.6: test del trampoline de inline-asm para el interprete.
  *        Construye trampolines reales (Keystone) y los EJECUTA con un array
  *        ctx[16], verificando el marshalling de registros host <-> ctx.
  *        Valida ademas que un asm que pisa rbx/rbp (cpuid) NO corrompe el
@@ -38,7 +38,7 @@ static int g_checks = 0, g_fails = 0;
 enum { RAX = 0, RCX = 1, RDX = 2, RBX = 3, RBP = 5, RSI = 6, RDI = 7 };
 
 int main() {
-    std::printf("=== test_asm_trampoline (Phase AS inc.6) ===\n");
+    std::printf("=== test_asm_trampoline ( AS inc.6) ===\n");
     register_keystone_asm_backend(); // instala g_asm_backend (Keystone)
     CodeCache cc;
 

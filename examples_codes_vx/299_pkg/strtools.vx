@@ -1,0 +1,10 @@
+// Modulo con una comptime fn de captura `expr` (stringifica el codigo fuente).
+namespace strtools;
+
+// comptime fn (NO @Macro): captura el TEXTO del argumento y lo devuelve como
+// VALOR string.  Usada cross-modulo -> el importador debe (a) capturar el arg
+// como texto crudo aunque no conozca la firma al parsear (siembra de params
+// `expr`), y (b) evaluar la fn importada por tree-walk (no re-baja a IR).
+public comptime string src(expr code) {
+    return code;
+}

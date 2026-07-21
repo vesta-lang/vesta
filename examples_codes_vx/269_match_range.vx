@@ -1,0 +1,46 @@
+// -----------------------------------------------------------------------------
+// match con RANGOS: `case a..b =>` (exclusivo) y `case a..=b =>` (inclusivo)
+// -----------------------------------------------------------------------------
+// Ademas de valores puntuales, un `match` sobre enteros/chars acepta patrones de
+// RANGO, con la misma convencion que el resto del lenguaje:
+//
+//   case a..b  => ...    // EXCLUSIVO:  a <= v < b
+//   case a..=b => ...    // INCLUSIVO:  a <= v <= b
+//
+// Se pueden mezclar con valores puntuales; las arms se prueban en orden
+// (first-match).  El check de un rango son dos comparaciones (`v >= a` y
+// `v < b` / `v <= b`).  Funciona en interprete, JIT y AOT.
+
+// Nota numerica -> categoria (0-100).
+i32 categoria(i32 nota) {
+    match (nota) {
+        case 0        => return 10;    // valor puntual (cero exacto)
+        case 1..=59   => return 1;     // inclusivo: suspenso (1..59)
+        case 60..70   => return 2;     // exclusivo: aprobado (60..69)
+        case 70..=100 => return 3;     // inclusivo: notable (70..100)
+        case _        => return 0;     // fuera de [0,100]
+    }
+    return -1;   // inalcanzable
+}
+
+// Clasifica un caracter ASCII por rangos.
+i32 clase(char c) {
+    match (c) {
+        case 'a'..='z' => return 1;    // minuscula
+        case 'A'..='Z' => return 2;    // mayuscula
+        case '0'..='9' => return 3;    // digito
+        case _         => return 0;    // otro
+    }
+    return -1;
+}
+
+i32 main() {
+    // categoria: 0->10, 30->1, 59->1, 60->2, 69->2, 70->3, 100->3, 150->0
+    println("cat: ${categoria(0)} ${categoria(59)} ${categoria(60)} ${categoria(69)} ${categoria(70)} ${categoria(100)} ${categoria(150)}");
+    // clase: 'k'->1 'Q'->2 '7'->3 '#'->0
+    println("chr: ${clase('k')} ${clase('Q')} ${clase('7')} ${clase('#')}");
+
+    // Determinista: categoria(45)=1 + categoria(65)=2 *10 + categoria(90)=3 *100
+    //             + clase('m')=1 *1000 = 1 + 20 + 300 + 1000 = 1321
+    return categoria(45) + categoria(65)*10 + categoria(90)*100 + clase('m')*1000;
+}

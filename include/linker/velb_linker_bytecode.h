@@ -295,7 +295,7 @@ typedef struct PACKED HeaderVELB {
     uint32_t size_ir_section = 0; // 4, offset 140
 
     /**
-     * @brief Phase E.1: offset al inicio de la seccion @c VSMP dentro del
+     * @brief  E.1: offset al inicio de la seccion @c VSMP dentro del
      *        .velb.  Contiene los stackmaps PRECISOS del interprete (por
      *        cada safepoint, las ubicaciones GC vivas) para el GC preciso.
      *
@@ -315,7 +315,7 @@ typedef struct PACKED HeaderVELB {
     uint64_t offset_stackmap_section = 0; // 8, offset 144
 
     /**
-     * @brief Phase E.1: tamano en bytes de la seccion @c VSMP.
+     * @brief  E.1: tamano en bytes de la seccion @c VSMP.
      */
     uint32_t size_stackmap_section = 0; // 4, offset 152
 

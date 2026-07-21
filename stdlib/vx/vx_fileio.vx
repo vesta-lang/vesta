@@ -31,12 +31,14 @@ extern "kernel32.dll" {
                    u32 disposition, u32 flags, u64 templ) -> u64;
     fn GetFileSizeEx(u64 h, i64* size) -> i32;
     fn ReadFile(u64 h, u8* buf, u32 n, u32* nread, u64 overlapped) -> i32;
+    fn WriteFile(u64 h, u8* buf, u32 n, u32* nwritten, u64 overlapped) -> i32;
     fn CloseHandle(u64 h) -> i32;
 }
 
 extern "libc.so.6" {
     fn open(u8* path, i32 flags, i32 mode) -> i32;
     fn read(i32 fd, u8* buf, u64 count) -> i64;
+    fn write(i32 fd, u8* buf, u64 count) -> i64;
     fn lseek(i32 fd, i64 off, i32 whence) -> i64;
     fn close(i32 fd) -> i32;
 }
@@ -90,6 +92,35 @@ public i64 file_read_into(string path, u8* buf, i64 size) {
     return (i64) nread;
 }
 
+// Escribe `size` bytes desde el buffer host `buf` a `path`, creando o
+// truncando el fichero.  Devuelve el numero de bytes escritos, o -1 si error.
+//
+// Abre con GENERIC_WRITE (0x40000000) sin comparticion y disposicion
+// CREATE_ALWAYS (2), que trunca un fichero existente o lo crea si no existe.
+// WriteFile vuelca el buffer completo en una sola llamada y reporta cuantos
+// bytes reales aterrizaron en disco via el out-param `nwritten`.
+@Target("os:windows")
+public i64 file_write_from(string path, u8* buf, i64 size) {
+    u8* pc = str_cstr(path);
+    if (pc == null) {
+        return -1;
+    }
+    // GENERIC_WRITE=0x40000000, share=0, CREATE_ALWAYS=2,
+    // FILE_ATTRIBUTE_NORMAL=0x80.
+    u64 h = CreateFileA(pc, (u32) 0x40000000, (u32) 0, (u64) 0,
+                        (u32) 2, (u32) 0x80, (u64) 0);
+    if (h == 0xFFFFFFFFFFFFFFFF) {
+        return -1;
+    }
+    u32 nwritten = 0;
+    i32 ok = WriteFile(h, buf, (u32) size, &nwritten, (u64) 0);
+    CloseHandle(h);
+    if (ok == 0) {
+        return -1;
+    }
+    return (i64) nwritten;
+}
+
 // ---------------------------------------------------------------------------
 // POSIX (libc.so.6).
 // ---------------------------------------------------------------------------
@@ -126,4 +157,25 @@ public i64 file_read_into(string path, u8* buf, i64 size) {
     i64 got = read(fd, buf, (u64) size);
     close(fd);
     return got;
+}
+
+// Escribe `size` bytes desde el buffer host `buf` a `path`, creando o
+// truncando el fichero.  Devuelve el numero de bytes escritos, o -1 si error.
+//
+// O_WRONLY=1, O_CREAT=0x40, O_TRUNC=0x200 (valores de Linux x86-64); la
+// combinacion crea el fichero si falta y lo trunca a cero antes de escribir.
+// El modo 0644 (0x1A4) fija los permisos del fichero recien creado.
+@Target("!os:windows")
+public i64 file_write_from(string path, u8* buf, i64 size) {
+    u8* pc = str_cstr(path);
+    if (pc == null) {
+        return -1;
+    }
+    i32 fd = open(pc, (i32) 0x241, (i32) 0x1A4);
+    if (fd < 0) {
+        return -1;
+    }
+    i64 put = write(fd, buf, (u64) size);
+    close(fd);
+    return put;
 }

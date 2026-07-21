@@ -34,6 +34,7 @@
 
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
+#include "analyze/fingerprint.h" // FunctionContracts
 
 namespace vx {
 
@@ -85,6 +86,11 @@ struct CompileOptions {
     /// diagrama Mermaid del bytecode .vel final.  Independiente de
     /// dump_ir / dump_mermaid_ir_*: opera solo sobre el texto del .vel.
     bool dump_mermaid_vel = false;
+    /// Cuando true, llena @c CompileResult::mermaid_types con un diagrama
+    /// de tipos (mermaid classDiagram): clases con sus campos/metodos +
+    /// herencia + interfaces implementadas + structs + enums (con su tipo
+    /// base y variantes).  Vista de alto nivel de la POO del modulo.
+    bool dump_mermaid_types = false;
 
     /// Variantes Graphviz (DOT) de los flags Mermaid.  Producen archivos
     /// .dot listos para `dot -Tpng/-Tsvg`, con la misma topologia y
@@ -97,6 +103,8 @@ struct CompileOptions {
     bool dump_graphviz_ir_pre = false;
     bool dump_graphviz_ir_post = false;
     bool dump_graphviz_vel = false;
+    /// Variante Graphviz del diagrama de tipos (ver dump_mermaid_types).
+    bool dump_graphviz_types = false;
 
     /// Variantes HTML interactivas (CSS+JS embebidos, sin dependencias).
     /// Producen un .html autocontenido por vista que el usuario abre en
@@ -108,14 +116,11 @@ struct CompileOptions {
     bool dump_html_ir_pre = false;
     bool dump_html_ir_post = false;
     bool dump_html_vel = false;
-
-    /// --diagram-cost: anotar cada nodo-funcion de los diagramas IR (pre y
-    /// post) con su coste Big-O (parcial + total) calculado por
-    /// analyze::bigo.  Cero impacto si no hay diagramas IR habilitados.
-    bool annotate_cost = false;
+    /// Variante HTML del diagrama de tipos (ver dump_mermaid_types).
+    bool dump_html_types = false;
 
     /// Lenguaje destino del transpiler IR -> codigo fuente.  Vacio = no
-    /// transpilar (default).  Valores soportados: "c" (Phase 1).
+    /// transpilar (default).  Valores soportados: "c" ( 1).
     /// Futuros: "java", "js", "rust", etc.
     std::string port_target;
 
@@ -141,7 +146,7 @@ struct CompileOptions {
     ///                      estadisticas al exit del programa.
     std::string instrument_mode;
 
-    /// Phase AOT.2.b: modo POO NATIVA (sin runtime VM).  Cuando true, el
+    ///  AOT.2.b: modo POO NATIVA (sin runtime VM).  Cuando true, el
     /// lowering de clases baja a layout estilo C-struct (offsets estaticos)
     /// + new->malloc(size)/alloca + ctor directo, SIN __module_init/
     /// ClassRegistry/GcHeap (no se emiten defclass/newobj/findclass/
@@ -195,6 +200,15 @@ struct CompileOptions {
     /// ADITIVO y gateado: con el default false el codegen es EXACTAMENTE el
     /// historico (cero coste).  NUNCA se activa en compilacion normal.
     bool lsp_value_trace = false;
+
+    /// Politica de contraccion de coma flotante a nivel de MODULO (CLI
+    /// -ffp-contract).  true (default) = fast: se permite contraer a*b+c en
+    /// FMA (1 redondeo).  false = off (IEEE estricto, 2 redondeos).  Se AND-ea
+    /// con el @c fp_contract por-funcion (@fp(strict) pone la funcion a false)
+    /// -> off global fuerza TODO a false.  Se aplica a @c IrFunction::fp_contract
+    /// en el lowering (misma unidad de traduccion que el optimizer), en vez de
+    /// depender de un global mutable que se duplica entre vm.exe/DLL/vmcore.
+    bool fp_contract = true;
 };
 
 /**
@@ -245,6 +259,7 @@ struct CompileResult {
                                  ///< (dump_mermaid_ir_post).
     std::string
         mermaid_vel; ///< Mermaid del bytecode .vel final (dump_mermaid_vel).
+    std::string mermaid_types; ///< classDiagram de tipos (dump_mermaid_types).
     /// Variantes Graphviz (DOT) llenas cuando los flags @c dump_graphviz_*
     /// estan activos.  Vacias en otro caso.  El contenido es texto DOT
     /// completo (con `digraph G { ... }`), listo para `dot -Tpng/-Tsvg`.
@@ -252,6 +267,7 @@ struct CompileResult {
     std::string graphviz_ir_pre;
     std::string graphviz_ir_post;
     std::string graphviz_vel;
+    std::string graphviz_types; ///< DOT del diagrama de tipos.
     /// Variantes HTML interactivas (documento completo `<!DOCTYPE html>...`)
     /// llenas cuando los flags @c dump_html_* estan activos.  Vacias en
     /// otro caso.  Cada una es una pagina autocontenida lista para abrir.
@@ -259,6 +275,7 @@ struct CompileResult {
     std::string html_ir_pre;
     std::string html_ir_post;
     std::string html_vel;
+    std::string html_types; ///< HTML del diagrama de tipos.
     Diagnostics diagnostics; ///< Errores y warnings acumulados.
 
     /**
@@ -281,7 +298,7 @@ struct CompileResult {
     std::vector<uint8_t> ir_section_bytes;
 
     /**
-     * @brief Phase AOT: IR del modulo COMPLETO serializado (functions +
+     * @brief  AOT: IR del modulo COMPLETO serializado (functions +
      * static_data + globals) via @c ir::emit_ir_module_cache (magic VXMC).
      *
      * A diferencia de @c ir_section_bytes (solo functions, lo consume el
@@ -294,6 +311,21 @@ struct CompileResult {
      * Vacio si la compilacion no produjo IR (caso de errores).
      */
     std::vector<uint8_t> ir_module_cache_bytes;
+
+    /// Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
+    /// por el usuario, por nombre de funcion.  Se llevan aqui (no en el IR)
+    /// porque son metadata compile-time que el codegen no necesita.  El modo
+    /// --analyze los verifica contra la huella inferida.  Ver
+    /// @c analyze::FunctionContracts.
+    std::unordered_map<std::string, analyze::FunctionContracts> contracts;
+
+    /// Contratos de TIPO (@pod/@no_heap/@size) declarados sobre struct/clase/
+    /// enum, por nombre de tipo.  Verificados contra @c type_fingerprints.
+    std::unordered_map<std::string, analyze::TypeContracts> type_contracts;
+
+    /// Huella de cada TIPO agregado (layout + propiedades de recurso) inferida
+    /// de los layouts del type checker.  La consume --analyze (reporte + checks).
+    std::vector<analyze::TypeFingerprint> type_fingerprints;
 
     /**
      * @brief Modo --analisis: IR del modulo completo serializado ANTES de
@@ -371,7 +403,7 @@ struct CompileResult {
     std::vector<std::pair<std::string, std::string>> macro_skip_reasons;
 
     /**
-     * @brief Phase M5.B: rutas canonicas (absolutas + normalizadas) de
+     * @brief  M5.B: rutas canonicas (absolutas + normalizadas) de
      * TODOS los modulos que participaron en el compile (root + deps
      * recursivos).  El main.cpp las usa para persistir el project
      * cache: tras un compile exitoso guarda
@@ -433,7 +465,7 @@ CompileResult compile_vx_source(const std::string &source,
                                  const CompileOptions &opts = {});
 
 /**
- * @brief Compila un proyecto multi-modulo (Phase M.2.e).
+ * @brief Compila un proyecto multi-modulo ( M.2.e).
  *
  * Resuelve los @c import del fichero raiz via @c ModuleGraph,
  * compila cada modulo en orden topologico (deps primero), inyecta

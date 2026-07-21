@@ -42,6 +42,7 @@ struct SymbolEntry {
     std::vector<std::string> deps; ///< nombres SIMPLES de simbolos referidos.
     uint32_t src_offset = 0;       ///< offset del span en la fuente original.
     uint32_t src_length = 0;       ///< longitud del span en bytes.
+    bool is_public = true;         ///< @c true si la decl es @c public (importable).
 };
 
 /**
@@ -106,6 +107,39 @@ std::vector<std::string> changed_symbols_closure(const SemanticIndex &old_idx,
  * @brief Volcado JSON del indice (depuracion, flag @c --dump-semantic-index).
  */
 std::string semantic_index_to_json(const SemanticIndex &idx);
+
+/**
+ * @struct ImportedModuleSemIndex
+ * @brief Indice semantico de un modulo IMPORTADO por el fichero analizado,
+ *        con su fuente cruda (para extraer firmas) y su uri.
+ *
+ * Lo consume el LSP para el completado / navegacion CROSS-MODULE: cuando el
+ * usuario escribe @c "lib.<TAB>", los simbolos publicos de @c lib viven en
+ * OTRO fichero, no en el indice del documento actual.
+ */
+struct ImportedModuleSemIndex {
+    std::string uri;    ///< file:// del modulo importado (para Location futura).
+    std::string source; ///< fuente cruda del modulo (extraccion de firmas).
+    SemanticIndex index;
+};
+
+/**
+ * @brief Construye los indices semanticos de todos los modulos IMPORTADOS
+ *        (transitivamente) por @p root_file, EXCLUYENDO el propio root.
+ *
+ * Reusa @c ModuleGraph (misma resolucion de paths que el compilador: dir del
+ * importer, search paths, VX_PATH, stdlib) para encontrar cada dependencia,
+ * la parsea y construye su @c SemanticIndex.  Best-effort: los modulos que no
+ * resuelvan o no parseen simplemente se omiten (no aborta).
+ *
+ * @param root_file          Path del fichero raiz (el que se esta editando).
+ * @param root_overlay_text  Texto en memoria del root (buffer del editor).
+ * @param extra_search_paths Search paths extra (ancestros del root, etc.).
+ * @return Un indice por modulo importado alcanzable.
+ */
+std::vector<ImportedModuleSemIndex> build_imported_sem_indexes(
+    const std::string &root_file, const std::string &root_overlay_text,
+    const std::vector<std::string> &extra_search_paths);
 
 } // namespace vx
 

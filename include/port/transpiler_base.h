@@ -289,6 +289,19 @@ class IPortBackend {
                             ir::IrValueId lhs, ir::IrValueId rhs,
                             ir::IrType t) = 0;
 
+    /** Emite un FMA (round(a*b+c), 1 SOLO redondeo): @c "v0 = fma(v1,v2,v3);".
+     *  Default: comentario TODO (backend futuro sin FMA). */
+    virtual void emit_fma(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId a,
+                          ir::IrValueId b, ir::IrValueId c, ir::IrType t) {
+        (void)dst;
+        (void)a;
+        (void)b;
+        (void)c;
+        (void)t;
+        ctx.indent();
+        ctx.out << "/* TODO backend sin emit_fma */\n";
+    }
+
     /** Emite una op unaria: @c "v0 = -v1;" o @c "v0 = ~v1;". */
     virtual void emit_unop(EmitContext &ctx, ir::IrOp op, ir::IrValueId dst,
                            ir::IrValueId src, ir::IrType t) = 0;
@@ -472,7 +485,7 @@ class IPortBackend {
     }
 
     /**
-     * @brief Phase AS inc.3: hook para inline asm nativo (IrOp::INLINE_ASM).
+     * @brief  AS inc.3: hook para inline asm nativo (IrOp::INLINE_ASM).
      *
      * El backend que soporte asm de la CPU host (port-C) lo materializa
      * (e.g. @c __asm__ __volatile__).  Default: delega en

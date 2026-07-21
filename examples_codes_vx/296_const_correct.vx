@@ -1,0 +1,46 @@
+// examples_codes_vx/296_const_correct.vx
+//
+// const-correctness C-style POR NIVEL (usos VALIDOS; los usos invalidos se
+// cubren con tests negativos compile-must-fail en el e2e).  `const T *`
+// (puntero a const, puntero mutable) vs `T *const` (puntero const, apuntado
+// mutable).  Escrituras permitidas y lecturas de valores const.
+//
+// Resultado esperado: R0 == 42.
+
+// Campo const de solo lectura (se lee, no se escribe).
+struct Cfg { const u8 version; u8 flags; }
+
+// Param `const T*` (puntero a const): se LEE a traves del puntero (OK); el
+// puntero en si es reasignable (no lo hacemos aqui).
+i32 read_through(const i32 *p) { return *p; }
+
+// Param `T *const` (puntero const): el APUNTADO es mutable -> `*q` se puede
+// escribir; el puntero no se reasigna.
+void write_through(i32 *const q) { *q = 40; }
+
+i32 main() {
+    // const de un valor no-puntero: se puede LEER.
+    const i32 base = 2;
+
+    // `char *const` (puntero const): mutar el apuntado es valido.
+    i32 cell = 0;
+    i32 *const cp = &cell;
+    write_through(cp);              // cell = 40
+
+    // `const i32 *` (puntero a const): leer a traves es valido.
+    const i32 *rp = &cell;
+    i32 got = read_through(rp);     // 40
+
+    // add-const: pasar un `i32*` donde se espera `const i32*` (anadir const) OK.
+    i32 tmp = 0;
+    i32 *mut = &tmp;
+    i32 z = read_through(mut);      // 0
+
+    // campo const: leerlo.
+    Cfg c;
+    c.flags = 0;
+    i32 v = (i32)base;              // 2
+
+    // 40 + 0 + 2 = 42
+    return got + z + v;
+}

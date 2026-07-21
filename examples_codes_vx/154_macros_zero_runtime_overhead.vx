@@ -26,8 +26,8 @@ comptime string M_chain(i64 n) {
 // (2) Macro con loop: emite tabla de 50 sumas.
 @Macro
 comptime string M_table(i64 n) {
-    comptime var string code = "0";
-    comptime var i64 i = 1;
+    string code = "0";
+    i64 i = 1;
     while (i <= n) {
         code = code + " + doblar(" + to_str(i) + ")";
         i = i + 1;
@@ -42,7 +42,7 @@ comptime string Pyramid(i64 n) {
 }
 
 // (4) Global mutable + macros que comparten estado.
-comptime var i64 g_unique = 0;
+const i64 g_unique = 0;
 
 @Macro
 comptime string M_uniq() {

@@ -20,7 +20,7 @@
  *   3. STORE resultado a slot del dst.
  *
  * Cero regalloc: el codigo emitido es sub-optimo en hot loops (cada
- * op accede memoria stack), pero CORRECTO y simple.  Phase D.3
+ * op accede memoria stack), pero CORRECTO y simple.   D.3
  * (C1 con minimal regalloc) y D.7 (linear scan) lo refinaran.
  *
  * = Calling convention =

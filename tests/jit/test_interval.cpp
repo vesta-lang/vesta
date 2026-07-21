@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_interval.cpp
- * @brief Tests del constructor de live intervals (Phase D.7, commit 2).
+ * @brief Tests del constructor de live intervals ( D.7, commit 2).
  *
  * Construye MFunctions de juguete a mano (forma vreg) y valida los rangos,
  * usos, posiciones de CALL y deteccion de codigo muerto.  Compila standalone
@@ -168,7 +168,7 @@ static void test_overlap() {
 }
 
 int main() {
-    std::printf("=== test_interval (Phase D.7 commit 2) ===\n");
+    std::printf("=== test_interval ( D.7 commit 2) ===\n");
     test_straight_line();
     test_live_across_call();
     test_cross_block();

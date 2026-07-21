@@ -10,7 +10,7 @@ namespace ejemplos.extern_winapi;
 // igual que `stdlib/native/io/vesta_io:vio_println` -- mismo
 // LoadLibraryA + GetProcAddress de @c src/ffi/native_ffi.cpp.
 //
-// El frontend Vex:
+// El frontend :
 //   - Parser reconoce `extern "lib" { fn name(params) -> R; ... }` y
 //     emite un AST::ExternFnDecl por cada funcion del bloque.
 //   - Type checker registra cada extern fn como Symbol::Function con

@@ -57,7 +57,10 @@
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
 #include "vx/diagnostic.h"
-#include "vx/parser.h" // set/get_aot_condcomp_target (vistas por @Target)
+#include "vx/incremental.h"     // CAS + claves Merkle + BuildConfig
+#include "vx/lexer.h"           // parse para el indice semantico
+#include "vx/parser.h"          // set/get_aot_condcomp_target + Parser
+#include "vx/semantic_index.h"  // build_semantic_index
 
 #include "jit/code_cache.h"      // vista JIT
 #include "jit/jit_compiler.h"    // vista JIT
@@ -1373,6 +1376,142 @@ VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
         if (db) sqlite3_close(db);
         set_err(out_err, "excepcion desconocida en vesta_sqlite_exec");
         return 2;
+    }
+}
+
+/* -- Compilacion incremental / CAS ------------------------------------- */
+
+VESTA_API int vesta_build_fingerprint(const VestaBuildConfig *cfg,
+                                      unsigned long long *out_ir_fp,
+                                      unsigned long long *out_full_fp) {
+    if (!cfg || !out_ir_fp || !out_full_fp) return 1;
+    try {
+        vx::BuildConfig b;
+        b.asm_target_bits = cfg->asm_target_bits ? cfg->asm_target_bits : 64;
+        b.native_poo = cfg->native_poo != 0;
+        b.exceptions_enabled = cfg->exceptions_enabled != 0;
+        b.instrument_mode = cfg->instrument_mode ? cfg->instrument_mode : "";
+        b.tgt_os = cfg->tgt_os ? cfg->tgt_os : "";
+        b.tgt_arch = cfg->tgt_arch ? cfg->tgt_arch : "";
+        b.opt_level = cfg->opt_level;
+        b.emit_debug = cfg->emit_debug != 0;
+        b.aot_vec_width = cfg->aot_vec_width ? cfg->aot_vec_width : 16;
+        b.profile_id = cfg->profile_id ? cfg->profile_id : "";
+        *out_ir_fp = b.ir_fingerprint();
+        *out_full_fp = b.full_fingerprint();
+        return 0;
+    } catch (...) {
+        return 2;
+    }
+}
+
+/// Handle opaco: envuelve un @c vx::CasStore por valor.
+struct VestaCas {
+    vx::CasStore store;
+};
+
+VESTA_API VestaCas *vesta_cas_open(const char *dir) {
+    try {
+        if (dir && *dir) return new VestaCas{vx::CasStore(std::string(dir))};
+        return new VestaCas{vx::CasStore::open_default()};
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+VESTA_API void vesta_cas_close(VestaCas *cas) { delete cas; }
+
+VESTA_API int vesta_cas_has(VestaCas *cas, unsigned long long key) {
+    if (!cas) return 0;
+    return cas->store.has(static_cast<vx::MerkleKey>(key)) ? 1 : 0;
+}
+
+VESTA_API int vesta_cas_get(VestaCas *cas, unsigned long long key,
+                            unsigned char **out_data, size_t *out_len) {
+    if (out_data) *out_data = nullptr;
+    if (out_len) *out_len = 0;
+    if (!cas || !out_data || !out_len) return 1;
+    try {
+        std::vector<uint8_t> buf;
+        if (!cas->store.get(static_cast<vx::MerkleKey>(key), buf)) return 2;
+        unsigned char *p =
+            static_cast<unsigned char *>(std::malloc(buf.empty() ? 1 : buf.size()));
+        if (!p) return 3;
+        if (!buf.empty()) std::memcpy(p, buf.data(), buf.size());
+        *out_data = p;
+        *out_len = buf.size();
+        return 0;
+    } catch (...) {
+        return 4;
+    }
+}
+
+VESTA_API int vesta_cas_put(VestaCas *cas, unsigned long long key,
+                            const unsigned char *data, size_t len) {
+    if (!cas || (len > 0 && !data)) return 1;
+    try {
+        return cas->store.put(static_cast<vx::MerkleKey>(key), data, len) ? 0 : 2;
+    } catch (...) {
+        return 3;
+    }
+}
+
+VESTA_API int vesta_merkle_keys_json(const char *src, const char *unit_name,
+                                     char **out_json) {
+    if (out_json) *out_json = nullptr;
+    if (!src || !out_json) return 1;
+    try {
+        const std::string uni = unit_name ? unit_name : "main";
+        vx::Diagnostics diag;
+        vx::Lexer lx(src, uni + ".vx", diag);
+        vx::Parser sp(lx, diag);
+        auto mod = sp.parse_program();
+        if (!mod) return 2;
+        vx::SemanticIndex idx = vx::build_semantic_index(*mod, src, uni);
+        vx::MerkleKeys keys = vx::compute_merkle_keys(idx);
+
+        auto esc = [](const std::string &s) {
+            std::string o;
+            for (char c : s) {
+                if (c == '"' || c == '\\') {
+                    o.push_back('\\');
+                    o.push_back(c);
+                } else if (c == '\n') {
+                    o += "\\n";
+                } else {
+                    o.push_back(c);
+                }
+            }
+            return o;
+        };
+        auto hex64 = [](uint64_t v) {
+            char b[19];
+            std::snprintf(b, sizeof(b), "0x%016llx",
+                          static_cast<unsigned long long>(v));
+            return std::string(b);
+        };
+
+        std::ostringstream j;
+        j << "{\"module\":\"" << esc(idx.module_path) << "\",\"symbols\":[";
+        for (size_t i = 0; i < idx.symbols.size(); ++i) {
+            const auto &s = idx.symbols[i];
+            if (i) j << ",";
+            j << "{\"name\":\"" << esc(s.name) << "\",\"kind\":"
+              << static_cast<unsigned>(s.kind) << ",\"content_hash\":\""
+              << hex64(s.content_hash) << "\",\"merkle_key\":\""
+              << hex64(keys.of(s.name)) << "\",\"is_public\":"
+              << (s.is_public ? "true" : "false") << ",\"deps\":[";
+            for (size_t k = 0; k < s.deps.size(); ++k) {
+                if (k) j << ",";
+                j << "\"" << esc(s.deps[k]) << "\"";
+            }
+            j << "]}";
+        }
+        j << "]}";
+        *out_json = dup_cstr(j.str());
+        return *out_json ? 0 : 3;
+    } catch (...) {
+        return 4;
     }
 }
 

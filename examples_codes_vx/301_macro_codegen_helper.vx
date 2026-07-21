@@ -1,0 +1,27 @@
+// -----------------------------------------------------------------------------
+// @Macro que GENERA codigo apoyandose en un helper comptime con captura `expr`.
+//
+// Antes, la llamada al helper dentro del cuerpo del macro se "constant-folded"
+// a VACIO (la ComptimeVM aun no tiene bytecode en pass 1) -> el macro devolvia
+// "".  Ahora se emite una CALLVM al helper, ejecutada al INVOCAR el macro, y el
+// helper con param `expr` captura el texto crudo de su argumento.
+// -----------------------------------------------------------------------------
+
+// Helper comptime: captura verbatim el TEXTO de su argumento.
+private comptime string tmpl(expr code) {
+    return code;
+}
+
+// @Macro: construye la expresion `<code> + <n>` como string, inyectada como
+// codigo real en el call site.  La parte `base` viene del helper `expr`.
+@Macro public comptime string plus(u32 n) {
+    return tmpl(base) + " + " + to_str(n);
+}
+
+i32 main() {
+    i32 base = 2;
+    // plus(40) se expande (compile-time) a la expresion: base + 40
+    i32 r = plus(40);
+    println("r=${r}");   // 42
+    return r;
+}

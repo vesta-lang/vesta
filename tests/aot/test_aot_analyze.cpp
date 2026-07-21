@@ -10,7 +10,7 @@
 
 /**
  * @file tests/aot/test_aot_analyze.cpp
- * @brief Tests de Phase AOT.1 -- analisis is_pure_native (clasificacion +
+ * @brief Tests de  AOT.1 -- analisis is_pure_native (clasificacion +
  *        admisibilidad por target + reporte de incompatibilidades).
  */
 
@@ -259,7 +259,7 @@ static void test_analyze_module() {
 }
 
 int main() {
-    std::printf("=== test_aot_analyze (Phase AOT.1) ===\n");
+    std::printf("=== test_aot_analyze ( AOT.1) ===\n");
     test_classify_op();
     test_allowed_in_target();
     test_analyze_module();

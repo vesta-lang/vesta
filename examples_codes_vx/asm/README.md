@@ -1,4 +1,4 @@
-# Ejemplos de inline-asm (Phase AS)
+# Ejemplos de inline-asm ( AS)
 
 Estos `.vx` usan **inline-asm nativo** (`asm { ... }` en sintaxis NASM Intel +
 storage-class `register("reg")`).  Se compilan y ejecutan **sin flags**:
@@ -58,4 +58,4 @@ interno del asm.  Asi se evita ligar registros vectoriales directamente.
   (las push/pop del trampolin/wrapper usan rsp) -> se rechaza.
 
 Tambien se puede portar cualquiera de estos `.vx` a C con `--port c` (GCC
-ensambla el asm); ver `tests/vx/test_vx_e2e.sh` (Phase AS) para la paridad.
+ensambla el asm); ver `tests/vx/test_vx_e2e.sh` ( AS) para la paridad.

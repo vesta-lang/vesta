@@ -1,6 +1,6 @@
 /**
  * @file vx_async.vx
- * @brief Runtime de asincronia cooperativo para Vex AOT (tiers bare/embed),
+ * @brief Runtime de asincronia cooperativo para  AOT (tiers bare/embed),
  *        SIN libc.
  *
  * Auto-bundle: el driver `-m aot` fusiona este modulo cuando el programa usa
@@ -27,7 +27,7 @@
  * (3), thread pool real para paralelismo (4).
  *
  * @par Multiplataforma
- * Este modulo es Vex puro (sin FFI ni inline-asm) -> identico en PE y ELF y en
+ * Este modulo es  puro (sin FFI ni inline-asm) -> identico en PE y ELF y en
  * cualquier arquitectura que soporte el codegen.  Toda la dependencia de
  * plataforma (TID, atomicos) vive en vx_sync.vx.
  *
@@ -45,7 +45,7 @@
  *
  * FRONTERA NATIVO/VM (critica):  el CUERPO de una tarea con fibra corre SIEMPRE
  * como codigo NATIVO sobre su pila host, luego debe ser una fn @c \@Naked (asm
- * puro).  @ref vasync_yield tambien es @c \@Naked: una fn Vex NORMAL llamada
+ * puro).  @ref vasync_yield tambien es @c \@Naked: una fn  NORMAL llamada
  * desde un cuerpo de fibra en @c -m vm falla (el codigo nativo sobre la pila host
  * no puede reentrar al interprete, que asume un frame VM).  Por eso el yield se
  * escribe en asm (lee los ctx globales via rip-relative y salta a fiber_switch).
@@ -114,6 +114,17 @@ i64 __vasync_cur_done = 0;      ///< 1 si la tarea en ejecucion termino.
 /// (run-to-completion o main) queda en 0 -> el fast-path del lock nunca ve
 /// contienda (single-thread), asi el override es correcto tambien sin fibras.
 i64 __vasync_current_fiber = 0;
+
+/**
+ * @brief Fiber-id de la tarea en ejecucion (0 = main / sin fibra).
+ * @return `__vasync_current_fiber`.
+ * @note Getter publico: los globals MUTABLES no se exportan cross-modulo (solo
+ *       const), asi que vx_sync (monitor cooperativo, FN.4/LIM-5) lo lee via
+ *       esta fn en vez de referenciar el global directo.
+ */
+public i64 vasync_cur_fiber() {
+    return __vasync_current_fiber;
+}
 
 // Tabla de fibras (una entrada por tarea suspendible viva).  VASYNC_FIBCAP
 // entradas; cada una: ctx (host_ptr), stack_top (host_ptr, para liberar),
@@ -457,7 +468,7 @@ void __vasync_fiber_stack_free(u64 top, u64 size) {
  * @brief Cede la CPU de la tarea (fibra) actual al bucle del scheduler.
  *
  * @c \@Naked por necesidad: se llama DESDE el cuerpo de una tarea, que corre como
- * codigo NATIVO sobre su pila de fibra host.  Una fn Vex normal fallaria en
+ * codigo NATIVO sobre su pila de fibra host.  Una fn  normal fallaria en
  * @c -m vm (no se puede reentrar al interprete desde ese contexto).  Lee los
  * FiberCtx globales via rip-relative (bug 198, simbolos del MISMO modulo) y salta
  * a @c fiber_switch(cur, sched) -> el control vuelve al bucle del scheduler justo

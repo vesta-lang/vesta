@@ -126,7 +126,7 @@ inline uint64_t enter_jit(JitFn fn, vrt_proc *proc) {
 inline void return_from_jit(vrt_proc *proc, uint64_t bytecode_pc) {
     (void)proc;
     (void)bytecode_pc;
-    /* TODO Phase D.5 */
+    /* TODO  D.5 */
 }
 
 } // namespace jit

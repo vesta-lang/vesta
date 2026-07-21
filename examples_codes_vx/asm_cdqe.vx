@@ -1,0 +1,15 @@
+// cdqe/cwde/cbw: extension CON SIGNO del acumulador a su ancho mayor
+// (cdqe eax->rax, cwde ax->eax, cbw al->ax).  NO son no-ops (distinto de
+// cqo/cdq, que preparan RDX:RAX para una division): modelan rax = sext(low, n).
+// interp/JIT/AOT.
+//
+//     vm --vx asm_cdqe.vx -o c && vm --run c.velb
+// @expect 42
+u64 main() {
+    // low32 = -42 (0xFFFFFFD6), high32 = 0.  cdqe sign-extiende a 64 bits.
+    register("rax") u64 a = 0x00000000FFFFFFD6;
+    asm { cdqe };            // rax = 0xFFFFFFFFFFFFFFD6 (-42 en 64 bits)
+    register("rcx") u64 r = a;
+    asm { neg rcx };         // -(-42) = 42
+    return r;
+}

@@ -47,10 +47,18 @@
 #include <memory>
 #include "vx/ast.h"
 #include "vx/borrow_checker.h"
-#include "vx/comptime_vm.h"
+#include "vx/comptime/comptime_vm.h"
 #include "vx/diagnostic.h"
 
 namespace vx {
+
+/// Sustitucion de type params de una instanciacion generica.  Se define en
+/// `src/vx/generic_clone.h` (interno del frontend, no publico); aqui basta la
+/// declaracion adelantada para pasarla por referencia.
+namespace vxgen {
+struct GenSubst;
+}
+
 /**
  * @brief ComptimeValue recursivo via shared_ptr.
  *
@@ -89,7 +97,7 @@ enum class SymbolKind : uint8_t {
                ///<       (ANSI codes RED/GREEN/BOLD/RESET/etc.).
                ///<       El lowering los convierte en STR_LIT_ADDR
                ///<       de un literal predefinido.
-    Namespace, ///< Phase M.7: namespace de un modulo importado.
+    Namespace, ///<  M.7: namespace de un modulo importado.
                ///< Sintaxis: @c "import \"lib_a\";" registra @c lib_a
                ///< como Symbol::Namespace.  El campo @c ns_index del
                ///< Symbol apunta al @c imported_namespaces_ del
@@ -111,7 +119,7 @@ struct FunctionSig {
     /// registrando el import via @c register_native_import.  Sin entry
     /// para extern_lib se trata como funcion Vesta normal (CALLVM).
     std::string extern_lib;
-    /// Phase M.5: nombre real del label generado para esta funcion.
+    ///  M.5: nombre real del label generado para esta funcion.
     /// Vacio = el nombre visible coincide con el label (caso normal).
     /// No vacio = la funcion fue importada de otro modulo con
     /// mangling automatico (`lib__foo`); el lowering emite @c CALLVM
@@ -126,6 +134,10 @@ struct FunctionSig {
     /// count); el count va en un param i64 OCULTO al final.
     bool is_variadic = false;
     Type variadic_elem;
+    /// Variadico CRUDO: el ULTIMO param es un `...` pelado (sin tipo ni nombre).
+    /// El caller NO empaqueta los args trailing -- los pasa crudos en los
+    /// arg-regs del ABI segun el tipo de cada uno.  Solo para funciones @Naked.
+    bool is_raw_variadic = false;
     /// Bug/feature 198: @Naked -- funcion cuyo cuerpo es asm nativo puro (sin
     /// prologo/epilogo VM).  El lowering, al ver una llamada a una @Naked,
     /// emite un CALLN al dispatcher @c vrt:naked_dispatch (que la compila al
@@ -158,6 +170,49 @@ struct StructFieldInfo {
     /// y @c size pero con distintos @c bit_offset.
     uint8_t bit_offset = 0;
     uint8_t bit_width = 0;
+    /// Valor por defecto del campo (`u8 a = 0x10;`), no-owning al AST (vive
+    /// durante toda la compilacion).  null = sin default (zero-init).  Lo usa
+    /// el lowering para `= {}`, campos no listados en el init y `default()`.
+    ast::Expr *default_init = nullptr;
+    /// Offset DINAMICO de un campo de overlay dado por una expresion que puede
+    /// referenciar campos hermanos (`@offset(prev_off + 0x10)`).  no-owning al
+    /// AST.  null = offset estatico (usa @c offset).  Al resolver un acceso el
+    /// lowering evalua esta expresion (los nombres desnudos de hermanos leen
+    /// @c LOAD [base + hermano.offset]) y direcciona en @c base + resultado.
+    ast::Expr *offset_expr = nullptr;
+    /// Resolver de la DIRECCION del campo (F3): `@offset { ...; return <dir>; }`.
+    /// no-owning al AST.  A diferencia de @c offset_expr (un offset relativo a
+    /// base), el bloque DEVUELVE la DIRECCION absoluta donde vive el campo, con
+    /// control de flujo completo; tiene `base` (el puntero de la vista) y los
+    /// campos hermanos en scope.  null = usa expr/offset constante.
+    ast::BlockStmt *offset_block = nullptr;
+    /// Overlay ARRAY (F3b): `T Name[count] @offset(pos) stride(s)`.  Si
+    /// @c array_stride != null, el campo es un array: @c offset/@c offset_expr da
+    /// `pos` (base de la tabla), @c array_stride los bytes por elemento, y
+    /// @c type es el tipo del ELEMENTO.  `v.Name[i]` = base + pos + i*stride.
+    /// no-owning al AST.
+    ast::Expr *array_count = nullptr;
+    ast::Expr *array_stride = nullptr;
+    /// Overlay array POR-ELEMENTO (`T Name[c] @element { ... }`): resolver que da
+    /// la DIRECCION del elemento `index` (stride variable / TLV).  no-owning al
+    /// AST.  null = array de stride fijo (usa @c array_stride).
+    ast::BlockStmt *element_block = nullptr;
+    /// Overlay endianness (F5): 0=nativo, 1=big-endian (`@be`), 2=little (`@le`).
+    /// Un campo `@be` emite BYTESWAP en read/write (host x86-64 = little-endian).
+    uint8_t endian = 0;
+    /// Overlay endianness DINAMICA (F5): `@endian(expr)` -- expr (nonzero=BE)
+    /// decide el orden en tiempo de acceso.  no-owning al AST.  null = estatico.
+    ast::Expr *endian_expr = nullptr;
+    /// Overlay array SIN count (`T Name[] @offset(...) stride(s)`): el usuario
+    /// gestiona la terminacion (p.ej. bucle hasta entrada nula).  @c array_count
+    /// null + @c is_array true = array no acotado.
+    bool is_array = false;
+    /// F4: el resolver `@offset { }` de este campo usa `parent<T>()`.  Entonces
+    /// la funcion sintetizada recibe un param extra `root` (el puntero de la
+    /// vista RAIZ) que el call site enhebra caminando la cadena de accesos.
+    /// @c resolver_parent_type = nombre del tipo overlay raiz (T).
+    bool resolver_uses_parent = false;
+    std::string resolver_parent_type;
 };
 
 /**
@@ -235,6 +290,17 @@ struct StructLayout {
     std::vector<ClassMethodInfo> methods;
     uint32_t size_bytes = 0;
     uint32_t align_bytes = 1;
+    /// Overlay F1: el struct es una VISTA sobre un puntero base ajeno.  Un valor
+    /// de este tipo ES un puntero (host) de 8 bytes; no se aloca buffer ni se
+    /// zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS (@offset).
+    bool is_union = false; ///< union C-style: campos en offset 0, size=max.
+    bool is_overlay = false;
+    /// Overlay: HUELLA estatica de la vista = max(offset+size) sobre los campos
+    /// de offset constante, redondeada al alineamiento.  Es lo que `sizeof(T)`
+    /// devuelve para un overlay (no @c size_bytes=8, que es el puntero): permite
+    /// reservar `u8[sizeof(PEB)] buf;` con el tamano exacto para CREAR la vista.
+    /// Los campos de offset dinamico (@offset(expr)) no cuentan (data-dependent).
+    uint32_t overlay_extent = 0;
     /// Fase 1 interop C: categoria INFERIDA de los campos (clasificador de
     /// Fase 0).  @c cat_c_representable: el struct cruza la frontera C por
     /// valor (todos sus campos C-representables y sin `~Struct()`).
@@ -266,7 +332,7 @@ struct StructLayout {
     /// IntrospectInfo POD en static_data para que `find_type("Name")`
     /// runtime lo encuentre.
     bool is_introspect = false;
-    /// Phase M6.a L.3: visibilidad cross-module.  Solo se exporta a
+    ///  M6.a L.3: visibilidad cross-module.  Solo se exporta a
     /// `.vxi` si es @c true.  Sin keyword `public`/`private` en el
     /// source: @c true (default permisivo).  Sin esto en false, otros
     /// modulos podrian importar el struct via @c only.
@@ -284,7 +350,19 @@ struct StructLayout {
 struct EnumVariantInfo {
     std::string name;
     uint32_t tag = 0;
+    int64_t int_value = 0;  ///< Valor (enums con tipo base ENTERO C-style).
+    /// Enums con VALOR de tipo NO-entero (float/string/struct/clase): el
+    /// lowering de @c E.A baja directamente esta expresion AST (reusa el
+    /// lowering de literales float/string/init-list).  Para backing entero
+    /// se usa @c int_value (soporta auto-incremento sin AST).
+    const ast::Expr *value_ast = nullptr;
     std::vector<Type> field_types;
+    /// Offset EXPLICITO (en bytes) de cada payload field dentro del buffer.
+    /// Vacio = layout uniforme del enum (`8 + 8*i`).  Se usa para los
+    /// pseudo-enums sinteticos de @c Optional / @c Result (ver
+    /// @c EnumLayout::is_optlike), donde el payload de @c Err vive en +16
+    /// (no en +8) porque Ok(V) y Err(E) NO se solapan en el buffer.
+    std::vector<uint32_t> field_offsets;
 };
 
 /**
@@ -303,13 +381,83 @@ struct EnumVariantInfo {
 struct EnumLayout {
     std::string name;
     std::vector<EnumVariantInfo> variants;
+    bool is_valued = false;              ///< enum con VALOR (`: u8`).
+    PrimitiveKind backing = PrimitiveKind::I64;  ///< tipo base si is_valued.
+    /// Nombre del tipo de USUARIO cuando @c backing es STRUCT/CLASS (`enum
+    /// Color : Rgb {..}`).  Un valor del enum ES un valor de este tipo.
+    std::string backing_type_name;
     uint32_t size_bytes = 8;         ///< Minimum: solo el tag.
     uint32_t max_payload_fields = 0; ///< 0 si todas son sin payload.
     /// marca `@Introspect`.
     bool is_introspect = false;
-    /// Phase M6.a L.3: visibilidad cross-module.
+    ///  M6.a L.3: visibilidad cross-module.
     bool is_public = true;
+    /// Pseudo-enum sintetico para @c match sobre @c Optional<T> / @c
+    /// Result<V,E>.  Cuando es true: (a) los payloads se guardan/leen con
+    /// su tipo NATIVO (no promovidos a i64 con BITCAST como los enums
+    /// reales), y (b) el offset del payload sale de @c
+    /// EnumVariantInfo::field_offsets (no del layout uniforme).  Coincide
+    /// con como los construye @c Some/None/Ok/Err y los lee
+    /// @c unwrap/value/error/isPresent/isOk.
+    bool is_optlike = false;
 };
+
+/**
+ * @brief Construye un @c EnumLayout sintetico para tratar @c Optional<T>
+ * o @c Result<V,E> como un enum de dos variantes en @c match.
+ *
+ * Convenio de layout (identico al que emiten @c Some/None/Ok/Err):
+ *   - @c Optional<T>: buffer de 16 bytes; `[+0 i64 flag]` (None=0, Some=1),
+ *     Some.payload en +8 con tipo @p st.pointee.
+ *   - @c Result<V,E>: buffer de 24 bytes; `[+0 i64 tag]` (Err=0, Ok=1),
+ *     Ok.payload en +8 (@p st.pointee), Err.payload en +16 (@p st.pointee2).
+ *
+ * @param st Tipo del scrutinee (kind OPTIONAL o RESULT).
+ * @return Layout con @c is_optlike=true, variantes ordenadas por tag.
+ */
+inline EnumLayout build_optlike_enum_layout(const Type &st) {
+    EnumLayout lay;
+    lay.is_optlike = true;
+    lay.max_payload_fields = 1;
+    if (st.kind == PrimitiveKind::OPTIONAL) {
+        lay.name = "Optional";
+        lay.size_bytes = 16;
+        // None (tag 0, sin payload).
+        EnumVariantInfo vn;
+        vn.name = "None";
+        vn.tag = 0;
+        lay.variants.push_back(std::move(vn));
+        // Some (tag 1, payload T en +8).
+        EnumVariantInfo vs;
+        vs.name = "Some";
+        vs.tag = 1;
+        vs.field_types.push_back(st.pointee ? *st.pointee
+                                            : Type{PrimitiveKind::I64});
+        vs.field_offsets.push_back(8);
+        lay.variants.push_back(std::move(vs));
+    } else {
+        // Result<V,E>.
+        lay.name = "Result";
+        lay.size_bytes = 24;
+        // Err (tag 0, payload E en +16).
+        EnumVariantInfo ve;
+        ve.name = "Err";
+        ve.tag = 0;
+        ve.field_types.push_back(st.pointee2 ? *st.pointee2
+                                             : Type{PrimitiveKind::I64});
+        ve.field_offsets.push_back(16);
+        lay.variants.push_back(std::move(ve));
+        // Ok (tag 1, payload V en +8).
+        EnumVariantInfo vo;
+        vo.name = "Ok";
+        vo.tag = 1;
+        vo.field_types.push_back(st.pointee ? *st.pointee
+                                            : Type{PrimitiveKind::I64});
+        vo.field_offsets.push_back(8);
+        lay.variants.push_back(std::move(vo));
+    }
+    return lay;
+}
 
 /**
  * @struct ClassLayout
@@ -329,7 +477,7 @@ struct ClassLayout {
     std::vector<StructFieldInfo> static_fields;
     std::vector<ClassMethodInfo> methods;
     uint32_t size_bytes = 0;
-    /// Para clases importadas cross-module via Phase M:
+    /// Para clases importadas cross-module via  M:
     ///   - @c name lleva el nombre mangled (e.g. "buffer__Buffer")
     ///     usado para identidad de tipo dentro del consumer.
     ///   - @c imported_helper_suffix lleva el nombre LOCAL en el modulo
@@ -393,7 +541,7 @@ struct ClassLayout {
     /// metodo.  El @c findclass(name) en runtime ya la encuentra.
     /// Acceso a campos via @c getfield con offsets fijos del ABI.
     bool is_runtime_predefined = false;
-    /// Phase M6.a L.3: visibilidad cross-module.
+    ///  M6.a L.3: visibilidad cross-module.
     bool is_public = true;
 };
 
@@ -418,11 +566,11 @@ struct Symbol {
     /// el usuario escriba la builtin standalone.  Vacio para variables
     /// normales.
     std::string reflection_alias;
-    /// Phase M.7: indice en @c TypeChecker::imported_namespaces_
+    ///  M.7: indice en @c TypeChecker::imported_namespaces_
     /// cuando @c kind == SymbolKind::Namespace.  Sin uso para los
     /// demas kinds.
     uint32_t ns_index = 0;
-    /// Phase AS inc.2: registro fisico canonico (rax/r8/v0...) si la
+    ///  AS inc.2: registro fisico canonico (rax/r8/v0...) si la
     /// variable se declaro con storage-class @c register("reg").  Vacio
     /// para variables normales.  Usado para detectar conflicto same-reg
     /// dentro del mismo scope.
@@ -515,12 +663,21 @@ class TypeChecker {
     }
 
     /**
-     * @brief Acceso de solo lectura al ModuleNode AST.  Phase M.L7
+     * @brief Acceso de solo lectura al ModuleNode AST.   M.L7
      * lo usa @c export_typechecker_to_vxi para iterar
      * @c GlobalVarDecl y extraer sus tipos sin tener que mantener
      * un mapa paralelo en el TypeChecker.
      */
     const ast::ModuleNode &ast_module() const noexcept { return mod_; }
+
+    /**
+     * @brief Anyade una plantilla generica / comptime fn / @Macro re-exportada
+     * a los exports de ESTE modulo (via `public import`).  El emitter del `.vxi`
+     * la vuelca como fuente para que los consumidores del re-exportador la vean.
+     */
+    void add_reexported_generic_template(ast::GenericTemplateExport tex) {
+        mod_.generic_template_exports.push_back(std::move(tex));
+    }
 
     /// #cross-module-generics: inyecta un decl (plantilla generica o
     /// concepto) re-parseado de un `.vxi` importado en este modulo, para
@@ -579,6 +736,31 @@ class TypeChecker {
     std::string monomorphize_struct(const std::string &template_name,
                                     const std::vector<Type> &args,
                                     const SourceLoc &loc);
+
+    /// @brief Resuelve los @c @complexity que el parser dejo pendientes.
+    ///
+    /// Su `when:` habla del parametro de tipo (`is_float<T>()`), asi que solo
+    /// tiene respuesta aqui, con T ya concreto: el coste de un metodo generico
+    /// depende de T de verdad (`atomic<i64>::fetch_add` es un `lock xadd` y
+    /// `atomic<f64>::fetch_add` un bucle CAS).  Vuelca el que casa a los campos
+    /// resueltos de @p nm y vacia su lista de pendientes.
+    /// @param nm el metodo CLONADO (la instanciacion).
+    /// @param m  el metodo de la PLANTILLA (de donde salen los pendientes).
+    void resolve_pending_complexity_(ast::ClassMethodDecl &nm,
+                                     const ast::ClassMethodDecl &m,
+                                     const vxgen::GenSubst &g,
+                                     const SourceLoc &loc);
+
+    /// Resuelve los @complexity de un metodo NO generico (todos sus atomos
+    /// deben ser de target: aqui no hay T al que referirse).
+    void resolve_complexity_no_generico_(ast::ClassMethodDecl &m);
+
+    /// Recorre las decls resolviendo los @complexity pendientes.  Las
+    /// instanciaciones ya vienen resueltas del clon; las plantillas se saltan
+    /// (no producen IR y sus `when:` sobre T no tienen respuesta fuera de una
+    /// instanciacion).
+    void resolve_complexity_decls_(
+        std::vector<std::unique_ptr<ast::Node>> &decls);
 
     /**
      * @brief Monomorphizacion de funcion generica.  Clona la FunctionDecl
@@ -750,6 +932,23 @@ class TypeChecker {
     const FunctionSig *function_sig_by_name(const std::string &name) const;
 
     /**
+     * @brief Accesor publico al mapa nombre -> indice de firma.
+     *
+     * El lowering lo recorre en su pase 1 para registrar el tipo de retorno
+     * de las funciones IMPORTADAS de otro modulo.  Esas funciones NO estan en
+     * @c mod_.decls (solo viven como @c FunctionSig inyectada desde el .vxi),
+     * asi que sin este recorrido el caller no sabria que una fn cross-modulo
+     * devuelve Optional/Result/enum/... y omitiria el retbuf hidden de la
+     * convencion SRET (escritura a puntero basura -> SEGV).
+     *
+     * @return Mapa nombre publico -> indice en @c function_sigs_.
+     */
+    const std::unordered_map<std::string, uint32_t> &
+    function_sigs_by_name() const noexcept {
+        return sig_by_name_;
+    }
+
+    /**
      * @brief Si @p name es una funcion extern, devuelve "@extern:<lib>:<name>".
      *        En cualquier otro caso devuelve "".
      *
@@ -805,6 +1004,76 @@ class TypeChecker {
     Type check_binary(ast::BinaryExpr *e);
     Type check_unary(ast::UnaryExpr *e);
     Type check_assign(ast::AssignExpr *e);
+    /// Nucleo de check_assign; devuelve el tipo del LVALUE (campo/pointee/
+    /// elemento/variable).  El wrapper usa ese @c is_const para el enforcement
+    /// de const-correctness (escritura a lvalue const = error).
+    Type check_assign_impl(ast::AssignExpr *e);
+
+  public:
+    /**
+     * @brief Resuelve un compound assign (`c += v`) sobre un tipo que
+     *        sobrecarga operadores, dejando @p e listo para el lowering.
+     *
+     * Dos vias, en este orden (el modelo de Python):
+     *   1. `__iadd__(V)` -> marca @c e->overload_method: UNA sola operacion
+     *      (lo que hace que `atomic<i64> g; g += 1;` sea indivisible).
+     *   2. si no lo declara -> DESAZUCARA el AST a `c = c + v` via `__add__`.
+     *
+     * Publico porque el lowering tambien lo necesita: `c++` fabrica su
+     * AssignExpr cuando el checker ya paso, y sin pasar por aqui caia al camino
+     * entero (sumaba 1 a la direccion del objeto).  Una sola implementacion
+     * para los dos.
+     *
+     * @param tt tipo del target; @p tv tipo del valor.
+     * @param out_result tipo resultante de la expresion, si devuelve true.
+     * @return true si @p e quedo resuelto como sobrecarga.
+     */
+    bool prepare_overloaded_compound_assign(ast::AssignExpr *e, const Type &tt,
+                                            const Type &tv,
+                                            Type &out_result) const;
+
+    /**
+     * @brief Fusiona `g = g OP x` en `g OP= x` (read-modify-write).
+     *
+     * Reescribe @p e in-place.  Es la INVERSA del desazucarado de
+     * @ref prepare_overloaded_compound_assign, y existe por los tipos ATOMICOS:
+     * reconocer que las dos `g` son la MISMA posicion permite fusionar los tres
+     * pasos (leer, operar, escribir) en el RMW indivisible del tipo.
+     *
+     * Solo actua si el tipo declara el metodo in-place, asi que los primitivos
+     * no se ven afectados.  Cubre los diez operadores con forma compuesta
+     * (`+ - * / %` y `& | ^ << >>`).
+     *
+     * @return true si @p e quedo reescrito.
+     */
+    bool try_fuse_rmw_assign(ast::AssignExpr *e);
+
+  private:
+    /// @brief Busca el dunder de compound assign (`+=` -> @c __iadd__) en el
+    ///        tipo @p tt (CLASS o STRUCT) que acepte un valor @p tv.
+    /// @return el metodo, o nullptr si el tipo no sobrecarga ese operador
+    ///         (entonces `a += b` sigue el camino clasico).
+    const ClassMethodInfo *find_compound_assign_dunder(const Type &tt,
+                                                       const Type &tv,
+                                                       ast::AssignOp op) const;
+
+    /// Metodos de un CLASS/STRUCT; nullptr si @p t no es uno o no esta
+    /// registrado.
+    const std::vector<ClassMethodInfo> *methods_of_type(const Type &t) const;
+
+    /// ¿@p t sobrecarga la suma/resta, de modo que `x++` / `x--` tengan
+    /// sentido?  (`__iadd__`/`__add__`/`__isub__`/`__sub__`.)
+    bool type_overloads_step(const Type &t) const;
+
+    /// @brief Busca un dunder UNARIO (sin parametros) por nombre en @p t.
+    /// @return el metodo, o nullptr si no aplica.
+    const ClassMethodInfo *find_unary_dunder(const Type &t,
+                                             const char *nm) const;
+
+    /// @brief Si @p t declara `__bool__`, envuelve @p slot en
+    ///        `(*slot).__bool__()` (desazucarado en el AST).
+    /// @return true si envolvio.
+    bool wrap_in_bool_dunder(std::unique_ptr<ast::Expr> &slot, const Type &t);
     /// Safety net (item 1): true si @c e es un closure CAPTURADOR -- un
     /// LambdaExpr con capturas o un metodo ligado `&obj.m` (que captura el
     /// receptor).  Un closure asi guardado en un campo de struct deja el env
@@ -920,6 +1189,19 @@ class TypeChecker {
     void expand_lombok_annotations();
 
     /**
+     * @brief Inyecta los valores por defecto de los campos de instancia de cada
+     *        clase (`i32 a = 5;`) al INICIO de sus constructores como
+     *        asignaciones `this.campo = default` (estilo Java/C++: los field
+     *        initializers corren antes del cuerpo del ctor, tras un super()).
+     *        Asi `new C()` aplica los defaults.  Si la clase con defaults no
+     *        declara ningun constructor, se sintetiza uno vacio.  Debe correr
+     *        tras @c expand_lombok_annotations (para cubrir ctors generados) y
+     *        antes de @c collect_classes (para que @c is_zero_init_ctor vea las
+     *        asignaciones inyectadas).
+     */
+    void apply_class_field_defaults_to_ctors();
+
+    /**
      * @brief Pase 0 extendido: registra todas las clases del modulo
      *        con sus layouts (fields + methods) antes del checking
      *        de cuerpos.  Permite que un metodo refiera a otra clase
@@ -965,7 +1247,7 @@ class TypeChecker {
 
   public:
     /**
-     * @brief Phase M.L26: acceso de solo lectura al set de nombres que
+     * @brief  M.L26: acceso de solo lectura al set de nombres que
      * @c lookup_with_depth ha resuelto exitosamente durante el check.
      * El @c compile_vx_project lo usa para detectar imports
      * declarados pero no usados y emitir warnings.
@@ -974,7 +1256,7 @@ class TypeChecker {
         return referenced_names_;
     }
 
-    /// Phase M.L23: marca un nombre como importado de otro modulo.
+    ///  M.L23: marca un nombre como importado de otro modulo.
     /// El export del @c .vxi del modulo actual lo filtra por
     /// defecto (no se re-exporta).  Si @c is_reexport es @c true ,
     /// se anyade tambien al set de re-exportados y SE EXPORTA al
@@ -992,9 +1274,28 @@ class TypeChecker {
 
   private:
     /**
-     * @brief Convierte un TypeNode AST a Type semantico.
+     * @brief Convierte un TypeNode AST a Type semantico.  Wrapper que propaga
+     * la const-correctness POR NIVEL: tras resolver la forma del tipo con
+     * @c type_from_node_impl, marca @c Type::is_const con el @c is_const de
+     * ESTE nodo (el nivel base o el nivel de puntero correspondiente; la const
+     * del apuntado la aporta la recursion sobre el pointee).
      */
     Type type_from_node(const ast::TypeNode *tn) const;
+    /// Nucleo de @c type_from_node (resuelve la FORMA del tipo).  No aplica el
+    /// @c is_const del nodo raiz -- eso lo hace el wrapper.
+    Type type_from_node_impl(const ast::TypeNode *tn) const;
+
+    /**
+     * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.
+     *
+     * Recorre punteros/arrays/optional hasta el @c NamedTypeNode base.  Si ese
+     * nombre no corresponde a ningun tipo conocido (primitivo, alias, struct/
+     * clase/enum, parametro de tipo comptime, ni un especial/generico que
+     * @c type_from_node reconozca), devuelve el nombre; en otro caso, cadena
+     * vacia.  Sirve para dar un error CLARO en vez de tratar el tipo como
+     * @c void (tamano 0) en silencio (return types, @c sizeof<T>, ...).
+     */
+    std::string first_unresolved_type(const ast::TypeNode *tn) const;
 
     /**
      * @brief Verifica si una asignacion entre tipos CLASS es valida
@@ -1029,6 +1330,11 @@ class TypeChecker {
         bool is_struct = false;
         bool is_type = false; ///< contiene un Type
         bool is_mutable = false;
+        /// #2: valor placeholder diferido (init dependia de una comptime fn
+        /// via ComptimeVM aun no cargada, pass 1 del two-phase).  Se resuelve
+        /// en pass 2; los reads propagan `deferred` para que static_assert no
+        /// se dispare sobre el placeholder.
+        bool deferred = false;
         int64_t value = 0;
         std::string str_value;
         std::vector<std::shared_ptr<ComptimeValue>> array_vals;
@@ -1214,8 +1520,13 @@ class TypeChecker {
     /// Devuelve true y escribe @p out si la expresion es evaluable.
     bool lsp_eval_int(const ast::Expr *e, int64_t *out);
     /// Evalua un builtin de introspeccion que da un escalar/bool (sizeof,
-    /// field_count, has_field, is_subtype, ...).  No cubre los que dan string.
+    /// field_count, has_field, is_subtype, is_float, ...).  No cubre los que dan
+    /// string.  Publico: ademas del LSP lo usa el lowering para resolver en
+    /// comptime los predicados de tipo y emitirlos como constante.
+public:
     bool lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out);
+
+private:
     std::unordered_map<std::string, ComptimeConst> comptime_const_values_;
     std::vector<std::unordered_map<std::string, ComptimeConst>>
         comptime_const_locals_;
@@ -1269,7 +1580,7 @@ class TypeChecker {
         return comptime_runtime_;
     }
 
-    /// Phase MC.9: snapshot publico de los contadores VM-only para
+    ///  MC.9: snapshot publico de los contadores VM-only para
     /// diagnostico desde main.cpp (cuando VESTA_MC_VERBOSE esta on).
     uint32_t macro_vmonly_hits() const noexcept { return macro_vmonly_hits_; }
     uint32_t macro_vmonly_misses() const noexcept {
@@ -1298,7 +1609,11 @@ class TypeChecker {
     /// rellena en cada @c function_sigs_.push_back y nunca se limpia.
     std::unordered_map<std::string, uint32_t> sig_by_name_;
 
-    /// Phase M.2.e: simbolos de funcion importados via .vxi que
+    /// Funciones registradas SOLO para que resuelvan los cuerpos de plantillas
+    /// importadas.  Ver @ref mark_template_only_fn.
+    std::unordered_set<std::string> template_only_fns_;
+
+    ///  M.2.e: simbolos de funcion importados via .vxi que
     /// deben declararse en el scope global al inicio de run().  El
     /// constructor del TypeChecker NO ha pusheado scope todavia,
     /// asi que las llamadas a register_imported_function durante
@@ -1306,7 +1621,7 @@ class TypeChecker {
     /// Esta cola se drena al inicio de run() tras push_scope().
     std::vector<std::pair<std::string, uint32_t>> pending_imported_fn_names_;
 
-    /// Phase M.L7: cola paralela para variables globales importadas.
+    ///  M.L7: cola paralela para variables globales importadas.
     struct PendingGlobal {
         std::string name;
         Type type;
@@ -1318,9 +1633,14 @@ class TypeChecker {
         /// via STRMAKE en @c lower_ident.
         bool is_str = false;
         std::string str_value;
+        /// Nombre del slot en el modulo que lo DEFINE (`lib__counter`).  Es la
+        /// clave con la que el merge cross-module unifica el storage, asi que
+        /// el lowering la necesita para los globals que NO se inlinean (los
+        /// mutables y los const sin valor de compile-time).
+        std::string mangled_label;
     };
     std::vector<PendingGlobal> pending_imported_globals_;
-    /// Phase M.L7: declaracion adelantada del struct + map.  El
+    ///  M.L7: declaracion adelantada del struct + map.  El
     /// accesor publico @c imported_global_consts() en la seccion
     /// public devuelve este miembro.
   public:
@@ -1332,42 +1652,59 @@ class TypeChecker {
         std::string str_value;
     };
 
+    /**
+     * @brief Global importado que tiene STORAGE (no se inlinea): un mutable
+     *        (`public i64 counter`) o un const cuyo valor no se conoce en
+     *        compile time (`public const string S = "hola"` -> el StringObject
+     *        lo construye el `__module_init` del dep).
+     *
+     * El consumidor no ve el AST del dep, asi que crea su propio slot con
+     * @c mangled_label como `shared_key`: el merge cross-module unifica por esa
+     * clave y ambos modulos acaban leyendo y escribiendo el MISMO storage.
+     */
+    struct ImportedGlobalStorage {
+        Type type;                 ///< tipo declarado en el dep.
+        std::string mangled_label; ///< nombre del slot en el dep.
+    };
+
   private:
     std::unordered_map<std::string, ImportedGlobalConst>
         imported_global_consts_;
+    std::unordered_map<std::string, ImportedGlobalStorage>
+        imported_global_storage_;
 
-    /// Phase M6.a L.3: visibilidad por simbolo top-level.
+    ///  M6.a L.3: visibilidad por simbolo top-level.
     /// El TypeChecker rellena estos sets al procesar cada decl segun
     /// @c FunctionDecl::is_public, @c GlobalVarDecl::is_public, etc.
     /// El emitter de .vxi consulta para filtrar simbolos privados.
     std::unordered_map<std::string, bool> function_is_public_;
     std::unordered_map<std::string, bool> global_is_public_;
     std::unordered_map<std::string, bool> typedef_is_public_;
-    /// Phase NS.3: nombres marcados @c "internal" (package-scoped).  El emitter
+    ///  NS.3: nombres marcados @c "internal" (package-scoped).  El emitter
     /// de .vxi los exporta con flag; el consumidor de OTRO paquete los filtra.
     std::unordered_set<std::string> function_is_internal_;
     std::unordered_set<std::string> global_is_internal_;
 
   public:
-    /// @brief Phase NS.3: @c true si la funcion @p name es @c internal.
+    /// @brief  NS.3: @c true si la funcion @p name es @c internal.
     bool function_is_internal(const std::string &name) const {
         return function_is_internal_.count(name) != 0;
     }
-    /// @brief Phase NS.3: @c true si el global @p name es @c internal.
+    /// @brief  NS.3: @c true si el global @p name es @c internal.
     bool global_is_internal(const std::string &name) const {
         return global_is_internal_.count(name) != 0;
     }
 
   private:
 
-    /// Phase M.L26: set de nombres que @c lookup_with_depth resolvio
+    ///  M.L26: set de nombres que @c lookup_with_depth resolvio
     /// exitosamente.  Mutable porque el lookup es @c const pero el
     /// tracking es metadata observacional, no afecta la semantica.
     /// Util para detectar imports declarados pero nunca usados +
     /// emitir warnings.
     mutable std::unordered_set<std::string> referenced_names_;
 
-    /// Phase M.L23: set de nombres importados desde @c .vxi de otros
+    ///  M.L23: set de nombres importados desde @c .vxi de otros
     /// modulos.  El export del @c .vxi del modulo actual los filtra
     /// por DEFAULT (no se re-exportan) salvo que esten tambien en
     /// @c reexported_imported_names_ (marcados con @c public import).
@@ -1379,6 +1716,14 @@ class TypeChecker {
     /// @c pop_scope final.  Sin esto, la lowering pierde los
     /// namespaces porque viven en @c scopes_ (popped).
     std::unordered_map<std::string, uint32_t> ns_idx_by_local_name_;
+
+    /// NS short-form: alias del ULTIMO segmento de un namespace punteado
+    /// (`org.geo.shapes` -> `shapes`) hacia su indice, cuando es UNICO.  Permite
+    /// acceder por el ultimo segmento (`shapes.area`) ademas del path completo.
+    /// @c ns_short_ambiguous_ marca los segmentos que aparecen en 2+ namespaces
+    /// (no se resuelve el short-form; hay que usar el path completo).
+    std::unordered_map<std::string, uint32_t> ns_short_alias_;
+    std::unordered_set<std::string> ns_short_ambiguous_;
 
     /// NS.2 round-trip: namespaces DECLARADOS por este modulo (via
     /// `namespace X;`), para que el export al .vxi sepa que la funcion
@@ -1408,7 +1753,7 @@ class TypeChecker {
 
   private:
   public:
-    /// Phase M.7: namespace de un modulo importado.  Cada entry
+    ///  M.7: namespace de un modulo importado.  Cada entry
     /// contiene los simbolos publicos del @c .vxi indexados por
     /// nombre.  Cuando el TypeChecker ve @c "buf.Buffer" o
     /// @c "lib_a.valor_a", busca @c "buf"/@c "lib_a" en la pila de
@@ -1466,7 +1811,7 @@ class TypeChecker {
                                    const std::string &public_name,
                                    ImportedNamespace::Sym sym);
 
-    /// @brief Phase NS.2-full: apunta un nombre local (alias del import) a un
+    /// @brief  NS.2-full: apunta un nombre local (alias del import) a un
     /// namespace ya registrado.  Usado para que @c "import a.b.c as x;" haga
     /// que @c x.Sym resuelva igual que @c a.b.c.Sym cuando el namespace
     /// declarado difiere del nombre del fichero/alias.
@@ -1491,7 +1836,7 @@ class TypeChecker {
     }
 
   private:
-    /// Phase NS.1b: resuelve un nombre qualified punteado `a.b.c.Symbol` a su
+    ///  NS.1b: resuelve un nombre qualified punteado `a.b.c.Symbol` a su
     /// namespace + simbolo, probando el PREFIJO de namespace mas LARGO (para
     /// paths multi-segmento: `ui.widgets.Button` -> ns=`ui.widgets`,
     /// sym=`Button`).  Cubre tambien el caso single-segment (`ui.Button`).
@@ -1564,6 +1909,27 @@ class TypeChecker {
     const Type *newtype_underlying(const std::string &name) const noexcept {
         auto it = newtype_underlying_.find(name);
         return (it != newtype_underlying_.end()) ? &it->second : nullptr;
+    }
+
+    /**
+     * @brief Nombre del layout REAL detras de un newtype (cadena vacia si no lo
+     *        es, o si su underlying no es un tipo con layout).
+     *
+     * `typedef Caja Sesion new;` -> `underlying_layout_name("Sesion")` da
+     * "Caja".  Un newtype comparte la representacion del underlying -- y por
+     * tanto su layout, sus campos y sus metodos; lo unico que anade es ser
+     * NOMINALMENTE distinto, y eso viaja en el @c Type (nominal_id), no en el
+     * layout.  Sin esto, los lookups por NOMBRE (`class_layouts_`,
+     * `enum_layouts_`) no encuentran nada y un newtype sobre una clase o un
+     * enum no se podia usar.
+     */
+    /// @brief Tipo que vale `new X(...)` (ver la definicion en el .cpp).
+    Type new_expr_result_type(const std::string &name) const;
+
+    std::string underlying_layout_name(const std::string &name) const {
+        auto it = newtype_underlying_.find(name);
+        if (it == newtype_underlying_.end()) return std::string();
+        return it->second.struct_name;
     }
 
     /// @brief Metadata de conversiones de un newtype (puede ser nullptr).
@@ -1699,7 +2065,7 @@ class TypeChecker {
         return (it == monomorph_info_.end()) ? nullptr : &it->second;
     }
 
-    // ---- Phase M.2: interop con .vxi (interfaces compiladas) ----
+    // ----  M.2: interop con .vxi (interfaces compiladas) ----
     //
     // El TypeChecker puede exportar sus simbolos publicos a un
     // descriptor @c vx::VxiModule para que el emitter del .vxi
@@ -1751,7 +2117,7 @@ class TypeChecker {
     void register_imported_newtype(const std::string &name, Type underlying) {
         newtype_underlying_.emplace(name, std::move(underlying));
     }
-    /// Phase M.L8: registra el bloque @c {explicit from/to T;} de un
+    ///  M.L8: registra el bloque @c {explicit from/to T;} de un
     /// newtype importado.  Las conversiones se almacenan en
     /// @c newtype_info_ y participan en @c check_cast como
     /// allow-list para casts cross-module.
@@ -1760,7 +2126,7 @@ class TypeChecker {
         newtype_info_.emplace(name, std::move(ni));
     }
     void register_imported_struct(const std::string &name, StructLayout L) {
-        // Phase M.fix-classfield: overwrite (no emplace) para soportar
+        //  M.fix-classfield: overwrite (no emplace) para soportar
         // pre-registro de skeleton seguido de fill cross-type within
         // mismo dep modulo.
         struct_layouts_[name] = std::move(L);
@@ -1771,6 +2137,19 @@ class TypeChecker {
     void register_imported_enum(const std::string &name, EnumLayout L) {
         enum_layouts_[name] = std::move(L);
     }
+    /**
+     * @brief Marca una funcion como visible SOLO para cuerpos de plantilla.
+     *
+     * El cuerpo de una plantilla generica importada se re-parsea en el modulo
+     * que la usa, donde los helpers de su modulo de origen no estan en scope.
+     * Se registran (bajo su label mangled) para que resuelva y enlace, pero el
+     * consumidor no los pidio: marcarlos aqui los excluye del fallback por
+     * sufijo de @c check_call, que si no dejaria que el nombre corto resolviera
+     * y romperia la higiene del `only`.
+     */
+    void mark_template_only_fn(const std::string &mangled) {
+        template_only_fns_.insert(mangled);
+    }
     void register_imported_function(const std::string &name, FunctionSig sig) {
         const uint32_t idx = static_cast<uint32_t>(function_sigs_.size());
         function_sigs_.push_back(std::move(sig));
@@ -1780,7 +2159,7 @@ class TypeChecker {
         // `lookup_with_depth` no encuentra la funcion importada.
         pending_imported_fn_names_.push_back({name, idx});
     }
-    /// Phase M.L7: registra una variable global importada de otro
+    ///  M.L7: registra una variable global importada de otro
     /// modulo via @c .vxi.  Igual que las funciones, se encola para
     /// que @c run() la declare en el scope global tras el
     /// @c push_scope inicial.  Si @c has_init_value es @c true y la
@@ -1788,13 +2167,15 @@ class TypeChecker {
     /// inline-ar el valor literal.
     void register_imported_global(const std::string &name, Type type,
                                   bool is_const, bool has_init_value = false,
-                                  uint64_t init_value = 0) {
+                                  uint64_t init_value = 0,
+                                  const std::string &mangled_label = "") {
         PendingGlobal pg;
         pg.name = name;
         pg.type = std::move(type);
         pg.is_const = is_const;
         pg.has_init_value = has_init_value;
         pg.init_value = init_value;
+        pg.mangled_label = mangled_label;
         pending_imported_globals_.push_back(std::move(pg));
     }
 
@@ -1812,7 +2193,7 @@ class TypeChecker {
         pending_imported_globals_.push_back(std::move(pg));
     }
 
-    /// Phase M.L7: tabla de globals const importadas con valor
+    ///  M.L7: tabla de globals const importadas con valor
     /// literal embedded.  El lowering la consulta en @c lower_ident
     /// para inline-ar `CONST <value>` directamente cuando el ident
     /// resuelve a uno de estos nombres.  Poblada al final de run()
@@ -1823,7 +2204,15 @@ class TypeChecker {
         return imported_global_consts_;
     }
 
-    /// Phase M6.a L.3: setea visibilidad de un simbolo top-level.
+    /// Globals importados que tienen storage propio (no inlinables).  El
+    /// lowering la consulta para crear el slot compartido con el dep.  Poblada
+    /// al final de run() drenando @c pending_imported_globals_.
+    const std::unordered_map<std::string, ImportedGlobalStorage> &
+    imported_global_storage() const noexcept {
+        return imported_global_storage_;
+    }
+
+    ///  M6.a L.3: setea visibilidad de un simbolo top-level.
     /// El TypeChecker llama esto al procesar cada decl.
     void set_function_visibility(const std::string &name, bool is_pub) {
         function_is_public_[name] = is_pub;
@@ -1880,6 +2269,21 @@ class TypeChecker {
     // @c check_class_method y se restaura al salir.
     Type current_fn_return_type_{PrimitiveKind::VOID};
 
+    // F4: contexto de chequeo de un resolver `@offset { }` de overlay.  Cuando
+    // @c overlay_resolver_active_ es true y el body llama a `parent<T>()`, se
+    // marca @c overlay_resolver_used_parent_ y se guarda T; tras el check se
+    // copia a @c StructFieldInfo::resolver_uses_parent del campo resolver.
+    bool overlay_resolver_active_ = false;
+    bool overlay_resolver_used_parent_ = false;
+    std::string overlay_resolver_parent_type_;
+    /// F4: resolvers `@offset { }` cuyo check se DIFIERE a un 2o pase (tras
+    /// construir TODOS los layouts de overlay), para que un resolver pueda usar
+    /// `parent<Otro>()` aunque Otro se defina despues (dependencia circular:
+    /// PeImage.Imports usa ImportDesc; ImportDesc.name usa parent<PeImage>()).
+    std::vector<std::pair<const ast::StructDecl *, const ast::StructFieldDecl *>>
+        pending_overlay_resolvers_;
+    void check_overlay_resolvers_deferred();
+
     // Safety net (item 1): variables LOCALES de tipo STRUCT a las que se les
     // asigno un closure CAPTURADOR en un campo.  El env de ese closure vive en
     // el STACK del scope actual (los structs son value-types sin destructor de
@@ -1916,6 +2320,11 @@ class TypeChecker {
     /// `comptime const` automaticamente para que los IdentExpr
     /// posteriores sean resoluble por el comptime evaluator.
     bool current_fn_is_macro_ = false;
+    /// P1: true si la fn actual es una comptime fn ruteada a la ComptimeVM (NO
+    /// un @Macro).  Se ejecuta SIEMPRE en la VM, asi que sus locales runtime NO
+    /// deben registrarse como comptime_const_locals (evita que un builtin como
+    /// comptime_concat pliegue el snapshot inicial en un loop de acumulacion).
+    bool current_fn_is_vm_comptime_fn_ = false;
     /// @NoExcept/@NoExceptions: la funcion actual no admite excepciones.
     /// check_stmt rechaza throw/try/catch cuando es true.
     bool current_fn_is_noexcept_ = false;
@@ -1954,6 +2363,15 @@ class TypeChecker {
                                ///< lambda.
     };
     std::vector<LambdaCtx> lambda_stack_;
+    /// Inferencia del tipo de retorno de un lambda block-body SIN tipo
+    /// declarado ni contexto (p.ej. el lambda que emite un @Macro).  Mientras
+    /// @c infer_lambda_void_return_ es true, un `return <valor>` en un cuerpo
+    /// declarado VOID NO es error: su tipo se captura en
+    /// @c inferred_lambda_return_type_ (el PRIMER return con valor manda) y se
+    /// usa como tipo de retorno del lambda.  Se salva/restaura por nivel para
+    /// soportar lambdas anidados.
+    bool infer_lambda_void_return_ = false;
+    Type inferred_lambda_return_type_{PrimitiveKind::VOID};
 };
 
 } // namespace vx

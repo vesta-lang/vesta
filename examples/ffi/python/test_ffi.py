@@ -3,7 +3,7 @@
 test_ffi.py -- ejemplo de consumo de libvesta desde Python via ctypes.
 
 Carga la libreria compartida (vesta.dll / libvesta.so), declara las firmas
-de la API C, y ejecuta snippets Vex verificando su valor de retorno.
+de la API C, y ejecuta snippets Vesta-lang verificando su valor de retorno.
 
 Uso:
     python test_ffi.py [ruta_a_la_libreria]
@@ -147,14 +147,14 @@ def _call_text(lib, fn, *args):
 
 
 def compile_to_ir(lib, src, unit):
-    """Vex -> texto del IR SSA."""
+    """Vesta-lang -> texto del IR SSA."""
     return _call_text(
         lib, lib.vesta_compile_to_ir, src.encode("utf-8"), unit.encode("utf-8")
     )
 
 
 def diagram(lib, src, unit, kind, fmt):
-    """Vex -> diagrama del pipeline (mermaid|graphviz|html)."""
+    """Vesta-lang -> diagrama del pipeline (mermaid|graphviz|html)."""
     return _call_text(
         lib,
         lib.vesta_diagram,
@@ -189,7 +189,7 @@ def vsh_eval(lib, script: str) -> int:
 
 
 def vesta_eval(lib: ctypes.CDLL, src: str, unit: str) -> int:
-    """Compila + ejecuta una fuente Vex; devuelve el valor de retorno (R0)."""
+    """Compila + ejecuta una fuente Vesta-lang; devuelve el valor de retorno (R0)."""
     out_exit = ctypes.c_int(0)
     out_err = ctypes.c_char_p()
     rc = lib.vesta_eval(

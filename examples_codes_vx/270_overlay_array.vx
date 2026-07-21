@@ -1,0 +1,60 @@
+// -----------------------------------------------------------------------------
+// Overlay structs (F3b): ARRAYS con stride -- tablas (secciones PE, phdrs ELF)
+// -----------------------------------------------------------------------------
+// Un campo de overlay puede ser un ARRAY de elementos espaciados por un STRIDE:
+//
+//   T Name[count] @offset(pos) stride(s);
+//
+//   * pos    = offset (relativo a base) de la primera entrada (const o hermano).
+//   * stride = bytes ENTRE elementos (const o hermano -> stride RUNTIME).
+//   * count  = numero de entradas (para bounds; puede ser un hermano).
+//
+// `v.Name[i]` resuelve a `base + pos + i*stride` (escala por el STRIDE, no por
+// sizeof).  Sirve para leer Y escribir.  El stride RUNTIME (leido de un campo)
+// es justo lo que necesitan las tablas de formatos binarios: la tabla de
+// secciones de un PE, los program headers de un ELF (stride = e_phentsize).
+//
+// Funciona en interprete, JIT y AOT.
+
+// Tabla con stride CONSTANTE (entradas de 8 bytes desde 0x10).
+@overlay struct Fija {
+    u32 count       @0x00;
+    u32 vals[count] @offset(0x10) stride(8);   // vals[i] en 0x10 + i*8
+}
+
+// Tabla estilo ELF: offset y stride LEIDOS de campos (runtime).
+@overlay struct ELFish {
+    u32 tab_off       @0x00;   // offset de la tabla
+    u32 ent_size      @0x04;   // stride RUNTIME (bytes por entrada)
+    u32 n             @0x08;
+    u32 entry[n] @offset(tab_off) stride(ent_size);
+}
+
+i32 main() {
+    // --- stride constante ---
+    u8* a = (u8*) malloc(128);
+    Fija f = Fija(a);
+    f.count = (u32)3;
+    f.vals[0] = (u32)10;   // 0x10
+    f.vals[1] = (u32)20;   // 0x18
+    f.vals[2] = (u32)30;   // 0x20
+    u32 sf = f.vals[0] + f.vals[1] + f.vals[2];
+    println("fija: ${f.vals[0]} ${f.vals[1]} ${f.vals[2]}  raw@0x18=${*(u32*)(a + 0x18)}");
+
+    // --- stride runtime (leido de ent_size) ---
+    u8* b = (u8*) malloc(256);
+    ELFish e = ELFish(b);
+    e.tab_off  = (u32)0x20;
+    e.ent_size = (u32)12;   // stride runtime
+    e.n        = (u32)3;
+    e.entry[0] = (u32)100;  // 0x20
+    e.entry[1] = (u32)200;  // 0x2C
+    e.entry[2] = (u32)300;  // 0x38
+    u32 se = e.entry[0] + e.entry[1] + e.entry[2];
+    println("elf : ${e.entry[0]} ${e.entry[1]} ${e.entry[2]}  raw@0x2C=${*(u32*)(b + 0x2C)}");
+
+    free(a);
+    free(b);
+    // sf=60, se=600 -> 660
+    return (i32)(sf + se);
+}

@@ -13,7 +13,7 @@
  *        @c TypeChecker::type_is_c_representable / @c type_is_managed.
  *
  * A diferencia de @c test_type_classify (clasificador puro con layouts
- * sinteticos), aqui se corre el TypeChecker REAL sobre un programa Vex y se
+ * sinteticos), aqui se corre el TypeChecker REAL sobre un programa  y se
  * verifican (a) los flags cacheados @c cat_* y (b) los metodos query.
  */
 

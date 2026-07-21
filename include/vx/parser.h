@@ -69,6 +69,16 @@ void set_aot_condcomp_target(const std::string &os,
 /// modo parsearian las variantes @Target contra el host (HALLAZGO-2).
 void get_aot_condcomp_target(std::string &os, std::string &arch) noexcept;
 
+/// Evalua una expresion de @c @Target (os/arch/cpu/mode/compiler/vm con
+/// &&/||/! y parentesis) contra el target activo.
+///
+/// Expuesta porque el `when:` de un contrato usa la MISMA gramatica, y el que
+/// habla del parametro de tipo lo resuelve el type checker al monomorphizar
+/// (donde T es concreto), no el parser.  Una expresion mixta
+/// (`arch:x86_64 && is_float<T>()`) se evalua alli, apoyandose en esta para sus
+/// atomos de target -- un solo evaluador de target para todo el compilador.
+bool target_expr_matches(const std::string &spec) noexcept;
+
 /**
  * @class Parser
  * @brief Construye un AST a partir de los tokens producidos por @c Lexer.
@@ -89,13 +99,32 @@ class Parser {
     Parser(Lexer &lex, Diagnostics &diags);
 
     /**
-     * @brief Phase M.L8: registra un alias de tipo conocido (typedef
+     * @brief  M.L8: registra un alias de tipo conocido (typedef
      * importado de otro modulo via @c .vxi) ANTES de parsear.  El
      * @c looks_like_cast lo usa para reconocer @c (Name)expr como un
      * cast.  Idempotente: insertar el mismo nombre dos veces es no-op.
      */
     void add_known_alias(const std::string &name) {
         declared_aliases_.insert(name);
+    }
+
+    /**
+     * @brief Siembra las posiciones de params @c expr de funciones IMPORTADAS
+     * de otros modulos, ANTES de parsear.
+     *
+     * Cross-module expr-capture: el raw-text slicing de un arg @c expr es una
+     * decision de PARSEO (el arg puede no ser una expresion valida, p.ej. un
+     * bloque @c asm).  Para una fn importada (`source(expr code)` de otro
+     * modulo) el parser no conoceria su firma a tiempo.  El @c ModuleGraph
+     * resuelve los imports ANTES de parsear el cuerpo (reusando el AST ya
+     * parseado del dep -- sin re-parseo) y siembra aqui `nombre -> posiciones`.
+     * No sobreescribe las fns declaradas en ESTE fichero (esas se registran
+     * durante el parseo).  Idempotente.
+     */
+    void seed_imported_expr_params(
+        const std::unordered_map<std::string, std::vector<int>> &m) {
+        for (const auto &kv : m)
+            macro_expr_params_.emplace(kv.first, kv.second);
     }
 
     /**
@@ -189,6 +218,34 @@ class Parser {
      */
     void error_at(const Token &tok, const char *msg);
 
+    /**
+     * @brief True si @p k puede usarse como NOMBRE (de funcion, variable,
+     *        parametro, campo, metodo, alias...).
+     *
+     * Es IDENTIFIER, o uno de los keywords CONTEXTUALES del lenguaje.
+     * `get` y `set` solo son palabras clave dentro del cuerpo de una
+     * clase y unicamente en la forma de property (`get n => e;` /
+     * `set n(T v) {...}`); en cualquier otra posicion son nombres
+     * corrientes (`HashMap.get`, `V get(K k)`, `u64 get(i64 x)`).
+     */
+    static bool is_name_token(TokenKind k) noexcept;
+
+    /**
+     * @brief Reporta "se esperaba un nombre" con un mensaje ESPECIFICO
+     *        cuando el token actual es una palabra reservada.
+     *
+     * Sin esto el usuario recibia un generico ("se esperaba un nombre
+     * tras el tipo") que no decia el motivo real ni apuntaba al termino
+     * culpable, y ademas arrastraba una cascada de errores derivados.
+     *
+     * @param what        Que se esperaba, para el mensaje especifico
+     *                    (p.ej. "nombre de funcion o variable global").
+     * @param generic_msg Mensaje a emitir si el token NO es una palabra
+     *                    reservada (se preserva el texto historico de
+     *                    cada sitio para no cambiar diagnosticos ajenos).
+     */
+    void error_expected_name(const char *what, const char *generic_msg);
+
     // -----------------------------------------------------------------
     // Reglas gramaticales: top-level y declaraciones.
     // -----------------------------------------------------------------
@@ -219,7 +276,7 @@ class Parser {
     /// @brief Parsea @c import "path" [as alias] [only A, B];
     /// @param is_public_reexport @c true si vino precedido de @c public.
     std::unique_ptr<ast::ImportDecl> parse_import_decl(bool is_public_reexport);
-    /// @brief Parsea @c "namespace foo { decls }" (Phase M.7.c).
+    /// @brief Parsea @c "namespace foo { decls }" ( M.7.c).
     std::unique_ptr<ast::NamespaceDecl> parse_namespace_decl();
     /// #cross-module-generics: captura el texto fuente de una plantilla/concepto
     /// (top-level o dentro de un namespace) en @c generic_template_exports.
@@ -232,10 +289,11 @@ class Parser {
     std::unique_ptr<ast::BytesDecl> parse_bytes_decl();
     /// @c asm name { <nasm 16/32/64> }  (codigo ensamblado por Keystone, AOT).
     std::unique_ptr<ast::BytesDecl> parse_asm_block_decl();
-    std::unique_ptr<ast::StructDecl> parse_struct_decl();
+    std::unique_ptr<ast::StructDecl> parse_struct_decl(bool is_overlay = false);
     /// `typedef struct {...} Name;` o
     /// `typedef enum {...} Name;`.  Devuelve StructDecl o EnumDecl.
-    std::unique_ptr<ast::Node> parse_typedef_struct_or_enum();
+    std::unique_ptr<ast::Node> parse_typedef_struct_or_enum(
+        bool leading_typedef = true);
     std::unique_ptr<ast::ClassDecl> parse_class_decl();
     std::unique_ptr<ast::ClassDecl> parse_interface_decl();
 
@@ -347,7 +405,8 @@ class Parser {
 
     std::unique_ptr<ast::BlockStmt> parse_block();
     std::unique_ptr<ast::Stmt> parse_statement();
-    std::unique_ptr<ast::Stmt> parse_var_decl_stmt(bool is_const);
+    std::unique_ptr<ast::Stmt> parse_var_decl_stmt(bool is_const,
+                                                   bool from_comptime = false);
     std::unique_ptr<ast::Stmt> parse_if_stmt();
     std::unique_ptr<ast::Stmt> parse_while_stmt();
     std::unique_ptr<ast::Stmt> parse_do_while_stmt();
@@ -357,7 +416,7 @@ class Parser {
     std::unique_ptr<ast::Stmt> parse_throw_stmt();
     std::unique_ptr<ast::Stmt> parse_synchronized_stmt();
     std::unique_ptr<ast::Stmt>
-    parse_asm_stmt(); ///< Phase AS: asm [quals] { ... } clobbers(...)
+    parse_asm_stmt(); ///<  AS: asm [quals] { ... } clobbers(...)
     std::unique_ptr<ast::Stmt> parse_expr_stmt();
 
     // -----------------------------------------------------------------
@@ -406,11 +465,23 @@ class Parser {
 
     /**
      * @brief Decide si el token actual abre un tipo primitivo (i32, ...).
+     *
+     * Para tipos escritos como IDENTIFIER (`Punto`, `Cls<T>`) el criterio
+     * incluye un lookahead: tras el tipo debe venir un NOMBRE.  Sin ese
+     * lookahead no se podria distinguir `a * b;` (expresion) de
+     * `Punto* p;` (declaracion).
+     *
+     * @param allow_reserved_name Si true, acepta ademas una palabra
+     *        reservada en la posicion del nombre.  Solo debe usarse donde
+     *        NO exista ambiguedad con expresiones (top-level), y sirve
+     *        para que el error se reporte sobre el nombre culpable en vez
+     *        de degenerar en "se esperaba un tipo" al inicio de la linea.
      */
-    [[nodiscard]] bool starts_type() const noexcept;
+    [[nodiscard]] bool starts_type(bool allow_reserved_name = false)
+        const noexcept;
 
     /**
-     * @brief Phase AS inc.2: decide si el statement actual es un var-decl
+     * @brief  AS inc.2: decide si el statement actual es un var-decl
      *        con storage-class @c register("reg").
      *
      * Reconoce el patron EXACTO @c register @c ( @c "reg" @c ) seguido de
@@ -434,6 +505,14 @@ class Parser {
      */
     [[nodiscard]] bool looks_like_cast() const noexcept;
 
+    /**
+     * @brief Detecta un compound literal C99: `(Tipo){...}` o
+     *        `(Tipo<args>){...}`.  Precondicion: @c current_ es '('.  Es
+     *        inequivoco (un `(expr){` no tiene otro significado), asi que
+     *        acepta un nombre de tipo aunque @c looks_like_cast lo rechace.
+     */
+    [[nodiscard]] bool looks_like_compound_literal() const noexcept;
+
     Lexer &lex_;
     Diagnostics &diags_;
     Token current_;
@@ -447,10 +526,100 @@ class Parser {
     /// en @c parse_postfix al construir un @c CallExpr para hacer
     /// raw-text capture en las posiciones marcadas.
     ///
-    /// Limitacion Phase A: el @Macro debe estar declarado ANTES de su
+    /// Limitacion  A: el @Macro debe estar declarado ANTES de su
     /// llamada en el archivo (single-pass parser). Forward refs requieren
-    /// un pre-scanner (Phase B futura).
+    /// un pre-scanner ( B futura).
     std::unordered_map<std::string, std::vector<int>> macro_expr_params_;
+
+    /**
+     * @struct MemberContracts
+     * @brief Contratos de huella declarados sobre un metodo de struct/clase.
+     *
+     * Los mismos que admite una funcion libre.  Se recogen antes del miembro y
+     * se vuelcan sobre el @c ClassMethodDecl cuando resulta ser un metodo; si
+     * el miembro era un campo, se ignoran con un error claro (un campo no tiene
+     * huella que declarar).
+     */
+    struct MemberContracts {
+        bool pure = false;
+        bool nothrow_ = false;
+        bool nopanic = false;
+        int64_t alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
+        int64_t alloc_partial = -1; ///< @alloc(partial: N).
+        int64_t stack = -1;         ///< @stack(total: N) o `@stack(N)`.
+        int64_t stack_partial = -1; ///< @stack(partial: N).
+        std::string complexity_expr;
+        std::vector<std::string> complexity_vars;
+        std::string partial_pre, partial_post, total_pre, total_post;
+        /// Los @complexity cuyo `when:` habla del parametro de tipo: se
+        /// resuelven al monomorphizar, no aqui.  Ver @ref ast::PendingComplexity.
+        std::vector<ast::PendingComplexity> pending;
+        /// Contratos de HUELLA con `when:`, sin resolver.
+        std::vector<ast::PendingFootprint> footprint_pending;
+        bool any = false; ///< true si se declaro alguno (para el diagnostico).
+    };
+
+    /// @brief Parsea los argumentos de `@complexity(...)`.
+    ///
+    /// Compartido entre las anotaciones top-level y las de un metodo: es el
+    /// mismo contrato sobre lo mismo.  Se entra con `complexity` ya consumido
+    /// (el siguiente token debe ser `(`) y se sale tras el `)` de cierre.
+    /// Las dimensiones se parsean SIEMPRE; quien decide que hacer con ellas es
+    /// el caller, porque un contrato no se puede resolver mirandolo solo a el:
+    /// varios `when:` pueden casar a la vez y hay que compararlos por
+    /// especificidad (ver `contract_when.h`).
+    /// @param out_when  el texto del `when:` tal cual (vacio si no lo lleva).
+    /// @param out_aplica false si el `when:` habla SOLO del target y NO casa:
+    ///        el contrato no es de esta compilacion y el caller lo tira.  Los
+    ///        que hablan del parametro de tipo salen con true y sin evaluar --
+    ///        el que puede es el clon de la monomorphizacion, con T concreto.
+    void parse_complexity_args_(std::string &expr, std::vector<std::string> &vars,
+                                std::string &partial_pre,
+                                std::string &partial_post, std::string &total_pre,
+                                std::string &total_post,
+                                std::string *out_when = nullptr,
+                                bool *out_aplica = nullptr);
+
+    /// @brief Lee `when: <expr>` de un contrato de huella y devuelve el texto
+    ///        raw de la expresion (sin comillas, como en @complexity).
+    ///
+    /// Se entra con @c current_ en el identificador `when`.  Captura hasta --sin
+    /// consumir-- el `)` de nivel 0, respetando los parentesis de un predicado
+    /// (`is_float<T>()`).  Devuelve "" y reporta si esta mal formado.
+    std::string read_footprint_when_();
+
+    /// @brief Dimensiones parseadas de un `@alloc`/`@stack`.
+    ///
+    /// La forma corta `@alloc(N)` fija @c total (el peor caso que importa desde
+    /// fuera); la nombrada `@alloc(partial: N, total: M)` fija lo que liste.
+    /// -1 = esa dimension no se declaro.  @c when vacio = sin `when:`.
+    struct FootprintDims {
+        int64_t partial = -1;
+        int64_t total = -1;
+        std::string when;
+    };
+
+    /// @brief Parsea el contenido de `@alloc(...)`/`@stack(...)` TRAS consumir el
+    ///        `(` y hasta --sin consumir-- el `)`.  Acepta la forma corta
+    ///        (un entero -> total) y la nombrada (`partial:`/`total:`), con un
+    ///        `when:` opcional al final.  @p nm es "alloc"/"stack" (mensajes).
+    FootprintDims parse_footprint_dims_(const std::string &nm);
+
+    /// @brief Consume las anotaciones de contrato que preceden a un miembro.
+    /// @param out se rellena con lo declarado; @c out.any dice si habia alguna.
+    void parse_member_contracts_(MemberContracts &out);
+
+    /// @brief Vuelca @p mc sobre un metodo ya parseado.
+    void apply_member_contracts_(const MemberContracts &mc,
+                                 ast::ClassMethodDecl &m);
+
+    /// @brief Suprime el postfijo `{}` (sobrecarga de `__braces__`) mientras se
+    ///        parsea una expresion a la que SIGUE un bloque del lenguaje.
+    ///
+    /// El unico sitio donde una expresion no va parentizada y lleva un `{`
+    /// pegado es el scrutinee del `match` (`match s { case ... }`, estilo Rust).
+    /// Ahi el `{` abre el cuerpo del match, no una llamada.
+    bool no_braces_call_ = false;
 
     /// Set de identifiers declarados como typedef / using en el archivo
     /// (alias de tipos).  Poblado por @c parse_typedef_decl /
@@ -460,8 +629,70 @@ class Parser {
     /// single-pass: el typedef debe declararse ANTES del uso (igual
     /// que cualquier forward decl en C/Vesta).
     std::unordered_set<std::string> declared_aliases_;
+    /// Nombres de los parametros `expr` de la funcion cuyo CUERPO se esta
+    /// parseando ahora mismo.  Sirve para el forwarding de expr-capture anidado:
+    /// si el argumento de una llamada a otra fn expr-capture es exactamente uno
+    /// de estos nombres (`return src(code);` donde `code` es un `expr` param del
+    /// macro), NO se re-captura el identificador como texto ("code") sino que se
+    /// emite un IdentExpr que en AST-eval resuelve al texto ya capturado.
+    std::unordered_set<std::string> current_expr_param_names_;
 
-    /// Phase M.L24: flag indicando si la ultima invocacion de
+    /// Aliases extra producidos por un typedef C-style multi-declarador
+    /// (`typedef LONG *PLONG, *LPLONG;` o `typedef struct {...} FOO, *PFOO;`).
+    /// parse_typedef_* solo devuelve el PRIMER declarador; los siguientes se
+    /// encolan aqui y @c parse_program / @c parse_namespace_decl los drenan al
+    /// nivel del modulo.  Reusa el patron de @c parse_extern_block (N decls).
+    std::vector<std::unique_ptr<ast::Node>> pending_extra_decls_;
+
+    /// Structs/uniones ANONIMOS sintetizados dentro del cuerpo de otro struct
+    /// (`struct { ... } campo;` o miembro anonimo C11 `union { ... };`).  Se
+    /// emiten como decls top-level ANTES del struct contenedor (que los
+    /// referencia por su nombre sintetico), asi que se drenan ANTES del decl
+    /// actual en parse_program / parse_namespace_decl.
+    std::vector<std::unique_ptr<ast::Node>> pending_before_decls_;
+    /// Contador para nombres sinteticos de agregados anonimos.
+    int anon_aggr_counter_ = 0;
+
+    /// Parsea la cola de declaradores C-style tras el primer alias:
+    /// mientras haya `,`, consume `[*]* NOMBRE` y encola un TypeAliasDecl
+    /// (base clonado + N punteros) en @c pending_extra_decls_.  @c base es el
+    /// tipo especificador SIN los punteros del primer declarador.
+    void parse_c_typedef_ptr_aliases_(const ast::TypeNode *base);
+
+    /// Consume un sufijo de array C-style `[N][M]...` (uni o multidimensional,
+    /// dimension opcional para `[]`) tras el nombre de un campo/variable y
+    /// envuelve @c base en @c ArrayTypeNode anidados.  `T[N][M]` = array de N de
+    /// (array de M de T): el primer `[` es el mas externo.  Devuelve @c base sin
+    /// cambios si no hay `[`.
+    std::unique_ptr<ast::TypeNode>
+    wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base);
+
+    /// Parsea un agregado ANONIMO inline (`struct { ... }` / `union { ... }`,
+    /// tag opcional) dentro del cuerpo de otro struct.  Devuelve un StructDecl
+    /// con nombre SINTETICO (`__anon<N>`) que el caller encola en
+    /// @c pending_before_decls_ y referencia como tipo del campo.  Precondicion:
+    /// current_ es 'struct'/'union' y el siguiente token (tras un tag opcional)
+    /// es '{'.
+    std::unique_ptr<ast::StructDecl> parse_inline_anon_aggregate_();
+
+    /// Declarador de PUNTERO A FUNCION estilo C: `R (*name)(params)`.  Tras
+    /// parsear el tipo de retorno @c ret, si en la posicion actual hay
+    /// `( * IDENT ) ( params )`, lo parsea: devuelve true, escribe el nombre en
+    /// @c out_name y un @c FunctionTypeNode (is_raw = cfn, 8 bytes) en
+    /// @c out_type.  Si no coincide el patron, devuelve false sin consumir.
+    /// Cubre campos/typedefs/params/vars de headers C (`int (*cb)(void*)`).
+    bool try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
+                               std::string &out_name,
+                               std::unique_ptr<ast::TypeNode> &out_type);
+
+    /// Nombres de @c struct declarados (single-pass, antes de su uso).  Lo
+    /// consulta @c looks_like_compound_literal para distinguir un compound
+    /// literal `(Struct){...}` de un scrutinee de control de flujo como
+    /// `match (val) {` -- solo se trata como compound literal si el nombre es
+    /// un struct conocido.
+    std::unordered_set<std::string> declared_structs_;
+
+    ///  M.L24: flag indicando si la ultima invocacion de
     /// @c parse_top_level_decl skipeo la decl por @c @Target no
     /// matcheado.  @c parse_program lo consulta para evitar
     /// llamar a @c synchronize() (que descartaria tokens validos
@@ -472,7 +703,7 @@ class Parser {
     /// ModuleNode::no_exceptions -> todas las funciones lo heredan.
     bool module_no_exceptions_ = false;
 
-    /// Phase M6.a L.3: visibilidad pendiente capturada en
+    ///  M6.a L.3: visibilidad pendiente capturada en
     /// @c parse_top_level_decl.  Los sub-parsers que produzcan un
     /// nodo top-level llaman @c apply_pending_visibility_ al final
     /// antes de devolver el nodo.  Valores: 0 = sin keyword (mantener
@@ -488,7 +719,7 @@ class Parser {
     /// No-op si @c pending_visibility_ == 0.
     void apply_pending_visibility(ast::Node *n) noexcept;
 
-    /// Phase M.L24: descarta una decl top-level cuya @Target no matcheo.
+    ///  M.L24: descarta una decl top-level cuya @Target no matcheo.
     /// Consume tokens hasta el final natural de la decl ({ ... } o ;).
     void skip_target_skipped_decl();
 };

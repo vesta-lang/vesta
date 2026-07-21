@@ -36,7 +36,7 @@ i32 main() {
     string s1 = "hola mundo gc-protected";
     vcol_alist_push_gc(proc, al, s1);
 
-    // Forzar GC manual: en Vex hoy no hay builtin gcrun directo,
+    // Forzar GC manual: en  hoy no hay builtin gcrun directo,
     // pero por construccion: la string s1 sigue viva en `s1` local
     // ademas del array.  Validar que el get devuelve el mismo handle.
     i64 h_back = vcol_alist_get(al, 0);

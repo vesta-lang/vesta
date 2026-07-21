@@ -12,9 +12,9 @@
 // Mide: STRMAKE + STRCAT + STRLEN + STRCMP + segundo STRMAKE+STRCAT.
 //
 // Para 1M iter expected R0 = 11023671 = 0xa83537.
-// C/C++/Java/Python/Vex INTERP todos producen el mismo valor.
+// C/C++/Java/Python/ INTERP todos producen el mismo valor.
 //
-// NOTA: Vex JIT actualmente produce R0 ligeramente diferente (~0.01%
+// NOTA:  JIT actualmente produce R0 ligeramente diferente (~0.01%
 // error) debido a un bug latente con strings post-GC.  En investigacion
 // como sprint string-perf-3.  El bench sigue valido para medir INTERP
 // vs C/C++/Java/Python en string ops puros.
@@ -55,7 +55,7 @@ i32 main() {
         }
 
         // OP5: substring (a[0:3]).
-        // Vex API: str_make sobre el mismo buf con menor longitud.
+        //  API: str_make sobre el mismo buf con menor longitud.
         u8[16] bufS;
         bufS[0] = bufA[0];
         bufS[1] = bufA[1];

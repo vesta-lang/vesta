@@ -18,10 +18,18 @@
 #include "vx/lowering.h"
 #include <algorithm> // UCRT64: no transitivo
 #include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
-#include "vx/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
-#include "vx/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
+#include "vx/asm/asm_effects.h" // inferencia de clobbers ( AS inc.4)
+#include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
+#include "vx/asm/asm_lift_emit.h"  // lift de patrones atomicos a IR tipado (ASA.3)
+#include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
+#include "vx/asm/asm_lift_micro.h"
+#include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
+#include "vx/asm/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
+#include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vx/collection_intrinsics.h" // tabla de tipos coleccion
-#include "vx/comptime_introspect.h"   // helpers compartidos rama A
+#include "vx/comptime/comptime_introspect.h"   // helpers compartidos rama A
+#include "vx/generics/concepts.h"                  // conceptos como predicado -> CONST bool
+#include "vx/generics/generic_clone.h"             // clone_expr (custom print to_string)
 #include "vx/lexer.h"                 // parse de fragments para @Macro
 #include "vx/parser.h"                // parse_one_expr para @Macro
 #include "ir/ir_optimizer.h"           // register_pure_new_helper
@@ -64,7 +72,7 @@ inline uint64_t ir_type_size(::ir::IrType t) noexcept {
 namespace vx {
 
 // =====================================================================
-//  Mini-ensamblador de bloques `asm` (Phase AOT 16/32-bit).
+//  Mini-ensamblador de bloques `asm` ( AOT 16/32-bit).
 //
 //  Keystone (KS_OPT_SYNTAX_NASM) ensambla instrucciones + labels intra-
 //  bloque + `db`, PERO no soporta `$`/`$$`/`times`.  Para permitir mezclar
@@ -490,9 +498,9 @@ bool asmblk_assemble(
     const std::string &body, uint8_t bits, std::vector<uint8_t> &out,
     std::string &err,
     std::vector<ir::IrModule::StaticDataMeta::SymRef> *sym_refs = nullptr) {
-    vx::AsmArch arch = bits == 16   ? vx::AsmArch::X86_16
-                        : bits == 32 ? vx::AsmArch::X86_32
-                                     : vx::AsmArch::X86_64;
+    // El arch lo decide el TARGET (una variante @Target("arch:arm64") ensambla
+    // en ARM aunque el build corra en x86); los bits solo mandan en x86.
+    vx::AsmArch arch = vx::asm_arch_for_target(bits);
     /* Pre-pase: recolectar los labels LOCALes (def `ident:`) para no
      * confundirlos con simbolos externos en call/jmp. */
     std::set<std::string> local_labels;
@@ -854,7 +862,34 @@ ir::IrType Lowering::ir_type_from_primitive(PrimitiveKind p) noexcept {
 // elemento dimensionable (entonces no se le reserva storage estatico).
 // Habilita buffers estaticos globales (p.ej. heap de un allocator bump en
 // codigo bare-metal): @c u8[4096] g_heap; -> slot de 4096 bytes en .data.
-static uint64_t vx_global_array_bytes(const ast::TypeNode *tn) {
+/**
+ * @brief Bits IEEE de @p d listos para grabarse en el slot de un global float.
+ *
+ * El ancho lo manda el TIPO DECLARADO, no el literal: los literales de coma
+ * flotante se parsean como @c double, pero el slot de un @c f32 guarda un
+ * binary32 y su LOAD lee 4 bytes.  Grabar ahi los bits de un double deja en
+ * esos 4 bytes el resto de la mantisa (para 0.5 son ceros -> el global valia
+ * 0).  El resultado va en los bytes bajos del qword del slot.
+ *
+ * @param d      Valor del literal (ya parseado como double).
+ * @param is_f32 true si el global se declaro @c f32; false si @c f64.
+ * @return Patron de bits a grabar en el slot.
+ */
+static uint64_t float_bits_for_global(double d, bool is_f32) {
+    uint64_t bits = 0;
+    if (is_f32) {
+        const float f = static_cast<float>(d);
+        uint32_t u32 = 0;
+        std::memcpy(&u32, &f, sizeof(u32));
+        bits = u32;
+    } else {
+        std::memcpy(&bits, &d, sizeof(d));
+    }
+    return bits;
+}
+
+static uint64_t vx_global_array_bytes(const ast::TypeNode *tn,
+                                      const TypeChecker &tc) {
     if (!tn || tn->kind != ast::NodeKind::ArrayTypeNode) return 0;
     auto *at = static_cast<const ast::ArrayTypeNode *>(tn);
     if (!at->element_type || !at->size_expr) return 0; // T[] decay = sin storage
@@ -868,6 +903,22 @@ static uint64_t vx_global_array_bytes(const ast::TypeNode *tn) {
                 ->prim);
     else if (at->element_type->kind == ast::NodeKind::PointerTypeNode)
         esz = 8;
+    else if (at->element_type->kind == ast::NodeKind::NamedTypeNode) {
+        // Elemento newtype (typedef-new, p.ej. `uintptr[256]`): tamano del
+        // primitivo subyacente (accesor const del type checker).
+        const auto *nt =
+            static_cast<const ast::NamedTypeNode *>(at->element_type.get());
+        if (const Type *u = tc.newtype_underlying(nt->name))
+            esz = primitive_size_bytes(u->kind);
+        else {
+            // Elemento `@overlay struct` (p.ej. `Foo[4] g_hs;`): el valor de
+            // una vista ES un puntero de 8 bytes -> el array guarda N punteros.
+            // Sin esto esz=0 y el global se quedaba SIN storage estatico.
+            auto sit = tc.struct_layouts().find(nt->name);
+            if (sit != tc.struct_layouts().end() && sit->second.is_overlay)
+                esz = 8;
+        }
+    }
     if (esz == 0 || count == 0) return 0;
     return count * esz;
 }
@@ -912,6 +963,89 @@ void Lowering::compute_type_intervals() {
         return hi;
     };
     for (const std::string &r : roots) dfs(r);
+}
+
+// Forward-decl del chequeo de lowereabilidad de macros (definido mas abajo) +
+// definicion del contexto force-lower, para que el pre-pase de run() los use.
+static std::string macro_body_unsupported_reason(const TypeChecker &tc,
+                                                 const ast::Stmt *s);
+static thread_local std::unordered_set<std::string> *g_macro_force_lower =
+    nullptr;
+static thread_local std::unordered_set<std::string> *g_macro_visiting = nullptr;
+
+void Lowering::register_fn_ret_info(const std::string &name, PrimitiveKind kind,
+                                    const std::string &enum_struct_name,
+                                    bool is_async) {
+    ir::IrType rt = (kind == PrimitiveKind::VOID || kind == PrimitiveKind::COUNT)
+                        ? ir::IrType::VOID
+                        : ir_type_from_primitive(kind);
+
+    // Enum de usuario: se modela como STRUCT cuyo struct_name esta en
+    // enum_layouts_.  Es SRET (retbuf del tamano del layout).
+    bool is_user_enum = false;
+    if (kind == PrimitiveKind::STRUCT && !enum_struct_name.empty()) {
+        const auto &elays = tc_.enum_layouts();
+        is_user_enum = (elays.find(enum_struct_name) != elays.end());
+    }
+    // (gap O): funciones que devuelven FUNCTION.  Mismo patron que los
+    // enums: el tipo IR pasa a VOID y el caller pasa un retbuf hidden de
+    // 16 bytes (slot del function value).
+    const bool is_function_ret = (kind == PrimitiveKind::FUNCTION);
+    if (is_function_ret) fn_returns_function_.insert(name);
+    // Smart pointers: SRET para `unique<T>` / `shared<T>`.  Sin esto,
+    // devolver un smart pointer seria inseguro (su slot vive en el stack
+    // del callee y muere al RET).  Con SRET el caller aloca el slot y el
+    // callee copia los bytes ahi.
+    const bool is_smartptr_ret = (kind == PrimitiveKind::UNIQUE_PTR ||
+                                  kind == PrimitiveKind::SHARED_PTR);
+    if (is_smartptr_ret) fn_returns_smartptr_.insert(name);
+    // Vesta Embed (native_poo_): `string` es value-type de 24 bytes ->
+    // retorno por valor via SRET (igual que un struct).  Solo en native;
+    // en Full/JIT `string` es un handle i64.
+    const bool is_str_value_ret = (native_poo_ && kind == PrimitiveKind::STRING);
+    if (is_str_value_ret) fn_returns_str_value_.insert(name);
+    // STRUCT por valor: MISMO motivo que el smart pointer de arriba -- el
+    // buffer del struct vive en el frame del callee y muere al RET.  Era el
+    // unico agregado sin SRET: devolvia el puntero a esa memoria muerta y
+    // funcionaba solo si el caller la copiaba antes de tocar la pila.
+    // Los enums (STRUCT con enum_layout) ya salen por `is_user_enum`, y un
+    // `@overlay struct` es un puntero de 8 bytes -> por registro, correcto.
+    bool is_struct_ret = false;
+    if (kind == PrimitiveKind::STRUCT && !is_user_enum &&
+        !enum_struct_name.empty()) {
+        const auto &slays = tc_.struct_layouts();
+        auto it_s = slays.find(enum_struct_name);
+        if (it_s != slays.end() && !it_s->second.is_overlay) {
+            is_struct_ret = true;
+            fn_ret_struct_name_[name] = enum_struct_name;
+        }
+    }
+
+    // sret: estas funciones tienen ret_type IR = VOID y un retbuf hidden
+    // como primer param.  Sin este ajuste, fn_return_types_ apuntaria a PTR
+    // y los callers crearian un dst SSA "huerfano" que el emisor intentaria
+    // escribir desde la salida (que no existe).
+    if (kind == PrimitiveKind::OPTIONAL || kind == PrimitiveKind::RESULT ||
+        is_user_enum || is_function_ret || is_smartptr_ret ||
+        is_str_value_ret || is_struct_ret) {
+        rt = ir::IrType::VOID;
+    }
+    // Item 9: @Async wrapper retorna i64 (Future handle), no T.  El tipo
+    // logico T se preserva como Future<T> en el sig del type checker para
+    // el `await fut`, pero el bytecode del wrapper devuelve i64 raw en R0.
+    // Sin este ajuste, el lowering del call site marca dst con tipo T (e.g.
+    // f64), emite un cast i64->f64 erroneo (FTOI cambia el valor), y await
+    // opera sobre un handle corrupto.
+    if (is_async) {
+        rt = ir::IrType::I64;
+        kind = PrimitiveKind::I64;
+    }
+
+    fn_return_types_[name] = rt;
+    fn_ret_kind_[name] = kind;
+    // Guardamos el nombre del enum para que el caller pueda buscar su
+    // size_bytes al alocar el retbuf.
+    if (is_user_enum) fn_ret_enum_name_[name] = enum_struct_name;
 }
 
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
@@ -979,7 +1113,6 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!decl) continue;
         if (decl->kind == ast::NodeKind::FunctionDecl) {
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-            ir::IrType rt = ir::IrType::VOID;
             PrimitiveKind kind = PrimitiveKind::VOID;
             if (fd->return_type &&
                 fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode &&
@@ -987,7 +1120,6 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         ->prim != PrimitiveKind::GC_PTR) {
                 auto *pt = static_cast<ast::PrimitiveTypeNode *>(
                     fd->return_type.get());
-                rt = ir_type_from_primitive(pt->prim);
                 kind = pt->prim;
             } else if (fd->return_type) {
                 // NOTA gc<T>: `gc<unique<i64>>` es un PrimitiveTypeNode(GC_PTR)
@@ -1010,82 +1142,23 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 const Type sem = tc_.resolve_type_node(fd->return_type.get());
                 if (sem.kind != PrimitiveKind::COUNT &&
                     sem.kind != PrimitiveKind::VOID) {
-                    rt = ir_type_from_primitive(sem.kind);
                     kind = sem.kind;
                 }
             }
-            // sret: las funciones que devuelven Optional/Result o un
-            // enum declarado tienen ret_type IR = VOID y un retbuf
-            // hidden como primer param.  Sin este ajuste,
-            // fn_return_types_ apuntaria a PTR y los callers crearian
-            // un dst SSA "huerfano" que el emisor intentaria escribir
-            // desde la salida (que no existe).
-            bool is_user_enum = false;
+            // El nombre del tipo cuando el retorno es STRUCT: sirve para
+            // distinguir un enum de usuario (SRET) de un struct normal.
+            std::string enum_struct_name;
             if (kind == PrimitiveKind::STRUCT && fd->return_type) {
                 const Type sem_check =
                     tc_.resolve_type_node(fd->return_type.get());
-                if (sem_check.kind == PrimitiveKind::STRUCT) {
-                    const auto &elays = tc_.enum_layouts();
-                    if (elays.find(sem_check.struct_name) != elays.end()) {
-                        is_user_enum = true;
-                    }
-                }
+                if (sem_check.kind == PrimitiveKind::STRUCT)
+                    enum_struct_name = sem_check.struct_name;
             }
-            // (gap O): detectar funciones que devuelven FUNCTION
-            // y registrarlas para SRET.  Mismo patron que enums: el
-            // tipo IR pasa a VOID y el caller pasa un retbuf hidden
-            // de 16 bytes (slot del function value).
-            bool is_function_ret = false;
-            if (kind == PrimitiveKind::FUNCTION && fd->return_type) {
-                is_function_ret = true;
-                fn_returns_function_.insert(fd->name);
-            }
-            // Smart pointers: SRET de 8 bytes para `unique<T>` o
-            // `shared<T>`.  Sin esto, devolver un smart pointer
-            // desde una funcion seria inseguro (su slot vive en el
-            // stack del callee y muere al RET).  Con SRET el caller
-            // aloca el slot y el callee copia los 8 bytes ahi.
-            bool is_smartptr_ret = false;
-            if ((kind == PrimitiveKind::UNIQUE_PTR ||
-                 kind == PrimitiveKind::SHARED_PTR) &&
-                fd->return_type) {
-                is_smartptr_ret = true;
-                fn_returns_smartptr_.insert(fd->name);
-            }
-            // Vesta Embed (native_poo_): `string` es value-type de 24
-            // bytes -> retorno por valor via SRET (igual que struct).
-            // Solo en native; en Full/JIT `string` es handle i64.
-            bool is_str_value_ret = false;
-            if (native_poo_ && kind == PrimitiveKind::STRING &&
-                fd->return_type) {
-                is_str_value_ret = true;
-                fn_returns_str_value_.insert(fd->name);
-            }
-            if (kind == PrimitiveKind::OPTIONAL ||
-                kind == PrimitiveKind::RESULT || is_user_enum ||
-                is_function_ret || is_smartptr_ret || is_str_value_ret) {
-                rt = ir::IrType::VOID;
-            }
-            // Item 9: @Async wrapper retorna i64 (Future handle), no T.
-            // El tipo logico T se preserva como Future<T> en el sig del
-            // type checker para el `await fut`, pero el bytecode del
-            // wrapper devuelve i64 raw en R0.  Sin este ajuste, el
-            // lowering del call site marca dst con tipo T (e.g. f64),
-            // emite un cast i64->f64 erroneo (FTOI cambia el value),
-            // y await opera sobre handle corrupto.
-            if (fd->is_async) {
-                rt = ir::IrType::I64;
-                kind = PrimitiveKind::I64;
-            }
-            fn_return_types_[fd->name] = rt;
-            fn_ret_kind_[fd->name] = kind;
-            if (is_user_enum) {
-                // Marcar como sret enum.  Guardamos el nombre para
-                // que el caller pueda buscar el size_bytes.
-                const Type sem_check =
-                    tc_.resolve_type_node(fd->return_type.get());
-                fn_ret_enum_name_[fd->name] = sem_check.struct_name;
-            }
+            // El registro (incluida la decision de SRET) vive en un unico
+            // helper compartido con las funciones importadas -- ver
+            // register_fn_ret_info.
+            register_fn_ret_info(fd->name, kind, enum_struct_name,
+                                 fd->is_async);
         } else if (decl->kind == ast::NodeKind::ExternFnDecl) {
             // FFI declarativo: registrar tipo de retorno y
             // mapeo nombre -> libreria nativa para que @c lower_call
@@ -1109,6 +1182,29 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             fn_return_types_[efd->name] = rt;
             extern_lib_by_fn_name_[efd->name] = efd->lib;
         }
+    }
+
+    // Pase 1b: registrar el retorno de las funciones IMPORTADAS de otro
+    // modulo.  No estan en @c mod_.decls (el modulo actual solo ve su propio
+    // AST); llegan como @c FunctionSig inyectada desde el .vxi, con su Type
+    // ya reconstruido por @c resolve_type_string.  Sin este pase el caller
+    // no sabria que una fn cross-modulo devuelve Optional/Result/enum/... y
+    // omitiria el retbuf hidden de la convencion SRET: el callee escribiria
+    // en lo que hubiera en el registro del primer argumento (el primer arg
+    // real) -> escritura a puntero basura -> SEGV.  Se usa el MISMO helper
+    // que las locales, asi que caller y callee no pueden divergir.
+    for (const auto &kv : tc_.function_sigs_by_name()) {
+        const std::string &fname = kv.first;
+        // Las locales (y las extern declaradas aqui) ya estan registradas
+        // arriba con su AST, que es la fuente mas precisa.
+        if (fn_return_types_.find(fname) != fn_return_types_.end()) continue;
+        const FunctionSig *sig = tc_.function_sig_by_name(fname);
+        if (!sig) continue;
+        // FFI nativo: convencion CALLN propia (valor en R0), nunca SRET.
+        if (!sig->extern_lib.empty()) continue;
+        register_fn_ret_info(fname, sig->return_type.kind,
+                             sig->return_type.struct_name,
+                             /*is_async=*/false);
     }
 
     // Pase 2: bajar cada funcion.
@@ -1253,9 +1349,30 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 tls_nonzero_inits_.push_back({tls_slot, init_val});
             continue;
         }
+        // Global de tipo STRUCT: reservar un slot de `size_bytes`, igual que un
+        // array.  Sin esto no habia storage y cualquier uso daba "nombre no
+        // resuelto" -- un struct simplemente no podia ser global, aunque un
+        // array de structs si.  El caso natural (un contador compartido, una
+        // config, un registro de estado) es justo una global.
+        //
+        // Un `@overlay struct` NO entra: su valor runtime es un puntero de 8
+        // bytes y lo cubre la rama de primitivos de abajo (lo trata como PTR).
+        if (gv->type && !gv->is_const && !gv->is_comptime &&
+            gv->type->kind == ast::NodeKind::NamedTypeNode) {
+            const Type gt = tc_.resolve_type_node(gv->type.get());
+            if (gt.kind == PrimitiveKind::STRUCT && !gt.struct_name.empty()) {
+                auto sit = tc_.struct_layouts().find(gt.struct_name);
+                if (sit != tc_.struct_layouts().end() &&
+                    !sit->second.is_overlay && sit->second.size_bytes > 0) {
+                    (void)get_or_create_runtime_global_slot(
+                        gv->name, (uint64_t)sit->second.size_bytes);
+                    continue;
+                }
+            }
+        }
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
         if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
-            const uint64_t ab = vx_global_array_bytes(gv->type.get());
+            const uint64_t ab = vx_global_array_bytes(gv->type.get(), tc_);
             if (ab > 0) {
                 const uint64_t slot =
                     get_or_create_runtime_global_slot(gv->name, ab);
@@ -1323,10 +1440,30 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
             continue;
         }
-        if (!gv->type || gv->type->kind != ast::NodeKind::PrimitiveTypeNode)
+        // Tipo primitivo directo O newtype (typedef-new) que resuelve a un
+        // primitivo (p.ej. `uintptr` -> u64): en ambos casos pre-creamos el
+        // slot del global para que TODAS las funciones (no solo la que lo
+        // escribe primero) resuelvan su lectura/escritura al mismo slot.
+        // Sin esto, un global de tipo std.types leido/escrito desde otra
+        // funcion daba "nombre no resuelto" o leia 0.
+        if (!gv->type ||
+            (gv->type->kind != ast::NodeKind::PrimitiveTypeNode &&
+             gv->type->kind != ast::NodeKind::NamedTypeNode))
             continue;
-        auto *pt = static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
-        switch (pt->prim) {
+        PrimitiveKind pt_prim =
+            (gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
+                ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())->prim
+                : tc_.resolve_type_node(gv->type.get()).kind;
+        // Un global de tipo overlay (`@overlay struct`) tiene como VALOR runtime
+        // un puntero al bloque host (8 bytes) -> darle slot como un PTR.
+        if (pt_prim == PrimitiveKind::STRUCT &&
+            gv->type->kind == ast::NodeKind::NamedTypeNode) {
+            Type rt = tc_.resolve_type_node(gv->type.get());
+            auto sit = tc_.struct_layouts().find(rt.struct_name);
+            if (sit != tc_.struct_layouts().end() && sit->second.is_overlay)
+                pt_prim = PrimitiveKind::PTR;
+        }
+        switch (pt_prim) {
         case PrimitiveKind::STRING:
         case PrimitiveKind::I8:
         case PrimitiveKind::I16:
@@ -1344,6 +1481,39 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             (void)get_or_create_runtime_global_slot(gv->name);
             break;
         default: break;
+        }
+    }
+    // Globals IMPORTADOS de otro modulo: mismo pre-pase.  Tiene que ser AQUI y
+    // no al primer uso, porque el prologo de `main` decide si llama a
+    // `__module_init` mirando si hay algun slot -- y un modulo que solo USA
+    // globals de sus deps no tendria ninguno todavia, asi que el init no
+    // correria y el global se leeria a cero.  Como el merge los unifica con los
+    // del dep por `shared_key`, pre-crearlos no cuesta storage.
+    for (const auto &kv : tc_.imported_global_storage())
+        (void)ensure_imported_global_slot(kv.first);
+    // Los que se usan cualificados (`lib.counter`) no estan en esa tabla: viven
+    // en el namespace importado.  Mismo criterio (kind=1 = variable/constante,
+    // sin valor inlineable, y no un string que se materializa desde su blob).
+    //
+    // OJO: la tabla de namespaces incluye tambien los DECLARADOS en este mismo
+    // modulo (`namespace app;` registra sus propios simbolos para el acceso
+    // cualificado).  Esos son locales: su storage ya lo decidio el bucle de
+    // arriba, con el tipo delante -- y hay tipos que NO llevan slot (un global
+    // de tipo funcion se resuelve como closure).  Darles uno aqui los
+    // desviaria a la ruta de global plano y romperia su uso.
+    for (auto &decl : mod_.decls) {
+        if (decl && decl->kind == ast::NodeKind::GlobalVarDecl)
+            local_global_names_.insert(
+                static_cast<ast::GlobalVarDecl *>(decl.get())->name);
+    }
+    for (const auto &ns : tc_.imported_namespaces()) {
+        for (const auto &sym : ns.symbols) {
+            if (sym.kind != 1 || sym.has_const_value ||
+                sym.mangled_label.empty())
+                continue;
+            if (sym.var_type.kind == PrimitiveKind::STRING) continue;
+            if (local_global_names_.count(sym.mangled_label) != 0) continue;
+            (void)shared_global_slot_for(sym.mangled_label, sym.var_type);
         }
     }
     // AOT (native_poo_): los campos estaticos de clase se mapean a globales
@@ -1392,6 +1562,43 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
         }
     }
+    /* PRE-PASE force-lower: determinar que comptime fns hay que bajar a runtime
+     * porque un @Macro (o comptime fn con asm) lowereable las referencia
+     * (transitivamente).  Sin esto, el `__macro_<X>` que llama a un helper
+     * comptime emitiria un `callvm code.<helper>` colgante (los comptime helpers
+     * no se bajan por defecto).  Poblamos @c comptime_fns_to_force_lower_ ANTES
+     * del lowering para que el orden de bajada de decls sea irrelevante. */
+    {
+        std::unordered_set<std::string> visiting;
+        g_macro_force_lower = &comptime_fns_to_force_lower_;
+        g_macro_visiting = &visiting;
+        for (auto &decl : mod_.decls) {
+            if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+            auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (!fd->body || fd->is_imported_comptime) continue;
+            const bool is_lowerable_comptime =
+                (fd->is_comptime && fd->is_macro) ||
+                (fd->is_comptime && !fd->is_macro &&
+                 comptime_fn_needs_vm(tc_, fd));
+            if (!is_lowerable_comptime) continue;
+            visiting.clear();
+            // Efecto colateral: recolecta los helpers lowereables.  Si el macro
+            // NO es lowereable, no pasa nada (sus helpers no se fuerzan; el
+            // macro caera a AST-only en lower_function como antes).
+            if (macro_body_unsupported_reason(tc_, fd->body.get()).empty()) {
+                // macro lowereable: sus helpers ya estan en el set.
+            } else {
+                // No lowereable: quitar cualquier helper que solo el aportara
+                // seria complejo; es inocuo dejarlos (una comptime fn lowerada
+                // de mas es dead code si nadie la llama en runtime).  Los
+                // helpers recolectados de un macro no-lowereable igual pueden
+                // ser referenciados por otro macro lowereable.
+            }
+        }
+        g_macro_force_lower = nullptr;
+        g_macro_visiting = nullptr;
+    }
+
     if (main_decl) lower_function(main_decl, out_module);
 
     for (auto &decl : mod_.decls) {
@@ -1441,14 +1648,32 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             // Global array nativo T[N]: ya tiene slot (pre-pase); soportado.
             if (!gv->is_const && !is_comptime_silent && gv->type &&
                 gv->type->kind == ast::NodeKind::ArrayTypeNode &&
-                vx_global_array_bytes(gv->type.get()) > 0) {
+                vx_global_array_bytes(gv->type.get(), tc_) > 0) {
                 runtime_global_supported = true;
             }
+            // Tipo primitivo directo O un newtype (typedef-new) que resuelve a
+            // un primitivo de <=8 bytes (p.ej. `uintptr` -> u64).  Resolvemos
+            // via resolve_type_node para que los tipos semanticos de std.types
+            // tengan storage global igual que su underlying.
             if (!gv->is_const && !is_comptime_silent && gv->type &&
-                gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
-                auto *pt =
-                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
-                switch (pt->prim) {
+                (gv->type->kind == ast::NodeKind::PrimitiveTypeNode ||
+                 gv->type->kind == ast::NodeKind::NamedTypeNode)) {
+                PrimitiveKind gpk =
+                    (gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
+                        ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())
+                              ->prim
+                        : tc_.resolve_type_node(gv->type.get()).kind;
+                // Global de tipo overlay: su valor runtime es un puntero (8 bytes)
+                // -> tratarlo como PTR (slot de 8 bytes, init por asignacion).
+                if (gpk == PrimitiveKind::STRUCT &&
+                    gv->type->kind == ast::NodeKind::NamedTypeNode) {
+                    Type rt = tc_.resolve_type_node(gv->type.get());
+                    auto sit = tc_.struct_layouts().find(rt.struct_name);
+                    if (sit != tc_.struct_layouts().end() &&
+                        sit->second.is_overlay)
+                        gpk = PrimitiveKind::PTR;
+                }
+                switch (gpk) {
                 case PrimitiveKind::STRING:
                 case PrimitiveKind::I8:
                 case PrimitiveKind::I16:
@@ -1477,6 +1702,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         // AOT puro, pero raro en codigo bare.)
                         uint64_t cval = 0;
                         bool have = false;
+                        // Un `f32 g = 0.5` guarda los bits de un binary32 (4
+                        // bytes), NO los de un double: el LOAD lee 4 bytes y
+                        // con los bits de f64 solo veria el resto de la
+                        // mantisa (0.5 en f64 tiene los 4 bytes bajos a cero
+                        // -> el global salia 0).
+                        const bool g_is_f32 = (gpk == PrimitiveKind::F32);
                         const ast::Expr *ie = gv->init.get();
                         if (ie) {
                             switch (ie->kind) {
@@ -1493,8 +1724,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                                 have = true;
                                 break;
                             case ast::NodeKind::FloatLitExpr: {
-                                double d = static_cast<const ast::FloatLitExpr *>(ie)->value;
-                                std::memcpy(&cval, &d, sizeof(double));
+                                const double d =
+                                    static_cast<const ast::FloatLitExpr *>(ie)->value;
+                                cval = float_bits_for_global(d, g_is_f32);
                                 have = true;
                                 break;
                             }
@@ -1507,9 +1739,10 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                                     have = true;
                                 } else if (u->op == ast::UnOp::Neg && u->operand &&
                                            u->operand->kind == ast::NodeKind::FloatLitExpr) {
-                                    double d = -static_cast<const ast::FloatLitExpr *>(
-                                        u->operand.get())->value;
-                                    std::memcpy(&cval, &d, sizeof(double));
+                                    const double d =
+                                        -static_cast<const ast::FloatLitExpr *>(
+                                            u->operand.get())->value;
+                                    cval = float_bits_for_global(d, g_is_f32);
                                     have = true;
                                 }
                                 break;
@@ -1571,7 +1804,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     generate_extern_cfn_thunks(out_module);
     // Helper runtime __vx_free_uniq para el reassign-free de campos unique<T>.
     generate_free_uniq_helper(out_module);
-    // Phase AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
+    //  AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
     // __module_init (las clases son layout estatico compile-time).
     if (!native_poo_) generate_module_init_function(out_module);
 
@@ -1628,7 +1861,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             m.section_at = bd->attr_at;
             m.section_order = bd->attr_order;
             m.sym_refs = std::move(asm_syms); // call/jmp -> funcion Vesta
-            // Phase NR / dev-OS: exportar el nombre del bloque como simbolo
+            //  NR / dev-OS: exportar el nombre del bloque como simbolo
             // resoluble por otros bloques (cross-block jmp/call/dd).
             m.symbol_name = bd->name;
             m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
@@ -1725,7 +1958,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         m.section_perms = bd->attr_section_perms;
         m.section_at = bd->attr_at;
         m.section_order = bd->attr_order;
-        // Phase NR / dev-OS: exportar el nombre del bloque bytes como simbolo
+        //  NR / dev-OS: exportar el nombre del bloque bytes como simbolo
         // resoluble cross-block (p.ej. `lgdt [gdtr]` / `dd gdt` desde otro).
         m.symbol_name = bd->name;
         m.flags |=
@@ -2147,7 +2380,7 @@ void Lowering::emit_introspect_info_chunks() {
 // ---------------------------------------------------------------------
 
 /**
- * @brief Phase MC.1 -- detecta si el body de un @Macro contiene
+ * @brief  MC.1 -- detecta si el body de un @Macro contiene
  * caracteristicas que el IR runtime NO soporta todavia.
  *
  * Devuelve la primera razon encontrada (string descriptivo) o cadena
@@ -2172,12 +2405,21 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
 static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                                                       const ast::Expr *e);
 
+/* Force-lower de comptime helpers: cuando @c g_macro_force_lower != nullptr, el
+ * chequeo de lowereabilidad NO rechaza las llamadas a comptime fns no-macro,
+ * sino que RECURRE en su body (chequeo transitivo) y, si son lowereables,
+ * recolecta su nombre en @c g_macro_force_lower para que @c lower_function las
+ * baje a runtime (`code.<helper>`), permitiendo que el `__macro_<X>` que las
+ * llama resuelva.  @c g_macro_visiting es la guarda de ciclos.  thread_local
+ * porque M8 compila modulos en paralelo (cada thread con su propio contexto).
+ * (Definidos arriba, antes de Lowering::run.) */
+
 static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                                                       const ast::Expr *e) {
     if (!e) return "";
     switch (e->kind) {
     case ast::NodeKind::IdentExpr: {
-        /* Phase MC.17.2: refs a `comptime const` (INMUTABLES)
+        /*  MC.17.2: refs a `comptime const` (INMUTABLES)
          * globales de tipo int SE ACEPTAN -- se materializan
          * como slot @c static_data de 8 bytes, leidos via
          * LOAD i64.  El valor es fijo, no hay divergencia
@@ -2195,9 +2437,20 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                 return "ref a comptime global string '" + id->name + "'";
             }
             if (cit->second.is_mutable) {
+                /* comptime var MUTABLE global: se comparte entre lectores
+                 * AST-eval (p.ej. `static_assert(g == 3)` top-level, otros
+                 * comptime blocks) y el macro.  Si el macro VM-evaluara y mutara
+                 * un slot static_data de la VM mientras el static_assert lee la
+                 * copia AST (comptime_const_values_) -> DESYNC (el assert ve el
+                 * valor viejo).  Por eso el macro que referencia un mutable
+                 * global se deja AST-eval (misma copia que los lectores) --
+                 * arquitectural, no un gap de codegen.  Los mutables SOLO se
+                 * podrian VM-evaluar si TODO lector comptime (incl. static_assert)
+                 * leyera el slot de la VM, lo que exigiria ejecutar la VM en cada
+                 * eval comptime -- fuera de alcance. */
                 return "ref a comptime var (mutable) global '" + id->name + "'";
             }
-            /* comptime const int OK. */
+            /* comptime const int (INMUTABLE) OK: slot static_data read-only. */
             return "";
         }
         return "";
@@ -2212,7 +2465,7 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
         if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
             const auto *id =
                 static_cast<const ast::IdentExpr *>(ce->callee.get());
-            /* Phase MC.15B+C: los builtins que YA estan aliasados a
+            /*  MC.15B+C: los builtins que YA estan aliasados a
              * sus equivalentes runtime str_* en @c lower_call NO
              * deben rechazarse aqui -- el lowering los soporta.
              * Los demas siguen siendo comptime-only.
@@ -2257,10 +2510,21 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
              * linker no resuelve (RelocationError).  Se fuerza a que el macro
              * corra en comptime (AST/VM eval), que SI resuelve el nombre via
              * lookup_virtual_fn y embebe el resultado como literal. */
-            if (ffi::lookup_virtual_fn("vesta_comptime", id->name)) {
+            /* Las type-metadata (`comptime_type_sizeof/alignof/kind`) con arg
+             * LITERAL string son CONSTANTES compile-time: el lowering las
+             * pliega a un CONST (ver lower_call), asi que NO rechazan el macro.
+             * El resto de virtual fns (static_assert, comptime_compile) sin
+             * simbolo bytecode siguen forzando AST/VM-eval del call site. */
+            static const std::unordered_set<std::string> FOLDABLE_TYPE_META = {
+                "comptime_type_sizeof", "comptime_type_alignof",
+                "comptime_type_kind"};
+            if (ffi::lookup_virtual_fn("vesta_comptime", id->name) &&
+                !(FOLDABLE_TYPE_META.count(id->name) && ce->args.size() == 1 &&
+                  ce->args[0] &&
+                  ce->args[0]->kind == ast::NodeKind::StringLitExpr)) {
                 return "virtual comptime fn '" + id->name + "'";
             }
-            /* Phase MC.17.3: calls a @Macros user-defined SE ACEPTAN
+            /*  MC.17.3: calls a @Macros user-defined SE ACEPTAN
              * (la callee tambien se baja a IR con nombre
              * `__macro_<callee>`, asi que emitimos CALLVM regular
              * a esa label).  Calls a comptime fns NO-@Macro
@@ -2275,7 +2539,45 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                      * el __macro_<callee> no existira y la
                      * CALLVM fallara en runtime -- ese caso
                      * cae al fallback AST por inconsistencia. */
+                    for (const auto &a : ce->args) {
+                        auto ra = macro_body_unsupported_reason_expr(tc, a.get());
+                        if (!ra.empty()) return ra;
+                    }
                     return "";
+                }
+                /* Llamada a una comptime fn NO-macro.  Con force-lower activo
+                 * (g_macro_force_lower != null): recurrir en su body; si es
+                 * lowereable, recolectarla para bajarla a runtime y ACEPTAR la
+                 * llamada.  Sin force-lower (call sites legacy): rechazar
+                 * (AST-only), comportamiento previo. */
+                if (g_macro_force_lower && fn_it->second &&
+                    fn_it->second->body) {
+                    const std::string &hn = fn_it->first; // nombre registrado
+                    if (g_macro_visiting->count(hn)) {
+                        return ""; // ciclo: asumir OK (el otro nivel decide)
+                    }
+                    g_macro_visiting->insert(hn);
+                    std::string sub = macro_body_unsupported_reason(
+                        tc, fn_it->second->body.get());
+                    g_macro_visiting->erase(hn);
+                    if (sub.empty()) {
+                        g_macro_force_lower->insert(hn);
+                        /* Seguir recorriendo los ARGS de esta llamada: pueden
+                         * contener llamadas anidadas a OTRAS comptime fns
+                         * (p.ej. `bf_emit(bf_classify(x))`) que tambien hay que
+                         * recolectar para el force-lower.  Sin esto, el callee
+                         * del argumento quedaba fuera del set -> su CALL
+                         * emitiria "no es comptime-evaluable (argumento
+                         * runtime?)". */
+                        for (const auto &a : ce->args) {
+                            auto ra = macro_body_unsupported_reason_expr(
+                                tc, a.get());
+                            if (!ra.empty()) return ra;
+                        }
+                        return "";
+                    }
+                    return "helper comptime no-lowereable '" + id->name +
+                           "': " + sub;
                 }
                 return "call a comptime fn user-defined '" + id->name + "'";
             }
@@ -2295,20 +2597,41 @@ static std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
         if (!r.empty()) return r;
         return macro_body_unsupported_reason_expr(tc, bn->rhs.get());
     }
+    case ast::NodeKind::StringLitExpr: {
+        /* Un string interpolado `"... ${expr} ..."` (o triple-quoted) que un
+         * @Macro devuelve puede llevar en su interpolacion llamadas a otras
+         * comptime fns (p.ej. `"() => { ${bf_compile_body(src)} }"`).  Recorrer
+         * las exprs de interpolacion para que esos callees entren al set de
+         * force-lower; sin esto la interpolacion emitia un CALLVM colgante y el
+         * macro no era comptime-evaluable a string (solo funcionaba con concat
+         * `"a" + f(x) + "b"`, que si se recorre por el case BinaryExpr). */
+        const auto *sl = static_cast<const ast::StringLitExpr *>(e);
+        for (const auto &ie : sl->interp_exprs) {
+            auto r = macro_body_unsupported_reason_expr(tc, ie.get());
+            if (!r.empty()) return r;
+        }
+        return "";
+    }
     case ast::NodeKind::InitListExpr: {
-        /* Init list `{a, b, c}` o `{.x=1, .y=2}` requiere ALLOCA
-         * tipado del destino (array o struct) en runtime.  El
-         * path del macro lowering no lo soporta; cae al AST
-         * evaluator que SI maneja arrays/structs (A.42). */
-        return "init list `{...}` en macro body (usa AST eval)";
+        /* Init list `{a, b, c}` de un array local: el lowering del macro lo
+         * soporta via el var-decl tipado (`i64 xs[N] = {...}`) que hace ALLOCA
+         * + STOREs.  Recurrir en los elementos por si alguno no es lowereable
+         * (p.ej. un init list de structs, que si requiere layout). */
+        const auto *il = static_cast<const ast::InitListExpr *>(e);
+        for (const auto &el : il->elements) {
+            auto r = macro_body_unsupported_reason_expr(tc, el.get());
+            if (!r.empty()) return r;
+        }
+        return "";
     }
     case ast::NodeKind::IndexExpr: {
-        /* Array indexing `arr[i]` requiere conocer el tipo de
-         * `arr` y el sizeof del elemento para emitir ADD + LOAD
-         * correctos.  En el body de un macro las vars locales
-         * pueden ser arrays comptime que NO existen en runtime;
-         * fallback al AST evaluator. */
-        return "array indexing `arr[i]` en macro body (usa AST eval)";
+        /* Array indexing `arr[i]`: lowereable en macro body cuando `arr` es un
+         * array local tipado (el lowering conoce el elem type via el var-decl).
+         * Recurrir en base + index. */
+        const auto *ix = static_cast<const ast::IndexExpr *>(e);
+        auto r = macro_body_unsupported_reason_expr(tc, ix->base.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason_expr(tc, ix->index.get());
     }
     case ast::NodeKind::UnaryExpr: {
         const auto *un = static_cast<const ast::UnaryExpr *>(e);
@@ -2363,7 +2686,13 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
         if (vd->type) {
             const auto *t = vd->type.get();
             if (t->kind == ast::NodeKind::ArrayTypeNode) {
-                return "var local de tipo array en macro body (usa AST eval)";
+                /* Array local `T[N]`: el lowering hace ALLOCA + init (STOREs) y
+                 * el indexing usa el elem type del var-decl.  Validar solo el
+                 * init. */
+                if (vd->init)
+                    return macro_body_unsupported_reason_expr(tc,
+                                                              vd->init.get());
+                return "";
             }
             if (t->kind == ast::NodeKind::NamedTypeNode) {
                 /* Si el nombre matchea un struct declarado, es
@@ -2433,6 +2762,95 @@ static std::string macro_body_unsupported_reason(const TypeChecker &tc,
     case ast::NodeKind::ComptimeForStmt:
         return "comptime block/for en macro body (requiere MC.5)";
     default: return "";
+    }
+}
+
+/* Detecta si el body de un @Macro FORWARDEA un expr-capture: llama a una
+ * comptime fn que tiene un parametro `expr` (p.ej. `source(e)` / `inject(e)`).
+ * Esos casos NO pueden correr en la ComptimeVM porque el helper necesita
+ * re-capturar el texto en SU sitio de llamada (no una representacion runtime);
+ * se dejan a AST-eval.  Un macro con `expr` param que solo lo usa como string
+ * (p.ej. `bf_compile_body(src)`) NO forwardea y SI va a la VM. */
+static bool macro_body_forwards_expr_capture_expr(const TypeChecker &tc,
+                                                  const ast::Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case ast::NodeKind::CallExpr: {
+        const auto *ce = static_cast<const ast::CallExpr *>(e);
+        if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
+            const std::string &n =
+                static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
+            auto it = tc.comptime_fns().find(n);
+            if (it != tc.comptime_fns().end() && it->second) {
+                for (const auto &p : it->second->params)
+                    if (p && p->is_expr_capture) return true;
+            }
+        }
+        for (const auto &a : ce->args)
+            if (macro_body_forwards_expr_capture_expr(tc, a.get())) return true;
+        return macro_body_forwards_expr_capture_expr(tc, ce->callee.get());
+    }
+    case ast::NodeKind::BinaryExpr: {
+        const auto *bn = static_cast<const ast::BinaryExpr *>(e);
+        return macro_body_forwards_expr_capture_expr(tc, bn->lhs.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, bn->rhs.get());
+    }
+    case ast::NodeKind::StringLitExpr: {
+        const auto *sl = static_cast<const ast::StringLitExpr *>(e);
+        for (const auto &ie : sl->interp_exprs)
+            if (macro_body_forwards_expr_capture_expr(tc, ie.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::TernaryExpr: {
+        const auto *te = static_cast<const ast::TernaryExpr *>(e);
+        return macro_body_forwards_expr_capture_expr(tc, te->cond.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, te->then_expr.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, te->else_expr.get());
+    }
+    default: return false;
+    }
+}
+static bool macro_body_forwards_expr_capture(const TypeChecker &tc,
+                                             const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body)
+            if (macro_body_forwards_expr_capture(tc, st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::ReturnStmt: {
+        const auto *rs = static_cast<const ast::ReturnStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, rs->value.get());
+    }
+    case ast::NodeKind::ExprStmt: {
+        const auto *es = static_cast<const ast::ExprStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, es->expr.get());
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        const auto *vd = static_cast<const ast::VarDeclStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, vd->init.get());
+    }
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, is->cond.get()) ||
+               macro_body_forwards_expr_capture(tc, is->then_branch.get()) ||
+               macro_body_forwards_expr_capture(tc, is->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt: {
+        const auto *ws = static_cast<const ast::WhileStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, ws->cond.get()) ||
+               macro_body_forwards_expr_capture(tc, ws->body.get());
+    }
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        return macro_body_forwards_expr_capture(tc, fs->init.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, fs->cond.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, fs->step.get()) ||
+               macro_body_forwards_expr_capture(tc, fs->body.get());
+    }
+    default: return false;
     }
 }
 
@@ -2572,6 +2990,10 @@ static void annotate_macro_param_idents(
 void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Bug fix 2026-05-23: forward declarations no tienen body -- skip.
     if (fd->is_forward_decl || !fd->body) return;
+    // Cross-module: una comptime/macro fn re-parseada de un dep NO se re-baja
+    // aqui (el dep ya bajo su `__macro_<X>` + helpers, que el importer mergea).
+    // Solo el AST se conserva para AST-eval al invocarla.
+    if (fd->is_imported_comptime) return;
     // Templates genericos (con type_params) y especializaciones (#7) se
     // omiten: sus monomorphizaciones concretas (que SI aparecen en
     // mod_.decls) se bajan normalmente.
@@ -2580,26 +3002,71 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * se evalua en compile-time cuando es invocada desde un contexto
      * comptime.
      *
-     * Phase MC.1 (A.43.22): @Macro bodies SI se lowean al IR (con
+     *  MC.1 (A.43.22): @Macro bodies SI se lowean al IR (con
      * nombre `__macro_<original>`) cuando el body es lowerable.
      * Esto valida que la pipeline IR -> bytecode soporta el codigo
      * del macro; futuros sprints MC.2+ ejecutan ese bytecode via
      * una ComptimeVM para acelerar la metaprogramacion ~10-1000x.
      * Por ahora el IR queda en el modulo como dead code; el call
      * site del macro sigue usando el evaluator AST. */
+    /* F1: una `comptime fn` (no-macro) con inline asm se baja a IR y se
+     * ejecuta en el ComptimeVM (JIT + interp fallback).  Funciona en .velb
+     * (interp/JIT) y en AOT: ambos hacen el two- que compila el codigo
+     * comptime a un `.velb` cacheado y lo carga, asi que los call sites
+     * comptime invocan la VM y el valor se pliega a constante. */
+    const bool is_vm_comptime_fn =
+        fd->is_comptime && !fd->is_macro && comptime_fn_needs_vm(tc_, fd);
+    /* Force-lower: una comptime fn (no-macro) que un @Macro lowereable
+     * referencia (recolectada en el pre-pase de run()) SI se baja, como fn
+     * runtime normal (nombre plano `fd->name`), para que el `callvm code.<X>`
+     * del macro resuelva. */
+    const bool is_force_lowered_comptime =
+        fd->is_comptime && !fd->is_macro &&
+        comptime_fns_to_force_lower_.count(fd->name) != 0;
     if (fd->is_comptime && !fd->is_macro) {
         /* comptime fn (no-macro): por defecto NO se baja (se evalua en
          * compile-time y se elide).  Solo-LSP: con emit_comptime_fns_ la
          * bajamos como funcion normal para poder inspeccionar su codegen
-         * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro. */
-        if (!emit_comptime_fns_) return;
+         * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro.
+         * F1: si usa asm, SI se baja (para ejecutar en el ComptimeVM).
+         * Force-lower: si un macro la referencia, tambien se baja. */
+        if (!emit_comptime_fns_ && !is_vm_comptime_fn &&
+            !is_force_lowered_comptime)
+            return;
     } else if (fd->is_comptime) {
+        /* @Macro con un param `expr`: el parser tipa `expr` como STRING (captura
+         * el texto crudo del call site como StringLitExpr).  Es VM-evaluable
+         * como cualquier macro con param string -> se baja a `__macro_<X>` y
+         * corre en la ComptimeVM (interp/JIT), marshalando el texto como
+         * StringObject.  El unico caso que NO puede ir a la VM es el FORWARDING
+         * del expr a un helper expr-capture (`source(e)`/`inject(e)`), donde el
+         * texto debe re-capturarse en el sitio del helper: esos SI se dejan a
+         * AST-eval.  (Antes se forzaba AST-eval para TODO expr-param macro; el
+         * usuario exige "nada de AST-eval, todo interp/JIT".) */
+        bool has_expr_param = false;
+        for (const auto &p : fd->params)
+            if (p && p->is_expr_capture) { has_expr_param = true; break; }
+        if (has_expr_param &&
+            macro_body_forwards_expr_capture(tc_, fd->body.get())) {
+            ++macro_skipped_count_;
+            macro_skip_reasons_.emplace_back(
+                fd->name, "forwarding de `expr` a helper expr-capture (AST-eval)");
+            return;
+        }
         /* @Macro: intentar lowear el body al IR.  Si contiene
          * caracteristicas no soportadas todavia (introspect,
          * comptime var, builtins comptime-only), saltar limpiamente
-         * y dejar que el evaluator AST haga el trabajo. */
+         * y dejar que el evaluator AST haga el trabajo.
+         *
+         * Activamos el contexto force-lower para que las llamadas a comptime
+         * fns lowereables NO se rechacen (se bajaran junto al macro). */
+        g_macro_force_lower = &comptime_fns_to_force_lower_;
+        std::unordered_set<std::string> ml_visiting;
+        g_macro_visiting = &ml_visiting;
         const std::string reason =
             macro_body_unsupported_reason(tc_, fd->body.get());
+        g_macro_force_lower = nullptr;
+        g_macro_visiting = nullptr;
         if (!reason.empty()) {
             /* No soportado -- fallback silencioso al AST eval.
              * Capturamos el reason para diagnostico via
@@ -2630,11 +3097,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
         /* Continuar al lowering normal con nombre prefijado. */
     }
-    /* Phase MC.17.1: setear flag para que lower_var_decl trate
+    /*  MC.17.1: setear flag para que lower_var_decl trate
      * `comptime var/const` LOCALES como vars runtime regulares.
      * Reset al salir de la funcion. */
     const bool prev_is_macro = current_fn_is_macro_;
-    current_fn_is_macro_ = (fd->is_comptime && fd->is_macro);
+    /* P1: fn-VM comparte modo macro. */
+    current_fn_is_macro_ = (fd->is_comptime && fd->is_macro) || is_vm_comptime_fn;
     struct ScopeGuard {
         bool *flag;
         bool saved;
@@ -2642,14 +3110,17 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     } macro_flag_guard{&current_fn_is_macro_, prev_is_macro};
 
     ir::IrFunction fn;
-    /* Phase MC.1: nombre prefijado para macros lowered al IR.
+    /*  MC.1: nombre prefijado para macros lowered al IR.
      * Asi no colisionan con funciones runtime y son identificables
      * por el TypeChecker para invocacion desde ComptimeVM (MC.2). */
-    if (fd->is_macro && fd->is_comptime) {
+    if ((fd->is_macro && fd->is_comptime) || is_vm_comptime_fn) {
+        /* @Macro, o comptime fn con asm (F1): nombre prefijado + registro en
+         * el ComptimeRuntime para invocacion via VM.  El prefijo `__macro_`
+         * identifica "codigo comptime lowered" (macro o fn). */
         fn.name = "__macro_" + fd->name;
         fn.is_macro_compiled = true;
         ++macro_lowered_count_;
-        /* Phase MC.2: registrar en el ComptimeRuntime para que el
+        /*  MC.2: registrar en el ComptimeRuntime para que el
          * TypeChecker pueda intentar invocar via VM en futuras
          * iteraciones de la compilacion.  En MC.2 el entry_pc es
          * 0 (placeholder) -- MC.3 lo populara con la direccion
@@ -2660,13 +3131,17 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         fn.name = fd->name;
     }
 
+    // @fp(strict|fast): politica de contraccion FMA de la funcion.  El pase
+    // ir_pass_fuse_fma solo contrae si fn.fp_contract; @fp(strict) -> false.
+    fn.fp_contract = fd->fp_contract;
+
     // AOT 2b (dev OS): seccion de salida del codigo + permisos.  Metadata
     // pura para el codegen AOT; el interp/JIT la ignoran.
     fn.section = fd->attr_section;
     fn.section_perms = fd->attr_section_perms;
     fn.section_at = fd->attr_at;
     fn.section_order = fd->attr_order;
-    // Phase NR: @Naked -- el codegen suprime prologo/epilogo/ret.
+    //  NR: @Naked -- el codegen suprime prologo/epilogo/ret.
     fn.is_naked = fd->is_naked;
 
     // Subsistema de coste (modo --analyze): propagar el contrato
@@ -2678,6 +3153,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.complexity_partial_post = fd->complexity_partial_post;
     fn.complexity_total_pre = fd->complexity_total_pre;
     fn.complexity_total_post = fd->complexity_total_post;
+    // Contratos de huella (recurso/efecto): metadata para la verificacion.
 
     // Tipo de retorno.  Aceptamos tipos primitivos directamente o
     // pasamos por resolve_type_node para PointerTypeNode/ArrayTypeNode
@@ -2703,9 +3179,25 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Vesta Embed (native_poo_): `string` value-type de 24 bytes -> SRET.
     const bool sret_str_value =
         (native_poo_ && sem_ret.kind == PrimitiveKind::STRING);
+    // STRUCT por valor -> SRET.  Era el UNICO agregado que no lo usaba, y por
+    // eso estaba roto: `return r` devolvia un PUNTERO al buffer de `r`, que
+    // vive en el frame del callee -- muerto tras el `ret`.  El caller leia esa
+    // memoria despues, y lo que hubiera pasado por la pila entre medias (el
+    // propio restore de registros del call) la pisaba.  Funcionaba de milagro
+    // cuando el caller copiaba antes de tocar la pila; con un `println` de por
+    // medio, el struct llegaba a ceros (medido).
+    //
+    // Un `@overlay struct` NO entra: su valor ES un puntero de 8 bytes a
+    // memoria ajena, asi que devolverlo por registro es correcto.
+    const auto &slays_check = tc_.struct_layouts();
+    auto it_slay_ret = slays_check.find(sem_ret.struct_name);
+    const bool sret_struct = sem_ret.kind == PrimitiveKind::STRUCT &&
+                             !sret_enum && it_slay_ret != slays_check.end() &&
+                             !it_slay_ret->second.is_overlay;
     const bool sret = (sem_ret.kind == PrimitiveKind::OPTIONAL ||
                        sem_ret.kind == PrimitiveKind::RESULT || sret_enum ||
-                       sret_function || sret_smartptr || sret_str_value);
+                       sret_function || sret_smartptr || sret_str_value ||
+                       sret_struct);
     if (fd->return_type &&
         fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode && !sret) {
         auto *pt = static_cast<ast::PrimitiveTypeNode *>(fd->return_type.get());
@@ -2737,10 +3229,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // marcarlo host rompe el copia in-place.
         // El value-string (native_poo_) vive en host stack (ALLOCA host)
         // -> su retbuf tambien es host_ptr para que las copias usen `movh`.
+        // El retbuf de un agregado vive en host, como el propio agregado
+        // (ver lower_var_decl): el `return` copia ahi con `movh`.
         const bool sret_optres_like =
             (sem_ret.kind == PrimitiveKind::OPTIONAL ||
              sem_ret.kind == PrimitiveKind::RESULT || sret_enum ||
-             sret_str_value);
+             sret_str_value || sret_struct);
         if (sret_optres_like) {
             fn.values[v_retbuf].is_host_ptr = true;
         }
@@ -2783,6 +3277,21 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 !sem.is_virtual) {
                 param_is_host_ptr = true;
             }
+            // Overlay: un valor overlay ES un puntero (host) de 8 bytes a la
+            // memoria ajena.  Pasado como parametro se recibe como PTR host;
+            // sin esto los accesos `v.campo`/`v.arr[i]` dentro del callee
+            // emiten mov/loadz (VM) en vez de movh/loadzh -> memoria erronea.
+            if (sem.kind == PrimitiveKind::STRUCT && !sem.struct_name.empty()) {
+                auto ovit = tc_.struct_layouts().find(sem.struct_name);
+                if (ovit != tc_.struct_layouts().end() &&
+                    ovit->second.is_overlay) {
+                    pt = ir::IrType::PTR;
+                }
+                // Un agregado se pasa por su DIRECCION y vive en memoria HOST
+                // (ver lower_var_decl): struct, enum/ADT (que tambien son
+                // PrimitiveKind::STRUCT) y overlay (puntero host ajeno).
+                param_is_host_ptr = true;
+            }
             // BugFix sret-cross-mem (2026-06-04): los parametros de
             // tipo Optional<T>/Result<V,E> son PTRs al buffer SRET
             // alocado por el caller (que ahora siempre es host_alloca).
@@ -2793,15 +3302,22 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 sem.kind == PrimitiveKind::RESULT) {
                 param_is_host_ptr = true;
             }
-            // Limitacion conocida (Phase A): `T[]` como tipo de
-            // parametro es ambiguo entre array dinamico (host_ptr de
-            // new T[N]) y stack-decay (VM addr de T[N] local).  Sin
-            // overload resolution o anotacion explicita, mantenemos
-            // is_virtual=true por defecto (VM addr) que cubre el
-            // patron decay-to-pointer del test 11_arrays_nativos.
-            // Para HOFs sobre arrays dinamicos (e.g. `Shape[]` de
-            // new Shape[N]), usar `T*` explicito en el parametro
-            // hasta que la distincion se resuelva en el type system.
+            // Bug host-vs-VM (2026-07-15): la ambiguedad historica de `T[]`
+            // como parametro (array dinamico host de `new T[N]` vs stack-decay
+            // de un `T[N]` local, que vivia en la pila VM) ESTA CERRADA: desde
+            // que @c ir_pass_promote_local_allocas promueve con force_all, todo
+            // `T[N]` local es tambien host.  Con ambos origenes en host, un
+            // `T[]` NO virtual es siempre una direccion host y se marca como
+            // tal arriba junto con `T*`.  `VirtualPtr<T>` (is_virtual=true)
+            // sigue siendo la unica forma de nombrar una direccion VM.
+        }
+        // Variadico CRUDO (`...` pelado): PASS-THROUGH.  El compilador NO
+        // empaqueta los args -- ocupan los arg-regs del ABI segun la convencion
+        // de llamada, y el cuerpo asm (para @Naked) los accede directamente.  No
+        // se crea binding ni __vacount: no hay array ni vacount().  Es el
+        // equivalente a una `F(a, ...)` en C, que acepta N args crudos.
+        if (p->is_raw_variadic) {
+            continue;
         }
         // Variadico (`T... name`): el callee lo recibe como `T*` (puntero host
         // al array empaquetado por el caller), NO como T.  El count va en un
@@ -2823,8 +3339,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         param_bindings.emplace_back(p->name, vid);
     }
     // Variadicos: param OCULTO i64 del count, tras el `T*` del ultimo param.
-    // `vacount()` en el body resuelve a este binding.
-    if (!fd->params.empty() && fd->params.back()->is_variadic) {
+    // `vacount()` en el body resuelve a este binding.  (Un variadico CRUDO
+    // `...` no empaqueta ni tiene count: los args pasan crudos en los arg-regs.)
+    if (!fd->params.empty() && fd->params.back()->is_variadic &&
+        !fd->params.back()->is_raw_variadic) {
         const ir::IrValueId vcnt = fn.new_value(ir::IrType::I64, "%__vacount");
         fn.values[vcnt].is_param = true;
         fn.params.push_back(vcnt);
@@ -2868,6 +3386,15 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     } else if (sret_str_value) {
         // value-string: {ptr,len,cap} = 3 qwords = 24 bytes.
         sret_buf_size_ = 24ULL;
+    } else if (sret_struct) {
+        // Tamano del struct declarado, redondeado a multiplo de 8: la copia al
+        // retbuf va qword a qword (`sret_buf_size_ / 8`), asi que un struct de
+        // 12 bytes copiaria solo 8 y perderia el ultimo campo.  El caller aloca
+        // con ESTE mismo redondeo, asi que copiar el qword de mas es escribir
+        // en su propio buffer.
+        sret_buf_size_ =
+            (static_cast<uint64_t>(it_slay_ret->second.size_bytes) + 7ULL) &
+            ~7ULL;
     } else if (sret) {
         sret_buf_size_ =
             (sem_ret.kind == PrimitiveKind::OPTIONAL ? 16ULL : 24ULL);
@@ -2972,7 +3499,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 break;
             }
         }
-        // Phase M6.b L.6: el root puede no declarar clases pero importar
+        //  M6.b L.6: el root puede no declarar clases pero importar
         // alguna de un dep via `import "lib" only Counter;`.  En ese
         // caso, class_layouts() del TypeChecker contiene la clase
         // importada y necesitamos llamar a __module_init (que el merge
@@ -3000,7 +3527,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
         // L2.2: tambien llamar __module_init si hay globals runtime
         // que requieren inicializacion (string="lit" etc.).
-        // Phase AOT.2.b: en POO nativa NO hay ClassRegistry -> main no
+        //  AOT.2.b: en POO nativa NO hay ClassRegistry -> main no
         // llama a __module_init (las clases son layout estatico).
         bool need_init = any_class || !runtime_global_slots_.empty();
         if (need_init && !native_poo_) {
@@ -3047,6 +3574,18 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // añadir RET con valor por defecto (0) en funciones no-void, o
     // RET sin valor en void.
     if (!block_terminated_) {
+        // Multihilo AOT: join-all implicito de los hilos de `spawn` en el RET
+        // por caida-al-final de main (sin return explicito).
+        if (native_poo_ && vx_thread_used_ && fd->name == "main") {
+            ir::IrInstr jc{};
+            jc.op = ir::IrOp::CALL;
+            jc.type = ir::IrType::VOID;
+            jc.dst = ir::IR_NO_VALUE;
+            jc.func_name = "__vx_thread_join_all";
+            jc.is_call_site = true;
+            jc.source_line = fd->loc.line;
+            fn.append(current_block_, std::move(jc));
+        }
         // emitir cleanups de auto-free de colecciones antes
         // del RET implicito.  Garantiza liberacion incluso si la
         // funcion cae al final sin un return explicito.
@@ -3172,7 +3711,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
          * type checker solo evalua una vez con el valor inicial.
          * Asi `comptime const SQ = j * j;` se actualiza por iter. */
         auto *vd = static_cast<ast::VarDeclStmt *>(s);
-        /* Phase MC.17.1: cuando estamos dentro de un @Macro body
+        /*  MC.17.1: cuando estamos dentro de un @Macro body
          * que se baja a IR, las VarDeclStmt marcadas
          * @c is_comptime se tratan como vars runtime regulares.
          * El macro corre en VM y los locales se computan en
@@ -3378,6 +3917,230 @@ void Lowering::lower_stmt(ast::Stmt *s) {
     }
 }
 
+void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
+                              uint32_t line) {
+    // Emite STORE 0 en trozos decrecientes (8/4/2/1) sin desbordar el rango.
+    auto store_zero = [&](ir::IrType ty, uint64_t o) {
+        ir::IrValueId v_addr = addr;
+        if (o > 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, o, line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            // Heredar la naturaleza host/VM de la base (AOT native_poo aloca el
+            // struct en la pila NATIVA -> el STORE debe ir a host, no a vm_mem).
+            fn_->values[v_addr].is_host_ptr = fn_->values[addr].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrValueId v_zero = emit_const(ty, 0, line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_zero, v_addr};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    };
+    uint64_t off = 0;
+    while (size_bytes - off >= 8) {
+        store_zero(ir::IrType::I64, off);
+        off += 8;
+    }
+    if (size_bytes - off >= 4) {
+        store_zero(ir::IrType::I32, off);
+        off += 4;
+    }
+    if (size_bytes - off >= 2) {
+        store_zero(ir::IrType::I16, off);
+        off += 2;
+    }
+    if (size_bytes - off >= 1) {
+        store_zero(ir::IrType::I8, off);
+        off += 1;
+    }
+}
+
+void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
+                                          const StructLayout &lay,
+                                          uint32_t line) {
+    for (const auto &fi : lay.fields) {
+        // Direccion del campo (base + offset), heredando naturaleza host/VM.
+        auto field_addr = [&]() -> ir::IrValueId {
+            if (fi.offset == 0) return base_addr;
+            ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)fi.offset, line);
+            ir::IrValueId v_a = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_a].is_host_ptr = fn_->values[base_addr].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_a;
+            ad.operands = {base_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+            return v_a;
+        };
+        if (!fi.default_init) {
+            // Campo struct anidado SIN default propio: si su TIPO declara
+            // defaults, aplicarlos recursivamente en la sub-direccion.
+            if (fi.type.kind == PrimitiveKind::STRUCT) {
+                auto it = tc_.struct_layouts().find(fi.type.struct_name);
+                if (it != tc_.struct_layouts().end()) {
+                    bool any_def = false;
+                    for (const auto &sf : it->second.fields)
+                        if (sf.default_init) {
+                            any_def = true;
+                            break;
+                        }
+                    if (any_def)
+                        emit_struct_field_defaults(field_addr(), it->second,
+                                                   line);
+                }
+            }
+            continue;
+        }
+        // Campo escalar con default comptime-constante: lower + STORE.
+        ir::IrValueId v_val = lower_expr(fi.default_init);
+        if (v_val == ir::IR_NO_VALUE) continue;
+        const ir::IrType ir_ft = ir_type_from_primitive(fi.type.kind);
+        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, line,
+                               /*is_explicit=*/true);
+        ir::IrValueId v_addr = field_addr();
+        if (fi.bit_width > 0) {
+            // Bit field con default: por ahora se ignora (raro); el zero-fill
+            // deja el campo a 0.  Un default de bit field requeriria RMW.
+            continue;
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir_ft;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    }
+}
+
+void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
+                                       const StructLayout &lay,
+                                       ast::InitListExpr *il, uint32_t line) {
+    // Aplicar primero los valores por defecto de los campos; el init-list
+    // explicito de abajo sobrescribe los campos que liste (DSE limpia lo muerto).
+    emit_struct_field_defaults(base_addr, lay, line);
+    for (size_t i = 0; i < il->elements.size(); ++i) {
+        const StructFieldInfo *fi = nullptr;
+        if (il->is_designated) {
+            const std::string &fname = il->field_names[i];
+            for (const auto &f : lay.fields) {
+                if (f.name == fname) {
+                    fi = &f;
+                    break;
+                }
+            }
+            if (!fi) {
+                error_at(il->loc, "lowering: campo '" + fname +
+                                      "' no existe en struct '" + lay.name + "'");
+                continue;
+            }
+        } else {
+            if (i >= lay.fields.size()) {
+                error_at(il->loc, "lowering: init list excede campos del struct");
+                break;
+            }
+            fi = &lay.fields[i];
+        }
+        // Direccion del campo destino (base + offset).
+        ir::IrValueId v_addr = base_addr;
+        if (fi->offset > 0) {
+            ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)fi->offset, line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            // `base + off` sigue apuntando a la MISMA memoria que `base`: la
+            // naturaleza (host / VM) se hereda.  Sin esto, un struct en host
+            // inicializado con una init-list anidada escribia sus campos con
+            // `mov` (VM) sobre una direccion host -> basura.
+            fn_->values[v_addr].is_host_ptr = fn_->values[base_addr].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {base_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ast::Expr *elem = il->elements[i].get();
+        // Campo de tipo STRUCT inicializado con un init-list ANIDADO
+        // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
+        // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
+        // baja un InitListExpr como valor, por eso hay que tratarlo aqui.
+        if (fi->type.kind == PrimitiveKind::STRUCT &&
+            elem->kind == ast::NodeKind::InitListExpr) {
+            auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+            if (it_sl == tc_.struct_layouts().end()) {
+                error_at(il->loc, "lowering: struct '" + fi->type.struct_name +
+                                      "' sin layout (init anidado)");
+                continue;
+            }
+            emit_struct_init_fields(v_addr, it_sl->second,
+                                    static_cast<ast::InitListExpr *>(elem), line);
+            continue;
+        }
+        ir::IrValueId v_val = lower_expr(elem);
+        if (v_val == ir::IR_NO_VALUE) continue;
+        // Campo AGREGADO inline (struct/array) desde una EXPRESION (otra
+        // variable, llamada, ...): copia memberwise desde la direccion origen
+        // (no un STORE escalar, que guardaria la direccion como puntero).
+        // Un campo de tipo `@overlay struct` NO es un agregado inline: guarda el
+        // HANDLE de la vista (8 bytes) -> STORE escalar del puntero (abajo).
+        if ((fi->type.kind == PrimitiveKind::STRUCT &&
+             !type_is_overlay(fi->type)) ||
+            fi->type.kind == PrimitiveKind::ARRAY) {
+            uint64_t sz = size_of_type(fi->type);
+            if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl != tc_.struct_layouts().end())
+                    sz = (uint64_t)it_sl->second.size_bytes;
+            }
+            if (sz == 0) sz = 8;
+            emit_memberwise_copy(v_addr, v_val, sz, line);
+            if (fi->type.kind == PrimitiveKind::STRUCT) {
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl != tc_.struct_layouts().end() &&
+                    it_sl->second.has_copy_hook) {
+                    emit_struct_method_on_host_field(
+                        v_addr, fi->type.struct_name,
+                        fi->type.struct_name + "____clone__", line);
+                }
+            }
+            continue;
+        }
+        const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
+        const bool elem_is_literal =
+            elem->kind == ast::NodeKind::IntLitExpr ||
+            elem->kind == ast::NodeKind::FloatLitExpr ||
+            elem->kind == ast::NodeKind::BoolLitExpr ||
+            elem->kind == ast::NodeKind::CharLitExpr ||
+            elem->kind == ast::NodeKind::NullLitExpr;
+        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, line,
+                               /*is_explicit=*/elem_is_literal);
+        if (fi->bit_width > 0) {
+            error_at(il->loc, "lowering: init list no soporta bit fields aun");
+            continue;
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir_ft;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    }
+}
+
 void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     // Resolver el Type semantico (aplicando aliases y structs).
     // A.43.7: con `auto`/`var` (vd->infer_type), el AST no tiene
@@ -3387,7 +4150,29 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     Type sem_type = vd->type ? tc_.resolve_type_node(vd->type.get())
                              : (vd->init ? vd->init->result_type : Type{});
 
-    // Phase Z.6: propagar el modificador @c shared del var-decl al
+    // Overlay F1: `PEB peb = PEB(ptr);`.  Un overlay ES un puntero (la vista);
+    // NO se aloca buffer.  Bajamos el init (que produce el puntero base host) y
+    // bindeamos la variable directamente a ese valor.  El acceso a campos
+    // (lower_field_access) reusa el camino de struct (base + offset + LOAD) con
+    // is_host_ptr=true -> loads/stores host.
+    if (sem_type.kind == PrimitiveKind::STRUCT) {
+        auto it = tc_.struct_layouts().find(sem_type.struct_name);
+        if (it != tc_.struct_layouts().end() && it->second.is_overlay) {
+            if (!vd->init) {
+                error_at(vd->loc, "un overlay '" + sem_type.struct_name +
+                                      "' requiere un puntero base en su "
+                                      "declaracion");
+                return;
+            }
+            ir::IrValueId base = lower_expr(vd->init.get());
+            if (base == ir::IR_NO_VALUE) return;
+            fn_->values[base].is_host_ptr = true;
+            bind(vd->name, base);
+            return;
+        }
+    }
+
+    //  Z.6: propagar el modificador @c shared del var-decl al
     // @c NewExpr del init.  Si el init es `new T(...)` y el var-decl
     // tiene `shared`, el `new` debe alocar en el SharedHeap en lugar
     // del gc_heap local.  El @c lower_new_expr detecta la marca y
@@ -3402,7 +4187,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         }
     }
 
-    // Phase Z.9: si el var-decl tiene `shared`, registrar el nombre en
+    //  Z.9: si el var-decl tiene `shared`, registrar el nombre en
     // @c shared_locals_ para que el escape analyzer en spawn capture
     // no genere warning (es shared explicitamente).
     if (vd->is_shared) {
@@ -3422,7 +4207,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             classes_used_gc_.insert(ne->class_name);
     }
 
-    // Phase AS inc.3: si el var-decl tiene storage-class register("reg"),
+    //  AS inc.3: si el var-decl tiene storage-class register("reg"),
     // forzar el camino ALLOCA (slot estable) marcando el nombre como
     // address-taken.  Sin esto, un primitivo register-bound se baja a un
     // SSA value efimero que el optimizer pliega/elimina (el body asm es
@@ -3559,8 +4344,18 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.type = ir::IrType::I8;
         al.dst = addr;
         al.imm = (uint64_t)lay.size_bytes;
+        // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
+        al.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
+        // Seguridad: zero-inicializar TODO el struct antes de escribir los
+        // campos listados.  Asi los campos NO presentes en el init-list quedan
+        // a 0 (no basura de la pila).  Subsume el zero de los bit fields.
+        emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
+        // Valores por defecto de los campos (`u8 a = 0x10`); el init-list
+        // explicito de abajo sobrescribe los campos que liste.
+        emit_struct_field_defaults(addr, lay, vd->loc.line);
         // Zero los storage words de bit fields antes del
         // loop para evitar que el RMW lea basura del ALLOCA.  Los
         // unique (offset, size) ya estan en lay.fields para bit
@@ -3615,6 +4410,38 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 }
                 fi = &lay.fields[i];
             }
+            // Campo STRUCT inicializado con un init-list ANIDADO
+            // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
+            // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
+            // baja un InitListExpr como valor -> hay que tratarlo aqui.
+            if (fi->type.kind == PrimitiveKind::STRUCT &&
+                il->elements[i]->kind == ast::NodeKind::InitListExpr) {
+                ir::IrValueId v_faddr = addr;
+                if (fi->offset > 0) {
+                    ir::IrValueId v_off = emit_const(
+                        ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
+                    v_faddr = fn_->new_value(ir::IrType::PTR);
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_faddr;
+                    ad.operands = {addr, v_off};
+                    ad.source_line = vd->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl == tc_.struct_layouts().end()) {
+                    error_at(vd->loc, "lowering: struct '" +
+                                          fi->type.struct_name +
+                                          "' sin layout (init anidado)");
+                    continue;
+                }
+                emit_struct_init_fields(
+                    v_faddr, it_sl->second,
+                    static_cast<ast::InitListExpr *>(il->elements[i].get()),
+                    vd->loc.line);
+                continue;
+            }
             ir::IrValueId v_val = lower_expr(il->elements[i].get());
             if (v_val == ir::IR_NO_VALUE) continue;
             const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
@@ -3646,7 +4473,10 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             // direccion origen).  Sin esto un `Outer o = {.w = inner}`
             // guardaba &inner en o.w y leer o.w.v devolvia la direccion
             // (bug struct-en-struct, value-type anidado).
-            if (fi->type.kind == PrimitiveKind::STRUCT ||
+            // Un campo de tipo `@overlay struct` NO es un agregado inline:
+            // guarda el HANDLE de la vista (8 bytes) -> STORE escalar (abajo).
+            if ((fi->type.kind == PrimitiveKind::STRUCT &&
+                 !type_is_overlay(fi->type)) ||
                 fi->type.kind == PrimitiveKind::ARRAY) {
                 uint64_t sz = size_of_type(fi->type);
                 if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
@@ -3777,24 +4607,34 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 eal.type = ir::IrType::I8;
                 eal.dst = eaddr;
                 eal.imm = static_cast<uint64_t>(elay.size_bytes);
+                // Todo agregado (struct Y enum) vive en memoria HOST en los
+                // tres modos.  Ver la rama STRUCT: si unos acaban en host y
+                // otros en la pila VM, el callee -- que solo recibe una
+                // direccion -- lee unos u otros como basura.
+                eal.host_alloca = true;
                 eal.source_line = vd->loc.line;
                 fn_->append(current_block_, std::move(eal));
-                // Si hay inicializador (constructor de variante),
-                // lower_expr produce un SSA value PTR al slot recien
-                // construido por @c lower_enum_constructor.  En vez
-                // de COPY-ar, simplemente bindeamos al slot del
-                // inicializador (la variable APUNTA al slot del
-                // constructor; el ALLOCA arriba queda sin uso pero
-                // el optimizer DCE lo eliminara).  Esto es equivalente
-                // semanticamente y evita un memcpy de @c size_bytes.
+                fn_->values[eaddr].is_host_ptr = true;
+                // La variable es un value-type: se bindea a un SLOT ESTABLE
+                // (@c eaddr, ALLOCA en VM stack) y el inicializador se COPIA
+                // qword-by-qword al slot -- MISMO modelo que un struct
+                // (ver rama STRUCT abajo).  Antes se bindeaba la variable al
+                // slot del constructor (repunte del puntero); eso rompia con
+                // una asignacion condicional (`if { t = X }` / arm de match):
+                // el var-decl apuntaba a un slot (p.ej. GC-host) y el assign
+                // a otro (ALLOCA VM), un PHI mezclaba punteros de naturaleza
+                // distinta y el LOAD del tag del `match t` usaba movh sobre
+                // una direccion VM -> SIGSEGV.  Con el slot estable, `t`
+                // tiene UNA sola direccion (VM) y el match lee siempre con mov.
+                bind(vd->name, eaddr);
                 if (vd->init) {
-                    ir::IrValueId init_addr = lower_expr(vd->init.get());
+                    const ir::IrValueId init_addr = lower_expr(vd->init.get());
                     if (init_addr != ir::IR_NO_VALUE) {
-                        bind(vd->name, init_addr);
-                        return;
+                        emit_enum_copy(eaddr, init_addr,
+                                       fn_->values[init_addr].is_host_ptr,
+                                       elay.size_bytes, vd->loc.line);
                     }
                 }
-                bind(vd->name, eaddr);
                 return;
             }
             error_at(vd->loc, "lowering: struct/enum desconocido '" +
@@ -3816,45 +4656,43 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // en la pila nativa (host_alloca).  Sin esto, un struct que
         // escapa (p.ej. se pasa por puntero a un metodo s.metodo()) se
         // aloca con ALLOCA_VM ([rbx+0x40]); el .exe standalone no tiene
-        // ProcessVM en rbx -> SIGSEGV.  En el path interp/Full este flag
-        // queda en false (el ir_optimizer promueve a host solo los no
-        // escapantes; los escapantes usan VM stack que el runtime mapea).
-        if (native_poo_) ins.host_alloca = true;
+        // ProcessVM en rbx -> SIGSEGV.
+        //
+        // Bug host-vs-VM (2026-07-15): tambien en interp/JIT cuando se toma
+        // `&p`.  El comentario anterior daba por bueno que "los escapantes
+        // usan VM stack que el runtime mapea", pero el consumidor del `P*`
+        // resultante (param, campo o elemento) lo deref-ea con movh por la
+        // convencion `T*`=host -> movh sobre direccion VM -> SIGSEGV.  Solo
+        // pasaba inadvertido mientras el inliner borraba la llamada.  Un
+        // struct que NO se address-takea se queda en la pila VM (y el
+        // ir_optimizer ya lo promueve por perf si no escapa).
+        // Host SIEMPRE, no solo en AOT ni solo si se toma la direccion.  Mismo
+        // criterio (y mismo motivo) que el buffer de un `T[N]` local.
+        //
+        // Que fuera CONDICIONAL era el bug: cualquier cosa que marcara UN local
+        // lo mandaba a host y dejaba al de al lado en la pila VM.  El callee no
+        // puede distinguirlos -- recibe una direccion y punto -- asi que leia
+        // uno de los dos como basura, con el otro funcionando (que es lo que lo
+        // hacia dificil de ver).  Medido: dos structs y un metodo con arg ->
+        // this=(0,0) y o=(1,2).  Con TODOS los agregados en host, caller y
+        // callee coinciden siempre.  Memoria VM explicita = `VirtualPtr<T>`.
+        ins.host_alloca = true;
+        const bool struct_is_host = ins.host_alloca;
         fn_->append(current_block_, std::move(ins));
-        if (native_poo_) fn_->values[addr].is_host_ptr = true;
+        if (struct_is_host) fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
-        // H5: si el struct tiene campos destructibles (shared/unique/closure/
-        // struct anidado), zero-inicializamos el buffer.  Un struct local en
-        // stack NO se zeroea (a diferencia de un objeto GC), asi que un campo
-        // shared/unique sin asignar contendria basura -> el dtor del struct
-        // leeria un ctrl/slot basura y haria free de basura (UAF).  Con el
-        // buffer a 0, el dtor de un campo no asignado es un no-op (null-guard).
-        // El init-list / copy posterior sobrescribe los campos que toque.
-        if (lay.has_destructible_field) {
-            const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, vd->loc.line);
-            const uint64_t qwords = (lay.size_bytes + 7) / 8;
-            for (uint64_t qi = 0; qi < qwords; ++qi) {
-                const ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, static_cast<int64_t>(qi * 8), vd->loc.line);
-                const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_at].is_host_ptr = fn_->values[addr].is_host_ptr;
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_at;
-                    ad.operands = {addr, v_off};
-                    ad.source_line = vd->loc.line;
-                    fn_->append(current_block_, std::move(ad));
-                }
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_z, v_at};
-                st.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(st));
-            }
-        }
+        // Seguridad + RAII: zero-inicializar SIEMPRE el buffer del struct.  Un
+        // struct local en pila NO se zeroea solo (a diferencia de un objeto GC);
+        // sin esto, (a) los campos no asignados exponen basura de la pila
+        // (seguridad), y (b) un campo shared/unique/closure sin asignar tendria
+        // un ctrl/slot basura y su dtor haria free de basura (UAF).  El
+        // init-list / copy posterior sobrescribe los campos que toque.
+        emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
+        // Declaracion sin init (`P p;`): aplicar los valores por defecto de los
+        // campos.  Si hay init (copia de otro struct/llamada) el copy de abajo
+        // sobrescribe todo, asi que los defaults solo aplican sin init.
+        if (!vd->init)
+            emit_struct_field_defaults(addr, lay, vd->loc.line);
         // Ownership ruta B (copy-hook): `S b = a;` donde S declara `__clone__`
         // y `a` es un lvalue struct existente (IdentExpr) es una COPIA.  Modelo
         // (estilo Rust Clone): memcpy bit a bit a->b (abajo) y DESPUES
@@ -3913,10 +4751,14 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         ld.source_line = vd->loc.line;
                         fn_->append(current_block_, std::move(ld));
                     }
-                    // dst slot (ALLOCA, VM stack) + off
+                    // dst slot + off.  Su naturaleza se HEREDA del slot: dar
+                    // por hecho que es VM hacia que la copia escribiera con
+                    // `mov` sobre una direccion host -> el struct se quedaba a
+                    // ceros (y su copy-hook/dtor operaban sobre basura).
                     const ir::IrValueId v_dst_at =
                         fn_->new_value(ir::IrType::PTR);
-                    // dst NO es host_ptr (slot ALLOCA en VM stack).
+                    fn_->values[v_dst_at].is_host_ptr =
+                        fn_->values[addr].is_host_ptr;
                     {
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
@@ -4191,105 +5033,16 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.type = ir::IrType::I8;
         al.dst = addr;
         al.imm = (uint64_t)lay.size_bytes;
+        // Bug host-vs-VM (2026-07-15): si se toma `&p`, el slot vive en host
+        // (`T*` = direccion host por convencion).  Ver el comentario extenso
+        // en la rama del struct sin init-list.
+        // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
+        al.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         al.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(al));
-        // STORE cada elemento al campo correspondiente.
-        for (size_t i = 0; i < il->elements.size(); ++i) {
-            const StructFieldInfo *fi = nullptr;
-            if (il->is_designated) {
-                const std::string &fname = il->field_names[i];
-                for (const auto &f : lay.fields) {
-                    if (f.name == fname) {
-                        fi = &f;
-                        break;
-                    }
-                }
-                if (!fi) {
-                    error_at(vd->loc, "lowering: campo '" + fname +
-                                          "' no existe en struct '" +
-                                          sem_type.struct_name + "'");
-                    continue;
-                }
-            } else {
-                if (i >= lay.fields.size()) {
-                    error_at(vd->loc,
-                             "lowering: init list excede campos del struct");
-                    break;
-                }
-                fi = &lay.fields[i];
-            }
-            ir::IrValueId v_val = lower_expr(il->elements[i].get());
-            if (v_val == ir::IR_NO_VALUE) continue;
-            const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-            // Direccion del campo de destino (addr + offset).
-            ir::IrValueId v_addr = addr;
-            if (fi->offset > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-                v_addr = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr;
-                ad.operands = {addr, v_off};
-                ad.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ad));
-            }
-            // Campo AGREGADO inline (struct/array value-type): @c v_val es la
-            // DIRECCION del agregado origen -> copia memberwise (qword a
-            // qword) sus bytes al campo, NO un STORE escalar (que guardaria la
-            // direccion origen como si fuera un puntero).  Sin esto un
-            // `Outer o = {.w = inner}` guardaba &inner en o.w y leer o.w.v
-            // devolvia la direccion en vez del valor (bug struct-en-struct).
-            if (fi->type.kind == PrimitiveKind::STRUCT ||
-                fi->type.kind == PrimitiveKind::ARRAY) {
-                uint64_t sz = size_of_type(fi->type);
-                if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
-                    auto it_sl =
-                        tc_.struct_layouts().find(fi->type.struct_name);
-                    if (it_sl != tc_.struct_layouts().end())
-                        sz = (uint64_t)it_sl->second.size_bytes;
-                }
-                if (sz == 0) sz = 8;
-                emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
-                // Copy-hook (__clone__) del struct, si lo declara.
-                if (fi->type.kind == PrimitiveKind::STRUCT) {
-                    auto it_sl =
-                        tc_.struct_layouts().find(fi->type.struct_name);
-                    if (it_sl != tc_.struct_layouts().end() &&
-                        it_sl->second.has_copy_hook) {
-                        emit_struct_method_on_host_field(
-                            v_addr, fi->type.struct_name,
-                            fi->type.struct_name + "____clone__", vd->loc.line);
-                    }
-                }
-                continue;
-            }
-            const bool elem_is_literal =
-                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft,
-                                   vd->loc.line,
-                                   /*is_explicit=*/elem_is_literal);
-            // Bit field: necesitaria read-modify-write; en init list
-            // simple solo se admiten campos normales.  Reportar error
-            // si fi->bit_width > 0 (uso raro: usar asignacion despues).
-            if (fi->bit_width > 0) {
-                error_at(vd->loc,
-                         "lowering: init list no soporta bit fields aun");
-                continue;
-            }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir_ft;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_val, v_addr};
-            st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
-        }
+        // STORE cada campo en su offset (recursivo para structs anidados).
+        emit_struct_init_fields(addr, lay, il, vd->loc.line);
         bind(vd->name, addr);
         return;
     }
@@ -4332,8 +5085,24 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         ins.dst = addr;
         ins.imm = (uint64_t)bytes;
         ins.source_line = vd->loc.line;
+        // Bug host-vs-VM (2026-07-15): el buffer de un `T[N]` local va SIEMPRE
+        // a memoria host, no solo en AOT.  Su tipo es un array NO virtual (ver
+        // @c type_from_node), asi que `arr` decaido a `T[]`/`T*` y `&arr[i]`
+        // son direcciones host y sus consumidores emiten movh.  Cuando el
+        // buffer se quedaba en la pila VM (interp/JIT) las dos rutas
+        // discrepaban: `sum_array(arr, n)` leia el array con movh sobre una
+        // direccion VM.  Un array VM explicito se nombra con `VirtualPtr<T>`.
+        ins.host_alloca = true;
         fn_->append(current_block_, std::move(ins));
+        fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
+        // Zero-inicializar SIEMPRE el buffer del array local (mismo motivo que
+        // los structs, ~L4415): un array en pila NO se zeroea solo.  El interp
+        // daba 0 solo porque su VM stack esta a cero; el JIT (pila HOST) leia
+        // basura -> DIVERGENCIA interp/JIT (un `i32[N] a` leido sin escribir, o
+        // `a[i]++` sobre un elemento no inicializado, daba garbage en JIT).
+        // Ademas es seguridad: sin esto el array expone basura de la pila.
+        emit_zero_fill(addr, (uint64_t)bytes, vd->loc.line);
         if (vd->init) {
             error_at(vd->loc, "lowering: inicializador de array aun no "
                               "soportado en esta ruta");
@@ -4373,11 +5142,29 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         ai.type = ir::IrType::I8; // unidad: 1 byte
         ai.dst = addr;
         ai.imm = (uint64_t)bytes;
+        // Bug host-vs-VM (2026-07-15): si se toma `&x`, el puntero resultante
+        // es un `T*` y por convencion del lenguaje un `T*` es una direccion
+        // HOST: el callee que reciba `T*`, o el campo/elemento `T*` donde se
+        // guarde, lo deref-earan con movh.  Por tanto el slot debe vivir en
+        // memoria host desde el principio.  Antes se quedaba en la pila VM y
+        // solo "funcionaba" mientras el inliner o el store-to-load forwarding
+        // borraban el deref; en cuanto el puntero cruzaba una frontera real
+        // (callee no inlineado, o guardado en un struct/array y releido) se
+        // hacia movh sobre una direccion VM -> SIGSEGV.
+        //
+        // Es el mismo criterio que @c ir_pass_promote_callned_allocas aplica a
+        // los args de CALLN.  Se marca AQUI (y no en un pase del IR) porque
+        // solo el lowering distingue un consumidor host (`T*`) de uno VM: los
+        // structs de params de los opcodes meta viven en la pila VM y NO se
+        // address-takean desde el codigo del usuario, asi que no se ven
+        // afectados.  `VirtualPtr<T>` sigue siendo la via para memoria VM.
+        ai.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         ai.source_line = vd->loc.line;
         fn_->append(current_block_, std::move(ai));
         bind(vd->name, addr);
 
-        // Phase AS inc.3: registrar el binding register("reg") -> slot.
+        //  AS inc.3: registrar el binding register("reg") -> slot.
         // El backend port-C materializa este ALLOCA como una variable C
         // con register-pin de GCC y traduce sus LOAD/STORE a accesos
         // directos a la variable.
@@ -4730,7 +5517,7 @@ bind_and_cleanup:
                     break;
                 }
             }
-            // Phase AOT.2.b/c/d: POO nativa -> al exit del scope, para una
+            //  AOT.2.b/c/d: POO nativa -> al exit del scope, para una
             // instancia HEAP (`= new`): invocar `~T()` (si existe) y luego
             // liberar la memoria (RAW_FREE).  RAII determinista, sin GC, sin
             // leak.  Una instancia STACK (`Rect r;` -> alloca) NO se libera
@@ -6002,6 +6789,21 @@ void Lowering::lower_for(ast::ForStmt *s) {
 }
 
 void Lowering::lower_return(ast::ReturnStmt *s) {
+    // Multihilo AOT: join-all implicito de los hilos lanzados por `spawn` ANTES
+    // del RET de main, para que sus efectos (sobre globals compartidos) esten
+    // completos cuando main lee su valor de retorno.  Se inyecta en CADA return
+    // de main; __vx_thread_join_all es no-op si no hay hilos.
+    if (native_poo_ && vx_thread_used_ && fn_ != nullptr &&
+        fn_->name == "main") {
+        ir::IrInstr jc{};
+        jc.op = ir::IrOp::CALL;
+        jc.type = ir::IrType::VOID;
+        jc.dst = ir::IR_NO_VALUE;
+        jc.func_name = "__vx_thread_join_all";
+        jc.is_call_site = true;
+        jc.source_line = s->loc.line;
+        fn_->append(current_block_, std::move(jc));
+    }
     // sret: si la funcion declara devolver Optional/Result, no
     // emitimos un RET con valor; en cambio:
     //   1. Bajamos s->value a un buffer local (Some/Ok/Err producen
@@ -7798,7 +8600,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             break;
         }
         case CleanupAction::Kind::NATIVE_FREE: {
-            // Phase AOT.2.d: invocar `~T()` (CALL directo al dtor del
+            //  AOT.2.d: invocar `~T()` (CALL directo al dtor del
             // tipo estatico) ANTES de liberar -> el dtor libera sus
             // recursos propios (RAII).  Luego RAW_FREE de la instancia
             // (host_ptr de calloc) -> aot_lower lo baja a call<free>.
@@ -9240,7 +10042,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
         spawn_captured_ssa_values_.push_back(v);
     }
 
-    // Phase Z.9: escape analysis cross-process.  Para cada captura que
+    //  Z.9: escape analysis cross-process.  Para cada captura que
     // es un objeto GC (is_gc_object=true en su SSA value) Y NO fue
     // declarada con @c shared, emitir warning con sugerencia clara.
     // Esto detecta el bug clasico (t13): pasar un objeto local al
@@ -9291,24 +10093,83 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     host_bearing_locals_.clear();
     cleanup_stack_.clear();
 
-    // BugFix R3: registrar las capturas como params del helper.  Cada
-    // captura llega via la calling convention spawnargs (R1, R2, ...).
-    for (size_t i = 0; i < captures.size(); ++i) {
-        ir::IrValueId v =
-            child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
-        child_fn.values[v].is_param = true;
-        // Si el SSA value original era host_ptr CLASS, propagarlo.
-        if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
-            spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
-            const auto &src_val =
-                saved_fn->values[spawn_captured_ssa_values_[i]];
-            if (src_val.is_host_ptr) child_fn.values[v].is_host_ptr = true;
-            if (src_val.is_gc_object) child_fn.values[v].is_gc_object = true;
+    // Registrar las capturas.
+    // - Ruta VM (no native_poo): cada captura es un PARAM del helper que llega
+    //   via la calling convention spawnargs (R1, R2, ...).
+    // - Ruta AOT (native_poo, hilo real): CreateThread/pthread pasan UN SOLO arg
+    //   -> el helper recibe UN param `cap_ptr` (host_ptr a un struct heap con las
+    //   N capturas, alocado por el caller); las LEE de cap_ptr[i], bindea los
+    //   nombres, y LIBERA el struct (RAW_FREE) tras leerlas.
+    if (native_poo_ && !captures.empty()) {
+        ir::IrValueId cap_ptr =
+            child_fn.new_value(ir::IrType::PTR, "%__cap_ptr");
+        child_fn.values[cap_ptr].is_param = true;
+        child_fn.values[cap_ptr].is_host_ptr = true;
+        child_fn.params.push_back(cap_ptr);
+        for (size_t i = 0; i < captures.size(); ++i) {
+            // addr = cap_ptr + i*8  (mantiene is_host_ptr).
+            ir::IrValueId addr = cap_ptr;
+            if (i != 0) {
+                addr = child_fn.new_value(ir::IrType::PTR);
+                child_fn.values[addr].is_host_ptr = true;
+                ir::IrValueId off = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(i * 8), loc.line);
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::PTR;
+                ad.dst = addr;
+                ad.operands = {cap_ptr, off};
+                ad.source_line = loc.line;
+                fn_->append(current_block_, std::move(ad));
+            }
+            // val = LOAD [addr] (host, qword).
+            ir::IrValueId val =
+                child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
+            if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
+                spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
+                const auto &src_val =
+                    saved_fn->values[spawn_captured_ssa_values_[i]];
+                if (src_val.is_host_ptr)
+                    child_fn.values[val].is_host_ptr = true;
+                if (src_val.is_gc_object)
+                    child_fn.values[val].is_gc_object = true;
+            }
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = val;
+            ld.operands = {addr};
+            ld.source_line = loc.line;
+            fn_->append(current_block_, std::move(ld));
+            scopes_.back()[captures[i]] = val;
         }
-        child_fn.params.push_back(v);
-        // Bindear el nombre en el topmost scope para que IdentExpr
-        // resuelva via @c lookup.
-        scopes_.back()[captures[i]] = v;
+        // Liberar el struct de capturas (ya leidas a locales).
+        ir::IrInstr fr{};
+        fr.op = ir::IrOp::RAW_FREE;
+        fr.type = ir::IrType::VOID;
+        fr.dst = ir::IR_NO_VALUE;
+        fr.operands = {cap_ptr};
+        fr.source_line = loc.line;
+        fn_->append(current_block_, std::move(fr));
+    } else {
+        // BugFix R3: capturas como params (R1..R12) via spawnargs (ruta VM).
+        for (size_t i = 0; i < captures.size(); ++i) {
+            ir::IrValueId v =
+                child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
+            child_fn.values[v].is_param = true;
+            // Si el SSA value original era host_ptr CLASS, propagarlo.
+            if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
+                spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
+                const auto &src_val =
+                    saved_fn->values[spawn_captured_ssa_values_[i]];
+                if (src_val.is_host_ptr) child_fn.values[v].is_host_ptr = true;
+                if (src_val.is_gc_object) child_fn.values[v].is_gc_object = true;
+            }
+            child_fn.params.push_back(v);
+            // Bindear el nombre en el topmost scope para que IdentExpr
+            // resuelva via @c lookup.
+            scopes_.back()[captures[i]] = v;
+        }
     }
 
     // Setup de pila: ahora lo hace exec_instr_spawn directamente al
@@ -9668,6 +10529,16 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
                 // a la celda en el outer scope.  Lo bindeamos como
                 // address_taken_local del helper para que read_local /
                 // write_local emitan LOAD/STORE indirectos.
+                //
+                // Bug host-vs-VM (2026-07-15): esa celda vive en memoria HOST.
+                // Una captura mutable obliga al owner a ser address-taken (el
+                // env guarda el puntero a su slot), y todo local address-taken
+                // se aloca ya en host -- ver @c lower_var_decl.  Sin marcarlo,
+                // los LOAD/STORE indirectos del helper emitian `mov` (VM) y
+                // escribian en una direccion VM mientras el owner leia la
+                // celda host: las mutaciones de la lambda no se veian desde
+                // fuera (el test 56_linkedlist_hof devolvia el `acc` base).
+                child_fn.values[raw_v].is_host_ptr = true;
                 address_taken_locals_.insert(e->captures[i]);
                 bind(e->captures[i], raw_v);
             } else {
@@ -9683,6 +10554,22 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
                     cv.operands = {raw_v};
                     cv.source_line = e->loc.line;
                     child_fn.append(entry, std::move(cv));
+                }
+                // El "valor" capturado de un AGREGADO (struct, enum/ADT, clase)
+                // es su DIRECCION, y vive en memoria host (ver lower_var_decl).
+                // Al releerla del env hay que devolverle esa naturaleza: sin
+                // esto el body de la lambda leia los campos del receptor con
+                // `mov` (VM) y los veia a cero.  Se notaba en `&mk(8).leer`
+                // (metodo ligado sobre un struct): el helper inlinea el metodo,
+                // asi que no pasa por el `this` de lower_struct_methods.
+                if (i < e->capture_types.size()) {
+                    const PrimitiveKind ck = e->capture_types[i].kind;
+                    if (ck == PrimitiveKind::STRUCT ||
+                        ck == PrimitiveKind::CLASS ||
+                        ck == PrimitiveKind::OPTIONAL ||
+                        ck == PrimitiveKind::RESULT) {
+                        child_fn.values[final_v].is_host_ptr = true;
+                    }
                 }
                 bind(e->captures[i], final_v);
             }
@@ -10048,12 +10935,117 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
 // Optional / Result.
 // ---------------------------------------------------------------------
 
+uint64_t Lowering::nested_sret_flat_size(const std::string &callee,
+                                         bool *out_is_host) const {
+    // Tamano del buffer SRET de BUFFER PLANO (value-type) que devuelve @p
+    // callee, o 0 si no lo es.  El fix nested-SRET copia el retbuf del productor
+    // a un slot fresco; la NATURALEZA de ese slot (via @p out_is_host) debe
+    // coincidir con como el CALLEE lee su parametro:
+    //   - ENUM/ADT: desde el modelo "agregados en memoria HOST" ([[proj_
+    //     aggregates_host]], commit a0ffa68) el callee marca su param enum como
+    //     is_host_ptr y lo lee via acceso HOST (`movh [t]`) -> fresh HOST
+    //     (out_is_host=true).  Un slot VM daria segfault (el callee leeria host
+    //     sobre una direccion VM).  ESTE sitio nested-SRET se le paso al fix
+    //     original -> `emit(classify(x))` inline crasheaba (MOVH sobre pila VM).
+    //   - Optional/Result: el callee los lee via acceso HOST (isPresent/unwrap/
+    //     value/error con is_host_ptr) -> fresh HOST (out_is_host=true).  Un
+    //     slot VM daria segfault (leeria host en una direccion VM).
+    // function/smart-ptr se excluyen (ownership de env/ctrl: copiar el buffer
+    // los duplicaria).
+    if (out_is_host) *out_is_host = false;
+    auto it_er = fn_ret_enum_name_.find(callee);
+    if (it_er != fn_ret_enum_name_.end()) {
+        const auto &elays = tc_.enum_layouts();
+        auto it_e = elays.find(it_er->second);
+        if (it_e != elays.end()) {
+            if (out_is_host) *out_is_host = true; // enum agregado -> host
+            return static_cast<uint64_t>(it_e->second.size_bytes);
+        }
+        return 0;
+    }
+    auto it_kind = fn_ret_kind_.find(callee);
+    if (it_kind != fn_ret_kind_.end()) {
+        if (it_kind->second == PrimitiveKind::OPTIONAL) {
+            if (out_is_host) *out_is_host = true;
+            return 16ULL;
+        }
+        if (it_kind->second == PrimitiveKind::RESULT) {
+            if (out_is_host) *out_is_host = true;
+            return 24ULL;
+        }
+    }
+    return 0;
+}
+
+void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
+                             bool src_is_host, uint64_t size_bytes,
+                             uint32_t line) {
+    if (dst_addr == ir::IR_NO_VALUE || src_addr == ir::IR_NO_VALUE) return;
+    const bool dst_is_host = fn_->values[dst_addr].is_host_ptr;
+    const uint64_t qwords = (size_bytes + 7) / 8;
+    for (uint64_t qi = 0; qi < qwords; ++qi) {
+        const uint64_t off = qi * 8;
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(off), line);
+        // src + off (hereda la naturaleza del origen para el LOAD).
+        const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_src_at].is_host_ptr = src_is_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_src_at;
+            ad.operands = {src_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_word;
+            ld.operands = {v_src_at};
+            ld.source_line = line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        // dst + off (naturaleza del slot destino, tipicamente VM ALLOCA).
+        const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_dst_at].is_host_ptr = dst_is_host;
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_dst_at;
+            ad.operands = {dst_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {v_word, v_dst_at};
+            st.source_line = line;
+            fn_->append(current_block_, std::move(st));
+        }
+    }
+}
+
 ir::IrValueId Lowering::lower_enum_constructor(
     const std::string &enum_name, const std::string &variant_name,
     const std::vector<std::unique_ptr<ast::Expr>> &args, const SourceLoc &loc) {
     // Localizar el layout del enum y la variante.
     const auto &elays = tc_.enum_layouts();
     auto it = elays.find(enum_name);
+    if (it == elays.end()) {
+        // `typedef Color Tinta new;` -> el layout (variantes, tags, payloads)
+        // es el del enum de debajo; el newtype solo anade la identidad, que ya
+        // viaja en el Type.
+        if (const std::string real = tc_.underlying_layout_name(enum_name);
+            !real.empty())
+            it = elays.find(real);
+    }
     if (it == elays.end()) {
         error_at(loc, "lowering: enum desconocido '" + enum_name + "'");
         return ir::IR_NO_VALUE;
@@ -10074,7 +11066,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
 
     // marker: MAKE_VARIANT identifica la construccion completa de
     // un valor ADT.  Emitido ANTES de la secuencia ALLOCA + STOREs para
-    // que el C2 JIT (Phase D.8) pueda reconocer el patron y aplicar
+    // que el C2 JIT ( D.8) pueda reconocer el patron y aplicar
     // escape analysis (promocion del slot a regs si no escapa) +
     // case-splitting eficiente del match downstream.  No produce SSA
     // value; el emitter actual lo trata como no-op.
@@ -10170,8 +11162,11 @@ ir::IrValueId Lowering::lower_enum_constructor(
         al.type = ir::IrType::I8;
         al.dst = addr;
         al.imm = static_cast<uint64_t>(elay.size_bytes);
+        // Host, como todo agregado (ver lower_var_decl).
+        al.host_alloca = true;
         al.source_line = loc.line;
         fn_->append(current_block_, std::move(al));
+        fn_->values[addr].is_host_ptr = true;
     }
 
     // 2. STORE i64 tag en offset 0 (= addr).
@@ -10204,6 +11199,11 @@ ir::IrValueId Lowering::lower_enum_constructor(
         ad.operands = {addr, off_v};
         ad.source_line = loc.line;
         fn_->append(current_block_, std::move(ad));
+        // Propagar is_host_ptr del buffer al puntero buf+off (patron
+        // is_host_ptr-en-add): el STORE del payload usa la naturaleza del
+        // buffer.  No-op hoy (el buffer del constructor es VM stack) pero
+        // unifica el patron con Some/Ok/value/error/unwrap.
+        fn_->values[addr_i].is_host_ptr = fn_->values[addr].is_host_ptr;
 
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -10217,20 +11217,665 @@ ir::IrValueId Lowering::lower_enum_constructor(
     return addr;
 }
 
+// Evalua un patron de valor de un match escalar (IntLit / CharLit / -IntLit)
+// a int64.  Los patrones estan validados por el type checker.
+static int64_t eval_scalar_pattern(const ast::Expr *p) {
+    if (!p) return 0;
+    if (p->kind == ast::NodeKind::IntLitExpr)
+        return (int64_t)static_cast<const ast::IntLitExpr *>(p)->value;
+    if (p->kind == ast::NodeKind::CharLitExpr)
+        return (int64_t)static_cast<const ast::CharLitExpr *>(p)->codepoint;
+    if (p->kind == ast::NodeKind::UnaryExpr) {
+        const auto *u = static_cast<const ast::UnaryExpr *>(p);
+        if (u->op == ast::UnOp::Neg)
+            return -eval_scalar_pattern(u->operand.get());
+    }
+    return 0;
+}
+
+void Lowering::emit_match_arm_phis(
+    const std::vector<std::unordered_map<std::string, ir::IrValueId>>
+        &entry_scopes,
+    const std::vector<
+        std::vector<std::unordered_map<std::string, ir::IrValueId>>> &arm_scopes,
+    const std::vector<ir::IrBlockId> &arm_preds,
+    const std::vector<char> &arm_reaches, ir::IrBlockId merge_bb,
+    uint32_t line) {
+    // Base: partimos del scope de entry (variables no tocadas conservan su valor).
+    scopes_ = entry_scopes;
+    const size_t depth = entry_scopes.size();
+    for (size_t lvl = 0; lvl < depth; ++lvl) {
+        for (auto &kv : entry_scopes[lvl]) {
+            const std::string &name = kv.first;
+            // Recolectar (val, pred) de cada arm que ALCANZA el merge.
+            std::vector<std::pair<ir::IrValueId, ir::IrBlockId>> args;
+            bool all_same = true;
+            ir::IrValueId first = ir::IR_NO_VALUE;
+            for (size_t i = 0; i < arm_scopes.size(); ++i) {
+                if (!arm_reaches[i]) continue;
+                if (lvl >= arm_scopes[i].size()) continue;
+                auto it = arm_scopes[i][lvl].find(name);
+                if (it == arm_scopes[i][lvl].end()) continue;
+                args.push_back({it->second, arm_preds[i]});
+                if (first == ir::IR_NO_VALUE) first = it->second;
+                else if (it->second != first) all_same = false;
+            }
+            if (args.empty()) continue;
+            if (all_same) {
+                scopes_[lvl][name] = first; // coherente en todos los arms
+                continue;
+            }
+            // PHI N-vias al inicio del merge (uno por arm que llega).
+            const ir::IrType phi_ty = fn_->values[first].type;
+            ir::IrValueId phi_v = fn_->new_value(phi_ty);
+            ir::IrInstr phi{};
+            phi.op = ir::IrOp::PHI;
+            phi.type = phi_ty;
+            phi.dst = phi_v;
+            for (auto &a : args) phi.phi_args.push_back({a.first, a.second});
+            phi.source_line = line;
+            fn_->blocks[merge_bb].instrs.insert(
+                fn_->blocks[merge_bb].instrs.begin(), std::move(phi));
+            scopes_[lvl][name] = phi_v;
+        }
+    }
+}
+
+ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
+    // 1. Valor del scrutinee (entero/char).  Se compara como i64.
+    ir::IrValueId tag_v = lower_expr(e->scrutinee.get());
+    if (tag_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+
+    const ir::IrBlockId merge_bb = fn_->new_block("smatch_end");
+    ssize_t default_arm_idx = -1;
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if (!e->arms[i].value_pattern && e->arms[i].variant_name == "_") {
+            default_arm_idx = (ssize_t)i;
+            break;
+        }
+    ir::IrBlockId default_bb =
+        (default_arm_idx >= 0) ? fn_->new_block("smatch_default") : merge_bb;
+
+    std::vector<ir::IrBlockId> arm_blocks(e->arms.size(), ir::IR_NO_BLOCK);
+    std::vector<ir::IrBlockId> arm_fall_bbs(e->arms.size(), ir::IR_NO_BLOCK);
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if ((ssize_t)i != default_arm_idx && e->arms[i].value_pattern)
+            arm_blocks[i] = fn_->new_block("smatch_arm");
+
+    bool any_guard = false;
+    for (const auto &a : e->arms)
+        if (a.guard) { any_guard = true; break; }
+    // Rangos `case a..b =>`: si hay alguno, forzamos dispatch LINEAL en orden de
+    // arm (preserva la prioridad first-match y permite el check `lo<=v<(=)hi`).
+    bool any_range = false;
+    for (const auto &a : e->arms)
+        if (a.value_pattern_hi) { any_range = true; break; }
+
+    std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern) continue;
+        if (e->arms[i].value_pattern_hi) continue; // rango: no es caso puntual
+        sw_cases.push_back(
+            {eval_scalar_pattern(e->arms[i].value_pattern.get()), arm_blocks[i]});
+    }
+    std::sort(sw_cases.begin(), sw_cases.end());
+
+    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
+        fn_->blocks[from].succs.push_back(to);
+        fn_->blocks[to].preds.push_back(from);
+    };
+
+    // Dispatch DENSO O(1): marker SWITCH_DENSE (island nativo en JIT).
+    if (!any_guard && !any_range && sw_cases.size() >= 4) {
+        const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
+        const int64_t range = hi - lo + 1, n = (int64_t)sw_cases.size();
+        if (lo >= 0 && range >= n && range <= 2 * n && range <= 256) {
+            std::vector<uint32_t> table((size_t)range, (uint32_t)default_bb);
+            for (const auto &c : sw_cases)
+                table[(size_t)(c.first - lo)] = (uint32_t)c.second;
+            ir::IrInstr sd{};
+            sd.op = ir::IrOp::SWITCH_DENSE;
+            sd.type = ir::IrType::VOID;
+            sd.dst = ir::IR_NO_VALUE;
+            sd.operands = {tag_v};
+            sd.imm = (uint64_t)lo;
+            sd.target_block = default_bb;
+            sd.jump_targets = std::move(table);
+            sd.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(sd));
+        }
+    }
+
+    const bool use_bst = !any_guard && !any_range && sw_cases.size() >= 5;
+    if (use_bst) {
+        // BST balanceado O(log N): cmp_lt en nodos, cmp_eq en hojas.
+        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
+            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
+                current_block_ = cur;
+                if (hi - lo <= 2) {
+                    for (size_t k = lo; k < hi; ++k) {
+                        ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                        ir::IrValueId tc = emit_const(
+                            ir::IrType::I64, (uint64_t)sw_cases[k].first,
+                            e->loc.line);
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_EQ;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = cmp;
+                        cm.operands = {tag_v, tc};
+                        cm.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(cm));
+                        ir::IrBlockId nb = fn_->new_block("s_next");
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.operands.push_back(cmp);
+                        br.target_block = sw_cases[k].second;
+                        br.false_block = nb;
+                        br.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(br));
+                        sw_edge(current_block_, sw_cases[k].second);
+                        sw_edge(current_block_, nb);
+                        current_block_ = nb;
+                    }
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.target_block = default_bb;
+                    br.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(br));
+                    sw_edge(current_block_, default_bb);
+                    return;
+                }
+                const size_t mid = lo + (hi - lo) / 2;
+                ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                ir::IrValueId tc = emit_const(
+                    ir::IrType::I64, (uint64_t)sw_cases[mid].first, e->loc.line);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LT;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp;
+                cm.operands = {tag_v, tc};
+                cm.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(cm));
+                ir::IrBlockId lb = fn_->new_block("s_lt");
+                ir::IrBlockId rb = fn_->new_block("s_ge");
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands.push_back(cmp);
+                br.target_block = lb;
+                br.false_block = rb;
+                br.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(br));
+                sw_edge(current_block_, lb);
+                sw_edge(current_block_, rb);
+                emit_bst(lo, mid, lb);
+                emit_bst(mid, hi, rb);
+            };
+        emit_bst(0, sw_cases.size(), current_block_);
+    } else {
+        // Cadena lineal en orden de arm (pocos casos, guards, o rangos).
+        // Helper: emite BR_COND cmp -> target, else fall.
+        auto emit_cmp_br = [&](ir::IrOp op, ir::IrValueId a, int64_t b,
+                               ir::IrBlockId target, ir::IrBlockId fall,
+                               uint32_t line) {
+            ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+            ir::IrValueId tc = emit_const(ir::IrType::I64, (uint64_t)b, line);
+            ir::IrInstr cm{};
+            cm.op = op;
+            cm.type = ir::IrType::BOOL;
+            cm.dst = cmp;
+            cm.operands = {a, tc};
+            cm.source_line = line;
+            fn_->append(current_block_, std::move(cm));
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(cmp);
+            br.target_block = target;
+            br.false_block = fall;
+            br.source_line = line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, target);
+            sw_edge(current_block_, fall);
+        };
+        for (size_t i = 0; i < e->arms.size(); ++i) {
+            if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern)
+                continue;
+            const uint32_t ln = e->arms[i].loc.line;
+            const int64_t lo =
+                eval_scalar_pattern(e->arms[i].value_pattern.get());
+            ir::IrBlockId fall = fn_->new_block("smatch_next");
+            arm_fall_bbs[i] = fall;
+            if (e->arms[i].value_pattern_hi) {
+                // Rango `lo <= v <(=) hi`: dos comparaciones.
+                const int64_t hi =
+                    eval_scalar_pattern(e->arms[i].value_pattern_hi.get());
+                ir::IrBlockId mid = fn_->new_block("smatch_rmid");
+                emit_cmp_br(ir::IrOp::CMP_GE, tag_v, lo, mid, fall, ln);
+                current_block_ = mid;
+                block_terminated_ = false;
+                const ir::IrOp hi_op = e->arms[i].range_inclusive
+                                           ? ir::IrOp::CMP_LE
+                                           : ir::IrOp::CMP_LT;
+                emit_cmp_br(hi_op, tag_v, hi, arm_blocks[i], fall, ln);
+            } else {
+                emit_cmp_br(ir::IrOp::CMP_EQ, tag_v, lo, arm_blocks[i], fall, ln);
+            }
+            current_block_ = fall;
+            block_terminated_ = false;
+        }
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = default_bb;
+        br.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(br));
+        sw_edge(current_block_, default_bb);
+    }
+
+    // 4. Bodies (con guard opcional).  SSA N-vias: snapshot del scope de entry,
+    // cada arm parte de ese entry, y en el merge se insertan PHIs para las
+    // variables mutadas (sin esto, una var ASIGNADA en un arm se quedaba con el
+    // valor del ultimo arm bajado).
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> entry_scopes =
+        scopes_;
+    std::vector<std::vector<std::unordered_map<std::string, ir::IrValueId>>>
+        arm_scopes(e->arms.size());
+    std::vector<ir::IrBlockId> arm_preds(e->arms.size(), ir::IR_NO_BLOCK);
+    std::vector<char> arm_reaches(e->arms.size(), 0);
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        const auto &arm = e->arms[i];
+        const ir::IrBlockId target =
+            ((ssize_t)i == default_arm_idx) ? default_bb : arm_blocks[i];
+        if (target == ir::IR_NO_BLOCK) continue;
+        current_block_ = target;
+        block_terminated_ = false;
+        scopes_ = entry_scopes; // cada arm parte del mismo entry
+        push_scope();
+        if (arm.guard) {
+            ir::IrValueId g = lower_expr(arm.guard.get());
+            ir::IrBlockId body_bb = fn_->new_block("smatch_body");
+            ir::IrBlockId gfall = (arm_fall_bbs[i] != ir::IR_NO_BLOCK)
+                                      ? arm_fall_bbs[i]
+                                      : default_bb;
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(g);
+            br.target_block = body_bb;
+            br.false_block = gfall;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, body_bb);
+            sw_edge(current_block_, gfall);
+            current_block_ = body_bb;
+            block_terminated_ = false;
+        }
+        if (arm.body) lower_stmt(arm.body.get());
+        if (!block_terminated_) {
+            arm_reaches[i] = 1;
+            arm_preds[i] = current_block_;
+            arm_scopes[i] = scopes_; // snapshot ANTES del pop
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = merge_bb;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, merge_bb);
+        }
+        pop_scope();
+    }
+
+    current_block_ = merge_bb;
+    block_terminated_ = false;
+    emit_match_arm_phis(entry_scopes, arm_scopes, arm_preds, arm_reaches,
+                        merge_bb, e->loc.line);
+    return ir::IR_NO_VALUE; // statement-like (VOID)
+}
+
+ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
+    ir::IrValueId s_h = lower_expr(e->scrutinee.get());
+    if (s_h == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+    // FAST PATH: la longitud en bytes es el discriminador MAS BARATO (O(1), sin
+    // iterar bytes).  Despachamos por longitud primero; la mayoria de inputs que
+    // no coinciden con ningun case se descartan aqui sin una sola comparacion.
+    // Dentro de un bucket (misma longitud) verificamos byte-a-byte (longitud
+    // igual).  Tipico: 1 comparacion de tamano + 1 comparacion de bytes.
+    //
+    // Dos modos, mismo algoritmo:
+    //   * native_poo_ (AOT / Embed, SIN GC): value-string {ptr,len,cap}.  La
+    //     longitud es un campo (emit_native_str_len) y la verificacion es
+    //     emit_strcmp_dispatched(ptr,len,...) -- todo AOT-nativo.
+    //   * GC (interp / JIT): StringObject via STRGETBYTES + STRCMP.
+    ir::IrValueId s_ptr = ir::IR_NO_VALUE; // solo native
+    ir::IrValueId L_v;
+    if (native_poo_) {
+        s_ptr = emit_native_str_data_ptr(s_h, e->loc.line);
+        L_v = emit_native_str_len(s_h, e->loc.line);
+    } else {
+        L_v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr gb{};
+        gb.op = ir::IrOp::STRGETBYTES;
+        gb.type = ir::IrType::I64;
+        gb.dst = L_v;
+        gb.operands = {s_h};
+        gb.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(gb));
+    }
+
+    ssize_t default_arm_idx = -1;
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if (!e->arms[i].value_pattern && e->arms[i].variant_name == "_") {
+            default_arm_idx = (ssize_t)i;
+            break;
+        }
+
+    // Agrupar arms por LONGITUD en bytes del literal (orden estable).  La
+    // longitud del StringLitExpr::value = bytes UTF-8, igual que STRGETBYTES.
+    std::vector<int64_t> distinct_lens;
+    std::map<int64_t, std::vector<size_t>> by_len;
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern) continue;
+        auto *sl = static_cast<ast::StringLitExpr *>(e->arms[i].value_pattern.get());
+        const int64_t L = (int64_t)sl->value.size();
+        if (!by_len.count(L)) distinct_lens.push_back(L);
+        by_len[L].push_back(i);
+    }
+
+    const ir::IrBlockId merge_bb = fn_->new_block("strmatch_end");
+    ir::IrBlockId default_bb =
+        (default_arm_idx >= 0) ? fn_->new_block("strmatch_default") : merge_bb;
+    std::map<int64_t, ir::IrBlockId> verify_bb;
+    for (int64_t L : distinct_lens)
+        verify_bb[L] = fn_->new_block("strmatch_verify");
+    std::vector<ir::IrBlockId> arm_blocks(e->arms.size(), ir::IR_NO_BLOCK);
+    for (size_t i = 0; i < e->arms.size(); ++i)
+        if ((ssize_t)i != default_arm_idx && e->arms[i].value_pattern)
+            arm_blocks[i] = fn_->new_block("strmatch_arm");
+
+    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
+        fn_->blocks[from].succs.push_back(to);
+        fn_->blocks[to].preds.push_back(from);
+    };
+
+    // Dispatch por LONGITUD (entero): SWITCH_DENSE si las longitudes son densas
+    // (comun: 3,4,5,6...), BST O(log N) si dispersas y muchas, else lineal.
+    std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
+    for (int64_t L : distinct_lens)
+        sw_cases.push_back({L, verify_bb[L]});
+    std::sort(sw_cases.begin(), sw_cases.end());
+    ir::IrValueId h_v = L_v; // el dispatch de abajo compara contra L_v
+    if (!sw_cases.empty()) {
+        const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
+        const int64_t range = hi - lo + 1, n = (int64_t)sw_cases.size();
+        if (lo >= 0 && n >= 4 && range >= n && range <= 2 * n && range <= 256) {
+            std::vector<uint32_t> table((size_t)range, (uint32_t)default_bb);
+            for (const auto &c : sw_cases)
+                table[(size_t)(c.first - lo)] = (uint32_t)c.second;
+            ir::IrInstr sd{};
+            sd.op = ir::IrOp::SWITCH_DENSE;
+            sd.type = ir::IrType::VOID;
+            sd.dst = ir::IR_NO_VALUE;
+            sd.operands = {L_v};
+            sd.imm = (uint64_t)lo;
+            sd.target_block = default_bb;
+            sd.jump_targets = std::move(table);
+            sd.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(sd));
+        }
+    }
+    const bool use_bst = sw_cases.size() >= 5;
+    if (use_bst) {
+        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
+            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
+                current_block_ = cur;
+                if (hi - lo <= 2) {
+                    for (size_t k = lo; k < hi; ++k) {
+                        ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                        ir::IrValueId tc = emit_const(
+                            ir::IrType::I64, (uint64_t)sw_cases[k].first,
+                            e->loc.line);
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_EQ;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = cmp;
+                        cm.operands = {h_v, tc};
+                        cm.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(cm));
+                        ir::IrBlockId nb = fn_->new_block("h_next");
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.operands.push_back(cmp);
+                        br.target_block = sw_cases[k].second;
+                        br.false_block = nb;
+                        br.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(br));
+                        sw_edge(current_block_, sw_cases[k].second);
+                        sw_edge(current_block_, nb);
+                        current_block_ = nb;
+                    }
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.target_block = default_bb;
+                    br.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(br));
+                    sw_edge(current_block_, default_bb);
+                    return;
+                }
+                const size_t mid = lo + (hi - lo) / 2;
+                ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+                ir::IrValueId tc = emit_const(
+                    ir::IrType::I64, (uint64_t)sw_cases[mid].first, e->loc.line);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LT;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp;
+                cm.operands = {h_v, tc};
+                cm.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(cm));
+                ir::IrBlockId lb = fn_->new_block("h_lt");
+                ir::IrBlockId rb = fn_->new_block("h_ge");
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands.push_back(cmp);
+                br.target_block = lb;
+                br.false_block = rb;
+                br.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(br));
+                sw_edge(current_block_, lb);
+                sw_edge(current_block_, rb);
+                emit_bst(lo, mid, lb);
+                emit_bst(mid, hi, rb);
+            };
+        emit_bst(0, sw_cases.size(), current_block_);
+    } else {
+        for (const auto &c : sw_cases) {
+            ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
+            ir::IrValueId tc =
+                emit_const(ir::IrType::I64, (uint64_t)c.first, e->loc.line);
+            ir::IrInstr cm{};
+            cm.op = ir::IrOp::CMP_EQ;
+            cm.type = ir::IrType::BOOL;
+            cm.dst = cmp;
+            cm.operands = {h_v, tc};
+            cm.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(cm));
+            ir::IrBlockId nb = fn_->new_block("h_next");
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(cmp);
+            br.target_block = c.second;
+            br.false_block = nb;
+            br.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, c.second);
+            sw_edge(current_block_, nb);
+            current_block_ = nb;
+        }
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = default_bb;
+        br.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(br));
+        sw_edge(current_block_, default_bb);
+    }
+
+    // Verify: en cada verify block, STRCMP del scrutinee contra cada case string
+    // del grupo (normalmente 1); ==0 -> arm body; ninguno -> default.
+    for (int64_t L : distinct_lens) {
+        current_block_ = verify_bb[L];
+        block_terminated_ = false;
+        for (size_t idx : by_len[L]) {
+            auto *sl =
+                static_cast<ast::StringLitExpr *>(e->arms[idx].value_pattern.get());
+            const uint32_t aln = e->arms[idx].loc.line;
+            ir::IrValueId scmp; // -1/0/1
+            if (native_poo_) {
+                // AOT: literal -> .rodata (STR_LIT_ADDR) + len const; compara
+                // via el strcmp CPU-dispatched (mismo que el `==` nativo).
+                std::vector<uint8_t> data(sl->value.begin(), sl->value.end());
+                data.push_back(0);
+                const uint64_t li = out_mod_->intern_static_data(std::move(data));
+                ir::IrValueId lit_ptr = fn_->new_value(ir::IrType::PTR);
+                fn_->values[lit_ptr].is_host_ptr = true;
+                ir::IrInstr sa{};
+                sa.op = ir::IrOp::STR_LIT_ADDR;
+                sa.type = ir::IrType::PTR;
+                sa.dst = lit_ptr;
+                sa.imm = li;
+                sa.source_line = aln;
+                fn_->append(current_block_, std::move(sa));
+                ir::IrValueId lit_len =
+                    emit_const(ir::IrType::I64, (uint64_t)sl->value.size(), aln);
+                scmp = emit_strcmp_dispatched(s_ptr, L_v, lit_ptr, lit_len, aln);
+            } else {
+                ir::IrValueId case_h = lower_string_literal_to_string_object(sl);
+                scmp = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr sc{};
+                sc.op = ir::IrOp::STRCMP;
+                sc.type = ir::IrType::I64;
+                sc.dst = scmp;
+                sc.operands = {s_h, case_h};
+                sc.source_line = aln;
+                fn_->append(current_block_, std::move(sc));
+            }
+            ir::IrValueId zero =
+                emit_const(ir::IrType::I64, 0, e->arms[idx].loc.line);
+            ir::IrValueId eqb = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_EQ;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = eqb;
+                cm.operands = {scmp, zero};
+                cm.source_line = e->arms[idx].loc.line;
+                fn_->append(current_block_, std::move(cm));
+            }
+            ir::IrBlockId vnext = fn_->new_block("strmatch_vnext");
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(eqb);
+            br.target_block = arm_blocks[idx];
+            br.false_block = vnext;
+            br.source_line = e->arms[idx].loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, arm_blocks[idx]);
+            sw_edge(current_block_, vnext);
+            current_block_ = vnext;
+            block_terminated_ = false;
+        }
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = default_bb;
+        br.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(br));
+        sw_edge(current_block_, default_bb);
+    }
+
+    // Bodies (con guard opcional: fallo del guard -> default) + merge N-vias.
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> entry_scopes =
+        scopes_;
+    std::vector<std::vector<std::unordered_map<std::string, ir::IrValueId>>>
+        arm_scopes(e->arms.size());
+    std::vector<ir::IrBlockId> arm_preds(e->arms.size(), ir::IR_NO_BLOCK);
+    std::vector<char> arm_reaches(e->arms.size(), 0);
+    for (size_t i = 0; i < e->arms.size(); ++i) {
+        const auto &arm = e->arms[i];
+        const ir::IrBlockId target =
+            ((ssize_t)i == default_arm_idx) ? default_bb : arm_blocks[i];
+        if (target == ir::IR_NO_BLOCK) continue;
+        current_block_ = target;
+        block_terminated_ = false;
+        scopes_ = entry_scopes;
+        push_scope();
+        if (arm.guard) {
+            ir::IrValueId g = lower_expr(arm.guard.get());
+            ir::IrBlockId body_bb = fn_->new_block("strmatch_body");
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(g);
+            br.target_block = body_bb;
+            br.false_block = default_bb;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, body_bb);
+            sw_edge(current_block_, default_bb);
+            current_block_ = body_bb;
+            block_terminated_ = false;
+        }
+        if (arm.body) lower_stmt(arm.body.get());
+        if (!block_terminated_) {
+            arm_reaches[i] = 1;
+            arm_preds[i] = current_block_;
+            arm_scopes[i] = scopes_;
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = merge_bb;
+            br.source_line = arm.loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, merge_bb);
+        }
+        pop_scope();
+    }
+
+    current_block_ = merge_bb;
+    block_terminated_ = false;
+    emit_match_arm_phis(entry_scopes, arm_scopes, arm_preds, arm_reaches,
+                        merge_bb, e->loc.line);
+    return ir::IR_NO_VALUE;
+}
+
 ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     if (!e || !e->scrutinee) {
         error_at(e ? e->loc : SourceLoc{}, "lowering: match sin scrutinee");
         return ir::IR_NO_VALUE;
     }
-    // Tipo del scrutinee debe ser STRUCT con struct_name en
-    // enum_layouts_.  Si no, el type checker ya reporto error y
-    // devolvemos NO_VALUE silenciosamente para no inundar.
+    // match ESCALAR (int/char) o STRING: scrutinee no-enum + arms value_pattern.
     const Type st = e->scrutinee->result_type;
-    if (st.kind != PrimitiveKind::STRUCT) return ir::IR_NO_VALUE;
+    // Optional<T> / Result<V,E>: pseudo-enums de dos variantes (ver
+    // build_optlike_enum_layout).  El dispatch + bindings reusan la misma
+    // maquinaria del enum; el layout sale sintetico.
+    const bool st_optlike = (st.kind == PrimitiveKind::OPTIONAL ||
+                             st.kind == PrimitiveKind::RESULT);
+    if (st.kind != PrimitiveKind::STRUCT && !st_optlike) {
+        bool any_value_arm = false;
+        for (const auto &a : e->arms)
+            if (a.value_pattern) { any_value_arm = true; break; }
+        if (st.kind == PrimitiveKind::STRING) return lower_match_string(e);
+        if (any_value_arm) return lower_match_scalar(e);
+        // Si no encaja en ningun path, el type checker ya reporto error;
+        // devolvemos NO_VALUE silenciosamente para no inundar.
+        return ir::IR_NO_VALUE;
+    }
+    // Tipo del scrutinee: STRUCT (enum real) u Optional/Result (sintetico).
     const auto &elays = tc_.enum_layouts();
-    auto it = elays.find(st.struct_name);
-    if (it == elays.end()) return ir::IR_NO_VALUE;
-    const EnumLayout &elay = it->second;
+    EnumLayout syn_optlike;
+    const EnumLayout *elayp = nullptr;
+    if (st_optlike) {
+        syn_optlike = build_optlike_enum_layout(st);
+        elayp = &syn_optlike;
+    } else {
+        auto it = elays.find(st.struct_name);
+        if (it == elays.end()) return ir::IR_NO_VALUE;
+        elayp = &it->second;
+    }
+    const EnumLayout &elay = *elayp;
 
     // 1. Lower del scrutinee -> SSA PTR al slot.
     ir::IrValueId scrut_addr = lower_expr(e->scrutinee.get());
@@ -10251,7 +11896,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
         mt.type = ir::IrType::VOID;
         mt.dst = ir::IR_NO_VALUE;
         mt.operands = {scrut_addr};
-        mt.func_name = st.struct_name; // nombre del enum
+        mt.func_name = elay.name; // nombre del enum (o Optional/Result)
         mt.imm = static_cast<uint64_t>(n_concrete);
         mt.source_line = e->loc.line;
         fn_->append(current_block_, std::move(mt));
@@ -10556,7 +12201,25 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 }
             }
             for (size_t bi = 0; bi < arm.bindings.size(); ++bi) {
-                const uint64_t off = 8ULL + 8ULL * static_cast<uint64_t>(bi);
+                // Offset del payload dentro del buffer.  Para Optional/Result
+                // (optlike) sale de field_offsets (Err vive en +16, no en +8);
+                // para enums reales es el layout uniforme 8 + 8*bi.
+                uint64_t off = 8ULL + 8ULL * static_cast<uint64_t>(bi);
+                if (elay.is_optlike && arm_var &&
+                    bi < arm_var->field_offsets.size()) {
+                    off = static_cast<uint64_t>(arm_var->field_offsets[bi]);
+                }
+                // Tipo del LOAD.  optlike: el payload se guardo con su tipo
+                // NATIVO (Some/Ok/Err no promueven a i64), asi que se lee
+                // directo -- igual que unwrap/value/error.  Enum real: i64
+                // (el constructor promueve todo payload a i64, floats via
+                // BITCAST) y se recupera abajo.
+                ir::IrType load_t = ir::IrType::I64;
+                if (elay.is_optlike && arm_var &&
+                    bi < arm_var->field_types.size()) {
+                    load_t = ir_type_from_primitive(
+                        arm_var->field_types[bi].kind);
+                }
                 ir::IrValueId addr_i = fn_->new_value(ir::IrType::PTR);
                 ir::IrValueId off_v =
                     emit_const(ir::IrType::I64, off, arm.loc.line);
@@ -10569,15 +12232,28 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     ad.source_line = arm.loc.line;
                     fn_->append(current_block_, std::move(ad));
                 }
-                ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+                // Propagar is_host_ptr del scrutinee al puntero scrut+off (patron
+                // is_host_ptr-en-add: el LOAD del payload debe usar la misma
+                // naturaleza -- host o VM -- que el buffer del enum).  Los enum
+                // reales viven en VM stack (no-op), pero Optional/Result viven en
+                // HOST alloca -> aqui el LOAD emite `movh`/`loadzh` correctamente.
+                fn_->values[addr_i].is_host_ptr =
+                    fn_->values[scrut_addr].is_host_ptr;
+                ir::IrValueId v = fn_->new_value(load_t);
                 {
                     ir::IrInstr ld{};
                     ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
+                    ld.type = load_t;
                     ld.dst = v;
                     ld.operands = {addr_i};
                     ld.source_line = arm.loc.line;
                     fn_->append(current_block_, std::move(ld));
+                }
+                // optlike: el valor cargado ya es del tipo nativo del payload;
+                // sin recuperacion de bits (Some/Ok/Err guardan native).
+                if (elay.is_optlike) {
+                    bind(arm.bindings[bi], v);
+                    continue;
                 }
                 // Si el field declarado es float, bitcastear i64 -> f64
                 // (recupera los bits IEEE escritos por el constructor).
@@ -10797,19 +12473,87 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     // regs al child antes de make_ready.  Aplica para Auto policy.
     const auto &caps = spawn_captured_ssa_values_;
 
-    // AOT/bare (native_poo_): spawn = hilo 1:1 del SO via CALL __vx_spawn
-    // (CreateThread en Win, clone en Linux), bundle-ado desde vx_thread.vx.
-    // El hint de `here`/`on(N)` se ignora (sin schedulers; cada spawn es un
-    // hilo).  Las capturas (SPAWN_ARGS) llegan en la Fase 2; por ahora solo
-    // el caso sin capturas (las capturas caen al rechazo de aot_analyze).
-    if (native_poo_ && caps.empty()) {
+    // AOT/bare (native_poo_): `spawn { }` tiene DOS bajadas segun el body:
+    //
+    //  (A) COOPERATIVA (el body usa mailbox/future/await: msgrecv/msgsend/fulfill/
+    //      future_alloc/await) -> es una TAREA del scheduler cooperativo de
+    //      vx_async (single-thread, run-to-completion), NO un hilo paralelo.  Baja
+    //      a CALL __vx_spawn(body) que ENCOLA la tarea y devuelve un pid (que
+    //      msgsend/await usan).  Identico a la semantica del interprete/JIT.
+    //
+    //  (B) HILO REAL del SO (cualquier otro body: computo puro / synchronized) via
+    //      CALL __vx_thread_run (CreateThread en Win, pthread en Linux), bundle-ado
+    //      desde vx_thread.vx.  El HANDLE se registra para el join-all implicito
+    //      que se inyecta al final de main.  Capturas: struct heap (RAW_ALLOC N*8)
+    //      que el helper LEE de cap_ptr[i] y libera; sin capturas, arg=0.
+    //
+    // La distincion refleja el modelo del lenguaje: async = cooperativo un hilo;
+    // spawn de computo = paralelismo real.
+    if (native_poo_ && caps.empty() && spawn_body_uses_coop(e->body.get())) {
         const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
         ir::IrInstr c{};
         c.op = ir::IrOp::CALL;
         c.type = ir::IrType::I64;
         c.dst = v_pid;
-        c.func_name = "__vx_spawn";
+        c.func_name = "__vx_spawn";  // encola tarea cooperativa; devuelve pid
         c.operands = {v_pc};
+        c.is_call_site = true;
+        c.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(c));
+        // NO marca vx_thread_used_: no es hilo real; el await bombea la cola.
+        return v_pid;
+    }
+    if (native_poo_) {
+        vx_thread_used_ = true;
+        ir::IrValueId v_arg;
+        if (caps.empty()) {
+            v_arg = emit_const(ir::IrType::I64, 0, e->loc.line);
+        } else {
+            ir::IrValueId v_size =
+                emit_const(ir::IrType::I64,
+                           static_cast<int64_t>(caps.size() * 8), e->loc.line);
+            ir::IrValueId cap_ptr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[cap_ptr].is_host_ptr = true;
+            ir::IrInstr al{};
+            al.op = ir::IrOp::RAW_ALLOC;
+            al.type = ir::IrType::PTR;
+            al.dst = cap_ptr;
+            al.operands = {v_size};
+            al.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(al));
+            for (size_t i = 0; i < caps.size(); ++i) {
+                ir::IrValueId addr = cap_ptr;
+                if (i != 0) {
+                    addr = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[addr].is_host_ptr = true;
+                    ir::IrValueId off =
+                        emit_const(ir::IrType::I64,
+                                   static_cast<int64_t>(i * 8), e->loc.line);
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::PTR;
+                    ad.dst = addr;
+                    ad.operands = {cap_ptr, off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.dst = ir::IR_NO_VALUE;
+                st.operands = {caps[i], addr};
+                st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            v_arg = cap_ptr;
+        }
+        const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CALL;
+        c.type = ir::IrType::I64;
+        c.dst = v_pid;
+        c.func_name = "__vx_thread_run";
+        c.operands = {v_pc, v_arg};
         c.is_call_site = true;
         c.source_line = e->loc.line;
         fn_->append(current_block_, std::move(c));
@@ -11321,7 +13065,7 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
 }
 
 // ---------------------------------------------------------------------
-// Phase AS: inline asm nativo -> IrOp::INLINE_ASM (marker host).
+//  AS: inline asm nativo -> IrOp::INLINE_ASM (marker host).
 //
 // Incremento 1 (aditivo): el cuerpo NASM viaja verbatim en func_name y
 // los calificadores + efectos (memory/flags) en un bitfield en imm.  El
@@ -11339,13 +13083,175 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
 // (port-C) decidira el transporte de la lista de registros.
 // ---------------------------------------------------------------------
 void Lowering::lower_asm(ast::AsmStmt *s) {
+    // Orden de la pipeline (importante): NO se reordena el TEXTO del asm todavia.
+    // El reordenamiento por latencia/puertos/ILP se aplica a TODO el codigo
+    // generado -- asm liftado Y codigo normal del lenguaje -- en el backend de
+    // JIT/AOT, via el scheduler machine-level (arch-data).  Por eso primero se
+    // intenta LIFTAR el bloque a IR (mas abajo): una vez es IR, se reordena como
+    // cualquier otra instruccion, junto con el resto del codigo.  El unico caso
+    // que el scheduler machine-level NO puede reordenar es el INLINE_ASM OPACO
+    // (no ve dentro): para que ese tampoco se quede sin reordenar, se le aplica
+    // un reschedule a nivel de TEXTO asm justo antes de emitirlo (mas abajo).
+    // Reordenar aqui, antes del lift, rompia patrones liftables de varias
+    // instrucciones (p.ej. cmp+cmov: colaba una mov entre el cmp y el cmov).
+
+    // ASA.2: diagnosticos del bloque.  Solo para bloques que el compilador debe
+    // entender (Analyzable/Volatile; `raw` es cero-analisis por diseno).  Se
+    // emiten como WARNINGS; la linea se mapea con body_loc.
+    if (s->level != ast::AsmLevel::Raw) {
+        auto emit = [&](const std::vector<vx::AsmDiag> &ds) {
+            for (const vx::AsmDiag &d : ds) {
+                SourceLoc dl = s->body_loc;
+                if (d.line_no > 0)
+                    dl.line = s->body_loc.line + (d.line_no - 1);
+                // Diagnostico CATALOGADO: solo codigo + args; el texto (y su
+                // idioma) los resuelve el catalogo al imprimir.
+                const DiagLevel lvl =
+                    (d.severity == vx::AsmDiagSeverity::Error) ? DiagLevel::ERR
+                    : (d.severity == vx::AsmDiagSeverity::Info) ? DiagLevel::NOTE
+                                                               : DiagLevel::WARN;
+                diags_.diag(dl, lvl, d.code, d.args);
+            }
+        };
+        vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, s->body);
+        // ESTRUCTURALES (codigo muerto, salto no resuelto, bucle sin salida):
+        // solidos, sin dependencias.
+        emit(vx::asm_diagnose_cfg(cfg));
+        // DATAFLOW.  defined_in = registros ligados por register() EN SCOPE (los
+        // que el `lookup` sigue resolviendo a su ALLOCA).  Solo lo computamos
+        // para el modelo CLASICO (sin operandos inc.7): el inc.7 usa placeholders
+        // %name en el body -> las lecturas/escrituras de registro no son fiables
+        // ahi, asi que en ese caso solo emitimos VXA005 (flags, basado en el
+        // mnemonico/rama, no en los operandos).  Tratar TODAS las bindings como
+        // definidas es un SUPERSET seguro: puede infra-avisar (output leido antes
+        // de escribirse) pero nunca da un falso positivo.
+        const bool classic_model = s->operands.empty();
+        std::vector<std::string> defined_in;
+        if (classic_model) {
+            for (const auto &b : fn_->asm_reg_bindings)
+                if (lookup(b.name) == b.alloca_value) {
+                    std::string c = vx::asm_canonical_reg(b.reg);
+                    if (!c.empty())
+                        defined_in.push_back(std::move(c));
+                }
+        }
+        int32_t ua = vx::instr_db::microarch_by_name(vx::instr_db::Isa::X86,
+                                                     "intel-skylake");
+        std::vector<vx::AsmDiag> df = vx::asm_diagnose_uninit(
+            cfg, vx::instr_db::Isa::X86, defined_in,
+            static_cast<uint32_t>(ua < 0 ? 0 : ua));
+        std::vector<vx::AsmDiag> keep;
+        for (auto &d : df)
+            if (classic_model || d.code == "VXA005") // VXA004 solo en clasico.
+                keep.push_back(std::move(d));
+        emit(keep);
+    }
+
     ir::IrInstr ia{};
     ia.op = ir::IrOp::INLINE_ASM;
     ia.type = ir::IrType::VOID;
     ia.dst = ir::IR_NO_VALUE;
     ia.source_line = s->loc.line;
 
-    // Phase AS inc.5g (metaprogramacion): sustituir las `comptime` consts
+    //  AS inc.7: crear las variables register-bound de la lista de
+    // operandos `( <clase> <nombre> [= init] )` ANTES de tokenizar el body
+    // (para sustituir los placeholders por el registro).  Clase concreta ->
+    // el registro se conoce aqui: se crea el mismo AsmRegBinding que inc.5 y
+    // se sustituye el placeholder por el nombre del registro en el body ->
+    // queda IDENTICO al modelo register().  Clase `reg` (allocator elige) ->
+    // requiere sustitucion POST-regalloc en el backend (en desarrollo).
+    std::vector<std::pair<std::string, std::string>> ph_subst; // nombre -> reg
+    // Registros YA reservados: los operandos con clase CONCRETA + los clobbers
+    // explicitos.  Los operandos `reg` (allocator) eligen entre los libres.
+    std::set<std::string> used_regs;
+    for (const auto &op : s->operands) {
+        if (op.reg_class != "reg" && op.reg_class != "mem") {
+            const std::string c = vx::asm_canonical_reg(op.reg_class);
+            if (!c.empty()) used_regs.insert(c);
+        }
+    }
+    for (const auto &cb : s->clobbers) {
+        const std::string c = vx::asm_canonical_reg(cb);
+        if (!c.empty()) used_regs.insert(c);
+    }
+    // Preferencia de eleccion para `reg`: caller-saved primero (menos coste de
+    // salvado), rsp/rbp excluidos siempre.  El compilador elige el primero
+    // libre (no reservado por concretos/clobbers ni por otro `reg` previo).
+    static const char *kRegPref[] = {"r10", "r11", "r8",  "r9",  "rcx", "rdx",
+                                     "rsi", "rdi", "rax", "rbx", "r12", "r13",
+                                     "r14", "r15"};
+    int reg_auto_count = 0; // indice $N de cada operando `reg` (auto)
+    for (auto &op : s->operands) {
+        std::string reg;
+        bool reg_auto = false;
+        int ph_index = -1;
+        if (op.reg_class == "reg") {
+            // operando `reg` AUTO.  El cuerpo lo referencia por el
+            // placeholder $N; el JIT/AOT lo rellenan POST-regalloc con el
+            // registro OPTIMO que elige el RA (constraint register-required,
+            // ensamblado diferido).  Se conserva un pick GREEDY (kRegPref) en
+            // @c binding.reg como asignacion por defecto para el INTERP (que no
+            // tiene RA): ahi el $N se sustituye por este registro.
+            reg_auto = true;
+            ph_index = reg_auto_count++;
+            for (const char *cand : kRegPref) {
+                if (used_regs.count(cand) == 0) {
+                    reg = cand;
+                    break;
+                }
+            }
+            if (reg.empty()) {
+                diags_.error(op.loc, "asm: sin registros GP libres para el "
+                                     "operando 'reg' (demasiados operandos/"
+                                     "clobbers)");
+                continue;
+            }
+            used_regs.insert(reg);
+        } else if (op.reg_class == "mem") {
+            continue; // ya reportado
+        } else {
+            reg = vx::asm_canonical_reg(op.reg_class);
+            if (reg.empty()) continue; // clase invalida (ya reportada)
+        }
+        // Lower del inicializador (entrada) para deducir el tipo del slot.
+        ir::IrType vt = ir::IrType::I64;
+        ir::IrValueId v0 = ir::IR_NO_VALUE;
+        if (op.init) {
+            v0 = lower_expr(op.init.get());
+            if (v0 != ir::IR_NO_VALUE) vt = fn_->values[v0].type;
+        }
+        const size_t bytes = ir_type_size(vt);
+        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        ir::IrInstr ai{};
+        ai.op = ir::IrOp::ALLOCA;
+        ai.type = ir::IrType::I8;
+        ai.dst = addr;
+        ai.imm = (uint64_t)bytes;
+        ai.source_line = s->loc.line;
+        fn_->append(current_block_, std::move(ai));
+        bind(op.name, addr);
+        address_taken_locals_.insert(op.name);
+        const bool is_vec = reg.rfind("xmm", 0) == 0 ||
+                            reg.rfind("ymm", 0) == 0 || reg.rfind("zmm", 0) == 0;
+        ir::AsmRegBinding b{addr, reg, vt, is_vec, op.name};
+        b.reg_auto = reg_auto;
+        b.ph_index = ph_index;
+        fn_->asm_reg_bindings.push_back(std::move(b));
+        if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, s->loc.line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = vt;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v0, addr};
+        st.source_line = s->loc.line;
+        fn_->append(current_block_, std::move(st));
+        // Placeholder en el cuerpo: reg concreto -> su nombre; reg AUTO -> $N
+        // (lo rellena el backend post-regalloc con el fisico que elija el RA).
+        ph_subst.emplace_back(op.name,
+                              reg_auto ? ("$" + std::to_string(ph_index)) : reg);
+    }
+
+    //  AS inc.5g (metaprogramacion): sustituir las `comptime` consts
     // ENTERAS por su literal en el cuerpo del asm ANTES de ensamblar, igual
     // que una macro textual (evita hardcodear el valor + mantiene el asm
     // legible).  Tokenizamos por identificadores [A-Za-z_][A-Za-z0-9_]*; un
@@ -11417,6 +13323,22 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     break;
             }
             const std::string tok = b.substr(i, j - i);
+            //  AS inc.7: si el token es el NOMBRE de un operando de la
+            // lista `( ... )`, sustituirlo por su REGISTRO (los concretos ya
+            // conocen el registro; los `reg` allocator se haran POST-regalloc
+            // en el backend).  Tiene prioridad sobre comptime/decoracion.
+            {
+                bool ph_done = false;
+                for (const auto &pr : ph_subst) {
+                    if (pr.first == tok) {
+                        body_sub += pr.second;
+                        i = j;
+                        ph_done = true;
+                        break;
+                    }
+                }
+                if (ph_done) continue;
+            }
             // Bug/feature 198: la decoracion de simbolos propios (__vxf_ fn /
             // __vxg_ global) solo debe aplicarse a tokens en posicion de
             // OPERANDO, NUNCA a un mnemonico ni a un registro.  Critico porque
@@ -11478,14 +13400,14 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             i = j;
         }
     }
-    // Phase AS inc.5g: normalizar los literales numericos del body a hex
+    //  AS inc.5g: normalizar los literales numericos del body a hex
     // explicito detectando su base (0x/0b/0o/decimal).  Keystone interpreta
     // los enteros BARE como HEX, asi que sin esto `shl rdx, 32` seria un
     // shift de 0x32=50.  Tras esto, los 4 bases se soportan correctamente.
     body_sub = vx::asm_normalize_numbers(body_sub);
     ia.func_name = body_sub; // cuerpo NASM (consts + bases ya normalizadas)
 
-    // Phase AS inc.4b: validacion de sintaxis en compile-time via el
+    //  AS inc.4b: validacion de sintaxis en compile-time via el
     // backend de ensamblado (Keystone).  Si esta registrado y rechaza el
     // body, emitimos un error con la linea Vesta (mejor que esperar a que
     // GCC falle al compilar el .c).  Si no hay backend (tests sin main),
@@ -11494,13 +13416,18 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     if (vx::g_asm_backend && !body_sub.empty()) {
         // Ensamblar el cuerpo COMPLETO (preserva el contexto de etiquetas: un
         // `jmp .loop` necesita ver la definicion `.loop:` de otra linea).
-        // Arch del TARGET (no del host): 32/16 si --aot-arch lo pide.
-        const vx::AsmArch asm_arch = asm_target_bits_ == 32 ? vx::AsmArch::X86_32
-                                      : asm_target_bits_ == 16
-                                          ? vx::AsmArch::X86_16
-                                          : vx::AsmArch::X86_64;
+        // Arch del TARGET (no del host): ARM si @Target lo pide, o 32/16 en x86
+        // segun @bits / --aot-arch.
+        const vx::AsmArch asm_arch = vx::asm_arch_for_target(asm_target_bits_);
+        // el cuerpo puede llevar placeholders $N (operandos `reg`
+        // auto).  Para VALIDAR la sintaxis con Keystone hay que darle un cuerpo
+        // concreto -> sustituimos $N por el pick greedy del binding (el
+        // ensamblado real usa el registro OPTIMO del RA post-regalloc en el
+        // JIT/AOT, o este mismo greedy en el interp).
+        const std::string vbody =
+            vx::asm_body_subst_greedy(body_sub, fn_->asm_reg_bindings);
         vx::AsmAssembleResult ar =
-            vx::g_asm_backend->assemble(body_sub, asm_arch);
+            vx::g_asm_backend->assemble(vbody, asm_arch);
         if (!ar.ok) {
             // Traducir el codigo de Keystone a un mensaje claro en espanol.
             auto human_asm_error = [](const std::string &e) -> std::string {
@@ -11548,7 +13475,8 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                                 body_sub[e2 - 1] == '\t' ||
                                 body_sub[e2 - 1] == '\r'))
                             --e2;
-                        std::string ln = body_sub.substr(a, e2 - a);
+                        std::string ln = vx::asm_body_subst_greedy(
+                            body_sub.substr(a, e2 - a), fn_->asm_reg_bindings);
                         const bool is_comment =
                             ln.empty() || ln[0] == ';' ||
                             (ln.size() >= 2 && ln[0] == '/' && ln[1] == '/');
@@ -11580,7 +13508,77 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         }
     }
 
-    // Phase AS inc.3: listar como operandos los slots ALLOCA de las
+    // ASA.3: intentar el LIFT del bloque ANALIZABLE a IR ANTES de los warnings y
+    // del INLINE_ASM.  Si liftea, hace return: los diagnosticos de abajo (VXA009
+    // rbx-reservado, VXA010 rsp-reasignado) NO deben dispararse porque solo
+    // aplican al bloque que se queda OPACO (INLINE_ASM); un bloque lifteado SI
+    // compila nativo aunque use rbx.  El mapa registro-canonico -> slot ALLOCA se
+    // construye aqui porque necesita el `lookup` de scope; la deteccion/emision
+    // vive en el modulo.
+    if (s->level == ast::AsmLevel::Analyzable) {
+        std::unordered_map<std::string, ir::IrValueId> slot_of;
+        for (const auto &b : fn_->asm_reg_bindings)
+            if (lookup(b.name) == b.alloca_value) {
+                std::string c = asm_canonical_reg(b.reg);
+                if (!c.empty()) slot_of[c] = b.alloca_value;
+            }
+        if (vx::asm_lift_emit(*fn_, current_block_, vx::instr_db::Isa::X86,
+                              ia.func_name, slot_of, s->loc.line))
+            return; // patron liftado -> NO se emite el INLINE_ASM.
+
+        // Lift GENERAL instruccion-a-instruccion: el asm entero straight-line
+        // (mov/lea/ALU/neg-not/inc-dec, [reg]) pasa a IR SSA real (ADD, LOAD,
+        // STORE...) que participa del optimizador -> del asm del usuario sale
+        // codigo mas eficiente.  Los registros ligados por register() se cargan
+        // de su slot (al ancho de su tipo) y se escriben de vuelta.  Cualquier
+        // forma fuera del subset -> false y cae al ASM_MICRO / INLINE_ASM.
+        {
+            std::unordered_map<std::string, vx::AsmBoundReg> bound;
+            for (const auto &b : fn_->asm_reg_bindings)
+                if (lookup(b.name) == b.alloca_value) {
+                    const std::string c = asm_canonical_reg(b.reg);
+                    if (c.empty()) continue;
+                    int wbits = 64;
+                    switch (b.type) {
+                    case ir::IrType::I8:
+                    case ir::IrType::U8:
+                    case ir::IrType::BOOL: wbits = 8; break;
+                    case ir::IrType::I16:
+                    case ir::IrType::U16: wbits = 16; break;
+                    case ir::IrType::I32:
+                    case ir::IrType::U32:
+                    case ir::IrType::F32: wbits = 32; break;
+                    default: wbits = 64; break; // I64/U64/PTR/HANDLE/F64
+                    }
+                    bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
+                }
+            uint32_t asm_exit = current_block_;
+            if (vx::asm_lift_general(*fn_, current_block_, vx::instr_db::Isa::X86,
+                                     ia.func_name, bound, s->loc.line,
+                                     &asm_exit)) {
+                // Si el asm tenia ramas, el lift creo un CFG y devuelve el bloque
+                // de CONTINUACION: el codigo siguiente se baja ahi.
+                current_block_ = asm_exit;
+                return; // bloque liftado a IR real -> NO se emite el INLINE_ASM.
+            }
+        }
+
+        // Si no encaja un patron tipado, intentar el lift GENERAL a ASM_MICRO:
+        // instrucciones opacas SIN operandos de registro (mfence/pause/...)
+        // pasan a ser IR (una ASM_MICRO por instruccion) que lleva sus efectos
+        // de la DB, en vez de la caja opaca INLINE_ASM.  Solo si TODO el bloque
+        // encaja (transaccional); si no, cae al INLINE_ASM de abajo.
+        if (vx::asm_lift_micro(*fn_, current_block_, vx::instr_db::Isa::X86,
+                               ia.func_name, s->loc.line, slot_of)) {
+            // El interp ejecuta la ASM_MICRO via vrt:asm_micro_exec (trampoline
+            // nativo si hay ensamblador, o emulacion portable del efecto).
+            // Registrar el import para que el linker lo resuelva.  Idempotente.
+            out_mod_->register_native_import("vrt", "asm_micro_exec");
+            return; // bloque liftado a ASM_MICRO -> NO se emite el INLINE_ASM.
+        }
+    }
+
+    //  AS inc.3: listar como operandos los slots ALLOCA de las
     // variables register-bound EN SCOPE en este punto.  Esto (a) impide
     // que el optimizer las elimine (INLINE_ASM es op no-safe -> sus
     // operandos "escapan"), y (b) le dice al backend que vars poner en la
@@ -11597,11 +13595,117 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         if (lookup(b.name) == b.alloca_value) {
             ia.operands.push_back(b.alloca_value);
             std::string c = asm_canonical_reg(b.reg);
-            if (!c.empty()) bound_canon.push_back(std::move(c));
+            if (!c.empty()) bound_canon.push_back(c);
+            // validar el PIN.  Manipular la pila desde el asm SI esta
+            // permitido -- pero en el CUERPO (push/pop, sub rsp, mov rax,rsp;
+            // todo eso funciona y el compilador lo entiende), NO pineando un
+            // valor Vesta a rsp/rbp (no puede vivir en el puntero de pila sin
+            // romper la pila; el marshalling no lo soporta) -> ERROR que GUiA a
+            // la forma correcta.  rbx esta reservado por el runtime en modo VM
+            // -> el JIT no compila el bloque (cae al interprete) -> WARNING.
+            // Los `reg` auto (b.reg_auto) NO se validan: el RA elige usable.
+            if (!b.reg_auto) {
+                if (c == "rsp" || c == "rbp")
+                    diags_.diag(s->body_loc, DiagLevel::ERR, "VXA008",
+                                {b.name, c});
+                else if (c == "rbx")
+                    diags_.diag(s->body_loc, DiagLevel::WARN, "VXA009",
+                                {b.name, c});
+            }
         }
     }
 
-    // Phase AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
+    // Reasignacion de rsp en una funcion NORMAL: el JIT lo compila (no cae al
+    // interprete), pero el epilogue de la funcion gestiona la pila, asi
+    // que un cambio de pila PERSISTENTE (corrutinas/fibras) no sobrevive al
+    // retorno.  Avisamos (no auto-corregimos): el usuario decide entre marcar
+    // la funcion @Naked (dueno de la pila) o equilibrar el cambio antes de
+    // cerrar el bloque.  Solo cuenta la REASIGNACION (mov/xchg/lea/pop de
+    // rsp/esp), no el ajuste balanceado (sub/add rsp, push/pop de datos), que
+    // es uso local legitimo del marco.
+    if (!fn_->is_naked) {
+        std::string sp_reassigned;
+        size_t p = 0;
+        while (p < body_sub.size()) {
+            size_t nl = body_sub.find('\n', p);
+            std::string ln =
+                body_sub.substr(p, nl == std::string::npos ? std::string::npos
+                                                           : nl - p);
+            p = (nl == std::string::npos) ? body_sub.size() : nl + 1;
+            // Trocear mnemonico + primer operando (minusculas).
+            size_t i = 0;
+            while (i < ln.size() && std::isspace((unsigned char)ln[i])) ++i;
+            size_t ms = i;
+            while (i < ln.size() && !std::isspace((unsigned char)ln[i])) ++i;
+            std::string mnem = ln.substr(ms, i - ms);
+            for (char &ch : mnem) ch = (char)std::tolower((unsigned char)ch);
+            const bool dest_op = (mnem == "mov" || mnem == "movq" ||
+                                  mnem == "lea" || mnem == "pop");
+            const bool xchg_op = (mnem == "xchg");
+            if (!dest_op && !xchg_op) continue;
+            // Operandos tras el mnemonico (sintaxis Intel: DEST primero).  Cortar
+            // en un comentario `//` o `;` para no mirar el texto de la nota.
+            std::string rest = ln.substr(i);
+            size_t cm = rest.find("//");
+            if (cm != std::string::npos) rest.resize(cm);
+            cm = rest.find(';');
+            if (cm != std::string::npos) rest.resize(cm);
+            for (char &ch : rest) ch = (char)std::tolower((unsigned char)ch);
+            // Devuelve el operando #n (0=DEST) recortado de espacios.
+            auto operand = [&](int n) {
+                size_t a = 0;
+                for (int k = 0; k < n; ++k) {
+                    a = rest.find(',', a);
+                    if (a == std::string::npos) return std::string();
+                    ++a;
+                }
+                size_t b = rest.find(',', a);
+                std::string t = rest.substr(a, b == std::string::npos
+                                                   ? std::string::npos
+                                                   : b - a);
+                size_t s0 = t.find_first_not_of(" \t");
+                size_t s1 = t.find_last_not_of(" \t");
+                return (s0 == std::string::npos) ? std::string()
+                                                 : t.substr(s0, s1 - s0 + 1);
+            };
+            // reasignacion: rsp/esp es el DESTINO (mov/lea/pop) o CUALQUIER
+            // operando de un xchg.  `mov rcx, rsp` (leer rsp) NO cuenta.
+            auto is_sp = [](const std::string &o, const char *r) {
+                return o == r;
+            };
+            std::string d0 = operand(0), d1 = operand(1);
+            if (is_sp(d0, "rsp") || (xchg_op && is_sp(d1, "rsp"))) {
+                sp_reassigned = "rsp";
+                break;
+            }
+            if (is_sp(d0, "esp") || (xchg_op && is_sp(d1, "esp"))) {
+                sp_reassigned = "esp";
+                break;
+            }
+        }
+        if (!sp_reassigned.empty())
+            diags_.diag(s->body_loc, DiagLevel::WARN, "VXA010", {sp_reassigned});
+    }
+
+    // El bloque NO lifto (cualquier lift habria hecho return arriba) -> se emite
+    // como INLINE_ASM OPACO.  El scheduler machine-level del backend reordena
+    // todo el codigo generado, pero NO ve dentro de un INLINE_ASM opaco; para que
+    // este
+    // tampoco se quede sin reordenar, se le aplica aqui el reschedule a nivel de
+    // TEXTO asm (mismo modelo de latencias/puertos).  Conservador: reschedule_asm
+    // solo reordena si es seguro (sin labels, deps + barreras respetadas,
+    // invariante valido); si no, devuelve el body intacto.  Solo modelo
+    // register() clasico (sin operandos inc.7 con placeholders $N).
+    if (s->level == ast::AsmLevel::Analyzable && s->operands.empty()) {
+        const int32_t ua = vx::instr_db::microarch_by_name(
+            vx::instr_db::Isa::X86, "intel-skylake");
+        body_sub = vx::instr_db::reschedule_asm(
+            vx::instr_db::Isa::X86, body_sub,
+            static_cast<uint32_t>(ua < 0 ? 0 : ua));
+        ia.func_name = body_sub; // el INLINE_ASM emitido usa el body reordenado
+    }
+
+    //  AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
     // `noinfer`, analizamos el cuerpo y unimos los clobbers inferidos con
     // los explicitos.  `nomem`/`preserves_flags`/`pure` QUITAN memory/flags
     // del set; `clobbers(...)` añaDE.  Resultado final -> asm_clobber_lists
@@ -11641,6 +13745,27 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     "); declara clobbers(...) explicitos "
                     "para precision o usa 'noinfer'");
         }
+    } else if (s->level != ast::AsmLevel::Raw) {
+        // ASA.2 (VXA006): con `noinfer`, la lista clobbers(...) es la que ve el
+        // regalloc EXACTAMENTE (no se infiere).  Si el asm MODIFICA un registro o
+        // las flags que no estan ni ligados por register() ni declarados, el
+        // backend los cree preservados -> miscompilacion.  Lo avisamos.  (`raw`
+        // es cero-analisis por diseno: no entra.)
+        vx::AsmInferResult inf = vx::asm_infer_clobbers(body_sub, bound_canon);
+        for (const auto &c : inf.clobber_regs) {
+            const std::string cc = vx::asm_canonical_reg(c);
+            bool declared = false;
+            for (const auto &d : s->clobbers)
+                if (vx::asm_canonical_reg(d) == cc) {
+                    declared = true;
+                    break;
+                }
+            if (!declared)
+                diags_.diag(s->body_loc, DiagLevel::WARN, "VXA006", {c});
+        }
+        if (inf.clobber_flags && !s->clobbers_flags && !s->q_preserves_flags &&
+            !s->q_pure)
+            diags_.diag(s->body_loc, DiagLevel::WARN, "VXA007", {});
     }
     // `nomem`/`preserves_flags`/`pure` afirman que NO se toca: override.
     if (s->q_nomem || s->q_pure) final_mem = false;
@@ -11654,7 +13779,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     if (s->q_pure) q |= 1ull << 3;
     if (final_mem) q |= 1ull << 4;
     if (final_flags) q |= 1ull << 5;
-    // Phase AS inc.3/4: empaquetar el "asm-id" (indice en asm_clobber_lists)
+    //  AS inc.3/4: empaquetar el "asm-id" (indice en asm_clobber_lists)
     // en los bits altos de imm (8..31).  El backend port-C lo lee para
     // recuperar la lista de clobbers (explicitos + inferidos) de ESTE bloque.
     const uint64_t asm_id = (uint64_t)fn_->asm_clobber_lists.size();
@@ -11667,7 +13792,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     ia.preserve = true;
     fn_->append(current_block_, std::move(ia));
 
-    // Phase AS inc.6: registrar el import nativo del helper runner para que
+    //  AS inc.6: registrar el import nativo del helper runner para que
     // el linker resuelva el `calln @Method("vrt:inline_asm_exec")` que
     // ir_emitter emite en el backend bytecode (interp puro, sin JIT).
     // Idempotente (register_native_import dedup).
@@ -11759,6 +13884,39 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
 
 ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (!e || !e->operand) return ir::IR_NO_VALUE;
+
+    // Compound literal `(Struct){...}`: construir un struct anonimo inline.
+    // Aloca + zero-fill + defaults + init-list, y devuelve su direccion (un
+    // valor struct como cualquier otro).  Funciona en interp/JIT/AOT.
+    if (e->target_type &&
+        e->operand->kind == ast::NodeKind::InitListExpr) {
+        Type tt = tc_.resolve_type_node(e->target_type.get());
+        if (tt.kind == PrimitiveKind::STRUCT) {
+            auto it = tc_.struct_layouts().find(tt.struct_name);
+            if (it != tc_.struct_layouts().end()) {
+                const StructLayout &lay = it->second;
+                ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.dst = addr;
+                al.imm = (uint64_t)lay.size_bytes;
+                al.source_line = e->loc.line;
+                // El buffer de un compound literal `(T){...}` es un agregado
+                // como cualquier otro -> host en los tres modos (ver
+                // lower_var_decl), no solo en AOT.
+                al.host_alloca = true;
+                fn_->append(current_block_, std::move(al));
+                fn_->values[addr].is_host_ptr = true;
+                emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
+                emit_struct_init_fields(
+                    addr, lay,
+                    static_cast<ast::InitListExpr *>(e->operand.get()),
+                    e->loc.line);
+                return addr;
+            }
+        }
+    }
 
     // Function pointer: `(u64) foo` / `(fn(...)->R) foo` donde foo es una
     // funcion top-level -> emitir LABEL_ADDR (direccion cruda del codigo).
@@ -12120,6 +14278,13 @@ size_t Lowering::size_of_type(const Type &t) const {
     return primitive_size_bytes(t.kind);
 }
 
+bool Lowering::type_is_overlay(const Type &t) const {
+    if (t.kind != PrimitiveKind::STRUCT || t.struct_name.empty()) return false;
+    const auto &layouts = tc_.struct_layouts();
+    auto it = layouts.find(t.struct_name);
+    return it != layouts.end() && it->second.is_overlay;
+}
+
 ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     // Calcula base + index * sizeof(*base) y devuelve el puntero al
     // elemento.  Si sizeof == 1 omitimos la multiplicacion para
@@ -12127,6 +14292,231 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     if (!e->base || !e->index) {
         error_at(e->loc, "lowering: subscript con base o indice nulo");
         return ir::IR_NO_VALUE;
+    }
+    // Overlay F3b: `v.arr[i]` (campo array de un overlay).  Direccion del
+    // elemento = base_overlay + pos + index*stride (escala por STRIDE, no por
+    // sizeof).  pos/stride pueden referenciar campos hermanos.
+    if (e->is_overlay_array &&
+        e->base->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->base.get());
+        const ir::IrValueId ov_base = lower_expr(fa->base.get());
+        if (ov_base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        const Type ovt = fa->base->result_type;
+        const auto &lays = tc_.struct_layouts();
+        auto it = lays.find(ovt.struct_name);
+        if (it == lays.end()) {
+            error_at(e->loc, "lowering: overlay array sin layout");
+            return ir::IR_NO_VALUE;
+        }
+        const StructLayout &lay = it->second;
+        const StructFieldInfo *afi = nullptr;
+        for (const auto &fi : lay.fields)
+            if (fi.name == fa->field_name) { afi = &fi; break; }
+        if (!afi || (!afi->array_stride && !afi->element_block)) {
+            error_at(e->loc, "lowering: campo array de overlay no encontrado");
+            return ir::IR_NO_VALUE;
+        }
+        // @element: la direccion del elemento la da un resolver POR-ELEMENTO
+        // `__ovl_element_<S>_<f>(self, index, [root])` (stride variable / TLV).
+        // Devuelve directamente la direccion del elemento `index`.
+        if (afi->element_block) {
+            const std::string rname =
+                generate_overlay_resolver(lay, *afi, /*is_element=*/true);
+            ir::IrValueId idx_v = lower_expr(e->index.get());
+            if (idx_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            idx_v = cast_if_needed(idx_v, fn_->values[idx_v].type,
+                                   ir::IrType::I64, e->loc.line);
+            ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[addr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALL;
+            ins.func_name = rname;
+            ins.type = ir::IrType::PTR;
+            ins.dst = addr;
+            ins.operands = {ov_base, idx_v};
+            if (afi->resolver_uses_parent) {
+                const ir::IrValueId root_v = lower_overlay_root(e->base.get());
+                if (root_v != ir::IR_NO_VALUE) ins.operands.push_back(root_v);
+            }
+            ins.is_call_site = true;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return addr;
+        }
+        // Ligar `base` + hermanos para las exprs de pos/stride.  Helper: LOAD
+        // en `addr` con el ancho del hermano y bind por nombre.
+        push_scope();
+        bind("base", ov_base);
+        auto bind_sib_at = [&](const StructFieldInfo &sib, ir::IrValueId addr) {
+            const ir::IrType stt = ir_type_from_primitive(sib.type.kind);
+            ir::IrValueId sv = fn_->new_value(stt);
+            ir::IrInstr l{};
+            l.op = ir::IrOp::LOAD;
+            l.type = stt;
+            l.dst = sv;
+            l.operands = {addr};
+            l.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(l));
+            bind(sib.name, sv);
+        };
+        auto add_off = [&](ir::IrValueId off_v) -> ir::IrValueId {
+            ir::IrValueId a = fn_->new_value(ir::IrType::PTR);
+            fn_->values[a].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::ADD;
+            ins.type = ir::IrType::PTR;
+            ins.dst = a;
+            ins.operands = {ov_base, off_v};
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return a;
+        };
+        // Pass 1: hermanos de offset CONSTANTE.
+        for (const auto &sib : lay.fields) {
+            if (sib.offset_expr || sib.offset_block || sib.array_stride) continue;
+            ir::IrValueId saddr = ov_base;
+            if (sib.offset != 0)
+                saddr = add_off(
+                    emit_const(ir::IrType::I64, (uint64_t)sib.offset,
+                               e->loc.line));
+            bind_sib_at(sib, saddr);
+        }
+        // Pass 2: hermanos de offset DINAMICO (@offset(expr)) REFERENCIADOS por
+        // la pos/stride del array (transitivamente).  Solo los usados: bindear
+        // los no-usados es innecesario y ademas corrompe (un LOAD u64 de un
+        // hermano dinamico no referenciado clobbereaba la direccion del array).
+        // Recolector recursivo de nombres de IdentExpr en una expr.
+        std::function<void(const ast::Expr *, std::set<std::string> &)>
+            collect_idents = [&](const ast::Expr *ex,
+                                 std::set<std::string> &out) {
+                if (!ex) return;
+                switch (ex->kind) {
+                case ast::NodeKind::IdentExpr:
+                    out.insert(static_cast<const ast::IdentExpr *>(ex)->name);
+                    break;
+                case ast::NodeKind::BinaryExpr: {
+                    auto *b = static_cast<const ast::BinaryExpr *>(ex);
+                    collect_idents(b->lhs.get(), out);
+                    collect_idents(b->rhs.get(), out);
+                    break;
+                }
+                case ast::NodeKind::UnaryExpr:
+                    collect_idents(
+                        static_cast<const ast::UnaryExpr *>(ex)->operand.get(),
+                        out);
+                    break;
+                case ast::NodeKind::CastExpr:
+                    collect_idents(
+                        static_cast<const ast::CastExpr *>(ex)->operand.get(),
+                        out);
+                    break;
+                default:
+                    break;
+                }
+            };
+        std::set<std::string> referenced;
+        collect_idents(afi->offset_expr, referenced);
+        collect_idents(afi->array_stride, referenced);
+        // Fixpoint: un hermano dinamico referenciado puede referenciar otros.
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const auto &sib : lay.fields) {
+                if (!sib.offset_expr || sib.array_stride) continue;
+                if (!referenced.count(sib.name)) continue;
+                size_t before = referenced.size();
+                collect_idents(sib.offset_expr, referenced);
+                if (referenced.size() != before) changed = true;
+            }
+        }
+        for (const auto &sib : lay.fields) {
+            if (!sib.offset_expr || sib.array_stride) continue;
+            if (!referenced.count(sib.name)) continue; // solo los usados
+            ir::IrValueId off_v = lower_expr(sib.offset_expr);
+            if (off_v == ir::IR_NO_VALUE) continue;
+            bind_sib_at(sib, add_off(off_v));
+        }
+        // Base de la tabla.  Dos formas:
+        //  (a) `@offset { block }`: un RESOLVER devuelve la DIRECCION ABSOLUTA de
+        //      la tabla (p.ej. traducir un RVA).  table_base = resolver(self).
+        //  (b) `@offset(pos)`/const: table_base = ov_base + pos.
+        ir::IrValueId stride_v = lower_expr(afi->array_stride);
+        ir::IrValueId table_base = ir::IR_NO_VALUE;
+        bool base_absolute = false;
+        if (afi->offset_block) {
+            base_absolute = true;
+        } else {
+            table_base =
+                afi->offset_expr
+                    ? lower_expr(afi->offset_expr)
+                    : emit_const(ir::IrType::I64, (uint64_t)afi->offset,
+                                 e->loc.line);
+        }
+        pop_scope();
+        if (stride_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        if (base_absolute) {
+            // F4/pieza2: la direccion base la da el resolver de bloque.  Se
+            // enhebra `root` si el resolver usa parent<T>() (F4).
+            const std::string rname = generate_overlay_resolver(lay, *afi);
+            table_base = fn_->new_value(ir::IrType::PTR);
+            fn_->values[table_base].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALL;
+            ins.func_name = rname;
+            ins.type = ir::IrType::PTR;
+            ins.dst = table_base;
+            ins.operands = {ov_base};
+            if (afi->resolver_uses_parent) {
+                const ir::IrValueId root_v = lower_overlay_root(e->base.get());
+                if (root_v != ir::IR_NO_VALUE) ins.operands.push_back(root_v);
+            }
+            ins.is_call_site = true;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+        } else if (table_base == ir::IR_NO_VALUE) {
+            return ir::IR_NO_VALUE;
+        }
+        ir::IrValueId i_v = lower_expr(e->index.get());
+        if (i_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        i_v = cast_if_needed(i_v, fn_->values[i_v].type, ir::IrType::I64,
+                             e->loc.line);
+        // scaled = i * stride
+        ir::IrValueId scaled = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr mul{};
+            mul.op = ir::IrOp::MUL;
+            mul.type = ir::IrType::I64;
+            mul.dst = scaled;
+            mul.operands = {i_v, stride_v};
+            mul.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(mul));
+        }
+        // addr = (base_absolute ? table_base : ov_base + pos) + scaled
+        ir::IrValueId t1;
+        if (base_absolute) {
+            t1 = table_base;   // ya es una direccion absoluta
+        } else {
+            t1 = fn_->new_value(ir::IrType::PTR);
+            fn_->values[t1].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = t1;
+            a.operands = {ov_base, table_base};
+            a.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(a));
+        }
+        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[addr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+        {
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = addr;
+            a.operands = {t1, scaled};
+            a.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(a));
+        }
+        return addr;
     }
     const Type bt = e->base->result_type;
     const bool is_ptr_like =
@@ -12184,10 +14574,57 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // Full/JIT el string es GC-managed y este path no se implementa aun.
     if (e->base && e->base->result_type.kind == PrimitiveKind::STRING) {
         if (!native_poo_) {
-            error_at(e->loc,
-                     "indexado/slice de string solo soportado en compilacion "
-                     "nativa (AOT Embed/Bare) por ahora");
-            return ir::IR_NO_VALUE;
+            // VM/JIT/interp: el string es un StringObject GC-managed.  `s[i]`
+            // (char) = el BYTE i-esimo del buffer: strraw (host_ptr a data) +
+            // LOAD u8 en [data + i].  Mismo patron que el builtin `ord`.  Para
+            // ASCII / UTF-8 de 1 byte el byte coincide con el codepoint.  El
+            // slice `s[a..b]` sigue solo en AOT (requiere copiar un substring).
+            if (e->is_range) {
+                error_at(e->loc,
+                         "slice de string s[a..b] solo soportado en compilacion "
+                         "nativa (AOT) por ahora; usa substr(s, a, len)");
+                return ir::IR_NO_VALUE;
+            }
+            if (!e->index) {
+                error_at(e->loc, "indexado de string sin indice");
+                return ir::IR_NO_VALUE;
+            }
+            const ir::IrValueId v_src = lower_expr(e->base.get());
+            if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            ir::IrValueId v_idx = lower_expr(e->index.get());
+            if (v_idx == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type,
+                                   ir::IrType::I64, e->loc.line);
+            // host_ptr al buffer de datos.
+            const ir::IrValueId v_raw = emit_strraw(v_src, e->loc.line);
+            // addr = raw + idx (hereda naturaleza host de strraw).
+            const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_at].is_host_ptr = true;
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = v_at;
+                ad.operands = {v_raw, v_idx};
+                ad.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ad));
+            }
+            // LOAD u8 (host) -> byte, zero-extendido al ancho del char.
+            const ir::IrType rt = (e->result_type.kind == PrimitiveKind::COUNT)
+                                      ? ir::IrType::I64
+                                      : ir_type_from_primitive(
+                                            e->result_type.kind);
+            const ir::IrValueId v_byte = fn_->new_value(rt);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::U8;
+                ld.dst = v_byte;
+                ld.operands = {v_at};
+                ld.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            return v_byte;
         }
         const ir::IrValueId v_src = lower_expr(e->base.get());
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
@@ -12257,8 +14694,18 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // Sin esto, `lower_index(m[i])` emitia LOAD ptr [m+i*sizeof(row)]
     // que leia bytes del primer elemento como si fueran un host_ptr ->
     // aliasing entre filas distintas, valores incorrectos.
-    if (e->result_type.kind == PrimitiveKind::ARRAY ||
-        e->result_type.kind == PrimitiveKind::STRUCT) {
+    // Array de HANDLES overlay (`Foo[N] hs;` / `Foo* hs`): el elemento GUARDA un
+    // puntero de 8 bytes -> su valor se obtiene CARGANDO ese puntero (cae al
+    // LOAD de abajo), no devolviendo la direccion del slot.  Sin esto, `hs[i]`
+    // daba `&hs[i]` -> todos los elementos aliaseaban el propio array.
+    //
+    // NO confundir con `v.arr[i]` (@c is_overlay_array = campo array DENTRO de
+    // una vista, `Sec secs[n] @offset(p) stride(s)`): ahi el elemento vive
+    // INLINE en la memoria ajena, asi que su direccion (la que ya calculo
+    // @c lower_index_addr escalando por STRIDE) ES el valor de la vista.
+    if ((e->result_type.kind == PrimitiveKind::ARRAY ||
+         e->result_type.kind == PrimitiveKind::STRUCT) &&
+        (e->is_overlay_array || !type_is_overlay(e->result_type))) {
         // Resultado es un sub-array o struct value-type; addr ya es la
         // direccion correcta del elemento.  Sin esto, `arr[i].field` con
         // `arr: Struct[N]` cargaba el primer qword del struct como un
@@ -12267,6 +14714,22 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     }
     const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
     const ir::IrValueId dst = fn_->new_value(ft);
+    // El puntero cargado de un elemento overlay apunta a memoria HOST ajena:
+    // marcarlo para que los accesos `hs[i].campo` emitan movh/loadzh (host) y
+    // no mov/loadz (memoria VM).
+    if (type_is_overlay(e->result_type)) fn_->values[dst].is_host_ptr = true;
+    // Bug host-vs-VM (2026-07-15): mismo criterio que el campo de struct/clase
+    // en @c lower_field_access -- un elemento de tipo `T*` (puntero HOST crudo,
+    // no `VirtualPtr<T>`) guarda por convencion una direccion host, asi que su
+    // deref posterior debe emitir movh/loadzh.  Sin esto, `hs[i][0]` sobre un
+    // `i64*[N]` emitia `mov` (VM) sobre una direccion host y leia basura,
+    // mientras que el MISMO puntero guardado en un campo de struct si usaba
+    // movh -> las dos rutas discrepaban.  `VirtualPtr<T>` (is_virtual) queda
+    // fuera: esa SI es una direccion de la memoria VM.
+    if (e->result_type.kind == PrimitiveKind::PTR &&
+        !e->result_type.is_virtual) {
+        fn_->values[dst].is_host_ptr = true;
+    }
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
     ld.type = ft;
@@ -12481,7 +14944,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                           e->loc.line);
     }
 
-    // Phase M.L7: globals const IMPORTADAS de otro modulo via .vxi.
+    //  M.L7: globals const IMPORTADAS de otro modulo via .vxi.
     // El TypeChecker las registro con su valor literal embedded en
     // @c imported_global_consts_; emitimos CONST inline igual que
     // las locales (cero overhead).
@@ -12519,6 +14982,10 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
     // Antes del const-globals scan para preferir el storage real cuando
     // existe.  Cero overhead vs constantes (un LOAD adicional, ~2 ns).
     {
+        // Un global IMPORTADO de otro modulo no tiene decl en este AST: se le
+        // registra aqui su slot compartido para que el resto de la ruta lo
+        // trate igual que a uno propio.
+        (void)ensure_imported_global_slot(e->name);
         auto sit = runtime_global_slots_.find(e->name);
         if (sit != runtime_global_slots_.end()) {
             // Detectar el tipo declarado del global para emitir LOAD
@@ -12526,11 +14993,13 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ir::IrType t = ir::IrType::I64;
             bool is_string = false;
             bool is_array = false;
+            bool found_decl = false;
             for (auto &decl : mod_.decls) {
                 if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl)
                     continue;
                 auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
                 if (gv->name != e->name) continue;
+                found_decl = true;
                 if (gv->type &&
                     gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
                     auto *pt =
@@ -12540,8 +15009,34 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 } else if (gv->type &&
                            gv->type->kind == ast::NodeKind::ArrayTypeNode) {
                     is_array = true;
+                } else if (gv->type &&
+                           gv->type->kind == ast::NodeKind::NamedTypeNode) {
+                    // Un STRUCT global decae a su DIRECCION, igual que un
+                    // array: el valor SSA de un agregado ES su direccion.
+                    // Cargar 8 bytes de el daria su primer campo.
+                    const Type gt = tc_.resolve_type_node(gv->type.get());
+                    if (gt.kind == PrimitiveKind::STRUCT &&
+                        !gt.struct_name.empty()) {
+                        auto sl = tc_.struct_layouts().find(gt.struct_name);
+                        if (sl != tc_.struct_layouts().end() &&
+                            !sl->second.is_overlay)
+                            is_array = true; // mismo trato: devolver la direccion
+                    }
                 }
                 break;
+            }
+            if (!found_decl) {
+                // Importado: el tipo lo da el .vxi del dep.  Sin esto el LOAD
+                // caeria al default i64 y un `i32` negativo del dep se leeria
+                // con los bytes altos del slot.
+                const auto &igs = tc_.imported_global_storage();
+                auto igt = igs.find(e->name);
+                if (igt != igs.end()) {
+                    const Type &gt = igt->second.type;
+                    is_string = (gt.kind == PrimitiveKind::STRING);
+                    is_array = (gt.kind == PrimitiveKind::ARRAY);
+                    if (!is_array) t = ir_type_from_primitive(gt.kind);
+                }
             }
             const uint64_t slot_idx = sit->second;
             // Array global: decae a su DIRECCION (host_ptr), no se carga
@@ -12549,11 +15044,11 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             if (is_array) {
                 const int ln_a = e->loc.line;
                 ir::IrValueId v_a = fn_->new_value(ir::IrType::PTR);
-                // AOT (native_poo_): el slot vive en .data del host -> host_ptr.
-                // VM/JIT: el slot vive en vm_mem -> direccion VM (NO host;
-                // marcar host_ptr haria que el indexado use movh sobre una
-                // direccion VM y segfaultee).
-                fn_->values[v_a].is_host_ptr = native_poo_;
+                // El storage de un global vive en memoria HOST en los 3 modos:
+                // en AOT en `.data`, y en interp/JIT en el bloque host al que
+                // el loader mapea la seccion `gdata`.  Su direccion es un `T*`
+                // y el indexado usa movh.
+                fn_->values[v_a].is_host_ptr = true;
                 ir::IrInstr is{};
                 is.op = ir::IrOp::STR_LIT_ADDR;
                 is.type = ir::IrType::PTR;
@@ -12573,6 +15068,9 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.imm = slot_idx;
                 is.source_line = ln;
                 fn_->append(current_block_, std::move(is));
+                // El slot vive en memoria host (seccion `gdata`) -> el LOAD de
+                // abajo es un acceso host directo, sin traducir.
+                fn_->values[v_addr].is_host_ptr = true;
             }
             // Para STRING, LOAD i64 (GcHandle); para otros, LOAD con
             // ancho declarado.
@@ -13098,7 +15596,350 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
 // ruido en el .vel para el caso comun de "campo cero".
 // ---------------------------------------------------------------------
 
+ir::IrValueId Lowering::lower_overlay_root(ast::Expr *e) {
+    // Camina hasta la vista raiz: la base mas profunda que NO es un acceso a
+    // campo/elemento overlay (p.ej. `pe` en `pe.Imports[i].name`).
+    ast::Expr *root = e;
+    for (;;) {
+        if (root->kind == ast::NodeKind::FieldAccessExpr) {
+            root = static_cast<ast::FieldAccessExpr *>(root)->base.get();
+            continue;
+        }
+        if (root->kind == ast::NodeKind::IndexExpr) {
+            root = static_cast<ast::IndexExpr *>(root)->base.get();
+            continue;
+        }
+        break;
+    }
+    return lower_expr(root);
+}
+
+std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
+                                                const StructFieldInfo &fi,
+                                                bool is_element) {
+    const std::string fn_name =
+        (is_element ? "__ovl_element_" : "__ovl_resolve_") + lay.name + "_" +
+        fi.name;
+    if (generated_overlay_resolvers_.count(fn_name)) return fn_name; // dedup
+    // Insertar YA el nombre: un resolver @element puede RECURSAR
+    // (`self.Name[index-1]`); sin esto la generacion compile-time no terminaria.
+    // La recursion se vuelve un CALL runtime al mismo resolver.
+    generated_overlay_resolvers_.insert(fn_name);
+    ast::BlockStmt *body_block =
+        is_element ? fi.element_block : fi.offset_block;
+
+    // Salvar contexto del padre (mismo protocolo que generate_lambda_helper).
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
+        std::move(scopes_);
+    std::unordered_set<std::string> saved_addr_taken =
+        std::move(address_taken_locals_);
+    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    const bool saved_sret_active = sret_active_;
+    const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
+    const uint64_t saved_sret_buf_size = sret_buf_size_;
+    const bool saved_returns_fn = current_fn_returns_function_;
+    sret_active_ = false;
+    sret_retbuf_ = ir::IR_NO_VALUE;
+    sret_buf_size_ = 0;
+    current_fn_returns_function_ = false;
+
+    ir::IrFunction child_fn;
+    child_fn.name = fn_name;
+    child_fn.ret_type = ir::IrType::PTR; // devuelve una DIRECCION (host)
+
+    // Param `self` = puntero base de la vista (host).
+    ir::IrValueId self_pv = child_fn.new_value(ir::IrType::PTR, "%self");
+    child_fn.values[self_pv].is_param = true;
+    child_fn.values[self_pv].is_host_ptr = true;
+    child_fn.params.push_back(self_pv);
+    // @element: 2o param `index` (i64) = el elemento a resolver.  Orden de
+    // params: self, [index], [root].
+    ir::IrValueId index_pv = ir::IR_NO_VALUE;
+    if (is_element) {
+        index_pv = child_fn.new_value(ir::IrType::I64, "%index");
+        child_fn.values[index_pv].is_param = true;
+        child_fn.params.push_back(index_pv);
+    }
+    // F4: si el resolver usa parent<T>(), un param `root` = puntero de la vista
+    // RAIZ (el call site lo enhebra caminando la cadena de accesos).
+    ir::IrValueId root_pv = ir::IR_NO_VALUE;
+    if (fi.resolver_uses_parent) {
+        root_pv = child_fn.new_value(ir::IrType::PTR, "%root");
+        child_fn.values[root_pv].is_param = true;
+        child_fn.values[root_pv].is_host_ptr = true;
+        child_fn.params.push_back(root_pv);
+    }
+
+    const ir::IrBlockId entry = child_fn.new_block("entry");
+    fn_ = &child_fn;
+    current_block_ = entry;
+    block_terminated_ = false;
+    scopes_.clear();
+    push_scope();
+    address_taken_locals_.clear();
+    host_bearing_locals_.clear();
+    cleanup_stack_.clear();
+
+    // `base` = self; cada campo hermano de offset CONSTANTE se lee de
+    // [self + off] (host) y se liga por nombre -> el body los usa como locales.
+    // F4: `this`/`self` = la vista completa (el propio puntero base), para que el
+    // resolver navegue arrays hermanos declarativamente (`this.Sections[i].campo`)
+    // via la maquinaria overlay -- sin aritmetica de punteros ni helpers.
+    bind("base", self_pv);
+    bind("this", self_pv);
+    // F4: `parent<T>()` en el body baja a este valor (el puntero raiz).
+    if (root_pv != ir::IR_NO_VALUE) bind("__ovl_root", root_pv);
+    // @element: `index` en scope.
+    if (index_pv != ir::IR_NO_VALUE) bind("index", index_pv);
+    for (const auto &sib : lay.fields) {
+        // Saltar dinamicos y ARRAYS: los arrays no son un escalar cargable; se
+        // navegan por `this.<array>[i]` (no como nombre desnudo).
+        if (sib.offset_expr || sib.offset_block || sib.array_count ||
+            sib.array_stride || sib.element_block)
+            continue; // solo escalares de offset constante
+        ir::IrValueId saddr = self_pv;
+        if (sib.offset != 0) {
+            ir::IrValueId so =
+                emit_const(ir::IrType::I64, (uint64_t)sib.offset, 0);
+            saddr = child_fn.new_value(ir::IrType::PTR);
+            child_fn.values[saddr].is_host_ptr = true;
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = saddr;
+            a.operands = {self_pv, so};
+            child_fn.append(entry, std::move(a));
+        }
+        const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+        ir::IrValueId sv = child_fn.new_value(st);
+        ir::IrInstr l{};
+        l.op = ir::IrOp::LOAD;
+        l.type = st;
+        l.dst = sv;
+        l.operands = {saddr};
+        child_fn.append(entry, std::move(l));
+        bind(sib.name, sv);
+    }
+
+    // Lower del body: if/else, multiples return, etc. -> RET (la direccion).
+    lower_block(body_block);
+    if (!block_terminated_) {
+        // Defensa: si el body no termina en return, devolvemos base (identidad).
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::PTR;
+        rt.operands = {self_pv};
+        fn_->append(current_block_, std::move(rt));
+        block_terminated_ = true;
+    }
+
+    pop_scope();
+    pending_spawn_helpers_.push_back(std::move(child_fn));
+    generated_overlay_resolvers_.insert(fn_name);
+
+    // Restaurar contexto del padre.
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    scopes_ = std::move(saved_scopes);
+    address_taken_locals_ = std::move(saved_addr_taken);
+    cleanup_stack_ = std::move(saved_cleanups);
+    sret_active_ = saved_sret_active;
+    sret_retbuf_ = saved_sret_retbuf;
+    sret_buf_size_ = saved_sret_buf_size;
+    current_fn_returns_function_ = saved_returns_fn;
+    return fn_name;
+}
+
+std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
+    const std::string fn_name = "__ovl_extent_" + lay.name;
+    if (generated_overlay_resolvers_.count(fn_name)) return fn_name; // dedup
+    generated_overlay_resolvers_.insert(fn_name);
+
+    // Salvar contexto (mismo protocolo que generate_overlay_resolver).
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
+        std::move(scopes_);
+    std::unordered_set<std::string> saved_addr_taken =
+        std::move(address_taken_locals_);
+    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    const bool saved_sret_active = sret_active_;
+    const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
+    const uint64_t saved_sret_buf_size = sret_buf_size_;
+    const bool saved_returns_fn = current_fn_returns_function_;
+    sret_active_ = false;
+    sret_retbuf_ = ir::IR_NO_VALUE;
+    sret_buf_size_ = 0;
+    current_fn_returns_function_ = false;
+
+    ir::IrFunction child_fn;
+    child_fn.name = fn_name;
+    child_fn.ret_type = ir::IrType::U64;   // el span en bytes
+    ir::IrValueId self_pv = child_fn.new_value(ir::IrType::PTR, "%self");
+    child_fn.values[self_pv].is_param = true;
+    child_fn.values[self_pv].is_host_ptr = true;
+    child_fn.params.push_back(self_pv);
+
+    const ir::IrBlockId entry = child_fn.new_block("entry");
+    fn_ = &child_fn;
+    current_block_ = entry;
+    block_terminated_ = false;
+    scopes_.clear();
+    push_scope();
+    address_taken_locals_.clear();
+    host_bearing_locals_.clear();
+    cleanup_stack_.clear();
+
+    bind("base", self_pv);
+    bind("this", self_pv);
+    // Ligar hermanos escalares de offset constante (para offset_expr/count/stride).
+    for (const auto &sib : lay.fields) {
+        if (sib.offset_expr || sib.offset_block || sib.array_count ||
+            sib.array_stride || sib.element_block)
+            continue;
+        ir::IrValueId saddr = self_pv;
+        if (sib.offset != 0) {
+            ir::IrValueId so = emit_const(ir::IrType::I64, (uint64_t)sib.offset, 0);
+            saddr = child_fn.new_value(ir::IrType::PTR);
+            child_fn.values[saddr].is_host_ptr = true;
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = saddr;
+            a.operands = {self_pv, so};
+            child_fn.append(entry, std::move(a));
+        }
+        const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+        ir::IrValueId sv = child_fn.new_value(st);
+        ir::IrInstr l{};
+        l.op = ir::IrOp::LOAD;
+        l.type = st;
+        l.dst = sv;
+        l.operands = {saddr};
+        child_fn.append(entry, std::move(l));
+        bind(sib.name, sv);
+    }
+
+    // Helpers de emision (u64).
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
+                   ir::IrType t) -> ir::IrValueId {
+        ir::IrValueId d = fn_->new_value(t);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = t;
+        in.dst = d;
+        in.operands = {a, b};
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+    // max sin ramas: max(a,b) = b ^ ((a^b) & -(a>b)).
+    auto emit_max = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId gt = bin(ir::IrOp::CMP_UGT, a, b, ir::IrType::BOOL);
+        ir::IrValueId mask = fn_->new_value(ir::IrType::U64);
+        {
+            ir::IrInstr n{};
+            n.op = ir::IrOp::NEG;
+            n.type = ir::IrType::U64;
+            n.dst = mask;
+            n.operands = {gt};
+            fn_->append(current_block_, std::move(n));
+        }
+        ir::IrValueId axb = bin(ir::IrOp::XOR, a, b, ir::IrType::U64);
+        ir::IrValueId tmp = bin(ir::IrOp::AND, axb, mask, ir::IrType::U64);
+        return bin(ir::IrOp::XOR, b, tmp, ir::IrType::U64);
+    };
+
+    ir::IrValueId maxv = emit_const(ir::IrType::U64, 0, 0);
+    for (const auto &fi : lay.fields) {
+        // Saltar lo que extent no cubre (documentado).
+        if (fi.resolver_uses_parent) continue;         // necesita root
+        if (fi.is_array && (!fi.array_count || fi.element_block))
+            continue;                                    // sin count / @element
+        ir::IrValueId end = ir::IR_NO_VALUE;
+        const uint64_t fsz = fi.size;
+        // base_off del campo/array (relativo a self).
+        ir::IrValueId base_off;
+        if (fi.offset_block) {
+            const std::string rname = generate_overlay_resolver(lay, fi);
+            ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[addr].is_host_ptr = true;
+            ir::IrInstr in{};
+            in.op = ir::IrOp::CALL;
+            in.func_name = rname;
+            in.type = ir::IrType::PTR;
+            in.dst = addr;
+            in.operands = {self_pv};
+            in.is_call_site = true;
+            fn_->append(current_block_, std::move(in));
+            base_off = bin(ir::IrOp::SUB, addr, self_pv, ir::IrType::U64);
+        } else if (fi.offset_expr) {
+            base_off = lower_expr(fi.offset_expr);
+            if (base_off == ir::IR_NO_VALUE) continue;
+        } else {
+            base_off = emit_const(ir::IrType::U64, (uint64_t)fi.offset, 0);
+        }
+        if (fi.is_array) {
+            ir::IrValueId cnt = lower_expr(fi.array_count);
+            ir::IrValueId strd = lower_expr(fi.array_stride);
+            if (cnt == ir::IR_NO_VALUE || strd == ir::IR_NO_VALUE) continue;
+            ir::IrValueId span = bin(ir::IrOp::MUL, cnt, strd, ir::IrType::U64);
+            end = bin(ir::IrOp::ADD, base_off, span, ir::IrType::U64);
+        } else {
+            ir::IrValueId sz = emit_const(ir::IrType::U64, fsz, 0);
+            end = bin(ir::IrOp::ADD, base_off, sz, ir::IrType::U64);
+        }
+        maxv = emit_max(maxv, end);
+    }
+
+    {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::U64;
+        rt.operands = {maxv};
+        fn_->append(current_block_, std::move(rt));
+        block_terminated_ = true;
+    }
+
+    pop_scope();
+    pending_spawn_helpers_.push_back(std::move(child_fn));
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    scopes_ = std::move(saved_scopes);
+    address_taken_locals_ = std::move(saved_addr_taken);
+    cleanup_stack_ = std::move(saved_cleanups);
+    sret_active_ = saved_sret_active;
+    sret_retbuf_ = saved_sret_retbuf;
+    sret_buf_size_ = saved_sret_buf_size;
+    current_fn_returns_function_ = saved_returns_fn;
+    return fn_name;
+}
+
 ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
+    // `lib.G` sobre un global de otro modulo: no hay base que bajar (`lib` es
+    // un namespace, no un valor), la direccion ES la del slot compartido.
+    // Punto unico: por aqui pasan la lectura, la escritura y el `&`.
+    uint64_t ns_slot = 0;
+    if (imported_global_slot_of(e, ns_slot)) {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        // El storage vive en memoria host (seccion `gdata`), como el de
+        // cualquier global.
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr is{};
+        is.op = ir::IrOp::STR_LIT_ADDR;
+        is.type = ir::IrType::PTR;
+        is.dst = v;
+        is.imm = ns_slot;
+        is.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(is));
+        return v;
+    }
     const ir::IrValueId base = lower_expr(e->base.get());
     if (base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
@@ -13116,19 +15957,93 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     }
     const StructLayout &lay = it->second;
     uint32_t offset = 0;
-    bool found = false;
+    const StructFieldInfo *fifound = nullptr;
     for (const auto &f : lay.fields) {
         if (f.name == e->field_name) {
             offset = f.offset;
-            found = true;
+            fifound = &f;
             break;
         }
     }
-    if (!found) {
+    if (!fifound) {
         error_at(e->loc, "lowering: campo '" + e->field_name +
                              "' no encontrado en struct '" + bt.struct_name +
                              "'");
         return ir::IR_NO_VALUE;
+    }
+    // Overlay F3: resolver de BLOQUE `@offset { ...; return <direccion>; }`.
+    // Se sintetiza como funcion `__ovl_resolve_<S>_<f>(self)` (control de flujo
+    // completo: if/else, multiples return; sin ALLOCA-en-bucle) y se llama con
+    // el puntero base.  El resultado ES la direccion (host) donde leer/escribir.
+    if (fifound->offset_block) {
+        const std::string rname = generate_overlay_resolver(lay, *fifound);
+        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[addr].is_host_ptr = fn_->values[base].is_host_ptr;
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = rname;
+        ins.type = ir::IrType::PTR;
+        ins.dst = addr;
+        ins.operands = {base};
+        // F4: enhebrar `root` si el resolver usa parent<T>() (la vista raiz de
+        // la cadena de accesos: `pe` en `pe.Imports[i].name`).
+        if (fifound->resolver_uses_parent) {
+            const ir::IrValueId root_v = lower_overlay_root(e->base.get());
+            if (root_v != ir::IR_NO_VALUE) ins.operands.push_back(root_v);
+        }
+        ins.is_call_site = true;
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        return addr;
+    }
+
+    // Overlay F2: offset DINAMICO `@offset(hermano + N)`.  Evaluamos la
+    // expresion en tiempo de acceso; los nombres desnudos de campos hermanos
+    // se enlazan a `LOAD [base + hermano.offset]` (host) en un scope temporal
+    // y `lower_expr` los resuelve por @c lookup.  El DAG del type checker
+    // garantiza que no hay ciclos.  fld_addr = base + offset_dinamico.
+    if (fifound->offset_expr) {
+        push_scope();
+        for (const auto &sib : lay.fields) {
+            if (sib.offset_expr) continue; // solo hermanos de offset constante
+            ir::IrValueId saddr = base;
+            if (sib.offset != 0) {
+                ir::IrValueId so = emit_const(ir::IrType::I64,
+                                              (uint64_t)sib.offset, e->loc.line);
+                saddr = fn_->new_value(ir::IrType::PTR);
+                fn_->values[saddr].is_host_ptr = fn_->values[base].is_host_ptr;
+                ir::IrInstr a{};
+                a.op = ir::IrOp::ADD;
+                a.type = ir::IrType::PTR;
+                a.dst = saddr;
+                a.operands = {base, so};
+                a.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(a));
+            }
+            const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+            ir::IrValueId sv = fn_->new_value(st);
+            ir::IrInstr l{};
+            l.op = ir::IrOp::LOAD;
+            l.type = st;
+            l.dst = sv;
+            l.operands = {saddr};
+            l.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(l));
+            bind(sib.name, sv);
+        }
+        const ir::IrValueId off_val = lower_expr(fifound->offset_expr);
+        pop_scope();
+        if (off_val == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        const ir::IrValueId fld_addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[fld_addr].is_host_ptr = fn_->values[base].is_host_ptr;
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::ADD;
+        ins.type = ir::IrType::PTR;
+        ins.dst = fld_addr;
+        ins.operands = {base, off_val};
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        return fld_addr;
     }
 
     if (offset == 0) return base;
@@ -13153,6 +16068,106 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
     return fld_addr;
+}
+
+ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
+                                                 const StructLayout &lay,
+                                                 const StructFieldInfo &fi,
+                                                 ir::IrValueId value,
+                                                 uint32_t line) {
+    if (!fi.endian_expr) return value;
+    // 1. Evaluar la expr de endianness con los hermanos ligados desde la base.
+    const ir::IrValueId ov_base = lower_expr(base_expr);
+    if (ov_base == ir::IR_NO_VALUE) return value;
+    push_scope();
+    bind("base", ov_base);
+    bind("this", ov_base);
+    for (const auto &sib : lay.fields) {
+        if (sib.offset_expr || sib.offset_block || sib.array_count ||
+            sib.array_stride || sib.element_block)
+            continue; // solo escalares de offset constante
+        ir::IrValueId saddr = ov_base;
+        if (sib.offset != 0) {
+            ir::IrValueId so = emit_const(ir::IrType::I64,
+                                          (uint64_t)sib.offset, line);
+            saddr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[saddr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::PTR;
+            a.dst = saddr;
+            a.operands = {ov_base, so};
+            a.source_line = line;
+            fn_->append(current_block_, std::move(a));
+        }
+        const ir::IrType st = ir_type_from_primitive(sib.type.kind);
+        ir::IrValueId sv = fn_->new_value(st);
+        ir::IrInstr l{};
+        l.op = ir::IrOp::LOAD;
+        l.type = st;
+        l.dst = sv;
+        l.operands = {saddr};
+        l.source_line = line;
+        fn_->append(current_block_, std::move(l));
+        bind(sib.name, sv);
+    }
+    const ir::IrValueId big = lower_expr(fi.endian_expr);
+    pop_scope();
+    if (big == ir::IR_NO_VALUE) return value;
+
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId d = fn_->new_value(ir::IrType::U64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::U64;
+        in.dst = d;
+        in.operands = {a, b};
+        in.source_line = line;
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+    // 2. sw = bswap64(value) >> (8-w)*8  (BYTESWAP swapea los 8 bytes).
+    ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);
+    {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BYTESWAP;
+        b.type = ir::IrType::U64;
+        b.dst = sw64;
+        b.operands = {value};
+        b.source_line = line;
+        fn_->append(current_block_, std::move(b));
+    }
+    ir::IrValueId sw = sw64;
+    if (fi.size < 8) {
+        ir::IrValueId shamt =
+            emit_const(ir::IrType::U64, (uint64_t)(8 - fi.size) * 8, line);
+        sw = bin(ir::IrOp::SHR, sw64, shamt);
+    }
+    // 3. select sin ramas: big ? sw : value = value ^ ((value ^ sw) & -(big!=0)).
+    ir::IrValueId zero = emit_const(ir::IrType::U64, 0, line);
+    ir::IrValueId nz = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_NE;
+        c.type = ir::IrType::BOOL;
+        c.dst = nz;
+        c.operands = {big, zero};
+        c.source_line = line;
+        fn_->append(current_block_, std::move(c));
+    }
+    ir::IrValueId mask = fn_->new_value(ir::IrType::U64);
+    {
+        ir::IrInstr n{};
+        n.op = ir::IrOp::NEG;
+        n.type = ir::IrType::U64;
+        n.dst = mask;
+        n.operands = {nz};
+        n.source_line = line;
+        fn_->append(current_block_, std::move(n));
+    }
+    ir::IrValueId vxs = bin(ir::IrOp::XOR, value, sw);
+    ir::IrValueId tmp = bin(ir::IrOp::AND, vxs, mask);
+    return bin(ir::IrOp::XOR, value, tmp);
 }
 
 ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
@@ -13189,6 +16204,56 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // constructor de variante con args vacio en lugar del manejo
     // generico de field-access (struct/clase) que fallaria al no
     // encontrar un campo llamado "Red" en un struct.
+    // C-style: enum con VALOR (property_kind=98).  La variante ES una constante
+    // del tipo base -> emitir un CONST del ancho base.  Base puede ser el
+    // nombre del enum (`Op.MOV`) o un acceso cualificado (`ns.Op.MOV`, cuyo
+    // result_type.struct_name es el nombre del enum).
+    if (e->property_kind == 98 && e->base) {
+        std::string enum_name;
+        if (e->base->kind == ast::NodeKind::IdentExpr) {
+            enum_name = static_cast<ast::IdentExpr *>(e->base.get())->name;
+        } else if (e->base->kind == ast::NodeKind::FieldAccessExpr) {
+            enum_name = e->base->result_type.struct_name;
+        }
+        const auto &elays = tc_.enum_layouts();
+        auto it = elays.find(enum_name);
+        if (it != elays.end() && it->second.is_valued) {
+            const PrimitiveKind bk = it->second.backing;
+            const bool backing_int =
+                (bk == PrimitiveKind::I8 || bk == PrimitiveKind::I16 ||
+                 bk == PrimitiveKind::I32 || bk == PrimitiveKind::I64 ||
+                 bk == PrimitiveKind::U8 || bk == PrimitiveKind::U16 ||
+                 bk == PrimitiveKind::U32 || bk == PrimitiveKind::U64);
+            for (const auto &v : it->second.variants) {
+                if (v.name == e->field_name) {
+                    if (backing_int) {
+                        // Entero: CONST del ancho base (soporta auto-incremento).
+                        const ir::IrType t = ir_type_from_primitive(bk);
+                        return emit_const(t, static_cast<uint64_t>(v.int_value),
+                                          e->loc.line);
+                    }
+                    // String: construir un StringObject real (no el puntero
+                    // crudo a los bytes que produce lower_string_lit).
+                    if (bk == PrimitiveKind::STRING && v.value_ast &&
+                        v.value_ast->kind == ast::NodeKind::StringLitExpr) {
+                        return lower_string_literal_to_string_object(
+                            const_cast<ast::StringLitExpr *>(
+                                static_cast<const ast::StringLitExpr *>(
+                                    v.value_ast)));
+                    }
+                    // Float/...: bajar la expresion AST de la variante (reusa
+                    // el lowering de literales float/init-list).
+                    if (v.value_ast) {
+                        return lower_expr(const_cast<ast::Expr *>(v.value_ast));
+                    }
+                    break;
+                }
+            }
+        }
+        error_at(e->loc, "lowering: variante de enum con valor '" +
+                             e->field_name + "' no resuelta");
+        return ir::IR_NO_VALUE;
+    }
     if (e->property_kind == 99 && e->base &&
         e->base->kind == ast::NodeKind::IdentExpr) {
         auto *base_id = static_cast<ast::IdentExpr *>(e->base.get());
@@ -13290,7 +16355,16 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // primeros 8 bytes de `a` como un puntero -> direccion basura -> segfault
     // en AOT (host) o valor erroneo en VM.  Mismo patron que los fixes B1/B3
     // de ptr_of/read_borrow sobre agregados.
-    if (e->result_type.kind == PrimitiveKind::STRUCT ||
+    //
+    // EXCEPCION: un campo cuyo TIPO es un `@overlay struct` NO es un agregado
+    // inline: guarda el HANDLE de la vista (un puntero host de 8 bytes, igual
+    // que una variable/parametro/elemento de array overlay).  Su valor se
+    // obtiene CARGANDO ese puntero del slot -> cae al LOAD de abajo.  Sin esto
+    // el campo se interpretaba como una vista EMBEBIDA en ese offset y leerlo
+    // devolvia `base+offset` (la direccion del propio slot) en vez del handle.
+    // Mismo patron que el array de handles overlay en lower_index.
+    if ((e->result_type.kind == PrimitiveKind::STRUCT &&
+         !type_is_overlay(e->result_type)) ||
         e->result_type.kind == PrimitiveKind::ARRAY ||
         e->result_type.kind == PrimitiveKind::OPTIONAL ||
         e->result_type.kind == PrimitiveKind::RESULT ||
@@ -13302,7 +16376,12 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     }
 
     const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
-    const ir::IrValueId dst = fn_->new_value(ft);
+    ir::IrValueId dst = fn_->new_value(ft);
+    // El handle cargado de un campo overlay apunta a memoria HOST ajena:
+    // marcarlo para que los accesos `h.ch.campo` emitan movh/loadzh (host) y no
+    // mov/loadz (memoria VM).  Mismo criterio que lower_index sobre arrays de
+    // handles overlay.
+    if (type_is_overlay(e->result_type)) fn_->values[dst].is_host_ptr = true;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::LOAD;
     ins.type = ft;
@@ -13310,6 +16389,28 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     ins.operands = {addr};
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
+
+    // F5: campo `@endian(expr)` -> swap CONDICIONAL segun la expr (nonzero =
+    // big-endian).  Comptime -> se pliega (cero coste); runtime -> select sin
+    // ramas.  Solo enteros multi-byte; el resto opera en orden nativo.
+    {
+        const Type bt_e = e->base ? e->base->result_type : Type{};
+        if (bt_e.kind == PrimitiveKind::STRUCT) {
+            auto it_e = tc_.struct_layouts().find(bt_e.struct_name);
+            if (it_e != tc_.struct_layouts().end()) {
+                for (const auto &f : it_e->second.fields) {
+                    if (f.name == e->field_name && f.endian_expr &&
+                        f.bit_width == 0 &&
+                        (f.size == 2 || f.size == 4 || f.size == 8)) {
+                        dst = emit_overlay_endian_swap(e->base.get(),
+                                                       it_e->second, f, dst,
+                                                       e->loc.line);
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     // Propagar is_host_ptr cuando el campo es un puntero/array host.
     // Critico para casos como `(*virtual_ptr).buf` donde el struct
@@ -13664,34 +16765,95 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     // "ambos operandos STRING" en el bytecode.
     auto coerce_string_operand = [&](ast::Expr *ex) -> ir::IrValueId {
         if (ex && ex->kind == ast::NodeKind::StringLitExpr) {
-            auto *sl = static_cast<ast::StringLitExpr *>(ex);
-            if (!sl->is_interpolated()) {
-                return lower_string_literal_to_string_object(sl);
-            }
+            // Literal de string (interpolado o no): construir el StringObject.
+            // lower_string_literal_to_string_object maneja AMBOS casos (fast
+            // path 1 STRMAKE para simples, STRMAKE+STRCAT para interpolados).
+            // OJO: NO usar lower_expr aqui -- en modo GC, lower_string_lit de un
+            // literal INTERPOLADO cae a STR_LIT_ADDR (bytes estaticos vacios
+            // para `"${n}"`) en vez de construir la interpolacion.
+            return lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(ex));
         }
         return lower_expr(ex);
     };
     /* En el body de @Macro los StringLitExpr pueden no haber pasado
      * por check_string (que setea result_type=PTR).  Aceptamos
-     * literales no interpolados como strings aunque su result_type
-     * sea VOID -- solo importa el StringLitExpr kind. */
+     * cualquier StringLitExpr como string -- solo importa el kind.
+     * Los INTERPOLADOS tambien cuentan (`base + "${n}"`): coerce_string_operand
+     * los baja via lower_expr (STRMAKE+STRCAT) a un handle STRING. */
     auto is_string_lit_node = [](const ast::Expr *ex) -> bool {
-        return ex && ex->kind == ast::NodeKind::StringLitExpr &&
-               !static_cast<const ast::StringLitExpr *>(ex)->is_interpolated();
+        return ex && ex->kind == ast::NodeKind::StringLitExpr;
+    };
+    /* Plegado de `"a" + "b"`: si TODO el arbol de `+` son literales, el valor se
+     * conoce al compilar -> se emite UN literal, no una cadena de STRCAT.
+     * Ninguno de los dos aporta nada en runtime, y el STRCAT ademas aloca.
+     *
+     * Recursivo para que `"a" + "b" + "c"` -- que es `((a+b)+c)` -- colapse
+     * entero y no a medias.  Un literal INTERPOLADO no entra: su valor depende
+     * de las expresiones de dentro. */
+    {
+        std::function<bool(const ast::Expr *, std::string &)> fold_str;
+        fold_str = [&](const ast::Expr *ex, std::string &out) -> bool {
+            if (!ex) return false;
+            if (ex->kind == ast::NodeKind::StringLitExpr) {
+                const auto *sl = static_cast<const ast::StringLitExpr *>(ex);
+                if (sl->is_interpolated()) return false;
+                out += sl->value;
+                return true;
+            }
+            if (ex->kind != ast::NodeKind::BinaryExpr) return false;
+            const auto *b = static_cast<const ast::BinaryExpr *>(ex);
+            if (b->op != ast::BinOp::Add) return false;
+            return fold_str(b->lhs.get(), out) && fold_str(b->rhs.get(), out);
+        };
+        if (e->op == ast::BinOp::Add) {
+            std::string folded;
+            if (fold_str(e, folded)) {
+                ast::StringLitExpr lit;
+                lit.loc = e->loc;
+                lit.value = std::move(folded);
+                return lower_string_literal_to_string_object(&lit);
+            }
+        }
+    }
+    /* En un cuerpo de @Macro los exprs tienen result_type=VOID (el macro no
+     * pasa por check_functions), asi que una llamada a un builtin que DEVUELVE
+     * string (`to_str`, `chr`, `substr`, `concat`, ...) no se reconoce como
+     * STRING -> `s + to_str(n)` caia a suma ENTERA en vez de STRCAT.  Este
+     * helper detecta esas llamadas por nombre para que el concat se lowere
+     * correctamente tambien dentro de macros (necesario para VM-evaluarlos). */
+    auto is_string_returning_builtin_call = [](const ast::Expr *ex) -> bool {
+        if (!ex || ex->kind != ast::NodeKind::CallExpr) return false;
+        const auto *ce = static_cast<const ast::CallExpr *>(ex);
+        if (!ce->callee || ce->callee->kind != ast::NodeKind::IdentExpr)
+            return false;
+        const std::string &n =
+            static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
+        static const std::unordered_set<std::string> STR_RET_BUILTINS = {
+            "to_str",  "chr",         "substr",         "concat",
+            "repeat",  "replace",     "str_concat",     "str_intern",
+            "gensym",  "comptime_to_str", "comptime_concat", "comptime_chr",
+            "comptime_substr",         "comptime_repeat", "comptime_replace",
+        };
+        return STR_RET_BUILTINS.count(n) != 0;
     };
     const bool lhs_is_str =
         (ltk == PrimitiveKind::STRING) ||
         (is_string_lit_node(e->lhs.get()) &&
-         (ltk == PrimitiveKind::PTR || ltk == PrimitiveKind::VOID));
+         (ltk == PrimitiveKind::PTR || ltk == PrimitiveKind::VOID)) ||
+        is_string_returning_builtin_call(e->lhs.get());
     const bool rhs_is_str =
         (rtk == PrimitiveKind::STRING) ||
         (is_string_lit_node(e->rhs.get()) &&
-         (rtk == PrimitiveKind::PTR || rtk == PrimitiveKind::VOID));
+         (rtk == PrimitiveKind::PTR || rtk == PrimitiveKind::VOID)) ||
+        is_string_returning_builtin_call(e->rhs.get());
     // `"a" + "b"` (ambos literales): concat tambien (espejo del checker).
     const bool both_str_lit =
         is_string_lit_node(e->lhs.get()) && is_string_lit_node(e->rhs.get());
-    const bool any_real_str = (ltk == PrimitiveKind::STRING) ||
-                              (rtk == PrimitiveKind::STRING) || both_str_lit;
+    const bool any_real_str =
+        (ltk == PrimitiveKind::STRING) || (rtk == PrimitiveKind::STRING) ||
+        both_str_lit || is_string_returning_builtin_call(e->lhs.get()) ||
+        is_string_returning_builtin_call(e->rhs.get());
     if (lhs_is_str && rhs_is_str && any_real_str) {
         // C-3: si el usuario marco una fn libre @StringConcat / @StringEq,
         // rutear el operador a una CALL a esa fn (mecanismo override).
@@ -14177,6 +17339,14 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             (e->op == ast::UnOp::PreInc || e->op == ast::UnOp::PostInc);
         const bool is_pre =
             (e->op == ast::UnOp::PreInc || e->op == ast::UnOp::PreDec);
+        // Tipo que SOBRECARGA la suma (`c++` es `c += 1`): tiene que salir por
+        // aqui, ANTES de las rutas enteras.  El valor SSA de un struct es su
+        // DIRECCION, asi que la ruta entera le sumaba 1 a la direccion del
+        // objeto (medido: `addu r3, r2`) y luego leia basura.
+        const PrimitiveKind opk = e->operand->result_type.kind;
+        if (opk == PrimitiveKind::CLASS || opk == PrimitiveKind::STRUCT) {
+            return lower_overloaded_step(e, is_inc, is_pre);
+        }
         auto compute_new = [&](ir::IrValueId old_val) -> ir::IrValueId {
             const ir::IrValueId one = emit_const(vt, 1, e->loc.line);
             const ir::IrValueId nv = fn_->new_value(vt);
@@ -14189,18 +17359,47 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             fn_->append(current_block_, std::move(o));
             return nv;
         };
-        // IdentExpr: ruta original via read_local/write_local.
+        // IdentExpr: si es un LOCAL del scope, ruta SSA original via
+        // read_local/write_local (Braun on-the-fly, sin ALLOCA).
         if (e->operand->kind == ast::NodeKind::IdentExpr) {
             auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
             const ir::IrValueId old_val = read_local(id->name, vt, e->loc.line);
-            if (old_val == ir::IR_NO_VALUE) {
+            if (old_val != ir::IR_NO_VALUE) {
+                const ir::IrValueId new_val = compute_new(old_val);
+                write_local(id->name, new_val, vt, e->loc.line);
+                return is_pre ? new_val : old_val;
+            }
+            // No es un local del scope (p.ej. una variable GLOBAL runtime o
+            // un comptime global dentro de un @Macro): delegamos en
+            // lower_assign con un compound sintetico (`x += 1` / `x -= 1`)
+            // para REUTILIZAR exactamente la misma resolucion de lvalue que
+            // la asignacion compuesta (que resuelve runtime_global_slots_ y
+            // comptime globals via STR_LIT_ADDR + LOAD + combine + STORE).
+            // Para el postfijo capturamos el valor previo ANTES del store
+            // via lower_ident, que tambien sabe resolver globales.
+            ir::IrValueId prev = ir::IR_NO_VALUE;
+            if (!is_pre) prev = lower_ident(id);
+            auto tgt = std::make_unique<ast::IdentExpr>();
+            tgt->name = id->name;
+            tgt->result_type = id->result_type;
+            tgt->loc = id->loc;
+            auto one = std::make_unique<ast::IntLitExpr>();
+            one->value = 1;
+            one->result_type = e->operand->result_type;
+            one->loc = e->loc;
+            ast::AssignExpr asn;
+            asn.op = is_inc ? ast::AssignOp::AddAssign : ast::AssignOp::SubAssign;
+            asn.loc = e->loc;
+            asn.result_type = id->result_type;
+            asn.target = std::move(tgt);
+            asn.value = std::move(one);
+            const ir::IrValueId new_val = lower_assign(&asn);
+            if (new_val == ir::IR_NO_VALUE) {
                 error_at(e->loc,
                          "lowering: nombre no resuelto: '" + id->name + "'");
                 return ir::IR_NO_VALUE;
             }
-            const ir::IrValueId new_val = compute_new(old_val);
-            write_local(id->name, new_val, vt, e->loc.line);
-            return is_pre ? new_val : old_val;
+            return is_pre ? new_val : prev;
         }
         // bug4: FieldAccessExpr (this.x++, obj.x++) sobre struct field.
         // Class fields se manejan separadamente (CLASS property o getfield).
@@ -14360,7 +17559,11 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 is.imm = git->second;
                 is.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(is));
-                if (native_poo_) fn_->values[va].is_host_ptr = true;
+                // `&global` es un `T*`: el storage vive en memoria host (en
+                // `.data` en AOT; en el bloque host de la seccion `gdata` en
+                // interp/JIT).  Asi la direccion sobrevive a viajar por memoria
+                // -- a un campo, a un parametro, a la FFI, a un `lock cmpxchg`.
+                fn_->values[va].is_host_ptr = true;
                 return va;
             }
             const ir::IrValueId addr = lookup(id->name);
@@ -14628,7 +17831,115 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * emitir una llamada al builtin.  Esto convierte el call site
      * en codigo runtime real generado a partir de string compile-time. */
     if (e->macro_expanded) {
+        // Si el @Macro se expandio a un literal string (`source(expr)` ->
+        // `"texto"`), coaccionarlo a StringObject GC-managed en lugar de bajarlo
+        // como puntero crudo (STR_LIT_ADDR).  Sin esto, `string s = macro()` y
+        // `${macro()}` recibian una direccion cruda en vez del contenido.
+        if (e->macro_expanded->kind == ast::NodeKind::StringLitExpr) {
+            return lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(e->macro_expanded.get()));
+        }
         return lower_expr(e->macro_expanded.get());
+    }
+
+    /* `source(arg)` (y cualquier comptime fn IMPORTADA pass-through con un
+     * unico param `expr` cuyo body es `return code`): es un quasi-quote --
+     * captura su argumento como texto/plantilla y lo DEVUELVE tal cual.  No
+     * tiene bytecode local que invocar (es importada), asi que un CALLVM
+     * `code.__macro_source` colgaria en el linker.  La INLINEAMOS: `source(X)`
+     * baja exactamente como `X`.  Cuando `X` es una plantilla con huecos
+     * `${expr}` (StringLitExpr interpolado que arma el parser), se baja por el
+     * path normal de interpolacion de strings -> funciona en interp/JIT/AOT
+     * igual que cualquier `"...${x}..."`, no solo en comptime. */
+    if (e->callee && e->callee->kind == ast::NodeKind::IdentExpr &&
+        e->args.size() == 1 && e->args[0]) {
+        const std::string &cn =
+            static_cast<ast::IdentExpr *>(e->callee.get())->name;
+        auto cf_it = tc_.comptime_fns().find(cn);
+        if (cf_it != tc_.comptime_fns().end() && cf_it->second &&
+            cf_it->second->is_imported_comptime &&
+            !cf_it->second->is_macro && cf_it->second->params.size() == 1 &&
+            cf_it->second->params[0] &&
+            cf_it->second->params[0]->is_expr_capture) {
+            ast::Expr *arg = e->args[0].get();
+            if (arg->kind == ast::NodeKind::StringLitExpr) {
+                return lower_string_literal_to_string_object(
+                    static_cast<ast::StringLitExpr *>(arg));
+            }
+            return lower_expr(arg);
+        }
+    }
+
+    // Overlay F1: construccion `PEB(ptr)` de un `@overlay struct`.  El valor del
+    // overlay ES el puntero base (memoria host ajena): lo bajamos y lo marcamos
+    // como host_ptr para que el acceso a campos emita loads/stores host.
+    if (e->callee && e->callee->kind == ast::NodeKind::IdentExpr &&
+        e->result_type.kind == PrimitiveKind::STRUCT) {
+        const std::string &cn =
+            static_cast<ast::IdentExpr *>(e->callee.get())->name;
+        auto it = tc_.struct_layouts().find(cn);
+        if (it != tc_.struct_layouts().end() && it->second.is_overlay &&
+            e->args.size() == 1) {
+            ir::IrValueId base = lower_expr(e->args[0].get());
+            if (base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            // El overlay es una VISTA sobre memoria host: forzar la naturaleza.
+            fn_->values[base].is_host_ptr = true;
+            return base;
+        }
+    }
+
+    // `Tipo.default([{...}])` / `val.default([{...}])`: struct con sus valores
+    // por defecto (+ overrides opcionales).  Reutiliza zero-fill + defaults de
+    // campo + init-list.  Forma estatica (base = nombre de struct) aloca un
+    // struct fresco; forma de instancia (base = variable struct) lo resetea.
+    if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr &&
+        e->result_type.kind == PrimitiveKind::STRUCT) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        if (fa->field_name == "default") {
+            const std::string &sname = e->result_type.struct_name;
+            auto it = tc_.struct_layouts().find(sname);
+            if (it != tc_.struct_layouts().end()) {
+                const StructLayout &lay = it->second;
+                bool is_static = false;
+                if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+                    const std::string &bn =
+                        static_cast<ast::IdentExpr *>(fa->base.get())->name;
+                    if (lookup(bn) == ir::IR_NO_VALUE &&
+                        tc_.struct_layouts().count(bn))
+                        is_static = true;
+                }
+                ir::IrValueId addr;
+                if (is_static) {
+                    addr = fn_->new_value(ir::IrType::PTR);
+                    ir::IrInstr al{};
+                    al.op = ir::IrOp::ALLOCA;
+                    al.type = ir::IrType::I8;
+                    al.dst = addr;
+                    al.imm = (uint64_t)lay.size_bytes;
+                    al.source_line = e->loc.line;
+                    // Agregado -> host en los tres modos, no solo en AOT.
+                    al.host_alloca = true;
+                    fn_->append(current_block_, std::move(al));
+                    fn_->values[addr].is_host_ptr = true;
+                } else {
+                    addr = lower_expr(fa->base.get());
+                    if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                }
+                emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
+                if (e->args.size() == 1 &&
+                    e->args[0]->kind == ast::NodeKind::InitListExpr) {
+                    // emit_struct_init_fields ya aplica los defaults + el
+                    // override; evita duplicar los defaults.
+                    emit_struct_init_fields(
+                        addr, lay,
+                        static_cast<ast::InitListExpr *>(e->args[0].get()),
+                        e->loc.line);
+                } else {
+                    emit_struct_field_defaults(addr, lay, e->loc.line);
+                }
+                return addr;
+            }
+        }
     }
 
     // Function pointers: llamada INDIRECTA.  Evaluamos el callee a un SSA
@@ -14759,14 +18070,14 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         return dst;
     }
 
-    // Phase M.7: llamada a funcion de namespace importado, ej.
+    //  M.7: llamada a funcion de namespace importado, ej.
     // `lib_a.valor_a(args)`.  El TypeChecker marca el FieldAccessExpr
     // callee con property_kind=4 y resuelve la firma del simbolo en
     // imported_namespaces_.  Aqui obtenemos el mangled_label y
     // emitimos CALL como si fuera una llamada normal.
     if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        // Phase NS.1b: la base puede ser un IdentExpr (single-segment `ui`) o
+        //  NS.1b: la base puede ser un IdentExpr (single-segment `ui`) o
         // una cadena de field-access (multi-segment `ui.widgets`).  La
         // resolucion usa @c fa->ns_index (autoritativo); @c idb solo se usa en
         // el fallback de static-method (ns_index no resuelto), que no aplica a
@@ -15064,7 +18375,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         const auto &cfns = tc_.comptime_fns();
         auto cit = cfns.find(cid->name);
         if (cit != cfns.end()) {
-            /* Phase MC.17.3: si estamos dentro de un @Macro body
+            /*  MC.17.3: si estamos dentro de un @Macro body
              * lowereado a IR Y el callee es OTRO @Macro, NO
              * intentamos comptime-eval; en su lugar caemos al
              * lowering normal mas abajo que emitira CALLVM regular
@@ -15084,6 +18395,57 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
              * (la callee ya esta en el IR como funcion regular). */
             ComptimeEvalResult r = comptime_eval_expr(tc_, e);
             if (!r.ok && emit_comptime_fns_) {
+                goto skip_comptime_eval_for_macro_to_macro;
+            }
+            /* F1: comptime fn con asm -> ejecutar en el ComptimeVM (JIT +
+             * interp fallback).  Con el two- (.velb y AOT), pass 2
+             * (bytecode comptime cargado via prebuilt) da el valor real; el
+             * pass 1 (sin bytecode) emite placeholder 0 -- inocuo, porque el
+             * cr del pass 1 se descarta y el pass 2 recompila.  La fn ya se
+             * bajo a `__macro_<name>` en lower_function. */
+            if (!r.ok && comptime_fn_uses_asm(tc_, cit->second)) {
+                const uint32_t src_line_asm = e->loc.line;
+                ir::IrType t_asm = ir::IrType::I64;
+                if (cit->second->return_type) {
+                    Type rt =
+                        tc_.resolve_type_node(cit->second->return_type.get());
+                    t_asm = ir_type_from_primitive(rt.kind);
+                }
+                std::vector<uint64_t> vm_args;
+                bool args_ok = true;
+                for (const auto &a : e->args) {
+                    ComptimeEvalResult av = comptime_eval_expr(tc_, a.get());
+                    if (!av.ok) {
+                        args_ok = false;
+                        break;
+                    }
+                    vm_args.push_back(static_cast<uint64_t>(av.value));
+                }
+                uint64_t r0 = 0;
+                if (args_ok) {
+                    (void)const_cast<TypeChecker &>(tc_)
+                        .comptime_runtime()
+                        .invoke_simple_macro("__macro_" + cid->name, vm_args,
+                                             r0);
+                }
+                return emit_const(t_asm, r0, src_line_asm);
+            }
+            /* Force-lower: si la comptime fn fue recolectada para bajarse a
+             * runtime (porque un @Macro lowereable la referencia), su llamada
+             * NO se comptime-evalua -- se emite un CALL normal a `code.<helper>`
+             * (via el label mas abajo).  El arg puede ser un param runtime del
+             * macro; el helper es ahora una fn runtime que lo recibe.  El
+             * rewrite a `__macro_` NO aplica (la fn no es is_macro), asi que el
+             * nombre queda plano y resuelve contra la fn force-lowered. */
+            if ((!r.ok || r.deferred) &&
+                comptime_fns_to_force_lower_.count(cid->name)) {
+                /* El fold en pass-1 puede devolver DIFERIDO (r.ok=true pero
+                 * r.deferred): la comptime fn corre en la ComptimeVM que aun no
+                 * tiene bytecode -> el fold da un valor vacio/placeholder.  Para
+                 * una fn force-lowered (un @Macro lowereable la referencia), NO
+                 * hornear ese vacio: emitir CALLVM a code.<helper>, que se
+                 * ejecuta al INVOCAR el macro (cuando el helper ya existe).  Sin
+                 * esto, un @Macro que llama a un helper comptime devolvia "". */
                 goto skip_comptime_eval_for_macro_to_macro;
             }
             if (!r.ok) {
@@ -15639,11 +19001,16 @@ skip_comptime_eval_for_macro_to_macro:
     // (24 bytes) usa SRET igual que un struct; el caller aloca el retbuf.
     const bool callee_is_str_value_sret =
         (fn_returns_str_value_.find(id->name) != fn_returns_str_value_.end());
+    // STRUCT por valor: el callee escribe en el retbuf que le pasa el caller.
+    // Sin esto devolvia un puntero a su propio frame, ya muerto.
+    auto it_struct_ret = fn_ret_struct_name_.find(id->name);
+    const bool callee_is_struct_sret =
+        (it_struct_ret != fn_ret_struct_name_.end());
     const bool callee_is_sret =
         (callee_kind == PrimitiveKind::OPTIONAL ||
          callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
          callee_is_function_sret || callee_is_smartptr_sret ||
-         callee_is_str_value_sret);
+         callee_is_str_value_sret || callee_is_struct_sret);
     ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
     if (callee_is_sret) {
         uint64_t buf_bytes = 16ULL; // default Optional
@@ -15665,6 +19032,16 @@ skip_comptime_eval_for_macro_to_macro:
             // usamos 16 que cubre ambos (shared solo usa los primeros 8 bytes;
             // la segunda mitad del slot es padding).
             buf_bytes = 16ULL;
+        } else if (callee_is_struct_sret) {
+            // Tamano del struct, redondeado a qword: el callee copia
+            // `sret_buf_size_/8` qwords y usa el mismo redondeo.
+            const auto &slays = tc_.struct_layouts();
+            auto it_s = slays.find(it_struct_ret->second);
+            if (it_s != slays.end()) {
+                buf_bytes =
+                    (static_cast<uint64_t>(it_s->second.size_bytes) + 7ULL) &
+                    ~7ULL;
+            }
         }
         v_call_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
@@ -15680,10 +19057,11 @@ skip_comptime_eval_for_macro_to_macro:
         // El retbuf del value-string vive en host stack (igual que
         // Optional/Result/enum): host_alloca + is_host_ptr para que las
         // copias del callee usen `movh` y el caller lea/libere host mem.
+        // El retbuf de un agregado vive en host, como el propio agregado.
         const bool is_optres_retbuf =
             (callee_kind == PrimitiveKind::OPTIONAL ||
              callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
-             callee_is_str_value_sret);
+             callee_is_str_value_sret || callee_is_struct_sret);
         if (is_optres_retbuf) {
             al.host_alloca = true;
         }
@@ -15747,7 +19125,59 @@ skip_comptime_eval_for_macro_to_macro:
             promote_to_string = true;
         }
         if (!promote_to_string) {
-            const ir::IrValueId v_arg = lower_expr(ae);
+            ir::IrValueId v_arg = lower_expr(ae);
+            // Fix nested-SRET (general): si el argumento es una llamada anidada
+            // a una fn que devuelve un tipo de buffer PLANO via SRET (enum,
+            // Optional, Result, o string value-type de Vesta Embed -- p.ej.
+            // `emit(classify(x))`), su valor SSA ES el retbuf de esa llamada:
+            // un slot fragil.  Al montar los args de ESTA llamada (parallel-move
+            // + presion de registros), el registro que sostiene ese retbuf puede
+            // clobbearse y el callee recibiria un puntero equivocado -> lee
+            // basura (match sobre la primera arm, Optional vacio, etc.).
+            // Copiamos el buffer a un slot FRESCO justo aqui (mismo patron que
+            // `T t = productor(x)`, que ya funcionaba) y pasamos ESE,
+            // desacoplandolo del retbuf productor.  Antes solo cubria enum; el
+            // bug es identico para TODO SRET de buffer plano, asi que se atiende
+            // de forma uniforme (function/smart-ptr se excluyen: tienen
+            // semantica de ownership -- copiar el buffer duplicaria el env/ctrl).
+            if (v_arg != ir::IR_NO_VALUE && ae &&
+                ae->kind == ast::NodeKind::CallExpr) {
+                auto *ce_arg = static_cast<ast::CallExpr *>(ae);
+                if (ce_arg->callee &&
+                    ce_arg->callee->kind == ast::NodeKind::IdentExpr) {
+                    const std::string &cn =
+                        static_cast<ast::IdentExpr *>(ce_arg->callee.get())
+                            ->name;
+                    bool fresh_is_host = false;
+                    const uint64_t sret_sz =
+                        nested_sret_flat_size(cn, &fresh_is_host);
+                    if (sret_sz > 0) {
+                        // Slot fresco cuya NATURALEZA coincide con como el callee
+                        // lee su param: VM-STACK para enum (lectura VM), HOST
+                        // para Optional/Result (lectura host).  Igual que el slot
+                        // de un var-decl `T t = productor(x)` del tipo
+                        // correspondiente.  La copia (emit_enum_copy) lee el
+                        // retbuf productor con su naturaleza real y escribe al
+                        // fresh; desacopla del retbuf fragil del productor.
+                        const ir::IrValueId fresh =
+                            fn_->new_value(ir::IrType::PTR);
+                        ir::IrInstr al{};
+                        al.op = ir::IrOp::ALLOCA;
+                        al.type = ir::IrType::I8;
+                        al.dst = fresh;
+                        al.imm = sret_sz;
+                        al.host_alloca = fresh_is_host;
+                        al.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(al));
+                        if (fresh_is_host)
+                            fn_->values[fresh].is_host_ptr = true;
+                        emit_enum_copy(fresh, v_arg,
+                                       fn_->values[v_arg].is_host_ptr, sret_sz,
+                                       e->loc.line);
+                        v_arg = fresh;
+                    }
+                }
+            }
             // Ruta B (H1 paso por valor): si el param es un STRUCT por valor con
             // copy-hook y el arg es un lvalue existente (IdentExpr), la callee
             // debe recibir una COPIA.  Copiamos + `copia.__clone__()` y pasamos
@@ -15793,7 +19223,8 @@ skip_comptime_eval_for_macro_to_macro:
     // en un array de pila host y reemplazarlos por (ptr, count).  El callee
     // recibe `T*` + el count (leido con vacount()).  Mismo patron que el argv
     // de vx_async, ahora como feature del lenguaje.
-    if (callee_sig && callee_sig->is_variadic && !callee_is_sret &&
+    if (callee_sig && callee_sig->is_variadic && !callee_sig->is_raw_variadic &&
+        !callee_is_sret &&
         arg_ids.size() >= callee_sig->param_types.size() - 1) {
         const size_t fixed = callee_sig->param_types.size() - 1;
         const size_t vcount = arg_ids.size() - fixed;
@@ -15865,12 +19296,14 @@ skip_comptime_eval_for_macro_to_macro:
     std::string callee_name = id->name;
     {
         auto fn_it = tc_.comptime_fns().find(id->name);
+        /* P1: rewrite a __macro_ para @Macros Y comptime fns-VM (recursion). */
         if (fn_it != tc_.comptime_fns().end() && fn_it->second &&
-            fn_it->second->is_macro) {
+            (fn_it->second->is_macro ||
+             comptime_fn_needs_vm(tc_, fn_it->second))) {
             callee_name = "__macro_" + id->name;
         }
     }
-    /* Phase M.5: si la funcion fue importada cross-module con
+    /*  M.5: si la funcion fue importada cross-module con
      * mangling, el label emitido en el .vel es el mangled
      * (`lib__foo`) aunque el nombre visible del usuario es `foo`.
      * Consultamos function_sig_by_name para detectar el caso. */
@@ -16404,6 +19837,52 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
     return v_dst;
 }
 
+ir::IrValueId Lowering::lower_overloaded_step(ast::UnaryExpr *e, bool is_inc,
+                                              bool is_pre) {
+    // `c++` sobre un tipo que sobrecarga la suma ES `c += 1`.  Se fabrica ese
+    // compound y se le pide al type checker que lo resuelva igual que a uno
+    // escrito a mano (`__iadd__` in-place, o desazucarado a `c = c + 1`).  El
+    // AssignExpr nace AQUI, con el checker ya pasado, asi que hay que pedirselo
+    // explicitamente -- pero la regla vive en un solo sitio.
+    const Type &tt = e->operand->result_type;
+    const int ln = e->loc.line;
+    // Postfijo: el valor de la expresion es el ANTERIOR -> leerlo antes.  En
+    // los tres lvalues el "valor" de un agregado es su direccion, asi que esto
+    // devuelve la direccion del objeto, no una copia; para `c++` como
+    // sentencia (el uso normal) da igual, y en expresion es lo mismo que hace
+    // el resto del lowering con los agregados.
+    ir::IrValueId prev = ir::IR_NO_VALUE;
+    if (!is_pre) prev = lower_expr(e->operand.get());
+
+    auto one = std::make_unique<ast::IntLitExpr>();
+    one->value = 1;
+    // El `1` es un ENTERO aunque `c` no lo sea: el dunder recibe un i64.  Si le
+    // copiaramos el tipo de `c` (un STRUCT), el dispatch no casaria.
+    one->result_type = Type{PrimitiveKind::I64};
+    one->loc = e->loc;
+
+    ast::AssignExpr asn;
+    asn.op = is_inc ? ast::AssignOp::AddAssign : ast::AssignOp::SubAssign;
+    asn.loc = e->loc;
+    asn.result_type = tt;
+    asn.target = std::move(e->operand);
+    asn.value = std::move(one);
+    Type res;
+    const bool ok = tc_.prepare_overloaded_compound_assign(
+        &asn, tt, Type{PrimitiveKind::I64}, res);
+    ir::IrValueId new_val = ir::IR_NO_VALUE;
+    if (ok) new_val = lower_assign(&asn);
+    e->operand = std::move(asn.target); // devolver el operando al AST
+    if (!ok) {
+        error_at(e->loc,
+                 "lowering: '" + std::string(is_inc ? "++" : "--") +
+                     "' sobre un tipo que no sobrecarga la suma");
+        return ir::IR_NO_VALUE;
+    }
+    (void)ln;
+    return is_pre ? new_val : prev;
+}
+
 ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     // admitimos como lvalue: IdentExpr (variable simple) o
     // FieldAccessExpr (p.x = v).  Otros lvalues (deref de puntero,
@@ -16411,6 +19890,33 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     if (!e->target) {
         error_at(e->loc, "lowering: target de '=' nulo");
         return ir::IR_NO_VALUE;
+    }
+    // Asignacion sobrecargada: el type checker dejo en @c overload_method el
+    // dunder (`__assign__` para `=`, `__iadd__` para `+=`, ...).  Se desugara a
+    // UNA llamada `target.__op__(value)` -- ni copia memberwise ni
+    // load-op-store.  Esa es toda la diferencia: para `atomic<T>` la operacion
+    // tiene que ser indivisible.
+    // Mismo patron que el binario sobrecargado (ver lower_binary): se roban los
+    // hijos para el call sintetico y se devuelven despues.
+    if (!e->overload_method.empty() && e->target && e->value) {
+        const bool recv_is_struct =
+            (e->target->result_type.kind == PrimitiveKind::STRUCT);
+        ast::CallExpr synth;
+        synth.loc = e->loc;
+        auto fa = std::make_unique<ast::FieldAccessExpr>();
+        fa->loc = e->loc;
+        fa->field_name = e->overload_method;
+        fa->base = std::move(e->target);
+        synth.callee = std::move(fa);
+        synth.args.push_back(std::move(e->value));
+        const ir::IrValueId v_call = recv_is_struct
+                                         ? lower_struct_method_call(&synth)
+                                         : lower_class_method_call(&synth);
+        auto *fa_back =
+            static_cast<ast::FieldAccessExpr *>(synth.callee.get());
+        e->target = std::move(fa_back->base);
+        e->value = std::move(synth.args[0]);
+        return v_call;
     }
     // Si el valor es un lambda-literal que se almacena en un campo / slot /
     // deref, su env ESCAPA del scope actual (el objeto contenedor puede
@@ -16590,6 +20096,28 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft,
                              e->value ? e->value->loc : e->loc);
 
+        // F5: campo `@endian(expr)` -> swap CONDICIONAL del valor a escribir
+        // (simetrico con el read): el store LE deja los bytes en el orden que
+        // dicta la expr.  Comptime se pliega; runtime = select sin ramas.
+        {
+            const Type bt_w = fa->base ? fa->base->result_type : Type{};
+            if (bt_w.kind == PrimitiveKind::STRUCT) {
+                auto it_w = tc_.struct_layouts().find(bt_w.struct_name);
+                if (it_w != tc_.struct_layouts().end()) {
+                    for (const auto &f : it_w->second.fields) {
+                        if (f.name == fa->field_name && f.endian_expr &&
+                            f.bit_width == 0 &&
+                            (f.size == 2 || f.size == 4 || f.size == 8)) {
+                            rhs = emit_overlay_endian_swap(fa->base.get(),
+                                                           it_w->second, f, rhs,
+                                                           e->loc.line);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // WRITE de bit field: read-modify-write.  Si el campo es bit
         // field, leemos el storage word completo, le limpiamos los
         // bits del rango con AND inverse_mask, le metemos el valor
@@ -16690,7 +20218,13 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         // declara `__clone__` (copy-hook), tras la copia aplica el efecto sobre
         // la copia del campo (p.ej. ++refcount).  Mismo modelo que el path
         // CLASS (lower_class_field_store).
-        if (fa->result_type.kind == PrimitiveKind::STRUCT) {
+        //
+        // EXCEPCION: si el campo es de tipo `@overlay struct`, el slot guarda el
+        // HANDLE de la vista (8 bytes), no un agregado embebido -> STORE directo
+        // del puntero (cae al camino generico de abajo).  Sin esto la copia
+        // memberwise volcaba el PAYLOAD apuntado por el handle en el campo.
+        if (fa->result_type.kind == PrimitiveKind::STRUCT &&
+            !type_is_overlay(fa->result_type)) {
             uint64_t sz = 8;
             auto it_sl = tc_.struct_layouts().find(fa->result_type.struct_name);
             if (it_sl != tc_.struct_layouts().end())
@@ -16895,8 +20429,16 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         // necesita memcpy de sizeof(Struct) bytes desde el RHS PTR al
         // slot (igual que `*ptr = struct_value`).  Sin esto, solo se
         // copia el primer qword.
+        // Array de HANDLES overlay: el RHS ya ES el puntero de la vista (8
+        // bytes), no la direccion de un payload que copiar.  Excluirlo del
+        // memcpy: cae al STORE generico de abajo (pt = PTR) que guarda el
+        // puntero tal cual.  Sin esto, `hs[i] = Foo(p)` emitia LOAD [p] +
+        // STORE -> guardaba el CONTENIDO apuntado en vez del puntero.
+        // `v.arr[i] = ...` (@c is_overlay_array, elemento INLINE en la vista)
+        // conserva la copia de bytes: ahi no hay puntero que guardar.
         if ((ix->result_type.kind == PrimitiveKind::STRUCT ||
              ix->result_type.kind == PrimitiveKind::ARRAY) &&
+            (ix->is_overlay_array || !type_is_overlay(ix->result_type)) &&
             e->op == ast::AssignOp::Assign) {
             uint64_t struct_size = 0;
             if (ix->result_type.kind == PrimitiveKind::STRUCT) {
@@ -17279,6 +20821,26 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     }
     if (rhs == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
+    /* Value-type ENUM: `t = <enum>` COPIA los bytes del enum al slot ESTABLE
+     * de `t` (no repunta el puntero).  Igual modelo que un struct; sin esto,
+     * una asignacion (condicional o no) repuntaria `t` al slot del constructor
+     * (naturaleza VM/host distinta al slot del var-decl) y un PHI mezclaria
+     * punteros de naturaleza mixta -> el `match t` posterior leeria el tag con
+     * el load de la naturaleza equivocada (movh sobre direccion VM) -> SIGSEGV. */
+    if (e->op == ast::AssignOp::Assign &&
+        id->result_type.kind == PrimitiveKind::STRUCT) {
+        const auto &elays_e = tc_.enum_layouts();
+        auto ite_e = elays_e.find(id->result_type.struct_name);
+        if (ite_e != elays_e.end()) {
+            const ir::IrValueId slot = lookup(id->name);
+            if (slot != ir::IR_NO_VALUE) {
+                emit_enum_copy(slot, rhs, fn_->values[rhs].is_host_ptr,
+                               ite_e->second.size_bytes, e->loc.line);
+                return slot;
+            }
+        }
+    }
+
     /* L2.2: target es global runtime con storage en static_data.
      * Emit STORE al slot.  Soporta `=` directo y compound assigns
      * via load-modify-store. */
@@ -17296,26 +20858,62 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 is.imm = slot_idx;
                 is.source_line = ln;
                 fn_->append(current_block_, std::move(is));
+                // El slot vive en memoria host (seccion `gdata`) -> el
+                // load-modify-store de abajo es acceso host directo.
+                fn_->values[v_addr].is_host_ptr = true;
             }
+            // Tipo declarado del global.  El compound assign tiene que operar
+            // con EL del global, no con i64: sobre un `f64 g`, un `g += x` con
+            // aritmetica entera sumaria los BITS IEEE (basura: 1.5+1.5+1.5 daba
+            // -0.75).  `g = g + x` no sufria porque va por el camino normal, con
+            // el tipo real.  Para STRING el valor es el GcHandle -> i64.
+            PrimitiveKind gprim = PrimitiveKind::I64;
+            for (auto &decl : mod_.decls) {
+                if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl)
+                    continue;
+                auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
+                if (gv->name != id->name) continue;
+                if (gv->type &&
+                    gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
+                    gprim =
+                        static_cast<ast::PrimitiveTypeNode *>(gv->type.get())
+                            ->prim;
+                break;
+            }
+            const bool gfloat =
+                (gprim == PrimitiveKind::F32 || gprim == PrimitiveKind::F64);
+            const ir::IrType gty =
+                gfloat ? ir_type_from_primitive(gprim) : ir::IrType::I64;
+            // El valor a guardar tiene que llegar en el ancho del global: los
+            // literales float se parsean como double, asi que `f32 g = 1.25`
+            // trae un f64 y guardarlo como F32 sin convertir escribe basura.
+            if (gfloat && e->value) {
+                const ir::IrType from =
+                    (e->value->result_type.kind == PrimitiveKind::F32)
+                        ? ir::IrType::F32
+                        : ir::IrType::F64;
+                rhs = cast_if_needed(rhs, from, gty, e->loc);
+            }
+
             // Compound assign: load cur + combine.
             if (e->op != ast::AssignOp::Assign) {
-                ir::IrValueId v_cur = fn_->new_value(ir::IrType::I64);
+                ir::IrValueId v_cur = fn_->new_value(gty);
                 {
                     ir::IrInstr ld{};
                     ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
+                    ld.type = gty;
                     ld.dst = v_cur;
                     ld.operands = {v_addr};
                     ld.source_line = ln;
                     fn_->append(current_block_, std::move(ld));
                 }
                 const ast::BinOp bop = compound_assign_op_to_binop(e->op);
-                rhs =
-                    emit_binop_ir(bop, v_cur, rhs, PrimitiveKind::I64, e->loc);
+                rhs = emit_binop_ir(bop, v_cur, rhs,
+                                    gfloat ? gprim : PrimitiveKind::I64, e->loc);
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
+            st.type = gty;
             st.operands = {rhs, v_addr};
             st.source_line = ln;
             fn_->append(current_block_, std::move(st));
@@ -17323,7 +20921,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         }
     }
 
-    /* Phase MC.17.2: si estamos dentro de un @Macro Y el target es
+    /*  MC.17.2: si estamos dentro de un @Macro Y el target es
      * un comptime global int, emit STORE al slot @c static_data
      * correspondiente.  Soporta `=` directo y compound `+=`/`-=`
      * (el caller computa cur op rhs en `rhs` antes de llegar aqui). */
@@ -17433,6 +21031,31 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             error_at(e->loc,
                      "lowering: nombre no resuelto: '" + id->name + "'");
             return ir::IR_NO_VALUE;
+        }
+        /* P1: `string += X` en el path Full/VM (no native_poo_).  El path arith
+         * generico de abajo (promote_arith + emit_binop) NO hace STRCAT sobre
+         * StringObject -> daba string vacio.  Emitimos STRCAT como `s = s + X`.
+         * (Antes funcionaba solo porque la comptime fn se AST-evaluaba; con el
+         * rewrite corre en la VM y necesita el lowering correcto.) */
+        if (!native_poo_ &&
+            e->target->result_type.kind == PrimitiveKind::STRING &&
+            e->op == ast::AssignOp::AddAssign && e->value) {
+            /* Coercion: un literal RHS debe promoverse a StringObject (STRMAKE),
+             * no dejarse como STR_LIT_ADDR crudo (STRCAT espera handles). */
+            ir::IrValueId v_rhs;
+            if (e->value->kind == ast::NodeKind::StringLitExpr &&
+                !static_cast<ast::StringLitExpr *>(e->value.get())
+                     ->is_interpolated()) {
+                v_rhs = lower_string_literal_to_string_object(
+                    static_cast<ast::StringLitExpr *>(e->value.get()));
+            } else {
+                v_rhs = lower_expr(e->value.get());
+            }
+            if (v_rhs == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            const ir::IrValueId v_cat =
+                emit_strcat(cur, v_rhs, static_cast<uint32_t>(e->loc.line));
+            write_local(id->name, v_cat, dst_ir, e->loc.line);
+            return v_cat;
         }
         // Promocion al tipo comun entre cur y rhs (igual que en
         // lower_binary).  En la mayoria de casos ambos tienen el
@@ -17645,6 +21268,226 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return true;
     }
 
+    // Overlay: `extent(v)` -> span total en runtime del layout de la vista.
+    // Baja a un CALL a `__ovl_extent_<S>(base)`.
+    if (name == "extent" && e->type_args.empty() && e->args.size() == 1) {
+        ast::Expr *arg = e->args[0].get();
+        const Type vt = arg->result_type;
+        if (vt.kind != PrimitiveKind::STRUCT) {
+            error_at(e->loc, "extent(v): v debe ser una vista @overlay");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const auto &lays = tc_.struct_layouts();
+        auto it = lays.find(vt.struct_name);
+        if (it == lays.end() || !it->second.is_overlay) {
+            error_at(e->loc, "extent(v): '" + vt.struct_name +
+                                 "' no es una vista @overlay");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId base = lower_expr(arg);
+        if (base == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const std::string rname = generate_overlay_extent(it->second);
+        ir::IrValueId d = fn_->new_value(ir::IrType::U64);
+        ir::IrInstr in{};
+        in.op = ir::IrOp::CALL;
+        in.func_name = rname;
+        in.type = ir::IrType::U64;
+        in.dst = d;
+        in.operands = {base};
+        in.is_call_site = true;
+        in.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(in));
+        out_value = d;
+        return true;
+    }
+
+    // F4: `parent<T>()` dentro de un resolver `@offset { }` = el puntero de la
+    // vista RAIZ, enhebrado como 2o param `root` (bind "__ovl_root").  Devuelve
+    // ese puntero tipado como la vista T (el CallExpr ya tiene result_type=T).
+    if (name == "parent" && !e->type_args.empty() && e->args.empty()) {
+        const ir::IrValueId rv = lookup("__ovl_root");
+        if (rv == ir::IR_NO_VALUE) {
+            error_at(e->loc, "parent<T>() solo es valido dentro de un resolver "
+                             "@offset { } (de un overlay accedido como sub-vista)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_value = rv;
+        return true;
+    }
+
+    // Overlay: forma-VALOR de offsetof / in_bounds (runtime).  Sin type
+    // args; el 1er arg es un acceso a campo/elemento de una vista @overlay
+    // (el type checker ya lo valido y fijo result_type a U64/BOOL).
+    //   offsetof(v.campo)       = (u64) &campo - base_de_la_vista
+    //   in_bounds(v.campo, len) = offsetof(v.campo) + sizeof(campo) <= len
+    // Reusa la resolucion de direccion de lower_field_addr/lower_index_addr
+    // (que ya resuelve @offset(expr) dinamico + stride de arrays); la raiz
+    // de la cadena de accesos ES el puntero base construido con `T(buf)`.
+    if (e->type_args.empty() && !e->args.empty() &&
+        (name == "offsetof" || name == "in_bounds") &&
+        (e->result_type.kind == PrimitiveKind::U64 ||
+         e->result_type.kind == PrimitiveKind::BOOL)) {
+        const uint32_t ln = e->loc.line;
+        ast::Expr *arg = e->args[0].get();
+        // Direccion (host) del campo/elemento accedido.
+        ir::IrValueId field_addr = ir::IR_NO_VALUE;
+        if (arg->kind == ast::NodeKind::FieldAccessExpr) {
+            field_addr =
+                lower_field_addr(static_cast<ast::FieldAccessExpr *>(arg));
+        } else if (arg->kind == ast::NodeKind::IndexExpr) {
+            field_addr = lower_index_addr(static_cast<ast::IndexExpr *>(arg));
+        }
+        if (field_addr == ir::IR_NO_VALUE) {
+            error_at(e->loc, name + ": el argumento debe ser un acceso a "
+                                    "campo/elemento de un overlay");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // Puntero base de la vista: raiz de la cadena de accesos.
+        ast::Expr *root = arg;
+        for (;;) {
+            if (root->kind == ast::NodeKind::FieldAccessExpr) {
+                root = static_cast<ast::FieldAccessExpr *>(root)->base.get();
+                continue;
+            }
+            if (root->kind == ast::NodeKind::IndexExpr) {
+                root = static_cast<ast::IndexExpr *>(root)->base.get();
+                continue;
+            }
+            break;
+        }
+        const ir::IrValueId base_ptr = lower_expr(root);
+        if (base_ptr == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // off = field_addr - base_ptr   (u64)
+        ir::IrValueId off = fn_->new_value(ir::IrType::U64);
+        {
+            ir::IrInstr s{};
+            s.op = ir::IrOp::SUB;
+            s.type = ir::IrType::U64;
+            s.dst = off;
+            s.operands = {field_addr, base_ptr};
+            s.source_line = ln;
+            fn_->append(current_block_, std::move(s));
+        }
+        if (name == "offsetof") {
+            out_value = off;
+            return true;
+        }
+        // in_bounds: (off + sizeof(campo)) <= len   (sin signo).
+        const uint64_t fsize = comptime_type_size(tc_, arg->result_type);
+        ir::IrValueId endv = off;
+        if (fsize != 0) {
+            ir::IrValueId fc = emit_const(ir::IrType::U64, fsize, ln);
+            endv = fn_->new_value(ir::IrType::U64);
+            ir::IrInstr a{};
+            a.op = ir::IrOp::ADD;
+            a.type = ir::IrType::U64;
+            a.dst = endv;
+            a.operands = {off, fc};
+            a.source_line = ln;
+            fn_->append(current_block_, std::move(a));
+        }
+        ir::IrValueId lenv = lower_expr(e->args[1].get());
+        if (lenv == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // Coaccionar len a u64 para una comparacion sin signo de 64 bits.
+        const ir::IrType lfrom =
+            ir_type_from_primitive(e->args[1]->result_type.kind);
+        lenv = cast_if_needed(lenv, lfrom, ir::IrType::U64, ln);
+        ir::IrValueId res = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_ULE;
+        c.type = ir::IrType::BOOL;
+        c.dst = res;
+        c.operands = {endv, lenv};
+        c.source_line = ln;
+        fn_->append(current_block_, std::move(c));
+        out_value = res;
+        return true;
+    }
+
+    /* Type-metadata con arg LITERAL string: comptime_type_sizeof/alignof/kind
+     * ("u64").  Son CONSTANTES compile-time -- se pliegan a un CONST para que
+     * un @Macro que las use se baje a IR y corra por VM/JIT (no AST-eval).
+     * El nombre del tipo se resuelve via resolve_type_string (misma ruta que
+     * los typenames canonicos importados). */
+    if (e->args.size() == 1 && e->args[0] &&
+        e->args[0]->kind == ast::NodeKind::StringLitExpr &&
+        (name == "comptime_type_sizeof" || name == "comptime_type_alignof" ||
+         name == "comptime_type_kind")) {
+        const std::string tn =
+            static_cast<ast::StringLitExpr *>(e->args[0].get())->value;
+        const Type t = tc_.resolve_type_string(tn);
+        const uint32_t src_line = e->loc.line;
+        if (name == "comptime_type_sizeof") {
+            out_value =
+                emit_const(ir::IrType::U64, comptime_type_size(tc_, t), src_line);
+            return true;
+        }
+        if (name == "comptime_type_alignof") {
+            out_value = emit_const(ir::IrType::U64, comptime_type_align(tc_, t),
+                                   src_line);
+            return true;
+        }
+        /* comptime_type_kind */
+        const ComptimeKind k = comptime_type_kind(t);
+        out_value = emit_const(
+            ir::IrType::I32, static_cast<uint64_t>(static_cast<int32_t>(k)),
+            src_line);
+        return true;
+    }
+
+    // `bitcast<T>(v)`: reinterpretar los BITS.  El type checker ya exigio que
+    // origen y destino midan lo mismo, asi que aqui es un BITCAST del IR -- que
+    // entre tipos del mismo ancho baja a un `mov`: coste cero.
+    if (name == "bitcast" && !e->type_args.empty() && e->args.size() == 1) {
+        const Type dst_t = tc_.resolve_type_node(e->type_args[0].get());
+        const ir::IrValueId v_src = lower_expr(e->args[0].get());
+        if (v_src == ir::IR_NO_VALUE) return true;
+        const ir::IrType dst_ir = ir_type_from_primitive(dst_t.kind);
+        const ir::IrValueId v_dst = fn_->new_value(dst_ir);
+        // Reinterpretar bits no cambia a que memoria apunta un puntero.
+        fn_->values[v_dst].is_host_ptr = fn_->values[v_src].is_host_ptr;
+        ir::IrInstr bc{};
+        bc.op = ir::IrOp::BITCAST;
+        bc.type = dst_ir;
+        bc.dst = v_dst;
+        bc.operands = {v_src};
+        bc.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(bc));
+        out_value = v_dst;
+        return true;
+    }
+    // Predicados de tipo: se responden en comptime -> una constante.  El `if`
+    // que los use lo pliega el optimizer y la rama muerta desaparece: en el
+    // binario solo queda el camino que corresponde a T.
+    if (e->type_args.size() == 1 && e->args.empty() &&
+        (name == "is_float" || name == "is_integer" || name == "is_signed" ||
+         name == "is_unsigned" || name == "is_numeric" || name == "is_bool" ||
+         name == "is_char" || name == "is_pointer" || name == "is_string" ||
+         name == "is_class" || name == "is_struct" || name == "is_primitive" ||
+         name == "is_enum")) {
+        int64_t v = 0;
+        if (!const_cast<TypeChecker &>(tc_).lsp_eval_builtin_scalar(e, &v)) {
+            error_at(e->loc, "lowering: '" + name +
+                                 "' no se pudo resolver en comptime");
+            return true;
+        }
+        out_value = emit_const(ir::IrType::I8, (uint64_t)(v != 0 ? 1 : 0),
+                               e->loc.line);
+        return true;
+    }
     if (!e->type_args.empty() &&
         (name == "sizeof" || name == "alignof" || name == "typename" ||
          name == "type_id" || name == "kind")) {
@@ -17713,7 +21556,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         name == "comptime_strlen") {
         const ComptimeEvalResult r = comptime_eval_expr(tc_, e);
         if (!r.ok) {
-            /* Phase MC.24: si el comptime eval falla (e.g. arg es
+            /*  MC.24: si el comptime eval falla (e.g. arg es
              * un comptime var que solo se resuelve en call-site
              * del macro padre), NO erroreamos.  En su lugar, dejamos
              * que el path runtime (str_concat/str_equals/str_length
@@ -18236,6 +22079,23 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     // -----------------------------------------------------------------
+    // Concepto como PREDICADO: `Concepto<T>()` -> CONST bool.  El type
+    // checker ya valido que sea un concepto (built-in o de usuario) con
+    // 1 type-arg y 0 args runtime.
+    // -----------------------------------------------------------------
+    if (!e->type_args.empty() && e->args.empty() &&
+        (is_builtin_concept(name) ||
+         tc_.concepts().find(name) != tc_.concepts().end())) {
+        const uint32_t src_line = e->loc.line;
+        const Type t1 = tc_.resolve_type_node(e->type_args[0].get());
+        const ConceptEval ce = comptime_eval_concept(tc_, name, t1);
+        out_value = emit_const(ir::IrType::BOOL,
+                               (ce.found && ce.satisfied) ? 1ULL : 0ULL,
+                               src_line);
+        return true;
+    }
+
+    // -----------------------------------------------------------------
     // Sprint 2 introspection: 12 builtins de fields/methods/types.
     // Mismas garantias que Sprint 1: cada llamada baja a UN solo
     // IrOp::CONST (o STR_LIT_ADDR + STRMAKE para los que devuelven
@@ -18246,8 +22106,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         const bool one_targ_no_args =
             name == "field_count" || name == "method_count" ||
             name == "is_class" || name == "is_struct" ||
-            name == "is_primitive" || name == "is_newtype" ||
-            name == "is_opaque" || name == "underlying_of";
+            name == "is_primitive" || name == "is_enum" ||
+            name == "is_newtype" || name == "is_opaque" ||
+            name == "underlying_of";
         const bool one_targ_str_arg =
             name == "offsetof" || name == "has_field" || name == "has_method" ||
             name == "field_type";
@@ -18313,6 +22174,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             }
             if (name == "is_struct") {
                 const bool v = comptime_is_struct(tc_, t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (name == "is_enum") {
+                const bool v = comptime_is_enum(tc_, t1);
                 out_value =
                     emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
                 return true;
@@ -18412,7 +22279,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // aqui devolvemos false para que lower_call siga con la ruta
     // generica (CALL a una funcion del usuario).
     const bool is_print = (name == "print");
-    /* Phase MC.18: `comptime_print` / `ct_print` se aliasan a
+    /*  MC.18: `comptime_print` / `ct_print` se aliasan a
      * `println` -- en el path VM-lowered es exactamente eso (print
      * a stderr).  El macro corre en compile time (porque la
      * ComptimeRuntime ejecuta el body al type-checkear el call
@@ -18614,7 +22481,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_z10_gc_collect = (name == "shared_gc_collect");
     // Builtins de string: cada uno baja a una sola instruccion bytecode
     // dedicada (STRLEN, STRGETBYTES, STRRAW, etc.) sin pasar por CALLN.
-    /* Phase MC.15B: alias comptime_* a sus equivalentes runtime str_*
+    /*  MC.15B: alias comptime_* a sus equivalentes runtime str_*
      * cuando aparecen en cuerpos de @Macro lowereados a IR.  El
      * type_checker ya valido el call con el comptime evaluator; aqui
      * solo emitimos el bytecode que la VM ejecutara al invocar el
@@ -18632,7 +22499,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         (name == "str_equals" || name == "comptime_streq");
     const bool is_str_make = (name == "str_make");
     const bool is_str_convert = (name == "str_convert");
-    /* Phase MC.15C: aliases comptime adicionales que lowerean a
+    /*  MC.15C: aliases comptime adicionales que lowerean a
      * codigo runtime (eliminando rejection en macro pre-validation). */
     const bool is_to_str = (name == "to_str" || name == "comptime_to_str");
     const bool is_chr_b = (name == "chr" || name == "comptime_chr");
@@ -18931,6 +22798,31 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         emit_print_typed_value;
     emit_print_typed_value = [&](ast::Expr *ex, const std::string &fmt_str) {
         if (!ex) return;
+        // Impresion PERSONALIZADA (patron Display / __str__): si `ex` es un
+        // struct/overlay que declara `to_string() -> string`, imprimimos
+        // `ex.to_string()`.  Se sintetiza el call clonando `ex` como receptor.
+        if (ex->result_type.kind == PrimitiveKind::STRUCT &&
+            ex->kind != ast::NodeKind::CallExpr) {   // evita recursion infinita
+            auto itl = tc_.struct_layouts().find(ex->result_type.struct_name);
+            if (itl != tc_.struct_layouts().end()) {
+                for (const auto &mth : itl->second.methods) {
+                    if (mth.name == "to_string" &&
+                        mth.return_type.kind == PrimitiveKind::STRING) {
+                        auto synth = std::make_unique<ast::CallExpr>();
+                        synth->loc = ex->loc;
+                        auto fa = std::make_unique<ast::FieldAccessExpr>();
+                        fa->loc = ex->loc;
+                        fa->field_name = "to_string";
+                        fa->base = vxgen::clone_expr(ex);
+                        if (fa->base) fa->base->result_type = ex->result_type;
+                        synth->callee = std::move(fa);
+                        synth->result_type = Type{PrimitiveKind::STRING};
+                        emit_print_typed_value(synth.get(), fmt_str);
+                        return;
+                    }
+                }
+            }
+        }
         // Caso especial: builtins de truecolor fg_rgb(r,g,b) /
         // bg_rgb(r,g,b) dentro de la interpolacion.  Se expanden a la
         // secuencia SGR 24-bit: fg -> "\x1b[38;2;R;G;Bm", bg ->
@@ -20596,7 +24488,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return true;
     }
 
-    /* Phase MC.15C: builtins comptime aliasados a codigo runtime.
+    /*  MC.15C: builtins comptime aliasados a codigo runtime.
      * Cuando aparecen en cuerpos de @Macro lowereados a IR, se
      * compilan a una secuencia de bytecode equivalente al AST eval. */
 
@@ -20724,7 +24616,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     if (is_static_assert_b) {
-        /* Phase MC.20: `static_assert(cond, msg)` se baja a CALLN
+        /*  MC.20: `static_assert(cond, msg)` se baja a CALLN
          * a la virtual lib `vesta_comptime:static_assert`.  El fn
          * recibe (cond_i64, msg_cstr) y emite diagnostic error si
          * cond es 0.  Cuando el macro corre via VM en compile time,
@@ -20811,7 +24703,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     if (is_repeat_b || is_replace_b || is_contains_b) {
-        /* Phase MC.15D: builtins de string que requieren acceso a
+        /*  MC.15D: builtins de string que requieren acceso a
          * los bytes RAW de StringObjects (via STRRAW) y un buffer
          * destino en vm_mem.  Layout comun:
          *   1. Resolver SSA values de cada arg (string -> handle).
@@ -21953,6 +25845,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         add.operands = {v_buf, v_eight};
         add.source_line = e->loc.line;
         fn_->append(current_block_, std::move(add));
+        // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
+        // buf+8.  Sin esto, el STORE del payload usa acceso VM (`mov`) sobre un
+        // buffer HOST (stack_alloc_buf con host_alloca) -> el valor se escribe a
+        // memoria VM en una direccion host (fuera de rango) y se pierde
+        // (unwrap devuelve 0).  Funcionaba por SUERTE cuando la direccion del
+        // alloc caia en rango VM.  Ok/Err ya tenian esta propagacion; Some no.
+        fn_->values[v_buf8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
         const ir::IrType payload_t = fn_->values[v_payload].type;
         ir::IrInstr st1{};
         st1.op = ir::IrOp::STORE;
@@ -22234,6 +26133,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             add.operands = {v_arg, v_eight};
             add.source_line = e->loc.line;
             fn_->append(current_block_, std::move(add));
+            // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
+            // buf+8 para que el LOAD del payload emita `loadzh`/`movh` (host).
+            // Sin esto, un Optional en buffer host (retornado por una fn SRET)
+            // se leia con `loadz` (VM) sobre direccion host -> unwrap daba 0.
+            // value/error ya lo hacian; unwrap no.
+            fn_->values[v_at].is_host_ptr = fn_->values[v_arg].is_host_ptr;
             const ir::IrValueId v_dst = fn_->new_value(payload_t);
             ir::IrInstr ldp{};
             ldp.op = ir::IrOp::LOAD;
@@ -24313,6 +28218,15 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         std::string suffix = m->is_constructor ? std::string("ctor") : m->name;
         fn.name = cd->name + "__" + suffix;
 
+        // @complexity del metodo al IR, igual que en una funcion libre (ver
+        // lower_function): metadata pura que solo consume el analizador.
+        fn.complexity_expr = m->complexity_expr;
+        fn.complexity_vars = m->complexity_vars;
+        fn.complexity_partial_pre = m->complexity_partial_pre;
+        fn.complexity_partial_post = m->complexity_partial_post;
+        fn.complexity_total_pre = m->complexity_total_pre;
+        fn.complexity_total_post = m->complexity_total_post;
+
         // Tipo de retorno + detect SRET (Result/Optional).  Para class
         // methods retornando Result/Optional cross-module, el callee
         // necesita retbuf hidden como SEGUNDO param (this=r1, retbuf=r2,
@@ -24321,9 +28235,25 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         Type sem_ret_m = Type{PrimitiveKind::VOID};
         if (m->return_type)
             sem_ret_m = tc_.resolve_type_node(m->return_type.get());
+        // Y el STRUCT por valor, que arrastraba EXACTAMENTE el use-after-free
+        // que describe el comentario de arriba: era el unico agregado sin SRET.
+        // Un enum (STRUCT con enum_layout) y un `@overlay struct` (que ES un
+        // puntero de 8 bytes) van por registro y no entran.
+        const StructLayout *m_ret_slay = nullptr;
+        if (sem_ret_m.kind == PrimitiveKind::STRUCT &&
+            !sem_ret_m.struct_name.empty() &&
+            tc_.enum_layouts().find(sem_ret_m.struct_name) ==
+                tc_.enum_layouts().end()) {
+            auto it_ms = tc_.struct_layouts().find(sem_ret_m.struct_name);
+            if (it_ms != tc_.struct_layouts().end() && !it_ms->second.is_overlay)
+                m_ret_slay = &it_ms->second;
+        }
         const bool method_sret =
             !m->is_constructor && (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
-                                   sem_ret_m.kind == PrimitiveKind::RESULT);
+                                   sem_ret_m.kind == PrimitiveKind::RESULT ||
+                                   (native_poo_ &&
+                                    sem_ret_m.kind == PrimitiveKind::STRING) ||
+                                   m_ret_slay != nullptr);
         if (m->is_constructor) {
             fn.ret_type = ir::IrType::VOID;
         } else if (method_sret) {
@@ -24397,6 +28327,13 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                 if ((sem.kind == PrimitiveKind::PTR ||
                      sem.kind == PrimitiveKind::ARRAY) &&
                     !sem.is_virtual) {
+                    param_is_host_ptr = true;
+                }
+                // Agregado por valor: host, como en el resto de rutas.  Este
+                // path (metodos de CLASE) no lo marcaba NI en AOT.
+                if (sem.kind == PrimitiveKind::OPTIONAL ||
+                    sem.kind == PrimitiveKind::RESULT ||
+                    sem.kind == PrimitiveKind::STRUCT) {
                     param_is_host_ptr = true;
                 }
             }
@@ -24499,20 +28436,35 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         const bool saved_sret_active = sret_active_;
         ir::IrValueId saved_sret_retbuf = sret_retbuf_;
         uint64_t saved_sret_buf_size = sret_buf_size_;
-        if (method_sret) {
-            sret_active_ = true;
-            sret_retbuf_ = v_method_retbuf;
-            sret_buf_size_ =
-                (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
-        }
+        // native_poo_ string SRET (mismo tratamiento que structs/funciones):
+        // construir el value-string real en el `return`.
+        const bool saved_sret_str_value_c = current_fn_sret_str_value_;
+        // SIEMPRE fijar segun ESTE metodo (ver nota en lower_struct_methods):
+        // un metodo no-string debe tener el flag en false aunque un metodo
+        // string previo lo dejara true, o su `return <cte>` se compilaria como
+        // copia value-string de 24 bytes -> deref invalido en AOT.
+        current_fn_sret_str_value_ =
+            (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
+        sret_active_ = method_sret;
+        sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
+        // El tamano manda la copia al retbuf (qword a qword) de cada `return`.
+        // Un struct usa SU tamano redondeado a qword: con el 24 fijo, uno de 8
+        // bytes copiaria 24 y pisaria memoria del caller.
+        sret_buf_size_ =
+            !method_sret ? 0ULL
+            : m_ret_slay != nullptr
+                ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
+                   ~7ULL)
+            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+                                                          : 24ULL;
 
         lower_block(m->body.get());
 
-        if (method_sret) {
-            sret_active_ = saved_sret_active;
-            sret_retbuf_ = saved_sret_retbuf;
-            sret_buf_size_ = saved_sret_buf_size;
-        }
+        // Restaurar SIEMPRE (se fijaron incondicionalmente arriba).
+        sret_active_ = saved_sret_active;
+        sret_retbuf_ = saved_sret_retbuf;
+        sret_buf_size_ = saved_sret_buf_size;
+        current_fn_sret_str_value_ = saved_sret_str_value_c;
 
         current_class_lowering_ = saved_class;
         current_fn_returns_string_ = saved_returns_str;
@@ -24775,13 +28727,59 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                                                      : m->name;
         fn.name = sd->name + "__" + suffix;
 
+        // B.3 contract: si el struct es una instanciacion generica
+        // (`atomic_i64` viene de `struct atomic<T>`), marcar la IrFunction con
+        // el template + los type args.  Lo mismo que hacen los metodos de clase
+        // y los helpers `__new_`; la ruta de structs genericos, que llego
+        // despues, se habia quedado sin ello.  Sin esta procedencia no hay
+        // forma de saber que `atomic_i64__swap` sale de `atomic<T>::swap`, y de
+        // eso depende que un contrato declarado sobre la PLANTILLA se pueda
+        // verificar contra sus instanciaciones.
+        if (const auto *mi = tc_.monomorph_info(sd->name)) {
+            fn.generic_template_name = mi->template_name;
+            fn.generic_type_args = mi->type_args;
+        }
+
+        // @complexity del metodo al IR, igual que en una funcion libre (ver
+        // lower_function): metadata pura que solo consume el analizador.
+        fn.complexity_expr = m->complexity_expr;
+        fn.complexity_vars = m->complexity_vars;
+        fn.complexity_partial_pre = m->complexity_partial_pre;
+        fn.complexity_partial_post = m->complexity_partial_post;
+        fn.complexity_total_pre = m->complexity_total_pre;
+        fn.complexity_total_post = m->complexity_total_post;
+
         // Tipo de retorno + deteccion de SRET (Optional/Result).  El
         // retbuf hidden va tras 'this'.
         Type sem_ret_m = Type{PrimitiveKind::VOID};
         if (m->return_type)
             sem_ret_m = tc_.resolve_type_node(m->return_type.get());
+        // Vesta Embed (native_poo_): `string` es value-type de 24 bytes
+        // {ptr,len,cap} -> SRET, igual que en lower_function (2707).  Sin
+        // esto un metodo que CONSTRUYE un string (interpolacion, concat) lo
+        // arma en su propio host-stack y devuelve un puntero colgante ->
+        // SIGSEGV en el caller.  Un string CONSTANTE no lo necesitaba
+        // (retorna un puntero a un value-string en .rodata), por eso el bug
+        // solo se veia con retornos construidos.  Caller simetrico abajo.
+        // Y un STRUCT por valor: EXACTAMENTE el mismo problema que el string de
+        // arriba -- se arma en el frame del callee y se devolvia un puntero a
+        // esa memoria, muerta tras el `ret`.  Era el unico agregado sin SRET.
+        // Un enum (STRUCT con enum_layout) y un `@overlay struct` (que ES un
+        // puntero de 8 bytes) no entran.
+        const StructLayout *m_ret_slay = nullptr;
+        if (sem_ret_m.kind == PrimitiveKind::STRUCT &&
+            !sem_ret_m.struct_name.empty() &&
+            tc_.enum_layouts().find(sem_ret_m.struct_name) ==
+                tc_.enum_layouts().end()) {
+            auto it_ms = tc_.struct_layouts().find(sem_ret_m.struct_name);
+            if (it_ms != tc_.struct_layouts().end() && !it_ms->second.is_overlay)
+                m_ret_slay = &it_ms->second;
+        }
         const bool method_sret = (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
-                                  sem_ret_m.kind == PrimitiveKind::RESULT);
+                                  sem_ret_m.kind == PrimitiveKind::RESULT ||
+                                  (native_poo_ &&
+                                   sem_ret_m.kind == PrimitiveKind::STRING) ||
+                                  m_ret_slay != nullptr);
         if (method_sret) {
             fn.ret_type = ir::IrType::VOID;
         } else if (m->return_type &&
@@ -24807,7 +28805,13 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         std::vector<std::pair<std::string, ir::IrValueId>> bindings;
         const ir::IrValueId this_vid = fn.new_value(ir::IrType::PTR, "%this");
         fn.values[this_vid].is_param = true;
-        if (native_poo_) fn.values[this_vid].is_host_ptr = true;
+        // `this` es la DIRECCION del receptor y todo agregado vive en memoria
+        // host (ver lower_var_decl) -> host SIEMPRE, no solo en AOT.  Mientras
+        // fue condicional, un receptor en host se leia aqui con `mov` (VM) y
+        // `this` llegaba a CEROS.  Un overlay es host por su propia naturaleza
+        // (su vista ES un puntero a memoria ajena): habilita ademas
+        // `self.translate(rva)` / `parent<T>().translate(rva)`.
+        fn.values[this_vid].is_host_ptr = true;
         // NS.6-ext: extension sobre una CLASE -> `this` es un objeto GC
         // (host_ptr al payload, refrescable tras GC), no un buffer VM-stack.
         if (ext_this_is_class_) {
@@ -24852,10 +28856,13 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                     sem.kind == PrimitiveKind::RESULT) {
                     param_is_host_ptr = true;
                 }
-                // STRUCT por valor: el callee recibe un PTR al buffer.
-                // En AOT (native_poo_) ese buffer vive en pila nativa
-                // (host) -> el callee debe leer los campos con `movh`.
-                if (sem.kind == PrimitiveKind::STRUCT && native_poo_) {
+                // Agregado por valor: el callee recibe un PTR a su buffer,
+                // y todo agregado vive en memoria HOST en los TRES modos (ver
+                // lower_var_decl) -> `movh`.  El `&& native_poo_` que habia
+                // aqui era el bug: en interp/JIT el callee leia el buffer con
+                // `mov` (VM) y, en cuanto el receptor acababa en host, llegaba
+                // a CEROS -- con el arg de al lado funcionando.
+                if (sem.kind == PrimitiveKind::STRUCT) {
                     param_is_host_ptr = true;
                 }
             }
@@ -24900,12 +28907,35 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const bool saved_sret_active = sret_active_;
         const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
         const uint64_t saved_sret_buf_size = sret_buf_size_;
-        if (method_sret) {
-            sret_active_ = true;
-            sret_retbuf_ = v_method_retbuf;
-            sret_buf_size_ =
-                (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
-        }
+        // native_poo_ string: activar current_fn_sret_str_value_ para que el
+        // `return <literal>` construya un value-string real (build_native_
+        // string_from_literal + emit_native_str_move_copy) en vez de copiar
+        // los bytes crudos del str_lit_addr como si fueran {ptr,len,cap}.
+        const bool saved_sret_str_value = current_fn_sret_str_value_;
+        const bool method_str_sret =
+            (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
+        // SIEMPRE fijar el contexto SRET segun ESTE metodo (no solo cuando hay
+        // SRET): un metodo que NO usa SRET (u64/void/...) debe tener
+        // sret_active_/sret_retbuf_/current_fn_sret_str_value_ en false/none
+        // aunque un metodo o funcion-libre STRING previo los dejara activos
+        // (lower_function pone sret_active_=true para `-> string` en native_poo
+        // y no lo restaura).  Sin este reset, el `return <cte>` de rex_len se
+        // compila como copia value-string de 24 bytes desde el valor como
+        // puntero -> deref invalido -> crash en AOT.  Reset incondicional =
+        // robusto y cero-coste (asignaciones triviales).
+        current_fn_sret_str_value_ = method_str_sret;
+        sret_active_ = method_sret;
+        sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
+        // El tamano manda la copia al retbuf (qword a qword) de cada `return`.
+        // Un struct usa SU tamano redondeado a qword: con el 24 fijo, uno de 8
+        // bytes copiaria 24 y pisaria memoria del caller.
+        sret_buf_size_ =
+            !method_sret ? 0ULL
+            : m_ret_slay != nullptr
+                ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
+                   ~7ULL)
+            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+                                                          : 24ULL;
 
         lower_block(m->body.get());
 
@@ -24981,11 +29011,11 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             }
         }
 
-        if (method_sret) {
-            sret_active_ = saved_sret_active;
-            sret_retbuf_ = saved_sret_retbuf;
-            sret_buf_size_ = saved_sret_buf_size;
-        }
+        // Restaurar SIEMPRE (se fijaron incondicionalmente arriba).
+        sret_active_ = saved_sret_active;
+        sret_retbuf_ = saved_sret_retbuf;
+        sret_buf_size_ = saved_sret_buf_size;
+        current_fn_sret_str_value_ = saved_sret_str_value;
         current_fn_returns_string_ = saved_returns_str;
 
         // RET por defecto si el body no termino con uno.
@@ -25344,13 +29374,14 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
 void Lowering::emit_struct_method_on_host_field(
     ir::IrValueId field_addr, const std::string &struct_name,
     const std::string &method_label, uint32_t line) {
-    // El metodo de struct se compila con this=VM (interp/JIT) o this=host (AOT,
-    // native_poo).  Solo necesitamos el temp VM intermedio cuando el campo es
-    // HOST pero el metodo espera VM (interp/JIT + campo en payload de clase).
-    // En AOT (todo host, metodo host-this) o si el campo ya es VM (struct
-    // contenedor en VM-stack) el CALL es directo sobre field_addr.
-    const bool need_temp =
-        !native_poo_ && fn_->values[field_addr].is_host_ptr;
+    // Historico: cuando un metodo de struct se compilaba con this=VM en
+    // interp/JIT, un campo en el payload HOST de una clase habia que COPIARLO a
+    // un temp VM para poder llamarlo.  Ese rodeo ya no hace falta -- `this` es
+    // host en los tres modos (ver lower_struct_methods) -- y ademas era DANINO
+    // para los metodos que MUTAN: el dtor o el `__clone__` operaban sobre la
+    // COPIA, asi que el refcount real no se tocaba (el free nunca llegaba, o
+    // llegaba de mas).  El CALL va directo sobre el campo.
+    const bool need_temp = false;
     if (!need_temp) {
         ir::IrInstr cd{};
         cd.op = ir::IrOp::CALL;
@@ -25455,7 +29486,10 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
     if (it_sl != tc_.struct_layouts().end())
         sz = static_cast<uint64_t>(it_sl->second.size_bytes);
     if (sz == 0) sz = 8;
-    // ALLOCA copia (host-ness identica a un struct local).
+    // ALLOCA copia: host-ness identica a un struct local, o sea HOST en los tres
+    // modos (ver lower_var_decl).  Cuando esta copia se quedaba en la pila VM en
+    // interp/JIT, el callee -- que lee sus params agregados con `movh` -- la leia
+    // como basura, y su `__clone__` / `~dtor` operaban sobre esa basura.
     const ir::IrValueId copy = fn_->new_value(ir::IrType::PTR);
     {
         ir::IrInstr al{};
@@ -25463,10 +29497,11 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
         al.type = ir::IrType::I8;
         al.imm = sz;
         al.dst = copy;
+        al.host_alloca = true;
         al.source_line = line;
         fn_->append(current_block_, std::move(al));
     }
-    if (native_poo_) fn_->values[copy].is_host_ptr = true;
+    fn_->values[copy].is_host_ptr = true;
     // memcpy v_src -> copy (respetando host-ness de origen y destino).
     const bool src_is_host = fn_->values[v_src].is_host_ptr;
     const bool dst_is_host = fn_->values[copy].is_host_ptr;
@@ -25842,7 +29877,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             effective_ctor ? effective_ctor->vtable_index : 0;
 
         // -------------------------------------------------------------
-        // Phase AOT.2.b -- POO NATIVA: __new_<Class>(args) sin runtime.
+        //  AOT.2.b -- POO NATIVA: __new_<Class>(args) sin runtime.
         //   %obj = call calloc(1, size_bytes)   ; heap zero-init, host_ptr
         //   [si hay ctor efectivo:] call <Class>__ctor(%obj, args...)
         //   ret %obj
@@ -26285,7 +30320,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
         (void)name_idx;
         (void)name_len; // ya no se usa findclass aqui
 
-        // Phase Z.6: emitir TANTO el helper local (__new_<Class>) como,
+        //  Z.6: emitir TANTO el helper local (__new_<Class>) como,
         // si la clase se uso con `shared` en algun var-decl, su variante
         // shared (__new_<Class>_shared).  El cuerpo es identico salvo
         // que la instruccion `newobj r1` se reemplaza por `newobjs r1`
@@ -26952,6 +30987,25 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
                 v_init = lower_expr(gv->init.get());
             }
             if (v_init == ir::IR_NO_VALUE) continue;
+            // El STORE tiene que respetar el TIPO DECLARADO del global.  Los
+            // literales de coma flotante se parsean como double, asi que un
+            // `f32 g = 0.5` produce un valor f64; guardarlo tal cual mete 8
+            // bytes de bits f64 en un slot cuyo LOAD lee 4 -> el global valia
+            // 0 (y ademas machacaba en runtime los bytes correctos que el
+            // pre-pase ya habia grabado en el slot).
+            ir::IrType sty = ir::IrType::I64;
+            if (gv->type && gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                const PrimitiveKind gpk =
+                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get())->prim;
+                if (gpk == PrimitiveKind::F32 || gpk == PrimitiveKind::F64) {
+                    sty = ir_type_from_primitive(gpk);
+                    const ir::IrType from =
+                        (gv->init->result_type.kind == PrimitiveKind::F32)
+                            ? ir::IrType::F32
+                            : ir::IrType::F64;
+                    v_init = cast_if_needed(v_init, from, sty, gv->loc);
+                }
+            }
             // STR_LIT_ADDR -> slot addr, STORE init.
             ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
             {
@@ -26962,10 +31016,12 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
                 is.imm = slot_idx;
                 is.source_line = ln;
                 fn_->append(current_block_, std::move(is));
+                // El slot vive en memoria host (seccion `gdata`).
+                fn_->values[v_addr].is_host_ptr = true;
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
+            st.type = sty;
             st.operands = {v_init, v_addr};
             st.source_line = ln;
             fn_->append(current_block_, std::move(st));
@@ -27204,7 +31260,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     // Emit IrInstr::CALL a __new_<ClassName>(args).  La funcion auxiliar
     // se genera al final de run() via generate_new_helpers.
     //
-    // Phase Z.6: si @c e->is_shared, despachamos al helper
+    //  Z.6: si @c e->is_shared, despachamos al helper
     // @c __new_<ClassName>_shared (emite @c newobjs en lugar de @c newobj
     // -> aloca en el SharedHeap).  El frontend marca @c is_shared cuando
     // el var-decl padre tiene modificador @c shared.
@@ -27220,9 +31276,15 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     // no con el mangled del consumer ("buffer__Buffer").  Si el layout
     // tiene @c imported_helper_suffix , lo usamos como sufijo del label.
     std::string helper_class_name = e->class_name;
+    // `typedef Caja Sesion new;` -> `new Sesion()` construye la clase de debajo,
+    // asi que el helper es `__new_Caja`.  El newtype no genera uno propio: no
+    // tiene nada que construir de distinto, solo una identidad distinta.
+    if (const std::string real = tc_.underlying_layout_name(helper_class_name);
+        !real.empty())
+        helper_class_name = real;
     {
         const auto &class_layouts = tc_.class_layouts();
-        auto it_lay = class_layouts.find(e->class_name);
+        auto it_lay = class_layouts.find(helper_class_name);
         if (it_lay != class_layouts.end() &&
             !it_lay->second.imported_helper_suffix.empty()) {
             helper_class_name = it_lay->second.imported_helper_suffix;
@@ -28082,11 +32144,12 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // retbuf (PTR), que se bindea a la var-decl o se pasa a otras fns.
     const bool method_call_sret =
         (mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-         mtd->return_type.kind == PrimitiveKind::RESULT);
+         mtd->return_type.kind == PrimitiveKind::RESULT ||
+         (native_poo_ && mtd->return_type.kind == PrimitiveKind::STRING));
     ir::IrValueId v_method_call_retbuf = ir::IR_NO_VALUE;
     if (method_call_sret) {
         uint64_t buf_bytes =
-            (mtd->return_type.kind == PrimitiveKind::RESULT) ? 24ULL : 16ULL;
+            (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
         v_method_call_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -28647,7 +32710,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         return visible_dst;
     }
 
-    // Phase AOT.2.c: POO nativa -- DEVIRT MONOMORFICA.  Si la clase
+    //  AOT.2.c: POO nativa -- DEVIRT MONOMORFICA.  Si la clase
     // receptora estatica es HOJA (ninguna otra clase la extiende), el tipo
     // dinamico == el estatico, por lo que la llamada NO puede resolver a un
     // override de subclase -> emitimos un CALL DIRECTO a <owner>__<metodo>
@@ -28843,12 +32906,34 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     // retbuf (host_alloca para que callee/caller usen movh) y lo pasa
     // como segundo "arg" (tras this).  El dst del CALL es VOID; el
     // valor visible es el retbuf.
+    // native_poo_: un metodo que devuelve `string` value-type usa SRET
+    // (simetrico con el callee en lower_struct_methods).  El caller aloca el
+    // retbuf de 24 bytes en host-stack y lo pasa tras 'this'.
+    // STRUCT por valor: mismo motivo que Optional/Result -- el buffer del
+    // struct vive en el frame del callee y muere al RET.  Un `@overlay struct`
+    // no: su valor ES un puntero de 8 bytes, va por registro.
+    const StructLayout *ret_slay = nullptr;
+    if (mtd->return_type.kind == PrimitiveKind::STRUCT &&
+        !mtd->return_type.struct_name.empty()) {
+        const auto &elays = tc_.enum_layouts();
+        if (elays.find(mtd->return_type.struct_name) == elays.end()) {
+            auto it_rs = tc_.struct_layouts().find(mtd->return_type.struct_name);
+            if (it_rs != tc_.struct_layouts().end() && !it_rs->second.is_overlay)
+                ret_slay = &it_rs->second;
+        }
+    }
     const bool method_sret = (mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-                              mtd->return_type.kind == PrimitiveKind::RESULT);
+                              mtd->return_type.kind == PrimitiveKind::RESULT ||
+                              (native_poo_ &&
+                               mtd->return_type.kind == PrimitiveKind::STRING) ||
+                              ret_slay != nullptr);
     ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
     if (method_sret) {
         const uint64_t buf_bytes =
-            (mtd->return_type.kind == PrimitiveKind::RESULT) ? 24ULL : 16ULL;
+            ret_slay != nullptr
+                ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) & ~7ULL)
+            : (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+                                                                 : 24ULL;
         v_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -34094,7 +38179,7 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
     fn_->append(current_block_, std::move(ins));
 }
 
-// ---- Sprint 2: Phase Z + reflexion + static + AOP ----
+// ---- Sprint 2:  Z + reflexion + static + AOP ----
 
 ir::IrValueId Lowering::emit_findmethod(ir::IrValueId v_params, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
@@ -34463,7 +38548,7 @@ ir::IrValueId Lowering::emit_getproc(uint32_t source_line) {
 }
 
 /**
- * @brief Phase MC.17.2 -- obtiene (o aloca) el slot de @c static_data
+ * @brief  MC.17.2 -- obtiene (o aloca) el slot de @c static_data
  * para un comptime global.
  *
  * Lookup en @c comptime_global_slots_; si no esta, lee el valor
@@ -34497,12 +38582,72 @@ uint64_t Lowering::get_or_create_runtime_global_slot(const std::string &name,
     // Marcar el slot como NON_DEDUP para que el merge cross-module
     // no colapse multiples globals con bytes iniciales identicos.
     gmeta.flags |= ir::IrModule::SD_FLAG_NON_DEDUP;
+    // Un global es UNO en todo el programa, identificado por su nombre (ya
+    // mangled por modulo/namespace, `lib__counter`).  El merge cross-module
+    // unifica por `shared_key`, asi que el modulo que DEFINE el global y el
+    // que solo lo USA (que crea su slot al vuelo, sin ver el AST del dep)
+    // acaban compartiendo el mismo storage en vez de tener uno cada uno.
+    gmeta.shared_key = name;
     // AOT: un global runtime es MUTABLE -> debe vivir en .data (rw), no en
     // .rodata (r): escribir a un slot read-only segfaultea en nativo.  El
     // interp/JIT ignoran section_name; solo lo consume el codegen AOT.
     gmeta.section_name = ".data";
     runtime_global_slots_[name] = idx;
     return idx;
+}
+
+uint64_t Lowering::shared_global_slot_for(const std::string &mangled_label,
+                                          const Type &t) {
+    // Tamano real del tipo: el slot del consumidor y el del dep se unifican por
+    // shared_key y gana el PRIMERO que aparezca en el merge, asi que los dos
+    // tienen que pedir el mismo tamano (con un global array, uno de 8 bytes
+    // recortaria el storage).  Minimo un qword, como todo global.
+    uint64_t nbytes = static_cast<uint64_t>(size_of_type(t));
+    if (nbytes < 8) nbytes = 8;
+    return get_or_create_runtime_global_slot(mangled_label, nbytes);
+}
+
+bool Lowering::imported_global_slot_of(ast::FieldAccessExpr *e,
+                                       uint64_t &out_slot) {
+    // property_kind=4 marca `ns.X`; ns_index dice CUAL namespace (el
+    // sentinel 0xFFFFFFFF = sin resolver).
+    if (e == nullptr || e->property_kind != 4 || e->ns_index == 0xFFFFFFFFu)
+        return false;
+    const auto &nss = tc_.imported_namespaces();
+    if (e->ns_index >= nss.size()) return false;
+    const auto &ns = nss[e->ns_index];
+    auto it_sym = ns.by_name.find(e->field_name);
+    if (it_sym == ns.by_name.end()) return false;
+    const auto &sym = ns.symbols[it_sym->second];
+    if (sym.kind != 1) return false;         // no es variable/constante
+    if (sym.has_const_value) return false;   // se inlinea como CONST
+    if (sym.mangled_label.empty()) return false;
+    // Simbolo de un namespace de ESTE modulo: es local, no importado.  Su
+    // storage (o su ausencia, p.ej. un global de tipo funcion) ya se decidio
+    // con el tipo delante; aqui solo pasan los de otros modulos.
+    if (local_global_names_.count(sym.mangled_label) != 0) return false;
+    // Un comptime const string se materializa via STRMAKE desde el blob del
+    // .vxi, no tiene storage que compartir.
+    if (sym.var_type.kind == PrimitiveKind::STRING) {
+        const auto &ics = tc_.imported_global_consts();
+        auto it_ic = ics.find(e->field_name);
+        if (it_ic != ics.end() && it_ic->second.is_str) return false;
+    }
+    out_slot = shared_global_slot_for(sym.mangled_label, sym.var_type);
+    return true;
+}
+
+bool Lowering::ensure_imported_global_slot(const std::string &name) {
+    if (runtime_global_slots_.count(name) != 0) return true;
+    const auto &igs = tc_.imported_global_storage();
+    auto it = igs.find(name);
+    if (it == igs.end()) return false;
+    const uint64_t slot =
+        shared_global_slot_for(it->second.mangled_label, it->second.type);
+    // Alias: en ESTE modulo el global se nombra `name` (el nombre local del
+    // import), pero su storage es el slot del dep.
+    runtime_global_slots_[name] = slot;
+    return true;
 }
 
 uint64_t Lowering::get_or_create_tls_global_slot(const std::string &name,
@@ -34609,6 +38754,39 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
                                        ir::IrType to, const SourceLoc &loc,
                                        bool is_explicit) {
     if (from == to || v == ir::IR_NO_VALUE) return v;
+    // Un valor CONSTANTE compile-time que CABE en el tipo destino no pierde
+    // informacion aunque el destino sea mas estrecho: `u8 x = 0x48` o
+    // `this.mod = 3` (bitfield) o un valued-enum (`Enc.RET`, cuyo valor es una
+    // constante) no deben avisar de narrowing.  Misma politica que C/C++: no
+    // se avisa por `char c = 65`.  Suprime el warning tratando el cast como
+    // explicito (la conversion de bits sigue emitiendose igual).
+    if (!is_explicit && v < fn_->values.size() && fn_->values[v].is_const) {
+        const uint64_t cv = fn_->values[v].const_val;
+        bool fits = false;
+        switch (to) {
+        case ir::IrType::U8:   fits = (cv <= 0xFFULL); break;
+        case ir::IrType::U16:  fits = (cv <= 0xFFFFULL); break;
+        case ir::IrType::U32:  fits = (cv <= 0xFFFFFFFFULL); break;
+        case ir::IrType::BOOL: fits = (cv <= 1ULL); break;
+        case ir::IrType::I8: {
+            const int64_t s = (int64_t)cv;
+            fits = (s >= -128 && s <= 255);
+            break;
+        }
+        case ir::IrType::I16: {
+            const int64_t s = (int64_t)cv;
+            fits = (s >= -32768 && s <= 65535);
+            break;
+        }
+        case ir::IrType::I32: {
+            const int64_t s = (int64_t)cv;
+            fits = (s >= -2147483648LL && s <= 4294967295LL);
+            break;
+        }
+        default: break;
+        }
+        if (fits) is_explicit = true;
+    }
     // Warning de seguridad para casts implicitos que pueden perder
     // informacion: narrowing entero, float -> int, int -> float (los
     // grandes pierden mantissa).  Solo se emite cuando el usuario NO
@@ -34865,6 +39043,27 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
     std::function<void(ast::Expr *)> visit_expr;
     std::function<void(ast::Stmt *)> visit_stmt;
 
+    // Marca address-taken toda variable asignada en @p n (parte de un loop):
+    // fuerza su ALLOCA en la declaracion (dominante), evitando el PHI
+    // direccion-vs-valor de un loop anidado en una rama condicional.
+    auto mark_loop_assigned = [&](const ast::Node *n) {
+        if (!n) return;
+        std::set<std::string> tmp;
+        collect_assigned_vars(n, tmp);
+        for (const auto &nm : tmp)
+            address_taken_locals_.insert(nm);
+    };
+
+    // Profundidad de anidamiento en ramas CONDICIONALES (then/else de un if,
+    // cuerpos de catch).  Solo promovemos las vars loop-carried a address-taken
+    // cuando el loop esta DENTRO de una rama condicional: ahi su ALLOCA (creado
+    // en el bloque del loop) no domina la rama hermana del if -> el merge
+    // produce el PHI direccion-vs-valor (el bug).  Un loop a nivel de funcion
+    // (cond_depth==0) crea su ALLOCA en un bloque que domina el exit -> no hay
+    // rama hermana problematica; ademas promover ahi romperia al vectorizador
+    // (que espera el contador/acumulador como PHI SSA).
+    int cond_depth = 0;
+
     visit_expr = [&](ast::Expr *e) {
         if (!e) return;
         switch (e->kind) {
@@ -34950,6 +39149,22 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
             visit_expr(ix->index.get());
             return;
         }
+        case ast::NodeKind::CastExpr: {
+            // `(T)(&x)`: el cast ENVUELVE el `&x`.  Sin recursar en el operando,
+            // el `&x` interno no se veia y `x` no se promocionaba a address-taken
+            // -> error "& sobre variable no promocionada".  Bug de deteccion.
+            auto *ce = static_cast<ast::CastExpr *>(e);
+            visit_expr(ce->operand.get());
+            return;
+        }
+        case ast::NodeKind::TernaryExpr: {
+            // `cond ? &a : &b` -- recursar en las 3 ramas por el mismo motivo.
+            auto *te = static_cast<ast::TernaryExpr *>(e);
+            visit_expr(te->cond.get());
+            visit_expr(te->then_expr.get());
+            visit_expr(te->else_expr.get());
+            return;
+        }
         default: return; // literales, IdentExpr puro, etc. no aportan
         }
     };
@@ -34973,6 +39188,195 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
             visit_expr(es->expr.get());
             return;
         }
+        case ast::NodeKind::IfStmt: {
+            auto *si = static_cast<ast::IfStmt *>(st);
+            visit_expr(si->cond.get());
+            // then/else son ramas condicionales: un loop dentro de ellas es el
+            // caso del bug (su ALLOCA no domina la rama hermana).
+            ++cond_depth;
+            visit_stmt(si->then_branch.get());
+            visit_stmt(si->else_branch.get());
+            --cond_depth;
+            return;
+        }
+        case ast::NodeKind::WhileStmt: {
+            auto *w = static_cast<ast::WhileStmt *>(st);
+            // Toda variable ASIGNADA dentro de un loop es loop-carried: el
+            // lowering le crea un ALLOCA para persistir su valor entre
+            // iteraciones (linea ~6377).  Si el loop esta dentro de una rama
+            // condicional, ese ALLOCA (creado en el bloque del loop) NO domina
+            // la rama HERMANA -> el merge del `if` termina con un PHI que mezcla
+            // la DIRECCION del alloca (rama del loop) con el VALOR original
+            // (rama sin loop) -> un `load` posterior deref-ea un valor como si
+            // fuera puntero (SIGSEGV / basura).  Marcarla address-taken AQUI
+            // (pre-pase) fuerza el ALLOCA en su DECLARACION (que domina todo) y
+            // todas las ramas la ven como memoria -> representacion consistente.
+            // Cero coste: el optimizer re-promueve a SSA los allocas que no
+            // escapan (mem2reg / promote_local_allocas).
+            if (cond_depth > 0) {
+                mark_loop_assigned(w->cond.get());
+                mark_loop_assigned(w->body.get());
+            }
+            visit_expr(w->cond.get());
+            visit_stmt(w->body.get());
+            return;
+        }
+        case ast::NodeKind::DoWhileStmt: {
+            auto *dw = static_cast<ast::DoWhileStmt *>(st);
+            if (cond_depth > 0) {
+                mark_loop_assigned(dw->body.get());
+                mark_loop_assigned(dw->cond.get());
+            }
+            visit_stmt(dw->body.get());
+            visit_expr(dw->cond.get());
+            return;
+        }
+        case ast::NodeKind::ForStmt: {
+            auto *f = static_cast<ast::ForStmt *>(st);
+            // Ver la nota en WhileStmt: toda variable asignada dentro del loop
+            // se marca address-taken para que su ALLOCA nazca en la declaracion
+            // (que domina todo), evitando el PHI direccion-vs-valor cuando el
+            // loop esta anidado en una rama condicional.
+            if (cond_depth > 0) {
+                mark_loop_assigned(f->cond.get());
+                mark_loop_assigned(f->step.get());
+                mark_loop_assigned(f->body.get());
+            }
+            visit_stmt(f->init.get());
+            visit_expr(f->cond.get());
+            visit_expr(f->step.get());
+            visit_stmt(f->body.get());
+            return;
+        }
+        case ast::NodeKind::TryStmt: {
+            // Sin esta rama, las variables declaradas dentro de un
+            // try/catch/finally no se promocionan a address-taken
+            // aunque aparezca `&var` en el body (error: '&x' sobre
+            // variable no promocionada).  Y el cascade de errores
+            // "nombre no resuelto" surge porque el lowering del
+            // var-decl falla al evaluar `&var` y deja el binding
+            // sin registrar.
+            auto *ts = static_cast<ast::TryStmt *>(st);
+            // try/catch introducen ramas (el catch se alcanza por un edge
+            // de excepcion): un loop dentro puede sufrir el mismo PHI mixto.
+            ++cond_depth;
+            visit_stmt(ts->body.get());
+            for (auto &cc : ts->catches)
+                visit_stmt(cc.body.get());
+            if (ts->finally_body) visit_stmt(ts->finally_body.get());
+            --cond_depth;
+            return;
+        }
+        case ast::NodeKind::ReturnStmt: {
+            auto *r = static_cast<ast::ReturnStmt *>(st);
+            visit_expr(r->value.get());
+            return;
+        }
+        case ast::NodeKind::SynchronizedStmt: {
+            auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+            visit_expr(sy->target.get());
+            visit_stmt(sy->body.get());
+            return;
+        }
+        default: return;
+        }
+    };
+    visit_stmt(s);
+}
+
+// ---------------------------------------------------------------------
+// spawn_body_uses_coop: recorre el body de un `spawn { }` buscando el uso
+// de primitivas de asincronia COOPERATIVA (mailbox / future / await).  Su
+// presencia indica que el spawn es una TAREA cooperativa del scheduler de
+// vx_async (single-thread, run-to-completion), NO un hilo real paralelo.
+// Ver la doc de la declaracion en lowering.h.
+// ---------------------------------------------------------------------
+bool Lowering::spawn_body_uses_coop(ast::Stmt *s) {
+    if (!s) return false;
+    bool found = false;
+    std::function<void(ast::Expr *)> visit_expr;
+    std::function<void(ast::Stmt *)> visit_stmt;
+
+    visit_expr = [&](ast::Expr *e) {
+        if (!e || found) return;
+        switch (e->kind) {
+        case ast::NodeKind::UnaryExpr: {
+            auto *u = static_cast<ast::UnaryExpr *>(e);
+            // `await fut` -> primitiva cooperativa.
+            if (u->op == ast::UnOp::Await) {
+                found = true;
+                return;
+            }
+            visit_expr(u->operand.get());
+            return;
+        }
+        case ast::NodeKind::CallExpr: {
+            auto *c = static_cast<ast::CallExpr *>(e);
+            if (c->callee &&
+                c->callee->kind == ast::NodeKind::IdentExpr) {
+                const std::string &nm =
+                    static_cast<ast::IdentExpr *>(c->callee.get())->name;
+                if (nm == "msgrecv" || nm == "msgsend" || nm == "fulfill" ||
+                    nm == "future_alloc") {
+                    found = true;
+                    return;
+                }
+            }
+            visit_expr(c->callee.get());
+            for (auto &arg : c->args) visit_expr(arg.get());
+            return;
+        }
+        case ast::NodeKind::BinaryExpr: {
+            auto *b = static_cast<ast::BinaryExpr *>(e);
+            visit_expr(b->lhs.get());
+            visit_expr(b->rhs.get());
+            return;
+        }
+        case ast::NodeKind::AssignExpr: {
+            auto *a = static_cast<ast::AssignExpr *>(e);
+            visit_expr(a->target.get());
+            visit_expr(a->value.get());
+            return;
+        }
+        case ast::NodeKind::FieldAccessExpr:
+            visit_expr(static_cast<ast::FieldAccessExpr *>(e)->base.get());
+            return;
+        case ast::NodeKind::IndexExpr: {
+            auto *ix = static_cast<ast::IndexExpr *>(e);
+            visit_expr(ix->base.get());
+            visit_expr(ix->index.get());
+            return;
+        }
+        case ast::NodeKind::CastExpr:
+            visit_expr(static_cast<ast::CastExpr *>(e)->operand.get());
+            return;
+        case ast::NodeKind::TernaryExpr: {
+            auto *te = static_cast<ast::TernaryExpr *>(e);
+            visit_expr(te->cond.get());
+            visit_expr(te->then_expr.get());
+            visit_expr(te->else_expr.get());
+            return;
+        }
+        default: return;
+        }
+    };
+
+    visit_stmt = [&](ast::Stmt *st) {
+        if (!st || found) return;
+        switch (st->kind) {
+        case ast::NodeKind::BlockStmt: {
+            auto *b = static_cast<ast::BlockStmt *>(st);
+            for (auto &child : b->body) visit_stmt(child.get());
+            return;
+        }
+        case ast::NodeKind::VarDeclStmt: {
+            auto *vd = static_cast<ast::VarDeclStmt *>(st);
+            if (vd->init) visit_expr(vd->init.get());
+            return;
+        }
+        case ast::NodeKind::ExprStmt:
+            visit_expr(static_cast<ast::ExprStmt *>(st)->expr.get());
+            return;
         case ast::NodeKind::IfStmt: {
             auto *si = static_cast<ast::IfStmt *>(st);
             visit_expr(si->cond.get());
@@ -35001,25 +39405,15 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
             return;
         }
         case ast::NodeKind::TryStmt: {
-            // Sin esta rama, las variables declaradas dentro de un
-            // try/catch/finally no se promocionan a address-taken
-            // aunque aparezca `&var` en el body (error: '&x' sobre
-            // variable no promocionada).  Y el cascade de errores
-            // "nombre no resuelto" surge porque el lowering del
-            // var-decl falla al evaluar `&var` y deja el binding
-            // sin registrar.
             auto *ts = static_cast<ast::TryStmt *>(st);
             visit_stmt(ts->body.get());
-            for (auto &cc : ts->catches)
-                visit_stmt(cc.body.get());
+            for (auto &cc : ts->catches) visit_stmt(cc.body.get());
             if (ts->finally_body) visit_stmt(ts->finally_body.get());
             return;
         }
-        case ast::NodeKind::ReturnStmt: {
-            auto *r = static_cast<ast::ReturnStmt *>(st);
-            visit_expr(r->value.get());
+        case ast::NodeKind::ReturnStmt:
+            visit_expr(static_cast<ast::ReturnStmt *>(st)->value.get());
             return;
-        }
         case ast::NodeKind::SynchronizedStmt: {
             auto *sy = static_cast<ast::SynchronizedStmt *>(st);
             visit_expr(sy->target.get());
@@ -35030,6 +39424,7 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
         }
     };
     visit_stmt(s);
+    return found;
 }
 
 // ---------------------------------------------------------------------

@@ -7,7 +7,7 @@
 
 /**
  * @file jit/linear_scan.cpp
- * @brief Implementacion del register allocator linear-scan (Phase D.7).
+ * @brief Implementacion del register allocator linear-scan ( D.7).
  *        Ver linear_scan.h y doc/REGALLOC.md.
  */
 
@@ -35,7 +35,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
         return false;
     };
 
-    /* Phase AS inc.5e: @p r esta CLOBBERED para @p iv si el intervalo cubre
+    /*  AS inc.5e: @p r esta CLOBBERED para @p iv si el intervalo cubre
      * la posicion de algun INLINE_ASM_RAW cuya lista de clobbers incluye
      * @p r.  Cubre los clobbers de callee-saved (r12-r15) que el
      * call-position no protege (este solo empuja los caller-saved
@@ -93,7 +93,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 active.resize(k);
             }
 
-            /* ---- Phase AS inc.5: intervalo PRECOLOREADO (register-bound
+            /* ----  AS inc.5: intervalo PRECOLOREADO (register-bound
              * de un inline-asm) ----
              * Toma su @c fixed_reg de forma INCONDICIONAL (override del
              * cross-call y del GC-spill: el inline-asm necesita el valor en
@@ -141,7 +141,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
             }
 
             /* ---- GC root vivo a traves de un call: SPILL forzado ----
-             * (Phase D.7 commit 6, enfoque A).  Un valor GC en un registro
+             * ( D.7 commit 6, enfoque A).  Un valor GC en un registro
              * a traves de un call seria invisible al GC (que escanea el
              * stack).  Lo ponemos en un slot SIEMPRE; el stackmap del call
              * lo describe ahi.  Los GC roots que NO cruzan calls siguen en
@@ -238,7 +238,14 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 }
             }
 
-            if (victim_idx < 0 || next_use(vid) >= victim_nu) {
+            /* un intervalo REGISTER-REQUIRED (operando `reg` de un asm
+             * que lo referencia por $N durante todo el bloque) NO puede
+             * derramarse: si hay una victima robable, se roba SIEMPRE su reg
+             * (aunque el propio next-use sea mas lejano); solo si NO hay victima
+             * cae al self-spill (rarisimo; el rewrite lo detecta y hace fallback
+             * al pick greedy). */
+            const bool must_reg = iv.reg_required && victim_idx >= 0;
+            if (!must_reg && (victim_idx < 0 || next_use(vid) >= victim_nu)) {
                 /* Spillear el PROPIO intervalo (su fin es el mas lejano,
                  * o no hay activo robable). */
                 out.assign[vid].loc = RegAlloc::Loc::SPILL;

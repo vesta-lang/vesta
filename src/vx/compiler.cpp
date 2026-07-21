@@ -19,17 +19,21 @@
 #include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
 
 #include "analyze/bigo.h"
+#include "analyze/fingerprint.h" // verificacion de contratos de huella
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "vx/lexer.h"
 #include "vx/lowering.h"
-#include "vx/mermaid_diagrams.h"
-#include "vx/graphviz_diagrams.h"
-#include "vx/html_diagrams.h"
-#include "vx/namespace_flatten.h"
+#include "vx/diagram/mermaid_diagrams.h"
+#include "vx/diagram/graphviz_diagrams.h"
+#include "vx/diagram/html_diagrams.h"
+#include "vx/module/namespace_flatten.h"
 #include "vx/parser.h"
+#include <iostream>
+
+#include "vx/comptime/comptime_collect.h"
 #include "vx/type_checker.h"
 
 #include "port/transpiler_base.h"
@@ -50,6 +54,182 @@ namespace vx {
  *
  * Cualquier valor fuera de rango cae en O1 (default conservador).
  */
+// Recolecta los contratos de huella declarados en el AST (recorriendo los
+// NamespaceDecl) a un mapa por nombre de funcion.  Se lleva APARTE del IR por
+// diseno: son metadata compile-time (modo --analyze) que el codegen no necesita.
+static void collect_contracts_(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::unordered_map<std::string, analyze::FunctionContracts> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::NamespaceDecl) {
+            collect_contracts_(
+                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
+            continue;
+        }
+        if (d->kind == ast::NodeKind::FunctionDecl) {
+            const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
+            analyze::FunctionContracts c;
+            c.pure = fd->contract_pure;
+            c.nothrow = fd->contract_nothrow;
+            c.nopanic = fd->contract_nopanic;
+            c.alloc_total = fd->contract_alloc;
+            c.alloc_partial = fd->contract_alloc_partial;
+            c.stack_total = fd->contract_stack;
+            c.stack_partial = fd->contract_stack_partial;
+            if (c.any()) out[fd->name] = c;
+        }
+        // Metodos de struct/clase: el mismo contrato sobre lo mismo.  Un metodo
+        // baja a una IrFunction `Tipo__metodo`, asi que se registra con esa
+        // clave -- la que el analizador vera.  Sin esto, un tipo cuya API son
+        // METODOS podia DECLARAR sus contratos pero nadie los verificaba: peor
+        // que no tenerlos, porque parecerian comprobados.
+        auto tomar_metodos =
+            [&](const std::string &tipo,
+                const std::vector<std::unique_ptr<ast::ClassMethodDecl>> &ms) {
+                for (const auto &m : ms) {
+                    if (!m) continue;
+                    analyze::FunctionContracts c;
+                    c.pure = m->contract_pure;
+                    c.nothrow = m->contract_nothrow;
+                    c.nopanic = m->contract_nopanic;
+                    c.alloc_total = m->contract_alloc;
+                    c.alloc_partial = m->contract_alloc_partial;
+                    c.stack_total = m->contract_stack;
+                    c.stack_partial = m->contract_stack_partial;
+                    if (c.any()) out[tipo + "__" + m->name] = c;
+                }
+            };
+        // Los TEMPLATES genericos se saltan: no producen IR (solo lo hacen sus
+        // instanciaciones), asi que su clave no tiene nada contra que
+        // verificarse -- y como `Caja__leer` acaba casando por sufijo con
+        // `Caja_i64__leer`, registrarla haria que cada incumplimiento se
+        // reportase dos veces.  La monomorphizacion copia los contratos, asi
+        // que cada instanciacion se verifica por su cuenta.
+        if (d->kind == ast::NodeKind::StructDecl) {
+            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
+            if (sd->type_params.empty() && !sd->is_specialization)
+                tomar_metodos(sd->name, sd->methods);
+        } else if (d->kind == ast::NodeKind::ClassDecl) {
+            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
+            if (cd->type_params.empty()) tomar_metodos(cd->name, cd->methods);
+        }
+    }
+}
+
+// Recolecta los contratos de TIPO (@pod/@no_heap/@size) declarados sobre
+// struct/clase/enum a un mapa por nombre de tipo.  Mismo criterio que
+// collect_contracts_ (compile-time, sin serializar).
+static void collect_type_contracts_(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::unordered_map<std::string, analyze::TypeContracts> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::NamespaceDecl) {
+            collect_type_contracts_(
+                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
+            continue;
+        }
+        auto take = [&](const std::string &name, bool pod, bool no_heap,
+                        int64_t size) {
+            analyze::TypeContracts c;
+            c.pod = pod;
+            c.no_heap = no_heap;
+            c.size = size;
+            if (c.any()) out[name] = c;
+        };
+        if (d->kind == ast::NodeKind::StructDecl) {
+            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
+            take(sd->name, sd->contract_pod, sd->contract_no_heap,
+                 sd->contract_size);
+        } else if (d->kind == ast::NodeKind::ClassDecl) {
+            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
+            take(cd->name, cd->contract_pod, cd->contract_no_heap,
+                 cd->contract_size);
+        } else if (d->kind == ast::NodeKind::EnumDecl) {
+            const auto *ed = static_cast<const ast::EnumDecl *>(d.get());
+            take(ed->name, ed->contract_pod, ed->contract_no_heap,
+                 ed->contract_size);
+        }
+    }
+}
+
+// Computa la huella de cada TIPO agregado (struct/clase/enum) a partir de los
+// layouts ya resueltos del type checker.  @pod/@no_heap se componen sobre los
+// tipos de campo via los clasificadores del type checker (type_is_managed /
+// type_is_c_representable), que son la verdad de la frontera C.
+static std::vector<analyze::TypeFingerprint>
+compute_type_fingerprints_(const TypeChecker &tc) {
+    std::vector<analyze::TypeFingerprint> out;
+    using TF = analyze::TypeFingerprint;
+
+    // Structs: value-types.  @pod = C-representable por valor + sin dtor.
+    for (const auto &kv : tc.struct_layouts()) {
+        const StructLayout &lay = kv.second;
+        TF tf;
+        tf.type_name = lay.name;
+        tf.kind = TF::STRUCT;
+        tf.size_bytes = lay.size_bytes;
+        tf.align_bytes = lay.align_bytes;
+        tf.field_count = static_cast<uint32_t>(lay.fields.size());
+        bool has_dtor = lay.has_destructible_field;
+        for (const auto &m : lay.methods)
+            if (m.is_destructor) has_dtor = true;
+        tf.has_destructor = has_dtor;
+        bool no_heap = true, all_c_repr = true;
+        for (const auto &f : lay.fields) {
+            if (tc.type_is_managed(f.type)) no_heap = false;
+            if (!tc.type_is_c_representable(f.type)) all_c_repr = false;
+        }
+        tf.no_heap = no_heap;
+        tf.is_pod = all_c_repr && !has_dtor && no_heap;
+        tf.is_reference = false;
+        out.push_back(std::move(tf));
+    }
+
+    // Clases: tipos por REFERENCIA (viven en el heap gestionado) -> nunca @pod
+    // ni @no_heap; @size verifica el tamano de la instancia.
+    for (const auto &kv : tc.class_layouts()) {
+        const ClassLayout &lay = kv.second;
+        if (lay.is_interface) continue; // sin instancias.
+        TF tf;
+        tf.type_name = lay.name;
+        tf.kind = TF::CLASS;
+        tf.size_bytes = lay.size_bytes;
+        tf.field_count = static_cast<uint32_t>(lay.fields.size());
+        bool has_dtor = false;
+        for (const auto &m : lay.methods)
+            if (m.is_destructor) has_dtor = true;
+        tf.has_destructor = has_dtor;
+        tf.is_reference = true;
+        tf.is_pod = false;
+        tf.no_heap = false;
+        out.push_back(std::move(tf));
+    }
+
+    // Enums: tagged unions inline (value-types).  @pod si ningun payload es
+    // gestionado y todos son C-representables; un enum sin payload es @pod.
+    for (const auto &kv : tc.enum_layouts()) {
+        const EnumLayout &lay = kv.second;
+        TF tf;
+        tf.type_name = lay.name;
+        tf.kind = TF::ENUM;
+        tf.size_bytes = lay.size_bytes;
+        tf.field_count = lay.max_payload_fields;
+        bool no_heap = true, all_c_repr = true;
+        for (const auto &v : lay.variants)
+            for (const auto &ft : v.field_types) {
+                if (tc.type_is_managed(ft)) no_heap = false;
+                if (!tc.type_is_c_representable(ft)) all_c_repr = false;
+            }
+        tf.no_heap = no_heap;
+        tf.is_pod = all_c_repr && no_heap;
+        tf.is_reference = false;
+        out.push_back(std::move(tf));
+    }
+    return out;
+}
+
 static ir::OptLevel opt_level_from_int(int n) noexcept {
     switch (n) {
     case 0: return ir::OptLevel::O0;
@@ -76,13 +256,80 @@ CompileResult compile_vx_source(const std::string &source,
         return res;
     }
 
-    // 1.5. Phase M.7.c: aplanar namespaces inline (`namespace ui { ... }`).
+    // 1.5.  M.7.c: aplanar namespaces inline (`namespace ui { ... }`).
     //      Tras este pre-pass, el AST no tiene NamespaceDecl wrappers;
     //      los simbolos internos llevan prefix `<ns>__` (cero overhead
     //      runtime; compatible con port-c).  Cada namespace encontrado
     //      se registra en el TypeChecker como Symbol::Namespace para
     //      que el resolver de `ns.X` lo encuentre.
     auto inline_namespaces = flatten_namespaces(*mod);
+
+    // P1 fase 1 (recolector): con los nombres ya mangled, identificar el
+    // conjunto comptime del modulo (comptime fns/@Macro/consts + deps
+    // transitivas).  Es la base del futuro artefacto comptime separado.  Hoy
+    // solo diagnostico opt-in (VESTA_DUMP_COMPTIME_UNIT=1); no cambia codegen.
+    if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
+        const ComptimeUnit cu = collect_comptime_unit(*mod, source);
+        dump_comptime_unit(cu, std::cerr);
+    }
+
+    // P1: eliminar el tree-walker tambien para los `comptime { }` de modulo.
+    // Cada bloque se transforma en una comptime fn sintetica `__ctblock_N`
+    // (que corre en la ComptimeVM como cualquier comptime fn) + una const que
+    // la invoca.  Asi el `println`/buffers del bloque se ejecutan de verdad en
+    // compile-time.  Los sinteticos se anexan al FINAL (preservan la semantica
+    // de que el bloque corre tras todos los globales del modulo).
+    {
+        std::vector<std::unique_ptr<ast::Node>> kept;
+        std::vector<std::unique_ptr<ast::Node>> synth;
+        int ctblock_n = 0;
+        for (auto &d : mod->decls) {
+            if (d && d->kind == ast::NodeKind::ComptimeBlockStmt) {
+                auto *cb = static_cast<ast::ComptimeBlockStmt *>(d.get());
+                const std::string fname =
+                    "__ctblock_" + std::to_string(ctblock_n++);
+                // comptime i64 __ctblock_N() { <stmts>; return 0; }
+                auto fn = std::make_unique<ast::FunctionDecl>();
+                fn->name = fname;
+                fn->is_comptime = true;
+                fn->loc = cb->loc;
+                auto rt = std::make_unique<ast::PrimitiveTypeNode>();
+                rt->prim = PrimitiveKind::I64;
+                fn->return_type = std::move(rt);
+                auto body = std::make_unique<ast::BlockStmt>();
+                for (auto &st : cb->stmts) body->body.push_back(std::move(st));
+                auto ret = std::make_unique<ast::ReturnStmt>();
+                auto zero = std::make_unique<ast::IntLitExpr>();
+                zero->value = 0;
+                ret->value = std::move(zero);
+                body->body.push_back(std::move(ret));
+                fn->body = std::move(body);
+                // const i64 __ctblock_N_r = __ctblock_N();
+                auto gv = std::make_unique<ast::GlobalVarDecl>();
+                gv->name = fname + "_r";
+                gv->is_const = true;
+                gv->loc = cb->loc;
+                auto gt = std::make_unique<ast::PrimitiveTypeNode>();
+                gt->prim = PrimitiveKind::I64;
+                gv->type = std::move(gt);
+                auto call = std::make_unique<ast::CallExpr>();
+                auto callee = std::make_unique<ast::IdentExpr>();
+                callee->name = fname;
+                call->callee = std::move(callee);
+                call->loc = cb->loc;
+                gv->init = std::move(call);
+                synth.push_back(std::move(fn));
+                synth.push_back(std::move(gv));
+                // el ComptimeBlockStmt original se descarta.
+            } else {
+                kept.push_back(std::move(d));
+            }
+        }
+        // Reasignar SIEMPRE: el loop ya movio cada decl a `kept`, dejando
+        // `mod->decls` con punteros moved-from aunque no hubiera bloques.
+        for (auto &s : synth) kept.push_back(std::move(s));
+        mod->decls = std::move(kept);
+    }
 
     // 2. TypeChecker: rellena result_type y valida semantica.
     TypeChecker tc(*mod, res.diagnostics);
@@ -229,6 +476,19 @@ CompileResult compile_vx_source(const std::string &source,
     if (opts.dump_html_ast) {
         res.html_ast = html_from_ast(*mod);
     }
+    // Diagrama de tipos (classDiagram): clases/herencia/interfaces/structs/
+    // enums/conceptos.  Vista de alto nivel de la POO, independiente del AST
+    // detallado.  Cada formato se llena solo si su flag esta activo.
+    if (opts.dump_mermaid_types) {
+        res.mermaid_types = mermaid_types_from_ast(*mod);
+    }
+    if (opts.dump_graphviz_types) {
+        res.graphviz_types = graphviz_types_from_ast(*mod);
+    }
+    if (opts.dump_html_types) {
+        res.html_types =
+            html_from_dot(graphviz_types_from_ast(*mod), "Tipos", "types");
+    }
 
     // 3. Lowering: AST -> ir::IrModule.  Pasamos el TypeChecker para
     // que el lowering pueda consultar StructLayout (offsets/tamanos)
@@ -238,7 +498,7 @@ CompileResult compile_vx_source(const std::string &source,
     if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
         lo.set_instrument_mode(opts.instrument_mode);
     }
-    lo.set_native_poo(opts.native_poo); // Phase AOT.2.b: POO nativa (-m aot)
+    lo.set_native_poo(opts.native_poo); //  AOT.2.b: POO nativa (-m aot)
     lo.set_asm_target_bits(opts.asm_target_bits); // arch del inline-asm @Naked
     lo.set_aot_vec_width(opts.aot_vec_width); // ancho SIMD del target (--float-isa)
     lo.set_aot_auto_vec(opts.aot_auto_vec);   // --float-isa auto: chunk dual
@@ -429,6 +689,17 @@ CompileResult compile_vx_source(const std::string &source,
         return res;
     }
 
+    // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin contraccion
+    // FMA) AND-eando la politica del modulo con el fp_contract por-funcion que ya
+    // puso el lowering (@fp(strict) -> false).  Se aplica aqui, en la misma unidad
+    // de traduccion que el optimizer/emitter que consumen irmod, para no depender
+    // del global mutable ir_set_fma_contract_allowed (se duplica entre vm.exe, el
+    // DLL y vmcore -> el setter de main.cpp puede tocar una copia distinta).
+    if (!opts.fp_contract) {
+        for (auto &fn : irmod.functions)
+            fn.fp_contract = false;
+    }
+
     // FN.3: auto-bundle del context-switch de fibra para el JIT.
     // En el path interp/JIT (native_poo == false), `fiber_swapctx` baja al
     // opcode VM SWAPCTX; el interp lo ejecuta directamente, pero el JIT emite
@@ -542,7 +813,7 @@ CompileResult compile_vx_source(const std::string &source,
     /* : set @c has_lowerable_macros si el lowering emitio
      * al menos una IrFunction marcada @c is_macro_compiled.  Esto
      * es un gate mas robusto que @c macro_expectations.empty() para
-     * disparar el two-phase compile, porque incluye casos con args
+     * disparar el two- compile, porque incluye casos con args
      * no codificables (string, struct, array) que no aparecerian
      * como expectations pero si pueden beneficiarse del VM path. */
     for (const auto &fn : irmod.functions) {
@@ -575,12 +846,12 @@ CompileResult compile_vx_source(const std::string &source,
     // del lowering (todos los PHIs, todos los CONSTs, blocks como
     // los emite el frontend, sin las transformaciones del optimizer).
     //
-    // --diagram-cost: si se pidio anotar el coste, calcular el analisis
-    // Big-O sobre el IR PRE-opt (complejidad algoritmica del fuente) una
-    // vez y reusarlo para los tres formatos de la vista pre.
+    // El coste Big-O (parcial + total) se anota SIEMPRE en los diagramas IR:
+    // se calcula sobre el IR PRE-opt (complejidad algoritmica del fuente) una
+    // vez y se reusa para los tres formatos de la vista pre.
     const bool want_cost_pre =
-        opts.annotate_cost && (opts.dump_mermaid_ir_pre ||
-                               opts.dump_graphviz_ir_pre || opts.dump_html_ir_pre);
+        (opts.dump_mermaid_ir_pre || opts.dump_graphviz_ir_pre ||
+         opts.dump_html_ir_pre);
     analyze::ModuleCost mc_pre;
     if (want_cost_pre) {
         mc_pre = analyze::analyze_module(irmod);
@@ -626,10 +897,9 @@ CompileResult compile_vx_source(const std::string &source,
         }
         const std::string title = "Diagrama IR post-optimizacion (opt_level=" +
                                   std::to_string(opts.opt_level) + ")";
-        // --diagram-cost: analisis Big-O sobre el IR POST-opt (complejidad
-        // efectiva del codigo final) calculado una vez para los tres formatos.
+        // Coste Big-O SIEMPRE sobre el IR POST-opt (complejidad efectiva del
+        // codigo final) calculado una vez para los tres formatos.
         const bool want_cost_post =
-            opts.annotate_cost &&
             (opts.dump_mermaid_ir_post || opts.dump_graphviz_ir_post ||
              opts.dump_html_ir_post);
         analyze::ModuleCost mc_post;
@@ -697,13 +967,13 @@ CompileResult compile_vx_source(const std::string &source,
         }
     }
 
-    // Phase AS (AS.7): el backend bytecode/interp NO puede materializar
+    //  AS (AS.7): el backend bytecode/interp NO puede materializar
     // inline asm de la CPU host (no existe opcode VM para rdtsc/cpuid/
     // syscall/etc.).  Si el target es bytecode (port_target vacio) y el
     // IR contiene algun IrOp::INLINE_ASM, abortamos con un error claro
     // ANTES de emitir el .vel.  Los backends nativos (port-C hoy; JIT/AOT
     // en el futuro) interceptan INLINE_ASM antes de llegar aqui.
-    // Phase AS inc.5: el inline-asm (IrOp::INLINE_ASM) ya NO se rechaza al
+    //  AS inc.5: el inline-asm (IrOp::INLINE_ASM) ya NO se rechaza al
     // emitir bytecode.  El .velb se emite con las funciones inline-asm (su
     // cuerpo bytecode es un trap que el ir_emitter emite, ver mas abajo) y
     // su IR completo (con asm_reg_bindings) viaja en la seccion @ir.  El
@@ -711,7 +981,7 @@ CompileResult compile_vx_source(const std::string &source,
     // threshold 1500); el cuerpo bytecode-trap NUNCA se ejecuta bajo JIT.
     // Sin flags: `vm --vx prog.vx -o prog && vm --run prog.velb`.
     //
-    // Phase AS inc.5g: PERO si el inline-asm liga un registro VECTORIAL
+    //  AS inc.5g: PERO si el inline-asm liga un registro VECTORIAL
     // (register("xmm0"/"ymm0"/"zmm0")), el JIT v1 no lo soporta (el regalloc
     // solo asigna el banco GP) -> en lugar de fallar SILENCIOSAMENTE en
     // runtime (el wrapper no compila -> trap hlt), abortamos AQUI con un
@@ -764,13 +1034,95 @@ CompileResult compile_vx_source(const std::string &source,
          * lo emite el lowering) antes de tocar nada.  Captura la complejidad
          * algoritmica del fuente; el analyzer la contrasta con la POST-opt. */
         if (opts.emit_ir_preopt) {
+            // Plegar las ramas comptime-constantes (const fold + unreachable,
+            // SIN inline): `is_float<T>()` es una CONSTANTE para cada
+            // instanciacion, asi que la rama muerta del template no es parte
+            // del cuerpo de esa instanciacion.  Resolucion de la
+            // monomorphizacion, no optimizacion.  (Igual que la ruta de
+            // proyecto.)
+            ir::IrModule irmod_pre = irmod;
+            for (auto &fn : irmod_pre.functions) {
+                bool changed = true;
+                while (changed) {
+                    changed = false;
+                    if (ir::ir_pass_const_fold(fn)) changed = true;
+                    if (ir::ir_pass_unreachable(fn)) changed = true;
+                }
+            }
             res.ir_module_cache_bytes_preopt =
-                ir::emit_ir_module_cache(irmod);
+                ir::emit_ir_module_cache(irmod_pre);
+        }
+        // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack): recoger
+        // del AST + guardarlos en el resultado (para --analyze) + VERIFICAR
+        // contra la huella del IR PRE-opt (@c irmod, donde TODAS las funciones
+        // existen -> enforcement completo; semantica source-level: source<=N =>
+        // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
+        collect_contracts_(mod->decls, res.contracts);
+        if (!res.contracts.empty()) {
+            // Arch del TARGET activo (@Target/AOT cross-compile); vacio = host
+            // de build (x86_64).  Selecciona la tabla de efectos con la que se
+            // analiza cada bloque `asm { }` (x86_64/x86/arm64).
+            std::string fp_os, fp_arch;
+            vx::get_aot_condcomp_target(fp_os, fp_arch);
+            if (fp_arch.empty()) fp_arch = "x86_64";
+            auto fps = analyze::compute_module_fingerprints(irmod, fp_arch);
+            analyze::compose_fingerprints(fps, &res.contracts);
+            // En --analyze (`emit_ir_preopt`) NO se emite el error ni se aborta
+            // (ver la nota en compiler_project.cpp): analyze mide, el build real
+            // enforça.
+            if (!opts.emit_ir_preopt) {
+                auto checks = analyze::verify_contracts(fps, res.contracts);
+                bool violated = false;
+                for (const auto &ck : checks) {
+                    if (ck.status != analyze::ContractCheck::VIOLATED) continue;
+                    SourceLoc loc;
+                    loc.file = filename;
+                    res.diagnostics.error(std::move(loc),
+                                          "contrato " + ck.contract +
+                                              " incumplido en '" + ck.function +
+                                              "': " + ck.detail);
+                    violated = true;
+                }
+                if (violated) {
+                    res.ok = false;
+                    return res;
+                }
+            }
+        }
+        // Contratos de TIPO (@pod/@no_heap/@size): recoger + computar la huella
+        // de los tipos (desde los layouts del type checker) + verificar.  La
+        // huella se calcula SIEMPRE (para el reporte de --analyze); los checks
+        // solo si hay contratos.  Decidibles del layout -> un VIOLATED es error.
+        collect_type_contracts_(mod->decls, res.type_contracts);
+        res.type_fingerprints = compute_type_fingerprints_(tc);
+        if (!res.type_contracts.empty()) {
+            auto tchecks = analyze::verify_type_contracts(res.type_fingerprints,
+                                                          res.type_contracts);
+            bool tviolated = false;
+            for (const auto &ck : tchecks) {
+                if (ck.status != analyze::ContractCheck::VIOLATED) continue;
+                SourceLoc loc;
+                loc.file = filename;
+                res.diagnostics.error(std::move(loc),
+                                      "contrato de tipo " + ck.contract +
+                                          " incumplido en '" + ck.function +
+                                          "': " + ck.detail);
+                tviolated = true;
+            }
+            if (tviolated) {
+                res.ok = false;
+                return res;
+            }
         }
         ir::IrModule irmod_for_section = irmod;
-        ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level));
+        // En modo --analyze (emit_ir_preopt) se optimiza SIN inline: el coste
+        // PARCIAL es propiedad del cuerpo escrito, no del optimizador.  El
+        // coste TOTAL lo compone el analizador via el callgraph.  Fuera de
+        // --analyze, inline normal (no se genera .velb en --analyze).
+        ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
+                        /*allow_inline=*/!opts.emit_ir_preopt);
         res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);
-        /* Phase AOT: modulo completo (functions + static_data + globals) para
+        /*  AOT: modulo completo (functions + static_data + globals) para
          * que el driver -m aot materialice los literales en .rodata. */
         res.ir_module_cache_bytes = ir::emit_ir_module_cache(irmod_for_section);
     }

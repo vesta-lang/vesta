@@ -28,6 +28,8 @@
 
 #include "vx/parser.h"
 
+#include "vx/contract_when.h"
+
 #include <iostream>
 #include <string>
 #include <unordered_set>
@@ -61,6 +63,9 @@ static bool is_comptime_builtin_name(const std::string &name) {
     static const std::unordered_set<std::string> set = {
         /* queries atomicas */
         "sizeof", "alignof", "typename", "type_id", "kind",
+        /* `bitcast<T>(v)`: RUNTIME (no comptime), pero lleva type-arg y el
+         * parser necesita saberlo para no tratar el `<` como comparacion. */
+        "bitcast",
         /* queries de fields/methods */
         "offsetof", "has_field", "has_method", "field_count", "method_count",
         "field_name", "field_type", "is_subtype", "is_same", "is_class",
@@ -91,7 +96,7 @@ Parser::Parser(Lexer &lex, Diagnostics &diags)
     // de aqui consume() avanza siempre.
 }
 
-// Phase M.L24: skip una decl top-level cuando @Target no matchea.
+//  M.L24: skip una decl top-level cuando @Target no matchea.
 // Consume tokens hasta el final natural de la decl: para decls con
 // cuerpo `{ ... }`, hasta cerrar el `}` matching; para decls simples
 // (typedef, using, global var), hasta el siguiente `;` top-level.
@@ -118,7 +123,7 @@ void Parser::skip_target_skipped_decl() {
     }
 }
 
-// Phase M.condcomp: evaluador completo de @Target.  Soporta una
+//  M.condcomp: evaluador completo de @Target.  Soporta una
 // expresion booleana sobre atomos de build:
 //   - os:windows / os:linux / os:macos / os:posix
 //   - arch:x86_64 / arch:arm64 / arch:x86
@@ -129,6 +134,7 @@ void Parser::skip_target_skipped_decl() {
 // Operadores: ! (NOT), && (AND), || (OR), parentesis.  Precedencia
 // estandar: ! > && > ||.  Mapea directo a `#if defined(...)` (C),
 // `#[cfg(...)]` (Rust), `static if (...)` (D).
+
 
 // Version del compilador / VM expuesta a @Target (M.m).  Bump al
 // publicar releases con semver.  El test M.condcomp espera
@@ -388,7 +394,11 @@ static bool target_matches_(const std::string &spec_in) noexcept {
     return p.parse_or();
 }
 
-// Phase M6.a L.3: aplica @c pending_visibility_ al nodo si soporta
+bool target_expr_matches(const std::string &spec) noexcept {
+    return target_matches_(spec);
+}
+
+//  M6.a L.3: aplica @c pending_visibility_ al nodo si soporta
 // @c is_public.  Limpia el flag al final para que sub-decls nested
 // no hereden la visibilidad del top-level que los envuelve.
 void Parser::apply_pending_visibility(ast::Node *n) noexcept {
@@ -498,6 +508,93 @@ void Parser::error_here(const char *msg) {
 
 void Parser::error_at(const Token &tok, const char *msg) {
     diags_.error(tok.loc, msg);
+}
+
+// -----------------------------------------------------------------------
+// Palabras reservadas usadas como nombre: diagnostico especifico.
+//
+// El enum TokenKind agrupa TODAS las palabras reservadas en un rango
+// CONTIGUO (categorias 4..7 de token.h: tipos primitivos, declaracion,
+// control de flujo, concurrencia/meta).  Eso permite clasificarlas con
+// un par de comparaciones en lugar de una tabla o un switch gigante.
+// Si se anaden keywords nuevas DENTRO de esas categorias, esto sigue
+// funcionando sin tocar nada.
+// -----------------------------------------------------------------------
+
+/**
+ * @brief True si @p k es una palabra reservada del lenguaje.
+ */
+static bool is_reserved_keyword(TokenKind k) noexcept {
+    // Categorias 4..7: desde el primer tipo primitivo hasta la ultima
+    // keyword de meta.  Un rango, dos comparaciones.
+    if (k >= TokenKind::KW_VOID && k <= TokenKind::KW_CASE) return true;
+    // Los literales-palabra viven en la categoria de literales (1), fuera
+    // del rango anterior, pero tampoco pueden ser nombres.
+    return k == TokenKind::TRUE_KW || k == TokenKind::FALSE_KW ||
+           k == TokenKind::NULL_KW;
+}
+
+/**
+ * @brief Rol de la palabra reservada, para enriquecer el diagnostico.
+ *
+ * Se deriva del rango del enum (barato: comparaciones, sin tabla).  El
+ * objetivo es que el mensaje diga POR QUE el termino esta reservado.
+ *
+ * @param k Palabra reservada (precondicion: is_reserved_keyword(k)).
+ * @return Cadena estatica descriptiva (no liberar).
+ */
+static const char *keyword_role(TokenKind k) noexcept {
+    // Casos con un rol mas util que el de su categoria.
+    switch (k) {
+    case TokenKind::KW_GET:
+    case TokenKind::KW_SET: return "accesor de propiedad";
+    default: break;
+    }
+    if (k >= TokenKind::KW_VOID && k <= TokenKind::KW_BORROW_MUT)
+        return "tipo primitivo";
+    if (k >= TokenKind::KW_CONST && k <= TokenKind::KW_SET)
+        return "palabra clave de declaracion";
+    if (k >= TokenKind::KW_IF && k <= TokenKind::KW_SUPER)
+        return "palabra clave de control de flujo";
+    if (k >= TokenKind::KW_SYNCHRONIZED && k <= TokenKind::KW_CASE)
+        return "palabra clave de concurrencia/meta";
+    // TRUE_KW / FALSE_KW / NULL_KW.
+    return "literal del lenguaje";
+}
+
+bool Parser::is_name_token(TokenKind k) noexcept {
+    // `get`/`set` son CONTEXTUALES: solo son keywords en la forma
+    // property dentro de una clase (`get n => e;`, `set n(T v) {...}`),
+    // que se detecta ANTES de llegar aqui y siempre SIN tipo previo.
+    // En cualquier otra posicion (y en todas las que llaman a este
+    // helper ya hemos parseado un tipo, o venimos de un '.') son
+    // nombres corrientes, sin ambiguedad posible.
+    return k == TokenKind::IDENTIFIER || k == TokenKind::KW_GET ||
+           k == TokenKind::KW_SET;
+}
+
+void Parser::error_expected_name(const char *what, const char *generic_msg) {
+    const TokenKind k = current_.kind;
+    if (!is_reserved_keyword(k)) {
+        // No es palabra reservada: conservar el mensaje historico del
+        // sitio (otro tipo de error: un simbolo, un literal, EOF...).
+        error_here(generic_msg);
+        return;
+    }
+    // Palabra reservada: decir cual es, por que lo esta y como salir.
+    const char *kw = token_kind_name(k);
+    std::string m;
+    m.reserve(160);
+    m += '\'';
+    m += kw;
+    m += "' es una palabra reservada del lenguaje (";
+    m += keyword_role(k);
+    m += "); no puede usarse como ";
+    m += what;
+    m += ".  Sugerencia: renombralo (p.ej. '";
+    m += kw;
+    m += "_').";
+    diags_.error(current_.loc, std::move(m));
 }
 
 void Parser::synchronize() {
@@ -647,8 +744,17 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             // #cross-module-generics: capturar el span fuente si es plantilla/
             // concepto (para el `.vxi`).  Helper compartido con
             // parse_namespace_decl (decls dentro de un namespace).
+            // Agregados anonimos sintetizados durante el parseo de este decl
+            // van ANTES (el decl los referencia por nombre).
+            for (auto &b : pending_before_decls_)
+                mod->decls.push_back(std::move(b));
+            pending_before_decls_.clear();
             collect_template_export_(mod.get(), decl.get(), decl_start_off);
             mod->decls.push_back(std::move(decl));
+            // Drenar los aliases extra de un typedef C-style multi-declarador.
+            for (auto &e : pending_extra_decls_)
+                mod->decls.push_back(std::move(e));
+            pending_extra_decls_.clear();
         } else if (last_decl_was_target_skip_) {
             // L.24: skip intencional via @Target no matcheado.
             // El skip_target_skipped_decl ya consumio la decl
@@ -792,228 +898,235 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
 //   [const]? <type> <ident>  ('=' expr)? ';'               -> GlobalVarDecl
 // ---------------------------------------------------------------------
 
-std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
-    // namespace foo { ... }  (Phase M.7.c, inline namespace estilo C++).
-    if (current_.kind == TokenKind::KW_NAMESPACE) {
-        return parse_namespace_decl();
-    }
-    // import "path" [as alias] [only A, B];  (Phase M sistema de modulos).
-    if (current_.kind == TokenKind::KW_IMPORT) {
-        return parse_import_decl(/*is_public_reexport=*/false);
-    }
-    // public import "x";  (re-export transitivo).
-    if (current_.kind == TokenKind::KW_PUBLIC &&
-        lex_.peek_at(0).kind == TokenKind::KW_IMPORT) {
-        (void)consume(); // 'public'
-        return parse_import_decl(/*is_public_reexport=*/true);
-    }
-    // Phase M6.a L.3: visibilidad de top-level decl.  Capturamos
-    // `public`/`private` y guardamos en pending_visibility_; cada
-    // sub-parser que produzca un decl top-level consulta el flag al
-    // final (helper @c apply_pending_visibility_) y lo limpia.  Sin
-    // keyword: el nodo conserva su default (is_public=true) -- compat
-    // con codigo existente.  Un futuro sprint M.future flipeara el
-    // default a privado tras migrar stdlib + editor.
-    if (current_.kind == TokenKind::KW_PUBLIC) {
-        (void)consume();
-        pending_visibility_ = 1; // 1 = public explicito
-    } else if (current_.kind == TokenKind::KW_PRIVATE) {
-        (void)consume();
-        pending_visibility_ = 2; // 2 = private explicito
-    } else if (current_.kind == TokenKind::IDENTIFIER &&
-               current_.lexeme == "internal") {
-        // Phase NS.3: `internal` (keyword contextual) -- package-scoped.
-        (void)consume();
-        pending_visibility_ = 3; // 3 = internal explicito
-    }
-    // Cleanup garantizado al salir de parse_top_level_decl.
-    struct VisGuard {
-        uint8_t &flag;
-        ~VisGuard() { flag = 0; }
-    } guard{pending_visibility_};
-    // concept Name<T> = pred; | { ... }  (#6, keyword contextual).  Se exige
-    // que tras `concept` venga un identificador (el nombre) para no chocar con
-    // un hipotetico uso de `concept` como identificador normal.
-    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "concept" &&
-        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
-        auto n = parse_concept_decl();
-        apply_pending_visibility(n.get());
-        return n;
-    }
-    // NS.6-ext: extension Tipo { ... }  (keyword contextual; exige IDENT tras).
-    if (current_.kind == TokenKind::IDENTIFIER &&
-        current_.lexeme == "extension" &&
-        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
-        auto n = parse_extension_decl();
-        apply_pending_visibility(n.get());
-        return n;
-    }
-    // NS.6-ext: impl Concept for Tipo { ... }  (keyword contextual).
-    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "impl" &&
-        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
-        auto n = parse_impl_decl();
-        apply_pending_visibility(n.get());
-        return n;
-    }
-    // typedef <tipo> <nombre> ;
-    if (current_.kind == TokenKind::KW_TYPEDEF) {
-        // typedef struct/enum C-style.
-        // Si tras typedef viene `struct` o `enum`, parseamos como
-        // StructDecl/EnumDecl con name al final.  Sin esto solo se
-        // soportaba `typedef i32 Foo;` (alias de tipo basico).
-        const TokenKind nk = lex_.peek_at(0).kind;
-        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM) {
-            auto n = parse_typedef_struct_or_enum();
-            apply_pending_visibility(n.get());
-            return n;
-        }
-        auto n = parse_typedef_decl();
-        apply_pending_visibility(n.get());
-        return n;
-    }
-    // using <nombre> = <tipo> ;
-    if (current_.kind == TokenKind::KW_USING) {
-        auto n = parse_using_decl();
-        apply_pending_visibility(n.get());
-        return n;
-    }
-    // Anotaciones top-level que preceden a una clase o funcion:
-    //   @Aspect:     clase de aspectos
-    //   @Async:      funcion async, transformada a wrapper future + spawn
-    //   @Introspect: clase/struct/enum runtime-introspectable (Sprint 4
-    //   A.37.s4)
-    //   @Target("os:linux"): Phase M.L24 - compilacion condicional;
-    //                la decl se descarta si no matchea el target actual.
-    //   Otras se aceptan y se ignoran silenciosamente.
-    bool top_is_aspect = false;
-    bool top_is_async = false;
-    bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
-    bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
-    bool top_is_naked = false;          /* Phase NR: @Naked (ISRs/stubs) */
-    bool top_is_noexcept = false;       /* @NoExcept: fn sin excepciones */
-    bool top_is_string_concat = false;  /* C-3: @StringConcat */
-    bool top_is_string_eq = false;      /* C-3: @StringEq */
-    bool top_is_sync_impl = false;      /* @SyncImpl: override de monitor */
-    /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
-       helper objetivo (hoy "memcpy"); vacio => no es override. */
-    std::string top_helper_override_target;
-    bool top_is_introspect = false;
-    bool top_is_macro = false;    /* A.43.16: @Macro */
-    bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
-    bool top_target_skip = false; /* L.24: @Target no matchea */
-    // Subsistema de coste (modo --analyze): @complexity(O(...)[, n=...]).
-    std::string top_complexity_expr;          // expr de coste normalizada
-    std::vector<std::string> top_complexity_vars; // bindings `n = <expr>`
-    // Contratos por dimension PARCIAL/TOTAL x PRE/POST (campos nombrados).
-    std::string top_complexity_partial_pre;
-    std::string top_complexity_partial_post;
-    std::string top_complexity_total_pre;
-    std::string top_complexity_total_post;
-    // Sprint lombok (2026-06-03): anotaciones tipo Lombok a nivel
-    // de clase.  El TypeChecker pre-pase las consume y genera
-    // ClassMethodDecls sinteticos (getters, setters, toString, etc.).
-    bool top_lk_getter = false;
-    bool top_lk_setter = false;
-    bool top_lk_tostring = false;
-    bool top_lk_equals_hash = false;
-    bool top_lk_no_args_ctor = false;
-    bool top_lk_all_args_ctor = false;
-    bool top_lk_required_ctor = false;
-    bool top_lk_data = false;
-    bool top_lk_value = false;
-    bool top_lk_builder = false;
-    bool top_lk_with_all = false;
-    bool top_lk_log = false;
-    bool top_lk_sync_methods = false;
-    // v4: atributos para comptime const a nivel modulo.
-    bool top_attr_hot = false;
-    bool top_attr_cold = false;
-    uint16_t top_attr_align = 0;
-    std::string top_attr_section;
-    std::string top_attr_section_perms;  // AOT 2b: @section(".x","rwx")
-    int64_t top_attr_at = -1;            // AOT: @at(N) offset/VA fijo (.bin)
-    int32_t top_attr_order = 0x7fffffff; // AOT: @order(N) orden de seccion
-    uint8_t top_attr_bits = 64; // AOT: @bits(16|32|64) para bloques asm
+// ---------------------------------------------------------------------------
+//  Contratos de huella sobre un METODO de struct/clase.
+//
+//  Los mismos que admite una funcion libre -- un metodo hace lo mismo con un
+//  argumento mas.  Sin esto, un tipo cuya API son METODOS (`atomic<T>`, las
+//  colecciones, ...) no podia declarar sus propiedades aunque el compilador
+//  supiera verificarlas; y una libreria estandar que no usa los contratos que
+//  el lenguaje ofrece esta diciendo lo contrario de lo que hace.
+// ---------------------------------------------------------------------------
+void Parser::parse_member_contracts_(MemberContracts &out) {
     while (current_.kind == TokenKind::AT) {
+        // Solo se consume si el nombre ES un contrato: cualquier otra anotacion
+        // (@Override, @Sync, ...) la maneja quien ya la manejaba.
+        const Token &nx = lex_.peek_at(0);
+        if (nx.kind != TokenKind::IDENTIFIER) return;
+        // COPIA, no referencia: los `consume()` de abajo invalidan el token
+        // peekeado, y las ramas que eligen por el nombre corren despues.
+        const std::string nm = nx.lexeme;
+        const bool es_flag =
+            (nm == "pure" || nm == "nothrow" || nm == "nopanic");
+        const bool es_num = (nm == "alloc" || nm == "stack");
+        const bool es_cx = (nm == "complexity");
+        if (!es_flag && !es_num && !es_cx) return;
+        (void)consume(); // '@'
+        (void)consume(); // el nombre
+        out.any = true;
+        if (es_flag) {
+            // Flag con `when:` opcional (`@pure(when: arch:x86_64)`).  Con when
+            // a la lista pending; sin when al campo directo (el default).
+            if (current_.kind == TokenKind::LPAREN) {
+                (void)consume(); // '('
+                ast::PendingFootprint pf;
+                pf.when = read_footprint_when_();
+                if (nm == "pure") pf.pure = 1;
+                else if (nm == "nothrow") pf.nothrow_ = 1;
+                else pf.nopanic = 1;
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' tras el `when:`");
+                out.footprint_pending.push_back(std::move(pf));
+            } else if (nm == "pure") {
+                out.pure = true;
+            } else if (nm == "nothrow") {
+                out.nothrow_ = true;
+            } else {
+                out.nopanic = true;
+            }
+        } else if (es_num) {
+            const std::string abre =
+                "se esperaba '(' tras @" + nm + " (usa @" + nm + "(N))";
+            (void)expect(TokenKind::LPAREN, abre.c_str());
+            const FootprintDims d = parse_footprint_dims_(nm);
+            const std::string cierra = "se esperaba ')' al cerrar @" + nm;
+            (void)expect(TokenKind::RPAREN, cierra.c_str());
+            const bool es_alloc = (nm == "alloc");
+            if (d.when.empty()) {
+                if (d.total >= 0) (es_alloc ? out.alloc : out.stack) = d.total;
+                if (d.partial >= 0)
+                    (es_alloc ? out.alloc_partial : out.stack_partial) =
+                        d.partial;
+            } else {
+                ast::PendingFootprint pf;
+                pf.when = d.when;
+                if (es_alloc) { pf.alloc = d.total; pf.alloc_partial = d.partial; }
+                else { pf.stack = d.total; pf.stack_partial = d.partial; }
+                out.footprint_pending.push_back(std::move(pf));
+            }
+        } else {
+            // TODOS los @complexity van a la lista, tambien el que no lleva
+            // `when:` -- resolver aqui el primero y dejar que el siguiente lo
+            // pise es lo que hacia que ganase el ultimo TEXTUALMENTE.  Se
+            // resuelven todos juntos y por especificidad cuando se conoce el
+            // ultimo, que para un generico es al monomorphizar.
+            ast::PendingComplexity pc;
+            bool aplica = true;
+            parse_complexity_args_(pc.expr, pc.vars, pc.partial_pre,
+                                   pc.partial_post, pc.total_pre, pc.total_post,
+                                   &pc.when, &aplica);
+            if (aplica) out.pending.push_back(std::move(pc));
+        }
+    }
+}
+
+void Parser::apply_member_contracts_(const MemberContracts &mc,
+                                     ast::ClassMethodDecl &m) {
+    if (!mc.any) return;
+    m.contract_pure = mc.pure;
+    m.contract_nothrow = mc.nothrow_;
+    m.contract_nopanic = mc.nopanic;
+    m.contract_alloc = mc.alloc;
+    m.contract_alloc_partial = mc.alloc_partial;
+    m.contract_stack = mc.stack;
+    m.contract_stack_partial = mc.stack_partial;
+    // Los @complexity van sin resolver: hay que verlos TODOS a la vez para
+    // aplicar la prioridad por especificidad, y para un metodo generico el
+    // ultimo dato (T) no llega hasta la monomorphizacion.  Los campos resueltos
+    // los rellena el type checker.
+    m.complexity_pending = mc.pending;
+    m.footprint_pending = mc.footprint_pending;
+}
+
+// ---------------------------------------------------------------------------
+//  @complexity(...): parseo compartido.
+//
+//  Extraido del bucle de anotaciones top-level para que lo usen TAMBIEN los
+//  metodos de struct/clase: es el mismo contrato sobre lo mismo, y duplicar 100
+//  lineas de troceado de texto para decir eso seria pedir que se separen.
+//  Se entra con el token de `complexity` ya consumido (el siguiente debe ser
+//  '('), y se sale tras el ')' de cierre.
+//
+//  Campo `when: <expr>` -- contrato CONDICIONAL.  El coste TOTAL de una
+//  funcion depende del target cuando algun callee tiene cuerpos por-arch de
+//  coste distinto: `atomic<T>::exchange` llama a `vx_atomic_swap64`, que en
+//  x86-64 es un bucle CAS escrito en Vesta (O(n)) y en arm64 el LL/SC nativo
+//  (O(1)).  Sin `when:` no habria ningun valor declarable correcto en las dos.
+//  La expresion es la MISMA de @Target (os/arch/cpu/semver/mode con &&/||/! y
+//  parentesis) y la evalua el MISMO `target_matches_`, asi que hereda gratis
+//  todo lo que @Target soporte hoy y manana.  Como @Target se resuelve al
+//  compilar (el target ya se conoce aqui), un `when:` que no case DESCARTA la
+//  anotacion en el sitio: aguas abajo (AST, huella, verificador) todo sigue
+//  viendo un solo contrato, el que aplica.  Sin `when:` -> aplica siempre.
+// ---------------------------------------------------------------------------
+Parser::FootprintDims Parser::parse_footprint_dims_(const std::string &nm) {
+    // Se entra TRAS el `(`; se sale con current_ en el `)` (el caller lo cierra).
+    FootprintDims d;
+    auto leer_int = [&](const char *que) -> int64_t {
+        if (current_.kind != TokenKind::INT_LIT) {
+            error_here((std::string("@") + nm + ": " + que +
+                        " requiere un entero literal")
+                           .c_str());
+            return -1;
+        }
+        const int64_t v = static_cast<int64_t>(consume().int_val);
+        if (v < 0) {
+            error_here((std::string("@") + nm + ": N debe ser >= 0").c_str());
+            return -1;
+        }
+        return v;
+    };
+    // Forma corta: un entero suelto -> TOTAL (el peor caso que importa fuera).
+    if (current_.kind == TokenKind::INT_LIT) {
+        d.total = leer_int("N");
+    } else {
+        // Forma nombrada: uno o mas `partial: N` / `total: N` por coma.
+        while (current_.kind == TokenKind::IDENTIFIER &&
+               (current_.lexeme == "partial" || current_.lexeme == "total")) {
+            const std::string campo = current_.lexeme;
+            (void)consume(); // 'partial'/'total'
+            (void)expect(TokenKind::COLON,
+                         (std::string("se esperaba ':' tras '") + campo +
+                          "' en @" + nm)
+                             .c_str());
+            const int64_t v = leer_int(campo.c_str());
+            if (campo == "partial") d.partial = v;
+            else d.total = v;
+            if (current_.kind == TokenKind::COMMA) {
+                // Puede ser separador entre dims O el inicio del `when:`.  Si lo
+                // que sigue NO es otra dim, se deja la coma para el `when:`.
+                // Peek: consumir la coma solo si tras ella hay otra dim.
+                (void)consume(); // ','
+            } else {
+                break;
+            }
+        }
+    }
+    // `when:` opcional (tras una coma ya consumida en la forma nombrada, o una
+    // coma nueva en la forma corta).
+    if (current_.kind == TokenKind::COMMA) {
+        (void)consume(); // ','
+        d.when = read_footprint_when_();
+    } else if (current_.kind == TokenKind::IDENTIFIER &&
+               current_.lexeme == "when") {
+        d.when = read_footprint_when_();
+    }
+    if (d.partial < 0 && d.total < 0)
+        error_here(
+            (std::string("@") + nm +
+             ": declara al menos una dimension (N, partial: N o total: N)")
+                .c_str());
+    return d;
+}
+
+std::string Parser::read_footprint_when_() {
+    // current_ debe ser el identificador `when`.
+    if (current_.kind != TokenKind::IDENTIFIER || current_.lexeme != "when") {
+        error_here("se esperaba `when:` en el contrato de huella");
+        return std::string();
+    }
+    (void)consume(); // when
+    if (expect(TokenKind::COLON, "se esperaba ':' tras `when`").kind !=
+        TokenKind::COLON)
+        return std::string();
+    // El valor va SIN comillas, como en @complexity (para que un editor lo vea
+    // como expresion y no como cadena).
+    if (current_.kind == TokenKind::STRING_LIT) {
+        error_here("el `when:` va SIN comillas (when: arch:arm64)");
+    }
+    const std::string &src = lex_.source_buffer();
+    const uint32_t start = current_.loc.offset;
+    uint32_t end = start;
+    int depth = 0;
+    while (current_.kind != TokenKind::END_OF_FILE) {
+        if (current_.kind == TokenKind::LPAREN) {
+            ++depth;
+        } else if (current_.kind == TokenKind::RPAREN) {
+            if (depth == 0) {
+                end = current_.loc.offset;
+                break; // NO se consume: lo cierra el caller
+            }
+            --depth;
+        }
         (void)consume();
-        if (current_.kind == TokenKind::IDENTIFIER) {
-            const bool is_target = (current_.lexeme == "Target");
-            if (current_.lexeme == "Aspect")
-                top_is_aspect = true;
-            else if (current_.lexeme == "Async")
-                top_is_async = true;
-            else if (current_.lexeme == "Introspect")
-                top_is_introspect = true;
-            else if (current_.lexeme == "Macro")
-                top_is_macro = true;
-            else if (current_.lexeme == "Pure")
-                top_is_pure = true;
-            else if (current_.lexeme == "AllocatorOverride")
-                top_is_alloc_override = true;
-            else if (current_.lexeme == "PanicHandler")
-                top_is_panic_handler = true;
-            else if (current_.lexeme == "Naked")
-                top_is_naked = true;
-            else if (current_.lexeme == "NoExcept")
-                top_is_noexcept = true;
-            else if (current_.lexeme == "NoExceptions")
-                module_no_exceptions_ = true; // sticky: modulo entero
-            else if (current_.lexeme == "StringConcat")
-                top_is_string_concat = true;
-            else if (current_.lexeme == "StringEq")
-                top_is_string_eq = true;
-            else if (current_.lexeme == "SyncImpl")
-                top_is_sync_impl = true;
-            // Sprint lombok (2026-06-03): anotaciones class-level.
-            // El parser solo marca los flags; el pre-pase del
-            // TypeChecker (expand_lombok_annotations) genera los
-            // ClassMethodDecls correspondientes.  Combos: @Data y
-            // @Value se descomponen en sus partes en el pre-pase.
-            else if (current_.lexeme == "Getter")
-                top_lk_getter = true;
-            else if (current_.lexeme == "Setter")
-                top_lk_setter = true;
-            else if (current_.lexeme == "ToString")
-                top_lk_tostring = true;
-            else if (current_.lexeme == "EqualsAndHashCode")
-                top_lk_equals_hash = true;
-            else if (current_.lexeme == "NoArgsConstructor")
-                top_lk_no_args_ctor = true;
-            else if (current_.lexeme == "AllArgsConstructor")
-                top_lk_all_args_ctor = true;
-            else if (current_.lexeme == "RequiredArgsConstructor")
-                top_lk_required_ctor = true;
-            else if (current_.lexeme == "Data")
-                top_lk_data = true;
-            else if (current_.lexeme == "Value")
-                top_lk_value = true;
-            else if (current_.lexeme == "Builder")
-                top_lk_builder = true;
-            else if (current_.lexeme == "With")
-                top_lk_with_all = true;
-            else if (current_.lexeme == "Log")
-                top_lk_log = true;
-            else if (current_.lexeme == "Synchronized")
-                top_lk_sync_methods = true;
-            // v4: atributos para comptime const.
-            const bool is_align = (current_.lexeme == "align");
-            const bool is_hot = (current_.lexeme == "hot");
-            const bool is_cold = (current_.lexeme == "cold");
-            const bool is_section = (current_.lexeme == "section");
-            const bool is_at = (current_.lexeme == "at");
-            const bool is_order = (current_.lexeme == "order");
-            const bool is_bits = (current_.lexeme == "bits");
-            const bool is_complexity = (current_.lexeme == "complexity");
-            // CPU dispatch Inc 4: @HelperOverride(<helper>).
-            const bool is_helper_override =
-                (current_.lexeme == "HelperOverride");
-            (void)consume();
-            // @complexity(O(...)[, n = <expr>]): contrato de coste para el
-            // modo --analyze.  Se captura el texto RAW entre los parens y se
-            // parte por la primera coma (la sub-expr de coste va antes; los
-            // bindings `var = ...` despues).  Metadata pura: el codegen la
-            // ignora.  Tolerante a errores: si falta '(' se omite sin abortar.
-            if (is_complexity) {
+    }
+    std::string spec = (start <= src.size() && end >= start && end <= src.size())
+                           ? src.substr(start, end - start)
+                           : std::string();
+    const size_t a = spec.find_first_not_of(" \t\r\n");
+    const size_t b = spec.find_last_not_of(" \t\r\n");
+    if (a == std::string::npos) return std::string();
+    return spec.substr(a, b - a + 1);
+}
+
+void Parser::parse_complexity_args_(std::string &top_complexity_expr,
+                                    std::vector<std::string> &top_complexity_vars,
+                                    std::string &top_complexity_partial_pre,
+                                    std::string &top_complexity_partial_post,
+                                    std::string &top_complexity_total_pre,
+                                    std::string &top_complexity_total_post,
+                                    std::string *out_when, bool *out_aplica) {
+    if (out_aplica) *out_aplica = true;
                 if (current_.kind != TokenKind::LPAREN) {
                     error_here("@complexity requiere '(O(...))'");
                 } else {
@@ -1085,6 +1198,54 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                             }
                             return std::string::npos;
                         };
+                        // Primera pasada: el `when:`.  Se mira ANTES de asignar
+                        // nada porque decide si esta anotacion aplica siquiera,
+                        // y el campo puede venir en cualquier posicion.
+                        bool aplica = true;
+                        for (const std::string &s : segs) {
+                            size_t col = top_colon(s);
+                            if (col == std::string::npos) continue;
+                            if (trim(s.substr(0, col)) != "when") continue;
+                            std::string spec = trim(s.substr(col + 1));
+                            // SIN comillas: entrecomillado, un IDE lo ve como
+                            // una cadena y no puede completar ni validar los
+                            // atomos.  El troceo lo permite sin ambiguedad
+                            // porque el separador del campo es el PRIMER ':' de
+                            // nivel superior: `when: arch:x86_64` da clave
+                            // `when` y valor `arch:x86_64`.
+                            if (spec.size() >= 2 && spec.front() == '"') {
+                                error_here("@complexity: el `when:` va SIN "
+                                           "comillas (when: arch:arm64)");
+                            }
+                            if (out_when) *out_when = spec;
+                            if (!cwhen::only_target(spec)) {
+                                // Habla del parametro de tipo: aqui T aun no es
+                                // nada.  Se deja SIN evaluar; lo resuelve el
+                                // clon de la monomorphizacion.
+                                if (!out_when) {
+                                    error_here(
+                                        "@complexity: el `when:` solo puede "
+                                        "hablar del parametro de tipo "
+                                        "(is_float<T>(), sizeof<T>()...) en un "
+                                        "metodo de un tipo generico");
+                                    return;
+                                }
+                                continue;
+                            }
+                            // Solo target: se puede decidir ya si el contrato
+                            // es de esta compilacion.  El que NO casa se tira;
+                            // el que casa SOBREVIVE con su `when:` intacto,
+                            // porque hara falta para compararlo por
+                            // especificidad con los otros que tambien casen.
+                            if (!target_matches_(spec)) aplica = false;
+                        }
+                        // Contrato de otro target: fuera.  (Un `when:` sobre T
+                        // no llega aqui con aplica=false: no se evalua.)
+                        if (!aplica) {
+                            if (out_aplica) *out_aplica = false;
+                            return;
+                        }
+
                         bool got_positional = false;
                         for (const std::string &s : segs) {
                             size_t col = top_colon(s);
@@ -1092,6 +1253,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                                 // Campo nombrado "dimension: O(...)".
                                 std::string key = trim(s.substr(0, col));
                                 std::string val = trim(s.substr(col + 1));
+                                if (key == "when")
+                                    continue; // ya tratado en la pasada de arriba
                                 if (key == "partial_pre")
                                     top_complexity_partial_pre = val;
                                 else if (key == "partial_post")
@@ -1102,10 +1265,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                                     top_complexity_total_post = val;
                                 else
                                     error_here(
-                                        ("@complexity: dimension desconocida "
-                                         "'" + key + "' (usar partial_pre, "
-                                         "partial_post, total_pre o "
-                                         "total_post)")
+                                        ("@complexity: campo desconocido "
+                                         "'" + key + "' (dimensiones: "
+                                         "partial_pre, partial_post, total_pre, "
+                                         "total_post; condicion: when)")
                                             .c_str());
                                 continue;
                             }
@@ -1125,6 +1288,272 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                         }
                     }
                 }
+}
+
+std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
+    // namespace foo { ... }  ( M.7.c, inline namespace estilo C++).
+    if (current_.kind == TokenKind::KW_NAMESPACE) {
+        return parse_namespace_decl();
+    }
+    // import "path" [as alias] [only A, B];  ( M sistema de modulos).
+    if (current_.kind == TokenKind::KW_IMPORT) {
+        return parse_import_decl(/*is_public_reexport=*/false);
+    }
+    // public import "x";  (re-export transitivo).
+    if (current_.kind == TokenKind::KW_PUBLIC &&
+        lex_.peek_at(0).kind == TokenKind::KW_IMPORT) {
+        (void)consume(); // 'public'
+        return parse_import_decl(/*is_public_reexport=*/true);
+    }
+    //  M6.a L.3: visibilidad de top-level decl.  Capturamos
+    // `public`/`private` y guardamos en pending_visibility_; cada
+    // sub-parser que produzca un decl top-level consulta el flag al
+    // final (helper @c apply_pending_visibility_) y lo limpia.  Sin
+    // keyword: el nodo conserva su default (is_public=true) -- compat
+    // con codigo existente.  Un futuro sprint M.future flipeara el
+    // default a privado tras migrar stdlib + editor.
+    if (current_.kind == TokenKind::KW_PUBLIC) {
+        (void)consume();
+        pending_visibility_ = 1; // 1 = public explicito
+    } else if (current_.kind == TokenKind::KW_PRIVATE) {
+        (void)consume();
+        pending_visibility_ = 2; // 2 = private explicito
+    } else if (current_.kind == TokenKind::IDENTIFIER &&
+               current_.lexeme == "internal") {
+        //  NS.3: `internal` (keyword contextual) -- package-scoped.
+        (void)consume();
+        pending_visibility_ = 3; // 3 = internal explicito
+    }
+    // Cleanup garantizado al salir de parse_top_level_decl.
+    struct VisGuard {
+        uint8_t &flag;
+        ~VisGuard() { flag = 0; }
+    } guard{pending_visibility_};
+    // concept Name<T> = pred; | { ... }  (#6, keyword contextual).  Se exige
+    // que tras `concept` venga un identificador (el nombre) para no chocar con
+    // un hipotetico uso de `concept` como identificador normal.
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "concept" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_concept_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // NS.6-ext: extension Tipo { ... }  (keyword contextual; exige IDENT tras).
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        current_.lexeme == "extension" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_extension_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // NS.6-ext: impl Concept for Tipo { ... }  (keyword contextual).
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "impl" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto n = parse_impl_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // typedef <tipo> <nombre> ;
+    if (current_.kind == TokenKind::KW_TYPEDEF) {
+        // typedef struct/enum C-style.
+        // Si tras typedef viene `struct` o `enum`, parseamos como
+        // StructDecl/EnumDecl con name al final.  Sin esto solo se
+        // soportaba `typedef i32 Foo;` (alias de tipo basico).
+        const TokenKind nk = lex_.peek_at(0).kind;
+        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM ||
+            nk == TokenKind::KW_UNION) {
+            auto n = parse_typedef_struct_or_enum();
+            apply_pending_visibility(n.get());
+            return n;
+        }
+        auto n = parse_typedef_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // using <nombre> = <tipo> ;
+    if (current_.kind == TokenKind::KW_USING) {
+        auto n = parse_using_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // Anotaciones top-level que preceden a una clase o funcion:
+    //   @Aspect:     clase de aspectos
+    //   @Async:      funcion async, transformada a wrapper future + spawn
+    //   @Introspect: clase/struct/enum runtime-introspectable (Sprint 4
+    //   A.37.s4)
+    //   @Target("os:linux"):  M.L24 - compilacion condicional;
+    //                la decl se descarta si no matchea el target actual.
+    //   Otras se aceptan y se ignoran silenciosamente.
+    bool top_is_aspect = false;
+    bool top_is_async = false;
+    bool top_fp_contract = true; /* @fp(strict|fast): default fast (contrae FMA) */
+    bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
+    bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
+    bool top_is_naked = false;          /*  NR: @Naked (ISRs/stubs) */
+    bool top_is_noexcept = false;       /* @NoExcept: fn sin excepciones */
+    bool top_is_string_concat = false;  /* C-3: @StringConcat */
+    bool top_is_string_eq = false;      /* C-3: @StringEq */
+    bool top_is_sync_impl = false;      /* @SyncImpl: override de monitor */
+    /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
+       helper objetivo (hoy "memcpy"); vacio => no es override. */
+    std::string top_helper_override_target;
+    bool top_is_introspect = false;
+    bool top_is_overlay = false;  /* overlay F1: @overlay struct (vista) */
+    bool top_is_macro = false;    /* A.43.16: @Macro */
+    bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
+    bool top_target_skip = false; /* L.24: @Target no matchea */
+    // Subsistema de coste (modo --analyze): @complexity(O(...)[, n=...]).
+    std::string top_complexity_expr;          // expr de coste normalizada
+    std::vector<std::string> top_complexity_vars; // bindings `n = <expr>`
+    // Contratos por dimension PARCIAL/TOTAL x PRE/POST (campos nombrados).
+    std::string top_complexity_partial_pre;
+    std::string top_complexity_partial_post;
+    std::string top_complexity_total_pre;
+    std::string top_complexity_total_post;
+    // TODOS los @complexity de la funcion, sin resolver: hay que verlos juntos
+    // para la regla de prioridad (por especificidad), igual que en los metodos.
+    // Sin esto ganaba el ultimo textualmente tambien en las funciones libres.
+    std::vector<ast::PendingComplexity> top_complexity_pending;
+    // Sprint lombok (2026-06-03): anotaciones tipo Lombok a nivel
+    // de clase.  El TypeChecker pre-pase las consume y genera
+    // ClassMethodDecls sinteticos (getters, setters, toString, etc.).
+    bool top_lk_getter = false;
+    bool top_lk_setter = false;
+    bool top_lk_tostring = false;
+    bool top_lk_equals_hash = false;
+    bool top_lk_no_args_ctor = false;
+    bool top_lk_all_args_ctor = false;
+    bool top_lk_required_ctor = false;
+    bool top_lk_data = false;
+    bool top_lk_value = false;
+    bool top_lk_builder = false;
+    bool top_lk_with_all = false;
+    bool top_lk_log = false;
+    bool top_lk_sync_methods = false;
+    // v4: atributos para comptime const a nivel modulo.
+    bool top_attr_hot = false;
+    bool top_attr_cold = false;
+    uint16_t top_attr_align = 0;
+    // Contratos comprobables de recurso/efecto (huella computacional).
+    bool top_c_pure = false, top_c_nothrow = false, top_c_nopanic = false;
+    // Contratos de huella CON `when:` (por arch/os/T): se resuelven aparte, por
+    // especificidad, en el type checker.  Los SIN when siguen en los campos de
+    // arriba (el default).
+    std::vector<ast::PendingFootprint> top_footprint_pending;
+    int64_t top_c_alloc = -1, top_c_stack = -1;
+    int64_t top_c_alloc_partial = -1, top_c_stack_partial = -1;
+    // Contratos de TIPO (struct/clase/enum): @pod / @no_heap / @size(N).
+    bool top_t_pod = false, top_t_no_heap = false;
+    int64_t top_t_size = -1;
+    std::string top_attr_section;
+    std::string top_attr_section_perms;  // AOT 2b: @section(".x","rwx")
+    int64_t top_attr_at = -1;            // AOT: @at(N) offset/VA fijo (.bin)
+    int32_t top_attr_order = 0x7fffffff; // AOT: @order(N) orden de seccion
+    uint8_t top_attr_bits = 64; // AOT: @bits(16|32|64) para bloques asm
+    while (current_.kind == TokenKind::AT) {
+        (void)consume();
+        if (current_.kind == TokenKind::IDENTIFIER) {
+            const bool is_target = (current_.lexeme == "Target");
+            if (current_.lexeme == "Aspect")
+                top_is_aspect = true;
+            else if (current_.lexeme == "Async")
+                top_is_async = true;
+            else if (current_.lexeme == "Introspect")
+                top_is_introspect = true;
+            else if (current_.lexeme == "overlay")
+                top_is_overlay = true;
+            else if (current_.lexeme == "Macro")
+                top_is_macro = true;
+            else if (current_.lexeme == "Pure")
+                top_is_pure = true;
+            else if (current_.lexeme == "AllocatorOverride")
+                top_is_alloc_override = true;
+            else if (current_.lexeme == "PanicHandler")
+                top_is_panic_handler = true;
+            else if (current_.lexeme == "Naked")
+                top_is_naked = true;
+            else if (current_.lexeme == "NoExcept")
+                top_is_noexcept = true;
+            else if (current_.lexeme == "NoExceptions")
+                module_no_exceptions_ = true; // sticky: modulo entero
+            else if (current_.lexeme == "StringConcat")
+                top_is_string_concat = true;
+            else if (current_.lexeme == "StringEq")
+                top_is_string_eq = true;
+            else if (current_.lexeme == "SyncImpl")
+                top_is_sync_impl = true;
+            // Sprint lombok (2026-06-03): anotaciones class-level.
+            // El parser solo marca los flags; el pre-pase del
+            // TypeChecker (expand_lombok_annotations) genera los
+            // ClassMethodDecls correspondientes.  Combos: @Data y
+            // @Value se descomponen en sus partes en el pre-pase.
+            else if (current_.lexeme == "Getter")
+                top_lk_getter = true;
+            else if (current_.lexeme == "Setter")
+                top_lk_setter = true;
+            else if (current_.lexeme == "ToString")
+                top_lk_tostring = true;
+            else if (current_.lexeme == "EqualsAndHashCode")
+                top_lk_equals_hash = true;
+            else if (current_.lexeme == "NoArgsConstructor")
+                top_lk_no_args_ctor = true;
+            else if (current_.lexeme == "AllArgsConstructor")
+                top_lk_all_args_ctor = true;
+            else if (current_.lexeme == "RequiredArgsConstructor")
+                top_lk_required_ctor = true;
+            else if (current_.lexeme == "Data")
+                top_lk_data = true;
+            else if (current_.lexeme == "Value")
+                top_lk_value = true;
+            else if (current_.lexeme == "Builder")
+                top_lk_builder = true;
+            else if (current_.lexeme == "With")
+                top_lk_with_all = true;
+            else if (current_.lexeme == "Log")
+                top_lk_log = true;
+            else if (current_.lexeme == "Synchronized")
+                top_lk_sync_methods = true;
+            // v4: atributos para comptime const.
+            const bool is_align = (current_.lexeme == "align");
+            const bool is_hot = (current_.lexeme == "hot");
+            const bool is_cold = (current_.lexeme == "cold");
+            const bool is_fp = (current_.lexeme == "fp");
+            const bool is_section = (current_.lexeme == "section");
+            const bool is_at = (current_.lexeme == "at");
+            const bool is_order = (current_.lexeme == "order");
+            const bool is_bits = (current_.lexeme == "bits");
+            const bool is_complexity = (current_.lexeme == "complexity");
+            // Contratos de huella (recurso/efecto): flags + con-arg.
+            const bool is_c_pure = (current_.lexeme == "pure");
+            const bool is_c_nothrow = (current_.lexeme == "nothrow");
+            const bool is_c_nopanic = (current_.lexeme == "nopanic");
+            const bool is_c_alloc = (current_.lexeme == "alloc");
+            const bool is_c_stack = (current_.lexeme == "stack");
+            // Contratos de TIPO (layout/recurso): flags @pod/@no_heap + @size(N).
+            const bool is_t_pod = (current_.lexeme == "pod");
+            const bool is_t_no_heap = (current_.lexeme == "no_heap");
+            const bool is_t_size = (current_.lexeme == "size");
+            // CPU dispatch Inc 4: @HelperOverride(<helper>).
+            const bool is_helper_override =
+                (current_.lexeme == "HelperOverride");
+            (void)consume();
+            // @complexity(O(...)[, n = <expr>]): contrato de coste para el
+            // modo --analyze.  Se captura el texto RAW entre los parens y se
+            // parte por la primera coma (la sub-expr de coste va antes; los
+            // bindings `var = ...` despues).  Metadata pura: el codegen la
+            // ignora.  Tolerante a errores: si falta '(' se omite sin abortar.
+            if (is_complexity) {
+                // A la lista, tambien el que no lleva `when:`: resolver el
+                // primero al vuelo y dejar que el siguiente lo pise es lo que
+                // hacia ganar al ultimo textualmente.  Los de una funcion libre
+                // no tienen T, asi que todos sus atomos son de target; el
+                // type checker los resuelve por especificidad.
+                ast::PendingComplexity pc;
+                bool aplica = true;
+                parse_complexity_args_(pc.expr, pc.vars, pc.partial_pre,
+                                       pc.partial_post, pc.total_pre,
+                                       pc.total_post, &pc.when, &aplica);
+                if (aplica) top_complexity_pending.push_back(std::move(pc));
                 continue;
             }
             if (is_hot) {
@@ -1133,6 +1562,101 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             }
             if (is_cold) {
                 top_attr_cold = true;
+                continue;
+            }
+            // @fp(strict|fast): politica de contraccion FMA por-funcion.
+            // strict -> IEEE (2 redondeos, sin FMA); fast (default) -> contrae.
+            if (is_fp) {
+                if (current_.kind == TokenKind::LPAREN) {
+                    (void)consume(); // '('
+                    if (current_.lexeme == "strict")
+                        top_fp_contract = false;
+                    else if (current_.lexeme == "fast")
+                        top_fp_contract = true;
+                    (void)consume(); // strict|fast
+                    if (current_.kind == TokenKind::RPAREN)
+                        (void)consume(); // ')'
+                }
+                continue;
+            }
+            // Contratos de huella: flags, con `when:` opcional
+            // (`@pure(when: arch:x86_64)`).  Con when -> a la lista pending;
+            // sin when -> el campo directo (el default).
+            if (is_c_pure || is_c_nothrow || is_c_nopanic) {
+                const int8_t v_pure = is_c_pure ? 1 : -1;
+                const int8_t v_nothrow = is_c_nothrow ? 1 : -1;
+                const int8_t v_nopanic = is_c_nopanic ? 1 : -1;
+                if (current_.kind == TokenKind::LPAREN) {
+                    (void)consume(); // '('
+                    ast::PendingFootprint pf;
+                    pf.when = read_footprint_when_();
+                    pf.pure = v_pure;
+                    pf.nothrow_ = v_nothrow;
+                    pf.nopanic = v_nopanic;
+                    (void)expect(TokenKind::RPAREN,
+                                 "se esperaba ')' tras el `when:`");
+                    top_footprint_pending.push_back(std::move(pf));
+                } else {
+                    top_c_pure = top_c_pure || is_c_pure;
+                    top_c_nothrow = top_c_nothrow || is_c_nothrow;
+                    top_c_nopanic = top_c_nopanic || is_c_nopanic;
+                }
+                continue;
+            }
+            // Contratos de TIPO sin argumento: @pod / @no_heap.
+            if (is_t_pod) {
+                top_t_pod = true;
+                continue;
+            }
+            if (is_t_no_heap) {
+                top_t_no_heap = true;
+                continue;
+            }
+            // Contrato de TIPO con argumento entero: @size(N) (tamano exacto).
+            if (is_t_size) {
+                (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @size");
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("@size(N) requiere un entero literal");
+                } else {
+                    const int64_t n = current_.int_val;
+                    (void)consume();
+                    if (n < 0) {
+                        error_here("@size(N): N debe ser >= 0");
+                    } else {
+                        top_t_size = n;
+                    }
+                }
+                (void)expect(TokenKind::RPAREN, "se esperaba ')' tras N en @size(N)");
+                continue;
+            }
+            // Contratos con argumento entero: @alloc(N) / @stack(N), con un
+            // `when:` opcional tras el N (`@alloc(0, when: arch:x86_64)`).
+            if (is_c_alloc || is_c_stack) {
+                const std::string nm = is_c_alloc ? "alloc" : "stack";
+                (void)expect(TokenKind::LPAREN,
+                             is_c_alloc ? "se esperaba '(' tras @alloc"
+                                        : "se esperaba '(' tras @stack");
+                const FootprintDims d = parse_footprint_dims_(nm);
+                (void)expect(TokenKind::RPAREN,
+                             ("se esperaba ')' al cerrar @" + nm).c_str());
+                if (d.when.empty()) {
+                    if (d.total >= 0)
+                        (is_c_alloc ? top_c_alloc : top_c_stack) = d.total;
+                    if (d.partial >= 0)
+                        (is_c_alloc ? top_c_alloc_partial
+                                    : top_c_stack_partial) = d.partial;
+                } else {
+                    ast::PendingFootprint pf;
+                    pf.when = d.when;
+                    if (is_c_alloc) {
+                        pf.alloc = d.total;
+                        pf.alloc_partial = d.partial;
+                    } else {
+                        pf.stack = d.total;
+                        pf.stack_partial = d.partial;
+                    }
+                    top_footprint_pending.push_back(std::move(pf));
+                }
                 continue;
             }
             if (is_align) {
@@ -1252,6 +1776,26 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     error_here("@Target requiere un string literal");
                 }
                 (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @Target");
+                // `mode:jit` / `mode:vm` NO condicionan: el .velb es agnostico
+                // al modo de ejecucion (el mismo binario corre en JIT o
+                // interp, lo decide un flag de runtime).  Antes evaluaban a
+                // false SIEMPRE, con lo que la decl se BORRABA en silencio.
+                // Error explicito en vez del borrado invisible.
+                {
+                    std::vector<std::string> ats;
+                    cwhen::atoms(spec, ats);
+                    for (const auto &a : ats) {
+                        if (a == "mode:jit" || a == "mode:vm") {
+                            error_here(
+                                "@Target: 'mode:jit'/'mode:vm' no condiciona -- "
+                                "el .velb es agnostico al modo de ejecucion (el "
+                                "mismo binario corre en JIT o interp).  Usa "
+                                "'mode:auto' para codigo agnostico o "
+                                "'mode:jit-required' para EXIGIR JIT.");
+                            break;
+                        }
+                    }
+                }
                 if (!target_matches_(spec)) {
                     top_target_skip = true;
                 }
@@ -1270,7 +1814,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             break;
         }
     }
-    // Phase M.L24: si @Target no matcheo, descartar la decl completa
+    //  M.L24: si @Target no matcheo, descartar la decl completa
     // SIN parsearla.  Esto evita diagnosticos espurios por simbolos
     // que solo existen en el otro target.  La pending_visibility se
     // limpia automaticamente via VisGuard al salir.
@@ -1283,7 +1827,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         return nullptr;
     }
     last_decl_was_target_skip_ = false;
-    // Phase M.condcomp: @Target sobre un `import`.  El path normal
+    //  M.condcomp: @Target sobre un `import`.  El path normal
     // maneja import ANTES del loop de annotations, pero cuando hay
     // `@Target("...") import "..."` el @Target ya se consumio aqui;
     // si la condicion matcheo (top_target_skip == false), parseamos
@@ -1342,10 +1886,68 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         apply_pending_visibility(bd.get());
         return bd;
     }
+    // typedef / using tras anotaciones (`@Target("arch:x86_64") public
+    // typedef u64 uintptr new;`).  El caso SIN anotaciones se maneja arriba
+    // (~L859) ANTES del loop de `@`; aqui cubrimos el caso post-anotacion,
+    // que antes caia a "se esperaba un tipo" (typedef no estaba en el
+    // dispatch post-@).  Habilita @Target por typedef (tipos por arquitectura).
+    if (current_.kind == TokenKind::KW_TYPEDEF) {
+        const auto nk = lex_.peek_at(0).kind;
+        std::unique_ptr<ast::Node> n;
+        if (nk == TokenKind::KW_STRUCT || nk == TokenKind::KW_ENUM ||
+            nk == TokenKind::KW_UNION) {
+            n = parse_typedef_struct_or_enum();
+            // `@align(N)` sobre un `typedef struct { ... } Name;`.
+            if (n && n->kind == ast::NodeKind::StructDecl && top_attr_align > 0)
+                static_cast<ast::StructDecl *>(n.get())->attr_align =
+                    top_attr_align;
+        } else {
+            n = parse_typedef_decl();
+        }
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    if (current_.kind == TokenKind::KW_USING) {
+        auto n = parse_using_decl();
+        apply_pending_visibility(n.get());
+        return n;
+    }
+    // struct C-tagless: `struct { ... } Name, *PName;` (nombre al final, sin
+    // `typedef`).  Se trata igual que `typedef struct { ... } Name;`.
+    if ((current_.kind == TokenKind::KW_STRUCT ||
+         current_.kind == TokenKind::KW_UNION) &&
+        lex_.peek_at(0).kind == TokenKind::LBRACE) {
+        auto n = parse_typedef_struct_or_enum(/*leading_typedef=*/false);
+        if (n && n->kind == ast::NodeKind::StructDecl && top_attr_align > 0)
+            static_cast<ast::StructDecl *>(n.get())->attr_align = top_attr_align;
+        apply_pending_visibility(n.get());
+        return n;
+    }
     // struct <nombre> { ... }
     if (current_.kind == TokenKind::KW_STRUCT) {
-        auto sd = parse_struct_decl();
+        auto sd = parse_struct_decl(top_is_overlay);
         if (sd && top_is_introspect) sd->is_introspect = true;
+        if (sd && top_is_overlay) sd->is_overlay = true;
+        if (sd) {
+            sd->contract_pod = top_t_pod;
+            sd->contract_no_heap = top_t_no_heap;
+            sd->contract_size = top_t_size;
+            sd->attr_align = top_attr_align;
+        }
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
+        apply_pending_visibility(sd.get());
+        return sd;
+    }
+    // union <nombre> { ... }  (struct con todos los campos en offset 0)
+    if (current_.kind == TokenKind::KW_UNION) {
+        auto sd = parse_struct_decl(/*is_overlay=*/false);
+        if (sd) {
+            sd->is_union = true;
+            sd->contract_pod = top_t_pod;
+            sd->contract_no_heap = top_t_no_heap;
+            sd->contract_size = top_t_size;
+        }
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(sd.get());
         return sd;
     }
@@ -1369,7 +1971,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             cd->lombok_with_all = top_lk_with_all;
             cd->lombok_log = top_lk_log;
             cd->lombok_sync_methods = top_lk_sync_methods;
+            cd->contract_pod = top_t_pod;
+            cd->contract_no_heap = top_t_no_heap;
+            cd->contract_size = top_t_size;
         }
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(cd.get());
         return cd;
     }
@@ -1386,6 +1992,13 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (current_.kind == TokenKind::KW_ENUM) {
         auto ed = parse_enum_decl();
         if (ed && top_is_introspect) ed->is_introspect = true;
+        if (ed) {
+            ed->contract_pod = top_t_pod;
+            ed->contract_no_heap = top_t_no_heap;
+            ed->contract_size = top_t_size;
+        }
+        // `;` final opcional estilo C: `enum E { ... };`.
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(ed.get());
         return ed;
     }
@@ -1447,38 +2060,52 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 "(comptime ya implica const, salvo 'comptime var')");
             is_comptime_const = true;
         } else if (mut_lex.peek_at(0).kind == TokenKind::IDENTIFIER &&
-                   (mut_lex.peek_at(0).lexeme == "var" ||
-                    mut_lex.peek_at(0).lexeme == "auto")) {
-            /* `comptime auto X` y `comptime var X` aceptados
-             * como alias.  Soportan DOS modos:
-             *   (a) `comptime var T NAME = init;` -- tipo explicito.
-             *   (b) `comptime var NAME = init;`   -- inferencia.
-             *   (c) `comptime auto NAME = init;`  -- idem (b).
-             */
+                   mut_lex.peek_at(0).lexeme == "var") {
+            /* Hard break v4: `comptime var` ELIMINADO.  La mutabilidad es
+             * el comportamiento por defecto en compile-time -- todo
+             * `comptime`/`const` es mutable DURANTE la compilacion y se
+             * congela al terminar -- asi que el marcador `var` es
+             * redundante y confuso.  Usa `comptime X` (tipo explicito) o
+             * `comptime auto X` (inferencia). */
+            const SourceLoc bad_loc = current_.loc;
+            (void)consume(); /* 'comptime' */
+            (void)consume(); /* 'var' */
+            diags_.error(
+                bad_loc,
+                "'comptime var' fue eliminado: usa 'comptime X' o "
+                "'comptime auto X' (comptime ya es mutable en compile-time)");
+            /* Consumir hasta ';' para no encadenar errores. */
+            while (current_.kind != TokenKind::SEMICOLON &&
+                   current_.kind != TokenKind::END_OF_FILE)
+                (void)consume();
+            (void)match(TokenKind::SEMICOLON);
+            return nullptr;
+        } else if (mut_lex.peek_at(0).kind == TokenKind::IDENTIFIER &&
+                   mut_lex.peek_at(0).lexeme == "auto") {
+            /* `comptime auto NAME = init;` -- inferencia de tipo.  `auto`
+             * (inferencia; valido en comptime y en runtime) es DISTINTO de
+             * `var` (marcador de mutabilidad, eliminado).  El tipo se
+             * deduce del init; mutable en compile-time por el pre-pase
+             * (is_mutable=true), congelado tras compilar. */
             const SourceLoc sugar_loc = current_.loc;
             (void)consume(); /* 'comptime' */
-            (void)consume(); /* 'var' o 'auto' */
-            /* Detectar modo (b)/(c): siguiente token es IDENT seguido
-             * de `=`.  Si si, build GlobalVarDecl con type=nullptr +
-             * is_const=false + is_comptime=true + infer. */
-            if (current_.kind == TokenKind::IDENTIFIER &&
-                mut_lex.peek_at(0).kind == TokenKind::ASSIGN) {
-                auto gv = std::make_unique<ast::GlobalVarDecl>();
-                gv->loc = sugar_loc;
-                gv->name = consume().lexeme;
-                gv->is_const = false; /* mutable */
-                gv->is_comptime = true;
-                gv->type = nullptr; /* infer */
-                (void)expect(
-                    TokenKind::ASSIGN,
-                    "se esperaba '=' tras 'comptime var/auto' + nombre");
-                gv->init = parse_expr();
-                (void)expect(
-                    TokenKind::SEMICOLON,
-                    "se esperaba ';' al final de la decl comptime var");
-                return gv;
-            }
-            is_comptime_var = true;
+            (void)consume(); /* 'auto' */
+            auto gv = std::make_unique<ast::GlobalVarDecl>();
+            gv->loc = sugar_loc;
+            gv->name = consume().lexeme;
+            /* is_const=true -> INMUTABLE en runtime (reasignarlo en runtime es
+             * error).  La mutabilidad comptime la da is_mutable=true en el
+             * pre-pase (todo global const/comptime es mutable en compile-time,
+             * congelado despues). */
+            gv->is_const = true;
+            gv->is_comptime = true;
+            gv->type = nullptr; /* infer desde init */
+            (void)expect(TokenKind::ASSIGN,
+                         "se esperaba '=' tras 'comptime auto' + nombre");
+            gv->init = parse_expr();
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' al final de la decl comptime auto");
+            return gv;
         } else if (mut_lex.peek_at(0).kind == TokenKind::IDENTIFIER &&
                    mut_lex.peek_at(1).kind == TokenKind::ASSIGN) {
             /* sugar: `comptime NAME = expr;` -> equivale a
@@ -1495,6 +2122,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             auto gv = std::make_unique<ast::GlobalVarDecl>();
             gv->loc = sugar_loc;
             gv->name = std::move(nm);
+            /* is_const=true -> INMUTABLE en runtime; mutable SOLO en
+             * compile-time (is_mutable=true en el pre-pase). */
             gv->is_const = true;
             gv->is_comptime = true;
             gv->type = nullptr; /* infer desde init */
@@ -1576,7 +2205,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         }
     }
 
-    if (!starts_type()) {
+    // allow_reserved_name: a nivel top-level no hay expression-statements,
+    // asi que `T <palabra_reservada>` solo puede ser un intento de declarar
+    // algo con un nombre invalido.  Aceptarlo aqui permite que el error se
+    // reporte sobre el nombre (con el motivo) en lugar de degenerar en un
+    // "se esperaba un tipo" apuntando al inicio de la linea.
+    if (!starts_type(/*allow_reserved_name=*/true)) {
         error_here("se esperaba un tipo al inicio de la declaracion top-level");
         return nullptr;
     }
@@ -1585,8 +2219,14 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     auto type_node = parse_type_node();
     if (!type_node) return nullptr;
 
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo");
+    // El nombre puede ser IDENTIFIER o un keyword CONTEXTUAL (`get`/`set`):
+    // a nivel top-level no existe la sintaxis de property, asi que tras un
+    // tipo ya parseado `Optional<u64> get(i64 x)` es inequivocamente
+    // "tipo + nombre".  Mismo criterio que ya aplicaban los miembros de
+    // clase y el acceso `obj.get(...)`.
+    if (!is_name_token(current_.kind)) {
+        error_expected_name("nombre de funcion o variable global",
+                            "se esperaba un nombre tras el tipo");
         return nullptr;
     }
     std::string name = consume().lexeme;
@@ -1611,6 +2251,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // future_alloc + spawn { msgrecv handle + body + fulfill } y
         // devuelve el handle del future al caller.
         if (fd && top_is_async) fd->is_async = true;
+        if (fd) fd->fp_contract = top_fp_contract; // @fp(strict|fast)
         if (fd && top_is_noexcept) fd->is_noexcept = true;
         if (fd && is_comptime_fn) fd->is_comptime = true;
         if (fd && top_is_macro) fd->is_macro = true;
@@ -1624,19 +2265,21 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && !top_helper_override_target.empty())
             fd->helper_override_target = top_helper_override_target;
         // Subsistema de coste: propagar el contrato @complexity al AST.
-        // @c complexity_expr (forma posicional) es azucar de total_post: si
-        // no se declaro total_post nombrado, lo usamos como tal.
+        // Sin resolver: el type checker aplica la regla de prioridad sobre
+        // todos juntos.  Los campos resueltos los rellena el.
         if (fd) {
-            fd->complexity_expr = top_complexity_expr;
-            fd->complexity_vars = top_complexity_vars;
-            fd->complexity_partial_pre = top_complexity_partial_pre;
-            fd->complexity_partial_post = top_complexity_partial_post;
-            fd->complexity_total_pre = top_complexity_total_pre;
-            fd->complexity_total_post = top_complexity_total_post;
-            // Azucar: la expr posicional rellena total_post si nadie lo declaro.
-            if (fd->complexity_total_post.empty() &&
-                !top_complexity_expr.empty())
-                fd->complexity_total_post = top_complexity_expr;
+            fd->complexity_pending = std::move(top_complexity_pending);
+            // Contratos de huella (recurso/efecto).  Los SIN `when:` van a los
+            // campos directos (el default); los CON when a la lista, que el
+            // type checker resuelve por especificidad.
+            fd->contract_pure = top_c_pure;
+            fd->contract_nothrow = top_c_nothrow;
+            fd->contract_nopanic = top_c_nopanic;
+            fd->contract_alloc = top_c_alloc;
+            fd->contract_alloc_partial = top_c_alloc_partial;
+            fd->contract_stack = top_c_stack;
+            fd->contract_stack_partial = top_c_stack_partial;
+            fd->footprint_pending = std::move(top_footprint_pending);
         }
         // AOT 2b (dev OS): seccion de salida del codigo + permisos.
         if (fd && !top_attr_section.empty()) {
@@ -1650,10 +2293,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && is_comptime_fn)
             fd->type_params = std::move(comptime_type_params);
         // Registrar posiciones de params @c expr para que el parser sepa
-        // hacer raw-text capture en los call sites de este @Macro.  Solo
-        // se honra el flag cuando la funcion es @Macro: en otro contexto
-        // produciria un mensaje de error en el type checker.
-        if (fd && top_is_macro && !fd->params.empty()) {
+        // hacer raw-text capture en los call sites de esta funcion.  Se honra
+        // para CUALQUIER funcion con params @c expr (no solo @Macro): permite
+        // helpers comptime como `comptime string source(expr code)` que
+        // capturan el texto crudo del argumento (p.ej. un bloque `asm`) sin
+        // parsearlo como expresion.
+        if (fd && !fd->params.empty()) {
             std::vector<int> positions;
             for (size_t i = 0; i < fd->params.size(); ++i) {
                 if (fd->params[i] && fd->params[i]->is_expr_capture) {
@@ -1670,9 +2315,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // `comptime T NAME = expr;` (forma canonica v4) -> comptime const
     // (inmutable, exportable, va al .vxi).
     // `comptime var T NAME = init;` -> comptime mutable (local al eval AST).
-    // v4: si veniamos como `is_comptime_const` (set tentativamente cuando
-    // se vio `comptime` sin `var`/`auto`/`<>`), forzamos @c is_const=true
-    // porque comptime SIEMPRE implica const en var-decls top-level.
+    // v4: un `comptime X` (var-decl top-level) es INMUTABLE en runtime
+    // (is_const=true) pero MUTABLE en compile-time (is_mutable=true en el
+    // pre-pase).  Reasignarlo en runtime es error; el codigo comptime SI lo
+    // puede alterar durante la compilacion.  Ya no existe `comptime var`.
     if (is_comptime_const) {
         is_const = true;
     }
@@ -1769,7 +2415,16 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
         error_here("se esperaba '{' para abrir el cuerpo de la funcion");
         return fn;
     }
+    // Forwarding de expr-capture anidado: registrar los nombres de params `expr`
+    // de ESTA funcion mientras se parsea su cuerpo, para que una llamada interna
+    // `otra(code)` con `code` = param expr no re-capture el identificador como
+    // texto sino que lo forwardee (ver parse_postfix).
+    auto saved_expr_params = std::move(current_expr_param_names_);
+    current_expr_param_names_.clear();
+    for (const auto &p : fn->params)
+        if (p && p->is_expr_capture) current_expr_param_names_.insert(p->name);
     fn->body = parse_block();
+    current_expr_param_names_ = std::move(saved_expr_params);
     return fn;
 }
 
@@ -1796,6 +2451,20 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
         p->name = consume().lexeme;
         return p;
     }
+    // Variadico CRUDO estilo C: `...` pelado (sin tipo ni nombre).  Acepta N
+    // args de CUALQUIER tipo; cada uno se coloca segun su ABI en el call site.
+    // El callee (para @Naked) los lee de los registros ABI en su asm; no hay
+    // empaquetado ni vacount().  Debe ser el ultimo parametro.
+    if (current_.kind == TokenKind::DOTDOTDOT) {
+        auto p = std::make_unique<ast::ParamDecl>();
+        p->loc = current_.loc;
+        (void)consume(); // '...'
+        p->is_variadic = true;
+        p->is_raw_variadic = true;
+        // Sin tipo ni nombre: el type checker valida que sea el ultimo y que la
+        // funcion sea @Naked.
+        return p;
+    }
     // Z.6: aceptar `shared T name` en params (con disambiguation vs
     // `shared<T>` smart pointer).  Hoy es sugar documental; el type
     // system trata `T` y `shared T` como mismo tipo en parametros
@@ -1814,6 +2483,16 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = current_.loc;
     p->type = parse_type_node();
+    // Parametro puntero a funcion estilo C: `R (*name)(params)`.
+    {
+        std::string fp_name;
+        std::unique_ptr<ast::TypeNode> fp_type;
+        if (try_parse_c_func_ptr_(p->type, fp_name, fp_type)) {
+            p->type = std::move(fp_type);
+            p->name = std::move(fp_name);
+            return p;
+        }
+    }
     // Parametro VARIADICO: `T... name`.  El `...` tras el tipo del elemento
     // marca el param como rest (debe ser el ultimo; la validacion de posicion
     // la hace el type checker).  El callee lo recibe como `T*` + un count
@@ -1831,8 +2510,9 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
         (void)consume();
         if (p->type) p->type->is_nonnull = true;
     }
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo del parametro");
+    if (!is_name_token(current_.kind)) {
+        error_expected_name("nombre de parametro",
+                            "se esperaba un nombre tras el tipo del parametro");
         return p;
     }
     p->name = consume().lexeme;
@@ -1977,6 +2657,10 @@ bool Parser::looks_like_cast() const noexcept {
     const TokenKind after = mut_lex.peek_at(off).kind;
     switch (after) {
     case TokenKind::IDENTIFIER:
+    // Keywords contextuales que en posicion de expresion son nombres:
+    // permite `(u64) get(x)` (cast del retorno de una funcion `get`).
+    case TokenKind::KW_GET:
+    case TokenKind::KW_SET:
     case TokenKind::INT_LIT:
     case TokenKind::FLOAT_LIT:
     case TokenKind::CHAR_LIT:
@@ -2003,6 +2687,42 @@ bool Parser::looks_like_cast() const noexcept {
     }
 }
 
+bool Parser::looks_like_compound_literal() const noexcept {
+    // Precondicion: current_ es '('.  Patron inequivoco: `( IDENT [<...>] ) {`.
+    Lexer &mut_lex = const_cast<Lexer &>(lex_);
+    size_t off = 0;
+    const Token &name_tok = mut_lex.peek_at(off);
+    if (name_tok.kind != TokenKind::IDENTIFIER) return false;
+    // Solo un NOMBRE DE STRUCT declarado dispara el compound literal; asi
+    // `match (val) {` / `(x) {` con `x`/`val` no-struct NO se confunden.
+    if (declared_structs_.count(name_tok.lexeme) == 0) return false;
+    ++off;
+    // Argumentos genericos opcionales `<...>` balanceados (>> = dos >).
+    if (mut_lex.peek_at(off).kind == TokenKind::LT) {
+        int depth = 1;
+        ++off;
+        const size_t MAXL = 64;
+        while (depth > 0 && off < MAXL) {
+            TokenKind k = mut_lex.peek_at(off).kind;
+            if (k == TokenKind::END_OF_FILE) return false;
+            if (k == TokenKind::LT)
+                ++depth;
+            else if (k == TokenKind::GT)
+                --depth;
+            else if (k == TokenKind::SHR) {
+                depth -= 2;
+                if (depth < 0) return false;
+            }
+            ++off;
+        }
+        if (depth != 0) return false;
+    }
+    // Debe seguir ')' y despues '{'.
+    if (mut_lex.peek_at(off).kind != TokenKind::RPAREN) return false;
+    ++off;
+    return mut_lex.peek_at(off).kind == TokenKind::LBRACE;
+}
+
 bool Parser::looks_like_register_storage() const noexcept {
     // Patron exacto: register ( "reg" ) <type-starter>.
     //   current_     = IDENTIFIER "register"
@@ -2027,7 +2747,7 @@ bool Parser::looks_like_register_storage() const noexcept {
     return false;
 }
 
-bool Parser::starts_type() const noexcept {
+bool Parser::starts_type(bool allow_reserved_name) const noexcept {
     // Cualquier keyword que sea tipo primitivo, o un identificador
     // seguido de uno o mas '*' (cero permitidos) y luego otro
     // identificador (caso "Edad x = ..." o "Punto* p = ...").  Si el
@@ -2047,6 +2767,33 @@ bool Parser::starts_type() const noexcept {
     // es el keyword reservado.
     if (current_.kind == TokenKind::KW_FN) return true;
     if (current_.kind == TokenKind::KW_CFN) return true;
+    // Qualifier C `const T` / `volatile T` en posicion de TIPO (campo/param):
+    // cuenta como inicio de tipo SOLO si lo que sigue empieza un tipo.  (El
+    // `const`/`volatile` de un const-var-decl lo detecta el statement parser
+    // antes, por su cuenta; esto solo aplica donde se consulta starts_type para
+    // decidir "campo o metodo" dentro de un struct/param.)
+    if (current_.kind == TokenKind::KW_CONST ||
+        (current_.kind == TokenKind::IDENTIFIER &&
+         current_.lexeme == "volatile")) {
+        Lexer &ml = const_cast<Lexer &>(lex_);
+        const Token &nx = ml.peek_at(0);
+        if (primitive_kind_from_token(nx.kind) != PrimitiveKind::COUNT)
+            return true;
+        if (nx.kind == TokenKind::IDENTIFIER) return true;
+        if (nx.kind == TokenKind::KW_STRUCT || nx.kind == TokenKind::KW_UNION ||
+            nx.kind == TokenKind::KW_ENUM || nx.kind == TokenKind::KW_FN ||
+            nx.kind == TokenKind::KW_CFN || nx.kind == TokenKind::KW_NONNULL)
+            return true;
+        return false;
+    }
+    // Especificador elaborado C `struct Tag` / `union Tag` / `enum Tag` como
+    // REFERENCIA de tipo (seguido de IDENT, no de `{` que es definicion inline).
+    if ((current_.kind == TokenKind::KW_STRUCT ||
+         current_.kind == TokenKind::KW_UNION ||
+         current_.kind == TokenKind::KW_ENUM)) {
+        Lexer &ml = const_cast<Lexer &>(lex_);
+        return ml.peek_at(0).kind == TokenKind::IDENTIFIER;
+    }
     if (current_.kind != TokenKind::IDENTIFIER) return false;
     /* `auto NAME = init;` y `var NAME = init;` cuentan como
      * inicio de var-decl (con inferencia local de tipo).  `auto`/`var`
@@ -2064,7 +2811,7 @@ bool Parser::starts_type() const noexcept {
 
     Lexer &mut_lex = const_cast<Lexer &>(lex_);
     size_t off = 0;
-    // Phase M.7.c: namespace qualified type `ui.Button name`.
+    //  M.7.c: namespace qualified type `ui.Button name`.
     // Saltar pares `DOT IDENT` antes del check de generics.
     while (mut_lex.peek_at(off).kind == TokenKind::DOT &&
            mut_lex.peek_at(off + 1).kind == TokenKind::IDENTIFIER) {
@@ -2126,8 +2873,14 @@ bool Parser::starts_type() const noexcept {
     // ser nombres de metodo normales (ej. `HashMap.get`, `Queue.set`).
     // Sin esto, `public V get(K key)` no se reconocia como inicio de
     // metodo porque `get` no era IDENTIFIER.
-    return nm == TokenKind::IDENTIFIER || nm == TokenKind::KW_GET ||
-           nm == TokenKind::KW_SET;
+    if (is_name_token(nm)) return true;
+    // Modo diagnostico (solo top-level, donde no hay expression-stmts con
+    // los que confundirse): una palabra reservada en posicion de nombre
+    // sigue "pareciendo" una declaracion.  Devolver true deja que el
+    // caller parsee el tipo y falle sobre el NOMBRE, con el mensaje que
+    // explica que el termino esta reservado, en vez de reportar un
+    // "se esperaba un tipo" al principio de la linea.
+    return allow_reserved_name && is_reserved_keyword(nm);
 }
 
 std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
@@ -2135,10 +2888,31 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
     // como no-null.  Solo afecta semantica del type checker
     // (rechazo de null literal); el lowering trata el tipo igual
     // que una referencia normal.
+    // Qualifiers C que preceden al tipo base (`const T`, `volatile T`).  El
+    // `const` de un const-var-decl se consume ANTES (statement/decl parser), asi
+    // que aqui solo aparece como qualifier DE TIPO.  `const` marca el nivel base
+    // como inmutable (const-correctness A); `volatile` se parsea pero se ignora.
+    bool base_const = false;
+    while (current_.kind == TokenKind::KW_CONST ||
+           (current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == "volatile")) {
+        if (current_.kind == TokenKind::KW_CONST) base_const = true;
+        (void)consume();
+    }
     bool nonnull = false;
     if (current_.kind == TokenKind::KW_NONNULL) {
         nonnull = true;
         (void)consume();
+    }
+    // Especificador de tipo ELABORADO estilo C: `struct Tag`, `union Tag`,
+    // `enum Tag` como REFERENCIA a un tipo (no definicion inline).  Vesta usa
+    // solo el nombre, asi que descartamos el keyword y seguimos con el IDENT.
+    // (La forma con `{` -- definicion inline -- la maneja el caller antes.)
+    if ((current_.kind == TokenKind::KW_STRUCT ||
+         current_.kind == TokenKind::KW_UNION ||
+         current_.kind == TokenKind::KW_ENUM) &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        (void)consume(); // 'struct' / 'union' / 'enum'
     }
     std::unique_ptr<ast::TypeNode> base;
     // closures: `fn(T1, T2, ...) -> R` produce un FunctionTypeNode.
@@ -2259,7 +3033,7 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         auto nt = std::make_unique<ast::NamedTypeNode>();
         nt->loc = current_.loc;
         nt->name = consume().lexeme;
-        // Phase M.7.c: namespace qualified type (`ui.Button`).
+        //  M.7.c: namespace qualified type (`ui.Button`).
         // Si seguidos vienen `.IDENT`, concatenamos al nombre con
         // separador `.` que el type checker traduce a mangled
         // `ui__Button` al resolver via imported_namespaces_.
@@ -2303,14 +3077,24 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         }
         return nullptr;
     }
+    // const del nivel BASE (`const char`): marca el nodo del tipo apuntado.
+    if (base && base_const) base->is_const = true;
     // Postfix: cada '*' apila un PointerTypeNode adicional.
     // Ejemplo: 'i32**' -> Pointer(Pointer(Primitive(i32))).
+    // C permite `const`/`volatile` TRAS cada '*' (`char * const * const`): marca
+    // ESE nivel de puntero como const (puntero inmutable).
     while (current_.kind == TokenKind::STAR) {
         const SourceLoc loc = current_.loc;
         (void)consume(); // '*'
         auto pn = std::make_unique<ast::PointerTypeNode>();
         pn->loc = loc;
         pn->pointee = std::move(base);
+        while (current_.kind == TokenKind::KW_CONST ||
+               (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "volatile")) {
+            if (current_.kind == TokenKind::KW_CONST) pn->is_const = true;
+            (void)consume();
+        }
         base = std::move(pn);
     }
     // Postfix '[N]' o '[]': arrays nativos.  Aceptamos solo literales
@@ -2346,20 +3130,392 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
 // preserva en is_using_form solo para diagnosticos.
 // -----------------------------------------------------------------
 
-std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
+// Deep-clone minimal de un TypeNode (Named/Primitive/Pointer/Array).  Suficiente
+// para replicar el tipo base de un typedef C-style en cada declarador extra.
+static std::unique_ptr<ast::TypeNode> clone_type_node_td_(const ast::TypeNode *t) {
+    if (!t) return nullptr;
+    switch (t->kind) {
+    case ast::NodeKind::PrimitiveTypeNode: {
+        auto *s = static_cast<const ast::PrimitiveTypeNode *>(t);
+        auto p = std::make_unique<ast::PrimitiveTypeNode>();
+        p->loc = s->loc;
+        p->prim = s->prim;
+        for (auto &ta : s->type_args)
+            p->type_args.push_back(clone_type_node_td_(ta.get()));
+        return p;
+    }
+    case ast::NodeKind::NamedTypeNode: {
+        auto *s = static_cast<const ast::NamedTypeNode *>(t);
+        auto p = std::make_unique<ast::NamedTypeNode>();
+        p->loc = s->loc;
+        p->name = s->name;
+        for (auto &ta : s->type_args)
+            p->type_args.push_back(clone_type_node_td_(ta.get()));
+        return p;
+    }
+    case ast::NodeKind::PointerTypeNode: {
+        auto *s = static_cast<const ast::PointerTypeNode *>(t);
+        auto p = std::make_unique<ast::PointerTypeNode>();
+        p->loc = s->loc;
+        p->pointee = clone_type_node_td_(s->pointee.get());
+        p->is_virtual = s->is_virtual;
+        return p;
+    }
+    case ast::NodeKind::ArrayTypeNode: {
+        auto *s = static_cast<const ast::ArrayTypeNode *>(t);
+        auto p = std::make_unique<ast::ArrayTypeNode>();
+        p->loc = s->loc;
+        p->element_type = clone_type_node_td_(s->element_type.get());
+        return p;
+    }
+    default:
+        return nullptr;
+    }
+}
+
+// Quita todos los niveles de puntero envolventes de un TypeNode: `LONG**` ->
+// `LONG`.  Devuelve un puntero al nodo base interno (no toma ownership).
+static const ast::TypeNode *strip_pointers_td_(const ast::TypeNode *t) {
+    while (t && t->kind == ast::NodeKind::PointerTypeNode)
+        t = static_cast<const ast::PointerTypeNode *>(t)->pointee.get();
+    return t;
+}
+
+bool Parser::try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
+                                   std::string &out_name,
+                                   std::unique_ptr<ast::TypeNode> &out_type) {
+    // Patron: `( '*'+ IDENT ) (`.  Lookahead sin consumir hasta confirmarlo.
+    if (current_.kind != TokenKind::LPAREN) return false;
+    Lexer &ml = const_cast<Lexer &>(lex_);
+    size_t off = 0;
+    int stars = 0;
+    while (ml.peek_at(off).kind == TokenKind::STAR) {
+        ++off;
+        ++stars;
+    }
+    if (stars == 0) return false; // `(algo` que no empieza por '*' no es func-ptr
+    if (ml.peek_at(off).kind != TokenKind::IDENTIFIER) return false;
+    ++off; // el nombre
+    if (ml.peek_at(off).kind != TokenKind::RPAREN) return false;
+    ++off; // ')'
+    if (ml.peek_at(off).kind != TokenKind::LPAREN) return false; // '(' de params
+    // Confirmado.  Consumir: '(' '*'... IDENT ')'.
+    (void)consume(); // '('
+    for (int i = 0; i < stars; ++i) (void)consume(); // '*'...
+    out_name = consume().lexeme;                      // nombre
+    (void)expect(TokenKind::RPAREN,
+                 "se esperaba ')' en el declarador de puntero a funcion");
+    (void)expect(TokenKind::LPAREN,
+                 "se esperaba '(' con los parametros del puntero a funcion");
+    auto fn = std::make_unique<ast::FunctionTypeNode>();
+    fn->loc = ret ? ret->loc : SourceLoc{};
+    fn->is_raw = true; // puntero a funcion crudo (cfn, 8 bytes)
+    fn->return_type = std::move(ret);
+    // Lista de parametros: tipos separados por coma.  Aceptamos `void` solo
+    // (C: sin parametros) descartandolo.  Nombres de parametro opcionales
+    // (estilo C `R (*f)(int a, int b)`) se ignoran.
+    if (!(current_.kind == TokenKind::KW_VOID &&
+          ml.peek_at(0).kind == TokenKind::RPAREN)) {
+        while (current_.kind != TokenKind::RPAREN &&
+               current_.kind != TokenKind::END_OF_FILE) {
+            auto pt = parse_type_node();
+            if (!pt) break;
+            // Nombre de parametro opcional (se descarta).
+            if (current_.kind == TokenKind::IDENTIFIER) (void)consume();
+            fn->param_types.push_back(std::move(pt));
+            if (!match(TokenKind::COMMA)) break;
+        }
+    } else {
+        (void)consume(); // 'void'
+    }
+    (void)expect(TokenKind::RPAREN,
+                 "se esperaba ')' al cerrar los parametros del puntero a "
+                 "funcion");
+    out_type = std::move(fn);
+    return true;
+}
+
+std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
+    const bool is_union = (current_.kind == TokenKind::KW_UNION);
+    const SourceLoc loc = current_.loc;
+    (void)consume(); // 'struct' / 'union'
+    // Tag opcional (ignorado): `struct _FOO { ... }`.
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        lex_.peek_at(0).kind == TokenKind::LBRACE) {
+        (void)consume();
+    }
+    (void)expect(TokenKind::LBRACE,
+                 "se esperaba '{' en el agregado anonimo");
+    auto s = std::make_unique<ast::StructDecl>();
+    s->loc = loc;
+    s->is_union = is_union;
+    s->name = "__anon" + std::to_string(anon_aggr_counter_++);
+    declared_structs_.insert(s->name);
+    // Cuerpo: campos `T name [array] [: bits] ;` + agregados anidados.
+    while (current_.kind != TokenKind::RBRACE &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        // Agregado anonimo anidado.
+        if ((current_.kind == TokenKind::KW_STRUCT ||
+             current_.kind == TokenKind::KW_UNION) &&
+            (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+             (lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+              lex_.peek_at(1).kind == TokenKind::LBRACE))) {
+            auto nested = parse_inline_anon_aggregate_();
+            const std::string nname = nested->name;
+            pending_before_decls_.push_back(std::move(nested));
+            ast::StructFieldDecl f;
+            f.loc = current_.loc;
+            auto nt = std::make_unique<ast::NamedTypeNode>();
+            nt->loc = f.loc;
+            nt->name = nname;
+            f.type = std::move(nt);
+            if (current_.kind == TokenKind::IDENTIFIER) {
+                f.name = consume().lexeme;
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+            } else {
+                f.is_anonymous = true;
+                f.name = nname;
+            }
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' tras el agregado anonimo");
+            s->fields.push_back(std::move(f));
+            continue;
+        }
+        if (!starts_type()) {
+            error_here("se esperaba un tipo de campo dentro del agregado");
+            synchronize();
+            continue;
+        }
+        ast::StructFieldDecl f;
+        f.loc = current_.loc;
+        f.type = parse_type_node();
+        if (!f.type) { synchronize(); continue; }
+        {
+            std::string fp_name;
+            std::unique_ptr<ast::TypeNode> fp_type;
+            if (try_parse_c_func_ptr_(f.type, fp_name, fp_type)) {
+                f.type = std::move(fp_type);
+                f.name = std::move(fp_name);
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+                (void)expect(TokenKind::SEMICOLON,
+                             "se esperaba ';' tras el campo puntero a funcion");
+                s->fields.push_back(std::move(f));
+                continue;
+            }
+        }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un nombre de campo tras el tipo");
+            synchronize();
+            continue;
+        }
+        // Clon del tipo BASE para el multi-declarador C `T a, b, c;`.
+        auto anon_base_clone = clone_type_node_td_(f.type.get());
+        f.name = consume().lexeme;
+        if (current_.kind == TokenKind::LBRACKET)
+            f.type = wrap_c_array_dims_(std::move(f.type));
+        if (current_.kind == TokenKind::COLON) {
+            (void)consume();
+            if (current_.kind == TokenKind::INT_LIT) {
+                f.bit_width = (uint8_t)current_.int_val;
+                (void)consume();
+            }
+        }
+        s->fields.push_back(std::move(f));
+        // Multi-declarador C `T a, b, c;` dentro del agregado anonimo inline.
+        while (current_.kind == TokenKind::COMMA) {
+            (void)consume(); // ','
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba el nombre del campo tras ','");
+                break;
+            }
+            ast::StructFieldDecl g;
+            g.loc = current_.loc;
+            g.type = clone_type_node_td_(anon_base_clone.get());
+            g.name = consume().lexeme;
+            if (current_.kind == TokenKind::LBRACKET)
+                g.type = wrap_c_array_dims_(std::move(g.type));
+            if (current_.kind == TokenKind::COLON) {
+                (void)consume();
+                if (current_.kind == TokenKind::INT_LIT) {
+                    g.bit_width = (uint8_t)current_.int_val;
+                    (void)consume();
+                }
+            }
+            s->fields.push_back(std::move(g));
+        }
+        (void)expect(TokenKind::SEMICOLON,
+                     "se esperaba ';' al final del campo");
+    }
+    (void)expect(TokenKind::RBRACE,
+                 "se esperaba '}' al cerrar el agregado anonimo");
+    return s;
+}
+
+std::unique_ptr<ast::TypeNode>
+Parser::wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base) {
+    std::vector<std::unique_ptr<ast::Expr>> dims; // null => [] sin acotar
+    while (current_.kind == TokenKind::LBRACKET) {
+        (void)consume(); // '['
+        std::unique_ptr<ast::Expr> n;
+        if (current_.kind != TokenKind::RBRACKET) n = parse_expr();
+        (void)expect(TokenKind::RBRACKET,
+                     "se esperaba ']' en la dimension del array");
+        dims.push_back(std::move(n));
+    }
+    // Envolver de la ULTIMA dimension a la PRIMERA (el primer `[` = mas externo).
+    for (auto it = dims.rbegin(); it != dims.rend(); ++it) {
+        auto arr = std::make_unique<ast::ArrayTypeNode>();
+        arr->loc = base ? base->loc : SourceLoc{};
+        arr->element_type = std::move(base);
+        arr->size_expr = std::move(*it);
+        base = std::move(arr);
+    }
+    return base;
+}
+
+void Parser::parse_c_typedef_ptr_aliases_(const ast::TypeNode *base) {
+    // Se entra con current_ == ','.  Cada iteracion: `, [*]* NOMBRE`.
+    while (current_.kind == TokenKind::COMMA) {
+        (void)consume(); // ','
+        int stars = 0;
+        while (current_.kind == TokenKind::STAR) {
+            (void)consume();
+            ++stars;
+        }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un nombre de alias tras ',' en el typedef");
+            break;
+        }
+        const SourceLoc nloc = current_.loc;
+        const std::string alias_name = consume().lexeme;
+        // Construir el tipo: base clonado + `stars` niveles de puntero.
+        std::unique_ptr<ast::TypeNode> ty = clone_type_node_td_(base);
+        if (!ty) {
+            error_here("typedef C-style: tipo base no clonable para el alias");
+            break;
+        }
+        for (int i = 0; i < stars; ++i) {
+            auto p = std::make_unique<ast::PointerTypeNode>();
+            p->loc = nloc;
+            p->pointee = std::move(ty);
+            ty = std::move(p);
+        }
+        auto a = std::make_unique<ast::TypeAliasDecl>();
+        a->loc = nloc;
+        a->is_using_form = false;
+        a->name = alias_name;
+        a->aliased = std::move(ty);
+        // Misma visibilidad que el typedef primario (pending_visibility_ sigue
+        // vigente; apply_pending_visibility no lo limpia).
+        apply_pending_visibility(a.get());
+        declared_aliases_.insert(alias_name);
+        pending_extra_decls_.push_back(std::move(a));
+    }
+}
+
+std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum(
+    bool leading_typedef) {
     // Sintaxis C: `typedef struct { ... } Name;` y
     // `typedef enum { ... } Name;`.  Tag opcional tras struct/enum:
     // `typedef struct Tag { ... } Name;` (Tag se ignora; usamos Name).
+    // Cuando leading_typedef=false se acepta la forma sin la palabra `typedef`:
+    // `struct { ... } Name, *PName;` (struct C-tagless con el nombre al final).
     const SourceLoc loc_td = current_.loc;
-    (void)consume(); // 'typedef'
+    if (leading_typedef) (void)consume(); // 'typedef'
 
-    const bool is_struct = (current_.kind == TokenKind::KW_STRUCT);
-    (void)consume(); // 'struct' o 'enum'
+    const bool is_union = (current_.kind == TokenKind::KW_UNION);
+    const bool is_struct =
+        (current_.kind == TokenKind::KW_STRUCT) || is_union;
+    const bool is_enum = !is_struct;
+    (void)consume(); // 'struct' / 'union' / 'enum'
 
-    // Tag opcional (ignorado; el name real va al final).
+    // Struct OPACO (forward-decl sin cuerpo): `typedef struct Tag *P, *LP;`.
+    // Idioma C de handle opaco.  Se registra `Tag` como un struct INCOMPLETO
+    // (sin campos; completable mas tarde definiendo `struct Tag { ... }` que
+    // sobrescribe el layout) y se crean los typedefs de puntero (`P = Tag*`).
+    // Un puntero a incompleto es valido (8 bytes); derefenciarlo sin completar
+    // falla naturalmente (no tiene campos).
+    if (is_struct && current_.kind == TokenKind::IDENTIFIER &&
+        lex_.peek_at(0).kind == TokenKind::STAR) {
+        const SourceLoc tag_loc = current_.loc;
+        const std::string tag = consume().lexeme;
+        declared_structs_.insert(tag);
+        auto incomplete = std::make_unique<ast::StructDecl>();
+        incomplete->loc = loc_td;
+        incomplete->name = tag;
+        incomplete->is_incomplete = true;
+        // Base = `Tag`; parsear el PRIMER alias `[*]+ NAME` (empieza con `*`) y
+        // luego el resto `, *NAME` con el helper compartido.
+        auto base = std::make_unique<ast::NamedTypeNode>();
+        base->loc = tag_loc;
+        base->name = tag;
+        int stars = 0;
+        while (current_.kind == TokenKind::STAR) { (void)consume(); ++stars; }
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del alias de puntero tras "
+                       "'typedef struct Tag *'");
+        } else {
+            const SourceLoc nloc = current_.loc;
+            const std::string alias_name = consume().lexeme;
+            std::unique_ptr<ast::TypeNode> ty = clone_type_node_td_(base.get());
+            for (int i = 0; i < stars; ++i) {
+                auto p = std::make_unique<ast::PointerTypeNode>();
+                p->loc = nloc;
+                p->pointee = std::move(ty);
+                ty = std::move(p);
+            }
+            auto a = std::make_unique<ast::TypeAliasDecl>();
+            a->loc = nloc;
+            a->is_using_form = false;
+            a->name = alias_name;
+            a->aliased = std::move(ty);
+            apply_pending_visibility(a.get());
+            declared_aliases_.insert(alias_name);
+            pending_extra_decls_.push_back(std::move(a));
+        }
+        if (current_.kind == TokenKind::COMMA)
+            parse_c_typedef_ptr_aliases_(base.get());
+        (void)expect(TokenKind::SEMICOLON,
+                     "se esperaba ';' al final del typedef de struct opaco");
+        return incomplete;
+    }
+
+    // Tag opcional (ignorado; el name real va al final).  En un enum C-style
+    // el tag puede ir seguido de `{` o de `:` (tipo base): `typedef enum Tag :
+    // int { ... } Name;`.
     if (current_.kind == TokenKind::IDENTIFIER &&
-        lex_.peek_at(0).kind == TokenKind::LBRACE) {
+        (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+         (is_enum && lex_.peek_at(0).kind == TokenKind::COLON))) {
         (void)consume(); // skip tag
+    }
+
+    // Tipo base opcional del enum C-style: `typedef enum : u8 { ... } Name;`.
+    // Si no se especifica un `: tipo`, el enum sigue siendo un conjunto de
+    // constantes enteras (NO una tagged union), pero su ancho se INFIERE del
+    // rango de valores en el type checker (marca c_style_auto_backing), imitando
+    // C: `int`/i32 si todo cabe, ensanchando a u32/i64/u64 si algun valor no
+    // cabe.  Esto evita el desbordamiento silencioso de fijar i32 (p.ej. valores
+    // 0xFFFFFFFF o de 64 bits).
+    std::string enum_backing;
+    bool enum_auto_backing = false;
+    if (is_enum) {
+        if (current_.kind == TokenKind::COLON) {
+            (void)consume(); // ':'
+            auto bt = parse_type_node();
+            if (bt && bt->kind == ast::NodeKind::PrimitiveTypeNode) {
+                auto *pt = static_cast<ast::PrimitiveTypeNode *>(bt.get());
+                enum_backing = primitive_name(pt->prim);
+            } else if (bt && bt->kind == ast::NodeKind::NamedTypeNode) {
+                enum_backing = static_cast<ast::NamedTypeNode *>(bt.get())->name;
+            } else {
+                error_here("el tipo base de un enum debe ser un entero "
+                           "(u8/.../i64)");
+            }
+        } else {
+            enum_auto_backing = true;
+        }
     }
 
     if (current_.kind != TokenKind::LBRACE) {
@@ -2371,9 +3527,38 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
     if (is_struct) {
         auto s = std::make_unique<ast::StructDecl>();
         s->loc = loc_td;
+        s->is_union = is_union;
         // Reusar logica de parse_struct_decl (cuerpo del struct).
         while (current_.kind != TokenKind::RBRACE &&
                current_.kind != TokenKind::END_OF_FILE) {
+            // Agregado anonimo inline dentro del typedef struct/union.
+            if ((current_.kind == TokenKind::KW_STRUCT ||
+                 current_.kind == TokenKind::KW_UNION) &&
+                (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+                 (lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+                  lex_.peek_at(1).kind == TokenKind::LBRACE))) {
+                auto anon = parse_inline_anon_aggregate_();
+                const std::string anon_name = anon->name;
+                pending_before_decls_.push_back(std::move(anon));
+                ast::StructFieldDecl f;
+                f.loc = current_.loc;
+                auto nt = std::make_unique<ast::NamedTypeNode>();
+                nt->loc = f.loc;
+                nt->name = anon_name;
+                f.type = std::move(nt);
+                if (current_.kind == TokenKind::IDENTIFIER) {
+                    f.name = consume().lexeme;
+                    if (current_.kind == TokenKind::LBRACKET)
+                        f.type = wrap_c_array_dims_(std::move(f.type));
+                } else {
+                    f.is_anonymous = true;
+                    f.name = anon_name;
+                }
+                (void)expect(TokenKind::SEMICOLON,
+                             "se esperaba ';' tras el agregado anonimo");
+                s->fields.push_back(std::move(f));
+                continue;
+            }
             if (!starts_type()) {
                 error_here("se esperaba un tipo de campo dentro del struct");
                 synchronize();
@@ -2386,12 +3571,33 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
                 synchronize();
                 continue;
             }
+            {
+                std::string fp_name;
+                std::unique_ptr<ast::TypeNode> fp_type;
+                if (try_parse_c_func_ptr_(f.type, fp_name, fp_type)) {
+                    f.type = std::move(fp_type);
+                    f.name = std::move(fp_name);
+                    if (current_.kind == TokenKind::LBRACKET)
+                        f.type = wrap_c_array_dims_(std::move(f.type));
+                    (void)expect(
+                        TokenKind::SEMICOLON,
+                        "se esperaba ';' tras el campo puntero a funcion");
+                    s->fields.push_back(std::move(f));
+                    continue;
+                }
+            }
             if (current_.kind != TokenKind::IDENTIFIER) {
                 error_here("se esperaba un nombre de campo tras el tipo");
                 synchronize();
                 continue;
             }
+            // Clon del tipo BASE para el multi-declarador C `T a, b, c;`.
+            auto base_type_clone = clone_type_node_td_(f.type.get());
             f.name = consume().lexeme;
+            // Array C-style `T name[N][M]` (uni/multidimensional).
+            if (current_.kind == TokenKind::LBRACKET) {
+                f.type = wrap_c_array_dims_(std::move(f.type));
+            }
             if (current_.kind == TokenKind::COLON) {
                 (void)consume();
                 if (current_.kind == TokenKind::INT_LIT) {
@@ -2399,9 +3605,32 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
                     (void)consume();
                 }
             }
+            s->fields.push_back(std::move(f));
+            // Multi-declarador C `T a, b, c;` en el cuerpo del typedef struct.
+            while (current_.kind == TokenKind::COMMA) {
+                (void)consume(); // ','
+                if (current_.kind != TokenKind::IDENTIFIER) {
+                    error_here("se esperaba el nombre del campo tras ','");
+                    break;
+                }
+                ast::StructFieldDecl g;
+                g.loc = current_.loc;
+                g.type = clone_type_node_td_(base_type_clone.get());
+                g.name = consume().lexeme;
+                if (current_.kind == TokenKind::LBRACKET) {
+                    g.type = wrap_c_array_dims_(std::move(g.type));
+                }
+                if (current_.kind == TokenKind::COLON) {
+                    (void)consume();
+                    if (current_.kind == TokenKind::INT_LIT) {
+                        g.bit_width = (uint8_t)current_.int_val;
+                        (void)consume();
+                    }
+                }
+                s->fields.push_back(std::move(g));
+            }
             (void)expect(TokenKind::SEMICOLON,
                          "se esperaba ';' al final del campo");
-            s->fields.push_back(std::move(f));
         }
         (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
         if (current_.kind != TokenKind::IDENTIFIER) {
@@ -2409,6 +3638,13 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
             return nullptr;
         }
         s->name = consume().lexeme;
+        // `typedef struct {...} FOO, *PFOO;`: alias de puntero a la estructura.
+        if (current_.kind == TokenKind::COMMA) {
+            auto base = std::make_unique<ast::NamedTypeNode>();
+            base->loc = s->loc;
+            base->name = s->name;
+            parse_c_typedef_ptr_aliases_(base.get());
+        }
         (void)expect(TokenKind::SEMICOLON,
                      "se esperaba ';' al final del typedef");
         return s;
@@ -2416,6 +3652,8 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
     // typedef enum { ... } Name;
     auto e = std::make_unique<ast::EnumDecl>();
     e->loc = loc_td;
+    e->backing_type = enum_backing;             // vacio si se infiere.
+    e->c_style_auto_backing = enum_auto_backing; // C-style: infiere el ancho.
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
         ast::EnumVariantDecl v;
@@ -2437,6 +3675,11 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar payload");
+        } else if (current_.kind == TokenKind::ASSIGN) {
+            // C-style: valor entero explicito `A = 0x01`.  El checker lo pliega
+            // a constante del tipo base y auto-incrementa los siguientes.
+            (void)consume(); // '='
+            v.value_expr = parse_expr();
         }
         e->variants.push_back(std::move(v));
         if (!match(TokenKind::COMMA)) break;
@@ -2447,6 +3690,13 @@ std::unique_ptr<ast::Node> Parser::parse_typedef_struct_or_enum() {
         return nullptr;
     }
     e->name = consume().lexeme;
+    // `typedef enum {...} FOO, *PFOO;`: alias de puntero al enum.
+    if (current_.kind == TokenKind::COMMA) {
+        auto base = std::make_unique<ast::NamedTypeNode>();
+        base->loc = e->loc;
+        base->name = e->name;
+        parse_c_typedef_ptr_aliases_(base.get());
+    }
     (void)expect(TokenKind::SEMICOLON, "se esperaba ';' al final del typedef");
     return e;
 }
@@ -2464,8 +3714,24 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
     a->aliased = parse_type_node();
     if (!a->aliased) return nullptr;
 
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo en 'typedef'");
+    // typedef de PUNTERO A FUNCION C: `typedef R (*NAME)(params);`.
+    {
+        std::string fp_name;
+        std::unique_ptr<ast::TypeNode> fp_type;
+        if (try_parse_c_func_ptr_(a->aliased, fp_name, fp_type)) {
+            a->name = std::move(fp_name);
+            a->aliased = std::move(fp_type);
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' al final del typedef de puntero a "
+                         "funcion");
+            declared_aliases_.insert(a->name);
+            return a;
+        }
+    }
+
+    if (!is_name_token(current_.kind)) {
+        error_expected_name("nombre de tipo en 'typedef'",
+                            "se esperaba un nombre tras el tipo en 'typedef'");
         return nullptr;
     }
     a->name = consume().lexeme;
@@ -2571,6 +3837,12 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
             return a;
         }
     }
+    // typedef C-style multi-declarador: `typedef LONG *PLONG, *LPLONG;`.
+    // El primer alias (a) ya esta parseado (aliased puede incluir sus '*').
+    // Para los siguientes el tipo base es `aliased` SIN sus punteros.
+    if (current_.kind == TokenKind::COMMA) {
+        parse_c_typedef_ptr_aliases_(strip_pointers_td_(a->aliased.get()));
+    }
     (void)expect(TokenKind::SEMICOLON, "se esperaba ';' al final de 'typedef'");
     // Item 19: registrar alias para que `looks_like_cast` lo reconozca
     // en `(MyTypedef) x`.
@@ -2604,7 +3876,7 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_using_decl() {
 }
 
 // -----------------------------------------------------------------
-// import: declaracion de importacion de modulo (Phase M).
+// import: declaracion de importacion de modulo ( M).
 //
 // Sintaxis aceptada:
 //   import "path";
@@ -2629,7 +3901,7 @@ Parser::parse_import_decl(bool is_public_reexport) {
 
     (void)consume(); // 'import'
 
-    // Phase NS.2-full: dos formas de import.
+    //  NS.2-full: dos formas de import.
     //   (a) por-PATH:      import "editor/buffer";   (literal string)
     //   (b) por-NAMESPACE: import a.b.c;             (identificadores punteados)
     // La forma (b) resuelve el namespace a fichero via el indice de
@@ -2679,6 +3951,14 @@ Parser::parse_import_decl(bool is_public_reexport) {
                     }
                     os.rename = consume().lexeme;
                 }
+                // Registrar el nombre efectivo (rename o name) como posible
+                // type-alias para que `looks_like_cast` reconozca `(T) x`
+                // cuando T es un typedef importado de otro modulo (p.ej.
+                // `uintptr` de std.types).  El guard de looks_like_cast (el
+                // token tras `)` debe iniciar una expresion) evita misparsear
+                // `(fn_importada)(args)`.
+                declared_aliases_.insert(os.rename.empty() ? os.name
+                                                           : os.rename);
                 im->only_symbols.push_back(std::move(os));
                 if (current_.kind == TokenKind::COMMA) {
                     (void)consume();
@@ -2726,6 +4006,10 @@ Parser::parse_import_decl(bool is_public_reexport) {
                 }
                 os.rename = consume().lexeme;
             }
+            // Ver nota en la forma selectiva `.{...}`: el nombre efectivo se
+            // registra como posible type-alias para reconocer `(T) x` con T
+            // importado (typedef cross-modulo, p.ej. `uintptr`).
+            declared_aliases_.insert(os.rename.empty() ? os.name : os.rename);
             im->only_symbols.push_back(std::move(os));
             if (current_.kind == TokenKind::COMMA) {
                 (void)consume();
@@ -2740,7 +4024,7 @@ Parser::parse_import_decl(bool is_public_reexport) {
 }
 
 // -----------------------------------------------------------------
-// namespace: agrupacion inline estilo C++ (Phase M.7.c).
+// namespace: agrupacion inline estilo C++ ( M.7.c).
 //
 //   namespace foo {
 //       class Button { ... }
@@ -2760,7 +4044,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     ns->loc = current_.loc;
     (void)consume(); // 'namespace'
 
-    // Phase NS.1: nombre con PATH punteado (a.b.c).  Se almacena como texto
+    //  NS.1: nombre con PATH punteado (a.b.c).  Se almacena como texto
     // punteado en @c name; el mangling posterior lo parte por '.' y une con
     // '__' (std.collections -> std__collections).
     if (current_.kind != TokenKind::IDENTIFIER) {
@@ -2780,7 +4064,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     }
     ns->name = path;
 
-    // Phase NS.3: override opcional de PackageId: `namespace X @id("...")`.
+    //  NS.3: override opcional de PackageId: `namespace X @id("...")`.
     // Permite renombrar el namespace manteniendo la identidad ABI.
     if (current_.kind == TokenKind::AT &&
         lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
@@ -2798,7 +4082,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
         (void)expect(TokenKind::RPAREN, "se esperaba ')' tras el id de '@id'");
     }
 
-    // Phase NS.1: forma STATEMENT `namespace a.b.c;` -- aplica al RESTO del
+    //  NS.1: forma STATEMENT `namespace a.b.c;` -- aplica al RESTO del
     // fichero (recoge las decls top-level siguientes hasta el proximo
     // `namespace` statement o EOF).  La forma BLOQUE `namespace a.b.c { ... }`
     // acota las decls con llaves (permite varios namespaces por fichero y
@@ -2833,8 +4117,15 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
                 continue;
             }
             // NS.2: exportar plantillas/concepts namespaced cross-module.
+            for (auto &b : pending_before_decls_)
+                ns->decls.push_back(std::move(b));
+            pending_before_decls_.clear();
             collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
             ns->decls.push_back(std::move(inner));
+            // Drenar aliases extra de un typedef C-style multi-declarador.
+            for (auto &e : pending_extra_decls_)
+                ns->decls.push_back(std::move(e));
+            pending_extra_decls_.clear();
         }
         return ns;
     }
@@ -2871,7 +4162,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
 }
 
 // -----------------------------------------------------------------
-// bytes: bloque de datos crudos estilo NASM (Phase AOT).
+// bytes: bloque de datos crudos estilo NASM ( AOT).
 //
 //   bytes name {
 //       db 0x55, 'A', "texto"     ; 1 byte por operando (string -> bytes)
@@ -3106,7 +4397,7 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_bytes_decl() {
 }
 
 // -----------------------------------------------------------------
-// asm: bloque de codigo NASM ensamblado por Keystone (Phase AOT 16/32-bit).
+// asm: bloque de codigo NASM ensamblado por Keystone ( AOT 16/32-bit).
 //
 //   @bits(16) @section(".boot","rx")
 //   asm boot {
@@ -3217,6 +4508,24 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
         parse_where_clause(e->type_bounds);
     }
 
+    // C-style: tipo base opcional `enum Op : u8 { ... }` -> enum con VALOR
+    // entero (las variantes son constantes del tipo base, no una tagged union).
+    if (current_.kind == TokenKind::COLON) {
+        (void)consume(); // ':'
+        auto bt = parse_type_node();
+        if (bt && bt->kind == ast::NodeKind::PrimitiveTypeNode) {
+            auto *pt = static_cast<ast::PrimitiveTypeNode *>(bt.get());
+            e->backing_type = primitive_name(pt->prim);
+        } else if (bt && bt->kind == ast::NodeKind::NamedTypeNode) {
+            // Backing de tipo de USUARIO (struct/clase): cada variante es una
+            // constante de ese tipo.  El checker valida que exista.
+            e->backing_type = static_cast<ast::NamedTypeNode *>(bt.get())->name;
+        } else {
+            error_here("el tipo base de un enum debe ser un entero, float, "
+                       "string, o un struct/clase (u8/.../f64/string/Nombre)");
+        }
+    }
+
     (void)expect(TokenKind::LBRACE,
                  "se esperaba '{' al abrir el cuerpo del enum");
 
@@ -3242,6 +4551,11 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
             }
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar payload de variante");
+        } else if (current_.kind == TokenKind::ASSIGN) {
+            // C-style: valor entero explicito `A = 0x01`.  Solo para enums con
+            // tipo base; el checker lo pliega a constante y valida.
+            (void)consume(); // '='
+            v.value_expr = parse_expr();
         }
         e->variants.push_back(std::move(v));
         // Coma separadora (con coma trailing opcional gracias al check
@@ -3249,6 +4563,19 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
         if (!match(TokenKind::COMMA)) break;
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el enum");
+    // C-style directo `enum Name { A = 0, B }` (sin `: tipo`, sin payloads):
+    // si alguna variante lleva valor entero explicito, es un enum de valores
+    // (no una tagged union).  Se marca c_style_auto_backing para que el checker
+    // infiera el ancho del backing (i32/u32/i64) igual que en `typedef enum`.
+    // Un `enum Color { Red, Green }` SIN valores sigue siendo ADT.
+    if (e->backing_type.empty() && e->type_params.empty()) {
+        bool any_value = false, any_payload = false;
+        for (const auto &v : e->variants) {
+            if (v.value_expr) any_value = true;
+            if (!v.field_types.empty()) any_payload = true;
+        }
+        if (any_value && !any_payload) e->c_style_auto_backing = true;
+    }
     return e;
 }
 
@@ -3274,7 +4601,16 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
     // parentesis (estilo Rust).  Esto permite tanto:
     //   match x { ... }
     //   match (x + 1) { ... }
-    m->scrutinee = parse_expr();
+    // Es el UNICO sitio del lenguaje donde una expresion no parentizada lleva
+    // un `{` pegado, asi que aqui el postfijo `{}` (sobrecarga de `__braces__`)
+    // se suprime: ese `{` abre el cuerpo del match.  Quien quiera un
+    // `a{...}` como scrutinee lo parentiza: `match (a{1,2}) { ... }`.
+    {
+        const bool prev_nb = no_braces_call_;
+        no_braces_call_ = true;
+        m->scrutinee = parse_expr();
+        no_braces_call_ = prev_nb;
+    }
     if (!m->scrutinee) return nullptr;
 
     (void)expect(TokenKind::LBRACE,
@@ -3297,6 +4633,90 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
         // el patron `Color.Red(...)`, pero internamente almacenamos solo
         // la parte tras el ultimo `.` ya que el match scrutinee fija el
         // tipo enum y el variant_name es suficiente.
+        //
+        // Patron de VALOR escalar (match sobre enteros/chars): `case 1 =>`,
+        // `case 'a' =>`, `case -3 =>`.  Se guarda en @c value_pattern y el arm
+        // NO lleva variant_name (queda vacio).  El type checker exige scrutinee
+        // entero/char.
+        const bool is_neg_int = (current_.kind == TokenKind::MINUS &&
+                                 lex_.peek_at(0).kind == TokenKind::INT_LIT);
+        const bool is_str_pat = (current_.kind == TokenKind::STRING_LIT ||
+                                 current_.kind == TokenKind::RAW_STRING_LIT);
+        const bool is_value_pat = (current_.kind == TokenKind::INT_LIT ||
+                                   current_.kind == TokenKind::CHAR_LIT ||
+                                   is_neg_int || is_str_pat);
+        if (is_value_pat) {
+            if (is_str_pat) {
+                auto lit = std::make_unique<ast::StringLitExpr>();
+                lit->loc = current_.loc;
+                lit->is_raw = (current_.kind == TokenKind::RAW_STRING_LIT);
+                lit->value = current_.str_val;
+                (void)consume();
+                arm.value_pattern = std::move(lit);
+            } else if (is_neg_int) {
+                SourceLoc mloc = current_.loc;
+                (void)consume(); // '-'
+                auto lit = std::make_unique<ast::IntLitExpr>();
+                lit->loc = current_.loc;
+                lit->value = current_.int_val;
+                (void)consume(); // INT_LIT
+                auto neg = std::make_unique<ast::UnaryExpr>();
+                neg->loc = mloc;
+                neg->op = ast::UnOp::Neg;
+                neg->operand = std::move(lit);
+                arm.value_pattern = std::move(neg);
+            } else if (current_.kind == TokenKind::INT_LIT) {
+                auto lit = std::make_unique<ast::IntLitExpr>();
+                lit->loc = current_.loc;
+                lit->value = current_.int_val;
+                (void)consume();
+                arm.value_pattern = std::move(lit);
+            } else { // CHAR_LIT
+                auto lit = std::make_unique<ast::CharLitExpr>();
+                lit->loc = current_.loc;
+                lit->codepoint = (uint32_t)current_.int_val;
+                (void)consume();
+                arm.value_pattern = std::move(lit);
+            }
+            // Rango `case a..b =>` (exclusivo) / `case a..=b =>` (inclusivo).
+            // Solo enteros/chars (no strings).  El literal alto se parsea igual.
+            if (!is_str_pat && (current_.kind == TokenKind::DOTDOT ||
+                                current_.kind == TokenKind::DOTDOTEQ)) {
+                arm.range_inclusive = (current_.kind == TokenKind::DOTDOTEQ);
+                (void)consume(); // '..' o '..='
+                if (current_.kind == TokenKind::MINUS &&
+                    lex_.peek_at(0).kind == TokenKind::INT_LIT) {
+                    SourceLoc mloc = current_.loc;
+                    (void)consume();
+                    auto lit = std::make_unique<ast::IntLitExpr>();
+                    lit->loc = current_.loc;
+                    lit->value = current_.int_val;
+                    (void)consume();
+                    auto neg = std::make_unique<ast::UnaryExpr>();
+                    neg->loc = mloc;
+                    neg->op = ast::UnOp::Neg;
+                    neg->operand = std::move(lit);
+                    arm.value_pattern_hi = std::move(neg);
+                } else if (current_.kind == TokenKind::INT_LIT) {
+                    auto lit = std::make_unique<ast::IntLitExpr>();
+                    lit->loc = current_.loc;
+                    lit->value = current_.int_val;
+                    (void)consume();
+                    arm.value_pattern_hi = std::move(lit);
+                } else if (current_.kind == TokenKind::CHAR_LIT) {
+                    auto lit = std::make_unique<ast::CharLitExpr>();
+                    lit->loc = current_.loc;
+                    lit->codepoint = (uint32_t)current_.int_val;
+                    (void)consume();
+                    arm.value_pattern_hi = std::move(lit);
+                } else {
+                    error_here("se esperaba un literal entero/char tras "
+                               "'..' / '..=' en el rango del case");
+                }
+            }
+            // Cae al flujo compartido de guard + `=>` + body (variant_name
+            // queda vacio: es un arm de VALOR, no de variante ni default).
+        } else {
         if (current_.kind != TokenKind::IDENTIFIER) {
             error_here("se esperaba un nombre de variante o '_' tras 'case'");
             synchronize();
@@ -3330,6 +4750,7 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar bindings del patron");
         }
+        } // fin del path de variante ADT (else del patron de valor)
         // Bug fix 2026-05-23: match guards `case Pat if cond =>`.
         // Tras parsear el patron (con o sin bindings), aceptar `if expr`
         // opcional antes del `=>`.  La expr se guarda en @c arm.guard
@@ -3370,9 +4791,13 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
     return m;
 }
 
-std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
+std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
     auto s = std::make_unique<ast::StructDecl>();
     s->loc = current_.loc;
+    // Overlay: fijarlo YA (antes de los campos) para que el parseo de campos vea
+    // `s->is_overlay` (arrays `[count]` + `stride(...)`).  El call site tambien
+    // lo re-asegura tras el return.
+    s->is_overlay = is_overlay;
     (void)consume(); // 'struct'
 
     if (current_.kind != TokenKind::IDENTIFIER) {
@@ -3380,6 +4805,9 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
         return nullptr;
     }
     s->name = consume().lexeme;
+    // Registrar el nombre para que `looks_like_compound_literal` distinga
+    // `(Struct){...}` de un scrutinee `match (val) {`.
+    declared_structs_.insert(s->name);
     // Genericos opcionales `<T>`, `<K, V>` tras el nombre.  Mismo patron que
     // parse_class_decl / parse_enum_decl: cada parametro es un identificador;
     // el struct se trata como plantilla y se monomorphiza en cada uso
@@ -3405,6 +4833,18 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
 
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
+        // Contratos de huella declarados sobre el metodo, antes del acceso:
+        //
+        //     @pure @nothrow @nopanic @alloc(0) @stack(0) @complexity(O(1))
+        //     public i64 leer() { ... }
+        //
+        // Un metodo hace lo mismo que una funcion libre con un argumento mas.
+        // Sin esto, un tipo cuya API son METODOS no podia declarar sus
+        // propiedades aunque el compilador supiera verificarlas -- y una
+        // libreria estandar que no declara los contratos que el lenguaje ofrece
+        // esta diciendo lo contrario de lo que hace.
+        MemberContracts mc;
+        parse_member_contracts_(mc);
         // Modificadores de acceso opcionales en el miembro.  Los
         // structs son flat: aceptamos public/private (informativo;
         // sin enforcement por ahora) pero NO static/final/virtual.
@@ -3448,6 +4888,38 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             continue;
         }
 
+        // Agregado ANONIMO inline (`struct { ... } campo;` o miembro C11
+        // `union { ... };`).  Se emite como struct sintetico top-level y el
+        // campo lo referencia; sin nombre de campo -> miembro anonimo (aplanado).
+        if ((current_.kind == TokenKind::KW_STRUCT ||
+             current_.kind == TokenKind::KW_UNION) &&
+            (lex_.peek_at(0).kind == TokenKind::LBRACE ||
+             (lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+              lex_.peek_at(1).kind == TokenKind::LBRACE))) {
+            auto anon = parse_inline_anon_aggregate_();
+            const std::string anon_name = anon->name;
+            pending_before_decls_.push_back(std::move(anon));
+            ast::StructFieldDecl f;
+            f.loc = current_.loc;
+            auto nt = std::make_unique<ast::NamedTypeNode>();
+            nt->loc = f.loc;
+            nt->name = anon_name;
+            f.type = std::move(nt);
+            if (current_.kind == TokenKind::IDENTIFIER) {
+                f.name = consume().lexeme;
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+            } else {
+                // Miembro anonimo C11: sus campos se aplanan en este struct.
+                f.is_anonymous = true;
+                f.name = anon_name;
+            }
+            (void)expect(TokenKind::SEMICOLON,
+                         "se esperaba ';' tras el agregado anonimo");
+            s->fields.push_back(std::move(f));
+            continue;
+        }
+
         if (!starts_type()) {
             error_here("se esperaba un tipo de campo o metodo dentro del "
                        "struct");
@@ -3460,16 +4932,33 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             synchronize();
             continue;
         }
+        // Puntero a funcion estilo C como campo: `R (*name)(params);`.
+        {
+            std::string fp_name;
+            std::unique_ptr<ast::TypeNode> fp_type;
+            if (try_parse_c_func_ptr_(type_node, fp_name, fp_type)) {
+                ast::StructFieldDecl f;
+                f.loc = mloc;
+                f.type = std::move(fp_type);
+                f.name = std::move(fp_name);
+                if (current_.kind == TokenKind::LBRACKET)
+                    f.type = wrap_c_array_dims_(std::move(f.type));
+                (void)expect(TokenKind::SEMICOLON,
+                             "se esperaba ';' tras el campo puntero a funcion");
+                s->fields.push_back(std::move(f));
+                continue;
+            }
+        }
         // El nombre del miembro puede ser un IDENTIFIER o los keywords
         // contextuales `get`/`set`: aqui YA parseamos un tipo, asi que esto es
         // la forma `<tipo> <nombre>(...)` (campo o metodo), nunca una property
         // (que se detecta ANTES, sin tipo previo).  Permitir `get`/`set` como
         // nombre de metodo/campo (p.ej. `T get()`) evita rechazarlos por
         // colisionar con los keywords de property.
-        if (current_.kind != TokenKind::IDENTIFIER &&
-            current_.kind != TokenKind::KW_GET &&
-            current_.kind != TokenKind::KW_SET) {
-            error_here("se esperaba un nombre de campo o metodo tras el tipo");
+        if (!is_name_token(current_.kind)) {
+            error_expected_name(
+                "nombre de campo o metodo",
+                "se esperaba un nombre de campo o metodo tras el tipo");
             synchronize();
             continue;
         }
@@ -3529,6 +5018,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
             const auto temp_aliases = register_temp_type_aliases(all_tp);
             m->body = parse_method_body(/*is_void=*/false);
             unregister_temp_type_aliases(temp_aliases);
+            apply_member_contracts_(mc, *m);
             s->methods.push_back(std::move(m));
             continue;
         }
@@ -3536,8 +5026,28 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
         // Campo.  Reusa el manejo de bit fields del codigo previo.
         ast::StructFieldDecl f;
         f.loc = mloc;
+        // Clon del tipo BASE (sin dims de array) para el multi-declarador C
+        // `T a, b, c;`: cada declarador extra reutiliza el mismo tipo base.
+        auto base_type_clone = clone_type_node_td_(type_node.get());
         f.type = std::move(type_node);
         f.name = std::move(member_name);
+        // Overlay F3b ARRAY: `T Name[count] ...`.  El `[count]` va tras el
+        // nombre (estilo C).  El tipo del campo es el tipo del ELEMENTO.
+        if (s->is_overlay && current_.kind == TokenKind::LBRACKET) {
+            (void)consume(); // '['
+            f.is_array = true;
+            // Count OPCIONAL: `T Name[]` (no acotado; el usuario termina el
+            // bucle, p.ej. al leer una entrada nula) o `T Name[count]`.
+            if (current_.kind != TokenKind::RBRACKET) {
+                f.array_count = parse_expr();
+            }
+            (void)expect(TokenKind::RBRACKET,
+                         "se esperaba ']' tras el count del array de overlay");
+        } else if (current_.kind == TokenKind::LBRACKET) {
+            // Array de campo C-style `T name[N][M]` (uni/multidimensional):
+            // el tipo del campo pasa a ser `T[N][M]`.
+            f.type = wrap_c_array_dims_(std::move(f.type));
+        }
         // Bit field width: `i32 flag : 3;`.  El bit_width
         // se guarda en el AST y el type checker calcula el packing.
         if (current_.kind == TokenKind::COLON) {
@@ -3555,9 +5065,128 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
                 (void)consume();
             }
         }
+        // Overlay: offset del campo.  `@0x30` (atajo constante), `@offset(0x30)`
+        // (constante) o `@offset(expr)` (F2: expresion que puede referenciar
+        // campos hermanos, `@offset(prev + 0x10)`).  El caso puramente constante
+        // se pliega a explicit_offset; el resto va a offset_expr.
+        while (current_.kind == TokenKind::AT) {
+            (void)consume(); // '@'
+            if (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "endian") {
+                // Overlay ENDIANNESS (F5): `@endian(expr)` -- la expr (nonzero =
+                // big-endian) decide el orden de bytes.  Es la UNICA forma:
+                //   fijo big:     @endian(true)
+                //   fijo little:  @endian(false)   (o sin @endian = nativo)
+                //   por contexto: @endian(self.ei_data == 2)  (ELF), comptime, ...
+                // Si la expr es comptime, el swap condicional se pliega (cero
+                // coste); si es runtime, es un select sin ramas.
+                (void)consume(); // 'endian'
+                (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @endian");
+                f.endian_expr = parse_expr();
+                (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @endian(expr)");
+            } else if (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "element") {
+                // Overlay array POR-ELEMENTO: `T Name[c] @element { ...; return
+                // <dir del elemento index>; }`.  Solo valido en un array.
+                (void)consume(); // 'element'
+                if (!f.is_array) {
+                    error_here("@element solo es valido en un campo array "
+                               "(`T Name[] @element { ... }`)");
+                }
+                if (current_.kind == TokenKind::LBRACE) {
+                    f.element_block = parse_block();
+                } else {
+                    error_here("se esperaba '{' tras @element");
+                }
+            } else if (current_.kind == TokenKind::IDENTIFIER &&
+                current_.lexeme == "offset") {
+                (void)consume(); // 'offset'
+                if (current_.kind == TokenKind::LBRACE) {
+                    // F3: resolver de BLOQUE `@offset { ...; return <dir>; }`.
+                    // Puede tener `let` locales + referenciar campos hermanos y
+                    // `base`; devuelve la DIRECCION final.
+                    f.offset_block = parse_block();
+                } else {
+                    (void)expect(TokenKind::LPAREN,
+                                 "se esperaba '(' o '{' tras @offset");
+                    auto oe = parse_expr();
+                    (void)expect(TokenKind::RPAREN,
+                                 "se esperaba ')' tras @offset(expr)");
+                    if (oe && oe->kind == ast::NodeKind::IntLitExpr) {
+                        f.explicit_offset = (int64_t)static_cast<ast::IntLitExpr *>(
+                                                oe.get())
+                                                ->value;
+                    } else {
+                        f.offset_expr = std::move(oe);
+                    }
+                }
+            } else {
+                // Atajo `@0x30`: solo constante entera.
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("@<offset> requiere un entero constante (o usa "
+                               "@offset(expr))");
+                } else {
+                    f.explicit_offset = (int64_t)current_.int_val;
+                    (void)consume();
+                }
+            }
+        }
+        // Overlay F3b: `stride(s)` tras @offset -- bytes entre elementos del
+        // array (fijo).  `T Name[count] @offset(pos) stride(s)`.
+        if (s->is_overlay && current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == "stride") {
+            (void)consume(); // 'stride'
+            (void)expect(TokenKind::LPAREN, "se esperaba '(' tras stride");
+            f.array_stride = parse_expr();
+            (void)expect(TokenKind::RPAREN, "se esperaba ')' tras stride(expr)");
+        }
+        // Valor por defecto del campo: `u8 a = 0x10;`.  Debe ser una expresion
+        // comptime-constante (se valida en el type checker); se aplica al crear
+        // el struct con `= {}` / campos no listados y por `default()`.
+        if (current_.kind == TokenKind::ASSIGN) {
+            (void)consume(); // '='
+            f.default_init = parse_expr();
+        }
+        s->fields.push_back(std::move(f));
+        // Multi-declarador C `T a, b, c;`: cada declarador extra reutiliza el
+        // tipo BASE (clon), con sus propias dims de array y bit-width opcionales.
+        while (current_.kind == TokenKind::COMMA) {
+            (void)consume(); // ','
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba el nombre del campo tras ','");
+                break;
+            }
+            ast::StructFieldDecl g;
+            g.loc = current_.loc;
+            g.type = clone_type_node_td_(base_type_clone.get());
+            g.name = consume().lexeme;
+            // Array C-style por-declarador: `T a, b[4];`.
+            if (current_.kind == TokenKind::LBRACKET) {
+                g.type = wrap_c_array_dims_(std::move(g.type));
+            }
+            // Bit-width por-declarador: `u32 a : 3, b : 5;`.
+            if (current_.kind == TokenKind::COLON) {
+                (void)consume();
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("se esperaba un literal entero tras ':' (bit width)");
+                } else {
+                    const int64_t w = (int64_t)current_.int_val;
+                    if (w <= 0 || w > 64)
+                        error_here("bit width debe estar en rango 1..64");
+                    else
+                        g.bit_width = (uint8_t)w;
+                    (void)consume();
+                }
+            }
+            // Valor por defecto por-declarador: `T a, b = 0;`.
+            if (current_.kind == TokenKind::ASSIGN) {
+                (void)consume();
+                g.default_init = parse_expr();
+            }
+            s->fields.push_back(std::move(g));
+        }
         (void)expect(TokenKind::SEMICOLON,
                      "se esperaba ';' al final del campo");
-        s->fields.push_back(std::move(f));
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
     return s;
@@ -3952,7 +5581,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             const SourceLoc sloc = current_.loc;
             (void)consume(); // 'set'
             if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba el nombre de la propiedad tras 'set'");
+                error_expected_name(
+                    "nombre de propiedad",
+                    "se esperaba el nombre de la propiedad tras 'set'");
                 synchronize();
                 continue;
             }
@@ -4109,7 +5740,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
             (void)consume(); // 'get'
             if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba el nombre de la propiedad tras 'get'");
+                error_expected_name(
+                    "nombre de propiedad",
+                    "se esperaba el nombre de la propiedad tras 'get'");
                 synchronize();
                 continue;
             }
@@ -4138,10 +5771,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         // ver `i32 get() { ... }` (KW_GET no es IDENTIFIER asi que
         // error_here + synchronize, y synchronize re-entraba en el
         // siguiente miembro produciendo el mismo error).
-        if (current_.kind != TokenKind::IDENTIFIER &&
-            current_.kind != TokenKind::KW_GET &&
-            current_.kind != TokenKind::KW_SET) {
-            error_here("se esperaba el nombre del miembro");
+        if (!is_name_token(current_.kind)) {
+            error_expected_name("nombre de miembro",
+                                "se esperaba el nombre del miembro");
             synchronize();
             continue;
         }
@@ -4701,7 +6333,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
             mut_lex.peek_at(0).kind == TokenKind::KW_CONST) {
             (void)consume(); // 'comptime'
             (void)consume(); // 'const'
-            auto vd = parse_var_decl_stmt(true);
+            auto vd = parse_var_decl_stmt(true, /*from_comptime=*/true);
             if (vd && vd->kind == ast::NodeKind::VarDeclStmt) {
                 auto *v = static_cast<ast::VarDeclStmt *>(vd.get());
                 v->is_comptime = true;
@@ -4789,7 +6421,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
                 synchronize();
                 return nullptr;
             }
-            auto vd = parse_var_decl_stmt(true); // comptime implica const
+            auto vd = parse_var_decl_stmt(true, /*from_comptime=*/true);
             if (vd && vd->kind == ast::NodeKind::VarDeclStmt) {
                 auto *v = static_cast<ast::VarDeclStmt *>(vd.get());
                 v->is_comptime = true;
@@ -4956,7 +6588,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
         return es;
     }
     default:
-        // Phase AS inc.2: `register("reg") T name;` es un var-decl con
+        //  AS inc.2: `register("reg") T name;` es un var-decl con
         // storage-class; se enruta a parse_var_decl_stmt aunque
         // `register` sea un IDENTIFIER (no keyword) y starts_type() lo
         // ignore.
@@ -4966,11 +6598,12 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
     }
 }
 
-std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const) {
+std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const,
+                                                       bool from_comptime) {
     auto vd = std::make_unique<ast::VarDeclStmt>();
     vd->loc = current_.loc;
     vd->is_const = is_const;
-    /* Phase AS inc.2: storage-class `register("reg")` antes del tipo.
+    /*  AS inc.2: storage-class `register("reg")` antes del tipo.
      * El patron ya fue validado por looks_like_register_storage() en el
      * router, pero KW_CONST / for-init tambien llaman aqui; reconsumimos
      * de forma defensiva solo cuando el patron `register ( "reg" )`
@@ -5013,21 +6646,48 @@ std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const) {
     } else {
         vd->type = parse_type_node();
     }
+    // const-correctness C-style: un `const` LIDER sobre un tipo PUNTERO
+    // qualifica el APUNTADO (`const char *p` = puntero a const char, puntero
+    // MUTABLE), no el binding.  Sobre un tipo no-puntero, `const` sigue siendo
+    // binding const (valor inmutable -- semantica Vesta existente + comptime).
+    // No aplica a comptime (su `const` es "compile-time", no del pointee).
+    if (is_const && !from_comptime && vd->type &&
+        vd->type->kind == ast::NodeKind::PointerTypeNode) {
+        ast::TypeNode *inner = vd->type.get();
+        while (inner->kind == ast::NodeKind::PointerTypeNode)
+            inner = static_cast<ast::PointerTypeNode *>(inner)->pointee.get();
+        if (inner) inner->is_const = true;
+        vd->is_const = false; // el puntero/binding es mutable (C)
+    }
+    // Puntero a funcion estilo C como variable: `R (*name)(params) = init;`.
+    bool got_fp_name = false;
+    {
+        std::string fp_name;
+        std::unique_ptr<ast::TypeNode> fp_type;
+        if (vd->type && try_parse_c_func_ptr_(vd->type, fp_name, fp_type)) {
+            vd->type = std::move(fp_type);
+            vd->name = std::move(fp_name);
+            got_fp_name = true;
+        }
+    }
     // azucar: `T !!name = init;` equivale a
     // `nonnull T name = !!init;`.  El `!!` entre tipo y nombre
     // marca el tipo como no-null y envuelve el inicializador con
     // unwrap para insertar el check runtime + assert compile-time.
     bool inline_nonnull = false;
-    if (current_.kind == TokenKind::BANG_BANG) {
+    if (!got_fp_name && current_.kind == TokenKind::BANG_BANG) {
         inline_nonnull = true;
         (void)consume();
         if (vd->type) vd->type->is_nonnull = true;
     }
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras el tipo");
-        return nullptr;
+    if (!got_fp_name) {
+        if (!is_name_token(current_.kind)) {
+            error_expected_name("nombre de variable",
+                                "se esperaba un nombre tras el tipo");
+            return nullptr;
+        }
+        vd->name = consume().lexeme;
     }
-    vd->name = consume().lexeme;
     // Sintaxis C-style: `T name[N]` -> wrappear el tipo base en
     // ArrayTypeNode(N).  Acepta tambien `T name[]` (sin tamano,
     // tipico de parametros con decay-to-ptr).  Cadena permitida
@@ -5216,7 +6876,8 @@ std::unique_ptr<ast::Stmt> Parser::parse_for_stmt() {
             s->body = parse_statement();
             return s;
         }
-        error_here("se esperaba un identificador tras el tipo en for");
+        error_expected_name("nombre de variable del 'for'",
+                            "se esperaba un identificador tras el tipo en for");
         return nullptr;
     }
 
@@ -5338,7 +6999,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_synchronized_stmt() {
 }
 
 // ---------------------------------------------------------------------
-// Phase AS: inline asm nativo.
+//  AS: inline asm nativo.
 //
 //   asm [volatile|nomem|preserves_flags|pure] {
 //       <NASM Intel verbatim>
@@ -5363,7 +7024,15 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
     while (current_.kind == TokenKind::IDENTIFIER) {
         const std::string &q = current_.lexeme;
         if (q == "volatile") {
+            // Nivel VOLATILE: se analiza para contratos pero se emite verbatim.
             s->q_volatile = true;
+            s->level = ast::AsmLevel::Volatile;
+        } else if (q == "raw") {
+            // Nivel RAW: caja negra, verbatim, CERO analisis -> tambien implica
+            // noinfer (el usuario declara sus clobbers a mano; nada se infiere).
+            s->q_volatile = true;
+            s->q_noinfer = true;
+            s->level = ast::AsmLevel::Raw;
         } else if (q == "nomem") {
             s->q_nomem = true;
         } else if (q == "preserves_flags") {
@@ -5380,8 +7049,84 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
         (void)consume();
     }
 
+    //  AS inc.7: lista opcional de operandos `( <clase> <nombre> [= expr],
+    // ... )` ANTES del '{'.  El '{' queda como asm 100% real.  Cada enlace es
+    // `<clase-de-registro> <nombre> [= <expr-de-entrada>]`; la clase es el
+    // "tipo" (reg = el compilador elige; rax/... = fijo; xmm/ymm = vector;
+    // mem = memoria).  Coma final permitida.
+    if (current_.kind == TokenKind::LPAREN) {
+        (void)consume(); // '('
+        while (current_.kind != TokenKind::RPAREN &&
+               current_.kind != TokenKind::END_OF_FILE) {
+            ast::AsmOperand op;
+            op.loc = current_.loc;
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba la clase de registro (reg, rax, xmm, "
+                           "mem, ...) en el operando del asm");
+                return nullptr;
+            }
+            op.reg_class = current_.lexeme;
+            (void)consume();
+            if (current_.kind != TokenKind::IDENTIFIER) {
+                error_here("se esperaba el nombre del operando tras la clase "
+                           "de registro");
+                return nullptr;
+            }
+            op.name = current_.lexeme;
+            (void)consume();
+            // Inicializador opcional `= <expr>` (entrada).  Sin el = scratch/out.
+            if (current_.kind == TokenKind::ASSIGN) {
+                (void)consume(); // '='
+                op.init = parse_expr();
+            }
+            s->operands.push_back(std::move(op));
+            if (current_.kind == TokenKind::COMMA) {
+                (void)consume(); // ',' (coma final permitida)
+            } else {
+                break;
+            }
+        }
+        if (current_.kind != TokenKind::RPAREN) {
+            error_here("se esperaba ')' al cerrar la lista de operandos del asm");
+            return nullptr;
+        }
+        (void)consume(); // ')'
+    }
+
+    // Clausula opcional `clobber(...)` o `clobbers(...)` ANTES del '{' (modelo
+    // inc.7).  Mismo parseo que la clausula legacy tras '}'.
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        (current_.lexeme == "clobber" || current_.lexeme == "clobbers")) {
+        (void)consume(); // 'clobber'/'clobbers'
+        (void)expect(TokenKind::LPAREN, "se esperaba '(' tras 'clobber'");
+        // Acepta IDENTIFICADORES desnudos (modelo inc.7: `clobber(flags,
+        // memory)`) o strings (legacy `clobbers("flags")`).
+        while (current_.kind == TokenKind::STRING_LIT ||
+               current_.kind == TokenKind::RAW_STRING_LIT ||
+               current_.kind == TokenKind::IDENTIFIER) {
+            const std::string c = (current_.kind == TokenKind::IDENTIFIER)
+                                      ? current_.lexeme
+                                      : current_.str_val;
+            (void)consume();
+            if (c == "memory")
+                s->clobbers_memory = true;
+            else if (c == "flags" || c == "cc")
+                s->clobbers_flags = true;
+            else if (!c.empty())
+                s->clobbers.push_back(c);
+            if (current_.kind == TokenKind::COMMA) {
+                (void)consume();
+                continue;
+            }
+            break;
+        }
+        (void)expect(TokenKind::RPAREN,
+                     "se esperaba ')' al cerrar 'clobber(...)'");
+    }
+
     if (current_.kind != TokenKind::LBRACE) {
-        error_here("se esperaba '{' tras 'asm' (y calificadores opcionales)");
+        error_here("se esperaba '{' tras 'asm' (y calificadores/operandos "
+                   "opcionales)");
         return nullptr;
     }
     (void)consume(); // '{'
@@ -5671,6 +7416,25 @@ std::unique_ptr<ast::Expr> Parser::parse_unary() {
     // Cast C-style `(T) expr`.  Comprobamos antes de los demas
     // unarios porque el cast tambien empieza con `(` y queremos
     // reconocerlo antes de caer al patron `(expr)`.
+    // Compound literal C99: `(Tipo){...}` / `(Tipo<args>){...}`.  Construye un
+    // valor struct anonimo inline (usable como arg, en un return, etc.) sin una
+    // variable intermedia.  Se representa como un CastExpr con operando
+    // InitListExpr; el type checker y el lowering lo tratan como construccion
+    // de struct.  Debe comprobarse ANTES del cast (un nombre de struct plano no
+    // pasa looks_like_cast, pero `(Nombre){` es inequivoco).
+    if (current_.kind == TokenKind::LPAREN && looks_like_compound_literal()) {
+        const SourceLoc loc = current_.loc;
+        (void)consume(); // '('
+        auto type_node = parse_type_node();
+        (void)expect(TokenKind::RPAREN,
+                     "se esperaba ')' tras el tipo del compound literal");
+        auto init = parse_primary(); // el '{...}' -> InitListExpr
+        auto ce = std::make_unique<ast::CastExpr>();
+        ce->loc = loc;
+        ce->target_type = std::move(type_node);
+        ce->operand = std::move(init);
+        return ce;
+    }
     if (current_.kind == TokenKind::LPAREN && looks_like_cast()) {
         const SourceLoc loc = current_.loc;
         (void)consume(); // '('
@@ -5778,10 +7542,14 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             case TokenKind::RBRACE:
             // binops + asignacion + comparacion + dot (chain)
             case TokenKind::PLUS:
-            case TokenKind::STAR:
+            // STAR y AMP NO van aqui: son tambien unarios prefijo (deref `*p`
+            // y addr-of `&x`), asi que `cond ? *ptr : x` / `cond ? &v : w`
+            // deben leerse como TERNARIO (rama then = deref/addr-of), no como
+            // postfix-? seguido de mul/and.  Mismo criterio que MINUS/LT/GT
+            // (default = ternario); para el postfix-? con `*`/`&` agrupar
+            // explicitamente: `(expr?) * x`.
             case TokenKind::SLASH:
             case TokenKind::PERCENT:
-            case TokenKind::AMP:
             case TokenKind::PIPE:
             case TokenKind::CARET:
             case TokenKind::AND_AND:
@@ -6008,10 +7776,107 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
                             captured =
                                 src.substr(start_off, end_off - start_off);
                         }
-                        auto slit = std::make_unique<ast::StringLitExpr>();
-                        slit->loc = loc;
-                        slit->value = std::move(captured);
-                        call->args.push_back(std::move(slit));
+                        // Forwarding de expr-capture anidado: si el arg es
+                        // EXACTAMENTE un identificador que es un param `expr` de
+                        // la funcion actual, emitir un IdentExpr (referencia) en
+                        // vez del texto crudo -- asi en AST-eval `code` resuelve
+                        // al texto ya capturado por el macro externo, no al
+                        // literal "code".
+                        auto is_ident = [](const std::string &s) -> bool {
+                            if (s.empty()) return false;
+                            if (!(std::isalpha((unsigned char)s[0]) ||
+                                  s[0] == '_'))
+                                return false;
+                            for (char c : s)
+                                if (!(std::isalnum((unsigned char)c) ||
+                                      c == '_'))
+                                    return false;
+                            return true;
+                        };
+                        if (is_ident(captured) &&
+                            current_expr_param_names_.count(captured)) {
+                            auto id = std::make_unique<ast::IdentExpr>();
+                            id->loc = loc;
+                            id->name = std::move(captured);
+                            call->args.push_back(std::move(id));
+                        } else {
+                            auto slit =
+                                std::make_unique<ast::StringLitExpr>();
+                            slit->loc = loc;
+                            /* Huecos de interpolacion `${expr}` en el texto
+                             * capturado: `source(...)` funciona como quasi-quote
+                             * -- el argumento se escribe como CODIGO legible (el
+                             * IDE lo resalta) y los `${expr}` se evaluan y
+                             * splicean.  Escaneamos el texto crudo: cada `${...}`
+                             * (con tracking de profundidad de llaves) se lex+parsea
+                             * como una expresion y va a @c interp_exprs; el texto
+                             * entre huecos va a @c interp_parts (layout N exprs ->
+                             * N+1 parts).  Sin huecos, es un StringLit simple. */
+                            std::string cur_part;
+                            bool has_interp = false;
+                            size_t sp = 0;
+                            while (sp < captured.size()) {
+                                /* Escape `\${...}`: hueco de interpolacion
+                                 * RUNTIME que ATRAVIESA hasta el codigo generado
+                                 * (no se evalua en comptime).  Emitimos `${`
+                                 * literal y seguimos -- el `${...}` queda en el
+                                 * texto de salida para que la interpolacion del
+                                 * lambda generado lo resuelva en runtime.  Asi
+                                 * `source( print("\${tape[p]:char}"); )` produce
+                                 * `print("${tape[p]:char}")` en el codigo. */
+                                if (sp + 1 < captured.size() &&
+                                    captured[sp] == '\\' &&
+                                    captured[sp + 1] == '$') {
+                                    cur_part.push_back('$');
+                                    sp += 2; /* saltar `\$`; el `{` queda literal */
+                                    continue;
+                                }
+                                if (sp + 1 < captured.size() &&
+                                    captured[sp] == '$' &&
+                                    captured[sp + 1] == '{') {
+                                    has_interp = true;
+                                    slit->interp_parts.push_back(cur_part);
+                                    cur_part.clear();
+                                    sp += 2; /* saltar `${` */
+                                    const size_t estart = sp;
+                                    int bdepth = 1;
+                                    while (sp < captured.size() && bdepth > 0) {
+                                        if (captured[sp] == '{')
+                                            ++bdepth;
+                                        else if (captured[sp] == '}') {
+                                            --bdepth;
+                                            if (bdepth == 0) break;
+                                        }
+                                        ++sp;
+                                    }
+                                    std::string expr_txt =
+                                        captured.substr(estart, sp - estart);
+                                    if (sp < captured.size())
+                                        ++sp; /* saltar `}` de cierre */
+                                    /* lex+parse el texto del hueco como expr. */
+                                    Lexer hole_lex(expr_txt,
+                                                   "<source-interp>", diags_);
+                                    Parser hole_par(hole_lex, diags_);
+                                    std::unique_ptr<ast::Expr> he =
+                                        hole_par.parse_one_expr();
+                                    slit->interp_exprs.push_back(std::move(he));
+                                    slit->interp_formats.emplace_back();
+                                } else {
+                                    cur_part.push_back(captured[sp]);
+                                    ++sp;
+                                }
+                            }
+                            if (has_interp) {
+                                slit->interp_parts.push_back(cur_part);
+                            } else {
+                                /* Sin huecos: el texto va en @c value.  Usamos
+                                 * @c cur_part (procesado -- con los escapes `\$`
+                                 * ya resueltos a `$`), NO @c captured (crudo),
+                                 * para que `\${...}` se emita como `${...}`. */
+                                slit->value = std::move(cur_part);
+                            }
+                            call->args.push_back(std::move(slit));
+                        }
                     } else {
                         auto arg = parse_expr();
                         if (arg) call->args.push_back(std::move(arg));
@@ -6025,6 +7890,38 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             expr = std::move(call);
             break;
         }
+        case TokenKind::LBRACE: {
+            /* `no_braces_call_`: el scrutinee de un `match` va sin parentesis y
+             * lleva el `{` del cuerpo pegado -> ahi este postfijo no aplica. */
+            if (no_braces_call_) return expr;
+            /* Sobrecarga de `{}`: postfijo `a{3,4,5}` -> CallExpr con
+             * `is_braces_call`, que el checker resuelve a `a.__braces__(...)`.
+             * Operador DISTINTO de `()`: un tipo puede definir uno, el otro o
+             * los dos.  No colisiona con nada: `T a = {2,3,3}` es un
+             * InitListExpr (el `{` va tras `=`, lo ve parse_primary), el
+             * compound literal lleva parentesis (`(T){...}`), `T{...}` desnudo
+             * no es sintaxis valida, y toda condicion del lenguaje va
+             * parentizada -- un `{` pegado a una expresion no puede ser un
+             * bloque.  Si el tipo no declara `__braces__`, el checker lo
+             * rechaza: la sintaxis solo existe si el tipo la define. */
+            const SourceLoc loc = current_.loc;
+            (void)consume(); // '{'
+            auto call = std::make_unique<ast::CallExpr>();
+            call->loc = loc;
+            call->callee = std::move(expr);
+            call->is_braces_call = true;
+            if (current_.kind != TokenKind::RBRACE) {
+                while (true) {
+                    auto arg = parse_expr();
+                    if (arg) call->args.push_back(std::move(arg));
+                    if (!match(TokenKind::COMMA)) break;
+                }
+            }
+            (void)expect(TokenKind::RBRACE,
+                         "se esperaba '}' al cerrar los argumentos de '{}'");
+            expr = std::move(call);
+            break;
+        }
         case TokenKind::DOT: {
             const SourceLoc loc = current_.loc;
             (void)consume(); // '.'
@@ -6033,10 +7930,9 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             // un metodo llamado 'get' o 'set' (no son property
             // accessors aqui, son nombres normales).  Sin esto
             // `obj.get(...)` fallaba al ver KW_GET tras DOT.
-            if (current_.kind != TokenKind::IDENTIFIER &&
-                current_.kind != TokenKind::KW_GET &&
-                current_.kind != TokenKind::KW_SET) {
-                error_here("se esperaba un nombre de campo tras '.'");
+            if (!is_name_token(current_.kind)) {
+                error_expected_name("nombre de campo o metodo tras '.'",
+                                    "se esperaba un nombre de campo tras '.'");
                 return expr;
             }
             auto fa = std::make_unique<ast::FieldAccessExpr>();
@@ -6054,10 +7950,9 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             // y el lowering reusan el path de `(*a).b` sin cambios.
             const SourceLoc loc = current_.loc;
             (void)consume(); // '->'
-            if (current_.kind != TokenKind::IDENTIFIER &&
-                current_.kind != TokenKind::KW_GET &&
-                current_.kind != TokenKind::KW_SET) {
-                error_here("se esperaba un nombre de campo tras '->'");
+            if (!is_name_token(current_.kind)) {
+                error_expected_name("nombre de campo o metodo tras '->'",
+                                    "se esperaba un nombre de campo tras '->'");
                 return expr;
             }
             auto deref = std::make_unique<ast::UnaryExpr>();
@@ -6198,6 +8093,32 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         e->loc = loc;
         e->is_raw = (current_.kind == TokenKind::RAW_STRING_LIT);
         e->value = consume().str_val;
+        /* Literales ADYACENTES se funden en uno, como en C:
+         *
+         *     string m = "primera parte "
+         *                "segunda parte";     // -> UN literal
+         *
+         * Es lo normal para partir un mensaje largo sin pasarse de ancho.  Y no
+         * es solo comodidad: con `+` hay que decidir, y sobre un `string` de
+         * runtime `"a" + "b"` emite un STRCAT para juntar dos cosas que ya se
+         * conocian al compilar.  Aqui no queda nada que ejecutar: es un literal.
+         *
+         * Un literal interpolado (`${...}`) NO entra: lo produce el lexer como
+         * una secuencia de tokens, no como un STRING_LIT suelto.  Pegar uno
+         * simple a uno interpolado no se funde, y el `+` lo cubre. */
+        while (current_.kind == TokenKind::STRING_LIT ||
+               current_.kind == TokenKind::RAW_STRING_LIT) {
+            /* Mezclar crudo y normal cambiaria el significado de los escapes de
+             * una de las dos mitades -> se pide que sean del mismo tipo. */
+            const bool nxt_raw = (current_.kind == TokenKind::RAW_STRING_LIT);
+            if (nxt_raw != e->is_raw) {
+                error_here("no se pueden pegar un literal normal y uno crudo "
+                           "(r\"...\"): sus escapes no significan lo mismo; "
+                           "usa '+' si es lo que quieres");
+                break;
+            }
+            e->value += consume().str_val;
+        }
         return e;
     }
     case TokenKind::ISTR_BEGIN: {
@@ -6281,6 +8202,13 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         }
         return e;
     }
+    // `get`/`set` son keywords CONTEXTUALES (solo property dentro de una
+    // clase, y esa forma se detecta en el bucle de miembros, nunca aqui).
+    // En posicion de expresion son nombres corrientes, de modo que una
+    // funcion libre llamada `get` se puede INVOCAR (`get(x)`) igual que
+    // se puede declarar.
+    case TokenKind::KW_GET:
+    case TokenKind::KW_SET:
     case TokenKind::IDENTIFIER: {
         auto e = std::make_unique<ast::IdentExpr>();
         e->loc = loc;
@@ -6357,7 +8285,7 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         // primitive_kind_from_token (i32, i64, string, bool, f32...).
         if (current_.kind == TokenKind::IDENTIFIER) {
             e->class_name = consume().lexeme;
-            // Phase M.7.c: namespace qualified `new ui.Button(...)`.
+            //  M.7.c: namespace qualified `new ui.Button(...)`.
             // Concatenamos con `.` igual que en parse_type_node;
             // el TypeChecker traduce a mangled label.
             while (current_.kind == TokenKind::DOT &&
@@ -6495,7 +8423,16 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
             return parse_lambda_expr();
         }
         (void)consume();
-        auto inner = parse_expr();
+        // Dentro de parentesis un `{` ya no puede abrir un bloque del lenguaje,
+        // asi que el postfijo `{}` vuelve a estar disponible aunque el grupo
+        // este dentro del scrutinee de un match: `match (a{1,2}) { ... }`.
+        std::unique_ptr<ast::Expr> inner;
+        {
+            const bool prev_nb = no_braces_call_;
+            no_braces_call_ = false;
+            inner = parse_expr();
+            no_braces_call_ = prev_nb;
+        }
         (void)expect(TokenKind::RPAREN,
                      "se esperaba ')' al cerrar la expresion entre parentesis");
         return inner;

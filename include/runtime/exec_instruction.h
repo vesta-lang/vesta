@@ -424,6 +424,18 @@ void exec_instr_mod_imm(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
+ * @brief CSEL r_dst, r_cond, r_a, r_b : @c dst = (cond != 0) ? a : b.
+ *
+ * Super-instruccion (1 despacho) del @c IrOp::SELECT para el INTERPRETE
+ * dispatch-bound: sustituye la mascara branchless (~8 ops:
+ * @c subu/xor/and/xor + cargas) que penalizaba branch_unpredict 2.3x.  El
+ * SELECT del IR es una primitiva SEMANTICA -- el JIT/AOT lo bajan a @c cmov,
+ * el interp a esta op.  Encoding FIXED_4 (decode_instr_four_reg):
+ * @c [0x00][0x7E][b2][b3] con b2=(dst<<4)|cond, b3=(a<<4)|b.
+ */
+void exec_instr_csel(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
  * @brief Ejecuta TRYENTER: apila un nuevo frame de excepcion en
  * exc_frame_stack.
  *
@@ -964,7 +976,7 @@ void exec_instr_getmgr(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
- * @brief Ejecuta NEWOBJS (Phase Z): aloca instancia en SharedHeap.
+ * @brief Ejecuta NEWOBJS ( Z): aloca instancia en SharedHeap.
  *
  * Variante shared de NEWOBJ.  Aloca en vm.shared_heap, registra el
  * host_ptr en shared_handle_table, e inicializa ObjectHeader con
@@ -1012,7 +1024,7 @@ void exec_instr_gcwb(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_gcalloc(ProcessVM *vm, const DecodedInstr &instr);
 
 // =========================================================================
-//  Ejecutores: atomics i64 (Phase Z, opcodes 0x00 0xA9 .. 0xAD)
+//  Ejecutores: atomics i64 ( Z, opcodes 0x00 0xA9 .. 0xAD)
 // =========================================================================
 void exec_instr_atomicld(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_atomicst(ProcessVM *vm, const DecodedInstr &instr);
@@ -1790,6 +1802,18 @@ void exec_instr_fastpop(ProcessVM *vm, const DecodedInstr &instr);
  * @c cls o @c static_data son nullptr.
  */
 void exec_instr_setstatic(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
+ * @brief mld r_dst, [base +/- index*scale +/- disp] : load universal (1 despacho).
+ * @brief mst [base +/- index*scale +/- disp], r_src : store universal.
+ *
+ * Resuelven la codificacion que faltaba (rbp/rsp como base, que el SIB no
+ * admite): el acceso a slots de derrame (rbp-relative) pasa de 3 instrucciones
+ * a 1.  base in {r0-r15, rbp(16), rsp(17)}, index*scale (x1..64), disp int16,
+ * ancho 1/2/4/8 (GP), host/vm.  Encoding FIXED_8 (decode_instr_mem_full).
+ */
+void exec_instr_mld(ProcessVM *vm, const DecodedInstr &instr);
+void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr);
 
 // -------------------------------------------------------------------------
 // Punto flotante escalar y vectorial  (opcodes extendidos 0xF0-0xFC)

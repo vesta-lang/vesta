@@ -15,7 +15,7 @@
  * @brief API estable C ABI de @c libvesta_rt para codigo generado (JIT/AOT).
  *
  * Este header expone los runtime entries necesarios para que codigo
- * generado por el JIT (Phase D) o el AOT (Phase F) pueda llamar al
+ * generado por el JIT ( D) o el AOT ( F) pueda llamar al
  * runtime sin depender del frontend del lenguaje ni de las cabeceras
  * C++ internas.  Toda la API es @c extern "C" con punteros opacos
  * para que sea linkable desde cualquier toolchain (Cranelift, MachineIR
@@ -490,7 +490,7 @@ uint64_t vrt_callclosure(vrt_proc *proc, uint64_t fn_addr, uint64_t env_addr);
  *   - Si la funcion lanza una excepcion sin handler interno y la catch
  *     esperada esta en codigo JIT-eated del caller, el unwind cruzaria
  *     la frontera JIT/interp -- comportamiento indefinido en v1.
- *     Solucion futura: Phase D.13 (native unwinding).
+ *     Solucion futura:  D.13 (native unwinding).
  *   - Si la funcion bloquea por IO/wait, este wrapper aborta con
  *     FATAL_ILLEGAL_INSTRUCTION (no se puede esperar IO sincronicamente
  *     desde dentro de un JIT frame).
@@ -522,7 +522,7 @@ uint64_t vrt_call_bc_function(vrt_proc *proc, uint64_t bc_entry_va);
 uint64_t vrt_calln(vrt_proc *proc, const char *lib_name, const char *fn_name);
 
 /* ========================================================================= */
-/* Acceso a memoria VM (Phase D.3-G: vm_addr -> host_ptr translator)         */
+/* Acceso a memoria VM ( D.3-G: vm_addr -> host_ptr translator)         */
 /* ========================================================================= */
 
 /**
@@ -562,7 +562,7 @@ void vrt_vm_write_u8(vrt_proc *proc, uint64_t vaddr, uint8_t value);
 /**
  * @brief Traduce una VM-addr a host_ptr via vm_mem.
  *
- * Phase D.jit-mem-model FULL: usado por el JIT en cada LOAD/STORE
+ *  D.jit-mem-model FULL: usado por el JIT en cada LOAD/STORE
  * cuyo puntero tiene IR is_host_ptr=false (VM-addr semantica).
  * Para is_host_ptr=true el JIT emite native mov directo sin esta
  * llamada.
@@ -645,7 +645,7 @@ uint64_t vrt_dlopen(vrt_proc *proc, uint64_t path_vaddr, uint32_t path_len);
 vrt_handle vrt_str_conv(vrt_proc *proc, vrt_handle src, uint32_t enc);
 
 /**
- * @brief Phase D.7.opt: registra un handle para un raw_ptr de objeto ya
+ * @brief  D.7.opt: registra un handle para un raw_ptr de objeto ya
  *        alocado por bump-pointer inline en JIT.
  *
  * El JIT-eated codigo emite el bump-pointer + init de @c GcHeader +
@@ -763,7 +763,7 @@ vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b);
 int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b);
 
 /* ========================================================================= */
-/* Safepoint (Phase E - infrastructure stub)                                  */
+/* Safepoint ( E - infrastructure stub)                                  */
 /* ========================================================================= */
 
 /**
@@ -774,7 +774,7 @@ int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b);
  * cada call site para garantizar que el GC pueda pausar el thread en
  * tiempo limitado.  Coste fast path: ~2ns (cmp byte + jne).
  *
- * @note Stub en v1: la implementacion real llega en Phase E (D.2).
+ * @note Stub en v1: la implementacion real llega en  E (D.2).
  *       Hoy es no-op para no romper builds.
  */
 void vrt_safepoint_poll(vrt_proc *proc);
@@ -802,7 +802,7 @@ void vrt_safepoint_poll(vrt_proc *proc);
  * realmente quiere pausar (typically 1 GC cycle de varios cientos
  * de microsegundos).
  *
- * @note En Phase D.2-foundation es stub: solo limpia el flag y retorna
+ * @note En  D.2-foundation es stub: solo limpia el flag y retorna
  *       (sin coordinacion real con GC).  La integracion completa con
  *       gc_heap.cpp::major_gc llega en D.2-integration.
  */

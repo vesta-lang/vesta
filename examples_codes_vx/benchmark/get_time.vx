@@ -1,4 +1,4 @@
-// Phase A.34 - Reflexion completa: getMethod + newInstance + invoke.
+//  A.34 - Reflexion completa: getMethod + newInstance + invoke.
 //
 // Verifica el ciclo completo de reflexion dinamica:
 //   1. forName("Calculadora")          -> ClassInfo* via findclass

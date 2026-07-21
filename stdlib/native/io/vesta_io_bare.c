@@ -1,6 +1,6 @@
 /**
  * @file vesta_io_bare.c
- * @brief I/O nativa minima para Vex AOT (tiers bare/embed) -- SIN la VM.
+ * @brief I/O nativa minima para  AOT (tiers bare/embed) -- SIN la VM.
  *
  * El path de I/O de la VM (vesta_io.c) toma @c (proc, vm_addr, len) porque sus
  * buffers viven en la memoria del proceso VM.  En compilacion nativa (-m aot)

@@ -18,6 +18,8 @@
 #include "lsp/lsp_server.h"
 
 #include "lsp/builtin_docs.h"
+#include "toolchain/toolchain.h" // vesta::tc::compile (compilar embebido)
+#include "util/fs_utils.h"       // fs::get_executable_path (localizar stdlib)
 
 #include <exception>
 #include <fstream>
@@ -29,6 +31,7 @@
 #include "lsp/param_hints.h"
 #include "lsp/semantic_tokens.h"
 #include "lsp/symbol_index.h"
+#include "vx/ast.h"
 #include "vx/diagnostic.h"
 
 namespace lsp {
@@ -66,6 +69,110 @@ void LspServer::send_result(const nlohmann::json &id,
     resp["id"] = id;
     resp["result"] = result;
     transport_.write_message(resp);
+}
+
+nlohmann::json LspServer::compile_request(const std::string &method,
+                                          const std::string &uri,
+                                          const nlohmann::json &params) {
+    namespace tc = vesta::tc;
+    const std::string fs_path = uri_to_fs_path(uri);
+    if (fs_path.empty())
+        return {{"ok", false}, {"message", "uri sin ruta de fichero"}};
+
+    tc::CompileRequest req;
+    req.input = fs_path;
+    // Si el documento esta abierto, usar su buffer (overlay) en vez del disco.
+    if (docs_.has(uri))
+        req.source_overlay = docs_.text(uri);
+    req.output = params.value("output", std::string());
+    req.module_name = params.value("moduleName", std::string("main"));
+    req.debug = params.value("debug", false);
+    req.instrument = params.value("instrument", std::string());
+    req.keep_labels = params.value("keepLabels", false);
+    req.emit_map = params.value("emitMap", false);
+    req.no_preprocessor = params.value("noPreprocessor", false);
+    // Critico: silenciar el stdout del ensamblado/linkado; en el LSP el stdout
+    // es el canal JSON-RPC y cualquier print de run_worker lo corromperia.
+    req.quiet = true;
+
+    // Modo: vm | jit | aot.
+    const std::string mode = params.value("mode", std::string("vm"));
+    if (mode == "aot") {
+        req.mode = tc::ExecMode::AOT;
+        // Opciones del emisor nativo (todas opcionales; defaults por host/tier).
+        const std::string tier = params.value("tier", std::string("bare"));
+        req.aot.tier = (tier == "embed")
+                           ? aot::Tier::EMBED
+                           : (tier == "full" ? aot::Tier::FULL : aot::Tier::BARE);
+        req.aot.freestanding = params.value("freestanding", false);
+        req.aot.no_exceptions = params.value("noExceptions", false);
+        req.aot.no_io = params.value("noIo", false);
+        req.aot.no_mem = params.value("noMem", false);
+        req.aot.arch = params.value("arch", std::string("x86-64"));
+        req.aot.float_isa = params.value("floatIsa", std::string("sse2"));
+        req.aot.format = params.value("format", std::string());
+        req.aot.emit = params.value("emit", std::string());
+        req.aot.no_pie = params.value("noPie", false);
+        req.aot.bin_base = params.value("binBase", std::string());
+        req.aot.sysroot = params.value("sysroot", std::string());
+        // Para localizar la stdlib (auto-bundle de exc/io): junto al ejecutable.
+        req.aot.argv0 = fs::get_executable_path();
+    } else if (mode == "jit")
+        req.mode = tc::ExecMode::JIT;
+    else
+        req.mode = tc::ExecMode::VM;
+
+    // Proyecto: explicito por el metodo/param, o auto-detectado si el fuente
+    // tiene algun `import "..."`.
+    const std::string &src =
+        docs_.has(uri) ? docs_.text(uri) : std::string();
+    const bool has_imports = src.find("import \"") != std::string::npos ||
+                             src.find("import\t\"") != std::string::npos;
+    req.is_project = (method == "vesta/compileProject") ||
+                     params.value("project", has_imports);
+
+    // Para proyectos, pasar los directorios ancestros como search paths (igual
+    // que el analisis), para resolver imports relativos al root.
+    if (req.is_project) {
+        std::string d = fs_path;
+        size_t slash = d.find_last_of("/\\");
+        if (slash != std::string::npos)
+            d = d.substr(0, slash);
+        for (int lvl = 0; lvl < 40 && !d.empty(); ++lvl) {
+            req.search_paths.push_back(d);
+            size_t s = d.find_last_of("/\\");
+            if (s == std::string::npos || s == 0 || (s == 2 && d[1] == ':'))
+                break;
+            d = d.substr(0, s);
+        }
+    }
+
+    tc::CompileResponse cr = tc::compile(req);
+
+    nlohmann::json diags = nlohmann::json::array();
+    for (const auto &d : cr.diagnostics) {
+        nlohmann::json jd;
+        jd["level"] = (d.level == tc::DiagLevel::Error)
+                          ? "error"
+                          : (d.level == tc::DiagLevel::Warning ? "warning"
+                                                               : "note");
+        jd["line"] = d.line;
+        jd["column"] = d.column;
+        jd["message"] = d.message;
+        jd["file"] = d.file;
+        diags.push_back(std::move(jd));
+    }
+
+    nlohmann::json out;
+    out["ok"] = cr.ok;
+    out["output"] = cr.output_path;
+    out["diagnostics"] = std::move(diags);
+    out["frontend_us"] = cr.frontend_us;
+    out["mode"] = mode;
+    out["project"] = req.is_project;
+    if (!cr.message.empty())
+        out["message"] = cr.message;
+    return out;
 }
 
 void LspServer::handle_initialize(const nlohmann::json &msg) {
@@ -150,6 +257,7 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     experimental["vestaMethods"] = nlohmann::json::array(
         {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
          "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
+         "vesta/modes", "vesta/compile", "vesta/compileProject",
          "vesta/macroExpand", "vesta/comptimeValues"});
     caps["experimental"] = std::move(experimental);
 
@@ -372,6 +480,7 @@ enum class CompletionKind : int {
     Field = 5,
     Variable = 6,
     Class = 7,
+    Interface = 8,
     Enum = 13,
     Keyword = 14,
     Struct = 22,
@@ -783,6 +892,93 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         }
     }
 
+    // NS.4: fallback por indice semantico -- resuelve el acceso CUALIFICADO por
+    // namespace (`shapes.area`, cursor sobre `area`) que build_doc_symbols no
+    // cubre.  El word es el ULTIMO segmento; el contenedor es el namespace.  La
+    // complejidad Big-O de abajo ya encuentra el coste por sufijo `__area`
+    // (el nombre mangled `org__geo__shapes__area` termina asi).
+    if (!resolved) {
+        const DocAnalysis &anx = engine_.analyze_document(uri, text);
+        for (const auto &s : anx.sem_index.symbols) {
+            const std::string &q = s.name;
+            const size_t dot = q.rfind('.');
+            const std::string simple =
+                (dot == std::string::npos) ? q : q.substr(dot + 1);
+            if (simple != word)
+                continue;
+            switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+            case vx::ast::NodeKind::StructDecl: kind = SymbolKind::Struct; break;
+            case vx::ast::NodeKind::ClassDecl: kind = SymbolKind::Class; break;
+            case vx::ast::NodeKind::EnumDecl: kind = SymbolKind::Enum; break;
+            case vx::ast::NodeKind::TypeAliasDecl:
+                kind = SymbolKind::TypeAlias;
+                break;
+            case vx::ast::NodeKind::GlobalVarDecl:
+                kind = SymbolKind::Variable;
+                break;
+            default: kind = SymbolKind::Function; break;
+            }
+            container = (dot == std::string::npos) ? std::string()
+                                                   : q.substr(0, dot);
+            // Firma = cabecera del decl (primera linea del span, hasta '{'/';').
+            const size_t len = std::min<size_t>(s.src_length, 240);
+            std::string span = text.substr(s.src_offset, len);
+            const size_t cut = span.find_first_of("{;\n");
+            signature = (cut == std::string::npos) ? span : span.substr(0, cut);
+            // trim trailing spaces.
+            while (!signature.empty() && (signature.back() == ' ' ||
+                                          signature.back() == '\t' ||
+                                          signature.back() == '\r'))
+                signature.pop_back();
+            resolved = true;
+            break;
+        }
+        // Cross-module: el simbolo puede vivir en un modulo importado.
+        if (!resolved) {
+            for (const auto &im : anx.imported_sem_indexes) {
+                for (const auto &s : im.index.symbols) {
+                    if (!s.is_public)
+                        continue; // solo public es accesible cross-module.
+                    const std::string &q = s.name;
+                    const size_t dot = q.rfind('.');
+                    const std::string simple =
+                        (dot == std::string::npos) ? q : q.substr(dot + 1);
+                    if (simple != word)
+                        continue;
+                    switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+                    case vx::ast::NodeKind::StructDecl: kind = SymbolKind::Struct; break;
+                    case vx::ast::NodeKind::ClassDecl: kind = SymbolKind::Class; break;
+                    case vx::ast::NodeKind::EnumDecl: kind = SymbolKind::Enum; break;
+                    case vx::ast::NodeKind::TypeAliasDecl:
+                        kind = SymbolKind::TypeAlias;
+                        break;
+                    case vx::ast::NodeKind::GlobalVarDecl:
+                        kind = SymbolKind::Variable;
+                        break;
+                    default: kind = SymbolKind::Function; break;
+                    }
+                    container = (dot == std::string::npos) ? std::string()
+                                                           : q.substr(0, dot);
+                    const size_t len = std::min<size_t>(s.src_length, 240);
+                    if (s.src_offset < im.source.size()) {
+                        std::string span = im.source.substr(s.src_offset, len);
+                        const size_t cut = span.find_first_of("{;\n");
+                        signature = (cut == std::string::npos) ? span
+                                                               : span.substr(0, cut);
+                        while (!signature.empty() && (signature.back() == ' ' ||
+                                                      signature.back() == '\t' ||
+                                                      signature.back() == '\r'))
+                            signature.pop_back();
+                    }
+                    resolved = true;
+                    break;
+                }
+                if (resolved)
+                    break;
+            }
+        }
+    }
+
     if (!resolved) {
         send_result(msg.at("id"), nullptr);
         return;
@@ -898,6 +1094,53 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
             locs.push_back(make_location(l));
     }
 
+    // NS.4: fallback por indice semantico -- resuelve el acceso CUALIFICADO por
+    // namespace (`shapes.area`, cursor sobre `area`).  El word bajo el cursor es
+    // el ULTIMO segmento; buscamos en el indice los simbolos cuyo nombre simple
+    // (ultimo segmento del nombre cualificado) coincide y devolvemos su span.
+    if (locs.empty()) {
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        for (const auto &s : an.sem_index.symbols) {
+            const std::string &q = s.name;
+            const size_t dot = q.rfind('.');
+            const std::string simple =
+                (dot == std::string::npos) ? q : q.substr(dot + 1);
+            if (simple != word)
+                continue;
+            WorkspaceLocation l;
+            l.uri = uri;
+            byte_offset_to_lsp_position(text, s.src_offset, l.start_line,
+                                        l.start_char);
+            byte_offset_to_lsp_position(text, s.src_offset + s.src_length,
+                                        l.end_line, l.end_char);
+            locs.push_back(make_location(l));
+        }
+        // Cross-module: un simbolo cuyo ultimo segmento coincide puede vivir en
+        // un modulo importado.  Devolvemos su Location en el fichero de origen.
+        if (locs.empty()) {
+            for (const auto &im : an.imported_sem_indexes) {
+                for (const auto &s : im.index.symbols) {
+                    if (!s.is_public)
+                        continue; // solo public es accesible cross-module.
+                    const std::string &q = s.name;
+                    const size_t dot = q.rfind('.');
+                    const std::string simple =
+                        (dot == std::string::npos) ? q : q.substr(dot + 1);
+                    if (simple != word)
+                        continue;
+                    WorkspaceLocation l;
+                    l.uri = im.uri;
+                    byte_offset_to_lsp_position(im.source, s.src_offset,
+                                                l.start_line, l.start_char);
+                    byte_offset_to_lsp_position(im.source,
+                                                s.src_offset + s.src_length,
+                                                l.end_line, l.end_char);
+                    locs.push_back(make_location(l));
+                }
+            }
+        }
+    }
+
     if (locs.empty()) {
         send_result(msg.at("id"), nullptr);
         return;
@@ -1008,6 +1251,78 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
                 }
             }
         }
+        // NS.4: completado de miembro de NAMESPACE (`ns.simbolo`).  Si el
+        // receptor no resolvio a un tipo, puede ser un namespace: ofrecer sus
+        // simbolos desde el indice semantico (nombres CUALIFICADOS).  Coincide
+        // si el receptor es el PATH completo del namespace o su ULTIMO segmento
+        // (short-form), consistente con la resolucion del compilador.
+        if (type_name.empty()) {
+            // Ofrece los miembros de un namespace desde un conjunto de simbolos
+            // (nombres CUALIFICADOS) + su fuente (para extraer la firma).  Se
+            // aplica al indice del documento Y a los de los modulos importados
+            // (cross-module: `import "lib"; lib.<TAB>`).
+            auto offer_ns_members = [&](const std::vector<vx::SymbolEntry> &syms,
+                                        const std::string &src, bool public_only) {
+                for (const auto &s : syms) {
+                    // Cross-module: solo los `public` son importables.
+                    if (public_only && !s.is_public)
+                        continue;
+                    const std::string &q = s.name;
+                    const size_t dot = q.rfind('.');
+                    if (dot == std::string::npos)
+                        continue; // simbolo sin namespace.
+                    const std::string ns = q.substr(0, dot);
+                    const std::string member = q.substr(dot + 1);
+                    bool match = (ns == receiver);
+                    if (!match) {
+                        const size_t nd = ns.rfind('.');
+                        const std::string last =
+                            (nd == std::string::npos) ? ns : ns.substr(nd + 1);
+                        match = (last == receiver);
+                    }
+                    if (!match || !has_prefix(member, prefix))
+                        continue;
+                    // Mapear el ast::NodeKind (u8) del indice a CompletionKind.
+                    CompletionKind k = CompletionKind::Function;
+                    switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+                    case vx::ast::NodeKind::StructDecl: k = CompletionKind::Struct; break;
+                    case vx::ast::NodeKind::ClassDecl: k = CompletionKind::Class; break;
+                    case vx::ast::NodeKind::EnumDecl: k = CompletionKind::Enum; break;
+                    case vx::ast::NodeKind::TypeAliasDecl: k = CompletionKind::Class; break;
+                    case vx::ast::NodeKind::ConceptDecl: k = CompletionKind::Interface; break;
+                    case vx::ast::NodeKind::GlobalVarDecl:
+                        k = CompletionKind::Variable;
+                        break;
+                    default: k = CompletionKind::Function; break;
+                    }
+                    // Detalle = firma (cabecera del decl) + namespace, como el hover.
+                    std::string detail;
+                    {
+                        const size_t len = std::min<size_t>(s.src_length, 200);
+                        if (s.src_offset < src.size()) {
+                            std::string span = src.substr(s.src_offset, len);
+                            const size_t cut = span.find_first_of("{;\n");
+                            std::string sig = (cut == std::string::npos)
+                                                  ? span
+                                                  : span.substr(0, cut);
+                            while (!sig.empty() && (sig.back() == ' ' ||
+                                                    sig.back() == '\t' ||
+                                                    sig.back() == '\r'))
+                                sig.pop_back();
+                            detail = sig.empty() ? ns : (sig + "  (" + ns + ")");
+                        } else {
+                            detail = ns;
+                        }
+                    }
+                    add_item(member, k, detail);
+                }
+            };
+            // Namespaces del propio documento (todos, incl. privados de fichero).
+            offer_ns_members(an.sem_index.symbols, text, /*public_only=*/false);
+            // Namespaces de los modulos importados (solo los public).
+            for (const auto &im : an.imported_sem_indexes)
+                offer_ns_members(im.index.symbols, im.source, /*public_only=*/true);
+        }
         // Caso miembro: NO mezclamos el completado general (evitar inundar con
         // todo el universo de nombres tras un punto).  Respondemos lo hallado
         // (puede ser vacio si el tipo no se resolvio: best-effort documentado).
@@ -1024,10 +1339,21 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
     for (const auto &ty : vx_types())
         if (has_prefix(ty, prefix))
             add_item(ty, CompletionKind::Class, "tipo");
-    // Builtins comunes (lista curada).
+    // Builtins comunes (lista curada, incluye los que no tienen doc formal).
     for (const auto &b : vx_builtins())
         if (has_prefix(b, prefix))
             add_item(b, CompletionKind::Function, "builtin");
+    // Builtins documentados (introspeccion, conceptos, overlay, strings, ...):
+    // la tabla de docs es la fuente de verdad; el detalle es su firma real.
+    for (const auto &b : all_builtin_names())
+        if (has_prefix(b, prefix)) {
+            const BuiltinDoc *d = lookup_builtin(b);
+            // Los conceptos se ofrecen como interfaz/clase (bound o predicado);
+            // el resto como funcion builtin.
+            bool is_concept = d && d->signature.find("<T>()  |  <T:") != std::string::npos;
+            add_item(b, is_concept ? CompletionKind::Interface : CompletionKind::Function,
+                     d ? d->signature : std::string("builtin"));
+        }
 
     // Simbolos del propio documento (con su firma como detalle cuando exista).
     DocSymbols sym = build_doc_symbols(text, uri);
@@ -1046,6 +1372,7 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
         case SymbolKind::Method: k = CompletionKind::Method; break;
         case SymbolKind::Field: k = CompletionKind::Field; break;
         case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+        case SymbolKind::Concept: k = CompletionKind::Interface; break;
         default: k = CompletionKind::Variable; break;
         }
         add_item(d.name, k, d.signature);
@@ -1072,6 +1399,7 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
                 case SymbolKind::Method: k = CompletionKind::Method; break;
                 case SymbolKind::Field: k = CompletionKind::Field; break;
                 case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+                case SymbolKind::Concept: k = CompletionKind::Interface; break;
                 default: k = CompletionKind::Variable; break;
                 }
                 add_item(name, k, signature);
@@ -1133,12 +1461,26 @@ bool LspServer::handle_vesta_request(const std::string &method,
             const std::string format =
                 params.value("format", std::string("mermaid"));
             const bool cost = params.value("cost", false);
-            result = inspector_.diagram(uri, kind, format, cost, itarget);
+            // 'function' solo lo usa kind="asm" (CFG del codigo nativo).
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.diagram(uri, kind, format, cost, itarget, fn);
         } else if (method == "vesta/functions") {
             result = inspector_.functions(uri);
         } else if (method == "vesta/aotCompat") {
             const std::string tier = params.value("tier", std::string("bare"));
             result = inspector_.aot_compat(uri, tier);
+        } else if (method == "vesta/modes") {
+            // Reporte del modulo en interp/JIT/AOT (todos, o el 'mode' pedido).
+            const std::string md = params.value("mode", std::string());
+            const std::string tier = params.value("tier", std::string("bare"));
+            result = inspector_.modes(uri, md, tier);
+        } else if (method == "vesta/compile" ||
+                   method == "vesta/compileProject") {
+            // El LSP embebe el compilador: produce un .velb en disco usando el
+            // driver reutilizable (vesta::tc).  No ejecuta nada (eso corre en
+            // un proceso aparte: correrlo aqui escribiria en el stdout del LSP
+            // y romperia el canal JSON-RPC).
+            result = compile_request(method, uri, params);
         } else if (method == "vesta/jitAsm") {
             const std::string fn = params.value("function", std::string());
             result = inspector_.jit_asm(uri, fn, itarget);

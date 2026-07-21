@@ -1,0 +1,47 @@
+// Un struct como variable GLOBAL, y el caso que lo pide de verdad: un contador
+// atomico compartido.
+//
+// Un atomico compartido ES una global -- si cada funcion tuviera el suyo no
+// habria nada que compartir.  Igual que un array global, un struct global vive
+// en el bloque de datos y su nombre vale por su direccion.
+namespace atomic_global;
+
+import "vx_atomic" only atomic;
+
+// El contador que ven todas las funciones del modulo.
+atomic<i64> peticiones;
+
+// Un struct normal tambien puede ser global.
+struct Config {
+    i64 limite;
+    i64 reintentos;
+}
+Config cfg;
+
+void atender() {
+    peticiones += 1;        // lock xadd sobre el contador compartido
+}
+
+i64 total() {
+    return *peticiones;     // load atomico
+}
+
+i32 main() {
+    peticiones = 0;
+    cfg.limite = 100;
+    cfg.reintentos = 3;
+
+    atender();
+    atender();
+    atender();
+    println("peticiones = ${total()}");             // 3
+
+    // La forma larga tambien: el compilador la funde en el mismo incremento.
+    peticiones = peticiones + 36;
+    println("tras +36  = ${total()}");              // 39
+
+    println("config: limite=${cfg.limite} reintentos=${cfg.reintentos}");
+
+    // 39 + 3 = 42
+    return (i32)(total() + cfg.reintentos);
+}

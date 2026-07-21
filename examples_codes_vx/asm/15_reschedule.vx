@@ -1,0 +1,23 @@
+// ASA: bloque `asm { }` ANALIZABLE multi-instruccion.  El compilador puede
+// reordenarlo por latencia/puertos (reschedule_asm), pero SIEMPRE respetando las
+// dependencias -> el resultado no cambia.  Aqui:
+//   rax = rdi;  rax = rax*rax (=9);  rcx = rsi;  rax = rax + rcx (=13).
+// La `mov rcx, rsi` es independiente de la cadena de rax y el planificador puede
+// adelantarla; el resultado sigue siendo 3*3 + 4 = 13.
+//
+//     vm --vx 15_reschedule.vx -o resched
+//     vm --run resched.velb
+//
+// @expect 13
+u64 main() {
+    register("rdi") u64 a = 3;
+    register("rsi") u64 b = 4;
+    register("rax") u64 r;
+    asm {
+        mov rax, rdi
+        imul rax, rax
+        mov rcx, rsi
+        add rax, rcx
+    } clobbers("rcx");
+    return r;
+}

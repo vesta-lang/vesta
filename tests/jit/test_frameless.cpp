@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_frameless.cpp
- * @brief Test del codegen FRAMELESS de hojas en el path vreg (Phase D.8 / C2).
+ * @brief Test del codegen FRAMELESS de hojas en el path vreg ( D.8 / C2).
  *
  * Una hoja (funcion sin CALLs) que no spillea ni reserva allocas no necesita
  * frame pointer: el rewrite (@c regalloc_rewrite.cpp) omite
@@ -315,7 +315,7 @@ static void test_call_preserves_frame() {
 
 int main() {
     std::setbuf(stdout, nullptr);
-    std::printf("=== test_frameless (Phase D.8 / C2: codegen frameless de "
+    std::printf("=== test_frameless ( D.8 / C2: codegen frameless de "
                 "hojas) ===\n");
     test_leaf_is_frameless();
     test_leaf_loop_is_frameless();

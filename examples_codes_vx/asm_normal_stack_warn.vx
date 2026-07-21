@@ -1,0 +1,19 @@
+// Reasignar rsp en una funcion NORMAL (no @Naked): se compila en el JIT
+// (no cae al interprete), pero el compilador AVISA (VXA010).
+//
+// El epilogue de una funcion normal gestiona la pila, asi que un cambio de
+// pila PERSISTENTE (una corrutina/fibra) no sobrevive al retorno.  Aqui el
+// cambio esta EQUILIBRADO (guardamos rsp en rcx y lo restauramos), asi que el
+// programa devuelve 42 correctamente; el aviso te recuerda que para un switch
+// persistente uses @Naked.
+//
+//     vm --vx asm_normal_stack_warn.vx -o s && vm --run s.velb
+// @expect 42
+u64 main() {
+    register("rax") u64 r = 42;
+    asm volatile {
+        mov rcx, rsp        // guardar rsp (leerlo NO dispara el aviso)
+        mov rsp, rcx        // reasignar rsp (equilibrado) -> VXA010
+    };
+    return r;
+}

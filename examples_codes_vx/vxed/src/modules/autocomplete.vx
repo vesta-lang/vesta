@@ -18,8 +18,8 @@ import "modules/screen";
 import "modules/keys";
 import "modules/input";
 
-public comptime i32 AC_MAX_TOKENS = 1024;
-public comptime i32 AC_MAX_NAME   = 64;
+public const i32 AC_MAX_TOKENS = 1024;
+public const i32 AC_MAX_NAME   = 64;
 
 public class AutoComplete {
     public u8*   names;

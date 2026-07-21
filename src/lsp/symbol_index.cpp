@@ -69,6 +69,7 @@ const char *symbol_kind_name(SymbolKind k) {
     case SymbolKind::Method: return "metodo";
     case SymbolKind::Field: return "campo";
     case SymbolKind::EnumVariant: return "variante de enum";
+    case SymbolKind::Concept: return "concepto";
     case SymbolKind::Unknown:
     default:
         return "simbolo";
@@ -333,6 +334,29 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
                 dn.signature = make_signature(m->name, m->params);
                 out.push_back(std::move(dn));
                 add_params(m->params, d->name + "." + m->name);
+            }
+            break;
+        }
+        case NodeKind::ConceptDecl: {
+            auto *d = static_cast<const ConceptDecl *>(node.get());
+            if (!d->name.empty()) {
+                DeclName dn;
+                dn.name = d->name;
+                dn.kind = SymbolKind::Concept;
+                dn.line = d->loc.line;
+                // Firma legible: concept N<T> (usable como bound o predicado).
+                std::string sig = "concept " + d->name;
+                if (!d->type_params.empty()) {
+                    sig += "<";
+                    for (size_t i = 0; i < d->type_params.size(); ++i) {
+                        if (i)
+                            sig += ", ";
+                        sig += d->type_params[i];
+                    }
+                    sig += ">";
+                }
+                dn.signature = std::move(sig);
+                out.push_back(std::move(dn));
             }
             break;
         }

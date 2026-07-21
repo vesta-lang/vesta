@@ -11,7 +11,7 @@ struct Flags {
 
 i32 main() {
     Flags f;
-    VirtualPtr<u32> p = &f.a;
+    u32* p = &f.a;
     *p = 0;            // limpiar todo
 
     // Escrituras independientes: read-modify-write para cada campo.

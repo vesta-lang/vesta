@@ -1,0 +1,23 @@
+// MANIPULAR LA PILA desde el asm esta PERMITIDO.
+//
+// Ahora que el asm no es una caja negra, el compilador ENTIENDE las
+// operaciones de pila y no las prohibe: leer rsp, guardar/restaurar con
+// push/pop, reservar con sub/add rsp -- todo funciona en interp Y jit, sin
+// falsos positivos (rsp/rbp estan siempre vivos por el ABI).  Lo que NO se
+// permite es pinear un VALOR Vesta a rsp/rbp (no cabe en el puntero de pila);
+// para eso esta el cuerpo del asm.
+//
+//     vm --vx asm_stack_manip.vx -o s && vm --run s.velb
+// @expect 42
+u64 main() {
+    register("rax") u64 r = 42;
+    register("rcx") u64 sp;
+    asm volatile {
+        mov rcx, rsp        // leer el puntero de pila (rsp siempre valido)
+        push rax            // guardar r en la pila
+        mov  rax, 999       // pisar rax
+        pop  rax            // restaurar r desde la pila -> rax = 42
+    };
+    // r = 42 (round-trip por la pila); sp = una direccion de pila valida.
+    return (sp > 0x1000) ? r : 0;
+}

@@ -11,6 +11,7 @@
 
 #include "runtime/profile.h"
 
+#include "ir/passes/select_policy.h"
 #include "loader/oop_types.h"
 
 #include <atomic>
@@ -20,6 +21,9 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <functional>
+#include <unordered_map>
+#include <utility>
 
 namespace runtime {
 namespace profile {
@@ -28,6 +32,14 @@ namespace profile {
 /// que @c active es false al startup -> fast path inline en todos
 /// los hooks no paga overhead.
 ProfileCollector g_profile;
+
+// Tabla estatica del profiler ligero (lock-free) + flag de actividad.
+LiteBranchSlot g_lite_branches[kLiteBranchSlots];
+std::atomic<bool> g_lite_active{false};
+
+void lite_profile_set_active(bool on) {
+    g_lite_active.store(on, std::memory_order_release);
+}
 
 namespace {
 std::once_flag g_atexit_once;
@@ -179,6 +191,84 @@ void write_u64(std::ofstream &out, uint64_t v) {
 // en TypeObservation::class_name al momento de la observacion
 // porque al dump (atexit) el ClassRegistry ya esta destruido.
 } // namespace
+
+int profile_write_branch_lines(
+    const std::string &path,
+    const std::function<uint32_t(uint64_t)> &pc_to_line) {
+    if (path.empty()) return 0;
+    // Agregar taken/not_taken por linea fuente.
+    std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> by_line;
+    {
+        std::lock_guard<std::mutex> lk(g_profile.collector_mtx);
+        for (const auto &kv : g_profile.branches) {
+            const uint32_t line = pc_to_line(kv.first);
+            if (line == 0) continue; // sin linea -> se descarta
+            auto &e = by_line[line];
+            e.first += kv.second.taken.load(std::memory_order_relaxed);
+            e.second += kv.second.not_taken.load(std::memory_order_relaxed);
+        }
+    }
+    std::ofstream out(path);
+    if (!out) {
+        std::fprintf(stderr,
+                     "[profile] error: no se pudo abrir '%s' para el perfil de "
+                     "branches\n",
+                     path.c_str());
+        return 0;
+    }
+    int n = 0;
+    for (const auto &kv : by_line) {
+        out << kv.first << ' ' << kv.second.first << ' ' << kv.second.second
+            << '\n';
+        ++n;
+    }
+    std::fprintf(stderr, "[profile] perfil de branches por linea: %s (%d lineas)\n",
+                 path.c_str(), n);
+    return n;
+}
+
+int profile_apply_branch_lines(
+    const std::function<uint32_t(uint64_t)> &pc_to_line) {
+    // Agregar taken/not_taken por linea fuente.  Se leen AMBAS fuentes: el
+    // profiler ligero (auto-PGO del JIT, always-on con el JIT) y el pesado D.6
+    // (--profile).  La linea comun se suma; asi el bridge funciona con
+    // cualquiera de los dos activo.
+    std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> by_line;
+    // Fuente 1: profiler ligero (tabla fija lock-free).
+    for (size_t i = 0; i < kLiteBranchSlots; ++i) {
+        const uint64_t pc = g_lite_branches[i].pc.load(std::memory_order_relaxed);
+        if (pc == 0) continue;
+        const uint32_t line = pc_to_line(pc);
+        if (line == 0) continue;
+        auto &e = by_line[line];
+        e.first += g_lite_branches[i].taken.load(std::memory_order_relaxed);
+        e.second += g_lite_branches[i].not_taken.load(std::memory_order_relaxed);
+    }
+    // Fuente 2: profiler pesado D.6 (si estaba activo con --profile).
+    {
+        std::lock_guard<std::mutex> lk(g_profile.collector_mtx);
+        for (const auto &kv : g_profile.branches) {
+            const uint32_t line = pc_to_line(kv.first);
+            if (line == 0) continue; // sin linea -> se descarta
+            auto &e = by_line[line];
+            e.first += kv.second.taken.load(std::memory_order_relaxed);
+            e.second += kv.second.not_taken.load(std::memory_order_relaxed);
+        }
+    }
+    int n = 0;
+    for (const auto &kv : by_line) {
+        const uint64_t taken = kv.second.first;
+        const uint64_t nt = kv.second.second;
+        const uint64_t total = taken + nt;
+        if (total == 0) continue;
+        // P(mispredict) = fraccion de la rama minoritaria.
+        const uint64_t minor = taken < nt ? taken : nt;
+        const double p = static_cast<double>(minor) / static_cast<double>(total);
+        ir::set_branch_profile_entry(kv.first, p);
+        ++n;
+    }
+    return n;
+}
 
 void profile_dump() {
     if (g_profile.output_path.empty()) return;

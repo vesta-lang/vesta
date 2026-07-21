@@ -64,7 +64,7 @@ class VirtualMemory {
      * en sucesion.  Cachear la traduccion (vaddr_base -> host_ptr) salta
      * el TLB walk de 3 niveles para hits.
      *
-     * **Publico para inline page cache hit del JIT** (Phase D.jit-mem-model
+     * **Publico para inline page cache hit del JIT** ( D.jit-mem-model
      * INLINE-CACHE): el codigo nativo emite cmp directo contra
      * cached_page_vaddr y carga cached_page_host sin call al runtime.
      * Los offsets se expone via @c vesta_rt/abi.h con @c static_assert

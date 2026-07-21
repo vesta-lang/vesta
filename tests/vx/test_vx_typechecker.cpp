@@ -12,7 +12,7 @@
 
 /**
  * @file test_vx_typechecker.cpp
- * @brief Test del pase de comprobacion de tipos de Vex.
+ * @brief Test del pase de comprobacion de tipos de Vesta-lang.
  *
  * Cobertura:
  *   - Programa correcto (compila limpio).

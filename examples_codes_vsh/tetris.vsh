@@ -1329,9 +1329,9 @@ class Game {
 
         // Animacion de line clear: parpadeo en blanco
         if self.state == STATE_LINE_CLEAR {
-            let phase = (self.line_clear_timer_ms / 100) % 2
+            let  = (self.line_clear_timer_ms / 100) % 2
             let col = ansi_rgb(255, 255, 255)
-            if phase == 0 { col = ansi_rgb(180, 180, 180) }
+            if  == 0 { col = ansi_rgb(180, 180, 180) }
             for lr in self.lines_to_clear {
                 let cc = 0
                 while cc < BOARD_W {

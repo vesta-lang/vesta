@@ -1,0 +1,45 @@
+namespace std.comptime.basics;
+
+/// @brief Captures the source text of an expression.
+///
+/// Returns the exact source text passed at the call site as a string literal.
+/// The argument is captured verbatim before semantic analysis, allowing macros
+/// to implement custom DSLs or perform source-level transformations.
+///
+/// @param code Source text to capture.
+/// @return A string literal containing the captured source text.
+///
+/// @code
+/// string s = comptime.source(a + b * c);
+/// // s == "a + b * c"
+///
+/// string path = comptime.source(ptr -> 0x90 -> 0x10);
+/// // path == "ptr -> 0x90 -> 0x10"
+/// @endcode
+///
+/// @note The captured text is not parsed or evaluated by the compiler before
+/// being passed to the macro.
+/* @Macro */ public comptime string source(expr code) {
+    // no usamos @Macro por que esto provoca que el codigo retornado
+    // se inyecte lo cual no nos interesa, solo queremos string-ficar el
+    // codigo o contenido pasado a esta funcion para que otras las procesen.
+    // Devuelve el texto CRUDO (sin comillas): asi el resultado puede
+    // spliceearse como codigo Vesta real (p.ej. construir el cuerpo de un
+    // lambda), no como un string literal.  El IDE resalta el argumento como
+    // codigo en lugar de un string opaco.
+    return code;
+}
+
+/// @brief Inyecta un string de codigo Vesta como una expresion.
+///
+/// `inject(code)` toma un `string` cuyo contenido es codigo Vesta (p.ej. el
+/// generado por otra `comptime fn`) y lo INYECTA en el sitio de llamada: el
+/// string se re-parsea como una expresion y sustituye a la llamada.  Asi el
+/// resultado de un generador de codigo (`comptime string CODE = gen(...)`) se
+/// convierte en codigo ejecutable con `inject(CODE)`.
+///
+/// A diferencia de `source` (que CAPTURA el texto de su argumento), `inject`
+/// EVALUA su argumento a un string y lo inyecta como codigo.
+@Macro public comptime string inject(string code) {
+    return code;
+}

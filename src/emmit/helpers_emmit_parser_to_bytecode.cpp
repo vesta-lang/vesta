@@ -250,7 +250,7 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
                                    static_cast<uint32_t>(instr->source_line)});
     }
 
-    // Stackmap PRECISO (Phase E.1): si la instruccion lleva un marcador
+    // Stackmap PRECISO ( E.1): si la instruccion lleva un marcador
     // `// @sm <hex>`, decodificar el hex y registrar el par
     // (byte_offset_del_modulo, slots).  El linker suma el offset del code
     // section para producir el offset absoluto y emite la seccion VSMP.

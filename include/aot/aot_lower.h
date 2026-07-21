@@ -10,7 +10,7 @@
 
 /**
  * @file aot/aot_lower.h
- * @brief Phase AOT.2 -- re-bajada de ops sintetizadas a CALL a simbolos
+ * @brief  AOT.2 -- re-bajada de ops sintetizadas a CALL a simbolos
  * externos.
  *
  * Pase IR->IR (independiente del target) que el driver @c -m aot ejecuta ANTES

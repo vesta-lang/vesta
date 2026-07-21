@@ -1,4 +1,4 @@
-// Excepciones nativas AOT (auto-hospedadas en Vex, setjmp/longjmp).
+// Excepciones nativas AOT (auto-hospedadas en , setjmp/longjmp).
 //
 // try/catch/throw sin GC, sin VM, sin runtime de la VM: el frontend baja
 // el try a __vx_push_frame + __vx_setjmp + br_cond, el throw a

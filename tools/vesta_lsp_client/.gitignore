@@ -1,0 +1,43 @@
+# Bytecode / cache de Python (NO subir)
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Empaquetado / distribucion
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Cobertura / test / typing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Editores / SO
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Artefactos de ejemplo (fuentes .vx temporales, binarios compilados)
+*.velb
+*.velb-map
+*.vel
+*.vexi
+*.vexir

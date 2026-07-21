@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_vreg_select.cpp
- * @brief Test del selector vreg desde IR (Phase D.7, commit 4b).
+ * @brief Test del selector vreg desde IR ( D.7, commit 4b).
  *
  * Construye IrFunctions, las selecciona a MachineIR de vregs, pasa por el
  * pipeline completo (intervals -> linear-scan -> rewrite) y EJECUTA el codigo
@@ -286,7 +286,7 @@ static void test_fallback() {
 
 int main() {
     std::setbuf(stdout, nullptr);
-    std::printf("=== test_vreg_select (Phase D.7 commit 4b/4c) ===\n");
+    std::printf("=== test_vreg_select ( D.7 commit 4b/4c) ===\n");
     test_mul();
     test_chain();
     test_loop_sum();

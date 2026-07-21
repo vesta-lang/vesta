@@ -899,6 +899,94 @@ static void test_float_ops() {
 //  main
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+//  Test ASM_MICRO: instruccion asm opaca liftada (isa+form_id de la DB) con
+//  operandos de entrada espejados (para liveness) y multiples salidas.
+// ---------------------------------------------------------------------------
+
+static void test_asm_micro() {
+    std::cout << "\n[Test ASM_MICRO] op + side-table + printer\n";
+
+    // Nombre/parse round-trip del opcode.
+    check(std::string(ir::ir_op_name(ir::IrOp::ASM_MICRO)) == "asm_micro",
+          "ir_op_name(ASM_MICRO) == \"asm_micro\"");
+    {
+        ir::IrOp op = ir::IrOp::NOP;
+        check(ir::ir_op_parse("asm_micro", op) && op == ir::IrOp::ASM_MICRO,
+              "ir_op_parse(\"asm_micro\") -> ASM_MICRO");
+    }
+
+    ir::IrModule mod;
+    mod.name = "test.asm_micro";
+    ir::IrFunction fn;
+    fn.name = "cpuid_leaf";
+    fn.ret_type = ir::IrType::VOID;
+
+    // Entrada eax (leaf) + salidas eax/ebx/ecx/edx: modela `cpuid`, que lee eax
+    // y escribe los 4 registros -> multi-salida (dst unico NO bastaria).
+    ir::IrValueId in_eax = fn.new_value(ir::IrType::I32, "leaf");
+    ir::IrValueId o_a = fn.new_value(ir::IrType::I32, "a");
+    ir::IrValueId o_b = fn.new_value(ir::IrType::I32, "b");
+    ir::IrValueId o_c = fn.new_value(ir::IrType::I32, "c");
+    ir::IrValueId o_d = fn.new_value(ir::IrType::I32, "d");
+
+    ir::IrBlockId entry = fn.new_block("entry");
+
+    // Side-table: forma de la DB + plantilla + operandos + salidas.
+    ir::AsmMicro am;
+    am.isa = 0;        // x86_64 (== instr_db::Isa)
+    am.form_id = 4242; // indice de forma en la DB (identidad -> efectos)
+    am.tmpl = "cpuid";
+    am.eff = 0; // cpuid: sin mem, no flags; barrera se consulta por form_id
+    {
+        ir::AsmMicroOperand op;
+        op.role = 2;          // lee-escribe (eax es entrada Y salida)
+        op.regclass = 0;      // GP
+        op.fixed_phys = 0;    // eax fijo
+        op.value = in_eax;
+        am.ins.push_back(op);
+    }
+    am.outs = {o_a, o_b, o_c, o_d};
+
+    ir::IrInstr ins;
+    ins.op = ir::IrOp::ASM_MICRO;
+    ins.type = ir::IrType::VOID;
+    ins.dst = o_a;           // primera salida (def visible al generico)
+    ins.operands = {in_eax}; // espejo de las entradas (liveness ve el uso)
+    ins.imm = fn.asm_micros.size();
+    fn.asm_micros.push_back(am);
+    fn.append(entry, ins);
+
+    {
+        ir::IrInstr r;
+        r.op = ir::IrOp::RET;
+        r.type = ir::IrType::VOID;
+        fn.append(entry, r);
+    }
+    mod.add_function(std::move(fn));
+
+    check(mod.functions[0].asm_micros.size() == 1,
+          "side-table asm_micros tiene 1 entrada");
+    check(mod.functions[0].asm_micros[0].outs.size() == 4,
+          "ASM_MICRO modela 4 salidas (cpuid eax/ebx/ecx/edx)");
+    check(mod.functions[0].asm_micros[0].ins.size() == 1 &&
+              mod.functions[0].asm_micros[0].ins[0].fixed_phys == 0,
+          "operando de entrada fijado a reg fisico (eax)");
+
+    std::ostringstream oss;
+    ir::ir_print(mod, oss);
+    const std::string text = oss.str();
+    check(text.find("asm_micro") != std::string::npos,
+          "printer emite el mnemonico asm_micro");
+    check(text.find("isa=0") != std::string::npos, "printer emite isa=0");
+    check(text.find("form=4242") != std::string::npos,
+          "printer emite form=4242");
+    check(text.find("cpuid") != std::string::npos,
+          "printer emite la plantilla");
+    check(text.find("outs=[") != std::string::npos,
+          "printer lista las salidas");
+}
+
 int main() {
     std::cout << "=== SSA IR Test Suite ===\n";
 
@@ -912,6 +1000,7 @@ int main() {
     test_monitors();
     test_exceptions();
     test_float_ops();
+    test_asm_micro();
 
     std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail
               << " FAIL ===\n";

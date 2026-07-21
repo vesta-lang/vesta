@@ -33,9 +33,9 @@ namespace lsp {
  * @brief Metadatos de un builtin para el hover y los ghost args.
  */
 struct BuiltinDoc {
-    const char *name;      ///< Nombre del builtin.
-    const char *signature; ///< Firma legible, p.ej. "println(value) -> void".
-    const char *doc;       ///< Descripcion (que recibe / hace / retorna).
+    const char *name;      ///< Nombre del builtin (clave; siempre un literal).
+    std::string signature; ///< Firma legible, p.ej. "println(value) -> void".
+    std::string doc;       ///< Descripcion (que recibe / hace / retorna).
     std::vector<std::string> params; ///< Nombres de parametros (ghost args).
 };
 
@@ -45,6 +45,16 @@ struct BuiltinDoc {
  * @return Puntero estable al metadato, o @c nullptr si no es un builtin.
  */
 const BuiltinDoc *lookup_builtin(const std::string &name);
+
+/**
+ * @brief Devuelve todos los nombres de builtins documentados (orden estable).
+ *
+ * Fuente unica para el completado del LSP: el handler de completion une esta
+ * lista con las palabras clave y los simbolos del proyecto.  Mantenerla junto
+ * a la tabla de docs evita que el completado y el hover diverjan.
+ * @return Referencia estable al vector de nombres.
+ */
+const std::vector<std::string> &all_builtin_names();
 
 } // namespace lsp
 

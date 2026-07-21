@@ -1,5 +1,5 @@
 // obj_accum: objeto mutable de 4 campos; el C2 JIT hace escape analysis +
-// scalar replacement del objeto no-escapante (equivalente a mem2reg de Vex).
+// scalar replacement del objeto no-escapante (equivalente a mem2reg de ).
 public class Main {
     static class Stats { long sum=0, cnt=0, mn=2000000000L, mx=-2000000000L; }
     public static void main(String[] args) {

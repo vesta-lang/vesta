@@ -205,6 +205,9 @@ function(add_vesta_plugin TARGET)
     if(DEFINED VESTA_SDK_DIR)
         file(RELATIVE_PATH _vp_rel "${VESTA_SDK_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
         if(_vp_rel MATCHES "^stdlib/")
+            # Los plugins nativos viven en el arbol de la stdlib (stdlib/native/..),
+            # que va en la RAIZ del prefijo (no en bin/).  El runtime en bin/ los
+            # resuelve relativo a su padre (exe_dir/../stdlib/native/..).
             install(TARGETS ${TARGET}
                 RUNTIME DESTINATION "${_vp_rel}" COMPONENT stdlib
                 LIBRARY DESTINATION "${_vp_rel}" COMPONENT stdlib)

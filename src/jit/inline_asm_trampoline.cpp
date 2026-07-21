@@ -8,16 +8,19 @@
 /**
  * @file jit/inline_asm_trampoline.cpp
  * @brief Implementacion del trampoline de inline-asm para el interprete
- *        (Phase AS inc.6).  Ver inline_asm_trampoline.h.
+ *        ( AS inc.6).  Ver inline_asm_trampoline.h.
  */
 
 #include "jit/inline_asm_trampoline.h"
 
 #include "jit/code_cache.h"
-#include "vx/asm_backend.h"
+#include "vx/asm/asm_backend.h"
 #include "ffi/virtual_lib_registry.h" // inc.6: registrar el helper runner
 #include "runtime/proceso_runtime.h" // inc.6: acceso a ProcessVM::asm_ctx + vm_mem
+
+#include <atomic> // emulacion portable del efecto (barrera) sin ensamblador
 #include "ir/ssa_ir.h"               // inc.6: IrFunction/IrInstr/IrOp del batch
+#include "vx/asm/asm_phys_reg.h"     // sustitucion $N -> reg fisico
 
 #include <cstdio>
 #include <cstdlib>
@@ -28,7 +31,7 @@
 namespace jit {
 
 // =====================================================================
-//  Phase AS inc.6: registro global hash(NASM) -> trampoline + helper
+//   AS inc.6: registro global hash(NASM) -> trampoline + helper
 //  nativo que el interprete invoca por cada bloque inline-asm.
 // =====================================================================
 
@@ -104,9 +107,45 @@ extern "C" uint64_t vrt_inline_asm_exec(uint64_t proc, uint64_t hash,
     return 0;
 }
 
+/* Ejecuta una ASM_MICRO (asm opaco liftado, SIN operandos de registro) en el
+ * interprete, con doble via segun haya ensamblador:
+ *
+ *   arg0 proc = ProcessVM* (scratch ctx para el trampoline).
+ *   arg1 hash = FNV-1a de la plantilla (clave del trampoline nativo).
+ *   arg2 eff  = bits de efecto de la DB (bit3 barrera) para la EMULACION.
+ *
+ * Si existe un trampoline nativo (el loader lo construyo con el ensamblador
+ * para el host), se ejecuta la instruccion REAL.  Si NO (host sin ensamblador u
+ * otra arch), se EMULA su efecto de forma PORTABLE via los eff bits -> el codigo
+ * sigue funcionando en cualquier arch (esta es la ventaja de ASM_MICRO sobre la
+ * caja opaca INLINE_ASM, que sin ensamblador no puede hacer NADA). */
+extern "C" uint64_t vrt_asm_micro_exec(uint64_t proc, uint64_t hash,
+                                       uint64_t eff) {
+    AsmTrampolineFn tramp = lookup_inline_asm_trampoline(hash);
+    if (tramp != nullptr) {
+        // Via nativa (ensamblador presente): ejecuta la instruccion REAL.  Sin
+        // operandos de registro -> ctx solo es scratch para el prologo/epilogo
+        // generico del trampoline.
+        auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
+        if (vm != nullptr) {
+            for (int i = 0; i < 16; ++i)
+                vm->asm_ctx[i] = 0;
+            tramp(vm->asm_ctx);
+        }
+        return 0;
+    }
+    // Via portable (sin ensamblador / otra arch): emular el efecto de la DB.
+    if (eff & 0x8u) // barrera de memoria (mfence/lfence/sfence)
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    // Sin barrera (pause/nop): no-op.
+    return 0;
+}
+
 void register_inline_asm_runner() {
     ffi::register_virtual_fn("vrt", "inline_asm_exec",
                              reinterpret_cast<void *>(&vrt_inline_asm_exec));
+    ffi::register_virtual_fn("vrt", "asm_micro_exec",
+                             reinterpret_cast<void *>(&vrt_asm_micro_exec));
 }
 
 void build_and_register_inline_asm_trampolines(
@@ -119,12 +158,34 @@ void build_and_register_inline_asm_trampolines(
     for (const auto &fn : fns) {
         for (const auto &blk : fn.blocks) {
             for (const auto &ins : blk.instrs) {
-                if (ins.op != ir::IrOp::INLINE_ASM) continue;
-                const uint64_t hash = fnv1a64_asm(ins.func_name);
+                // Cuerpo asm a registrar como trampoline nativo: INLINE_ASM lo
+                // lleva en func_name; ASM_MICRO (asm opaco liftado, caso sin
+                // operandos de registro) en asm_micros[imm].tmpl.  El interp
+                // ejecuta ambos via el trampoline SOLO si hay ensamblador; si no,
+                // no se registra y vrt_inline_asm_exec hace no-op (sigue corriendo).
+                const std::string *body = nullptr;
+                std::string subst; // vive hasta el registro (: $N -> reg)
+                if (ins.op == ir::IrOp::INLINE_ASM) {
+                    // sustituir $N por el pick GREEDY del binding (el
+                    // interp no tiene RA).  Mismo cuerpo que hashea ir_emitter.
+                    subst = vx::asm_body_subst_greedy(ins.func_name,
+                                                      fn.asm_reg_bindings);
+                    body = &subst;
+                } else if (ins.op == ir::IrOp::ASM_MICRO &&
+                           ins.imm < fn.asm_micros.size()) {
+                    const ir::AsmMicro &am = fn.asm_micros[ins.imm];
+                    if (am.operands.empty()) {
+                        body = &am.tmpl; // sin operandos: verbatim
+                    } else if (vx::asm_micro_subst_phys(am, subst)) {
+                        body = &subst;   // fisico fijo sustituido
+                    }
+                    // operando no fisico (SSA/RA) -> no se trampolinea
+                }
+                if (body == nullptr) continue;
+                const uint64_t hash = fnv1a64_asm(*body);
                 if (lookup_inline_asm_trampoline(hash) != nullptr) continue;
                 std::string err;
-                AsmTrampolineFn tp =
-                    build_asm_trampoline(ins.func_name, asm_cc, &err);
+                AsmTrampolineFn tp = build_asm_trampoline(*body, asm_cc, &err);
                 if (tp == nullptr) {
                     std::fprintf(stderr,
                                  "[asm] no se pudo ensamblar el trampoline de "

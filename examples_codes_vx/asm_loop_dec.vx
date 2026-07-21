@@ -1,0 +1,21 @@
+// flags-as-SSA extendido: las flags no vienen SOLO de cmp/test.  Una ALU
+// (add/sub/and/or/xor/inc/dec/neg) define ZF (result==0), que un jz/jnz posterior
+// lee -- el bucle contador clasico `dec rcx; jnz .top` sin cmp.  El lift lo baja
+// a un IR-CFG real (BR_COND), asi que el bucle escrito en asm se OPTIMIZA como
+// cualquier bucle del lenguaje, en interp/JIT/AOT.
+//
+//     vm --vx asm_loop_dec.vx -o c && vm --run c.velb
+// @expect 42
+u64 main() {
+    register("rax") u64 acc = 0;
+    register("rcx") u64 n = 9;
+    // acc = 9 + 8 + ... + 1 = 45 (el dec define ZF; jnz la lee, sin cmp).
+    asm { .top:
+          add rax, rcx
+          dec rcx
+          jnz .top };
+    // 45 - 3 = 42.
+    register("rbx") u64 tres = 3;
+    asm { sub rax, rbx };
+    return acc;
+}
