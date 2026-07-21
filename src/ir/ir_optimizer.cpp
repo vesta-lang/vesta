@@ -4497,6 +4497,221 @@ bool ir_pass_fuse_fma(IrFunction &fn) {
     return changed;
 }
 
+// Crea un nuevo SSA value CONST de tipo @c type con valor @c imm y devuelve
+// (new_vid, instr).  El caller debe INSERTAR la instr en un bloque (antes del
+// uso) para que el IR quede bien-formado.  Version libre de la lambda homonima
+// de strength_reduction, usada por ir_pass_narrow_cmp.
+static std::pair<IrValueId, IrInstr> make_new_narrow_const(IrFunction &fn,
+                                                           IrType type,
+                                                           uint64_t imm) {
+    const IrValueId new_id = static_cast<IrValueId>(fn.values.size());
+    IrValue v{};
+    v.id = new_id;
+    v.type = type;
+    v.name = "%nc" + std::to_string(new_id);
+    v.is_const = true;
+    v.const_val = imm;
+    fn.values.push_back(v);
+    IrInstr ci{};
+    ci.op = IrOp::CONST;
+    ci.type = type;
+    ci.dst = new_id;
+    ci.imm = imm;
+    return {new_id, ci};
+}
+
+// ==========================================================================
+//  Pase ir_pass_narrow_cmp -- estrechar comparaciones extendidas
+// ==========================================================================
+//
+// El frontend promueve un operando estrecho (i8/i16/i32) a i64 con SEXT/ZEXT
+// cuando el otro operando es un literal i64, y compara a 64 bits:
+//
+//     %c = const.i64 35
+//     %s = sext.i64 %a        (%a : i32)
+//     %r = cmp.ne.bool %s, %c
+//
+// Como el backend compara al ANCHO de los operandos (verificado: `i32 == i32`
+// emite un compare de 32 bits width-aware, correcto aun con bits altos sucios),
+// esto equivale a comparar %a (i32) contra un const.i32 35 -> se elimina el SEXT
+// y el const.i64 (los mata el DCE):
+//
+//     %r = cmp.ne.bool %a, %nc   (%nc = const.i32 35)
+//
+// Soundness:
+//   - EQ/NE: sext(x)==K <=> x==(W)K si K cabe en el rango del ancho W; idem ZEXT.
+//   - LT/GT/LE/GE (signed): SEXT preserva el orden con signo -> narrow si K cabe
+//     en el rango SIGNED de W.
+//   - ULT/UGT/ULE/UGE (unsigned): ZEXT preserva el orden sin signo -> narrow si
+//     K cabe en [0, 2^W-1].
+//   - cmp(ext(x), ext(y)) con el MISMO kind y ancho -> cmp(x, y) al ancho W.
+//   Cualquier caso que no encaje se deja intacto (conservador).
+bool ir_pass_narrow_cmp(IrFunction &fn) {
+    const size_t nv = fn.values.size();
+    if (nv == 0)
+        return false;
+
+    // Mapa de definiciones: por cada value, si es SEXT/ZEXT (con su fuente +
+    // ancho) o CONST (con su valor).
+    std::vector<IrValueId> ext_src(nv, IR_NO_VALUE);
+    std::vector<uint8_t> ext_kind(nv, 0); // 1=SEXT, 2=ZEXT
+    std::vector<IrType> src_type(nv, IrType::I64);
+    std::vector<int64_t> cval(nv, 0);
+    std::vector<uint8_t> is_c(nv, 0);
+    for (auto &bb : fn.blocks) {
+        for (auto &in : bb.instrs) {
+            if (in.dst == IR_NO_VALUE || static_cast<size_t>(in.dst) >= nv)
+                continue;
+            if ((in.op == IrOp::SEXT || in.op == IrOp::ZEXT) &&
+                !in.operands.empty()) {
+                const IrValueId s = in.operands[0];
+                if (s != IR_NO_VALUE && static_cast<size_t>(s) < nv) {
+                    ext_src[in.dst] = s;
+                    ext_kind[in.dst] = (in.op == IrOp::SEXT) ? 1 : 2;
+                    src_type[in.dst] = fn.values[s].type;
+                }
+            } else if (in.op == IrOp::CONST) {
+                is_c[in.dst] = 1;
+                cval[in.dst] = static_cast<int64_t>(in.imm);
+            }
+        }
+    }
+
+    // Ancho en bits de un tipo entero estrecho (0 = no aplicable: i64/u64/no-int).
+    auto narrow_bits = [](IrType t) -> int {
+        switch (t) {
+        case IrType::I8:
+        case IrType::U8: return 8;
+        case IrType::I16:
+        case IrType::U16: return 16;
+        case IrType::I32:
+        case IrType::U32: return 32;
+        default: return 0; // I64/U64/PTR/float: no estrechar
+        }
+    };
+    auto is_signed_cmp = [](IrOp op) -> bool {
+        switch (op) {
+        case IrOp::CMP_LT:
+        case IrOp::CMP_GT:
+        case IrOp::CMP_LE:
+        case IrOp::CMP_GE: return true;
+        default: return false; // EQ/NE agnostico; U* son unsigned
+        }
+    };
+    auto is_unsigned_cmp = [](IrOp op) -> bool {
+        switch (op) {
+        case IrOp::CMP_ULT:
+        case IrOp::CMP_UGT:
+        case IrOp::CMP_ULE:
+        case IrOp::CMP_UGE: return true;
+        default: return false;
+        }
+    };
+    auto is_eqne = [](IrOp op) -> bool {
+        return op == IrOp::CMP_EQ || op == IrOp::CMP_NE;
+    };
+    // K cabe en el rango representable del ancho W segun el kind del ext.
+    auto const_fits = [&](int64_t K, IrType W, uint8_t kind) -> bool {
+        const int bits = narrow_bits(W);
+        if (bits <= 0 || bits >= 64)
+            return false;
+        if (kind == 1) { // SEXT: rango con signo [-2^(b-1), 2^(b-1)-1]
+            const int64_t lo = -(int64_t{1} << (bits - 1));
+            const int64_t hi = (int64_t{1} << (bits - 1)) - 1;
+            return K >= lo && K <= hi;
+        }
+        // ZEXT: rango sin signo [0, 2^b-1]
+        if (K < 0)
+            return false;
+        const uint64_t hi = (uint64_t{1} << bits) - 1;
+        return static_cast<uint64_t>(K) <= hi;
+    };
+
+    struct Insertion {
+        size_t bb_idx;
+        size_t pos;
+        IrInstr instr;
+    };
+    std::vector<Insertion> pending;
+    bool changed = false;
+
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        auto &bb = fn.blocks[bi];
+        for (size_t i = 0; i < bb.instrs.size(); ++i) {
+            IrInstr &ins = bb.instrs[i];
+            const bool sgn = is_signed_cmp(ins.op);
+            const bool uns = is_unsigned_cmp(ins.op);
+            const bool eqne = is_eqne(ins.op);
+            if (!(sgn || uns || eqne) || ins.operands.size() < 2)
+                continue;
+            const IrValueId o0 = ins.operands[0], o1 = ins.operands[1];
+            if (o0 == IR_NO_VALUE || o1 == IR_NO_VALUE ||
+                static_cast<size_t>(o0) >= nv || static_cast<size_t>(o1) >= nv)
+                continue;
+
+            // El kind de ext requerido: signed->SEXT, unsigned->ZEXT, EQ/NE->
+            // cualquiera pero CONSISTENTE entre ambos operandos.
+            const uint8_t k0 = ext_kind[o0], k1 = ext_kind[o1];
+
+            // --- Caso A: ambos operandos son ext del MISMO kind y ancho. ---
+            if (k0 && k1 && k0 == k1 && src_type[o0] == src_type[o1] &&
+                narrow_bits(src_type[o0]) > 0) {
+                const uint8_t want = sgn ? 1 : (uns ? 2 : k0);
+                if (k0 == want) {
+                    ins.operands[0] = ext_src[o0];
+                    ins.operands[1] = ext_src[o1];
+                    changed = true;
+                    continue;
+                }
+            }
+
+            // --- Caso B: un operando es ext, el otro es const que cabe. ---
+            IrValueId ext_v = IR_NO_VALUE, const_v = IR_NO_VALUE;
+            int ext_pos = -1;
+            if (k0 && is_c[o1]) {
+                ext_v = o0;
+                const_v = o1;
+                ext_pos = 0;
+            } else if (k1 && is_c[o0]) {
+                ext_v = o1;
+                const_v = o0;
+                ext_pos = 1;
+            }
+            if (ext_v == IR_NO_VALUE)
+                continue;
+            const uint8_t kind = ext_kind[ext_v];
+            const uint8_t want = sgn ? 1 : (uns ? 2 : kind);
+            if (kind != want)
+                continue; // signed cmp necesita SEXT; unsigned necesita ZEXT
+            const IrType W = src_type[ext_v];
+            if (narrow_bits(W) <= 0)
+                continue;
+            const int64_t K = cval[const_v];
+            if (!const_fits(K, W, kind))
+                continue;
+            // Reescribir: ext_operand -> fuente estrecha; const -> const.<W> K.
+            auto p = make_new_narrow_const(fn, W, static_cast<uint64_t>(K));
+            pending.push_back({bi, i, p.second});
+            ins.operands[ext_pos] = ext_src[ext_v];
+            ins.operands[1 - ext_pos] = p.first;
+            changed = true;
+        }
+    }
+
+    // Insertar los CONST nuevos (de atras hacia delante para no invalidar pos).
+    std::sort(pending.begin(), pending.end(), [](const Insertion &a,
+                                                  const Insertion &b) {
+        if (a.bb_idx != b.bb_idx)
+            return a.bb_idx > b.bb_idx;
+        return a.pos > b.pos;
+    });
+    for (const auto &ins : pending) {
+        auto &blk = fn.blocks[ins.bb_idx];
+        blk.instrs.insert(blk.instrs.begin() + ins.pos, ins.instr);
+    }
+    return changed;
+}
+
 bool ir_pass_simplify(IrFunction &fn) {
     bool changed = false;
 
@@ -10450,6 +10665,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
             any |= ir_pass_copy_prop(fn);
             any |= ir_pass_simplify(fn); /* algebraic + cast fold + phi simp */
+            any |= ir_pass_narrow_cmp(fn); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
             // Contraccion FMA (fmul+fadd -> fma) DESPUES de simplify, que ya
             // quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).  Decision
             // unica en el IR -> interp/JIT/AOT consistentes (1 redondeo).

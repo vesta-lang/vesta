@@ -360,6 +360,14 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
 bool ir_pass_simplify(IrFunction &fn);
 
 /**
+ * @brief Estrecha comparaciones extendidas: @c cmp(sext/zext(x), const) ->
+ * @c cmp(x, const_estrecho) cuando el const cabe en el ancho de @c x, y
+ * @c cmp(ext(x), ext(y)) -> @c cmp(x, y).  Elimina el SEXT/ZEXT y el const.i64
+ * (los mata el DCE).  El backend compara al ancho de los operandos.
+ */
+bool ir_pass_narrow_cmp(IrFunction &fn);
+
+/**
  * @brief Contrae @c fmul+fadd single-use en un @c FMA (round(a*b+c), 1
  * redondeo).  Solo en funciones @c \@fp(fast) (fn.fp_contract).  Corre DESPUES
  * de @c ir_pass_simplify.  Ver la nota en el .cpp.
