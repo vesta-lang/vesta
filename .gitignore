@@ -417,3 +417,4 @@ timings/x86/*.vxisa
 timings/x86/*.vxarch
 timings/x86/instr_form_ids.h
 tools/import/__pycache__/
+ANAMNESIS.txt
