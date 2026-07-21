@@ -18,8 +18,10 @@
 #include "codegen/rbank/objective.h"
 #include "codegen/rbank/optimization_context.h"
 #include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
+#include <vector>
 
 using namespace jit;
 using namespace jit::rbank;
@@ -159,6 +161,44 @@ int main() {
         // las fracciones suman ~1.
         const double sum = ex.top[0].fraction + ex.top[1].fraction + ex.top[2].fraction;
         CHECK(sum > 0.99 && sum < 1.01, "las fracciones del top no suman ~1");
+    }
+
+    // --- Convergencia programa + hardware en el contexto (Fase 0.25) ---
+    std::printf("\n[convergencia: programa (exec_weight) + hardware (hw_cost)]\n");
+    {
+        // Fact del PROGRAMA: valor f64 en loop_depth=2 (exec_weight estatico=100).
+        ValueRequirements r; r.value_id = 1; r.cls = ResourceClass::FP_VECTOR;
+        r.loop_depth = 2; r.rematerializable = false;
+
+        // (a) Sin HW cableado -> fallback generico (reload=4.0), from_hw=false.
+        OptimizationContext ctx_sw = make_context(bank, cs);
+        CHECK(!ctx_sw.has_hw_cost(), "contexto sin HW marca from_hw");
+        ObjectiveTerms t_sw = ctx_sw.spill_terms_for(r);
+        // spill = reload(4.0 fallback) x exec_weight(100) = 400.
+        CHECK(t_sw.spill == 400.0, "convergencia fallback mal (4*100)");
+
+        // (b) Con HW real (uarch con reload caro=10) -> el HW escala el spill.
+        SpillCostCard hw; hw.reload_latency = 10.0; hw.store_latency = 2.0;
+        hw.move_latency = 1.0; hw.from_hw = true;
+        OptimizationContext ctx_hw = make_context(bank, cs, {}, {}, false, hw);
+        CHECK(ctx_hw.has_hw_cost(), "contexto con HW no lo marca");
+        ObjectiveTerms t_hw = ctx_hw.spill_terms_for(r);
+        // spill = reload(10) x exec_weight(100) = 1000; latency = store(2).
+        CHECK(t_hw.spill == 1000.0 && t_hw.latency == 2.0,
+              "el HW real no se propago al spill (10*100) / store");
+
+        // (c) El perfil MEDIDO del programa (PGO) manda sobre el estatico.
+        ValueRequirements rp = r; rp.execution_weight = 5000.0;
+        ObjectiveTerms t_pgo = ctx_hw.spill_terms_for(rp);
+        // spill = reload(10) x exec_weight_medido(5000) = 50000.
+        CHECK(t_pgo.spill == 50000.0, "el perfil medido no domino (10*5000)");
+
+        // (d) La DECISION refleja la convergencia: derramar el valor caliente en
+        //     la uarch cara es peor que ocupar una lane -> el motor evita el spill.
+        ObjectiveTerms lane_t; lane_t.register_pressure = 1.0; // barato
+        std::vector<Candidate> cands = {cand(0, lane_t), cand(1, t_hw)};
+        const Candidate *best = policy.choose(cands, ctx_hw);
+        CHECK(best && best->id.value == 0, "el motor no evito el spill caro");
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
