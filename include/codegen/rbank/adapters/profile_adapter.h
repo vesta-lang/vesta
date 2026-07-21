@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/adapters/profile_adapter.h
+ * @file codegen/rbank/adapters/profile_adapter.h
  * @brief Adaptador de PERFIL (Fase 0.25): @c analysis::ProfileFacts ->
  *        @c execution_weight en un @c ValueRequirements.
  *
@@ -18,12 +18,12 @@
  * Fase 0.25: ADITIVO.
  */
 
-#ifndef VESTA_JIT_RBANK_ADAPTERS_PROFILE_ADAPTER_H
-#define VESTA_JIT_RBANK_ADAPTERS_PROFILE_ADAPTER_H
+#ifndef VESTA_CODEGEN_RBANK_ADAPTERS_PROFILE_ADAPTER_H
+#define VESTA_CODEGEN_RBANK_ADAPTERS_PROFILE_ADAPTER_H
 
 #include "analysis/derived/profile_facts.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/value_requirements.h"
 
 namespace jit {
 namespace rbank {
@@ -41,4 +41,4 @@ inline void populate_profile_requirements(ValueRequirements &r,
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_ADAPTERS_PROFILE_ADAPTER_H
+#endif // VESTA_CODEGEN_RBANK_ADAPTERS_PROFILE_ADAPTER_H

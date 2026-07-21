@@ -13,8 +13,8 @@
  */
 
 #include "ir/ssa_ir.h"
-#include "jit/rbank/build_requirements.h"
-#include "jit/rbank/physical_bank.h"
+#include "codegen/rbank/build_requirements.h"
+#include "codegen/rbank/physical_bank.h"
 
 #include <cstdio>
 

@@ -16,7 +16,7 @@
  * validacion estructural + round-trip contra @c TargetRegInfo.
  */
 
-#include "jit/rbank/physical_bank.h"
+#include "codegen/rbank/physical_bank.h"
 #include "jit/target_reginfo.h"
 
 #include <cstdio>

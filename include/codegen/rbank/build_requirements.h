@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/build_requirements.h
+ * @file codegen/rbank/build_requirements.h
  * @brief Ensamblador del SNAPSHOT: @c build_value_requirements(fn) corre TODOS
  *        los adaptadores sobre una funcion real y produce el @c ValueRequirements
  *        por valor.
@@ -53,20 +53,20 @@
  * GcAdapter/AliasFacts lo formalizara); @c address_taken queda diferido.
  */
 
-#ifndef VESTA_JIT_RBANK_BUILD_REQUIREMENTS_H
-#define VESTA_JIT_RBANK_BUILD_REQUIREMENTS_H
+#ifndef VESTA_CODEGEN_RBANK_BUILD_REQUIREMENTS_H
+#define VESTA_CODEGEN_RBANK_BUILD_REQUIREMENTS_H
 
 #include "analysis/derived/profile_facts.h"
 #include "analysis/facts/loop_facts.h"
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/adapters/const_adapter.h"
-#include "jit/rbank/adapters/liveness_adapter.h"
-#include "jit/rbank/adapters/loop_adapter.h"
-#include "jit/rbank/adapters/profile_adapter.h"
-#include "jit/rbank/adapters/type_adapter.h"
-#include "jit/rbank/physical_bank.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/adapters/const_adapter.h"
+#include "codegen/rbank/adapters/liveness_adapter.h"
+#include "codegen/rbank/adapters/loop_adapter.h"
+#include "codegen/rbank/adapters/profile_adapter.h"
+#include "codegen/rbank/adapters/type_adapter.h"
+#include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdint>
 #include <string>
@@ -170,4 +170,4 @@ inline std::vector<RequirementIssue> audit_requirements(
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_BUILD_REQUIREMENTS_H
+#endif // VESTA_CODEGEN_RBANK_BUILD_REQUIREMENTS_H

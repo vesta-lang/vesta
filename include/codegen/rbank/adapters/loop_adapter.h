@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/adapters/loop_adapter.h
+ * @file codegen/rbank/adapters/loop_adapter.h
  * @brief Adaptador de BUCLES (Fase 0.25): @c analysis::LoopFacts ->
  *        @c loop_depth en un @c ValueRequirements.
  *
@@ -20,12 +20,12 @@
  * Fase 0.25: ADITIVO, sin cambio de comportamiento.
  */
 
-#ifndef VESTA_JIT_RBANK_ADAPTERS_LOOP_ADAPTER_H
-#define VESTA_JIT_RBANK_ADAPTERS_LOOP_ADAPTER_H
+#ifndef VESTA_CODEGEN_RBANK_ADAPTERS_LOOP_ADAPTER_H
+#define VESTA_CODEGEN_RBANK_ADAPTERS_LOOP_ADAPTER_H
 
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/value_requirements.h"
 
 namespace jit {
 namespace rbank {
@@ -43,4 +43,4 @@ inline void populate_loop_requirements(ValueRequirements &r,
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_ADAPTERS_LOOP_ADAPTER_H
+#endif // VESTA_CODEGEN_RBANK_ADAPTERS_LOOP_ADAPTER_H

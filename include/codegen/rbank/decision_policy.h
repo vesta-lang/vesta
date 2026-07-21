@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/decision_policy.h
+ * @file codegen/rbank/decision_policy.h
  * @brief Cuspide del modelo: el MOTOR DE DECISION (score / choose / explain).
  *
  * El @c DecisionEngine es el UNICO punto de seleccion del optimizador: recibe
@@ -41,11 +41,11 @@
  * de Pareto son de fases posteriores.
  */
 
-#ifndef VESTA_JIT_RBANK_DECISION_POLICY_H
-#define VESTA_JIT_RBANK_DECISION_POLICY_H
+#ifndef VESTA_CODEGEN_RBANK_DECISION_POLICY_H
+#define VESTA_CODEGEN_RBANK_DECISION_POLICY_H
 
-#include "jit/rbank/objective.h"
-#include "jit/rbank/optimization_context.h"
+#include "codegen/rbank/objective.h"
+#include "codegen/rbank/optimization_context.h"
 
 #include <algorithm>
 #include <array>
@@ -265,4 +265,4 @@ struct WeightedObjectivePolicy : DecisionEngine {
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_DECISION_POLICY_H
+#endif // VESTA_CODEGEN_RBANK_DECISION_POLICY_H

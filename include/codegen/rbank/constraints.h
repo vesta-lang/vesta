@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/constraints.h
+ * @file codegen/rbank/constraints.h
  * @brief Nivel 2 del modelo de asignacion de recursos: FEASIBILIDAD DURA.
  *
  * @c ConstraintSet captura las relaciones que TODA asignacion VALIDA debe
@@ -43,11 +43,11 @@
  * la representacion + el verificador, poblado desde liveness en Fase 0.25.
  */
 
-#ifndef VESTA_JIT_RBANK_CONSTRAINTS_H
-#define VESTA_JIT_RBANK_CONSTRAINTS_H
+#ifndef VESTA_CODEGEN_RBANK_CONSTRAINTS_H
+#define VESTA_CODEGEN_RBANK_CONSTRAINTS_H
 
-#include "jit/rbank/physical_bank.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdint>
 #include <unordered_map>
@@ -235,4 +235,4 @@ inline ConstraintViolation validate_assignment(
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_CONSTRAINTS_H
+#endif // VESTA_CODEGEN_RBANK_CONSTRAINTS_H

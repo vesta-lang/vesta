@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/adapters/const_adapter.h
+ * @file codegen/rbank/adapters/const_adapter.h
  * @brief Adaptador de CONSTANTES (Fase 0.25): @c ir::IrValue.is_const ->
  *        @c rematerializable en un @c ValueRequirements.
  *
@@ -26,11 +26,11 @@
  * Fase 0.25: ADITIVO, sin cambio de comportamiento (solo el test lo consume).
  */
 
-#ifndef VESTA_JIT_RBANK_ADAPTERS_CONST_ADAPTER_H
-#define VESTA_JIT_RBANK_ADAPTERS_CONST_ADAPTER_H
+#ifndef VESTA_CODEGEN_RBANK_ADAPTERS_CONST_ADAPTER_H
+#define VESTA_CODEGEN_RBANK_ADAPTERS_CONST_ADAPTER_H
 
 #include "ir/ssa_ir.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/value_requirements.h"
 
 namespace jit {
 namespace rbank {
@@ -49,4 +49,4 @@ inline void populate_const_requirements(ValueRequirements &r,
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_ADAPTERS_CONST_ADAPTER_H
+#endif // VESTA_CODEGEN_RBANK_ADAPTERS_CONST_ADAPTER_H

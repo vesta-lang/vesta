@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/objective.h
+ * @file codegen/rbank/objective.h
  * @brief Nivel 3 del modelo de asignacion de recursos: PREFERENCIAS SUAVES.
  *
  * El @c Objective es lo OPUESTO a @c Constraints: si las restricciones dicen
@@ -45,11 +45,11 @@
  * Fase 0: ADITIVO, funciones puras, sin consumidores (solo el test).
  */
 
-#ifndef VESTA_JIT_RBANK_OBJECTIVE_H
-#define VESTA_JIT_RBANK_OBJECTIVE_H
+#ifndef VESTA_CODEGEN_RBANK_OBJECTIVE_H
+#define VESTA_CODEGEN_RBANK_OBJECTIVE_H
 
-#include "jit/rbank/physical_bank.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdint>
 
@@ -215,4 +215,4 @@ inline ObjectiveTerms spill_terms(const ValueRequirements &r,
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_OBJECTIVE_H
+#endif // VESTA_CODEGEN_RBANK_OBJECTIVE_H

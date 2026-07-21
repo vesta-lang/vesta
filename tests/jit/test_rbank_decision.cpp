@@ -13,11 +13,11 @@
  *        eleccion, explicacion como DATO i18n-ready).
  */
 
-#include "jit/rbank/constraints.h"
-#include "jit/rbank/decision_policy.h"
-#include "jit/rbank/objective.h"
-#include "jit/rbank/optimization_context.h"
-#include "jit/rbank/physical_bank.h"
+#include "codegen/rbank/constraints.h"
+#include "codegen/rbank/decision_policy.h"
+#include "codegen/rbank/objective.h"
+#include "codegen/rbank/optimization_context.h"
+#include "codegen/rbank/physical_bank.h"
 
 #include <cstdio>
 

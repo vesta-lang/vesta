@@ -14,9 +14,9 @@
 #include "analysis/derived/profile_facts.h"
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/adapters/profile_adapter.h"
-#include "jit/rbank/optimization_context.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/adapters/profile_adapter.h"
+#include "codegen/rbank/optimization_context.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
 

@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/optimization_context.h
+ * @file codegen/rbank/optimization_context.h
  * @brief Nivel 4 del modelo: el CONTEXTO que recibe la DecisionPolicy.
  *
  * @c OptimizationContext es la FIRMA ESTABLE que la @c DecisionPolicy (y
@@ -38,12 +38,12 @@
  * consumidores salvo el test.
  */
 
-#ifndef VESTA_JIT_RBANK_OPTIMIZATION_CONTEXT_H
-#define VESTA_JIT_RBANK_OPTIMIZATION_CONTEXT_H
+#ifndef VESTA_CODEGEN_RBANK_OPTIMIZATION_CONTEXT_H
+#define VESTA_CODEGEN_RBANK_OPTIMIZATION_CONTEXT_H
 
-#include "jit/rbank/constraints.h"
-#include "jit/rbank/objective.h"
-#include "jit/rbank/physical_bank.h"
+#include "codegen/rbank/constraints.h"
+#include "codegen/rbank/objective.h"
+#include "codegen/rbank/physical_bank.h"
 
 #include <cstdint>
 
@@ -152,4 +152,4 @@ inline OptimizationContext make_context(const PhysicalRegisterBank &bank,
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_OPTIMIZATION_CONTEXT_H
+#endif // VESTA_CODEGEN_RBANK_OPTIMIZATION_CONTEXT_H

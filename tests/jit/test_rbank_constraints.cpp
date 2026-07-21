@@ -13,9 +13,9 @@
  *        todo devolviendo DATOS i18n-ready.
  */
 
-#include "jit/rbank/constraints.h"
-#include "jit/rbank/physical_bank.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/constraints.h"
+#include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
 

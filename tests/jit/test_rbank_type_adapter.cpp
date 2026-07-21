@@ -14,8 +14,8 @@
 
 #include "analysis/memory/memory_access.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/adapters/type_adapter.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/adapters/type_adapter.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
 

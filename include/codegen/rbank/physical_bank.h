@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/physical_bank.h
+ * @file codegen/rbank/physical_bank.h
  * @brief Nivel FISICO del modelo de asignacion de recursos: el objeto UNICO
  *        donde convergen TargetRegInfo, BackendCaps, arch-data, ABI, scheduler,
  *        allocator, vectorizador e interprete.
@@ -75,8 +75,8 @@
  * No se implementa aqui; es una comprobacion de que el nivel es datos puros.
  */
 
-#ifndef VESTA_JIT_RBANK_PHYSICAL_BANK_H
-#define VESTA_JIT_RBANK_PHYSICAL_BANK_H
+#ifndef VESTA_CODEGEN_RBANK_PHYSICAL_BANK_H
+#define VESTA_CODEGEN_RBANK_PHYSICAL_BANK_H
 
 #include "jit/backend_caps.h"
 #include "jit/machine_ir.h"
@@ -702,4 +702,4 @@ inline RoundTripReport physical_bank_roundtrip_check(
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_PHYSICAL_BANK_H
+#endif // VESTA_CODEGEN_RBANK_PHYSICAL_BANK_H

@@ -13,8 +13,8 @@
  *        clase) y que la satisfacibilidad devuelve DATOS i18n-ready.
  */
 
-#include "jit/rbank/physical_bank.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
 

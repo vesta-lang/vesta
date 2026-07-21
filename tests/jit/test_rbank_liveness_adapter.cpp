@@ -15,8 +15,8 @@
 
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/adapters/liveness_adapter.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/adapters/liveness_adapter.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
 

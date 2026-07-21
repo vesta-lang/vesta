@@ -13,8 +13,8 @@
 
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/adapters/loop_adapter.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/adapters/loop_adapter.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
 

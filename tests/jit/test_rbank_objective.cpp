@@ -13,9 +13,9 @@
  *        lane volatil cuesta mas que en preservada.
  */
 
-#include "jit/rbank/objective.h"
-#include "jit/rbank/physical_bank.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/objective.h"
+#include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdio>
 

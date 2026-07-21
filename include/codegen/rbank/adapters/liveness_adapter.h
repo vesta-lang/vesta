@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/adapters/liveness_adapter.h
+ * @file codegen/rbank/adapters/liveness_adapter.h
  * @brief Adaptador de VIVACIDAD (Fase 0.25): liveness + posiciones de CALL ->
  *        @c crosses_call en un @c ValueRequirements.
  *
@@ -32,12 +32,12 @@
  * Fase 0.25: ADITIVO, sin cambio de comportamiento (solo el test lo consume).
  */
 
-#ifndef VESTA_JIT_RBANK_ADAPTERS_LIVENESS_ADAPTER_H
-#define VESTA_JIT_RBANK_ADAPTERS_LIVENESS_ADAPTER_H
+#ifndef VESTA_CODEGEN_RBANK_ADAPTERS_LIVENESS_ADAPTER_H
+#define VESTA_CODEGEN_RBANK_ADAPTERS_LIVENESS_ADAPTER_H
 
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/value_requirements.h"
 
 #include <cstdint>
 #include <vector>
@@ -111,4 +111,4 @@ inline void populate_liveness_requirements(
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_ADAPTERS_LIVENESS_ADAPTER_H
+#endif // VESTA_CODEGEN_RBANK_ADAPTERS_LIVENESS_ADAPTER_H

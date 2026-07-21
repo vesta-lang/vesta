@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/value_requirements.h
+ * @file codegen/rbank/value_requirements.h
  * @brief Nivel 1 del modelo de asignacion de recursos: QUE NECESITA un valor.
  *
  * @c ValueRequirements describe, por cada valor SSA que debe materializarse, lo
@@ -41,10 +41,10 @@
  * puras -> serializable, sin comportamiento oculto.
  */
 
-#ifndef VESTA_JIT_RBANK_VALUE_REQUIREMENTS_H
-#define VESTA_JIT_RBANK_VALUE_REQUIREMENTS_H
+#ifndef VESTA_CODEGEN_RBANK_VALUE_REQUIREMENTS_H
+#define VESTA_CODEGEN_RBANK_VALUE_REQUIREMENTS_H
 
-#include "jit/rbank/physical_bank.h"
+#include "codegen/rbank/physical_bank.h"
 
 #include <cstdint>
 
@@ -214,4 +214,4 @@ inline SatisfiabilityReport requirements_satisfiable(
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_VALUE_REQUIREMENTS_H
+#endif // VESTA_CODEGEN_RBANK_VALUE_REQUIREMENTS_H

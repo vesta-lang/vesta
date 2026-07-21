@@ -6,7 +6,7 @@
  */
 
 /**
- * @file jit/rbank/adapters/type_adapter.h
+ * @file codegen/rbank/adapters/type_adapter.h
  * @brief Adaptador de TIPO (Fase 0.25): @c ir::IrType -> clase de recurso +
  *        ancho de vista en un @c ValueRequirements.
  *
@@ -31,12 +31,12 @@
  * el test; el wiring al codegen es de fases posteriores).
  */
 
-#ifndef VESTA_JIT_RBANK_ADAPTERS_TYPE_ADAPTER_H
-#define VESTA_JIT_RBANK_ADAPTERS_TYPE_ADAPTER_H
+#ifndef VESTA_CODEGEN_RBANK_ADAPTERS_TYPE_ADAPTER_H
+#define VESTA_CODEGEN_RBANK_ADAPTERS_TYPE_ADAPTER_H
 
 #include "analysis/memory/memory_access.h"
 #include "ir/ssa_ir.h"
-#include "jit/rbank/value_requirements.h"
+#include "codegen/rbank/value_requirements.h"
 
 namespace jit {
 namespace rbank {
@@ -91,4 +91,4 @@ inline void populate_type_requirements(ValueRequirements &r, ir::IrType t) noexc
 } // namespace rbank
 } // namespace jit
 
-#endif // VESTA_JIT_RBANK_ADAPTERS_TYPE_ADAPTER_H
+#endif // VESTA_CODEGEN_RBANK_ADAPTERS_TYPE_ADAPTER_H
