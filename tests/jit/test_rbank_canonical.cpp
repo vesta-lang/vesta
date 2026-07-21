@@ -19,9 +19,10 @@
  *      equivalente (HIT) produce un coloreado propio identico al directo.
  */
 
-#include "codegen/rbank/canonical.h"
+#include "codegen/rbank/canonical_problem.h"
 #include "codegen/rbank/coloring.h"
 #include "codegen/rbank/physical_bank.h"
+#include "codegen/rbank/solution_cache.h"
 
 #include <cstdio>
 #include <numeric>
