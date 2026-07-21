@@ -82,6 +82,7 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::FSQRT:
     case IrOp::FMIN:
     case IrOp::FMAX:
+    case IrOp::FMA:
     case IrOp::FFLOOR:
     case IrOp::FCEIL:
     case IrOp::FROUND:

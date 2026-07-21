@@ -1386,6 +1386,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     //   Otras se aceptan y se ignoran silenciosamente.
     bool top_is_aspect = false;
     bool top_is_async = false;
+    bool top_fp_contract = true; /* @fp(strict|fast): default fast (contrae FMA) */
     bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
     bool top_is_naked = false;          /*  NR: @Naked (ISRs/stubs) */
@@ -1516,6 +1517,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             const bool is_align = (current_.lexeme == "align");
             const bool is_hot = (current_.lexeme == "hot");
             const bool is_cold = (current_.lexeme == "cold");
+            const bool is_fp = (current_.lexeme == "fp");
             const bool is_section = (current_.lexeme == "section");
             const bool is_at = (current_.lexeme == "at");
             const bool is_order = (current_.lexeme == "order");
@@ -1560,6 +1562,21 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             }
             if (is_cold) {
                 top_attr_cold = true;
+                continue;
+            }
+            // @fp(strict|fast): politica de contraccion FMA por-funcion.
+            // strict -> IEEE (2 redondeos, sin FMA); fast (default) -> contrae.
+            if (is_fp) {
+                if (current_.kind == TokenKind::LPAREN) {
+                    (void)consume(); // '('
+                    if (current_.lexeme == "strict")
+                        top_fp_contract = false;
+                    else if (current_.lexeme == "fast")
+                        top_fp_contract = true;
+                    (void)consume(); // strict|fast
+                    if (current_.kind == TokenKind::RPAREN)
+                        (void)consume(); // ')'
+                }
                 continue;
             }
             // Contratos de huella: flags, con `when:` opcional
@@ -2234,6 +2251,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // future_alloc + spawn { msgrecv handle + body + fulfill } y
         // devuelve el handle del future al caller.
         if (fd && top_is_async) fd->is_async = true;
+        if (fd) fd->fp_contract = top_fp_contract; // @fp(strict|fast)
         if (fd && top_is_noexcept) fd->is_noexcept = true;
         if (fd && is_comptime_fn) fd->is_comptime = true;
         if (fd && top_is_macro) fd->is_macro = true;

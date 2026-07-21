@@ -4468,6 +4468,10 @@ bool ir_pass_fuse_fma(IrFunction &fn) {
         for (auto &in : bb.instrs) {
             if (in.op != IrOp::FADD || in.operands.size() < 2)
                 continue;
+            // @fp(strict) inlineado en un caller fast: el fadd copiado del callee
+            // strict lleva no_fp_contract -> no fusionar (preservar 2 redondeos).
+            if (in.no_fp_contract)
+                continue;
             for (int k = 0; k < 2; ++k) {
                 const IrValueId t = in.operands[k];
                 const IrValueId cval = in.operands[1 - k];
@@ -4477,6 +4481,8 @@ bool ir_pass_fuse_fma(IrFunction &fn) {
                     continue;
                 IrInstr *mul = def_fmul[t];
                 if (mul == nullptr || mul->type != in.type)
+                    continue;
+                if (mul->no_fp_contract) // el fmul tambien debe ser contraible
                     continue;
                 const IrValueId a = mul->operands[0];
                 const IrValueId b = mul->operands[1];
@@ -4854,6 +4860,85 @@ bool ir_pass_simplify(IrFunction &fn) {
                                            : f64_to_bits(r);
                 rewrite_as_const_with_value(fn, ins, out_bits);
                 const_vids[ins.dst] = static_cast<int64_t>(out_bits);
+                changed = true;
+                break;
+            }
+            // FoldCompareConstants (entero): cmp.<cc> const, const -> const bool.
+            // Signed via int64, unsigned via uint64.  El resultado (0/1) deja al
+            // BR_COND siguiente foldearse a un salto incondicional (ir_pass_
+            // simplify) -> unreachable-elim + DCE colapsan las ramas muertas.
+            case IrOp::CMP_EQ:
+            case IrOp::CMP_NE:
+            case IrOp::CMP_LT:
+            case IrOp::CMP_GT:
+            case IrOp::CMP_LE:
+            case IrOp::CMP_GE:
+            case IrOp::CMP_ULT:
+            case IrOp::CMP_UGT:
+            case IrOp::CMP_ULE:
+            case IrOp::CMP_UGE: {
+                if (ins.operands.size() < 2) break;
+                int64_t c0 = 0, c1 = 0;
+                if (!get_const(ins.operands[0], c0)) break;
+                if (!get_const(ins.operands[1], c1)) break;
+                const uint64_t u0 = static_cast<uint64_t>(c0);
+                const uint64_t u1 = static_cast<uint64_t>(c1);
+                bool r = false;
+                switch (ins.op) {
+                case IrOp::CMP_EQ: r = (c0 == c1); break;
+                case IrOp::CMP_NE: r = (c0 != c1); break;
+                case IrOp::CMP_LT: r = (c0 < c1); break;
+                case IrOp::CMP_GT: r = (c0 > c1); break;
+                case IrOp::CMP_LE: r = (c0 <= c1); break;
+                case IrOp::CMP_GE: r = (c0 >= c1); break;
+                case IrOp::CMP_ULT: r = (u0 < u1); break;
+                case IrOp::CMP_UGT: r = (u0 > u1); break;
+                case IrOp::CMP_ULE: r = (u0 <= u1); break;
+                case IrOp::CMP_UGE: r = (u0 >= u1); break;
+                default: break;
+                }
+                rewrite_as_const_with_value(fn, ins, r ? 1u : 0u);
+                const_vids[ins.dst] = r ? 1 : 0;
+                changed = true;
+                break;
+            }
+            // FoldCompareConstants (float): fcmp.<cc> const, const -> const bool.
+            // Se interpreta segun ins.type (F32/F64).  GUARD NaN: si algun operando
+            // es NaN, NO foldear (dejar al runtime) -- asi el fold es SOUND sea cual
+            // sea la semantica ordered/unordered de FCMP en el backend (sin riesgo
+            // de divergencia en el diff_harness).  Sin NaN, ordered == C.
+            case IrOp::FCMP_EQ:
+            case IrOp::FCMP_NE:
+            case IrOp::FCMP_LT:
+            case IrOp::FCMP_GT:
+            case IrOp::FCMP_LE:
+            case IrOp::FCMP_GE: {
+                if (ins.operands.size() < 2) break;
+                int64_t c0 = 0, c1 = 0;
+                if (!get_const(ins.operands[0], c0)) break;
+                if (!get_const(ins.operands[1], c1)) break;
+                const bool is_f32 = (ins.type == IrType::F32);
+                const double a =
+                    is_f32
+                        ? static_cast<double>(bits_to_f32(static_cast<uint32_t>(c0)))
+                        : bits_to_f64(static_cast<uint64_t>(c0));
+                const double b =
+                    is_f32
+                        ? static_cast<double>(bits_to_f32(static_cast<uint32_t>(c1)))
+                        : bits_to_f64(static_cast<uint64_t>(c1));
+                if (std::isnan(a) || std::isnan(b)) break; // sound: no foldear NaN
+                bool r = false;
+                switch (ins.op) {
+                case IrOp::FCMP_EQ: r = (a == b); break;
+                case IrOp::FCMP_NE: r = (a != b); break;
+                case IrOp::FCMP_LT: r = (a < b); break;
+                case IrOp::FCMP_GT: r = (a > b); break;
+                case IrOp::FCMP_LE: r = (a <= b); break;
+                case IrOp::FCMP_GE: r = (a >= b); break;
+                default: break;
+                }
+                rewrite_as_const_with_value(fn, ins, r ? 1u : 0u);
+                const_vids[ins.dst] = r ? 1 : 0;
                 changed = true;
                 break;
             }
@@ -7566,6 +7651,14 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                     }
                     /* Clonar c_ins y remap operandos + dst. */
                     IrInstr ni = c_ins;
+                    /* @fp(strict) sound bajo inlining: si el callee es STRICT,
+                     * marcar sus ops copiadas para que el fuse del caller (fast)
+                     * NO las contraiga a FMA -- preserva los 2 redondeos IEEE del
+                     * callee.  El fuse chequea el flag en el fmul Y el fadd, asi
+                     * que basta marcar las del callee (aunque el fadd combinante
+                     * fuera del caller, el fmul marcado bloquea la fusion). */
+                    if (!callee.fp_contract)
+                        ni.no_fp_contract = true;
                     /* dst: si tiene resultado, mapear a nuevo VID en caller. */
                     if (ni.dst != IR_NO_VALUE) {
                         const IrType dst_type = (ni.dst < callee.values.size())

@@ -689,6 +689,17 @@ CompileResult compile_vx_source(const std::string &source,
         return res;
     }
 
+    // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin contraccion
+    // FMA) AND-eando la politica del modulo con el fp_contract por-funcion que ya
+    // puso el lowering (@fp(strict) -> false).  Se aplica aqui, en la misma unidad
+    // de traduccion que el optimizer/emitter que consumen irmod, para no depender
+    // del global mutable ir_set_fma_contract_allowed (se duplica entre vm.exe, el
+    // DLL y vmcore -> el setter de main.cpp puede tocar una copia distinta).
+    if (!opts.fp_contract) {
+        for (auto &fn : irmod.functions)
+            fn.fp_contract = false;
+    }
+
     // FN.3: auto-bundle del context-switch de fibra para el JIT.
     // En el path interp/JIT (native_poo == false), `fiber_swapctx` baja al
     // opcode VM SWAPCTX; el interp lo ejecuta directamente, pero el JIT emite

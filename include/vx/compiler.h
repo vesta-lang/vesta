@@ -200,6 +200,15 @@ struct CompileOptions {
     /// ADITIVO y gateado: con el default false el codegen es EXACTAMENTE el
     /// historico (cero coste).  NUNCA se activa en compilacion normal.
     bool lsp_value_trace = false;
+
+    /// Politica de contraccion de coma flotante a nivel de MODULO (CLI
+    /// -ffp-contract).  true (default) = fast: se permite contraer a*b+c en
+    /// FMA (1 redondeo).  false = off (IEEE estricto, 2 redondeos).  Se AND-ea
+    /// con el @c fp_contract por-funcion (@fp(strict) pone la funcion a false)
+    /// -> off global fuerza TODO a false.  Se aplica a @c IrFunction::fp_contract
+    /// en el lowering (misma unidad de traduccion que el optimizer), en vez de
+    /// depender de un global mutable que se duplica entre vm.exe/DLL/vmcore.
+    bool fp_contract = true;
 };
 
 /**

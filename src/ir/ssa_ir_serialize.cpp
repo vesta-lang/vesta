@@ -84,6 +84,9 @@ constexpr uint8_t FN_FLAG_VARIADIC =
     1 << 1; ///< Acepta nargs variable (R15 contiene el count)
 constexpr uint8_t FN_FLAG_NAKED =
     1 << 2; ///<  NR @Naked: sin prologo/epilogo/ret (ISRs/stubs)
+constexpr uint8_t FN_FLAG_NO_FP_CONTRACT =
+    1 << 3; ///< @fp(strict)/-ffp-contract=off: fp_contract=false.  Bit NEGATIVO
+            ///< (se pone cuando es false) -> caches viejas sin el bit -> true.
 
 /**
  * @brief Serializa un @c IrValue al stream binario.
@@ -377,6 +380,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     if (fn.is_native) fn_flags |= FN_FLAG_NATIVE;
     if (fn.is_variadic) fn_flags |= FN_FLAG_VARIADIC;
     if (fn.is_naked) fn_flags |= FN_FLAG_NAKED;
+    if (!fn.fp_contract) fn_flags |= FN_FLAG_NO_FP_CONTRACT;
     write_u8(out, fn_flags);
 
     // Params: lista de IrValueId que apuntan a entries en values[]
@@ -487,6 +491,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     out.is_native = (fn_flags & FN_FLAG_NATIVE) != 0;
     out.is_variadic = (fn_flags & FN_FLAG_VARIADIC) != 0;
     out.is_naked = (fn_flags & FN_FLAG_NAKED) != 0;
+    out.fp_contract = (fn_flags & FN_FLAG_NO_FP_CONTRACT) == 0;
 
     /* params */
     uint32_t n_params = 0;

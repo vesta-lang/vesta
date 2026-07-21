@@ -928,6 +928,14 @@ struct IrInstr {
     /// del linear scan (ver lower_for / lower_while).
     bool preserve = false;
 
+    /// @fp(strict) bajo inlining: cuando el inliner copia el cuerpo de un callee
+    /// STRICT (fp_contract=false) dentro de un caller FAST, marca las ops float
+    /// copiadas con este flag para que @c ir_pass_fuse_fma NO las contraiga a FMA
+    /// (preservar la semantica IEEE de 2 redondeos del callee).  Marcador
+    /// TRANSITORIO de compile-time (el fuse corre en O2 ANTES de serializar el
+    /// @ir post-opt) -> NO se serializa; el JIT/AOT consumen el IR ya fusionado.
+    bool no_fp_contract = false;
+
     /// AOT: STR_LIT_ADDR sobre la plantilla de un `thread_local` (TLS).  Solo
     /// en memoria (NO serializado): el driver AOT lo DERIVA tras parsear,
     /// consultando SD_FLAG_TLS de la entrada static_data @c imm.  El codegen

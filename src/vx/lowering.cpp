@@ -3131,6 +3131,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         fn.name = fd->name;
     }
 
+    // @fp(strict|fast): politica de contraccion FMA de la funcion.  El pase
+    // ir_pass_fuse_fma solo contrae si fn.fp_contract; @fp(strict) -> false.
+    fn.fp_contract = fd->fp_contract;
+
     // AOT 2b (dev OS): seccion de salida del codigo + permisos.  Metadata
     // pura para el codegen AOT; el interp/JIT la ignoran.
     fn.section = fd->attr_section;

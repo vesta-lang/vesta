@@ -1649,6 +1649,12 @@ struct FunctionDecl : Node {
     /// registra la firma sin requerir body; otra FunctionDecl con el
     /// mismo nombre debe aparecer despues con body, o error.
     bool is_forward_decl = false;
+    /// @fp(strict|fast): politica de contraccion de coma flotante de ESTA
+    /// funcion.  true (default) = fast (se permite contraer a*b+c en FMA, 1
+    /// redondeo).  false = strict (IEEE, 2 redondeos, sin FMA).  Se propaga a
+    /// @c IrFunction::fp_contract en el lowering.  El CLI -ffp-contract=off lo
+    /// AND-ea a false para todo el modulo.
+    bool fp_contract = true;
     ///  AOT.3 2b (dev OS): `@section(".name"[,"perms"])` -- seccion de
     /// salida del codigo de la funcion en AOT.  Vacio => default `.text`.
     /// @c attr_section_perms = subconjunto de "rwx" (vacio => convencion del

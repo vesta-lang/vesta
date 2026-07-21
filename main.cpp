@@ -40,6 +40,7 @@
 #include "aot/linker.h"        //  AOT.5: linker propio (enlaza .o)
 #include "jit/vreg_pipeline.h" //  AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
+#include "jit/backend_caps.h" // caps del target para el gate FMA (AOT)
 #include "jit/auto_jit.h"
 #include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
@@ -691,6 +692,12 @@ int main(int argc, char *argv[]) {
             "binario). Nota: un binario avx/avx512f FIJO da SIGILL en una CPU "
             "sin ese soporte; usa auto para portabilidad.",
             cxxopts::value<std::string>()->default_value("sse2"))(
+            "ffp-contract",
+            "Politica de contraccion de coma flotante: fast (default -- contrae "
+            "a*b+c en FMA, 1 redondeo, como gcc/clang) | off (IEEE estricto, 2 "
+            "redondeos, sin FMA).  Global; @fp(strict|fast) lo override por "
+            "funcion.",
+            cxxopts::value<std::string>()->default_value("fast"))(
             "vx-base",
             "VA base address para el modulo (hex, e.g. 0x10000000). Usado para "
             "plugins cargados via loadmodule, evita solapamiento con el caller "
@@ -1012,6 +1019,12 @@ int main(int argc, char *argv[]) {
     if (result.count("cpu"))
         jit::sched::set_sched_cpu(result["cpu"].as<std::string>());
 
+    // -ffp-contract=off: IEEE estricto (sin contraccion FMA).  Global; el AOT y
+    // @fp(strict) lo pueden refinar despues.
+    if (result.count("ffp-contract") &&
+        result["ffp-contract"].as<std::string>() == "off")
+        ir::ir_set_fma_contract_allowed(false);
+
     if (result.count("jit-threshold")) {
         jit::set_jit_threshold(result["jit-threshold"].as<uint32_t>());
     } else if (result.count("mode")) {
@@ -1024,11 +1037,26 @@ int main(int argc, char *argv[]) {
             // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
             aot_mode = true;
             jit::set_jit_threshold(UINT32_MAX);
-            // FMA: el codegen AOT (vreg) aun no emite VFMADD escalar -> no crear
-            // nodos IrOp::FMA para AOT (el pase fuse_fma queda desactivado).  El
-            // interp/JIT (velb) si los crean (interp = std::fma; JIT cae a interp
-            // en funciones con FMA hasta que el vreg emita VFMADD).
-            ir::ir_set_fma_contract_allowed(false);
+            // FMA en AOT: la contraccion escalar es ORTOGONAL a --float-isa (que
+            // controla el ancho SIMD).  Default = ON (la mayoria de CPUs tienen
+            // FMA3; VFMADD231SD no depende del ancho vectorial).  Solo se
+            // desactiva con -ffp-contract=off, o si --cpu apunta a una microarq
+            // SIN FMA (la DB lo sabe -> evita SIGILL en ese target concreto).
+            {
+                const bool ffp_off =
+                    result.count("ffp-contract") &&
+                    result["ffp-contract"].as<std::string>() == "off";
+                bool fma_ok = !ffp_off;
+                if (result.count("cpu")) {
+                    const std::string cpu_s =
+                        result["cpu"].as<std::string>();
+                    if (!cpu_s.empty() && cpu_s != "generic")
+                        fma_ok =
+                            fma_ok && jit::backend_caps_from_cpu(cpu_s).fma;
+                }
+                ir::ir_set_fma_contract_allowed(fma_ok);
+                jit::set_vreg_fma(fma_ok);
+            }
             // @Target target-aware: los atomos os:/arch: de @Target se evaluan
             // contra el TARGET del binario AOT (cross-compile), no el host de
             // build, para que las variantes por plataforma del runtime/usuario
@@ -1850,6 +1878,10 @@ int main(int argc, char *argv[]) {
         copts.module_name = "main";
         copts.opt_level = 2;
         copts.emit_ir_preopt = true;
+        // --analyze respeta -ffp-contract=off (el coste/IR reflejado debe
+        // coincidir con el binario que se generara).
+        copts.fp_contract = !(result.count("ffp-contract") &&
+                              result["ffp-contract"].as<std::string>() == "off");
         // Si el fuente tiene `import`, hay que ir por el compilador
         // multi-modulo, igual que hacen las demas rutas.  ANTES esta llamaba
         // siempre a `compile_vx_source` (un solo fichero), asi que analizar un
@@ -2848,6 +2880,11 @@ int main(int argc, char *argv[]) {
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
         copts.native_poo = aot_mode; //  AOT.2.b: clases nativas en -m aot
         copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
+        // -ffp-contract=off: IEEE estricto (sin contraccion FMA) a nivel de
+        // modulo.  Se propaga a IrFunction::fp_contract en el lowering (fiable
+        // cross-TU, a diferencia del global mutable).
+        copts.fp_contract = !(result.count("ffp-contract") &&
+                              result["ffp-contract"].as<std::string>() == "off");
         // Bits del target para el inline-asm @Naked (validacion compile-time):
         // --aot-arch x86-32 -> 32 (si no, `jmp ecx` y demas fallan en mode64).
         if (aot_mode) {

@@ -202,8 +202,12 @@ BackendCaps backend_caps_from_float_isa(FloatIsa fisa) {
         c.lzcnt = true;
         break;
     case FloatIsa::AVX:
-        // AVX (VEX float) NO garantiza FMA (AVX2 != FMA3).  Conservador: sin fma.
+        // El nivel `avx` de --float-isa = AVX2 256b (ver la ayuda).  AVX2 implica
+        // FMA3 en la practica (Haswell+; no hay CPU con AVX2 sin FMA3), asi que
+        // el target AVX2 SI puede emitir VFMADD.
         c.avx = true;
+        c.avx2 = true;
+        c.fma = true;
         c.sse42 = true;
         c.popcnt = true;
         break;

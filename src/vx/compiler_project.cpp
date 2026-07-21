@@ -1826,6 +1826,15 @@ CompileResult compile_vx_project(
             return;
         }
 
+        // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin FMA)
+        // en cada funcion del modulo.  Mismo criterio que compile_vx_source; se
+        // aplica aqui (misma TU que el optimizer del proyecto) para no depender
+        // del global mutable duplicado entre vm.exe/DLL/vmcore.
+        if (!opts.fp_contract) {
+            for (auto &fn : pm.ir.functions)
+                fn.fp_contract = false;
+        }
+
         //  M.5: export con strip_prefix = `<module>__` para que el
         // .vxi exponga nombres publicos sin el mangle.  El consumidor
         // importa "sumar" pero la FunctionSig lleva mangled_label="lib__sumar".
