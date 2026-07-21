@@ -12,3 +12,4 @@ u64 main() {
     };
     return x;
 }
+// @expect-compile-fail

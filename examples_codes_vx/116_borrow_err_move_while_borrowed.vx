@@ -6,3 +6,4 @@ i32 main() {
     unique<i32> q = move(owner);     // ERROR esperado
     return 0;
 }
+// @expect-compile-fail

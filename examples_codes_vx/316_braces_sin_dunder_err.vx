@@ -17,3 +17,4 @@ i32 main() {
     i64 q = a{3, 4, 5};     // error: Punto no declara __braces__
     return (i32) q;
 }
+// @expect-compile-fail

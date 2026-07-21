@@ -11,3 +11,4 @@ i32 main() {
     // Shape es un enum, pero NO es ValuedEnum -> constraint violada.
     return tag(Shape.Circle(5));
 }
+// @expect-compile-fail
