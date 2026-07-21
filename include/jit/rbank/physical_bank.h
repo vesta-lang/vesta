@@ -360,6 +360,18 @@ struct PhysicalRegisterBank {
         const Lane *l = by_id(id);
         return l && l->allocatable(vec_reduction_active);
     }
+    /**
+     * @brief True si existe ALGUNA lane asignable de clase @p cls que soporte
+     *        la vista @p w (el banco puede alojar un valor de ese tipo).
+     * @param vec_reduction_active  cuenta o no los VEC_ACC demand-driven.
+     */
+    bool can_hold(ResourceClass cls, ViewWidth w,
+                  bool vec_reduction_active) const noexcept {
+        for (const auto &l : lanes)
+            if (l.cls == cls && l.allocatable(vec_reduction_active) && l.supports(w))
+                return true;
+        return false;
+    }
     /** @brief True si la lane @p id soporta la vista @p w. */
     bool supports(uint8_t id, ViewWidth w) const noexcept {
         const Lane *l = by_id(id);
